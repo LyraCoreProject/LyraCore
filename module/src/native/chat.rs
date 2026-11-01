@@ -188,6 +188,18 @@ fn refused(
     channel: String,
     refusal: ChatRefusal,
 ) -> Result<(), Rollback> {
+    if let Some(packet) = refusal_packet(guid, kind, channel, refusal) {
+        super::send_raw(ctx, connection, packet.opcode, packet.body, false);
+    }
+    Ok(())
+}
+
+pub(super) fn refusal_packet(
+    guid: u64,
+    kind: u8,
+    channel: String,
+    refusal: ChatRefusal,
+) -> Option<lyracore_protocol::world::Packet> {
     let response = match refusal {
         ChatRefusal::UnknownLanguage => {
             ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(SMSG_NOTIFICATION {
@@ -211,12 +223,11 @@ fn refused(
                 subject_guid: guid,
                 ..Default::default()
             });
-            super::send_raw(ctx, connection, opcode, body, false);
-            return Ok(());
+            return Some(lyracore_protocol::world::Packet { opcode, body });
         }
-        _ => return Ok(()),
+        _ => return None,
     };
-    Ok(super::send(ctx, connection, response, false)?)
+    Some(packet(response))
 }
 
 pub(super) fn ignores(ctx: &ReducerContext, listener: u64, speaker: u64) -> bool {
@@ -236,6 +247,18 @@ fn whisper(
     message: String,
     target_name: String,
 ) -> Result<(), Rollback> {
+    if super::realm_communication::whisper(
+        ctx,
+        connection,
+        super::realm_communication::Whisper {
+            speaker,
+            language,
+            message: message.clone(),
+            target_name: target_name.clone(),
+        },
+    )? {
+        return Ok(());
+    }
     let target = crate::helpers::character_by_name(ctx, &target_name)
         .filter(|target| super::is_player(ctx, target.guid));
     let Some(target) = target else {

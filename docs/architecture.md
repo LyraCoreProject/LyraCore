@@ -412,8 +412,25 @@ arrival fence before the source writes the Handoff marker. Adoption enters with 
 saved teleport counter, on the same connection. A refused import restores the source position and
 closes the World Session. See [Character Transfer](character-transfer.md) for crash recovery.
 
-Groups, guilds, whispers, who, friends, mail and auctions stay per World Shard; interactions across
-World Shards remain unsupported. A Transfer carries the existing Character-owned manifest, not
+Whispers and `/who` route through the Realm Shard. It asks each configured World Shard for the
+current matches, then checks the replies against the Character directory and away World Session.
+`/who` keeps the existing faction, name, level, guild, class, race and zone filters and 49-entry
+limit. A refused query or a missing reply after 15 seconds sends an unavailable notification; it
+does not report a partial list or an offline whisper target. Ambiguous online names also return
+unavailable. Name reservation across World Shards remains separate work.
+
+Replies carry the original Account, Character guid and connection id. Delivery uses the current
+World Shard and repeats the recipient and ignore Gates there. A refused delivery retries every
+250 ms for at most 15 seconds, so a resolved recipient can move through Transfer without receiving
+duplicate packets. An in-flight IDC is never retried. A reply cannot reach a different Character
+or a replacement connection, and delivery waits only while that Character remains away from the
+Realm Shard. These are independent World Shard snapshots, not a simultaneous Realm snapshot: a
+Character in the Transfer gap may be absent from a query, and away or zone facts can change after
+the query.
+No movement updates are sent to the Realm Shard for this feature.
+
+Groups, guilds, friends, mail and auctions stay per World Shard; interactions across World Shards
+remain unsupported. A Transfer carries the existing Character-owned manifest, not
 Shard-owned social or economic state. Casts in progress are cancelled; melee, threat, AOI Grants,
 Transport attachment and other omitted transient state do not survive. World departure also applies
 the existing logout cleanup, including buyback cleanup and pet despawn. A Shard without a role or

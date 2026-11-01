@@ -73,7 +73,8 @@ a refused Transfer or connection loss before adoption also clears them on the re
 Leaving the world keeps pet despawn, buyback cleanup and the rest of the existing logout cleanup.
 Connection request limits start with the adopted connection state.
 
-Groups, guilds, whispers, who, friends, mail and auctions across World Shards remain unsupported.
+Groups, guilds, friends, mail and auctions across World Shards remain unsupported. Whispers and
+`/who` use Realm queries; see [their delivery and snapshot limits](architecture.md#durable-state-and-extension-points).
 The manifest does not make Shard-owned social or economic state shared. Transport attachment does
 not survive a Transfer between World Shards. Sessionless Character Relocation does not use this
 native World Session path.

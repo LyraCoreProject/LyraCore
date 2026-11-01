@@ -16,6 +16,10 @@ pub(crate) mod character_owned_tripwire {
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
         (
+            &["game_native_away"],
+            "Realm Shard World Session routing keyed by Account, removed on return or connection close",
+        ),
+        (
             &["game_character_directory", "game_character_directory_version"],
             "Realm Shard routing and delete revisions, updated by World Shards over IDC",
         ),
