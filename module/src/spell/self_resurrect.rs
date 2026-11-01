@@ -2,18 +2,35 @@ use lyracore_shared::packing::power_type;
 use spacetimedb::ReducerContext;
 
 use super::{
-    auras_on, game_self_resurrect_option, game_spell_effect, SelfResurrectOption, A_SELF_RESURRECT,
-    E_SELF_RESURRECT,
+    auras_on, game_self_resurrect_option, game_spell_cd, game_spell_effect, SelfResurrectOption,
+    A_SELF_RESURRECT, E_SELF_RESURRECT,
 };
 use crate::game_world_entity;
+
+const REINCARNATION_PASSIVE: u32 = 20608;
+const REINCARNATION: u32 = 21169;
+const ANKH: u32 = 17030;
+const REINCARNATION_COOLDOWN_MS: u32 = 3_600_000;
 
 // Record the option before death removes the Soulstone aura.
 pub(crate) fn record_self_resurrect_option(ctx: &ReducerContext, character_guid: u64) {
     let chosen = auras_on(ctx, character_guid)
         .filter(|a| a.eff_kind == A_SELF_RESURRECT && a.eff_p0 > 0)
         .map(|a| a.eff_p0 as u32)
-        .max();
+        .max()
+        .or_else(|| reincarnation_ready(ctx, character_guid).then_some(REINCARNATION));
     SelfResurrectOption::set(ctx, character_guid, chosen);
+}
+
+fn reincarnation_ready(ctx: &ReducerContext, character_guid: u64) -> bool {
+    super::knows_spell(ctx, character_guid, REINCARNATION_PASSIVE)
+        && crate::items::item_count(ctx, character_guid, ANKH) > 0
+        && !ctx
+            .db
+            .game_spell_cd()
+            .by_caster()
+            .filter(&character_guid)
+            .any(|cd| cd.spell_id == REINCARNATION && cd.ready_at > crate::time::now(ctx))
 }
 
 pub(crate) fn do_self_resurrect(
@@ -41,6 +58,21 @@ pub(crate) fn do_self_resurrect(
         .filter(&option.spell_id)
         .find(|e| e.kind == E_SELF_RESURRECT)
         .ok_or_else(|| format!("spell {} has no self-resurrect effect", option.spell_id))?;
+
+    if option.spell_id == REINCARNATION {
+        if !reincarnation_ready(ctx, character_guid) {
+            return Err(
+                "Reincarnation requires the learned spell, a carried Ankh and no cooldown".into(),
+            );
+        }
+        crate::items::remove_items(ctx, character_guid, ANKH, 1)?;
+        super::cast::start_spell_cooldown(
+            ctx,
+            character_guid,
+            REINCARNATION,
+            REINCARNATION_COOLDOWN_MS,
+        );
+    }
 
     let (health, power) = self_resurrect_vitals(
         character.max_health,

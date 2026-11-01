@@ -118,6 +118,13 @@ and the vmangos snapshot, so these steps are their only client proof.
 - Release Spirit first, and record whether the ghost gets any prompt. After a Priest resurrects the
   Warlock, a death without a Soulstone shows only Release Spirit. Log out on the death screen and
   back in, and record the state. Moving during the 3 second cast still consumes the item.
+- On a Shaman who knows Reincarnation (20608), carry an Ankh (17030) with no cooldown on
+  21169. Die and confirm the death dialog shows Use Reincarnation. Use it and confirm 20% health
+  and mana, one Ankh consumed, no Resurrection Sickness, and a one-hour cooldown. Die again with
+  another Ankh; the button must be absent until the cooldown expires.
+- Repeat with no Ankh, an Ankh only in the bank, and Reincarnation not learned. Each death must
+  show only Release Spirit. With both a Soulstone and ready Reincarnation, confirm Use Soulstone
+  takes priority and uses neither an Ankh nor the Reincarnation cooldown.
 
 ## Distract
 

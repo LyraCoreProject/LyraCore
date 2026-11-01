@@ -153,6 +153,131 @@ fn rage_comes_back_empty_and_energy_comes_back_full() {
     assert_eq!(number(&entity(&standalone), "power"), 100);
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn reincarnation_revives_with_an_ankh_and_starts_its_cooldown() {
+    let shard = start("self-res-reincarnation");
+    reincarnation(&shard);
+    shard.assert_call("debug_set_health", &["1", "0"]);
+    assert_eq!(option_spell(&shard), Some(21169));
+    hold_vitals(&shard);
+    shard.assert_call("debug_self_resurrect", &["1"]);
+    let character = entity(&shard);
+    assert_alive_in_place(&character);
+    assert_eq!(number(&character, "health"), 200);
+    assert_eq!(number(&character, "power"), 400);
+    assert_eq!(option_spell(&shard), None);
+    assert!(shard
+        .query_rows("SELECT guid FROM game_item_instance WHERE owner_guid = 1 AND entry = 17030")
+        .is_empty());
+    let cooldowns =
+        shard.query_rows("SELECT spell_id, ready_at FROM game_spell_cd WHERE caster_guid = 1");
+    assert_eq!(cooldowns.len(), 1);
+    assert_eq!(number(&cooldowns[0], "spell_id"), 21169);
+    let ready_at = spacetimedb::Timestamp::parse_from_rfc3339(&cooldowns[0]["ready_at"])
+        .unwrap()
+        .to_micros_since_unix_epoch();
+    assert_eq!(ready_at, 1_003_600_000_000);
+
+    ankh(&shard);
+    shard.assert_call("debug_set_health", &["1", "0"]);
+    assert_eq!(option_spell(&shard), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn reincarnation_requires_a_learned_spell_and_a_carried_ankh() {
+    for (name, change) in [
+        (
+            "unlearned",
+            "DELETE FROM game_player_spell WHERE character_guid = 1 AND spell_id = 20608",
+        ),
+        (
+            "missing-ankh",
+            "DELETE FROM game_item_instance WHERE owner_guid = 1 AND entry = 17030",
+        ),
+        (
+            "banked-ankh",
+            "UPDATE game_item_instance SET slot = 39 WHERE owner_guid = 1 AND entry = 17030",
+        ),
+    ] {
+        let shard = start(&format!("self-res-{name}"));
+        reincarnation(&shard);
+        shard.assert_sql(change);
+        shard.assert_call("debug_set_health", &["1", "0"]);
+        assert_eq!(option_spell(&shard), None, "{name}");
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn soulstone_takes_priority_without_spending_reincarnation() {
+    let shard = start("self-res-priority");
+    reincarnation(&shard);
+    soulstone(&shard);
+    shard.assert_call("debug_set_health", &["1", "0"]);
+    assert_eq!(option_spell(&shard), Some(SOULSTONE_SELF_RES));
+    shard.assert_call("debug_self_resurrect", &["1"]);
+    assert_eq!(
+        shard
+            .query_rows(
+                "SELECT guid FROM game_item_instance WHERE owner_guid = 1 AND entry = 17030"
+            )
+            .len(),
+        1
+    );
+    assert!(shard
+        .query_rows("SELECT id FROM game_spell_cd WHERE caster_guid = 1 AND spell_id = 21169")
+        .is_empty());
+    shard.assert_call("debug_set_health", &["1", "0"]);
+    assert_eq!(option_spell(&shard), Some(21169));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn reincarnation_rechecks_its_requirements_before_spending_the_option() {
+    let shard = start("self-res-recheck");
+    reincarnation(&shard);
+    shard.assert_call("debug_set_health", &["1", "0"]);
+    assert_eq!(option_spell(&shard), Some(21169));
+    shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1 AND entry = 17030");
+    assert!(!shard.call("debug_self_resurrect", &["1"]).status.success());
+    assert_eq!(entity(&shard)["dead"], "true");
+    assert_eq!(option_spell(&shard), Some(21169));
+    assert!(shard
+        .query_rows("SELECT id FROM game_spell_cd WHERE caster_guid = 1 AND spell_id = 21169")
+        .is_empty());
+    ankh(&shard);
+    shard.assert_call("debug_self_resurrect", &["1"]);
+    assert_alive_in_place(&entity(&shard));
+}
+
+fn reincarnation(shard: &Standalone) {
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    shard.assert_sql("INSERT INTO game_conformance_clock (id, now_micros, elapsed_micros) VALUES (0, 1000000000000, 0)");
+    set_class(shard, 7, MANA, 2000);
+    insert_spell(shard, 21169, "Reincarnation", 0);
+    insert_effect(
+        shard,
+        21169,
+        u32::from(E_SELF_RESURRECT),
+        20,
+        u32::from(T_SELF),
+        0,
+        0,
+    );
+    shard.assert_call("debug_learn_spell", &["1", "20608"]);
+    ankh(shard);
+}
+
+fn ankh(shard: &Standalone) {
+    shard.assert_call("debug_grant_item", &["1", "6948", "1"]);
+    shard.assert_sql(
+        "UPDATE game_item_instance SET entry = 17030 WHERE owner_guid = 1 AND entry = 6948",
+    );
+}
+
 fn start(name: &str) -> Standalone {
     let mut standalone = Standalone::start(name);
     standalone.publish_module();
