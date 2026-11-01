@@ -3884,12 +3884,18 @@ def check_logon(host):
     assert stale.socket.recv(1) == b''
     stale.close()
     for options, expected in [({'valid_proof': False}, 13), ({'build': 1234}, 20), ({'username': 'UNKNOWN'}, 21)]:
-        client = host.connect(**({'username': 'LOGON', 'key': native_key} | options))
+        client = host.connect(**({'username': 'LOGON', 'key': native_key,
+                                 'addons': [('CustomAddon', 1, 0, 0)]} | options))
         assert client.read(False) == (0x1ee, bytes([expected])), options
         assert client.socket.recv(1) == b''
         client.close()
-    client = host.connect('LOGON', key=native_key)
+    client = host.connect('LOGON', key=native_key, addons=[
+        ('Blizzard_AuctionUI', 1, 0x4c1c776d, 0),
+        ('CustomAddon', 1, 0x12345678, 0),
+        ('DisabledAddon', 0, 0, 0),
+    ])
     assert client.read() == (0x1ee, bytes([12]) + bytes(9))
+    assert client.addon_info == bytes([2, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0])
     ignored_requests(client)
     client.send(0x1dc, struct.pack('<II', 123, 20))
     assert client.read() == (0x1dd, struct.pack('<I', 123))

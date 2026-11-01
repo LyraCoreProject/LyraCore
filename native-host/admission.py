@@ -15,9 +15,10 @@ def run(host, idle_seconds=0):
         guids[suffix] = host.character('Queued' + suffix.lower(), account=account)
 
     def open_client(suffix, position=0):
-        client = host.connect('QUEUE' + suffix)
+        client = host.connect('QUEUE' + suffix, addons=[('QueueAddon', 1, 0, 0)])
         clients.append(client)
         expect_auth(client, position)
+        assert client.addon_info == bytes([1, 0, 0])
         return client
 
     def expect_auth(client, position=0):

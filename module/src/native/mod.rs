@@ -632,7 +632,15 @@ fn authenticate(
             },
             ..connection
         });
-    admission::request(ctx, connection_id, account.id)
+    admission::request(ctx, connection_id, account.id)?;
+    send(
+        ctx,
+        connection_id,
+        ServerOpcodeMessage::SMSG_ADDON_INFO(Box::new(codec::auth_session::build_addon_info(
+            &claim.addon_info,
+        ))),
+        false,
+    )
 }
 
 fn auth_failure(

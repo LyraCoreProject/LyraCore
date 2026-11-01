@@ -75,6 +75,35 @@ Compressed authentication and ticket requests use bounded raw handlers. Tickets 
 handler in the Login Queue, at Character selection and in the world. The Module ignores decoded
 in-world requests without a handler, including Help UI bug reports.
 
+## Addon authentication
+
+The Module reads the zlib addon block after the `CMSG_AUTH_SESSION` proof. It permits at most
+1,048,575 decompressed bytes and 248 entries. The count keeps even a reply with a 256-byte public
+key for every entry within one world frame. The declared size must match the decompressed size;
+incomplete streams, trailing compressed bytes and incomplete entries end the World Session.
+A zero size permits either no compressed bytes or a complete empty zlib stream.
+
+After the Session proof succeeds, the Module sends `SMSG_ADDON_INFO` (0x2EF)
+after the initial `SMSG_AUTH_RESPONSE`, including an initial Login Queue response. Queue updates
+and later admission do not repeat it. An empty list receives an empty reply. Failed authentication
+receives no addon reply.
+
+Entries retain request order. As in
+[VMaNGOS's addon handshake](https://github.com/vmangos/core/blob/development/src/game/Handlers/AddonHandler.cpp),
+names containing `Blizzard` receive hidden status 2 and an information block. CRC `0x4C1C776D`
+uses the client's existing key; other CRCs receive the build-5875 256-byte modulus. Custom addons
+receive visible status 1 without an information block. Replies offer no revision or URL.
+
+The fixed [authentication packet fixture](../crates/lyracore-protocol/tests/fixtures/auth-session-5875.bin)
+contains the 174 published build-5875 packet bytes from
+[wow_messages](https://github.com/gtker/wow_messages/blob/main/wow_message_parser/wowm/world/character_screen/cmsg_auth_session.wowm).
+It contains twelve Blizzard addons and is independent of this repository's request writer. Codec
+tests check that packet, reply layouts, the count bound and malformed input. Native checks verify
+encrypted replies for empty, custom, disabled and Blizzard addon lists and for Login Queue entry.
+These checks do not establish addon UI behavior on a real client.
+
+## Character state
+
 Character CREATE and VALUES expose XP, coinage, inventory pointers, skills and Character-sheet
 stats only to the owner. Observers receive public fields such as health, level and visible equipment.
 Whispers remain deliverable while the recipient waits for a world-port acknowledgement.
