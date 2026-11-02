@@ -89,26 +89,114 @@ fn without_an_option_self_resurrection_is_refused_and_changes_nothing() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn the_option_survives_release_spirit_and_revives_the_ghost() {
+fn release_spirit_clears_the_option_and_self_resurrection_is_refused() {
     let standalone = start("self-res-ghost");
     set_class(&standalone, WARLOCK, MANA, 2000);
     soulstone(&standalone);
     standalone.assert_call("debug_set_health", &[&PLAYER.to_string(), "0"]);
+    assert_eq!(option_spell(&standalone), Some(SOULSTONE_SELF_RES));
     standalone.assert_call("debug_repop", &[&PLAYER.to_string()]);
 
     let ghost = entity(&standalone);
     assert_ne!(number(&ghost, "player_flags") & player_flags::GHOST, 0);
-    assert_eq!(option_spell(&standalone), Some(SOULSTONE_SELF_RES));
+    assert_eq!(option_spell(&standalone), None);
     assert_eq!(corpse_count(&standalone), 1);
 
-    hold_vitals(&standalone);
-    standalone.assert_call("debug_self_resurrect", &[&PLAYER.to_string()]);
+    assert!(!standalone
+        .call("debug_self_resurrect", &[&PLAYER.to_string()])
+        .status
+        .success());
 
-    let player = entity(&standalone);
-    assert_alive_in_place(&player);
-    assert_eq!(number(&player, "health"), SOULSTONE_HEALTH);
-    assert_eq!(corpse_count(&standalone), 0, "the corpse is gone");
-    assert_eq!(option_spell(&standalone), None);
+    assert_eq!(entity(&standalone), ghost);
+    assert_eq!(corpse_count(&standalone), 1);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_ghost_cannot_spend_a_stale_reincarnation_option_through_the_native_protocol() {
+    let shard = start("self-res-ghost-stale");
+    let mut connection = enter_native(&shard);
+    reincarnation(&shard);
+    shard.assert_call("debug_set_health", &["1", "0"]);
+    shard.assert_call("debug_repop", &["1"]);
+    let counter = number(
+        &shard
+            .query_rows("SELECT teleport_counter FROM game_native_player WHERE character_guid = 1")
+            [0],
+        "teleport_counter",
+    );
+    let mut acknowledgement = PLAYER.to_le_bytes().to_vec();
+    acknowledgement.extend_from_slice(&counter.to_le_bytes());
+    acknowledgement.extend_from_slice(&0u32.to_le_bytes());
+    connection
+        .call("native_world_receive", json!([0x00c7u32, acknowledgement]))
+        .unwrap();
+    shard.assert_sql("DELETE FROM game_self_resurrect_option WHERE character_guid = 1");
+    shard.assert_sql(
+        "INSERT INTO game_self_resurrect_option (character_guid, spell_id) VALUES (1, 21169)",
+    );
+    let ghost = entity(&shard);
+    let corpses = shard.query_rows("SELECT * FROM game_corpse WHERE owner_guid = 1");
+    let inventory = shard.query_rows("SELECT * FROM game_item_instance WHERE owner_guid = 1");
+
+    let refusal = connection
+        .call("native_world_receive", json!([0x2b3u32, Vec::<u8>::new()]))
+        .unwrap_err();
+    assert!(refusal.contains("native_reply:[]"), "{refusal}");
+    assert_eq!(entity(&shard), ghost);
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_corpse WHERE owner_guid = 1"),
+        corpses
+    );
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_item_instance WHERE owner_guid = 1"),
+        inventory
+    );
+    assert_eq!(option_spell(&shard), Some(21169));
+    assert!(shard
+        .query_rows("SELECT id FROM game_spell_cd WHERE caster_guid = 1")
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn beginning_a_transfer_clears_the_option_even_without_a_live_entity() {
+    for live in [true, false] {
+        let shard = start(&format!("self-res-transfer-{live}"));
+        shard.assert_call("claim_operator", &[]);
+        soulstone(&shard);
+        shard.assert_call("debug_set_health", &["1", "0"]);
+        assert_eq!(option_spell(&shard), Some(SOULSTONE_SELF_RES));
+        if !live {
+            shard.assert_sql("DELETE FROM game_world_entity WHERE guid = 1");
+        }
+
+        shard.assert_call(
+            "begin_transfer",
+            &[
+                "619",
+                &support::actor("1"),
+                "0",
+                "0",
+                "1200",
+                "1200",
+                "50",
+                "0",
+                "true",
+            ],
+        );
+
+        assert_eq!(option_spell(&shard), None);
+        assert!(shard
+            .query_rows("SELECT guid FROM game_world_entity WHERE guid = 1")
+            .is_empty());
+        assert_eq!(
+            shard
+                .query_rows("SELECT transfer_id FROM game_transfer_out WHERE transfer_id = 619")
+                .len(),
+            1
+        );
+    }
 }
 
 #[test]
@@ -118,6 +206,9 @@ fn a_spirit_healer_resurrection_or_a_logout_spends_the_option() {
     soulstone(&standalone);
     standalone.assert_call("debug_set_health", &[&PLAYER.to_string(), "0"]);
     standalone.assert_call("debug_repop", &[&PLAYER.to_string()]);
+    standalone.assert_sql(&format!(
+        "INSERT INTO game_self_resurrect_option (character_guid, spell_id) VALUES ({PLAYER}, {SOULSTONE_SELF_RES})"
+    ));
     standalone.assert_call("debug_spirit_healer_res", &[&PLAYER.to_string()]);
     assert_eq!(
         option_spell(&standalone),

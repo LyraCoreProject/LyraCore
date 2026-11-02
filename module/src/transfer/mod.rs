@@ -698,6 +698,7 @@ impl BeginSink for CtxShard<'_> {
         is_in_transit(self.ctx, guid)
     }
     fn freeze_live_entity(&mut self, guid: u64) {
+        crate::spell::clear_resurrect_request_and_option(self.ctx, guid);
         // Persist vitals, position and ghost state before deleting the live entity.
         let entities = self.ctx.db.game_world_entity();
         if let Some(e) = entities.guid().find(guid) {

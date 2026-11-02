@@ -76,8 +76,7 @@ pub(crate) use scheduler::{
 };
 pub use scheduler::{fire_spell_impact, tick_auras, tick_ground_areas};
 pub(crate) use self_resurrect::{
-    clear_resurrect_request, clear_resurrect_request_and_option, do_self_resurrect,
-    record_self_resurrect_option,
+    clear_resurrect_request_and_option, do_self_resurrect, record_self_resurrect_option,
 };
 
 pub(crate) use spellbook::{

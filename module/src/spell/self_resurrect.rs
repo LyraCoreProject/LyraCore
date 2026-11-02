@@ -1,4 +1,4 @@
-use lyracore_shared::packing::power_type;
+use lyracore_shared::{constants::player_flags, packing::power_type};
 use spacetimedb::ReducerContext;
 
 use super::{
@@ -60,6 +60,9 @@ pub(crate) fn do_self_resurrect(
         .ok_or_else(|| "caller not in world".to_string())?;
     if !character.dead {
         return Err("caller is not dead".into());
+    }
+    if character.player_flags & player_flags::GHOST != 0 {
+        return Err("caller is a ghost".into());
     }
     let option = ctx
         .db
@@ -127,12 +130,8 @@ pub(crate) fn self_resurrect_vitals(
     (health.min(max_health).max(1), power)
 }
 
-pub(crate) fn clear_resurrect_request(ctx: &ReducerContext, character_guid: u64) {
-    super::ResurrectRequest::delete(ctx, character_guid);
-}
-
 pub(crate) fn clear_resurrect_request_and_option(ctx: &ReducerContext, character_guid: u64) {
-    clear_resurrect_request(ctx, character_guid);
+    super::ResurrectRequest::delete(ctx, character_guid);
     SelfResurrectOption::set(ctx, character_guid, None);
 }
 
