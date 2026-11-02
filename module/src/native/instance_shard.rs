@@ -345,7 +345,7 @@ fn finish(ctx: &ReducerContext, request: &[u8], instance_id: u64, error: &str) {
         return;
     };
     if actor.map_id != trigger.map_id
-        || !crate::quest::AreaTriggerVolume::of(&trigger).contains(
+        || !crate::quest::AreaTriggerVolume::of(&trigger).contains_client_position(
             [trigger.x, trigger.y, trigger.z],
             [actor.x, actor.y, actor.z],
         )

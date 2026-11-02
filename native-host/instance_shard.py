@@ -84,6 +84,8 @@ def check(host):
         assert sorted(host.rows(f'SELECT guid, entry, slot, stack_count FROM game_item_instance WHERE owner_guid = {guid}', target)) == sorted(inventory)
         return host.rows(f'SELECT instance_id FROM game_world_entity WHERE guid = {guid}', target)[0][0]
 
+    leader.send(0xb6, struct.pack('<IIffffI', 2, 0, 1012, 1000, 0, 0, 0))
+    leader.collect()
     run = cross(leader, leader_guid, continent, instances, entrance)
     assert run != 0
     assert host.rows('SELECT instance_id FROM game_instance', continent) == []

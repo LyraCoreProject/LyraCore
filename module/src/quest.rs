@@ -1421,20 +1421,29 @@ impl AreaTriggerVolume {
     }
 
     pub(crate) fn contains(self, origin: [f32; 3], point: [f32; 3]) -> bool {
+        self.contains_with_tolerance(origin, point, 0.0)
+    }
+
+    pub(crate) fn contains_client_position(self, origin: [f32; 3], point: [f32; 3]) -> bool {
+        // The client can send the trigger before its next movement update.
+        self.contains_with_tolerance(origin, point, 5.0)
+    }
+
+    fn contains_with_tolerance(self, origin: [f32; 3], point: [f32; 3], tolerance: f64) -> bool {
         if !self.valid() || !origin.into_iter().chain(point).all(f32::is_finite) {
             return false;
         }
         let [dx, dy, dz] =
             std::array::from_fn(|index| f64::from(point[index]) - f64::from(origin[index]));
         if self.radius > 0.0 {
-            return dx * dx + dy * dy + dz * dz <= f64::from(self.radius).powi(2);
+            return dx * dx + dy * dy + dz * dz <= (f64::from(self.radius) + tolerance).powi(2);
         }
         let (sin, cos) = f64::from(self.yaw).sin_cos();
         let local_x = dx * cos + dy * sin;
         let local_y = -dx * sin + dy * cos;
-        local_x.abs() <= f64::from(self.length) / 2.0
-            && local_y.abs() <= f64::from(self.width) / 2.0
-            && dz.abs() <= f64::from(self.height) / 2.0
+        local_x.abs() <= f64::from(self.length) / 2.0 + tolerance
+            && local_y.abs() <= f64::from(self.width) / 2.0 + tolerance
+            && dz.abs() <= f64::from(self.height) / 2.0 + tolerance
     }
 }
 
@@ -1597,7 +1606,7 @@ pub(crate) fn request_enter_areatrigger(
         .find(trigger_id)
         .ok_or("AreaTrigger is unavailable")?;
     if actor.map_id != trigger.map_id
-        || !AreaTriggerVolume::of(&trigger).contains(
+        || !AreaTriggerVolume::of(&trigger).contains_client_position(
             [trigger.x, trigger.y, trigger.z],
             [actor.x, actor.y, actor.z],
         )
@@ -1966,6 +1975,42 @@ mod tests {
         assert!(route.contains(13.0, 24.0, 30.0));
         assert!(!route.contains(13.1, 24.0, 30.0));
         assert!(!route.contains(10.0, 20.0, 35.1));
+    }
+
+    #[test]
+    fn client_areatrigger_sphere_allows_five_yards_of_position_lag() {
+        let volume = AreaTriggerVolume {
+            radius: 6.0,
+            length: 0.0,
+            width: 0.0,
+            height: 0.0,
+            yaw: 0.0,
+        };
+        let origin = [-14.3628, -393.38, 64.5605];
+        let last_position = [-14.5732, -385.475, 62.4561];
+        assert!(!volume.contains(origin, last_position));
+        assert!(volume.contains_client_position(origin, last_position));
+        assert!(volume.contains_client_position([0.0; 3], [11.0, 0.0, 0.0]));
+        assert!(!volume.contains_client_position([0.0; 3], [11.1, 0.0, 0.0]));
+        assert!(!volume.contains_client_position([0.0; 3], [0.0, 0.0, 11.1]));
+        assert!(!volume.contains_client_position([0.0; 3], [f32::NAN, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn client_areatrigger_box_bounds_position_lag_in_rotated_axes() {
+        let volume = AreaTriggerVolume {
+            radius: 0.0,
+            length: 8.0,
+            width: 2.0,
+            height: 4.0,
+            yaw: std::f32::consts::FRAC_PI_2,
+        };
+        let origin = [0.0; 3];
+        assert!(volume.contains_client_position(origin, [5.9, 8.9, 7.0]));
+        assert!(!volume.contains(origin, [5.9, 8.9, 7.0]));
+        for outside in [[6.1, 0.0, 0.0], [0.0, 9.1, 0.0], [0.0, 0.0, 7.1]] {
+            assert!(!volume.contains_client_position(origin, outside));
+        }
     }
 
     #[test]
