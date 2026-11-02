@@ -336,7 +336,8 @@ pub(crate) fn push_event(
         .game_character()
         .guid()
         .find(recipient_guid)
-        .map(|c| c.owner_identity);
+        .map(|c| c.owner_identity)
+        .or_else(|| crate::native::realm_party::identity(ctx, recipient_guid));
     ctx.db.game_group_event().insert(GroupEvent {
         id: 0,
         recipient_identity: crate::helpers::event_recipient_identity(bound),
@@ -355,13 +356,7 @@ pub(crate) fn roster_payload(ctx: &ReducerContext, group_id: u64) -> Option<Stri
         .into_iter()
         .map(|m| RosterMember {
             guid: m.character_guid,
-            name: ctx
-                .db
-                .game_character()
-                .guid()
-                .find(m.character_guid)
-                .map(|c| c.name)
-                .unwrap_or_default(),
+            name: crate::native::realm_party::name(ctx, m.character_guid).unwrap_or_default(),
             slot: raid_slot_of(&m),
         })
         .collect();
@@ -1020,7 +1015,7 @@ fn raid_chat_refusal(
     }
 }
 
-fn push_list_to_all(ctx: &ReducerContext, group_id: u64) {
+pub(crate) fn push_list_to_all(ctx: &ReducerContext, group_id: u64) {
     let Some(payload) = roster_payload(ctx, group_id) else {
         spacetimedb::log::warn!(
             "push_list_to_all: group {group_id} row missing — skipping roster push (broken invariant, not a fabricated empty roster)"
@@ -1291,7 +1286,8 @@ impl JoinPlan {
 fn member_identity(ctx: &ReducerContext, character_guid: u64) -> Identity {
     crate::helpers::event_recipient_identity(
         crate::helpers::character_by_guid(ctx, character_guid)
-            .map(|character| character.owner_identity),
+            .map(|character| character.owner_identity)
+            .or_else(|| crate::native::realm_party::identity(ctx, character_guid)),
     )
 }
 
@@ -1796,6 +1792,9 @@ pub(crate) fn apply_action(
     actor_guid: u64,
     action: GroupAction,
 ) -> Result<(), GroupOpError> {
+    if plane == Plane::Shard && crate::peer::realm_shard(ctx).is_some() {
+        return Err(GroupRefusal::ActionSuppressed.into());
+    }
     use GroupAction::*;
     use RosterChange::{Changed, Unchanged};
     if plane == Plane::Shard {
@@ -1888,7 +1887,7 @@ fn accepts_other_team(ctx: &ReducerContext, acceptor_guid: u64) -> bool {
         .is_some_and(|(acceptor, inviter)| !lyracore_shared::faction::same_team(acceptor, inviter))
 }
 
-fn action_groups(
+pub(crate) fn action_groups(
     ctx: &ReducerContext,
     actor_guid: u64,
     action: GroupAction,
@@ -2108,7 +2107,7 @@ fn target_icon_updates(
     Ok(updates)
 }
 
-fn write_target_icon(ctx: &ReducerContext, group_id: u64, update: TargetIcon) {
+pub(crate) fn write_target_icon(ctx: &ReducerContext, group_id: u64, update: TargetIcon) {
     let icons = ctx.db.game_group_target_icon();
     let row = icons
         .by_group()

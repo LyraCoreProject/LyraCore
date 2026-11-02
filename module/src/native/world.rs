@@ -4,11 +4,11 @@ use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use crate::action_bar::game_player_action;
 use crate::aoi::game_aoi_grant;
-use crate::game_world_entity;
 use crate::reputation::game_player_reputation;
 use crate::skill::game_player_skill;
 use crate::spell::spellbook::game_player_spell;
 use crate::world::CharacterDeparture;
+use crate::{game_character, game_world_entity};
 
 use super::{
     game_native_player, game_native_world_connection, NativeActive, NativePlayer,
@@ -67,6 +67,34 @@ pub(super) fn enter_character(
     if character.account_id != account_id || account.banned {
         return Err("Account cannot log in this Character".into());
     }
+    let origin = super::teleport::NativeTeleportOrigin {
+        map_id: character.map_id,
+        instance_id: character.pending_instance_id,
+        zone_id: character.zone_id,
+        x: character.x,
+        y: character.y,
+        z: character.z,
+        orientation: character.orientation,
+    };
+    let mut character = character;
+    crate::world::restore_reaped_instance(ctx, &mut character);
+    if character.map_id != origin.map_id
+        && super::directory::transfer_target(ctx, character.map_id).is_some()
+    {
+        ctx.db.game_character().guid().update(character);
+        if super::transfer::begin_character(
+            ctx,
+            &connection,
+            account_id,
+            guid,
+            teleport_counter,
+            Some(origin),
+            entry == crate::world::WorldEntry::WorldPort,
+        )? {
+            return Ok(());
+        }
+        return Err("Instance return has no destination World Shard".into());
+    }
     if !super::directory::owns_map(ctx, character.map_id) {
         return Err("World Shard does not own the Character map".into());
     }
@@ -77,6 +105,7 @@ pub(super) fn enter_character(
     if let Some(previous) = ctx.db.game_native_player().account_id().find(account_id) {
         super::disconnect(ctx, previous.connection_id);
     }
+    super::realm_party::restore(ctx, guid);
     crate::world::apply_player_login(ctx, &account, guid, owner, entry)?;
     let live = ctx
         .db
@@ -246,6 +275,7 @@ pub(super) fn enter_character(
     super::petition::replay(ctx, guid, connection.connection_id);
     super::chat::replay_system_messages(ctx, guid);
     super::party::roster(ctx, guid, entry == crate::world::WorldEntry::Login);
+    super::realm_party::presence(ctx, guid, true);
     if entry == crate::world::WorldEntry::Login {
         super::social::presence(ctx, guid, true);
         super::guild::presence(ctx, guid, true);
@@ -264,6 +294,7 @@ pub(super) fn leave(
 ) {
     let players = ctx.db.game_native_player();
     if let Some(player) = players.connection_id().find(connection_id) {
+        super::realm_party::presence(ctx, player.character_guid, false);
         super::clear_audience(ctx, connection_id);
         super::member_stats::stop(ctx, connection_id);
         super::teleport::restore_origin(ctx, player.character_guid, player.teleport_origin);

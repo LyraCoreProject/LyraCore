@@ -1619,6 +1619,15 @@ pub(crate) fn apply_enter_areatrigger(ctx: &ReducerContext, player_guid: u64, tr
     on_areatrigger_entered(ctx, player_guid, trigger_id);
     if let Some((target_map, x, y, z, o)) = teleport_target {
         let instance_id = if crate::instance::is_dungeon_map(target_map) {
+            if crate::native::instance_shard::enter(
+                ctx,
+                player_guid,
+                trigger_id,
+                target_map,
+                [x, y, z, o],
+            ) {
+                return;
+            }
             match crate::instance::resolve_or_create_instance(ctx, player_guid, target_map) {
                 Ok(id) => id,
                 Err(e) => {

@@ -136,7 +136,29 @@ fn presence(ctx: &ReducerContext, guid: u64) -> Presence {
             auras: auras(ctx, guid),
             pet: pet(ctx, guid),
         }),
-        None => Presence::Offline,
+        None => {
+            if super::realm_party::online(ctx, guid) {
+                use super::realm_party::game_party_character;
+                ctx.db
+                    .game_party_character()
+                    .guid()
+                    .find(guid)
+                    .and_then(|character| character.stats)
+                    .map_or(Presence::Loading, Presence::Live)
+            } else {
+                Presence::Offline
+            }
+        }
+    }
+}
+
+pub(super) fn snapshot(ctx: &ReducerContext, guid: u64) -> Option<MemberEntity> {
+    if ctx.db.game_world_entity().guid().find(guid).is_none() {
+        return None;
+    }
+    match presence(ctx, guid) {
+        Presence::Live(entity) => Some(entity),
+        _ => None,
     }
 }
 
@@ -305,6 +327,7 @@ pub fn tick_native_member_stats(ctx: &ReducerContext, record: NativeMemberStats)
             return;
         }
     };
+    super::realm_party::presence(ctx, owner.character_guid, true);
     let visible: BTreeSet<_> = ctx
         .db
         .game_aoi_grant()

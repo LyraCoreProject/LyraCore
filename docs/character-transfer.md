@@ -49,7 +49,8 @@ outboxes and results resume on restart. A timeout alone never releases cross-Sha
    The notice comes from the new owner and matches the old connection, so it cannot close a newer
    World Session.
 7. The Native Host attaches the same connection to the target. `native_world_adopt` enters with
-   `WorldEntry::WorldPort` and the saved teleport counter. Self CREATE finishes the loading screen.
+   `WorldEntry::WorldPort` and the saved teleport counter. A login returning from a reaped Instance
+   instead retains `WorldEntry::Login` for its destination. Self CREATE finishes the loading screen.
    The source keeps its pending departure through the Handoff marker until connection cleanup.
    Adoption clears any pending departure left by an earlier visit to the target on this connection.
    If the connection is lost, the next login routes to the target through the updated directory.
@@ -73,7 +74,8 @@ a refused Transfer or connection loss before adoption also clears them on the re
 Leaving the world keeps pet despawn, buyback cleanup and the rest of the existing logout cleanup.
 Connection request limits start with the adopted connection state.
 
-Groups, guilds, friends, mail and auctions across World Shards remain unsupported. Whispers and
+Guilds, friends, mail and auctions across World Shards remain unsupported. Native Groups use
+Realm-owned membership with World Shard projections, restored independently of the manifest. Whispers and
 `/who` use Realm queries; see [their delivery and snapshot limits](architecture.md#durable-state-and-extension-points).
 The manifest does not make Shard-owned social or economic state shared. Transport attachment does
 not survive a Transfer between World Shards. Sessionless Character Relocation does not use this

@@ -53,6 +53,8 @@ pub struct NativeTransfer {
     pub blob: Vec<u8>,
     pub revision: u64,
     pub origin: Vec<u8>,
+    #[default(true)]
+    pub world_port: bool,
 }
 
 pub(super) fn begin(
@@ -60,7 +62,28 @@ pub(super) fn begin(
     connection: &NativeWorldConnection,
     player: &NativePlayer,
 ) -> Result<bool, String> {
-    let Some(character) = crate::helpers::character_by_guid(ctx, player.character_guid) else {
+    begin_character(
+        ctx,
+        connection,
+        player.account_id,
+        player.character_guid,
+        player.teleport_counter,
+        player.teleport_origin,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn begin_character(
+    ctx: &ReducerContext,
+    connection: &NativeWorldConnection,
+    account_id: u64,
+    guid: u64,
+    teleport_counter: u32,
+    origin: Option<NativeTeleportOrigin>,
+    world_port: bool,
+) -> Result<bool, String> {
+    let Some(character) = crate::helpers::character_by_guid(ctx, guid) else {
         return Err("Character no longer exists".into());
     };
     let Some(target) = directory::transfer_target(ctx, character.map_id) else {
@@ -71,13 +94,13 @@ pub(super) fn begin(
         .db
         .game_account()
         .id()
-        .find(player.account_id)
+        .find(account_id)
         .ok_or("Account no longer exists")?;
     let session = ctx
         .db
         .game_session()
         .account_id()
-        .find(player.account_id)
+        .find(account_id)
         .ok_or("Session no longer exists")?;
     let cipher = ctx
         .db
@@ -99,20 +122,14 @@ pub(super) fn begin(
         connection.connection_id,
         crate::world::CharacterDeparture::Transfer,
     );
-    let mut character = crate::helpers::character_by_guid(ctx, player.character_guid)
+    let mut character = crate::helpers::character_by_guid(ctx, guid)
         .ok_or("Character vanished during departure")?;
     character.relocate(destination);
     ctx.db.game_character().guid().update(character);
-    if let Some(cast) = crate::spell::pending_cast(ctx, player.character_guid) {
-        crate::spell::cancel_cast_attempt(ctx, player.character_guid, cast.scheduled_id);
+    if let Some(cast) = crate::spell::pending_cast(ctx, guid) {
+        crate::spell::cancel_cast_attempt(ctx, guid, cast.scheduled_id);
     }
-    transfer::apply_begin(
-        &mut CtxShard { ctx },
-        transfer_id,
-        player.character_guid,
-        destination,
-        true,
-    )?;
+    transfer::apply_begin(&mut CtxShard { ctx }, transfer_id, guid, destination, true)?;
     let escrow = ctx
         .db
         .game_transfer_out()
@@ -135,11 +152,12 @@ pub(super) fn begin(
         session: bsatn::to_vec(&session).map_err(|error| error.to_string())?,
         client_seed: cipher.client_seed,
         client_proof: cipher.client_proof,
-        character_guid: player.character_guid,
-        teleport_counter: player.teleport_counter,
+        character_guid: guid,
+        teleport_counter,
         blob: escrow.blob,
         revision: directory::revision(ctx),
-        origin: bsatn::to_vec(&player.teleport_origin).map_err(|error| error.to_string())?,
+        origin: bsatn::to_vec(&origin).map_err(|error| error.to_string())?,
+        world_port,
     });
     Ok(true)
 }
@@ -169,6 +187,7 @@ pub fn idc_native_transfer(
     blob: Vec<u8>,
     revision: u64,
     origin: Vec<u8>,
+    world_port: bool,
 ) -> Result<(), String> {
     require_world_peer(ctx, realm)?;
     let _ = origin;
@@ -205,7 +224,22 @@ pub fn idc_native_transfer(
     {
         return Err("Transfer target already holds this Character".into());
     }
+    let first_import = ctx
+        .db
+        .game_transfer_in()
+        .transfer_id()
+        .find(transfer_id)
+        .is_none();
     transfer::apply_import_blob(&mut CtxShard { ctx }, transfer_id, blob)?;
+    if first_import {
+        super::instance_shard::imported(
+            ctx,
+            character_guid,
+            connection,
+            decoded.dest_map_id,
+            decoded.dest_instance_id,
+        )?;
+    }
     directory::observe_revision(ctx, revision);
     let connection_id = ConnectionId::from_u128(connection);
     let handoffs = ctx.db.game_native_handoff();
@@ -217,7 +251,7 @@ pub fn idc_native_transfer(
         client_seed,
         client_proof,
         character_guid: Some(character_guid),
-        world_port: true,
+        world_port,
         teleport_counter,
         transfer_id,
         transfer_source: Some(ctx.sender()),

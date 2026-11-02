@@ -54,6 +54,11 @@ pub(super) fn receive(
     if let Some(notice) = super::chat_flood::judge(ctx, connection, &actor, &message) {
         return Ok(super::send(ctx, id, notice, false)?);
     }
+    if matches!(&message, ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) if kind(&chat.chat_type).is_some_and(super::realm_party::is_group_chat))
+        && super::realm_party::submit(ctx, id, guid, &message)?
+    {
+        return Ok(());
+    }
     let needs_ground_actor = match &message {
         ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) => matches!(
             chat.chat_type,

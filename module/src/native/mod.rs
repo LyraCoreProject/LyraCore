@@ -25,9 +25,14 @@ mod gossip;
 mod guild;
 mod handoff;
 mod realm_communication;
+pub(crate) mod realm_party;
 mod realm_shard;
 pub(crate) use realm_shard::account_changed;
 mod instance;
+pub(crate) mod instance_shard;
+pub(crate) use instance_shard::{
+    sweep_delete_game_instance_entry, sweep_transfer_game_instance_entry,
+};
 mod inventory;
 mod logon;
 mod loot;

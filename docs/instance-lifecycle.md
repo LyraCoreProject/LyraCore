@@ -44,3 +44,35 @@ timer. `reconcile_instance_removal` runs when membership or location changes, in
 Group projection. `expire_instance_removal` checks the rule again before moving the Character home.
 
 All tables are private.
+
+## Dedicated Instance Shard
+
+A multi-Shard Realm assigns its dungeon maps to one World Shard with
+`operator_set_map_owner`, using the same ownership records on the Realm and all World Shards.
+That Instance Shard needs the dungeon World Source and `hosts_instances` enabled. Continent
+Shards need the entrance Area Triggers. There is no Instance allocator across multiple Shards.
+Existing multi-Shard data needs the reviewed migration described in [danger zones](danger-zones.md).
+
+For a remote dungeon, `native::instance_shard::enter` queues admission before teleport. The Realm
+checks the source World Session and supplies its current Group snapshot. The destination applies
+that snapshot, checks party capacity, resolves the party lease or personal binding, and creates
+population there when needed. A sixty-second admission reservation keeps the lease occupied until
+Transfer import. Admission refusal leaves the Character on its source Shard. A reply must match the
+pending request and connection, and the Character must still be inside the entrance Area Trigger.
+
+The source starts its existing teleport and Transfer after admission. The destination requires a
+live reservation for that source, Character, connection, map and Instance before accepting import.
+Import consumes the reservation, binds the arriving Character and restores its Group projection.
+The Transfer fence protects the Instance until release. Admission also clears its empty stamp.
+An expired admission cannot create an unfenced arrival: import refuses and the existing Transfer
+abort restores the source position.
+
+Dungeon exits use map ownership to Transfer back to the continent. Personal bindings travel in the
+Character manifest. A binding whose Instance was reaped is ignored on the next admission. Logging
+back into a reaped Instance resolves the existing entrance or home fallback and Transfers to that
+map's World Shard before sending the login sequence. The Character is never entered at Instance
+zero on a dungeon map as an intermediate step.
+
+The `instance-shard` Native Host check covers party entry, separate solo runs, party chat across
+the portal, exits, binding reuse, reconnect, reaping and admission refusal on a disposable Realm.
+Native Instance reset requests remain unavailable.

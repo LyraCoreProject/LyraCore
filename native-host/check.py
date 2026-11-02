@@ -22,6 +22,7 @@ from operator_characters import check_operator_characters
 from operator_creatures import check_operator_creatures
 import reload
 import realm_communication
+import instance_shard
 import retention
 from spell_source import check_spell_source_behavior
 
@@ -5456,6 +5457,7 @@ ALONE = {
     'realm-shard': (check_realm_shard, {'seeded': True}),
     'continent-shards': (check_continent_shards, {'seeded': True}),
     'realm-communication': (realm_communication.check, {'seeded': True}),
+    'instance-shard': (instance_shard.check, {'seeded': True}),
 }
 
 

@@ -270,6 +270,9 @@ pub(super) fn apply(
             revision,
             world: ctx.sender(),
         });
+        if !present {
+            super::realm_party::deleted(ctx, guid)?;
+        }
         directory.guid().delete(guid);
         if present {
             directory.insert(CharacterDirectory {

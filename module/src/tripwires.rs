@@ -15,6 +15,8 @@ pub(crate) mod character_owned_tripwire {
     ];
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
+        (&["game_party_character", "game_party_membership"], "Realm-owned party facts and projection revisions retained across Character Transfer; deletion publishes offline facts and a membership tombstone"),
+        (&["game_instance_entry_lease"], "destination-owned admission reservation expires after sixty seconds or is consumed by Transfer import"),
         (
             &["game_native_away"],
             "Realm Shard World Session routing keyed by Account, removed on return or connection close",
