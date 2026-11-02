@@ -281,7 +281,11 @@ Connection loss during loading marks the Character offline and keeps its destina
 login. The decoder uses the unpacked acknowledgement GUID in build 5875, as
 [CMaNGOS](https://github.com/cmangos/mangos-classic/blob/master/src/game/MotionGenerators/MovementHandler.cpp#L240)
 reads it. AreaTrigger requests check the Actor's map and position against the imported sphere or
-rotated box before exploration credit or teleport. Dungeon entry resolves party ownership and
+rotated box before exploration credit or teleport. Client requests allow five yards beyond the
+volume because the request can precede the next movement update, as in
+[VMaNGOS's range Gate](https://github.com/vmangos/core/blob/development/src/game/Handlers/MiscHandler.cpp#L585-L589).
+The same margin applies when asynchronous Instance admission completes. Sessionless crossings and
+content geometry use the exact volume. Dungeon entry resolves party ownership and
 Character bindings. Separate Instances keep separate AOI Grants, even on the same map.
 
 **Creatures and objects.** The [creature movement handler](../module/src/native/creature.rs) sends

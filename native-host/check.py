@@ -2028,7 +2028,7 @@ def check_areatriggers(host):
     no_port(enter(first, sphere))
     host.sql(f'UPDATE game_area_trigger SET map_id = 0 WHERE id = {sphere}')
     assert counts() == [0, 0]
-    for x, y, z in [(1005.1, 1000, 0), (1000, 1000, 5.1)]:
+    for x, y, z in [(1010.1, 1000, 0), (1000, 1000, 10.1)]:
         host.call('debug_teleport', [first_guid, 0, x, y, z, 0])
         first.collect()
         no_port(enter(first, sphere))
@@ -2038,7 +2038,7 @@ def check_areatriggers(host):
     packets = enter(first, sphere)
     assert any(opcode == 0xc7 for opcode, _ in packets)
     assert location(first_guid) == [0, 0, 1100, 1000, 0] and counts() == [1, 0]
-    host.call('debug_teleport', [first_guid, 0, 1101.1, 1000, 0, 0])
+    host.call('debug_teleport', [first_guid, 0, 1106.1, 1000, 0, 0])
     first.collect()
     no_port(enter(first, box))
     host.call('debug_teleport', [first_guid, 0, 1100, 1003.5, 1.5, 0])
@@ -2079,6 +2079,11 @@ def check_areatriggers(host):
     assert not ({first_guid, second_guid} & set(creates(packets)))
     assert solo_guid not in creates(first.collect() + second.collect())
     assert not host.rows(f'SELECT id FROM game_aoi_grant WHERE viewer_guid = {solo_guid} AND entity_guid = {first_guid}')
+    first.send(0xb6, struct.pack('<IIffffI', 2, 0, 1012, 1000, 0, 0, 0))
+    first.collect()
+    first.send(0xee, struct.pack('<IIffffI', 2, 500, 1009, 1000, 0, 0, 0))
+    first.collect()
+    assert location(first_guid)[2:] == [1012, 1000, 0]
     packets = enter(first, exit_trigger)
     assert any(opcode == 0x3e for opcode, _ in packets) and location(first_guid)[:2] == [0, 0]
     enter(first, dungeon)
