@@ -214,14 +214,13 @@ fn send_changes(ctx: &ReducerContext, account_id: u64, changes: Vec<(u64, bool)>
     let revision = revision(ctx);
     let profiles: Vec<_> = changes
         .into_iter()
-        .map(|(guid, present)| {
-            let character = ctx
-                .db
-                .game_character()
-                .guid()
-                .find(guid)
-                .filter(|_| present);
-            CharacterProfile {
+        .filter_map(|(guid, present)| {
+            let character = if present {
+                Some(crate::helpers::character_by_guid(ctx, guid)?)
+            } else {
+                None
+            };
+            Some(CharacterProfile {
                 guid,
                 account_id,
                 world: ctx.database_identity(),
@@ -232,10 +231,13 @@ fn send_changes(ctx: &ReducerContext, account_id: u64, changes: Vec<(u64, bool)>
                 race: character.as_ref().map_or(0, |character| character.race),
                 class: character.as_ref().map_or(0, |character| character.class),
                 gender: character.as_ref().map_or(0, |character| character.gender),
-                deleted: character.is_none(),
-            }
+                deleted: !present,
+            })
         })
         .collect();
+    if profiles.is_empty() {
+        return;
+    }
     ctx.db.game_character_profiles().insert(CharacterProfiles {
         id: 0,
         database: remote::Identity(realm),
