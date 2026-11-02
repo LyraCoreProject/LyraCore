@@ -52,6 +52,11 @@ fn main() {
     println!("cargo:rerun-if-changed={}", src_dir.display());
     println!("cargo:rerun-if-changed=../datascripts/runtime-scripts/events.json");
 
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-cdylib-link-arg=-undefined");
+        println!("cargo:rustc-cdylib-link-arg=dynamic_lookup");
+    }
+
     let packages_dir = Path::new(&manifest_dir)
         .parent()
         .expect("module/ has a parent (the repo root)")
