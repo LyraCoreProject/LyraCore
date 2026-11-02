@@ -37,7 +37,7 @@ impl BroadcastCooldowns {
     }
 }
 
-enum CommandReply {
+pub(super) enum CommandReply {
     Silent,
     Invite(String),
     Leave(String),
@@ -45,7 +45,7 @@ enum CommandReply {
 }
 
 impl CommandReply {
-    fn packet(&self, result: PartyResult) -> Option<ServerOpcodeMessage> {
+    pub(super) fn packet(&self, result: PartyResult) -> Option<ServerOpcodeMessage> {
         let (operation, member) = match self {
             Self::Silent => return None,
             Self::Invite(name) => (PartyOperation::Invite, name.clone()),
@@ -62,7 +62,7 @@ impl CommandReply {
         )))
     }
 
-    fn refused(&self, error: GroupOpError) -> Rollback {
+    pub(super) fn refused(&self, error: GroupOpError) -> Rollback {
         use GroupRefusal as R;
         let result = match &error {
             GroupOpError::Refused(R::AlreadyInGroup) => PartyResult::AlreadyInGroup,
@@ -100,22 +100,76 @@ pub(super) fn receive(
     guid: u64,
     message: ClientOpcodeMessage,
 ) -> Result<(), Rollback> {
+    use GroupAction as A;
     let actor = super::available_entity(ctx, guid)?;
+    let limited_action = match &message {
+        ClientOpcodeMessage::MSG_RAID_READY_CHECK(request) if request.answer.is_none() => {
+            Some(GroupAction::ReadyCheckStart)
+        }
+        ClientOpcodeMessage::MSG_MINIMAP_PING(_) => Some(GroupAction::MinimapPing {
+            x_bits: 0,
+            y_bits: 0,
+        }),
+        ClientOpcodeMessage::MSG_RANDOM_ROLL(_) => Some(GroupAction::RandomRoll { min: 0, max: 0 }),
+        _ => None,
+    };
+    if let Some(action) = limited_action {
+        if !connection
+            .group_broadcasts
+            .get_or_insert_default()
+            .admit(crate::time::now(ctx).to_micros_since_unix_epoch(), action)
+        {
+            return Ok(());
+        }
+        connection = ctx
+            .db
+            .game_native_world_connection()
+            .connection_id()
+            .update(connection);
+    }
+    if super::realm_party::submit(ctx, connection.connection_id, guid, &message)? {
+        return Ok(());
+    }
+    let Some((action, reply)) = command(ctx, guid, actor.class(), message)? else {
+        return Ok(());
+    };
+    let limited = matches!(
+        action,
+        A::ReadyCheckStart | A::MinimapPing { .. } | A::RandomRoll { .. }
+    );
+    let id = connection.connection_id;
+    if let Err(error) = crate::group::apply_action(ctx, Plane::Shard, guid, action) {
+        if limited && matches!(error, GroupOpError::Refused(_)) {
+            return Ok(());
+        }
+        return Err(reply.refused(error));
+    }
+    if let A::Invite(target) = action {
+        crate::group::answer_sessionless_invite(ctx, target)
+            .map_err(|error| reply.refused(error))?;
+    }
+    if let Some(packet) = reply.packet(PartyResult::Success) {
+        super::send(ctx, id, packet, false)?;
+    }
+    Ok(())
+}
+
+pub(super) fn command(
+    ctx: &ReducerContext,
+    guid: u64,
+    class: u8,
+    message: ClientOpcodeMessage,
+) -> Result<Option<(GroupAction, CommandReply)>, Rollback> {
     use ClientOpcodeMessage as C;
     use GroupAction as A;
-    let (action, reply) = match message {
+    let command = match message {
         C::CMSG_GROUP_INVITE(request) => {
             let reply = CommandReply::Invite(request.name.clone());
             let target = named_character(ctx, &request.name)
                 .ok_or_else(|| reply.refused(GroupRefusal::NoSuchPlayer.into()))?;
             (A::Invite(target), reply)
         }
-        C::CMSG_GROUP_ACCEPT => (
-            A::Accept {
-                class: actor.class(),
-            },
-            CommandReply::Silent,
-        ),
+        C::CMSG_GROUP_ACCEPT => (A::Accept { class }, CommandReply::Silent),
         C::CMSG_GROUP_DECLINE => (A::Decline, CommandReply::Silent),
         C::CMSG_GROUP_DISBAND => (
             A::Leave {
@@ -131,7 +185,7 @@ pub(super) fn receive(
         }
         C::CMSG_GROUP_UNINVITE_GUID(request) => {
             if request.guid.guid() == guid {
-                return Ok(());
+                return Ok(None);
             }
             (
                 A::Uninvite(request.guid.guid()),
@@ -159,7 +213,7 @@ pub(super) fn receive(
         ),
         C::CMSG_GROUP_CHANGE_SUB_GROUP(request) => {
             let Some(target) = named_member(ctx, guid, &request.name) else {
-                return Ok(());
+                return Ok(None);
             };
             (
                 A::ChangeSubgroup {
@@ -171,10 +225,10 @@ pub(super) fn receive(
         }
         C::CMSG_GROUP_SWAP_SUB_GROUP(request) => {
             let Some(first) = named_member(ctx, guid, &request.name) else {
-                return Ok(());
+                return Ok(None);
             };
             let Some(second) = named_member(ctx, guid, &request.swap_with_name) else {
-                return Ok(());
+                return Ok(None);
             };
             (A::SwapSubgroup { first, second }, CommandReply::Silent)
         }
@@ -188,7 +242,7 @@ pub(super) fn receive(
         C::MSG_RAID_TARGET_UPDATE(request) => (target_icon(*request), CommandReply::Silent),
         C::MSG_MINIMAP_PING(request) => {
             if !request.position_x.is_finite() || !request.position_y.is_finite() {
-                return Ok(());
+                return Ok(None);
             }
             (
                 A::MinimapPing {
@@ -207,42 +261,13 @@ pub(super) fn receive(
         ),
         _ => return Err("opcode is not a party or raid request".into()),
     };
-    let limited = matches!(
-        action,
-        A::ReadyCheckStart | A::MinimapPing { .. } | A::RandomRoll { .. }
-    );
-    let id = connection.connection_id;
-    if limited {
-        if !connection
-            .group_broadcasts
-            .get_or_insert_default()
-            .admit(crate::time::now(ctx).to_micros_since_unix_epoch(), action)
-        {
-            return Ok(());
-        }
-        ctx.db
-            .game_native_world_connection()
-            .connection_id()
-            .update(connection);
-    }
-    if let Err(error) = crate::group::apply_action(ctx, Plane::Shard, guid, action) {
-        if limited && matches!(error, GroupOpError::Refused(_)) {
-            return Ok(());
-        }
-        return Err(reply.refused(error));
-    }
-    if let A::Invite(target) = action {
-        crate::group::answer_sessionless_invite(ctx, target)
-            .map_err(|error| reply.refused(error))?;
-    }
-    if let Some(packet) = reply.packet(PartyResult::Success) {
-        super::send(ctx, id, packet, false)?;
-    }
-    Ok(())
+    Ok(Some(command))
 }
 
 fn named_character(ctx: &ReducerContext, name: &str) -> Option<u64> {
-    crate::helpers::character_by_name(ctx, name).map(|c| c.guid)
+    crate::helpers::character_by_name(ctx, name)
+        .map(|c| c.guid)
+        .or_else(|| super::realm_party::named(ctx, name))
 }
 
 fn named_member(ctx: &ReducerContext, guid: u64, name: &str) -> Option<u64> {
@@ -250,9 +275,9 @@ fn named_member(ctx: &ReducerContext, guid: u64, name: &str) -> Option<u64> {
     crate::group::members_of(ctx, own.group_id)
         .into_iter()
         .find_map(|member| {
-            crate::helpers::character_by_guid(ctx, member.character_guid)
-                .filter(|c| c.name.eq_ignore_ascii_case(name))
-                .map(|c| c.guid)
+            super::realm_party::name(ctx, member.character_guid)
+                .filter(|candidate| candidate.eq_ignore_ascii_case(name))
+                .map(|_| member.character_guid)
         })
 }
 
@@ -285,6 +310,7 @@ fn send_roster(ctx: &ReducerContext, connection: ConnectionId, guid: u64, roster
     super::member_stats::start(ctx, connection, guid);
     let list = codec::build_group_list(guid, roster, |member| {
         ctx.db.game_world_entity().guid().find(member).is_some()
+            || super::realm_party::online(ctx, member)
     });
     let (opcode, body) = codec::build_group_list_raw(&list);
     super::send_raw(ctx, connection, opcode, body, false);
@@ -292,6 +318,53 @@ fn send_roster(ctx: &ReducerContext, connection: ConnectionId, guid: u64, roster
         let (opcode, body) = codec::build_target_icon_list_raw(&roster.target_icons);
         super::send_raw(ctx, connection, opcode, body, false);
     }
+}
+
+#[derive(PartialEq, Eq)]
+pub(super) struct RosterState {
+    payload: String,
+    online: Vec<bool>,
+    icons: String,
+}
+
+pub(super) fn roster_state(ctx: &ReducerContext, guid: u64) -> Option<RosterState> {
+    let member = crate::group::group_of(ctx, guid)?;
+    let payload = crate::group::roster_payload(ctx, member.group_id)?;
+    let roster = RosterPayload::decode(&payload)?;
+    let online = roster
+        .members
+        .iter()
+        .map(|member| {
+            ctx.db
+                .game_world_entity()
+                .guid()
+                .find(member.guid)
+                .is_some()
+                || super::realm_party::online(ctx, member.guid)
+        })
+        .collect();
+    Some(RosterState {
+        payload,
+        online,
+        icons: group::encode_target_icons(&crate::group::target_icons_of(ctx, member.group_id)),
+    })
+}
+
+pub(super) fn enter(ctx: &ReducerContext, guid: u64, entry: crate::world::WorldEntry) {
+    if entry == crate::world::WorldEntry::WorldPort
+        && crate::peer::realm_shard(ctx).is_some()
+        && crate::group::group_of(ctx, guid).is_none()
+    {
+        group_event(
+            ctx,
+            guid,
+            lyracore_shared::group::event_kind::DESTROYED,
+            0,
+            "",
+        );
+    }
+    roster(ctx, guid, entry == crate::world::WorldEntry::Login);
+    super::realm_party::presence(ctx, guid, true);
 }
 
 pub(crate) fn roster(ctx: &ReducerContext, guid: u64, all_members: bool) {
@@ -329,11 +402,7 @@ pub(super) fn group_event(ctx: &ReducerContext, guid: u64, kind: u8, other: u64,
     let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) else {
         return;
     };
-    let name = || {
-        crate::helpers::character_by_guid(ctx, other)
-            .map(|c| c.name)
-            .unwrap_or_default()
-    };
+    let name = || super::realm_party::name(ctx, other).unwrap_or_default();
     use lyracore_shared::meeting_stone::event_kind as stone_kind;
     use ServerOpcodeMessage as S;
     let packet = match kind {

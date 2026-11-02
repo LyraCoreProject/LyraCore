@@ -29,7 +29,7 @@ entry in both files.
 
 **H** [Handoff](#requests-and-delivery) · [Headless Client](CORE_TERMS.md#headless-client) · [Hold](#retired-terms) · [Host Operation](#runtime-scripts)
 
-**I** [Idle Bot](#bots) · [Import Family](#packages) · [Instance Lease](#groups) · [Instance Pool](#retired-terms) · [Instance Removal](#groups) · [Instance Vmap Slice](#realm-topology) · [Invocation](#runtime-scripts) · [Item Exchange](#procs) · [Item Text](#mail)
+**I** [Idle Bot](#bots) · [Import Family](#packages) · [Instance Lease](#groups) · [Instance Shard](#realm-topology) · [Instance Pool](#retired-terms) · [Instance Removal](#groups) · [Instance Vmap Slice](#realm-topology) · [Invocation](#runtime-scripts) · [Item Exchange](#procs) · [Item Text](#mail)
 
 **L** [Land Mount](#mounts) · [Lethal Damage Floor](#creature-ai) · [Letter Copy](#mail) · [Listing](#auctions) · [Login Queue](#accounts-characters-and-sessions) · [Logon Limiter](#accounts-characters-and-sessions) · [Loot Release](#loot) · [Loot Roll](#loot) · [Loot Roll Promotion](#retired-terms) · [Loot Roll Promotion Receipt](#retired-terms) · [Loot Source](#loot) · [Loot Tag](#loot) · [Loot Window](#loot)
 
@@ -67,7 +67,8 @@ Core terms used here: [Native Host](CORE_TERMS.md#native-host),
 A Shard that holds logon, Accounts, Sessions and the Login Queue of its Realm, but no Characters.
 It uses its Character directory to route Character selection to World Shards and hands each
 World Session to its owning World Shard by Handoff to enter the world. It keeps the Session of an
-Account it handed away, so the Session reaper spares it.
+Account it handed away, so the Session reaper spares it. It owns native Group membership and
+routes Group requests, snapshots and chat across its World Shards.
 _Avoid_: login server, auth database
 
 **World Shard**:
@@ -75,6 +76,10 @@ A Shard that holds the Characters and the world of a Realm with a Realm Shard. I
 Shard's Character selection requests and keeps copies of the Accounts and Sessions of the World
 Sessions it holds. Logout hands the World Session back to the Realm Shard.
 _Avoid_: game server, map server
+
+**Instance Shard**:
+The World Shard assigned the Realm's dungeon maps. It owns their Instance Leases and populations.
+The first implementation uses one fixed Instance Shard; it does not allocate runs across Shards.
 
 **Character directory**:
 The Realm Shard's record of each Character guid, Account id and owning World Shard. World Shards
@@ -303,7 +308,8 @@ See `module/src/auth.rs`.
 ### Groups
 
 **Group**:
-The members led by one leader, a Party or a Raid. Stored in `game_group`.
+The members led by one leader, a Party or a Raid. Stored in `game_group`. In a Realm with separate
+Shards, native requests change the Realm Shard copy; World Shards apply versioned projections.
 
 **Party**:
 A Group of up to 5 members that its leader has not converted to a Raid.

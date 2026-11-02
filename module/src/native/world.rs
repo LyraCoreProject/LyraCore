@@ -67,6 +67,9 @@ pub(super) fn enter_character(
     if character.account_id != account_id || account.banned {
         return Err("Account cannot log in this Character".into());
     }
+    if super::instance_shard::return_from_reaped(ctx, &connection, guid, entry, teleport_counter)? {
+        return Ok(());
+    }
     if !super::directory::owns_map(ctx, character.map_id) {
         return Err("World Shard does not own the Character map".into());
     }
@@ -77,6 +80,7 @@ pub(super) fn enter_character(
     if let Some(previous) = ctx.db.game_native_player().account_id().find(account_id) {
         super::disconnect(ctx, previous.connection_id);
     }
+    super::realm_party::restore(ctx, guid);
     crate::world::apply_player_login(ctx, &account, guid, owner, entry)?;
     let live = ctx
         .db
@@ -245,7 +249,7 @@ pub(super) fn enter_character(
     super::instance::replay(ctx, guid);
     super::petition::replay(ctx, guid, connection.connection_id);
     super::chat::replay_system_messages(ctx, guid);
-    super::party::roster(ctx, guid, entry == crate::world::WorldEntry::Login);
+    super::party::enter(ctx, guid, entry);
     if entry == crate::world::WorldEntry::Login {
         super::social::presence(ctx, guid, true);
         super::guild::presence(ctx, guid, true);
@@ -264,6 +268,7 @@ pub(super) fn leave(
 ) {
     let players = ctx.db.game_native_player();
     if let Some(player) = players.connection_id().find(connection_id) {
+        super::realm_party::presence(ctx, player.character_guid, false);
         super::clear_audience(ctx, connection_id);
         super::member_stats::stop(ctx, connection_id);
         super::teleport::restore_origin(ctx, player.character_guid, player.teleport_origin);
@@ -297,9 +302,6 @@ pub(super) fn receive(
     opcode: u32,
     body: &[u8],
 ) -> Result<(), Rollback> {
-    if super::transfer::pending(ctx, connection.connection_id) {
-        return Ok(());
-    }
     let player = ctx
         .db
         .game_native_player()
@@ -701,8 +703,10 @@ pub(super) fn receive(
                         state: NativeWorldState::CharacterSelection { account_id },
                         ..connection
                     });
-                for message in codec::logout_sequence() {
-                    super::send(ctx, connection.connection_id, message, false)?;
+                if crate::peer::realm_shard(ctx).is_none() {
+                    for message in codec::logout_sequence() {
+                        super::send(ctx, connection.connection_id, message, false)?;
+                    }
                 }
                 super::realm_shard::return_to_selection(
                     ctx,

@@ -10,3 +10,4 @@ game_item_template spellppmrate_2 0.0
 game_item_template spellppmrate_3 0.0
 game_item_template spellppmrate_4 0.0
 game_item_template spellppmrate_5 0.0
+game_loot_roll group_id 0

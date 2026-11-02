@@ -32,9 +32,9 @@ const DELIVERY_RETRY_MICROS: i64 = 250_000;
 
 #[derive(SpacetimeType, Clone)]
 pub struct Participant {
-    account_id: u64,
-    connection: u128,
-    guid: u64,
+    pub(super) account_id: u64,
+    pub(super) connection: u128,
+    pub(super) guid: u64,
 }
 
 #[derive(SpacetimeType, Clone)]
@@ -574,7 +574,7 @@ pub struct RealmDeliveryRetry {
     pub delivery_id: u64,
 }
 
-fn deliver(
+pub(super) fn deliver(
     ctx: &ReducerContext,
     recipient: Participant,
     packets: Vec<(u16, Vec<u8>)>,

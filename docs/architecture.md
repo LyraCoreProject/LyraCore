@@ -429,7 +429,7 @@ Character in the Transfer gap may be absent from a query, and away or zone facts
 the query.
 No movement updates are sent to the Realm Shard for this feature.
 
-Groups, guilds, friends, mail and auctions stay per World Shard; interactions across World Shards
+Guilds, friends, mail and auctions stay per World Shard; their interactions across World Shards
 remain unsupported. A Transfer carries the existing Character-owned manifest, not
 Shard-owned social or economic state. Casts in progress are cancelled; melee, threat, AOI Grants,
 Transport attachment and other omitted transient state do not survive. World departure also applies
@@ -440,3 +440,33 @@ still refused.
 Packages compile into the same Module and have its privileges. `module/build.rs` discovers their
 source and registry markers. The supported operations and compatibility rules are in
 [the Package API](./package-api.md).
+
+### Groups across World Shards
+
+`native::realm_party` routes native party and raid requests to the Realm Shard. The Realm checks
+the requesting Account, Character, connection and source against its directory and away record.
+It applies the existing Group rules and sends versioned Group projections to its World Shards.
+Per-Character membership revisions survive Transfer, including tombstones after departure, so a
+late Group snapshot cannot undo a newer membership. Disband snapshots settle rolls on the World
+Shard that holds the loot; each roll records its Group, so a late disband cannot settle a new
+Group's rolls. A projection restores membership after
+Character import; membership itself does not move in the Transfer manifest.
+
+Presence carries Character names, faction, class and Member Stats. World entry and departure
+publish presence; the existing five-second Member Stats schedule refreshes grouped members and
+their roster projections. A World Shard change counts as new presence. Refused projection deliveries
+retry after one second while their destination remains a Peer Shard. Applying a snapshot compares
+the visible roster before and after the change, so a newer presence snapshot also repairs missed
+client roster notifications. Transient Group events expire after fifteen seconds.
+The Realm checks current connection ownership before accepting those facts. World Shards retain
+remote Member Stats for their local party frames. Group chat selects the authoritative Realm
+audience and uses the same connection-bound delivery and ignore Gates as whispers. Group events
+are delivered only to their original connection; login restores the roster and pending invite.
+
+Shard-local Group mutations are refused when a World Shard has a Realm Shard. Meeting Stone
+matchmaking and Sessionless Group actions are not supported in this topology; single-Shard
+behavior is unchanged. An existing multi-Shard Realm requires migration of its Group state before
+this revision is deployed. This change does not supply an automatic Group migration.
+
+Dungeon admission uses this Realm-owned membership and one fixed Instance Shard. See
+[Instance lifecycle](instance-lifecycle.md#dedicated-instance-shard) for admission, return and reaping.

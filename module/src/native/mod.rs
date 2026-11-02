@@ -25,9 +25,14 @@ mod gossip;
 mod guild;
 mod handoff;
 mod realm_communication;
+pub(crate) mod realm_party;
 mod realm_shard;
 pub(crate) use realm_shard::account_changed;
 mod instance;
+pub(crate) mod instance_shard;
+pub(crate) use instance_shard::{
+    sweep_delete_game_instance_entry, sweep_transfer_game_instance_entry,
+};
 mod inventory;
 mod logon;
 mod loot;
@@ -293,6 +298,7 @@ fn send_raw(
 
 fn disconnect(ctx: &ReducerContext, connection_id: ConnectionId) {
     realm_shard::closing(ctx, connection_id);
+    realm_shard::clear_return(ctx, connection_id);
     realm_shard::cancel_selection(ctx, connection_id);
     #[cfg(feature = "conformance_test_fixture")]
     debug::close(ctx, connection_id);
@@ -414,6 +420,11 @@ fn receive(ctx: &ReducerContext, opcode: u32, body: Vec<u8>) -> Result<(), Rollb
     };
     if let Some(account_id) = account_id {
         current_account(ctx, &connection, account_id)?;
+    }
+    if transfer::pending(ctx, connection_id)
+        || (realm_shard::returning(ctx, connection_id) && opcode != 0x01dc)
+    {
+        return Ok(());
     }
     // World requests can remain in flight after logout; selection decodes only its own requests.
     if matches!(
@@ -745,6 +756,7 @@ fn local_session_accounts(ctx: &ReducerContext) -> std::collections::HashSet<u64
 pub(crate) fn close(ctx: &ReducerContext) {
     if let Some(connection_id) = ctx.connection_id() {
         realm_shard::closing(ctx, connection_id);
+        realm_shard::clear_return(ctx, connection_id);
         realm_shard::cancel_selection(ctx, connection_id);
         #[cfg(feature = "conformance_test_fixture")]
         debug::close(ctx, connection_id);

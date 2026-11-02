@@ -15,6 +15,8 @@ pub(crate) mod character_owned_tripwire {
     ];
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
+        (&["game_party_character", "game_party_membership"], "Realm-owned party facts and projection revisions retained across Character Transfer; deletion publishes offline facts and a membership tombstone"),
+        (&["game_instance_entry_lease"], "destination-owned admission reservation expires after sixty seconds or is consumed by Transfer import"),
         (
             &["game_native_away"],
             "Realm Shard World Session routing keyed by Account, removed on return or connection close",
@@ -1337,7 +1339,7 @@ mod character_fence_tripwire {
         ("module/src/helpers.rs", 2, "`character_by_guid` and `characters_by_name` apply the Transfer Gate to raw Character reads"),
         ("module/src/transfer/mod.rs", 4, "Transfer reads the fenced Character for export, destination materialization, durability checks, and the in-transit Instance census."),
         ("module/src/world.rs", 8, "player_login carries its own `is_in_transit` fence (the re-materialisation chokepoint, 2 reads); teleport_player, set_home, persist_entity and is_gm_character take a guid already resolved through a fenced entity (persist_entity is called BY begin_transfer); debug_delete_character keeps a raw existence probe so a missing character stays a no-op while an in-transit one is REFUSED, with the fence on the same expression; cascade_delete_character's raw row DELETE is the sweep that probe guards. `recall_to_home` is now FENCED (character_by_guid) — it was the one teleport_player caller needing no live entity"),
-        ("module/src/group.rs", 3, "Group accept, uninvite, and leave read member identity while changing membership."),
+        ("module/src/group.rs", 2, "Group events and departure read member identity while changing membership."),
         ("module/src/auth.rs", 5, "Character creation checks name uniqueness and initializes the guid allocator. Character deletion distinguishes absence, ownership, and the Transfer fence. `adopt_character_gm_levels` is the Realm-wide repair scan that moves legacy Character GM levels onto Accounts."),
         ("module/src/items/ops.rs", 2, "race/class reads for the starter loadout and the mana-class gate — no write to the character"),
         ("module/src/spell/cast/targeting.rs", 1, "caster NAME for the resurrect prompt — no write"),

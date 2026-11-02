@@ -356,7 +356,12 @@ fn live_instance_for(ctx: &ReducerContext, instance_id: u64, map_id: u32) -> boo
         .unwrap_or(false)
 }
 
-fn bind_character(ctx: &ReducerContext, character_guid: u64, instance_id: u64, map_id: u32) {
+pub(crate) fn bind_character(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    instance_id: u64,
+    map_id: u32,
+) {
     let t = ctx.db.game_instance_binding();
     let stale: Vec<u64> = t
         .by_character()
@@ -777,6 +782,7 @@ pub(crate) fn occupied_instances(ctx: &ReducerContext) -> HashSet<u64> {
         .filter(|e| e.is_player() && e.instance_id != 0)
         .map(|e| e.instance_id)
         .collect();
+    occupied.extend(crate::native::instance_shard::occupied(ctx));
     match crate::transfer::in_transit_instances(ctx) {
         Ok(claimed) => occupied.extend(claimed),
         Err(crate::transfer::TransferClaimReadLimit) => {
@@ -901,7 +907,13 @@ pub(crate) fn apply_reset_instances(
         .collect();
     let mut flagged = 0u32;
     for b in bindings {
-        let Some(mut inst) = ctx.db.game_instance().instance_id().find(b.instance_id) else {
+        let Some(mut inst) = ctx
+            .db
+            .game_instance()
+            .instance_id()
+            .find(b.instance_id)
+            .filter(|instance| instance.map_id == b.map_id)
+        else {
             continue;
         };
         let caller_is_leader = ctx
@@ -951,6 +963,7 @@ fn instance_removal_standing(ctx: &ReducerContext, character_guid: u64) -> Optio
         .game_instance()
         .instance_id()
         .find(instance_id)
+        .filter(|instance| instance.map_id == map_id)
         .map_or(0, |instance| instance.party_id);
     let own_group = crate::group::group_of(ctx, character_guid).map(|member| member.group_id);
     instance_removal_due(

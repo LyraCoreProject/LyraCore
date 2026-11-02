@@ -23,6 +23,20 @@ pub(super) fn receive(
     super::actor(ctx, guid)?;
     let response = match message {
         ClientOpcodeMessage::CMSG_MEETINGSTONE_JOIN(request) => {
+            if crate::peer::realm_shard(ctx).is_some() {
+                return Ok(super::send(
+                    ctx,
+                    connection,
+                    ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(
+                        lyracore_protocol::messages::vanilla::SMSG_NOTIFICATION {
+                            notification:
+                                "Meeting Stone matchmaking is unavailable across World Shards."
+                                    .into(),
+                        },
+                    )),
+                    false,
+                )?);
+            }
             let area = meeting_stone::admit(ctx, guid, request.guid.guid())
                 .map_err(|refusal| Rollback::silent(refusal.as_tag()))?;
             if Area::try_from(area).is_err() {

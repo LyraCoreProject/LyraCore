@@ -425,6 +425,27 @@ pub struct ReturnToSelection {
     pub client_proof: Vec<u8>,
 }
 
+#[table(accessor = game_native_return_pending)]
+pub struct NativeReturnPending {
+    #[primary_key]
+    pub connection_id: ConnectionId,
+}
+
+pub(super) fn returning(ctx: &ReducerContext, connection_id: ConnectionId) -> bool {
+    ctx.db
+        .game_native_return_pending()
+        .connection_id()
+        .find(connection_id)
+        .is_some()
+}
+
+pub(super) fn clear_return(ctx: &ReducerContext, connection_id: ConnectionId) {
+    ctx.db
+        .game_native_return_pending()
+        .connection_id()
+        .delete(connection_id);
+}
+
 /// Hands a logged-out World Session back to the Realm Shard.
 pub(super) fn return_to_selection(
     ctx: &ReducerContext,
@@ -441,6 +462,9 @@ pub(super) fn return_to_selection(
         .connection_id()
         .find(connection_id)
         .ok_or("world proof is missing")?;
+    ctx.db
+        .game_native_return_pending()
+        .insert(NativeReturnPending { connection_id });
     ctx.db.game_return_to_selection().insert(ReturnToSelection {
         id: 0,
         database: remote::Identity(realm),

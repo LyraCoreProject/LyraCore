@@ -630,45 +630,17 @@ pub(crate) enum WorldEntry {
     WorldPort,
 }
 
-pub(crate) fn apply_player_login(
+pub(crate) fn restore_reaped_instance(
     ctx: &ReducerContext,
-    account: &crate::Account,
-    character_guid: u64,
-    owner: spacetimedb::Identity,
-    entry: WorldEntry,
-) -> Result<(), String> {
-    let chars = ctx.db.game_character();
-    let mut character = chars
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("no such character: {character_guid}"))?;
-    if character.account_id != account.id {
-        return Err("character does not belong to caller".to_string());
-    }
-
-    if crate::transfer::is_in_transit(ctx, character_guid) {
-        return Err(format!(
-            "character {character_guid} is in transit between shards"
-        ));
-    }
-
-    restamp_owned_data(ctx, character_guid, owner);
-
-    let entities = ctx.db.game_world_entity();
-    // Persist the previous live entity before replacement so ghost relog cannot lose progression.
-    if let Some(stale) = entities.guid().find(character_guid) {
-        persist_entity(ctx, &stale, false);
-        crate::WorldEntity::delete(ctx, character_guid);
-        character = chars.guid().find(character_guid).unwrap_or(character);
-    }
-
+    character: &mut crate::character::Character,
+) {
     if character.pending_instance_id != 0
         && ctx
             .db
             .game_instance()
             .instance_id()
             .find(character.pending_instance_id)
-            .is_none()
+            .is_none_or(|instance| instance.map_id != character.map_id)
     {
         let reaped_id = character.pending_instance_id;
         match crate::instance::stranding_fallback(
@@ -702,6 +674,41 @@ pub(crate) fn apply_player_login(
             character.map_id
         );
     }
+}
+
+pub(crate) fn apply_player_login(
+    ctx: &ReducerContext,
+    account: &crate::Account,
+    character_guid: u64,
+    owner: spacetimedb::Identity,
+    entry: WorldEntry,
+) -> Result<(), String> {
+    let chars = ctx.db.game_character();
+    let mut character = chars
+        .guid()
+        .find(character_guid)
+        .ok_or_else(|| format!("no such character: {character_guid}"))?;
+    if character.account_id != account.id {
+        return Err("character does not belong to caller".to_string());
+    }
+
+    if crate::transfer::is_in_transit(ctx, character_guid) {
+        return Err(format!(
+            "character {character_guid} is in transit between shards"
+        ));
+    }
+
+    restamp_owned_data(ctx, character_guid, owner);
+
+    let entities = ctx.db.game_world_entity();
+    // Persist the previous live entity before replacement so ghost relog cannot lose progression.
+    if let Some(stale) = entities.guid().find(character_guid) {
+        persist_entity(ctx, &stale, false);
+        crate::WorldEntity::delete(ctx, character_guid);
+        character = chars.guid().find(character_guid).unwrap_or(character);
+    }
+
+    restore_reaped_instance(ctx, &mut character);
     if !crate::native::directory::owns_map(ctx, character.map_id) {
         return Err("World Shard does not own the Character map".into());
     }
