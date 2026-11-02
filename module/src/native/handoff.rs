@@ -110,7 +110,15 @@ pub fn native_world_adopt(ctx: &ReducerContext) -> Result<(), String> {
             },
             handoff.teleport_counter,
         ),
-        None => super::current_account(ctx, &connection, account.id).map(drop),
+        None => {
+            super::current_account(ctx, &connection, account.id)?;
+            if crate::peer::world_shard(ctx).is_some() {
+                for message in lyracore_protocol::codec::logout_sequence() {
+                    super::send(ctx, connection_id, message, false)?;
+                }
+            }
+            Ok(())
+        }
     }
 }
 

@@ -94,9 +94,31 @@ def check(host):
     host.sql(f'DELETE FROM game_group_member WHERE character_guid = {leader_guid}', continent)
     host.wait_until(lambda: host.rows(f'SELECT group_id FROM game_group_member WHERE character_guid = {leader_guid}', continent) == [[group]],
                     'periodic presence did not repair the source projection after Transfer', timeout=12)
+    member.collect()
+    host.call('operator_remove_peer_shard', [host.identity()], database=continent)
     leader.send(0x7a, struct.pack('<IQI', 2, leader_guid, 3))
-    host.wait_until(lambda: host.rows(f'SELECT loot_method, master_looter_guid, loot_threshold FROM game_group WHERE group_id = {group}', continent) == [[2, leader_guid, 3]],
-                    'loot rules did not reach the other World Shard')
+    host.wait_until(lambda: bool(host.rows('SELECT id FROM game_party_projection_retry')),
+                    'refused Group projection was not retained')
+    revision = host.rows('SELECT revision FROM game_directory_clock')[0][0] + 1
+    roster = struct.pack('<QQBBQB', group, leader_guid, 2, 3, leader_guid, 0)
+    roster += struct.pack('<I', 2) + struct.pack('<QBQB', leader_guid, 0, member_guid, 0)
+    roster += struct.pack('<I', 0) + b'\x01'
+    # A newer presence snapshot carries state without the refused command's LIST event.
+    update = struct.pack('<QII', revision, 0, 1) + roster + struct.pack('<IIq', 0, 0, 0)
+    [operator_hex] = host.rows('SELECT identity FROM game_operator')[0][0]
+    operator = {'__identity__': f'0x{int(operator_hex, 16):064x}'}
+    host.call('operator_add_peer_shard', [operator, 'projection fixture'], database=continent)
+    host.call('operator_set_shard_role', [{'some': {'world': operator}}], database=continent)
+    try:
+        host.call('idc_world_party_update', [list(update)], database=continent)
+    finally:
+        host.call('operator_add_peer_shard', [host.identity(), 'realm'], database=continent)
+        host.call('operator_set_shard_role', [{'some': {'world': host.identity()}}], database=continent)
+        host.call('operator_remove_peer_shard', [operator], database=continent)
+    assert host.rows(f'SELECT loot_method, master_looter_guid, loot_threshold FROM game_group WHERE group_id = {group}', continent) == [[2, leader_guid, 3]]
+    assert any(body[-11:] == struct.pack('<BQBB', 2, leader_guid, 3, 0) for body in received(member, 0x7d))
+    host.wait_until(lambda: not host.rows('SELECT id FROM game_party_projection_retry'),
+                    'older Group projection retry did not settle')
     leader.send(0x7a, struct.pack('<IQI', 3, 0, 2))
     host.wait_until(lambda: host.rows(f'SELECT loot_method FROM game_group WHERE group_id = {group}', instances) == [[3]],
                     'Group Loot was not restored')

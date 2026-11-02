@@ -153,9 +153,7 @@ fn presence(ctx: &ReducerContext, guid: u64) -> Presence {
 }
 
 pub(super) fn snapshot(ctx: &ReducerContext, guid: u64) -> Option<MemberEntity> {
-    if ctx.db.game_world_entity().guid().find(guid).is_none() {
-        return None;
-    }
+    ctx.db.game_world_entity().guid().find(guid)?;
     match presence(ctx, guid) {
         Presence::Live(entity) => Some(entity),
         _ => None,

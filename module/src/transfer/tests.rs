@@ -1230,13 +1230,14 @@ fn the_instance_removal_dies_with_the_source_copy_and_is_not_carried() {
     assert!(NOT_TRANSPORTED.contains(&"game_instance_removal"));
 }
 
-const OLD_BLOBS_MAY_LACK: [&str; 7] = [
+const OLD_BLOBS_MAY_LACK: [&str; 8] = [
     "game_auction_bid_hold",
     "game_auction_hold",
     "game_character_away",
     "game_fatigue_state",
     "game_group_target_icon",
     "game_guild_fee_hold",
+    "game_instance_entry",
     "game_instance_removal",
 ];
 
@@ -1357,7 +1358,7 @@ fn the_tables_old_blobs_may_lack_are_pinned() {
     }
     #[cfg(not(has_packages))]
     {
-        assert_eq!(manifest().len(), 45);
+        assert_eq!(manifest().len(), 46);
         assert_eq!(manifest_without(&OLD_BLOBS_MAY_LACK).len(), 38);
     }
 }

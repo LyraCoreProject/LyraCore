@@ -4,11 +4,11 @@ use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use crate::action_bar::game_player_action;
 use crate::aoi::game_aoi_grant;
+use crate::game_world_entity;
 use crate::reputation::game_player_reputation;
 use crate::skill::game_player_skill;
 use crate::spell::spellbook::game_player_spell;
 use crate::world::CharacterDeparture;
-use crate::{game_character, game_world_entity};
 
 use super::{
     game_native_player, game_native_world_connection, NativeActive, NativePlayer,
@@ -67,33 +67,8 @@ pub(super) fn enter_character(
     if character.account_id != account_id || account.banned {
         return Err("Account cannot log in this Character".into());
     }
-    let origin = super::teleport::NativeTeleportOrigin {
-        map_id: character.map_id,
-        instance_id: character.pending_instance_id,
-        zone_id: character.zone_id,
-        x: character.x,
-        y: character.y,
-        z: character.z,
-        orientation: character.orientation,
-    };
-    let mut character = character;
-    crate::world::restore_reaped_instance(ctx, &mut character);
-    if character.map_id != origin.map_id
-        && super::directory::transfer_target(ctx, character.map_id).is_some()
-    {
-        ctx.db.game_character().guid().update(character);
-        if super::transfer::begin_character(
-            ctx,
-            &connection,
-            account_id,
-            guid,
-            teleport_counter,
-            Some(origin),
-            entry == crate::world::WorldEntry::WorldPort,
-        )? {
-            return Ok(());
-        }
-        return Err("Instance return has no destination World Shard".into());
+    if super::instance_shard::return_from_reaped(ctx, &connection, guid, entry, teleport_counter)? {
+        return Ok(());
     }
     if !super::directory::owns_map(ctx, character.map_id) {
         return Err("World Shard does not own the Character map".into());
@@ -274,8 +249,7 @@ pub(super) fn enter_character(
     super::instance::replay(ctx, guid);
     super::petition::replay(ctx, guid, connection.connection_id);
     super::chat::replay_system_messages(ctx, guid);
-    super::party::roster(ctx, guid, entry == crate::world::WorldEntry::Login);
-    super::realm_party::presence(ctx, guid, true);
+    super::party::enter(ctx, guid, entry);
     if entry == crate::world::WorldEntry::Login {
         super::social::presence(ctx, guid, true);
         super::guild::presence(ctx, guid, true);
@@ -729,8 +703,10 @@ pub(super) fn receive(
                         state: NativeWorldState::CharacterSelection { account_id },
                         ..connection
                     });
-                for message in codec::logout_sequence() {
-                    super::send(ctx, connection.connection_id, message, false)?;
+                if crate::peer::realm_shard(ctx).is_none() {
+                    for message in codec::logout_sequence() {
+                        super::send(ctx, connection.connection_id, message, false)?;
+                    }
                 }
                 super::realm_shard::return_to_selection(
                     ctx,

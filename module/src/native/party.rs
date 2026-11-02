@@ -320,6 +320,53 @@ fn send_roster(ctx: &ReducerContext, connection: ConnectionId, guid: u64, roster
     }
 }
 
+#[derive(PartialEq, Eq)]
+pub(super) struct RosterState {
+    payload: String,
+    online: Vec<bool>,
+    icons: String,
+}
+
+pub(super) fn roster_state(ctx: &ReducerContext, guid: u64) -> Option<RosterState> {
+    let member = crate::group::group_of(ctx, guid)?;
+    let payload = crate::group::roster_payload(ctx, member.group_id)?;
+    let roster = RosterPayload::decode(&payload)?;
+    let online = roster
+        .members
+        .iter()
+        .map(|member| {
+            ctx.db
+                .game_world_entity()
+                .guid()
+                .find(member.guid)
+                .is_some()
+                || super::realm_party::online(ctx, member.guid)
+        })
+        .collect();
+    Some(RosterState {
+        payload,
+        online,
+        icons: group::encode_target_icons(&crate::group::target_icons_of(ctx, member.group_id)),
+    })
+}
+
+pub(super) fn enter(ctx: &ReducerContext, guid: u64, entry: crate::world::WorldEntry) {
+    if entry == crate::world::WorldEntry::WorldPort
+        && crate::peer::realm_shard(ctx).is_some()
+        && crate::group::group_of(ctx, guid).is_none()
+    {
+        group_event(
+            ctx,
+            guid,
+            lyracore_shared::group::event_kind::DESTROYED,
+            0,
+            "",
+        );
+    }
+    roster(ctx, guid, entry == crate::world::WorldEntry::Login);
+    super::realm_party::presence(ctx, guid, true);
+}
+
 pub(crate) fn roster(ctx: &ReducerContext, guid: u64, all_members: bool) {
     let Some(member) = crate::group::group_of(ctx, guid) else {
         return;

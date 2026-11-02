@@ -208,6 +208,7 @@ fn store_character(ctx: &ReducerContext, character: PartyCharacter) {
     {
         return;
     }
+    directory::observe_revision(ctx, character.revision);
     table.guid().delete(character.guid);
     table.insert(character);
 }
@@ -574,6 +575,35 @@ pub fn idc_world_party_update(ctx: &ReducerContext, update: Vec<u8>) -> Result<(
 
 pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), String> {
     let update: Update = bsatn::from_slice(update).map_err(|error| error.to_string())?;
+    let mut affected: BTreeSet<_> = update.absent.iter().copied().collect();
+    for roster in &update.rosters {
+        affected.extend(roster.members.iter().map(|member| member.guid));
+        affected.extend(
+            group::members_of(ctx, roster.group_id)
+                .into_iter()
+                .map(|member| member.character_guid),
+        );
+    }
+    for character in &update.characters {
+        if let Some(member) = group::group_of(ctx, character.guid) {
+            affected.extend(
+                group::members_of(ctx, member.group_id)
+                    .into_iter()
+                    .map(|member| member.character_guid),
+            );
+        }
+    }
+    let before: Vec<_> = affected
+        .into_iter()
+        .filter(|guid| {
+            ctx.db
+                .game_native_player()
+                .character_guid()
+                .find(*guid)
+                .is_some()
+        })
+        .map(|guid| (guid, super::party::roster_state(ctx, guid)))
+        .collect();
     directory::observe_revision(ctx, update.revision);
     for character in update.characters {
         store_character(ctx, character);
@@ -600,8 +630,8 @@ pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), 
         project(ctx, roster, update.revision);
     }
     for event in update.events {
-        if ctx.timestamp.to_micros_since_unix_epoch() >= update.events_expire_micros
-            && !matches!(event.kind, event_kind::LIST | event_kind::DESTROYED)
+        if matches!(event.kind, event_kind::LIST | event_kind::DESTROYED)
+            || ctx.timestamp.to_micros_since_unix_epoch() >= update.events_expire_micros
         {
             continue;
         }
@@ -629,6 +659,16 @@ pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), 
                 event.other,
                 &event.payload,
             );
+        }
+    }
+    for (guid, previous) in before {
+        let current = super::party::roster_state(ctx, guid);
+        if current != previous {
+            if current.is_some() {
+                super::party::roster(ctx, guid, false);
+            } else {
+                super::party::group_event(ctx, guid, event_kind::DESTROYED, 0, "");
+            }
         }
     }
     Ok(())

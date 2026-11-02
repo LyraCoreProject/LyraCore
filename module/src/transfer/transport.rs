@@ -46,6 +46,8 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_group_member",
     "game_group_member_partition",
     "game_group_target_icon",
+    // Admission requests settle on the source connection before Transfer.
+    "game_instance_entry",
     "game_instance_removal",
     "game_pet_command",
     "game_mail_delivery",
@@ -484,6 +486,7 @@ pub(crate) const TRANSFER_TABLES_OLD_BLOBS_MAY_LACK: &[&str] = &[
     "game_fatigue_state",
     "game_group_target_icon",
     "game_guild_fee_hold",
+    "game_instance_entry",
     "game_instance_removal",
 ];
 

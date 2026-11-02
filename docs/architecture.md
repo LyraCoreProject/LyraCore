@@ -455,7 +455,9 @@ Character import; membership itself does not move in the Transfer manifest.
 Presence carries Character names, faction, class and Member Stats. World entry and departure
 publish presence; the existing five-second Member Stats schedule refreshes grouped members and
 their roster projections. A World Shard change counts as new presence. Refused projection deliveries
-retry after one second while their destination remains a Peer Shard.
+retry after one second while their destination remains a Peer Shard. Applying a snapshot compares
+the visible roster before and after the change, so a newer presence snapshot also repairs missed
+client roster notifications. Transient Group events expire after fifteen seconds.
 The Realm checks current connection ownership before accepting those facts. World Shards retain
 remote Member Stats for their local party frames. Group chat selects the authoritative Realm
 audience and uses the same connection-bound delivery and ignore Gates as whispers. Group events

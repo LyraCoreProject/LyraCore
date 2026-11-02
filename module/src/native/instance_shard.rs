@@ -296,6 +296,9 @@ pub fn idc_instance_entry_answer(
     instance_id: u64,
     error: String,
 ) -> Result<(), String> {
+    if !crate::peer::is_peer(ctx, ctx.sender()) || realm_shard(ctx).is_none() {
+        return Err("caller is not a Peer Shard".into());
+    }
     let decoded: Request = bsatn::from_slice(&request).map_err(|error| error.to_string())?;
     let expected = if instance_id == 0 {
         realm_shard(ctx)
@@ -441,4 +444,46 @@ pub(crate) fn occupied(ctx: &ReducerContext) -> Vec<u64> {
         .filter(|lease| lease.expires > now)
         .map(|lease| lease.instance_id)
         .collect()
+}
+
+pub(super) fn return_from_reaped(
+    ctx: &ReducerContext,
+    connection: &super::NativeWorldConnection,
+    guid: u64,
+    entry: crate::world::WorldEntry,
+    teleport_counter: u32,
+) -> Result<bool, String> {
+    use crate::game_character;
+    let character =
+        crate::helpers::character_by_guid(ctx, guid).ok_or("Character no longer exists")?;
+    let character_account = character.account_id;
+    let origin = super::teleport::NativeTeleportOrigin {
+        map_id: character.map_id,
+        instance_id: character.pending_instance_id,
+        zone_id: character.zone_id,
+        x: character.x,
+        y: character.y,
+        z: character.z,
+        orientation: character.orientation,
+    };
+    let mut character = character;
+    crate::world::restore_reaped_instance(ctx, &mut character);
+    if character.map_id != origin.map_id
+        && directory::transfer_target(ctx, character.map_id).is_some()
+    {
+        ctx.db.game_character().guid().update(character);
+        if super::transfer::begin_character(
+            ctx,
+            connection,
+            character_account,
+            guid,
+            teleport_counter,
+            Some(origin),
+            entry == crate::world::WorldEntry::WorldPort,
+        )? {
+            return Ok(true);
+        }
+        return Err("Instance return has no destination World Shard".into());
+    }
+    Ok(false)
 }

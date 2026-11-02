@@ -90,3 +90,7 @@ native World Session path.
   [Module build](module-build.md).
 - Package Teardown refuses while a Package Character has Escrow or a claimed Transfer Intent.
 - The Architecture Tests in `module/src/tripwires.rs` enforce the raw-lookup exclusions.
+
+Logout on a split Realm sends its completion packets only after the Realm Shard adopts the returning
+World Session. The source refuses new selection requests while that Handoff is pending. This keeps
+an immediate login from entering the old World Shard after the Realm has removed its away record.
