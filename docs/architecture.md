@@ -433,8 +433,8 @@ Character in the Transfer gap may be absent from a query, and away or zone facts
 the query.
 No movement updates are sent to the Realm Shard for this feature.
 
-Guilds, friends, mail and auctions stay per World Shard; their interactions across World Shards
-remain unsupported. A Transfer carries the existing Character-owned manifest, not
+Guilds, mail and auctions stay per World Shard; their interactions across World Shards
+remain unsupported. Friends and ignores use the Character profiles and presence described below. A Transfer carries the existing Character-owned manifest, not
 Shard-owned social or economic state. Casts in progress are cancelled; melee, threat, AOI Grants,
 Transport attachment and other omitted transient state do not survive. World departure also applies
 the existing logout cleanup, including buyback cleanup and pet despawn. A Shard without a role or
@@ -444,6 +444,34 @@ still refused.
 Packages compile into the same Module and have its privileges. `module/build.rs` discovers their
 source and registry markers. The supported operations and compatibility rules are in
 [the Package API](./package-api.md).
+
+### Contacts across World Shards
+
+Contact lists remain Character-owned and travel in the Transfer manifest. Each World Shard reports
+Character names, race, class and gender through the Realm directory, including Characters that have
+never logged in. The Realm accepts a report only from the current World owner with a newer directory
+revision, then distributes private, versioned Character profiles to its World Shards. Deleted profiles
+remain as tombstones. Refused profile deliveries retry while the destination is still a Peer Shard.
+The old directory reducer remains available for outboxes committed before the upgrade.
+
+Friend and ignore additions resolve these profiles and apply the existing self, faction, duplicate
+and list-cap Gates in the owning World Shard transaction. Ambiguous names are refused. Name queries
+also use the profiles, so the client can display remote contacts. Friend lists and login/logout
+notifications use the existing Group presence projections, even for Characters without a Group.
+Zone, level and away-status changes refresh that presence. Repeated or older presence revisions do
+not send duplicate login notifications. Presence and profiles are asynchronous: a recent change may
+remain unseen until its projection arrives; a Transfer may briefly show a friend offline.
+
+A deletion removes references from contact lists on each World Shard. World entry and list requests
+also discard contacts whose deleted profile arrived before a Transfer imported the list. Local
+contact rows, including ignores used by whisper delivery, retain their existing ownership and Gates.
+
+For an existing Realm, publish the Module to all Shards with gameplay closed, then call
+`operator_report_character_profiles` on every World Shard. Wait for the Realm profiles to match the
+Character directory and for profile outboxes and retries to drain. Call the same reducer on the Realm
+Shard to replay all retained profiles, including deletion tombstones, and wait for those deliveries
+before reopening gameplay. Login repopulates online presence. Repeat the profile replay when adding
+a World Shard. No contact rows move during this upgrade.
 
 ### Groups across World Shards
 

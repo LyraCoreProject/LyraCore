@@ -46,6 +46,21 @@ pub struct MemberEntity {
     pet: Option<MemberPet>,
 }
 
+impl MemberEntity {
+    pub(super) fn friend_online(&self, class: u8, chat_tag: u8) -> codec::FriendOnline {
+        codec::FriendOnline {
+            away: match chat_tag {
+                1 => lyracore_protocol::AwayStatus::Afk,
+                2 => lyracore_protocol::AwayStatus::Dnd,
+                _ => lyracore_protocol::AwayStatus::None,
+            },
+            zone_id: self.zone_id,
+            level: self.level.min(u32::from(u8::MAX)) as u8,
+            class,
+        }
+    }
+}
+
 #[derive(SpacetimeType, Clone)]
 pub struct MemberSnapshot {
     guid: u64,

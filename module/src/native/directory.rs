@@ -1,5 +1,5 @@
 use spacetimedb::sats::bsatn;
-use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
+use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use crate::game_character;
 use crate::peer::{is_peer, realm_shard, role, world_shard, ShardRole};
@@ -211,15 +211,36 @@ fn send_changes(ctx: &ReducerContext, account_id: u64, changes: Vec<(u64, bool)>
     let Some(realm) = realm_shard(ctx) else {
         return;
     };
-    ctx.db
-        .game_character_directory_update()
-        .insert(CharacterDirectoryUpdate {
-            id: 0,
-            database: remote::Identity(realm),
-            account_id,
-            changes: bsatn::to_vec(&changes).expect("directory changes encode"),
-            revision: revision(ctx),
-        });
+    let revision = revision(ctx);
+    let profiles: Vec<_> = changes
+        .into_iter()
+        .map(|(guid, present)| {
+            let character = ctx
+                .db
+                .game_character()
+                .guid()
+                .find(guid)
+                .filter(|_| present);
+            CharacterProfile {
+                guid,
+                account_id,
+                world: ctx.database_identity(),
+                revision,
+                name: character
+                    .as_ref()
+                    .map_or_else(String::new, |character| character.name.clone()),
+                race: character.as_ref().map_or(0, |character| character.race),
+                class: character.as_ref().map_or(0, |character| character.class),
+                gender: character.as_ref().map_or(0, |character| character.gender),
+                deleted: character.is_none(),
+            }
+        })
+        .collect();
+    ctx.db.game_character_profiles().insert(CharacterProfiles {
+        id: 0,
+        database: remote::Identity(realm),
+        profiles: bsatn::to_vec(&profiles).expect("Character profiles encode"),
+    });
 }
 
 // One message per Account: each call between databases costs a round trip and disk writes.
@@ -294,6 +315,151 @@ pub fn idc_character_directory(
 ) -> Result<(), String> {
     require_world(ctx)?;
     apply(ctx, account_id, &changes, revision)
+}
+
+#[table(accessor = game_character_profile)]
+#[derive(Clone)]
+pub struct CharacterProfile {
+    #[primary_key]
+    pub guid: u64,
+    pub account_id: u64,
+    pub world: Identity,
+    pub revision: u64,
+    pub name: String,
+    pub race: u8,
+    pub class: u8,
+    pub gender: u8,
+    pub deleted: bool,
+}
+
+#[table(accessor = game_character_profiles, outbox(remote::idc_character_profiles))]
+pub struct CharacterProfiles {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[target]
+    pub database: remote::Identity,
+    pub profiles: Vec<u8>,
+}
+
+#[table(accessor = game_character_profiles_retry, scheduled(retry_character_profiles))]
+pub struct CharacterProfilesRetry {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub scheduled_at: ScheduleAt,
+    pub call: CharacterProfiles,
+}
+
+#[reducer]
+pub fn idc_character_profiles(ctx: &ReducerContext, profiles: Vec<u8>) -> Result<(), String> {
+    let realm = world_shard(ctx).is_some();
+    if realm {
+        require_world(ctx)?;
+    } else {
+        crate::peer::require_sender(ctx, realm_shard(ctx))?;
+    }
+    let profiles: Vec<CharacterProfile> =
+        bsatn::from_slice(&profiles).map_err(|error| error.to_string())?;
+    let mut accepted = Vec::new();
+    for profile in profiles {
+        if realm {
+            if profile.world != ctx.sender() {
+                return Err("Character profile source differs from its World Shard".into());
+            }
+            if ctx
+                .db
+                .game_character_directory_version()
+                .guid()
+                .find(profile.guid)
+                .is_some_and(|old| old.revision >= profile.revision)
+            {
+                continue;
+            }
+            let changes = bsatn::to_vec(&vec![(profile.guid, !profile.deleted)])
+                .expect("directory change encodes");
+            apply(ctx, profile.account_id, &changes, profile.revision)?;
+        }
+        let table = ctx.db.game_character_profile();
+        if table
+            .guid()
+            .find(profile.guid)
+            .is_some_and(|old| old.revision >= profile.revision)
+        {
+            continue;
+        }
+        observe_revision(ctx, profile.revision);
+        if !realm && profile.deleted {
+            super::social::deleted(ctx, profile.guid);
+        }
+        table.guid().delete(profile.guid);
+        table.insert(profile.clone());
+        accepted.push(profile);
+    }
+    if realm {
+        publish_profiles(ctx, &accepted);
+    }
+    Ok(())
+}
+
+fn publish_profiles(ctx: &ReducerContext, profiles: &[CharacterProfile]) {
+    if profiles.is_empty() {
+        return;
+    }
+    let mut worlds: std::collections::BTreeSet<_> = world_shard(ctx).into_iter().collect();
+    worlds.extend(ctx.db.game_map_owner().iter().map(|owner| owner.world));
+    let profiles = bsatn::to_vec(profiles).expect("Character profiles encode");
+    for world in worlds {
+        ctx.db.game_character_profiles().insert(CharacterProfiles {
+            id: 0,
+            database: remote::Identity(world),
+            profiles: profiles.clone(),
+        });
+    }
+}
+
+#[reducer(on_result(game_character_profiles))]
+pub fn character_profiles_answered(
+    ctx: &ReducerContext,
+    call: CharacterProfiles,
+    result: Result<(), String>,
+) {
+    if let Err(error) = result {
+        spacetimedb::log::warn!("Character profiles to {} wait: {error}", call.database.0);
+        ctx.db
+            .game_character_profiles_retry()
+            .insert(CharacterProfilesRetry {
+                id: 0,
+                scheduled_at: (ctx.timestamp + TimeDuration::from_micros(1_000_000)).into(),
+                call,
+            });
+    }
+}
+
+#[reducer]
+pub fn retry_character_profiles(ctx: &ReducerContext, retry: CharacterProfilesRetry) {
+    if crate::time::scheduler_authorized(ctx) && is_peer(ctx, retry.call.database.0) {
+        ctx.db.game_character_profiles().insert(CharacterProfiles {
+            id: 0,
+            ..retry.call
+        });
+    }
+}
+
+#[reducer]
+pub fn operator_report_character_profiles(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    if world_shard(ctx).is_some() {
+        let profiles = ctx.db.game_character_profile().iter().collect::<Vec<_>>();
+        for batch in profiles.chunks(128) {
+            publish_profiles(ctx, batch);
+        }
+    } else if realm_shard(ctx).is_some() {
+        report_characters(ctx);
+    } else {
+        return Err("Character profiles require a Realm Shard or World Shard".into());
+    }
+    Ok(())
 }
 
 #[cfg(test)]

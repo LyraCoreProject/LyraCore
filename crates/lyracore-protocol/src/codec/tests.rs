@@ -354,7 +354,7 @@ fn name_query_response_maps_seeded_warrior() {
         gender: 0,
         ..Default::default()
     };
-    let r = build_name_query_response(&c).unwrap();
+    let r = build_name_query_response(c.guid, c.name.clone(), c.race, c.gender, c.class).unwrap();
     assert_eq!(r.guid.guid(), 1);
     assert_eq!(r.character_name, "Tester");
     assert!(r.realm_name.is_empty());
