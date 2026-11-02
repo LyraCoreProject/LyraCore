@@ -75,7 +75,9 @@ Leaving the world keeps pet despawn, buyback cleanup and the rest of the existin
 Connection request limits start with the adopted connection state.
 
 Guilds, mail and auctions across World Shards remain unsupported. Friends and ignores travel with
-their owning Character; remote names, presence and deletion tombstones use Realm projections. See
+their owning Character; Transfer cleanup preserves other Characters' contacts that refer to the
+mover on both source and destination. Remote names, presence and deletion tombstones use Realm
+projections. See
 [contacts across World Shards](architecture.md#contacts-across-world-shards). Native Groups use
 Realm-owned membership with World Shard projections, restored independently of the manifest. Whispers and
 `/who` use Realm queries; see [their delivery and snapshot limits](architecture.md#durable-state-and-extension-points).

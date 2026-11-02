@@ -285,6 +285,9 @@ def check_contacts(host, worlds, character, enter, received):
     assert sorted(body[0] for _, body in replies) == [7, 22]
     assert not any(opcode == 0x96 for opcode, _ in owner.collect())
 
+    owner_level, owner_zone = host.rows(f'SELECT level, zone_id FROM game_world_entity WHERE guid = {guid}', eastern)[0]
+    target.send(0x69, b'Contactowner\0')
+    assert received(target, 0x68) == [(0x68, struct.pack('<BQBIII', 6, guid, 1, owner_zone, owner_level, 1))]
     host.call('debug_teleport', [guid, 1, 20, 0, 0, 0], database=eastern)
     packets = []
     while guid not in creates(packets):
@@ -296,6 +299,7 @@ def check_contacts(host, worlds, character, enter, received):
     host.wait_until(lambda: not host.rows(f'SELECT id FROM game_character_contact WHERE owner_guid = {guid}', eastern),
         'Transfer retained the source contact list')
     assert len(host.rows(f'SELECT id FROM game_character_contact WHERE owner_guid = {guid}', western)) == 2
+    assert host.rows(f'SELECT target_guid FROM game_character_contact WHERE owner_guid = {target_guid}', western) == [[guid]], 'Transfer import removed a destination Character contact'
     lists(struct.pack('<BIII', 2, zone, level, 1))
     owner.close()
     host.wait_until(lambda: not host.rows(f'SELECT account_id FROM game_native_away WHERE account_id = {account.id}'),
@@ -316,6 +320,8 @@ def check_contacts(host, worlds, character, enter, received):
     host.wait_until(lambda: host.rows(f'SELECT online FROM game_party_character WHERE guid = {target_guid}', western) == [[True]]
         and not host.rows('SELECT connection_id FROM game_native_transfer_pending', western),
         'contact target did not finish Transfer')
+    contacts = host.rows(f'SELECT target_guid, is_ignore FROM game_character_contact WHERE owner_guid = {guid}', western)
+    assert sorted(contacts) == [[target_guid, False], [target_guid, True]], f'target Transfer removed another Character\'s contacts: {contacts}'
     owner.collect()
     target.send(0x4b)
     received(target, 0x4d)
