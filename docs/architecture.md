@@ -447,11 +447,15 @@ source and registry markers. The supported operations and compatibility rules ar
 the requesting Account, Character, connection and source against its directory and away record.
 It applies the existing Group rules and sends versioned Group projections to its World Shards.
 Per-Character membership revisions survive Transfer, including tombstones after departure, so a
-late Group snapshot cannot undo a newer membership. A projection restores membership after
+late Group snapshot cannot undo a newer membership. Disband snapshots settle rolls on the World
+Shard that holds the loot; each roll records its Group, so a late disband cannot settle a new
+Group's rolls. A projection restores membership after
 Character import; membership itself does not move in the Transfer manifest.
 
 Presence carries Character names, faction, class and Member Stats. World entry and departure
-publish presence; the existing five-second Member Stats schedule refreshes grouped members.
+publish presence; the existing five-second Member Stats schedule refreshes grouped members and
+their roster projections. A World Shard change counts as new presence. Refused projection deliveries
+retry after one second while their destination remains a Peer Shard.
 The Realm checks current connection ownership before accepting those facts. World Shards retain
 remote Member Stats for their local party frames. Group chat selects the authoritative Realm
 audience and uses the same connection-bound delivery and ignore Gates as whispers. Group events

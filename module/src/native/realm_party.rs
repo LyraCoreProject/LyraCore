@@ -10,7 +10,8 @@ use lyracore_protocol::{
 use lyracore_shared::chat::chat_kind;
 use lyracore_shared::group::{event_kind, GroupRefusal, TargetIcon};
 use spacetimedb::{
-    reducer, sats::bsatn, table, ConnectionId, Identity, ReducerContext, SpacetimeType, Table,
+    reducer, sats::bsatn, table, ConnectionId, Identity, ReducerContext, ScheduleAt, SpacetimeType,
+    Table, TimeDuration,
 };
 
 use super::directory::{game_character_directory, game_map_owner};
@@ -31,6 +32,7 @@ pub struct PartyCharacter {
     pub guid: u64,
     pub account_id: u64,
     pub connection: u128,
+    pub world: Identity,
     pub name: String,
     pub race: u8,
     pub class: u8,
@@ -73,6 +75,7 @@ pub struct Roster {
     kind: u8,
     members: Vec<Member>,
     icons: Vec<Icon>,
+    disband: Option<PartyDisband>,
 }
 
 #[derive(SpacetimeType)]
@@ -97,6 +100,7 @@ pub struct Update {
     rosters: Vec<Roster>,
     events: Vec<Event>,
     absent: Vec<u64>,
+    events_expire_micros: i64,
 }
 
 fn encode<T: spacetimedb::Serialize>(value: &T) -> Vec<u8> {
@@ -159,6 +163,7 @@ pub(super) fn facts(ctx: &ReducerContext, guid: u64, online: bool) -> Option<Par
         guid,
         account_id: player.account_id,
         connection: player.connection_id.to_u128(),
+        world: ctx.database_identity(),
         name: character.name,
         race: character.race,
         class: character.class,
@@ -247,7 +252,11 @@ pub fn idc_party_presence(ctx: &ReducerContext, character: Vec<u8>) -> Result<()
         .game_party_character()
         .guid()
         .find(character.guid)
-        .is_none_or(|old| old.online != character.online || old.connection != character.connection);
+        .is_none_or(|old| {
+            old.online != character.online
+                || old.connection != character.connection
+                || old.world != character.world
+        });
     let guid = character.guid;
     let mark = event_mark(ctx);
     store_character(ctx, character);
@@ -271,16 +280,7 @@ pub fn idc_party_presence(ctx: &ReducerContext, character: Vec<u8>) -> Result<()
             );
         }
     }
-    publish(
-        ctx,
-        if presence_changed {
-            groups
-        } else {
-            BTreeSet::new()
-        },
-        &[guid],
-        mark,
-    );
+    publish(ctx, groups, &[guid], mark);
     Ok(())
 }
 
@@ -499,6 +499,7 @@ fn roster(ctx: &ReducerContext, id: u64, guids: &mut BTreeSet<u64>) -> Roster {
         master: group.as_ref().map_or(0, |g| g.master_looter_guid),
         kind: group.as_ref().map_or(0, |g| g.group_type),
         members,
+        disband: ctx.db.game_party_disband().group_id().find(id),
         icons: group::target_icons_of(ctx, id)
             .into_iter()
             .map(|icon| Icon {
@@ -544,6 +545,7 @@ fn publish(ctx: &ReducerContext, groups: BTreeSet<u64>, extra_characters: &[u64]
         .collect();
     let update = encode(&Update {
         revision: directory::revision(ctx),
+        events_expire_micros: ctx.timestamp.to_micros_since_unix_epoch() + 15_000_000,
         characters,
         rosters,
         events,
@@ -598,6 +600,12 @@ pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), 
         project(ctx, roster, update.revision);
     }
     for event in update.events {
+        if ctx.timestamp.to_micros_since_unix_epoch() >= update.events_expire_micros
+            && !matches!(event.kind, event_kind::LIST | event_kind::DESTROYED)
+        {
+            continue;
+        }
+
         if ctx
             .db
             .game_party_membership()
@@ -659,6 +667,14 @@ fn project(ctx: &ReducerContext, roster: Roster, revision: u64) {
             group_type: roster.kind,
         });
     } else {
+        if let Some(disband) = roster.disband {
+            crate::loot::force_resolve_rolls_for_disband(
+                ctx,
+                &disband.members,
+                disband.survivor,
+                Some(roster.group_id),
+            );
+        }
         ctx.db.game_group().group_id().delete(roster.group_id);
     }
     let icons = ctx.db.game_group_target_icon();
@@ -827,6 +843,7 @@ pub(super) fn snapshot(ctx: &ReducerContext, guid: u64) -> Vec<u8> {
         .collect();
     encode(&Update {
         revision: directory::revision(ctx),
+        events_expire_micros: 0,
         rosters,
         characters: guids
             .into_iter()
@@ -839,4 +856,65 @@ pub(super) fn snapshot(ctx: &ReducerContext, guid: u64) -> Vec<u8> {
             Vec::new()
         },
     })
+}
+
+#[table(accessor = game_party_disband)]
+pub struct PartyDisband {
+    #[primary_key]
+    pub group_id: u64,
+    pub members: Vec<u64>,
+    pub survivor: Option<u64>,
+}
+
+pub(crate) fn disbanded(
+    ctx: &ReducerContext,
+    group_id: u64,
+    members: &[u64],
+    survivor: Option<u64>,
+) {
+    if world_shard(ctx).is_some() {
+        ctx.db.game_party_disband().group_id().delete(group_id);
+        ctx.db.game_party_disband().insert(PartyDisband {
+            group_id,
+            members: members.to_vec(),
+            survivor,
+        });
+    }
+}
+
+#[table(accessor = game_party_projection_retry, scheduled(retry_party_projection))]
+pub struct PartyProjectionRetry {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub scheduled_at: ScheduleAt,
+    pub call: WorldPartyUpdate,
+}
+
+#[reducer(on_result(game_world_party_update))]
+pub fn world_party_update_answered(
+    ctx: &ReducerContext,
+    call: WorldPartyUpdate,
+    result: Result<(), String>,
+) {
+    if let Err(error) = result {
+        spacetimedb::log::warn!("Group projection to {} waits: {error}", call.database.0);
+        ctx.db
+            .game_party_projection_retry()
+            .insert(PartyProjectionRetry {
+                id: 0,
+                scheduled_at: (ctx.timestamp + TimeDuration::from_micros(1_000_000)).into(),
+                call,
+            });
+    }
+}
+
+#[reducer]
+pub fn retry_party_projection(ctx: &ReducerContext, retry: PartyProjectionRetry) {
+    if crate::time::scheduler_authorized(ctx) && crate::peer::is_peer(ctx, retry.call.database.0) {
+        ctx.db.game_world_party_update().insert(WorldPartyUpdate {
+            id: 0,
+            ..retry.call
+        });
+    }
 }

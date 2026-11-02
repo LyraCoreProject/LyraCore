@@ -420,6 +420,9 @@ fn receive(ctx: &ReducerContext, opcode: u32, body: Vec<u8>) -> Result<(), Rollb
     if let Some(account_id) = account_id {
         current_account(ctx, &connection, account_id)?;
     }
+    if transfer::pending(ctx, connection_id) {
+        return Ok(());
+    }
     // World requests can remain in flight after logout; selection decodes only its own requests.
     if matches!(
         connection.state,

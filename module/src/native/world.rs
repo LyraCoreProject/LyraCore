@@ -328,9 +328,6 @@ pub(super) fn receive(
     opcode: u32,
     body: &[u8],
 ) -> Result<(), Rollback> {
-    if super::transfer::pending(ctx, connection.connection_id) {
-        return Ok(());
-    }
     let player = ctx
         .db
         .game_native_player()

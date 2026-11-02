@@ -91,6 +91,15 @@ def check(host):
     assert host.rows(f'SELECT group_id FROM game_group_member WHERE character_guid = {leader_guid}', instances) == [[group]]
     assert host.rows(f'SELECT leader_guid FROM game_group WHERE group_id = {group}') == [[leader_guid]]
 
+    host.sql(f'DELETE FROM game_group_member WHERE character_guid = {leader_guid}', continent)
+    host.wait_until(lambda: host.rows(f'SELECT group_id FROM game_group_member WHERE character_guid = {leader_guid}', continent) == [[group]],
+                    'periodic presence did not repair the source projection after Transfer', timeout=12)
+    leader.send(0x7a, struct.pack('<IQI', 2, leader_guid, 3))
+    host.wait_until(lambda: host.rows(f'SELECT loot_method, master_looter_guid, loot_threshold FROM game_group WHERE group_id = {group}', continent) == [[2, leader_guid, 3]],
+                    'loot rules did not reach the other World Shard')
+    leader.send(0x7a, struct.pack('<IQI', 3, 0, 2))
+    host.wait_until(lambda: host.rows(f'SELECT loot_method FROM game_group WHERE group_id = {group}', instances) == [[3]],
+                    'Group Loot was not restored')
     member.collect()
     leader.send(0x95, struct.pack('<II', 1, 7) + b'Across the portal\0')
     assert any(b'Across the portal\0' in body for body in received(member, 0x96))
@@ -118,14 +127,33 @@ def check(host):
     assert not host.rows(f'SELECT guid FROM game_character WHERE guid = {member_guid}', instances)
     assert host.rows(f'SELECT group_id FROM game_group_member WHERE character_guid = {member_guid}') == [[group]]
 
-    # A destination refusal leaves the Character and its inventory on the continent.
+    inventory_before = host.rows(f'SELECT guid, entry, slot, stack_count FROM game_item_instance WHERE owner_guid = {member_guid}', continent)
     host.call('operator_remove_peer_shard', [host.identity()], database=instances)
     member.send(0xb4, struct.pack('<I', entrance))
     received(member, 0x1cb)
     assert host.rows(f'SELECT map_id, instance_id FROM game_world_entity WHERE guid = {member_guid}', continent) == [[0, 0]]
     assert not host.rows(f'SELECT guid FROM game_character WHERE guid = {member_guid}', instances)
+    assert host.rows(f'SELECT guid, entry, slot, stack_count FROM game_item_instance WHERE owner_guid = {member_guid}', continent) == inventory_before
     host.call('operator_add_peer_shard', [host.identity(), 'realm'], database=instances)
     replacement = cross(member, member_guid, continent, instances, entrance)
     assert replacement not in (0, run, separate)
+    login(leader, leader_guid)
+    assert cross(leader, leader_guid, continent, instances, entrance) == replacement
+    host.sql('DELETE FROM game_creature_loot WHERE creature_entry = 51000', instances)
+    host.sql('INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090901,51000,5090050,10000,1,0,false)', instances)
+    existing = set(row[0] for row in host.rows('SELECT guid FROM game_world_entity WHERE entry = 51000', instances))
+    host.call('debug_spawn_at_feet', [leader_guid, 51000, 3], database=instances)
+    spawned = set(row[0] for row in host.rows('SELECT guid FROM game_world_entity WHERE entry = 51000', instances)) - existing
+    assert len(spawned) == 1
+    corpse = spawned.pop()
+    host.call('debug_apply_damage', [corpse, 1, leader_guid], database=instances)
+    host.call('debug_kill_creature', [leader_guid, corpse], database=instances)
+    assert host.rows(f'SELECT group_id FROM game_loot_roll WHERE corpse_guid = {corpse}', instances) == [[group]]
+    before = host.rows(f'SELECT guid FROM game_item_instance WHERE owner_guid = {leader_guid} AND entry = 5090050', instances)
+    member.send(0x7b)
+    host.wait_until(lambda: not host.rows(f'SELECT id FROM game_loot_roll WHERE corpse_guid = {corpse}', instances),
+                    'disband did not settle the World Shard loot roll')
+    assert len(host.rows(f'SELECT guid FROM game_item_instance WHERE owner_guid = {leader_guid} AND entry = 5090050', instances)) == len(before) + 1
+    assert not host.rows(f'SELECT id FROM game_loot_roll_vote WHERE voter_guid = {member_guid}', instances)
     for client in (leader, member, solo):
         client.close()

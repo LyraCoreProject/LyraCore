@@ -1594,7 +1594,8 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64, departure
             } else {
                 None
             };
-            crate::loot::force_resolve_rolls_for_disband(ctx, &all_guids, survivor);
+            crate::native::realm_party::disbanded(ctx, group_id, &all_guids, survivor);
+            crate::loot::force_resolve_rolls_for_disband(ctx, &all_guids, survivor, None);
             for r in &remaining {
                 push_event(
                     ctx,

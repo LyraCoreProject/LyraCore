@@ -34,6 +34,8 @@ pub struct LootRoll {
     pub random_property_id: u32,
     #[default(Identity::ZERO)]
     pub promotion_source: Identity,
+    #[default(0u64)]
+    pub group_id: u64,
 }
 
 #[derive(Clone)]
@@ -275,6 +277,10 @@ fn insert_roll_rows(
         resolved: false,
         random_property_id,
         promotion_source: ctx.database_identity(),
+        group_id: recipients
+            .first()
+            .and_then(|guid| crate::group::group_of(ctx, *guid))
+            .map_or(0, |member| member.group_id),
     });
     let votes = ctx.db.game_loot_roll_vote();
     for &guid in recipients {
@@ -559,12 +565,13 @@ pub(crate) fn force_resolve_rolls_for_disband(
     ctx: &ReducerContext,
     member_guids: &[u64],
     survivor: Option<u64>,
+    group_id: Option<u64>,
 ) {
     let rolls: Vec<LootRoll> = ctx
         .db
         .game_loot_roll()
         .iter()
-        .filter(|r| !r.resolved)
+        .filter(|r| !r.resolved && group_id.is_none_or(|group_id| r.group_id == group_id))
         .collect();
     for roll in rolls {
         let votes_tab = ctx.db.game_loot_roll_vote();
