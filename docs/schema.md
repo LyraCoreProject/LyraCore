@@ -40,6 +40,12 @@ Native world-port Transfer adds private IDC outboxes and a pending connection ta
 Host's cipher and packet layouts do not change. See [Character Transfer](character-transfer.md)
 for the ledger and Handoff ordering.
 
+`game_character_profile` is a new private directory projection. Its revision orders name and faction
+facts and deletion tombstones independently of delivery order. `game_character_profiles` and
+`game_character_profiles_retry` carry and retry these projections. Existing contact and presence
+row layouts are unchanged. Populate profiles on an existing Realm before opening gameplay; see
+[contacts across World Shards](architecture.md#contacts-across-world-shards).
+
 `game_creature_level_stats` holds final health, damage and armor by template and level.
 `game_creature_display` holds weighted display choices by template. Both are new tables, so an
 existing Realm migrates without changing stored template rows. A template stat change takes

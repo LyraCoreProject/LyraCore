@@ -1462,7 +1462,14 @@ pub(crate) fn listing_holds_after(blob: &[u8]) -> ListingHolds {
 
 // Restore listing Holds omitted by older blobs so the cascade cannot destroy their value.
 fn cascade_for_transfer(ctx: &ReducerContext, guid: u64, listing_holds: ListingHolds) {
-    use crate::auction::game_auction_hold;
+    use crate::{auction::game_auction_hold, chat::game_character_contact};
+    let incoming_contacts: Vec<_> = ctx
+        .db
+        .game_character_contact()
+        .by_target()
+        .filter(guid)
+        .filter(|contact| contact.owner_guid != guid)
+        .collect();
     let kept: Vec<_> = match listing_holds {
         ListingHolds::Delete => Vec::new(),
         ListingHolds::Keep => ctx
@@ -1473,6 +1480,9 @@ fn cascade_for_transfer(ctx: &ReducerContext, guid: u64, listing_holds: ListingH
             .collect(),
     };
     crate::world::cascade_delete_character(ctx, guid);
+    for contact in incoming_contacts {
+        ctx.db.game_character_contact().insert(contact);
+    }
     for hold in kept {
         ctx.db.game_auction_hold().insert(hold);
     }

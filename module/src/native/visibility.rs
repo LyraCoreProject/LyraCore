@@ -363,6 +363,13 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
         if old.zone_id != new.zone_id {
             super::environment::zone_changed(ctx, new);
         }
+        if old.zone_id != new.zone_id
+            || old.level != new.level
+            || lyracore_shared::chat::chat_tag_for(old.player_flags)
+                != lyracore_shared::chat::chat_tag_for(new.player_flags)
+        {
+            super::realm_party::presence(ctx, new.guid, true);
+        }
         if old.level != new.level {
             super::book::talent_points(ctx, new.guid, new.level);
         }

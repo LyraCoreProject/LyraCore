@@ -249,9 +249,9 @@ pub(super) fn enter_character(
     super::instance::replay(ctx, guid);
     super::petition::replay(ctx, guid, connection.connection_id);
     super::chat::replay_system_messages(ctx, guid);
+    super::social::enter(ctx, account_id, guid, entry);
     super::party::enter(ctx, guid, entry);
     if entry == crate::world::WorldEntry::Login {
-        super::social::presence(ctx, guid, true);
         super::guild::presence(ctx, guid, true);
     }
     if let Some(sequence) = cinematic {
@@ -718,13 +718,10 @@ pub(super) fn receive(
             }
         }
         ClientOpcodeMessage::CMSG_NAME_QUERY(query) => {
-            let Some(character) = crate::helpers::character_by_guid(ctx, query.guid.guid()) else {
+            let Some(response) = super::social::name_query(ctx, query.guid.guid())? else {
                 return Ok(());
             };
-            ServerOpcodeMessage::SMSG_NAME_QUERY_RESPONSE(Box::new(
-                codec::build_name_query_response(&super::view::character(ctx, character))
-                    .map_err(|error| error.to_string())?,
-            ))
+            ServerOpcodeMessage::SMSG_NAME_QUERY_RESPONSE(Box::new(response))
         }
         ClientOpcodeMessage::CMSG_QUERY_TIME => ServerOpcodeMessage::SMSG_QUERY_TIME_RESPONSE(
             lyracore_protocol::messages::vanilla::SMSG_QUERY_TIME_RESPONSE {

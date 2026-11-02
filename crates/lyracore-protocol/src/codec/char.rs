@@ -110,14 +110,20 @@ pub fn build_char_enum(chars: &[CharacterView]) -> Result<SMSG_CHAR_ENUM> {
     Ok(SMSG_CHAR_ENUM { characters })
 }
 
-pub fn build_name_query_response(c: &CharacterView) -> Result<SMSG_NAME_QUERY_RESPONSE> {
+pub fn build_name_query_response(
+    guid: u64,
+    name: String,
+    race: u8,
+    gender: u8,
+    class: u8,
+) -> Result<SMSG_NAME_QUERY_RESPONSE> {
     Ok(SMSG_NAME_QUERY_RESPONSE {
-        guid: Guid::new(c.guid),
-        character_name: c.name.clone(),
+        guid: Guid::new(guid),
+        character_name: name,
         realm_name: String::new(),
-        race: Race::try_from(c.race).map_err(|_| anyhow!("invalid race {}", c.race))?,
-        gender: Gender::try_from(c.gender).map_err(|_| anyhow!("invalid gender {}", c.gender))?,
-        class: Class::try_from(c.class).map_err(|_| anyhow!("invalid class {}", c.class))?,
+        race: Race::try_from(race).map_err(|_| anyhow!("invalid race {race}"))?,
+        gender: Gender::try_from(gender).map_err(|_| anyhow!("invalid gender {gender}"))?,
+        class: Class::try_from(class).map_err(|_| anyhow!("invalid class {class}"))?,
     })
 }
 

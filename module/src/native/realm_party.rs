@@ -201,14 +201,17 @@ pub(super) fn presence(ctx: &ReducerContext, guid: u64, online: bool) {
 
 fn store_character(ctx: &ReducerContext, character: PartyCharacter) {
     let table = ctx.db.game_party_character();
-    if table
-        .guid()
-        .find(character.guid)
-        .is_some_and(|old| old.revision > character.revision)
+    let previous = table.guid().find(character.guid);
+    if previous
+        .as_ref()
+        .is_some_and(|old| old.revision >= character.revision)
     {
         return;
     }
     directory::observe_revision(ctx, character.revision);
+    if realm_shard(ctx).is_some() {
+        super::social::projected_presence(ctx, previous.as_ref(), &character);
+    }
     table.guid().delete(character.guid);
     table.insert(character);
 }
