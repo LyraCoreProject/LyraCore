@@ -249,11 +249,9 @@ pub(super) fn enter_character(
     super::instance::replay(ctx, guid);
     super::petition::replay(ctx, guid, connection.connection_id);
     super::chat::replay_system_messages(ctx, guid);
-    super::social::prune_deleted(ctx, guid);
-    super::directory::changed(ctx, account_id, guid, true);
+    super::social::enter(ctx, account_id, guid, entry);
     super::party::enter(ctx, guid, entry);
     if entry == crate::world::WorldEntry::Login {
-        super::social::presence(ctx, guid, true);
         super::guild::presence(ctx, guid, true);
     }
     if let Some(sequence) = cinematic {

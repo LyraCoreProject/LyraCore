@@ -318,6 +318,19 @@ fn remove(
     Ok(())
 }
 
+pub(super) fn enter(
+    ctx: &ReducerContext,
+    account_id: u64,
+    guid: u64,
+    entry: crate::world::WorldEntry,
+) {
+    prune_deleted(ctx, guid);
+    super::directory::changed(ctx, account_id, guid, true);
+    if entry == crate::world::WorldEntry::Login {
+        presence(ctx, guid, true);
+    }
+}
+
 pub(super) fn presence(ctx: &ReducerContext, guid: u64, present: bool) {
     if crate::peer::realm_shard(ctx).is_some() {
         return;
@@ -394,7 +407,7 @@ pub(super) fn projected_presence(
     notify_presence(ctx, character.guid, character.race, fields);
 }
 
-pub(super) fn prune_deleted(ctx: &ReducerContext, guid: u64) {
+fn prune_deleted(ctx: &ReducerContext, guid: u64) {
     if crate::peer::realm_shard(ctx).is_none() {
         return;
     }
