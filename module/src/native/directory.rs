@@ -369,18 +369,31 @@ pub fn idc_character_profiles(ctx: &ReducerContext, profiles: Vec<u8>) -> Result
             if profile.world != ctx.sender() {
                 return Err("Character profile source differs from its World Shard".into());
             }
-            if ctx
+            if let Some(version) = ctx
                 .db
                 .game_character_directory_version()
                 .guid()
                 .find(profile.guid)
-                .is_some_and(|old| old.revision >= profile.revision)
+                .filter(|version| version.revision >= profile.revision)
             {
-                continue;
+                let current = ctx.db.game_character_directory().guid().find(profile.guid);
+                let same_owner = version.world == ctx.sender()
+                    && match current {
+                        Some(entry) => {
+                            !profile.deleted
+                                && entry.world == ctx.sender()
+                                && entry.account_id == profile.account_id
+                        }
+                        None => profile.deleted,
+                    };
+                if !same_owner {
+                    continue;
+                }
+            } else {
+                let changes = bsatn::to_vec(&vec![(profile.guid, !profile.deleted)])
+                    .expect("directory change encodes");
+                apply(ctx, profile.account_id, &changes, profile.revision)?;
             }
-            let changes = bsatn::to_vec(&vec![(profile.guid, !profile.deleted)])
-                .expect("directory change encodes");
-            apply(ctx, profile.account_id, &changes, profile.revision)?;
         }
         let table = ctx.db.game_character_profile();
         if table

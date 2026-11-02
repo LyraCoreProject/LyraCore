@@ -228,6 +228,7 @@ def check(host):
     enter(replacement, guid)
     deliver(delivery, refused=True)
     assert not any(opcode == 0x1cb for opcode, _ in replacement.collect())
+    check_profile_ordering(host, eastern)
 
 
 def check_contacts(host, worlds, character, enter, received):
@@ -343,3 +344,50 @@ def check_contacts(host, worlds, character, enter, received):
     assert received(owner, 0x3c) == [(0x3c, b'\x39')]
     owner.close()
     target.close()
+
+
+def check_profile_ordering(host, world):
+    [operator_hex] = host.rows('SELECT identity FROM game_operator')[0][0]
+    operator = {'__identity__': f'0x{int(operator_hex, 16):064x}'}
+    guid, account_id = 9_000_000_001, 9_000_001
+
+    def selection(revision, present):
+        changes = struct.pack('<IQB', 1, guid, present)
+        host.call('idc_selection_result', [0, 0x3a, [], 0, account_id, list(changes), revision])
+
+    def profile(revision, name, deleted=False):
+        encoded = name.encode()
+        payload = struct.pack('<IQQ', 1, guid, account_id) + int(operator_hex, 16).to_bytes(32, 'little')
+        payload += struct.pack('<QI', revision, len(encoded)) + encoded + bytes([1, 1, 0, deleted])
+        host.call('idc_character_profiles', [list(payload)])
+
+    def stored(database=None):
+        return host.rows(f'SELECT name, deleted FROM game_character_profile WHERE guid = {guid}', database)
+
+    host.call('operator_add_peer_shard', [operator, 'Character profile ordering fixture'])
+    host.call('operator_set_shard_role', [{'some': {'realm': operator}}])
+    try:
+        selection(20, True)
+        profile(10, 'Beforeselection')
+        assert stored() == [['Beforeselection', False]], 'selection revision discarded an unseen Character profile'
+        profile(15, 'Currentprofile')
+        profile(10, 'Beforeselection')
+        assert stored() == [['Currentprofile', False]], 'older profile replaced newer facts'
+        destination = host.identity(world)['__identity__']
+        host.sql(f'UPDATE game_character_directory SET world = {destination} WHERE guid = {guid}')
+        host.sql(f'UPDATE game_character_directory_version SET world = {destination}, revision = 30 WHERE guid = {guid}')
+        profile(25, 'Retiredowner')
+        assert stored() == [['Currentprofile', False]], 'former World owner replaced current facts'
+        source = operator['__identity__']
+        host.sql(f'UPDATE game_character_directory SET world = {source} WHERE guid = {guid}')
+        host.sql(f'UPDATE game_character_directory_version SET world = {source}, revision = 35 WHERE guid = {guid}')
+        selection(40, False)
+        profile(30, 'Beforedeletion')
+        assert stored() == [['Currentprofile', False]], 'a delayed profile revived a deleted Character'
+        profile(35, '', deleted=True)
+        profile(30, 'Beforedeletion')
+        assert stored() == [['', True]], 'selection revision discarded the deletion tombstone'
+        host.wait_until(lambda: stored(world) == [['', True]], 'deletion tombstone was not projected')
+    finally:
+        host.call('operator_set_shard_role', [{'some': {'realm': host.identity(world)}}])
+        host.call('operator_remove_peer_shard', [operator])

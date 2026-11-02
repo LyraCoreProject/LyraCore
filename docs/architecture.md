@@ -449,10 +449,12 @@ source and registry markers. The supported operations and compatibility rules ar
 
 Contact lists remain Character-owned and travel in the Transfer manifest. Each World Shard reports
 Character names, race, class and gender through the Realm directory, including Characters that have
-never logged in. The Realm accepts a report only from the current World owner with a newer directory
-revision, then distributes private, versioned Character profiles to its World Shards. Deleted profiles
-remain as tombstones. Refused profile deliveries retry while the destination is still a Peer Shard.
-The old directory reducer remains available for outboxes committed before the upgrade.
+never logged in. The Realm checks each report against the current World owner, then distributes
+private, versioned Character profiles to its World Shards. Profile revisions are ordered separately
+from directory revisions: a newer Character-selection reply must not discard an unseen profile.
+A delayed report cannot reverse a directory deletion or replace facts from the current World owner.
+Deleted profiles remain as tombstones. Refused profile deliveries retry while the destination is still
+a Peer Shard. The old directory reducer remains available for outboxes committed before the upgrade.
 
 Friend and ignore additions resolve these profiles and apply the existing self, faction, duplicate
 and list-cap Gates in the owning World Shard transaction. Ambiguous names are refused. Name queries
