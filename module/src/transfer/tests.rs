@@ -1329,6 +1329,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         ("game_fatigue_state", count),
         ("game_group_target_icon", count),
         ("game_guild_fee_hold", count),
+        ("game_instance_entry", count),
         ("game_instance_removal", count),
     ];
     let carried = [TableRows {
@@ -1344,7 +1345,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         arms,
     )
     .expect("the filled payload imports");
-    assert_eq!(applied.get(), 8);
+    assert_eq!(applied.get(), 9);
 }
 
 #[test]
