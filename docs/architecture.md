@@ -228,9 +228,10 @@ sends deltas for members outside AOI. Private snapshots keep the prior Aura and 
 removals clear the client. Loading members keep their previous snapshot, and full requests report
 that they are loading. Logout and group destruction delete the connection's scheduled updates.
 
-**Guilds.** The [guild handler](../module/src/native/guild.rs) reads Character facts and applies
-membership and rank permissions in the same transaction. Rosters show loading Characters as online
-and filter officer notes by the recipient's rank. Membership changes update guild ID and rank
+**Guilds.** The [guild handler](../module/src/native/guild.rs) takes Actor facts and an invitee
+lookup, applies membership and rank permissions, and returns the direct reply. Its caller owns
+authentication, invitee Gates and rollback on error. Guild events emit in the mutation transaction.
+Rosters show loading Characters as online and filter officer notes by the recipient's rank. Membership changes update guild ID and rank
 through AOI. Login sends the MOTD to the Character and sign-on to other members; map changes
 announce no sign-off. [Charter and emblem purchases](../module/src/native/petition.rs) commit
 copper, items, guild state and notifications in one transaction. Petition signatures use the actual
