@@ -16,6 +16,10 @@ pub(crate) mod character_owned_tripwire {
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
         (
+            &["game_auction_deletion"],
+            "Realm-owned deletion guard rejects late Auction requests until the World reports the deletion outcome, independent of the client connection",
+        ),
+        (
             &["game_auction_transaction"],
             "World-owned auction settlement blocks Character Transfer and deletion until the outcome and any refund are applied",
         ),

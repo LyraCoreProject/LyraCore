@@ -64,6 +64,53 @@ pub struct AuctionTransaction {
     pub outcome: Option<AuctionOutcome>,
 }
 
+#[table(accessor = game_auction_deletion)]
+pub struct AuctionDeletion {
+    #[primary_key]
+    pub guid: u64,
+    #[unique]
+    pub selection_id: u64,
+    pub world: Identity,
+}
+
+pub(super) fn begin_deletion(
+    ctx: &ReducerContext,
+    guid: u64,
+    selection_id: u64,
+    world: Identity,
+) -> Result<(), Rollback> {
+    if auctions::character_has_auction_value(ctx, guid)
+        || ctx.db.game_auction_deletion().guid().find(guid).is_some()
+    {
+        return Err(Rollback::reply(
+            ServerOpcodeMessage::SMSG_CHAR_DELETE(
+                lyracore_protocol::codec::build_char_delete_response(
+                    lyracore_protocol::codec::CharDeleteOutcome::Failed,
+                ),
+            ),
+            "Character has Auction value or deletion pending",
+        ));
+    }
+    ctx.db.game_auction_deletion().insert(AuctionDeletion {
+        guid,
+        selection_id,
+        world,
+    });
+    Ok(())
+}
+
+pub(super) fn finish_deletion(ctx: &ReducerContext, selection_id: u64, world: Identity) {
+    if let Some(row) = ctx
+        .db
+        .game_auction_deletion()
+        .selection_id()
+        .find(selection_id)
+        .filter(|row| row.world == world)
+    {
+        ctx.db.game_auction_deletion().guid().delete(row.guid);
+    }
+}
+
 #[table(accessor = game_realm_auction_request, outbox(remote::idc_realm_auction_request))]
 pub struct RealmAuctionRequest {
     #[primary_key]
@@ -451,6 +498,9 @@ pub fn idc_realm_auction_request(
 ) -> Result<(), String> {
     directory::require_world(ctx)?;
     let request: Request = bsatn::from_slice(&request).map_err(|error| error.to_string())?;
+    if ctx.db.game_auction_deletion().guid().find(guid).is_some() {
+        return Err("Character deletion is pending".into());
+    }
     if !matches!(&request, Request::Import(ListingImport { .. }))
         && ctx
             .db

@@ -58,6 +58,7 @@ def check(host):
     realm_guild.check_import(host, worlds, character, received)
     realm_petition.check_import(host, worlds, character, received)
     realm_auction.check_import(host, worlds, character, received)
+    realm_auction.check_deletion(host, worlds, character, received)
     account, client, guid = character('Eastern', 0)
     peer_account, peer, peer_guid = character('Western', 1)
 

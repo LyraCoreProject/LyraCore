@@ -376,7 +376,8 @@ World receipts retain accepted sell identities for repeated packets; they do not
 It retains the request, reserved copper and eventual outcome until settlement completes.
 `game_realm_auction_request` and `game_world_auction_answer` are private IDC outboxes;
 `game_auction_retry` schedules refused answer deliveries and refunds that still need purse space.
-These four tables are additive. Existing row layouts remain unchanged. The migration and failure
+`game_auction_deletion` fences late Auction requests until a pending Character deletion finishes.
+These five tables are additive. Existing row layouts remain unchanged. The migration and failure
 contracts are in [Auctions across World Shards](architecture.md#auctions-across-world-shards).
 
 ### Guilds (`module/src/guild/`)

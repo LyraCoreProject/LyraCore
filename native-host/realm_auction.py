@@ -40,6 +40,47 @@ def sell(client, npc, item):
     client.send(0x256, struct.pack('<QQIII', npc, item, 100, 500, 120))
 
 
+def check_deletion(host, worlds, character, received):
+    shard = worlds[0]
+    account, client, guid = character('Auctiondelete', 0)
+    settled(host, shard, guid)
+    npc = auctioneer(host, shard, guid)
+    host.call('debug_set_money', [guid, 1000], database=shard)
+    item = grant(host, shard, guid)
+    world = host.identity(shard)['__identity__']
+    # The deletion was dispatched before this delayed Listing; its connection is already gone.
+    host.sql(f'INSERT INTO game_auction_deletion (guid,selection_id,world) VALUES ({guid},18446744073709551614,{world})')
+    sell(client, npc, item)
+    assert received(client, 0x1cb) == [(0x1cb, b'Auction request unavailable. Please try again.\0')]
+    host.wait_until(lambda: not host.rows(f'SELECT operation FROM game_auction_transaction WHERE guid = {guid}', shard), 'refused Listing did not settle')
+    assert host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}', shard) == [[1000]]
+    assert not host.rows(f'SELECT id FROM game_auction WHERE owner_guid = {guid}')
+    assert host.rows(f'SELECT item_entry,item_stack_count FROM game_mail WHERE recipient_guid = {guid}', shard) == [[ITEM, 1]]
+    client.send(0x4b)
+    received(client, 0x4d)
+    client.close()
+    assert host.rows(f'SELECT guid FROM game_auction_deletion WHERE guid = {guid}') == [[guid]]
+    client = host.connect(account.username)
+    assert client.read()[0] == 0x1ee
+    client.send(0x38, struct.pack('<Q', guid))
+    assert received(client, 0x3c) == [(0x3c, b'\x3a')]
+    host.sql(f'DELETE FROM game_auction_deletion WHERE guid = {guid}')
+    host.call('operator_remove_peer_shard', [host.identity()], database=shard)
+    client.send(0x38, struct.pack('<Q', guid))
+    client.read_until_closed(timeout=15)
+    assert not host.rows('SELECT id FROM game_pending_selection')
+    assert not host.rows(f'SELECT guid FROM game_auction_deletion WHERE guid = {guid}')
+    assert host.rows(f'SELECT guid FROM game_character WHERE guid = {guid}', shard) == [[guid]]
+    client.close()
+    host.call('operator_add_peer_shard', [host.identity(), 'realm'], database=shard)
+    client = host.connect(account.username)
+    assert client.read()[0] == 0x1ee
+    client.send(0x38, struct.pack('<Q', guid))
+    assert received(client, 0x3c) == [(0x3c, b'\x39')]
+    assert not host.rows(f'SELECT guid FROM game_auction_deletion WHERE guid = {guid}')
+    client.close()
+
+
 def check_import(host, worlds, character, received):
     fixtures(host, worlds)
     owners = []

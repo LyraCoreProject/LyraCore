@@ -639,6 +639,12 @@ Refusal. Auction Notices use the existing bounded Realm delivery path; Auction M
 and follows its recipient through Transfer. The Realm refuses deletion of a seller or standing
 bidder while it owns Auction value.
 
+Before sending Character deletion to its World, the Realm records `game_auction_deletion` and
+refuses later Auction requests for that Character. This closes the ordering gap between the
+selection and Auction delivery streams. The guard remains after a client disconnect or selection
+timeout. Only the matching World result or confirmed request rollback clears it; a successful
+result updates the Character directory before clearing the guard.
+
 With gameplay closed, publish every Shard and backfill Character profiles before migrating existing
 Listings. Capture each World’s `game_auction`, `game_auction_operation_receipt` and referenced
 `game_item_text` rows. Call `operator_route_auctions` on each World. The Realm imports each Listing
