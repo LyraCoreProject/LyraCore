@@ -181,38 +181,7 @@ pub(super) fn enter_character(
         )?,
     }
     super::environment::enter_zone(ctx, connection.connection_id, entity.map_id, entity.zone_id);
-    for (opcode, body) in items
-        .iter()
-        .filter_map(codec::build_enchantment_slot_values)
-    {
-        super::send_raw(ctx, connection.connection_id, opcode, body, false);
-    }
-    for item in items
-        .iter()
-        .filter(|item| item.temporary_enchantment.enchantment != 0)
-    {
-        super::send(
-            ctx,
-            connection.connection_id,
-            ServerOpcodeMessage::SMSG_ITEM_ENCHANT_TIME_UPDATE(Box::new(
-                codec::build_item_enchant_time_update(
-                    item.guid,
-                    item.owner_guid,
-                    item.temporary_enchantment.duration_ms / 1000,
-                ),
-            )),
-            false,
-        )?;
-    }
-    for item in &items {
-        if let Some((bag_slot, position)) = codec::bag_content_parts(item.slot) {
-            if let Some(bag) = items.iter().find(|bag| bag.slot == bag_slot) {
-                let (opcode, body) =
-                    codec::build_container_slot_values(bag.guid, position, item.guid);
-                super::send_raw(ctx, connection.connection_id, opcode, body, false);
-            }
-        }
-    }
+    replay_item_details(ctx, connection.connection_id, &items)?;
     ctx.db
         .game_native_world_connection()
         .connection_id()
@@ -258,6 +227,46 @@ pub(super) fn enter_character(
     if let Some(sequence) = cinematic {
         let (opcode, body) = codec::build_trigger_cinematic(sequence);
         super::send_raw(ctx, connection.connection_id, opcode, body, false);
+    }
+    Ok(())
+}
+
+fn replay_item_details(
+    ctx: &ReducerContext,
+    connection_id: ConnectionId,
+    items: &[codec::ItemInstanceView],
+) -> Result<(), String> {
+    for (opcode, body) in items
+        .iter()
+        .filter_map(codec::build_enchantment_slot_values)
+    {
+        super::send_raw(ctx, connection_id, opcode, body, false);
+    }
+    for item in items
+        .iter()
+        .filter(|item| item.temporary_enchantment.enchantment != 0)
+    {
+        super::send(
+            ctx,
+            connection_id,
+            ServerOpcodeMessage::SMSG_ITEM_ENCHANT_TIME_UPDATE(Box::new(
+                codec::build_item_enchant_time_update(
+                    item.guid,
+                    item.owner_guid,
+                    item.temporary_enchantment.duration_ms / 1000,
+                ),
+            )),
+            false,
+        )?;
+    }
+    for item in items {
+        if let Some((bag_slot, position)) = codec::bag_content_parts(item.slot) {
+            if let Some(bag) = items.iter().find(|bag| bag.slot == bag_slot) {
+                let (opcode, body) =
+                    codec::build_container_slot_values(bag.guid, position, item.guid);
+                super::send_raw(ctx, connection_id, opcode, body, false);
+            }
+        }
     }
     Ok(())
 }
