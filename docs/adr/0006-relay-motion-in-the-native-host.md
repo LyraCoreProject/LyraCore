@@ -73,5 +73,9 @@ lag is client-measured, p95; writer is the World Shard's.
 | Spread, 600 yd, 200 ms, combat | 600 | 216 ms | 97% | 24 ms | 87% |
 | | 800 | 391 ms, 694 connected | 96% | 25 ms, 800 connected | 99% |
 
+These runs predate two changes: facing and pitch now reach the Module, and samples follow 4 yards
+of drift instead of 8. With those changes and Grants kept one cell beyond the AOI, dense 1,000
+measured 72 ms at 43% writer, and spread 800 measured 25 ms at 86%.
+
 In the spread runs creature AI keeps the writer busy, and movement lag no longer depends on it.
 Raw reports are in `~/LyraCore-native/.lyracore/sidecar-20261103/` on Argus.
