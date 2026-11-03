@@ -5382,6 +5382,8 @@ def check_continent_shards(host):
         entered.append(client.read())
     client.collect()
     assert_playtest(kalimdor, entered, False)
+    host.wait_until(lambda: not host.rows(f'SELECT guid FROM game_guild_transaction WHERE guid = {guid}', kalimdor),
+                    'login guild reconciliation did not settle before Transfer')
     host.call('debug_teleport', [guid, 0, 20, 0, 0, 0], database=kalimdor)
     client.collect(auto_ack=False)
     client.send(0xdc)
