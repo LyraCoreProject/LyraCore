@@ -203,41 +203,52 @@ pub(super) fn receive(
             )?;
         }
         C::CMSG_TURN_IN_PETITION(request) => {
-            let charter = request.petition.guid();
-            if !core::holds_charter(ctx, guid, charter) {
-                return Ok(());
-            }
-            let name = view(ctx, charter).map_or(String::new(), |petition| petition.name);
-            run(
-                GuildOp::TurnInPetition {
-                    charter_item_guid: charter,
-                },
-                &|refusal| match refusal {
-                    GuildRefusal::AlreadyInGuild => {
-                        Some(turn_in_result(PetitionResult::AlreadyInGuild))
-                    }
-                    GuildRefusal::NeedMoreSignatures => {
-                        Some(turn_in_result(PetitionResult::NeedMore))
-                    }
-                    GuildRefusal::NameExists => name_refusal(refusal, &name),
-                    _ => None,
-                },
-            )?;
-            crate::ItemInstance::delete(ctx, charter);
-            super::send(
-                ctx,
-                id,
-                command(
-                    GuildCommand::Create,
-                    &name,
-                    GuildCommandResult::PlayerNoMoreInGuild,
-                ),
-                false,
-            )?;
-            super::send(ctx, id, turn_in_result(PetitionResult::Ok), false)?;
+            turn_in(ctx, id, guid, actor.account_id, request.petition.guid())?;
         }
         _ => return Err("opcode is not a guild purchase or petition request".into()),
     }
+    Ok(())
+}
+
+fn turn_in(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    account_id: u64,
+    charter: u64,
+) -> Result<(), Rollback> {
+    if !core::holds_charter(ctx, guid, charter) {
+        return Ok(());
+    }
+    let name = view(ctx, charter).map_or(String::new(), |petition| petition.name);
+    guild::apply_op(
+        ctx,
+        guid,
+        account_id,
+        GuildOp::TurnInPetition {
+            charter_item_guid: charter,
+        },
+    )
+    .map_err(|refusal| {
+        refused(refusal.as_tag().into(), &|refusal| match refusal {
+            GuildRefusal::AlreadyInGuild => Some(turn_in_result(PetitionResult::AlreadyInGuild)),
+            GuildRefusal::NeedMoreSignatures => Some(turn_in_result(PetitionResult::NeedMore)),
+            GuildRefusal::NameExists => name_refusal(refusal, &name),
+            _ => None,
+        })
+    })?;
+    crate::ItemInstance::delete(ctx, charter);
+    super::send(
+        ctx,
+        connection,
+        command(
+            GuildCommand::Create,
+            &name,
+            GuildCommandResult::PlayerNoMoreInGuild,
+        ),
+        false,
+    )?;
+    super::send(ctx, connection, turn_in_result(PetitionResult::Ok), false)?;
     Ok(())
 }
 
