@@ -32,18 +32,82 @@ enum Reply {
     Rank,
 }
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "Guild opcode dispatch stays in one match"
-)]
+pub(super) struct Actor {
+    pub guid: u64,
+    pub account_id: u64,
+    pub name: String,
+    pub team: u32,
+}
+
+impl From<&Character> for Actor {
+    fn from(character: &Character) -> Self {
+        Self {
+            guid: character.guid,
+            account_id: character.account_id,
+            name: character.name.clone(),
+            team: team_for_race(character.race),
+        }
+    }
+}
+
+pub(super) struct Invitee {
+    pub guid: u64,
+    pub name: String,
+    pub team: u32,
+    pub ignores_actor: bool,
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
 ) -> Result<(), Rollback> {
-    let actor = super::available_character(ctx, guid)?;
-    let id = connection.connection_id;
+    let character = super::available_character(ctx, guid)?;
+    let actor = Actor::from(&character);
+    let reply = request(
+        ctx,
+        &actor,
+        crate::auth::gm_level(ctx, actor.account_id),
+        message,
+        |name| invitee(ctx, guid, name),
+    )?;
+    if let Some(packet) = reply {
+        super::send(ctx, connection.connection_id, packet, false)?;
+    }
+    Ok(())
+}
+
+fn invitee(ctx: &ReducerContext, actor: u64, name: &str) -> Option<Invitee> {
+    let target = crate::helpers::character_by_name(ctx, name)?;
+    ctx.db.game_world_entity().guid().find(target.guid)?;
+    let ignores_actor = ctx
+        .db
+        .game_character_contact()
+        .by_owner()
+        .filter(target.guid)
+        .any(|contact| contact.is_ignore && contact.target_guid == actor);
+    Some(Invitee {
+        guid: target.guid,
+        name: target.name,
+        team: team_for_race(target.race),
+        ignores_actor,
+    })
+}
+
+// The caller owns authentication, invitee Gates and rollback on error.
+#[allow(
+    clippy::too_many_lines,
+    reason = "Guild opcode dispatch stays in one match"
+)]
+pub(super) fn request(
+    ctx: &ReducerContext,
+    actor: &Actor,
+    gm_level: u8,
+    message: ClientOpcodeMessage,
+    resolve_invitee: impl FnOnce(&str) -> Option<Invitee>,
+) -> Result<Option<ServerOpcodeMessage>, Rollback> {
+    let guid = actor.guid;
     use ClientOpcodeMessage as C;
     let mut typed_name = String::new();
     let mut target_name = String::new();
@@ -55,13 +119,11 @@ pub(super) fn receive(
                     codec::build_guild_query_response(&guild),
                 ))
             });
-            return Ok(super::send(ctx, id, packet, false)?);
+            return Ok(Some(packet));
         }
         C::CMSG_GUILD_ROSTER => {
-            if let Some(member) = guild::member(ctx, guid) {
-                rosters(ctx, member.guild_id, &[(id, member.rank_id)]);
-            }
-            return Ok(());
+            return Ok(guild::member(ctx, guid)
+                .and_then(|member| roster(ctx, member.guild_id, member.rank_id)));
         }
         C::CMSG_GUILD_INFO => {
             let packet = own_guild(ctx, guid).map_or_else(not_in_guild, |guild| {
@@ -86,51 +148,27 @@ pub(super) fn receive(
                     (accounts.len() + unknown) as u32,
                 )))
             });
-            return Ok(super::send(ctx, id, packet, false)?);
+            return Ok(Some(packet));
         }
-        C::CMSG_GUILD_CREATE(request) => (
-            create(
-                &actor,
-                crate::auth::gm_level(ctx, actor.account_id),
-                request.guild_name,
-            ),
-            Reply::Silent,
-        ),
+        C::CMSG_GUILD_CREATE(request) => {
+            (create(actor, gm_level, request.guild_name), Reply::Silent)
+        }
         C::CMSG_GUILD_INVITE(request) => {
             typed_name = request.invited_player;
-            let Some(target) =
-                crate::helpers::character_by_name(ctx, &typed_name).filter(|target| {
-                    ctx.db
-                        .game_world_entity()
-                        .guid()
-                        .find(target.guid)
-                        .is_some()
-                })
-            else {
-                return Ok(super::send(
-                    ctx,
-                    id,
-                    command(
-                        GuildCommand::Invite,
-                        typed_name,
-                        GuildCommandResult::GuildPlayerNotFoundS,
-                    ),
-                    false,
-                )?);
+            let Some(target) = resolve_invitee(&typed_name) else {
+                return Ok(Some(command(
+                    GuildCommand::Invite,
+                    typed_name,
+                    GuildCommandResult::GuildPlayerNotFoundS,
+                )));
             };
-            target_name = target.name.clone();
-            let ignores = ctx
-                .db
-                .game_character_contact()
-                .by_owner()
-                .filter(target.guid)
-                .any(|contact| contact.is_ignore && contact.target_guid == guid);
+            target_name = target.name;
             (
                 GuildOp::Invite(GuildInviteRequest {
                     target_guid: target.guid,
-                    actor_team: team_for_race(actor.race),
-                    target_team: team_for_race(target.race),
-                    target_ignores_actor: ignores,
+                    actor_team: actor.team,
+                    target_team: target.team,
+                    target_ignores_actor: target.ignores_actor,
                 }),
                 Reply::Membership,
             )
@@ -138,7 +176,7 @@ pub(super) fn receive(
         C::CMSG_GUILD_ACCEPT => (
             GuildOp::Accept(GuildAcceptRequest {
                 actor_name: actor.name.clone(),
-                actor_team: team_for_race(actor.race),
+                actor_team: actor.team,
             }),
             Reply::Silent,
         ),
@@ -150,7 +188,7 @@ pub(super) fn receive(
         ),
         C::CMSG_GUILD_LEAVE => {
             let Some(guild) = own_guild(ctx, guid) else {
-                return Ok(super::send(ctx, id, not_in_guild(), false)?);
+                return Ok(Some(not_in_guild()));
             };
             if guild.leader_guid != guid {
                 success = Some(command(
@@ -255,10 +293,7 @@ pub(super) fn receive(
             None => Rollback::silent(cause),
         });
     }
-    if let Some(packet) = success {
-        super::send(ctx, id, packet, false)?;
-    }
-    Ok(())
+    Ok(success)
 }
 
 fn command(command: GuildCommand, name: String, result: GuildCommandResult) -> ServerOpcodeMessage {
@@ -437,6 +472,30 @@ fn roster_lines(ctx: &ReducerContext, id: u32) -> Vec<codec::GuildRosterLine> {
         .collect()
 }
 
+fn roster(ctx: &ReducerContext, guild_id: u32, rank_id: u32) -> Option<ServerOpcodeMessage> {
+    let guild = view(ctx, guild_id)?;
+    let show_notes = has_right(guild.rank_rights(rank_id), rights::VIEWOFFNOTE);
+    Some(roster_message(
+        &guild,
+        &roster_lines(ctx, guild_id),
+        show_notes,
+    ))
+}
+
+fn roster_message(
+    guild: &codec::GuildView,
+    lines: &[codec::GuildRosterLine],
+    show_notes: bool,
+) -> ServerOpcodeMessage {
+    let lines = lines.iter().cloned().map(|mut line| {
+        if !show_notes {
+            line.officer_note.clear();
+        }
+        line
+    });
+    ServerOpcodeMessage::SMSG_GUILD_ROSTER(Box::new(codec::build_guild_roster(guild, lines)))
+}
+
 fn rosters(ctx: &ReducerContext, guild_id: u32, recipients: &[(ConnectionId, u32)]) {
     if recipients.is_empty() {
         return;
@@ -455,15 +514,7 @@ fn rosters(ctx: &ReducerContext, guild_id: u32, recipients: &[(ConnectionId, u32
         if recipients.is_empty() {
             continue;
         }
-        let lines = lines.iter().cloned().map(|mut line| {
-            if !show_notes {
-                line.officer_note.clear();
-            }
-            line
-        });
-        let packet = encode(ServerOpcodeMessage::SMSG_GUILD_ROSTER(Box::new(
-            codec::build_guild_roster(&guild, lines),
-        )));
+        let packet = encode(roster_message(&guild, &lines, show_notes));
         for (connection, _) in recipients {
             super::send_raw(ctx, *connection, packet.opcode, packet.body.clone(), false);
         }
@@ -602,11 +653,11 @@ pub(super) fn presence(ctx: &ReducerContext, guid: u64, online: bool) {
     }
 }
 
-fn create(leader: &Character, gm_level: u8, name: String) -> GuildOp {
+fn create(leader: &Actor, gm_level: u8, name: String) -> GuildOp {
     GuildOp::GmCreate(GuildGmCreate {
         leader_guid: leader.guid,
         leader_name: leader.name.clone(),
-        leader_team: team_for_race(leader.race),
+        leader_team: leader.team,
         leader_realm_account: leader.account_id,
         gm_level,
         name,
@@ -642,7 +693,7 @@ pub(super) fn dot_command(
             ctx,
             actor.guid,
             account_id,
-            create(&leader, gm_level, name.into()),
+            create(&Actor::from(&leader), gm_level, name.into()),
         )
         .map_err(|refusal| match refusal {
             GuildRefusal::NotGameMaster => "permission denied".into(),
