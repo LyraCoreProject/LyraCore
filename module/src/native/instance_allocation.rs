@@ -131,7 +131,12 @@ pub(crate) fn hosts(ctx: &ReducerContext, map: u32, world: Identity) -> bool {
 }
 
 pub(super) fn worlds(ctx: &ReducerContext) -> impl Iterator<Item = Identity> {
-    ctx.db.game_instance_host().iter().map(|host| host.world)
+    ctx.db
+        .game_instance_host()
+        .iter()
+        .map(|host| host.world)
+        .collect::<Vec<_>>()
+        .into_iter()
 }
 
 pub(super) fn select(
