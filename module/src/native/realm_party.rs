@@ -14,7 +14,7 @@ use spacetimedb::{
     Table, TimeDuration,
 };
 
-use super::directory::{game_character_directory, game_map_owner};
+use super::directory::game_character_directory;
 use super::{directory, game_native_player, realm_shard::game_native_away, Rollback};
 use crate::{
     group::{
@@ -607,8 +607,7 @@ pub(crate) fn publish(
         events,
         absent,
     });
-    let mut worlds: BTreeSet<_> = world_shard(ctx).into_iter().collect();
-    worlds.extend(ctx.db.game_map_owner().iter().map(|owner| owner.world));
+    let worlds = directory::worlds(ctx);
     for world in worlds {
         ctx.db.game_world_party_update().insert(WorldPartyUpdate {
             id: 0,
@@ -970,6 +969,7 @@ pub(crate) fn disbanded(
     survivor: Option<u64>,
 ) {
     if world_shard(ctx).is_some() {
+        super::instance_allocation::forget(ctx, group_id, true);
         ctx.db.game_party_disband().group_id().delete(group_id);
         ctx.db.game_party_disband().insert(PartyDisband {
             group_id,

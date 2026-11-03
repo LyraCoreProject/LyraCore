@@ -3,9 +3,7 @@ use spacetimedb::{
     reducer, table, ConnectionId, Identity, ReducerContext, ScheduleAt, Table, TimeDuration,
 };
 
-use super::directory::{
-    self, game_character_directory, game_character_directory_version, game_map_owner,
-};
+use super::directory::{self, game_character_directory, game_character_directory_version};
 use super::handoff::{game_native_handoff, NativeHandoff};
 use super::realm_shard::{
     game_native_away, game_world_session_closed, store_account, store_session, WorldSessionClosed,
@@ -86,9 +84,14 @@ pub(super) fn begin_character(
     let Some(character) = crate::helpers::character_by_guid(ctx, guid) else {
         return Err("Character no longer exists".into());
     };
-    let Some(target) = directory::transfer_target(ctx, character.map_id) else {
+    let Some(target) =
+        directory::transfer_destination(ctx, guid, character.map_id, character.pending_instance_id)
+    else {
         return Ok(false);
     };
+    if !is_peer(ctx, target) {
+        return Err("destination World Shard is not a Peer Shard".into());
+    }
     let realm = realm_shard(ctx).ok_or("Transfer requires a Realm Shard")?;
     let account = ctx
         .db
@@ -196,12 +199,7 @@ pub fn idc_native_transfer(
     if decoded.transfer_id != transfer_id
         || decoded.character_guid != character_guid
         || character.guid != character_guid
-        || !ctx
-            .db
-            .game_map_owner()
-            .map_id()
-            .find(decoded.dest_map_id)
-            .is_some_and(|owner| owner.world == ctx.database_identity())
+        || !super::instance_allocation::hosts(ctx, decoded.dest_map_id, ctx.database_identity())
     {
         return Err("Transfer destination or Character does not match".into());
     }

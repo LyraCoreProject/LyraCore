@@ -29,7 +29,7 @@ entry in both files.
 
 **H** [Handoff](#requests-and-delivery) · [Headless Client](CORE_TERMS.md#headless-client) · [Hold](#retired-terms) · [Host Operation](#runtime-scripts)
 
-**I** [Idle Bot](#bots) · [Import Family](#packages) · [Instance Lease](#groups) · [Instance Shard](#realm-topology) · [Instance Pool](#retired-terms) · [Instance Removal](#groups) · [Instance Vmap Slice](#realm-topology) · [Invocation](#runtime-scripts) · [Item Exchange](#procs) · [Item Text](#mail)
+**I** [Idle Bot](#bots) · [Import Family](#packages) · [Instance Lease](#groups) · [Instance Placement](#realm-topology) · [Instance Shard](#realm-topology) · [Instance Pool](#retired-terms) · [Instance Removal](#groups) · [Instance Vmap Slice](#realm-topology) · [Invocation](#runtime-scripts) · [Item Exchange](#procs) · [Item Text](#mail)
 
 **L** [Land Mount](#mounts) · [Lethal Damage Floor](#creature-ai) · [Letter Copy](#mail) · [Listing](#auctions) · [Login Queue](#accounts-characters-and-sessions) · [Logon Limiter](#accounts-characters-and-sessions) · [Loot Release](#loot) · [Loot Roll](#loot) · [Loot Roll Promotion](#retired-terms) · [Loot Roll Promotion Receipt](#retired-terms) · [Loot Source](#loot) · [Loot Tag](#loot) · [Loot Window](#loot)
 
@@ -78,8 +78,13 @@ Sessions it holds. Logout hands the World Session back to the Realm Shard.
 _Avoid_: game server, map server
 
 **Instance Shard**:
-The World Shard assigned the Realm's dungeon maps. It owns their Instance Leases and populations.
-The first implementation uses one fixed Instance Shard; it does not allocate runs across Shards.
+A World Shard that hosts dungeon Instance Leases and their populations. A dungeon map can have
+several Instance Shards; the Realm selects a host when it creates an Instance Placement.
+
+**Instance Placement**:
+The Realm's durable choice of an Instance Shard for one Group or solo Character on one dungeon map.
+It keeps entry and later runs on that host while new placements take turns across accepting hosts.
+A personal binding also names its host, because Instance ids are local to each Shard.
 
 **Character directory**:
 The Realm Shard's record of each Character guid, Account id and owning World Shard. World Shards

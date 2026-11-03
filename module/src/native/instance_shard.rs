@@ -32,6 +32,29 @@ pub struct Request {
     expires: i64,
 }
 
+#[derive(SpacetimeType)]
+struct Admission {
+    request: Request,
+    binding_world: Option<Identity>,
+}
+
+#[derive(SpacetimeType)]
+struct AdmissionParty {
+    group: u64,
+    snapshot: Vec<u8>,
+}
+
+fn admission(bytes: &[u8]) -> Result<Admission, String> {
+    bsatn::from_slice(bytes)
+        .or_else(|_| {
+            bsatn::from_slice::<Request>(bytes).map(|request| Admission {
+                request,
+                binding_world: None,
+            })
+        })
+        .map_err(|error| error.to_string())
+}
+
 #[table(accessor = game_instance_entry, scheduled(expire_instance_entry))]
 pub struct InstanceEntry {
     #[primary_key]
@@ -64,8 +87,10 @@ pub(crate) fn enter(
     map: u32,
     pose: [f32; 4],
 ) -> bool {
-    let Some(realm) = realm_shard(ctx).filter(|_| directory::transfer_target(ctx, map).is_some())
-    else {
+    let Some(realm) = realm_shard(ctx).filter(|_| {
+        super::instance_allocation::configured(ctx, map)
+            || directory::transfer_destination(ctx, guid, map, 0).is_some()
+    }) else {
         return false;
     };
     let Some(actor) = realm_party::facts(ctx, guid, true) else {
@@ -80,20 +105,23 @@ pub(crate) fn enter(
         .by_character()
         .filter(guid)
         .find(|binding| binding.map_id == map)
-        .map_or(0, |binding| binding.instance_id);
+        .map(|binding| (binding.instance_id, binding.world));
     let id = directory::revision(ctx);
     let expires = ctx.timestamp.to_micros_since_unix_epoch() + ADMISSION_MICROS;
-    let request = bsatn::to_vec(&Request {
-        id,
-        actor,
-        map,
-        binding,
-        trigger,
-        x: pose[0],
-        y: pose[1],
-        z: pose[2],
-        o: pose[3],
-        expires,
+    let request = bsatn::to_vec(&Admission {
+        request: Request {
+            id,
+            actor,
+            map,
+            binding: binding.map_or(0, |(instance, _)| instance),
+            trigger,
+            x: pose[0],
+            y: pose[1],
+            z: pose[2],
+            o: pose[3],
+            expires,
+        },
+        binding_world: binding.and_then(|(_, world)| world),
     })
     .expect("Instance entry encodes");
     ctx.db.game_instance_entry().insert(InstanceEntry {
@@ -112,8 +140,9 @@ pub(crate) fn enter(
     true
 }
 
-fn decode(ctx: &ReducerContext, request: &[u8]) -> Result<Request, String> {
-    let request: Request = bsatn::from_slice(request).map_err(|error| error.to_string())?;
+fn decode(ctx: &ReducerContext, bytes: &[u8]) -> Result<Admission, String> {
+    let admission = admission(bytes)?;
+    let request = &admission.request;
     if ctx.timestamp.to_micros_since_unix_epoch() >= request.expires {
         return Err("Instance admission expired".into());
     }
@@ -124,7 +153,7 @@ fn decode(ctx: &ReducerContext, request: &[u8]) -> Result<Request, String> {
     {
         return Err("invalid dungeon destination".into());
     }
-    Ok(request)
+    Ok(admission)
 }
 
 #[table(accessor = game_world_instance_entry, outbox(remote::idc_world_instance_entry))]
@@ -142,25 +171,34 @@ pub struct WorldInstanceEntry {
 #[reducer]
 pub fn idc_realm_instance_entry(ctx: &ReducerContext, request: Vec<u8>) -> Result<(), String> {
     directory::require_world(ctx)?;
-    let decoded = decode(ctx, &request)?;
+    let admission = decode(ctx, &request)?;
+    let decoded = admission.request;
     if realm_party::current(ctx, &decoded.actor) != Some(ctx.sender()) {
         return Err("World Session changed".into());
     }
-    let owner = ctx
-        .db
-        .game_map_owner()
-        .map_id()
-        .find(decoded.map)
-        .ok_or("dungeon has no World Shard")?;
-    if owner.world == ctx.sender() {
-        return Err("dungeon belongs to the source".into());
-    }
-    let party = realm_party::snapshot(ctx, decoded.actor.guid);
+    let bound_world = (decoded.binding != 0)
+        .then(|| {
+            admission.binding_world.or_else(|| {
+                ctx.db
+                    .game_map_owner()
+                    .map_id()
+                    .find(decoded.map)
+                    .map(|owner| owner.world)
+            })
+        })
+        .flatten();
+    let world =
+        super::instance_allocation::select(ctx, decoded.actor.guid, decoded.map, bound_world)?;
+    let party = bsatn::to_vec(&AdmissionParty {
+        group: crate::group::group_of(ctx, decoded.actor.guid).map_or(0, |member| member.group_id),
+        snapshot: realm_party::snapshot(ctx, decoded.actor.guid),
+    })
+    .expect("Instance admission Group encodes");
     ctx.db
         .game_world_instance_entry()
         .insert(WorldInstanceEntry {
             id: 0,
-            database: remote::Identity(owner.world),
+            database: remote::Identity(world),
             source: remote::Identity(ctx.sender()),
             request,
             party,
@@ -203,19 +241,82 @@ pub fn idc_world_instance_entry(
     party: Vec<u8>,
 ) -> Result<(), String> {
     require_sender(ctx, realm_shard(ctx))?;
-    let decoded = decode(ctx, &request)?;
-    if !directory::owns_map(ctx, decoded.map) || !crate::peer::is_peer(ctx, source) {
+    let admission = decode(ctx, &request)?;
+    let decoded = admission.request;
+    if !directory::owns_map(ctx, decoded.map)
+        || (!crate::peer::is_peer(ctx, source) && source != ctx.database_identity())
+    {
         return Err("Instance Shard routing changed".into());
     }
-    realm_party::apply_snapshot(ctx, &party)?;
     let guid = decoded.actor.guid;
-    if crate::helpers::character_by_guid(ctx, guid).is_some()
+    if let Ok(party) = bsatn::from_slice::<AdmissionParty>(&party) {
+        realm_party::apply_snapshot(ctx, &party.snapshot)?;
+        if crate::group::group_of(ctx, guid).map_or(0, |member| member.group_id) != party.group {
+            return Err("Group changed during Instance admission".into());
+        }
+    } else {
+        realm_party::apply_snapshot(ctx, &party)?;
+    }
+    if source == ctx.database_identity() {
+        if !ctx
+            .db
+            .game_instance_entry()
+            .id()
+            .find(decoded.id)
+            .is_some_and(|pending| pending.guid == guid && pending.request == request)
+        {
+            return Err("Instance admission is no longer pending".into());
+        }
+        if !ctx
+            .db
+            .game_native_player()
+            .connection_id()
+            .find(ConnectionId::from_u128(decoded.actor.connection))
+            .is_some_and(|player| player.character_guid == guid && player.teleport.is_none())
+        {
+            return Err("World Session changed".into());
+        }
+        if crate::taxi::movement_is_suppressed(ctx, guid)
+            || super::realm_petition::pending(ctx, guid)
+            || super::realm_auction::pending(ctx, guid)
+        {
+            return Err("Character cannot enter an Instance yet".into());
+        }
+        let trigger = ctx
+            .db
+            .game_area_trigger()
+            .id()
+            .find(decoded.trigger)
+            .ok_or("Instance entrance is missing")?;
+        let actor = super::available_entity(ctx, guid).map_err(|error| error.to_string())?;
+        if actor.map_id != trigger.map_id
+            || !crate::quest::AreaTriggerVolume::of(&trigger).contains_client_position(
+                [trigger.x, trigger.y, trigger.z],
+                [actor.x, actor.y, actor.z],
+            )
+        {
+            return Err("Character left the Instance entrance".into());
+        }
+    } else if crate::helpers::character_by_guid(ctx, guid).is_some()
         || crate::transfer::is_in_transit(ctx, guid)
     {
         return Err("destination already holds this Character".into());
     }
-    if decoded.binding != 0 {
-        instance::bind_character(ctx, guid, decoded.binding, decoded.map);
+    let binding_world = admission.binding_world.or_else(|| {
+        ctx.db
+            .game_map_owner()
+            .map_id()
+            .find(decoded.map)
+            .map(|owner| owner.world)
+    });
+    if decoded.binding != 0 && binding_world == Some(ctx.database_identity()) {
+        instance::bind_character(
+            ctx,
+            guid,
+            decoded.binding,
+            decoded.map,
+            ctx.database_identity(),
+        );
     }
     let instance_id = instance::resolve_or_create_instance(ctx, guid, decoded.map)?;
     if let Some(mut instance) = ctx.db.game_instance().instance_id().find(instance_id) {
@@ -247,6 +348,10 @@ pub fn idc_world_instance_entry(
             map_id: decoded.map,
             expires: decoded.expires,
         });
+    if source == ctx.database_identity() {
+        finish(ctx, &request, instance_id, "", Some(source));
+        return Ok(());
+    }
     ctx.db
         .game_instance_entry_answer()
         .insert(InstanceEntryAnswer {
@@ -285,7 +390,7 @@ pub fn realm_instance_entry_answered(
     result: Result<(), String>,
 ) {
     if let Err(error) = result {
-        finish(ctx, &call.request, 0, &error);
+        finish(ctx, &call.request, 0, &error, None);
     }
 }
 
@@ -299,21 +404,27 @@ pub fn idc_instance_entry_answer(
     if !crate::peer::is_peer(ctx, ctx.sender()) || realm_shard(ctx).is_none() {
         return Err("caller is not a Peer Shard".into());
     }
-    let decoded: Request = bsatn::from_slice(&request).map_err(|error| error.to_string())?;
-    let expected = if instance_id == 0 {
-        realm_shard(ctx)
-    } else {
-        directory::transfer_target(ctx, decoded.map)
-    };
-    require_sender(ctx, expected)?;
-    finish(ctx, &request, instance_id, &error);
+    let decoded = admission(&request)?.request;
+    if instance_id == 0 {
+        require_sender(ctx, realm_shard(ctx))?;
+    } else if !super::instance_allocation::hosts(ctx, decoded.map, ctx.sender()) {
+        return Err("Instance reply is from another map's Shard".into());
+    }
+    finish(ctx, &request, instance_id, &error, Some(ctx.sender()));
     Ok(())
 }
 
-fn finish(ctx: &ReducerContext, request: &[u8], instance_id: u64, error: &str) {
+fn finish(
+    ctx: &ReducerContext,
+    request: &[u8],
+    instance_id: u64,
+    error: &str,
+    world: Option<Identity>,
+) {
     let Ok(decoded) = decode(ctx, request) else {
         return;
     };
+    let decoded = decoded.request;
     let Some(pending) = ctx
         .db
         .game_instance_entry()
@@ -334,7 +445,14 @@ fn finish(ctx: &ReducerContext, request: &[u8], instance_id: u64, error: &str) {
     {
         return;
     }
-    if !error.is_empty() {
+    if !error.is_empty()
+        || world.is_some_and(|world| {
+            world != ctx.database_identity() && !crate::peer::is_peer(ctx, world)
+        })
+        || crate::taxi::movement_is_suppressed(ctx, pending.guid)
+        || super::realm_petition::pending(ctx, pending.guid)
+        || super::realm_auction::pending(ctx, pending.guid)
+    {
         notice(ctx, connection);
         return;
     }
@@ -352,9 +470,18 @@ fn finish(ctx: &ReducerContext, request: &[u8], instance_id: u64, error: &str) {
     {
         return;
     }
-    instance::bind_character(ctx, pending.guid, instance_id, decoded.map);
+    instance::bind_character(
+        ctx,
+        pending.guid,
+        instance_id,
+        decoded.map,
+        world.unwrap_or(ctx.database_identity()),
+    );
     let (x, y, z, o) = (decoded.x, decoded.y, decoded.z, decoded.o);
     crate::world::teleport_player(ctx, pending.guid, decoded.map, instance_id, x, y, z, o);
+    if world == Some(ctx.database_identity()) && actor.map_id == decoded.map {
+        arrived(ctx, pending.guid, decoded.map, instance_id);
+    }
 }
 
 fn notice(ctx: &ReducerContext, connection: ConnectionId) {
@@ -375,7 +502,8 @@ pub fn expire_instance_entry(ctx: &ReducerContext, entry: InstanceEntry) {
     }
     if let Some(pending) = ctx.db.game_instance_entry().id().find(entry.id) {
         ctx.db.game_instance_entry().id().delete(entry.id);
-        if let Ok(request) = bsatn::from_slice::<Request>(&pending.request) {
+        if let Ok(admission) = admission(&pending.request) {
+            let request = admission.request;
             let connection = ConnectionId::from_u128(request.actor.connection);
             if ctx
                 .db
@@ -431,9 +559,26 @@ pub(super) fn imported(
         return Err("dungeon Instance has expired".into());
     }
     realm_party::restore(ctx, guid);
-    instance::bind_character(ctx, guid, instance_id, map);
+    instance::bind_character(ctx, guid, instance_id, map, ctx.database_identity());
     ctx.db.game_instance_entry_lease().id().delete(lease.id);
     Ok(())
+}
+
+pub(super) fn arrived(ctx: &ReducerContext, guid: u64, map: u32, instance: u64) {
+    let leases = ctx.db.game_instance_entry_lease();
+    let ids: Vec<_> = leases
+        .iter()
+        .filter(|lease| {
+            lease.source == ctx.database_identity()
+                && lease.guid == guid
+                && lease.map_id == map
+                && lease.instance_id == instance
+        })
+        .map(|lease| lease.id)
+        .collect();
+    for id in ids {
+        leases.id().delete(id);
+    }
 }
 
 pub(crate) fn occupied(ctx: &ReducerContext) -> Vec<u64> {

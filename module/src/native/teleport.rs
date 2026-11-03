@@ -36,7 +36,14 @@ pub(super) fn restore_origin(
     else {
         return;
     };
-    if super::directory::owns_map(ctx, character.map_id) {
+    if super::directory::transfer_destination(
+        ctx,
+        guid,
+        character.map_id,
+        character.pending_instance_id,
+    )
+    .is_none()
+    {
         return;
     }
     character.map_id = origin.map_id;

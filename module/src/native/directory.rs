@@ -90,6 +90,7 @@ pub(super) fn require_world(ctx: &ReducerContext) -> Result<(), String> {
     let sender = ctx.sender();
     let configured = world_shard(ctx).is_some_and(|default| {
         default == sender
+            || super::instance_allocation::worlds(ctx).any(|world| world == sender)
             || ctx
                 .db
                 .game_map_owner()
@@ -100,14 +101,9 @@ pub(super) fn require_world(ctx: &ReducerContext) -> Result<(), String> {
 }
 
 pub(crate) fn owns_map(ctx: &ReducerContext, map_id: u32) -> bool {
-    realm_shard(ctx).is_none()
+    super::instance_allocation::hosts(ctx, map_id, ctx.database_identity())
+        || realm_shard(ctx).is_none()
         || ctx.db.game_map_owner().iter().next().is_none()
-        || ctx
-            .db
-            .game_map_owner()
-            .map_id()
-            .find(map_id)
-            .is_some_and(|owner| owner.world == ctx.database_identity())
 }
 
 pub(crate) fn transfer_target(ctx: &ReducerContext, map_id: u32) -> Option<Identity> {
@@ -120,6 +116,44 @@ pub(crate) fn transfer_target(ctx: &ReducerContext, map_id: u32) -> Option<Ident
         .filter(|world| {
             *world != ctx.database_identity() && *world != realm && is_peer(ctx, *world)
         })
+}
+
+pub(crate) fn transfer_destination(
+    ctx: &ReducerContext,
+    guid: u64,
+    map: u32,
+    instance: u64,
+) -> Option<Identity> {
+    use crate::instance::game_instance_binding;
+    if crate::instance::is_dungeon_map(map) && instance != 0 {
+        if let Some(world) = ctx
+            .db
+            .game_instance_binding()
+            .by_character()
+            .filter(guid)
+            .find(|binding| binding.map_id == map && binding.instance_id == instance)
+            .and_then(|binding| binding.world)
+        {
+            return realm_shard(ctx)
+                .filter(|realm| world != *realm && world != ctx.database_identity())
+                .map(|_| world);
+        }
+    }
+    let realm = realm_shard(ctx)?;
+    ctx.db
+        .game_map_owner()
+        .map_id()
+        .find(map)
+        .map(|owner| owner.world)
+        .filter(|world| *world != ctx.database_identity() && *world != realm)
+}
+
+pub(super) fn worlds(ctx: &ReducerContext) -> std::collections::BTreeSet<Identity> {
+    world_shard(ctx)
+        .into_iter()
+        .chain(ctx.db.game_map_owner().iter().map(|owner| owner.world))
+        .chain(super::instance_allocation::worlds(ctx))
+        .collect()
 }
 
 pub(super) fn character_world(
@@ -294,6 +328,7 @@ pub(super) fn apply(
             world: ctx.sender(),
         });
         if !present {
+            super::instance_allocation::forget(ctx, guid, false);
             super::realm_party::deleted(ctx, guid)?;
             super::realm_guild::deleted(ctx, guid);
         }
@@ -422,8 +457,7 @@ fn publish_profiles(ctx: &ReducerContext, profiles: &[CharacterProfile]) {
     if profiles.is_empty() {
         return;
     }
-    let mut worlds: std::collections::BTreeSet<_> = world_shard(ctx).into_iter().collect();
-    worlds.extend(ctx.db.game_map_owner().iter().map(|owner| owner.world));
+    let worlds = worlds(ctx);
     let profiles = bsatn::to_vec(profiles).expect("Character profiles encode");
     for world in worlds {
         ctx.db.game_character_profiles().insert(CharacterProfiles {

@@ -184,6 +184,8 @@ pub struct GameInstanceBinding {
     pub character_guid: u64,
     pub instance_id: u64,
     pub map_id: u32,
+    #[default(None::<spacetimedb::Identity>)]
+    pub world: Option<spacetimedb::Identity>,
 }
 
 crate::character_owned!(delete, fn sweep_delete_game_instance_binding(ctx, character_guid) {
@@ -346,6 +348,19 @@ pub(crate) fn instance_removal_due(
         && gm_level == 0
 }
 
+fn binding_is_local(ctx: &ReducerContext, map: u32, world: Option<spacetimedb::Identity>) -> bool {
+    use crate::native::directory::game_map_owner;
+    world
+        .or_else(|| {
+            ctx.db
+                .game_map_owner()
+                .map_id()
+                .find(map)
+                .map(|owner| owner.world)
+        })
+        .is_none_or(|world| world == ctx.database_identity())
+}
+
 fn live_instance_for(ctx: &ReducerContext, instance_id: u64, map_id: u32) -> bool {
     ctx.db
         .game_instance()
@@ -360,6 +375,7 @@ pub(crate) fn bind_character(
     character_guid: u64,
     instance_id: u64,
     map_id: u32,
+    world: spacetimedb::Identity,
 ) {
     let t = ctx.db.game_instance_binding();
     let stale: Vec<u64> = t
@@ -376,6 +392,7 @@ pub(crate) fn bind_character(
         character_guid,
         instance_id,
         map_id,
+        world: Some(world),
     });
 }
 
@@ -402,7 +419,12 @@ pub(crate) fn resolve_or_create_instance(
         .filter(&character_guid)
         .find(|b| b.map_id == target_map);
     let own_live = match own_binding {
-        Some(b) if live_instance_for(ctx, b.instance_id, target_map) => Some(b.instance_id),
+        Some(b)
+            if binding_is_local(ctx, b.map_id, b.world)
+                && live_instance_for(ctx, b.instance_id, target_map) =>
+        {
+            Some(b.instance_id)
+        }
         Some(b) => {
             bindings.id().delete(b.id);
             None
@@ -426,12 +448,12 @@ pub(crate) fn resolve_or_create_instance(
             Ok(id)
         }
         InstanceRoute::Party(id) => {
-            bind_character(ctx, character_guid, id, target_map);
+            bind_character(ctx, character_guid, id, target_map, ctx.database_identity());
             Ok(id)
         }
         InstanceRoute::Create => {
             let id = create_instance(ctx, target_map, party_id)?;
-            bind_character(ctx, character_guid, id, target_map);
+            bind_character(ctx, character_guid, id, target_map, ctx.database_identity());
             Ok(id)
         }
     }
@@ -472,7 +494,13 @@ pub(crate) fn admit_existing_party_instance(
     if instance.party_id != group.group_id {
         adopt_instance_for_party(ctx, expected_instance, group.group_id);
     }
-    bind_character(ctx, character_guid, expected_instance, target_map);
+    bind_character(
+        ctx,
+        character_guid,
+        expected_instance,
+        target_map,
+        ctx.database_identity(),
+    );
     Ok(expected_instance)
 }
 
@@ -879,6 +907,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
     let stale: Vec<u64> = bindings
         .by_instance()
         .filter(&instance_id)
+        .filter(|binding| binding_is_local(ctx, binding.map_id, binding.world))
         .map(|b| b.id)
         .collect();
     for id in stale {
@@ -896,6 +925,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
 pub(crate) struct ResetBinding {
     pub map: u32,
     pub instance: u64,
+    pub world: Option<spacetimedb::Identity>,
 }
 
 pub(crate) fn reset_bindings(ctx: &ReducerContext, guid: u64) -> Vec<ResetBinding> {
@@ -906,6 +936,7 @@ pub(crate) fn reset_bindings(ctx: &ReducerContext, guid: u64) -> Vec<ResetBindin
         .map(|binding| ResetBinding {
             map: binding.map_id,
             instance: binding.instance_id,
+            world: binding.world,
         })
         .collect()
 }
@@ -945,6 +976,7 @@ pub(crate) fn reset_instances(
     } else {
         bindings
             .iter()
+            .filter(|binding| binding_is_local(ctx, binding.map, binding.world))
             .filter_map(|binding| {
                 ctx.db
                     .game_instance()

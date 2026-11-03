@@ -619,7 +619,8 @@ Shard-local Group mutations are refused when a World Shard has a Realm Shard. Se
 actions are not supported in this topology; single-Shard behavior is unchanged. An existing multi-Shard Realm requires migration of its Group state before
 this revision is deployed. This change does not supply an automatic Group migration.
 
-Dungeon admission uses this Realm-owned membership and one fixed Instance Shard. See
+Dungeon admission uses this Realm-owned membership and durable Instance Placements across the
+configured Instance Shards. See
 [Instance lifecycle](instance-lifecycle.md#dedicated-instance-shard) for admission, return and reaping.
 
 

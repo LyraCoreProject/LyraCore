@@ -1,8 +1,9 @@
 # Character Transfer
 
-A native cross-map teleport starts a Transfer when the destination map belongs to a Peer World
-Shard. The source sends `SMSG_TRANSFER_PENDING` and `SMSG_NEW_WORLD` first. It starts the Transfer
-at `MSG_MOVE_WORLDPORT_ACK`, while the client is behind its loading screen. A Shard without a role,
+A native teleport starts a Transfer when its destination belongs to a Peer World Shard.
+A dungeon binding selects its hosting Shard, including a different Shard of the same map;
+other destinations use map ownership. The source sends `SMSG_TRANSFER_PENDING` and `SMSG_NEW_WORLD`
+first. It starts the Transfer at `MSG_MOVE_WORLDPORT_ACK`, while the client is behind its loading screen. A Shard without a role,
 or a World Shard without map assignments, keeps the local world-port path.
 
 `module/src/native/transfer.rs` drives the protocol through durable IDC outboxes and their
@@ -81,8 +82,9 @@ manifest. A pending guild transaction refuses Transfer before freezing or export
 its source must settle the Realm result and any refund first. Mail moves with its recipient, and
 its timers resume after the Transfer settles. Item Text travels with its references and receives
 new local ids; a missing text record refuses import. Incoming letters wait until the directory
-names a settled World owner. Auction listings across World Shards remain unsupported. Friends and ignores travel with their owning Character; Transfer cleanup preserves other Characters' contacts that refer to the
-mover on both source and destination. Remote names, presence and deletion tombstones use Realm
+names a settled World owner. Realm Auction Listings and bids stay on the Realm. Friends and ignores
+travel with their owning Character; Transfer cleanup preserves other Characters' contacts that refer
+to the mover on both source and destination. Remote names, presence and deletion tombstones use Realm
 projections. See
 [contacts across World Shards](architecture.md#contacts-across-world-shards). Native Groups use
 Realm-owned membership with World Shard projections, restored independently of the manifest. Whispers and

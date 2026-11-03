@@ -82,6 +82,7 @@ pub(super) fn enter_character(
     }
     super::realm_party::restore(ctx, guid);
     crate::world::apply_player_login(ctx, &account, guid, owner, entry)?;
+    super::instance_shard::arrived(ctx, guid, character.map_id, character.pending_instance_id);
     let live = ctx
         .db
         .game_world_entity()
