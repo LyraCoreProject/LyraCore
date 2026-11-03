@@ -45,7 +45,7 @@ pub enum Operation {
     TurnIn(u64),
     Close(u64),
     Verify(u64),
-    Import(Import),
+    Import(GuildPetitionImport),
     Reconcile(Vec<u64>),
 }
 
@@ -178,12 +178,11 @@ pub(super) fn receive(
                 {
                     return Ok(())
                 }
-                C::CMSG_OFFER_PETITION(request) => {
+                C::CMSG_OFFER_PETITION(request)
                     if !petition::holds_charter(ctx, guid, request.petition.guid())
-                        || super::available_entity(ctx, request.target.guid()).is_err()
-                    {
-                        return Ok(());
-                    }
+                        || super::available_entity(ctx, request.target.guid()).is_err() =>
+                {
+                    return Ok(())
                 }
                 _ => {}
             }
@@ -623,7 +622,7 @@ pub(super) fn request(
 }
 
 #[derive(SpacetimeType)]
-pub struct Import {
+pub struct GuildPetitionImport {
     pub petition: GuildPetition,
     pub signatures: Vec<GuildPetitionSignature>,
 }
@@ -649,7 +648,7 @@ pub fn operator_report_guild_petitions(ctx: &ReducerContext) -> Result<(), Strin
         start(
             ctx,
             petition.owner_guid,
-            Operation::Import(Import {
+            Operation::Import(GuildPetitionImport {
                 petition,
                 signatures,
             }),
@@ -659,7 +658,7 @@ pub fn operator_report_guild_petitions(ctx: &ReducerContext) -> Result<(), Strin
     Ok(())
 }
 
-fn import(ctx: &ReducerContext, actor: &Actor, state: Import) -> Result<(), String> {
+fn import(ctx: &ReducerContext, actor: &Actor, state: GuildPetitionImport) -> Result<(), String> {
     use super::{directory::game_character_profile, realm_shard::game_native_away};
     use lyracore_shared::guild::{
         petition_signature_key, validate_guild_name, MAX_PETITION_SIGNATURES,
