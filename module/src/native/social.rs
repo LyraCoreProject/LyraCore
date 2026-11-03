@@ -278,8 +278,12 @@ fn add(
         return Ok(());
     };
     crate::taxi::reject_action_while_in_flight(ctx, actor.guid)?;
+    let guid = actor.guid;
     crate::chat::add_contact(ctx, actor, target_guid, is_ignore, Some(race))
         .map_err(|refusal| refused(refusal, target_guid, is_ignore))?;
+    if is_ignore {
+        super::realm_party::presence(ctx, guid, true);
+    }
     let online = (!is_ignore)
         .then(|| target_online(ctx, target_guid))
         .flatten();
@@ -302,8 +306,12 @@ fn remove(
     is_ignore: bool,
 ) -> Result<(), Rollback> {
     crate::taxi::reject_action_while_in_flight(ctx, actor.guid)?;
+    let guid = actor.guid;
     crate::chat::remove_contact(ctx, actor, target, is_ignore)
         .map_err(|refusal| refused(refusal, target, is_ignore))?;
+    if is_ignore {
+        super::realm_party::presence(ctx, guid, true);
+    }
     result(
         ctx,
         connection,

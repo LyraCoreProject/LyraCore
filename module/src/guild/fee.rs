@@ -111,6 +111,9 @@ pub(crate) fn purchase(
     payer_guid: u64,
     request: GuildFeeRequest,
 ) -> Result<(), String> {
+    if crate::peer::realm_shard(ctx).is_some() {
+        return Err("guild purchases require Realm coordination".into());
+    }
     let apply = || -> Result<(), FeeError> {
         let purse = CtxPurse { ctx };
         let ledger = CtxLedger { ctx };

@@ -1,6 +1,7 @@
 import struct
 
 from headless import creates
+import realm_guild
 
 
 def check(host):
@@ -92,6 +93,7 @@ def check(host):
         else:
             assert not any(opcode == 0x96 for opcode, _ in peer.collect(auto_ack=auto_ack))
 
+    realm_guild.check(host, worlds, character, received)
     check_contacts(host, worlds, character, enter, received)
 
     who(['Eastern', 'Western'])

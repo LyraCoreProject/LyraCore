@@ -191,6 +191,7 @@ pub struct PartyPresence {
 
 pub(super) fn presence(ctx: &ReducerContext, guid: u64, online: bool) {
     if let (Some(realm), Some(character)) = (realm_shard(ctx), facts(ctx, guid, online)) {
+        super::realm_guild::presence(ctx, character.clone());
         ctx.db.game_party_presence().insert(PartyPresence {
             id: 0,
             database: remote::Identity(realm),
@@ -347,8 +348,8 @@ pub fn idc_realm_party_command(
         lyracore_protocol::world::decode(opcode, &body).map_err(|error| error.to_string())?;
     if let ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) = message {
         let kind = super::chat::kind(&chat.chat_type)
-            .filter(|kind| is_group_chat(*kind))
-            .ok_or("not a party chat request")?;
+            .filter(|kind| is_realm_chat(*kind))
+            .ok_or("not a Realm chat request")?;
         return crate::realm_chat::apply_chat(
             ctx,
             guid,
@@ -827,15 +828,20 @@ pub(super) fn deleted(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     Ok(())
 }
 
-pub(super) fn is_group_chat(kind: u8) -> bool {
+pub(super) fn is_realm_chat(kind: u8) -> bool {
     matches!(
         kind,
-        chat_kind::PARTY | chat_kind::RAID | chat_kind::RAID_LEADER | chat_kind::RAID_WARNING
+        chat_kind::PARTY
+            | chat_kind::RAID
+            | chat_kind::RAID_LEADER
+            | chat_kind::RAID_WARNING
+            | chat_kind::GUILD
+            | chat_kind::OFFICER
     )
 }
 
 pub(crate) fn relay_chat(ctx: &ReducerContext, line: &crate::realm_chat::RealmChatLine) {
-    if world_shard(ctx).is_none() || !is_group_chat(line.kind) {
+    if world_shard(ctx).is_none() || !is_realm_chat(line.kind) {
         return;
     }
     let Some(message) = codec::build_realm_chat_line(

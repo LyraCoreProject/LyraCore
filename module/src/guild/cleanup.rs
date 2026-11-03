@@ -5,6 +5,9 @@ use super::membership::{disband_guild, game_guild_invite};
 use super::{game_guild, game_guild_member, member, petition, push_event, GuildMember};
 
 pub(crate) fn forget_deleted_character(ctx: &ReducerContext, character_guid: u64) {
+    if crate::peer::realm_shard(ctx).is_some() {
+        return;
+    }
     ctx.db
         .game_guild_invite()
         .target_guid()

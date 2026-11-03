@@ -39,6 +39,12 @@ pub(super) fn receive(
     message: ClientOpcodeMessage,
 ) -> Result<(), Rollback> {
     let actor = super::available_character(ctx, guid)?;
+    if crate::peer::realm_shard(ctx).is_some() {
+        return Err(Rollback::reply(
+            super::realm_guild::unavailable(),
+            "cross-Shard guild purchases and petitions are unavailable",
+        ));
+    }
     let id = connection.connection_id;
     use ClientOpcodeMessage as C;
     let run = |op, reply: &dyn Fn(GuildRefusal) -> Option<ServerOpcodeMessage>| {
@@ -420,6 +426,9 @@ fn charter_values(ctx: &ReducerContext, connection: ConnectionId, item: u64, pet
 }
 
 pub(super) fn replay(ctx: &ReducerContext, guid: u64, connection: ConnectionId) {
+    if crate::peer::realm_shard(ctx).is_some() {
+        return;
+    }
     let petition = ctx.db.game_guild_petition().owner_guid().find(guid);
     for item in ctx
         .db

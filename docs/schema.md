@@ -379,7 +379,20 @@ slots 0 to 8. Turn-in deletes both and founds the Guild in the same transaction.
 `GuildOp` gets each new variant at the end, because BSATN encodes a variant by its position.
 
 PLAYER_GUILDID and PLAYER_GUILDRANK are not stored. The Module projects them from
-`game_guild_member`. `game_guild_fee_hold` and
+`game_guild_member`. With a Realm Shard, guilds, ranks, memberships and invitations are
+Realm-owned; World Shards hold guild, rank and membership projections. `game_guild_sequence`
+keeps the highest allocated or imported Realm guild id, including after disband.
+
+`game_guild_character` holds current connection facts, roster fields and private ignore snapshots
+on the Realm. `game_guild_projection` retains guild revisions and disband records.
+`game_guild_membership_projection` retains each membership's own revision and optional member row;
+a missing member is a deletion record, not permission to restore an older roster. These records
+survive Transfer. `game_realm_guild_command`, `game_realm_guild_presence` and
+`game_world_guild_update` are IDC outboxes; `game_guild_projection_retry` retains refused snapshot
+deliveries. See [the guild migration procedure](architecture.md#guilds-across-world-shards) before
+using these tables on an existing Realm.
+
+`game_guild_fee_hold` and
 `game_guild_fee_decision` are retired Gateway tables, and nothing writes them.
 
 ### Riding (`module/src/skill.rs`, `module/src/skilldata.rs`, `module/src/trainer.rs`)

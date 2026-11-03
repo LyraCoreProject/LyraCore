@@ -64,6 +64,9 @@ pub(super) fn receive(
     message: ClientOpcodeMessage,
 ) -> Result<(), Rollback> {
     let character = super::available_character(ctx, guid)?;
+    if super::realm_guild::submit(ctx, connection.connection_id, guid, &message)? {
+        return Ok(());
+    }
     let actor = Actor::from(&character);
     let reply = request(
         ctx,
@@ -399,7 +402,7 @@ fn own_guild(ctx: &ReducerContext, guid: u64) -> Option<codec::GuildView> {
     view(ctx, guild::member(ctx, guid)?.guild_id)
 }
 
-fn view(ctx: &ReducerContext, id: u32) -> Option<codec::GuildView> {
+pub(super) fn view(ctx: &ReducerContext, id: u32) -> Option<codec::GuildView> {
     let guild = ctx.db.game_guild().guild_id().find(id)?;
     Some(codec::GuildView {
         guild_id: id,
@@ -467,12 +470,19 @@ fn roster_lines(ctx: &ReducerContext, id: u32) -> Vec<codec::GuildRosterLine> {
                     })
                 };
             }
+            if crate::peer::world_shard(ctx).is_some() {
+                super::realm_guild::roster_line(ctx, &mut line);
+            }
             line
         })
         .collect()
 }
 
-fn roster(ctx: &ReducerContext, guild_id: u32, rank_id: u32) -> Option<ServerOpcodeMessage> {
+pub(super) fn roster(
+    ctx: &ReducerContext,
+    guild_id: u32,
+    rank_id: u32,
+) -> Option<ServerOpcodeMessage> {
     let guild = view(ctx, guild_id)?;
     let show_notes = has_right(guild.rank_rights(rank_id), rights::VIEWOFFNOTE);
     Some(roster_message(
@@ -521,7 +531,7 @@ fn rosters(ctx: &ReducerContext, guild_id: u32, recipients: &[(ConnectionId, u32
     }
 }
 
-fn encode(message: ServerOpcodeMessage) -> lyracore_protocol::world::Packet {
+pub(super) fn encode(message: ServerOpcodeMessage) -> lyracore_protocol::world::Packet {
     lyracore_protocol::world::encode(message).expect("bounded guild message fits a world frame")
 }
 
@@ -533,6 +543,9 @@ pub(crate) fn membership_changed(ctx: &ReducerContext, guid: u64) {
 }
 
 pub(crate) fn event(ctx: &ReducerContext, event: &GuildEvent) {
+    if super::realm_guild::event(ctx, event) {
+        return;
+    }
     if event_kind::is_petition(event.kind) {
         super::petition::event(ctx, event);
         return;
@@ -626,6 +639,9 @@ pub(crate) fn event(ctx: &ReducerContext, event: &GuildEvent) {
 }
 
 pub(super) fn presence(ctx: &ReducerContext, guid: u64, online: bool) {
+    if crate::peer::realm_shard(ctx).is_some() {
+        return;
+    }
     if guild::member(ctx, guid).is_none() {
         return;
     }
@@ -676,6 +692,9 @@ pub(super) fn dot_command(
 ) -> Result<(), Rollback> {
     let character =
         crate::helpers::character_by_guid(ctx, actor.guid).ok_or("Character is not available")?;
+    if crate::peer::realm_shard(ctx).is_some() {
+        return super::realm_guild::dot_command(ctx, actor, text);
+    }
     let result = (|| {
         let gm_level = crate::auth::gm_level(ctx, character.account_id);
         if gm_level == 0 {
@@ -711,7 +730,7 @@ pub(super) fn dot_command(
     })
 }
 
-fn parse_create(text: &str) -> Option<(Option<&str>, &str)> {
+pub(super) fn parse_create(text: &str) -> Option<(Option<&str>, &str)> {
     let rest = text.strip_prefix(".guild")?.trim_start();
     let (subcommand, rest) = rest.split_once(char::is_whitespace)?;
     if !subcommand.eq_ignore_ascii_case("create") {

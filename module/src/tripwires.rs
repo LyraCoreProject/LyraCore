@@ -15,6 +15,7 @@ pub(crate) mod character_owned_tripwire {
     ];
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
+        (&["game_guild_character", "game_guild_membership_projection"], "Realm-owned guild presence and membership revisions retained across Character Transfer; directory deletion removes presence and projects membership removal"),
         (
             &["game_character_profile"],
             "Realm-owned directory projections retain deletion tombstones across Character deletion and Transfer",
@@ -155,7 +156,7 @@ pub(crate) mod character_owned_tripwire {
                 "game_guild_petition",
                 "game_guild_petition_signature",
             ],
-            "shared Guild state; cascade_delete_character removes membership and petitions without deleting other members",
+            "shared Guild state; single-Shard deletion cleans membership and petitions, while split topology preserves World projections and applies directory deletion on the Realm",
         ),
         (
             &["game_guild_fee_decision"],

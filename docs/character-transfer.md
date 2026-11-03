@@ -74,7 +74,9 @@ a refused Transfer or connection loss before adoption also clears them on the re
 Leaving the world keeps pet despawn, buyback cleanup and the rest of the existing logout cleanup.
 Connection request limits start with the adopted connection state.
 
-Guilds, mail and auctions across World Shards remain unsupported. Friends and ignores travel with
+Realm-owned guild membership remains projected on the World Shards across Transfer. Actual
+Character deletion changes it through the Realm directory; a Transfer cascade does not remove it.
+Guild purchases and petitions, mail and auctions across World Shards remain unsupported. Friends and ignores travel with
 their owning Character; Transfer cleanup preserves other Characters' contacts that refer to the
 mover on both source and destination. Remote names, presence and deletion tombstones use Realm
 projections. See
