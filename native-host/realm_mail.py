@@ -32,7 +32,7 @@ def check(host, worlds, character, received):
         return rows[0][0]
 
     def request(client, opcode, mail, action, code=0, extra=b''):
-        client.send(opcode, struct.pack('<QI', box, mail))
+        client.send(opcode, struct.pack('<QI', box, mail) + (bytes(4) if opcode == 0x24a else b''))
         assert (0x239, struct.pack('<III', mail, action, code) + extra) in received(client, 0x239)
 
     def text(client, text_id, hint=0):
@@ -55,7 +55,7 @@ def check(host, worlds, character, received):
     request(second, 0x245, original, 1)
     assert money(west, recipient) == 5100
     request(second, 0x245, original, 1, 6)
-    request(second, 0x249, original, 4)
+    request(second, 0x24a, original, 5)
     copy, old_text = host.rows(f'SELECT guid, item_text_id FROM game_item_instance WHERE owner_guid = {recipient} AND entry = 8383', west)[0]
     assert text(second, old_text, copy) == struct.pack('<I', old_text) + b'private across Shards\0'
 
