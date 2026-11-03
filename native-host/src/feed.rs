@@ -122,6 +122,8 @@ impl Packet {
 const OUTPUT_BYTES: usize = 2 * 1024 * 1024;
 // Beyond these distances an observer gets every second or fourth relayed heartbeat of a mover.
 const HEARTBEAT_STRIDES: [(f32, u32); 2] = [(40.0, 2), (80.0, 4)];
+// A heartbeat that turns a mover further than this, or changes its flags, reaches every observer.
+const HEARTBEAT_TURN_RAD: f32 = 0.2;
 const RELAY_FLUSH: Duration = Duration::from_millis(20);
 const SLOT_BYTES: usize = std::mem::size_of::<Option<Arc<Packet>>>();
 
@@ -236,9 +238,11 @@ struct State {
     relays: Vec<Relay>,
     // Each connection's last queued relay; newer Coalescible Motion replaces it there.
     last_relay: HashMap<ConnectionId, usize>,
-    // Where each permitted mover last relayed from, and how many heartbeats it relayed.
+    // Where each permitted mover last relayed from, how many heartbeats it queued, and the
+    // movement flags and orientation that every observer last got from it.
     positions: HashMap<ConnectionId, (f32, f32)>,
     heartbeats: HashMap<ConnectionId, u32>,
+    headings: HashMap<ConnectionId, (u32, f32)>,
 }
 
 struct Relay {
@@ -246,6 +250,18 @@ struct Relay {
     packet: Arc<Packet>,
     at: (f32, f32),
     heartbeat: Option<u32>,
+}
+
+/// The movement flags and orientation of a MovementInfo.
+fn heading(movement_info: &[u8]) -> Option<(u32, f32)> {
+    let flags = u32::from_le_bytes(movement_info.get(..4)?.try_into().ok()?);
+    let orientation = f32::from_le_bytes(movement_info.get(20..24)?.try_into().ok()?);
+    Some((flags, orientation))
+}
+
+fn turned((flags, orientation): (u32, f32), (seen_flags, seen): (u32, f32)) -> bool {
+    let turn = (orientation - seen).rem_euclid(std::f32::consts::TAU);
+    flags != seen_flags || turn.min(std::f32::consts::TAU - turn) > HEARTBEAT_TURN_RAD
 }
 
 /// The observer at `viewer` gets one in this many of a mover's relayed heartbeats.
@@ -271,11 +287,11 @@ impl State {
     fn forget_mover(&mut self, connection: ConnectionId) {
         self.positions.remove(&connection);
         self.heartbeats.remove(&connection);
+        self.headings.remove(&connection);
     }
 
     fn flush_relays(&mut self) {
         self.last_relay.clear();
-        // Each recipient's position is read once, with its delivery.
         let mut deliveries = HashMap::<ConnectionId, (Option<(f32, f32)>, Delivery)>::new();
         for relay in std::mem::take(&mut self.relays) {
             let Audience::Aoi(aoi) = relay.packet.audience else {
@@ -451,29 +467,48 @@ impl Registration {
         });
         let state = &mut *state;
         state.positions.insert(self.connection_id, at);
-        let heartbeat = (opcode == super::motion::HEARTBEAT).then(|| {
-            let count = state.heartbeats.entry(self.connection_id).or_default();
-            *count = count.wrapping_add(1);
-            *count
+        let replaced = state
+            .last_relay
+            .get(&self.connection_id)
+            .copied()
+            .filter(|&index| {
+                packet.motion_mover().is_some()
+                    && state.relays[index].packet.motion_mover().is_some()
+            });
+        let heading = heading(movement_info);
+        let turning = heading.is_some_and(|heading| {
+            state
+                .headings
+                .get(&self.connection_id)
+                .is_none_or(|&seen| turned(heading, seen))
         });
-        let mut relay = Relay {
+        // A heartbeat that replaces a facing or pitch change reaches every recipient; one that
+        // replaces a queued heartbeat takes its place in the count.
+        let heartbeat = match replaced.map(|index| state.relays[index].heartbeat) {
+            _ if opcode != super::motion::HEARTBEAT || turning => None,
+            Some(queued) => queued,
+            None => {
+                let count = state.heartbeats.entry(self.connection_id).or_default();
+                *count = count.wrapping_add(1);
+                Some(*count)
+            }
+        };
+        let everyone = heartbeat.is_none_or(|count| {
+            HEARTBEAT_STRIDES
+                .iter()
+                .all(|&(_, stride)| count % stride == 0)
+        });
+        if let Some(heading) = heading.filter(|_| everyone) {
+            state.headings.insert(self.connection_id, heading);
+        }
+        let relay = Relay {
             connection: self.connection_id,
             packet,
             at,
             heartbeat,
         };
-        let last = state.last_relay.get(&self.connection_id).copied();
-        match last.filter(|&index| {
-            relay.packet.motion_mover().is_some()
-                && state.relays[index].packet.motion_mover().is_some()
-        }) {
-            Some(index) => {
-                // A heartbeat that replaces a facing or pitch change reaches every recipient.
-                if state.relays[index].heartbeat.is_none() {
-                    relay.heartbeat = None;
-                }
-                state.relays[index] = relay;
-            }
+        match replaced {
+            Some(index) => state.relays[index] = relay,
             None => {
                 state
                     .last_relay
@@ -1041,6 +1076,25 @@ mod tests {
         assert_eq!(heartbeats, [8, 2]);
         assert_eq!(received(&[0x0da]), [1, 1]);
         assert_eq!(received(&[0x0da, 0x0ee]), [1, 1]);
+        let paired = (0..4).fold([0, 0], |[near, far], _| {
+            let [a, b] = received(&[0x0ee, 0x0ee]);
+            [near + a, far + b]
+        });
+        assert_eq!(paired, [4, 1]);
+        let facing = |orientation: f32| {
+            let mut info = vec![0; 28];
+            info[20..24].copy_from_slice(&orientation.to_le_bytes());
+            info
+        };
+        let heartbeat = |orientation: f32| {
+            assert!(mover.relay(0x0ee, (0.0, 0.0), &facing(orientation)));
+            feed.flush_relays();
+            [&near_deliveries, &far_deliveries]
+                .map(|deliveries| take(deliveries).map_or(0, |delivery| delivery.packets.len()))
+        };
+        assert_eq!(heartbeat(0.0), [1, 1]);
+        assert_eq!(heartbeat(0.1), [1, 0]);
+        assert_eq!(heartbeat(0.5), [1, 1]);
         assert_eq!(heartbeat_stride(None, (0.0, 0.0)), 1);
         assert_eq!(heartbeat_stride(Some((50.0, 0.0)), (0.0, 0.0)), 2);
     }
