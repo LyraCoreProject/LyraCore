@@ -73,7 +73,8 @@ jobs:
         run: cargo +"$HOST_TOOLCHAIN" test --release --locked -p spacetimedb-engine --lib retention::tests
       - name: Check delivery routing, motion relay and the Module row layouts
         working-directory: ${{ env.HOST_CHECKOUT }}
-        run: cargo +"$HOST_TOOLCHAIN" test --release --locked -p spacetimedb-standalone --lib native_world::
+        run: |
+          cargo +"$HOST_TOOLCHAIN" test --release --locked -p spacetimedb-standalone --lib native_world::
 
   module:
     runs-on: ubuntu-latest
