@@ -45,15 +45,16 @@ def check(host):
             enter(client, guid)
         return account, client, guid
 
-    account, client, guid = character('Eastern', 0)
-    peer_account, peer, peer_guid = character('Western', 1)
-
     def received(connection, opcode, count=1, auto_ack=True):
         packets = []
         host.wait_until(lambda: packets.extend(connection.collect(auto_ack=auto_ack))
             or sum(code == opcode for code, _ in packets) >= count,
             f'no complete response for opcode {opcode:#x}')
         return [packet for packet in packets if packet[0] == opcode]
+
+    realm_guild.check_import(host, worlds, character, received)
+    account, client, guid = character('Eastern', 0)
+    peer_account, peer, peer_guid = character('Western', 1)
 
     def send(connection, kind, message, language=7, target=None):
         body = struct.pack('<II', kind, language)

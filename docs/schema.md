@@ -384,7 +384,8 @@ Realm-owned; World Shards hold guild, rank and membership projections. `game_gui
 keeps the highest allocated or imported Realm guild id, including after disband.
 
 `game_guild_character` holds current connection facts, roster fields and private ignore snapshots
-on the Realm. `game_guild_projection` retains guild revisions and disband records.
+on the Realm. Presence reports include stored roster fields for offline members; the Operator
+backfills them before guild import. `game_guild_projection` retains guild revisions and disband records.
 `game_guild_membership_projection` retains each membership's own revision and optional member row;
 a missing member is a deletion record, not permission to restore an older roster. These records
 survive Transfer. `game_realm_guild_command`, `game_realm_guild_presence` and

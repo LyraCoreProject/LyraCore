@@ -1,4 +1,5 @@
 import struct
+import time
 
 from headless import creates
 
@@ -220,3 +221,64 @@ def check_authority_ordering(host):
     except RuntimeError as error:
         assert 'guild id or name conflicts' in str(error)
     assert len(host.rows('SELECT id FROM game_guild_rank', shard)) == 5
+
+
+def check_import(host, worlds, character, received):
+    eastern, western = worlds
+    leader_account, leader, leader_guid = character('Guildoldlead', 0, online=False)
+    member_account, member, member_guid = character('Guildoldpeer', 1, online=False)
+    logout = int((time.time() - 2 * 86400) * 1_000_000)
+    host.sql(f'UPDATE game_character SET level = 37, zone_id = 14, last_logout_micros = {logout} WHERE guid = {member_guid}', western)
+    guild = dict(guild_id=500, name_key='imported guild', name='Imported Guild', leader_guid=leader_guid,
+        team=469, motd='Imported MOTD', info='', emblem_style=0, emblem_color=0, border_style=0,
+        border_color=0, background_color=0, created_micros=0)
+    ranks = [dict(id=rank + 1, guild_id=500, rank_id=rank, name=name, rights=0xff1ff if rank < 2 else 0x43)
+        for rank, name in enumerate(('Guild Master', 'Officer', 'Veteran', 'Member', 'Initiate'))]
+    members = [dict(character_guid=guid, guild_id=500, rank_id=rank, name=name, public_note='',
+        officer_note='', realm_account_id=account.id, joined_micros=0)
+        for guid, account, rank, name in [(leader_guid,leader_account,0,'Guildoldlead'),
+            (member_guid,member_account,4,'Guildoldpeer')]]
+    for shard in worlds:
+        for table, rows in [('game_guild',[guild]),('game_guild_rank',ranks),('game_guild_member',members)]:
+            for row in rows:
+                values = ','.join("'" + value + "'" if isinstance(value,str) else str(value) for value in row.values())
+                host.sql(f"INSERT INTO {table} ({','.join(row)}) VALUES ({values})",shard)
+        host.call('operator_report_character_profiles',database=shard)
+    host.wait_until(lambda: len(host.rows('SELECT guid FROM game_character_profile WHERE deleted = false')) == 2,
+        'imported members have no Character profiles')
+    for shard in worlds:
+        host.call('operator_report_guild_characters',database=shard)
+    host.wait_until(lambda: len(host.rows('SELECT guid FROM game_guild_character')) == 2,
+        'offline guild roster backfill did not reach the Realm')
+    host.call('operator_import_guild',[dict(guild=guild,ranks=ranks,members=members,invites=[])])
+    for shard in worlds:
+        host.wait_until(lambda shard=shard: host.rows('SELECT guild_id FROM game_guild_projection WHERE guild_id = 500',shard),
+            'imported guild projection did not settle')
+    leader.send(0x3d,struct.pack('<Q',leader_guid))
+    packets=[]
+    while leader_guid not in creates(packets):
+        packets.append(leader.read())
+    leader.collect()
+    try:
+        host.call('operator_report_guild_characters',database=eastern)
+        raise AssertionError('roster backfill accepted an active World Session')
+    except RuntimeError as error:
+        assert 'gameplay closed' in str(error)
+    leader.send(0x89)
+    motd, _, roster_members = roster(received(leader,0x8a)[-1][1])
+    offline = roster_members[member_guid]
+    assert motd == 'Imported MOTD'
+    assert offline[:6] == ('Guildoldpeer',0,4,37,1,14), offline
+    assert 1.99 <= offline[6] <= 2.01, offline
+    leader.send(0x8f)
+    received(leader,0x92)
+    host.wait_until(lambda: not host.rows('SELECT guild_id FROM game_guild WHERE guild_id = 500'),
+        'imported guild was not disbanded')
+    leader.send(0x4b)
+    received(leader,0x4d)
+    for client,guid in [(leader,leader_guid),(member,member_guid)]:
+        client.send(0x38,struct.pack('<Q',guid))
+        assert received(client,0x3c) == [(0x3c,b'\x39')]
+        client.close()
+    host.wait_until(lambda: not host.rows('SELECT guid FROM game_guild_character'),
+        'deleted imported members retained roster facts')

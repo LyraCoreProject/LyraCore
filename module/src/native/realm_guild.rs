@@ -31,6 +31,9 @@ const CREATE_FOR_LEADER: u32 = 0;
 pub struct Facts {
     character: PartyCharacter,
     ignores: Vec<u64>,
+    level: u8,
+    zone: u32,
+    logout_micros: i64,
 }
 
 #[table(accessor = game_guild_character)]
@@ -78,9 +81,21 @@ fn encode<T: spacetimedb::Serialize>(value: &T) -> Vec<u8> {
     bsatn::to_vec(value).expect("guild state encodes")
 }
 
-fn facts(ctx: &ReducerContext, character: PartyCharacter) -> Facts {
+fn facts(ctx: &ReducerContext, character: PartyCharacter) -> Option<Facts> {
     use crate::chat::game_character_contact;
-    Facts {
+    let stored = crate::helpers::character_by_guid(ctx, character.guid)?;
+    let stats = character
+        .stats
+        .as_ref()
+        .map(|stats| stats.friend_online(character.class, 0));
+    Some(Facts {
+        level: stats.as_ref().map_or(stored.level, |stats| stats.level),
+        zone: stats.as_ref().map_or(stored.zone_id, |stats| stats.zone_id),
+        logout_micros: if !character.online && character.connection != 0 {
+            ctx.timestamp.to_micros_since_unix_epoch()
+        } else {
+            stored.last_logout_micros.min(i64::MAX as u64) as i64
+        },
         ignores: ctx
             .db
             .game_character_contact()
@@ -90,7 +105,7 @@ fn facts(ctx: &ReducerContext, character: PartyCharacter) -> Facts {
             .map(|contact| contact.target_guid)
             .collect(),
         character,
-    }
+    })
 }
 
 #[table(accessor = game_realm_guild_presence, outbox(remote::idc_realm_guild_presence))]
@@ -104,15 +119,46 @@ pub struct RealmGuildPresence {
 }
 
 pub(super) fn presence(ctx: &ReducerContext, character: PartyCharacter) {
-    if let Some(realm) = realm_shard(ctx) {
+    if let (Some(realm), Some(facts)) = (realm_shard(ctx), facts(ctx, character)) {
         ctx.db
             .game_realm_guild_presence()
             .insert(RealmGuildPresence {
                 id: 0,
                 database: remote::Identity(realm),
-                facts: encode(&facts(ctx, character)),
+                facts: encode(&facts),
             });
     }
+}
+
+#[reducer]
+pub fn operator_report_guild_characters(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    if realm_shard(ctx).is_none() || ctx.db.game_native_player().iter().next().is_some() {
+        return Err("guild roster backfill requires a World Shard with gameplay closed".into());
+    }
+    for member in ctx.db.game_guild_member().iter() {
+        let Some(character) = crate::helpers::character_by_guid(ctx, member.character_guid) else {
+            continue;
+        };
+        presence(
+            ctx,
+            PartyCharacter {
+                guid: character.guid,
+                account_id: character.account_id,
+                connection: 0,
+                world: ctx.database_identity(),
+                name: character.name,
+                race: character.race,
+                class: character.class,
+                chat_tag: 0,
+                identity: character.owner_identity,
+                online: false,
+                stats: None,
+                revision: directory::revision(ctx),
+            },
+        );
+    }
+    Ok(())
 }
 
 fn current(ctx: &ReducerContext, facts: &Facts) -> bool {
@@ -134,32 +180,14 @@ fn store_character(ctx: &ReducerContext, facts: Facts) -> bool {
         old.facts.character.online != facts.character.online
             || old.facts.character.connection != facts.character.connection
     });
-    let stats = facts
-        .character
-        .stats
-        .as_ref()
-        .map(|stats| stats.friend_online(facts.character.class, 0));
-    let level = stats.as_ref().map_or_else(
-        || previous.as_ref().map_or(0, |old| old.level),
-        |stats| stats.level,
-    );
-    let zone = stats.as_ref().map_or_else(
-        || previous.as_ref().map_or(0, |old| old.zone),
-        |stats| stats.zone_id,
-    );
-    let logout_micros = if !facts.character.online && changed {
-        ctx.timestamp.to_micros_since_unix_epoch()
-    } else {
-        previous.as_ref().map_or(0, |old| old.logout_micros)
-    };
     directory::observe_revision(ctx, facts.character.revision);
     table.guid().delete(guid);
     table.insert(GuildCharacter {
         guid,
+        level: facts.level,
+        zone: facts.zone,
+        logout_micros: facts.logout_micros,
         facts,
-        level,
-        zone,
-        logout_micros,
     });
     changed
 }
@@ -265,7 +293,7 @@ pub(super) fn submit(
     ctx.db.game_realm_guild_command().insert(RealmGuildCommand {
         id: 0,
         database: remote::Identity(realm),
-        facts: encode(&facts(ctx, character)),
+        facts: encode(&facts(ctx, character).ok_or("Character is not owned here")?),
         opcode,
         body: frame[6..].to_vec(),
     });
@@ -897,7 +925,7 @@ pub(super) fn dot_command(
     ctx.db.game_realm_guild_command().insert(RealmGuildCommand {
         id: 0,
         database: remote::Identity(realm),
-        facts: encode(&facts(ctx, character)),
+        facts: encode(&facts(ctx, character).ok_or("Character is not owned here")?),
         opcode: CREATE_FOR_LEADER,
         body: encode(&(
             leader.map(str::to_owned),

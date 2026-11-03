@@ -498,6 +498,9 @@ leader succession or disband there. Refused projections retry while the destinat
 `operator_report_realm_guilds` replays current guilds and disband records.
 
 For existing state, keep gameplay closed across all Shards and backfill Character profiles first.
+Call `operator_report_guild_characters` on every World Shard and wait for the Realm's
+`game_guild_character` rows to cover the resident guild members. This preserves offline level,
+class, zone and last logout without making members log in; it refuses a World with active players.
 Capture each World Shard's `game_guild`, `game_guild_rank`, `game_guild_member` and
 `game_guild_invite` rows. Resolve conflicting guild ids, names, memberships and invitations before
 importing. Call `operator_import_guild` on the Realm with one `Import` object per guild, containing
