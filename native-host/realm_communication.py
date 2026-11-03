@@ -28,6 +28,8 @@ def check(host):
         for owner in (None, *worlds):
             host.call('operator_set_map_owner', [map_id, host.identity(shard)], database=owner)
 
+    host.wait_until(lambda: len(host.rows('SELECT world FROM game_character_names_ready')) == 2,
+                    'World names did not arrive')
     def enter(client, guid):
         client.send(0x3d, struct.pack('<Q', guid))
         packets = []

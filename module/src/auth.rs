@@ -810,12 +810,19 @@ pub(crate) fn check_new_character(
     class: u8,
 ) -> Result<(), CreateCharacterRefusal> {
     require_guid_range(ctx)?;
+    if crate::peer::role(ctx).is_some()
+        && crate::peer::require_sender(ctx, crate::peer::realm_shard(ctx)).is_err()
+    {
+        return Err("Character creation requires a Realm name reservation"
+            .to_string()
+            .into());
+    }
+    let folded = name.to_lowercase();
     if ctx
         .db
         .game_character()
-        .name()
-        .find(name.to_string())
-        .is_some()
+        .iter()
+        .any(|character| character.name.to_lowercase() == folded)
     {
         return Err(CreateCharacterRefusal::NameInUse);
     }

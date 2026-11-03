@@ -56,7 +56,8 @@ connection's packets before the marker and drops the rest of the source Shard's 
 attaches the connection to the target Shard under the same connection id and calls
 `native_world_adopt`, which builds the World Session from the target's `game_native_handoff` row.
 The source Shard sees an ordinary disconnect. A request still in flight to the source Shard may
-fail without ending the World Session. Only a World Session at Character selection can move yet.
+fail without ending the World Session. Handoff moves a World Session at Character selection or
+after a committed Character Transfer.
 
 World entry registers the Character as an AOI viewer before self CREATE and replays its grants
 after it. A Passenger's Transport is the one grant replayed before self CREATE.
@@ -421,6 +422,38 @@ also closes it if an answer never arrives. Closing a connection removes its pend
 Late replies can update the directory but cannot send a packet to the departed connection.
 Creation and deletion Refusal packets return through the World Shard's error envelope.
 
+The Realm reserves each case-insensitive Character name before it sends creation to a World
+Shard. Pending reservations also count toward the Account limit. A successful creation reply or
+Character profile binds the reservation to its guid. A confirmed World refusal releases it;
+a timeout, connection close or Host restart does not. Confirmed deletion releases the name, and
+Transfer keeps it reserved. World Shards accept creation only from their Realm Shard, so direct
+Operator and Package creation on a World Shard cannot bypass reservation. A single-Shard Realm
+keeps synchronous creation and checks names without case distinctions.
+
+Each World Shard reports a complete Character profile snapshot before new creation opens. This
+includes an empty World Shard. The Realm records readiness only after accepting every batch of the report,
+including its names. Conflicting existing names refuse the report and keep creation closed for
+that World configuration. A report made during Character Transfer does not establish readiness.
+
+### Upgrade Character name reservations
+
+Close gameplay and drain Character selection and Transfers. Publish all Shards, call
+`debug_repair_after_publish`, then call `operator_report_character_profiles` on every World Shard.
+Before reopening creation, check that `game_character_names_ready` covers the default World,
+all map owners and all Instance hosts, and that every live directory guid has its reservation.
+Existing names that differ only by case must be reconciled before their report can succeed; this
+upgrade does not rename Characters. Reports use batches of at most 128 profiles; durable progress
+counts each batch once, and a refused batch cannot establish readiness. World reports retry a
+refused delivery, so inspect the refusal instead of repeatedly publishing.
+
+The new reservation, readiness and report-progress tables start empty, so creation stays closed until these reports finish. Existing names
+and pending reservations remain durable on subsequent updates. Never remove a pending reservation
+just because its connection or selection deadline expired: its World creation can still commit.
+The profile receiver accepts the previous payload shape, but all Shards must run the new revision
+before new creation opens. Old creation replies and profile outboxes must drain before this update.
+
+### World Sessions and communication
+
 Login and deletion route by Character guid and Account. Login sends the owning World Shard Account
 and Session copies, then hands the World Session over by Handoff. Logout hands it back. The Realm
 Shard records which World Shard holds the away World Session, so changed Accounts and Sessions go
@@ -440,7 +473,7 @@ current matches, then checks the replies against the Character directory and awa
 `/who` keeps the existing faction, name, level, guild, class, race and zone filters and 49-entry
 limit. A refused query or a missing reply after 15 seconds sends an unavailable notification; it
 does not report a partial list or an offline whisper target. Ambiguous online names also return
-unavailable. Name reservation across World Shards remains separate work.
+unavailable. Character Name Reservations prevent new duplicate names across World Shards.
 
 Replies carry the original Account, Character guid and connection id. Delivery uses the current
 World Shard and repeats the recipient and ignore Gates there. A refused delivery retries every

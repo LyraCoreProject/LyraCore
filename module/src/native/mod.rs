@@ -8,6 +8,7 @@ mod book;
 mod cast;
 mod channel;
 mod character;
+mod character_names;
 mod chat;
 mod chat_flood;
 mod combat;

@@ -1,5 +1,7 @@
 use spacetimedb::sats::bsatn;
-use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{
+    reducer, table, Identity, ReducerContext, ScheduleAt, SpacetimeType, Table, TimeDuration,
+};
 
 use crate::game_character;
 use crate::peer::{is_peer, realm_shard, role, world_shard, ShardRole};
@@ -279,19 +281,49 @@ fn send_changes(ctx: &ReducerContext, account_id: u64, changes: Vec<(u64, bool)>
     });
 }
 
-// One message per Account: each call between databases costs a round trip and disk writes.
 pub(crate) fn report_characters(ctx: &ReducerContext) {
-    let mut by_account = std::collections::BTreeMap::<u64, Vec<(u64, bool)>>::new();
-    for character in ctx.db.game_character().iter() {
-        if !crate::transfer::is_in_transit(ctx, character.guid) {
-            by_account
-                .entry(character.account_id)
-                .or_default()
-                .push((character.guid, true));
-        }
-    }
-    for (account_id, changes) in by_account {
-        send_changes(ctx, account_id, changes);
+    let Some(realm) = realm_shard(ctx) else {
+        return;
+    };
+    let revision = revision(ctx);
+    let complete = !ctx
+        .db
+        .game_character()
+        .iter()
+        .any(|character| crate::transfer::is_in_transit(ctx, character.guid));
+    let profiles: Vec<_> = ctx
+        .db
+        .game_character()
+        .iter()
+        .filter(|character| !crate::transfer::is_in_transit(ctx, character.guid))
+        .map(|character| CharacterProfile {
+            guid: character.guid,
+            account_id: character.account_id,
+            world: ctx.database_identity(),
+            revision,
+            name: character.name,
+            race: character.race,
+            class: character.class,
+            gender: character.gender,
+            deleted: false,
+        })
+        .collect();
+    let total = profiles.len().div_ceil(128).max(1);
+    for index in 0..total {
+        let start = index * 128;
+        let report = ProfileReport {
+            profiles: profiles[start..profiles.len().min(start + 128)].to_vec(),
+            snapshot: complete.then_some(super::character_names::NameReport {
+                revision,
+                index: index as u32,
+                total: total as u32,
+            }),
+        };
+        ctx.db.game_character_profiles().insert(CharacterProfiles {
+            id: 0,
+            database: remote::Identity(realm),
+            profiles: bsatn::to_vec(&report).expect("Character profile report encodes"),
+        });
     }
 }
 
@@ -328,6 +360,7 @@ pub(super) fn apply(
             world: ctx.sender(),
         });
         if !present {
+            super::character_names::deleted(ctx, guid);
             super::instance_allocation::forget(ctx, guid, false);
             super::realm_party::deleted(ctx, guid)?;
             super::realm_guild::deleted(ctx, guid);
@@ -370,6 +403,12 @@ pub struct CharacterProfile {
     pub deleted: bool,
 }
 
+#[derive(SpacetimeType)]
+struct ProfileReport {
+    profiles: Vec<CharacterProfile>,
+    snapshot: Option<super::character_names::NameReport>,
+}
+
 #[table(accessor = game_character_profiles, outbox(remote::idc_character_profiles))]
 pub struct CharacterProfiles {
     #[primary_key]
@@ -397,10 +436,16 @@ pub fn idc_character_profiles(ctx: &ReducerContext, profiles: Vec<u8>) -> Result
     } else {
         crate::peer::require_sender(ctx, realm_shard(ctx))?;
     }
-    let profiles: Vec<CharacterProfile> =
-        bsatn::from_slice(&profiles).map_err(|error| error.to_string())?;
+    let report: ProfileReport = bsatn::from_slice(&profiles)
+        .or_else(|_| {
+            bsatn::from_slice::<Vec<CharacterProfile>>(&profiles).map(|profiles| ProfileReport {
+                profiles,
+                snapshot: None,
+            })
+        })
+        .map_err(|error| error.to_string())?;
     let mut accepted = Vec::new();
-    for profile in profiles {
+    for profile in report.profiles {
         if realm {
             if profile.world != ctx.sender() {
                 return Err("Character profile source differs from its World Shard".into());
@@ -440,6 +485,9 @@ pub fn idc_character_profiles(ctx: &ReducerContext, profiles: Vec<u8>) -> Result
             continue;
         }
         observe_revision(ctx, profile.revision);
+        if realm {
+            super::character_names::observe(ctx, &profile)?;
+        }
         if !realm && profile.deleted {
             super::social::deleted(ctx, profile.guid);
         }
@@ -449,6 +497,9 @@ pub fn idc_character_profiles(ctx: &ReducerContext, profiles: Vec<u8>) -> Result
     }
     if realm {
         publish_profiles(ctx, &accepted);
+        if let Some(snapshot) = report.snapshot {
+            super::character_names::reported(ctx, snapshot)?;
+        }
     }
     Ok(())
 }

@@ -24,6 +24,8 @@ def check(host):
             host.call('operator_set_instance_host', [36, host.identity(shard), True], database=owner)
         host.call('operator_set_instance_host', [43, host.identity(first), True], database=owner)
     host.call('operator_set_character_start_map', [1, 1, 0])
+    host.wait_until(lambda: len(host.rows('SELECT world FROM game_character_names_ready')) == 3,
+                    'World names did not arrive')
     entrance, leave, inside, side_exit, rejoin = 5090632, 5090633, 5090634, 5090635, 5090636
     for shard in worlds:
         for trigger, origin, target in ((entrance, 0, 36), (leave, 36, 0), (inside, 36, 43), (side_exit, 43, 0), (rejoin, 36, 36)):
