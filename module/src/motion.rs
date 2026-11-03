@@ -29,12 +29,18 @@ pub struct MotionPublishSchedule {
     pub scheduled_at: ScheduleAt,
 }
 
+include!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../native-host/src/motion_opcodes.rs"
+));
+
 pub(crate) fn is_discrete(opcode: u16) -> bool {
-    use lyracore_shared::opcodes::movement as m;
-    !matches!(
-        opcode as u32,
-        m::MSG_MOVE_HEARTBEAT | m::MSG_MOVE_SET_FACING | m::MSG_MOVE_SET_PITCH
-    )
+    !COALESCIBLE_MOTION_OPCODES.contains(&opcode)
+}
+
+/// A movement message the client sends with its own MovementInfo.
+pub(crate) fn is_client_motion(opcode: u32) -> bool {
+    u16::try_from(opcode).is_ok_and(|opcode| CLIENT_MOTION_OPCODES.contains(&opcode))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +173,19 @@ pub(crate) fn queue_motion(
     }
 }
 
+/// Publishes the mover's staged motion now instead of at the next tick.
+pub(crate) fn flush(ctx: &ReducerContext, guid: u64) {
+    let pending = ctx.db.game_entity_motion_pending();
+    if let Some(row) = pending.guid().find(guid) {
+        pending.guid().delete(guid);
+        if tick_action(ctx.db.game_world_entity().guid().find(guid).is_some())
+            == TickAction::Publish
+        {
+            publish(ctx, &row);
+        }
+    }
+}
+
 pub(crate) fn drop_pending(ctx: &ReducerContext, guid: u64) {
     ctx.db.game_entity_motion_pending().guid().delete(guid);
 }
@@ -276,6 +295,12 @@ mod tests {
                  HEARTBEAT, SET_FACING and SET_PITCH carry nothing a later packet does not"
             );
         }
+    }
+
+    #[test]
+    fn the_host_relays_exactly_the_client_movement_opcodes() {
+        let shared: Vec<_> = m::SLICE_MOVE_OPCODES.iter().map(|&op| op as u16).collect();
+        assert_eq!(CLIENT_MOTION_OPCODES.to_vec(), shared);
     }
 
     #[test]

@@ -273,6 +273,7 @@ pub(super) fn leave(
         super::member_stats::stop(ctx, connection_id);
         super::teleport::restore_origin(ctx, player.character_guid, player.teleport_origin);
         players.connection_id().delete(connection_id);
+        super::motion_permit::withdraw(ctx, connection_id);
         crate::meeting_stone::remove_solo_seeker(ctx, player.character_guid);
         crate::channel::leave_all(ctx, player.character_guid);
         super::social::presence(ctx, player.character_guid, false);
@@ -299,6 +300,7 @@ pub(super) fn receive(
     ctx: &ReducerContext,
     mut connection: NativeWorldConnection,
     guid: u64,
+    relay: super::MotionRelay,
     opcode: u32,
     body: &[u8],
 ) -> Result<(), Rollback> {
@@ -336,13 +338,10 @@ pub(super) fn receive(
             .guid()
             .find(guid)
             .ok_or("Character is not in the world")?;
-        return Ok(crate::world::apply_movement_update(
-            ctx,
-            entity,
-            opcode as u16,
-            &movement,
-            body.to_vec(),
-        )?);
+        let relay_body = (relay == super::MotionRelay::Module).then(|| body.to_vec());
+        crate::world::apply_movement_update(ctx, entity, opcode as u16, &movement, relay_body)?;
+        super::motion_permit::refresh(ctx, connection.connection_id, guid);
+        return Ok(());
     }
     if opcode == codec::CMSG_AUCTION_LIST_ITEMS_OPCODE {
         return super::auction::browse(ctx, connection.connection_id, guid, body);
@@ -800,11 +799,7 @@ fn movement_receipt(
     }
     let bytes =
         codec::movement_info_to_bytes(movement.info()).map_err(|error| error.to_string())?;
-    Ok(crate::world::apply_movement_update(
-        ctx,
-        entity,
-        opcode as u16,
-        &movement,
-        bytes,
-    )?)
+    crate::world::apply_movement_update(ctx, entity, opcode as u16, &movement, Some(bytes))?;
+    super::motion_permit::refresh_character(ctx, guid);
+    Ok(())
 }

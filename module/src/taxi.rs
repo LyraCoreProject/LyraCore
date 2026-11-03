@@ -1197,6 +1197,7 @@ pub(crate) fn activate_taxi(
             origin_recorded: true,
         };
         ctx.db.game_active_taxi_flight().insert(flight);
+        crate::native::refresh_motion_permit(ctx, character_guid);
         player.money = player_state.money;
         player.update(ctx);
         Ok(())

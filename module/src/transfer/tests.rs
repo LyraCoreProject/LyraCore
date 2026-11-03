@@ -40,6 +40,7 @@ fn manifest_exclude_holds_only_local_runtime_state() {
             "game_aoi_viewer",
             "game_native_player",
             "game_native_member_stats",
+            "game_native_motion_permit",
             "game_character_relocation",
             "game_transport_passenger",
         ],

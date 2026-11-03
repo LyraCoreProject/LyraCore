@@ -1,0 +1,8 @@
+// MSG_MOVE opcodes a client sends with its own MovementInfo. The Module and Host include this file.
+const CLIENT_MOTION_OPCODES: [u16; 21] = [
+    0x00b5, 0x00b6, 0x00b7, 0x00b8, 0x00b9, 0x00ba, 0x00bb, 0x00bc, 0x00bd, 0x00be, 0x00bf, 0x00c0,
+    0x00c1, 0x00c2, 0x00c3, 0x00c9, 0x00ca, 0x00cb, 0x00da, 0x00db, 0x00ee,
+];
+
+// MSG_MOVE_SET_FACING, MSG_MOVE_SET_PITCH and MSG_MOVE_HEARTBEAT.
+const COALESCIBLE_MOTION_OPCODES: [u16; 3] = [0x00da, 0x00db, 0x00ee];

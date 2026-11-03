@@ -77,6 +77,8 @@ def main():
         'mod': 'crates/standalone/src/native_world.rs',
         'feed': 'crates/standalone/src/native_feed.rs',
         'wire': 'crates/standalone/src/native_wire.rs',
+        'motion': 'crates/standalone/src/native_motion.rs',
+        'motion_opcodes': 'crates/standalone/src/native_motion_opcodes.rs',
         'delivery_rows': 'crates/standalone/src/native_delivery_rows.rs',
     }
     for name, destination in sources.items():

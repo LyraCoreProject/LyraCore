@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -8,9 +8,10 @@ use spacetimedb_auth::identity::ConnectionAuthCtx;
 use spacetimedb_client_api::{ControlStateReadAccess, NodeDelegate};
 use spacetimedb_client_api_messages::websocket::v2;
 use spacetimedb_lib::{bsatn, identity::AuthCtx, ConnectionId, Identity, SpacetimeType};
-use tokio::sync::mpsc;
 
 use crate::StandaloneEnv;
+
+const WORLD_ENTITY: u8 = 0;
 
 #[derive(SpacetimeType, PartialEq)]
 #[sats(crate = spacetimedb_lib)]
@@ -64,6 +65,14 @@ struct Recipient {
 #[derive(SpacetimeType)]
 #[sats(crate = spacetimedb_lib)]
 #[cfg_attr(test, derive(Debug, PartialEq))]
+struct MotionPermit {
+    connection_id: ConnectionId,
+    character_guid: u64,
+}
+
+#[derive(SpacetimeType)]
+#[sats(crate = spacetimedb_lib)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub(super) struct Packet {
     id: u64,
     audience: Audience,
@@ -74,7 +83,33 @@ pub(super) struct Packet {
     pub authentication_complete: bool,
 }
 
+impl Cipher {
+    fn size(&self) -> usize {
+        std::mem::size_of::<Cipher>()
+            + self.username.capacity()
+            + self.session_key.capacity()
+            + self.client_proof.capacity()
+    }
+}
+
 impl Packet {
+    // Arc stores its strong and weak reference counts beside the Packet.
+    fn size(&self) -> usize {
+        std::mem::size_of::<Packet>() + 2 * std::mem::size_of::<usize>() + self.body.capacity()
+    }
+
+    /// The mover whose Coalescible Motion this packet relays through AOI.
+    fn motion_mover(&self) -> Option<u64> {
+        match self.audience {
+            Audience::Aoi(Aoi {
+                layer: WORLD_ENTITY,
+                entity_guid,
+                ..
+            }) if self.opcode.is_some_and(super::motion::coalescible) => Some(entity_guid),
+            _ => None,
+        }
+    }
+
     /// The Shard that this connection moves to, when this packet is a Handoff marker.
     pub(super) fn handoff(&self) -> Option<Identity> {
         match self.audience {
@@ -84,16 +119,110 @@ impl Packet {
     }
 }
 
+const OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+const RELAY_FLUSH: Duration = Duration::from_millis(20);
+const SLOT_BYTES: usize = std::mem::size_of::<Option<Arc<Packet>>>();
+
 #[derive(Default)]
 pub(super) struct Delivery {
     pub cipher: Option<Cipher>,
     pub packets: Vec<Arc<Packet>>,
-    budget: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
-struct Client {
-    sender: mpsc::UnboundedSender<Delivery>,
-    budget: Arc<tokio::sync::Semaphore>,
+/// Output one connection has not taken yet; superseded Coalescible Motion leaves an empty slot.
+#[derive(Default)]
+struct Queue {
+    cipher: Option<Cipher>,
+    slots: VecDeque<Option<Arc<Packet>>>,
+    motion: HashMap<u64, usize>,
+    bytes: usize,
+    closed: bool,
+}
+
+impl Queue {
+    /// Queues one transaction's packets; returns false when the connection exceeds its byte limit
+    /// or already holds a queued cipher.
+    fn push(&mut self, cipher: Option<Cipher>, packets: Vec<Arc<Packet>>) -> bool {
+        if let Some(cipher) = cipher {
+            if self.cipher.is_some() {
+                return false;
+            }
+            self.bytes += cipher.size();
+            self.cipher = Some(cipher);
+        }
+        for packet in packets {
+            if let Some(mover) = packet.motion_mover() {
+                if let Some(previous) = self.motion.insert(mover, self.slots.len()) {
+                    if let Some(superseded) = self.slots[previous].take() {
+                        self.bytes -= superseded.size();
+                    }
+                }
+            }
+            self.bytes += SLOT_BYTES + packet.size();
+            self.slots.push_back(Some(packet));
+        }
+        self.bytes <= OUTPUT_BYTES
+    }
+
+    fn take(&mut self) -> Option<Delivery> {
+        if self.cipher.is_none() && self.slots.is_empty() {
+            return None;
+        }
+        self.motion.clear();
+        self.bytes = 0;
+        Some(Delivery {
+            cipher: self.cipher.take(),
+            packets: self.slots.drain(..).flatten().collect(),
+        })
+    }
+}
+
+#[derive(Default)]
+struct Outbox {
+    queue: Mutex<Queue>,
+    ready: tokio::sync::Notify,
+}
+
+impl Outbox {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Queue> {
+        self.queue
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn close(&self) {
+        self.lock().closed = true;
+        self.ready.notify_one();
+    }
+}
+
+/// One connection's output; queued transactions arrive together as one Delivery.
+pub(super) struct Deliveries(Arc<Outbox>);
+
+impl Deliveries {
+    /// The next Delivery, or None once the connection's output has closed and drained.
+    pub(super) async fn recv(&mut self) -> Option<Delivery> {
+        loop {
+            {
+                let mut queue = self.0.lock();
+                if let Some(delivery) = queue.take() {
+                    return Some(delivery);
+                }
+                if queue.closed {
+                    return None;
+                }
+            }
+            self.0.ready.notified().await;
+        }
+    }
+}
+
+struct Client(Arc<Outbox>);
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        self.0.close();
+    }
 }
 
 #[derive(Default)]
@@ -101,12 +230,57 @@ struct State {
     closed: bool,
     clients: HashMap<ConnectionId, Client>,
     router: Router,
+    permits: HashMap<ConnectionId, u64>,
+    relays: Vec<(ConnectionId, Arc<Packet>)>,
+    // Each connection's last queued relay; newer Coalescible Motion replaces it there.
+    last_relay: HashMap<ConnectionId, usize>,
 }
 
 impl State {
     fn remove(&mut self, connection: ConnectionId) {
         self.clients.remove(&connection);
         self.router.clear(connection);
+    }
+
+    fn flush_relays(&mut self) {
+        self.last_relay.clear();
+        let relays: Vec<_> = std::mem::take(&mut self.relays)
+            .into_iter()
+            .filter(|(connection, packet)| {
+                let Audience::Aoi(aoi) = packet.audience else {
+                    return false;
+                };
+                self.permits.get(connection) == Some(&aoi.entity_guid)
+            })
+            .map(|(_, packet)| packet)
+            .collect();
+        let clients = &self.clients;
+        let routed = self
+            .router
+            .route(relays, |connection| clients.contains_key(connection));
+        self.deliver(routed.into_iter().map(|(connection, packets)| {
+            (
+                connection,
+                Delivery {
+                    cipher: None,
+                    packets,
+                },
+            )
+        }));
+    }
+
+    fn deliver(&mut self, deliveries: impl IntoIterator<Item = (ConnectionId, Delivery)>) {
+        for (connection, delivery) in deliveries {
+            let Some(Client(outbox)) = self.clients.get(&connection) else {
+                continue;
+            };
+            if outbox.lock().push(delivery.cipher, delivery.packets) {
+                outbox.ready.notify_one();
+            } else {
+                self.remove(connection);
+                log::warn!("native output byte limit reached for connection {connection}");
+            }
+        }
     }
 }
 
@@ -124,7 +298,8 @@ impl Router {
         registered: impl Fn(&ConnectionId) -> bool,
     ) -> HashMap<ConnectionId, Vec<Arc<Packet>>> {
         let mut deliveries = HashMap::<ConnectionId, Vec<Arc<Packet>>>::new();
-        packets.sort_unstable_by_key(|packet| packet.id);
+        // Host relays carry id 0 and keep their arrival order.
+        packets.sort_by_key(|packet| packet.id);
         for packet in packets {
             match packet.audience {
                 Audience::Clear(connection) => self.clear(connection),
@@ -205,6 +380,61 @@ pub(super) struct Registration {
     connection_id: ConnectionId,
 }
 
+impl Registration {
+    /// Relays the connection's movement to its AOI recipients; false without a Motion Permit.
+    pub(super) fn relay(&self, opcode: u16, movement_info: &[u8]) -> bool {
+        let mut state = self
+            .feed
+            .0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(&mover) = state.permits.get(&self.connection_id) else {
+            return false;
+        };
+        let mut body = Vec::with_capacity(9 + movement_info.len());
+        packed_guid(&mut body, mover);
+        body.extend_from_slice(movement_info);
+        let packet = Arc::new(Packet {
+            id: 0,
+            audience: Audience::Aoi(Aoi {
+                layer: WORLD_ENTITY,
+                entity_guid: mover,
+                exclude_connection: Some(self.connection_id),
+            }),
+            opcode: Some(opcode),
+            body,
+            close_after: false,
+            not_before_micros: 0,
+            authentication_complete: false,
+        });
+        let state = &mut *state;
+        let last = state.last_relay.get(&self.connection_id).copied();
+        match last.filter(|&at| {
+            packet.motion_mover().is_some() && state.relays[at].1.motion_mover().is_some()
+        }) {
+            Some(at) => state.relays[at].1 = packet,
+            None => {
+                state
+                    .last_relay
+                    .insert(self.connection_id, state.relays.len());
+                state.relays.push((self.connection_id, packet));
+            }
+        }
+        true
+    }
+}
+
+fn packed_guid(body: &mut Vec<u8>, guid: u64) {
+    let bytes = guid.to_le_bytes();
+    let mask = bytes
+        .iter()
+        .enumerate()
+        .filter(|(_, byte)| **byte != 0)
+        .fold(0u8, |mask, (index, _)| mask | 1 << index);
+    body.push(mask);
+    body.extend(bytes.iter().filter(|byte| **byte != 0));
+}
+
 impl Drop for Registration {
     fn drop(&mut self) {
         self.feed
@@ -230,10 +460,18 @@ impl Drop for FeedLifetime {
 }
 
 impl Feed {
+    // Routes queued Host relays together, so one write carries many movers.
+    fn flush_relays(&self) {
+        self.0
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .flush_relays();
+    }
+
     pub(super) fn register(
         self: &Arc<Self>,
         connection_id: ConnectionId,
-    ) -> Result<(Registration, mpsc::UnboundedReceiver<Delivery>)> {
+    ) -> Result<(Registration, Deliveries)> {
         let mut state = self
             .0
             .lock()
@@ -243,21 +481,14 @@ impl Feed {
             !state.clients.contains_key(&connection_id),
             "native connection id collision"
         );
-        // Each queued delivery holds byte permits for its payload and storage.
-        let (tx, rx) = mpsc::unbounded_channel();
-        state.clients.insert(
-            connection_id,
-            Client {
-                sender: tx,
-                budget: Arc::new(tokio::sync::Semaphore::new(2 * 1024 * 1024)),
-            },
-        );
+        let outbox = Arc::new(Outbox::default());
+        state.clients.insert(connection_id, Client(outbox.clone()));
         Ok((
             Registration {
                 feed: self.clone(),
                 connection_id,
             },
-            rx,
+            Deliveries(outbox),
         ))
     }
 
@@ -267,8 +498,10 @@ impl Feed {
         };
         let mut deliveries = HashMap::<ConnectionId, Delivery>::new();
         let mut packets = Vec::<Arc<Packet>>::new();
+        let mut permits = Vec::<(MotionPermit, bool)>::new();
         let mut row = |table: &str, bytes: &[u8], insert: bool| -> Result<()> {
             match table {
+                "game_native_motion_permit" => permits.push((bsatn::from_slice(bytes)?, insert)),
                 "game_native_cipher" => {
                     if insert {
                         let cipher: Cipher = bsatn::from_slice(bytes)?;
@@ -326,47 +559,26 @@ impl Feed {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let state = &mut *state;
+        // Relays the Host queued before a permit change precede that transaction's packets.
+        if !permits.is_empty() {
+            state.flush_relays();
+        }
+        for (permit, insert) in permits {
+            if insert {
+                state
+                    .permits
+                    .insert(permit.connection_id, permit.character_guid);
+            } else if state.permits.get(&permit.connection_id) == Some(&permit.character_guid) {
+                state.permits.remove(&permit.connection_id);
+            }
+        }
         let routed = state
             .router
             .route(packets, |connection| state.clients.contains_key(connection));
         for (connection, packets) in routed {
             deliveries.entry(connection).or_default().packets = packets;
         }
-        for (connection, mut delivery) in deliveries {
-            let Some(client) = state.clients.get(&connection) else {
-                continue;
-            };
-            let size = std::mem::size_of::<Delivery>()
-                + delivery.packets.capacity() * std::mem::size_of::<Arc<Packet>>()
-                + delivery
-                    .packets
-                    .iter()
-                    .map(|packet| {
-                        // Arc stores its strong and weak reference counts beside the Packet.
-                        std::mem::size_of::<Packet>()
-                            + 2 * std::mem::size_of::<usize>()
-                            + packet.body.capacity()
-                    })
-                    .sum::<usize>()
-                + delivery.cipher.as_ref().map_or(0, |cipher| {
-                    cipher.username.capacity()
-                        + cipher.session_key.capacity()
-                        + cipher.client_proof.capacity()
-                });
-            let permit = u32::try_from(size)
-                .ok()
-                .and_then(|size| client.budget.clone().try_acquire_many_owned(size).ok());
-            let Some(permit) = permit else {
-                state.remove(connection);
-                log::warn!("native output byte limit reached for connection {connection}");
-                continue;
-            };
-            delivery.budget = Some(permit);
-            if client.sender.send(delivery).is_err() {
-                state.remove(connection);
-                log::warn!("native output queue closed for connection {connection}");
-            }
-        }
+        state.deliver(deliveries);
         Ok(initial)
     }
 }
@@ -461,6 +673,7 @@ async fn create(ctx: Arc<StandaloneEnv>, database: Identity, owner: Identity) ->
                 query_strings: vec![
                     "SELECT * FROM game_native_cipher".into(),
                     "SELECT * FROM game_native_packet".into(),
+                    "SELECT * FROM game_native_motion_permit".into(),
                 ]
                 .into_boxed_slice(),
             },
@@ -468,6 +681,18 @@ async fn create(ctx: Arc<StandaloneEnv>, database: Identity, owner: Identity) ->
         )
         .await?;
     ready_rx.await?;
+    let flushing = Arc::downgrade(&feed);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(RELAY_FLUSH);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            interval.tick().await;
+            let Some(feed) = flushing.upgrade() else {
+                return;
+            };
+            feed.flush_relays();
+        }
+    });
     Ok(feed)
 }
 
@@ -481,7 +706,6 @@ mod tests {
     const VIEWER: ConnectionId = ConnectionId::from_u128(1);
     const OTHER_VIEWER: ConnectionId = ConnectionId::from_u128(2);
     const EXCLUDED_VIEWER: ConnectionId = ConnectionId::from_u128(3);
-    const WORLD_ENTITY: u8 = 0;
     const GAME_OBJECT: u8 = 1;
     const SUBJECT: u64 = 100;
     const OTHER_SUBJECT: u64 = 200;
@@ -582,10 +806,141 @@ mod tests {
         ))
     }
 
-    #[test]
-    fn output_burst_preserves_order_until_drained() {
+    fn take(deliveries: &Deliveries) -> Option<Delivery> {
+        deliveries.0.lock().take()
+    }
+
+    fn closed(deliveries: &Deliveries) -> bool {
+        deliveries.0.lock().closed
+    }
+
+    fn ids(delivery: Delivery) -> Vec<u64> {
+        delivery.packets.iter().map(|packet| packet.id).collect()
+    }
+
+    fn movement(id: u64, mover: u64, opcode: u16) -> Packet {
+        row(
+            id,
+            Audience::Aoi(Aoi {
+                layer: WORLD_ENTITY,
+                entity_guid: mover,
+                exclude_connection: None,
+            }),
+            Some(opcode),
+            vec![0; 60],
+        )
+    }
+
+    fn granted_feed(movers: &[u64]) -> (Arc<Feed>, Registration, Deliveries) {
         let feed = Arc::new(Feed::default());
-        let (_registration, mut deliveries) = feed.register(CONNECTION).unwrap();
+        let (registration, deliveries) = feed.register(VIEWER).unwrap();
+        for (id, mover) in (1..).zip(movers) {
+            let recipient = Recipient {
+                connection_id: VIEWER,
+                layer: WORLD_ENTITY,
+                entity_guid: *mover,
+            };
+            feed.apply(transaction(row(
+                id,
+                Audience::Grant(recipient),
+                None,
+                Vec::new(),
+            )))
+            .unwrap();
+        }
+        take(&deliveries).unwrap();
+        (feed, registration, deliveries)
+    }
+
+    fn permit(feed: &Feed, connection_id: ConnectionId, character_guid: u64, insert: bool) {
+        let bytes = bsatn::to_vec(&MotionPermit {
+            connection_id,
+            character_guid,
+        })
+        .unwrap();
+        let rows = |present: bool| {
+            let bytes = if present { bytes.clone() } else { Vec::new() };
+            v2::BsatnRowList::new(
+                spacetimedb_client_api_messages::websocket::v1::RowSizeHint::FixedSize(24),
+                bytes.into(),
+            )
+        };
+        let update = v2::TableUpdate {
+            table_name: "game_native_motion_permit".into(),
+            rows: vec![v2::TableUpdateRows::PersistentTable(
+                v2::PersistentTableRows {
+                    inserts: rows(insert),
+                    deletes: rows(!insert),
+                },
+            )]
+            .into(),
+        };
+        feed.apply(OutboundMessage::V2(v2::ServerMessage::TransactionUpdate(
+            v2::TransactionUpdate {
+                query_sets: vec![v2::QuerySetUpdate {
+                    query_set_id: v2::QuerySetId::new(1),
+                    tables: vec![update].into(),
+                }]
+                .into(),
+            },
+        )))
+        .unwrap();
+    }
+
+    #[test]
+    fn permitted_movement_reaches_its_movers_aoi_recipients_only() {
+        let (feed, _viewer, deliveries) = granted_feed(&[SUBJECT]);
+        let (mover, mover_deliveries) = feed.register(OTHER_VIEWER).unwrap();
+        let info = [1, 2, 3];
+        assert!(!mover.relay(0x0ee, &info));
+        permit(&feed, OTHER_VIEWER, SUBJECT, true);
+        assert!(mover.relay(0x0ee, &info));
+        feed.flush_relays();
+        let relayed = take(&deliveries).unwrap().packets;
+        assert_eq!(relayed.len(), 1);
+        assert_eq!(relayed[0].opcode, Some(0x0ee));
+        assert_eq!(relayed[0].body, [0b1, 100, 1, 2, 3]);
+        assert!(take(&mover_deliveries).is_none());
+        permit(&feed, OTHER_VIEWER, SUBJECT, false);
+        assert!(!mover.relay(0x0ee, &info));
+    }
+
+    #[test]
+    fn a_movers_queued_relays_keep_its_transitions_and_go_out_before_its_permit_changes() {
+        let (feed, _viewer, deliveries) = granted_feed(&[SUBJECT]);
+        let (mover, _mover_deliveries) = feed.register(OTHER_VIEWER).unwrap();
+        permit(&feed, OTHER_VIEWER, SUBJECT, true);
+        for (opcode, info) in [(0x0ee, 1), (0x0ee, 2), (0x0bb, 3), (0x0da, 4), (0x0ee, 5)] {
+            assert!(mover.relay(opcode, &[info]));
+        }
+        let relays = |packets: &mut dyn Iterator<Item = &Arc<Packet>>| -> Vec<_> {
+            packets
+                .map(|packet| (packet.opcode, packet.body[2]))
+                .collect()
+        };
+        assert_eq!(
+            relays(
+                &mut feed
+                    .0
+                    .lock()
+                    .unwrap()
+                    .relays
+                    .iter()
+                    .map(|(_, packet)| packet)
+            ),
+            [(Some(0x0ee), 2), (Some(0x0bb), 3), (Some(0x0ee), 5)]
+        );
+        permit(&feed, OTHER_VIEWER, SUBJECT, false);
+        assert_eq!(
+            relays(&mut take(&deliveries).unwrap().packets.iter()),
+            [(Some(0x0bb), 3), (Some(0x0ee), 5)]
+        );
+    }
+
+    #[test]
+    fn queued_transactions_arrive_together_in_id_order() {
+        let feed = Arc::new(Feed::default());
+        let (_registration, deliveries) = feed.register(CONNECTION).unwrap();
         for _ in 0..2 {
             for sequence in 0u32..256 {
                 feed.apply(transaction(row(
@@ -596,12 +951,17 @@ mod tests {
                 )))
                 .unwrap();
             }
-            for sequence in 0u32..256 {
-                let delivery = deliveries.try_recv().unwrap();
-                assert_eq!(delivery.packets.len(), 1);
-                assert_eq!(delivery.packets[0].opcode, Some(0x1dd));
-                assert_eq!(delivery.packets[0].body, sequence.to_le_bytes());
-            }
+            let bodies: Vec<_> = take(&deliveries)
+                .unwrap()
+                .packets
+                .iter()
+                .map(|packet| packet.body.clone())
+                .collect();
+            let sent: Vec<_> = (0u32..256)
+                .map(|sequence| sequence.to_le_bytes().to_vec())
+                .collect();
+            assert_eq!(bodies, sent);
+            assert!(take(&deliveries).is_none());
         }
     }
 
@@ -609,8 +969,8 @@ mod tests {
     fn output_budget_closes_only_the_slow_reader() {
         for (messages, opcode, body_size) in [(40, Some(0x180), 60_000), (32_768, None, 0)] {
             let feed = Arc::new(Feed::default());
-            let (_slow_registration, mut slow) = feed.register(VIEWER).unwrap();
-            let (_fast_registration, mut fast) = feed.register(OTHER_VIEWER).unwrap();
+            let (_slow_registration, slow) = feed.register(VIEWER).unwrap();
+            let (_fast_registration, fast) = feed.register(OTHER_VIEWER).unwrap();
             for id in 0..messages {
                 for connection in [VIEWER, OTHER_VIEWER] {
                     feed.apply(transaction(row(
@@ -621,18 +981,40 @@ mod tests {
                     )))
                     .unwrap();
                 }
-                assert_eq!(fast.try_recv().unwrap().packets[0].id, id);
+                assert_eq!(ids(take(&fast).unwrap()), [id]);
             }
-            while slow.try_recv().is_ok() {}
-            assert!(matches!(
-                slow.try_recv(),
-                Err(mpsc::error::TryRecvError::Disconnected)
-            ));
-            assert!(matches!(
-                fast.try_recv(),
-                Err(mpsc::error::TryRecvError::Empty)
-            ));
+            assert!(take(&slow).is_some());
+            assert!(closed(&slow));
+            assert!(!closed(&fast));
+            assert!(take(&fast).is_none());
         }
+    }
+
+    #[test]
+    fn queued_motion_gives_way_to_its_movers_newer_motion() {
+        let (feed, _registration, deliveries) = granted_feed(&[SUBJECT, OTHER_SUBJECT]);
+        for packet in [
+            movement(3, SUBJECT, 0x0ee),
+            movement(4, OTHER_SUBJECT, 0x0ee),
+            movement(5, SUBJECT, 0x0b7),
+            movement(6, SUBJECT, 0x0ee),
+            movement(7, SUBJECT, 0x0da),
+        ] {
+            feed.apply(transaction(packet)).unwrap();
+        }
+        assert_eq!(ids(take(&deliveries).unwrap()), [4, 5, 7]);
+    }
+
+    #[test]
+    fn slow_reader_of_motion_alone_stays_connected_and_gets_the_latest() {
+        let (feed, _registration, deliveries) = granted_feed(&[SUBJECT]);
+        let heartbeats = 50_000;
+        for id in 2..2 + heartbeats {
+            feed.apply(transaction(movement(id, SUBJECT, 0x0ee)))
+                .unwrap();
+        }
+        assert!(!closed(&deliveries));
+        assert_eq!(ids(take(&deliveries).unwrap()), [heartbeats + 1]);
     }
 
     #[test]
@@ -795,6 +1177,18 @@ mod tests {
         };
         assert_eq!(bsatn::from_slice::<Cipher>(CIPHER).unwrap(), cipher);
         assert_eq!(bsatn::to_vec(&cipher).unwrap(), CIPHER);
+    }
+
+    #[test]
+    fn module_motion_permit_row_decodes() {
+        let permit = MotionPermit {
+            connection_id: CONNECTION,
+            character_guid: 8,
+        };
+        assert_eq!(
+            bsatn::from_slice::<MotionPermit>(MOTION_PERMIT).unwrap(),
+            permit
+        );
     }
 
     #[test]

@@ -121,15 +121,75 @@ pub(crate) fn entity_changed(
             remove_viewer_grants(ctx, entity.guid);
         }
     }
-    if old.is_some_and(|old| {
-        old.map_id == entity.map_id
-            && old.instance_id == entity.instance_id
-            && old.cell == entity.cell
-            && old.npc_flags == entity.npc_flags
-    }) {
+    match old {
+        Some(old)
+            if old.map_id == entity.map_id
+                && old.instance_id == entity.instance_id
+                && old.npc_flags == entity.npc_flags =>
+        {
+            if old.cell != entity.cell {
+                shift_subject(ctx, old.cell, entity);
+            }
+        }
+        _ => refresh_entity_with_freshness(ctx, entity.guid, old.is_none() && !entity.is_player()),
+    }
+}
+
+/// A cell move changes only the Grants of viewers in cells that enter or leave the entity's reach.
+fn shift_subject(ctx: &ReducerContext, from: i64, entity: &WorldEntity) {
+    if ctx.db.game_aoi_viewer().count() == 0 {
         return;
     }
-    refresh_entity_with_freshness(ctx, entity.guid, old.is_none() && !entity.is_player());
+    let reach = |cell| AoiViewer {
+        guid: entity.guid,
+        map_id: entity.map_id,
+        instance_id: entity.instance_id,
+        cell,
+        is_ghost: false,
+    };
+    let (before, after) = (reach(from), reach(entity.cell));
+    let (map_id, instance_id) = (entity.map_id, entity.instance_id);
+    let grants = ctx.db.game_aoi_grant();
+    let find = |viewer: u64| {
+        grants
+            .by_viewer()
+            .filter((viewer, WORLD_ENTITY, entity.guid))
+            .next()
+    };
+    for cell in cells(from).filter(|&cell| !after.contains(map_id, instance_id, cell)) {
+        for viewer in ctx
+            .db
+            .game_aoi_viewer()
+            .by_cell()
+            .filter((map_id, instance_id, cell))
+        {
+            if let Some(grant) = find(viewer.guid) {
+                grants.id().delete(grant.id);
+                crate::native::grant_removed(ctx, &grant);
+            }
+        }
+    }
+    let stealthed = crate::spell::is_stealthed(ctx, entity.guid);
+    crate::native::with_shared_creates(|| {
+        for cell in cells(entity.cell).filter(|&cell| !before.contains(map_id, instance_id, cell)) {
+            for viewer in ctx
+                .db
+                .game_aoi_viewer()
+                .by_cell()
+                .filter((map_id, instance_id, cell))
+            {
+                if viewer.sees_entity(entity, stealthed) && find(viewer.guid).is_none() {
+                    let grant = grants.insert(AoiGrant {
+                        id: 0,
+                        viewer_guid: viewer.guid,
+                        layer: WORLD_ENTITY,
+                        entity_guid: entity.guid,
+                    });
+                    crate::native::grant_added(ctx, &grant, false);
+                }
+            }
+        }
+    });
 }
 
 pub(crate) fn enter_viewer(ctx: &ReducerContext, guid: u64) -> Result<(), String> {

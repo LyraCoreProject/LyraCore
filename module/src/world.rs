@@ -943,13 +943,14 @@ pub(crate) fn plan_movement(
     }
 }
 
-/// `relay_body` is the MovementInfo the motion Relay sends to observers unchanged.
+/// `relay_body` is the MovementInfo the motion Relay sends to observers unchanged; None when the
+/// Native Host already relayed it.
 pub(crate) fn apply_movement_update(
     ctx: &ReducerContext,
     mut mover: WorldEntity,
     opcode: u16,
     movement: &ClientMovement,
-    relay_body: Vec<u8>,
+    relay_body: Option<Vec<u8>>,
 ) -> Result<(), String> {
     let info = movement.info();
     let (x, y, z) = (info.position.x, info.position.y, info.position.z);
@@ -1085,7 +1086,7 @@ pub(crate) fn apply_movement_update(
         score_and_log_movement(ctx, mover_guid, &delta);
     }
 
-    if plan.relay_motion {
+    if let Some(relay_body) = relay_body.filter(|_| plan.relay_motion) {
         crate::motion::queue_motion(
             ctx,
             mover_guid,

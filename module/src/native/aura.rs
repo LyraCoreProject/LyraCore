@@ -133,6 +133,9 @@ fn movement(
     let mut out = Vec::new();
     let touched = |rule: fn(&Aura) -> bool| changed.iter().any(|aura| rule(aura));
     let holds = |aura: &Aura| lyracore_shared::aura::holds_in_place(aura.eff_kind, aura.eff_p0);
+    if touched(holds) && own {
+        super::motion_permit::refresh_character(ctx, guid);
+    }
     if touched(holds) && (own || matches!(guid >> 48, 0xf130 | 0xf140)) {
         let corpse = own
             && ctx
@@ -211,6 +214,7 @@ pub(super) fn life_changed(
     if old.dead == new.dead && was_ghost == ghost {
         return;
     }
+    super::motion_permit::refresh_character(ctx, new.guid);
     let Some(owner) = ctx.db.game_native_player().character_guid().find(new.guid) else {
         return;
     };
