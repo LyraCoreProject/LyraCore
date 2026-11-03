@@ -358,6 +358,9 @@ pub fn idc_realm_party_command(
     let guid = actor.guid;
     let class = actor.class;
     store_character(ctx, actor.clone());
+    if opcode == 0x31d {
+        return super::instance_reset::dispatch(ctx, actor, &body);
+    }
     if super::meeting_stone::is_realm_request(opcode) {
         let mark = event_mark(ctx);
         super::meeting_stone::apply_realm(ctx, guid, opcode, &body)
@@ -461,7 +464,7 @@ pub fn realm_party_command_answered(
     }
     match result {
         Ok(()) => {
-            if super::meeting_stone::is_realm_request(call.opcode) {
+            if call.opcode == 0x31d || super::meeting_stone::is_realm_request(call.opcode) {
                 return Ok(());
             }
             let message = lyracore_protocol::world::decode(call.opcode, &call.body)
@@ -488,7 +491,9 @@ pub fn realm_party_command_answered(
                     ctx,
                     connection,
                     ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(SMSG_NOTIFICATION {
-                        notification: if super::meeting_stone::is_realm_request(call.opcode) {
+                        notification: if call.opcode == 0x31d {
+                            "Instance reset request unavailable. Please try again."
+                        } else if super::meeting_stone::is_realm_request(call.opcode) {
                             "Meeting Stone request unavailable. Please try again."
                         } else {
                             "Party request unavailable. Please try again."

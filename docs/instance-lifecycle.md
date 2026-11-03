@@ -75,4 +75,34 @@ zero on a dungeon map as an intermediate step.
 
 The `instance-shard` Native Host check covers party entry, separate solo runs, party chat across
 the portal, exits, binding reuse, reconnect, reaping and admission refusal on a disposable Realm.
-Native Instance reset requests remain unavailable.
+
+## Manual resets
+
+`CMSG_RESET_INSTANCES` resets eligible normal dungeons. A solo Character selects its bindings;
+a Group leader selects the Group's leases, including a run the leader has not entered. Other
+members cannot reset the Group. Raid maps are excluded. A Group member who is offline prevents
+the reset. These rules follow the pinned [request handler](https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/MiscHandler.cpp)
+and [Group reset behavior](https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Group/Group.cpp).
+
+On a split Realm, the source snapshots personal bindings into the ordered Group command stream.
+The Realm checks the current World Session, leadership and member presence, then sends its Group
+snapshot to the Shards that own the dungeon maps. The Instance Shard applies the versioned snapshot
+and refuses a reset if a newer projection has changed the caller's Group or leadership. It checks
+occupancy in the same transaction that sets `reset_requested`: players, admission reservations and
+Transfer fences all protect a run. The single-Shard path uses the same reset rules locally.
+
+Accepted leases immediately stop admitting Characters. The existing reaper removes their population
+and bindings on its next empty observation. A stale binding carried by a Character on another World
+is ignored at the next admission; that entry creates or joins a fresh run. Resetting one run does
+not reset other solo runs on the same map.
+
+Each selected lease returns `SMSG_INSTANCE_RESET` on success or `SMSG_INSTANCE_RESET_FAILED` for
+occupancy or an offline member. Delivery failures return an unavailable notification. Replies are
+restricted to the requesting Character and connection on the source World. Requests and replies
+expire after sixty seconds, and unavailable requests are not retried automatically. A Transfer or
+reconnect can therefore lose a notification without undoing an accepted reset.
+
+The new `game_world_instance_reset` and `game_instance_reset_result` outboxes start empty. Existing
+stored rows, IDC signatures and Host delivery layouts are unchanged. Publish the Realm and every
+World before reopening gameplay. Raid lockouts, scheduled raid resets and dungeon difficulty
+selection remain outside this path.

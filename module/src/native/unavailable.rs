@@ -113,7 +113,6 @@ pub fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<Vec<Pack
             unavailable("Quest sharing confirmations")
         }
         ClientOpcodeMessage::MSG_QUEST_PUSH_RESULT(_) => unavailable("Quest sharing responses"),
-        ClientOpcodeMessage::CMSG_RESET_INSTANCES => unavailable("Instance reset requests"),
         // Instance bindings end with their Instance, so no character holds a raid lockout.
         ClientOpcodeMessage::CMSG_REQUEST_RAID_INFO => {
             message(ServerOpcodeMessage::SMSG_RAID_INSTANCE_INFO(Box::default()))

@@ -132,6 +132,75 @@ def check(host):
     assert separate not in (0, run)
     assert host.rows(f'SELECT guid FROM game_world_entity WHERE map_id = 36 AND instance_id = {run} AND guid = {solo_guid}', instances) == []
 
+    leader.send(0x31d)
+    assert received(leader, 0x31f) == [struct.pack('<II', 0, 36)]
+    assert cross(leader, leader_guid, instances, continent, exit_trigger) == 0
+    leader.send(0x31d)
+    assert received(leader, 0x31f) == [struct.pack('<II', 0, 36)]
+    assert cross(member, member_guid, instances, continent, exit_trigger) == 0
+    member.send(0x31d)
+    packets = member.collect()
+    host.wait_until(lambda: not host.rows('SELECT id FROM game_realm_party_command', continent),
+                    'non-leader reset did not settle')
+    assert not any(opcode in (0x31e, 0x31f) for opcode, _ in packets + member.collect())
+    assert host.rows(f'SELECT reset_requested FROM game_instance WHERE instance_id = {run}', instances) == [[False]]
+
+    leader.send(0x78, struct.pack('<Q', member_guid))
+    leader.send(0x31d)
+    leader.collect()
+    host.wait_until(lambda: host.rows(f'SELECT leader_guid FROM game_group WHERE group_id = {group}') == [[member_guid]]
+                    and not host.rows('SELECT id FROM game_realm_party_command', continent),
+                    'leadership change and reset did not settle in order')
+    assert host.rows(f'SELECT reset_requested FROM game_instance WHERE instance_id = {run}', instances) == [[False]]
+    member.send(0x78, struct.pack('<Q', leader_guid))
+    member.collect()
+    host.wait_until(lambda: host.rows(f'SELECT leader_guid FROM game_group WHERE group_id = {group}') == [[leader_guid]],
+                    'Group leadership was not restored')
+
+    member.send(0x4b)
+    received(member, 0x4d)
+    host.wait_until(lambda: host.rows(f'SELECT online FROM game_party_character WHERE guid = {member_guid}') == [[False]],
+                    'offline Group member remained online')
+    leader.send(0x31d)
+    assert received(leader, 0x31f) == [struct.pack('<II', 1, 36)]
+    login(member, member_guid)
+    host.wait_until(lambda: host.rows(f'SELECT online FROM game_party_character WHERE guid = {member_guid}') == [[True]],
+                    'Group member did not reconnect')
+
+    member.send(0xb4, struct.pack('<I', entrance))
+    packets = []
+    host.wait_until(lambda: packets.extend(member.collect(auto_ack=False)) or any(op == 0x3e for op, _ in packets),
+                    'admission did not start a World Port')
+    assert host.rows(f'SELECT instance_id FROM game_instance_entry_lease WHERE guid = {member_guid}', instances) == [[run]]
+    assert not any(mask & 16 for [mask] in host.rows(f'SELECT type_mask FROM game_world_entity WHERE instance_id = {run}', instances))
+    leader.send(0x31d)
+    assert received(leader, 0x31f) == [struct.pack('<II', 0, 36)]
+    member.send(0xdc)
+    host.wait_until(lambda: member_guid in creates(member.collect()), 'reserved arrival did not finish')
+    assert cross(member, member_guid, instances, continent, exit_trigger) == 0
+
+    host.call('operator_remove_peer_shard', [host.identity()], database=instances)
+    leader.send(0x31d)
+    assert any(b'Instance reset request unavailable' in body for body in received(leader, 0x1cb))
+    assert host.rows(f'SELECT reset_requested FROM game_instance WHERE instance_id = {run}', instances) == [[False]]
+    host.call('operator_add_peer_shard', [host.identity(), 'realm'], database=instances)
+    host.sql(f'DELETE FROM game_instance_binding WHERE character_guid = {leader_guid}', continent)
+    leader.send(0x31d)
+    assert received(leader, 0x31e) == [struct.pack('<I', 36)]
+    previous = run
+    run = cross(leader, leader_guid, continent, instances, entrance)
+    assert run not in (0, previous, separate)
+    assert cross(member, member_guid, continent, instances, entrance) == run
+
+    solo.send(0x31d)
+    assert received(solo, 0x31f) == [struct.pack('<II', 0, 36)]
+    assert cross(solo, solo_guid, instances, continent, exit_trigger) == 0
+    solo.send(0x31d)
+    assert received(solo, 0x31e) == [struct.pack('<I', 36)]
+    previous = separate
+    separate = cross(solo, solo_guid, continent, instances, entrance)
+    assert separate not in (0, run, previous)
+
     assert cross(member, member_guid, instances, continent, exit_trigger) == 0
     assert host.rows(f'SELECT instance_id FROM game_instance_binding WHERE character_guid = {member_guid} AND map_id = 36', continent) == [[run]]
     assert cross(member, member_guid, continent, instances, entrance) == run

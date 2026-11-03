@@ -3,7 +3,7 @@ id = "instance_reset"
 system = "world"
 scope = "A group leader can reset eligible Instances."
 requests = ["0x031D", "0x0329"]
-replies = []
+replies = ["0x031E", "0x031F"]
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
@@ -18,12 +18,6 @@ symbol = "WorldSession::HandleResetInstancesOpcode"
 
 [real_client]
 status = "unverified"
-
-[[known_gaps]]
-description = "The Module returns an unavailable response for CMSG_RESET_INSTANCES."
-path = "module/src/native/unavailable.rs"
-symbol = "responses"
-evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
 
 [[known_gaps]]
 description = "Stock-client use of MSG_SET_DUNGEON_DIFFICULTY is unverified; vmangos marks it unhandled. Check whether the client sends it and what result to preserve."
