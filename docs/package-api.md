@@ -111,7 +111,9 @@ Package operations return no outcome.
 `package::create_character(ctx, package_name, name, race, class) -> Result<u64, String>`
 creates a Character with no Session and returns its guid. It applies the Refusals a client-created
 Character meets: `NAME_IN_USE` for a taken name, `INVALID_RACE_CLASS` for a pair the imported
-CharBaseInfo does not list, and the guid range Refusal. These Refusals write nothing.
+CharBaseInfo does not list, and the guid range Refusal. These Refusals write nothing. Synchronous
+Package creation requires a single-Shard Realm; a World Shard refuses it because creation must
+reserve a name on the Realm Shard first.
 
 The Character goes on the first Account that `package_name` owns with room for another Character.
 When every owned Account is full, Core creates a new Account without credentials, so no login can

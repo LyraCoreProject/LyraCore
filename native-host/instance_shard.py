@@ -22,6 +22,8 @@ def check(host):
         for owner in (None, *worlds):
             host.call('operator_set_map_owner', [map_id, host.identity(shard)], database=owner)
     host.call('operator_set_character_start_map', [1, 1, 0])
+    host.wait_until(lambda: len(host.rows('SELECT world FROM game_character_names_ready')) == 2,
+                    'World names did not arrive')
     entrance, exit_trigger = 5090632, 5090633
     for shard in worlds:
         for trigger, map_id, destination in ((entrance, 0, 36), (exit_trigger, 36, 0)):

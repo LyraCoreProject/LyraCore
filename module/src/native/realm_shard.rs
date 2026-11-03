@@ -128,6 +128,10 @@ pub fn selection_answered(
     let Err(error) = result else {
         return;
     };
+    // IDC retries Transport Loss; this callback carries the receiver's durable outcome.
+    if request.opcode == 0x36 {
+        super::character_names::refused(ctx, request.selection_id, request.database.0);
+    }
     super::realm_auction::finish_deletion(ctx, request.selection_id, request.database.0);
     if request.selection_id != 0 {
         if request.opcode == 0x37 || super::rollback::replies_in(&error).is_none() {
@@ -335,11 +339,17 @@ pub fn idc_selection_request(
                     .map(|character| character.guid)
                     .collect();
                 let mut changes: Vec<(u64, bool)> = before
-                    .into_iter()
+                    .iter()
+                    .copied()
                     .filter(|guid| !after.contains(guid))
                     .map(|guid| (guid, false))
                     .collect();
-                changes.extend(after.into_iter().map(|guid| (guid, true)));
+                changes.extend(
+                    after
+                        .into_iter()
+                        .filter(|guid| opcode != 0x36 || !before.contains(guid))
+                        .map(|guid| (guid, true)),
+                );
                 blob(&changes)
             },
             revision: directory::revision(ctx),
@@ -547,6 +557,12 @@ pub fn idc_selection_result(
 ) -> Result<(), String> {
     directory::require_world(ctx)?;
     directory::apply(ctx, account_id, &directory_changes, revision)?;
+    if opcode == 0x3a && body == [0x2e] {
+        super::character_names::created(ctx, selection_id, account_id, &directory_changes)?;
+    }
+    if opcode == 0x3a && body.len() == 1 && body[0] != 0x2e {
+        super::character_names::refused(ctx, selection_id, ctx.sender());
+    }
     super::realm_auction::finish_deletion(ctx, selection_id, ctx.sender());
     let connection_id = ConnectionId::from_u128(connection);
     if selection_id != 0 {
@@ -685,6 +701,10 @@ pub(super) fn route_selection(
         ClientOpcodeMessage::CMSG_CHAR_DELETE(request) => Some(request.guid.guid()),
         _ => None,
     };
+    let creating = match &message {
+        ClientOpcodeMessage::CMSG_CHAR_CREATE(request) => Some(request.name.clone()),
+        _ => None,
+    };
     let world = match message {
         ClientOpcodeMessage::CMSG_CHAR_ENUM => {
             let mut worlds: Vec<Identity> = ctx
@@ -726,20 +746,6 @@ pub(super) fn route_selection(
             return Ok(());
         }
         ClientOpcodeMessage::CMSG_CHAR_CREATE(request) => {
-            let count = ctx
-                .db
-                .game_character_directory()
-                .by_account()
-                .filter(account_id)
-                .count();
-            if count >= crate::auth::CHARACTERS_PER_ACCOUNT {
-                return Err(Rollback::reply(
-                    ServerOpcodeMessage::SMSG_CHAR_CREATE(codec::build_char_create_response(
-                        codec::CharCreateOutcome::ServerLimit,
-                    )),
-                    "Account is full",
-                ));
-            }
             directory::create_world(ctx, request.race.as_int(), request.class.as_int()).ok_or_else(
                 || {
                     Rollback::reply(
@@ -774,6 +780,18 @@ pub(super) fn route_selection(
     });
     if let Some(guid) = deleting {
         super::realm_auction::begin_deletion(ctx, guid, pending.id, world)?;
+    }
+    if let Some(name) = creating {
+        super::character_names::reserve(ctx, &name, account_id, world, pending.id).map_err(
+            |refusal| {
+                Rollback::reply(
+                    ServerOpcodeMessage::SMSG_CHAR_CREATE(codec::build_char_create_response(
+                        super::character::create_outcome(&refusal),
+                    )),
+                    refusal,
+                )
+            },
+        )?;
     }
     Ok(relay_selection(
         ctx,

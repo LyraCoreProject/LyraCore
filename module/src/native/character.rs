@@ -40,7 +40,7 @@ pub(super) fn create(
     ))
 }
 
-fn create_outcome(refusal: &CreateCharacterRefusal) -> codec::CharCreateOutcome {
+pub(super) fn create_outcome(refusal: &CreateCharacterRefusal) -> codec::CharCreateOutcome {
     match refusal {
         CreateCharacterRefusal::NameInUse => codec::CharCreateOutcome::NameInUse,
         CreateCharacterRefusal::AccountFull => codec::CharCreateOutcome::ServerLimit,

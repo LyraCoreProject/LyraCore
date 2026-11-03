@@ -24,6 +24,7 @@ import reload
 import realm_communication
 import instance_shard
 import instance_allocation
+import character_names
 from instance_reset import check_instance_resets
 import retention
 from spell_source import check_spell_source_behavior
@@ -3923,6 +3924,8 @@ def check_character_create(host):
     assert client.read() == (0x3a, bytes([0x2e]))
     client.send(0x36, character_body)
     assert client.read() == (0x3a, bytes([0x31]))
+    client.send(0x36, b'nAtIvE\0' + bytes([1, 1, 0, 0, 0, 0, 0, 0, 0]))
+    assert client.read() == (0x3a, bytes([0x31]))
     allocator = host.rows('SELECT high_water FROM game_guid_allocator WHERE id = 0')[0][0]
     old_size = host.rows('SELECT size FROM game_guid_range WHERE id = 0')[0][0]
     host.restore('game_guid_range', 'id = 0', 'size')
@@ -5141,6 +5144,8 @@ def check_realm_shard(host):
     # A one-field variant carries its field directly, under its camelCase name.
     host.call('operator_set_shard_role', [{'some': {'realm': host.identity(world)}}])
     host.call('operator_set_shard_role', [{'some': {'world': host.identity()}}], database=world)
+    host.wait_until(lambda: len(host.rows('SELECT world FROM game_character_names_ready')) == 1,
+                    'World names did not arrive')
     host.account('SPLIT')
     client = host.connect('SPLIT')
     opcode, body = client.read()
@@ -5208,6 +5213,8 @@ def check_continent_shards(host):
             host.call('operator_set_map_owner', [map_id, host.identity(shard)], database=world)
     for race, map_id in ((1, 0), (2, 1)):
         host.call('operator_set_character_start_map', [race, 1, map_id])
+    host.wait_until(lambda: len(host.rows('SELECT world FROM game_character_names_ready')) == 2,
+                    'World names did not arrive')
     account = host.account('CONTINENTS')
     host.sql(f'UPDATE game_account SET gm_level = 1 WHERE id = {account.id}')
     client = host.connect('CONTINENTS')
@@ -5222,6 +5229,8 @@ def check_continent_shards(host):
         rows = host.rows(f'SELECT guid, account_id, world FROM game_character_directory WHERE account_id = {account.id}')
         expected = [[guid, account.id, owners[0 if shard == eastern else 1]] for guid, shard in characters]
         assert sorted(rows) == sorted(expected), (rows, expected)
+        for guid, _ in characters:
+            assert len(host.rows(f'SELECT name FROM game_character_name WHERE guid = {guid}')) == 1
 
     def enable_playtest(shard):
         for command in ('.god on', '.speed 2'):
@@ -5471,6 +5480,7 @@ ALONE = {
     'realm-communication': (realm_communication.check, {'seeded': True}),
     'instance-shard': (instance_shard.check, {'seeded': True}),
     'instance-allocation': (instance_allocation.check, {'seeded': True}),
+    'character-names': (character_names.check, {'seeded': True}),
 }
 
 

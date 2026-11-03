@@ -17,7 +17,7 @@ entry in both files.
 
 **B** [Base Snapshot](#packages) · [Baseline](#client-content) · [Behavior](#conformance) · [Bot Capacity Lease](#bots) · [Bot Controller](#bots) · [Bounded Map Slice](#realm-topology) · [Build Identity](#packages)
 
-**C** [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character directory](#realm-topology) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Coalescible Motion](#requests-and-delivery) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
+**C** [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character directory](#realm-topology) · [Character Name Reservation](#realm-topology) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Coalescible Motion](#requests-and-delivery) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
 
 **D** [Data-dependent field](#conformance) · [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
@@ -90,6 +90,11 @@ A personal binding also names its host, because Instance ids are local to each S
 The Realm Shard's record of each Character guid, Account id and owning World Shard. World Shards
 send changes over IDC on creation, deletion and Transfer. Login and deletion use this record;
 Character lists ask each World Shard that holds Characters of the Account.
+
+**Character Name Reservation**:
+The Realm Shard's durable claim on a case-insensitive Character name. It begins before creation
+reaches a World Shard, survives a missing reply or closed World Session, and binds to the created
+guid. A confirmed creation failure or Character deletion releases it.
 
 **Peer Shard**:
 Another Shard of the same Realm, listed in `game_peer_shard`. Only a Peer Shard may call this
