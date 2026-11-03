@@ -108,3 +108,7 @@ an immediate login from entering the old World Shard after the Realm has removed
 Pending Auction payments also refuse Transfer and cross-map teleport until the outcome and any
 refund settle. Active Realm Listings and bids stay on the Realm; their Auction Mail follows the
 Character directory. See [Auctions across World Shards](architecture.md#auctions-across-world-shards).
+
+Meeting Stone Queue state stays on the Realm during Transfer. A solo Seeker keeps its place while
+its World Session moves. Matching uses current Realm presence and resumes when presence returns.
+See [Meeting Stones across World Shards](architecture.md#meeting-stones-across-world-shards).

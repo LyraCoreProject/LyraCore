@@ -447,11 +447,13 @@ fn read_bucket(
     for seeker in rows {
         if seeker.group_id != 0 {
             group_ids.insert(seeker.group_id);
-        } else if seeker_is_online(ctx, seeker.character_guid)
-            && crate::group::group_of(ctx, seeker.character_guid).is_none()
-        {
+        } else if crate::group::group_of(ctx, seeker.character_guid).is_some() {
+            seekers.character_guid().delete(seeker.character_guid);
+        } else if seeker_is_online(ctx, seeker.character_guid) {
             solos.push(seeker);
-        } else {
+        } else if crate::peer::world_shard(ctx).is_none()
+            || !crate::native::realm_party::has_world_session(ctx, seeker.character_guid)
+        {
             seekers.character_guid().delete(seeker.character_guid);
         }
     }
@@ -481,6 +483,9 @@ fn read_bucket(
 }
 
 fn seeker_is_online(ctx: &ReducerContext, character_guid: u64) -> bool {
+    if crate::peer::world_shard(ctx).is_some() {
+        return crate::native::realm_party::online(ctx, character_guid);
+    }
     if crate::native::is_player(ctx, character_guid) {
         return true;
     }
@@ -603,7 +608,18 @@ fn stone_add(
         .game_meeting_stone_seeker()
         .character_guid()
         .delete(joiner.character_guid);
-    crate::group::apply_action_for(ctx, joiner.character_guid, GroupAction::StoneAdd(plan))?;
+    let plane = if crate::peer::world_shard(ctx).is_some() {
+        crate::group::Plane::RealmCore
+    } else {
+        crate::group::Plane::Shard
+    };
+    crate::group::apply_action(
+        ctx,
+        plane,
+        joiner.character_guid,
+        GroupAction::StoneAdd(plan),
+    )
+    .map_err(|error| error.to_string())?;
     crate::native::party_roster(ctx, joiner.character_guid, true);
     crate::group::group_of(ctx, joiner.character_guid)
         .map(|member| member.group_id)
@@ -728,9 +744,10 @@ pub(crate) fn party_disbanded(ctx: &ReducerContext, group_id: u64, former_member
 
 #[reducer]
 pub fn remind_queued_parties(ctx: &ReducerContext, _schedule: MeetingStoneReminderSchedule) {
-    if !crate::time::scheduler_authorized(ctx) {
+    if !crate::time::scheduler_authorized(ctx) || crate::peer::realm_shard(ctx).is_some() {
         return;
     }
+    let mark = crate::native::realm_party::event_mark(ctx);
     let Some(next_reminder_at) =
         crate::time::now(ctx).checked_add(TimeDuration::from_micros(REMINDER_INTERVAL_MICROS))
     else {
@@ -742,6 +759,9 @@ pub fn remind_queued_parties(ctx: &ReducerContext, _schedule: MeetingStoneRemind
         .iter()
         .filter(|party| party.next_reminder_at <= crate::time::now(ctx))
         .collect();
+    if due.is_empty() {
+        return;
+    }
     for party in due {
         let members = member_guids(ctx, party.group_id);
         push_to_each(ctx, &members, event_kind::IN_PROGRESS, 0);
@@ -749,6 +769,9 @@ pub fn remind_queued_parties(ctx: &ReducerContext, _schedule: MeetingStoneRemind
             next_reminder_at,
             ..party
         });
+    }
+    if crate::peer::world_shard(ctx).is_some() {
+        crate::native::realm_party::publish(ctx, BTreeSet::new(), &[], mark);
     }
 }
 
@@ -765,6 +788,24 @@ pub(crate) fn rearm_reminder_schedule(ctx: &ReducerContext) {
             TimeDuration::from_micros(REMINDER_TICK_MICROS),
         ),
     });
+}
+
+pub(crate) fn resume_seeker(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
+    if let Some(seeker) = ctx
+        .db
+        .game_meeting_stone_seeker()
+        .character_guid()
+        .find(guid)
+    {
+        match_bucket(
+            ctx,
+            Bucket {
+                area_id: seeker.area_id,
+                team: seeker.team,
+            },
+        )?;
+    }
+    Ok(())
 }
 
 pub(crate) fn remove_solo_seeker(ctx: &ReducerContext, character_guid: u64) {

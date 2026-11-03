@@ -920,7 +920,8 @@ _Avoid_: LFG queue, matchmaking queue
 
 **Seeker**:
 One Character in the Meeting Stone Queue, alone or as a member of a queued Party. It carries its
-class and team from Character facts. A solo Seeker lasts as long as its World Session.
+class and team from Character facts. A solo Seeker lasts as long as its World Session, including
+Transfer between World Shards; logout or a replacement World Session removes it.
 _Avoid_: queued player, LFG player
 
 **Open Role**:
