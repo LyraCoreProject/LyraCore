@@ -369,6 +369,16 @@ Every mail a bid, buyout, expiry, Cancellation or refused listing sends is an Au
 `game_auction_notice` is the matching live packet: one row per outbid, won, sold, expired, new-bid
 or removed notice, inserted in the same transaction as its mail and reaped by the event GC.
 
+
+In a sharded Realm, `game_auction` and its authoritative receipts and expiries live on the Realm.
+World receipts retain accepted sell identities for repeated packets; they do not own a Listing.
+`game_auction_transaction` is private World state keyed by operation id and indexed by Character.
+It retains the request, reserved copper and eventual outcome until settlement completes.
+`game_realm_auction_request` and `game_world_auction_answer` are private IDC outboxes;
+`game_auction_retry` schedules refused answer deliveries and refunds that still need purse space.
+These four tables are additive. Existing row layouts remain unchanged. The migration and failure
+contracts are in [Auctions across World Shards](architecture.md#auctions-across-world-shards).
+
 ### Guilds (`module/src/guild/`)
 
 `game_guild` is one Guild: its name, a unique lower-case `name_key`, the leader, the team fixed at

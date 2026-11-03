@@ -15,6 +15,7 @@ mod creature;
 mod death;
 #[cfg(feature = "conformance_test_fixture")]
 mod debug;
+pub(crate) mod realm_auction;
 #[cfg(feature = "conformance_test_fixture")]
 pub(crate) use debug::record_birth as record_conformance_birth;
 pub(crate) mod directory;

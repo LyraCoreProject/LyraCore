@@ -611,7 +611,7 @@ pub(crate) trait ShardLedger {
 
 pub(crate) trait BeginSink: ShardLedger {
     fn has_active_taxi_flight(&self, guid: u64) -> bool;
-    fn has_pending_guild_transaction(&self, guid: u64) -> bool;
+    fn has_pending_transaction(&self, guid: u64) -> bool;
     fn is_in_transit(&self, guid: u64) -> bool;
     fn freeze_live_entity(&mut self, guid: u64);
     fn export_rows(&self, guid: u64) -> Vec<TableRows>;
@@ -711,8 +711,9 @@ impl ShardLedger for CtxShard<'_> {
 }
 
 impl BeginSink for CtxShard<'_> {
-    fn has_pending_guild_transaction(&self, guid: u64) -> bool {
+    fn has_pending_transaction(&self, guid: u64) -> bool {
         crate::native::realm_petition::pending(self.ctx, guid)
+            || crate::native::realm_auction::pending(self.ctx, guid)
     }
     fn has_active_taxi_flight(&self, guid: u64) -> bool {
         crate::taxi::is_in_flight(self.ctx, guid)
@@ -867,8 +868,8 @@ pub(crate) fn apply_begin<S: BeginSink>(
     dest: Destination,
     cross_database: bool,
 ) -> Result<(), String> {
-    if sink.has_pending_guild_transaction(character_guid) {
-        return Err("guild transaction is settling".into());
+    if sink.has_pending_transaction(character_guid) {
+        return Err("Character transaction is settling".into());
     }
     if sink.has_active_taxi_flight(character_guid) {
         return Err("PLAYER_IN_TAXI_FLIGHT".to_string());

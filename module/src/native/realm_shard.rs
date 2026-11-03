@@ -740,6 +740,14 @@ pub(super) fn route_selection(
             )?
         }
         ClientOpcodeMessage::CMSG_CHAR_DELETE(request) => {
+            if crate::auction::character_has_auction_value(ctx, request.guid.guid()) {
+                return Err(Rollback::reply(
+                    ServerOpcodeMessage::SMSG_CHAR_DELETE(codec::build_char_delete_response(
+                        codec::CharDeleteOutcome::Failed,
+                    )),
+                    "Character has Auction value",
+                ));
+            }
             directory::character_world(ctx, account_id, request.guid.guid()).ok_or_else(|| {
                 Rollback::reply(
                     ServerOpcodeMessage::SMSG_CHAR_DELETE(codec::build_char_delete_response(

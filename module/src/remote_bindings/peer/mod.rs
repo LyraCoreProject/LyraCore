@@ -1844,6 +1844,204 @@ impl spacetimedb::rt::RemoteReducer for idc_peer_hello {
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
+pub struct IdcRealmAuctionRequestArgs {
+    pub operation: ::core::primitive::u64,
+    pub guid: ::core::primitive::u64,
+    pub connection: ::core::primitive::u128,
+    pub request: ::std::vec::Vec<::core::primitive::u8>,
+}
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_realm_auction_request_operation_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as operation), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(operation),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_realm_auction_request_operation_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_realm_auction_request_operation_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_realm_auction_request_operation {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(operation),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as operation), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u64 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_realm_auction_request_operation_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_realm_auction_request_operation!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_realm_auction_request_operation;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_realm_auction_request_guid_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as guid), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(guid),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_realm_auction_request_guid_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_realm_auction_request_guid_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_realm_auction_request_guid {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(guid),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as guid), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u64 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_realm_auction_request_guid_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_realm_auction_request_guid!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_realm_auction_request_guid;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_realm_auction_request_connection_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as connection), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(connection),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_realm_auction_request_connection_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_realm_auction_request_connection_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_realm_auction_request_connection {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(connection),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as connection), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u128 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_realm_auction_request_connection_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_realm_auction_request_connection!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_realm_auction_request_connection;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_realm_auction_request_request_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as request), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(request),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_realm_auction_request_request_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_realm_auction_request_request_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_realm_auction_request_request {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(request),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as request), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::std::vec::Vec::<::core::primitive::u8> = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_realm_auction_request_request_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_realm_auction_request_request!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_realm_auction_request_request;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_realm_auction_request {
+    ($module:path, { $($columns:tt)* }) => {{
+        #[allow(unused_imports)]
+        use $module as __outbox_receiver;
+        &[__outbox_receiver::__spacetimedb_typecheck_outbox_idc_realm_auction_request_operation!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_realm_auction_request_guid!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_realm_auction_request_connection!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_realm_auction_request_request!(__outbox_receiver; $($columns)*)]
+    }};
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_realm_auction_request;
+
+#[allow(non_camel_case_types)]
+pub struct idc_realm_auction_request;
+
+impl spacetimedb::rt::RemoteReducer for idc_realm_auction_request {
+    const NAME: &'static str = "idc_realm_auction_request";
+    const SIGNATURE_HASH: &'static str =
+        "6ebfe2496db9db6d8384afabf6e1fa9e1c0b6dfa398463513385674afb0f4ddc";
+    type Args = IdcRealmAuctionRequestArgs;
+}
+
+#[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
+#[sats(crate = __lib)]
 pub struct IdcRealmCommunicationArgs {
     pub request: ::std::vec::Vec<::core::primitive::u8>,
 }
@@ -3321,6 +3519,204 @@ impl spacetimedb::rt::RemoteReducer for idc_selection_result {
     const SIGNATURE_HASH: &'static str =
         "365f31637dc50d188e0f46fa6cf6c2b9a0b91c265bbdb26365ce436c48442cf1";
     type Args = IdcSelectionResultArgs;
+}
+
+#[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
+#[sats(crate = __lib)]
+pub struct IdcWorldAuctionAnswerArgs {
+    pub operation: ::core::primitive::u64,
+    pub guid: ::core::primitive::u64,
+    pub connection: ::core::primitive::u128,
+    pub answer: ::std::vec::Vec<::core::primitive::u8>,
+}
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_world_auction_answer_operation_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as operation), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(operation),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_world_auction_answer_operation_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_world_auction_answer_operation_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_world_auction_answer_operation {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(operation),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as operation), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u64 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_world_auction_answer_operation_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_world_auction_answer_operation!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_world_auction_answer_operation;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_world_auction_answer_guid_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as guid), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(guid),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_world_auction_answer_guid_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_world_auction_answer_guid_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_world_auction_answer_guid {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(guid),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as guid), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u64 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_world_auction_answer_guid_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_world_auction_answer_guid!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_world_auction_answer_guid;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_world_auction_answer_connection_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as connection), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(connection),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_world_auction_answer_connection_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_world_auction_answer_connection_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_world_auction_answer_connection {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(connection),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as connection), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u128 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_world_auction_answer_connection_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_world_auction_answer_connection!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_world_auction_answer_connection;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_world_auction_answer_answer_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as answer), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(answer),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_world_auction_answer_answer_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_world_auction_answer_answer_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_world_auction_answer_answer {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(answer),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as answer), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::std::vec::Vec::<::core::primitive::u8> = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_world_auction_answer_answer_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_world_auction_answer_answer!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_world_auction_answer_answer;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_world_auction_answer {
+    ($module:path, { $($columns:tt)* }) => {{
+        #[allow(unused_imports)]
+        use $module as __outbox_receiver;
+        &[__outbox_receiver::__spacetimedb_typecheck_outbox_idc_world_auction_answer_operation!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_world_auction_answer_guid!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_world_auction_answer_connection!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_world_auction_answer_answer!(__outbox_receiver; $($columns)*)]
+    }};
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_world_auction_answer;
+
+#[allow(non_camel_case_types)]
+pub struct idc_world_auction_answer;
+
+impl spacetimedb::rt::RemoteReducer for idc_world_auction_answer {
+    const NAME: &'static str = "idc_world_auction_answer";
+    const SIGNATURE_HASH: &'static str =
+        "9bbfb44759dbd9fe07e39b082ca2fe088c1ab6c24106b544d3fba427ebd5e9a4";
+    type Args = IdcWorldAuctionAnswerArgs;
 }
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]

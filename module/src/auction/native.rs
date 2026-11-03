@@ -1,6 +1,6 @@
 use super::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum BidRefusal {
     Auction(AuctionRefusal),
     HigherBid {
@@ -97,26 +97,7 @@ pub(crate) fn bid(
     let mut market = CtxBidMarket { ctx };
     let auction = market.auction(auction_id);
     let decision = decide_bid(auction, request, market.now_micros());
-    let price = match decision {
-        BidDecision::Accepted(accepted) => accepted.price,
-        BidDecision::ItemNotFound => return Err(AuctionRefusal::ItemNotFound.into()),
-        BidDecision::HigherBid {
-            bidder_guid,
-            current_bid,
-            minimum_increment,
-        } => {
-            return Err(BidRefusal::HigherBid {
-                bidder_guid,
-                current_bid,
-                minimum_increment,
-            })
-        }
-        BidDecision::BidIncrement => return Err(BidRefusal::Increment),
-        BidDecision::BidOwn => return Err(BidRefusal::Own),
-        BidDecision::Database | BidDecision::Cancelled { .. } => {
-            return Err(AuctionRefusal::Database.into())
-        }
-    };
+    let price = accepted_price(decision)?;
     bidder.money = bidder
         .money
         .checked_sub(price)
@@ -169,4 +150,28 @@ pub(crate) fn cancel(
     seller.money -= cut;
     seller.update(ctx);
     market.apply_decision(request, Some(auction), decision)
+}
+
+pub(super) fn accepted_price(decision: BidDecision) -> Result<u32, BidRefusal> {
+    let price = match decision {
+        BidDecision::Accepted(accepted) => accepted.price,
+        BidDecision::ItemNotFound => return Err(AuctionRefusal::ItemNotFound.into()),
+        BidDecision::HigherBid {
+            bidder_guid,
+            current_bid,
+            minimum_increment,
+        } => {
+            return Err(BidRefusal::HigherBid {
+                bidder_guid,
+                current_bid,
+                minimum_increment,
+            })
+        }
+        BidDecision::BidIncrement => return Err(BidRefusal::Increment),
+        BidDecision::BidOwn => return Err(BidRefusal::Own),
+        BidDecision::Database | BidDecision::Cancelled { .. } => {
+            return Err(AuctionRefusal::Database.into())
+        }
+    };
+    Ok(price)
 }

@@ -308,7 +308,7 @@ impl ShardLedger for FakeDb {
 }
 
 impl BeginSink for FakeDb {
-    fn has_pending_guild_transaction(&self, guid: u64) -> bool {
+    fn has_pending_transaction(&self, guid: u64) -> bool {
         self.guild_transactions.borrow().contains(&guid)
     }
     fn has_active_taxi_flight(&self, guid: u64) -> bool {
@@ -348,7 +348,7 @@ fn unsettled_guild_payment_refuses_transfer_without_freezing_or_exporting() {
     src.guild_transactions.borrow_mut().insert(GUID);
     assert_eq!(
         apply_begin(&mut src, XFER, GUID, DEST, true).unwrap_err(),
-        "guild transaction is settling"
+        "Character transaction is settling"
     );
     assert!(src.out_rows.borrow().is_empty());
     assert_eq!(src.froze.get(), 0);

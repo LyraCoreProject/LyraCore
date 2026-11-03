@@ -267,8 +267,9 @@ state changes send name-cache fields through AOI, and care and progression field
 while its Grant holds. Grant replay restores the same recipient-specific fields.
 
 **Auctions.** The [auction handler](../module/src/native/auction.rs) checks the actual auctioneer
-and Character before browsing or changing a listing. Listing, bidding and cancellation commit purse
-changes, items, Auction Mail and recipient notices in one transaction. A listing receipt supports a
+and Character before browsing or changing a Listing. On a single Shard, Listing, bidding and
+Cancellation commit purse changes, items, Auction Mail and recipient notices in one transaction.
+Across World Shards, the Realm owns Listings and decisions; World payments settle as described below. A listing receipt supports a
 repeated sell request and keeps the snapshot for expiry. Buyouts require the full offer to be
 affordable but debit only the accepted price. Owner and bidder pages use their Character indexes.
 Browse filters and usable-item checks run in the Module. Notices go only to their named recipient,
@@ -435,7 +436,7 @@ the query.
 No movement updates are sent to the Realm Shard for this feature.
 
 Mailboxes stay with their Character on its World Shard; letters cross Shards through the Realm as
-described below. Auction listings remain local to their World Shard.
+described below. The Realm owns Auction Listings and serializes bid decisions across World Shards.
 Guild membership and communication use the Realm authority described below. Friends and ignores use the Character profiles and presence described below. A Transfer carries the existing Character-owned manifest, not
 Shard-owned social or economic state. Casts in progress are cancelled; melee, threat, AOI Grants,
 Transport attachment and other omitted transient state do not survive. World departure also applies
@@ -604,3 +605,51 @@ this revision is deployed. This change does not supply an automatic Group migrat
 
 Dungeon admission uses this Realm-owned membership and one fixed Instance Shard. See
 [Instance lifecycle](instance-lifecycle.md#dedicated-instance-shard) for admission, return and reaping.
+
+
+### Auctions across World Shards
+
+`native::realm_auction` sends admitted requests to the Realm. Worlds check the resident Character,
+auctioneer, distance and item or copper before committing a durable request. The Realm owns
+Listings, standing bids, receipts and expiry. Alliance, Horde and neutral remain separate Auction
+Markets. Browse, owner and bidder pages read that authority; usable-item filtering uses the World’s
+admitted level, class and learned proficiencies. The Realm needs the same item catalogue as the
+Worlds. No Listing projection can become a second bid authority.
+
+A World removes the listed item and debits the deposit in the transaction that queues the request.
+A bid reserves the full offer. Realm acceptance keeps only the accepted price and refunds any
+buyout excess. A refused Listing returns its item through Auction Mail and refunds its deposit.
+A refused bid refunds its whole offer. A transport result that confirms remote rollback is a
+Refusal; an outstanding transport call is not permission to refund or repeat the operation.
+Accepted Listing receipts also remain on their source World to recognize repeated sell packets.
+The Realm checks that the original Listing is still active before answering a repeat.
+
+Cancellation first asks the Realm for the Auction Cut. The World debits that quote and sends the
+Cancellation. The Realm checks the current cut again before committing. If a new bid changed the
+cut, the Cancellation refuses and refunds the quoted amount; the seller can retry. An unaffordable
+quote produces no answer, as on a single Shard. Logout before the quote is paid leaves the Listing
+active; a payment already reserved can finish after logout.
+
+`game_auction_transaction` retains each World payment until the outcome and refund settle.
+Refunds credit a live purse or its stored Character. If it fills meanwhile, remaining copper waits
+for space without saturation loss. Transfer, cross-map teleport and Character deletion refuse while
+that transaction remains. Ordinary movement and logout continue. A result is applied once and only
+the originating connection receives its command reply. Realm-to-World results retry after a
+Refusal. Auction Notices use the existing bounded Realm delivery path; Auction Mail remains durable
+and follows its recipient through Transfer. The Realm refuses deletion of a seller or standing
+bidder while it owns Auction value.
+
+With gameplay closed, publish every Shard and backfill Character profiles before migrating existing
+Listings. Capture each World’s `game_auction`, `game_auction_operation_receipt` and referenced
+`game_item_text` rows. Call `operator_route_auctions` on each World. The Realm imports each Listing
+with a new local id, preserving the operation id, seller, bidder, bids, deposit, rates, item state
+and dates. Item Text gets a fresh local id. Missing receipts or text and conflicting operation ids
+refuse import. Resolve those conflicts against the capture before retrying.
+
+World expiry pauses while Listings await migration; World auction requests refuse while any local
+Listing remains. Only a successful result removes the source Listing, expiry and receipt and releases
+its Item Text reference. Wait for transactions and result retries to drain, require source Listing
+tables to be empty, and compare the Realm rows by operation id with the capture. An overdue Listing
+can settle on the Realm during this wait, so include its resulting Auction Mail in the comparison.
+Repeated migration calls skip owners with work already pending. The reducer’s active-session checks
+do not replace closing listeners on every Shard before this procedure.
