@@ -71,6 +71,13 @@ macro_rules! character_owned {
             );
         }
     };
+    (transfer, fn $name:ident($ctx:ident, $guid:ident, $io:ident) $body:block) => {
+        pub(crate) fn $name(
+            $ctx: &spacetimedb::ReducerContext,
+            $guid: u64,
+            $io: &mut $crate::transfer::RowIo<'_>,
+        ) $body
+    };
     (not_transported, fn $name:ident()) => {
         pub(crate) fn $name(
             _ctx: &spacetimedb::ReducerContext,

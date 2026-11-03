@@ -78,8 +78,10 @@ Realm-owned guild membership remains projected on the World Shards across Transf
 Character deletion changes it through the Realm directory; a Transfer cascade does not remove it.
 Guild petitions and signatures remain on the Realm, while charter items travel in the inventory
 manifest. A pending guild transaction refuses Transfer before freezing or exporting the Character;
-its source must settle the Realm result and any refund first. Mail and auctions across World Shards
-remain unsupported. Friends and ignores travel with their owning Character; Transfer cleanup preserves other Characters' contacts that refer to the
+its source must settle the Realm result and any refund first. Mail moves with its recipient, and
+its timers resume after the Transfer settles. Item Text travels with its references and receives
+new local ids; a missing text record refuses import. Incoming letters wait until the directory
+names a settled World owner. Auction listings across World Shards remain unsupported. Friends and ignores travel with their owning Character; Transfer cleanup preserves other Characters' contacts that refer to the
 mover on both source and destination. Remote names, presence and deletion tombstones use Realm
 projections. See
 [contacts across World Shards](architecture.md#contacts-across-world-shards). Native Groups use

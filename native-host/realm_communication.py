@@ -3,6 +3,7 @@ import struct
 from headless import creates
 import realm_guild
 import realm_petition
+import realm_mail
 
 
 def check(host):
@@ -98,6 +99,7 @@ def check(host):
 
     realm_guild.check(host, worlds, character, received)
     realm_petition.check(host, worlds, character, received)
+    realm_mail.check(host, worlds, character, received)
     check_contacts(host, worlds, character, enter, received)
 
     who(['Eastern', 'Western'])

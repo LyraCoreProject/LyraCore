@@ -221,6 +221,7 @@ pub(crate) fn export_rows_via<C>(
 
 pub(crate) fn export_rows(ctx: &ReducerContext, character_guid: u64) -> Vec<TableRows> {
     let mut payload = export_rows_via(ctx, character_guid, crate::CHARACTER_OWNED_TRANSFERS);
+    super::mail_text::export(ctx, &mut payload);
     legacy_item_rows::mark_current(&mut payload);
     payload
 }
@@ -275,7 +276,8 @@ pub(crate) fn import_rows(
     character_guid: u64,
     payload: &[TableRows],
 ) -> Result<(), String> {
-    let payload = legacy_item_rows::prepare(payload)?;
+    let mut payload = legacy_item_rows::prepare(payload)?;
+    super::mail_text::import(ctx, &mut payload)?;
     if let Some(entry) = payload
         .iter()
         .find(|entry| entry.table == "game_party_command_issuer")
