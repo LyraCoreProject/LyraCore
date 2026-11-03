@@ -247,10 +247,10 @@ its participants, and scheduled Duel transitions emit packets in the same transa
 clears both participants' arbiter and team fields, then removes the flag. A winner announcement
 also reaches Characters in nearby AOI cells on the same map and Instance.
 
-**Meeting Stones.** The [meeting-stone handler](../module/src/native/meeting_stone.rs) reads race
-and class from the Character rows and applies admission and queue changes in one transaction.
-Seekers use their World Session for presence, and logout removes solo Seekers. Stone Adds send
-party rosters directly.
+**Meeting Stones.** The [meeting-stone handler](../module/src/native/meeting_stone.rs) checks the
+GameObject, partition, distance, taxi state and level on the Character’s World. On a single Shard,
+admission and queue changes share one transaction. Across World Shards, the Realm owns the Queue
+and Stone Adds as described below. Logout removes solo Seekers.
 
 **Mail.** The [mail handler](../module/src/native/mail.rs) checks the mailbox, resolves the
 recipient and applies the send, take, return or Letter Copy in one transaction, without Escrow.
@@ -598,14 +598,39 @@ remote Member Stats for their local party frames. Group chat selects the authori
 audience and uses the same connection-bound delivery and ignore Gates as whispers. Group events
 are delivered only to their original connection; login restores the roster and pending invite.
 
-Shard-local Group mutations are refused when a World Shard has a Realm Shard. Meeting Stone
-matchmaking and Sessionless Group actions are not supported in this topology; single-Shard
-behavior is unchanged. An existing multi-Shard Realm requires migration of its Group state before
+Shard-local Group mutations are refused when a World Shard has a Realm Shard. Sessionless Group
+actions are not supported in this topology; single-Shard behavior is unchanged. An existing multi-Shard Realm requires migration of its Group state before
 this revision is deployed. This change does not supply an automatic Group migration.
 
 Dungeon admission uses this Realm-owned membership and one fixed Instance Shard. See
 [Instance lifecycle](instance-lifecycle.md#dedicated-instance-shard) for admission, return and reaping.
 
+
+### Meeting Stones across World Shards
+
+The World admits a Meeting Stone use against its resident Character and GameObject. It sends the
+admitted dungeon area through the same ordered command stream as Group requests. The internal JOIN
+body contains that area as a four-byte integer; the client still sends a GameObject guid. The Realm
+checks the source World and current World Session, reads authoritative Group membership and class
+facts, and runs the existing Queue and Stone Add rules. Team and dungeon area separate the queues.
+LEAVE and INFO use the same stream, so they cannot overtake that connection’s admitted JOIN.
+
+The Realm owns `game_meeting_stone_seeker` and `game_meeting_stone_party`. Stone Adds use the Realm
+Group join core. Group publication includes every roster affected by the resulting events, including
+Parties formed or filled by another Character’s request. Queue status, completion, added-member
+notices and five-minute reminders use Group delivery, including its retry, connection and expiry
+Gates. INFO reads current Realm queue state. No World maintains a second Queue authority.
+
+A solo Seeker remains queued through Transfer in the same World Session. A Seeker whose current
+World presence is unavailable is skipped; fresh presence resumes matching after arrival.
+Returning to Character selection, disconnecting or replacing the World Session removes a solo
+Seeker. Queued Party membership follows the existing Group rules, including offline members,
+leader-only withdrawal, kicks and disband. Late presence cannot recreate a removed Seeker.
+
+Stored layouts, IDC signatures and client packet layouts are unchanged. Publish the Realm and every
+World before reopening gameplay. Queues from a single-Shard topology are transient: drain them
+before splitting that topology; World-local queue rows are not imported. The Group migration
+requirements above still apply.
 
 ### Auctions across World Shards
 

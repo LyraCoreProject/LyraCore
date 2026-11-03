@@ -137,7 +137,7 @@ pub(super) fn current(ctx: &ReducerContext, character: &PartyCharacter) -> Optio
     .then_some(entry.world)
 }
 
-pub(super) fn online(ctx: &ReducerContext, guid: u64) -> bool {
+pub(crate) fn online(ctx: &ReducerContext, guid: u64) -> bool {
     ctx.db
         .game_party_character()
         .guid()
@@ -217,7 +217,7 @@ fn store_character(ctx: &ReducerContext, character: PartyCharacter) {
     table.insert(character);
 }
 
-fn event_mark(ctx: &ReducerContext) -> u64 {
+pub(crate) fn event_mark(ctx: &ReducerContext) -> u64 {
     ctx.db
         .game_group_event()
         .iter()
@@ -275,6 +275,7 @@ pub fn idc_party_presence(ctx: &ReducerContext, character: Vec<u8>) -> Result<()
         }
     }
     if presence_changed && online(ctx, guid) {
+        crate::meeting_stone::resume_seeker(ctx, guid)?;
         if let Some(invite) = ctx.db.game_group_invite().by_target().filter(guid).next() {
             group::push_event(
                 ctx,
@@ -307,6 +308,24 @@ pub(super) fn submit(
     guid: u64,
     message: &ClientOpcodeMessage,
 ) -> Result<bool, Rollback> {
+    if realm_shard(ctx).is_none() {
+        return Ok(false);
+    }
+    let mut frame = Vec::new();
+    message
+        .write_unencrypted_client(&mut frame)
+        .map_err(|error| error.to_string())?;
+    let opcode = u32::from_le_bytes(frame[2..6].try_into().expect("encoded client header"));
+    submit_admitted(ctx, connection, guid, opcode, frame[6..].to_vec())
+}
+
+pub(super) fn submit_admitted(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    opcode: u32,
+    body: Vec<u8>,
+) -> Result<bool, Rollback> {
     let Some(realm) = realm_shard(ctx) else {
         return Ok(false);
     };
@@ -314,17 +333,12 @@ pub(super) fn submit(
     if character.connection != connection.to_u128() {
         return Err("World Session changed".into());
     }
-    let mut frame = Vec::new();
-    message
-        .write_unencrypted_client(&mut frame)
-        .map_err(|error| error.to_string())?;
-    let opcode = u32::from_le_bytes(frame[2..6].try_into().expect("encoded client header"));
     ctx.db.game_realm_party_command().insert(RealmPartyCommand {
         id: 0,
         database: remote::Identity(realm),
         character: encode(&character),
         opcode,
-        body: frame[6..].to_vec(),
+        body,
     });
     Ok(true)
 }
@@ -344,6 +358,13 @@ pub fn idc_realm_party_command(
     let guid = actor.guid;
     let class = actor.class;
     store_character(ctx, actor.clone());
+    if super::meeting_stone::is_realm_request(opcode) {
+        let mark = event_mark(ctx);
+        super::meeting_stone::apply_realm(ctx, guid, opcode, &body)
+            .map_err(Rollback::into_reducer_error)?;
+        publish(ctx, BTreeSet::new(), &[guid], mark);
+        return Ok(());
+    }
     let message =
         lyracore_protocol::world::decode(opcode, &body).map_err(|error| error.to_string())?;
     if let ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) = message {
@@ -440,6 +461,9 @@ pub fn realm_party_command_answered(
     }
     match result {
         Ok(()) => {
+            if super::meeting_stone::is_realm_request(call.opcode) {
+                return Ok(());
+            }
             let message = lyracore_protocol::world::decode(call.opcode, &call.body)
                 .map_err(|error| error.to_string())?;
             // Resolve the reply from the request, even if its named target moved during IDC.
@@ -464,7 +488,12 @@ pub fn realm_party_command_answered(
                     ctx,
                     connection,
                     ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(SMSG_NOTIFICATION {
-                        notification: "Party request unavailable. Please try again.".into(),
+                        notification: if super::meeting_stone::is_realm_request(call.opcode) {
+                            "Meeting Stone request unavailable. Please try again."
+                        } else {
+                            "Party request unavailable. Please try again."
+                        }
+                        .into(),
                     })),
                     false,
                 )?;
@@ -515,12 +544,13 @@ fn roster(ctx: &ReducerContext, id: u64, guids: &mut BTreeSet<u64>) -> Roster {
     }
 }
 
-fn publish(ctx: &ReducerContext, groups: BTreeSet<u64>, extra_characters: &[u64], mark: u64) {
+pub(crate) fn publish(
+    ctx: &ReducerContext,
+    mut groups: BTreeSet<u64>,
+    extra_characters: &[u64],
+    mark: u64,
+) {
     let mut guids: BTreeSet<u64> = extra_characters.iter().copied().collect();
-    let rosters = groups
-        .into_iter()
-        .map(|id| roster(ctx, id, &mut guids))
-        .collect();
     let events = ctx
         .db
         .game_group_event()
@@ -528,7 +558,9 @@ fn publish(ctx: &ReducerContext, groups: BTreeSet<u64>, extra_characters: &[u64]
         .filter(|event| event.id > mark)
         .filter_map(|event| {
             guids.insert(event.recipient_guid);
-            guids.insert(event.other_guid);
+            if event.other_guid != 0 {
+                guids.insert(event.other_guid);
+            }
             let recipient = ctx
                 .db
                 .game_party_character()
@@ -544,6 +576,20 @@ fn publish(ctx: &ReducerContext, groups: BTreeSet<u64>, extra_characters: &[u64]
             })
         })
         .collect();
+    groups.extend(
+        guids
+            .iter()
+            .filter_map(|guid| group::group_of(ctx, *guid).map(|member| member.group_id)),
+    );
+    let rosters = groups
+        .into_iter()
+        .map(|id| roster(ctx, id, &mut guids))
+        .collect();
+    let absent = guids
+        .iter()
+        .copied()
+        .filter(|guid| group::group_of(ctx, *guid).is_none())
+        .collect();
     let characters = guids
         .into_iter()
         .filter_map(|guid| ctx.db.game_party_character().guid().find(guid))
@@ -554,11 +600,7 @@ fn publish(ctx: &ReducerContext, groups: BTreeSet<u64>, extra_characters: &[u64]
         characters,
         rosters,
         events,
-        absent: extra_characters
-            .iter()
-            .copied()
-            .filter(|guid| group::group_of(ctx, *guid).is_none())
-            .collect(),
+        absent,
     });
     let mut worlds: BTreeSet<_> = world_shard(ctx).into_iter().collect();
     worlds.extend(ctx.db.game_map_owner().iter().map(|owner| owner.world));
@@ -808,6 +850,7 @@ pub(super) fn restore(ctx: &ReducerContext, guid: u64) {
 }
 
 pub(super) fn deleted(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
+    crate::meeting_stone::remove_solo_seeker(ctx, guid);
     let mark = event_mark(ctx);
     let action = GroupAction::Leave {
         cause: lyracore_shared::group::leave_cause::CHARACTER_DELETED,
@@ -966,4 +1009,18 @@ pub fn retry_party_projection(ctx: &ReducerContext, retry: PartyProjectionRetry)
             ..retry.call
         });
     }
+}
+
+pub(crate) fn has_world_session(ctx: &ReducerContext, guid: u64) -> bool {
+    ctx.db
+        .game_character_directory()
+        .guid()
+        .find(guid)
+        .and_then(|entry| {
+            ctx.db
+                .game_native_away()
+                .account_id()
+                .find(entry.account_id)
+        })
+        .is_some_and(|away| away.character_guid == guid)
 }

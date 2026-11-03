@@ -23,23 +23,18 @@ pub(super) fn receive(
     super::actor(ctx, guid)?;
     let response = match message {
         ClientOpcodeMessage::CMSG_MEETINGSTONE_JOIN(request) => {
-            if crate::peer::realm_shard(ctx).is_some() {
-                return Ok(super::send(
-                    ctx,
-                    connection,
-                    ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(
-                        lyracore_protocol::messages::vanilla::SMSG_NOTIFICATION {
-                            notification:
-                                "Meeting Stone matchmaking is unavailable across World Shards."
-                                    .into(),
-                        },
-                    )),
-                    false,
-                )?);
-            }
             let area = meeting_stone::admit(ctx, guid, request.guid.guid())
                 .map_err(|refusal| Rollback::silent(refusal.as_tag()))?;
             if Area::try_from(area).is_err() {
+                return Ok(());
+            }
+            if super::realm_party::submit_admitted(
+                ctx,
+                connection,
+                guid,
+                0x292,
+                area.to_le_bytes().to_vec(),
+            )? {
                 return Ok(());
             }
             let party = crate::group::group_with_members(ctx, guid)
@@ -61,22 +56,13 @@ pub(super) fn receive(
                     })
                 })
                 .collect::<Vec<_>>();
-            meeting_stone::join(ctx, guid, area, &facts).map_err(|error| match error {
-                StoneOpError::Refused(refusal) => {
-                    let cause = refusal.as_tag();
-                    match join_failure_for(refusal).and_then(codec::build_meetingstone_joinfailed) {
-                        Some(packet) => Rollback::reply(
-                            ServerOpcodeMessage::SMSG_MEETINGSTONE_JOINFAILED(packet),
-                            cause,
-                        ),
-                        None => Rollback::silent(cause),
-                    }
-                }
-                StoneOpError::Invalid(cause) => Rollback::from(cause),
-            })?;
+            meeting_stone::join(ctx, guid, area, &facts).map_err(join_error)?;
             return Ok(());
         }
         ClientOpcodeMessage::CMSG_MEETINGSTONE_LEAVE => {
+            if super::realm_party::submit_admitted(ctx, connection, guid, 0x293, Vec::new())? {
+                return Ok(());
+            }
             meeting_stone::leave(ctx, guid).map_err(|error| match error {
                 StoneOpError::Refused(refusal) => Rollback::silent(refusal.as_tag()),
                 StoneOpError::Invalid(cause) => Rollback::from(cause),
@@ -84,6 +70,9 @@ pub(super) fn receive(
             return Ok(());
         }
         ClientOpcodeMessage::CMSG_MEETINGSTONE_INFO => {
+            if super::realm_party::submit_admitted(ctx, connection, guid, 0x296, Vec::new())? {
+                return Ok(());
+            }
             let (area, status) = ctx
                 .db
                 .game_meeting_stone_seeker()
@@ -104,4 +93,102 @@ pub(super) fn receive(
         _ => return Err("opcode is not a meeting stone request".into()),
     };
     Ok(super::send(ctx, connection, response, false)?)
+}
+
+pub(super) fn is_realm_request(opcode: u32) -> bool {
+    matches!(opcode, 0x292 | 0x293 | 0x296)
+}
+
+// JOIN carries the World-admitted area as u32, not the client's GameObject guid.
+pub(super) fn apply_realm(
+    ctx: &ReducerContext,
+    guid: u64,
+    opcode: u32,
+    body: &[u8],
+) -> Result<(), Rollback> {
+    use super::directory::game_character_profile;
+    use super::realm_party::game_party_character;
+    match opcode {
+        0x292 => {
+            let area = u32::from_le_bytes(
+                body.try_into()
+                    .map_err(|_| "invalid admitted Meeting Stone area")?,
+            );
+            if Area::try_from(area).is_err() {
+                return Err("unknown Meeting Stone area".into());
+            }
+            let mut guids = vec![guid];
+            if let Some(member) = crate::group::group_of(ctx, guid) {
+                guids.extend(
+                    crate::group::members_of(ctx, member.group_id)
+                        .iter()
+                        .map(|member| member.character_guid),
+                );
+            }
+            guids.sort_unstable();
+            guids.dedup();
+            let facts: Vec<_> = guids
+                .into_iter()
+                .filter_map(|guid| {
+                    ctx.db
+                        .game_party_character()
+                        .guid()
+                        .find(guid)
+                        .map(|character| (character.race, character.class))
+                        .or_else(|| {
+                            ctx.db
+                                .game_character_profile()
+                                .guid()
+                                .find(guid)
+                                .filter(|character| !character.deleted)
+                                .map(|character| (character.race, character.class))
+                        })
+                        .map(|(race, class)| SeekerFacts {
+                            character_guid: guid,
+                            race,
+                            class,
+                        })
+                })
+                .collect();
+            meeting_stone::join(ctx, guid, area, &facts).map_err(join_error)
+        }
+        0x293 if body.is_empty() => meeting_stone::leave(ctx, guid).map_err(|error| match error {
+            StoneOpError::Refused(refusal) => Rollback::silent(refusal.as_tag()),
+            StoneOpError::Invalid(cause) => Rollback::from(cause),
+        }),
+        0x296 if body.is_empty() => {
+            let (area, status) = ctx
+                .db
+                .game_meeting_stone_seeker()
+                .character_guid()
+                .find(guid)
+                .map_or((0, queue_status::NONE), |seeker| {
+                    (seeker.area_id, queue_status::JOINED_QUEUE)
+                });
+            crate::group::push_event(
+                ctx,
+                guid,
+                lyracore_shared::meeting_stone::event_kind::QUEUE,
+                0,
+                lyracore_shared::meeting_stone::encode_queue(area, status),
+            );
+            Ok(())
+        }
+        _ => Err("invalid Meeting Stone request".into()),
+    }
+}
+
+fn join_error(error: StoneOpError) -> Rollback {
+    match error {
+        StoneOpError::Refused(refusal) => {
+            match join_failure_for(refusal).and_then(codec::build_meetingstone_joinfailed) {
+                Some(packet) => Rollback::reply(
+                    ServerOpcodeMessage::SMSG_MEETINGSTONE_JOINFAILED(packet),
+                    refusal.as_tag(),
+                ),
+                None => Rollback::silent(refusal.as_tag()),
+            }
+        }
+        StoneOpError::Invalid(cause) => Rollback::from(cause),
+    }
 }
