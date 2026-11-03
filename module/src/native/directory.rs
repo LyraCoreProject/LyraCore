@@ -286,17 +286,14 @@ pub(crate) fn report_characters(ctx: &ReducerContext) {
         return;
     };
     let revision = revision(ctx);
-    let complete = !ctx
-        .db
-        .game_character()
-        .iter()
-        .any(|character| crate::transfer::is_in_transit(ctx, character.guid));
-    let profiles: Vec<_> = ctx
-        .db
-        .game_character()
-        .iter()
-        .filter(|character| !crate::transfer::is_in_transit(ctx, character.guid))
-        .map(|character| CharacterProfile {
+    let mut complete = true;
+    let mut profiles = Vec::new();
+    for character in ctx.db.game_character().iter() {
+        if crate::transfer::is_in_transit(ctx, character.guid) {
+            complete = false;
+            continue;
+        }
+        profiles.push(CharacterProfile {
             guid: character.guid,
             account_id: character.account_id,
             world: ctx.database_identity(),
@@ -306,8 +303,8 @@ pub(crate) fn report_characters(ctx: &ReducerContext) {
             class: character.class,
             gender: character.gender,
             deleted: false,
-        })
-        .collect();
+        });
+    }
     let total = profiles.len().div_ceil(128).max(1);
     for index in 0..total {
         let start = index * 128;
