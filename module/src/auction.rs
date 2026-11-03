@@ -1,4 +1,5 @@
 pub(crate) mod native;
+pub(crate) mod realm;
 
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
@@ -25,6 +26,7 @@ pub struct AuctionHouseDefinition {
     index(accessor = by_owner, btree(columns = [owner_guid])),
     index(accessor = by_highest_bidder, btree(columns = [highest_bidder_guid]))
 )]
+#[derive(Clone)]
 pub struct Auction {
     #[primary_key]
     #[auto_inc]
@@ -58,6 +60,7 @@ pub struct Auction {
     accessor = game_auction_operation_receipt,
     index(accessor = by_actor, btree(columns = [actor_guid]))
 )]
+#[derive(Clone)]
 pub struct AuctionOperationReceipt {
     #[primary_key]
     pub operation_id: u64,
@@ -1467,6 +1470,27 @@ impl ExpirySink for CtxExpiry<'_> {
 pub fn expire_auction(ctx: &ReducerContext, schedule: AuctionExpiry) -> Result<(), String> {
     if !crate::time::scheduler_authorized(ctx) {
         return Err("scheduler only".to_string());
+    }
+    if crate::peer::realm_shard(ctx).is_some() {
+        if ctx
+            .db
+            .game_auction()
+            .id()
+            .find(schedule.auction_id)
+            .is_some()
+        {
+            ctx.db
+                .game_auction_expiry()
+                .auction_id()
+                .delete(schedule.auction_id);
+            ctx.db.game_auction_expiry().insert(AuctionExpiry {
+                scheduled_id: 0,
+                scheduled_at: (ctx.timestamp + spacetimedb::TimeDuration::from_micros(1_000_000))
+                    .into(),
+                auction_id: schedule.auction_id,
+            });
+        }
+        return Ok(());
     }
     expire_active(&mut CtxExpiry { ctx }, schedule.auction_id)
 }

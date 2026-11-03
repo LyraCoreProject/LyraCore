@@ -128,6 +128,7 @@ pub fn selection_answered(
     let Err(error) = result else {
         return;
     };
+    super::realm_auction::finish_deletion(ctx, request.selection_id, request.database.0);
     if request.selection_id != 0 {
         if request.opcode == 0x37 || super::rollback::replies_in(&error).is_none() {
             fail_selection(ctx, request.selection_id);
@@ -542,6 +543,7 @@ pub fn idc_selection_result(
 ) -> Result<(), String> {
     directory::require_world(ctx)?;
     directory::apply(ctx, account_id, &directory_changes, revision)?;
+    super::realm_auction::finish_deletion(ctx, selection_id, ctx.sender());
     let connection_id = ConnectionId::from_u128(connection);
     if selection_id != 0 {
         selection_answer(ctx, selection_id, connection_id, opcode, body)?;
@@ -673,6 +675,10 @@ pub(super) fn route_selection(
     }
     let message =
         lyracore_protocol::world::decode(opcode, &body).map_err(|error| error.to_string())?;
+    let deleting = match &message {
+        ClientOpcodeMessage::CMSG_CHAR_DELETE(request) => Some(request.guid.guid()),
+        _ => None,
+    };
     let world = match message {
         ClientOpcodeMessage::CMSG_CHAR_ENUM => {
             let mut worlds: Vec<Identity> = ctx
@@ -760,6 +766,9 @@ pub(super) fn route_selection(
         bodies: Vec::new(),
         answered: Vec::new(),
     });
+    if let Some(guid) = deleting {
+        super::realm_auction::begin_deletion(ctx, guid, pending.id, world)?;
+    }
     Ok(relay_selection(
         ctx,
         connection_id,

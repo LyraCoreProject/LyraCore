@@ -104,3 +104,7 @@ native World Session path.
 Logout on a split Realm sends its completion packets only after the Realm Shard adopts the returning
 World Session. The source refuses new selection requests while that Handoff is pending. This keeps
 an immediate login from entering the old World Shard after the Realm has removed its away record.
+
+Pending Auction payments also refuse Transfer and cross-map teleport until the outcome and any
+refund settle. Active Realm Listings and bids stay on the Realm; their Auction Mail follows the
+Character directory. See [Auctions across World Shards](architecture.md#auctions-across-world-shards).

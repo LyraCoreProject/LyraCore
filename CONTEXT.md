@@ -824,7 +824,7 @@ _Avoid_: resolve, close
 
 **Auction Market**:
 The listing pool shared by the houses of one team: Alliance, Horde or neutral. A bid reaches every
-listing in its bidder's market, whatever house placed it. The house the seller stands at still sets
+Listing in its bidder's market across World Shards, whatever house placed it. The house the seller stands at still sets
 that listing's deposit and cut. See `crates/lyracore-shared/src/auction.rs`.
 
 **Auction Mail**:
@@ -833,9 +833,10 @@ and the counterparty's name where the invoice names one. Sent for an outbid refu
 successful sale, an expired listing, a cancelled listing's item, and the bid a Cancellation refunds.
 
 **Auction Notice**:
-The live message an online seller or bidder gets the instant an auction is outbid, won, sold,
-expired or cancelled. The Module selects its recipient in the same transaction. An offline
-recipient gets the Auction Mail only.
+The live message to an online seller or bidder when a Listing is outbid, won, sold, expired or
+cancelled. The Module selects its recipient in the same transaction. Across World Shards, the
+Realm delivers it asynchronously to the current World Session. An offline recipient gets the
+Auction Mail only.
 
 **Cancellation**:
 The seller withdraws an active listing. The item goes back by Auction Mail, a displaced bidder gets
