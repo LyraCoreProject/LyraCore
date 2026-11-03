@@ -73,7 +73,8 @@ jobs:
         run: cargo +"$HOST_TOOLCHAIN" test --release --locked -p spacetimedb-engine --lib retention::tests
       - name: Check delivery routing, motion relay and the Module row layouts
         working-directory: ${{ env.HOST_CHECKOUT }}
-        run: cargo +"$HOST_TOOLCHAIN" test --release --locked -p spacetimedb-standalone --lib native_world::
+        run: |
+          cargo +"$HOST_TOOLCHAIN" test --release --locked -p spacetimedb-standalone --lib native_world::
 
   module:
     runs-on: ubuntu-latest
@@ -110,7 +111,7 @@ jobs:
           - group: Handoff
             checks: handoff realm-shard
           - group: continent Shards
-            checks: continent-shards realm-communication instance-shard
+            checks: continent-shards realm-communication instance-shard instance-allocation
     name: checks (${{ matrix.group }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

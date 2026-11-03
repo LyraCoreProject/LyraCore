@@ -457,11 +457,15 @@ fn teleport(
     [x, y, z, o]: [f32; 4],
     aboard: Option<crate::transport::Aboard>,
 ) {
-    if (!crate::native::directory::owns_map(ctx, map_id)
-        && !(crate::native::directory::transfer_target(ctx, map_id).is_some()
-            && crate::native::has_world_session(ctx, player_guid)))
-        || crate::taxi::movement_is_suppressed(ctx, player_guid)
-    {
+    let destination =
+        crate::native::directory::transfer_destination(ctx, player_guid, map_id, instance_id);
+    let allowed = destination.map_or_else(
+        || crate::native::directory::owns_map(ctx, map_id),
+        |world| {
+            crate::peer::is_peer(ctx, world) && crate::native::has_world_session(ctx, player_guid)
+        },
+    );
+    if !allowed || crate::taxi::movement_is_suppressed(ctx, player_guid) {
         return;
     }
     let entities = ctx.db.game_world_entity();
@@ -469,7 +473,7 @@ fn teleport(
         return;
     };
     let recipient_identity = e.owner_identity;
-    let cross_map = is_cross_map_teleport(e.map_id, map_id);
+    let cross_map = is_cross_map_teleport(e.map_id, map_id) || destination.is_some();
     if cross_map
         && (crate::native::realm_petition::pending(ctx, player_guid)
             || crate::native::realm_auction::pending(ctx, player_guid))

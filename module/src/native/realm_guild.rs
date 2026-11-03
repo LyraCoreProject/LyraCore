@@ -523,7 +523,6 @@ pub struct WorldGuildUpdate {
 }
 
 fn publish(ctx: &ReducerContext, guilds: BTreeSet<u32>) {
-    use super::directory::game_map_owner;
     let guilds: Vec<_> = guilds
         .into_iter()
         .filter(|id| *id != 0)
@@ -555,8 +554,7 @@ fn publish(ctx: &ReducerContext, guilds: BTreeSet<u32>) {
         guilds,
         members,
     });
-    let mut worlds: BTreeSet<_> = world_shard(ctx).into_iter().collect();
-    worlds.extend(ctx.db.game_map_owner().iter().map(|owner| owner.world));
+    let worlds = directory::worlds(ctx);
     for world in worlds {
         ctx.db.game_world_guild_update().insert(WorldGuildUpdate {
             id: 0,

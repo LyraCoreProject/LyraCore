@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use lyracore_protocol::{
     codec,
@@ -15,14 +15,14 @@ use spacetimedb::{
 };
 
 use super::{
-    directory::{self, game_character_directory, game_map_owner},
+    directory::{self, game_character_directory},
     game_native_player, game_native_world_connection,
     realm_shard::game_native_away,
     NativeActive, NativeWorldState, Rollback,
 };
 use crate::{
     away::game_character_away,
-    peer::{realm_shard, require_sender, world_shard},
+    peer::{realm_shard, require_sender},
     realm_chat::{SpeakerFacts, WhisperRequest, WhisperTargetFacts},
     remote_bindings::peer as remote,
 };
@@ -241,9 +241,7 @@ pub fn idc_realm_communication(ctx: &ReducerContext, request: Vec<u8>) -> Result
     if current_world(ctx, &request.actor) != Some(ctx.sender()) {
         return Err("World Shard no longer holds this Character's World Session".into());
     }
-    let mut worlds = BTreeSet::new();
-    worlds.extend(world_shard(ctx));
-    worlds.extend(ctx.db.game_map_owner().iter().map(|owner| owner.world));
+    let worlds = directory::worlds(ctx);
     let query = ctx.db.game_realm_query().insert(RealmQuery {
         id: 0,
         scheduled_at: (ctx.timestamp + TimeDuration::from_micros(REQUEST_LIFETIME_MICROS)).into(),

@@ -23,6 +23,7 @@ from operator_creatures import check_operator_creatures
 import reload
 import realm_communication
 import instance_shard
+import instance_allocation
 from instance_reset import check_instance_resets
 import retention
 from spell_source import check_spell_source_behavior
@@ -477,7 +478,7 @@ def check_environment(host):
     host.call('debug_set_health', [guid, health])
     client.collect()
     peer.collect()
-    client.send(0xee, struct.pack('<IIfffffI', 0x200000, 200000, -31, -1, 0, 0, 0, 0))
+    client.send(0xca, struct.pack('<IIfffffI', 0x200000, 200000, -31, -1, 0, 0, 0, 0))
     assert (0x1d9, struct.pack('<IIIIBI', 1, 60000, 60000, 0xffffffff, 0, 0)) in client.collect()
     assert not any(opcode in (0x1d9, 0x1db, 0x1fc) for opcode, _ in peer.collect())
     host.sql(f'UPDATE game_breath_state SET remaining_air_micros = 100000 WHERE entity_guid = {guid}')
@@ -490,16 +491,16 @@ def check_environment(host):
     assert (0x1fc, struct.pack('<QBIII', guid, 1, (health * 20 + 99) // 100, 0, 0)) in drowned
     assert values(drowned, guid)[22] < health
     assert not any(opcode in (0x1d9, 0x1db, 0x1fc) for opcode, _ in peer.collect())
-    client.send(0xee, struct.pack('<IIffffI', 0, 201000, -31, -1, 0, 0, 0))
+    client.send(0xcb, struct.pack('<IIffffI', 0, 201000, -31, -1, 0, 0, 0))
     assert (0x1db, struct.pack('<I', 1)) in client.collect()
-    client.send(0xee, struct.pack('<IIfffffI', 0x200000, 202000, -31, -1, 0, 0, 0, 0))
+    client.send(0xca, struct.pack('<IIfffffI', 0x200000, 202000, -31, -1, 0, 0, 0, 0))
     assert any(opcode == 0x1d9 for opcode, _ in client.collect())
     host.call('debug_set_health', [guid, 0])
     assert (0x1db, struct.pack('<I', 1)) in client.collect()
     assert not host.rows(f'SELECT entity_guid FROM game_breath_state WHERE entity_guid = {guid}')
     host.call('debug_set_health', [guid, health])
     client.collect()
-    client.send(0xee, struct.pack('<IIfffffI', 0x200000, 203000, -31, -1, 0, 0, 0, 0))
+    client.send(0xca, struct.pack('<IIfffffI', 0x200000, 203000, -31, -1, 0, 0, 0, 0))
     assert any(opcode == 0x1d9 for opcode, _ in client.collect())
     client.send(0x4b)
     client.collect()
@@ -539,7 +540,7 @@ def check_fatigue(host):
     assert logs and values(exhausted, guid)[22] < health
     assert not any(opcode in (0x1d9, 0x1db, 0x1fc) for opcode, _ in peer.collect())
     host.sql(f'DELETE FROM game_terrain_deep_water WHERE key = {(512 << 16) | 512}')
-    client.send(0xee, struct.pack('<IIffffI', 0, timestamp + 2000, -31, -1, 0, 0, 0))
+    client.send(0xb7, struct.pack('<IIffffI', 0, timestamp + 2000, -31, -1, 0, 0, 0))
     recovering = [struct.unpack('<IIIIBI', body) for opcode, body in client.collect() if opcode == 0x1d9]
     assert [(timer, duration, scale) for timer, _, duration, scale, _, _ in recovering] == [(0, 60000, 10)]
     host.sql(f'UPDATE game_fatigue_state SET remaining_micros = 59990000 WHERE entity_guid = {guid}')
@@ -4546,6 +4547,9 @@ def check_aoi(host):
     assert any(opcode == 0xee and packed_guid(body) == guid for opcode, body in motion)
     assert not any(opcode == 0xee for opcode, _ in client.collect())
     host.call('debug_teleport', [guid, 0, 150, 0, 0, 0])
+    assert guid not in destroys(peer.collect())
+    assert peer_guid not in destroys(client.collect())
+    host.call('debug_teleport', [guid, 0, 200, 0, 0, 0])
     assert destroys(peer.collect()).count(guid) == 1
     assert destroys(client.collect()).count(peer_guid) == 1
     host.call('debug_teleport', [guid, 0, 0, 0, 0, 0])
@@ -5381,6 +5385,8 @@ def check_continent_shards(host):
         entered.append(client.read())
     client.collect()
     assert_playtest(kalimdor, entered, False)
+    host.wait_until(lambda: not host.rows(f'SELECT guid FROM game_guild_transaction WHERE guid = {guid}', kalimdor),
+                    'login guild reconciliation did not settle before Transfer')
     host.call('debug_teleport', [guid, 0, 20, 0, 0, 0], database=kalimdor)
     client.collect(auto_ack=False)
     client.send(0xdc)
@@ -5464,6 +5470,7 @@ ALONE = {
     'continent-shards': (check_continent_shards, {'seeded': True}),
     'realm-communication': (realm_communication.check, {'seeded': True}),
     'instance-shard': (instance_shard.check, {'seeded': True}),
+    'instance-allocation': (instance_allocation.check, {'seeded': True}),
 }
 
 

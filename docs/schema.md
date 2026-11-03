@@ -84,6 +84,12 @@ for replacement and import rules. Existing spell table layouts stay unchanged.
 Instance resets. They start empty; no existing columns or IDC signatures change. Reset state uses
 the existing `game_instance.reset_requested` field. See [Instance lifecycle](instance-lifecycle.md#manual-resets).
 
+`game_instance_binding.world` is end-appended with `None::<Identity>`. A legacy `None` uses the
+unchanged default map owner; new bindings record their hosting Shard explicitly. Transfer carries
+this column with the binding. `game_instance_host` and `game_instance_placement` are new private
+tables for host configuration and Realm placement. See the [allocation upgrade](instance-lifecycle.md#upgrade-an-existing-realm)
+before enabling multiple hosts for existing leases.
+
 ## 2. Inventory
 
 Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully

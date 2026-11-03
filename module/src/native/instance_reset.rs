@@ -82,6 +82,7 @@ pub(super) fn dispatch(
             .iter()
             .filter(|owner| instance::resettable_map(owner.map_id))
             .map(|owner| owner.world)
+            .chain(super::instance_allocation::worlds(ctx))
             .chain(
                 ctx.db
                     .game_map_owner()
@@ -97,12 +98,14 @@ pub(super) fn dispatch(
             .iter()
             .filter(|binding| instance::resettable_map(binding.map))
             .filter_map(|binding| {
-                ctx.db
-                    .game_map_owner()
-                    .map_id()
-                    .find(binding.map)
-                    .map(|owner| owner.world)
-                    .or_else(|| world_shard(ctx))
+                binding.world.or_else(|| {
+                    ctx.db
+                        .game_map_owner()
+                        .map_id()
+                        .find(binding.map)
+                        .map(|owner| owner.world)
+                        .or_else(|| world_shard(ctx))
+                })
             })
             .collect()
     };
@@ -221,7 +224,6 @@ pub fn idc_instance_reset_result(
     request: Vec<u8>,
     result: Vec<u8>,
 ) -> Result<(), String> {
-    use directory::game_map_owner;
     if realm_shard(ctx).is_none() || !crate::peer::is_peer(ctx, ctx.sender()) {
         return Err("caller is not a Peer Shard".into());
     }
@@ -233,13 +235,9 @@ pub fn idc_instance_reset_result(
     }
     if let Some(results) = &result {
         for result in results {
-            let owner = ctx
-                .db
-                .game_map_owner()
-                .map_id()
-                .find(result.map)
-                .map_or(ctx.database_identity(), |owner| owner.world);
-            require_sender(ctx, Some(owner))?;
+            if !super::instance_allocation::hosts(ctx, result.map, ctx.sender()) {
+                return Err("Instance reset reply is from another map's Shard".into());
+            }
         }
     } else {
         require_sender(ctx, realm_shard(ctx))?;

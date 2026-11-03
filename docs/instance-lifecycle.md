@@ -49,8 +49,9 @@ All tables are private.
 
 A multi-Shard Realm assigns its dungeon maps to one World Shard with
 `operator_set_map_owner`, using the same ownership records on the Realm and all World Shards.
-That Instance Shard needs the dungeon World Source and `hosts_instances` enabled. Continent
-Shards need the entrance Area Triggers. There is no Instance allocator across multiple Shards.
+Every Instance Shard needs the dungeon World Source and `hosts_instances` enabled. Continent
+Shards need the entrance Area Triggers. The fixed map owner remains the default for legacy bindings;
+additional hosts use the allocation configuration below.
 Existing multi-Shard data needs the reviewed migration described in [danger zones](danger-zones.md).
 
 For a remote dungeon, `native::instance_shard::enter` queues admission before teleport. The Realm
@@ -67,14 +68,57 @@ The Transfer fence protects the Instance until release. Admission also clears it
 An expired admission cannot create an unfenced arrival: import refuses and the existing Transfer
 abort restores the source position.
 
-Dungeon exits use map ownership to Transfer back to the continent. Personal bindings travel in the
-Character manifest. A binding whose Instance was reaped is ignored on the next admission. Logging
+Dungeon exits use map ownership to Transfer back to the continent. Personal bindings, including
+their hosting Shard, travel in the Character manifest. A binding whose Instance was reaped is ignored on the next admission. Logging
 back into a reaped Instance resolves the existing entrance or home fallback and Transfers to that
 map's World Shard before sending the login sequence. The Character is never entered at Instance
 zero on a dungeon map as an intermediate step.
 
 The `instance-shard` Native Host check covers party entry, separate solo runs, party chat across
 the portal, exits, binding reuse, reconnect, reaping and admission refusal on a disposable Realm.
+
+## Allocation across Instance Shards
+
+`operator_set_instance_host(map_id, world, accepting)` registers a dungeon host. Repeat the same
+configuration on the Realm and every World, and list all participating Shards as peers of one another.
+Keep the original `operator_set_map_owner` record: it identifies the host of old bindings whose
+`world` column is null. Without registered hosts, fixed-map routing still applies.
+
+The Realm creates an Instance Placement for each Group or solo Character and dungeon map. New
+placements take turns across accepting hosts. Concurrent Group arrivals resolve the same durable
+placement. An existing personal binding selects its host when there is no Group placement; a Group
+placement takes precedence over a member's separate solo run. The Instance Shard still creates the
+local lease and checks capacity. Instance ids can coincide on different Shards: a binding's `world`
+field, map and Instance id identify its destination together.
+
+Set `accepting` to false to stop new placements on a host. Existing placements and personal bindings
+continue to enter it, including fresh runs after a reset. This is a drain of new placements, not an
+automatic evacuation. An unavailable assigned host refuses entry; it never creates a second copy
+of the run elsewhere. Adding hosts does not move existing placements. Group disband removes its
+placements; Character deletion removes that Character's solo placements. To retire a host, first resolve
+its remaining Characters, bindings and placements with gameplay closed.
+
+Admission, Group snapshots, world-port Transfer, reconnect, reaped-instance return and reset replies
+all recognize registered hosts. Entry to another dungeon on the same host stays local. Group,
+guild, profile and Realm-query fan-out includes every registered Instance Shard. The admission
+reservation protects a local world port until arrival, just as it protects a remote Transfer.
+
+### Upgrade an existing Realm
+
+Close gameplay, drain Transfers and reset requests and replies, and publish every Shard. The new nullable `world`
+column is end-appended to `game_instance_binding`; old rows use the unchanged default map owner.
+Existing admission payloads remain decodable, and IDC signatures and Host delivery layouts do not
+change. `game_instance_host` and `game_instance_placement` start empty.
+
+Before enabling additional hosts, capture every live dungeon lease and its Group on each existing
+Instance Shard. For each grouped run, call `operator_adopt_instance_placement(group_id, map_id, world)`
+on the Realm. It refuses to replace an existing placement with another host. Conflicting live runs
+for the same Group and map require reconciliation before reopening gameplay. Solo bindings need no
+placement import. Register hosts on every Shard, then call `operator_report_character_profiles`
+and `operator_report_realm_guilds` on the Realm. Verify Group and guild projections with a
+disposable member on each new host before reopening gameplay. Group admission carries the Realm
+snapshot. Preserve captures of leases, bindings, population identities, Characters and inventory
+through this update.
 
 ## Manual resets
 
@@ -102,7 +146,8 @@ restricted to the requesting Character and connection on the source World. Reque
 expire after sixty seconds, and unavailable requests are not retried automatically. A Transfer or
 reconnect can therefore lose a notification without undoing an accepted reset.
 
-The new `game_world_instance_reset` and `game_instance_reset_result` outboxes start empty. Existing
-stored rows, IDC signatures and Host delivery layouts are unchanged. Publish the Realm and every
+The `game_world_instance_reset` and `game_instance_reset_result` outboxes carry reset work. Reset
+bindings include their hosting Shard; drain these outboxes before upgrading their internal payload.
+IDC signatures and Host delivery layouts are unchanged. Publish the Realm and every
 World before reopening gameplay. Raid lockouts, scheduled raid resets and dungeon difficulty
 selection remain outside this path.
