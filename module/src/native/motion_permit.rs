@@ -51,11 +51,13 @@ pub(super) fn refresh(ctx: &ReducerContext, connection_id: ConnectionId, guid: u
                     && !crate::taxi::movement_is_suppressed(ctx, guid)
                     && !crate::spell::is_movement_blocked(ctx, guid)
             });
+    if permitted {
+        // A permitted mover's Module relays go out in this transaction, not at the motion tick.
+        crate::motion::flush(ctx, guid);
+    }
     let permits = ctx.db.game_native_motion_permit();
     match (permits.connection_id().find(connection_id), permitted) {
         (None, true) => {
-            // Staged motion goes out first, so the Host's later relays cannot precede it.
-            crate::motion::flush(ctx, guid);
             permits.insert(NativeMotionPermit {
                 connection_id,
                 character_guid: guid,

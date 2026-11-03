@@ -20,22 +20,28 @@ transaction: keep the fast path out of the database and cross into it on purpose
    the Character moves on foot and freely: alive or a ghost, not on a taxi, a Transport or a
    loading screen, and not held in place. It withdraws the permit in the transaction that ends any
    of those, and when the World Session leaves the world. Without a permit, movement takes the
-   Module path unchanged. Granting a permit first publishes the mover's staged motion, so no older
-   Module relay can follow a newer Host relay.
+   Module path unchanged. A permitted mover's Module relays go out in their own transaction, not
+   at the motion tick. A Host relay can overtake one only while the Host has not yet applied that
+   transaction, which affects at most the first movement after a permit is granted.
 3. The Host checks what the Module's movement Gate checks before it relays: a client movement
    opcode, a complete MovementInfo with finite position, no Transport flag, and a client time newer
    than the last accepted one. A message that fails goes to the Module, which decides.
-4. The Module still receives every discrete movement and one Coalescible Motion sample a second,
-   or sooner after 8 yards of drift, through `native_world_motion`. It applies them as it applies
+4. The Module still receives every movement except heartbeats, and one heartbeat sample a second,
+   or sooner after 4 yards of drift, through `native_world_motion`. Facing and pitch reach it
+   because melee and spell Gates read the Character's orientation. It applies them as it applies
    any movement and sends no relay of its own. Exploration, rest, breath, fatigue, AOI cell
    changes, aura and channel breaks, fall damage and movement scoring run on those messages.
 5. The Module's position for a moving Character can trail the client by up to one sample. It
    already trailed by up to 4 yards before this change, because heartbeats within that drift did
-   not write the entity. Range Gates keep their existing tolerance. A Host crash loses at most the
+   not write the entity. The sample drift matches it, so Range Gates such as the 9-yard melee
+   leeway keep their existing tolerance. A Host crash loses at most the
    motion since the last sample, which the client corrects on its next movement.
 6. Host relays use the delivery path of Module packets, including Coalescible Motion thinning for
    slow readers. The Host wakes writers for queued relays every 20 ms, so one write carries many
-   movers instead of one socket write per heartbeat per recipient.
+   movers instead of one socket write per heartbeat per recipient. A connection keeps at most one
+   queued Coalescible Motion relay after its last discrete one, so a client that floods heartbeats
+   adds no routing work. A transaction that changes a permit first sends the queued relays, so a
+   relay accepted before a withdrawal reaches observers before that transaction's packets.
 7. Movement opcode lists the Host and Module share live in `native-host/src/motion_opcodes.rs`.
    A Module test checks them against `lyracore-shared`.
 8. A Module must be published before a Host that subscribes to `game_native_motion_permit`. An

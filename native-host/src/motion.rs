@@ -7,8 +7,10 @@ const ON_TRANSPORT: u32 = 0x0200_0000;
 const MOVEMENT_INFO_BYTES: usize = 28;
 // Optional MovementInfo tails: swim pitch, jump velocity and spline elevation, in bytes.
 const MOVEMENT_TAILS: [(u32, usize); 3] = [(0x0020_0000, 4), (0x2000, 16), (0x0400_0000, 4)];
+const HEARTBEAT: u16 = 0x00ee;
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
-const SAMPLE_DRIFT_YD: f32 = 8.0;
+// The Module's persist drift; the melee leeway assumes its position trails by no more.
+const SAMPLE_DRIFT_YD: f32 = 4.0;
 
 pub(super) fn coalescible(opcode: u16) -> bool {
     COALESCIBLE_MOTION_OPCODES.contains(&opcode)
@@ -79,7 +81,7 @@ impl Mover {
     /// Records a pose; returns whether the Module should receive it as a sample.
     pub(super) fn accept(&mut self, pose: Pose, now: Instant) -> bool {
         self.time_ms = Some(pose.time_ms);
-        let due = !coalescible(pose.opcode)
+        let due = pose.opcode != HEARTBEAT
             || self.sampled.is_none_or(|(at, x, y)| {
                 now.duration_since(at) >= SAMPLE_INTERVAL
                     || (pose.x - x).powi(2) + (pose.y - y).powi(2) >= SAMPLE_DRIFT_YD.powi(2)
@@ -126,7 +128,7 @@ mod tests {
     }
 
     #[test]
-    fn heartbeats_are_sampled_about_once_a_second_and_discrete_movement_always() {
+    fn heartbeats_are_sampled_about_once_a_second_and_other_movement_always() {
         let start = Instant::now();
         let mut mover = Mover::default();
         let at = |ms| start + Duration::from_millis(ms);
@@ -143,7 +145,11 @@ mod tests {
             Some(true)
         );
         assert_eq!(
-            accepted(&mut mover, movement(0x0ee, 0, 1200, 7.0), at(1100)),
+            accepted(&mut mover, movement(0x0da, 0, 800, 3.5), at(700)),
+            Some(true)
+        );
+        assert_eq!(
+            accepted(&mut mover, movement(0x0ee, 0, 1200, 6.0), at(1100)),
             Some(false)
         );
         assert_eq!(

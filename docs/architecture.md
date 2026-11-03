@@ -33,8 +33,8 @@ A World Session with a Motion Permit has its movement relayed by the Host
 Character moves freely on foot and withdraws it in the transaction that roots, kills, seats on a
 taxi or teleports the Character, or that sees a Transport flag. The Host checks that a movement
 message is well formed, on foot and newer than the last one, then sends it straight to the mover's
-AOI Grant holders. It forwards discrete movement, and one Coalescible Motion sample a second or
-after 8 yards, to `native_world_motion`, which applies it without a Module relay. Without a permit,
+AOI Grant holders. It forwards all movement except heartbeats, and one heartbeat sample a second or
+after 4 yards, to `native_world_motion`, which applies it without a Module relay. Without a permit,
 or when a check fails, movement goes to `native_world_receive` as before. The shared opcode lists
 are in `native-host/src/motion_opcodes.rs`.
 

@@ -1,5 +1,4 @@
-// BSATN rows of game_native_cipher, game_native_packet and game_native_motion_permit.
-// Module and Host tests include this file.
+// BSATN rows of the Host's three native tables. Module and Host tests include this file.
 
 #[rustfmt::skip]
 const CIPHER: &[u8] = &[

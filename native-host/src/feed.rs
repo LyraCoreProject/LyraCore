@@ -140,7 +140,8 @@ struct Queue {
 }
 
 impl Queue {
-    /// Queues one transaction's packets; returns false when the connection exceeds its byte limit.
+    /// Queues one transaction's packets; returns false when the connection exceeds its byte limit
+    /// or already holds a queued cipher.
     fn push(&mut self, cipher: Option<Cipher>, packets: Vec<Arc<Packet>>) -> bool {
         if let Some(cipher) = cipher {
             if self.cipher.is_some() {
@@ -231,12 +232,55 @@ struct State {
     router: Router,
     permits: HashMap<ConnectionId, u64>,
     relays: Vec<(ConnectionId, Arc<Packet>)>,
+    // Each connection's last queued relay; newer Coalescible Motion replaces it there.
+    last_relay: HashMap<ConnectionId, usize>,
 }
 
 impl State {
     fn remove(&mut self, connection: ConnectionId) {
         self.clients.remove(&connection);
         self.router.clear(connection);
+    }
+
+    fn flush_relays(&mut self) {
+        self.last_relay.clear();
+        let relays: Vec<_> = std::mem::take(&mut self.relays)
+            .into_iter()
+            .filter(|(connection, packet)| {
+                let Audience::Aoi(aoi) = packet.audience else {
+                    return false;
+                };
+                self.permits.get(connection) == Some(&aoi.entity_guid)
+            })
+            .map(|(_, packet)| packet)
+            .collect();
+        let clients = &self.clients;
+        let routed = self
+            .router
+            .route(relays, |connection| clients.contains_key(connection));
+        self.deliver(routed.into_iter().map(|(connection, packets)| {
+            (
+                connection,
+                Delivery {
+                    cipher: None,
+                    packets,
+                },
+            )
+        }));
+    }
+
+    fn deliver(&mut self, deliveries: impl IntoIterator<Item = (ConnectionId, Delivery)>) {
+        for (connection, delivery) in deliveries {
+            let Some(Client(outbox)) = self.clients.get(&connection) else {
+                continue;
+            };
+            if outbox.lock().push(delivery.cipher, delivery.packets) {
+                outbox.ready.notify_one();
+            } else {
+                self.remove(connection);
+                log::warn!("native output byte limit reached for connection {connection}");
+            }
+        }
     }
 }
 
@@ -363,7 +407,19 @@ impl Registration {
             not_before_micros: 0,
             authentication_complete: false,
         });
-        state.relays.push((self.connection_id, packet));
+        let state = &mut *state;
+        let last = state.last_relay.get(&self.connection_id).copied();
+        match last.filter(|&at| {
+            packet.motion_mover().is_some() && state.relays[at].1.motion_mover().is_some()
+        }) {
+            Some(at) => state.relays[at].1 = packet,
+            None => {
+                state
+                    .last_relay
+                    .insert(self.connection_id, state.relays.len());
+                state.relays.push((self.connection_id, packet));
+            }
+        }
         true
     }
 }
@@ -406,35 +462,10 @@ impl Drop for FeedLifetime {
 impl Feed {
     // Routes queued Host relays together, so one write carries many movers.
     fn flush_relays(&self) {
-        let mut state = self
-            .0
+        self.0
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let state = &mut *state;
-        let relays: Vec<_> = std::mem::take(&mut state.relays)
-            .into_iter()
-            .filter(|(connection, packet)| {
-                let Audience::Aoi(aoi) = packet.audience else {
-                    return false;
-                };
-                state.permits.get(connection) == Some(&aoi.entity_guid)
-            })
-            .map(|(_, packet)| packet)
-            .collect();
-        let routed = state
-            .router
-            .route(relays, |connection| state.clients.contains_key(connection));
-        for (connection, packets) in routed {
-            let Some(Client(outbox)) = state.clients.get(&connection) else {
-                continue;
-            };
-            if outbox.lock().push(None, packets) {
-                outbox.ready.notify_one();
-            } else {
-                state.remove(connection);
-                log::warn!("native output byte limit reached for connection {connection}");
-            }
-        }
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .flush_relays();
     }
 
     pub(super) fn register(
@@ -528,6 +559,10 @@ impl Feed {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         let state = &mut *state;
+        // Relays the Host queued before a permit change precede that transaction's packets.
+        if !permits.is_empty() {
+            state.flush_relays();
+        }
         for (permit, insert) in permits {
             if insert {
                 state
@@ -543,17 +578,7 @@ impl Feed {
         for (connection, packets) in routed {
             deliveries.entry(connection).or_default().packets = packets;
         }
-        for (connection, delivery) in deliveries {
-            let Some(Client(outbox)) = state.clients.get(&connection) else {
-                continue;
-            };
-            if outbox.lock().push(delivery.cipher, delivery.packets) {
-                outbox.ready.notify_one();
-            } else {
-                state.remove(connection);
-                log::warn!("native output byte limit reached for connection {connection}");
-            }
-        }
+        state.deliver(deliveries);
         Ok(initial)
     }
 }
@@ -878,6 +903,38 @@ mod tests {
         assert!(take(&mover_deliveries).is_none());
         permit(&feed, OTHER_VIEWER, SUBJECT, false);
         assert!(!mover.relay(0x0ee, &info));
+    }
+
+    #[test]
+    fn a_movers_queued_relays_keep_its_transitions_and_go_out_before_its_permit_changes() {
+        let (feed, _viewer, deliveries) = granted_feed(&[SUBJECT]);
+        let (mover, _mover_deliveries) = feed.register(OTHER_VIEWER).unwrap();
+        permit(&feed, OTHER_VIEWER, SUBJECT, true);
+        for (opcode, info) in [(0x0ee, 1), (0x0ee, 2), (0x0bb, 3), (0x0da, 4), (0x0ee, 5)] {
+            assert!(mover.relay(opcode, &[info]));
+        }
+        let relays = |packets: &mut dyn Iterator<Item = &Arc<Packet>>| -> Vec<_> {
+            packets
+                .map(|packet| (packet.opcode, packet.body[2]))
+                .collect()
+        };
+        assert_eq!(
+            relays(
+                &mut feed
+                    .0
+                    .lock()
+                    .unwrap()
+                    .relays
+                    .iter()
+                    .map(|(_, packet)| packet)
+            ),
+            [(Some(0x0ee), 2), (Some(0x0bb), 3), (Some(0x0ee), 5)]
+        );
+        permit(&feed, OTHER_VIEWER, SUBJECT, false);
+        assert_eq!(
+            relays(&mut take(&deliveries).unwrap().packets.iter()),
+            [(Some(0x0bb), 3), (Some(0x0ee), 5)]
+        );
     }
 
     #[test]

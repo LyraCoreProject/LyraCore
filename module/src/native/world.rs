@@ -799,11 +799,7 @@ fn movement_receipt(
     }
     let bytes =
         codec::movement_info_to_bytes(movement.info()).map_err(|error| error.to_string())?;
-    Ok(crate::world::apply_movement_update(
-        ctx,
-        entity,
-        opcode as u16,
-        &movement,
-        Some(bytes),
-    )?)
+    crate::world::apply_movement_update(ctx, entity, opcode as u16, &movement, Some(bytes))?;
+    super::motion_permit::refresh_character(ctx, guid);
+    Ok(())
 }
