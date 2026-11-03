@@ -295,6 +295,7 @@ pub(super) fn apply(
         });
         if !present {
             super::realm_party::deleted(ctx, guid)?;
+            super::realm_guild::deleted(ctx, guid);
         }
         directory.guid().delete(guid);
         if present {

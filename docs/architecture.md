@@ -434,8 +434,8 @@ Character in the Transfer gap may be absent from a query, and away or zone facts
 the query.
 No movement updates are sent to the Realm Shard for this feature.
 
-Guilds, mail and auctions stay per World Shard; their interactions across World Shards
-remain unsupported. Friends and ignores use the Character profiles and presence described below. A Transfer carries the existing Character-owned manifest, not
+Mail and auctions stay per World Shard; their interactions across World Shards remain unsupported.
+Guild membership and communication use the Realm authority described below. Friends and ignores use the Character profiles and presence described below. A Transfer carries the existing Character-owned manifest, not
 Shard-owned social or economic state. Casts in progress are cancelled; melee, threat, AOI Grants,
 Transport attachment and other omitted transient state do not survive. World departure also applies
 the existing logout cleanup, including buyback cleanup and pet despawn. A Shard without a role or
@@ -475,6 +475,49 @@ Character directory and for profile outboxes and retries to drain. Call the same
 Shard to replay all retained profiles, including deletion tombstones, and wait for those deliveries
 before reopening gameplay. Login repopulates online presence. Repeat the profile replay when adding
 a World Shard. No contact rows move during this upgrade.
+
+### Guilds across World Shards
+
+`native::realm_guild` routes native guild requests and GM creation to the Realm Shard. It checks
+Character ownership and the current World Session before applying membership, rank, invitation,
+MOTD, information and note rules. Guild and officer chat use the same Realm delivery path as group
+chat. Roster replies filter officer notes using authoritative rank rights.
+
+World Shards report guild presence and ignore lists as private, versioned facts. The Realm refuses
+reports from former Character owners and old connections cannot take a replacement connection
+offline. Invite admission uses the latest accepted target facts, then delivery repeats the ignore
+Gate on the recipient's World Shard. These are asynchronous facts, not a simultaneous Realm
+snapshot. Login, logout, level, zone and ignore changes refresh them.
+
+Guild snapshots and individual memberships have separate revision records. A guild snapshot never
+implicitly removes its former members: each membership change carries its own revision and a
+retained deletion record. This prevents a delayed roster from clearing a newer guild membership.
+World projections update the existing guild tables and AOI fields. Character Transfer preserves
+these projections; actual deletion reaches the Realm through the Character directory and applies
+leader succession or disband there. Refused projections retry while the destination is a Peer Shard.
+`operator_report_realm_guilds` replays current guilds and disband records.
+
+For existing state, keep gameplay closed across all Shards and backfill Character profiles first.
+Call `operator_report_guild_characters` on every World Shard and wait for the Realm's
+`game_guild_character` rows to cover the resident guild members. This preserves offline level,
+class, zone and last logout without making members log in; it refuses a World with active players.
+Capture each World Shard's `game_guild`, `game_guild_rank`, `game_guild_member` and
+`game_guild_invite` rows. Resolve conflicting guild ids, names, memberships and invitations before
+importing. Call `operator_import_guild` on the Realm with one `Import` object per guild, containing
+`guild`, `ranks`, `members` and `invites`. It preserves guild ids, rank numbers, notes, invitations
+and join times; internal rank row ids are reassigned. It refuses occupied ids or names and
+inconsistent Character facts. Imported ids advance the Realm's persistent guild sequence.
+
+A World Shard with unmigrated guilds refuses native guild mutations. Its first projection must
+match the captured local guild state before it can replace that state. Wait for every World
+projection and retry to settle, then compare memberships, ranks and settings with the capture.
+The import reducer refuses a Realm with Characters away in World Sessions. This Gate does not
+replace closing the listeners and checking every Shard before migration.
+
+This implementation stage does not support cross-Shard charters, petitions or emblem purchases.
+Those requests and Sessionless guild mutations are refused in the split topology. Existing charter
+items are preserved, and single-Shard behavior is unchanged. Complete the purchase coordination
+and petition migration before deploying this stage to an existing Realm.
 
 ### Groups across World Shards
 

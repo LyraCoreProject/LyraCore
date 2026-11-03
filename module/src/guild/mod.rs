@@ -32,6 +32,20 @@ pub struct Guild {
     pub created_micros: i64,
 }
 
+#[table(accessor = game_guild_sequence)]
+pub struct GuildSequence {
+    #[primary_key]
+    pub id: u8,
+    pub last_id: u32,
+}
+
+pub(crate) fn observe_guild_id(ctx: &ReducerContext, id: u32) {
+    let sequence = ctx.db.game_guild_sequence();
+    let last_id = sequence.id().find(0).map_or(id, |row| row.last_id.max(id));
+    sequence.id().delete(0);
+    sequence.insert(GuildSequence { id: 0, last_id });
+}
+
 #[table(accessor = game_guild_rank, index(accessor = by_guild, btree(columns = [guild_id])))]
 pub struct GuildRank {
     #[primary_key]
@@ -57,23 +71,26 @@ pub struct GuildMember {
 }
 
 impl GuildMember {
-    fn insert(self, ctx: &ReducerContext) -> Self {
+    pub(crate) fn insert(self, ctx: &ReducerContext) -> Self {
         let row = ctx.db.game_guild_member().insert(self);
+        crate::native::guild_member_changed(ctx, row.character_guid);
         crate::native::guild_membership_changed(ctx, row.character_guid);
         row
     }
 
-    pub(super) fn update(self, ctx: &ReducerContext) -> Self {
+    pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
         let previous = member(ctx, self.character_guid);
         let row = ctx.db.game_guild_member().character_guid().update(self);
+        crate::native::guild_member_changed(ctx, row.character_guid);
         if previous.is_none_or(|old| (old.guild_id, old.rank_id) != (row.guild_id, row.rank_id)) {
             crate::native::guild_membership_changed(ctx, row.character_guid);
         }
         row
     }
 
-    pub(super) fn delete(ctx: &ReducerContext, guid: u64) {
+    pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {
         if ctx.db.game_guild_member().character_guid().delete(guid) {
+            crate::native::guild_member_changed(ctx, guid);
             crate::native::guild_membership_changed(ctx, guid);
         }
     }
@@ -171,6 +188,9 @@ pub fn realm_guild_op(
     op: GuildOp,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    if crate::peer::role(ctx).is_some() {
+        return Err("guild requests require a native World Session in this topology".into());
+    }
     let actor_account = request_actor.ownership.as_ref().map_or(0, |t| t.account_id);
     let tokenless = request_actor.ownership.is_none();
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
@@ -293,8 +313,22 @@ pub(crate) fn create_guild(
         },
         member(ctx, leader_guid).is_some(),
     )?;
+    let guild_id = if crate::peer::world_shard(ctx).is_some() {
+        let next = ctx
+            .db
+            .game_guild_sequence()
+            .id()
+            .find(0)
+            .map_or(0, |row| row.last_id)
+            .checked_add(1)
+            .ok_or(GuildRefusal::NoPermission)?;
+        observe_guild_id(ctx, next);
+        next
+    } else {
+        0
+    };
     let guild = ctx.db.game_guild().insert(Guild {
-        guild_id: 0,
+        guild_id,
         name_key: key,
         name: name.to_string(),
         leader_guid,

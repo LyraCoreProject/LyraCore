@@ -39,6 +39,12 @@ pub(super) fn receive(
     message: ClientOpcodeMessage,
 ) -> Result<(), Rollback> {
     let actor = super::available_character(ctx, guid)?;
+    if crate::peer::realm_shard(ctx).is_some() {
+        return Err(Rollback::reply(
+            super::realm_guild::unavailable(),
+            "cross-Shard guild purchases and petitions are unavailable",
+        ));
+    }
     let id = connection.connection_id;
     use ClientOpcodeMessage as C;
     let run = |op, reply: &dyn Fn(GuildRefusal) -> Option<ServerOpcodeMessage>| {
@@ -197,41 +203,52 @@ pub(super) fn receive(
             )?;
         }
         C::CMSG_TURN_IN_PETITION(request) => {
-            let charter = request.petition.guid();
-            if !core::holds_charter(ctx, guid, charter) {
-                return Ok(());
-            }
-            let name = view(ctx, charter).map_or(String::new(), |petition| petition.name);
-            run(
-                GuildOp::TurnInPetition {
-                    charter_item_guid: charter,
-                },
-                &|refusal| match refusal {
-                    GuildRefusal::AlreadyInGuild => {
-                        Some(turn_in_result(PetitionResult::AlreadyInGuild))
-                    }
-                    GuildRefusal::NeedMoreSignatures => {
-                        Some(turn_in_result(PetitionResult::NeedMore))
-                    }
-                    GuildRefusal::NameExists => name_refusal(refusal, &name),
-                    _ => None,
-                },
-            )?;
-            crate::ItemInstance::delete(ctx, charter);
-            super::send(
-                ctx,
-                id,
-                command(
-                    GuildCommand::Create,
-                    &name,
-                    GuildCommandResult::PlayerNoMoreInGuild,
-                ),
-                false,
-            )?;
-            super::send(ctx, id, turn_in_result(PetitionResult::Ok), false)?;
+            turn_in(ctx, id, guid, actor.account_id, request.petition.guid())?;
         }
         _ => return Err("opcode is not a guild purchase or petition request".into()),
     }
+    Ok(())
+}
+
+fn turn_in(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    account_id: u64,
+    charter: u64,
+) -> Result<(), Rollback> {
+    if !core::holds_charter(ctx, guid, charter) {
+        return Ok(());
+    }
+    let name = view(ctx, charter).map_or(String::new(), |petition| petition.name);
+    guild::apply_op(
+        ctx,
+        guid,
+        account_id,
+        GuildOp::TurnInPetition {
+            charter_item_guid: charter,
+        },
+    )
+    .map_err(|refusal| {
+        refused(refusal.as_tag().into(), &|refusal| match refusal {
+            GuildRefusal::AlreadyInGuild => Some(turn_in_result(PetitionResult::AlreadyInGuild)),
+            GuildRefusal::NeedMoreSignatures => Some(turn_in_result(PetitionResult::NeedMore)),
+            GuildRefusal::NameExists => name_refusal(refusal, &name),
+            _ => None,
+        })
+    })?;
+    crate::ItemInstance::delete(ctx, charter);
+    super::send(
+        ctx,
+        connection,
+        command(
+            GuildCommand::Create,
+            &name,
+            GuildCommandResult::PlayerNoMoreInGuild,
+        ),
+        false,
+    )?;
+    super::send(ctx, connection, turn_in_result(PetitionResult::Ok), false)?;
     Ok(())
 }
 
@@ -420,6 +437,9 @@ fn charter_values(ctx: &ReducerContext, connection: ConnectionId, item: u64, pet
 }
 
 pub(super) fn replay(ctx: &ReducerContext, guid: u64, connection: ConnectionId) {
+    if crate::peer::realm_shard(ctx).is_some() {
+        return;
+    }
     let petition = ctx.db.game_guild_petition().owner_guid().find(guid);
     for item in ctx
         .db
