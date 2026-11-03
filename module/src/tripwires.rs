@@ -15,6 +15,14 @@ pub(crate) mod character_owned_tripwire {
     ];
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
+        (
+            &["game_auction_transaction"],
+            "World-owned auction settlement blocks Character Transfer and deletion until the outcome and any refund are applied",
+        ),
+        (
+            &["game_realm_auction_request", "game_world_auction_answer"],
+            "Shard-owned IDC outboxes retained until delivery completes; result callbacks settle payments or schedule refused answer delivery",
+        ),
         (&["game_guild_transaction", "game_guild_transaction_retry"], "World-owned guild settlement blocks Character Transfer and deletion until the IDC result and any refund are applied"),
         (&["game_guild_character", "game_guild_membership_projection"], "Realm-owned guild presence and membership revisions retained across Character Transfer; directory deletion removes presence and projects membership removal"),
         (
@@ -53,7 +61,7 @@ pub(crate) mod character_owned_tripwire {
         ),
         (
             &["game_auction", "game_auction_operation_receipt"],
-            "realm-owned Auction value and listing receipts",
+            "Shard-owned Listings and receipts retained across Character Transfer; settlement and expiry consume the listed value",
         ),
         (
             &["game_auction_bid_decision"],
