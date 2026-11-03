@@ -46,6 +46,13 @@ transaction: keep the fast path out of the database and cross into it on purpose
    A Module test checks them against `lyracore-shared`.
 8. A Module must be published before a Host that subscribes to `game_native_motion_permit`. An
    older Host ignores permits and leaves every movement on the Module path.
+9. An observer more than 40 yards from a mover gets every second relayed heartbeat of that mover,
+   and one more than 80 yards away every fourth. The Host measures from where each of them last
+   relayed movement. An observer without a permit, or that has not moved, gets every heartbeat.
+   Every other movement, and a heartbeat that replaced a queued facing or pitch change, reaches
+   every observer. The 1.12 client moves peers on from their movement flags between heartbeats,
+   so a distant heartbeat mostly corrects drift. A crowd sends N² heartbeats, and most of its
+   pairs are far apart.
 
 ## Rejected
 

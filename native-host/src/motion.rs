@@ -7,7 +7,7 @@ const ON_TRANSPORT: u32 = 0x0200_0000;
 const MOVEMENT_INFO_BYTES: usize = 28;
 // Optional MovementInfo tails: swim pitch, jump velocity and spline elevation, in bytes.
 const MOVEMENT_TAILS: [(u32, usize); 3] = [(0x0020_0000, 4), (0x2000, 16), (0x0400_0000, 4)];
-const HEARTBEAT: u16 = 0x00ee;
+pub(super) const HEARTBEAT: u16 = 0x00ee;
 const SAMPLE_INTERVAL: Duration = Duration::from_secs(1);
 // The Module's persist drift; the melee leeway assumes its position trails by no more.
 const SAMPLE_DRIFT_YD: f32 = 4.0;
@@ -57,6 +57,10 @@ pub(super) fn pose(opcode: u32, body: &[u8]) -> Option<Pose> {
 impl Pose {
     pub(super) fn opcode(&self) -> u16 {
         self.opcode
+    }
+
+    pub(super) fn position(&self) -> (f32, f32) {
+        (self.x, self.y)
     }
 }
 
