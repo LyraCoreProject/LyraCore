@@ -120,8 +120,11 @@ async fn write_packets(
 ) -> Result<()> {
     let mut bytes = Vec::new();
     let mut close = false;
+    // A Delivery can join several transactions; output after a close is not sent.
     for packet in packets {
-        ensure!(!close, "Module emitted packets after connection close");
+        if close {
+            break;
+        }
         close = packet.close_after;
         let Some(opcode) = packet.opcode else {
             ensure!(
@@ -140,7 +143,10 @@ async fn write_packets(
         }
         bytes.extend_from_slice(&packet.body);
     }
-    tokio::time::timeout(Duration::from_secs(2), writer.write_all(&bytes)).await??;
+    // The deadline bounds each chunk's progress, so a joined Delivery gets no shorter allowance.
+    for chunk in bytes.chunks(64 * 1024) {
+        tokio::time::timeout(Duration::from_secs(2), writer.write_all(chunk)).await??;
+    }
     ensure!(!close, "Module closed the native connection");
     Ok(())
 }

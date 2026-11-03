@@ -42,6 +42,7 @@ mod loot;
 mod mail;
 mod meeting_stone;
 mod member_stats;
+mod motion_permit;
 mod object;
 mod party;
 mod pet;
@@ -93,6 +94,10 @@ pub(crate) use mail::arrived as mail_arrived;
 pub(crate) use member_stats::{game_native_member_stats, tick_native_member_stats};
 pub(crate) use member_stats::{
     sweep_delete_game_native_member_stats, sweep_transfer_game_native_member_stats,
+};
+pub(crate) use motion_permit::{
+    refresh_character as refresh_motion_permit, sweep_delete_game_native_motion_permit,
+    sweep_transfer_game_native_motion_permit,
 };
 pub(crate) use object::changed as gameobject_changed;
 pub(crate) use party::roster as party_roster;
@@ -405,11 +410,36 @@ pub fn native_world_receive(
     opcode: u32,
     body: Vec<u8>,
 ) -> Result<(), String> {
-    receive(ctx, opcode, body).map_err(Rollback::into_reducer_error)
+    let connection_id = connection_id(ctx)?;
+    receive(ctx, connection_id, MotionRelay::Module, opcode, body)
+        .map_err(Rollback::into_reducer_error)
 }
 
-fn receive(ctx: &ReducerContext, opcode: u32, body: Vec<u8>) -> Result<(), Rollback> {
+/// Which tier sends observers a mover's movement.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MotionRelay {
+    Module,
+    Host,
+}
+
+/// Applies movement the Host already relayed under the connection's Motion Permit.
+#[reducer]
+pub fn native_world_motion(ctx: &ReducerContext, opcode: u32, body: Vec<u8>) -> Result<(), String> {
     let connection_id = connection_id(ctx)?;
+    if !crate::motion::is_client_motion(opcode) {
+        return Err(format!("native motion carries opcode 0x{opcode:03x}"));
+    }
+    receive(ctx, connection_id, MotionRelay::Host, opcode, body)
+        .map_err(Rollback::into_reducer_error)
+}
+
+fn receive(
+    ctx: &ReducerContext,
+    connection_id: ConnectionId,
+    relay: MotionRelay,
+    opcode: u32,
+    body: Vec<u8>,
+) -> Result<(), Rollback> {
     let connection = ctx
         .db
         .game_native_world_connection()
@@ -515,7 +545,7 @@ fn receive(ctx: &ReducerContext, opcode: u32, body: Vec<u8>) -> Result<(), Rollb
             Ok(send(ctx, connection_id, reply, false)?)
         }
         NativeWorldState::InWorld(NativeActive { character_guid, .. }) => {
-            world::receive(ctx, connection, character_guid, opcode, &body)
+            world::receive(ctx, connection, character_guid, relay, opcode, &body)
         }
     }
 }
@@ -925,5 +955,14 @@ mod tests {
         for (row, fixture) in rows {
             assert_eq!(bsatn::to_vec(&row).unwrap(), fixture, "packet {}", row.id);
         }
+    }
+
+    #[test]
+    fn motion_permit_row_matches_the_host_fixture() {
+        let permit = super::motion_permit::NativeMotionPermit {
+            connection_id: CONNECTION,
+            character_guid: 8,
+        };
+        assert_eq!(bsatn::to_vec(&permit).unwrap(), MOTION_PERMIT);
     }
 }

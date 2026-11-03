@@ -24,7 +24,9 @@ Shard. An existing multi-Shard Realm needs a reviewed data migration first; see
    - Change native reducer arguments and their Host calls together. The Host and Module also share
      the BSATN layouts of `game_native_cipher` and `game_native_packet`. Update
      `native-host/src/feed.rs` with `module/src/native/mod.rs`, then run the native protocol check.
-     Both sides' unit tests pin these layouts to the rows in `native-host/src/delivery_rows.rs`.
+     Both sides' unit tests pin these layouts, and `game_native_motion_permit`, to the rows in
+     `native-host/src/delivery_rows.rs`. Publish a Module with `game_native_motion_permit` before
+     you start a Host that subscribes to it; that Host's output subscription fails without it.
    - `./lyracore dev watch` permits only an unchanged Module definition. Its development Host
      compares all reducer arguments and private table layouts before it replaces the Module.
      SpacetimeDB's normal migration check does not compare reducer arguments. Use a planned

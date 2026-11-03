@@ -10,11 +10,13 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, oneshot, watch};
+use tokio::sync::{oneshot, watch};
 use wow_srp::vanilla_header::ProofSeed;
 
 #[path = "native_feed.rs"]
 mod feed;
+#[path = "native_motion.rs"]
+mod motion;
 #[path = "native_wire.rs"]
 mod wire;
 
@@ -107,10 +109,10 @@ impl Drop for ClientLifetime {
 /// A native connection's attachment to one Shard. Dropping it disconnects the client from that Shard.
 struct Shard {
     client: ClientConnection,
-    deliveries: mpsc::UnboundedReceiver<feed::Delivery>,
+    deliveries: feed::Deliveries,
     closed: oneshot::Receiver<()>,
     _stop: oneshot::Sender<()>,
-    _registration: feed::Registration,
+    feed: Arc<feed::Registration>,
 }
 
 async fn attach(
@@ -171,7 +173,7 @@ async fn attach(
         deliveries,
         closed,
         _stop: stop,
-        _registration: registration,
+        feed: Arc::new(registration),
     })
 }
 
@@ -214,7 +216,7 @@ async fn request(
     };
     let packets: Vec<(u16, Vec<u8>)> = serde_json::from_str(reply)?;
     ensure!(
-        reducer == "native_world_receive",
+        matches!(reducer, "native_world_receive" | "native_world_motion"),
         "native rollback reply outside a world request"
     );
     call(client, "native_world_reply", &(packets,))
@@ -291,14 +293,31 @@ async fn serve(
     let (mut reader, mut writer) = socket.into_split();
     let (activity, mut activity_rx) = watch::channel(tokio::time::Instant::now());
     // A request that was in flight to the Shard before a Handoff may fail once that Shard lets go.
-    let (current, current_rx) = watch::channel((0u64, shard.client.clone()));
+    let (current, current_rx) = watch::channel((0u64, shard.client.clone(), shard.feed.clone()));
     let input_activity = activity.clone();
     let input = async move {
+        let mut mover = motion::Mover::default();
         loop {
             let (opcode, body) = wire::read_client(&mut reader, Some(&mut decrypt)).await?;
+            let now = std::time::Instant::now();
             input_activity.send_replace(tokio::time::Instant::now());
-            let (generation, client) = current_rx.borrow().clone();
-            let result = request(&client, "native_world_receive", &(opcode, body)).await;
+            let (generation, client, feed) = current_rx.borrow().clone();
+            let pose = motion::pose(opcode, &body).filter(|pose| mover.follows(pose));
+            let result = match pose {
+                Some(pose) if feed.relay(pose.opcode(), &body) => {
+                    if mover.accept(pose, now) {
+                        request(&client, "native_world_motion", &(opcode, body)).await
+                    } else {
+                        Ok(())
+                    }
+                }
+                _ => {
+                    if let Some(pose) = pose {
+                        mover.accept(pose, now);
+                    }
+                    request(&client, "native_world_receive", &(opcode, body)).await
+                }
+            };
             if result.is_err() && current_rx.borrow().0 == generation {
                 return result;
             }
@@ -335,7 +354,7 @@ async fn serve(
                 let next = attach(ctx, database, connection_id).await?;
                 request(&next.client, "native_world_adopt", &()).await?;
                 generation += 1;
-                current.send_replace((generation, next.client.clone()));
+                current.send_replace((generation, next.client.clone(), next.feed.clone()));
                 shard = next;
                 adopting = true;
             }
@@ -358,7 +377,7 @@ async fn serve_logon(shard: Shard, mut socket: TcpStream) -> Result<()> {
         mut deliveries,
         mut closed,
         _stop: _attached,
-        _registration: _registered,
+        feed: _registered,
     } = shard;
     request(
         &client,

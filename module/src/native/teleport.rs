@@ -76,7 +76,9 @@ pub(crate) fn begin(ctx: &ReducerContext, guid: u64, cross_map: bool) -> Option<
     player.open_loot = 0;
     player.gossip_menu = None;
     let counter = player.teleport_counter;
+    let connection_id = player.connection_id;
     ctx.db.game_native_player().connection_id().update(player);
+    super::motion_permit::withdraw(ctx, connection_id);
     Some(counter)
 }
 

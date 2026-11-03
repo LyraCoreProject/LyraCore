@@ -73,7 +73,7 @@ pub fn gw_movement_update(
     }
     let mover = actor(ctx, actor_guid)?;
     let movement = gw_movement(&movement_info, x, y, z, o, move_time_ms);
-    crate::world::apply_movement_update(ctx, mover, opcode, &movement, movement_info)
+    crate::world::apply_movement_update(ctx, mover, opcode, &movement, Some(movement_info))
 }
 
 /// The pose arguments are authoritative; a body that does not decode supplies only its flag word.
@@ -141,7 +141,13 @@ pub fn gw_movement_batch(ctx: &ReducerContext, moves: Vec<GwMove>) -> Result<(),
             let actor_guid = crate::account_ownership::require_actor(ctx, m.actor)?;
             let mover = actor(ctx, actor_guid)?;
             let movement = gw_movement(&m.movement_info, m.x, m.y, m.z, m.o, m.move_time_ms);
-            crate::world::apply_movement_update(ctx, mover, m.opcode, &movement, m.movement_info)
+            crate::world::apply_movement_update(
+                ctx,
+                mover,
+                m.opcode,
+                &movement,
+                Some(m.movement_info),
+            )
         },
     );
     // Drain motion inside the batch transaction so its subscription sweep runs once.

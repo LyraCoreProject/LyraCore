@@ -1,4 +1,5 @@
-// BSATN rows of game_native_cipher and game_native_packet. Module and Host tests include this file.
+// BSATN rows of game_native_cipher, game_native_packet and game_native_motion_permit.
+// Module and Host tests include this file.
 
 #[rustfmt::skip]
 const CIPHER: &[u8] = &[
@@ -74,4 +75,10 @@ const HANDOFF_PACKET: &[u8] = &[
     0,
     0, 0, 0, 0, 0, 0, 0, 0,
     0,
+];
+
+#[rustfmt::skip]
+const MOTION_PERMIT: &[u8] = &[
+    7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    8, 0, 0, 0, 0, 0, 0, 0,
 ];

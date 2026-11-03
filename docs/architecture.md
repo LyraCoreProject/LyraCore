@@ -28,6 +28,23 @@ If a Module replacement closes the selected Module before dispatch, the Host ret
 unexecuted request once against the current Module. It does not retry failed reducer outcomes or
 requests whose outcome is unknown.
 
+A World Session with a Motion Permit has its movement relayed by the Host
+([ADR 0006](./adr/0006-relay-motion-in-the-native-host.md)). The Module holds the permit while the
+Character moves freely on foot and withdraws it in the transaction that roots, kills, seats on a
+taxi or teleports the Character, or that sees a Transport flag. The Host checks that a movement
+message is well formed, on foot and newer than the last one, then sends it straight to the mover's
+AOI Grant holders. It forwards discrete movement, and one Coalescible Motion sample a second or
+after 8 yards, to `native_world_motion`, which applies it without a Module relay. Without a permit,
+or when a check fails, movement goes to `native_world_receive` as before. The shared opcode lists
+are in `native-host/src/motion_opcodes.rs`.
+
+Output a connection has not taken yet waits in one queue, and the Host writes all of it at once, in
+64 KiB chunks with a 2-second deadline each. Host relays wake writers every 20 ms. A newer
+Coalescible Motion Relay for the same mover supersedes a queued one and returns its bytes to the
+connection's 2 MiB output limit, so a slow reader falls behind on motion before it reaches the
+limit. Discrete movement and every other packet always reach the client in order. Output after a
+close is not sent.
+
 `game_native_packet.id` orders delivery instructions within a transaction. A grant's CREATE comes
 before the packets delivered through that grant. A revoke removes its recipient before later
 packets can use it. Logout clears every delivery permission of the connection before it returns to
