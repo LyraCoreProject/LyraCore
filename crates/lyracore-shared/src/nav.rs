@@ -283,6 +283,38 @@ fn nearest_walkable(
     None
 }
 
+/// The node to approach instead of a target with no walkable node within the stopping distance,
+/// such as one on a steep slope; `None` when the target needs no approach. Err is the finished
+/// search: blocked without a walkable node nearby, or a partial leg in a straight line.
+fn approach(
+    cache: &mut Cache<impl FnMut(u16, u16) -> Option<NavCellData>>,
+    from: (f32, f32),
+    target: (u32, u32),
+    to: (f32, f32),
+    stop_dist: f32,
+) -> Result<Option<(u32, u32)>, LegSearch> {
+    if stop_dist == 0.0
+        || grid_walkable(cache, target.0, target.1)
+        || walkable_within(cache, target, to, stop_dist)
+    {
+        return Ok(None);
+    }
+    let Some((x, y)) = nearest_walkable(cache, target, to, APPROACH_SEARCH_YD) else {
+        return Err(LegSearch {
+            outcome: LegOutcome::Blocked,
+            expansions: 0,
+        });
+    };
+    let point = (grid_to_world(x), grid_to_world(y));
+    if line_walkable(cache, from, point) {
+        return Err(LegSearch {
+            outcome: LegOutcome::Partial(vec![point]),
+            expansions: 0,
+        });
+    }
+    Ok(Some((x, y)))
+}
+
 // Exempt the start cell so a mover can leave a conservative obstruction margin.
 fn line_walkable(
     cache: &mut Cache<impl FnMut(u16, u16) -> Option<NavCellData>>,
@@ -471,26 +503,15 @@ fn search_leg(
     if stop_dist == 0.0 && !target_walkable {
         return blocked(0);
     }
-    // A target with no walkable node within the stopping distance, such as one on a steep slope,
-    // is approached at the nearest walkable node instead, and the leg is partial.
-    let approached = stop_dist > 0.0
-        && !target_walkable
-        && !walkable_within(&mut cache, (tx, ty), to, stop_dist);
-    let (tx, ty, to, stop_dist, target_walkable) = if approached {
-        let Some((x, y)) = nearest_walkable(&mut cache, (tx, ty), to, APPROACH_SEARCH_YD) else {
-            return blocked(0);
-        };
-        let approach = (grid_to_world(x), grid_to_world(y));
-        if line_walkable(&mut cache, from, approach) {
-            return LegSearch {
-                outcome: LegOutcome::Partial(vec![approach]),
-                expansions: 0,
-            };
-        }
-        (x, y, approach, 0.0, true)
-    } else {
-        (tx, ty, to, stop_dist, target_walkable)
+    let approach = match approach(&mut cache, from, (tx, ty), to, stop_dist) {
+        Ok(approach) => approach,
+        Err(search) => return search,
     };
+    let approached = approach.is_some();
+    let (tx, ty, to, stop_dist, target_walkable) = approach
+        .map_or((tx, ty, to, stop_dist, target_walkable), |(x, y)| {
+            (x, y, (grid_to_world(x), grid_to_world(y)), 0.0, true)
+        });
     // A 5/4 heuristic weight trades shortest paths for fewer expansions.
     use std::cmp::Reverse;
     use std::collections::{BinaryHeap, HashMap};
