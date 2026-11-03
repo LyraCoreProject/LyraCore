@@ -23,6 +23,14 @@ pub struct GuildPetition {
     pub created_micros: i64,
 }
 
+impl GuildPetition {
+    pub(crate) fn insert(self, ctx: &ReducerContext) -> Self {
+        let petition = ctx.db.game_guild_petition().insert(self);
+        crate::native::guild_charter_opened(ctx, &petition);
+        petition
+    }
+}
+
 #[table(
     accessor = game_guild_petition_signature,
     index(accessor = by_petition, btree(columns = [petition_id])),
@@ -36,6 +44,20 @@ pub struct GuildPetitionSignature {
     pub signer_name: String,
     pub signer_realm_account: u64,
     pub signed_micros: i64,
+}
+
+#[table(accessor = game_guild_petition_sequence)]
+pub struct GuildPetitionSequence {
+    #[primary_key]
+    pub id: u8,
+    pub last_id: u32,
+}
+
+pub(crate) fn observe_id(ctx: &ReducerContext, id: u32) {
+    let table = ctx.db.game_guild_petition_sequence();
+    let last_id = table.id().find(0).map_or(id, |old| old.last_id.max(id));
+    table.id().delete(0);
+    table.insert(GuildPetitionSequence { id: 0, last_id });
 }
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
@@ -211,18 +233,32 @@ pub(crate) fn open(
     team: u32,
     name: &str,
     charter_item_guid: u64,
-) -> u32 {
-    let petition = ctx.db.game_guild_petition().insert(GuildPetition {
-        petition_id: 0,
+) -> Result<u32, GuildRefusal> {
+    let petition_id = if crate::peer::world_shard(ctx).is_some() {
+        let next = ctx
+            .db
+            .game_guild_petition_sequence()
+            .id()
+            .find(0)
+            .map_or(0, |row| row.last_id)
+            .checked_add(1)
+            .ok_or(GuildRefusal::NoPermission)?;
+        observe_id(ctx, next);
+        next
+    } else {
+        0
+    };
+    let petition = GuildPetition {
+        petition_id,
         charter_item_guid,
         owner_guid,
         owner_name: owner_name.to_string(),
         team,
         name: name.to_string(),
         created_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
-    });
-    crate::native::guild_charter_opened(ctx, &petition);
-    petition.petition_id
+    }
+    .insert(ctx);
+    Ok(petition.petition_id)
 }
 
 pub(crate) fn sign(

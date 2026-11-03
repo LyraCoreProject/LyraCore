@@ -31,7 +31,7 @@ def generate(wasm):
         sys.exit('spacetime CLI not found')
     standalone = Path(os.path.realpath(spacetime)).with_name('spacetimedb-standalone')
     definition = json.loads(subprocess.run([standalone, 'extract-schema', wasm, '--host-type', 'wasm'],
-        check=True, capture_output=True, text=True).stdout)
+        check=True, stdout=subprocess.PIPE, text=True).stdout)
     sections = []
     for section in definition['V10']['sections']:
         [(kind, value)] = section.items()

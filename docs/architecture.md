@@ -514,10 +514,35 @@ projection and retry to settle, then compare memberships, ranks and settings wit
 The import reducer refuses a Realm with Characters away in World Sessions. This Gate does not
 replace closing the listeners and checking every Shard before migration.
 
-This implementation stage does not support cross-Shard charters, petitions or emblem purchases.
-Those requests and Sessionless guild mutations are refused in the split topology. Existing charter
-items are preserved, and single-Shard behavior is unchanged. Complete the purchase coordination
-and petition migration before deploying this stage to an existing Realm.
+Guild charters, signatures, renames, offers, declines, founding and emblem purchases also use the
+Realm. The World checks NPC access and the purse, debits copper and creates a purchased charter
+before queuing its durable request. `game_guild_transaction` records that request until its result
+settles. Realm refusal returns the copper and removes the provisional charter; acceptance keeps the
+charge. Founding consumes the charter only after Realm acceptance. A repeated result cannot charge,
+refund or consume again. A missing transport response is not permission to refund.
+
+Refunds update the live purse or the stored Character after logout. If the purse has filled while
+the request was pending, settlement credits only the space available and retries the remaining
+copper. Cross-map teleport, Transfer and Character deletion refuse while settlement is pending.
+Ordinary movement, logout and other inventory actions can continue. Charter destruction during a
+request is reconciled after its result. Login compares held charter item GUIDs with the Realm's
+petition, closes a petition whose charter is missing, and removes inert items only after an explicit
+Realm absence result. Pending reconciliation and closure retry refusals; they also prevent Transfer.
+
+Before reopening an existing Realm, capture `game_guild_petition`,
+`game_guild_petition_signature` and the matching owned charter items on every World Shard. Resolve
+petition id conflicts and missing charter items. With gameplay closed and Character profiles
+backfilled, call `operator_report_guild_petitions` on each World. It sends each petition and its
+signatures to the Realm, preserving petition ids, item GUIDs, Account attribution and timestamps.
+The Realm validates owners, signers and conflicts, then advances its petition id sequence. Only a
+successful result removes the original World petition and signatures; charter items stay in their
+inventory. Wait for source transactions to drain, require the source petition tables to be empty,
+and compare Realm rows and World items with the capture. A refused import leaves its source rows
+for correction and another report. Reopening gameplay before these checks is unsupported.
+
+Publish the Realm Module before the World Modules and drain guild outboxes before changing their
+private operation encoding. Sessionless guild mutations remain refused in the split topology;
+single-Shard purchases and petitions retain their local atomic transaction.
 
 ### Groups across World Shards
 

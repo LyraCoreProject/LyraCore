@@ -29,7 +29,7 @@ const CREATE_FOR_LEADER: u32 = 0;
 
 #[derive(SpacetimeType)]
 pub struct Facts {
-    character: PartyCharacter,
+    pub(super) character: PartyCharacter,
     ignores: Vec<u64>,
     level: u8,
     zone: u32,
@@ -161,6 +161,41 @@ pub fn operator_report_guild_characters(ctx: &ReducerContext) -> Result<(), Stri
     Ok(())
 }
 
+pub(super) fn queue(
+    ctx: &ReducerContext,
+    guid: u64,
+    opcode: u32,
+    body: Vec<u8>,
+) -> Result<RealmGuildCommand, String> {
+    let realm = realm_shard(ctx).ok_or("World Shard has no Realm Shard")?;
+    let character = realm_party::facts(ctx, guid, true)
+        .or_else(|| {
+            let character = crate::helpers::character_by_guid(ctx, guid)?;
+            Some(PartyCharacter {
+                guid,
+                account_id: character.account_id,
+                connection: 0,
+                world: ctx.database_identity(),
+                name: character.name,
+                race: character.race,
+                class: character.class,
+                chat_tag: 0,
+                identity: character.owner_identity,
+                online: false,
+                stats: None,
+                revision: directory::revision(ctx),
+            })
+        })
+        .ok_or("Character is not owned here")?;
+    Ok(ctx.db.game_realm_guild_command().insert(RealmGuildCommand {
+        id: 0,
+        database: remote::Identity(realm),
+        facts: encode(&facts(ctx, character).ok_or("Character is not owned here")?),
+        opcode,
+        body,
+    }))
+}
+
 fn current(ctx: &ReducerContext, facts: &Facts) -> bool {
     facts.character.world == ctx.sender()
         && realm_party::current(ctx, &facts.character) == Some(ctx.sender())
@@ -226,6 +261,11 @@ pub fn idc_realm_guild_presence(ctx: &ReducerContext, facts: Vec<u8>) -> Result<
             return Ok(());
         }
     }
+    record_presence(ctx, facts)
+}
+
+fn record_presence(ctx: &ReducerContext, facts: Facts) -> Result<(), String> {
+    let character = &facts.character;
     let (guid, online, account, name) = (
         character.guid,
         character.online,
@@ -329,7 +369,28 @@ pub fn idc_realm_guild_command(
 ) -> Result<(), String> {
     directory::require_world(ctx)?;
     let facts: Facts = bsatn::from_slice(&facts).map_err(|error| error.to_string())?;
-    if !current(ctx, &facts) || !facts.character.online {
+    let operation = (opcode == super::realm_petition::TRANSACTION)
+        .then(|| bsatn::from_slice::<super::realm_petition::Operation>(&body))
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let background = operation
+        .as_ref()
+        .is_some_and(|operation| operation.background());
+    if background {
+        use directory::game_character_directory;
+        if facts.character.world != ctx.sender()
+            || ctx
+                .db
+                .game_character_directory()
+                .guid()
+                .find(facts.character.guid)
+                .is_none_or(|entry| {
+                    entry.world != ctx.sender() || entry.account_id != facts.character.account_id
+                })
+        {
+            return Err("World Shard does not hold this Character".into());
+        }
+    } else if !current(ctx, &facts) || !facts.character.online {
         return Err("World Session changed".into());
     }
     let actor = super::guild::Actor {
@@ -338,7 +399,9 @@ pub fn idc_realm_guild_command(
         name: facts.character.name.clone(),
         team: team_for_race(facts.character.race),
     };
-    store_character(ctx, facts);
+    if facts.character.online && current(ctx, &facts) {
+        record_presence(ctx, facts)?;
+    }
     let mut guilds: BTreeSet<_> = guild::member(ctx, actor.guid)
         .map(|member| member.guild_id)
         .into_iter()
@@ -350,21 +413,29 @@ pub fn idc_realm_guild_command(
         .map(|event| event.id)
         .max()
         .unwrap_or(0);
-    let reply = if opcode == CREATE_FOR_LEADER {
+    let reply = if let Some(operation) = operation {
+        super::realm_petition::apply(ctx, &actor, operation)
+            .map_err(Rollback::into_reducer_error)?
+    } else if opcode == CREATE_FOR_LEADER {
         let leader = create(ctx, &actor, &body).map_err(Rollback::into_reducer_error)?;
         guilds.extend(guild::member(ctx, leader).map(|member| member.guild_id));
         None
     } else {
         let message =
             lyracore_protocol::world::decode(opcode, &body).map_err(|error| error.to_string())?;
-        super::guild::request(
-            ctx,
-            &actor,
-            crate::auth::gm_level(ctx, actor.account_id),
-            message,
-            |name| invitee(ctx, actor.guid, name),
-        )
-        .map_err(Rollback::into_reducer_error)?
+        if super::realm_petition::is_request(&message) {
+            super::realm_petition::request(ctx, &actor, message)
+                .map_err(Rollback::into_reducer_error)?
+        } else {
+            super::guild::request(
+                ctx,
+                &actor,
+                crate::auth::gm_level(ctx, actor.account_id),
+                message,
+                |name| invitee(ctx, actor.guid, name),
+            )
+            .map_err(Rollback::into_reducer_error)?
+        }
     };
     guilds.extend(guild::member(ctx, actor.guid).map(|member| member.guild_id));
     guilds.extend(
@@ -388,10 +459,17 @@ pub fn realm_guild_command_answered(
     call: RealmGuildCommand,
     result: Result<(), String>,
 ) -> Result<(), String> {
-    let Err(error) = result else {
-        return Ok(());
-    };
     let facts: Facts = bsatn::from_slice(&call.facts).map_err(|error| error.to_string())?;
+    if call.opcode == super::realm_petition::TRANSACTION {
+        return super::realm_petition::answered(
+            ctx,
+            &call,
+            facts.character.guid,
+            facts.character.connection,
+            result,
+        );
+    }
+    let Err(error) = result else { return Ok(()) };
     let connection = ConnectionId::from_u128(facts.character.connection);
     if ctx
         .db
@@ -544,7 +622,12 @@ fn project(ctx: &ReducerContext, snapshot: Snapshot, revision: u64) -> Result<()
     Ok(())
 }
 
-fn deliver(ctx: &ReducerContext, guid: u64, packets: Vec<(u16, Vec<u8>)>, ignore: Option<u64>) {
+pub(super) fn deliver(
+    ctx: &ReducerContext,
+    guid: u64,
+    packets: Vec<(u16, Vec<u8>)>,
+    ignore: Option<u64>,
+) {
     let Some(row) = ctx.db.game_guild_character().guid().find(guid) else {
         return;
     };
@@ -569,6 +652,15 @@ pub(super) fn event(ctx: &ReducerContext, event: &guild::GuildEvent) -> bool {
         return false;
     }
     if event_kind::is_petition(event.kind) {
+        if let Some(packet) = super::petition::event_packet(ctx, event) {
+            let packet = super::guild::encode(packet);
+            deliver(
+                ctx,
+                event.recipient_guid,
+                vec![(packet.opcode, packet.body)],
+                None,
+            );
+        }
         return true;
     }
     let recipients: Vec<_> = if event.recipient_guid != 0 {
@@ -866,7 +958,7 @@ pub fn operator_report_realm_guilds(ctx: &ReducerContext) -> Result<(), String> 
     Ok(())
 }
 
-fn has_local_guilds(ctx: &ReducerContext) -> bool {
+pub(super) fn has_local_guilds(ctx: &ReducerContext) -> bool {
     ctx.db.game_guild().iter().any(|guild| {
         ctx.db
             .game_guild_projection()

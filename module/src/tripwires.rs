@@ -15,6 +15,7 @@ pub(crate) mod character_owned_tripwire {
     ];
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
+        (&["game_guild_transaction", "game_guild_transaction_retry"], "World-owned guild settlement blocks Character Transfer and deletion until the IDC result and any refund are applied"),
         (&["game_guild_character", "game_guild_membership_projection"], "Realm-owned guild presence and membership revisions retained across Character Transfer; directory deletion removes presence and projects membership removal"),
         (
             &["game_character_profile"],
