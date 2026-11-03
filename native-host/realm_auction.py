@@ -199,7 +199,10 @@ def check(host, worlds, character, received):
 
     expiring = listing()
     transfer(host, seller, owner, east, 1, received)
+    expired_mail = f"SELECT item_entry FROM game_mail WHERE recipient_guid = {owner} AND subject = '{ITEM}:1900:3'"
+    assert not host.rows(expired_mail, west)
     host.call('debug_auction_due', [expiring])
-    host.wait_until(lambda: host.rows(f'SELECT id FROM game_mail WHERE recipient_guid = {owner} AND item_entry = {ITEM}', west), 'expiry did not follow the seller through Transfer')
+    host.wait_until(lambda: host.rows(expired_mail, west) == [[ITEM]], 'expiry did not follow the seller through Transfer')
+    assert not host.rows(f'SELECT id FROM game_auction WHERE id = {expiring}')
     for client, guid in ((seller, owner), (bidder, buyer), (rival, competitor)):
         remove(client, guid, received)
