@@ -120,6 +120,10 @@ impl Packet {
 }
 
 const OUTPUT_BYTES: usize = 2 * 1024 * 1024;
+// Beyond these distances an observer gets every second or fourth relayed heartbeat of a mover.
+const HEARTBEAT_STRIDES: [(f32, u32); 2] = [(40.0, 2), (80.0, 4)];
+// A heartbeat that turns a mover further than this, or changes its flags, reaches every observer.
+const HEARTBEAT_TURN_RAD: f32 = 0.2;
 const RELAY_FLUSH: Duration = Duration::from_millis(20);
 const SLOT_BYTES: usize = std::mem::size_of::<Option<Arc<Packet>>>();
 
@@ -231,42 +235,95 @@ struct State {
     clients: HashMap<ConnectionId, Client>,
     router: Router,
     permits: HashMap<ConnectionId, u64>,
-    relays: Vec<(ConnectionId, Arc<Packet>)>,
+    relays: Vec<Relay>,
     // Each connection's last queued relay; newer Coalescible Motion replaces it there.
     last_relay: HashMap<ConnectionId, usize>,
+    // Where each permitted mover last relayed from, how many heartbeats it queued, and the
+    // movement flags and orientation that every observer last got from it.
+    positions: HashMap<ConnectionId, (f32, f32)>,
+    heartbeats: HashMap<ConnectionId, u32>,
+    headings: HashMap<ConnectionId, (u32, f32)>,
+}
+
+struct Relay {
+    connection: ConnectionId,
+    packet: Arc<Packet>,
+    at: (f32, f32),
+    heartbeat: Option<u32>,
+}
+
+/// The movement flags and orientation of a MovementInfo.
+fn heading(movement_info: &[u8]) -> Option<(u32, f32)> {
+    let flags = u32::from_le_bytes(movement_info.get(..4)?.try_into().ok()?);
+    let orientation = f32::from_le_bytes(movement_info.get(20..24)?.try_into().ok()?);
+    Some((flags, orientation))
+}
+
+fn turned((flags, orientation): (u32, f32), (seen_flags, seen): (u32, f32)) -> bool {
+    let turn = (orientation - seen).rem_euclid(std::f32::consts::TAU);
+    flags != seen_flags || turn.min(std::f32::consts::TAU - turn) > HEARTBEAT_TURN_RAD
+}
+
+/// The observer at `viewer` gets one in this many of a mover's relayed heartbeats.
+fn heartbeat_stride(viewer: Option<(f32, f32)>, mover: (f32, f32)) -> u32 {
+    let Some((x, y)) = viewer else {
+        return 1;
+    };
+    let distance_sq = (x - mover.0).powi(2) + (y - mover.1).powi(2);
+    HEARTBEAT_STRIDES
+        .iter()
+        .rev()
+        .find(|(yards, _)| distance_sq > yards * yards)
+        .map_or(1, |&(_, stride)| stride)
 }
 
 impl State {
     fn remove(&mut self, connection: ConnectionId) {
         self.clients.remove(&connection);
         self.router.clear(connection);
+        self.forget_mover(connection);
+    }
+
+    fn forget_mover(&mut self, connection: ConnectionId) {
+        self.positions.remove(&connection);
+        self.heartbeats.remove(&connection);
+        self.headings.remove(&connection);
     }
 
     fn flush_relays(&mut self) {
         self.last_relay.clear();
-        let relays: Vec<_> = std::mem::take(&mut self.relays)
-            .into_iter()
-            .filter(|(connection, packet)| {
-                let Audience::Aoi(aoi) = packet.audience else {
-                    return false;
-                };
-                self.permits.get(connection) == Some(&aoi.entity_guid)
-            })
-            .map(|(_, packet)| packet)
-            .collect();
-        let clients = &self.clients;
-        let routed = self
-            .router
-            .route(relays, |connection| clients.contains_key(connection));
-        self.deliver(routed.into_iter().map(|(connection, packets)| {
-            (
-                connection,
-                Delivery {
-                    cipher: None,
-                    packets,
-                },
-            )
-        }));
+        let mut deliveries = HashMap::<ConnectionId, (Option<(f32, f32)>, Delivery)>::new();
+        for relay in std::mem::take(&mut self.relays) {
+            let Audience::Aoi(aoi) = relay.packet.audience else {
+                continue;
+            };
+            if self.permits.get(&relay.connection) != Some(&aoi.entity_guid) {
+                continue;
+            }
+            let Some(viewers) = self.router.recipients.get(&(aoi.layer, aoi.entity_guid)) else {
+                continue;
+            };
+            for &viewer in viewers {
+                if Some(viewer) == aoi.exclude_connection {
+                    continue;
+                }
+                let (at, delivery) = deliveries
+                    .entry(viewer)
+                    .or_insert_with(|| (self.positions.get(&viewer).copied(), Delivery::default()));
+                if relay
+                    .heartbeat
+                    .is_none_or(|heartbeat| heartbeat % heartbeat_stride(*at, relay.at) == 0)
+                {
+                    delivery.packets.push(relay.packet.clone());
+                }
+            }
+        }
+        self.deliver(
+            deliveries
+                .into_iter()
+                .filter(|(_, (_, delivery))| !delivery.packets.is_empty())
+                .map(|(viewer, (_, delivery))| (viewer, delivery)),
+        );
     }
 
     fn deliver(&mut self, deliveries: impl IntoIterator<Item = (ConnectionId, Delivery)>) {
@@ -381,8 +438,9 @@ pub(super) struct Registration {
 }
 
 impl Registration {
-    /// Relays the connection's movement to its AOI recipients; false without a Motion Permit.
-    pub(super) fn relay(&self, opcode: u16, movement_info: &[u8]) -> bool {
+    /// Relays the connection's movement from `at` to its AOI recipients; false without a Motion
+    /// Permit. Distant recipients get only some heartbeats.
+    pub(super) fn relay(&self, opcode: u16, at: (f32, f32), movement_info: &[u8]) -> bool {
         let mut state = self
             .feed
             .0
@@ -408,16 +466,54 @@ impl Registration {
             authentication_complete: false,
         });
         let state = &mut *state;
-        let last = state.last_relay.get(&self.connection_id).copied();
-        match last.filter(|&at| {
-            packet.motion_mover().is_some() && state.relays[at].1.motion_mover().is_some()
-        }) {
-            Some(at) => state.relays[at].1 = packet,
+        state.positions.insert(self.connection_id, at);
+        let replaced = state
+            .last_relay
+            .get(&self.connection_id)
+            .copied()
+            .filter(|&index| {
+                packet.motion_mover().is_some()
+                    && state.relays[index].packet.motion_mover().is_some()
+            });
+        let heading = heading(movement_info);
+        let turning = heading.is_some_and(|heading| {
+            state
+                .headings
+                .get(&self.connection_id)
+                .is_none_or(|&seen| turned(heading, seen))
+        });
+        // A heartbeat that replaces a facing or pitch change reaches every recipient; one that
+        // replaces a queued heartbeat takes its place in the count.
+        let heartbeat = match replaced.map(|index| state.relays[index].heartbeat) {
+            _ if opcode != super::motion::HEARTBEAT || turning => None,
+            Some(queued) => queued,
+            None => {
+                let count = state.heartbeats.entry(self.connection_id).or_default();
+                *count = count.wrapping_add(1);
+                Some(*count)
+            }
+        };
+        let everyone = heartbeat.is_none_or(|count| {
+            HEARTBEAT_STRIDES
+                .iter()
+                .all(|&(_, stride)| count % stride == 0)
+        });
+        if let Some(heading) = heading.filter(|_| everyone) {
+            state.headings.insert(self.connection_id, heading);
+        }
+        let relay = Relay {
+            connection: self.connection_id,
+            packet,
+            at,
+            heartbeat,
+        };
+        match replaced {
+            Some(index) => state.relays[index] = relay,
             None => {
                 state
                     .last_relay
                     .insert(self.connection_id, state.relays.len());
-                state.relays.push((self.connection_id, packet));
+                state.relays.push(relay);
             }
         }
         true
@@ -570,6 +666,7 @@ impl Feed {
                     .insert(permit.connection_id, permit.character_guid);
             } else if state.permits.get(&permit.connection_id) == Some(&permit.character_guid) {
                 state.permits.remove(&permit.connection_id);
+                state.forget_mover(permit.connection_id);
             }
         }
         let routed = state
@@ -892,9 +989,9 @@ mod tests {
         let (feed, _viewer, deliveries) = granted_feed(&[SUBJECT]);
         let (mover, mover_deliveries) = feed.register(OTHER_VIEWER).unwrap();
         let info = [1, 2, 3];
-        assert!(!mover.relay(0x0ee, &info));
+        assert!(!mover.relay(0x0ee, (0.0, 0.0), &info));
         permit(&feed, OTHER_VIEWER, SUBJECT, true);
-        assert!(mover.relay(0x0ee, &info));
+        assert!(mover.relay(0x0ee, (0.0, 0.0), &info));
         feed.flush_relays();
         let relayed = take(&deliveries).unwrap().packets;
         assert_eq!(relayed.len(), 1);
@@ -902,7 +999,7 @@ mod tests {
         assert_eq!(relayed[0].body, [0b1, 100, 1, 2, 3]);
         assert!(take(&mover_deliveries).is_none());
         permit(&feed, OTHER_VIEWER, SUBJECT, false);
-        assert!(!mover.relay(0x0ee, &info));
+        assert!(!mover.relay(0x0ee, (0.0, 0.0), &info));
     }
 
     #[test]
@@ -911,7 +1008,7 @@ mod tests {
         let (mover, _mover_deliveries) = feed.register(OTHER_VIEWER).unwrap();
         permit(&feed, OTHER_VIEWER, SUBJECT, true);
         for (opcode, info) in [(0x0ee, 1), (0x0ee, 2), (0x0bb, 3), (0x0da, 4), (0x0ee, 5)] {
-            assert!(mover.relay(opcode, &[info]));
+            assert!(mover.relay(opcode, (0.0, 0.0), &[info]));
         }
         let relays = |packets: &mut dyn Iterator<Item = &Arc<Packet>>| -> Vec<_> {
             packets
@@ -926,7 +1023,7 @@ mod tests {
                     .unwrap()
                     .relays
                     .iter()
-                    .map(|(_, packet)| packet)
+                    .map(|relay| &relay.packet)
             ),
             [(Some(0x0ee), 2), (Some(0x0bb), 3), (Some(0x0ee), 5)]
         );
@@ -935,6 +1032,71 @@ mod tests {
             relays(&mut take(&deliveries).unwrap().packets.iter()),
             [(Some(0x0bb), 3), (Some(0x0ee), 5)]
         );
+    }
+
+    #[test]
+    fn distant_observers_get_fewer_heartbeats_but_every_other_movement() {
+        let feed = Arc::new(Feed::default());
+        let (near, near_deliveries) = feed.register(VIEWER).unwrap();
+        let (far, far_deliveries) = feed.register(CONNECTION).unwrap();
+        let (mover, _mover_deliveries) = feed.register(OTHER_VIEWER).unwrap();
+        for (id, viewer) in [(1, VIEWER), (2, CONNECTION)] {
+            let recipient = Recipient {
+                connection_id: viewer,
+                layer: WORLD_ENTITY,
+                entity_guid: SUBJECT,
+            };
+            feed.apply(transaction(row(
+                id,
+                Audience::Grant(recipient),
+                None,
+                Vec::new(),
+            )))
+            .unwrap();
+        }
+        take(&near_deliveries);
+        take(&far_deliveries);
+        permit(&feed, OTHER_VIEWER, SUBJECT, true);
+        permit(&feed, VIEWER, 300, true);
+        permit(&feed, CONNECTION, 400, true);
+        assert!(near.relay(0x0b5, (10.0, 0.0), &[0]));
+        assert!(far.relay(0x0b5, (100.0, 0.0), &[0]));
+        let received = |opcodes: &[u16]| {
+            for &opcode in opcodes {
+                assert!(mover.relay(opcode, (0.0, 0.0), &[0]));
+            }
+            feed.flush_relays();
+            [&near_deliveries, &far_deliveries]
+                .map(|deliveries| take(deliveries).map_or(0, |delivery| delivery.packets.len()))
+        };
+        let heartbeats = (0..8).fold([0, 0], |[near, far], _| {
+            let [a, b] = received(&[0x0ee]);
+            [near + a, far + b]
+        });
+        assert_eq!(heartbeats, [8, 2]);
+        assert_eq!(received(&[0x0da]), [1, 1]);
+        assert_eq!(received(&[0x0da, 0x0ee]), [1, 1]);
+        let paired = (0..4).fold([0, 0], |[near, far], _| {
+            let [a, b] = received(&[0x0ee, 0x0ee]);
+            [near + a, far + b]
+        });
+        assert_eq!(paired, [4, 1]);
+        let facing = |orientation: f32| {
+            let mut info = vec![0; 28];
+            info[20..24].copy_from_slice(&orientation.to_le_bytes());
+            info
+        };
+        let heartbeat = |orientation: f32| {
+            assert!(mover.relay(0x0ee, (0.0, 0.0), &facing(orientation)));
+            feed.flush_relays();
+            [&near_deliveries, &far_deliveries]
+                .map(|deliveries| take(deliveries).map_or(0, |delivery| delivery.packets.len()))
+        };
+        assert_eq!(heartbeat(0.0), [1, 1]);
+        assert_eq!(heartbeat(0.1), [1, 0]);
+        assert_eq!(heartbeat(0.5), [1, 1]);
+        assert_eq!(heartbeat_stride(None, (0.0, 0.0)), 1);
+        assert_eq!(heartbeat_stride(Some((50.0, 0.0)), (0.0, 0.0)), 2);
     }
 
     #[test]

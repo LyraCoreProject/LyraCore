@@ -304,7 +304,7 @@ async fn serve(
             let (generation, client, feed) = current_rx.borrow().clone();
             let pose = motion::pose(opcode, &body).filter(|pose| mover.follows(pose));
             let result = match pose {
-                Some(pose) if feed.relay(pose.opcode(), &body) => {
+                Some(pose) if feed.relay(pose.opcode(), pose.position(), &body) => {
                     if mover.accept(pose, now) {
                         request(&client, "native_world_motion", &(opcode, body)).await
                     } else {
