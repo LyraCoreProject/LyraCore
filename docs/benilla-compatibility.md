@@ -199,7 +199,6 @@ A Refusal or an empty reply does not establish a working gameplay feature.
 | Tutorial mark-seen requests | No reply; login already reports every tutorial seen |
 | Ammunition, skill unlearning, equipment visibility, PvP flags and honor queries | Specific System Messages |
 | Summon acceptance, remote cameras, LFG preferences and quest-share confirmations | Specific System Messages |
-| Instance resets | Specific System Message |
 | Raid lockout queries | An empty lockout list; instance bindings end with their Instance |
 | Taxi chains | Activation failure; single-hop taxis have their own implementation |
 

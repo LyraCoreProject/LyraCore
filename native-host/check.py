@@ -23,6 +23,7 @@ from operator_creatures import check_operator_creatures
 import reload
 import realm_communication
 import instance_shard
+from instance_reset import check_instance_resets
 import retention
 from spell_source import check_spell_source_behavior
 
@@ -5443,7 +5444,7 @@ SHARED = named(
     check_operator_reducers, check_operator_items, check_operator_spells, check_operator_creatures, check_operator_characters, check_logon, check_character_create, check_queries, check_visibility,
     check_inventory, check_creature_catalogue, check_pet_level_scaling, check_spell_source_behavior, check_gossip_submenus, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
     check_casting, check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social,
-    check_channels, check_party,
+    check_channels, check_party, check_instance_resets,
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,
     check_auctions, check_pets, check_areatriggers, check_world_objects, check_transports, check_transport_crossings, check_addon, check_chat, check_eventai_speech,
     check_sessionless_movement, check_charge_movement, check_logon_limits, check_decoder_bounds,

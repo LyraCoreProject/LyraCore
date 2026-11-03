@@ -80,6 +80,10 @@ for execution and failure rules.
 source fields committed with an Operator spell edit. See [spell edits](operator-content-api.md#spell-edits)
 for replacement and import rules. Existing spell table layouts stay unchanged.
 
+`game_world_instance_reset` and `game_instance_reset_result` are new private outboxes for manual
+Instance resets. They start empty; no existing columns or IDC signatures change. Reset state uses
+the existing `game_instance.reset_requested` field. See [Instance lifecycle](instance-lifecycle.md#manual-resets).
+
 ## 2. Inventory
 
 Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully

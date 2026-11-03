@@ -33,6 +33,7 @@ pub(crate) mod realm_petition;
 mod realm_shard;
 pub(crate) use realm_shard::account_changed;
 mod instance;
+mod instance_reset;
 pub(crate) mod instance_shard;
 pub(crate) use instance_shard::{
     sweep_delete_game_instance_entry, sweep_transfer_game_instance_entry,

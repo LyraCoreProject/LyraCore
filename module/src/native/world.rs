@@ -385,6 +385,9 @@ pub(super) fn receive(
         return Ok(());
     }
     let response = match message {
+        ClientOpcodeMessage::CMSG_RESET_INSTANCES => {
+            return super::instance_reset::receive(ctx, connection.connection_id, guid);
+        }
         message @ (ClientOpcodeMessage::MSG_AUCTION_HELLO(_)
         | ClientOpcodeMessage::CMSG_AUCTION_LIST_OWNER_ITEMS(_)
         | ClientOpcodeMessage::CMSG_AUCTION_LIST_BIDDER_ITEMS(_)

@@ -328,9 +328,8 @@ pub(crate) fn stranding_fallback(
     }
 }
 
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
-pub(crate) fn reset_eligible(party_id: u64, caller_is_leader: bool, occupied: bool) -> bool {
-    !occupied && (party_id == 0 || caller_is_leader)
+pub(crate) fn resettable_map(map: u32) -> bool {
+    is_dungeon_map(map) && !matches!(map, 249 | 309 | 409 | 469 | 509 | 531 | 533)
 }
 
 pub(crate) fn instance_removal_due(
@@ -893,49 +892,107 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
     );
 }
 
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
-pub(crate) fn apply_reset_instances(
-    ctx: &ReducerContext,
-    character_guid: u64,
-) -> Result<u32, String> {
-    let occupied = occupied_instances(ctx);
-    let bindings: Vec<GameInstanceBinding> = ctx
-        .db
+#[derive(spacetimedb::SpacetimeType, Clone)]
+pub(crate) struct ResetBinding {
+    pub map: u32,
+    pub instance: u64,
+}
+
+pub(crate) fn reset_bindings(ctx: &ReducerContext, guid: u64) -> Vec<ResetBinding> {
+    ctx.db
         .game_instance_binding()
         .by_character()
-        .filter(&character_guid)
-        .collect();
-    let mut flagged = 0u32;
-    for b in bindings {
-        let Some(mut inst) = ctx
-            .db
+        .filter(guid)
+        .map(|binding| ResetBinding {
+            map: binding.map_id,
+            instance: binding.instance_id,
+        })
+        .collect()
+}
+
+#[derive(spacetimedb::SpacetimeType)]
+pub(crate) enum ResetFailure {
+    Occupied,
+    Offline,
+}
+
+#[derive(spacetimedb::SpacetimeType)]
+pub(crate) struct ResetOutcome {
+    pub map: u32,
+    pub failure: Option<ResetFailure>,
+}
+
+pub(crate) fn reset_instances(
+    ctx: &ReducerContext,
+    guid: u64,
+    bindings: &[ResetBinding],
+    offline: bool,
+) -> Vec<ResetOutcome> {
+    let group = crate::group::group_of(ctx, guid)
+        .and_then(|member| ctx.db.game_group().group_id().find(member.group_id));
+    if group
+        .as_ref()
+        .is_some_and(|group| group.leader_guid != guid)
+    {
+        return Vec::new();
+    }
+    let candidates: Vec<_> = if let Some(group) = group {
+        ctx.db
             .game_instance()
-            .instance_id()
-            .find(b.instance_id)
-            .filter(|instance| instance.map_id == b.map_id)
-        else {
-            continue;
-        };
-        let caller_is_leader = ctx
-            .db
-            .game_group()
-            .group_id()
-            .find(inst.party_id)
-            .map(|g| g.leader_guid == character_guid)
-            .unwrap_or(false);
-        if !reset_eligible(
-            inst.party_id,
-            caller_is_leader,
-            occupied.contains(&inst.instance_id),
-        ) {
+            .by_party()
+            .filter(group.group_id)
+            .collect()
+    } else {
+        bindings
+            .iter()
+            .filter_map(|binding| {
+                ctx.db
+                    .game_instance()
+                    .instance_id()
+                    .find(binding.instance)
+                    .filter(|instance| {
+                        instance.map_id == binding.map
+                            && instance_is_ownerless(ctx, instance.party_id)
+                    })
+            })
+            .collect()
+    };
+    let occupied = occupied_instances(ctx);
+    let mut results = Vec::new();
+    for mut instance in candidates {
+        if instance.reset_requested
+            || !resettable_map(instance.map_id)
+            || !crate::native::directory::owns_map(ctx, instance.map_id)
+        {
             continue;
         }
-        if !inst.reset_requested {
-            inst.reset_requested = true;
-            ctx.db.game_instance().instance_id().update(inst);
-            flagged += 1;
+        let failure = if offline {
+            Some(ResetFailure::Offline)
+        } else if occupied.contains(&instance.instance_id) {
+            Some(ResetFailure::Occupied)
+        } else {
+            None
+        };
+        let accepted = failure.is_none();
+        results.push(ResetOutcome {
+            map: instance.map_id,
+            failure,
+        });
+        if accepted {
+            instance.reset_requested = true;
+            ctx.db.game_instance().instance_id().update(instance);
         }
     }
+    results
+}
+
+#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
+pub(crate) fn apply_reset_instances(ctx: &ReducerContext, guid: u64) -> Result<u32, String> {
+    let results = reset_instances(ctx, guid, &reset_bindings(ctx, guid), false);
+    let flagged = results
+        .iter()
+        .filter(|result| result.failure.is_none())
+        .count() as u32;
     if flagged == 0 {
         Err("no unoccupied instance eligible for reset".to_string())
     } else {
@@ -1243,18 +1300,13 @@ mod tests {
     }
 
     #[test]
-    fn reset_eligibility_requires_unoccupied_and_leadership_for_party_instances() {
-        assert!(reset_eligible(0, false, false));
-        assert!(!reset_eligible(0, false, true));
-        assert!(reset_eligible(42, true, false));
-        assert!(
-            !reset_eligible(42, false, false),
-            "a non-leader member cannot reset"
-        );
-        assert!(
-            !reset_eligible(42, true, true),
-            "even the leader cannot reset an occupied instance"
-        );
+    fn manual_reset_excludes_raids_but_includes_upper_blackrock_spire() {
+        for map in [36, 229, 429] {
+            assert!(resettable_map(map));
+        }
+        for map in [0, 1, 30, 249, 309, 409, 469, 509, 531, 533] {
+            assert!(!resettable_map(map));
+        }
     }
 
     #[test]
