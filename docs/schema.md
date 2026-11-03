@@ -313,8 +313,8 @@ retired. They stay because dropping a table is a destructive migration. Nothing 
 
 ### Mail (`module/src/mail.rs`, `mail_timer.rs`, `mail_text.rs`)
 
-`mail::insert_letter` is the only writer of `game_mail`, and a source scan in `mail.rs` fails on
-any other insert. The END-appended header columns carry what the 1.12 inbox reads: `sender_kind`
+`mail::store_letter` allocates Mail ids for new and arriving letters. It also reserves ids for
+imported Item Text, so text and future letters cannot collide. The END-appended header columns carry what the 1.12 inbox reads: `sender_kind`
 (the vanilla `MailMessageType`: 0 Character, 2 Auction, 3 Creature, 4 Gameobject), `sender_entry`
 (the auction house id, or the creature or gameobject entry), `check_flags` (the `MailCheckMask`
 bits except READ, which stays `was_read`), `mail_template_id` and `deliver_micros` (when the
@@ -343,8 +343,12 @@ deleted. The count can be too high, never too low. A letter destroyed or sold fr
 nothing. `game_item_instance.item_text_id` is 0 for every item that is not a copied letter, and
 every item snapshot (mail, trade, auction) keeps it.
 
+`game_mail_forward` carries a letter and its attachment text through IDC; `game_mail_forward_retry`
+retains refused deliveries and resolves the recipient's current World again on the Realm. Both are
+private and survive Character logout, deletion and Transfer. Resident inboxes use `game_mail`.
+
 `game_mail_escrow` and `game_mail_delivery` hold legacy cross-Shard Mail value. World Session mail
-uses no Escrow, and a Reward Letter inserts its Mail directly
+uses the forward outbox, and a Reward Letter inserts or forwards its Mail directly
 (`module/src/mail_reward.rs`).
 
 ### Auctions (`module/src/auction.rs`)

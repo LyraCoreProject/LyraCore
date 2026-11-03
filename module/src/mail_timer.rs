@@ -101,6 +101,15 @@ pub(crate) fn arm_next(ctx: &ReducerContext, mail: &Mail) {
     arm(ctx, mail.id, next_due(mail, crate::time::now(ctx)));
 }
 
+pub(crate) fn resume(ctx: &ReducerContext, guid: u64) {
+    if crate::transfer::is_in_transit(ctx, guid) {
+        return;
+    }
+    for mail in ctx.db.game_mail().by_recipient().filter(guid) {
+        start(ctx, &mail);
+    }
+}
+
 pub(crate) fn stop(ctx: &ReducerContext, mail_id: u64) {
     ctx.db.game_mail_timer().mail_id().delete(mail_id);
 }
@@ -178,6 +187,14 @@ pub(crate) fn fire(ctx: &ReducerContext, timer: &MailTimer) {
     let Some(mail) = ctx.db.game_mail().id().find(timer.mail_id) else {
         return;
     };
+    if crate::transfer::is_in_transit(ctx, mail.recipient_guid) {
+        arm(
+            ctx,
+            mail.id,
+            crate::time::now(ctx) + spacetimedb::TimeDuration::from_micros(1_000_000),
+        );
+        return;
+    }
     let due = match timer.scheduled_at {
         ScheduleAt::Time(at) => crate::time::scheduled_time(ctx, at),
         ScheduleAt::Interval(_) => crate::time::now(ctx),

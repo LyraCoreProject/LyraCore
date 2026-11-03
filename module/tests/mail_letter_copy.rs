@@ -380,6 +380,9 @@ fn a_transfer_keeps_the_text_of_the_letters_it_carries() {
     destination.publish_module();
     destination.assert_call("claim_operator", &[]);
     destination.assert_call("install_guid_range", &["1000000000"]);
+    destination.assert_sql(&format!(
+        "INSERT INTO game_item_text (id,text,letters) VALUES ({mail_id},'another letter',1)"
+    ));
     let system = actor(0);
     destination.assert_call("import_character_blob", &["5090096", &blob, &system]);
     source.assert_call("confirm_import", &["5090096", &system]);
@@ -391,19 +394,38 @@ fn a_transfer_keeps_the_text_of_the_letters_it_carries() {
             .is_empty(),
         "the Mail left with its recipient"
     );
-    assert_eq!(
-        destination.query_rows(&format!(
-            "SELECT item_text_id FROM game_mail WHERE recipient_guid = {partner}"
-        ))[0]["item_text_id"],
-        mail_id.to_string()
-    );
-    let text = source.query_rows(&format!(
-        "SELECT text, letters FROM game_item_text WHERE id = {mail_id}"
+    let arrived = destination.query_rows(&format!(
+        "SELECT item_text_id FROM game_mail WHERE recipient_guid = {partner}"
+    ));
+    let text_id = &arrived[0]["item_text_id"];
+    assert_ne!(text_id, &mail_id.to_string());
+    let text = destination.query_rows(&format!(
+        "SELECT text, letters FROM game_item_text WHERE id = {text_id}"
     ));
     assert_eq!(
         [&text[0]["text"], &text[0]["letters"]],
         ["left it at the inn", "1"],
-        "a letter that travels is not destroyed"
+        "the destination owns the transferred letter's text reference"
+    );
+    assert_eq!(
+        destination.query_rows(&format!(
+            "SELECT text, letters FROM game_item_text WHERE id = {mail_id}"
+        ))[0],
+        [
+            ("text".into(), "another letter".into()),
+            ("letters".into(), "1".into())
+        ]
+        .into_iter()
+        .collect(),
+        "an unrelated destination text is unchanged"
+    );
+    assert!(
+        source
+            .query_rows(&format!(
+                "SELECT id FROM game_item_text WHERE id = {mail_id}"
+            ))
+            .is_empty(),
+        "the source releases its last reference only after confirmed import"
     );
 }
 

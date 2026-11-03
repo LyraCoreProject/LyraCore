@@ -6,7 +6,7 @@ use lyracore_protocol::{
     },
 };
 use lyracore_shared::{faction::same_team, mail as rules};
-use spacetimedb::{ConnectionId, ReducerContext};
+use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{game_native_player, Rollback};
 use crate::{
@@ -190,15 +190,19 @@ fn at_mailbox(
 }
 
 fn same_account(ctx: &ReducerContext, first: u64, second: u64) -> bool {
-    match (
-        crate::helpers::character_by_guid(ctx, first),
-        crate::helpers::character_by_guid(ctx, second),
-    ) {
-        (Some(first), Some(second)) => {
-            first.account_id != 0 && first.account_id == second.account_id
-        }
-        _ => false,
+    fn account(ctx: &ReducerContext, guid: u64) -> Option<u64> {
+        use super::directory::game_character_profile;
+        crate::helpers::character_by_guid(ctx, guid)
+            .map(|character| character.account_id)
+            .or_else(|| {
+                ctx.db
+                    .game_character_profile()
+                    .guid()
+                    .find(guid)
+                    .map(|profile| profile.account_id)
+            })
     }
+    matches!((account(ctx, first), account(ctx, second)), (Some(a), Some(b)) if a != 0 && a == b)
 }
 
 fn send_letter(
@@ -208,19 +212,33 @@ fn send_letter(
 ) -> Result<(), MailResult> {
     let sender =
         crate::helpers::character_by_guid(ctx, sender_guid).ok_or(MailResult::ErrInternalError)?;
-    let candidates = crate::helpers::characters_by_name(ctx, &request.receiver).collect::<Vec<_>>();
+    use super::directory::game_character_profile;
+    let candidates: Vec<(u64, u64, u8)> = if crate::peer::realm_shard(ctx).is_some() {
+        ctx.db
+            .game_character_profile()
+            .iter()
+            .filter(|profile| {
+                !profile.deleted && profile.name.eq_ignore_ascii_case(&request.receiver)
+            })
+            .map(|profile| (profile.guid, profile.account_id, profile.race))
+            .collect()
+    } else {
+        crate::helpers::characters_by_name(ctx, &request.receiver)
+            .map(|character| (character.guid, character.account_id, character.race))
+            .collect()
+    };
     if candidates.is_empty() {
         return Err(MailResult::ErrRecipientNotFound);
     }
     if candidates
         .iter()
-        .any(|character| character.guid == sender_guid)
+        .any(|character| character.0 == sender_guid)
     {
         return Err(MailResult::ErrCannotSendToSelf);
     }
     let mut reachable = candidates
         .iter()
-        .filter(|character| same_team(sender.race, character.race));
+        .filter(|character| same_team(sender.race, character.2));
     let recipient = reachable.next().ok_or(MailResult::ErrNotYourTeam)?;
     if reachable.next().is_some() {
         return Err(MailResult::ErrRecipientNotFound);
@@ -228,13 +246,13 @@ fn send_letter(
     core::apply_send(
         ctx,
         sender_guid,
-        recipient.guid,
+        recipient.0,
         request.subject,
         request.body,
         request.money.as_int(),
         rules::cod_at_send(request.cash_on_delivery_amount, request.item.guid() != 0),
         request.item.guid(),
-        sender.account_id != 0 && sender.account_id == recipient.account_id,
+        sender.account_id != 0 && sender.account_id == recipient.1,
     )
     .map_err(|refusal| match refusal {
         MailRefusal::NotEnoughMoney => MailResult::ErrNotEnoughMoney,
@@ -261,12 +279,14 @@ fn item_text(ctx: &ReducerContext, guid: u64, text_id: u32, item_hint: u32) -> S
     if body.is_none() && !owns_item {
         return String::new();
     }
+    if let Some(body) = body {
+        return body;
+    }
     ctx.db
         .game_item_text()
         .id()
         .find(text_id)
         .map(|text| text.text)
-        .or(body)
         .unwrap_or_default()
 }
 

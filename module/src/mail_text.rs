@@ -9,6 +9,7 @@ const NOTHING_TO_COPY: &str = "mail: this mail has no text to copy";
 const ID_TOO_LARGE_TO_COPY: &str = "mail: this letter's id is too large to become a Plain Letter";
 
 #[table(accessor = game_item_text)]
+#[derive(Clone)]
 pub struct ItemText {
     #[primary_key]
     pub id: u32,
@@ -50,6 +51,14 @@ pub(crate) fn drop_letter_text(ctx: &ReducerContext, item_text_id: u32) {
         }
         Some(_) => {}
     }
+}
+
+pub(crate) fn import_text(ctx: &ReducerContext, text: String, letters: u32) -> Result<u32, String> {
+    let id = crate::mail::reserve_text_id(ctx)?;
+    ctx.db
+        .game_item_text()
+        .insert(ItemText { id, text, letters });
+    Ok(id)
 }
 
 const ALREADY_GRANTED: &str = "mail: this letter was already made permanent";
@@ -127,7 +136,6 @@ pub(crate) fn apply_copy_letter(
     Ok(apply_mark_letter_granted(ctx, recipient_guid, mail_id)?)
 }
 
-// Transfer source sweeps move letters rather than destroying them, so their text must remain.
 pub(crate) fn drop_character_letters(ctx: &ReducerContext, character_guid: u64) {
     let in_bags = ctx
         .db

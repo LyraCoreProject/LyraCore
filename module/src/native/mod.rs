@@ -26,6 +26,7 @@ mod guild;
 mod handoff;
 mod realm_communication;
 mod realm_guild;
+pub(crate) mod realm_mail;
 pub(crate) mod realm_party;
 pub(crate) mod realm_petition;
 mod realm_shard;

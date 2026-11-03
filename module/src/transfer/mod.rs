@@ -1,5 +1,6 @@
 //! Before changing the Transfer ledger, fence or reducers, read docs/character-transfer.md.
 
+mod mail_text;
 mod transport;
 #[cfg(test)]
 pub(crate) use transport::{
@@ -670,18 +671,36 @@ impl ShardLedger for CtxShard<'_> {
         self.ctx.db.game_transfer_in().insert(row);
     }
     fn delete_out_row(&mut self, transfer_id: u64) {
+        let row = self
+            .ctx
+            .db
+            .game_transfer_out()
+            .transfer_id()
+            .find(transfer_id);
         self.ctx
             .db
             .game_transfer_out()
             .transfer_id()
             .delete(transfer_id);
+        if let Some(row) = row {
+            crate::mail_timer::resume(self.ctx, row.character_guid);
+        }
     }
     fn delete_in_row(&mut self, transfer_id: u64) {
+        let row = self
+            .ctx
+            .db
+            .game_transfer_in()
+            .transfer_id()
+            .find(transfer_id);
         self.ctx
             .db
             .game_transfer_in()
             .transfer_id()
             .delete(transfer_id);
+        if let Some(row) = row {
+            crate::mail_timer::resume(self.ctx, row.character_guid);
+        }
     }
     fn has_character(&self, guid: u64) -> bool {
         self.ctx.db.game_character().guid().find(guid).is_some()
@@ -1486,6 +1505,7 @@ fn cascade_for_transfer(ctx: &ReducerContext, guid: u64, listing_holds: ListingH
             .filter(&guid)
             .collect(),
     };
+    mail_text::release(ctx, guid, matches!(listing_holds, ListingHolds::Delete));
     crate::world::cascade_delete_character(ctx, guid);
     for contact in incoming_contacts {
         ctx.db.game_character_contact().insert(contact);

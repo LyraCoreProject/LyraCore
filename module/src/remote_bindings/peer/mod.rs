@@ -527,6 +527,75 @@ impl spacetimedb::rt::RemoteReducer for idc_instance_entry_answer {
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
+pub struct IdcMailReceiveArgs {
+    pub parcel: ::std::vec::Vec<::core::primitive::u8>,
+}
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_mail_receive_parcel_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as parcel), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(parcel),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_mail_receive_parcel_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_mail_receive_parcel_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_mail_receive_parcel {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(parcel),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as parcel), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::std::vec::Vec::<::core::primitive::u8> = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_mail_receive_parcel_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_mail_receive_parcel!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_mail_receive_parcel;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_mail_receive {
+    ($module:path, { $($columns:tt)* }) => {{
+        #[allow(unused_imports)]
+        use $module as __outbox_receiver;
+        &[__outbox_receiver::__spacetimedb_typecheck_outbox_idc_mail_receive_parcel!(__outbox_receiver; $($columns)*)]
+    }};
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_mail_receive;
+
+#[allow(non_camel_case_types)]
+pub struct idc_mail_receive;
+
+impl spacetimedb::rt::RemoteReducer for idc_mail_receive {
+    const NAME: &'static str = "idc_mail_receive";
+    const SIGNATURE_HASH: &'static str =
+        "1c7cb20eeebc5bd7addd9434d313f43f954057c1274b09885c3e84c4502c671f";
+    type Args = IdcMailReceiveArgs;
+}
+
+#[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
+#[sats(crate = __lib)]
 pub struct IdcNativeTransferArgs {
     pub realm: Identity,
     pub transfer_id: ::core::primitive::u64,

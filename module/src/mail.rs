@@ -58,6 +58,7 @@ impl From<MailRefusal> for String {
 }
 
 #[table(accessor = game_mail, public, index(accessor = by_recipient, btree(columns = [recipient_guid])))]
+#[derive(Clone)]
 pub struct Mail {
     #[primary_key]
     #[auto_inc]
@@ -90,7 +91,7 @@ pub struct Mail {
     #[default(0u32)]
     pub item_text_id: u32,
 }
-// Transfer deletes transported source rows without destroying their letter text.
+// Character deletion and Transfer release Item Text before sweeping these Mail rows.
 crate::character_owned!(delete, fn sweep_delete_game_mail(ctx, character_guid) {
     let mails = ctx.db.game_mail();
     for r in mails.by_recipient().filter(&character_guid).collect::<Vec<_>>() {
@@ -98,9 +99,11 @@ crate::character_owned!(delete, fn sweep_delete_game_mail(ctx, character_guid) {
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_mail(ctx, character_guid, io) {
-    table = game_mail,
-    by = by_recipient,
-    remint = id,
+    crate::transfer::move_rows(
+        ctx, io,
+        || ctx.db.game_mail().by_recipient().filter(character_guid).collect::<Vec<_>>(),
+        |ctx, row| { receive_letter(ctx, row); },
+    );
 });
 impl Mail {
     pub(crate) fn sender(&self) -> MailSender {
@@ -158,6 +161,20 @@ pub(crate) fn detach_item(
     }
     let inst = owned.expect("Detach is only reachable with a row");
     let snapshot = ItemSnapshot::from(&inst);
+    if snapshot.item_text_id != 0 {
+        use crate::mail_text::game_item_text;
+        if ctx
+            .db
+            .game_item_text()
+            .id()
+            .find(snapshot.item_text_id)
+            .is_none()
+        {
+            return Err("Mail attachment is missing its Item Text"
+                .to_string()
+                .into());
+        }
+    }
     crate::ItemInstance::delete(ctx, item_guid);
     Ok(snapshot)
 }
@@ -277,32 +294,95 @@ fn after_delay(now_micros: i64, delay_secs: u32) -> i64 {
 }
 pub(crate) fn insert_letter(ctx: &ReducerContext, letter: Letter) -> u64 {
     let (sender_kind, sender_guid, sender_entry) = letter.sender.columns();
-    let mail = ctx.db.game_mail().insert(Mail {
-        id: 0,
-        recipient_guid: letter.recipient_guid,
-        sender_guid,
-        subject: letter.subject,
-        body: letter.body,
-        item_entry: letter.item.entry,
-        item_stack_count: letter.item.stack_count,
-        item_durability: letter.item.durability,
-        item_enchant_id: letter.item.enchant_id,
-        item_soulbound: letter.item.soulbound,
-        random_property_id: letter.item.random_property_id,
-        item_text_id: letter.item.item_text_id,
-        money: letter.money,
-        cod: letter.cod,
-        was_read: false,
-        created_at: crate::time::now(ctx),
-        sender_kind,
-        sender_entry,
-        check_flags: letter.check_flags,
-        mail_template_id: letter.mail_template_id,
-        deliver_micros: letter.deliver_micros,
-    });
-    crate::mail_timer::start(ctx, &mail);
+    let mail = store_letter(
+        ctx,
+        Mail {
+            id: 0,
+            recipient_guid: letter.recipient_guid,
+            sender_guid,
+            subject: letter.subject,
+            body: letter.body,
+            item_entry: letter.item.entry,
+            item_stack_count: letter.item.stack_count,
+            item_durability: letter.item.durability,
+            item_enchant_id: letter.item.enchant_id,
+            item_soulbound: letter.item.soulbound,
+            random_property_id: letter.item.random_property_id,
+            item_text_id: letter.item.item_text_id,
+            money: letter.money,
+            cod: letter.cod,
+            was_read: false,
+            created_at: crate::time::now(ctx),
+            sender_kind,
+            sender_entry,
+            check_flags: letter.check_flags,
+            mail_template_id: letter.mail_template_id,
+            deliver_micros: letter.deliver_micros,
+        },
+    );
+    deliver_or_route(ctx, &mail);
     mail.id
 }
+fn store_letter(ctx: &ReducerContext, mut mail: Mail) -> Mail {
+    use crate::mail_text::game_item_text;
+    loop {
+        mail.id = 0;
+        mail = ctx.db.game_mail().insert(mail);
+        if u32::try_from(mail.id)
+            .ok()
+            .is_none_or(|id| ctx.db.game_item_text().id().find(id).is_none())
+        {
+            return mail;
+        }
+        ctx.db.game_mail().id().delete(mail.id);
+    }
+}
+
+pub(crate) fn receive_letter(ctx: &ReducerContext, mail: Mail) {
+    let mail = store_letter(ctx, mail);
+    crate::mail_timer::start(ctx, &mail);
+}
+
+pub(crate) fn deliver_or_route(ctx: &ReducerContext, mail: &Mail) {
+    if crate::native::realm_mail::route(ctx, mail) {
+        remove_mail(ctx, mail.id);
+    } else {
+        crate::mail_timer::start(ctx, mail);
+    }
+}
+
+// Mail and Item Text share IDs; consume a Mail ID before importing a Letter Copy's text.
+pub(crate) fn reserve_text_id(ctx: &ReducerContext) -> Result<u32, String> {
+    let row = store_letter(
+        ctx,
+        Mail {
+            id: 0,
+            recipient_guid: 0,
+            sender_guid: 0,
+            subject: String::new(),
+            body: String::new(),
+            item_entry: 0,
+            item_stack_count: 0,
+            item_durability: 0,
+            item_enchant_id: 0,
+            item_soulbound: false,
+            money: 0,
+            cod: 0,
+            was_read: false,
+            created_at: crate::time::now(ctx),
+            random_property_id: 0,
+            sender_kind: 0,
+            sender_entry: 0,
+            check_flags: 0,
+            mail_template_id: 0,
+            deliver_micros: 0,
+            item_text_id: 0,
+        },
+    );
+    ctx.db.game_mail().id().delete(row.id);
+    u32::try_from(row.id).map_err(|_| "Item Text id space exhausted".into())
+}
+
 pub(crate) fn delivered_mail(ctx: &ReducerContext, mail_id: u64) -> Option<Mail> {
     ctx.db
         .game_mail()
@@ -607,7 +687,7 @@ pub(crate) fn send_back(ctx: &ReducerContext, row: Mail, delay_secs: u32) {
         delay_secs,
     ));
     let back = ctx.db.game_mail().id().update(returned(row, arrives));
-    crate::mail_timer::start(ctx, &back);
+    deliver_or_route(ctx, &back);
 }
 pub(crate) fn delete_mail(ctx: &ReducerContext, mail_id: u64) {
     if let Some(row) = ctx.db.game_mail().id().find(mail_id) {

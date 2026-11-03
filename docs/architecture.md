@@ -434,7 +434,8 @@ Character in the Transfer gap may be absent from a query, and away or zone facts
 the query.
 No movement updates are sent to the Realm Shard for this feature.
 
-Mail and auctions stay per World Shard; their interactions across World Shards remain unsupported.
+Mailboxes stay with their Character on its World Shard; letters cross Shards through the Realm as
+described below. Auction listings remain local to their World Shard.
 Guild membership and communication use the Realm authority described below. Friends and ignores use the Character profiles and presence described below. A Transfer carries the existing Character-owned manifest, not
 Shard-owned social or economic state. Casts in progress are cancelled; melee, threat, AOI Grants,
 Transport attachment and other omitted transient state do not survive. World departure also applies
@@ -543,6 +544,36 @@ for correction and another report. Reopening gameplay before these checks is uns
 Publish the Realm Module before the World Modules and drain guild outboxes before changing their
 private operation encoding. Sessionless guild mutations remain refused in the split topology;
 single-Shard purchases and petitions retain their local atomic transaction.
+
+### Mail across World Shards
+
+The sending World checks the mailbox, resolves the recipient from Realm Character profiles, and
+commits postage, attached copper and removal of the attached item with the Mail. A local recipient
+receives it in that transaction. Otherwise `native::realm_mail` moves the complete letter into a
+durable IDC outbox addressed to the Realm. It preserves the creation time, Delivery Delay, sender
+kind, COD price, item state and any attached Letter Copy's text. This path also carries returns,
+COD payments, Reward Letters and Auction Mail.
+
+The Realm routes each letter through the Character directory. The receiving World requires a
+resident Character with no Transfer fence, then commits the Mail, Item Text and Mail Timer together.
+IDC executes each call once. A refused destination rolls back and retains the letter in a scheduled
+retry; the Realm consults the directory again before every attempt. Transport delay does not refund
+or duplicate value. An absent directory entry waits for a profile; a deletion tombstone returns a
+Character's letter once, or discards a letter that cannot be returned.
+
+Inbox reads, item pickup, COD debit, Letter Copy creation and money pickup remain local transactions.
+An accepted COD pickup queues its payment in that same transaction. Mail transfers with its recipient;
+Mail Timers wait behind the Transfer fence and resume after release or rollback. Transfer carries the
+Item Text referenced by inventory, Mail and legacy value rows, allocating new local text ids and
+rewriting references on arrival. Text ids share the Mail id space, so importing text consumes an id
+before future Mail can use it. Older destinations refuse the additional text payload.
+
+With gameplay closed on an existing split Realm, publish the Realm and every World, backfill Character
+profiles and wait for the profile outboxes to drain. Capture Mail, attached items and Item Text on
+each Shard, then call `operator_route_mail` on each World to move letters whose recipient is elsewhere.
+Compare recipient totals and attachment contents after Mail outboxes and retries drain. Ordinary
+resident inboxes need no migration. Do not transfer Characters carrying Letter Copies to an older
+Module. A missing text record refuses the delivery or Transfer rather than dropping the text.
 
 ### Groups across World Shards
 
