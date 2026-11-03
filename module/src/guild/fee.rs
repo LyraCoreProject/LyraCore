@@ -44,6 +44,67 @@ pub struct GuildCharterTerms {
     pub payer_team: u32,
 }
 
+#[derive(SpacetimeType, Clone)]
+pub enum GuildPayment {
+    Emblem(GuildEmblem),
+    Charter(GuildCharterTerms),
+}
+
+// The caller must roll back on error and durably queue the Realm decision with the debit.
+pub(crate) fn prepare(
+    ctx: &ReducerContext,
+    payer: u64,
+    request: GuildFeeRequest,
+) -> Result<(GuildPayment, u32), String> {
+    let run = || -> Result<_, FeeError> {
+        let purse = CtxPurse { ctx };
+        match request {
+            GuildFeeRequest::Emblem(request) => {
+                payment_gate(&purse, payer, request.npc_guid, Fee::Emblem)?;
+                debit(ctx, payer, EMBLEM_COST_COPPER)?;
+                Ok((GuildPayment::Emblem(request.emblem), EMBLEM_COST_COPPER))
+            }
+            GuildFeeRequest::Charter(request) => {
+                validate_guild_name(&request.name).map_err(FeeError::Refused)?;
+                payment_gate(&purse, payer, request.npc_guid, Fee::Charter)?;
+                let character = crate::helpers::character_by_guid(ctx, payer)
+                    .ok_or(FeeError::Refused(GuildRefusal::NoSuchCharacter))?;
+                let identity = debit(ctx, payer, CHARTER_COST_COPPER)?;
+                let charter = purse.create_charter(payer, identity)?;
+                Ok((
+                    GuildPayment::Charter(GuildCharterTerms {
+                        charter_item_guid: charter,
+                        name: request.name,
+                        payer_name: character.name,
+                        payer_team: lyracore_shared::faction::team_for_race(character.race),
+                    }),
+                    CHARTER_COST_COPPER,
+                ))
+            }
+        }
+    };
+    run().map_err(FeeError::into_text)
+}
+
+pub(crate) fn accept(
+    ctx: &ReducerContext,
+    payer: u64,
+    payment: &GuildPayment,
+) -> Result<(), GuildRefusal> {
+    let ledger = CtxLedger { ctx };
+    match payment {
+        GuildPayment::Emblem(emblem) => {
+            let guild = emblem_gate(&ledger, payer)?;
+            ledger.apply_emblem(guild, emblem);
+        }
+        GuildPayment::Charter(terms) => {
+            charter_gate(&ledger, payer, terms)?;
+            ledger.open_petition(payer, terms)?;
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Fee {
     Emblem,
@@ -143,7 +204,9 @@ pub(crate) fn purchase(
                 payment_gate(&purse, payer_guid, request.npc_guid, Fee::Charter)?;
                 let identity = debit(ctx, payer_guid, CHARTER_COST_COPPER)?;
                 charter.charter_item_guid = purse.create_charter(payer_guid, identity)?;
-                ledger.open_petition(payer_guid, &charter);
+                ledger
+                    .open_petition(payer_guid, &charter)
+                    .map_err(FeeError::Refused)?;
             }
         }
         Ok(())
@@ -354,7 +417,11 @@ impl CtxLedger<'_> {
         );
     }
 
-    fn open_petition(&self, payer_guid: u64, terms: &GuildCharterTerms) -> u32 {
+    fn open_petition(
+        &self,
+        payer_guid: u64,
+        terms: &GuildCharterTerms,
+    ) -> Result<u32, GuildRefusal> {
         petition::open(
             self.ctx,
             payer_guid,

@@ -44,6 +44,7 @@ pub struct FakeDb {
     auction_holds: RefCell<HashSet<u64>>,
     froze: Cell<u32>,
     active_taxi: RefCell<HashSet<u64>>,
+    guild_transactions: RefCell<HashSet<u64>>,
 }
 
 #[derive(Clone, Default)]
@@ -307,6 +308,9 @@ impl ShardLedger for FakeDb {
 }
 
 impl BeginSink for FakeDb {
+    fn has_pending_guild_transaction(&self, guid: u64) -> bool {
+        self.guild_transactions.borrow().contains(&guid)
+    }
     fn has_active_taxi_flight(&self, guid: u64) -> bool {
         self.active_taxi.borrow().contains(&guid)
     }
@@ -336,6 +340,21 @@ impl BeginSink for FakeDb {
     fn arm_reaper(&mut self) {
         self.reaper_armed.set(true);
     }
+}
+
+#[test]
+fn unsettled_guild_payment_refuses_transfer_without_freezing_or_exporting() {
+    let mut src = beginning(GUID);
+    src.guild_transactions.borrow_mut().insert(GUID);
+    assert_eq!(
+        apply_begin(&mut src, XFER, GUID, DEST, true).unwrap_err(),
+        "guild transaction is settling"
+    );
+    assert!(src.out_rows.borrow().is_empty());
+    assert_eq!(src.froze.get(), 0);
+    src.guild_transactions.borrow_mut().remove(&GUID);
+    apply_begin(&mut src, XFER, GUID, DEST, true).unwrap();
+    assert!(src.out_row(XFER).is_some());
 }
 
 #[test]

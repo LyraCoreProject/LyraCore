@@ -470,6 +470,9 @@ fn teleport(
     };
     let recipient_identity = e.owner_identity;
     let cross_map = is_cross_map_teleport(e.map_id, map_id);
+    if cross_map && crate::native::realm_petition::pending(ctx, player_guid) {
+        return;
+    }
     let sessionless = crate::helpers::character_by_guid(ctx, player_guid)
         .is_some_and(|character| !character.online);
     let changes_partition = e.map_id != map_id || e.instance_id != instance_id;
@@ -840,6 +843,9 @@ pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_delete_character(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+    if crate::native::realm_petition::pending(ctx, character_guid) {
+        return Err("CHAR_GUILD_TRANSACTION_PENDING".into());
+    }
     if crate::helpers::character_by_guid(ctx, character_guid).is_none()
         && ctx
             .db

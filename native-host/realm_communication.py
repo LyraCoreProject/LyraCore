@@ -2,6 +2,7 @@ import struct
 
 from headless import creates
 import realm_guild
+import realm_petition
 
 
 def check(host):
@@ -53,6 +54,7 @@ def check(host):
         return [packet for packet in packets if packet[0] == opcode]
 
     realm_guild.check_import(host, worlds, character, received)
+    realm_petition.check_import(host, worlds, character, received)
     account, client, guid = character('Eastern', 0)
     peer_account, peer, peer_guid = character('Western', 1)
 
@@ -95,6 +97,7 @@ def check(host):
             assert not any(opcode == 0x96 for opcode, _ in peer.collect(auto_ack=auto_ack))
 
     realm_guild.check(host, worlds, character, received)
+    realm_petition.check(host, worlds, character, received)
     check_contacts(host, worlds, character, enter, received)
 
     who(['Eastern', 'Western'])

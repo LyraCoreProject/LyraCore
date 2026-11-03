@@ -39,11 +39,14 @@ pub(super) fn receive(
     message: ClientOpcodeMessage,
 ) -> Result<(), Rollback> {
     let actor = super::available_character(ctx, guid)?;
-    if crate::peer::realm_shard(ctx).is_some() {
-        return Err(Rollback::reply(
-            super::realm_guild::unavailable(),
-            "cross-Shard guild purchases and petitions are unavailable",
-        ));
+    if crate::peer::realm_shard(ctx).is_some()
+        && !matches!(
+            message,
+            ClientOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(_)
+                | ClientOpcodeMessage::CMSG_PETITION_SHOWLIST(_)
+        )
+    {
+        return super::realm_petition::receive(ctx, connection, guid, message);
     }
     let id = connection.connection_id;
     use ClientOpcodeMessage as C;
@@ -252,7 +255,10 @@ fn turn_in(
     Ok(())
 }
 
-fn refused(cause: String, reply: &dyn Fn(GuildRefusal) -> Option<ServerOpcodeMessage>) -> Rollback {
+pub(super) fn refused(
+    cause: String,
+    reply: &dyn Fn(GuildRefusal) -> Option<ServerOpcodeMessage>,
+) -> Rollback {
     let Some(refusal) = GuildRefusal::parse_tag(&cause) else {
         return Rollback::from(cause);
     };
@@ -262,7 +268,11 @@ fn refused(cause: String, reply: &dyn Fn(GuildRefusal) -> Option<ServerOpcodeMes
     }
 }
 
-fn command(command: GuildCommand, name: &str, result: GuildCommandResult) -> ServerOpcodeMessage {
+pub(super) fn command(
+    command: GuildCommand,
+    name: &str,
+    result: GuildCommandResult,
+) -> ServerOpcodeMessage {
     ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(Box::new(codec::build_guild_command_result(
         command,
         name.into(),
@@ -270,33 +280,37 @@ fn command(command: GuildCommand, name: &str, result: GuildCommandResult) -> Ser
     )))
 }
 
-fn emblem_result(result: GuildEmblemResult) -> ServerOpcodeMessage {
+pub(super) fn emblem_result(result: GuildEmblemResult) -> ServerOpcodeMessage {
     ServerOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(MSG_SAVE_GUILD_EMBLEM_Server { result })
 }
 
-fn turn_in_result(result: PetitionResult) -> ServerOpcodeMessage {
+pub(super) fn turn_in_result(result: PetitionResult) -> ServerOpcodeMessage {
     ServerOpcodeMessage::SMSG_TURN_IN_PETITION_RESULTS(SMSG_TURN_IN_PETITION_RESULTS { result })
 }
 
-fn sign_result(charter: u64, signer: u64, result: PetitionResult) -> ServerOpcodeMessage {
+pub(super) fn sign_result(
+    charter: u64,
+    signer: u64,
+    result: PetitionResult,
+) -> ServerOpcodeMessage {
     ServerOpcodeMessage::SMSG_PETITION_SIGN_RESULTS(Box::new(codec::build_petition_sign_results(
         charter, signer, result,
     )))
 }
 
-fn signatures(petition: &codec::PetitionView) -> ServerOpcodeMessage {
+pub(super) fn signatures(petition: &codec::PetitionView) -> ServerOpcodeMessage {
     ServerOpcodeMessage::SMSG_PETITION_SHOW_SIGNATURES(Box::new(
         codec::build_petition_show_signatures(petition),
     ))
 }
 
-fn query(petition: &codec::PetitionView) -> ServerOpcodeMessage {
+pub(super) fn query(petition: &codec::PetitionView) -> ServerOpcodeMessage {
     ServerOpcodeMessage::SMSG_PETITION_QUERY_RESPONSE(Box::new(
         codec::build_petition_query_response(petition),
     ))
 }
 
-fn standing_refusal(refusal: GuildRefusal, name: &str) -> Option<ServerOpcodeMessage> {
+pub(super) fn standing_refusal(refusal: GuildRefusal, name: &str) -> Option<ServerOpcodeMessage> {
     let (command_kind, name, result) = match refusal {
         GuildRefusal::NotAllied => (GuildCommand::Create, "", GuildCommandResult::GuildNotAllied),
         GuildRefusal::AlreadyInGuild => (
@@ -314,7 +328,7 @@ fn standing_refusal(refusal: GuildRefusal, name: &str) -> Option<ServerOpcodeMes
     Some(command(command_kind, name, result))
 }
 
-fn name_refusal(refusal: GuildRefusal, name: &str) -> Option<ServerOpcodeMessage> {
+pub(super) fn name_refusal(refusal: GuildRefusal, name: &str) -> Option<ServerOpcodeMessage> {
     Some(command(
         GuildCommand::Create,
         name,
@@ -326,7 +340,11 @@ fn name_refusal(refusal: GuildRefusal, name: &str) -> Option<ServerOpcodeMessage
     ))
 }
 
-fn purchase_refusal(refusal: GuildRefusal, npc: u64, name: &str) -> Option<ServerOpcodeMessage> {
+pub(super) fn purchase_refusal(
+    refusal: GuildRefusal,
+    npc: u64,
+    name: &str,
+) -> Option<ServerOpcodeMessage> {
     Some(match refusal {
         GuildRefusal::NotEnoughMoney | GuildRefusal::CharterUnavailable => {
             let (guid, result) = if refusal == GuildRefusal::NotEnoughMoney {
@@ -350,7 +368,7 @@ fn purchase_refusal(refusal: GuildRefusal, npc: u64, name: &str) -> Option<Serve
     })
 }
 
-fn view(ctx: &ReducerContext, charter: u64) -> Option<codec::PetitionView> {
+pub(super) fn view(ctx: &ReducerContext, charter: u64) -> Option<codec::PetitionView> {
     let petition = ctx
         .db
         .game_guild_petition()
@@ -380,7 +398,18 @@ pub(crate) fn event(ctx: &ReducerContext, event: &GuildEvent) {
     else {
         return;
     };
-    let packet = match event.kind {
+    let packet = event_packet(ctx, event);
+    if let Some(packet) = packet {
+        super::send(ctx, recipient.connection_id, packet, false)
+            .expect("bounded petition message fits a world frame");
+    }
+}
+
+pub(super) fn event_packet(
+    ctx: &ReducerContext,
+    event: &GuildEvent,
+) -> Option<ServerOpcodeMessage> {
+    match event.kind {
         event_kind::PETITION_OFFERED => {
             view(ctx, event.other_guid).map(|petition| signatures(&petition))
         }
@@ -408,14 +437,16 @@ pub(crate) fn event(ctx: &ReducerContext, event: &GuildEvent) {
             GuildCommandResult::PlayerNoMoreInGuild,
         )),
         _ => None,
-    };
-    if let Some(packet) = packet {
-        super::send(ctx, recipient.connection_id, packet, false)
-            .expect("bounded petition message fits a world frame");
     }
 }
 
 pub(crate) fn charter_opened(ctx: &ReducerContext, petition: &GuildPetition) {
+    if crate::peer::world_shard(ctx).is_some() {
+        let packet =
+            codec::build_charter_petition_values(petition.charter_item_guid, petition.petition_id);
+        super::realm_guild::deliver(ctx, petition.owner_guid, vec![packet], None);
+        return;
+    }
     if let Some(owner) = ctx
         .db
         .game_native_player()
@@ -438,6 +469,7 @@ fn charter_values(ctx: &ReducerContext, connection: ConnectionId, item: u64, pet
 
 pub(super) fn replay(ctx: &ReducerContext, guid: u64, connection: ConnectionId) {
     if crate::peer::realm_shard(ctx).is_some() {
+        super::realm_petition::replay(ctx, guid);
         return;
     }
     let petition = ctx.db.game_guild_petition().owner_guid().find(guid);

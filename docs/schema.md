@@ -375,8 +375,10 @@ at most one Guild; each row keeps a name snapshot. `game_guild_event` is an even
 `game_guild_invite` is one pending offer per target Character, reaped on `INVITE_TTL_MICROS`.
 `game_guild_petition` is one open Petition, at most one per owner, tied to its Guild Charter item
 guid. `game_guild_petition_signature` is keyed by `petition_signature_key(petition_id, slot)` for
-slots 0 to 8. Turn-in deletes both and founds the Guild in the same transaction. The typed
-`GuildOp` gets each new variant at the end, because BSATN encodes a variant by its position.
+slots 0 to 8. Turn-in deletes both and founds the Guild in the same transaction. These rows are
+Realm-owned in a split topology. `game_guild_petition_sequence` keeps its highest allocated or
+imported petition id, including after a petition closes. The typed `GuildOp` gets each new variant
+at the end, because BSATN encodes a variant by its position.
 
 PLAYER_GUILDID and PLAYER_GUILDRANK are not stored. The Module projects them from
 `game_guild_member`. With a Realm Shard, guilds, ranks, memberships and invitations are
@@ -392,6 +394,13 @@ survive Transfer. `game_realm_guild_command`, `game_realm_guild_presence` and
 `game_world_guild_update` are IDC outboxes; `game_guild_projection_retry` retains refused snapshot
 deliveries. See [the guild migration procedure](architecture.md#guilds-across-world-shards) before
 using these tables on an existing Realm.
+
+`game_guild_transaction` records one unsettled World request per Character, its outbox call id,
+operation, debited copper and optional result. `game_guild_transaction_retry` schedules closure,
+reconciliation or remaining-refund retries. Transfer and deletion refuse while this state exists;
+it never travels in a Character export. Successful settlement deletes it. The existing guild
+command IDC carries these typed operations under internal opcode one, leaving its published
+arguments unchanged.
 
 `game_guild_fee_hold` and
 `game_guild_fee_decision` are retired Gateway tables, and nothing writes them.

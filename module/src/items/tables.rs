@@ -190,6 +190,7 @@ impl ItemInstance {
         let removed = items.guid().delete(guid);
         super::forget_temporary_enchantment(ctx, guid);
         if let Some(row) = previous {
+            crate::native::realm_petition::item_removed(ctx, &row);
             crate::native::item_changed(ctx, Some(&row), None, false);
         }
         removed
