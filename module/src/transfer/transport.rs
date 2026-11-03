@@ -27,6 +27,7 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &[
     "game_aoi_viewer",
     "game_native_player",
     "game_native_member_stats",
+    "game_native_motion_permit",
     "game_character_relocation",
     "game_transport_passenger",
 ];
@@ -37,6 +38,7 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_aoi_viewer",
     "game_native_player",
     "game_native_member_stats",
+    "game_native_motion_permit",
     "game_character_relocation",
     "game_rest_state_event",
     "game_breath_relay_event",
