@@ -171,7 +171,7 @@ fn ambiguous_case_insensitive_names_refuse_even_an_exact_spelling() {
         "create_character",
         &[
             &account,
-            "\"tester\"",
+            "\"Othername\"",
             "1",
             "1",
             "0",
@@ -182,6 +182,7 @@ fn ambiguous_case_insensitive_names_refuse_even_an_exact_spelling() {
             "0",
         ],
     );
+    shard.assert_sql("UPDATE game_character SET name = 'tester' WHERE name = 'Othername'");
     refused(&shard, ARGS, "is ambiguous ignoring ASCII case");
 }
 
