@@ -43,6 +43,8 @@ fn cell_crossings_keep_surviving_grant_ids_and_remove_departures() {
     teleport(&shard, "50");
     assert_eq!(number::<u64>(&grants(&shard, &wolf, 0)[0], "id"), original);
     teleport(&shard, "150");
+    assert_eq!(number::<u64>(&grants(&shard, &wolf, 0)[0], "id"), original);
+    teleport(&shard, "200");
     assert!(grants(&shard, &wolf, 0).is_empty());
     teleport(&shard, "0");
     assert_eq!(grants(&shard, &wolf, 0).len(), 1);
@@ -93,6 +95,11 @@ fn gameobjects_enter_and_leave_with_the_viewer() {
         original
     );
     teleport(&shard, "150");
+    assert_eq!(
+        number::<u64>(&grants(&shard, &object, 1)[0], "id"),
+        original
+    );
+    teleport(&shard, "200");
     assert!(grants(&shard, &object, 1).is_empty());
     teleport(&shard, "0");
     assert_eq!(grants(&shard, &object, 1).len(), 1);
