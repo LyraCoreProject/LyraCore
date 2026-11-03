@@ -23,6 +23,14 @@ pub struct GuildPetition {
     pub created_micros: i64,
 }
 
+impl GuildPetition {
+    pub(crate) fn insert(self, ctx: &ReducerContext) -> Self {
+        let petition = ctx.db.game_guild_petition().insert(self);
+        crate::native::guild_charter_opened(ctx, &petition);
+        petition
+    }
+}
+
 #[table(
     accessor = game_guild_petition_signature,
     index(accessor = by_petition, btree(columns = [petition_id])),
@@ -240,7 +248,7 @@ pub(crate) fn open(
     } else {
         0
     };
-    let petition = ctx.db.game_guild_petition().insert(GuildPetition {
+    let petition = GuildPetition {
         petition_id,
         charter_item_guid,
         owner_guid,
@@ -248,8 +256,8 @@ pub(crate) fn open(
         team,
         name: name.to_string(),
         created_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
-    });
-    crate::native::guild_charter_opened(ctx, &petition);
+    }
+    .insert(ctx);
     Ok(petition.petition_id)
 }
 

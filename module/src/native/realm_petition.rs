@@ -729,7 +729,7 @@ fn import(ctx: &ReducerContext, actor: &Actor, state: GuildPetitionImport) -> Re
         }
     }
     petition::observe_id(ctx, row.petition_id);
-    table.insert(state.petition);
+    state.petition.insert(ctx);
     for signature in state.signatures {
         ctx.db.game_guild_petition_signature().insert(signature);
     }
