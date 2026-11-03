@@ -16,6 +16,8 @@ pub(crate) const GAME_OBJECT: u8 = 1;
 pub(crate) const CORPSE: u8 = 2;
 pub(crate) const DYNAMIC_OBJECT: u8 = 3;
 pub(crate) const TRANSPORT: u8 = 4;
+// A cell move removes Grants only beyond one more cell, so a crowd at an AOI edge keeps its objects.
+const KEEP_HALF_SPAN: i32 = BOX_HALF_SPAN + 1;
 
 #[table(
     accessor = game_aoi_grant,
@@ -76,20 +78,31 @@ impl AoiViewer {
     }
 
     fn contains(&self, map_id: u32, instance_id: u64, cell: i64) -> bool {
+        self.within(map_id, instance_id, cell, BOX_HALF_SPAN)
+    }
+
+    fn keeps(&self, map_id: u32, instance_id: u64, cell: i64) -> bool {
+        self.within(map_id, instance_id, cell, KEEP_HALF_SPAN)
+    }
+
+    fn within(&self, map_id: u32, instance_id: u64, cell: i64, span: i32) -> bool {
         let (x, y) = grid_cell_of_id(self.cell);
         let (other_x, other_y) = grid_cell_of_id(cell);
         self.map_id == map_id
             && self.instance_id == instance_id
-            && x.abs_diff(other_x) <= BOX_HALF_SPAN as u32
-            && y.abs_diff(other_y) <= BOX_HALF_SPAN as u32
+            && x.abs_diff(other_x) <= span as u32
+            && y.abs_diff(other_y) <= span as u32
     }
 }
 
 fn cells(cell: i64) -> impl Iterator<Item = i64> {
+    cells_within(cell, BOX_HALF_SPAN)
+}
+
+fn cells_within(cell: i64, span: i32) -> impl Iterator<Item = i64> {
     let (x, y) = grid_cell_of_id(cell);
-    (x.saturating_sub(BOX_HALF_SPAN)..=x.saturating_add(BOX_HALF_SPAN)).flat_map(move |x| {
-        (y.saturating_sub(BOX_HALF_SPAN)..=y.saturating_add(BOX_HALF_SPAN))
-            .map(move |y| grid_cell_id(x, y))
+    (x.saturating_sub(span)..=x.saturating_add(span)).flat_map(move |x| {
+        (y.saturating_sub(span)..=y.saturating_add(span)).map(move |y| grid_cell_id(x, y))
     })
 }
 
@@ -135,7 +148,8 @@ pub(crate) fn entity_changed(
     }
 }
 
-/// A cell move changes only the Grants of viewers in cells that enter or leave the entity's reach.
+/// A cell move adds the Grants of viewers that enter the entity's reach and removes those beyond
+/// its keep.
 fn shift_subject(ctx: &ReducerContext, from: i64, entity: &WorldEntity) {
     if ctx.db.game_aoi_viewer().count() == 0 {
         return;
@@ -156,7 +170,9 @@ fn shift_subject(ctx: &ReducerContext, from: i64, entity: &WorldEntity) {
             .filter((viewer, WORLD_ENTITY, entity.guid))
             .next()
     };
-    for cell in cells(from).filter(|&cell| !after.contains(map_id, instance_id, cell)) {
+    for cell in
+        cells_within(from, KEEP_HALF_SPAN).filter(|&cell| !after.keeps(map_id, instance_id, cell))
+    {
         for viewer in ctx
             .db
             .game_aoi_viewer()
@@ -292,11 +308,12 @@ fn subjects_in(ctx: &ReducerContext, viewer: &AoiViewer, cell: i64, all: bool) -
         .collect()
 }
 
-/// A cell move changes only the subjects in cells that enter or leave the AOI.
+/// A cell move adds the subjects that enter the AOI and removes those beyond its keep.
 fn shift_viewer(ctx: &ReducerContext, from: &AoiViewer, to: &AoiViewer) {
     let grants = ctx.db.game_aoi_grant();
     let find = |layer: u8, guid: u64| grants.by_viewer().filter((to.guid, layer, guid)).next();
-    for cell in cells(from.cell).filter(|&cell| !to.contains(to.map_id, to.instance_id, cell)) {
+    let gone = |&cell: &i64| !to.keeps(to.map_id, to.instance_id, cell);
+    for cell in cells_within(from.cell, KEEP_HALF_SPAN).filter(gone) {
         for (layer, guid) in subjects_in(ctx, from, cell, true) {
             if let Some(grant) = find(layer, guid) {
                 grants.id().delete(grant.id);
@@ -461,6 +478,16 @@ mod tests {
         assert!(!viewer.sees_entity(&entity, true));
         entity.guid = viewer.guid;
         assert!(viewer.sees_entity(&entity, true));
+    }
+
+    #[test]
+    fn a_cell_move_keeps_grants_one_cell_beyond_the_aoi() {
+        let viewer = viewer();
+        assert!(!viewer.contains(0, 7, grid_cell_id(3, -3)));
+        assert!(viewer.keeps(0, 7, grid_cell_id(3, -3)));
+        assert!(!viewer.keeps(0, 7, grid_cell_id(4, 0)));
+        assert!(!viewer.keeps(1, 7, grid_cell_id(0, 0)));
+        assert_eq!(cells_within(viewer.cell, KEEP_HALF_SPAN).count(), 49);
     }
 
     #[test]
