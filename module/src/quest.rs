@@ -155,6 +155,13 @@ pub struct QuestTemplate {
     pub quest_type: u32,
 }
 
+#[table(accessor = game_quest_flags)]
+pub struct QuestFlags {
+    #[primary_key]
+    pub quest_entry: u32,
+    pub flags: u32,
+}
+
 #[table(accessor = game_quest_text, public)]
 pub struct QuestText {
     #[primary_key]

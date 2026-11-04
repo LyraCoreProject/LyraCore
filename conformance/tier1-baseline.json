@@ -140,30 +140,6 @@
           },
           "opcode": 93,
           "field_path": [
-            "flags"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "requirements",
-          "stream": {
-            "kind": "reply",
-            "id": "requirements"
-          },
-          "opcode": 93,
-          "field_path": [
-            "money_max_level"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "requirements",
-          "stream": {
-            "kind": "reply",
-            "id": "requirements"
-          },
-          "opcode": 93,
-          "field_path": [
             "objectives"
           ]
         },
@@ -178,25 +154,6 @@
           "field_path": [
             "title"
           ]
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "unrelated_quest",
-          "stream": {
-            "kind": "reply",
-            "id": "unrelated_quest"
-          },
-          "opcode": 382,
-          "field_path": []
-        },
-        {
-          "rule": "unexpected_packet",
-          "checkpoint": "unrelated_quest",
-          "stream": {
-            "kind": "unexpected"
-          },
-          "opcode": 392,
-          "field_path": []
         }
       ],
       "data": []

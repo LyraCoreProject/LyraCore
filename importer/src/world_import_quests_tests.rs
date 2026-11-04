@@ -30,6 +30,7 @@ fn quest<'a>(
         ("MinLevel", N(5)),
         ("QuestLevel", N(8)),
         ("RewXP", N(123)),
+        ("QuestFlags", N(8)),
         ("RewMailTemplateId", N(5)),
         ("RewMailDelaySecs", N(12)),
         ("RewMailMoney", N(34)),
@@ -52,7 +53,7 @@ fn quest<'a>(
 }
 
 fn source() -> WorldSource {
-    let mut names = "entry patch ZoneOrSort MinLevel QuestLevel Type RequiredClasses RequiredRaces LimitTime SpecialFlags PrevQuestId NextQuestInChain SrcItemId SrcItemCount RewRepFaction1 RewRepValue1 RewRepFaction2 RewRepValue2 RewOrReqMoney RewSpell RewSpellCast RewMoneyMaxLevel RewMailTemplateId RewMailDelaySecs RewMailMoney RewXP".split_whitespace().map(str::to_string).collect::<Vec<_>>();
+    let mut names = "entry patch ZoneOrSort MinLevel QuestLevel Type RequiredClasses RequiredRaces LimitTime QuestFlags SpecialFlags PrevQuestId NextQuestInChain SrcItemId SrcItemCount RewRepFaction1 RewRepValue1 RewRepFaction2 RewRepValue2 RewOrReqMoney RewSpell RewSpellCast RewMoneyMaxLevel RewMailTemplateId RewMailDelaySecs RewMailMoney RewXP".split_whitespace().map(str::to_string).collect::<Vec<_>>();
     for slot in 1..=4 {
         for prefix in [
             "ReqCreatureOrGOId",
@@ -223,7 +224,7 @@ fn source() -> WorldSource {
 }
 
 #[test]
-fn named_quests_select_revisions_relations_mail_money_xp_and_learn_spells() {
+fn named_quests_select_revisions_relations_mail_money_xp_flags_and_learn_spells() {
     let source = source();
     let quests = build_quests(
         &source,
@@ -237,6 +238,11 @@ fn named_quests_select_revisions_relations_mail_money_xp_and_learn_spells() {
     assert_eq!(quests.entries, HashSet::from([100]));
     assert!(quests.templates[0].starts_with("(100,5,8,'Snow 雪',0,123,"));
     assert_eq!(quests.texts, ["(100,'','','NULL','')"]);
+    let mut statements = Vec::new();
+    push_quest_statements(&mut statements, &quests, &[]);
+    assert!(statements.iter().any(|statement| {
+        statement.contains("game_quest_flags") && statement.contains("(100,8)")
+    }));
     assert_eq!(quests.reward_mail, ["(100,5,12,0,34)"]);
     assert_eq!(quests.reward_spells, ["(100,600)"]);
     assert_eq!(

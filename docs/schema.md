@@ -68,6 +68,12 @@ mutation saves these positions before changing the log. New quests use the first
 swaps move positions and abandon leaves a hole. Reconnect and Character Transfer retain the row.
 The public `game_character_quest` layout stays unchanged for Package compatibility.
 
+`game_quest_flags` is a new private companion table for the source `QuestFlags` bits returned in
+quest queries. Absence means zero; reimport quests to populate an existing Realm. The public quest
+template layout stays unchanged for Packages. Existing authored templates default to zero flags.
+These stored bits do not implement the gameplay
+rules for every flag; the import Compatibility Manifest continues to report that gap.
+
 ### The three migration rules that have bitten
 
 1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64`

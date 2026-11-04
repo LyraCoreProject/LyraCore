@@ -1,5 +1,6 @@
 // See conformance/README.md#quest-data for fixture provenance and scope.
 pub const STATEMENTS: &[&str] = &[
+    "INSERT INTO game_quest_flags (quest_entry,flags) VALUES (433,8)",
     "INSERT INTO game_quest_template (entry,min_level,quest_level,title,reward_money,reward_xp,\
     prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,\
     rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,\
