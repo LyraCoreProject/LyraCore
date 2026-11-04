@@ -313,6 +313,18 @@ pub fn build_coinage_values(guid: u64, money: u32) -> SMSG_UPDATE_OBJECT {
     })
 }
 
+pub fn build_bank_purchase_values(
+    guid: u64,
+    money: u32,
+    player_bytes_2: u32,
+) -> SMSG_UPDATE_OBJECT {
+    let (a, b, c, d) = unpack4(super::entity::client_player_bytes_2(player_bytes_2));
+    player_values(guid, |player| {
+        player.set_player_field_coinage(money as i32);
+        player.set_player_bytes_2(a, b, c, d);
+    })
+}
+
 pub fn build_player_ammo_id_values(guid: u64, ammo_entry: u32) -> SMSG_UPDATE_OBJECT {
     player_values(guid, |player| {
         player.set_player_ammo_id(ammo_entry as i32);

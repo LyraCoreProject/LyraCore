@@ -465,6 +465,24 @@ fn coinage_values_is_player_mask_without_object_type() {
 }
 
 #[test]
+fn bank_purchase_values_combine_coinage_and_bank_slots_without_object_type() {
+    let update = build_bank_purchase_values(5, 9_000, 0x0201_0000);
+    let [Object::Values {
+        guid1,
+        mask1: UpdateMask::Player(fields),
+    }] = update.objects.as_slice()
+    else {
+        panic!("expected one Character VALUES update: {update:?}");
+    };
+    assert_eq!(guid1.guid(), 5);
+    assert_eq!(fields.player_field_coinage(), Some(9_000));
+    assert_eq!(fields.player_bytes_2(), Some((0, 0xee, 1, 2)));
+    let mut bytes = Vec::new();
+    update.write_unencrypted_server(&mut bytes).unwrap();
+    assert_no_object_type(&bytes[4..]);
+}
+
+#[test]
 fn combo_points_values_set_the_combo_target_and_byte_1_of_player_field_bytes() {
     let (opcode, body) = build_combo_points_values(0x10, 0xF130_0000_0000_0042, 3);
     assert_eq!(opcode, SMSG_UPDATE_OBJECT_OPCODE);
