@@ -8,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 
+from preflight import check_spacetime_version
+
 
 SETUP_FAILURE_EXIT = 2
 
@@ -47,6 +49,10 @@ def main():
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parent.parent
+    try:
+        check_spacetime_version(root)
+    except (OSError, ValueError, KeyError, RuntimeError) as error:
+        return setup_failure(args.scenario, args.json, str(error))
     scratch = Path(os.environ.get(
         "LYRACORE_CONFORMANCE_SCRATCH",
         Path.home() / ".cache/lyracore-scratch/conformance-run",
