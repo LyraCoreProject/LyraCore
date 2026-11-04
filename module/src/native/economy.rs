@@ -289,12 +289,7 @@ pub(super) fn receive(
                 .map_err(|refusal| Rollback::reply(reply(BuyBankSlotResult::NotBanker), refusal))?;
             crate::items::apply_buy_bank_slot(ctx, guid, c.guid.guid())
                 .map_err(|refusal| Rollback::reply(reply(bank_slot_result(&refusal)), refusal))?;
-            Ok(super::send(
-                ctx,
-                connection,
-                reply(BuyBankSlotResult::Ok),
-                false,
-            )?)
+            Ok(())
         }
         ClientOpcodeMessage::CMSG_AUTOBANK_ITEM(c) => {
             auto_bank(ctx, guid, c.bag_index, c.slot_index)
