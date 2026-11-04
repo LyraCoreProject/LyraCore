@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 
 use lyracore_protocol::codec;
-use lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage;
+use lyracore_protocol::messages::vanilla::{opcodes::ServerOpcodeMessage, Object, UpdateMask};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::game_native_player;
@@ -383,7 +383,11 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
                 ));
             }
             if old.money != new.money {
-                private.push(codec::build_coinage_values(new.guid, new.money));
+                private.push(if old.bank_bag_slots != new.bank_bag_slots {
+                    codec::build_bank_purchase_values(new.guid, new.money, new.player_bytes_2)
+                } else {
+                    codec::build_coinage_values(new.guid, new.money)
+                });
             }
             for values in private {
                 if let Err(error) = super::send(
@@ -427,6 +431,16 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
     }
     for message in updates(old, new) {
         let (message, exclude_self) = match message {
+            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(ref update)
+                if old.money != new.money
+                    && old.bank_bag_slots != new.bank_bag_slots
+                    && update.objects.iter().any(|object| {
+                        matches!(object, Object::Values { mask1: UpdateMask::Player(fields), .. }
+                            if fields.player_bytes_2().is_some())
+                    }) =>
+            {
+                (message, true)
+            }
             ServerOpcodeMessage::SMSG_FORCE_RUN_SPEED_CHANGE(change) => {
                 let observed =
                     codec::build_spline_speed(new.guid, codec::ObservedSpeed::Run, change.speed);
