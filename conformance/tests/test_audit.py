@@ -163,6 +163,39 @@ class ModuleSchema(unittest.TestCase):
                 self.assertNotEqual(audit.schema_fingerprint(original), audit.schema_fingerprint(changed))
 
 
+    def test_only_new_private_tables_are_compatible(self):
+        previous = audit.canonical_schema(self.schema())
+        current = copy.deepcopy(previous)
+        current['Tables'].append(dict(current['Tables'][0], source_name='companion'))
+        self.assertTrue(audit.compatible_schema(previous, current))
+        for table_access, is_event in [({'Public': []}, False), ({'Private': []}, True)]:
+            with self.subTest(table_access=table_access, is_event=is_event):
+                changed = copy.deepcopy(current)
+                changed['Tables'][-1].update(table_access=table_access, is_event=is_event)
+                self.assertFalse(audit.compatible_schema(previous, changed))
+
+    def test_stored_layout_and_initialization_changes_are_incompatible(self):
+        previous = audit.canonical_schema(self.schema())
+        for section, replacement in [
+                ('Tables', []), ('Typespace', {}),
+                ('Schedules', [{'table_name': 'rows'}]),
+                ('LifeCycleReducers', [{'function_name': 'another_init'}])]:
+            with self.subTest(section=section):
+                current = copy.deepcopy(previous)
+                current[section] = replacement
+                self.assertFalse(audit.compatible_schema(previous, current))
+        for field, value in [('default_values', []), ('table_access', {'Public': []}),
+                             ('is_event', True)]:
+            with self.subTest(field=field):
+                current = copy.deepcopy(previous)
+                current['Tables'][0][field] = value
+                self.assertFalse(audit.compatible_schema(previous, current))
+        current = copy.deepcopy(previous)
+        row = next(value for value in current['Typespace'].values() if 'Product' in value)
+        row['Product']['elements'].append(dict(name={'some': 'cell'}, algebraic_type={'I64': []}))
+        self.assertFalse(audit.compatible_schema(previous, current))
+
+
 class ImportModuleCoverage(unittest.TestCase):
     def test_reachable_modules_are_hashed(self):
         hashed = set()
@@ -283,9 +316,12 @@ class ScenarioKey(unittest.TestCase):
                 changed_pin, _ = audit.scenario_key(harness, client)
                 (importer / 'lib.rs').write_text('changed')
                 changed_importer, _ = audit.scenario_key(harness, client)
+                (root / '.lyracore-cli-rev').write_text('new cli')
+                changed_cli, _ = audit.scenario_key(harness, client)
             self.assertNotEqual(first, changed_client)
             self.assertNotEqual(changed_client, changed_pin)
             self.assertNotEqual(changed_pin, changed_importer)
+            self.assertNotEqual(changed_importer, changed_cli)
 
 
 class ImportedWorld(unittest.TestCase):
@@ -718,7 +754,8 @@ class ReferenceOwnership(unittest.TestCase):
         state = self.cache / 'realm/state.json'
         state.parent.mkdir()
         state.write_text(json.dumps(dict(native_host_sha256=audit.digest(host),
-                                        module_sha256=audit.digest(module), database_commit='pin')))
+                                        module_sha256=audit.digest(module), database_commit='pin',
+                                        world_origin='snapshot')))
         scenario = {'id': 'taxi_single_hop', 'characters': ['Taxi']}
         (self.root / 'catalogue.json').write_text(json.dumps([scenario]))
         @audit.contextmanager
@@ -746,7 +783,8 @@ class ReferenceOwnership(unittest.TestCase):
         state = self.cache / 'realm/state.json'
         state.parent.mkdir()
         state.write_text(json.dumps(dict(native_host_sha256=audit.digest(host),
-                                        module_sha256=audit.digest(module), database_commit='pin')))
+                                        module_sha256=audit.digest(module), database_commit='pin',
+                                        world_origin='snapshot')))
         scenario = {'id': 'taxi_single_hop', 'characters': ['Taxi']}
         (self.root / 'catalogue.json').write_text(json.dumps([scenario]))
         @audit.contextmanager
@@ -947,7 +985,7 @@ class ScenarioRealmReuse(unittest.TestCase):
             self.assertFalse(self.running)
             shutil.rmtree(self.realm)
         elif 'describe' in args:
-            output = json.dumps(ModuleSchema().schema() if self.fail_schema else self.schema)
+            output = json.dumps((ModuleSchema().schema() if self.fail_schema else self.schema)['V10'])
         elif args[1:3] == ['dev', 'up']:
             if self.fail_publish and (self.realm / '.lyracore/native-data/world').exists():
                 self.fail_publish = False
@@ -1017,6 +1055,17 @@ class ScenarioRealmReuse(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'forbids cold import'):
             with audit.scenario_realm('key', self.pins, self.root, 0, require_snapshot=True):
                 self.fail('failed upgrade cannot supply evidence')
+        self.assertEqual(self.imports, 1)
+        self.assertFalse(self.running)
+
+    def test_unexpected_published_schema_cannot_supply_evidence(self):
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            pass
+        self.add_private_table()
+        self.fail_schema = True
+        with self.assertRaisesRegex(RuntimeError, 'published Module schema differs'):
+            with audit.scenario_realm('key', self.pins, self.root, 0):
+                self.fail('schema mismatch cannot supply evidence')
         self.assertEqual(self.imports, 1)
         self.assertFalse(self.running)
 

@@ -1,5 +1,5 @@
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from concurrent.futures import ThreadPoolExecutor
 import datetime
 import fcntl
@@ -435,14 +435,22 @@ class SnapshotUpgradeError(RuntimeError):
 def start_realm(realm_root, cli, env, *, restored=False):
     try:
         run_with_diagnostic([cli, 'dev', 'up', '--single'], env=env, cwd=realm_root)
+    except (RuntimeError, subprocess.TimeoutExpired) as error:
+        if restored:
+            raise SnapshotUpgradeError(str(error)) from error
+        raise
+
+
+def verify_realm_schema(realm_root, env, *, restored=False):
+    try:
         schema = run_with_diagnostic(
-            [env['PATH'].split(':')[0] + '/spacetime', '--config-path',
+            [realm_root.parent / 'bin/spacetime', '--config-path',
              realm_root / '.lyracore/native-cli.toml', 'describe', '--json',
              '-s', 'http://127.0.0.1:3000', 'lyracore'], env=env, cwd=realm_root)
         expected = json.loads((SCENARIO_CACHE / 'deployment-schema.json').read_text())
-        if canonical_schema(json.loads(schema.stdout)) != expected:
+        if canonical_schema({'V10': json.loads(schema.stdout)}) != expected:
             raise RuntimeError('published Module schema differs from deployment Module')
-    except (RuntimeError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+    except (RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
         if restored:
             raise SnapshotUpgradeError(str(error)) from error
         raise
@@ -849,17 +857,18 @@ def local_realm(work, client_data, peer_count):
 
 @contextmanager
 def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False):
-    try:
-        with prepare_scenario_realm(key, pins, client_data, peer_count,
-                                    require_snapshot=require_snapshot) as realm:
-            yield realm
-    except SnapshotUpgradeError as error:
-        print(f'[audit] snapshot publish or initialization failed: {error}', file=sys.stderr, flush=True)
-        if require_snapshot:
-            raise RuntimeError('--require-snapshot forbids cold import after snapshot upgrade failure') from error
-        print('[audit] falling back to a fresh world import', file=sys.stderr, flush=True)
-        with prepare_scenario_realm(key, pins, client_data, peer_count, use_snapshot=False) as realm:
-            yield realm
+    with ExitStack() as lifetime:
+        try:
+            realm = lifetime.enter_context(prepare_scenario_realm(
+                key, pins, client_data, peer_count, require_snapshot=require_snapshot))
+        except SnapshotUpgradeError as error:
+            print(f'[audit] snapshot publish or initialization failed: {error}', file=sys.stderr, flush=True)
+            if require_snapshot:
+                raise RuntimeError('--require-snapshot forbids cold import after snapshot upgrade failure') from error
+            print('[audit] falling back to a fresh world import', file=sys.stderr, flush=True)
+            realm = lifetime.enter_context(prepare_scenario_realm(
+                key, pins, client_data, peer_count, use_snapshot=False))
+        yield realm
 
 
 @contextmanager
@@ -946,6 +955,7 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
                 (native / 'native-host').symlink_to(SCENARIO_CACHE / 'native-host', target_is_directory=True)
                 with timed('Realm start'):
                     start_realm(realm_root, cli, cli_env, restored=saved)
+                    verify_realm_schema(realm_root, cli_env, restored=saved)
                 if not saved:
                     password = secrets.token_hex(8)
                     (cache / 'password').write_text(password + '\n')
@@ -964,6 +974,7 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
                         stop_realm(realm_root, cli, cli_env)
                         seal_snapshot(key, realm_root, password)
                         start_realm(realm_root, cli, cli_env, restored=True)
+                        verify_realm_schema(realm_root, cli_env, restored=True)
                 else:
                     print('[audit] import: 0.00s (cached snapshot)', file=sys.stderr, flush=True)
                 state = dict(phase='ready', key=key, core_commit=current,
@@ -984,8 +995,13 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
                 shutil.rmtree(cache)
                 raise
         else:
-            with timed('Realm start'):
-                restore_imported_world(realm_root, snapshot / 'native-data', cli, cli_env)
+            try:
+                with timed('Realm start'):
+                    restore_imported_world(realm_root, snapshot / 'native-data', cli, cli_env)
+                    verify_realm_schema(realm_root, cli_env, restored=True)
+            except SnapshotUpgradeError:
+                stop_realm(realm_root, cli, cli_env)
+                raise
             print('[audit] import: 0.00s (cached snapshot)', file=sys.stderr, flush=True)
             state['world_origin'] = origin
             state['native_host_sha256'] = digest(realm_root / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone')
@@ -998,6 +1014,9 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
         token = realm_root / '.lyracore/native-owner-token'
         if not token.is_file():
             raise RuntimeError('cached Realm has no Operator token')
+        imported = json.loads((realm_root / '.import/vmangos/current.json').read_text())
+        if imported['commit'] != pins['database_commit']:
+            raise RuntimeError('restored world differs from Reference Server data pin')
         print(f"[audit] world origin: {state['world_origin']}", file=sys.stderr, flush=True)
         password = (snapshot / 'password').read_text().strip()
         for account in ['CONFORMANCE', *(f'CONFORMANCE{peer}' for peer in range(2, peer_count + 2))]:
