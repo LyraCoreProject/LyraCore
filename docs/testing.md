@@ -217,15 +217,20 @@ revision, scenario hash, and rule and data signature sets to equal
 After changing one scenario's signatures, run `./conformance/baseline <scenario>`. It runs that
 scenario's durable test and replaces only its entry from the new comparison. To regenerate every
 entry, run all tier 1 scenarios, then `./conformance/baseline`. Review the baseline diff in the
-same PR
-as the Behavior change. The baseline does not affect comparator classification or scoreboard results.
+same PR as the Behavior change. The baseline does not affect comparator classification or scoreboard results.
+The [PR signature ratchet](../conformance/README.md#pull-request-signature-ratchet) separately
+compares the committed baseline with the merge base. Added rule signatures fail when the scenario
+hash and harness revision are unchanged. Removed signatures pass. New scenarios and changed
+provenance pass as new measurements and appear in the job summary. A maintainer accepts a deliberate
+addition with the GitHub PR label `conformance-accept-signature`; label changes rerun the check.
+The workflow reads current labels from GitHub and runs trusted base code, with a read-only token
+and no PR checkout or repository secrets. A maintainer creates the label before first use.
 Use `./conformance/run <scenario>` for one tier 1 scenario, or add `--json` for grouped,
 machine-readable differences and baseline changes. It runs only the named durable test. See the
 [run output contract](../conformance/README.md#run-one-scenario).
-For a local implementer check, run the changed scenario and `cargo fmt --all -- --check`. Run
-`cargo clippy -p <crate> --all-targets --all-features -- -D warnings` for each changed crate. If the
-Module changed, run `cargo test -p lyracore-module --lib --features=debug_reducers`. CI runs all
-tier 1 scenarios and the full suite.
+For a local implementer check, run the changed scenario and `cargo fmt --all`. CI runs clippy,
+all tier 1 scenarios and the full suite. Run one test locally only to reproduce a CI failure or
+to see a new test fail before its fix.
 Run the manual [Conformance Audit](../conformance/README.md#conformance-audit) for comparisons over
 TCP on both servers. Run `./conformance/scoreboard` to join it with the Feature Ledger and the
 latest Conformance Audit report. The scoreboard's example tests check counts, evidence freshness
@@ -239,8 +244,17 @@ if one exists. An implementer reports suspected scenario defects to the author. 
 never edits the scenario, Golden Trace or Equivalence Rules to obtain a pass. See
 [ADR 0005](adr/0005-1-12-conformance.md).
 
-The durable CI target discovery includes `native_conformance` automatically and runs both tier 1
-scenarios. Use the [taxi setup](../conformance/README.md#taxi-data) to run that test.
+On pushes to `main`, the durable job that runs `native_conformance` produces
+`./conformance/scoreboard --json` from its complete `.lyracore/conformance/tier1.json`, uploads both
+files as `conformance-scoreboard-<commit>` for 90 days, and prints `--summary` in the job summary.
+Whole targets stay on one shard, so this adds no scenario rerun. Low numbers never fail this step;
+missing or malformed explicit evidence still fails. The summary shows evidence presence and state
+counts beside pass totals: zero passes with absent evidence means unmeasured. Signature totals
+include recorded stale evidence and are null when absent. CI commits no generated evidence.
+Documentation-only pushes to `main` also run the durable workflow to capture each commit.
+
+The durable CI target discovery includes `native_conformance` automatically and runs every tier 1
+scenario. Use the [taxi setup](../conformance/README.md#taxi-data) to run that test.
 `native_debug_gate` checks that native fixture entry stays behind `conformance_test_fixture` and
 that the check detects a missing or ineffective feature gate. Its durable test builds with only
 `debug_reducers`, the feature set used by `lyracore publish`, and checks that the Module does not
