@@ -19,7 +19,7 @@ entry in both files.
 
 **C** [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character directory](#realm-topology) · [Character Name Reservation](#realm-topology) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Coalescible Motion](#requests-and-delivery) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
 
-**D** [Data-dependent field](#conformance) · [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
+**D** [Data Gap](#conformance) · [Data-dependent field](#conformance) · [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
 **E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Equivalence Rule](#conformance) · [Escrow](#retired-terms) · [Event Binding](#packages) · [Extra Attack](#procs)
 
@@ -1198,6 +1198,11 @@ _Avoid_: feature (when meaning one interaction)
 A dated comparison of LyraCore and the Reference Server through the same wire scenarios. It
 separates rule differences from data differences using the comparator's classification tags.
 _Avoid_: compatibility audit
+
+**Data Gap**:
+A known gap in World Source translation or imported representation, identified by an `importer/`
+source path in the Feature Ledger. The scoreboard assigns it to `data_import` work and counts it
+separately from behavior gaps. This assignment does not classify wire differences or prove conformance.
 
 **Data-dependent field**:
 A packet field declared in a harness scenario with its opcode, field path and reason. The comparator

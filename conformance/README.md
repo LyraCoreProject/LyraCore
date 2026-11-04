@@ -36,7 +36,7 @@ All nested tables refuse unknown fields too. Paths are relative, without parent-
 | `required_rungs` | Evidence needed to count the Behavior as done |
 | `scenarios` | Plain string ids in the pinned harness catalogue; empty until authored |
 | `deliberate_deviations` | Intentional result differences, each with an `id`, `result`, `reason` and HTTPS `source` |
-| `known_gaps` | Optional list of defects or open stock-client questions with `description`, relative core `path`, `symbol` and `evidence`; no status or classification effect |
+| `known_gaps` | Optional list of defects or open stock-client questions with `description`, relative core `path`, `symbol` and `evidence`; work kind derived from path |
 | `real_client` | A human-maintained check, described below |
 | `prerequisites` | Fixture or world-data requirements in plain words |
 | `tests` | Retained Rust evidence, each with a source `path`, test `function` and `rung` |
@@ -68,8 +68,9 @@ Known gaps record observed defects or open stock-client questions and their evid
 excuse differences nor change rule/data classification, pass counts or freshness.
 `scope_verification` marks Behaviors whose every request has unverified stock-client use. It
 requires at least one request and does not change the denominator. The scoreboard shows known-gap
-counts separately. Each entry requires nonempty description, symbol and evidence fields and a
-relative source path. Unknown fields, including status, fail.
+counts separately. Paths under `importer/` identify Data Gaps; other paths identify behavior gaps.
+This work assignment does not change comparator tags or conformance results. Each entry requires
+nonempty description, symbol and evidence fields and a relative source path. Unknown fields, including status, fail.
 
 ### Data-dependent fields
 
@@ -416,7 +417,8 @@ and artifact upload, with no extra durable test time. CI never commits this evid
 commit to track progress within retention; download them for longer retention.
 
 `--summary` prints the same short summary used by CI. It includes Behaviors with scenarios, passes,
-recorded rule and data signature totals for each tier, evidence states and open work by kind.
+recorded rule and data signature totals for each tier, evidence states, open work by kind and
+data coverage.
 Low counts do not fail the scoreboard. Invalid inputs still fail. A recorded signature total sums
 per-Behavior distinct signatures from the supplied report, including stale evidence; the state
 counts show whether those measurements are current. Absent evidence has null signature totals.
@@ -424,19 +426,21 @@ A pass total of zero alone does not mean measured failure: check `evidence` and 
 summary. `absent` means no report; `not_run` means a Behavior lacks complete evidence.
 
 The system table counts Behaviors with and without scenarios. The open-work list includes every
-Behavior without a scenario and every scenario-backed Behavior without a clean tier 1 and audit
-pass, or with known gaps. A scenario author takes an entry without a scenario. An implementer takes
-an entry with one when its evidence still points to implementation work. If tier 1 passes, or the
-best available rule-signature count is zero and the ledger has no known gaps, an entry with a missing,
+Behavior without a scenario except entries with only Data Gaps, and every scenario-backed Behavior
+without a clean tier 1 and audit pass, or with behavior gaps. A scenario author takes an entry
+without a scenario. Data Gaps get separate `data_import` items, including on mixed Behaviors.
+An implementer takes an entry with one when its evidence still points to implementation work. If tier 1 passes, or the
+best available rule-signature count is zero and the ledger has no behavior gaps, an entry with a missing,
 stale, unverified or reference-unstable audit calls for evidence refresh by a maintainer through
 `./conformance/audit`.
-Scope verification follows established implementation and scenario work; evidence refresh comes
-last. Each entry gives a next command. The scenario-author command opens the ledger entry. An
-implementer normally runs the first
-listed scenario; further scenarios are in the Behavior's `scenarios` field.
+Scope verification follows established implementation and scenario work, then data import; evidence
+refresh comes last. A data importer takes `data_import` items and fixes World Source translation
+or imported representation. Its command locates findings in the importer source paths. Each entry
+gives a next command. The scenario-author command opens the ledger entry. An implementer normally
+runs the first listed scenario; further scenarios are in the Behavior's `scenarios` field.
 Each open-work item also has `reproduce_with`: `tier1` or `audit` for work with a scenario, and null
-when no scenario exists. An implementer whose tier 1 result passes but whose audit reports
-differences reproduces them with `./conformance/audit --scenario <id> --check`. An audit-only difference usually also means
+for scenario author, scope verification and data import work. An implementer whose tier 1 result
+passes but whose audit reports differences reproduces them with `./conformance/audit --scenario <id> --check`. An audit-only difference usually also means
 the tier 1 fixture misses something; a scenario author can fix that fixture.
 Run a tier 1 item's `next_command` from the repo root. Exit code 0 means its signature set still
 matches the Tier 1 baseline and all properties passed. Code 1 means a baseline change or property
@@ -452,7 +456,10 @@ list sorts by descending number of other Behaviors that directly depend on the e
 descending measured rule-signature count, then descending number of distinct
 claimed request opcodes, then ascending Behavior id. It uses the committed tier 1 baseline's
 distinct rule signatures when the Behavior has one, then the audit count, then a local tier 1
-count. If none exists, it uses the number of distinct known gaps. Repeating a known gap does not
+count. If none exists, it uses the number of distinct behavior gaps. Data Gaps never increase
+scenario or implementer priority.
+Data-import items sort by distinct Data Gap count, then Behavior id; dependency and opcode counts
+are zero for those items. Repeating a known gap does not
 increase priority. Dependency edits change the ranking and receive review as such in their PRs.
 The formula uses no assigned priority.
 
@@ -461,7 +468,8 @@ keyed by their ledger ids, a `summary`, `open_work` in rank order, `opcode_cover
 `tier1_evidence` and `audit_evidence`. Evidence is null when absent; otherwise it has `path` and
 the complete validated schema-2 `report`, including scenario comparisons and audit summaries.
 `summary` gives `behaviors`, `with_scenario`, `without_scenario`, `open_work_by_kind`, and
-`tier1` and `audit` objects. Each tier gives `evidence` (`absent` or `present`), `pass`, Behavior
+`data_coverage`, `tier1` and `audit` objects. Each tier gives `evidence` (`absent` or `present`),
+`pass`, Behavior
 `states` counts, `scenarios_recorded`, `scenarios_expected`, `rule_signatures` and `data_signatures`.
 Each system gives `behaviors`, `with_scenario`, `without_scenario`, `tier1_pass`, `audit_pass`,
 `real_client_waiting`, `claimed_opcodes` and `unavailable`. Each Behavior gives its `system`,
@@ -472,8 +480,10 @@ measured. State values are `no_scenario`, `not_run`, `stale`, `different`, `unve
 signatures and raw record counts. Spell counts give build, source path or missing expected path, and per-class
 trainable, supported-kind and unsupported-kind counts. Open-work items give `behavior`, `system`,
 `kind`, `reproduce_with`, `next_command`, `prerequisites` and the three numeric ranking inputs. `kind` is
-`scenario_author`, `implementer`, `scope_verification` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input
-is the measured signature count or the distinct-gap fallback. Counts and state names have the same
+`scenario_author`, `implementer`, `scope_verification`, `data_import` or `evidence_refresh`.
+The `open_signatures_or_gaps` ranking input
+is the measured signature count or the distinct behavior-gap fallback; data-import items use
+distinct Data Gaps. Counts and state names have the same
 meaning as the text scoreboard.
 `opcode_coverage` reports `claimed`, `out_of_scope`, `unclaimed` and `total` for the build-5875
 request inventory. `unclaimed_opcodes` lists the missing numbers; it is empty on a successful run.
@@ -571,6 +581,24 @@ these sets against it. It also
 replays that earlier report's LyraCore candidates when its harness revision matches the current pin.
 Older reports receive structure checks; the newest report receives current ledger checks, so a
 Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes are not audit baselines.
+
+### Data coverage
+
+`summary.data_coverage` contains ledger gap totals (`behavior` and `data_import`) and `systems`.
+Each system contains those same `gaps`, `by_source` counts keyed by relative source path, and
+`port_census` reports linked from importer gap evidence. Gap totals count ledger entries; the
+ranking deduplicates identical entries. Classification is derived from the path, with no new
+handwritten status or changes to ledger files.
+
+Each census reports `planned_import_rows_by_table` from its vmangos production plan and the
+archived Compatibility Manifest (`manifest`), including finding codes, classifications and occurrence
+counts. `--summary` prints planned rows and totals of finding occurrences by classification; codes remain
+in JSON and the census. Reports retain their source identity and profile in the linked
+census document. These are archived planned rows, not a measurement of a running Realm or the
+current importer. Findings can overlap and count different units from imported rows. Reports can
+also appear under several systems; do not sum them across systems. No source-data percentage or
+unsupported-row denominator is inferred. Scenario coverage and comparator data signatures remain
+separate measurements. Missing census evidence gives an empty report map, not zero unsupported rows.
 
 ## Conformance Audit
 

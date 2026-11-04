@@ -9,6 +9,8 @@ use serde_json::{json, Value};
 
 #[path = "scoreboard/counts.rs"]
 mod counts;
+#[path = "scoreboard/data.rs"]
+mod data;
 #[path = "scoreboard/evidence.rs"]
 mod evidence;
 #[path = "scoreboard/spells.rs"]
@@ -98,11 +100,45 @@ fn open_work_from(
     for behavior in ledger.behaviors() {
         let tier1_state = state(tier1, behavior, tier1_head, revision)?;
         let audit_state = state(audit, behavior, audit_head, revision)?;
-        if !behavior.scenarios.is_empty()
-            && tier1_state.is_match()
-            && audit_state.is_match()
-            && behavior.known_gaps.is_empty()
-            && behavior.scope_verification == ScopeVerification::Established
+        let data_gaps = behavior
+            .known_gaps
+            .iter()
+            .filter(|gap| data::is_data_gap(&gap.path))
+            .map(|gap| (&gap.description, &gap.path, &gap.symbol, &gap.evidence))
+            .collect::<BTreeSet<_>>();
+        if !data_gaps.is_empty() {
+            let paths = data_gaps
+                .iter()
+                .map(|(_, path, _, _)| (*path).clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join(" ");
+            work.push(OpenWork {
+                behavior: behavior.id.clone(),
+                system: behavior.system.clone(),
+                kind: "data_import",
+                reproduce_with: None,
+                next_command: format!("rg -n 'unsupported|finding' {paths}"),
+                prerequisites: Vec::new(),
+                dependents: 0,
+                open_signatures_or_gaps: data_gaps.len(),
+                claimed_opcodes: 0,
+            });
+        }
+        let distinct_gaps = behavior
+            .known_gaps
+            .iter()
+            .filter(|gap| !data::is_data_gap(&gap.path))
+            .map(|gap| (&gap.description, &gap.path, &gap.symbol, &gap.evidence))
+            .collect::<BTreeSet<_>>()
+            .len();
+        if behavior.scope_verification == ScopeVerification::Established
+            && ((behavior.scenarios.is_empty() && distinct_gaps == 0 && !data_gaps.is_empty())
+                || (!behavior.scenarios.is_empty()
+                    && tier1_state.is_match()
+                    && audit_state.is_match()
+                    && distinct_gaps == 0))
         {
             continue;
         }
@@ -132,12 +168,6 @@ fn open_work_from(
                         .map(|report| report.summary(&behavior.id, false).rule.signatures.len())
                 })
         });
-        let distinct_gaps = behavior
-            .known_gaps
-            .iter()
-            .map(|gap| (&gap.description, &gap.path, &gap.symbol, &gap.evidence))
-            .collect::<BTreeSet<_>>()
-            .len();
         let kind = if behavior.scope_verification == ScopeVerification::StockClientUseUnverified {
             "scope_verification"
         } else if behavior.scenarios.is_empty() {
@@ -206,7 +236,8 @@ fn open_work_from(
     }
     let group = |kind| match kind {
         "scope_verification" => 1,
-        "evidence_refresh" => 2,
+        "data_import" => 2,
+        "evidence_refresh" => 3,
         _ => 0,
     };
     work.sort_by(|a, b| {
@@ -253,6 +284,7 @@ struct ScoreboardSummary {
     without_scenario: usize,
     tier1: TierSummary,
     audit: TierSummary,
+    data_coverage: data::Coverage,
     open_work_by_kind: BTreeMap<&'static str, usize>,
 }
 
@@ -308,6 +340,7 @@ fn scoreboard_summary(data: &ScoreboardData<'_>) -> Result<ScoreboardSummary> {
         .filter(|behavior| !behavior.scenarios.is_empty())
         .count();
     let mut open_work_by_kind = BTreeMap::from([
+        ("data_import", 0),
         ("implementer", 0),
         ("scenario_author", 0),
         ("scope_verification", 0),
@@ -332,6 +365,7 @@ fn scoreboard_summary(data: &ScoreboardData<'_>) -> Result<ScoreboardSummary> {
             data.audit_head,
             data.revision,
         )?,
+        data_coverage: data::coverage(data.ledger)?,
         open_work_by_kind,
     })
 }
@@ -377,6 +411,48 @@ fn print_summary(data: &ScoreboardData<'_>) -> Result<()> {
             .collect::<Vec<_>>()
             .join(", ")
     );
+    println!(
+        "\nData coverage: {} data-import gaps, {} behavior gaps.",
+        summary.data_coverage.gaps.data_import, summary.data_coverage.gaps.behavior
+    );
+    println!(
+        "\n| System | Source | Behavior gaps | Data-import gaps |\n| --- | --- | ---: | ---: |"
+    );
+    for (system, coverage) in &summary.data_coverage.systems {
+        println!(
+            "| {system} | Total | {} | {} |",
+            coverage.gaps.behavior, coverage.gaps.data_import
+        );
+        for (source, gaps) in &coverage.by_source {
+            println!(
+                "| {system} | {source} | {} | {} |",
+                gaps.behavior, gaps.data_import
+            );
+        }
+    }
+    for (system, coverage) in &summary.data_coverage.systems {
+        for (path, census) in &coverage.port_census {
+            println!("\n{system}: {path} (archived production plan; see report for source identity and scope).");
+            for (table, rows) in &census.planned_import_rows_by_table {
+                println!("- {table}: {rows} planned import rows");
+            }
+            if let Some(findings) = census.manifest["findings"].as_array() {
+                let mut occurrences = BTreeMap::<&str, u64>::new();
+                for finding in findings {
+                    let classification = finding["classification"]
+                        .as_str()
+                        .context("finding classification")?;
+                    *occurrences.entry(classification).or_default() += finding["occurrences"]
+                        .as_u64()
+                        .context("finding occurrences")?;
+                }
+                for (classification, count) in occurrences {
+                    println!("- {classification}: {count} finding occurrences (codes in --json and census)");
+                }
+            }
+        }
+    }
+    println!("\nPlanned rows and finding occurrences have different units and may overlap; no coverage percentage is inferred.");
     println!("\nSignature totals include stale recorded evidence; absent evidence is unmeasured.");
     Ok(())
 }
@@ -758,7 +834,7 @@ fn print_text(data: &ScoreboardData<'_>) -> Result<()> {
         }
     }
     spells::print(spells);
-    println!("\nOpen work: established Behaviors, scope verification, evidence refresh; within each group ranked by dependents, measured rule signatures or distinct known gaps, claimed request opcodes, then Behavior id:");
+    println!("\nOpen work: established Behaviors, scope verification, data import, evidence refresh; within each group ranked by dependents, measured rule signatures or distinct behavior gaps (data gaps in their own group), claimed request opcodes, then Behavior id:");
     for (index, item) in work.iter().enumerate() {
         println!(
             "{}. {} / {}: {} (dependents {}, signatures or gaps {}, opcodes {}); reproduce with {}; {}",
@@ -1148,6 +1224,15 @@ fn json_reports_behavior_evidence_and_scenario_coverage() -> Result<()> {
     assert_eq!(output["summary"]["tier1"]["states"]["not_run"], 1);
     assert_eq!(output["summary"]["tier1"]["rule_signatures"], Value::Null);
     assert_eq!(output["schema_version"], 1);
+    assert_eq!(
+        output["summary"]["data_coverage"]["gaps"],
+        json!({"behavior": 2, "data_import": 0})
+    );
+    assert_eq!(
+        output["summary"]["data_coverage"]["systems"]["sample"]["by_source"]["module/src/taxi.rs"]
+            ["behavior"],
+        2
+    );
     assert_eq!(output["systems"]["sample"]["with_scenario"], 1);
     assert_eq!(output["systems"]["sample"]["without_scenario"], 5);
     assert_eq!(output["behaviors"]["branch"]["tier1"]["state"], "not_run");
@@ -1347,5 +1432,36 @@ fn external_report_with_canonical_predecessor_link_passes() -> Result<()> {
         report.validate_changes()?;
         report.verify_capture(&alias_path)?;
     }
+    Ok(())
+}
+
+#[test]
+fn importer_gaps_have_their_own_work_instead_of_scenario_rank() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ledger = FeatureLedger::load(&root.join("features"))?;
+    let work = open_work(&ledger, None, None, "head", "head", "pin")?;
+    let creature: Vec<_> = work
+        .iter()
+        .filter(|item| item.behavior == "creature_world_behavior")
+        .collect();
+    assert_eq!(creature.len(), 1);
+    assert_eq!(creature[0].kind, "data_import");
+    assert_eq!(creature[0].open_signatures_or_gaps, 2252);
+    assert_eq!(creature[0].reproduce_with, None);
+    assert!(creature[0]
+        .next_command
+        .contains("importer/src/world_import_creatures.rs"));
+    let quest: Vec<_> = work
+        .iter()
+        .filter(|item| item.behavior == "quest_progress")
+        .collect();
+    assert_eq!(quest.len(), 2);
+    assert!(quest
+        .iter()
+        .any(|item| item.kind == "data_import" && item.open_signatures_or_gaps == 19));
+    assert!(quest
+        .iter()
+        .any(|item| item.kind == "scenario_author" && item.open_signatures_or_gaps == 1));
+    assert_ne!(work[0].kind, "data_import");
     Ok(())
 }

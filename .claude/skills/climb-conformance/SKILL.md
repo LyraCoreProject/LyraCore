@@ -1,6 +1,6 @@
 ---
 name: climb-conformance
-description: Climb a 1.12 Behavior from ranked conformance work as either an implementer or a scenario author.
+description: Climb a 1.12 Behavior from ranked conformance work as an implementer, scenario author or data importer.
 metadata:
     harness: [claude, codex]
 ---
@@ -27,6 +27,18 @@ If you change a table schema, read [migration trap §1.2](../../../docs/danger-z
 
 When setup cannot be repaired or no fix matches the Reference Server, stop and hand the item to a maintainer with the commands you ran and their output. Keep scenario defects with the scenario author. Every review finding must become an automated check that fails on the old code before its fix merges: a scenario variant (for example a second Character or a reconnect), a property check, a strictness mutation or a fixture check. List review findings that CI missed in the PR, each tagged as uncovered situation, loose rule, fixture artefact, broken invariant or client rejection. Keep scenarios, Golden Traces, Equivalence Rules and the harness pin out of an implementation PR. Preserve the tests and required rungs; add no skips or weaker rules. Generate baselines only with `./conformance/baseline`.
 For a broken invariant, add a named property under `conformance/support/properties/` with a violating-stream test and prove it fails on the old code in scratch.
+
+## Data importer
+
+1. Run `./conformance/scoreboard --json`. Take the first `kind = "data_import"` item. Read the
+   Behavior's importer gaps and `summary.data_coverage.systems` for their source paths and archived
+   port census counts. Run its `next_command` to locate Compatibility Manifest findings.
+2. Fix World Source translation or imported representation in core. Use the gap's evidence to
+   reproduce the finding with a local import plan; follow [data ingestion](../../../docs/data-ingestion.md).
+   Keep source rows local. A maintainer handles any apply to a live Realm.
+3. Update only gaps the evidence closes. Report the plan counts and remaining findings in a core
+   PR with [file-pr](../file-pr/SKILL.md). A scenario author owns missing scenarios; an implementer
+   owns Module behavior. Mixed Behaviors can have separate work items for both roles.
 
 ## Scenario author
 
