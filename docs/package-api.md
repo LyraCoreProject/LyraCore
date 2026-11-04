@@ -418,8 +418,12 @@ applies the imported landing and records a completed Character Relocation in the
 The returned id names that completed relocation. A repeat for the same controller generation,
 AreaTrigger and destination returns the same id while the Character remains in that destination
 partition. Only the latest relocation remains. A Refusal leaves the Character, Instance binding and
-relocation unchanged. No Transfer Intent or Escrow is created. `area_trigger_route` exposes the
-source center and containment rule for candidate movement.
+relocation unchanged. On a split Realm, a destination owned by another World is refused with
+`OtherPartition`; this synchronous verb does not queue a cross-Shard Transfer. With map assignments
+configured, a destination without an owner is also refused. Cross-map requests wait for Character
+transactions to settle. These Gates run before Instance admission or a receipt write.
+No Transfer Intent or Escrow is created. `area_trigger_route` exposes the source center and
+containment rule for candidate movement.
 
 ### Package Config
 

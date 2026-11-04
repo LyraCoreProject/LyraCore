@@ -1662,6 +1662,7 @@ pub(crate) fn enter_sessionless_areatrigger(
             ));
         }
     }
+    crate::world::teleport_gate(ctx, character_guid, expected_map, expected_instance)?;
     let destination_instance = if crate::instance::is_dungeon_map(expected_map) {
         crate::instance::admit_existing_party_instance(
             ctx,
