@@ -1136,6 +1136,90 @@
       "rule": [
         {
           "rule": "exact_field",
+          "checkpoint": "details",
+          "stream": {
+            "kind": "reply",
+            "id": "details"
+          },
+          "opcode": 392,
+          "field_path": [
+            "details"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "checkpoint": "details",
+          "stream": {
+            "kind": "reply",
+            "id": "details"
+          },
+          "opcode": 392,
+          "field_path": [
+            "objectives"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "checkpoint": "details",
+          "stream": {
+            "kind": "reply",
+            "id": "details"
+          },
+          "opcode": 392,
+          "field_path": [
+            "title"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "checkpoint": "hello",
+          "stream": {
+            "kind": "reply",
+            "id": "hello"
+          },
+          "opcode": 392,
+          "field_path": [
+            "details"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "checkpoint": "hello",
+          "stream": {
+            "kind": "reply",
+            "id": "hello"
+          },
+          "opcode": 392,
+          "field_path": [
+            "objectives"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "checkpoint": "hello",
+          "stream": {
+            "kind": "reply",
+            "id": "hello"
+          },
+          "opcode": 392,
+          "field_path": [
+            "title"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "checkpoint": "requirements",
+          "stream": {
+            "kind": "reply",
+            "id": "requirements"
+          },
+          "opcode": 93,
+          "field_path": [
+            "details"
+          ]
+        },
+        {
+          "rule": "exact_field",
           "checkpoint": "requirements",
           "stream": {
             "kind": "reply",
@@ -1156,6 +1240,30 @@
           "opcode": 93,
           "field_path": [
             "money_max_level"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "checkpoint": "requirements",
+          "stream": {
+            "kind": "reply",
+            "id": "requirements"
+          },
+          "opcode": 93,
+          "field_path": [
+            "objectives"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "checkpoint": "requirements",
+          "stream": {
+            "kind": "reply",
+            "id": "requirements"
+          },
+          "opcode": 93,
+          "field_path": [
+            "title"
           ]
         },
         {
