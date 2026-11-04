@@ -632,9 +632,10 @@ directories are removed under the shared snapshot-store lock. Copying requires t
 world and its password. The next check at the same core commit retries sealing without importing
 again. An interrupted import requires inspection before cleanup. Do not edit a sealed snapshot.
 
-Each check restores the imported data before capture. The active Realm, target directory and
-temporary files live under `$HOME/.cache/lyracore-scratch/m5c/`, or `LYRACORE_AUDIT_SCRATCH` when
-set. The runner waits for its Native Host to exit before replacing or deleting data. It records
+Each check owns its scratch directory before building deployment artifacts; a concurrent check
+using that directory fails before it can replace them. Each check restores the imported data before
+capture. The active Realm, target directory and temporary files live under `$HOME/.cache/lyracore-scratch/m5c/`,
+or `LYRACORE_AUDIT_SCRATCH` when set. The runner waits for its Native Host to exit before replacing or deleting data. It records
 process ownership before startup and checks the CLI's PID identities before stopping it. It retains
 those records across a shutdown timeout, even when the CLI clears its own records. Native Host build
 output survives gameplay checkout changes; `dev up` still checks the current Host source and

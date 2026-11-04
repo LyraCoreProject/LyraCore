@@ -104,7 +104,7 @@ def tree_hash(paths):
 
 def canonical_schema(schema):
     if set(schema) != {'V10'}:
-        raise RuntimeError('audit snapshot schema hashing requires a V10 Module definition')
+        raise RuntimeError('audit snapshots require a V10 Module definition')
     sections = {name: value for section in schema['V10']['sections'] for name, value in section.items()}
     types = sections.pop('Typespace')['types']
     names = {item['ty']: item['source_name'] for item in sections['Types']}
@@ -1252,29 +1252,31 @@ def scenario_main(args):
         raise RuntimeError('Docker is unavailable or docker group access is missing: '
                            + docker.stderr.strip())
     SCENARIO_CACHE.mkdir(parents=True, exist_ok=True)
-    temporary = SCENARIO_CACHE / 'tmp'
-    temporary.mkdir(exist_ok=True)
-    os.environ['TMPDIR'] = str(temporary)
-    target = SCENARIO_CACHE / 'target'
-    os.environ['CARGO_TARGET_DIR'] = str(target)
-    os.environ['PATH'] = str(Path.home() / '.cargo/bin') + ':' + os.environ['PATH']
-    os.chdir(ROOT)
-    core_commit = git('rev-parse', 'HEAD')
-    revision = next(line.split()[1] for line in (ROOT / '.wire-harness-rev').read_text().splitlines()
-                    if line.strip() and not line.startswith('#'))
-    for directory in [ROOT, *ROOT.parents]:
-        check_cargo_config(directory / '.cargo')
-    cargo_home = Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo'))
-    check_cargo_config(cargo_home)
-    metadata = json.loads(run(['cargo', 'metadata', '--locked', '--format-version', '1'],
-                              capture_output=True, text=True).stdout)
-    harness = pinned_harness(metadata, revision, cargo_home)
-    with timed('build'):
-        run(['cargo', 'build', '--locked', '-p', 'lyracore-conformance',
-             '--example', 'audit', '--example', 'run'], stdout=subprocess.DEVNULL)
-        run(['cargo', 'build', '--locked', '--manifest-path', harness / 'Cargo.toml',
-             '--bin', 'vanilla-wire'], stdout=subprocess.DEVNULL)
-    return run_scenario(args, harness, target, core_commit)
+    with (SCENARIO_CACHE / '.check.lock').open('w') as ownership:
+        lock_owned_state(ownership, 'scenario check')
+        temporary = SCENARIO_CACHE / 'tmp'
+        temporary.mkdir(exist_ok=True)
+        os.environ['TMPDIR'] = str(temporary)
+        target = SCENARIO_CACHE / 'target'
+        os.environ['CARGO_TARGET_DIR'] = str(target)
+        os.environ['PATH'] = str(Path.home() / '.cargo/bin') + ':' + os.environ['PATH']
+        os.chdir(ROOT)
+        core_commit = git('rev-parse', 'HEAD')
+        revision = next(line.split()[1] for line in (ROOT / '.wire-harness-rev').read_text().splitlines()
+                        if line.strip() and not line.startswith('#'))
+        for directory in [ROOT, *ROOT.parents]:
+            check_cargo_config(directory / '.cargo')
+        cargo_home = Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo'))
+        check_cargo_config(cargo_home)
+        metadata = json.loads(run(['cargo', 'metadata', '--locked', '--format-version', '1'],
+                                  capture_output=True, text=True).stdout)
+        harness = pinned_harness(metadata, revision, cargo_home)
+        with timed('build'):
+            run(['cargo', 'build', '--locked', '-p', 'lyracore-conformance',
+                 '--example', 'audit', '--example', 'run'], stdout=subprocess.DEVNULL)
+            run(['cargo', 'build', '--locked', '--manifest-path', harness / 'Cargo.toml',
+                 '--bin', 'vanilla-wire'], stdout=subprocess.DEVNULL)
+        return run_scenario(args, harness, target, core_commit)
 
 
 def stop_scenario_cache():

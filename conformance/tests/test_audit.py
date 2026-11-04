@@ -162,7 +162,6 @@ class ModuleSchema(unittest.TestCase):
                 changed['V10']['sections'][0]['Typespace']['types'][index][kind][ordered].reverse()
                 self.assertNotEqual(audit.schema_fingerprint(original), audit.schema_fingerprint(changed))
 
-
     def test_only_new_private_tables_are_compatible(self):
         previous = audit.canonical_schema(self.schema())
         current = copy.deepcopy(previous)
@@ -810,6 +809,24 @@ class ReferenceOwnership(unittest.TestCase):
         self.assertFalse(self.marker.exists())
 
 
+class ScenarioOwnership(unittest.TestCase):
+    def test_second_check_cannot_replace_deployment_artifacts(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            cache = Path(directory)
+            module = cache / 'deployment.wasm'
+            module.write_text('first check')
+            with (cache / '.check.lock').open('w') as ownership, \
+                    patch.object(audit, 'SCENARIO_CACHE', cache), \
+                    patch.object(audit, 'git', return_value=''), \
+                    patch.object(audit.shutil, 'which', return_value='/usr/bin/docker'), \
+                    patch.object(audit.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
+                audit.lock_owned_state(ownership, 'first check')
+                with self.assertRaisesRegex(RuntimeError, 'scenario check is busy'):
+                    audit.scenario_main(SimpleNamespace())
+            self.assertEqual(module.read_text(), 'first check')
+
+
 class Tier1BuildDirectory(unittest.TestCase):
     def test_agreement_overrides_the_deployment_target_directory(self):
         audit.SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -959,7 +976,8 @@ class ScenarioRealmReuse(unittest.TestCase):
         self.fail_schema = False
         self.schema = ModuleSchema().schema()
         self.pins = {'database_commit': 'pin'}
-        (self.cache / 'deployment-schema.json').write_text(json.dumps(audit.canonical_schema(ModuleSchema().schema())))
+        (self.cache / 'deployment-schema.json').write_text(
+            json.dumps(audit.canonical_schema(self.schema)))
         (self.root / '.lyracore-cli-rev').write_text('30814fe814edbfa3a143102f93008080482df6a6')
         for name, value in [('ROOT', self.root), ('SCENARIO_CACHE', self.cache),
                             ('SNAPSHOT_STORE', self.store)]:
@@ -989,6 +1007,7 @@ class ScenarioRealmReuse(unittest.TestCase):
         elif args[1:3] == ['dev', 'up']:
             if self.fail_publish and (self.realm / '.lyracore/native-data/world').exists():
                 self.fail_publish = False
+                self.running = True
                 raise audit.subprocess.CalledProcessError(1, args, stderr=b'upgrade initialization failed')
             self.assertTrue((self.cache / 'realm/state.json').is_file())
             self.running = True
