@@ -978,11 +978,12 @@ def prepare_catalogue_snapshot(work, base_key, pins, client_data, *, require_sna
         schema = json.loads((SCENARIO_CACHE / 'deployment-schema.json').read_text())
         if snapshot_origin(snapshot_path(key), schema) is not None:
             return key
-    if require_snapshot:
-        raise RuntimeError('catalogue snapshot missing; --require-snapshot forbids an import; '
-                           'run --scenario vendor_offers --check once to prepare fixture content')
+    if require_snapshot and not validate_snapshot(snapshot_path(base_key), base_key):
+        raise RuntimeError('base world snapshot missing; --require-snapshot forbids an import; '
+                           'run a single --check once to prepare the base world')
     peer_count = max(len(scenario['characters']) - 1 for scenario in catalogue)
-    with scenario_realm(base_key, pins, client_data, peer_count) as (password, _token, _host, _module, realm):
+    with scenario_realm(base_key, pins, client_data, peer_count,
+                        require_snapshot=require_snapshot) as (password, _token, _host, _module, realm):
         cli_env = dict(os.environ)
         cli_env.pop('CARGO_TARGET_DIR', None)
         cli_env['PATH'] = str(realm.parent / 'bin') + ':' + cli_env['PATH']
@@ -1184,7 +1185,7 @@ def run_scenario(args, harness, target, core_commit):
         key = prepare_catalogue_snapshot(work, key, pins, str(args.client_data),
                                          require_snapshot=args.require_snapshot)
         with capture_scenario(harness, wire, work, args.scenario, key, pins, str(args.client_data),
-                              require_snapshot=args.require_snapshot) as world_origin:
+                              require_snapshot=True) as world_origin:
             if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
                 raise RuntimeError('core changed during scenario capture; commit and rerun')
             with timed('comparison and output'):
@@ -1336,7 +1337,7 @@ def main():
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--agreement', action='store_true')
     parser.add_argument('--require-snapshot', action='store_true',
-                        help='fail instead of importing when no matching snapshot exists')
+                        help='fail instead of a fresh world import when no matching base snapshot exists')
     parser.add_argument('--stop', action='store_true')
     args = parser.parse_args(json.loads(os.environ.get('LYRACORE_AUDIT_ARGS', '[]')))
     if args.stop:

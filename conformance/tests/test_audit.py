@@ -1205,14 +1205,26 @@ class CatalogueSnapshot(unittest.TestCase):
                 audit.prepare_catalogue_snapshot(root, 'base', {'database_commit': 'pin'}, root,
                                                  require_snapshot=False, fresh=True)
 
-    def test_rehearsal_cannot_prepare_missing_catalogue_content(self):
+    def test_rehearsal_prepares_fixture_content_with_a_strict_cached_base(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            root = Path(directory)
+            (root / 'catalogue.json').write_text(json.dumps([dict(creatures=[9499], characters=['Vendor'])]))
+            with patch.object(audit, 'validate_snapshot', side_effect=lambda _path, key: key == 'base'), \
+                    patch.object(audit, 'scenario_realm', side_effect=RuntimeError('cached base entered')) as realm, \
+                    self.assertRaisesRegex(RuntimeError, 'cached base entered'):
+                audit.prepare_catalogue_snapshot(root, 'base', {'database_commit': 'pin'}, root,
+                                                 require_snapshot=True)
+            self.assertTrue(realm.call_args.kwargs['require_snapshot'])
+
+    def test_rehearsal_cannot_import_without_a_base_world(self):
         audit.SCRATCH.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
             root = Path(directory)
             (root / 'catalogue.json').write_text(json.dumps([dict(creatures=[9499])]))
             with patch.object(audit, 'SNAPSHOT_STORE', root / 'snapshots'), \
                     patch.object(audit, 'run') as run, \
-                    self.assertRaisesRegex(RuntimeError, 'catalogue snapshot missing'):
+                    self.assertRaisesRegex(RuntimeError, 'base world snapshot missing'):
                 audit.prepare_catalogue_snapshot(root, 'base', {'database_commit': 'pin'}, root,
                                                  require_snapshot=True)
             run.assert_not_called()

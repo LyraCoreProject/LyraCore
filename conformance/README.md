@@ -581,8 +581,8 @@ Before a full audit, rehearse every catalogue scenario on both servers:
 ```
 
 Rehearsal uses the full audit's catalogue order and capture path, restoring both servers before
-each scenario. It requires a matching imported-world snapshot and never imports or falls back to
-an import. If none exists, run one scenario with `--check` once to seal a snapshot first. Rehearsal
+each scenario. It requires a matching imported-world snapshot and never starts or falls back to
+a fresh world import. If none exists, run one scenario with `--check` once to seal a snapshot first. Rehearsal
 prints one JSON line per completed scenario with setup success, wall time, and rule/data difference
 record counts for both servers. Differences are data and do not stop the remaining captures.
 Setup, capture or comparison execution failures exit 2; reaching the end exits 0. It writes no audit
@@ -603,8 +603,9 @@ prepares a catalogue snapshot from the cached base world with the existing impor
 creature and vendor content; terrain, navigation and collision data are retained. This is a warm
 preparation, without a new full world import. The catalogue key covers the base key, required
 creature entries and the preparation code. The store keeps this snapshot together with its base.
-Rehearsal requires the prepared catalogue snapshot and refuses to prepare it. Full audits build it
-from their newly imported base world, even when an older catalogue snapshot exists.
+Rehearsal can prepare this fixture content from a matching cached base; it never starts a fresh
+world import or regenerates terrain, navigation or collision data. Full audits build the catalogue
+snapshot from their newly imported base world, even when an older catalogue snapshot exists.
 
 The local check captures the scenario on both servers and compares each candidate with its Golden
 Trace. It prints the same grouped text or JSON fields as `./conformance/run`. Its `baseline` field
