@@ -15,7 +15,7 @@ spec.loader.exec_module(selector)
 class DurableTargetTests(unittest.TestCase):
     def test_ci_selects_every_current_target_once(self):
         selected = []
-        for job in range(3):
+        for job in range(len(selector.JOB_SECONDS)):
             result = subprocess.run(
                 [sys.executable, str(SCRIPT), str(job)],
                 check=True,
