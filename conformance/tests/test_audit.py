@@ -1,5 +1,6 @@
 import copy
 import importlib.util
+import io
 import json
 import os
 import re
@@ -60,27 +61,11 @@ class ClientDataPath(unittest.TestCase):
             relative = os.path.relpath(client_data, Path.cwd())
             arguments = ['--date', '2099-01-01', '--output', str(Path(directory) / 'reports'),
                          '--client-data', relative]
-            captured = []
-
-            def capture_servers(_harness, _wire, _work, path):
-                captured.append(path)
-                return {}, 'host', 'module', 'content'
-
-            def run(args, **_):
-                return type('Result', (), {'stdout': '{}'})()
-
-            original_cwd = Path.cwd()
-            self.addCleanup(os.chdir, original_cwd)
-            original_tempdir = tempfile.tempdir
-            self.addCleanup(setattr, tempfile, 'tempdir', original_tempdir)
             with patch.dict(audit.os.environ, LYRACORE_AUDIT_ARGS=json.dumps(arguments)), \
-                    patch.object(audit, 'git', side_effect=lambda *args: 'core' if args[0] == 'rev-parse' else ''), \
-                    patch.object(audit, 'run', run), patch.object(audit, 'check_cargo_config'), \
-                    patch.object(audit, 'pinned_harness', return_value=Path(directory)), \
-                    patch.object(audit, 'capture_servers', side_effect=capture_servers), \
-                    patch.object(audit, 'check_spacetime_version'), patch.object(audit, 'module_schema_hash'):
-                audit.main()
-            self.assertEqual(captured, [str(client_data.resolve())])
+                    patch.object(audit, 'scenario_main', return_value=0) as run, \
+                    patch.object(audit, 'check_spacetime_version'):
+                self.assertEqual(audit.main(), 0)
+            self.assertEqual(run.call_args.args[0].client_data, client_data.resolve())
 
 
 class ModuleSchema(unittest.TestCase):
@@ -672,7 +657,7 @@ class ReferenceOwnership(unittest.TestCase):
 
     def test_full_audit_restores_world_and_stops_after_capture_failure(self):
         with self.assertRaisesRegex(RuntimeError, 'capture failed'):
-            with audit.reference_server(self.root, 0):
+            with audit.scenario_reference_server(self.root, 'full-audit', keep=False):
                 self.world = 'changed'
                 raise RuntimeError('capture failed')
         self.assertEqual(self.world, 'clean world')
@@ -698,6 +683,12 @@ class ReferenceOwnership(unittest.TestCase):
         self.assertFalse(self.marker.exists())
 
     def test_catalogue_restores_both_worlds_before_reassigning_a_name(self):
+        self.capture_catalogue(rehearse=False)
+
+    def test_rehearsal_continues_past_differences_without_importing(self):
+        self.capture_catalogue(rehearse=True)
+
+    def capture_catalogue(self, *, rehearse):
         realm = self.root / 'realm'
         current = realm / '.import/vmangos/current.json'
         current.parent.mkdir(parents=True)
@@ -716,13 +707,15 @@ class ReferenceOwnership(unittest.TestCase):
         (self.root / 'credentials/peer2-password').write_text('fake')
         realm_state = {}
         captured = []
+        preparations = []
         @audit.contextmanager
-        def realm_server(*_args, **_kwargs):
+        def realm_server(*_args, **options):
+            preparations.append(options)
             realm_state.clear()
             yield 'password', token, host, module, realm
         def capture(_wire, _work, scenario, adapter, *_args, **options):
             if adapter == 'vmangos':
-                self.assertEqual(options['progress'], audit.sys.stderr)
+                self.assertEqual(_args[-1]['COMPOSE_PROJECT_NAME'], self.project)
                 self.assertEqual(self.world, 'clean world')
                 self.world = 'Characters, creatures, vendor stock and restock timers changed'
             else:
@@ -733,8 +726,16 @@ class ReferenceOwnership(unittest.TestCase):
         with patch.object(audit, 'scenario_realm', realm_server), \
                 patch.object(audit, 'prepare_scenario_realm', realm_server), \
                 patch.object(audit, 'scenario_key', return_value=('key', {'database_commit': 'pin'})), \
-                patch.object(audit, 'capture', side_effect=capture):
-            audit.capture_servers(self.root, 'wire', self.root, self.root)
+                patch.object(audit, 'capture', side_effect=capture), \
+                patch.object(audit, 'rehearse_comparison', return_value=dict(rule=1, data=2)), \
+                patch.object(audit.sys, 'stdout', io.StringIO()) as output:
+            audit.capture_servers(self.root, 'wire', self.root, self.root, rehearse=rehearse)
+        if rehearse:
+            self.assertTrue(all(call == {'require_snapshot': True} for call in preparations))
+            self.assertEqual([json.loads(line)['scenario'] for line in output.getvalue().splitlines()],
+                             ['actor_first', 'viewer_first'])
+        else:
+            self.assertEqual(preparations[0], {'use_snapshot': False})
         self.assertCountEqual(captured, [(entry['id'], adapter) for entry in scenarios
                                         for adapter in ['vmangos', 'lyracore']])
         self.assertFalse(self.ids)
@@ -1152,20 +1153,6 @@ class Rehearsal(unittest.TestCase):
             self.assertEqual(audit.main(), 0)
         self.assertTrue(capture.call_args.args[0].rehearse)
         run.assert_not_called()
-
-
-class FullAuditCleanup(unittest.TestCase):
-    def test_startup_marker_keeps_worktree_when_host_exit_is_unconfirmed(self):
-        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
-            work = Path(directory) / 'audit'
-            work.mkdir()
-            (work / 'realm-starting.json').write_text('{}')
-            audit.cleanup_audit_work(work)
-            self.assertTrue(work.exists())
-            (work / 'realm-starting.json').unlink()
-            audit.cleanup_audit_work(work)
-            self.assertFalse(work.exists())
 
 
 if __name__ == '__main__':

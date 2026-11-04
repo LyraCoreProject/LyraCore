@@ -568,12 +568,6 @@ def wait_port(port, world=False):
     raise RuntimeError(f'local Reference Server port {port} did not start')
 
 
-@contextmanager
-def reference_server(harness, peer_count):
-    with scenario_reference_server(harness, 'full-audit', peer_count, keep=False) as provenance:
-        yield provenance
-
-
 def peer_accounts(scenario):
     return [f'CONFORMANCE{index}' for index in range(2, len(scenario['characters']) + 1)]
 
@@ -1158,6 +1152,29 @@ def run_scenario(args, harness, target, core_commit):
                 return rendered.returncode
 
 
+def run_catalogue(args, harness, target, core_commit):
+    with timed('Module schema fingerprint'):
+        module_schema_hash()
+    with scenario_work() as work:
+        audit = target / 'debug/examples/audit'
+        run_with_diagnostic([audit, 'export', work])
+        provenance, host_hash, module_hash, content = capture_servers(
+            harness, target / 'debug/vanilla-wire', work, str(args.client_data),
+            rehearse=args.rehearse)
+        if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
+            raise RuntimeError('core changed during catalogue capture; commit and rerun')
+        if not args.rehearse:
+            revision = next(line.split()[1] for line in (ROOT / '.wire-harness-rev').read_text().splitlines()
+                            if line.strip() and not line.startswith('#'))
+            (work / 'run.json').write_text(json.dumps(dict(
+                core_commit=core_commit, working_tree_dirty=False, harness_revision=revision,
+                recorded_at_unix_ms=time.time_ns() // 1_000_000, native_host_sha256=host_hash,
+                module_sha256=module_hash, content=content, reference=provenance)))
+            with timed('report'):
+                run_with_diagnostic([audit, 'report', work, args.output, args.date])
+    return 0
+
+
 def scenario_main(args):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('clean core working tree required; commit changes before scenario capture')
@@ -1193,17 +1210,9 @@ def scenario_main(args):
                  '--example', 'audit', '--example', 'run'], stdout=subprocess.DEVNULL)
             run(['cargo', 'build', '--locked', '--manifest-path', harness / 'Cargo.toml',
                  '--bin', 'vanilla-wire'], stdout=subprocess.DEVNULL)
-        if args.rehearse:
-            with timed('Module schema fingerprint'):
-                module_schema_hash()
-            with scenario_work() as work:
-                run_with_diagnostic([target / 'debug/examples/audit', 'export', work])
-                capture_servers(harness, target / 'debug/vanilla-wire', work,
-                                str(args.client_data), rehearse=True)
-                if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
-                    raise RuntimeError('core changed during rehearsal; commit and rerun')
-            return 0
-        return run_scenario(args, harness, target, core_commit)
+        if args.scenario:
+            return run_scenario(args, harness, target, core_commit)
+        return run_catalogue(args, harness, target, core_commit)
 
 
 def stop_scenario_cache():
@@ -1239,15 +1248,6 @@ def stop_scenario_cache():
                 env = dict(os.environ, COMPOSE_PROJECT_NAME=owned['project'])
                 compose = [owned['adapter']]
                 release_reference(marker, owned, compose, env)
-
-
-def cleanup_audit_work(work):
-    marker = work / 'realm-starting.json'
-    if marker.exists():
-        print(f'[audit] keeping {work}: Realm shutdown did not finish',
-              file=sys.stderr, flush=True)
-        return
-    shutil.rmtree(work)
 
 
 def main():
@@ -1315,46 +1315,11 @@ def main():
     if not args.client_data or not Path(args.client_data).is_dir():
         parser.error('pass --client-data with an existing 1.12.1 client Data directory')
     args.client_data = Path(args.client_data).resolve()
-    SCRATCH.mkdir(parents=True, exist_ok=True)
-    temporary = SCRATCH / 'tmp'
-    temporary.mkdir(exist_ok=True)
-    os.environ['TMPDIR'] = str(temporary)
-    target = SCRATCH / 'target'
-    os.environ['CARGO_TARGET_DIR'] = str(target)
-    os.environ['PATH'] = str(Path.home() / '.cargo/bin') + ':' + os.environ['PATH']
-    os.chdir(ROOT)
-    core_commit = git('rev-parse', 'HEAD')
-    dirty = git('status', '--porcelain', '--untracked-files=normal')
-    revision = next(line.split()[1] for line in (ROOT / '.wire-harness-rev').read_text().splitlines()
-                    if line.strip() and not line.startswith('#'))
-    for directory in [ROOT, *ROOT.parents]:
-        check_cargo_config(directory / '.cargo')
-    check_cargo_config(Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo')))
-    metadata = json.loads(run(['cargo', 'metadata', '--locked', '--format-version', '1'],
-                              capture_output=True, text=True).stdout)
-    cargo_home = Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo'))
-    harness = pinned_harness(metadata, revision, cargo_home)
-    run(['cargo', 'build', '--locked', '-p', 'lyracore-conformance', '--example', 'audit'])
-    run(['cargo', 'build', '--locked', '--manifest-path', harness / 'Cargo.toml', '--bin', 'vanilla-wire'])
-    module_schema_hash()
-    audit = target / 'debug/examples/audit'
-    work = Path(tempfile.mkdtemp(prefix='audit-', dir=SCRATCH))
     try:
-        tempfile.tempdir = str(work)
-        os.environ['TMPDIR'] = str(work)
-        run([audit, 'export', work])
-        provenance, host_hash, module_hash, content = capture_servers(
-            harness, target / 'debug/vanilla-wire', work, str(args.client_data))
-        if core_commit != git('rev-parse', 'HEAD') or dirty != git('status', '--porcelain', '--untracked-files=normal'):
-            raise RuntimeError('core changed during capture; rerun the audit')
-        (work / 'run.json').write_text(json.dumps(dict(
-            core_commit=core_commit, working_tree_dirty=bool(dirty), harness_revision=revision,
-            recorded_at_unix_ms=time.time_ns() // 1_000_000, native_host_sha256=host_hash,
-            module_sha256=module_hash, content=content, reference=provenance)))
-        with timed('report'):
-            run([audit, 'report', work, args.output, args.date])
-    finally:
-        cleanup_audit_work(work)
+        with timed('total audit'):
+            return scenario_main(args)
+    except Exception as error:
+        return setup_failure(None, False, str(error))
 
 
 if __name__ == '__main__':
