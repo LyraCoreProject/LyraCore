@@ -415,7 +415,9 @@ fn latest_audit_uses_capture_time_and_rejects_malformed_evidence() {
     let directory = scratch::Scratch::new("scoreboard-test").unwrap();
     let (ledger, mut value) = audit_example();
     let mut historical = value.clone();
-    historical["scenarios"][0]["behavior"] = json!("retired_behavior");
+    for scenario in historical["scenarios"].as_array_mut().unwrap() {
+        scenario["behavior"] = json!("retired_behavior");
+    }
     historical["audit"]["behaviors"] =
         json!({"retired_behavior": historical["audit"]["behaviors"]["taxi_single_hop"].clone()});
     std::fs::write(
