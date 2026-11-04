@@ -5,11 +5,13 @@ import os
 import re
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 SPEC = importlib.util.spec_from_file_location('audit', os.environ.get(
     'LYRACORE_AUDIT_TEST_SOURCE', Path(__file__).parents[1] / 'audit.py'))
 audit = importlib.util.module_from_spec(SPEC)
@@ -105,7 +107,8 @@ class ClientDataPath(unittest.TestCase):
                     patch.object(audit, 'git', side_effect=lambda *args: 'core' if args[0] == 'rev-parse' else ''), \
                     patch.object(audit, 'run', run), patch.object(audit, 'check_cargo_config'), \
                     patch.object(audit, 'pinned_harness', return_value=Path(directory)), \
-                    patch.object(audit, 'capture_servers', side_effect=capture_servers):
+                    patch.object(audit, 'capture_servers', side_effect=capture_servers), \
+                    patch.object(audit, 'check_spacetime_version'):
                 audit.main()
             self.assertEqual(captured, [str(client_data.resolve())])
 

@@ -6,12 +6,19 @@ import subprocess
 import sys
 import tempfile
 
+from preflight import check_spacetime_version
+
 
 def main():
     parser = argparse.ArgumentParser(prog="./conformance/baseline")
     parser.add_argument("scenario", nargs="?")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
+    try:
+        check_spacetime_version(root)
+    except (OSError, ValueError, KeyError, RuntimeError) as error:
+        sys.stderr.write(f"setup_failed: {error}\n")
+        return 2
     command = ["cargo", "run", "--quiet", "--locked", "-p", "lyracore-conformance",
                "--example", "baseline", "--", "regenerate"]
     if args.scenario is None:
