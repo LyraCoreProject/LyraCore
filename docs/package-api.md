@@ -121,8 +121,31 @@ Publish all Shards before using this path. After upgrading Worlds that already h
 Characters, call `operator_report_package_groups` on each World to publish their current presence.
 Grouped Package Characters refresh their remote member statistics every five seconds while active.
 Statistics wait behind outstanding Package commands and keep the existing consent revision. The
-World stops its refresh timer when no active Package Group members remain. Guild operations and
-cross-Shard relocation remain separate work.
+World stops its refresh timer when no active Package Group members remain.
+
+### Sessionless guild membership
+
+`actor::guild_invitation(ctx, guid)` reads a pending `GuildInvitation`, and
+`actor::guild_membership(ctx, guid)` reads the current membership. A Package explicitly calls
+`accept_guild_invite`, `decline_guild_invite`, `invite_to_guild(ctx, guid, target_guid)` or
+`leave_guild`. These verbs require a Package-owned Account, a live body, current ownership and
+Sessionless Action Consent. Guild invitations are not accepted automatically. Accept and decline
+name the exact invitation observed on the World; a changed invitation is refused.
+
+On a single-Shard Realm these verbs apply immediately. On a World Shard, `Ok(())` means the durable
+request was queued. Read the invitation and membership projections to observe completion; Realm
+Refusals are logged. The Realm applies the existing guild rank, faction, ignore and leader Gates.
+This does not grant a Package guild creation or GM rights. No World Session is created.
+
+Guild presence shares the Group authority revision and consent fence. Body and consent changes
+publish presence; level and zone changes refresh roster details without advancing that fence.
+Expired, declined and disbanded invitations clear the World's projection. A retained revision keeps
+a delayed invitation from restoring a cleared one. Pending delivery survives a Host restart.
+
+Publish all Shards before using the guild verbs, then call `operator_report_package_groups` on each
+World that already has live Package Characters. The report now publishes both Group and guild
+presence and restores pending guild invitations. Existing table layouts are unchanged.
+Cross-Shard Package relocation remains separate work.
 
 ### Package-owned Accounts
 
@@ -262,6 +285,8 @@ instead: accepted work or a Refusal, and a Cast Handle for a pending cast.
 | `spirit_res` | `world::do_spirit_healer_res` | ghost actor res without a healer Gate; 25% carried-item durability loss and level-scaled sickness apply |
 | `self_resurrect` | `spell::do_self_resurrect` | dead actor with a Self-Resurrection Option revives in place; no sickness |
 | `accept_group_invite` | `group::accept_invite_for` | pending invite exists + inviter on the same team + its Group still exists (or a solo inviter is still ungrouped) + group not full; roster events fire and the Roster Revision advances |
+| `guild_invitation`, `guild_membership` | Package guild and guild reads | pending invitation and current projected membership |
+| `invite_to_guild`, `accept_guild_invite`, `decline_guild_invite`, `leave_guild` | Package guild requests | Package ownership, live body and consent; Realm guild rules; World success means queued |
 | `set_sessionless_action_consent` | `sessionless::set_sessionless_action_consent` | update Package consent and clear unclaimed Group Intents atomically |
 | `companion_target_facts` | `group::companion_target_facts` | exact hostile creature + partition/death/control gates; never selects a substitute |
 | `system_message` | `chat::emit_system_message` | recipient exists and is online on this Shard; text is trimmed, bounded, and non-empty |

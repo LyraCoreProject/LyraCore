@@ -193,13 +193,13 @@ consumption and upgrade obligations.
 
 ### Package Groups (`module/src/native/realm_party/package.rs`)
 
-`game_package_party_authority` is a new private table on the World and Realm. It retains the
-Character guid, World, authority revision and active state. Body and consent changes advance the
+`game_package_party_authority`, declared in `native/package_actor.rs`, is a private table on the
+World and Realm. It retains the Character guid, World, authority revision and active state. Body and consent changes advance the
 revision on the owning World; the Realm keeps it after presence becomes inactive to fence delayed
 commands. Existing Group table layouts and IDC arguments are unchanged. Opcode zero in
 `game_realm_party_command` carries a Package command and its authority. A zero connection alone
-does not grant Group authority. The Realm also requires Package Account ownership and the current
-Character directory owner. See [the Package contract](package-api.md#session-less-action-consent)
+does not grant Group or guild authority. The Realm also requires Package Account ownership and
+the current Character directory owner. See [the Package contract](package-api.md#session-less-action-consent)
 for upgrade and completion obligations.
 
 `game_package_party_refresh` is a new private scheduled table with at most one row per World. It
@@ -207,6 +207,17 @@ refreshes statistics for active Package Group members every five seconds, keepin
 revisions unchanged. Outstanding Package commands delay a refresh batch. The timer removes itself
 when no active Package Group members remain. After upgrading an existing World, the Package Group
 presence report starts the timer for existing membership.
+
+### Package guilds (`module/src/native/package_guild.rs`)
+
+`game_package_guild_delivery` carries World requests and Realm invitation projections through
+`idc_package_guild`. `game_package_guild_retry` retains refused projection deliveries for retry;
+transport failures remain in the outbox. `game_package_guild_invitation` retains one current
+invitation or cleared revision per Character on its World. Cleared rows survive Character removal
+to prevent a delayed delivery from restoring an old invitation. All three tables are new and
+private. The existing `game_package_party_authority` layout is unchanged and fences both Group and
+guild actions. See [the Package contract](package-api.md#sessionless-guild-membership) for explicit
+acceptance, asynchronous completion and the presence report required after an upgrade.
 
 ### Realm communication (`module/src/native/realm_communication.rs`)
 

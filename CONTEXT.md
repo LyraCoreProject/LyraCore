@@ -425,8 +425,9 @@ the route observation can state whether its consulted cells had verified coverag
 **Sessionless Action Consent**:
 A Character-owned core projection of a Package's controller selection. An absent row permits
 sessionless actions. Each selection updates consent and clears the latest Character Relocation.
-Invite, leave and automatic group acceptance check current consent in the same transaction as the
-action. Consent is deleted with its Character.
+Group and guild actions check current consent on the owning Shard. Cross-Shard requests carry
+that authority revision; the Realm refuses it after observing a newer revision. Consent is deleted
+with its Character.
 
 **Idle Bot**:
 A Package-controlled Character, one with a Sessionless Action Consent row, that is out of combat and

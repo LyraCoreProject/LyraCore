@@ -17,6 +17,20 @@ pub struct GuildInvite {
     pub created_at: Timestamp,
 }
 
+impl GuildInvite {
+    pub(crate) fn insert(self, ctx: &ReducerContext) {
+        let guid = self.target_guid;
+        ctx.db.game_guild_invite().insert(self);
+        crate::native::package_guild::invitation_changed(ctx, guid);
+    }
+
+    pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {
+        if ctx.db.game_guild_invite().target_guid().delete(guid) {
+            crate::native::package_guild::invitation_changed(ctx, guid);
+        }
+    }
+}
+
 pub(crate) fn invite(
     ctx: &ReducerContext,
     actor_guid: u64,
@@ -51,12 +65,13 @@ pub(crate) fn invite(
         .guild_id()
         .find(actor.guild_id)
         .map_or(String::new(), |guild| guild.name);
-    ctx.db.game_guild_invite().insert(GuildInvite {
+    GuildInvite {
         target_guid: request.target_guid,
         guild_id: actor.guild_id,
         inviter_guid: actor_guid,
         created_at: crate::time::now(ctx),
-    });
+    }
+    .insert(ctx);
     push_event(
         ctx,
         actor.guild_id,
@@ -102,7 +117,7 @@ pub(crate) fn accept(
         rank_id,
         actor_account,
     )?;
-    ctx.db.game_guild_invite().target_guid().delete(actor_guid);
+    GuildInvite::delete(ctx, actor_guid);
     push_event(
         ctx,
         guild.guild_id,
@@ -129,7 +144,7 @@ pub(crate) fn decline(
         .target_guid()
         .find(actor_guid)
         .ok_or(GuildRefusal::NoPendingInvite)?;
-    ctx.db.game_guild_invite().target_guid().delete(actor_guid);
+    GuildInvite::delete(ctx, actor_guid);
     push_event(
         ctx,
         invite.guild_id,
@@ -421,7 +436,7 @@ pub(super) fn disband_guild(ctx: &ReducerContext, guild_id: u32) {
         .map(|row| row.target_guid)
         .collect();
     for target_guid in invite_targets {
-        ctx.db.game_guild_invite().target_guid().delete(target_guid);
+        GuildInvite::delete(ctx, target_guid);
     }
     ctx.db.game_guild().guild_id().delete(guild_id);
 }
