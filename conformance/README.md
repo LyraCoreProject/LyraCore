@@ -145,9 +145,9 @@ and data signature sets for every catalogue scenario. A signature is the rule, r
 when named, checkpoint, stream, opcode and field path. It holds no reason or packet values. The
 durable test checks provenance and
 requires exact set equality, including when a difference disappears. After one scenario changes,
-use `./conformance/baseline <scenario>`. It runs only that scenario's tier 1 test and replaces its
-entry from the comparison made in that invocation. Other entries stay byte-identical. To regenerate
-every entry, run all tier 1 scenarios, then `./conformance/baseline`. Both forms check the core commit,
+use `./conformance/baseline <scenario>`. It runs only that scenario's tier 1 test and adds or
+replaces its entry from the comparison made in that invocation. Other entries stay byte-identical.
+To regenerate every entry, run all tier 1 scenarios, then `./conformance/baseline`. Both forms check the core commit,
 harness revision and scenario hashes before writing the canonical file.
 Review the changed signatures with the behavior change. This baseline does not change comparator
 tags, scoreboard pass/fail or the Conformance Audit.

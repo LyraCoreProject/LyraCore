@@ -139,7 +139,7 @@
     {
       "scenario": "connection_identity",
       "behavior": "connection_identity",
-      "harness_revision": "42a5d53ae2ebbd8c909e4e466a6090fee874c380",
+      "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
       "scenario_sha256": "36fc53aa842da673a2c4a91712b163b04f6bbeccb3d96730e3cacd5e90ee9f3e",
       "rule": [],
       "data": []
@@ -1136,42 +1136,6 @@
       "rule": [
         {
           "rule": "exact_field",
-          "checkpoint": "details",
-          "stream": {
-            "kind": "reply",
-            "id": "details"
-          },
-          "opcode": 392,
-          "field_path": [
-            "details"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "hello",
-          "stream": {
-            "kind": "reply",
-            "id": "hello"
-          },
-          "opcode": 392,
-          "field_path": [
-            "details"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "requirements",
-          "stream": {
-            "kind": "reply",
-            "id": "requirements"
-          },
-          "opcode": 93,
-          "field_path": [
-            "details"
-          ]
-        },
-        {
-          "rule": "exact_field",
           "checkpoint": "requirements",
           "stream": {
             "kind": "reply",
@@ -1219,10 +1183,22 @@
     {
       "scenario": "taxi_single_hop",
       "behavior": "taxi_single_hop",
-      "harness_revision": "42a5d53ae2ebbd8c909e4e466a6090fee874c380",
-      "scenario_sha256": "264f82f2ae727eb2be18ca11e7d6b73aaad304c49ae31edcf8aadb072f1e095a",
+      "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
+      "scenario_sha256": "bb3bd01d74fe631dbce63b31a826ae95838c9e599b511c293ff6a88c635abe31",
       "rule": [],
       "data": [
+        {
+          "rule": "zone_weather_type",
+          "checkpoint": "flight",
+          "stream": {
+            "kind": "broadcast",
+            "id": "zones"
+          },
+          "opcode": 756,
+          "field_path": [
+            "weather_type"
+          ]
+        },
         {
           "rule": "zone_world_state_catalogue",
           "checkpoint": "flight",
@@ -1240,8 +1216,8 @@
     {
       "scenario": "taxi_single_hop__late_observer",
       "behavior": "taxi_single_hop",
-      "harness_revision": "42a5d53ae2ebbd8c909e4e466a6090fee874c380",
-      "scenario_sha256": "c10c256eaf597071d640cb3022a7e95fe534afb6aa9188427e757fbfdd4c4337",
+      "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
+      "scenario_sha256": "8be2dd91517ff0a34ad814b1e68ba2ea548fa0bd224ef22bd211759a6dcb1473",
       "rule": [
         {
           "rule": "actor_create_delivery",
@@ -1711,7 +1687,7 @@
           "field_path": []
         },
         {
-          "rule": "passenger_update_delivery",
+          "rule": "passenger_zone_flags_delivery",
           "character": "actor",
           "checkpoint": "flight",
           "stream": {
@@ -1723,39 +1699,7 @@
             "objects",
             "0",
             "values",
-            "field_1176"
-          ]
-        },
-        {
-          "rule": "passenger_update_delivery",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_133"
-          ]
-        },
-        {
-          "rule": "passenger_update_delivery",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_46"
+            "field_190"
           ]
         },
         {
@@ -1802,8 +1746,8 @@
     {
       "scenario": "taxi_single_hop__reconnect",
       "behavior": "taxi_single_hop",
-      "harness_revision": "42a5d53ae2ebbd8c909e4e466a6090fee874c380",
-      "scenario_sha256": "82c3c48f21f261d740eeed6d841f64ba132a283a00480ba5d257d3dc53b8f733",
+      "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
+      "scenario_sha256": "c912d20c44e3c02a89ee2939697e37d70cf79c492c47fee437ca47599536b793",
       "rule": [
         {
           "rule": "create_orientation",
@@ -3486,6 +3430,28 @@
           },
           "opcode": 199,
           "field_path": []
+        },
+        {
+          "rule": "zone_weather_delivery",
+          "character": "actor",
+          "checkpoint": "flight",
+          "stream": {
+            "kind": "broadcast",
+            "id": "zones"
+          },
+          "opcode": 756,
+          "field_path": []
+        },
+        {
+          "rule": "zone_world_states_delivery",
+          "character": "actor",
+          "checkpoint": "flight",
+          "stream": {
+            "kind": "broadcast",
+            "id": "zones"
+          },
+          "opcode": 706,
+          "field_path": []
         }
       ],
       "data": [
@@ -3507,7 +3473,7 @@
     {
       "scenario": "two_character_visibility",
       "behavior": "character_visibility",
-      "harness_revision": "42a5d53ae2ebbd8c909e4e466a6090fee874c380",
+      "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
       "scenario_sha256": "51126d4da33601aa9f2862073408b3e6575fe48ab07152b52a557b691b0a4b6f",
       "rule": [
         {
@@ -3789,7 +3755,7 @@
     {
       "scenario": "two_character_visibility__opposite_faction",
       "behavior": "character_visibility",
-      "harness_revision": "42a5d53ae2ebbd8c909e4e466a6090fee874c380",
+      "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
       "scenario_sha256": "0866a16fd1084a8df7f52271205c2cd55d074525b4aa80c682e8e50447edd8c6",
       "rule": [
         {
