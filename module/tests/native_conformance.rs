@@ -65,6 +65,105 @@ fn enter(shard: &Standalone, guid: u64) -> ReducerConnection {
     connection
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn quest_slots_survive_reconnect_and_reuse_only_the_abandoned_slot() {
+    use std::collections::BTreeMap;
+
+    fn fields(rows: Vec<Box<RawValue>>, guid: u64) -> BTreeMap<u16, u32> {
+        let mut fields = BTreeMap::new();
+        for row in rows {
+            let Packet(_, _, (option, opcode), body, _, _, _) =
+                serde_json::from_str(row.get()).unwrap();
+            if option != 0 {
+                continue;
+            }
+            let opcode = serde_json::from_str(opcode.get()).unwrap();
+            let bytes: Vec<_> = (0..body.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&body[i..i + 2], 16).unwrap())
+                .collect();
+            for update in properties::updates(opcode, &bytes).unwrap() {
+                if update.guid == guid {
+                    fields.extend(update.fields);
+                }
+            }
+        }
+        fields
+    }
+
+    let (shard, guid, _) = fixture("quest-slot-reconnect");
+    for statement in quest_world::STATEMENTS {
+        shard.assert_sql(statement);
+    }
+    shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
+    for quest in [15, 7] {
+        shard.assert_call(
+            "debug_grant_quest",
+            &[&guid.to_string(), &quest.to_string()],
+        );
+    }
+    let mut first = enter(&shard, guid);
+    first.drain_packets();
+    first
+        .call("native_world_receive", json!([0x193u32, [0u8, 19]]))
+        .unwrap();
+    let swapped = fields(first.drain_packets(), guid);
+    assert_eq!(swapped.get(&198), Some(&0));
+    assert_eq!(swapped.get(&255), Some(&15));
+    drop(first);
+    assert!(lyracore_test_support::poll_until(
+        Duration::from_secs(5),
+        || {
+            shard
+                .query_rows(&format!(
+                    "SELECT guid FROM game_world_entity WHERE guid = {guid}"
+                ))
+                .is_empty()
+        }
+    ));
+    let mut second = enter(&shard, guid);
+    let restored = fields(second.drain_packets(), guid);
+    assert_eq!(restored.get(&201), Some(&7));
+    assert_eq!(restored.get(&255), Some(&15));
+    second
+        .call("native_world_receive", json!([0x194u32, [19u8]]))
+        .unwrap();
+    assert_eq!(fields(second.drain_packets(), guid).get(&255), Some(&0));
+    shard.assert_call("debug_grant_quest", &[&guid.to_string(), "433"]);
+    second
+        .call("native_world_receive", json!([0x1dcu32, vec![0u8; 8]]))
+        .unwrap();
+    let accepted = fields(second.drain_packets(), guid);
+    assert_eq!(accepted.get(&198), Some(&433));
+    assert!(!accepted.contains_key(&201));
+    drop(second);
+    assert!(lyracore_test_support::poll_until(
+        Duration::from_secs(5),
+        || {
+            shard
+                .query_rows(&format!(
+                    "SELECT guid FROM game_world_entity WHERE guid = {guid}"
+                ))
+                .is_empty()
+        }
+    ));
+    shard.assert_sql("DELETE FROM game_character_quest_log");
+    let mut legacy = enter(&shard, guid);
+    let projected = fields(legacy.drain_packets(), guid);
+    assert_eq!(projected.get(&198), Some(&7));
+    assert_eq!(projected.get(&201), Some(&433));
+    legacy
+        .call("native_world_receive", json!([0x194u32, [0u8]]))
+        .unwrap();
+    assert_eq!(fields(legacy.drain_packets(), guid).get(&198), Some(&0));
+    let rows = shard.query_rows(&format!(
+        "SELECT entries FROM game_character_quest_log WHERE character_guid = {guid}"
+    ));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["entries"], "0433000000000000000000");
+}
+
 #[derive(Deserialize)]
 struct Packet(
     u64,

@@ -62,6 +62,12 @@ keyed by definition revision and source rule id. Imports replace rules and polic
 default, so old relay runs keep their failure behavior. See [command lists](data-ingestion.md#command-lists-in-eventai)
 for execution and failure rules.
 
+`game_character_quest_log` is a new private companion table with 20 quest entries per Character;
+zero denotes an empty slot. An absent row projects legacy quests in quest-id order. The next quest
+mutation saves these positions before changing the log. New quests use the first free slot;
+swaps move positions and abandon leaves a hole. Reconnect and Character Transfer retain the row.
+The public `game_character_quest` layout stays unchanged for Package compatibility.
+
 ### The three migration rules that have bitten
 
 1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64`

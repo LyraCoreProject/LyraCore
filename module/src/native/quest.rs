@@ -408,6 +408,21 @@ pub(super) fn receive(
             }
             packets
         }
+        ClientOpcodeMessage::CMSG_QUESTLOG_SWAP_QUEST(q) => {
+            super::actor(ctx, guid)?;
+            if q.slot1 == q.slot2
+                || usize::from(q.slot1) >= MAX_QUEST_LOG_SIZE
+                || usize::from(q.slot2) >= MAX_QUEST_LOG_SIZE
+            {
+                return Ok(());
+            }
+            let before = super::view::quests(ctx, guid);
+            let mut entries = quest_log_entries(ctx, guid);
+            entries.swap(usize::from(q.slot1), usize::from(q.slot2));
+            save_quest_log(ctx, guid, entries);
+            send_log_changes(ctx, guid, &before, &super::view::quests(ctx, guid));
+            Vec::new()
+        }
         ClientOpcodeMessage::CMSG_QUESTLOG_REMOVE_QUEST(q) => {
             super::actor(ctx, guid)?;
             if let Some(slot) = super::view::quests(ctx, guid)
@@ -445,6 +460,7 @@ pub(crate) fn changed(
     ctx: &ReducerContext,
     old: Option<&CharacterQuest>,
     new: Option<&CharacterQuest>,
+    slot: u8,
 ) {
     let Some(row) = new.or(old) else {
         return;
@@ -504,7 +520,37 @@ pub(crate) fn changed(
             super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
         }
     }
-    refresh(ctx, row.character_guid);
+    let after = super::view::quests(ctx, row.character_guid);
+    let mut before = after.clone();
+    before.retain(|slot| slot.quest_id != row.quest_entry);
+    if let Some(old) = old.filter(|old| !old.rewarded && usize::from(slot) < MAX_QUEST_LOG_SIZE) {
+        before.push(super::view::quest_slot(ctx, old, slot));
+    }
+    send_log_changes(ctx, row.character_guid, &before, &after);
+}
+
+fn send_log_changes(
+    ctx: &ReducerContext,
+    guid: u64,
+    before: &[codec::update_mask::QuestLogSlot],
+    after: &[codec::update_mask::QuestLogSlot],
+) {
+    use codec::update_mask::{full_quest_log_mask, idx, UpdateMaskValues};
+    let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) else {
+        return;
+    };
+    let before = full_quest_log_mask(before);
+    let after = full_quest_log_mask(after);
+    let mut changes = UpdateMaskValues::new();
+    for field in idx::PLAYER_QUEST_LOG_1_1..idx::PLAYER_QUEST_LOG_1_1 + 3 * idx::QUEST_LOG_SLOTS {
+        if before.get(field) != after.get(field) {
+            changes.set_u32(field, after.get(field).unwrap_or(0));
+        }
+    }
+    if changes.block_count() != 0 {
+        let (opcode, body) = codec::build_values_update_raw(guid, &changes);
+        super::send_raw(ctx, owner.connection_id, opcode, body, false);
+    }
 }
 
 pub(crate) fn event_credit(ctx: &ReducerContext, row: &CharacterQuestEventCredit, inserted: bool) {
