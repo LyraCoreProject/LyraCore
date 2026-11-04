@@ -4,7 +4,7 @@
     {
       "scenario": "bank_slot_purchase",
       "behavior": "bank_slot_purchase",
-      "harness_revision": "42a5d53ae2ebbd8c909e4e466a6090fee874c380",
+      "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
       "scenario_sha256": "d73644183fd921f24df5f209ffe3f79ca4573ff04ea8e41d478a768c98ccf358",
       "rule": [
         {
@@ -47,7 +47,7 @@
     {
       "scenario": "bank_slot_purchase__observer",
       "behavior": "bank_slot_purchase",
-      "harness_revision": "42a5d53ae2ebbd8c909e4e466a6090fee874c380",
+      "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
       "scenario_sha256": "e7fd829b9432beadb28d0a8cd81cae77e4e60aa74799e4f8eb2321364ded6c1e",
       "rule": [
         {
@@ -93,7 +93,7 @@
     {
       "scenario": "bank_slot_purchase__spawn_beside_viewer",
       "behavior": "bank_slot_purchase",
-      "harness_revision": "42a5d53ae2ebbd8c909e4e466a6090fee874c380",
+      "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
       "scenario_sha256": "7ddc32d010796a0b11139ba05fec0fe07c3013cf5125b77b304628109300e424",
       "rule": [
         {
@@ -142,6 +142,1078 @@
       "harness_revision": "42a5d53ae2ebbd8c909e4e466a6090fee874c380",
       "scenario_sha256": "36fc53aa842da673a2c4a91712b163b04f6bbeccb3d96730e3cacd5e90ee9f3e",
       "rule": [],
+      "data": []
+    },
+    {
+      "scenario": "quest_log",
+      "behavior": "quest_log",
+      "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
+      "scenario_sha256": "f33b52b3118a8608db2cb3140491ceac12cd9a988442b7d5cb9a4757624f273b",
+      "rule": [
+        {
+          "rule": "exact_field",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_198"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_199"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_200"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_201"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_202"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_203"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_204"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_205"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_206"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_207"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_208"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_209"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_210"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_211"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_212"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_213"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_214"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_215"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_216"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_217"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_218"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_219"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_220"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_221"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_222"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_223"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_224"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_225"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_226"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_227"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_228"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_229"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_230"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_231"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_232"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_233"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_234"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_235"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_236"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_237"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_238"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_239"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_240"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_241"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_242"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_243"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_244"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_245"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_246"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_247"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_248"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_249"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_250"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_251"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_252"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_253"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_254"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_255"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_256"
+          ]
+        },
+        {
+          "rule": "extra_packet",
+          "checkpoint": "abandon_first",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_257"
+          ]
+        },
+        {
+          "rule": "missing_packet",
+          "checkpoint": "abandon_second",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_201"
+          ]
+        },
+        {
+          "rule": "missing_packet",
+          "checkpoint": "swap",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_198"
+          ]
+        },
+        {
+          "rule": "missing_packet",
+          "checkpoint": "swap",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_201"
+          ]
+        },
+        {
+          "rule": "missing_packet",
+          "checkpoint": "swap_back",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_198"
+          ]
+        },
+        {
+          "rule": "missing_packet",
+          "checkpoint": "swap_back",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_201"
+          ]
+        }
+      ],
+      "data": []
+    },
+    {
+      "scenario": "quest_offers",
+      "behavior": "quest_offers",
+      "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
+      "scenario_sha256": "4b995c8c2043f8c6902f587e684d175634cb9a32b6041fe18845e3eba32aef57",
+      "rule": [
+        {
+          "rule": "exact_field",
+          "checkpoint": "details",
+          "stream": {
+            "kind": "reply",
+            "id": "details"
+          },
+          "opcode": 392,
+          "field_path": [
+            "details"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "checkpoint": "hello",
+          "stream": {
+            "kind": "reply",
+            "id": "hello"
+          },
+          "opcode": 392,
+          "field_path": [
+            "details"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "checkpoint": "requirements",
+          "stream": {
+            "kind": "reply",
+            "id": "requirements"
+          },
+          "opcode": 93,
+          "field_path": [
+            "details"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "checkpoint": "requirements",
+          "stream": {
+            "kind": "reply",
+            "id": "requirements"
+          },
+          "opcode": 93,
+          "field_path": [
+            "flags"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "checkpoint": "requirements",
+          "stream": {
+            "kind": "reply",
+            "id": "requirements"
+          },
+          "opcode": 93,
+          "field_path": [
+            "money_max_level"
+          ]
+        },
+        {
+          "rule": "missing_packet",
+          "checkpoint": "unrelated_quest",
+          "stream": {
+            "kind": "reply",
+            "id": "unrelated_quest"
+          },
+          "opcode": 382,
+          "field_path": []
+        },
+        {
+          "rule": "unexpected_packet",
+          "checkpoint": "unrelated_quest",
+          "stream": {
+            "kind": "unexpected"
+          },
+          "opcode": 392,
+          "field_path": []
+        }
+      ],
       "data": []
     },
     {

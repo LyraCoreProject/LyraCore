@@ -6,7 +6,7 @@ use lyracore_test_support::{ReducerConnection, Standalone};
 use serde::Deserialize;
 use serde_json::{json, value::RawValue};
 use wire_client::runner::{MultiTransport, Transport};
-use wire_client::scenario::{FixtureVerb, Observation, Scenario};
+use wire_client::scenario::{FixtureVerb, Observation, QuestState, Scenario};
 
 use super::properties::{self, Batch, CreateContext, Packet, Projection};
 
@@ -46,6 +46,7 @@ impl OperatorTransport {
         let guid = prepare_character(shard, "CONFORMANCE", name, race, class, *level, at)?;
         let fixtures = prepare_fixtures(shard, guid, &scenario.fixtures[1..], at)?;
         let transport = Self::connect(shard, guid, fixtures)?;
+        verify_quest_opening(&transport.opening, guid, &scenario.fixtures)?;
         let character = &shard.query_rows(&format!(
             "SELECT * FROM game_world_entity WHERE guid = {guid}"
         ))[0];
@@ -292,6 +293,15 @@ fn prepare_fixtures(
                     "fixture money did not apply"
                 );
             }
+            FixtureVerb::Quest {
+                entry,
+                state: QuestState::Incomplete,
+            } => {
+                shard.assert_call(
+                    "debug_grant_quest",
+                    &[&guid.to_string(), &entry.to_string()],
+                );
+            }
             FixtureVerb::KnownFlightNode { node_id } => {
                 shard.assert_call(
                     "debug_learn_taxi_node",
@@ -344,7 +354,123 @@ fn prepare_fixtures(
             }
         }
     }
+    let expected: Vec<_> = verbs
+        .iter()
+        .filter_map(|verb| match verb {
+            FixtureVerb::Quest { entry, .. } => Some(*entry),
+            _ => None,
+        })
+        .collect();
+    if !expected.is_empty() {
+        let mut rows = shard.query_rows(&format!(
+            "SELECT * FROM game_character_quest WHERE character_guid = {guid}"
+        ));
+        rows.sort_by_key(|row| row["id"].parse::<u64>().unwrap());
+        ensure!(
+            rows.len() == expected.len(),
+            "quest fixture log length differs"
+        );
+        for (row, entry) in rows.iter().zip(expected) {
+            ensure!(
+                row["quest_entry"].parse::<u32>()? == entry,
+                "quest fixture order differs"
+            );
+            ensure!(
+                row["rewarded"] == "false"
+                    && row["failed"] == "false"
+                    && row["deadline_micros"] == "0",
+                "quest fixture state differs"
+            );
+            let counts = &row["counts"];
+            ensure!(
+                !counts.is_empty() && counts.bytes().all(|count| count == b'0'),
+                "quest fixture must be incomplete without progress"
+            );
+        }
+    }
     Ok(fixtures)
+}
+
+fn verify_quest_opening(
+    opening: &[Observation],
+    guid: u64,
+    fixtures: &[FixtureVerb],
+) -> Result<()> {
+    use wire_client::decode::Field;
+    let quests: Vec<_> = fixtures
+        .iter()
+        .filter_map(|fixture| match fixture {
+            FixtureVerb::Quest { entry, .. } => Some(*entry),
+            _ => None,
+        })
+        .collect();
+    if quests.is_empty() {
+        return Ok(());
+    }
+    for observation in opening {
+        let Some(Field::List(objects)) = observation.packet.fields.get("objects") else {
+            continue;
+        };
+        for object in objects {
+            let Field::Object(object) = object else {
+                continue;
+            };
+            if object.get("guid") != Some(&Field::Guid(guid))
+                || !matches!(object.get("kind"), Some(Field::Unsigned(2 | 3)))
+            {
+                continue;
+            }
+            let Some(Field::Object(values)) = object.get("values") else {
+                bail!("Character CREATE has no values");
+            };
+            return verify_quest_words(values, &quests);
+        }
+    }
+    bail!("quest fixture has no Character CREATE")
+}
+
+fn verify_quest_words(
+    values: &BTreeMap<String, wire_client::decode::Field>,
+    quests: &[u32],
+) -> Result<()> {
+    use wire_client::decode::Field;
+    // Build 5875 has 20 quest slots, three words each, beginning at field 198.
+    for slot in 0..20 {
+        for offset in 0..3 {
+            let field = format!("field_{}", 198 + slot * 3 + offset);
+            let expected = if offset == 0 {
+                u64::from(quests.get(slot).copied().unwrap_or(0))
+            } else {
+                0
+            };
+            let actual = match values.get(&field) {
+                Some(Field::Unsigned(value)) => *value,
+                None => 0,
+                _ => bail!("quest fixture {field} has the wrong type"),
+            };
+            ensure!(
+                actual == expected,
+                "quest fixture {field}: expected {expected}, actual {actual}"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn quest_fixture_requires_ordered_incomplete_slots_and_an_empty_remainder() {
+    use wire_client::decode::Field;
+    let values = BTreeMap::from([
+        ("field_198".into(), Field::Unsigned(7)),
+        ("field_201".into(), Field::Unsigned(15)),
+    ]);
+    assert!(verify_quest_words(&values, &[7, 15]).is_ok());
+    assert!(verify_quest_words(&values, &[15, 7]).is_err());
+    for (field, value) in [(199, 1), (200, 1), (204, 7), (257, 1)] {
+        let mut changed = values.clone();
+        changed.insert(format!("field_{field}"), Field::Unsigned(value));
+        assert!(verify_quest_words(&changed, &[7, 15]).is_err());
+    }
 }
 
 impl Transport for OperatorTransport {
@@ -466,6 +592,15 @@ impl<'a> MultiOperatorTransport<'a> {
             );
             if character.initially_connected {
                 transport.connect(&character.id)?;
+                verify_quest_opening(
+                    &transport.characters[&character.id]
+                        .transport
+                        .as_ref()
+                        .context("fixture connection")?
+                        .opening,
+                    guid,
+                    &character.fixtures,
+                )?;
             }
         }
         Ok(transport)

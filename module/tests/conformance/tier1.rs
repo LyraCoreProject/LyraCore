@@ -499,3 +499,22 @@ fn result_updates_preserve_other_scenarios_and_clear_failed_setup() -> Result<()
     std::fs::remove_dir_all(directory)?;
     Ok(())
 }
+
+fn seed_quest_world(shard: &Standalone, _: &wire_client::scenario::Scenario) -> Result<()> {
+    for statement in super::quest_world::STATEMENTS {
+        shard.assert_sql(statement);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn quest_offers_matches_its_golden_trace() -> Result<()> {
+    run_scenario("quest_offers", seed_quest_world, None)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn quest_log_matches_its_golden_trace() -> Result<()> {
+    run_scenario("quest_log", seed_quest_world, None)
+}

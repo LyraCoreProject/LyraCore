@@ -102,20 +102,33 @@ fn replace_scenario(
         .map(|entry| entry.scenario.as_str())
         .collect();
     ensure!(
-        actual == expected,
-        "committed tier 1 baseline does not list every catalogue scenario; run every tier 1 test, then ./conformance/baseline without a scenario"
+        actual.iter().all(|id| expected.contains(id)),
+        "committed tier 1 baseline contains an unknown catalogue scenario"
     );
-    let entry = committed
-        .scenarios
-        .iter_mut()
-        .find(|entry| entry.scenario == current.scenario)
-        .context("scenario is missing from the committed tier 1 baseline")?;
+    let golden = catalogue::get(&current.scenario)?;
     ensure!(
-        entry.behavior == current.behavior,
+        current.behavior == golden.scenario().behavior,
         "Behavior changed for {}",
         current.scenario
     );
-    *entry = current;
+    match committed
+        .scenarios
+        .iter_mut()
+        .find(|entry| entry.scenario == current.scenario)
+    {
+        Some(entry) => {
+            ensure!(
+                entry.behavior == current.behavior,
+                "Behavior changed for {}",
+                current.scenario
+            );
+            *entry = current;
+        }
+        None => committed.scenarios.push(current),
+    }
+    committed
+        .scenarios
+        .sort_by(|left, right| left.scenario.cmp(&right.scenario));
     Ok(committed)
 }
 
@@ -226,6 +239,21 @@ mod tests {
         }
         assert_eq!(outside(&before)?, outside(&after)?);
         assert_ne!(before, after);
+        Ok(())
+    }
+
+    #[test]
+    fn targeted_generation_adds_a_new_catalogue_scenario() -> Result<()> {
+        let original = ratchet::Baseline {
+            schema_version: 1,
+            scenarios: vec![entry("connection_identity")],
+        };
+        let before = original.scenarios[0].clone();
+        let updated = replace_scenario(original, entry("quest_log"))?;
+        assert_eq!(updated.scenarios.len(), 2);
+        assert_eq!(updated.scenarios[0], before);
+        assert_eq!(updated.scenarios[1], entry("quest_log"));
+        assert!(replace_scenario(updated, entry("unknown_scenario")).is_err());
         Ok(())
     }
 
