@@ -62,6 +62,12 @@ keyed by definition revision and source rule id. Imports replace rules and polic
 default, so old relay runs keep their failure behavior. See [command lists](data-ingestion.md#command-lists-in-eventai)
 for execution and failure rules.
 
+`game_quest_flags` is a new private companion table for the source `QuestFlags` bits returned in
+quest queries. Absence means zero; reimport quests to populate an existing Realm. The public quest
+template layout stays unchanged for Packages. Existing authored templates default to zero flags.
+These stored bits do not implement the gameplay
+rules for every flag; the import Compatibility Manifest continues to report that gap.
+
 ### The three migration rules that have bitten
 
 1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64`

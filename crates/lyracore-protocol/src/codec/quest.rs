@@ -25,6 +25,7 @@ pub struct QuestDetailView {
     pub reward_xp: u32,
     pub next_quest_id: u32,
     pub max_level_money_reward: u32,
+    pub flags: u32,
     pub rewards: Vec<QuestRewardView>,
     pub choice_rewards: Vec<QuestRewardView>,
     /// Gameobject objectives encode the negated entry id as a u32.
@@ -345,7 +346,7 @@ pub fn build_quest_query_response_raw(d: &QuestDetailView) -> (u16, Vec<u8>) {
     u32le(&mut body, d.max_level_money_reward);
     u32le(&mut body, 0);
     u32le(&mut body, 0);
-    u32le(&mut body, 0);
+    u32le(&mut body, d.flags);
     for i in 0..4 {
         let (item, count) = d
             .rewards
@@ -484,6 +485,7 @@ mod tests {
             reward_xp: 0,
             next_quest_id: 0,
             max_level_money_reward: 0,
+            flags: 0,
             rewards: vec![],
             choice_rewards: vec![],
             objectives: vec![],
@@ -507,6 +509,7 @@ mod tests {
             next_quest_id: 15,
             money_reward: 500,
             max_level_money_reward: 4200,
+            flags: 0,
             ..detail_view()
         };
         let (_, body) = build_quest_query_response_raw(&d);
@@ -603,6 +606,7 @@ mod tests {
             reward_xp: 0,
             next_quest_id: 0,
             max_level_money_reward: 0,
+            flags: 0,
             rewards: Vec::new(),
             choice_rewards: Vec::new(),
             objectives: Vec::new(),
@@ -659,6 +663,7 @@ mod tests {
             reward_xp: 130,
             next_quest_id: 0,
             max_level_money_reward: 0,
+            flags: 0,
             rewards: vec![QuestRewardView {
                 item_entry: 6078,
                 count: 1,

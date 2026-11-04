@@ -54,7 +54,14 @@ pub(super) fn quest_detail_view(
         money_reward: tmpl.reward_money,
         reward_xp,
         next_quest_id: tmpl.next_quest_id,
-        max_level_money_reward: lyracore_shared::quest::max_level_money_reward(reward_xp),
+        max_level_money_reward: tmpl.reward_money_max_level,
+        flags: ctx
+            .db
+            .game_quest_flags()
+            .quest_entry()
+            .find(quest_id)
+            .map(|quest| quest.flags)
+            .unwrap_or(0),
         rewards: quest_rewards(ctx, quest_id),
         choice_rewards: quest_choice_rewards(ctx, quest_id),
         objectives: raw_objs
@@ -359,7 +366,24 @@ pub(super) fn receive(
             menu(ctx, q.guid.guid(), guid)?
         }
         ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(q) => {
-            details(ctx, q.guid.guid(), q.quest_id)
+            use crate::items::game_item_instance;
+            let giver = q.guid.guid();
+            let related = giver_relations(ctx, giver)
+                .iter()
+                .any(|(quest, _)| *quest == q.quest_id)
+                || ctx
+                    .db
+                    .game_item_instance()
+                    .guid()
+                    .find(giver)
+                    .filter(|item| item.owner_guid == guid)
+                    .and_then(|item| ctx.db.game_item_template().entry().find(item.entry))
+                    .is_some_and(|item| item.start_quest == q.quest_id);
+            if related {
+                details(ctx, giver, q.quest_id)
+            } else {
+                vec![packet(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE)?]
+            }
         }
         ClientOpcodeMessage::CMSG_QUEST_QUERY(q) => quest_detail_view(ctx, q.quest_id)
             .map(|detail| {

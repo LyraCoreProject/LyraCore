@@ -536,6 +536,7 @@ struct GossipEtl {
 struct QuestEtl {
     entries: std::collections::HashSet<u64>,
     templates: Vec<String>,
+    flags: Vec<String>,
     texts: Vec<String>,
     objectives: Vec<String>,
     cast_objectives: Vec<String>,
@@ -675,6 +676,7 @@ fn build_quests(
         .collect();
 
     let mut quest_rows: Vec<String> = Vec::new();
+    let mut quest_flag_rows = Vec::new();
     let mut quest_text_rows: Vec<String> = Vec::new();
     let mut objective_rows: Vec<String> = Vec::new();
     let mut cast_objective_rows: Vec<String> = Vec::new();
@@ -729,6 +731,8 @@ fn build_quests(
         let money: i64 = row.number(qt::REW_OR_REQ_MONEY)?;
         let reward_money_max_level: i64 = row.number(qt::REW_MONEY_MAX_LEVEL)?;
         let prev_quest: i64 = row.number(qt::PREV_QUEST_ID)?;
+        let flags: u32 = row.number("QuestFlags")?;
+        quest_flag_rows.push(format!("({entry},{flags})"));
         let special_flags: u32 = row.number(qt::SPECIAL_FLAGS)?;
         let repeatable = (special_flags & 1) != 0;
         let req_races: u32 = row.number(qt::REQUIRED_RACES)?;
@@ -888,6 +892,7 @@ fn build_quests(
     Ok(QuestEtl {
         entries: valid_quests,
         templates: quest_rows,
+        flags: quest_flag_rows,
         texts: quest_text_rows,
         objectives: objective_rows,
         cast_objectives: cast_objective_rows,
@@ -1808,6 +1813,13 @@ fn push_gameobject_statements(
 fn push_quest_statements(stmts: &mut Vec<String>, quests: &QuestEtl, mail_loot_rows: &[String]) {
     stmts.push("DELETE FROM game_quest_template WHERE entry > 0".into());
     stmts.push("DELETE FROM game_quest_text WHERE quest_entry > 0".into());
+    stmts.push("DELETE FROM game_quest_flags WHERE quest_entry > 0".into());
+    push_insert(
+        stmts,
+        "game_quest_flags",
+        "quest_entry,flags",
+        &quests.flags,
+    );
     stmts.push("DELETE FROM game_quest_objective WHERE id > 0".into());
     stmts.push("DELETE FROM game_quest_cast_objective WHERE id > 0".into());
     stmts.push("DELETE FROM game_quest_reward_item WHERE id > 0".into());

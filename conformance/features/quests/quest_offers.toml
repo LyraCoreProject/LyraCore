@@ -9,7 +9,9 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["quest_offers"]
 deliberate_deviations = []
 prerequisites = []
-tests = []
+tests = [
+    { path = "importer/src/world_import_quests_tests.rs", function = "named_quests_select_revisions_relations_mail_money_xp_flags_and_learn_spells", rung = "unit" },
+]
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
