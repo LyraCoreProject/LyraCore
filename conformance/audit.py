@@ -19,6 +19,8 @@ import tempfile
 import time
 import tomllib
 
+from preflight import check_spacetime_version
+
 ROOT = Path(__file__).resolve().parent.parent
 SCRATCH = Path(os.environ.get('LYRACORE_AUDIT_SCRATCH', Path.home() / '.cache/lyracore-scratch/m5c'))
 REFERENCE = Path.home() / '.cache/lyracore-scratch/reference-server'
@@ -1234,6 +1236,10 @@ def main():
         parser.error('--agreement requires --scenario ID --check')
     if args.require_snapshot and not args.scenario:
         parser.error('--require-snapshot requires --scenario ID --check')
+    try:
+        check_spacetime_version(ROOT, executable='spacetime')
+    except (OSError, ValueError, KeyError, RuntimeError) as error:
+        return setup_failure(args.scenario, args.json, str(error))
     if args.client_data is None:
         config = ROOT / '.lyracore/config.json'
         if config.is_file():
