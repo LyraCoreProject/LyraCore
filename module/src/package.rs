@@ -9,6 +9,9 @@ pub(crate) use crate::package_fixture as fixture;
 pub(crate) use crate::package_test as test;
 
 pub(crate) use crate::helpers::require_operator;
+pub(crate) use crate::native::package_creation::{
+    request_character, take_character_result, CharacterCreation,
+};
 pub(crate) use crate::package_account::create_package_character as create_character;
 pub(crate) use crate::package_config::ensure_package_config_default as ensure_config_default;
 
