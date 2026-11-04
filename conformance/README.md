@@ -574,6 +574,21 @@ Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes a
 
 ## Conformance Audit
 
+Before a full audit, rehearse every catalogue scenario on both servers:
+
+```bash
+./conformance/audit --rehearse --client-data /path/to/client/Data
+```
+
+Rehearsal uses the full audit's catalogue order and capture path, restoring both servers before
+each scenario. It requires a matching imported-world snapshot and never starts or falls back to
+a fresh world import. If none exists, run one scenario with `--check` once to seal a snapshot first. Rehearsal
+prints one JSON line per completed scenario with setup success, wall time, and rule/data difference
+record counts for both servers. Differences are data and do not stop the remaining captures.
+Setup, capture or comparison execution failures exit 2; reaching the end exits 0. It writes no audit
+report, accepts neither `--date` nor `--output`, and stops both servers on exit. Scrubbed captures
+and comparisons remain in the printed diagnostics directory, outside the repository.
+
 Run one scenario while climbing a Behavior:
 
 ```bash
@@ -581,6 +596,16 @@ Run one scenario while climbing a Behavior:
 ./conformance/audit --scenario taxi_single_hop --check --json --client-data /path/to/client/Data
 ./conformance/audit --scenario taxi_single_hop --check --agreement --json --client-data /path/to/client/Data
 ```
+
+Catalogue fixture creatures can lie outside the `alliance-single` slice. A local `--check`
+prepares a catalogue snapshot from the cached base world with the existing importer's
+`--include-creatures` option. It loads World Source rows and client catalogues for the required
+creature and vendor content; terrain, navigation and collision data are retained. This is a warm
+preparation, without a new full world import. The catalogue key covers the base key, required
+creature entries and the preparation code. The store keeps this snapshot together with its base.
+Rehearsal can prepare this fixture content from a matching cached base; it never starts a fresh
+world import or regenerates terrain, navigation or collision data. Full audits build the catalogue
+snapshot from their newly imported base world, even when an older catalogue snapshot exists.
 
 The local check captures the scenario on both servers and compares each candidate with its Golden
 Trace. It prints the same grouped text or JSON fields as `./conformance/run`. Its `baseline` field
@@ -621,11 +646,13 @@ both a missing or incompatible snapshot and the cold fallback after an upgrade f
 
 The check output includes `world_origin`: `fresh_import`, `snapshot` or `upgraded_snapshot`. Text
 output prints the same value as `World origin`. Agreement JSON carries it inside `audit`. This is
-local check evidence only. Full audits always import a fresh world; their append-only reports never
-use these snapshots. Equivalence between upgraded and freshly imported worlds is not claimed.
+local check evidence only. Full audits always import a fresh world in that invocation, seal it,
+and restore that new snapshot before every scenario. They never reuse an earlier invocation's
+import. Equivalence between upgraded and freshly imported worlds is not claimed.
 
 Snapshots from the older schema-keyed format take the cold path once. The store retains the newest
-two snapshots and removes older ones after a successful seal. A cold import that replaces an
+two snapshots and removes older ones after a successful seal. A catalogue snapshot retains its base
+world as the second snapshot, so fixture changes cannot evict the expensive base import. A cold import that replaces an
 incompatible snapshot keeps the old seal until the new import is sealed. Abandoned `.pending`
 directories are removed under the shared snapshot-store lock. Copying requires the world size plus
 10% or 256 MiB of free space, whichever reserve is larger. A failed seal retains the stopped imported
@@ -653,14 +680,17 @@ the owned containers. Recovery keeps the same container IDs and can retry an int
 Changed IDs stop the command before it touches the containers. `./conformance/audit --stop` restores
 the Reference Server, stops owned services and removes the active worktree; it retains the sealed
 snapshots and build output. The full audit uses the same Reference Server recovery and stops it on
-exit. Required LyraCore Accounts are provisioned after every restore with the sealed password, so a
-larger scenario catalogue needs no new import.
+exit. Full audits, rehearsals and local checks use the same per-scenario restore path. This resets
+Character names across Accounts, Account state, money, quests, items, reputation, fixture creatures,
+spawned objects, vendor stock and restock timers. Required LyraCore Accounts are provisioned after
+every restore with the sealed password, so a larger scenario catalogue needs no new import.
 
 Phase timings go to stderr, leaving JSON on stdout. They include builds, schema extraction, client
 hashing, Realm startup, import, snapshot sealing, both captures and comparison. Agreement also
 reports its tier 1 time. The runner builds one deployment WASM and uses that file for schema
-extraction, preflight bindings and publication. With at least four available CPUs, the two wire
-captures run concurrently. A warm check prints `import: 0.00s (cached snapshot)` and identifies its world origin.
+extraction, preflight bindings and publication. With at least four available CPUs, both server
+restores overlap, then both wire captures run concurrently. A warm check prints
+`import: 0.00s (cached snapshot)` and identifies its world origin.
 
 A failed reference comparison prints its scrubbed differences, including signatures and expected and
 actual values, before exit 2. Both comparisons and captures survive work-directory cleanup under
@@ -724,8 +754,8 @@ fixture spawn during setup. Tier 1 still uses the bundled route
 fixture.
 
 All Docker commands run inside a `newgrp docker` heredoc. The command checks the prepared runtime's
-pins and provenance, starts its compose services, prepares peer Accounts, and resets each catalogue
-Character on its own Account in the disposable Reference Server. Every scenario produces both a
+pins and provenance, restores the pristine Reference Server database, starts its compose services,
+and prepares peer Accounts before each scenario. Every scenario produces both a
 LyraCore and vmangos candidate in scratch. Both
 compare with their embedded Golden Trace; the Reference Server must also retain its recorded
 provenance. Reference rule and data counts remain visible even when LyraCore fails.
@@ -733,16 +763,16 @@ provenance. Reference rule and data counts remain visible even when LyraCore fai
 The command writes `conformance/reports/<date>.md`, `<date>.json` and `<date>.traces/`. Audit
 history is append-only: each run needs a new date or suffix, such as `2026-10-28-c6`, and the
 command refuses existing outputs. The trace directory contains only LyraCore candidates. Reference
-Server candidates stay in the audit's scratch directory and are deleted with it at exit; the report
-keeps their SHA-256 and reference-stability results. `--output DIRECTORY` selects another report
-destination. Rule differences are audit findings and do not make the command fail; missing
+Server candidates remain in local diagnostics; the report keeps their SHA-256 and reference-stability
+results. `--output DIRECTORY` selects another report destination. Rule differences are audit findings and do not make the command fail; missing
 captures, infrastructure errors and invalid evidence do. A failed run cannot write a partial
 success report. No scenario is skipped, including taxi.
 Real-client fields, Equivalence Rules and Deliberate Deviations are untouched.
 
-The full audit runner stops both servers on exit, including capture failures and normal interrupts. Credentials
-and crash diagnostics stay under `$HOME/.cache/lyracore-scratch/m5c/` and are deleted when
-the run ends. Build output uses its `target/` directory. The prepared Reference Server's runtime
+The full audit runner stops both servers on exit, including capture failures and normal interrupts.
+Credentials are removed with the active Realm. Scrubbed captures and crash diagnostics remain under
+`$HOME/.cache/lyracore/conformance-worlds/diagnostics/`. Build output uses
+`scenario-audit/target/` under the audit scratch directory. The prepared Reference Server's runtime
 stays under `$HOME/.cache/lyracore-scratch/reference-server/`. Reports contain only provenance,
 counts, signatures and scrubbed difference values. Committed LyraCore candidate traces contain
 numbers and text digests, with the same scrubbed field types as Golden Traces. Never commit a
