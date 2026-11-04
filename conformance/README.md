@@ -591,15 +591,14 @@ ranking deduplicates identical entries. Classification is derived from the path,
 handwritten status or changes to ledger files.
 
 Each census reports `planned_import_rows_by_table` from its vmangos production plan and the
-archived Compatibility Manifest (`manifest`), including finding codes, classifications and occurrence counts.
-`--summary` prints planned rows and totals of finding occurrences by classification; codes remain
+archived Compatibility Manifest (`manifest`), including finding codes, classifications and occurrence
+counts. `--summary` prints planned rows and totals of finding occurrences by classification; codes remain
 in JSON and the census. Reports retain their source identity and profile in the linked
 census document. These are archived planned rows, not a measurement of a running Realm or the
 current importer. Findings can overlap and count different units from imported rows. Reports can
 also appear under several systems; do not sum them across systems. No source-data percentage or
 unsupported-row denominator is inferred. Scenario coverage and comparator data signatures remain
 separate measurements. Missing census evidence gives an empty report map, not zero unsupported rows.
-
 
 ## Conformance Audit
 

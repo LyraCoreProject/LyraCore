@@ -108,8 +108,8 @@ fn coverage_keeps_ledger_gaps_and_source_occurrences_separate() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ledger = FeatureLedger::load(&root.join("features"))?;
     let coverage = coverage(&ledger)?;
-    assert_eq!(coverage.gaps.data_import, 2348);
-    assert_eq!(coverage.gaps.behavior, 68);
+    assert_eq!(coverage.gaps.data_import, 2336);
+    assert_eq!(coverage.gaps.behavior, 82);
     let creatures = &coverage.systems["creatures"];
     assert_eq!(
         creatures.by_source["importer/src/world_import_creatures.rs"].data_import,

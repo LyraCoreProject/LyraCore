@@ -419,12 +419,18 @@ fn print_summary(data: &ScoreboardData<'_>) -> Result<()> {
         "\n| System | Source | Behavior gaps | Data-import gaps |\n| --- | --- | ---: | ---: |"
     );
     for (system, coverage) in &summary.data_coverage.systems {
+        println!(
+            "| {system} | Total | {} | {} |",
+            coverage.gaps.behavior, coverage.gaps.data_import
+        );
         for (source, gaps) in &coverage.by_source {
             println!(
                 "| {system} | {source} | {} | {} |",
                 gaps.behavior, gaps.data_import
             );
         }
+    }
+    for (system, coverage) in &summary.data_coverage.systems {
         for (path, census) in &coverage.port_census {
             println!("\n{system}: {path} (archived production plan; see report for source identity and scope).");
             for (table, rows) in &census.planned_import_rows_by_table {
