@@ -394,10 +394,12 @@ def require_copy_space(source, destination):
         raise RuntimeError(f'insufficient free space to copy {source}: need {needed + reserve} bytes')
 
 
-def seal_snapshot(key, realm_root, password):
+def seal_snapshot(key, realm_root, password, *, base_key=None):
     SNAPSHOT_STORE.mkdir(parents=True, exist_ok=True, mode=0o700)
     SNAPSHOT_STORE.chmod(0o700)
     clean_pending_snapshots()
+    if base_key and not validate_snapshot(snapshot_path(base_key), base_key):
+        raise RuntimeError('catalogue snapshot requires a sealed base world')
     require_copy_space(realm_root / '.lyracore/native-data', SNAPSHOT_STORE)
     pending = SNAPSHOT_STORE / (key + '.pending')
     pending.mkdir(mode=0o700)
@@ -413,7 +415,10 @@ def seal_snapshot(key, realm_root, password):
     manifest = dict(data=file_manifest(pending / 'native-data'),
                     jwt=file_manifest(pending / 'native-jwt'))
     schema = json.loads((SCENARIO_CACHE / 'deployment-schema.json').read_text())
-    write_state(pending / 'state.json', dict(key=key, manifest=manifest, module_schema=schema))
+    state = dict(key=key, manifest=manifest, module_schema=schema)
+    if base_key:
+        state['base_world'] = base_key
+    write_state(pending / 'state.json', state)
     (pending / 'state.json').chmod(0o400)
     pending.chmod(0o500)
     existing = snapshot_path(key)
@@ -421,11 +426,14 @@ def seal_snapshot(key, realm_root, password):
         writable_tree(existing)
         shutil.rmtree(existing)
     pending.rename(existing)
-    for old in sorted((p for p in SNAPSHOT_STORE.iterdir()
+    previous = sorted((p for p in SNAPSHOT_STORE.iterdir()
                        if p.is_dir() and p.name != key and (p / 'state.json').is_file()),
-                      key=lambda p: p.stat().st_mtime, reverse=True)[1:]:
-        writable_tree(old)
-        shutil.rmtree(old)
+                      key=lambda p: p.stat().st_mtime, reverse=True)
+    retained = {base_key} if base_key else {path.name for path in previous[:1]}
+    for old in previous:
+        if old.name not in retained:
+            writable_tree(old)
+            shutil.rmtree(old)
 
 
 class SnapshotUpgradeError(RuntimeError):
@@ -951,6 +959,61 @@ def rehearse_comparison(wire, work, scenario, adapter):
             for kind in ['rule', 'data']}
 
 
+def catalogue_snapshot_key(base_key, catalogue):
+    creatures = sorted({entry for scenario in catalogue for entry in scenario.get('creatures', [])})
+    if not creatures:
+        return base_key, creatures
+    contract = {path: digest(ROOT / path) for path in
+                ['conformance/audit.py', 'conformance/examples/audit.rs']}
+    key = dict(base_world=base_key, creatures=creatures, preparation=contract)
+    return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest(), creatures
+
+
+def prepare_catalogue_snapshot(work, base_key, pins, client_data, *, require_snapshot, fresh=False):
+    catalogue = json.loads((work / 'catalogue.json').read_text())
+    key, creatures = catalogue_snapshot_key(base_key, catalogue)
+    if not creatures:
+        return key
+    if not fresh and validate_snapshot(snapshot_path(key), key):
+        schema = json.loads((SCENARIO_CACHE / 'deployment-schema.json').read_text())
+        if snapshot_origin(snapshot_path(key), schema) is not None:
+            return key
+    if require_snapshot:
+        raise RuntimeError('catalogue snapshot missing; --require-snapshot forbids an import; '
+                           'run --scenario vendor_offers --check once to prepare fixture content')
+    peer_count = max(len(scenario['characters']) - 1 for scenario in catalogue)
+    with scenario_realm(base_key, pins, client_data, peer_count) as (password, _token, _host, _module, realm):
+        cli_env = dict(os.environ)
+        cli_env.pop('CARGO_TARGET_DIR', None)
+        cli_env['PATH'] = str(realm.parent / 'bin') + ':' + cli_env['PATH']
+        try:
+            source_root = SNAPSHOT_STORE / 'sources' / pins['database_commit']
+            marker = source_root / 'current.json'
+            source = json.loads(marker.read_text()) if marker.is_file() else None
+            if (not source or source['commit'] != pins['database_commit']
+                    or not Path(source['sqlite_path']).is_file()
+                    or digest(Path(source['sqlite_path'])) != source['sqlite_sha256']):
+                with timed('catalogue World Source preparation'):
+                    fetched = run_with_diagnostic([sys.executable, ROOT / 'importer/scripts/pull-vmangos.py',
+                                                   '--output', source_root])
+                    source = json.loads(fetched.stdout)
+            if source['commit'] != pins['database_commit']:
+                raise RuntimeError('catalogue World Source differs from the Reference Server pin')
+            run(['cargo', 'build', '--locked', '-p', 'lyracore-importer', '--bin', 'lyracore-importer'],
+                cwd=ROOT, stdout=subprocess.DEVNULL)
+            env = dict(os.environ, LYRACORE_SPACETIME_CONFIG_PATH=str(realm / '.lyracore/native-cli.toml'))
+            with timed('catalogue fixture content'):
+                run([SCENARIO_CACHE / 'target/debug/lyracore-importer', '--dump', source['sqlite_path'],
+                     '--dbc', client_data, '--world-profile', 'alliance-single',
+                     '--include-creatures', ','.join(map(str, creatures)),
+                     '--source-sha', pins['database_commit'], '--server', 'http://127.0.0.1:3000',
+                     '--db', 'lyracore', '--apply'], cwd=ROOT, env=env, stdout=subprocess.DEVNULL)
+        finally:
+            stop_realm(realm, realm / 'lyracore', cli_env)
+        seal_snapshot(key, realm, password, base_key=base_key)
+    return key
+
+
 def capture_servers(harness, wire, work, client_data, *, rehearse=False):
     scenarios = json.loads((work / 'catalogue.json').read_text())
     peer_count = max(len(scenario['characters']) - 1 for scenario in scenarios)
@@ -959,6 +1022,8 @@ def capture_servers(harness, wire, work, client_data, *, rehearse=False):
         if not rehearse:
             with prepare_scenario_realm(key, pins, client_data, peer_count, use_snapshot=False):
                 pass
+        key = prepare_catalogue_snapshot(work, key, pins, client_data,
+                                         require_snapshot=rehearse, fresh=not rehearse)
         for scenario in scenarios:
             started = time.monotonic()
             with capture_scenario(harness, wire, work, scenario['id'], key, pins, client_data,
@@ -972,7 +1037,8 @@ def capture_servers(harness, wire, work, client_data, *, rehearse=False):
                                           comparisons=comparisons)), flush=True)
         provenance = json.loads((work / 'reference.json').read_text())
         content = (f"lyracore import alliance-single, vmangos db_latest {pins['database_commit']}, "
-                   'client data from the supplied path; imported creature spawns retained')
+                   'client data from the supplied path; imported creature spawns retained; '
+                   'catalogue creature and vendor content included from the same World Source')
         return provenance, state['native_host_sha256'], state['module_sha256'], content
     finally:
         stop_scenario_cache(preserve_import=True)
@@ -1115,6 +1181,8 @@ def run_scenario(args, harness, target, core_commit):
                 raise RuntimeError('tier 1 did not produce a comparison: '
                                    + (tier1.stderr + tier1.stdout).strip())
         run_with_diagnostic([audit, 'export', work])
+        key = prepare_catalogue_snapshot(work, key, pins, str(args.client_data),
+                                         require_snapshot=args.require_snapshot)
         with capture_scenario(harness, wire, work, args.scenario, key, pins, str(args.client_data),
                               require_snapshot=args.require_snapshot) as world_origin:
             if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):

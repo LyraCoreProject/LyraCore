@@ -932,6 +932,12 @@ class SnapshotStore(unittest.TestCase):
                 changed.write_text('changed')
                 with self.assertRaisesRegex(RuntimeError, 'changed after sealing'):
                     audit.validate_snapshot(store / 'third', 'third')
+                audit.seal_snapshot('catalogue-first', realm, 'password', base_key='second')
+                self.assertTrue((store / 'second').exists())
+                audit.seal_snapshot('catalogue-second', realm, 'password', base_key='second')
+                self.assertTrue(audit.validate_snapshot(store / 'second', 'second'))
+                self.assertFalse((store / 'catalogue-first').exists())
+                self.assertTrue(audit.validate_snapshot(store / 'catalogue-second', 'catalogue-second'))
 
     def test_abandoned_pending_worlds_are_removed_and_copy_checks_free_space(self):
         with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
@@ -1173,6 +1179,43 @@ class ScenarioRealmReuse(unittest.TestCase):
         self.assertEqual(self.imports, 0)
         self.assertFalse(self.running)
         self.assertFalse((self.root / 'reports').exists())
+
+
+class CatalogueSnapshot(unittest.TestCase):
+    def test_creature_requirements_are_independent_of_catalogue_order(self):
+        first = [dict(creatures=[9499, 11188]), dict(creatures=[9499])]
+        second = list(reversed(first))
+        key, creatures = audit.catalogue_snapshot_key('base', first)
+        self.assertEqual(creatures, [9499, 11188])
+        self.assertEqual(audit.catalogue_snapshot_key('base', second), (key, creatures))
+        self.assertNotEqual(audit.catalogue_snapshot_key('other', first)[0], key)
+        self.assertNotEqual(audit.catalogue_snapshot_key('base', [dict(creatures=[9499])])[0], key)
+
+    def test_full_audit_rebuilds_catalogue_content_from_its_new_base(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            root = Path(directory)
+            (root / 'catalogue.json').write_text(json.dumps([dict(creatures=[9499], characters=['Vendor'])]))
+            (root / 'deployment-schema.json').write_text('{}')
+            with patch.object(audit, 'SCENARIO_CACHE', root), \
+                    patch.object(audit, 'validate_snapshot', return_value=True), \
+                    patch.object(audit, 'snapshot_origin', return_value='snapshot'), \
+                    patch.object(audit, 'scenario_realm', side_effect=RuntimeError('new base required')), \
+                    self.assertRaisesRegex(RuntimeError, 'new base required'):
+                audit.prepare_catalogue_snapshot(root, 'base', {'database_commit': 'pin'}, root,
+                                                 require_snapshot=False, fresh=True)
+
+    def test_rehearsal_cannot_prepare_missing_catalogue_content(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            root = Path(directory)
+            (root / 'catalogue.json').write_text(json.dumps([dict(creatures=[9499])]))
+            with patch.object(audit, 'SNAPSHOT_STORE', root / 'snapshots'), \
+                    patch.object(audit, 'run') as run, \
+                    self.assertRaisesRegex(RuntimeError, 'catalogue snapshot missing'):
+                audit.prepare_catalogue_snapshot(root, 'base', {'database_commit': 'pin'}, root,
+                                                 require_snapshot=True)
+            run.assert_not_called()
 
 
 class Rehearsal(unittest.TestCase):

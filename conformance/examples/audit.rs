@@ -62,6 +62,14 @@ fn export(directory: &Path) -> Result<()> {
         } else {
             vec![&golden.scenario().fixtures]
         };
+        let creatures = fixtures
+            .iter()
+            .flat_map(|fixtures| fixtures.iter())
+            .filter_map(|fixture| match fixture {
+                FixtureVerb::Creature { entry, .. } => Some(*entry),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         let characters = fixtures
             .into_iter()
             .map(|fixtures| match &fixtures[0] {
@@ -74,7 +82,9 @@ fn export(directory: &Path) -> Result<()> {
             directory.join(format!("{}-golden.json", entry.id)),
             entry.trace,
         )?;
-        scenarios.push(serde_json::json!({"id": entry.id, "characters": characters}));
+        scenarios.push(
+            serde_json::json!({"id": entry.id, "characters": characters, "creatures": creatures}),
+        );
     }
     std::fs::write(
         directory.join("catalogue.json"),

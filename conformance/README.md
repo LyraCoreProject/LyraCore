@@ -597,6 +597,15 @@ Run one scenario while climbing a Behavior:
 ./conformance/audit --scenario taxi_single_hop --check --agreement --json --client-data /path/to/client/Data
 ```
 
+Catalogue fixture creatures can lie outside the `alliance-single` slice. A local `--check`
+prepares a catalogue snapshot from the cached base world with the existing importer's
+`--include-creatures` option. It loads World Source rows and client catalogues for the required
+creature and vendor content; terrain, navigation and collision data are retained. This is a warm
+preparation, without a new full world import. The catalogue key covers the base key, required
+creature entries and the preparation code. The store keeps this snapshot together with its base.
+Rehearsal requires the prepared catalogue snapshot and refuses to prepare it. Full audits build it
+from their newly imported base world, even when an older catalogue snapshot exists.
+
 The local check captures the scenario on both servers and compares each candidate with its Golden
 Trace. It prints the same grouped text or JSON fields as `./conformance/run`. Its `baseline` field
 compares rule and data signatures with the newest committed full audit report. Exit 0 means those
@@ -641,7 +650,8 @@ and restore that new snapshot before every scenario. They never reuse an earlier
 import. Equivalence between upgraded and freshly imported worlds is not claimed.
 
 Snapshots from the older schema-keyed format take the cold path once. The store retains the newest
-two snapshots and removes older ones after a successful seal. A cold import that replaces an
+two snapshots and removes older ones after a successful seal. A catalogue snapshot retains its base
+world as the second snapshot, so fixture changes cannot evict the expensive base import. A cold import that replaces an
 incompatible snapshot keeps the old seal until the new import is sealed. Abandoned `.pending`
 directories are removed under the shared snapshot-store lock. Copying requires the world size plus
 10% or 256 MiB of free space, whichever reserve is larger. A failed seal retains the stopped imported
