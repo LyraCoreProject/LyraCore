@@ -1,5 +1,5 @@
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from concurrent.futures import ThreadPoolExecutor
 import datetime
 import fcntl
@@ -102,9 +102,9 @@ def tree_hash(paths):
     return checksum.hexdigest()
 
 
-def schema_fingerprint(schema):
+def canonical_schema(schema):
     if set(schema) != {'V10'}:
-        raise RuntimeError('audit snapshot schema hashing requires a V10 Module definition')
+        raise RuntimeError('audit snapshots require a V10 Module definition')
     sections = {name: value for section in schema['V10']['sections'] for name, value in section.items()}
     types = sections.pop('Typespace')['types']
     names = {item['ty']: item['source_name'] for item in sections['Types']}
@@ -134,7 +134,47 @@ def schema_fingerprint(schema):
         canonical[name] = normalize(value)
         if isinstance(value, list):
             canonical[name].sort(key=lambda entry: json.dumps(entry, sort_keys=True))
-    return hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
+    return canonical
+
+
+def schema_fingerprint(schema):
+    return hashlib.sha256(json.dumps(canonical_schema(schema), sort_keys=True).encode()).hexdigest()
+
+
+def compatible_schema(previous, current):
+    old_tables = {table['source_name']: table for table in previous['Tables']}
+    new_tables = {table['source_name']: table for table in current['Tables']}
+    if any(new_tables.get(name) != table for name, table in old_tables.items()):
+        return False
+    if any(table['table_access'] != {'Private': []} or table.get('is_event', False)
+           for name, table in new_tables.items() if name not in old_tables):
+        return False
+    if any(current['Typespace'].get(name) != value
+           for name, value in previous['Typespace'].items()):
+        return False
+    for section in previous.keys() | current.keys():
+        if section in ['Tables', 'Typespace']:
+            continue
+        old, new = previous.get(section), current.get(section)
+        if section == 'ExplicitNames':
+            old, new = old['entries'], new['entries']
+        if section in ['Types', 'Reducers', 'ExplicitNames']:
+            if any(entry not in new for entry in old):
+                return False
+        elif old != new:
+            return False
+    return True
+
+
+def snapshot_origin(path, schema):
+    previous = json.loads((path / 'state.json').read_text()).get('module_schema')
+    if previous == schema:
+        return 'snapshot'
+    if previous is not None and compatible_schema(previous, schema):
+        return 'upgraded_snapshot'
+    print('[audit] snapshot schema is incompatible or missing; cold import required',
+          file=sys.stderr, flush=True)
+    return None
 
 
 def module_schema_hash():
@@ -158,7 +198,9 @@ def module_schema_hash():
     with timed('Module schema extraction'):
         extracted = run_with_diagnostic([host_checkout / 'target/release/spacetimedb-standalone',
                                          'extract-schema', module], timeout=120)
-    return schema_fingerprint(json.loads(extracted.stdout))
+    schema = json.loads(extracted.stdout)
+    write_state(SCENARIO_CACHE / 'deployment-schema.json', canonical_schema(schema))
+    return schema_fingerprint(schema)
 
 
 # Read README.md's import contract before extending the import or initialization call paths.
@@ -213,12 +255,12 @@ def import_contract_paths():
     return sorted(paths)
 
 
-def scenario_key(harness, client_data, schema_hash):
+def scenario_key(harness, client_data):
     pins = json.loads((harness / 'adapters/vmangos/pins.json').read_text())
     with timed('client data fingerprint'):
         client_hash = client_fingerprint(client_data)
     contract = tree_hash(import_contract_paths())
-    key = dict(import_contract_sha256=contract, module_schema_sha256=schema_hash,
+    key = dict(snapshot_version=2, import_contract_sha256=contract,
                vmangos_database_commit=pins['database_commit'],
                cli_revision=(ROOT / '.lyracore-cli-rev').read_text().strip(),
                client_sha256=client_hash)
@@ -370,15 +412,48 @@ def seal_snapshot(key, realm_root, password):
         item.chmod(0o500 if item.is_dir() else 0o400)
     manifest = dict(data=file_manifest(pending / 'native-data'),
                     jwt=file_manifest(pending / 'native-jwt'))
-    write_state(pending / 'state.json', dict(key=key, manifest=manifest))
+    schema = json.loads((SCENARIO_CACHE / 'deployment-schema.json').read_text())
+    write_state(pending / 'state.json', dict(key=key, manifest=manifest, module_schema=schema))
     (pending / 'state.json').chmod(0o400)
     pending.chmod(0o500)
-    pending.rename(snapshot_path(key))
+    existing = snapshot_path(key)
+    if existing.exists():
+        writable_tree(existing)
+        shutil.rmtree(existing)
+    pending.rename(existing)
     for old in sorted((p for p in SNAPSHOT_STORE.iterdir()
                        if p.is_dir() and p.name != key and (p / 'state.json').is_file()),
                       key=lambda p: p.stat().st_mtime, reverse=True)[1:]:
         writable_tree(old)
         shutil.rmtree(old)
+
+
+class SnapshotUpgradeError(RuntimeError):
+    pass
+
+
+def start_realm(realm_root, cli, env, *, restored=False):
+    try:
+        run_with_diagnostic([cli, 'dev', 'up', '--single'], env=env, cwd=realm_root)
+    except (RuntimeError, subprocess.TimeoutExpired) as error:
+        if restored:
+            raise SnapshotUpgradeError(str(error)) from error
+        raise
+
+
+def verify_realm_schema(realm_root, env, *, restored=False):
+    try:
+        schema = run_with_diagnostic(
+            [realm_root.parent / 'bin/spacetime', '--config-path',
+             realm_root / '.lyracore/native-cli.toml', 'describe', '--json',
+             '-s', 'http://127.0.0.1:3000', 'lyracore'], env=env, cwd=realm_root)
+        expected = json.loads((SCENARIO_CACHE / 'deployment-schema.json').read_text())
+        if canonical_schema({'V10': json.loads(schema.stdout)}) != expected:
+            raise RuntimeError('published Module schema differs from deployment Module')
+    except (RuntimeError, ValueError, subprocess.TimeoutExpired) as error:
+        if restored:
+            raise SnapshotUpgradeError(str(error)) from error
+        raise
 
 
 def restore_imported_world(realm_root, seed, cli, env):
@@ -388,8 +463,7 @@ def restore_imported_world(realm_root, seed, cli, env):
     shutil.rmtree(native_data)
     shutil.copytree(seed, native_data)
     writable_tree(native_data)
-    run([cli, 'dev', 'up', '--single'], env=env, cwd=realm_root,
-        stdout=subprocess.DEVNULL)
+    start_realm(realm_root, cli, env, restored=True)
 
 
 def retain_host_build(realm_root):
@@ -783,6 +857,23 @@ def local_realm(work, client_data, peer_count):
 
 @contextmanager
 def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False):
+    with ExitStack() as lifetime:
+        try:
+            realm = lifetime.enter_context(prepare_scenario_realm(
+                key, pins, client_data, peer_count, require_snapshot=require_snapshot))
+        except SnapshotUpgradeError as error:
+            print(f'[audit] snapshot publish or initialization failed: {error}', file=sys.stderr, flush=True)
+            if require_snapshot:
+                raise RuntimeError('--require-snapshot forbids cold import after snapshot upgrade failure') from error
+            print('[audit] falling back to a fresh world import', file=sys.stderr, flush=True)
+            realm = lifetime.enter_context(prepare_scenario_realm(
+                key, pins, client_data, peer_count, use_snapshot=False))
+        yield realm
+
+
+@contextmanager
+def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False,
+                           use_snapshot=True):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('clean core working tree required; commit changes before scenario capture')
     if (ROOT / '.lyracore-cli-rev').read_text().strip() != '30814fe814edbfa3a143102f93008080482df6a6':
@@ -805,7 +896,10 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
         cli_env.pop('CARGO_TARGET_DIR', None)
         cli_env['PATH'] = str(bin_dir) + ':' + cli_env['PATH']
         snapshot = snapshot_path(key)
-        saved = validate_snapshot(snapshot, key)
+        schema = json.loads((SCENARIO_CACHE / 'deployment-schema.json').read_text())
+        origin = (snapshot_origin(snapshot, schema)
+                  if use_snapshot and validate_snapshot(snapshot, key) else None)
+        saved = origin is not None
         if require_snapshot and not saved:
             raise RuntimeError(f'no imported-world snapshot for {key}; --require-snapshot forbids an import')
         current = git('rev-parse', 'HEAD')
@@ -815,11 +909,12 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
         if state and state['phase'] == 'importing':
             raise RuntimeError(f'interrupted import retained at {realm_root}; inspect it before cleanup')
         if state and state['phase'] == 'imported':
-            if state['key'] != key:
+            if state['key'] != key or state['core_commit'] != current:
                 raise RuntimeError(f'unsealed imported world retained at {realm_root}; seal it before changing inputs')
             stop_realm(realm_root, cli, cli_env)
             seal_snapshot(key, realm_root, (cache / 'password').read_text().strip())
             saved = True
+            origin = 'fresh_import'
         if state and (not saved or state['key'] != key or state['core_commit'] != current
                       or state['phase'] != 'ready'):
             if (realm_root / '.lyracore').exists():
@@ -859,8 +954,8 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
                 (SCENARIO_CACHE / 'native-host').mkdir(exist_ok=True)
                 (native / 'native-host').symlink_to(SCENARIO_CACHE / 'native-host', target_is_directory=True)
                 with timed('Realm start'):
-                    run([cli, 'dev', 'up', '--single'], env=cli_env, cwd=realm_root,
-                        stdout=subprocess.DEVNULL)
+                    start_realm(realm_root, cli, cli_env, restored=saved)
+                    verify_realm_schema(realm_root, cli_env, restored=saved)
                 if not saved:
                     password = secrets.token_hex(8)
                     (cache / 'password').write_text(password + '\n')
@@ -878,11 +973,12 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
                     with timed('imported world snapshot'):
                         stop_realm(realm_root, cli, cli_env)
                         seal_snapshot(key, realm_root, password)
-                        run([cli, 'dev', 'up', '--single'], env=cli_env, cwd=realm_root,
-                            stdout=subprocess.DEVNULL)
+                        start_realm(realm_root, cli, cli_env, restored=True)
+                        verify_realm_schema(realm_root, cli_env, restored=True)
                 else:
                     print('[audit] import: 0.00s (cached snapshot)', file=sys.stderr, flush=True)
                 state = dict(phase='ready', key=key, core_commit=current,
+                             world_origin=origin or 'fresh_import',
                              native_host_sha256=digest(realm_root / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone'),
                              module_sha256=digest(SCENARIO_CACHE / 'deployment.wasm'),
                              database_commit=pins['database_commit'])
@@ -890,7 +986,7 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
             except BaseException:
                 if (realm_root / '.lyracore').exists():
                     stop_realm(realm_root, cli, cli_env)
-                if state and state['phase'] in ['importing', 'imported'] and not snapshot.exists():
+                if state and state['phase'] in ['importing', 'imported']:
                     print(f'[audit] retaining stopped imported world at {realm_root}', file=sys.stderr)
                     raise
                 if (realm_root / '.git').exists():
@@ -899,9 +995,15 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
                 shutil.rmtree(cache)
                 raise
         else:
-            with timed('Realm start'):
-                restore_imported_world(realm_root, snapshot / 'native-data', cli, cli_env)
+            try:
+                with timed('Realm start'):
+                    restore_imported_world(realm_root, snapshot / 'native-data', cli, cli_env)
+                    verify_realm_schema(realm_root, cli_env, restored=True)
+            except SnapshotUpgradeError:
+                stop_realm(realm_root, cli, cli_env)
+                raise
             print('[audit] import: 0.00s (cached snapshot)', file=sys.stderr, flush=True)
+            state['world_origin'] = origin
             state['native_host_sha256'] = digest(realm_root / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone')
             state['module_sha256'] = digest(SCENARIO_CACHE / 'deployment.wasm')
             write_state(marker, state)
@@ -912,6 +1014,10 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
         token = realm_root / '.lyracore/native-owner-token'
         if not token.is_file():
             raise RuntimeError('cached Realm has no Operator token')
+        imported = json.loads((realm_root / '.import/vmangos/current.json').read_text())
+        if imported['commit'] != pins['database_commit']:
+            raise RuntimeError('restored world differs from Reference Server data pin')
+        print(f"[audit] world origin: {state['world_origin']}", file=sys.stderr, flush=True)
         password = (snapshot / 'password').read_text().strip()
         for account in ['CONFORMANCE', *(f'CONFORMANCE{peer}' for peer in range(2, peer_count + 2))]:
             run([cli, 'account', 'create', account, '--password-stdin'],
@@ -1009,7 +1115,7 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, r
             if (digest(host) != state['native_host_sha256'] or digest(module) != state['module_sha256']
                     or snapshot['commit'] != state['database_commit']):
                 raise RuntimeError('cached Realm Module, Native Host or imported data changed during capture')
-            yield
+            yield state['world_origin']
 
 
 def setup_failure(scenario, json_mode, diagnostic):
@@ -1078,8 +1184,8 @@ def run_scenario(args, harness, target, core_commit):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('clean core working tree required; commit changes before scenario capture')
     with timed('Module schema fingerprint'):
-        schema_hash = module_schema_hash()
-    key, pins = scenario_key(harness, args.client_data, schema_hash)
+        module_schema_hash()
+    key, pins = scenario_key(harness, args.client_data)
     with scenario_work() as work:
         os.environ['TMPDIR'] = str(work)
         audit = target / 'debug/examples/audit'
@@ -1097,7 +1203,7 @@ def run_scenario(args, harness, target, core_commit):
                                    + (tier1.stderr + tier1.stdout).strip())
         run_with_diagnostic([audit, 'export', work])
         with capture_scenario(harness, wire, work, args.scenario, key, pins, str(args.client_data),
-                              require_snapshot=args.require_snapshot):
+                              require_snapshot=args.require_snapshot) as world_origin:
             if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
                 raise RuntimeError('core changed during scenario capture; commit and rerun')
             with timed('comparison and output'):
@@ -1112,6 +1218,11 @@ def run_scenario(args, harness, target, core_commit):
                 if rendered.returncode not in [0, 1] or not rendered.stdout:
                     raise RuntimeError('could not render the completed scenario comparison: '
                                        + rendered.stderr.strip())
+                if args.json:
+                    output = dict(json.loads(rendered.stdout), world_origin=world_origin)
+                    rendered.stdout = json.dumps(output, indent=2) + '\n'
+                else:
+                    rendered.stdout += f'World origin: {world_origin}\n'
                 if args.agreement:
                     agreement = agreement_result(work / 'tier1.json', work / 'result.json', args.scenario)
                     if args.json:
@@ -1141,29 +1252,31 @@ def scenario_main(args):
         raise RuntimeError('Docker is unavailable or docker group access is missing: '
                            + docker.stderr.strip())
     SCENARIO_CACHE.mkdir(parents=True, exist_ok=True)
-    temporary = SCENARIO_CACHE / 'tmp'
-    temporary.mkdir(exist_ok=True)
-    os.environ['TMPDIR'] = str(temporary)
-    target = SCENARIO_CACHE / 'target'
-    os.environ['CARGO_TARGET_DIR'] = str(target)
-    os.environ['PATH'] = str(Path.home() / '.cargo/bin') + ':' + os.environ['PATH']
-    os.chdir(ROOT)
-    core_commit = git('rev-parse', 'HEAD')
-    revision = next(line.split()[1] for line in (ROOT / '.wire-harness-rev').read_text().splitlines()
-                    if line.strip() and not line.startswith('#'))
-    for directory in [ROOT, *ROOT.parents]:
-        check_cargo_config(directory / '.cargo')
-    cargo_home = Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo'))
-    check_cargo_config(cargo_home)
-    metadata = json.loads(run(['cargo', 'metadata', '--locked', '--format-version', '1'],
-                              capture_output=True, text=True).stdout)
-    harness = pinned_harness(metadata, revision, cargo_home)
-    with timed('build'):
-        run(['cargo', 'build', '--locked', '-p', 'lyracore-conformance',
-             '--example', 'audit', '--example', 'run'], stdout=subprocess.DEVNULL)
-        run(['cargo', 'build', '--locked', '--manifest-path', harness / 'Cargo.toml',
-             '--bin', 'vanilla-wire'], stdout=subprocess.DEVNULL)
-    return run_scenario(args, harness, target, core_commit)
+    with (SCENARIO_CACHE / '.check.lock').open('w') as ownership:
+        lock_owned_state(ownership, 'scenario check')
+        temporary = SCENARIO_CACHE / 'tmp'
+        temporary.mkdir(exist_ok=True)
+        os.environ['TMPDIR'] = str(temporary)
+        target = SCENARIO_CACHE / 'target'
+        os.environ['CARGO_TARGET_DIR'] = str(target)
+        os.environ['PATH'] = str(Path.home() / '.cargo/bin') + ':' + os.environ['PATH']
+        os.chdir(ROOT)
+        core_commit = git('rev-parse', 'HEAD')
+        revision = next(line.split()[1] for line in (ROOT / '.wire-harness-rev').read_text().splitlines()
+                        if line.strip() and not line.startswith('#'))
+        for directory in [ROOT, *ROOT.parents]:
+            check_cargo_config(directory / '.cargo')
+        cargo_home = Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo'))
+        check_cargo_config(cargo_home)
+        metadata = json.loads(run(['cargo', 'metadata', '--locked', '--format-version', '1'],
+                                  capture_output=True, text=True).stdout)
+        harness = pinned_harness(metadata, revision, cargo_home)
+        with timed('build'):
+            run(['cargo', 'build', '--locked', '-p', 'lyracore-conformance',
+                 '--example', 'audit', '--example', 'run'], stdout=subprocess.DEVNULL)
+            run(['cargo', 'build', '--locked', '--manifest-path', harness / 'Cargo.toml',
+                 '--bin', 'vanilla-wire'], stdout=subprocess.DEVNULL)
+        return run_scenario(args, harness, target, core_commit)
 
 
 def stop_scenario_cache():

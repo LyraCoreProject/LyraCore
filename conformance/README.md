@@ -599,23 +599,43 @@ differs. A tier 1 setup failure exits 2 with its diagnostic.
 
 The first check creates a disposable Realm worktree and imports the pinned vmangos world. It seals
 the imported Realm at `$HOME/.cache/lyracore/conformance-worlds/<key>/`. The key covers the explicit
-import contract below, the full Module schema extracted from the deployment WASM, the vmangos
-database pin, the client Data bytes, and the CLI pin. Gameplay edits outside the import contract
-reuse the snapshot. Schema hashing includes table defaults, access and event flags. It normalizes
-type references and unordered definitions while preserving column and enum variant order. Later
-checks copy the snapshot into a new worktree at the current core commit; `dev up` publishes the
-current Module through SpacetimeDB's migration check. A schema change changes the key and requires a
-new import. The store retains the newest two snapshots and removes older ones after a successful
-seal. Abandoned `.pending` directories are removed under the shared snapshot-store lock. Copying
-requires the world size plus 10% or 256 MiB of free space, whichever reserve is larger. A failed
-seal retains the stopped imported world and its password. The next check retries sealing without
-importing again. An interrupted import requires inspection before cleanup. Do not edit a sealed
-snapshot. Add `--require-snapshot` to forbid a cold import. A missing or changed import key then
-exits 2.
+import contract below, the vmangos database pin, the client Data bytes, the CLI pin and the snapshot
+format version. The seal records the full Module schema extracted from the deployment WASM.
+Gameplay edits outside the import contract reuse the snapshot.
 
-Each check restores the imported data before capture. The active Realm, target directory and
-temporary files live under `$HOME/.cache/lyracore-scratch/m5c/`, or `LYRACORE_AUDIT_SCRATCH` when
-set. The runner waits for its Native Host to exit before replacing or deleting data. It records
+A check can also reuse a snapshot after adding ordinary private tables. Every existing table,
+default, access flag, event flag and named type must remain unchanged. Existing reducer definitions
+and explicit names must remain present. Schedules, outboxes, lifecycle declarations and other schema
+sections must remain unchanged. New public or event tables and changes to existing table columns,
+including defaulted end-appended columns, take the cold path. A successful SpacetimeDB migration
+alone does not establish that a column default needs no backfill; see
+[danger zones](../docs/danger-zones.md#1-do-not-touch-traps).
+
+Checks restore the stopped snapshot with its original Module, then `dev up` publishes the current
+Module through SpacetimeDB's normal migration check. The pinned CLI calls
+`debug_repair_after_publish`; `init` does not run again. Before capture, the runner verifies the
+published schema against the deployment WASM and checks the imported revision. A failed publish,
+initialization or schema verification stops the restored Realm and prints the diagnostic before
+falling back to a fresh import. A failed fresh start fails the check. `--require-snapshot` forbids
+both a missing or incompatible snapshot and the cold fallback after an upgrade failure.
+
+The check output includes `world_origin`: `fresh_import`, `snapshot` or `upgraded_snapshot`. Text
+output prints the same value as `World origin`. Agreement JSON carries it inside `audit`. This is
+local check evidence only. Full audits always import a fresh world; their append-only reports never
+use these snapshots. Equivalence between upgraded and freshly imported worlds is not claimed.
+
+Snapshots from the older schema-keyed format take the cold path once. The store retains the newest
+two snapshots and removes older ones after a successful seal. A cold import that replaces an
+incompatible snapshot keeps the old seal until the new import is sealed. Abandoned `.pending`
+directories are removed under the shared snapshot-store lock. Copying requires the world size plus
+10% or 256 MiB of free space, whichever reserve is larger. A failed seal retains the stopped imported
+world and its password. The next check at the same core commit retries sealing without importing
+again. An interrupted import requires inspection before cleanup. Do not edit a sealed snapshot.
+
+Each check owns its scratch directory before building deployment artifacts; a concurrent check
+using that directory fails before it can replace them. Each check restores the imported data before
+capture. The active Realm, target directory and temporary files live under `$HOME/.cache/lyracore-scratch/m5c/`,
+or `LYRACORE_AUDIT_SCRATCH` when set. The runner waits for its Native Host to exit before replacing or deleting data. It records
 process ownership before startup and checks the CLI's PID identities before stopping it. It retains
 those records across a shutdown timeout, even when the CLI clears its own records. Native Host build
 output survives gameplay checkout changes; `dev up` still checks the current Host source and
@@ -640,7 +660,7 @@ Phase timings go to stderr, leaving JSON on stdout. They include builds, schema 
 hashing, Realm startup, import, snapshot sealing, both captures and comparison. Agreement also
 reports its tier 1 time. The runner builds one deployment WASM and uses that file for schema
 extraction, preflight bindings and publication. With at least four available CPUs, the two wire
-captures run concurrently. A warm check prints `import: 0.00s (cached snapshot)`.
+captures run concurrently. A warm check prints `import: 0.00s (cached snapshot)` and identifies its world origin.
 
 A failed reference comparison prints its scrubbed differences, including signatures and expected and
 actual values, before exit 2. Both comparisons and captures survive work-directory cleanup under
@@ -664,8 +684,11 @@ checks that every reachable child module is hashed.
 
 Files shared by import and gameplay are conservatively included in full. Taxi request handling and
 other gameplay outside these paths do not invalidate the snapshot. Extend the contract when an
-import or initialization call gains another dependency or data file. A schema change always
-invalidates it, even when the changed table is outside these paths.
+import or initialization call gains another dependency or data file. Adding an importer table, such
+as `game_quest_flags`, changes the importer sources and therefore the key: publishing an empty new
+table cannot supply its imported rows. The key test covers a newly added importer source file as
+well as edits to existing import and initialization sources. Additive schema reuse applies only
+when these inputs are unchanged.
 
 Prepare the pinned Reference Server once with the harness's
 [setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/adapters/vmangos/README.md).
