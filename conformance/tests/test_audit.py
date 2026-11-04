@@ -266,12 +266,16 @@ class ScenarioKey(unittest.TestCase):
                 self.assertEqual(first, audit.scenario_key(harness, client)[0])
                 for name in ['Cargo.lock', 'crates/lyracore-shared/src/nav.rs',
                              'module/src/seed.rs', 'module/src/seed/fixtures.rs',
-                             'module/src/operations.rs', 'module/src/package_import/creatures.rs']:
+                             'module/src/operations.rs', 'module/src/package_import/creatures.rs',
+                             'importer/src/game_quest_flags.rs']:
                     with self.subTest(import_input=name):
                         path = root / name
                         path.write_text('changed')
                         self.assertNotEqual(first, audit.scenario_key(harness, client)[0])
-                        path.write_text('original')
+                        if name == 'importer/src/game_quest_flags.rs':
+                            path.unlink()
+                        else:
+                            path.write_text('original')
                 (client / 'dbc.MPQ').write_bytes(b'other')
                 changed_client, _ = audit.scenario_key(harness, client)
                 pins['database_commit'] = 'b' * 40
@@ -913,6 +917,9 @@ class ScenarioRealmReuse(unittest.TestCase):
         self.commit = 'first-gameplay'
         self.running = False
         self.imports = 0
+        self.fail_publish = False
+        self.fail_schema = False
+        self.schema = ModuleSchema().schema()
         self.pins = {'database_commit': 'pin'}
         (self.cache / 'deployment-schema.json').write_text(json.dumps(audit.canonical_schema(ModuleSchema().schema())))
         (self.root / '.lyracore-cli-rev').write_text('30814fe814edbfa3a143102f93008080482df6a6')
@@ -923,7 +930,6 @@ class ScenarioRealmReuse(unittest.TestCase):
             self.addCleanup(patched.stop)
         for patched in [patch.object(audit, 'run', side_effect=self.fake_run),
                         patch.object(audit, 'free_port'),
-                        patch.object(audit, 'start_realm', side_effect=lambda realm, cli, env, **_: self.fake_run([cli, 'dev', 'up'])),
                         patch.object(audit.shutil, 'which', return_value='/usr/bin/spacetime')]:
             patched.start()
             self.addCleanup(patched.stop)
@@ -940,7 +946,12 @@ class ScenarioRealmReuse(unittest.TestCase):
         elif args[:3] == ['git', 'worktree', 'remove']:
             self.assertFalse(self.running)
             shutil.rmtree(self.realm)
+        elif 'describe' in args:
+            output = json.dumps(ModuleSchema().schema() if self.fail_schema else self.schema)
         elif args[1:3] == ['dev', 'up']:
+            if self.fail_publish and (self.realm / '.lyracore/native-data/world').exists():
+                self.fail_publish = False
+                raise audit.subprocess.CalledProcessError(1, args, stderr=b'upgrade initialization failed')
             self.assertTrue((self.cache / 'realm/state.json').is_file())
             self.running = True
             native = self.realm / '.lyracore'
@@ -969,6 +980,55 @@ class ScenarioRealmReuse(unittest.TestCase):
             current.parent.mkdir(parents=True)
             current.write_text(json.dumps({'commit': 'pin'}))
         return audit.subprocess.CompletedProcess(args, 0, stdout=output)
+
+    def add_private_table(self):
+        self.schema['V10']['sections'][2]['Tables'].append(dict(
+            source_name='companion', product_type_ref=0, primary_key=[0],
+            table_access={'Private': []}, is_event=False))
+        (self.cache / 'deployment-schema.json').write_text(
+            json.dumps(audit.canonical_schema(self.schema)))
+
+    def test_private_table_reuses_imported_rows_and_records_upgrade(self):
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            pass
+        self.add_private_table()
+        self.commit = 'additive-schema'
+        with audit.scenario_realm('key', self.pins, self.root, 0) as (*_, realm):
+            self.assertEqual((realm / '.lyracore/native-data/world').read_text(), 'imported')
+            state = json.loads((self.cache / 'realm/state.json').read_text())
+            self.assertEqual(state['world_origin'], 'upgraded_snapshot')
+        self.assertEqual(self.imports, 1)
+
+    def test_failed_upgrade_imports_again_and_records_fresh_world(self):
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            pass
+        self.add_private_table()
+        self.fail_publish = True
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            state = json.loads((self.cache / 'realm/state.json').read_text())
+            self.assertEqual(state['world_origin'], 'fresh_import')
+        self.assertEqual(self.imports, 2)
+
+    def test_failed_upgrade_with_required_snapshot_never_imports(self):
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            pass
+        self.add_private_table()
+        self.fail_publish = True
+        with self.assertRaisesRegex(RuntimeError, 'forbids cold import'):
+            with audit.scenario_realm('key', self.pins, self.root, 0, require_snapshot=True):
+                self.fail('failed upgrade cannot supply evidence')
+        self.assertEqual(self.imports, 1)
+        self.assertFalse(self.running)
+
+    def test_existing_table_change_imports_again(self):
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            pass
+        self.schema['V10']['sections'][2]['Tables'][0]['default_values'] = []
+        (self.cache / 'deployment-schema.json').write_text(
+            json.dumps(audit.canonical_schema(self.schema)))
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            pass
+        self.assertEqual(self.imports, 2)
 
     def test_gameplay_commit_copies_snapshot_and_publishes_current_module(self):
         with audit.scenario_realm('key', self.pins, self.root, 0) as (_, _, _, module, realm):
