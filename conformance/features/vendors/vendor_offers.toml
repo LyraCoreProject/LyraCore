@@ -3,16 +3,16 @@ id = "vendor_offers"
 system = "vendors"
 scope = "A vendor shows available items, conditions and restock state."
 requests = []
-replies = []
+replies = ["0x019F", "0x01A4", "0x01A5", "0x0166"]
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
-scenarios = []
+scenarios = ["vendor_offers"]
 deliberate_deviations = []
 prerequisites = []
 tests = []
 
 [vmangos]
-commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/ObjectMgr.cpp"
 symbol = "ObjectMgr::LoadVendors"
 

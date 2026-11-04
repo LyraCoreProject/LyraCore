@@ -1,5 +1,6 @@
 // See conformance/README.md#quest-data for fixture provenance and scope.
 pub const STATEMENTS: &[&str] = &[
+    "INSERT INTO game_quest_flags (quest_entry,flags) VALUES (2158,8)",
     "INSERT INTO game_quest_flags (quest_entry,flags) VALUES (433,8)",
     "INSERT INTO game_quest_template (entry,min_level,quest_level,title,reward_money,reward_xp,\
     prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,\
@@ -31,4 +32,9 @@ pub const STATEMENTS: &[&str] = &[
     money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,\
     pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class)VALUES (1977,'Fixture giver',\
     '',1570,50,1,55,2,0,7,0,0,0,1,1500,0,0,50,1,0,0,0,0,0,0,0,0)",
+    "INSERT INTO game_quest_template (entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level,quest_type) VALUES (2158,1,5,'Fixture quest 2158',0,110,0,0,0,12,72,25,0,0,0,0,false,0,0,60,0)",
+    "INSERT INTO game_quest_text (quest_entry,details,objectives,offer_reward_text,request_items_text) VALUES (2158,'Fixture details 2158.','Fixture objectives 2158.','Fixture reward 2158.','Fixture request 2158.')",
+    "INSERT INTO game_quest_text (quest_entry,details,objectives,offer_reward_text,request_items_text) VALUES (7,'Fixture details 7.','Fixture objectives 7.','Fixture reward 7.','Fixture request 7.')",
+    "INSERT INTO game_quest_reward_choice (id,quest_entry,choice_index,item_entry,count) VALUES (1,2158,0,4656,5),(2,2158,1,159,5)",
+    "INSERT INTO game_creature_quest (id,creature_entry,quest_entry,role) VALUES (3,197,7,1),(4,295,2158,1),(5,6774,2158,0)",
 ];

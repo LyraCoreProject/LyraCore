@@ -3,10 +3,10 @@ id = "vendor_transactions"
 system = "vendors"
 scope = "A Character can browse, buy, sell, buy back and repair items at a vendor."
 requests = ["0x019E", "0x01A0", "0x01A2", "0x01A3", "0x0290", "0x02A8"]
-replies = []
+replies = ["0x019F", "0x01A4", "0x01A5", "0x01A1", "0x0166"]
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
-scenarios = []
+scenarios = ["vendor_transactions"]
 deliberate_deviations = []
 prerequisites = []
 tests = []
@@ -24,3 +24,9 @@ description = "The Module returns an unavailable response for CMSG_BUY_ITEM_IN_S
 path = "module/src/native/unavailable.rs"
 symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
+
+[[known_gaps]]
+description = "Starter inventory links and buyback fields differ from the recording. Core assigns the Hearthstone to slot 38 and represents buyback items with synthetic GUIDs and zero timestamps."
+path = "module/src/native/economy.rs"
+symbol = "send_buyback"
+evidence = "vendor_transactions tier 1: buy slot 25 instead of 26; Character inventory and buyback GUID words; expiry field 1238 is zero."
