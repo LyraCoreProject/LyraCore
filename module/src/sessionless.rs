@@ -116,6 +116,7 @@ pub(crate) fn set_sessionless_action_consent(
         .game_character_relocation()
         .character_guid()
         .delete(character_guid);
+    crate::native::realm_party::package::presence(ctx, character_guid);
 }
 
 pub(crate) fn action_gate(

@@ -201,6 +201,18 @@ fn apply_sessionless_group_action(ctx: &ReducerContext, actor_guid: u64, action:
         refused(refusal, "Companion group action");
         return;
     }
+    if crate::peer::realm_shard(ctx).is_some() {
+        use crate::native::realm_party::package::{self, Action};
+        let action = match action {
+            GroupAction::Invite(target) => Action::Invite(target),
+            GroupAction::Leave { .. } => Action::Leave,
+            _ => return,
+        };
+        if let Err(error) = package::submit(ctx, actor_guid, action) {
+            spacetimedb::log::warn!("Package Group request for {actor_guid} refused: {error}");
+        }
+        return;
+    }
     let result = apply_action(ctx, Plane::Shard, actor_guid, action).and_then(|()| {
         if let GroupAction::Invite(target_guid) = action {
             answer_sessionless_invite(ctx, target_guid)
@@ -1109,6 +1121,13 @@ pub(crate) fn accept_invite_for(ctx: &ReducerContext, acceptor_guid: u64) -> Res
     if acceptor.as_ref().is_some_and(|character| !character.online) {
         crate::sessionless::group_action_gate(ctx, acceptor_guid)
             .map_err(|refusal| refused(refusal, "session-less group acceptance"))?;
+        if crate::native::realm_party::package::submit(
+            ctx,
+            acceptor_guid,
+            crate::native::realm_party::package::Action::Accept,
+        )? {
+            return Ok(());
+        }
     }
     let class = acceptor.map_or(0, |character| character.class);
     apply_action_for(ctx, acceptor_guid, GroupAction::Accept { class })

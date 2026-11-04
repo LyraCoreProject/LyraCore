@@ -135,7 +135,7 @@ jobs:
           - group: Handoff
             checks: handoff realm-shard
           - group: continent Shards
-            checks: continent-shards realm-communication instance-shard instance-allocation character-names package-creation
+            checks: continent-shards realm-communication instance-shard instance-allocation character-names package-creation package-groups
     name: checks (${{ matrix.group }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

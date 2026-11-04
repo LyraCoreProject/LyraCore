@@ -26,6 +26,7 @@ import instance_shard
 import instance_allocation
 import character_names
 import package_creation
+import package_groups
 from instance_reset import check_instance_resets
 import retention
 from spell_source import check_spell_source_behavior
@@ -5483,6 +5484,7 @@ ALONE = {
     'instance-allocation': (instance_allocation.check, {'seeded': True}),
     'character-names': (character_names.check, {'seeded': True}),
     'package-creation': (package_creation.check, {'seeded': True}),
+    'package-groups': (package_groups.check, {'seeded': True}),
 }
 
 

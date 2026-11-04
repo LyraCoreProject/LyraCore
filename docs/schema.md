@@ -191,6 +191,17 @@ Package Account allocation on the Realm includes both directory entries and pend
 See [the Package contract](package-api.md#asynchronous-package-character-creation) for result
 consumption and upgrade obligations.
 
+### Package Groups (`module/src/native/realm_party/package.rs`)
+
+`game_package_party_authority` is a new private table on the World and Realm. It retains the
+Character guid, World, authority revision and active state. Body and consent changes advance the
+revision on the owning World; the Realm keeps it after presence becomes inactive to fence delayed
+commands. Existing Group table layouts and IDC arguments are unchanged. Opcode zero in
+`game_realm_party_command` carries a Package command and its authority. A zero connection alone
+does not grant Group authority. The Realm also requires Package Account ownership and the current
+Character directory owner. See [the Package contract](package-api.md#session-less-action-consent)
+for upgrade and completion obligations.
+
 ### Realm communication (`module/src/native/realm_communication.rs`)
 
 `game_native_away.character_guid` is END-appended with default zero. New world entries record the
