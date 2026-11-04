@@ -70,6 +70,10 @@ fn export(directory: &Path) -> Result<()> {
             })
             .collect::<Result<Vec<_>>>()?;
         std::fs::write(directory.join(format!("{}.toml", entry.id)), entry.scenario)?;
+        std::fs::write(
+            directory.join(format!("{}-golden.json", entry.id)),
+            entry.trace,
+        )?;
         scenarios.push(serde_json::json!({"id": entry.id, "characters": characters}));
     }
     std::fs::write(

@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import sys
 import tempfile
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -688,7 +689,10 @@ class ReferenceOwnership(unittest.TestCase):
     def test_rehearsal_continues_past_differences_without_importing(self):
         self.capture_catalogue(rehearse=True)
 
-    def capture_catalogue(self, *, rehearse):
+    def test_rehearsal_starts_independent_servers_together(self):
+        self.capture_catalogue(rehearse=True, parallel_start=True)
+
+    def capture_catalogue(self, *, rehearse, parallel_start=False):
         realm = self.root / 'realm'
         current = realm / '.import/vmangos/current.json'
         current.parent.mkdir(parents=True)
@@ -708,9 +712,15 @@ class ReferenceOwnership(unittest.TestCase):
         realm_state = {}
         captured = []
         preparations = []
+        startup = threading.Barrier(2, timeout=5)
+        def wait_port(port, **_options):
+            if parallel_start and port == 18085:
+                startup.wait()
         @audit.contextmanager
         def realm_server(*_args, **options):
             preparations.append(options)
+            if parallel_start and options.get('require_snapshot'):
+                startup.wait()
             realm_state.clear()
             yield 'password', token, host, module, realm
         def capture(_wire, _work, scenario, adapter, *_args, **options):
@@ -728,7 +738,9 @@ class ReferenceOwnership(unittest.TestCase):
                 patch.object(audit, 'scenario_key', return_value=('key', {'database_commit': 'pin'})), \
                 patch.object(audit, 'capture', side_effect=capture), \
                 patch.object(audit, 'rehearse_comparison', return_value=dict(rule=1, data=2)), \
-                patch.object(audit.sys, 'stdout', io.StringIO()) as output:
+                patch.object(audit.sys, 'stdout', io.StringIO()) as output, \
+                patch.object(audit, 'wait_port', side_effect=wait_port), \
+                patch.object(audit.os, 'sched_getaffinity', return_value=range(4), create=True):
             audit.capture_servers(self.root, 'wire', self.root, self.root, rehearse=rehearse)
         if rehearse:
             self.assertTrue(all(call == {'require_snapshot': True} for call in preparations))
@@ -769,6 +781,24 @@ class ReferenceOwnership(unittest.TestCase):
         self.assertEqual(json.loads(self.marker.read_text())['phase'], 'invalid')
         with self.context():
             self.assertEqual(self.world, 'clean world')
+
+    def test_reference_stops_even_when_realm_shutdown_fails(self):
+        with self.context():
+            self.world = 'changed'
+        realm = self.cache / 'realm/core'
+        (realm / '.lyracore').mkdir(parents=True)
+        (realm / 'lyracore').write_text('CLI')
+        (realm.parent / 'state.json').write_text(json.dumps({'phase': 'ready'}))
+        def run(args, **options):
+            if list(args[1:3]) == ['dev', 'down']:
+                raise audit.subprocess.CalledProcessError(1, args)
+            return self.fake_run(args, **options)
+        with patch.object(audit, 'run', side_effect=run), \
+                self.assertRaises(audit.subprocess.CalledProcessError):
+            audit.stop_scenario_cache()
+        self.assertFalse(self.ids)
+        self.assertFalse(self.marker.exists())
+        self.assertTrue(realm.exists())
 
     def test_stop_restores_clean_world_and_removes_owned_containers(self):
         with self.context():
@@ -1097,6 +1127,7 @@ class ScenarioRealmReuse(unittest.TestCase):
                     self.fail('unsealed import')
         self.assertFalse(self.running)
         self.assertEqual((self.realm / '.lyracore/native-data/world').read_text(), 'imported')
+        audit.stop_scenario_cache(preserve_import=True)
         with audit.scenario_realm('key', self.pins, self.root, 0):
             pass
         self.assertEqual(self.imports, 1)

@@ -932,8 +932,8 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
         yield password, token, host, module, realm_root
 
 
-def rehearse_comparison(harness, wire, work, scenario, adapter):
-    golden = harness / 'traces' / f"{scenario['id']}.json"
+def rehearse_comparison(wire, work, scenario, adapter):
+    golden = work / f"{scenario['id']}-golden.json"
     expected = json.loads(golden.read_text())['header']['origin']['provenance']
     if json.loads((work / 'reference.json').read_text()) != expected:
         raise RuntimeError('Reference Server provenance differs from the Golden Trace')
@@ -955,17 +955,17 @@ def capture_servers(harness, wire, work, client_data, *, rehearse=False):
     scenarios = json.loads((work / 'catalogue.json').read_text())
     peer_count = max(len(scenario['characters']) - 1 for scenario in scenarios)
     key, pins = scenario_key(harness, Path(client_data))
-    if not rehearse:
-        with prepare_scenario_realm(key, pins, client_data, peer_count, use_snapshot=False):
-            pass
     try:
+        if not rehearse:
+            with prepare_scenario_realm(key, pins, client_data, peer_count, use_snapshot=False):
+                pass
         for scenario in scenarios:
             started = time.monotonic()
             with capture_scenario(harness, wire, work, scenario['id'], key, pins, client_data,
                                   require_snapshot=True):
                 state = json.loads((SCENARIO_CACHE / 'realm/state.json').read_text())
                 if rehearse:
-                    comparisons = {adapter: rehearse_comparison(harness, wire, work, scenario, adapter)
+                    comparisons = {adapter: rehearse_comparison(wire, work, scenario, adapter)
                                    for adapter in ['vmangos', 'lyracore']}
                     print(json.dumps(dict(scenario=scenario['id'], setup='passed',
                                           seconds=round(time.monotonic() - started, 2),
@@ -975,7 +975,7 @@ def capture_servers(harness, wire, work, client_data, *, rehearse=False):
                    'client data from the supplied path; imported creature spawns retained')
         return provenance, state['native_host_sha256'], state['module_sha256'], content
     finally:
-        stop_scenario_cache()
+        stop_scenario_cache(preserve_import=True)
 
 
 @contextmanager
@@ -987,21 +987,25 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, r
     if entry is None:
         raise RuntimeError(f'unknown catalogue scenario {scenario}')
     characters = entry['characters']
-    peer_count = len(characters) - 1
     max_peer_count = max(len(item['characters']) - 1 for item in catalogue)
-    with scenario_realm(key, pins, client_data, max_peer_count,
-                        require_snapshot=require_snapshot) as (password, token, host, module, realm_root):
-        realm_env.update(WIRE_REALM_URL='http://127.0.0.1:3000',
-                         WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD='lyracore')
-        with scenario_reference_server(harness, key, peer_count) as (provenance, project):
+    cores = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else (os.cpu_count() or 1)
+    with ExitStack() as realm_lifetime, ExitStack() as reference_lifetime:
+        with ThreadPoolExecutor(max_workers=2 if cores >= 4 else 1) as captures:
+            realm_start = captures.submit(realm_lifetime.enter_context, scenario_realm(
+                key, pins, client_data, max_peer_count, require_snapshot=require_snapshot))
+            reference_start = captures.submit(reference_lifetime.enter_context,
+                                             scenario_reference_server(harness, key, len(characters) - 1))
+            password, token, host, module, realm_root = realm_start.result()
+            provenance, project = reference_start.result()
+            realm_env.update(WIRE_REALM_URL='http://127.0.0.1:3000',
+                             WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD='lyracore')
             (work / 'reference.json').write_text(json.dumps(provenance))
             reference_env = dict(env, COMPOSE_PROJECT_NAME=project,
                                  WIRE_GM_ACCOUNT='CONFORMANCEGM', WIRE_GM_CHARACTER='Conformsetup')
             def capture_reference():
                 with timed(f'{scenario} Reference Server run'):
-                    accounts = ['CONFORMANCE', *peer_accounts(entry)]
                     passwords = []
-                    for index in range(len(accounts)):
+                    for index in range(len(characters)):
                         name = 'player-password' if index == 0 else f'peer{index + 1}-password'
                         secret = (REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
                         passwords.append(secret)
@@ -1012,21 +1016,19 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, r
                 with timed(f'{scenario} Realm run'):
                     capture(wire, work, entry, 'lyracore', [3724, 8085],
                             (password + '\n').encode() * len(characters), realm_env, progress=sys.stderr)
-            cores = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else (os.cpu_count() or 1)
             if cores >= 4:
-                with ThreadPoolExecutor(max_workers=2) as captures:
-                    futures = [captures.submit(capture_reference), captures.submit(capture_realm)]
-                    for future in futures:
-                        future.result()
+                futures = [captures.submit(capture_reference), captures.submit(capture_realm)]
+                for future in futures:
+                    future.result()
             else:
                 capture_reference()
                 capture_realm()
-            state = json.loads((SCENARIO_CACHE / 'realm/state.json').read_text())
-            snapshot = json.loads((realm_root / '.import/vmangos/current.json').read_text())
-            if (digest(host) != state['native_host_sha256'] or digest(module) != state['module_sha256']
-                    or snapshot['commit'] != state['database_commit']):
-                raise RuntimeError('cached Realm Module, Native Host or imported data changed during capture')
-            yield state['world_origin']
+        state = json.loads((SCENARIO_CACHE / 'realm/state.json').read_text())
+        snapshot = json.loads((realm_root / '.import/vmangos/current.json').read_text())
+        if (digest(host) != state['native_host_sha256'] or digest(module) != state['module_sha256']
+                or snapshot['commit'] != state['database_commit']):
+            raise RuntimeError('cached Realm Module, Native Host or imported data changed during capture')
+        yield state['world_origin']
 
 
 def setup_failure(scenario, json_mode, diagnostic):
@@ -1215,39 +1217,43 @@ def scenario_main(args):
         return run_catalogue(args, harness, target, core_commit)
 
 
-def stop_scenario_cache():
+def stop_scenario_cache(*, preserve_import=False):
     SCENARIO_CACHE.mkdir(parents=True, exist_ok=True)
     with (SCENARIO_CACHE / '.realm.lock').open('w') as lock:
         lock_owned_state(lock, 'scenario Realm')
-        cache = SCENARIO_CACHE / 'realm'
-        realm_root = cache / 'core'
-        if cache.exists():
-            marker = cache / 'state.json'
-            if not marker.is_file():
-                raise RuntimeError('scenario Realm has no ownership marker; inspect it before cleanup')
-            cli_env = dict(os.environ)
-            cli_env.pop('CARGO_TARGET_DIR', None)
-            cli_env['PATH'] = (str(cache / 'bin') + ':' + str(Path.home() / '.cargo/bin')
-                               + ':' + cli_env['PATH'])
-            if (realm_root / 'lyracore').is_file() and (realm_root / '.lyracore').exists():
-                stop_realm(realm_root, realm_root / 'lyracore', cli_env)
-            elif realm_processes(realm_root):
-                raise RuntimeError('scenario Realm has owned PIDs but no CLI to stop them')
-            else:
-                for port in [3000, 3724, 8085]:
-                    free_port(port)
-            if (realm_root / '.git').exists():
-                run(['git', 'worktree', 'remove', '--force', realm_root], cwd=ROOT,
-                    stdout=subprocess.DEVNULL)
-            shutil.rmtree(cache)
-        marker = SCENARIO_CACHE / 'reference-state.json'
-        if marker.is_file():
-            with (REFERENCE / '.audit.lock').open('w') as reference_lock:
-                lock_owned_state(reference_lock, 'Reference Server', wait=True)
-                owned = json.loads(marker.read_text())
-                env = dict(os.environ, COMPOSE_PROJECT_NAME=owned['project'])
-                compose = [owned['adapter']]
-                release_reference(marker, owned, compose, env)
+        try:
+            cache = SCENARIO_CACHE / 'realm'
+            realm_root = cache / 'core'
+            if cache.exists():
+                marker = cache / 'state.json'
+                if not marker.is_file():
+                    raise RuntimeError('scenario Realm has no ownership marker; inspect it before cleanup')
+                state = json.loads(marker.read_text())
+                cli_env = dict(os.environ)
+                cli_env.pop('CARGO_TARGET_DIR', None)
+                cli_env['PATH'] = (str(cache / 'bin') + ':' + str(Path.home() / '.cargo/bin')
+                                   + ':' + cli_env['PATH'])
+                if (realm_root / 'lyracore').is_file() and (realm_root / '.lyracore').exists():
+                    stop_realm(realm_root, realm_root / 'lyracore', cli_env)
+                elif realm_processes(realm_root):
+                    raise RuntimeError('scenario Realm has owned PIDs but no CLI to stop them')
+                else:
+                    for port in [3000, 3724, 8085]:
+                        free_port(port)
+                if not (preserve_import and state.get('phase') in ['importing', 'imported']):
+                    if (realm_root / '.git').exists():
+                        run(['git', 'worktree', 'remove', '--force', realm_root], cwd=ROOT,
+                            stdout=subprocess.DEVNULL)
+                    shutil.rmtree(cache)
+        finally:
+            marker = SCENARIO_CACHE / 'reference-state.json'
+            if marker.is_file():
+                with (REFERENCE / '.audit.lock').open('w') as reference_lock:
+                    lock_owned_state(reference_lock, 'Reference Server', wait=True)
+                    owned = json.loads(marker.read_text())
+                    env = dict(os.environ, COMPOSE_PROJECT_NAME=owned['project'])
+                    compose = [owned['adapter']]
+                    release_reference(marker, owned, compose, env)
 
 
 def main():
@@ -1300,7 +1306,7 @@ def main():
                 return scenario_main(args)
         except Exception as error:
             return setup_failure(args.scenario, args.json, str(error))
-    args.date = args.date or datetime.date.today().isoformat()
+    args.date = args.date if args.date is not None else datetime.date.today().isoformat()
     args.output = args.output or ROOT / 'conformance/reports'
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}(?:-[a-z0-9]+)?', args.date):
         parser.error('--date must be YYYY-MM-DD or YYYY-MM-DD-suffix')

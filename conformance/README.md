@@ -677,8 +677,9 @@ every restore with the sealed password, so a larger scenario catalogue needs no 
 Phase timings go to stderr, leaving JSON on stdout. They include builds, schema extraction, client
 hashing, Realm startup, import, snapshot sealing, both captures and comparison. Agreement also
 reports its tier 1 time. The runner builds one deployment WASM and uses that file for schema
-extraction, preflight bindings and publication. With at least four available CPUs, the two wire
-captures run concurrently. A warm check prints `import: 0.00s (cached snapshot)` and identifies its world origin.
+extraction, preflight bindings and publication. With at least four available CPUs, both server
+restores overlap, then both wire captures run concurrently. A warm check prints
+`import: 0.00s (cached snapshot)` and identifies its world origin.
 
 A failed reference comparison prints its scrubbed differences, including signatures and expected and
 actual values, before exit 2. Both comparisons and captures survive work-directory cleanup under
@@ -742,8 +743,8 @@ fixture spawn during setup. Tier 1 still uses the bundled route
 fixture.
 
 All Docker commands run inside a `newgrp docker` heredoc. The command checks the prepared runtime's
-pins and provenance, starts its compose services, prepares peer Accounts, and resets each catalogue
-Character on its own Account in the disposable Reference Server. Every scenario produces both a
+pins and provenance, restores the pristine Reference Server database, starts its compose services,
+and prepares peer Accounts before each scenario. Every scenario produces both a
 LyraCore and vmangos candidate in scratch. Both
 compare with their embedded Golden Trace; the Reference Server must also retain its recorded
 provenance. Reference rule and data counts remain visible even when LyraCore fails.
@@ -751,16 +752,16 @@ provenance. Reference rule and data counts remain visible even when LyraCore fai
 The command writes `conformance/reports/<date>.md`, `<date>.json` and `<date>.traces/`. Audit
 history is append-only: each run needs a new date or suffix, such as `2026-10-28-c6`, and the
 command refuses existing outputs. The trace directory contains only LyraCore candidates. Reference
-Server candidates stay in the audit's scratch directory and are deleted with it at exit; the report
-keeps their SHA-256 and reference-stability results. `--output DIRECTORY` selects another report
-destination. Rule differences are audit findings and do not make the command fail; missing
+Server candidates remain in local diagnostics; the report keeps their SHA-256 and reference-stability
+results. `--output DIRECTORY` selects another report destination. Rule differences are audit findings and do not make the command fail; missing
 captures, infrastructure errors and invalid evidence do. A failed run cannot write a partial
 success report. No scenario is skipped, including taxi.
 Real-client fields, Equivalence Rules and Deliberate Deviations are untouched.
 
-The full audit runner stops both servers on exit, including capture failures and normal interrupts. Credentials
-and crash diagnostics stay under `$HOME/.cache/lyracore-scratch/m5c/` and are deleted when
-the run ends. Build output uses its `target/` directory. The prepared Reference Server's runtime
+The full audit runner stops both servers on exit, including capture failures and normal interrupts.
+Credentials are removed with the active Realm. Scrubbed captures and crash diagnostics remain under
+`$HOME/.cache/lyracore/conformance-worlds/diagnostics/`. Build output uses
+`scenario-audit/target/` under the audit scratch directory. The prepared Reference Server's runtime
 stays under `$HOME/.cache/lyracore-scratch/reference-server/`. Reports contain only provenance,
 counts, signatures and scrubbed difference values. Committed LyraCore candidate traces contain
 numbers and text digests, with the same scrubbed field types as Golden Traces. Never commit a
