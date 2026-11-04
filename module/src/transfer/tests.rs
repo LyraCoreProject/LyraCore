@@ -1328,6 +1328,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         ("game_auction_bid_hold", count),
         ("game_auction_hold", count),
         ("game_character_away", count),
+        ("game_character_quest_log", count),
         ("game_fatigue_state", count),
         ("game_group_target_icon", count),
         ("game_guild_fee_hold", count),
@@ -1347,7 +1348,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         arms,
     )
     .expect("the filled payload imports");
-    assert_eq!(applied.get(), 9);
+    assert_eq!(applied.get(), 10);
 }
 
 #[test]
