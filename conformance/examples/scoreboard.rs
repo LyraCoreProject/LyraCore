@@ -221,6 +221,152 @@ fn state_json(state: &State) -> Value {
     json!({"state": kind, "display": state.to_string(), "summary": summary})
 }
 
+#[derive(Serialize)]
+struct TierSummary {
+    evidence: &'static str,
+    pass: usize,
+    states: BTreeMap<String, usize>,
+    scenarios_recorded: usize,
+    scenarios_expected: usize,
+    rule_signatures: Option<usize>,
+    data_signatures: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct ScoreboardSummary {
+    behaviors: usize,
+    with_scenario: usize,
+    without_scenario: usize,
+    tier1: TierSummary,
+    audit: TierSummary,
+    open_work_by_kind: BTreeMap<&'static str, usize>,
+}
+
+fn tier_summary(
+    ledger: &FeatureLedger,
+    report: Option<&Report>,
+    head: &str,
+    revision: &str,
+) -> Result<TierSummary> {
+    let mut states = BTreeMap::new();
+    let mut pass = 0;
+    let mut rule_signatures = 0;
+    let mut data_signatures = 0;
+    for behavior in ledger.behaviors() {
+        let state = state(report, behavior, head, revision)?;
+        pass += usize::from(state.is_match());
+        let kind = state_json(&state)["state"]
+            .as_str()
+            .context("evidence state name")?
+            .to_owned();
+        *states.entry(kind).or_default() += 1;
+        if let Some(report) = report {
+            let summary = report.summary(&behavior.id, false);
+            rule_signatures += summary.rule.signatures.len();
+            data_signatures += summary.data.signatures.len();
+        }
+    }
+    Ok(TierSummary {
+        evidence: if report.is_some() {
+            "present"
+        } else {
+            "absent"
+        },
+        pass,
+        states,
+        scenarios_recorded: report.map_or(0, |report| report.scenarios.len()),
+        scenarios_expected: ledger
+            .behaviors()
+            .iter()
+            .map(|behavior| behavior.scenarios.len())
+            .sum(),
+        rule_signatures: report.map(|_| rule_signatures),
+        data_signatures: report.map(|_| data_signatures),
+    })
+}
+
+fn scoreboard_summary(data: &ScoreboardData<'_>) -> Result<ScoreboardSummary> {
+    let behaviors = data.ledger.behaviors().len();
+    let with_scenario = data
+        .ledger
+        .behaviors()
+        .iter()
+        .filter(|behavior| !behavior.scenarios.is_empty())
+        .count();
+    let mut open_work_by_kind = BTreeMap::from([
+        ("implementer", 0),
+        ("scenario_author", 0),
+        ("scope_verification", 0),
+        ("evidence_refresh", 0),
+    ]);
+    for item in data.work {
+        *open_work_by_kind.entry(item.kind).or_default() += 1;
+    }
+    Ok(ScoreboardSummary {
+        behaviors,
+        with_scenario,
+        without_scenario: behaviors - with_scenario,
+        tier1: tier_summary(
+            data.ledger,
+            data.tier1.map(|(_, report)| report),
+            data.tier1_head,
+            data.revision,
+        )?,
+        audit: tier_summary(
+            data.ledger,
+            data.audit.map(|(_, report)| report),
+            data.audit_head,
+            data.revision,
+        )?,
+        open_work_by_kind,
+    })
+}
+
+fn print_summary(data: &ScoreboardData<'_>) -> Result<()> {
+    let summary = scoreboard_summary(data)?;
+    println!("## Conformance scoreboard\n");
+    println!(
+        "Behaviors with scenarios: {} / {} ({} without).\n",
+        summary.with_scenario, summary.behaviors, summary.without_scenario
+    );
+    println!("| Tier | Passes | Evidence | Scenarios recorded / expected | Recorded rule signatures | Recorded data signatures |\n| --- | ---: | --- | ---: | ---: | ---: |");
+    for (name, tier) in [("Tier 1", &summary.tier1), ("Audit", &summary.audit)] {
+        let count = |value: Option<usize>| {
+            value.map_or_else(|| "unmeasured".into(), |value| value.to_string())
+        };
+        println!(
+            "| {name} | {} | {} | {} / {} | {} | {} |",
+            tier.pass,
+            tier.evidence,
+            tier.scenarios_recorded,
+            tier.scenarios_expected,
+            count(tier.rule_signatures),
+            count(tier.data_signatures)
+        );
+    }
+    for (name, tier) in [("Tier 1", &summary.tier1), ("Audit", &summary.audit)] {
+        println!(
+            "\n{name} Behavior states: {}.",
+            tier.states
+                .iter()
+                .map(|(state, count)| format!("{state}: {count}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    println!(
+        "\nOpen work: {}.",
+        summary
+            .open_work_by_kind
+            .iter()
+            .map(|(kind, count)| format!("{kind}: {count}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!("\nSignature totals include stale recorded evidence; absent evidence is unmeasured.");
+    Ok(())
+}
+
 fn scoreboard_json(data: &ScoreboardData<'_>) -> Result<Value> {
     let ScoreboardData {
         ledger,
@@ -272,6 +418,7 @@ fn scoreboard_json(data: &ScoreboardData<'_>) -> Result<Value> {
     let unclaimed = unclaimed_requests(ledger, counts)?;
     Ok(json!({
         "schema_version": 1,
+        "summary": scoreboard_summary(data)?,
         "tier1_evidence": tier1.map(|(path, report)| json!({"path": path, "report": report})),
         "audit_evidence": audit.map(|(path, report)| json!({"path": path, "report": report})),
         "opcode_coverage": {
@@ -358,10 +505,12 @@ fn main() -> Result<()> {
     let mut audit_path = None;
     let mut vmangos_path = None;
     let mut json_output = false;
+    let mut summary_output = false;
     let mut arguments = std::env::args().skip(1);
     while let Some(option) = arguments.next() {
         match option.as_str() {
             "--json" => json_output = true,
+            "--summary" => summary_output = true,
             "--tier1" => {
                 tier1_path = arguments.next().context("--tier1 needs a path")?.into();
                 explicit_tier1 = true;
@@ -377,12 +526,16 @@ fn main() -> Result<()> {
                 ));
             }
             "--help" => {
-                println!("scoreboard [--json] [--tier1 RESULT.json] [--audit REPORT.json] [--vmangos mangos.sqlite]");
+                println!("scoreboard [--json | --summary] [--tier1 RESULT.json] [--audit REPORT.json] [--vmangos mangos.sqlite]");
                 return Ok(());
             }
             _ => bail!("unknown option {option}"),
         }
     }
+    ensure!(
+        !(json_output && summary_output),
+        "choose --json or --summary"
+    );
     let output = Command::new("git")
         .current_dir(root)
         .args(["rev-parse", "HEAD"])
@@ -478,10 +631,14 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
+    if summary_output {
+        return print_summary(&data);
+    }
     print_text(&data)
 }
 
 fn print_text(data: &ScoreboardData<'_>) -> Result<()> {
+    print_summary(data)?;
     let ScoreboardData {
         ledger,
         counts,
@@ -924,6 +1081,10 @@ fn json_reports_behavior_evidence_and_scenario_coverage() -> Result<()> {
         revision: "pin",
         work: &work,
     })?;
+    assert_eq!(output["summary"]["tier1"]["evidence"], "absent");
+    assert_eq!(output["summary"]["tier1"]["pass"], 0);
+    assert_eq!(output["summary"]["tier1"]["states"]["not_run"], 1);
+    assert_eq!(output["summary"]["tier1"]["rule_signatures"], Value::Null);
     assert_eq!(output["schema_version"], 1);
     assert_eq!(output["systems"]["sample"]["with_scenario"], 1);
     assert_eq!(output["systems"]["sample"]["without_scenario"], 5);
@@ -940,6 +1101,71 @@ fn json_reports_behavior_evidence_and_scenario_coverage() -> Result<()> {
     assert_eq!(output["open_work"][0]["reproduce_with"], Value::Null);
     assert_eq!(output["open_work"][1]["reproduce_with"], "tier1");
     assert!(output["audit_evidence"].is_null());
+    Ok(())
+}
+
+#[cfg(test)]
+fn measured_connection() -> Result<(FeatureLedger, Report)> {
+    let ledger = FeatureLedger::from_sources([
+        (
+            "connection/connection_identity.toml",
+            include_str!("../features/connection/connection_identity.toml"),
+        ),
+        (
+            "taxi/taxi_single_hop.toml",
+            include_str!("../features/taxi/taxi_single_hop.toml"),
+        ),
+    ])?;
+    let golden = wire_client::catalogue::get("connection_identity")?;
+    let report = serde_json::from_value(json!({
+        "schema_version": 2, "tier": "tier1", "core_commit": "head",
+        "working_tree_dirty": false, "harness_revision": "pin", "recorded_at_unix_ms": 1,
+        "scenarios": [{
+            "id": "connection_identity", "behavior": "connection_identity",
+            "scenario_sha256": golden.trace().header.scenario_sha256,
+            "comparison": {"differences": []}, "properties": [],
+        }],
+    }))?;
+    Ok((ledger, report))
+}
+
+#[test]
+fn summary_separates_partial_evidence_from_measured_passes() -> Result<()> {
+    let (ledger, report) = measured_connection()?;
+    let summary = tier_summary(&ledger, Some(&report), "head", "pin")?;
+    assert_eq!(summary.evidence, "present");
+    assert_eq!(summary.pass, 1);
+    assert_eq!(summary.scenarios_recorded, 1);
+    assert_eq!(summary.scenarios_expected, 2);
+    assert_eq!(summary.states["match"], 1);
+    assert_eq!(summary.states["not_run"], 1);
+    assert_eq!(summary.rule_signatures, Some(0));
+    assert_eq!(summary.data_signatures, Some(0));
+    Ok(())
+}
+
+#[test]
+fn summary_keeps_recorded_signatures_when_evidence_is_stale() -> Result<()> {
+    let (ledger, mut report) = measured_connection()?;
+    let difference = json!({
+        "classification": "rule", "character": null, "checkpoint": "reply", "stream": null,
+        "packet_index": null, "field_path": ["value"], "opcode": 1, "deviations": [],
+        "rule": "field_value", "reason": "different value", "expected": null, "actual": null,
+    });
+    let mut data_difference = difference.clone();
+    data_difference["classification"] = json!("data");
+    report.scenarios[0].comparison.differences =
+        serde_json::from_value(json!([difference, difference, data_difference,]))?;
+    let summary = tier_summary(&ledger, Some(&report), "head", "pin")?;
+    assert_eq!(summary.pass, 0);
+    assert_eq!(summary.states["different"], 1);
+    assert_eq!(summary.rule_signatures, Some(1));
+    assert_eq!(summary.data_signatures, Some(1));
+    let stale = tier_summary(&ledger, Some(&report), "new-head", "pin")?;
+    assert_eq!(stale.pass, 0);
+    assert_eq!(stale.states["stale"], 2);
+    assert_eq!(stale.rule_signatures, Some(1));
+    assert_eq!(stale.data_signatures, Some(1));
     Ok(())
 }
 

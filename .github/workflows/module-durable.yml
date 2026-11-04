@@ -35,6 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
@@ -53,13 +54,36 @@ jobs:
 
       # Each test owns a standalone process; the thread limit bounds memory use.
       - name: Run the durable suite, shard ${{ matrix.shard }} of 3
+        id: durable-suite
         run: |
           mapfile -t targets < <(python3 scripts/durable-test-targets.py "${{ matrix.shard }}")
           [ "${#targets[@]}" -gt 0 ]
           args=()
-          for target in "${targets[@]}"; do args+=(--test "$target"); done
+          for target in "${targets[@]}"; do
+            args+=(--test "$target")
+            if [ "$target" = native_conformance ]; then
+              echo "conformance=true" >> "$GITHUB_OUTPUT"
+            fi
+          done
           echo "targets: ${targets[*]}"
           cargo test -p lyracore-module "${args[@]}" -- --ignored --test-threads=4 --skip deadmines --skip populated_old_module_upgrades_without_clearing
+
+      - name: Produce the conformance scoreboard
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.durable-suite.outputs.conformance == 'true' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/conformance-scoreboard"
+          cp .lyracore/conformance/tier1.json "$RUNNER_TEMP/conformance-scoreboard/tier1.json"
+          ./conformance/scoreboard --json --tier1 .lyracore/conformance/tier1.json > "$RUNNER_TEMP/conformance-scoreboard/scoreboard.json"
+          ./conformance/scoreboard --summary --tier1 .lyracore/conformance/tier1.json >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the conformance scoreboard and tier 1 evidence
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.durable-suite.outputs.conformance == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: conformance-scoreboard-${{ github.sha }}
+          path: ${{ runner.temp }}/conformance-scoreboard/
+          if-no-files-found: error
+          retention-days: 90
 
       - id: baseline-cache
         if: matrix.shard == 2

@@ -152,6 +152,27 @@ harness revision and scenario hashes before writing the canonical file.
 Review the changed signatures with the behavior change. This baseline does not change comparator
 tags, scoreboard pass/fail or the Conformance Audit.
 
+### Pull request signature ratchet
+
+The `Conformance ratchet` job compares the PR's Tier 1 baseline with its merge base. For a
+scenario with unchanged `scenario_sha256` and `harness_revision`, any added rule signature fails,
+even if another signature was removed. Removed signatures and data changes pass this check.
+New scenarios and changed scenario hashes or harness revisions are new measurements: they pass
+and are listed in the job summary. The durable tests still require exact equality with the
+committed baseline for both signature classes.
+
+A maintainer can apply the PR label `conformance-accept-signature` to accept a deliberate addition.
+Keep its reason and added signatures in the PR. Adding or removing the label reruns the check;
+the summary retains accepted additions. A maintainer creates the label once in GitHub.
+
+The workflow uses `pull_request_target` and runs only code from the trusted base branch. It reads
+the two baselines as Git blobs and reads current labels from the GitHub API. PR files cannot
+change the label decision. The token has only `contents: read` and `pull-requests: read`; checkout
+credentials are not persisted, PR code is never executed, and no repository secrets or caches
+are used. The baseline comes from the merge base, as in the harness strictness allowlist check.
+The workflow takes effect after it lands on the base branch; an older base branch must first
+receive this tooling. Maintainers can then require the `ratchet` job in branch protection.
+
 ### Global tier 1 properties
 
 Every tier 1 run checks each recipient's candidate update stream, including opening packets and
@@ -374,6 +395,7 @@ From the repo root:
 ```bash
 ./conformance/scoreboard
 ./conformance/scoreboard --json
+./conformance/scoreboard --summary
 cargo test -p lyracore-conformance --example scoreboard
 ```
 
@@ -381,6 +403,22 @@ The script runs the Rust example `scoreboard`. It reads the Feature Ledger and p
 and a row for each Behavior. Tier 1, Conformance Audit and real-client checks have separate columns.
 It does not infer a pass from a test declaration or claim overall completion from these columns.
 The ledger's other required rungs remain obligations.
+
+On each push to `main` outside documentation, `Module durable tests` publishes the `conformance-scoreboard-<commit>`
+artifact for 90 days and a short job summary. The artifact contains `scoreboard.json` from
+`./conformance/scoreboard --json` and the run's `tier1.json`. CI shards whole test targets, so the
+job that runs `native_conformance` already records all tier 1 scenarios in one process. No scenario
+rerun or shard merge is needed. Added work is scoreboard compilation, two scoreboard invocations
+and artifact upload, with no extra durable test time. CI never commits this evidence. Compare artifacts by
+commit to track progress within retention; download them for longer retention.
+
+`--summary` prints the same short summary used by CI. It includes Behaviors with scenarios, passes,
+recorded rule and data signature totals for each tier, evidence states and open work by kind.
+Low counts do not fail the scoreboard. Invalid inputs still fail. A recorded signature total sums
+per-Behavior distinct signatures from the supplied report, including stale evidence; the state
+counts show whether those measurements are current. Absent evidence has null signature totals.
+A pass total of zero alone does not mean measured failure: check `evidence` and `states` in the
+summary. `absent` means no report; `not_run` means a Behavior lacks complete evidence.
 
 The system table counts Behaviors with and without scenarios. The open-work list includes every
 Behavior without a scenario and every scenario-backed Behavior without a clean tier 1 and audit
@@ -416,9 +454,12 @@ increase priority. Dependency edits change the ranking and receive review as suc
 The formula uses no assigned priority.
 
 `--json` emits one JSON object and no text. Schema version 1 has `systems` and `behaviors` objects
-keyed by their ledger ids, `open_work` in rank order, `opcode_coverage`, `trainable_spells`,
+keyed by their ledger ids, a `summary`, `open_work` in rank order, `opcode_coverage`, `trainable_spells`,
 `tier1_evidence` and `audit_evidence`. Evidence is null when absent; otherwise it has `path` and
 the complete validated schema-2 `report`, including scenario comparisons and audit summaries.
+`summary` gives `behaviors`, `with_scenario`, `without_scenario`, `open_work_by_kind`, and
+`tier1` and `audit` objects. Each tier gives `evidence` (`absent` or `present`), `pass`, Behavior
+`states` counts, `scenarios_recorded`, `scenarios_expected`, `rule_signatures` and `data_signatures`.
 Each system gives `behaviors`, `with_scenario`, `without_scenario`, `tier1_pass`, `audit_pass`,
 `real_client_waiting`, `claimed_opcodes` and `unavailable`. Each Behavior gives its `system`,
 `scenarios`, `dependencies`, `required_rungs`, `scope_verification`, `tier1`, `audit`, `real_client`, `claimed_opcodes`,

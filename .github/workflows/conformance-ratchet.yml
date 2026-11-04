@@ -1,0 +1,46 @@
+name: Conformance ratchet
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited, labeled, unlabeled]
+
+concurrency:
+  group: conformance-ratchet-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  ratchet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # Only trusted base code runs; the PR supplies one JSON blob, never a checkout.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Read the merge-base and PR baselines
+        env:
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git fetch --no-tags origin "$PR_HEAD"
+          base=$(git merge-base "$PR_BASE" "$PR_HEAD")
+          git show "$base:conformance/tier1-baseline.json" > "$RUNNER_TEMP/ratchet-base.json"
+          git show "$PR_HEAD:conformance/tier1-baseline.json" > "$RUNNER_TEMP/ratchet-current.json"
+      - name: Read current PR labels from GitHub
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: gh api "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" --jq '[.labels[].name]' > "$RUNNER_TEMP/ratchet-labels.json"
+      - name: Check rule signature additions
+        run: |
+          set -o pipefail
+          python3 conformance/check_ratchet.py \
+            --base "$RUNNER_TEMP/ratchet-base.json" \
+            --current "$RUNNER_TEMP/ratchet-current.json" \
+            --labels "$RUNNER_TEMP/ratchet-labels.json" | tee -a "$GITHUB_STEP_SUMMARY"
