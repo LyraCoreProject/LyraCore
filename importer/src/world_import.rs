@@ -731,7 +731,7 @@ fn build_quests(
         let money: i64 = row.number(qt::REW_OR_REQ_MONEY)?;
         let reward_money_max_level: i64 = row.number(qt::REW_MONEY_MAX_LEVEL)?;
         let prev_quest: i64 = row.number(qt::PREV_QUEST_ID)?;
-        let flags: u32 = row.number("QuestFlags")?;
+        let flags: u32 = row.number(qt::QUEST_FLAGS)?;
         quest_flag_rows.push(format!("({entry},{flags})"));
         let special_flags: u32 = row.number(qt::SPECIAL_FLAGS)?;
         let repeatable = (special_flags & 1) != 0;

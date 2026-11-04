@@ -9,7 +9,9 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["quest_log"]
 deliberate_deviations = []
 prerequisites = []
-tests = []
+tests = [
+    { path = "module/tests/native_conformance.rs", function = "quest_slots_survive_reconnect_and_reuse_only_the_abandoned_slot", rung = "durable_module" },
+]
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
