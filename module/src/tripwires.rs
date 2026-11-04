@@ -38,6 +38,10 @@ pub(crate) mod character_owned_tripwire {
             "Realm-owned name reservations survive Character Transfer and pending selection expiry; confirmed deletion releases the name",
         ),
         (&["game_party_character", "game_party_membership"], "Realm-owned party facts and projection revisions retained across Character Transfer; deletion publishes offline facts and a membership tombstone"),
+        (
+            &["game_package_party_authority"],
+            "Shard-owned Package Group authority revisions retained after body removal and Character cleanup to fence stale requests; the Realm directory separately gates the current owner",
+        ),
         (&["game_instance_entry_lease"], "destination-owned admission reservation expires after sixty seconds or is consumed by Transfer import"),
         (
             &["game_native_away"],

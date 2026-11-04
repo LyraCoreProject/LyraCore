@@ -106,6 +106,22 @@ invitation unanswered. `emit_bot_invite_intent` and `emit_bot_leave_intent` appl
 directly and create no Group Intent. A group invariant failure aborts the transaction because those
 Package operations return no outcome.
 
+On a World Shard, these verbs submit durable requests to the Realm for Characters on Package-owned
+Accounts. `accept_group_invite` returning success means the request was queued; read the projected
+Group membership to observe completion. The Realm owns the roster and applies faction, capacity and
+leader Gates. Refusals are logged. No World Session is created.
+
+Building or removing a live Package Character and changing its consent publish Group presence.
+Each change advances a durable authority revision. The Realm refuses an older revision after it
+observes the newer one. A request already admitted by the Realm is not undone by a later consent
+change. Invitations to a Package Character return to its World for a fresh consent Gate before
+automatic acceptance. A delayed acceptance names its inviter and cannot accept a different invite.
+
+Publish all Shards before using this path. After upgrading Worlds that already have live Package
+Characters, call `operator_report_package_groups` on each World to publish their current presence.
+This path covers Group membership; guild operations, remote member-stat refresh and cross-Shard
+relocation remain separate work.
+
 ### Package-owned Accounts
 
 `package::create_character(ctx, package_name, name, race, class) -> Result<u64, String>`
@@ -142,7 +158,7 @@ retain at most 64 requests on a Shard, including unread results.
 A restart or delayed reply does not release the name or discard pending work. A confirmed creation
 Refusal releases the name. Result delivery retries until the Realm and World can accept it.
 The Package must wait for `Created` before placing or activating the Character. Creation does not
-move Package tables or enable sessionless Group, guild or cross-Shard relocation operations.
+move Package tables, activate Group presence, or enable guild or cross-Shard relocation operations.
 
 Publish all Shards before using this interface and complete the
 [Character-name import](architecture.md#upgrade-character-name-reservations). Package Accounts are
