@@ -6,42 +6,7 @@
       "behavior": "bank_slot_purchase",
       "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
       "scenario_sha256": "d73644183fd921f24df5f209ffe3f79ca4573ff04ea8e41d478a768c98ccf358",
-      "rule": [
-        {
-          "rule": "extra_packet",
-          "checkpoint": "buy_slot",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": []
-        },
-        {
-          "rule": "field_shape",
-          "checkpoint": "buy_slot",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_194"
-          ]
-        },
-        {
-          "rule": "unexpected_packet",
-          "checkpoint": "buy_slot",
-          "stream": {
-            "kind": "unexpected"
-          },
-          "opcode": 442,
-          "field_path": []
-        }
-      ],
+      "rule": [],
       "data": []
     },
     {
@@ -49,45 +14,7 @@
       "behavior": "bank_slot_purchase",
       "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
       "scenario_sha256": "e7fd829b9432beadb28d0a8cd81cae77e4e60aa74799e4f8eb2321364ded6c1e",
-      "rule": [
-        {
-          "rule": "extra_packet",
-          "character": "actor",
-          "checkpoint": "buy_slot",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": []
-        },
-        {
-          "rule": "field_shape",
-          "character": "actor",
-          "checkpoint": "buy_slot",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_194"
-          ]
-        },
-        {
-          "rule": "unexpected_packet",
-          "character": "actor",
-          "checkpoint": "buy_slot",
-          "stream": {
-            "kind": "unexpected"
-          },
-          "opcode": 442,
-          "field_path": []
-        }
-      ],
+      "rule": [],
       "data": []
     },
     {
@@ -95,45 +22,7 @@
       "behavior": "bank_slot_purchase",
       "harness_revision": "aa0eda69b6637201287e7ddb9921424dbfea138c",
       "scenario_sha256": "7ddc32d010796a0b11139ba05fec0fe07c3013cf5125b77b304628109300e424",
-      "rule": [
-        {
-          "rule": "extra_packet",
-          "character": "actor",
-          "checkpoint": "buy_slot",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": []
-        },
-        {
-          "rule": "field_shape",
-          "character": "actor",
-          "checkpoint": "buy_slot",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_194"
-          ]
-        },
-        {
-          "rule": "unexpected_packet",
-          "character": "actor",
-          "checkpoint": "buy_slot",
-          "stream": {
-            "kind": "unexpected"
-          },
-          "opcode": 442,
-          "field_path": []
-        }
-      ],
+      "rule": [],
       "data": []
     },
     {
