@@ -6,7 +6,7 @@ requests = ["0x00C7", "0x01AA", "0x01AC", "0x01AD"]
 replies = ["0x00A9", "0x00C7", "0x00DD", "0x014E", "0x016E", "0x016F", "0x01A9", "0x01AB", "0x01AE"]
 dependencies = ["connection_identity"]
 required_rungs = ["tier1", "conformance_audit", "real_client"]
-scenarios = ["taxi_single_hop"]
+scenarios = ["taxi_single_hop", "taxi_single_hop__late_observer", "taxi_single_hop__reconnect"]
 deliberate_deviations = [
   { id = "war_effort_world_states", result = "Zone entry sends vmangos's 109 default world states without the 55 Ahn'Qiraj War Effort counters and totals that vmangos appends while event 84 is active.", reason = "LyraCore has no game event system yet, so it cannot know whether the War Effort is running or how far it has progressed. The maintainer chose to defer these states until game events exist rather than hard-code the Reference Server's event state.", source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/scripts/world/world_event_wareffort.cpp" },
 ]

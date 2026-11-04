@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -110,7 +111,10 @@ fn run_scenario(
         .as_millis()
         .try_into()?;
     update_result(&path, &golden, None, &[], recorded_at)?;
-    let mut shard = Standalone::start(&format!("tier1-{}", id.replace('_', "-")));
+    let mut shard = Standalone::start(&format!(
+        "tier1-{}",
+        id.replace("__", "_").replace('_', "-")
+    ));
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
@@ -254,7 +258,10 @@ fn run_multi_scenario(
         .as_millis()
         .try_into()?;
     update_result(&path, &golden, None, &[], recorded_at)?;
-    let mut shard = Standalone::start(&format!("tier1-{}", id.replace('_', "-")));
+    let mut shard = Standalone::start(&format!(
+        "tier1-{}",
+        id.replace("__", "_").replace('_', "-")
+    ));
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
@@ -280,7 +287,7 @@ fn seed_visibility_world(
     scenario: &wire_client::scenario::Scenario,
 ) -> Result<()> {
     let cell = super::taxi_route::STORMWIND_CELL;
-    let mut race_class = None;
+    let mut races = BTreeSet::new();
     for character in &scenario.characters {
         let FixtureVerb::Character {
             race, class, at, ..
@@ -294,10 +301,10 @@ fn seed_visibility_world(
         let race = wire_client::cli::parse_race(race)?.as_int();
         let class = wire_client::cli::parse_class(class)?.as_int();
         ensure!(
-            race == 1 && class == 1,
-            "visibility outfit needs a human warrior"
+            matches!(race, 1 | 2) && class == 1,
+            "visibility outfit needs a human or orc warrior"
         );
-        race_class = Some(lyracore_package_delta::packed_race_class_id(race, class));
+        races.insert(race);
         ensure!(
             at.map == 0
                 && lyracore_shared::terrain::cell_index(at.x) == Some(cell.0)
@@ -317,17 +324,23 @@ fn seed_visibility_world(
         .next()
         .context("seeded item template 51")?;
     let columns = "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property";
-    for (entry, name, subclass, inventory_type) in [
-        (38, "Outfit shirt", 0, 4),
-        (39, "Outfit pants", 0, 7),
-        (40, "Outfit boots", 0, 8),
-        (2362, "Outfit shield", 6, 14),
+    for (entry, name, class, subclass, inventory_type, delay_ms) in [
+        (38, "Outfit shirt", 4, 0, 4, 0),
+        (39, "Outfit pants", 4, 0, 7, 0),
+        (40, "Outfit boots", 4, 0, 8, 0),
+        (2362, "Outfit shield", 4, 6, 14, 0),
+        (6125, "Outfit harness", 4, 0, 4, 0),
+        (139, "Outfit pants", 4, 0, 7, 0),
+        (140, "Outfit boots", 4, 0, 8, 0),
+        (12282, "Outfit axe", 2, 1, 17, 2900),
     ] {
         let mut template = base.clone();
         for (field, value) in [
             ("entry", entry.to_string()),
             ("name", name.into()),
+            ("class", class.to_string()),
             ("subclass", subclass.to_string()),
+            ("delay_ms", delay_ms.to_string()),
             ("inventory_type", inventory_type.to_string()),
             ("display_id", "0".into()),
             ("quality", "0".into()),
@@ -354,13 +367,51 @@ fn seed_visibility_world(
             "INSERT INTO game_item_template ({columns}) VALUES ({values})"
         ));
     }
-    let race_class = race_class.context("visibility Character fixture")?;
-    for (id, entry) in [25, 38, 39, 40, 2362].into_iter().enumerate() {
-        shard.assert_sql(&format!(
-            "INSERT INTO game_start_item (id,race_class,item_entry,count) VALUES ({},{race_class},{entry},1)",
-            id + 1
-        ));
+    let mut id = 0;
+    for race in races {
+        let race_class = lyracore_package_delta::packed_race_class_id(race, 1);
+        let items: &[u32] = match race {
+            1 => &[25, 38, 39, 40, 2362],
+            2 => &[6125, 139, 140, 12282],
+            _ => unreachable!(),
+        };
+        for entry in items {
+            id += 1;
+            shard.assert_sql(&format!(
+                "INSERT INTO game_start_item (id,race_class,item_entry,count) VALUES ({id},{race_class},{entry},1)"
+            ));
+        }
     }
+    Ok(())
+}
+
+fn seed_taxi_world(shard: &Standalone, scenario: &wire_client::scenario::Scenario) -> Result<()> {
+    let mut route = scenario.clone();
+    route.fixtures.extend(
+        scenario
+            .characters
+            .iter()
+            .flat_map(|character| character.fixtures.iter().cloned()),
+    );
+    for statement in super::taxi_route::statements(&route)? {
+        shard.assert_sql(&statement);
+    }
+    shard.assert_call(
+        "import_terrain_chunks",
+        &[&super::taxi_route::terrain_chunks()],
+    );
+    Ok(())
+}
+
+fn seed_bank_world(shard: &Standalone, _: &wire_client::scenario::Scenario) -> Result<()> {
+    shard.assert_sql(
+        "INSERT INTO game_creature_template \
+         (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,\
+          creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,\
+          money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,\
+          pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) \
+         VALUES (5099,'Bank fixture','',1,1,100,35,256,0,7,0,0,0,1,2000,0,0,1,100,0,0,0,0,0,0,0,0)",
+    );
     Ok(())
 }
 
@@ -373,46 +424,57 @@ fn connection_identity_matches_its_golden_trace() -> Result<()> {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn taxi_single_hop_matches_its_golden_trace() -> Result<()> {
-    run_scenario(
-        "taxi_single_hop",
-        |shard, scenario| {
-            for statement in super::taxi_route::statements(scenario)? {
-                shard.assert_sql(&statement);
-            }
-            shard.assert_call(
-                "import_terrain_chunks",
-                &[&super::taxi_route::terrain_chunks()],
-            );
-            Ok(())
-        },
-        None,
-    )
+    run_scenario("taxi_single_hop", seed_taxi_world, None)
 }
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn bank_slot_purchase_matches_its_golden_trace() -> Result<()> {
-    run_scenario(
-        "bank_slot_purchase",
-        |shard, _| {
-            shard.assert_sql(
-            "INSERT INTO game_creature_template \
-             (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,\
-              creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,\
-              money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,\
-              pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) \
-             VALUES (5099,'Bank fixture','',1,1,100,35,256,0,7,0,0,0,1,2000,0,0,1,100,0,0,0,0,0,0,0,0)",
-        );
-            Ok(())
-        },
-        Some(5099),
-    )
+    run_scenario("bank_slot_purchase", seed_bank_world, Some(5099))
 }
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn two_character_visibility_matches_its_golden_trace() -> Result<()> {
     run_multi_scenario("two_character_visibility", seed_visibility_world)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+#[expect(non_snake_case, reason = "test name matches the harness scenario id")]
+fn bank_slot_purchase__observer_matches_its_golden_trace() -> Result<()> {
+    run_multi_scenario("bank_slot_purchase__observer", seed_bank_world)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+#[expect(non_snake_case, reason = "test name matches the harness scenario id")]
+fn bank_slot_purchase__spawn_beside_viewer_matches_its_golden_trace() -> Result<()> {
+    run_multi_scenario("bank_slot_purchase__spawn_beside_viewer", seed_bank_world)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+#[expect(non_snake_case, reason = "test name matches the harness scenario id")]
+fn taxi_single_hop__late_observer_matches_its_golden_trace() -> Result<()> {
+    run_multi_scenario("taxi_single_hop__late_observer", seed_taxi_world)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+#[expect(non_snake_case, reason = "test name matches the harness scenario id")]
+fn taxi_single_hop__reconnect_matches_its_golden_trace() -> Result<()> {
+    run_multi_scenario("taxi_single_hop__reconnect", seed_taxi_world)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+#[expect(non_snake_case, reason = "test name matches the harness scenario id")]
+fn two_character_visibility__opposite_faction_matches_its_golden_trace() -> Result<()> {
+    run_multi_scenario(
+        "two_character_visibility__opposite_faction",
+        seed_visibility_world,
+    )
 }
 
 #[test]

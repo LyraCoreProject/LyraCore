@@ -246,7 +246,7 @@ baseline still names the old harness revision. The generator requires a complete
 catalogue scenario; a setup failure stops the proposal.
 
 The workflow runs comparisons without a credential. It passes the harness revision and a
-base64-encoded Tier 1 baseline, capped at 64 KiB before encoding, as job outputs. A separate
+base64-encoded Tier 1 baseline, capped at 128 KiB before encoding, as job outputs. A separate
 runner fetches the tag, validates the baseline and derives its signature summary before using
 `HARNESS_PIN_TOKEN` to open or update the single
 `ci/auto-harness-pin` PR. Its body shows added and removed rule and data signatures per scenario,
@@ -381,7 +381,10 @@ uses item entries 25, 38, 39, 40 and 2362. The pinned Golden Trace records the f
 armor entries in each peer CREATE update; the fixture supplies only the item template fields
 needed to equip them. Entry 25 already has a template in the disposable Shard. The fixture adds
 these rows before creating either Character, so area rest state and visible equipment are present
-on both arrival streams.
+on both arrival streams. The opposite-faction variant adds the orc warrior outfit: entries 6125,
+139, 140 and 12282. Its pinned Golden Trace records those visible item entries and the axe's
+2900 ms attack interval. Both outfits use synthetic item templates, so remaining field differences
+stay in the measured baseline.
 
 The [T2g comparison](reports/2026-10-27-t2g.md) records the conformance.4 aligned differences
 and maps them to the taxi entry's known gaps. The [T2d comparison](reports/2026-10-27-t2d.md)

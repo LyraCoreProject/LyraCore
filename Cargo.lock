@@ -2795,7 +2795,7 @@ dependencies = [
 [[package]]
 name = "wire-client"
 version = "0.2.0-conformance.5"
-source = "git+https://github.com/LyraCoreProject/wire-harness?rev=166ecd701003b1d8538737d3f95ee0fa345d1779#166ecd701003b1d8538737d3f95ee0fa345d1779"
+source = "git+https://github.com/LyraCoreProject/wire-harness?rev=42a5d53ae2ebbd8c909e4e466a6090fee874c380#42a5d53ae2ebbd8c909e4e466a6090fee874c380"
 dependencies = [
  "anyhow",
  "flate2",

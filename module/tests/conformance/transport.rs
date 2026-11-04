@@ -10,6 +10,14 @@ use wire_client::scenario::{FixtureVerb, Observation, Scenario};
 
 use super::properties::{self, Batch, CreateContext, Packet, Projection};
 
+#[derive(Deserialize)]
+struct CreateRow {
+    packet_id: u64,
+    newly_added: bool,
+    layer: u8,
+    gameobject_type: u8,
+}
+
 pub struct OperatorTransport {
     connection: ReducerConnection,
     guid: u64,
@@ -163,14 +171,13 @@ impl OperatorTransport {
             .drain_inserts("game_native_conformance_create")
             .into_iter()
             .map(|row| {
-                let (id, newly_added, layer, gameobject_type): (u64, bool, u8, u8) =
-                    serde_json::from_str(row.get())?;
+                let row: CreateRow = serde_json::from_str(row.get())?;
                 Ok((
-                    id,
+                    row.packet_id,
                     CreateContext {
-                        newly_added,
-                        layer,
-                        gameobject_type,
+                        newly_added: row.newly_added,
+                        layer: row.layer,
+                        gameobject_type: row.gameobject_type,
                     },
                 ))
             })
@@ -417,7 +424,11 @@ impl<'a> MultiOperatorTransport<'a> {
             scenario.schema_version == 4,
             "scenario needs named Characters"
         );
-        let mut characters = BTreeMap::new();
+        let mut transport = Self {
+            shard,
+            characters: BTreeMap::new(),
+            virtual_micros: 0,
+        };
         for character in &scenario.characters {
             let FixtureVerb::Character {
                 name,
@@ -442,8 +453,9 @@ impl<'a> MultiOperatorTransport<'a> {
                     &at.y.to_string(),
                 ],
             );
+            transport.capture_except(None)?;
             shard.assert_call("debug_logout_character", &[&guid.to_string()]);
-            characters.insert(
+            transport.characters.insert(
                 character.id.clone(),
                 MultiCharacter {
                     guid,
@@ -452,13 +464,6 @@ impl<'a> MultiOperatorTransport<'a> {
                     completed: Vec::new(),
                 },
             );
-        }
-        let mut transport = Self {
-            shard,
-            characters,
-            virtual_micros: 0,
-        };
-        for character in &scenario.characters {
             if character.initially_connected {
                 transport.connect(&character.id)?;
             }
@@ -809,4 +814,18 @@ fn delivery_uses_packet_ids_before_applying_grants() {
             }
         ]
     );
+}
+
+#[test]
+fn create_context_accepts_subscription_and_reducer_rows() -> Result<()> {
+    for row in [
+        r#"{"packet_id":7,"newly_added":true,"layer":0,"gameobject_type":0}"#,
+        "[7,true,0,0]",
+    ] {
+        let row: CreateRow = serde_json::from_str(row)?;
+        assert_eq!(row.packet_id, 7);
+        assert!(row.newly_added);
+        assert_eq!((row.layer, row.gameobject_type), (0, 0));
+    }
+    Ok(())
 }

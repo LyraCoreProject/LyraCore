@@ -76,7 +76,21 @@ fn open_work(
     audit_head: &str,
     revision: &str,
 ) -> Result<Vec<OpenWork>> {
-    let baseline: Value = serde_json::from_str(include_str!("../tier1-baseline.json"))?;
+    let baseline = serde_json::from_str(include_str!("../tier1-baseline.json"))?;
+    open_work_from(
+        &baseline, ledger, audit, tier1, tier1_head, audit_head, revision,
+    )
+}
+
+fn open_work_from(
+    baseline: &Value,
+    ledger: &FeatureLedger,
+    audit: Option<&Report>,
+    tier1: Option<&Report>,
+    tier1_head: &str,
+    audit_head: &str,
+    revision: &str,
+) -> Result<Vec<OpenWork>> {
     let baseline_scenarios = baseline["scenarios"]
         .as_array()
         .context("tier 1 baseline scenarios")?;
@@ -910,11 +924,28 @@ fn audit_name_skips_existing_report_parts() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+fn clean_baseline() -> Result<Value> {
+    let mut baseline: Value = serde_json::from_str(include_str!("../tier1-baseline.json"))?;
+    for scenario in baseline["scenarios"].as_array_mut().unwrap() {
+        scenario["rule"] = json!([]);
+    }
+    Ok(baseline)
+}
+
 #[test]
 fn clean_baseline_without_report_requests_audit() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ledger = FeatureLedger::load(&root.join("features"))?;
-    let work = open_work(&ledger, None, None, "head", "head", "pin")?;
+    let work = open_work_from(
+        &clean_baseline()?,
+        &ledger,
+        None,
+        None,
+        "head",
+        "head",
+        "pin",
+    )?;
     for behavior in ["connection_identity", "taxi_single_hop"] {
         let item = work.iter().find(|item| item.behavior == behavior).unwrap();
         assert_eq!(item.kind, "evidence_refresh");
@@ -936,7 +967,8 @@ fn clean_tier1_with_stale_audit_requests_evidence_refresh() -> Result<()> {
         scenario["properties"] = json!([]);
     }
     let tier1: Report = serde_json::from_value(tier1_value)?;
-    let work = open_work(
+    let work = open_work_from(
+        &clean_baseline()?,
         &ledger,
         Some(&audit),
         Some(&tier1),
@@ -978,7 +1010,8 @@ fn clean_tier1_with_stale_audit_requests_evidence_refresh() -> Result<()> {
                 .iter()
                 .position(|item| item.behavior == "connection_identity")
     );
-    let without_tier1 = open_work(
+    let without_tier1 = open_work_from(
+        &clean_baseline()?,
         &ledger,
         Some(&audit),
         None,
@@ -994,7 +1027,8 @@ fn clean_tier1_with_stale_audit_requests_evidence_refresh() -> Result<()> {
     assert!(connection
         .next_command
         .starts_with("./conformance/audit --date "));
-    let without_audit = open_work(
+    let without_audit = open_work_from(
+        &clean_baseline()?,
         &ledger,
         None,
         Some(&tier1),
@@ -1022,8 +1056,29 @@ fn clean_tier1_with_audit_difference_reproduces_with_audit() -> Result<()> {
         scenario["comparison"]["differences"] = json!([]);
         scenario["properties"] = json!([]);
     }
+    let scenarios = tier1_value["scenarios"].as_array_mut().unwrap();
+    let taxi = scenarios
+        .iter()
+        .find(|scenario| scenario["id"] == "taxi_single_hop")
+        .unwrap()
+        .clone();
+    for id in [
+        "taxi_single_hop__late_observer",
+        "taxi_single_hop__reconnect",
+    ] {
+        let mut variant = taxi.clone();
+        variant["id"] = json!(id);
+        variant["scenario_sha256"] = json!(
+            wire_client::catalogue::get(id)?
+                .trace()
+                .header
+                .scenario_sha256
+        );
+        scenarios.push(variant);
+    }
     let tier1: Report = serde_json::from_value(tier1_value)?;
-    let work = open_work(
+    let work = open_work_from(
+        &clean_baseline()?,
         &ledger,
         Some(&audit),
         Some(&tier1),
@@ -1136,7 +1191,7 @@ fn summary_separates_partial_evidence_from_measured_passes() -> Result<()> {
     assert_eq!(summary.evidence, "present");
     assert_eq!(summary.pass, 1);
     assert_eq!(summary.scenarios_recorded, 1);
-    assert_eq!(summary.scenarios_expected, 2);
+    assert_eq!(summary.scenarios_expected, 4);
     assert_eq!(summary.states["match"], 1);
     assert_eq!(summary.states["not_run"], 1);
     assert_eq!(summary.rule_signatures, Some(0));
