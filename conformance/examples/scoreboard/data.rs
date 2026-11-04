@@ -1,3 +1,4 @@
+use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
@@ -94,9 +95,9 @@ pub fn coverage(ledger: &FeatureLedger) -> Result<Coverage> {
             }
         }
         for path in reports {
-            if !system.port_census.contains_key(&path) {
-                let source = std::fs::read_to_string(root.join(&path))?;
-                system.port_census.insert(path, census(&source)?);
+            if let Entry::Vacant(entry) = system.port_census.entry(path) {
+                let source = std::fs::read_to_string(root.join(entry.key()))?;
+                entry.insert(census(&source)?);
             }
         }
     }
