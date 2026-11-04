@@ -1,6 +1,8 @@
 import importlib.util
 import base64
 import copy
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
@@ -27,14 +29,16 @@ class PinBumpTests(unittest.TestCase):
             harness = root / "harness"
             (harness / "src").mkdir(parents=True)
             (harness / "src/catalogue.rs").write_text(
-                '    Entry { id: "existing", },\n    Entry { id: "new_scenario", },\n'
+                '    Entry { id: "existing", },\n    Entry { id: "existing_multi", },\n'
+                '    Entry { id: "new_scenario", },\n'
             )
             tests = root / "module/tests/conformance/tier1.rs"
             tests.parent.mkdir(parents=True)
-            tests.write_text('run_scenario("existing", |_, _| Ok(()))\n')
+            tests.write_text('run_scenario("existing", |_, _| Ok(()))\n'
+                             'run_multi_scenario("existing_multi", seed_world)\n')
             ledger = root / "conformance/features/system/existing.toml"
             ledger.parent.mkdir(parents=True)
-            ledger.write_text('scenarios = ["existing"]\n')
+            ledger.write_text('scenarios = ["existing", "existing_multi"]\n')
             metadata = {"packages": [{
                 "name": "wire-client", "manifest_path": str(harness / "Cargo.toml"),
                 "source": "git+https://github.com/LyraCoreProject/wire-harness?rev=abc",
@@ -43,6 +47,22 @@ class PinBumpTests(unittest.TestCase):
                 with mock.patch.object(PIN_BUMP.subprocess, "check_output",
                                        return_value=json.dumps(metadata)):
                     self.assertEqual(PIN_BUMP.missing_scenarios(), ["new_scenario"])
+
+    def test_missing_scenarios_emit_a_workflow_warning(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as directory:
+            root = Path(directory)
+            summary = root / "summary"
+            output = root / "output"
+            stdout = io.StringIO()
+            with mock.patch.object(PIN_BUMP, "missing_scenarios", return_value=["new_scenario"]), \
+                    mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(summary)}), \
+                    contextlib.redirect_stdout(stdout):
+                PIN_BUMP.check_catalogue(output)
+            self.assertIn("::warning title=Harness pin proposal blocked::", stdout.getvalue())
+            self.assertIn("new_scenario", stdout.getvalue())
+            self.assertIn("new_scenario", summary.read_text())
+            self.assertEqual(output.read_text(), "missing=true\n")
 
     def test_publish_accepts_only_baseline_provenance_and_signatures(self):
         before = json.loads((SCRIPT.parent / "tier1-baseline.json").read_text())

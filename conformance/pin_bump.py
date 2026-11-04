@@ -20,7 +20,7 @@ DEPENDENCY = re.compile(
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
 TAG_NAME = re.compile(r"v0\.2\.0-conformance\.[0-9]+")
-MAX_BASELINE_BYTES = 64_000
+MAX_BASELINE_BYTES = 128 * 1024
 PROPOSAL_FILES = (".wire-harness-rev", "Cargo.toml", "Cargo.lock",
                   "conformance/tier1-baseline.json")
 
@@ -97,7 +97,7 @@ def missing_scenarios():
     if not entries or len(entries) != catalogue.count("    Entry {") or len(entries) != len(set(entries)):
         raise ValueError("could not read the harness scenario catalogue")
     tests = (ROOT / "module/tests/conformance/tier1.rs").read_text()
-    tested = set(re.findall(r'run_scenario\(\s*"([a-z0-9_]+)"', tests))
+    tested = set(re.findall(r'run_(?:multi_)?scenario\(\s*"([a-z0-9_]+)"', tests))
     ledger = set()
     for path in (ROOT / "conformance/features").glob("*/*.toml"):
         ledger.update(tomllib.loads(path.read_text())["scenarios"])
@@ -110,7 +110,7 @@ def check_catalogue(output):
         stream.write(f"missing={str(bool(missing)).lower()}\n")
     if missing:
         message = "New harness scenarios need a combined core PR: " + ", ".join(missing)
-        print(message)
+        print("::warning title=Harness pin proposal blocked::" + message)
         with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as stream:
             stream.write(f"{message}\n")
 
