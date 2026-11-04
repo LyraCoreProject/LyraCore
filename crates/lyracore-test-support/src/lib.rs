@@ -197,10 +197,6 @@ impl Standalone {
     }
 
     fn start_with_storage(test_name: &str, storage: Storage) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("failed to reserve a local port");
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-
         // Tests of one file share a name and a process, and two can start in the same nanosecond.
         static STARTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nonce = SystemTime::now()
@@ -219,14 +215,18 @@ impl Standalone {
         let log_path = log_dir.join(format!("{name}.log"));
 
         let spacetime = std::env::var_os("SPACETIME_BIN").unwrap_or_else(|| "spacetime".into());
-        let address = format!("127.0.0.1:{port}");
-        let server = format!("http://{address}");
         // The first node must finish creating shared signing keys before the next reads.
         let signing_keys = signing_keys();
         let startup = signing_keys
             .startup
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A released port stays free only until the node binds it, so reserve inside this lock.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("failed to reserve a local port");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let address = format!("127.0.0.1:{port}");
+        let server = format!("http://{address}");
         let child = spawn_node(
             &spacetime,
             &cli_config,
