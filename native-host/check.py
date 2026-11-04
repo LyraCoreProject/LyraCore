@@ -4129,7 +4129,7 @@ def check_inventory(host):
     assert host.rows(f'SELECT slot FROM game_item_instance WHERE guid = {food_guid}')[0][0] < 39
     client.send(0x1b9, struct.pack('<Q', vendor))
     bank_slot = client.collect()
-    assert (0x1ba, struct.pack('<I', 3)) in bank_slot
+    assert not any(opcode == 0x1ba for opcode, _ in bank_slot)
     assert values(bank_slot, guid)[194] >> 16 & 255 == 1
     assert host.rows(f'SELECT bank_bag_slots, money FROM game_world_entity WHERE guid = {guid}') == [[1, 48980]]
     client.send(0x17c, struct.pack('<QI', vendor, 0))
