@@ -33,6 +33,9 @@ def check(host):
     host.call('operator_set_shard_role', [{'some': {'realm': host.identity(east)}}])
     for world in worlds:
         host.call('operator_set_shard_role', [{'some': {'world': host.identity()}}], database=world)
+        for peer in worlds:
+            if peer != world:
+                host.call('operator_add_peer_shard', [host.identity(peer), peer], database=world)
     for map_id, world in enumerate(worlds):
         for owner in (None, *worlds):
             host.call('operator_set_map_owner', [map_id, host.identity(world)], database=owner)
