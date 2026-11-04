@@ -399,12 +399,6 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
                 }
             }
         }
-        if old.player_bytes_2 != new.player_bytes_2 {
-            if let Some(owner) = ctx.db.game_native_player().character_guid().find(new.guid) {
-                let (opcode, body) = codec::build_rest_state_values(new.guid, new.player_bytes_2);
-                super::send_raw(ctx, owner.connection_id, opcode, body, false);
-            }
-        }
         if old.armor != new.armor {
             if let Some(owner) = ctx.db.game_native_player().character_guid().find(new.guid) {
                 let current: Vec<_> = crate::spell::auras_on(ctx, new.guid).collect();
@@ -503,6 +497,10 @@ pub(crate) fn loot_flags(ctx: &ReducerContext, entity: &WorldEntity) {
 fn updates(old: &WorldEntity, new: &WorldEntity) -> Vec<ServerOpcodeMessage> {
     let mut out = Vec::new();
     let is_player = new.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0;
+    if is_player && old.player_bytes_2 != new.player_bytes_2 {
+        let m = codec::build_bank_bag_slots_values(new.guid, new.player_bytes_2);
+        out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+    }
     if is_player && old.level != new.level {
         let m = codec::build_level_values(new.guid, new.level);
         out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
@@ -568,4 +566,38 @@ fn updates(old: &WorldEntity, new: &WorldEntity) -> Vec<ServerOpcodeMessage> {
         )));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use lyracore_protocol::messages::vanilla::{Object, UpdateMask};
+
+    #[test]
+    fn bank_slot_purchase_updates_public_fields_without_coinage() {
+        let mut old = crate::helpers::tests::entity(5, 0, 0, 0, 0);
+        old.type_mask = lyracore_shared::constants::type_mask::PLAYER_BIT;
+        old.money = 10_000;
+        old.player_bytes_2 = 0x0200_0000;
+        let mut new = crate::helpers::tests::entity(5, 0, 0, 0, 0);
+        new.type_mask = old.type_mask;
+        new.money = 9_000;
+        new.bank_bag_slots = 1;
+        new.player_bytes_2 = 0x0201_0000;
+
+        let messages = updates(&old, &new);
+        let [ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update)] = messages.as_slice() else {
+            panic!("the purchase must update the public bank slot field: {messages:?}");
+        };
+        let [Object::Values {
+            guid1,
+            mask1: UpdateMask::Player(fields),
+        }] = update.objects.as_slice()
+        else {
+            panic!("expected Character VALUES: {update:?}");
+        };
+        assert_eq!(guid1.guid(), 5);
+        assert_eq!(fields.player_bytes_2(), Some((0, 0xee, 1, 2)));
+        assert_eq!(fields.player_field_coinage(), None);
+    }
 }
