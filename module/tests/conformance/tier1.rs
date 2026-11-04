@@ -518,3 +518,64 @@ fn quest_offers_matches_its_golden_trace() -> Result<()> {
 fn quest_log_matches_its_golden_trace() -> Result<()> {
     run_scenario("quest_log", seed_quest_world, None)
 }
+
+fn seed_transaction_world(shard: &Standalone, _: &wire_client::scenario::Scenario) -> Result<()> {
+    for statement in super::transaction_world::STATEMENTS
+        .iter()
+        .chain(super::character_world::STATEMENTS)
+    {
+        shard.assert_sql(statement);
+    }
+    Ok(())
+}
+
+fn seed_quest_transaction_world(
+    shard: &Standalone,
+    scenario: &wire_client::scenario::Scenario,
+) -> Result<()> {
+    seed_transaction_world(shard, scenario)?;
+    seed_quest_world(shard, scenario)?;
+    shard.assert_sql("DELETE FROM game_faction WHERE faction_id = 72");
+    shard.assert_sql(
+        "INSERT INTO game_faction (faction_id,reputation_index,base_standing) VALUES (72,19,0)",
+    );
+    Ok(())
+}
+
+fn seed_spell_world(shard: &Standalone, scenario: &wire_client::scenario::Scenario) -> Result<()> {
+    seed_transaction_world(shard, scenario)?;
+    for statement in super::spell_world::STATEMENTS {
+        shard.assert_sql(statement);
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn vendor_transactions_matches_its_golden_trace() -> Result<()> {
+    run_scenario("vendor_transactions", seed_transaction_world, None)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn vendor_offers_matches_its_golden_trace() -> Result<()> {
+    run_scenario("vendor_offers", seed_transaction_world, None)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn quest_completion_matches_its_golden_trace() -> Result<()> {
+    run_scenario("quest_completion", seed_quest_transaction_world, None)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn quest_reward_matches_its_golden_trace() -> Result<()> {
+    run_scenario("quest_reward", seed_quest_transaction_world, None)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn cast_and_interrupt_matches_its_golden_trace() -> Result<()> {
+    run_scenario("cast_and_interrupt", seed_spell_world, None)
+}

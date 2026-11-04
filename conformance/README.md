@@ -810,3 +810,24 @@ The fixture preserves creature 1977's display, faction, level and quest-giver fl
 Its health and combat values are inert placeholders: the scenarios scope out creatures and
 perform no combat. Quest grants bypass prerequisite eligibility and preserve fixture order.
 These are approved tier 1 fixtures, not imported world data or gameplay changes.
+
+## Transaction and spell data
+
+Tier 1 uses `support/transaction_world.rs`, `support/character_world.rs` and
+`support/spell_world.rs` for the five scenarios added by harness PRs #46–#50. Numeric values
+come from the read-only SQLite snapshot at database commit
+`464179081673cfd240f7ffe7f0daf96bca0b5a70`. All text is fixture-authored.
+The fixtures preserve the ordered vendor stock, item prices, displays, buy counts and durability,
+starting outfits, level stats and quest 2158's choice rewards, 110 XP and faction 72 reward 25.
+Spell 5504 costs 60 mana and takes 3000 ms to create two items 5350.
+
+The current vendor table cannot store restock seconds, offer flags or condition links.
+Vendor 66 item 6270 restocks after 7200 seconds. Vendor 9499 item 11325 has stock 10 and
+restocks after 60 seconds; item 15759 has stock 1, restocks after 3600 seconds and has offer
+flags 3. Vendor 11188 items 13480, 6149 and 3928 have stock 1 and restock after 7200 seconds;
+item 13480 has offer flags 3. Item 14526 uses condition 4000.
+Condition 4000 is content-patch equality with zero; patch 10
+must hide its offer. The fixture stores the condition but cannot link it to the offer yet.
+Quest 2158's flags 8 are seeded through `game_quest_flags`.
+Creature health and combat values are inert placeholders; these scenarios do no creature combat.
+The baselines record differences from unsupported data and gameplay without weakening comparison.

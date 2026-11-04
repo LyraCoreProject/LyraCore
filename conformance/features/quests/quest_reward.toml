@@ -3,10 +3,10 @@ id = "quest_reward"
 system = "quests"
 scope = "Turning in a completed quest grants the selected reward together with its other rewards and completes the quest."
 requests = ["0x0189", "0x018E"]
-replies = ["0x0191"]
+replies = ["0x017E", "0x018D", "0x0166", "0x0124", "0x01D0", "0x0191"]
 dependencies = []
 required_rungs = ["durable_module", "tier1", "conformance_audit", "real_client"]
-scenarios = []
+scenarios = ["quest_reward"]
 deliberate_deviations = []
 prerequisites = ["Quest templates, objectives, giver relations and reward item templates are imported."]
 
@@ -22,3 +22,9 @@ status = "unverified"
 path = "module/tests/quest_choice_reward.rs"
 function = "durable_choice_turn_in_grants_the_selected_item_with_all_other_rewards"
 rung = "durable_module"
+
+[[known_gaps]]
+description = "Quest reward acceptance, invalid-choice and repeated-turn-in replies differ. Item notification flags, starter inventory slots and the XP packet also differ."
+path = "module/src/native/quest.rs"
+symbol = "receive"
+evidence = "quest_reward tier 1: missing gossip-close on accept, invalid-choice and repeat packet differences, item notification fields and slot 24 instead of 25, and XP packet alignment."

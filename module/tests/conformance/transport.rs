@@ -45,8 +45,9 @@ impl OperatorTransport {
         };
         let guid = prepare_character(shard, "CONFORMANCE", name, race, class, *level, at)?;
         let fixtures = prepare_fixtures(shard, guid, &scenario.fixtures[1..], at)?;
-        let transport = Self::connect(shard, guid, fixtures)?;
-        verify_quest_opening(&transport.opening, guid, &scenario.fixtures)?;
+        let mut transport = Self::connect(shard, guid, fixtures)?;
+        let items = verify_opening(&transport.opening, guid, &scenario.fixtures)?;
+        transport.fixtures.extend(items);
         let character = &shard.query_rows(&format!(
             "SELECT * FROM game_world_entity WHERE guid = {guid}"
         ))[0];
@@ -293,13 +294,22 @@ fn prepare_fixtures(
                     "fixture money did not apply"
                 );
             }
-            FixtureVerb::Quest {
-                entry,
-                state: QuestState::Incomplete,
-            } => {
+            FixtureVerb::Quest { entry, .. } => {
                 shard.assert_call(
                     "debug_grant_quest",
                     &[&guid.to_string(), &entry.to_string()],
+                );
+            }
+            FixtureVerb::Item { entry, count, .. } => {
+                shard.assert_call(
+                    "debug_grant_item",
+                    &[&guid.to_string(), &entry.to_string(), &count.to_string()],
+                );
+            }
+            FixtureVerb::Spell { spell_id } => {
+                shard.assert_call(
+                    "debug_learn_spell",
+                    &[&guid.to_string(), &spell_id.to_string()],
                 );
             }
             FixtureVerb::KnownFlightNode { node_id } => {
@@ -383,12 +393,138 @@ fn prepare_fixtures(
             );
             let counts = &row["counts"];
             ensure!(
-                !counts.is_empty() && counts.bytes().all(|count| count == b'0'),
-                "quest fixture must be incomplete without progress"
+                counts.bytes().all(|count| count == b'0'),
+                "quest fixture must have no objective progress"
             );
         }
     }
     Ok(fixtures)
+}
+
+fn verify_opening(
+    opening: &[Observation],
+    guid: u64,
+    fixtures: &[FixtureVerb],
+) -> Result<BTreeMap<String, u64>> {
+    verify_quest_opening(opening, guid, fixtures)?;
+    if fixtures
+        .iter()
+        .any(|fixture| matches!(fixture, FixtureVerb::Spell { .. }))
+    {
+        let mut verified = false;
+        for observation in opening {
+            verified |= spell_snapshot_matches(observation, fixtures)?;
+        }
+        ensure!(verified, "spell fixture has no final login spell list");
+    }
+    if fixtures
+        .iter()
+        .any(|fixture| matches!(fixture, FixtureVerb::Item { .. }))
+    {
+        return item_fixture_bindings(opening, guid, fixtures)?
+            .context("item fixture missing from final login backpack snapshot");
+    }
+    Ok(BTreeMap::new())
+}
+
+fn item_fixture_bindings(
+    opening: &[Observation],
+    guid: u64,
+    fixtures: &[FixtureVerb],
+) -> Result<Option<BTreeMap<String, u64>>> {
+    use wire_client::decode::Field;
+    let mut inventory = None;
+    let mut items = BTreeMap::new();
+    for observation in opening {
+        let Some(Field::List(objects)) = observation.packet.fields.get("objects") else {
+            continue;
+        };
+        for object in objects {
+            let Field::Object(object) = object else {
+                continue;
+            };
+            if !matches!(object.get("kind"), Some(Field::Unsigned(2 | 3))) {
+                continue;
+            }
+            let (Some(Field::Guid(subject)), Some(Field::Object(values))) =
+                (object.get("guid"), object.get("values"))
+            else {
+                continue;
+            };
+            if *subject == guid {
+                inventory = Some(values);
+            }
+            if *subject >> 48 == 0x4000 {
+                items.insert(*subject, values);
+            }
+        }
+    }
+    let Some(inventory) = inventory else {
+        return Ok(None);
+    };
+    let word = |values: &BTreeMap<String, Field>, index| -> Result<u64> {
+        match values.get(&format!("field_{index}")) {
+            Some(Field::Unsigned(value)) => Ok(*value),
+            None => Ok(0),
+            _ => bail!("item fixture field has the wrong type"),
+        }
+    };
+    let mut bindings = BTreeMap::new();
+    for fixture in fixtures {
+        let FixtureVerb::Item { id, entry, count } = fixture else {
+            continue;
+        };
+        let mut matching = Vec::new();
+        // Build 5875 backpack slots 23..39 use GUID pairs starting at field 486.
+        for slot in 23..39 {
+            let item_guid =
+                word(inventory, 486 + slot * 2)? | (word(inventory, 487 + slot * 2)? << 32);
+            let Some(values) = items.get(&item_guid) else {
+                continue;
+            };
+            if word(values, 3)? != u64::from(*entry) {
+                continue;
+            }
+            ensure!(
+                word(values, 6)? | (word(values, 7)? << 32) == guid,
+                "item fixture has the wrong owner"
+            );
+            ensure!(
+                word(values, 14)? == u64::from(*count),
+                "item fixture has the wrong count"
+            );
+            matching.push(item_guid);
+        }
+        ensure!(
+            matching.len() <= 1,
+            "item fixture must occupy one backpack stack"
+        );
+        let Some(item_guid) = matching.first() else {
+            return Ok(None);
+        };
+        bindings.insert(id.clone(), *item_guid);
+    }
+    Ok(Some(bindings))
+}
+
+fn spell_snapshot_matches(observation: &Observation, fixtures: &[FixtureVerb]) -> Result<bool> {
+    use wire_client::decode::Field;
+    if observation.packet.opcode != 298 {
+        return Ok(false);
+    }
+    let Some(Field::List(spells)) = observation.packet.fields.get("spells") else {
+        bail!("final login spell list did not decode");
+    };
+    for fixture in fixtures {
+        if let FixtureVerb::Spell { spell_id } = fixture {
+            let present = spells.iter().any(|spell| matches!(spell, Field::Object(fields) if fields.get("id") == Some(&Field::Unsigned((*spell_id).into()))));
+            ensure!(
+                present,
+                "spell fixture {spell_id} missing from final login spell list"
+            );
+        }
+    }
+    Ok(true)
 }
 
 fn verify_quest_opening(
@@ -400,7 +536,7 @@ fn verify_quest_opening(
     let quests: Vec<_> = fixtures
         .iter()
         .filter_map(|fixture| match fixture {
-            FixtureVerb::Quest { entry, .. } => Some(*entry),
+            FixtureVerb::Quest { entry, state } => Some((*entry, *state)),
             _ => None,
         })
         .collect();
@@ -431,7 +567,7 @@ fn verify_quest_opening(
 
 fn verify_quest_words(
     values: &BTreeMap<String, wire_client::decode::Field>,
-    quests: &[u32],
+    quests: &[(u32, QuestState)],
 ) -> Result<()> {
     use wire_client::decode::Field;
     // Build 5875 has 20 quest slots, three words each, beginning at field 198.
@@ -439,7 +575,13 @@ fn verify_quest_words(
         for offset in 0..3 {
             let field = format!("field_{}", 198 + slot * 3 + offset);
             let expected = if offset == 0 {
-                u64::from(quests.get(slot).copied().unwrap_or(0))
+                quests.get(slot).map_or(0, |(entry, _)| u64::from(*entry))
+            } else if offset == 1
+                && quests
+                    .get(slot)
+                    .is_some_and(|(_, state)| matches!(state, QuestState::Complete))
+            {
+                0x0100_0000
             } else {
                 0
             };
@@ -464,13 +606,32 @@ fn quest_fixture_requires_ordered_incomplete_slots_and_an_empty_remainder() {
         ("field_198".into(), Field::Unsigned(7)),
         ("field_201".into(), Field::Unsigned(15)),
     ]);
-    assert!(verify_quest_words(&values, &[7, 15]).is_ok());
-    assert!(verify_quest_words(&values, &[15, 7]).is_err());
+    assert!(verify_quest_words(
+        &values,
+        &[(7, QuestState::Incomplete), (15, QuestState::Incomplete)]
+    )
+    .is_ok());
+    assert!(verify_quest_words(
+        &values,
+        &[(15, QuestState::Incomplete), (7, QuestState::Incomplete)]
+    )
+    .is_err());
     for (field, value) in [(199, 1), (200, 1), (204, 7), (257, 1)] {
         let mut changed = values.clone();
         changed.insert(format!("field_{field}"), Field::Unsigned(value));
-        assert!(verify_quest_words(&changed, &[7, 15]).is_err());
+        assert!(verify_quest_words(
+            &changed,
+            &[(7, QuestState::Incomplete), (15, QuestState::Incomplete)]
+        )
+        .is_err());
     }
+    let mut complete = values.clone();
+    complete.insert("field_201".into(), Field::Unsigned(2158));
+    complete.insert("field_202".into(), Field::Unsigned(0x0100_0000));
+    let quests = [(7, QuestState::Incomplete), (2158, QuestState::Complete)];
+    assert!(verify_quest_words(&complete, &quests).is_ok());
+    complete.remove("field_202");
+    assert!(verify_quest_words(&complete, &quests).is_err());
 }
 
 impl Transport for OperatorTransport {
@@ -592,7 +753,7 @@ impl<'a> MultiOperatorTransport<'a> {
             );
             if character.initially_connected {
                 transport.connect(&character.id)?;
-                verify_quest_opening(
+                let items = verify_opening(
                     &transport.characters[&character.id]
                         .transport
                         .as_ref()
@@ -601,6 +762,17 @@ impl<'a> MultiOperatorTransport<'a> {
                     guid,
                     &character.fixtures,
                 )?;
+                let prepared = transport
+                    .characters
+                    .get_mut(&character.id)
+                    .context("fixture Character")?;
+                prepared.fixtures.extend(items.clone());
+                prepared
+                    .transport
+                    .as_mut()
+                    .context("fixture connection")?
+                    .fixtures
+                    .extend(items);
             }
         }
         Ok(transport)
@@ -963,6 +1135,98 @@ fn create_context_accepts_subscription_and_reducer_rows() -> Result<()> {
         assert_eq!((row.layer, row.gameobject_type), (0, 0));
     }
     Ok(())
+}
+
+#[test]
+fn spell_fixture_requires_the_declared_spell_in_final_login() {
+    use std::collections::BTreeMap;
+    use wire_client::decode::{Field, Packet};
+    use wire_client::scenario::{FixtureVerb, Observation, Stream};
+    let fixtures = [FixtureVerb::Spell { spell_id: 5504 }];
+    let snapshot = |id| Observation {
+        character: None,
+        received_after_ms: None,
+        checkpoint: "opening".into(),
+        stream: Stream::Opening,
+        packet: Packet {
+            opcode: 298,
+            fields: BTreeMap::from([(
+                "spells".into(),
+                Field::List(vec![Field::Object(BTreeMap::from([(
+                    "id".into(),
+                    Field::Unsigned(id),
+                )]))]),
+            )]),
+        },
+    };
+    assert!(spell_snapshot_matches(&snapshot(5504), &fixtures).unwrap());
+    assert!(spell_snapshot_matches(&snapshot(133), &fixtures).is_err());
+}
+
+#[test]
+fn item_fixture_requires_owned_backpack_stack_with_exact_count() {
+    use std::collections::BTreeMap;
+    use wire_client::decode::{Field, Packet};
+    use wire_client::scenario::{FixtureVerb, Observation, Stream};
+    let fixtures = [FixtureVerb::Item {
+        id: "linen".into(),
+        entry: 2589,
+        count: 2,
+    }];
+    let snapshot = |owner, count, slot| {
+        let object = |guid, values| {
+            Field::Object(BTreeMap::from([
+                ("guid".into(), Field::Guid(guid)),
+                ("kind".into(), Field::Unsigned(3)),
+                ("values".into(), Field::Object(values)),
+            ]))
+        };
+        Observation {
+            character: None,
+            received_after_ms: None,
+            checkpoint: "opening".into(),
+            stream: Stream::Opening,
+            packet: Packet {
+                opcode: 169,
+                fields: BTreeMap::from([(
+                    "objects".into(),
+                    Field::List(vec![
+                        object(
+                            9,
+                            BTreeMap::from([
+                                (format!("field_{}", 486 + slot * 2), Field::Unsigned(7)),
+                                (
+                                    format!("field_{}", 487 + slot * 2),
+                                    Field::Unsigned(0x40000000),
+                                ),
+                            ]),
+                        ),
+                        object(
+                            0x4000000000000007,
+                            BTreeMap::from([
+                                ("field_3".into(), Field::Unsigned(2589)),
+                                ("field_6".into(), Field::Unsigned(owner)),
+                                ("field_14".into(), Field::Unsigned(count)),
+                            ]),
+                        ),
+                    ]),
+                )]),
+            },
+        }
+    };
+    assert_eq!(
+        item_fixture_bindings(&[snapshot(9, 2, 25)], 9, &fixtures)
+            .unwrap()
+            .unwrap()["linen"],
+        0x4000000000000007
+    );
+    assert!(item_fixture_bindings(&[], 9, &fixtures).unwrap().is_none());
+    assert!(item_fixture_bindings(&[snapshot(9, 2, 40)], 9, &fixtures)
+        .unwrap()
+        .is_none());
+    for (owner, count) in [(10, 2), (9, 1), (9, 3)] {
+        assert!(item_fixture_bindings(&[snapshot(owner, count, 25)], 9, &fixtures).is_err());
+    }
 }
 
 #[test]

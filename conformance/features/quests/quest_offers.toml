@@ -21,8 +21,3 @@ symbol = "WorldSession::HandleQuestQueryOpcode"
 [real_client]
 status = "unverified"
 
-[[known_gaps]]
-description = "Tier 1 quest text differs from the Golden Trace digests because the fixture authors its own text; Reference Server text stays out of the repository. Do not change the Module for these nine title, details and objectives signatures. Tagging those fields as data fields in the scenario removes them."
-path = "conformance/support/quest_world.rs"
-symbol = "STATEMENTS"
-evidence = "quest_offers tier 1 exact_field signatures on title, details and objectives at the hello, details and requirements checkpoints"

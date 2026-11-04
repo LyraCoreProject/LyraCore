@@ -7,16 +7,22 @@ use serde_json::json;
 use serde_json::value::RawValue;
 use wow_world_messages::vanilla::{ClientMessage, CMSG_AUTH_SESSION};
 
+#[path = "../../conformance/support/character_world.rs"]
+mod character_world;
 #[path = "../../conformance/support/properties/mod.rs"]
 mod properties;
 #[path = "../../conformance/support/quest_world.rs"]
 mod quest_world;
+#[path = "../../conformance/support/spell_world.rs"]
+mod spell_world;
 #[path = "conformance/taxi.rs"]
 mod taxi;
 #[path = "../../conformance/support/taxi_route.rs"]
 mod taxi_route;
 #[path = "conformance/tier1.rs"]
 mod tier1;
+#[path = "../../conformance/support/transaction_world.rs"]
+mod transaction_world;
 #[path = "conformance/transport.rs"]
 mod transport;
 
