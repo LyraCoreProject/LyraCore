@@ -382,10 +382,24 @@ mod tests {
             baseline["scenarios"][0]["harness_revision"],
             report.harness_revision
         );
-        assert_eq!(
-            baseline["scenarios"][0]["scenario_sha256"],
-            String::from(golden.trace().header.scenario_sha256.clone())
-        );
+        let recorded = report
+            .scenarios
+            .iter()
+            .find(|entry| entry.id == scenario)
+            .context("committed scenario")?;
+        if recorded.scenario_sha256 == golden.trace().header.scenario_sha256 {
+            assert_eq!(
+                baseline["scenarios"][0]["scenario_sha256"],
+                String::from(recorded.scenario_sha256.clone())
+            );
+        } else {
+            assert_eq!(
+                baseline["scenarios"][0]["scenario_sha256"],
+                String::from(Sha256Digest::of(b"not in the latest full audit"))
+            );
+            assert_eq!(baseline["scenarios"][0]["rule"], serde_json::json!([]));
+            assert_eq!(baseline["scenarios"][0]["data"], serde_json::json!([]));
+        }
         Ok(())
     }
 

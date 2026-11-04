@@ -9,6 +9,8 @@ use wow_world_messages::vanilla::{ClientMessage, CMSG_AUTH_SESSION};
 
 #[path = "../../conformance/support/properties/mod.rs"]
 mod properties;
+#[path = "../../conformance/support/quest_world.rs"]
+mod quest_world;
 #[path = "conformance/taxi.rs"]
 mod taxi;
 #[path = "../../conformance/support/taxi_route.rs"]

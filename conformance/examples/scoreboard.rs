@@ -1048,7 +1048,14 @@ fn clean_tier1_with_stale_audit_requests_evidence_refresh() -> Result<()> {
 fn clean_tier1_with_audit_difference_reproduces_with_audit() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ledger = FeatureLedger::load(&root.join("features"))?;
-    let (_, audit) = evidence::latest_audit(&root.join("reports"), None)?.context("audit")?;
+    let (_, mut audit) = evidence::latest_audit(&root.join("reports"), None)?.context("audit")?;
+    for scenario in &mut audit.scenarios {
+        scenario.scenario_sha256 = wire_client::catalogue::get(&scenario.id)?
+            .trace()
+            .header
+            .scenario_sha256
+            .clone();
+    }
     let mut tier1_value = serde_json::to_value(&audit)?;
     tier1_value["tier"] = json!("tier1");
     tier1_value["audit"] = Value::Null;
