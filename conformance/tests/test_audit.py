@@ -51,36 +51,6 @@ class WorldReadiness(unittest.TestCase):
         self.assertEqual(connect.call_count, 2)
 
 
-class LocalRealmLifetime(unittest.TestCase):
-    def test_import_failure_stops_the_realm_started_by_the_audit(self):
-        calls = []
-
-        def run(args, **_):
-            calls.append([str(arg) for arg in args])
-            if args[:3] == ['git', 'worktree', 'add']:
-                args[4].mkdir()
-            if args[1:3] == ['import', '--accept']:
-                raise RuntimeError('import failed')
-            if args[:3] == ['git', 'worktree', 'remove']:
-                shutil.rmtree(args[4])
-
-        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory, \
-                patch.object(audit, 'ROOT', Path(directory)), patch.object(audit, 'git', return_value=''), \
-                patch.object(audit, 'run', run), patch.object(audit.shutil, 'which', return_value='/usr/bin/spacetime'), \
-                patch.object(audit.socket, 'socket'):
-            work = Path(directory)
-            (work / '.lyracore-cli-rev').write_text('30814fe814edbfa3a143102f93008080482df6a6')
-            with self.assertRaisesRegex(RuntimeError, 'import failed'):
-                with audit.local_realm(work, work / 'client/Data', 0):
-                    self.fail('capture must not start')
-            self.assertFalse((work / 'core').exists())
-        self.assertEqual([call[1:3] for call in calls],
-                         [['worktree', 'add'], ['dev', 'up'], ['import', '--accept'],
-                          ['dev', 'down'], ['worktree', 'remove']])
-        self.assertEqual(calls[2][-2:], ['--client-data', str(work / 'client/Data')])
-
-
 class ClientDataPath(unittest.TestCase):
     def test_relative_client_data_is_resolved_before_the_audit_changes_directory(self):
         audit.SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -108,7 +78,7 @@ class ClientDataPath(unittest.TestCase):
                     patch.object(audit, 'run', run), patch.object(audit, 'check_cargo_config'), \
                     patch.object(audit, 'pinned_harness', return_value=Path(directory)), \
                     patch.object(audit, 'capture_servers', side_effect=capture_servers), \
-                    patch.object(audit, 'check_spacetime_version'):
+                    patch.object(audit, 'check_spacetime_version'), patch.object(audit, 'module_schema_hash'):
                 audit.main()
             self.assertEqual(captured, [str(client_data.resolve())])
 
@@ -357,21 +327,6 @@ class IncompleteScenarioCache(unittest.TestCase):
             with patch.object(audit, 'SCENARIO_CACHE', cache), patch.object(audit, 'free_port'):
                 audit.stop_scenario_cache()
             self.assertFalse((cache / 'realm').exists())
-
-
-class CleanupAuthentication(unittest.TestCase):
-    def test_only_pre_authentication_proof_errors_retry_once(self):
-        proof = audit.subprocess.CalledProcessError(1, ['wire'], stderr=b'Error: logon proof rejected\n')
-        deletion = audit.subprocess.CalledProcessError(1, ['wire'], stderr=b'Error: character deletion failed\n')
-        for errors, calls, succeeds in [([proof, None], 2, True), ([proof, proof], 2, False),
-                                        ([deletion], 1, False)]:
-            with self.subTest(succeeds=succeeds, calls=calls), patch.object(audit, 'run', side_effect=errors) as run:
-                if succeeds:
-                    audit.delete_reference_character('wire', 'Fixture', 'CONFORMANCE', b'password', {})
-                else:
-                    with self.assertRaises(RuntimeError):
-                        audit.delete_reference_character('wire', 'Fixture', 'CONFORMANCE', b'password', {})
-                self.assertEqual(run.call_count, calls)
 
 
 class NamedCharacters(unittest.TestCase):
@@ -742,7 +697,7 @@ class ReferenceOwnership(unittest.TestCase):
         self.assertEqual(self.running, {'auth', 'database', 'world'})
         self.assertFalse(self.marker.exists())
 
-    def test_wire_adapter_receives_the_owned_project_in_scenario_and_full_audits(self):
+    def test_catalogue_restores_both_worlds_before_reassigning_a_name(self):
         realm = self.root / 'realm'
         current = realm / '.import/vmangos/current.json'
         current.parent.mkdir(parents=True)
@@ -755,21 +710,35 @@ class ReferenceOwnership(unittest.TestCase):
         state.write_text(json.dumps(dict(native_host_sha256=audit.digest(host),
                                         module_sha256=audit.digest(module), database_commit='pin',
                                         world_origin='snapshot')))
-        scenario = {'id': 'taxi_single_hop', 'characters': ['Taxi']}
-        (self.root / 'catalogue.json').write_text(json.dumps([scenario]))
+        scenarios = [dict(id='actor_first', characters=['Banktester', 'Spawnwatch']),
+                     dict(id='viewer_first', characters=['Spawnwatch', 'Banktester'])]
+        (self.root / 'catalogue.json').write_text(json.dumps(scenarios))
+        (self.root / 'credentials/peer2-password').write_text('fake')
+        realm_state = {}
+        captured = []
         @audit.contextmanager
-        def local_realm(*_args, **_kwargs):
+        def realm_server(*_args, **_kwargs):
+            realm_state.clear()
             yield 'password', token, host, module, realm
-        with patch.object(audit, 'scenario_realm', local_realm), \
-                patch.object(audit, 'local_realm', local_realm):
-            credentials = self.root / 'credentials'
-            credentials.mkdir(exist_ok=True)
-            for name in ['player-password', 'gm-password']:
-                (credentials / name).write_text('fake')
-            with audit.capture_scenario(self.root, 'wire', self.root, scenario['id'], 'key', {}, self.root):
-                pass
+        def capture(_wire, _work, scenario, adapter, *_args, **options):
+            if adapter == 'vmangos':
+                self.assertEqual(options['progress'], audit.sys.stderr)
+                self.assertEqual(self.world, 'clean world')
+                self.world = 'Characters, creatures, vendor stock and restock timers changed'
+            else:
+                self.assertEqual(realm_state, {})
+                realm_state.update(names=scenario['characters'], money=0, quests=[7], items=[25],
+                                   reputation=10, creatures=[523], objects=[1], stock=0, restock=60)
+            captured.append((scenario['id'], adapter))
+        with patch.object(audit, 'scenario_realm', realm_server), \
+                patch.object(audit, 'prepare_scenario_realm', realm_server), \
+                patch.object(audit, 'scenario_key', return_value=('key', {'database_commit': 'pin'})), \
+                patch.object(audit, 'capture', side_effect=capture):
             audit.capture_servers(self.root, 'wire', self.root, self.root)
-        self.assertCountEqual(self.captures, ['vmangos', 'lyracore', 'vmangos', 'lyracore'])
+        self.assertCountEqual(captured, [(entry['id'], adapter) for entry in scenarios
+                                        for adapter in ['vmangos', 'lyracore']])
+        self.assertFalse(self.ids)
+        self.assertFalse(self.marker.exists())
 
     def test_reference_comparison_failure_keeps_ownership_until_invalidated(self):
         realm = self.root / 'realm'
@@ -1153,6 +1122,36 @@ class ScenarioRealmReuse(unittest.TestCase):
         self.assertEqual(self.imports, 0)
         self.assertFalse(self.running)
         self.assertFalse(self.realm.exists())
+
+    def test_rehearsal_without_snapshot_never_imports(self):
+        (self.root / 'catalogue.json').write_text(json.dumps([
+            dict(id='bank_slot_purchase', characters=['Banktester'])]))
+        with patch.object(audit, 'scenario_key', return_value=('missing', self.pins)), \
+                self.assertRaisesRegex(RuntimeError, 'forbids an import'):
+            audit.capture_servers(self.root, 'wire', self.root, self.root, rehearse=True)
+        self.assertEqual(self.imports, 0)
+        self.assertFalse(self.running)
+        self.assertFalse((self.root / 'reports').exists())
+
+
+class Rehearsal(unittest.TestCase):
+    def test_rehearsal_cannot_select_report_output(self):
+        for option in [['--output', '/unused'], ['--date', '2099-01-01'],
+                       ['--check', '--scenario', 'bank_slot_purchase']]:
+            with patch.dict(audit.os.environ, LYRACORE_AUDIT_ARGS=json.dumps(['--rehearse', *option])), \
+                    self.assertRaises(SystemExit) as error:
+                audit.main()
+            self.assertEqual(error.exception.code, 2)
+
+    def test_rehearsal_routes_to_capture_without_the_report_writer(self):
+        with patch.dict(audit.os.environ, LYRACORE_AUDIT_ARGS=json.dumps([
+                '--rehearse', '--client-data', str(audit.ROOT)])), \
+                patch.object(audit, 'check_spacetime_version'), \
+                patch.object(audit, 'scenario_main', return_value=0) as capture, \
+                patch.object(audit, 'run') as run:
+            self.assertEqual(audit.main(), 0)
+        self.assertTrue(capture.call_args.args[0].rehearse)
+        run.assert_not_called()
 
 
 class FullAuditCleanup(unittest.TestCase):

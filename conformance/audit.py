@@ -767,94 +767,6 @@ def capture(wire, work, scenario, adapter, endpoints, password, env, progress=sy
         timeout=240)
 
 
-def delete_reference_character(wire, name, account, password, env, endpoints=(13724, 18085)):
-    command = [wire, 'scenario', 'char-delete', '--host', '127.0.0.1',
-               '--logon-port', str(endpoints[0]), '--world-port', str(endpoints[1]),
-               '--account', account, '--character', name,
-               '--password-stdin']
-    for attempt in range(2):
-        try:
-            run(command, input=password, env=env, capture_output=True, timeout=60)
-            return
-        except subprocess.CalledProcessError as error:
-            if attempt or not error.stderr or error.stderr.splitlines()[-1] not in [
-                    b'Error: logon proof rejected', b'Error: server proof mismatch']:
-                raise RuntimeError(f'Reference Character cleanup failed: {error.stderr.decode(errors="replace").strip()}') from error
-            print('Retrying fixture Character cleanup after an SRP proof rejection.',
-                  file=sys.stderr, flush=True)
-
-
-@contextmanager
-def local_realm(work, client_data, peer_count):
-    if git('status', '--porcelain', '--untracked-files=normal'):
-        raise RuntimeError('commit core changes before starting an isolated audit Realm')
-    revision = (ROOT / '.lyracore-cli-rev').read_text().strip()
-    if revision != '30814fe814edbfa3a143102f93008080482df6a6':
-        raise RuntimeError('audit Realm isolation needs review for this lyracore CLI revision')
-    for port in [3000, 3724, 8085]:
-        with socket.socket() as listener:
-            listener.bind(('127.0.0.1', port))
-    spacetime = shutil.which('spacetime')
-    if spacetime is None:
-        raise RuntimeError('spacetime CLI is missing')
-    realm_root = work / 'core'
-    run(['git', 'worktree', 'add', '--detach', realm_root, 'HEAD'], cwd=ROOT,
-        stdout=subprocess.DEVNULL)
-    try:
-        if (realm_root / '.lyracore').exists():
-            raise RuntimeError('new audit worktree already has Realm state')
-        (realm_root / 'target').symlink_to(SCRATCH / 'target', target_is_directory=True)
-        cli = realm_root / 'lyracore'
-        bin_dir = work / 'bin'
-        bin_dir.mkdir()
-        isolated = bin_dir / 'spacetime'
-        isolated.write_text('#!/bin/sh\n'
-                            'if [ "$1" = login ] && [ "$2" = show ] && [ "$3" = --token ]; then\n'
-                            '    exit 1\n'
-                            'fi\n'
-                            'exec ' + shlex.quote(spacetime) + ' "$@"\n')
-        isolated.chmod(0o700)
-        cli_env = dict(os.environ)
-        cli_env.pop('CARGO_TARGET_DIR', None)
-        cli_env['PATH'] = str(bin_dir) + ':' + cli_env['PATH']
-    except BaseException:
-        run(['git', 'worktree', 'remove', '--force', realm_root], cwd=ROOT,
-            stdout=subprocess.DEVNULL)
-        raise
-    stopped = False
-    try:
-        try:
-            write_state(work / 'realm-starting.json', {'worktree': str(realm_root)})
-            with timed('Realm start'):
-                run([cli, 'dev', 'up', '--single'], env=cli_env, cwd=realm_root)
-            with timed('import'):
-                run([cli, 'import', '--accept', '--client-data', client_data],
-                    env=cli_env, cwd=realm_root)
-            token = realm_root / '.lyracore/native-owner-token'
-            if not token.is_file():
-                raise RuntimeError('isolated Realm has no Operator token')
-            password = secrets.token_hex(8)
-            run([cli, 'account', 'create', 'CONFORMANCE', '--password-stdin'],
-                input=(password + '\n').encode(), env=cli_env, cwd=realm_root)
-            for peer in range(2, peer_count + 2):
-                run([cli, 'account', 'create', f'CONFORMANCE{peer}', '--password-stdin'],
-                    input=(password + '\n').encode(), env=cli_env, cwd=realm_root)
-            copied_token = work / 'operator-token'
-            copied_token.write_bytes(token.read_bytes())
-            copied_token.chmod(0o600)
-            host = realm_root / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone'
-            module = realm_root / 'target/wasm32-unknown-unknown/release/lyracore_module.wasm'
-            yield password, copied_token, host, module, realm_root
-        finally:
-            stop_realm(realm_root, cli, cli_env)
-            stopped = True
-            (work / 'realm-starting.json').unlink(missing_ok=True)
-    finally:
-        if stopped:
-            run(['git', 'worktree', 'remove', '--force', realm_root], cwd=ROOT,
-                stdout=subprocess.DEVNULL)
-
-
 @contextmanager
 def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False):
     with ExitStack() as lifetime:
@@ -1026,40 +938,50 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
         yield password, token, host, module, realm_root
 
 
-def capture_servers(harness, wire, work, client_data):
-    env = dict(os.environ, WIRE_CRASH_DIR=str(work / 'diagnostics'))
+def rehearse_comparison(harness, wire, work, scenario, adapter):
+    golden = harness / 'traces' / f"{scenario['id']}.json"
+    expected = json.loads(golden.read_text())['header']['origin']['provenance']
+    if json.loads((work / 'reference.json').read_text()) != expected:
+        raise RuntimeError('Reference Server provenance differs from the Golden Trace')
+    result = subprocess.run([str(arg) for arg in [
+        wire, 'compare', work / f"{scenario['id']}.toml", golden,
+        work / f"{scenario['id']}-{adapter}.json"]], capture_output=True, text=True)
+    if result.returncode not in [0, 1] or not result.stdout:
+        raise RuntimeError('rehearsal comparison failed: ' + result.stderr.strip())
+    comparison = json.loads(result.stdout)
+    differences = comparison['differences']
+    if any(item['classification'] not in ['rule', 'data'] for item in differences):
+        raise RuntimeError('rehearsal comparison has an unknown classification')
+    (work / f"{scenario['id']}-{adapter}-comparison.json").write_text(result.stdout)
+    return {kind: sum(item['classification'] == kind for item in differences)
+            for kind in ['rule', 'data']}
+
+
+def capture_servers(harness, wire, work, client_data, *, rehearse=False):
     scenarios = json.loads((work / 'catalogue.json').read_text())
     peer_count = max(len(scenario['characters']) - 1 for scenario in scenarios)
-    with local_realm(work, client_data, peer_count) as (password, token, host, module, realm_root):
-        host_hash = digest(host)
-        module_hash = digest(module)
-        with reference_server(harness, peer_count) as (provenance, project):
-            reference_env = dict(env, COMPOSE_PROJECT_NAME=project,
-                                 WIRE_GM_ACCOUNT='CONFORMANCEGM', WIRE_GM_CHARACTER='Conformsetup')
-            for scenario in scenarios:
-                with timed(f"{scenario['id']} Reference Server run"):
-                    accounts = ['CONFORMANCE', *peer_accounts(scenario)]
-                    passwords = []
-                    for index, account in enumerate(accounts):
-                        name = 'player-password' if index == 0 else f'peer{index + 1}-password'
-                        secret = (REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
-                        passwords.append(secret)
-                        character = scenario['characters'][index]
-                        delete_reference_character(wire, character, account, secret, env)
-                    passwords.append((REFERENCE / 'credentials/gm-password').read_bytes().rstrip(b'\n') + b'\n')
-                    capture(wire, work, scenario, 'vmangos', [13724, 18085], b''.join(passwords), reference_env)
-        env.update(WIRE_REALM_URL='http://127.0.0.1:3000',
-                   WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD='lyracore')
+    key, pins = scenario_key(harness, Path(client_data))
+    try:
+        if not rehearse:
+            with prepare_scenario_realm(key, pins, client_data, peer_count, use_snapshot=False):
+                pass
         for scenario in scenarios:
-            with timed(f"{scenario['id']} Realm run"):
-                capture(wire, work, scenario, 'lyracore', [3724, 8085],
-                        (password + '\n').encode() * len(scenario['characters']), env)
-        if digest(host) != host_hash or digest(module) != module_hash:
-            raise RuntimeError('local Realm binaries changed during capture')
-        snapshot = json.loads((realm_root / '.import/vmangos/current.json').read_text())
-        content = (f"lyracore import alliance-single, vmangos db_latest {snapshot['commit']}, "
+            started = time.monotonic()
+            with capture_scenario(harness, wire, work, scenario['id'], key, pins, client_data,
+                                  require_snapshot=True):
+                state = json.loads((SCENARIO_CACHE / 'realm/state.json').read_text())
+                if rehearse:
+                    comparisons = {adapter: rehearse_comparison(harness, wire, work, scenario, adapter)
+                                   for adapter in ['vmangos', 'lyracore']}
+                    print(json.dumps(dict(scenario=scenario['id'], setup='passed',
+                                          seconds=round(time.monotonic() - started, 2),
+                                          comparisons=comparisons)), flush=True)
+        provenance = json.loads((work / 'reference.json').read_text())
+        content = (f"lyracore import alliance-single, vmangos db_latest {pins['database_commit']}, "
                    'client data from the supplied path; imported creature spawns retained')
-        return provenance, host_hash, module_hash, content
+        return provenance, state['native_host_sha256'], state['module_sha256'], content
+    finally:
+        stop_scenario_cache()
 
 
 @contextmanager
@@ -1085,20 +1007,15 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, r
                 with timed(f'{scenario} Reference Server run'):
                     accounts = ['CONFORMANCE', *peer_accounts(entry)]
                     passwords = []
-                    for index, account in enumerate(accounts):
+                    for index in range(len(accounts)):
                         name = 'player-password' if index == 0 else f'peer{index + 1}-password'
                         secret = (REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
                         passwords.append(secret)
-                        delete_reference_character(wire, characters[index], account, secret, env)
                     passwords.append((REFERENCE / 'credentials/gm-password').read_bytes().rstrip(b'\n') + b'\n')
                     capture(wire, work, entry, 'vmangos', [13724, 18085], b''.join(passwords),
                             reference_env, progress=sys.stderr)
             def capture_realm():
                 with timed(f'{scenario} Realm run'):
-                    for index, character in enumerate(characters):
-                        account = 'CONFORMANCE' if index == 0 else f'CONFORMANCE{index + 1}'
-                        delete_reference_character(wire, character, account, (password + '\n').encode(),
-                                                   realm_env, endpoints=(3724, 8085))
                     capture(wire, work, entry, 'lyracore', [3724, 8085],
                             (password + '\n').encode() * len(characters), realm_env, progress=sys.stderr)
             cores = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else (os.cpu_count() or 1)
@@ -1276,6 +1193,16 @@ def scenario_main(args):
                  '--example', 'audit', '--example', 'run'], stdout=subprocess.DEVNULL)
             run(['cargo', 'build', '--locked', '--manifest-path', harness / 'Cargo.toml',
                  '--bin', 'vanilla-wire'], stdout=subprocess.DEVNULL)
+        if args.rehearse:
+            with timed('Module schema fingerprint'):
+                module_schema_hash()
+            with scenario_work() as work:
+                run_with_diagnostic([target / 'debug/examples/audit', 'export', work])
+                capture_servers(harness, target / 'debug/vanilla-wire', work,
+                                str(args.client_data), rehearse=True)
+                if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
+                    raise RuntimeError('core changed during rehearsal; commit and rerun')
+            return 0
         return run_scenario(args, harness, target, core_commit)
 
 
@@ -1325,11 +1252,13 @@ def cleanup_audit_work(work):
 
 def main():
     parser = argparse.ArgumentParser(description='Compare catalogue scenarios on two local servers.')
-    parser.add_argument('--date', default=datetime.date.today().isoformat())
-    parser.add_argument('--output', type=Path, default=ROOT / 'conformance/reports')
+    parser.add_argument('--date')
+    parser.add_argument('--output', type=Path)
     parser.add_argument('--client-data', type=Path)
     parser.add_argument('--scenario')
     parser.add_argument('--check', action='store_true')
+    parser.add_argument('--rehearse', action='store_true',
+                        help='capture the full catalogue from cached worlds without writing a report')
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--agreement', action='store_true')
     parser.add_argument('--require-snapshot', action='store_true',
@@ -1337,10 +1266,14 @@ def main():
     parser.add_argument('--stop', action='store_true')
     args = parser.parse_args(json.loads(os.environ.get('LYRACORE_AUDIT_ARGS', '[]')))
     if args.stop:
-        if args.scenario or args.check or args.json or args.agreement or args.require_snapshot:
+        if args.scenario or args.check or args.json or args.agreement or args.require_snapshot or args.rehearse:
             parser.error('--stop cannot be combined with scenario check options')
         stop_scenario_cache()
         return 0
+    if args.rehearse and (args.scenario or args.check or args.json or args.agreement or args.require_snapshot):
+        parser.error('--rehearse cannot be combined with scenario check options')
+    if args.rehearse and (args.date is not None or args.output is not None):
+        parser.error('--rehearse cannot write a dated report or select an output directory')
     if args.check != bool(args.scenario):
         parser.error('--scenario ID requires --check, and --check requires --scenario ID')
     if args.json and not args.scenario:
@@ -1357,16 +1290,18 @@ def main():
         config = ROOT / '.lyracore/config.json'
         if config.is_file():
             args.client_data = json.loads(config.read_text()).get('client_data')
-    if args.scenario:
+    if args.scenario or args.rehearse:
         if not args.client_data or not Path(args.client_data).is_dir():
             return setup_failure(args.scenario, args.json,
                                  'client data missing; pass --client-data with an existing 1.12.1 client Data directory')
         args.client_data = Path(args.client_data).resolve()
         try:
-            with timed('total scenario check'):
+            with timed('total rehearsal' if args.rehearse else 'total scenario check'):
                 return scenario_main(args)
         except Exception as error:
             return setup_failure(args.scenario, args.json, str(error))
+    args.date = args.date or datetime.date.today().isoformat()
+    args.output = args.output or ROOT / 'conformance/reports'
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}(?:-[a-z0-9]+)?', args.date):
         parser.error('--date must be YYYY-MM-DD or YYYY-MM-DD-suffix')
     try:
@@ -1401,6 +1336,7 @@ def main():
     harness = pinned_harness(metadata, revision, cargo_home)
     run(['cargo', 'build', '--locked', '-p', 'lyracore-conformance', '--example', 'audit'])
     run(['cargo', 'build', '--locked', '--manifest-path', harness / 'Cargo.toml', '--bin', 'vanilla-wire'])
+    module_schema_hash()
     audit = target / 'debug/examples/audit'
     work = Path(tempfile.mkdtemp(prefix='audit-', dir=SCRATCH))
     try:

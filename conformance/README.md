@@ -574,6 +574,21 @@ Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes a
 
 ## Conformance Audit
 
+Before a full audit, rehearse every catalogue scenario on both servers:
+
+```bash
+./conformance/audit --rehearse --client-data /path/to/client/Data
+```
+
+Rehearsal uses the full audit's catalogue order and capture path, restoring both servers before
+each scenario. It requires a matching imported-world snapshot and never imports or falls back to
+an import. If none exists, run one scenario with `--check` once to seal a snapshot first. Rehearsal
+prints one JSON line per completed scenario with setup success, wall time, and rule/data difference
+record counts for both servers. Differences are data and do not stop the remaining captures.
+Setup, capture or comparison execution failures exit 2; reaching the end exits 0. It writes no audit
+report, accepts neither `--date` nor `--output`, and stops both servers on exit. Scrubbed captures
+and comparisons remain in the printed diagnostics directory, outside the repository.
+
 Run one scenario while climbing a Behavior:
 
 ```bash
@@ -621,8 +636,9 @@ both a missing or incompatible snapshot and the cold fallback after an upgrade f
 
 The check output includes `world_origin`: `fresh_import`, `snapshot` or `upgraded_snapshot`. Text
 output prints the same value as `World origin`. Agreement JSON carries it inside `audit`. This is
-local check evidence only. Full audits always import a fresh world; their append-only reports never
-use these snapshots. Equivalence between upgraded and freshly imported worlds is not claimed.
+local check evidence only. Full audits always import a fresh world in that invocation, seal it,
+and restore that new snapshot before every scenario. They never reuse an earlier invocation's
+import. Equivalence between upgraded and freshly imported worlds is not claimed.
 
 Snapshots from the older schema-keyed format take the cold path once. The store retains the newest
 two snapshots and removes older ones after a successful seal. A cold import that replaces an
@@ -653,8 +669,10 @@ the owned containers. Recovery keeps the same container IDs and can retry an int
 Changed IDs stop the command before it touches the containers. `./conformance/audit --stop` restores
 the Reference Server, stops owned services and removes the active worktree; it retains the sealed
 snapshots and build output. The full audit uses the same Reference Server recovery and stops it on
-exit. Required LyraCore Accounts are provisioned after every restore with the sealed password, so a
-larger scenario catalogue needs no new import.
+exit. Full audits, rehearsals and local checks use the same per-scenario restore path. This resets
+Character names across Accounts, Account state, money, quests, items, reputation, fixture creatures,
+spawned objects, vendor stock and restock timers. Required LyraCore Accounts are provisioned after
+every restore with the sealed password, so a larger scenario catalogue needs no new import.
 
 Phase timings go to stderr, leaving JSON on stdout. They include builds, schema extraction, client
 hashing, Realm startup, import, snapshot sealing, both captures and comparison. Agreement also
