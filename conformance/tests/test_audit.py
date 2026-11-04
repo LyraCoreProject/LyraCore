@@ -260,27 +260,25 @@ class ScenarioKey(unittest.TestCase):
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_text('contract input')
             with patch.object(audit, 'ROOT', root), patch.object(audit, 'SCENARIO_CACHE', root):
-                first, _ = audit.scenario_key(harness, client, 'schema')
-                self.assertEqual(first, audit.scenario_key(harness, client, 'schema')[0])
+                first, _ = audit.scenario_key(harness, client)
+                self.assertEqual(first, audit.scenario_key(harness, client)[0])
                 gameplay.write_text('second gameplay commit')
-                self.assertEqual(first, audit.scenario_key(harness, client, 'schema')[0])
+                self.assertEqual(first, audit.scenario_key(harness, client)[0])
                 for name in ['Cargo.lock', 'crates/lyracore-shared/src/nav.rs',
                              'module/src/seed.rs', 'module/src/seed/fixtures.rs',
                              'module/src/operations.rs', 'module/src/package_import/creatures.rs']:
                     with self.subTest(import_input=name):
                         path = root / name
                         path.write_text('changed')
-                        self.assertNotEqual(first, audit.scenario_key(harness, client, 'schema')[0])
+                        self.assertNotEqual(first, audit.scenario_key(harness, client)[0])
                         path.write_text('original')
-                changed_schema, _ = audit.scenario_key(harness, client, 'new schema')
                 (client / 'dbc.MPQ').write_bytes(b'other')
-                changed_client, _ = audit.scenario_key(harness, client, 'schema')
+                changed_client, _ = audit.scenario_key(harness, client)
                 pins['database_commit'] = 'b' * 40
                 (adapter / 'pins.json').write_text(json.dumps(pins))
-                changed_pin, _ = audit.scenario_key(harness, client, 'schema')
+                changed_pin, _ = audit.scenario_key(harness, client)
                 (importer / 'lib.rs').write_text('changed')
-                changed_importer, _ = audit.scenario_key(harness, client, 'schema')
-            self.assertNotEqual(first, changed_schema)
+                changed_importer, _ = audit.scenario_key(harness, client)
             self.assertNotEqual(first, changed_client)
             self.assertNotEqual(changed_client, changed_pin)
             self.assertNotEqual(changed_pin, changed_importer)
@@ -863,7 +861,8 @@ class SnapshotStore(unittest.TestCase):
             (realm / '.import/vmangos').mkdir(parents=True)
             (realm / '.import/vmangos/current.json').write_text('{"commit":"pin"}')
             store = root / 'store'
-            with patch.object(audit, 'SNAPSHOT_STORE', store):
+            (root / 'deployment-schema.json').write_text('{}')
+            with patch.object(audit, 'SNAPSHOT_STORE', store), patch.object(audit, 'SCENARIO_CACHE', root):
                 for key in ['first', 'second', 'third']:
                     audit.seal_snapshot(key, realm, 'password')
                     self.assertTrue(audit.validate_snapshot(audit.snapshot_path(key), key))
@@ -915,6 +914,7 @@ class ScenarioRealmReuse(unittest.TestCase):
         self.running = False
         self.imports = 0
         self.pins = {'database_commit': 'pin'}
+        (self.cache / 'deployment-schema.json').write_text(json.dumps(audit.canonical_schema(ModuleSchema().schema())))
         (self.root / '.lyracore-cli-rev').write_text('30814fe814edbfa3a143102f93008080482df6a6')
         for name, value in [('ROOT', self.root), ('SCENARIO_CACHE', self.cache),
                             ('SNAPSHOT_STORE', self.store)]:
@@ -923,6 +923,7 @@ class ScenarioRealmReuse(unittest.TestCase):
             self.addCleanup(patched.stop)
         for patched in [patch.object(audit, 'run', side_effect=self.fake_run),
                         patch.object(audit, 'free_port'),
+                        patch.object(audit, 'start_realm', side_effect=lambda realm, cli, env, **_: self.fake_run([cli, 'dev', 'up'])),
                         patch.object(audit.shutil, 'which', return_value='/usr/bin/spacetime')]:
             patched.start()
             self.addCleanup(patched.stop)
