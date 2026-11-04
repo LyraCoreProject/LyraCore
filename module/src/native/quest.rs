@@ -417,16 +417,9 @@ pub(super) fn receive(
                 return Ok(());
             }
             let before = super::view::quests(ctx, guid);
-            for mut quest in persist_quest_log_slots(ctx, guid) {
-                quest.log_slot = if quest.log_slot == q.slot1 {
-                    q.slot2
-                } else if quest.log_slot == q.slot2 {
-                    q.slot1
-                } else {
-                    continue;
-                };
-                ctx.db.game_character_quest().id().update(quest);
-            }
+            let mut entries = quest_log_entries(ctx, guid);
+            entries.swap(usize::from(q.slot1), usize::from(q.slot2));
+            save_quest_log(ctx, guid, entries);
             send_log_changes(ctx, guid, &before, &super::view::quests(ctx, guid));
             Vec::new()
         }
@@ -467,6 +460,7 @@ pub(crate) fn changed(
     ctx: &ReducerContext,
     old: Option<&CharacterQuest>,
     new: Option<&CharacterQuest>,
+    slot: u8,
 ) {
     let Some(row) = new.or(old) else {
         return;
@@ -529,10 +523,8 @@ pub(crate) fn changed(
     let after = super::view::quests(ctx, row.character_guid);
     let mut before = after.clone();
     before.retain(|slot| slot.quest_id != row.quest_entry);
-    if let Some(old) =
-        old.filter(|old| !old.rewarded && usize::from(old.log_slot) < MAX_QUEST_LOG_SIZE)
-    {
-        before.push(super::view::quest_slot(ctx, old));
+    if let Some(old) = old.filter(|old| !old.rewarded && usize::from(slot) < MAX_QUEST_LOG_SIZE) {
+        before.push(super::view::quest_slot(ctx, old, slot));
     }
     send_log_changes(ctx, row.character_guid, &before, &after);
 }

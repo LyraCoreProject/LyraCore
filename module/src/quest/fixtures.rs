@@ -190,7 +190,6 @@ pub fn debug_stage_choice_reward_fixture(
             rewarded: false,
             deadline_micros: 0,
             failed: false,
-            log_slot: 255,
         },
     );
     Ok(())
@@ -602,7 +601,6 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
                 rewarded: false,
                 deadline_micros: 0,
                 failed: false,
-                log_slot: 255,
             },
         );
     }
@@ -831,7 +829,6 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
                     rewarded: false,
                     deadline_micros: 0,
                     failed: false,
-                    log_slot: 255,
                 },
             );
         }
@@ -1149,7 +1146,6 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
                 rewarded: false,
                 deadline_micros: 0,
                 failed: false,
-                log_slot: 255,
             },
         );
     }

@@ -255,7 +255,6 @@ mod fixture {
                     rewarded: false,
                     deadline_micros: 0,
                     failed: false,
-                    log_slot: 255,
                 },
             );
         }

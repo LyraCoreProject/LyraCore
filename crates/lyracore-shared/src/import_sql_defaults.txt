@@ -11,4 +11,3 @@ game_item_template spellppmrate_3 0.0
 game_item_template spellppmrate_4 0.0
 game_item_template spellppmrate_5 0.0
 game_loot_roll group_id 0
-game_character_quest log_slot 255

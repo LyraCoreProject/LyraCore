@@ -148,7 +148,7 @@ fn quest_slots_survive_reconnect_and_reuse_only_the_abandoned_slot() {
                 .is_empty()
         }
     ));
-    shard.assert_sql("UPDATE game_character_quest SET log_slot = 255");
+    shard.assert_sql("DELETE FROM game_character_quest_log");
     let mut legacy = enter(&shard, guid);
     let projected = fields(legacy.drain_packets(), guid);
     assert_eq!(projected.get(&198), Some(&7));
@@ -158,11 +158,10 @@ fn quest_slots_survive_reconnect_and_reuse_only_the_abandoned_slot() {
         .unwrap();
     assert_eq!(fields(legacy.drain_packets(), guid).get(&198), Some(&0));
     let rows = shard.query_rows(&format!(
-        "SELECT quest_entry, log_slot FROM game_character_quest WHERE character_guid = {guid}"
+        "SELECT entries FROM game_character_quest_log WHERE character_guid = {guid}"
     ));
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0]["quest_entry"], "433");
-    assert_eq!(rows[0]["log_slot"], "1");
+    assert_eq!(rows[0]["entries"], "0433000000000000000000");
 }
 
 #[derive(Deserialize)]

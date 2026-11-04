@@ -62,11 +62,11 @@ keyed by definition revision and source rule id. Imports replace rules and polic
 default, so old relay runs keep their failure behavior. See [command lists](data-ingestion.md#command-lists-in-eventai)
 for execution and failure rules.
 
-`game_character_quest.log_slot` is end-appended with typed default 255, outside the 20 client
-slots. Unrewarded legacy rows project into free slots in quest-id order, preserving their former
-client view. The next quest mutation saves these positions before changing the log. New quests
-use the first free slot; swaps move positions and abandon leaves a hole. Reconnect and Character
-Transfer retain these positions. Rewarded rows do not occupy a slot.
+`game_character_quest_log` is a new private companion table with 20 quest entries per Character;
+zero denotes an empty slot. An absent row projects legacy quests in quest-id order. The next quest
+mutation saves these positions before changing the log. New quests use the first free slot;
+swaps move positions and abandon leaves a hole. Reconnect and Character Transfer retain the row.
+The public `game_character_quest` layout stays unchanged for Package compatibility.
 
 ### The three migration rules that have bitten
 

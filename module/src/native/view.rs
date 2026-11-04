@@ -205,15 +205,20 @@ pub(super) fn equipment(ctx: &ReducerContext, guid: u64) -> Vec<codec::ItemInsta
 }
 
 pub(super) fn quests(ctx: &ReducerContext, guid: u64) -> Vec<codec::update_mask::QuestLogSlot> {
-    crate::quest::quest_log_rows(ctx, guid)
-        .iter()
-        .map(|quest| quest_slot(ctx, quest))
+    crate::quest::quest_log_entries(ctx, guid)
+        .into_iter()
+        .enumerate()
+        .filter_map(|(slot, entry)| {
+            crate::quest::character_quest_row(ctx, guid, entry)
+                .map(|quest| quest_slot(ctx, &quest, slot as u8))
+        })
         .collect()
 }
 
 pub(super) fn quest_slot(
     ctx: &ReducerContext,
     quest: &crate::quest::CharacterQuest,
+    slot: u8,
 ) -> codec::update_mask::QuestLogSlot {
     use crate::quest::{game_quest_objective, objective_kind};
     let state = u8::from(crate::quest::quest_is_complete(ctx, quest));
@@ -232,7 +237,7 @@ pub(super) fn quest_slot(
         }
     }
     codec::update_mask::QuestLogSlot {
-        slot: quest.log_slot,
+        slot,
         quest_id: quest.quest_entry,
         state,
         counts,

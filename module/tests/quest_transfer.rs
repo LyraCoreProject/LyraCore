@@ -82,6 +82,10 @@ fn quest_progress_survives_cross_shard_transfer_and_world_port() {
     let destination = shard("quest-transfer-destination", "1000000000");
     seed_quests(&source);
     let before = quests(&source);
+    let log_query =
+        format!("SELECT entries FROM game_character_quest_log WHERE character_guid = {CHARACTER}");
+    let before_log = source.query_rows(&log_query);
+    assert_eq!(before_log.len(), 1);
     assert_eq!(before.len(), 4);
     for (row, expected_counts) in before.iter().zip(["4321", "3321", "2221", "1111"]) {
         assert_eq!(row["counts"], expected_counts, "{before:?}");
@@ -123,9 +127,11 @@ fn quest_progress_survives_cross_shard_transfer_and_world_port() {
     let system = actor("0");
     destination.assert_call("import_character_blob", &[TRANSFER, &blob, &system]);
     assert_eq!(quests(&destination), before, "import preserves every quest");
+    assert_eq!(destination.query_rows(&log_query), before_log);
     source.assert_call("confirm_import", &[TRANSFER, &system]);
     source.assert_call("finish_transfer", &[TRANSFER, &system]);
     assert!(quests(&source).is_empty(), "the source quests left once");
+    assert!(source.query_rows(&log_query).is_empty());
     destination.assert_call("release_transfer", &[TRANSFER, &system]);
     assert_eq!(
         quests(&destination),
