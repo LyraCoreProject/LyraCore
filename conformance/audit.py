@@ -814,7 +814,7 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
             raise RuntimeError('scenario Realm has no ownership marker; inspect it before cleanup')
         if state and state['phase'] == 'importing':
             raise RuntimeError(f'interrupted import retained at {realm_root}; inspect it before cleanup')
-        if state and state['phase'] == 'imported':
+        if state and state['phase'] == 'imported' and use_snapshot:
             if state['key'] != key or state['core_commit'] != current:
                 raise RuntimeError(f'unsealed imported world retained at {realm_root}; seal it before changing inputs')
             stop_realm(realm_root, cli, cli_env)
@@ -955,10 +955,10 @@ def capture_servers(harness, wire, work, client_data, *, rehearse=False):
     scenarios = json.loads((work / 'catalogue.json').read_text())
     peer_count = max(len(scenario['characters']) - 1 for scenario in scenarios)
     key, pins = scenario_key(harness, Path(client_data))
+    if not rehearse:
+        with prepare_scenario_realm(key, pins, client_data, peer_count, use_snapshot=False):
+            pass
     try:
-        if not rehearse:
-            with prepare_scenario_realm(key, pins, client_data, peer_count, use_snapshot=False):
-                pass
         for scenario in scenarios:
             started = time.monotonic()
             with capture_scenario(harness, wire, work, scenario['id'], key, pins, client_data,

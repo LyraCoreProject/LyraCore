@@ -1102,6 +1102,15 @@ class ScenarioRealmReuse(unittest.TestCase):
         self.assertEqual(self.imports, 1)
         self.assertTrue(audit.validate_snapshot(self.store / 'key', 'key'))
 
+    def test_fresh_audit_does_not_resume_an_earlier_unsealed_import(self):
+        with patch.object(audit, 'seal_snapshot', side_effect=OSError('disk full')):
+            with self.assertRaisesRegex(OSError, 'disk full'):
+                with audit.scenario_realm('key', self.pins, self.root, 0):
+                    self.fail('unsealed import')
+        with audit.prepare_scenario_realm('key', self.pins, self.root, 0, use_snapshot=False):
+            pass
+        self.assertEqual(self.imports, 2)
+
     def test_ready_marker_failure_stops_realm_and_keeps_snapshot(self):
         write = audit.write_state
         def fail_ready(path, state):
