@@ -108,6 +108,10 @@ the smallest such value among the jobs. Leave out a baseline compile after a cac
 scoreboard steps that run only on `main`. Keep the run reference in the script current. Run
 `python3 -m unittest discover -s scripts/tests` to check the assignment.
 
+`native_debug_gate` builds the Module with other features, and this replaces the fixture build. The
+next target on its job then rebuilds the fixture for about 100 seconds. Record that rebuild on
+`native_debug_gate`, not on the next target, so that the target keeps a job to itself.
+
 The Session expiry test checks the five-minute production interval before it shortens the schedule
 on its private fixture. It then checks two real scheduled cleanups without a five-minute wait.
 The Operator-only `debug_accelerate_session_reaper` control is for disposable test instances;
