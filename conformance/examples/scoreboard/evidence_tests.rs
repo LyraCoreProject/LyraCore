@@ -7,14 +7,26 @@ mod scratch;
 fn example() -> (FeatureLedger, Value) {
     let ledger =
         FeatureLedger::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("features")).unwrap();
-    let golden = wire_client::catalogue::get("taxi_single_hop").unwrap();
+    let scenarios: Vec<_> = ledger
+        .behaviors()
+        .iter()
+        .find(|behavior| behavior.id == "taxi_single_hop")
+        .unwrap()
+        .scenarios
+        .iter()
+        .map(|id| {
+            let golden = wire_client::catalogue::get(id).unwrap();
+            json!({"id": id, "behavior": "taxi_single_hop",
+                "scenario_sha256": golden.trace().header.scenario_sha256,
+                "comparison": {"differences": []}, "properties": []})
+        })
+        .collect();
     (
         ledger,
         json!({
             "schema_version": 2, "tier": "tier1", "core_commit": "1".repeat(40),
             "harness_revision": harness_revision().to_string(), "working_tree_dirty": false, "recorded_at_unix_ms": 1,
-            "scenarios": [{"id": "taxi_single_hop", "behavior": "taxi_single_hop",
-                "scenario_sha256": golden.trace().header.scenario_sha256, "comparison": {"differences": []}, "properties": []}],
+            "scenarios": scenarios,
         }),
     )
 }
@@ -52,14 +64,14 @@ fn state(value: &Value, ledger: &FeatureLedger) -> State {
 fn audit_example() -> (FeatureLedger, Value) {
     let (ledger, mut value) = example();
     value["tier"] = json!("conformance_audit");
-    value["scenarios"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("properties");
-    value["scenarios"][0]["reference_comparison"] = json!({"differences": []});
-    value["scenarios"][0]["reference_sha256"] = json!("c".repeat(64));
-    value["scenarios"][0]["capture"] = json!({"sha256": "d".repeat(64), "core_commit": value["core_commit"],
-        "native_host_sha256": "a".repeat(64), "module_sha256": "b".repeat(64)});
+    let core_commit = value["core_commit"].clone();
+    for scenario in value["scenarios"].as_array_mut().unwrap() {
+        scenario.as_object_mut().unwrap().remove("properties");
+        scenario["reference_comparison"] = json!({"differences": []});
+        scenario["reference_sha256"] = json!("c".repeat(64));
+        scenario["capture"] = json!({"sha256": "d".repeat(64), "core_commit": core_commit,
+            "native_host_sha256": "a".repeat(64), "module_sha256": "b".repeat(64)});
+    }
     let golden = wire_client::catalogue::get("taxi_single_hop").unwrap();
     let wire_client::trace::Origin::Golden { provenance } = &golden.trace().header.origin else {
         panic!()
