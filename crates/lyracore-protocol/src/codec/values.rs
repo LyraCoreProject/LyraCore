@@ -319,9 +319,9 @@ pub fn build_bank_purchase_values(
     player_bytes_2: u32,
 ) -> SMSG_UPDATE_OBJECT {
     let (a, b, c, d) = unpack4(super::entity::client_player_bytes_2(player_bytes_2));
-    player_values(guid, |player| {
-        player.set_player_field_coinage(money as i32);
-        player.set_player_bytes_2(a, b, c, d);
+    player_values(guid, |fields| {
+        fields.set_player_field_coinage(money as i32);
+        fields.set_player_bytes_2(a, b, c, d);
     })
 }
 
