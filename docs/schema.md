@@ -171,13 +171,25 @@ additive migration. `game_selection_request.selection_id` and `game_native_away.
 END-appended defaults; a legacy away row uses the default World Shard.
 
 `game_character_name` is a new private Realm table keyed by the lowercased name. A pending row
-has a nonzero selection id and guid zero; a completed row has its Character guid and selection id
-zero. The Account and World identify the creator. Confirmed deletion releases the row. It stays
+has guid zero. Its selection id is nonzero for native creation and zero for Package creation;
+a completed row has its Character guid and selection id zero. The Account and World identify the creator. Confirmed deletion releases the row. It stays
 on the Realm through Transfer and selection expiry. `game_character_names_ready` records World
 Shards whose complete name report committed. `game_character_name_report` retains the current
 report revision, expected batch count and accepted batch indexes until that World becomes ready.
 All three tables start empty. See the
 [upgrade procedure](architecture.md#upgrade-character-name-reservations).
+
+### Package Character creation (`module/src/native/package_creation.rs`)
+
+`game_package_character_request` retains each World's Package request and its Pending, Created or
+Refused result until the Package consumes it. It has at most 64 rows per Package per Shard.
+`game_package_creation_delivery` carries request, grant, created-profile and completion messages.
+`game_package_creation_retry` retains refused result deliveries for retry; transport failures stay
+in the outbox. All three tables are private and new. Request ids are local to the requesting World.
+A grant failure rolls back World creation before its Realm callback releases the pending name.
+Package Account allocation on the Realm includes both directory entries and pending reservations.
+See [the Package contract](package-api.md#asynchronous-package-character-creation) for result
+consumption and upgrade obligations.
 
 ### Realm communication (`module/src/native/realm_communication.rs`)
 

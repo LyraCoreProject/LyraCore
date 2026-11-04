@@ -123,6 +123,33 @@ so it stays when the Package is disabled. Pass the Package's own name.
 The Character starts at level 1 at its race and class start position, with zero gender and
 appearance bytes. The Package places it, levels it and builds its live entity.
 
+### Asynchronous Package Character creation
+
+`package::request_character(ctx, package_name, name, race, class) -> Result<u64, String>`
+returns a durable request id. Call it on the World Shard that owns the race/class start map. Retain
+that id in Package state; do not submit the same creation again on each tick. The Realm reserves the
+name and selects a Package-owned Account, counting pending creations toward its ten-Character limit
+across all Worlds. The World creates the Character without a Session. It uses the same starting
+state and creation Gates as synchronous creation. On a single-Shard Realm, creation finishes in
+the requesting transaction.
+
+`package::take_character_result(ctx, package_name, request_id) -> Result<package::CharacterCreation, String>`
+returns `Pending`, `Created(guid)` or `Refused(reason)`. Pending leaves the request intact. A completed
+result is consumed in the caller's transaction, so record the guid or refusal in Package state in
+that transaction. A missing request or a different Package name returns an error. A Package may
+retain at most 64 requests on a Shard, including unread results.
+
+A restart or delayed reply does not release the name or discard pending work. A confirmed creation
+Refusal releases the name. Result delivery retries until the Realm and World can accept it.
+The Package must wait for `Created` before placing or activating the Character. Creation does not
+move Package tables or enable sessionless Group, guild or cross-Shard relocation operations.
+
+Publish all Shards before using this interface and complete the
+[Character-name import](architecture.md#upgrade-character-name-reservations). Package Accounts are
+allocated on the Realm and copied with their ownership to the requesting World. Conflicting legacy
+World Account ids or usernames refuse creation without overwriting that World state. Reconcile such
+Accounts before retrying; this addition does not migrate existing Package Accounts.
+
 ### Package Teardown
 
 `teardown_package(package_name)` is an Operator reducer. Run it before a Package leaves the build.
@@ -141,7 +168,9 @@ through ownership, as with a Character on an Account made before Package-owned A
 Character with a World Session is never made Dormant.
 
 Teardown refuses, and writes nothing, while one of these Characters has a Transfer escrow row or a
-claimed Transfer Intent, because the escrow names the Package's tables.
+claimed Transfer Intent, because the escrow names the Package's tables. It also refuses while a
+local Package Character request or a Realm name reservation for the Package is pending. Successful
+teardown discards unread completed creation results.
 
 A Package stays stopped until the first tick of a build that does not compile it. Enabling it again
 then starts it fresh: empty tables, default Package Config, and no Characters from before. Its old

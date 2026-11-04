@@ -30,7 +30,10 @@ pub(crate) fn create_package_character(
     )?)
 }
 
-fn owned_account_with_room(ctx: &ReducerContext, package_name: &str) -> Result<u64, String> {
+pub(crate) fn owned_account_with_room(
+    ctx: &ReducerContext,
+    package_name: &str,
+) -> Result<u64, String> {
     let owned: Vec<u64> = ctx
         .db
         .game_package_account()
@@ -38,13 +41,16 @@ fn owned_account_with_room(ctx: &ReducerContext, package_name: &str) -> Result<u
         .filter(package_name)
         .map(|row| row.account_id)
         .collect();
-    if let Some(&id) = owned
-        .iter()
-        .find(|&&id| crate::auth::account_has_room(ctx, id))
-    {
+    if let Some(&id) = owned.iter().find(|&&id| {
+        if crate::peer::world_shard(ctx).is_some() {
+            crate::native::realm_account_has_room(ctx, id)
+        } else {
+            crate::auth::account_has_room(ctx, id)
+        }
+    }) {
         return Ok(id);
     }
-    // The # prefix cannot collide with uppercased alphanumeric login names.
+    // The # separator cannot collide with uppercased alphanumeric login names.
     let accounts = ctx.db.game_account();
     let username = (owned.len()..)
         .map(|n| format!("{package_name}#{n}"))

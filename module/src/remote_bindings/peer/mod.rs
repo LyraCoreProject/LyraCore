@@ -5010,3 +5010,72 @@ impl spacetimedb::rt::RemoteReducer for idc_world_session_closed {
         "d5f66b7d03917bd2e92efdf6f9e95b9a8167db2d87e7dd5220e11b8b465882e1";
     type Args = IdcWorldSessionClosedArgs;
 }
+
+#[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
+#[sats(crate = __lib)]
+pub struct IdcPackageCreationArgs {
+    pub message: ::std::vec::Vec<::core::primitive::u8>,
+}
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_package_creation_message_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as message), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(message),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_package_creation_message_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_package_creation_message_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_package_creation_message {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(message),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as message), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::std::vec::Vec::<::core::primitive::u8> = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_package_creation_message_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_package_creation_message!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_package_creation_message;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_package_creation {
+    ($module:path, { $($columns:tt)* }) => {{
+        #[allow(unused_imports)]
+        use $module as __outbox_receiver;
+        &[__outbox_receiver::__spacetimedb_typecheck_outbox_idc_package_creation_message!(__outbox_receiver; $($columns)*)]
+    }};
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_package_creation;
+
+#[allow(non_camel_case_types)]
+pub struct idc_package_creation;
+
+impl spacetimedb::rt::RemoteReducer for idc_package_creation {
+    const NAME: &'static str = "idc_package_creation";
+    const SIGNATURE_HASH: &'static str =
+        "a179c04a458010db1e9db9847e97fe31b1a9e6b7bb1996afe06887d609c89b6b";
+    type Args = IdcPackageCreationArgs;
+}
