@@ -31,6 +31,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p lyracore-conformance -- --nocapture
 cargo test -p lyracore-conformance --example scoreboard --example audit --example run --example baseline
 python3 -B -m unittest discover -s conformance/tests -p 'test_*.py'
+python3 -B -m unittest discover -s native-host -p 'test_*.py'
 cargo test -p lyracore-protocol --example benilla_inventory
 python3 -m unittest discover -s importer/scripts/tests -v
 cargo test -p lyracore-importer
@@ -103,9 +104,13 @@ estimates, use a successful main run: record each Module target's duration, roun
 seconds, in the JSON file. Measure a target from its `Running tests/…` line to the next one, because
 the log interleaves stdout and stderr and a `test result` line can land after the next target
 starts. Set each job's `JOB_SECONDS` entry to its total duration minus its target durations, less
-the smallest such value among the jobs. Leave out a baseline compile after a cache miss. Keep the
-run reference in the script current. Run `python3 -m unittest discover -s scripts/tests` to check
-the assignment.
+the smallest such value among the jobs. Leave out a baseline compile after a cache miss and the
+scoreboard steps that run only on `main`. Keep the run reference in the script current. Run
+`python3 -m unittest discover -s scripts/tests` to check the assignment.
+
+`native_debug_gate` builds the Module with other features, and this replaces the fixture build. The
+next target on its job then rebuilds the fixture for about 100 seconds. Record that rebuild on
+`native_debug_gate`, not on the next target, so that the target keeps a job to itself.
 
 The Session expiry test checks the five-minute production interval before it shortens the schedule
 on its private fixture. It then checks two real scheduled cleanups without a five-minute wait.
@@ -129,7 +134,9 @@ python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/rel
 CI builds the Host once and reuses the binary until `prepare-host.py`, the Host toolchain, a
 patch or a file in `native-host/src` changes. A parallel job runs the patched Host's
 `compile_cache`, `retention` and delivery `feed` unit tests in the SpacetimeDB checkout with the
-Host toolchain.
+Host toolchain. Those tests read only the same inputs, so after a pass the job skips them until an
+input or the workflow changes. The Module includes `delivery_rows.rs` in its own tests, which run
+on every Module change.
 
 `check.py` runs named checks. Without names it runs every shared check on one seeded Disposable
 Host. Give names to run only those checks, and use `--list` to print them. Checks run in the order
@@ -141,7 +148,7 @@ registry order, in the reverse order and one at a time. Creatures that a check s
 world. The runner prints `PASS` or `FAIL` with the check name, and for a failure the Host log lines
 written during that check.
 
-These checks get their own Host. CI runs the shared checks and these checks in three parallel jobs:
+These checks get their own Host. CI runs the shared checks and these checks in five parallel jobs:
 
 | Check | Covers |
 |---|---|
