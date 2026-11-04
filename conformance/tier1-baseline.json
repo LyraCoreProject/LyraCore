@@ -78,17 +78,6 @@
           ]
         },
         {
-          "rule": "missing_packet",
-          "character": "viewer",
-          "checkpoint": "buy_slot",
-          "stream": {
-            "kind": "broadcast",
-            "id": "objects"
-          },
-          "opcode": 169,
-          "field_path": []
-        },
-        {
           "rule": "unexpected_packet",
           "character": "actor",
           "checkpoint": "buy_slot",
@@ -133,17 +122,6 @@
             "values",
             "field_194"
           ]
-        },
-        {
-          "rule": "missing_packet",
-          "character": "viewer",
-          "checkpoint": "buy_slot",
-          "stream": {
-            "kind": "broadcast",
-            "id": "objects"
-          },
-          "opcode": 169,
-          "field_path": []
         },
         {
           "rule": "unexpected_packet",
