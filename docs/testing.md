@@ -1,8 +1,10 @@
 # Testing
 
-CI runs four workflows on every pull request, forks included. This page lists their commands so you
-can reproduce a CI failure. Do not run them all before a PR; CI does. A green unit tier does not prove the durable tier, and neither proves
-what a real client shows.
+Rust and Runtime Scripts run on draft pull requests, forks included. Module durable and Native Host
+start when a PR is marked ready, then run on further pushes while it stays ready, subject to path
+filters. Pushes to `main` keep their existing workflow coverage. This page lists the commands so you
+can reproduce a CI failure. Do not run them all before a PR; CI does. A green unit tier does not
+prove the durable tier, and neither proves what a real client shows.
 
 ## Prerequisites
 
@@ -71,8 +73,15 @@ cargo build --release --target wasm32-unknown-unknown -p lyracore-module --featu
 cargo test -p lyracore-module --test weather -- --ignored
 ```
 
-CI runs every target in three parallel jobs with `--test-threads=4 --skip deadmines`. It skips the
+CI runs every target in six parallel jobs with `--test-threads=4 --skip deadmines`. It skips the
 workflow when a change touches only Markdown, `docs/` or `.claude/`.
+Both durable and Native Host also skip PRs that change only `conformance/*.py`,
+`conformance/tests/*.py`, the `conformance/run`, `baseline`, `scoreboard` and `audit` launchers, or
+`conformance/reports/**`. These files operate tooling and recorded reports; tier 1 reads its
+committed baseline and compiles its Rust support directly. Rust still tests the Python tooling,
+conformance crate and examples, including replay of the committed audit report. Changes to
+`conformance/support/`, `features/`, `tier1-baseline.json`, `examples/` or `src/`, and any changes to
+`module/`, `scripts/` or `.github/` code, still select the full workflows on ready PRs.
 The Deadmines targets need the separately installed dungeons Package. CI runs the
 [taxi Behavior](../conformance/features/taxi/taxi_single_hop.toml) against its committed tier 1
 signature baseline. The bundled route fixture removes its imported-data requirement.
