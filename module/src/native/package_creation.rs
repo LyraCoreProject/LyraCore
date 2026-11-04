@@ -236,6 +236,9 @@ fn finish(ctx: &ReducerContext, id: u64, result: CharacterCreation) -> Result<()
 
 #[reducer]
 pub fn idc_package_creation(ctx: &ReducerContext, message: Vec<u8>) -> Result<(), String> {
+    if !crate::peer::is_peer(ctx, ctx.sender()) {
+        return Err("caller is not a Peer Shard".into());
+    }
     let message: Message = bsatn::from_slice(&message).map_err(|error| error.to_string())?;
     match message {
         Message::Request(request) => {

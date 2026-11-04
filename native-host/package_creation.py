@@ -102,7 +102,8 @@ def check(host):
     take(east, stopped, package='realm-stopped')
     assert not host.rows("SELECT guid FROM game_character WHERE name = 'Realmstopped'", east)
     assert not host.rows("SELECT name FROM game_character_name WHERE name = 'realmstopped'")
-    refused_call('idc_package_creation', [[3] + [0] * 8 + [2] + [0] * 4], east, 'Peer Shard')
+    for payload in ([], [3] + [0] * 8 + [2] + [0] * 4):
+        refused_call('idc_package_creation', [payload], east, 'Peer Shard')
 
     for world in worlds:
         assert not host.rows('SELECT id FROM game_package_character_request', world)
