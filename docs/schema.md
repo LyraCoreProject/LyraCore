@@ -202,6 +202,12 @@ does not grant Group authority. The Realm also requires Package Account ownershi
 Character directory owner. See [the Package contract](package-api.md#session-less-action-consent)
 for upgrade and completion obligations.
 
+`game_package_party_refresh` is a new private scheduled table with at most one row per World. It
+refreshes statistics for active Package Group members every five seconds, keeping their authority
+revisions unchanged. Outstanding Package commands delay a refresh batch. The timer removes itself
+when no active Package Group members remain. After upgrading an existing World, the Package Group
+presence report starts the timer for existing membership.
+
 ### Realm communication (`module/src/native/realm_communication.rs`)
 
 `game_native_away.character_guid` is END-appended with default zero. New world entries record the

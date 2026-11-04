@@ -840,6 +840,7 @@ fn project(ctx: &ReducerContext, roster: Roster, revision: u64) {
             revision,
         });
         restore(ctx, guid);
+        package::membership_changed(ctx, guid);
         crate::instance::reconcile_instance_removal(ctx, guid);
     }
     projections.group_id().delete(roster.group_id);
