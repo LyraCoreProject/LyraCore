@@ -2,6 +2,15 @@ name: Native Host
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - "conformance/*.py"
+      - "conformance/tests/*.py"
+      - "conformance/run"
+      - "conformance/baseline"
+      - "conformance/scoreboard"
+      - "conformance/audit"
+      - "conformance/reports/**"
   push:
     branches: [main]
 
@@ -18,6 +27,7 @@ env:
 
 jobs:
   host:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -50,6 +60,7 @@ jobs:
           if-no-files-found: error
 
   host-tests:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -77,6 +88,7 @@ jobs:
           cargo +"$HOST_TOOLCHAIN" test --release --locked -p spacetimedb-standalone --lib native_world::
 
   module:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -95,6 +107,7 @@ jobs:
           if-no-files-found: error
 
   checks:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     needs: [host, module]
     runs-on: ubuntu-latest
     timeout-minutes: 30

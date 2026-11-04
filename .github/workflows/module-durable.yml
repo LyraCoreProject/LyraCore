@@ -2,7 +2,15 @@ name: Module durable tests
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
     paths-ignore:
+      - "conformance/*.py"
+      - "conformance/tests/*.py"
+      - "conformance/run"
+      - "conformance/baseline"
+      - "conformance/scoreboard"
+      - "conformance/audit"
+      - "conformance/reports/**"
       - "**/*.md"
       - "docs/**"
       - ".claude/**"
@@ -26,12 +34,13 @@ env:
 
 jobs:
   durable:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        shard: [0, 1, 2]
+        shard: [0, 1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -53,7 +62,7 @@ jobs:
         run: python3 scripts/idc-bindings.py target/wasm32-unknown-unknown/release/lyracore_module.wasm --check
 
       # Each test owns a standalone process; the thread limit bounds memory use.
-      - name: Run the durable suite, shard ${{ matrix.shard }} of 3
+      - name: Run the durable suite, shard ${{ matrix.shard }} of 6
         id: durable-suite
         run: |
           mapfile -t targets < <(python3 scripts/durable-test-targets.py "${{ matrix.shard }}")
