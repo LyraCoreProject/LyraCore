@@ -1,6 +1,5 @@
 use spacetimedb::{
-    reducer, sats::bsatn, table, Identity, ReducerContext, ScheduleAt, SpacetimeType, Table,
-    TimeDuration,
+    reducer, sats::bsatn, table, ReducerContext, ScheduleAt, SpacetimeType, Table, TimeDuration,
 };
 
 use super::super::package_actor::{facts, game_package_party_authority, PackagePartyAuthority};

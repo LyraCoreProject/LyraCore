@@ -53,9 +53,7 @@ pub(super) fn changed(
     ctx: &ReducerContext,
     guid: u64,
 ) -> Option<(PartyCharacter, PackagePartyAuthority)> {
-    if realm_shard(ctx).is_none() {
-        return None;
-    }
+    realm_shard(ctx)?;
     let active = crate::sessionless::group_action_gate(ctx, guid).is_ok()
         && crate::helpers::character_by_guid(ctx, guid)
             .and_then(|character| {

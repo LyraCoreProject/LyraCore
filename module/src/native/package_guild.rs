@@ -46,7 +46,7 @@ struct Request {
 
 #[derive(SpacetimeType)]
 enum Message {
-    Request(Request),
+    Request(Box<Request>),
     Invitation(PackageGuildInvitation),
 }
 
@@ -153,11 +153,11 @@ pub(super) fn presence(
         send(
             ctx,
             realm,
-            Message::Request(Request {
+            Message::Request(Box::new(Request {
                 facts,
                 authority,
                 action: None,
-            }),
+            })),
         );
     }
 }
@@ -207,11 +207,11 @@ fn submit(ctx: &ReducerContext, guid: u64, action: Action) -> Result<(), String>
         send(
             ctx,
             realm,
-            Message::Request(Request {
+            Message::Request(Box::new(Request {
                 facts,
                 authority,
                 action: Some(action),
-            }),
+            })),
         );
         Ok(())
     } else {
@@ -270,6 +270,7 @@ pub fn idc_package_guild(ctx: &ReducerContext, message: Vec<u8>) -> Result<(), S
     let message: Message = bsatn::from_slice(&message).map_err(|error| error.to_string())?;
     match message {
         Message::Request(request) => {
+            let request = *request;
             directory::require_world(ctx)?;
             let character = &request.facts.character;
             package_actor::admit(ctx, character, request.authority)?;
