@@ -99,6 +99,20 @@ fn entity_projection(
     } else {
         Vec::new()
     };
+    let buyback = if viewer == guid {
+        native::economy::buyback(ctx, guid)
+            .iter()
+            .enumerate()
+            .map(|(index, row)| {
+                (
+                    native::economy::buyback_item(ctx, guid, index as u16, row),
+                    row.price,
+                )
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
     let skills = if viewer == guid {
         ctx.db
             .game_player_skill()
@@ -135,6 +149,7 @@ fn entity_projection(
             &view,
             view.scale_x.to_bits(),
             &items,
+            &buyback,
             &skills,
             &quests,
             &stats,
@@ -149,7 +164,24 @@ fn entity_projection(
             .map_err(|error| error.to_string())?;
             let extra = stats
                 .as_ref()
-                .map(|stats| encode(codec::build_sheet_stats_values(guid, stats)))
+                .map(|stats| {
+                    let mut extra = encode(codec::build_sheet_stats_values(guid, stats))?;
+                    let mut mask = codec::update_mask::UpdateMaskValues::new();
+                    for index in 0..12u16 {
+                        let (item, price) = buyback
+                            .get(usize::from(index))
+                            .map_or((0, 0), |(item, price)| (item.guid, *price));
+                        // Build 5875 buyback links begin at 624, prices at 1226 and timestamps at 1238.
+                        mask.set_u64(624 + index * 2, item);
+                        mask.set_u32(1226 + index, price);
+                        mask.set_u32(1238 + index, 0);
+                    }
+                    let (_, buyback_fields) = codec::build_values_update_raw(guid, &mask);
+                    // UPDATE_OBJECT has a four-byte block count and one-byte transport flag.
+                    extra[..4].copy_from_slice(&2u32.to_le_bytes());
+                    extra.extend_from_slice(&buyback_fields[5..]);
+                    Ok::<_, String>(extra)
+                })
                 .transpose()?;
             Ok((message, extra))
         },
@@ -188,6 +220,11 @@ pub fn debug_native_project(
         .find(connection_id)
         .ok_or("conformance Character is not in world")?
         .character_guid;
+    let buyback = native::economy::buyback(ctx, viewer)
+        .iter()
+        .enumerate()
+        .map(|(index, row)| native::economy::buyback_item(ctx, viewer, index as u16, row))
+        .collect::<Vec<_>>();
     let guids = ctx
         .db
         .game_aoi_grant()
@@ -201,6 +238,7 @@ pub fn debug_native_project(
                 .filter(viewer)
                 .map(|item| item.guid),
         )
+        .chain(buyback.iter().map(|item| item.guid))
         .collect::<std::collections::BTreeSet<_>>();
     let cache = ctx.db.game_native_conformance_cache();
     for old in cache.by_connection().filter(connection_id) {
@@ -317,6 +355,11 @@ pub fn debug_native_project(
                 Ok((codec::build_item_create_object(&view), None))
             })?;
             (body, extra, 1, item.owner_guid)
+        } else if let Some(view) = buyback.iter().find(|item| item.guid == guid) {
+            let (body, extra) = encoded(ctx, connection_id, guid, full, view, || {
+                Ok((codec::build_item_create_object(view), None))
+            })?;
+            (body, extra, 1, viewer)
         } else {
             return Err(format!(
                 "object {guid} is not visible to conformance Character"

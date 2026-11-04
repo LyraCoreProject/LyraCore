@@ -964,3 +964,43 @@ fn create_context_accepts_subscription_and_reducer_rows() -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn sold_buyback_items_remain_in_the_fresh_projection() -> Result<()> {
+    let (shard, guid, _) = super::fixture("buyback-projection");
+    shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
+    shard.assert_sql("UPDATE game_creature_template SET npc_flags = 4, faction_template = 35 WHERE entry = 51000");
+    let before: BTreeSet<_> = shard
+        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .into_iter()
+        .map(|row| row["guid"].clone())
+        .collect();
+    shard.assert_call("debug_spawn_at_feet", &[&guid.to_string(), "51000", "2"]);
+    let vendor = shard
+        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .into_iter()
+        .find(|row| !before.contains(&row["guid"]))
+        .context("fixture vendor")?["guid"]
+        .parse::<u64>()?;
+    shard.assert_call("debug_grant_item", &[&guid.to_string(), "52", "2"]);
+    let item = shard.query_rows(&format!(
+        "SELECT guid FROM game_item_instance WHERE owner_guid = {guid} AND entry = 52"
+    ))[0]["guid"]
+        .parse::<u64>()?;
+    let mut transport = OperatorTransport::connect(&shard, guid, BTreeMap::new())?;
+    let mut sell = vendor.to_le_bytes().to_vec();
+    sell.extend(item.to_le_bytes());
+    sell.push(2);
+    transport.send(0x01a0, &sell)?;
+    let rows = shard.query_rows(&format!(
+        "SELECT stack_count,price FROM game_character_buyback WHERE player_guid = {guid}"
+    ));
+    ensure!(
+        rows.len() == 1 && rows[0]["stack_count"] == "2" && rows[0]["price"] == "4",
+        "sale did not retain its buyback row: {rows:?}"
+    );
+    let violations = properties::run(transport.batches())?;
+    ensure!(violations.is_empty(), "buyback properties: {violations:#?}");
+    Ok(())
+}

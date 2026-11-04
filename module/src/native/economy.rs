@@ -87,7 +87,7 @@ pub(super) fn bank(
     )?)
 }
 
-fn buyback(ctx: &ReducerContext, guid: u64) -> Vec<BuybackEntry> {
+pub(super) fn buyback(ctx: &ReducerContext, guid: u64) -> Vec<BuybackEntry> {
     let mut entries: Vec<_> = ctx
         .db
         .game_character_buyback()
@@ -110,6 +110,31 @@ pub(super) fn replay_buyback(
     Ok(())
 }
 
+pub(super) fn buyback_item(
+    ctx: &ReducerContext,
+    guid: u64,
+    index: u16,
+    row: &BuybackEntry,
+) -> codec::ItemInstanceView {
+    let item_guid = 0x4090_0000_0000_0000 | u64::from(index);
+    let wire_slot = 69 + index;
+    codec::ItemInstanceView {
+        guid: item_guid,
+        entry: row.item_entry,
+        owner_guid: guid,
+        slot: wire_slot as u8,
+        stack_count: row.stack_count,
+        random_property_id: row.random_property_id,
+        random_property_enchant_ids: ctx
+            .db
+            .game_item_random_property()
+            .property_id()
+            .find(row.random_property_id)
+            .map_or([0; 3], |p| [p.enchant_id_1, p.enchant_id_2, p.enchant_id_3]),
+        ..Default::default()
+    }
+}
+
 fn send_buyback(
     ctx: &ReducerContext,
     connection: ConnectionId,
@@ -130,21 +155,7 @@ fn send_buyback(
             )?;
         }
         let (item_guid, price) = if let Some(row) = entries.get(usize::from(index)) {
-            let view = codec::ItemInstanceView {
-                guid: item_guid,
-                entry: row.item_entry,
-                owner_guid: guid,
-                slot: wire_slot as u8,
-                stack_count: row.stack_count,
-                random_property_id: row.random_property_id,
-                random_property_enchant_ids: ctx
-                    .db
-                    .game_item_random_property()
-                    .property_id()
-                    .find(row.random_property_id)
-                    .map_or([0; 3], |p| [p.enchant_id_1, p.enchant_id_2, p.enchant_id_3]),
-                ..Default::default()
-            };
+            let view = buyback_item(ctx, guid, index, row);
             super::send(
                 ctx,
                 connection,
