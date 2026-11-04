@@ -796,15 +796,17 @@ behavior. Only counts are printed; spell names and SQLite records stay local.
 
 ## Quest data
 
-Tier 1 uses `support/quest_world.rs` for quests 7, 15 and 433. The quest templates,
-kill objectives, quest 433 text and creature 1977's start and end relations were checked in
+Tier 1 uses `support/quest_world.rs` for quests 7, 15 and 433. The numeric quest templates,
+kill objectives and creature 1977's start and end relations were checked in
 the local vmangos world snapshot at database commit
 `464179081673cfd240f7ffe7f0daf96bca0b5a70`, the source used by the harness quest recordings.
 Quests 7 and 15 require ten kills of creatures 6 and 257. Quest 433 requires ten kills of
 creature 1117 and rewards 300 copper, 660 base XP and 75 reputation with factions 47 and 54.
 It has no item or spell rewards. See the pinned harness `docs/quests.md` for the recorded scope.
 
-The fixture preserves creature 1977's name, display, faction, level and quest-giver flag.
+Quest and creature text is fixture-authored, because Reference Server text stays out of the
+repository, so tier 1 records text digest differences that the imported audit does not have.
+The fixture preserves creature 1977's display, faction, level and quest-giver flag.
 Its health and combat values are inert placeholders: the scenarios scope out creatures and
 perform no combat. Quest grants bypass prerequisite eligibility and preserve fixture order.
 These are approved tier 1 fixtures, not imported world data or gameplay changes.
