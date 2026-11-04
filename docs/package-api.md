@@ -119,8 +119,10 @@ automatic acceptance. A delayed acceptance names its inviter and cannot accept a
 
 Publish all Shards before using this path. After upgrading Worlds that already have live Package
 Characters, call `operator_report_package_groups` on each World to publish their current presence.
-This path covers Group membership; guild operations, remote member-stat refresh and cross-Shard
-relocation remain separate work.
+Grouped Package Characters refresh their remote member statistics every five seconds while active.
+Statistics wait behind outstanding Package commands and keep the existing consent revision. The
+World stops its refresh timer when no active Package Group members remain. Guild operations and
+cross-Shard relocation remain separate work.
 
 ### Package-owned Accounts
 

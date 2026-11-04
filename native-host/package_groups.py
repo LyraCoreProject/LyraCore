@@ -1,6 +1,6 @@
 import struct
 
-from headless import creates
+from headless import creates, packed_guid
 
 
 def check(host):
@@ -49,6 +49,8 @@ def check(host):
     def leave(world, actor):
         host.call('debug_emit_sessionless_group_intent', [actor, 0, True], database=world)
         host.wait_until(lambda: members([]), 'Package leave did not disband the two-member Group')
+        host.wait_until(lambda: all(not host.rows('SELECT id FROM game_package_party_refresh', shard) for shard in worlds),
+                        'Package statistics kept running without Group members', timeout=12)
 
     alpha = package_character(east, 'Alpha')
     beta = package_character(west, 'Beta')
@@ -57,6 +59,14 @@ def check(host):
     for world in worlds:
         host.rows('SELECT guid FROM game_character', world)
     host.wait_until(lambda: members([alpha, beta]), 'Package Group did not survive restart', timeout=20)
+    assert all(len(host.rows('SELECT id FROM game_package_party_refresh', world)) == 1 for world in worlds)
+    revision = host.rows(f'SELECT revision FROM game_party_character WHERE guid = {beta}')[0][0]
+    host.restart()
+    for world in worlds:
+        host.rows('SELECT id FROM game_package_party_refresh', world)
+    host.wait_until(lambda: host.rows(f'SELECT revision FROM game_party_character WHERE guid = {beta}')[0][0] > revision,
+                    'Package statistics did not resume after restart', timeout=12)
+    assert members([alpha, beta])
     assert len(host.rows('SELECT group_id FROM game_group')) == 1
     assert all(not host.rows('SELECT connection_id FROM game_native_player', world) for world in worlds)
     leave(west, beta)
@@ -89,6 +99,25 @@ def check(host):
                     'player presence did not reach Realm')
     client.send(0x6e, b'Beta\0')
     host.wait_until(lambda: members([player, beta]), 'Package did not accept player invitation')
+    client.collect()
+    authority = host.rows(f'SELECT revision FROM game_package_party_authority WHERE guid = {beta}', west)
+    health = host.rows(f'SELECT max_health FROM game_world_entity WHERE guid = {beta}', west)[0][0] - 1
+    host.sql(f'UPDATE game_world_entity SET health = {health}, power = 17, max_power = 100 WHERE guid = {beta}', west)
+    statistics = {}
+    def refreshed():
+        for opcode, body in client.collect():
+            if opcode != 0x7e or packed_guid(body) != beta:
+                continue
+            offset = 1 + body[0].bit_count()
+            mask = struct.unpack_from('<I', body, offset)[0]
+            offset += 4
+            for bit, fmt in enumerate(['B', 'H', 'H', 'B', 'H', 'H']):
+                if mask & (1 << bit):
+                    statistics[bit] = struct.unpack_from('<' + fmt, body, offset)[0]
+                    offset += struct.calcsize('<' + fmt)
+        return statistics.get(1) == health and statistics.get(4) == 17 and statistics.get(5) == 100
+    host.wait_until(refreshed, 'remote Package health and power did not refresh on the native connection', timeout=16)
+    assert host.rows(f'SELECT revision FROM game_package_party_authority WHERE guid = {beta}', west) == authority
     leave(west, beta)
     client.collect()
     invite(west, beta, player)
