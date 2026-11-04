@@ -55,21 +55,27 @@ class RatchetTests(unittest.TestCase):
         self.current["scenarios"].append(new)
         result = self.compare()
         self.assertTrue(result["passes"])
-        self.assertEqual(result["new_measurements"], {"new": ["new scenario"]})
+        self.assertEqual(result["new_measurements"], {
+            "new": {"reasons": ["new scenario"], "added_rule_signatures": []},
+        })
 
     def test_changed_hash_is_reported_as_new_measurement(self):
         self.add_signature()
         self.current["scenarios"][0]["scenario_sha256"] = "c" * 64
         result = self.compare()
         self.assertTrue(result["passes"])
-        self.assertEqual(result["new_measurements"], {"sample": ["scenario_sha256"]})
+        measurement = result["new_measurements"]["sample"]
+        self.assertEqual(measurement["reasons"], ["scenario_sha256"])
+        self.assertEqual(len(measurement["added_rule_signatures"]), 1)
 
     def test_changed_harness_is_reported_as_new_measurement(self):
         self.add_signature()
         self.current["scenarios"][0]["harness_revision"] = "c" * 40
         result = self.compare()
         self.assertTrue(result["passes"])
-        self.assertEqual(result["new_measurements"], {"sample": ["harness_revision"]})
+        measurement = result["new_measurements"]["sample"]
+        self.assertEqual(measurement["reasons"], ["harness_revision"])
+        self.assertEqual(len(measurement["added_rule_signatures"]), 1)
 
     def test_label_accepts_and_keeps_added_signatures_visible(self):
         self.add_signature()

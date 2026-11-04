@@ -251,7 +251,6 @@ Whole targets stay on one shard, so this adds no scenario rerun. Low numbers nev
 missing or malformed explicit evidence still fails. The summary shows evidence presence and state
 counts beside pass totals: zero passes with absent evidence means unmeasured. Signature totals
 include recorded stale evidence and are null when absent. CI commits no generated evidence.
-Documentation-only pushes to `main` also run the durable workflow to capture each commit.
 
 The durable CI target discovery includes `native_conformance` automatically and runs every tier 1
 scenario. Use the [taxi setup](../conformance/README.md#taxi-data) to run that test.

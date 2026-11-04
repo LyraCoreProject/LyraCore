@@ -48,11 +48,17 @@ def compare(base, current, labels):
             field for field in ("scenario_sha256", "harness_revision")
             if old[field] != entry[field]
         ]
-        if reasons:
-            measurements[name] = reasons
+        if old is None:
+            measurements[name] = {"reasons": reasons, "added_rule_signatures": []}
             continue
         before = signatures(old["rule"])
         after = signatures(entry["rule"])
+        if reasons:
+            measurements[name] = {
+                "reasons": reasons,
+                "added_rule_signatures": [json.loads(value) for value in sorted(after - before)],
+            }
+            continue
         if after - before:
             additions[name] = [json.loads(value) for value in sorted(after - before)]
         if before - after:

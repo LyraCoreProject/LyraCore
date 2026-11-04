@@ -404,13 +404,12 @@ and a row for each Behavior. Tier 1, Conformance Audit and real-client checks ha
 It does not infer a pass from a test declaration or claim overall completion from these columns.
 The ledger's other required rungs remain obligations.
 
-On every push to `main`, `Module durable tests` publishes the `conformance-scoreboard-<commit>`
+On each push to `main` outside documentation, `Module durable tests` publishes the `conformance-scoreboard-<commit>`
 artifact for 90 days and a short job summary. The artifact contains `scoreboard.json` from
 `./conformance/scoreboard --json` and the run's `tier1.json`. CI shards whole test targets, so the
 job that runs `native_conformance` already records all tier 1 scenarios in one process. No scenario
 rerun or shard merge is needed. Added work is scoreboard compilation, two scoreboard invocations
-and artifact upload; no extra durable test time on code pushes. Documentation-only pushes to
-`main` now run the durable workflow too. CI never commits this evidence. Compare artifacts by
+and artifact upload, with no extra durable test time. CI never commits this evidence. Compare artifacts by
 commit to track progress within retention; download them for longer retention.
 
 `--summary` prints the same short summary used by CI. It includes Behaviors with scenarios, passes,
