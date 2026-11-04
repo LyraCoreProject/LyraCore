@@ -8,9 +8,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-# Durations from https://github.com/LyraCoreProject/LyraCore/actions/runs/40829225789.
+# Durations from https://github.com/LyraCoreProject/LyraCore/actions/runs/41883972737.
 # Job 2 also runs the populated-upgrade check from a cached baseline Wasm.
-JOB_SECONDS = (0, 0, 33, 0, 0, 0)
+JOB_SECONDS = (30, 79, 48, 0, 17, 43)
 DEFAULT_TARGET_SECONDS = 20
 
 

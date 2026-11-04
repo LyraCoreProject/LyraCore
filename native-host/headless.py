@@ -1,5 +1,6 @@
 import hashlib
 import secrets
+import select
 import socket
 import struct
 import zlib
@@ -8,6 +9,7 @@ KEY = bytes([0x57] * 40)
 PRIME = bytes.fromhex('b79b3e2a87823cab8f5ebfbf8eb10108535006298b5badbd5b53e1895e644b89')
 # SMSG_AUTH_CHALLENGE header: size 6, opcode 0x1ec, sent before the cipher starts.
 AUTH_CHALLENGE = bytes([0, 6, 0xec, 1])
+FENCE_RESEND_SECONDS = 1
 
 
 def sha(*parts):
@@ -162,12 +164,31 @@ class World:
     def send(self, opcode, body=b''):
         self.socket.sendall(self.encrypt.encrypt(request_header(opcode, len(body))) + body)
 
-    def collect(self, auto_ack=True):
-        """Returns every packet sent before a ping fence, optionally acknowledging teleports."""
+    def fence(self):
         sequence = secrets.randbits(32)
         self.send(0x1dc, struct.pack('<II', sequence, 0))
+        return sequence
+
+    def readable(self, seconds):
+        # poll, because select refuses the descriptors above 1024 that exhaustion checks reach.
+        poller = select.poll()
+        poller.register(self.socket, select.POLLIN)
+        return bool(poller.poll(seconds * 1000))
+
+    def collect(self, auto_ack=True):
+        """Returns every packet sent before a ping fence, optionally acknowledging teleports."""
+        sequence = self.fence()
         packets = []
+        quiet_seconds = 0
         while True:
+            # A Handoff discards a PONG behind its marker, so a quiet socket needs a new fence.
+            if not self.readable(FENCE_RESEND_SECONDS):
+                quiet_seconds += FENCE_RESEND_SECONDS
+                if quiet_seconds >= self.socket.gettimeout():
+                    raise TimeoutError(f'no PONG in {quiet_seconds} seconds')
+                sequence = self.fence()
+                continue
+            quiet_seconds = 0
             packet = self.read()
             if packet == (0x1dd, struct.pack('<I', sequence)):
                 return packets
@@ -178,8 +199,7 @@ class World:
                     self.send(0xc7, teleport_ack(packet[1]))
                 else:
                     self.send(0xdc)
-                sequence = secrets.randbits(32)
-                self.send(0x1dc, struct.pack('<II', sequence, 0))
+                sequence = self.fence()
 
     def read_until_closed(self, timeout=3):
         self.socket.settimeout(timeout)
