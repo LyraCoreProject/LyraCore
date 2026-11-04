@@ -41,20 +41,29 @@ struct Request {
 }
 
 #[derive(SpacetimeType)]
+struct Grant {
+    request: Request,
+    account: Vec<u8>,
+}
+
+#[derive(SpacetimeType)]
+struct Created {
+    request: Request,
+    profile: directory::CharacterProfile,
+}
+
+#[derive(SpacetimeType)]
+struct Completion {
+    id: u64,
+    result: CharacterCreation,
+}
+
+#[derive(SpacetimeType)]
 enum Message {
     Request(Request),
-    Grant {
-        request: Request,
-        account: Vec<u8>,
-    },
-    Created {
-        request: Request,
-        profile: directory::CharacterProfile,
-    },
-    Complete {
-        id: u64,
-        result: CharacterCreation,
-    },
+    Grant(Grant),
+    Created(Created),
+    Complete(Completion),
 }
 
 #[table(accessor = game_package_creation_delivery, outbox(remote::idc_package_creation))]
@@ -246,13 +255,13 @@ pub fn idc_package_creation(ctx: &ReducerContext, message: Vec<u8>) -> Result<()
             send(
                 ctx,
                 ctx.sender(),
-                Message::Grant {
+                Message::Grant(Grant {
                     request,
                     account: encode(&account),
-                },
+                }),
             );
         }
-        Message::Grant { request, account } => {
+        Message::Grant(Grant { request, account }) => {
             require_sender(ctx, realm(ctx))?;
             let pending = ctx
                 .db
@@ -322,9 +331,13 @@ pub fn idc_package_creation(ctx: &ReducerContext, message: Vec<u8>) -> Result<()
                 gender: 0,
                 deleted: false,
             };
-            send(ctx, ctx.sender(), Message::Created { request, profile });
+            send(
+                ctx,
+                ctx.sender(),
+                Message::Created(Created { request, profile }),
+            );
         }
-        Message::Created { request, profile } => {
+        Message::Created(Created { request, profile }) => {
             directory::require_world(ctx)?;
             if profile.deleted
                 || profile.guid == 0
@@ -345,13 +358,13 @@ pub fn idc_package_creation(ctx: &ReducerContext, message: Vec<u8>) -> Result<()
             send(
                 ctx,
                 ctx.sender(),
-                Message::Complete {
+                Message::Complete(Completion {
                     id: request.id,
                     result: CharacterCreation::Created(guid),
-                },
+                }),
             );
         }
-        Message::Complete { id, result } => {
+        Message::Complete(Completion { id, result }) => {
             require_sender(ctx, realm(ctx))?;
             finish(ctx, id, result)?;
         }
@@ -376,20 +389,20 @@ pub fn package_creation_answered(
             finish(ctx, request.id, CharacterCreation::Refused(error))
                 .expect("pending request can be refused");
         }
-        Message::Grant { request, account } => {
+        Message::Grant(Grant { request, account }) => {
             let account: Account =
                 bsatn::from_slice(&account).expect("stored Package Account decodes");
             character_names::release_package(ctx, &request.name, account.id, call.database.0);
             send(
                 ctx,
                 call.database.0,
-                Message::Complete {
+                Message::Complete(Completion {
                     id: request.id,
                     result: CharacterCreation::Refused(error),
-                },
+                }),
             );
         }
-        Message::Created { .. } | Message::Complete { .. } => {
+        Message::Created(_) | Message::Complete(_) => {
             spacetimedb::log::warn!(
                 "Package creation result to {} waits: {error}",
                 call.database.0
