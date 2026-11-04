@@ -311,19 +311,18 @@ pub fn operator_report_package_groups(ctx: &ReducerContext) -> Result<(), String
     if realm_shard(ctx).is_none() {
         return Err("Package Group presence must be reported by a World Shard".into());
     }
-    use crate::game_world_entity;
-    let guids: std::collections::BTreeSet<_> = ctx
+    use crate::game_character;
+    let guids: Vec<_> = ctx
         .db
-        .game_world_entity()
+        .game_package_account()
         .iter()
-        .filter(|entity| entity.is_player())
-        .map(|entity| entity.guid)
-        .chain(
+        .flat_map(|owner| {
             ctx.db
-                .game_package_party_authority()
-                .iter()
-                .map(|authority| authority.guid),
-        )
+                .game_character()
+                .by_account()
+                .filter(owner.account_id)
+                .map(|character| character.guid)
+        })
         .collect();
     for guid in guids {
         presence(ctx, guid);
