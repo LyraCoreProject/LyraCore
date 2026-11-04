@@ -205,45 +205,39 @@ pub(super) fn equipment(ctx: &ReducerContext, guid: u64) -> Vec<codec::ItemInsta
 }
 
 pub(super) fn quests(ctx: &ReducerContext, guid: u64) -> Vec<codec::update_mask::QuestLogSlot> {
-    use crate::quest::{game_character_quest, game_quest_objective, objective_kind};
-    let mut quests: Vec<_> = ctx
-        .db
-        .game_character_quest()
-        .by_character()
-        .filter(guid)
-        .filter(|quest| !quest.rewarded)
-        .collect();
-    quests.sort_by_key(|quest| quest.quest_entry);
-    quests
-        .into_iter()
-        .take(codec::update_mask::idx::QUEST_LOG_SLOTS as usize)
-        .enumerate()
-        .map(|(slot, quest)| {
-            let state = u8::from(crate::quest::quest_is_complete(ctx, &quest));
-            let mut counts = quest.counts;
-            // The client redraws its quest tracker only when a counter changes, so carried
-            // items fill their objective's counter as vmangos does.
-            for objective in ctx
-                .db
-                .game_quest_objective()
-                .by_quest()
-                .filter(quest.quest_entry)
-                .filter(|objective| objective.kind == objective_kind::COLLECT_ITEM)
-            {
-                if let Some(count) = counts.get_mut(usize::from(objective.obj_index)) {
-                    *count = crate::items::item_count(ctx, guid, objective.target_entry)
-                        .min(objective.required_count);
-                }
-            }
-            codec::update_mask::QuestLogSlot {
-                slot: slot as u8,
-                quest_id: quest.quest_entry,
-                state,
-                counts,
-                timer: 0,
-            }
-        })
+    crate::quest::quest_log_rows(ctx, guid)
+        .iter()
+        .map(|quest| quest_slot(ctx, quest))
         .collect()
+}
+
+pub(super) fn quest_slot(
+    ctx: &ReducerContext,
+    quest: &crate::quest::CharacterQuest,
+) -> codec::update_mask::QuestLogSlot {
+    use crate::quest::{game_quest_objective, objective_kind};
+    let state = u8::from(crate::quest::quest_is_complete(ctx, quest));
+    let mut counts = quest.counts.clone();
+    // Carried items fill their objective counter so the client redraws its quest tracker.
+    for objective in ctx
+        .db
+        .game_quest_objective()
+        .by_quest()
+        .filter(quest.quest_entry)
+        .filter(|objective| objective.kind == objective_kind::COLLECT_ITEM)
+    {
+        if let Some(count) = counts.get_mut(usize::from(objective.obj_index)) {
+            *count = crate::items::item_count(ctx, quest.character_guid, objective.target_entry)
+                .min(objective.required_count);
+        }
+    }
+    codec::update_mask::QuestLogSlot {
+        slot: quest.log_slot,
+        quest_id: quest.quest_entry,
+        state,
+        counts,
+        timer: 0,
+    }
 }
 
 pub(super) fn item_template(t: crate::items::ItemTemplate) -> codec::ItemTemplateView {

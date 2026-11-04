@@ -607,6 +607,7 @@ pub(super) fn receive(
         | ClientOpcodeMessage::CMSG_QUESTGIVER_COMPLETE_QUEST(_)
         | ClientOpcodeMessage::CMSG_QUESTGIVER_REQUEST_REWARD(_)
         | ClientOpcodeMessage::CMSG_QUESTGIVER_CHOOSE_REWARD(_)
+        | ClientOpcodeMessage::CMSG_QUESTLOG_SWAP_QUEST(_)
         | ClientOpcodeMessage::CMSG_QUESTLOG_REMOVE_QUEST(_)
         | ClientOpcodeMessage::CMSG_PUSHQUESTTOPARTY(_)) => {
             return super::quest::receive(ctx, connection.connection_id, guid, message);

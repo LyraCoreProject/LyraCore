@@ -260,6 +260,7 @@ pub struct GameObjectQuest {
         btree(columns = [character_guid, rewarded, failed])
     )
 )]
+#[derive(Clone)]
 pub struct CharacterQuest {
     #[primary_key]
     #[auto_inc]
@@ -273,6 +274,8 @@ pub struct CharacterQuest {
     pub deadline_micros: i64,
     #[default(false)]
     pub failed: bool,
+    #[default(255u8)]
+    pub log_slot: u8,
 }
 
 #[table(
@@ -288,20 +291,37 @@ pub struct CharacterQuestEventCredit {
 }
 
 impl CharacterQuest {
-    pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
+    pub(crate) fn insert(ctx: &ReducerContext, mut row: Self) -> Self {
+        let quests = persist_quest_log_slots(ctx, row.character_guid);
+        row.log_slot = if row.rewarded {
+            255
+        } else {
+            free_quest_log_slot(&quests)
+        };
         let row = ctx.db.game_character_quest().insert(row);
         crate::native::quest_changed(ctx, None, Some(&row));
         row
     }
-    pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
+    pub(crate) fn update(mut self, ctx: &ReducerContext) -> Self {
+        let quests = persist_quest_log_slots(ctx, self.character_guid);
         let table = ctx.db.game_character_quest();
         let old = table.id().find(self.id);
+        self.log_slot = if self.rewarded {
+            255
+        } else if let Some(old) = old.as_ref().filter(|old| !old.rewarded) {
+            old.log_slot
+        } else {
+            free_quest_log_slot(&quests)
+        };
         let row = table.id().update(self);
         crate::native::quest_changed(ctx, old.as_ref(), Some(&row));
         row
     }
     pub(crate) fn delete(ctx: &ReducerContext, id: u64) -> bool {
         let table = ctx.db.game_character_quest();
+        if let Some(row) = table.id().find(id) {
+            persist_quest_log_slots(ctx, row.character_guid);
+        }
         let old = table.id().find(id);
         let removed = table.id().delete(id);
         if let Some(row) = old {
@@ -309,6 +329,55 @@ impl CharacterQuest {
         }
         removed
     }
+}
+
+pub(crate) fn quest_log_rows(ctx: &ReducerContext, guid: u64) -> Vec<CharacterQuest> {
+    let mut quests: Vec<_> = ctx
+        .db
+        .game_character_quest()
+        .by_character()
+        .filter(guid)
+        .filter(|quest| !quest.rewarded)
+        .collect();
+    quests.sort_by_key(|quest| quest.quest_entry);
+    let mut occupied = [false; MAX_QUEST_LOG_SIZE];
+    for quest in &quests {
+        if let Some(slot) = occupied.get_mut(usize::from(quest.log_slot)) {
+            *slot = true;
+        }
+    }
+    // Legacy rows retain their old sorted projection until their first mutation saves the slots.
+    for quest in &mut quests {
+        if usize::from(quest.log_slot) >= MAX_QUEST_LOG_SIZE {
+            if let Some(slot) = occupied.iter().position(|used| !used) {
+                quest.log_slot = slot as u8;
+                occupied[slot] = true;
+            }
+        }
+    }
+    quests.retain(|quest| usize::from(quest.log_slot) < MAX_QUEST_LOG_SIZE);
+    quests
+}
+
+fn free_quest_log_slot(quests: &[CharacterQuest]) -> u8 {
+    (0..MAX_QUEST_LOG_SIZE as u8)
+        .find(|slot| quests.iter().all(|quest| quest.log_slot != *slot))
+        .unwrap_or(255)
+}
+
+pub(crate) fn persist_quest_log_slots(ctx: &ReducerContext, guid: u64) -> Vec<CharacterQuest> {
+    let quests = quest_log_rows(ctx, guid);
+    let table = ctx.db.game_character_quest();
+    for quest in &quests {
+        if table
+            .id()
+            .find(quest.id)
+            .is_some_and(|old| old.log_slot != quest.log_slot)
+        {
+            table.id().update(quest.clone());
+        }
+    }
+    quests
 }
 impl CharacterQuestEventCredit {
     fn insert(ctx: &ReducerContext, row: Self) -> Self {
@@ -768,6 +837,7 @@ fn apply_accept_effects(
                     rewarded: false,
                     deadline_micros,
                     failed: false,
+                    log_slot: 255,
                 },
             );
         }
