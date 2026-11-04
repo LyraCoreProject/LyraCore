@@ -287,29 +287,120 @@ pub struct CharacterQuestEventCredit {
     pub quest_entry: u32,
 }
 
+#[table(accessor = game_character_quest_log)]
+pub struct CharacterQuestLog {
+    #[primary_key]
+    pub character_guid: u64,
+    pub entries: Vec<u32>,
+}
+
 impl CharacterQuest {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
+        let slot = set_quest_log_entry(ctx, row.character_guid, row.quest_entry, !row.rewarded);
         let row = ctx.db.game_character_quest().insert(row);
-        crate::native::quest_changed(ctx, None, Some(&row));
+        crate::native::quest_changed(ctx, None, Some(&row), slot);
         row
     }
     pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
+        let slot = set_quest_log_entry(ctx, self.character_guid, self.quest_entry, !self.rewarded);
         let table = ctx.db.game_character_quest();
         let old = table.id().find(self.id);
         let row = table.id().update(self);
-        crate::native::quest_changed(ctx, old.as_ref(), Some(&row));
+        crate::native::quest_changed(ctx, old.as_ref(), Some(&row), slot);
         row
     }
     pub(crate) fn delete(ctx: &ReducerContext, id: u64) -> bool {
         let table = ctx.db.game_character_quest();
         let old = table.id().find(id);
+        let slot = old
+            .as_ref()
+            .map(|row| set_quest_log_entry(ctx, row.character_guid, row.quest_entry, false))
+            .unwrap_or(255);
         let removed = table.id().delete(id);
         if let Some(row) = old {
-            crate::native::quest_changed(ctx, Some(&row), None);
+            crate::native::quest_changed(ctx, Some(&row), None, slot);
         }
         removed
     }
 }
+
+pub(crate) fn quest_log_entries(ctx: &ReducerContext, guid: u64) -> Vec<u32> {
+    let mut quests: Vec<_> = ctx
+        .db
+        .game_character_quest()
+        .by_character()
+        .filter(guid)
+        .filter(|quest| !quest.rewarded)
+        .map(|quest| quest.quest_entry)
+        .collect();
+    quests.sort_unstable();
+    // An absent companion row preserves the legacy quest-id order until the first mutation.
+    let mut entries = ctx
+        .db
+        .game_character_quest_log()
+        .character_guid()
+        .find(guid)
+        .map(|log| log.entries)
+        .unwrap_or_default();
+    entries.resize(MAX_QUEST_LOG_SIZE, 0);
+    entries.truncate(MAX_QUEST_LOG_SIZE);
+    for entry in &mut entries {
+        if !quests.contains(entry) {
+            *entry = 0;
+        }
+    }
+    for quest in quests {
+        if !entries.contains(&quest) {
+            if let Some(entry) = entries.iter_mut().find(|entry| **entry == 0) {
+                *entry = quest;
+            }
+        }
+    }
+    entries
+}
+
+pub(crate) fn save_quest_log(ctx: &ReducerContext, guid: u64, entries: Vec<u32>) {
+    let table = ctx.db.game_character_quest_log();
+    if entries.iter().all(|entry| *entry == 0) {
+        table.character_guid().delete(guid);
+        return;
+    }
+    let log = CharacterQuestLog {
+        character_guid: guid,
+        entries,
+    };
+    if table.character_guid().find(guid).is_some() {
+        table.character_guid().update(log);
+    } else {
+        table.insert(log);
+    }
+}
+
+fn set_quest_log_entry(ctx: &ReducerContext, guid: u64, quest: u32, present: bool) -> u8 {
+    let mut entries = quest_log_entries(ctx, guid);
+    let slot = entries
+        .iter()
+        .position(|entry| *entry == quest)
+        .or_else(|| {
+            present
+                .then(|| entries.iter().position(|entry| *entry == 0))
+                .flatten()
+        });
+    if let Some(slot) = slot {
+        entries[slot] = if present { quest } else { 0 };
+    }
+    save_quest_log(ctx, guid, entries);
+    slot.map(|slot| slot as u8).unwrap_or(255)
+}
+
+crate::character_owned!(delete, fn sweep_delete_game_character_quest_log(ctx, character_guid) {
+    ctx.db.game_character_quest_log().character_guid().delete(character_guid);
+});
+crate::character_owned!(transfer, fn sweep_transfer_game_character_quest_log(ctx, character_guid, io) {
+    table = game_character_quest_log,
+    primary_key = character_guid,
+});
+
 impl CharacterQuestEventCredit {
     fn insert(ctx: &ReducerContext, row: Self) -> Self {
         let row = ctx.db.game_character_quest_event_credit().insert(row);
