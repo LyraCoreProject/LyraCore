@@ -81,7 +81,7 @@ pub(super) fn receive(
     Ok(())
 }
 
-fn invitee(ctx: &ReducerContext, actor: u64, name: &str) -> Option<Invitee> {
+pub(super) fn invitee(ctx: &ReducerContext, actor: u64, name: &str) -> Option<Invitee> {
     let target = crate::helpers::character_by_name(ctx, name)?;
     ctx.db.game_world_entity().guid().find(target.guid)?;
     let ignores_actor = ctx

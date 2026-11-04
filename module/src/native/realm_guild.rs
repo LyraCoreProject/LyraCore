@@ -81,8 +81,9 @@ fn encode<T: spacetimedb::Serialize>(value: &T) -> Vec<u8> {
     bsatn::to_vec(value).expect("guild state encodes")
 }
 
-fn facts(ctx: &ReducerContext, character: PartyCharacter) -> Option<Facts> {
+pub(super) fn facts(ctx: &ReducerContext, character: PartyCharacter) -> Option<Facts> {
     use crate::chat::game_character_contact;
+    use crate::package_account::game_package_account;
     let stored = crate::helpers::character_by_guid(ctx, character.guid)?;
     let stats = character
         .stats
@@ -91,7 +92,15 @@ fn facts(ctx: &ReducerContext, character: PartyCharacter) -> Option<Facts> {
     Some(Facts {
         level: stats.as_ref().map_or(stored.level, |stats| stats.level),
         zone: stats.as_ref().map_or(stored.zone_id, |stats| stats.zone_id),
-        logout_micros: if !character.online && character.connection != 0 {
+        logout_micros: if !character.online
+            && (character.connection != 0
+                || ctx
+                    .db
+                    .game_package_account()
+                    .account_id()
+                    .find(character.account_id)
+                    .is_some())
+        {
             ctx.timestamp.to_micros_since_unix_epoch()
         } else {
             stored.last_logout_micros.min(i64::MAX as u64) as i64
@@ -264,7 +273,7 @@ pub fn idc_realm_guild_presence(ctx: &ReducerContext, facts: Vec<u8>) -> Result<
     record_presence(ctx, facts)
 }
 
-fn record_presence(ctx: &ReducerContext, facts: Facts) -> Result<(), String> {
+pub(super) fn record_presence(ctx: &ReducerContext, facts: Facts) -> Result<(), String> {
     let character = &facts.character;
     let (guid, online, account, name) = (
         character.guid,
@@ -350,6 +359,19 @@ fn invitee(ctx: &ReducerContext, actor: u64, name: &str) -> Option<super::guild:
     });
     let target = matches.next()?;
     if matches.next().is_some() {
+        return None;
+    }
+    invitee_by_guid(ctx, actor, target.guid)
+}
+
+pub(super) fn invitee_by_guid(
+    ctx: &ReducerContext,
+    actor: u64,
+    guid: u64,
+) -> Option<super::guild::Invitee> {
+    let target = ctx.db.game_guild_character().guid().find(guid)?;
+    let character = &target.facts.character;
+    if !character.online || realm_party::current(ctx, character) != Some(character.world) {
         return None;
     }
     Some(super::guild::Invitee {
@@ -522,7 +544,7 @@ pub struct WorldGuildUpdate {
     pub update: Vec<u8>,
 }
 
-fn publish(ctx: &ReducerContext, guilds: BTreeSet<u32>) {
+pub(super) fn publish(ctx: &ReducerContext, guilds: BTreeSet<u32>) {
     let guilds: Vec<_> = guilds
         .into_iter()
         .filter(|id| *id != 0)
@@ -926,7 +948,7 @@ pub fn operator_import_guild(ctx: &ReducerContext, state: Import) -> Result<(), 
         member.insert(ctx);
     }
     for invite in state.invites {
-        ctx.db.game_guild_invite().insert(invite);
+        invite.insert(ctx);
     }
     publish(ctx, BTreeSet::from([id]));
     Ok(())

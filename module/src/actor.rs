@@ -185,6 +185,14 @@ package_only! {
 }
 
 package_only! {
+    pub(crate) use crate::native::package_guild::{
+        guild_invitation, invite_to_guild, accept_guild_invite, decline_guild_invite, leave_guild,
+        GuildInvitation,
+    };
+    pub(crate) use crate::guild::member as guild_membership;
+}
+
+package_only! {
     pub(crate) use crate::gameobject::apply_use_gameobject as use_gameobject;
     pub(crate) use crate::gameobject::request_use_gameobject as request_use_gameobject;
 }

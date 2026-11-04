@@ -3,7 +3,7 @@ import struct
 from headless import creates, packed_guid
 
 
-def check(host):
+def shards(host):
     east, west = [host.add_database(guid_base=base) for base in (1_000_000_000, 2_000_000_000)]
     worlds = (east, west)
     for world in worlds:
@@ -24,19 +24,26 @@ def check(host):
     host.wait_until(lambda: len(host.rows('SELECT world FROM game_character_names_ready')) == 2,
                     'World names did not arrive')
 
-    def package_character(world, name):
-        host.call('debug_request_package_character', ['companions', name, 1, 1], database=world)
-        request = host.rows(f"SELECT id FROM game_package_character_request WHERE name = '{name}'", world)[0][0]
-        def ready():
-            host.call('debug_take_package_character_result', ['companions', request], database=world)
-            return not host.rows(f'SELECT id FROM game_package_character_request WHERE id = {request}', world)
-        host.wait_until(ready, 'Package creation did not finish', timeout=20)
-        guid = host.rows(f"SELECT guid FROM game_character WHERE name = '{name}'", world)[0][0]
-        host.sql(f'UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {guid}', world)
-        host.call('debug_spawn_player_entity', [guid], database=world)
-        host.wait_until(lambda: host.rows(f'SELECT active FROM game_package_party_authority WHERE guid = {guid}') == [[True]],
-                        'Package Group presence did not arrive')
-        return guid
+    return worlds
+
+
+def package_character(host, world, name):
+    host.call('debug_request_package_character', ['companions', name, 1, 1], database=world)
+    request = host.rows(f"SELECT id FROM game_package_character_request WHERE name = '{name}'", world)[0][0]
+    def ready():
+        host.call('debug_take_package_character_result', ['companions', request], database=world)
+        return not host.rows(f'SELECT id FROM game_package_character_request WHERE id = {request}', world)
+    host.wait_until(ready, 'Package creation did not finish', timeout=20)
+    guid = host.rows(f"SELECT guid FROM game_character WHERE name = '{name}'", world)[0][0]
+    host.sql(f'UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {guid}', world)
+    host.call('debug_spawn_player_entity', [guid], database=world)
+    host.wait_until(lambda: host.rows(f'SELECT active FROM game_package_party_authority WHERE guid = {guid}') == [[True]],
+                    'Package Group presence did not arrive')
+    return guid
+
+
+def check(host):
+    east, west = worlds = shards(host)
 
     def members(expected):
         wanted = sorted(expected)
@@ -52,8 +59,8 @@ def check(host):
         host.wait_until(lambda: all(not host.rows('SELECT id FROM game_package_party_refresh', shard) for shard in worlds),
                         'Package statistics kept running without Group members', timeout=12)
 
-    alpha = package_character(east, 'Alpha')
-    beta = package_character(west, 'Beta')
+    alpha = package_character(host, east, 'Alpha')
+    beta = package_character(host, west, 'Beta')
     invite(east, alpha, beta)
     host.restart()
     for world in worlds:

@@ -3,25 +3,13 @@ use spacetimedb::{
     TimeDuration,
 };
 
-use super::{
-    directory, encode, game_native_away, game_native_player, game_party_character,
-    game_realm_party_command, PartyCharacter,
-};
+use super::super::package_actor::{facts, game_package_party_authority, PackagePartyAuthority};
+use super::{encode, game_party_character, game_realm_party_command, PartyCharacter};
 use crate::{
     group::{self, game_group_invite, GroupAction, Plane},
     package_account::game_package_account,
     peer::realm_shard,
 };
-
-#[table(accessor = game_package_party_authority)]
-#[derive(Clone)]
-pub struct PackagePartyAuthority {
-    #[primary_key]
-    pub guid: u64,
-    pub world: Identity,
-    pub revision: u64,
-    pub active: bool,
-}
 
 #[table(accessor = game_package_party_refresh, scheduled(refresh_package_party))]
 pub struct PackagePartyRefresh {
@@ -116,40 +104,6 @@ struct Command {
     action: Action,
 }
 
-fn facts(ctx: &ReducerContext, guid: u64, active: bool) -> Option<PartyCharacter> {
-    let character = crate::helpers::character_by_guid(ctx, guid)?;
-    ctx.db
-        .game_package_account()
-        .account_id()
-        .find(character.account_id)?;
-    if character.online
-        || ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(guid)
-            .is_some()
-    {
-        return None;
-    }
-    Some(PartyCharacter {
-        guid,
-        account_id: character.account_id,
-        connection: 0,
-        world: ctx.database_identity(),
-        name: character.name,
-        race: character.race,
-        class: character.class,
-        chat_tag: 0,
-        identity: character.owner_identity,
-        online: active,
-        stats: active
-            .then(|| super::super::member_stats::snapshot(ctx, guid))
-            .flatten(),
-        revision: directory::revision(ctx),
-    })
-}
-
 fn queue(
     ctx: &ReducerContext,
     character: PartyCharacter,
@@ -171,126 +125,21 @@ fn queue(
 }
 
 pub(crate) fn presence(ctx: &ReducerContext, guid: u64) {
-    if realm_shard(ctx).is_none() {
-        return;
-    }
-    let active = crate::sessionless::group_action_gate(ctx, guid).is_ok()
-        && crate::helpers::character_by_guid(ctx, guid)
-            .and_then(|character| {
-                ctx.db
-                    .game_package_account()
-                    .account_id()
-                    .find(character.account_id)
-            })
-            .is_some_and(|owner| {
-                crate::package_teardown::runs(ctx, &owner.package_name.replace('-', "_"))
-            });
-    let Some(character) = facts(ctx, guid, active) else {
+    let Some((character, authority)) = super::super::package_actor::changed(ctx, guid) else {
         return;
     };
-    let authorities = ctx.db.game_package_party_authority();
-    let authority = PackagePartyAuthority {
-        guid,
-        world: ctx.database_identity(),
-        revision: character.revision,
-        active,
-    };
-    authorities.guid().delete(guid);
-    authorities.insert(authority.clone());
     membership_changed(ctx, guid);
-    queue(ctx, character, authority, Action::Presence);
+    queue(ctx, character.clone(), authority.clone(), Action::Presence);
+    super::super::package_guild::presence(ctx, character, authority);
 }
 
 pub(crate) fn submit(ctx: &ReducerContext, guid: u64, action: Action) -> Result<bool, String> {
     if realm_shard(ctx).is_none() {
         return Ok(false);
     }
-    crate::sessionless::group_action_gate(ctx, guid)
-        .map_err(|refusal| refusal.as_tag().to_string())?;
-    let authority = ctx
-        .db
-        .game_package_party_authority()
-        .guid()
-        .find(guid)
-        .filter(|authority| authority.active && authority.world == ctx.database_identity())
-        .ok_or("Package Character has no active Group authority")?;
-    let character = facts(ctx, guid, true).ok_or("Character is not owned by a Package")?;
+    let (character, authority) = super::super::package_actor::local(ctx, guid)?;
     queue(ctx, character, authority, action);
     Ok(true)
-}
-
-pub(super) fn current(ctx: &ReducerContext, character: &PartyCharacter) -> bool {
-    ctx.db
-        .game_package_party_authority()
-        .guid()
-        .find(character.guid)
-        .is_some_and(|authority| authority.active && authority.world == character.world)
-        && ctx
-            .db
-            .game_package_account()
-            .account_id()
-            .find(character.account_id)
-            .is_some()
-        && ctx
-            .db
-            .game_native_away()
-            .account_id()
-            .find(character.account_id)
-            .is_none()
-}
-
-fn admit(
-    ctx: &ReducerContext,
-    character: &PartyCharacter,
-    authority: PackagePartyAuthority,
-) -> Result<(), String> {
-    use super::directory::game_character_directory;
-    let guid = character.guid;
-    let entry = ctx
-        .db
-        .game_character_directory()
-        .guid()
-        .find(guid)
-        .ok_or("Package Character is not in the directory")?;
-    let owner = ctx
-        .db
-        .game_package_account()
-        .account_id()
-        .find(entry.account_id)
-        .ok_or("Character is not owned by a Package")?;
-    if entry.world != ctx.sender()
-        || character.world != ctx.sender()
-        || character.account_id != entry.account_id
-        || character.connection != 0
-        || authority.guid != guid
-        || authority.world != ctx.sender()
-        || authority.revision > character.revision
-        || authority.active != character.online
-        || ctx
-            .db
-            .game_native_away()
-            .account_id()
-            .find(character.account_id)
-            .is_some()
-    {
-        return Err("World Shard does not hold this Package Character".into());
-    }
-    if character.online
-        && !crate::package_teardown::runs(ctx, &owner.package_name.replace('-', "_"))
-    {
-        return Err("Package is stopped on the Realm Shard".into());
-    }
-    let authorities = ctx.db.game_package_party_authority();
-    if authorities.guid().find(guid).is_some_and(|old| {
-        old.revision > authority.revision
-            || (old.revision == authority.revision
-                && (old.active != authority.active || old.world != authority.world))
-    }) {
-        return Err("Package Group authority changed".into());
-    }
-    authorities.guid().delete(guid);
-    authorities.insert(authority);
-    Ok(())
 }
 
 pub(super) fn apply(
@@ -299,7 +148,7 @@ pub(super) fn apply(
     body: &[u8],
 ) -> Result<(), String> {
     let command: Command = bsatn::from_slice(body).map_err(|error| error.to_string())?;
-    admit(ctx, &character, command.authority)?;
+    super::super::package_actor::admit(ctx, &character, command.authority)?;
     let guid = character.guid;
     let mark = super::event_mark(ctx);
     let class = character.class;

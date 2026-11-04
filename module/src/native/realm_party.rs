@@ -133,7 +133,7 @@ pub(super) fn current(ctx: &ReducerContext, character: &PartyCharacter) -> Optio
     if character.connection == 0 {
         return (entry.account_id == character.account_id
             && entry.world == character.world
-            && package::current(ctx, character))
+            && super::package_actor::current(ctx, character))
         .then_some(entry.world);
     }
     let away = ctx
