@@ -243,13 +243,7 @@ pub(crate) fn bot_transfer_intent_gate(
         ));
     }
     crate::sessionless::action_gate(ctx, bot_guid)?;
-    ctx.db
-        .game_world_entity()
-        .guid()
-        .find(bot_guid)
-        .ok_or_else(|| {
-            ActionRefusal::new(ActionRefusalKind::MissingActor, "Character is not in world")
-        })?;
+    crate::world::teleport_gate(ctx, bot_guid, destination.map_id, destination.instance_id)?;
     Ok(None)
 }
 
