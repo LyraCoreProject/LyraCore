@@ -1173,9 +1173,7 @@ fn check_cast_range(what: &str, dist: f32, range_yd: u32) -> Result<(), CastGate
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_lines)]
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn check_cast_gate_suffix(
     ctx: &ReducerContext,
     caster: &WorldEntity,
