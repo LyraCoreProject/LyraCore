@@ -1,6 +1,6 @@
 //! Read docs/danger-zones.md#vendor-stock-migration before changing restock.
 
-use spacetimedb::{reducer, ReducerContext, Table};
+use spacetimedb::{rand::Rng, reducer, ReducerContext, Table};
 
 use super::tables::{
     game_vendor_stock, game_vendor_stock_runtime, VendorStock, VendorStockRuntime,
@@ -103,7 +103,7 @@ pub(crate) fn purchase(ctx: &ReducerContext, vendor: u64, offer: &NpcVendor, rem
         0
     };
     let random_percent = if offer.stock_flags & 1 != 0 {
-        80 + ctx.random::<u32>() % 41
+        ctx.rng().gen_range(80..=120)
     } else {
         100
     };

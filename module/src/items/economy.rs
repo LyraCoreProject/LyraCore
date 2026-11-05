@@ -502,6 +502,8 @@ pub(crate) enum BuyRefusal {
         required_level: u8,
     },
     Refused(crate::Refusal),
+    /// The caller must roll back the transaction.
+    CommitFailed(Box<BuyRefusal>),
 }
 
 impl From<lyracore_protocol::messages::vanilla::InventoryResult> for BuyRefusal {
@@ -553,6 +555,7 @@ impl std::fmt::Display for BuyRefusal {
             Self::UnknownItem => f.write_str("unknown purchase item"),
             Self::Reputation => f.write_str("purchase requires reputation"),
             Self::Refused(refusal) => refusal.fmt(f),
+            Self::CommitFailed(refusal) => refusal.fmt(f),
         }
     }
 }
@@ -658,7 +661,8 @@ pub(crate) fn apply_buy_item_to(
         plan.grant(ctx, &tmpl, total_count, false, None)?;
         None
     };
-    // Storage failure must roll back both the debit and the stock counter.
+    crate::native::vendor_purchase_started(ctx, character_guid, vendor_guid, item_entry, lots);
+    // A commit failure must roll back payment, stock debit and the queued reply.
     character.money = character.money.saturating_sub(cost);
     character.update(ctx);
     super::vendor_stock::purchase(
@@ -667,14 +671,15 @@ pub(crate) fn apply_buy_item_to(
         &offer,
         available.saturating_sub(total_count),
     );
-    if let Some(slot) = last_slot {
-        Ok(plan.commit_purchase(ctx, slot, total_count)?)
+    let committed = if let Some(slot) = last_slot {
+        plan.commit_purchase(ctx, slot, total_count)
     } else {
-        Ok(plan.commit_with_source(
+        plan.commit_with_source(
             ctx,
             lyracore_protocol::messages::vanilla::NewItemSource::FromNpc,
-        )?)
-    }
+        )
+    };
+    committed.map_err(|cause| BuyRefusal::CommitFailed(Box::new(cause.into())))
 }
 
 #[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]

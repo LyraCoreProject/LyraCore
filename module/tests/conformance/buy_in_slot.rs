@@ -852,7 +852,6 @@ fn vendor_stock_failed_money_and_storage_leave_stock_unchanged() {
     stock_offer(&shard);
     ordinary_buy(&mut connection, vendor, 1);
     let stock = shard.query_rows("SELECT * FROM game_vendor_stock");
-    stock_time(&shard, 25);
     for in_slot in [false, true] {
         shard.assert_sql(&format!(
             "UPDATE game_world_entity SET money = 0 WHERE guid = {guid}"
@@ -1080,4 +1079,71 @@ fn vendor_stock_missing_restock_metadata_ignores_an_older_counter() {
         shard.query_rows("SELECT count FROM game_vendor_stock")[0]["count"],
         "4"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn vendor_stock_refused_purchases_preserve_partial_restock_observations() {
+    let (shard, mut connection, guid, vendor) = stage("vendor-stock-refused-restock");
+    stock_offer(&shard);
+    ordinary_buy(&mut connection, vendor, 5);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET money = 0 WHERE guid = {guid}"
+    ));
+    let before = inventory(&shard, guid);
+    stock_time(&shard, 25);
+    let packets = ordinary_buy(&mut connection, vendor, 1);
+    assert_eq!(
+        packets
+            .iter()
+            .find(|(opcode, _)| *opcode == 0x1a5)
+            .unwrap()
+            .1[12],
+        2
+    );
+    assert_eq!(money(&shard, guid), "0");
+    assert_eq!(inventory(&shard, guid), before);
+    stock_time(&shard, 30);
+    assert_eq!(listed_stock(&mut connection, vendor), 4);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET money = 50000 WHERE guid = {guid}"
+    ));
+    grant(&shard, guid, ARMOR, 1, 30);
+    let before = inventory(&shard, guid);
+    stock_time(&shard, 45);
+    let packets = buy(&mut connection, vendor, THREAD, guid, 30, 1);
+    assert!(packets.iter().any(|(opcode, _)| *opcode == 0x112));
+    assert!(!packets.iter().any(|(opcode, _)| *opcode == 0x1a4));
+    assert_eq!(money(&shard, guid), "50000");
+    assert_eq!(inventory(&shard, guid), before);
+    stock_time(&shard, 50);
+    assert_eq!(listed_stock(&mut connection, vendor), 8);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn vendor_stock_commit_failure_rolls_back_payment_stock_and_acknowledgement() {
+    let (shard, mut connection, guid, vendor) = stage("vendor-stock-commit");
+    stock_offer(&shard);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET max_stack = 2 WHERE entry = {THREAD}"
+    ));
+    ordinary_buy(&mut connection, vendor, 1);
+    let balance = money(&shard, guid);
+    let before = inventory(&shard, guid);
+    let stock = shard.query_rows("SELECT * FROM game_vendor_stock");
+    shard.assert_sql("DELETE FROM game_guid_range WHERE id = 0");
+    for in_slot in [false, true] {
+        let packets = if in_slot {
+            buy(&mut connection, vendor, THREAD, guid, 30, 1)
+        } else {
+            ordinary_buy(&mut connection, vendor, 1)
+        };
+        assert_eq!(packets.len(), 1);
+        assert_eq!(packets[0].0, 0x1a5);
+        assert_eq!(packets[0].1[12], 0);
+        assert_eq!(money(&shard, guid), balance);
+        assert_eq!(inventory(&shard, guid), before);
+        assert_eq!(shard.query_rows("SELECT * FROM game_vendor_stock"), stock);
+    }
 }

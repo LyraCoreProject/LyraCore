@@ -210,6 +210,72 @@ fn purchase_reply(
     )))
 }
 
+pub(crate) fn purchase_started(
+    ctx: &ReducerContext,
+    character: u64,
+    vendor: u64,
+    entry: u32,
+    lots: u32,
+) {
+    let Some(owner) = ctx.db.game_native_player().character_guid().find(character) else {
+        return;
+    };
+    let reply =
+        purchase_reply(ctx, vendor, entry, lots).expect("purchase preflight checked the offer");
+    super::send(ctx, owner.connection_id, reply, false)
+        .expect("the fixed purchase reply fits a world frame");
+}
+
+// Refusals can advance restock; see docs/danger-zones.md#vendor-stock-migration.
+fn purchase_failed(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    vendor: u64,
+    entry: u32,
+    refusal: BuyRefusal,
+    in_slot: bool,
+) -> Result<(), Rollback> {
+    let (refusal, must_roll_back) = match refusal {
+        BuyRefusal::CommitFailed(cause) => (*cause, true),
+        refusal => (refusal, false),
+    };
+    let packet = match &refusal {
+        BuyRefusal::Equipment {
+            result,
+            required_level,
+        } if in_slot => {
+            let mut body = vec![result.as_int()];
+            if *result == lyracore_protocol::messages::vanilla::InventoryResult::CantEquipLevelI {
+                body.extend(u32::from(*required_level).to_le_bytes());
+            }
+            body.extend([0; 17]);
+            lyracore_protocol::world::Packet {
+                opcode: 0x112,
+                body,
+            }
+        }
+        _ => {
+            let (vendor, result) = if in_slot && matches!(&refusal, BuyRefusal::Vendor(_)) {
+                (0, BuyResult::DistanceTooFar)
+            } else if matches!(&refusal, BuyRefusal::UnknownItem) {
+                (0, BuyResult::CantFindItem)
+            } else {
+                (vendor, buy_result(&refusal))
+            };
+            lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(
+                codec::build_buy_failed(vendor, entry, result),
+            )))
+            .map_err(|cause| Rollback::Failure(cause.to_string()))?
+        }
+    };
+    if must_roll_back {
+        return Err(Rollback::replies(vec![packet], refusal));
+    }
+    spacetimedb::log::debug!("purchase refused: {refusal}");
+    super::send_raw(ctx, connection, packet.opcode, packet.body, false);
+    Ok(())
+}
+
 fn purchase_in_slot(
     ctx: &ReducerContext,
     connection: ConnectionId,
@@ -241,53 +307,17 @@ fn purchase_in_slot(
         return Ok(());
     }
     let vendor = request.vendor.guid();
-    if let Some(reply) = purchase_reply(ctx, vendor, request.item, u32::from(request.amount).max(1))
-    {
-        super::send(ctx, connection, reply, false)?;
-    }
-    crate::items::apply_buy_item_to(
+    match crate::items::apply_buy_item_to(
         ctx,
         guid,
         vendor,
         request.item,
         u32::from(request.amount),
         Some((bag, request.bag_slot)),
-    )
-    .map_err(|refusal| {
-        if let BuyRefusal::Equipment {
-            result,
-            required_level,
-        } = &refusal
-        {
-            let mut body = vec![result.as_int()];
-            if *result == lyracore_protocol::messages::vanilla::InventoryResult::CantEquipLevelI {
-                body.extend(u32::from(*required_level).to_le_bytes());
-            }
-            body.extend([0; 17]);
-            return Rollback::replies(
-                vec![lyracore_protocol::world::Packet {
-                    opcode: 0x112,
-                    body,
-                }],
-                refusal,
-            );
-        }
-        let (vendor, result) = if matches!(&refusal, BuyRefusal::Vendor(_)) {
-            (0, BuyResult::DistanceTooFar)
-        } else if matches!(&refusal, BuyRefusal::UnknownItem) {
-            (0, BuyResult::CantFindItem)
-        } else {
-            (vendor, buy_result(&refusal))
-        };
-        Rollback::reply(
-            ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(codec::build_buy_failed(
-                vendor,
-                request.item,
-                result,
-            ))),
-            refusal,
-        )
-    })
+    ) {
+        Ok(()) => Ok(()),
+        Err(refusal) => purchase_failed(ctx, connection, vendor, request.item, refusal, true),
+    }
 }
 
 pub(super) fn receive(
@@ -305,30 +335,15 @@ pub(super) fn receive(
         }
         ClientOpcodeMessage::CMSG_BUY_ITEM(c) => {
             let vendor = c.vendor.guid();
-            super::actor(ctx, guid)
+            let result = super::actor(ctx, guid)
                 .map_err(BuyRefusal::from)
                 .and_then(|_| {
-                    if let Some(reply) =
-                        purchase_reply(ctx, vendor, c.item, u32::from(c.amount).max(1))
-                    {
-                        super::send(ctx, connection, reply, false).map_err(BuyRefusal::from)?;
-                    }
                     crate::items::apply_buy_item(ctx, guid, vendor, c.item, u32::from(c.amount))
-                })
-                .map_err(|refusal| {
-                    Rollback::reply(
-                        ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(codec::build_buy_failed(
-                            if matches!(refusal, BuyRefusal::UnknownItem) {
-                                0
-                            } else {
-                                vendor
-                            },
-                            c.item,
-                            buy_result(&refusal),
-                        ))),
-                        refusal,
-                    )
-                })
+                });
+            match result {
+                Ok(()) => Ok(()),
+                Err(refusal) => purchase_failed(ctx, connection, vendor, c.item, refusal, false),
+            }
         }
         ClientOpcodeMessage::CMSG_BUY_ITEM_IN_SLOT(c) => {
             purchase_in_slot(ctx, connection, guid, &c)
@@ -453,6 +468,7 @@ fn buy_result(refusal: &BuyRefusal) -> BuyResult {
         BuyRefusal::NotEnoughMoney { .. } => BuyResult::NotEnoughMoney,
         BuyRefusal::InventoryFull => BuyResult::CantCarryMore,
         BuyRefusal::SoldOut => BuyResult::ItemAlreadySold,
+        BuyRefusal::CommitFailed(cause) => buy_result(cause),
         BuyRefusal::UnknownItem => BuyResult::CantFindItem,
         BuyRefusal::Reputation => BuyResult::ReputationRequire,
         BuyRefusal::Refused(_) | BuyRefusal::Equipment { .. } => BuyResult::CantFindItem,
@@ -531,6 +547,7 @@ mod tests {
             ),
             (R::NotEnoughMoney { have: 9, need: 10 }, 2),
             (R::InventoryFull, 8),
+            (R::CommitFailed(Box::new(R::InventoryFull)), 8),
             (R::SoldOut, 1),
             (R::Refused("vendor does not sell that item".into()), 0),
         ] {

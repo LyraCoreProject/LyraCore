@@ -116,7 +116,10 @@ shared offers. Ordinary death, corpse removal and respawn retain stock and elaps
 the spawn or its Instance discards stock. These lifetimes follow the in-memory creature object in
 vmangos; LyraCore does not implement vmangos grid unloading. Server restart restores full stock.
 The counter is lazy: each elapsed interval restores `buy_count` items, capped at the maximum.
-A partial refill observed by a list read resets its timestamp to that read, discarding the remainder.
+A partial refill observed by a list read or buy check resets its timestamp to that request,
+discarding the remainder. A refused buy can still observe restock, including this timestamp reset.
+It never pays for, stores or consumes the refused purchase. A failure during storage commit rolls
+back the payment, stock debit and queued acknowledgement together.
 A successful purchase resets the timestamp and selects the next interval. Offer flag 1 selects
 80 through 120 percent of the interval; flag 2 scales it above 2500 active, unqueued World Sessions.
 Integer truncation occurs after each scaling operation. A computed zero interval is floored to one

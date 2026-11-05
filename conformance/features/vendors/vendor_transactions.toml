@@ -84,7 +84,7 @@ evidence = "build_item_create_object reaches enchantment slot 0; item_projection
 description = "vendor_transactions buys unlimited offers and does not measure limited stock or restock."
 path = "module/tests/conformance/buy_in_slot.rs"
 symbol = "vendor_stock_both_buy_opcodes_share_stock_and_refuse_atomically"
-evidence = "Durable tests check list counts, both buy opcodes, refusal atomicity, per-spawn counters and lazy restock against Creature::GetVendorItemCurrentCount and UpdateVendorItemCurrentCount at d9173eca3ea08dd985c52dabbcc826898d1d0b77. A scenario author must add a limited offer with BuyCount greater than one, two Characters sharing a spawn, a second spawn, stock exhaustion, refused purchases, and list reads before and after restock boundaries. No harness PR is assigned."
+evidence = "Durable tests check list counts, both buy opcodes, refusal atomicity, per-spawn counters and lazy restock against Creature::GetVendorItemCurrentCount and UpdateVendorItemCurrentCount at d9173eca3ea08dd985c52dabbcc826898d1d0b77. A scenario author must add a limited offer with BuyCount greater than one, two Characters sharing a spawn, a second spawn, stock exhaustion, refused purchases during partial refill, and list reads before and after restock boundaries. No harness PR is assigned."
 
 [[known_gaps]]
 description = "Grid unloading resets vmangos creature stock; LyraCore has no grid-unload lifecycle."

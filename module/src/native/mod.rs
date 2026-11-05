@@ -91,7 +91,9 @@ pub(crate) use death::{
     corpse_changed, corpse_created, corpse_removed, resurrect_offered, self_resurrection_changed,
 };
 pub(crate) use duel::event as duel_event;
-pub(crate) use economy::{buyback_destroyed, buyback_removed};
+pub(crate) use economy::{
+    buyback_destroyed, buyback_removed, purchase_started as vendor_purchase_started,
+};
 pub(crate) use environment::{breath_event, fall_damage, weather_changed};
 pub(crate) use guild::{event as guild_event, membership_changed as guild_membership_changed};
 pub(crate) use instance::removal_changed as instance_removal_changed;
