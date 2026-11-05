@@ -601,16 +601,24 @@ mod tests {
     }
 
     #[test]
-    fn an_update_keeps_the_chance_on_hit_rates_and_a_create_has_none() {
+    fn an_update_keeps_imported_spell_metadata_and_a_create_defaults_it() {
         let old = ItemTemplate {
             spellppmrate_1: 9.5,
+            spellcategory_1: 30,
+            spellcategory_5: 1160,
             ..fields().into_template(25, None)
         };
         let renamed = ItemFields {
             name: "Renamed".into(),
             ..fields()
         };
-        assert_eq!(renamed.into_template(25, Some(&old)).spellppmrate_1, 9.5);
+        let renamed = renamed.into_template(25, Some(&old));
+        assert_eq!(renamed.spellppmrate_1, 9.5);
+        assert_eq!(
+            (renamed.spellcategory_1, renamed.spellcategory_5),
+            (30, 1160)
+        );
+        assert_eq!(fields().into_template(26, None).spellcategory_1, 0);
         assert_eq!(fields().into_template(26, None).spellppmrate_1, 0.0);
     }
 
