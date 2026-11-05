@@ -256,6 +256,10 @@ pub(crate) mod character_owned_tripwire {
             "creature-owned spawn or movement state keyed by the creature guid",
         ),
         (
+            &["game_vendor_stock"],
+            "vendor spawn stock survives ordinary respawn; spawn removal, items import or a new Native Host process clears it",
+        ),
+        (
             &["game_gameobject"],
             "World GameObject state keyed by the GameObject's own guid",
         ),
