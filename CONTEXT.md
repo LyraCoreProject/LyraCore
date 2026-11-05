@@ -1219,7 +1219,7 @@ expected results for conformance checks.
 _Avoid_: golden file, snapshot (for recorded packets)
 
 **Roll Conformance**:
-A comparison of repeated gameplay outcomes with recorded Reference Server outcome counts, used to
+A comparison of repeated gameplay outcomes with fixed probabilities derived from the Reference Server, used to
 check random-roll rates for a declared combat context.
 
 **Equivalence Rule**:

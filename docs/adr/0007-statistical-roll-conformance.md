@@ -1,179 +1,152 @@
-# 0007. Measure random rolls against recorded outcome counts
+# 0007. Measure random rolls against source-derived probabilities
 
-Proposed, 2026-11-04. Implementation stops at the maintainer decision below.
+Accepted design, 2026-11-05. First slice: white main-hand melee at levels 60 and 63.
 
 [ADR 0005](0005-1-12-conformance.md) checks random fields' shape and range. A server that always
-crits can satisfy that contract. Roll Conformance adds a distribution check over real gameplay
-outcomes, using recorded vmangos counts. It supplements packet checks and keeps vmangos as the
-only Reference Server.
+crits can satisfy that contract. Roll Conformance compares delivered gameplay outcomes with fixed
+probabilities derived from vmangos. vmangos remains the only Reference Server.
 
-## Maintainer decision
+## Authority and independence
 
-Approve a maintainer-owned verifier for a blinded seed, or explicitly accept public seeds alone.
-Recommend the verifier. The [trusted ratchet](../../.github/workflows/conformance-ratchet.yml)
-deliberately executes only base code and reads PR baselines as data. It has no blinded verifier.
-Giving a secret seed to a PR-controlled test would expose it and permit tuning; executing PR code
-in that trusted job would break its trust boundary.
+For roll rates only, this is a deliberate, scoped exception to ADR 0005's recordings-only rule.
+Derive expected probabilities exactly from the attack-table code at vmangos commit
+`d9173eca3ea08dd985c52dabbcc826898d1d0b77`. Read GitHub raw URLs; do not clone vmangos. Record each
+formula input, source path and line. The person deriving rates must not fix gameplay for this
+Behavior and must not derive expectations from LyraCore's code. Rate differences are findings,
+reported as ordinary rule signatures and `known_gaps`; a different implementer handles gameplay.
 
-Freeze the submitted Module artifact and head SHA before choosing the blinded seed. A trusted
-controller runs the artifact in an isolated disposable Shard, without repository credentials or
-network egress, using a base-owned runner and reviewed harness revision. It keeps seeds and logs
-private until the submission closes, then releases the counts and verdict. A changed head needs
-a fresh challenge. Attest artifact hash, head, runner and harness revisions. Maintainers must
-choose the owner, isolation, required-check policy and retry policy. Do not put a repository secret
-in an ordinary PR job. No current policy authorizes this new verifier.
+## Pinned first context and derivation
 
-Two public fixed seeds give local feedback; a third, chosen after submission, prevents tuning a
-rate to one known sample. Challenges repeat deterministically, without retry-until-green. This
-impedes seed tuning, not arbitrary malicious code: independent review must still catch fixture
-detection and fabricated packets. Public seeds alone give weaker assurance and must be named as
-such if selected. This decision belongs to the maintainer before implementation proceeds.
+Use a level-60 human warrior (race 1, class 1), standing, with agility 100, defense 300 and
+unarmed skill 162 at 300/300. Every equipment slot is empty, including both hands. Unarmed attacks
+are main-hand white melee, at their ordinary 2000 ms cadence. No talents, buffs, auras, procs,
+queued strikes, extra attacks or hit/crit bonuses. No GM attack-speed changes.
 
-The contract below is proposed, not measured. Inspected bases: core
-`e3207d491b05c159008d1da3114ddb3c252ea6c1`, harness
-`1fcc4ec9c739fd3f6cee7584b846054db189ced1`. Neither has a swing-distribution scenario.
+Targets are spawned creature entry 38, non-pet humanoids, standing, not stunned, casting or
+evading, with no no-parry/no-block/no-defense flags, no auras and normal rank. Set levels to 60
+and 63: defense and maximum skill are 300 and 315. Each Character has a separate target, two
+yards directly ahead, facing the Character. Both health pools are 1,000,000,000; no deaths or
+gear breakage can change the context. Reference positions start on map 0 at
+(-8949.95, -132.493, 83.5312), Character orientation 0; parallel pairs are offset on the y axis.
+Reject missing packets, changed skills, levels, stats, position, facing or attack context.
 
-## Reference recording and cost
+Source links below use one-based lines at the pinned commit:
 
-Start with level-60 Character main-hand white swings against level-60 and level-63 creatures,
-from the front. Count miss, dodge, parry, block, glancing, crit and hit separately per level.
-Pin numeric race, class, creature entry, equipment, capped weapon skill and defense, orientation,
-position and avoidance-enabling state. Use no offhand, queued strike, proc, buff or extra attack.
-Verify state before and after capture; skill gains, deaths, equipment breaks, changing context
-and ambiguous outcomes invalidate capture. Zero-count categories remain tested.
+- [SpellCaster.cpp:116–158](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  empty main hand selects unarmed skill; creatures use their melee skill for defense.
+- [SpellCaster.cpp:336–425](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  base miss 5%, no offhand penalty or hit bonus. With skill difference d = 300 - defense,
+  miss is 5 - 0.1d for d >= -10, otherwise 5 - 0.2d. Results: 5%, 8%.
+- [SpellCaster.cpp:446–468, 582–624](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  dodge is 5 - 0.1d; parry is 5 - 0.2d for d >= -10, otherwise 5 - 0.6d.
+  Results: dodge 5%, 6.5%; parry 5%, 14%.
+- [SpellCaster.cpp:625–679](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  glance is min(40, 10 - 2d)%; creature block is min(5, 5 - 0.1d)%.
+  Results: glance 10%, 40%; block 5%, 5%.
+- [Unit.cpp:2474–2550](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp):
+  standing, non-casting humanoid creature base dodge, parry and block are each 5%.
+- [Player.cpp:5146–5150](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp),
+  [StatSystem.cpp:531–587](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/StatSystem.cpp),
+  [ObjectMgr.cpp:5087–5124, 5332–5343](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/ObjectMgr.cpp):
+  crit is agility / class rate, with no warrior class offset or skill adjustment at 300/300.
+  Database `464179081673cfd240f7ffe7f0daf96bca0b5a70`, `player_crit_per_agility`
+  (class=1, level=60) supplies rate 20. Agility 100 / 20 gives 5%.
+- [Unit.cpp:2552–2596](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp):
+  creature defense subtracts 0.2% per missing skill from crit: 5%, 2%.
+- [SpellCaster.cpp:428–729](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  uniform integer roll 0..9999 uses cumulative miss, dodge, parry, glance, block, crit, hit.
+  These contexts do not clip a category. Hit is the remaining probability; crushing is impossible.
 
-Record exactly 200,000 eligible swings per level, then an independent checked repeat of the same
-size. The first recording is authority; the repeat checks setup and stationarity. Never choose
-whichever recording fits core. At a true 5% rate, 200,000 independent draws give approximate
-marginal 95% precision of +/-0.096 percentage points; at 50%, +/-0.219 points. These describe
-sampling precision, not pass tolerances or simultaneous intervals.
+| Target level | Miss | Dodge | Parry | Block | Glancing | Crit | Hit |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 60 | 5% | 5% | 5% | 5% | 10% | 5% | 65% |
+| 63 | 8% | 6.5% | 14% | 5% | 40% | 2% | 24.5% |
 
-The harness recorder independently decodes `SMSG_ATTACKERSTATEUPDATE`, selects the attacking
-Character and bound target, and streams seven integer counts. Reject malformed packets,
-conflicting flags, duplicate observations and missing samples. Retain per-Character totals and
-1,000-swing block counts to expose changing state; aggregate only verified identical contexts.
-Store sample count, duration, scenario SHA-256, classifier version and existing vmangos binary,
-source and database provenance. Hash all text through the existing scrubber. The artifact holds
-thousands of integers instead of hundreds of thousands of packets. Only the recorder writes it,
-in the harness repository. Source-derived probabilities are not recorded evidence.
+These are integer interval widths over 10,000 possible rolls, not estimated rates.
 
-Extend `reference.sh record-checked`, run under `newgrp docker`, with a bounded streaming count
-checkpoint. Its current 4,096-frame checkpoint limit and 180-second window cannot carry this
-capture. Keep small attack-start/stop packet witnesses and ordinary packet checks; do not raise
-the packet cap or weaken decoding. The new format explicitly records aggregate evidence; existing
-Golden Traces keep their packet contract. The scenario hash covers all statistical parameters.
+## Small Reference Server check
 
-Including the repeat, there are 800,000 reference swings. At an assumed two-second cadence:
-444 Character-hours, or 27.8 wall hours with 16 Characters in parallel, plus setup. Schema 4
-supports 16 Characters; concurrent starts and drains must be added. Give each its own target and
-count no observer copies. This is a one-time recording, never a developer check.
+Record about 2,000 eligible swings per level once, without a repeat recording. Sixteen parallel
+Characters, eight per level with 250 swings each, target about eight minutes at ordinary cadence,
+plus setup. If parallel setup costs too much, use fewer and accept a longer run under about 30
+minutes. Report the actual setup and recording times. Never stop another audit's containers;
+use the shared Reference Server lock and wait or retry when busy.
 
-A verified 50-ms cadence would reduce that estimate to 41.7 minutes with 16 Characters, including
-the repeat. This is not a measured or approved shortcut. Before using GM attack-speed setup,
-prove at the pinned vmangos source and in packet capture that it changes scheduling only, leaves
-the attack table and skills unchanged, and produces normal combat packets. Otherwise use ordinary
-cadence. Do not patch vmangos or synthesize outcomes. Report actual setup, capture and repeat times.
+The check confirms that the derived rates match vmangos in practice. It catches a misread formula,
+not a subtle error. It does not estimate the expected probabilities. No seven-hour or 28-hour
+recordings, repeated samples or GM attack-speed shortcut are authorized.
 
-## Core measurement and path evidence
+The recorder independently decodes `SMSG_ATTACKERSTATEUPDATE`, counts only the bound attacker's
+own target, and retains per-Character counts plus 50-swing blocks. Keep small attack start/stop
+packet witnesses. Store elapsed time, scenario SHA-256, classifier version and existing pinned
+binary/source/database provenance in the harness. Scrub all text. Never retain the large packet
+stream or trust a server-supplied histogram. Invalid context or incomplete capture is a setup
+failure, not evidence against a rate.
 
-Use tier 1's virtual clock. The current code establishes the required production path:
+## Gameplay path and deterministic random input
 
-1. [`native/world.rs`](../../module/src/native/world.rs) dispatches `CMSG_ATTACKSWING` to
-   [`native/combat.rs::attack`](../../module/src/native/combat.rs), starting the melee attack.
-2. [`time.rs`](../../module/src/time.rs) dispatches the virtual melee schedule to production
-   [`combat/swing.rs::tick_melee`](../../module/src/combat/swing.rs).
-3. That tick runs `melee_pass`, `resolve_swing` and `fire_melee_swing`, calls
-   [`combat/folds.rs::roll_swing`](../../module/src/combat/folds.rs), applies damage and inserts
-   the normal `CombatEvent`.
-4. `native/combat.rs::combat_event` builds and delivers `SMSG_ATTACKERSTATEUPDATE`. The harness's
-   independent decoder classifies these delivered bytes, outside the Module.
+Tier 1 enters through `CMSG_ATTACKSWING`, native attack admission, `tick_melee`, `roll_swing`,
+damage application and delivered `SMSG_ATTACKERSTATEUPDATE`. The harness's independent decoder
+classifies the delivered bytes. `debug_compute_swing` never rolls or applies a swing and cannot
+supply evidence. Direct calls to a calculation or Module-produced counts cannot supply it either.
 
-[`debug_compute_swing` and `debug_compute_spell`](../../module/src/debug/readout.rs) write rate
-and damage readouts. They never roll or apply a swing. Direct calls to `attack_outcome` or
-`roll_swing` also skip gameplay. None can supply this evidence.
+Collect 50,000 swings per target level per seed. Batch ordinary scheduler advances in bounded
+transactions and drain delivered packets between batches. Preserve schedule order, admission,
+range and facing checks. Check attack start, damage and stop with small witnesses. Missing or
+malformed samples fail setup. The warm budget for both public seeds together is 30 seconds,
+excluding build/publication; report setup and warm collection separately. Do not reduce the sample
+or substitute calculations to meet it.
 
-Collect 50,000 swings per level for each of two public seeds and one blinded seed: 300,000
-candidate swings, compared separately by level and seed. Batch repeated 50-ms scheduler advances
-inside bounded transactions; drain normal delivered packets between batches and stop at the exact
-count. Preserve admission, schedule ordering, range/facing checks and state changes. Never trust
-a Module-supplied histogram. A small witness checks admission, landed damage and attack stop.
-Missing or malformed samples fail; infrastructure failures are not rate findings.
+The virtual clock does not seed `ReducerContext::random`. Add a narrow Seam at
+`roll_swing_with_range`'s outcome, weapon and block draws, gated by `conformance_test_fixture`.
+Use durable SplitMix64 state per attacking Character, with specified stream ids and draw order:
+outcome, weapon, block, each the low 32 bits of the next SplitMix64 output. Keep production draws
+and modulo range reduction unchanged. Seed setup is Operator-only and resets in each disposable
+Shard. Exclude other random effects that can change this context.
 
-The warm budget is 30 seconds for both public seeds together, excluding build/publication.
-This is an acceptance budget, not a benchmark. Report cold setup and warm collection separately.
-The current transport's WebSocket round trip per 50-ms advance is unsuitable. If batching misses
-the budget, optimize that path; do not substitute a calculation or silently reduce the sample.
+Prove identical counts in two fresh Shards with the same seed and input, different counts for a
+different seed, comparator sensitivity and actual gameplay-rate sensitivity through packets.
 
-## Determinism
+## Seeds and exact test
 
-The virtual clock changes `time::now`, not `ReducerContext.timestamp`. SpacetimeDB 2.14.0's
-`ReducerContext::random` seeds its private `StdbRng` from that transaction timestamp; no seed setter
-is public for a deployed WASM Module. Fixed virtual start time does not fix today's swing draws.
+PRs run public fixed seeds `0x4c79726100000001` and `0x4c79726100000002`. Every push to `main`
+runs a third seed derived deterministically from the merge commit SHA, which does not exist before
+merge. It runs in the durable job that already runs tier 1. No secret or isolated controller is
+needed. A failure is found just after merge and handled by revert. Never retry until green.
+A fixed seed, fixture and build give a fixed verdict: there is no runtime sampling flake.
 
-Add a narrow random-input Seam where `roll_swing_with_range` obtains outcome, weapon and block
-draws. Production retains existing draws and range reduction. Under `conformance_test_fixture`
-only, supply a specified seeded PRNG with durable state and a stream per attacking Character.
-Pin its algorithm/version and draw order; never override chances or resolved outcomes. Operator
-seed setup resets with the disposable Shard. Control or exclude every other reachable random
-effect that can change the context; capped skills and equipment alone do not prove stationarity.
+Use an exact equal-tail binomial test for each category against its fixed probability:
+p = min(1, 2 min(P[X <= observed], P[X >= observed])). This is a conservative two-sided exact
+test for discrete counts. Sum binomial masses relative to the mode, avoiding underflow, and add
+a conservative floating-point allowance before comparing with the rejection threshold. Include
+hand-worked tails and probabilities zero and one in targeted tests. No Monte Carlo or two-sample
+Fisher test.
 
-Prove identical counts in two fresh Shards using the same seed/input, a different-seed check,
-and detection of a gameplay-rate mutation through delivered packets. Review production and fixture
-paths together: only their random input may differ in roll resolution. Structural checks support
-that review but do not prove malicious code honest. These execution checks remain unperformed.
+Reserve a family false-failure bound of at most 1e-6 per submission over seven categories, two
+levels and three seeds: 42 tests, reject each at p <= 1e-6 / 42 (about 2.381e-8). Bonferroni
+needs no independence across categories or tests. Within a stationary context the sampling model
+requires independent draws; block counts do not prove that assumption. The bound concerns seed
+selection across submissions, not a lifetime bound over unlimited submissions. More contexts or
+seeds require a new family allocation. The small reference check is diagnostic and is reported
+separately from this submission verdict.
 
-## Statistical test
+## Signatures and strictness
 
-For each category use a two-sided Fisher exact test on reference and candidate rows
-`[category_count, total - category_count]`, with the probability-ordered definition in the
-[R statistics manual](https://stat.ethz.ch/R-manual/R-devel/library/stats/html/fisher.test.html).
-This includes reference uncertainty and handles sparse or zero counts. Use deterministic
-hypergeometric calculation, no Monte Carlo, and conservative numerical bounds at the threshold.
-Check worked tables and extreme counts against independently computed expected results.
+Register `white_melee_outcomes` for `combat/auto_attack`, with its tier 1 test and harness pin.
+Emit ordinary `DifferenceClass::Rule` records: rule `white_melee_distribution`, checkpoint by
+level and seed slot, broadcast stream `swings`, opcode `0x014A`, field `["outcomes", category]`.
+The ordinary signature baseline and ratchet retain failures. Counts, rates, p-values and shifts
+remain in the numerical report. A held signature does not bound further worsening of that rate;
+report that limitation. Record observed gameplay differences as `known_gaps`, without fixing them.
 
-Allocate false failure at most `1e-6` to one reference check plus one frozen candidate submission:
-14 reference-repeat comparisons and 42 candidate comparisons. Reject each at `p <= 1e-6 / 56`,
-about `1.786e-8`. Bonferroni needs no independence between categories or tests sharing reference
-counts. The sampling model does require independent draws within stationary contexts; block
-diagnostics do not prove that assumption. Do not discard inconvenient blocks. More contexts or
-seeds require a new family allocation.
+Run strictness in release builds. A synthetic passing control has each expected basis-point
+interval multiplied by five to total 50,000. Transfer 1,000 hit samples to crit; require crit
+rate signatures at both levels. This control is never measured evidence. Also make a real scratch
+change of +2 percentage points to crit chance, measure delivered packets, require detection and
+restore the source. Do not change gameplay in this PR.
 
-This bound concerns reference sampling and initial seed selection under equal underlying rates.
-Fixed reference, seed, build and fixture give the same verdict on every rerun: no runtime sampling
-flake. It is not a lifetime bound across unlimited submissions or a guarantee of detecting every
-small shift. Do not search for a passing seed, redraw after failure, or rerecord to make core pass.
-
-## Ledger, ratchet and strictness
-
-Register `white_melee_outcomes` for `combat/auto_attack`, extending that Behavior's scope and source
-evidence. Add its tier 1 entry, advance both harness pins together, and generate the baseline with
-`conformance/baseline`. Keep gameplay fixes with another implementer; record differences as
-`known_gaps`. The scenario author does not change gameplay to obtain a pass.
-
-Emit ordinary `DifferenceClass::Rule` records: rule `white_melee_distribution`, checkpoint by level
-and seed slot, broadcast stream `swings`, combat opcode and field path `["outcomes", category]`.
-Counts, rates, p-values and signed shifts belong in the report, outside grouping signatures.
-Existing signature extraction and ratchet hold these failures; the scoreboard needs no new
-denominator or data classification. An existing failure signature does not bound further rate
-worsening; expose that limitation in the numerical report. Blinded results attest the frozen head
-separately from the public Tier 1 baseline and must be required if that assurance is selected.
-
-Run strictness from a RELEASE build. Make a passing comparator control by proportionally scaling
-reference counts to 50,000 with deterministic integer rounding; this is never measured evidence.
-Transfer 1,000 hit samples to crit, keeping the total and category shapes valid. Require that
-2-percentage-point shift to produce distribution rule signatures at both levels, not a shape or
-sample-count failure. Also shift core's actual crit chance by that amount in scratch and require
-the delivered-packet measurement to detect it; restore afterward. The first check proves comparator
-sensitivity, the second proves gameplay-path sensitivity. Neither has run yet.
-
-## Scope and handoff
-
-Spell misses, resists, procs, damage distributions, glancing damage penalties, offhand/rear attacks,
-other levels/skills, PvP and gameplay corrections stay out of this slice. Counts do not establish
-all melee parity. Commit no client files, Reference Server data, bulk world rows or unscrubbed text.
-
-After the maintainer decision, implement the scenario and needed Fixture Verbs in both adapters,
-record through the checked recorder, then add tier 1 and release strictness. Run only targeted
-checks and this scenario. Install SpacetimeDB 2.14.0 under task scratch without changing the default.
-Keep PRs draft until evidence is complete; the orchestrator reviews, merges and tags. This design
-establishes no measured LyraCore-versus-vmangos distribution, recording cost or tier 1 runtime.
+Spell misses, resists, procs, damage distributions, glancing damage penalties, offhand/rear
+attacks, other levels/skills and PvP remain outside this slice. The counts do not establish all
+melee parity. Keep PRs draft while iterating, then ready; the orchestrator reviews and merges.
+Do not merge or tag. Use only targeted checks and this scenario, SpacetimeDB 2.14.0 in task scratch,
+and leave the default CLI unchanged.

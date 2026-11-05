@@ -713,10 +713,22 @@ pub(crate) fn roll_swing_with_range(
             0
         },
     };
+    let production_draws = || {
+        [
+            ctx.random::<u32>(),
+            ctx.random::<u32>(),
+            ctx.random::<u32>(),
+        ]
+    };
+    #[cfg(feature = "conformance_test_fixture")]
+    let draws =
+        crate::conformance_rolls::swing_draws(ctx, attacker.guid).unwrap_or_else(production_draws);
+    #[cfg(not(feature = "conformance_test_fixture"))]
+    let draws = production_draws();
     let rolls = SwingRolls {
-        outcome: ctx.random::<u32>() % 10_000,
-        weapon: ctx.random::<u32>(),
-        block: ctx.random::<u32>() % 10_000,
+        outcome: draws[0] % 10_000,
+        weapon: draws[1],
+        block: draws[2] % 10_000,
     };
     let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), attacker.level);
     resolve_swing(table, rolls, range, strike, mit_pct, block_value)

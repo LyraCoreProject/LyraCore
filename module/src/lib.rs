@@ -240,6 +240,8 @@ mod rest;
 
 mod runtime_script;
 
+#[cfg(feature = "conformance_test_fixture")]
+mod conformance_rolls;
 mod script_binding;
 mod seed;
 mod sessionless;
