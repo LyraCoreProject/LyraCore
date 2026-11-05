@@ -9,6 +9,7 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
+
 [[tests]]
 path = "module/tests/conformance/buy_in_slot.rs"
 function = "review_equipment_purchase_shares_ordinary_equip_effects_or_records_the_gap"
