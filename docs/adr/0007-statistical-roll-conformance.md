@@ -323,3 +323,26 @@ difference in `known_gaps`, preserving the numerical report and the held-signatu
 from the first slice. The same public-signature union governs the merge seed. A gameplay
 blocker is a finding for a separate implementer. Generic TCP audits report `spell_sample` until
 full candidate collection exists; copied reference metadata and short witnesses prove no rate.
+
+### Single replacement exception, 2026-11-05
+
+The first completed spell diagnostic collected 2,000 casts per level and passed its source-derived
+rate check. Counts are ordered miss, full resist, crit, ordinary hit, overlapping partial resist:
+
+| Target level | Miss | Full resist | Crit | Ordinary hit | Partial resist |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 60 | 0 | 87 | 124 | 1789 | 0 |
+| 63 | 0 | 316 | 97 | 1587 | 314 |
+
+Fixture setup took 473,572 ms and capture took 463,490 ms. The author edited the running
+`reference.sh` wrapper. When it resumed, a shell read failed; its failure cleanup deleted the
+accepted Golden Trace. The sample was lost to that wrapper edit, not rejected on its results.
+These aggregate counts survive in the task record; the deleted trace is not reconstructed.
+
+The maintainer approved exactly one replacement capture of 2,000 casts per level as a single
+exception to the rule above, "once, without a repeat recording". The context, expected rates,
+public seeds and measurement code remain fixed. No script may be edited while capture runs.
+A launcher copies the recorder-accepted bytes to a separate path before returning control to
+wrapper cleanup. The replacement is the recorded sample regardless of how its results compare
+with the lost sample. Report both samples. If this replacement fails or is lost, stop; no third
+capture is authorized. This exception does not change the general single-recording rule.
