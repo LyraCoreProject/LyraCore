@@ -114,7 +114,7 @@ pub fn debug_prepare_spell_roll_character(
     ctx.db.game_spell().spell_id().delete(2948);
     ctx.db.game_spell().insert(spell);
     let effects = ctx.db.game_spell_effect();
-    for effect in effects.by_spell().filter(&2948).collect::<Vec<_>>() {
+    for effect in effects.by_spell().filter(&2948u32).collect::<Vec<_>>() {
         effects.id().delete(effect.id);
     }
     let mut effect = crate::seed::base_effect(2948, 0);
