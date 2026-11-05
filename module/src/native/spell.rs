@@ -277,7 +277,7 @@ fn cast_event_messages(
     }
 
     if let Some(packet) = cooldown_message(row.caster_guid, row.spell_id, row.cooldown_ms) {
-        out.push((EventAudience::Everyone, packet));
+        out.push((EventAudience::Source, packet));
     }
     out
 }
