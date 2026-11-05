@@ -47,6 +47,26 @@ pub(crate) fn spline_changed(ctx: &ReducerContext, row: &TaxiPassengerSpline) {
     }
 }
 
+pub(crate) fn resumed(ctx: &ReducerContext, row: &TaxiPassengerSpline) -> Result<(), String> {
+    if let Some(owner) = ctx
+        .db
+        .game_native_player()
+        .character_guid()
+        .find(row.character_guid)
+    {
+        super::send(
+            ctx,
+            owner.connection_id,
+            ServerOpcodeMessage::SMSG_MOUNTRESULT(SMSG_MOUNTRESULT {
+                result: MountResult::Ok,
+            }),
+            false,
+        )?;
+    }
+    spline_changed(ctx, row);
+    Ok(())
+}
+
 fn dismount_result(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -119,6 +139,9 @@ pub(crate) fn landed(ctx: &ReducerContext, character_guid: u64) {
 }
 
 pub(super) fn create_spline(ctx: &ReducerContext, guid: u64, view: &mut codec::EntityView) {
+    if view.unit_flags & lyracore_shared::constants::unit_flags::TAXI_FLIGHT == 0 {
+        return;
+    }
     if let Some((spline, pose)) = crate::taxi::current_create_spline(ctx, guid) {
         [view.x, view.y, view.z, view.orientation] = pose;
         view.spline = Some(spline);

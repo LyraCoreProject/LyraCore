@@ -83,6 +83,8 @@ pub(super) fn enter_character(
     super::realm_party::restore(ctx, guid);
     crate::world::apply_player_login(ctx, &account, guid, owner, entry)?;
     super::instance_shard::arrived(ctx, guid, character.map_id, character.pending_instance_id);
+    crate::aoi::enter_viewer(ctx, guid)?;
+    crate::creatures::cycle::player_arrived(ctx, guid);
     let live = ctx
         .db
         .game_world_entity()
@@ -152,7 +154,6 @@ pub(super) fn enter_character(
     let mut self_create = codec::build_self_create_object(&entity, &items, &skills, &quests)
         .map_err(|error| error.to_string())?;
     codec::set_create_freshness(&mut self_create, codec::CreateFreshness::Known);
-    crate::aoi::enter_viewer(ctx, guid)?;
     let mut grants: Vec<_> = ctx.db.game_aoi_grant().by_viewer().filter(guid).collect();
     grants.sort_by_key(|grant| grant.layer != crate::aoi::TRANSPORT);
     // A Passenger's self CREATE names its Transport, so the client must already have it.
@@ -211,6 +212,9 @@ pub(super) fn enter_character(
     });
     for grant in grants {
         super::visibility::create(ctx, connection.connection_id, &grant, false)?;
+    }
+    if entry == crate::world::WorldEntry::Login {
+        crate::taxi::resume_flight(ctx, guid)?;
     }
     if carrier.is_none() {
         crate::transport::rejoin(ctx, guid);

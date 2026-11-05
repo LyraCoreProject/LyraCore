@@ -1,7 +1,7 @@
 schema_version = 1
 id = "taxi_single_hop"
 system = "taxi"
-scope = "A Character queries a known flight master, sees known flight nodes, pays for a direct flight from Stormwind to Sentinel Hill, follows its mount spline and lands. Taxi chains are outside this Behavior."
+scope = "A Character queries a known flight master, sees known flight nodes, pays for a direct flight from Stormwind to Sentinel Hill, follows its mount spline and lands. A reconnect resumes from the saved position after the Character enters the world. Taxi chains are outside this Behavior."
 requests = ["0x00C7", "0x01AA", "0x01AC", "0x01AD"]
 replies = ["0x00A9", "0x00C7", "0x00DD", "0x014E", "0x016E", "0x016F", "0x01A9", "0x01AB", "0x01AE"]
 dependencies = ["connection_identity"]
@@ -49,3 +49,47 @@ rung = "durable_module"
 path = "module/tests/taxi_targeting.rs"
 function = "a_taxi_passenger_leaves_combat_and_cannot_be_targeted_until_landing"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/native_conformance.rs"
+function = "a_reconnecting_passenger_applies_class_specific_starting_passives"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/native_conformance.rs"
+function = "a_reconnecting_passenger_enters_the_world_before_resuming_taxi"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/native_conformance.rs"
+function = "flyer_reconnect_resumes_from_its_saved_position"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/native_conformance.rs"
+function = "a_reconnect_on_the_last_taxi_segment_lands_on_the_next_tick"
+rung = "durable_module"
+
+[[known_gaps]]
+description = "Reconnect weather is not controlled by the scenario. In the 2026-11-05 narrow audit on 311a3858, zone_weather_sound / 0x02F4 expected 0 and received 8556 twice; zone_weather_type expected 0 and received 3 twice. The Golden Trace and fresh Reference capture both have fine weather, while the imported candidate has a light sandstorm. Weather::ReGenerate selects weather independently and Weather::GetSound maps that state to 8556. A scenario author must control or separately measure weather; this is a fixture difference, not a taxi rule failure."
+path = "module/src/weather.rs"
+symbol = "WeatherState"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Weather.cpp"
+
+[[known_gaps]]
+description = "Historical G19 inventory high-word findings at fields 493, 499, 501 and 519 are absent on 311a3858 with harness 55252ab. The raw expected high word remains 1073741824 and actual remains 1073774592. These are halves of allocated item identities, not scalar player state. The existing harness now joins both halves before identity comparison. ObjectGuid identifies item type through high tag 0x4000. No new rule or allocator change is needed. This records the resolved comparison defect for scenario authors."
+path = "crates/lyracore-protocol/src/codec/entity.rs"
+symbol = "build_self_create_object"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/ObjectGuid.h"
+
+[[known_gaps]]
+description = "Historical G21 field_shape at fields 534/535 and G26 reconnect_item_534 are absent on 311a3858 after the Hearthstone fix. The fresh reconnect CREATE has a slot-24 item in both captures: Reference fields 534/535 are 14/1073741824, candidate fields are 5/1073774592; each resolves to its existing item CREATE with entry 6948. Allocated identities differ, but item presence and identity continuity match. No current fixture correction is needed for these resolved findings."
+path = "module/src/items/tables.rs"
+symbol = "ItemInstance"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp"
+
+[[known_gaps]]
+description = "The Tier 1 reconnect fixture lacks the imported race-1/class-1 Human Spirit passive 20598 and the hostile creature 478 beside the saved flight position. Golden expects Spirit 21 rather than the fixture's 20, a combat-bearing login CREATE (field 46 = 524296), taxi-plus-combat VALUES (1572876), attack-stop 0x0144 and a later combat-clear VALUES (1048588). The corrected Module in the sparse fixture instead sends CREATE flags 8 and a single taxi VALUES 1048588 at 40000 ms, with no attack-stop. Pairing that VALUES with Golden's combat clear at 41537 ms exposes reconnected_mount_delivery / 0x00A9 / field_46, a 1537 ms difference against the existing 1150 ms bound. The fixture cannot show those imported-world fixes. Durable tests supply the passive and a hostile NPC; a scenario author owns the fixture update."
+path = "module/tests/conformance/tier1.rs"
+symbol = "taxi_single_hop__reconnect_matches_its_golden_trace"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/CharacterHandler.cpp"

@@ -16,6 +16,28 @@ const LEGACY_NOTIFICATIONS: &[&str] = &[
     "game_emote_event",
 ];
 
+fn assert_saved_taxi_flight_upgrade(baseline: &[u8]) {
+    let mut shard = Standalone::start("taxi-resume-schema-upgrade");
+    shard.publish_module_bytes(baseline);
+    shard.assert_sql_exact("INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros) VALUES (42,6,2,4,6852,110,17,1800000000000000)");
+    let before = shard
+        .query_rows("SELECT * FROM game_active_taxi_flight WHERE character_guid = 42")
+        .pop()
+        .unwrap();
+    shard.publish_module_bytes(module_bytes());
+    let after = shard
+        .query_rows("SELECT * FROM game_active_taxi_flight WHERE character_guid = 42")
+        .pop()
+        .unwrap();
+    assert_eq!(after["first_destination_node_index"], "1");
+    for (column, value) in before {
+        assert_eq!(after[&column], value, "{column}");
+    }
+    assert!(shard
+        .query_rows("SELECT * FROM game_combat_check_schedule")
+        .is_empty());
+}
+
 #[test]
 #[ignore = "requires LYRACORE_TEST_BASELINE_WASM from 859c7257 and the SpacetimeDB 2.14.0 CLI"]
 fn populated_old_module_upgrades_without_clearing() {
@@ -23,6 +45,7 @@ fn populated_old_module_upgrades_without_clearing() {
         .expect("set LYRACORE_TEST_BASELINE_WASM to the Module Wasm built at 859c7257c74d2c371dea8ed743cfbccd596cac11 plus module/tests/fixtures/upgrade-baseline.patch, with debug_reducers,package_test_fixture");
     let baseline = fs::read(baseline_path).expect("read the baseline Module Wasm");
     assert!(baseline.starts_with(b"\0asm"), "baseline is not Wasm");
+    assert_saved_taxi_flight_upgrade(&baseline);
     let current = module_bytes();
     let mut shard = populated_old_module(&baseline);
     let character_before = character(&shard);

@@ -20,7 +20,7 @@ mod ctx;
 #[cfg(test)]
 mod harness;
 
-pub(crate) use ctx::{run, stop_on_stored_leg};
+pub(crate) use ctx::{player_arrived, run, stop_on_stored_leg};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct Point {
@@ -759,6 +759,14 @@ fn aggro<W: EngageSink>(w: &mut W, active: &HashSet<u64>) -> (Vec<Called>, usize
         .into_iter()
         .filter(|p| is_aggro_candidate(p.dead, p.godmode, p.taxi_flying))
         .collect();
+    aggro_with_targets(w, active, &targets)
+}
+
+fn aggro_with_targets<W: EngageSink>(
+    w: &mut W,
+    active: &HashSet<u64>,
+    targets: &[AggroTarget],
+) -> (Vec<Called>, usize) {
     if targets.is_empty() {
         return (Vec::new(), 0);
     }
@@ -771,7 +779,7 @@ fn aggro<W: EngageSink>(w: &mut W, active: &HashSet<u64>) -> (Vec<Called>, usize
         {
             continue;
         }
-        let Some(victim) = nearest_noticed(w, s, &targets) else {
+        let Some(victim) = nearest_noticed(w, s, targets) else {
             continue;
         };
         called.push(Called {

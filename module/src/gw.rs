@@ -618,7 +618,11 @@ fn enter_world(
     let owner = account.identity.ok_or_else(|| {
         "account has no bound identity — establish_session must run before login".to_string()
     })?;
-    crate::world::apply_player_login(ctx, &account, character_guid, owner, entry)
+    crate::world::apply_player_login(ctx, &account, character_guid, owner, entry)?;
+    if entry == crate::world::WorldEntry::Login {
+        crate::taxi::resume_flight(ctx, character_guid)?;
+    }
+    Ok(())
 }
 
 #[reducer]

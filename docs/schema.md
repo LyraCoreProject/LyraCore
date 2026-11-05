@@ -20,6 +20,12 @@ Counts and whole-second timestamps are shared by all Characters buying from that
 `game_vendor_stock_runtime` records the Host process identity that owns those counters.
 See [vendor stock migration](danger-zones.md#vendor-stock-migration) for lifetime and import rules.
 
+`game_active_taxi_flight.first_destination_node_index` is end-appended with default 1. It names
+the first DBC vertex after the stored launch origin, so existing flights retain their route.
+A reconnect sends the unmounted login CREATE, then restarts the remaining spline from the saved
+position. `game_combat_check_schedule` is a new private one-shot schedule: suspending hostility for
+taxi resumption keeps the combat flag until the 1,200 ms check, including when the flight lands first.
+
 ## 1. Conventions
 
 - **Naming.** Core tables take the `game_` prefix; Package tables take `pkg_<name>_`. External

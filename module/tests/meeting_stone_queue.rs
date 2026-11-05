@@ -269,8 +269,8 @@ fn the_stone_admission_refuses_without_writing_anything() {
     realm.assert_sql(&format!(
         "INSERT INTO game_active_taxi_flight (character_guid, path_id, source_node_id, \
          destination_node_id, mount_display_id, fare, current_node_index, started_micros, \
-         origin_x, origin_y, origin_z, origin_recorded) \
-         VALUES ({BRAM}, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, false)"
+         origin_x, origin_y, origin_z, origin_recorded,first_destination_node_index) \
+         VALUES ({BRAM}, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, false,1)"
     ));
     admission(
         &session(BRAM),

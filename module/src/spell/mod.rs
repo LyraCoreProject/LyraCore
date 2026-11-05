@@ -86,7 +86,7 @@ pub(crate) use self_resurrect::{
 };
 
 pub(crate) use spellbook::{
-    apply_racial_passives, forget_spell, knows_spell, learn_spell, learn_spell_with_dependents,
+    apply_starting_passives, forget_spell, knows_spell, learn_spell, learn_spell_with_dependents,
     strip_spell_auras,
 };
 pub use spellbook::{

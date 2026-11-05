@@ -1130,22 +1130,6 @@
           "field_path": [
             "objects",
             "0",
-            "movement",
-            "flags"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
             "values",
             "field_126"
           ]
@@ -1754,102 +1738,6 @@
           "field_path": [
             "objects",
             "0",
-            "movement",
-            "destination"
-          ]
-        },
-        {
-          "rule": "field_shape",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "movement",
-            "duration"
-          ]
-        },
-        {
-          "rule": "field_shape",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "movement",
-            "elapsed"
-          ]
-        },
-        {
-          "rule": "field_shape",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "movement",
-            "points"
-          ]
-        },
-        {
-          "rule": "field_shape",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "movement",
-            "spline_flags"
-          ]
-        },
-        {
-          "rule": "field_shape",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "movement",
-            "spline_id"
-          ]
-        },
-        {
-          "rule": "field_shape",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
             "values",
             "field_101"
           ]
@@ -2124,22 +2012,6 @@
             "0",
             "values",
             "field_130"
-          ]
-        },
-        {
-          "rule": "field_shape",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_133"
           ]
         },
         {
@@ -2595,28 +2467,6 @@
           "character": "actor",
           "checkpoint": "flight",
           "stream": {
-            "kind": "reply",
-            "id": "flight"
-          },
-          "opcode": 221,
-          "field_path": []
-        },
-        {
-          "rule": "missing_packet",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "reply",
-            "id": "flight"
-          },
-          "opcode": 366,
-          "field_path": []
-        },
-        {
-          "rule": "missing_packet",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
             "kind": "broadcast",
             "id": "combat"
           },
@@ -2633,22 +2483,6 @@
           },
           "opcode": 306,
           "field_path": []
-        },
-        {
-          "rule": "missing_packet",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_133"
-          ]
         },
         {
           "rule": "missing_packet",
@@ -2726,7 +2560,7 @@
           ]
         },
         {
-          "rule": "reconnected_dismount_delivery",
+          "rule": "reconnected_mount_delivery",
           "character": "actor",
           "checkpoint": "flight",
           "stream": {
@@ -2738,19 +2572,8 @@
             "objects",
             "0",
             "values",
-            "field_133"
+            "field_46"
           ]
-        },
-        {
-          "rule": "reconnected_landing_delivery",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "reply",
-            "id": "flight"
-          },
-          "opcode": 199,
-          "field_path": []
         },
         {
           "rule": "zone_weather_delivery",
