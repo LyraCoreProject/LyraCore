@@ -26,7 +26,7 @@ pub(crate) use economy::NpcRefusal;
 pub(crate) use economy::{
     apply_buy_bank_slot, apply_buy_item, apply_buyback_item, apply_item_sell,
     apply_item_sell_count, apply_player_repair, innkeeper_access_gate, npc_interaction_gate,
-    BankSlotRefusal, BuyRefusal, NpcGate, SellRefusal,
+    vendor_offers, BankSlotRefusal, BuyRefusal, NpcGate, SellRefusal,
 };
 pub(crate) use exchange::{exchange_items, ItemStoragePlan};
 pub(crate) use guids::{allocate_item_guids, next_item_guid};

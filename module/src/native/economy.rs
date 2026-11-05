@@ -10,10 +10,10 @@ use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::Rollback;
 use crate::items::{
-    game_character_buyback, game_item_instance, game_item_random_property, game_item_template,
-    game_npc_vendor, BankSlotRefusal, BuyRefusal, BuybackEntry, NpcGate, SellRefusal,
+    game_character_buyback, game_item_instance, game_item_random_property, BankSlotRefusal,
+    BuyRefusal, BuybackEntry, NpcGate, SellRefusal,
 };
-use crate::Refusal;
+use crate::{game_world_entity, Refusal};
 
 fn interaction(
     ctx: &ReducerContext,
@@ -42,29 +42,16 @@ pub(super) fn vendor(
     npc: u64,
 ) -> Result<(), Refusal> {
     let npc = interaction(ctx, guid, npc, npc_flags::VENDOR)?;
-    let mut stock: Vec<_> = ctx
-        .db
-        .game_npc_vendor()
-        .by_vendor()
-        .filter(npc.entry)
-        .collect();
-    stock.sort_by_key(|row| row.slot);
     let discount = crate::reputation::vendor_discount_pct(ctx, guid, npc.faction_template);
-    let items = stock
+    let items = crate::items::vendor_offers(ctx, npc.entry)
         .into_iter()
-        .filter_map(|row| {
-            ctx.db
-                .game_item_template()
-                .entry()
-                .find(row.item_entry)
-                .map(|item| codec::VendorItemView {
-                    item_entry: item.entry,
-                    display_id: item.display_id,
-                    buy_price: item.buy_price - item.buy_price.saturating_mul(discount) / 100,
-                    max_durability: item.max_durability,
-                    max_count: row.max_count,
-                    buy_count: item.buy_count,
-                })
+        .map(|(row, item)| codec::VendorItemView {
+            item_entry: item.entry,
+            display_id: item.display_id,
+            buy_price: item.buy_price - item.buy_price.saturating_mul(discount) / 100,
+            max_durability: item.max_durability,
+            max_count: row.max_count,
+            buy_count: item.buy_count,
         })
         .collect::<Vec<_>>();
     let (opcode, body) = codec::build_list_inventory_raw(npc.guid, &items);
@@ -191,6 +178,34 @@ fn owned_slot(ctx: &ReducerContext, guid: u64, item: u64) -> Result<u8, String> 
         .ok_or_else(|| "Character does not own that item".into())
 }
 
+fn purchase_reply(
+    ctx: &ReducerContext,
+    vendor: u64,
+    entry: u32,
+    lots: u32,
+) -> Option<ServerOpcodeMessage> {
+    let npc = ctx.db.game_world_entity().guid().find(vendor)?;
+    let (index, (offer, template)) = crate::items::vendor_offers(ctx, npc.entry)
+        .into_iter()
+        .enumerate()
+        .find(|(_, (offer, _))| offer.item_entry == entry)?;
+    let amount_for_sale = if offer.max_count == 0 {
+        u32::MAX
+    } else {
+        offer
+            .max_count
+            .saturating_sub(lots.saturating_mul(template.buy_count.max(1)))
+    };
+    Some(ServerOpcodeMessage::SMSG_BUY_ITEM(Box::new(
+        lyracore_protocol::messages::vanilla::SMSG_BUY_ITEM {
+            guid: lyracore_protocol::messages::Guid::new(vendor),
+            vendor_slot: index as u32 + 1,
+            amount_for_sale,
+            amount_bought: lots,
+        },
+    )))
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
@@ -209,6 +224,11 @@ pub(super) fn receive(
             super::actor(ctx, guid)
                 .map_err(BuyRefusal::from)
                 .and_then(|_| {
+                    if let Some(reply) =
+                        purchase_reply(ctx, vendor, c.item, u32::from(c.amount).max(1))
+                    {
+                        super::send(ctx, connection, reply, false).map_err(BuyRefusal::from)?;
+                    }
                     crate::items::apply_buy_item(ctx, guid, vendor, c.item, u32::from(c.amount))
                 })
                 .map_err(|refusal| {

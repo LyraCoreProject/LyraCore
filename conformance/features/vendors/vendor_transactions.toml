@@ -9,7 +9,16 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["vendor_transactions"]
 deliberate_deviations = []
 prerequisites = []
-tests = []
+
+[[tests]]
+path = "module/tests/starting_inventory.rs"
+function = "starting_items_fill_the_backpack_including_the_hearthstone"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/native_conformance.rs"
+function = "vendor_purchases_acknowledge_the_offer_before_the_npc_receipt"
+rung = "durable_module"
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -26,7 +35,13 @@ symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
 
 [[known_gaps]]
-description = "Starter inventory links and buyback fields differ from the recording. Core assigns the Hearthstone to slot 38 and represents buyback items with synthetic GUIDs and zero timestamps."
+description = "Buyback replaces the sold item with a synthetic GUID and later creates another item. Ring slots and timestamps differ, empty buyback sends no reply, and selling the restored item fails."
 path = "module/src/native/economy.rs"
 symbol = "send_buyback"
-evidence = "vendor_transactions tier 1: buy slot 25 instead of 26; Character inventory and buyback GUID words; expiry field 1238 is zero."
+evidence = "vendor_transactions tier 1: sell and buyback Character fields, unexpected destroy and item-push packets, missing empty-buyback reply and sell_again fields; expiry field 1238 is zero."
+
+[[known_gaps]]
+description = "Allocated item GUIDs set bit 47, so their inventory link high word is 0x40008000 instead of the reference's 0x40000000."
+path = "module/src/items/guids.rs"
+symbol = "allocate_item_guids"
+evidence = "vendor_transactions tier 1 after starter placement: exact_field at buy field_539 and buyback field_537, expected 1073741824 and actual 1073774592."

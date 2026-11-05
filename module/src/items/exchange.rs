@@ -1,4 +1,5 @@
 use crate::actor::{ActionRefusal, ActionRefusalKind};
+use lyracore_protocol::messages::vanilla::NewItemSource;
 use spacetimedb::{Identity, ReducerContext, Timestamp};
 
 use super::inventory::{free_inventory_slots, is_carried_slot};
@@ -253,6 +254,14 @@ impl ItemStoragePlan {
     }
 
     pub(crate) fn commit(self, ctx: &ReducerContext) -> Result<(), ActionRefusal> {
+        self.commit_with_source(ctx, NewItemSource::Looted)
+    }
+
+    pub(crate) fn commit_with_source(
+        self,
+        ctx: &ReducerContext,
+        source: NewItemSource,
+    ) -> Result<(), ActionRefusal> {
         let changed_offer = self.check_trade_offers(ctx)?;
         if ctx
             .db
@@ -290,13 +299,13 @@ impl ItemStoragePlan {
                     if item.stack_count == 0 {
                         crate::ItemInstance::delete(ctx, item.guid);
                     } else {
-                        item.update(ctx);
+                        item.update_as(ctx, Some(source));
                     }
                 }
                 Some(_) => {}
                 None => {
                     item.guid = guids.next().expect("item plan reserved every new GUID");
-                    crate::ItemInstance::insert(ctx, item);
+                    crate::ItemInstance::insert_as(ctx, item, Some(source));
                 }
             }
         }
