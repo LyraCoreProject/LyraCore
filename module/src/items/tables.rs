@@ -290,6 +290,23 @@ pub struct NpcVendor {
     pub stock_flags: u32,
 }
 
+#[table(accessor = game_vendor_stock, index(accessor = by_vendor, btree(columns = [vendor_guid])))]
+pub struct VendorStock {
+    #[primary_key]
+    pub key: u128,
+    pub vendor_guid: u64,
+    pub count: u32,
+    pub last_increment_seconds: i64,
+    pub restock_seconds: u32,
+}
+
+#[table(accessor = game_vendor_stock_runtime)]
+pub struct VendorStockRuntime {
+    #[primary_key]
+    pub id: u8,
+    pub runtime_id: u128,
+}
+
 #[table(accessor = game_character_buyback, index(accessor = by_player_guid, btree(columns = [player_guid])))]
 pub struct BuybackEntry {
     #[primary_key]

@@ -1,25 +1,11 @@
 //! Read docs/danger-zones.md#vendor-stock-migration before changing restock.
 
-use spacetimedb::{reducer, table, ReducerContext, Table};
+use spacetimedb::{reducer, ReducerContext, Table};
 
+use super::tables::{
+    game_vendor_stock, game_vendor_stock_runtime, VendorStock, VendorStockRuntime,
+};
 use super::{ItemTemplate, NpcVendor};
-
-#[table(accessor = game_vendor_stock, index(accessor = by_vendor, btree(columns = [vendor_guid])))]
-pub struct VendorStock {
-    #[primary_key]
-    pub key: u128,
-    pub vendor_guid: u64,
-    pub count: u32,
-    pub last_increment_seconds: i64,
-    pub restock_seconds: u32,
-}
-
-#[table(accessor = game_vendor_stock_runtime)]
-pub struct VendorStockRuntime {
-    #[primary_key]
-    pub id: u8,
-    pub runtime_id: u128,
-}
 
 #[reducer]
 pub fn native_vendor_stock_runtime(ctx: &ReducerContext, runtime_id: u128) -> Result<(), String> {
