@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use lyracore_package_delta::{
-    artifact_kind, trace, ArtifactKind, ClaimTrace, Operation, PackageDelta,
+    artifact_kind, trace, ArtifactKind, ClaimTrace, Operation, PackageDelta, PrimaryKey,
 };
 
 use crate::shard::Shard;
@@ -13,6 +13,27 @@ use crate::world_import_scope::WorldImportScope;
 const GENERATED_DIR: &str = "data/.generated";
 
 const APPLY_REDUCER: &str = "apply_package_deltas";
+
+pub(crate) fn item_entries_after_replay(
+    scope: &WorldImportScope,
+    root: &str,
+) -> Result<std::collections::HashSet<u64>> {
+    let (artifacts, _) = routed_to_this_shard(
+        scope,
+        artifacts_for_family(read_enabled(Path::new(root))?, "items")?,
+    )?;
+    let mut entries = std::collections::HashSet::new();
+    for artifact in artifacts {
+        for claim in artifact.delta.claims() {
+            if let (PrimaryKey::Item { entry }, Operation::Insert) =
+                (claim.key(), claim.operation())
+            {
+                entries.insert(u64::from(entry));
+            }
+        }
+    }
+    Ok(entries)
+}
 
 #[derive(Debug)]
 struct Artifact {

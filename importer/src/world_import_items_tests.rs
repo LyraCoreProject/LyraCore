@@ -253,7 +253,7 @@ fn patch_conditions_remove_unavailable_vendor_offers_and_creature_drops() {
                 VALUES (3,{},100,0,1,1,{condition},0,10);
         ", 1000 + condition, 1000 + condition));
     }
-    let (_, loot, vendors) = build_items_and_loot(
+    let ItemRows { loot, vendors, .. } = build_items_and_loot(
         &source,
         &HashMap::from([(100, 3)]),
         &HashSet::from([100]),
@@ -328,7 +328,9 @@ fn an_imported_item_keeps_the_procs_per_minute_of_each_spell_slot() {
         &source,
         "UPDATE item_template SET spellppmrate_1 = 9.5, spellppmrate_5 = 0.8 WHERE entry = 1001",
     );
-    let (items, _, _) = build_items_and_loot(
+    let ItemRows {
+        templates: items, ..
+    } = build_items_and_loot(
         &source,
         &HashMap::from([(100, 3)]),
         &HashSet::from([100]),
@@ -360,6 +362,29 @@ fn imported_items_cannot_use_the_operator_template_range() {
     .unwrap_err();
     assert!(
         refusal.to_string().contains("Operator Template Range"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn imported_items_cannot_use_entries_above_the_source_range() {
+    let source = item_source();
+    edit_source(
+        &source,
+        "UPDATE item_template SET entry = 7000000 WHERE entry = 1001",
+    );
+    let refusal = build_items_and_loot(
+        &source,
+        &HashMap::from([(100, 3)]),
+        &HashSet::from([100]),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .unwrap_err();
+    assert!(
+        refusal
+            .to_string()
+            .contains("outside the source item range"),
         "{refusal}"
     );
 }

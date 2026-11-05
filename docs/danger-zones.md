@@ -101,9 +101,18 @@ Host refuses the connection. No native delivery row or existing reducer argument
 restart resets; an older Host does not announce a new process.
 
 Reimport the `items` Import Family once, with the updated importer, to gain stock and restock on
-an existing Realm. This is one cold import of the item catalogue, creature loot and vendor offers;
-it clears current stock counters and replays Package claims through the existing import path.
-It does not replace Characters or their owned Items. Supply the same client Data directory
+an existing Realm. This is one cold import of the source item catalogue, creature loot and vendor
+offers; it clears current stock counters. Item templates at or above the Operator Template Range
+floor survive, including Operator-created items. Loot and offers that refer to those item entries
+or creature entries survive too. Imported rows must not collide with their retained row IDs.
+Before its first write, the importer refuses a plan that would leave any owned Item or retained
+loot/offer without an item template. A source entry removed from the new catalogue can therefore
+block the import; resolve it through a reviewed content migration before retrying. These checks
+assume a cold import with no concurrent content edits or Item grants.
+Package claims replay only when `--packages` is supplied; replay does not restore Operator edits.
+With that flag, the same preflight also refuses removal of an owned or referenced Package Item
+template that the enabled Package claims would not restore.
+The import does not replace Characters or their owned Items. Supply the same client Data directory
 (`--dbc`) required by the items import's Random Property validation; no separate DBC catalogue
 reimport is needed for vendor stock.
 Without that reimport, the zero restock interval preserves today's purchases: the list shows the

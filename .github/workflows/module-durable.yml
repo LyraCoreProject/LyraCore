@@ -61,6 +61,10 @@ jobs:
         if: matrix.shard == 0
         run: python3 scripts/idc-bindings.py target/wasm32-unknown-unknown/release/lyracore_module.wasm --check
 
+      - name: Check populated items reimports
+        if: matrix.shard == 0
+        run: cargo test -p lyracore-importer --test items_reimport -- --ignored --test-threads=1
+
       # Each test owns a standalone process; the thread limit bounds memory use.
       - name: Run the durable suite, shard ${{ matrix.shard }} of 6
         id: durable-suite
