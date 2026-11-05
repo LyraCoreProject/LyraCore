@@ -26,6 +26,9 @@ pub fn harness_revision() -> &'static str {
 
 fn roll_difference(scenario: &wire_client::scenario::Scenario, difference: &Difference) -> bool {
     use wire_client::trace::RecordedField;
+    if scenario.spell_rolls.is_some() {
+        return spell_difference(scenario, difference);
+    }
     let Some(spec) = &scenario.rolls else {
         return false;
     };
@@ -61,6 +64,55 @@ fn roll_difference(scenario: &wire_client::scenario::Scenario, difference: &Diff
             && difference.expected == Some(RecordedField::Unsigned(u64::from(spec.expected_basis_points[index][category]) * u64::from(spec.samples_per_level) / 10_000))
             && matches!(difference.actual, Some(RecordedField::Unsigned(count)) if count <= u64::from(spec.samples_per_level))
     })
+}
+
+fn spell_difference(scenario: &wire_client::scenario::Scenario, difference: &Difference) -> bool {
+    use wire_client::trace::RecordedField;
+
+    let Some(spec) = &scenario.spell_rolls else {
+        return false;
+    };
+    if difference.classification != DifferenceClass::Rule
+        || difference.character.is_some()
+        || difference.stream != Some(Stream::Broadcast("casts".into()))
+        || difference.opcode != Some(0x250)
+        || difference.packet_index.is_some()
+    {
+        return false;
+    }
+    let level_index = spec.target_levels.iter().position(|level| {
+        ["public_1", "public_2", "merge"]
+            .iter()
+            .any(|slot| difference.checkpoint == format!("level_{level}_{slot}"))
+    });
+    if difference.rule == "spell_sample" {
+        return difference.field_path == ["outcomes"]
+            && difference.expected
+                == Some(RecordedField::Unsigned(u64::from(spec.samples_per_level)))
+            && ((difference.checkpoint == "roll_sample" && difference.actual.is_none())
+                || (level_index.is_some()
+                    && matches!(difference.actual, Some(RecordedField::Unsigned(count)) if count < u64::from(spec.samples_per_level))));
+    }
+    if difference.rule != "spell_distribution"
+        || difference.field_path.len() != 2
+        || difference.field_path[0] != "outcomes"
+    {
+        return false;
+    }
+    let Some(level) = level_index else {
+        return false;
+    };
+    let Some(category) = wire_client::spell_rolls::CATEGORIES
+        .iter()
+        .position(|category| *category == difference.field_path[1])
+    else {
+        return false;
+    };
+    let probability = spec.expected[level][category];
+    let expected = u128::from(probability.numerator) * u128::from(spec.samples_per_level)
+        / u128::from(probability.denominator);
+    difference.expected == Some(RecordedField::Unsigned(expected as u64))
+        && matches!(difference.actual, Some(RecordedField::Unsigned(count)) if count <= u64::from(spec.samples_per_level))
 }
 
 #[derive(Debug, Deserialize, Serialize)]
