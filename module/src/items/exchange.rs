@@ -325,7 +325,10 @@ impl ItemStoragePlan {
                 _ => 4,
             };
         let (preferred, explicit) = if bag == 255 {
-            if (81..keyring_end).contains(&slot) && template.bag_family != 9 {
+            if (81..keyring_end).contains(&slot)
+                && template.bag_family != 9
+                && !self.items.iter().any(|item| item.slot == slot)
+            {
                 return Err(InventoryResult::ItemDoesntGoIntoBag2.into());
             }
             (
@@ -344,10 +347,12 @@ impl ItemStoragePlan {
                 .entry()
                 .find(bag_item.entry)
                 .ok_or(InventoryResult::IntBagError)?;
-            if slot != 255 && slot >= bag_template.container_slots.min(18) {
+            let occupied = codec::inventory_slot(bag, slot)
+                .is_some_and(|slot| self.items.iter().any(|item| item.slot == slot));
+            if !occupied && slot != 255 && slot >= bag_template.container_slots.min(18) {
                 return Err(InventoryResult::IntBagError.into());
             }
-            if !item_fits_bag(template, &bag_template) {
+            if !occupied && !item_fits_bag(template, &bag_template) {
                 return Err(InventoryResult::ItemDoesntGoIntoBag2.into());
             }
             let explicit = if slot == 255 {

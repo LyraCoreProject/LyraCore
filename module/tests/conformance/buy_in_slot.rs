@@ -445,6 +445,14 @@ fn keyring_destinations_check_the_item_family_and_publish_the_link() {
     let item: u64 = rows[0]["guid"].parse().unwrap();
     assert_eq!(fields[&648], item as u32);
     assert_eq!(fields[&649], (item >> 32) as u32);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET bag_family = 0 WHERE entry = {THREAD}"
+    ));
+    buy(&mut connection, vendor, THREAD, guid, 81, 1);
+    let rows = inventory(&shard, guid);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["guid"], item.to_string());
+    assert_eq!(rows[0]["stack_count"], "2");
 }
 
 #[test]
