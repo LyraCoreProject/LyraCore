@@ -316,7 +316,7 @@ fn send_raw(
     });
 }
 
-fn disconnect(ctx: &ReducerContext, connection_id: ConnectionId) {
+pub(crate) fn disconnect(ctx: &ReducerContext, connection_id: ConnectionId) {
     realm_shard::closing(ctx, connection_id);
     realm_shard::clear_return(ctx, connection_id);
     realm_shard::cancel_selection(ctx, connection_id);

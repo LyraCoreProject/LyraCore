@@ -1,6 +1,6 @@
 use crate::actor::{ActionRefusal, ActionRefusalKind};
 use lyracore_protocol::messages::vanilla::NewItemSource;
-use spacetimedb::{Identity, ReducerContext, Table, Timestamp};
+use spacetimedb::{Identity, ReducerContext, Timestamp};
 
 use super::inventory::{free_inventory_slots, is_carried_slot};
 use super::{
@@ -384,8 +384,7 @@ impl ItemStoragePlan {
                     if item.stack_count == 0 {
                         crate::ItemInstance::delete(ctx, item.guid);
                     } else if source.is_none() {
-                        let row = ctx.db.game_item_instance().guid().update(item);
-                        crate::native::item_restored(ctx, &row, false);
+                        item.update_restored(ctx);
                     } else {
                         item.update_as(ctx, source);
                     }
@@ -396,8 +395,7 @@ impl ItemStoragePlan {
                         item.guid = guids.next().expect("item plan reserved every new GUID");
                     }
                     if source.is_none() {
-                        let row = ctx.db.game_item_instance().insert(item);
-                        crate::native::item_restored(ctx, &row, true);
+                        item.insert_restored(ctx);
                     } else {
                         crate::ItemInstance::insert_as(ctx, item, source);
                     }

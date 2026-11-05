@@ -1,6 +1,6 @@
 use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
-use super::{game_character_buyback, game_item_instance, ItemInstance, ItemTemplate};
+use super::{game_character_buyback, ItemInstance, ItemTemplate};
 
 pub(crate) const BUYBACK_START: u8 = 69;
 pub(crate) const BUYBACK_END: u8 = 81;
@@ -69,6 +69,19 @@ pub(crate) fn clear(ctx: &ReducerContext, character_guid: u64) {
 }
 
 pub(crate) fn discard_legacy(ctx: &ReducerContext) {
+    use crate::native::game_native_player;
+
+    for player in ctx.db.game_native_player().iter().collect::<Vec<_>>() {
+        if ctx
+            .db
+            .game_buyback_state()
+            .character_guid()
+            .find(player.character_guid)
+            .is_none()
+        {
+            crate::native::disconnect(ctx, player.connection_id);
+        }
+    }
     let rows = ctx.db.game_character_buyback();
     for row in rows.iter().collect::<Vec<_>>() {
         rows.id().delete(row.id);
@@ -166,12 +179,11 @@ pub(super) fn sell(
     let remaining = if partial {
         let mut remaining = original.clone();
         remaining.stack_count -= count;
-        Some(ctx.db.game_item_instance().guid().update(remaining))
+        Some(remaining)
     } else {
-        ctx.db.game_item_instance().guid().delete(original.guid);
         None
     };
-    crate::native::item_sold(ctx, &original, remaining.as_ref(), &row, evicted.as_ref());
+    original.sell(ctx, remaining, &row, evicted.as_ref());
     Ok(())
 }
 

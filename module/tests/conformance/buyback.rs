@@ -47,6 +47,10 @@ fn request(connection: &mut ReducerConnection, opcode: u32, body: Vec<u8>) -> Ve
             .call("native_world_reply", json!([replies]))
             .unwrap();
     }
+    delivered(connection)
+}
+
+fn delivered(connection: &mut ReducerConnection) -> Vec<(u16, Vec<u8>)> {
     connection
         .drain_packets()
         .into_iter()
@@ -897,15 +901,180 @@ fn package_teardown_also_clears_buyback_after_sessionless_presence_is_lost() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn legacy_buyback_snapshots_are_inert_and_publish_repair_discards_them() {
-    let (shard, mut connection, guid, vendor) = stage("buyback-legacy");
+fn publish_repair_ends_legacy_world_sessions_before_buyback_resumes() {
+    use lyracore_protocol::codec;
+
+    let (mut shard, mut connection, guid, vendor) = stage("buyback-legacy");
+    let inventory = grant(&shard, guid, 5090050, 1);
+    shard.assert_sql(&format!(
+        "DELETE FROM game_buyback_state WHERE character_guid = {guid}"
+    ));
     shard.assert_sql(&format!("INSERT INTO game_character_buyback (id,player_guid,item_entry,stack_count,price,soulbound,random_property_id) VALUES (5090001,{guid},5090050,1,13,false,0)"));
-    assert_eq!(buyback(&mut connection, vendor, 69)[0].0, 0x1a5);
-    shard.assert_call("debug_repair_after_publish", &[]);
+    let synthetic = 0x4090_0000_0000_0000;
+    let create = lyracore_protocol::world::encode(
+        lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(codec::build_item_create_object(&codec::ItemInstanceView {
+                guid: synthetic,
+                entry: 5090050,
+                owner_guid: guid,
+                slot: 69,
+                stack_count: 1,
+                ..Default::default()
+            })),
+        ),
+    )
+    .unwrap();
+    let mut fields = codec::update_mask::UpdateMaskValues::new();
+    fields.set_u64(624, synthetic);
+    fields.set_u32(1226, 13);
+    fields.set_u32(1238, 0);
+    let links = codec::build_values_update_raw(guid, &fields);
+    connection
+        .call(
+            "native_world_reply",
+            json!([[(create.opcode, create.body), links]]),
+        )
+        .unwrap();
+    let legacy = delivered(&mut connection);
+    assert_eq!(values(&legacy, synthetic)[&14], 1);
+    assert_eq!(values(&legacy, guid)[&624], synthetic as u32);
+    assert_eq!(values(&legacy, guid)[&1226], 13);
+    assert_eq!(values(&legacy, guid)[&1238], 0);
+    shard
+        .assert_sql("UPDATE game_conformance_clock SET now_micros = 1800003600000000 WHERE id = 0");
+
+    shard.publish_module();
+    connection
+        .call("debug_repair_after_publish", json!([]))
+        .unwrap();
+    assert!(
+        connection.drain_packets().iter().any(|row| {
+            let Packet(_, _, (tag, _), _, close_after, _, _) =
+                serde_json::from_str(row.get()).unwrap();
+            tag != 0 && close_after
+        }),
+        "legacy client must discard its synthetic objects and buyback fields on disconnect"
+    );
+    assert!(shard
+        .query_rows("SELECT * FROM game_native_player")
+        .is_empty());
+    assert!(shard
+        .query_rows("SELECT * FROM game_native_world_connection")
+        .is_empty());
     assert!(shard
         .query_rows("SELECT * FROM game_character_buyback")
         .is_empty());
     assert!(sold_rows(&shard, guid).is_empty());
+    let mut connection = enter(&shard, guid);
+    shard
+        .assert_sql("UPDATE game_conformance_clock SET now_micros = 1800007200000000 WHERE id = 0");
+    assert_eq!(
+        values(&sell(&mut connection, vendor, inventory, 0), guid)[&1238],
+        111600
+    );
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_native_player").len(),
+        1
+    );
+    assert_eq!(sold_rows(&shard, guid).len(), 1);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn selling_equipped_gear_relays_client_armor_and_every_resistance() {
+    let (shard, mut connection, guid, vendor) = stage("buyback-equipped-resistances");
+    shard.assert_sql("UPDATE game_item_template SET stat_armor = 100, holy_res = 11, fire_res = 12, nature_res = 13, frost_res = 14, shadow_res = 15, arcane_res = 16 WHERE entry = 5090050");
+    let item = grant(&shard, guid, 5090050, 1);
+    let base: u32 = shard.query_rows(&format!(
+        "SELECT armor FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["armor"]
+        .parse()
+        .unwrap();
+    connection
+        .call("debug_equip_item", json!([guid, 23]))
+        .unwrap();
+    let equipped = values(&delivered(&mut connection), guid);
+    for (index, expected) in [base + 100, 11, 12, 13, 14, 15, 16].into_iter().enumerate() {
+        assert_eq!(equipped.get(&(155 + index as u16)), Some(&expected));
+    }
+    let sold = values(&sell(&mut connection, vendor, item, 0), guid);
+    for (index, expected) in [base, 0, 0, 0, 0, 0, 0].into_iter().enumerate() {
+        assert_eq!(sold.get(&(155 + index as u16)), Some(&expected));
+    }
+    assert_eq!(sold[&516], 0);
+    let returned = values(&buyback(&mut connection, vendor, 69), guid);
+    assert_eq!(returned[&532], item as u32);
+    let mut client = sold.clone();
+    client.extend(returned);
+    for (index, expected) in [base, 0, 0, 0, 0, 0, 0].into_iter().enumerate() {
+        assert_eq!(client.get(&(155 + index as u16)), Some(&expected));
+    }
+    shard.assert_call("debug_equip_item", &[&guid.to_string(), "23"]);
+    let sold_again = values(&sell(&mut connection, vendor, item, 0), guid);
+    for index in 0..7 {
+        assert_eq!(sold_again.get(&(155 + index)), sold.get(&(155 + index)));
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn selling_a_guild_charter_preserves_its_petition_for_buyback() {
+    let (shard, mut connection, guid, vendor) = stage("buyback-charter");
+    let mut template = shard
+        .query_rows("SELECT * FROM game_item_template WHERE entry = 5090050")
+        .remove(0);
+    template.insert("entry".into(), "5863".into());
+    template.insert("name".into(), "Guild Charter".into());
+    let columns = "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property,spellppmrate_1,spellppmrate_2,spellppmrate_3,spellppmrate_4,spellppmrate_5";
+    let values = columns
+        .split(',')
+        .map(|key| {
+            let value = &template[key];
+            if key == "name" {
+                format!("'{value}'")
+            } else {
+                value.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    shard.assert_sql(&format!(
+        "INSERT INTO game_item_template ({columns}) VALUES ({values})"
+    ));
+    let charter = grant(&shard, guid, 5863, 1);
+    shard.assert_sql(&format!("INSERT INTO game_guild_petition (petition_id,charter_item_guid,owner_guid,owner_name,team,name,created_micros) VALUES (123,{charter},{guid},'Conformance',469,'Buyback Charter',1800000000000000)"));
+    shard.assert_sql(&format!(
+        "UPDATE game_item_instance SET enchant_id = 123 WHERE guid = {charter}"
+    ));
+    let realm = format!(r#"{{"__identity__":"0x{}"}}"#, "11".repeat(32));
+    shard.assert_call(
+        "operator_add_peer_shard",
+        &[&realm, "\"unavailable-realm\""],
+    );
+    shard.assert_call(
+        "operator_set_shard_role",
+        &[&format!(r#"{{"some":{{"world":{realm}}}}}"#)],
+    );
+    let petition = shard.query_rows("SELECT * FROM game_guild_petition");
+    sell(&mut connection, vendor, charter, 0);
+    assert!(
+        shard
+            .query_rows("SELECT * FROM game_guild_transaction")
+            .is_empty(),
+        "sale must not send the destruction-only Petition close"
+    );
+    buyback(&mut connection, vendor, 69);
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_guild_petition"),
+        petition
+    );
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT enchant_id FROM game_item_instance WHERE guid = {charter}"
+        ))[0]["enchant_id"],
+        "123"
+    );
 }
 
 #[test]

@@ -98,6 +98,10 @@ Native Host delivery layouts do not change. Use the normal planned publish and
 
 The legacy `game_character_buyback` table keeps its schema for additive migration. Its snapshots
 cannot restore Item identity and are discarded by the repair reducer or the Character's next login.
+The repair reducer ends connected World Sessions that have no `game_buyback_state` row. Their
+clients discard legacy buyback links, prices and synthetic objects; the next login starts a fresh
+ring and timestamp origin. World Sessions that already have buyback state stay connected. Run the
+repair reducer before play resumes after the upgrade, even when the legacy table is empty.
 Buyback contents do not survive logout, a fresh login after a crash, or a completed Character
 Transfer. Carried and banked Items retain their existing rows and GUIDs.
 

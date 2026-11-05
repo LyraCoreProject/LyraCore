@@ -406,6 +406,10 @@ for collisions. Letter Copy grant retries also check buyback to avoid a duplicat
 sale keeps the GUID; a partial sale creates a new stack with the reference
 clone rules. Restoration keeps that GUID unless the stack merges completely into existing stacks.
 Merging keeps the destination stack's property and binding. Buyback sends no item receipt.
+Sale and restoration write ordinary Item rows through named `ItemInstance` methods with their own
+delivery. A sale removes equipped armor and resistance bonuses from the client's fields. It pauses
+Temporary Enchantments instead of forgetting them. It does not close a Guild Charter's Petition:
+the Reference Server removes the Item from inventory without destroying it.
 
 `game_buyback_state` stores the login time and current slot. Slots 69 through 80 retain their
 positions when another slot is bought back. A full ring selects the oldest timestamp, with ties
@@ -423,7 +427,9 @@ or Item Text to the arriving inventory.
 
 Both buyback tables are additive. The old `game_character_buyback` declaration and row layout stay
 for migration compatibility; no gameplay reads its snapshots. `debug_repair_after_publish` discards
-those rows, and login also clears the Character's legacy rows. See
+those rows and ends connected World Sessions without buyback state, so the client discards legacy
+objects and fields and a fresh login establishes the timestamp origin. Sessions with buyback state
+remain connected. Login also clears the Character's legacy rows. See
 [the buyback migration](danger-zones.md#buyback-migration) before updating an existing Realm.
 
 ### Mail (`module/src/mail.rs`, `mail_timer.rs`, `mail_text.rs`)

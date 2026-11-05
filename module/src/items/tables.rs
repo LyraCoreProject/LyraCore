@@ -190,6 +190,32 @@ impl ItemInstance {
         row
     }
 
+    pub(super) fn sell(
+        self,
+        ctx: &ReducerContext,
+        remaining: Option<Self>,
+        sold: &super::buyback::BuybackItem,
+        evicted: Option<&super::buyback::BuybackItem>,
+    ) {
+        if let Some(remaining) = &remaining {
+            ctx.db.game_item_instance().guid().update(remaining.clone());
+        } else {
+            ctx.db.game_item_instance().guid().delete(self.guid);
+        }
+        // Sale preserves Petitions and pauses enchantments; see docs/schema.md when changing buyback.
+        crate::native::item_sold(ctx, &self, remaining.as_ref(), sold, evicted);
+    }
+
+    pub(super) fn insert_restored(self, ctx: &ReducerContext) {
+        let row = ctx.db.game_item_instance().insert(self);
+        crate::native::item_restored(ctx, &row, true);
+    }
+
+    pub(super) fn update_restored(self, ctx: &ReducerContext) {
+        let row = ctx.db.game_item_instance().guid().update(self);
+        crate::native::item_restored(ctx, &row, false);
+    }
+
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) -> bool {
         let items = ctx.db.game_item_instance();
         let previous = items.guid().find(guid);

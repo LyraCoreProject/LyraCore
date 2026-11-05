@@ -107,6 +107,11 @@ fn create_item(view: &codec::ItemInstanceView, packets: &mut Vec<Packet>) {
     }
 }
 
+fn armor_and_resistances(ctx: &ReducerContext, guid: u64, packets: &mut Vec<Packet>) {
+    let auras: Vec<_> = crate::spell::auras_on(ctx, guid).collect();
+    packets.extend(super::aura::armor(ctx, guid, &auras));
+}
+
 pub(crate) fn item_sold(
     ctx: &ReducerContext,
     original: &ItemInstance,
@@ -134,6 +139,9 @@ pub(crate) fn item_sold(
             codec::build_destroy_object(evicted.item_guid),
         )));
     }
+    if remaining.is_none() && original.slot <= 18 {
+        armor_and_resistances(ctx, original.owner_guid, &mut packets);
+    }
     send(ctx, owner.connection_id, packets);
     super::economy::buyback_values(
         ctx,
@@ -160,6 +168,9 @@ pub(crate) fn item_restored(ctx: &ReducerContext, item: &ItemInstance, new_slot:
     create_item(&view, &mut packets);
     if new_slot {
         slot(ctx, item.owner_guid, item.slot, &view, &mut packets);
+    }
+    if item.slot <= 18 {
+        armor_and_resistances(ctx, item.owner_guid, &mut packets);
     }
     send(ctx, owner.connection_id, packets);
     super::quest::item_changed(ctx, item.owner_guid, item.entry);
@@ -299,8 +310,7 @@ pub(crate) fn changed(
         _ => row.slot <= 18,
     };
     if affects_resistances {
-        let auras: Vec<_> = crate::spell::auras_on(ctx, row.owner_guid).collect();
-        packets.extend(super::aura::armor(ctx, row.owner_guid, &auras));
+        armor_and_resistances(ctx, row.owner_guid, &mut packets);
     }
     send(ctx, owner.connection_id, packets);
     if previous.map(|row| (row.entry, row.stack_count))
