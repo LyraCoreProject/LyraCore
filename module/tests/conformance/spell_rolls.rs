@@ -196,6 +196,10 @@ fn verify_context(
         shard_name,
         "SELECT guid,race,class,level FROM game_character",
     );
+    let reactions = shard.query_database_rows(
+        shard_name,
+        "SELECT creature_guid,react_state FROM game_creature_ai_state",
+    );
     for character in characters {
         let entity = entities
             .iter()
@@ -209,6 +213,15 @@ fn verify_context(
             .iter()
             .find(|row| row["guid"] == character.guid.to_string())
             .context("spell identity disappeared")?;
+        let reaction = reactions
+            .iter()
+            .find(|row| row["creature_guid"] == character.target.to_string())
+            .context("spell target has no passive reaction state")?;
+        ensure!(
+            reaction["react_state"] == "0",
+            "spell target is not passive: {}",
+            reaction["react_state"]
+        );
         ensure!(
             identity["race"] == "1" && identity["class"] == "8" && identity["level"] == "60",
             "spell race, class or Character level changed"

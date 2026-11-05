@@ -60,7 +60,7 @@ pub fn debug_prepare_spell_roll_character(
     seed: u64,
     stream: u64,
 ) -> Result<(), String> {
-    use crate::{game_spell, game_spell_effect};
+    use crate::{game_creature_ai_state, game_spell, game_spell_effect};
 
     crate::helpers::require_operator(ctx)?;
     if !matches!(target_level, 60 | 63) || !crate::time::is_virtual(ctx) {
@@ -98,6 +98,25 @@ pub fn debug_prepare_spell_roll_character(
     target.max_health = 1_000_000_000;
     target.orientation = std::f32::consts::PI;
     target.update(ctx);
+    let reactions = ctx.db.game_creature_ai_state();
+    if let Some(mut reaction) = reactions.creature_guid().find(target_guid) {
+        reaction.react_state = 0;
+        reactions.creature_guid().update(reaction);
+    } else {
+        reactions.insert(crate::CreatureAiState {
+            creature_guid: target_guid,
+            phase: 0,
+            lifecycle_id: crate::creatures::current_life_seq(ctx, target_guid),
+            engagement_id: 1,
+            ranged_distance: 0.0,
+            ranged_angle: 0.0,
+            ranged_posture_active: false,
+            definition_revision: 0,
+            active_object: false,
+            react_state: 0,
+            melee_enabled: true,
+        });
+    }
 
     let mut spell = crate::seed::base_spell(2948, "Fixture spell 2948");
     spell.cost = 50;
