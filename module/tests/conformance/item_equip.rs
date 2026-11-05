@@ -109,6 +109,22 @@ fn equip_moves_swaps_and_shared_spells_keep_each_items_effect_once() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_self_cast_of_the_same_passive_does_not_replace_an_items_aura() {
+    let (shard, mut connection, guid, _) = fixture("equip-and-self-passive");
+    grant(&shard, guid, ITEM, 1, 23);
+    equip(&mut connection, 23);
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), &EQUIP.to_string(), &guid.to_string()],
+    );
+    assert_effect(&shard, guid, 2);
+    move_item(&mut connection, 10, 23);
+    assert_effect(&shard, guid, 1);
+    assert!(shard.query_rows("SELECT * FROM game_item_aura").is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn equip_cooldown_packets_gate_zero_cooldown_use_and_preserve_longer_delays() {
     let (shard, mut connection, guid, vendor) = fixture("equip-cooldown");
     let item = grant(&shard, guid, ITEM, 1, 23);
