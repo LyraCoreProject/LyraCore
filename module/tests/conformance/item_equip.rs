@@ -1,6 +1,6 @@
 use super::buy_in_slot::{buy, grant, inventory, request, stage};
 use super::enter;
-use lyracore_test_support::{ReducerConnection, Standalone};
+use lyracore_test_support::{poll_until, ReducerConnection, Standalone, POLL_TIMEOUT};
 use wow_world_messages::vanilla::{
     ClientMessage, SpellCastTargets, SpellCastTargets_SpellCastTargetFlags, CMSG_USE_ITEM,
 };
@@ -53,6 +53,7 @@ fn auras(shard: &Standalone, guid: u64) -> Vec<std::collections::BTreeMap<String
     ))
 }
 
+#[track_caller]
 pub(super) fn assert_effect(shard: &Standalone, guid: u64, count: usize) {
     let rows = auras(shard, guid);
     assert_eq!(rows.len(), count, "{rows:?}");
@@ -159,6 +160,19 @@ fn equip_cooldown_packets_gate_zero_cooldown_use_and_preserve_longer_delays() {
         )]
     );
     assert_eq!(inventory(&shard, guid), before);
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET attributes = 33554432 WHERE spell_id = {USE}"
+    ));
+    assert_eq!(
+        request(&mut connection, 0xab, frame[6..].to_vec()),
+        vec![(
+            0x130,
+            lyracore_protocol::codec::build_cast_result_failed(USE, 0x17)
+        )]
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET attributes = 0 WHERE spell_id = {USE}"
+    ));
     let actor = format!(r#"{{"guid":{guid},"ownership":null}}"#);
     let refused = shard.call("gw_use_item", &[&actor, "10"]);
     assert!(
@@ -209,6 +223,45 @@ fn equip_cooldown_packets_gate_zero_cooldown_use_and_preserve_longer_delays() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn equip_retains_source_category_cooldowns_and_item_category_overrides() {
+    let (shard, mut connection, guid, _) = fixture("equip-category-cooldown");
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET category = 30, category_cooldown_ms = 60000 WHERE spell_id = {USE}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET category = 30, cast_time_ms = 100 WHERE spell_id = {FORM}"
+    ));
+    grant(&shard, guid, ITEM, 1, 23);
+    equip(&mut connection, 23);
+    shard.assert_sql(&format!("UPDATE game_item_template SET class = 4, subclass = 1, inventory_type = 11, required_level = 1, max_stack = 1, bonding = 0, spellid_1 = {FORM}, spelltrigger_1 = 0, spellcategory_1 = 0 WHERE entry = 5090052"));
+    grant(&shard, guid, 5090052, 1, 23);
+    equip(&mut connection, 23);
+    advance(&shard, 30000);
+    assert!(!shard
+        .call(
+            "debug_begin_cast",
+            &[&guid.to_string(), &FORM.to_string(), &guid.to_string()]
+        )
+        .status
+        .success());
+    shard.assert_call("gw_use_item", &[&actor(guid), "11"]);
+    advance(&shard, 100);
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT stance FROM game_world_entity WHERE guid = {guid}"
+        ))[0]["stance"],
+        "2"
+    );
+    assert!(!shard
+        .call("gw_use_item", &[&actor(guid), "10"])
+        .status
+        .success());
+    advance(&shard, 29900);
+    shard.assert_call("gw_use_item", &[&actor(guid), "10"]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn passive_equip_auras_are_hidden_permanent_and_not_cancellable_or_dispellable() {
     let (shard, mut connection, guid, _) = fixture("equip-passive");
     shard.assert_call(
@@ -240,6 +293,18 @@ fn passive_equip_auras_are_hidden_permanent_and_not_cancellable_or_dispellable()
         "debug_cast_spell",
         &[&guid.to_string(), &USE.to_string(), &guid.to_string()],
     );
+    assert_effect(&shard, guid, 1);
+    assert!(!shard
+        .call("gw_cancel_aura", &[&actor, &EQUIP.to_string()])
+        .status
+        .success());
+    move_item(&mut connection, 10, 23);
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET attributes = 128, duration_index = 21 WHERE spell_id = {EQUIP}"
+    ));
+    equip(&mut connection, 23);
+    assert_effect(&shard, guid, 1);
+    advance(&shard, 120000);
     assert_effect(&shard, guid, 1);
     assert!(!shard
         .call("gw_cancel_aura", &[&actor, &EQUIP.to_string()])
@@ -308,9 +373,16 @@ fn login_reconnect_and_resurrection_rebuild_equip_auras_once_without_a_new_coold
     grant(&shard, guid, ITEM, 1, 23);
     equip(&mut connection, 23);
     assert_effect(&shard, guid, 1);
+    let original = auras(&shard, guid);
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert_eq!(auras(&shard, guid), original);
     drop(connection);
-    shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
-    assert_effect(&shard, guid, 1);
+    assert!(poll_until(POLL_TIMEOUT, || shard
+        .query_rows(&format!(
+            "SELECT character_guid FROM game_native_player WHERE character_guid = {guid}"
+        ))
+        .is_empty()));
+    assert!(auras(&shard, guid).is_empty());
     let mut connection = enter(&shard, guid);
     assert_effect(&shard, guid, 1);
     connection.drain_packets();
@@ -363,7 +435,7 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
     );
     assert_effect(&shard, guid, 0);
     shard.assert_sql(&format!(
-        "UPDATE game_spell SET attributes_ex2 = 524288 WHERE spell_id = {EQUIP}"
+        "UPDATE game_spell SET attributes_ex_2 = 524288 WHERE spell_id = {EQUIP}"
     ));
     move_item(&mut connection, 11, 10);
     assert_effect(&shard, guid, 1);
@@ -417,7 +489,7 @@ fn actor(guid: u64) -> String {
 fn trade_and_mail_keep_effects_with_equipment_and_not_with_carried_items() {
     let (shard, mut connection, guid, _) = fixture("equip-trade-mail");
     let other = partner(&shard);
-    let item = grant(&shard, guid, ITEM, 1, 23);
+    grant(&shard, guid, ITEM, 1, 23);
     equip(&mut connection, 23);
     shard.assert_call("gw_initiate_trade", &[&actor(guid), &other.to_string()]);
     shard.assert_call("gw_begin_trade", &[&actor(other)]);
@@ -433,14 +505,13 @@ fn trade_and_mail_keep_effects_with_equipment_and_not_with_carried_items() {
     shard.assert_call("gw_accept_trade", &[&actor(other)]);
     assert_effect(&shard, guid, 0);
     assert_effect(&shard, other, 0);
-    let slot = shard.query_rows(&format!(
-        "SELECT slot FROM game_item_instance WHERE guid = {item}"
-    ))[0]["slot"]
-        .clone();
+    let received = &shard.query_rows(&format!(
+        "SELECT guid,slot FROM game_item_instance WHERE owner_guid = {other} AND entry = {ITEM}"
+    ))[0];
+    let slot = received["slot"].clone();
+    let item = received["guid"].clone();
     shard.assert_call("debug_equip_item", &[&other.to_string(), &slot]);
     assert_effect(&shard, other, 1);
-    shard.assert_call("debug_unequip_item", &[&other.to_string(), "10"]);
-    assert_effect(&shard, other, 0);
     shard.assert_call(
         "realm_mail_send",
         &[
@@ -450,7 +521,7 @@ fn trade_and_mail_keep_effects_with_equipment_and_not_with_carried_items() {
             "\"\"",
             "0",
             "0",
-            &item.to_string(),
+            &item,
             "true",
         ],
     );
@@ -492,4 +563,13 @@ fn visible_equip_effects_keep_the_sources_duration_and_reapply_after_resurrectio
         ))[0]["sheet_sta_bonus"],
         "0"
     );
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET duration_ms = 50 WHERE spell_id = {EQUIP}"
+    ));
+    move_item(&mut connection, 10, 23);
+    equip(&mut connection, 23);
+    advance(&shard, 299);
+    assert_eq!(auras(&shard, guid).len(), 1);
+    advance(&shard, 1);
+    assert!(auras(&shard, guid).is_empty());
 }

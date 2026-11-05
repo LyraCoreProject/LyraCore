@@ -655,7 +655,7 @@ fn equipment_purchase_shares_ordinary_equip_auras_and_cooldowns() {
     fn effects(shard: &Standalone, guid: u64, packets: &[(u16, Vec<u8>)]) -> (bool, bool, bool) {
         let aura = !shard
             .query_rows(&format!(
-                "SELECT * FROM game_aura WHERE target_guid = {guid} AND spell_id = 168"
+                "SELECT id FROM game_aura WHERE target_guid = {guid} AND spell_id = 168"
             ))
             .is_empty();
         let cooldown = !shard

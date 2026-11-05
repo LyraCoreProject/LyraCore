@@ -201,6 +201,7 @@ fn crossing_with_equipment(name: &str, equipment: bool) -> Crossing {
     let state = source.query_rows("SELECT * FROM game_buyback_state");
     if equipment {
         super::super::item_equip::configure(&source);
+        source.assert_sql("UPDATE game_spell SET category = 30, category_cooldown_ms = 60000 WHERE spell_id = 5090901");
         let item = grant(&source, guid, 5090050, 1);
         let slot: u8 = source.query_rows(&format!(
             "SELECT slot FROM game_item_instance WHERE guid = {item}"
@@ -231,7 +232,7 @@ fn crossing_with_equipment(name: &str, equipment: bool) -> Crossing {
         .query_rows("SELECT transfer_id,blob FROM game_transfer_out")
         .remove(0);
     let cooldowns = source.query_rows(&format!(
-        "SELECT spell_id,ready_at FROM game_spell_cd WHERE caster_guid = {guid}"
+        "SELECT spell_id,ready_at,category,category_ready_micros FROM game_spell_cd WHERE caster_guid = {guid}"
     ));
     let transfer = &out["transfer_id"];
     let blob = serde_json::to_string(out["blob"].strip_prefix("0x").unwrap()).unwrap();
@@ -243,6 +244,7 @@ fn crossing_with_equipment(name: &str, equipment: bool) -> Crossing {
     let (destination, _, _) = sessionless(&format!("{name}-destination"));
     if equipment {
         super::super::item_equip::configure(&destination);
+        destination.assert_sql("UPDATE game_spell SET category = 30, category_cooldown_ms = 60000 WHERE spell_id = 5090901");
     }
     destination.assert_call(
         "debug_start_virtual_clock",
@@ -293,7 +295,7 @@ fn equip_auras_rebuild_once_after_native_handoff_and_world_port() {
     assert!(!c.cooldowns.is_empty());
     assert_eq!(
         c.destination.query_rows(&format!(
-            "SELECT spell_id,ready_at FROM game_spell_cd WHERE caster_guid = {}",
+            "SELECT spell_id,ready_at,category,category_ready_micros FROM game_spell_cd WHERE caster_guid = {}",
             c.guid
         )),
         c.cooldowns
@@ -307,6 +309,26 @@ fn equip_auras_rebuild_once_after_native_handoff_and_world_port() {
         ))
         .is_empty());
     assert!(!c.arrival.iter().any(|(opcode, _)| *opcode == 0xb0));
+    let initial = &c
+        .arrival
+        .iter()
+        .find(|(opcode, _)| *opcode == 0x12a)
+        .unwrap()
+        .1;
+    let known = usize::from(u16::from_le_bytes(initial[1..3].try_into().unwrap()));
+    let start = 3 + 4 * known;
+    let count = usize::from(u16::from_le_bytes(
+        initial[start..start + 2].try_into().unwrap(),
+    ));
+    let cooldown = initial[start + 2..]
+        .chunks_exact(14)
+        .take(count)
+        .find(|row| row[0..2] == (5090901u32 as u16).to_le_bytes())
+        .unwrap();
+    assert_eq!(&cooldown[2..4], &[0, 0]);
+    assert_eq!(&cooldown[4..6], &30u16.to_le_bytes());
+    assert_eq!(&cooldown[6..10], &30000u32.to_le_bytes());
+    assert_eq!(&cooldown[10..14], &60000u32.to_le_bytes());
     assert!(!c
         .destination
         .call(

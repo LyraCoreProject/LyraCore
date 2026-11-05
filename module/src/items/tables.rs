@@ -128,6 +128,16 @@ pub struct ItemTemplate {
     pub spellppmrate_4: f32,
     #[default(0.0f32)]
     pub spellppmrate_5: f32,
+    #[default(0u32)]
+    pub spellcategory_1: u32,
+    #[default(0u32)]
+    pub spellcategory_2: u32,
+    #[default(0u32)]
+    pub spellcategory_3: u32,
+    #[default(0u32)]
+    pub spellcategory_4: u32,
+    #[default(0u32)]
+    pub spellcategory_5: u32,
 }
 
 #[table(accessor = game_item_instance, public, index(accessor = by_owner_guid, btree(columns = [owner_guid])))]

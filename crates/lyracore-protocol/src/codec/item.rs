@@ -63,6 +63,7 @@ pub struct ItemTemplateView {
     pub spelltrigger_4: u8,
     pub spellid_5: u32,
     pub spelltrigger_5: u8,
+    pub spell_categories: [u32; 5],
     pub required_skill: u32,
     pub required_skill_rank: u32,
     pub required_reputation_faction: u32,
@@ -222,6 +223,9 @@ pub fn build_item_query_response(
     spells[2] = spell_slot(t.spellid_3, t.spelltrigger_3);
     spells[3] = spell_slot(t.spellid_4, t.spelltrigger_4);
     spells[4] = spell_slot(t.spellid_5, t.spelltrigger_5);
+    for (spell, category) in spells.iter_mut().zip(t.spell_categories) {
+        spell.spell_category = category;
+    }
     SMSG_ITEM_QUERY_SINGLE_RESPONSE {
         item: t.entry,
         found: Some(SMSG_ITEM_QUERY_SINGLE_RESPONSE_found {

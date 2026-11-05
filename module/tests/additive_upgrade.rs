@@ -35,9 +35,11 @@ fn populated_old_module_upgrades_without_clearing() {
         "single_target_key",
         "form_mask",
         "form_exclude",
-        "attributes_ex2",
+        "attributes_ex_2",
         "visual_id",
         "duration_index",
+        "category",
+        "category_cooldown_ms",
     ] {
         assert!(
             !spell_before[0].contains_key(column),
@@ -60,9 +62,11 @@ fn populated_old_module_upgrades_without_clearing() {
         "single_target_key",
         "form_mask",
         "form_exclude",
-        "attributes_ex2",
+        "attributes_ex_2",
         "visual_id",
         "duration_index",
+        "category",
+        "category_cooldown_ms",
     ] {
         assert_eq!(
             spell_after[0].remove(column).as_deref(),

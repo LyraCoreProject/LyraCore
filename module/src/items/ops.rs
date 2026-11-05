@@ -9,10 +9,10 @@ use super::{next_item_guid, refuse, select_property};
 use crate::game_character;
 use crate::game_corpse_loot;
 use crate::game_gameobject;
+use crate::game_spell;
 use crate::game_spell_effect;
 use crate::game_start_item;
 use crate::game_world_entity;
-use crate::{game_spell, game_spell_cd};
 
 use super::inventory::{first_free_backpack_slot, first_free_bag_slot, is_carried_slot};
 use super::rules::{
@@ -562,14 +562,12 @@ pub(crate) fn apply_item_use_on(
                     & lyracore_shared::spell::taxonomy::SPELL_ATTR_RANGED_AUTO_REPEAT
                     == 0
         })
-        && ctx
-            .db
-            .game_spell_cd()
-            .by_caster()
-            .filter(player_guid)
-            .any(|cooldown| {
-                cooldown.spell_id == spell_id && cooldown.ready_at > crate::time::now(ctx)
-            })
+        && !super::equip::spell_ready(
+            ctx,
+            player_guid,
+            spell_id,
+            super::equip::use_category(&tmpl, spell_id),
+        )
     {
         return Err(ItemRefusal::SpellCooldown(spell_id));
     }
@@ -582,22 +580,12 @@ pub(crate) fn apply_item_use_on(
             crate::ItemInstance::delete(ctx, inst.guid);
         }
     }
-    let unit_guid = match target {
-        ItemUseTarget::Item(item_guid) => {
-            return crate::spell::begin_item_cast(
-                ctx,
-                player_guid,
-                spell_id,
-                player.level as u8,
-                item_guid,
-                false,
-            )
-            .map_err(|detail| refuse(ItemRefusal::NotRightNow, detail));
-        }
-        ItemUseTarget::User => player_guid,
-        ItemUseTarget::Unit(unit_guid) => unit_guid,
+    let (unit_guid, item_target) = match target {
+        ItemUseTarget::Item(item_guid) => (player_guid, Some(item_guid)),
+        ItemUseTarget::User => (player_guid, None),
+        ItemUseTarget::Unit(unit_guid) => (unit_guid, None),
     };
-    crate::spell::begin_cast(
+    crate::spell::begin_cast_with_admission(
         ctx,
         player_guid,
         spell_id,
@@ -605,7 +593,11 @@ pub(crate) fn apply_item_use_on(
         unit_guid,
         false,
         None,
+        item_target,
+        Some(super::equip::use_category(&tmpl, spell_id)),
+        crate::spell::CreatureSpellCasterAdmission::Living,
     )
+    .map(|_| ())
     .map_err(|detail| refuse(ItemRefusal::NotRightNow, detail))
 }
 

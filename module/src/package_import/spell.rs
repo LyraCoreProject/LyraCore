@@ -140,9 +140,11 @@ fn blank_spell(spell_id: u32) -> Spell {
         single_target_key: 0,
         form_mask: 0,
         form_exclude: 0,
-        attributes_ex2: 0,
+        attributes_ex_2: 0,
         visual_id: 0,
         duration_index: 0,
+        category: 0,
+        category_cooldown_ms: 0,
     }
 }
 
@@ -199,9 +201,11 @@ fn apply_spell_field(spell: &mut Spell, field: &str, value: &FieldValue) -> Resu
         "single_target_key" => spell.single_target_key = as_u64(field, value)?,
         "form_mask" => spell.form_mask = as_u32(field, value)?,
         "form_exclude" => spell.form_exclude = as_u32(field, value)?,
-        "attributes_ex2" => spell.attributes_ex2 = as_u32(field, value)?,
+        "attributes_ex_2" => spell.attributes_ex_2 = as_u32(field, value)?,
         "visual_id" => spell.visual_id = as_u32(field, value)?,
         "duration_index" => spell.duration_index = as_u32(field, value)?,
+        "category" => spell.category = as_u32(field, value)?,
+        "category_cooldown_ms" => spell.category_cooldown_ms = as_u32(field, value)?,
 
         "custom_flags" => spell.custom_flags = as_u32(field, value)?,
         "min_target_level" => spell.min_target_level = as_u32(field, value)?,

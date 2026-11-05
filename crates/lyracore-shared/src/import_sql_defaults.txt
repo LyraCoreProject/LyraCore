@@ -15,6 +15,15 @@ game_npc_vendor restock_seconds 0
 game_npc_vendor stock_flags 0
 game_spell form_mask 0
 game_spell form_exclude 0
-game_spell attributes_ex2 0
+game_spell attributes_ex_2 0
 game_spell visual_id 0
 game_spell duration_index 0
+game_spell category 0
+game_spell category_cooldown_ms 0
+game_item_template spellcategory_1 0
+game_item_template spellcategory_2 0
+game_item_template spellcategory_3 0
+game_item_template spellcategory_4 0
+game_item_template spellcategory_5 0
+game_spell_cd category 0
+game_spell_cd category_ready_micros 0

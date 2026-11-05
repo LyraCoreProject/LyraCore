@@ -132,7 +132,10 @@ pub(super) fn enter_character(
         crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1_000_000,
     )
     .map_err(|error| error.to_string())?;
-    for message in messages {
+    for mut message in messages {
+        if let ServerOpcodeMessage::SMSG_INITIAL_SPELLS(book) = &mut message {
+            book.cooldowns = super::book::cooldowns(ctx, guid);
+        }
         super::send(ctx, connection.connection_id, message, false)?;
     }
     for item in &items {

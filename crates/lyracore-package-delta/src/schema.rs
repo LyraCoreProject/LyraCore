@@ -304,9 +304,11 @@ impl Table {
                     | "single_target_key"
                     | "form_mask"
                     | "form_exclude"
-                    | "attributes_ex2"
+                    | "attributes_ex_2"
                     | "visual_id"
                     | "duration_index"
+                    | "category"
+                    | "category_cooldown_ms"
             ) | (Self::SpellEffect, "bonus_coefficient")
         )
     }
@@ -366,9 +368,11 @@ const SPELL_COLUMNS: &[Column] = &[
     column("single_target_key", FieldType::U64),
     column("form_mask", FieldType::U32),
     column("form_exclude", FieldType::U32),
-    column("attributes_ex2", FieldType::U32),
+    column("attributes_ex_2", FieldType::U32),
     column("visual_id", FieldType::U32),
     column("duration_index", FieldType::U32),
+    column("category", FieldType::U32),
+    column("category_cooldown_ms", FieldType::U32),
 ];
 
 const SPELL_EFFECT_COLUMNS: &[Column] = &[

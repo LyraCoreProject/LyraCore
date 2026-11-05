@@ -61,11 +61,15 @@ pub struct Spell {
     #[default(0u32)]
     pub form_exclude: u32,
     #[default(0u32)]
-    pub attributes_ex2: u32,
+    pub attributes_ex_2: u32,
     #[default(0u32)]
     pub visual_id: u32,
     #[default(0u32)]
     pub duration_index: u32,
+    #[default(0u32)]
+    pub category: u32,
+    #[default(0u32)]
+    pub category_cooldown_ms: u32,
 }
 
 impl Spell {
@@ -94,7 +98,7 @@ impl Spell {
             self.attributes & SPELL_ATTR_NOT_SHAPESHIFT == 0 && self.form_mask == 0
         } else {
             self.form_mask == 0
-                || self.attributes_ex2 & SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED != 0
+                || self.attributes_ex_2 & SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED != 0
         }
     }
 }
@@ -232,7 +236,36 @@ struct ItemAura {
     item_guid: u64,
 }
 
+#[table(accessor = game_item_aura_expiry, scheduled(expire_item_aura))]
+pub struct ItemAuraExpiry {
+    #[primary_key]
+    pub aura_id: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
+#[spacetimedb::reducer]
+pub(crate) fn expire_item_aura(ctx: &ReducerContext, expiry: ItemAuraExpiry) {
+    if !crate::time::scheduler_authorized(ctx) {
+        return;
+    }
+    if let Some(aura) = ctx.db.game_aura().id().find(expiry.aura_id) {
+        if aura.expires_at <= crate::time::now(ctx) {
+            super::shed_auras(ctx, aura.target_guid, vec![aura]);
+        }
+    }
+}
+
 impl Aura {
+    fn arm_item_expiry(&self, ctx: &ReducerContext) {
+        ctx.db.game_item_aura_expiry().aura_id().delete(self.id);
+        if self.item_guid(ctx) != 0 && self.expires_at.to_micros_since_unix_epoch() != i64::MAX {
+            ctx.db.game_item_aura_expiry().insert(ItemAuraExpiry {
+                aura_id: self.id,
+                scheduled_at: crate::time::schedule_time(ctx, self.expires_at),
+            });
+        }
+    }
+
     pub(crate) fn item_guid(&self, ctx: &ReducerContext) -> u64 {
         ctx.db
             .game_item_aura()
@@ -252,6 +285,7 @@ impl Aura {
                 aura_id: aura.id,
                 item_guid,
             });
+            aura.arm_item_expiry(ctx);
         }
         if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
             crate::aoi::refresh_entity(ctx, aura.target_guid);
@@ -264,6 +298,12 @@ impl Aura {
         let auras = ctx.db.game_aura();
         let previous = auras.id().find(self.id);
         let aura = auras.id().update(self);
+        if previous
+            .as_ref()
+            .is_some_and(|old| old.expires_at != aura.expires_at)
+        {
+            aura.arm_item_expiry(ctx);
+        }
         if previous
             .as_ref()
             .is_some_and(|old| old.eff_kind != aura.eff_kind)
@@ -279,6 +319,7 @@ impl Aura {
         let previous = auras.id().find(id);
         let removed = auras.id().delete(id);
         ctx.db.game_item_aura().aura_id().delete(id);
+        ctx.db.game_item_aura_expiry().aura_id().delete(id);
         if let Some(aura) = previous {
             if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
                 crate::aoi::refresh_entity(ctx, aura.target_guid);
@@ -518,6 +559,10 @@ pub struct SpellCd {
     pub caster_guid: u64,
     pub spell_id: u32,
     pub ready_at: Timestamp,
+    #[default(0u32)]
+    pub category: u32,
+    #[default(0i64)]
+    pub category_ready_micros: i64,
 }
 
 crate::character_owned!(delete, fn sweep_delete_game_spell_cd(ctx, character_guid) {
@@ -657,6 +702,8 @@ pub struct PendingCast {
     // Zero is no item target; item guids start above zero.
     #[default(0u64)]
     pub item_target_guid: u64,
+    #[default(None::<u32>)]
+    pub cooldown_category: Option<u32>,
 }
 
 #[table(accessor = game_pending_spell_impact, scheduled(fire_spell_impact))]

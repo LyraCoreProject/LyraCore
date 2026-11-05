@@ -91,7 +91,7 @@ mod tests {
     #[test]
     fn legacy_batches_preserve_quoted_delimiters_and_explicit_new_values() {
         let sql = "INSERT INTO game_spell (spell_id,name,custom_flags) VALUES (1,'a); ''b',8),(2,'c',16);\nINSERT INTO game_spell_effect (id,kind) VALUES (4,2);SELECT * FROM game_spell";
-        assert_eq!(insert_defaults(sql), "INSERT INTO game_spell (spell_id,name,custom_flags,min_target_level,single_target_key) VALUES (1,'a); ''b',8,0,0),(2,'c',16,0,0);\nINSERT INTO game_spell_effect (id,kind,bonus_coefficient) VALUES (4,2,-1.0);SELECT * FROM game_spell");
+        assert_eq!(insert_defaults(sql), "INSERT INTO game_spell (spell_id,name,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex_2,visual_id,duration_index,category,category_cooldown_ms) VALUES (1,'a); ''b',8,0,0,0,0,0,0,0,0,0),(2,'c',16,0,0,0,0,0,0,0,0,0);\nINSERT INTO game_spell_effect (id,kind,bonus_coefficient) VALUES (4,2,-1.0);SELECT * FROM game_spell");
         assert_eq!(insert_defaults(&insert_defaults(sql)), insert_defaults(sql));
     }
 

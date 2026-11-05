@@ -120,13 +120,17 @@ before enabling multiple hosts for existing leases.
 the association. Equipment changes reconcile these rows through `ItemInstance`; world entry,
 resurrection and form changes use the same reconciliation. Hidden passive effects use slot 255
 and do not consume a client Aura slot. The association and its derived Auras do not travel in
-Character Transfer. World entry rebuilds them from equipment. Spell cooldowns travel separately
-in `game_spell_cd` and keep their absolute deadlines.
+Character Transfer. Finite equip Auras use `game_item_aura_expiry` to expire at their deadline,
+independent of the general Aura sweep. World entry rebuilds them from equipment. Spell cooldowns
+travel separately in `game_spell_cd` and keep their absolute deadlines.
 
-`game_spell.form_mask`, `form_exclude`, `attributes_ex2`, `visual_id` and `duration_index` retain
-source fields needed by equip effects. Their typed zero defaults preserve old rows during an
-additive publish. See [equip spell migration](danger-zones.md#equip-spell-migration) before play
-resumes on an existing Realm.
+`game_spell.form_mask`, `form_exclude`, `attributes_ex_2`, `visual_id`, `duration_index`, `category`
+and `category_cooldown_ms` retain source fields needed by equip effects. The five
+`game_item_template.spellcategory_*` fields override category admission for an Item cast.
+`game_spell_cd.category` identifies the shared category owner; `category_ready_micros` keeps its
+absolute deadline. `game_pending_cast.cooldown_category` preserves an Item's override, including
+zero, through cast completion. Their typed defaults preserve old rows during an additive publish.
+See [equip spell migration](danger-zones.md#equip-spell-migration) before play resumes.
 
 Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully
 qualified `#[spacetimedb::table(...)]`; missing the second form undercounts.

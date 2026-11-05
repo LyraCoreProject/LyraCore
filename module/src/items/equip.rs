@@ -8,6 +8,39 @@ use crate::{
 const NO_EQUIP_COOLDOWN: u32 = 0x80;
 const SPELLMOD_COOLDOWN: i32 = 11;
 
+pub(crate) fn spell_ready(ctx: &ReducerContext, caster: u64, spell: u32, category: u32) -> bool {
+    let now = crate::time::now(ctx);
+    let micros = now.to_micros_since_unix_epoch();
+    !ctx.db
+        .game_spell_cd()
+        .by_caster()
+        .filter(caster)
+        .any(|cooldown| {
+            (cooldown.spell_id == spell
+                && (!crate::spell::is_ready_at(
+                    micros,
+                    cooldown.ready_at.to_micros_since_unix_epoch(),
+                ) || cooldown.category_ready_micros > micros))
+                || (category != 0
+                    && cooldown.category == category
+                    && cooldown.category_ready_micros > micros)
+        })
+}
+
+pub(super) fn use_category(item: &ItemTemplate, spell: u32) -> u32 {
+    spells(item)
+        .into_iter()
+        .zip([
+            item.spellcategory_1,
+            item.spellcategory_2,
+            item.spellcategory_3,
+            item.spellcategory_4,
+            item.spellcategory_5,
+        ])
+        .find(|((id, trigger), _)| *id == spell && *trigger == 0)
+        .map_or(0, |(_, category)| category)
+}
+
 pub(super) fn spells(item: &ItemTemplate) -> [(u32, u8); 5] {
     [
         (item.spellid_1, item.spelltrigger_1),
@@ -140,17 +173,38 @@ fn cooldown(ctx: &ReducerContext, item: &ItemInstance) {
         let Some(spell) = ctx.db.game_spell().spell_id().find(spell_id) else {
             continue;
         };
-        if !ctx
-            .db
-            .game_spell_cd()
-            .by_caster()
-            .filter(item.owner_guid)
-            .any(|cd| cd.spell_id == spell_id && cd.ready_at > crate::time::now(ctx))
-        {
+        if spell_ready(ctx, item.owner_guid, spell_id, 0) {
             let (flat, percent) =
                 crate::spell::spell_mod(ctx, item.owner_guid, SPELLMOD_COOLDOWN, &spell);
             let duration = crate::spell::apply_spell_mod(30_000, flat, percent);
-            crate::spell::start_spell_cooldown(ctx, item.owner_guid, spell_id, duration);
+            if duration != 0 || spell.category_cooldown_ms != 0 {
+                crate::spell::record_spell_cooldown(ctx, item.owner_guid, spell_id, duration);
+            }
+            if spell.category != 0 && spell.category_cooldown_ms != 0 {
+                let ready = crate::time::now(ctx)
+                    .to_micros_since_unix_epoch()
+                    .saturating_add(i64::from(spell.category_cooldown_ms) * 1000);
+                let cooldowns = ctx.db.game_spell_cd();
+                let row = cooldowns
+                    .by_caster()
+                    .filter(item.owner_guid)
+                    .find(|row| {
+                        row.category == spell.category
+                            && row.category_ready_micros
+                                > crate::time::now(ctx).to_micros_since_unix_epoch()
+                    })
+                    .or_else(|| {
+                        cooldowns
+                            .by_caster()
+                            .filter(item.owner_guid)
+                            .find(|row| row.spell_id == spell_id)
+                    });
+                if let Some(mut row) = row {
+                    row.category = spell.category;
+                    row.category_ready_micros = ready;
+                    cooldowns.id().update(row);
+                }
+            }
         }
         crate::native::item_equip_cooldown(ctx, item.owner_guid, item.guid, spell_id);
     }

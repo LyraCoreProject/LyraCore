@@ -909,6 +909,8 @@ fn push_spell_header_row(
         attributes_ex2: s.attributes_ex2,
         visual_id: s.visual_id,
         duration_index: s.duration,
+        category: s.category,
+        category_cooldown_ms: s.category_recovery_time,
     });
     if binding_summon_entry(
         spell_id,
@@ -1403,7 +1405,7 @@ fn assemble_spell_sql(
     push_insert(
         &mut stmts,
         "game_spell",
-        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex2,visual_id,duration_index",
+        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex2,visual_id,duration_index,category,category_cooldown_ms",
         &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
@@ -1626,7 +1628,7 @@ pub(crate) fn selected_world_plan(
             !s.starts_with("INSERT INTO game_spell (")
                 && !s.starts_with("INSERT INTO game_spell_effect (")
         });
-        push_insert(&mut stmts, "game_spell", "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex2,visual_id,duration_index", &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>());
+        push_insert(&mut stmts, "game_spell", "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex2,visual_id,duration_index,category,category_cooldown_ms", &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>());
         push_insert(&mut stmts, "game_spell_effect", "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient", &rows.effects.iter().chain(&rows.fishing).map(SpellEffectRow::sql_values).collect::<Vec<_>>());
     }
     Ok(crate::world_import::DumpPlan {
@@ -2403,12 +2405,15 @@ mod tests {
         dbc.spells[0].attributes_ex2 = 0x80000;
         dbc.spells[0].visual_id = 3580;
         dbc.spells[0].duration = 21;
+        dbc.spells[0].category = 30;
+        dbc.spells[0].category_recovery_time = 60000;
         let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
         let header = &rows.headers[0];
         assert_eq!((header.form_mask, header.form_exclude), (145, 671588450));
         assert_eq!(header.attributes_ex2, 0x80000);
         assert_eq!(header.visual_id, 3580);
         assert_eq!(header.duration_index, 21);
+        assert_eq!((header.category, header.category_cooldown_ms), (30, 60000));
     }
 
     #[test]

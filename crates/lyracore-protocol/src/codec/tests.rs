@@ -1811,6 +1811,18 @@ fn ring_of_fire_resistance() -> ItemTemplateView {
 }
 
 #[test]
+fn item_query_preserves_the_five_spell_category_overrides() {
+    let mut item = ring_of_fire_resistance();
+    item.spell_categories = [30, 94, 1141, 0, 1160];
+    let response = build_item_query_response(item.entry, Some(&item));
+    let found = response.found.unwrap();
+    assert_eq!(
+        found.spells.map(|spell| spell.spell_category),
+        [30, 94, 1141, 0, 1160]
+    );
+}
+
+#[test]
 fn item_query_response_carries_the_work_item_213_columns() {
     let t = ring_of_fire_resistance();
     let msg = build_item_query_response(t.entry, Some(&t));

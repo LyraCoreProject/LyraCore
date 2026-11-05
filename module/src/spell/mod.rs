@@ -18,6 +18,8 @@ pub(crate) mod source_behavior;
 pub(crate) mod spellbook;
 pub(crate) mod stacking;
 mod tables;
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) use tables::{expire_item_aura, game_item_aura_expiry};
 mod taxonomy;
 
 #[cfg(test)]
@@ -29,10 +31,10 @@ pub(crate) use cast::{
     apply_direct_heal, apply_effect, apply_item_auras, apply_spell_auras, aura_apply, begin_cast,
     begin_cast_with_admission, begin_item_cast, cast_triggered, charge_spell_cost,
     check_cast_start_gates, check_pending_cast_los, clear_dead_callback_cast_admission,
-    faction_target_violation, recipe_reagents, resolve_cast_at, resolve_cast_at_typed,
-    revive_amount, select_targets, start_creature_spell, start_spell_cooldown,
-    CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
-    ItemGrantOutcome,
+    faction_target_violation, recipe_reagents, record_spell_cooldown, resolve_cast_at,
+    resolve_cast_at_typed, revive_amount, select_targets, start_creature_spell,
+    start_spell_cooldown, CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode,
+    CreatureSpellTarget, ItemGrantOutcome,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use cast::{blink_forward, resolve_cast};

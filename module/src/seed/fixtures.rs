@@ -411,9 +411,11 @@ pub(crate) fn base_spell(spell_id: u32, name: &str) -> Spell {
         single_target_key: 0,
         form_mask: 0,
         form_exclude: 0,
-        attributes_ex2: 0,
+        attributes_ex_2: 0,
         visual_id: 0,
         duration_index: 0,
+        category: 0,
+        category_cooldown_ms: 0,
     }
 }
 
@@ -508,6 +510,11 @@ pub(crate) fn base_item(entry: u32, name: &str) -> ItemTemplate {
         spellppmrate_3: 0.0,
         spellppmrate_4: 0.0,
         spellppmrate_5: 0.0,
+        spellcategory_1: 0,
+        spellcategory_2: 0,
+        spellcategory_3: 0,
+        spellcategory_4: 0,
+        spellcategory_5: 0,
     }
 }
 

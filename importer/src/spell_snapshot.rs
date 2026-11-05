@@ -39,9 +39,11 @@ pub(crate) struct SpellHeaderRow {
     pub(crate) single_target_key: u64,
     pub(crate) form_mask: u32,
     pub(crate) form_exclude: u32,
-    pub(crate) attributes_ex2: u32,
+    pub(crate) attributes_ex_2: u32,
     pub(crate) visual_id: u32,
     pub(crate) duration_index: u32,
+    pub(crate) category: u32,
+    pub(crate) category_cooldown_ms: u32,
 }
 
 impl SpellHeaderRow {
@@ -77,9 +79,14 @@ impl SpellHeaderRow {
             ("single_target_key", FieldValue::U64(self.single_target_key)),
             ("form_mask", FieldValue::U32(self.form_mask)),
             ("form_exclude", FieldValue::U32(self.form_exclude)),
-            ("attributes_ex2", FieldValue::U32(self.attributes_ex2)),
+            ("attributes_ex_2", FieldValue::U32(self.attributes_ex_2)),
             ("visual_id", FieldValue::U32(self.visual_id)),
             ("duration_index", FieldValue::U32(self.duration_index)),
+            ("category", FieldValue::U32(self.category)),
+            (
+                "category_cooldown_ms",
+                FieldValue::U32(self.category_cooldown_ms),
+            ),
         ]
     }
 
@@ -333,9 +340,11 @@ mod tests {
             single_target_key: 0,
             form_mask: 0,
             form_exclude: 0,
-            attributes_ex2: 0,
+            attributes_ex_2: 0,
             visual_id: 0,
             duration_index: 0,
+            category: 0,
+            category_cooldown_ms: 0,
         }
     }
 
@@ -397,7 +406,7 @@ mod tests {
         assert!(sql.starts_with("(133,'Fireball',0,30,"), "{sql}");
         assert!(sql.contains(",18446744073709551615,"), "{sql}");
         assert!(
-            sql.ends_with(",true,0,0,3,18446744073709551615,0,0,0,8000,0,0,0,0,0,0,0,0)"),
+            sql.ends_with(",true,0,0,3,18446744073709551615,0,0,0,8000,0,0,0,0,0,0,0,0,0,0)"),
             "{sql}"
         );
     }
@@ -409,7 +418,9 @@ mod tests {
         spell.custom_flags = 64;
         spell.min_target_level = 12;
         spell.single_target_key = 99;
-        assert!(spell.sql_values().ends_with(",13000,64,12,99,0,0,0,0,0)"));
+        assert!(spell
+            .sql_values()
+            .ends_with(",13000,64,12,99,0,0,0,0,0,0,0)"));
 
         let mut effect = effect(133, 0);
         effect.points_per_combo = 3.5;

@@ -292,6 +292,13 @@ pub(super) fn item_template(t: crate::items::ItemTemplate) -> codec::ItemTemplat
         spelltrigger_4: t.spelltrigger_4,
         spellid_5: t.spellid_5,
         spelltrigger_5: t.spelltrigger_5,
+        spell_categories: [
+            t.spellcategory_1,
+            t.spellcategory_2,
+            t.spellcategory_3,
+            t.spellcategory_4,
+            t.spellcategory_5,
+        ],
         required_skill: t.required_skill,
         required_skill_rank: t.required_skill_rank,
         required_reputation_faction: t.required_reputation_faction,

@@ -12,6 +12,41 @@ use crate::{
     talent::game_character_talent,
 };
 
+pub(super) fn cooldowns(
+    ctx: &ReducerContext,
+    guid: u64,
+) -> Vec<lyracore_protocol::messages::vanilla::CooldownSpell> {
+    use crate::game_spell_cd;
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
+    ctx.db
+        .game_spell_cd()
+        .by_caster()
+        .filter(guid)
+        .filter_map(|row| {
+            let remaining = |deadline: i64| {
+                std::time::Duration::from_millis(
+                    (deadline.saturating_sub(now) / 1000).clamp(0, u32::MAX as i64) as u64,
+                )
+            };
+            let cooldown = remaining(row.ready_at.to_micros_since_unix_epoch());
+            let category_cooldown = remaining(row.category_ready_micros);
+            (!cooldown.is_zero() || !category_cooldown.is_zero()).then_some(
+                lyracore_protocol::messages::vanilla::CooldownSpell {
+                    spell_id: row.spell_id as u16,
+                    item_id: 0,
+                    spell_category: if category_cooldown.is_zero() {
+                        0
+                    } else {
+                        row.category as u16
+                    },
+                    cooldown,
+                    category_cooldown,
+                },
+            )
+        })
+        .collect()
+}
+
 pub(crate) fn talent_points(ctx: &ReducerContext, guid: u64, level: u32) {
     if !super::is_player(ctx, guid) {
         return;
