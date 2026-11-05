@@ -534,7 +534,9 @@ pub(super) fn merge_seed(commit: &str) -> Result<()> {
     }
     println!(
         "merge {commit}: {}",
-        serde_json::to_string_pretty(&comparison)?
+        serde_json::to_string_pretty(
+            &json!({"seed": format!("{seed:#018x}"), "counts": &counts, "comparison": &comparison})
+        )?
     );
     let mut held = Comparison {
         differences: vec![],

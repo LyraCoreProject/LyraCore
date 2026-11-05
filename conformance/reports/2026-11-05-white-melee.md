@@ -88,6 +88,10 @@ findings. The Feature Ledger retains them as `known_gaps`; this change does not 
   all seven independently decoded wire categories, conflicting/malformed packet rejection,
   attempted avoidance flags distinct from resolved outcomes, and a shifted comparator input.
   The shifted input transfers 1,000 hit samples to crit and is rejected at both levels.
+  A short TCP trace cannot claim a full roll sample, even by copying reference metadata.
+  Malformed count overflow was reproduced before its fix and now returns an error.
+- Release packet-witness strictness detects 28 mutations and excuses one change in stream
+  interleaving, with no unexplained survivor. These witness controls complement the rate controls.
 - A real scratch change added 200 basis points to `roll_swing_with_range` crit chance. The same
   delivered-packet collection added the following crit counts, with equal hit reductions and
   every other category unchanged:
@@ -112,14 +116,34 @@ signature after merge calls for revert, never rerunning until green.
 
 ## Reference check and remaining scope
 
-The short check recording is pending completion. Invalid fixture attempts produced no Golden
-Trace and supplied no statistical evidence. The recorder waits or exits busy when another audit
-owns the lock or ports; it never stops those containers.
+One completed vmangos recording retains exactly 2,000 own-attacker swings at each level, from
+sixteen Characters. Capture took **508.376 seconds (8m 28.376s)**; fixture setup took
+**379.130 seconds (6m 19.130s)**. Together these measured phases took 14m 47.506s, excluding
+container startup, Account reset and cleanup. No repeat recording was taken. The independent
+classifier and exact diagnostic check accepted both levels:
+
+| Reference target | Miss | Dodge | Parry | Block | Glancing | Crit | Hit |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 60 counts | 95 | 107 | 104 | 86 | 186 | 106 | 1316 |
+| 60 rates | 4.75% | 5.35% | 5.20% | 4.30% | 9.30% | 5.30% | 65.80% |
+| 63 counts | 148 | 132 | 288 | 122 | 754 | 40 | 516 |
+| 63 rates | 7.40% | 6.60% | 14.40% | 6.10% | 37.70% | 2.00% | 25.80% |
+
+This is a small diagnostic for a misread formula, not a precise estimate or a subtle-error test.
+Invalid fixture attempts, including one early 20-minute timeout, supplied no statistical evidence.
+Readiness checks found moving targets and a starting aura. The final context uses GM Island,
+neutral faction 7, idle movement, a pinned spawn home and cleared auras, followed by an unretained
+start/stop readiness swing per Character. Every counted sample uses the fixed context. The one
+completed valid sample was neither repeated nor selected from multiple completed samples.
+The recorder waits or exits busy when another audit owns the lock or ports; it never stops those
+containers. Its guard also removes spawned targets on setup failure.
 
 The first slice measures Tier 1 rolls. TCP audits explicitly report a missing roll sample rather
 than treating small start/stop witnesses as rate evidence. No stock build-5875 client was run.
 The future merge-SHA run cannot be executed before that merge exists. The harness PR must merge
 and receive its automatic release tag before the core smoke pin can name a published release.
+The current `.wire-harness-rev` is explicitly an unpublished review pin; replace its anticipated
+tag and branch commit with that tested release before merging core.
 
 The new tables, reducers and scheduler batching exist only under `conformance_test_fixture`.
 Production random draw count, order and modulo reduction remain unchanged. Existing schedule
