@@ -5297,6 +5297,275 @@
         }
       ],
       "data": []
+    },
+    {
+      "scenario": "white_melee_outcomes",
+      "behavior": "auto_attack",
+      "harness_revision": "67d1829607dd1ff82268e80d5dc134f796fcc3f4",
+      "scenario_sha256": "52c55709d94ea782d9d7c17122096b18fdbf81c74f9ac67ff8156ab7286a74b5",
+      "rule": [
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_60_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "block"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_60_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "crit"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_60_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "glancing"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_60_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "hit"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_60_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "block"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_60_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "crit"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_60_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "glancing"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_60_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "hit"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_63_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "block"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_63_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "crit"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_63_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "glancing"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_63_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "hit"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_63_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "miss"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_63_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "parry"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_63_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "block"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_63_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "crit"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_63_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "glancing"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_63_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "hit"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_63_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "miss"
+          ]
+        },
+        {
+          "rule": "white_melee_distribution",
+          "checkpoint": "level_63_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "swings"
+          },
+          "opcode": 330,
+          "field_path": [
+            "outcomes",
+            "parry"
+          ]
+        }
+      ],
+      "data": []
     }
   ]
 }
