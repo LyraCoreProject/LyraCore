@@ -16,12 +16,12 @@ use super::properties::{self, Violation};
 use super::transport::{MultiOperatorTransport, OperatorTransport};
 
 #[path = "../../../conformance/support/ratchet.rs"]
-mod ratchet;
+pub(super) mod ratchet;
 
 static REPORT: Mutex<()> = Mutex::new(());
 const VIRTUAL_START_MICROS: u64 = 1_800_000_000_000_000;
 
-fn harness_revision() -> Result<&'static str> {
+pub(super) fn harness_revision() -> Result<&'static str> {
     include_str!("../../../.wire-harness-rev")
         .lines()
         .filter(|line| !line.starts_with('#'))
@@ -39,7 +39,7 @@ fn git(arguments: &[&str]) -> Result<String> {
     Ok(String::from_utf8(output.stdout)?.trim().into())
 }
 
-fn update_result(
+pub(super) fn update_result(
     path: &Path,
     golden: &wire_client::trace::GoldenTrace,
     comparison: Option<&compare::Comparison>,
@@ -218,7 +218,7 @@ fn probe_door(shard: &Standalone, transport: &mut OperatorTransport) -> Result<(
     Ok(())
 }
 
-fn record_and_check(
+pub(super) fn record_and_check(
     id: &str,
     path: &Path,
     golden: &wire_client::trace::GoldenTrace,
@@ -578,4 +578,19 @@ fn quest_reward_matches_its_golden_trace() -> Result<()> {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn cast_and_interrupt_matches_its_golden_trace() -> Result<()> {
     run_scenario("cast_and_interrupt", seed_spell_world, None)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn white_melee_outcomes_matches_its_golden_trace() -> Result<()> {
+    super::rolls::public_seeds()
+}
+
+#[test]
+#[ignore = "runs once on main with the merge commit seed"]
+fn white_melee_outcomes_merge_seed() -> Result<()> {
+    let Some(commit) = std::env::var_os("LYRACORE_ROLL_MERGE_SHA") else {
+        return Ok(());
+    };
+    super::rolls::merge_seed(&commit.to_string_lossy())
 }

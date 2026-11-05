@@ -68,7 +68,12 @@ fn debug_reducers_build_does_not_export_conformance_entry() {
     assert!(!reducers
         .iter()
         .any(|reducer| reducer["source_name"] == "debug_native_project"));
-    for name in ["debug_start_virtual_clock", "debug_advance_virtual_clock"] {
+    for name in [
+        "debug_start_virtual_clock",
+        "debug_advance_virtual_clock",
+        "debug_prepare_roll_character",
+        "debug_advance_roll_batch",
+    ] {
         assert!(!reducers
             .iter()
             .any(|reducer| reducer["source_name"] == name));
@@ -83,6 +88,8 @@ fn debug_reducers_build_does_not_export_conformance_entry() {
         "game_native_conformance_cache",
         "game_native_conformance_create",
         "game_native_conformance_birth",
+        "game_conformance_swing_random",
+        "game_conformance_schedule_revision",
     ] {
         assert!(!schema_section(&schema, "Tables")
             .as_array()

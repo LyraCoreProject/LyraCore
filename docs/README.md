@@ -37,6 +37,6 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [agents/maintainer.md](./agents/maintainer.md) | Runbook | An agent works for a maintainer |
 | [agents/cross-repo-cli.md](./agents/cross-repo-cli.md) | How-to | A change spans this repository and `lyracore-cli` |
 | [adr/0005-1-12-conformance.md](./adr/0005-1-12-conformance.md) | Decision record | You change conformance scenarios, evidence or the Feature Ledger |
-| [adr/0007-statistical-roll-conformance.md](./adr/0007-statistical-roll-conformance.md) | Proposed decision | You design random-roll measurements or decide the blinded verifier policy |
+| [adr/0007-statistical-roll-conformance.md](./adr/0007-statistical-roll-conformance.md) | Decision record | You derive expected roll rates or change statistical conformance |
 | [adr/](./adr/) | Decision records | You want the reason behind a standing decision |
 | [verify-lyracore checks](../.claude/skills/verify-lyracore/checks.md) | Checklist | A change needs a check on a real 1.12.1 client |

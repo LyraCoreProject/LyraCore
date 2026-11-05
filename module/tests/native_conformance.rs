@@ -13,6 +13,8 @@ mod character_world;
 mod properties;
 #[path = "../../conformance/support/quest_world.rs"]
 mod quest_world;
+#[path = "conformance/rolls.rs"]
+mod rolls;
 #[path = "../../conformance/support/spell_world.rs"]
 mod spell_world;
 #[path = "conformance/taxi.rs"]

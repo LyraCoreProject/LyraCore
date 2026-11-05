@@ -66,7 +66,7 @@ pub fn debug_prepare_roll_character(
     character.agility = 100;
     character.health = 1_000_000_000;
     character.max_health = 1_000_000_000;
-    character.base_attack_time_ms = 2000;
+    character.base_attack_time_ms = 50;
     character.next_swing_spell = 0;
     character.update(ctx);
     target.level = target_level;
@@ -91,8 +91,5 @@ pub fn debug_advance_roll_batch(ctx: &ReducerContext, ticks: u32) -> Result<(), 
     if !(1..=4000).contains(&ticks) {
         return Err("roll batch needs 1 through 4000 scheduler ticks".into());
     }
-    for _ in 0..ticks {
-        crate::time::debug_advance_virtual_clock(ctx, 50_000)?;
-    }
-    Ok(())
+    crate::time::advance_virtual_clock(ctx, i64::from(ticks) * 50_000)
 }

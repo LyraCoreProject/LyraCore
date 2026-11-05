@@ -107,6 +107,23 @@ pub(crate) fn is_virtual(ctx: &ReducerContext) -> bool {
 }
 
 #[cfg(feature = "conformance_test_fixture")]
+#[table(accessor = game_conformance_schedule_revision)]
+pub struct ConformanceScheduleRevision {
+    #[primary_key]
+    pub id: u8,
+    pub revision: u64,
+}
+
+#[cfg(feature = "conformance_test_fixture")]
+fn schedule_revision(ctx: &ReducerContext) -> u64 {
+    ctx.db
+        .game_conformance_schedule_revision()
+        .id()
+        .find(0)
+        .map_or(0, |row| row.revision)
+}
+
+#[cfg(feature = "conformance_test_fixture")]
 fn park_at(ctx: &ReducerContext, due_micros: i64, interval_micros: i64) -> ScheduleAt {
     let arming = ctx.db.game_conformance_arming();
     let mut parked_micros = ctx
@@ -119,6 +136,17 @@ fn park_at(ctx: &ReducerContext, due_micros: i64, interval_micros: i64) -> Sched
         parked_micros = parked_micros
             .checked_add(1)
             .expect("virtual schedule parking overflows");
+    }
+    let revisions = ctx.db.game_conformance_schedule_revision();
+    let previous = revisions.id().find(0);
+    let row = ConformanceScheduleRevision {
+        id: 0,
+        revision: previous.as_ref().map_or(1, |row| row.revision + 1),
+    };
+    if previous.is_some() {
+        revisions.id().update(row);
+    } else {
+        revisions.insert(row);
     }
     arming.insert(ConformanceArming {
         parked_micros,
@@ -301,62 +329,13 @@ pub fn debug_start_virtual_clock(ctx: &ReducerContext, now_micros: i64) -> Resul
 pub fn debug_advance_virtual_clock(ctx: &ReducerContext, delta_micros: i64) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let clocks = ctx.db.game_conformance_clock();
-    let mut clock = clocks.id().find(0).ok_or("virtual clock is not running")?;
+    let clock = clocks.id().find(0).ok_or("virtual clock is not running")?;
     if !(1..=50_000).contains(&delta_micros)
         || clock.elapsed_micros % 50_000 + delta_micros > 50_000
     {
         return Err("virtual clock must advance to the next 50 ms boundary".into());
     }
-    let target = clock
-        .now_micros
-        .checked_add(delta_micros)
-        .ok_or("virtual clock overflows")?;
-    let elapsed = clock
-        .elapsed_micros
-        .checked_add(delta_micros)
-        .ok_or("virtual clock overflows")?;
-    capture_schedules(ctx, clock.now_micros, false)?;
-    let mut fired = 0;
-    while let Some(record) = ctx
-        .db
-        .game_conformance_schedule()
-        .iter()
-        .filter(|record| record.due_micros <= target)
-        // Equal deadlines use table kind then row id; live scheduling does not promise this order.
-        .min_by_key(|record| (record.due_micros, record.key))
-    {
-        fired += 1;
-        if fired > 4096 {
-            return Err("virtual schedule fired more than 4096 times in one advance".into());
-        }
-        let fired_at = record.due_micros.max(clock.now_micros);
-        clock.now_micros = fired_at;
-        clock.elapsed_micros = elapsed - (target - fired_at);
-        clocks.id().update(clock.clone());
-        let schedules = ctx.db.game_conformance_schedule();
-        if record.interval_micros > 0 {
-            schedules.key().update(ConformanceSchedule {
-                due_micros: record
-                    .due_micros
-                    .checked_add(record.interval_micros)
-                    .ok_or("virtual schedule overflows")?,
-                ..record.clone()
-            });
-        } else {
-            schedules.key().delete(record.key);
-        }
-        fire_schedule(
-            ctx,
-            record.key,
-            record.interval_micros,
-            record.parked_micros,
-        )?;
-        capture_schedules(ctx, clock.now_micros, false)?;
-    }
-    clock.now_micros = target;
-    clock.elapsed_micros = elapsed;
-    clocks.id().update(clock);
-    Ok(())
+    advance_virtual_clock(ctx, delta_micros)
 }
 
 #[cfg(feature = "conformance_test_fixture")]
@@ -389,5 +368,80 @@ pub fn debug_stage_virtual_spell_impact(
             after_resist: damage,
             triggered: false,
         });
+    Ok(())
+}
+
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) fn advance_virtual_clock(ctx: &ReducerContext, delta: i64) -> Result<(), String> {
+    use std::cmp::Reverse;
+    use std::collections::BinaryHeap;
+
+    let clocks = ctx.db.game_conformance_clock();
+    let mut clock = clocks.id().find(0).ok_or("virtual clock is not running")?;
+    let target = clock
+        .now_micros
+        .checked_add(delta)
+        .ok_or("virtual clock overflows")?;
+    let elapsed = clock
+        .elapsed_micros
+        .checked_add(delta)
+        .ok_or("virtual clock overflows")?;
+    capture_schedules(ctx, clock.now_micros, false)?;
+    let schedules = ctx.db.game_conformance_schedule();
+    let calendar = || {
+        schedules
+            .iter()
+            .map(|row| Reverse((row.due_micros, row.key)))
+            .collect::<BinaryHeap<_>>()
+    };
+    let mut queue = calendar();
+    let start = clock.now_micros;
+    let mut boundary = 0;
+    let mut fired = 0;
+    while let Some(Reverse((due, key))) = queue.pop() {
+        if due > target {
+            break;
+        }
+        let Some(record) = schedules.key().find(key) else {
+            continue;
+        };
+        if record.due_micros != due {
+            continue;
+        }
+        let next_boundary = (due - start - 1).max(0) / 50_000;
+        if next_boundary != boundary {
+            boundary = next_boundary;
+            fired = 0;
+        }
+        fired += 1;
+        if fired > 4096 {
+            return Err("roll batch schedule limit exceeded".into());
+        }
+        let fired_at = due.max(clock.now_micros);
+        clock.now_micros = fired_at;
+        clock.elapsed_micros = elapsed - (target - fired_at);
+        clocks.id().update(clock.clone());
+        if record.interval_micros > 0 {
+            schedules.key().update(ConformanceSchedule {
+                due_micros: due
+                    .checked_add(record.interval_micros)
+                    .ok_or("virtual schedule overflows")?,
+                ..record.clone()
+            });
+        } else {
+            schedules.key().delete(key);
+        }
+        let revision = schedule_revision(ctx);
+        fire_schedule(ctx, key, record.interval_micros, record.parked_micros)?;
+        if schedule_revision(ctx) != revision {
+            capture_schedules(ctx, clock.now_micros, false)?;
+            queue = calendar();
+        } else if let Some(next) = schedules.key().find(key) {
+            queue.push(Reverse((next.due_micros, key)));
+        }
+    }
+    clock.now_micros = target;
+    clock.elapsed_micros = elapsed;
+    clocks.id().update(clock);
     Ok(())
 }

@@ -19,7 +19,7 @@ reported as ordinary rule signatures and `known_gaps`; a different implementer h
 
 Use a level-60 human warrior (race 1, class 1), standing, with agility 100, defense 300 and
 unarmed skill 162 at 300/300. Every equipment slot is empty, including both hands. Unarmed attacks
-are main-hand white melee, at their ordinary 2000 ms cadence. No talents, buffs, auras, procs,
+are main-hand white melee; the Reference Server retains its ordinary 2000 ms cadence. No talents, buffs, auras, procs,
 queued strikes, extra attacks or hit/crit bonuses. No GM attack-speed changes.
 
 Targets are spawned creature entry 38, non-pet humanoids, standing, not stunned, casting or
@@ -27,10 +27,14 @@ evading, with no no-parry/no-block/no-defense flags, no auras and normal rank. S
 and 63: defense and maximum skill are 300 and 315. Each Character has a separate target, two
 yards directly ahead, facing the Character. Both health pools are 1,000,000,000; no deaths or
 gear breakage can change the context. Reference positions start on map 0 at
-(-8949.95, -132.493, 83.5312), Character orientation 0; parallel pairs are offset on the y axis.
+(-8949.95, -132.493, 83.5312), Character orientation 0; reference pairs share these positions. Tier 1 offsets pairs by 200 yards on the y axis
+to avoid observer packet cost; their relative position and facing stay identical.
 Reject missing packets, changed skills, levels, stats, position, facing or attack context.
 
 Source links below use one-based lines at the pinned commit:
+
+- [SpellCaster.h:284–286](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.h):
+  maximum skill and creature melee skill are level multiplied by five.
 
 - [SpellCaster.cpp:116–158](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
   empty main hand selects unarmed skill; creatures use their melee skill for defense.
@@ -90,8 +94,14 @@ damage application and delivered `SMSG_ATTACKERSTATEUPDATE`. The harness's indep
 classifies the delivered bytes. `debug_compute_swing` never rolls or applies a swing and cannot
 supply evidence. Direct calls to a calculation or Module-produced counts cannot supply it either.
 
-Collect 50,000 swings per target level per seed. Batch ordinary scheduler advances in bounded
-transactions and drain delivered packets between batches. Preserve schedule order, admission,
+Collect 50,000 swings per target level per seed. Tier 1 pins the fixture-only attack interval to
+50 ms so each ordinary 100 ms melee tick has a ready swing. This changes scheduling input only; the
+pinned `RollMeleeOutcomeAgainst` formula never reads attack interval. The Reference Server retains
+ordinary 2000 ms attacks. No haste aura or GM attack-speed command is used. This slice checks
+roll rates, not attack cadence. Batch ordinary scheduler advances in bounded
+transactions and drain delivered packets between batches. Equal deadlines retain the existing
+virtual-clock order of table kind then row id; live scheduling does not promise this order.
+Preserve schedule order, admission,
 range and facing checks. Check attack start, damage and stop with small witnesses. Missing or
 malformed samples fail setup. The warm budget for both public seeds together is 30 seconds,
 excluding build/publication; report setup and warm collection separately. Do not reduce the sample
@@ -100,7 +110,9 @@ or substitute calculations to meet it.
 The virtual clock does not seed `ReducerContext::random`. Add a narrow Seam at
 `roll_swing_with_range`'s outcome, weapon and block draws, gated by `conformance_test_fixture`.
 Use durable SplitMix64 state per attacking Character, with specified stream ids and draw order:
-outcome, weapon, block, each the low 32 bits of the next SplitMix64 output. Keep production draws
+outcome, weapon, block, each the low 32 bits of the next SplitMix64 output. Stream ids are
+0..15, eight per level, starting from seed XOR (stream * 0xd1b54a32d192ed03), with wrapping
+64-bit multiplication. Each of two fresh Shards per level holds four Characters. Keep production draws
 and modulo range reduction unchanged. Seed setup is Operator-only and resets in each disposable
 Shard. Exclude other random effects that can change this context.
 
@@ -112,7 +124,7 @@ different seed, comparator sensitivity and actual gameplay-rate sensitivity thro
 PRs run public fixed seeds `0x4c79726100000001` and `0x4c79726100000002`. Every push to `main`
 runs a third seed derived deterministically from the merge commit SHA, which does not exist before
 merge. It runs in the durable job that already runs tier 1. No secret or isolated controller is
-needed. A failure is found just after merge and handled by revert. Never retry until green.
+needed. Interpret the first 16 hexadecimal SHA digits as a big-endian u64 seed. A failure is found just after merge and handled by revert. Never retry until green.
 A fixed seed, fixture and build give a fixed verdict: there is no runtime sampling flake.
 
 Use an exact equal-tail binomial test for each category against its fixed probability:
@@ -137,7 +149,9 @@ Emit ordinary `DifferenceClass::Rule` records: rule `white_melee_distribution`, 
 level and seed slot, broadcast stream `swings`, opcode `0x014A`, field `["outcomes", category]`.
 The ordinary signature baseline and ratchet retain failures. Counts, rates, p-values and shifts
 remain in the numerical report. A held signature does not bound further worsening of that rate;
-report that limitation. Record observed gameplay differences as `known_gaps`, without fixing them.
+report that limitation. The merge run maps its category signatures to both public seed slots
+before the same baseline check, so the held gaps apply without a seed-specific baseline.
+Record observed gameplay differences as `known_gaps`, without fixing them.
 
 Run strictness in release builds. A synthetic passing control has each expected basis-point
 interval multiplied by five to total 50,000. Transfer 1,000 hit samples to crit; require crit
@@ -147,6 +161,7 @@ restore the source. Do not change gameplay in this PR.
 
 Spell misses, resists, procs, damage distributions, glancing damage penalties, offhand/rear
 attacks, other levels/skills and PvP remain outside this slice. The counts do not establish all
-melee parity. Keep PRs draft while iterating, then ready; the orchestrator reviews and merges.
+melee parity. TCP audits currently report an explicit missing-roll-sample signature; their
+small packet witnesses do not claim to measure these rates. Keep PRs draft while iterating, then ready; the orchestrator reviews and merges.
 Do not merge or tag. Use only targeted checks and this scenario, SpacetimeDB 2.14.0 in task scratch,
 and leave the default CLI unchanged.

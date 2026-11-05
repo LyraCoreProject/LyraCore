@@ -16,10 +16,6 @@ on:
       - ".claude/**"
   push:
     branches: [main]
-    paths-ignore:
-      - "**/*.md"
-      - "docs/**"
-      - ".claude/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
@@ -77,6 +73,12 @@ jobs:
           echo "targets: ${targets[*]}"
           cargo test -p lyracore-module "${args[@]}" -- --ignored --test-threads=4 --skip deadmines --skip populated_old_module_upgrades_without_clearing
 
+      - name: Check white melee with the merge commit seed
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.durable-suite.outputs.conformance == 'true' }}
+        env:
+          LYRACORE_ROLL_MERGE_SHA: ${{ github.sha }}
+        run: cargo test -p lyracore-module --test native_conformance tier1::white_melee_outcomes_merge_seed -- --ignored --exact --test-threads=1 --nocapture
+
       - name: Produce the conformance scoreboard
         if: ${{ !cancelled() && github.event_name == 'push' && steps.durable-suite.outputs.conformance == 'true' }}
         run: |
@@ -123,10 +125,12 @@ jobs:
           LYRACORE_TEST_BASELINE_WASM: ${{ env.UPGRADE_BASELINE_WASM }}
         run: cargo test -p lyracore-module --test additive_upgrade populated_old_module_upgrades_without_clearing -- --ignored --exact --test-threads=1
 
-      - name: Upload the standalone logs
+      - name: Upload the standalone logs and tier 1 evidence
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: standalone-logs-${{ matrix.shard }}
-          path: /tmp/lyracore-standalone-logs
+          path: |
+            /tmp/lyracore-standalone-logs
+            .lyracore/conformance/tier1.json
           if-no-files-found: ignore
