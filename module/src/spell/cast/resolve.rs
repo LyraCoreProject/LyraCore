@@ -593,7 +593,7 @@ fn cast_triggered_with_origin(
         .guid()
         .find(caster_guid)
         .ok_or_else(|| format!("caster {caster_guid} not in world"))?;
-    check_faction_target(ctx, &caster, &effects, target_guid, spell_id).map_err(String::from)?;
+    check_unit_target(ctx, &caster, &effects, target_guid, spell_id).map_err(String::from)?;
     run_spell_effects(
         ctx,
         &hdr,
@@ -820,13 +820,27 @@ fn check_cast_gates_with_admission(
     check_cast_gate_suffix(ctx, caster, hdr, effects, target_guid, spell_id, level)
 }
 
-fn check_faction_target(
+fn check_unit_target(
     ctx: &ReducerContext,
     caster: &WorldEntity,
     effects: &[SpellEffect],
     target_guid: u64,
     spell_id: u32,
 ) -> Result<(), CastGateRefusal> {
+    if target_guid != caster.guid
+        && effects.iter().any(|effect| targets_unit(effect.target))
+        && ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(target_guid)
+            .is_some_and(|target| crate::taxi::is_flying(&target))
+    {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::BadTargets,
+            "a taxi passenger cannot be a spell target",
+        ));
+    }
     // Target kinds determine faction eligibility; is_negative only describes aura polarity.
     if target_guid != caster.guid {
         // Inert DBC markers can name ally targets even when the spell is hostile.
@@ -955,7 +969,7 @@ fn check_cast_gate_prefix(
     Ok(())
 }
 
-fn target_kind_requires_los(target: u8) -> bool {
+fn targets_unit(target: u8) -> bool {
     matches!(
         target,
         T_TARGET_ENEMY | T_TARGET_ALLY | T_TARGET_ANY | T_AREA_ENEMY | T_AREA_ALLY | T_CHAIN_ENEMY
@@ -971,9 +985,7 @@ fn targeted_los_applies(
     caster_is_player
         && target_guid != 0
         && target_guid != caster_guid
-        && effects
-            .iter()
-            .any(|effect| target_kind_requires_los(effect.target))
+        && effects.iter().any(|effect| targets_unit(effect.target))
 }
 
 fn check_targeted_los(
@@ -1242,7 +1254,7 @@ fn check_cast_gate_suffix(
         crate::spell::source_behavior::check_target_level(hdr.min_target_level, caster.level)?;
     }
 
-    check_faction_target(ctx, caster, effects, target_guid, spell_id)?;
+    check_unit_target(ctx, caster, effects, target_guid, spell_id)?;
 
     if let Some(e) = effects.iter().find(|e| {
         e.kind & KIND_AURA_BIT != 0 && e.p1 != 0 && has_aura(ctx, target_guid, e.p1 as u32)
@@ -1698,10 +1710,10 @@ mod companion_los_tests {
             T_AREA_ALLY,
             T_CHAIN_ENEMY,
         ] {
-            assert!(target_kind_requires_los(target));
+            assert!(targets_unit(target));
         }
-        assert!(!target_kind_requires_los(T_SELF));
-        assert!(!target_kind_requires_los(T_SCRIPTED));
+        assert!(!targets_unit(T_SELF));
+        assert!(!targets_unit(T_SCRIPTED));
     }
 }
 

@@ -218,6 +218,7 @@ pub(crate) struct AggroTarget {
     pub instance_id: u64,
     pub dead: bool,
     pub godmode: bool,
+    pub taxi_flying: bool,
     pub stealthed: bool,
 }
 
@@ -756,7 +757,7 @@ fn aggro<W: EngageSink>(w: &mut W, active: &HashSet<u64>) -> (Vec<Called>, usize
     let targets: Vec<AggroTarget> = w
         .players()
         .into_iter()
-        .filter(|p| is_aggro_candidate(p.dead, p.godmode))
+        .filter(|p| is_aggro_candidate(p.dead, p.godmode, p.taxi_flying))
         .collect();
     if targets.is_empty() {
         return (Vec::new(), 0);

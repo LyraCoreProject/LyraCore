@@ -67,8 +67,8 @@ pub(crate) fn finite_point(x: f32, y: f32, z: f32) -> bool {
     x.is_finite() && y.is_finite() && z.is_finite()
 }
 
-pub(crate) fn is_aggro_candidate(dead: bool, godmode: bool) -> bool {
-    !dead && !godmode
+pub(crate) fn is_aggro_candidate(dead: bool, godmode: bool, taxi_flying: bool) -> bool {
+    !dead && !godmode && !taxi_flying
 }
 
 pub(crate) fn aggro_radius(
@@ -734,14 +734,18 @@ mod tests {
     }
 
     #[test]
-    fn godmode_and_dead_players_are_not_aggro_candidates() {
+    fn dead_godmode_and_flying_characters_are_not_aggro_candidates() {
         assert!(
-            is_aggro_candidate(false, false),
+            is_aggro_candidate(false, false, false),
             "an ordinary live player IS a candidate"
         );
-        assert!(!is_aggro_candidate(true, false), "a corpse is not");
-        assert!(!is_aggro_candidate(false, true), "a godmoded GM is not");
-        assert!(!is_aggro_candidate(true, true));
+        assert!(!is_aggro_candidate(true, false, false), "a corpse is not");
+        assert!(
+            !is_aggro_candidate(false, true, false),
+            "a godmoded GM is not"
+        );
+        assert!(!is_aggro_candidate(true, true, false));
+        assert!(!is_aggro_candidate(false, false, true));
     }
 
     #[test]

@@ -133,7 +133,20 @@ pub(crate) fn select_targets(
     let one = if explicit == 0 { caster_guid } else { explicit };
     match e.target {
         T_SELF => vec![caster_guid],
-        T_TARGET_ENEMY | T_TARGET_ALLY | T_TARGET_ANY => vec![one],
+        T_TARGET_ENEMY | T_TARGET_ALLY | T_TARGET_ANY => {
+            if one != caster_guid
+                && ctx
+                    .db
+                    .game_world_entity()
+                    .guid()
+                    .find(one)
+                    .is_some_and(|target| crate::taxi::is_flying(&target))
+            {
+                Vec::new()
+            } else {
+                vec![one]
+            }
+        }
         T_AREA_ENEMY | T_AREA_ALLY | T_CHAIN_ENEMY => {
             let entities = ctx.db.game_world_entity();
             let Some(caster) = entities.guid().find(caster_guid) else {
