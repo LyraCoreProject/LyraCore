@@ -166,15 +166,27 @@ def compatible_schema(previous, current):
     return True
 
 
-def snapshot_origin(path, schema):
-    previous = json.loads((path / 'state.json').read_text()).get('module_schema')
+def snapshot_origin(path, schema, *, strict_world=False):
+    state = json.loads((path / 'state.json').read_text())
+    previous = state.get('module_schema')
+    if 'gameplay_manifest' not in state:
+        return None
     if previous == schema:
-        return 'snapshot'
-    if previous is not None and compatible_schema(previous, schema):
-        return 'upgraded_snapshot'
-    print('[audit] snapshot schema is incompatible or missing; cold import required',
-          file=sys.stderr, flush=True)
-    return None
+        origin = 'snapshot'
+    elif previous is not None and compatible_schema(previous, schema):
+        origin = 'upgraded_snapshot'
+    else:
+        print('[audit] snapshot schema is incompatible or missing; cold import required',
+              file=sys.stderr, flush=True)
+        return None
+    changed = snapshot_gameplay_changes(path)
+    if changed and strict_world:
+        print('[audit] strict world requires an import after Tier B changes: ' + ', '.join(changed),
+              file=sys.stderr, flush=True)
+        return None
+    if changed:
+        origin += '_gameplay_drift'
+    return origin
 
 
 def module_schema_hash():
@@ -205,21 +217,90 @@ def module_schema_hash():
 
 # Read README.md's import contract before extending the import or initialization call paths.
 IMPORT_CONTRACT = (
-    'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml',
-    'importer/src', 'importer/scripts', 'importer/manifests', 'importer/Cargo.toml',
-    'crates/lyracore-shared', 'crates/lyracore-package-delta', 'crates/lyracore-protocol',
-    'module/Cargo.toml', 'module/build.rs', 'module/src/lib.rs', 'module/src/debug',
-    'module/src/seed.rs', 'module/src/config.rs', 'module/src/operations.rs',
-    'module/src/package_import.rs', 'module/src/import_meta.rs',
-    'module/src/terrain.rs', 'module/src/nav.rs', 'module/src/vmap.rs', 'module/src/go_model.rs',
-    'module/src/go_collider.rs', 'module/src/region.rs', 'module/src/creatures',
-    'module/src/gameobject.rs', 'module/src/items',
-    'module/src/spell', 'module/src/action_bar.rs', 'module/src/xp.rs',
-    'module/src/talent.rs', 'module/src/weather.rs', 'module/src/skill.rs',
-    'module/src/helpers.rs', 'module/src/time.rs', 'module/src/instance.rs',
-    'module/src/world.rs', 'module/src/duel.rs', 'module/src/motion.rs', 'module/src/gw.rs',
-    'module/src/meeting_stone', 'module/src/quest.rs', 'module/src/loot',
-    'module/src/trainer.rs', 'module/src/auth.rs',
+    'Cargo.toml',
+    'Cargo.lock',
+    'rust-toolchain.toml',
+    'importer/src',
+    'importer/scripts',
+    'importer/manifests',
+    'importer/Cargo.toml',
+    'crates/lyracore-shared',
+    'crates/lyracore-package-delta',
+    'crates/lyracore-protocol',
+    'module/Cargo.toml',
+    'module/build.rs',
+    'module/build_support/source.rs',
+    'native-host/src/motion_opcodes.rs',
+    'module/src/lib.rs',
+    'module/src/seed.rs',
+    'module/src/config.rs',
+    'module/src/operations.rs',
+    'module/src/package_import.rs',
+    'module/src/import_meta.rs',
+    'module/src/terrain.rs',
+    'module/src/nav.rs',
+    'module/src/vmap.rs',
+    'module/src/go_model.rs',
+    'module/src/go_collider.rs',
+    'module/src/region.rs',
+    'module/src/creatures/catalogue.rs',
+    'module/src/creatures/spawn.rs',
+    'module/src/creatures/eventai/fixtures.rs',
+    'module/src/creatures/eventai/loader.rs',
+    'module/src/creatures/eventai/model.rs',
+    'module/src/creatures/eventai/stored.rs',
+    'module/src/creatures/eventai/tables.rs',
+    'module/src/creatures/eventai/relay.rs',
+    'module/src/gameobject.rs',
+    'module/src/items/tables.rs',
+    'module/src/items/properties.rs',
+    'module/src/spell/tables.rs',
+    'module/src/spell/spellbook.rs',
+    'module/src/spell/stacking.rs',
+    'module/src/spell/proc.rs',
+    'module/src/action_bar.rs',
+    'module/src/xp.rs',
+    'module/src/talent.rs',
+    'module/src/weather.rs',
+    'module/src/skill.rs',
+    'module/src/helpers.rs',
+    'module/src/time.rs',
+    'module/src/instance.rs',
+    'module/src/world.rs',
+    'module/src/world/simulation.rs',
+    'module/src/world/placement.rs',
+    'module/src/breath.rs',
+    'module/src/gc.rs',
+    'module/src/combat/engage.rs',
+    'module/src/creatures/tick/mod.rs',
+    'module/src/creatures/pet_care.rs',
+    'module/src/creatures/eventai/presentation.rs',
+    'module/src/duel.rs',
+    'module/src/motion.rs',
+    'module/src/gw.rs',
+    'module/src/meeting_stone/mod.rs',
+    'module/src/quest.rs',
+    'module/src/loot/mod.rs',
+    'module/src/trainer.rs',
+    'module/src/auth.rs',
+    'module/src/seed/fixtures.rs',
+    'module/src/tables.rs',
+    'module/src/character.rs',
+    'module/src/faction.rs',
+    'module/src/graveyard.rs',
+    'module/src/skilldata.rs',
+    'module/src/auction.rs',
+    'module/src/mail_catalogue.rs',
+    'module/src/stats.rs',
+    'module/src/operator_content/spells.rs',
+    'module/src/gossip.rs',
+    'module/src/creatures/population.rs',
+    'module/src/items/temporary_enchantment.rs',
+    'module/src/spell/chance_on_hit.rs',
+    'module/src/transport/mod.rs',
+    'datascripts/runtime-scripts/event-names.rs',
+    'datascripts/runtime-scripts/events.json',
+    'module/src/package_import',
 )
 
 
@@ -228,31 +309,21 @@ def import_contract_paths():
     missing = [str(path) for path in sorted(paths) if not path.exists()]
     if missing:
         raise RuntimeError('import contract paths are missing: ' + ', '.join(missing))
-    pending = list(paths)
-    scanned = set()
-    while pending:
-        path = pending.pop()
-        if path in scanned:
-            continue
-        scanned.add(path)
-        if path.is_dir():
-            pending.extend(path.rglob('*.rs'))
-        elif path.suffix == '.rs':
-            children = path.parent if path.name == 'mod.rs' else path.with_suffix('')
-            if children.is_dir():
-                paths.add(children)
-                pending.append(children)
-            # #[path] is relative to the source file for external module declarations.
-            for relative in re.findall(
-                    r'^\s*#\[path\s*=\s*"([^"\n]+)"\]\s*'
-                    r'(?:#\[[^\n]+\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*;',
-                    path.read_text(), re.MULTILINE):
-                child = (path.parent / relative).resolve()
-                if not child.is_relative_to(ROOT) or not child.is_file():
-                    raise RuntimeError(f'import module path is missing or outside the checkout: {child}')
-                paths.add(child)
-                pending.append(child)
     return sorted(paths)
+
+
+def gameplay_manifest():
+    strict = {ROOT / path for path in IMPORT_CONTRACT}
+    return {str(path.relative_to(ROOT)): digest(path)
+            for path in sorted((ROOT / 'module/src').rglob('*.rs'))
+            if not any(path == entry or entry in path.parents for entry in strict)}
+
+
+def snapshot_gameplay_changes(path):
+    saved = json.loads((path / 'state.json').read_text())['gameplay_manifest']
+    current = gameplay_manifest()
+    return sorted(name for name in saved.keys() | current.keys()
+                  if saved.get(name) != current.get(name))
 
 
 def scenario_key(harness, client_data):
@@ -260,7 +331,7 @@ def scenario_key(harness, client_data):
     with timed('client data fingerprint'):
         client_hash = client_fingerprint(client_data)
     contract = tree_hash(import_contract_paths())
-    key = dict(snapshot_version=2, import_contract_sha256=contract,
+    key = dict(snapshot_version=3, import_contract_sha256=contract,
                vmangos_database_commit=pins['database_commit'],
                cli_revision=(ROOT / '.lyracore-cli-rev').read_text().strip(),
                client_sha256=client_hash)
@@ -415,7 +486,9 @@ def seal_snapshot(key, realm_root, password, *, base_key=None):
     manifest = dict(data=file_manifest(pending / 'native-data'),
                     jwt=file_manifest(pending / 'native-jwt'))
     schema = json.loads((SCENARIO_CACHE / 'deployment-schema.json').read_text())
-    state = dict(key=key, manifest=manifest, module_schema=schema)
+    gameplay = (json.loads((snapshot_path(base_key) / 'state.json').read_text())['gameplay_manifest']
+                if base_key else gameplay_manifest())
+    state = dict(key=key, manifest=manifest, module_schema=schema, gameplay_manifest=gameplay)
     if base_key:
         state['base_world'] = base_key
     write_state(pending / 'state.json', state)
@@ -770,24 +843,25 @@ def capture(wire, work, scenario, adapter, endpoints, password, env, progress=sy
 
 
 @contextmanager
-def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False):
+def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False, strict_world=False):
     with ExitStack() as lifetime:
         try:
             realm = lifetime.enter_context(prepare_scenario_realm(
-                key, pins, client_data, peer_count, require_snapshot=require_snapshot))
+                key, pins, client_data, peer_count, require_snapshot=require_snapshot,
+                strict_world=strict_world))
         except SnapshotUpgradeError as error:
             print(f'[audit] snapshot publish or initialization failed: {error}', file=sys.stderr, flush=True)
             if require_snapshot:
                 raise RuntimeError('--require-snapshot forbids cold import after snapshot upgrade failure') from error
             print('[audit] falling back to a fresh world import', file=sys.stderr, flush=True)
             realm = lifetime.enter_context(prepare_scenario_realm(
-                key, pins, client_data, peer_count, use_snapshot=False))
+                key, pins, client_data, peer_count, use_snapshot=False, strict_world=strict_world))
         yield realm
 
 
 @contextmanager
 def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False,
-                           use_snapshot=True):
+                           use_snapshot=True, strict_world=False):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('clean core working tree required; commit changes before scenario capture')
     if (ROOT / '.lyracore-cli-rev').read_text().strip() != '30814fe814edbfa3a143102f93008080482df6a6':
@@ -811,7 +885,7 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
         cli_env['PATH'] = str(bin_dir) + ':' + cli_env['PATH']
         snapshot = snapshot_path(key)
         schema = json.loads((SCENARIO_CACHE / 'deployment-schema.json').read_text())
-        origin = (snapshot_origin(snapshot, schema)
+        origin = (snapshot_origin(snapshot, schema, strict_world=strict_world)
                   if use_snapshot and validate_snapshot(snapshot, key) else None)
         saved = origin is not None
         if require_snapshot and not saved:
@@ -893,6 +967,7 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
                     print('[audit] import: 0.00s (cached snapshot)', file=sys.stderr, flush=True)
                 state = dict(phase='ready', key=key, core_commit=current,
                              world_origin=origin or 'fresh_import',
+                             changed_gameplay_files=snapshot_gameplay_changes(snapshot) if saved else [],
                              native_host_sha256=digest(realm_root / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone'),
                              module_sha256=digest(SCENARIO_CACHE / 'deployment.wasm'),
                              database_commit=pins['database_commit'])
@@ -918,6 +993,7 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
                 raise
             print('[audit] import: 0.00s (cached snapshot)', file=sys.stderr, flush=True)
             state['world_origin'] = origin
+            state['changed_gameplay_files'] = snapshot_gameplay_changes(snapshot)
             state['native_host_sha256'] = digest(realm_root / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone')
             state['module_sha256'] = digest(SCENARIO_CACHE / 'deployment.wasm')
             write_state(marker, state)
@@ -932,6 +1008,8 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
         if imported['commit'] != pins['database_commit']:
             raise RuntimeError('restored world differs from Reference Server data pin')
         print(f"[audit] world origin: {state['world_origin']}", file=sys.stderr, flush=True)
+        for path in state['changed_gameplay_files']:
+            print(f'[audit] changed Tier B file: {path}', file=sys.stderr, flush=True)
         password = (snapshot / 'password').read_text().strip()
         for account in ['CONFORMANCE', *(f'CONFORMANCE{peer}' for peer in range(2, peer_count + 2))]:
             run([cli, 'account', 'create', account, '--password-stdin'],
@@ -969,21 +1047,23 @@ def catalogue_snapshot_key(base_key, catalogue):
     return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest(), creatures
 
 
-def prepare_catalogue_snapshot(work, base_key, pins, client_data, *, require_snapshot, fresh=False):
+def prepare_catalogue_snapshot(work, base_key, pins, client_data, *, require_snapshot, fresh=False,
+                               strict_world=False):
     catalogue = json.loads((work / 'catalogue.json').read_text())
     key, creatures = catalogue_snapshot_key(base_key, catalogue)
     if not creatures:
         return key
     if not fresh and validate_snapshot(snapshot_path(key), key):
         schema = json.loads((SCENARIO_CACHE / 'deployment-schema.json').read_text())
-        if snapshot_origin(snapshot_path(key), schema) is not None:
+        if snapshot_origin(snapshot_path(key), schema, strict_world=strict_world) is not None:
             return key
     if require_snapshot and not validate_snapshot(snapshot_path(base_key), base_key):
         raise RuntimeError('base world snapshot missing; --require-snapshot forbids an import; '
                            'run a single --check once to prepare the base world')
     peer_count = max(len(scenario['characters']) - 1 for scenario in catalogue)
     with scenario_realm(base_key, pins, client_data, peer_count,
-                        require_snapshot=require_snapshot) as (password, _token, _host, _module, realm):
+                        require_snapshot=require_snapshot, strict_world=strict_world) as (
+                            password, _token, _host, _module, realm):
         cli_env = dict(os.environ)
         cli_env.pop('CARGO_TARGET_DIR', None)
         cli_env['PATH'] = str(realm.parent / 'bin') + ':' + cli_env['PATH']
@@ -1024,11 +1104,12 @@ def capture_servers(harness, wire, work, client_data, *, rehearse=False):
             with prepare_scenario_realm(key, pins, client_data, peer_count, use_snapshot=False):
                 pass
         key = prepare_catalogue_snapshot(work, key, pins, client_data,
-                                         require_snapshot=rehearse, fresh=not rehearse)
+                                         require_snapshot=rehearse, fresh=not rehearse,
+                                         strict_world=rehearse)
         for scenario in scenarios:
             started = time.monotonic()
             with capture_scenario(harness, wire, work, scenario['id'], key, pins, client_data,
-                                  require_snapshot=True):
+                                  require_snapshot=True, strict_world=rehearse):
                 state = json.loads((SCENARIO_CACHE / 'realm/state.json').read_text())
                 if rehearse:
                     comparisons = {adapter: rehearse_comparison(wire, work, scenario, adapter)
@@ -1046,7 +1127,8 @@ def capture_servers(harness, wire, work, client_data, *, rehearse=False):
 
 
 @contextmanager
-def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, require_snapshot=False):
+def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, require_snapshot=False,
+                     strict_world=False):
     env = dict(os.environ, WIRE_CRASH_DIR=str(work / 'diagnostics'))
     realm_env = dict(env)
     catalogue = json.loads((work / 'catalogue.json').read_text())
@@ -1059,7 +1141,8 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, r
     with ExitStack() as realm_lifetime, ExitStack() as reference_lifetime:
         with ThreadPoolExecutor(max_workers=2 if cores >= 4 else 1) as captures:
             realm_start = captures.submit(realm_lifetime.enter_context, scenario_realm(
-                key, pins, client_data, max_peer_count, require_snapshot=require_snapshot))
+                key, pins, client_data, max_peer_count, require_snapshot=require_snapshot,
+                strict_world=strict_world))
             reference_start = captures.submit(reference_lifetime.enter_context,
                                              scenario_reference_server(harness, key, len(characters) - 1))
             password, token, host, module, realm_root = realm_start.result()
@@ -1095,7 +1178,7 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, r
         if (digest(host) != state['native_host_sha256'] or digest(module) != state['module_sha256']
                 or snapshot['commit'] != state['database_commit']):
             raise RuntimeError('cached Realm Module, Native Host or imported data changed during capture')
-        yield state['world_origin']
+        yield {name: state[name] for name in ['world_origin', 'changed_gameplay_files']}
 
 
 def setup_failure(scenario, json_mode, diagnostic):
@@ -1183,9 +1266,10 @@ def run_scenario(args, harness, target, core_commit):
                                    + (tier1.stderr + tier1.stdout).strip())
         run_with_diagnostic([audit, 'export', work])
         key = prepare_catalogue_snapshot(work, key, pins, str(args.client_data),
-                                         require_snapshot=args.require_snapshot)
+                                         require_snapshot=args.require_snapshot,
+                                         strict_world=args.strict_world)
         with capture_scenario(harness, wire, work, args.scenario, key, pins, str(args.client_data),
-                              require_snapshot=True) as world_origin:
+                              require_snapshot=True, strict_world=args.strict_world) as world:
             if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
                 raise RuntimeError('core changed during scenario capture; commit and rerun')
             with timed('comparison and output'):
@@ -1201,10 +1285,13 @@ def run_scenario(args, harness, target, core_commit):
                     raise RuntimeError('could not render the completed scenario comparison: '
                                        + rendered.stderr.strip())
                 if args.json:
-                    output = dict(json.loads(rendered.stdout), world_origin=world_origin)
+                    output = dict(json.loads(rendered.stdout), **world)
                     rendered.stdout = json.dumps(output, indent=2) + '\n'
                 else:
-                    rendered.stdout += f'World origin: {world_origin}\n'
+                    rendered.stdout += f"World origin: {world['world_origin']}\n"
+                    if world['changed_gameplay_files']:
+                        rendered.stdout += 'Changed Tier B files:\n' + ''.join(
+                            f'  {path}\n' for path in world['changed_gameplay_files'])
                 if args.agreement:
                     agreement = agreement_result(work / 'tier1.json', work / 'result.json', args.scenario)
                     if args.json:
@@ -1338,10 +1425,13 @@ def main():
     parser.add_argument('--agreement', action='store_true')
     parser.add_argument('--require-snapshot', action='store_true',
                         help='fail instead of a fresh world import when no matching base snapshot exists')
+    parser.add_argument('--strict-world', action='store_true',
+                        help='treat reachable gameplay changes as cold import inputs for a local check')
     parser.add_argument('--stop', action='store_true')
     args = parser.parse_args(json.loads(os.environ.get('LYRACORE_AUDIT_ARGS', '[]')))
     if args.stop:
-        if args.scenario or args.check or args.json or args.agreement or args.require_snapshot or args.rehearse:
+        if (args.scenario or args.check or args.json or args.agreement or args.require_snapshot
+                or args.rehearse or args.strict_world):
             parser.error('--stop cannot be combined with scenario check options')
         stop_scenario_cache()
         return 0
@@ -1355,6 +1445,8 @@ def main():
         parser.error('--json requires --scenario ID --check')
     if args.agreement and not args.scenario:
         parser.error('--agreement requires --scenario ID --check')
+    if args.strict_world and not args.scenario:
+        parser.error('--strict-world requires --scenario ID --check')
     if args.require_snapshot and not args.scenario:
         parser.error('--require-snapshot requires --scenario ID --check')
     try:
