@@ -504,13 +504,15 @@ mod tests {
         assert_eq!(report.scenarios.len(), catalogue::ENTRIES.len());
         for (behavior, result) in &report.audit.as_ref().unwrap().behaviors {
             assert_eq!(result.candidate, result.reference);
-            if behavior == "auto_attack" {
+            let missing_sample = match behavior.as_str() {
+                "auto_attack" => Some("white_melee_sample"),
+                "cast_and_interrupt" => Some("spell_sample"),
+                _ => None,
+            };
+            if let Some(rule) = missing_sample {
                 assert_eq!(result.candidate.rule.raw_records, 1);
                 assert_eq!(result.candidate.rule.signatures.len(), 1);
-                assert_eq!(
-                    result.candidate.rule.signatures[0].signature.rule,
-                    "white_melee_sample"
-                );
+                assert_eq!(result.candidate.rule.signatures[0].signature.rule, rule);
                 assert_eq!(result.candidate.data, Default::default());
             } else {
                 assert_eq!(result.candidate, Summary::default());

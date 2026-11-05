@@ -83,6 +83,12 @@ jobs:
           LYRACORE_ROLL_MERGE_SHA: ${{ github.sha }}
         run: cargo test -p lyracore-module --test native_conformance tier1::white_melee_outcomes_merge_seed -- --ignored --exact --test-threads=1 --nocapture
 
+      - name: Check spell rolls with the merge commit seed
+        if: ${{ !cancelled() && github.event_name == 'push' && steps.durable-suite.outputs.conformance == 'true' }}
+        env:
+          LYRACORE_ROLL_MERGE_SHA: ${{ github.sha }}
+        run: cargo test -p lyracore-module --test native_conformance tier1::spell_direct_damage_outcomes_merge_seed -- --ignored --exact --test-threads=1 --nocapture
+
       - name: Produce the conformance scoreboard
         if: ${{ !cancelled() && github.event_name == 'push' && steps.durable-suite.outputs.conformance == 'true' }}
         run: |

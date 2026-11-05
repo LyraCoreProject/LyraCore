@@ -1,6 +1,6 @@
 # 0007. Measure random rolls against source-derived probabilities
 
-Accepted design, 2026-11-05. First slice: white main-hand melee at levels 60 and 63.
+Accepted design, 2026-11-05. Slices: white main-hand melee and direct-damage spells at levels 60 and 63.
 
 [ADR 0005](0005-1-12-conformance.md) checks random fields' shape and range. A server that always
 crits can satisfy that contract. Roll Conformance compares delivered gameplay outcomes with fixed
@@ -9,7 +9,7 @@ probabilities derived from vmangos. vmangos remains the only Reference Server.
 ## Authority and independence
 
 For roll rates only, this is a deliberate, scoped exception to ADR 0005's recordings-only rule.
-Derive expected probabilities exactly from the attack-table code at vmangos commit
+Derive expected probabilities exactly from the attack-table and spell-roll code at vmangos commit
 `d9173eca3ea08dd985c52dabbcc826898d1d0b77`. Read GitHub raw URLs; do not clone vmangos. Record each
 formula input, source path and line. The person deriving rates must not fix gameplay for this
 Behavior and must not derive expectations from LyraCore's code. Rate differences are findings,
@@ -91,7 +91,104 @@ strictness and cost; differences remain findings.
 
 The crit, block and glancing findings assume the Tier 1 fixture matches the pinned inputs: agility 100, skill 300, unarmed.
 
-## Small Reference Server check
+## Pinned second context: direct-damage spells
+
+A level-60 human mage (race 1, class 8) casts Scorch rank 1, spell 2948. Intellect is 125.
+All equipment slots are empty. There are no talents, auras, hit bonuses, crit bonuses, spell
+penetration or procs. The target is creature 38, normal rank, non-pet, type 7, class 1, at level
+60 or 63. Fire resistance is zero; all extra and static flags are zero. Both participants stand
+still, alive, on map 1 at (16222.1, 16252.1, 12.5872). The target stands two yards ahead and faces
+the Character. Each Character has a separate target. Faction 7, idle movement and passive reaction
+prevent interference; these inputs do not enter the roll formulas. Starting auras are removed.
+Both health pools and the Character's maximum mana are 1,000,000,000. There are no resource
+restores during collection. The Reference Server retains Scorch's ordinary 1500-ms cast time and
+1500-ms global cooldown. Casts start at least 1600 ms apart; cadence is outside this slice.
+
+Scorch has one direct-damage effect, no projectile delay, periodic damage, applied aura, mechanic,
+proc or cooldown beyond the global cooldown. Unlike Frostbolt, it requires no spell aura exception.
+It exercises the actual level-difference hit formula and innate partial resistance without gear or
+talents. Partial resistance is included because its rate can be derived exactly.
+
+The pinned database is `464179081673cfd240f7ffe7f0daf96bca0b5a70`, archive SHA-256
+`9e178f1d70363e92a7b8c259000102dc9739333d79ca00c99ea32dd1fb43e904`. Its `mangos.sql:4077`
+contains human mage level-60 create stats `(1,8,60,30,35,45,125,126)`. The fixture sets the additive
+intellect modifier to zero and checks delivered intellect 125. `mangos.sql:5879`, `spell_template`
+entry 2948/build 5464, supplies school 2, damage class 1, attributes 65536, all extended attributes
+zero, effects [2,0,0], no mechanic or aura, cast-time index 16, speed zero and start recovery 1500.
+The current build selects that row. The target and its non-combat EventAI context follow the first
+slice. The recorder checks its actual fire resistance and maximum health through GM readback before
+and after collection. Character level, race/class, intellect, equipment, auras, mana, health, target
+level/faction and stationary positions are checked through independently decoded update fields.
+Invalid or incomplete context fails setup; it is not a rate finding.
+
+### Spell derivation
+
+All source references below use one-based lines at commit
+`d9173eca3ea08dd985c52dabbcc826898d1d0b77`, fetched through raw GitHub URLs only.
+
+- [SpellCaster.cpp:169–237](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp) selects the magic hit table for
+  damage class 1, after evade, immunity and reflection checks. Those modifiers are absent here.
+- [SpellCaster.cpp:772–880](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp) uses target-minus-caster level
+  difference `d`, PvE coefficient 11, and base hit `96-d` percent for `d < 3`, otherwise
+  `94-(d-2)*11` percent. All spell, aura, mechanic, debuff and hit modifiers are zero. Scorch is
+  non-binary. Hit thresholds are 9600 and 8300. `irand(0,10000)` is inclusive and returns
+  `SPELL_MISS_RESIST` for rolls below `10000-hit`. Thus full-resist probabilities are exactly
+  `400/10001` and `1700/10001`; landed probabilities H are `9601/10001` and `8301/10001`.
+  `SPELL_MISS_MISS` has probability zero for this context.
+- [Random.cpp:28–31, 62–65](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/shared/Utilities/Random.cpp),
+  [Random.h:58–62](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/shared/Utilities/Random.h), and
+  [MersenneTwister.h:159–163, 202–220](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/dep/include/mersennetwister/MersenneTwister.h)
+  define inclusive integer sampling and `roll_chance_f(chance)` as `chance > rand_chance()`.
+  The latter compares against exactly `100*U/2^32`, with U uniform on 0 through `2^32-1`.
+- [Unit.cpp:2597–2662](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp) gives mage crit as
+  `3.70f + intellect/(14.77f + 0.65f*level)`, with no aura bonuses. At intellect 125 and level 60,
+  single-precision arithmetic gives denominator `53.77000045776367` and chance
+  `6.024716377258301` percent (bits `0x40c0ca7a`, exactly `3158685/524288`). The strict comparison
+  accepts `ceil(chance*2^32/100) = 258759599` integers. The exact crit probability C is therefore
+  `258759599/4294967296`, rather than a rounded basis-point rate.
+- [Unit.cpp:5212–5321](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp) reads that school crit value, with no creature
+  level suppression for magic damage. Target auras, class scripts and spell modifiers are absent.
+  [Spell.cpp:900–923](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp) rolls hit and crit separately. Delivered crit
+  probability is H*C; ordinary hit probability is H*(1-C).
+  [SpellCaster.cpp:1230–1275](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp) carries the crit result into the delivered damage flag;
+  Scorch has no ignore-caster-modifiers attribute.
+- [SpellMgr.cpp:3342–3394](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellMgr.cpp) makes Scorch non-binary because its
+  only effect is direct damage. [SpellEntry.h:506–523, 1110–1122](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellEntry.h)
+  allows that effect to crit; the cannot-crit attribute is absent.
+- [SpellCaster.cpp:882–924](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp) adds innate creature resistance
+  `trunc(8*d*60/63)` to zero fire resistance and zero penetration. This is 0 or 22. Multiplication
+  by `0.15f/60`, then by 100 in the resistance roll, yields 0 or approximately 5.50000048 percent.
+- [Unit.cpp:1885–1918, 2397–2469](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp) interpolates between resistance
+  rows at chance 5 and 8. At level 63 the cumulative thresholds are exactly 1 for 75% resistance,
+  between 5 and 6 for at least 50%, and between 18 and 19 for at least 25%. Against integer rolls
+  0 through 99 this gives widths 1, 5, 13 and 81 for 75%, 50%, 25% and zero resistance. The
+  conditional partial-resist probability is exactly 19/100; it is zero at level 60. Damage is
+  always positive and large enough for every nonzero quarter to remain positive after dithering.
+  [Unit.cpp:1920–1955, 2205–2233](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp) applies this roll after a landed
+  non-binary cast. Unconditional partial-resist probability is H*19/100 at level 63.
+- [Spell.cpp:223–254](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Packets/Spell.cpp) defines the independently decoded
+  `SMSG_SPELLNONMELEEDAMAGELOG` layout. [SpellDefines.h:190–229](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellDefines.h)
+  defines critical flag 0x02. Positive resisted damage marks partial resistance. `SMSG_SPELL_GO`
+  identifies hit targets or full-resist reason 2; reason 1 is a distinct miss. Absorb, block,
+  immunity, reflection, negative resistance, other spells and changed targets fail setup.
+- [UnitCommands.cpp:1502–1534, 2327–2369](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Commands/UnitCommands.cpp),
+  [Unit.cpp:7890–7905](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp),
+  [CreatureCommands.cpp:845–872](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Commands/CreatureCommands.cpp), and
+  [DebugCommands.cpp:1223–1269](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Commands/DebugCommands.cpp) define intellect, mana,
+  passive reaction and private update-field readback used only during fixture preparation/checks.
+  [UpdateFields_1_12_1.h:47–100](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/UpdateFields_1_12_1.h) defines the checked
+  health, mana, race/class, intellect and fire-resistance words.
+
+| Target level | Miss | Full resist | Crit | Ordinary hit | Partial resist (overlapping) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 60 | 0 | 400/10001 | (9601*258759599)/(10001*4294967296) | (9601*4036207697)/(10001*4294967296) | 0 |
+| 63 | 0 | 1700/10001 | (8301*258759599)/(10001*4294967296) | (8301*4036207697)/(10001*4294967296) | (8301*19)/(10001*100) |
+
+Partial resistance overlaps ordinary hits and crits. Only the first four columns sum to one.
+The TOML stores exact rational numerators and denominators. Expectations never come from the
+small recording or from LyraCore calculations.
+
+## Small Reference Server check: white melee
 
 Record about 2,000 eligible swings per level once, without a repeat recording. Sixteen parallel
 Characters, eight per level with 250 swings each, target about eight minutes at ordinary cadence,
@@ -159,8 +256,9 @@ a conservative floating-point allowance before comparing with the rejection thre
 hand-worked tails and probabilities zero and one in targeted tests. No Monte Carlo or two-sample
 Fisher test.
 
-Reserve a family false-failure bound of at most 1e-6 per submission over seven categories, two
-levels and three seeds: 42 tests, reject each at p <= 1e-6 / 42 (about 2.381e-8). Bonferroni
+Reserve a family false-failure bound of at most 1e-6 per submission over seven white-melee
+categories plus five spell checks, two levels and three seeds: 72 tests. Reject each at
+p <= 1e-6 / 72 (about 1.389e-8). Partial resistance overlaps spell hits and crits. Bonferroni
 needs no independence across categories or tests. Within a stationary context the sampling model
 requires independent draws; block counts do not prove that assumption. The bound concerns seed
 selection across submissions, not a lifetime bound over unlimited submissions. More contexts or
@@ -186,9 +284,99 @@ rate signatures at both levels. This control is never measured evidence. Also ma
 change of +2 percentage points to crit chance, measure delivered packets, require detection and
 restore the source. Do not change gameplay in this PR.
 
-Spell misses, resists, procs, damage distributions, glancing damage penalties, offhand/rear
-attacks, other levels/skills and PvP remain outside this slice. The counts do not establish all
+Procs, damage distributions, glancing damage penalties, offhand/rear attacks, other spells,
+levels/skills and PvP remain outside these slices. The counts do not establish all
 melee parity. TCP audits currently report an explicit missing-roll-sample signature; their
 small packet witnesses do not claim to measure these rates. Keep PRs draft while iterating, then ready; the orchestrator reviews and merges.
 Do not merge or tag. Use only targeted checks and this scenario, SpacetimeDB 2.14.0 in task scratch,
 and leave the default CLI unchanged.
+
+
+## Small Reference Server check: spells
+
+Record one completed check with 2,000 casts per target level: sixteen Characters, eight per
+level, 250 casts each, five 50-cast blocks per Character. Keep ordinary 1500-ms Scorch casts
+and start them at least 1600 ms apart. Use the shared Reference Server lock. An unretained
+readiness cast checks each fixture; it supplies no second rate recording. Record setup and
+capture time, classifier version and existing binary/source/database provenance. Retain one
+cast-start witness and integer counts; scrub text and discard the packet stream. Only the
+recorder writes this Golden Trace. The diagnostic checks for a misread formula and does not
+estimate the expected probabilities or enter the submission verdict.
+
+The harness collector binds each trial to its Character, target and spell. It requires one
+1500-ms `SMSG_SPELL_START`, one `SMSG_SPELL_GO`, and one delivered damage log for a landed cast.
+It counts full resists from `SMSG_SPELL_GO`, crits/hits from the damage log and positive resisted
+damage as an overlapping partial resist. Refused, duplicate, missing or ineligible outcomes
+fail setup. Observer copies cannot add samples. There is no server-supplied histogram.
+
+Register `spell_direct_damage_outcomes` under `spells/cast_and_interrupt` after the harness PR
+merges. Tier 1 must enter through `CMSG_CAST_SPELL`, cast admission, ordinary cast scheduling,
+damage application and delivered spell packets. It collects 50,000 casts per level for each of
+the two public seeds, with a third derived from the merge SHA on main. Use the fixture-only
+random Seam in `module/src/conformance_rolls.rs`, retain production draws, and prove repeatability
+and gameplay-rate sensitivity through delivered packets. Core fixture implementation and its
+measurement report follow the reviewed harness release in one pin/baseline PR.
+
+Emit ordinary `DifferenceClass::Rule` signatures: rule `spell_distribution`, checkpoint by level
+and seed slot, stream `casts`, opcode `0x0250`, field `outcomes/<check>`. Record every measured
+difference in `known_gaps`, preserving the numerical report and the held-signature limitation
+from the first slice. The same public-signature union governs the merge seed. A gameplay
+blocker is a finding for a separate implementer. Generic TCP audits report `spell_sample` until
+full candidate collection exists; copied reference metadata and short witnesses prove no rate.
+
+### Single replacement exception, 2026-11-05
+
+The first completed spell diagnostic collected 2,000 casts per level and passed its source-derived
+rate check. Counts are ordered miss, full resist, crit, ordinary hit, overlapping partial resist:
+
+| Target level | Miss | Full resist | Crit | Ordinary hit | Partial resist |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 60 | 0 | 87 | 124 | 1789 | 0 |
+| 63 | 0 | 316 | 97 | 1587 | 314 |
+
+Fixture setup took 473,572 ms and capture took 463,490 ms. The author edited the running
+`reference.sh` wrapper. When it resumed, a shell read failed; its failure cleanup deleted the
+accepted Golden Trace. The sample was lost to that wrapper edit, not rejected on its results.
+These aggregate counts survive in the task record; the deleted trace is not reconstructed.
+
+The maintainer approved exactly one replacement capture of 2,000 casts per level as a single
+exception to the rule above, "once, without a repeat recording". The context, expected rates,
+public seeds and measurement code remain fixed. No script may be edited while capture runs.
+A launcher copies the recorder-accepted bytes to a separate path before returning control to
+wrapper cleanup. The replacement is the recorded sample regardless of how its results compare
+with the lost sample. Report both samples. If this replacement fails or is lost, stop; no third
+capture is authorized. This exception does not change the general single-recording rule.
+
+The single approved replacement completed and passed its diagnostic. It is the recorded sample:
+
+| Target level | Miss | Full resist | Crit | Ordinary hit | Partial resist |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 60 | 0 | 77 | 114 | 1809 | 0 |
+| 63 | 0 | 357 | 100 | 1543 | 324 |
+
+Replacement setup took 464,310 ms; capture took 454,361 ms. All 59 frozen source/input hashes
+matched after the checked wrapper exited zero. The launcher copied and synced the accepted
+12,433-byte trace before wrapper cleanup; both copies have SHA-256
+`958c3f88f01d229477a7376bad28881fdba5c3d31e3bcd62f68d62533d97239f`.
+No script changed during capture. No third recording was taken.
+
+### Core spell measurement
+
+The core fixture translates Scorch's additional pinned numeric inputs from `mangos.sql:5879`:
+cost 50, range 30, spell/max level 22/26, family 3 and flags 1073741840, proc flags/charges zero
+and proc chance 101. Its one damage effect uses source base points 52 plus the offset of one,
+die sides 13, per-level points 0.9 and coefficient 0.429. Equipment, talents and auras remain
+absent; target reaction is explicitly passive and checked before collection.
+
+The first valid-context attempt at `fa737462` stopped at cast 3 against level 60 under public
+seed `0x4c79726100000001`. A diagnostic replay reproduced two completed ordinary hits, followed
+by START 1500 ms, a pending cast with one pushback, no pending impact, and mage health
+999,999,998 instead of 1,000,000,000. Passive-target retaliation blocks the pinned context.
+No gameplay correction or probability adjustment is made. The [spell report](../../conformance/reports/2026-11-05-spell-rolls.md)
+records this finding. An earlier fixture attempt lacked passive state; its new pre-cast check
+failed before any cast, and the fixture now supplies that already pinned input.
+
+Emit ordinary `spell_sample` Rule signatures for blocked level/seed samples and retain them in
+`known_gaps`. Do not test or report partial counts as rates. Full-rate repeatability and gameplay
+chance sensitivity remain unmeasured until a separate implementer repairs the gameplay blocker.
+The allocation still reserves all 72 tests. Main replays the merge seed once, without retry.

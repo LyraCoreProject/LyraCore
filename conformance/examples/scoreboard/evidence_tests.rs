@@ -764,3 +764,94 @@ fn roll_evidence_requires_pinned_levels_categories_and_sample_shape() -> Result<
     assert!(roll_difference(golden.scenario(), sample));
     Ok(())
 }
+
+#[test]
+fn spell_evidence_requires_pinned_context_and_sample_shape() -> Result<()> {
+    use wire_client::trace::RecordedField;
+
+    let golden = wire_client::catalogue::get("spell_direct_damage_outcomes")?;
+    let mut candidate = golden.trace().clone();
+    candidate.header.origin = Origin::Candidate {
+        adapter: "test".into(),
+    };
+    candidate.spell_roll_check = None;
+    let comparison = wire_client::compare::compare(&golden, &candidate, &[])?;
+    let tcp = comparison
+        .differences
+        .iter()
+        .find(|difference| difference.rule == "spell_sample")
+        .context("missing full spell sample")?;
+    assert!(roll_difference(golden.scenario(), tcp));
+    let mut blocked = tcp.clone();
+    blocked.checkpoint = "level_60_public_1".into();
+    blocked.actual = Some(RecordedField::Unsigned(16));
+    assert!(roll_difference(golden.scenario(), &blocked));
+    for mutation in 0..9 {
+        let mut wrong = blocked.clone();
+        match mutation {
+            0 => wrong.checkpoint = "level_61_public_1".into(),
+            1 => wrong.checkpoint = "level_60_retry".into(),
+            2 => wrong.opcode = Some(0x14a),
+            3 => wrong.stream = Some(Stream::Broadcast("swings".into())),
+            4 => wrong.classification = DifferenceClass::Data,
+            5 => wrong.field_path = vec!["invented".into()],
+            6 => wrong.expected = Some(RecordedField::Unsigned(49_999)),
+            7 => wrong.actual = Some(RecordedField::Unsigned(50_000)),
+            8 => wrong.actual = None,
+            _ => unreachable!(),
+        }
+        assert!(
+            !roll_difference(golden.scenario(), &wrong),
+            "mutation {mutation}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn spell_rate_evidence_requires_exact_rational_means_and_known_categories() -> Result<()> {
+    let golden = wire_client::catalogue::get("spell_direct_damage_outcomes")?;
+    let spec = golden
+        .scenario()
+        .spell_rolls
+        .as_ref()
+        .context("spell specification")?;
+    for level in 0..2 {
+        let mut counts = [0; 5];
+        for (count, expected) in counts.iter_mut().zip(spec.expected[level]) {
+            *count =
+                (u128::from(expected.numerator) * 50_000 / u128::from(expected.denominator)) as u32;
+        }
+        counts[3] = 50_000 - counts[..3].iter().sum::<u32>();
+        counts[2] += 1000;
+        counts[3] -= 1000;
+        let comparison = wire_client::spell_rolls::compare(
+            spec,
+            &wire_client::spell_rolls::Counts(counts),
+            level,
+            "public_2",
+            50_000,
+        )?;
+        let original = comparison
+            .differences
+            .iter()
+            .find(|difference| difference.field_path == ["outcomes", "crit"])
+            .context("shifted spell crit difference")?;
+        assert!(roll_difference(golden.scenario(), original));
+        for mutation in 0..4 {
+            let mut wrong = original.clone();
+            match mutation {
+                0 => wrong.field_path[1] = "invented".into(),
+                1 => wrong.expected = Some(wire_client::trace::RecordedField::Unsigned(0)),
+                2 => wrong.actual = Some(wire_client::trace::RecordedField::Unsigned(50_001)),
+                3 => wrong.checkpoint = "level_63_retry".into(),
+                _ => unreachable!(),
+            }
+            assert!(
+                !roll_difference(golden.scenario(), &wrong),
+                "mutation {mutation}"
+            );
+        }
+    }
+    Ok(())
+}

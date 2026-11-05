@@ -617,3 +617,18 @@ fn white_melee_outcomes_merge_seed() -> Result<()> {
     };
     super::rolls::merge_seed(&commit.to_string_lossy())
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn spell_direct_damage_outcomes_matches_its_golden_trace() -> Result<()> {
+    super::spell_rolls::public_seeds()
+}
+
+#[test]
+#[ignore = "runs once on main with the merge commit seed"]
+fn spell_direct_damage_outcomes_merge_seed() -> Result<()> {
+    let Some(commit) = std::env::var_os("LYRACORE_ROLL_MERGE_SHA") else {
+        return Ok(());
+    };
+    super::spell_rolls::merge_seed(&commit.to_string_lossy())
+}

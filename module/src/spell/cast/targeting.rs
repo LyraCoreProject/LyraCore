@@ -60,7 +60,12 @@ pub(crate) fn spell_misses(ctx: &ReducerContext, caster_level: u8, target_guid: 
         .find(target_guid)
         .map(|t| t.level)
         .unwrap_or(caster_level as u32);
-    (ctx.random::<u32>() % 10_000) < spell_miss_chance_bp(caster_level as u32, target_level)
+    #[cfg(feature = "conformance_test_fixture")]
+    let draw = crate::conformance_rolls::spell_target_draw(ctx, target_guid)
+        .unwrap_or_else(|| ctx.random::<u32>());
+    #[cfg(not(feature = "conformance_test_fixture"))]
+    let draw = ctx.random::<u32>();
+    (draw % 10_000) < spell_miss_chance_bp(caster_level as u32, target_level)
 }
 
 pub(crate) fn recipe_reagents(ctx: &ReducerContext, spell_id: u32) -> Vec<(u32, u32)> {
@@ -903,7 +908,12 @@ fn apply_damage_effect(
             } else {
                 crate::spell::math::apply_spell_mod(scaled.max(0) as u32, dmg_flat, dmg_pct) as i32
             };
-            let is_crit = (ctx.random::<u32>() % 10_000) < spell_crit_bp(ctx, caster_guid);
+            #[cfg(feature = "conformance_test_fixture")]
+            let draw = crate::conformance_rolls::spell_draw(ctx, caster_guid)
+                .unwrap_or_else(|| ctx.random::<u32>());
+            #[cfg(not(feature = "conformance_test_fixture"))]
+            let draw = ctx.random::<u32>();
+            let is_crit = (draw % 10_000) < spell_crit_bp(ctx, caster_guid);
             let crit_scaled = apply_spell_crit(scaled, is_crit);
             let after_resist =
                 source_behavior::mitigate_spell(ctx, hdr, caster_guid, target_guid, crit_scaled);

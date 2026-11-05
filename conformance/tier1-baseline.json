@@ -4,7 +4,7 @@
     {
       "scenario": "bank_slot_purchase",
       "behavior": "bank_slot_purchase",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "d73644183fd921f24df5f209ffe3f79ca4573ff04ea8e41d478a768c98ccf358",
       "rule": [],
       "data": []
@@ -12,7 +12,7 @@
     {
       "scenario": "bank_slot_purchase__observer",
       "behavior": "bank_slot_purchase",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "e7fd829b9432beadb28d0a8cd81cae77e4e60aa74799e4f8eb2321364ded6c1e",
       "rule": [],
       "data": []
@@ -20,7 +20,7 @@
     {
       "scenario": "bank_slot_purchase__spawn_beside_viewer",
       "behavior": "bank_slot_purchase",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "7ddc32d010796a0b11139ba05fec0fe07c3013cf5125b77b304628109300e424",
       "rule": [],
       "data": []
@@ -28,7 +28,7 @@
     {
       "scenario": "cast_and_interrupt",
       "behavior": "cast_and_interrupt",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "5be9d598a7da6c8f5a28cca50ad4952ff12e4ecc5db4f9c3780b32ed42ebde33",
       "rule": [
         {
@@ -86,7 +86,7 @@
     {
       "scenario": "connection_identity",
       "behavior": "connection_identity",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "36fc53aa842da673a2c4a91712b163b04f6bbeccb3d96730e3cacd5e90ee9f3e",
       "rule": [],
       "data": []
@@ -94,7 +94,7 @@
     {
       "scenario": "quest_completion",
       "behavior": "quest_completion",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "a16eb52d824819c94f81314fd949c3f3f3c652529ecb3362e6a763564ed4e69c",
       "rule": [
         {
@@ -247,7 +247,7 @@
     {
       "scenario": "quest_log",
       "behavior": "quest_log",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "f33b52b3118a8608db2cb3140491ceac12cd9a988442b7d5cb9a4757624f273b",
       "rule": [],
       "data": []
@@ -255,7 +255,7 @@
     {
       "scenario": "quest_offers",
       "behavior": "quest_offers",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "17234c713e80e0728a21ecbf45233a06619d14d57bc15794d9cf99eb7316ad54",
       "rule": [],
       "data": [
@@ -372,7 +372,7 @@
     {
       "scenario": "quest_reward",
       "behavior": "quest_reward",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "8db6390434c393b76389a00152e7dcc041264fad7ab879f98bd180bcf789c9e2",
       "rule": [
         {
@@ -526,9 +526,66 @@
       ]
     },
     {
+      "scenario": "spell_direct_damage_outcomes",
+      "behavior": "cast_and_interrupt",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
+      "scenario_sha256": "9557d716512cbae222a713ba0da6c33d35557cb6a5efbdf86968a0a9419a2d2a",
+      "rule": [
+        {
+          "rule": "spell_sample",
+          "checkpoint": "level_60_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "casts"
+          },
+          "opcode": 592,
+          "field_path": [
+            "outcomes"
+          ]
+        },
+        {
+          "rule": "spell_sample",
+          "checkpoint": "level_60_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "casts"
+          },
+          "opcode": 592,
+          "field_path": [
+            "outcomes"
+          ]
+        },
+        {
+          "rule": "spell_sample",
+          "checkpoint": "level_63_public_1",
+          "stream": {
+            "kind": "broadcast",
+            "id": "casts"
+          },
+          "opcode": 592,
+          "field_path": [
+            "outcomes"
+          ]
+        },
+        {
+          "rule": "spell_sample",
+          "checkpoint": "level_63_public_2",
+          "stream": {
+            "kind": "broadcast",
+            "id": "casts"
+          },
+          "opcode": 592,
+          "field_path": [
+            "outcomes"
+          ]
+        }
+      ],
+      "data": []
+    },
+    {
       "scenario": "taxi_single_hop",
       "behavior": "taxi_single_hop",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "bb3bd01d74fe631dbce63b31a826ae95838c9e599b511c293ff6a88c635abe31",
       "rule": [],
       "data": [
@@ -561,7 +618,7 @@
     {
       "scenario": "taxi_single_hop__late_observer",
       "behavior": "taxi_single_hop",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "8be2dd91517ff0a34ad814b1e68ba2ea548fa0bd224ef22bd211759a6dcb1473",
       "rule": [
         {
@@ -1091,7 +1148,7 @@
     {
       "scenario": "taxi_single_hop__reconnect",
       "behavior": "taxi_single_hop",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "c912d20c44e3c02a89ee2939697e37d70cf79c492c47fee437ca47599536b793",
       "rule": [
         {
@@ -2770,7 +2827,7 @@
     {
       "scenario": "two_character_visibility",
       "behavior": "character_visibility",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "51126d4da33601aa9f2862073408b3e6575fe48ab07152b52a557b691b0a4b6f",
       "rule": [
         {
@@ -3052,7 +3109,7 @@
     {
       "scenario": "two_character_visibility__opposite_faction",
       "behavior": "character_visibility",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "0866a16fd1084a8df7f52271205c2cd55d074525b4aa80c682e8e50447edd8c6",
       "rule": [
         {
@@ -3414,7 +3471,7 @@
     {
       "scenario": "vendor_offers",
       "behavior": "vendor_offers",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "435f39c8caca44b261e12f74680b6c21ebc4553e7b10fce2eaf2e4cd7416af29",
       "rule": [
         {
@@ -3463,7 +3520,7 @@
     {
       "scenario": "vendor_transactions",
       "behavior": "vendor_transactions",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "e5ef06ea30275a5a1ffa5a340dda642c7c51cb346e8bc876955a2e7fca64aa54",
       "rule": [],
       "data": []
@@ -3471,7 +3528,7 @@
     {
       "scenario": "white_melee_outcomes",
       "behavior": "auto_attack",
-      "harness_revision": "55252ab4caf50d125c00cffb44969cbf26b892a5",
+      "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "52c55709d94ea782d9d7c17122096b18fdbf81c74f9ac67ff8156ab7286a74b5",
       "rule": [],
       "data": []
