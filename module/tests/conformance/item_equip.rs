@@ -566,7 +566,7 @@ fn visible_equip_effects_keep_the_sources_duration_and_reapply_after_resurrectio
         shard.assert_sql(&format!(
             "UPDATE game_spell SET attributes = {attributes} WHERE spell_id = {EQUIP}"
         ));
-        request(&mut connection, 0x136, EQUIP.to_le_bytes().to_vec());
+        assert!(request(&mut connection, 0x136, EQUIP.to_le_bytes().to_vec()).is_empty());
         assert_eq!(auras(&shard, guid).len(), 1);
         assert!(!shard
             .call("gw_cancel_aura", &[&actor(guid), &EQUIP.to_string()])
