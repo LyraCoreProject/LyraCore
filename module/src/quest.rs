@@ -1571,6 +1571,21 @@ pub(crate) fn area_trigger_route(
     route.valid().then_some(route)
 }
 
+pub(crate) fn area_trigger_destination(
+    ctx: &ReducerContext,
+    trigger: u32,
+) -> Option<crate::transfer::Destination> {
+    let route = area_trigger_route(ctx, trigger)?;
+    Some(crate::transfer::Destination {
+        map_id: route.target_map,
+        instance_id: 0,
+        x: route.target_x,
+        y: route.target_y,
+        z: route.target_z,
+        o: route.target_o,
+    })
+}
+
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn enter_sessionless_areatrigger(
     ctx: &ReducerContext,

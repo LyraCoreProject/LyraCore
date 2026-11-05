@@ -48,6 +48,7 @@ pub fn teardown_package(ctx: &ReducerContext, package_name: String) -> Result<()
         .find(|package| package.name == ident)
         .ok_or_else(|| format!("{package_name} is not a Package this build compiles"))?;
     crate::native::package_creation::require_settled(ctx, &package_name)?;
+    crate::native::package_relocation::require_settled(ctx, &package_name)?;
     let characters = package_characters(ctx, package, &package_name);
     if let Some(guid) = characters.iter().find(|&&guid| crossing(ctx, guid)) {
         return Err(format!(
@@ -68,6 +69,7 @@ pub fn teardown_package(ctx: &ReducerContext, package_name: String) -> Result<()
         });
     }
     crate::native::package_creation::clear_results(ctx, &package_name);
+    crate::native::package_relocation::clear_results(ctx, &package_name);
     for guid in characters {
         make_dormant(ctx, guid);
     }

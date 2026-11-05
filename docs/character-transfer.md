@@ -93,6 +93,26 @@ The manifest does not make Shard-owned social or economic state shared. Transpor
 not survive a Transfer between World Shards. Sessionless Character Relocation does not use this
 native World Session path.
 
+## Package relocation
+
+`native::package_relocation` uses the same Character manifest and Escrow ledger for a Package-owned
+Character without a World Session. The Package requests an imported AreaTrigger crossing and polls
+a retained result on the source. Dungeon entry first uses Realm Instance allocation; admission names
+its request id so a different sessionless request cannot consume the reservation.
+
+The source freezes and exports the Character in one transaction. The destination checks the Peer,
+Package Account, map and admission reservation, then imports under an arrival fence. It stores the
+exact Transfer and source in `game_package_arrival`. A refused import rolls back target writes and
+restores the source body. Successful import confirms and deletes the source Character together with
+queuing the Realm directory change. Directory settlement must name the target before the source
+queues release. Release checks the stored arrival, clears Escrow and restores the body atomically.
+Only its successful reply records `Arrived` on the source.
+
+Committed import cannot be cancelled. Directory and release refusals retain retries; timeout and
+Host restart do not release the target fence or recreate the source. No Session copy, WorldPort
+Handoff or client acknowledgement participates. Package Teardown waits for pending relocation even
+when the Character has already left its source. Terminal results survive restart until consumed.
+
 ## Manifest discipline
 
 - `transfer::is_in_transit` hides a Character with an Escrow row from by-guid lookups and refuses

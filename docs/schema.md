@@ -191,6 +191,15 @@ Package Account allocation on the Realm includes both directory entries and pend
 See [the Package contract](package-api.md#asynchronous-package-character-creation) for result
 consumption and upgrade obligations.
 
+### Package relocation (`module/src/native/package_relocation.rs`)
+
+`game_package_relocation` retains the source request, entrance and authority snapshot, and result.
+It is Shard-owned: source Character cleanup must not discard the completion that the Package polls.
+`game_package_arrival` holds the exact Transfer and source that may release an imported body. It is
+deleted with successful release. `game_package_relocation_delivery` and its retry table retain work
+after source removal. These four private tables are new; existing table layouts and Host delivery
+layouts do not change. See [Package relocation ordering](character-transfer.md#package-relocation).
+
 ### Package Groups (`module/src/native/realm_party/package.rs`)
 
 `game_package_party_authority`, declared in `native/package_actor.rs`, is a private table on the

@@ -61,6 +61,12 @@ population there when needed. A sixty-second admission reservation keeps the lea
 Transfer import. Admission refusal leaves the Character on its source Shard. A reply must match the
 pending request and connection, and the Character must still be inside the entrance Area Trigger.
 
+Package relocation uses the same allocator and admission reservations without a World Session. The
+Realm checks Package authority and directory ownership; the source checks its saved consent revision
+and entrance before departure. Import names the exact admission request as well as the Character and
+Instance. A Package body is restored only after Transfer release. The `package-transfer` Native Host
+check covers Package Group entry, binding reuse, exits and restart settlement.
+
 The source starts its existing teleport and Transfer after admission. The destination requires a
 live reservation for that source, Character, connection, map and Instance before accepting import.
 Import consumes the reservation, binds the arriving Character and restores its Group projection.

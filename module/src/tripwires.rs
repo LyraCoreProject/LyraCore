@@ -46,6 +46,10 @@ pub(crate) mod character_owned_tripwire {
             &["game_package_guild_invitation"],
             "Realm-owned guild invitation projections retain revisions on the World after clearing an invitation so delayed delivery cannot restore it",
         ),
+        (
+            &["game_package_relocation"],
+            "Shard-owned relocation results survive source Character cleanup until the Package consumes them",
+        ),
         (&["game_instance_entry_lease"], "destination-owned admission reservation expires after sixty seconds or is consumed by Transfer import"),
         (
             &["game_native_away"],

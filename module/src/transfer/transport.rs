@@ -48,7 +48,7 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_group_member",
     "game_group_member_partition",
     "game_group_target_icon",
-    // Admission requests settle on the source connection before Transfer.
+    // Admission requests settle on the source Shard before Transfer.
     "game_instance_entry",
     "game_instance_removal",
     "game_pet_command",
@@ -393,7 +393,7 @@ pub struct ExportBlob {
     pub payload: Vec<TableRows>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Destination {
     pub map_id: u32,
     pub instance_id: u64,

@@ -145,7 +145,6 @@ a delayed invitation from restoring a cleared one. Pending delivery survives a H
 Publish all Shards before using the guild verbs, then call `operator_report_package_groups` on each
 World that already has live Package Characters. The report now publishes both Group and guild
 presence and restores pending guild invitations. Existing table layouts are unchanged.
-Cross-Shard Package relocation remains separate work.
 
 ### Package-owned Accounts
 
@@ -191,6 +190,39 @@ allocated on the Realm and copied with their ownership to the requesting World. 
 World Account ids or usernames refuse creation without overwriting that World state. Reconcile such
 Accounts before retrying; this addition does not migrate existing Package Accounts.
 
+### Asynchronous Package relocation
+
+`package::request_relocation(ctx, package_name, guid, trigger) -> Result<u64, String>`
+requests an imported AreaTrigger crossing for a live Character on a Package-owned Account.
+Core checks the source volume, Sessionless Action Consent, movement and Account ownership Gates.
+The imported route selects the destination; Packages do not supply a Shard or landing position.
+Propagate an error to abort the calling reducer. On success, retain the returned request id on the
+source Shard and do not request the same move on each tick.
+
+`package::take_relocation_result(ctx, package_name, request_id) -> Result<package::Relocation, String>`
+returns `Pending`, `Arrived(world)` or `Refused(reason)`. Pending retains the request. A terminal result
+is consumed in the caller's transaction. There is at most one Pending request per Character and at
+most 64 retained requests per Package per Shard. The result stays on the source even after its
+Character has moved; keep the polling state outside the Character-owned Transfer manifest.
+
+Dungeon entry uses Realm Instance allocation and the Group snapshot. Core checks consent, authority
+and the entrance again when admission returns. A refused or expired admission leaves the Character
+on its source. Once Transfer freezes the Character, later consent changes do not cancel the move.
+Import refusal restores the source body. After import succeeds, directory and release failures retry
+with the target fenced. `Arrived` means the body is available on its destination; it does not promise
+that all asynchronous social projections have arrived. No World Session or client Handoff is created.
+
+Local crossings finish in the requesting transaction, except dungeon admission on a World Shard,
+which still goes through the Realm. Cross-Shard movement carries the Character-owned Transfer
+manifest, including Package tables with transport arms. Shard-owned Package state does not move.
+These requests do not create the controller-generation receipt used by `enter_sessionless_areatrigger`.
+See [Transfer ordering](character-transfer.md#package-relocation) for recovery behavior.
+
+Publish every Shard before using this API. Package Accounts must already have Realm ownership and
+Character directory entries, as established by asynchronous Package creation. Reconcile legacy
+Account conflicts before retrying a refused import. This API does not convert existing Packages to
+use asynchronous relocation automatically.
+
 ### Package Teardown
 
 `teardown_package(package_name)` is an Operator reducer. Run it before a Package leaves the build.
@@ -210,8 +242,8 @@ Character with a World Session is never made Dormant.
 
 Teardown refuses, and writes nothing, while one of these Characters has a Transfer escrow row or a
 claimed Transfer Intent, because the escrow names the Package's tables. It also refuses while a
-local Package Character request or a Realm name reservation for the Package is pending. Successful
-teardown discards unread completed creation results.
+local Package creation or relocation request, or a Realm name reservation for the Package, is pending.
+Successful teardown discards unread completed creation and relocation results.
 
 A Package stays stopped until the first tick of a build that does not compile it. Enabling it again
 then starts it fresh: empty tables, default Package Config, and no Characters from before. Its old
