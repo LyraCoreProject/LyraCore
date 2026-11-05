@@ -152,65 +152,15 @@ class ModuleSchema(unittest.TestCase):
 
 
 class ImportModuleCoverage(unittest.TestCase):
-    def test_reachable_modules_are_hashed(self):
-        hashed = set()
+    def test_module_inputs_are_explicit_files(self):
         for path in audit.import_contract_paths():
-            hashed.update(path.rglob('*') if path.is_dir() else [path])
-        pending = [audit.ROOT / name for name in audit.IMPORT_CONTRACT
-                   if name.startswith('module/src/') and name.endswith('.rs')
-                   and name != 'module/src/lib.rs']
-        pending.extend(path for path in hashed if path.suffix == '.rs'
-                       and path.is_relative_to(audit.ROOT / 'module/src')
-                       and path.name != 'lib.rs')
-        visited = set()
-        while pending:
-            path = pending.pop()
-            if path in visited:
-                continue
-            visited.add(path)
-            source = re.sub(r'/\*.*?\*/|//[^\n]*', '', path.read_text(), flags=re.DOTALL)
-            for declaration in re.finditer(
-                    r'((?:#\[[^\n]+\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;',
-                    source):
-                attributes, name = declaration.groups()
-                explicit = re.search(r'path\s*=\s*"([^"]+)"', attributes)
-                directory = path.parent if path.name == 'mod.rs' else path.with_suffix('')
-                candidates = ([path.parent / explicit[1]] if explicit else
-                              [directory / f'{name}.rs', directory / name / 'mod.rs'])
-                children = [child for child in candidates if child.is_file()]
-                self.assertEqual(len(children), 1, f'{path}: module {name}')
-                child = children[0].resolve()
-                self.assertIn(child, hashed, f'unhashed child module of {path}')
-                pending.append(child)
+            if path.is_relative_to(audit.ROOT / 'module/src') and path.name != 'package_import':
+                self.assertTrue(path.is_file(), str(path))
 
-    def test_coverage_check_detects_an_unhashed_seed_child(self):
-        paths = [path for path in audit.import_contract_paths()
-                 if path != audit.ROOT / 'module/src/seed']
-        with patch.object(audit, 'import_contract_paths', return_value=paths):
-            with self.assertRaisesRegex(AssertionError, 'unhashed child module'):
-                self.test_reachable_modules_are_hashed()
-
-    def test_child_directories_and_external_module_paths_are_hashed_recursively(self):
-        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
-            root = Path(directory)
-            (root / 'seed.rs').write_text('mod fixtures;')
-            (root / 'seed').mkdir()
-            (root / 'seed/fixtures.rs').write_text('#[path = "../shared.rs"]\nmod shared;')
-            (root / 'shared.rs').write_text('#[path = "external/mod.rs"]\nmod external;')
-            (root / 'external').mkdir()
-            (root / 'external/mod.rs').write_text('mod leaf;')
-            (root / 'external/leaf.rs').write_text('original')
-            (root / 'shared').mkdir()
-            nested = root / 'shared/nested.rs'
-            nested.write_text('original')
-            with patch.object(audit, 'ROOT', root), \
-                    patch.object(audit, 'IMPORT_CONTRACT', ('seed.rs',)):
-                before = audit.tree_hash(audit.import_contract_paths())
-                for path in [nested, root / 'external/leaf.rs']:
-                    path.write_text('changed')
-                    self.assertNotEqual(before, audit.tree_hash(audit.import_contract_paths()))
-                    path.write_text('original')
+    def test_missing_contract_file_is_an_error(self):
+        with patch.object(audit, 'IMPORT_CONTRACT', ('module/src/no-such-import-input.rs',)):
+            with self.assertRaisesRegex(RuntimeError, 'import contract paths are missing'):
+                audit.import_contract_paths()
 
 
 class ScenarioKey(unittest.TestCase):
@@ -230,7 +180,7 @@ class ScenarioKey(unittest.TestCase):
             (root / 'importer/scripts').mkdir()
             (root / 'importer/manifests').mkdir()
             (root / 'importer/Cargo.toml').write_text('')
-            gameplay = root / 'module/src/taxi.rs'
+            gameplay = root / 'module/src/creatures/ai.rs'
             gameplay.parent.mkdir(parents=True)
             gameplay.write_text('first gameplay commit')
             for name in ['Cargo.lock', 'crates/lyracore-shared/src/nav.rs',
@@ -250,8 +200,14 @@ class ScenarioKey(unittest.TestCase):
             with patch.object(audit, 'ROOT', root), patch.object(audit, 'SCENARIO_CACHE', root):
                 first, _ = audit.scenario_key(harness, client)
                 self.assertEqual(first, audit.scenario_key(harness, client)[0])
-                gameplay.write_text('second gameplay commit')
-                self.assertEqual(first, audit.scenario_key(harness, client)[0])
+                for name in ['module/src/creatures/ai.rs', 'module/src/combat/swing.rs',
+                             'module/src/native/casting.rs', 'module/src/spell/cast.rs',
+                             'module/src/spell/effects.rs']:
+                    with self.subTest(gameplay=name):
+                        path = root / name
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_text('second gameplay commit')
+                        self.assertEqual(first, audit.scenario_key(harness, client)[0])
                 for name in ['Cargo.lock', 'crates/lyracore-shared/src/nav.rs',
                              'module/src/seed.rs', 'module/src/seed/fixtures.rs',
                              'module/src/operations.rs', 'module/src/package_import/creatures.rs',
@@ -704,7 +660,7 @@ class ReferenceOwnership(unittest.TestCase):
         state.parent.mkdir()
         state.write_text(json.dumps(dict(native_host_sha256=audit.digest(host),
                                         module_sha256=audit.digest(module), database_commit='pin',
-                                        world_origin='snapshot')))
+                                        world_origin='snapshot', changed_gameplay_files=[])))
         scenarios = [dict(id='actor_first', characters=['Banktester', 'Spawnwatch']),
                      dict(id='viewer_first', characters=['Spawnwatch', 'Banktester'])]
         (self.root / 'catalogue.json').write_text(json.dumps(scenarios))
@@ -743,7 +699,8 @@ class ReferenceOwnership(unittest.TestCase):
                 patch.object(audit.os, 'sched_getaffinity', return_value=range(4), create=True):
             audit.capture_servers(self.root, 'wire', self.root, self.root, rehearse=rehearse)
         if rehearse:
-            self.assertTrue(all(call == {'require_snapshot': True} for call in preparations))
+            self.assertTrue(all(call == {'require_snapshot': True, 'strict_world': True}
+                                for call in preparations))
             self.assertEqual([json.loads(line)['scenario'] for line in output.getvalue().splitlines()],
                              ['actor_first', 'viewer_first'])
         else:
@@ -765,7 +722,7 @@ class ReferenceOwnership(unittest.TestCase):
         state.parent.mkdir()
         state.write_text(json.dumps(dict(native_host_sha256=audit.digest(host),
                                         module_sha256=audit.digest(module), database_commit='pin',
-                                        world_origin='snapshot')))
+                                        world_origin='snapshot', changed_gameplay_files=[])))
         scenario = {'id': 'taxi_single_hop', 'characters': ['Taxi']}
         (self.root / 'catalogue.json').write_text(json.dumps([scenario]))
         @audit.contextmanager
@@ -841,7 +798,7 @@ class Tier1BuildDirectory(unittest.TestCase):
                     patch.object(audit, 'scenario_work', return_value=work), \
                     patch.dict(os.environ, CARGO_TARGET_DIR=str(cache / 'deployment')), \
                     patch.object(audit.subprocess, 'run', side_effect=RuntimeError('child boundary')) as run:
-                args = SimpleNamespace(client_data=cache, agreement=True, scenario='taxi_single_hop')
+                args = SimpleNamespace(client_data=cache, agreement=True, scenario='taxi_single_hop', strict_world=False)
                 with self.assertRaisesRegex(RuntimeError, 'child boundary'):
                     audit.run_scenario(args, cache, cache, 'core')
             self.assertEqual(run.call_args.kwargs['env']['CARGO_TARGET_DIR'],
@@ -965,6 +922,37 @@ class SnapshotStore(unittest.TestCase):
                 audit.validate_snapshot(root / 'key', 'key')
 
 
+class SnapshotGameplay(unittest.TestCase):
+    def test_added_deleted_and_changed_files_are_reported(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            root = Path(directory)
+            creatures = root / 'module/src/creatures'
+            creatures.mkdir(parents=True)
+            (creatures / 'ai.rs').write_text('old targeting')
+            (creatures / 'old.rs').write_text('removed gameplay')
+            schema = audit.canonical_schema(ModuleSchema().schema())
+            with patch.object(audit, 'ROOT', root):
+                (root / 'state.json').write_text(json.dumps(dict(
+                    module_schema=schema, gameplay_manifest=audit.gameplay_manifest())))
+                self.assertEqual(audit.snapshot_origin(root, schema), 'snapshot')
+                (creatures / 'ai.rs').write_text('new targeting')
+                (creatures / 'old.rs').unlink()
+                (creatures / 'new.rs').write_text('new gameplay')
+                self.assertEqual(audit.snapshot_gameplay_changes(root), [
+                    'module/src/creatures/ai.rs', 'module/src/creatures/new.rs',
+                    'module/src/creatures/old.rs'])
+                self.assertEqual(audit.snapshot_origin(root, schema), 'snapshot_gameplay_drift')
+
+    def test_snapshot_without_gameplay_provenance_requires_an_import(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            root = Path(directory)
+            schema = audit.canonical_schema(ModuleSchema().schema())
+            (root / 'state.json').write_text(json.dumps(dict(module_schema=schema)))
+            self.assertIsNone(audit.snapshot_origin(root, schema))
+
+
 class ScenarioRealmReuse(unittest.TestCase):
     def setUp(self):
         audit.SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -1050,6 +1038,56 @@ class ScenarioRealmReuse(unittest.TestCase):
             table_access={'Private': []}, is_event=False))
         (self.cache / 'deployment-schema.json').write_text(
             json.dumps(audit.canonical_schema(self.schema)))
+
+    def test_gameplay_drift_reuses_the_world_and_reports_the_changed_file(self):
+        gameplay = self.root / 'module/src/creatures/ai.rs'
+        gameplay.parent.mkdir(parents=True)
+        gameplay.write_text('first gameplay')
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            pass
+        gameplay.write_text('changed targeting')
+        self.commit = 'changed-gameplay'
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            state = json.loads((self.cache / 'realm/state.json').read_text())
+            self.assertEqual(state['world_origin'], 'snapshot_gameplay_drift')
+            self.assertEqual(state['changed_gameplay_files'], ['module/src/creatures/ai.rs'])
+        self.assertEqual(self.imports, 1)
+        self.assertEqual((self.store / 'key/state.json').stat().st_mode & 0o222, 0)
+
+    def test_strict_world_imports_only_after_gameplay_changes(self):
+        gameplay = self.root / 'module/src/creatures/ai.rs'
+        gameplay.parent.mkdir(parents=True)
+        gameplay.write_text('first gameplay')
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            pass
+        with audit.scenario_realm('key', self.pins, self.root, 0, strict_world=True):
+            self.assertEqual(self.imports, 1)
+        gameplay.write_text('changed targeting')
+        self.commit = 'changed-gameplay'
+        with self.assertRaisesRegex(RuntimeError, 'forbids an import'):
+            with audit.scenario_realm('key', self.pins, self.root, 0,
+                                      strict_world=True, require_snapshot=True):
+                self.fail('strict mode cannot reuse a changed gameplay world')
+        self.assertEqual(self.imports, 1)
+        with audit.scenario_realm('key', self.pins, self.root, 0, strict_world=True):
+            state = json.loads((self.cache / 'realm/state.json').read_text())
+            self.assertEqual(state['world_origin'], 'fresh_import')
+            self.assertEqual(state['changed_gameplay_files'], [])
+        self.assertEqual(self.imports, 2)
+
+    def test_catalogue_snapshot_preserves_drift_from_its_base(self):
+        gameplay = self.root / 'module/src/creatures/ai.rs'
+        gameplay.parent.mkdir(parents=True)
+        gameplay.write_text('first gameplay')
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            pass
+        gameplay.write_text('changed targeting')
+        audit.seal_snapshot('catalogue', self.realm, 'password', base_key='key')
+        schema = audit.canonical_schema(self.schema)
+        self.assertEqual(audit.snapshot_origin(self.store / 'catalogue', schema),
+                         'snapshot_gameplay_drift')
+        self.assertEqual(audit.snapshot_gameplay_changes(self.store / 'catalogue'),
+                         ['module/src/creatures/ai.rs'])
 
     def test_private_table_reuses_imported_rows_and_records_upgrade(self):
         with audit.scenario_realm('key', self.pins, self.root, 0):
