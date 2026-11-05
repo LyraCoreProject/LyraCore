@@ -450,6 +450,17 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
         &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
     );
     assert_effect(&shard, guid, 0);
+    shard.assert_sql(&format!("UPDATE game_spell SET form_mask = 0, form_exclude = 0, attributes = 65600 WHERE spell_id = {EQUIP}"));
+    move_item(&mut connection, 10, 11);
+    assert_effect(&shard, guid, 0);
+    shard.assert_sql(&format!(
+        "UPDATE game_spell_effect SET p0 = 2 WHERE spell_id = {FORM}"
+    ));
+    shard.assert_call(
+        "debug_cast_spell",
+        &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
+    );
+    assert_effect(&shard, guid, 1);
 }
 
 fn partner(shard: &Standalone) -> u64 {
@@ -564,10 +575,11 @@ fn visible_equip_effects_keep_the_sources_duration_and_reapply_after_resurrectio
         "0"
     );
     shard.assert_sql(&format!(
-        "UPDATE game_spell SET duration_ms = 50 WHERE spell_id = {EQUIP}"
+        "UPDATE game_spell SET attributes = 64, duration_ms = 50 WHERE spell_id = {EQUIP}"
     ));
     move_item(&mut connection, 10, 23);
-    equip(&mut connection, 23);
+    let packets = equip(&mut connection, 23);
+    assert!(packets.iter().any(|(opcode, _)| *opcode == 0x137));
     advance(&shard, 299);
     assert_eq!(auras(&shard, guid).len(), 1);
     advance(&shard, 1);
