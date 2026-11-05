@@ -109,3 +109,26 @@ No stock client or live Realm was used. Fixture tables and reducers remain behin
 random calls, count, order and modulo reduction. Existing packet witnesses and this blocked
 sample do not establish spell-roll parity. A held missing-sample signature cannot bound a rate
 or establish that a later gameplay change produces a complete sample.
+
+## Final baseline and focused verification
+
+The branch was rebased onto main `e210e089`, including vendor #1005 and Character-deletion
+#1007. The new missing-sample control passed. `./conformance/run spell_direct_damage_outcomes
+--json` then exited zero: the four held findings matched, `conforms` remained false and rates
+remained unmeasured. The two new evidence-validation controls also passed. They accept only
+pinned spell levels, seed slots, categories, rational expected means and bounded counts. The
+sample control first failed before its validation fix. The three audit tests that CI reported
+then passed individually after the compatibility update; no replay or Markdown guard was removed.
+
+CI run [42111970478](https://github.com/LyraCoreProject/LyraCore/actions/runs/42111970478)
+completed all 18 scenario comparisons with zero property violations. Every rule and data
+signature set matched the committed sets. Its tested merge commit
+`4defe8c674308a660d2d6ebb9c2e454c8b605f46` has the same source tree as PR head `e31e9ee2`.
+The unmodified Tier 1 report has SHA-256
+`94946f0dccb860336ab32ca329a3a690e18156c2b593c66a00e3857836560af4`.
+
+`./conformance/baseline` regenerated the complete baseline from that report while checked out
+at the tested commit, then the task branch was restored. Only the 17 existing harness revisions
+changed; the new scenario already used conformance.19. No signature or scenario hash changed.
+No generated report or baseline was hand-edited. The remaining fast-CI compatibility fixes
+change evidence validation and its tests, not the Module or comparator outcomes.
