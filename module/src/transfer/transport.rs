@@ -4,7 +4,7 @@ use super::TransferOut;
 use crate::bridge::{
     game_party_command_issuer, game_party_command_receipt, PartyCommandIssuer, PartyCommandReceipt,
 };
-use crate::items::{item_guid_exists, ItemInstance};
+use crate::items::{item_guid_exists, BuybackItem, BuybackState, ItemInstance};
 
 #[path = "legacy_item_rows.rs"]
 mod legacy_item_rows;
@@ -22,8 +22,6 @@ pub(crate) const HOT_TABLES: &[&str] = &[
 ];
 
 pub(crate) const MANIFEST_EXCLUDE: &[&str] = &[
-    "game_buyback_item",
-    "game_buyback_state",
     "game_transfer_out",
     "game_aoi_grant",
     "game_aoi_viewer",
@@ -36,9 +34,6 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &[
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const NOT_TRANSPORTED: &[&str] = &[
-    // Buyback is discarded when the resident Character leaves the Shard.
-    "game_buyback_item",
-    "game_buyback_state",
     "game_character_buyback",
     "game_aoi_grant",
     "game_aoi_viewer",
@@ -286,6 +281,7 @@ pub(crate) fn import_rows(
 ) -> Result<(), String> {
     let mut payload = legacy_item_rows::prepare(payload)?;
     super::mail_text::import(ctx, &mut payload)?;
+    let mut guids = std::collections::BTreeSet::new();
     if let Some(entry) = payload
         .iter()
         .find(|entry| entry.table == "game_party_command_issuer")
@@ -311,7 +307,6 @@ pub(crate) fn import_rows(
         let mut outcome = Ok(());
         let rows = decode_rows::<ItemInstance>(&entry.rows, &mut outcome);
         outcome?;
-        let mut guids = std::collections::BTreeSet::new();
         for row in rows {
             if row.owner_guid != character_guid {
                 return Err(format!(
@@ -327,6 +322,7 @@ pub(crate) fn import_rows(
             }
         }
     }
+    admit_buyback_import(ctx, character_guid, &payload, &mut guids)?;
     if let Some(entry) = payload
         .iter()
         .find(|entry| entry.table == "game_party_command_receipt")
@@ -378,6 +374,62 @@ pub(crate) fn import_rows(
         &payload,
         crate::CHARACTER_OWNED_TRANSFERS,
     )
+}
+
+fn admit_buyback_import(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    payload: &[TableRows],
+    guids: &mut std::collections::BTreeSet<u64>,
+) -> Result<(), String> {
+    let mut has_buyback = false;
+    if let Some(entry) = payload
+        .iter()
+        .find(|entry| entry.table == "game_buyback_item")
+    {
+        let mut outcome = Ok(());
+        let rows = decode_rows::<BuybackItem>(&entry.rows, &mut outcome);
+        outcome?;
+        let mut slots = std::collections::BTreeSet::new();
+        for row in rows {
+            has_buyback = true;
+            if row.character_guid != character_guid
+                || row.item.owner_guid != character_guid
+                || row.item_guid != row.item.guid
+                || row.item.slot != u8::MAX
+                || !(69..81).contains(&row.slot)
+                || !slots.insert(row.slot)
+            {
+                return Err(format!(
+                    "BUYBACK_ITEM_INVALID: item {} for Character {character_guid}",
+                    row.item_guid
+                ));
+            }
+            if !guids.insert(row.item_guid) || item_guid_exists(ctx, row.item_guid) {
+                return Err(format!(
+                    "ITEM_GUID_CONFLICT: item {} for Character {character_guid}",
+                    row.item_guid
+                ));
+            }
+        }
+    }
+    if let Some(entry) = payload
+        .iter()
+        .find(|entry| entry.table == "game_buyback_state")
+    {
+        let mut outcome = Ok(());
+        let states = decode_rows::<BuybackState>(&entry.rows, &mut outcome);
+        outcome?;
+        if states.len() > 1
+            || (has_buyback && states.is_empty())
+            || states.iter().any(|row| {
+                row.character_guid != character_guid || !(69..81).contains(&row.current_slot)
+            })
+        {
+            return Err(format!("BUYBACK_STATE_INVALID: Character {character_guid}"));
+        }
+    }
+    Ok(())
 }
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
@@ -490,6 +542,8 @@ pub(crate) fn decode_character_row(
 pub(crate) const TRANSFER_TABLES_OLD_BLOBS_MAY_LACK: &[&str] = &[
     "game_auction_bid_hold",
     "game_auction_hold",
+    "game_buyback_item",
+    "game_buyback_state",
     "game_character_away",
     "game_character_quest_log",
     "game_fatigue_state",

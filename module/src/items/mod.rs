@@ -23,9 +23,9 @@ pub(crate) fn refused(refusal: ItemRefusal) -> String {
 pub(crate) use buyback::{
     begin_session as begin_buyback_session, clear as clear_buyback,
     discard_legacy as discard_legacy_buyback, entries as buyback_entries, game_buyback_item,
-    sweep_delete_game_buyback_item, sweep_delete_game_buyback_state,
-    sweep_transfer_game_buyback_item, sweep_transfer_game_buyback_state, BuybackItem,
-    BUYBACK_START,
+    game_buyback_state, sweep_delete_game_buyback_item, sweep_delete_game_buyback_state,
+    sweep_restamp_game_buyback_item, sweep_transfer_game_buyback_item,
+    sweep_transfer_game_buyback_state, BuybackItem, BuybackState, BUYBACK_START,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use economy::apply_repair_item;

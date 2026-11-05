@@ -12,13 +12,13 @@ fn remap(
     mut map: impl FnMut(u32) -> Result<u32, String>,
 ) -> Result<(), String> {
     macro_rules! rows {
-        ($entry:expr, $row:ty) => {{
+        ($entry:expr, $row:ty, $($field:ident).+) => {{
             let mut outcome = Ok(());
             let mut rows = decode_rows::<$row>(&$entry.rows, &mut outcome);
             outcome?;
             for row in &mut rows {
-                if row.item_text_id != 0 {
-                    row.item_text_id = map(row.item_text_id)?;
+                if row.$($field).+ != 0 {
+                    row.$($field).+ = map(row.$($field).+)?;
                 }
             }
             $entry.rows = encode_rows(rows);
@@ -26,10 +26,11 @@ fn remap(
     }
     for entry in payload {
         match entry.table.as_str() {
-            "game_item_instance" => rows!(entry, crate::ItemInstance),
-            "game_mail" => rows!(entry, crate::mail::Mail),
-            "game_mail_escrow" => rows!(entry, crate::mail_escrow::MailEscrow),
-            "game_auction_hold" => rows!(entry, crate::auction::AuctionHold),
+            "game_item_instance" => rows!(entry, crate::ItemInstance, item_text_id),
+            "game_buyback_item" => rows!(entry, crate::items::BuybackItem, item.item_text_id),
+            "game_mail" => rows!(entry, crate::mail::Mail, item_text_id),
+            "game_mail_escrow" => rows!(entry, crate::mail_escrow::MailEscrow, item_text_id),
+            "game_auction_hold" => rows!(entry, crate::auction::AuctionHold, item_text_id),
             _ => {}
         }
     }
@@ -104,6 +105,8 @@ pub(super) fn release(ctx: &ReducerContext, guid: u64, include_holds: bool) {
     }
     let mut payload =
         super::transport::export_rows_via(ctx, guid, crate::CHARACTER_OWNED_TRANSFERS);
+    // The buyback deletion sweep releases its own Item Text references.
+    payload.retain(|entry| entry.table != "game_buyback_item");
     if !include_holds {
         payload.retain(|entry| entry.table != "game_auction_hold");
     }

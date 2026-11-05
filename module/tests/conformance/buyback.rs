@@ -3,6 +3,9 @@ use serde_json::json;
 
 use super::{enter, fixture, Packet};
 
+#[path = "buyback_handoff.rs"]
+mod handoff;
+
 fn stage(name: &str) -> (Standalone, ReducerConnection, u64, u64) {
     stage_in(fixture(name))
 }
@@ -467,12 +470,8 @@ fn item_guid_allocation_cannot_collide_with_buyback() {
         .is_empty());
 }
 
-#[test]
-#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn temporary_enchantment_duration_pauses_in_buyback() {
+fn poison(shard: &Standalone, connection: &mut ReducerConnection, guid: u64, item: u64) {
     use lyracore_shared::spell::taxonomy::{E_ENCHANT_ITEM_TEMPORARY, P_ENCHANT_ID, T_SELF};
-    let (shard, mut connection, guid, vendor) = stage("buyback-enchantment");
-    let item = grant(&shard, guid, 5090050, 1);
     let spell: u32 = 5090200;
     shard.assert_sql(&format!(
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) VALUES ({spell}, 'Buyback poison', 0, 0, 0, 0, 0, 5, 0, 1, 0, 0, 0, 0, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, 0, 0)"
@@ -506,6 +505,14 @@ fn temporary_enchantment_duration_pauses_in_buyback() {
         ))[0]["charges"],
         "40"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn temporary_enchantment_duration_pauses_in_buyback() {
+    let (shard, mut connection, guid, vendor) = stage("buyback-enchantment");
+    let item = grant(&shard, guid, 5090050, 1);
+    poison(&shard, &mut connection, guid, item);
     sell(&mut connection, vendor, item, 0);
     assert!(shard
         .query_rows(&format!(
@@ -691,7 +698,7 @@ fn transfer_without_a_world_session_carries_inventory_and_discards_buyback() {
         "import_character_blob",
         &["5090071", &blob, r#"{"guid":0,"ownership":null}"#],
     );
-    assert!(sold_rows(&destination, guid).is_empty());
+    assert_eq!(sold_rows(&destination, guid).len(), 1);
     assert!(destination
         .query_rows(&format!(
             "SELECT * FROM game_item_instance WHERE guid = {sold}"
@@ -717,6 +724,13 @@ fn transfer_without_a_world_session_carries_inventory_and_discards_buyback() {
             "SELECT * FROM game_item_instance WHERE owner_guid = {guid}"
         ))
         .is_empty());
+    destination.assert_call(
+        "release_transfer",
+        &["5090071", r#"{"guid":0,"ownership":null}"#],
+    );
+    let _login = enter(&destination, guid);
+    assert!(sold_rows(&destination, guid).is_empty());
+    assert!(sold_rows(&destination, guid).is_empty());
 }
 
 #[test]

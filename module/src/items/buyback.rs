@@ -50,8 +50,10 @@ pub(crate) fn clear(ctx: &ReducerContext, character_guid: u64) {
         ctx.db.game_buyback_item().item_guid().delete(row.item_guid);
         super::forget_temporary_enchantment(ctx, row.item_guid);
         crate::mail_text::drop_letter_text(ctx, row.item.item_text_id);
-        crate::native::buyback_removed(ctx, &row);
-        crate::native::buyback_destroyed(ctx, &row);
+        if !crate::transfer::is_in_transit(ctx, character_guid) {
+            crate::native::buyback_removed(ctx, &row);
+            crate::native::buyback_destroyed(ctx, &row);
+        }
     }
     ctx.db
         .game_buyback_state()
@@ -212,5 +214,20 @@ crate::character_owned!(delete, fn sweep_delete_game_buyback_item(ctx, character
 crate::character_owned!(delete, fn sweep_delete_game_buyback_state(ctx, character_guid) {
     ctx.db.game_buyback_state().character_guid().delete(character_guid);
 });
-crate::character_owned!(not_transported, fn sweep_transfer_game_buyback_item());
-crate::character_owned!(not_transported, fn sweep_transfer_game_buyback_state());
+crate::character_owned!(transfer, fn sweep_transfer_game_buyback_item(ctx, character_guid, io) {
+    table = game_buyback_item,
+    by = by_character,
+    keep_key,
+});
+crate::character_owned!(transfer, fn sweep_transfer_game_buyback_state(ctx, character_guid, io) {
+    table = game_buyback_state,
+    primary_key = character_guid,
+});
+crate::character_owned!(restamp, fn sweep_restamp_game_buyback_item(ctx, character_guid, identity) {
+    for mut row in entries(ctx, character_guid) {
+        if row.item.owner_identity != identity {
+            row.item.owner_identity = identity;
+            ctx.db.game_buyback_item().item_guid().update(row);
+        }
+    }
+});

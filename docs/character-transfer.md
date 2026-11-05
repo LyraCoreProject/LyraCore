@@ -72,10 +72,14 @@ are rebuilt or dropped. A pending cast is cancelled before export. Melee, threat
 state do not survive. Pending godmode and the run speed multiplier survive export and adoption,
 as they do for a cross-map teleport within one Shard. A real logout or connection loss clears them;
 a refused Transfer or connection loss before adoption also clears them on the resident copy.
-Leaving the world keeps pet despawn, buyback cleanup and the rest of the existing logout cleanup.
-Buyback Items live outside inventory and never enter the manifest, including a Transfer without a
-World Session. The source deletion sweep destroys them when Transfer finishes. See
-[buyback storage](schema.md#buyback-modulesrcitemsbuybackrs).
+A Transfer departure keeps buyback while running the remaining departure cleanup, including pet
+despawn. Both buyback tables travel with their keys intact. A Handoff or World Port in the same
+World Session retains the ring, prices, timestamps, login origin, current slot, Item GUIDs and
+paused Temporary Enchantments. Adoption replays the sold Items and ring fields. The source keeps
+its rows until import is attested, then removes them without client destroy delivery. Refused
+imports leave its copy intact. See [buyback storage](schema.md#buyback-modulesrcitemsbuybackrs).
+A fresh login clears transported buyback before the client view is built, including after a
+sessionless Transfer. Package relocation also discards buyback when it makes its source dormant.
 Connection request limits start with the adopted connection state.
 
 Realm-owned guild membership remains projected on the World Shards across Transfer. Actual
@@ -120,6 +124,11 @@ when the Character has already left its source. Terminal results survive restart
 
 - `transfer::is_in_transit` hides a Character with an Escrow row from by-guid lookups and refuses
   world entry. The rest and quest passes also skip it.
+- Current manifests carry both buyback tables. Older manifests may omit them through the existing
+  empty-table compatibility path; a fresh login then starts an empty ring. A World Port import
+  requires buyback session state and refuses atomically when the source cannot provide it. An
+  older destination refuses the new manifest tables. Update both Shards before moving active
+  World Sessions. The Item row codecs in `transfer/legacy_item_rows.rs` remain unchanged.
 - Every Character-keyed table needs a `character_owned!` delete sweep and Transfer arm. The build
   derives `CHARACTER_OWNED_TABLES` from them, and the manifest tests refuse a missing arm. See
   [Module build](module-build.md).

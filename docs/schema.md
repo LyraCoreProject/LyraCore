@@ -421,15 +421,21 @@ charges until restoration.
 Logout and Transport Loss discard buyback. Every fresh login also clears it before building the
 client view, including after a crash with no previous live body or World Session. Character deletion
 and Package Teardown clear it, including teardown of a Character whose body is already absent.
-Buyback is excluded from the Character Transfer manifest, including sessionless Package relocation;
-the source destruction sweep releases it when Transfer finishes. Buyback contributes no Item row
-or Item Text to the arriving inventory.
+Both buyback tables travel in the Character Transfer manifest. A Handoff or World Port preserves
+the same World Session: ring positions, prices, timestamps, `login_at`, `current_slot`, complete
+Items and paused Temporary Enchantments stay intact and replay on arrival. Buyback Items still
+have no ordinary inventory row. Import checks GUID collisions across both tables and the whole
+arriving payload. Nested Item ownership is restamped at entry. Item Text travels with its
+references and receives local ids; the source deletion sweep releases each buyback reference once
+and sends no destroy delivery for transported Items. Fresh login discards transported buyback,
+including after a sessionless Transfer; Package relocation clears it while making its source dormant.
 
 Both buyback tables are additive. The old `game_character_buyback` declaration and row layout stay
 for migration compatibility; no gameplay reads its snapshots. `debug_repair_after_publish` discards
 those rows and ends connected World Sessions without buyback state, so the client discards legacy
 objects and fields and a fresh login establishes the timestamp origin. Sessions with buyback state
-remain connected. Login also clears the Character's legacy rows. See
+remain connected, including Sessions adopted by Handoff. Native World Port import refuses a
+missing buyback session row before adoption. Login also clears the Character's legacy rows. See
 [the buyback migration](danger-zones.md#buyback-migration) before updating an existing Realm.
 
 ### Mail (`module/src/mail.rs`, `mail_timer.rs`, `mail_text.rs`)

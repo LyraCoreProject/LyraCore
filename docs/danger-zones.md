@@ -102,8 +102,17 @@ The repair reducer ends connected World Sessions that have no `game_buyback_stat
 clients discard legacy buyback links, prices and synthetic objects; the next login starts a fresh
 ring and timestamp origin. World Sessions that already have buyback state stay connected. Run the
 repair reducer before play resumes after the upgrade, even when the legacy table is empty.
-Buyback contents do not survive logout, a fresh login after a crash, or a completed Character
-Transfer. Carried and banked Items retain their existing rows and GUIDs.
+A Handoff or World Port within one World Session preserves buyback, including its login origin
+and paused Temporary Enchantments. Logout and fresh login discard it, including login after a
+crash or a sessionless Transfer. Carried and banked Items retain their existing rows and GUIDs.
+
+The Character Transfer table list now carries buyback without changing table layouts or the blob
+format. The existing compatibility path fills both tables empty for older manifests that omit
+them, so sessionless import and fresh login still work. A native World Port requires the original
+buyback session row and refuses import atomically if it is absent; an older destination refuses
+the new manifest tables. Update both Shards before moving active World Sessions. Retain the source
+copy after a refusal and do not attest an import that failed. The older Item row codecs remain
+explicit in `module/src/transfer/legacy_item_rows.rs`.
 
 ### Corpse AOI migration
 
