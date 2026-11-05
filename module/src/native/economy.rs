@@ -211,6 +211,86 @@ fn purchase_reply(
     )))
 }
 
+fn purchase_in_slot(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    request: &lyracore_protocol::messages::vanilla::CMSG_BUY_ITEM_IN_SLOT,
+) -> Result<(), Rollback> {
+    super::actor(ctx, guid)?;
+    let bag = if request.bag.guid() == guid {
+        255
+    } else {
+        let Some(bag) = ctx
+            .db
+            .game_item_instance()
+            .guid()
+            .find(request.bag.guid())
+            .filter(|item| item.owner_guid == guid && (19..23).contains(&item.slot))
+        else {
+            return Ok(());
+        };
+        bag.slot
+    };
+    if ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(guid)
+        .is_some_and(|player| player.dead || player.health == 0)
+    {
+        return Ok(());
+    }
+    let vendor = request.vendor.guid();
+    if let Some(reply) = purchase_reply(ctx, vendor, request.item, u32::from(request.amount).max(1))
+    {
+        super::send(ctx, connection, reply, false)?;
+    }
+    crate::items::apply_buy_item_to(
+        ctx,
+        guid,
+        vendor,
+        request.item,
+        u32::from(request.amount),
+        Some((bag, request.bag_slot)),
+    )
+    .map_err(|refusal| {
+        if let BuyRefusal::Equipment {
+            result,
+            required_level,
+        } = &refusal
+        {
+            let mut body = vec![result.as_int()];
+            if *result == lyracore_protocol::messages::vanilla::InventoryResult::CantEquipLevelI {
+                body.extend(u32::from(*required_level).to_le_bytes());
+            }
+            body.extend([0; 17]);
+            return Rollback::replies(
+                vec![lyracore_protocol::world::Packet {
+                    opcode: 0x112,
+                    body,
+                }],
+                refusal,
+            );
+        }
+        let (vendor, result) = if matches!(&refusal, BuyRefusal::Vendor(_)) {
+            (0, BuyResult::DistanceTooFar)
+        } else if matches!(&refusal, BuyRefusal::UnknownItem) {
+            (0, BuyResult::CantFindItem)
+        } else {
+            (vendor, buy_result(&refusal))
+        };
+        Rollback::reply(
+            ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(codec::build_buy_failed(
+                vendor,
+                request.item,
+                result,
+            ))),
+            refusal,
+        )
+    })
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
@@ -248,77 +328,7 @@ pub(super) fn receive(
                 })
         }
         ClientOpcodeMessage::CMSG_BUY_ITEM_IN_SLOT(c) => {
-            super::actor(ctx, guid)?;
-            let bag = if c.bag.guid() == guid {
-                255
-            } else {
-                let Some(bag) = ctx
-                    .db
-                    .game_item_instance()
-                    .guid()
-                    .find(c.bag.guid())
-                    .filter(|item| item.owner_guid == guid && (19..23).contains(&item.slot))
-                else {
-                    return Ok(());
-                };
-                bag.slot
-            };
-            if ctx
-                .db
-                .game_world_entity()
-                .guid()
-                .find(guid)
-                .is_some_and(|player| player.dead || player.health == 0)
-            {
-                return Ok(());
-            }
-            let vendor = c.vendor.guid();
-            if let Some(reply) = purchase_reply(ctx, vendor, c.item, u32::from(c.amount).max(1)) {
-                super::send(ctx, connection, reply, false)?;
-            }
-            crate::items::apply_buy_item_to(
-                ctx,
-                guid,
-                vendor,
-                c.item,
-                u32::from(c.amount),
-                Some((bag, c.bag_slot)),
-            )
-            .map_err(|refusal| {
-                if let BuyRefusal::Equipment {
-                    result,
-                    required_level,
-                } = &refusal
-                {
-                    let mut body = vec![result.as_int()];
-                    if *result
-                        == lyracore_protocol::messages::vanilla::InventoryResult::CantEquipLevelI
-                    {
-                        body.extend(u32::from(*required_level).to_le_bytes());
-                    }
-                    body.extend([0; 17]);
-                    return Rollback::replies(
-                        vec![lyracore_protocol::world::Packet {
-                            opcode: 0x112,
-                            body,
-                        }],
-                        refusal,
-                    );
-                }
-                let (vendor, result) = if matches!(&refusal, BuyRefusal::Vendor(_)) {
-                    (0, BuyResult::DistanceTooFar)
-                } else if matches!(&refusal, BuyRefusal::UnknownItem) {
-                    (0, BuyResult::CantFindItem)
-                } else {
-                    (vendor, buy_result(&refusal))
-                };
-                Rollback::reply(
-                    ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(codec::build_buy_failed(
-                        vendor, c.item, result,
-                    ))),
-                    refusal,
-                )
-            })
+            purchase_in_slot(ctx, connection, guid, &c)
         }
         ClientOpcodeMessage::CMSG_SELL_ITEM(c) => {
             let result = super::actor(ctx, guid)
