@@ -1,3 +1,3 @@
 # Unpublished review pin for wire-harness PR #53; finalize its release before merging core.
 # Before bumping, read lyracore-cli/docs/commands.md under dev smoke.
-v0.2.0-conformance.18 17eb29cb61cc2ecff7b88aab077de630a9ad36b6
+v0.2.0-conformance.18 67d1829607dd1ff82268e80d5dc134f796fcc3f4

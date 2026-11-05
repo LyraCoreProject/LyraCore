@@ -470,6 +470,7 @@ pub(super) fn public_seeds() -> Result<()> {
         }
     }
     let report = core_root().join(".lyracore/conformance/white-melee-rates.json");
+    std::fs::create_dir_all(report.parent().context("roll rate report parent")?)?;
     std::fs::write(report, serde_json::to_vec_pretty(&measurements)?)?;
     super::tier1::record_and_check(
         "white_melee_outcomes",
