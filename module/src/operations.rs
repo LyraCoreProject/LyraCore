@@ -16,7 +16,7 @@ use crate::{
 pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::items::discard_legacy_buyback(ctx);
-    let players: Vec<_> = ctx
+    let guids: Vec<_> = ctx
         .db
         .game_world_entity()
         .by_entry()
@@ -24,7 +24,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         .filter(|entity| entity.is_player())
         .map(|entity| entity.guid)
         .collect();
-    for guid in players {
+    for guid in guids {
         if crate::helpers::acting_entity_by_guid(ctx, guid).is_some() {
             crate::items::equip::restore(ctx, guid);
             crate::spell::recompute_vitals(ctx, guid);

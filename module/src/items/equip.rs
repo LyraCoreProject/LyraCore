@@ -92,7 +92,7 @@ pub(crate) fn restore(ctx: &ReducerContext, guid: u64) {
 }
 
 fn reconcile_item(ctx: &ReducerContext, guid: u64, changed_item: Option<u64>, restoring: bool) {
-    let Some(player) = ctx.db.game_world_entity().guid().find(guid) else {
+    let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
         return;
     };
     let mut desired = std::collections::BTreeMap::new();
@@ -113,8 +113,8 @@ fn reconcile_item(ctx: &ReducerContext, guid: u64, changed_item: Option<u64>, re
         for (spell, trigger) in spells(&template) {
             if spell != 0 && trigger == 1 {
                 if let Some(header) = ctx.db.game_spell().spell_id().find(spell) {
-                    if (!player.dead || header.equip_passive())
-                        && header.allows_equip_form(player.unit_bytes_1 >> 16 & 0xff)
+                    if (!entity.dead || header.equip_passive())
+                        && header.allows_equip_form(entity.unit_bytes_1 >> 16 & 0xff)
                     {
                         desired.insert((item.guid, spell), header);
                     }
@@ -134,8 +134,8 @@ fn reconcile_item(ctx: &ReducerContext, guid: u64, changed_item: Option<u64>, re
         .collect();
     crate::spell::shed_auras(ctx, guid, removed);
     for ((item, _), header) in desired {
-        if !player.dead || (restoring && header.equip_passive()) {
-            crate::spell::apply_item_auras(ctx, &header, guid, player.level as u8, item);
+        if !entity.dead || (restoring && header.equip_passive()) {
+            crate::spell::apply_item_auras(ctx, &header, guid, entity.level as u8, item);
         }
     }
 }

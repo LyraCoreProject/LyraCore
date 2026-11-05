@@ -30,11 +30,11 @@ fn send(ctx: &ReducerContext, connection: ConnectionId, packets: Vec<Packet>) {
 }
 
 pub(crate) fn item_equip_cooldown(ctx: &ReducerContext, owner: u64, item: u64, spell: u32) {
-    if let Some(player) = ctx.db.game_native_player().character_guid().find(owner) {
+    if let Some(world_session) = ctx.db.game_native_player().character_guid().find(owner) {
         // SMSG_ITEM_COOLDOWN: Item GUID (u64), spell id (u32).
         let mut body = item.to_le_bytes().to_vec();
         body.extend(spell.to_le_bytes());
-        super::send_raw(ctx, player.connection_id, 0xb0, body, false);
+        super::send_raw(ctx, world_session.connection_id, 0xb0, body, false);
     }
 }
 
