@@ -578,6 +578,7 @@ pub(super) fn receive(
         }
         message @ (ClientOpcodeMessage::CMSG_LIST_INVENTORY(_)
         | ClientOpcodeMessage::CMSG_BUY_ITEM(_)
+        | ClientOpcodeMessage::CMSG_BUY_ITEM_IN_SLOT(_)
         | ClientOpcodeMessage::CMSG_SELL_ITEM(_)
         | ClientOpcodeMessage::CMSG_BUYBACK_ITEM(_)
         | ClientOpcodeMessage::CMSG_REPAIR_ITEM(_)

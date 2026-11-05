@@ -7,6 +7,8 @@ use serde_json::json;
 use serde_json::value::RawValue;
 use wow_world_messages::vanilla::{ClientMessage, CMSG_AUTH_SESSION};
 
+#[path = "conformance/buy_in_slot.rs"]
+mod buy_in_slot;
 #[path = "conformance/buyback.rs"]
 mod buyback;
 #[path = "../../conformance/support/character_world.rs"]

@@ -171,70 +171,18 @@ pub(crate) fn apply_item_move(
             }
         }
         if to_slot <= BAG_SLOT_END_INCL {
-            let can_dual_wield = crate::spell::knows_spell(
-                ctx,
-                player_guid,
-                lyracore_shared::constants::dual_wield::SPELL_ID,
-            );
             let tmpl = ctx
                 .db
                 .game_item_template()
                 .entry()
                 .find(src.entry)
                 .ok_or(ItemRefusal::CannotEquip)?;
-            let fits = if to_slot >= BAG_SLOT_START {
-                matches!(tmpl.class, 1 | 11)
-                    && tmpl.inventory_type == invtype::BAG
-                    && tmpl.container_slots > 0
-            } else {
-                can_equip_into(tmpl.class, tmpl.inventory_type, to_slot, can_dual_wield)
-            };
-            if !fits {
-                return Err(ItemRefusal::CannotEquip);
-            }
-            let player = crate::helpers::live_entity(ctx, player_guid)
-                .map_err(|_| refuse(ItemRefusal::Internal, "user not in world"))?;
-            if !meets_required_level(player.level, tmpl.required_level) {
-                return Err(refuse(
-                    ItemRefusal::CannotEquip,
-                    format!("requires level {}", tmpl.required_level),
-                ));
-            }
-            let player_class = player.class();
-            if !eligibility_mask_allows(tmpl.allowed_class, player_class) {
-                return Err(refuse(
-                    ItemRefusal::NoProficiency,
-                    format!("class {player_class} is not allowed to equip this item"),
-                ));
-            }
-            let player_race = player.race();
-            if !eligibility_mask_allows(tmpl.allowed_race, player_race) {
-                return Err(refuse(
-                    ItemRefusal::NoProficiency,
-                    format!("race {player_race} is not allowed to equip this item"),
-                ));
-            }
-            let current_skill = ctx
-                .db
-                .game_player_skill()
-                .by_character()
-                .filter(&player_guid)
-                .find(|skill| skill.skill_line == tmpl.required_skill)
-                .map(|skill| skill.current);
-            if !meets_required_skill(tmpl.required_skill, tmpl.required_skill_rank, current_skill) {
-                return Err(refuse(
-                    ItemRefusal::RequiredSkill,
-                    format!(
-                        "requires skill {} at rank {}",
-                        tmpl.required_skill, tmpl.required_skill_rank
-                    ),
-                ));
-            }
+            validate_equipment(ctx, player_guid, &tmpl, to_slot).map_err(equipment_refusal)?;
             let reputation_standing = ctx
                 .db
                 .game_player_reputation()
                 .by_character()
-                .filter(&player_guid)
+                .filter(player_guid)
                 .find(|reputation| reputation.faction_id == tmpl.required_reputation_faction)
                 .map(|reputation| reputation.standing);
             if !meets_required_reputation(
@@ -242,39 +190,36 @@ pub(crate) fn apply_item_move(
                 tmpl.required_reputation_rank,
                 reputation_standing,
             ) {
-                return Err(refuse(
-                    ItemRefusal::RequiredReputation,
-                    format!(
-                        "requires reputation faction {} at rank {}",
-                        tmpl.required_reputation_faction, tmpl.required_reputation_rank
-                    ),
-                ));
-            }
-            let proficiency = Proficiency::from_spellbook(player_class, |spell_id| {
-                crate::spell::knows_spell(ctx, player_guid, spell_id)
-            });
-            if !proficiency.can_equip(tmpl.class, tmpl.subclass) {
-                return Err(refuse(
-                    ItemRefusal::NoProficiency,
-                    format!(
-                        "class {} lacks proficiency for item class {}/subclass {}",
-                        player_class, tmpl.class, tmpl.subclass
-                    ),
-                ));
+                return Err(ItemRefusal::RequiredReputation);
             }
             if binds_on_equip(tmpl.bonding) {
                 src.soulbound = true;
             }
         }
     }
-    let displaced_off_hand = displaced_off_hand(
-        ctx,
-        player_guid,
-        from_slot,
-        to_slot,
-        src.guid,
-        destination.as_ref().map(|item| item.guid),
-    )?;
+    let displaced_off_hand = if [from_slot, to_slot]
+        .iter()
+        .any(|slot| matches!(*slot, equip_slot::MAINHAND | equip_slot::OFFHAND))
+    {
+        let destination_guid = destination.as_ref().map(|item| item.guid);
+        let owned_after_move = ctx
+            .db
+            .game_item_instance()
+            .by_owner_guid()
+            .filter(&player_guid)
+            .map(|mut item| {
+                if item.guid == src.guid {
+                    item.slot = to_slot;
+                } else if Some(item.guid) == destination_guid {
+                    item.slot = from_slot;
+                }
+                item
+            })
+            .collect();
+        displaced_off_hand(ctx, owned_after_move, &[Some(src.guid), destination_guid])?
+    } else {
+        None
+    };
     if let Some(mut dst) = destination {
         if dst.entry == src.entry && dst.random_property_id == src.random_property_id {
             if let Some(tmpl) = ctx.db.game_item_template().entry().find(src.entry) {
@@ -307,6 +252,80 @@ pub(crate) fn apply_item_move(
         crate::spell::recompute_sheet(ctx, player_guid);
     }
     Ok(())
+}
+
+pub(super) fn validate_equipment(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    template: &super::ItemTemplate,
+    slot: u8,
+) -> Result<(), lyracore_protocol::messages::vanilla::InventoryResult> {
+    use lyracore_protocol::messages::vanilla::InventoryResult;
+    let character = crate::helpers::live_entity(ctx, character_guid)
+        .map_err(|_| InventoryResult::ItemNotFound)?;
+    let can_dual_wield = crate::spell::knows_spell(
+        ctx,
+        character_guid,
+        lyracore_shared::constants::dual_wield::SPELL_ID,
+    );
+    let fits = if slot >= BAG_SLOT_START {
+        matches!(template.class, 1 | 11)
+            && template.inventory_type == invtype::BAG
+            && template.container_slots > 0
+    } else {
+        can_equip_into(
+            template.class,
+            template.inventory_type,
+            slot,
+            can_dual_wield,
+        )
+    };
+    if !fits {
+        return Err(InventoryResult::ItemCantBeEquipped);
+    }
+    if !eligibility_mask_allows(template.allowed_class, character.class())
+        || !eligibility_mask_allows(template.allowed_race, character.race())
+    {
+        return Err(InventoryResult::YouCanNeverUseThatItem);
+    }
+    let current_skill = ctx
+        .db
+        .game_player_skill()
+        .by_character()
+        .filter(character_guid)
+        .find(|skill| skill.skill_line == template.required_skill)
+        .map(|skill| skill.current);
+    if template.required_skill != 0 && current_skill.unwrap_or(0) == 0 {
+        return Err(InventoryResult::NoRequiredProficiency);
+    }
+    if !meets_required_skill(
+        template.required_skill,
+        template.required_skill_rank,
+        current_skill,
+    ) {
+        return Err(InventoryResult::CantEquipSkill);
+    }
+    if !meets_required_level(character.level, template.required_level) {
+        return Err(InventoryResult::CantEquipLevelI);
+    }
+    let proficiency = Proficiency::from_spellbook(character.class(), |spell_id| {
+        crate::spell::knows_spell(ctx, character_guid, spell_id)
+    });
+    if !proficiency.can_equip(template.class, template.subclass) {
+        return Err(InventoryResult::NoRequiredProficiency);
+    }
+    Ok(())
+}
+
+fn equipment_refusal(result: lyracore_protocol::messages::vanilla::InventoryResult) -> ItemRefusal {
+    use lyracore_protocol::messages::vanilla::InventoryResult;
+    match result {
+        InventoryResult::YouCanNeverUseThatItem | InventoryResult::NoRequiredProficiency => {
+            ItemRefusal::NoProficiency
+        }
+        InventoryResult::CantEquipSkill => ItemRefusal::RequiredSkill,
+        _ => ItemRefusal::CannotEquip,
+    }
 }
 
 pub(crate) fn apply_equip_item(
@@ -345,49 +364,30 @@ pub(crate) fn apply_equip_item(
     apply_item_move(ctx, player_guid, from_slot, to_slot)
 }
 
-fn displaced_off_hand(
+pub(super) fn displaced_off_hand(
     ctx: &ReducerContext,
-    player_guid: u64,
-    from_slot: u8,
-    to_slot: u8,
-    src_guid: u64,
-    destination_guid: Option<u64>,
+    owned_after_move: Vec<ItemInstance>,
+    moved: &[Option<u64>; 2],
 ) -> Result<Option<ItemInstance>, ItemRefusal> {
-    if ![from_slot, to_slot]
-        .iter()
-        .any(|slot| matches!(*slot, equip_slot::MAINHAND | equip_slot::OFFHAND))
-    {
-        return Ok(None);
-    }
-    let owned_after_move = ctx
-        .db
-        .game_item_instance()
-        .by_owner_guid()
-        .filter(&player_guid)
-        .map(|mut item| {
-            if item.guid == src_guid {
-                item.slot = to_slot;
-            } else if Some(item.guid) == destination_guid {
-                item.slot = from_slot;
-            }
-            item
-        })
-        .collect();
     let templates = ctx.db.game_item_template();
     off_hand_after_move(
         owned_after_move,
-        &[Some(src_guid), destination_guid],
+        moved,
         |entry| {
             templates
                 .entry()
                 .find(entry)
                 .is_some_and(|template| template.inventory_type == invtype::TWO_HAND_WEAPON)
         },
-        |entry| {
+        |item_entry, bag_entry| {
+            let Some(item) = templates.entry().find(item_entry) else {
+                return 0;
+            };
             templates
                 .entry()
-                .find(entry)
-                .map_or(0, |t| t.container_slots)
+                .find(bag_entry)
+                .filter(|bag| item_fits_bag(&item, bag))
+                .map_or(0, |bag| bag.container_slots)
         },
     )
 }
@@ -501,6 +501,7 @@ const BAG_CONTENT_END: u8 = BAG_CONTENT_OFFSET + BAG_SLOT_COUNT * MAX_BAG_SIZE;
 pub(crate) fn valid_dest_slot(to_slot: u8) -> bool {
     to_slot < BACKPACK_SLOT_END
         || is_bank_slot(to_slot)
+        || (81..113).contains(&to_slot)
         || (BAG_CONTENT_OFFSET..BAG_CONTENT_END).contains(&to_slot)
 }
 
@@ -623,12 +624,27 @@ pub(super) fn free_inventory_slots(
     free
 }
 
-// A two-hander moved into the main hand sends the off-hand item to the first free carried slot.
+pub(super) fn item_fits_bag(item: &super::ItemTemplate, bag: &super::ItemTemplate) -> bool {
+    if bag.bag_family != 0 && item.container_slots != 0 {
+        return false;
+    }
+    match (bag.class, bag.subclass) {
+        (1, 0) => true,
+        (1, 1) => item.bag_family == 3,
+        (1, 2) => item.bag_family == 6,
+        (1, 3) => item.bag_family == 7,
+        (11, 2) => item.bag_family == 1,
+        (11, 3) => item.bag_family == 2,
+        _ => false,
+    }
+}
+
+// A two-hander sends the off-hand item to the first compatible free carried slot.
 fn off_hand_after_move(
     mut owned_after_move: Vec<ItemInstance>,
     moved: &[Option<u64>; 2],
     is_two_hander: impl Fn(u32) -> bool,
-    bag_capacity: impl FnMut(u32) -> u8,
+    mut compatible_bag_capacity: impl FnMut(u32, u32) -> u8,
 ) -> Result<Option<ItemInstance>, ItemRefusal> {
     let in_slot = |slot| owned_after_move.iter().position(|item| item.slot == slot);
     let (Some(main_hand), Some(off_hand)) =
@@ -642,15 +658,17 @@ fn off_hand_after_move(
     let was_moved = |index: usize| moved.contains(&Some(owned_after_move[index].guid));
     match (was_moved(main_hand), was_moved(off_hand)) {
         (true, false) => {
-            let free_slot = free_inventory_slots(&owned_after_move, bag_capacity)
-                .first()
-                .copied()
-                .ok_or_else(|| {
-                    refuse(
-                        ItemRefusal::InventoryFull,
-                        "no free slot for the off-hand item",
-                    )
-                })?;
+            let free_slot = free_inventory_slots(&owned_after_move, |bag_entry| {
+                compatible_bag_capacity(owned_after_move[off_hand].entry, bag_entry)
+            })
+            .first()
+            .copied()
+            .ok_or_else(|| {
+                refuse(
+                    ItemRefusal::InventoryFull,
+                    "no free slot for the off-hand item",
+                )
+            })?;
             let mut off_hand = owned_after_move.swap_remove(off_hand);
             off_hand.slot = free_slot;
             Ok(Some(off_hand))
@@ -782,7 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn valid_dest_slot_admits_the_three_modeled_ranges_only() {
+    fn valid_dest_slot_admits_the_four_modeled_ranges_only() {
         for slot in [0u8, 18, 19, 22, 23, 38] {
             assert!(valid_dest_slot(slot), "slot {slot} is in the 0..=38 range");
         }
@@ -791,6 +809,11 @@ mod tests {
         }
         assert!(!valid_dest_slot(63));
         assert!(!valid_dest_slot(68));
+        for slot in 81..=112 {
+            assert!(valid_dest_slot(slot));
+        }
+        assert!(!valid_dest_slot(80));
+        assert!(!valid_dest_slot(113));
         assert!(!valid_dest_slot(119));
         assert!(valid_dest_slot(120));
         assert!(valid_dest_slot(191));
@@ -804,7 +827,7 @@ mod tests {
             assert!(valid_dest_slot(slot));
             assert!(!valid_split_dest_slot(slot));
         }
-        for slot in [23, 38, 39, 62, 120, 191] {
+        for slot in [23, 38, 39, 62, 81, 112, 120, 191] {
             assert!(valid_split_dest_slot(slot));
         }
         for slot in [63, 119, 192, 255] {
@@ -845,8 +868,13 @@ mod tests {
         owned_after_move: Vec<ItemInstance>,
         moved: [Option<u64>; 2],
     ) -> Result<Option<(u64, u8)>, ItemRefusal> {
-        off_hand_after_move(owned_after_move, &moved, |entry| entry == TWO_HANDER, |_| 0)
-            .map(|off_hand| off_hand.map(|item| (item.guid, item.slot)))
+        off_hand_after_move(
+            owned_after_move,
+            &moved,
+            |entry| entry == TWO_HANDER,
+            |_, _| 0,
+        )
+        .map(|off_hand| off_hand.map(|item| (item.guid, item.slot)))
     }
 
     #[test]

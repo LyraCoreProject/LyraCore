@@ -97,7 +97,7 @@ pub(crate) use guild::{event as guild_event, membership_changed as guild_members
 pub(crate) use instance::removal_changed as instance_removal_changed;
 pub(crate) use inventory::changed as item_changed;
 pub(crate) use inventory::temporary_enchantment_changed;
-pub(crate) use inventory::{item_restored, item_sold};
+pub(crate) use inventory::{item_purchase_started, item_purchased, item_restored, item_sold};
 #[cfg(feature = "conformance_test_fixture")]
 pub(crate) use logon::{game_native_logon_reaper, native_reap_logon_addresses};
 pub(crate) use mail::arrived as mail_arrived;

@@ -30,6 +30,16 @@ path = "module/tests/conformance/buyback.rs"
 function = "transfer_without_a_world_session_carries_inventory_and_discards_buyback"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/conformance/buy_in_slot.rs"
+function = "backpack_purchase_uses_the_requested_slot_and_acknowledges_before_one_receipt"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/buy_in_slot.rs"
+function = "equipment_purchases_keep_the_ordinary_equip_stats_and_wire_values"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/ItemHandler.cpp"
@@ -39,10 +49,10 @@ symbol = "WorldSession::HandleListInventoryOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "The Module returns an unavailable response for CMSG_BUY_ITEM_IN_SLOT."
-path = "module/src/native/unavailable.rs"
-symbol = "responses"
-evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
+description = "Vendor stock and restock are not enforced. Vendor offer conditions, required honor rank, honor discounts and required equip spells have no representation in the current vendor and item metadata."
+path = "module/src/items/economy.rs"
+symbol = "apply_buy_item_to"
+evidence = "Pinned vmangos Player::BuyItemFromVendor checks stock, visibility conditions and honor rank; GetReputationPriceDiscount checks visual honor rank; CanUseItem checks RequiredSpell. NpcVendor retains max_count but has no live stock or restock schedule; the vendor and item tables omit condition, honor and required-spell metadata. vendor_transactions buys unlimited, unconditional offers and has no honor or required-spell case."
 
 [[known_gaps]]
 description = "Sale value still uses the template sell price without charge or durability adjustments; buyback retains the amount paid at sale time. Exact damaged-item and charged-item sale values need the corresponding item metadata and DBC cost catalogues."

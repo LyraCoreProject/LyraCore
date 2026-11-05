@@ -118,15 +118,6 @@ pub fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<Vec<Pack
             message(ServerOpcodeMessage::SMSG_RAID_INSTANCE_INFO(Box::default()))
         }
         ClientOpcodeMessage::MSG_INSPECT_HONOR_STATS(_) => unavailable("Honor statistics"),
-        ClientOpcodeMessage::CMSG_BUY_ITEM_IN_SLOT(_) => {
-            message(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
-                Box::new(codec::build_inventory_refusal(
-                    lyracore_shared::item::ItemRefusal::NotRightNow,
-                    0,
-                    0,
-                )),
-            ))
-        }
         _ => return None,
     };
     Some(vec![response])

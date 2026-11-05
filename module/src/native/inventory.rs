@@ -61,17 +61,7 @@ fn clear_slot(ctx: &ReducerContext, item: &ItemInstance, packets: &mut Vec<Packe
     }
 }
 
-fn gain(
-    ctx: &ReducerContext,
-    row: &ItemInstance,
-    count: u32,
-    stack_add: bool,
-    source: NewItemSource,
-    packets: &mut Vec<Packet>,
-) {
-    if count == 0 {
-        return;
-    }
+fn receipt(row: &ItemInstance, count: u32, stack_add: bool, source: NewItemSource) -> Packet {
     let (bag, position) = codec::bag_content_parts(row.slot).unwrap_or((255, row.slot));
     let mut receipt = codec::build_item_push_result(
         row.owner_guid,
@@ -83,19 +73,69 @@ fn gain(
         row.random_property_id,
     );
     receipt.source = source;
-    packets.push(packet(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(
-        Box::new(receipt),
-    )));
-    if super::quest::collects(ctx, row.owner_guid, row.entry) {
+    packet(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(Box::new(
+        receipt,
+    )))
+}
+
+fn quest_gain(ctx: &ReducerContext, character_guid: u64, entry: u32, count: u32) -> Option<Packet> {
+    (count != 0 && super::quest::collects(ctx, character_guid, entry)).then(|| {
+        packet(ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_ITEM(
+            lyracore_protocol::messages::vanilla::SMSG_QUESTUPDATE_ADD_ITEM {
+                required_item_id: entry,
+                items_required: count,
+            },
+        ))
+    })
+}
+
+fn gain(
+    ctx: &ReducerContext,
+    row: &ItemInstance,
+    count: u32,
+    stack_add: bool,
+    source: NewItemSource,
+    packets: &mut Vec<Packet>,
+) {
+    if count == 0 {
+        return;
+    }
+    packets.push(receipt(row, count, stack_add, source));
+    if let Some(toast) = quest_gain(ctx, row.owner_guid, row.entry, count) {
         // The client's toast adds this count to its bags, so it must lead the item's update.
-        packets.insert(
-            0,
-            packet(ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_ITEM(
-                lyracore_protocol::messages::vanilla::SMSG_QUESTUPDATE_ADD_ITEM {
-                    required_item_id: row.entry,
-                    items_required: count,
-                },
-            )),
+        packets.insert(0, toast);
+    }
+}
+
+pub(crate) fn item_purchase_started(ctx: &ReducerContext, item: &ItemInstance, count: u32) {
+    if let Some(owner) = ctx
+        .db
+        .game_native_player()
+        .character_guid()
+        .find(item.owner_guid)
+    {
+        if let Some(toast) = quest_gain(ctx, item.owner_guid, item.entry, count) {
+            send(ctx, owner.connection_id, vec![toast]);
+        }
+    }
+}
+
+pub(crate) fn item_purchased(ctx: &ReducerContext, item: &ItemInstance, count: u32) {
+    if let Some(owner) = ctx
+        .db
+        .game_native_player()
+        .character_guid()
+        .find(item.owner_guid)
+    {
+        send(
+            ctx,
+            owner.connection_id,
+            vec![receipt(
+                item,
+                count,
+                item.stack_count != count,
+                NewItemSource::FromNpc,
+            )],
         );
     }
 }
