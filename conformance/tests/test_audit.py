@@ -154,7 +154,7 @@ class ModuleSchema(unittest.TestCase):
 class ImportModuleCoverage(unittest.TestCase):
     def test_module_inputs_are_explicit_files(self):
         for path in audit.import_contract_paths():
-            if path.is_relative_to(audit.ROOT / 'module/src'):
+            if path.is_relative_to(audit.ROOT / 'module/src') and path.name != 'package_import':
                 self.assertTrue(path.is_file(), str(path))
 
     def test_missing_contract_file_is_an_error(self):
@@ -199,6 +199,7 @@ class ScenarioKey(unittest.TestCase):
                     path.write_text('contract input')
             with patch.object(audit, 'ROOT', root), patch.object(audit, 'SCENARIO_CACHE', root):
                 first, _ = audit.scenario_key(harness, client)
+                strict, _ = audit.scenario_key(harness, client, strict_world=True)
                 self.assertEqual(first, audit.scenario_key(harness, client)[0])
                 for name in ['module/src/creatures/ai.rs', 'module/src/combat/swing.rs',
                              'module/src/native/casting.rs', 'module/src/spell/cast.rs',
@@ -208,6 +209,8 @@ class ScenarioKey(unittest.TestCase):
                         path.parent.mkdir(parents=True, exist_ok=True)
                         path.write_text('second gameplay commit')
                         self.assertEqual(first, audit.scenario_key(harness, client)[0])
+                        self.assertNotEqual(strict, audit.scenario_key(
+                            harness, client, strict_world=True)[0])
                 for name in ['Cargo.lock', 'crates/lyracore-shared/src/nav.rs',
                              'module/src/seed.rs', 'module/src/seed/fixtures.rs',
                              'module/src/operations.rs', 'module/src/package_import/creatures.rs',
@@ -660,7 +663,7 @@ class ReferenceOwnership(unittest.TestCase):
         state.parent.mkdir()
         state.write_text(json.dumps(dict(native_host_sha256=audit.digest(host),
                                         module_sha256=audit.digest(module), database_commit='pin',
-                                        world_origin='snapshot')))
+                                        world_origin='snapshot', changed_gameplay_files=[])))
         scenarios = [dict(id='actor_first', characters=['Banktester', 'Spawnwatch']),
                      dict(id='viewer_first', characters=['Spawnwatch', 'Banktester'])]
         (self.root / 'catalogue.json').write_text(json.dumps(scenarios))
@@ -721,7 +724,7 @@ class ReferenceOwnership(unittest.TestCase):
         state.parent.mkdir()
         state.write_text(json.dumps(dict(native_host_sha256=audit.digest(host),
                                         module_sha256=audit.digest(module), database_commit='pin',
-                                        world_origin='snapshot')))
+                                        world_origin='snapshot', changed_gameplay_files=[])))
         scenario = {'id': 'taxi_single_hop', 'characters': ['Taxi']}
         (self.root / 'catalogue.json').write_text(json.dumps([scenario]))
         @audit.contextmanager
@@ -797,7 +800,7 @@ class Tier1BuildDirectory(unittest.TestCase):
                     patch.object(audit, 'scenario_work', return_value=work), \
                     patch.dict(os.environ, CARGO_TARGET_DIR=str(cache / 'deployment')), \
                     patch.object(audit.subprocess, 'run', side_effect=RuntimeError('child boundary')) as run:
-                args = SimpleNamespace(client_data=cache, agreement=True, scenario='taxi_single_hop')
+                args = SimpleNamespace(client_data=cache, agreement=True, scenario='taxi_single_hop', strict_world=False)
                 with self.assertRaisesRegex(RuntimeError, 'child boundary'):
                     audit.run_scenario(args, cache, cache, 'core')
             self.assertEqual(run.call_args.kwargs['env']['CARGO_TARGET_DIR'],
@@ -921,6 +924,37 @@ class SnapshotStore(unittest.TestCase):
                 audit.validate_snapshot(root / 'key', 'key')
 
 
+class SnapshotGameplay(unittest.TestCase):
+    def test_added_deleted_and_changed_files_are_reported(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            root = Path(directory)
+            creatures = root / 'module/src/creatures'
+            creatures.mkdir(parents=True)
+            (creatures / 'ai.rs').write_text('old targeting')
+            (creatures / 'old.rs').write_text('removed gameplay')
+            schema = audit.canonical_schema(ModuleSchema().schema())
+            with patch.object(audit, 'ROOT', root):
+                (root / 'state.json').write_text(json.dumps(dict(
+                    module_schema=schema, gameplay_manifest=audit.gameplay_manifest())))
+                self.assertEqual(audit.snapshot_origin(root, schema), 'snapshot')
+                (creatures / 'ai.rs').write_text('new targeting')
+                (creatures / 'old.rs').unlink()
+                (creatures / 'new.rs').write_text('new gameplay')
+                self.assertEqual(audit.snapshot_gameplay_changes(root), [
+                    'module/src/creatures/ai.rs', 'module/src/creatures/new.rs',
+                    'module/src/creatures/old.rs'])
+                self.assertEqual(audit.snapshot_origin(root, schema), 'snapshot_gameplay_drift')
+
+    def test_snapshot_without_gameplay_provenance_requires_an_import(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            root = Path(directory)
+            schema = audit.canonical_schema(ModuleSchema().schema())
+            (root / 'state.json').write_text(json.dumps(dict(module_schema=schema)))
+            self.assertIsNone(audit.snapshot_origin(root, schema))
+
+
 class ScenarioRealmReuse(unittest.TestCase):
     def setUp(self):
         audit.SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -1006,6 +1040,35 @@ class ScenarioRealmReuse(unittest.TestCase):
             table_access={'Private': []}, is_event=False))
         (self.cache / 'deployment-schema.json').write_text(
             json.dumps(audit.canonical_schema(self.schema)))
+
+    def test_gameplay_drift_reuses_the_world_and_reports_the_changed_file(self):
+        gameplay = self.root / 'module/src/creatures/ai.rs'
+        gameplay.parent.mkdir(parents=True)
+        gameplay.write_text('first gameplay')
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            pass
+        gameplay.write_text('changed targeting')
+        self.commit = 'changed-gameplay'
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            state = json.loads((self.cache / 'realm/state.json').read_text())
+            self.assertEqual(state['world_origin'], 'snapshot_gameplay_drift')
+            self.assertEqual(state['changed_gameplay_files'], ['module/src/creatures/ai.rs'])
+        self.assertEqual(self.imports, 1)
+        self.assertEqual((self.store / 'key/state.json').stat().st_mode & 0o222, 0)
+
+    def test_catalogue_snapshot_preserves_drift_from_its_base(self):
+        gameplay = self.root / 'module/src/creatures/ai.rs'
+        gameplay.parent.mkdir(parents=True)
+        gameplay.write_text('first gameplay')
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            pass
+        gameplay.write_text('changed targeting')
+        audit.seal_snapshot('catalogue', self.realm, 'password', base_key='key')
+        schema = audit.canonical_schema(self.schema)
+        self.assertEqual(audit.snapshot_origin(self.store / 'catalogue', schema),
+                         'snapshot_gameplay_drift')
+        self.assertEqual(audit.snapshot_gameplay_changes(self.store / 'catalogue'),
+                         ['module/src/creatures/ai.rs'])
 
     def test_private_table_reuses_imported_rows_and_records_upgrade(self):
         with audit.scenario_realm('key', self.pins, self.root, 0):

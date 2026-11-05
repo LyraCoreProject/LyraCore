@@ -8,7 +8,6 @@ mod hostile_summon;
 mod hunter_pet;
 mod pet;
 mod pet_care;
-mod schedule;
 #[cfg(feature = "conformance_test_fixture")]
 pub(crate) use eventai::{
     expire_eventai_summon, fire_eventai_forced_despawn, resume_relay_arrival, resume_relay_run,
@@ -22,13 +21,11 @@ mod spawn;
 pub(crate) use spawn::game_creature_spawn_map;
 pub(crate) mod tick;
 
-pub(crate) use schedule::{GLOBAL_TICK_INSTANCE, MOVE_TICK_MICROS, SLICED_TICK_MICROS};
-
 pub(crate) use ai::{
     beyond_combat_backstop, chase_step, combat_active_radius, flee_eligible,
     is_sense_tick_for_interval, pursuit_deadline_ms, rout_window_open,
     sense_period_secs_for_interval, should_evade, should_flee, tick_secs_for_interval, TickScope,
-    TickSlice,
+    TickSlice, GLOBAL_TICK_INSTANCE, MOVE_TICK_MICROS, SLICED_TICK_MICROS,
 };
 #[cfg(test)]
 pub(crate) use ai::{MOVE_TICK_SECS, SENSE_EVERY_N_TICKS};

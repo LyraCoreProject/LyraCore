@@ -1,5 +1,3 @@
-use super::schedule::{GLOBAL_TICK_INSTANCE, MOVE_TICK_MICROS, SLICED_TICK_MICROS, TICK_SLICES};
-
 const FLEE_HEALTH_PCT: u32 = 15;
 
 const ASSIST_RADIUS: f32 = 10.0;
@@ -200,6 +198,8 @@ pub(crate) fn wander_point(
 
 pub(crate) const MOVE_TICK_SECS: f32 = 0.5;
 
+pub(crate) const MOVE_TICK_MICROS: i64 = 500_000;
+
 pub(crate) const SENSE_EVERY_N_TICKS: i64 = 8;
 
 pub(crate) const SENSE_PERIOD_MICROS: i64 = MOVE_TICK_MICROS * SENSE_EVERY_N_TICKS;
@@ -236,6 +236,13 @@ pub(crate) fn sense_period_secs_for_interval(interval_micros: i64) -> f32 {
     let every_n = (SENSE_PERIOD_MICROS / interval).max(1);
     (every_n * interval) as f32 / 1_000_000.0
 }
+
+pub(crate) const GLOBAL_TICK_INSTANCE: u64 = u64::MAX;
+
+pub(crate) const TICK_SLICES: u32 = 4;
+
+/// Each firing runs one slice, so every creature still runs once per `MOVE_TICK_MICROS`.
+pub(crate) const SLICED_TICK_MICROS: i64 = MOVE_TICK_MICROS / TICK_SLICES as i64;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct TickSlice {

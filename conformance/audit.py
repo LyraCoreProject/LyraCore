@@ -167,14 +167,21 @@ def compatible_schema(previous, current):
 
 
 def snapshot_origin(path, schema):
-    previous = json.loads((path / 'state.json').read_text()).get('module_schema')
+    state = json.loads((path / 'state.json').read_text())
+    previous = state.get('module_schema')
+    if 'gameplay_manifest' not in state:
+        return None
     if previous == schema:
-        return 'snapshot'
-    if previous is not None and compatible_schema(previous, schema):
-        return 'upgraded_snapshot'
-    print('[audit] snapshot schema is incompatible or missing; cold import required',
-          file=sys.stderr, flush=True)
-    return None
+        origin = 'snapshot'
+    elif previous is not None and compatible_schema(previous, schema):
+        origin = 'upgraded_snapshot'
+    else:
+        print('[audit] snapshot schema is incompatible or missing; cold import required',
+              file=sys.stderr, flush=True)
+        return None
+    if snapshot_gameplay_changes(path):
+        origin += '_gameplay_drift'
+    return origin
 
 
 def module_schema_hash():
@@ -217,177 +224,67 @@ IMPORT_CONTRACT = (
     'crates/lyracore-protocol',
     'module/Cargo.toml',
     'module/build.rs',
-    'module/src/account_ownership.rs',
-    'module/src/action_bar.rs',
-    'module/src/actor.rs',
-    'module/src/aoi.rs',
-    'module/src/auction.rs',
-    'module/src/auth.rs',
-    'module/src/breath.rs',
-    'module/src/breath_relay.rs',
-    'module/src/channel.rs',
-    'module/src/character.rs',
-    'module/src/chat.rs',
-    'module/src/combat/death.rs',
-    'module/src/combat/engage.rs',
-    'module/src/combat/folds.rs',
-    'module/src/combat/mod.rs',
-    'module/src/combat/tables.rs',
-    'module/src/combo.rs',
+    'module/build_support/source.rs',
+    'module/src/lib.rs',
+    'module/src/seed.rs',
     'module/src/config.rs',
-    'module/src/corpse.rs',
+    'module/src/operations.rs',
+    'module/src/package_import.rs',
+    'module/src/import_meta.rs',
+    'module/src/terrain.rs',
+    'module/src/nav.rs',
+    'module/src/vmap.rs',
+    'module/src/go_model.rs',
+    'module/src/go_collider.rs',
+    'module/src/region.rs',
     'module/src/creatures/catalogue.rs',
-    'module/src/creatures/cycle/ctx.rs',
-    'module/src/creatures/cycle/mod.rs',
-    'module/src/creatures/distraction.rs',
-    'module/src/creatures/eventai/combat.rs',
-    'module/src/creatures/eventai/edges.rs',
+    'module/src/creatures/spawn.rs',
     'module/src/creatures/eventai/fixtures.rs',
     'module/src/creatures/eventai/loader.rs',
-    'module/src/creatures/eventai/mobility.rs',
-    'module/src/creatures/eventai/mod.rs',
     'module/src/creatures/eventai/model.rs',
-    'module/src/creatures/eventai/movement.rs',
-    'module/src/creatures/eventai/presentation.rs',
-    'module/src/creatures/eventai/relay.rs',
-    'module/src/creatures/eventai/relay_control.rs',
     'module/src/creatures/eventai/stored.rs',
     'module/src/creatures/eventai/tables.rs',
-    'module/src/creatures/guardian.rs',
-    'module/src/creatures/hunter_pet.rs',
-    'module/src/creatures/mod.rs',
-    'module/src/creatures/pet.rs',
-    'module/src/creatures/pet_care.rs',
-    'module/src/creatures/population.rs',
-    'module/src/creatures/presentation.rs',
-    'module/src/creatures/schedule.rs',
-    'module/src/creatures/spawn.rs',
-    'module/src/creatures/tick/lifecycle.rs',
-    'module/src/creatures/tick/mod.rs',
-    'module/src/duel.rs',
-    'module/src/encounter.rs',
-    'module/src/faction.rs',
+    'module/src/creatures/eventai/relay.rs',
     'module/src/gameobject.rs',
-    'module/src/gc.rs',
-    'module/src/gm.rs',
-    'module/src/go_collider.rs',
-    'module/src/go_model.rs',
-    'module/src/graveyard.rs',
-    'module/src/group.rs',
-    'module/src/guild/cleanup.rs',
-    'module/src/guild/fee.rs',
-    'module/src/guild/membership.rs',
-    'module/src/guild/mod.rs',
-    'module/src/guild/petition.rs',
-    'module/src/guild/settings.rs',
-    'module/src/gw.rs',
-    'module/src/helpers.rs',
-    'module/src/hooks.rs',
-    'module/src/import_meta.rs',
-    'module/src/instance.rs',
-    'module/src/items/mod.rs',
-    'module/src/items/ops.rs',
-    'module/src/items/properties.rs',
-    'module/src/items/rules.rs',
     'module/src/items/tables.rs',
-    'module/src/items/temporary_enchantment.rs',
-    'module/src/lib.rs',
-    'module/src/loot/mod.rs',
-    'module/src/loot/rolls.rs',
-    'module/src/loot/tag.rs',
-    'module/src/mail.rs',
-    'module/src/mail_timer.rs',
-    'module/src/meeting_stone/mod.rs',
-    'module/src/motion.rs',
-    'module/src/native/addon.rs',
-    'module/src/native/admission.rs',
-    'module/src/native/aura.rs',
-    'module/src/native/book.rs',
-    'module/src/native/channel.rs',
-    'module/src/native/chat_flood.rs',
-    'module/src/native/combat.rs',
-    'module/src/native/creature.rs',
-    'module/src/native/death.rs',
-    'module/src/native/debug/projection.rs',
-    'module/src/native/debug.rs',
-    'module/src/native/directory.rs',
-    'module/src/native/duel.rs',
-    'module/src/native/environment.rs',
-    'module/src/native/gossip.rs',
-    'module/src/native/guild.rs',
-    'module/src/native/handoff.rs',
-    'module/src/native/instance.rs',
-    'module/src/native/inventory.rs',
-    'module/src/native/loot.rs',
-    'module/src/native/member_stats.rs',
-    'module/src/native/mod.rs',
-    'module/src/native/motion_permit.rs',
-    'module/src/native/object.rs',
-    'module/src/native/package_actor.rs',
-    'module/src/native/package_guild.rs',
-    'module/src/native/party.rs',
-    'module/src/native/pet.rs',
-    'module/src/native/petition.rs',
-    'module/src/native/quest.rs',
-    'module/src/native/realm_communication.rs',
-    'module/src/native/realm_guild.rs',
-    'module/src/native/realm_party/package.rs',
-    'module/src/native/realm_party.rs',
-    'module/src/native/realm_shard.rs',
-    'module/src/native/reputation.rs',
-    'module/src/native/social.rs',
-    'module/src/native/spell.rs',
-    'module/src/native/taxi.rs',
-    'module/src/native/teleport.rs',
-    'module/src/native/trade.rs',
-    'module/src/native/transfer.rs',
-    'module/src/native/transport.rs',
-    'module/src/native/view.rs',
-    'module/src/native/visibility.rs',
-    'module/src/native/world.rs',
-    'module/src/nav.rs',
-    'module/src/operations.rs',
-    'module/src/operator_content/creatures.rs',
-    'module/src/operator_content.rs',
-    'module/src/package_account.rs',
-    'module/src/package_import.rs',
-    'module/src/package_teardown.rs',
-    'module/src/peer.rs',
-    'module/src/quest.rs',
-    'module/src/refusal.rs',
-    'module/src/region.rs',
-    'module/src/remote_bindings/mod.rs',
-    'module/src/remote_bindings/peer/mod.rs',
-    'module/src/reputation.rs',
-    'module/src/rest.rs',
-    'module/src/runtime_script.rs',
-    'module/src/seed/fixtures.rs',
-    'module/src/seed.rs',
-    'module/src/sessionless.rs',
-    'module/src/skill.rs',
-    'module/src/skilldata.rs',
-    'module/src/spell/control.rs',
-    'module/src/spell/math.rs',
-    'module/src/spell/mod.rs',
-    'module/src/spell/proc.rs',
-    'module/src/spell/self_resurrect.rs',
+    'module/src/items/properties.rs',
+    'module/src/spell/tables.rs',
     'module/src/spell/spellbook.rs',
     'module/src/spell/stacking.rs',
-    'module/src/spell/tables.rs',
-    'module/src/talent.rs',
-    'module/src/taxi.rs',
-    'module/src/terrain.rs',
-    'module/src/threat.rs',
-    'module/src/time.rs',
-    'module/src/trade.rs',
-    'module/src/transfer/mod.rs',
-    'module/src/transport/mod.rs',
-    'module/src/transport/timetable.rs',
-    'module/src/vmap.rs',
-    'module/src/weather.rs',
-    'module/src/world/simulation.rs',
-    'module/src/world.rs',
+    'module/src/spell/proc.rs',
+    'module/src/action_bar.rs',
     'module/src/xp.rs',
+    'module/src/talent.rs',
+    'module/src/weather.rs',
+    'module/src/skill.rs',
+    'module/src/helpers.rs',
+    'module/src/time.rs',
+    'module/src/instance.rs',
+    'module/src/world.rs',
+    'module/src/world/simulation.rs',
+    'module/src/world/placement.rs',
+    'module/src/breath.rs',
+    'module/src/gc.rs',
+    'module/src/combat/engage.rs',
+    'module/src/creatures/tick/mod.rs',
+    'module/src/creatures/pet_care.rs',
+    'module/src/creatures/eventai/presentation.rs',
+    'module/src/duel.rs',
+    'module/src/motion.rs',
+    'module/src/gw.rs',
+    'module/src/meeting_stone/mod.rs',
+    'module/src/quest.rs',
+    'module/src/loot/mod.rs',
+    'module/src/trainer.rs',
+    'module/src/auth.rs',
+    'module/src/seed/fixtures.rs',
+    'module/src/tables.rs',
+    'module/src/character.rs',
+    'module/src/faction.rs',
+    'module/src/graveyard.rs',
+    'module/src/skilldata.rs',
+    'datascripts/runtime-scripts/events.json',
+    'module/src/package_import',
 )
 
 
@@ -399,15 +296,31 @@ def import_contract_paths():
     return sorted(paths)
 
 
-def scenario_key(harness, client_data):
+def gameplay_manifest():
+    strict = {ROOT / path for path in IMPORT_CONTRACT}
+    return {str(path.relative_to(ROOT)): digest(path)
+            for path in sorted((ROOT / 'module/src').rglob('*.rs'))
+            if not any(path == entry or entry in path.parents for entry in strict)}
+
+
+def snapshot_gameplay_changes(path):
+    saved = json.loads((path / 'state.json').read_text())['gameplay_manifest']
+    current = gameplay_manifest()
+    return sorted(name for name in saved.keys() | current.keys()
+                  if saved.get(name) != current.get(name))
+
+
+def scenario_key(harness, client_data, *, strict_world=False):
     pins = json.loads((harness / 'adapters/vmangos/pins.json').read_text())
     with timed('client data fingerprint'):
         client_hash = client_fingerprint(client_data)
     contract = tree_hash(import_contract_paths())
-    key = dict(snapshot_version=2, import_contract_sha256=contract,
+    key = dict(snapshot_version=3, import_contract_sha256=contract,
                vmangos_database_commit=pins['database_commit'],
                cli_revision=(ROOT / '.lyracore-cli-rev').read_text().strip(),
                client_sha256=client_hash)
+    if strict_world:
+        key['gameplay_manifest'] = gameplay_manifest()
     return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest(), pins
 
 
@@ -559,7 +472,9 @@ def seal_snapshot(key, realm_root, password, *, base_key=None):
     manifest = dict(data=file_manifest(pending / 'native-data'),
                     jwt=file_manifest(pending / 'native-jwt'))
     schema = json.loads((SCENARIO_CACHE / 'deployment-schema.json').read_text())
-    state = dict(key=key, manifest=manifest, module_schema=schema)
+    gameplay = (json.loads((snapshot_path(base_key) / 'state.json').read_text())['gameplay_manifest']
+                if base_key else gameplay_manifest())
+    state = dict(key=key, manifest=manifest, module_schema=schema, gameplay_manifest=gameplay)
     if base_key:
         state['base_world'] = base_key
     write_state(pending / 'state.json', state)
@@ -1037,6 +952,7 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
                     print('[audit] import: 0.00s (cached snapshot)', file=sys.stderr, flush=True)
                 state = dict(phase='ready', key=key, core_commit=current,
                              world_origin=origin or 'fresh_import',
+                             changed_gameplay_files=snapshot_gameplay_changes(snapshot) if saved else [],
                              native_host_sha256=digest(realm_root / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone'),
                              module_sha256=digest(SCENARIO_CACHE / 'deployment.wasm'),
                              database_commit=pins['database_commit'])
@@ -1062,6 +978,7 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
                 raise
             print('[audit] import: 0.00s (cached snapshot)', file=sys.stderr, flush=True)
             state['world_origin'] = origin
+            state['changed_gameplay_files'] = snapshot_gameplay_changes(snapshot)
             state['native_host_sha256'] = digest(realm_root / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone')
             state['module_sha256'] = digest(SCENARIO_CACHE / 'deployment.wasm')
             write_state(marker, state)
@@ -1076,6 +993,8 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
         if imported['commit'] != pins['database_commit']:
             raise RuntimeError('restored world differs from Reference Server data pin')
         print(f"[audit] world origin: {state['world_origin']}", file=sys.stderr, flush=True)
+        for path in state['changed_gameplay_files']:
+            print(f'[audit] changed Tier B file: {path}', file=sys.stderr, flush=True)
         password = (snapshot / 'password').read_text().strip()
         for account in ['CONFORMANCE', *(f'CONFORMANCE{peer}' for peer in range(2, peer_count + 2))]:
             run([cli, 'account', 'create', account, '--password-stdin'],
@@ -1239,7 +1158,7 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, r
         if (digest(host) != state['native_host_sha256'] or digest(module) != state['module_sha256']
                 or snapshot['commit'] != state['database_commit']):
             raise RuntimeError('cached Realm Module, Native Host or imported data changed during capture')
-        yield state['world_origin']
+        yield {name: state[name] for name in ['world_origin', 'changed_gameplay_files']}
 
 
 def setup_failure(scenario, json_mode, diagnostic):
@@ -1309,7 +1228,7 @@ def run_scenario(args, harness, target, core_commit):
         raise RuntimeError('clean core working tree required; commit changes before scenario capture')
     with timed('Module schema fingerprint'):
         module_schema_hash()
-    key, pins = scenario_key(harness, args.client_data)
+    key, pins = scenario_key(harness, args.client_data, strict_world=args.strict_world)
     with scenario_work() as work:
         os.environ['TMPDIR'] = str(work)
         audit = target / 'debug/examples/audit'
@@ -1329,7 +1248,7 @@ def run_scenario(args, harness, target, core_commit):
         key = prepare_catalogue_snapshot(work, key, pins, str(args.client_data),
                                          require_snapshot=args.require_snapshot)
         with capture_scenario(harness, wire, work, args.scenario, key, pins, str(args.client_data),
-                              require_snapshot=True) as world_origin:
+                              require_snapshot=True) as world:
             if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
                 raise RuntimeError('core changed during scenario capture; commit and rerun')
             with timed('comparison and output'):
@@ -1345,10 +1264,13 @@ def run_scenario(args, harness, target, core_commit):
                     raise RuntimeError('could not render the completed scenario comparison: '
                                        + rendered.stderr.strip())
                 if args.json:
-                    output = dict(json.loads(rendered.stdout), world_origin=world_origin)
+                    output = dict(json.loads(rendered.stdout), **world)
                     rendered.stdout = json.dumps(output, indent=2) + '\n'
                 else:
-                    rendered.stdout += f'World origin: {world_origin}\n'
+                    rendered.stdout += f"World origin: {world['world_origin']}\n"
+                    if world['changed_gameplay_files']:
+                        rendered.stdout += 'Changed Tier B files:\n' + ''.join(
+                            f'  {path}\n' for path in world['changed_gameplay_files'])
                 if args.agreement:
                     agreement = agreement_result(work / 'tier1.json', work / 'result.json', args.scenario)
                     if args.json:
@@ -1482,10 +1404,12 @@ def main():
     parser.add_argument('--agreement', action='store_true')
     parser.add_argument('--require-snapshot', action='store_true',
                         help='fail instead of a fresh world import when no matching base snapshot exists')
+    parser.add_argument('--strict-world', action='store_true',
+                        help='treat reachable gameplay changes as cold import inputs for a local check')
     parser.add_argument('--stop', action='store_true')
     args = parser.parse_args(json.loads(os.environ.get('LYRACORE_AUDIT_ARGS', '[]')))
     if args.stop:
-        if args.scenario or args.check or args.json or args.agreement or args.require_snapshot or args.rehearse:
+        if args.scenario or args.check or args.json or args.agreement or args.require_snapshot or args.rehearse or args.strict_world:
             parser.error('--stop cannot be combined with scenario check options')
         stop_scenario_cache()
         return 0
@@ -1499,6 +1423,8 @@ def main():
         parser.error('--json requires --scenario ID --check')
     if args.agreement and not args.scenario:
         parser.error('--agreement requires --scenario ID --check')
+    if args.strict_world and not args.scenario:
+        parser.error('--strict-world requires --scenario ID --check')
     if args.require_snapshot and not args.scenario:
         parser.error('--require-snapshot requires --scenario ID --check')
     try:
