@@ -230,6 +230,7 @@ IMPORT_CONTRACT = (
     'module/Cargo.toml',
     'module/build.rs',
     'module/build_support/source.rs',
+    'native-host/src/motion_opcodes.rs',
     'module/src/lib.rs',
     'module/src/seed.rs',
     'module/src/config.rs',
@@ -846,7 +847,8 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
     with ExitStack() as lifetime:
         try:
             realm = lifetime.enter_context(prepare_scenario_realm(
-                key, pins, client_data, peer_count, require_snapshot=require_snapshot, strict_world=strict_world))
+                key, pins, client_data, peer_count, require_snapshot=require_snapshot,
+                strict_world=strict_world))
         except SnapshotUpgradeError as error:
             print(f'[audit] snapshot publish or initialization failed: {error}', file=sys.stderr, flush=True)
             if require_snapshot:
@@ -1060,7 +1062,8 @@ def prepare_catalogue_snapshot(work, base_key, pins, client_data, *, require_sna
                            'run a single --check once to prepare the base world')
     peer_count = max(len(scenario['characters']) - 1 for scenario in catalogue)
     with scenario_realm(base_key, pins, client_data, peer_count,
-                        require_snapshot=require_snapshot, strict_world=strict_world) as (password, _token, _host, _module, realm):
+                        require_snapshot=require_snapshot, strict_world=strict_world) as (
+                            password, _token, _host, _module, realm):
         cli_env = dict(os.environ)
         cli_env.pop('CARGO_TARGET_DIR', None)
         cli_env['PATH'] = str(realm.parent / 'bin') + ':' + cli_env['PATH']
@@ -1263,7 +1266,8 @@ def run_scenario(args, harness, target, core_commit):
                                    + (tier1.stderr + tier1.stdout).strip())
         run_with_diagnostic([audit, 'export', work])
         key = prepare_catalogue_snapshot(work, key, pins, str(args.client_data),
-                                         require_snapshot=args.require_snapshot, strict_world=args.strict_world)
+                                         require_snapshot=args.require_snapshot,
+                                         strict_world=args.strict_world)
         with capture_scenario(harness, wire, work, args.scenario, key, pins, str(args.client_data),
                               require_snapshot=True, strict_world=args.strict_world) as world:
             if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
@@ -1426,7 +1430,8 @@ def main():
     parser.add_argument('--stop', action='store_true')
     args = parser.parse_args(json.loads(os.environ.get('LYRACORE_AUDIT_ARGS', '[]')))
     if args.stop:
-        if args.scenario or args.check or args.json or args.agreement or args.require_snapshot or args.rehearse or args.strict_world:
+        if (args.scenario or args.check or args.json or args.agreement or args.require_snapshot
+                or args.rehearse or args.strict_world):
             parser.error('--stop cannot be combined with scenario check options')
         stop_scenario_cache()
         return 0

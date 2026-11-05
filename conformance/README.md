@@ -736,8 +736,10 @@ Deltas. The snapshot has two source tiers:
 - **Tier A**, `IMPORT_CONTRACT` in `audit.py`, changes the snapshot key and requires a cold import.
   It covers importer sources, scripts and manifests; shared, Package Delta and protocol crates;
   workspace dependencies and toolchain; Module build inputs; initialization, import reducers,
-  row-building helpers and the table definitions they write. Data inputs include the Runtime Script
-  event catalogue used by `module/build.rs` and the generated event names included by shared code. Module paths are explicit files, except for the
+  row-building helpers and the table definitions they write. The shared
+  `native-host/src/motion_opcodes.rs` include also stays in Tier A. Data inputs include the Runtime
+  Script event catalogue used by `module/build.rs` and the generated event names included by shared
+  code. Module paths are explicit files, except for the
   Package Import helpers, whose complete directory stays in Tier A.
 - **Tier B** is every remaining Rust source under `module/src`. It includes gameplay reached by
   initialization and is deliberately a superset of that call graph. A local `--check` reuses the
@@ -784,7 +786,7 @@ import.
 
 Compared with the earlier directory contract, `module/src/debug` moves to Tier B. The complete
 `creatures`, `spell`, `items`, `loot` and `meeting_stone` directories become the explicit Tier A
-files above and Tier B for their remaining files. In particular, `creatures/ai.rs`, `combat/*`
+files above and Tier B for their remaining files. `quest/fixtures.rs` also moves to Tier B. In particular, `creatures/ai.rs`, `combat/*`
 except `engage.rs`, all `native/*`, and spell casting, effects, control, scheduling, targeting and
 outcome code now stay warm in ordinary checks, with drift reported. There is no production source
 split.
@@ -792,8 +794,11 @@ split.
 The Architecture Test in `tests/import_contract.rs` extends the old child-module coverage check. It
 parses the entire Module, including external `#[path]` children, rather than trying to infer which
 dynamic hook can run. Every compiled source must belong to at least one tier; table definitions
-named by importer SQL and Package Delta code must be in Tier A; literal `include!`, `include_str!`
-and `include_bytes!` inputs must belong to Tier A. It also checks the build script and proves
+named by importer SQL and Package Delta code must be in Tier A. Literal `include!`, `include_str!`
+and `include_bytes!` inputs must belong to Tier A; literal source includes are followed recursively.
+`CARGO_MANIFEST_DIR` inputs resolve at the crate root; generated `OUT_DIR` source is covered by
+the strict build script and its inputs. Unknown computed inputs require review. It also checks the
+build script and proves
 coverage fails when a required seed, import or gameplay file is removed from both tiers. Comments
 and test-only modules do not create dependencies. Review the Tier A classification when an import or
 initialization helper gains a dependency; put new data files in Tier A. Adding importer code or

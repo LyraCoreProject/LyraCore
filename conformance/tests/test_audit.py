@@ -699,7 +699,8 @@ class ReferenceOwnership(unittest.TestCase):
                 patch.object(audit.os, 'sched_getaffinity', return_value=range(4), create=True):
             audit.capture_servers(self.root, 'wire', self.root, self.root, rehearse=rehearse)
         if rehearse:
-            self.assertTrue(all(call == {'require_snapshot': True} for call in preparations))
+            self.assertTrue(all(call == {'require_snapshot': True, 'strict_world': True}
+                                for call in preparations))
             self.assertEqual([json.loads(line)['scenario'] for line in output.getvalue().splitlines()],
                              ['actor_first', 'viewer_first'])
         else:
