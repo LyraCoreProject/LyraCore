@@ -32,9 +32,10 @@ pub(crate) use economy::apply_repair_item;
 #[cfg(test)]
 pub(crate) use economy::NpcRefusal;
 pub(crate) use economy::{
-    apply_buy_bank_slot, apply_buy_item, apply_buyback_item, apply_item_sell,
+    apply_buy_bank_slot, apply_buy_item, apply_buy_item_to, apply_buyback_item, apply_item_sell,
     apply_item_sell_count, apply_player_repair, innkeeper_access_gate, npc_interaction_gate,
-    vendor_offers, BankSlotRefusal, BuyRefusal, BuybackRefusal, NpcGate, SellRefusal,
+    vendor_offers, vendor_purchase_price, BankSlotRefusal, BuyRefusal, BuybackRefusal, NpcGate,
+    SellRefusal,
 };
 pub(crate) use exchange::{exchange_items, ItemStoragePlan};
 pub(crate) use guids::{allocate_item_guids, item_guid_exists, next_item_guid};

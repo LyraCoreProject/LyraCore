@@ -100,6 +100,27 @@ fn gain(
     }
 }
 
+pub(crate) fn item_purchased(ctx: &ReducerContext, item: &ItemInstance, count: u32) {
+    let Some(owner) = ctx
+        .db
+        .game_native_player()
+        .character_guid()
+        .find(item.owner_guid)
+    else {
+        return;
+    };
+    let mut packets = Vec::new();
+    gain(
+        ctx,
+        item,
+        count,
+        item.stack_count != count,
+        NewItemSource::FromNpc,
+        &mut packets,
+    );
+    send(ctx, owner.connection_id, packets);
+}
+
 fn create_item(view: &codec::ItemInstanceView, packets: &mut Vec<Packet>) {
     packets.push(update(codec::build_item_create_object(view)));
     if let Some((opcode, body)) = codec::build_enchantment_slot_values(view) {

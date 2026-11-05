@@ -1,5 +1,5 @@
 pub const fn is_carried_slot(slot: u8) -> bool {
-    slot <= 38 || (slot >= 120 && slot <= 191)
+    slot <= 38 || (slot >= 81 && slot <= 112) || (slot >= 120 && slot <= 191)
 }
 
 pub fn carried_quantity(entry: u32, items: impl IntoIterator<Item = (u8, u32, u32)>) -> u32 {

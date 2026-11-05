@@ -171,70 +171,18 @@ pub(crate) fn apply_item_move(
             }
         }
         if to_slot <= BAG_SLOT_END_INCL {
-            let can_dual_wield = crate::spell::knows_spell(
-                ctx,
-                player_guid,
-                lyracore_shared::constants::dual_wield::SPELL_ID,
-            );
             let tmpl = ctx
                 .db
                 .game_item_template()
                 .entry()
                 .find(src.entry)
                 .ok_or(ItemRefusal::CannotEquip)?;
-            let fits = if to_slot >= BAG_SLOT_START {
-                matches!(tmpl.class, 1 | 11)
-                    && tmpl.inventory_type == invtype::BAG
-                    && tmpl.container_slots > 0
-            } else {
-                can_equip_into(tmpl.class, tmpl.inventory_type, to_slot, can_dual_wield)
-            };
-            if !fits {
-                return Err(ItemRefusal::CannotEquip);
-            }
-            let player = crate::helpers::live_entity(ctx, player_guid)
-                .map_err(|_| refuse(ItemRefusal::Internal, "user not in world"))?;
-            if !meets_required_level(player.level, tmpl.required_level) {
-                return Err(refuse(
-                    ItemRefusal::CannotEquip,
-                    format!("requires level {}", tmpl.required_level),
-                ));
-            }
-            let player_class = player.class();
-            if !eligibility_mask_allows(tmpl.allowed_class, player_class) {
-                return Err(refuse(
-                    ItemRefusal::NoProficiency,
-                    format!("class {player_class} is not allowed to equip this item"),
-                ));
-            }
-            let player_race = player.race();
-            if !eligibility_mask_allows(tmpl.allowed_race, player_race) {
-                return Err(refuse(
-                    ItemRefusal::NoProficiency,
-                    format!("race {player_race} is not allowed to equip this item"),
-                ));
-            }
-            let current_skill = ctx
-                .db
-                .game_player_skill()
-                .by_character()
-                .filter(&player_guid)
-                .find(|skill| skill.skill_line == tmpl.required_skill)
-                .map(|skill| skill.current);
-            if !meets_required_skill(tmpl.required_skill, tmpl.required_skill_rank, current_skill) {
-                return Err(refuse(
-                    ItemRefusal::RequiredSkill,
-                    format!(
-                        "requires skill {} at rank {}",
-                        tmpl.required_skill, tmpl.required_skill_rank
-                    ),
-                ));
-            }
+            validate_equipment(ctx, player_guid, &tmpl, to_slot).map_err(equipment_refusal)?;
             let reputation_standing = ctx
                 .db
                 .game_player_reputation()
                 .by_character()
-                .filter(&player_guid)
+                .filter(player_guid)
                 .find(|reputation| reputation.faction_id == tmpl.required_reputation_faction)
                 .map(|reputation| reputation.standing);
             if !meets_required_reputation(
@@ -242,25 +190,7 @@ pub(crate) fn apply_item_move(
                 tmpl.required_reputation_rank,
                 reputation_standing,
             ) {
-                return Err(refuse(
-                    ItemRefusal::RequiredReputation,
-                    format!(
-                        "requires reputation faction {} at rank {}",
-                        tmpl.required_reputation_faction, tmpl.required_reputation_rank
-                    ),
-                ));
-            }
-            let proficiency = Proficiency::from_spellbook(player_class, |spell_id| {
-                crate::spell::knows_spell(ctx, player_guid, spell_id)
-            });
-            if !proficiency.can_equip(tmpl.class, tmpl.subclass) {
-                return Err(refuse(
-                    ItemRefusal::NoProficiency,
-                    format!(
-                        "class {} lacks proficiency for item class {}/subclass {}",
-                        player_class, tmpl.class, tmpl.subclass
-                    ),
-                ));
+                return Err(ItemRefusal::RequiredReputation);
             }
             if binds_on_equip(tmpl.bonding) {
                 src.soulbound = true;
@@ -307,6 +237,80 @@ pub(crate) fn apply_item_move(
         crate::spell::recompute_sheet(ctx, player_guid);
     }
     Ok(())
+}
+
+pub(super) fn validate_equipment(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    template: &super::ItemTemplate,
+    slot: u8,
+) -> Result<(), lyracore_protocol::messages::vanilla::InventoryResult> {
+    use lyracore_protocol::messages::vanilla::InventoryResult;
+    let player =
+        crate::helpers::live_entity(ctx, player_guid).map_err(|_| InventoryResult::ItemNotFound)?;
+    let can_dual_wield = crate::spell::knows_spell(
+        ctx,
+        player_guid,
+        lyracore_shared::constants::dual_wield::SPELL_ID,
+    );
+    let fits = if slot >= BAG_SLOT_START {
+        matches!(template.class, 1 | 11)
+            && template.inventory_type == invtype::BAG
+            && template.container_slots > 0
+    } else {
+        can_equip_into(
+            template.class,
+            template.inventory_type,
+            slot,
+            can_dual_wield,
+        )
+    };
+    if !fits {
+        return Err(InventoryResult::ItemCantBeEquipped);
+    }
+    if !eligibility_mask_allows(template.allowed_class, player.class())
+        || !eligibility_mask_allows(template.allowed_race, player.race())
+    {
+        return Err(InventoryResult::YouCanNeverUseThatItem);
+    }
+    let current_skill = ctx
+        .db
+        .game_player_skill()
+        .by_character()
+        .filter(player_guid)
+        .find(|skill| skill.skill_line == template.required_skill)
+        .map(|skill| skill.current);
+    if template.required_skill != 0 && current_skill.unwrap_or(0) == 0 {
+        return Err(InventoryResult::NoRequiredProficiency);
+    }
+    if !meets_required_skill(
+        template.required_skill,
+        template.required_skill_rank,
+        current_skill,
+    ) {
+        return Err(InventoryResult::CantEquipSkill);
+    }
+    if !meets_required_level(player.level, template.required_level) {
+        return Err(InventoryResult::CantEquipLevelI);
+    }
+    let proficiency = Proficiency::from_spellbook(player.class(), |spell_id| {
+        crate::spell::knows_spell(ctx, player_guid, spell_id)
+    });
+    if !proficiency.can_equip(template.class, template.subclass) {
+        return Err(InventoryResult::NoRequiredProficiency);
+    }
+    Ok(())
+}
+
+fn equipment_refusal(result: lyracore_protocol::messages::vanilla::InventoryResult) -> ItemRefusal {
+    use lyracore_protocol::messages::vanilla::InventoryResult;
+    match result {
+        InventoryResult::YouCanNeverUseThatItem | InventoryResult::NoRequiredProficiency => {
+            ItemRefusal::NoProficiency
+        }
+        InventoryResult::CantEquipSkill => ItemRefusal::RequiredSkill,
+        _ => ItemRefusal::CannotEquip,
+    }
 }
 
 pub(crate) fn apply_equip_item(

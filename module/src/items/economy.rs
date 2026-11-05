@@ -497,9 +497,27 @@ pub(crate) fn apply_buyback_item(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BuyRefusal {
     Vendor(NpcRefusal),
-    NotEnoughMoney { have: u32, need: u32 },
+    NotEnoughMoney {
+        have: u32,
+        need: u32,
+    },
     InventoryFull,
+    UnknownItem,
+    Reputation,
+    Equipment {
+        result: lyracore_protocol::messages::vanilla::InventoryResult,
+        required_level: u8,
+    },
     Refused(crate::Refusal),
+}
+
+impl From<lyracore_protocol::messages::vanilla::InventoryResult> for BuyRefusal {
+    fn from(result: lyracore_protocol::messages::vanilla::InventoryResult) -> Self {
+        Self::Equipment {
+            result,
+            required_level: 0,
+        }
+    }
 }
 
 impl From<String> for BuyRefusal {
@@ -537,6 +555,9 @@ impl std::fmt::Display for BuyRefusal {
                 write!(f, "not enough money: have {have}, need {need}")
             }
             Self::InventoryFull => lyracore_shared::mail::INVENTORY_FULL.fmt(f),
+            Self::Equipment { result, .. } => write!(f, "{result:?}"),
+            Self::UnknownItem => f.write_str("unknown purchase item"),
+            Self::Reputation => f.write_str("purchase requires reputation"),
             Self::Refused(refusal) => refusal.fmt(f),
         }
     }
@@ -548,6 +569,16 @@ impl From<BuyRefusal> for String {
     }
 }
 
+pub(crate) fn vendor_purchase_price(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    faction_template: u32,
+    price: u32,
+) -> u32 {
+    let discount = crate::reputation::vendor_discount_pct(ctx, character_guid, faction_template);
+    (price as f32 * (1.0 - discount as f32 / 100.0) + 0.5) as u32
+}
+
 pub(crate) fn apply_buy_item(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -555,6 +586,23 @@ pub(crate) fn apply_buy_item(
     item_entry: u32,
     count: u32,
 ) -> Result<(), BuyRefusal> {
+    apply_buy_item_to(ctx, player_guid, vendor_guid, item_entry, count, None)
+}
+
+pub(crate) fn apply_buy_item_to(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    vendor_guid: u64,
+    item_entry: u32,
+    count: u32,
+    destination: Option<(u8, u8)>,
+) -> Result<(), BuyRefusal> {
+    let tmpl = ctx
+        .db
+        .game_item_template()
+        .entry()
+        .find(item_entry)
+        .ok_or(BuyRefusal::UnknownItem)?;
     let (mut player, vendor) = npc_interaction_gate(
         ctx,
         player_guid,
@@ -568,20 +616,34 @@ pub(crate) fn apply_buy_item(
     if !vendor_sells(ctx, vendor.entry, item_entry) {
         return Err("vendor does not sell that item".to_string().into());
     }
-    let tmpl = ctx
-        .db
-        .game_item_template()
-        .entry()
-        .find(item_entry)
-        .ok_or_else(|| format!("no such item {item_entry}"))?;
-    if tmpl.buy_price == 0 {
-        return Err("item cannot be bought".to_string().into());
+    if tmpl.required_reputation_rank != 0 {
+        use crate::{game_faction_template, game_player_reputation};
+        let faction = if tmpl.required_reputation_faction != 0 {
+            tmpl.required_reputation_faction
+        } else {
+            ctx.db
+                .game_faction_template()
+                .id()
+                .find(vendor.faction_template)
+                .map_or(0, |faction| faction.faction)
+        };
+        let standing = ctx
+            .db
+            .game_player_reputation()
+            .by_character()
+            .filter(player_guid)
+            .find(|reputation| reputation.faction_id == faction)
+            .map_or(0, |reputation| reputation.standing);
+        if u32::from(crate::reputation::reputation_rank(standing)) < tmpl.required_reputation_rank {
+            return Err(BuyRefusal::Reputation);
+        }
     }
-    let cost = {
-        let base = buy_cost(tmpl.buy_price, lots);
-        let pct = crate::reputation::vendor_discount_pct(ctx, player_guid, vendor.faction_template);
-        base - base.saturating_mul(pct) / 100
-    };
+    let cost = vendor_purchase_price(
+        ctx,
+        player_guid,
+        vendor.faction_template,
+        buy_cost(tmpl.buy_price, lots),
+    );
     if player.money < cost {
         return Err(BuyRefusal::NotEnoughMoney {
             have: player.money,
@@ -589,20 +651,24 @@ pub(crate) fn apply_buy_item(
         });
     }
     let mut plan = super::ItemStoragePlan::read(ctx, player_guid, player.owner_identity);
-    plan.grant(
-        ctx,
-        &tmpl,
-        lots.saturating_mul(tmpl.buy_count.max(1)),
-        false,
-        None,
-    )?;
+    let total_count = lots.saturating_mul(tmpl.buy_count.max(1));
+    let last_slot = if let Some((bag, slot)) = destination {
+        Some(plan.purchase(ctx, &tmpl, total_count, bag, slot)?)
+    } else {
+        plan.grant(ctx, &tmpl, total_count, false, None)?;
+        None
+    };
     // Propagate storage failure so the reducer rolls back the debit.
     player.money = player.money.saturating_sub(cost);
     player.update(ctx);
-    Ok(plan.commit_with_source(
-        ctx,
-        lyracore_protocol::messages::vanilla::NewItemSource::FromNpc,
-    )?)
+    if let Some(slot) = last_slot {
+        Ok(plan.commit_purchase(ctx, slot, total_count)?)
+    } else {
+        Ok(plan.commit_with_source(
+            ctx,
+            lyracore_protocol::messages::vanilla::NewItemSource::FromNpc,
+        )?)
+    }
 }
 
 #[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]

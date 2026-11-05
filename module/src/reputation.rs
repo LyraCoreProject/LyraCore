@@ -75,10 +75,8 @@ pub(crate) fn reputation_rank(standing: i32) -> u8 {
 }
 
 pub(crate) fn reputation_discount_pct(standing: i32) -> u32 {
-    const NEUTRAL: u8 = 3;
-    let rank = reputation_rank(standing);
-    if rank > NEUTRAL {
-        5 * (rank - NEUTRAL) as u32
+    if reputation_rank(standing) >= 5 {
+        10
     } else {
         0
     }
@@ -270,12 +268,13 @@ mod rep_tests {
     }
 
     #[test]
-    fn discount_is_5pct_per_rank_above_neutral() {
+    fn discount_is_ten_percent_from_honored() {
         assert_eq!(reputation_discount_pct(0), 0);
         assert_eq!(reputation_discount_pct(-10000), 0);
-        assert_eq!(reputation_discount_pct(3000), 5);
+        assert_eq!(reputation_discount_pct(3000), 0);
+        assert_eq!(reputation_discount_pct(8999), 0);
         assert_eq!(reputation_discount_pct(9000), 10);
-        assert_eq!(reputation_discount_pct(21000), 15);
-        assert_eq!(reputation_discount_pct(42000), 20);
+        assert_eq!(reputation_discount_pct(21000), 10);
+        assert_eq!(reputation_discount_pct(42000), 10);
     }
 }
