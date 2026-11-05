@@ -2,7 +2,7 @@ use crate::actor::{ActionRefusal, ActionRefusalKind};
 use lyracore_protocol::messages::vanilla::NewItemSource;
 use spacetimedb::{Identity, ReducerContext, Timestamp};
 
-use super::inventory::{free_inventory_slots, is_carried_slot};
+use super::inventory::{free_inventory_slots, is_carried_slot, item_fits_bag};
 use super::{
     allocate_item_guids, binds_on_grant, game_item_instance, game_item_template, merge_amount,
     select_property, ItemInstance, ItemTemplate,
@@ -177,11 +177,11 @@ impl ItemStoragePlan {
         slot: u8,
     ) -> Result<u8, super::economy::BuyRefusal> {
         use lyracore_protocol::messages::vanilla::InventoryResult;
-        let player = crate::helpers::live_entity(ctx, self.character_guid)?;
+        let character = crate::helpers::live_entity(ctx, self.character_guid)?;
         if crate::spell::is_stunned(ctx, self.character_guid) {
             return Err(InventoryResult::YouAreStunned.into());
         }
-        if player.combat_active
+        if character.combat_active
             && !matches!(template.class, 2 | 6)
             && !matches!(template.inventory_type, 14 | 23 | 28)
         {
@@ -232,21 +232,6 @@ impl ItemStoragePlan {
         {
             return Err(InventoryResult::CantEquipWithTwohanded.into());
         }
-        if template.inventory_type == 17 {
-            if let Some(offhand) = self.items.iter().position(|item| item.slot == 16) {
-                let free = free_inventory_slots(&self.items, |entry| {
-                    ctx.db
-                        .game_item_template()
-                        .entry()
-                        .find(entry)
-                        .map_or(0, |bag| bag.container_slots)
-                })
-                .first()
-                .copied()
-                .ok_or(InventoryResult::InventoryFull)?;
-                self.items[offhand].slot = free;
-            }
-        }
         self.items.push(self.new_stack(
             template,
             slot,
@@ -254,6 +239,18 @@ impl ItemStoragePlan {
             select_property(ctx, template)?,
             binds_on_grant(template.bonding) || super::rules::binds_on_equip(template.bonding),
         ));
+        if template.inventory_type == 17 {
+            if let Some(offhand) =
+                super::inventory::displaced_off_hand(ctx, self.items.clone(), &[Some(0), None])
+                    .map_err(|_| InventoryResult::InventoryFull)?
+            {
+                self.items
+                    .iter_mut()
+                    .find(|item| item.guid == offhand.guid)
+                    .expect("the off-hand item belongs to the plan")
+                    .slot = offhand.slot;
+            }
+        }
         Ok(slot)
     }
 
@@ -292,18 +289,13 @@ impl ItemStoragePlan {
         let property = select_property(ctx, template)?;
         let last_slot = destinations.last().ok_or(InventoryResult::InventoryFull)?.0;
         for (slot, count) in destinations {
-            if let Some(item) = self.items.iter_mut().find(|item| item.slot == slot) {
-                item.stack_count += count;
-                item.soulbound |= binds_on_grant(template.bonding);
-            } else {
-                self.items.push(self.new_stack(
-                    template,
-                    slot,
-                    count,
-                    property,
-                    binds_on_grant(template.bonding),
-                ));
-            }
+            self.add_stack(
+                template,
+                slot,
+                count,
+                property,
+                binds_on_grant(template.bonding),
+            );
         }
         Ok(last_slot)
     }
@@ -316,9 +308,9 @@ impl ItemStoragePlan {
         slot: u8,
     ) -> Result<Vec<u8>, super::economy::BuyRefusal> {
         use lyracore_protocol::{codec, messages::vanilla::InventoryResult};
-        let player = crate::helpers::live_entity(ctx, self.character_guid)?;
+        let character = crate::helpers::live_entity(ctx, self.character_guid)?;
         let keyring_end = 81
-            + match player.level {
+            + match character.level {
                 61.. => 16,
                 50..=60 => 12,
                 40..=49 => 8,
@@ -434,6 +426,27 @@ impl ItemStoragePlan {
             }
         }
         (specialized, regular)
+    }
+
+    fn add_stack(
+        &mut self,
+        template: &ItemTemplate,
+        slot: u8,
+        count: u32,
+        property: u32,
+        soulbound: bool,
+    ) {
+        if let Some(item) = self
+            .items
+            .iter_mut()
+            .find(|item| item.slot == slot && item.stack_count > 0)
+        {
+            item.stack_count += count;
+            item.soulbound |= soulbound;
+        } else {
+            self.items
+                .push(self.new_stack(template, slot, count, property, soulbound));
+        }
     }
 
     fn new_stack(
@@ -595,10 +608,9 @@ impl ItemStoragePlan {
             .collect::<Result<_, _>>()?;
         let soulbound = force_soulbound || binds_on_grant(template.bonding);
         for index in partials {
-            let item = &mut self.items[index];
+            let item = &self.items[index];
             let add = merge_amount(count, item.stack_count, max_stack);
-            item.stack_count += add;
-            item.soulbound |= soulbound;
+            self.add_stack(template, item.slot, add, random_property_id, soulbound);
             count -= add;
             if count == 0 {
                 break;
@@ -606,8 +618,7 @@ impl ItemStoragePlan {
         }
         for (slot, random_property_id) in slots.into_iter().zip(properties) {
             let take = count.min(max_stack);
-            self.items
-                .push(self.new_stack(template, slot, take, random_property_id, soulbound));
+            self.add_stack(template, slot, take, random_property_id, soulbound);
             count -= take;
         }
         Ok(())
@@ -653,6 +664,12 @@ impl ItemStoragePlan {
         count: u32,
     ) -> Result<(), ActionRefusal> {
         let character_guid = self.character_guid;
+        let purchased = self
+            .items
+            .iter()
+            .find(|item| item.slot == last_slot)
+            .expect("the purchase plan has a final destination");
+        crate::native::item_purchase_started(ctx, purchased, count);
         self.commit_planned(ctx, None, false)?;
         let item = super::item_in_slot(ctx, character_guid, last_slot)
             .expect("the purchase plan committed its final destination");
@@ -738,21 +755,6 @@ impl ItemStoragePlan {
     }
 }
 
-fn item_fits_bag(item: &ItemTemplate, bag: &ItemTemplate) -> bool {
-    if bag.bag_family != 0 && item.container_slots != 0 {
-        return false;
-    }
-    match (bag.class, bag.subclass) {
-        (1, 0) => true,
-        (1, 1) => item.bag_family == 3,
-        (1, 2) => item.bag_family == 6,
-        (1, 3) => item.bag_family == 7,
-        (11, 2) => item.bag_family == 1,
-        (11, 3) => item.bag_family == 2,
-        _ => false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -799,6 +801,11 @@ mod tests {
             .map(|item| (item.slot, item.entry, item.stack_count))
             .collect();
         assert_eq!(rewards, vec![(23, 2, 1), (24, 3, 1)]);
+        assert!(plan
+            .items
+            .iter()
+            .filter(|item| item.entry == 1 && item.slot < 25)
+            .all(|item| item.stack_count == 0));
     }
 
     #[test]
@@ -841,6 +848,7 @@ mod tests {
         let mut plan = plan(vec![item(23, 1, 8)]);
         let mut template = crate::seed::base_item(1, "stackable reward");
         template.max_stack = 10;
+        template.bonding = super::super::rules::bonding::BIND_ON_PICKUP;
         grant(&mut plan, &template, 7).unwrap();
         grant(&mut plan, &template, 8).unwrap();
         let stacks: Vec<_> = plan
@@ -849,6 +857,7 @@ mod tests {
             .map(|item| (item.slot, item.stack_count))
             .collect();
         assert_eq!(stacks, vec![(23, 10), (24, 10), (25, 3)]);
+        assert!(plan.items.iter().all(|item| item.soulbound));
     }
 
     #[test]

@@ -237,7 +237,7 @@ fn purchase_in_slot(
         .game_world_entity()
         .guid()
         .find(guid)
-        .is_some_and(|player| player.dead || player.health == 0)
+        .is_some_and(|character| character.dead || character.health == 0)
     {
         return Ok(());
     }
@@ -319,7 +319,11 @@ pub(super) fn receive(
                 .map_err(|refusal| {
                     Rollback::reply(
                         ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(codec::build_buy_failed(
-                            vendor,
+                            if matches!(refusal, BuyRefusal::UnknownItem) {
+                                0
+                            } else {
+                                vendor
+                            },
                             c.item,
                             buy_result(&refusal),
                         ))),

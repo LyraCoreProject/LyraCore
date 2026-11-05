@@ -7,7 +7,7 @@ use wow_world_messages::vanilla::{
 
 pub fn inventory_slot(bag: u8, slot: u8) -> Option<u8> {
     match (bag, slot) {
-        (255, 0..=62) => Some(slot),
+        (255, 0..=62 | 81..=112) => Some(slot),
         (19..=22, 0..=17) => Some(120 + (bag - 19) * 18 + slot),
         _ => None,
     }

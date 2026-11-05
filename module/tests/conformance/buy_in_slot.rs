@@ -38,15 +38,19 @@ fn buy(
     slot: u8,
     count: u8,
 ) -> Vec<(u16, Vec<u8>)> {
-    connection
-        .call("native_world_receive", json!([0x1dcu32, vec![0u8; 8]]))
-        .unwrap();
-    connection.drain_packets();
     let mut body = vendor.to_le_bytes().to_vec();
     body.extend(entry.to_le_bytes());
     body.extend(bag.to_le_bytes());
     body.extend([slot, count]);
-    if let Err(reason) = connection.call("native_world_receive", json!([0x1a3u32, body])) {
+    request(connection, 0x1a3, body)
+}
+
+fn request(connection: &mut ReducerConnection, opcode: u32, body: Vec<u8>) -> Vec<(u16, Vec<u8>)> {
+    connection
+        .call("native_world_receive", json!([0x1dcu32, vec![0u8; 8]]))
+        .unwrap();
+    connection.drain_packets();
+    if let Err(reason) = connection.call("native_world_receive", json!([opcode, body])) {
         let replies: Vec<(u16, Vec<u8>)> =
             serde_json::from_str(reason.strip_prefix("native_reply:").expect(&reason)).unwrap();
         connection
@@ -487,4 +491,251 @@ fn purchase_admission_checks_items_vendors_and_reputation_before_storage() {
     buy(&mut connection, vendor, THREAD, guid, 30, 1);
     assert_eq!(money(&shard, guid), "0");
     assert_eq!(inventory(&shard, guid)[0]["slot"], "30");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn review_two_hander_cannot_store_a_shield_in_a_quiver() {
+    let (shard, mut connection, guid, vendor) = stage("purchase-quiver-offhand");
+    shard.assert_sql(&format!("UPDATE game_item_template SET class = 2, subclass = 1, inventory_type = 17, required_level = 1, max_stack = 1 WHERE entry = {ARMOR}"));
+    shard.assert_call("debug_learn_spell", &[&guid.to_string(), "197"]);
+    shard.assert_sql(&format!("UPDATE game_item_template SET class = 4, subclass = 6, inventory_type = 14, max_stack = 1 WHERE entry = {THREAD}"));
+    shard.assert_sql("UPDATE game_item_template SET class = 11, subclass = 2, inventory_type = 18, container_slots = 4 WHERE entry = 5090054");
+    grant(&shard, guid, 5090054, 1, 19);
+    let shield = grant(&shard, guid, THREAD, 1, 16);
+    for slot in 23..39 {
+        grant(&shard, guid, ARMOR, 1, slot);
+    }
+    let before = inventory(&shard, guid);
+    refusal(&buy(&mut connection, vendor, ARMOR, guid, 15, 1), 50);
+    assert_eq!(inventory(&shard, guid), before);
+    assert_eq!(money(&shard, guid), "50000");
+    shard.assert_sql("UPDATE game_item_template SET class = 1, subclass = 0 WHERE entry = 5090054");
+    buy(&mut connection, vendor, ARMOR, guid, 15, 1);
+    assert!(inventory(&shard, guid)
+        .iter()
+        .any(|row| row["guid"] == shield.to_string() && row["slot"] == "120"));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn review_quest_toast_precedes_item_updates_and_one_total_receipt() {
+    let (shard, mut connection, guid, vendor) = stage("purchase-quest-order");
+    shard.assert_sql(&format!("UPDATE game_quest_objective SET kind = 1, target_entry = {THREAD}, required_count = 20 WHERE id = 5090000"));
+    shard.assert_call("debug_grant_quest", &[&guid.to_string(), "50900"]);
+    grant(&shard, guid, THREAD, 19, 30);
+    let packets = buy(&mut connection, vendor, THREAD, guid, 30, 3);
+    let toast = packets
+        .iter()
+        .position(|(opcode, _)| *opcode == 0x19a)
+        .expect("quest item toast");
+    let update = packets
+        .iter()
+        .position(|(opcode, body)| {
+            super::properties::updates(*opcode, body)
+                .unwrap()
+                .iter()
+                .any(|object| object.guid != guid)
+        })
+        .expect("item update");
+    let receipt = packets
+        .iter()
+        .position(|(opcode, _)| *opcode == 0x166)
+        .unwrap();
+    assert!(
+        toast < update && update < receipt,
+        "packet opcodes: {:?}",
+        packets.iter().map(|p| p.0).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        packets
+            .iter()
+            .filter(|(opcode, _)| *opcode == 0x19a)
+            .count(),
+        1
+    );
+    assert_eq!(
+        &packets[toast].1,
+        &[THREAD.to_le_bytes(), 3u32.to_le_bytes()].concat()
+    );
+    assert_eq!(
+        packets
+            .iter()
+            .filter(|(opcode, _)| *opcode == 0x166)
+            .count(),
+        1
+    );
+}
+
+fn keyring_purchase(name: &str, slot: u8, count: u8) -> (Standalone, ReducerConnection, u64) {
+    let (shard, mut connection, guid, vendor) = stage(name);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET bag_family = 9 WHERE entry = {THREAD}"
+    ));
+    buy(&mut connection, vendor, THREAD, guid, slot, count);
+    assert!(inventory(&shard, guid)
+        .iter()
+        .any(|row| row["slot"] == slot.to_string()));
+    (shard, connection, guid)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn review_keyring_purchase_can_be_split() {
+    let (shard, mut connection, guid) = keyring_purchase("purchase-keyring-split", 81, 4);
+    let packets = request(&mut connection, 0x10e, vec![255, 81, 255, 82, 2]);
+    assert!(
+        !packets.iter().any(|(opcode, _)| *opcode == 0x112),
+        "{packets:?}"
+    );
+    let rows = inventory(&shard, guid);
+    assert_eq!(rows.len(), 2);
+    for slot in [81, 82] {
+        assert!(rows
+            .iter()
+            .any(|row| row["slot"] == slot.to_string() && row["stack_count"] == "2"));
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn review_keyring_purchase_can_be_destroyed() {
+    let (shard, mut connection, guid) = keyring_purchase("purchase-keyring-destroy", 112, 4);
+    request(&mut connection, 0x111, vec![255, 112, 1, 0, 0, 0]);
+    assert_eq!(inventory(&shard, guid)[0]["stack_count"], "3");
+    request(&mut connection, 0x111, vec![255, 112, 0, 0, 0, 0]);
+    assert!(inventory(&shard, guid).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn review_keyring_purchase_can_move_to_backpack_and_back() {
+    let (shard, mut connection, guid) = keyring_purchase("purchase-keyring-move", 81, 4);
+    for (source, destination) in [(81, 23), (23, 112), (112, 81)] {
+        let packets = request(&mut connection, 0x10c, vec![255, destination, 255, source]);
+        assert!(
+            !packets.iter().any(|(opcode, _)| *opcode == 0x112),
+            "{packets:?}"
+        );
+        assert_eq!(inventory(&shard, guid)[0]["slot"], destination.to_string());
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn review_ordinary_unknown_purchase_uses_a_zero_vendor_guid() {
+    let (shard, mut connection, guid, vendor) = stage("purchase-ordinary-unknown");
+    let mut body = vendor.to_le_bytes().to_vec();
+    body.extend(u32::MAX.to_le_bytes());
+    body.extend([1, 0]);
+    let packets = request(&mut connection, 0x1a2, body);
+    let mut expected = vec![0; 8];
+    expected.extend(u32::MAX.to_le_bytes());
+    expected.push(0);
+    assert_eq!(packets, [(0x1a5, expected)]);
+    assert_eq!(money(&shard, guid), "50000");
+    assert!(inventory(&shard, guid).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn review_equipment_purchase_shares_ordinary_equip_effects_or_records_the_gap() {
+    fn effects(shard: &Standalone, guid: u64, packets: &[(u16, Vec<u8>)]) -> (bool, bool, bool) {
+        let aura = !shard
+            .query_rows(&format!(
+                "SELECT * FROM game_aura WHERE target_guid = {guid} AND spell_id = 168"
+            ))
+            .is_empty();
+        let cooldown = !shard
+            .query_rows(&format!(
+                "SELECT * FROM game_spell_cd WHERE caster_guid = {guid} AND spell_id = 50072"
+            ))
+            .is_empty();
+        (
+            aura,
+            cooldown,
+            packets.iter().any(|(opcode, _)| *opcode == 0xb0),
+        )
+    }
+    let (shard, mut connection, guid, vendor) = stage("purchase-shared-equip-effects");
+    shard.assert_sql(&format!("UPDATE game_item_template SET class = 4, subclass = 1, inventory_type = 1, required_level = 1, spellid_1 = 168, spelltrigger_1 = 1, spellid_2 = 50072, spelltrigger_2 = 0 WHERE entry = {ARMOR}"));
+    grant(&shard, guid, ARMOR, 1, 23);
+    let packets = request(&mut connection, 0x10a, vec![255, 23]);
+    assert_eq!(inventory(&shard, guid)[0]["slot"], "0");
+    let ordinary = effects(&shard, guid, &packets);
+    request(&mut connection, 0x10c, vec![255, 23, 255, 0]);
+    shard.assert_sql(&format!(
+        "DELETE FROM game_spell_cd WHERE caster_guid = {guid}"
+    ));
+    let packets = buy(&mut connection, vendor, ARMOR, guid, 0, 1);
+    let purchased = effects(&shard, guid, &packets);
+    assert_eq!(
+        ordinary, purchased,
+        "on-equip aura, cooldown and cooldown packet"
+    );
+    if ordinary != (true, true, true) {
+        let ledger = include_str!("../../../conformance/features/inventory/bag_management.toml");
+        assert!(
+            ledger.split("[[known_gaps]]").skip(1).any(|gap| {
+                gap.contains("on-equip spells")
+                    && gap.contains("30-second equip cooldown")
+                    && gap.contains("symbol = \"apply_item_move\"")
+            }),
+            "ordinary equip also lacks these effects; record the shared gap on bag_management"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn review_purchase_into_an_offered_stack_updates_the_offer_and_clears_acceptance() {
+    let (shard, mut connection, guid, vendor) = stage("purchase-trade-offer");
+    let item = grant(&shard, guid, THREAD, 19, 30);
+    let account = shard.query_rows("SELECT id FROM game_account WHERE username = 'CONFORMANCE'")[0]
+        ["id"]
+        .clone();
+    shard.assert_call(
+        "create_character",
+        &[
+            &account,
+            "\"Trader\"",
+            "1",
+            "1",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+        ],
+    );
+    let other = shard.query_rows("SELECT guid FROM game_character WHERE name = 'Trader'")[0]
+        ["guid"]
+        .clone();
+    shard.assert_call("debug_spawn_player_entity", &[&other]);
+    let actor = format!(r#"{{"guid":{guid},"ownership":null}}"#);
+    let partner = format!(r#"{{"guid":{other},"ownership":null}}"#);
+    shard.assert_call("gw_initiate_trade", &[&actor, &other]);
+    shard.assert_call("gw_begin_trade", &[&partner]);
+    shard.assert_call("gw_set_trade_item", &[&actor, "0", "30"]);
+    shard.assert_call("gw_accept_trade", &[&actor]);
+    assert_eq!(
+        shard.query_rows("SELECT initiator_accepted FROM game_trade_session")[0]
+            ["initiator_accepted"],
+        "true"
+    );
+    let packets = buy(&mut connection, vendor, THREAD, guid, 30, 3);
+    assert!(!packets.iter().any(|(opcode, _)| *opcode == 0x1a5));
+    assert_eq!(
+        shard.query_rows("SELECT item_guid FROM game_trade_slot")[0]["item_guid"],
+        item.to_string()
+    );
+    assert_eq!(
+        shard.query_rows("SELECT initiator_accepted FROM game_trade_session")[0]
+            ["initiator_accepted"],
+        "false"
+    );
+    assert!(inventory(&shard, guid)
+        .iter()
+        .any(|row| row["guid"] == item.to_string() && row["stack_count"] == "20"));
 }

@@ -591,7 +591,7 @@ pub(crate) fn apply_buy_item(
 
 pub(crate) fn apply_buy_item_to(
     ctx: &ReducerContext,
-    player_guid: u64,
+    character_guid: u64,
     vendor_guid: u64,
     item_entry: u32,
     count: u32,
@@ -603,9 +603,9 @@ pub(crate) fn apply_buy_item_to(
         .entry()
         .find(item_entry)
         .ok_or(BuyRefusal::UnknownItem)?;
-    let (mut player, vendor) = npc_interaction_gate(
+    let (mut character, vendor) = npc_interaction_gate(
         ctx,
-        player_guid,
+        character_guid,
         vendor_guid,
         lyracore_shared::constants::npc_flags::VENDOR,
         "vendor",
@@ -631,7 +631,7 @@ pub(crate) fn apply_buy_item_to(
             .db
             .game_player_reputation()
             .by_character()
-            .filter(player_guid)
+            .filter(character_guid)
             .find(|reputation| reputation.faction_id == faction)
             .map_or(0, |reputation| reputation.standing);
         if u32::from(crate::reputation::reputation_rank(standing)) < tmpl.required_reputation_rank {
@@ -640,17 +640,17 @@ pub(crate) fn apply_buy_item_to(
     }
     let cost = vendor_purchase_price(
         ctx,
-        player_guid,
+        character_guid,
         vendor.faction_template,
         buy_cost(tmpl.buy_price, lots),
     );
-    if player.money < cost {
+    if character.money < cost {
         return Err(BuyRefusal::NotEnoughMoney {
-            have: player.money,
+            have: character.money,
             need: cost,
         });
     }
-    let mut plan = super::ItemStoragePlan::read(ctx, player_guid, player.owner_identity);
+    let mut plan = super::ItemStoragePlan::read(ctx, character_guid, character.owner_identity);
     let total_count = lots.saturating_mul(tmpl.buy_count.max(1));
     let last_slot = if let Some((bag, slot)) = destination {
         Some(plan.purchase(ctx, &tmpl, total_count, bag, slot)?)
@@ -659,8 +659,8 @@ pub(crate) fn apply_buy_item_to(
         None
     };
     // Propagate storage failure so the reducer rolls back the debit.
-    player.money = player.money.saturating_sub(cost);
-    player.update(ctx);
+    character.money = character.money.saturating_sub(cost);
+    character.update(ctx);
     if let Some(slot) = last_slot {
         Ok(plan.commit_purchase(ctx, slot, total_count)?)
     } else {
