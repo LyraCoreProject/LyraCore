@@ -92,6 +92,12 @@ path = "module/src/items/vendor_stock.rs"
 symbol = "available"
 evidence = "At d9173eca3ea08dd985c52dabbcc826898d1d0b77, Map::UnloadGrid destroys creature objects, whose destructor clears m_vendorItemCounts; GridUnload defaults to true in World.cpp. The maintainer agreed to keep this existing lifecycle difference as a follow-up. Ordinary respawn, spawn removal and server restart have durable coverage in this change."
 
+[[known_gaps]]
+description = "Flag-2 dynamic restock intervals undercount active sessions split across World Shards."
+path = "module/src/native/mod.rs"
+symbol = "vendor_session_population"
+evidence = "Only offers with itemflags bit 2 use population scaling: the read-only full-world items plan for snapshot 464179081673cfd240f7ffe7f0daf96bca0b5a70 has 208 such limited offers out of 951 limited offers. With all active sessions on one World Shard the interval is unaffected; splitting 5,000 active sessions across two World Shards makes a 600-second offer use 600 seconds instead of vmangos's 300. vendor_session_population reads local connections and game_native_away, but away rows and admission state live on the Realm Shard. Peer status and Character directory/profile projections carry no Realm-wide session count. A fix needs a versioned Realm-to-World active-session-count projection with an authenticated receiver, freshness and refresh/retry policy. The maintainer left this new protocol blocked."
+
 [[deliberate_deviations]]
 id = "stock_zero_delay"
 result = "A computed flagged restock interval of zero is floored to one second."
