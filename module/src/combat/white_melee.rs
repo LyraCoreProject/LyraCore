@@ -74,11 +74,16 @@ pub(super) fn attack_table(
 pub(super) fn sheet_crit_bp(
     agility: u32,
     class: u8,
+    level: u32,
     rate: Option<f32>,
     weapon: i32,
     maximum: i32,
     bonus: i32,
 ) -> u32 {
+    let Some(rate) = rate.filter(|rate| rate.is_finite() && *rate > 0.0) else {
+        let agility_bp = i64::from(agility) * 100 / (i64::from(level) + 4);
+        return (1000 + agility_bp + i64::from(bonus)).clamp(0, 10_000) as u32;
+    };
     let offset = match class {
         2 => 70,
         5 => 300,
@@ -88,9 +93,7 @@ pub(super) fn sheet_crit_bp(
         11 => 90,
         _ => 0,
     };
-    let agility = rate
-        .filter(|rate| rate.is_finite() && *rate > 0.0)
-        .map_or(0.0, |rate| agility as f32 / rate * 100.0);
+    let agility = agility as f32 / rate * 100.0;
     (agility + (offset + bonus + (weapon - maximum) * 4) as f32).clamp(0.0, 10_000.0) as u32
 }
 
@@ -215,12 +218,20 @@ mod tests {
 
     #[test]
     fn crit_uses_class_rates_offsets_and_actual_weapon_skill() {
-        assert_eq!(sheet_crit_bp(100, 1, Some(20.0), 300, 300, 0), 500);
-        assert_eq!(sheet_crit_bp(20, 1, Some(4.0), 5, 5, 0), 500);
-        assert_eq!(sheet_crit_bp(100, 4, Some(28.9855), 300, 300, 0), 345);
-        assert_eq!(sheet_crit_bp(100, 8, Some(19.4553), 300, 300, 0), 833);
-        assert_eq!(sheet_crit_bp(100, 1, Some(20.0), 295, 300, 0), 480);
-        assert_eq!(sheet_crit_bp(100, 1, Some(20.0), 305, 300, 0), 520);
-        assert_eq!(sheet_crit_bp(100, 1, None, 300, 300, 0), 0);
+        assert_eq!(sheet_crit_bp(100, 1, 60, Some(20.0), 300, 300, 0), 500);
+        assert_eq!(sheet_crit_bp(20, 1, 1, Some(4.0), 5, 5, 0), 500);
+        assert_eq!(sheet_crit_bp(100, 4, 60, Some(28.9855), 300, 300, 0), 345);
+        assert_eq!(sheet_crit_bp(100, 8, 60, Some(19.4553), 300, 300, 0), 833);
+        assert_eq!(sheet_crit_bp(100, 1, 60, Some(20.0), 295, 300, 0), 480);
+        assert_eq!(sheet_crit_bp(100, 1, 60, Some(20.0), 305, 300, 0), 520);
+    }
+
+    #[test]
+    fn missing_crit_rate_preserves_the_previous_formula() {
+        assert_eq!(sheet_crit_bp(100, 8, 60, None, 300, 300, 0), 1156);
+        assert_eq!(sheet_crit_bp(100, 8, 60, None, 295, 300, 200), 1356);
+        assert_eq!(sheet_crit_bp(20, 4, 1, None, 5, 5, 0), 1400);
+        assert_eq!(sheet_crit_bp(100, 8, 60, None, 300, 300, -1500), 0);
+        assert_eq!(sheet_crit_bp(100, 8, 60, None, 300, 300, 10_000), 10_000);
     }
 }

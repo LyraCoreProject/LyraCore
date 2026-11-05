@@ -251,19 +251,11 @@ pub(crate) fn effective_crit_bp(ctx: &ReducerContext, attacker: &WorldEntity) ->
     if !attacker.is_player() {
         return (500 + bonus).clamp(0, 10_000) as u32;
     }
-    use crate::stats::game_crit_per_agility;
-    let rate = ctx
-        .db
-        .game_crit_per_agility()
-        .class_level()
-        .find(crate::stats::class_level_key(
-            attacker.class(),
-            attacker.level.clamp(1, 60),
-        ))
-        .map(|row| row.rate);
+    let rate = crate::stats::crit_per_agility_for(ctx, attacker.class(), attacker.level);
     super::white_melee::sheet_crit_bp(
         effective_agility(ctx, attacker),
         attacker.class(),
+        attacker.level,
         rate,
         crate::skill::effective_weapon_skill(ctx, attacker) as i32,
         crate::skill::skill_cap_for_level(attacker.level) as i32,

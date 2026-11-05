@@ -10,7 +10,8 @@ say: invariants, why a column exists and ordering rules.
 
 `game_crit_per_agility` stores imported class/level rates; `game_creature_defense` stores imported
 creature defense flags. Both are new catalogues. See the [white melee migration](danger-zones.md#white-melee-catalogue-migration)
-before publishing to an existing Realm.
+before publishing to an existing Realm. The private `game_missing_crit_catalogue` singleton records
+the first missing crit rate and suppresses repeat warnings while the previous formula is in use.
 
 ## 1. Conventions
 

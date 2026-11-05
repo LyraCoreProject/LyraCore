@@ -145,8 +145,10 @@ no repair.
 `game_crit_per_agility` and `game_creature_defense` start empty after a publish. Run
 `debug_repair_after_publish` to seed warrior levels 1 and 60, then reimport the `globals` and
 `creatures` families before play resumes. Other class/level combinations need imported crit rates;
-creatures need their no-parry, no-block and no-defense flags. Existing Character sheet values are
-refreshed on world entry, equipment changes and weapon skill changes.
+creatures need their no-parry, no-block and no-defense flags. Missing crit rates use the previous
+crit calculation in combat and on the sheet, with one warning per Shard. This fallback does not
+replace the globals reimport. Existing Character sheet values are refreshed on world entry,
+equipment changes and weapon skill changes.
 
 ### Starting stack migration
 
