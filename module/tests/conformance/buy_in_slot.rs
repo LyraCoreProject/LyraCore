@@ -469,7 +469,7 @@ fn purchase_admission_checks_items_vendors_and_reputation_before_storage() {
         "debug_grant_reputation",
         &[&guid.to_string(), "50900", "9000"],
     );
-    shard.assert_sql("UPDATE game_faction_template SET faction = 50900 WHERE id = 35");
+    shard.assert_sql("INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (35,50900,0,0,0,0,0,0,0,0,0,0,0)");
     shard.assert_sql(&format!(
         "UPDATE game_item_template SET buy_price = 11 WHERE entry = {THREAD}"
     ));
