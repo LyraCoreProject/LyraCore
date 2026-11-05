@@ -484,7 +484,7 @@ fn poison(shard: &Standalone, connection: &mut ReducerConnection, guid: u64, ite
         "INSERT INTO game_spell_enchant_charges (spell_id, charges) VALUES ({spell}, 40)"
     ));
     shard.assert_sql(&format!("UPDATE game_item_template SET spellid_1 = {spell}, spelltrigger_1 = 0 WHERE entry = 5090052"));
-    grant(&shard, guid, 5090052, 1);
+    grant(shard, guid, 5090052, 1);
     shard.assert_call("debug_use_item_on_item", &[&guid.to_string(), "24", "23"]);
     for _ in 0..20 {
         if !shard

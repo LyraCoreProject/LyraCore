@@ -79,7 +79,7 @@ fn receive_handoff(
         [0]["id"]
         .parse()
         .unwrap();
-    let identity = Some(Identity::from_hex(&format!("{:064x}", 0x1234)).unwrap());
+    let identity = Some(Identity::from_hex(format!("{:064x}", 0x1234)).unwrap());
     let account = lyracore_module::Account {
         id: account_id,
         username: "CONFORMANCE".into(),
@@ -110,7 +110,7 @@ fn receive_handoff(
         "SELECT map_id FROM game_character WHERE guid = {guid}"
     ));
     let map = characters.first().map_or("0", |row| row["map_id"].as_str());
-    shard.assert_call("operator_set_map_owner", &[&map, &database_identity(shard)]);
+    shard.assert_call("operator_set_map_owner", &[map, &database_identity(shard)]);
     let connection = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
     let args = vec![
         realm,
