@@ -119,7 +119,6 @@ pub const STATEMENTS: &[&str] = &[
     "INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count) VALUES (19,9499,11325,1,10)",
     "INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count) VALUES (20,9499,13483,2,0)",
     "INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count) VALUES (21,9499,15759,3,1)",
-    "INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count) VALUES (22,11188,14526,0,0)",
     "INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count) VALUES (23,11188,3371,1,0)",
     "INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count) VALUES (24,11188,3372,2,0)",
     "INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count) VALUES (25,11188,8925,3,0)",
