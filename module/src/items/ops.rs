@@ -61,12 +61,6 @@ pub(crate) fn grant_starter_item(
         );
         Ok(())
     };
-    grant_one(
-        starter_item::HEARTHSTONE_ENTRY,
-        starter_item::HEARTHSTONE_SLOT,
-        1,
-    )?;
-
     let race_class: u16 = ctx
         .db
         .game_character()
@@ -89,10 +83,6 @@ pub(crate) fn grant_starter_item(
         let mut occupied: std::collections::HashSet<u8> = std::collections::HashSet::new();
         let mut backpack = starter_item::BACKPACK_SLOT_0;
         for (entry, count) in outfit {
-            // CharStartOutfit includes the Hearthstone already granted above.
-            if entry == starter_item::HEARTHSTONE_ENTRY {
-                continue;
-            }
             let Some(tmpl) = ctx.db.game_item_template().entry().find(entry) else {
                 continue;
             };
@@ -110,6 +100,11 @@ pub(crate) fn grant_starter_item(
         return Ok(());
     }
 
+    grant_one(
+        starter_item::HEARTHSTONE_ENTRY,
+        starter_item::HEARTHSTONE_SLOT,
+        1,
+    )?;
     grant_one(starter_item::ENTRY, starter_item::MAINHAND_SLOT, 1)?;
     grant_one(51, starter_item::BACKPACK_SLOT_0, 1)?;
     grant_one(52, starter_item::BACKPACK_SLOT_0 + 1, 5)?;
