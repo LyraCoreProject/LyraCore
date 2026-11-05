@@ -24,3 +24,9 @@ description = "The completed cast omits its create-item execute log and orders t
 path = "module/src/native/cast.rs"
 symbol = "receive"
 evidence = "cast_and_interrupt tier 1 with conformance.17: missing opcode 588 and extra/missing opcode 358 at finish; unexpected opcode 305 and missing opcode 304 at bad_target."
+
+[[known_gaps]]
+description = "The passive spell target still deals damage to the mage and causes cast pushback. The pinned direct-damage context cannot complete a full sample; hit, miss, full-resist, crit and partial-resist rates remain unmeasured."
+path = "module/src/creatures/cycle/mod.rs"
+symbol = "run_cycle"
+evidence = "spell_direct_damage_outcomes tier 1 with conformance.19: reaction state 0; level-60 first public seed stops at cast 3 with START 1500 ms, pushback_count 1 and mage health 999999998. Ordinary spell_sample signatures retain the incomplete samples without binomial rate claims."

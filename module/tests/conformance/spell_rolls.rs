@@ -500,6 +500,7 @@ pub(super) fn public_seeds() -> Result<()> {
         measurements.push(measure(seed, golden.scenario(), "spell-roll-public")?);
     }
     let report = core_root().join(".lyracore/conformance/spell-rates.json");
+    std::fs::create_dir_all(report.parent().context("spell report parent")?)?;
     std::fs::write(&report, serde_json::to_vec_pretty(&measurements)?)?;
     let complete = measurements
         .iter()

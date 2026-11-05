@@ -351,6 +351,15 @@ findings. The [measurement report](reports/2026-11-05-white-melee.md) records ex
 cost, repeatability and strictness. A held category signature cannot detect further worsening
 within that category. TCP audits explicitly report a missing full roll sample.
 
+## Direct-damage spell roll rates
+
+`spell_direct_damage_outcomes` extends [ADR 0007](../docs/adr/0007-statistical-roll-conformance.md)
+with a level-60 mage casting Scorch at level-60 and level-63 creatures. Complete samples use
+50,000 casts per level for each public seed. The first core measurement is blocked: passive
+targets still damage the mage and cause cast pushback. Ordinary `spell_sample` findings retain
+that gap; every rate remains unmeasured. The [spell report](reports/2026-11-05-spell-rolls.md)
+records the context, expected rates and diagnostic evidence. Partial counts cannot claim parity.
+
 ## Taxi data
 
 `taxi_single_hop` uses the harness's money, known-flight-node and creature Fixture Verbs. The

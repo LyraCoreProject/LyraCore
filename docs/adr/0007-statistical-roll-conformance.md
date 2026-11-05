@@ -359,3 +359,24 @@ matched after the checked wrapper exited zero. The launcher copied and synced th
 12,433-byte trace before wrapper cleanup; both copies have SHA-256
 `958c3f88f01d229477a7376bad28881fdba5c3d31e3bcd62f68d62533d97239f`.
 No script changed during capture. No third recording was taken.
+
+### Core spell measurement
+
+The core fixture translates Scorch's additional pinned numeric inputs from `mangos.sql:5879`:
+cost 50, range 30, spell/max level 22/26, family 3 and flags 1073741840, proc flags/charges zero
+and proc chance 101. Its one damage effect uses source base points 52 plus the offset of one,
+die sides 13, per-level points 0.9 and coefficient 0.429. Equipment, talents and auras remain
+absent; target reaction is explicitly passive and checked before collection.
+
+The first valid-context attempt at `fa737462` stopped at cast 3 against level 60 under public
+seed `0x4c79726100000001`. A diagnostic replay reproduced two completed ordinary hits, followed
+by START 1500 ms, a pending cast with one pushback, no pending impact, and mage health
+999,999,998 instead of 1,000,000,000. Passive-target retaliation blocks the pinned context.
+No gameplay correction or probability adjustment is made. The [spell report](../../conformance/reports/2026-11-05-spell-rolls.md)
+records this finding. An earlier fixture attempt lacked passive state; its new pre-cast check
+failed before any cast, and the fixture now supplies that already pinned input.
+
+Emit ordinary `spell_sample` Rule signatures for blocked level/seed samples and retain them in
+`known_gaps`. Do not test or report partial counts as rates. Full-rate repeatability and gameplay
+chance sensitivity remain unmeasured until a separate implementer repairs the gameplay blocker.
+The allocation still reserves all 72 tests. Main replays the merge seed once, without retry.
