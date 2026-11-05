@@ -562,6 +562,20 @@ fn visible_equip_effects_keep_the_sources_duration_and_reapply_after_resurrectio
     assert_eq!(rows.len(), 1);
     assert!(rows[0]["slot"].parse::<u8>().unwrap() < 32);
     assert!(packets.iter().any(|(opcode, _)| *opcode == 0x137));
+    for attributes in [128u32, 0x80000000] {
+        shard.assert_sql(&format!(
+            "UPDATE game_spell SET attributes = {attributes} WHERE spell_id = {EQUIP}"
+        ));
+        request(&mut connection, 0x136, EQUIP.to_le_bytes().to_vec());
+        assert_eq!(auras(&shard, guid).len(), 1);
+        assert!(!shard
+            .call("gw_cancel_aura", &[&actor(guid), &EQUIP.to_string()])
+            .status
+            .success());
+    }
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET attributes = 0 WHERE spell_id = {EQUIP}"
+    ));
     shard.assert_call("debug_set_health", &[&guid.to_string(), "0"]);
     assert!(auras(&shard, guid).is_empty());
     shard.assert_call("debug_set_health", &[&guid.to_string(), "1"]);
