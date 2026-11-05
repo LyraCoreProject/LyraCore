@@ -62,7 +62,19 @@ fn teardown_leaves_a_package_character_dormant_and_forgets_the_package_config() 
         );
     }
 
+    shard.assert_call(
+        "debug_request_package_character",
+        &[&arg(PACKAGE), &arg("Unread"), "1", "1"],
+    );
+    assert_eq!(
+        count(&shard, "SELECT id FROM game_package_character_request"),
+        1
+    );
     shard.assert_call("teardown_package", &[&arg(PACKAGE)]);
+    assert_eq!(
+        count(&shard, "SELECT id FROM game_package_character_request"),
+        0
+    );
 
     for (what, query) in &owned {
         assert_eq!(count(&shard, query), 0, "teardown left the {what}");

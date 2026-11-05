@@ -10,6 +10,9 @@ impl WorldEntity {
         crate::combo::forget(ctx, guid);
         crate::transport::leave(ctx, guid);
         crate::aoi::entity_removed(ctx, guid);
+        if removed {
+            crate::native::realm_party::package::presence(ctx, guid);
+        }
         removed
     }
 
@@ -40,6 +43,9 @@ impl WorldEntity {
             entity.cell,
         );
         crate::aoi::entity_changed(ctx, None, &entity);
+        if entity.is_player() {
+            crate::native::realm_party::package::presence(ctx, entity.guid);
+        }
         entity
     }
 
@@ -49,6 +55,9 @@ impl WorldEntity {
         let entity = ctx.db.game_world_entity().guid().update(self);
         crate::aoi::entity_changed(ctx, old.as_ref(), &entity);
         if let Some(old) = old {
+            if entity.is_player() && (old.level != entity.level || old.zone_id != entity.zone_id) {
+                crate::native::package_guild::details_changed(ctx, entity.guid);
+            }
             if crate::breath::eligible(&old) && !crate::breath::eligible(&entity) {
                 crate::breath::clear(ctx, entity.guid);
             }

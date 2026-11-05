@@ -449,14 +449,14 @@ pub(crate) fn teleport_aboard(
     teleport(ctx, guid, map_id, 0, pose, Some(aboard));
 }
 
-fn teleport(
+pub(crate) fn teleport_gate(
     ctx: &ReducerContext,
     player_guid: u64,
     map_id: u32,
     instance_id: u64,
-    [x, y, z, o]: [f32; 4],
-    aboard: Option<crate::transport::Aboard>,
-) {
+) -> Result<Option<Identity>, crate::actor::ActionRefusal> {
+    use crate::actor::{ActionRefusal, ActionRefusalKind};
+
     let destination =
         crate::native::directory::transfer_destination(ctx, player_guid, map_id, instance_id);
     let allowed = destination.map_or_else(
@@ -465,21 +465,56 @@ fn teleport(
             crate::peer::is_peer(ctx, world) && crate::native::has_world_session(ctx, player_guid)
         },
     );
-    if !allowed || crate::taxi::movement_is_suppressed(ctx, player_guid) {
-        return;
+    if !allowed {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::OtherPartition,
+            "destination requires a World Session Transfer or a locally owned map",
+        ));
     }
-    let entities = ctx.db.game_world_entity();
-    let Some(e) = entities.guid().find(player_guid) else {
-        return;
-    };
-    let recipient_identity = e.owner_identity;
-    let cross_map = is_cross_map_teleport(e.map_id, map_id) || destination.is_some();
-    if cross_map
+    if crate::taxi::movement_is_suppressed(ctx, player_guid) {
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            "Character is in flight",
+        ));
+    }
+    let entity = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(player_guid)
+        .ok_or_else(|| {
+            ActionRefusal::new(ActionRefusalKind::MissingActor, "Character is not in world")
+        })?;
+    if (is_cross_map_teleport(entity.map_id, map_id) || destination.is_some())
         && (crate::native::realm_petition::pending(ctx, player_guid)
             || crate::native::realm_auction::pending(ctx, player_guid))
     {
-        return;
+        return Err(ActionRefusal::new(
+            ActionRefusalKind::CannotAct,
+            "Character transaction is settling",
+        ));
     }
+    Ok(destination)
+}
+
+fn teleport(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    map_id: u32,
+    instance_id: u64,
+    [x, y, z, o]: [f32; 4],
+    aboard: Option<crate::transport::Aboard>,
+) {
+    let Ok(destination) = teleport_gate(ctx, player_guid, map_id, instance_id) else {
+        return;
+    };
+    let entities = ctx.db.game_world_entity();
+    let e = entities
+        .guid()
+        .find(player_guid)
+        .expect("teleport Gate requires a live entity");
+    let recipient_identity = e.owner_identity;
+    let cross_map = is_cross_map_teleport(e.map_id, map_id) || destination.is_some();
     let sessionless = crate::helpers::character_by_guid(ctx, player_guid)
         .is_some_and(|character| !character.online);
     let changes_partition = e.map_id != map_id || e.instance_id != instance_id;

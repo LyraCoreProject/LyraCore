@@ -1,3 +1,5 @@
+pub(crate) mod package;
+
 use std::collections::BTreeSet;
 
 use lyracore_protocol::{
@@ -24,6 +26,9 @@ use crate::{
     peer::{realm_shard, require_sender, world_shard},
     remote_bindings::peer as remote,
 };
+
+// Opcode zero carries a Package Group command instead of client packet bytes.
+const PACKAGE_COMMAND: u32 = 0;
 
 #[table(accessor = game_party_character)]
 #[derive(Clone)]
@@ -125,6 +130,12 @@ pub(super) fn current(ctx: &ReducerContext, character: &PartyCharacter) -> Optio
         .game_character_directory()
         .guid()
         .find(character.guid)?;
+    if character.connection == 0 {
+        return (entry.account_id == character.account_id
+            && entry.world == character.world
+            && super::package_actor::current(ctx, character))
+        .then_some(entry.world);
+    }
     let away = ctx
         .db
         .game_native_away()
@@ -352,7 +363,10 @@ pub fn idc_realm_party_command(
 ) -> Result<(), String> {
     directory::require_world(ctx)?;
     let actor: PartyCharacter = bsatn::from_slice(&character).map_err(|error| error.to_string())?;
-    if current(ctx, &actor) != Some(ctx.sender()) {
+    if opcode == PACKAGE_COMMAND {
+        return package::apply(ctx, actor, &body);
+    }
+    if actor.connection == 0 || current(ctx, &actor) != Some(ctx.sender()) {
         return Err("World Session changed".into());
     }
     let guid = actor.guid;
@@ -452,6 +466,12 @@ pub fn realm_party_command_answered(
 ) -> Result<(), String> {
     let actor: PartyCharacter =
         bsatn::from_slice(&call.character).map_err(|error| error.to_string())?;
+    if call.opcode == PACKAGE_COMMAND {
+        if let Err(error) = result {
+            spacetimedb::log::warn!("Package Group request for {} refused: {error}", actor.guid);
+        }
+        return Ok(());
+    }
     let connection = ConnectionId::from_u128(actor.connection);
     if !ctx
         .db
@@ -577,7 +597,16 @@ pub(crate) fn publish(
                 connection: recipient.connection,
                 kind: event.kind,
                 other: event.other_guid,
-                payload: event.payload,
+                payload: if event.kind == event_kind::INVITE && recipient.connection == 0 {
+                    ctx.db
+                        .game_group_invite()
+                        .by_target()
+                        .filter(event.recipient_guid)
+                        .next()
+                        .map_or_else(String::new, |invite| invite.id.to_string())
+                } else {
+                    event.payload
+                },
             })
         })
         .collect();
@@ -680,6 +709,19 @@ pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), 
         project(ctx, roster, update.revision);
     }
     for event in update.events {
+        if event.connection == 0 && event.kind == event_kind::INVITE {
+            if let Ok(id) = event.payload.parse() {
+                let _ = package::submit(
+                    ctx,
+                    event.recipient,
+                    package::Action::Answer(package::Invitation {
+                        id,
+                        inviter: event.other,
+                    }),
+                );
+            }
+            continue;
+        }
         if matches!(event.kind, event_kind::LIST | event_kind::DESTROYED)
             || ctx.timestamp.to_micros_since_unix_epoch() >= update.events_expire_micros
         {
@@ -798,6 +840,7 @@ fn project(ctx: &ReducerContext, roster: Roster, revision: u64) {
             revision,
         });
         restore(ctx, guid);
+        package::membership_changed(ctx, guid);
         crate::instance::reconcile_instance_removal(ctx, guid);
     }
     projections.group_id().delete(roster.group_id);

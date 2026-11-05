@@ -171,13 +171,53 @@ additive migration. `game_selection_request.selection_id` and `game_native_away.
 END-appended defaults; a legacy away row uses the default World Shard.
 
 `game_character_name` is a new private Realm table keyed by the lowercased name. A pending row
-has a nonzero selection id and guid zero; a completed row has its Character guid and selection id
-zero. The Account and World identify the creator. Confirmed deletion releases the row. It stays
+has guid zero. Its selection id is nonzero for native creation and zero for Package creation;
+a completed row has its Character guid and selection id zero. The Account and World identify the creator. Confirmed deletion releases the row. It stays
 on the Realm through Transfer and selection expiry. `game_character_names_ready` records World
 Shards whose complete name report committed. `game_character_name_report` retains the current
 report revision, expected batch count and accepted batch indexes until that World becomes ready.
 All three tables start empty. See the
 [upgrade procedure](architecture.md#upgrade-character-name-reservations).
+
+### Package Character creation (`module/src/native/package_creation.rs`)
+
+`game_package_character_request` retains each World's Package request and its Pending, Created or
+Refused result until the Package consumes it. It has at most 64 rows per Package per Shard.
+`game_package_creation_delivery` carries request, grant, created-profile and completion messages.
+`game_package_creation_retry` retains refused result deliveries for retry; transport failures stay
+in the outbox. All three tables are private and new. Request ids are local to the requesting World.
+A grant failure rolls back World creation before its Realm callback releases the pending name.
+Package Account allocation on the Realm includes both directory entries and pending reservations.
+See [the Package contract](package-api.md#asynchronous-package-character-creation) for result
+consumption and upgrade obligations.
+
+### Package Groups (`module/src/native/realm_party/package.rs`)
+
+`game_package_party_authority`, declared in `native/package_actor.rs`, is a private table on the
+World and Realm. It retains the Character guid, World, authority revision and active state. Body and consent changes advance the
+revision on the owning World; the Realm keeps it after presence becomes inactive to fence delayed
+commands. Existing Group table layouts and IDC arguments are unchanged. Opcode zero in
+`game_realm_party_command` carries a Package command and its authority. A zero connection alone
+does not grant Group or guild authority. The Realm also requires Package Account ownership and
+the current Character directory owner. See [the Package contract](package-api.md#session-less-action-consent)
+for upgrade and completion obligations.
+
+`game_package_party_refresh` is a new private scheduled table with at most one row per World. It
+refreshes statistics for active Package Group members every five seconds, keeping their authority
+revisions unchanged. Outstanding Package commands delay a refresh batch. The timer removes itself
+when no active Package Group members remain. After upgrading an existing World, the Package Group
+presence report starts the timer for existing membership.
+
+### Package guilds (`module/src/native/package_guild.rs`)
+
+`game_package_guild_delivery` carries World requests and Realm invitation projections through
+`idc_package_guild`. `game_package_guild_retry` retains refused projection deliveries for retry;
+transport failures remain in the outbox. `game_package_guild_invitation` retains one current
+invitation or cleared revision per Character on its World. Cleared rows survive Character removal
+to prevent a delayed delivery from restoring an old invitation. All three tables are new and
+private. The existing `game_package_party_authority` layout is unchanged and fences both Group and
+guild actions. See [the Package contract](package-api.md#sessionless-guild-membership) for explicit
+acceptance, asynchronous completion and the presence report required after an upgrade.
 
 ### Realm communication (`module/src/native/realm_communication.rs`)
 

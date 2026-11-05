@@ -428,7 +428,9 @@ Shard. Pending reservations also count toward the Account limit. A successful cr
 Character profile binds the reservation to its guid. A confirmed World refusal releases it;
 a timeout, connection close or Host restart does not. Confirmed deletion releases the name, and
 Transfer keeps it reserved. World Shards accept creation only from their Realm Shard, so direct
-Operator and Package creation on a World Shard cannot bypass reservation. A single-Shard Realm
+Operator and synchronous Package creation on a World Shard cannot bypass reservation. Asynchronous
+[Package creation](package-api.md#asynchronous-package-character-creation) requests a Realm reservation
+and Package-owned Account before the World creates its sessionless Character. A single-Shard Realm
 keeps synchronous creation and checks names without case distinctions.
 
 Each World Shard reports a complete Character profile snapshot before new creation opens. This

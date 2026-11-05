@@ -1,17 +1,14 @@
 use lyracore_shared::guild::{event_kind, LEADER_RANK};
 use spacetimedb::ReducerContext;
 
-use super::membership::{disband_guild, game_guild_invite};
+use super::membership::{disband_guild, GuildInvite};
 use super::{game_guild, game_guild_member, member, petition, push_event, GuildMember};
 
 pub(crate) fn forget_deleted_character(ctx: &ReducerContext, character_guid: u64) {
     if crate::peer::realm_shard(ctx).is_some() {
         return;
     }
-    ctx.db
-        .game_guild_invite()
-        .target_guid()
-        .delete(character_guid);
+    GuildInvite::delete(ctx, character_guid);
     if let Some(departed) = member(ctx, character_guid) {
         leave_guild(ctx, departed);
     }

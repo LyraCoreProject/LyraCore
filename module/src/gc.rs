@@ -91,7 +91,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
             .map(|e| e.target_guid)
             .collect();
         for target_guid in stale {
-            t.target_guid().delete(target_guid);
+            crate::guild::membership::GuildInvite::delete(ctx, target_guid);
         }
     }
 

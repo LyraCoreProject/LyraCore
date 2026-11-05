@@ -25,6 +25,10 @@ import realm_communication
 import instance_shard
 import instance_allocation
 import character_names
+import package_creation
+import package_groups
+import package_guilds
+import package_relocation
 from instance_reset import check_instance_resets
 import retention
 from spell_source import check_spell_source_behavior
@@ -5481,6 +5485,10 @@ ALONE = {
     'instance-shard': (instance_shard.check, {'seeded': True}),
     'instance-allocation': (instance_allocation.check, {'seeded': True}),
     'character-names': (character_names.check, {'seeded': True}),
+    'package-creation': (package_creation.check, {'seeded': True}),
+    'package-groups': (package_groups.check, {'seeded': True}),
+    'package-guilds': (package_guilds.check, {'seeded': True}),
+    'package-relocation': (package_relocation.check, {'seeded': True}),
 }
 
 

@@ -106,6 +106,47 @@ invitation unanswered. `emit_bot_invite_intent` and `emit_bot_leave_intent` appl
 directly and create no Group Intent. A group invariant failure aborts the transaction because those
 Package operations return no outcome.
 
+On a World Shard, these verbs submit durable requests to the Realm for Characters on Package-owned
+Accounts. `accept_group_invite` returning success means the request was queued; read the projected
+Group membership to observe completion. The Realm owns the roster and applies faction, capacity and
+leader Gates. Refusals are logged. No World Session is created.
+
+Building or removing a live Package Character and changing its consent publish Group presence.
+Each change advances a durable authority revision. The Realm refuses an older revision after it
+observes the newer one. A request already admitted by the Realm is not undone by a later consent
+change. Invitations to a Package Character return to its World for a fresh consent Gate before
+automatic acceptance. A delayed acceptance names its inviter and cannot accept a different invite.
+
+Publish all Shards before using this path. After upgrading Worlds that already have live Package
+Characters, call `operator_report_package_groups` on each World to publish their current presence.
+Grouped Package Characters refresh their remote member statistics every five seconds while active.
+Statistics wait behind outstanding Package commands and keep the existing consent revision. The
+World stops its refresh timer when no active Package Group members remain.
+
+### Sessionless guild membership
+
+`actor::guild_invitation(ctx, guid)` reads a pending `GuildInvitation`, and
+`actor::guild_membership(ctx, guid)` reads the current membership. A Package explicitly calls
+`accept_guild_invite`, `decline_guild_invite`, `invite_to_guild(ctx, guid, target_guid)` or
+`leave_guild`. These verbs require a Package-owned Account, a live body, current ownership and
+Sessionless Action Consent. Guild invitations are not accepted automatically. Accept and decline
+name the exact invitation observed on the World; a changed invitation is refused.
+
+On a single-Shard Realm these verbs apply immediately. On a World Shard, `Ok(())` means the durable
+request was queued. Read the invitation and membership projections to observe completion; Realm
+Refusals are logged. The Realm applies the existing guild rank, faction, ignore and leader Gates.
+This does not grant a Package guild creation or GM rights. No World Session is created.
+
+Guild presence shares the Group authority revision and consent fence. Body and consent changes
+publish presence; level and zone changes refresh roster details without advancing that fence.
+Expired, declined and disbanded invitations clear the World's projection. A retained revision keeps
+a delayed invitation from restoring a cleared one. Pending delivery survives a Host restart.
+
+Publish all Shards before using the guild verbs, then call `operator_report_package_groups` on each
+World that already has live Package Characters. The report now publishes both Group and guild
+presence and restores pending guild invitations. Existing table layouts are unchanged.
+Cross-Shard Package relocation remains separate work.
+
 ### Package-owned Accounts
 
 `package::create_character(ctx, package_name, name, race, class) -> Result<u64, String>`
@@ -122,6 +163,33 @@ so it stays when the Package is disabled. Pass the Package's own name.
 
 The Character starts at level 1 at its race and class start position, with zero gender and
 appearance bytes. The Package places it, levels it and builds its live entity.
+
+### Asynchronous Package Character creation
+
+`package::request_character(ctx, package_name, name, race, class) -> Result<u64, String>`
+returns a durable request id. Call it on the World Shard that owns the race/class start map. Retain
+that id in Package state; do not submit the same creation again on each tick. The Realm reserves the
+name and selects a Package-owned Account, counting pending creations toward its ten-Character limit
+across all Worlds. The World creates the Character without a Session. It uses the same starting
+state and creation Gates as synchronous creation. On a single-Shard Realm, creation finishes in
+the requesting transaction.
+
+`package::take_character_result(ctx, package_name, request_id) -> Result<package::CharacterCreation, String>`
+returns `Pending`, `Created(guid)` or `Refused(reason)`. Pending leaves the request intact. A completed
+result is consumed in the caller's transaction, so record the guid or refusal in Package state in
+that transaction. A missing request or a different Package name returns an error. A Package may
+retain at most 64 requests on a Shard, including unread results.
+
+A restart or delayed reply does not release the name or discard pending work. A confirmed creation
+Refusal releases the name. Result delivery retries until the Realm and World can accept it.
+The Package must wait for `Created` before placing or activating the Character. Creation does not
+move Package tables, activate Group presence, or enable guild or cross-Shard relocation operations.
+
+Publish all Shards before using this interface and complete the
+[Character-name import](architecture.md#upgrade-character-name-reservations). Package Accounts are
+allocated on the Realm and copied with their ownership to the requesting World. Conflicting legacy
+World Account ids or usernames refuse creation without overwriting that World state. Reconcile such
+Accounts before retrying; this addition does not migrate existing Package Accounts.
 
 ### Package Teardown
 
@@ -141,7 +209,9 @@ through ownership, as with a Character on an Account made before Package-owned A
 Character with a World Session is never made Dormant.
 
 Teardown refuses, and writes nothing, while one of these Characters has a Transfer escrow row or a
-claimed Transfer Intent, because the escrow names the Package's tables.
+claimed Transfer Intent, because the escrow names the Package's tables. It also refuses while a
+local Package Character request or a Realm name reservation for the Package is pending. Successful
+teardown discards unread completed creation results.
 
 A Package stays stopped until the first tick of a build that does not compile it. Enabling it again
 then starts it fresh: empty tables, default Package Config, and no Characters from before. Its old
@@ -215,6 +285,8 @@ instead: accepted work or a Refusal, and a Cast Handle for a pending cast.
 | `spirit_res` | `world::do_spirit_healer_res` | ghost actor res without a healer Gate; 25% carried-item durability loss and level-scaled sickness apply |
 | `self_resurrect` | `spell::do_self_resurrect` | dead actor with a Self-Resurrection Option revives in place; no sickness |
 | `accept_group_invite` | `group::accept_invite_for` | pending invite exists + inviter on the same team + its Group still exists (or a solo inviter is still ungrouped) + group not full; roster events fire and the Roster Revision advances |
+| `guild_invitation`, `guild_membership` | Package guild and guild reads | pending invitation and current projected membership |
+| `invite_to_guild`, `accept_guild_invite`, `decline_guild_invite`, `leave_guild` | Package guild requests | Package ownership, live body and consent; Realm guild rules; World success means queued |
 | `set_sessionless_action_consent` | `sessionless::set_sessionless_action_consent` | update Package consent and clear unclaimed Group Intents atomically |
 | `companion_target_facts` | `group::companion_target_facts` | exact hostile creature + partition/death/control gates; never selects a substitute |
 | `system_message` | `chat::emit_system_message` | recipient exists and is online on this Shard; text is trimmed, bounded, and non-empty |
@@ -346,8 +418,12 @@ applies the imported landing and records a completed Character Relocation in the
 The returned id names that completed relocation. A repeat for the same controller generation,
 AreaTrigger and destination returns the same id while the Character remains in that destination
 partition. Only the latest relocation remains. A Refusal leaves the Character, Instance binding and
-relocation unchanged. No Transfer Intent or Escrow is created. `area_trigger_route` exposes the
-source center and containment rule for candidate movement.
+relocation unchanged. On a split Realm, a destination owned by another World is refused with
+`OtherPartition`; this synchronous verb does not queue a cross-Shard Transfer. With map assignments
+configured, a destination without an owner is also refused. Cross-map requests wait for Character
+transactions to settle. These Gates run before Instance admission or a receipt write.
+No Transfer Intent or Escrow is created. `area_trigger_route` exposes the source center and
+containment rule for candidate movement.
 
 ### Package Config
 
