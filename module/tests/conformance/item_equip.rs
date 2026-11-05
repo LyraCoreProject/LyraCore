@@ -33,6 +33,20 @@ pub(super) fn configure(shard: &Standalone) {
     ));
 }
 
+fn advance(shard: &Standalone, milliseconds: u32) {
+    let ticks = milliseconds / 50;
+    if ticks != 0 {
+        shard.assert_call("debug_advance_roll_batch", &[&ticks.to_string()]);
+    }
+    let remainder = milliseconds % 50;
+    if remainder != 0 {
+        shard.assert_call(
+            "debug_advance_virtual_clock",
+            &[&(remainder * 1000).to_string()],
+        );
+    }
+}
+
 fn auras(shard: &Standalone, guid: u64) -> Vec<std::collections::BTreeMap<String, String>> {
     shard.query_rows(&format!(
         "SELECT id,spell_id,slot,amount,stacks,applied_at FROM game_aura WHERE target_guid = {guid} AND spell_id = {EQUIP}"
@@ -136,9 +150,9 @@ fn equip_cooldown_packets_gate_zero_cooldown_use_and_preserve_longer_delays() {
         "use during equip cooldown succeeded"
     );
     assert_eq!(inventory(&shard, guid), before);
-    shard.assert_call("debug_advance_virtual_clock", &["29999000"]);
+    advance(&shard, 29999);
     assert!(!shard.call("gw_use_item", &[&actor, "10"]).status.success());
-    shard.assert_call("debug_advance_virtual_clock", &["1000"]);
+    advance(&shard, 1);
     shard.assert_call("gw_use_item", &[&actor, "10"]);
 
     shard.assert_sql(&format!(
@@ -200,7 +214,7 @@ fn passive_equip_auras_are_hidden_permanent_and_not_cancellable_or_dispellable()
     let packets = request(&mut connection, 0x136, EQUIP.to_le_bytes().to_vec());
     assert!(!packets.iter().any(|(opcode, _)| *opcode == 0x137));
     assert_eq!(auras(&shard, guid), original);
-    shard.assert_call("debug_advance_virtual_clock", &["120000000"]);
+    advance(&shard, 120000);
     assert_eq!(auras(&shard, guid), original);
     shard.assert_sql(&format!(
         "UPDATE game_spell_effect SET kind = 4, p0 = 1 WHERE spell_id = {USE}"
@@ -454,7 +468,7 @@ fn visible_equip_effects_keep_the_sources_duration_and_reapply_after_resurrectio
     assert!(auras(&shard, guid).is_empty());
     shard.assert_call("debug_set_health", &[&guid.to_string(), "1"]);
     assert_eq!(auras(&shard, guid).len(), 1);
-    shard.assert_call("debug_advance_virtual_clock", &["5000000"]);
+    advance(&shard, 5000);
     assert!(auras(&shard, guid).is_empty());
     assert_eq!(
         shard.query_rows(&format!(
