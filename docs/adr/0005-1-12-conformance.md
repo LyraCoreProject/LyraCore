@@ -77,6 +77,8 @@ using a separate scenario author and independent decoders.
     reports suspected scenario defects to the author and never changes a scenario, Golden Trace
     or Equivalence Rule to obtain a pass. [Testing](../testing.md#conformance) records these roles.
 
+For roll rates only, [ADR 0007](0007-statistical-roll-conformance.md) permits source-derived probabilities with a small recording check.
+
 ## Two verification tiers
 
 Tier 1 runs on every core change in CI, including the taxi comparison.

@@ -14,6 +14,7 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [schema.md](./schema.md) | Reference | You add or change a table |
 | [Conformance Audit baseline](../conformance/reports/2026-10-28-c5.md) | Verification | You check measured rule and data signatures and reference stability |
 | [T2d taxi comparison](../conformance/reports/2026-10-27-t2d.md) | Verification | You investigate the first taxi conformance differences |
+| [White melee Roll Conformance](../conformance/reports/2026-11-05-white-melee.md) | Verification | You check source-derived rates, delivered counts, cost or strictness |
 | [Feature Ledger](../conformance/README.md) | Reference | You add or assess a conformance Behavior and its evidence requirements |
 | [climb-conformance](../.claude/skills/climb-conformance/SKILL.md) | Agent skill | You implement a ranked Behavior or author its scenario |
 | [testing.md](./testing.md) | Reference | You run CI checks locally or choose a verification rung |
@@ -37,5 +38,6 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [agents/maintainer.md](./agents/maintainer.md) | Runbook | An agent works for a maintainer |
 | [agents/cross-repo-cli.md](./agents/cross-repo-cli.md) | How-to | A change spans this repository and `lyracore-cli` |
 | [adr/0005-1-12-conformance.md](./adr/0005-1-12-conformance.md) | Decision record | You change conformance scenarios, evidence or the Feature Ledger |
+| [adr/0007-statistical-roll-conformance.md](./adr/0007-statistical-roll-conformance.md) | Decision record | You derive expected roll rates or change statistical conformance |
 | [adr/](./adr/) | Decision records | You want the reason behind a standing decision |
 | [verify-lyracore checks](../.claude/skills/verify-lyracore/checks.md) | Checklist | A change needs a check on a real 1.12.1 client |

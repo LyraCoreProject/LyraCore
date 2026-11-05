@@ -342,9 +342,13 @@ impl Standalone {
     }
 
     pub fn connect_reducers(&self, queries: &[&str]) -> ReducerConnection {
+        self.connect_shard_reducers(&self.database, queries)
+    }
+
+    pub fn connect_shard_reducers(&self, shard_name: &str, queries: &[&str]) -> ReducerConnection {
         ReducerConnection::connect(
             &self.address,
-            &self.database,
+            shard_name,
             Some(&self.owner_token()),
             queries,
         )

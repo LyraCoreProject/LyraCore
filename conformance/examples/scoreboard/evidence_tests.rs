@@ -722,3 +722,45 @@ fn missing_or_malformed_properties_cannot_be_passing_evidence() {
         .remove("properties");
     assert!(parse(&missing, &ledger).is_err());
 }
+
+#[test]
+fn roll_evidence_requires_pinned_levels_categories_and_sample_shape() -> Result<()> {
+    let golden = wire_client::catalogue::get("white_melee_outcomes")?;
+    let spec = golden
+        .scenario()
+        .rolls
+        .as_ref()
+        .context("roll specification")?;
+    let mut counts =
+        wire_client::rolls::Counts(spec.expected_basis_points[0].map(|value| value * 5));
+    counts.0[5] += 1000;
+    counts.0[6] -= 1000;
+    let comparison = wire_client::rolls::compare(spec, &counts, 0, "public_1", 50_000)?;
+    let original = comparison
+        .differences
+        .first()
+        .context("shifted roll difference")?;
+    assert!(roll_difference(golden.scenario(), original));
+    let mut wrong = original.clone();
+    wrong.checkpoint = "level_61_public_1".into();
+    assert!(!roll_difference(golden.scenario(), &wrong));
+    wrong = original.clone();
+    wrong.field_path[1] = "invented".into();
+    assert!(!roll_difference(golden.scenario(), &wrong));
+    wrong = original.clone();
+    wrong.actual = Some(wire_client::trace::RecordedField::Unsigned(50_001));
+    assert!(!roll_difference(golden.scenario(), &wrong));
+    let mut candidate = golden.trace().clone();
+    candidate.header.origin = Origin::Candidate {
+        adapter: "test".into(),
+    };
+    candidate.roll_check = None;
+    let comparison = wire_client::compare::compare(&golden, &candidate, &[])?;
+    let sample = comparison
+        .differences
+        .iter()
+        .find(|difference| difference.rule == "white_melee_sample")
+        .context("missing full sample")?;
+    assert!(roll_difference(golden.scenario(), sample));
+    Ok(())
+}

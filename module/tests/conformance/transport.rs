@@ -33,17 +33,15 @@ pub struct OperatorTransport {
 impl OperatorTransport {
     pub fn prepare(shard: &Standalone, scenario: &Scenario) -> Result<Self> {
         scenario.validate()?;
-        let FixtureVerb::Character {
-            name,
-            race,
-            class,
-            level,
-            at,
-        } = &scenario.fixtures[0]
-        else {
+        let FixtureVerb::Character { level, at, .. } = &scenario.fixtures[0] else {
             bail!("first fixture must be a Character");
         };
-        let guid = prepare_character(shard, "CONFORMANCE", name, race, class, *level, at)?;
+        let guid = prepare_character(
+            shard,
+            shard.shard_name(),
+            "CONFORMANCE",
+            &scenario.fixtures[0],
+        )?;
         let fixtures = prepare_fixtures(shard, guid, &scenario.fixtures[1..], at)?;
         let mut transport = Self::connect(shard, guid, fixtures)?;
         let items = verify_opening(&transport.opening, guid, &scenario.fixtures)?;
@@ -212,17 +210,25 @@ fn decode_hex(encoded: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
-fn prepare_character(
+pub(super) fn prepare_character(
     shard: &Standalone,
+    shard_name: &str,
     account_name: &str,
-    name: &str,
-    race: &str,
-    class: &str,
-    level: u8,
-    at: &wire_client::scenario::Position,
+    fixture: &FixtureVerb,
 ) -> Result<u64> {
+    let FixtureVerb::Character {
+        name,
+        race,
+        class,
+        level,
+        at,
+    } = fixture
+    else {
+        bail!("Character fixture required");
+    };
     let credentials = serde_json::to_string(&vec![0u8; 32])?;
-    shard.assert_call(
+    shard.assert_call_database(
+        shard_name,
         "provision_account",
         &[
             &serde_json::to_string(account_name)?,
@@ -230,12 +236,14 @@ fn prepare_character(
             &credentials,
         ],
     );
-    let account = &shard.query_rows(&format!(
-        "SELECT id FROM game_account WHERE username = '{account_name}'"
-    ))[0]["id"];
+    let account = &shard.query_database_rows(
+        shard_name,
+        &format!("SELECT id FROM game_account WHERE username = '{account_name}'"),
+    )[0]["id"];
     let race = wire_client::cli::parse_race(race)?.as_int().to_string();
     let class = wire_client::cli::parse_class(class)?.as_int().to_string();
-    shard.assert_call(
+    shard.assert_call_database(
+        shard_name,
         "create_character",
         &[
             account,
@@ -250,17 +258,27 @@ fn prepare_character(
             "0",
         ],
     );
-    let character = &shard.query_rows(&format!(
-        "SELECT * FROM game_character WHERE name = '{name}'"
-    ))[0];
+    let character = &shard.query_database_rows(
+        shard_name,
+        &format!("SELECT * FROM game_character WHERE name = '{name}'"),
+    )[0];
     ensure!(
         character["race"] == race && character["class"] == class,
         "fixture race or class did not apply"
     );
     let guid = character["guid"].parse::<u64>()?;
-    shard.assert_call("debug_set_level", &[&guid.to_string(), &level.to_string()]);
-    shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
-    shard.assert_call(
+    shard.assert_call_database(
+        shard_name,
+        "debug_set_level",
+        &[&guid.to_string(), &level.to_string()],
+    );
+    shard.assert_call_database(
+        shard_name,
+        "debug_spawn_player_entity",
+        &[&guid.to_string()],
+    );
+    shard.assert_call_database(
+        shard_name,
         "debug_teleport",
         &[
             &guid.to_string(),
@@ -717,18 +735,12 @@ impl<'a> MultiOperatorTransport<'a> {
             virtual_micros: 0,
         };
         for character in &scenario.characters {
-            let FixtureVerb::Character {
-                name,
-                race,
-                class,
-                level,
-                at,
-            } = &character.fixtures[0]
-            else {
+            let FixtureVerb::Character { at, .. } = &character.fixtures[0] else {
                 bail!("first fixture must be a Character");
             };
             let account = format!("CONFORMANCE_{}", character.id.to_ascii_uppercase());
-            let guid = prepare_character(shard, &account, name, race, class, *level, at)?;
+            let guid =
+                prepare_character(shard, shard.shard_name(), &account, &character.fixtures[0])?;
             let fixtures = prepare_fixtures(shard, guid, &character.fixtures[1..], at)?;
             // Resolve rest before logout so peer CREATE uses the persisted flag.
             shard.assert_call(
@@ -916,7 +928,7 @@ impl MultiTransport for MultiOperatorTransport<'_> {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Row(
     u64,
     (u8, Box<RawValue>),
@@ -927,20 +939,20 @@ struct Row(
     bool,
 );
 
-struct Delivery {
+pub(super) struct Delivery {
     connection: u128,
     grants: BTreeSet<(u8, u64)>,
 }
 
 impl Delivery {
-    fn new(connection: u128) -> Self {
+    pub(super) fn new(connection: u128) -> Self {
         Self {
             connection,
             grants: BTreeSet::new(),
         }
     }
 
-    fn route_rows(&mut self, rows: Vec<Box<RawValue>>) -> Result<Vec<Packet>> {
+    pub(super) fn route_rows(&mut self, rows: Vec<Box<RawValue>>) -> Result<Vec<Packet>> {
         let mut rows = rows
             .iter()
             .map(|row| serde_json::from_str::<Row>(row.get()))
@@ -1023,6 +1035,45 @@ impl Delivery {
             _ => bail!("invalid opcode option {option}"),
         }
     }
+}
+
+pub(super) fn roll_packets(
+    rows: Vec<Box<RawValue>>,
+    deliveries: &mut BTreeMap<u64, Delivery>,
+) -> Result<Vec<(u64, Packet)>> {
+    let mut rows = rows
+        .iter()
+        .map(|row| serde_json::from_str::<Row>(row.get()))
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    rows.sort_by_key(|row| row.0);
+    let mut packets = Vec::new();
+    for row in rows {
+        if matches!(row.1 .0, 2..=4) || row.4 {
+            for delivery in deliveries.values_mut() {
+                delivery.route(row.clone())?;
+            }
+            continue;
+        }
+        if row.2 .0 != 0 {
+            continue;
+        }
+        let opcode: u16 = serde_json::from_str(row.2 .1.get())?;
+        if !matches!(opcode, 0x143 | 0x144 | 0x14a) {
+            continue;
+        }
+        let decoded = wire_client::decode::decode(opcode, &decode_hex(&row.3)?)?;
+        let Some(wire_client::decode::Field::Guid(attacker)) = decoded.fields.get("attacker")
+        else {
+            bail!("combat packet has no attacker");
+        };
+        if let Some(delivery) = deliveries.get_mut(attacker) {
+            let packet = delivery
+                .route(row)?
+                .context("combat packet was not delivered to its attacking Character")?;
+            packets.push((*attacker, packet));
+        }
+    }
+    Ok(packets)
 }
 
 #[test]
