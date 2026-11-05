@@ -346,3 +346,16 @@ A launcher copies the recorder-accepted bytes to a separate path before returnin
 wrapper cleanup. The replacement is the recorded sample regardless of how its results compare
 with the lost sample. Report both samples. If this replacement fails or is lost, stop; no third
 capture is authorized. This exception does not change the general single-recording rule.
+
+The single approved replacement completed and passed its diagnostic. It is the recorded sample:
+
+| Target level | Miss | Full resist | Crit | Ordinary hit | Partial resist |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 60 | 0 | 77 | 114 | 1809 | 0 |
+| 63 | 0 | 357 | 100 | 1543 | 324 |
+
+Replacement setup took 464,310 ms; capture took 454,361 ms. All 59 frozen source/input hashes
+matched after the checked wrapper exited zero. The launcher copied and synced the accepted
+12,433-byte trace before wrapper cleanup; both copies have SHA-256
+`958c3f88f01d229477a7376bad28881fdba5c3d31e3bcd62f68d62533d97239f`.
+No script changed during capture. No third recording was taken.
