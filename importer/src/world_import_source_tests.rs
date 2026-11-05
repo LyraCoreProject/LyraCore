@@ -159,7 +159,9 @@ fn crit_catalogue_interpolates_missing_levels_and_refuses_invalid_rates() {
     assert!(inserts.contains("(316,1,60,20)"));
     assert!(inserts.contains("(2108,8,60,20)"));
     assert_eq!(inserts.matches("),(").count(), 119);
-    let WorldSource::Vmangos(connection) = &source;
+    let WorldSource::Vmangos(connection) = &source else {
+        panic!("expected the unprofiled fixture source");
+    };
     connection
         .execute(
             "UPDATE player_crit_per_agility SET rate = 0 WHERE level = 60",

@@ -139,6 +139,43 @@ fn model_attributes(dump: &impl TableRows) -> Result<BTreeMap<u32, (u8, u32, f32
         .collect()
 }
 
+fn template_findings(row: &Row, entry: u64, restored: u32, findings: &mut Findings) -> Result<()> {
+    let extra = row.number::<u32>("flags_extra")?;
+    if !row
+        .optional_text("script_name")?
+        .unwrap_or_default()
+        .is_empty()
+    {
+        finding(findings, "creatures.script", entry);
+    }
+    if !row.optional_text("auras")?.unwrap_or_default().is_empty() {
+        finding(findings, "creatures.auras", entry);
+    }
+    if row.number::<u32>("static_flags1")? & 0x60 & !restored != 0 {
+        finding(findings, "creatures.scripted-immunity", entry);
+    }
+    if row.number::<u32>("static_flags1")? & !0x51e1_4270 != 0
+        || row.number::<u32>("static_flags2")? & !8 != 0
+    {
+        finding(findings, "creatures.static-behavior", entry);
+    }
+    if extra & !0x14 != 0 {
+        finding(findings, "creatures.template-behavior", entry);
+    }
+    for name in [
+        "spawn_spell_id",
+        "totem_spell_id",
+        "immunity_flags",
+        "mechanic_immune_mask",
+        "school_immune_mask",
+    ] {
+        if row.number::<u32>(name)? != 0 {
+            finding(findings, "creatures.template-behavior", entry);
+        }
+    }
+    Ok(())
+}
+
 fn templates(
     dump: &impl TableRows,
     entries: &HashSet<u64>,
@@ -310,38 +347,7 @@ fn templates(
         .collect::<Result<Vec<_>>>()?;
         templates.push(format!("({entry},{},{},{display},{min},{health},{},{},{unit},{},{},{kind},{},{scale},{},{},{},{max},{max_health},0,{low},{high},{armor},{},{},{},{})",
             sql_text(row.text("name")?), sql_text(row.optional_text("subname")?.unwrap_or_default()), fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6], fields[7], fields[8], fields[9], fields[10], fields[11]));
-        if !row
-            .optional_text("script_name")?
-            .unwrap_or_default()
-            .is_empty()
-        {
-            finding(findings, "creatures.script", entry);
-        }
-        if !row.optional_text("auras")?.unwrap_or_default().is_empty() {
-            finding(findings, "creatures.auras", entry);
-        }
-        if row.number::<u32>("static_flags1")? & 0x60 & !restored != 0 {
-            finding(findings, "creatures.scripted-immunity", entry);
-        }
-        if row.number::<u32>("static_flags1")? & !0x51e1_4270 != 0
-            || row.number::<u32>("static_flags2")? & !8 != 0
-        {
-            finding(findings, "creatures.static-behavior", entry);
-        }
-        if extra & !0x14 != 0 {
-            finding(findings, "creatures.template-behavior", entry);
-        }
-        for name in [
-            "spawn_spell_id",
-            "totem_spell_id",
-            "immunity_flags",
-            "mechanic_immune_mask",
-            "school_immune_mask",
-        ] {
-            if row.number::<u32>(name)? != 0 {
-                finding(findings, "creatures.template-behavior", entry);
-            }
-        }
+        template_findings(row, entry, restored, findings)?;
     }
     for (table, key, columns, rows) in [
         ("game_creature_template", "entry", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class", templates),
@@ -757,7 +763,9 @@ mod tests {
     #[test]
     fn creature_defense_flags_survive_import() {
         let source = template_source();
-        let WorldSource::Vmangos(connection) = &source;
+        let WorldSource::Vmangos(connection) = &source else {
+            panic!("expected the unprofiled fixture source");
+        };
         connection
             .execute(
                 "UPDATE creature_template SET flags_extra = 20, static_flags1 = 16384",

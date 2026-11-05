@@ -719,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn crit_and_hit_ratings_fold_into_the_attack_table_bands() {
+    fn hit_bonus_reduces_miss_chance() {
         assert_eq!(miss_bp_with_bonus(600, 0), 600);
         assert_eq!(miss_bp_with_bonus(600, 500), 100);
         assert_eq!(miss_bp_with_bonus(500, 1500), 0);
@@ -743,7 +743,7 @@ mod tests {
             parry: PARRY_BP,
             glancing: glancing_chance_bp(10, 13),
             block: 0,
-            crit: CRIT_BP,
+            crit: 1000,
             crushing: 0,
         };
         let (m, d, p, g, c) = (t.miss, t.dodge, t.parry, t.glancing, t.crit);
@@ -764,7 +764,7 @@ mod tests {
             parry: PARRY_BP,
             glancing: glancing_chance_bp(10, 10),
             block: 0,
-            crit: CRIT_BP,
+            crit: 1000,
             crushing: 0,
         };
         assert_eq!(eq.glancing, 0);

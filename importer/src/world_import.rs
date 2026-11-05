@@ -152,7 +152,7 @@ fn build_crit_per_agility_sql(
     dump: &(impl crate::dump::TableRows + ?Sized),
 ) -> Result<Vec<String>> {
     let mut classes = std::collections::BTreeMap::<u8, std::collections::BTreeMap<u32, f32>>::new();
-    for row in parse_table(dump, "player_crit_per_agility")? {
+    for row in parse_table(dump, "player_crit_per_agility")?.iter() {
         let class = row.number::<u8>("class")?;
         let level = row.number::<u32>("level")?;
         let rate = row.number::<f32>("rate")?;
