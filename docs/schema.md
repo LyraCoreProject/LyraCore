@@ -116,6 +116,18 @@ before enabling multiple hosts for existing leases.
 
 ## 2. Inventory
 
+`game_item_aura` associates a runtime Aura with the Item that applied it. Aura deletion deletes
+the association. Equipment changes reconcile these rows through `ItemInstance`; world entry,
+resurrection and form changes use the same reconciliation. Hidden passive effects use slot 255
+and do not consume a client Aura slot. The association and its derived Auras do not travel in
+Character Transfer. World entry rebuilds them from equipment. Spell cooldowns travel separately
+in `game_spell_cd` and keep their absolute deadlines.
+
+`game_spell.form_mask`, `form_exclude`, `attributes_ex2`, `visual_id` and `duration_index` retain
+source fields needed by equip effects. Their typed zero defaults preserve old rows during an
+additive publish. See [equip spell migration](danger-zones.md#equip-spell-migration) before play
+resumes on an existing Realm.
+
 Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully
 qualified `#[spacetimedb::table(...)]`; missing the second form undercounts.
 

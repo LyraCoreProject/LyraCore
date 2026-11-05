@@ -218,6 +218,24 @@ expire this threat. The grid check uses the pinned Reference's default geometry,
 with no nearby Character or active creature enters evade and clears that combat. LyraCore keeps the
 creature object loaded; this does not implement grid unloading or change vendor stock lifetime.
 
+### Equip spell migration
+
+The five END-appended source fields on `game_spell` default to zero. Reimport `spell` before play
+resumes so equip effects retain their form restrictions, visibility and duration rules. Item
+templates already contain the five spell slots and the flag that exempts an Item from the equip
+cooldown; no item reimport is required for those fields. No new spell effects are implemented.
+
+`game_item_aura` starts empty. `debug_repair_after_publish` reconciles equipment and refreshes
+the sheet of every online Character without starting an equip cooldown. Fresh login, reconnect,
+resurrection and form changes also reconcile equipment. World exit removes derived equip Auras;
+Transfer excludes them and world entry rebuilds them once. Ordinary Auras keep their published
+row layout and Transfer codec.
+
+Transfer now carries `game_spell_cd`, including an active equip cooldown. Old blobs that lack
+this table import with no spell cooldown rows. An older destination refuses the new manifest.
+Update both Shards before an active World Session crosses them. Keep a refused source Transfer
+until both ends can import it. The Native Host delivery layouts are unchanged.
+
 ### Temporary enchantment migration
 
 Poisons, sharpening stones, weapon oils and shaman weapon spells need effect 54 imported as

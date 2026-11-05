@@ -3,7 +3,12 @@ use spacetimedb::{table, Identity, ReducerContext, ScheduleAt, Table, Timestamp}
 use super::{fire_pending_cast, fire_spell_impact, tick_auras, tick_ground_areas};
 use crate::WorldEntity;
 
+const SPELL_ATTR_DO_NOT_DISPLAY: u32 = 0x80;
+const SPELL_ATTR_NOT_SHAPESHIFT: u32 = 0x10000;
+const SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED: u32 = 0x80000;
+
 #[table(accessor = game_spell, public)]
+#[derive(Clone)]
 pub struct Spell {
     #[primary_key]
     pub spell_id: u32,
@@ -51,11 +56,46 @@ pub struct Spell {
     pub min_target_level: u32,
     #[default(0u64)]
     pub single_target_key: u64,
+    #[default(0u32)]
+    pub form_mask: u32,
+    #[default(0u32)]
+    pub form_exclude: u32,
+    #[default(0u32)]
+    pub attributes_ex2: u32,
+    #[default(0u32)]
+    pub visual_id: u32,
+    #[default(0u32)]
+    pub duration_index: u32,
 }
 
 impl Spell {
     pub(crate) fn negative(&self) -> bool {
         lyracore_shared::spell_custom::is_negative(self.custom_flags, self.is_negative)
+    }
+
+    pub(crate) fn equip_passive(&self) -> bool {
+        self.attributes & super::SPELL_ATTR_PASSIVE != 0
+            || (self.attributes == SPELL_ATTR_DO_NOT_DISPLAY && self.duration_index == 21)
+    }
+
+    pub(crate) fn allows_equip_form(&self, form: u32) -> bool {
+        let mask = form
+            .checked_sub(1)
+            .and_then(|shift| 1u32.checked_shl(shift))
+            .unwrap_or(0);
+        if self.form_exclude & mask != 0 {
+            return false;
+        }
+        if self.form_mask & mask != 0 {
+            return true;
+        }
+        let shifted = form != 0 && !matches!(form, 17..=19);
+        if shifted {
+            self.attributes & SPELL_ATTR_NOT_SHAPESHIFT == 0 && self.form_mask == 0
+        } else {
+            self.form_mask == 0
+                || self.attributes_ex2 & SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED != 0
+        }
     }
 }
 
@@ -185,9 +225,34 @@ pub struct Aura {
     pub proc_ready_micros: i64,
 }
 
+#[table(accessor = game_item_aura)]
+struct ItemAura {
+    #[primary_key]
+    aura_id: u64,
+    item_guid: u64,
+}
+
 impl Aura {
+    pub(crate) fn item_guid(&self, ctx: &ReducerContext) -> u64 {
+        ctx.db
+            .game_item_aura()
+            .aura_id()
+            .find(self.id)
+            .map_or(0, |source| source.item_guid)
+    }
+
     pub(crate) fn insert(self, ctx: &ReducerContext) -> Self {
+        self.insert_from_item(ctx, 0)
+    }
+
+    pub(crate) fn insert_from_item(self, ctx: &ReducerContext, item_guid: u64) -> Self {
         let aura = ctx.db.game_aura().insert(self);
+        if item_guid != 0 {
+            ctx.db.game_item_aura().insert(ItemAura {
+                aura_id: aura.id,
+                item_guid,
+            });
+        }
         if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
             crate::aoi::refresh_entity(ctx, aura.target_guid);
         }
@@ -213,6 +278,7 @@ impl Aura {
         let auras = ctx.db.game_aura();
         let previous = auras.id().find(id);
         let removed = auras.id().delete(id);
+        ctx.db.game_item_aura().aura_id().delete(id);
         if let Some(aura) = previous {
             if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
                 crate::aoi::refresh_entity(ctx, aura.target_guid);
@@ -231,9 +297,12 @@ crate::character_owned!(delete, fn sweep_delete_game_aura(ctx, character_guid) {
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_aura(ctx, character_guid, io) {
-    table = game_aura,
-    by = by_target,
-    remint = id,
+    crate::transfer::move_rows(
+        ctx, io,
+        || ctx.db.game_aura().by_target().filter(character_guid)
+            .filter(|aura| aura.item_guid(ctx) == 0).collect(),
+        |ctx, mut aura: Aura| { aura.id = 0; aura.insert(ctx); },
+    );
 });
 
 pub const CAST_FAIL_NONE: u8 = 0;
@@ -450,6 +519,18 @@ pub struct SpellCd {
     pub spell_id: u32,
     pub ready_at: Timestamp,
 }
+
+crate::character_owned!(delete, fn sweep_delete_game_spell_cd(ctx, character_guid) {
+    let cooldowns = ctx.db.game_spell_cd();
+    for cooldown in cooldowns.by_caster().filter(character_guid).collect::<Vec<_>>() {
+        cooldowns.id().delete(cooldown.id);
+    }
+});
+crate::character_owned!(transfer, fn sweep_transfer_game_spell_cd(ctx, character_guid, io) {
+    table = game_spell_cd,
+    by = by_caster,
+    remint = id,
+});
 
 #[table(accessor = game_school_lockout, public, index(accessor = by_caster, btree(columns = [caster_guid])))]
 pub struct SchoolLockout {

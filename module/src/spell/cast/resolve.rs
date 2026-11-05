@@ -1196,25 +1196,26 @@ fn check_cast_gate_suffix(
         ));
     }
 
-    if hdr.cooldown_ms > 0 {
-        if let Some(cd) = ctx
+    if hdr.attributes & SPELL_ATTR_PASSIVE == 0
+        && hdr.cast_flags & SPELL_ATTR_RANGED_AUTO_REPEAT == 0
+        && ctx
             .db
             .game_spell_cd()
             .by_caster()
-            .filter(&caster_guid)
-            .find(|r| r.spell_id == spell_id)
-        {
-            if !is_ready_at(
-                crate::time::now(ctx).to_micros_since_unix_epoch(),
-                cd.ready_at.to_micros_since_unix_epoch(),
-            ) {
-                return Err(CastGateRefusal::new(
-                    CastRefusalKind::Cooldown,
-                    CastRefusalReason::NotReady,
-                    "spell not ready (cooldown)".to_string(),
-                ));
-            }
-        }
+            .filter(caster_guid)
+            .any(|cd| {
+                cd.spell_id == spell_id
+                    && !is_ready_at(
+                        crate::time::now(ctx).to_micros_since_unix_epoch(),
+                        cd.ready_at.to_micros_since_unix_epoch(),
+                    )
+            })
+    {
+        return Err(CastGateRefusal::new(
+            CastRefusalKind::Cooldown,
+            CastRefusalReason::NotReady,
+            "spell not ready (cooldown)".to_string(),
+        ));
     }
 
     if hdr.cast_flags & (SPELL_ATTR_REQ_OVERPOWER | SPELL_ATTR_REQ_REVENGE) != 0 {
@@ -1769,7 +1770,48 @@ pub(crate) fn apply_spell_auras(
             target_guid,
             level,
             points,
+            0,
         );
+    }
+}
+
+pub(crate) fn apply_item_auras(
+    ctx: &ReducerContext,
+    header: &Spell,
+    guid: u64,
+    level: u8,
+    item: u64,
+) {
+    let mut header = header.clone();
+    if header.equip_passive() && (header.duration_index == 0 || header.visual_id == 0) {
+        header.duration_ms = u32::MAX;
+    }
+    for effect in ctx
+        .db
+        .game_spell_effect()
+        .by_spell()
+        .filter(header.spell_id)
+        .filter(|effect| passive_applies_effect_kind(effect.kind))
+    {
+        if ctx
+            .db
+            .game_aura()
+            .by_target()
+            .filter(guid)
+            .any(|aura| aura.effect_id == effect.id && aura.item_guid(ctx) == item)
+        {
+            continue;
+        }
+        let points = effect_amount(
+            effect.base_points,
+            effect.die_sides,
+            effect.per_level,
+            level as u32,
+            header.spell_level,
+            header.max_level,
+            ctx.random::<u32>(),
+        );
+        aura_apply(ctx, &effect, &header, guid, guid, guid, level, points, item);
     }
 }
 

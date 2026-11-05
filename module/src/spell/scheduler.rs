@@ -214,7 +214,15 @@ pub(crate) fn do_cancel_aura(
         return Err("ghost effects end on resurrection".into());
     }
     if let Some(spell) = ctx.db.game_spell().spell_id().find(spell_id) {
-        if spell.attributes & SPELL_ATTR_PASSIVE != 0 {
+        if spell.attributes & SPELL_ATTR_PASSIVE != 0
+            || (spell.equip_passive()
+                && ctx
+                    .db
+                    .game_aura()
+                    .by_target()
+                    .filter(player_guid)
+                    .any(|aura| aura.spell_id == spell_id && aura.item_guid(ctx) != 0))
+        {
             return Err(format!("spell {spell_id} is passive and cannot be cancelled").into());
         }
         if spell.negative() {

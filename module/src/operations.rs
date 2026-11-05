@@ -1,5 +1,6 @@
 use spacetimedb::{log, reducer, ReducerContext, Table, TimeDuration};
 
+use crate::game_character;
 use crate::spell::stacking::game_spell_group;
 use crate::{
     game_auction, game_auction_expiry, game_aura, game_aura_schedule, game_breath_schedule,
@@ -15,6 +16,16 @@ use crate::{
 pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::items::discard_legacy_buyback(ctx);
+    for character in ctx
+        .db
+        .game_character()
+        .iter()
+        .filter(|character| character.online)
+    {
+        crate::items::equip::reconcile(ctx, character.guid);
+        crate::spell::recompute_vitals(ctx, character.guid);
+        crate::spell::recompute_sheet(ctx, character.guid);
+    }
 
     crate::seed::seed_crit_rates(ctx);
     crate::talent::seed_talents(ctx);

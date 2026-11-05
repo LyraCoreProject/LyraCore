@@ -180,6 +180,7 @@ fn auras(ctx: &ReducerContext, guid: u64) -> Vec<MemberAura> {
         .game_aura()
         .by_target()
         .filter(guid)
+        .filter(|aura| aura.slot < 48)
         .map(|aura| MemberAura {
             slot: aura.slot,
             spell_id: aura.spell_id,

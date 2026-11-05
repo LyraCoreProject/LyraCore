@@ -172,9 +172,15 @@ struct Crossing {
     departure: Vec<(u16, Vec<u8>)>,
     escrow_items: Vec<BTreeMap<String, String>>,
     escrow_state: Vec<BTreeMap<String, String>>,
+    transported_equip_auras: usize,
+    cooldowns: Vec<BTreeMap<String, String>>,
 }
 
 fn crossing(name: &str) -> Crossing {
+    crossing_with_equipment(name, false)
+}
+
+fn crossing_with_equipment(name: &str, equipment: bool) -> Crossing {
     let (source, old_connection, guid, vendor) = stage(&format!("{name}-source"));
     let mut source_connection = authenticate(&source, guid);
     drop(old_connection);
@@ -193,6 +199,17 @@ fn crossing(name: &str) -> Crossing {
     buyback(&mut source_connection, vendor, 70);
     let items = sold_rows(&source, guid);
     let state = source.query_rows("SELECT * FROM game_buyback_state");
+    if equipment {
+        super::super::item_equip::configure(&source);
+        let item = grant(&source, guid, 5090050, 1);
+        let slot: u8 = source.query_rows(&format!(
+            "SELECT slot FROM game_item_instance WHERE guid = {item}"
+        ))[0]["slot"]
+            .parse()
+            .unwrap();
+        request(&mut source_connection, 0x10a, vec![255, slot]);
+        super::super::item_equip::assert_effect(&source, guid, 1);
+    }
     let realm = format!(r#"{{"__identity__":"0x{}"}}"#, "11".repeat(32));
     let target = format!(r#"{{"__identity__":"0x{}"}}"#, "22".repeat(32));
     for peer in [&realm, &target] {
@@ -213,10 +230,28 @@ fn crossing(name: &str) -> Crossing {
     let out = source
         .query_rows("SELECT transfer_id,blob FROM game_transfer_out")
         .remove(0);
+    let cooldowns = source.query_rows(&format!(
+        "SELECT spell_id,ready_at FROM game_spell_cd WHERE caster_guid = {guid}"
+    ));
     let transfer = &out["transfer_id"];
     let blob = serde_json::to_string(out["blob"].strip_prefix("0x").unwrap()).unwrap();
+    let transported_equip_auras = if equipment {
+        count_transported_equip_auras(&out["blob"])
+    } else {
+        0
+    };
     let (destination, _, _) = sessionless(&format!("{name}-destination"));
-    destination.assert_call("debug_start_virtual_clock", &["1800003605000000"]);
+    if equipment {
+        super::super::item_equip::configure(&destination);
+    }
+    destination.assert_call(
+        "debug_start_virtual_clock",
+        &[if equipment {
+            "1800000005000000"
+        } else {
+            "1800003605000000"
+        }],
+    );
     destination.assert_sql(&format!(
         "DELETE FROM game_world_entity WHERE guid = {guid}"
     ));
@@ -245,7 +280,86 @@ fn crossing(name: &str) -> Crossing {
         departure,
         escrow_items,
         escrow_state,
+        transported_equip_auras,
+        cooldowns,
     }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn equip_auras_rebuild_once_after_native_handoff_and_world_port() {
+    let c = crossing_with_equipment("equip-native-handoff", true);
+    assert_eq!(c.transported_equip_auras, 0);
+    assert!(!c.cooldowns.is_empty());
+    assert_eq!(
+        c.destination.query_rows(&format!(
+            "SELECT spell_id,ready_at FROM game_spell_cd WHERE caster_guid = {}",
+            c.guid
+        )),
+        c.cooldowns
+    );
+    super::super::item_equip::assert_effect(&c.destination, c.guid, 1);
+    assert!(c
+        .source
+        .query_rows(&format!(
+            "SELECT * FROM game_aura WHERE target_guid = {} AND spell_id = 5090900",
+            c.guid
+        ))
+        .is_empty());
+    assert!(!c.arrival.iter().any(|(opcode, _)| *opcode == 0xb0));
+    assert!(!c
+        .destination
+        .call(
+            "gw_use_item",
+            &[&format!(r#"{{"guid":{},"ownership":null}}"#, c.guid), "10"]
+        )
+        .status
+        .success());
+    c.destination
+        .assert_call("debug_spawn_player_entity", &[&c.guid.to_string()]);
+    super::super::item_equip::assert_effect(&c.destination, c.guid, 1);
+}
+
+fn count_transported_equip_auras(hex: &str) -> usize {
+    #[derive(spacetimedb::SpacetimeType)]
+    struct Manifest {
+        table: String,
+        hot: bool,
+    }
+    #[derive(spacetimedb::SpacetimeType)]
+    struct Rows {
+        table: String,
+        rows: Vec<u8>,
+    }
+    #[derive(spacetimedb::SpacetimeType)]
+    struct Blob {
+        transfer_id: u64,
+        character_guid: u64,
+        money: u32,
+        manifest: Vec<Manifest>,
+        dest_map_id: u32,
+        dest_instance_id: u64,
+        dest_x: f32,
+        dest_y: f32,
+        dest_z: f32,
+        dest_o: f32,
+        character_row: Vec<u8>,
+        payload: Vec<Rows>,
+    }
+    let hex = hex.strip_prefix("0x").unwrap();
+    let bytes: Vec<_> = (0..hex.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&hex[at..at + 2], 16).unwrap())
+        .collect();
+    let blob: Blob = spacetimedb::sats::bsatn::from_slice(&bytes).unwrap();
+    let rows = blob
+        .payload
+        .iter()
+        .find(|rows| rows.table == "game_aura")
+        .unwrap();
+    let auras: Vec<lyracore_module::Aura> =
+        spacetimedb::sats::bsatn::from_slice(&rows.rows).unwrap();
+    auras.iter().filter(|aura| aura.spell_id == 5090900).count()
 }
 
 #[test]

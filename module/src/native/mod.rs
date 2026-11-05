@@ -98,6 +98,7 @@ pub(crate) use environment::{breath_event, fall_damage, weather_changed};
 pub(crate) use guild::{event as guild_event, membership_changed as guild_membership_changed};
 pub(crate) use instance::removal_changed as instance_removal_changed;
 pub(crate) use inventory::changed as item_changed;
+pub(crate) use inventory::item_equip_cooldown;
 pub(crate) use inventory::temporary_enchantment_changed;
 pub(crate) use inventory::{item_purchase_started, item_purchased, item_restored, item_sold};
 #[cfg(feature = "conformance_test_fixture")]

@@ -11,7 +11,7 @@ use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{game_native_player, Rollback};
 use crate::items::{item_in_slot, ItemUseTarget};
-use crate::{game_item_template, ItemInstance};
+use crate::{game_item_template, game_spell, ItemInstance};
 
 fn packet(message: ServerOpcodeMessage) -> Packet {
     lyracore_protocol::world::encode(message).expect("bounded item message fits a world frame")
@@ -24,6 +24,14 @@ fn update(message: lyracore_protocol::messages::vanilla::SMSG_UPDATE_OBJECT) -> 
 fn send(ctx: &ReducerContext, connection: ConnectionId, packets: Vec<Packet>) {
     for packet in packets {
         super::send_raw(ctx, connection, packet.opcode, packet.body, false);
+    }
+}
+
+pub(crate) fn item_equip_cooldown(ctx: &ReducerContext, owner: u64, item: u64, spell: u32) {
+    if let Some(player) = ctx.db.game_native_player().character_guid().find(owner) {
+        let mut body = item.to_le_bytes().to_vec();
+        body.extend(spell.to_le_bytes());
+        super::send_raw(ctx, player.connection_id, 0xb0, body, false);
     }
 }
 
@@ -525,6 +533,26 @@ pub(super) fn receive(
         }
     })();
     result.map_err(|reason| {
+        if let ItemRefusal::SpellCooldown(spell) = reason {
+            let failure = if ctx
+                .db
+                .game_spell()
+                .spell_id()
+                .find(spell)
+                .is_some_and(|header| header.attributes & 0x02000000 != 0)
+            {
+                codec::cast_failure::DONT_REPORT
+            } else {
+                codec::cast_failure::NOT_READY
+            };
+            return Rollback::replies(
+                vec![Packet {
+                    opcode: 0x130,
+                    body: codec::build_cast_result_failed(spell, failure),
+                }],
+                reason.as_tag(),
+            );
+        }
         Rollback::reply(
             ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
                 codec::build_inventory_refusal(reason, item_guids[0], item_guids[1]),

@@ -551,6 +551,7 @@ pub(crate) const TRANSFER_TABLES_OLD_BLOBS_MAY_LACK: &[&str] = &[
     "game_guild_fee_hold",
     "game_instance_entry",
     "game_instance_removal",
+    "game_spell_cd",
 ];
 
 pub(crate) fn check_manifest(transfer_id: u64, arriving: &[ManifestEntry]) -> Result<(), String> {

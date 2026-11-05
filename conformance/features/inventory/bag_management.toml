@@ -12,7 +12,57 @@ prerequisites = []
 
 [[tests]]
 path = "module/tests/conformance/buy_in_slot.rs"
-function = "review_equipment_purchase_shares_ordinary_equip_effects_or_records_the_gap"
+function = "equipment_purchase_shares_ordinary_equip_auras_and_cooldowns"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "equip_moves_swaps_and_shared_spells_keep_each_items_effect_once"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "equip_cooldown_packets_gate_zero_cooldown_use_and_preserve_longer_delays"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "passive_equip_auras_are_hidden_permanent_and_not_cancellable_or_dispellable"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "sale_buyback_destroy_and_equipment_purchase_share_equip_effects"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "broken_equipment_loses_auras_and_repair_restores_them_without_a_cooldown"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "login_reconnect_and_resurrection_rebuild_equip_auras_once_without_a_new_cooldown"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "trade_and_mail_keep_effects_with_equipment_and_not_with_carried_items"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/buyback_handoff.rs"
+function = "equip_auras_rebuild_once_after_native_handoff_and_world_port"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "visible_equip_effects_keep_the_sources_duration_and_reapply_after_resurrection"
 rung = "durable_module"
 
 [vmangos]
@@ -30,7 +80,7 @@ symbol = "receive"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
 
 [[known_gaps]]
-description = "Ordinary equipping and direct equipment purchases omit on-equip spells and the 30-second equip cooldown for on-use spells, including SMSG_ITEM_COOLDOWN."
-path = "module/src/items/inventory.rs"
-symbol = "apply_item_move"
-evidence = "Pinned vmangos Player::EquipItem calls _ApplyItemMods (which calls ApplyItemEquipSpell) and ApplyEquipCooldown; see https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp. apply_item_move only binds the item, moves it and recomputes vitals and the sheet. review_equipment_purchase_shares_ordinary_equip_effects_or_records_the_gap observes no aura for an on-equip spell and no spell cooldown or cooldown packet for an on-use spell through either route."
+description = "Equip spells now apply existing aura kinds, but effects imported as E_SCRIPTED or placeholder A_FLAG and non-aura equip effects still need spell implementations. No scenario or real-client check covers equip aura visibility, source Item removal, forms, durability or equip cooldown packets yet."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "apply_item_auras"
+evidence = "Source-backed durable equip tests cover supported aura effects at ItemInstance writes and world entry. Unsupported kinds remain those in importer/src/spell_kind.rs; pinned vmangos Player::ApplyEquipSpell performs a triggered cast of the full spell."

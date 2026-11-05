@@ -904,6 +904,11 @@ fn push_spell_header_row(
         custom_flags: s.custom_flags,
         min_target_level: s.min_target_level,
         single_target_key: s.single_target_key,
+        form_mask: s.shapeshift_mask,
+        form_exclude: s.shapeshift_exclude,
+        attributes_ex2: s.attributes_ex2,
+        visual_id: s.visual_id,
+        duration_index: s.duration,
     });
     if binding_summon_entry(
         spell_id,
@@ -1398,7 +1403,7 @@ fn assemble_spell_sql(
     push_insert(
         &mut stmts,
         "game_spell",
-        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key",
+        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex2,visual_id,duration_index",
         &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
@@ -1621,7 +1626,7 @@ pub(crate) fn selected_world_plan(
             !s.starts_with("INSERT INTO game_spell (")
                 && !s.starts_with("INSERT INTO game_spell_effect (")
         });
-        push_insert(&mut stmts, "game_spell", "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key", &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>());
+        push_insert(&mut stmts, "game_spell", "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex2,visual_id,duration_index", &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>());
         push_insert(&mut stmts, "game_spell_effect", "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient", &rows.effects.iter().chain(&rows.fishing).map(SpellEffectRow::sql_values).collect::<Vec<_>>());
     }
     Ok(crate::world_import::DumpPlan {
@@ -2388,6 +2393,22 @@ mod tests {
             (rows.effects[0].p0, rows.effects[0].p0_kind),
             (2, P_STAT_ID)
         );
+    }
+
+    #[test]
+    fn equip_form_and_aura_metadata_reaches_the_imported_header() {
+        let mut dbc = fixture_tables();
+        dbc.spells[0].shapeshift_mask = 145;
+        dbc.spells[0].shapeshift_exclude = 671588450;
+        dbc.spells[0].attributes_ex2 = 0x80000;
+        dbc.spells[0].visual_id = 3580;
+        dbc.spells[0].duration = 21;
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let header = &rows.headers[0];
+        assert_eq!((header.form_mask, header.form_exclude), (145, 671588450));
+        assert_eq!(header.attributes_ex2, 0x80000);
+        assert_eq!(header.visual_id, 3580);
+        assert_eq!(header.duration_index, 21);
     }
 
     #[test]

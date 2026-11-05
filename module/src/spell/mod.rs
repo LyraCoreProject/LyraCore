@@ -26,7 +26,7 @@ mod tests;
 #[cfg(test)]
 pub(crate) use cast::passive_applies_effect_kind;
 pub(crate) use cast::{
-    apply_direct_heal, apply_effect, apply_spell_auras, aura_apply, begin_cast,
+    apply_direct_heal, apply_effect, apply_item_auras, apply_spell_auras, aura_apply, begin_cast,
     begin_cast_with_admission, begin_item_cast, cast_triggered, charge_spell_cost,
     check_cast_start_gates, check_pending_cast_los, clear_dead_callback_cast_admission,
     faction_target_violation, recipe_reagents, resolve_cast_at, resolve_cast_at_typed,
@@ -139,7 +139,10 @@ pub(crate) use taxonomy::{
     STANCE_DEFENSIVE_THREAT_PCT,
 };
 
-pub(crate) use tables::{sweep_delete_game_aura, sweep_transfer_game_aura};
+pub(crate) use tables::{
+    sweep_delete_game_aura, sweep_delete_game_spell_cd, sweep_transfer_game_aura,
+    sweep_transfer_game_spell_cd,
+};
 
 pub(crate) use spellbook::{
     sweep_delete_game_player_spell, sweep_restamp_game_player_spell,

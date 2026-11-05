@@ -299,7 +299,14 @@ impl Table {
             (self, name),
             (
                 Self::Spell,
-                "custom_flags" | "min_target_level" | "single_target_key"
+                "custom_flags"
+                    | "min_target_level"
+                    | "single_target_key"
+                    | "form_mask"
+                    | "form_exclude"
+                    | "attributes_ex2"
+                    | "visual_id"
+                    | "duration_index"
             ) | (Self::SpellEffect, "bonus_coefficient")
         )
     }
@@ -357,6 +364,11 @@ const SPELL_COLUMNS: &[Column] = &[
     column("custom_flags", FieldType::U32),
     column("min_target_level", FieldType::U32),
     column("single_target_key", FieldType::U64),
+    column("form_mask", FieldType::U32),
+    column("form_exclude", FieldType::U32),
+    column("attributes_ex2", FieldType::U32),
+    column("visual_id", FieldType::U32),
+    column("duration_index", FieldType::U32),
 ];
 
 const SPELL_EFFECT_COLUMNS: &[Column] = &[

@@ -361,11 +361,13 @@ pub fn build_inventory_refusal(
             item2,
             bag_type_subclass,
         },
-        ItemRefusal::NotRightNow => SMSG_INVENTORY_CHANGE_FAILURE::CantDoRightNow {
-            item1,
-            item2,
-            bag_type_subclass,
-        },
+        ItemRefusal::NotRightNow | ItemRefusal::SpellCooldown(_) => {
+            SMSG_INVENTORY_CHANGE_FAILURE::CantDoRightNow {
+                item1,
+                item2,
+                bag_type_subclass,
+            }
+        }
         ItemRefusal::Internal => SMSG_INVENTORY_CHANGE_FAILURE::IntBagError {
             item1,
             item2,

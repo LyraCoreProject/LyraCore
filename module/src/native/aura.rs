@@ -42,6 +42,7 @@ fn modifiers(current: &[Aura], previous: &[&Aura]) -> Vec<Packet> {
 fn sync(guid: u64, auras: &[Aura]) -> Packet {
     let slots: Vec<_> = auras
         .iter()
+        .filter(|aura| aura.slot < 48)
         .map(|aura| codec::update_mask::AuraSlot {
             slot: aura.slot,
             spell_id: aura.spell_id,
@@ -57,7 +58,7 @@ fn sync(guid: u64, auras: &[Aura]) -> Packet {
 fn duration(ctx: &ReducerContext, aura: &Aura) -> Option<Packet> {
     let expiry = aura.expires_at.to_micros_since_unix_epoch();
     // i64::MAX represents a toggle Aura with no timer.
-    if expiry == i64::MAX {
+    if expiry == i64::MAX || aura.slot >= 48 {
         return None;
     }
     let remaining =
@@ -282,8 +283,14 @@ pub(crate) fn changed(ctx: &ReducerContext, previous: Option<&Aura>, current: Op
         .by_target()
         .filter(row.target_guid)
         .collect();
-    let packet = sync(row.target_guid, &auras);
-    super::visibility::broadcast(ctx, row.target_guid, packet.opcode, packet.body, false);
+    if previous
+        .into_iter()
+        .chain(current)
+        .any(|aura| aura.slot < 48)
+    {
+        let packet = sync(row.target_guid, &auras);
+        super::visibility::broadcast(ctx, row.target_guid, packet.opcode, packet.body, false);
+    }
     let changed: Vec<_> = previous.into_iter().chain(current).collect();
     for packet in movement(ctx, row.target_guid, &auras, &changed, false) {
         super::visibility::broadcast(ctx, row.target_guid, packet.opcode, packet.body, true);
@@ -319,7 +326,7 @@ pub(crate) fn changed(ctx: &ReducerContext, previous: Option<&Aura>, current: Op
 pub(super) fn replay(ctx: &ReducerContext, connection: ConnectionId, guid: u64, own: bool) {
     let auras: Vec<_> = ctx.db.game_aura().by_target().filter(guid).collect();
     let mut packets = Vec::new();
-    if !auras.is_empty() {
+    if auras.iter().any(|aura| aura.slot < 48) {
         packets.push(sync(guid, &auras));
     }
     packets.extend(movement(

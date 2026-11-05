@@ -490,7 +490,10 @@ pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
             !spells
                 .spell_id()
                 .find(a.spell_id)
-                .map(|s| aura_survives_death(s.attributes))
+                .map(|s| {
+                    aura_survives_death(s.attributes)
+                        || (a.item_guid(ctx) != 0 && s.equip_passive())
+                })
                 .unwrap_or(false)
         })
         .collect();

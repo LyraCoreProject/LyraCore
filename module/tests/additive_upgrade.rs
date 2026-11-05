@@ -29,7 +29,16 @@ fn populated_old_module_upgrades_without_clearing() {
     let entity_before = entity(&shard);
     let spell_before = shard.query_rows("SELECT * FROM game_spell WHERE spell_id = 5090100");
     let effect_before = shard.query_rows("SELECT * FROM game_spell_effect WHERE id = 20360400");
-    for column in ["custom_flags", "min_target_level", "single_target_key"] {
+    for column in [
+        "custom_flags",
+        "min_target_level",
+        "single_target_key",
+        "form_mask",
+        "form_exclude",
+        "attributes_ex2",
+        "visual_id",
+        "duration_index",
+    ] {
         assert!(
             !spell_before[0].contains_key(column),
             "the baseline already has {column}"
@@ -45,7 +54,16 @@ fn populated_old_module_upgrades_without_clearing() {
     assert_eq!(upgraded_character(&shard), character_before);
     assert_eq!(entity(&shard), entity_before);
     let mut spell_after = shard.query_rows("SELECT * FROM game_spell WHERE spell_id = 5090100");
-    for column in ["custom_flags", "min_target_level", "single_target_key"] {
+    for column in [
+        "custom_flags",
+        "min_target_level",
+        "single_target_key",
+        "form_mask",
+        "form_exclude",
+        "attributes_ex2",
+        "visual_id",
+        "duration_index",
+    ] {
         assert_eq!(
             spell_after[0].remove(column).as_deref(),
             Some("0"),

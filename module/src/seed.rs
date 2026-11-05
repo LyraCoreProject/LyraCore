@@ -664,6 +664,11 @@ fn seed_spell_registry(ctx: &ReducerContext) {
             custom_flags: 0,
             min_target_level: 0,
             single_target_key: 0,
+            form_mask: 0,
+            form_exclude: 0,
+            attributes_ex2: 0,
+            visual_id: 0,
+            duration_index: 0,
         });
     };
     let effect = |spell_id: u32,

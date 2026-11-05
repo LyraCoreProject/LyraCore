@@ -170,6 +170,7 @@ impl ItemInstance {
     ) -> Self {
         let row = ctx.db.game_item_instance().insert(row);
         crate::native::item_changed(ctx, None, Some(&row), source);
+        super::equip::changed(ctx, None, Some(&row));
         row
     }
 
@@ -187,6 +188,7 @@ impl ItemInstance {
         let previous = items.guid().find(self.guid);
         let row = items.guid().update(self);
         crate::native::item_changed(ctx, previous.as_ref(), Some(&row), source);
+        super::equip::changed(ctx, previous.as_ref(), Some(&row));
         row
     }
 
@@ -204,16 +206,20 @@ impl ItemInstance {
         }
         // Sale preserves Petitions and pauses enchantments; see docs/schema.md when changing buyback.
         crate::native::item_sold(ctx, &self, remaining.as_ref(), sold, evicted);
+        super::equip::changed(ctx, Some(&self), remaining.as_ref());
     }
 
     pub(super) fn insert_restored(self, ctx: &ReducerContext) {
         let row = ctx.db.game_item_instance().insert(self);
         crate::native::item_restored(ctx, &row, true);
+        super::equip::changed(ctx, None, Some(&row));
     }
 
     pub(super) fn update_restored(self, ctx: &ReducerContext) {
+        let previous = ctx.db.game_item_instance().guid().find(self.guid);
         let row = ctx.db.game_item_instance().guid().update(self);
         crate::native::item_restored(ctx, &row, false);
+        super::equip::changed(ctx, previous.as_ref(), Some(&row));
     }
 
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) -> bool {
@@ -224,6 +230,7 @@ impl ItemInstance {
         if let Some(row) = previous {
             crate::native::realm_petition::item_removed(ctx, &row);
             crate::native::item_changed(ctx, Some(&row), None, None);
+            super::equip::changed(ctx, Some(&row), None);
         }
         removed
     }

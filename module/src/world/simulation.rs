@@ -6,6 +6,7 @@ impl WorldEntity {
     pub(crate) fn delete(ctx: &ReducerContext, guid: impl std::borrow::Borrow<u64>) -> bool {
         let guid = *guid.borrow();
         let removed = ctx.db.game_world_entity().guid().delete(guid);
+        crate::items::equip::clear(ctx, guid);
         crate::breath::clear(ctx, guid);
         crate::combo::forget(ctx, guid);
         crate::transport::leave(ctx, guid);
@@ -45,6 +46,7 @@ impl WorldEntity {
         crate::aoi::entity_changed(ctx, None, &entity);
         if entity.is_player() {
             crate::native::realm_party::package::presence(ctx, entity.guid);
+            crate::items::equip::reconcile(ctx, entity.guid);
         }
         entity
     }
@@ -55,6 +57,12 @@ impl WorldEntity {
         let entity = ctx.db.game_world_entity().guid().update(self);
         crate::aoi::entity_changed(ctx, old.as_ref(), &entity);
         if let Some(old) = old {
+            if entity.is_player()
+                && (old.dead != entity.dead
+                    || old.unit_bytes_1 >> 16 & 0xff != entity.unit_bytes_1 >> 16 & 0xff)
+            {
+                crate::items::equip::reconcile(ctx, entity.guid);
+            }
             if entity.is_player() && (old.level != entity.level || old.zone_id != entity.zone_id) {
                 crate::native::package_guild::details_changed(ctx, entity.guid);
             }

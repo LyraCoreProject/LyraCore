@@ -12,6 +12,7 @@ use crate::game_gameobject;
 use crate::game_spell_effect;
 use crate::game_start_item;
 use crate::game_world_entity;
+use crate::{game_spell, game_spell_cd};
 
 use super::inventory::{first_free_backpack_slot, first_free_bag_slot, is_carried_slot};
 use super::rules::{
@@ -424,7 +425,10 @@ pub(crate) fn remove_items(
 pub(crate) const RECENTLY_BANDAGED_SPELL: u32 = 11196;
 
 fn use_spell_for(tmpl: &ItemTemplate) -> Option<u32> {
-    (tmpl.spellid_1 != 0 && tmpl.spelltrigger_1 == 0).then_some(tmpl.spellid_1)
+    super::equip::spells(tmpl)
+        .into_iter()
+        .find(|(spell, trigger)| *spell != 0 && *trigger == 0)
+        .map(|(spell, _)| spell)
 }
 
 fn spell_keeps_item(ctx: &ReducerContext, spell_id: u32) -> bool {
@@ -546,6 +550,28 @@ pub(crate) fn apply_item_use_on(
             ItemRefusal::ItemNotUsable,
             "only mana users can use that",
         ));
+    }
+    if ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(spell_id)
+        .is_some_and(|spell| {
+            spell.attributes & crate::spell::SPELL_ATTR_PASSIVE == 0
+                && spell.cast_flags
+                    & lyracore_shared::spell::taxonomy::SPELL_ATTR_RANGED_AUTO_REPEAT
+                    == 0
+        })
+        && ctx
+            .db
+            .game_spell_cd()
+            .by_caster()
+            .filter(player_guid)
+            .any(|cooldown| {
+                cooldown.spell_id == spell_id && cooldown.ready_at > crate::time::now(ctx)
+            })
+    {
+        return Err(ItemRefusal::SpellCooldown(spell_id));
     }
     // Propagate cast Refusals so the reducer rolls back item consumption.
     if !spell_keeps_item(ctx, spell_id) {
