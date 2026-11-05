@@ -2,7 +2,7 @@ use lyracore_protocol::{
     codec,
     messages::vanilla::{
         opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
-        SpellCastTargets_SpellCastTargetFlags_Item as ItemTarget,
+        NewItemSource, SpellCastTargets_SpellCastTargetFlags_Item as ItemTarget,
     },
     world::Packet,
 };
@@ -66,22 +66,25 @@ fn gain(
     row: &ItemInstance,
     count: u32,
     stack_add: bool,
+    source: NewItemSource,
     packets: &mut Vec<Packet>,
 ) {
     if count == 0 {
         return;
     }
     let (bag, position) = codec::bag_content_parts(row.slot).unwrap_or((255, row.slot));
+    let mut receipt = codec::build_item_push_result(
+        row.owner_guid,
+        bag,
+        u32::from(position),
+        row.entry,
+        count,
+        stack_add,
+        row.random_property_id,
+    );
+    receipt.source = source;
     packets.push(packet(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(
-        Box::new(codec::build_item_push_result(
-            row.owner_guid,
-            bag,
-            u32::from(position),
-            row.entry,
-            count,
-            stack_add,
-            row.random_property_id,
-        )),
+        Box::new(receipt),
     )));
     if super::quest::collects(ctx, row.owner_guid, row.entry) {
         // The client's toast adds this count to its bags, so it must lead the item's update.
@@ -101,7 +104,7 @@ pub(crate) fn changed(
     ctx: &ReducerContext,
     previous: Option<&ItemInstance>,
     current: Option<&ItemInstance>,
-    received: bool,
+    source: Option<NewItemSource>,
 ) {
     if ctx.db.game_native_player().count() == 0 {
         return;
@@ -122,8 +125,8 @@ pub(crate) fn changed(
         .zip(current)
         .is_some_and(|(old, row)| old.owner_guid != row.owner_guid)
     {
-        changed(ctx, previous, None, received);
-        changed(ctx, None, current, received);
+        changed(ctx, previous, None, source);
+        changed(ctx, None, current, source);
         return;
     }
     let Some(row) = current.or(previous) else {
@@ -146,8 +149,8 @@ pub(crate) fn changed(
                 packets.push(Packet { opcode, body });
             }
             slot(ctx, row.owner_guid, row.slot, &view, &mut packets);
-            if received {
-                gain(ctx, row, row.stack_count, false, &mut packets);
+            if let Some(source) = source {
+                gain(ctx, row, row.stack_count, false, source, &mut packets);
             }
         }
         (Some(old), None) => {
@@ -196,12 +199,13 @@ pub(crate) fn changed(
                     row.durability,
                 )));
             }
-            if received && old.slot == row.slot {
+            if let Some(source) = source.filter(|_| old.slot == row.slot) {
                 gain(
                     ctx,
                     row,
                     row.stack_count.saturating_sub(old.stack_count),
                     true,
+                    source,
                     &mut packets,
                 );
             }

@@ -73,6 +73,77 @@ fn enter(shard: &Standalone, guid: u64) -> ReducerConnection {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn vendor_purchases_acknowledge_the_offer_before_the_npc_receipt() {
+    let (shard, guid, _) = fixture("vendor-purchase-replies");
+    shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    shard.assert_sql("UPDATE game_item_template SET buy_count = 5 WHERE entry = 5090052");
+    shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
+    shard.assert_call("debug_spawn_at_feet", &[&guid.to_string(), "51004", "2.0"]);
+    let vendor: u64 = shard
+        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004")
+        .iter()
+        .map(|row| row["guid"].parse::<u64>().unwrap())
+        .max()
+        .unwrap();
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET money = 50000 WHERE guid = {guid}"
+    ));
+    let mut connection = enter(&shard, guid);
+    connection.drain_packets();
+    for (count, expected_slot) in [(2u8, None), (1, Some(u32::MAX)), (0, Some(u32::MAX))] {
+        let mut body = vendor.to_le_bytes().to_vec();
+        body.extend(5090052u32.to_le_bytes());
+        body.extend([count, 1]);
+        connection
+            .call("native_world_receive", json!([0x1a2u32, body]))
+            .unwrap();
+        let packets: Vec<_> = connection
+            .drain_packets()
+            .into_iter()
+            .filter_map(|row| {
+                let Packet(_, _, (tag, opcode), body, _, _, _) =
+                    serde_json::from_str(row.get()).unwrap();
+                let opcode: u16 = serde_json::from_str(opcode.get()).unwrap();
+                if tag != 0 || !matches!(opcode, 0x1a4 | 0x166) {
+                    return None;
+                }
+                let bytes: Vec<_> = (0..body.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&body[i..i + 2], 16).unwrap())
+                    .collect();
+                Some((opcode, bytes))
+            })
+            .collect();
+        assert_eq!(
+            packets.iter().map(|p| p.0).collect::<Vec<_>>(),
+            [0x1a4, 0x166]
+        );
+        let mut acknowledgement = vendor.to_le_bytes().to_vec();
+        acknowledgement.extend(2u32.to_le_bytes());
+        acknowledgement.extend(u32::MAX.to_le_bytes());
+        acknowledgement.extend(u32::from(count.max(1)).to_le_bytes());
+        assert_eq!(packets[0].1, acknowledgement);
+        let receipt = &packets[1].1;
+        assert_eq!(u32::from_le_bytes(receipt[8..12].try_into().unwrap()), 1);
+        assert_eq!(
+            u32::from_le_bytes(receipt[25..29].try_into().unwrap()),
+            5090052
+        );
+        assert_eq!(
+            u32::from_le_bytes(receipt[37..41].try_into().unwrap()),
+            u32::from(count.max(1)) * 5
+        );
+        if let Some(slot) = expected_slot {
+            assert_eq!(
+                u32::from_le_bytes(receipt[21..25].try_into().unwrap()),
+                slot
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn quest_slots_survive_reconnect_and_reuse_only_the_abandoned_slot() {
     use std::collections::BTreeMap;
 
