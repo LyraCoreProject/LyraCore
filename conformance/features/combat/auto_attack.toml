@@ -26,19 +26,13 @@ symbol = "receive"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
 
 [[known_gaps]]
-description = "White melee: level-60 delivered packets have no blocks or glancing blows, excessive crits and hits; both public seeds retain these four category signatures."
-path = "module/src/combat/folds.rs"
-symbol = "roll_swing_with_range"
-evidence = "conformance/reports/2026-11-05-white-melee.md"
-
-[[known_gaps]]
-description = "White melee: level-63 delivered packets have excessive misses, crits and hits, low parry and glancing rates, and no blocks; both public seeds retain these six category signatures."
-path = "module/src/combat/folds.rs"
-symbol = "roll_swing_with_range"
-evidence = "conformance/reports/2026-11-05-white-melee.md"
-
-[[known_gaps]]
 description = "Roll rates are measured through Tier 1 delivered packets; TCP audits report white_melee_sample until full TCP collection exists. Rear attacks, offhand, other contexts and stock-client melee remain unverified."
 path = "module/tests/conformance/rolls.rs"
 symbol = "public_seeds"
 evidence = "docs/adr/0007-statistical-roll-conformance.md"
+
+[[known_gaps]]
+description = "Other white melee contexts retain the legacy Character dodge formula, Character parry and block eligibility, creature crushing chance, weapon-skill bonuses and offhand weapon-skill selection. Controlled units, queued strikes and target-side hit/crit auras need separate conformance."
+path = "module/src/combat/folds.rs"
+symbol = "white_swing_table"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp"

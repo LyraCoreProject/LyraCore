@@ -183,6 +183,8 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
     shard.assert_sql("UPDATE game_world_entity SET armor = 40 WHERE guid = 1");
     shard.assert_call("debug_compute_swing", &[&wolf, "1"]);
     let bare = readout(&shard, "swing");
+    shard.assert_call("debug_compute_swing", &["1", "1"]);
+    let bare_pvp = readout(&shard, "swing");
     shard.assert_call("debug_equip_offhand", &["1", "50053"]);
     shard.assert_call("debug_compute_swing", &[&wolf, "1"]);
     let equipped = readout(&shard, "swing");
@@ -192,13 +194,19 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
     );
     assert_eq!(
         equipped["dodge_bp"].parse::<u32>().unwrap(),
-        bare["dodge_bp"].parse::<u32>().unwrap() + 240
+        bare["dodge_bp"].parse::<u32>().unwrap() + 216
     );
     assert_eq!(
         equipped["parry_bp"].parse::<u32>().unwrap(),
-        bare["parry_bp"].parse::<u32>().unwrap() + 340
+        bare["parry_bp"].parse::<u32>().unwrap() + 316
     );
-    assert_eq!(equipped["block_bp"], "940");
+    assert_eq!(equipped["block_bp"], "916");
+    shard.assert_call("debug_compute_swing", &["1", "1"]);
+    let equipped_pvp = readout(&shard, "swing");
+    assert_eq!(
+        equipped_pvp["hit_miss_bp"].parse::<u32>().unwrap(),
+        bare_pvp["hit_miss_bp"].parse::<u32>().unwrap() + 16
+    );
     assert_eq!(bare["mitigation_pct"], "7");
     assert_eq!(
         equipped["mitigation_pct"], "68",
@@ -234,8 +242,14 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
         broken["defender_defense_skill"],
         bare["defender_defense_skill"]
     );
-    assert_eq!(broken["dodge_bp"], bare["dodge_bp"]);
-    assert_eq!(broken["parry_bp"], bare["parry_bp"]);
+    assert_eq!(
+        broken["dodge_bp"].parse::<u32>().unwrap(),
+        bare["dodge_bp"].parse::<u32>().unwrap().saturating_sub(180)
+    );
+    assert_eq!(
+        broken["parry_bp"].parse::<u32>().unwrap(),
+        bare["parry_bp"].parse::<u32>().unwrap().saturating_sub(180)
+    );
     assert_eq!(broken["block_bp"], "0");
     assert_eq!(broken["mitigation_pct"], "3");
     shard.assert_call("debug_compute_spell", &[&wolf, "1", "5090211"]);

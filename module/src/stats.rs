@@ -1,8 +1,50 @@
 use lyracore_package_delta::{packed_class_level_id, packed_race_class_level_id};
 use lyracore_shared::packing::power_type;
-use spacetimedb::{table, ReducerContext};
+use spacetimedb::{table, ReducerContext, Table};
 
 use crate::{game_character, game_world_entity, WorldEntity};
+
+#[table(accessor = game_crit_per_agility, public)]
+pub struct CritPerAgility {
+    #[primary_key]
+    pub class_level: u32,
+    pub class: u8,
+    pub level: u32,
+    pub rate: f32,
+}
+
+#[table(accessor = game_missing_crit_catalogue)]
+pub struct MissingCritCatalogue {
+    #[primary_key]
+    pub id: u8,
+    pub class: u8,
+    pub level: u32,
+}
+
+pub(crate) fn crit_per_agility_for(ctx: &ReducerContext, class: u8, level: u32) -> Option<f32> {
+    let level = level.clamp(1, 60);
+    let rate = ctx
+        .db
+        .game_crit_per_agility()
+        .class_level()
+        .find(class_level_key(class, level))
+        .map(|row| row.rate)
+        .filter(|rate| rate.is_finite() && *rate > 0.0);
+    if rate.is_none() && ctx.db.game_missing_crit_catalogue().id().find(0).is_none() {
+        ctx.db
+            .game_missing_crit_catalogue()
+            .insert(MissingCritCatalogue {
+                id: 0,
+                class,
+                level,
+            });
+        spacetimedb::log::warn!(
+            "Missing crit-per-agility catalogue rate for class {class}, level {level}; \
+             using the previous crit formula for missing rates. Reimport globals."
+        );
+    }
+    rate
+}
 
 #[table(accessor = game_class_level_stats, public)]
 pub struct ClassLevelStats {

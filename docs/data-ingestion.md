@@ -14,6 +14,21 @@ tables. The Operator's own 1.12.1 client supplies the remaining tables, terrain,
 model geometry. `importer/scripts/pull-vmangos.py` fetches the SQLite snapshot into the ignored
 `.import/` directory. LyraCore distributes neither source's data.
 
+The globals pass imports `player_crit_per_agility` into `game_crit_per_agility`. It fills missing
+levels by linear interpolation and requires positive rates at levels 1 and 60 for each class.
+Melee crit uses the attacker's class and level, with level 60 rates above level 60. The demo
+world seeds only warrior levels 1 and 60. **Existing Realms must reimport the globals family to
+use the correct crit rates for every class and level.** Until a class/level rate exists, combat
+and the Character sheet use the previous crit calculation: a 10% base plus
+`agility / (level + 4)` percentage points, then aura and equipment bonuses. The Module logs a
+warning once per Shard and records the first missing class and level in the private
+`game_missing_crit_catalogue` table. This fallback preserves crit while the reimport is pending;
+it does not provide the source-backed class rates.
+
+The creatures pass stores the no-parry, no-block and no-defense flags in `game_creature_defense`.
+White melee reads these flags alongside facing, totem type, casting and stun state. Reimport the
+creatures family to populate them on an existing Realm.
+
 The globals pass imports selected `areatrigger_tavern` ids with `patch_min <= 10`. The Module
 matches them to the imported `areatrigger_template` geometry for inn rest. Reimport replaces the
 selected id set.

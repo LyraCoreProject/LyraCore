@@ -247,9 +247,20 @@ pub(crate) fn effective_block_value(ctx: &ReducerContext, defender: &WorldEntity
 
 pub(crate) fn effective_crit_bp(ctx: &ReducerContext, attacker: &WorldEntity) -> u32 {
     let bonus = crate::spell::combat_field_bonus(ctx, attacker.guid, crate::spell::COMBAT_CRIT)
-        + crate::items::equipped_stat_bonus(ctx, attacker.guid, crate::items::EquipStat::Crit)
-        + agility_crit_bp(effective_agility(ctx, attacker), attacker.level) as i32;
-    crit_bp_with_bonus(bonus)
+        + crate::items::equipped_stat_bonus(ctx, attacker.guid, crate::items::EquipStat::Crit);
+    if !attacker.is_player() {
+        return (500 + bonus).clamp(0, 10_000) as u32;
+    }
+    let rate = crate::stats::crit_per_agility_for(ctx, attacker.class(), attacker.level);
+    super::white_melee::sheet_crit_bp(
+        effective_agility(ctx, attacker),
+        attacker.class(),
+        attacker.level,
+        rate,
+        crate::skill::effective_weapon_skill(ctx, attacker) as i32,
+        crate::skill::skill_cap_for_level(attacker.level) as i32,
+        bonus,
+    )
 }
 
 pub(crate) fn effective_miss_bp(
@@ -698,20 +709,28 @@ pub(crate) fn roll_swing_with_range(
     range: (u32, u32),
     strike: Option<QueuedStrikeDamage>,
 ) -> (u32, u8, u32) {
-    let block_value = effective_block_value(ctx, target);
-    let sd = crate::skill::skill_diff_ctx(ctx, attacker, target);
-    let table = AttackTable {
-        miss: effective_miss_bp(ctx, attacker, sd),
-        dodge: effective_dodge_bp(ctx, target, sd),
-        parry: effective_parry_bp(ctx, target, sd),
-        glancing: glancing_chance_bp(attacker.level, target.level),
-        block: effective_block_bp(ctx, target, sd, block_value),
-        crit: effective_crit_bp(ctx, attacker),
-        crushing: if !attacker.is_player() && target.is_player() {
-            crushing_chance_bp(attacker.level, target.level)
-        } else {
-            0
-        },
+    let block_value = if strike.is_none() {
+        white_block_value(ctx, target)
+    } else {
+        effective_block_value(ctx, target)
+    };
+    let table = if strike.is_none() {
+        white_swing_table(ctx, attacker, target, block_value)
+    } else {
+        let sd = crate::skill::skill_diff_ctx(ctx, attacker, target);
+        AttackTable {
+            miss: effective_miss_bp(ctx, attacker, sd),
+            dodge: effective_dodge_bp(ctx, target, sd),
+            parry: effective_parry_bp(ctx, target, sd),
+            glancing: glancing_chance_bp(attacker.level, target.level),
+            block: effective_block_bp(ctx, target, sd, block_value),
+            crit: effective_crit_bp(ctx, attacker),
+            crushing: if !attacker.is_player() && target.is_player() {
+                crushing_chance_bp(attacker.level, target.level)
+            } else {
+                0
+            },
+        }
     };
     let production_draws = || {
         [
@@ -732,6 +751,199 @@ pub(crate) fn roll_swing_with_range(
     };
     let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), attacker.level);
     resolve_swing(table, rolls, range, strike, mit_pct, block_value)
+}
+
+pub(crate) fn white_swing_table(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: &WorldEntity,
+    block_value: u32,
+) -> AttackTable {
+    use crate::creatures::catalogue::game_creature_defense;
+
+    let target_is_character = target.is_player();
+    let weapon = crate::skill::effective_weapon_skill(ctx, attacker) as i32;
+    let maximum = crate::skill::skill_cap_for_level(attacker.level) as i32;
+    let defense_maximum = crate::skill::skill_cap_for_level(target.level) as i32;
+    let flags = (!target_is_character)
+        .then(|| ctx.db.game_creature_defense().entry().find(target.entry))
+        .flatten();
+    let defense = white_defense_skill(
+        ctx,
+        attacker,
+        target,
+        flags.as_ref().is_some_and(|flags| flags.no_defense),
+    );
+    let facing = crate::spell::is_facing(
+        target.x,
+        target.y,
+        target.orientation,
+        attacker.x,
+        attacker.y,
+    );
+    let (dodge, parry, block) =
+        white_defense_bands(ctx, target, block_value, facing, flags.as_ref());
+    let hit_bonus = crate::spell::combat_field_bonus(ctx, attacker.guid, crate::spell::COMBAT_HIT)
+        + crate::items::equipped_stat_bonus(ctx, attacker.guid, crate::items::EquipStat::Hit);
+    let mut table = super::white_melee::attack_table(
+        super::white_melee::Skills {
+            weapon,
+            maximum,
+            defense,
+            defense_maximum,
+            target_level: target.level,
+            target_is_character,
+        },
+        AttackTable {
+            miss: if attacker.is_player()
+                && attacker.next_swing_spell == 0
+                && equipped_offhand_weapon_damage(ctx, attacker.guid).is_some()
+            {
+                2400
+            } else {
+                500
+            },
+            dodge,
+            parry,
+            glancing: 0,
+            block,
+            crit: effective_crit_bp(ctx, attacker),
+            crushing: if !attacker.is_player() && target_is_character {
+                crushing_chance_bp(attacker.level, target.level)
+            } else {
+                0
+            },
+        },
+        hit_bonus,
+        character_controls(ctx, attacker) && !character_controls(ctx, target),
+    );
+    if target_is_character && !facing {
+        table.dodge = 0;
+    }
+    if target.unit_bytes_1 & 0xff != 0 {
+        table.miss = 0;
+    }
+    table
+}
+
+fn character_controls(ctx: &ReducerContext, unit: &WorldEntity) -> bool {
+    unit.is_player()
+        || unit.owner_guid != 0
+            && ctx
+                .db
+                .game_world_entity()
+                .guid()
+                .find(unit.owner_guid)
+                .is_some_and(|owner| owner.is_player())
+}
+
+fn white_defense_bands(
+    ctx: &ReducerContext,
+    target: &WorldEntity,
+    block_value: u32,
+    facing: bool,
+    flags: Option<&crate::creatures::catalogue::CreatureDefense>,
+) -> (u32, u32, u32) {
+    let target_is_character = target.is_player();
+    let totem = !target_is_character
+        && ctx
+            .db
+            .game_creature_template()
+            .entry()
+            .find(target.entry)
+            .is_some_and(|template| template.creature_type == 11);
+    let can_defend = !totem
+        && !crate::spell::is_stunned(ctx, target.guid)
+        && !crate::spell::is_non_melee_spell_casting(ctx, target.guid);
+    let dodge = if target_is_character {
+        effective_dodge_bp(ctx, target, 0)
+    } else {
+        fold_band(
+            ctx,
+            target.guid,
+            500,
+            crate::spell::COMBAT_DODGE,
+            crate::items::EquipStat::Dodge,
+        )
+    };
+    let parry = effective_parry_bp(ctx, target, 0);
+    let block = if target_is_character {
+        effective_block_bp(ctx, target, 0, block_value)
+    } else {
+        fold_band(
+            ctx,
+            target.guid,
+            500,
+            crate::spell::COMBAT_BLOCK,
+            crate::items::EquipStat::Block,
+        )
+    };
+    let defense_bonus = if target_is_character {
+        (i64::from(crate::skill::effective_defense_skill(ctx, target))
+            - i64::from(crate::skill::skill_cap_for_level(target.level)))
+            * 4
+    } else {
+        0
+    };
+    let with_defense = |chance| (i64::from(chance) + defense_bonus).clamp(0, 10_000) as u32;
+    let dodge = with_defense(dodge);
+    let parry = with_defense(parry);
+    let block = if !target_is_character || block_value > 0 {
+        with_defense(block)
+    } else {
+        0
+    };
+    (
+        if can_defend { dodge } else { 0 },
+        if can_defend && facing && !flags.is_some_and(|flags| flags.no_parry) {
+            parry
+        } else {
+            0
+        },
+        if can_defend && facing && !flags.is_some_and(|flags| flags.no_block) {
+            block
+        } else {
+            0
+        },
+    )
+}
+
+pub(crate) fn white_block_value(ctx: &ReducerContext, target: &WorldEntity) -> u32 {
+    if target.is_player() {
+        effective_block_value(ctx, target)
+    } else {
+        target.level / 2 + effective_strength(ctx, target) / 20
+    }
+}
+
+fn white_defense_skill(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: &WorldEntity,
+    no_defense: bool,
+) -> i32 {
+    use crate::skill::game_player_skill;
+    let maximum = crate::skill::skill_cap_for_level(target.level) as i32;
+    if no_defense {
+        0
+    } else if target.is_player() && attacker.is_player() {
+        let maximum = ctx
+            .db
+            .game_player_skill()
+            .by_character()
+            .filter(target.guid)
+            .find(|skill| skill.skill_line == crate::skill::skill_line::DEFENSE)
+            .map_or(maximum, |skill| i32::from(skill.max_rank));
+        let aura = crate::spell::combat_field_bonus(ctx, target.guid, crate::spell::COMBAT_DEFENSE);
+        let gear =
+            crate::items::equipped_stat_bonus(ctx, target.guid, crate::items::EquipStat::Defense);
+        (i64::from(maximum) + i64::from(aura) + i64::from(gear)).clamp(0, i64::from(i32::MAX))
+            as i32
+    } else if target.is_player() {
+        crate::skill::effective_defense_skill(ctx, target) as i32
+    } else {
+        maximum
+    }
 }
 
 struct SwingRolls {

@@ -30,7 +30,6 @@ const MAX_PARRY_BP: u32 = 3000;
 const BLOCK_BP: u32 = 500;
 const BLOCK_BP_PER_SKILL: u32 = 10;
 const MAX_BLOCK_BP: u32 = 3000;
-const CRIT_BP: u32 = 1000;
 const BASE_DODGE_BP: u32 = 500;
 const DODGE_BP_PER_AGILITY: u32 = 5;
 const MAX_DODGE_BP: u32 = 3000;
@@ -153,14 +152,6 @@ pub(crate) fn apply_offhand_penalty(min: u32, max: u32) -> (u32, u32) {
 
 pub(crate) fn effective_stat(base: i32, aura: i32, gear: i32) -> u32 {
     (i64::from(base) + i64::from(aura) + i64::from(gear)).clamp(0, i64::from(u32::MAX)) as u32
-}
-
-pub(crate) fn crit_bp_with_bonus(bonus: i32) -> u32 {
-    (CRIT_BP as i32 + bonus).clamp(0, 10_000) as u32
-}
-
-pub(crate) fn agility_crit_bp(agility: u32, level: u32) -> u32 {
-    agility * 100 / (level + 4)
 }
 
 pub(crate) fn miss_bp_with_bonus(miss: u32, bonus: i32) -> u32 {
@@ -542,14 +533,6 @@ mod tests {
     }
 
     #[test]
-    fn agility_crit_rises_with_agility_and_is_suppressed_by_level() {
-        assert!(agility_crit_bp(40, 5) > agility_crit_bp(20, 5));
-        assert!(agility_crit_bp(20, 10) < agility_crit_bp(20, 1));
-        assert_eq!(agility_crit_bp(0, 5), 0);
-        assert_eq!(crit_bp_with_bonus(agility_crit_bp(0, 5) as i32), 1000);
-    }
-
-    #[test]
     fn rogue_melee_ap_folds_in_agility_others_keep_the_str_curve() {
         let lo_agi = melee_attack_power_for(CLASS_ROGUE, 20, 20, 5);
         let hi_agi = melee_attack_power_for(CLASS_ROGUE, 20, 40, 5);
@@ -736,12 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn crit_and_hit_ratings_fold_into_the_attack_table_bands() {
-        assert_eq!(crit_bp_with_bonus(0), 1000);
-        assert_eq!(crit_bp_with_bonus(1000), 2000);
-        assert_eq!(crit_bp_with_bonus(100_000), 10_000);
-        assert_eq!(crit_bp_with_bonus(-1500), 0);
-
+    fn hit_bonus_reduces_miss_chance() {
         assert_eq!(miss_bp_with_bonus(600, 0), 600);
         assert_eq!(miss_bp_with_bonus(600, 500), 100);
         assert_eq!(miss_bp_with_bonus(500, 1500), 0);
@@ -765,7 +743,7 @@ mod tests {
             parry: PARRY_BP,
             glancing: glancing_chance_bp(10, 13),
             block: 0,
-            crit: CRIT_BP,
+            crit: 1000,
             crushing: 0,
         };
         let (m, d, p, g, c) = (t.miss, t.dodge, t.parry, t.glancing, t.crit);
@@ -786,7 +764,7 @@ mod tests {
             parry: PARRY_BP,
             glancing: glancing_chance_bp(10, 10),
             block: 0,
-            crit: CRIT_BP,
+            crit: 1000,
             crushing: 0,
         };
         assert_eq!(eq.glancing, 0);

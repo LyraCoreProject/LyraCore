@@ -108,7 +108,8 @@ class PinBumpTests(unittest.TestCase):
         for entry in after["scenarios"]:
             entry["harness_revision"] = revision
         PIN_BUMP.validate_baseline(before, after, revision)
-        signature = after["scenarios"][-1]["rule"][1]
+        signature = next(signature for scenario in after["scenarios"]
+                         for signature in scenario["rule"] if signature.get("character"))
         signature["character"] = ""
         with self.assertRaisesRegex(ValueError, "signature Character"):
             PIN_BUMP.validate_baseline(before, after, revision)

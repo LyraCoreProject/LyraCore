@@ -15,6 +15,7 @@ use crate::{
 pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
 
+    crate::seed::seed_crit_rates(ctx);
     crate::talent::seed_talents(ctx);
     let talents = ctx.db.game_talent().count();
 
