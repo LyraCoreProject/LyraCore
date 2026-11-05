@@ -34,24 +34,26 @@ impl Drop for Preparation<'_> {
     }
 }
 
-fn collect(
+struct RollFixture {
+    collector: ReducerConnection,
+    characters: Vec<Character>,
+    deliveries: BTreeMap<u64, Delivery>,
+}
+
+fn prepare(
     shard: &Standalone,
     shard_name: &str,
     scenario: &wire_client::scenario::Scenario,
     seed: u64,
     level_index: usize,
     part: usize,
-    ready: &std::sync::Barrier,
-) -> Result<Counts> {
-    let mut preparation = Preparation {
-        ready,
-        arrived: false,
-    };
-    let setup = Instant::now();
+) -> Result<RollFixture> {
     let spec = scenario.rolls.as_ref().context("roll specification")?;
     ensure!(
         spec.agility == 100
             && spec.weapon_skill == 300
+            && spec.defense_skill == 300
+            && spec.target_faction == 7
             && spec.target_entry == 38
             && spec.target_levels == [60, 63],
         "unsupported tier 1 roll fixture context"
@@ -63,7 +65,7 @@ fn collect(
         "debug_start_virtual_clock",
         &["1800000000000000"],
     );
-    shard.assert_sql_database(shard_name, "INSERT INTO game_creature_template (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) VALUES (38,'White melee target','',1,60,1000000000,17,0,0,7,0,0,0,1,2000,0,0,60,1000000000,0,0,0,0,0,0,0,0)");
+    shard.assert_sql_database(shard_name, "INSERT INTO game_creature_template (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) VALUES (38,'White melee target','',1,60,1000000000,7,0,0,7,0,0,0,1,2000,0,0,60,1000000000,0,0,0,0,0,0,0,0)");
     let FixtureVerb::Character { at, .. } = &scenario.fixtures[0] else {
         anyhow::bail!("roll Character fixture")
     };
@@ -92,7 +94,7 @@ fn collect(
         .filter(|(index, _)| index / 8 == level_index && index % 8 / 4 == part)
     {
         let mut at = at.clone();
-        at.y += index as f32 * 200.0;
+        at.y -= index as f32 * 200.0;
         let fixture = FixtureVerb::Character {
             name: (*name).into(),
             race: "human".into(),
@@ -160,6 +162,32 @@ fn collect(
     for delivery in deliveries.values_mut() {
         delivery.route_rows(opening.clone())?;
     }
+    Ok(RollFixture {
+        collector,
+        characters,
+        deliveries,
+    })
+}
+
+fn collect(
+    shard: &Standalone,
+    shard_name: &str,
+    scenario: &wire_client::scenario::Scenario,
+    seed: u64,
+    level_index: usize,
+    part: usize,
+    ready: &std::sync::Barrier,
+) -> Result<Counts> {
+    let mut preparation = Preparation {
+        ready,
+        arrived: false,
+    };
+    let setup = Instant::now();
+    let RollFixture {
+        mut collector,
+        mut characters,
+        mut deliveries,
+    } = prepare(shard, shard_name, scenario, seed, level_index, part)?;
     println!(
         "roll seed {seed}: setup {:.3}s",
         setup.elapsed().as_secs_f64()
@@ -176,7 +204,7 @@ fn collect(
             )
             .map_err(anyhow::Error::msg)?;
     }
-    let per_character = spec.samples_per_level / 8;
+    let per_character = scenario.rolls.as_ref().unwrap().samples_per_level / 8;
     let mut batches = 0;
     while characters
         .iter()
@@ -184,7 +212,7 @@ fn collect(
     {
         batches += 1;
         ensure!(
-            batches <= 126,
+            batches <= 125,
             "incomplete white melee sample: {:?}",
             characters
                 .iter()

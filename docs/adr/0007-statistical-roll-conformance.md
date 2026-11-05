@@ -22,14 +22,18 @@ unarmed skill 162 at 300/300. Every equipment slot is empty, including both hand
 are main-hand white melee; the Reference Server retains its ordinary 2000 ms cadence. No talents, buffs, auras, procs,
 queued strikes, extra attacks or hit/crit bonuses. No GM attack-speed changes.
 
-Targets are spawned creature entry 38, non-pet humanoids, standing, not stunned, casting or
+Targets are spawned creature entry 38, type 7 humanoid, class 1, rank 0, faction 7,
+`static_flags1 = static_flags2 = flags_extra = 0`, non-pet, standing, not stunned, casting or
 evading, with no no-parry/no-block/no-defense flags, no auras and normal rank. Set levels to 60
 and 63: defense and maximum skill are 300 and 315. Each Character has a separate target, two
 yards directly ahead, facing the Character. Both health pools are 1,000,000,000; no deaths or
-gear breakage can change the context. Reference positions start on map 0 at
-(-8949.95, -132.493, 83.5312), Character orientation 0; reference pairs share these positions. Tier 1 offsets pairs by 200 yards on the y axis
+gear breakage can change the context. Reference positions start on map 1 at
+(16222.1, 16252.1, 12.5872), Character orientation 0; reference pairs share these positions. Tier 1 offsets pairs by minus 200 yards on the y axis
 to avoid observer packet cost; their relative position and facing stay identical.
-Reject missing packets, changed skills, levels, stats, position, facing or attack context.
+The Reference Server temporarily changes each spawned target from faction 17 to neutral faction 7,
+which the pinned `FactionTemplate.dbc` gives zero faction-group, friend and enemy masks. This
+avoids ambient aggression. The GM Island position also excludes nearby guard interference. The attack-table formulas do not read
+faction. Reject missing packets, changed skills, levels, stats, position, facing or attack context.
 
 Source links below use one-based lines at the pinned commit:
 
@@ -66,7 +70,9 @@ Source links below use one-based lines at the pinned commit:
 | 60 | 5% | 5% | 5% | 5% | 10% | 5% | 65% |
 | 63 | 8% | 6.5% | 14% | 5% | 40% | 2% | 24.5% |
 
-These are integer interval widths over 10,000 possible rolls, not estimated rates.
+These are integer interval widths over 10,000 possible rolls, not estimated rates. The first
+[measurement report](../../conformance/reports/2026-11-05-white-melee.md) records delivered counts,
+strictness and cost; differences remain findings.
 
 ## Small Reference Server check
 

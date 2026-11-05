@@ -331,6 +331,22 @@ The comparator marks a Behavior as nonconforming when it finds rule records. The
 check fails when either signature set changes or provenance differs, regardless of that result.
 No packet text enters this result. The scoreboard consumes it.
 
+## White melee roll rates
+
+`white_melee_outcomes` follows [ADR 0007](../docs/adr/0007-statistical-roll-conformance.md).
+Its expected probabilities are independently derived from pinned vmangos attack-table source;
+its small Golden Trace checks that derivation in practice. It is a scoped exception to the
+recordings-only rate authority, and cannot establish attack cadence or all melee parity.
+
+The Tier 1 collector sends native attack and stop requests, advances ordinary scheduled callbacks
+in batches and classifies delivered combat bytes with the harness decoder. It counts only each
+Character's own attacker stream. It checks attack start, damage, stop and live context; it does
+not run the full update-projection properties over the 200,000-swing stream. Other scenarios keep
+those properties. Ordinary `white_melee_distribution` signatures and `known_gaps` retain the
+findings. The [measurement report](reports/2026-11-05-white-melee.md) records exact counts, warm
+cost, repeatability and strictness. A held category signature cannot detect further worsening
+within that category. TCP audits explicitly report a missing full roll sample.
+
 ## Taxi data
 
 `taxi_single_hop` uses the harness's money, known-flight-node and creature Fixture Verbs. The
