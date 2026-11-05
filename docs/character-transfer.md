@@ -66,7 +66,10 @@ removes the unused target Handoff.
 ## State carried and state dropped
 
 The Transfer uses the existing Character-owned BSATN manifest. Items, skills, spells, quests, Auras
-and other transported Character-owned rows travel in one batch. Auras keep their absolute expiry.
+and other transported Character-owned rows travel in one batch. Ordinary Auras keep their absolute
+expiry. Equip Auras from Items are excluded and rebuilt once at world entry. Spell and category
+cooldowns travel with their absolute deadlines. See
+[equip spell migration](danger-zones.md#equip-spell-migration) before updating existing Shards.
 AOI Grants, the NativePlayer row, Transport attachment and other explicitly omitted transient rows
 are rebuilt or dropped. A pending cast is cancelled before export. Melee, threat and other combat
 state do not survive. Pending godmode and the run speed multiplier survive export and adoption,

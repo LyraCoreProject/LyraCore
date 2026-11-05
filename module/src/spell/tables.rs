@@ -93,7 +93,11 @@ impl Spell {
         if self.form_mask & mask != 0 {
             return true;
         }
-        let shifted = form != 0 && !matches!(form, 17..=19);
+        if form > 32 {
+            return true;
+        }
+        // Build-5875 SpellShapeshiftForm marks these forms as stances.
+        let shifted = form != 0 && !matches!(form, 17..=19 | 28 | 30 | 31);
         if shifted {
             self.attributes & SPELL_ATTR_NOT_SHAPESHIFT == 0 && self.form_mask == 0
         } else {
