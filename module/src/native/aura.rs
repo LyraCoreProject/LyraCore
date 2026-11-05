@@ -57,7 +57,7 @@ fn sync(guid: u64, auras: &[Aura]) -> Packet {
 
 fn duration(ctx: &ReducerContext, aura: &Aura) -> Option<Packet> {
     let expiry = aura.expires_at.to_micros_since_unix_epoch();
-    // i64::MAX represents a toggle Aura with no timer.
+    // i64::MAX marks a permanent Aura.
     if expiry == i64::MAX || aura.slot >= 48 {
         return None;
     }
