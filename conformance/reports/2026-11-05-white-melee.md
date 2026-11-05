@@ -78,7 +78,11 @@ findings. The Feature Ledger retains them as `known_gaps`; this change does not 
 
 - The first public seed was repeated in four additional fresh Shards with the same inputs.
   All per-Shard counts were identical. The second public seed produced different counts.
-- The release Module collected both public seeds, 200,000 swings total, in 26.383 seconds warm
+- With the final context guards, the release Module collected both public seeds, 200,000 swings
+  total, in **16.223 seconds warm**, with maximum per-Shard setup **5.954 seconds**, excluding
+  node startup and Module publication. That cold test invocation, including the Module rebuild,
+  took 185.50 seconds. The counts equal the control exactly.
+- The release Module collected the same public samples in 26.383 seconds warm
   during the repeatability proof. The maximum per-Shard fixture setup was 8.016 seconds, excluding
   node startup and Module publication. A subsequent restored-source run collected them in
   16.999 seconds warm and reproduced every control count. Cold test execution, including a
@@ -154,3 +158,8 @@ Production random draw count, order and modulo reduction remain unchanged. Exist
 callbacks still execute at their deadlines; equal virtual deadlines retain table-kind/row-id order.
 The fixture uses a 50 ms attack interval so each ordinary 100 ms melee tick is ready; the
 Reference Server retains 2000 ms unarmed attacks. Attack cadence is outside this slice.
+
+The other Tier 1 baseline entries were regenerated with `./conformance/baseline` from CI evidence
+at merge commit `b4704a2dde79c35f2c640f4d19004d55a4dbd6aa` ([durable run](https://github.com/LyraCoreProject/LyraCore/actions/runs/42001719730)).
+All 17 comparisons completed without property violations. Unrelated scenarios were not replayed
+locally. Their signature sets are unchanged; this refresh advances their harness provenance.

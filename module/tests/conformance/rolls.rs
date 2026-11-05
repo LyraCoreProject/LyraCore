@@ -294,7 +294,6 @@ fn collect(
         .call("debug_advance_roll_batch", json!([40]))
         .map_err(anyhow::Error::msg)?;
     let rows = collector.drain_packets();
-    let mut counts = Counts::default();
     for (guid, packet) in roll_packets(rows, &mut deliveries)? {
         let character = characters.iter_mut().find(|c| c.guid == guid).unwrap();
         if packet.opcode == 0x144 {
@@ -314,11 +313,46 @@ fn collect(
             );
         }
     }
-    let entities = shard.query_database_rows(
+    let counts = verified_counts(
+        shard,
         shard_name,
-        "SELECT guid,level,agility,health,dead FROM game_world_entity",
+        &characters,
+        scenario.rolls.as_ref().unwrap().target_levels[level_index],
+    )?;
+    println!(
+        "roll seed {seed}: warm {:.3}s; counts {}",
+        warm.elapsed().as_secs_f64(),
+        serde_json::to_string(&counts)?
     );
-    for character in &mut characters {
+    Ok(counts)
+}
+
+fn verified_counts(
+    shard: &Standalone,
+    shard_name: &str,
+    characters: &[Character],
+    target_level: u32,
+) -> Result<Counts> {
+    ensure!(
+        shard
+            .query_database_rows(shard_name, "SELECT id FROM game_aura")
+            .is_empty(),
+        "roll participants have auras"
+    );
+    ensure!(
+        shard
+            .query_database_rows(shard_name, "SELECT guid FROM game_item_instance")
+            .is_empty(),
+        "roll participants have items"
+    );
+    let entities = shard.query_database_rows(shard_name,
+        "SELECT guid,level,agility,health,max_health,dead,map_id,x,y,z,orientation FROM game_world_entity");
+    let skills = shard.query_database_rows(
+        shard_name,
+        "SELECT character_guid,skill_line,current,max_rank FROM game_player_skill",
+    );
+    let mut counts = Counts::default();
+    for character in characters {
         ensure!(
             character.started && character.stopped && character.damage > 0,
             "missing gameplay witness"
@@ -327,22 +361,53 @@ fn collect(
             .iter()
             .find(|row| row["guid"] == character.guid.to_string())
             .context("roll Character disappeared")?;
+        let target = entities
+            .iter()
+            .find(|row| row["guid"] == character.target.to_string())
+            .context("roll target disappeared")?;
         ensure!(
             entity["level"] == "60"
                 && entity["agility"] == "100"
-                && entity["dead"] == "false"
-                && entity["health"].parse::<u32>()? > 0,
-            "roll Character context changed"
+                && target["level"] == target_level.to_string(),
+            "roll levels or agility changed"
+        );
+        for participant in [entity, target] {
+            ensure!(
+                participant["dead"] == "false"
+                    && participant["health"].parse::<u32>()? > 0
+                    && participant["max_health"] == "1000000000"
+                    && participant["map_id"] == "1",
+                "roll health or map changed"
+            );
+        }
+        for skill in [95, 162] {
+            let row = skills
+                .iter()
+                .find(|row| {
+                    row["character_guid"] == character.guid.to_string()
+                        && row["skill_line"] == skill.to_string()
+                })
+                .context("roll skill disappeared")?;
+            ensure!(
+                row["current"] == "300" && row["max_rank"] == "300",
+                "roll skill changed"
+            );
+        }
+        let coordinate = |row: &BTreeMap<String, String>, name: &str| -> Result<f32> {
+            Ok(row.get(name).context("roll coordinate missing")?.parse()?)
+        };
+        ensure!(
+            (coordinate(target, "x")? - coordinate(entity, "x")? - 2.0).abs() < 0.01
+                && (coordinate(target, "y")? - coordinate(entity, "y")?).abs() < 0.01
+                && (coordinate(target, "z")? - coordinate(entity, "z")?).abs() < 0.01
+                && coordinate(entity, "orientation")?.cos() > 0.9999
+                && coordinate(target, "orientation")?.cos() < -0.9999,
+            "roll position or facing changed"
         );
         for category in 0..7 {
             counts.0[category] += character.counts.0[category];
         }
     }
-    println!(
-        "roll seed {seed}: warm {:.3}s; counts {}",
-        warm.elapsed().as_secs_f64(),
-        serde_json::to_string(&counts)?
-    );
     Ok(counts)
 }
 
@@ -584,7 +649,7 @@ fn check_merge_signatures(
             .collect::<std::collections::BTreeSet<_>>()
     };
     let rules = allowed(&expected.rule);
-    let data = allowed(&expected.data);
+    let data_signatures = allowed(&expected.data);
     ensure!(
         current
             .rule
@@ -593,7 +658,7 @@ fn check_merge_signatures(
             && current
                 .data
                 .iter()
-                .all(|signature| data.contains(signature)),
+                .all(|signature| data_signatures.contains(signature)),
         "merge seed adds a rule signature; revert, do not retry"
     );
     Ok(())

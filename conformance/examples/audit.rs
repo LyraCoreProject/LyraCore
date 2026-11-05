@@ -502,9 +502,19 @@ mod tests {
         };
         let report = compare_run(&directory, &ledger, load_run()?, None)?;
         assert_eq!(report.scenarios.len(), catalogue::ENTRIES.len());
-        for result in report.audit.as_ref().unwrap().behaviors.values() {
-            assert_eq!(result.candidate, Summary::default());
-            assert_eq!(result.reference, Summary::default());
+        for (behavior, result) in &report.audit.as_ref().unwrap().behaviors {
+            assert_eq!(result.candidate, result.reference);
+            if behavior == "auto_attack" {
+                assert_eq!(result.candidate.rule.raw_records, 1);
+                assert_eq!(result.candidate.rule.signatures.len(), 1);
+                assert_eq!(
+                    result.candidate.rule.signatures[0].signature.rule,
+                    "white_melee_sample"
+                );
+                assert_eq!(result.candidate.data, Default::default());
+            } else {
+                assert_eq!(result.candidate, Summary::default());
+            }
             assert!(result.changes.is_none());
         }
         let repeated = compare_run(
