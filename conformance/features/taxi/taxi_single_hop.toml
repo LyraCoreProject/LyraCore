@@ -44,3 +44,8 @@ rung = "durable_module"
 path = "module/tests/native_conformance.rs"
 function = "world_entry_resets_rest_state_before_bonus_threshold"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/taxi_targeting.rs"
+function = "a_taxi_passenger_leaves_combat_and_cannot_be_targeted_until_landing"
+rung = "durable_module"

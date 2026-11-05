@@ -14,7 +14,7 @@ pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     let Some(mut e) = entities.guid().find(guid) else {
         return;
     };
-    if e.dead {
+    if e.dead || crate::taxi::is_flying(&e) {
         return;
     }
     let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
@@ -34,6 +34,15 @@ pub(crate) fn arm_creature_engagement(
     target_guid: u64,
     assist: bool,
 ) -> bool {
+    if ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(target_guid)
+        .is_some_and(|target| crate::taxi::is_flying(&target))
+    {
+        return false;
+    }
     let melee = ctx.db.game_melee_attack();
     if melee.attacker_guid().find(creature_guid).is_some() {
         return false;
@@ -208,11 +217,12 @@ fn may_help_decision(same_unit: bool, active_duel: bool, hostile: bool) -> bool 
 }
 
 pub(crate) fn may_harm(ctx: &ReducerContext, attacker: &WorldEntity, target: &WorldEntity) -> bool {
-    may_harm_decision(
-        attacker.guid == target.guid,
-        crate::duel::active_opponents(ctx, attacker.guid, target.guid),
-        crate::faction::is_friendly(ctx, attacker.faction_template, target.faction_template),
-    )
+    !crate::taxi::is_flying(target)
+        && may_harm_decision(
+            attacker.guid == target.guid,
+            crate::duel::active_opponents(ctx, attacker.guid, target.guid),
+            crate::faction::is_friendly(ctx, attacker.faction_template, target.faction_template),
+        )
 }
 
 pub(crate) fn may_help(ctx: &ReducerContext, helper: &WorldEntity, target: &WorldEntity) -> bool {
@@ -228,7 +238,8 @@ pub(crate) fn is_hostile_target(
     attacker: &WorldEntity,
     target: &WorldEntity,
 ) -> bool {
-    attacker.guid != target.guid
+    !crate::taxi::is_flying(target)
+        && attacker.guid != target.guid
         && (crate::duel::active_opponents(ctx, attacker.guid, target.guid)
             || crate::faction::is_hostile(ctx, attacker.faction_template, target.faction_template))
 }

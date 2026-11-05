@@ -1213,6 +1213,10 @@ pub(crate) fn activate_taxi(
     )
 }
 
+pub(crate) fn is_flying(entity: &WorldEntity) -> bool {
+    entity.unit_flags & lyracore_shared::constants::unit_flags::TAXI_FLIGHT != 0
+}
+
 pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
     let Some(mut flight) = ctx
         .db
@@ -1225,7 +1229,7 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
     if flight.started_micros != 0 {
         return;
     }
-    let Some(mut player) = ctx.db.game_world_entity().guid().find(character_guid) else {
+    let Some(player) = ctx.db.game_world_entity().guid().find(character_guid) else {
         return;
     };
     let Some(points) = ordered_route(ctx, flight.path_id) else {
@@ -1248,6 +1252,10 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
         clear_flight(ctx, player);
         return;
     }
+    crate::combat::disengage(ctx, character_guid);
+    let Some(mut player) = ctx.db.game_world_entity().guid().find(character_guid) else {
+        return;
+    };
     flight.started_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     player.mount_display_id = flight.mount_display_id;
     player.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT
