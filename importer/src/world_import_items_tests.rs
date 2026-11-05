@@ -208,7 +208,7 @@ fn vmangos_items_select_versions_join_vendor_templates_and_exclude_forbidden_off
     assert!(sql.contains("'Fixture broth'"));
     assert!(!sql.contains("Old drink"));
     assert!(sql.contains(",false,500,0,"));
-    assert!(sql.contains("(1,100,1001,1,0),(2,100,1000,2,0)"));
+    assert!(sql.contains("(1,100,1001,1,0,0,0),(2,100,1000,2,0,0,0)"));
     assert!(!sql.contains("INSERT INTO game_creature_loot"));
     assert!(!sql.contains("1002"));
     assert!(plan.reducer_batches(&args).unwrap().is_empty());
@@ -393,4 +393,67 @@ fn starting_stacks_keep_their_createinfo_amount() {
     assert!(sql.contains(&format!(",{race_class},2947,100)")), "{sql}");
     assert!(sql.contains(&format!(",{race_class},2070,4)")), "{sql}");
     assert!(!sql.contains(",2092,"), "{sql}");
+}
+
+#[test]
+fn vendor_stock_import_retains_direct_and_shared_restock_policies() {
+    let source = item_source();
+    edit_source(&source, "UPDATE npc_vendor SET maxcount = 4, incrtime = 600, itemflags = 3; UPDATE npc_vendor_template SET maxcount = 8, incrtime = 1200;");
+    let args = crate::parse_args_from([
+        "--dump",
+        "fixture.sqlite",
+        "--family",
+        "items",
+        "--world-profile",
+        "full-world",
+    ])
+    .unwrap()
+    .world_import_args()
+    .unwrap();
+    let plan = build_vmangos_plan(&source, &args).unwrap();
+    let sql = plan.stmts.join(";\n");
+    assert!(sql.contains("id,creature_entry,item_entry,slot,max_count,restock_seconds,stock_flags"));
+    assert!(sql.contains("(1,100,1001,1,4,600,3),(2,100,1000,2,8,1200,0)"));
+    assert!(sql.contains("DELETE FROM game_vendor_stock"));
+    let findings = items_findings(&source, &HashSet::from([100]))
+        .unwrap()
+        .to_string();
+    assert!(!findings.contains("items.vendor-restock"));
+    assert!(!findings.contains("items.vendor-item-flags"));
+}
+
+#[test]
+fn vendor_stock_import_omits_inconsistent_stock_limits() {
+    for change in [
+        "UPDATE npc_vendor SET maxcount = 4, incrtime = 0",
+        "UPDATE npc_vendor SET maxcount = 0, incrtime = 600",
+        "UPDATE npc_vendor_template SET maxcount = 4, incrtime = 0",
+        "UPDATE npc_vendor_template SET maxcount = 0, incrtime = 600",
+    ] {
+        let source = item_source();
+        edit_source(&source, change);
+        let args = crate::parse_args_from([
+            "--dump",
+            "fixture.sqlite",
+            "--family",
+            "items",
+            "--world-profile",
+            "full-world",
+        ])
+        .unwrap()
+        .world_import_args()
+        .unwrap();
+        let plan = build_vmangos_plan(&source, &args).unwrap();
+        let vendors = plan
+            .stmts
+            .iter()
+            .find(|sql| sql.starts_with("INSERT INTO game_npc_vendor"))
+            .unwrap();
+        let expected = if change.contains("npc_vendor_template") {
+            "(1,100,1001,1,0,0,0)"
+        } else {
+            "(1,100,1000,2,0,0,0)"
+        };
+        assert!(vendors.ends_with(expected), "{change}: {vendors}");
+    }
 }

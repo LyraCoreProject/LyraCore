@@ -166,7 +166,7 @@ fn a_refused_item_batch_rolls_back_templates_vendors_and_success_logs() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn vendor_replacement_allocates_above_imported_ids_and_preserves_list_order() {
     let shard = realm("operator-items-vendor");
-    shard.assert_sql(&format!("INSERT INTO game_npc_vendor (id, creature_entry, item_entry, slot, max_count) VALUES (90000000, {VENDOR}, 25, 1, 0)"));
+    shard.assert_sql(&format!("INSERT INTO game_npc_vendor (id, creature_entry, item_entry, slot, max_count, restock_seconds, stock_flags) VALUES (90000000, {VENDOR}, 25, 1, 0, 0, 0)"));
     apply(
         &shard,
         json!([{"setVendorOffers": {"creature_entry": VENDOR, "offers": [

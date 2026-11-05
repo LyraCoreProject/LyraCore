@@ -1007,27 +1007,42 @@ fn build_items_and_loot(
             continue;
         }
         let item: u64 = row.number(nv::ITEM)?;
-        if item == 0 || forbidden.contains(&item) || !nv_seen.insert((entry, item)) {
+        if item == 0 || forbidden.contains(&item) {
             continue;
         }
         let slot: u32 = row.number(nv::SLOT)?;
         let max_count: u32 = row.number(nv::MAXCOUNT)?;
+        let restock_seconds: u32 = row.number("incrtime")?;
+        let stock_flags: u32 = row.number("itemflags")?;
+        if (max_count == 0) != (restock_seconds == 0) || !nv_seen.insert((entry, item)) {
+            continue;
+        }
         item_ids.insert(item);
-        vendor_rows.push(format!("({vendor_id},{entry},{item},{slot},{max_count})"));
+        vendor_rows.push(format!(
+            "({vendor_id},{entry},{item},{slot},{max_count},{restock_seconds},{stock_flags})"
+        ));
         vendor_id += 1;
     }
 
-    let mut tmpl_stock: HashMap<u64, Vec<(u64, u32, u32)>> = HashMap::new();
+    let mut tmpl_stock: HashMap<u64, Vec<_>> = HashMap::new();
     for row in parse_table(dump, "npc_vendor_template")?.iter() {
         let t: u64 = row.number("entry")?;
         let item: u64 = row.number("item")?;
         let max_count: u32 = row.number("maxcount")?;
         let slot: u32 = row.number("slot")?;
+        let restock_seconds: u32 = row.number("incrtime")?;
+        let stock_flags: u32 = row.number("itemflags")?;
+        if (max_count == 0) != (restock_seconds == 0) {
+            continue;
+        }
         if t != 0 && item != 0 && !forbidden.contains(&item) {
-            tmpl_stock
-                .entry(t)
-                .or_default()
-                .push((item, slot, max_count));
+            tmpl_stock.entry(t).or_default().push((
+                item,
+                slot,
+                max_count,
+                restock_seconds,
+                stock_flags,
+            ));
         }
     }
     let (creature_entry, vendor_id_column) = ("entry", "vendor_id");
@@ -1043,12 +1058,14 @@ fn build_items_and_loot(
         let Some(stock) = tmpl_stock.get(&vt).filter(|_| vt != 0) else {
             continue;
         };
-        for &(item, slot, max_count) in stock {
+        for &(item, slot, max_count, restock_seconds, stock_flags) in stock {
             if !nv_seen.insert((entry, item)) {
                 continue;
             }
             item_ids.insert(item);
-            vendor_rows.push(format!("({vendor_id},{entry},{item},{slot},{max_count})"));
+            vendor_rows.push(format!(
+                "({vendor_id},{entry},{item},{slot},{max_count},{restock_seconds},{stock_flags})"
+            ));
             vendor_id += 1;
         }
     }
@@ -1735,6 +1752,7 @@ fn push_item_statements(
     stmts.push("DELETE FROM game_item_template WHERE entry > 0".into());
     stmts.push("DELETE FROM game_creature_loot WHERE id > 0".into());
     stmts.push("DELETE FROM game_npc_vendor WHERE id > 0".into());
+    stmts.push("DELETE FROM game_vendor_stock WHERE key > 0".into());
     push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property,spellppmrate_1,spellppmrate_2,spellppmrate_3,spellppmrate_4,spellppmrate_5", item_rows);
     push_insert(
         stmts,
@@ -1745,7 +1763,7 @@ fn push_item_statements(
     push_insert(
         stmts,
         "game_npc_vendor",
-        "id,creature_entry,item_entry,slot,max_count",
+        "id,creature_entry,item_entry,slot,max_count,restock_seconds,stock_flags",
         vendor_rows,
     );
 }
@@ -2034,17 +2052,11 @@ fn items_findings(
             } else {
                 template_users.get(&entry).cloned().unwrap_or_default()
             };
-            for (column, code) in [
-                ("condition_id", "items.vendor-condition"),
-                ("incrtime", "items.vendor-restock"),
-                ("itemflags", "items.vendor-item-flags"),
-            ] {
-                if row.number::<u64>(column)? != 0 {
-                    findings
-                        .entry(code)
-                        .or_default()
-                        .extend(users.iter().map(|&user| (user, item)));
-                }
+            if row.number::<u64>("condition_id")? != 0 {
+                findings
+                    .entry("items.vendor-condition")
+                    .or_default()
+                    .extend(users.iter().map(|&user| (user, item)));
             }
         }
     }

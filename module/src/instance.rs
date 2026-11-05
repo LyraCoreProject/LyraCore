@@ -109,6 +109,7 @@ pub(crate) fn remove_spawn_copies(ctx: &ReducerContext, source_guid: u64) {
     {
         crate::creatures::despawn_creature_entity(ctx, spawn.guid);
         remove_spawn_waypoints(ctx, spawn.guid);
+        crate::items::vendor_stock::forget(ctx, spawn.guid);
         spawns.guid().delete(spawn.guid);
     }
 }
@@ -854,6 +855,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
     let copies: Vec<_> = spawns.by_instance().filter(instance_id).collect();
     for spawn in copies {
         remove_spawn_waypoints(ctx, spawn.guid);
+        crate::items::vendor_stock::forget(ctx, spawn.guid);
         spawns.guid().delete(spawn.guid);
     }
     crate::creatures::population::clear_instance(ctx, instance_id);

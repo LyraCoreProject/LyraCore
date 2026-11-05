@@ -348,6 +348,8 @@ fn replace_vendor(
                 item_entry: offer.item_entry,
                 slot: slot as u32,
                 max_count: offer.max_count,
+                restock_seconds: 0,
+                stock_flags: 0,
             })
         })
         .collect::<Result<_, String>>()?;

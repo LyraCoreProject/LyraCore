@@ -6,6 +6,9 @@ use crate::{game_corpse_loot, game_gameobject, game_gameobject_pool_member, game
 use super::*;
 
 pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
+    if ctx.db.game_creature_spawn().guid().find(guid).is_none() {
+        crate::items::vendor_stock::forget(ctx, guid);
+    }
     crate::combat::disengage(ctx, guid);
     crate::threat::clear_taunt_lock(ctx, guid);
     crate::combat::clear_lethal_damage_floor(ctx, guid);

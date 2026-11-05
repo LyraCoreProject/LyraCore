@@ -2400,7 +2400,7 @@ fn list_inventory_raw_body_is_exact_vanilla_layout() {
         display_id: 1542,
         buy_price: 35,
         max_durability: 20,
-        max_count: 0,
+        available_count: u32::MAX,
         buy_count: 1,
     };
     let (opcode, body) = build_list_inventory_raw(vendor_guid, &[item]);
@@ -2433,7 +2433,7 @@ fn list_inventory_raw_truncates_stock_to_255_items() {
             display_id: 1,
             buy_price: 1,
             max_durability: 1,
-            max_count: 1,
+            available_count: 1,
             buy_count: 1,
         })
         .collect();

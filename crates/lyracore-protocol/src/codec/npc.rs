@@ -149,7 +149,7 @@ pub struct VendorItemView {
     pub display_id: u32,
     pub buy_price: u32,
     pub max_durability: u32,
-    pub max_count: u32,
+    pub available_count: u32, // u32::MAX means unlimited; zero means sold out.
     pub buy_count: u32,
 }
 
@@ -168,13 +168,7 @@ pub fn build_list_inventory_raw(vendor_guid: u64, items: &[VendorItemView]) -> (
         body.extend_from_slice(&((i as u32) + 1).to_le_bytes());
         body.extend_from_slice(&it.item_entry.to_le_bytes());
         body.extend_from_slice(&it.display_id.to_le_bytes());
-        // The wire uses 0xFFFF_FFFF for unlimited stock.
-        let max_count = if it.max_count == 0 {
-            0xFFFF_FFFF
-        } else {
-            it.max_count
-        };
-        body.extend_from_slice(&max_count.to_le_bytes());
+        body.extend_from_slice(&it.available_count.to_le_bytes());
         body.extend_from_slice(&it.buy_price.to_le_bytes());
         body.extend_from_slice(&it.max_durability.to_le_bytes());
         body.extend_from_slice(&it.buy_count.max(1).to_le_bytes());

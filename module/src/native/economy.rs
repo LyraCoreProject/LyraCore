@@ -54,7 +54,7 @@ pub(super) fn vendor(
                 item.buy_price,
             ),
             max_durability: item.max_durability,
-            max_count: row.max_count,
+            available_count: crate::items::vendor_stock::available(ctx, npc.guid, &row, &item),
             buy_count: item.buy_count,
         })
         .collect::<Vec<_>>();
@@ -197,8 +197,7 @@ fn purchase_reply(
     let amount_for_sale = if offer.max_count == 0 {
         u32::MAX
     } else {
-        offer
-            .max_count
+        crate::items::vendor_stock::available(ctx, vendor, &offer, &template)
             .saturating_sub(lots.saturating_mul(template.buy_count.max(1)))
     };
     Some(ServerOpcodeMessage::SMSG_BUY_ITEM(Box::new(
@@ -453,6 +452,7 @@ fn buy_result(refusal: &BuyRefusal) -> BuyResult {
         },
         BuyRefusal::NotEnoughMoney { .. } => BuyResult::NotEnoughMoney,
         BuyRefusal::InventoryFull => BuyResult::CantCarryMore,
+        BuyRefusal::SoldOut => BuyResult::ItemAlreadySold,
         BuyRefusal::UnknownItem => BuyResult::CantFindItem,
         BuyRefusal::Reputation => BuyResult::ReputationRequire,
         BuyRefusal::Refused(_) | BuyRefusal::Equipment { .. } => BuyResult::CantFindItem,
@@ -531,6 +531,7 @@ mod tests {
             ),
             (R::NotEnoughMoney { have: 9, need: 10 }, 2),
             (R::InventoryFull, 8),
+            (R::SoldOut, 1),
             (R::Refused("vendor does not sell that item".into()), 0),
         ] {
             assert_eq!(buy_result(&refusal).as_int(), code, "{refusal}");

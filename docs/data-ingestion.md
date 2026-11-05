@@ -137,8 +137,12 @@ selected `forbidden_items` from vendor offers and creature loot. The unused `res
 on-use spells. Property Pool weights preserve four
 decimal places with a common integer scale of 10,000. The Module uses relative weights.
 
-Static WOW_PATCH conditions remove false offers and clear true conditions. Vendor stock timing, runtime offer conditions and
-item flags are unsupported and appear in the Compatibility Manifest. The reader projects the
+Static WOW_PATCH conditions remove false offers and clear true conditions. Vendor offers retain
+`incrtime` as `restock_seconds` and `itemflags` as `stock_flags`, including shared offers.
+Offers with inconsistent zero values for `maxcount` and `incrtime` are omitted, as in
+`ObjectMgr::IsVendorItemValid`. Runtime offer conditions remain unsupported and appear in the
+Compatibility Manifest.
+Existing Realms need one items reimport; see [vendor stock migration](danger-zones.md#vendor-stock-migration). The reader projects the
 columns needed for narrow joins and spell checks, retaining the keys and fields needed for the
 same patch/build selection. It never substitutes client spell fields into vmangos rows.
 

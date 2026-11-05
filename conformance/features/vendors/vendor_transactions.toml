@@ -7,7 +7,6 @@ replies = ["0x019F", "0x01A4", "0x01A5", "0x01A1", "0x0166"]
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["vendor_transactions"]
-deliberate_deviations = []
 prerequisites = []
 
 [[tests]]
@@ -40,6 +39,21 @@ path = "module/tests/conformance/buy_in_slot.rs"
 function = "equipment_purchases_keep_the_ordinary_equip_stats_and_wire_values"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/conformance/buy_in_slot.rs"
+function = "vendor_stock_both_buy_opcodes_share_stock_and_refuse_atomically"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/buy_in_slot.rs"
+function = "vendor_stock_lazy_restock_discards_partial_intervals_and_caps_at_full"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/buy_in_slot.rs"
+function = "vendor_stock_ordinary_respawn_keeps_the_counter_and_elapsed_time"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/ItemHandler.cpp"
@@ -49,10 +63,10 @@ symbol = "WorldSession::HandleListInventoryOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "Vendor stock and restock are not enforced. Vendor offer conditions, required honor rank, honor discounts and required equip spells have no representation in the current vendor and item metadata."
+description = "Vendor offer conditions, required honor rank, honor discounts and required equip spells have no representation in the current vendor and item metadata."
 path = "module/src/items/economy.rs"
 symbol = "apply_buy_item_to"
-evidence = "Pinned vmangos Player::BuyItemFromVendor checks stock, visibility conditions and honor rank; GetReputationPriceDiscount checks visual honor rank; CanUseItem checks RequiredSpell. NpcVendor retains max_count but has no live stock or restock schedule; the vendor and item tables omit condition, honor and required-spell metadata. vendor_transactions buys unlimited, unconditional offers and has no honor or required-spell case."
+evidence = "Pinned vmangos Player::BuyItemFromVendor checks stock, visibility conditions and honor rank; GetReputationPriceDiscount checks visual honor rank; CanUseItem checks RequiredSpell. The vendor and item tables omit condition, honor and required-spell metadata. vendor_transactions buys unlimited, unconditional offers and has no honor or required-spell case."
 
 [[known_gaps]]
 description = "Sale value still uses the template sell price without charge or durability adjustments; buyback retains the amount paid at sale time. Exact damaged-item and charged-item sale values need the corresponding item metadata and DBC cost catalogues."
@@ -65,3 +79,21 @@ description = "Fresh conformance Item projections omit later enchantment words, 
 path = "module/src/native/debug/projection.rs"
 symbol = "item_projection"
 evidence = "build_item_create_object reaches enchantment slot 0; item_projection adds Container links but omits build_enchantment_slot_values. Reference Item enchantments occupy fields 22 through 42. Fixing the fixture also needs the active-duration field representation to agree with delivered values; vendor_transactions has no enchanted sale and produces no signature for this gap."
+
+[[known_gaps]]
+description = "vendor_transactions buys unlimited offers and does not measure limited stock or restock."
+path = "module/tests/conformance/buy_in_slot.rs"
+symbol = "vendor_stock_both_buy_opcodes_share_stock_and_refuse_atomically"
+evidence = "Durable tests check list counts, both buy opcodes, refusal atomicity, per-spawn counters and lazy restock against Creature::GetVendorItemCurrentCount and UpdateVendorItemCurrentCount at d9173eca3ea08dd985c52dabbcc826898d1d0b77. A scenario author must add a limited offer with BuyCount greater than one, two Characters sharing a spawn, a second spawn, stock exhaustion, refused purchases, and list reads before and after restock boundaries. No harness PR is assigned."
+
+[[known_gaps]]
+description = "Grid unloading resets vmangos creature stock; LyraCore has no grid-unload lifecycle."
+path = "module/src/items/vendor_stock.rs"
+symbol = "available"
+evidence = "At d9173eca3ea08dd985c52dabbcc826898d1d0b77, Map::UnloadGrid destroys creature objects, whose destructor clears m_vendorItemCounts; GridUnload defaults to true in World.cpp. The maintainer agreed to keep this existing lifecycle difference as a follow-up. Ordinary respawn, spawn removal and server restart have durable coverage in this change."
+
+[[deliberate_deviations]]
+id = "stock_zero_delay"
+result = "A computed flagged restock interval of zero is floored to one second."
+reason = "The maintainer agreed to preserve restock without reproducing the Reference Server's division by zero."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Creature.cpp"

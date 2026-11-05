@@ -284,6 +284,10 @@ pub struct NpcVendor {
     pub item_entry: u32,
     pub slot: u32,
     pub max_count: u32, // Zero means unlimited stock.
+    #[default(0u32)]
+    pub restock_seconds: u32,
+    #[default(0u32)]
+    pub stock_flags: u32,
 }
 
 #[table(accessor = game_character_buyback, index(accessor = by_player_guid, btree(columns = [player_guid])))]

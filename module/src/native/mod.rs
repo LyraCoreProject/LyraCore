@@ -780,6 +780,16 @@ pub(crate) fn active_session_accounts(ctx: &ReducerContext) -> std::collections:
     active
 }
 
+pub(crate) fn vendor_session_population(ctx: &ReducerContext) -> usize {
+    let mut active = active_session_accounts(ctx);
+    for connection in ctx.db.game_native_world_connection().iter() {
+        if let NativeWorldState::Queued { account_id } = connection.state {
+            active.remove(&account_id);
+        }
+    }
+    active.len()
+}
+
 fn local_session_accounts(ctx: &ReducerContext) -> std::collections::HashSet<u64> {
     ctx.db
         .game_native_world_connection()

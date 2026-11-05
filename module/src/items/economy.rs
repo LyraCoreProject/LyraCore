@@ -249,14 +249,6 @@ pub(crate) fn apply_buy_bank_slot(
     Ok(())
 }
 
-pub(crate) fn vendor_sells(ctx: &ReducerContext, vendor_entry: u32, item_entry: u32) -> bool {
-    ctx.db
-        .game_npc_vendor()
-        .by_vendor()
-        .filter(&vendor_entry)
-        .any(|v| v.item_entry == item_entry)
-}
-
 pub(crate) fn vendor_offers(
     ctx: &ReducerContext,
     vendor_entry: u32,
@@ -502,6 +494,7 @@ pub(crate) enum BuyRefusal {
         need: u32,
     },
     InventoryFull,
+    SoldOut,
     UnknownItem,
     Reputation,
     Equipment {
@@ -555,6 +548,7 @@ impl std::fmt::Display for BuyRefusal {
                 write!(f, "not enough money: have {have}, need {need}")
             }
             Self::InventoryFull => lyracore_shared::mail::INVENTORY_FULL.fmt(f),
+            Self::SoldOut => f.write_str("vendor item already sold"),
             Self::Equipment { result, .. } => write!(f, "{result:?}"),
             Self::UnknownItem => f.write_str("unknown purchase item"),
             Self::Reputation => f.write_str("purchase requires reputation"),
@@ -613,8 +607,15 @@ pub(crate) fn apply_buy_item_to(
         "buy",
     )?;
     let lots = count.max(1);
-    if !vendor_sells(ctx, vendor.entry, item_entry) {
-        return Err("vendor does not sell that item".to_string().into());
+    let offer = vendor_offers(ctx, vendor.entry)
+        .into_iter()
+        .find(|(offer, _)| offer.item_entry == item_entry)
+        .map(|(offer, _)| offer)
+        .ok_or_else(|| "vendor does not sell that item".to_string())?;
+    let total_count = lots.saturating_mul(tmpl.buy_count.max(1));
+    let available = super::vendor_stock::available(ctx, vendor_guid, &offer, &tmpl);
+    if offer.restock_seconds != 0 && offer.max_count != 0 && available < total_count {
+        return Err(BuyRefusal::SoldOut);
     }
     if tmpl.required_reputation_rank != 0 {
         use crate::{game_faction_template, game_player_reputation};
@@ -651,16 +652,21 @@ pub(crate) fn apply_buy_item_to(
         });
     }
     let mut plan = super::ItemStoragePlan::read(ctx, character_guid, character.owner_identity);
-    let total_count = lots.saturating_mul(tmpl.buy_count.max(1));
     let last_slot = if let Some((bag, slot)) = destination {
         Some(plan.purchase(ctx, &tmpl, total_count, bag, slot)?)
     } else {
         plan.grant(ctx, &tmpl, total_count, false, None)?;
         None
     };
-    // Propagate storage failure so the reducer rolls back the debit.
+    // Storage failure must roll back both the debit and the stock counter.
     character.money = character.money.saturating_sub(cost);
     character.update(ctx);
+    super::vendor_stock::purchase(
+        ctx,
+        vendor_guid,
+        &offer,
+        available.saturating_sub(total_count),
+    );
     if let Some(slot) = last_slot {
         Ok(plan.commit_purchase(ctx, slot, total_count)?)
     } else {
