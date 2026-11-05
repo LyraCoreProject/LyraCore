@@ -72,7 +72,10 @@ pub(crate) mod character_owned_tripwire {
             "fixture-only evidence confined to a disposable tier 1 Shard",
         ),
         (
-            &["game_conformance_swing_random"],
+            &[
+                "game_conformance_swing_random",
+                "game_conformance_spell_random",
+            ],
             "fixture-only random input state retained for the lifetime of its disposable Shard",
         ),
         (
