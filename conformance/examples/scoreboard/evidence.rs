@@ -24,6 +24,45 @@ pub fn harness_revision() -> &'static str {
         .expect("harness pin")
 }
 
+fn roll_difference(scenario: &wire_client::scenario::Scenario, difference: &Difference) -> bool {
+    use wire_client::trace::RecordedField;
+    let Some(spec) = &scenario.rolls else {
+        return false;
+    };
+    if difference.classification != DifferenceClass::Rule
+        || difference.character.is_some()
+        || difference.stream != Some(Stream::Broadcast("swings".into()))
+        || difference.opcode != Some(0x14a)
+        || difference.packet_index.is_some()
+    {
+        return false;
+    }
+    if difference.rule == "white_melee_sample" {
+        return difference.checkpoint == "roll_sample"
+            && difference.field_path == ["outcomes"]
+            && difference.expected
+                == Some(RecordedField::Unsigned(u64::from(spec.samples_per_level)))
+            && difference.actual.is_none();
+    }
+    if difference.rule != "white_melee_distribution"
+        || difference.field_path.len() != 2
+        || difference.field_path[0] != "outcomes"
+    {
+        return false;
+    }
+    let Some(category) = wire_client::rolls::CATEGORIES
+        .iter()
+        .position(|category| *category == difference.field_path[1])
+    else {
+        return false;
+    };
+    spec.target_levels.iter().enumerate().any(|(index, level)| {
+        ["public_1", "public_2", "merge"].iter().any(|slot| difference.checkpoint == format!("level_{level}_{slot}"))
+            && difference.expected == Some(RecordedField::Unsigned(u64::from(spec.expected_basis_points[index][category]) * u64::from(spec.samples_per_level) / 10_000))
+            && matches!(difference.actual, Some(RecordedField::Unsigned(count)) if count <= u64::from(spec.samples_per_level))
+    })
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Report {
@@ -316,6 +355,7 @@ impl Report {
                                     .steps
                                     .iter()
                                     .any(|s| s.id == difference.checkpoint)
+                                    || roll_difference(golden.scenario(), difference)
                                     || (difference.checkpoint.is_empty()
                                         && difference.classification == DifferenceClass::Rule
                                         && difference.stream.is_none()
