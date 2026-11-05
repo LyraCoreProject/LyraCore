@@ -277,7 +277,7 @@ fn cast_event_messages(
     }
 
     if let Some(packet) = cooldown_message(row.caster_guid, row.spell_id, row.cooldown_ms) {
-        out.push((EventAudience::Everyone, packet));
+        out.push((EventAudience::Source, packet));
     }
     out
 }
@@ -320,4 +320,60 @@ fn periodic_log_outbound(row: &SpellCastEvent) -> Option<Packet> {
         opcode: codec::SMSG_PERIODICAURALOG_OPCODE,
         body: codec::build_periodic_aura_log(row.target_guid, row.caster_guid, row.spell_id, tick),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cast_cooldowns_go_to_the_caster_while_spell_go_reaches_observers() {
+        for (caster, client_initiated) in [(1, false), (1, true), (0xF130000001000001, false)] {
+            let row = SpellCastEvent {
+                id: 0,
+                caster_guid: caster,
+                spell_id: 12544,
+                created_at: spacetimedb::Timestamp::UNIX_EPOCH,
+                target_guid: caster,
+                cast_time_ms: 0,
+                is_completion: false,
+                damage: 0,
+                school: 0,
+                is_crit: false,
+                resisted: 0,
+                absorbed: 0,
+                is_interrupted: false,
+                cooldown_ms: 10000,
+                delay_ms: 0,
+                healed: 0,
+                is_proc_log: false,
+                swing_hit_info: 0,
+                client_initiated,
+                map_id: 0,
+                instance_id: 0,
+                grid_x: 0,
+                grid_y: 0,
+                failure_reason: 0,
+                kind: SpellCastEventKind::Go as u8,
+                miss_info: 0,
+                energized: 0,
+                power_type: 0,
+            };
+            let packets = cast_event_messages(&row, None);
+            let cooldowns: Vec<_> = packets
+                .iter()
+                .filter(|(_, packet)| packet.opcode == 0x0134)
+                .collect();
+            assert_eq!(cooldowns.len(), 1);
+            assert!(matches!(cooldowns[0].0, EventAudience::Source));
+            let go = packets
+                .iter()
+                .find(|(_, packet)| packet.opcode == 0x0132)
+                .unwrap();
+            assert!(matches!(
+                go.0,
+                EventAudience::Peers | EventAudience::Everyone
+            ));
+        }
+    }
 }
