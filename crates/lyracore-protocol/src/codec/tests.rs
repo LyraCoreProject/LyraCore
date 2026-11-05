@@ -918,75 +918,70 @@ fn exhaustion_damage_log_carries_the_actual_damage() {
     }
 }
 
+fn melee_packet(packet: crate::world::Packet) -> benilla_protocol::messages::AttackerState {
+    let (decoded, tail) =
+        benilla_protocol::messages::parse_server_with_tail(packet.opcode, &packet.body).unwrap();
+    assert_eq!(tail, 0);
+    let benilla_protocol::messages::ServerPacket::AttackerState(swing) = decoded else {
+        panic!("expected SMSG_ATTACKERSTATEUPDATE");
+    };
+    swing
+}
+
 #[test]
 fn attacker_state_update_is_one_physical_normal_swing() {
-    let player = 1u64;
+    let character = 1u64;
     let chicken = (0xF130u64 << 48) | (620u64 << 24) | 1;
-    let msg = build_attacker_state_update(player, chicken, 7, 0, 0, 0);
-    assert_eq!(msg.hit_info, HitInfo::AffectsVictim);
-    assert_eq!(msg.damage_state, 1);
-    assert_eq!(msg.attacker.guid(), player);
-    assert_eq!(msg.target.guid(), chicken);
-    assert_eq!(msg.total_damage, 7);
-    assert_eq!(msg.damages.len(), 1);
-    assert_eq!(msg.damages[0].spell_school_mask, 0);
-    assert_eq!(msg.damages[0].damage_uint, 7);
-    assert_eq!(msg.damages[0].damage_float, 7.0);
-    let server = ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(Box::new(msg));
-    let mut buf = Vec::new();
-    server.write_unencrypted_server(&mut buf).unwrap();
-    match ServerOpcodeMessage::read_unencrypted(&mut buf.as_slice()).unwrap() {
-        ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(m) => {
-            assert_eq!(m.total_damage, 7);
-            assert_eq!(m.damages[0].damage_uint, 7);
-        }
-        other => panic!("expected SMSG_ATTACKERSTATEUPDATE, got {other}"),
-    }
+    let swing = melee_packet(build_attacker_state_update(character, chicken, 7, 0, 0, 0));
+    assert_eq!(swing.attacker, character);
+    assert_eq!(swing.victim, chicken);
+    assert_eq!(swing.hit_info, 0x2);
+    assert_eq!(swing.victim_state, 1);
+    assert_eq!(swing.damage, 7);
+    assert_eq!(swing.school, 0);
+    assert_eq!(swing.absorb, 0);
+    assert_eq!(swing.resist, 0);
+    assert_eq!(swing.blocked, 0);
 }
 
 #[test]
 fn attacker_state_update_maps_hit_info_discriminant() {
-    let normal = build_attacker_state_update(1, 2, 7, 0, 0, 0);
-    assert_eq!(normal.hit_info, HitInfo::AffectsVictim);
-    assert_eq!(normal.damage_state, 1);
-    assert_eq!(normal.blocked_amount, 0);
-    let crit = build_attacker_state_update(1, 2, 14, 1, 0, 0);
-    assert_eq!(crit.hit_info, HitInfo::CriticalHit);
-    assert_eq!(crit.damage_state, 1);
-    let miss = build_attacker_state_update(1, 2, 0, 2, 0, 0);
-    assert_eq!(miss.hit_info, HitInfo::Miss);
-    assert_eq!(miss.damage_state, 0);
-    assert_eq!(miss.total_damage, 0);
-    let dodge = build_attacker_state_update(1, 2, 0, 3, 0, 0);
-    assert_eq!(dodge.hit_info, HitInfo::NormalSwing);
-    assert_eq!(dodge.damage_state, 2);
-    assert_eq!(dodge.total_damage, 0);
-    let parry = build_attacker_state_update(1, 2, 0, 4, 0, 0);
-    assert_eq!(parry.hit_info, HitInfo::NormalSwing);
-    assert_eq!(parry.damage_state, 3);
-    let glancing = build_attacker_state_update(1, 2, 4, 5, 0, 0);
-    assert_eq!(glancing.hit_info, HitInfo::Glancing);
-    assert_eq!(glancing.damage_state, 1);
-    assert_eq!(glancing.total_damage, 4);
-    let block = build_attacker_state_update(1, 2, 5, 7, 25, 0);
-    assert_eq!(block.hit_info, HitInfo::AffectsVictim);
-    assert_eq!(block.damage_state, 4);
-    assert_eq!(block.total_damage, 5);
-    assert_eq!(block.blocked_amount, 25);
-    let ranged = build_attacker_state_update(1, 2, 9, 0, 0, 75);
-    assert_eq!(ranged.spell_id, 75);
-    assert_eq!(ranged.hit_info, HitInfo::AffectsVictim);
-    assert_eq!(ranged.total_damage, 9);
-    let server = ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(Box::new(block));
-    let mut buf = Vec::new();
-    server.write_unencrypted_server(&mut buf).unwrap();
-    match ServerOpcodeMessage::read_unencrypted(&mut buf.as_slice()).unwrap() {
-        ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(m) => {
-            assert_eq!(m.blocked_amount, 25);
-            assert_eq!(m.damage_state, 4);
-        }
-        other => panic!("expected SMSG_ATTACKERSTATEUPDATE, got {other}"),
+    for (outcome, damage, blocked, flags, state) in [
+        (0, 7, 0, 0x2, 1),
+        (1, 14, 0, 0x82, 1),
+        (2, 0, 0, 0x10, 0),
+        (3, 0, 0, 0x2, 2),
+        (4, 0, 0, 0x2, 3),
+        (5, 4, 0, 0x4002, 1),
+        (6, 15, 0, 0x8002, 1),
+        (7, 5, 25, 0x802, 1),
+        (7, 0, 25, 0x802, 5),
+        (7, 5, 0, 0x802, 1),
+    ] {
+        let packet = build_attacker_state_update(1, 2, damage, outcome, blocked, 0);
+        assert_eq!(packet.opcode, 0x14a);
+        assert_eq!(
+            u32::from_le_bytes(packet.body[..4].try_into().unwrap()),
+            flags
+        );
+        let state_offset = packet.body.len() - 16;
+        assert_eq!(
+            u32::from_le_bytes(
+                packet.body[state_offset..state_offset + 4]
+                    .try_into()
+                    .unwrap()
+            ),
+            state
+        );
+        let swing = melee_packet(packet);
+        assert_eq!(swing.damage, damage);
+        assert_eq!(swing.hit_info, flags);
+        assert_eq!(swing.victim_state, state);
+        assert_eq!(swing.blocked, blocked);
     }
+    let ranged = melee_packet(build_attacker_state_update(1, 2, 9, 0, 0, 75));
+    assert_eq!(ranged.melee_spell_id, 75);
+    assert_eq!(ranged.damage, 9);
 }
 
 #[test]

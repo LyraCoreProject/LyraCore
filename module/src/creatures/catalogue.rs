@@ -2,6 +2,15 @@ use spacetimedb::{table, ReducerContext};
 
 use super::CreatureTemplate;
 
+#[table(accessor = game_creature_defense, public)]
+pub struct CreatureDefense {
+    #[primary_key]
+    pub entry: u32,
+    pub no_parry: bool,
+    pub no_block: bool,
+    pub no_defense: bool,
+}
+
 #[table(accessor = game_creature_level_stats, public, index(accessor = by_entry, btree(columns = [entry])))]
 pub struct CreatureLevelStats {
     #[primary_key]

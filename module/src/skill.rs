@@ -191,6 +191,7 @@ impl PlayerSkill {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
         let row = ctx.db.game_player_skill().insert(row);
         crate::native::skill_changed(ctx, None, Some(&row));
+        refresh_weapon_crit(ctx, &row);
         row
     }
 
@@ -198,6 +199,7 @@ impl PlayerSkill {
         let previous = ctx.db.game_player_skill().id().find(self.id);
         let row = ctx.db.game_player_skill().id().update(self);
         crate::native::skill_changed(ctx, previous.as_ref(), Some(&row));
+        refresh_weapon_crit(ctx, &row);
         row
     }
 
@@ -205,7 +207,14 @@ impl PlayerSkill {
         if let Some(row) = ctx.db.game_player_skill().id().find(id) {
             ctx.db.game_player_skill().id().delete(id);
             crate::native::skill_changed(ctx, Some(&row), None);
+            refresh_weapon_crit(ctx, &row);
         }
+    }
+}
+
+fn refresh_weapon_crit(ctx: &ReducerContext, skill: &PlayerSkill) {
+    if skill.skill_line == equipped_weapon_skill_line(ctx, skill.character_guid) {
+        crate::spell::recompute_sheet(ctx, skill.character_guid);
     }
 }
 

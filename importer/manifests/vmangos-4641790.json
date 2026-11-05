@@ -2052,6 +2052,13 @@
       },
       "locked_rows": 540
     },
+    "player_crit_per_agility": {
+      "columns": {
+        "integer": ["class", "level"],
+        "real": ["rate"]
+      },
+      "locked_rows": 440
+    },
     "player_levelstats": {
       "columns": {
         "integer": [

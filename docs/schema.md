@@ -8,6 +8,10 @@ say: invariants, why a column exists and ordering rules.
 [`architecture.md`](./architecture.md) explains how the tables fit into the runtime.
 [`danger-zones.md`](./danger-zones.md) §1.2 is the authority for migrations.
 
+`game_crit_per_agility` stores imported class/level rates; `game_creature_defense` stores imported
+creature defense flags. Both are new catalogues. See the [white melee migration](danger-zones.md#white-melee-catalogue-migration)
+before publishing to an existing Realm.
+
 ## 1. Conventions
 
 - **Naming.** Core tables take the `game_` prefix; Package tables take `pkg_<name>_`. External

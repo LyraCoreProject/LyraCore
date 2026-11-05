@@ -390,6 +390,38 @@ pub fn build_attacker_state_update(
     attacker_guid: u64,
     target_guid: u64,
     damage: u32,
+    outcome: u8,
+    blocked_amount: u32,
+    spell_id: u32,
+) -> crate::world::Packet {
+    let message = attacker_state_update(
+        attacker_guid,
+        target_guid,
+        damage,
+        outcome,
+        blocked_amount,
+        spell_id,
+    );
+    let mut flags = message.hit_info.as_int();
+    if outcome == 7 || blocked_amount > 0 {
+        flags |= 0x800;
+    }
+    if matches!(outcome, 3 | 4) || damage > 0 || blocked_amount > 0 {
+        flags |= 0x2;
+    }
+    let mut packet = crate::world::encode(ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(Box::new(
+        message,
+    )))
+    .expect("one melee damage entry fits a world frame");
+    // The binding's HitInfo enum cannot represent combined flags or HITINFO_BLOCK (0x800).
+    packet.body[..4].copy_from_slice(&flags.to_le_bytes());
+    packet
+}
+
+fn attacker_state_update(
+    attacker_guid: u64,
+    target_guid: u64,
+    damage: u32,
     hit_info: u8,
     blocked_amount: u32,
     spell_id: u32,
@@ -400,8 +432,15 @@ pub fn build_attacker_state_update(
         3 => (HitInfo::NormalSwing, u32::from(VICTIMSTATE_DODGE)),
         4 => (HitInfo::NormalSwing, u32::from(VICTIMSTATE_PARRY)),
         5 => (HitInfo::Glancing, u32::from(VICTIMSTATE_NORMAL)),
-        // Block text uses VictimState::Block and blocked_amount, not a HitInfo flag.
-        7 => (HitInfo::AffectsVictim, u32::from(VICTIMSTATE_BLOCK)),
+        6 => (HitInfo::Crushing, u32::from(VICTIMSTATE_NORMAL)),
+        7 => (
+            HitInfo::AffectsVictim,
+            u32::from(if damage == 0 {
+                VICTIMSTATE_BLOCK
+            } else {
+                VICTIMSTATE_NORMAL
+            }),
+        ),
         _ => (HitInfo::AffectsVictim, u32::from(VICTIMSTATE_NORMAL)),
     };
     SMSG_ATTACKERSTATEUPDATE {
@@ -427,7 +466,7 @@ const VICTIMSTATE_UNAFFECTED: u8 = 0;
 const VICTIMSTATE_NORMAL: u8 = 1;
 const VICTIMSTATE_DODGE: u8 = 2;
 const VICTIMSTATE_PARRY: u8 = 3;
-const VICTIMSTATE_BLOCK: u8 = 4;
+const VICTIMSTATE_BLOCK: u8 = 5;
 
 #[cfg(test)]
 mod tests {

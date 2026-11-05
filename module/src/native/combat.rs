@@ -83,22 +83,16 @@ pub(crate) fn combat_event(ctx: &ReducerContext, event: &CombatEvent) {
             ))),
             false,
         );
-    } else if !event.spell_swing {
-        emit(
-            ctx,
+    } else if !event.spell_swing && ctx.db.game_native_player().count() != 0 {
+        let packet = codec::build_attacker_state_update(
             event.attacker_guid,
-            ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(Box::new(
-                codec::build_attacker_state_update(
-                    event.attacker_guid,
-                    event.target_guid,
-                    event.damage,
-                    event.hit_info,
-                    event.blocked_amount,
-                    0,
-                ),
-            )),
-            false,
+            event.target_guid,
+            event.damage,
+            event.hit_info,
+            event.blocked_amount,
+            0,
         );
+        super::visibility::broadcast(ctx, event.attacker_guid, packet.opcode, packet.body, false);
     }
     if event.killing_blow && event.ranged_spell_id == 0 {
         emit(

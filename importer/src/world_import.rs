@@ -148,6 +148,55 @@ fn normalize_item_mask(source: i64, unrestricted: u32) -> Result<u32> {
     }
 }
 
+fn build_crit_per_agility_sql(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> Result<Vec<String>> {
+    let mut classes = std::collections::BTreeMap::<u8, std::collections::BTreeMap<u32, f32>>::new();
+    for row in parse_table(dump, "player_crit_per_agility")? {
+        let class = row.number::<u8>("class")?;
+        let level = row.number::<u32>("level")?;
+        let rate = row.number::<f32>("rate")?;
+        anyhow::ensure!(
+            level > 0 && level <= 60 && rate.is_finite() && rate > 0.0,
+            "invalid player_crit_per_agility row for class {class}, level {level}"
+        );
+        anyhow::ensure!(
+            classes
+                .entry(class)
+                .or_default()
+                .insert(level, rate)
+                .is_none(),
+            "duplicate player_crit_per_agility row for class {class}, level {level}"
+        );
+    }
+    let mut rows = Vec::new();
+    for (class, mut rates) in classes {
+        anyhow::ensure!(
+            rates.contains_key(&1) && rates.contains_key(&60),
+            "player_crit_per_agility class {class}: levels 1 and 60 are required"
+        );
+        for level in 1..=60 {
+            if !rates.contains_key(&level) {
+                let previous = rates[&(level - 1)];
+                let (&next_level, &next_rate) = rates.range(level..).next().unwrap();
+                let rate = previous + (next_rate - previous) / (next_level - level + 1) as f32;
+                rates.insert(level, rate);
+            }
+            let rate = rates[&level];
+            let key = packed_class_level_id(class, level as u8);
+            rows.push(format!("({key},{class},{level},{rate})"));
+        }
+    }
+    let mut statements = vec!["DELETE FROM game_crit_per_agility WHERE class_level >= 0".into()];
+    push_insert(
+        &mut statements,
+        "game_crit_per_agility",
+        "class_level,class,level,rate",
+        &rows,
+    );
+    Ok(statements)
+}
+
 fn build_stats_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<Vec<String>> {
     let mut stmts: Vec<String> = vec![
         "DELETE FROM game_class_level_stats WHERE class_level >= 0".into(),
@@ -1897,6 +1946,7 @@ pub(crate) fn globals_statements(
     client: Option<&str>,
 ) -> Result<Vec<String>> {
     let mut statements = build_stats_sql(dump)?;
+    statements.extend(build_crit_per_agility_sql(dump)?);
     statements.extend(build_start_position_sql(dump)?);
     statements.extend(build_graveyard_zone_sql(dump)?);
     statements.extend(build_createinfo_spell_sql(dump)?);

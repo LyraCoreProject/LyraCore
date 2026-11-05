@@ -4,6 +4,15 @@ use spacetimedb::{table, ReducerContext};
 
 use crate::{game_character, game_world_entity, WorldEntity};
 
+#[table(accessor = game_crit_per_agility, public)]
+pub struct CritPerAgility {
+    #[primary_key]
+    pub class_level: u32,
+    pub class: u8,
+    pub level: u32,
+    pub rate: f32,
+}
+
 #[table(accessor = game_class_level_stats, public)]
 pub struct ClassLevelStats {
     #[primary_key]

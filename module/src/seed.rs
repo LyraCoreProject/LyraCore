@@ -29,6 +29,29 @@ pub fn init(ctx: &ReducerContext) {
     seed_spell_registry(ctx);
     crate::items::seed_compatibility_enchantments(ctx);
     seed_scheduler_arming(ctx);
+    seed_crit_rates(ctx);
+}
+
+pub(crate) fn seed_crit_rates(ctx: &ReducerContext) {
+    use crate::stats::{game_crit_per_agility, CritPerAgility};
+    for (level, rate) in [(1, 4.0), (60, 20.0)] {
+        let key = crate::stats::class_level_key(1, level);
+        if ctx
+            .db
+            .game_crit_per_agility()
+            .class_level()
+            .find(key)
+            .is_some()
+        {
+            continue;
+        }
+        ctx.db.game_crit_per_agility().insert(CritPerAgility {
+            class_level: key,
+            class: 1,
+            level,
+            rate,
+        });
+    }
 }
 
 fn seed_production_core(ctx: &ReducerContext) {

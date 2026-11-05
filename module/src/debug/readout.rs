@@ -81,15 +81,15 @@ pub fn debug_compute_swing(ctx: &ReducerContext, attacker_guid: u64, target_guid
     let (bmin, bmax) = crate::combat::swing_range_ctx(ctx, &attacker);
     let eff_armor = crate::combat::effective_armor(ctx, &target);
     let p = crate::combat::swing_profile(bmin, bmax, eff_armor, attacker.level);
-    let crit_bp = crate::combat::effective_crit_bp(ctx, &attacker);
-    let sd = crate::skill::skill_diff_ctx(ctx, &attacker, &target);
+    let block_value = crate::combat::white_block_value(ctx, &target);
+    let table = crate::combat::white_swing_table(ctx, &attacker, &target, block_value);
+    let crit_bp = table.crit;
     let attacker_weapon_skill = crate::skill::effective_weapon_skill(ctx, &attacker);
     let defender_defense_skill = crate::skill::effective_defense_skill(ctx, &target);
-    let hit_miss_bp = crate::combat::effective_miss_bp(ctx, &attacker, sd);
-    let dodge_bp = crate::combat::effective_dodge_bp(ctx, &target, sd);
-    let parry_bp = crate::combat::effective_parry_bp(ctx, &target, sd);
-    let block_value = crate::combat::effective_block_value(ctx, &target);
-    let block_bp = crate::combat::effective_block_bp(ctx, &target, sd, block_value);
+    let hit_miss_bp = table.miss;
+    let dodge_bp = table.dodge;
+    let parry_bp = table.parry;
+    let block_bp = table.block;
     let attack_time_ms = crate::combat::effective_swing_time(ctx, &attacker);
     let damage_done_pct = crate::spell::stance_damage_done_pct(attacker.stance)
         + crate::spell::combat_field_bonus(ctx, attacker_guid, crate::spell::COMBAT_DMG_DONE);
