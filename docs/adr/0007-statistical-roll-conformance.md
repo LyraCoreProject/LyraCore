@@ -89,6 +89,8 @@ These are integer interval widths over 10,000 possible rolls, not estimated rate
 [measurement report](../../conformance/reports/2026-11-05-white-melee.md) records delivered counts,
 strictness and cost; differences remain findings.
 
+The crit, block and glancing findings assume the Tier 1 fixture matches the pinned inputs: agility 100, skill 300, unarmed.
+
 ## Small Reference Server check
 
 Record about 2,000 eligible swings per level once, without a repeat recording. Sixteen parallel
@@ -143,11 +145,12 @@ different seed, comparator sensitivity and actual gameplay-rate sensitivity thro
 
 ## Seeds and exact test
 
-PRs run public fixed seeds `0x4c79726100000001` and `0x4c79726100000002`. Every push to `main`
+PRs run public fixed seeds `0x4c79726100000001` and `0x4c79726100000002`. Every gameplay-relevant push to `main`
 runs a third seed derived deterministically from the merge commit SHA, which does not exist before
 merge. It runs in the durable job that already runs tier 1. No secret or isolated controller is
 needed. Interpret the first 16 hexadecimal SHA digits as a big-endian u64 seed. A failure is found just after merge and handled by revert. Never retry until green.
 A fixed seed, fixture and build give a fixed verdict: there is no runtime sampling flake.
+The durable workflow retains its push path filters for Markdown, `docs/**` and `.claude/**`; those pushes cannot change gameplay.
 
 Use an exact equal-tail binomial test for each category against its fixed probability:
 p = min(1, 2 min(P[X <= observed], P[X >= observed])). This is a conservative two-sided exact

@@ -351,6 +351,10 @@ fn verified_counts(
         shard_name,
         "SELECT character_guid,skill_line,current,max_rank FROM game_player_skill",
     );
+    let identities = shard.query_database_rows(
+        shard_name,
+        "SELECT guid,race,class,level FROM game_character",
+    );
     let mut counts = Counts::default();
     for character in characters {
         ensure!(
@@ -365,6 +369,14 @@ fn verified_counts(
             .iter()
             .find(|row| row["guid"] == character.target.to_string())
             .context("roll target disappeared")?;
+        let identity = identities
+            .iter()
+            .find(|row| row["guid"] == character.guid.to_string())
+            .context("roll Character identity disappeared")?;
+        ensure!(
+            identity["race"] == "1" && identity["class"] == "1" && identity["level"] == "60",
+            "roll Character race, class or level changed"
+        );
         ensure!(
             entity["level"] == "60"
                 && entity["agility"] == "100"
@@ -408,6 +420,10 @@ fn verified_counts(
             counts.0[category] += character.counts.0[category];
         }
     }
+    println!(
+        "roll fixture {shard_name}: verified {} level-60 human warriors, agility 100, unarmed/defense 300/300, no items or auras",
+        characters.len()
+    );
     Ok(counts)
 }
 

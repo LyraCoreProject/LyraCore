@@ -5,6 +5,8 @@ independent vmangos derivation, every formula input and pinned source lines. Thi
 rates from that source and changed only conformance fixtures and measurement infrastructure.
 No gameplay correction is included. vmangos is the only Reference Server.
 
+The crit, block and glancing findings assume the Tier 1 fixture matches the pinned inputs: agility 100, skill 300, unarmed.
+
 ## Delivered LyraCore outcomes
 
 Each row contains 50,000 own-attacker `SMSG_ATTACKERSTATEUPDATE` packets. The fixture sends
@@ -74,14 +76,24 @@ seed slot; the second is target level 60 then 63. The exact comparator produces 
 parry, block, glancing, crit and hit at level 63, for each seed: 20 rule signatures. These are
 findings. The Feature Ledger retains them as `known_gaps`; this change does not fix gameplay.
 
+The fixture's SQL reads check every Character's actual `game_world_entity.agility` is 100,
+`game_character` race/class/level are 1/1/60, and unarmed/defense skills are both 300/300.
+The item and aura tables are empty. Thus the agility input to LyraCore's crit calculation equals
+the derivation's agility input; there is no fixture stat gap to correct. The computed chances
+differ: `effective_crit_bp` in `module/src/combat/folds.rs` uses the existing
+`module/src/combat/tables.rs` functions, giving 1000 + floor(100 * 100 / (60 + 4)) = 1156 basis
+points (11.56%) at both target levels. The independent vmangos derivation gives 500 and 200
+basis points (5% and 2%). This diagnoses the gameplay formula difference; it does not supply
+expected rates or replace delivered-packet evidence. Gameplay remains unchanged.
+
 ## Repeatability, cost and strictness
 
 - The first public seed was repeated in four additional fresh Shards with the same inputs.
   All per-Shard counts were identical. The second public seed produced different counts.
-- With the final context guards, the release Module collected both public seeds, 200,000 swings
-  total, in **16.223 seconds warm**, with maximum per-Shard setup **5.954 seconds**, excluding
-  node startup and Module publication. That cold test invocation, including the Module rebuild,
-  took 185.50 seconds. The counts equal the control exactly.
+- At the released harness pin, the release Module collected both public seeds, 200,000 swings
+  total, in **16.815 seconds warm**, with maximum per-Shard setup **5.847 seconds**, excluding
+  node startup and Module publication. The final all-17 Tier 1 test invocation took 76.38 seconds
+  with the release Module already built. Every count equals the control exactly.
 - The release Module collected the same public samples in 26.383 seconds warm
   during the repeatability proof. The maximum per-Shard fixture setup was 8.016 seconds, excluding
   node startup and Module publication. A subsequent restored-source run collected them in
@@ -148,10 +160,12 @@ containers. Its guard also removes spawned targets on setup failure.
 
 The first slice measures Tier 1 rolls. TCP audits explicitly report a missing roll sample rather
 than treating small start/stop witnesses as rate evidence. No stock build-5875 client was run.
-The future merge-SHA run cannot be executed before that merge exists. The harness PR must merge
-and receive its automatic release tag before the core smoke pin can name a published release.
-The current `.wire-harness-rev` is explicitly an unpublished review pin; replace its anticipated
-tag and branch commit with that tested release before merging core.
+The future merge-SHA run cannot be executed before that merge exists. Harness PR #53 merged as
+`55252ab4caf50d125c00cffb44969cbf26b892a5` and passed its main CI run. CI published
+`v0.2.0-conformance.18` at that exact commit. `.wire-harness-rev`, the workspace `wire-client`
+revision and `Cargo.lock` now pin that released commit. The harness checkout is back on `main`.
+The durable workflow retains its Markdown, `docs/**` and `.claude/**` push filters from #971;
+those pushes cannot change gameplay and do not need another merge-seed measurement.
 
 The new tables, reducers and scheduler batching exist only under `conformance_test_fixture`.
 Production random draw count, order and modulo reduction remain unchanged. Existing schedule
@@ -159,7 +173,15 @@ callbacks still execute at their deadlines; equal virtual deadlines retain table
 The fixture uses a 50 ms attack interval so each ordinary 100 ms melee tick is ready; the
 Reference Server retains 2000 ms unarmed attacks. Attack cadence is outside this slice.
 
-The other Tier 1 baseline entries were regenerated with `./conformance/baseline` from CI evidence
-at merge commit `b4704a2dde79c35f2c640f4d19004d55a4dbd6aa` ([durable run](https://github.com/LyraCoreProject/LyraCore/actions/runs/42001719730)).
-All 17 comparisons completed without property violations. Unrelated scenarios were not replayed
-locally. Their signature sets are unchanged; this refresh advances their harness provenance.
+Finalization fetched `origin` and confirmed main `ddead53d9cd5c403f03c6a324d2611e49153cdef`
+was already merged. `git diff --stat origin/main` was reviewed. All 17 scenarios were replayed
+locally at the released harness pin. The first pass completed every comparison with zero property
+violations and failed only the expected stale harness provenance checks. `./conformance/baseline`
+regenerated all entries from that result. Every signature set is unchanged; only harness provenance
+advanced. The final run passed all 17 scenario comparisons and the inactive merge-seed entry point
+(18 Rust tests), again with zero property violations. Actual SQL reads verified the pinned inputs
+for all 32 Characters. No fixture stat correction or gameplay change was needed.
+
+`cargo test -q --locked -p lyracore-conformance --example scoreboard --example audit` passed
+all 73 tests (28 audit, 45 scoreboard). The release tag's source tree is identical to the reviewed
+harness commit, so the recorded release strictness proofs apply unchanged.
