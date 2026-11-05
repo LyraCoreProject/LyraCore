@@ -73,8 +73,9 @@ def check(host):
     assert not host.rows('SELECT id FROM game_package_relocation', east)
     host.call('debug_set_sessionless_action_consent', [alpha, True], database=east)
     host.wait_until(lambda: host.rows(f'SELECT active FROM game_package_party_authority WHERE guid = {alpha}') == [[True]], 'consent did not arrive')
-    conflict = host.account('CONFLICT', database=west)
-    host.sql(f'UPDATE game_account SET id = {owner} WHERE id = {conflict.id}', west)
+    host.call('provision_account', ['CONFLICT', [0] * 32, [1] * 32], database=west)
+    conflict = host.rows("SELECT id FROM game_account WHERE username = 'CONFLICT'", west)[0][0]
+    host.sql(f'UPDATE game_account SET id = {owner} WHERE id = {conflict}', west)
     refused = request(east, alpha, forward)
     settled(east, refused, 2)
     assert host.rows(f'SELECT map_id FROM game_world_entity WHERE guid = {alpha}', east) == [[0]]
