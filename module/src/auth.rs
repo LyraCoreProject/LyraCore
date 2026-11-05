@@ -958,7 +958,7 @@ pub fn delete_character(
     apply_delete_character(ctx, account_id, character_guid)
 }
 
-pub(crate) fn apply_delete_character(
+pub(crate) fn character_deletion_gate(
     ctx: &ReducerContext,
     account_id: u64,
     character_guid: u64,
@@ -984,6 +984,15 @@ pub(crate) fn apply_delete_character(
     if crate::auction::character_has_auction_value(ctx, character_guid) {
         return Err("CHAR_HAS_AUCTION_VALUE".to_string());
     }
+    Ok(())
+}
+
+pub(crate) fn apply_delete_character(
+    ctx: &ReducerContext,
+    account_id: u64,
+    character_guid: u64,
+) -> Result<(), String> {
+    character_deletion_gate(ctx, account_id, character_guid)?;
     if ctx
         .db
         .game_world_entity()

@@ -15,7 +15,9 @@ pub(crate) use crate::native::package_creation::{
 pub(crate) use crate::native::package_relocation::{
     request_relocation, take_relocation_result, Relocation,
 };
-pub(crate) use crate::package_account::create_package_character as create_character;
+pub(crate) use crate::package_account::{
+    create_package_character as create_character, delete_package_character as delete_character,
+};
 pub(crate) use crate::package_config::ensure_package_config_default as ensure_config_default;
 
 pub(crate) mod character {
