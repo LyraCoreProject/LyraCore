@@ -3625,12 +3625,15 @@
           "rule": "exact_field",
           "checkpoint": "deplete",
           "stream": {
-            "kind": "reply",
-            "id": "deplete"
+            "kind": "broadcast",
+            "id": "values"
           },
-          "opcode": 358,
+          "opcode": 169,
           "field_path": [
-            "slot"
+            "objects",
+            "0",
+            "values",
+            "field_537"
           ]
         },
         {
@@ -3671,36 +3674,6 @@
             "items",
             "1",
             "stock"
-          ]
-        },
-        {
-          "rule": "extra_packet",
-          "checkpoint": "deplete",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_534"
-          ]
-        },
-        {
-          "rule": "extra_packet",
-          "checkpoint": "deplete",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_535"
           ]
         },
         {
@@ -3816,36 +3789,6 @@
           },
           "opcode": 420,
           "field_path": []
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "deplete",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_536"
-          ]
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "deplete",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_537"
-          ]
         }
       ],
       "data": []
@@ -3887,12 +3830,30 @@
           "rule": "exact_field",
           "checkpoint": "buy",
           "stream": {
-            "kind": "reply",
-            "id": "buy"
+            "kind": "broadcast",
+            "id": "values"
           },
-          "opcode": 358,
+          "opcode": 169,
           "field_path": [
-            "slot"
+            "objects",
+            "0",
+            "values",
+            "field_539"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "checkpoint": "buyback",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_537"
           ]
         },
         {
@@ -3908,36 +3869,6 @@
             "0",
             "values",
             "field_625"
-          ]
-        },
-        {
-          "rule": "extra_packet",
-          "checkpoint": "buy",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_536"
-          ]
-        },
-        {
-          "rule": "extra_packet",
-          "checkpoint": "buy",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_537"
           ]
         },
         {
@@ -4268,36 +4199,6 @@
             "0",
             "values",
             "field_1249"
-          ]
-        },
-        {
-          "rule": "extra_packet",
-          "checkpoint": "buyback",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_534"
-          ]
-        },
-        {
-          "rule": "extra_packet",
-          "checkpoint": "buyback",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_535"
           ]
         },
         {
@@ -4958,36 +4859,6 @@
             "0",
             "values",
             "field_1249"
-          ]
-        },
-        {
-          "rule": "extra_packet",
-          "checkpoint": "sell",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_534"
-          ]
-        },
-        {
-          "rule": "extra_packet",
-          "checkpoint": "sell",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_535"
           ]
         },
         {
@@ -5347,36 +5218,6 @@
         },
         {
           "rule": "missing_packet",
-          "checkpoint": "buy",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_538"
-          ]
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "buy",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_539"
-          ]
-        },
-        {
-          "rule": "missing_packet",
           "checkpoint": "buy_in_slot",
           "stream": {
             "kind": "reply",
@@ -5442,36 +5283,6 @@
         },
         {
           "rule": "missing_packet",
-          "checkpoint": "buyback",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_536"
-          ]
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "buyback",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_537"
-          ]
-        },
-        {
-          "rule": "missing_packet",
           "checkpoint": "buyback_empty",
           "stream": {
             "kind": "reply",
@@ -5479,36 +5290,6 @@
           },
           "opcode": 421,
           "field_path": []
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "sell",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_536"
-          ]
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "sell",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_537"
-          ]
         },
         {
           "rule": "missing_packet",
