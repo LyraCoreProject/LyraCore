@@ -15,6 +15,11 @@ path = "module/tests/starting_inventory.rs"
 function = "starting_items_fill_the_backpack_including_the_hearthstone"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/native_conformance.rs"
+function = "vendor_purchases_acknowledge_the_offer_before_the_npc_receipt"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/ItemHandler.cpp"
@@ -34,12 +39,6 @@ description = "Buyback replaces the sold item with a synthetic GUID and later cr
 path = "module/src/native/economy.rs"
 symbol = "send_buyback"
 evidence = "vendor_transactions tier 1: sell and buyback Character fields, unexpected destroy and item-push packets, missing empty-buyback reply and sell_again fields; expiry field 1238 is zero."
-
-[[known_gaps]]
-description = "A vendor purchase omits SMSG_BUY_ITEM and marks its item-push result as looted instead of received from an NPC."
-path = "module/src/native/economy.rs"
-symbol = "receive"
-evidence = "vendor_transactions tier 1: buy is missing 0x01A4 and 0x0166 received is zero instead of one."
 
 [[known_gaps]]
 description = "Allocated item GUIDs set bit 47, so their inventory link high word is 0x40008000 instead of the reference's 0x40000000."

@@ -3511,18 +3511,6 @@
           "rule": "exact_field",
           "checkpoint": "deplete",
           "stream": {
-            "kind": "reply",
-            "id": "deplete"
-          },
-          "opcode": 358,
-          "field_path": [
-            "received"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "deplete",
-          "stream": {
             "kind": "broadcast",
             "id": "values"
           },
@@ -3677,16 +3665,6 @@
             "items",
             "7"
           ]
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "deplete",
-          "stream": {
-            "kind": "reply",
-            "id": "deplete"
-          },
-          "opcode": 420,
-          "field_path": []
         }
       ],
       "data": []
@@ -3710,18 +3688,6 @@
             "0",
             "values",
             "field_1238"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "buy",
-          "stream": {
-            "kind": "reply",
-            "id": "buy"
-          },
-          "opcode": 358,
-          "field_path": [
-            "received"
           ]
         },
         {
@@ -5103,16 +5069,6 @@
             "values",
             "field_624"
           ]
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "buy",
-          "stream": {
-            "kind": "reply",
-            "id": "buy"
-          },
-          "opcode": 420,
-          "field_path": []
         },
         {
           "rule": "missing_packet",

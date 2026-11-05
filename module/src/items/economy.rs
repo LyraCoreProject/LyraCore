@@ -5,11 +5,11 @@ use crate::game_world_entity;
 use crate::WorldEntity;
 
 use super::inventory::is_carried_slot;
-use super::ops::{store_item, StoreRefusal};
+use super::ops::store_item;
 use super::rules::{buy_cost, equip_slot, repair_cost, sell_value};
 use super::tables::{
     game_character_buyback, game_item_instance, game_item_template, item_in_slot, BuybackEntry,
-    ItemInstance,
+    ItemInstance, ItemTemplate, NpcVendor,
 };
 
 // Squared yards.
@@ -259,6 +259,27 @@ pub(crate) fn vendor_sells(ctx: &ReducerContext, vendor_entry: u32, item_entry: 
         .any(|v| v.item_entry == item_entry)
 }
 
+pub(crate) fn vendor_offers(
+    ctx: &ReducerContext,
+    vendor_entry: u32,
+) -> Vec<(NpcVendor, ItemTemplate)> {
+    let mut offers: Vec<_> = ctx
+        .db
+        .game_npc_vendor()
+        .by_vendor()
+        .filter(vendor_entry)
+        .filter_map(|offer| {
+            ctx.db
+                .game_item_template()
+                .entry()
+                .find(offer.item_entry)
+                .map(|template| (offer, template))
+        })
+        .collect();
+    offers.sort_by_key(|(offer, _)| (offer.slot, offer.id));
+    offers
+}
+
 pub(crate) fn buyback_ring_full(current_len: usize) -> bool {
     current_len >= 12
 }
@@ -465,11 +486,11 @@ impl From<NpcRefusal> for BuyRefusal {
     }
 }
 
-impl From<StoreRefusal> for BuyRefusal {
-    fn from(refusal: StoreRefusal) -> Self {
-        match refusal {
-            StoreRefusal::InventoryFull => Self::InventoryFull,
-            StoreRefusal::Refused(refusal) => Self::Refused(refusal),
+impl From<crate::actor::ActionRefusal> for BuyRefusal {
+    fn from(refusal: crate::actor::ActionRefusal) -> Self {
+        match refusal.kind {
+            crate::actor::ActionRefusalKind::InventoryFull => Self::InventoryFull,
+            _ => Self::Refused(refusal.into()),
         }
     }
 }
@@ -509,9 +530,7 @@ pub(crate) fn apply_buy_item(
         "target is not a vendor",
         "buy",
     )?;
-    if count == 0 {
-        return Err("invalid count".to_string().into());
-    }
+    let lots = count.max(1);
     if !vendor_sells(ctx, vendor.entry, item_entry) {
         return Err("vendor does not sell that item".to_string().into());
     }
@@ -525,7 +544,7 @@ pub(crate) fn apply_buy_item(
         return Err("item cannot be bought".to_string().into());
     }
     let cost = {
-        let base = buy_cost(tmpl.buy_price, count);
+        let base = buy_cost(tmpl.buy_price, lots);
         let pct = crate::reputation::vendor_discount_pct(ctx, player_guid, vendor.faction_template);
         base - base.saturating_mul(pct) / 100
     };
@@ -535,19 +554,20 @@ pub(crate) fn apply_buy_item(
             need: cost,
         });
     }
-    // Propagate storage failure so the reducer rolls back the debit.
-    player.money = player.money.saturating_sub(cost);
-    let owner_identity = player.owner_identity;
-    player.update(ctx);
-    // vmangos BuyItemFromVendor: the client buys lots, and each lot holds the template's BuyCount.
-    Ok(store_item(
+    let mut plan = super::ItemStoragePlan::read(ctx, player_guid, player.owner_identity);
+    plan.grant(
         ctx,
-        player_guid,
-        owner_identity,
         &tmpl,
-        count.saturating_mul(tmpl.buy_count.max(1)),
+        lots.saturating_mul(tmpl.buy_count.max(1)),
         false,
         None,
+    )?;
+    // Propagate storage failure so the reducer rolls back the debit.
+    player.money = player.money.saturating_sub(cost);
+    player.update(ctx);
+    Ok(plan.commit_with_source(
+        ctx,
+        lyracore_protocol::messages::vanilla::NewItemSource::FromNpc,
     )?)
 }
 

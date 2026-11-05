@@ -1,3 +1,4 @@
+use lyracore_protocol::messages::vanilla::NewItemSource;
 use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
 // Playable class IDs skip 6 and 10; Druid is bit 10.
@@ -153,34 +154,38 @@ pub struct ItemInstance {
 
 impl ItemInstance {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
-        Self::insert_as(ctx, row, true)
+        Self::insert_as(ctx, row, Some(NewItemSource::Looted))
     }
 
     /// Inserts a stack split off the character's own, without the item push or quest toast.
     pub(crate) fn insert_split(ctx: &ReducerContext, row: Self) -> Self {
-        Self::insert_as(ctx, row, false)
+        Self::insert_as(ctx, row, None)
     }
 
-    fn insert_as(ctx: &ReducerContext, row: Self, received: bool) -> Self {
+    pub(super) fn insert_as(
+        ctx: &ReducerContext,
+        row: Self,
+        source: Option<NewItemSource>,
+    ) -> Self {
         let row = ctx.db.game_item_instance().insert(row);
-        crate::native::item_changed(ctx, None, Some(&row), received);
+        crate::native::item_changed(ctx, None, Some(&row), source);
         row
     }
 
     pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
-        self.update_as(ctx, true)
+        self.update_as(ctx, Some(NewItemSource::Looted))
     }
 
     /// Updates a stack merged from the character's own, without the item push or quest toast.
     pub(crate) fn update_merged(self, ctx: &ReducerContext) -> Self {
-        self.update_as(ctx, false)
+        self.update_as(ctx, None)
     }
 
-    fn update_as(self, ctx: &ReducerContext, received: bool) -> Self {
+    pub(super) fn update_as(self, ctx: &ReducerContext, source: Option<NewItemSource>) -> Self {
         let items = ctx.db.game_item_instance();
         let previous = items.guid().find(self.guid);
         let row = items.guid().update(self);
-        crate::native::item_changed(ctx, previous.as_ref(), Some(&row), received);
+        crate::native::item_changed(ctx, previous.as_ref(), Some(&row), source);
         row
     }
 
@@ -191,7 +196,7 @@ impl ItemInstance {
         super::forget_temporary_enchantment(ctx, guid);
         if let Some(row) = previous {
             crate::native::realm_petition::item_removed(ctx, &row);
-            crate::native::item_changed(ctx, Some(&row), None, false);
+            crate::native::item_changed(ctx, Some(&row), None, None);
         }
         removed
     }
