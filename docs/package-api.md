@@ -163,6 +163,26 @@ so it stays when the Package is disabled. Pass the Package's own name.
 The Character starts at level 1 at its race and class start position, with zero gender and
 appearance bytes. The Package places it, levels it and builds its live entity.
 
+### Package Character deletion
+
+`package::delete_character(ctx, package_name, guid) -> Result<(), String>` removes a Character on
+an Account owned by that Package. Call it on the Character's current World, or on a single-Shard
+Realm. It refuses a World Session or Account Claim, Transfer Escrow or Intent, pending Package
+relocation, pending guild or Auction transaction, retained Auction value, or Guild Leader.
+
+It accepts live and Dormant Characters. Deletion of a live body runs logout cleanup and hooks
+first. Propagate any error to abort the calling reducer so hooks and deletion commit together.
+Sessionless Action Consent does not prevent retiring a Character. The Package Account remains.
+
+Success means local deletion and the durable Realm notification committed. Realm name release,
+directory removal, Group and guild cleanup, and profile deletion settle asynchronously and survive
+Host restart. A new creation can reuse the name after that cleanup settles. This uses the existing
+Character deletion protocol and creates no World Session.
+
+`package::character::cascade_delete_character` remains a low-level compatibility operation. It does
+not notify the Realm and is also used for source cleanup during Transfer. Packages must use
+`package::delete_character` for actual deletion across Shards.
+
 ### Asynchronous Package Character creation
 
 `package::request_character(ctx, package_name, name, race, class) -> Result<u64, String>`

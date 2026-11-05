@@ -94,6 +94,13 @@ def check(host):
                     'import did not commit before directory settlement', timeout=20)
     assert host.rows(f'SELECT character_guid FROM game_transfer_in WHERE character_guid = {alpha}', west) == [[alpha]]
     assert not host.rows(f'SELECT guid FROM game_world_entity WHERE guid = {alpha}', west)
+    try:
+        host.call('debug_delete_package_character', ['test_fixture', alpha], database=west)
+        raise AssertionError('deletion removed an imported Character before release')
+    except RuntimeError as error:
+        assert 'Character unavailable' in str(error), str(error)
+    assert host.rows(f'SELECT guid FROM game_character WHERE guid = {alpha}', west) == [[alpha]]
+    assert host.rows(f'SELECT character_guid FROM game_transfer_in WHERE character_guid = {alpha}', west) == [[alpha]]
     host.call('debug_take_package_relocation', ['test_fixture', crossing], database=east)
     assert host.rows(f'SELECT result FROM game_package_relocation WHERE id = {crossing}', east)[0][0][0] == 0
     try:
