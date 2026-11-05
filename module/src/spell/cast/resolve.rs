@@ -1667,6 +1667,7 @@ pub(crate) fn begin_cast_with_admission(
 #[cfg(test)]
 mod ground_destination_tests {
     use super::*;
+    use lyracore_shared::spell::taxonomy::SPELL_ATTR_RANGED_AUTO_REPEAT;
 
     const CASTER: (f32, f32, f32) = (0.0, 0.0, 0.0);
 

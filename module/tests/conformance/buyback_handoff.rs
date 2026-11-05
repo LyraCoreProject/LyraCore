@@ -302,7 +302,7 @@ fn equip_auras_rebuild_once_after_native_handoff_and_world_port() {
     assert!(c
         .source
         .query_rows(&format!(
-            "SELECT * FROM game_aura WHERE target_guid = {} AND spell_id = 5090900",
+            "SELECT id FROM game_aura WHERE target_guid = {} AND spell_id = 5090900",
             c.guid
         ))
         .is_empty());

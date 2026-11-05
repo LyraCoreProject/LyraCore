@@ -6,7 +6,7 @@ use crate::{
 };
 
 const NO_EQUIP_COOLDOWN: u32 = 0x80;
-const SPELLMOD_COOLDOWN: u8 = 11;
+const SPELLMOD_COOLDOWN: i32 = 11;
 
 pub(super) fn spells(item: &ItemTemplate) -> [(u32, u8); 5] {
     [

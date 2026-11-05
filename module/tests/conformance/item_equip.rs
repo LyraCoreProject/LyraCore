@@ -8,6 +8,7 @@ use wow_world_messages::vanilla::{
 const ITEM: u32 = 5090050;
 const EQUIP: u32 = 5090900;
 const USE: u32 = 5090901;
+const FORM: u32 = 5090902;
 
 fn fixture(name: &str) -> (Standalone, ReducerConnection, u64, u64) {
     let (shard, connection, guid, vendor) = stage(name);
@@ -16,7 +17,9 @@ fn fixture(name: &str) -> (Standalone, ReducerConnection, u64, u64) {
 }
 
 pub(super) fn configure(shard: &Standalone) {
-    for (spell, kind, points, attributes) in [(EQUIP, 0xa0, 7, 64), (USE, 0xa2, 50, 0)] {
+    for (spell, kind, points, attributes) in
+        [(EQUIP, 0xa0, 7, 64), (USE, 0xa2, 50, 0), (FORM, 0x14, 0, 0)]
+    {
         shard.assert_sql(&format!(
             "INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Equip fixture {spell}',0,0,0,0,0,0,1000,1,1,0,5,0,{attributes},1,0,false,0,0,0,0,0,0,0,0)"
         ));
@@ -32,7 +35,7 @@ pub(super) fn configure(shard: &Standalone) {
 
 fn auras(shard: &Standalone, guid: u64) -> Vec<std::collections::BTreeMap<String, String>> {
     shard.query_rows(&format!(
-        "SELECT * FROM game_aura WHERE target_guid = {guid} AND spell_id = {EQUIP}"
+        "SELECT id,spell_id,slot,amount,stacks,applied_at FROM game_aura WHERE target_guid = {guid} AND spell_id = {EQUIP}"
     ))
 }
 
@@ -133,9 +136,9 @@ fn equip_cooldown_packets_gate_zero_cooldown_use_and_preserve_longer_delays() {
         "use during equip cooldown succeeded"
     );
     assert_eq!(inventory(&shard, guid), before);
-    shard.assert_call("debug_advance_time", &["29999"]);
+    shard.assert_call("debug_advance_virtual_clock", &["29999000"]);
     assert!(!shard.call("gw_use_item", &[&actor, "10"]).status.success());
-    shard.assert_call("debug_advance_time", &["1"]);
+    shard.assert_call("debug_advance_virtual_clock", &["1000"]);
     shard.assert_call("gw_use_item", &[&actor, "10"]);
 
     shard.assert_sql(&format!(
@@ -197,7 +200,7 @@ fn passive_equip_auras_are_hidden_permanent_and_not_cancellable_or_dispellable()
     let packets = request(&mut connection, 0x136, EQUIP.to_le_bytes().to_vec());
     assert!(!packets.iter().any(|(opcode, _)| *opcode == 0x137));
     assert_eq!(auras(&shard, guid), original);
-    shard.assert_call("debug_advance_time", &["120000"]);
+    shard.assert_call("debug_advance_virtual_clock", &["120000000"]);
     assert_eq!(auras(&shard, guid), original);
     shard.assert_sql(&format!(
         "UPDATE game_spell_effect SET kind = 4, p0 = 1 WHERE spell_id = {USE}"
@@ -300,7 +303,10 @@ fn login_reconnect_and_resurrection_rebuild_equip_auras_once_without_a_new_coold
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
     let (shard, mut connection, guid, _) = fixture("equip-forms");
-    shard.assert_call("debug_learn_spell", &[&guid.to_string(), "768"]);
+    shard.assert_sql(&format!(
+        "UPDATE game_spell_effect SET p0 = 4, p0_kind = 0 WHERE spell_id = {FORM}"
+    ));
+    shard.assert_call("debug_learn_spell", &[&guid.to_string(), &FORM.to_string()]);
     shard.assert_sql(&format!(
         "UPDATE game_spell SET form_mask = 1 WHERE spell_id = {EQUIP}"
     ));
@@ -312,7 +318,7 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
     ));
     shard.assert_call(
         "debug_cast_spell",
-        &[&guid.to_string(), "768", &guid.to_string()],
+        &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
     );
     assert_effect(&shard, guid, 1);
     let original = auras(&shard, guid);
@@ -323,7 +329,7 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
     ));
     shard.assert_call(
         "debug_cast_spell",
-        &[&guid.to_string(), "768", &guid.to_string()],
+        &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
     );
     assert_effect(&shard, guid, 0);
     shard.assert_sql(&format!(
@@ -339,7 +345,7 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
     ));
     shard.assert_call(
         "debug_cast_spell",
-        &[&guid.to_string(), "768", &guid.to_string()],
+        &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
     );
     assert_effect(&shard, guid, 0);
 }
@@ -448,7 +454,7 @@ fn visible_equip_effects_keep_the_sources_duration_and_reapply_after_resurrectio
     assert!(auras(&shard, guid).is_empty());
     shard.assert_call("debug_set_health", &[&guid.to_string(), "1"]);
     assert_eq!(auras(&shard, guid).len(), 1);
-    shard.assert_call("debug_advance_time", &["5000"]);
+    shard.assert_call("debug_advance_virtual_clock", &["5000000"]);
     assert!(auras(&shard, guid).is_empty());
     assert_eq!(
         shard.query_rows(&format!(
