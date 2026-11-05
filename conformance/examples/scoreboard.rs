@@ -1000,6 +1000,15 @@ fn audit_name_skips_existing_report_parts() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+fn clean_baseline() -> Result<Value> {
+    let mut baseline: Value = serde_json::from_str(include_str!("../tier1-baseline.json"))?;
+    for scenario in baseline["scenarios"].as_array_mut().unwrap() {
+        scenario["rule"] = json!([]);
+    }
+    Ok(baseline)
+}
+
 #[test]
 fn clean_baseline_without_report_requests_audit() -> Result<()> {
     let ledger = synthetic_ledger();
