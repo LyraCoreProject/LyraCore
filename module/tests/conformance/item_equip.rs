@@ -399,6 +399,22 @@ fn login_reconnect_and_resurrection_rebuild_equip_auras_once_without_a_new_coold
             "SELECT * FROM game_spell_cd WHERE caster_guid = {guid}"
         ))
         .is_empty());
+    shard.assert_call("debug_set_health", &[&guid.to_string(), "0"]);
+    shard.assert_call("debug_repop", &[&guid.to_string()]);
+    drop(connection);
+    assert!(poll_until(POLL_TIMEOUT, || shard
+        .query_rows(&format!(
+            "SELECT character_guid FROM game_native_player WHERE character_guid = {guid}"
+        ))
+        .is_empty()));
+    let _connection = enter(&shard, guid);
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT dead FROM game_world_entity WHERE guid = {guid}"
+        ))[0]["dead"],
+        "true"
+    );
+    assert_effect(&shard, guid, 1);
 }
 
 #[test]

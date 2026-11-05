@@ -46,7 +46,7 @@ impl WorldEntity {
         crate::aoi::entity_changed(ctx, None, &entity);
         if entity.is_player() {
             crate::native::realm_party::package::presence(ctx, entity.guid);
-            crate::items::equip::reconcile(ctx, entity.guid);
+            crate::items::equip::restore(ctx, entity.guid);
         }
         entity
     }

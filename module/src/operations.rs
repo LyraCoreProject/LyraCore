@@ -26,7 +26,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         .collect();
     for guid in players {
         if crate::helpers::acting_entity_by_guid(ctx, guid).is_some() {
-            crate::items::equip::reconcile(ctx, guid);
+            crate::items::equip::restore(ctx, guid);
             crate::spell::recompute_vitals(ctx, guid);
             crate::spell::recompute_sheet(ctx, guid);
         }

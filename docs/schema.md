@@ -118,7 +118,8 @@ before enabling multiple hosts for existing leases.
 
 `game_item_aura` associates a runtime Aura with the Item that applied it. Aura deletion deletes
 the association. Equipment changes reconcile these rows through `ItemInstance`; world entry,
-resurrection and form changes use the same reconciliation. Hidden passive effects use slot 255
+resurrection and form changes use the same reconciliation. World entry also restores passive
+effects for a ghost. Hidden passive effects use slot 255
 and do not consume a client Aura slot. The association and its derived Auras do not travel in
 Character Transfer. Finite equip Auras use `game_item_aura_expiry` to expire at their deadline,
 independent of the general Aura sweep. World entry rebuilds them from equipment. Spell cooldowns

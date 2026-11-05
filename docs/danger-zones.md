@@ -227,8 +227,9 @@ are implemented.
 
 `game_item_aura` and its finite-expiry schedule `game_item_aura_expiry` start empty.
 `debug_repair_after_publish` reconciles equipment and refreshes the sheet of every online Character
-without starting an equip cooldown. Fresh login, reconnect,
-resurrection and form changes also reconcile equipment. World exit removes derived equip Auras;
+without starting an equip cooldown, including passive effects on ghosts. Fresh login, reconnect,
+resurrection and form changes also reconcile equipment. World entry restores passive effects
+for a ghost. World exit removes derived equip Auras;
 Transfer excludes them and world entry rebuilds them once. Ordinary Auras keep their published
 row layout and Transfer codec.
 
