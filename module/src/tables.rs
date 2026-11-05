@@ -38,7 +38,7 @@ pub use crate::chat::{
 };
 pub use crate::combat::death::{game_creature_lethal_damage_floor, CreatureLethalDamageFloor};
 #[cfg(feature = "conformance_test_fixture")]
-pub use crate::combat::{game_combat_check_schedule, CombatCheckSchedule};
+pub use crate::combat::game_combat_check_schedule;
 pub use crate::combat::{
     game_combat_event, game_combat_event_live, game_melee_attack, game_melee_schedule,
     game_ranged_impact_schedule, CombatEvent, MeleeAttack, MeleeSchedule, RangedImpactSchedule,

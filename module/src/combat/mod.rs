@@ -18,8 +18,6 @@ pub(crate) use lyracore_shared::aura::move_speed_with_pct;
 
 #[cfg(feature = "conformance_test_fixture")]
 pub(crate) use engage::check_combat;
-#[cfg(feature = "conformance_test_fixture")]
-pub use engage::CombatCheckSchedule;
 #[cfg(test)]
 pub(crate) use engage::COMBAT_DROP_MS;
 pub(crate) use engage::{
