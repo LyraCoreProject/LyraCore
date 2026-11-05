@@ -80,6 +80,60 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn item_projection(
+    ctx: &ReducerContext,
+    connection_id: ConnectionId,
+    view: &codec::ItemInstanceView,
+    full: bool,
+) -> Result<(String, String, u8, u64), String> {
+    let mut contents: Vec<_> = if view.container_slots == 0 {
+        Vec::new()
+    } else {
+        ctx.db
+            .game_item_instance()
+            .by_owner_guid()
+            .filter(view.owner_guid)
+            .filter_map(|item| {
+                codec::bag_content_parts(item.slot)
+                    .filter(|(slot, _)| *slot == view.slot)
+                    .map(|(_, position)| (position, item.guid))
+            })
+            .collect()
+    };
+    contents.sort_unstable();
+    let (body, extra) = encoded(
+        ctx,
+        connection_id,
+        view.guid,
+        full,
+        &(view, &contents),
+        || {
+            let extra = if view.container_slots != 0 {
+                let mut mask = codec::update_mask::UpdateMaskValues::new();
+                for position in 0..view.container_slots.min(18) {
+                    let item_guid = contents
+                        .iter()
+                        .find(|(index, _)| *index == position)
+                        .map_or(0, |(_, guid)| *guid);
+                    // Build 5875 Container links begin at field 50.
+                    mask.set_u64(50 + u16::from(position) * 2, item_guid);
+                }
+                let (_, slots) = codec::build_values_update_raw(view.guid, &mask);
+                Some(slots)
+            } else {
+                None
+            };
+            Ok((codec::build_item_create_object(view), extra))
+        },
+    )?;
+    Ok((
+        body,
+        extra,
+        if view.container_slots == 0 { 1 } else { 2 },
+        view.owner_guid,
+    ))
+}
+
 fn entity_projection(
     ctx: &ReducerContext,
     connection_id: ConnectionId,
@@ -102,11 +156,12 @@ fn entity_projection(
     let buyback = if viewer == guid {
         native::economy::buyback(ctx, guid)
             .iter()
-            .enumerate()
-            .map(|(index, row)| {
+            .map(|row| {
                 (
-                    native::economy::buyback_item(ctx, guid, index as u16, row),
+                    native::economy::buyback_item(ctx, row),
+                    row.slot,
                     row.price,
+                    row.timestamp,
                 )
             })
             .collect::<Vec<_>>()
@@ -168,13 +223,16 @@ fn entity_projection(
                     let mut extra = encode(codec::build_sheet_stats_values(guid, stats))?;
                     let mut mask = codec::update_mask::UpdateMaskValues::new();
                     for index in 0..12u16 {
-                        let (item, price) = buyback
-                            .get(usize::from(index))
-                            .map_or((0, 0), |(item, price)| (item.guid, *price));
+                        let (item, price, timestamp) = buyback
+                            .iter()
+                            .find(|(_, slot, _, _)| u16::from(*slot) == 69 + index)
+                            .map_or((0, 0, 0), |(item, _, price, timestamp)| {
+                                (item.guid, *price, *timestamp)
+                            });
                         // Build 5875 buyback links begin at 624, prices at 1226 and timestamps at 1238.
                         mask.set_u64(624 + index * 2, item);
                         mask.set_u32(1226 + index, price);
-                        mask.set_u32(1238 + index, 0);
+                        mask.set_u32(1238 + index, timestamp);
                     }
                     let (_, buyback_fields) = codec::build_values_update_raw(guid, &mask);
                     // UPDATE_OBJECT has a four-byte block count and one-byte transport flag.
@@ -222,8 +280,7 @@ pub fn debug_native_project(
         .character_guid;
     let buyback = native::economy::buyback(ctx, viewer)
         .iter()
-        .enumerate()
-        .map(|(index, row)| native::economy::buyback_item(ctx, viewer, index as u16, row))
+        .map(|row| native::economy::buyback_item(ctx, row))
         .collect::<Vec<_>>();
     let guids = ctx
         .db
@@ -351,15 +408,9 @@ pub fn debug_native_project(
                 return Err("item is not visible to conformance Character".into());
             }
             let view = native::view::item(ctx, &item);
-            let (body, extra) = encoded(ctx, connection_id, guid, full, &view, || {
-                Ok((codec::build_item_create_object(&view), None))
-            })?;
-            (body, extra, 1, item.owner_guid)
+            item_projection(ctx, connection_id, &view, full)?
         } else if let Some(view) = buyback.iter().find(|item| item.guid == guid) {
-            let (body, extra) = encoded(ctx, connection_id, guid, full, view, || {
-                Ok((codec::build_item_create_object(view), None))
-            })?;
-            (body, extra, 1, viewer)
+            item_projection(ctx, connection_id, view, full)?
         } else {
             return Err(format!(
                 "object {guid} is not visible to conformance Character"

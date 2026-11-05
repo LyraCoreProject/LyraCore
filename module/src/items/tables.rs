@@ -131,6 +131,7 @@ pub struct ItemTemplate {
 }
 
 #[table(accessor = game_item_instance, public, index(accessor = by_owner_guid, btree(columns = [owner_guid])))]
+#[derive(Clone)]
 pub struct ItemInstance {
     #[primary_key]
     pub guid: u64,
@@ -187,6 +188,32 @@ impl ItemInstance {
         let row = items.guid().update(self);
         crate::native::item_changed(ctx, previous.as_ref(), Some(&row), source);
         row
+    }
+
+    pub(super) fn sell(
+        self,
+        ctx: &ReducerContext,
+        remaining: Option<Self>,
+        sold: &super::buyback::BuybackItem,
+        evicted: Option<&super::buyback::BuybackItem>,
+    ) {
+        if let Some(remaining) = &remaining {
+            ctx.db.game_item_instance().guid().update(remaining.clone());
+        } else {
+            ctx.db.game_item_instance().guid().delete(self.guid);
+        }
+        // Sale preserves Petitions and pauses enchantments; see docs/schema.md when changing buyback.
+        crate::native::item_sold(ctx, &self, remaining.as_ref(), sold, evicted);
+    }
+
+    pub(super) fn insert_restored(self, ctx: &ReducerContext) {
+        let row = ctx.db.game_item_instance().insert(self);
+        crate::native::item_restored(ctx, &row, true);
+    }
+
+    pub(super) fn update_restored(self, ctx: &ReducerContext) {
+        let row = ctx.db.game_item_instance().guid().update(self);
+        crate::native::item_restored(ctx, &row, false);
     }
 
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) -> bool {
@@ -281,9 +308,5 @@ crate::character_owned!(delete, fn sweep_delete_game_character_buyback(ctx, char
         buybacks.id().delete(r.id);
     }
 });
-// Re-minted buyback IDs must preserve export order because IDs order the ring.
-crate::character_owned!(transfer, fn sweep_transfer_game_character_buyback(ctx, character_guid, io) {
-    table = game_character_buyback,
-    by = by_player_guid,
-    remint = id,
-});
+// Legacy snapshots cannot restore an Item identity; see docs/schema.md when upgrading buyback.
+crate::character_owned!(not_transported, fn sweep_transfer_game_character_buyback());

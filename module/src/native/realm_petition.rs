@@ -493,6 +493,12 @@ fn charter_items(ctx: &ReducerContext, guid: u64) -> Vec<u64> {
         .filter(guid)
         .filter(|item| item.entry == GUILD_CHARTER_ENTRY)
         .map(|item| item.guid)
+        .chain(
+            crate::items::buyback_entries(ctx, guid)
+                .into_iter()
+                .filter(|row| row.item.entry == GUILD_CHARTER_ENTRY)
+                .map(|row| row.item_guid),
+        )
         .collect();
     items.sort_unstable();
     items

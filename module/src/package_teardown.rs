@@ -150,7 +150,9 @@ fn make_dormant(ctx: &ReducerContext, guid: u64) {
         .character_guid()
         .delete(guid);
     if let Some(entity) = ctx.db.game_world_entity().guid().find(guid) {
-        crate::world::remove_live_character(ctx, entity);
+        crate::world::remove_live_character(ctx, entity, crate::world::CharacterDeparture::Logout);
+    } else {
+        crate::items::clear_buyback(ctx, guid);
     }
 }
 

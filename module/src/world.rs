@@ -6,9 +6,7 @@ use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
 use crate::faction::game_faction_template;
 use crate::graveyard;
 use crate::helpers::entity_by_owner;
-use crate::{
-    game_aura, game_character, game_character_buyback, game_creature_spline, game_instance,
-};
+use crate::{game_aura, game_character, game_creature_spline, game_instance};
 
 mod placement;
 mod simulation;
@@ -743,6 +741,9 @@ pub(crate) fn apply_player_login(
         ));
     }
 
+    if entry == WorldEntry::Login {
+        crate::items::begin_buyback_session(ctx, character_guid);
+    }
     restamp_owned_data(ctx, character_guid, owner);
 
     let entities = ctx.db.game_world_entity();
@@ -1446,7 +1447,11 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
     }
 }
 
-pub(crate) fn remove_live_character(ctx: &ReducerContext, entity: WorldEntity) {
+pub(crate) fn remove_live_character(
+    ctx: &ReducerContext,
+    entity: WorldEntity,
+    departure: CharacterDeparture,
+) {
     // Fire logout hooks before deletion while handlers can still read the live entity.
     crate::hooks::fire_on_logout(
         ctx,
@@ -1461,6 +1466,7 @@ pub(crate) fn remove_live_character(ctx: &ReducerContext, entity: WorldEntity) {
         ctx,
         entity.guid,
         persisted_pending_ghost(entity.dead, entity.player_flags),
+        departure,
     );
 }
 
@@ -1496,10 +1502,15 @@ pub(crate) fn remove_loading_character(
     );
     let keep_corpse = character.pending_ghost;
     ctx.db.game_character().guid().update(character);
-    finish_logout(ctx, guid, keep_corpse);
+    finish_logout(ctx, guid, keep_corpse, departure);
 }
 
-fn finish_logout(ctx: &ReducerContext, guid: u64, keep_corpse: bool) {
+fn finish_logout(
+    ctx: &ReducerContext,
+    guid: u64,
+    keep_corpse: bool,
+    departure: CharacterDeparture,
+) {
     crate::combat::disengage(ctx, guid);
     crate::trade::cancel_trade_for(ctx, guid);
     if !keep_corpse {
@@ -1508,14 +1519,8 @@ fn finish_logout(ctx: &ReducerContext, guid: u64, keep_corpse: bool) {
     crate::spell::clear_resurrect_request_and_option(ctx, guid);
     crate::spell::break_stealth(ctx, guid);
     crate::creatures::despawn_pets(ctx, guid);
-    for row in ctx
-        .db
-        .game_character_buyback()
-        .by_player_guid()
-        .filter(&guid)
-        .collect::<Vec<_>>()
-    {
-        ctx.db.game_character_buyback().id().delete(row.id);
+    if departure == CharacterDeparture::Logout {
+        crate::items::clear_buyback(ctx, guid);
     }
     crate::motion::drop_pending(ctx, guid);
     ctx.db.game_entity_motion().guid().delete(guid);
@@ -1550,7 +1555,7 @@ pub fn on_disconnect(ctx: &ReducerContext) {
     crate::native::close(ctx);
     if let Some(entity) = entity_by_owner(ctx, ctx.sender()) {
         if !crate::native::is_player(ctx, entity.guid) {
-            remove_live_character(ctx, entity);
+            remove_live_character(ctx, entity, CharacterDeparture::Logout);
         }
     }
 }

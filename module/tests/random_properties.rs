@@ -299,30 +299,38 @@ fn buyback_restores_the_saved_property_without_reading_the_current_pool() {
     let shard = fixture("property-buyback");
     shard.assert_call("debug_spawn_at_feet", &["1", "51004", "1"]);
     let vendor = shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004");
-    for property in [PROPERTY, "0"] {
+    for (index, property) in [PROPERTY, "0"].into_iter().enumerate() {
         shard.assert_call("debug_grant_item", &["1", ITEM, "1"]);
         shard.assert_sql(&format!(
             "UPDATE game_item_instance SET random_property_id = {property} WHERE owner_guid = 1"
         ));
+        let original = shard.query_rows("SELECT guid FROM game_item_instance WHERE owner_guid = 1")
+            [0]["guid"]
+            .clone();
         shard.assert_call("debug_sell_item", &["1", &vendor[0]["guid"], "23"]);
-        let sold = shard.query_rows(
-            "SELECT random_property_id FROM game_character_buyback WHERE player_guid = 1",
-        );
+        let sold =
+            shard.query_rows("SELECT item_guid FROM game_buyback_item WHERE character_guid = 1");
         assert_eq!(sold.len(), 1);
-        assert_eq!(sold[0]["random_property_id"], property);
+        assert_eq!(sold[0]["item_guid"], original);
         shard.assert_sql(&format!(
             "UPDATE game_item_template SET random_property = 5090199 WHERE entry = {ITEM}"
         ));
         shard.assert_call(
             "gw_buyback_item",
-            &[r#"{"guid":1,"ownership":null}"#, &vendor[0]["guid"], "0"],
+            &[
+                r#"{"guid":1,"ownership":null}"#,
+                &vendor[0]["guid"],
+                &index.to_string(),
+            ],
         );
-        let restored = shard
-            .query_rows("SELECT random_property_id FROM game_item_instance WHERE owner_guid = 1");
+        let restored = shard.query_rows(
+            "SELECT guid,random_property_id FROM game_item_instance WHERE owner_guid = 1",
+        );
         assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0]["guid"], original);
         assert_eq!(restored[0]["random_property_id"], property);
         assert!(shard
-            .query_rows("SELECT id FROM game_character_buyback WHERE player_guid = 1")
+            .query_rows("SELECT item_guid FROM game_buyback_item WHERE character_guid = 1")
             .is_empty());
         shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
         shard.assert_sql(&format!(

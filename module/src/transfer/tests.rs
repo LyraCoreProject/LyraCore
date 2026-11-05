@@ -1231,9 +1231,11 @@ fn the_instance_removal_dies_with_the_source_copy_and_is_not_carried() {
     assert!(NOT_TRANSPORTED.contains(&"game_instance_removal"));
 }
 
-const OLD_BLOBS_MAY_LACK: [&str; 9] = [
+const OLD_BLOBS_MAY_LACK: [&str; 11] = [
     "game_auction_bid_hold",
     "game_auction_hold",
+    "game_buyback_item",
+    "game_buyback_state",
     "game_character_away",
     "game_character_quest_log",
     "game_fatigue_state",
@@ -1318,6 +1320,20 @@ fn any_other_manifest_difference_is_still_drift() {
 }
 
 #[test]
+fn legacy_buyback_manifests_arrive_empty_without_weakening_current_payload_coverage() {
+    for table in ["game_buyback_item", "game_buyback_state"] {
+        assert!(manifest().iter().any(|entry| entry.table == table));
+    }
+    let old = manifest_without(&["game_buyback_item", "game_buyback_state"]);
+    assert_eq!(check_manifest(7, &old), Ok(()));
+    assert_eq!(
+        payload_for_this_build(&old, &[]),
+        vec![empty("game_buyback_item"), empty("game_buyback_state")]
+    );
+    assert!(payload_for_this_build(&manifest(), &[]).is_empty());
+}
+
+#[test]
 fn a_filled_old_payload_covers_every_transport_arm() {
     fn count(applied: &std::cell::Cell<usize>, _: u64, _: &mut RowIo<'_>) {
         applied.set(applied.get() + 1);
@@ -1327,6 +1343,8 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         ("game_item_instance", count),
         ("game_auction_bid_hold", count),
         ("game_auction_hold", count),
+        ("game_buyback_item", count),
+        ("game_buyback_state", count),
         ("game_character_away", count),
         ("game_character_quest_log", count),
         ("game_fatigue_state", count),
@@ -1348,7 +1366,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         arms,
     )
     .expect("the filled payload imports");
-    assert_eq!(applied.get(), 10);
+    assert_eq!(applied.get(), 12);
 }
 
 #[test]
@@ -1362,7 +1380,7 @@ fn the_tables_old_blobs_may_lack_are_pinned() {
     }
     #[cfg(not(has_packages))]
     {
-        assert_eq!(manifest().len(), 47);
+        assert_eq!(manifest().len(), 49);
         assert_eq!(manifest_without(&OLD_BLOBS_MAY_LACK).len(), 38);
     }
 }

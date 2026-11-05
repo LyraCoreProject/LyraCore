@@ -294,7 +294,7 @@ pub(super) fn leave(
             .guid()
             .find(player.character_guid)
         {
-            crate::world::remove_live_character(ctx, entity);
+            crate::world::remove_live_character(ctx, entity, departure);
         } else {
             crate::world::remove_loading_character(ctx, player.character_guid, departure);
         }

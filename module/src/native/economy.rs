@@ -8,10 +8,10 @@ use lyracore_protocol::{
 use lyracore_shared::constants::npc_flags;
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::Rollback;
+use super::{game_native_player, Rollback};
 use crate::items::{
-    game_character_buyback, game_item_instance, game_item_random_property, BankSlotRefusal,
-    BuyRefusal, BuybackEntry, NpcGate, SellRefusal,
+    game_item_instance, BankSlotRefusal, BuyRefusal, BuybackItem, BuybackRefusal, NpcGate,
+    SellRefusal,
 };
 use crate::{game_world_entity, Refusal};
 
@@ -74,15 +74,8 @@ pub(super) fn bank(
     )?)
 }
 
-pub(super) fn buyback(ctx: &ReducerContext, guid: u64) -> Vec<BuybackEntry> {
-    let mut entries: Vec<_> = ctx
-        .db
-        .game_character_buyback()
-        .by_player_guid()
-        .filter(guid)
-        .collect();
-    entries.sort_by_key(|row| std::cmp::Reverse(row.id));
-    entries
+pub(super) fn buyback(ctx: &ReducerContext, guid: u64) -> Vec<BuybackItem> {
+    crate::items::buyback_entries(ctx, guid)
 }
 
 pub(super) fn replay_buyback(
@@ -90,82 +83,90 @@ pub(super) fn replay_buyback(
     connection: ConnectionId,
     guid: u64,
 ) -> Result<(), String> {
-    let entries = buyback(ctx, guid);
-    if !entries.is_empty() {
-        send_buyback(ctx, connection, guid, &entries, 0)?;
-    }
-    Ok(())
-}
-
-pub(super) fn buyback_item(
-    ctx: &ReducerContext,
-    guid: u64,
-    index: u16,
-    row: &BuybackEntry,
-) -> codec::ItemInstanceView {
-    let item_guid = 0x4090_0000_0000_0000 | u64::from(index);
-    let wire_slot = 69 + index;
-    codec::ItemInstanceView {
-        guid: item_guid,
-        entry: row.item_entry,
-        owner_guid: guid,
-        slot: wire_slot as u8,
-        stack_count: row.stack_count,
-        random_property_id: row.random_property_id,
-        random_property_enchant_ids: ctx
-            .db
-            .game_item_random_property()
-            .property_id()
-            .find(row.random_property_id)
-            .map_or([0; 3], |p| [p.enchant_id_1, p.enchant_id_2, p.enchant_id_3]),
-        ..Default::default()
-    }
-}
-
-fn send_buyback(
-    ctx: &ReducerContext,
-    connection: ConnectionId,
-    guid: u64,
-    entries: &[BuybackEntry],
-    previous_count: usize,
-) -> Result<(), String> {
-    let mut mask = codec::update_mask::UpdateMaskValues::new();
-    for index in 0..12u16 {
-        let wire_slot = 69 + index;
-        let item_guid = 0x4090_0000_0000_0000 | u64::from(index);
-        if usize::from(index) < previous_count {
-            super::send(
-                ctx,
-                connection,
-                ServerOpcodeMessage::SMSG_DESTROY_OBJECT(codec::build_destroy_object(item_guid)),
-                false,
-            )?;
+    for row in buyback(ctx, guid) {
+        let view = buyback_item(ctx, &row);
+        super::send(
+            ctx,
+            connection,
+            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_item_create_object(
+                &view,
+            ))),
+            false,
+        )?;
+        if let Some((opcode, body)) = codec::build_enchantment_slot_values(&view) {
+            super::send_raw(ctx, connection, opcode, body, false);
         }
-        let (item_guid, price) = if let Some(row) = entries.get(usize::from(index)) {
-            let view = buyback_item(ctx, guid, index, row);
-            super::send(
-                ctx,
-                connection,
-                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_item_create_object(
-                    &view,
-                ))),
-                false,
-            )?;
-            if let Some((opcode, body)) = codec::build_enchantment_slot_values(&view) {
-                super::send_raw(ctx, connection, opcode, body, false);
-            }
-            (item_guid, row.price)
-        } else {
-            (0, 0)
-        };
-        // Build 5875 fields: INV_SLOT base 486, BUYBACK_PRICE_1 1226, BUYBACK_TIMESTAMP_1 1238.
-        mask.set_u64(486 + wire_slot * 2, item_guid);
-        mask.set_u32(1226 + index, price);
-        mask.set_u32(1238 + index, 0);
+        buyback_values(
+            ctx,
+            row.character_guid,
+            row.slot,
+            row.item_guid,
+            row.price,
+            row.timestamp,
+        );
     }
-    let (opcode, body) = codec::build_values_update_raw(guid, &mask);
-    super::send_raw(ctx, connection, opcode, body, false);
     Ok(())
+}
+
+pub(super) fn buyback_item(ctx: &ReducerContext, row: &BuybackItem) -> codec::ItemInstanceView {
+    let mut view = super::view::item(ctx, &row.item);
+    view.contained_guid = Some(0);
+    if let Some(paused) = &row.temporary_enchantment {
+        view.temporary_enchantment = codec::TemporaryEnchantmentView {
+            enchantment: paused.enchant_id,
+            duration_ms: (paused.remaining_micros / 1000).clamp(0, i64::from(u32::MAX)) as u32,
+            charges: paused.charges,
+        };
+    }
+    view
+}
+
+pub(super) fn buyback_values(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    slot: u8,
+    item_guid: u64,
+    price: u32,
+    timestamp: u32,
+) {
+    let Some(owner) = ctx
+        .db
+        .game_native_player()
+        .character_guid()
+        .find(character_guid)
+    else {
+        return;
+    };
+    let index = u16::from(slot - crate::items::BUYBACK_START);
+    let mut mask = codec::update_mask::UpdateMaskValues::new();
+    // Build 5875: buyback links at 624, prices at 1226 and timestamps at 1238.
+    mask.set_u64(624 + index * 2, item_guid);
+    mask.set_u32(1226 + index, price);
+    mask.set_u32(1238 + index, timestamp);
+    let (opcode, body) = codec::build_values_update_raw(character_guid, &mask);
+    super::send_raw(ctx, owner.connection_id, opcode, body, false);
+}
+
+pub(crate) fn buyback_removed(ctx: &ReducerContext, row: &BuybackItem) {
+    buyback_values(ctx, row.character_guid, row.slot, 0, 0, 0);
+}
+
+pub(crate) fn buyback_destroyed(ctx: &ReducerContext, row: &BuybackItem) {
+    let Some(owner) = ctx
+        .db
+        .game_native_player()
+        .character_guid()
+        .find(row.character_guid)
+    else {
+        return;
+    };
+    super::send(
+        ctx,
+        owner.connection_id,
+        ServerOpcodeMessage::SMSG_DESTROY_OBJECT(codec::build_destroy_object(row.item_guid)),
+        false,
+    )
+    .expect("bounded item message fits a world frame");
 }
 
 fn owned_slot(ctx: &ReducerContext, guid: u64, item: u64) -> Result<u8, String> {
@@ -243,7 +244,6 @@ pub(super) fn receive(
                 })
         }
         ClientOpcodeMessage::CMSG_SELL_ITEM(c) => {
-            let previous = buyback(ctx, guid).len();
             let result = super::actor(ctx, guid)
                 .map_err(SellRefusal::from)
                 .and_then(|_| owned_slot(ctx, guid, c.item.guid()).map_err(SellRefusal::from))
@@ -266,29 +266,46 @@ pub(super) fn receive(
                     refusal,
                 )
             })?;
-            Ok(send_buyback(
-                ctx,
-                connection,
-                guid,
-                &buyback(ctx, guid),
-                previous,
-            )?)
+            Ok(())
         }
         ClientOpcodeMessage::CMSG_BUYBACK_ITEM(c) => {
-            let previous = buyback(ctx, guid).len();
-            let slot = c.slot.as_int();
-            if !(69..81).contains(&slot) {
-                return Ok(());
-            }
             super::actor(ctx, guid)?;
-            crate::items::apply_buyback_item(ctx, guid, c.guid.guid(), (slot - 69) as u8)?;
-            Ok(send_buyback(
-                ctx,
-                connection,
-                guid,
-                &buyback(ctx, guid),
-                previous,
-            )?)
+            let index = c
+                .slot
+                .as_int()
+                .checked_sub(69)
+                .filter(|index| *index < 12)
+                .map_or(u8::MAX, |index| index as u8);
+            crate::items::apply_buyback_item(ctx, guid, c.guid.guid(), index)
+                .map_err(|cause| {
+                    let reply = match &cause {
+                        BuybackRefusal::Vendor(_) => ServerOpcodeMessage::SMSG_SELL_ITEM(Box::new(
+                            codec::build_sell_item_refusal(0, 0, SellItemResult::CantFindVendor),
+                        )),
+                        BuybackRefusal::Money { entry } => ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(
+                            codec::build_buy_failed(c.guid.guid(), *entry, BuyResult::NotEnoughMoney),
+                        )),
+                        BuybackRefusal::Limit { item_guid } => ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
+                            lyracore_protocol::messages::vanilla::SMSG_INVENTORY_CHANGE_FAILURE::CantCarryMoreOfThis {
+                                item1: lyracore_protocol::messages::Guid::new(*item_guid),
+                                item2: lyracore_protocol::messages::Guid::new(0),
+                                bag_type_subclass: 0,
+                            },
+                        )),
+                        BuybackRefusal::Storage { item_guid, cause } => ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
+                            codec::build_inventory_refusal(
+                                if cause.kind == crate::actor::ActionRefusalKind::InventoryFull {
+                                    lyracore_shared::item::ItemRefusal::InventoryFull
+                                } else { lyracore_shared::item::ItemRefusal::Internal },
+                                *item_guid, 0,
+                            ),
+                        )),
+                        BuybackRefusal::Empty | BuybackRefusal::Refused(_) => ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(
+                            codec::build_buy_failed(c.guid.guid(), 0, BuyResult::CantFindItem),
+                        )),
+                    };
+                    Rollback::reply(reply, cause)
+                })
         }
         ClientOpcodeMessage::CMSG_REPAIR_ITEM(c) => {
             let result = super::actor(ctx, guid)

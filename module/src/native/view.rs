@@ -154,6 +154,10 @@ pub(super) fn item(ctx: &ReducerContext, item: &crate::ItemInstance) -> codec::I
         guid: item.guid,
         entry: item.entry,
         owner_guid: item.owner_guid,
+        contained_guid: codec::bag_content_parts(item.slot).and_then(|(slot, _)| {
+            crate::items::item_in_slot(ctx, item.owner_guid, slot).map(|bag| bag.guid)
+        }),
+        soulbound: item.soulbound,
         slot: item.slot,
         stack_count: item.stack_count,
         durability: item.durability,

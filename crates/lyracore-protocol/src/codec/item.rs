@@ -82,6 +82,8 @@ pub struct ItemInstanceView {
     pub guid: u64,
     pub entry: u32,
     pub owner_guid: u64,
+    pub contained_guid: Option<u64>,
+    pub soulbound: bool,
     pub slot: u8,
     pub stack_count: u32,
     pub durability: u32,
@@ -428,6 +430,7 @@ pub fn build_buy_bank_slot_result(result: BuyBankSlotResult) -> SMSG_BUY_BANK_SL
 
 pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
     let owner = Guid::new(inst.owner_guid);
+    let contained = Guid::new(inst.contained_guid.unwrap_or(inst.owner_guid));
     let update_flag =
         MovementBlock_UpdateFlag::empty().set_all(MovementBlock_UpdateFlag_All { unknown1: 1 });
     let guid3 = Guid::new(inst.guid);
@@ -438,7 +441,8 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
             .set_object_scale_x(1.0)
             .set_item_random_properties_id(inst.random_property_id as i32)
             .set_item_owner(owner)
-            .set_item_contained(owner)
+            .set_item_contained(contained)
+            .set_item_flags(i32::from(inst.soulbound))
             .set_item_stack_count(inst.stack_count.max(1) as i32)
             .set_item_durability(inst.durability as i32)
             .set_item_maxdurability(inst.max_durability as i32)
@@ -466,7 +470,8 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
             .set_object_scale_x(1.0)
             .set_item_random_properties_id(inst.random_property_id as i32)
             .set_item_owner(owner)
-            .set_item_contained(owner)
+            .set_item_contained(contained)
+            .set_item_flags(i32::from(inst.soulbound))
             .set_item_stack_count(inst.stack_count.max(1) as i32)
             .set_item_durability(inst.durability as i32)
             .set_item_maxdurability(inst.max_durability as i32)

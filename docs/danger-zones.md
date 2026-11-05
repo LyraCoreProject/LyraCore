@@ -90,6 +90,30 @@ The first run on a Shard with Mail from before the Mail Timer applies the vanill
 its sender or is deleted with its copper, at 100 Mail a second. That is a maintainer decision, not
 a fault.
 
+### Buyback migration
+
+`game_buyback_item` and `game_buyback_state` are new private tables. Existing table layouts and the
+Native Host delivery layouts do not change. Use the normal planned publish and
+`debug_repair_after_publish`; no Shard clear or content reimport is needed for buyback.
+
+The legacy `game_character_buyback` table keeps its schema for additive migration. Its snapshots
+cannot restore Item identity and are discarded by the repair reducer or the Character's next login.
+The repair reducer ends connected World Sessions that have no `game_buyback_state` row. Their
+clients discard legacy buyback links, prices and synthetic objects; the next login starts a fresh
+ring and timestamp origin. World Sessions that already have buyback state stay connected. Run the
+repair reducer before play resumes after the upgrade, even when the legacy table is empty.
+A Handoff or World Port within one World Session preserves buyback, including its login origin
+and paused Temporary Enchantments. Logout and fresh login discard it, including login after a
+crash or a sessionless Transfer. Carried and banked Items retain their existing rows and GUIDs.
+
+The Character Transfer table list now carries buyback without changing table layouts or the blob
+format. The existing compatibility path fills both tables empty for older manifests that omit
+them, so sessionless import and fresh login still work. A native World Port requires the original
+buyback session row and refuses import atomically if it is absent; an older destination refuses
+the new manifest tables. Update both Shards before moving active World Sessions. Retain the source
+copy after a refusal and do not attest an import that failed. The older Item row codecs remain
+explicit in `module/src/transfer/legacy_item_rows.rs`.
+
 ### Corpse AOI migration
 
 The native runtime indexes `game_corpse` by map, Instance and `cell`. The end-appended `cell`

@@ -128,7 +128,7 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | Combat, threat and duel | `combat/engage.rs`, `combat/death.rs`, `combat/energy.rs`, `threat.rs`, `duel.rs` |
 | Spell and aura | `spell/tables.rs`, `spell/stacking.rs`, `spell/cast/resolve.rs` |
 | Quest | `quest.rs` |
-| Item, trade and mail | `items/tables.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
+| Item, trade and mail | `items/tables.rs`, `items/buyback.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
 | Auction house | `auction.rs` |
 | Creature (template, spawn, AI, pet, trainer) | `creatures/*`, `trainer.rs`, `gossip.rs` |
 | GameObject | `gameobject.rs`, `go_model.rs`, `go_collider.rs` |
@@ -396,6 +396,48 @@ last member to leave deletes the channel with its password and bans.
 `game_channel_member`, `game_channel_event` and `game_whisper_event` in `module/src/chat.rs` are
 retired. They stay because dropping a table is a destructive migration. Nothing writes them.
 
+### Buyback (`module/src/items/buyback.rs`)
+
+`game_buyback_item` holds a sold Item's complete instance and any paused Temporary Enchantment.
+It is private. The Item has no `game_item_instance` row while it is in buyback, so slot lookup,
+equipment, storage, uniqueness, quests, item use, trade, Mail, Auctions, bank access, durability
+and repair cannot treat it as inventory. GUID allocation and Transfer import check both tables
+for collisions. Letter Copy grant retries also check buyback to avoid a duplicate copy. A full
+sale keeps the GUID; a partial sale creates a new stack with the reference
+clone rules. Restoration keeps that GUID unless the stack merges completely into existing stacks.
+Merging keeps the destination stack's property and binding. Buyback sends no item receipt.
+Sale and restoration write ordinary Item rows through named `ItemInstance` methods with their own
+delivery. A sale removes equipped armor and resistance bonuses from the client's fields. It pauses
+Temporary Enchantments instead of forgetting them. It does not close a Guild Charter's Petition:
+the Reference Server removes the Item from inventory without destroying it.
+
+`game_buyback_state` stores the login time and current slot. Slots 69 through 80 retain their
+positions when another slot is bought back. A full ring selects the oldest timestamp, with ties
+going to the lowest slot. The timestamp field is 108000 plus whole seconds since login. It is a
+client field and does not drive an expiry timer, as in the pinned Reference Server. Eviction
+destroys the Item and releases its Item Text. Temporary Enchantments retain their remaining duration and
+charges until restoration.
+
+Logout and Transport Loss discard buyback. Every fresh login also clears it before building the
+client view, including after a crash with no previous live body or World Session. Character deletion
+and Package Teardown clear it, including teardown of a Character whose body is already absent.
+Both buyback tables travel in the Character Transfer manifest. A Handoff or World Port preserves
+the same World Session: ring positions, prices, timestamps, `login_at`, `current_slot`, complete
+Items and paused Temporary Enchantments stay intact and replay on arrival. Buyback Items still
+have no ordinary inventory row. Import checks GUID collisions across both tables and the whole
+arriving payload. Nested Item ownership is restamped at entry. Item Text travels with its
+references and receives local ids; the source deletion sweep releases each buyback reference once
+and sends no destroy delivery for transported Items. Fresh login discards transported buyback,
+including after a sessionless Transfer; Package relocation clears it while making its source dormant.
+
+Both buyback tables are additive. The old `game_character_buyback` declaration and row layout stay
+for migration compatibility; no gameplay reads its snapshots. `debug_repair_after_publish` discards
+those rows and ends connected World Sessions without buyback state, so the client discards legacy
+objects and fields and a fresh login establishes the timestamp origin. Sessions with buyback state
+remain connected, including Sessions adopted by Handoff. Native World Port import refuses a
+missing buyback session row before adoption. Login also clears the Character's legacy rows. See
+[the buyback migration](danger-zones.md#buyback-migration) before updating an existing Realm.
+
 ### Mail (`module/src/mail.rs`, `mail_timer.rs`, `mail_text.rs`)
 
 `mail::store_letter` allocates Mail ids for new and arriving letters. It also reserves ids for
@@ -424,8 +466,9 @@ its item text always agree. The row outlives the Mail. Its END-appended `letters
 Letters that can carry it: each copy adds one, and `mail_text::drop_letter_text` takes one away
 when a Mail is deleted with the letter attached or when a Character is deleted. The row goes at 0.
 The default `u32::MAX` marks a row filed before the count existed, and such a row is never
-deleted. The count can be too high, never too low. A letter destroyed or sold from the bags drops
-nothing. `game_item_instance.item_text_id` is 0 for every item that is not a copied letter, and
+deleted. The count can be too high, never too low. Destroying a Letter Copy or discarding it from
+buyback releases its reference. A sale retains the reference until the Item is restored or discarded.
+`game_item_instance.item_text_id` is 0 for every item that is not a copied letter, and
 every item snapshot (mail, trade, auction) keeps it.
 
 `game_mail_forward` carries a letter and its attachment text through IDC; `game_mail_forward_retry`

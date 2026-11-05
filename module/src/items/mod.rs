@@ -1,3 +1,4 @@
+mod buyback;
 mod economy;
 mod exchange;
 mod guids;
@@ -19,6 +20,13 @@ pub(crate) fn refused(refusal: ItemRefusal) -> String {
     refusal.as_tag().to_string()
 }
 
+pub(crate) use buyback::{
+    begin_session as begin_buyback_session, clear as clear_buyback,
+    discard_legacy as discard_legacy_buyback, entries as buyback_entries, game_buyback_item,
+    game_buyback_state, sweep_delete_game_buyback_item, sweep_delete_game_buyback_state,
+    sweep_restamp_game_buyback_item, sweep_transfer_game_buyback_item,
+    sweep_transfer_game_buyback_state, BuybackItem, BuybackState, BUYBACK_START,
+};
 #[cfg(feature = "debug_reducers")]
 pub(crate) use economy::apply_repair_item;
 #[cfg(test)]
@@ -26,10 +34,10 @@ pub(crate) use economy::NpcRefusal;
 pub(crate) use economy::{
     apply_buy_bank_slot, apply_buy_item, apply_buyback_item, apply_item_sell,
     apply_item_sell_count, apply_player_repair, innkeeper_access_gate, npc_interaction_gate,
-    vendor_offers, BankSlotRefusal, BuyRefusal, NpcGate, SellRefusal,
+    vendor_offers, BankSlotRefusal, BuyRefusal, BuybackRefusal, NpcGate, SellRefusal,
 };
 pub(crate) use exchange::{exchange_items, ItemStoragePlan};
-pub(crate) use guids::{allocate_item_guids, next_item_guid};
+pub(crate) use guids::{allocate_item_guids, item_guid_exists, next_item_guid};
 pub(crate) use inventory::{
     apply_auto_bank_item, apply_equip_item, apply_equip_profile_upgrade, apply_item_destroy,
     apply_item_move, apply_item_split, apply_unequip_item, count_free_inventory_slots,

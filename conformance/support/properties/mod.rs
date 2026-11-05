@@ -1,3 +1,4 @@
+mod buyback_item_integrity;
 mod client_view_consistency;
 mod create_kind_matches_freshness;
 mod private_fields_stay_private;
@@ -118,11 +119,13 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<Update>> {
 }
 
 pub fn run(batches: &[Batch]) -> Result<Vec<Violation>> {
+    let mut previous = BTreeMap::<u64, BTreeMap<u64, Projection>>::new();
     let mut views = BTreeMap::<u64, ClientViews>::new();
     let mut known = BTreeMap::<(u64, u64), Projection>::new();
     let mut violations = Vec::new();
     for batch in batches {
         if batch.reset {
+            previous.remove(&batch.recipient);
             views.remove(&batch.recipient);
             known.retain(|(recipient, _), _| *recipient != batch.recipient);
         }
@@ -164,6 +167,12 @@ pub fn run(batches: &[Batch]) -> Result<Vec<Violation>> {
             }
         }
         violations.extend(view.check(batch.recipient, &batch.projections));
+        violations.extend(buyback_item_integrity::check(
+            batch.recipient,
+            previous.get(&batch.recipient),
+            &batch.projections,
+        ));
+        previous.insert(batch.recipient, batch.projections.clone());
     }
     violations.sort();
     violations.dedup();

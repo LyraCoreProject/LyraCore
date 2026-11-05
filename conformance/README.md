@@ -183,6 +183,10 @@ when the Golden Trace signatures still match the baseline.
 
 The checks live in `conformance/support/properties/`, one module per stable property name:
 
+- `buyback_item_integrity` checks that a full sale keeps the Item GUID and that buyback links never
+  refer to Items also reachable through equipment, carried slots, bank slots or bag contents. It
+  compares consecutive full projections at reducer boundaries; partial-stack sales may clone.
+  It does not prove copper conservation or complete wire fidelity.
 - `private_fields_stay_private` checks CREATE and VALUES masks against vmangos's 1.12.1
   [update-field flags](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/UpdateFields_1_12_1.h)
   and [recipient rules](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Object.cpp).

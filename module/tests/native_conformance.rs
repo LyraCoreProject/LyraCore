@@ -7,6 +7,8 @@ use serde_json::json;
 use serde_json::value::RawValue;
 use wow_world_messages::vanilla::{ClientMessage, CMSG_AUTH_SESSION};
 
+#[path = "conformance/buyback.rs"]
+mod buyback;
 #[path = "../../conformance/support/character_world.rs"]
 mod character_world;
 #[path = "../../conformance/support/properties/mod.rs"]
@@ -29,7 +31,10 @@ mod transaction_world;
 mod transport;
 
 fn fixture(name: &str) -> (Standalone, u64, String) {
-    let mut shard = Standalone::start(name);
+    fixture_in(Standalone::start(name))
+}
+
+fn fixture_in(mut shard: Standalone) -> (Standalone, u64, String) {
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);

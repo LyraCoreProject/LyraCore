@@ -1071,6 +1071,6 @@ pub fn debug_logout_character(ctx: &ReducerContext, character_guid: u64) -> Resu
         .guid()
         .find(character_guid)
         .ok_or_else(|| format!("{character_guid} is not in the world"))?;
-    crate::world::remove_live_character(ctx, entity);
+    crate::world::remove_live_character(ctx, entity, crate::world::CharacterDeparture::Logout);
     Ok(())
 }

@@ -12,6 +12,7 @@ use super::teleport::NativeTeleportOrigin;
 use super::{
     game_native_cipher, game_native_world_connection, NativePlayer, NativeWorldConnection,
 };
+use crate::items::game_buyback_state;
 use crate::peer::{is_peer, realm_shard};
 use crate::remote_bindings::peer as remote;
 use crate::transfer::{self, game_transfer_in, game_transfer_out, CtxShard};
@@ -229,6 +230,16 @@ pub fn idc_native_transfer(
         .find(transfer_id)
         .is_none();
     transfer::apply_import_blob(&mut CtxShard { ctx }, transfer_id, blob)?;
+    if world_port
+        && ctx
+            .db
+            .game_buyback_state()
+            .character_guid()
+            .find(character_guid)
+            .is_none()
+    {
+        return Err("World Port Transfer has no buyback World Session state".into());
+    }
     if first_import {
         super::instance_shard::imported(
             ctx,
