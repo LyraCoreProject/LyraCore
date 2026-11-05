@@ -1,6 +1,6 @@
 use crate::actor::{ActionRefusal, ActionRefusalKind};
 use lyracore_protocol::messages::vanilla::NewItemSource;
-use spacetimedb::{Identity, ReducerContext, Timestamp};
+use spacetimedb::{Identity, ReducerContext, Table, Timestamp};
 
 use super::inventory::{free_inventory_slots, is_carried_slot};
 use super::{
@@ -139,6 +139,74 @@ impl ItemStoragePlan {
         )
     }
 
+    // Returns whether storage retains the sold Item GUID instead of consuming it in existing stacks.
+    pub(crate) fn restore(
+        &mut self,
+        ctx: &ReducerContext,
+        template: &ItemTemplate,
+        item: &ItemInstance,
+    ) -> Result<bool, ActionRefusal> {
+        let max_stack = template.max_stack.max(1);
+        let partials: Vec<_> = self
+            .items
+            .iter()
+            .enumerate()
+            .filter(|(_, current)| {
+                current.slot >= lyracore_shared::constants::starter_item::BACKPACK_SLOT_0
+                    && is_carried_slot(current.slot)
+                    && current.entry == item.entry
+                    && current.stack_count > 0
+                    && current.stack_count < max_stack
+            })
+            .map(|(index, _)| index)
+            .collect();
+        let mut count = item.stack_count;
+        let remaining = partials.iter().fold(count, |left, &index| {
+            left.saturating_sub(max_stack - self.items[index].stack_count)
+        });
+        let new_stacks = remaining.div_ceil(max_stack) as usize;
+        let slots = free_inventory_slots(&self.items, |entry| {
+            ctx.db
+                .game_item_template()
+                .entry()
+                .find(entry)
+                .map_or(0, |bag| bag.container_slots)
+        });
+        if new_stacks > slots.len() {
+            return Err(ActionRefusal::new(
+                ActionRefusalKind::InventoryFull,
+                lyracore_shared::mail::INVENTORY_FULL,
+            ));
+        }
+        for index in partials {
+            let current = &mut self.items[index];
+            let add = merge_amount(count, current.stack_count, max_stack);
+            current.stack_count += add;
+            current.soulbound |= binds_on_grant(template.bonding);
+            count -= add;
+            if count == 0 {
+                break;
+            }
+        }
+        for (index, slot) in slots.into_iter().take(new_stacks).enumerate() {
+            let last = index + 1 == new_stacks;
+            let mut restored = item.clone();
+            restored.slot = slot;
+            restored.stack_count = count.min(max_stack);
+            restored.soulbound |= binds_on_grant(template.bonding);
+            if !last {
+                restored.guid = 0;
+                restored.durability = template.max_durability;
+                restored.enchant_id = 0;
+                restored.item_text_id = 0;
+                restored.created_at = self.created_at;
+            }
+            count -= restored.stack_count;
+            self.items.push(restored);
+        }
+        Ok(new_stacks != 0)
+    }
+
     fn plan_grant(
         &mut self,
         template: &ItemTemplate,
@@ -262,6 +330,18 @@ impl ItemStoragePlan {
         ctx: &ReducerContext,
         source: NewItemSource,
     ) -> Result<(), ActionRefusal> {
+        self.commit_planned(ctx, Some(source))
+    }
+
+    pub(crate) fn commit_restored(self, ctx: &ReducerContext) -> Result<(), ActionRefusal> {
+        self.commit_planned(ctx, None)
+    }
+
+    fn commit_planned(
+        self,
+        ctx: &ReducerContext,
+        source: Option<NewItemSource>,
+    ) -> Result<(), ActionRefusal> {
         let changed_offer = self.check_trade_offers(ctx)?;
         if ctx
             .db
@@ -289,8 +369,13 @@ impl ItemStoragePlan {
                 return Err(super::refused(lyracore_shared::item::ItemRefusal::NotRightNow).into());
             }
         }
-        let mut guids =
-            allocate_item_guids(ctx, self.items.len() - self.original_stacks.len())?.into_iter();
+        let new_guids = self
+            .items
+            .iter()
+            .skip(self.original_stacks.len())
+            .filter(|item| item.guid == 0)
+            .count();
+        let mut guids = allocate_item_guids(ctx, new_guids)?.into_iter();
         for (index, mut item) in self.items.into_iter().enumerate() {
             match self.original_stacks.get(index) {
                 Some(&(count, soulbound))
@@ -298,14 +383,24 @@ impl ItemStoragePlan {
                 {
                     if item.stack_count == 0 {
                         crate::ItemInstance::delete(ctx, item.guid);
+                    } else if source.is_none() {
+                        let row = ctx.db.game_item_instance().guid().update(item);
+                        crate::native::item_restored(ctx, &row, false);
                     } else {
-                        item.update_as(ctx, Some(source));
+                        item.update_as(ctx, source);
                     }
                 }
                 Some(_) => {}
                 None => {
-                    item.guid = guids.next().expect("item plan reserved every new GUID");
-                    crate::ItemInstance::insert_as(ctx, item, Some(source));
+                    if item.guid == 0 {
+                        item.guid = guids.next().expect("item plan reserved every new GUID");
+                    }
+                    if source.is_none() {
+                        let row = ctx.db.game_item_instance().insert(item);
+                        crate::native::item_restored(ctx, &row, true);
+                    } else {
+                        crate::ItemInstance::insert_as(ctx, item, source);
+                    }
                 }
             }
         }

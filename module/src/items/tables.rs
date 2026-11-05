@@ -131,6 +131,7 @@ pub struct ItemTemplate {
 }
 
 #[table(accessor = game_item_instance, public, index(accessor = by_owner_guid, btree(columns = [owner_guid])))]
+#[derive(Clone)]
 pub struct ItemInstance {
     #[primary_key]
     pub guid: u64,
@@ -281,9 +282,5 @@ crate::character_owned!(delete, fn sweep_delete_game_character_buyback(ctx, char
         buybacks.id().delete(r.id);
     }
 });
-// Re-minted buyback IDs must preserve export order because IDs order the ring.
-crate::character_owned!(transfer, fn sweep_transfer_game_character_buyback(ctx, character_guid, io) {
-    table = game_character_buyback,
-    by = by_player_guid,
-    remint = id,
-});
+// Legacy snapshots cannot restore an Item identity; see docs/schema.md when upgrading buyback.
+crate::character_owned!(not_transported, fn sweep_transfer_game_character_buyback());

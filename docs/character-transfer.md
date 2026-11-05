@@ -73,6 +73,9 @@ state do not survive. Pending godmode and the run speed multiplier survive expor
 as they do for a cross-map teleport within one Shard. A real logout or connection loss clears them;
 a refused Transfer or connection loss before adoption also clears them on the resident copy.
 Leaving the world keeps pet despawn, buyback cleanup and the rest of the existing logout cleanup.
+Buyback Items live outside inventory and never enter the manifest, including a Transfer without a
+World Session. The source deletion sweep destroys them when Transfer finishes. See
+[buyback storage](schema.md#buyback-modulesrcitemsbuybackrs).
 Connection request limits start with the adopted connection state.
 
 Realm-owned guild membership remains projected on the World Shards across Transfer. Actual

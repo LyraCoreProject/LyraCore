@@ -20,6 +20,16 @@ path = "module/tests/native_conformance.rs"
 function = "vendor_purchases_acknowledge_the_offer_before_the_npc_receipt"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/conformance/buyback.rs"
+function = "a_full_sale_returns_the_same_item_with_its_instance_state"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/buyback.rs"
+function = "transfer_without_a_world_session_carries_inventory_and_discards_buyback"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/ItemHandler.cpp"
@@ -35,7 +45,13 @@ symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
 
 [[known_gaps]]
-description = "Buyback replaces the sold item with a synthetic GUID and later creates another item. Ring slots and timestamps differ, empty buyback sends no reply, and selling the restored item fails."
-path = "module/src/native/economy.rs"
-symbol = "send_buyback"
-evidence = "vendor_transactions tier 1 with conformance.17: guid_bijection at sell fields 624/625 and buyback fields 536/537 exposes the synthetic buyback GUID and replacement item GUID. Ring slots, expiry, packet delivery and selling the restored item still differ."
+description = "Sale value still uses the template sell price without charge or durability adjustments; buyback retains the amount paid at sale time. Exact damaged-item and charged-item sale values need the corresponding item metadata and DBC cost catalogues."
+path = "module/src/items/economy.rs"
+symbol = "apply_item_sell_count"
+evidence = "Pinned vmangos ItemHandler.cpp HandleSellItemOpcode adjusts for spell charges and DurabilityCosts/Quality. The Module still calls sell_value(template.sell_price, count); vendor_transactions has no damaged or charged sale."
+
+[[known_gaps]]
+description = "Fresh conformance Item projections omit later enchantment words, so they cannot check buyback's Random Property enchantment slots or Temporary Enchantment fields. Durable buyback tests check the retained state and Temporary Enchantment delivery."
+path = "module/src/native/debug/projection.rs"
+symbol = "item_projection"
+evidence = "build_item_create_object reaches enchantment slot 0; item_projection adds Container links but omits build_enchantment_slot_values. Reference Item enchantments occupy fields 22 through 42. Fixing the fixture also needs the active-duration field representation to agree with delivered values; vendor_transactions has no enchanted sale and produces no signature for this gap."

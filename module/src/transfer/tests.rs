@@ -35,6 +35,8 @@ fn manifest_exclude_holds_only_local_runtime_state() {
     assert_eq!(
         MANIFEST_EXCLUDE,
         [
+            "game_buyback_item",
+            "game_buyback_state",
             "game_transfer_out",
             "game_aoi_grant",
             "game_aoi_viewer",
@@ -44,7 +46,7 @@ fn manifest_exclude_holds_only_local_runtime_state() {
             "game_character_relocation",
             "game_transport_passenger",
         ],
-        "Only local relocation, Transfer machinery and connection state may be excluded."
+        "Only buyback, local relocation, Transfer machinery and connection state may be excluded."
     );
 }
 

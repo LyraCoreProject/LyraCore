@@ -204,30 +204,6 @@ fn profile_item_target_admitted(target_count: u32) -> Result<(), ActionRefusal> 
 }
 
 // Callers may catch a Refusal, so failed storage must leave inventory unchanged.
-pub(crate) fn store_item(
-    ctx: &ReducerContext,
-    player_guid: u64,
-    owner_identity: spacetimedb::Identity,
-    tmpl: &ItemTemplate,
-    count: u32,
-    force_soulbound: bool,
-    preselected_property: Option<u32>,
-) -> Result<(), StoreRefusal> {
-    store_item_typed(
-        ctx,
-        player_guid,
-        owner_identity,
-        tmpl,
-        count,
-        force_soulbound,
-        preselected_property,
-    )
-    .map_err(|refusal| match refusal.kind {
-        ActionRefusalKind::InventoryFull => StoreRefusal::InventoryFull,
-        _ => StoreRefusal::Refused(refusal.into()),
-    })
-}
-
 fn store_item_typed(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -359,7 +335,10 @@ pub(crate) fn grant_letter_item(
         .game_item_instance()
         .by_owner_guid()
         .filter(&player_guid)
-        .any(|i| item_text_id != 0 && i.item_text_id == item_text_id);
+        .any(|i| item_text_id != 0 && i.item_text_id == item_text_id)
+        || super::buyback::entries(ctx, player_guid)
+            .iter()
+            .any(|row| item_text_id != 0 && row.item.item_text_id == item_text_id);
     if already_granted {
         return Ok(());
     }

@@ -90,6 +90,17 @@ The first run on a Shard with Mail from before the Mail Timer applies the vanill
 its sender or is deleted with its copper, at 100 Mail a second. That is a maintainer decision, not
 a fault.
 
+### Buyback migration
+
+`game_buyback_item` and `game_buyback_state` are new private tables. Existing table layouts and the
+Native Host delivery layouts do not change. Use the normal planned publish and
+`debug_repair_after_publish`; no Shard clear or content reimport is needed for buyback.
+
+The legacy `game_character_buyback` table keeps its schema for additive migration. Its snapshots
+cannot restore Item identity and are discarded by the repair reducer or the Character's next login.
+Buyback contents do not survive logout, a fresh login after a crash, or a completed Character
+Transfer. Carried and banked Items retain their existing rows and GUIDs.
+
 ### Corpse AOI migration
 
 The native runtime indexes `game_corpse` by map, Instance and `cell`. The end-appended `cell`

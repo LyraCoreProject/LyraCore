@@ -14,6 +14,7 @@ use crate::{
 #[allow(clippy::too_many_lines)]
 pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    crate::items::discard_legacy_buyback(ctx);
 
     crate::seed::seed_crit_rates(ctx);
     crate::talent::seed_talents(ctx);

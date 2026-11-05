@@ -4,12 +4,12 @@ use super::TransferOut;
 use crate::bridge::{
     game_party_command_issuer, game_party_command_receipt, PartyCommandIssuer, PartyCommandReceipt,
 };
-use crate::items::{game_item_instance, ItemInstance};
+use crate::items::{item_guid_exists, ItemInstance};
 
 #[path = "legacy_item_rows.rs"]
 mod legacy_item_rows;
 
-// Hot marks describe first-frame state; every table still travels in one blob.
+// Hot marks describe first-frame state; transported tables travel in one blob.
 pub(crate) const HOT_TABLES: &[&str] = &[
     "game_item_instance",
     "game_player_action",
@@ -22,6 +22,8 @@ pub(crate) const HOT_TABLES: &[&str] = &[
 ];
 
 pub(crate) const MANIFEST_EXCLUDE: &[&str] = &[
+    "game_buyback_item",
+    "game_buyback_state",
     "game_transfer_out",
     "game_aoi_grant",
     "game_aoi_viewer",
@@ -34,6 +36,10 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &[
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const NOT_TRANSPORTED: &[&str] = &[
+    // Buyback is discarded when the resident Character leaves the Shard.
+    "game_buyback_item",
+    "game_buyback_state",
+    "game_character_buyback",
     "game_aoi_grant",
     "game_aoi_viewer",
     "game_native_player",
@@ -313,9 +319,7 @@ pub(crate) fn import_rows(
                     row.guid, row.owner_guid
                 ));
             }
-            if !guids.insert(row.guid)
-                || ctx.db.game_item_instance().guid().find(row.guid).is_some()
-            {
+            if !guids.insert(row.guid) || item_guid_exists(ctx, row.guid) {
                 return Err(format!(
                     "ITEM_GUID_CONFLICT: item {} for Character {character_guid}",
                     row.guid

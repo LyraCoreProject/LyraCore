@@ -1,15 +1,13 @@
-use spacetimedb::{ReducerContext, Table};
+use spacetimedb::ReducerContext;
 
 use crate::game_npc_vendor;
 use crate::game_world_entity;
 use crate::WorldEntity;
 
 use super::inventory::is_carried_slot;
-use super::ops::store_item;
 use super::rules::{buy_cost, equip_slot, repair_cost, sell_value};
 use super::tables::{
-    game_character_buyback, game_item_instance, game_item_template, item_in_slot, BuybackEntry,
-    ItemInstance, ItemTemplate, NpcVendor,
+    game_item_instance, game_item_template, item_in_slot, ItemInstance, ItemTemplate, NpcVendor,
 };
 
 // Squared yards.
@@ -280,15 +278,6 @@ pub(crate) fn vendor_offers(
     offers
 }
 
-pub(crate) fn buyback_ring_full(current_len: usize) -> bool {
-    current_len >= 12
-}
-
-pub(crate) fn buyback_newest_first(mut ids: Vec<u64>) -> Vec<u64> {
-    ids.sort_by(|a, b| b.cmp(a));
-    ids
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SellRefusal {
     Vendor(NpcRefusal),
@@ -355,7 +344,7 @@ pub(crate) fn apply_item_sell_count(
         "target is not a vendor",
         "sell",
     )?;
-    let mut inst = item_in_slot(ctx, player_guid, slot).ok_or(SellRefusal::NoItemInSlot(slot))?;
+    let inst = item_in_slot(ctx, player_guid, slot).ok_or(SellRefusal::NoItemInSlot(slot))?;
     let count = if count == 0 { inst.stack_count } else { count };
     if count > inst.stack_count {
         return Err("invalid sell count".to_string().into());
@@ -363,8 +352,8 @@ pub(crate) fn apply_item_sell_count(
     if crate::trade::item_is_offered(ctx, player_guid, inst.guid) {
         return Err(super::refused(lyracore_shared::item::ItemRefusal::NotRightNow).into());
     }
-    if inst.slot <= equip_slot::END {
-        return Err("cannot sell an equipped item".to_string().into());
+    if super::inventory::bag_has_contents(ctx, player_guid, inst.slot) {
+        return Err("cannot sell a nonempty bag".to_string().into());
     }
     if !is_carried_slot(inst.slot) {
         return Err("cannot sell a banked item".to_string().into());
@@ -379,30 +368,50 @@ pub(crate) fn apply_item_sell_count(
         return Err("item has no sell value".to_string().into());
     }
     let earned = sell_value(tmpl.sell_price, count);
+    super::buyback::sell(ctx, inst, &tmpl, count, earned)?;
     player.money = player.money.saturating_add(earned);
     player.update(ctx);
-    let buyback_tab = ctx.db.game_character_buyback();
-    let mut old: Vec<BuybackEntry> = buyback_tab.by_player_guid().filter(&player_guid).collect();
-    old.sort_by_key(|e| e.id);
-    if buyback_ring_full(old.len()) {
-        buyback_tab.id().delete(old[0].id);
-    }
-    buyback_tab.insert(BuybackEntry {
-        id: 0,
-        player_guid,
-        item_entry: inst.entry,
-        stack_count: count,
-        price: earned,
-        soulbound: inst.soulbound,
-        random_property_id: inst.random_property_id,
-    });
-    if count == inst.stack_count {
-        crate::ItemInstance::delete(ctx, inst.guid);
-    } else {
-        inst.stack_count -= count;
-        inst.update(ctx);
+    if slot <= equip_slot::END {
+        crate::spell::recompute_vitals(ctx, player_guid);
+        crate::spell::recompute_sheet(ctx, player_guid);
     }
     Ok(())
+}
+
+#[derive(Debug)]
+pub(crate) enum BuybackRefusal {
+    Vendor(NpcRefusal),
+    Empty,
+    Money {
+        entry: u32,
+    },
+    Limit {
+        item_guid: u64,
+    },
+    Storage {
+        item_guid: u64,
+        cause: crate::actor::ActionRefusal,
+    },
+    Refused(crate::Refusal),
+}
+
+impl std::fmt::Display for BuybackRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Vendor(cause) => cause.fmt(f),
+            Self::Empty => f.write_str("no item in buyback slot"),
+            Self::Money { .. } => f.write_str("not enough money"),
+            Self::Limit { .. } => f.write_str("unique item limit"),
+            Self::Storage { cause, .. } => cause.fmt(f),
+            Self::Refused(cause) => cause.fmt(f),
+        }
+    }
+}
+
+impl From<BuybackRefusal> for String {
+    fn from(cause: BuybackRefusal) -> Self {
+        cause.to_string()
+    }
 }
 
 pub(crate) fn apply_buyback_item(
@@ -410,7 +419,7 @@ pub(crate) fn apply_buyback_item(
     player_guid: u64,
     vendor_guid: u64,
     slot_idx: u8,
-) -> Result<(), crate::Refusal> {
+) -> Result<(), BuybackRefusal> {
     let (mut player, _vendor) = npc_interaction_gate(
         ctx,
         player_guid,
@@ -419,44 +428,69 @@ pub(crate) fn apply_buyback_item(
         "vendor",
         "target is not a vendor",
         "use buyback",
-    )?;
-    let buyback_tab = ctx.db.game_character_buyback();
-    let entries: Vec<BuybackEntry> = buyback_tab.by_player_guid().filter(&player_guid).collect();
-    let ordered_ids = buyback_newest_first(entries.iter().map(|e| e.id).collect());
-    let target_id = ordered_ids
-        .get(slot_idx as usize)
-        .copied()
-        .ok_or_else(|| "no item in buyback slot".to_string())?;
-    let entry = entries
+    )
+    .map_err(BuybackRefusal::Vendor)?;
+    let row = super::buyback::entries(ctx, player_guid)
         .into_iter()
-        .find(|e| e.id == target_id)
-        .ok_or_else(|| "no item in buyback slot".to_string())?;
-    if player.money < entry.price {
-        return Err(format!(
-            "not enough money: have {}, need {}",
-            player.money, entry.price
-        )
-        .into());
+        .find(|row| {
+            u16::from(row.slot) == u16::from(super::buyback::BUYBACK_START) + u16::from(slot_idx)
+        })
+        .ok_or(BuybackRefusal::Empty)?;
+    if player.money < row.price {
+        return Err(BuybackRefusal::Money {
+            entry: row.item.entry,
+        });
     }
-    let owner_identity = player.owner_identity;
-    player.money -= entry.price;
-    player.update(ctx);
-    let tmpl = ctx
+    let template = ctx
         .db
         .game_item_template()
         .entry()
-        .find(entry.item_entry)
-        .ok_or_else(|| format!("no template for item {}", entry.item_entry))?;
-    store_item(
-        ctx,
-        player_guid,
-        owner_identity,
-        &tmpl,
-        entry.stack_count,
-        entry.soulbound,
-        Some(entry.random_property_id),
-    )?;
-    buyback_tab.id().delete(entry.id);
+        .find(row.item.entry)
+        .ok_or_else(|| BuybackRefusal::Refused("buyback item has no template".into()))?;
+    let owned: u64 = ctx
+        .db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(player_guid)
+        .filter(|item| item.entry == row.item.entry)
+        .map(|item| u64::from(item.stack_count))
+        .sum();
+    if template.max_count != 0
+        && owned + u64::from(row.item.stack_count) > u64::from(template.max_count)
+    {
+        return Err(BuybackRefusal::Limit {
+            item_guid: row.item_guid,
+        });
+    }
+    let mut plan = super::ItemStoragePlan::read(ctx, player_guid, player.owner_identity);
+    let retained =
+        plan.restore(ctx, &template, &row.item)
+            .map_err(|cause| BuybackRefusal::Storage {
+                item_guid: row.item_guid,
+                cause,
+            })?;
+    plan.commit_restored(ctx)
+        .map_err(|cause| BuybackRefusal::Storage {
+            item_guid: row.item_guid,
+            cause,
+        })?;
+    player.money -= row.price;
+    player.update(ctx);
+    super::buyback::take(ctx, &row);
+    if retained {
+        if let Some(paused) = &row.temporary_enchantment {
+            let item = ctx
+                .db
+                .game_item_instance()
+                .guid()
+                .find(row.item_guid)
+                .expect("restore kept the Item GUID");
+            super::temporary_enchantment::resume(ctx, &item, paused);
+        }
+    } else {
+        crate::native::buyback_destroyed(ctx, &row);
+        crate::mail_text::drop_letter_text(ctx, row.item.item_text_id);
+    }
     Ok(())
 }
 
@@ -657,10 +691,7 @@ pub(crate) fn apply_player_repair(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        buyback_newest_first, buyback_ring_full, flagged_npc_in_reach, BankSlotRefusal, NpcGate,
-        NpcRefusal, VENDOR_RANGE_SQ,
-    };
+    use super::{flagged_npc_in_reach, BankSlotRefusal, NpcGate, NpcRefusal, VENDOR_RANGE_SQ};
     use lyracore_shared::constants::npc_flags::{BANKER, VENDOR};
 
     #[test]
@@ -696,20 +727,5 @@ mod tests {
         ] {
             assert_eq!(String::from(refusal), text);
         }
-    }
-
-    #[test]
-    fn buyback_ring_full_evicts_at_twelve_not_before() {
-        assert!(!buyback_ring_full(0));
-        assert!(!buyback_ring_full(11));
-        assert!(buyback_ring_full(12));
-        assert!(buyback_ring_full(13));
-    }
-
-    #[test]
-    fn buyback_newest_first_orders_ids_descending_by_auto_inc() {
-        assert_eq!(buyback_newest_first(vec![5, 1, 9, 3]), vec![9, 5, 3, 1]);
-        assert_eq!(buyback_newest_first(vec![]), Vec::<u64>::new());
-        assert_eq!(buyback_newest_first(vec![7]), vec![7]);
     }
 }

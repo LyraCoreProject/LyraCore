@@ -71,7 +71,11 @@ impl OperatorTransport {
         Ok(transport)
     }
 
-    fn connect(shard: &Standalone, guid: u64, fixtures: BTreeMap<String, u64>) -> Result<Self> {
+    pub(super) fn connect(
+        shard: &Standalone,
+        guid: u64,
+        fixtures: BTreeMap<String, u64>,
+    ) -> Result<Self> {
         let mut connection = shard.connect_reducers(&[
             "SELECT * FROM game_native_packet",
             "SELECT * FROM game_native_conformance_projection",
@@ -1309,11 +1313,23 @@ fn sold_buyback_items_remain_in_the_fresh_projection() -> Result<()> {
     sell.push(2);
     transport.send(0x01a0, &sell)?;
     let rows = shard.query_rows(&format!(
-        "SELECT stack_count,price FROM game_character_buyback WHERE player_guid = {guid}"
+        "SELECT item_guid,price FROM game_buyback_item WHERE character_guid = {guid}"
     ));
     ensure!(
-        rows.len() == 1 && rows[0]["stack_count"] == "2" && rows[0]["price"] == "4",
+        rows.len() == 1 && rows[0]["price"] == "4",
         "sale did not retain its buyback row: {rows:?}"
+    );
+    let sold_guid = rows[0]["item_guid"].parse::<u64>()?;
+    ensure!(
+        transport
+            .batches()
+            .last()
+            .context("sale batch")?
+            .projections[&sold_guid]
+            .fields
+            .get(&14)
+            == Some(&2),
+        "the buyback projection lost the sold stack count"
     );
     let violations = properties::run(transport.batches())?;
     ensure!(violations.is_empty(), "buyback properties: {violations:#?}");

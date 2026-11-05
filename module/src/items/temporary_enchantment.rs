@@ -1,4 +1,6 @@
-use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
+use spacetimedb::{
+    reducer, table, ReducerContext, ScheduleAt, SpacetimeType, Table, TimeDuration, Timestamp,
+};
 
 use super::{game_item_instance, ItemInstance};
 
@@ -37,6 +39,44 @@ pub(crate) fn temporary_enchantment(
 
 pub(crate) fn temporary_enchant_id(ctx: &ReducerContext, item_guid: u64) -> u32 {
     temporary_enchantment(ctx, item_guid).map_or(0, |row| row.enchant_id)
+}
+
+#[derive(SpacetimeType, Clone, Debug)]
+pub struct PausedEnchantment {
+    pub enchant_id: u32,
+    pub remaining_micros: i64,
+    pub charges: u32,
+}
+
+pub(super) fn pause(ctx: &ReducerContext, item_guid: u64) -> Option<PausedEnchantment> {
+    let row = temporary_enchantment(ctx, item_guid)?;
+    forget_item(ctx, item_guid);
+    Some(PausedEnchantment {
+        enchant_id: row.enchant_id,
+        remaining_micros: row
+            .expires_at
+            .to_micros_since_unix_epoch()
+            .saturating_sub(crate::time::now(ctx).to_micros_since_unix_epoch())
+            .max(0),
+        charges: row.charges,
+    })
+}
+
+pub(super) fn resume(ctx: &ReducerContext, item: &ItemInstance, paused: &PausedEnchantment) {
+    let expires_at = crate::time::now(ctx)
+        .checked_add(TimeDuration::from_micros(paused.remaining_micros))
+        .unwrap_or(crate::time::now(ctx));
+    ctx.db
+        .game_temporary_enchantment()
+        .insert(TemporaryEnchantment {
+            scheduled_id: 0,
+            scheduled_at: crate::time::schedule_time(ctx, expires_at),
+            item_guid: item.guid,
+            enchant_id: paused.enchant_id,
+            expires_at,
+            charges: paused.charges,
+        });
+    changed(ctx, item);
 }
 
 // Follows vmangos Spell::EffectEnchantItemTmp: the new enchantment replaces the old one.

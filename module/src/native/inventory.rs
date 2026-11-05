@@ -100,6 +100,71 @@ fn gain(
     }
 }
 
+fn create_item(view: &codec::ItemInstanceView, packets: &mut Vec<Packet>) {
+    packets.push(update(codec::build_item_create_object(view)));
+    if let Some((opcode, body)) = codec::build_enchantment_slot_values(view) {
+        packets.push(Packet { opcode, body });
+    }
+}
+
+pub(crate) fn item_sold(
+    ctx: &ReducerContext,
+    original: &ItemInstance,
+    remaining: Option<&ItemInstance>,
+    sold: &crate::items::BuybackItem,
+    evicted: Option<&crate::items::BuybackItem>,
+) {
+    let Some(owner) = ctx
+        .db
+        .game_native_player()
+        .character_guid()
+        .find(original.owner_guid)
+    else {
+        return;
+    };
+    let mut packets = Vec::new();
+    if let Some(remaining) = remaining {
+        create_item(&super::view::item(ctx, remaining), &mut packets);
+    } else {
+        clear_slot(ctx, original, &mut packets);
+    }
+    create_item(&super::economy::buyback_item(ctx, sold), &mut packets);
+    if let Some(evicted) = evicted {
+        packets.push(packet(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
+            codec::build_destroy_object(evicted.item_guid),
+        )));
+    }
+    send(ctx, owner.connection_id, packets);
+    super::economy::buyback_values(
+        ctx,
+        sold.character_guid,
+        sold.slot,
+        sold.item_guid,
+        sold.price,
+        sold.timestamp,
+    );
+    super::quest::item_changed(ctx, original.owner_guid, original.entry);
+}
+
+pub(crate) fn item_restored(ctx: &ReducerContext, item: &ItemInstance, new_slot: bool) {
+    let Some(owner) = ctx
+        .db
+        .game_native_player()
+        .character_guid()
+        .find(item.owner_guid)
+    else {
+        return;
+    };
+    let mut packets = Vec::new();
+    let view = super::view::item(ctx, item);
+    create_item(&view, &mut packets);
+    if new_slot {
+        slot(ctx, item.owner_guid, item.slot, &view, &mut packets);
+    }
+    send(ctx, owner.connection_id, packets);
+    super::quest::item_changed(ctx, item.owner_guid, item.entry);
+}
+
 pub(crate) fn changed(
     ctx: &ReducerContext,
     previous: Option<&ItemInstance>,
@@ -118,6 +183,7 @@ pub(crate) fn changed(
             && old.random_property_id == row.random_property_id
             && old.item_text_id == row.item_text_id
             && old.entry == row.entry
+            && old.soulbound == row.soulbound
     }) {
         return;
     }
@@ -161,6 +227,12 @@ pub(crate) fn changed(
         }
         (Some(old), Some(row)) => {
             let view = super::view::item(ctx, row);
+            if old.soulbound != row.soulbound {
+                let mut mask = codec::update_mask::UpdateMaskValues::new();
+                mask.set_u32(21, u32::from(row.soulbound));
+                let (opcode, body) = codec::build_values_update_raw(row.guid, &mask);
+                packets.push(Packet { opcode, body });
+            }
             if old.entry != row.entry || old.random_property_id != row.random_property_id {
                 packets.push(packet(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
                     codec::build_destroy_object(row.guid),
@@ -176,6 +248,10 @@ pub(crate) fn changed(
             if old.slot != row.slot {
                 clear_slot(ctx, old, &mut packets);
                 slot(ctx, row.owner_guid, row.slot, &view, &mut packets);
+                let mut mask = codec::update_mask::UpdateMaskValues::new();
+                mask.set_u64(8, view.contained_guid.unwrap_or(view.owner_guid));
+                let (opcode, body) = codec::build_values_update_raw(row.guid, &mask);
+                packets.push(Packet { opcode, body });
             }
             if old.enchant_id != row.enchant_id {
                 if row.entry == lyracore_shared::guild::GUILD_CHARTER_ENTRY {

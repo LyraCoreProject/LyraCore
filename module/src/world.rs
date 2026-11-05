@@ -6,9 +6,7 @@ use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
 use crate::faction::game_faction_template;
 use crate::graveyard;
 use crate::helpers::entity_by_owner;
-use crate::{
-    game_aura, game_character, game_character_buyback, game_creature_spline, game_instance,
-};
+use crate::{game_aura, game_character, game_creature_spline, game_instance};
 
 mod placement;
 mod simulation;
@@ -743,6 +741,9 @@ pub(crate) fn apply_player_login(
         ));
     }
 
+    if entry == WorldEntry::Login {
+        crate::items::begin_buyback_session(ctx, character_guid);
+    }
     restamp_owned_data(ctx, character_guid, owner);
 
     let entities = ctx.db.game_world_entity();
@@ -1508,15 +1509,7 @@ fn finish_logout(ctx: &ReducerContext, guid: u64, keep_corpse: bool) {
     crate::spell::clear_resurrect_request_and_option(ctx, guid);
     crate::spell::break_stealth(ctx, guid);
     crate::creatures::despawn_pets(ctx, guid);
-    for row in ctx
-        .db
-        .game_character_buyback()
-        .by_player_guid()
-        .filter(&guid)
-        .collect::<Vec<_>>()
-    {
-        ctx.db.game_character_buyback().id().delete(row.id);
-    }
+    crate::items::clear_buyback(ctx, guid);
     crate::motion::drop_pending(ctx, guid);
     ctx.db.game_entity_motion().guid().delete(guid);
     crate::WorldEntity::delete(ctx, guid);

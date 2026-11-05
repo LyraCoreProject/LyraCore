@@ -15,7 +15,7 @@ use super::tables::{
 };
 use crate::{game_player_reputation, game_player_skill};
 
-fn bag_has_contents(ctx: &ReducerContext, character_guid: u64, slot: u8) -> bool {
+pub(super) fn bag_has_contents(ctx: &ReducerContext, character_guid: u64, slot: u8) -> bool {
     if !(BAG_SLOT_START..=BAG_SLOT_END_INCL).contains(&slot) {
         return false;
     }

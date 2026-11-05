@@ -1290,6 +1290,7 @@ item for a set time, in the client's second enchantment slot. A new one replaces
 and Chance on Hit count beside the permanent enchantment. Poisons carry charges, and the last one
 spent removes it early. `game_temporary_enchantment` holds it, keyed by item, and its schedule
 removes it at expiry. The time runs while the item is unequipped or its owner is offline.
+A sale pauses the remaining duration and charges in buyback until restoration.
 _Avoid_: temp enchant, coating, imbue
 
 **Stat Kind**:
