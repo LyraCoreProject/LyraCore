@@ -236,6 +236,7 @@ pub fn idc_native_transfer(
             connection,
             decoded.dest_map_id,
             decoded.dest_instance_id,
+            None,
         )?;
     }
     directory::observe_revision(ctx, revision);

@@ -52,6 +52,7 @@ mod object;
 mod package_actor;
 pub(crate) mod package_creation;
 pub(crate) mod package_guild;
+pub(crate) mod package_relocation;
 mod party;
 mod pet;
 mod petition;

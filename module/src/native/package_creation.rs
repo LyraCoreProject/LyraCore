@@ -218,6 +218,45 @@ pub(crate) fn clear_results(ctx: &ReducerContext, package: &str) {
     }
 }
 
+pub(super) fn store_account(
+    ctx: &ReducerContext,
+    package: &str,
+    account: &[u8],
+) -> Result<Account, String> {
+    let decoded: Account = bsatn::from_slice(account).map_err(|error| error.to_string())?;
+    let accounts = ctx.db.game_account();
+    if decoded.identity.is_some()
+        || !decoded.salt.is_empty()
+        || !decoded.verifier.is_empty()
+        || accounts.id().find(decoded.id).is_some_and(|old| {
+            old.username != decoded.username
+                || old.identity.is_some()
+                || !old.salt.is_empty()
+                || !old.verifier.is_empty()
+        })
+        || accounts
+            .username()
+            .find(&decoded.username)
+            .is_some_and(|old| old.id != decoded.id)
+        || ctx
+            .db
+            .game_package_account()
+            .account_id()
+            .find(decoded.id)
+            .is_some_and(|owner| owner.package_name != package)
+    {
+        return Err("Package Account conflicts with existing World state".into());
+    }
+    let account = realm_shard::store_account(ctx, account)?;
+    let owners = ctx.db.game_package_account();
+    owners.account_id().delete(account.id);
+    owners.insert(PackageAccount {
+        account_id: account.id,
+        package_name: package.to_string(),
+    });
+    Ok(account)
+}
+
 fn finish(ctx: &ReducerContext, id: u64, result: CharacterCreation) -> Result<(), String> {
     if result == CharacterCreation::Pending {
         return Err("Package Character result is still pending".into());
@@ -283,38 +322,7 @@ pub fn idc_package_creation(ctx: &ReducerContext, message: Vec<u8>) -> Result<()
             if !crate::package_teardown::runs(ctx, &request.package.replace('-', "_")) {
                 return Err("Package is stopped on the World Shard".into());
             }
-            let decoded: Account =
-                bsatn::from_slice(&account).map_err(|error| error.to_string())?;
-            let accounts = ctx.db.game_account();
-            if decoded.identity.is_some()
-                || !decoded.salt.is_empty()
-                || !decoded.verifier.is_empty()
-                || accounts.id().find(decoded.id).is_some_and(|old| {
-                    old.username != decoded.username
-                        || old.identity.is_some()
-                        || !old.salt.is_empty()
-                        || !old.verifier.is_empty()
-                })
-                || accounts
-                    .username()
-                    .find(&decoded.username)
-                    .is_some_and(|old| old.id != decoded.id)
-                || ctx
-                    .db
-                    .game_package_account()
-                    .account_id()
-                    .find(decoded.id)
-                    .is_some_and(|owner| owner.package_name != request.package)
-            {
-                return Err("Package Account conflicts with existing World state".into());
-            }
-            let account = realm_shard::store_account(ctx, &account)?;
-            let owners = ctx.db.game_package_account();
-            owners.account_id().delete(account.id);
-            owners.insert(PackageAccount {
-                account_id: account.id,
-                package_name: request.package.clone(),
-            });
+            let account = store_account(ctx, &request.package, &account)?;
             let guid = crate::auth::insert_new_character(
                 ctx,
                 account.id,
