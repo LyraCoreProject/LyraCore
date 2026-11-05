@@ -19,6 +19,8 @@ mod properties;
 mod quest_world;
 #[path = "conformance/rolls.rs"]
 mod rolls;
+#[path = "conformance/spell_rolls.rs"]
+mod spell_rolls;
 #[path = "../../conformance/support/spell_world.rs"]
 mod spell_world;
 #[path = "conformance/taxi.rs"]

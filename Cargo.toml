@@ -24,7 +24,7 @@ publish = false
 too_many_lines = "warn"
 
 [workspace.dependencies]
-wire-client = { git = "https://github.com/LyraCoreProject/wire-harness", rev = "55252ab4caf50d125c00cffb44969cbf26b892a5" }
+wire-client = { git = "https://github.com/LyraCoreProject/wire-harness", rev = "004d8d740dbbc5d06548b6710d6ede0f682c3807" }
 lyracore-conformance = { path = "conformance" }
 lyracore-shared = { path = "crates/lyracore-shared" }
 lyracore-protocol = { path = "crates/lyracore-protocol" }

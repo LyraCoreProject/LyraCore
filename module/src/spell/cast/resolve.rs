@@ -301,6 +301,11 @@ fn run_spell_effects(
     let mut weapon_targets = Vec::new();
     let mut seen_weapon_targets = std::collections::HashSet::new();
     for e in effects {
+        #[cfg(feature = "conformance_test_fixture")]
+        let draw = crate::conformance_rolls::spell_draw(ctx, caster_guid)
+            .unwrap_or_else(|| ctx.random::<u32>());
+        #[cfg(not(feature = "conformance_test_fixture"))]
+        let draw = ctx.random::<u32>();
         let points = effect_amount(
             e.base_points,
             e.die_sides,
@@ -308,7 +313,7 @@ fn run_spell_effects(
             level as u32,
             hdr.spell_level,
             hdr.max_level,
-            ctx.random::<u32>(),
+            draw,
         );
         for t in select_targets(ctx, caster_guid, target_guid, e, dest) {
             if triggered && !triggered_target_admitted(origin, caster_guid, t, is_alive(ctx, t)) {

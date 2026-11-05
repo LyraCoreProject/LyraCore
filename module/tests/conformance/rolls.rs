@@ -636,7 +636,7 @@ pub(super) fn merge_seed(commit: &str) -> Result<()> {
     Ok(())
 }
 
-fn check_merge_signatures(
+pub(super) fn check_merge_signatures(
     baseline: &super::tier1::ratchet::Baseline,
     current: &super::tier1::ratchet::ScenarioBaseline,
 ) -> Result<()> {

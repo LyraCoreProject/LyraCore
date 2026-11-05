@@ -73,6 +73,7 @@ fn debug_reducers_build_does_not_export_conformance_entry() {
         "debug_advance_virtual_clock",
         "debug_prepare_roll_character",
         "debug_advance_roll_batch",
+        "debug_prepare_spell_roll_character",
     ] {
         assert!(!reducers
             .iter()
@@ -89,6 +90,7 @@ fn debug_reducers_build_does_not_export_conformance_entry() {
         "game_native_conformance_create",
         "game_native_conformance_birth",
         "game_conformance_swing_random",
+        "game_conformance_spell_random",
         "game_conformance_schedule_revision",
     ] {
         assert!(!schema_section(&schema, "Tables")
