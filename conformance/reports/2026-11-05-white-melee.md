@@ -112,14 +112,18 @@ The statistical family reserves 42 tests: seven categories, two levels and three
 Each exact equal-tail binomial test rejects at p <= 1e-6 / 42, with a conservative floating-point
 allowance. Bonferroni bounds false failure at at most 1e-6 per submission. Fixed seed and build
 give a fixed verdict. The merge seed comes from the first 16 hex digits of the merge SHA; a new
-signature after merge calls for revert, never rerunning until green.
+signature after merge calls for revert, never rerunning until green. The merge run accepts only
+the union of held public category signatures. A held category need not be detected by every new
+seed; its absence does not clear the public baseline. A targeted policy control failed under an
+exact-signature check and now passes while still rejecting new categories and stale provenance.
 
 ## Reference check and remaining scope
 
 One completed vmangos recording retains exactly 2,000 own-attacker swings at each level, from
 sixteen Characters. Capture took **508.376 seconds (8m 28.376s)**; fixture setup took
 **379.130 seconds (6m 19.130s)**. Together these measured phases took 14m 47.506s, excluding
-container startup, Account reset and cleanup. No repeat recording was taken. The independent
+container startup, Account reset and cleanup. The full valid invocation, from log creation
+through its final cleanup write, took about 15m 32.7s. No repeat recording was taken. The independent
 classifier and exact diagnostic check accepted both levels:
 
 | Reference target | Miss | Dodge | Parry | Block | Glancing | Crit | Hit |

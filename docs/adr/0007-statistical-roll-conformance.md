@@ -171,8 +171,10 @@ Emit ordinary `DifferenceClass::Rule` records: rule `white_melee_distribution`, 
 level and seed slot, broadcast stream `swings`, opcode `0x014A`, field `["outcomes", category]`.
 The ordinary signature baseline and ratchet retain failures. Counts, rates, p-values and shifts
 remain in the numerical report. A held signature does not bound further worsening of that rate;
-report that limitation. The merge run maps its category signatures to both public seed slots
-before the same baseline check, so the held gaps apply without a seed-specific baseline.
+report that limitation. Public fixed seeds keep the exact baseline check. The merge run uses
+the union of held public signatures, normalized by level and category, and fails on additions.
+A different seed can fail to detect a known wrong rate; that absence does not clear a gap or
+justify reverting unchanged gameplay. New signatures still require revert, without retry.
 Record observed gameplay differences as `known_gaps`, without fixing them.
 
 Run strictness in release builds. A synthetic passing control has each expected basis-point

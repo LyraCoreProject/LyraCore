@@ -539,25 +539,107 @@ pub(super) fn merge_seed(commit: &str) -> Result<()> {
             &json!({"seed": format!("{seed:#018x}"), "counts": &counts, "comparison": &comparison})
         )?
     );
-    let mut held = Comparison {
-        differences: vec![],
-    };
-    for difference in &comparison.differences {
-        for slot in ["public_1", "public_2"] {
-            let mut difference = difference.clone();
-            difference.checkpoint = difference.checkpoint.replace("_merge", &format!("_{slot}"));
-            held.differences.push(difference);
-        }
-    }
     let current = super::tier1::ratchet::ScenarioBaseline::from_comparison(
         "white_melee_outcomes",
         "auto_attack",
         super::tier1::harness_revision()?,
         &golden.trace().header.scenario_sha256,
-        &held,
+        &comparison,
     );
-    super::tier1::ratchet::Baseline::read(&core_root().join("conformance/tier1-baseline.json"))?
-        .check(&current)
-        .context("merge seed changed held rule signatures; revert, do not retry")?;
+    check_merge_signatures(
+        &super::tier1::ratchet::Baseline::read(
+            &core_root().join("conformance/tier1-baseline.json"),
+        )?,
+        &current,
+    )?;
     Ok(())
+}
+
+fn check_merge_signatures(
+    baseline: &super::tier1::ratchet::Baseline,
+    current: &super::tier1::ratchet::ScenarioBaseline,
+) -> Result<()> {
+    let expected = baseline
+        .scenarios
+        .iter()
+        .find(|entry| entry.scenario == current.scenario)
+        .context("no held public roll signatures")?;
+    ensure!(
+        expected.behavior == current.behavior
+            && expected.harness_revision == current.harness_revision
+            && expected.scenario_sha256 == current.scenario_sha256,
+        "merge seed baseline provenance differs"
+    );
+    let allowed = |signatures: &[super::tier1::ratchet::Signature]| {
+        signatures
+            .iter()
+            .cloned()
+            .map(|mut signature| {
+                signature.checkpoint = signature
+                    .checkpoint
+                    .replace("_public_1", "_merge")
+                    .replace("_public_2", "_merge");
+                signature
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let rules = allowed(&expected.rule);
+    let data = allowed(&expected.data);
+    ensure!(
+        current
+            .rule
+            .iter()
+            .all(|signature| rules.contains(signature))
+            && current
+                .data
+                .iter()
+                .all(|signature| data.contains(signature)),
+        "merge seed adds a rule signature; revert, do not retry"
+    );
+    Ok(())
+}
+
+#[test]
+fn merge_seed_holds_known_categories_without_requiring_their_redetection() {
+    use super::tier1::ratchet::{Baseline, ScenarioBaseline};
+    use wire_client::compare::{Difference, DifferenceClass};
+    use wire_client::scenario::Stream;
+    use wire_client::trace::Sha256Digest;
+
+    let difference = |slot: &str, category: &str| Difference {
+        classification: DifferenceClass::Rule,
+        character: None,
+        checkpoint: format!("level_60_{slot}"),
+        stream: Some(Stream::Broadcast("swings".into())),
+        packet_index: None,
+        field_path: vec!["outcomes".into(), category.into()],
+        opcode: Some(0x14a),
+        deviations: vec![],
+        rule: "white_melee_distribution".into(),
+        reason: String::new(),
+        expected: None,
+        actual: None,
+    };
+    let entry = |differences| {
+        ScenarioBaseline::from_comparison(
+            "white_melee_outcomes",
+            "auto_attack",
+            "harness",
+            &Sha256Digest::of(b"merge seed policy"),
+            &Comparison { differences },
+        )
+    };
+    let baseline = Baseline {
+        schema_version: 1,
+        scenarios: vec![entry(vec![
+            difference("public_1", "miss"),
+            difference("public_2", "crit"),
+        ])],
+    };
+    assert!(check_merge_signatures(&baseline, &entry(vec![])).is_ok());
+    let mut known = entry(vec![difference("merge", "crit")]);
+    assert!(check_merge_signatures(&baseline, &known).is_ok());
+    assert!(check_merge_signatures(&baseline, &entry(vec![difference("merge", "dodge")])).is_err());
+    known.harness_revision = "other harness".into();
+    assert!(check_merge_signatures(&baseline, &known).is_err());
 }
