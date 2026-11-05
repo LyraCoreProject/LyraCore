@@ -199,7 +199,6 @@ class ScenarioKey(unittest.TestCase):
                     path.write_text('contract input')
             with patch.object(audit, 'ROOT', root), patch.object(audit, 'SCENARIO_CACHE', root):
                 first, _ = audit.scenario_key(harness, client)
-                strict, _ = audit.scenario_key(harness, client, strict_world=True)
                 self.assertEqual(first, audit.scenario_key(harness, client)[0])
                 for name in ['module/src/creatures/ai.rs', 'module/src/combat/swing.rs',
                              'module/src/native/casting.rs', 'module/src/spell/cast.rs',
@@ -209,8 +208,6 @@ class ScenarioKey(unittest.TestCase):
                         path.parent.mkdir(parents=True, exist_ok=True)
                         path.write_text('second gameplay commit')
                         self.assertEqual(first, audit.scenario_key(harness, client)[0])
-                        self.assertNotEqual(strict, audit.scenario_key(
-                            harness, client, strict_world=True)[0])
                 for name in ['Cargo.lock', 'crates/lyracore-shared/src/nav.rs',
                              'module/src/seed.rs', 'module/src/seed/fixtures.rs',
                              'module/src/operations.rs', 'module/src/package_import/creatures.rs',
@@ -1055,6 +1052,27 @@ class ScenarioRealmReuse(unittest.TestCase):
             self.assertEqual(state['changed_gameplay_files'], ['module/src/creatures/ai.rs'])
         self.assertEqual(self.imports, 1)
         self.assertEqual((self.store / 'key/state.json').stat().st_mode & 0o222, 0)
+
+    def test_strict_world_imports_only_after_gameplay_changes(self):
+        gameplay = self.root / 'module/src/creatures/ai.rs'
+        gameplay.parent.mkdir(parents=True)
+        gameplay.write_text('first gameplay')
+        with audit.scenario_realm('key', self.pins, self.root, 0):
+            pass
+        with audit.scenario_realm('key', self.pins, self.root, 0, strict_world=True):
+            self.assertEqual(self.imports, 1)
+        gameplay.write_text('changed targeting')
+        self.commit = 'changed-gameplay'
+        with self.assertRaisesRegex(RuntimeError, 'forbids an import'):
+            with audit.scenario_realm('key', self.pins, self.root, 0,
+                                      strict_world=True, require_snapshot=True):
+                self.fail('strict mode cannot reuse a changed gameplay world')
+        self.assertEqual(self.imports, 1)
+        with audit.scenario_realm('key', self.pins, self.root, 0, strict_world=True):
+            state = json.loads((self.cache / 'realm/state.json').read_text())
+            self.assertEqual(state['world_origin'], 'fresh_import')
+            self.assertEqual(state['changed_gameplay_files'], [])
+        self.assertEqual(self.imports, 2)
 
     def test_catalogue_snapshot_preserves_drift_from_its_base(self):
         gameplay = self.root / 'module/src/creatures/ai.rs'

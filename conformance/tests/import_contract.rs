@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,6 +17,8 @@ struct Sources {
     directory: PathBuf,
     files: BTreeSet<PathBuf>,
     inputs: BTreeSet<PathBuf>,
+    tables: BTreeMap<String, PathBuf>,
+    table_references: BTreeSet<String>,
 }
 
 impl Sources {
@@ -24,7 +26,7 @@ impl Sources {
         let file = file.canonicalize().unwrap();
         let directory = if matches!(
             file.file_name().unwrap().to_str().unwrap(),
-            "lib.rs" | "mod.rs" | "build.rs"
+            "lib.rs" | "main.rs" | "mod.rs" | "build.rs"
         ) {
             file.parent().unwrap().to_owned()
         } else {
@@ -36,6 +38,8 @@ impl Sources {
             file,
             directory,
             inputs: BTreeSet::new(),
+            tables: BTreeMap::new(),
+            table_references: BTreeSet::new(),
         };
         scan.visit_file(&source);
         scan
@@ -80,6 +84,8 @@ impl<'ast> Visit<'ast> for Sources {
         let child = Self::read(&path);
         self.files.extend(child.files);
         self.inputs.extend(child.inputs);
+        self.tables.extend(child.tables);
+        self.table_references.extend(child.table_references);
     }
 
     fn visit_item_fn(&mut self, item: &'ast syn::ItemFn) {
@@ -94,7 +100,39 @@ impl<'ast> Visit<'ast> for Sources {
         }
     }
 
+    fn visit_item_struct(&mut self, item: &'ast syn::ItemStruct) {
+        if test_only(&item.attrs) {
+            return;
+        }
+        for attribute in &item.attrs {
+            if attribute
+                .path()
+                .segments
+                .last()
+                .is_some_and(|part| part.ident == "table")
+            {
+                if let syn::Meta::List(list) = &attribute.meta {
+                    let tokens = list.tokens.to_string();
+                    let parts: Vec<_> = tokens.split_whitespace().collect();
+                    if let Some(index) = parts.iter().position(|part| *part == "accessor") {
+                        self.tables.insert(
+                            parts[index + 2].trim_end_matches(',').to_owned(),
+                            self.file.clone(),
+                        );
+                    }
+                }
+            }
+        }
+        visit::visit_item_struct(self, item);
+    }
+
+    fn visit_lit_str(&mut self, literal: &'ast syn::LitStr) {
+        self.table_references.extend(table_names(&literal.value()));
+    }
+
     fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        self.table_references
+            .extend(table_names(&mac.tokens.to_string()));
         if mac.path.is_ident("include_str")
             || mac.path.is_ident("include_bytes")
             || mac.path.is_ident("include")
@@ -117,6 +155,14 @@ impl<'ast> Visit<'ast> for Sources {
             }
         }
     }
+}
+
+fn table_names(source: &str) -> BTreeSet<String> {
+    source
+        .split(|character: char| !character.is_ascii_alphanumeric() && character != '_')
+        .filter(|name| name.starts_with("game_"))
+        .map(str::to_owned)
+        .collect()
 }
 
 fn contracts() -> (BTreeSet<PathBuf>, BTreeSet<PathBuf>) {
@@ -154,7 +200,38 @@ fn import_and_initialization_dependencies_are_in_a_world_tier() {
     let build = Sources::read(&root.join("module/build.rs"));
     scan.files.extend(build.files);
     scan.inputs.extend(build.inputs);
+    let importer = Sources::read(&root.join("importer/src/main.rs"));
+    let mut imported_tables = importer.table_references.clone();
+    scan.files.extend(importer.files);
+    scan.inputs.extend(importer.inputs);
+    for entry in [
+        "importer/src/lib.rs",
+        "crates/lyracore-shared/src/lib.rs",
+        "crates/lyracore-package-delta/src/lib.rs",
+        "crates/lyracore-protocol/src/lib.rs",
+    ] {
+        let source = Sources::read(&root.join(entry));
+        if entry == "crates/lyracore-package-delta/src/lib.rs" {
+            imported_tables.extend(source.table_references);
+        }
+        scan.files.extend(source.files);
+        scan.inputs.extend(source.inputs);
+    }
     let (strict, gameplay) = contracts();
+    assert!(imported_tables.contains("game_creature_spawn"));
+    let nonstrict_tables: BTreeMap<_, _> = imported_tables
+        .iter()
+        .filter_map(|name| {
+            scan.tables
+                .get(name)
+                .filter(|file| !strict.contains(*file))
+                .map(|file| (name, file))
+        })
+        .collect();
+    assert!(
+        nonstrict_tables.is_empty(),
+        "imported table definitions must be in Tier A: {nonstrict_tables:#?}"
+    );
     let uncovered = missing(&scan, &strict, &gameplay);
     assert!(
         uncovered.is_empty(),

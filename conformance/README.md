@@ -609,8 +609,9 @@ Before a full audit, rehearse every catalogue scenario on both servers:
 ```
 
 Rehearsal uses the full audit's catalogue order and capture path, restoring both servers before
-each scenario. It requires a matching imported-world snapshot and never starts or falls back to
-a fresh world import. If none exists, run one scenario with `--check` once to seal a snapshot first. Rehearsal
+each scenario. It requires an imported-world snapshot that matches both source tiers and never starts or falls
+back to a fresh world import. If none exists, run one scenario with `--check --strict-world` to
+seal a matching snapshot first. Rehearsal
 prints one JSON line per completed scenario with setup success, wall time, and rule/data difference
 record counts for both servers. Differences are data and do not stop the remaining captures.
 Setup, capture or comparison execution failures exit 2; reaching the end exits 0. It writes no audit
@@ -652,8 +653,8 @@ differs. A tier 1 setup failure exits 2 with its diagnostic.
 
 The first check creates a disposable Realm worktree and imports the pinned vmangos world. It seals
 the imported Realm at `$HOME/.cache/lyracore/conformance-worlds/<key>/`. The key covers Tier A of the
-import contract below (both tiers with `--strict-world`), the vmangos database pin, the client Data bytes, the CLI pin and the snapshot
-format version. The seal records the full Module schema extracted from the deployment WASM.
+import contract below, the vmangos database pin, the client Data bytes, the CLI pin and the snapshot
+format version. `--strict-world` also requires matching Tier B sources. The seal records the full Module schema extracted from the deployment WASM.
 Tier B gameplay edits reuse the snapshot with drift reported in an ordinary local check.
 
 A check can also reuse a snapshot after adding ordinary private tables. Every existing table,
@@ -736,7 +737,7 @@ Deltas. The snapshot has two source tiers:
   It covers importer sources, scripts and manifests; shared, Package Delta and protocol crates;
   workspace dependencies and toolchain; Module build inputs; initialization, import reducers,
   row-building helpers and the table definitions they write. Data inputs include the Runtime Script
-  event catalogue used by `module/build.rs`. Module paths are explicit files, except for the
+  event catalogue used by `module/build.rs` and the generated event names included by shared code. Module paths are explicit files, except for the
   Package Import helpers, whose complete directory stays in Tier A.
 - **Tier B** is every remaining Rust source under `module/src`. It includes gameplay reached by
   initialization and is deliberately a superset of that call graph. A local `--check` reuses the
@@ -744,22 +745,24 @@ Deltas. The snapshot has two source tiers:
   removed file in `changed_gameplay_files`. Text output prints the same list. An additive schema
   upgrade with gameplay drift reports `upgraded_snapshot_gameplay_drift`.
 
-This distinction preserves the world-building callbacks. `seed::init` calls the production,
-map-0 demo, spell-registry and scheduler seed functions. The demo uses
-`creatures::spawn::build_creature_entity` and `insert_creature_entity`, then
-`WorldEntity::insert` in `world/simulation.rs`, AOI and the creature-spawn hook in
-`creatures/eventai/edges.rs`. That hook can reach the EventAI engine, movement and combat.
-`seed::seed_production_core` calls `spellbook::grant_createinfo_spells`, which also leads to Native Host spell notices.
-The importer calls terrain, navigation, vmap, GameObject, creature-spawn and EventAI import
-reducers; spawn replacement reaches `creatures/tick/lifecycle.rs` and gameplay cleanup.
+This distinction preserves the world-building callbacks. `seed::init` calls the production, map-0
+demo, spell-registry and scheduler seed functions. The demo uses
+`creatures::spawn::build_creature_entity` and `insert_creature_entity`, then `WorldEntity::insert`
+in `world/simulation.rs`, AOI and the creature-spawn hook in `creatures/eventai/edges.rs`. That hook
+can reach the EventAI engine, movement and combat. `seed::seed_production_core` calls
+`spellbook::grant_createinfo_spells`, which also leads to Native Host spell notices. The importer
+calls terrain, navigation, vmap, GameObject, creature-spawn and EventAI import reducers; spawn
+replacement reaches `creatures/tick/lifecycle.rs` and gameplay cleanup.
 `importer/scripts/import-world.sh` then calls `debug_repair_after_publish`, `restore_taxi_fixture`
 and `arm_all_pools`. Repair seeds catalogues and schedules and repairs legacy rows. These calls
 remain intact. Tier B changes mean the restored world can differ from a fresh import.
 
-Use `--strict-world` with `--scenario ID --check` to include all Tier B fingerprints in the key.
-A Tier B change then requires a cold import; `--require-snapshot` refuses it. Strict and ordinary
-checks use separate keys. Full audits always import fresh, regardless of either tier, and remain
-required evidence for the freshly built world. Rehearsal retains its existing cached-world behavior.
+Use `--strict-world` with `--scenario ID --check` to require matching Tier B fingerprints too. A
+Tier B change then requires a cold import; `--require-snapshot` refuses it. Strict mode can reuse an
+ordinary snapshot when both tiers match. A fresh strict import updates that same snapshot. Full
+audits always import fresh, regardless of either tier, and remain required evidence for the freshly
+built world. Rehearsal requires both tiers to match and never imports; use a strict check to refresh
+a drifted base world before rehearsal.
 
 The seal records a per-file Tier B manifest from the import. A catalogue snapshot inherits its base
 world's manifest, so preparing fixtures cannot erase earlier gameplay drift. Snapshots without this
@@ -767,29 +770,35 @@ provenance take the cold path once. `world_origin: snapshot` means both source t
 not turn a local check into a full audit.
 
 Mixed files stay in Tier A in full: `seed.rs`, `seed/fixtures.rs`, `operations.rs`, `config.rs`,
-`auth.rs`, `helpers.rs`, `time.rs`, `world.rs`, `world/{simulation,placement}.rs`, `character.rs`, `instance.rs`, `gameobject.rs`,
-`go_collider.rs`, `go_model.rs`, `region.rs`, `terrain.rs`, `nav.rs`, `vmap.rs`, `faction.rs`,
-`graveyard.rs`, `breath.rs`, `gc.rs`, `combat/engage.rs`, `skill.rs`, `skilldata.rs`, `action_bar.rs`, `xp.rs`, `talent.rs`, `weather.rs`,
+`auth.rs`, `operator_content/spells.rs`, `auction.rs`, `mail_catalogue.rs`, `stats.rs`, `gossip.rs`,
+`transport/mod.rs`, `helpers.rs`, `time.rs`, `world.rs`, `world/{simulation,placement}.rs`,
+`character.rs`, `instance.rs`, `gameobject.rs`, `go_collider.rs`, `go_model.rs`, `region.rs`,
+`terrain.rs`, `nav.rs`, `vmap.rs`, `faction.rs`, `graveyard.rs`, `breath.rs`, `gc.rs`,
+`combat/engage.rs`, `skill.rs`, `skilldata.rs`, `action_bar.rs`, `xp.rs`, `talent.rs`, `weather.rs`,
 `duel.rs`, `motion.rs`, `gw.rs`, `quest.rs`, `trainer.rs`, `meeting_stone/mod.rs`, `loot/mod.rs`,
-`items/{tables,properties}.rs`, `creatures/{catalogue,spawn,pet_care}.rs`, `creatures/tick/mod.rs`,
+`items/{tables,properties,temporary_enchantment}.rs`,
+`creatures/{catalogue,spawn,pet_care,population}.rs`, `creatures/tick/mod.rs`,
 `creatures/eventai/{fixtures,loader,model,stored,tables,relay,presentation}.rs`, and
-`spell/{tables,spellbook,stacking,proc}.rs`. Their gameplay edits still require a cold import.
+`spell/{tables,spellbook,stacking,proc,chance_on_hit}.rs`. Their gameplay edits still require a cold
+import.
 
 Compared with the earlier directory contract, `module/src/debug` moves to Tier B. The complete
 `creatures`, `spell`, `items`, `loot` and `meeting_stone` directories become the explicit Tier A
-files above and Tier B for their remaining files. In particular, `creatures/ai.rs`, `combat/*` except
-`engage.rs`, all `native/*`, and spell casting, effects, control, scheduling, targeting and outcome
-code now stay warm in ordinary checks, with drift reported. There is no production source split.
+files above and Tier B for their remaining files. In particular, `creatures/ai.rs`, `combat/*`
+except `engage.rs`, all `native/*`, and spell casting, effects, control, scheduling, targeting and
+outcome code now stay warm in ordinary checks, with drift reported. There is no production source
+split.
 
-The Architecture Test in `tests/import_contract.rs` extends the old child-module coverage check.
-It parses the entire Module, including external `#[path]` children, rather than trying to infer
-which dynamic hook can run. Every compiled source must belong to at least one tier; literal
-`include!`, `include_str!` and `include_bytes!` inputs must belong to Tier A. It also checks the build
-script and proves coverage fails when a required seed, import or gameplay file is removed from both
-tiers. Comments and test-only modules do not create dependencies. Review the Tier A classification
-when an import or initialization helper gains a dependency; put new data files in Tier A.
-Adding importer code or changing table data still changes Tier A even if the compiled schema is
-compatible. Empty new tables do not supply imported rows.
+The Architecture Test in `tests/import_contract.rs` extends the old child-module coverage check. It
+parses the entire Module, including external `#[path]` children, rather than trying to infer which
+dynamic hook can run. Every compiled source must belong to at least one tier; table definitions
+named by importer SQL and Package Delta code must be in Tier A; literal `include!`, `include_str!`
+and `include_bytes!` inputs must belong to Tier A. It also checks the build script and proves
+coverage fails when a required seed, import or gameplay file is removed from both tiers. Comments
+and test-only modules do not create dependencies. Review the Tier A classification when an import or
+initialization helper gains a dependency; put new data files in Tier A. Adding importer code or
+changing table data still changes Tier A even if the compiled schema is compatible. Empty new tables
+do not supply imported rows.
 
 Prepare the pinned Reference Server once with the harness's
 [setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/adapters/vmangos/README.md).

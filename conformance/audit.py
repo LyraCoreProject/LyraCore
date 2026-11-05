@@ -166,7 +166,7 @@ def compatible_schema(previous, current):
     return True
 
 
-def snapshot_origin(path, schema):
+def snapshot_origin(path, schema, *, strict_world=False):
     state = json.loads((path / 'state.json').read_text())
     previous = state.get('module_schema')
     if 'gameplay_manifest' not in state:
@@ -179,7 +179,12 @@ def snapshot_origin(path, schema):
         print('[audit] snapshot schema is incompatible or missing; cold import required',
               file=sys.stderr, flush=True)
         return None
-    if snapshot_gameplay_changes(path):
+    changed = snapshot_gameplay_changes(path)
+    if changed and strict_world:
+        print('[audit] strict world requires an import after Tier B changes: ' + ', '.join(changed),
+              file=sys.stderr, flush=True)
+        return None
+    if changed:
         origin += '_gameplay_drift'
     return origin
 
@@ -283,6 +288,16 @@ IMPORT_CONTRACT = (
     'module/src/faction.rs',
     'module/src/graveyard.rs',
     'module/src/skilldata.rs',
+    'module/src/auction.rs',
+    'module/src/mail_catalogue.rs',
+    'module/src/stats.rs',
+    'module/src/operator_content/spells.rs',
+    'module/src/gossip.rs',
+    'module/src/creatures/population.rs',
+    'module/src/items/temporary_enchantment.rs',
+    'module/src/spell/chance_on_hit.rs',
+    'module/src/transport/mod.rs',
+    'datascripts/runtime-scripts/event-names.rs',
     'datascripts/runtime-scripts/events.json',
     'module/src/package_import',
 )
@@ -310,7 +325,7 @@ def snapshot_gameplay_changes(path):
                   if saved.get(name) != current.get(name))
 
 
-def scenario_key(harness, client_data, *, strict_world=False):
+def scenario_key(harness, client_data):
     pins = json.loads((harness / 'adapters/vmangos/pins.json').read_text())
     with timed('client data fingerprint'):
         client_hash = client_fingerprint(client_data)
@@ -319,8 +334,6 @@ def scenario_key(harness, client_data, *, strict_world=False):
                vmangos_database_commit=pins['database_commit'],
                cli_revision=(ROOT / '.lyracore-cli-rev').read_text().strip(),
                client_sha256=client_hash)
-    if strict_world:
-        key['gameplay_manifest'] = gameplay_manifest()
     return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest(), pins
 
 
@@ -829,24 +842,24 @@ def capture(wire, work, scenario, adapter, endpoints, password, env, progress=sy
 
 
 @contextmanager
-def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False):
+def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False, strict_world=False):
     with ExitStack() as lifetime:
         try:
             realm = lifetime.enter_context(prepare_scenario_realm(
-                key, pins, client_data, peer_count, require_snapshot=require_snapshot))
+                key, pins, client_data, peer_count, require_snapshot=require_snapshot, strict_world=strict_world))
         except SnapshotUpgradeError as error:
             print(f'[audit] snapshot publish or initialization failed: {error}', file=sys.stderr, flush=True)
             if require_snapshot:
                 raise RuntimeError('--require-snapshot forbids cold import after snapshot upgrade failure') from error
             print('[audit] falling back to a fresh world import', file=sys.stderr, flush=True)
             realm = lifetime.enter_context(prepare_scenario_realm(
-                key, pins, client_data, peer_count, use_snapshot=False))
+                key, pins, client_data, peer_count, use_snapshot=False, strict_world=strict_world))
         yield realm
 
 
 @contextmanager
 def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False,
-                           use_snapshot=True):
+                           use_snapshot=True, strict_world=False):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('clean core working tree required; commit changes before scenario capture')
     if (ROOT / '.lyracore-cli-rev').read_text().strip() != '30814fe814edbfa3a143102f93008080482df6a6':
@@ -870,7 +883,7 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
         cli_env['PATH'] = str(bin_dir) + ':' + cli_env['PATH']
         snapshot = snapshot_path(key)
         schema = json.loads((SCENARIO_CACHE / 'deployment-schema.json').read_text())
-        origin = (snapshot_origin(snapshot, schema)
+        origin = (snapshot_origin(snapshot, schema, strict_world=strict_world)
                   if use_snapshot and validate_snapshot(snapshot, key) else None)
         saved = origin is not None
         if require_snapshot and not saved:
@@ -1032,21 +1045,22 @@ def catalogue_snapshot_key(base_key, catalogue):
     return hashlib.sha256(json.dumps(key, sort_keys=True).encode()).hexdigest(), creatures
 
 
-def prepare_catalogue_snapshot(work, base_key, pins, client_data, *, require_snapshot, fresh=False):
+def prepare_catalogue_snapshot(work, base_key, pins, client_data, *, require_snapshot, fresh=False,
+                               strict_world=False):
     catalogue = json.loads((work / 'catalogue.json').read_text())
     key, creatures = catalogue_snapshot_key(base_key, catalogue)
     if not creatures:
         return key
     if not fresh and validate_snapshot(snapshot_path(key), key):
         schema = json.loads((SCENARIO_CACHE / 'deployment-schema.json').read_text())
-        if snapshot_origin(snapshot_path(key), schema) is not None:
+        if snapshot_origin(snapshot_path(key), schema, strict_world=strict_world) is not None:
             return key
     if require_snapshot and not validate_snapshot(snapshot_path(base_key), base_key):
         raise RuntimeError('base world snapshot missing; --require-snapshot forbids an import; '
                            'run a single --check once to prepare the base world')
     peer_count = max(len(scenario['characters']) - 1 for scenario in catalogue)
     with scenario_realm(base_key, pins, client_data, peer_count,
-                        require_snapshot=require_snapshot) as (password, _token, _host, _module, realm):
+                        require_snapshot=require_snapshot, strict_world=strict_world) as (password, _token, _host, _module, realm):
         cli_env = dict(os.environ)
         cli_env.pop('CARGO_TARGET_DIR', None)
         cli_env['PATH'] = str(realm.parent / 'bin') + ':' + cli_env['PATH']
@@ -1087,11 +1101,12 @@ def capture_servers(harness, wire, work, client_data, *, rehearse=False):
             with prepare_scenario_realm(key, pins, client_data, peer_count, use_snapshot=False):
                 pass
         key = prepare_catalogue_snapshot(work, key, pins, client_data,
-                                         require_snapshot=rehearse, fresh=not rehearse)
+                                         require_snapshot=rehearse, fresh=not rehearse,
+                                         strict_world=rehearse)
         for scenario in scenarios:
             started = time.monotonic()
             with capture_scenario(harness, wire, work, scenario['id'], key, pins, client_data,
-                                  require_snapshot=True):
+                                  require_snapshot=True, strict_world=rehearse):
                 state = json.loads((SCENARIO_CACHE / 'realm/state.json').read_text())
                 if rehearse:
                     comparisons = {adapter: rehearse_comparison(wire, work, scenario, adapter)
@@ -1109,7 +1124,8 @@ def capture_servers(harness, wire, work, client_data, *, rehearse=False):
 
 
 @contextmanager
-def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, require_snapshot=False):
+def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, require_snapshot=False,
+                     strict_world=False):
     env = dict(os.environ, WIRE_CRASH_DIR=str(work / 'diagnostics'))
     realm_env = dict(env)
     catalogue = json.loads((work / 'catalogue.json').read_text())
@@ -1122,7 +1138,8 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, r
     with ExitStack() as realm_lifetime, ExitStack() as reference_lifetime:
         with ThreadPoolExecutor(max_workers=2 if cores >= 4 else 1) as captures:
             realm_start = captures.submit(realm_lifetime.enter_context, scenario_realm(
-                key, pins, client_data, max_peer_count, require_snapshot=require_snapshot))
+                key, pins, client_data, max_peer_count, require_snapshot=require_snapshot,
+                strict_world=strict_world))
             reference_start = captures.submit(reference_lifetime.enter_context,
                                              scenario_reference_server(harness, key, len(characters) - 1))
             password, token, host, module, realm_root = realm_start.result()
@@ -1228,7 +1245,7 @@ def run_scenario(args, harness, target, core_commit):
         raise RuntimeError('clean core working tree required; commit changes before scenario capture')
     with timed('Module schema fingerprint'):
         module_schema_hash()
-    key, pins = scenario_key(harness, args.client_data, strict_world=args.strict_world)
+    key, pins = scenario_key(harness, args.client_data)
     with scenario_work() as work:
         os.environ['TMPDIR'] = str(work)
         audit = target / 'debug/examples/audit'
@@ -1246,9 +1263,9 @@ def run_scenario(args, harness, target, core_commit):
                                    + (tier1.stderr + tier1.stdout).strip())
         run_with_diagnostic([audit, 'export', work])
         key = prepare_catalogue_snapshot(work, key, pins, str(args.client_data),
-                                         require_snapshot=args.require_snapshot)
+                                         require_snapshot=args.require_snapshot, strict_world=args.strict_world)
         with capture_scenario(harness, wire, work, args.scenario, key, pins, str(args.client_data),
-                              require_snapshot=True) as world:
+                              require_snapshot=True, strict_world=args.strict_world) as world:
             if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
                 raise RuntimeError('core changed during scenario capture; commit and rerun')
             with timed('comparison and output'):
