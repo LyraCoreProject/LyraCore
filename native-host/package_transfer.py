@@ -24,8 +24,8 @@ def check(host):
             host.sql(f'INSERT INTO game_area_trigger (id,map_id,x,y,z,radius,box_length,box_width,box_height,box_yaw) VALUES ({trigger},{origin},0,0,0,5,0,0,0,0)', world)
             host.sql(f"INSERT INTO game_areatrigger_teleport (trigger_id,target_map,x,y,z,o,name) VALUES ({trigger},{target},0,0,0,0,'Package Transfer')", world)
 
-    alpha = package_character(host, east, 'Mover')
-    beta = package_character(host, east, 'Partner')
+    alpha = package_character(host, east, 'Mover', 'test_fixture')
+    beta = package_character(host, east, 'Partner', 'test_fixture')
     host.call('debug_emit_sessionless_group_intent', [alpha, beta, False], database=east)
     host.wait_until(lambda: len(host.rows('SELECT character_guid FROM game_group_member')) == 2, 'Package Group did not form')
     group = host.rows(f'SELECT group_id FROM game_group_member WHERE character_guid = {alpha}')[0][0]
@@ -33,7 +33,7 @@ def check(host):
     owner = host.rows(f'SELECT account_id FROM game_character WHERE guid = {alpha}', east)[0][0]
 
     def request(world, guid, trigger):
-        host.call('debug_request_package_relocation', ['companions', guid, trigger], database=world)
+        host.call('debug_request_package_relocation', ['test_fixture', guid, trigger], database=world)
         return host.rows(f'SELECT id FROM game_package_relocation WHERE guid = {guid}', world)[-1][0]
 
     def settled(world, id, outcome):
@@ -43,7 +43,7 @@ def check(host):
         host.wait_until(done, f'Package relocation did not reach result {outcome}', timeout=30)
 
     def take(world, id):
-        host.call('debug_take_package_relocation', ['companions', id], database=world)
+        host.call('debug_take_package_relocation', ['test_fixture', id], database=world)
         assert not host.rows(f'SELECT id FROM game_package_relocation WHERE id = {id}', world)
 
     def arrived(source, target, guid, id, expected_group=group):
@@ -94,10 +94,10 @@ def check(host):
                     'import did not commit before directory settlement', timeout=20)
     assert host.rows(f'SELECT character_guid FROM game_transfer_in WHERE character_guid = {alpha}', west) == [[alpha]]
     assert not host.rows(f'SELECT guid FROM game_world_entity WHERE guid = {alpha}', west)
-    host.call('debug_take_package_relocation', ['companions', crossing], database=east)
+    host.call('debug_take_package_relocation', ['test_fixture', crossing], database=east)
     assert host.rows(f'SELECT result FROM game_package_relocation WHERE id = {crossing}', east)[0][0][0] == 0
     try:
-        host.call('teardown_package', ['companions'], database=east)
+        host.call('teardown_package', ['test_fixture'], database=east)
         raise AssertionError('teardown discarded a pending relocation')
     except RuntimeError as error:
         assert 'relocation is pending' in str(error)
@@ -114,7 +114,7 @@ def check(host):
     except RuntimeError as error:
         assert 'another Package' in str(error)
     assert sorted(host.rows(f'SELECT guid, entry, slot, stack_count FROM game_item_instance WHERE owner_guid = {alpha}', west)) == sorted(inventory)
-    assert host.rows(f'SELECT package_name FROM game_package_account WHERE account_id = {owner}', west) == [['companions']]
+    assert host.rows(f'SELECT package_name FROM game_package_account WHERE account_id = {owner}', west) == [['test_fixture']]
     host.restart()
     for world in worlds:
         host.rows('SELECT guid FROM game_character', world)
@@ -153,7 +153,7 @@ def check(host):
     for shard in (None, *worlds):
         host.call('operator_set_instance_host', [36, host.identity(dungeon), False], database=shard)
         host.call('operator_set_instance_host', [36, host.identity(east), True], database=shard)
-    solo = package_character(host, east, 'Solorun')
+    solo = package_character(host, east, 'Solorun', 'test_fixture')
     admission = request(east, solo, entrance)
     arrived(east, east, solo, admission, expected_group=0)
     assert host.rows(f'SELECT map_id FROM game_world_entity WHERE guid = {solo}', east) == [[36]]
