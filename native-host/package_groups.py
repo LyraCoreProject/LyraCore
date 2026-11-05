@@ -27,11 +27,11 @@ def shards(host):
     return worlds
 
 
-def package_character(host, world, name):
-    host.call('debug_request_package_character', ['companions', name, 1, 1], database=world)
+def package_character(host, world, name, package='companions'):
+    host.call('debug_request_package_character', [package, name, 1, 1], database=world)
     request = host.rows(f"SELECT id FROM game_package_character_request WHERE name = '{name}'", world)[0][0]
     def ready():
-        host.call('debug_take_package_character_result', ['companions', request], database=world)
+        host.call('debug_take_package_character_result', [package, request], database=world)
         return not host.rows(f'SELECT id FROM game_package_character_request WHERE id = {request}', world)
     host.wait_until(ready, 'Package creation did not finish', timeout=20)
     guid = host.rows(f"SELECT guid FROM game_character WHERE name = '{name}'", world)[0][0]

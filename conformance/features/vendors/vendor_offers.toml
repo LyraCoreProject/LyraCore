@@ -20,10 +20,10 @@ symbol = "ObjectMgr::LoadVendors"
 status = "unverified"
 
 [[known_gaps]]
-description = "items.vendor-condition: The source behavior is not represented by the current import."
+description = "Vendor offer condition links are not imported; the tier 1 fixture projects patch 10 membership without implementing conditional visibility in gameplay."
 path = "importer/src/world_import.rs"
 symbol = "vmangos_items_plan"
-evidence = "Compatibility Manifest items.vendor-condition; conformance/vmangos-port-census/items.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+evidence = "Vendor 11188 item 14526 uses condition 4000, type 24, patch equality with zero at vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70. Player::IsVendorItemVisible at d9173eca3ea08dd985c52dabbcc826898d1d0b77 evaluates that condition; patch 10 hides the offer. Compatibility Manifest items.vendor-condition; conformance/vmangos-port-census/items.md."
 
 [[known_gaps]]
 description = "items.vendor-item-flags: The source behavior is not represented by the current import."
@@ -36,9 +36,3 @@ description = "items.vendor-restock: The source behavior is not represented by t
 path = "importer/src/world_import.rs"
 symbol = "vmangos_items_plan"
 evidence = "Compatibility Manifest items.vendor-restock; conformance/vmangos-port-census/items.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
-description = "Allocated item GUIDs set bit 47, so their inventory link high word is 0x40008000 instead of the reference's 0x40000000."
-path = "module/src/items/guids.rs"
-symbol = "allocate_item_guids"
-evidence = "vendor_offers tier 1 after starter placement: exact_field at deplete field_537, expected 1073741824 and actual 1073774592."

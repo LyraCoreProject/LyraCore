@@ -400,6 +400,29 @@ fn seed_taxi_world(shard: &Standalone, scenario: &wire_client::scenario::Scenari
         "import_terrain_chunks",
         &[&super::taxi_route::terrain_chunks()],
     );
+    if scenario.id == "taxi_single_hop" {
+        shard.assert_sql("DELETE FROM game_faction_template WHERE id = 1 OR id = 14");
+        shard.assert_sql(
+            "INSERT INTO game_faction_template \
+             (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) \
+             VALUES (1,1,3,2,12,0,0,0,0,0,0,0,0),(14,14,8,0,1,0,0,0,0,0,0,0,0)",
+        );
+        shard.assert_sql(
+            "INSERT INTO game_creature_template \
+             (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,\
+              creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,\
+              money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,\
+              pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) \
+             VALUES (990002,'Fixture creature 990002','',1,1,100,14,0,0,1,0,0,0,1,2000,0,0,1,100,80,1,1,0,0,0,0,0)",
+        );
+        let guid = (0xf130_u64 << 48) | (990002_u64 << 24) | 1;
+        shard.assert_call(
+            "import_creature_spawns_append",
+            &[&format!(
+                "{guid},990002,0,-9451.3798828125,386.5201721191406,56.9287109375,0,0,0"
+            )],
+        );
+    }
     Ok(())
 }
 

@@ -99,6 +99,48 @@ pub(crate) fn enter(
     if ctx.db.game_instance_entry().guid().find(guid).is_some() {
         return true;
     }
+    let id = directory::revision(ctx);
+    queue_entry(ctx, realm, id, actor, trigger, map, pose)
+        .expect("native admission has no pending entry");
+    true
+}
+
+pub(super) fn enter_package(
+    ctx: &ReducerContext,
+    id: u64,
+    actor: PartyCharacter,
+    trigger: u32,
+    destination: crate::transfer::Destination,
+) -> Result<(), String> {
+    let realm = realm_shard(ctx).ok_or("Instance admission requires a Realm Shard")?;
+    queue_entry(
+        ctx,
+        realm,
+        id,
+        actor,
+        trigger,
+        destination.map_id,
+        [destination.x, destination.y, destination.z, destination.o],
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "Native and Package admission share the same request"
+)]
+fn queue_entry(
+    ctx: &ReducerContext,
+    realm: Identity,
+    id: u64,
+    actor: PartyCharacter,
+    trigger: u32,
+    map: u32,
+    pose: [f32; 4],
+) -> Result<(), String> {
+    let guid = actor.guid;
+    if ctx.db.game_instance_entry().guid().find(guid).is_some() {
+        return Err("Instance admission is already pending".into());
+    }
     let binding = ctx
         .db
         .game_instance_binding()
@@ -106,7 +148,6 @@ pub(crate) fn enter(
         .filter(guid)
         .find(|binding| binding.map_id == map)
         .map(|binding| (binding.instance_id, binding.world));
-    let id = directory::revision(ctx);
     let expires = ctx.timestamp.to_micros_since_unix_epoch() + ADMISSION_MICROS;
     let request = bsatn::to_vec(&Admission {
         request: Request {
@@ -137,7 +178,7 @@ pub(crate) fn enter(
             database: remote::Identity(realm),
             request,
         });
-    true
+    Ok(())
 }
 
 fn decode(ctx: &ReducerContext, bytes: &[u8]) -> Result<Admission, String> {
@@ -267,7 +308,9 @@ pub fn idc_world_instance_entry(
         {
             return Err("Instance admission is no longer pending".into());
         }
-        if !ctx
+        if decoded.actor.connection == 0 {
+            super::package_relocation::validate_admission(ctx, decoded.id)?;
+        } else if !ctx
             .db
             .game_native_player()
             .connection_id()
@@ -349,7 +392,7 @@ pub fn idc_world_instance_entry(
             expires: decoded.expires,
         });
     if source == ctx.database_identity() {
-        finish(ctx, &request, instance_id, "", Some(source));
+        finish(ctx, &request, instance_id, "", Some(source))?;
         return Ok(());
     }
     ctx.db
@@ -388,10 +431,11 @@ pub fn realm_instance_entry_answered(
     ctx: &ReducerContext,
     call: RealmInstanceEntry,
     result: Result<(), String>,
-) {
+) -> Result<(), String> {
     if let Err(error) = result {
-        finish(ctx, &call.request, 0, &error, None);
+        finish(ctx, &call.request, 0, &error, None)?;
     }
+    Ok(())
 }
 
 #[reducer]
@@ -410,11 +454,38 @@ pub fn idc_instance_entry_answer(
     } else if !super::instance_allocation::hosts(ctx, decoded.map, ctx.sender()) {
         return Err("Instance reply is from another map's Shard".into());
     }
-    finish(ctx, &request, instance_id, &error, Some(ctx.sender()));
+    finish(ctx, &request, instance_id, &error, Some(ctx.sender()))?;
     Ok(())
 }
 
 fn finish(
+    ctx: &ReducerContext,
+    request: &[u8],
+    instance_id: u64,
+    error: &str,
+    world: Option<Identity>,
+) -> Result<(), String> {
+    let decoded = admission(request)?.request;
+    if decoded.actor.connection != 0 {
+        finish_native(ctx, request, instance_id, error, world);
+    } else if ctx
+        .db
+        .game_instance_entry()
+        .id()
+        .find(decoded.id)
+        .is_some_and(|pending| pending.request == request)
+    {
+        if ctx.timestamp.to_micros_since_unix_epoch() >= decoded.expires {
+            super::package_relocation::expired(ctx, decoded.id);
+        } else {
+            super::package_relocation::admitted(ctx, decoded.id, world, instance_id, error)?;
+        }
+        ctx.db.game_instance_entry().id().delete(decoded.id);
+    }
+    Ok(())
+}
+
+fn finish_native(
     ctx: &ReducerContext,
     request: &[u8],
     instance_id: u64,
@@ -504,6 +575,10 @@ pub fn expire_instance_entry(ctx: &ReducerContext, entry: InstanceEntry) {
         ctx.db.game_instance_entry().id().delete(entry.id);
         if let Ok(admission) = admission(&pending.request) {
             let request = admission.request;
+            if request.actor.connection == 0 {
+                super::package_relocation::expired(ctx, request.id);
+                return;
+            }
             let connection = ConnectionId::from_u128(request.actor.connection);
             if ctx
                 .db
@@ -531,6 +606,7 @@ pub(super) fn imported(
     connection: u128,
     map: u32,
     instance_id: u64,
+    request_id: Option<u64>,
 ) -> Result<(), String> {
     if !instance::is_dungeon_map(map) {
         return Ok(());
@@ -542,6 +618,7 @@ pub(super) fn imported(
         .iter()
         .find(|lease| {
             lease.source == ctx.sender()
+                && request_id.is_none_or(|id| lease.request_id == id)
                 && lease.guid == guid
                 && lease.connection == connection
                 && lease.map_id == map
