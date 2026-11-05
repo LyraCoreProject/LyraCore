@@ -566,6 +566,7 @@ impl EngageSink for CtxWorld<'_> {
                 instance_id: e.instance_id,
                 dead: e.dead,
                 godmode: e.godmode,
+                taxi_flying: crate::taxi::is_flying(&e),
                 stealthed: crate::spell::is_stealthed(self.ctx, e.guid),
             })
             .collect()

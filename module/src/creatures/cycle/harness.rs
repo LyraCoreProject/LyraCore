@@ -588,6 +588,7 @@ impl Scenario {
             instance_id: INSTANCE,
             dead: false,
             godmode: false,
+            taxi_flying: false,
             stealthed: false,
         });
         self

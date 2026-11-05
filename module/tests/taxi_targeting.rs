@@ -1,6 +1,7 @@
 mod support;
 
-use lyracore_shared::constants::{taxi_fixture as taxi, unit_flags};
+use lyracore_shared::constants::taxi_fixture as taxi;
+use lyracore_shared::spell::taxonomy::{T_AREA_ENEMY, T_TARGET_ENEMY};
 use support::Standalone;
 
 #[test]
@@ -20,8 +21,9 @@ fn a_taxi_passenger_leaves_combat_and_cannot_be_targeted_until_landing() {
         .unwrap()["guid"]
         .clone();
     shard.assert_sql(
-        "UPDATE game_spell SET cast_time_ms = 0, gcd_ms = 0, cost = 0 WHERE spell_id = 116",
+        "UPDATE game_spell SET cast_time_ms = 500, gcd_ms = 0, cost = 0, range_yd = 100 WHERE spell_id = 50021",
     );
+    shard.assert_call("debug_begin_cast", &[&wolf, "50021", "1"]);
     shard.assert_call("debug_engage", &[&wolf, "1"]);
     shard.assert_sql(&format!(
         "INSERT INTO game_active_taxi_flight \
@@ -40,12 +42,21 @@ fn a_taxi_passenger_leaves_combat_and_cannot_be_targeted_until_landing() {
         "takeoff must stop attacks already aimed at the passenger"
     );
     let before = shard.query_rows("SELECT health FROM game_world_entity WHERE guid = 1");
-    let refused = shard.call("debug_begin_cast", &[&wolf, "116", "1"]);
+    let refused = shard.call("debug_begin_cast", &[&wolf, "50021", "1"]);
     assert!(
         !refused.status.success(),
         "a hostile spell must refuse a taxi passenger"
     );
-    shard.assert_call("debug_advance_virtual_clock", &["1000000"]);
+    shard.assert_sql(&format!(
+        "UPDATE game_spell_effect SET target = {T_AREA_ENEMY}, radius_yd = 100 WHERE spell_id = 50021"
+    ));
+    shard.assert_call("debug_force_cast_at", &[&wolf, "50021", &wolf]);
+    shard.assert_sql(&format!(
+        "UPDATE game_spell_effect SET target = {T_TARGET_ENEMY} WHERE spell_id = 50021"
+    ));
+    for _ in 0..20 {
+        shard.assert_call("debug_advance_virtual_clock", &["50000"]);
+    }
     assert!(
         shard
             .query_rows("SELECT attacker_guid FROM game_melee_attack WHERE target_guid = 1")
@@ -57,13 +68,20 @@ fn a_taxi_passenger_leaves_combat_and_cannot_be_targeted_until_landing() {
         before
     );
     assert!(shard
-        .query_rows("SELECT id FROM game_aura WHERE target_guid = 1 AND spell_id = 116")
+        .query_rows("SELECT id FROM game_aura WHERE target_guid = 1 AND spell_id = 50021")
         .is_empty());
 
-    shard.assert_sql("DELETE FROM game_active_taxi_flight WHERE character_guid = 1");
-    shard.assert_sql(&format!(
-        "UPDATE game_world_entity SET unit_flags = {} WHERE guid = 1",
-        unit_flags::PLAYER_CONTROLLED
-    ));
-    shard.assert_call("debug_begin_cast", &[&wolf, "116", "1"]);
+    for _ in 0..80 {
+        shard.assert_call("debug_advance_virtual_clock", &["50000"]);
+        if shard
+            .query_rows(
+                "SELECT character_guid FROM game_active_taxi_flight WHERE character_guid = 1",
+            )
+            .is_empty()
+        {
+            shard.assert_call("debug_begin_cast", &[&wolf, "50021", "1"]);
+            return;
+        }
+    }
+    panic!("the taxi flight did not land");
 }
