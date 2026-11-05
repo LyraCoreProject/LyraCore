@@ -24,7 +24,7 @@ function = "durable_choice_turn_in_grants_the_selected_item_with_all_other_rewar
 rung = "durable_module"
 
 [[known_gaps]]
-description = "Quest reward acceptance, invalid-choice and repeated-turn-in replies differ. Item notification flags, starter inventory slots and the XP packet also differ."
+description = "Quest acceptance, reward-offer metadata, invalid-choice and repeated-turn-in replies differ. Item notification flags and XP packet ordering also differ."
 path = "module/src/native/quest.rs"
 symbol = "receive"
-evidence = "quest_reward tier 1: missing gossip-close on accept, invalid-choice and repeat packet differences, item notification fields and slot 24 instead of 25, and XP packet alignment."
+evidence = "quest_reward tier 1 with conformance.17: offer flags and emotes; missing gossip-close on accept; invalid-choice and repeat packet differences; item notification received/show fields; extra/missing opcode 464 and field 717 update at turn_in."

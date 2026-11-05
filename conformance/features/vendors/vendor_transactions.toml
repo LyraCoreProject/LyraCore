@@ -38,10 +38,4 @@ evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#miss
 description = "Buyback replaces the sold item with a synthetic GUID and later creates another item. Ring slots and timestamps differ, empty buyback sends no reply, and selling the restored item fails."
 path = "module/src/native/economy.rs"
 symbol = "send_buyback"
-evidence = "vendor_transactions tier 1: sell and buyback Character fields, unexpected destroy and item-push packets, missing empty-buyback reply and sell_again fields; expiry field 1238 is zero."
-
-[[known_gaps]]
-description = "Allocated item GUIDs set bit 47, so their inventory link high word is 0x40008000 instead of the reference's 0x40000000."
-path = "module/src/items/guids.rs"
-symbol = "allocate_item_guids"
-evidence = "vendor_transactions tier 1 after starter placement: exact_field at buy field_539 and buyback field_537, expected 1073741824 and actual 1073774592."
+evidence = "vendor_transactions tier 1 with conformance.17: guid_bijection at sell fields 624/625 and buyback fields 536/537 exposes the synthetic buyback GUID and replacement item GUID. Ring slots, expiry, packet delivery and selling the restored item still differ."

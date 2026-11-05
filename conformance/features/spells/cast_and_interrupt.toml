@@ -20,7 +20,7 @@ symbol = "WorldSession::HandleCastSpellOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "The completed cast omits its create-item execute log and differs in item notification and inventory slot. A negative self-target starts a cast instead of returning the recorded Refusal."
+description = "The completed cast omits its create-item execute log and orders the item notification differently. A negative self-target starts a cast instead of returning the recorded Refusal."
 path = "module/src/native/cast.rs"
 symbol = "receive"
-evidence = "cast_and_interrupt tier 1: missing opcode 588 at finish, item notification and inventory GUID words, unexpected opcode 305 and missing opcode 304 at bad_target."
+evidence = "cast_and_interrupt tier 1 with conformance.17: missing opcode 588 and extra/missing opcode 358 at finish; unexpected opcode 305 and missing opcode 304 at bad_target."
