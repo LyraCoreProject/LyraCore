@@ -4,11 +4,13 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use anyhow::{ensure, Context, Result};
 use lyracore_test_support::{core_root, ReducerConnection, Standalone};
 use serde_json::json;
-use wire_client::compare::Comparison;
+use wire_client::compare::{Comparison, Difference, DifferenceClass};
 use wire_client::decode::{decode, Field};
 use wire_client::rolls::PUBLIC_SEEDS;
+use wire_client::scenario::Stream;
 use wire_client::scenario::{FixtureVerb, Scenario};
 use wire_client::spell_rolls::{self, Collector, Counts};
+use wire_client::trace::RecordedField;
 
 use super::transport::{prepare_character, Delivery};
 
@@ -20,6 +22,31 @@ struct Character {
     collector: Collector,
     delivery: Delivery,
     damage: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+enum Sample {
+    Complete { counts: Counts },
+    Blocked { counts: Counts, reason: String },
+}
+
+impl Sample {
+    fn counts(&self) -> &Counts {
+        match self {
+            Self::Complete { counts } | Self::Blocked { counts, .. } => counts,
+        }
+    }
+}
+
+fn total_counts(characters: &[Character]) -> Counts {
+    let mut counts = Counts::default();
+    for character in characters {
+        for (sum, count) in counts.0.iter_mut().zip(character.collector.counts.0) {
+            *sum += count;
+        }
+    }
+    counts
 }
 
 struct Preparation<'a> {
@@ -276,7 +303,7 @@ fn collect(
     level_index: usize,
     part: usize,
     ready: &std::sync::Barrier,
-) -> Result<Counts> {
+) -> Result<Sample> {
     let mut preparation = Preparation {
         ready,
         arrived: false,
@@ -307,12 +334,18 @@ fn collect(
             .call("debug_advance_roll_batch", json!([32]))
             .map_err(anyhow::Error::msg)?;
         let rows = receiver.drain_packets();
+        let mut blocked = None;
         for character in &mut characters {
+            let mut observed = Vec::new();
             for packet in character.delivery.route_rows(rows.clone())? {
-                if !matches!(packet.opcode, 0x130 | 0x131 | 0x132 | 0x250) {
+                if !matches!(packet.opcode, 0x130 | 0x131 | 0x132 | 0x250 | 0x14a) {
                     continue;
                 }
                 let packet = decode(packet.opcode, &packet.body)?;
+                observed.push(packet.clone());
+                if packet.opcode == 0x14a {
+                    continue;
+                }
                 if character.collector.observe(&packet)? && packet.opcode == 0x250 {
                     let Some(Field::Unsigned(damage)) = packet.fields.get("damage") else {
                         anyhow::bail!("spell damage missing")
@@ -320,13 +353,28 @@ fn collect(
                     character.damage += damage;
                 }
             }
-            ensure!(
-                character.collector.idle()
-                    && character.collector.counts.total() == u64::from(trial + 1),
-                "incomplete or duplicate spell trial {} for Character {}",
-                trial + 1,
-                character.guid
+            if !character.collector.idle()
+                || character.collector.counts.total() != u64::from(trial + 1)
+            {
+                blocked = Some(format!(
+                    "incomplete or duplicate spell trial {} for Character {}; counts {:?}; packets {:?}; pending {:?}; impact {:?}; health {:?}",
+                    trial + 1, character.guid, character.collector.counts.0, observed,
+                    shard.query_database_rows(shard_name, &format!("SELECT spell_id,pushback_count FROM game_pending_cast WHERE caster_guid = {}", character.guid)),
+                    shard.query_database_rows(shard_name, &format!("SELECT spell_id FROM game_pending_spell_impact WHERE caster_guid = {}", character.guid)),
+                    shard.query_database_rows(shard_name, &format!("SELECT guid,health FROM game_world_entity WHERE guid = {} OR guid = {}", character.guid, character.target)),
+                ));
+                break;
+            }
+        }
+        if let Some(reason) = blocked {
+            println!(
+                "spell {shard_name}: blocked after {:.3}s warm: {reason}",
+                warm.elapsed().as_secs_f64()
             );
+            return Ok(Sample::Blocked {
+                counts: total_counts(&characters),
+                reason,
+            });
         }
         if (trial + 1) % 1250 == 0 {
             println!(
@@ -343,21 +391,16 @@ fn collect(
         scenario.spell_rolls.as_ref().unwrap().target_levels[level_index],
         true,
     )?;
-    let mut counts = Counts::default();
-    for character in &characters {
-        for (sum, count) in counts.0.iter_mut().zip(character.collector.counts.0) {
-            *sum += count;
-        }
-    }
+    let counts = total_counts(&characters);
     println!(
         "spell {shard_name}: seed {seed}; warm {:.3}s; counts {}",
         warm.elapsed().as_secs_f64(),
         serde_json::to_string(&counts)?
     );
-    Ok(counts)
+    Ok(Sample::Complete { counts })
 }
 
-fn measure(seed: u64, scenario: &Scenario, prefix: &str) -> Result<[Counts; 2]> {
+fn measure(seed: u64, scenario: &Scenario, prefix: &str) -> Result<[Sample; 2]> {
     let mut shard = Standalone::start_persistent(prefix);
     let names: Vec<_> = (0..4)
         .map(|index| {
@@ -367,7 +410,7 @@ fn measure(seed: u64, scenario: &Scenario, prefix: &str) -> Result<[Counts; 2]> 
         })
         .collect();
     let ready = std::sync::Barrier::new(4);
-    let parts = std::thread::scope(|scope| -> Result<Vec<Counts>> {
+    let parts = std::thread::scope(|scope| -> Result<Vec<Sample>> {
         let mut jobs = Vec::new();
         for level in 0..2 {
             for part in 0..2 {
@@ -387,10 +430,58 @@ fn measure(seed: u64, scenario: &Scenario, prefix: &str) -> Result<[Counts; 2]> 
             .collect()
     })?;
     Ok(std::array::from_fn(|level| {
-        Counts(std::array::from_fn(|category| {
-            parts[level * 2].0[category] + parts[level * 2 + 1].0[category]
-        }))
+        let pair = &parts[level * 2..level * 2 + 2];
+        let counts = Counts(std::array::from_fn(|category| {
+            pair[0].counts().0[category] + pair[1].counts().0[category]
+        }));
+        let blockers: Vec<_> = pair
+            .iter()
+            .filter_map(|sample| match sample {
+                Sample::Blocked { reason, .. } => Some(reason.as_str()),
+                Sample::Complete { .. } => None,
+            })
+            .collect();
+        if blockers.is_empty() {
+            Sample::Complete { counts }
+        } else {
+            Sample::Blocked {
+                counts,
+                reason: blockers.join("; "),
+            }
+        }
     }))
+}
+
+fn compare_samples(
+    spec: &spell_rolls::Specification,
+    samples: &[Sample; 2],
+    slot: &str,
+) -> Result<Comparison> {
+    let mut comparison = Comparison {
+        differences: vec![],
+    };
+    for (level, sample) in samples.iter().enumerate() {
+        match sample {
+            Sample::Complete { counts } => comparison
+                .differences
+                .extend(spell_rolls::compare(spec, counts, level, slot, 50_000)?.differences),
+            Sample::Blocked { counts, reason } => comparison.differences.push(Difference {
+                classification: DifferenceClass::Rule,
+                character: None,
+                checkpoint: format!("level_{}_{}", spec.target_levels[level], slot),
+                stream: Some(Stream::Broadcast("casts".into())),
+                packet_index: None,
+                field_path: vec!["outcomes".into()],
+                opcode: Some(0x250),
+                deviations: vec![],
+                rule: "spell_sample".into(),
+                reason: format!("full spell sample is blocked; rates are unmeasured: {reason}"),
+                expected: Some(RecordedField::Unsigned(u64::from(spec.samples_per_level))),
+                actual: Some(RecordedField::Unsigned(counts.total())),
+            }),
+        }
+    }
+    Ok(comparison)
 }
 
 pub(super) fn public_seeds() -> Result<()> {
@@ -410,32 +501,34 @@ pub(super) fn public_seeds() -> Result<()> {
     }
     let report = core_root().join(".lyracore/conformance/spell-rates.json");
     std::fs::write(&report, serde_json::to_vec_pretty(&measurements)?)?;
-    if std::env::var_os("LYRACORE_ROLL_REPEATABILITY").is_some() {
+    let complete = measurements
+        .iter()
+        .flatten()
+        .all(|sample| matches!(sample, Sample::Complete { .. }));
+    if complete && std::env::var_os("LYRACORE_ROLL_REPEATABILITY").is_some() {
         ensure!(
             measure(PUBLIC_SEEDS[0], golden.scenario(), "spell-roll-repeat")? == measurements[0],
             "same seed changed delivered spell counts"
         );
     }
-    ensure!(
-        measurements[0] != measurements[1],
-        "different seed did not change delivered spell counts"
-    );
+    if complete {
+        ensure!(
+            measurements[0] != measurements[1],
+            "different seed did not change delivered spell counts"
+        );
+    }
     let mut comparison = Comparison {
         differences: vec![],
     };
     for (slot, levels) in measurements.iter().enumerate() {
-        for (level, counts) in levels.iter().enumerate() {
-            comparison.differences.extend(
-                spell_rolls::compare(
-                    golden.scenario().spell_rolls.as_ref().unwrap(),
-                    counts,
-                    level,
-                    &format!("public_{}", slot + 1),
-                    50_000,
-                )?
-                .differences,
-            );
-        }
+        comparison.differences.extend(
+            compare_samples(
+                golden.scenario().spell_rolls.as_ref().unwrap(),
+                levels,
+                &format!("public_{}", slot + 1),
+            )?
+            .differences,
+        );
     }
     super::tier1::record_and_check(
         "spell_direct_damage_outcomes",
@@ -455,21 +548,11 @@ pub(super) fn merge_seed(commit: &str) -> Result<()> {
     let seed = u64::from_str_radix(&commit[..16], 16)?;
     let golden = wire_client::catalogue::get("spell_direct_damage_outcomes")?;
     let counts = measure(seed, golden.scenario(), "spell-roll-merge")?;
-    let mut comparison = Comparison {
-        differences: vec![],
-    };
-    for (level, counts) in counts.iter().enumerate() {
-        comparison.differences.extend(
-            spell_rolls::compare(
-                golden.scenario().spell_rolls.as_ref().unwrap(),
-                counts,
-                level,
-                "merge",
-                50_000,
-            )?
-            .differences,
-        );
-    }
+    let comparison = compare_samples(
+        golden.scenario().spell_rolls.as_ref().unwrap(),
+        &counts,
+        "merge",
+    )?;
     println!(
         "spell merge {commit}: {}",
         serde_json::to_string_pretty(
@@ -489,4 +572,27 @@ pub(super) fn merge_seed(commit: &str) -> Result<()> {
         )?,
         &current,
     )
+}
+
+#[test]
+fn blocked_spell_samples_never_claim_rate_evidence() -> Result<()> {
+    let golden = wire_client::catalogue::get("spell_direct_damage_outcomes")?;
+    let samples = std::array::from_fn(|_| Sample::Blocked {
+        counts: Counts([0, 0, 0, 2, 0]),
+        reason: "passive target caused cast pushback".into(),
+    });
+    let comparison = compare_samples(
+        golden.scenario().spell_rolls.as_ref().unwrap(),
+        &samples,
+        "public_1",
+    )?;
+    assert_eq!(comparison.differences.len(), 2);
+    for difference in comparison.differences {
+        assert_eq!(difference.classification, DifferenceClass::Rule);
+        assert_eq!(difference.rule, "spell_sample");
+        assert_eq!(difference.expected, Some(RecordedField::Unsigned(50_000)));
+        assert_eq!(difference.actual, Some(RecordedField::Unsigned(2)));
+        assert_eq!(difference.field_path, ["outcomes"]);
+    }
+    Ok(())
 }
