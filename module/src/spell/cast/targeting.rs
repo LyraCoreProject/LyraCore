@@ -300,7 +300,7 @@ pub(crate) fn aura_has_visible_slot(
         .game_world_entity()
         .guid()
         .find(caster_guid)
-        .filter(|caster| !caster.is_player())
+        .filter(|caster| !caster.is_player() && caster.owner_guid != 0)
         .and_then(|caster| ctx.db.game_creature_template().entry().find(caster.entry))
         .is_some_and(|template| template.creature_type == TOTEM_TYPE)
 }

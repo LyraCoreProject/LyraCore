@@ -188,6 +188,10 @@ fn passive_area_and_totem_auras_keep_their_visible_slots() {
     apply(character, character, false);
     apply(character, totem, true);
     shard.assert_sql("UPDATE game_spell SET cast_flags = 0, visual_id = 0 WHERE spell_id = 20598");
+    apply(totem, character, false);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET owner_guid = {character} WHERE guid = {totem}"
+    ));
     apply(totem, character, true);
     apply(totem, totem, true);
     apply(character, character, false);
