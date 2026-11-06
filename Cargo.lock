@@ -1208,6 +1208,7 @@ dependencies = [
  "blake3",
  "flate2",
  "lyracore-package-delta",
+ "lyracore-protocol",
  "lyracore-shared",
  "lyracore-test-support",
  "rusqlite",

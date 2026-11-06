@@ -531,6 +531,8 @@ pub struct RangedImpactSchedule {
     pub ranged_spell_id: u32,
     #[default(false)]
     pub is_crit: bool,
+    #[default(0)]
+    pub school: u8,
 }
 
 pub(crate) enum AttackRefusal {

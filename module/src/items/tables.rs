@@ -138,6 +138,8 @@ pub struct ItemTemplate {
     pub spellcategory_4: u32,
     #[default(0u32)]
     pub spellcategory_5: u32,
+    #[default(0)]
+    pub damage_school: u8,
 }
 
 #[table(accessor = game_item_instance, public, index(accessor = by_owner_guid, btree(columns = [owner_guid])))]

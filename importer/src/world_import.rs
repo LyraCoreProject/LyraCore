@@ -1137,7 +1137,7 @@ fn build_items_and_loot(
         let buy_count: u32 = row.number::<u32>(it::BUY_COUNT)?.max(1);
         let food_type: u8 = row.number(it::FOOD_TYPE)?;
         item_rows.push(format!(
-            "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type},{allowed_class},{allowed_race},{random_property},{ppm1},{ppm2},{ppm3},{ppm4},{ppm5},{cat1},{cat2},{cat3},{cat4},{cat5})",
+            "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type},{allowed_class},{allowed_race},{random_property},{ppm1},{ppm2},{ppm3},{ppm4},{ppm5},{cat1},{cat2},{cat3},{cat4},{cat5},{damage_school})",
             sheath = row.number::<u8>(it::SHEATH)?,
             sp1 = row.number::<u32>(it::SPELLID_1)?,
             spt1 = row.number::<u8>(it::SPELLTRIGGER_1)?,
@@ -1173,6 +1173,7 @@ fn build_items_and_loot(
             cat3 = row.number::<u32>("spellcategory_3")?,
             cat4 = row.number::<u32>("spellcategory_4")?,
             cat5 = row.number::<u32>("spellcategory_5")?,
+            damage_school = row.number::<u8>("dmg_type1")?,
 
             allowed_class = allowed_class,
             allowed_race = allowed_race,
@@ -1791,7 +1792,7 @@ fn push_item_statements(
         stmts.push(format!("DELETE FROM {table} WHERE item_entry < {OPERATOR_TEMPLATE_ID_FLOOR} AND creature_entry < {OPERATOR_TEMPLATE_ID_FLOOR}"));
     }
     stmts.push("DELETE FROM game_vendor_stock WHERE key > 0".into());
-    push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property,spellppmrate_1,spellppmrate_2,spellppmrate_3,spellppmrate_4,spellppmrate_5,spellcategory_1,spellcategory_2,spellcategory_3,spellcategory_4,spellcategory_5", item_rows);
+    push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property,spellppmrate_1,spellppmrate_2,spellppmrate_3,spellppmrate_4,spellppmrate_5,spellcategory_1,spellcategory_2,spellcategory_3,spellcategory_4,spellcategory_5,damage_school", item_rows);
     push_insert(
         stmts,
         "game_creature_loot",
@@ -2688,3 +2689,7 @@ struct GameobjectTemplateRows {
 #[cfg(test)]
 #[path = "world_import_source_tests.rs"]
 mod source_tests;
+
+#[cfg(test)]
+#[path = "spell_power_tests.rs"]
+mod spell_power_tests;

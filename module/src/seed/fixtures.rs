@@ -416,6 +416,12 @@ pub(crate) fn base_spell(spell_id: u32, name: &str) -> Spell {
         duration_index: 0,
         category: 0,
         category_cooldown_ms: 0,
+        equipped_item_class: -1,
+        equipped_item_subclass_mask: 0,
+        equipped_item_inventory_mask: 0,
+        attributes_ex_3: 0,
+        attributes_ex_4: 0,
+        damage_class: 0,
     }
 }
 
@@ -516,6 +522,7 @@ pub(crate) fn base_item(entry: u32, name: &str) -> ItemTemplate {
         spellcategory_3: 0,
         spellcategory_4: 0,
         spellcategory_5: 0,
+        damage_school: 0,
     }
 }
 

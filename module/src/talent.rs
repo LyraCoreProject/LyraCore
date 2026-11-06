@@ -684,6 +684,12 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                 duration_index: 0,
                 category: 0,
                 category_cooldown_ms: 0,
+                equipped_item_class: -1,
+                equipped_item_subclass_mask: 0,
+                equipped_item_inventory_mask: 0,
+                attributes_ex_3: 0,
+                attributes_ex_4: 0,
+                damage_class: 0,
             });
             ctx.db.game_spell_effect().insert(SpellEffect {
                 id: packed_spell_effect_id(spell_id, 0),

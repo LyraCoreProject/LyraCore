@@ -534,3 +534,34 @@ mod lint_tests {
         }
     }
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct DamageBonusValues {
+    pub positive: [i32; 7],
+    pub negative: [i32; 7],
+    pub percent: [f32; 7],
+}
+
+impl Default for DamageBonusValues {
+    fn default() -> Self {
+        Self {
+            positive: [0; 7],
+            negative: [0; 7],
+            percent: [1.0; 7],
+        }
+    }
+}
+
+pub fn damage_bonus_mask(values: &DamageBonusValues) -> update_mask::UpdateMaskValues {
+    let mut mask = update_mask::UpdateMaskValues::new();
+    for school in 0..7u16 {
+        mask.set_u32(1201 + school, values.positive[school as usize] as u32);
+        mask.set_u32(1208 + school, values.negative[school as usize] as u32);
+        mask.set_f32(1215 + school, values.percent[school as usize]);
+    }
+    mask
+}
+
+pub fn build_damage_bonus_values(guid: u64, values: &DamageBonusValues) -> (u16, Vec<u8>) {
+    build_values_update_raw(guid, &damage_bonus_mask(values))
+}

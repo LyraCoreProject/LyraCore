@@ -517,7 +517,7 @@ fn hit_roll(
         entities.guid().find(target_guid),
     ) {
         (Some(caster), Some(target)) => {
-            let roll = crate::combat::roll_strike_outcome(ctx, &caster, &target, ranged);
+            let roll = crate::combat::roll_strike_outcome(ctx, &caster, &target, ranged, spell);
             arm_avoidance_reacts(ctx, caster_guid, target_guid, roll);
             roll
         }
@@ -1306,9 +1306,10 @@ fn check_cast_gate_suffix(
 
     check_unit_target(ctx, caster, effects, target_guid, spell_id)?;
 
-    if let Some(e) = effects.iter().find(|e| {
-        e.kind & KIND_AURA_BIT != 0 && e.p1 != 0 && has_aura(ctx, target_guid, e.p1 as u32)
-    }) {
+    if let Some(e) = effects
+        .iter()
+        .find(|e| e.kind == A_ABSORB && e.p1 != 0 && has_aura(ctx, target_guid, e.p1 as u32))
+    {
         return Err(CastGateRefusal::other(CastRefusalReason::Unreported, format!(
             "spell {spell_id} refused — target {target_guid} carries the linked debuff {} (Weakened-Soul-style lockout)",
             e.p1

@@ -155,6 +155,11 @@ pub(super) fn enter_character(
         .map_err(|error| error.to_string())?;
     codec::set_create_sheet_stats(&mut self_create, guid, &super::view::sheet_stats(&live))
         .map_err(|error| error.to_string())?;
+    codec::set_create_damage_bonuses(
+        &mut self_create,
+        &crate::spell::bonuses::damage_fields(ctx, guid),
+    )
+    .map_err(|error| error.to_string())?;
     codec::set_create_freshness(&mut self_create, codec::CreateFreshness::Known);
     let mut grants: Vec<_> = ctx.db.game_aoi_grant().by_viewer().filter(guid).collect();
     grants.sort_by_key(|grant| grant.layer != crate::aoi::TRANSPORT);

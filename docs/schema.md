@@ -844,7 +844,7 @@ inert on equip until reimport or an explicit supported claim. This does not enab
 At patch 10 / build 5875, 2,645 Item entries name 640 equip spells. Of these, 2,643 entries
 name 638 spells with the 52 aura types below; two entries name spells without an aura type. Counts
 are distinct Item entries per type and overlap. One weapon-dependent crit Item stays inert; the
-other 383 use the shared melee/ranged crit bonus. One area stat Item and one area spell-crit Item
+other 383 use the shared melee/ranged crit bonus. One area stat Item, one area spell-crit Item and the area damage aura on Atiesh
 also stay inert. Only ordinary self-targeted effect-6 shapes are enabled. Healing retains its
 school mask in `A_MOD_HEALING`. This is a source-to-consumer audit, not a claim that every
 spell or baseline combat calculation is complete.
@@ -852,12 +852,37 @@ spell or baseline combat calculation is complete.
 Unsupported cast effects import as `A_INERT` (0xB9). They keep their Aura holder, icon, duration,
 refresh, stack limit and dispel behavior; no numeric consumer reads this kind. This does not enable
 those effects on equipment. In particular, Thorns and Retribution Aura retain holders without
-reflection; Arcane Elixir and Curse of Weakness retain holders without flat damage modification;
-Dampen and Amplify Magic retain buff holders without flat incoming damage or healing modification.
+reflection. Arcane Elixir, Greater Arcane Elixir and Ephemeral Power now add magic damage;
+Curse of Weakness reduces physical weapon damage. Dampen and Amplify Magic modify incoming
+spell damage and healing by school. They replace each other. The spell plan imports source
+stack groups for school modifiers, including Arcane versus Greater Arcane Elixir. The zero-default
+END column `game_spell_group.power_rank` preserves each source group's stronger-spell order.
+Groups with zero power ranks retain their existing magnitude comparisons. A cast checks every
+source group before it removes conflicting auras; a refusal preserves the active spell.
 Aspect of the Hawk contributes only its ranged AP to the separate ranged field. Unrestricted crit
 checks only the source equipment class of -1; masks are ignored in that case, including Recklessness
 and Elixir of the Mongoose. Ranged AP uses the class formula, and ranged damage retains its fraction
 on the wire. The sheet sends both melee and ranged crit percentages, using each attack slot's weapon skill.
+
+`game_spell` END-appends source equipment class, subclass and inventory masks, attribute words
+3 and 4, and damage class. The importer computes missing damage and healing coefficients from
+the source cast time, channel duration, direct/periodic split, area targets, extra effects and
+spell level. Explicit coefficients already include level penalties. The pinned Reference uses
+no caster-level downranking factor. Intellect contributes spell crit, not spell damage or healing.
+Damage-only bonuses do not increase healing. Physical nonweapon spells such as Eviscerate
+use their source coefficients too. Area and pet-area modifier shapes remain inert until their
+propagation is supported. Seal of Righteousness uses its source weapon-speed
+base and 0.10 one-hand / 0.125 two-hand coefficient; the judgement Dummy remains a holder.
+Physical flat damage enters each weapon slot once;
+weapon-restricted magic bonuses do not become general spell power. Flat incoming magic damage
+and healing reductions cannot remove more than half the spell's pre-mitigation amount.
+Ground damage snapshots outgoing spell power and applies incoming modifiers per target on each tick.
+`game_ground_area.effect_id` END-appends a zero-default source effect key for that coefficient.
+The native CREATE and aura VALUES send all seven signed positive/negative damage fields and
+float percent multipliers. `game_item_template.damage_school` END-appends the source
+`dmg_type1` index (zero defaults to physical). Wand attacks use that school for spell crit,
+ignore flat spell power, and retain the school on a projectile already in flight.
+Damage display fields are derived from active auras and need no new durable cache.
 
 `game_world_entity.sheet_ranged_dmg_min_fraction` and `sheet_ranged_dmg_max_fraction` are
 zero-default END-appended caches for the fractional parts. The existing integer damage columns and
@@ -871,8 +896,8 @@ Publish repair refreshes these projections; see
 | 3 PeriodicDamage | 1 | periodic damage / leech shape not certified | Inert | 19307 |
 | 4 Dummy | 12 | A_FLAG placeholder | Inert | 16372 |
 | 8 PeriodicHeal | 8 | periodic healing bonus/cadence not certified | Inert | 5707 |
-| 13 ModDamageDone | 928 | flat school damage and weapon restrictions need mechanics | Inert | 7685 |
-| 14 ModDamageTaken | 2 | flat incoming damage needs school-aware folding | Inert | 5102 |
+| 13 ModDamageDone | 928 | signed school damage; weapon-slot restrictions; spell coefficients | Correct for 927 Items; area aura 28143 on Atiesh stays inert | 7685 |
+| 14 ModDamageTaken | 2 | flat incoming damage by school; spell coefficients and half-damage floor | Correct | 5102 |
 | 15 DamageShield | 10 | reflection needs mechanics; no absorb mapping | Inert | 15438 |
 | 17 ModStealthDetect | 8 | detection placeholder | Inert | 12418 |
 | 19 ModInvisibilityDetection | 2 | detection placeholder | Inert | 17623 |
@@ -894,7 +919,7 @@ Publish repair refreshes these projections; see
 | 57 ModSpellCritChance | 2 | spell_crit_bp; separate spell basis points | Correct for 1 Item; 1 area Item inert | 23434 |
 | 58 ModIncreaseSwimSpeed | 1 | swim stacking not certified | Inert | 8747 |
 | 64 PeriodicManaLeech | 1 | mana leech needs drain and gain | Inert | 19307 |
-| 71 ModSpellCritChanceSchool | 215 | school crit needs a school-aware consumer | Inert | 18382 |
+| 71 ModSpellCritChanceSchool | 215 | spell crit by school; source percent units | Correct | 18382 |
 | 77 MechanicImmunity | 4 | mechanic immunity representation not certified | Inert | 7219 |
 | 82 WaterBreathing | 3 | water breathing placeholder | Inert | 11789 |
 | 85 ModPowerRegen | 345 | MP5 needs two-second regeneration, not periodic energize | Inert | 18378 |

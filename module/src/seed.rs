@@ -671,6 +671,12 @@ fn seed_spell_registry(ctx: &ReducerContext) {
             duration_index: 0,
             category: 0,
             category_cooldown_ms: 0,
+            equipped_item_class: -1,
+            equipped_item_subclass_mask: 0,
+            equipped_item_inventory_mask: 0,
+            attributes_ex_3: 0,
+            attributes_ex_4: 0,
+            damage_class: 0,
         });
     };
     let effect = |spell_id: u32,
@@ -1355,6 +1361,7 @@ pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {
                     id: 0,
                     group_id,
                     spell_id,
+                    power_rank: 0,
                 });
             }
         }

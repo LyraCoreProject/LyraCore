@@ -346,12 +346,30 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     .find(a.spell_id)
                     .map(|s| s.school_mask)
                     .unwrap_or(0);
+                let points = ctx
+                    .db
+                    .game_spell()
+                    .spell_id()
+                    .find(a.spell_id)
+                    .zip(ctx.db.game_spell_effect().id().find(a.effect_id))
+                    .map_or(a.amount, |(hdr, effect)| {
+                        let damage = bonuses::spell_damage_taken(
+                            ctx,
+                            &hdr,
+                            &effect,
+                            a.caster_guid,
+                            a.target_guid,
+                            lyracore_shared::aura::stacked_amount(a.amount, a.stacks) as f32,
+                            a.stacks,
+                        );
+                        bonuses::round_damage(ctx, a.target_guid, damage)
+                    });
                 let amount = resist_magic_damage(
                     ctx,
                     a.target_guid,
                     school,
                     a.level as u32,
-                    a.amount,
+                    points,
                     a.spell_id,
                     true,
                 );
@@ -360,7 +378,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     SpellCastEvent {
                         damage: amount.max(0) as u32,
                         school: crate::spell::school_index(school),
-                        resisted: a.amount.saturating_sub(amount).max(0) as u32,
+                        resisted: points.saturating_sub(amount).max(0) as u32,
                         ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
                     },
                 );
@@ -430,13 +448,34 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     .get(&a.target_guid)
                     .copied()
                     .unwrap_or(target.health);
-                let new_health = healed_value(cur, target.max_health, a.amount);
+                let healing = lyracore_shared::aura::stacked_amount(a.amount, a.stacks);
+                let healing = ctx
+                    .db
+                    .game_spell()
+                    .spell_id()
+                    .find(a.spell_id)
+                    .zip(ctx.db.game_spell_effect().id().find(a.effect_id))
+                    .map_or(healing, |(hdr, effect)| {
+                        bonuses::round_damage(
+                            ctx,
+                            a.target_guid,
+                            bonuses::healing_taken(
+                                ctx,
+                                &hdr,
+                                &effect,
+                                a.target_guid,
+                                healing as f32,
+                                a.stacks,
+                            ),
+                        )
+                    });
+                let new_health = healed_value(cur, target.max_health, healing);
                 pending.insert(a.target_guid, new_health);
                 if cur < target.max_health {
                     crate::spell::SpellCastEvent::insert(
                         ctx,
                         SpellCastEvent {
-                            healed: a.amount.max(0) as u32,
+                            healed: healing.max(0) as u32,
                             ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
                         },
                     );
@@ -644,13 +683,31 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 .take(AOE_MAX_TARGETS)
                 .collect();
 
+        let source = ctx
+            .db
+            .game_spell()
+            .spell_id()
+            .find(a.spell_id)
+            .zip(ctx.db.game_spell_effect().id().find(a.effect_id));
         for t in targets {
+            let points = source.as_ref().map_or(a.amount, |(header, effect)| {
+                let damage = bonuses::spell_damage_taken(
+                    ctx,
+                    header,
+                    effect,
+                    a.caster_guid,
+                    t,
+                    a.amount as f32,
+                    1,
+                );
+                bonuses::round_damage(ctx, t, damage)
+            });
             let resisted = resist_magic_damage(
                 ctx,
                 t,
                 a.school_mask,
                 caster.as_ref().map_or(0, |caster| caster.level),
-                a.amount,
+                points,
                 a.spell_id,
                 true,
             );
@@ -661,14 +718,14 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 resisted,
                 crate::combat::Hit::triggered(),
             );
-            if dealt > 0 || absorbed > 0 || a.amount > resisted {
+            if dealt > 0 || absorbed > 0 || points > resisted {
                 crate::spell::SpellCastEvent::insert(
                     ctx,
                     crate::spell::SpellCastEvent {
                         target_guid: t,
                         damage: dealt,
                         school: crate::spell::school_index(a.school_mask),
-                        resisted: (a.amount.max(0) as u32).saturating_sub(resisted.max(0) as u32),
+                        resisted: (points.max(0) as u32).saturating_sub(resisted.max(0) as u32),
                         absorbed,
                         is_proc_log: true,
                         ..crate::spell::SpellCastEvent::signal(

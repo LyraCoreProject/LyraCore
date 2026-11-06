@@ -302,6 +302,16 @@ pub(crate) fn changed(ctx: &ReducerContext, previous: Option<&Aura>, current: Op
         .find(row.target_guid)
     {
         let mut packets = movement(ctx, row.target_guid, &auras, &changed, true);
+        if changed.iter().any(|aura| {
+            matches!(
+                aura.eff_kind,
+                A_MOD_DAMAGE_DONE_FLAT | A_MOD_DAMAGE_DONE_PCT
+            )
+        }) {
+            let values = crate::spell::bonuses::damage_fields(ctx, row.target_guid);
+            let (opcode, body) = codec::build_damage_bonus_values(row.target_guid, &values);
+            packets.push(Packet { opcode, body });
+        }
         if changed
             .iter()
             .any(|row| matches!(row.eff_kind, A_SPELLMOD_FLAT | A_SPELLMOD_PCT))

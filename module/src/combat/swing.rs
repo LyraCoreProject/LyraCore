@@ -203,7 +203,15 @@ pub(crate) fn offhand_swing_range(
     )
     .saturating_add_signed(aura_attack_power_bonus(ctx, attacker.guid));
     let (raw_min, raw_max) = weapon_swing_range_ap(ap, dmin, dmax, delay);
-    apply_offhand_penalty(raw_min, raw_max)
+    let apply = |base| {
+        crate::spell::bonuses::weapon_damage(
+            ctx,
+            attacker,
+            crate::items::equip_slot::OFFHAND,
+            base as f32,
+        ) as u32
+    };
+    apply_offhand_penalty(apply(raw_min), apply(raw_max))
 }
 
 fn resolve_swing(ctx: &ReducerContext) {
@@ -600,7 +608,7 @@ fn fire_melee_swing(
 
     let (mut seal_portion, mut seal_spell) = (0u32, 0u32);
     if rolled > 0 {
-        let (p, s) = seal_holy_on_swing(ctx, attacker);
+        let (p, s) = seal_holy_on_swing(ctx, attacker, target_guid);
         seal_portion = p;
         seal_spell = s;
         rolled += seal_portion;
@@ -783,7 +791,20 @@ fn fire_ranged_shot(
                 lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
             ),
         );
-        (rdmin as u32, rdmax as u32)
+        (
+            crate::spell::bonuses::weapon_damage(
+                ctx,
+                attacker,
+                crate::items::equip_slot::RANGED,
+                rdmin,
+            ) as u32,
+            crate::spell::bonuses::weapon_damage(
+                ctx,
+                attacker,
+                crate::items::equip_slot::RANGED,
+                rdmax,
+            ) as u32,
+        )
     } else {
         (dmin, dmax)
     };
@@ -880,6 +901,15 @@ fn schedule_ranged_impact(
             damage,
             ranged_spell_id,
             is_crit,
+            school: if ranged_spell_id == 5019 {
+                super::folds::ranged_school(ctx, attacker_guid)
+            } else {
+                ctx.db
+                    .game_spell()
+                    .spell_id()
+                    .find(ranged_spell_id)
+                    .map_or(0, |spell| crate::spell::school_index(spell.school_mask))
+            },
         });
 }
 
@@ -926,6 +956,7 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
                 target_guid: shot.target_guid,
                 damage: damage.amount,
                 is_crit: shot.is_crit,
+                school: shot.school,
                 is_proc_log: true,
                 ..SpellCastEvent::signal_at(
                     ctx,

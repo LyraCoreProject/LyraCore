@@ -10,6 +10,7 @@ pub(crate) use outcome::{
     CastRefusal, CastRefusalKind, CastRefusalReason, CastStart,
 };
 pub(crate) use presentation::recompute_display;
+pub(crate) mod bonuses;
 mod control;
 mod effects;
 mod math;
@@ -59,19 +60,19 @@ pub(crate) use math::spell_crit_bp;
 #[cfg(any(test, feature = "debug_reducers"))]
 pub(crate) use math::spell_miss_chance_bp;
 #[cfg(test)]
-pub(crate) use math::{absorb_draw, can_afford, int_spell_power, stance_damage_taken_pct};
+pub(crate) use math::{absorb_draw, can_afford, stance_damage_taken_pct};
 pub(crate) use math::{
     add_flat_pool_bonus, apply_damage_pct, apply_resistance, apply_spell_crit, apply_spell_mod,
     aura_moves_sheet, aura_moves_vitals, auras_on, break_stealth, client_form_for_stance,
-    combat_field_bonus, combat_health_regen_pct, compose_magnitude, cost_gate_blocks,
-    damage_taken_bonus, damaged_value, detect_range_mod, dispel_category_matches, distance_3d,
-    drain_shields, effect_amount, energized_value, form_recast_toggles_off, healed_value,
-    healing_power, is_behind, is_facing, is_on_cooldown, is_ready_at, is_stealthed,
-    level_gate_blocks, power_regen_rate, projectile_travel_ms, rederive_pool, remove_seal_auras,
-    resist_magic_damage, resistance_bonus, school_index, school_locked, seal_amount,
-    seal_amount_and_spell, should_arm_spell_retaliation, speed_bonus, spell_crit_chance, spell_mod,
-    spell_power, stance_allows, stance_damage_done_pct, stance_switch_clears_power,
-    stance_threat_pct, stat_bonus, stat_pct_bonus,
+    combat_field_bonus, combat_health_regen_pct, cost_gate_blocks, damage_taken_bonus,
+    damaged_value, detect_range_mod, dispel_category_matches, distance_3d, drain_shields,
+    effect_amount, energized_value, form_recast_toggles_off, healed_value, healing_power,
+    is_behind, is_facing, is_on_cooldown, is_ready_at, is_stealthed, level_gate_blocks,
+    power_regen_rate, projectile_travel_ms, rederive_pool, remove_seal_auras, resist_magic_damage,
+    resistance_bonus, school_index, school_locked, seal_amount, seal_amount_and_spell,
+    should_arm_spell_retaliation, speed_bonus, spell_crit_chance, spell_mod, spell_power,
+    stance_allows, stance_damage_done_pct, stance_switch_clears_power, stance_threat_pct,
+    stat_bonus, stat_pct_bonus,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use scheduler::arm_ground_area_tick;
@@ -109,28 +110,29 @@ pub use tables::{
 
 pub(crate) use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_COMBAT_HEALTH_REGEN_PCT, A_CONTROL, A_DISARM, A_FLAG, A_IMMUNITY, A_MOD_COMBAT,
-    A_MOD_DAMAGE_TAKEN, A_MOD_DETECT_RANGE, A_MOD_HEALING, A_MOD_POWER_REGEN_PCT, A_MOD_RESISTANCE,
-    A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE,
-    A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_RETALIATE, A_SEAL,
-    A_SELF_RESURRECT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_STEALTH, A_TRANSFORM, BEAST_TYPE,
-    COMBAT_ATTACK_POWER, COMBAT_BLOCK, COMBAT_CRIT, COMBAT_DEFENSE, COMBAT_DMG_DONE, COMBAT_DODGE,
-    COMBAT_HIT, COMBAT_PARRY, COMBAT_SPELL_POWER, COMBAT_THREAT, CRITTER_TYPE, E_ADD_COMBO,
-    E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISMOUNT, E_DISTRACT, E_DUEL,
-    E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_HEAL, E_HEAL_MAX_HEALTH,
-    E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN,
-    E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE,
-    E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER,
-    E_WEAPON_STRIKE, HUMANOID_TYPE, KIND_AURA_BIT, M_FEAR, M_POLY, M_ROOT, M_STUN, P_DISPLAY_ID,
-    P_ENTRY, P_GAMEOBJECT_ENTRY, P_MECHANIC, P_PCT_MAX_POWER, P_POWER_TYPE, P_SPEED_KIND,
-    RESIST_ARMOR, SPEED_MOUNTED, SPEED_MOVE, SPEED_SWING, SPELLMOD_OP_CASTING_TIME,
-    SPELLMOD_OP_DAMAGE, SPELL_ATTR_ALWAYS_HIT, SPELL_ATTR_BINARY, SPELL_ATTR_CANNOT_CRIT,
-    SPELL_ATTR_CHANNELED, SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_IGNORE_RESISTANCES,
-    SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_MAGIC_HIT, SPELL_ATTR_PASSIVE, SPELL_ATTR_REQ_BEHIND,
-    SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE,
-    SPELL_ATTR_REQ_STEALTH, SPELL_ATTR_STEALTH_SAFE, SPELL_ATTR_USES_RANGED_SLOT,
-    SPELL_ATTR_WEAPON_PROCS, STANCE_BEAR, STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_AGI,
-    STAT_ALL, STAT_INT, STAT_SPI, STAT_STA, STAT_STR, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY,
-    T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN, A_MOD_DAMAGE_TAKEN_FLAT,
+    A_MOD_DETECT_RANGE, A_MOD_HEALING, A_MOD_HEALING_TAKEN, A_MOD_POWER_REGEN_PCT,
+    A_MOD_RESISTANCE, A_MOD_SCHOOL_CRIT, A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED,
+    A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE,
+    A_PROC_TRIGGER, A_RETALIATE, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT,
+    A_STEALTH, A_TRANSFORM, BEAST_TYPE, COMBAT_ATTACK_POWER, COMBAT_BLOCK, COMBAT_CRIT,
+    COMBAT_DEFENSE, COMBAT_DMG_DONE, COMBAT_DODGE, COMBAT_HIT, COMBAT_PARRY, COMBAT_SPELL_POWER,
+    COMBAT_THREAT, CRITTER_TYPE, E_ADD_COMBO, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM,
+    E_DAMAGE, E_DISMOUNT, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET,
+    E_FINISHER_DAMAGE, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING,
+    E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT,
+    E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_PET,
+    E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, HUMANOID_TYPE, KIND_AURA_BIT, M_FEAR,
+    M_POLY, M_ROOT, M_STUN, P_DISPLAY_ID, P_ENTRY, P_GAMEOBJECT_ENTRY, P_MECHANIC, P_PCT_MAX_POWER,
+    P_POWER_TYPE, P_SPEED_KIND, RESIST_ARMOR, SPEED_MOUNTED, SPEED_MOVE, SPEED_SWING,
+    SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_DAMAGE, SPELL_ATTR_ALWAYS_HIT, SPELL_ATTR_BINARY,
+    SPELL_ATTR_CANNOT_CRIT, SPELL_ATTR_CHANNELED, SPELL_ATTR_COMBO_FINISHER,
+    SPELL_ATTR_IGNORE_RESISTANCES, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_MAGIC_HIT,
+    SPELL_ATTR_PASSIVE, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER,
+    SPELL_ATTR_REQ_REVENGE, SPELL_ATTR_REQ_STEALTH, SPELL_ATTR_STEALTH_SAFE,
+    SPELL_ATTR_USES_RANGED_SLOT, SPELL_ATTR_WEAPON_PROCS, STANCE_BEAR, STANCE_CAT,
+    STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_AGI, STAT_ALL, STAT_INT, STAT_SPI, STAT_STA, STAT_STR,
+    T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 #[cfg(test)]
 pub(crate) use lyracore_shared::spell::taxonomy::{
@@ -138,9 +140,8 @@ pub(crate) use lyracore_shared::spell::taxonomy::{
 };
 pub(crate) use tables::SpellCastEventKind;
 pub(crate) use taxonomy::{
-    DISARM_SWING_RETAINED_PCT, INT_PER_SPELL_POWER, INT_SPELL_POWER_BASE, PROJECTILE_SPEED_YPS,
-    SPELL_POWER_COEFF_PCT, STANCE_DEFENSIVE_DMG_DONE_PCT, STANCE_DEFENSIVE_DR_PCT,
-    STANCE_DEFENSIVE_THREAT_PCT,
+    DISARM_SWING_RETAINED_PCT, PROJECTILE_SPEED_YPS, STANCE_DEFENSIVE_DMG_DONE_PCT,
+    STANCE_DEFENSIVE_DR_PCT, STANCE_DEFENSIVE_THREAT_PCT,
 };
 
 pub(crate) use tables::{
