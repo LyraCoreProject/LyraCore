@@ -614,7 +614,14 @@ pub(crate) fn roll_strike_outcome(
         ),
         crushing: 0,
     };
-    attack_outcome(ctx.random::<u32>() % 10_000, &table)
+    let production_draw = || ctx.random::<u32>();
+    #[cfg(feature = "conformance_test_fixture")]
+    let draw = crate::conformance_rolls::swing_draws(ctx, attacker.guid)
+        .map(|draws| draws[0])
+        .unwrap_or_else(production_draw);
+    #[cfg(not(feature = "conformance_test_fixture"))]
+    let draw = production_draw();
+    attack_outcome(draw % 10_000, &table)
 }
 
 pub(crate) fn weapon_strike_spell_damage(
