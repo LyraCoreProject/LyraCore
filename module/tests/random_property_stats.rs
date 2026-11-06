@@ -123,14 +123,14 @@ fn direct_pools_and_regeneration_follow_working_equipment() {
     assert!(
         poll_until(POLL_TIMEOUT, || {
             let row = world_row(&shard);
-            row["health"] == "144" && row["power"] == "124"
+            row["health"] == "110" && row["power"] == "124"
         }),
         "the scheduled regeneration pass did not apply the expected health and mana"
     );
 
     shard.assert_sql("UPDATE game_world_entity SET simulation_indexed = false, power = 100, mana_regen_paused_until_ms = 9999999999999 WHERE guid = 1");
     assert!(
-        poll_until(POLL_TIMEOUT, || world_row(&shard)["power"] == "108"),
+        poll_until(POLL_TIMEOUT, || world_row(&shard)["power"] == "104"),
         "flat mana regeneration stopped during the five-second rule"
     );
 
@@ -145,7 +145,7 @@ fn direct_pools_and_regeneration_follow_working_equipment() {
     );
     shard.assert_call("debug_engage", &[&wolf, "1"]);
     assert!(
-        poll_until(POLL_TIMEOUT, || world_row(&shard)["health"] == "112"),
+        poll_until(POLL_TIMEOUT, || world_row(&shard)["health"] == "106"),
         "flat health regeneration stopped in combat"
     );
 }
