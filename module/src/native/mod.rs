@@ -124,7 +124,8 @@ pub(crate) use realm_guild::member_changed as guild_member_changed;
 pub(crate) use reputation::{changed as reputation_changed, watched as watched_faction};
 pub(crate) use spell::{cast_event, spell_cooldown, spell_impact};
 pub(crate) use taxi::{
-    aborted as taxi_aborted, landed as taxi_landed, spline_changed as taxi_spline_changed,
+    aborted as taxi_aborted, landed as taxi_landed, resumed as taxi_resumed,
+    spline_changed as taxi_spline_changed,
 };
 pub(crate) use teleport::{
     begin as begin_teleport, changed as teleport_changed, expire_near_teleports_pass,

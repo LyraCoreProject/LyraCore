@@ -352,9 +352,6 @@ pub(super) fn replay(ctx: &ReducerContext, connection: ConnectionId, guid: u64, 
             if ghost {
                 packets.push(packet(codec::build_move_water_walk(guid, true)));
             }
-            packets.push(packet(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                codec::build_sheet_stats_values(guid, &super::view::sheet_stats(&entity)),
-            ))));
         }
     }
     for packet in packets {

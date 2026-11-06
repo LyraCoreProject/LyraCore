@@ -217,7 +217,7 @@ fn dead_ghost_combat_taxi_and_transport_states_refuse_without_changes() {
             "UPDATE game_world_entity SET {reset} WHERE guid = 1"
         ));
     }
-    shard.assert_sql("INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded) VALUES (1,1,1,2,1,0,0,1700000000000000,0,0,0,true)");
+    shard.assert_sql("INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded,first_destination_node_index) VALUES (1,1,1,2,1,0,0,1700000000000000,0,0,0,true,1)");
     refused(&shard, ARGS, "character is on a taxi flight");
     shard.assert_sql("DELETE FROM game_active_taxi_flight");
     shard.assert_sql("INSERT INTO game_transport_passenger (character_guid,transport_entry,x,y,z,orientation) VALUES (1,1,0,0,0,0)");

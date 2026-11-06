@@ -159,6 +159,7 @@ pub struct GameTaxiPath {
     pub fare: u32,
 }
 
+#[derive(Clone)]
 #[table(
     accessor = game_taxi_path_node,
     public,

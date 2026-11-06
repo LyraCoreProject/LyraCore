@@ -1011,22 +1011,12 @@ fn clean_baseline() -> Result<Value> {
 
 #[test]
 fn clean_baseline_without_report_requests_audit() -> Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let ledger = FeatureLedger::load(&root.join("features"))?;
-    let work = open_work_from(
-        &clean_baseline()?,
-        &ledger,
-        None,
-        None,
-        "head",
-        "head",
-        "pin",
-    )?;
-    for behavior in ["connection_identity", "taxi_single_hop"] {
-        let item = work.iter().find(|item| item.behavior == behavior).unwrap();
-        assert_eq!(item.kind, "evidence_refresh");
-        assert!(item.next_command.starts_with("./conformance/audit --date "));
-    }
+    let ledger = synthetic_ledger();
+    let baseline = json!({"scenarios": [{"behavior": "branch", "rule": []}]});
+    let work = open_work_from(&baseline, &ledger, None, None, "head", "head", "pin")?;
+    let item = work.iter().find(|item| item.behavior == "branch").unwrap();
+    assert_eq!(item.kind, "evidence_refresh");
+    assert!(item.next_command.starts_with("./conformance/audit --date "));
     Ok(())
 }
 

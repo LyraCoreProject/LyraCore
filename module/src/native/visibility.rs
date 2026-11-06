@@ -273,7 +273,7 @@ pub(super) fn create(
     }
     if grant.layer == WORLD_ENTITY {
         super::pet::replay(ctx, connection, grant.viewer_guid, grant.entity_guid)?;
-        super::combat::replay(ctx, connection, grant.entity_guid)?;
+        super::combat::replay(ctx, connection, grant.entity_guid, grant.viewer_guid)?;
         super::aura::replay(ctx, connection, grant.entity_guid, false);
         super::creature::replay(ctx, connection, grant.entity_guid);
     }

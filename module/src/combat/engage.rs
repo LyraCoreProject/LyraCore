@@ -8,6 +8,48 @@ use crate::creatures::tick::game_creature_spline;
 use crate::spell::{CastGateRefusal, CastRefusalReason};
 
 pub(crate) const COMBAT_DROP_MS: u64 = 6000;
+// vmangos Unit::Update polls PvE combat state every 1,200 ms.
+const COMBAT_CHECK_MICROS: i64 = 1_200_000;
+
+#[table(accessor = game_combat_check_schedule, scheduled(check_combat))]
+pub struct CombatCheckSchedule {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    #[unique]
+    pub character_guid: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
+crate::character_owned!(delete, fn sweep_delete_game_combat_check_schedule(ctx, character_guid) {
+    ctx.db.game_combat_check_schedule().character_guid().delete(character_guid);
+});
+crate::character_owned!(not_transported, fn sweep_transfer_game_combat_check_schedule());
+
+#[spacetimedb::reducer]
+pub fn check_combat(ctx: &ReducerContext, schedule: CombatCheckSchedule) {
+    if !crate::time::scheduler_authorized(ctx) {
+        return;
+    }
+    ctx.db
+        .game_combat_check_schedule()
+        .scheduled_id()
+        .delete(schedule.scheduled_id);
+    let Some(mut character) = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(schedule.character_guid)
+    else {
+        return;
+    };
+    let now_ms = crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1000;
+    if now_ms >= character.combat_until_ms && !is_engaged(ctx, character.guid) {
+        character.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
+        character.combat_until_ms = 0;
+        character.update(ctx);
+    }
+}
 
 pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     let entities = ctx.db.game_world_entity();
@@ -155,6 +197,14 @@ pub(crate) fn refresh_leash(ctx: &ReducerContext, guid_a: u64, guid_b: u64) {
 }
 
 pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
+    disengage_with_combat_check(ctx, guid, false);
+}
+
+pub(crate) fn suspend_hostile_references(ctx: &ReducerContext, guid: u64) {
+    disengage_with_combat_check(ctx, guid, true);
+}
+
+fn disengage_with_combat_check(ctx: &ReducerContext, guid: u64, defer_character_exit: bool) {
     let melee = ctx.db.game_melee_attack();
     let attackers_of_guid: Vec<u64> = melee
         .by_target()
@@ -171,12 +221,17 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
         crate::combat::MeleeAttack::delete(ctx, a);
     }
     use crate::game_threat;
-    let threat_members = ctx
-        .db
-        .game_threat()
+    let threats = ctx.db.game_threat();
+    let threat_members = threats
         .by_creature()
         .filter(&guid)
         .map(|entry| entry.source_guid)
+        .chain(
+            threats
+                .by_source()
+                .filter(&guid)
+                .map(|entry| entry.creature_guid),
+        )
         .collect::<Vec<_>>();
     crate::threat::clear_for_unit(ctx, guid);
     clear_target(ctx, guid);
@@ -186,6 +241,8 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
     let mut freed = attackers_of_guid;
     freed.extend(threat_members);
     freed.push(guid);
+    freed.sort_unstable();
+    freed.dedup();
     let entities = ctx.db.game_world_entity();
     for g in freed {
         if is_engaged(ctx, g) {
@@ -198,8 +255,28 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
         crate::creatures::reset_engagement(ctx, g);
         if let Some(mut e) = entities.guid().find(g) {
             if e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0 {
-                e.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
-                e.combat_until_ms = 0;
+                if defer_character_exit && g == guid && e.is_player() {
+                    let due = Timestamp::from_micros_since_unix_epoch(
+                        crate::time::now(ctx)
+                            .to_micros_since_unix_epoch()
+                            .saturating_add(COMBAT_CHECK_MICROS),
+                    );
+                    e.combat_until_ms = due.to_micros_since_unix_epoch().max(0) as u64 / 1000;
+                    ctx.db
+                        .game_combat_check_schedule()
+                        .character_guid()
+                        .delete(guid);
+                    ctx.db
+                        .game_combat_check_schedule()
+                        .insert(CombatCheckSchedule {
+                            scheduled_id: 0,
+                            character_guid: guid,
+                            scheduled_at: crate::time::schedule_time(ctx, due),
+                        });
+                } else {
+                    e.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
+                    e.combat_until_ms = 0;
+                }
                 e.update(ctx);
             }
         }

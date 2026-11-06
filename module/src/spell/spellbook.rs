@@ -76,15 +76,21 @@ pub(crate) fn knows_spell(ctx: &ReducerContext, guid: u64, spell_id: u32) -> boo
         .is_some()
 }
 
-pub(crate) fn apply_racial_passives(ctx: &ReducerContext, guid: u64, race: u8, level: u8) {
-    let racials: Vec<u32> = ctx
+pub(crate) fn apply_starting_passives(
+    ctx: &ReducerContext,
+    guid: u64,
+    race: u8,
+    class: u8,
+    level: u8,
+) {
+    let starting_spells: Vec<u32> = ctx
         .db
         .game_createinfo_spell()
         .iter()
-        .filter(|r| r.class == 0 && (r.race == 0 || r.race == race))
+        .filter(|row| createinfo_row_matches(row.race, row.class, race, class))
         .map(|r| r.spell_id)
         .collect();
-    for spell_id in racials {
+    for spell_id in starting_spells {
         let Some(hdr) = ctx.db.game_spell().spell_id().find(spell_id) else {
             continue;
         };

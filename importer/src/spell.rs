@@ -39,8 +39,8 @@ use lyracore_shared::spell::taxonomy::{
     P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
     P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW,
     P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
-    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_CHANNELED,
-    SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_PASSIVE,
+    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_AREA_AURA,
+    SPELL_ATTR_CHANNELED, SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER,
     SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE, SPELL_ATTR_REQ_STEALTH,
     SPELL_ATTR_STEALTH_SAFE, SPELL_ATTR_USES_RANGED_SLOT, SPELL_ATTR_WEAPON_PROCS,
@@ -873,6 +873,18 @@ fn push_spell_header_row(
         cast_flags |= SPELL_ATTR_WEAPON_PROCS;
     }
     cast_flags |= roll_cast_flags(s);
+    if s.effect
+        .iter()
+        .zip(s.effect_aura.iter())
+        .any(|(effect, aura)| {
+            matches!(
+                *effect,
+                EFFECT_APPLY_AREA_AURA_PARTY | EFFECT_APPLY_AREA_AURA_PET
+            ) && *aura != 0
+        })
+    {
+        cast_flags |= SPELL_ATTR_AREA_AURA;
+    }
     let stances = translate_stance_mask(s.shapeshift_mask);
     let spell_level = s.spell_level.min(255) as u8;
     spell_levels.insert(spell_id, spell_level);
@@ -2998,6 +3010,30 @@ mod tests {
     #[test]
     fn equip_review_battle_shouts_area_target_stays_inert_on_equip() {
         assert!(!equip_review_effect(6673, 99, 14, 0, (6, 20, 0)).equip_supported);
+    }
+
+    #[test]
+    fn area_aura_visibility_preserves_party_and_pet_effect_origins() {
+        for (effect, aura, expected) in [
+            (6, 137, 0),
+            (35, 137, SPELL_ATTR_AREA_AURA),
+            (119, 137, SPELL_ATTR_AREA_AURA),
+            (35, 0, 0),
+        ] {
+            let mut dbc = fixture_tables();
+            dbc.spells = vec![Spell {
+                id: 20598,
+                attributes: SPELL_ATTR_PASSIVE,
+                effect: [effect, 0, 0],
+                effect_aura: [aura, 0, 0],
+                effect_base_points: [4, 0, 0],
+                effect_misc_value: [4, 0, 0],
+                implicit_target_a: [1, 0, 0],
+                ..Default::default()
+            }];
+            let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+            assert_eq!(rows.headers[0].cast_flags & SPELL_ATTR_AREA_AURA, expected);
+        }
     }
 
     #[test]

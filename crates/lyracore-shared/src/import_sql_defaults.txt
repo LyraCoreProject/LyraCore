@@ -33,3 +33,4 @@ game_world_entity sheet_ranged_ap_modifiers 0
 game_world_entity sheet_ranged_dmg_min_fraction 0.0
 game_world_entity sheet_ranged_dmg_max_fraction 0.0
 game_world_entity sheet_ranged_crit_bp 0
+game_active_taxi_flight first_destination_node_index 1

@@ -772,9 +772,10 @@ pub(crate) fn apply_player_login(
         crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(character_guid));
     }
 
-    crate::taxi::sync_flight_on_world_entry(ctx, &mut character);
-
     let mut entity = crate::creatures::build_player_entity(ctx, &character, owner);
+    if entry == WorldEntry::Login {
+        crate::taxi::prepare_world_entry(ctx, &mut entity);
+    }
     if character.pending_ghost {
         let (dead, health, player_flags, unit_bytes_1) =
             ghost_restored_fields(entity.player_flags, entity.unit_bytes_1);
@@ -787,7 +788,9 @@ pub(crate) fn apply_player_login(
     entity.insert(ctx);
     crate::ghost::restore(ctx, character_guid);
     crate::spell::recompute_display(ctx, character_guid);
-    crate::taxi::arm_taxi_flight(ctx, character_guid);
+    if entry == WorldEntry::WorldPort {
+        crate::taxi::arm_taxi_flight(ctx, character_guid);
+    }
     crate::transport::arm_crossings(ctx);
     crate::mount::restore_mount_on_rebuild(ctx, character_guid);
 
@@ -810,7 +813,13 @@ pub(crate) fn apply_player_login(
 
     crate::talent::apply_learned_talents(ctx, character.guid, owner, character.level as u32);
 
-    crate::spell::apply_racial_passives(ctx, character.guid, character.race, character.level);
+    crate::spell::apply_starting_passives(
+        ctx,
+        character.guid,
+        character.race,
+        character.class,
+        character.level,
+    );
 
     crate::spell::recompute_vitals(ctx, character.guid);
     crate::spell::recompute_sheet(ctx, character.guid);

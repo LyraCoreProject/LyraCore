@@ -195,6 +195,7 @@ macro_rules! schedule_tables {
         $macro!($ctx, 31, game_creature_ai_forced_despawn, scheduled_id, crate::creatures::fire_eventai_forced_despawn $(, $extra)*);
         $macro!($ctx, 32, game_temporary_enchantment, scheduled_id, crate::items::expire_temporary_enchantment $(, $extra)*);
         $macro!($ctx, 33, game_item_aura_expiry, aura_id, crate::spell::expire_item_aura $(, $extra)*);
+        $macro!($ctx, 34, game_combat_check_schedule, scheduled_id, crate::combat::check_combat $(, $extra)*);
     };
 }
 

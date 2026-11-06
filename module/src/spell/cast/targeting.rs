@@ -278,6 +278,33 @@ fn next_stacks(current: u8, max_stacks: u8) -> u8 {
     (current.max(1) + 1).min(max_stacks.max(1))
 }
 
+pub(crate) fn aura_has_visible_slot(
+    ctx: &ReducerContext,
+    header: &Spell,
+    caster_guid: u64,
+    target_guid: u64,
+) -> bool {
+    use lyracore_shared::spell::taxonomy::{SPELL_ATTR_AREA_AURA, TOTEM_TYPE};
+
+    if !header.equip_passive() {
+        return true;
+    }
+    if header.cast_flags & SPELL_ATTR_AREA_AURA != 0 {
+        if caster_guid != target_guid {
+            return true;
+        }
+    } else if header.visual_id != 0 {
+        return true;
+    }
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(caster_guid)
+        .filter(|caster| !caster.is_player() && caster.owner_guid != 0)
+        .and_then(|caster| ctx.db.game_creature_template().entry().find(caster.entry))
+        .is_some_and(|template| template.creature_type == TOTEM_TYPE)
+}
+
 // The 1.12 client chooses buff or debuff frames by slot index rather than aura flags.
 fn pick_aura_slot(
     existing: &[(u8, u32)],
@@ -286,14 +313,17 @@ fn pick_aura_slot(
     buff_slot_count: u8,
     slot_count: u8,
 ) -> Option<u8> {
-    if let Some(&(slot, _)) = existing.iter().find(|(_, sp)| *sp == spell_id) {
-        return Some(slot); // All effects of one spell share one client icon.
-    }
     let mut range = if is_negative {
         buff_slot_count..slot_count
     } else {
         0..buff_slot_count
     };
+    if let Some(&(slot, _)) = existing
+        .iter()
+        .find(|(slot, sp)| *sp == spell_id && range.contains(slot))
+    {
+        return Some(slot);
+    }
     range.find(|s| !existing.iter().any(|(es, _)| es == s))
 }
 
@@ -531,7 +561,7 @@ pub(crate) fn aura_apply(
                 )
             })
             .collect();
-        let visible = source_item == 0 || !hdr.equip_passive() || hdr.visual_id != 0;
+        let visible = aura_has_visible_slot(ctx, hdr, caster_guid, target_guid);
         let Some(slot) = (if !visible {
             Some(u8::MAX)
         } else {
@@ -1841,6 +1871,14 @@ mod effect_handler_tests {
         let full: Vec<(u8, u32)> = (0u8..3).map(|s| (s, s as u32 + 100)).collect();
         assert_eq!(super::pick_aura_slot(&full, 999, false, 3, 4), None);
         assert_eq!(super::pick_aura_slot(&full, 101, false, 3, 4), Some(1));
+    }
+
+    #[test]
+    fn a_hidden_holder_does_not_hide_a_visible_holder_of_the_same_spell() {
+        assert_eq!(
+            super::pick_aura_slot(&[(255, 20598)], 20598, false, 32, 48),
+            Some(0)
+        );
     }
 
     #[test]

@@ -20,6 +20,12 @@ Counts and whole-second timestamps are shared by all Characters buying from that
 `game_vendor_stock_runtime` records the Host process identity that owns those counters.
 See [vendor stock migration](danger-zones.md#vendor-stock-migration) for lifetime and import rules.
 
+`game_active_taxi_flight.first_destination_node_index` is end-appended with default 1. It names
+the first DBC vertex after the stored launch origin, so existing flights retain their route.
+A reconnect sends the unmounted login CREATE, then restarts the remaining spline from the saved
+position. `game_combat_check_schedule` is a new private one-shot schedule: suspending hostility for
+taxi resumption keeps the combat flag until the 1,200 ms check, including when the flight lands first.
+
 ## 1. Conventions
 
 - **Naming.** Core tables take the `game_` prefix; Package tables take `pkg_<name>_`. External
@@ -592,6 +598,11 @@ data the importer writes, the third is a per-aura snapshot.
 
 `game_spell` carries the selected vmangos `spell_template` fields: `proc_flags`, the vanilla
 `procFlags` bitmask with no translation table, `proc_chance` (a whole percent) and `proc_charges` (0 means unlimited).
+
+`game_spell.cast_flags` retains party and pet area-aura origins as `SPELL_ATTR_AREA_AURA`.
+Their translated target can be self, so slot visibility must use this flag instead of inferring
+the source effect from the target. Ordinary passives use slot 255; visual passives, recipient
+area auras and totem auras can use visible slots. Repair applies the same rule to stored cast auras.
 
 `game_spell_proc_event` carries the source proc-event overlay: `ppm_rate`,
 `icd_ms`, `proc_ex` (the normal-hit and critical-hit rule), the `school_mask`, `family_name` and

@@ -15,6 +15,6 @@ pub(crate) use resolve::{
 #[cfg(feature = "debug_reducers")]
 pub(crate) use targeting::blink_forward;
 pub(crate) use targeting::{
-    apply_direct_heal, apply_effect, aura_apply, dynamic_object_guid, faction_target_violation,
-    recipe_reagents, revive_amount, select_targets, ItemGrantOutcome,
+    apply_direct_heal, apply_effect, aura_apply, aura_has_visible_slot, dynamic_object_guid,
+    faction_target_violation, recipe_reagents, revive_amount, select_targets, ItemGrantOutcome,
 };

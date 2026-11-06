@@ -66,6 +66,67 @@ struct CtxWorld<'a> {
     chase_expansions: std::cell::Cell<u32>,
 }
 
+fn aggro_target(ctx: &ReducerContext, entity: &WorldEntity) -> AggroTarget {
+    AggroTarget {
+        guid: entity.guid,
+        at: Point {
+            x: entity.x,
+            y: entity.y,
+            z: entity.z,
+        },
+        level: entity.level,
+        faction_template: entity.faction_template,
+        map_id: entity.map_id,
+        instance_id: entity.instance_id,
+        dead: entity.dead,
+        godmode: entity.godmode,
+        taxi_flying: crate::taxi::is_flying(entity),
+        stealthed: crate::spell::is_stealthed(ctx, entity.guid),
+    }
+}
+
+pub(crate) fn character_arrived(ctx: &ReducerContext, guid: u64) {
+    let Some(character) = ctx.db.game_world_entity().guid().find(guid) else {
+        return;
+    };
+    let target = aggro_target(ctx, &character);
+    if !super::is_aggro_candidate(target.dead, target.godmode, target.taxi_flying) {
+        return;
+    }
+    let radius = lyracore_shared::spatial::DEFAULT_VISIBILITY_RADIUS;
+    let active = crate::helpers::entities_near(
+        ctx,
+        character.map_id,
+        character.instance_id,
+        character.x,
+        character.y,
+        radius,
+    )
+    .into_iter()
+    .filter(|entity| !entity.is_player())
+    .filter(|entity| crate::helpers::dist_sq(&character, entity) <= radius * radius)
+    .map(|entity| entity.guid)
+    .collect();
+    let mut world = CtxWorld {
+        ctx,
+        regen_window: crate::combat::RegenWindow::new(
+            crate::time::now(ctx).to_micros_since_unix_epoch() as u64 / 1000,
+            0,
+        ),
+        advances: Vec::new(),
+        profile: false,
+        chase_expansions: std::cell::Cell::new(0),
+    };
+    crate::vmap::with_query_cache(|| {
+        let (pulls, _) = super::aggro_with_targets(&mut world, &active, &[target]);
+        super::assist(&mut world, &active, pulls);
+    });
+    for attack in ctx.db.game_melee_attack().by_target().filter(&guid) {
+        world.enter_combat(attack.attacker_guid);
+        world.enter_combat(guid);
+    }
+}
+
 impl CtxWorld<'_> {
     // Restoring the stored row in the same transaction leaves no commit-log entry.
     fn settle_advances(self) {
@@ -553,22 +614,7 @@ impl EngageSink for CtxWorld<'_> {
             .by_entry()
             .filter(0u32)
             .filter(|e| e.is_player())
-            .map(|e| AggroTarget {
-                guid: e.guid,
-                at: Point {
-                    x: e.x,
-                    y: e.y,
-                    z: e.z,
-                },
-                level: e.level,
-                faction_template: e.faction_template,
-                map_id: e.map_id,
-                instance_id: e.instance_id,
-                dead: e.dead,
-                godmode: e.godmode,
-                taxi_flying: crate::taxi::is_flying(&e),
-                stealthed: crate::spell::is_stealthed(self.ctx, e.guid),
-            })
+            .map(|entity| aggro_target(self.ctx, &entity))
             .collect()
     }
     fn sensing_creatures(&self, active: &HashSet<u64>) -> Vec<Sensor> {

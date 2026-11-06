@@ -28,8 +28,8 @@ fn a_taxi_passenger_leaves_combat_and_cannot_be_targeted_until_landing() {
     shard.assert_sql(&format!(
         "INSERT INTO game_active_taxi_flight \
          (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,\
-          current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded) \
-         VALUES (1,{},{},{},1147,25,0,0,0,0,0,false)",
+          current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded,first_destination_node_index) \
+         VALUES (1,{},{},{},1147,25,0,0,0,0,0,false,1)",
         taxi::PATH_ID,
         taxi::SOURCE_NODE_STORAGE_ID,
         taxi::DESTINATION_NODE_STORAGE_ID

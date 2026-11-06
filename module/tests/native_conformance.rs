@@ -15,6 +15,8 @@ mod buyback;
 mod character_world;
 #[path = "conformance/item_equip.rs"]
 mod item_equip;
+#[path = "conformance/passives.rs"]
+mod passives;
 #[path = "../../conformance/support/properties/mod.rs"]
 mod properties;
 #[path = "../../conformance/support/quest_world.rs"]
@@ -82,6 +84,59 @@ fn enter(shard: &Standalone, guid: u64) -> ReducerConnection {
         .call("debug_native_enter_world", json!([guid]))
         .unwrap();
     connection
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn native_login_calls_nearby_pack_assistance() {
+    use lyracore_shared::constants::unit_flags;
+
+    let (shard, character, _) = fixture("native-login-assistance");
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    shard.assert_sql("DELETE FROM game_faction_template WHERE id = 1 OR id = 14");
+    shard.assert_sql("INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (1,1,3,2,12,0,0,0,0,0,0,0,0),(14,14,8,0,1,0,0,0,0,0,0,0,0)");
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET x = 0, y = 0, z = 0, orientation = 0, level = 1 WHERE guid = {character}"
+    ));
+    shard.assert_call("debug_spawn_player_entity", &[&character.to_string()]);
+    for distance in [15, 23] {
+        shard.assert_call(
+            "debug_spawn_at_feet",
+            &[&character.to_string(), "51000", &distance.to_string()],
+        );
+    }
+    let creatures = shard.query_rows(
+        "SELECT guid FROM game_world_entity WHERE entry = 51000 AND (x = 15 OR x = 23)",
+    );
+    assert_eq!(creatures.len(), 2);
+    assert!(shard
+        .query_rows("SELECT * FROM game_melee_attack")
+        .is_empty());
+
+    let _connection = enter(&shard, character);
+    let mut engaged = shard
+        .query_rows(&format!(
+            "SELECT attacker_guid FROM game_melee_attack WHERE target_guid = {character}"
+        ))
+        .into_iter()
+        .map(|row| row["attacker_guid"].parse::<u64>().unwrap())
+        .collect::<Vec<_>>();
+    engaged.sort_unstable();
+    let mut expected = creatures
+        .iter()
+        .map(|row| row["guid"].parse::<u64>().unwrap())
+        .collect::<Vec<_>>();
+    expected.sort_unstable();
+    assert_eq!(engaged, expected, "both pack members must engage on login");
+    for guid in expected.into_iter().chain([character]) {
+        let flags = shard.query_rows(&format!(
+            "SELECT unit_flags FROM game_world_entity WHERE guid = {guid}"
+        ))[0]["unit_flags"]
+            .parse::<u32>()
+            .unwrap();
+        assert_ne!(flags & unit_flags::IN_COMBAT, 0, "{guid} must be in combat");
+    }
 }
 
 #[test]
@@ -494,6 +549,10 @@ fn taxi_flight_on_route(
     route: &[(f32, f32, f32)],
 ) -> (Standalone, u64, u64) {
     let (shard, passenger, _) = fixture(name);
+    let &(x, y, z) = route.first().expect("taxi fixture needs a launch point");
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET x = {x}, y = {y}, z = {z} WHERE guid = {passenger}"
+    ));
     let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
     shard.assert_call(
         "provision_account",
@@ -813,7 +872,7 @@ fn login_near_a_flyer_replays_its_current_spline() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn flyer_reconnect_restores_position_and_replays_current_spline() {
+fn flyer_reconnect_resumes_from_its_saved_position() {
     let (shard, passenger, _) = taxi_flight("taxi-flyer-reconnect", 40);
     let mut first = enter(&shard, passenger);
     first.drain_packets();
@@ -837,18 +896,14 @@ fn flyer_reconnect_restores_position_and_replays_current_spline() {
 
     let mut second = enter(&shard, passenger);
     let world_x = taxi_x(&shard, passenger);
-    let (spline, position) =
-        taxi_create(&second.drain_packets(), second.connection_id(), passenger)
-            .expect("reconnect did not create the flyer with its spline");
-    let replay_x = position.x;
-    assert!(spline.time_passed > 0);
+    let rows = second.drain_packets();
+    assert!(taxi_create(&rows, second.connection_id(), passenger).is_none());
+    let packets = decoded_taxi_entry_packets(&rows);
+    assert!(packets.iter().any(|packet| packet.opcode == 0x016e));
+    assert!(packets.iter().any(|packet| packet.opcode == 0x00dd));
     assert!(
-        world_x > saved_x + 15.0,
+        (world_x - saved_x).abs() < 5.0,
         "saved {saved_x}, reconnected {world_x}"
-    );
-    assert!(
-        (replay_x - world_x).abs() < 5.0,
-        "replayed {replay_x}, world {world_x}"
     );
 }
 
@@ -1218,11 +1273,68 @@ fn start_taxi_flight_on_route(shard: &Standalone, passenger: u64, route: &[(f32,
         .join(",");
     shard.assert_sql(&format!("INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) VALUES {values}"));
     shard.assert_sql(&format!(
-        "INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded) VALUES ({passenger},5090992,5090990,5090991,1147,0,0,0,0,0,0,false)"
+        "INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded,first_destination_node_index) VALUES ({passenger},5090992,5090990,5090991,1147,0,0,0,0,0,0,false,1)"
     ));
     shard.assert_call(
         "gw_arm_taxi_flight",
         &[&format!("{{\"guid\":{passenger},\"ownership\":null}}")],
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_reconnecting_passenger_applies_class_specific_starting_passives() {
+    use lyracore_shared::spell::taxonomy::{A_MOD_STAT_PCT, SPELL_ATTR_PASSIVE, STAT_SPI};
+
+    let (shard, passenger, _) = fixture("taxi-reconnect-passives");
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {passenger}"
+    ));
+    shard.assert_sql("DELETE FROM game_level_stats WHERE race = 1 AND class = 1 AND level = 1");
+    shard.assert_sql("INSERT INTO game_level_stats (race_class_level,race,class,level,strength,agility,stamina,intellect,spirit) VALUES (65793,1,1,1,23,20,22,20,20)");
+    shard.assert_sql("DELETE FROM game_createinfo_spell WHERE spell_id = 20598");
+    shard.assert_sql(
+        "INSERT INTO game_createinfo_spell (id,race,class,spell_id) VALUES (5090908,1,1,20598)",
+    );
+    shard.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (20598,'Spirit passive fixture',0,0,0,0,0,0,0,1,0,0,1,0,{SPELL_ATTR_PASSIVE},1,0,false,0,0,0,0,0,0,0,0)"));
+    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (82392,20598,0,{A_MOD_STAT_PCT},5,0,0.0,0,0,0.0,0,0,0,{STAT_SPI},0,0,0,false,0.0)"));
+    let spirit = || {
+        shard.query_rows(&format!(
+            "SELECT spirit FROM game_world_entity WHERE guid = {passenger}"
+        ))[0]["spirit"]
+            .clone()
+    };
+    let first = enter(&shard, passenger);
+    assert_eq!(
+        spirit(),
+        "21",
+        "starting passives must apply before login CREATE"
+    );
+    start_taxi_flight_on_route(
+        &shard,
+        passenger,
+        &[(0.0, 0.0, 0.0), (1000.0, 0.0, 0.0), (2000.0, 0.0, 0.0)],
+    );
+    drop(first);
+    assert!(lyracore_test_support::poll_until(
+        Duration::from_secs(5),
+        || shard
+            .query_rows("SELECT * FROM game_native_player")
+            .is_empty()
+    ));
+    let _second = enter(&shard, passenger);
+    assert_eq!(
+        spirit(),
+        "21",
+        "reconnect must retain the five-percent Spirit bonus"
+    );
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT id FROM game_aura WHERE target_guid = {passenger} AND spell_id = 20598"
+            ))
+            .len(),
+        1
     );
 }
 
@@ -1233,7 +1345,11 @@ fn a_reconnecting_passenger_keeps_both_taxi_flags() {
 
     let (shard, passenger, _) = fixture("taxi-reconnect");
     let first = enter(&shard, passenger);
-    start_taxi_flight(&shard, passenger, 2000);
+    start_taxi_flight_on_route(
+        &shard,
+        passenger,
+        &[(0.0, 0.0, 0.0), (1000.0, 0.0, 0.0), (2000.0, 0.0, 0.0)],
+    );
     let flags = |shard: &Standalone| -> u32 {
         shard.query_rows(&format!(
             "SELECT unit_flags FROM game_world_entity WHERE guid = {passenger}"
@@ -1260,4 +1376,179 @@ fn a_reconnecting_passenger_keeps_both_taxi_flags() {
     );
     let _second = enter(&shard, passenger);
     assert_eq!(flags(&shard) & taxi_flags, taxi_flags);
+}
+
+fn decoded_taxi_entry_packets(rows: &[Box<RawValue>]) -> Vec<wire_client::decode::Packet> {
+    rows.iter()
+        .filter_map(|row| {
+            let Packet(_, _, (option, opcode), body, _, _, _) =
+                serde_json::from_str(row.get()).unwrap();
+            if option != 0 {
+                return None;
+            }
+            let opcode: u16 = serde_json::from_str(opcode.get()).unwrap();
+            if ![0x00a9, 0x00dd, 0x0143, 0x0144, 0x016e].contains(&opcode) {
+                return None;
+            }
+            let bytes: Vec<u8> = body
+                .as_bytes()
+                .chunks_exact(2)
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+                .collect();
+            Some(wire_client::decode::decode(opcode, &bytes).unwrap())
+        })
+        .collect()
+}
+
+fn assert_taxi_resumes_after_world_entry(packets: &[wire_client::decode::Packet], passenger: u64) {
+    use lyracore_shared::constants::unit_flags;
+    use wire_client::decode::Field;
+
+    let flags: Vec<_> = packets
+        .iter()
+        .flat_map(|packet| match packet.fields.get("objects") {
+            Some(Field::List(objects)) => objects.iter(),
+            _ => [].iter(),
+        })
+        .filter_map(|object| {
+            let Field::Object(object) = object else {
+                return None;
+            };
+            if object.get("guid") != Some(&Field::Guid(passenger)) {
+                return None;
+            }
+            let Some(Field::Object(values)) = object.get("values") else {
+                return None;
+            };
+            let Some(Field::Unsigned(flags)) = values.get("field_46") else {
+                return None;
+            };
+            Some((object.get("kind").cloned().unwrap(), *flags as u32))
+        })
+        .collect();
+    let controlled = unit_flags::PLAYER_CONTROLLED;
+    let flying = controlled | unit_flags::TAXI_FLIGHT | unit_flags::REMOVE_CLIENT_CONTROL;
+    assert_eq!(
+        flags,
+        vec![
+            (Field::Unsigned(2), controlled | unit_flags::IN_COMBAT),
+            (Field::Unsigned(0), flying | unit_flags::IN_COMBAT)
+        ]
+    );
+    let sequence: Vec<_> = packets
+        .iter()
+        .filter(|packet| [0x0143, 0x0144, 0x016e, 0x00dd].contains(&packet.opcode))
+        .map(|packet| packet.opcode)
+        .collect();
+    assert_eq!(sequence, vec![0x0144, 0x016e, 0x00dd]);
+    let resumed_spline = packets
+        .iter()
+        .find(|packet| packet.opcode == 0x00dd)
+        .unwrap();
+    let Some(Field::List(points)) = resumed_spline.fields.get("points") else {
+        panic!("resumed spline has no point list");
+    };
+    assert_eq!(points.len(), 1, "the selected resume node is replaced");
+    assert!(packets.iter().any(|packet| packet.opcode == 0x0144
+        && packet.fields.get("victim") == Some(&Field::Guid(passenger))));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_reconnecting_passenger_enters_the_world_before_resuming_taxi() {
+    use lyracore_shared::constants::unit_flags;
+
+    let (shard, passenger, _) = fixture("taxi-entry-order");
+    shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    shard.assert_sql("DELETE FROM game_faction_template WHERE id = 1 OR id = 14");
+    shard.assert_sql("INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (1,1,3,2,12,0,0,0,0,0,0,0,0),(14,14,8,0,1,0,0,0,0,0,0,0,0)");
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {passenger}"
+    ));
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    let first = enter(&shard, passenger);
+    start_taxi_flight_on_route(
+        &shard,
+        passenger,
+        &[(0.0, 0.0, 0.0), (1000.0, 0.0, 0.0), (2000.0, 0.0, 0.0)],
+    );
+    for _ in 0..20 {
+        shard.assert_call("debug_advance_virtual_clock", &["50000"]);
+    }
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[&passenger.to_string(), "51000", "2"],
+    );
+    drop(first);
+    assert!(lyracore_test_support::poll_until(
+        Duration::from_secs(5),
+        || shard
+            .query_rows("SELECT * FROM game_native_player")
+            .is_empty()
+    ));
+    let mut second = enter(&shard, passenger);
+    let packets = decoded_taxi_entry_packets(&second.drain_packets());
+    assert_taxi_resumes_after_world_entry(&packets, passenger);
+    for _ in 0..24 {
+        shard.assert_call("debug_advance_virtual_clock", &["50000"]);
+    }
+    let entity = &shard.query_rows(&format!(
+        "SELECT unit_flags FROM game_world_entity WHERE guid = {passenger}"
+    ))[0];
+    let flying =
+        unit_flags::PLAYER_CONTROLLED | unit_flags::TAXI_FLIGHT | unit_flags::REMOVE_CLIENT_CONTROL;
+    assert_eq!(entity["unit_flags"].parse::<u32>().unwrap(), flying);
+    assert!(shard
+        .query_rows(&format!(
+            "SELECT attacker_guid FROM game_melee_attack WHERE target_guid = {passenger}"
+        ))
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_reconnect_on_the_last_taxi_segment_lands_on_the_next_tick() {
+    let (shard, passenger, _) = fixture("taxi-last-segment-reconnect");
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {passenger}"
+    ));
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    let first = enter(&shard, passenger);
+    start_taxi_flight_on_route(
+        &shard,
+        passenger,
+        &[(0.0, 0.0, 0.0), (1000.0, 0.0, 0.0), (2000.0, 0.0, 0.0)],
+    );
+    drop(first);
+    assert!(lyracore_test_support::poll_until(
+        Duration::from_secs(5),
+        || shard
+            .query_rows("SELECT * FROM game_native_player")
+            .is_empty()
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET x = 1500, orientation = 0.5 WHERE guid = {passenger}"
+    ));
+    let mut second = enter(&shard, passenger);
+    let packets = decoded_taxi_entry_packets(&second.drain_packets());
+    assert!(packets.iter().any(|packet| packet.opcode == 0x016e));
+    assert!(!packets.iter().any(|packet| packet.opcode == 0x00dd));
+    let movement = &shard.query_rows(&format!(
+        "SELECT movement_flags FROM game_world_entity WHERE guid = {passenger}"
+    ))[0];
+    assert_eq!(movement["movement_flags"], "0");
+    for _ in 0..2 {
+        shard.assert_call("debug_advance_virtual_clock", &["50000"]);
+    }
+    let entity = &shard.query_rows(&format!(
+        "SELECT x, orientation, mount_display_id FROM game_world_entity WHERE guid = {passenger}"
+    ))[0];
+    assert_eq!(entity["x"].parse::<f32>().unwrap(), 2000.0);
+    assert_eq!(entity["orientation"].parse::<f32>().unwrap(), 0.5);
+    assert_eq!(entity["mount_display_id"], "0");
+    assert!(shard
+        .query_rows(&format!(
+            "SELECT * FROM game_active_taxi_flight WHERE character_guid = {passenger}"
+        ))
+        .is_empty());
 }

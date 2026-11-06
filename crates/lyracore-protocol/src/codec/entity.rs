@@ -590,6 +590,29 @@ pub fn build_self_create_object(
     Ok(create)
 }
 
+pub fn set_create_sheet_stats(
+    create: &mut SMSG_UPDATE_OBJECT,
+    guid: u64,
+    stats: &SheetStatsValues,
+) -> Result<()> {
+    use wow_world_messages::vanilla::ServerMessage;
+
+    let mut bytes = Vec::new();
+    build_sheet_stats_values(guid, stats).write_unencrypted_server(&mut bytes)?;
+    let updates = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
+    let fields = &updates
+        .first()
+        .ok_or_else(|| anyhow!("could not read sheet descriptor"))?
+        .fields;
+    add_create_fields(create, |mask| {
+        for &(field, value) in fields {
+            if value != 0 || mask.get(field).is_some() {
+                mask.set_u32(field, value);
+            }
+        }
+    })
+}
+
 fn add_create_fields(
     create: &mut SMSG_UPDATE_OBJECT,
     add: impl FnOnce(&mut update_mask::UpdateMaskValues),

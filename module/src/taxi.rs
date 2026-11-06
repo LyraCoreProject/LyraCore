@@ -41,6 +41,8 @@ pub struct ActiveTaxiFlight {
     pub origin_z: f32,
     #[default(false)]
     pub origin_recorded: bool,
+    #[default(1u32)]
+    pub first_destination_node_index: u32,
 }
 
 #[table(accessor = game_taxi_flight_schedule, scheduled(advance_taxi_flight))]
@@ -435,16 +437,41 @@ struct RoutePosition {
     complete: bool,
 }
 
-fn flight_route(
-    flight: &ActiveTaxiFlight,
-    mut points: Vec<GameTaxiPathNode>,
-) -> Vec<GameTaxiPathNode> {
+fn flight_route(flight: &ActiveTaxiFlight, points: Vec<GameTaxiPathNode>) -> Vec<GameTaxiPathNode> {
+    let Some(mut origin) = points.first().cloned() else {
+        return Vec::new();
+    };
     if flight.origin_recorded {
-        points[0].x = flight.origin_x;
-        points[0].y = flight.origin_y;
-        points[0].z = flight.origin_z;
+        origin.x = flight.origin_x;
+        origin.y = flight.origin_y;
+        origin.z = flight.origin_z;
     }
+    std::iter::once(origin)
+        .chain(
+            points
+                .into_iter()
+                .skip(flight.first_destination_node_index as usize),
+        )
+        .collect()
+}
+
+fn resume_node(points: &[GameTaxiPathNode], character: &WorldEntity) -> u32 {
+    // The Reference uses a strict bracket and falls back to DBC node 0.
     points
+        .windows(2)
+        .enumerate()
+        .find_map(|(index, pair)| {
+            let next = &pair[1];
+            if next.map_id != character.map_id {
+                return None;
+            }
+            let previous = &pair[0];
+            let dot = (character.x - previous.x) * (character.x - next.x)
+                + (character.y - previous.y) * (character.y - next.y)
+                + (character.z - previous.z) * (character.z - next.z);
+            (dot < 0.0).then_some(index as u32 + 1)
+        })
+        .unwrap_or(0)
 }
 
 fn spline_controls(points: &[GameTaxiPathNode], index: usize) -> [[f32; 3]; 4] {
@@ -530,6 +557,16 @@ fn route_duration_micros(points: &[GameTaxiPathNode]) -> Option<i64> {
 }
 
 fn route_position(points: &[GameTaxiPathNode], elapsed_micros: i64) -> Option<RoutePosition> {
+    if let [point] = points {
+        return Some(RoutePosition {
+            point_index: 0,
+            x: point.x,
+            y: point.y,
+            z: point.z,
+            orientation: 0.0,
+            complete: true,
+        });
+    }
     let times = route_timestamps_micros(points)?;
     let total = *times.last()?;
     let elapsed = elapsed_micros.max(0);
@@ -660,29 +697,94 @@ fn remaining_spline(
     }
 }
 
-pub(crate) fn sync_flight_on_world_entry(ctx: &ReducerContext, character: &mut crate::Character) {
-    let Some(flight) = ctx
+pub(crate) fn prepare_world_entry(ctx: &ReducerContext, character: &mut WorldEntity) {
+    if is_in_flight(ctx, character.guid) {
+        character.mount_display_id = 0;
+        character.unit_flags &= !(lyracore_shared::constants::unit_flags::TAXI_FLIGHT
+            | lyracore_shared::constants::unit_flags::REMOVE_CLIENT_CONTROL);
+        character.movement_flags = 0;
+    }
+}
+
+pub(crate) fn resume_flight(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+    let Some(mut flight) = ctx
         .db
         .game_active_taxi_flight()
         .character_guid()
-        .find(character.guid)
+        .find(character_guid)
     else {
-        return;
+        return Ok(());
     };
-    if flight.started_micros == 0 {
-        return;
-    }
+    let Some(character) = ctx.db.game_world_entity().guid().find(character_guid) else {
+        return Ok(());
+    };
     let Some(points) = ordered_route(ctx, flight.path_id) else {
-        return;
+        clear_flight(ctx, character);
+        return Ok(());
     };
-    let points = flight_route(&flight, points);
-    let elapsed = crate::time::now(ctx)
-        .to_micros_since_unix_epoch()
-        .saturating_sub(flight.started_micros);
-    if let Some(position) = route_position(&points, elapsed) {
-        (character.x, character.y, character.z) = (position.x, position.y, position.z);
-        character.orientation = position.orientation;
+    if points.iter().any(|point| point.map_id != character.map_id)
+        || ctx
+            .db
+            .game_taxi_node()
+            .id()
+            .find(flight.destination_node_id)
+            .is_none_or(|destination| destination.map_id != character.map_id)
+    {
+        clear_flight(ctx, character);
+        return Ok(());
     }
+    // Spline launch replaces the selected Reference node with the saved position.
+    flight.first_destination_node_index = resume_node(&points, &character) + 1;
+    flight.origin_x = character.x;
+    flight.origin_y = character.y;
+    flight.origin_z = character.z;
+    flight.origin_recorded = true;
+    flight.current_node_index = 0;
+    flight.started_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
+    let points = flight_route(&flight, points);
+    let Some(position) = route_position(&points, 0) else {
+        clear_flight(ctx, character);
+        return Ok(());
+    };
+    crate::combat::suspend_hostile_references(ctx, character_guid);
+    let Some(mut character) = ctx.db.game_world_entity().guid().find(character_guid) else {
+        return Ok(());
+    };
+    let spline = remaining_spline(&flight, &character, &points, position, 0);
+    character.mount_display_id = flight.mount_display_id;
+    ctx.db
+        .game_active_taxi_flight()
+        .character_guid()
+        .update(flight);
+    crate::native::taxi_resumed(ctx, &spline)?;
+    character.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT
+        | lyracore_shared::constants::unit_flags::REMOVE_CLIENT_CONTROL;
+    character.movement_flags = if points.len() > 1 {
+        TAXI_MOVEMENT_FORWARD
+    } else {
+        0
+    };
+    character.update(ctx);
+    crate::native::refresh_motion_permit(ctx, character_guid);
+    write_passenger_spline(ctx, spline);
+    if ctx
+        .db
+        .game_taxi_flight_schedule()
+        .scheduled_id()
+        .find(character_guid)
+        .is_none()
+    {
+        ctx.db
+            .game_taxi_flight_schedule()
+            .insert(TaxiFlightSchedule {
+                scheduled_id: character_guid,
+                scheduled_at: crate::time::schedule_interval(
+                    ctx,
+                    TimeDuration::from_micros(TAXI_TICK_MICROS),
+                ),
+            });
+    }
+    Ok(())
 }
 
 fn write_passenger_spline(ctx: &ReducerContext, row: TaxiPassengerSpline) {
@@ -1195,6 +1297,7 @@ pub(crate) fn activate_taxi(
             origin_y: player.y,
             origin_z: player.z,
             origin_recorded: true,
+            first_destination_node_index: 1,
         };
         ctx.db.game_active_taxi_flight().insert(flight);
         crate::native::refresh_motion_permit(ctx, character_guid);
@@ -1261,7 +1364,10 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
     player.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT
         | lyracore_shared::constants::unit_flags::REMOVE_CLIENT_CONTROL;
     player.movement_flags = TAXI_MOVEMENT_FORWARD;
-    let start = route_position(&points, 0).expect("validated route has a start");
+    let Some(start) = route_position(&points, 0) else {
+        clear_flight(ctx, player);
+        return;
+    };
     let start = RoutePosition {
         x: player.x,
         y: player.y,
@@ -1351,7 +1457,12 @@ fn taxi_pass(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
         return;
     }
     if position.complete {
-        land_flight(ctx, player, &destination, position.orientation);
+        let orientation = if points.len() == 1 {
+            player.orientation
+        } else {
+            position.orientation
+        };
+        land_flight(ctx, player, &destination, orientation);
         return;
     }
 
@@ -1816,6 +1927,22 @@ mod tests {
     }
 
     #[test]
+    fn a_resume_uses_a_strict_segment_bracket() {
+        let points: Vec<_> = (0..3)
+            .map(|index| {
+                let mut node = point(index + 1, 99, index, 0);
+                node.x = index as f32 * 10.0;
+                node
+            })
+            .collect();
+        let mut character = crate::helpers::tests::entity(1, 0, 0, 0, 0);
+        character.x = 15.0;
+        assert_eq!(resume_node(&points, &character), 2);
+        character.x = 10.0;
+        assert_eq!(resume_node(&points, &character), 0);
+    }
+
+    #[test]
     fn a_recorded_departure_replaces_the_first_route_point() {
         let mut flight = ActiveTaxiFlight {
             character_guid: 1,
@@ -1830,6 +1957,7 @@ mod tests {
             origin_y: 20.0,
             origin_z: 30.0,
             origin_recorded: false,
+            first_destination_node_index: 1,
         };
 
         let points = vec![point(1, 99, 0, 0), point(2, 99, 1, 0)];

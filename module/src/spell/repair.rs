@@ -34,8 +34,14 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
         } else {
             effect.period_ms
         };
-        let wrong_polarity = aura.slot < 48 && (aura.slot >= 32) != header.negative();
-        if !wrong_polarity
+        let visible =
+            super::cast::aura_has_visible_slot(ctx, &header, aura.caster_guid, aura.target_guid);
+        let wrong_slot = if visible {
+            aura.slot >= 48 || (aura.slot >= 32) != header.negative()
+        } else {
+            aura.slot != u8::MAX
+        };
+        if !wrong_slot
             && (
                 aura.eff_kind,
                 aura.eff_p0,
@@ -54,7 +60,9 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
         {
             continue;
         }
-        if wrong_polarity {
+        if wrong_slot && !visible {
+            aura.slot = u8::MAX;
+        } else if wrong_slot {
             let mut slots = if header.negative() { 32..48 } else { 0..32 };
             let current: Vec<_> = ctx
                 .db

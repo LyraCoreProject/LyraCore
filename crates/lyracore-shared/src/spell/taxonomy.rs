@@ -128,6 +128,7 @@ pub const FAMILY_FLAG_DRUID_RIP_BITE: u64 = 0x0080_0000;
 pub const HUMANOID_TYPE: u8 = 7;
 pub const BEAST_TYPE: u8 = 1;
 pub const CRITTER_TYPE: u8 = 8;
+pub const TOTEM_TYPE: u8 = 11;
 pub const M_STUN: i32 = 1;
 pub const M_ROOT: i32 = 2;
 pub const M_FEAR: i32 = 3;
@@ -203,6 +204,7 @@ pub const SPELL_ATTR_CANNOT_CRIT: u32 = 0x1000;
 pub const SPELL_ATTR_IGNORE_RESISTANCES: u32 = 0x2000;
 pub const SPELL_ATTR_ALWAYS_HIT: u32 = 0x4000;
 pub const SPELL_ATTR_MAGIC_HIT: u32 = 0x8000;
+pub const SPELL_ATTR_AREA_AURA: u32 = 0x0001_0000;
 
 #[cfg(test)]
 mod tests {
