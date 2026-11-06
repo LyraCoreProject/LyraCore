@@ -39,7 +39,7 @@ pub fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
     if kind == E_TAUNT && name == "Feint" {
         return E_REDUCE_THREAT;
     }
-    if kind != E_SCRIPTED && kind != A_FLAG {
+    if kind != E_SCRIPTED && kind != A_FLAG && kind != A_INERT {
         return kind;
     }
     match name {
@@ -172,7 +172,7 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         | AllowChampionSpells
         | UseNormalMovementSpeed => A_FLAG,
 
-        _ => E_SCRIPTED,
+        _ => A_INERT,
     }
 }
 
@@ -181,7 +181,7 @@ pub fn equip_aura_supported(aura: u32, misc: u32, equipment: [u32; 3]) -> bool {
     match AuraMod::from_int(aura).ok() {
         Some(ModStat) => misc <= 4 || misc == u32::MAX,
         Some(ModResistance) => misc != 0 && misc & !0x7f == 0,
-        Some(ModCritPercent) => equipment == [u32::MAX, 0, 0],
+        Some(ModCritPercent) => equipment[0] == u32::MAX,
         Some(
             ModHitChance | ModAttackPower | ModRangedAttackPower | ModHealingDone
             | ModSpellCritChance,

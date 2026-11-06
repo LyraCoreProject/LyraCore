@@ -30,3 +30,5 @@ game_spell_cd category_ready_micros 0
 game_spell_effect equip_supported false
 game_world_entity sheet_ap_modifiers 0
 game_world_entity sheet_ranged_ap_modifiers 0
+game_world_entity sheet_ranged_dmg_min_fraction 0.0
+game_world_entity sheet_ranged_dmg_max_fraction 0.0

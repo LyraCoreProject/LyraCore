@@ -2981,8 +2981,8 @@ fn create_object_carries_stored_melee_and_ranged_sheet_projection() {
         sheet_dmg_min: 11,
         sheet_dmg_max: 13,
         sheet_ranged_ap: 30,
-        sheet_ranged_dmg_min: 14,
-        sheet_ranged_dmg_max: 18,
+        sheet_ranged_dmg_min: 14.0,
+        sheet_ranged_dmg_max: 18.0,
         ..warrior_entity()
     };
     let msg = build_create_object(&e, CreateKind::SelfPlayer, &[], &[]).unwrap();
@@ -3022,8 +3022,8 @@ fn create_object_carries_a_zero_stored_sheet_projection() {
 #[test]
 fn create_object_carries_a_flat_wand_projection() {
     let e = EntityView {
-        sheet_ranged_dmg_min: 8,
-        sheet_ranged_dmg_max: 12,
+        sheet_ranged_dmg_min: 8.0,
+        sheet_ranged_dmg_max: 12.0,
         ..warrior_entity()
     };
     let msg = build_create_object(&e, CreateKind::SelfPlayer, &[], &[]).unwrap();
@@ -3062,8 +3062,8 @@ fn ranged_sheet_stats(
         dmg_min: 11,
         dmg_max: 13,
         ranged_attack_power,
-        ranged_dmg_min,
-        ranged_dmg_max,
+        ranged_dmg_min: ranged_dmg_min as f32,
+        ranged_dmg_max: ranged_dmg_max as f32,
         crit_pct: 5.0,
     }
 }
@@ -3090,6 +3090,22 @@ fn assert_sheet_values_projection(stats: SheetStatsValues, expected: (i32, f32, 
 #[test]
 fn sheet_values_carry_the_same_melee_and_ranged_projection() {
     assert_sheet_values_projection(ranged_sheet_stats(30, 14, 18), (30, 14.0, 18.0));
+}
+
+#[test]
+fn spell_7598_updates_both_melee_and_ranged_crit_fields() {
+    let mut stats = ranged_sheet_stats(180, 48, 68);
+    stats.crit_pct = 7.0;
+    let msg = build_sheet_stats_values(1, &stats);
+    let Object::Values {
+        mask1: UpdateMask::Player(player),
+        ..
+    } = &msg.objects[0]
+    else {
+        panic!("expected Player Values")
+    };
+    assert_eq!(player.player_crit_percentage(), Some(7.0));
+    assert_eq!(player.player_ranged_crit_percentage(), Some(7.0));
 }
 
 #[test]

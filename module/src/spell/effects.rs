@@ -217,6 +217,7 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
         )
     };
     let (ranged_ap, ranged_dmg_min, ranged_dmg_max) = crate::combat::ranged_sheet_values(
+        class,
         eff_agi,
         e.level,
         crate::combat::equipped_ranged_weapon(ctx, unit_guid),
@@ -226,6 +227,9 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
             lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
         ),
     );
+    let ranged_min_fraction = ranged_dmg_min.fract();
+    let ranged_max_fraction = ranged_dmg_max.fract();
+    let (ranged_dmg_min, ranged_dmg_max) = (ranged_dmg_min as u32, ranged_dmg_max as u32);
     let crit_bp = crate::combat::effective_crit_bp(ctx, &e);
 
     if str_bonus == e.sheet_str_bonus
@@ -243,6 +247,8 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
         && ranged_ap == e.sheet_ranged_ap
         && ranged_dmg_min == e.sheet_ranged_dmg_min
         && ranged_dmg_max == e.sheet_ranged_dmg_max
+        && ranged_min_fraction == e.sheet_ranged_dmg_min_fraction
+        && ranged_max_fraction == e.sheet_ranged_dmg_max_fraction
     {
         return;
     }
@@ -261,6 +267,8 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     e.sheet_ranged_ap = ranged_ap;
     e.sheet_ranged_dmg_min = ranged_dmg_min;
     e.sheet_ranged_dmg_max = ranged_dmg_max;
+    e.sheet_ranged_dmg_min_fraction = ranged_min_fraction;
+    e.sheet_ranged_dmg_max_fraction = ranged_max_fraction;
     e.update(ctx);
 }
 

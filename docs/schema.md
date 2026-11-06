@@ -837,6 +837,21 @@ also stay inert. Only ordinary self-targeted effect-6 shapes are enabled. Healin
 school mask in `A_MOD_HEALING`. This is a source-to-consumer audit, not a claim that every
 spell or baseline combat calculation is complete.
 
+Unsupported cast effects import as `A_INERT` (0xB9). They keep their Aura holder, icon, duration,
+refresh, stack limit and dispel behavior; no numeric consumer reads this kind. This does not enable
+those effects on equipment. In particular, Thorns and Retribution Aura retain holders without
+reflection; Arcane Elixir and Curse of Weakness retain holders without flat damage modification;
+Dampen and Amplify Magic retain buff holders without flat incoming damage or healing modification.
+Aspect of the Hawk contributes only its ranged AP to the separate ranged field. Unrestricted crit
+checks only the source equipment class of -1; masks are ignored in that case, including Recklessness
+and Elixir of the Mongoose. Ranged AP uses the class formula, and ranged damage retains its fraction
+on the wire. The sheet sends both melee and ranged crit percentages.
+
+`game_world_entity.sheet_ranged_dmg_min_fraction` and `sheet_ranged_dmg_max_fraction` are
+zero-default END-appended caches for the fractional parts. The existing integer damage columns and
+Character Transfer layout stay unchanged. Publish repair refreshes these projections; see
+[the migration order](danger-zones.md#equip-spell-migration).
+
 | Source aura type | Items | Consumer or missing behavior | Equip result | Example spell |
 | --- | ---: | --- | --- | ---: |
 | 3 PeriodicDamage | 1 | periodic damage / leech shape not certified | Inert | 19307 |
@@ -858,7 +873,7 @@ spell or baseline combat calculation is complete.
 | 47 ModParryPercent | 28 | parry modifier not implemented | Inert | 13665 |
 | 49 ModDodgePercent | 89 | roll uses basis points; full dodge sheet projection is absent | Inert | 13669 |
 | 51 ModBlockPercent | 24 | block modifier not implemented | Inert | 13674 |
-| 52 ModCritPercent | 384 | effective_crit_bp; percent to basis points | Correct when unrestricted; weapon-restricted 9132 inert | 7597 |
+| 52 ModCritPercent | 384 | effective_crit_bp and both wire crit fields; percent to basis points | Correct when unrestricted; weapon-restricted 9132 inert | 7597 |
 | 54 ModHitChance | 192 | effective_miss_bp; percent to basis points | Correct | 15464 |
 | 55 ModSpellHitChance | 76 | spell hit needs its own consumer | Inert | 23727 |
 | 56 Transform | 7 | transform requirements not certified | Inert | 8299 |
@@ -878,7 +893,7 @@ spell or baseline combat calculation is complete.
 | 112 OverrideClassScripts | 6 | class scripts need mechanics | Inert | 27853 |
 | 117 ModMechanicResistance | 5 | mechanic resistance needs mechanics | Inert | 18985 |
 | 123 ModTargetResistance | 30 | target resistance needs mechanics | Inert | 25717 |
-| 124 ModRangedAttackPower | 305 | ranged_sheet_values and ranged attacks; flat AP | Correct | 9138 |
+| 124 ModRangedAttackPower | 305 | class-specific ranged_sheet_values and ranged attacks; flat AP | Correct | 9138 |
 | 130 ModMountedSpeedAlways | 1 | mounted-speed stacking not certified | Inert | 13587 |
 | 131 ModRangedAttackPowerVersus | 39 | ranged AP needs creature-type selection | Inert | 14097 |
 | 135 ModHealingDone | 1017 | healing_power; flat healing by school mask | Correct | 7678 |
@@ -895,5 +910,9 @@ spell or baseline combat calculation is complete.
 The source handlers are in [SpellAuras.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellAuras.cpp).
 School damage, melee and ranged AP, healing and crit distinctions also follow
 [Unit.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp).
+Cast Aura polarity also follows
+[SpellEntry::IsPositiveEffect](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellEntry.cpp).
+The class AP formulas and fractional damage follow
+[StatSystem.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/StatSystem.cpp).
 Mana regeneration follows the two-second `Player::Regenerate` cadence in
 [Player.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp).

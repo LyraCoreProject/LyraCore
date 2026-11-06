@@ -268,6 +268,8 @@ pub(crate) mod tests {
             sheet_ap_mods: 0,
             sheet_ap_modifiers: 0,
             sheet_ranged_ap_modifiers: 0,
+            sheet_ranged_dmg_min_fraction: 0.0,
+            sheet_ranged_dmg_max_fraction: 0.0,
             sheet_dmg_min: 0,
             sheet_dmg_max: 0,
             sheet_crit_bp: 0,

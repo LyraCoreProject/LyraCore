@@ -233,23 +233,40 @@ healing calculation. Flat school damage and damage shields no longer import as d
 or absorbs. The complete admitted/inert type list and Item counts are in
 [the equip aura support audit](schema.md#equip-aura-support).
 
-Publish, reimport `spell` and `items`, then call `debug_repair_after_publish` before play resumes.
-A repair before reimport is safe; call it again after the imports. Each derived aura retains its
-source definition locally. Repair keeps unchanged effects and rebuilds only stale definitions,
+Before play resumes:
+
+1. Publish the Module through a planned additive update.
+2. Reimport `spell` and `items` with the updated importer.
+3. Call `debug_repair_after_publish` after the imports.
+
+A repair before reimport is safe; call it again after the imports. Each derived equip aura retains
+its source definition locally. Repair keeps unchanged effects and rebuilds stale definitions,
 including changed units, visibility and eligibility. It does not restart equip cooldowns or retain
 duplicate effects. Changed finite equip effects restart their source duration during this explicit
 repair. Unchanged aura identity and deadlines are preserved. Connected Characters and ghosts
-receive the rebuilt state. Other cast Auras retain their frozen values; this repair does not rewrite a normal cast or its
-remaining duration. Recasting a supported effect rebuilds changed fields from the current import.
-Expire or remove an old cast effect that the new import makes inert before play resumes; a recast
-of an inert effect cannot replace the old Aura. Recast affected supported buffs after reimport.
-Older Package Deltas default to inert equip effects; an author must supply a supported claim.
+receive the rebuilt state.
+
+Repair also compares every ordinary cast Aura's frozen effect kind, parameters, units and cadence
+with its imported definition, including offline and permanent rows. It removes missing definitions,
+refreshes obsolete metadata, converts percentage units once and clears obsolete absorb capacity.
+Aura writes notify connected clients and refresh their sheets. Existing cast magnitudes, stacks,
+application times and remaining durations stay frozen, apart from the unit conversion. Buff and
+debuff slots follow the current definition. Missing learned passives are restored without stacking
+existing effects. No manual Aura cleanup or recast is required. Repeating repair is idempotent.
+Unsupported cast modifiers retain ordinary Aura holders with inert numeric effects; this includes
+flat school damage, damage shields, flat incoming damage and incoming healing. Reflection and flat
+spell damage remain unimplemented. Older Package Deltas default to inert equip effects; an author
+must supply a supported claim.
 
 `game_world_entity` END-appends `sheet_ap_modifiers` and `sheet_ranged_ap_modifiers` with
 zero defaults. These derived projections pack the positive signed-16 modifier in the low half
 and the negative signed-16 modifier in the high half. Ranged base AP no longer includes these
 modifiers. The final publish repair recomputes both projections for connected Characters; world
 entry recomputes them for returning Characters. Neither column is Character-owned Transfer state.
+Two further zero-default END columns, `sheet_ranged_dmg_min_fraction` and
+`sheet_ranged_dmg_max_fraction`, retain fractional ranged damage for the wire. They leave the
+existing integer columns intact. Publish repair recomputes them for connected Characters; world
+entry recomputes them on login. Both fields are derived and do not cross Character Transfer.
 
 `game_item_aura` and its finite-expiry schedule `game_item_aura_expiry` start empty.
 `debug_repair_after_publish` reconciles equipment and refreshes the sheet of every online Character

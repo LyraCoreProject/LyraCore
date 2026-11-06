@@ -704,6 +704,32 @@ fn review_equip(
     equip(connection, 23)
 }
 
+fn review_packets(connection: &mut ReducerConnection) -> Vec<(u16, Vec<u8>)> {
+    connection
+        .call(
+            "native_world_receive",
+            serde_json::json!([0x1dcu32, vec![0u8; 8]]),
+        )
+        .unwrap();
+    connection
+        .drain_packets()
+        .into_iter()
+        .filter_map(|row| {
+            let super::Packet(_, _, (tag, opcode), body, _, _, _) =
+                serde_json::from_str(row.get()).unwrap();
+            (tag == 0).then(|| {
+                (
+                    serde_json::from_str(opcode.get()).unwrap(),
+                    (0..body.len())
+                        .step_by(2)
+                        .map(|i| u8::from_str_radix(&body[i..i + 2], 16).unwrap())
+                        .collect(),
+                )
+            })
+        })
+        .collect()
+}
+
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn equip_review_9329_and_its_cast_keep_melee_and_ranged_attack_power_separate() {
@@ -795,7 +821,14 @@ fn equip_review_7598_and_15464_and_their_casts_use_basis_points_without_spell_cr
         )
     };
     let base = read();
-    review_equip(&shard, &mut connection, guid, 7598);
+    let packets = review_equip(&shard, &mut connection, guid, 7598);
+    let crit_fields: std::collections::BTreeMap<_, _> = packets
+        .iter()
+        .flat_map(|(opcode, body)| super::properties::updates(*opcode, body).unwrap())
+        .filter(|update| update.guid == guid)
+        .flat_map(|update| update.fields)
+        .collect();
+    assert_eq!(crit_fields[&1110], crit_fields[&1109]);
     shard.assert_sql(&format!(
         "UPDATE game_item_template SET spellid_1 = 15464 WHERE entry = {ITEM}"
     ));
@@ -914,4 +947,257 @@ fn equip_review_7678_healing_respects_its_magic_school_mask() {
             );
         }
     }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn equip_review_inert_thorns_keeps_its_visible_refreshable_dispellable_aura() {
+    let (shard, mut connection, guid, vendor) = fixture("equip-review-inert-thorns");
+    review_spell(&shard, 467, &[(0xb9, 3, 0, 255)], false);
+    shard.assert_sql("UPDATE game_spell SET name = 'Thorns', attributes = 65536, school_mask = 8, duration_ms = 600000, dispel_type = 1, cost = 35 WHERE spell_id = 467");
+    let unit_bytes = shard.query_rows(&format!(
+        "SELECT unit_bytes_0 FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["unit_bytes_0"]
+        .parse::<u32>()
+        .unwrap()
+        & 0x00ff_ffff;
+    shard.assert_sql(&format!("UPDATE game_world_entity SET power = 500, max_power = 500, unit_bytes_0 = {unit_bytes} WHERE guid = {guid}"));
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), "467", &guid.to_string()],
+    );
+    let read = || {
+        shard.query_rows(&format!("SELECT id,slot,stacks,expires_at,eff_kind,amount_remaining FROM game_aura WHERE target_guid = {guid} AND spell_id = 467"))
+    };
+    let first = read();
+    assert_eq!(
+        first.len(),
+        1,
+        "unsupported Thorns must keep its aura holder"
+    );
+    assert!(first[0]["slot"].parse::<u8>().unwrap() < 32);
+    assert_eq!(first[0]["amount_remaining"], "0");
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT power FROM game_world_entity WHERE guid = {guid}"
+        ))[0]["power"],
+        "465"
+    );
+    let packets = review_packets(&mut connection);
+    assert!(packets.iter().any(|(opcode, _)| *opcode == 0x137));
+    advance(&shard, 1000);
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), "467", &guid.to_string()],
+    );
+    let refreshed = read();
+    assert_eq!(refreshed.len(), 1);
+    assert_eq!(refreshed[0]["id"], first[0]["id"]);
+    assert_eq!(refreshed[0]["stacks"], "1");
+    assert_ne!(refreshed[0]["expires_at"], first[0]["expires_at"]);
+    request(&mut connection, 0x136, 467u32.to_le_bytes().to_vec());
+    assert!(read().is_empty());
+    shard.assert_sql("UPDATE game_spell SET cost = 0 WHERE spell_id = 467");
+    shard.assert_sql("UPDATE game_spell_effect SET target = 3 WHERE spell_id = 467");
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&vendor.to_string(), "467", &guid.to_string()],
+    );
+    assert_eq!(read().len(), 1);
+    shard.assert_sql("UPDATE game_spell SET attributes = 0, cost = 0 WHERE spell_id = 527");
+    shard.assert_sql(
+        "UPDATE game_spell_effect SET kind = 4, p0 = 1, target = 0 WHERE spell_id = 527",
+    );
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), "527", &guid.to_string()],
+    );
+    assert!(read().is_empty());
+    advance(&shard, 1500);
+    review_spell(&shard, 24659, &[(0xb9, 17, 0, 0)], false);
+    shard.assert_sql("UPDATE game_spell SET attributes = 0, duration_ms = 20000, max_stacks = 12 WHERE spell_id = 24659");
+    for _ in 0..14 {
+        shard.assert_call(
+            "debug_begin_cast",
+            &[&guid.to_string(), "24659", &guid.to_string()],
+        );
+    }
+    let stacked = shard.query_rows(&format!(
+        "SELECT stacks FROM game_aura WHERE target_guid = {guid} AND spell_id = 24659"
+    ));
+    assert_eq!(stacked.len(), 1);
+    assert_eq!(stacked[0]["stacks"], "12");
+    advance(&shard, 19500);
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT id FROM game_aura WHERE target_guid = {guid} AND spell_id = 24659"
+            ))
+            .len(),
+        1
+    );
+    advance(&shard, 1000);
+    assert!(shard
+        .query_rows(&format!(
+            "SELECT id FROM game_aura WHERE target_guid = {guid} AND spell_id = 24659"
+        ))
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn equip_review_publish_repair_refreshes_stale_casts_and_permanent_passives_once() {
+    let (shard, mut connection, guid, _) = fixture("equip-review-cast-migration");
+    for (spell, effects) in [
+        (18052, vec![(0xa3, 34, 3, 5)]),
+        (21142, vec![(0xa2, 5, 0, 255)]),
+        (9329, vec![(0xa3, 16, 0, 5), (0xa3, 16, 0, 5)]),
+        (7598, vec![(0xa3, 2, 1, 5)]),
+    ] {
+        review_spell(&shard, spell, &effects, false);
+        shard.assert_sql(&format!(
+            "UPDATE game_spell SET duration_ms = 4294967295 WHERE spell_id = {spell}"
+        ));
+        shard.assert_call(
+            "debug_begin_cast",
+            &[&guid.to_string(), &spell.to_string(), &guid.to_string()],
+        );
+    }
+    review_spell(&shard, 11390, &[(0xa3, 20, 3, 5)], false);
+    shard.assert_sql("UPDATE game_spell SET attributes = 671088640, duration_ms = 1800000 WHERE spell_id = 11390");
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), "11390", &guid.to_string()],
+    );
+    let elixir_deadline = shard.query_rows(&format!(
+        "SELECT expires_at FROM game_aura WHERE target_guid = {guid} AND spell_id = 11390"
+    ));
+    review_spell(
+        &shard,
+        604,
+        &[(0xa6, -10, 126, 2), (0xb9, -20, 0, 0)],
+        false,
+    );
+    shard.assert_sql(
+        "UPDATE game_spell SET is_negative = true, duration_ms = 600000 WHERE spell_id = 604",
+    );
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), "604", &guid.to_string()],
+    );
+    review_spell(&shard, 9138, &[(0xa3, 6, 0, 5), (0xa3, 6, 11, 5)], false);
+    shard.assert_sql("UPDATE game_spell SET duration_ms = 4294967295 WHERE spell_id = 9138");
+    shard.assert_call("debug_learn_spell", &[&guid.to_string(), "9138"]);
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT id FROM game_aura WHERE target_guid = {guid} AND spell_id = 9138"
+            ))
+            .len(),
+        2
+    );
+    review_packets(&mut connection);
+    shard.assert_sql(
+        "UPDATE game_spell_effect SET kind = 185, p0 = 0, p0_kind = 255 WHERE spell_id = 18052",
+    );
+    shard.assert_sql("UPDATE game_spell_effect SET kind = 185 WHERE spell_id = 21142");
+    shard.assert_sql(
+        "UPDATE game_spell_effect SET kind = 185, p0 = 0, p0_kind = 0 WHERE spell_id = 11390",
+    );
+    shard.assert_sql(
+        "UPDATE game_spell_effect SET kind = 185, p0 = 0, p0_kind = 0 WHERE spell_id = 604",
+    );
+    shard.assert_sql("UPDATE game_spell SET is_negative = false WHERE spell_id = 604");
+    shard.assert_sql("UPDATE game_spell_effect SET p0 = 11 WHERE id = 37317");
+    shard.assert_sql("UPDATE game_spell_effect SET p0_kind = 17 WHERE spell_id = 7598");
+    shard.assert_call("debug_repair_after_publish", &[]);
+    let rows = shard.query_rows(&format!("SELECT spell_id,effect_id,eff_kind,eff_p0,eff_p0_kind,amount,amount_remaining,stacks FROM game_aura WHERE target_guid = {guid}"));
+    let ap = rows.iter().find(|row| row["effect_id"] == "37317").unwrap();
+    assert_eq!(
+        ap["eff_p0"], "11",
+        "repair must replace the old combined AP field"
+    );
+    let crit = rows.iter().find(|row| row["spell_id"] == "7598").unwrap();
+    assert_eq!(crit["amount"], "200");
+    for spell in ["18052", "21142"] {
+        let row = rows.iter().find(|row| row["spell_id"] == spell).unwrap();
+        assert_eq!(row["eff_kind"], "185");
+        assert_eq!(row["amount_remaining"], "0");
+    }
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT expires_at FROM game_aura WHERE target_guid = {guid} AND spell_id = 11390"
+        )),
+        elixir_deadline
+    );
+    let dampen = shard.query_rows(&format!(
+        "SELECT slot FROM game_aura WHERE target_guid = {guid} AND spell_id = 604"
+    ));
+    assert_eq!(dampen.len(), 2);
+    assert!(dampen
+        .iter()
+        .all(|row| row["slot"].parse::<u8>().unwrap() < 32));
+    assert_eq!(dampen[0]["slot"], dampen[1]["slot"]);
+    let packets = review_packets(&mut connection);
+    assert!(packets
+        .iter()
+        .flat_map(|(opcode, body)| super::properties::updates(*opcode, body).unwrap())
+        .any(|update| update.guid == guid));
+    let snapshot = shard.query_rows(&format!(
+        "SELECT id,spell_id,slot,applied_at,eff_kind,eff_p0,eff_p0_kind,eff_p1,amount,amount_remaining,stacks,period_ms,next_tick_micros FROM game_aura WHERE target_guid = {guid}"
+    ));
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT id,spell_id,slot,applied_at,eff_kind,eff_p0,eff_p0_kind,eff_p1,amount,amount_remaining,stacks,period_ms,next_tick_micros FROM game_aura WHERE target_guid = {guid}"
+        )),
+        snapshot
+    );
+    drop(connection);
+    assert!(poll_until(POLL_TIMEOUT, || shard
+        .query_rows(&format!(
+            "SELECT character_guid FROM game_native_player WHERE character_guid = {guid}"
+        ))
+        .is_empty()));
+    shard.assert_sql(&format!("UPDATE game_aura SET eff_p0_kind = 5, amount = 2 WHERE target_guid = {guid} AND spell_id = 7598"));
+    shard.assert_call("debug_repair_after_publish", &[]);
+    let _connection = enter(&shard, guid);
+    shard.assert_call("debug_set_health", &[&guid.to_string(), "0"]);
+    shard.assert_call("debug_set_health", &[&guid.to_string(), "1"]);
+    let restored = shard.query_rows(&format!(
+        "SELECT amount FROM game_aura WHERE target_guid = {guid} AND spell_id = 7598"
+    ));
+    assert_eq!(restored.len(), 1);
+    assert_eq!(restored[0]["amount"], "200");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn equip_review_15327_and_9329_send_fractional_thrown_damage_for_real_rogue_agility() {
+    let (shard, mut connection, guid, _) = fixture("equip-review-thrown-agility");
+    let bytes = shard.query_rows(&format!(
+        "SELECT unit_bytes_0 FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["unit_bytes_0"]
+        .parse::<u32>()
+        .unwrap();
+    let bytes = (bytes & !0xff00) | (4 << 8);
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET class = 4, level = 60 WHERE guid = {guid}"
+    ));
+    shard.assert_sql(&format!("UPDATE game_world_entity SET unit_bytes_0 = {bytes}, level = 60, agility = 130 WHERE guid = {guid}"));
+    shard.assert_sql("UPDATE game_item_template SET class = 2, subclass = 16, inventory_type = 25, damage_min = 23.0, damage_max = 43.0, delay_ms = 1800, required_skill = 0 WHERE entry = 25");
+    grant(&shard, guid, 25, 1, 17);
+    shard.assert_call("debug_repair_after_publish", &[]);
+    review_spell(&shard, 9329, &[(0xa3, 16, 0, 5), (0xa3, 16, 11, 5)], true);
+    let packets = review_equip(&shard, &mut connection, guid, 9329);
+    let fields: std::collections::BTreeMap<_, _> = packets
+        .iter()
+        .flat_map(|(opcode, body)| super::properties::updates(*opcode, body).unwrap())
+        .filter(|update| update.guid == guid)
+        .flat_map(|update| update.fields)
+        .collect();
+    assert_eq!(fields[&168], 180);
+    assert!((f32::from_bits(fields[&171]) - 48.2).abs() < 0.0001);
+    assert!((f32::from_bits(fields[&172]) - 68.2).abs() < 0.0001);
 }

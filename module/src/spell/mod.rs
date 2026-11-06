@@ -2,6 +2,8 @@ pub(crate) mod cast;
 pub(crate) mod chance_on_hit;
 mod outcome;
 mod presentation;
+mod repair;
+pub(crate) use repair::repair_cast_auras;
 mod rolls;
 pub(crate) use outcome::{
     cast_readiness, pending_cast, request_cast, CastFinish, CastGateRefusal, CastHandle,

@@ -391,6 +391,12 @@ After import, `import-world.sh` verifies that native definition subjects are wel
 The Compatibility Manifest remains the authority for source values and dependency paths. Real-client
 Verification should cover one source-backed rule and one creature with no native definition.
 
+The SQL apply path checks every generated INSERT's column and value counts after adding shared
+migration defaults, before its first write. A malformed plan therefore cannot clear spell effects
+and then fail on an INSERT arity error. SQL statements still commit separately. Runtime constraints
+or a transport failure can leave a partial import; stop play and rerun the same import before
+calling publish repair and resuming play.
+
 ## Client catalogues and Transports
 
 The standalone DBC pass combines vmangos taxi nodes with client TaxiPath and TaxiPathNode through

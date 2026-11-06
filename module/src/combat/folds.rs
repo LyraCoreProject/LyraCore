@@ -585,6 +585,7 @@ fn strike_weapon_range(
         delay
     };
     let (_, min, max) = ranged_sheet_values(
+        attacker.class(),
         effective_agility(ctx, attacker),
         attacker.level,
         Some((dmin, dmax, delay, subclass)),
@@ -594,7 +595,7 @@ fn strike_weapon_range(
             lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
         ),
     );
-    (min, max)
+    (min as u32, max as u32)
 }
 
 fn strike_amount(

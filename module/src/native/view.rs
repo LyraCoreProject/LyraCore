@@ -121,8 +121,8 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
         sheet_dmg_min: e.sheet_dmg_min,
         sheet_dmg_max: e.sheet_dmg_max,
         sheet_ranged_ap: e.sheet_ranged_ap,
-        sheet_ranged_dmg_min: e.sheet_ranged_dmg_min,
-        sheet_ranged_dmg_max: e.sheet_ranged_dmg_max,
+        sheet_ranged_dmg_min: e.sheet_ranged_dmg_min as f32 + e.sheet_ranged_dmg_min_fraction,
+        sheet_ranged_dmg_max: e.sheet_ranged_dmg_max as f32 + e.sheet_ranged_dmg_max_fraction,
         npc_flags: e.npc_flags,
         effective_armor: crate::combat::effective_armor(ctx, e),
         magic_resistances: std::array::from_fn(|index| {
@@ -338,8 +338,8 @@ pub(super) fn sheet_stats(e: &WorldEntity) -> codec::SheetStatsValues {
         dmg_min: e.sheet_dmg_min,
         dmg_max: e.sheet_dmg_max,
         ranged_attack_power: e.sheet_ranged_ap,
-        ranged_dmg_min: e.sheet_ranged_dmg_min,
-        ranged_dmg_max: e.sheet_ranged_dmg_max,
+        ranged_dmg_min: e.sheet_ranged_dmg_min as f32 + e.sheet_ranged_dmg_min_fraction,
+        ranged_dmg_max: e.sheet_ranged_dmg_max as f32 + e.sheet_ranged_dmg_max_fraction,
         // PLAYER_CRIT_PERCENTAGE uses percent; sheet_crit_bp uses basis points.
         crit_pct: e.sheet_crit_bp as f32 / 100.0,
     }

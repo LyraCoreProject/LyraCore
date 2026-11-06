@@ -773,6 +773,7 @@ fn fire_ranged_shot(
 
     let (rdmin, rdmax) = if attacker.is_player() {
         let (_, rdmin, rdmax) = ranged_sheet_values(
+            attacker.class(),
             effective_agility(ctx, attacker),
             attacker.level,
             Some(weapon),
@@ -782,7 +783,7 @@ fn fire_ranged_shot(
                 lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
             ),
         );
-        (rdmin, rdmax)
+        (rdmin as u32, rdmax as u32)
     } else {
         (dmin, dmax)
     };

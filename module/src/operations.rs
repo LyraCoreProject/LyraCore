@@ -16,6 +16,7 @@ use crate::{
 pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::items::discard_legacy_buyback(ctx);
+    crate::spell::repair_cast_auras(ctx);
     let guids: Vec<_> = ctx
         .db
         .game_world_entity()

@@ -98,6 +98,7 @@ effect_kinds! {
     A_TRANSFORM => AuraTransform = 0xB6,
     A_MOD_POWER_REGEN_PCT => AuraModPowerRegenPct = 0xB7,
     A_MOD_HEALING => AuraModHealing = 0xB8,
+    A_INERT => AuraInert = 0xB9,
     A_FLAG => AuraFlag = 0xBE,
     E_SUMMON_GUARDIANS => SummonGuardians = 0x27,
     E_ADD_EXTRA_ATTACKS => AddExtraAttacks = 0x28,

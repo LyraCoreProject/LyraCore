@@ -54,8 +54,8 @@ pub struct EntityView {
     pub sheet_dmg_min: u32,
     pub sheet_dmg_max: u32,
     pub sheet_ranged_ap: u32,
-    pub sheet_ranged_dmg_min: u32,
-    pub sheet_ranged_dmg_max: u32,
+    pub sheet_ranged_dmg_min: f32,
+    pub sheet_ranged_dmg_max: f32,
     pub npc_flags: u32,
     pub owner_guid: u64,
     pub effective_armor: u32,
@@ -420,8 +420,8 @@ pub fn build_create_object(
                 .set_unit_maxdamage(entity.sheet_dmg_max as f32)
                 .set_unit_ranged_attack_power(entity.sheet_ranged_ap as i32)
                 .set_unit_ranged_attack_power_mods((ranged_mods >> 16) as u16, ranged_mods as u16)
-                .set_unit_minrangeddamage(entity.sheet_ranged_dmg_min as f32)
-                .set_unit_maxrangeddamage(entity.sheet_ranged_dmg_max as f32)
+                .set_unit_minrangeddamage(entity.sheet_ranged_dmg_min)
+                .set_unit_maxrangeddamage(entity.sheet_ranged_dmg_max)
                 // The paperdoll divides damage by this multiplier; zero produces infinities.
                 .set_player_field_mod_damage_done_pct(1.0_f32.to_bits() as i32);
         }
