@@ -69,6 +69,18 @@ pub(super) fn changed(
         return;
     }
     if let Some(previous) = previous.filter(|item| equipped(item)) {
+        if current.is_some_and(|item| {
+            equipped(item) && item.owner_guid == previous.owner_guid && item.slot != previous.slot
+        }) {
+            let removed = ctx
+                .db
+                .game_aura()
+                .by_target()
+                .filter(previous.owner_guid)
+                .filter(|aura| aura.item_guid(ctx) == previous.guid)
+                .collect();
+            crate::spell::shed_auras(ctx, previous.owner_guid, removed);
+        }
         reconcile_item(ctx, previous.owner_guid, Some(previous.guid), false);
     }
     if let Some(current) = current.filter(|item| equipped(item)) {

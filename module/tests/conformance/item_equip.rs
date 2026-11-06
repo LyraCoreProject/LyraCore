@@ -439,9 +439,8 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
         &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
     );
     assert_effect(&shard, guid, 1);
-    let original = auras(&shard, guid);
     move_item(&mut connection, 10, 11);
-    assert_eq!(auras(&shard, guid), original);
+    assert_effect(&shard, guid, 1);
     shard.assert_sql(&format!(
         "DELETE FROM game_spell_cooldown WHERE caster_guid = {guid}"
     ));
@@ -477,6 +476,7 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
         &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
     );
     assert_effect(&shard, guid, 1);
+    let original = auras(&shard, guid);
     for stance in [11, 13, 14] {
         shard.assert_sql(&format!(
             "UPDATE game_spell_effect SET p0 = {stance} WHERE spell_id = {FORM}"
@@ -489,6 +489,7 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
             &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
         );
         assert_effect(&shard, guid, 1);
+        assert_eq!(auras(&shard, guid), original);
     }
 }
 
@@ -591,6 +592,11 @@ fn visible_equip_effects_keep_the_sources_duration_and_reapply_after_resurrectio
     assert_eq!(rows.len(), 1);
     assert!(rows[0]["slot"].parse::<u8>().unwrap() < 32);
     assert!(packets.iter().any(|(opcode, _)| *opcode == 0x137));
+    advance(&shard, 3000);
+    move_item(&mut connection, 10, 11);
+    advance(&shard, 2000);
+    assert_eq!(auras(&shard, guid).len(), 1);
+    move_item(&mut connection, 11, 10);
     for attributes in [128u32, 0x80000000] {
         shard.assert_sql(&format!(
             "UPDATE game_spell SET attributes = {attributes} WHERE spell_id = {EQUIP}"
