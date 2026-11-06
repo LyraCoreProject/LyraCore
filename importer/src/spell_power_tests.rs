@@ -245,6 +245,12 @@ fn actual_spell_power_world_plan_curse_enrage_and_weapon_requirements_change_wea
     assert_eq!(sheet_min(&shard), axe + 1);
     equip_weapon(&shard, 25);
     assert_eq!(sheet_min(&shard), sword);
+    shard.assert_sql("DELETE FROM game_aura WHERE target_guid = 1");
+    shard.assert_sql(
+        "UPDATE game_world_entity SET level = 1, strength = 0, agility = 0 WHERE guid = 1",
+    );
+    cast(&shard, wolf, 702, 1);
+    assert_eq!(sheet_min(&shard), 0);
 }
 
 #[test]
@@ -321,6 +327,7 @@ fn actual_spell_power_world_plan_sends_signed_school_damage_fields_on_cast_and_r
     wire.call("debug_begin_cast", json!([wolf, 702, 1]))
         .unwrap();
     assert_eq!(damage_values(&mut wire)[&1208], (-3i32) as u32);
+    wire.call("debug_advance_roll_batch", json!([31])).unwrap();
     wire.call("debug_begin_cast", json!([1, 12880, 1])).unwrap();
     assert_eq!(damage_values(&mut wire)[&1215], 1.05f32.to_bits());
     wire.call(
@@ -356,4 +363,85 @@ fn actual_spell_power_world_plan_snapshots_corruption_with_its_dot_coefficient()
     shard.assert_sql("DELETE FROM game_aura WHERE spell_id = 11390");
     cast(&shard, 1, 17539, 1);
     assert_eq!(corruption(), ordinary + 2);
+}
+
+fn seal_damage(connection: &mut lyracore_test_support::ReducerConnection) -> Vec<u32> {
+    let mut hits = Vec::new();
+    for packet in connection.drain_packets() {
+        let packet: serde_json::Value = serde_json::from_str(packet.get()).unwrap();
+        if packet[2][1].as_u64() != Some(0x250) {
+            continue;
+        }
+        let encoded = packet[3].as_str().unwrap();
+        let body: Vec<_> = (0..encoded.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16).unwrap())
+            .collect();
+        let mut offset = 0;
+        for _ in 0..2 {
+            offset += 1 + body[offset].count_ones() as usize;
+        }
+        let spell = u32::from_le_bytes(body[offset..offset + 4].try_into().unwrap());
+        if spell == 25742 {
+            hits.push(u32::from_le_bytes(
+                body[offset + 4..offset + 8].try_into().unwrap(),
+            ));
+        }
+    }
+    hits
+}
+
+#[test]
+#[ignore = "requires World Source, client DBCs, SpacetimeDB 2.14.0 and Wasm"]
+fn actual_spell_power_world_plan_scales_righteousness_with_its_weapon_coefficient() {
+    use serde_json::json;
+    let shard = imported_spells(&[21084, 25742, 11390]);
+    import_items(&shard, &[25, 50, 51, 52]);
+    let wolf = (0xf130u64 << 48) | (51000u64 << 24) | 1;
+    shard.assert_sql(
+        "UPDATE game_player_skill SET current = 300, max_rank = 300 WHERE character_guid = 1",
+    );
+    shard.assert_sql(
+        "INSERT INTO game_conformance_swing_random (character_guid,state) VALUES (1,1)",
+    );
+    cast(&shard, 1, 21084, 1);
+    let auras = shard.query_rows("SELECT eff_kind,amount FROM game_aura WHERE spell_id = 21084");
+    assert_eq!(auras.iter().filter(|a| a["eff_kind"] == "167").count(), 1);
+    let mut wire = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
+    wire.call("native_world_open", json!([42])).unwrap();
+    wire.call("debug_native_enter_world", json!([1])).unwrap();
+    wire.drain_packets();
+    for bonus in [false, true] {
+        if bonus {
+            shard.assert_sql("DELETE FROM game_aura WHERE spell_id = 21084 AND effect_id = 84336");
+            shard.assert_sql("UPDATE game_aura SET eff_kind = 167 WHERE spell_id = 21084");
+            wire.call("debug_repair_after_publish", json!([])).unwrap();
+            shard.clear_schedule("game_creature_move_schedule");
+            shard.clear_schedule("game_melee_schedule");
+            let restored = shard.query_rows(
+                "SELECT amount FROM game_aura WHERE spell_id = 21084 AND effect_id = 84336",
+            );
+            assert_eq!(restored.len(), 1);
+            assert_eq!(restored[0]["amount"], "216");
+            wire.call("debug_begin_cast", json!([1, 11390, 1])).unwrap();
+        }
+        shard.assert_sql(
+            "UPDATE game_conformance_swing_random SET state = 1 WHERE character_guid = 1",
+        );
+        shard.assert_sql(
+            "UPDATE game_conformance_spell_random SET state = 0 WHERE character_guid = 1",
+        );
+        wire.call(
+            "native_world_receive",
+            json!([0x141, wolf.to_le_bytes().to_vec()]),
+        )
+        .unwrap();
+        wire.call("debug_advance_roll_batch", json!([45])).unwrap();
+        wire.call("native_world_receive", json!([0x142, Vec::<u8>::new()]))
+            .unwrap();
+        let hits = seal_damage(&mut wire);
+        assert!(!hits.is_empty());
+        let expected = if bonus { [5, 6] } else { [3, 4] };
+        assert!(hits.iter().all(|hit| expected.contains(hit)), "{hits:?}");
+    }
 }

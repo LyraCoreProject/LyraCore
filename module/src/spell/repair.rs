@@ -109,7 +109,67 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
         recompute_vitals(ctx, target);
         recompute_sheet(ctx, target);
     }
+    restore_missing_seals(ctx);
     restore_missing_passives(ctx);
+}
+
+fn restore_missing_seals(ctx: &ReducerContext) {
+    let markers: Vec<_> = ctx
+        .db
+        .game_aura()
+        .iter()
+        .filter(|aura| aura.eff_kind == A_FLAG && aura.item_guid(ctx) == 0)
+        .collect();
+    for mut aura in markers {
+        let Some(header) = ctx
+            .db
+            .game_spell()
+            .spell_id()
+            .find(aura.spell_id)
+            .filter(|header| {
+                header.cast_flags & lyracore_shared::spell::taxonomy::SPELL_ATTR_RIGHTEOUSNESS != 0
+            })
+        else {
+            continue;
+        };
+        let Some(effect) = ctx
+            .db
+            .game_spell_effect()
+            .by_spell()
+            .filter(aura.spell_id)
+            .find(|effect| effect.effect_index == 0 && effect.kind == A_SEAL)
+        else {
+            continue;
+        };
+        if ctx
+            .db
+            .game_aura()
+            .by_target()
+            .filter(aura.target_guid)
+            .any(|existing| {
+                existing.effect_id == effect.id && existing.caster_guid == aura.caster_guid
+            })
+        {
+            continue;
+        }
+        aura.id = 0;
+        aura.effect_id = effect.id;
+        aura.eff_kind = effect.kind;
+        aura.eff_p0 = effect.p0;
+        aura.eff_p0_kind = effect.p0_kind;
+        aura.eff_p1 = effect.p1;
+        aura.amount = effect_amount(
+            effect.base_points,
+            effect.die_sides,
+            effect.per_level,
+            u32::from(aura.level),
+            header.spell_level,
+            header.max_level,
+            0,
+        );
+        aura.amount_remaining = 0;
+        aura.insert(ctx);
+    }
 }
 
 fn restore_missing_passives(ctx: &ReducerContext) {

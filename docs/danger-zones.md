@@ -254,7 +254,9 @@ Repair also compares every ordinary cast Aura's frozen effect kind, parameters, 
 with its imported definition, including offline and permanent rows. It removes missing definitions,
 refreshes obsolete metadata, converts percentage units once and clears obsolete absorb capacity.
 Aura writes notify connected clients and refresh their sheets. Existing cast magnitudes, stacks,
-application times and remaining durations stay frozen, apart from the unit conversion. Buff and
+application times and remaining durations stay frozen, apart from the unit conversion. A legacy
+Seal of Righteousness judgement marker restores a missing damage effect at its saved cast level
+and deadline. Buff and
 debuff slots follow the current definition. Missing learned passives are restored without stacking
 existing effects. No manual Aura cleanup or recast is required. Repeating repair is idempotent.
 Unsupported cast modifiers retain ordinary Aura holders with inert numeric effects; this includes

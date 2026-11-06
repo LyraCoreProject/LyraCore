@@ -114,21 +114,23 @@ pub(crate) fn weapon_damage(
     ((base + flat as f32) * multiplier).max(0.0)
 }
 
+// Preserve fractions; the caller applies taken modifiers and dithers after mitigation.
 pub(crate) fn spell_damage_done_float(
     ctx: &ReducerContext,
     hdr: &Spell,
     effect: &SpellEffect,
     caster: u64,
-    points: i32,
+    points: f32,
     periodic: bool,
 ) -> f32 {
     if hdr.custom_flags & lyracore_shared::spell_custom::FIXED_DAMAGE != 0
         || hdr.attributes_ex_3 & 0x2000_0000 != 0
         || (hdr.family_name == 3 && hdr.family_flags & 0x0800_0000 != 0)
     {
-        return points as f32;
+        return points;
     }
-    let power = if matches!(hdr.damage_class, 2 | 3) {
+    let seal = hdr.cast_flags & lyracore_shared::spell::taxonomy::SPELL_ATTR_RIGHTEOUSNESS != 0;
+    let power = if matches!(hdr.damage_class, 2 | 3) && !seal {
         auras_on(ctx, caster)
             .filter(|aura| {
                 aura.eff_kind == A_MOD_DAMAGE_DONE_FLAT
@@ -159,9 +161,10 @@ pub(crate) fn spell_damage_done_float(
         spell_power(ctx, caster, hdr.school_mask)
     };
     let mut damage =
-        points as f32 + power as f32 * spell_coefficient(ctx, hdr, effect, caster, true);
+        points + power as f32 * spell_coefficient(ctx, hdr, effect, caster, caster, true);
     for aura in auras_on(ctx, caster).filter(|aura| {
-        aura.eff_kind == A_MOD_DAMAGE_DONE_PCT && aura.eff_p0 & i32::from(hdr.school_mask) != 0
+        aura.eff_kind == A_MOD_DAMAGE_DONE_PCT
+            && (aura.eff_p0 & i32::from(hdr.school_mask) != 0 || (seal && aura.eff_p0 & 1 != 0))
     }) {
         if ctx
             .db
@@ -182,7 +185,17 @@ pub(crate) fn spell_damage_done_float(
                             &source,
                         )
                 } else {
-                    unrestricted(&source) && hdr.equipped_item_class == -1
+                    (aura.eff_p0 & i32::from(hdr.school_mask) != 0
+                        && unrestricted(&source)
+                        && hdr.equipped_item_class == -1)
+                        || (seal
+                            && aura.eff_p0 & 1 != 0
+                            && fits_weapon(
+                                ctx,
+                                caster,
+                                crate::items::equip_slot::MAINHAND,
+                                &source,
+                            ))
                 }
             })
         {
@@ -202,7 +215,7 @@ pub(crate) fn spell_damage_taken(
     ctx: &ReducerContext,
     hdr: &Spell,
     effect: &SpellEffect,
-    _caster: u64,
+    caster: u64,
     target: u64,
     damage: f32,
     stacks: u8,
@@ -220,8 +233,8 @@ pub(crate) fn spell_damage_taken(
         })
         .map(|aura| amount(&aura))
         .sum();
-    let mut bonus =
-        flat as f32 * spell_coefficient(ctx, hdr, effect, target, false) * f32::from(stacks.max(1));
+    let coefficient = spell_coefficient(ctx, hdr, effect, caster, target, false);
+    let mut bonus = flat as f32 * coefficient * f32::from(stacks.max(1));
     if !matches!(hdr.damage_class, 2 | 3) {
         bonus = bonus.max(-(damage / 2.0));
     }
@@ -253,6 +266,7 @@ pub(crate) fn healing_taken(
     effect: &SpellEffect,
     target: u64,
     healing: f32,
+    stacks: u8,
 ) -> f32 {
     if hdr.damage_class == 0 {
         return healing;
@@ -263,8 +277,10 @@ pub(crate) fn healing_taken(
         })
         .map(|aura| amount(&aura))
         .sum();
-    let bonus =
-        (flat as f32 * spell_coefficient(ctx, hdr, effect, target, false)).max(-(healing / 2.0));
+    let bonus = (flat as f32
+        * spell_coefficient(ctx, hdr, effect, target, target, false)
+        * f32::from(stacks.max(1)))
+    .max(-(healing / 2.0));
     (healing + bonus).max(0.0)
 }
 
@@ -337,18 +353,30 @@ pub(crate) fn spell_coefficient(
     ctx: &ReducerContext,
     hdr: &Spell,
     effect: &SpellEffect,
+    caster: u64,
     modifier: u64,
     done: bool,
 ) -> f32 {
-    let coefficient = if hdr.family_name == 10 && hdr.spell_id == 20424 {
-        if done {
-            0.20
+    let coefficient =
+        if hdr.cast_flags & lyracore_shared::spell::taxonomy::SPELL_ATTR_RIGHTEOUSNESS != 0 {
+            crate::items::item_in_slot(ctx, caster, crate::items::equip_slot::MAINHAND)
+                .and_then(|item| ctx.db.game_item_template().entry().find(item.entry))
+                .map_or(0.10, |weapon| {
+                    if weapon.inventory_type == crate::items::invtype::TWO_HAND_WEAPON {
+                        0.125
+                    } else {
+                        0.10
+                    }
+                })
+        } else if hdr.family_name == 10 && hdr.spell_id == 20424 {
+            if done {
+                0.20
+            } else {
+                0.29
+            }
         } else {
-            0.29
-        }
-    } else {
-        effect.bonus_coefficient.max(0.0)
-    };
+            effect.bonus_coefficient.max(0.0)
+        };
     let (flat, percent) = spell_mod(ctx, modifier, 24, hdr);
     (coefficient * 100.0 + flat as f32) * (100 + percent) as f32 / 10000.0
 }

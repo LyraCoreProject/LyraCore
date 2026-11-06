@@ -155,7 +155,8 @@ pub(crate) fn weapon_swing_range_ap(
 }
 
 pub(crate) fn apply_offhand_penalty(min: u32, max: u32) -> (u32, u32) {
-    ((min / 2).max(1), (max / 2).max(1))
+    let halve = |damage: u32| if damage == 0 { 0 } else { (damage / 2).max(1) };
+    (halve(min), halve(max))
 }
 
 pub(crate) fn effective_stat(base: i32, aura: i32, gear: i32) -> u32 {
@@ -1355,10 +1356,10 @@ mod tests {
         }
 
         #[test]
-        fn apply_offhand_penalty_floors_at_one() {
+        fn apply_offhand_penalty_preserves_zero_and_floors_positive_damage_at_one() {
             assert_eq!(apply_offhand_penalty(1, 1), (1, 1));
-            assert_eq!(apply_offhand_penalty(0, 1), (1, 1));
-            assert_eq!(apply_offhand_penalty(0, 0), (1, 1));
+            assert_eq!(apply_offhand_penalty(0, 1), (0, 1));
+            assert_eq!(apply_offhand_penalty(0, 0), (0, 0));
         }
     }
 }

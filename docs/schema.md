@@ -865,7 +865,8 @@ on the wire. The sheet sends both melee and ranged crit percentages, using each 
 the source cast time, channel duration, direct/periodic split, area targets, extra effects and
 spell level. Explicit coefficients already include level penalties. The pinned Reference uses
 no caster-level downranking factor. Intellect contributes spell crit, not spell damage or healing.
-Damage-only bonuses do not increase healing. Physical flat damage enters each weapon slot once;
+Damage-only bonuses do not increase healing. Seal of Righteousness uses its source weapon-speed
+base and 0.10 one-hand / 0.125 two-hand coefficient; the judgement Dummy remains a holder. Physical flat damage enters each weapon slot once;
 weapon-restricted magic bonuses do not become general spell power. Flat incoming magic damage
 and healing reductions cannot remove more than half the spell's pre-mitigation amount.
 The native CREATE and aura VALUES send all seven signed positive/negative damage fields and

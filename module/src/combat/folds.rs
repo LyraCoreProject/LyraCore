@@ -78,8 +78,73 @@ pub(crate) fn aura_attack_power_bonus(ctx: &ReducerContext, unit_guid: u64) -> i
     crate::spell::combat_field_bonus(ctx, unit_guid, crate::spell::COMBAT_ATTACK_POWER)
 }
 
-pub(crate) fn seal_holy_on_swing(ctx: &ReducerContext, attacker: &WorldEntity) -> (u32, u32) {
+pub(crate) fn seal_holy_on_swing(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: u64,
+) -> (u32, u32) {
     let (amount, spell) = crate::spell::seal_amount_and_spell(ctx, attacker.guid);
+    if let Some(header) = ctx.db.game_spell().spell_id().find(spell).filter(|header| {
+        header.cast_flags & lyracore_shared::spell::taxonomy::SPELL_ATTR_RIGHTEOUSNESS != 0
+    }) {
+        let Some(effect) = ctx
+            .db
+            .game_spell_effect()
+            .by_spell()
+            .filter(spell)
+            .find(|effect| effect.kind == crate::spell::A_SEAL && effect.effect_index == 0)
+        else {
+            return (0, 0);
+        };
+        let speed =
+            crate::items::item_in_slot(ctx, attacker.guid, crate::items::equip_slot::MAINHAND)
+                .and_then(|item| ctx.db.game_item_template().entry().find(item.entry))
+                .map_or(2000, |weapon| weapon.delay_ms) as f32
+                / 1000.0;
+        let min = amount as f32 / 87.0;
+        let max = amount as f32 / 25.0;
+        let mut base = (max - min) * ((speed - 1.5) / 2.5) + min;
+        for aura in crate::spell::auras_on(ctx, attacker.guid)
+            .filter(|aura| [20224, 20225, 20330, 20331, 20332].contains(&aura.spell_id))
+        {
+            if aura.eff_kind == crate::spell::A_SPELLMOD_PCT && aura.eff_p0 == 8 && aura.amount > 0
+            {
+                base *= (100 + lyracore_shared::aura::stacked_amount(aura.amount, aura.stacks))
+                    as f32
+                    / 100.0;
+            }
+        }
+        let done = crate::spell::bonuses::spell_damage_done_float(
+            ctx,
+            &header,
+            &effect,
+            attacker.guid,
+            base,
+            false,
+        );
+        let taken = crate::spell::bonuses::spell_damage_taken(
+            ctx,
+            &header,
+            &effect,
+            attacker.guid,
+            target,
+            done,
+            1,
+        );
+        let damage = crate::spell::bonuses::round_damage(ctx, target, taken).max(0) as u32;
+        let triggered = match spell {
+            20154 | 21084 => 25742,
+            20287 => 25740,
+            20288 => 25739,
+            20289 => 25738,
+            20290 => 25737,
+            20291 => 25736,
+            20292 => 25735,
+            20293 => 25713,
+            _ => return (0, 0),
+        };
+        return (damage, triggered);
+    }
     (seal_swing_holy(amount, attacker.base_attack_time_ms), spell)
 }
 
@@ -795,7 +860,16 @@ pub(crate) fn roll_swing_with_range(
             parry: effective_parry_bp(ctx, target, sd),
             glancing: glancing_chance_bp(attacker.level, target.level),
             block: effective_block_bp(ctx, target, sd, block_value),
-            crit: effective_crit_bp(ctx, attacker),
+            crit: effective_crit_bp(ctx, attacker).saturating_add_signed(
+                ctx.db
+                    .game_spell()
+                    .spell_id()
+                    .find(attacker.next_swing_spell)
+                    .map_or(0, |spell| {
+                        (crate::spell::bonuses::school_crit(ctx, attacker.guid, spell.school_mask)
+                            * 100.0) as i32
+                    }),
+            ),
             crushing: if !attacker.is_player() && target.is_player() {
                 crushing_chance_bp(attacker.level, target.level)
             } else {
@@ -1081,7 +1155,8 @@ fn resolve_swing_with_damage_taken(
     let base = damage_taken(base);
     let pre_mit = match outcome {
         HIT_CRIT => base * CRIT_MULT,
-        HIT_GLANCING => (base * GLANCING_DAMAGE_PCT / 100).max(1),
+        HIT_GLANCING if base > 0 => (base * GLANCING_DAMAGE_PCT / 100).max(1),
+        HIT_GLANCING => 0,
         HIT_CRUSHING => base * CRUSH_DAMAGE_PCT / 100,
         _ => base,
     };
@@ -1331,6 +1406,14 @@ mod queued_strike_tests {
         assert_eq!(
             resolve_swing(table(0, 0, 0), rolls(9_999), (1, 1), maul, 0, 0),
             (2002, HIT_NORMAL, 0)
+        );
+    }
+
+    #[test]
+    fn zero_damage_stays_zero_on_a_glancing_hit() {
+        assert_eq!(
+            resolve_swing(table(0, 0, 10_000), rolls(9_999), (0, 0), None, 0, 0),
+            (0, HIT_GLANCING, 0)
         );
     }
 

@@ -211,6 +211,7 @@ pub const SPELL_ATTR_ALWAYS_HIT: u32 = 0x4000;
 pub const SPELL_ATTR_MAGIC_HIT: u32 = 0x8000;
 pub const SPELL_ATTR_AREA_AURA: u32 = 0x0001_0000;
 pub const SPELL_ATTR_ITEM_TARGET: u32 = 0x0002_0000;
+pub const SPELL_ATTR_RIGHTEOUSNESS: u32 = 0x0004_0000;
 
 #[cfg(test)]
 mod tests {

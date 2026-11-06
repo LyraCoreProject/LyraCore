@@ -187,7 +187,7 @@ pub fn debug_compute_spell(
         &hdr,
         &eff,
         caster_guid,
-        eff.base_points,
+        eff.base_points as f32,
         false,
     ) as i32;
     let scaled = crate::spell::bonuses::spell_damage_taken(

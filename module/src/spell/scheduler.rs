@@ -465,6 +465,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                                 &effect,
                                 a.target_guid,
                                 healing as f32,
+                                a.stacks,
                             ),
                         )
                     });

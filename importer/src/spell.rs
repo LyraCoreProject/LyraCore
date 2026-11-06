@@ -882,6 +882,9 @@ fn push_spell_header_row(
         cast_flags |= SPELL_ATTR_WEAPON_PROCS;
     }
     cast_flags |= roll_cast_flags(s);
+    if s.family_name == 10 && s.family_flags & 0x0800_0000 != 0 && s.icon_id == 25 {
+        cast_flags |= lyracore_shared::spell::taxonomy::SPELL_ATTR_RIGHTEOUSNESS;
+    }
     if s.targets & 0x10 != 0 {
         cast_flags |= lyracore_shared::spell::taxonomy::SPELL_ATTR_ITEM_TARGET;
     }
@@ -1351,6 +1354,11 @@ fn resolve_effect_kind(
         kind
     } else {
         correct_script_effect_kind(name, kind)
+    };
+    let kind = if kind == A_SEAL && s.family_name == 10 && s.icon_id == 25 && i != 0 {
+        A_FLAG
+    } else {
+        kind
     };
     let kind = if effect_id == EFFECT_SCHOOL_DAMAGE
         && school_mask == SCHOOL_MASK_PHYSICAL

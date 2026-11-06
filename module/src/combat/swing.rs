@@ -608,7 +608,7 @@ fn fire_melee_swing(
 
     let (mut seal_portion, mut seal_spell) = (0u32, 0u32);
     if rolled > 0 {
-        let (p, s) = seal_holy_on_swing(ctx, attacker);
+        let (p, s) = seal_holy_on_swing(ctx, attacker, target_guid);
         seal_portion = p;
         seal_spell = s;
         rolled += seal_portion;
