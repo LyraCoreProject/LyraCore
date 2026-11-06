@@ -25,28 +25,28 @@ use std::path::Path;
 
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN,
-    A_MOD_HEALING, A_MOD_HEALTH_POWER, A_MOD_POWER_REGEN_PCT, A_MOD_RESISTANCE, A_MOD_SPEED,
-    A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL,
-    A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT,
-    A_SPELLMOD_PCT, A_TRANSFORM, COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DMG_DONE, COMBAT_DODGE,
-    COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO,
-    E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL,
-    E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE,
-    E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK,
-    E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT,
-    E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_PET,
-    E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN,
-    P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
-    P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW,
-    P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
-    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_AREA_AURA,
-    SPELL_ATTR_CHANNELED, SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_PASSIVE,
-    SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER,
-    SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE, SPELL_ATTR_REQ_STEALTH,
-    SPELL_ATTR_STEALTH_SAFE, SPELL_ATTR_USES_RANGED_SLOT, SPELL_ATTR_WEAPON_PROCS,
-    SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER,
-    STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY,
-    T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    A_MOD_HEALING, A_MOD_HEALTH_POWER, A_MOD_POWER_REGEN_PCT, A_MOD_RESISTANCE, A_MOD_SKILL,
+    A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE,
+    A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT,
+    A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_TRANSFORM, COMBAT_ATTACK_POWER, COMBAT_CRIT,
+    COMBAT_DMG_DONE, COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_SPELL_CRIT,
+    COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE,
+    E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE,
+    E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT,
+    E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME,
+    E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS,
+    E_SUMMON_HOSTILE, E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR,
+    M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY,
+    P_FLAG, P_FLAT_MANA, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER,
+    P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID,
+    P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM,
+    SPELL_ATTR_AREA_AURA, SPELL_ATTR_CHANNELED, SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER,
+    SPELL_ATTR_PASSIVE, SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND,
+    SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE,
+    SPELL_ATTR_REQ_STEALTH, SPELL_ATTR_STEALTH_SAFE, SPELL_ATTR_USES_RANGED_SLOT,
+    SPELL_ATTR_WEAPON_PROCS, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STANCE_BATTLE, STANCE_BEAR,
+    STANCE_BERSERKER, STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY,
+    T_AREA_ENEMY, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 
 fn binding_summon_entry(spell_id: u32, effect: i32, event: u32, focus: u32) -> Option<i32> {
@@ -396,6 +396,7 @@ fn proc_damage_school_p0(kind: u8, p0: i32, p0_kind: u8, school_mask: u8) -> (i3
 fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
     use AuraMod::*;
     match kind {
+        A_MOD_SKILL => (misc as i32, P_SKILL_LINE),
         A_MOD_STAT | A_MOD_STAT_PCT => {
             let p0 = if misc == u32::MAX {
                 i32::from(STAT_ALL)
@@ -480,7 +481,10 @@ fn is_reducing_modifier_aura(effect_id: i32, aura: AuraMod, base_points: i32) ->
         && base_points.saturating_add(1) < 0
         && (matches!(
             aura,
-            AuraMod::ModDamageDone | AuraMod::ModSkill | AuraMod::ModHealingPct
+            AuraMod::ModDamageDone
+                | AuraMod::ModSkill
+                | AuraMod::ModSkillTalent
+                | AuraMod::ModHealingPct
         ) || matches!(
             aura_mod_to_kind(aura),
             A_MOD_STAT | A_MOD_RESISTANCE | A_MOD_COMBAT | A_MOD_HEALING
@@ -1117,7 +1121,9 @@ fn push_spell_effect_rows(
             wrapper_to_rank.entry(spell_id).or_insert(trigger_spell);
         }
         let effect_mechanic = s.effect_mechanic[i] as u8;
-        let p1 = if kind == E_SUMMON_HOSTILE {
+        let p1 = if kind == A_MOD_SKILL {
+            i32::from(s.effect_aura[i] == 98)
+        } else if kind == E_SUMMON_HOSTILE {
             s.requires_spell_focus as i32
         } else if kind == E_POWER_BURN {
             power_burn_ratio_bp(s.effect_multiple_values[i])
@@ -1587,6 +1593,7 @@ fn kind_name(kind: u8) -> &'static str {
         A_MOD_HEALTH_POWER => "A_MOD_HEALTH_POWER",
         A_MOD_HEALING => "A_MOD_HEALING",
         A_INERT => "A_INERT",
+        A_MOD_SKILL => "A_MOD_SKILL",
         A_MOD_DAMAGE_TAKEN => "A_MOD_DAMAGE_TAKEN",
         A_CONTROL => "A_CONTROL",
         A_IMMUNITY => "A_IMMUNITY",
@@ -1819,6 +1826,105 @@ mod tests {
             durations: authored_table(4, &[&[1, 12000, 0, 12000]]),
             radii: authored_table(4, &[&[1, 7.0f32.to_bits()], &[2, 9.0f32.to_bits()]]),
         }
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE, LYRACORE_TEST_DBC, SpacetimeDB and Wasm"]
+    fn world_source_skill_auras_follow_the_spell_sql_plan() {
+        let source = crate::world_source::WorldSource::open(Path::new(
+            &std::env::var("LYRACORE_VMANGOS_SQLITE").unwrap(),
+        ))
+        .unwrap();
+        let plan = world_plan(&source, &std::env::var("LYRACORE_TEST_DBC").unwrap()).unwrap();
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient,equip_supported)").unwrap();
+        for sql in plan
+            .stmts
+            .iter()
+            .filter(|sql| sql.contains("game_spell_effect"))
+        {
+            db.execute_batch(&lyracore_shared::import_sql::insert_defaults(sql))
+                .unwrap();
+        }
+        for (spell, index, points, line, permanent) in [
+            (7515, 0, 3, 95, 0),
+            (20597, 0, 5, 43, 1),
+            (20597, 1, 5, 55, 1),
+            (20864, 0, 5, 54, 1),
+            (20864, 1, 5, 160, 1),
+            (20595, 0, 5, 46, 1),
+            (27720, 0, 13, 95, 0),
+            (7824, 0, 10, 164, 0),
+            (26613, 1, -100, 95, 0),
+            (7038, 0, -100, 43, 0),
+        ] {
+            let actual = db.query_row(
+                "SELECT kind,base_points,p0,p0_kind,p1,equip_supported FROM game_spell_effect WHERE spell_id = ?1 AND effect_index = ?2",
+                [spell, index],
+                |row| Ok((row.get::<_, u8>(0)?, row.get::<_, i32>(1)?, row.get::<_, i32>(2)?, row.get::<_, u8>(3)?, row.get::<_, i32>(4)?, row.get::<_, bool>(5)?)),
+            ).unwrap();
+            assert_eq!(
+                actual,
+                (189, points, line, 18, permanent, spell != 26613),
+                "spell {spell} effect {index}"
+            );
+        }
+        let path =
+            std::env::temp_dir().join(format!("skill-spell-plan-{}.json", std::process::id()));
+        let mut statements = plan.stmts;
+        statements.extend(
+            crate::world_import::globals_statements(
+                &source,
+                Some(&std::env::var("LYRACORE_TEST_DBC").unwrap()),
+            )
+            .unwrap()
+            .into_iter()
+            .filter(|sql| {
+                sql.contains("game_createinfo_spell")
+                    || sql.contains("game_level_stats")
+                    || sql.contains("game_crit_per_agility")
+            }),
+        );
+        statements.extend(
+            crate::dbc::replacement_plan(&source, &std::env::var("LYRACORE_TEST_DBC").unwrap())
+                .unwrap()
+                .stmts
+                .into_iter()
+                .filter(|sql| {
+                    sql.contains("game_createinfo_spell") || sql.contains("game_skill_ability")
+                }),
+        );
+        statements.extend(
+            crate::dbc::catalogue_statements(&std::env::var("LYRACORE_TEST_DBC").unwrap(), &source)
+                .unwrap()
+                .into_iter()
+                .filter(|sql| sql.contains("game_skill_availability")),
+        );
+        std::fs::write(&path, serde_json::to_vec(&statements).unwrap()).unwrap();
+        let output = std::process::Command::new("cargo")
+            .current_dir(lyracore_test_support::core_root())
+            .args([
+                "test",
+                "--locked",
+                "-p",
+                "lyracore-module",
+                "--test",
+                "native_conformance",
+                "skills::",
+                "--",
+                "--ignored",
+                "--test-threads=1",
+            ])
+            .env("LYRACORE_SKILL_SPELL_PLAN", &path)
+            .output()
+            .unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(
+            output.status.success(),
+            "full spell import through gameplay failed:\n{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
 
     #[test]
@@ -2954,7 +3060,7 @@ mod tests {
             (22, 12956, 9, 32, (6, 1, 0), true),
             (23, 758, -1, 0, (6, 1, 0), false),
             (29, 7363, 3, 4, (35, 1, 0), false),
-            (30, 7515, 2, 95, (6, 1, 0), false),
+            (30, 7515, 2, 95, (6, 1, 0), true),
             (31, 17625, 7, 0, (6, 1, 0), false),
             (42, 4070, 0, 0, (6, 1, 0), false),
             (43, 16550, 59, 0, (6, 1, 0), false),

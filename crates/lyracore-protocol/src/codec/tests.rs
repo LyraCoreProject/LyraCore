@@ -2046,7 +2046,29 @@ fn skill_block_reads_learned_rows_override_and_append() {
         &warrior_entity(),
         CreateKind::SelfPlayer,
         &[],
-        &[(95, 37, 75), (186, 12, 75), (999_999, 1, 1)],
+        &[
+            SkillView {
+                line: 95,
+                current: 37,
+                maximum: 75,
+                temporary_bonus: 0,
+                permanent_bonus: 0,
+            },
+            SkillView {
+                line: 186,
+                current: 12,
+                maximum: 75,
+                temporary_bonus: 0,
+                permanent_bonus: 0,
+            },
+            SkillView {
+                line: 999_999,
+                current: 1,
+                maximum: 1,
+                temporary_bonus: 0,
+                permanent_bonus: 0,
+            },
+        ],
     )
     .unwrap();
     match &msg.objects[0] {
@@ -4228,7 +4250,13 @@ fn item_guid_allocation_bits_survive_item_and_container_wire_updates() {
 fn self_create_preserves_non_quest_fields_and_movement() {
     let entity = warrior_entity();
     let inventory = [worn_item(23, 0x4000_0000_0000_0042, 25, 0)];
-    let skills = [(164, 37, 75)];
+    let skills = [SkillView {
+        line: 164,
+        current: 37,
+        maximum: 75,
+        temporary_bonus: 0,
+        permanent_bonus: 0,
+    }];
     let original =
         build_create_object(&entity, CreateKind::SelfPlayer, &inventory, &skills).unwrap();
     let quests = [update_mask::QuestLogSlot {

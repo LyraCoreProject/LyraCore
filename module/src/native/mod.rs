@@ -79,7 +79,8 @@ pub(crate) use admission::{game_native_admission_tick, native_admission_tick};
 pub(crate) use auction::notice as auction_notice;
 pub(crate) use aura::changed as aura_changed;
 pub(crate) use book::{
-    forgotten as spell_forgotten, learned as spell_learned, skill_changed, talent_points,
+    forgotten as spell_forgotten, learned as spell_learned, skill_bonus_changed, skill_changed,
+    talent_points,
 };
 pub(crate) use channel::notice as channel_notice;
 pub(crate) use chat::{creature_sound, realm_chat_line, speech, system_message, text_emote};

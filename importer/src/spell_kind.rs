@@ -81,6 +81,7 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         AddFlatModifier => A_SPELLMOD_FLAT,
         AddPctModifier => A_SPELLMOD_PCT,
 
+        ModSkill | ModSkillTalent => A_MOD_SKILL,
         ModStat => A_MOD_STAT,
         ModPercentStat | ModTotalStatPercentage => A_MOD_STAT_PCT,
 
@@ -179,6 +180,7 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
 pub fn equip_aura_supported(aura: u32, misc: u32, equipment: [u32; 3]) -> bool {
     use AuraMod::*;
     match AuraMod::from_int(aura).ok() {
+        Some(ModSkill | ModSkillTalent) => misc > 0 && misc <= u16::MAX.into(),
         Some(ModStat) => misc <= 4 || misc == u32::MAX,
         Some(ModResistance) => misc != 0 && misc & !0x7f == 0,
         Some(ModCritPercent) => equipment[0] == u32::MAX,

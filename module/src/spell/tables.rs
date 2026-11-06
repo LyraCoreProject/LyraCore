@@ -317,6 +317,7 @@ impl Aura {
         if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
             crate::aoi::refresh_entity(ctx, aura.target_guid);
         }
+        crate::skill::aura_changed(ctx, None, Some(&aura));
         crate::native::aura_changed(ctx, None, Some(&aura));
         aura
     }
@@ -337,6 +338,7 @@ impl Aura {
         {
             crate::aoi::refresh_entity(ctx, aura.target_guid);
         }
+        crate::skill::aura_changed(ctx, previous.as_ref(), Some(&aura));
         crate::native::aura_changed(ctx, previous.as_ref(), Some(&aura));
         aura
     }
@@ -351,6 +353,7 @@ impl Aura {
             if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
                 crate::aoi::refresh_entity(ctx, aura.target_guid);
             }
+            crate::skill::aura_changed(ctx, Some(&aura), None);
             crate::native::aura_changed(ctx, Some(&aura), None);
         }
         removed

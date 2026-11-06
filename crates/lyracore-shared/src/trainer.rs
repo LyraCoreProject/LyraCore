@@ -135,7 +135,22 @@ pub fn resolve_learn_target(spell_id: u32, effects: impl IntoIterator<Item = Lea
 pub fn is_combat_skill_line(line: u32) -> bool {
     matches!(
         line,
-        44 | 172 | 54 | 160 | 229 | 43 | 55 | 136 | 473 | 173 | 162 | 95
+        44 | 172
+            | 54
+            | 160
+            | 229
+            | 43
+            | 55
+            | 136
+            | 473
+            | 173
+            | 162
+            | 95
+            | 45
+            | 46
+            | 176
+            | 226
+            | 228
     )
 }
 

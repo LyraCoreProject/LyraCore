@@ -154,6 +154,7 @@ fn direct_pools_and_regeneration_follow_working_equipment() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn defenses_and_each_magic_resistance_reach_combat_callers() {
     let shard = fixture("property-stat-defense", 1);
+    shard.assert_call("debug_set_skill", &["1", "95", "5"]);
     enchantments(
         &shard,
         &[

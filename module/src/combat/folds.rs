@@ -963,27 +963,10 @@ fn white_defense_skill(
     target: &WorldEntity,
     no_defense: bool,
 ) -> i32 {
-    use crate::skill::game_player_skill;
-    let maximum = crate::skill::skill_cap_for_level(target.level) as i32;
     if no_defense {
         0
-    } else if target.is_player() && attacker.is_player() {
-        let maximum = ctx
-            .db
-            .game_player_skill()
-            .by_character()
-            .filter(target.guid)
-            .find(|skill| skill.skill_line == crate::skill::skill_line::DEFENSE)
-            .map_or(maximum, |skill| i32::from(skill.max_rank));
-        let aura = crate::spell::combat_field_bonus(ctx, target.guid, crate::spell::COMBAT_DEFENSE);
-        let gear =
-            crate::items::equipped_stat_bonus(ctx, target.guid, crate::items::EquipStat::Defense);
-        (i64::from(maximum) + i64::from(aura) + i64::from(gear)).clamp(0, i64::from(i32::MAX))
-            as i32
-    } else if target.is_player() {
-        crate::skill::effective_defense_skill(ctx, target) as i32
     } else {
-        maximum
+        crate::skill::defense_skill(ctx, target, attacker.is_player()) as i32
     }
 }
 

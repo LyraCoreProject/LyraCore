@@ -23,6 +23,8 @@ mod properties;
 mod quest_world;
 #[path = "conformance/rolls.rs"]
 mod rolls;
+#[path = "conformance/skills.rs"]
+mod skills;
 #[path = "conformance/spell_rolls.rs"]
 mod spell_rolls;
 #[path = "../../conformance/support/spell_world.rs"]

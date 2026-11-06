@@ -13,7 +13,7 @@ use super::rules::{
 use super::tables::{
     game_item_instance, game_item_template, item_in_slot, slot_occupied, ItemInstance,
 };
-use crate::{game_player_reputation, game_player_skill};
+use crate::game_player_reputation;
 
 pub(super) fn bag_has_contents(ctx: &ReducerContext, character_guid: u64, slot: u8) -> bool {
     if !(BAG_SLOT_START..=BAG_SLOT_END_INCL).contains(&slot) {
@@ -288,20 +288,15 @@ pub(super) fn validate_equipment(
     {
         return Err(InventoryResult::YouCanNeverUseThatItem);
     }
-    let current_skill = ctx
-        .db
-        .game_player_skill()
-        .by_character()
-        .filter(character_guid)
-        .find(|skill| skill.skill_line == template.required_skill)
-        .map(|skill| skill.current);
-    if template.required_skill != 0 && current_skill.unwrap_or(0) == 0 {
+    let current_skill =
+        crate::skill::skill_value(ctx, character_guid, template.required_skill, false) as u16;
+    if template.required_skill != 0 && current_skill == 0 {
         return Err(InventoryResult::NoRequiredProficiency);
     }
     if !meets_required_skill(
         template.required_skill,
         template.required_skill_rank,
-        current_skill,
+        Some(current_skill),
     ) {
         return Err(InventoryResult::CantEquipSkill);
     }

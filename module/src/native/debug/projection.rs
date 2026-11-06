@@ -173,7 +173,7 @@ fn entity_projection(
             .game_player_skill()
             .by_character()
             .filter(guid)
-            .map(|skill| (skill.skill_line, skill.current, skill.max_rank))
+            .map(|skill| skill.view(ctx))
             .collect::<Vec<_>>()
     } else {
         Vec::new()

@@ -868,6 +868,7 @@ pub(crate) fn apply_effect(
         | EffectKind::AuraModResistance
         | EffectKind::AuraAbsorb
         | EffectKind::AuraInert
+        | EffectKind::AuraModSkill
         | EffectKind::AuraModHealing
         | EffectKind::AuraModCombat
         | EffectKind::AuraModSpeed
