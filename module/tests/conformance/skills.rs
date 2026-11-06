@@ -39,6 +39,12 @@ fn racial_spells(shard: &Standalone) {
 }
 
 fn fields(connection: &mut ReducerConnection, guid: u64) -> BTreeMap<String, Field> {
+    connection
+        .call(
+            "native_world_receive",
+            serde_json::json!([0x1dcu32, vec![0u8; 8]]),
+        )
+        .unwrap();
     let mut result = BTreeMap::new();
     for packet in decoded_taxi_entry_packets(&connection.drain_packets()) {
         let Some(Field::List(objects)) = packet.fields.get("objects") else {
@@ -248,6 +254,8 @@ fn ranged_skill_caps_and_empty_slots_survive_repair_and_reconnect() {
     shard.assert_sql(&format!(
         "UPDATE game_character SET level = 2 WHERE guid = {guid}"
     ));
+    shard.assert_sql("DELETE FROM game_level_stats WHERE race_class_level = 65794");
+    shard.assert_sql("INSERT INTO game_level_stats (race_class_level,race,class,level,strength,agility,stamina,intellect,spirit) VALUES (65794,1,1,2,24,21,23,20,20)");
     shard.assert_sql("DELETE FROM game_crit_per_agility WHERE class_level = 258");
     shard.assert_sql(
         "INSERT INTO game_crit_per_agility (class_level,class,level,rate) VALUES (258,1,2,4.0)",
