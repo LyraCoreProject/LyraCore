@@ -72,7 +72,7 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/conformance/item_equip.rs"
-function = "a_self_cast_of_the_same_passive_does_not_replace_an_items_aura"
+function = "self_casts_keep_passive_item_sources_and_replace_active_equip_effects"
 rung = "durable_module"
 
 [vmangos]

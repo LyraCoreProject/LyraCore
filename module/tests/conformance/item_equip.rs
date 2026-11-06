@@ -110,7 +110,7 @@ fn equip_moves_swaps_and_shared_spells_keep_each_items_effect_once() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_self_cast_of_the_same_passive_does_not_replace_an_items_aura() {
+fn self_casts_keep_passive_item_sources_and_replace_active_equip_effects() {
     let (shard, mut connection, guid, _) = fixture("equip-and-self-passive");
     grant(&shard, guid, ITEM, 1, 23);
     equip(&mut connection, 23);
@@ -122,6 +122,20 @@ fn a_self_cast_of_the_same_passive_does_not_replace_an_items_aura() {
     move_item(&mut connection, 10, 23);
     assert_effect(&shard, guid, 1);
     assert!(shard.query_rows("SELECT * FROM game_item_aura").is_empty());
+    shard.assert_sql(&format!(
+        "DELETE FROM game_aura WHERE target_guid = {guid} AND spell_id = {EQUIP}"
+    ));
+    shard.assert_sql(&format!("UPDATE game_spell SET attributes = 0, max_stacks = 0, visual_id = 3580, duration_index = 1, duration_ms = 5000 WHERE spell_id = {EQUIP}"));
+    equip(&mut connection, 23);
+    assert_eq!(auras(&shard, guid).len(), 1);
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), &EQUIP.to_string(), &guid.to_string()],
+    );
+    assert_eq!(auras(&shard, guid).len(), 1);
+    assert!(shard.query_rows("SELECT * FROM game_item_aura").is_empty());
+    move_item(&mut connection, 10, 23);
+    assert_eq!(auras(&shard, guid).len(), 1);
 }
 
 #[test]

@@ -444,7 +444,8 @@ pub(crate) fn aura_apply(
             .filter(|a| {
                 a.effect_id == e.id
                     && (a.caster_guid != caster_guid
-                        || (source_item != 0 && a.item_guid(ctx) != source_item))
+                        || ((source_item != 0 || !hdr.equip_passive())
+                            && a.item_guid(ctx) != source_item))
             })
             .collect();
         shed_auras(ctx, target_guid, replaced);
