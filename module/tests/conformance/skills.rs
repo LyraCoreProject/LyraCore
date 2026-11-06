@@ -178,10 +178,17 @@ fn cast(shard: &Standalone, connection: &mut ReducerConnection, spell: u32) {
 fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_progress() {
     use super::buy_in_slot::{grant, request, stage};
     let (shard, mut connection, guid, _) = stage("skill-equipment-and-casts");
-    human_starting_stats(&shard);
+    shard.assert_sql("DELETE FROM game_level_stats WHERE race_class_level = 65812");
+    shard.assert_sql("INSERT INTO game_level_stats (race_class_level,race,class,level,strength,agility,stamina,intellect,spirit) VALUES (65812,1,1,20,47,35,43,22,27)");
+    shard.assert_sql("DELETE FROM game_crit_per_agility WHERE class_level = 276");
+    shard.assert_sql("INSERT INTO game_crit_per_agility (class_level,class,level,rate) VALUES (276,1,20,7.80031)");
     shard.assert_sql(&format!(
-        "UPDATE game_world_entity SET agility = 20 WHERE guid = {guid}"
+        "UPDATE game_character SET level = 20 WHERE guid = {guid}"
     ));
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 20, agility = 35 WHERE guid = {guid}"
+    ));
+    shard.assert_call("debug_repair_after_publish", &[]);
     let imported = import_spell_plan(&shard, Some(&mut connection));
     if !imported {
         skill_spell(&shard, 7515, "Increased Defense", 95, 3, 192, false);
@@ -214,19 +221,19 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
     }
     cast(&shard, &mut connection, 27720);
     let values = fields(&mut connection, guid);
-    assert_eq!(skill(&values, 95), (1, 5, 19, 0));
+    assert_eq!(skill(&values, 95), (1, 100, 19, 0));
     let mut reconnect = enter(&shard, guid);
-    assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 5, 19, 0));
+    assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 100, 19, 0));
 
     shard.assert_sql(&format!("UPDATE game_aura SET eff_kind = 185, eff_p0 = 0, eff_p0_kind = 0 WHERE target_guid = {guid} AND spell_id = 27720"));
     shard.assert_call("debug_repair_after_publish", &[]);
     shard.assert_call("debug_repair_after_publish", &[]);
-    assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 5, 19, 0));
+    assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 100, 19, 0));
     shard.assert_sql(
         "UPDATE game_spell_effect SET kind = 185, equip_supported = false WHERE spell_id = 7515",
     );
     shard.assert_call("debug_repair_after_publish", &[]);
-    assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 5, 13, 0));
+    assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 100, 13, 0));
     if imported {
         import_spell_plan(&shard, Some(&mut reconnect));
     } else {
@@ -235,9 +242,14 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
         );
     }
     shard.assert_call("debug_repair_after_publish", &[]);
-    assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 5, 19, 0));
+    assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 100, 19, 0));
     grant(&shard, guid, 25, 1, 25);
     request(&mut reconnect, 0x10a, vec![255, 25]);
+    let before_crit = shard.query_rows(&format!(
+        "SELECT sheet_crit_bp FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["sheet_crit_bp"]
+        .parse::<u32>()
+        .unwrap();
     cast(&shard, &mut reconnect, 7038);
     let reduction = shard.query_rows(&format!("SELECT eff_kind,eff_p0,amount FROM game_aura WHERE target_guid = {guid} AND spell_id = 7038"));
     assert_eq!(
@@ -247,26 +259,26 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
     );
     assert_eq!(
         (
-            &reduction[0]["eff_kind"],
-            &reduction[0]["eff_p0"],
-            &reduction[0]["amount"]
+            reduction[0]["eff_kind"].as_str(),
+            reduction[0]["eff_p0"].as_str(),
+            reduction[0]["amount"].as_str()
         ),
-        (&"189".to_string(), &"43".to_string(), &"-100".to_string())
+        ("189", "43", "-100")
     );
     assert_eq!(
         skill(&fields(&mut reconnect, guid), 43),
-        (1, 5, -100, if imported { 5 } else { 0 })
+        (1, 100, -100, if imported { 5 } else { 0 })
     );
     assert_eq!(
         shard.query_rows(&format!(
             "SELECT sheet_crit_bp FROM game_world_entity WHERE guid = {guid}"
         ))[0]["sheet_crit_bp"],
-        "480"
+        (before_crit - if imported { 24 } else { 4 }).to_string()
     );
     request(&mut reconnect, 0x10c, vec![255, 23, 255, 10]);
     request(&mut reconnect, 0x10c, vec![255, 24, 255, 11]);
     let mut reconnect = enter(&shard, guid);
-    assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 5, 13, 0));
+    assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 100, 13, 0));
     let duration_ms = [27720, 7038]
         .into_iter()
         .map(|spell| {
@@ -286,8 +298,11 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
     }
     let mut reconnect = enter(&shard, guid);
     let values = fields(&mut reconnect, guid);
-    assert_eq!(skill(&values, 95), (1, 5, 0, 0));
-    assert_eq!(skill(&values, 43), (1, 5, 0, if imported { 5 } else { 0 }));
+    assert_eq!(skill(&values, 95), (1, 100, 0, 0));
+    assert_eq!(
+        skill(&values, 43),
+        (1, 100, 0, if imported { 5 } else { 0 })
+    );
 }
 
 #[test]
