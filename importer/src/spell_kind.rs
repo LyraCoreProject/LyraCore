@@ -183,7 +183,7 @@ pub fn equip_aura_supported(aura: u32, misc: u32, equipment: [u32; 3]) -> bool {
         Some(ModResistance) => misc != 0 && misc & !0x7f == 0,
         Some(ModCritPercent) => equipment == [u32::MAX, 0, 0],
         Some(
-            ModDodgePercent | ModHitChance | ModAttackPower | ModRangedAttackPower | ModHealingDone
+            ModHitChance | ModAttackPower | ModRangedAttackPower | ModHealingDone
             | ModSpellCritChance,
         ) => true,
         _ => false,

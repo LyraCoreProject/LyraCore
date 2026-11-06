@@ -2803,7 +2803,7 @@ mod tests {
             (43, 16550, 59, 0, (6, 1, 0), false),
             (45, 4152, 0, 7, (6, 1, 0), false),
             (47, 13665, 0, 0, (6, 1, 0), false),
-            (49, 13669, 0, 0, (6, 1, 0), true),
+            (49, 13669, 0, 0, (6, 1, 0), false),
             (51, 13674, 0, 0, (6, 1, 0), false),
             (52, 7597, 0, 0, (6, 1, 0), true),
             (54, 15464, 0, 0, (6, 1, 0), true),
@@ -2872,6 +2872,11 @@ mod tests {
         let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
         assert_eq!(rows.effects[0].kind, E_SCRIPTED);
         assert!(!rows.effects[0].equip_supported);
+    }
+
+    #[test]
+    fn equip_review_13669_dodge_stays_inert_until_its_paperdoll_projection_is_supported() {
+        assert!(!equip_review_effect(13669, 49, 0, 0, (6, 1, 0)).equip_supported);
     }
 
     #[test]

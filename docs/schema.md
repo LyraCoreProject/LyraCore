@@ -856,7 +856,7 @@ spell or baseline combat calculation is complete.
 | 43 ProcTriggerDamage | 1 | item proc restrictions not certified | Inert | 16550 |
 | 45 TrackResources | 2 | tracking placeholder | Inert | 4152 |
 | 47 ModParryPercent | 28 | parry modifier not implemented | Inert | 13665 |
-| 49 ModDodgePercent | 89 | effective_dodge_bp; percent to basis points | Correct | 13669 |
+| 49 ModDodgePercent | 89 | roll uses basis points; full dodge sheet projection is absent | Inert | 13669 |
 | 51 ModBlockPercent | 24 | block modifier not implemented | Inert | 13674 |
 | 52 ModCritPercent | 384 | effective_crit_bp; percent to basis points | Correct when unrestricted; weapon-restricted 9132 inert | 7597 |
 | 54 ModHitChance | 192 | effective_miss_bp; percent to basis points | Correct | 15464 |
