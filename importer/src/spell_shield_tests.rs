@@ -2,6 +2,31 @@ use super::aura_test_support::Character;
 use serde_json::json;
 
 impl Character {
+    fn equip_staff(&mut self) {
+        self.shard.assert_sql("UPDATE game_item_template SET class=2,subclass=10,inventory_type=17,damage_min=10,damage_max=10,delay_ms=2000,spellid_1=0,spellid_2=0,spellid_3=0,spellid_4=0,spellid_5=0 WHERE entry=5090050");
+        self.shard
+            .assert_call("debug_set_skill", &[&self.guid.to_string(), "136", "300"]);
+        self.shard.assert_call(
+            "debug_grant_item",
+            &[&self.guid.to_string(), "5090050", "1"],
+        );
+        self.shard.assert_sql(&format!(
+            "UPDATE game_item_instance SET slot=23 WHERE owner_guid={} AND entry=5090050",
+            self.guid
+        ));
+        self.request(0x10a, vec![255, 23]);
+        assert_eq!(
+            self.shard.query_rows(&format!(
+                "SELECT slot FROM game_item_instance WHERE owner_guid={} AND entry=5090050",
+                self.guid
+            ))[0]["slot"],
+            "15"
+        );
+        self.shard.assert_sql(&format!("UPDATE game_world_entity SET health=1000000000,max_health=1000000000,power=10000,max_power=10000 WHERE guid={}",self.guid));
+        self.shard
+            .assert_call("debug_set_health", &[&self.guid.to_string(), "1000000000"]);
+    }
+
     fn cast_at(&mut self, spell: u32, target: u64) {
         self.shard.assert_call(
             "debug_learn_spell",
@@ -27,6 +52,9 @@ impl Character {
             .into_iter()
             .filter_map(|row| {
                 let row: serde_json::Value = serde_json::from_str(row.get()).unwrap();
+                if row[2][0] == 0 && row[2][1] == 0x130 {
+                    eprintln!("native cast refusal packet: {row}");
+                }
                 (row[2][0] == 0 && row[2][1] == opcode).then(|| {
                     let body = row[3].as_str().unwrap();
                     (0..body.len())
@@ -224,6 +252,7 @@ fn imported_shields_do_not_recurse_and_can_kill_the_attacker() {
             "UPDATE game_creature_ai_state SET react_state=0,melee_enabled=false WHERE creature_guid={target}"
         ));
     }
+    character.equip_staff();
     character.cast(467);
     character.advance(1);
     character.cast_at(467, target);
@@ -287,18 +316,26 @@ fn imported_shields_do_not_recurse_and_can_kill_the_attacker() {
     );
     character.advance(1);
     character.connection.drain_packets();
+    character.shard.assert_sql(&format!(
+        "UPDATE game_conformance_swing_random SET state=2 WHERE character_guid={}",
+        character.guid
+    ));
     character.cast_at(11976, target);
     let strike = character.packets(0x24f);
     assert_eq!(
         strike.len(),
         1,
-        "a landed weapon-proc melee spell triggers the shield"
+        "a landed weapon-proc melee spell triggers the shield: spell={:?}; target={:?}; casts={:?}", character.shard.query_rows("SELECT cast_flags,cost,power_type,cast_time_ms,range_yd FROM game_spell WHERE spell_id=11976"),character.shard.query_rows(&format!("SELECT health,dead,x,y FROM game_world_entity WHERE guid={target}")),character.shard.query_rows("SELECT * FROM game_pending_cast")
     );
     character.advance(1);
     character.cast(642);
     character.advance(1);
     let before = character.pool("health");
     character.connection.drain_packets();
+    character.shard.assert_sql(&format!(
+        "UPDATE game_conformance_swing_random SET state=2 WHERE character_guid={}",
+        character.guid
+    ));
     character.cast_at(11976, target);
     assert_eq!(
         character.pool("health"),

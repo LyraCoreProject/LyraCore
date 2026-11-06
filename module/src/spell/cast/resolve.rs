@@ -484,6 +484,15 @@ fn run_spell_effects(
             ..SpellCastEvent::signal(ctx, caster_guid, hdr.spell_id, SpellCastEventKind::Go)
         },
     );
+    finish_weapon_hits(ctx, caster_guid, weapon_targets, shield_targets);
+}
+
+fn finish_weapon_hits(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    weapon_targets: Vec<u64>,
+    shield_targets: std::collections::BTreeSet<u64>,
+) {
     for target in weapon_targets {
         crate::spell::chance_on_hit::roll_chance_on_hit(
             ctx,
