@@ -972,6 +972,36 @@ fn hit_of(
     )
 }
 
+fn direct_spell_crit_chance(ctx: &ReducerContext, hdr: &Spell, caster_guid: u64) -> f32 {
+    match hdr.damage_class {
+        2 | 3 => ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(caster_guid)
+            .filter(|caster| {
+                caster.is_player() || (caster.owner_guid != 0 && caster.owner_guid >> 48 == 0)
+            })
+            .map_or(0.0, |caster| {
+                let base = if hdr.damage_class == 3 {
+                    crate::combat::effective_ranged_crit_bp(ctx, &caster)
+                } else {
+                    crate::combat::effective_crit_bp(ctx, &caster)
+                };
+                base as f32 / 100.0 + bonuses::school_crit(ctx, caster_guid, hdr.school_mask)
+            }),
+        _ if hdr.school_mask & RESIST_ARMOR != 0 => 0.0,
+        _ => {
+            spell_crit_chance(ctx, caster_guid)
+                + if hdr.damage_class == 1 {
+                    bonuses::school_crit(ctx, caster_guid, 1 << school_index(hdr.school_mask))
+                } else {
+                    0.0
+                }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_damage_effect(
     ctx: &ReducerContext,
@@ -992,39 +1022,7 @@ fn apply_damage_effect(
                 .unwrap_or_else(|| ctx.random::<u32>());
             #[cfg(not(feature = "conformance_test_fixture"))]
             let draw = ctx.random::<u32>();
-            let chance = match hdr.damage_class {
-                2 | 3 => ctx
-                    .db
-                    .game_world_entity()
-                    .guid()
-                    .find(caster_guid)
-                    .filter(|caster| {
-                        caster.is_player()
-                            || (caster.owner_guid != 0 && caster.owner_guid >> 48 == 0)
-                    })
-                    .map_or(0.0, |caster| {
-                        let base = if hdr.damage_class == 3 {
-                            crate::combat::effective_ranged_crit_bp(ctx, &caster)
-                        } else {
-                            crate::combat::effective_crit_bp(ctx, &caster)
-                        };
-                        base as f32 / 100.0
-                            + bonuses::school_crit(ctx, caster_guid, hdr.school_mask)
-                    }),
-                _ if hdr.school_mask & RESIST_ARMOR != 0 => 0.0,
-                _ => {
-                    spell_crit_chance(ctx, caster_guid)
-                        + if hdr.damage_class == 1 {
-                            bonuses::school_crit(
-                                ctx,
-                                caster_guid,
-                                1 << school_index(hdr.school_mask),
-                            )
-                        } else {
-                            0.0
-                        }
-                }
-            };
+            let chance = direct_spell_crit_chance(ctx, hdr, caster_guid);
             let is_crit = hdr.cast_flags & SPELL_ATTR_CANNOT_CRIT == 0
                 && hdr.attributes_ex_3 & 0x2000_0000 == 0
                 && crate::spell::rolls::chance_succeeds(chance, draw);

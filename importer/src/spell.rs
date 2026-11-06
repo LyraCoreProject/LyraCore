@@ -1282,11 +1282,10 @@ fn spell_bonus_coefficient(s: &Spell, dbc: &SpellTables, index: usize, kind: u8)
     let ticks = (0..3)
         .find(|&i| s.effect[i] == 6 && matches!(s.effect_aura[i], 3 | 8 | 53))
         .map_or(6, |i| {
-            if s.effect_amplitude[i] == 0 {
-                6
-            } else {
-                duration.min(30000) / s.effect_amplitude[i]
-            }
+            duration
+                .min(30000)
+                .checked_div(s.effect_amplitude[i])
+                .unwrap_or(6)
         });
     let dot_factor = if periodic {
         let factor = if channeled {
