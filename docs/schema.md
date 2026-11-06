@@ -827,8 +827,9 @@ inert on equip until reimport or an explicit supported claim. This does not enab
 The 52 source types below occur on 2,645 equipped Item entries at patch 10 / build 5875. Counts
 are distinct Item entries per type and overlap. One weapon-dependent crit Item stays inert; the
 other 383 use the shared melee/ranged crit bonus. One area stat Item and one area spell-crit Item
-also stay inert. Only ordinary self-targeted effect-6 shapes are enabled. This is a source-to-consumer audit, not a claim
-that every spell or baseline combat calculation is complete.
+also stay inert. Only ordinary self-targeted effect-6 shapes are enabled. Healing retains its
+school mask in `A_MOD_HEALING`. This is a source-to-consumer audit, not a claim that every
+spell or baseline combat calculation is complete.
 
 | Source aura type | Items | Consumer or missing behavior | Equip result | Example spell |
 | --- | ---: | --- | --- | ---: |

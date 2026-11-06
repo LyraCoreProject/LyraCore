@@ -228,16 +228,18 @@ are implemented.
 `game_spell_effect` END-appends `equip_supported` with a false default. Until the `spell`
 reimport, equipment effects remain inert. That reimport also separates melee and ranged AP,
 healing and spell crit, and marks source percentages for conversion to basis points after their
-amount is rolled. Flat school damage and damage shields no longer import as damage percentages
+amount is rolled. Healing retains its school mask in `A_MOD_HEALING` for the existing flat
+healing calculation. Flat school damage and damage shields no longer import as damage percentages
 or absorbs. The complete admitted/inert type list and Item counts are in
 [the equip aura support audit](schema.md#equip-aura-support).
 
 Publish, reimport `spell` and `items`, then call `debug_repair_after_publish` before play resumes.
-A repair before reimport is safe; call it again after the imports. Each derived aura retains its source definition locally. Repair keeps unchanged effects and rebuilds
-only stale definitions, including changed units, visibility and eligibility.
-It does not restart equip cooldowns or retain duplicate effects. Changed finite equip effects restart their
-source duration during this explicit repair. Unchanged aura identity and deadlines are preserved. Connected Characters and ghosts receive the rebuilt
-state. Other cast Auras retain their frozen values; this repair does not rewrite a normal cast or its
+A repair before reimport is safe; call it again after the imports. Each derived aura retains its
+source definition locally. Repair keeps unchanged effects and rebuilds only stale definitions,
+including changed units, visibility and eligibility. It does not restart equip cooldowns or retain
+duplicate effects. Changed finite equip effects restart their source duration during this explicit
+repair. Unchanged aura identity and deadlines are preserved. Connected Characters and ghosts
+receive the rebuilt state. Other cast Auras retain their frozen values; this repair does not rewrite a normal cast or its
 remaining duration. Recasting a supported effect rebuilds changed fields from the current import.
 Expire or remove an old cast effect that the new import makes inert before play resumes; a recast
 of an inert effect cannot replace the old Aura. Recast affected supported buffs after reimport.

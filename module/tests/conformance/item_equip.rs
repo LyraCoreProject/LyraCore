@@ -856,7 +856,7 @@ fn equip_review_7678_healing_respects_its_magic_school_mask() {
     let (shard, mut connection, guid, _) = fixture("equip-review-healing-schools");
     review_spell(&shard, 7678, &[(0xb8, 9, 126, 2)], true);
     review_equip(&shard, &mut connection, guid, 7678);
-    for (spell, school, gain) in [(5090990, 2, 10), (5090991, 1, 1)] {
+    for (spell, school) in [(5090990, 2), (5090991, 1)] {
         review_spell(&shard, spell, &[(2, 1, 0, 0)], false);
         shard.assert_sql(&format!(
             "UPDATE game_spell SET attributes = 0, school_mask = {school} WHERE spell_id = {spell}"
@@ -864,16 +864,27 @@ fn equip_review_7678_healing_respects_its_magic_school_mask() {
         shard.assert_sql(&format!(
             "UPDATE game_spell_effect SET bonus_coefficient = 1.0 WHERE spell_id = {spell}"
         ));
-        shard.assert_sql(&format!("UPDATE game_world_entity SET health = 1, max_health = 1000, intellect = 0 WHERE guid = {guid}"));
-        shard.assert_call(
-            "debug_begin_cast",
-            &[&guid.to_string(), &spell.to_string(), &guid.to_string()],
-        );
-        assert_eq!(
-            shard.query_rows(&format!(
-                "SELECT health FROM game_world_entity WHERE guid = {guid}"
-            ))[0]["health"],
-            (1 + gain).to_string()
-        );
+    }
+    for casting in [false, true] {
+        if casting {
+            move_item(&mut connection, 10, 23);
+            shard.assert_call(
+                "debug_begin_cast",
+                &[&guid.to_string(), "7678", &guid.to_string()],
+            );
+        }
+        for (spell, gain) in [(5090990, 10), (5090991, 1)] {
+            shard.assert_sql(&format!("UPDATE game_world_entity SET health = 1, max_health = 1000, intellect = 0 WHERE guid = {guid}"));
+            shard.assert_call(
+                "debug_begin_cast",
+                &[&guid.to_string(), &spell.to_string(), &guid.to_string()],
+            );
+            assert_eq!(
+                shard.query_rows(&format!(
+                    "SELECT health FROM game_world_entity WHERE guid = {guid}"
+                ))[0]["health"],
+                (1 + gain).to_string()
+            );
+        }
     }
 }
