@@ -91,6 +91,9 @@ pub(crate) fn spell_crit_chance(ctx: &ReducerContext, caster_guid: u64) -> f32 {
     let Some(caster) = ctx.db.game_world_entity().guid().find(caster_guid) else {
         return 0.0;
     };
+    if !caster.is_player() && (caster.owner_guid == 0 || caster.owner_guid >> 48 != 0) {
+        return 0.0;
+    }
     let base = super::rolls::intellect_crit_chance(
         caster.is_player().then(|| caster.class()),
         effective_intellect(ctx, caster_guid).max(0) as u32,

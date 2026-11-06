@@ -2,6 +2,96 @@ mod support;
 
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn only_creatures_with_a_character_owner_can_crit_with_spells() {
+    use lyracore_shared::spell::taxonomy::SPELL_ATTR_IGNORE_RESISTANCES;
+
+    let (shard, caster) = stage("creature-spell-crit-owner");
+    shard.assert_sql("UPDATE game_world_entity SET godmode = false, health = 10000, max_health = 10000 WHERE guid = 1");
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 60 WHERE guid = {caster}"
+    ));
+    shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {SPELL_ATTR_IGNORE_RESISTANCES}, range_yd = 0, gcd_ms = 0, cooldown_ms = 0 WHERE spell_id = 133"));
+    shard.assert_sql("UPDATE game_spell_effect SET base_points = 400, die_sides = 0, per_level = 0.0 WHERE spell_id = 133");
+    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES ({caster},1,2)"));
+    let events = subscribe_with_fence(&shard, &["SELECT * FROM game_spell_cast_event_live"]);
+    for (index, (owner, crit)) in [("0", false), (caster.as_str(), false), ("1", true)]
+        .into_iter()
+        .enumerate()
+    {
+        shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET owner_guid = {owner} WHERE guid = {caster}"
+        ));
+        shard.assert_sql(&format!(
+            "UPDATE game_conformance_spell_random SET state = 2 WHERE character_guid = {caster}"
+        ));
+        shard.assert_call("debug_force_cast_at", &[&caster, "133", "1"]);
+        fence_subscription(&shard, &events);
+        let casts: Vec<_> = event_rows(&events, "game_spell_cast_event_live")
+            .into_iter()
+            .filter(|row| row["caster_guid"] == caster && row["kind"] == "2")
+            .collect();
+        assert_eq!(casts.len(), index + 1);
+        assert_eq!(casts[index]["is_crit"], crit.to_string(), "owner {owner}");
+        assert_eq!(casts[index]["damage"], if crit { "600" } else { "400" });
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn binary_periodic_damage_and_slow_share_one_resist_roll_at_cast() {
+    use lyracore_shared::spell::taxonomy::{
+        A_MOD_RESISTANCE, A_MOD_SPEED, A_PERIODIC_DAMAGE, SPELL_ATTR_BINARY,
+    };
+
+    let (shard, target) = stage("binary-aura-hit");
+    shard.assert_sql(&format!("UPDATE game_world_entity SET level = 60, health = 10000, max_health = 10000 WHERE guid = {target}"));
+    shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {SPELL_ATTR_BINARY}, duration_ms = 10000, gcd_ms = 0, cooldown_ms = 0, is_negative = true WHERE spell_id = 133"));
+    shard.assert_sql(&format!("UPDATE game_spell_effect SET kind = {A_PERIODIC_DAMAGE}, base_points = 10, die_sides = 0, per_level = 0.0, period_ms = 1000 WHERE spell_id = 133"));
+    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (533,133,1,{A_MOD_SPEED},-50,0,0.0,0,1,0.0,0,0,0,0,0,0,0,false,0.0)"));
+    shard.assert_call("debug_fill_aura_slots", &[&target, "1", "false", "1"]);
+    shard.assert_sql(&format!("UPDATE game_aura SET eff_kind = {A_MOD_RESISTANCE}, amount = 300, eff_p0 = 4 WHERE target_guid = {target}"));
+    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES (1,{target},0)"));
+    let events = subscribe_with_fence(&shard, &["SELECT * FROM game_spell_cast_event_live"]);
+    for (index, (resistance, seed, miss)) in [
+        (300, 10161, "2"),
+        (300, 21988, "0"),
+        (300, 26747, "0"),
+        (0, 10161, "0"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        shard.assert_sql(&format!("UPDATE game_aura SET amount = {resistance} WHERE target_guid = {target} AND eff_kind = {A_MOD_RESISTANCE}"));
+        shard.assert_sql(&format!(
+            "UPDATE game_conformance_spell_random SET state = {seed} WHERE character_guid = 1"
+        ));
+        shard.assert_call("debug_force_cast_at", &["1", "133", &target]);
+        fence_subscription(&shard, &events);
+        let casts: Vec<_> = event_rows(&events, "game_spell_cast_event_live")
+            .into_iter()
+            .filter(|row| row["caster_guid"] == "1" && row["kind"] == "2")
+            .collect();
+        assert_eq!(casts.len(), index + 1);
+        assert_eq!(
+            casts[index]["miss_info"], miss,
+            "resistance {resistance}, seed {seed}"
+        );
+        assert_eq!(
+            shard
+                .query_rows(&format!(
+                    "SELECT id FROM game_aura WHERE target_guid = {target} AND spell_id = 133"
+                ))
+                .len(),
+            if miss == "0" { 2 } else { 0 }
+        );
+        shard.assert_sql(&format!(
+            "DELETE FROM game_aura WHERE target_guid = {target} AND spell_id = 133"
+        ));
+    }
+}
+
 fn stage(name: &str) -> (Standalone, String) {
     let mut shard = Standalone::start(name);
     shard.publish_module();
