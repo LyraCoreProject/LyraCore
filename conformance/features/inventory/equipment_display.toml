@@ -24,3 +24,9 @@ description = "The Module returns an unavailable response for CMSG_TOGGLE_HELM, 
 path = "module/src/native/unavailable.rs"
 symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
+
+[[known_gaps]]
+description = "ModSkill now projects signed skill bonuses from all 206 equipment items into combat, existing skill requirements and PLAYER_SKILL_INFO. Eleven of those items modify Fishing (356). Their bonus fields are correct, but the existing fishing path selects loot without a skill-dependent success roll, so these bonuses cannot change fishing success yet. This change does not add that missing fishing mechanic."
+path = "module/src/professions.rs"
+symbol = "apply_fish"
+evidence = "module/src/professions.rs; docs/schema.md#equip-aura-support"

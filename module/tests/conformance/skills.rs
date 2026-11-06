@@ -122,13 +122,21 @@ fn skill_spell(
     ));
 }
 
-fn cast(connection: &mut ReducerConnection, spell: u32) {
+fn cast(shard: &Standalone, connection: &mut ReducerConnection, spell: u32) {
     let mut body = spell.to_le_bytes().to_vec();
-    body.push(0);
     body.extend(0u16.to_le_bytes());
     connection
         .call("native_world_receive", serde_json::json!([0x12eu32, body]))
         .unwrap();
+    let cast_ms: u32 = shard.query_rows(&format!(
+        "SELECT cast_time_ms FROM game_spell WHERE spell_id = {spell}"
+    ))[0]["cast_time_ms"]
+        .parse()
+        .unwrap();
+    shard.assert_call(
+        "debug_advance_roll_batch",
+        &[&cast_ms.div_ceil(50).max(1).to_string()],
+    );
 }
 
 #[test]
@@ -169,7 +177,7 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
     for slot in [23, 24] {
         request(&mut connection, 0x10a, vec![255, slot]);
     }
-    cast(&mut connection, 27720);
+    cast(&shard, &mut connection, 27720);
     let values = fields(&mut connection, guid);
     assert_eq!(skill(&values, 95), (1, 5, 19, 0));
     let mut reconnect = enter(&shard, guid);
@@ -179,9 +187,23 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
     shard.assert_call("debug_repair_after_publish", &[]);
     shard.assert_call("debug_repair_after_publish", &[]);
     assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 5, 19, 0));
+    shard.assert_sql(
+        "UPDATE game_spell_effect SET kind = 185, equip_supported = false WHERE spell_id = 7515",
+    );
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 5, 13, 0));
+    if imported {
+        import_spell_plan(&shard);
+    } else {
+        shard.assert_sql(
+            "UPDATE game_spell_effect SET kind = 189, equip_supported = true WHERE spell_id = 7515",
+        );
+    }
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 5, 19, 0));
     grant(&shard, guid, 25, 1, 25);
     request(&mut reconnect, 0x10a, vec![255, 25]);
-    cast(&mut reconnect, 7038);
+    cast(&shard, &mut reconnect, 7038);
     assert_eq!(
         skill(&fields(&mut reconnect, guid), 43),
         (1, 5, -100, if imported { 5 } else { 0 })
@@ -260,7 +282,7 @@ fn a_skill_aura_does_not_grant_a_profession_but_applies_when_the_skill_is_learne
     shard.assert_call("debug_learn_spell", &[&guid.to_string(), "7824"]);
     shard.assert_sql("UPDATE game_item_template SET class = 4, subclass = 1, inventory_type = 11, required_level = 1, required_skill = 164, required_skill_rank = 10, max_stack = 1, bonding = 0, spellid_1 = 0, spellid_2 = 0, spellid_3 = 0, spellid_4 = 0, spellid_5 = 0 WHERE entry = 5090050");
     let item = grant(&shard, guid, 5090050, 1, 23);
-    cast(&mut connection, 7824);
+    cast(&shard, &mut connection, 7824);
     assert!(shard.query_rows(&format!("SELECT current FROM game_player_skill WHERE character_guid = {guid} AND skill_line = 164")).is_empty());
     let packets = request(&mut connection, 0x10a, vec![255, 23]);
     assert!(packets.iter().any(|(opcode, _)| *opcode == 0x112));
