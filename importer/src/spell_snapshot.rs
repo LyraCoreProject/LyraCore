@@ -436,7 +436,7 @@ mod tests {
         assert!(sql.starts_with("(133,'Fireball',0,30,"), "{sql}");
         assert!(sql.contains(",18446744073709551615,"), "{sql}");
         assert!(
-            sql.ends_with(",true,0,0,3,18446744073709551615,0,0,0,8000,0,0,0,0,0,0,0,0,0,0)"),
+            sql.ends_with(",true,0,0,3,18446744073709551615,0,0,0,8000,0,0,0,0,0,0,0,0,0,0,-1,0,0,0,0,0)"),
             "{sql}"
         );
     }
@@ -450,7 +450,7 @@ mod tests {
         spell.single_target_key = 99;
         assert!(spell
             .sql_values()
-            .ends_with(",13000,64,12,99,0,0,0,0,0,0,0)"));
+            .ends_with(",13000,64,12,99,0,0,0,0,0,0,0,-1,0,0,0,0,0)"));
 
         let mut effect = effect(133, 0);
         effect.points_per_combo = 3.5;

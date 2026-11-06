@@ -342,7 +342,7 @@ fn an_imported_item_keeps_the_procs_per_minute_of_each_spell_slot() {
         .iter()
         .find(|row| row.contains("'Ordinary Water'"))
         .unwrap();
-    assert!(water.ends_with(",9.5,0,0,0,0.8,30,0,0,0,1160)"), "{water}");
+    assert!(water.ends_with(",9.5,0,0,0,0.8,30,0,0,0,1160,0)"), "{water}");
 }
 
 #[test]
