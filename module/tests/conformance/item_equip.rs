@@ -953,7 +953,7 @@ fn equip_review_7678_healing_respects_its_magic_school_mask() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn equip_review_inert_thorns_keeps_its_visible_refreshable_dispellable_aura() {
     let (shard, mut connection, guid, vendor) = fixture("equip-review-inert-thorns");
-    review_spell(&shard, 467, &[(0xb9, 3, 0, 255)], false);
+    review_spell(&shard, 467, &[(0xb9, 3, 0, 0)], false);
     shard.assert_sql("UPDATE game_spell SET name = 'Thorns', attributes = 65536, school_mask = 8, duration_ms = 600000, dispel_type = 1, cost = 35 WHERE spell_id = 467");
     let unit_bytes = shard.query_rows(&format!(
         "SELECT unit_bytes_0 FROM game_world_entity WHERE guid = {guid}"
@@ -1110,9 +1110,11 @@ fn equip_review_publish_repair_refreshes_stale_casts_and_permanent_passives_once
     );
     review_packets(&mut connection);
     shard.assert_sql(
-        "UPDATE game_spell_effect SET kind = 185, p0 = 0, p0_kind = 255 WHERE spell_id = 18052",
+        "UPDATE game_spell_effect SET kind = 185, p0 = 0, p0_kind = 0 WHERE spell_id = 18052",
     );
-    shard.assert_sql("UPDATE game_spell_effect SET kind = 185 WHERE spell_id = 21142");
+    shard.assert_sql(
+        "UPDATE game_spell_effect SET kind = 185, p0 = 0, p0_kind = 0 WHERE spell_id = 21142",
+    );
     shard.assert_sql(
         "UPDATE game_spell_effect SET kind = 185, p0 = 0, p0_kind = 0 WHERE spell_id = 11390",
     );
@@ -1151,6 +1153,12 @@ fn equip_review_publish_repair_refreshes_stale_casts_and_permanent_passives_once
         .all(|row| row["slot"].parse::<u8>().unwrap() < 32));
     assert_eq!(dampen[0]["slot"], dampen[1]["slot"]);
     let packets = review_packets(&mut connection);
+    let mut dampen_duration = vec![dampen[0]["slot"].parse::<u8>().unwrap()];
+    dampen_duration.extend(600000u32.to_le_bytes());
+    assert!(
+        packets.contains(&(0x137, dampen_duration)),
+        "the repaired buff slot needs its remaining duration"
+    );
     assert!(packets
         .iter()
         .flat_map(|(opcode, body)| super::properties::updates(*opcode, body).unwrap())
@@ -1211,4 +1219,37 @@ fn equip_review_15327_and_9329_send_fractional_thrown_damage_for_real_rogue_agil
     assert_eq!(fields[&168], 180);
     assert!((f32::from_bits(fields[&171]) - 48.2).abs() < 0.0001);
     assert!((f32::from_bits(fields[&172]) - 68.2).abs() < 0.0001);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn equip_review_7598_ranged_crit_uses_the_ranged_weapon_skill() {
+    let (shard, mut connection, guid, _) = fixture("equip-review-ranged-crit-skill");
+    shard.assert_call("debug_set_level", &[&guid.to_string(), "60"]);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET agility = 100 WHERE guid = {guid}"
+    ));
+    shard.assert_sql("UPDATE game_item_template SET class = 2, subclass = 16, inventory_type = 25, damage_min = 23.0, damage_max = 43.0, delay_ms = 1800, required_skill = 0 WHERE entry = 25");
+    grant(&shard, guid, 25, 1, 17);
+    shard.assert_call("debug_set_skill", &[&guid.to_string(), "162", "300"]);
+    shard.assert_call("debug_set_skill", &[&guid.to_string(), "176", "295"]);
+    review_spell(&shard, 7598, &[(0xa3, 2, 1, 17)], true);
+    let fields = |packets: Vec<(u16, Vec<u8>)>| -> std::collections::BTreeMap<_, _> {
+        packets
+            .iter()
+            .flat_map(|(opcode, body)| super::properties::updates(*opcode, body).unwrap())
+            .filter(|update| update.guid == guid)
+            .flat_map(|update| update.fields)
+            .collect()
+    };
+    let equipped = fields(review_equip(&shard, &mut connection, guid, 7598));
+    assert_eq!(f32::from_bits(equipped[&1109]), 7.0);
+    assert_eq!(
+        f32::from_bits(equipped[&1110]),
+        6.8,
+        "ranged crit must use thrown skill 295, not unarmed skill 300"
+    );
+    shard.assert_call("debug_set_skill", &[&guid.to_string(), "176", "300"]);
+    let trained = fields(review_packets(&mut connection));
+    assert_eq!(f32::from_bits(trained[&1110]), 7.0);
 }

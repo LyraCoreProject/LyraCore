@@ -308,7 +308,10 @@ pub(crate) fn changed(ctx: &ReducerContext, previous: Option<&Aura>, current: Op
         {
             packets.extend(modifiers(&auras, &changed));
         }
-        if previous.is_none_or(|old| Some(old.expires_at) != current.map(|new| new.expires_at)) {
+        if previous
+            .zip(current)
+            .is_none_or(|(old, new)| old.expires_at != new.expires_at || old.slot != new.slot)
+        {
             packets.extend(current.and_then(|aura| duration(ctx, aura)));
         }
         if changed

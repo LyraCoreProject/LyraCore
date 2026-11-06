@@ -265,6 +265,7 @@ pub struct SheetStatsValues {
     pub ranged_dmg_min: f32,
     pub ranged_dmg_max: f32,
     pub crit_pct: f32,
+    pub ranged_crit_pct: f32,
 }
 
 pub fn build_sheet_stats_values(guid: u64, s: &SheetStatsValues) -> SMSG_UPDATE_OBJECT {
@@ -297,7 +298,7 @@ pub fn build_sheet_stats_values(guid: u64, s: &SheetStatsValues) -> SMSG_UPDATE_
         p.set_unit_minrangeddamage(s.ranged_dmg_min);
         p.set_unit_maxrangeddamage(s.ranged_dmg_max);
         p.set_player_crit_percentage(s.crit_pct);
-        p.set_player_ranged_crit_percentage(s.crit_pct);
+        p.set_player_ranged_crit_percentage(s.ranged_crit_pct);
     })
 }
 

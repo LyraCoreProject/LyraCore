@@ -56,7 +56,13 @@ fn populated_old_module_upgrades_without_clearing() {
 
     assert_eq!(upgraded_character(&shard), character_before);
     let mut entity_after = entity(&shard);
-    for column in ["sheet_ap_modifiers", "sheet_ranged_ap_modifiers"] {
+    for column in [
+        "sheet_ap_modifiers",
+        "sheet_ranged_ap_modifiers",
+        "sheet_ranged_dmg_min_fraction",
+        "sheet_ranged_dmg_max_fraction",
+        "sheet_ranged_crit_bp",
+    ] {
         assert!(!entity_before.contains_key(column));
         assert_eq!(entity_after.remove(column).as_deref(), Some("0"));
     }

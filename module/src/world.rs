@@ -255,6 +255,8 @@ pub struct WorldEntity {
     pub sheet_ranged_dmg_min_fraction: f32,
     #[default(0.0f32)]
     pub sheet_ranged_dmg_max_fraction: f32,
+    #[default(0u32)]
+    pub sheet_ranged_crit_bp: u32,
 }
 
 impl WorldEntity {

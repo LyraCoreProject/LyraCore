@@ -830,7 +830,8 @@ The source bytes stay local to the Shard and are excluded from Character records
 `game_spell_effect.equip_supported` defaults to false. The spell importer enables only source
 shapes whose units, selection and consumer have been audited. Existing and authored rows stay
 inert on equip until reimport or an explicit supported claim. This does not enable instant effects.
-The 52 source types below occur on 2,645 equipped Item entries at patch 10 / build 5875. Counts
+At patch 10 / build 5875, 2,645 Item entries name 640 equip spells. Of these, 2,643 entries
+name 638 spells with the 52 aura types below; two entries name spells without an aura type. Counts
 are distinct Item entries per type and overlap. One weapon-dependent crit Item stays inert; the
 other 383 use the shared melee/ranged crit bonus. One area stat Item and one area spell-crit Item
 also stay inert. Only ordinary self-targeted effect-6 shapes are enabled. Healing retains its
@@ -845,11 +846,13 @@ Dampen and Amplify Magic retain buff holders without flat incoming damage or hea
 Aspect of the Hawk contributes only its ranged AP to the separate ranged field. Unrestricted crit
 checks only the source equipment class of -1; masks are ignored in that case, including Recklessness
 and Elixir of the Mongoose. Ranged AP uses the class formula, and ranged damage retains its fraction
-on the wire. The sheet sends both melee and ranged crit percentages.
+on the wire. The sheet sends both melee and ranged crit percentages, using each attack slot's weapon skill.
 
 `game_world_entity.sheet_ranged_dmg_min_fraction` and `sheet_ranged_dmg_max_fraction` are
 zero-default END-appended caches for the fractional parts. The existing integer damage columns and
-Character Transfer layout stay unchanged. Publish repair refreshes these projections; see
+Character Transfer layout stay unchanged. The zero-default END cache `sheet_ranged_crit_bp`
+keeps ranged crit separate from melee crit and refreshes when the ranged weapon skill changes.
+Publish repair refreshes these projections; see
 [the migration order](danger-zones.md#equip-spell-migration).
 
 | Source aura type | Items | Consumer or missing behavior | Equip result | Example spell |
@@ -873,7 +876,7 @@ Character Transfer layout stay unchanged. Publish repair refreshes these project
 | 47 ModParryPercent | 28 | parry modifier not implemented | Inert | 13665 |
 | 49 ModDodgePercent | 89 | roll uses basis points; full dodge sheet projection is absent | Inert | 13669 |
 | 51 ModBlockPercent | 24 | block modifier not implemented | Inert | 13674 |
-| 52 ModCritPercent | 384 | effective_crit_bp and both wire crit fields; percent to basis points | Correct when unrestricted; weapon-restricted 9132 inert | 7597 |
+| 52 ModCritPercent | 384 | effective_crit_bp / effective_ranged_crit_bp and both wire fields; percent to basis points | Correct when unrestricted; weapon-restricted 9132 inert | 7597 |
 | 54 ModHitChance | 192 | effective_miss_bp; percent to basis points | Correct | 15464 |
 | 55 ModSpellHitChance | 76 | spell hit needs its own consumer | Inert | 23727 |
 | 56 Transform | 7 | transform requirements not certified | Inert | 8299 |

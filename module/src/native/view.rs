@@ -342,5 +342,6 @@ pub(super) fn sheet_stats(e: &WorldEntity) -> codec::SheetStatsValues {
         ranged_dmg_max: e.sheet_ranged_dmg_max as f32 + e.sheet_ranged_dmg_max_fraction,
         // PLAYER_CRIT_PERCENTAGE uses percent; sheet_crit_bp uses basis points.
         crit_pct: e.sheet_crit_bp as f32 / 100.0,
+        ranged_crit_pct: e.sheet_ranged_crit_bp as f32 / 100.0,
     }
 }

@@ -267,6 +267,9 @@ Two further zero-default END columns, `sheet_ranged_dmg_min_fraction` and
 `sheet_ranged_dmg_max_fraction`, retain fractional ranged damage for the wire. They leave the
 existing integer columns intact. Publish repair recomputes them for connected Characters; world
 entry recomputes them on login. Both fields are derived and do not cross Character Transfer.
+The zero-default END field `sheet_ranged_crit_bp` keeps the ranged weapon's skill contribution
+separate from melee crit. Publish repair and world entry refresh it; weapon skill writes refresh
+the affected melee or ranged projection. It is also derived and does not cross Character Transfer.
 
 `game_item_aura` and its finite-expiry schedule `game_item_aura_expiry` start empty.
 `debug_repair_after_publish` reconciles equipment and refreshes the sheet of every online Character

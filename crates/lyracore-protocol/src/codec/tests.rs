@@ -3065,6 +3065,7 @@ fn ranged_sheet_stats(
         ranged_dmg_min: ranged_dmg_min as f32,
         ranged_dmg_max: ranged_dmg_max as f32,
         crit_pct: 5.0,
+        ranged_crit_pct: 5.0,
     }
 }
 
@@ -3096,6 +3097,7 @@ fn sheet_values_carry_the_same_melee_and_ranged_projection() {
 fn spell_7598_updates_both_melee_and_ranged_crit_fields() {
     let mut stats = ranged_sheet_stats(180, 48, 68);
     stats.crit_pct = 7.0;
+    stats.ranged_crit_pct = 7.0;
     let msg = build_sheet_stats_values(1, &stats);
     let Object::Values {
         mask1: UpdateMask::Player(player),

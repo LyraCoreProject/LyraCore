@@ -229,6 +229,7 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     let ranged_max_fraction = ranged_dmg_max.fract();
     let (ranged_dmg_min, ranged_dmg_max) = (ranged_dmg_min as u32, ranged_dmg_max as u32);
     let crit_bp = crate::combat::effective_crit_bp(ctx, &e);
+    let ranged_crit_bp = crate::combat::effective_ranged_crit_bp(ctx, &e);
 
     if str_bonus == e.sheet_str_bonus
         && agi_bonus == e.sheet_agi_bonus
@@ -242,6 +243,7 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
         && dmg_min == e.sheet_dmg_min
         && dmg_max == e.sheet_dmg_max
         && crit_bp == e.sheet_crit_bp
+        && ranged_crit_bp == e.sheet_ranged_crit_bp
         && ranged_ap == e.sheet_ranged_ap
         && ranged_dmg_min == e.sheet_ranged_dmg_min
         && ranged_dmg_max == e.sheet_ranged_dmg_max
@@ -262,6 +264,7 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     e.sheet_dmg_min = dmg_min;
     e.sheet_dmg_max = dmg_max;
     e.sheet_crit_bp = crit_bp;
+    e.sheet_ranged_crit_bp = ranged_crit_bp;
     e.sheet_ranged_ap = ranged_ap;
     e.sheet_ranged_dmg_min = ranged_dmg_min;
     e.sheet_ranged_dmg_max = ranged_dmg_max;

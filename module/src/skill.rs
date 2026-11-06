@@ -8,6 +8,11 @@ use crate::{game_item_template, game_world_entity, WorldEntity};
 pub const SKILL_PER_LEVEL: u32 = 5;
 
 pub mod skill_line {
+    pub const BOW: u32 = 45;
+    pub const GUN: u32 = 46;
+    pub const CROSSBOW: u32 = 226;
+    pub const THROWN: u32 = 176;
+    pub const WAND: u32 = 228;
     pub const AXE_1H: u32 = 44;
     pub const AXE_2H: u32 = 172;
     pub const MACE_1H: u32 = 54;
@@ -63,6 +68,11 @@ pub(crate) fn weapon_subclass_to_skill_line(subclass: u8) -> u32 {
     match subclass {
         0 => AXE_1H,
         1 => AXE_2H,
+        2 => BOW,
+        3 => GUN,
+        16 => THROWN,
+        18 => CROSSBOW,
+        19 => WAND,
         4 => MACE_1H,
         5 => MACE_2H,
         6 => POLEARM,
@@ -213,7 +223,14 @@ impl PlayerSkill {
 }
 
 fn refresh_weapon_crit(ctx: &ReducerContext, skill: &PlayerSkill) {
-    if skill.skill_line == equipped_weapon_skill_line(ctx, skill.character_guid) {
+    if skill.skill_line == equipped_weapon_skill_line(ctx, skill.character_guid)
+        || skill.skill_line
+            == equipped_weapon_skill_line_at(
+                ctx,
+                skill.character_guid,
+                crate::items::equip_slot::RANGED,
+            )
+    {
         crate::spell::recompute_sheet(ctx, skill.character_guid);
     }
 }
@@ -240,7 +257,11 @@ crate::character_owned!(restamp, fn sweep_restamp_game_player_skill(ctx, charact
 });
 
 fn equipped_weapon_skill_line(ctx: &ReducerContext, guid: u64) -> u32 {
-    let Some(inst) = crate::items::item_in_slot(ctx, guid, starter_item::MAINHAND_SLOT) else {
+    equipped_weapon_skill_line_at(ctx, guid, starter_item::MAINHAND_SLOT)
+}
+
+fn equipped_weapon_skill_line_at(ctx: &ReducerContext, guid: u64, slot: u8) -> u32 {
+    let Some(inst) = crate::items::item_in_slot(ctx, guid, slot) else {
         return skill_line::UNARMED;
     };
     let Some(tmpl) = ctx.db.game_item_template().entry().find(inst.entry) else {
@@ -264,6 +285,11 @@ fn skill_value_or_cap(ctx: &ReducerContext, guid: u64, line: u32, level: u32) ->
 
 pub(crate) fn effective_weapon_skill(ctx: &ReducerContext, attacker: &WorldEntity) -> u32 {
     let line = equipped_weapon_skill_line(ctx, attacker.guid);
+    skill_value_or_cap(ctx, attacker.guid, line, attacker.level)
+}
+
+pub(crate) fn effective_ranged_weapon_skill(ctx: &ReducerContext, attacker: &WorldEntity) -> u32 {
+    let line = equipped_weapon_skill_line_at(ctx, attacker.guid, crate::items::equip_slot::RANGED);
     skill_value_or_cap(ctx, attacker.guid, line, attacker.level)
 }
 
@@ -1005,8 +1031,11 @@ mod tests {
         assert_eq!(weapon_subclass_to_skill_line(0), skill_line::AXE_1H);
         assert_eq!(weapon_subclass_to_skill_line(15), skill_line::DAGGER);
         assert_eq!(weapon_subclass_to_skill_line(10), skill_line::STAFF);
-        assert_eq!(weapon_subclass_to_skill_line(16), skill_line::UNARMED);
-        assert_eq!(weapon_subclass_to_skill_line(19), skill_line::UNARMED);
+        assert_eq!(weapon_subclass_to_skill_line(16), skill_line::THROWN);
+        assert_eq!(weapon_subclass_to_skill_line(2), skill_line::BOW);
+        assert_eq!(weapon_subclass_to_skill_line(3), skill_line::GUN);
+        assert_eq!(weapon_subclass_to_skill_line(18), skill_line::CROSSBOW);
+        assert_eq!(weapon_subclass_to_skill_line(19), skill_line::WAND);
         assert_eq!(weapon_subclass_to_skill_line(255), skill_line::UNARMED);
     }
 
