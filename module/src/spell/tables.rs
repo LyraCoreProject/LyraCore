@@ -652,6 +652,8 @@ pub struct GroundArea {
     pub period_ms: u32,
     pub next_tick_micros: i64,
     pub expires_at: Timestamp,
+    #[default(0)]
+    pub effect_id: u64,
 }
 
 // Client build 5875 draws the ground effect from a DynamicObject CREATE.

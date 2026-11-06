@@ -406,6 +406,7 @@ pub fn debug_spawn_ground_area(
         period_ms: eff.period_ms,
         next_tick_micros: now.to_micros_since_unix_epoch() + (eff.period_ms as i64) * 1000,
         expires_at,
+        effect_id: eff.id,
     });
     log::info!(
         "debug_spawn_ground_area: {spell_id} at ({:.1},{:.1}) r={} amount={}/{}ms for {}ms",

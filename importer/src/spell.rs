@@ -1221,12 +1221,15 @@ fn spell_bonus_coefficient(s: &Spell, dbc: &SpellTables, index: usize, kind: u8)
     if explicit >= 0.0
         || !matches!(
             kind,
-            E_DAMAGE | E_HEAL | A_PERIODIC_DAMAGE | A_PERIODIC_HEAL
+            E_DAMAGE | E_HEAL | A_PERIODIC_DAMAGE | A_PERIODIC_HEAL | E_PERSISTENT_AREA
         )
     {
         return explicit;
     }
-    let periodic = matches!(kind, A_PERIODIC_DAMAGE | A_PERIODIC_HEAL);
+    let periodic = matches!(
+        kind,
+        A_PERIODIC_DAMAGE | A_PERIODIC_HEAL | E_PERSISTENT_AREA
+    );
     let channeled = is_channeled(s.attributes_ex1, &s.name);
     let duration = dbc
         .durations
@@ -1279,14 +1282,18 @@ fn spell_bonus_coefficient(s: &Spell, dbc: &SpellTables, index: usize, kind: u8)
             }
         }
     }
-    let ticks = (0..3)
-        .find(|&i| s.effect[i] == 6 && matches!(s.effect_aura[i], 3 | 8 | 53))
-        .map_or(6, |i| {
-            duration
-                .min(30000)
-                .checked_div(s.effect_amplitude[i])
-                .unwrap_or(6)
-        });
+    let ticks = if duration == 0 {
+        1
+    } else {
+        (0..3)
+            .find(|&i| s.effect[i] == 6 && matches!(s.effect_aura[i], 3 | 8 | 53))
+            .map_or(6, |i| {
+                duration
+                    .min(30000)
+                    .checked_div(s.effect_amplitude[i])
+                    .unwrap_or(6)
+            })
+    };
     let dot_factor = if periodic {
         let factor = if channeled {
             1.0
@@ -1326,6 +1333,19 @@ fn resolve_effect_kind(
             A_INERT
         } else {
             aura_mod_to_kind(aura)
+        };
+        let k = if effect_id != 6
+            && matches!(
+                k,
+                A_MOD_DAMAGE_DONE_FLAT
+                    | A_MOD_DAMAGE_TAKEN_FLAT
+                    | A_MOD_SCHOOL_CRIT
+                    | A_MOD_DAMAGE_DONE_PCT
+                    | A_MOD_HEALING_TAKEN
+            ) {
+            A_INERT
+        } else {
+            k
         };
         if matches!(k, E_SCRIPTED | A_INERT) {
             *cov.unmapped_aura
@@ -1427,7 +1447,9 @@ fn resolve_effect_kind(
     } else {
         kind
     };
-    let kind = if kind == A_PERIODIC_DAMAGE && matches!(name, "Consecration" | "Flamestrike") {
+    let kind = if kind == A_PERIODIC_DAMAGE
+        && (effect_id == 27 || matches!(name, "Consecration" | "Flamestrike"))
+    {
         E_PERSISTENT_AREA
     } else {
         kind

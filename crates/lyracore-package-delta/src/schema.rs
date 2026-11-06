@@ -316,6 +316,7 @@ impl Table {
                     | "attributes_ex_4"
                     | "damage_class"
             ) | (Self::SpellEffect, "bonus_coefficient" | "equip_supported")
+                | (Self::Item, "damage_school")
         )
     }
 

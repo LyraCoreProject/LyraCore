@@ -267,7 +267,8 @@ and derive missing coefficients. Equipment class defaults to -1 (unrestricted); 
 columns default to zero. Reimport `items` to populate the zero-default END column
 `game_item_template.damage_school` from `dmg_type1`. The zero-default END column
 `game_ranged_impact_schedule.school` freezes the damage school at launch. Run publish repair
-after reimport to refresh both cast and equip auras. Older Package Deltas default to inert equip
+after reimport to refresh both cast and equip auras. The zero-default END column
+`game_ground_area.effect_id` identifies each new ground effect's incoming coefficient. Older Package Deltas default to inert equip
 effects; an author must supply a supported claim.
 
 `game_world_entity` END-appends `sheet_ap_modifiers` and `sheet_ranged_ap_modifiers` with

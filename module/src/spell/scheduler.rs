@@ -683,13 +683,31 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 .take(AOE_MAX_TARGETS)
                 .collect();
 
+        let source = ctx
+            .db
+            .game_spell()
+            .spell_id()
+            .find(a.spell_id)
+            .zip(ctx.db.game_spell_effect().id().find(a.effect_id));
         for t in targets {
+            let points = source.as_ref().map_or(a.amount, |(header, effect)| {
+                let damage = bonuses::spell_damage_taken(
+                    ctx,
+                    header,
+                    effect,
+                    a.caster_guid,
+                    t,
+                    a.amount as f32,
+                    1,
+                );
+                bonuses::round_damage(ctx, t, damage)
+            });
             let resisted = resist_magic_damage(
                 ctx,
                 t,
                 a.school_mask,
                 caster.as_ref().map_or(0, |caster| caster.level),
-                a.amount,
+                points,
                 a.spell_id,
                 true,
             );
@@ -700,14 +718,14 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 resisted,
                 crate::combat::Hit::triggered(),
             );
-            if dealt > 0 || absorbed > 0 || a.amount > resisted {
+            if dealt > 0 || absorbed > 0 || points > resisted {
                 crate::spell::SpellCastEvent::insert(
                     ctx,
                     crate::spell::SpellCastEvent {
                         target_guid: t,
                         damage: dealt,
                         school: crate::spell::school_index(a.school_mask),
-                        resisted: (a.amount.max(0) as u32).saturating_sub(resisted.max(0) as u32),
+                        resisted: (points.max(0) as u32).saturating_sub(resisted.max(0) as u32),
                         absorbed,
                         is_proc_log: true,
                         ..crate::spell::SpellCastEvent::signal(

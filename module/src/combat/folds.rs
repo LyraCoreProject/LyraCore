@@ -641,23 +641,6 @@ pub(crate) fn weapon_strike_spell_damage(
 }
 
 /// A finisher's damage: `amount` with the damage spell mods, the strike's crit and the target's armor.
-pub(crate) fn finisher_strike_damage(
-    ctx: &ReducerContext,
-    attacker: &WorldEntity,
-    target: &WorldEntity,
-    spell: &crate::spell::Spell,
-    amount: i32,
-    crit: bool,
-) -> u32 {
-    let mods = crate::spell::spell_mod(ctx, attacker.guid, crate::spell::SPELLMOD_OP_DAMAGE, spell);
-    let mit_pct = if spell.custom_flags & lyracore_shared::spell_custom::IGNORE_ARMOR != 0 {
-        0
-    } else {
-        armor_mitigation_pct(effective_armor(ctx, target), attacker.level)
-    };
-    strike_amount(0, amount, 100, mods, crit, mit_pct)
-}
-
 pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
     melee_attack_power_for(
         unit.class(),
