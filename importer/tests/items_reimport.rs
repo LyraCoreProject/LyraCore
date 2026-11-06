@@ -119,7 +119,11 @@ fn fields(shard: &Standalone) -> Value {
         .unwrap();
     Value::Object(
         row.into_iter()
-            .filter(|(key, _)| key != "entry" && !key.starts_with("spellppmrate_"))
+            .filter(|(key, _)| {
+                key != "entry"
+                    && !key.starts_with("spellppmrate_")
+                    && !key.starts_with("spellcategory_")
+            })
             .map(|(key, value)| {
                 let value = if key == "name" {
                     json!("Operator blade")
