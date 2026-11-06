@@ -403,7 +403,7 @@ fn actual_spell_power_world_plan_snapshots_corruption_with_its_dot_coefficient()
 fn spell_hits(
     connection: &mut lyracore_test_support::ReducerConnection,
     id: u32,
-) -> Vec<(u32, u8)> {
+) -> Vec<(u32, u8, bool)> {
     let mut hits = Vec::new();
     for packet in connection.drain_packets() {
         let packet: serde_json::Value = serde_json::from_str(packet.get()).unwrap();
@@ -421,9 +421,11 @@ fn spell_hits(
         }
         let spell = u32::from_le_bytes(body[offset..offset + 4].try_into().unwrap());
         if spell == id {
+            // Spell crit uses hit-info bit 0x2 after the blocked-damage field.
             hits.push((
                 u32::from_le_bytes(body[offset + 4..offset + 8].try_into().unwrap()),
                 body[offset + 8],
+                u32::from_le_bytes(body[offset + 23..offset + 27].try_into().unwrap()) & 2 != 0,
             ));
         }
     }
@@ -484,7 +486,7 @@ fn actual_spell_power_world_plan_scales_righteousness_with_its_weapon_coefficien
         let expected = if bonus { [5, 6] } else { [3, 4] };
         assert!(
             hits.iter()
-                .all(|(damage, school)| expected.contains(damage) && *school == 1),
+                .all(|(damage, school, _)| expected.contains(damage) && *school == 1),
             "{hits:?}"
         );
     }
@@ -592,8 +594,11 @@ fn actual_spell_power_world_plan_wand_keeps_arcane_school_without_spell_power() 
     wire.call("native_world_open", json!([42])).unwrap();
     wire.call("debug_native_enter_world", json!([1])).unwrap();
     let (gx, gy) = lyracore_shared::spatial::grid_cell(-8934.95, -132.493);
-    shard.assert_sql(&format!("UPDATE game_world_entity SET x = -8934.95, grid_x = {gx}, grid_y = {gy} WHERE guid = {wolf}"));
+    shard.assert_sql(&format!("UPDATE game_world_entity SET x = -8934.95, grid_x = {gx}, grid_y = {gy}, level = 1 WHERE guid = {wolf}"));
     shard.assert_sql("UPDATE game_world_entity SET orientation = 0, power = 100000, max_power = 100000 WHERE guid = 1");
+    shard.assert_sql(
+        "UPDATE game_player_skill SET current = 300, max_rank = 300 WHERE character_guid = 1",
+    );
     shard.clear_schedule("game_creature_move_schedule");
     let mut request = Vec::new();
     CMSG_CAST_SPELL {
@@ -624,18 +629,44 @@ fn actual_spell_power_world_plan_wand_keeps_arcane_school_without_spell_power() 
         wire.call("debug_advance_roll_batch", json!([40])).unwrap();
         let hits = spell_hits(wire, 5019);
         assert!(!hits.is_empty());
-        assert!(hits.iter().all(|(_, school)| *school == 6), "{hits:?}");
-        hits.into_iter()
-            .map(|(damage, _)| damage)
-            .collect::<Vec<_>>()
+        assert!(hits.iter().all(|(_, school, _)| *school == 6), "{hits:?}");
+        hits
     };
-    let ordinary = shoot(&mut wire);
+    let sheet = || {
+        shard.query_rows("SELECT sheet_ranged_dmg_min,sheet_ranged_dmg_max FROM game_world_entity WHERE guid = 1")
+    };
+    let ordinary = sheet();
+    assert_eq!(ordinary[0]["sheet_ranged_dmg_min"], "12");
+    assert_eq!(ordinary[0]["sheet_ranged_dmg_max"], "22");
+    let check_hits = |hits: Vec<(u32, u8, bool)>, min: u32, max: u32| {
+        for (damage, _, crit) in hits {
+            let (min, max) = if crit {
+                (min * 3 / 2, max * 3 / 2)
+            } else {
+                (min, max)
+            };
+            assert!(
+                (min..=max).contains(&damage),
+                "{damage} outside {min}..={max}"
+            );
+        }
+    };
+    check_hits(shoot(&mut wire), 12, 22);
     wire.call("debug_begin_cast", json!([1, 11390, 1])).unwrap();
     wire.call("debug_advance_roll_batch", json!([61])).unwrap();
-    assert_eq!(shoot(&mut wire), ordinary);
+    assert_eq!(sheet(), ordinary);
+    check_hits(shoot(&mut wire), 12, 22);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 60 WHERE guid = {wolf}"
+    ));
+    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES ({wolf},1,0)"));
     wire.call("debug_begin_cast", json!([wolf, 702, 1]))
         .unwrap();
     wire.call("debug_advance_roll_batch", json!([61])).unwrap();
-    let reduced: Vec<_> = ordinary.into_iter().map(|damage| damage - 3).collect();
-    assert_eq!(shoot(&mut wire), reduced);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 1 WHERE guid = {wolf}"
+    ));
+    assert_eq!(sheet()[0]["sheet_ranged_dmg_min"], "9");
+    assert_eq!(sheet()[0]["sheet_ranged_dmg_max"], "19");
+    check_hits(shoot(&mut wire), 9, 19);
 }
