@@ -817,6 +817,12 @@ Real world content is not seeded. It comes from the importer; see
 
 ### Equip aura support
 
+`game_world_entity.sheet_ap_modifiers` and `sheet_ranged_ap_modifiers` cache the wire AP
+breakdown. The low signed-16 half is the positive modifier and the high signed-16 half is the
+negative modifier. They are END-appended with zero defaults and refreshed by publish repair.
+The ranged base AP stays separate. Damage uses the signed total; both CREATE and VALUES
+retain the individual modifier halves.
+
 `game_item_aura` retains the exact BSATN source definition for each active derived aura. Repair
 compares it with the current header and effect, so unchanged auras keep their identity and timing.
 The source bytes stay local to the Shard and are excluded from Character records and Transfer.
@@ -852,7 +858,7 @@ spell or baseline combat calculation is complete.
 | 47 ModParryPercent | 28 | parry modifier not implemented | Inert | 13665 |
 | 49 ModDodgePercent | 89 | effective_dodge_bp; percent to basis points | Correct | 13669 |
 | 51 ModBlockPercent | 24 | block modifier not implemented | Inert | 13674 |
-| 52 ModCritPercent | 384 | effective_crit_bp; percent to basis points | Correct when unrestricted; 1 Item inert | 7597 |
+| 52 ModCritPercent | 384 | effective_crit_bp; percent to basis points | Correct when unrestricted; weapon-restricted 9132 inert | 7597 |
 | 54 ModHitChance | 192 | effective_miss_bp; percent to basis points | Correct | 15464 |
 | 55 ModSpellHitChance | 76 | spell hit needs its own consumer | Inert | 23727 |
 | 56 Transform | 7 | transform requirements not certified | Inert | 8299 |

@@ -245,6 +245,12 @@ Expire or remove an old cast effect that the new import makes inert before play 
 of an inert effect cannot replace the old Aura. Recast affected supported buffs after reimport.
 Older Package Deltas default to inert equip effects; an author must supply a supported claim.
 
+`game_world_entity` END-appends `sheet_ap_modifiers` and `sheet_ranged_ap_modifiers` with
+zero defaults. These derived projections pack the positive signed-16 modifier in the low half
+and the negative signed-16 modifier in the high half. Ranged base AP no longer includes these
+modifiers. The final publish repair recomputes both projections for connected Characters; world
+entry recomputes them for returning Characters. Neither column is Character-owned Transfer state.
+
 `game_item_aura` and its finite-expiry schedule `game_item_aura_expiry` start empty.
 `debug_repair_after_publish` reconciles equipment and refreshes the sheet of every online Character
 without starting an equip cooldown, including passive effects on ghosts. Fresh login, reconnect,

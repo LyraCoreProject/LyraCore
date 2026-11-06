@@ -123,10 +123,11 @@ pub(crate) fn ranged_sheet_values(
     let Some((dmg_min, dmg_max, delay_ms, subclass)) = weapon else {
         return (0, 0, 0);
     };
-    if matches!(subclass, ws::BOW | ws::GUN | ws::CROSSBOW) {
-        let attack_power = ranged_attack_power(agility, level).saturating_add_signed(bonus);
+    if matches!(subclass, ws::BOW | ws::GUN | ws::CROSSBOW | ws::THROWN) {
+        let base = ranged_attack_power(agility, level);
+        let attack_power = base.saturating_add_signed(bonus);
         let (dmg_min, dmg_max) = weapon_swing_range_ap(attack_power, dmg_min, dmg_max, delay_ms);
-        (attack_power, dmg_min, dmg_max)
+        (base, dmg_min, dmg_max)
     } else {
         (0, dmg_min, dmg_max)
     }
@@ -566,6 +567,19 @@ mod tests {
     }
 
     #[test]
+    fn spell_9329_adds_ranged_attack_power_to_thrown_damage_without_changing_its_base() {
+        assert_eq!(
+            ranged_sheet_values(
+                0,
+                1,
+                Some((10, 10, 14_000, crate::items::weapon_subclass::THROWN)),
+                16
+            ),
+            (0, 26, 26)
+        );
+    }
+
+    #[test]
     fn ranged_sheet_wand_keeps_flat_weapon_damage() {
         let values = ranged_sheet_values(
             20,
@@ -904,6 +918,8 @@ mod tests {
             sheet_spi_bonus: 0,
             sheet_ap_base: 0,
             sheet_ap_mods: 0,
+            sheet_ap_modifiers: 0,
+            sheet_ranged_ap_modifiers: 0,
             sheet_dmg_min: 0,
             sheet_dmg_max: 0,
             sheet_crit_bp: 0,

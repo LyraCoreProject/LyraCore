@@ -59,6 +59,21 @@ pub(crate) fn effective_block_bp(
     }
 }
 
+pub(crate) fn attack_power_modifiers(ctx: &ReducerContext, guid: u64, field: u8) -> u32 {
+    let (positive, negative) = crate::spell::auras_on(ctx, guid)
+        .filter(|aura| {
+            aura.eff_kind == crate::spell::A_MOD_COMBAT && aura.eff_p0 == i32::from(field)
+        })
+        .map(|aura| lyracore_shared::aura::stacked_amount(aura.amount, aura.stacks))
+        .fold((0i32, 0i32), |(positive, negative), amount| {
+            (
+                positive.saturating_add(amount.max(0)),
+                negative.saturating_add(amount.min(0)),
+            )
+        });
+    u32::from(positive as u16) | (u32::from(negative as u16) << 16)
+}
+
 pub(crate) fn aura_attack_power_bonus(ctx: &ReducerContext, unit_guid: u64) -> i32 {
     crate::spell::combat_field_bonus(ctx, unit_guid, crate::spell::COMBAT_ATTACK_POWER)
 }

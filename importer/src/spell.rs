@@ -1183,7 +1183,11 @@ fn resolve_effect_kind(
     let school_mask = header.school_mask;
     let channeled = header.channeled;
     let (kind, (p0, p0_kind)) = if is_aura_effect(effect_id) || s.effect_aura[i] != 0 {
-        let k = aura_mod_to_kind(aura);
+        let k = if aura == AuraMod::ModCritPercent && s.equipment != [u32::MAX, 0, 0] {
+            E_SCRIPTED
+        } else {
+            aura_mod_to_kind(aura)
+        };
         if k == E_SCRIPTED {
             *cov.unmapped_aura
                 .entry(format!("{} ({aura:?})", s.effect_aura[i]))
@@ -2849,6 +2853,25 @@ mod tests {
     #[test]
     fn equip_review_battle_shouts_area_target_stays_inert_on_equip() {
         assert!(!equip_review_effect(6673, 99, 14, 0, (6, 20, 0)).equip_supported);
+    }
+
+    #[test]
+    fn equip_review_9132_weapon_restricted_crit_is_inert_for_casts_as_well_as_equipping() {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![Spell {
+            id: 9132,
+            attributes: 192,
+            duration: 21,
+            equipment: [2, 327692, 0],
+            effect: [6, 0, 0],
+            effect_aura: [52, 0, 0],
+            effect_die_sides: [1, 0, 0],
+            implicit_target_a: [1, 0, 0],
+            ..Default::default()
+        }];
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        assert_eq!(rows.effects[0].kind, E_SCRIPTED);
+        assert!(!rows.effects[0].equip_supported);
     }
 
     #[test]

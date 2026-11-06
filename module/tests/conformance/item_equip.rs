@@ -691,12 +691,17 @@ fn review_spell(shard: &Standalone, spell: u32, effects: &[(u8, i32, i32, u8)], 
     }
 }
 
-fn review_equip(shard: &Standalone, connection: &mut ReducerConnection, guid: u64, spell: u32) {
+fn review_equip(
+    shard: &Standalone,
+    connection: &mut ReducerConnection,
+    guid: u64,
+    spell: u32,
+) -> Vec<(u16, Vec<u8>)> {
     shard.assert_sql(&format!(
         "UPDATE game_item_template SET spellid_1 = {spell}, spellid_5 = 0 WHERE entry = {ITEM}"
     ));
     grant(shard, guid, ITEM, 1, 23);
-    equip(connection, 23);
+    equip(connection, 23)
 }
 
 #[test]
@@ -708,17 +713,14 @@ fn equip_review_9329_and_its_cast_keep_melee_and_ranged_attack_power_separate() 
     grant(&shard, guid, 25, 1, 17);
     shard.assert_call("debug_repair_after_publish", &[]);
     let sheet = || {
-        shard.query_rows(&format!("SELECT sheet_ap_mods,sheet_ranged_ap,sheet_ranged_dmg_min FROM game_world_entity WHERE guid = {guid}"))[0].clone()
+        shard.query_rows(&format!("SELECT sheet_ap_mods,sheet_ranged_ap,sheet_ranged_ap_modifiers,sheet_ranged_dmg_min FROM game_world_entity WHERE guid = {guid}"))[0].clone()
     };
     let base = sheet();
     review_equip(&shard, &mut connection, guid, 9329);
     let equipped = sheet();
     assert_eq!(equipped["sheet_ap_mods"], "16");
-    assert_eq!(
-        equipped["sheet_ranged_ap"].parse::<u32>().unwrap()
-            - base["sheet_ranged_ap"].parse::<u32>().unwrap(),
-        16
-    );
+    assert_eq!(equipped["sheet_ranged_ap"], base["sheet_ranged_ap"]);
+    assert_eq!(equipped["sheet_ranged_ap_modifiers"], "16");
     assert_eq!(
         equipped["sheet_ranged_dmg_min"].parse::<u32>().unwrap()
             - base["sheet_ranged_dmg_min"].parse::<u32>().unwrap(),
@@ -731,6 +733,31 @@ fn equip_review_9329_and_its_cast_keep_melee_and_ranged_attack_power_separate() 
         &[&guid.to_string(), "9329", &guid.to_string()],
     );
     assert_eq!(sheet(), equipped);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn equip_review_9329_sends_ranged_ap_as_a_modifier_without_changing_its_base() {
+    let (shard, mut connection, guid, _) = fixture("equip-review-ranged-wire");
+    review_spell(&shard, 9329, &[(0xa3, 16, 0, 5), (0xa3, 16, 11, 5)], true);
+    shard.assert_sql("UPDATE game_item_template SET class = 2, subclass = 2, inventory_type = 15, damage_min = 10.0, damage_max = 10.0, delay_ms = 14000, required_skill = 0 WHERE entry = 25");
+    grant(&shard, guid, 25, 1, 17);
+    shard.assert_call("debug_repair_after_publish", &[]);
+    let base = shard.query_rows(&format!(
+        "SELECT sheet_ranged_ap FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["sheet_ranged_ap"]
+        .parse::<u32>()
+        .unwrap();
+    let packets = review_equip(&shard, &mut connection, guid, 9329);
+    let fields: std::collections::BTreeMap<_, _> = packets
+        .iter()
+        .flat_map(|(opcode, body)| super::properties::updates(*opcode, body).unwrap())
+        .filter(|update| update.guid == guid)
+        .flat_map(|update| update.fields)
+        .collect();
+    assert_eq!(fields[&166], 16);
+    assert_eq!(fields[&168], base);
+    assert_eq!(fields[&169], 16);
 }
 
 #[test]

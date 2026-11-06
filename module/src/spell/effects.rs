@@ -205,6 +205,17 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     let ap_base = crate::combat::melee_attack_power_for(class, eff_str, eff_agi, e.level);
     let ap_mods = crate::combat::aura_attack_power_bonus(ctx, unit_guid);
     let (dmg_min, dmg_max) = crate::combat::swing_range_ctx(ctx, &e);
+    let ap_modifiers = crate::combat::attack_power_modifiers(ctx, unit_guid, COMBAT_ATTACK_POWER);
+    // Priest, mage and warlock ignore ranged AP modifiers.
+    let ranged_ap_modifiers = if matches!(class, 5 | 8 | 9) {
+        0
+    } else {
+        crate::combat::attack_power_modifiers(
+            ctx,
+            unit_guid,
+            lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
+        )
+    };
     let (ranged_ap, ranged_dmg_min, ranged_dmg_max) = crate::combat::ranged_sheet_values(
         eff_agi,
         e.level,
@@ -224,6 +235,8 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
         && spi_bonus == e.sheet_spi_bonus
         && ap_base == e.sheet_ap_base
         && ap_mods == e.sheet_ap_mods
+        && ap_modifiers == e.sheet_ap_modifiers
+        && ranged_ap_modifiers == e.sheet_ranged_ap_modifiers
         && dmg_min == e.sheet_dmg_min
         && dmg_max == e.sheet_dmg_max
         && crit_bp == e.sheet_crit_bp
@@ -240,6 +253,8 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     e.sheet_spi_bonus = spi_bonus;
     e.sheet_ap_base = ap_base;
     e.sheet_ap_mods = ap_mods;
+    e.sheet_ap_modifiers = ap_modifiers;
+    e.sheet_ranged_ap_modifiers = ranged_ap_modifiers;
     e.sheet_dmg_min = dmg_min;
     e.sheet_dmg_max = dmg_max;
     e.sheet_crit_bp = crit_bp;

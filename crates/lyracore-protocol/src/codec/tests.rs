@@ -3057,7 +3057,8 @@ fn ranged_sheet_stats(
         int_bonus: 0,
         spi_bonus: 0,
         attack_power: 50,
-        ap_mods: 0,
+        ap_modifiers: 0,
+        ranged_ap_modifiers: 0,
         dmg_min: 11,
         dmg_max: 13,
         ranged_attack_power,
@@ -4255,4 +4256,52 @@ fn self_create_with_no_quests_matches_the_ordinary_create() {
         build_self_create_object(&entity, &[], &[], &[]).unwrap(),
         build_create_object(&entity, CreateKind::SelfPlayer, &[], &[]).unwrap(),
     );
+}
+
+#[test]
+fn demoralizing_shouts_negative_attack_power_is_signed_on_the_wire() {
+    let mut stats = ranged_sheet_stats(0, 0, 0);
+    stats.ap_modifiers = u32::from((-35i16) as u16) << 16;
+    let update = build_sheet_stats_values(1, &stats);
+    let Object::Values {
+        mask1: UpdateMask::Player(player),
+        ..
+    } = &update.objects[0]
+    else {
+        panic!("expected Player values");
+    };
+    assert_eq!(player.unit_attack_power_mods(), Some((0, (-35i16) as u16)));
+}
+
+#[test]
+fn spell_9329_and_demoralizing_shout_keep_both_attack_power_halves_in_create_and_values() {
+    let modifiers = 16 | (u32::from((-35i16) as u16) << 16);
+    let entity = EntityView {
+        sheet_ap_modifiers: modifiers,
+        sheet_ranged_ap_modifiers: 16,
+        ..warrior_entity()
+    };
+    let create = build_create_object(&entity, CreateKind::SelfPlayer, &[], &[]).unwrap();
+    let Object::CreateObject2 {
+        mask2: UpdateMask::Player(player),
+        ..
+    } = &create.objects[0]
+    else {
+        panic!("expected Player CREATE");
+    };
+    assert_eq!(player.unit_attack_power_mods(), Some((16, (-35i16) as u16)));
+    assert_eq!(player.unit_ranged_attack_power_mods(), Some((16, 0)));
+    let mut stats = ranged_sheet_stats(0, 0, 0);
+    stats.ap_modifiers = modifiers;
+    stats.ranged_ap_modifiers = 16;
+    let update = build_sheet_stats_values(1, &stats);
+    let Object::Values {
+        mask1: UpdateMask::Player(player),
+        ..
+    } = &update.objects[0]
+    else {
+        panic!("expected Player VALUES");
+    };
+    assert_eq!(player.unit_attack_power_mods(), Some((16, (-35i16) as u16)));
+    assert_eq!(player.unit_ranged_attack_power_mods(), Some((16, 0)));
 }

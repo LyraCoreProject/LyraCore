@@ -266,6 +266,8 @@ pub(crate) mod tests {
             sheet_spi_bonus: 0,
             sheet_ap_base: 0,
             sheet_ap_mods: 0,
+            sheet_ap_modifiers: 0,
+            sheet_ranged_ap_modifiers: 0,
             sheet_dmg_min: 0,
             sheet_dmg_max: 0,
             sheet_crit_bp: 0,

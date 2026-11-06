@@ -48,7 +48,9 @@ pub struct EntityView {
     pub intellect: u32,
     pub spirit: u32,
     pub sheet_ap_base: u32,
-    pub sheet_ap_mods: i32,
+    // Positive i16 in the low half, negative i16 in the high half.
+    pub sheet_ap_modifiers: u32,
+    pub sheet_ranged_ap_modifiers: u32,
     pub sheet_dmg_min: u32,
     pub sheet_dmg_max: u32,
     pub sheet_ranged_ap: u32,
@@ -409,15 +411,19 @@ pub fn build_create_object(
                 .set_unit_arcane_resistance(entity.magic_resistances[5] as i32)
                 // Unset damage fields become uninitialized floats in the build 5875 paperdoll.
                 .set_unit_attack_power(entity.sheet_ap_base as i32)
+                // gtker writes its first short argument into the high half.
                 .set_unit_attack_power_mods(
-                    entity.sheet_ap_mods.max(0) as u16,
-                    (-entity.sheet_ap_mods).max(0) as u16,
+                    (entity.sheet_ap_modifiers >> 16) as u16,
+                    entity.sheet_ap_modifiers as u16,
                 )
                 // Attack power uses 1 + multiplier; setting 1.0 doubles displayed AP.
                 .set_unit_mindamage(entity.sheet_dmg_min as f32)
                 .set_unit_maxdamage(entity.sheet_dmg_max as f32)
                 .set_unit_ranged_attack_power(entity.sheet_ranged_ap as i32)
-                .set_unit_ranged_attack_power_mods(0, 0)
+                .set_unit_ranged_attack_power_mods(
+                    (entity.sheet_ranged_ap_modifiers >> 16) as u16,
+                    entity.sheet_ranged_ap_modifiers as u16,
+                )
                 .set_unit_minrangeddamage(entity.sheet_ranged_dmg_min as f32)
                 .set_unit_maxrangeddamage(entity.sheet_ranged_dmg_max as f32)
                 // The paperdoll divides damage by this multiplier; zero produces infinities.

@@ -55,7 +55,12 @@ fn populated_old_module_upgrades_without_clearing() {
     shard.publish_module_bytes(current);
 
     assert_eq!(upgraded_character(&shard), character_before);
-    assert_eq!(entity(&shard), entity_before);
+    let mut entity_after = entity(&shard);
+    for column in ["sheet_ap_modifiers", "sheet_ranged_ap_modifiers"] {
+        assert!(!entity_before.contains_key(column));
+        assert_eq!(entity_after.remove(column).as_deref(), Some("0"));
+    }
+    assert_eq!(entity_after, entity_before);
     let mut spell_after = shard.query_rows("SELECT * FROM game_spell WHERE spell_id = 5090100");
     for column in [
         "custom_flags",

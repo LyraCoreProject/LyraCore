@@ -113,6 +113,11 @@ symbol = "WorldSession::HandleAutoEquipItemOpcode"
 [real_client]
 status = "unverified"
 
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "equip_review_9329_sends_ranged_ap_as_a_modifier_without_changing_its_base"
+rung = "durable_module"
+
 [[known_gaps]]
 description = "Stock-client use of CMSG_AUTOEQUIP_GROUND_ITEM, CMSG_AUTOSTORE_GROUND_ITEM, CMSG_DROP_ITEM is unverified; vmangos marks them unhandled. Check whether the client sends any of them and what result to preserve."
 path = "module/src/native/mod.rs"
