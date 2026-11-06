@@ -450,6 +450,7 @@ pub(crate) enum HitSource {
     MeleeSpell,
     Spell,
     Triggered,
+    DamageShield,
 }
 
 impl HitSource {
@@ -637,7 +638,8 @@ pub(crate) fn apply_hit(
             duel_completed: true,
         };
     }
-    let killed = is_lethal(target.health, dmg) && (weapon || !target_is_player);
+    let shield = matches!(hit.source, HitSource::DamageShield);
+    let killed = is_lethal(target.health, dmg) && (weapon || !target_is_player || shield);
     if killed {
         if target_is_player {
             kill_player(ctx, target_guid, attacker_guid);
@@ -668,10 +670,12 @@ pub(crate) fn apply_hit(
     if damage.lethal_prevented {
         commit_death_prevention(ctx, target_guid, attacker_guid);
     }
-    refresh_leash(ctx, attacker_guid, target_guid);
-    engage_passive_creature(ctx, target_guid, attacker_guid);
-    if !weapon {
-        enter_combat(ctx, target_guid);
+    if !shield {
+        refresh_leash(ctx, attacker_guid, target_guid);
+        engage_passive_creature(ctx, target_guid, attacker_guid);
+        if !weapon {
+            enter_combat(ctx, target_guid);
+        }
     }
 
     crate::spell::break_auras_on_damage(
@@ -687,7 +691,7 @@ pub(crate) fn apply_hit(
             attacker_guid,
             crate::threat::threat_from_damage(dmg),
         );
-        if !weapon {
+        if !weapon && !shield {
             crate::spell::arm_spell_retaliation(ctx, attacker_guid, target_guid);
         }
     }

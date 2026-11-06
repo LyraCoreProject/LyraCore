@@ -1,6 +1,13 @@
 use std::collections::BTreeMap;
 
 #[cfg(test)]
+#[path = "spell_aura_test_support.rs"]
+mod aura_test_support;
+#[cfg(test)]
+#[path = "spell_shield_tests.rs"]
+mod shield_tests;
+
+#[cfg(test)]
 use crate::spell_dbc::read_spells;
 use crate::spell_dbc::Spell;
 use anyhow::{Context, Result};
@@ -24,30 +31,31 @@ use lyracore_importer::spell_kind::{
 use std::path::Path;
 
 use lyracore_shared::spell::taxonomy::{
-    A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_DONE_FLAT,
-    A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN, A_MOD_DAMAGE_TAKEN_FLAT, A_MOD_HEALING,
-    A_MOD_HEALING_TAKEN, A_MOD_HEALTH_POWER, A_MOD_POWER_REGEN_PCT, A_MOD_RESISTANCE,
-    A_MOD_SCHOOL_CRIT, A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE,
-    A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER,
-    A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_TRANSFORM, COMBAT_ATTACK_POWER,
-    COMBAT_CRIT, COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_SPELL_CRIT,
-    COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE,
-    E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE,
-    E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT,
-    E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME,
-    E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS,
-    E_SUMMON_HOSTILE, E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR,
-    M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY,
-    P_FLAG, P_FLAT_MANA, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER,
-    P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID,
-    SPEED_MOUNTED, SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM,
-    SPELL_ATTR_AREA_AURA, SPELL_ATTR_CHANNELED, SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER,
-    SPELL_ATTR_PASSIVE, SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND,
-    SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE,
-    SPELL_ATTR_REQ_STEALTH, SPELL_ATTR_STEALTH_SAFE, SPELL_ATTR_USES_RANGED_SLOT,
-    SPELL_ATTR_WEAPON_PROCS, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STANCE_BATTLE, STANCE_BEAR,
-    STANCE_BERSERKER, STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY,
-    T_AREA_ENEMY, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    A_ABSORB, A_CONTROL, A_DAMAGE_SHIELD, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT,
+    A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN, A_MOD_DAMAGE_TAKEN_FLAT,
+    A_MOD_HEALING, A_MOD_HEALING_TAKEN, A_MOD_HEALTH_POWER, A_MOD_POWER_REGEN_PCT,
+    A_MOD_RESISTANCE, A_MOD_SCHOOL_CRIT, A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED,
+    A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE,
+    A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_TRANSFORM,
+    COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER,
+    COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE,
+    E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL,
+    E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL,
+    E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
+    E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED,
+    E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_PET,
+    E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN,
+    P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
+    P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW,
+    P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
+    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_AREA_AURA,
+    SPELL_ATTR_CHANNELED, SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_PASSIVE,
+    SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER,
+    SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE, SPELL_ATTR_REQ_STEALTH,
+    SPELL_ATTR_STEALTH_SAFE, SPELL_ATTR_USES_RANGED_SLOT, SPELL_ATTR_WEAPON_PROCS,
+    SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER,
+    STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY,
+    T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 
 fn binding_summon_entry(spell_id: u32, effect: i32, event: u32, focus: u32) -> Option<i32> {
@@ -1138,7 +1146,14 @@ fn push_spell_effect_rows(
             wrapper_to_rank.entry(spell_id).or_insert(trigger_spell);
         }
         let effect_mechanic = s.effect_mechanic[i] as u8;
-        let p1 = if kind == E_SUMMON_HOSTILE {
+        let p1 = if kind == A_IMMUNITY {
+            s.effect_aura[i] as i32
+                | if s.attributes_ex1 & 0x0001_0000 != 0 {
+                    0x100
+                } else {
+                    0
+                }
+        } else if kind == E_SUMMON_HOSTILE {
             s.requires_spell_focus as i32
         } else if kind == E_POWER_BURN {
             power_burn_ratio_bp(s.effect_multiple_values[i])
@@ -1744,6 +1759,7 @@ fn kind_name(kind: u8) -> &'static str {
         A_PROC_DAMAGE => "A_PROC_DAMAGE",
         A_SELF_RESURRECT => "A_SELF_RESURRECT",
         A_MOD_POWER_REGEN_PCT => "A_MOD_POWER_REGEN_PCT",
+        A_DAMAGE_SHIELD => "A_DAMAGE_SHIELD",
         _ => "?",
     }
 }
@@ -1992,10 +2008,10 @@ mod tests {
         let crate::world_source::WorldSource::Vmangos(connection) = &source else {
             unreachable!()
         };
-        connection.execute_batch("DELETE FROM spell_template; INSERT INTO spell_template (entry,build,name,effect1,effectApplyAuraName1,effectBasePoints1,effectDieSides1,effectImplicitTargetA1,equippedItemClass) VALUES (7598,5875,'Increased Critical 2',6,52,1,1,1,-1)").unwrap();
+        connection.execute_batch("DELETE FROM spell_template; INSERT INTO spell_template (entry,build,name,effect1,effectApplyAuraName1,effectBasePoints1,effectDieSides1,effectImplicitTargetA1,equippedItemClass) VALUES (7598,5875,'Increased Critical 2',6,52,1,1,1,-1),(15438,5875,'Thorns',6,15,2,1,1,-1)").unwrap();
         let plans = [
             world_plan(&source, path.to_str().unwrap()),
-            selected_world_plan(&source, path.to_str().unwrap(), &[7598], &[]),
+            selected_world_plan(&source, path.to_str().unwrap(), &[7598, 15438], &[]),
         ];
         std::fs::remove_dir_all(path).unwrap();
         for plan in plans {
@@ -2018,6 +2034,8 @@ mod tests {
                 )
                 .unwrap();
             assert!(supported);
+            let actual = db.query_row("SELECT kind,base_points,period_ms,equip_supported FROM game_spell_effect WHERE spell_id=15438 AND effect_index=0",[],|row| Ok((row.get::<_,u8>(0)?,row.get::<_,i32>(1)?,row.get::<_,u32>(2)?,row.get::<_,bool>(3)?))).unwrap();
+            assert_eq!(actual, (A_DAMAGE_SHIELD, 3, 0, true));
         }
     }
 
@@ -3090,7 +3108,7 @@ mod tests {
             (8, 5707, 9, 0, (6, 1, 0), false),
             (13, 7685, 3, 4, (6, 1, 0), true),
             (14, 5102, -2, 1, (6, 1, 0), true),
-            (15, 15438, 2, 0, (6, 1, 0), false),
+            (15, 15438, 2, 0, (6, 1, 0), true),
             (17, 12418, 17, 0, (6, 1, 0), false),
             (19, 17623, 999, 4, (6, 1, 0), false),
             (22, 12956, 9, 32, (6, 1, 0), true),
@@ -3232,10 +3250,10 @@ mod tests {
     }
 
     #[test]
-    fn equip_review_21142_damage_shields_are_inert_instead_of_absorbing() {
+    fn equip_review_21142_damage_shields_reflect_instead_of_absorbing() {
         assert_eq!(
             equip_review_effect(21142, 15, 4, 0, (6, 1, 0)).kind,
-            A_INERT
+            A_DAMAGE_SHIELD
         );
     }
 

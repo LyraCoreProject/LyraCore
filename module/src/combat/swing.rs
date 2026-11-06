@@ -164,15 +164,18 @@ fn resolve_offhand_swing(
     );
 
     let dealt = damage.amount;
-    if apply_hit(
+    let combat_ended = apply_hit(
         ctx,
         attacker_guid,
         target_guid,
         damage,
         Hit::weapon(HitSource::OffHand, hit_info == HIT_CRIT),
     )
-    .combat_ended()
-    {
+    .combat_ended();
+    if combat_ended {
+        if affects_victim(hit_info, dealt, blocked) {
+            super::damage_shield::reflect(ctx, attacker_guid, target_guid);
+        }
         return;
     }
     if affects_victim(hit_info, dealt, blocked) {
@@ -182,6 +185,7 @@ fn resolve_offhand_swing(
             target_guid,
             crate::items::equip_slot::OFFHAND,
         );
+        super::damage_shield::reflect(ctx, attacker_guid, target_guid);
     }
 
     if let Some(mut fresh) = melee.attacker_guid().find(attacker_guid) {
@@ -682,6 +686,14 @@ fn fire_melee_swing(
         },
     )
     .combat_ended();
+    let reflects = if swing_is_spell {
+        dealt > 0
+            && queued_header
+                .as_ref()
+                .is_some_and(|spell| spell.cast_flags & crate::spell::SPELL_ATTR_WEAPON_PROCS != 0)
+    } else {
+        affects_victim(hit_info, dealt, blocked)
+    };
     if swing_is_spell {
         let school_mask = queued_header
             .as_ref()
@@ -695,6 +707,9 @@ fn fire_melee_swing(
         );
     }
     if combat_ended {
+        if reflects {
+            super::damage_shield::reflect(ctx, attacker_guid, target_guid);
+        }
         return;
     }
     // vmangos: a weapon-proc strike rolls even when avoided; a white swing must affect the victim.
@@ -712,6 +727,9 @@ fn fire_melee_swing(
             target_guid,
             crate::items::equip_slot::MAINHAND,
         );
+    }
+    if reflects {
+        super::damage_shield::reflect(ctx, attacker_guid, target_guid);
     }
 
     // Arm Revenge after damage so a stale defender snapshot cannot erase its deadline.

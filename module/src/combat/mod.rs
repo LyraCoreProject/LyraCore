@@ -1,3 +1,4 @@
+pub(crate) mod damage_shield;
 pub(crate) mod death;
 mod energy;
 mod engage;

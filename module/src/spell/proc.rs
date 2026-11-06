@@ -120,7 +120,7 @@ pub(crate) fn hit_bits(hit: &Hit) -> (u32, u32) {
             PROC_FLAG_SUCCESSFUL_NEGATIVE_SPELL_HIT,
             PROC_FLAG_TAKEN_NEGATIVE_SPELL_HIT,
         ),
-        HitSource::Triggered => (0, 0),
+        HitSource::Triggered | HitSource::DamageShield => (0, 0),
     }
 }
 

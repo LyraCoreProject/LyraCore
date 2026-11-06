@@ -260,7 +260,7 @@ and deadline. Buff and
 debuff slots follow the current definition. Missing learned passives are restored without stacking
 existing effects. No manual Aura cleanup or recast is required. Repeating repair is idempotent.
 Unsupported cast modifiers retain ordinary Aura holders with inert numeric effects; this includes
-damage shields and the other source types listed as inert in the equip audit. Flat school damage,
+the source types listed as inert in the equip audit. Flat school damage,
 incoming school damage, incoming healing and school crit are active after the spell-power update.
 Reimport `spell` to fill the six END-appended source equipment, attribute and damage-class fields
 and derive missing coefficients. Equipment class defaults to -1 (unrestricted); the other new
@@ -301,6 +301,12 @@ The category and category deadline on existing spell cooldown rows default to ze
 deadlines stay unchanged. A pending cast's new category override defaults to `None`, which uses
 the spell's category. New Item casts retain their Item category through completion. World entry
 sends remaining spell and category cooldowns in `SMSG_INITIAL_SPELLS`.
+
+### Damage shield migration
+
+Reimport `spell`, then call `debug_repair_after_publish` before play resumes. Both cast and equip
+Auras use the corrected shield kind. Repair clears obsolete absorb capacity and retains cast
+amounts and application times. Repeated repair preserves unchanged equip effects.
 
 ### Temporary enchantment migration
 

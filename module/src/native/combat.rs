@@ -68,6 +68,58 @@ fn emit(ctx: &ReducerContext, source: u64, message: ServerOpcodeMessage, source_
     }
 }
 
+pub(crate) fn damage_shield(
+    ctx: &ReducerContext,
+    bearer: u64,
+    attacker: u64,
+    damage: u32,
+    school: u8,
+) {
+    use lyracore_protocol::messages::vanilla::SMSG_SPELLDAMAGESHIELD;
+    emit(
+        ctx,
+        bearer,
+        ServerOpcodeMessage::SMSG_SPELLDAMAGESHIELD(Box::new(SMSG_SPELLDAMAGESHIELD {
+            victim: Guid::new(bearer),
+            caster: Guid::new(attacker),
+            damage,
+            school: school.try_into().unwrap_or_default(),
+        })),
+        false,
+    );
+}
+
+pub(crate) fn damage_shield_miss(
+    ctx: &ReducerContext,
+    bearer: u64,
+    attacker: u64,
+    spell: u32,
+    miss: u8,
+) {
+    super::visibility::broadcast(
+        ctx,
+        bearer,
+        codec::SMSG_SPELLLOGMISS_OPCODE,
+        codec::build_spell_log_miss(bearer, spell, attacker, miss),
+        false,
+    );
+}
+
+pub(crate) fn damage_shield_immune(ctx: &ReducerContext, bearer: u64, attacker: u64, spell: u32) {
+    use lyracore_protocol::messages::vanilla::SMSG_SPELLORDAMAGE_IMMUNE;
+    emit(
+        ctx,
+        bearer,
+        ServerOpcodeMessage::SMSG_SPELLORDAMAGE_IMMUNE(Box::new(SMSG_SPELLORDAMAGE_IMMUNE {
+            caster: Guid::new(bearer),
+            target: Guid::new(attacker),
+            id: spell,
+            debug_log_format: false,
+        })),
+        false,
+    );
+}
+
 pub(crate) fn combat_event(ctx: &ReducerContext, event: &CombatEvent) {
     if event.ranged_spell_id != 0 {
         let ammo = (event.ammo_display_id != 0).then_some((event.ammo_display_id, 24));
