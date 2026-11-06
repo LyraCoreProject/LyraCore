@@ -428,7 +428,7 @@ mod tests {
         let mut effect = effect(133, 0);
         effect.points_per_combo = 3.5;
         effect.bonus_coefficient = 0.75;
-        assert!(effect.sql_values().ends_with(",3.5,0.75)"));
+        assert!(effect.sql_values().ends_with(",3.5,0.75,false)"));
     }
 
     #[test]

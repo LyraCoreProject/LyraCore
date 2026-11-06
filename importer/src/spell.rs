@@ -24,11 +24,11 @@ use lyracore_importer::spell_kind::{
 use std::path::Path;
 
 use lyracore_shared::spell::taxonomy::{
-    A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN, A_MOD_HEALTH_POWER,
-    A_MOD_POWER_REGEN_PCT, A_MOD_RESISTANCE, A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED,
-    A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE,
-    A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_TRANSFORM,
-    COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DMG_DONE, COMBAT_DODGE, COMBAT_HEALING_POWER,
+    A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN, A_MOD_HEALING,
+    A_MOD_HEALTH_POWER, A_MOD_POWER_REGEN_PCT, A_MOD_RESISTANCE, A_MOD_SPEED, A_MOD_STAT,
+    A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL,
+    A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT,
+    A_SPELLMOD_PCT, A_TRANSFORM, COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DMG_DONE, COMBAT_DODGE,
     COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO,
     E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL,
     E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE,
@@ -406,7 +406,7 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
         }
         // SpellModOp, including 0 for damage and 10 for cast time.
         A_SPELLMOD_FLAT | A_SPELLMOD_PCT => (misc as i32, P_SPELLMOD_OP),
-        A_MOD_RESISTANCE => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
+        A_MOD_RESISTANCE | A_MOD_HEALING => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
         A_MOD_DAMAGE_TAKEN => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
         A_ABSORB => match aura {
             ManaShield => (0, P_NONE),
@@ -421,7 +421,6 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
                 ModSpellCritChance => i32::from(COMBAT_SPELL_CRIT),
                 ModRangedAttackPower => i32::from(COMBAT_RANGED_ATTACK_POWER),
                 ModHitChance | ModSpellHitChance => i32::from(COMBAT_HIT),
-                ModHealingDone => i32::from(COMBAT_HEALING_POWER),
                 ModDodgePercent => i32::from(COMBAT_DODGE),
                 ModTotalThreat | ModThreat => i32::from(COMBAT_THREAT),
                 _ => i32::from(COMBAT_ATTACK_POWER),
@@ -481,7 +480,7 @@ fn is_reducing_modifier_aura(effect_id: i32, aura: AuraMod, base_points: i32) ->
         && base_points < 0
         && matches!(
             aura_mod_to_kind(aura),
-            A_MOD_STAT | A_MOD_RESISTANCE | A_MOD_COMBAT
+            A_MOD_STAT | A_MOD_RESISTANCE | A_MOD_COMBAT | A_MOD_HEALING
         )
 }
 
@@ -1559,6 +1558,7 @@ fn kind_name(kind: u8) -> &'static str {
         A_MOD_COMBAT => "A_MOD_COMBAT",
         A_MOD_SPEED => "A_MOD_SPEED",
         A_MOD_HEALTH_POWER => "A_MOD_HEALTH_POWER",
+        A_MOD_HEALING => "A_MOD_HEALING",
         A_MOD_DAMAGE_TAKEN => "A_MOD_DAMAGE_TAKEN",
         A_CONTROL => "A_CONTROL",
         A_IMMUNITY => "A_IMMUNITY",
@@ -1825,7 +1825,7 @@ mod tests {
             (effect.points_per_combo, effect.bonus_coefficient),
             (5.0, 0.5)
         );
-        assert!(effect.sql_values().ends_with(",5.0,0.5)"));
+        assert!(effect.sql_values().ends_with(",5.0,0.5,false)"));
     }
 
     #[test]
@@ -2794,7 +2794,7 @@ mod tests {
             (23, 758, -1, 0, (6, 1, 0), false),
             (29, 7363, 3, 4, (35, 1, 0), false),
             (30, 7515, 2, 95, (6, 1, 0), false),
-            (31, 17625, 7, 0, (6, 1, 0), true),
+            (31, 17625, 7, 0, (6, 1, 0), false),
             (42, 4070, 0, 0, (6, 1, 0), false),
             (43, 16550, 59, 0, (6, 1, 0), false),
             (45, 4152, 0, 7, (6, 1, 0), false),
@@ -2852,6 +2852,11 @@ mod tests {
     }
 
     #[test]
+    fn equip_review_unholy_aura_speed_is_inert_until_mounted_and_slow_stacking_match() {
+        assert!(!equip_review_effect(17625, 31, 7, 0, (6, 1, 0)).equip_supported);
+    }
+
+    #[test]
     fn equip_review_18052_flat_school_damage_is_inert_until_its_bonus_is_supported() {
         assert_eq!(
             equip_review_effect(18052, 13, 33, 126, (6, 1, 0)).kind,
@@ -2886,7 +2891,10 @@ mod tests {
     #[test]
     fn equip_review_7678_healing_does_not_increase_spell_damage() {
         let effect = equip_review_effect(7678, 135, 8, 126, (6, 1, 0));
-        assert_eq!((effect.base_points, effect.p0), (9, 12));
+        assert_eq!(
+            (effect.kind, effect.base_points, effect.p0, effect.p0_kind),
+            (0xb8, 9, 126, P_SCHOOL_MASK)
+        );
     }
 
     #[test]
@@ -3514,8 +3522,8 @@ mod tests {
         );
         assert_eq!(aura_mod_to_kind(ModDamageDone), E_SCRIPTED);
         assert_eq!(
-            resolve_aura_params(A_MOD_COMBAT, ModHealingDone, 0),
-            (i32::from(COMBAT_HEALING_POWER), P_COMBAT_FIELD)
+            resolve_aura_params(A_MOD_HEALING, ModHealingDone, 126),
+            (126, P_SCHOOL_MASK)
         );
     }
 
@@ -3717,6 +3725,7 @@ mod tests {
         assert!(is_reducing_modifier_aura(6, ModResistance, -90));
         assert!(is_reducing_modifier_aura(6, ModAttackPower, -35));
         assert!(is_reducing_modifier_aura(6, ModStat, -10));
+        assert!(is_reducing_modifier_aura(6, ModHealingDone, -25));
         assert!(!is_reducing_modifier_aura(6, ModAttackPower, 15));
         assert!(!is_reducing_modifier_aura(6, ModResistance, 2000));
         assert!(!is_reducing_modifier_aura(6, PeriodicDamage, -5));

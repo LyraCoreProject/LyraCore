@@ -844,7 +844,7 @@ that every spell or baseline combat calculation is complete.
 | 23 PeriodicTriggerSpell | 9 | periodic trigger needs mechanics | Inert | 758 |
 | 29 ModStat | 1 | stat_bonus supports self auras; selected effect 35 needs area mechanics | Inert for the selected Item | 7363 |
 | 30 ModSkill | 206 | skill modifier needs mechanics | Inert | 7515 |
-| 31 ModIncreaseSpeed | 62 | run_speed; strongest positive percent | Correct | 17625 |
+| 31 ModIncreaseSpeed | 62 | run_speed lacks faithful mounted and slow composition | Inert | 17625 |
 | 42 ProcTriggerSpell | 52 | item proc restrictions not certified | Inert | 4070 |
 | 43 ProcTriggerDamage | 1 | item proc restrictions not certified | Inert | 16550 |
 | 45 TrackResources | 2 | tracking placeholder | Inert | 4152 |
@@ -874,7 +874,7 @@ that every spell or baseline combat calculation is complete.
 | 124 ModRangedAttackPower | 305 | ranged_sheet_values and ranged attacks; flat AP | Correct | 9138 |
 | 130 ModMountedSpeedAlways | 1 | mounted-speed stacking not certified | Inert | 13587 |
 | 131 ModRangedAttackPowerVersus | 39 | ranged AP needs creature-type selection | Inert | 14097 |
-| 135 ModHealingDone | 1017 | healing_power; flat healing only | Correct | 7678 |
+| 135 ModHealingDone | 1017 | healing_power; flat healing by school mask | Correct | 7678 |
 | 138 ModMeleeHaste | 3 | melee haste must stay separate from ranged haste | Inert | 18065 |
 | 139 ForceReaction | 1 | faction reaction needs mechanics | Inert | 28282 |
 | 140 ModRangedHaste | 1 | ranged haste must stay separate from melee haste | Inert | 23674 |

@@ -459,11 +459,9 @@ pub(crate) fn spell_power(ctx: &ReducerContext, caster_guid: u64, school_mask: u
 
 pub(crate) fn healing_power(ctx: &ReducerContext, caster_guid: u64, school_mask: u8) -> i32 {
     spell_power(ctx, caster_guid, school_mask)
-        .saturating_add(combat_field_bonus(
-            ctx,
-            caster_guid,
-            lyracore_shared::spell::taxonomy::COMBAT_HEALING_POWER,
-        ))
+        .saturating_add(sum_active_auras(ctx, caster_guid, |aura| {
+            aura.eff_kind == A_MOD_HEALING && aura.eff_p0 & i32::from(school_mask) != 0
+        }))
         .saturating_add(crate::items::equipped_school_stat_bonus(
             ctx,
             caster_guid,
