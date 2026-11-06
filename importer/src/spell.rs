@@ -103,6 +103,37 @@ fn triggers_weapon_procs(s: &Spell) -> bool {
         || s.custom_flags & lyracore_shared::spell_custom::TRIGGER_WEAPON_PROCS != 0
 }
 
+fn roll_cast_flags(spell: &Spell) -> u32 {
+    use lyracore_shared::spell::taxonomy::{
+        SPELL_ATTR_ALWAYS_HIT, SPELL_ATTR_BINARY, SPELL_ATTR_CANNOT_CRIT,
+        SPELL_ATTR_IGNORE_RESISTANCES, SPELL_ATTR_MAGIC_HIT,
+    };
+    let binary = spell.damage_class == 1
+        && spell.school != 0
+        && (matches!(spell.id, 26143 | 26478)
+            || (0..3).any(|index| match spell.effect[index] {
+                68 | 98 => true,
+                6 => matches!(
+                    AuraMod::from_int(spell.effect_aura[index]),
+                    Ok(AuraMod::ModFear
+                        | AuraMod::ModStun
+                        | AuraMod::ModDamageTaken
+                        | AuraMod::ModResistance
+                        | AuraMod::ModPacify
+                        | AuraMod::ModRoot
+                        | AuraMod::ModSilence
+                        | AuraMod::ModDecreaseSpeed
+                        | AuraMod::ModDisarm)
+                ),
+                _ => false,
+            }));
+    (u32::from(binary) * SPELL_ATTR_BINARY)
+        | (u32::from(spell.damage_class == 1) * SPELL_ATTR_MAGIC_HIT)
+        | (u32::from(spell.attributes_ex2 & 0x2000_0000 != 0) * SPELL_ATTR_CANNOT_CRIT)
+        | (u32::from(spell.attributes_ex3 & 0x0004_0000 != 0) * SPELL_ATTR_ALWAYS_HIT)
+        | (u32::from(spell.attributes_ex4 & 1 != 0) * SPELL_ATTR_IGNORE_RESISTANCES)
+}
+
 // Overpower carries the finisher bit for its dodge window; passive talents are never cast.
 fn is_combo_finisher(s: &Spell) -> bool {
     s.attributes_ex1 & ATTR_EX1_FINISHER_MASK != 0
@@ -831,6 +862,7 @@ fn push_spell_header_row(
     if triggers_weapon_procs(s) {
         cast_flags |= SPELL_ATTR_WEAPON_PROCS;
     }
+    cast_flags |= roll_cast_flags(s);
     let stances = translate_stance_mask(s.shapeshift_mask);
     let spell_level = s.spell_level.min(255) as u8;
     spell_levels.insert(spell_id, spell_level);
@@ -3744,5 +3776,98 @@ mod binding_tests {
         }
         assert_eq!(instant_effect_to_kind(56), E_SUMMON_PET);
         assert_eq!(resolve_instant_params(E_SUMMON_PET, 416, 0), (416, P_ENTRY));
+    }
+}
+
+#[cfg(test)]
+mod roll_metadata_tests {
+    use super::*;
+    use lyracore_shared::spell::taxonomy::{
+        SPELL_ATTR_ALWAYS_HIT, SPELL_ATTR_BINARY, SPELL_ATTR_CANNOT_CRIT,
+        SPELL_ATTR_IGNORE_RESISTANCES, SPELL_ATTR_MAGIC_HIT,
+    };
+
+    #[test]
+    fn binary_classification_reads_original_effects_before_aura_translation() {
+        let mut spell = Spell {
+            id: 116,
+            school: 4,
+            damage_class: 1,
+            effect: [2, 6, 0],
+            effect_aura: [0, 33, 0],
+            ..Default::default()
+        };
+        assert_eq!(
+            roll_cast_flags(&spell) & SPELL_ATTR_BINARY,
+            SPELL_ATTR_BINARY
+        );
+        for aura in [7, 12, 14, 22, 25, 26, 27, 33, 67] {
+            spell.effect_aura[1] = aura;
+            assert_eq!(
+                roll_cast_flags(&spell) & SPELL_ATTR_BINARY,
+                SPELL_ATTR_BINARY
+            );
+        }
+        for aura in [3, 5, 8, 101] {
+            spell.effect_aura[1] = aura;
+            assert_eq!(roll_cast_flags(&spell) & SPELL_ATTR_BINARY, 0);
+        }
+        spell.effect = [2, 68, 0];
+        assert_eq!(
+            roll_cast_flags(&spell) & SPELL_ATTR_BINARY,
+            SPELL_ATTR_BINARY
+        );
+        spell.effect[1] = 98;
+        assert_eq!(
+            roll_cast_flags(&spell) & SPELL_ATTR_BINARY,
+            SPELL_ATTR_BINARY
+        );
+        spell.damage_class = 2;
+        assert_eq!(roll_cast_flags(&spell) & SPELL_ATTR_BINARY, 0);
+        spell.damage_class = 1;
+        spell.school = 0;
+        assert_eq!(roll_cast_flags(&spell) & SPELL_ATTR_BINARY, 0);
+        spell.school = 2;
+        spell.effect = [2, 0, 0];
+        assert_eq!(roll_cast_flags(&spell) & SPELL_ATTR_BINARY, 0);
+        for id in [26143, 26478] {
+            spell.id = id;
+            assert_eq!(
+                roll_cast_flags(&spell) & SPELL_ATTR_BINARY,
+                SPELL_ATTR_BINARY
+            );
+        }
+    }
+
+    #[test]
+    fn magic_hit_classification_does_not_require_a_direct_damage_effect() {
+        let mut spell = Spell {
+            damage_class: 1,
+            effect: [6, 0, 0],
+            effect_aura: [3, 0, 0],
+            ..Default::default()
+        };
+        assert_eq!(
+            roll_cast_flags(&spell) & SPELL_ATTR_MAGIC_HIT,
+            SPELL_ATTR_MAGIC_HIT
+        );
+        for class in [0, 2, 3] {
+            spell.damage_class = class;
+            assert_eq!(roll_cast_flags(&spell) & SPELL_ATTR_MAGIC_HIT, 0);
+        }
+    }
+
+    #[test]
+    fn source_roll_attributes_survive_import() {
+        let spell = Spell {
+            attributes_ex2: 0x2000_0000,
+            attributes_ex3: 0x0004_0000,
+            attributes_ex4: 1,
+            ..Default::default()
+        };
+        assert_eq!(
+            roll_cast_flags(&spell),
+            SPELL_ATTR_CANNOT_CRIT | SPELL_ATTR_ALWAYS_HIT | SPELL_ATTR_IGNORE_RESISTANCES
+        );
     }
 }

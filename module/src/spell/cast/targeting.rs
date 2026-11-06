@@ -52,20 +52,42 @@ impl EffectHit {
 }
 
 /// An absent target counts as equal level.
-pub(crate) fn spell_misses(ctx: &ReducerContext, caster_level: u8, target_guid: u64) -> bool {
-    let target_level = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(target_guid)
-        .map(|t| t.level)
-        .unwrap_or(caster_level as u32);
-    #[cfg(feature = "conformance_test_fixture")]
-    let draw = crate::conformance_rolls::spell_target_draw(ctx, target_guid)
-        .unwrap_or_else(|| ctx.random::<u32>());
-    #[cfg(not(feature = "conformance_test_fixture"))]
-    let draw = ctx.random::<u32>();
-    (draw % 10_000) < spell_miss_chance_bp(caster_level as u32, target_level)
+pub(crate) fn spell_misses(
+    ctx: &ReducerContext,
+    caster_level: u8,
+    target_guid: u64,
+    spell: &Spell,
+) -> bool {
+    if spell.cast_flags & SPELL_ATTR_IGNORE_RESISTANCES != 0 {
+        return false;
+    }
+    let target = ctx.db.game_world_entity().guid().find(target_guid);
+    let target_level = target
+        .as_ref()
+        .map_or(u32::from(caster_level), |target| target.level);
+    let target_is_character = target.as_ref().is_some_and(|target| target.is_player());
+    let binary_resistance = if spell.cast_flags & SPELL_ATTR_BINARY != 0 {
+        crate::spell::rolls::resistance_chance(
+            resistance_bonus(ctx, target_guid, spell.school_mask),
+            u32::from(caster_level),
+            target_level,
+            target_is_character,
+            false,
+        )
+    } else {
+        0.0
+    };
+    let miss = if spell.cast_flags & SPELL_ATTR_ALWAYS_HIT != 0 {
+        0
+    } else {
+        crate::spell::rolls::magic_miss_bp(
+            u32::from(caster_level),
+            target_level,
+            target_is_character,
+            binary_resistance,
+        )
+    };
+    crate::spell::rolls::integer_roll(ctx, target_guid, 10_000) < miss
 }
 
 pub(crate) fn recipe_reagents(ctx: &ReducerContext, spell_id: u32) -> Vec<(u32, u32)> {
@@ -913,7 +935,9 @@ fn apply_damage_effect(
                 .unwrap_or_else(|| ctx.random::<u32>());
             #[cfg(not(feature = "conformance_test_fixture"))]
             let draw = ctx.random::<u32>();
-            let is_crit = (draw % 10_000) < spell_crit_bp(ctx, caster_guid);
+            let is_crit = hdr.cast_flags & SPELL_ATTR_CANNOT_CRIT == 0
+                && hdr.school_mask & RESIST_ARMOR == 0
+                && crate::spell::rolls::chance_succeeds(spell_crit_chance(ctx, caster_guid), draw);
             let crit_scaled = apply_spell_crit(scaled, is_crit);
             let after_resist =
                 source_behavior::mitigate_spell(ctx, hdr, caster_guid, target_guid, crit_scaled);

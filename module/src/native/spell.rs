@@ -97,7 +97,7 @@ pub(crate) fn spell_impact(ctx: &ReducerContext, event: &SpellImpactEvent) {
 }
 
 fn damage_log(row: &SpellCastEvent) -> Option<Packet> {
-    (row.damage > 0).then(|| {
+    (row.damage > 0 || row.absorbed > 0 || row.resisted > 0).then(|| {
         let log = codec::build_spell_non_melee_damage_log(
             row.target_guid,
             row.caster_guid,
@@ -326,39 +326,62 @@ fn periodic_log_outbound(row: &SpellCastEvent) -> Option<Packet> {
 mod tests {
     use super::*;
 
+    fn event() -> SpellCastEvent {
+        SpellCastEvent {
+            id: 0,
+            caster_guid: 1,
+            spell_id: 12544,
+            created_at: spacetimedb::Timestamp::UNIX_EPOCH,
+            target_guid: 1,
+            cast_time_ms: 0,
+            is_completion: false,
+            damage: 0,
+            school: 0,
+            is_crit: false,
+            resisted: 0,
+            absorbed: 0,
+            is_interrupted: false,
+            cooldown_ms: 10000,
+            delay_ms: 0,
+            healed: 0,
+            is_proc_log: false,
+            swing_hit_info: 0,
+            client_initiated: false,
+            map_id: 0,
+            instance_id: 0,
+            grid_x: 0,
+            grid_y: 0,
+            failure_reason: 0,
+            kind: SpellCastEventKind::Go as u8,
+            miss_info: 0,
+            energized: 0,
+            power_type: 0,
+        }
+    }
+
+    #[test]
+    fn zero_damage_still_logs_absorption_and_resistance() {
+        let mut row = event();
+        row.kind = SpellCastEventKind::ProcLog as u8;
+        assert!(cast_event_messages(&row, None).is_empty());
+        for (damage, absorbed, resisted) in [(1, 0, 0), (0, 1, 0), (0, 0, 1)] {
+            row.damage = damage;
+            row.absorbed = absorbed;
+            row.resisted = resisted;
+            let packets = cast_event_messages(&row, None);
+            assert_eq!(packets.len(), 1);
+            assert_eq!(packets[0].1.opcode, 0x0250);
+            assert!(matches!(packets[0].0, EventAudience::Everyone));
+        }
+    }
+
     #[test]
     fn cast_cooldowns_go_to_the_caster_while_spell_go_reaches_observers() {
         for (caster, client_initiated) in [(1, false), (1, true), (0xF130000001000001, false)] {
-            let row = SpellCastEvent {
-                id: 0,
-                caster_guid: caster,
-                spell_id: 12544,
-                created_at: spacetimedb::Timestamp::UNIX_EPOCH,
-                target_guid: caster,
-                cast_time_ms: 0,
-                is_completion: false,
-                damage: 0,
-                school: 0,
-                is_crit: false,
-                resisted: 0,
-                absorbed: 0,
-                is_interrupted: false,
-                cooldown_ms: 10000,
-                delay_ms: 0,
-                healed: 0,
-                is_proc_log: false,
-                swing_hit_info: 0,
-                client_initiated,
-                map_id: 0,
-                instance_id: 0,
-                grid_x: 0,
-                grid_y: 0,
-                failure_reason: 0,
-                kind: SpellCastEventKind::Go as u8,
-                miss_info: 0,
-                energized: 0,
-                power_type: 0,
-            };
+            let mut row = event();
+            row.caster_guid = caster;
+            row.target_guid = caster;
+            row.client_initiated = client_initiated;
             let packets = cast_event_messages(&row, None);
             let cooldowns: Vec<_> = packets
                 .iter()

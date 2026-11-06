@@ -343,8 +343,15 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     .find(a.spell_id)
                     .map(|s| s.school_mask)
                     .unwrap_or(0);
-                let amount =
-                    resist_magic_damage(ctx, a.target_guid, school, a.level as u32, a.amount);
+                let amount = resist_magic_damage(
+                    ctx,
+                    a.target_guid,
+                    school,
+                    a.level as u32,
+                    a.amount,
+                    a.spell_id,
+                    true,
+                );
                 crate::spell::SpellCastEvent::insert(
                     ctx,
                     SpellCastEvent {
@@ -635,7 +642,15 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 .collect();
 
         for t in targets {
-            let resisted = apply_resistance(ctx, t, a.caster_guid, a.school_mask, a.amount);
+            let resisted = resist_magic_damage(
+                ctx,
+                t,
+                a.school_mask,
+                caster.as_ref().map_or(0, |caster| caster.level),
+                a.amount,
+                a.spell_id,
+                true,
+            );
             let (dealt, absorbed) = apply_target_damage(
                 ctx,
                 t,
@@ -643,7 +658,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 resisted,
                 crate::combat::Hit::triggered(),
             );
-            if dealt > 0 || absorbed > 0 {
+            if dealt > 0 || absorbed > 0 || a.amount > resisted {
                 crate::spell::SpellCastEvent::insert(
                     ctx,
                     crate::spell::SpellCastEvent {

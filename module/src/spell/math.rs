@@ -69,13 +69,6 @@ pub(crate) fn compose_magnitude(base_points: i32, spell_power: i32, coeff_pct: i
     base_points + sp * coeff_pct / 100
 }
 
-pub(crate) const SPELL_CRIT_BP: u32 = 0;
-
-// Low-level approximation; 100 and 5 are tuning constants rather than an exact vanilla curve.
-pub(crate) fn intellect_crit_bp(intellect: u32, level: u32) -> u32 {
-    intellect * 100 / (level + 5)
-}
-
 pub(crate) fn apply_spell_crit(dmg: i32, is_crit: bool) -> i32 {
     if is_crit {
         dmg * 3 / 2
@@ -84,32 +77,29 @@ pub(crate) fn apply_spell_crit(dmg: i32, is_crit: bool) -> i32 {
     }
 }
 
-pub(crate) fn spell_crit_bp_with_bonus(bonus: i32) -> u32 {
-    (SPELL_CRIT_BP as i32 + bonus).clamp(0, 10_000) as u32
-}
-
+#[cfg(any(test, feature = "debug_reducers"))]
 pub(crate) fn spell_miss_chance_bp(attacker_level: u32, target_level: u32) -> u32 {
-    let diff = target_level.saturating_sub(attacker_level);
-    let bp = match diff {
-        0 => 400,
-        1 => 500,
-        2 => 600,
-        d => 600 + (d - 2) * 1100,
-    };
-    bp.min(9900)
+    super::rolls::magic_miss_bp(attacker_level, target_level, false, 0.0)
 }
 
+#[cfg(feature = "debug_reducers")]
 pub(crate) fn spell_crit_bp(ctx: &ReducerContext, caster_guid: u64) -> u32 {
-    let level = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(caster_guid)
-        .map(|c| c.level)
-        .unwrap_or(0);
-    let int_crit =
-        intellect_crit_bp(effective_intellect(ctx, caster_guid).max(0) as u32, level) as i32;
-    spell_crit_bp_with_bonus(int_crit + combat_field_bonus(ctx, caster_guid, COMBAT_CRIT))
+    (spell_crit_chance(ctx, caster_guid) * 100.0) as u32
+}
+
+pub(crate) fn spell_crit_chance(ctx: &ReducerContext, caster_guid: u64) -> f32 {
+    let Some(caster) = ctx.db.game_world_entity().guid().find(caster_guid) else {
+        return 0.0;
+    };
+    if !caster.is_player() && (caster.owner_guid == 0 || caster.owner_guid >> 48 != 0) {
+        return 0.0;
+    }
+    let base = super::rolls::intellect_crit_chance(
+        caster.is_player().then(|| caster.class()),
+        effective_intellect(ctx, caster_guid).max(0) as u32,
+        caster.level,
+    );
+    (base + combat_field_bonus(ctx, caster_guid, COMBAT_CRIT) as f32 / 100.0).clamp(0.0, 100.0)
 }
 
 pub(crate) fn is_on_cooldown(now_micros: i64, ready_micros: i64) -> bool {
@@ -178,6 +168,7 @@ pub(crate) fn apply_resistance(
     caster_guid: u64,
     school_mask: u8,
     dmg: i32,
+    spell_id: u32,
 ) -> i32 {
     let caster_level = ctx
         .db
@@ -186,7 +177,15 @@ pub(crate) fn apply_resistance(
         .find(caster_guid)
         .map(|c| c.level)
         .unwrap_or(0);
-    resist_magic_damage(ctx, target_guid, school_mask, caster_level, dmg)
+    resist_magic_damage(
+        ctx,
+        target_guid,
+        school_mask,
+        caster_level,
+        dmg,
+        spell_id,
+        false,
+    )
 }
 
 pub(crate) fn resist_magic_damage(
@@ -195,24 +194,40 @@ pub(crate) fn resist_magic_damage(
     school_mask: u8,
     level: u32,
     dmg: i32,
+    spell_id: u32,
+    periodic: bool,
 ) -> i32 {
     if dmg <= 0 {
         return dmg;
     }
-    let magic_mask = school_mask & !RESIST_ARMOR;
-    if magic_mask == 0 {
+    if school_mask == 0 || school_mask & RESIST_ARMOR != 0 {
         return dmg;
     }
-    let resistance = resistance_bonus(ctx, target_guid, magic_mask).max(0) as u32;
-    if resistance == 0 {
+    let flags = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(spell_id)
+        .map_or(0, |spell| spell.cast_flags);
+    if flags & SPELL_ATTR_IGNORE_RESISTANCES != 0 {
         return dmg;
     }
-    let pct = crate::combat::resist_mitigation_pct(resistance, level);
-    apply_resist_pct(dmg, pct)
-}
-
-pub(crate) fn apply_resist_pct(dmg: i32, pct: u32) -> i32 {
-    (dmg - dmg * pct as i32 / 100).max(1)
+    let target = ctx.db.game_world_entity().guid().find(target_guid);
+    let chance = super::rolls::resistance_chance(
+        resistance_bonus(ctx, target_guid, school_mask),
+        level,
+        target.as_ref().map_or(level, |target| target.level),
+        target.as_ref().is_some_and(|target| target.is_player()),
+        true,
+    );
+    if flags & SPELL_ATTR_BINARY != 0 && chance >= 0.0 {
+        return dmg;
+    }
+    let periodic = periodic && !matches!(spell_id, 23461 | 24818 | 25812 | 28531);
+    let roll = super::rolls::integer_roll(ctx, target_guid, 99);
+    let quarters = super::rolls::resistance_quarters(chance, periodic, roll);
+    let dither = super::rolls::target_draw(ctx, target_guid);
+    super::rolls::damage_after_resistance(dmg, quarters, dither)
 }
 
 pub(crate) fn dispel_category_matches(dispel_cat: u8, aura_cat: u8) -> bool {
@@ -653,16 +668,6 @@ mod tests {
         assert_eq!(projectile_travel_ms(0.0, 21.0), 0);
         assert_eq!(projectile_travel_ms(30.0, 0.0), 0);
         assert_eq!(projectile_travel_ms(30.0, -1.0), 0);
-    }
-
-    #[test]
-    fn apply_resist_pct_scales_and_floors_at_one() {
-        assert_eq!(apply_resist_pct(100, 0), 100);
-        assert_eq!(apply_resist_pct(100, 50), 50);
-        assert_eq!(apply_resist_pct(100, 75), 25);
-        assert_eq!(apply_resist_pct(4, 75), 1);
-        assert_eq!(apply_resist_pct(100, 100), 1);
-        assert_eq!(apply_resist_pct(1, 75), 1);
     }
 
     fn shield(id: u64, amount_remaining: i32) -> Aura {

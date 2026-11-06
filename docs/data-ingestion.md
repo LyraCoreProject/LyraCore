@@ -480,7 +480,7 @@ An extra field restores alignment at the localized name, column 120.
 | Consumed fields | Build 5875 columns |
 |---|---|
 | ID, school, dispel, mechanic | 0, 1, 4, 5 |
-| Attributes, AttributesEx1, AttributesEx2, stance mask | 6, 7, 8, 11 |
+| Attributes, AttributesEx1–4, stance mask | 6, 7..10, 11 |
 | Explicit target flags | 13 |
 | Required spell focus, cast time, recovery times | 15, 18, 19, 20 |
 | Aura interrupt, Proc mask, chance, charges | 22, 24, 25, 26 |
@@ -490,6 +490,14 @@ An extra field restores alignment at the localized name, column 120.
 | Mechanics, target A, target B, radii, auras, amplitudes | 79..81, 82..84, 85..87, 88..90, 91..93, 94..96 |
 | Multipliers, chain targets, item references, miscellaneous values, triggered spells, combo scaling | 97..99, 100..102, 103..105, 106..108, 109..111, 112..114 |
 | English name, family, complete 64-bit family mask | 120, 160, 161..162 |
+| Damage class | 164 |
+
+Spell import keeps magic hit testing, binary resistance, cannot-crit, always-hit and ignore-resistance
+behavior in `cast_flags`. The magic hit flag comes from damage class 1, independently of effect kind.
+Binary classification uses the original damage class, effects and aura types, before the effect
+translation combines related aura types. It follows `Spells::IsBinary` in the
+[pinned vmangos source](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellMgr.cpp).
+Reimport the `spell` family to give existing Realms these flags.
 
 Spell output retains its existing magnitude convention, base points plus one, and auxiliary-table
 range, radius, duration and cast-time resolution. Item enchantments retain base points plus base dice.

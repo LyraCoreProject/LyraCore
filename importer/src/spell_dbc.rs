@@ -12,6 +12,9 @@ pub(crate) struct Spell {
     pub(crate) attributes: u32,
     pub(crate) attributes_ex1: u32,
     pub(crate) attributes_ex2: u32,
+    pub(crate) attributes_ex3: u32,
+    pub(crate) attributes_ex4: u32,
+    pub(crate) damage_class: u32,
     pub(crate) shapeshift_mask: u32,
     pub(crate) targets: u32,
     pub(crate) requires_spell_focus: u32,
@@ -111,6 +114,9 @@ pub(crate) fn read_spells(bytes: &[u8]) -> Result<Vec<Spell>> {
                 attributes: column(6),
                 attributes_ex1: column(7),
                 attributes_ex2: column(8),
+                attributes_ex3: column(9),
+                attributes_ex4: column(10),
+                damage_class: column(164),
                 shapeshift_mask: column(11),
                 targets: column(13),
                 requires_spell_focus: column(15),
@@ -179,6 +185,19 @@ mod tests {
         }
         bytes.resize(713, 0);
         bytes
+    }
+
+    #[test]
+    fn spell_roll_metadata_keeps_the_build_5875_columns() {
+        let mut bytes = empty_spell();
+        for (column, value) in [(9, 0x0004_0000_u32), (10, 1), (164, 1)] {
+            let at = 20 + column * 4;
+            bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
+        }
+        let spell = read_spells(&bytes).unwrap().remove(0);
+        assert_eq!(spell.attributes_ex3, 0x0004_0000);
+        assert_eq!(spell.attributes_ex4, 1);
+        assert_eq!(spell.damage_class, 1);
     }
 
     #[test]

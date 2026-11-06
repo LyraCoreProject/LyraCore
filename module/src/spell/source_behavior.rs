@@ -44,7 +44,7 @@ pub(crate) fn mitigate_spell(
             return (i64::from(damage) * i64::from(100 - percent) / 100).max(1) as i32;
         }
     }
-    apply_resistance(ctx, target, caster, hdr.school_mask, damage)
+    apply_resistance(ctx, target, caster, hdr.school_mask, damage, hdr.spell_id)
 }
 
 pub(crate) fn aura_casters_coexist(hdr: &Spell, kind: u8) -> bool {

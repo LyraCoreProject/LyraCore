@@ -216,21 +216,33 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 10 WHERE guid = {wolf}"
     ));
-    for (index, (school, expected)) in
-        [(2u8, 90u32), (4, 85), (8, 81), (16, 76), (32, 72), (64, 67)]
-            .into_iter()
-            .enumerate()
+    shard.assert_sql("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES (1,1,0)");
+    for (index, (school, seeds)) in [
+        (2u8, [32u64, 125]),
+        (4, [32, 125]),
+        (8, [125, 12]),
+        (16, [246, 15]),
+        (32, [89, 16]),
+        (64, [43, 25]),
+    ]
+    .into_iter()
+    .enumerate()
     {
         let spell = 5090210 + index as u32;
         create_damage_spell(&shard, spell, school);
-        shard.assert_call("debug_compute_spell", &[&wolf, "1", &spell.to_string()]);
-        assert_eq!(
-            readout(&shard, "spell")["spell_hit_normal"]
-                .parse::<u32>()
-                .unwrap(),
-            expected,
-            "school mask {school} used the wrong resistance"
-        );
+        for (seed, expected) in seeds.into_iter().zip([25, 50]) {
+            shard.assert_sql(&format!(
+                "UPDATE game_conformance_spell_random SET state = {seed} WHERE character_guid = 1"
+            ));
+            shard.assert_call("debug_compute_spell", &[&wolf, "1", &spell.to_string()]);
+            assert_eq!(
+                readout(&shard, "spell")["spell_hit_normal"]
+                    .parse::<u32>()
+                    .unwrap(),
+                expected,
+                "school mask {school}, seed {seed} used the wrong resistance"
+            );
+        }
     }
 
     shard.assert_sql(
@@ -252,6 +264,9 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
     );
     assert_eq!(broken["block_bp"], "0");
     assert_eq!(broken["mitigation_pct"], "3");
+    shard.assert_sql(
+        "UPDATE game_conformance_spell_random SET state = 125 WHERE character_guid = 1",
+    );
     shard.assert_call("debug_compute_spell", &[&wolf, "1", "5090211"]);
     assert_eq!(readout(&shard, "spell")["spell_hit_normal"], "100");
 }
