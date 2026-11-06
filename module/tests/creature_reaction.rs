@@ -278,11 +278,10 @@ fn taxi_takeoff_clears_a_passive_creatures_threat_only_combat() {
         !in_combat(&target),
         "a passive creature must leave combat after its last hostile reference goes offline"
     );
-    assert!(in_combat("1"), "the passenger waits for its combat check");
-    for _ in 0..24 {
-        shard.assert_call("debug_advance_virtual_clock", &["50000"]);
-    }
-    assert!(!in_combat("1"));
+    assert!(
+        !in_combat("1"),
+        "arming an ordinary flight clears passenger combat"
+    );
 }
 
 #[test]
