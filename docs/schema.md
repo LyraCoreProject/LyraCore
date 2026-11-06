@@ -854,7 +854,11 @@ refresh, stack limit and dispel behavior; no numeric consumer reads this kind. T
 those effects on equipment. In particular, Thorns and Retribution Aura retain holders without
 reflection. Arcane Elixir, Greater Arcane Elixir and Ephemeral Power now add magic damage;
 Curse of Weakness reduces physical weapon damage. Dampen and Amplify Magic modify incoming
-spell damage and healing by school.
+spell damage and healing by school. They replace each other. The spell plan imports source
+stack groups for school modifiers, including Arcane versus Greater Arcane Elixir. The zero-default
+END column `game_spell_group.power_rank` preserves each source group's stronger-spell order.
+Groups with zero power ranks retain their existing magnitude comparisons. A cast checks every
+source group before it removes conflicting auras; a refusal preserves the active spell.
 Aspect of the Hawk contributes only its ranged AP to the separate ranged field. Unrestricted crit
 checks only the source equipment class of -1; masks are ignored in that case, including Recklessness
 and Elixir of the Mongoose. Ranged AP uses the class formula, and ranged damage retains its fraction

@@ -1361,6 +1361,7 @@ pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {
                     id: 0,
                     group_id,
                     spell_id,
+                    power_rank: 0,
                 });
             }
         }

@@ -256,7 +256,8 @@ refreshes obsolete metadata, converts percentage units once and clears obsolete 
 Aura writes notify connected clients and refresh their sheets. Existing cast magnitudes, stacks,
 application times and remaining durations stay frozen, apart from the unit conversion. A legacy
 Seal of Righteousness judgement marker restores a missing damage effect at its saved cast level
-and deadline. Buff and
+and deadline. School-modifier group repair keeps the source's stronger elixir or the newest
+exclusive spell and removes conflicting saved holders without refreshing their deadlines. Buff and
 debuff slots follow the current definition. Missing learned passives are restored without stacking
 existing effects. No manual Aura cleanup or recast is required. Repeating repair is idempotent.
 Unsupported cast modifiers retain ordinary Aura holders with inert numeric effects; this includes

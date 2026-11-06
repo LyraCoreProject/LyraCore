@@ -111,6 +111,54 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
     }
     restore_missing_seals(ctx);
     restore_missing_passives(ctx);
+    repair_school_modifier_groups(ctx);
+}
+
+fn repair_school_modifier_groups(ctx: &ReducerContext) {
+    let mut auras: Vec<_> = ctx
+        .db
+        .game_aura()
+        .iter()
+        .filter(|aura| {
+            matches!(
+                aura.eff_kind,
+                A_MOD_DAMAGE_DONE_FLAT
+                    | A_MOD_DAMAGE_TAKEN_FLAT
+                    | A_MOD_SCHOOL_CRIT
+                    | A_MOD_DAMAGE_DONE_PCT
+                    | A_MOD_HEALING_TAKEN
+            ) && aura.item_guid(ctx) == 0
+        })
+        .collect();
+    auras.sort_by_key(|aura| {
+        std::cmp::Reverse((aura.applied_at.to_micros_since_unix_epoch(), aura.id))
+    });
+    for aura in auras {
+        if ctx.db.game_aura().id().find(aura.id).is_none() {
+            continue;
+        }
+        if !super::stacking::apply_group_conflict(
+            ctx,
+            aura.spell_id,
+            aura.caster_guid,
+            aura.target_guid,
+            super::stacking::rank_of(ctx, aura.spell_id),
+            lyracore_shared::aura::stacked_amount(aura.amount, aura.stacks).saturating_abs(),
+        ) {
+            let siblings = ctx
+                .db
+                .game_aura()
+                .by_target()
+                .filter(aura.target_guid)
+                .filter(|row| {
+                    row.spell_id == aura.spell_id
+                        && row.caster_guid == aura.caster_guid
+                        && row.item_guid(ctx) == 0
+                })
+                .collect();
+            shed_auras(ctx, aura.target_guid, siblings);
+        }
+    }
 }
 
 fn restore_missing_seals(ctx: &ReducerContext) {

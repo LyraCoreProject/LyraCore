@@ -1,3 +1,6 @@
+#[path = "spell_groups.rs"]
+mod groups;
+
 use std::collections::BTreeMap;
 
 #[cfg(test)]
@@ -1786,16 +1789,14 @@ pub(crate) fn selected_world_plan(
             spell.id
         );
     }
-    let (mut rows, cov, _) = derive_spell_rows(
-        &open_spell_tables(Path::new(data_dir), spells)?,
-        only,
-        trainers,
-    )?;
+    let tables = open_spell_tables(Path::new(data_dir), spells)?;
+    let (mut rows, cov, _) = derive_spell_rows(&tables, only, trainers)?;
     let replaced: std::collections::HashSet<_> =
         rows.fishing.iter().map(SpellEffectRow::row_id).collect();
     rows.effects
         .retain(|effect| !replaced.contains(&effect.row_id()));
     let mut stmts = assemble_spell_sql(&rows, only, !trainers.is_empty());
+    groups::append(source, &tables.spells, &rows, &mut stmts)?;
     if only.is_empty() {
         stmts.push("DELETE FROM game_operator_spell_source WHERE spell_id < 50000".into());
     } else {

@@ -120,7 +120,7 @@ fn fireball(shard: &crate::standalone_support::Standalone, seed: u64) -> u32 {
 #[test]
 #[ignore = "requires World Source, client DBCs, SpacetimeDB 2.14.0 and Wasm"]
 fn actual_spell_power_world_plan_scales_cast_and_equipped_damage_once() {
-    let shard = imported_spells(&[133, 11390, 23271, 7685]);
+    let shard = imported_spells(&[133, 11390, 23271, 7685, 17539]);
     let ordinary = fireball(&shard, 0);
     assert!(ordinary > 0);
     cast(&shard, 1, 11390, 1);
@@ -152,19 +152,68 @@ fn actual_spell_power_world_plan_scales_cast_and_equipped_damage_once() {
     assert_eq!(fireball(&shard, 0), ordinary + 25);
     shard.assert_call("debug_repair_after_publish", &[]);
     assert_eq!(fireball(&shard, 0), ordinary + 25);
+    cast(&shard, 1, 17539, 1);
+    assert!((26..=27).contains(&(fireball(&shard, 0) - ordinary)));
+    cast(&shard, 1, 11390, 1);
+    assert!((26..=27).contains(&(fireball(&shard, 0) - ordinary)));
+    let greater = shard.query_rows(
+        "SELECT id,applied_at,expires_at FROM game_aura WHERE target_guid = 1 AND spell_id = 17539",
+    );
+    shard.assert_sql("UPDATE game_spell_group_rule SET rule = 0 WHERE group_id = 1023");
+    cast(&shard, 1, 11390, 1);
+    assert_eq!(
+        shard
+            .query_rows("SELECT id FROM game_aura WHERE target_guid = 1 AND spell_id = 11390")
+            .len(),
+        1
+    );
+    shard.assert_sql("UPDATE game_spell_group_rule SET rule = 3 WHERE group_id = 1023");
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert!(shard
+        .query_rows("SELECT id FROM game_aura WHERE target_guid = 1 AND spell_id = 11390")
+        .is_empty());
+    assert_eq!(shard.query_rows("SELECT id,applied_at,expires_at FROM game_aura WHERE target_guid = 1 AND spell_id = 17539"), greater);
+    assert!((26..=27).contains(&(fireball(&shard, 0) - ordinary)));
 }
 
 #[test]
 #[ignore = "requires World Source, client DBCs, SpacetimeDB 2.14.0 and Wasm"]
 fn actual_spell_power_world_plan_dampen_and_amplify_scale_incoming_damage() {
-    let shard = imported_spells(&[133, 604, 1008]);
+    let shard = imported_spells(&[133, 604, 1008, 20911, 25899]);
     let wolf = (0xf130u64 << 48) | (51000u64 << 24) | 1;
     let ordinary = fireball(&shard, 0);
     cast(&shard, wolf, 604, wolf);
     assert_eq!(fireball(&shard, 0), ordinary - 1);
-    shard.assert_sql("DELETE FROM game_aura WHERE spell_id = 604");
     cast(&shard, wolf, 1008, wolf);
     assert_eq!(fireball(&shard, 0), ordinary + 2);
+    shard.assert_sql("UPDATE game_spell_group_rule SET rule = 0 WHERE group_id = 1073741827");
+    cast(&shard, wolf, 604, wolf);
+    let dampen =
+        shard.query_rows("SELECT id,applied_at,expires_at FROM game_aura WHERE spell_id = 604");
+    shard.assert_sql("UPDATE game_spell_group_rule SET rule = 1 WHERE group_id = 1073741827");
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert!(shard
+        .query_rows("SELECT id FROM game_aura WHERE spell_id = 1008")
+        .is_empty());
+    assert_eq!(
+        shard.query_rows("SELECT id,applied_at,expires_at FROM game_aura WHERE spell_id = 604"),
+        dampen
+    );
+    assert_eq!(fireball(&shard, 0), ordinary - 1);
+    cast(&shard, wolf, 25899, wolf);
+    let sanctuary = shard
+        .query_rows("SELECT id,amount,applied_at,expires_at FROM game_aura WHERE spell_id = 25899");
+    assert!(!sanctuary.is_empty());
+    cast(&shard, wolf, 20911, wolf);
+    assert!(shard
+        .query_rows("SELECT id FROM game_aura WHERE spell_id = 20911")
+        .is_empty());
+    assert_eq!(
+        shard.query_rows(
+            "SELECT id,amount,applied_at,expires_at FROM game_aura WHERE spell_id = 25899"
+        ),
+        sanctuary
+    );
 }
 
 #[test]
