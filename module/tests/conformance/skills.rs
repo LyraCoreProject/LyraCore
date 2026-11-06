@@ -77,6 +77,7 @@ fn fields(connection: &mut ReducerConnection, guid: u64) -> BTreeMap<String, Fie
     result
 }
 
+#[track_caller]
 fn skill(values: &BTreeMap<String, Field>, line: u32) -> (u16, u16, i16, i16) {
     let word = |field| match values.get(&format!("field_{field}")) {
         Some(Field::Unsigned(value)) => *value as u32,
@@ -148,6 +149,12 @@ fn cast(shard: &Standalone, connection: &mut ReducerConnection, spell: u32) {
     {
         let replies: Vec<(u16, Vec<u8>)> =
             serde_json::from_str(reason.strip_prefix("native_reply:").expect(&reason)).unwrap();
+        assert!(
+            !replies
+                .iter()
+                .any(|(opcode, body)| *opcode == 0x130 && body.get(4) == Some(&2)),
+            "cast {spell} failed: {reason}"
+        );
         connection
             .call("native_world_reply", serde_json::json!([replies]))
             .unwrap();
@@ -232,6 +239,20 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
     grant(&shard, guid, 25, 1, 25);
     request(&mut reconnect, 0x10a, vec![255, 25]);
     cast(&shard, &mut reconnect, 7038);
+    let reduction = shard.query_rows(&format!("SELECT eff_kind,eff_p0,amount FROM game_aura WHERE target_guid = {guid} AND spell_id = 7038"));
+    assert_eq!(
+        reduction.len(),
+        1,
+        "skill reduction did not apply: {reduction:?}"
+    );
+    assert_eq!(
+        (
+            &reduction[0]["eff_kind"],
+            &reduction[0]["eff_p0"],
+            &reduction[0]["amount"]
+        ),
+        (&"189".to_string(), &"43".to_string(), &"-100".to_string())
+    );
     assert_eq!(
         skill(&fields(&mut reconnect, guid), 43),
         (1, 5, -100, if imported { 5 } else { 0 })
