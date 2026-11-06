@@ -99,7 +99,14 @@ pub(crate) fn spell_crit_chance(ctx: &ReducerContext, caster_guid: u64) -> f32 {
         effective_intellect(ctx, caster_guid).max(0) as u32,
         caster.level,
     );
-    (base + combat_field_bonus(ctx, caster_guid, lyracore_shared::spell::taxonomy::COMBAT_SPELL_CRIT) as f32 / 100.0).clamp(0.0, 100.0)
+    (base
+        + combat_field_bonus(
+            ctx,
+            caster_guid,
+            lyracore_shared::spell::taxonomy::COMBAT_SPELL_CRIT,
+        ) as f32
+            / 100.0)
+        .clamp(0.0, 100.0)
 }
 
 pub(crate) fn is_on_cooldown(now_micros: i64, ready_micros: i64) -> bool {
