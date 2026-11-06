@@ -28,8 +28,8 @@ pub(crate) use engage::{
     may_help, refresh_leash, request_attack, resume_creature_engagement, start_melee_attack,
     stop_attack_for, stop_duel_combat, suspend_hostile_references,
     sweep_delete_game_combat_check_schedule, sweep_transfer_game_combat_check_schedule,
-    validate_attack_target, AttackRefusal,
-    SWING_ERROR_BAD_FACING, SWING_ERROR_NONE, SWING_ERROR_NOT_IN_RANGE,
+    validate_attack_target, AttackRefusal, SWING_ERROR_BAD_FACING, SWING_ERROR_NONE,
+    SWING_ERROR_NOT_IN_RANGE,
 };
 pub use engage::{
     game_combat_event, game_combat_event_live, game_melee_attack, game_melee_schedule,

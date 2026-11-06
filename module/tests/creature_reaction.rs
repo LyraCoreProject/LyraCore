@@ -232,6 +232,61 @@ fn a_resisted_hostile_spell_keeps_initial_threat_without_a_loot_tag() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn taxi_takeoff_clears_a_passive_creatures_threat_only_combat() {
+    use lyracore_shared::constants::{taxi_fixture as taxi, unit_flags};
+
+    let shard = stage("passive-taxi-threat");
+    shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    let target = creature(&shard, 0);
+    shard.assert_call(
+        "debug_stage_virtual_spell_impact",
+        &["1", &target, "10", "50000"],
+    );
+    shard.assert_call("debug_advance_virtual_clock", &["50000"]);
+    shard.assert_sql(&format!(
+        "UPDATE game_threat SET threat = 0 WHERE creature_guid = {target} AND source_guid = 1"
+    ));
+    assert!(shard
+        .query_rows("SELECT * FROM game_melee_attack")
+        .is_empty());
+    let in_combat = |guid: &str| {
+        shard.query_rows(&format!(
+            "SELECT unit_flags FROM game_world_entity WHERE guid = {guid}"
+        ))[0]["unit_flags"]
+            .parse::<u32>()
+            .unwrap()
+            & unit_flags::IN_COMBAT
+            != 0
+    };
+    assert!(in_combat(&target));
+    shard.assert_sql(&format!(
+        "INSERT INTO game_active_taxi_flight \
+         (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,\
+          current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded,first_destination_node_index) \
+         VALUES (1,{},{},{},1147,25,0,0,0,0,0,false,1)",
+        taxi::PATH_ID,
+        taxi::SOURCE_NODE_STORAGE_ID,
+        taxi::DESTINATION_NODE_STORAGE_ID
+    ));
+    shard.assert_call("gw_arm_taxi_flight", &[r#"{"guid":1,"ownership":null}"#]);
+    assert!(shard
+        .query_rows(&format!(
+            "SELECT id FROM game_threat WHERE creature_guid = {target} AND source_guid = 1"
+        ))
+        .is_empty());
+    assert!(
+        !in_combat(&target),
+        "a passive creature must leave combat after its last hostile reference goes offline"
+    );
+    assert!(in_combat("1"), "the passenger waits for its combat check");
+    for _ in 0..24 {
+        shard.assert_call("debug_advance_virtual_clock", &["50000"]);
+    }
+    assert!(!in_combat("1"));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_passive_creature_runs_its_script_once_on_each_combat_entry() {
     let shard = stage("passive-combat-script");
     let rules = "900001,aggro,100,4294967295,once,all,ordinary,any-posture,phase:1+help:20";

@@ -35,7 +35,7 @@ pub fn check_combat(ctx: &ReducerContext, schedule: CombatCheckSchedule) {
         .game_combat_check_schedule()
         .scheduled_id()
         .delete(schedule.scheduled_id);
-    let Some(mut player) = ctx
+    let Some(mut character) = ctx
         .db
         .game_world_entity()
         .guid()
@@ -44,10 +44,10 @@ pub fn check_combat(ctx: &ReducerContext, schedule: CombatCheckSchedule) {
         return;
     };
     let now_ms = crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1000;
-    if now_ms >= player.combat_until_ms && !is_engaged(ctx, player.guid) {
-        player.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
-        player.combat_until_ms = 0;
-        player.update(ctx);
+    if now_ms >= character.combat_until_ms && !is_engaged(ctx, character.guid) {
+        character.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
+        character.combat_until_ms = 0;
+        character.update(ctx);
     }
 }
 
@@ -221,12 +221,17 @@ fn disengage_with_combat_check(ctx: &ReducerContext, guid: u64, defer_character_
         crate::combat::MeleeAttack::delete(ctx, a);
     }
     use crate::game_threat;
-    let threat_members = ctx
-        .db
-        .game_threat()
+    let threats = ctx.db.game_threat();
+    let threat_members = threats
         .by_creature()
         .filter(&guid)
         .map(|entry| entry.source_guid)
+        .chain(
+            threats
+                .by_source()
+                .filter(&guid)
+                .map(|entry| entry.creature_guid),
+        )
         .collect::<Vec<_>>();
     crate::threat::clear_for_unit(ctx, guid);
     clear_target(ctx, guid);

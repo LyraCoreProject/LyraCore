@@ -143,6 +143,40 @@ fn self_casts_keep_passive_item_sources_and_replace_active_equip_effects() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn equip_passive_visibility_keeps_visual_and_hidden_auras_on_reconnect() {
+    for visual in [0, 3580] {
+        let (shard, mut connection, guid, _) = fixture("equip-passive-visibility");
+        shard.assert_sql(&format!(
+            "UPDATE game_spell SET visual_id = {visual} WHERE spell_id = {EQUIP}"
+        ));
+        grant(&shard, guid, ITEM, 1, 23);
+        equip(&mut connection, 23);
+        let assert_visibility = || {
+            let rows = auras(&shard, guid);
+            assert_eq!(rows.len(), 1);
+            assert_eq!(rows[0]["slot"].parse::<u8>().unwrap() < 32, visual != 0);
+            assert_eq!(rows[0]["amount"], "7");
+            assert_eq!(
+                shard
+                    .query_rows("SELECT item_guid FROM game_item_aura")
+                    .len(),
+                1
+            );
+        };
+        assert_visibility();
+        shard.assert_call("debug_repair_after_publish", &[]);
+        assert_visibility();
+        drop(connection);
+        assert!(poll_until(POLL_TIMEOUT, || shard
+            .query_rows("SELECT * FROM game_native_player")
+            .is_empty()));
+        let _connection = enter(&shard, guid);
+        assert_visibility();
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn equip_cooldown_packets_gate_zero_cooldown_use_and_preserve_longer_delays() {
     let (shard, mut connection, guid, vendor) = fixture("equip-cooldown");
     let item = grant(&shard, guid, ITEM, 1, 23);

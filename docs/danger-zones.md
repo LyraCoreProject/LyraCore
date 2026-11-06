@@ -225,6 +225,11 @@ The seven END-appended source fields on `game_spell` and five category overrides
 effects retain their forms, visibility, duration and category cooldown rules. No new spell effects
 are implemented.
 
+Reimport `spell` after the passive visibility update to retain party and pet area-aura origins in
+`game_spell.cast_flags`. The translated target alone cannot recover that distinction. After the
+import, `debug_repair_after_publish` applies the current visibility rule to stored cast auras;
+ordinary passive rows move to hidden slot 255 without losing their effects.
+
 `game_spell_effect` END-appends `equip_supported` with a false default. Until the `spell`
 reimport, equipment effects remain inert. That reimport also separates melee and ranged AP,
 healing and spell crit, and marks source percentages for conversion to basis points after their

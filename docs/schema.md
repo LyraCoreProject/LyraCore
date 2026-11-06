@@ -599,6 +599,11 @@ data the importer writes, the third is a per-aura snapshot.
 `game_spell` carries the selected vmangos `spell_template` fields: `proc_flags`, the vanilla
 `procFlags` bitmask with no translation table, `proc_chance` (a whole percent) and `proc_charges` (0 means unlimited).
 
+`game_spell.cast_flags` retains party and pet area-aura origins as `SPELL_ATTR_AREA_AURA`.
+Their translated target can be self, so slot visibility must use this flag instead of inferring
+the source effect from the target. Ordinary passives use slot 255; visual passives, recipient
+area auras and totem auras can use visible slots. Repair applies the same rule to stored cast auras.
+
 `game_spell_proc_event` carries the source proc-event overlay: `ppm_rate`,
 `icd_ms`, `proc_ex` (the normal-hit and critical-hit rule), the `school_mask`, `family_name` and
 `family_flags` filter on triggering spells, a `proc_flags` override and a `custom_chance`. It is

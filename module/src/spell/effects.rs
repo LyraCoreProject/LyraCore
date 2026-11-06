@@ -183,7 +183,7 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     if !e.is_player() {
         return;
     }
-    let (race, class, _gender, _pt) = lyracore_shared::packing::unpack4(e.unit_bytes_0);
+    let (_, class, _, _) = lyracore_shared::packing::unpack4(e.unit_bytes_0);
 
     let eff_str = crate::combat::effective_strength(ctx, &e);
     let eff_agi = crate::combat::effective_agility(ctx, &e);
@@ -195,10 +195,15 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     let int_bonus = stat_bonus(ctx, unit_guid, STAT_INT).saturating_add(
         crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Intellect),
     );
-    // recompute_vitals must run first because it stores effective Spirit in e.spirit.
-    let base_spirit = crate::stats::base_attributes_for(ctx, race, class, e.level).4;
-    let spi_bonus = (i64::from(e.spirit) - i64::from(base_spirit))
-        .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
+    let spi_flat = i128::from(stat_bonus(ctx, unit_guid, STAT_SPI))
+        + i128::from(crate::items::equipped_stat_bonus(
+            ctx,
+            unit_guid,
+            crate::items::EquipStat::Spirit,
+        ));
+    let spi_bonus = ((spi_flat * (100 + i128::from(stat_pct_bonus(ctx, unit_guid, STAT_SPI))))
+        / 100)
+        .clamp(i128::from(i32::MIN), i128::from(i32::MAX)) as i32;
 
     let ap_base = crate::combat::melee_attack_power_for(class, eff_str, eff_agi, e.level);
     let ap_mods = crate::combat::aura_attack_power_bonus(ctx, unit_guid);

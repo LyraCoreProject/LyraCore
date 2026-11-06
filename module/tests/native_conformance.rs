@@ -15,6 +15,8 @@ mod buyback;
 mod character_world;
 #[path = "conformance/item_equip.rs"]
 mod item_equip;
+#[path = "conformance/passives.rs"]
+mod passives;
 #[path = "../../conformance/support/properties/mod.rs"]
 mod properties;
 #[path = "../../conformance/support/quest_world.rs"]
