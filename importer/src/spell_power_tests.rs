@@ -243,7 +243,7 @@ fn sheet_min(shard: &crate::standalone_support::Standalone) -> u32 {
 #[test]
 #[ignore = "requires World Source, client DBCs, SpacetimeDB 2.14.0 and Wasm"]
 fn actual_spell_power_world_plan_curse_enrage_and_weapon_requirements_change_weapon_damage() {
-    let shard = imported_spells(&[702, 8599, 4334, 196, 201]);
+    let shard = imported_spells(&[702, 8599, 4334, 196, 201, 1680, 11708]);
     let wolf = (0xf130u64 << 48) | (51000u64 << 24) | 1;
     let ordinary = sheet_min(&shard);
     assert!(ordinary > 3);
@@ -268,6 +268,24 @@ fn actual_spell_power_world_plan_curse_enrage_and_weapon_requirements_change_wea
     );
     cast(&shard, wolf, 702, 1);
     assert_eq!(sheet_min(&shard), 0);
+    cast(&shard, wolf, 11708, 1);
+    shard.assert_sql(
+        "INSERT INTO game_conformance_swing_random (character_guid,state) VALUES (1,1)",
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 36, stance = {}, power = 100000 WHERE guid = 1",
+        lyracore_shared::spell::taxonomy::STANCE_BERSERKER
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 36, health = 100000 WHERE guid = {wolf}"
+    ));
+    cast(&shard, 1, 1680, wolf);
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT health FROM game_world_entity WHERE guid = {wolf}"
+        ))[0]["health"],
+        "100000"
+    );
 }
 
 #[test]
@@ -548,6 +566,13 @@ fn actual_spell_power_world_plan_scales_eviscerate_as_nonweapon_damage() {
 #[test]
 #[ignore = "requires World Source, client DBCs, SpacetimeDB 2.14.0 and Wasm"]
 fn actual_spell_power_world_plan_wand_keeps_arcane_school_without_spell_power() {
+    use lyracore_protocol::messages::{
+        vanilla::{
+            Guid, SpellCastTargets, SpellCastTargets_SpellCastTargetFlags,
+            SpellCastTargets_SpellCastTargetFlags_Unit, CMSG_CAST_SPELL,
+        },
+        Message,
+    };
     use serde_json::json;
     let shard = imported_spell_fixture(&[5019, 11390, 702], true);
     let wolf = (0xf130u64 << 48) | (51000u64 << 24) | 1;
@@ -569,12 +594,29 @@ fn actual_spell_power_world_plan_wand_keeps_arcane_school_without_spell_power() 
     let (gx, gy) = lyracore_shared::spatial::grid_cell(-8934.95, -132.493);
     shard.assert_sql(&format!("UPDATE game_world_entity SET x = -8934.95, grid_x = {gx}, grid_y = {gy} WHERE guid = {wolf}"));
     shard.assert_sql("UPDATE game_world_entity SET orientation = 0, power = 100000, max_power = 100000 WHERE guid = 1");
+    shard.clear_schedule("game_creature_move_schedule");
+    let mut request = Vec::new();
+    CMSG_CAST_SPELL {
+        spell: 5019,
+        targets: SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::default().set_unit(
+                SpellCastTargets_SpellCastTargetFlags_Unit {
+                    unit_target: Guid::new(wolf),
+                },
+            ),
+        },
+    }
+    .write_into_vec(&mut request)
+    .unwrap();
     wire.drain_packets();
     let shoot = |wire: &mut lyracore_test_support::ReducerConnection| {
         shard.assert_sql(
             "UPDATE game_conformance_swing_random SET state = 1 WHERE character_guid = 1",
         );
-        wire.call("debug_begin_cast", json!([1, 5019, wolf]))
+        shard.assert_sql(
+            "UPDATE game_conformance_spell_random SET state = 0 WHERE character_guid = 1",
+        );
+        wire.call("native_world_receive", json!([0x12e, request]))
             .unwrap();
         wire.call("debug_advance_roll_batch", json!([61])).unwrap();
         wire.call("native_world_receive", json!([0x26d, Vec::<u8>::new()]))

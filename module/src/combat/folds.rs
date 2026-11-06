@@ -647,7 +647,6 @@ pub(crate) fn weapon_strike_spell_damage(
     armor_mitigated(if crit { base * CRIT_MULT } else { base }, mit_pct)
 }
 
-/// A finisher's damage: `amount` with the damage spell mods, the strike's crit and the target's armor.
 pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
     melee_attack_power_for(
         unit.class(),
@@ -714,7 +713,7 @@ fn strike_amount(
     let base =
         crate::spell::apply_spell_mod(scaled.min(i64::from(u32::MAX)) as u32, mod_flat, mod_pct);
     let pre_mit = u64::from(base) * if crit { u64::from(CRIT_MULT) } else { 1 };
-    (pre_mit * u64::from(100 - mit_pct.min(100)) / 100).clamp(1, u64::from(u32::MAX)) as u32
+    (pre_mit * u64::from(100 - mit_pct.min(100)) / 100).min(u64::from(u32::MAX)) as u32
 }
 
 // vmangos TakeAmmo: a thrown stack loses one; an unstackable thrown weapon loses durability.
