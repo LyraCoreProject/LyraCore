@@ -42,9 +42,10 @@ fn manifest_exclude_holds_only_local_runtime_state() {
             "game_native_member_stats",
             "game_native_motion_permit",
             "game_character_relocation",
+            "game_combat_check_schedule",
             "game_transport_passenger",
         ],
-        "Only local relocation, Transfer machinery and connection state may be excluded."
+        "Only local relocation, combat checks, Transfer machinery and connection state may be excluded."
     );
 }
 
