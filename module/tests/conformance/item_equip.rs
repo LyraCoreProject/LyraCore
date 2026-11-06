@@ -995,25 +995,36 @@ fn equip_review_inert_thorns_keeps_its_visible_refreshable_dispellable_aura() {
     assert_eq!(refreshed[0]["id"], first[0]["id"]);
     assert_eq!(refreshed[0]["stacks"], "1");
     assert_ne!(refreshed[0]["expires_at"], first[0]["expires_at"]);
-    request(&mut connection, 0x136, 467u32.to_le_bytes().to_vec());
-    assert!(read().is_empty());
-    shard.assert_sql("UPDATE game_spell SET cost = 0 WHERE spell_id = 467");
-    shard.assert_sql("UPDATE game_spell_effect SET target = 3 WHERE spell_id = 467");
-    shard.assert_call(
-        "debug_begin_cast",
-        &[&vendor.to_string(), "467", &guid.to_string()],
-    );
-    assert_eq!(read().len(), 1);
-    shard.assert_sql("UPDATE game_spell SET attributes = 0, cost = 0 WHERE spell_id = 527");
     shard.assert_sql(
-        "UPDATE game_spell_effect SET kind = 4, p0 = 1, target = 0 WHERE spell_id = 527",
+        "UPDATE game_spell SET attributes = 0, cost = 0, gcd_ms = 0 WHERE spell_id = 527",
+    );
+    shard.assert_sql(
+        "UPDATE game_spell_effect SET kind = 4, p0 = 1, target = 3 WHERE spell_id = 527",
     );
     shard.assert_call(
         "debug_begin_cast",
         &[&guid.to_string(), "527", &guid.to_string()],
     );
+    assert_eq!(read().len(), 1, "a helpful dispel must keep Thorns");
+    request(&mut connection, 0x136, 467u32.to_le_bytes().to_vec());
     assert!(read().is_empty());
-    advance(&shard, 1500);
+    shard.assert_sql("UPDATE game_spell SET cost = 0 WHERE spell_id = 467");
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), "467", &guid.to_string()],
+    );
+    assert_eq!(read().len(), 1);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET faction_template = 14 WHERE guid = {vendor}"
+    ));
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&vendor.to_string(), "527", &guid.to_string()],
+    );
+    assert!(
+        read().is_empty(),
+        "an enemy dispel must remove self-cast Thorns"
+    );
     review_spell(&shard, 24659, &[(0xb9, 17, 0, 0)], false);
     shard.assert_sql("UPDATE game_spell SET attributes = 0, duration_ms = 20000, max_stacks = 12 WHERE spell_id = 24659");
     for _ in 0..14 {

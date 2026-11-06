@@ -221,7 +221,10 @@ pub fn supported_effect(name: &str, slot: &EffectSlot) -> bool {
     } else {
         correct_script_effect_kind(name, kind)
     };
-    dismount_effect_kind(slot.effect, slot.misc as u32).unwrap_or(kind) != E_SCRIPTED
+    !matches!(
+        dismount_effect_kind(slot.effect, slot.misc as u32).unwrap_or(kind),
+        E_SCRIPTED | A_INERT
+    )
 }
 
 #[cfg(test)]

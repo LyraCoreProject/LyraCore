@@ -60,52 +60,50 @@ pub(crate) fn apply_target_damage(
     (damage.amount, absorbed)
 }
 
-pub(crate) fn dispel_target(ctx: &ReducerContext, target_guid: u64, category: u8) -> u32 {
-    let auras = ctx.db.game_aura();
+pub(crate) fn dispel_target(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    target_guid: u64,
+    category: u8,
+) -> u32 {
+    let entities = ctx.db.game_world_entity();
+    let (Some(caster), Some(target)) = (
+        entities.guid().find(caster_guid),
+        entities.guid().find(target_guid),
+    ) else {
+        return 0;
+    };
+    let friendly = caster_guid == target_guid
+        || (!crate::duel::active_opponents(ctx, caster_guid, target_guid)
+            && crate::faction::is_friendly(ctx, target.faction_template, caster.faction_template));
     let spells = ctx.db.game_spell();
-    // Diminishing returns starts at removal, so inspect each aura before deleting it.
-    let debuffs: Vec<Aura> = auras
+    let dispelled: Vec<Aura> = ctx
+        .db
+        .game_aura()
         .by_target()
-        .filter(&target_guid)
-        .filter(|a| a.caster_guid != target_guid)
-        .filter(|a| {
-            let aura_cat = spells
-                .spell_id()
-                .find(a.spell_id)
-                .map(|s| s.dispel_type)
-                .unwrap_or(0);
-            dispel_category_matches(category, aura_cat)
+        .filter(target_guid)
+        .filter(|aura| {
+            spells.spell_id().find(aura.spell_id).is_some_and(|spell| {
+                spell.dispel_type != 0
+                    && dispel_category_matches(category, spell.dispel_type)
+                    && (!matches!(spell.dispel_type, 1 | 4) || spell.negative() == friendly)
+            })
         })
         .collect();
-    let removed = debuffs.len() as u32;
-    let redisplay = debuffs.iter().any(|a| a.eff_kind == A_TRANSFORM);
-    let moves_mount = debuffs
-        .iter()
-        .any(|a| crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0));
+    let removed = dispelled.len() as u32;
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
-    for a in debuffs {
-        if let Some(dr_category) = crate::spell::stacking::dr_category_for_effect(
+    for aura in &dispelled {
+        if let Some(category) = crate::spell::stacking::dr_category_for_effect(
             ctx,
-            a.eff_kind,
-            a.eff_p0_kind,
-            a.eff_p0,
-            a.target_guid,
+            aura.eff_kind,
+            aura.eff_p0_kind,
+            aura.eff_p0,
+            target_guid,
         ) {
-            crate::spell::stacking::dr_window_on_removal(
-                ctx,
-                a.target_guid,
-                dr_category,
-                now_micros,
-            );
+            crate::spell::stacking::dr_window_on_removal(ctx, target_guid, category, now_micros);
         }
-        crate::Aura::delete(ctx, a.id);
     }
-    if moves_mount {
-        crate::mount::recompute_mount(ctx, target_guid);
-    }
-    if redisplay {
-        recompute_display(ctx, target_guid);
-    }
+    shed_auras(ctx, target_guid, dispelled);
     removed
 }
 

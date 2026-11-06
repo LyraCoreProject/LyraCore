@@ -76,7 +76,7 @@ impl Shard {
                 &s[..s.len().min(60)]
             );
             let out = spacetime()
-                .args(["sql", "-s", &self.server, &self.db, &s])
+                .args(["sql", "-s", &self.server, &self.db, s])
                 .output()
                 .context("run spacetime sql")?;
             if !out.status.success() {
@@ -157,6 +157,14 @@ fn validate_insert_arity(sql: &str) -> Result<()> {
     Ok(())
 }
 
+fn spacetime() -> Command {
+    let mut command = Command::new("spacetime");
+    if let Some(path) = std::env::var_os("LYRACORE_SPACETIME_CONFIG_PATH") {
+        command.arg("--config-path").arg(path);
+    }
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,12 +193,4 @@ mod tests {
         .unwrap();
         assert!(validate_insert_arity("INSERT INTO t (id,name) VALUES (1,'a'),(2,'b',3)").is_err());
     }
-}
-
-fn spacetime() -> Command {
-    let mut command = Command::new("spacetime");
-    if let Some(path) = std::env::var_os("LYRACORE_SPACETIME_CONFIG_PATH") {
-        command.arg("--config-path").arg(path);
-    }
-    command
 }

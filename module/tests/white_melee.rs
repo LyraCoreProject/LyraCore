@@ -22,6 +22,7 @@ fn white_melee_chances_follow_catalogue_skills_and_defender_eligibility() {
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
     shard.assert_sql("UPDATE game_character SET class = 1, level = 60 WHERE guid = 1");

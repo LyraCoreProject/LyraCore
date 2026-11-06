@@ -810,8 +810,8 @@ pub(crate) fn apply_effect(
             } else {
                 hdr.dispel_type
             };
-            let removed = dispel_target(ctx, target_guid, category);
-            log::info!("dispel (cat {category}) on {target_guid} removed {removed} debuff(s)");
+            let removed = dispel_target(ctx, caster_guid, target_guid, category);
+            log::info!("dispel (cat {category}) on {target_guid} removed {removed} aura(s)");
             EffectHit::none()
         }
         EffectKind::EnchantItemTemporary => {
