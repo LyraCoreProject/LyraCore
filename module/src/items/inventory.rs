@@ -289,14 +289,14 @@ pub(super) fn validate_equipment(
         return Err(InventoryResult::YouCanNeverUseThatItem);
     }
     let current_skill =
-        Some(crate::skill::skill_value(ctx, character_guid, template.required_skill, false) as u16);
-    if template.required_skill != 0 && current_skill.unwrap_or(0) == 0 {
+        crate::skill::skill_value(ctx, character_guid, template.required_skill, false) as u16;
+    if template.required_skill != 0 && current_skill == 0 {
         return Err(InventoryResult::NoRequiredProficiency);
     }
     if !meets_required_skill(
         template.required_skill,
         template.required_skill_rank,
-        current_skill,
+        Some(current_skill),
     ) {
         return Err(InventoryResult::CantEquipSkill);
     }
