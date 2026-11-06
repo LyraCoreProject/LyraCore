@@ -2,8 +2,12 @@ use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use lyracore_shared::constants::starter_item;
 
+use lyracore_shared::spell::taxonomy::{A_MOD_SKILL, STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR};
+
 use crate::skilldata::{game_skill_ability, game_skill_availability};
-use crate::{game_item_template, game_world_entity, WorldEntity};
+use crate::{
+    game_aura, game_item_template, game_player_spell, game_world_entity, Aura, WorldEntity,
+};
 
 pub const SKILL_PER_LEVEL: u32 = 5;
 
@@ -198,6 +202,18 @@ pub struct PlayerSkill {
 }
 
 impl PlayerSkill {
+    pub(crate) fn view(&self, ctx: &ReducerContext) -> lyracore_protocol::codec::SkillView {
+        let (temporary_bonus, permanent_bonus) =
+            skill_bonuses(ctx, self.character_guid, self.skill_line);
+        lyracore_protocol::codec::SkillView {
+            line: self.skill_line,
+            current: self.current,
+            maximum: self.max_rank,
+            temporary_bonus,
+            permanent_bonus,
+        }
+    }
+
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
         let row = ctx.db.game_player_skill().insert(row);
         crate::native::skill_changed(ctx, None, Some(&row));
@@ -224,7 +240,7 @@ impl PlayerSkill {
 
 fn refresh_weapon_crit(ctx: &ReducerContext, skill: &PlayerSkill) {
     if skill.skill_line == equipped_weapon_skill_line(ctx, skill.character_guid)
-        || skill.skill_line
+        || Some(skill.skill_line)
             == equipped_weapon_skill_line_at(
                 ctx,
                 skill.character_guid,
@@ -258,43 +274,123 @@ crate::character_owned!(restamp, fn sweep_restamp_game_player_skill(ctx, charact
 
 fn equipped_weapon_skill_line(ctx: &ReducerContext, guid: u64) -> u32 {
     equipped_weapon_skill_line_at(ctx, guid, starter_item::MAINHAND_SLOT)
+        .unwrap_or(skill_line::UNARMED)
 }
 
-fn equipped_weapon_skill_line_at(ctx: &ReducerContext, guid: u64, slot: u8) -> u32 {
-    let Some(inst) = crate::items::item_in_slot(ctx, guid, slot) else {
-        return skill_line::UNARMED;
-    };
-    let Some(tmpl) = ctx.db.game_item_template().entry().find(inst.entry) else {
-        return skill_line::UNARMED;
-    };
-    if tmpl.class != starter_item::CLASS_WEAPON || crate::items::item_is_broken(&tmpl, &inst) {
-        return skill_line::UNARMED;
-    }
-    weapon_subclass_to_skill_line(tmpl.subclass)
+fn equipped_weapon_skill_line_at(ctx: &ReducerContext, guid: u64, slot: u8) -> Option<u32> {
+    let inst = crate::items::item_in_slot(ctx, guid, slot)?;
+    let tmpl = ctx.db.game_item_template().entry().find(inst.entry)?;
+    (tmpl.class == starter_item::CLASS_WEAPON && !crate::items::item_is_broken(&tmpl, &inst))
+        .then(|| weapon_subclass_to_skill_line(tmpl.subclass))
 }
 
-fn skill_value_or_cap(ctx: &ReducerContext, guid: u64, line: u32, level: u32) -> u32 {
+fn skill_bonuses(ctx: &ReducerContext, guid: u64, line: u32) -> (i16, i16) {
     ctx.db
+        .game_aura()
+        .by_target()
+        .filter(guid)
+        .filter(|aura| aura.eff_kind == A_MOD_SKILL && aura.eff_p0 == line as i32)
+        .fold((0i16, 0i16), |(temporary, permanent), aura| {
+            let amount = (aura.amount as i16).wrapping_mul(i16::from(aura.stacks.max(1)));
+            if aura.eff_p1 == 1 {
+                (temporary, permanent.wrapping_add(amount))
+            } else {
+                (temporary.wrapping_add(amount), permanent)
+            }
+        })
+}
+
+pub(crate) fn aura_changed(ctx: &ReducerContext, previous: Option<&Aura>, current: Option<&Aura>) {
+    let contribution = |aura: &Aura| {
+        (aura.eff_kind == A_MOD_SKILL).then_some((
+            aura.target_guid,
+            aura.eff_p0,
+            aura.eff_p1,
+            aura.amount,
+            aura.stacks.max(1),
+        ))
+    };
+    if previous.and_then(contribution) == current.and_then(contribution) {
+        return;
+    }
+    let mut lines = Vec::new();
+    for aura in previous
+        .into_iter()
+        .chain(current)
+        .filter(|aura| aura.eff_kind == A_MOD_SKILL)
+    {
+        let key = (aura.target_guid, aura.eff_p0 as u32);
+        if !lines.contains(&key) {
+            lines.push(key);
+        }
+    }
+    for (guid, line) in lines {
+        if let Some(skill) = ctx
+            .db
+            .game_player_skill()
+            .by_character()
+            .filter(guid)
+            .find(|skill| skill.skill_line == line)
+        {
+            crate::native::skill_bonus_changed(ctx, &skill);
+            refresh_weapon_crit(ctx, &skill);
+        }
+    }
+}
+
+fn skill_value(ctx: &ReducerContext, guid: u64, line: u32, maximum: bool) -> u32 {
+    let Some(skill) = ctx
+        .db
         .game_player_skill()
         .by_character()
-        .filter(&guid)
-        .find(|s| s.skill_line == line)
-        .map(|s| s.current as u32)
-        .unwrap_or_else(|| skill_cap_for_level(level))
+        .filter(guid)
+        .find(|skill| skill.skill_line == line)
+    else {
+        return 0;
+    };
+    let (temporary, permanent) = skill_bonuses(ctx, guid, line);
+    let base = if maximum {
+        skill.max_rank
+    } else {
+        skill.current
+    };
+    u32::from((i32::from(base) + i32::from(temporary) + i32::from(permanent)).max(0) as u16)
 }
 
 pub(crate) fn effective_weapon_skill(ctx: &ReducerContext, attacker: &WorldEntity) -> u32 {
+    if !attacker.is_player()
+        || matches!(attacker.stance, STANCE_BEAR | STANCE_CAT | STANCE_DIRE_BEAR)
+    {
+        return skill_cap_for_level(attacker.level);
+    }
     let line = equipped_weapon_skill_line(ctx, attacker.guid);
-    skill_value_or_cap(ctx, attacker.guid, line, attacker.level)
+    skill_value(ctx, attacker.guid, line, false)
 }
 
 pub(crate) fn effective_ranged_weapon_skill(ctx: &ReducerContext, attacker: &WorldEntity) -> u32 {
-    let line = equipped_weapon_skill_line_at(ctx, attacker.guid, crate::items::equip_slot::RANGED);
-    skill_value_or_cap(ctx, attacker.guid, line, attacker.level)
+    if !attacker.is_player() {
+        return skill_cap_for_level(attacker.level);
+    }
+    let Some(line) =
+        equipped_weapon_skill_line_at(ctx, attacker.guid, crate::items::equip_slot::RANGED)
+    else {
+        return 0;
+    };
+    if matches!(attacker.stance, STANCE_BEAR | STANCE_CAT | STANCE_DIRE_BEAR) {
+        return skill_cap_for_level(attacker.level);
+    }
+    skill_value(ctx, attacker.guid, line, false)
 }
 
 pub(crate) fn effective_defense_skill(ctx: &ReducerContext, target: &WorldEntity) -> u32 {
-    let base = skill_value_or_cap(ctx, target.guid, skill_line::DEFENSE, target.level);
+    defense_skill(ctx, target, false)
+}
+
+pub(crate) fn defense_skill(ctx: &ReducerContext, target: &WorldEntity, maximum: bool) -> u32 {
+    if !target.is_player() {
+        return skill_cap_for_level(target.level);
+    }
+    let base = skill_value(ctx, target.guid, skill_line::DEFENSE, maximum);
     let aura = crate::spell::combat_field_bonus(ctx, target.guid, crate::spell::COMBAT_DEFENSE);
     let gear =
         crate::items::equipped_stat_bonus(ctx, target.guid, crate::items::EquipStat::Defense);
@@ -414,20 +510,49 @@ pub(crate) fn learn_riding(ctx: &ReducerContext, guid: u64, owner: Identity, ran
     }
 }
 
+fn skill_always_maximized(ctx: &ReducerContext, entity: &WorldEntity, line: u32) -> bool {
+    ctx.db
+        .game_skill_availability()
+        .by_skill_line()
+        .filter(line)
+        .any(|row| {
+            profile_mask_admits(row.race_mask, entity.race())
+                && profile_mask_admits(row.class_mask, entity.class())
+                && row.flags & 0x10 != 0
+        })
+}
+
+fn starting_skill_value(ctx: &ReducerContext, entity: &WorldEntity, line: u32, cap: u16) -> u16 {
+    if skill_always_maximized(ctx, entity, line) {
+        cap
+    } else {
+        1
+    }
+}
+
 pub(crate) fn raise_combat_caps(ctx: &ReducerContext, guid: u64, new_level: u32) {
+    let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
+        return;
+    };
     let cap = skill_cap_for_level(new_level) as u16;
     let skills = ctx.db.game_player_skill();
     for mut row in skills.by_character().filter(&guid).collect::<Vec<_>>() {
         let tracks_level =
             is_combat_skill_line(row.skill_line) || row.skill_line == skill_line::LOCKPICKING;
-        if tracks_level && row.max_rank < cap {
+        if !tracks_level || row.max_rank == 1 {
+            continue;
+        }
+        let always_max = skill_always_maximized(ctx, &entity, row.skill_line);
+        if row.max_rank != cap || (always_max && row.current != cap) {
             row.max_rank = cap;
+            if always_max {
+                row.current = cap;
+            }
             row.update(ctx);
         }
     }
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 fn profile_mask_admits(mask: u32, id: u8) -> bool {
     mask == 0 || (id != 0 && (id as u32) <= u32::BITS && mask & (1u32 << (id - 1)) != 0)
 }
@@ -533,7 +658,7 @@ pub(crate) fn reconcile_profile_skill(
                 character_guid: guid,
                 owner_identity: actor.owner_identity,
                 skill_line: line,
-                current: cap,
+                current: starting_skill_value(ctx, &actor, line, cap),
                 max_rank: cap,
             },
         );
@@ -877,16 +1002,48 @@ pub(crate) fn ensure_player_skills(
     level: u32,
     class: u8,
 ) {
+    let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
+        return;
+    };
     let cap = skill_cap_for_level(level) as u16;
     let equipped_weapon = equipped_weapon_skill_line(ctx, guid);
     let skills = ctx.db.game_player_skill();
 
-    let mut lines: std::collections::HashSet<u32> = std::collections::HashSet::new();
+    let mut lines = std::collections::BTreeSet::new();
     lines.insert(skill_line::DEFENSE);
     lines.insert(skill_line::UNARMED);
     lines.insert(equipped_weapon);
     for &l in class_starting_weapon_skill_lines(class) {
         lines.insert(l);
+    }
+
+    let known: std::collections::BTreeSet<_> = ctx
+        .db
+        .game_player_spell()
+        .by_character()
+        .filter(guid)
+        .map(|spell| spell.spell_id)
+        .collect();
+    for line in [
+        skill_line::BOW,
+        skill_line::GUN,
+        skill_line::CROSSBOW,
+        skill_line::THROWN,
+        skill_line::WAND,
+    ] {
+        if ctx
+            .db
+            .game_skill_ability()
+            .by_skill_line()
+            .filter(line)
+            .any(|ability| {
+                known.contains(&ability.spell_id)
+                    && profile_mask_admits(ability.race_mask, entity.race())
+                    && profile_mask_admits(ability.class_mask, class)
+            })
+        {
+            lines.insert(line);
+        }
     }
 
     for line in lines {
@@ -902,7 +1059,7 @@ pub(crate) fn ensure_player_skills(
                     character_guid: guid,
                     owner_identity: owner,
                     skill_line: line,
-                    current: cap,
+                    current: starting_skill_value(ctx, &entity, line, cap),
                     max_rank: cap,
                 },
             );

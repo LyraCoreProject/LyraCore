@@ -308,15 +308,36 @@ pub fn class_static_skills(class_b: u8) -> &'static [(Skill, u16, u16)] {
     }
 }
 
-pub fn skill_slot_layout(class_b: u8, learned: &[(u32, u16, u16)]) -> Vec<(Skill, u16, u16)> {
-    let mut lines: Vec<(Skill, u16, u16)> = class_static_skills(class_b).to_vec();
-    for &(line, cur, max) in learned {
-        let Ok(sk) = Skill::try_from(line) else {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SkillView {
+    pub line: u32,
+    pub current: u16,
+    pub maximum: u16,
+    pub temporary_bonus: i16,
+    pub permanent_bonus: i16,
+}
+
+pub fn skill_slot_layout(class_b: u8, learned: &[SkillView]) -> Vec<SkillInfo> {
+    let mut lines: Vec<_> = class_static_skills(class_b)
+        .iter()
+        .map(|&(skill, current, maximum)| SkillInfo::new(skill, 0, current, maximum, 0, 0))
+        .collect();
+    for row in learned {
+        let Ok(skill) = Skill::try_from(row.line) else {
             continue;
         };
-        match lines.iter_mut().find(|(s, _, _)| *s == sk) {
-            Some(entry) => *entry = (sk, cur, max),
-            None => lines.push((sk, cur, max)),
+        // wow_world_messages names the low bonus half permanent; 5875 stores temporary there.
+        let info = SkillInfo::new(
+            skill,
+            0,
+            row.current,
+            row.maximum,
+            row.temporary_bonus as u16,
+            row.permanent_bonus as u16,
+        );
+        match lines.iter_mut().find(|entry| entry.skill == skill) {
+            Some(entry) => *entry = info,
+            None => lines.push(info),
         }
     }
     lines
@@ -349,7 +370,7 @@ pub fn build_create_object(
     entity: &EntityView,
     kind: CreateKind,
     inventory: &[ItemInstanceView],
-    learned_skills: &[(u32, u16, u16)],
+    learned_skills: &[SkillView],
 ) -> Result<SMSG_UPDATE_OBJECT> {
     let (race_b, class_b, gender_b, power_b) = unpack4(entity.unit_bytes_0);
     let race = Race::try_from(race_b).map_err(|_| anyhow!("invalid race {race_b}"))?;
@@ -458,10 +479,9 @@ pub fn build_create_object(
 
         if matches!(kind, CreateKind::SelfPlayer) {
             let skill_lines = skill_slot_layout(class_b, learned_skills);
-            for (i, &(skill, min, max)) in skill_lines.iter().enumerate() {
+            for (i, &info) in skill_lines.iter().enumerate() {
                 if let Ok(idx) = SkillInfoIndex::try_from(i as u8) {
-                    builder = builder
-                        .set_player_skill_info(SkillInfo::new(skill, 0, min, max, 0, 0), idx);
+                    builder = builder.set_player_skill_info(info, idx);
                 }
             }
         }
@@ -565,7 +585,7 @@ pub fn build_create_object(
 pub fn build_self_create_object(
     entity: &EntityView,
     inventory: &[ItemInstanceView],
-    learned_skills: &[(u32, u16, u16)],
+    learned_skills: &[SkillView],
     quests: &[update_mask::QuestLogSlot],
 ) -> Result<SMSG_UPDATE_OBJECT> {
     let mut create =

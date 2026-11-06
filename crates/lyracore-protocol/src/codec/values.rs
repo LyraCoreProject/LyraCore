@@ -350,16 +350,10 @@ pub fn build_owner_summon_values(owner_guid: u64, pet_guid: u64) -> SMSG_UPDATE_
     })
 }
 
-pub fn build_skill_values(
-    guid: u64,
-    slot: u8,
-    skill: Skill,
-    cur: u16,
-    max: u16,
-) -> Option<SMSG_UPDATE_OBJECT> {
+pub fn build_skill_values(guid: u64, slot: u8, skill: SkillInfo) -> Option<SMSG_UPDATE_OBJECT> {
     let idx = SkillInfoIndex::try_from(slot).ok()?;
     Some(player_values(guid, |player| {
-        player.set_player_skill_info(SkillInfo::new(skill, 0, cur, max, 0, 0), idx);
+        player.set_player_skill_info(skill, idx);
     }))
 }
 
@@ -487,7 +481,8 @@ mod lint_tests {
             ),
             (
                 "skill",
-                build_skill_values(g, 3, Skill::Fishing, 100, 150).unwrap(),
+                build_skill_values(g, 3, SkillInfo::new(Skill::Fishing, 0, 100, 150, 0, 0))
+                    .unwrap(),
             ),
             ("talent_points", build_talent_points_values(g, 2)),
             ("xp", build_player_xp_values(g, 400, 1000)),

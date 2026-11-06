@@ -1,10 +1,26 @@
 use spacetimedb::{ReducerContext, Table};
 
 use super::*;
-use crate::{game_character_talent, game_player_spell, game_talent};
+use crate::{game_character_talent, game_player_spell, game_talent, game_world_entity};
 use lyracore_shared::spell::taxonomy::P_COMBAT_PERCENT;
 
 pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
+    let characters: Vec<_> = ctx
+        .db
+        .game_world_entity()
+        .by_entry()
+        .filter(0u32)
+        .filter(|entity| entity.is_player())
+        .collect();
+    for character in characters {
+        crate::skill::ensure_player_skills(
+            ctx,
+            character.guid,
+            character.owner_identity,
+            character.level,
+            character.class(),
+        );
+    }
     let auras: Vec<_> = ctx
         .db
         .game_aura()

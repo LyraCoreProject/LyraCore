@@ -166,30 +166,25 @@ pub(crate) fn skill_changed(
         .game_player_skill()
         .by_character()
         .filter(row.character_guid)
-        .map(|row| (row.id, row.skill_line, row.current, row.max_rank))
+        .map(|row| (row.id, row.view(ctx)))
         .collect();
-    let layout = |stored: &mut Vec<(u64, u32, u16, u16)>| {
+    let layout = |stored: &mut Vec<(u64, codec::SkillView)>| {
         stored.sort_by_key(|row| row.0);
         codec::skill_slot_layout(
             character.class(),
-            &stored
-                .iter()
-                .map(|row| (row.1, row.2, row.3))
-                .collect::<Vec<_>>(),
+            &stored.iter().map(|row| row.1).collect::<Vec<_>>(),
         )
     };
     let after = layout(&mut stored);
     stored.retain(|entry| entry.0 != row.id);
     if let Some(old) = previous {
-        stored.push((old.id, old.skill_line, old.current, old.max_rank));
+        stored.push((old.id, old.view(ctx)));
     }
     let before = layout(&mut stored);
     for slot in 0..before.len().max(after.len()).min(128) {
         if before.get(slot) != after.get(slot) {
-            let (skill, current, cap) = after.get(slot).copied().unwrap_or_default();
-            if let Some(values) =
-                codec::build_skill_values(row.character_guid, slot as u8, skill, current, cap)
-            {
+            let skill = after.get(slot).copied().unwrap_or_default();
+            if let Some(values) = codec::build_skill_values(row.character_guid, slot as u8, skill) {
                 send(
                     ctx,
                     row.character_guid,
@@ -197,5 +192,33 @@ pub(crate) fn skill_changed(
                 );
             }
         }
+    }
+}
+
+pub(crate) fn skill_bonus_changed(ctx: &ReducerContext, skill: &PlayerSkill) {
+    let Some(character) = ctx.db.game_world_entity().guid().find(skill.character_guid) else {
+        return;
+    };
+    let skills: Vec<_> = ctx
+        .db
+        .game_player_skill()
+        .by_character()
+        .filter(skill.character_guid)
+        .map(|row| row.view(ctx))
+        .collect();
+    let slots = codec::skill_slot_layout(character.class(), &skills);
+    let Some((slot, info)) = slots
+        .into_iter()
+        .enumerate()
+        .find(|(_, info)| u32::from(info.skill.as_int()) == skill.skill_line)
+    else {
+        return;
+    };
+    if let Some(values) = codec::build_skill_values(skill.character_guid, slot as u8, info) {
+        send(
+            ctx,
+            skill.character_guid,
+            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)),
+        );
     }
 }

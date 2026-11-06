@@ -99,6 +99,8 @@ effect_kinds! {
     A_MOD_POWER_REGEN_PCT => AuraModPowerRegenPct = 0xB7,
     A_MOD_HEALING => AuraModHealing = 0xB8,
     A_INERT => AuraInert = 0xB9,
+    // p0 is the skill line; p1 selects temporary (0) or permanent (1) bonus points.
+    A_MOD_SKILL => AuraModSkill = 0xBD,
     A_FLAG => AuraFlag = 0xBE,
     E_SUMMON_GUARDIANS => SummonGuardians = 0x27,
     E_ADD_EXTRA_ATTACKS => AddExtraAttacks = 0x28,
@@ -154,6 +156,7 @@ pub const P_SPELL_ID: u8 = 15;
 pub const P_FLAT_MANA: u8 = 16;
 // Source combat percentages convert to basis points after rolling the effect amount.
 pub const P_COMBAT_PERCENT: u8 = 17;
+pub const P_SKILL_LINE: u8 = 18;
 pub const P_RAW: u8 = 255;
 pub const T_SELF: u8 = 0;
 pub const T_TARGET_ENEMY: u8 = 1;
@@ -277,6 +280,8 @@ mod tests {
         assert_eq!(P_SPELL_ID, 15);
         assert_eq!(P_FLAT_MANA, 16);
         assert_eq!(P_COMBAT_PERCENT, 17);
+        assert_eq!(P_SKILL_LINE, 18);
+        assert_eq!(A_MOD_SKILL, 0xBD);
         assert_eq!(P_RAW, 255);
         let all = [
             P_NONE,
@@ -296,6 +301,7 @@ mod tests {
             P_SPELL_ID,
             P_FLAT_MANA,
             P_COMBAT_PERCENT,
+            P_SKILL_LINE,
             P_RAW,
         ];
         for (i, a) in all.iter().enumerate() {
