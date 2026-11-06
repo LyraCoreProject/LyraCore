@@ -1478,6 +1478,10 @@ fn a_reconnect_on_the_last_taxi_segment_lands_on_the_next_tick() {
     let packets = decoded_taxi_entry_packets(&second.drain_packets());
     assert!(packets.iter().any(|packet| packet.opcode == 0x016e));
     assert!(!packets.iter().any(|packet| packet.opcode == 0x00dd));
+    let movement = &shard.query_rows(&format!(
+        "SELECT movement_flags FROM game_world_entity WHERE guid = {passenger}"
+    ))[0];
+    assert_eq!(movement["movement_flags"], "0");
     for _ in 0..2 {
         shard.assert_call("debug_advance_virtual_clock", &["50000"]);
     }

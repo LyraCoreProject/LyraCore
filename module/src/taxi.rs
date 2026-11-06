@@ -759,7 +759,11 @@ pub(crate) fn resume_flight(ctx: &ReducerContext, character_guid: u64) -> Result
     crate::native::taxi_resumed(ctx, &spline)?;
     player.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT
         | lyracore_shared::constants::unit_flags::REMOVE_CLIENT_CONTROL;
-    player.movement_flags = TAXI_MOVEMENT_FORWARD;
+    player.movement_flags = if points.len() > 1 {
+        TAXI_MOVEMENT_FORWARD
+    } else {
+        0
+    };
     player.update(ctx);
     crate::native::refresh_motion_permit(ctx, character_guid);
     write_passenger_spline(ctx, spline);

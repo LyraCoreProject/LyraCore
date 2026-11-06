@@ -29,6 +29,7 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &[
     "game_native_member_stats",
     "game_native_motion_permit",
     "game_character_relocation",
+    "game_combat_check_schedule",
     "game_transport_passenger",
 ];
 
@@ -41,6 +42,8 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_native_member_stats",
     "game_native_motion_permit",
     "game_character_relocation",
+    // Combat checks belong to the live entity and do not survive Transfer.
+    "game_combat_check_schedule",
     "game_rest_state_event",
     "game_breath_relay_event",
     "game_breath_state",
