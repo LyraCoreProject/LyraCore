@@ -879,7 +879,10 @@ without changing earned progress or granting unknown skills. Combat and skill de
 same values. `PLAYER_SKILL_INFO` packs the signed temporary bonus in the low half and permanent
 bonus in the high half, in both CREATE and VALUES. Equip removal, Aura expiry and repair update
 these fields and weapon crit. Defense bonuses also reach white melee hit, avoidance, crit and
-glancing calculations, including maximum defense against another Character.
+glancing calculations, including maximum defense against another Character. Skill requirements
+for equipment, skinning, gathering and locks also include bonuses. Fishing retains its existing
+loot selection without a skill-dependent success roll; its 11 ModSkill equipment items deliver
+the correct bonus fields but do not change that missing roll.
 
 | Source aura type | Items | Consumer or missing behavior | Equip result | Example spell |
 | --- | ---: | --- | --- | ---: |
@@ -894,7 +897,7 @@ glancing calculations, including maximum defense against another Character.
 | 22 ModResistance | 74 | resistance_bonus; flat school mask | Correct | 12956 |
 | 23 PeriodicTriggerSpell | 9 | periodic trigger needs mechanics | Inert | 758 |
 | 29 ModStat | 1 | stat_bonus supports self auras; selected effect 35 needs area mechanics | Inert for the selected Item | 7363 |
-| 30 ModSkill | 206 | signed skill points; shared combat authority and client temporary bonus | Correct | 7515 |
+| 30 ModSkill | 206 | signed skill points; combat, skill requirements and client bonuses | Correct bonuses; fishing success roll remains absent | 7515 |
 | 31 ModIncreaseSpeed | 62 | run_speed lacks faithful mounted and slow composition | Inert | 17625 |
 | 42 ProcTriggerSpell | 52 | item proc restrictions not certified | Inert | 4070 |
 | 43 ProcTriggerDamage | 1 | item proc restrictions not certified | Inert | 16550 |

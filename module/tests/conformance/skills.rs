@@ -248,3 +248,30 @@ fn ranged_skill_caps_and_empty_slots_survive_repair_and_reconnect() {
     assert!((crit(&with_bow) - crit(&without_bow) - 0.16).abs() < 0.00001);
     assert_eq!(skill(&without_bow, 45), (4, 10, 0, 0));
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_skill_aura_does_not_grant_a_profession_but_applies_when_the_skill_is_learned() {
+    use super::buy_in_slot::{grant, request, stage};
+    let (shard, mut connection, guid, _) = stage("skill-profession-requirement");
+    if !import_spell_plan(&shard) {
+        skill_spell(&shard, 7824, "Blacksmithing Skill +10", 164, 10, 128, false);
+    }
+    shard.assert_call("debug_learn_spell", &[&guid.to_string(), "7824"]);
+    shard.assert_sql("UPDATE game_item_template SET class = 4, subclass = 1, inventory_type = 11, required_level = 1, required_skill = 164, required_skill_rank = 10, max_stack = 1, bonding = 0, spellid_1 = 0, spellid_2 = 0, spellid_3 = 0, spellid_4 = 0, spellid_5 = 0 WHERE entry = 5090050");
+    let item = grant(&shard, guid, 5090050, 1, 23);
+    cast(&mut connection, 7824);
+    assert!(shard.query_rows(&format!("SELECT current FROM game_player_skill WHERE character_guid = {guid} AND skill_line = 164")).is_empty());
+    let packets = request(&mut connection, 0x10a, vec![255, 23]);
+    assert!(packets.iter().any(|(opcode, _)| *opcode == 0x112));
+    shard.assert_call("debug_learn_profession", &[&guid.to_string(), "164", "75"]);
+    assert_eq!(skill(&fields(&mut connection, guid), 164), (1, 75, 10, 0));
+    request(&mut connection, 0x10a, vec![255, 23]);
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT slot FROM game_item_instance WHERE guid = {item}"
+        ))[0]["slot"],
+        "10"
+    );
+    assert_eq!(shard.query_rows(&format!("SELECT current FROM game_player_skill WHERE character_guid = {guid} AND skill_line = 164"))[0]["current"], "1");
+}

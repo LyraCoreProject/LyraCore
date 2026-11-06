@@ -4,7 +4,6 @@ use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp
 
 use crate::creatures::game_creature_spawn_map;
 use crate::game_gameobject_loot;
-use crate::game_player_skill;
 use crate::game_world_entity;
 use crate::nav::game_nav_chunk;
 use crate::spell::{CastGateRefusal, CastRefusalReason};
@@ -546,14 +545,7 @@ pub(crate) fn apply_pick_lock(
             continue;
         }
         if row.kind == LOCK_KIND_SKILL {
-            let current = ctx
-                .db
-                .game_player_skill()
-                .by_character()
-                .filter(&caster_guid)
-                .find(|s| s.skill_line == row.property)
-                .map(|s| s.current as u32)
-                .unwrap_or(0);
+            let current = crate::skill::skill_value(ctx, caster_guid, row.property, false);
             if current >= row.required_skill {
                 satisfied = true;
                 climb = Some((row.property, row.required_skill));
@@ -643,14 +635,7 @@ fn use_resolved_gameobject(
                 return Err("node already gathered".to_string());
             }
             let line = tmpl.gather_skill_line;
-            let learned = ctx
-                .db
-                .game_player_skill()
-                .by_character()
-                .filter(&caster_guid)
-                .find(|s| s.skill_line == line)
-                .map(|s| s.current as u32)
-                .unwrap_or(0);
+            let learned = crate::skill::skill_value(ctx, caster_guid, line, false);
             can_gather(learned, tmpl.data1)?;
             // Grant before depletion so a full bag leaves the node gatherable.
             crate::items::grant_item(ctx, caster_guid, tmpl.data0, 1)?;

@@ -338,7 +338,7 @@ pub(crate) fn aura_changed(ctx: &ReducerContext, previous: Option<&Aura>, curren
     }
 }
 
-fn skill_value(ctx: &ReducerContext, guid: u64, line: u32, maximum: bool) -> u32 {
+pub(crate) fn skill_value(ctx: &ReducerContext, guid: u64, line: u32, maximum: bool) -> u32 {
     let Some(skill) = ctx
         .db
         .game_player_skill()
