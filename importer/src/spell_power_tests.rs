@@ -382,7 +382,10 @@ fn actual_spell_power_world_plan_snapshots_corruption_with_its_dot_coefficient()
     assert_eq!(corruption(), ordinary + 2);
 }
 
-fn seal_damage(connection: &mut lyracore_test_support::ReducerConnection) -> Vec<u32> {
+fn spell_hits(
+    connection: &mut lyracore_test_support::ReducerConnection,
+    id: u32,
+) -> Vec<(u32, u8)> {
     let mut hits = Vec::new();
     for packet in connection.drain_packets() {
         let packet: serde_json::Value = serde_json::from_str(packet.get()).unwrap();
@@ -399,9 +402,10 @@ fn seal_damage(connection: &mut lyracore_test_support::ReducerConnection) -> Vec
             offset += 1 + body[offset].count_ones() as usize;
         }
         let spell = u32::from_le_bytes(body[offset..offset + 4].try_into().unwrap());
-        if spell == 25742 {
-            hits.push(u32::from_le_bytes(
-                body[offset + 4..offset + 8].try_into().unwrap(),
+        if spell == id {
+            hits.push((
+                u32::from_le_bytes(body[offset + 4..offset + 8].try_into().unwrap()),
+                body[offset + 8],
             ));
         }
     }
@@ -457,10 +461,14 @@ fn actual_spell_power_world_plan_scales_righteousness_with_its_weapon_coefficien
         wire.call("debug_advance_roll_batch", json!([45])).unwrap();
         wire.call("native_world_receive", json!([0x142, Vec::<u8>::new()]))
             .unwrap();
-        let hits = seal_damage(&mut wire);
+        let hits = spell_hits(&mut wire, 25742);
         assert!(!hits.is_empty());
         let expected = if bonus { [5, 6] } else { [3, 4] };
-        assert!(hits.iter().all(|hit| expected.contains(hit)), "{hits:?}");
+        assert!(
+            hits.iter()
+                .all(|(damage, school)| expected.contains(damage) && *school == 1),
+            "{hits:?}"
+        );
     }
 }
 
@@ -535,4 +543,56 @@ fn actual_spell_power_world_plan_scales_eviscerate_as_nonweapon_damage() {
     assert_eq!(eviscerate(), ordinary - 3);
     cast(&shard, 1, 8599, 1);
     assert_eq!(eviscerate(), ordinary + 57);
+}
+
+#[test]
+#[ignore = "requires World Source, client DBCs, SpacetimeDB 2.14.0 and Wasm"]
+fn actual_spell_power_world_plan_wand_keeps_arcane_school_without_spell_power() {
+    use serde_json::json;
+    let shard = imported_spell_fixture(&[5019, 11390, 702], true);
+    let wolf = (0xf130u64 << 48) | (51000u64 << 24) | 1;
+    shard.assert_sql("UPDATE game_character SET class = 8 WHERE guid = 1");
+    shard.assert_call("debug_learn_spell", &["1", "5009"]);
+    shard.assert_call("debug_learn_spell", &["1", "5019"]);
+    shard.assert_call("debug_set_skill", &["1", "228", "300"]);
+    import_items(&shard, &[25, 50, 51, 52, 11287]);
+    shard.assert_call("debug_grant_item", &["1", "11287", "1"]);
+    let wand = shard
+        .query_rows("SELECT slot FROM game_item_instance WHERE owner_guid = 1 AND entry = 11287");
+    shard.assert_call("debug_equip_item", &["1", &wand[0]["slot"]]);
+    shard.assert_sql(
+        "INSERT INTO game_conformance_swing_random (character_guid,state) VALUES (1,1)",
+    );
+    let mut wire = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
+    wire.call("native_world_open", json!([42])).unwrap();
+    wire.call("debug_native_enter_world", json!([1])).unwrap();
+    let (gx, gy) = lyracore_shared::spatial::grid_cell(-8934.95, -132.493);
+    shard.assert_sql(&format!("UPDATE game_world_entity SET x = -8934.95, grid_x = {gx}, grid_y = {gy} WHERE guid = {wolf}"));
+    shard.assert_sql("UPDATE game_world_entity SET orientation = 0, power = 100000, max_power = 100000 WHERE guid = 1");
+    wire.drain_packets();
+    let shoot = |wire: &mut lyracore_test_support::ReducerConnection| {
+        shard.assert_sql(
+            "UPDATE game_conformance_swing_random SET state = 1 WHERE character_guid = 1",
+        );
+        wire.call("debug_begin_cast", json!([1, 5019, wolf]))
+            .unwrap();
+        wire.call("debug_advance_roll_batch", json!([61])).unwrap();
+        wire.call("native_world_receive", json!([0x26d, Vec::<u8>::new()]))
+            .unwrap();
+        let hits = spell_hits(wire, 5019);
+        assert!(!hits.is_empty());
+        assert!(hits.iter().all(|(_, school)| *school == 6), "{hits:?}");
+        hits.into_iter()
+            .map(|(damage, _)| damage)
+            .collect::<Vec<_>>()
+    };
+    let ordinary = shoot(&mut wire);
+    wire.call("debug_begin_cast", json!([1, 11390, 1])).unwrap();
+    wire.call("debug_advance_roll_batch", json!([61])).unwrap();
+    assert_eq!(shoot(&mut wire), ordinary);
+    wire.call("debug_begin_cast", json!([wolf, 702, 1]))
+        .unwrap();
+    wire.call("debug_advance_roll_batch", json!([61])).unwrap();
+    let reduced: Vec<_> = ordinary.into_iter().map(|damage| damage - 3).collect();
+    assert_eq!(shoot(&mut wire), reduced);
 }
