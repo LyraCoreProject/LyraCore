@@ -502,7 +502,7 @@ pub(crate) fn aura_apply(
         } else {
             0
         };
-    // p1 holds linked debuffs, so trigger auras freeze trigger_spell in eff_p1.
+    // Trigger Auras freeze trigger_spell in eff_p1.
     let eff_p1 = if e.kind == A_PERIODIC_TRIGGER || e.kind == A_PROC_TRIGGER {
         e.trigger_spell as i32
     } else {
@@ -890,6 +890,11 @@ pub(crate) fn apply_effect(
         | EffectKind::AuraSelfResurrect
         | EffectKind::AuraTransform
         | EffectKind::AuraModPowerRegenPct
+        | EffectKind::AuraModPowerRegen
+        | EffectKind::AuraModHealthRegen
+        | EffectKind::AuraModRegen
+        | EffectKind::AuraModHealthRegenPct
+        | EffectKind::AuraManaRegenInterrupt
         | EffectKind::AuraFlag => apply_aura_effect(
             ctx,
             e,
@@ -936,7 +941,7 @@ fn apply_aura_effect(
         points,
         0,
     );
-    if e.p1 != 0 {
+    if e.kind == A_ABSORB && e.p1 != 0 {
         apply_linked_debuff(ctx, e.p1 as u32, caster_guid, target_guid, level);
     }
     // Check action blocking after placement so the new control aura participates.

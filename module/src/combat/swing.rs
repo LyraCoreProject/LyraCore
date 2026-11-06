@@ -10,6 +10,7 @@ pub fn tick_melee(ctx: &ReducerContext, _schedule: MeleeSchedule) {
     if !crate::time::scheduler_authorized(ctx) {
         return;
     }
+    super::regeneration::regenerate_characters(ctx);
     melee_pass(ctx);
 }
 

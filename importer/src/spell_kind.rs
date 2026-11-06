@@ -120,11 +120,14 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         SchoolImmunity | DamageImmunity | EffectImmunity | StateImmunity | MechanicImmunity
         | MechanicImmunityMask => A_IMMUNITY,
 
-        ModRegenDuringCombat | ModHealthRegenInCombat => A_COMBAT_HEALTH_REGEN_PCT,
+        ModRegenDuringCombat => A_COMBAT_HEALTH_REGEN_PCT,
+        ModHealthRegenInCombat => A_MOD_HEALTH_REGEN,
 
-        ModRegen => A_PERIODIC_HEAL,
-        ModPowerRegen => A_PERIODIC_ENERGIZE,
+        ModRegen => A_MOD_REGEN,
+        ModHealthRegenPercent => A_MOD_HEALTH_REGEN_PCT,
+        ModPowerRegen => A_MOD_POWER_REGEN,
         ModPowerRegenPercent => A_MOD_POWER_REGEN_PCT,
+        ModManaRegenInterrupt => A_MANA_REGEN_INTERRUPT,
 
         ModDisarm => A_DISARM,
         Mounted => A_MOUNTED,
@@ -147,7 +150,6 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         | ModLanguage
         | FarSight
         | WaterBreathing
-        | ModHealthRegenPercent
         | PreventsFleeing
         | ModUnattackable
         | InterruptRegen
@@ -182,9 +184,18 @@ pub fn equip_aura_supported(aura: u32, misc: u32, equipment: [u32; 3]) -> bool {
         Some(ModStat) => misc <= 4 || misc == u32::MAX,
         Some(ModResistance) => misc != 0 && misc & !0x7f == 0,
         Some(ModCritPercent) => equipment[0] == u32::MAX,
+        Some(ModPowerRegen) => misc == 0,
         Some(
-            ModHitChance | ModAttackPower | ModRangedAttackPower | ModHealingDone
-            | ModSpellCritChance,
+            ModHitChance
+            | ModAttackPower
+            | ModRangedAttackPower
+            | ModHealingDone
+            | ModSpellCritChance
+            | ModHealthRegenInCombat
+            | ModRegen
+            | ModHealthRegenPercent
+            | ModRegenDuringCombat
+            | ModManaRegenInterrupt,
         ) => true,
         _ => false,
     }

@@ -336,7 +336,7 @@ fn aura_moves_vitals_gate() {
     assert!(aura_moves_vitals(A_MOD_STAT, STAT_ALL as i32));
     assert!(!aura_moves_vitals(A_MOD_STAT, STAT_STR as i32));
     assert!(!aura_moves_vitals(A_MOD_STAT, STAT_AGI as i32));
-    assert!(!aura_moves_vitals(A_MOD_STAT, STAT_SPI as i32));
+    assert!(aura_moves_vitals(A_MOD_STAT, STAT_SPI as i32));
     assert!(!aura_moves_vitals(A_MOD_COMBAT, STAT_STA as i32));
     assert!(!aura_moves_vitals(A_PERIODIC_DAMAGE, STAT_INT as i32));
     assert!(!aura_moves_vitals(A_MOD_RESISTANCE, STAT_ALL as i32));

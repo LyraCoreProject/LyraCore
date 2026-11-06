@@ -14,7 +14,7 @@ pub fn stacked_amount(amount: i32, stacks: u8) -> i32 {
 }
 
 pub fn moves_sheet(kind: u8, parameter: i32) -> bool {
-    (kind == A_MOD_STAT
+    (matches!(kind, A_MOD_STAT | A_MOD_STAT_PCT)
         && [STAT_STR, STAT_AGI, STAT_STA, STAT_INT, STAT_SPI, STAT_ALL]
             .into_iter()
             .any(|stat| parameter == i32::from(stat)))

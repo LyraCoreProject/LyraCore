@@ -294,6 +294,18 @@ deadlines stay unchanged. A pending cast's new category override defaults to `No
 the spell's category. New Item casts retain their Item category through completion. World entry
 sends remaining spell and category cooldowns in `SMSG_INITIAL_SPELLS`.
 
+### Regeneration migration
+
+Reimport `spell`, then call `debug_repair_after_publish` before play resumes. Both cast and equip
+Auras use the corrected MP5 and HP5 kinds. Repair stops obsolete periodic energize and heal ticks,
+and repairs Evocation's former 15% magnitude to the source
+1500% spirit multiplier. The remaining cast amounts and application times stay frozen. Repeated
+repair preserves unchanged equip effects and does not add a second regeneration contribution.
+
+`game_character_regeneration` is a new empty private table. It needs no backfill. Transfer carries its
+fractional health remainder and next tick deadline; older Transfer blobs start with neither. Existing Characters use the two-second consumer without a recast or
+manual Aura cleanup. Rage and energy keep their existing consumers.
+
 ### Temporary enchantment migration
 
 Poisons, sharpening stones, weapon oils and shaman weapon spells need effect 54 imported as

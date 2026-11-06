@@ -86,6 +86,13 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
         } else if aura.eff_p0_kind == P_COMBAT_PERCENT && effect.p0_kind != P_COMBAT_PERCENT {
             aura.amount /= 100;
         }
+        if aura.spell_id == 12051
+            && effect.effect_index == 0
+            && aura.eff_kind == A_PERIODIC_ENERGIZE
+            && effect.kind == A_MOD_POWER_REGEN_PCT
+        {
+            aura.amount = effect.base_points;
+        }
         if effect.kind != A_ABSORB {
             aura.amount_remaining = 0;
         } else if aura.eff_kind != A_ABSORB {

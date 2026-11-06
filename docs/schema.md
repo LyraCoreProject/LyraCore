@@ -897,7 +897,7 @@ Publish repair refreshes these projections; see
 | 71 ModSpellCritChanceSchool | 215 | school crit needs a school-aware consumer | Inert | 18382 |
 | 77 MechanicImmunity | 4 | mechanic immunity representation not certified | Inert | 7219 |
 | 82 WaterBreathing | 3 | water breathing placeholder | Inert | 11789 |
-| 85 ModPowerRegen | 345 | MP5 needs two-second regeneration, not periodic energize | Inert | 18378 |
+| 85 ModPowerRegen | 345 | flat MP5 on two-second ticks, including during the five-second rule | Correct for mana | 18378 |
 | 89 PeriodicDamagePercent | 1 | percent damage must scale with health | Inert | 28347 |
 | 99 ModAttackPower | 291 | melee_attack_power; signed flat AP | Correct | 9138 |
 | 102 ModMeleeAttackPowerVersus | 40 | melee AP needs creature-type selection | Inert | 14097 |
@@ -918,7 +918,7 @@ Publish repair refreshes these projections; see
 | 144 SafeFall | 2 | safe fall placeholder | Inert | 23409 |
 | 154 ModStealthLevel | 5 | stealth level needs mechanics | Inert | 17746 |
 | 158 ModShieldBlockvalue | 21 | block value needs mechanics | Inert | 22852 |
-| 161 ModHealthRegenInCombat | 38 | flat combat regeneration must not be percent | Inert | 12956 |
+| 161 ModHealthRegenInCombat | 38 | flat HP5 in and out of combat, with health fraction carry | Correct | 12956 |
 | 180 ModFlatSpellDamageVersus | 6 | flat damage needs creature-type selection | Inert | 22849 |
 
 The source handlers are in [SpellAuras.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellAuras.cpp).
@@ -930,3 +930,27 @@ The class AP formulas and fractional damage follow
 [StatSystem.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/StatSystem.cpp).
 Mana regeneration follows the two-second `Player::Regenerate` cadence in
 [Player.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp).
+
+### Regeneration
+
+`A_MOD_POWER_REGEN` (0xC1) stores mana per five seconds. Each Character keeps a two-second
+timer, independent of energy. Mana adds MP5 to class-specific spirit regeneration and
+truncates each tick. The five-second rule suppresses only spirit regeneration; aura 134 permits a
+percentage of spirit while that rule is active. Aura 110 multiplies spirit, without multiplying
+MP5. Evocation therefore uses its source spirit multiplier and casting allowance. Non-mana aura
+85 shapes import as inert; energy and rage retain their separate calculations.
+
+`A_MOD_HEALTH_REGEN` (0xC2) stores HP5 that applies in and out of combat. `A_MOD_REGEN` (0xC3)
+stores out-of-combat regeneration, with the source period in `p1` (zero defaults to 5,000 ms).
+`A_MOD_HEALTH_REGEN_PCT` (0xC4) multiplies out-of-combat spirit regeneration. Existing
+`A_COMBAT_HEALTH_REGEN_PCT` remains the percentage of spirit permitted in combat.
+`A_MANA_REGEN_INTERRUPT` (0xC5) stores the casting allowance. Sitting multiplies spirit health
+regeneration by 1.5; polymorph uses 10% maximum health per tick before HP5.
+
+`game_character_regeneration` is a private Character-keyed row holding the fractional health gain
+and next tick deadline. Full pools do not accumulate credit before a new deficit.
+It starts empty, travels with the Character across Transfer, and resets on a fresh login.
+Character deletion removes the row.
+Regeneration selects Character deficits through the composite type/pending index and reads indexed Auras;
+it adds no whole-table scan. The source mana rates have no dedicated 5875 update fields. Health
+and power changes use the ordinary unit field updates.

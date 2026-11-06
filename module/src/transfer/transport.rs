@@ -549,6 +549,7 @@ pub(crate) const TRANSFER_TABLES_OLD_BLOBS_MAY_LACK: &[&str] = &[
     "game_buyback_state",
     "game_character_away",
     "game_character_quest_log",
+    "game_character_regeneration",
     "game_fatigue_state",
     "game_group_target_icon",
     "game_guild_fee_hold",

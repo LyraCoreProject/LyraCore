@@ -1232,13 +1232,14 @@ fn the_instance_removal_dies_with_the_source_copy_and_is_not_carried() {
     assert!(NOT_TRANSPORTED.contains(&"game_instance_removal"));
 }
 
-const OLD_BLOBS_MAY_LACK: [&str; 12] = [
+const OLD_BLOBS_MAY_LACK: [&str; 13] = [
     "game_auction_bid_hold",
     "game_auction_hold",
     "game_buyback_item",
     "game_buyback_state",
     "game_character_away",
     "game_character_quest_log",
+    "game_character_regeneration",
     "game_fatigue_state",
     "game_group_target_icon",
     "game_guild_fee_hold",
@@ -1349,6 +1350,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         ("game_buyback_state", count),
         ("game_character_away", count),
         ("game_character_quest_log", count),
+        ("game_character_regeneration", count),
         ("game_fatigue_state", count),
         ("game_group_target_icon", count),
         ("game_guild_fee_hold", count),
@@ -1369,7 +1371,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         arms,
     )
     .expect("the filled payload imports");
-    assert_eq!(applied.get(), 13);
+    assert_eq!(applied.get(), 14);
 }
 
 #[test]
@@ -1383,7 +1385,7 @@ fn the_tables_old_blobs_may_lack_are_pinned() {
     }
     #[cfg(not(has_packages))]
     {
-        assert_eq!(manifest().len(), 50);
+        assert_eq!(manifest().len(), 51);
         assert_eq!(manifest_without(&OLD_BLOBS_MAY_LACK).len(), 38);
     }
 }
