@@ -162,3 +162,49 @@ fn imported_demon_armor_regenerates_flat_health_and_carries_its_fraction() {
         "6 HP5 credits 12 health over five ticks"
     );
 }
+
+#[test]
+#[ignore = "requires local World Source, stock client MPQs, SpacetimeDB 2.14.0 and Wasm"]
+fn imported_food_and_health_percent_regeneration_use_source_units() {
+    let mut character = Character::imported("imported-food-consumer", &[433, 24705]);
+    character.cast(433);
+    character.set_pools();
+    character.shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_bytes_1=0 WHERE guid={}",
+        character.guid
+    ));
+    character.advance(1);
+    assert_eq!(
+        character.pool("health"),
+        118,
+        "standing Mage gains 12 spirit health plus 6.8 food health per tick"
+    );
+    character.advance(4);
+    assert_eq!(
+        character.pool("health"),
+        193,
+        "the source float carry leaves the last fraction for the next tick"
+    );
+    character.shard.assert_sql(&format!(
+        "DELETE FROM game_aura WHERE target_guid={} AND spell_id=433",
+        character.guid
+    ));
+    character.cast(24705);
+    character.set_pools();
+    character.advance(1);
+    assert_eq!(
+        character.pool("health"),
+        115,
+        "Invocation multiplies spirit regeneration by 1.25"
+    );
+    character.shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_bytes_1=1 WHERE guid={}",
+        character.guid
+    ));
+    character.advance(1);
+    assert_eq!(
+        character.pool("health"),
+        138,
+        "sitting multiplies spirit regeneration by 1.5 and carries the fraction"
+    );
+}
