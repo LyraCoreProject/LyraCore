@@ -295,7 +295,7 @@ fn run_spell_effects(
     let weapon_strike = matches!(table, HitTable::Weapon { .. });
     let rolls_hit = weapon_strike
         || effects.iter().any(|e| e.kind == E_DAMAGE)
-        || (hdr.negative() && hdr.school_mask & !RESIST_ARMOR != 0);
+        || (hdr.negative() && hdr.cast_flags & (SPELL_ATTR_BINARY | SPELL_ATTR_MAGIC_HIT) != 0);
     let mut target_rolls: std::collections::HashMap<u64, u8> = std::collections::HashMap::new();
     // vmangos rolls the main hand per target, landed or avoided. LyraCore skips a Chance on Hit cast.
     let rolls_weapon =
@@ -446,7 +446,11 @@ fn run_spell_effects(
             is_crit: any_crit,
             resisted: total_resisted,
             absorbed: total_absorbed,
-            miss_info: cast_miss(primary_avoided, weapon_strike, hdr.school_mask),
+            miss_info: cast_miss(
+                primary_avoided,
+                weapon_strike,
+                hdr.cast_flags & SPELL_ATTR_MAGIC_HIT != 0 || hdr.school_mask & !RESIST_ARMOR != 0,
+            ),
             energized: total_energized,
             power_type: energized_power_type,
             cooldown_ms: hdr.cooldown_ms,
@@ -509,15 +513,12 @@ fn arm_avoidance_reacts(ctx: &ReducerContext, caster_guid: u64, target_guid: u64
     }
 }
 
-fn cast_miss(roll: u8, weapon_strike: bool, school_mask: u8) -> u8 {
+fn cast_miss(roll: u8, weapon_strike: bool, magic_hit: bool) -> u8 {
     use crate::combat::{HIT_DODGE, HIT_MISS, HIT_PARRY};
-    const SCHOOL_MASK_PHYSICAL: u8 = 0x01;
     match roll {
         HIT_DODGE => crate::spell::CAST_MISS_DODGE,
         HIT_PARRY => crate::spell::CAST_MISS_PARRY,
-        HIT_MISS if weapon_strike || matches!(school_mask, 0 | SCHOOL_MASK_PHYSICAL) => {
-            crate::spell::CAST_MISS_MISS
-        }
+        HIT_MISS if weapon_strike || !magic_hit => crate::spell::CAST_MISS_MISS,
         HIT_MISS => crate::spell::CAST_MISS_RESIST,
         _ => crate::spell::CAST_MISS_NONE,
     }
@@ -1909,21 +1910,21 @@ mod cast_miss_tests {
 
     #[test]
     fn a_failed_hit_roll_misses_a_physical_spell_and_resists_a_magic_one() {
-        // School masks: 0 none, 1 physical, 4 fire, 32 shadow.
         use crate::combat::{HIT_CRIT, HIT_MISS, HIT_NORMAL};
         assert_eq!(
-            cast_miss(HIT_NORMAL, false, 4),
+            cast_miss(HIT_NORMAL, false, true),
             crate::spell::CAST_MISS_NONE
         );
-        assert_eq!(cast_miss(HIT_CRIT, true, 1), crate::spell::CAST_MISS_NONE);
-        assert_eq!(cast_miss(HIT_MISS, false, 0), crate::spell::CAST_MISS_MISS);
-        assert_eq!(cast_miss(HIT_MISS, false, 1), crate::spell::CAST_MISS_MISS);
         assert_eq!(
-            cast_miss(HIT_MISS, false, 4),
-            crate::spell::CAST_MISS_RESIST
+            cast_miss(HIT_CRIT, true, false),
+            crate::spell::CAST_MISS_NONE
         );
         assert_eq!(
-            cast_miss(HIT_MISS, false, 32),
+            cast_miss(HIT_MISS, false, false),
+            crate::spell::CAST_MISS_MISS
+        );
+        assert_eq!(
+            cast_miss(HIT_MISS, false, true),
             crate::spell::CAST_MISS_RESIST
         );
     }
@@ -1931,8 +1932,17 @@ mod cast_miss_tests {
     #[test]
     fn a_weapon_spell_reports_its_physical_avoidance_whatever_its_school() {
         use crate::combat::{HIT_DODGE, HIT_MISS, HIT_PARRY};
-        assert_eq!(cast_miss(HIT_MISS, true, 2), crate::spell::CAST_MISS_MISS);
-        assert_eq!(cast_miss(HIT_DODGE, true, 1), crate::spell::CAST_MISS_DODGE);
-        assert_eq!(cast_miss(HIT_PARRY, true, 1), crate::spell::CAST_MISS_PARRY);
+        assert_eq!(
+            cast_miss(HIT_MISS, true, true),
+            crate::spell::CAST_MISS_MISS
+        );
+        assert_eq!(
+            cast_miss(HIT_DODGE, true, false),
+            crate::spell::CAST_MISS_DODGE
+        );
+        assert_eq!(
+            cast_miss(HIT_PARRY, true, false),
+            crate::spell::CAST_MISS_PARRY
+        );
     }
 }

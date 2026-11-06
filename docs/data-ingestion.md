@@ -492,9 +492,10 @@ An extra field restores alignment at the localized name, column 120.
 | English name, family, complete 64-bit family mask | 120, 160, 161..162 |
 | Damage class | 164 |
 
-Spell import keeps binary resistance, cannot-crit, always-hit and ignore-resistance behavior in
-`cast_flags`. Binary classification uses the original damage class, effects and aura types, before
-the effect translation combines related aura types. It follows `Spells::IsBinary` in the
+Spell import keeps magic hit testing, binary resistance, cannot-crit, always-hit and ignore-resistance
+behavior in `cast_flags`. The magic hit flag comes from damage class 1, independently of effect kind.
+Binary classification uses the original damage class, effects and aura types, before the effect
+translation combines related aura types. It follows `Spells::IsBinary` in the
 [pinned vmangos source](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellMgr.cpp).
 Reimport the `spell` family to give existing Realms these flags.
 

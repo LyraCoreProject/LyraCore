@@ -196,6 +196,7 @@ pub const SPELL_ATTR_BINARY: u32 = 0x0800;
 pub const SPELL_ATTR_CANNOT_CRIT: u32 = 0x1000;
 pub const SPELL_ATTR_IGNORE_RESISTANCES: u32 = 0x2000;
 pub const SPELL_ATTR_ALWAYS_HIT: u32 = 0x4000;
+pub const SPELL_ATTR_MAGIC_HIT: u32 = 0x8000;
 
 #[cfg(test)]
 mod tests {
