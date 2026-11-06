@@ -110,7 +110,7 @@ fn coverage_keeps_ledger_gaps_and_source_occurrences_separate() -> Result<()> {
     let ledger = FeatureLedger::load(&root.join("features"))?;
     let coverage = coverage(&ledger)?;
     assert_eq!(coverage.gaps.data_import, 2334);
-    assert_eq!(coverage.gaps.behavior, 96);
+    assert_eq!(coverage.gaps.behavior, 97);
     assert!(!coverage.systems["spells"]
         .by_source
         .contains_key("module/src/creatures/cycle/mod.rs"));

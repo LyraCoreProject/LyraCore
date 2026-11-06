@@ -30,3 +30,9 @@ description = "ModSkill now projects signed skill bonuses from all 206 equipment
 path = "module/src/professions.rs"
 symbol = "apply_fish"
 evidence = "module/src/professions.rs; docs/schema.md#equip-aura-support"
+
+[[known_gaps]]
+description = "Flattened defense enchantments retain the existing item-stat fold rather than an Aura. They still affect combat but do not populate PLAYER_SKILL_INFO bonus fields. A negative skill Aura clamps before that separate fold, so a low earned defense value plus a positive enchantment can stay above zero when vmangos clamps the combined skill value to zero. Fixing the enchantment representation and mutation delivery requires a separate item-enchantment change. Direct equip-spell and cast ModSkill bonuses share the new skill authority."
+path = "module/src/items/properties.rs"
+symbol = "EquipStat::kind"
+evidence = "importer/src/item_property.rs; module/src/skill.rs; docs/schema.md#equip-aura-support"

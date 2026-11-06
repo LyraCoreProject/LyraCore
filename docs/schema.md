@@ -883,6 +883,9 @@ glancing calculations, including maximum defense against another Character. Skil
 for equipment, skinning, gathering and locks also include bonuses. Fishing retains its existing
 loot selection without a skill-dependent success roll; its 11 ModSkill equipment items deliver
 the correct bonus fields but do not change that missing roll.
+Flattened defense enchantments still use the separate item-stat fold. Their bonus fields are
+absent, and their positive bonus is added after a negative skill Aura has clamped at zero. The
+feature ledger records this remaining item-enchantment representation and delivery gap.
 
 | Source aura type | Items | Consumer or missing behavior | Equip result | Example spell |
 | --- | ---: | --- | --- | ---: |
