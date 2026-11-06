@@ -8,7 +8,10 @@ use lyracore_shared::spell::taxonomy::{
 
 use std::collections::BTreeMap;
 
-use support::{event_rows, poll_until, Standalone, TableSubscription, POLL_TIMEOUT};
+use support::{
+    event_rows, fence_subscription, poll_until, subscribe_with_fence, Standalone,
+    TableSubscription, POLL_TIMEOUT,
+};
 
 type SqlRow = BTreeMap<String, String>;
 
@@ -27,7 +30,6 @@ const SLOW_SWING_MS: u32 = 60_000;
 // 30 procs per minute on a 2 second weapon is a certain proc.
 const CERTAIN_PPM: f32 = 30.0;
 const WEAPON_DELAY_MS: u32 = 2000;
-// At this level the capped miss, dodge and parry chances sum past certainty for a level 1 player.
 const OUT_OF_REACH_LEVEL: u32 = 60;
 const AVOIDED_SWINGS: usize = 3;
 const ATTEMPTS: usize = 15;
@@ -77,14 +79,23 @@ fn an_avoided_weapon_ability_still_casts_the_main_hand_chance_on_hit_spell() {
 fn only_a_white_swing_that_connects_casts_the_chance_on_hit_spell() {
     let mut standalone = Standalone::start("chance-on-hit-swing");
     let wolf = stage(&mut standalone);
+    standalone.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     set_level(&standalone, wolf, OUT_OF_REACH_LEVEL);
-    let events = standalone.subscribe(&[CAST_EVENTS, SWING_EVENTS]);
+    standalone.assert_sql(
+        "INSERT INTO game_conformance_swing_random (character_guid,state) VALUES (1,1)",
+    );
+    let events = subscribe_with_fence(&standalone, &[CAST_EVENTS, SWING_EVENTS]);
     standalone.assert_call("debug_engage", &["1", &wolf.to_string()]);
 
-    assert!(
-        poll_until(POLL_TIMEOUT, || swings(&events) >= AVOIDED_SWINGS),
-        "the engagement never swung {AVOIDED_SWINGS} times"
-    );
+    for count in 1..=AVOIDED_SWINGS {
+        standalone
+            .assert_sql("UPDATE game_melee_attack SET last_swing_ms = 1 WHERE attacker_guid = 1");
+        standalone.assert_call("debug_advance_roll_batch", &["4"]);
+        fence_subscription(&standalone, &events);
+        let outcomes = event_rows(&events, "game_combat_event_live");
+        assert_eq!(outcomes.len(), count);
+        assert_eq!(outcomes[count - 1]["hit_info"], "2");
+    }
     assert_eq!(
         go_of(&events, THUNDERFURY_PROC),
         None,
@@ -92,9 +103,18 @@ fn only_a_white_swing_that_connects_casts_the_chance_on_hit_spell() {
     );
 
     set_level(&standalone, wolf, 1);
-    assert!(
-        poll_until(POLL_TIMEOUT, || go_of(&events, THUNDERFURY_PROC).is_some()),
-        "a certain Chance on Hit must cast its spell when a white swing connects"
+    standalone
+        .assert_sql("UPDATE game_conformance_swing_random SET state = 1 WHERE character_guid = 1");
+    standalone.assert_sql("UPDATE game_melee_attack SET last_swing_ms = 1 WHERE attacker_guid = 1");
+    standalone.assert_call("debug_advance_roll_batch", &["4"]);
+    fence_subscription(&standalone, &events);
+    let outcomes = event_rows(&events, "game_combat_event_live");
+    assert_eq!(outcomes.len(), AVOIDED_SWINGS + 1);
+    assert!(outcomes[AVOIDED_SWINGS]["damage"].parse::<u32>().unwrap() > 0);
+    assert_eq!(gos_of(&events, THUNDERFURY_PROC), 1);
+    assert_eq!(
+        go_of(&events, THUNDERFURY_PROC).unwrap()["target_guid"],
+        wolf.to_string()
     );
 }
 
