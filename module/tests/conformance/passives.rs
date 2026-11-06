@@ -17,7 +17,10 @@ fn starting_passives(shard: &Standalone) {
         (20598, A_MOD_STAT_PCT, 5, STAT_SPI, 0),
         (28330, A_MOD_STAT, 3, STAT_STR, 3580),
     ] {
-        shard.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,visual_id) VALUES ({spell},'Starting passive fixture {spell}',0,0,0,0,0,0,0,1,0,0,0,0,{SPELL_ATTR_PASSIVE},1,0,false,0,0,0,0,0,0,0,0,{visual})"));
+        shard.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Starting passive fixture {spell}',0,0,0,0,0,0,0,1,0,0,0,0,{SPELL_ATTR_PASSIVE},1,0,false,0,0,0,0,0,0,0,0)"));
+        shard.assert_sql(&format!(
+            "UPDATE game_spell SET visual_id = {visual} WHERE spell_id = {spell}"
+        ));
         shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({},{spell},0,{kind},{points},0,0.0,0,0,0.0,0,0,0,{stat},1,0,0,false,0.0)", spell * 4));
         shard.assert_sql(&format!(
             "DELETE FROM game_createinfo_spell WHERE spell_id = {spell}"

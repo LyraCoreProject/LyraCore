@@ -1124,7 +1124,7 @@ fn equip_review_publish_repair_refreshes_stale_casts_and_permanent_passives_once
         false,
     );
     shard.assert_sql(
-        "UPDATE game_spell SET is_negative = true, duration_ms = 600000 WHERE spell_id = 604",
+        "UPDATE game_spell SET attributes = 65536, visual_id = 970, duration_index = 6, is_negative = true, duration_ms = 600000 WHERE spell_id = 604",
     );
     shard.assert_call(
         "debug_begin_cast",
