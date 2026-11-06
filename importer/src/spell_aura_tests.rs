@@ -170,10 +170,12 @@ fn imported_mage_armor_and_innervate_apply_the_source_five_second_rule() {
     character.advance(1);
     assert_eq!(character.pool("power"), 122);
     character.advance(1);
+    assert_eq!(character.pool("power"), 133);
+    character.advance(1);
     assert_eq!(
         character.pool("power"),
-        159,
-        "full spirit returns after five seconds, even while in combat"
+        170,
+        "the first tick after the five-second deadline restores full spirit in combat"
     );
     character.cast(24363);
     character.set_pools();

@@ -1383,7 +1383,7 @@ fn the_tables_old_blobs_may_lack_are_pinned() {
     }
     #[cfg(not(has_packages))]
     {
-        assert_eq!(manifest().len(), 50);
-        assert_eq!(manifest_without(&OLD_BLOBS_MAY_LACK).len(), 38);
+        assert_eq!(manifest().len(), 51);
+        assert_eq!(manifest_without(&OLD_BLOBS_MAY_LACK).len(), 39);
     }
 }
