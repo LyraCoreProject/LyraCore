@@ -1131,6 +1131,8 @@ fn push_spell_effect_rows(
             points_per_combo: s.effect_points_per_combo[i],
             bonus_coefficient: s.bonus_coefficient.map_or(-1.0, |c| c[i]),
             equip_supported: effect_id == 6
+                && s.implicit_target_a[i] == 1
+                && s.implicit_target_b[i] == 0
                 && equip_aura_supported(s.effect_aura[i], s.effect_misc_value[i], s.equipment),
         });
 
@@ -2750,7 +2752,13 @@ mod tests {
             .unwrap()
     }
 
-    fn equip_review_effect(spell_id: u32, aura: u32, raw_points: i32, misc: u32) -> SpellEffectRow {
+    fn equip_review_effect(
+        spell_id: u32,
+        aura: u32,
+        raw_points: i32,
+        misc: u32,
+        shape: (i32, i32, i32),
+    ) -> SpellEffectRow {
         let mut dbc = fixture_tables();
         dbc.spells = vec![Spell {
             id: spell_id,
@@ -2758,12 +2766,13 @@ mod tests {
             attributes: 192,
             duration: 21,
             equipment: [u32::MAX, 0, 0],
-            effect: [6, 0, 0],
+            effect: [shape.0, 0, 0],
             effect_aura: [aura, 0, 0],
             effect_base_points: [raw_points, 0, 0],
             effect_die_sides: [1, 0, 0],
             effect_misc_value: [misc, 0, 0],
-            implicit_target_a: [1, 0, 0],
+            implicit_target_a: [shape.1, 0, 0],
+            implicit_target_b: [shape.2, 0, 0],
             ..Default::default()
         }];
         let (mut rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
@@ -2773,62 +2782,62 @@ mod tests {
     #[test]
     fn equip_review_the_source_aura_census_enables_only_audited_consumers() {
         let cases = [
-            (3, 19307, 99, 0, false),
-            (4, 16372, 0, 0, false),
-            (8, 5707, 9, 0, false),
-            (13, 7685, 3, 4, false),
-            (14, 5102, -2, 1, false),
-            (15, 15438, 2, 0, false),
-            (17, 12418, 17, 0, false),
-            (19, 17623, 999, 4, false),
-            (22, 12956, 9, 32, true),
-            (23, 758, -1, 0, false),
-            (29, 7363, 3, 4, true),
-            (30, 7515, 2, 95, false),
-            (31, 17625, 7, 0, true),
-            (42, 4070, 0, 0, false),
-            (43, 16550, 59, 0, false),
-            (45, 4152, 0, 7, false),
-            (47, 13665, 0, 0, false),
-            (49, 13669, 0, 0, true),
-            (51, 13674, 0, 0, false),
-            (52, 7597, 0, 0, true),
-            (54, 15464, 0, 0, true),
-            (55, 23727, 0, 0, false),
-            (56, 8299, 0, 10697, false),
-            (57, 23434, 49, 0, true),
-            (58, 8747, 14, 0, false),
-            (64, 19307, 99, 0, false),
-            (71, 18382, 1, 126, false),
-            (77, 7219, -1, 3, false),
-            (82, 11789, -1, 0, false),
-            (85, 18378, 7, 0, false),
-            (89, 28347, 9, 0, false),
-            (99, 9138, 5, 0, true),
-            (102, 14097, 44, 4, false),
-            (107, 18388, -2001, 11, false),
-            (108, 23043, 49, 9, false),
-            (109, 17768, 99, 0, false),
-            (112, 27853, 49, 4415, false),
-            (117, 18985, 4, 9, false),
-            (123, 25717, -301, 4, false),
-            (124, 9138, 5, 0, true),
-            (130, 13587, 2, 0, false),
-            (131, 14097, 44, 4, false),
-            (135, 7678, 8, 126, true),
-            (138, 18065, 9, 0, false),
-            (139, 28282, 0, 529, false),
-            (140, 23674, 149, 0, false),
-            (141, 14824, 9, 0, false),
-            (144, 23409, 1, 0, false),
-            (154, 17746, 4, 0, false),
-            (158, 22852, 22, 0, false),
-            (161, 12956, 2, 0, false),
-            (180, 22849, 34, 32, false),
+            (3, 19307, 99, 0, (6, 1, 0), false),
+            (4, 16372, 0, 0, (6, 1, 0), false),
+            (8, 5707, 9, 0, (6, 1, 0), false),
+            (13, 7685, 3, 4, (6, 1, 0), false),
+            (14, 5102, -2, 1, (6, 1, 0), false),
+            (15, 15438, 2, 0, (6, 1, 0), false),
+            (17, 12418, 17, 0, (6, 1, 0), false),
+            (19, 17623, 999, 4, (6, 1, 0), false),
+            (22, 12956, 9, 32, (6, 1, 0), true),
+            (23, 758, -1, 0, (6, 1, 0), false),
+            (29, 7363, 3, 4, (35, 1, 0), false),
+            (30, 7515, 2, 95, (6, 1, 0), false),
+            (31, 17625, 7, 0, (6, 1, 0), true),
+            (42, 4070, 0, 0, (6, 1, 0), false),
+            (43, 16550, 59, 0, (6, 1, 0), false),
+            (45, 4152, 0, 7, (6, 1, 0), false),
+            (47, 13665, 0, 0, (6, 1, 0), false),
+            (49, 13669, 0, 0, (6, 1, 0), true),
+            (51, 13674, 0, 0, (6, 1, 0), false),
+            (52, 7597, 0, 0, (6, 1, 0), true),
+            (54, 15464, 0, 0, (6, 1, 0), true),
+            (55, 23727, 0, 0, (6, 1, 0), false),
+            (56, 8299, 0, 10697, (6, 1, 0), false),
+            (57, 23434, 49, 0, (6, 1, 0), true),
+            (58, 8747, 14, 0, (6, 1, 0), false),
+            (64, 19307, 99, 0, (6, 1, 0), false),
+            (71, 18382, 1, 126, (6, 1, 0), false),
+            (77, 7219, -1, 3, (6, 1, 0), false),
+            (82, 11789, -1, 0, (6, 1, 0), false),
+            (85, 18378, 7, 0, (6, 1, 0), false),
+            (89, 28347, 9, 0, (6, 1, 0), false),
+            (99, 9138, 5, 0, (6, 1, 0), true),
+            (102, 14097, 44, 4, (6, 1, 0), false),
+            (107, 18388, -2001, 11, (6, 1, 0), false),
+            (108, 23043, 49, 9, (6, 1, 0), false),
+            (109, 17768, 99, 0, (6, 1, 0), false),
+            (112, 27853, 49, 4415, (6, 1, 0), false),
+            (117, 18985, 4, 9, (6, 1, 0), false),
+            (123, 25717, -301, 4, (6, 1, 0), false),
+            (124, 9138, 5, 0, (6, 1, 0), true),
+            (130, 13587, 2, 0, (6, 1, 0), false),
+            (131, 14097, 44, 4, (6, 1, 0), false),
+            (135, 7678, 8, 126, (6, 1, 0), true),
+            (138, 18065, 9, 0, (6, 1, 0), false),
+            (139, 28282, 0, 529, (6, 1, 0), false),
+            (140, 23674, 149, 0, (6, 1, 0), false),
+            (141, 14824, 9, 0, (6, 1, 0), false),
+            (144, 23409, 1, 0, (6, 1, 0), false),
+            (154, 17746, 4, 0, (6, 1, 0), false),
+            (158, 22852, 22, 0, (6, 1, 0), false),
+            (161, 12956, 2, 0, (6, 1, 0), false),
+            (180, 22849, 34, 32, (6, 1, 0), false),
         ];
-        for (aura, spell, points, misc, supported) in cases {
+        for (aura, spell, points, misc, shape, supported) in cases {
             assert_eq!(
-                equip_review_effect(spell, aura, points, misc).equip_supported,
+                equip_review_effect(spell, aura, points, misc, shape).equip_supported,
                 supported,
                 "{spell}: {aura}"
             );
@@ -2838,14 +2847,22 @@ mod tests {
     }
 
     #[test]
+    fn equip_review_battle_shouts_area_target_stays_inert_on_equip() {
+        assert!(!equip_review_effect(6673, 99, 14, 0, (6, 20, 0)).equip_supported);
+    }
+
+    #[test]
     fn equip_review_18052_flat_school_damage_is_inert_until_its_bonus_is_supported() {
-        assert_eq!(equip_review_effect(18052, 13, 33, 126).kind, E_SCRIPTED);
+        assert_eq!(
+            equip_review_effect(18052, 13, 33, 126, (6, 1, 0)).kind,
+            E_SCRIPTED
+        );
     }
 
     #[test]
     fn equip_review_9329_ranged_attack_power_has_its_own_field() {
-        let melee = equip_review_effect(9329, 99, 15, 0);
-        let ranged = equip_review_effect(9329, 124, 15, 0);
+        let melee = equip_review_effect(9329, 99, 15, 0, (6, 1, 0));
+        let ranged = equip_review_effect(9329, 124, 15, 0, (6, 1, 0));
         assert_eq!((melee.base_points, melee.p0), (16, 0));
         assert_eq!((ranged.base_points, ranged.p0), (16, 11));
     }
@@ -2853,19 +2870,22 @@ mod tests {
     #[test]
     fn equip_review_7598_and_15464_keep_percentage_units_until_the_aura_roll() {
         for (spell, aura, raw, points) in [(7598, 52, 1, 2), (15464, 54, 0, 1)] {
-            let effect = equip_review_effect(spell, aura, raw, 0);
+            let effect = equip_review_effect(spell, aura, raw, 0, (6, 1, 0));
             assert_eq!((effect.base_points, effect.p0_kind), (points, 17));
         }
     }
 
     #[test]
     fn equip_review_21142_damage_shields_are_inert_instead_of_absorbing() {
-        assert_eq!(equip_review_effect(21142, 15, 4, 0).kind, E_SCRIPTED);
+        assert_eq!(
+            equip_review_effect(21142, 15, 4, 0, (6, 1, 0)).kind,
+            E_SCRIPTED
+        );
     }
 
     #[test]
     fn equip_review_7678_healing_does_not_increase_spell_damage() {
-        let effect = equip_review_effect(7678, 135, 8, 126);
+        let effect = equip_review_effect(7678, 135, 8, 126, (6, 1, 0));
         assert_eq!((effect.base_points, effect.p0), (9, 12));
     }
 

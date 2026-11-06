@@ -233,10 +233,10 @@ or absorbs. The complete admitted/inert type list and Item counts are in
 [the equip aura support audit](schema.md#equip-aura-support).
 
 Publish, reimport `spell` and `items`, then call `debug_repair_after_publish` before play resumes.
-A repair before reimport is safe; call it again after the imports. Each repair discards derived equip
-Auras and rebuilds them from current metadata, including changed units, visibility and eligibility.
-It does not restart equip cooldowns or retain duplicate effects. Finite equip effects restart their
-source duration during this explicit repair. Connected Characters and ghosts receive the rebuilt
+A repair before reimport is safe; call it again after the imports. Each derived aura retains its source definition locally. Repair keeps unchanged effects and rebuilds
+only stale definitions, including changed units, visibility and eligibility.
+It does not restart equip cooldowns or retain duplicate effects. Changed finite equip effects restart their
+source duration during this explicit repair. Unchanged aura identity and deadlines are preserved. Connected Characters and ghosts receive the rebuilt
 state. Other cast Auras retain their frozen values; this repair does not rewrite a normal cast or its
 remaining duration. Recasting a supported effect rebuilds changed fields from the current import.
 Expire or remove an old cast effect that the new import makes inert before play resumes; a recast

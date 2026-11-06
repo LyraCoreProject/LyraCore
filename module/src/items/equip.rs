@@ -100,7 +100,14 @@ pub(crate) fn reconcile(ctx: &ReducerContext, guid: u64) {
 }
 
 pub(crate) fn repair(ctx: &ReducerContext, guid: u64) {
-    clear(ctx, guid);
+    let stale = ctx
+        .db
+        .game_aura()
+        .by_target()
+        .filter(guid)
+        .filter(|aura| aura.item_guid(ctx) != 0 && !aura.item_definition_matches(ctx))
+        .collect();
+    crate::spell::shed_auras(ctx, guid, stale);
     restore(ctx, guid);
 }
 

@@ -817,12 +817,17 @@ Real world content is not seeded. It comes from the importer; see
 
 ### Equip aura support
 
+`game_item_aura` retains the exact BSATN source definition for each active derived aura. Repair
+compares it with the current header and effect, so unchanged auras keep their identity and timing.
+The source bytes stay local to the Shard and are excluded from Character records and Transfer.
+
 `game_spell_effect.equip_supported` defaults to false. The spell importer enables only source
 shapes whose units, selection and consumer have been audited. Existing and authored rows stay
 inert on equip until reimport or an explicit supported claim. This does not enable instant effects.
 The 52 source types below occur on 2,645 equipped Item entries at patch 10 / build 5875. Counts
 are distinct Item entries per type and overlap. One weapon-dependent crit Item stays inert; the
-other 383 use the shared melee/ranged crit bonus. This is a source-to-consumer audit, not a claim
+other 383 use the shared melee/ranged crit bonus. One area stat Item and one area spell-crit Item
+also stay inert. Only ordinary self-targeted effect-6 shapes are enabled. This is a source-to-consumer audit, not a claim
 that every spell or baseline combat calculation is complete.
 
 | Source aura type | Items | Consumer or missing behavior | Equip result | Example spell |
@@ -837,7 +842,7 @@ that every spell or baseline combat calculation is complete.
 | 19 ModInvisibilityDetection | 2 | detection placeholder | Inert | 17623 |
 | 22 ModResistance | 74 | resistance_bonus; flat school mask | Correct | 12956 |
 | 23 PeriodicTriggerSpell | 9 | periodic trigger needs mechanics | Inert | 758 |
-| 29 ModStat | 1 | stat_bonus; signed attribute points | Correct | 7363 |
+| 29 ModStat | 1 | stat_bonus supports self auras; selected effect 35 needs area mechanics | Inert for the selected Item | 7363 |
 | 30 ModSkill | 206 | skill modifier needs mechanics | Inert | 7515 |
 | 31 ModIncreaseSpeed | 62 | run_speed; strongest positive percent | Correct | 17625 |
 | 42 ProcTriggerSpell | 52 | item proc restrictions not certified | Inert | 4070 |
@@ -850,7 +855,7 @@ that every spell or baseline combat calculation is complete.
 | 54 ModHitChance | 192 | effective_miss_bp; percent to basis points | Correct | 15464 |
 | 55 ModSpellHitChance | 76 | spell hit needs its own consumer | Inert | 23727 |
 | 56 Transform | 7 | transform requirements not certified | Inert | 8299 |
-| 57 ModSpellCritChance | 2 | spell_crit_bp; separate spell basis points | Correct | 23434 |
+| 57 ModSpellCritChance | 2 | spell_crit_bp; separate spell basis points | Correct for 1 Item; 1 area Item inert | 23434 |
 | 58 ModIncreaseSwimSpeed | 1 | swim stacking not certified | Inert | 8747 |
 | 64 PeriodicManaLeech | 1 | mana leech needs drain and gain | Inert | 19307 |
 | 71 ModSpellCritChanceSchool | 215 | school crit needs a school-aware consumer | Inert | 18382 |

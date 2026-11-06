@@ -241,6 +241,7 @@ struct ItemAura {
     #[primary_key]
     aura_id: u64,
     item_guid: u64,
+    definition: Vec<u8>,
 }
 
 #[table(accessor = game_item_aura_expiry, scheduled(expire_item_aura))]
@@ -263,6 +264,23 @@ pub(crate) fn expire_item_aura(ctx: &ReducerContext, expiry: ItemAuraExpiry) {
 }
 
 impl Aura {
+    fn item_definition(ctx: &ReducerContext, spell: u32, effect: u64) -> Option<Vec<u8>> {
+        let spell = ctx.db.game_spell().spell_id().find(spell)?;
+        let effect = ctx.db.game_spell_effect().id().find(effect)?;
+        spacetimedb::sats::bsatn::to_vec(&(spell, effect)).ok()
+    }
+
+    pub(crate) fn item_definition_matches(&self, ctx: &ReducerContext) -> bool {
+        ctx.db
+            .game_item_aura()
+            .aura_id()
+            .find(self.id)
+            .is_some_and(|source| {
+                Self::item_definition(ctx, self.spell_id, self.effect_id)
+                    .is_some_and(|definition| definition == source.definition)
+            })
+    }
+
     fn arm_item_expiry(&self, ctx: &ReducerContext) {
         ctx.db.game_item_aura_expiry().aura_id().delete(self.id);
         if self.item_guid(ctx) != 0 && self.expires_at.to_micros_since_unix_epoch() != i64::MAX {
@@ -291,6 +309,8 @@ impl Aura {
             ctx.db.game_item_aura().insert(ItemAura {
                 aura_id: aura.id,
                 item_guid,
+                definition: Self::item_definition(ctx, aura.spell_id, aura.effect_id)
+                    .unwrap_or_default(),
             });
             aura.arm_item_expiry(ctx);
         }

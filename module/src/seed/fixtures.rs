@@ -702,6 +702,7 @@ pub(crate) fn seed_frost_armor_fixture(ctx: &ReducerContext) {
             target: 0,
             p0: 1,
             p0_kind: 2,
+            equip_supported: true,
             ..base_effect(FROST_ARMOR, 0)
         },
     );
