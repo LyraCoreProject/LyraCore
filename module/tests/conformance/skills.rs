@@ -224,8 +224,23 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
     request(&mut reconnect, 0x10c, vec![255, 24, 255, 11]);
     let mut reconnect = enter(&shard, guid);
     assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 5, 13, 0));
-    shard.assert_sql(&format!("UPDATE game_aura SET expires_at = 1800000000000000 WHERE target_guid = {guid} AND spell_id IN (27720, 7038)"));
-    shard.assert_call("debug_advance_roll_batch", &["20"]);
+    let duration_ms = [27720, 7038]
+        .into_iter()
+        .map(|spell| {
+            shard.query_rows(&format!(
+                "SELECT duration_ms FROM game_spell WHERE spell_id = {spell}"
+            ))[0]["duration_ms"]
+                .parse::<u32>()
+                .unwrap()
+        })
+        .max()
+        .unwrap();
+    let mut ticks = duration_ms.div_ceil(50) + 20;
+    while ticks > 0 {
+        let batch = ticks.min(4000);
+        shard.assert_call("debug_advance_roll_batch", &[&batch.to_string()]);
+        ticks -= batch;
+    }
     let mut reconnect = enter(&shard, guid);
     let values = fields(&mut reconnect, guid);
     assert_eq!(skill(&values, 95), (1, 5, 0, 0));
