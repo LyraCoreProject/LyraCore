@@ -170,6 +170,7 @@ fn blank_spell_effect(spell_id: u32, effect_index: u8) -> SpellEffect {
         enters_combat: false,
         points_per_combo: 0.0,
         bonus_coefficient: -1.0,
+        equip_supported: false,
     }
 }
 
@@ -236,6 +237,7 @@ fn apply_effect_field(
         "p1" => effect.p1 = as_i32(field, value)?,
         "script_id" => effect.script_id = as_u32(field, value)?,
         "bonus_coefficient" => effect.bonus_coefficient = as_f32(field, value)?,
+        "equip_supported" => effect.equip_supported = as_bool(field, value)?,
         "enters_combat" => effect.enters_combat = as_bool(field, value)?,
         other => {
             return Err(format!(

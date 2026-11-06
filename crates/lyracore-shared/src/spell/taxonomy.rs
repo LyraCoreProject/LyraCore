@@ -149,6 +149,8 @@ pub const P_GAMEOBJECT_ENTRY: u8 = 13;
 pub const P_DISPLAY_ID: u8 = 14;
 pub const P_SPELL_ID: u8 = 15;
 pub const P_FLAT_MANA: u8 = 16;
+// Source combat percentages convert to basis points after rolling the effect amount.
+pub const P_COMBAT_PERCENT: u8 = 17;
 pub const P_RAW: u8 = 255;
 pub const T_SELF: u8 = 0;
 pub const T_TARGET_ENEMY: u8 = 1;
@@ -168,6 +170,9 @@ pub const COMBAT_DODGE: u8 = 7;
 pub const COMBAT_BLOCK: u8 = 8;
 pub const COMBAT_DEFENSE: u8 = 9;
 pub const COMBAT_THREAT: u8 = 10;
+pub const COMBAT_RANGED_ATTACK_POWER: u8 = 11;
+pub const COMBAT_HEALING_POWER: u8 = 12;
+pub const COMBAT_SPELL_CRIT: u8 = 13;
 pub const SPEED_MOVE: u8 = 0;
 pub const SPEED_SWING: u8 = 1;
 pub const SPEED_CAST: u8 = 2;
@@ -268,6 +273,7 @@ mod tests {
         assert_eq!(P_DISPLAY_ID, 14);
         assert_eq!(P_SPELL_ID, 15);
         assert_eq!(P_FLAT_MANA, 16);
+        assert_eq!(P_COMBAT_PERCENT, 17);
         assert_eq!(P_RAW, 255);
         let all = [
             P_NONE,
@@ -286,6 +292,7 @@ mod tests {
             P_DISPLAY_ID,
             P_SPELL_ID,
             P_FLAT_MANA,
+            P_COMBAT_PERCENT,
             P_RAW,
         ];
         for (i, a) in all.iter().enumerate() {

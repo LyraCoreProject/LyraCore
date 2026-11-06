@@ -47,6 +47,7 @@ fn populated_old_module_upgrades_without_clearing() {
         );
     }
     assert!(!effect_before[0].contains_key("bonus_coefficient"));
+    assert!(!effect_before[0].contains_key("equip_supported"));
     let legacy_emotes = shard.query_rows("SELECT * FROM game_emote_event WHERE sender_guid = 1");
     assert!(legacy_emotes.is_empty(), "main emits only live emotes");
     let old_schema = shard.describe();
@@ -82,6 +83,10 @@ fn populated_old_module_upgrades_without_clearing() {
     assert_eq!(
         effect_after[0].remove("bonus_coefficient").as_deref(),
         Some("-1")
+    );
+    assert_eq!(
+        effect_after[0].remove("equip_supported").as_deref(),
+        Some("false")
     );
     assert_eq!(
         effect_after, effect_before,

@@ -814,3 +814,74 @@ transaction, so a partial seed never persists.
 
 Real world content is not seeded. It comes from the importer; see
 [`data-ingestion.md`](./data-ingestion.md).
+
+### Equip aura support
+
+`game_spell_effect.equip_supported` defaults to false. The spell importer enables only source
+shapes whose units, selection and consumer have been audited. Existing and authored rows stay
+inert on equip until reimport or an explicit supported claim. This does not enable instant effects.
+The 52 source types below occur on 2,645 equipped Item entries at patch 10 / build 5875. Counts
+are distinct Item entries per type and overlap. One weapon-dependent crit Item stays inert; the
+other 383 use the shared melee/ranged crit bonus. This is a source-to-consumer audit, not a claim
+that every spell or baseline combat calculation is complete.
+
+| Source aura type | Items | Consumer or missing behavior | Equip result | Example spell |
+| --- | ---: | --- | --- | ---: |
+| 3 PeriodicDamage | 1 | periodic damage / leech shape not certified | Inert | 19307 |
+| 4 Dummy | 12 | A_FLAG placeholder | Inert | 16372 |
+| 8 PeriodicHeal | 8 | periodic healing bonus/cadence not certified | Inert | 5707 |
+| 13 ModDamageDone | 928 | flat school damage and weapon restrictions need mechanics | Inert | 7685 |
+| 14 ModDamageTaken | 2 | flat incoming damage needs school-aware folding | Inert | 5102 |
+| 15 DamageShield | 10 | reflection needs mechanics; no absorb mapping | Inert | 15438 |
+| 17 ModStealthDetect | 8 | detection placeholder | Inert | 12418 |
+| 19 ModInvisibilityDetection | 2 | detection placeholder | Inert | 17623 |
+| 22 ModResistance | 74 | resistance_bonus; flat school mask | Correct | 12956 |
+| 23 PeriodicTriggerSpell | 9 | periodic trigger needs mechanics | Inert | 758 |
+| 29 ModStat | 1 | stat_bonus; signed attribute points | Correct | 7363 |
+| 30 ModSkill | 206 | skill modifier needs mechanics | Inert | 7515 |
+| 31 ModIncreaseSpeed | 62 | run_speed; strongest positive percent | Correct | 17625 |
+| 42 ProcTriggerSpell | 52 | item proc restrictions not certified | Inert | 4070 |
+| 43 ProcTriggerDamage | 1 | item proc restrictions not certified | Inert | 16550 |
+| 45 TrackResources | 2 | tracking placeholder | Inert | 4152 |
+| 47 ModParryPercent | 28 | parry modifier not implemented | Inert | 13665 |
+| 49 ModDodgePercent | 89 | effective_dodge_bp; percent to basis points | Correct | 13669 |
+| 51 ModBlockPercent | 24 | block modifier not implemented | Inert | 13674 |
+| 52 ModCritPercent | 384 | effective_crit_bp; percent to basis points | Correct when unrestricted; 1 Item inert | 7597 |
+| 54 ModHitChance | 192 | effective_miss_bp; percent to basis points | Correct | 15464 |
+| 55 ModSpellHitChance | 76 | spell hit needs its own consumer | Inert | 23727 |
+| 56 Transform | 7 | transform requirements not certified | Inert | 8299 |
+| 57 ModSpellCritChance | 2 | spell_crit_bp; separate spell basis points | Correct | 23434 |
+| 58 ModIncreaseSwimSpeed | 1 | swim stacking not certified | Inert | 8747 |
+| 64 PeriodicManaLeech | 1 | mana leech needs drain and gain | Inert | 19307 |
+| 71 ModSpellCritChanceSchool | 215 | school crit needs a school-aware consumer | Inert | 18382 |
+| 77 MechanicImmunity | 4 | mechanic immunity representation not certified | Inert | 7219 |
+| 82 WaterBreathing | 3 | water breathing placeholder | Inert | 11789 |
+| 85 ModPowerRegen | 345 | MP5 needs two-second regeneration, not periodic energize | Inert | 18378 |
+| 89 PeriodicDamagePercent | 1 | percent damage must scale with health | Inert | 28347 |
+| 99 ModAttackPower | 291 | melee_attack_power; signed flat AP | Correct | 9138 |
+| 102 ModMeleeAttackPowerVersus | 40 | melee AP needs creature-type selection | Inert | 14097 |
+| 107 AddFlatModifier | 50 | SpellMod operation/mask semantics not certified | Inert | 18388 |
+| 108 AddPctModifier | 16 | SpellMod operation/mask semantics not certified | Inert | 23043 |
+| 109 AddTargetTrigger | 2 | target trigger needs mechanics | Inert | 17768 |
+| 112 OverrideClassScripts | 6 | class scripts need mechanics | Inert | 27853 |
+| 117 ModMechanicResistance | 5 | mechanic resistance needs mechanics | Inert | 18985 |
+| 123 ModTargetResistance | 30 | target resistance needs mechanics | Inert | 25717 |
+| 124 ModRangedAttackPower | 305 | ranged_sheet_values and ranged attacks; flat AP | Correct | 9138 |
+| 130 ModMountedSpeedAlways | 1 | mounted-speed stacking not certified | Inert | 13587 |
+| 131 ModRangedAttackPowerVersus | 39 | ranged AP needs creature-type selection | Inert | 14097 |
+| 135 ModHealingDone | 1017 | healing_power; flat healing only | Correct | 7678 |
+| 138 ModMeleeHaste | 3 | melee haste must stay separate from ranged haste | Inert | 18065 |
+| 139 ForceReaction | 1 | faction reaction needs mechanics | Inert | 28282 |
+| 140 ModRangedHaste | 1 | ranged haste must stay separate from melee haste | Inert | 23674 |
+| 141 ModRangedAmmoHaste | 21 | ammo haste needs its own consumer | Inert | 14824 |
+| 144 SafeFall | 2 | safe fall placeholder | Inert | 23409 |
+| 154 ModStealthLevel | 5 | stealth level needs mechanics | Inert | 17746 |
+| 158 ModShieldBlockvalue | 21 | block value needs mechanics | Inert | 22852 |
+| 161 ModHealthRegenInCombat | 38 | flat combat regeneration must not be percent | Inert | 12956 |
+| 180 ModFlatSpellDamageVersus | 6 | flat damage needs creature-type selection | Inert | 22849 |
+
+The source handlers are in [SpellAuras.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellAuras.cpp).
+School damage, melee and ranged AP, healing and crit distinctions also follow
+[Unit.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp).
+Mana regeneration follows the two-second `Player::Regenerate` cadence in
+[Player.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp).

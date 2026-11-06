@@ -75,6 +75,31 @@ path = "module/tests/conformance/item_equip.rs"
 function = "self_casts_keep_passive_item_sources_and_replace_active_equip_effects"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "equip_review_repair_discards_guardian_after_reimport_marks_it_inert"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "equip_review_9329_and_its_cast_keep_melee_and_ranged_attack_power_separate"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "equip_review_7598_and_15464_and_their_casts_use_basis_points_without_spell_crit"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "equip_review_repair_refreshes_the_imported_7598_magnitude_without_stacking"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/item_equip.rs"
+function = "equip_review_recasting_9329_refreshes_its_reimported_attack_power_fields"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/ItemHandler.cpp"
@@ -90,7 +115,7 @@ symbol = "receive"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
 
 [[known_gaps]]
-description = "Equip spells now apply existing aura kinds, but effects imported as E_SCRIPTED or placeholder A_FLAG and non-aura equip effects still need spell implementations. No scenario or real-client check covers equip aura visibility, source Item removal, forms, durability or equip cooldown packets yet."
+description = "Equip admits only audited aura shapes. Remaining inert source aura types (distinct Item counts overlap): PeriodicDamage 1, Dummy 12, PeriodicHeal 8, ModDamageDone 928, ModDamageTaken 2, DamageShield 10, ModStealthDetect 8, ModInvisibilityDetection 2, PeriodicTriggerSpell 9, ModSkill 206, ProcTriggerSpell 52, ProcTriggerDamage 1, TrackResources 2, ModParryPercent 28, ModBlockPercent 24, ModSpellHitChance 76, Transform 7, ModIncreaseSwimSpeed 1, PeriodicManaLeech 1, ModSpellCritChanceSchool 215, MechanicImmunity 4, WaterBreathing 3, ModPowerRegen 345, PeriodicDamagePercent 1, ModMeleeAttackPowerVersus 40, AddFlatModifier 50, AddPctModifier 16, AddTargetTrigger 2, OverrideClassScripts 6, ModMechanicResistance 5, ModTargetResistance 30, ModMountedSpeedAlways 1, ModRangedAttackPowerVersus 39, ModMeleeHaste 3, ForceReaction 1, ModRangedHaste 1, ModRangedAmmoHaste 21, SafeFall 2, ModStealthLevel 5, ModShieldBlockvalue 21, ModHealthRegenInCombat 38, ModFlatSpellDamageVersus 6. Weapon-dependent crit also remains inert on 1 Item. Non-aura equip effects, a scenario and real-client checks still need work."
 path = "module/src/spell/cast/resolve.rs"
 symbol = "apply_item_auras"
-evidence = "Source-backed durable equip tests cover supported aura effects at ItemInstance writes and world entry. Unsupported kinds remain those in importer/src/spell_kind.rs; pinned vmangos Player::ApplyEquipSpell performs a triggered cast of the full spell."
+evidence = "Source-backed durable equip tests cover supported aura effects at ItemInstance writes and world entry. The 52-type source-to-consumer audit is in docs/schema.md#equip-aura-support; pinned vmangos Player::ApplyEquipSpell performs a triggered cast of the full spell."

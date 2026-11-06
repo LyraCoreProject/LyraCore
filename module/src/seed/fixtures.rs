@@ -441,6 +441,7 @@ pub(crate) fn base_effect(spell_id: u32, effect_index: u8) -> SpellEffect {
         enters_combat: false,
         points_per_combo: 0.0,
         bonus_coefficient: -1.0,
+        equip_supported: false,
     }
 }
 

@@ -59,9 +59,8 @@ pub(crate) fn effective_block_bp(
     }
 }
 
-pub(crate) fn aura_attack_power_bonus(ctx: &ReducerContext, unit_guid: u64) -> u32 {
-    crate::spell::combat_field_bonus(ctx, unit_guid, crate::spell::COMBAT_ATTACK_POWER).max(0)
-        as u32
+pub(crate) fn aura_attack_power_bonus(ctx: &ReducerContext, unit_guid: u64) -> i32 {
+    crate::spell::combat_field_bonus(ctx, unit_guid, crate::spell::COMBAT_ATTACK_POWER)
 }
 
 pub(crate) fn seal_holy_on_swing(ctx: &ReducerContext, attacker: &WorldEntity) -> (u32, u32) {
@@ -541,7 +540,8 @@ pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u3
         effective_strength(ctx, unit),
         effective_agility(ctx, unit),
         unit.level,
-    ) + aura_attack_power_bonus(ctx, unit.guid)
+    )
+    .saturating_add_signed(aura_attack_power_bonus(ctx, unit.guid))
 }
 
 const SCHOOL_MASK_PHYSICAL: u8 = 1;
@@ -573,6 +573,11 @@ fn strike_weapon_range(
         effective_agility(ctx, attacker),
         attacker.level,
         Some((dmin, dmax, delay, subclass)),
+        crate::spell::combat_field_bonus(
+            ctx,
+            attacker.guid,
+            lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
+        ),
     );
     (min, max)
 }

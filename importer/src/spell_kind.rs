@@ -90,22 +90,13 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         | ModBaseResistancePct
         | ModResistanceOfStatPercent => A_MOD_RESISTANCE,
 
-        SchoolAbsorb | DamageShield | ManaShield => A_ABSORB,
+        SchoolAbsorb | ManaShield => A_ABSORB,
 
-        ModAttackPower
-        | ModRangedAttackPower
-        | ModMeleeAttackPowerVersus
-        | ModRangedAttackPowerVersus
-        | ModAttackPowerPct
-        | ModRangedAttackPowerPct => A_MOD_COMBAT,
-        ModCritPercent | ModSpellCritChance | ModSpellCritChanceSchool | ModCritPercentVersus => {
-            A_MOD_COMBAT
-        }
-        ModHitChance | ModSpellHitChance => A_MOD_COMBAT,
-        ModDamageDone | ModDamagePercentDone | ModDamageDoneCreature | ModDamageDoneVersus => {
-            A_MOD_COMBAT
-        }
-        ModHealing | ModHealingDone => A_MOD_COMBAT,
+        ModAttackPower | ModRangedAttackPower => A_MOD_COMBAT,
+        ModCritPercent | ModSpellCritChance => A_MOD_COMBAT,
+        ModHitChance => A_MOD_COMBAT,
+        ModDamagePercentDone | ModDamageDoneCreature | ModDamageDoneVersus => A_MOD_COMBAT,
+        ModHealingDone => A_MOD_COMBAT,
         ModDodgePercent | ModTotalThreat | ModThreat => A_MOD_COMBAT,
 
         ModIncreaseSpeed | ModDecreaseSpeed | ModSpeedAlways | ModSpeedNotStack => A_MOD_SPEED,
@@ -182,6 +173,20 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         | UseNormalMovementSpeed => A_FLAG,
 
         _ => E_SCRIPTED,
+    }
+}
+
+pub fn equip_aura_supported(aura: u32, misc: u32, equipment: [u32; 3]) -> bool {
+    use AuraMod::*;
+    match AuraMod::from_int(aura).ok() {
+        Some(ModStat) => misc <= 4 || misc == u32::MAX,
+        Some(ModResistance) => misc != 0 && misc & !0x7f == 0,
+        Some(ModCritPercent) => equipment == [u32::MAX, 0, 0],
+        Some(
+            ModIncreaseSpeed | ModDodgePercent | ModHitChance | ModAttackPower
+            | ModRangedAttackPower | ModHealingDone | ModSpellCritChance,
+        ) => true,
+        _ => false,
     }
 }
 

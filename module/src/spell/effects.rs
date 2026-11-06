@@ -203,12 +203,17 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
         .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
 
     let ap_base = crate::combat::melee_attack_power_for(class, eff_str, eff_agi, e.level);
-    let ap_mods = crate::combat::aura_attack_power_bonus(ctx, unit_guid) as i32;
+    let ap_mods = crate::combat::aura_attack_power_bonus(ctx, unit_guid);
     let (dmg_min, dmg_max) = crate::combat::swing_range_ctx(ctx, &e);
     let (ranged_ap, ranged_dmg_min, ranged_dmg_max) = crate::combat::ranged_sheet_values(
         eff_agi,
         e.level,
         crate::combat::equipped_ranged_weapon(ctx, unit_guid),
+        combat_field_bonus(
+            ctx,
+            unit_guid,
+            lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
+        ),
     );
     let crit_bp = crate::combat::effective_crit_bp(ctx, &e);
 

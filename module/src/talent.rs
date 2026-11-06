@@ -627,6 +627,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                     enters_combat: false,
                     points_per_combo: 0.0,
                     bonus_coefficient: -1.0,
+                    equip_supported: false,
                 });
             }
         };
@@ -705,6 +706,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                 enters_combat: false,
                 points_per_combo: 0.0,
                 bonus_coefficient: -1.0,
+                equip_supported: false,
             });
         }
     };

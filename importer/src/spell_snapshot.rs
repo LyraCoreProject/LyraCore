@@ -126,6 +126,7 @@ pub(crate) struct SpellEffectRow {
     pub(crate) enters_combat: bool,
     pub(crate) points_per_combo: f32,
     pub(crate) bonus_coefficient: f32,
+    pub(crate) equip_supported: bool,
 }
 
 impl SpellEffectRow {
@@ -153,6 +154,7 @@ impl SpellEffectRow {
             ("script_id", FieldValue::U32(self.script_id)),
             ("enters_combat", FieldValue::Bool(self.enters_combat)),
             ("bonus_coefficient", FieldValue::F32(self.bonus_coefficient)),
+            ("equip_supported", FieldValue::Bool(self.equip_supported)),
         ]
     }
 
@@ -369,6 +371,7 @@ mod tests {
             enters_combat: false,
             points_per_combo: 0.0,
             bonus_coefficient: -1.0,
+            equip_supported: false,
         }
     }
 

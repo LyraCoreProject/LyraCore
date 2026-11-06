@@ -29,6 +29,9 @@ pub(super) fn configure(shard: &Standalone) {
         ));
     }
     shard.assert_sql(&format!(
+        "UPDATE game_spell_effect SET equip_supported = true WHERE spell_id = {EQUIP}"
+    ));
+    shard.assert_sql(&format!(
         "UPDATE game_item_template SET class = 4, subclass = 1, inventory_type = 11, required_level = 1, max_stack = 1, bonding = 0, stat_stamina = 0, spellid_1 = {EQUIP}, spelltrigger_1 = 1, spellid_2 = 0, spellid_3 = 0, spellid_4 = 0, spellid_5 = {USE}, spelltrigger_5 = 0 WHERE entry = {ITEM}"
     ));
 }
@@ -647,4 +650,202 @@ fn visible_equip_effects_keep_the_sources_duration_and_reapply_after_resurrectio
     assert_eq!(auras(&shard, guid).len(), 1);
     advance(&shard, 1);
     assert!(auras(&shard, guid).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn equip_review_repair_discards_guardian_after_reimport_marks_it_inert() {
+    let (shard, mut connection, guid, _) = fixture("equip-review-guardian-reimport");
+    review_spell(&shard, 4070, &[(0xab, 1, 0, 255)], true);
+    shard.assert_sql(
+        "UPDATE game_spell SET attributes = 448, duration_index = 0 WHERE spell_id = 4070",
+    );
+    review_equip(&shard, &mut connection, guid, 4070);
+    let old = shard.query_rows(&format!(
+        "SELECT slot,amount FROM game_aura WHERE target_guid = {guid} AND spell_id = 4070"
+    ));
+    assert_eq!(
+        (old[0]["slot"].as_str(), old[0]["amount"].as_str()),
+        ("255", "1")
+    );
+    shard.assert_sql(
+        "UPDATE game_spell SET visual_id = 83, duration_index = 21 WHERE spell_id = 4070",
+    );
+    shard.assert_sql("UPDATE game_spell_effect SET equip_supported = false WHERE spell_id = 4070");
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert!(shard
+        .query_rows(&format!(
+            "SELECT id FROM game_aura WHERE target_guid = {guid} AND spell_id = 4070"
+        ))
+        .is_empty());
+}
+
+fn review_spell(shard: &Standalone, spell: u32, effects: &[(u8, i32, i32, u8)], supported: bool) {
+    shard.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Source shape {spell}',0,0,0,0,0,0,1000,1,0,0,0,0,192,0,0,false,0,0,0,0,0,0,0,0)"));
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET duration_index = 21 WHERE spell_id = {spell}"
+    ));
+    for (index, &(kind, points, parameter, tag)) in effects.iter().enumerate() {
+        let id = u64::from(spell) * 4 + index as u64;
+        shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient,equip_supported) VALUES ({id},{spell},{index},{kind},{points},1,0.0,0,0,0.0,0,0,0,{parameter},{tag},0,0,false,0.0,-1.0,{supported})"));
+    }
+}
+
+fn review_equip(shard: &Standalone, connection: &mut ReducerConnection, guid: u64, spell: u32) {
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET spellid_1 = {spell}, spellid_5 = 0 WHERE entry = {ITEM}"
+    ));
+    grant(shard, guid, ITEM, 1, 23);
+    equip(connection, 23);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn equip_review_9329_and_its_cast_keep_melee_and_ranged_attack_power_separate() {
+    let (shard, mut connection, guid, _) = fixture("equip-review-attack-power");
+    review_spell(&shard, 9329, &[(0xa3, 16, 0, 5), (0xa3, 16, 11, 5)], true);
+    shard.assert_sql("UPDATE game_item_template SET class = 2, subclass = 2, inventory_type = 15, damage_min = 10.0, damage_max = 10.0, delay_ms = 14000, required_skill = 0 WHERE entry = 25");
+    grant(&shard, guid, 25, 1, 17);
+    shard.assert_call("debug_repair_after_publish", &[]);
+    let sheet = || {
+        shard.query_rows(&format!("SELECT sheet_ap_mods,sheet_ranged_ap,sheet_ranged_dmg_min FROM game_world_entity WHERE guid = {guid}"))[0].clone()
+    };
+    let base = sheet();
+    review_equip(&shard, &mut connection, guid, 9329);
+    let equipped = sheet();
+    assert_eq!(equipped["sheet_ap_mods"], "16");
+    assert_eq!(
+        equipped["sheet_ranged_ap"].parse::<u32>().unwrap()
+            - base["sheet_ranged_ap"].parse::<u32>().unwrap(),
+        16
+    );
+    assert_eq!(
+        equipped["sheet_ranged_dmg_min"].parse::<u32>().unwrap()
+            - base["sheet_ranged_dmg_min"].parse::<u32>().unwrap(),
+        16
+    );
+    move_item(&mut connection, 10, 23);
+    assert_eq!(sheet(), base);
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), "9329", &guid.to_string()],
+    );
+    assert_eq!(sheet(), equipped);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn equip_review_7598_and_15464_and_their_casts_use_basis_points_without_spell_crit() {
+    let (shard, mut connection, guid, vendor) = fixture("equip-review-hit-crit");
+    shard.assert_call("debug_set_level", &[&guid.to_string(), "10"]);
+    shard.assert_call("debug_set_skill", &[&guid.to_string(), "162", "50"]);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 10 WHERE guid = {vendor}"
+    ));
+    review_spell(&shard, 7598, &[(0xa3, 2, 1, 17)], true);
+    review_spell(&shard, 15464, &[(0xa3, 1, 2, 17)], true);
+    let read = || {
+        shard.assert_call(
+            "debug_compute_swing",
+            &[&guid.to_string(), &vendor.to_string()],
+        );
+        let swing = shard
+            .query_rows("SELECT crit_bp,hit_miss_bp FROM game_debug_readout WHERE key = 'swing'")
+            [0]
+        .clone();
+        shard.assert_call(
+            "debug_compute_spell",
+            &[&guid.to_string(), &vendor.to_string(), "133"],
+        );
+        let crit = shard
+            .query_rows("SELECT spell_crit_bp FROM game_debug_readout WHERE key = 'spell'")[0]
+            ["spell_crit_bp"]
+            .clone();
+        (
+            swing["crit_bp"].parse::<i32>().unwrap(),
+            swing["hit_miss_bp"].parse::<i32>().unwrap(),
+            crit,
+        )
+    };
+    let base = read();
+    review_equip(&shard, &mut connection, guid, 7598);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET spellid_1 = 15464 WHERE entry = {ITEM}"
+    ));
+    grant(&shard, guid, ITEM, 1, 24);
+    equip(&mut connection, 24);
+    let after = read();
+    assert_eq!(after, (base.0 + 200, base.1 - 100, base.2.clone()));
+    move_item(&mut connection, 10, 23);
+    move_item(&mut connection, 11, 24);
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), "7598", &guid.to_string()],
+    );
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), "15464", &guid.to_string()],
+    );
+    assert_eq!(read(), after);
+    review_spell(&shard, 23434, &[(0xa3, 50, 13, 17)], true);
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), "23434", &guid.to_string()],
+    );
+    let spell_crit = read();
+    assert_eq!((spell_crit.0, spell_crit.1), (after.0, after.1));
+    assert_eq!(
+        spell_crit.2.parse::<u32>().unwrap(),
+        after.2.parse::<u32>().unwrap() + 5000
+    );
+    shard.assert_sql(&format!(
+        "DELETE FROM game_aura WHERE target_guid = {guid} AND spell_id = 23434"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET spellid_1 = 23434 WHERE entry = {ITEM}"
+    ));
+    equip(&mut connection, 23);
+    assert_eq!(read(), spell_crit);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn equip_review_repair_refreshes_the_imported_7598_magnitude_without_stacking() {
+    let (shard, mut connection, guid, _) = fixture("equip-review-refresh");
+    review_spell(&shard, 7598, &[(0xa3, 2, 1, 5)], true);
+    review_equip(&shard, &mut connection, guid, 7598);
+    shard.assert_sql("UPDATE game_spell_effect SET p0_kind = 17 WHERE spell_id = 7598");
+    shard.assert_call("debug_repair_after_publish", &[]);
+    shard.assert_call("debug_repair_after_publish", &[]);
+    let rows = shard.query_rows(&format!(
+        "SELECT amount,stacks FROM game_aura WHERE target_guid = {guid} AND spell_id = 7598"
+    ));
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0]["amount"], "200");
+    assert_eq!(rows[0]["stacks"], "1");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn equip_review_recasting_9329_refreshes_its_reimported_attack_power_fields() {
+    let (shard, _connection, guid, _) = fixture("equip-review-cast-refresh");
+    review_spell(&shard, 9329, &[(0xa3, 16, 0, 5), (0xa3, 16, 0, 5)], false);
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), "9329", &guid.to_string()],
+    );
+    shard.assert_sql("UPDATE game_spell_effect SET p0 = 11 WHERE id = 37317");
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&guid.to_string(), "9329", &guid.to_string()],
+    );
+    let rows = shard.query_rows(&format!(
+        "SELECT eff_p0 FROM game_aura WHERE target_guid = {guid} AND spell_id = 9329"
+    ));
+    let mut fields: Vec<_> = rows
+        .iter()
+        .map(|row| row["eff_p0"].parse::<u32>().unwrap())
+        .collect();
+    fields.sort();
+    assert_eq!(fields, [0, 11]);
 }

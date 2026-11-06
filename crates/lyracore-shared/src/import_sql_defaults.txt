@@ -27,3 +27,4 @@ game_item_template spellcategory_4 0
 game_item_template spellcategory_5 0
 game_spell_cd category 0
 game_spell_cd category_ready_micros 0
+game_spell_effect equip_supported false

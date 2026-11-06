@@ -116,6 +116,7 @@ pub(crate) fn ranged_sheet_values(
     agility: u32,
     level: u32,
     weapon: Option<(u32, u32, u32, u8)>,
+    bonus: i32,
 ) -> (u32, u32, u32) {
     use crate::items::weapon_subclass as ws;
 
@@ -123,7 +124,7 @@ pub(crate) fn ranged_sheet_values(
         return (0, 0, 0);
     };
     if matches!(subclass, ws::BOW | ws::GUN | ws::CROSSBOW) {
-        let attack_power = ranged_attack_power(agility, level);
+        let attack_power = ranged_attack_power(agility, level).saturating_add_signed(bonus);
         let (dmg_min, dmg_max) = weapon_swing_range_ap(attack_power, dmg_min, dmg_max, delay_ms);
         (attack_power, dmg_min, dmg_max)
     } else {
@@ -558,6 +559,7 @@ mod tests {
             20,
             10,
             Some((8, 12, 2_800, crate::items::weapon_subclass::BOW)),
+            0,
         );
 
         assert_eq!(values, (30, 14, 18));
@@ -569,6 +571,7 @@ mod tests {
             20,
             10,
             Some((8, 12, 2_800, crate::items::weapon_subclass::WAND)),
+            0,
         );
 
         assert_eq!(values, (0, 8, 12));

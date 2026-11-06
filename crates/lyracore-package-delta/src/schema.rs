@@ -309,7 +309,7 @@ impl Table {
                     | "duration_index"
                     | "category"
                     | "category_cooldown_ms"
-            ) | (Self::SpellEffect, "bonus_coefficient")
+            ) | (Self::SpellEffect, "bonus_coefficient" | "equip_supported")
         )
     }
 
@@ -392,6 +392,7 @@ const SPELL_EFFECT_COLUMNS: &[Column] = &[
     column("script_id", FieldType::U32),
     column("enters_combat", FieldType::Bool),
     column("bonus_coefficient", FieldType::F32),
+    column("equip_supported", FieldType::Bool),
 ];
 
 const ITEM_COLUMNS: &[Column] = &[

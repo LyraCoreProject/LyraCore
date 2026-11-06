@@ -1839,7 +1839,7 @@ pub(crate) fn apply_item_auras(
         .game_spell_effect()
         .by_spell()
         .filter(header.spell_id)
-        .filter(|effect| passive_applies_effect_kind(effect.kind))
+        .filter(|effect| effect.equip_supported && passive_applies_effect_kind(effect.kind))
     {
         if ctx
             .db
@@ -1889,6 +1889,7 @@ mod eventai_hit_tests {
             enters_combat: false,
             points_per_combo: 0.0,
             bonus_coefficient: -1.0,
+            equip_supported: false,
         }
     }
 

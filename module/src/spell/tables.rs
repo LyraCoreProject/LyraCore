@@ -138,6 +138,9 @@ pub struct SpellEffect {
     pub points_per_combo: f32,
     #[default({ -1.0f32 })]
     pub bonus_coefficient: f32,
+    // Reimport spell before enabling derived equip effects; see docs/danger-zones.md.
+    #[default(false)]
+    pub equip_supported: bool,
 }
 
 #[table(accessor = game_spell_reagent, index(accessor = by_spell, btree(columns = [spell_id])))]

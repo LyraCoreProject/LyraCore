@@ -225,6 +225,24 @@ The seven END-appended source fields on `game_spell` and five category overrides
 effects retain their forms, visibility, duration and category cooldown rules. No new spell effects
 are implemented.
 
+`game_spell_effect` END-appends `equip_supported` with a false default. Until the `spell`
+reimport, equipment effects remain inert. That reimport also separates melee and ranged AP,
+healing and spell crit, and marks source percentages for conversion to basis points after their
+amount is rolled. Flat school damage and damage shields no longer import as damage percentages
+or absorbs. The complete admitted/inert type list and Item counts are in
+[the equip aura support audit](schema.md#equip-aura-support).
+
+Publish, reimport `spell` and `items`, then call `debug_repair_after_publish` before play resumes.
+A repair before reimport is safe; call it again after the imports. Each repair discards derived equip
+Auras and rebuilds them from current metadata, including changed units, visibility and eligibility.
+It does not restart equip cooldowns or retain duplicate effects. Finite equip effects restart their
+source duration during this explicit repair. Connected Characters and ghosts receive the rebuilt
+state. Other cast Auras retain their frozen values; this repair does not rewrite a normal cast or its
+remaining duration. Recasting a supported effect rebuilds changed fields from the current import.
+Expire or remove an old cast effect that the new import makes inert before play resumes; a recast
+of an inert effect cannot replace the old Aura. Recast affected supported buffs after reimport.
+Older Package Deltas default to inert equip effects; an author must supply a supported claim.
+
 `game_item_aura` and its finite-expiry schedule `game_item_aura_expiry` start empty.
 `debug_repair_after_publish` reconciles equipment and refreshes the sheet of every online Character
 without starting an equip cooldown, including passive effects on ghosts. Fresh login, reconnect,

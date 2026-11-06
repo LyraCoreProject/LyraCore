@@ -99,6 +99,11 @@ pub(crate) fn reconcile(ctx: &ReducerContext, guid: u64) {
     reconcile_item(ctx, guid, None, false);
 }
 
+pub(crate) fn repair(ctx: &ReducerContext, guid: u64) {
+    clear(ctx, guid);
+    restore(ctx, guid);
+}
+
 pub(crate) fn restore(ctx: &ReducerContext, guid: u64) {
     reconcile_item(ctx, guid, None, true);
 }
@@ -108,14 +113,22 @@ fn reconcile_item(ctx: &ReducerContext, guid: u64, changed_item: Option<u64>, re
         return;
     };
     let mut desired = std::collections::BTreeMap::new();
-    for item in ctx
-        .db
-        .game_item_instance()
-        .by_owner_guid()
-        .filter(guid)
-        .filter(equipped)
-        .filter(|item| changed_item.is_none_or(|changed| item.guid == changed))
-    {
+    let items: Vec<_> = if let Some(item) = changed_item {
+        ctx.db
+            .game_item_instance()
+            .guid()
+            .find(item)
+            .into_iter()
+            .filter(|item| item.owner_guid == guid)
+            .collect()
+    } else {
+        ctx.db
+            .game_item_instance()
+            .by_owner_guid()
+            .filter(guid)
+            .collect()
+    };
+    for item in items.into_iter().filter(equipped) {
         let Some(template) = ctx.db.game_item_template().entry().find(item.entry) else {
             continue;
         };

@@ -702,6 +702,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
             enters_combat: false,
             points_per_combo: 0.0,
             bonus_coefficient: -1.0,
+            equip_supported: matches!(kind, 0xa0 | 0xa1),
         });
     };
     spell(

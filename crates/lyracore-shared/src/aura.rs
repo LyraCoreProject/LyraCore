@@ -19,7 +19,7 @@ pub fn moves_sheet(kind: u8, parameter: i32) -> bool {
             .into_iter()
             .any(|stat| parameter == i32::from(stat)))
         || (kind == A_MOD_COMBAT
-            && [COMBAT_ATTACK_POWER, COMBAT_CRIT]
+            && [COMBAT_ATTACK_POWER, COMBAT_RANGED_ATTACK_POWER, COMBAT_CRIT]
                 .into_iter()
                 .any(|field| parameter == i32::from(field)))
 }

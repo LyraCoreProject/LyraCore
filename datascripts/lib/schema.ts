@@ -81,6 +81,7 @@ export const SPELL_EFFECT_COLUMNS: {
   scriptId: { column: "script_id", type: "u32" },
   entersCombat: { column: "enters_combat", type: "bool" },
   bonusCoefficient: { column: "bonus_coefficient", type: "f32", defaultValue: -1 },
+  equipSupported: { column: "equip_supported", type: "bool", defaultValue: false },
 };
 
 export const SPELL_TABLE = "game_spell";

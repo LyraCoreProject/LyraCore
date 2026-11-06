@@ -328,6 +328,11 @@ pub(crate) fn aura_apply(
     source_item: u64,
 ) {
     let now = crate::time::now(ctx);
+    let points = if e.p0_kind == lyracore_shared::spell::taxonomy::P_COMBAT_PERCENT {
+        points.saturating_mul(100)
+    } else {
+        points
+    };
     let points = if e.p0_kind == P_PCT_MAX_POWER {
         let max_power = ctx
             .db
@@ -450,11 +455,16 @@ pub(crate) fn aura_apply(
             .collect();
         shed_auras(ctx, target_guid, replaced);
     }
-    let existing = auras.by_target().filter(&target_guid).find(|a| {
+    let mut existing = auras.by_target().filter(&target_guid).find(|a| {
         a.effect_id == e.id
             && a.item_guid(ctx) == source_item
             && (cross_caster_stack || a.caster_guid == caster_guid)
     });
+    if existing.as_ref().is_some_and(|aura| {
+        (aura.eff_kind, aura.eff_p0, aura.eff_p0_kind) != (e.kind, e.p0, e.p0_kind)
+    }) {
+        shed_auras(ctx, target_guid, existing.take().into_iter().collect());
+    }
     let amount_remaining = if e.kind == A_ABSORB { points.max(0) } else { 0 };
     let channel_target =
         if e.kind == A_PERIODIC_TRIGGER || hdr.cast_flags & SPELL_ATTR_CHANNELED != 0 {
