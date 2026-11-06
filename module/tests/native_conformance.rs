@@ -1332,7 +1332,7 @@ fn decoded_taxi_entry_packets(rows: &[Box<RawValue>]) -> Vec<wire_client::decode
                 return None;
             }
             let opcode: u16 = serde_json::from_str(opcode.get()).unwrap();
-            if ![0x00a9, 0x00dd, 0x0144, 0x016e].contains(&opcode) {
+            if ![0x00a9, 0x00dd, 0x0143, 0x0144, 0x016e].contains(&opcode) {
                 return None;
             }
             let bytes: Vec<u8> = body
@@ -1382,7 +1382,7 @@ fn assert_taxi_resumes_after_world_entry(packets: &[wire_client::decode::Packet]
     );
     let sequence: Vec<_> = packets
         .iter()
-        .filter(|packet| [0x0144, 0x016e, 0x00dd].contains(&packet.opcode))
+        .filter(|packet| [0x0143, 0x0144, 0x016e, 0x00dd].contains(&packet.opcode))
         .map(|packet| packet.opcode)
         .collect();
     assert_eq!(sequence, vec![0x0144, 0x016e, 0x00dd]);

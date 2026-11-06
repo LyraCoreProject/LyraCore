@@ -189,13 +189,14 @@ pub(super) fn replay(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
+    viewer_guid: u64,
 ) -> Result<(), String> {
     if let Some(row) = ctx
         .db
         .game_melee_attack()
         .attacker_guid()
         .find(guid)
-        .filter(|row| row.ranged_spell_id == 0)
+        .filter(|row| row.ranged_spell_id == 0 && row.target_guid != viewer_guid)
     {
         super::send(
             ctx,
