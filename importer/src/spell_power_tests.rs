@@ -621,6 +621,7 @@ fn actual_spell_power_world_plan_wand_keeps_arcane_school_without_spell_power() 
         wire.call("debug_advance_roll_batch", json!([61])).unwrap();
         wire.call("native_world_receive", json!([0x26d, Vec::<u8>::new()]))
             .unwrap();
+        wire.call("debug_advance_roll_batch", json!([40])).unwrap();
         let hits = spell_hits(wire, 5019);
         assert!(!hits.is_empty());
         assert!(hits.iter().all(|(_, school)| *school == 6), "{hits:?}");
