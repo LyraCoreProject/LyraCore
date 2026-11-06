@@ -2,6 +2,7 @@ pub(crate) mod death;
 mod energy;
 mod engage;
 mod folds;
+mod inactive_grid;
 mod swing;
 mod tables;
 mod white_melee;
@@ -19,9 +20,10 @@ pub(crate) use lyracore_shared::aura::move_speed_with_pct;
 pub(crate) use engage::COMBAT_DROP_MS;
 pub(crate) use engage::{
     apply_start_attack, apply_start_ranged_attack, arm_creature_engagement, break_own_attacks,
-    disengage, enter_combat, is_engaged, is_hostile_target, may_harm, may_help, refresh_leash,
-    request_attack, start_melee_attack, stop_attack_for, stop_duel_combat, validate_attack_target,
-    AttackRefusal, SWING_ERROR_BAD_FACING, SWING_ERROR_NONE, SWING_ERROR_NOT_IN_RANGE,
+    disengage, engage_passive_creature, enter_combat, is_engaged, is_hostile_target, may_harm,
+    may_help, refresh_leash, request_attack, resume_creature_engagement, start_melee_attack,
+    stop_attack_for, stop_duel_combat, validate_attack_target, AttackRefusal,
+    SWING_ERROR_BAD_FACING, SWING_ERROR_NONE, SWING_ERROR_NOT_IN_RANGE,
 };
 pub use engage::{
     game_combat_event, game_combat_event_live, game_melee_attack, game_melee_schedule,

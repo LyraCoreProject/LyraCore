@@ -68,7 +68,9 @@ pub(crate) fn condition<W: EventAiWorld>(
     let creature = world.eventai_unit(context.creature_guid)?;
     match rule.event {
         EventCondition::TimedInCombat(_) => context.engaged.then_some(*context),
-        EventCondition::TimedOutOfCombat(_) => (!context.engaged).then_some(*context),
+        EventCondition::TimedOutOfCombat(_) => (!world.eventai_is_engaged(creature.guid)
+            && !world.eventai_is_evading(creature.guid))
+        .then_some(*context),
         EventCondition::TimedGeneric(_) => Some(*context),
         EventCondition::CreatureHealth(health) => ((context.engaged || health.allow_out_of_combat)
             && in_inclusive_pct(

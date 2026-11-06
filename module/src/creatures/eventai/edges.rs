@@ -64,7 +64,11 @@ crate::game_hook!(on_aggro, fn creature_ai_on_aggro(ctx, payload) {
         payload.creature_guid,
         Some(payload.target_guid),
         None,
-        Some(payload.target_guid),
+        ctx.db
+            .game_melee_attack()
+            .attacker_guid()
+            .find(payload.creature_guid)
+            .map(|attack| attack.target_guid),
         payload.assist,
     );
 });

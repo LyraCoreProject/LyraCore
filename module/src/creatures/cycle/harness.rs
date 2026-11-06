@@ -1566,6 +1566,10 @@ impl EventAiWorld for Scenario {
             .any(|fight| fight.attacker == guid || fight.victim == guid)
     }
 
+    fn eventai_is_evading(&self, guid: u64) -> bool {
+        self.eventai_returning_home.borrow().contains(&guid)
+    }
+
     fn eventai_matches_predicate(&self, guid: u64, predicate: EventPredicate) -> bool {
         match predicate {
             EventPredicate::Always => true,

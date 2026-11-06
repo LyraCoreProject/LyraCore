@@ -1057,7 +1057,9 @@ fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
         let Some(top) = w.top_threat(f.guid) else {
             continue;
         };
-        if top != f.victim && w.threat_on(f.guid, top) > w.threat_on(f.guid, f.victim) {
+        if top != f.victim
+            && (f.victim == 0 || w.threat_on(f.guid, top) > w.threat_on(f.guid, f.victim))
+        {
             switches.push((f.guid, top));
         }
     }

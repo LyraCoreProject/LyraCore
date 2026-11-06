@@ -530,56 +530,7 @@
       "behavior": "cast_and_interrupt",
       "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "9557d716512cbae222a713ba0da6c33d35557cb6a5efbdf86968a0a9419a2d2a",
-      "rule": [
-        {
-          "rule": "spell_sample",
-          "checkpoint": "level_60_public_1",
-          "stream": {
-            "kind": "broadcast",
-            "id": "casts"
-          },
-          "opcode": 592,
-          "field_path": [
-            "outcomes"
-          ]
-        },
-        {
-          "rule": "spell_sample",
-          "checkpoint": "level_60_public_2",
-          "stream": {
-            "kind": "broadcast",
-            "id": "casts"
-          },
-          "opcode": 592,
-          "field_path": [
-            "outcomes"
-          ]
-        },
-        {
-          "rule": "spell_sample",
-          "checkpoint": "level_63_public_1",
-          "stream": {
-            "kind": "broadcast",
-            "id": "casts"
-          },
-          "opcode": 592,
-          "field_path": [
-            "outcomes"
-          ]
-        },
-        {
-          "rule": "spell_sample",
-          "checkpoint": "level_63_public_2",
-          "stream": {
-            "kind": "broadcast",
-            "id": "casts"
-          },
-          "opcode": 592,
-          "field_path": [
-            "outcomes"
-          ]
-        }
-      ],
+      "rule": [],
       "data": []
     },
     {

@@ -77,9 +77,6 @@ pub(crate) fn add_threat(ctx: &ReducerContext, creature_guid: u64, source_guid: 
         log::warn!("add_threat: negative amount {amount} for creature {creature_guid} source {source_guid} (upstream bug?)");
         return;
     }
-    if amount == 0 {
-        return;
-    }
     let source_stance = ctx
         .db
         .game_world_entity()
@@ -92,10 +89,9 @@ pub(crate) fn add_threat(ctx: &ReducerContext, creature_guid: u64, source_guid: 
         + source_stance as i64)
         .max(0);
     let amount = amount * threat_mult / 100;
-    if amount == 0 {
-        return;
+    if amount > 0 {
+        crate::loot::tag::record_first_threat(ctx, creature_guid, source_guid);
     }
-    crate::loot::tag::record_first_threat(ctx, creature_guid, source_guid);
     let threats = ctx.db.game_threat();
     if let Some(mut row) = threats
         .by_creature()
@@ -288,12 +284,19 @@ pub(crate) fn add_heal_threat(
     if !healer_is_player || effective_heal == 0 {
         return;
     }
-    let mobs: Vec<u64> = ctx
+    let mut mobs: Vec<u64> = ctx
         .db
         .game_melee_attack()
         .by_target()
         .filter(&healed_guid)
         .map(|a| a.attacker_guid)
+        .chain(
+            ctx.db
+                .game_threat()
+                .by_source()
+                .filter(&healed_guid)
+                .map(|entry| entry.creature_guid),
+        )
         .filter(|g| {
             entities
                 .guid()
@@ -302,6 +305,8 @@ pub(crate) fn add_heal_threat(
                 .unwrap_or(false)
         })
         .collect();
+    mobs.sort_unstable();
+    mobs.dedup();
     let each = threat_from_heal_each(effective_heal, mobs.len() as u32);
     for creature in mobs {
         add_threat(ctx, creature, healer_guid, each);

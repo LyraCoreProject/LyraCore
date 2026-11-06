@@ -34,6 +34,30 @@ pub(crate) fn arm_creature_engagement(
     target_guid: u64,
     assist: bool,
 ) -> bool {
+    if !resume_creature_engagement(ctx, creature_guid, target_guid) {
+        return false;
+    }
+    crate::hooks::fire_on_aggro(
+        ctx,
+        &crate::hooks::AggroPayload {
+            creature_guid,
+            target_guid,
+            assist,
+        },
+    );
+    true
+}
+
+pub(crate) fn resume_creature_engagement(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    target_guid: u64,
+) -> bool {
+    if crate::creatures::react_state(ctx, creature_guid)
+        == crate::creatures::CreatureReactState::Passive
+    {
+        return false;
+    }
     if ctx
         .db
         .game_world_entity()
@@ -69,15 +93,45 @@ pub(crate) fn arm_creature_engagement(
             creature.update(ctx);
         }
     }
-    crate::hooks::fire_on_aggro(
-        ctx,
-        &crate::hooks::AggroPayload {
-            creature_guid,
-            target_guid,
-            assist,
-        },
-    );
     true
+}
+
+pub(crate) fn engage_passive_creature(ctx: &ReducerContext, creature_guid: u64, source_guid: u64) {
+    if crate::creatures::react_state(ctx, creature_guid)
+        != crate::creatures::CreatureReactState::Passive
+    {
+        return;
+    }
+    let entities = ctx.db.game_world_entity();
+    let (Some(creature), Some(source)) = (
+        entities.guid().find(creature_guid),
+        entities.guid().find(source_guid),
+    ) else {
+        return;
+    };
+    if creature.is_player()
+        || creature.dead
+        || source.dead
+        || creature.map_id != source.map_id
+        || creature.instance_id != source.instance_id
+        || !may_harm(ctx, &source, &creature)
+    {
+        return;
+    }
+    let entering = creature.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT == 0;
+    crate::threat::add_threat(ctx, creature_guid, source_guid, 0);
+    enter_combat(ctx, creature_guid);
+    enter_combat(ctx, source_guid);
+    if entering {
+        crate::hooks::fire_on_aggro(
+            ctx,
+            &crate::hooks::AggroPayload {
+                creature_guid,
+                target_guid: source_guid,
+                assist: false,
+            },
+        );
+    }
 }
 
 pub(crate) fn refresh_leash(ctx: &ReducerContext, guid_a: u64, guid_b: u64) {
@@ -198,14 +252,11 @@ pub(crate) fn break_own_attacks(ctx: &ReducerContext, guid: u64) {
 pub(crate) fn is_engaged(ctx: &ReducerContext, guid: u64) -> bool {
     let melee = ctx.db.game_melee_attack();
     use crate::game_threat;
+    let threats = ctx.db.game_threat();
     melee.attacker_guid().find(guid).is_some()
         || melee.by_target().filter(&guid).next().is_some()
-        || ctx
-            .db
-            .game_threat()
-            .by_source()
-            .filter(&guid)
-            .any(|entry| melee.attacker_guid().find(entry.creature_guid).is_some())
+        || threats.by_creature().filter(&guid).next().is_some()
+        || threats.by_source().filter(&guid).next().is_some()
 }
 
 fn may_harm_decision(same_unit: bool, active_duel: bool, friendly: bool) -> bool {

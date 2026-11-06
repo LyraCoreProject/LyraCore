@@ -41,6 +41,7 @@ pub(crate) trait EventAiWorld {
     fn eventai_spell_range(&self, spell_id: u32) -> Option<u32>;
     fn eventai_spell_excludes_caster(&self, spell_id: u32) -> bool;
     fn eventai_is_engaged(&self, guid: u64) -> bool;
+    fn eventai_is_evading(&self, guid: u64) -> bool;
     fn eventai_matches_predicate(&self, guid: u64, predicate: EventPredicate) -> bool;
     fn eventai_in_zone_or_area(&self, unit: &EventAiUnit, zone_or_area_id: u32) -> bool;
     fn eventai_combat_action_ready(&self, guid: u64) -> bool;
@@ -1217,7 +1218,16 @@ impl EventAiWorld for DatabaseWorld<'_> {
     }
 
     fn eventai_is_engaged(&self, guid: u64) -> bool {
-        crate::combat::is_engaged(self.ctx, guid)
+        self.ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(guid)
+            .is_some_and(|e| e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0)
+    }
+
+    fn eventai_is_evading(&self, guid: u64) -> bool {
+        super::movement::returning_home(self.ctx, guid)
     }
 
     fn eventai_matches_predicate(&self, guid: u64, predicate: EventPredicate) -> bool {

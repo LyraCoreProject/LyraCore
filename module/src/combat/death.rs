@@ -669,6 +669,7 @@ pub(crate) fn apply_hit(
         commit_death_prevention(ctx, target_guid, attacker_guid);
     }
     refresh_leash(ctx, attacker_guid, target_guid);
+    engage_passive_creature(ctx, target_guid, attacker_guid);
     if !weapon {
         enter_combat(ctx, target_guid);
     }

@@ -14,6 +14,7 @@ pub fn tick_melee(ctx: &ReducerContext, _schedule: MeleeSchedule) {
 }
 
 fn melee_pass(ctx: &ReducerContext) {
+    super::inactive_grid::evade_inactive_grids(ctx);
     leash_pass(ctx);
     aggro_pass(ctx);
     resolve_swing(ctx);
@@ -63,13 +64,17 @@ fn leash_pass(ctx: &ReducerContext) {
         }
     }
     for creature in evaders {
-        crate::creatures::eventai_on_evade(ctx, creature);
-        disengage(ctx, creature);
-        if let Some(mut c) = entities.guid().find(creature) {
-            if c.health != c.max_health {
-                c.health = c.max_health;
-                c.update(ctx);
-            }
+        evade(ctx, creature);
+    }
+}
+
+pub(super) fn evade(ctx: &ReducerContext, creature: u64) {
+    crate::creatures::eventai_on_evade(ctx, creature);
+    disengage(ctx, creature);
+    if let Some(mut c) = ctx.db.game_world_entity().guid().find(creature) {
+        if c.health != c.max_health {
+            c.health = c.max_health;
+            c.update(ctx);
         }
     }
 }
@@ -104,6 +109,7 @@ fn aggro_pass(ctx: &ReducerContext) {
         }
     }
     for (creature, player) in new_aggro {
+        engage_passive_creature(ctx, creature, player);
         arm_creature_engagement(ctx, creature, player, false);
     }
 }
