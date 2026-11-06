@@ -45,6 +45,7 @@ impl WorldEntity {
         );
         crate::aoi::entity_changed(ctx, None, &entity);
         if entity.is_player() {
+            crate::combat::enter_character_regeneration(ctx, &entity);
             crate::native::realm_party::package::presence(ctx, entity.guid);
             crate::items::equip::restore(ctx, entity.guid);
         }
@@ -57,6 +58,9 @@ impl WorldEntity {
         let entity = ctx.db.game_world_entity().guid().update(self);
         crate::aoi::entity_changed(ctx, old.as_ref(), &entity);
         if let Some(old) = old {
+            if entity.is_player() {
+                crate::combat::activate_character_regeneration(ctx, &old, &entity);
+            }
             if entity.is_player()
                 && (old.dead != entity.dead
                     || old.unit_bytes_1 >> 16 & 0xff != entity.unit_bytes_1 >> 16 & 0xff)

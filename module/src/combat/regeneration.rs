@@ -3,26 +3,79 @@ use spacetimedb::{table, ReducerContext, Table};
 
 use crate::{game_spell, game_world_entity, WorldEntity};
 
-#[table(accessor = game_health_regen_carry)]
-pub struct HealthRegenCarry {
+#[table(accessor = game_character_regeneration)]
+pub struct CharacterRegeneration {
     #[primary_key]
     pub character_guid: u64,
-    pub fraction: f32,
+    pub health_fraction: f32,
+    pub next_tick_ms: u64,
 }
 
-crate::character_owned!(delete, fn sweep_delete_game_health_regen_carry(ctx, character_guid) {
-    ctx.db.game_health_regen_carry().character_guid().delete(character_guid);
+crate::character_owned!(delete, fn sweep_delete_game_character_regeneration(ctx, character_guid) {
+    ctx.db.game_character_regeneration().character_guid().delete(character_guid);
 });
-crate::character_owned!(transfer, fn sweep_transfer_game_health_regen_carry(ctx, character_guid, io) {
-    table = game_health_regen_carry,
+crate::character_owned!(transfer, fn sweep_transfer_game_character_regeneration(ctx, character_guid, io) {
+    table = game_character_regeneration,
     primary_key = character_guid,
 });
 
 pub(crate) fn clear_character_regeneration(ctx: &ReducerContext, guid: u64) {
     ctx.db
-        .game_health_regen_carry()
+        .game_character_regeneration()
         .character_guid()
         .delete(guid);
+}
+
+const TICK_MS: u64 = 2000;
+
+fn now_ms(ctx: &ReducerContext) -> u64 {
+    crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1000
+}
+
+fn state(ctx: &ReducerContext, e: &WorldEntity) -> CharacterRegeneration {
+    let rows = ctx.db.game_character_regeneration();
+    rows.character_guid().find(e.guid).unwrap_or_else(|| {
+        rows.insert(CharacterRegeneration {
+            character_guid: e.guid,
+            health_fraction: 0.0,
+            next_tick_ms: now_ms(ctx).saturating_add(
+                if e.health < e.max_health || (e.power_type() == MANA && e.power < e.max_power) {
+                    0
+                } else {
+                    TICK_MS
+                },
+            ),
+        })
+    })
+}
+
+pub(crate) fn enter_character_regeneration(ctx: &ReducerContext, e: &WorldEntity) {
+    state(ctx, e);
+}
+
+pub(crate) fn activate_character_regeneration(
+    ctx: &ReducerContext,
+    old: &WorldEntity,
+    e: &WorldEntity,
+) {
+    if e.dead || (!old.dead && (old.regeneration_pending || !e.regeneration_pending)) {
+        return;
+    }
+    let now = now_ms(ctx);
+    let mut row = state(ctx, e);
+    if old.dead && !e.dead {
+        row.next_tick_ms = now;
+    } else if row.next_tick_ms <= now {
+        row.next_tick_ms = row
+            .next_tick_ms
+            .saturating_add(((now - row.next_tick_ms) / TICK_MS + 1) * TICK_MS);
+    } else {
+        return;
+    }
+    ctx.db
+        .game_character_regeneration()
+        .character_guid()
+        .update(row);
 }
 
 #[derive(Default)]
@@ -102,9 +155,8 @@ impl Bonuses {
     }
 }
 
-// The caller credits whole two-second ticks; mana discards fractions and health carries them.
-pub(super) fn regenerate(ctx: &ReducerContext, ticks: u64) {
-    let now_ms = crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1000;
+pub(crate) fn regenerate_characters(ctx: &ReducerContext) -> usize {
+    let now = now_ms(ctx);
     let recovering: Vec<_> = ctx
         .db
         .game_world_entity()
@@ -112,18 +164,22 @@ pub(super) fn regenerate(ctx: &ReducerContext, ticks: u64) {
         .filter(true)
         .filter(|e| e.is_player())
         .collect();
+    let mut credited = 0;
     for mut e in recovering {
+        let mut row = state(ctx, &e);
+        if row.next_tick_ms > now {
+            continue;
+        }
+        row.next_tick_ms = row.next_tick_ms.saturating_add(TICK_MS);
+        credited += 1;
         let bonuses = Bonuses::read(ctx, &e);
         let in_combat = e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
             || super::is_engaged(ctx, e.guid);
         let class = (e.unit_bytes_0 >> 8) as u8;
         let before = (e.health, e.power);
         if e.power_type() == MANA && e.power < e.max_power {
-            let per_tick =
-                bonuses.mana_per_tick(class, e.spirit, now_ms < e.mana_regen_paused_until_ms);
-            e.power = u64::from(e.power)
-                .saturating_add(ticks.saturating_mul(u64::from(per_tick)))
-                .min(u64::from(e.max_power)) as u32;
+            let gain = bonuses.mana_per_tick(class, e.spirit, now < e.mana_regen_paused_until_ms);
+            e.power = e.power.saturating_add(gain).min(e.max_power);
         }
         if e.health < e.max_health
             && (!in_combat
@@ -131,36 +187,22 @@ pub(super) fn regenerate(ctx: &ReducerContext, ticks: u64) {
                 || bonuses.health_per_five != 0.0
                 || bonuses.polymorphed)
         {
-            let carry = ctx.db.game_health_regen_carry();
-            let previous = carry.character_guid().find(e.guid);
-            let mut fraction = previous.as_ref().map_or(0.0, |row| row.fraction);
-            let gain = health_per_tick(&e, class, in_combat, &bonuses);
-            let ticks = if gain == 0.0 { ticks.min(1) } else { ticks };
-            for _ in 0..ticks {
-                let amount = gain + fraction;
-                fraction = amount - amount as i32 as f32;
-                e.health = e
-                    .health
-                    .saturating_add((amount as i32).max(0) as u32)
-                    .min(e.max_health);
-                if e.health == e.max_health {
-                    break;
-                }
-            }
-            let row = HealthRegenCarry {
-                character_guid: e.guid,
-                fraction,
-            };
-            if previous.is_some() {
-                carry.character_guid().update(row);
-            } else {
-                carry.insert(row);
-            }
+            let gain = health_per_tick(&e, class, in_combat, &bonuses) + row.health_fraction;
+            row.health_fraction = gain - gain as i32 as f32;
+            e.health = e
+                .health
+                .saturating_add((gain as i32).max(0) as u32)
+                .min(e.max_health);
         }
+        ctx.db
+            .game_character_regeneration()
+            .character_guid()
+            .update(row);
         if before != (e.health, e.power) {
             e.update(ctx);
         }
     }
+    credited
 }
 
 fn mana_per_second(class: u8, spirit: u32) -> f32 {

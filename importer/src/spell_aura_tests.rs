@@ -21,11 +21,9 @@ fn imported_mage_armor_and_innervate_apply_the_source_five_second_rule() {
     character.advance(1);
     assert_eq!(character.pool("power"), 122);
     character.advance(1);
-    assert_eq!(character.pool("power"), 133);
-    character.advance(1);
     assert_eq!(
         character.pool("power"),
-        170,
+        159,
         "the first tick after the five-second deadline restores full spirit in combat"
     );
     character.cast(24363);
@@ -80,6 +78,14 @@ fn imported_mp5_ticks_on_equipment_and_casts_during_the_five_second_rule() {
     let mut character = Character::imported("imported-mp5-consumer", &[18378, 24363]);
     character.cast(24363);
     character.set_pools();
+    character
+        .shard
+        .assert_call("debug_advance_roll_batch", &["10"]);
+    assert_eq!(
+        character.pool("power"),
+        100,
+        "a Character must not inherit the energy clock's early tick"
+    );
     character.advance(1);
     assert_eq!(
         character.pool("power"),

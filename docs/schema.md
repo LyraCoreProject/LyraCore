@@ -933,8 +933,8 @@ Mana regeneration follows the two-second `Player::Regenerate` cadence in
 
 ### Regeneration
 
-`A_MOD_POWER_REGEN` (0xC1) stores mana per five seconds. Character regeneration shares the
-existing two-second clock with energy. Mana adds MP5 to class-specific spirit regeneration and
+`A_MOD_POWER_REGEN` (0xC1) stores mana per five seconds. Each Character keeps a two-second
+timer, independent of energy. Mana adds MP5 to class-specific spirit regeneration and
 truncates each tick. The five-second rule suppresses only spirit regeneration; aura 134 permits a
 percentage of spirit while that rule is active. Aura 110 multiplies spirit, without multiplying
 MP5. Evocation therefore uses its source spirit multiplier and casting allowance. Non-mana aura
@@ -947,7 +947,8 @@ stores out-of-combat regeneration, with the source period in `p1` (zero defaults
 `A_MANA_REGEN_INTERRUPT` (0xC5) stores the casting allowance. Sitting multiplies spirit health
 regeneration by 1.5; polymorph uses 10% maximum health per tick before HP5.
 
-`game_health_regen_carry` is a private Character-keyed row holding the fractional health gain.
+`game_character_regeneration` is a private Character-keyed row holding the fractional health gain
+and next tick deadline. Full pools do not accumulate credit before a new deficit.
 It starts empty, travels with the Character across Transfer, and resets on a fresh login.
 Character deletion removes the row.
 Regeneration selects only the indexed entities with a deficit and reads each unit's indexed Auras;
