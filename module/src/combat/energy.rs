@@ -50,7 +50,10 @@ pub(crate) fn regenerate_energy(ctx: &ReducerContext) -> usize {
         });
     }
     match step {
-        ClockStep::Credit(ticks) => credit_energy(ctx, ticks),
+        ClockStep::Credit(ticks) => {
+            super::regeneration::regenerate(ctx, ticks);
+            credit_energy(ctx, ticks)
+        }
         ClockStep::Hold | ClockStep::Rebase => 0,
     }
 }

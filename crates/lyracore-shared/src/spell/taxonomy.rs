@@ -100,6 +100,11 @@ effect_kinds! {
     A_MOD_HEALING => AuraModHealing = 0xB8,
     A_INERT => AuraInert = 0xB9,
     A_FLAG => AuraFlag = 0xBE,
+    A_MOD_POWER_REGEN => AuraModPowerRegen = 0xC1,
+    A_MOD_HEALTH_REGEN => AuraModHealthRegen = 0xC2,
+    A_MOD_REGEN => AuraModRegen = 0xC3,
+    A_MOD_HEALTH_REGEN_PCT => AuraModHealthRegenPct = 0xC4,
+    A_MANA_REGEN_INTERRUPT => AuraManaRegenInterrupt = 0xC5,
     E_SUMMON_GUARDIANS => SummonGuardians = 0x27,
     E_ADD_EXTRA_ATTACKS => AddExtraAttacks = 0x28,
     // Effect points are the duration in seconds; p0 is the enchantment id.
@@ -233,6 +238,11 @@ mod tests {
         assert_eq!(A_ABSORB, 0xA2);
         assert_eq!(A_MOD_COMBAT, 0xA3);
         assert_eq!(A_MOD_POWER_REGEN_PCT, 0xB7);
+        assert_eq!(A_MOD_POWER_REGEN, 0xC1);
+        assert_eq!(A_MOD_HEALTH_REGEN, 0xC2);
+        assert_eq!(A_MOD_REGEN, 0xC3);
+        assert_eq!(A_MOD_HEALTH_REGEN_PCT, 0xC4);
+        assert_eq!(A_MANA_REGEN_INTERRUPT, 0xC5);
         assert_eq!(A_FLAG, 0xBE);
         for k in [
             E_DAMAGE, E_HEAL, E_ENERGIZE, E_DISPEL, E_TRIGGER, E_SCRIPTED,

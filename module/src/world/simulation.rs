@@ -7,6 +7,7 @@ impl WorldEntity {
         let guid = *guid.borrow();
         let removed = ctx.db.game_world_entity().guid().delete(guid);
         crate::items::equip::clear(ctx, guid);
+        crate::combat::clear_character_regeneration(ctx, guid);
         crate::breath::clear(ctx, guid);
         crate::combo::forget(ctx, guid);
         crate::transport::leave(ctx, guid);

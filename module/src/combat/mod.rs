@@ -1,5 +1,10 @@
 pub(crate) mod death;
 mod energy;
+mod regeneration;
+pub(crate) use regeneration::{
+    clear_character_regeneration, sweep_delete_game_health_regen_carry,
+    sweep_transfer_game_health_regen_carry,
+};
 mod engage;
 mod folds;
 mod inactive_grid;
