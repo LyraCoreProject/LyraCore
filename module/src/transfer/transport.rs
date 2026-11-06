@@ -44,8 +44,6 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_character_relocation",
     // Combat checks belong to the live entity and do not survive Transfer.
     "game_combat_check_schedule",
-    // Health tick fractions belong to the live entity and reset when it leaves the world.
-    "game_health_regen_carry",
     "game_rest_state_event",
     "game_breath_relay_event",
     "game_breath_state",
@@ -554,6 +552,7 @@ pub(crate) const TRANSFER_TABLES_OLD_BLOBS_MAY_LACK: &[&str] = &[
     "game_fatigue_state",
     "game_group_target_icon",
     "game_guild_fee_hold",
+    "game_health_regen_carry",
     "game_instance_entry",
     "game_instance_removal",
     "game_spell_cd",

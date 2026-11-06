@@ -948,7 +948,8 @@ stores out-of-combat regeneration, with the source period in `p1` (zero defaults
 regeneration by 1.5; polymorph uses 10% maximum health per tick before HP5.
 
 `game_health_regen_carry` is a private Character-keyed row holding the fractional health gain.
-It starts empty, is deleted on world exit and Character deletion, and does not cross Transfer.
+It starts empty, travels with the Character across Transfer, and resets on a fresh login.
+Character deletion removes the row.
 Regeneration selects only the indexed entities with a deficit and reads each unit's indexed Auras;
 it adds no whole-table scan. The source mana rates have no dedicated 5875 update fields. Health
 and power changes use the ordinary unit field updates.

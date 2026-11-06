@@ -72,8 +72,8 @@ cooldowns travel with their absolute deadlines. See
 [equip spell migration](danger-zones.md#equip-spell-migration) before updating existing Shards.
 AOI Grants, the NativePlayer row, Transport attachment and other explicitly omitted transient rows
 are rebuilt or dropped. A pending cast is cancelled before export. Melee, threat and other combat
-state do not survive. The fractional health tick remainder also resets when the live entity leaves
-the world. Pending godmode and the run speed multiplier survive export and adoption,
+state do not survive. The fractional health tick remainder travels with the Character and resets
+on a fresh login. Pending godmode and the run speed multiplier survive export and adoption,
 as they do for a cross-map teleport within one Shard. A real logout or connection loss clears them;
 a refused Transfer or connection loss before adoption also clears them on the resident copy.
 A Transfer departure keeps buyback while running the remaining departure cleanup, including pet

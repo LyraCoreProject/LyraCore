@@ -13,7 +13,10 @@ pub struct HealthRegenCarry {
 crate::character_owned!(delete, fn sweep_delete_game_health_regen_carry(ctx, character_guid) {
     ctx.db.game_health_regen_carry().character_guid().delete(character_guid);
 });
-crate::character_owned!(not_transported, fn sweep_transfer_game_health_regen_carry());
+crate::character_owned!(transfer, fn sweep_transfer_game_health_regen_carry(ctx, character_guid, io) {
+    table = game_health_regen_carry,
+    primary_key = character_guid,
+});
 
 pub(crate) fn clear_character_regeneration(ctx: &ReducerContext, guid: u64) {
     ctx.db

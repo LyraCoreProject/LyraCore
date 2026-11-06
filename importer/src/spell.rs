@@ -1,6 +1,9 @@
 use std::collections::BTreeMap;
 
 #[cfg(test)]
+#[path = "spell_aura_test_support.rs"]
+mod aura_test_support;
+#[cfg(test)]
 #[path = "spell_aura_tests.rs"]
 mod aura_tests;
 

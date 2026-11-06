@@ -541,7 +541,10 @@ pub(crate) fn add_flat_pool_bonus(pool: u32, bonus: i32) -> u32 {
 }
 
 pub(crate) fn aura_moves_vitals(kind: u8, p0: i32) -> bool {
-    kind == A_MOD_STAT && (p0 == STAT_STA as i32 || p0 == STAT_INT as i32 || p0 == STAT_ALL as i32)
+    matches!(kind, A_MOD_STAT | A_MOD_STAT_PCT)
+        && [STAT_STA, STAT_INT, STAT_SPI, STAT_ALL]
+            .into_iter()
+            .any(|stat| p0 == i32::from(stat))
 }
 
 pub(crate) use lyracore_shared::aura::moves_sheet as aura_moves_sheet;
@@ -765,5 +768,18 @@ mod facing_tests {
     #[test]
     fn coincident_points_always_face() {
         assert!(is_facing(3.0, -4.0, 1.234, 3.0, -4.0));
+    }
+}
+
+#[cfg(test)]
+mod spirit_refresh_tests {
+    use super::*;
+
+    #[test]
+    fn spirit_and_percent_stat_auras_refresh_the_cached_vitals_and_sheet() {
+        for kind in [A_MOD_STAT, A_MOD_STAT_PCT] {
+            assert!(aura_moves_vitals(kind, i32::from(STAT_SPI)));
+            assert!(aura_moves_sheet(kind, i32::from(STAT_SPI)));
+        }
     }
 }

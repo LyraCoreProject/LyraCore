@@ -302,8 +302,8 @@ and repairs Evocation's former 15% magnitude to the source
 1500% spirit multiplier. The remaining cast amounts and application times stay frozen. Repeated
 repair preserves unchanged equip effects and does not add a second regeneration contribution.
 
-`game_health_regen_carry` is a new empty private table. It needs no backfill and carries no
-Character Transfer state. Existing Characters use the two-second consumer without a recast or
+`game_health_regen_carry` is a new empty private table. It needs no backfill. Transfer carries its
+fractional health remainder; older Transfer blobs start with no remainder. Existing Characters use the two-second consumer without a recast or
 manual Aura cleanup. Rage and energy keep their existing consumers.
 
 ### Temporary enchantment migration
