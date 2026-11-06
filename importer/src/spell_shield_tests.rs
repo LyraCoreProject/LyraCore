@@ -52,9 +52,6 @@ impl Character {
             .into_iter()
             .filter_map(|row| {
                 let row: serde_json::Value = serde_json::from_str(row.get()).unwrap();
-                if row[2][0] == 0 && row[2][1] == 0x130 {
-                    eprintln!("native cast refusal packet: {row}");
-                }
                 (row[2][0] == 0 && row[2][1] == opcode).then(|| {
                     let body = row[3].as_str().unwrap();
                     (0..body.len())
@@ -206,7 +203,7 @@ fn imported_thorns_reflects_melee_with_its_school_packet_and_bearer_credit() {
 fn imported_shields_do_not_recurse_and_can_kill_the_attacker() {
     let mut character = Character::imported(
         "imported-shield-death",
-        &[467, 15279, 11976, 642, 1044, 77, 133],
+        &[467, 15279, 11976, 22572, 642, 1044, 77, 133],
     );
     character
         .shard
@@ -317,15 +314,32 @@ fn imported_shields_do_not_recurse_and_can_kill_the_attacker() {
     character.advance(1);
     character.connection.drain_packets();
     character.shard.assert_sql(&format!(
-        "UPDATE game_conformance_swing_random SET state=2 WHERE character_guid={}",
+        "UPDATE game_conformance_swing_random SET state=1 WHERE character_guid={}",
         character.guid
     ));
-    character.cast_at(11976, target);
+    character.cast_at(22572, target);
     let strike = character.packets(0x24f);
     assert_eq!(
         strike.len(),
         1,
-        "a landed weapon-proc melee spell triggers the shield: spell={:?}; target={:?}; casts={:?}", character.shard.query_rows("SELECT cast_flags,cost,power_type,cast_time_ms,range_yd FROM game_spell WHERE spell_id=11976"),character.shard.query_rows(&format!("SELECT health,dead,x,y FROM game_world_entity WHERE guid={target}")),character.shard.query_rows("SELECT * FROM game_pending_cast")
+        "a landed weapon-proc melee spell triggers the shield: spell={:?}; target={:?}; casts={:?}", character.shard.query_rows("SELECT cast_flags,cost,power_type,cast_time_ms,range_yd FROM game_spell WHERE spell_id=22572"),character.shard.query_rows(&format!("SELECT health,dead,x,y FROM game_world_entity WHERE guid={target}")),character.shard.query_rows("SELECT * FROM game_pending_cast")
+    );
+    character.advance(1);
+    character.connection.drain_packets();
+    character.shard.assert_sql(&format!(
+        "UPDATE game_conformance_swing_random SET state=1 WHERE character_guid={}",
+        character.guid
+    ));
+    character.request(0x141, target.to_le_bytes().to_vec());
+    character.cast_at(11976, target);
+    character
+        .shard
+        .assert_call("debug_advance_roll_batch", &["2"]);
+    character.request(0x142, vec![]);
+    assert_eq!(
+        character.packets(0x24f).len(),
+        1,
+        "a landed queued Strike triggers the shield once"
     );
     character.advance(1);
     character.cast(642);
@@ -333,10 +347,10 @@ fn imported_shields_do_not_recurse_and_can_kill_the_attacker() {
     let before = character.pool("health");
     character.connection.drain_packets();
     character.shard.assert_sql(&format!(
-        "UPDATE game_conformance_swing_random SET state=2 WHERE character_guid={}",
+        "UPDATE game_conformance_swing_random SET state=1 WHERE character_guid={}",
         character.guid
     ));
-    character.cast_at(11976, target);
+    character.cast_at(22572, target);
     assert_eq!(
         character.pool("health"),
         before,
@@ -371,6 +385,10 @@ fn imported_shields_do_not_recurse_and_can_kill_the_attacker() {
         .shard
         .assert_call("debug_set_health", &[&character.guid.to_string(), "3"]);
     character.connection.drain_packets();
+    character.shard.assert_sql(&format!(
+        "UPDATE game_conformance_swing_random SET state=1 WHERE character_guid={}",
+        character.guid
+    ));
     character.request(0x141, target.to_le_bytes().to_vec());
     character.advance(3);
     let packets = character.packets(0x24f);

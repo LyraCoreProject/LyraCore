@@ -3,26 +3,23 @@ use lyracore_shared::spell::taxonomy::{
 };
 use spacetimedb::ReducerContext;
 
-use crate::{game_aura, game_spell, game_spell_effect, game_world_entity};
+use crate::{game_spell, game_spell_effect, game_world_entity};
 
 pub(crate) fn reflect(ctx: &ReducerContext, attacker_guid: u64, bearer_guid: u64) {
     if attacker_guid == bearer_guid {
         return;
     }
-    let shields: Vec<_> = crate::spell::auras_on(ctx, bearer_guid)
-        .filter(|aura| {
-            aura.eff_kind == A_DAMAGE_SHIELD
-                && !crate::spell::is_due_for_expiry(
-                    aura.eff_kind,
-                    aura.expires_at,
-                    crate::time::now(ctx),
-                )
-        })
-        .collect();
-    for shield in shields {
-        if ctx.db.game_aura().id().find(shield.id).is_none() {
-            continue;
-        }
+    let mut reflected = std::collections::BTreeSet::new();
+    while let Some(shield) = crate::spell::auras_on(ctx, bearer_guid).find(|aura| {
+        aura.eff_kind == A_DAMAGE_SHIELD
+            && !reflected.contains(&aura.id)
+            && !crate::spell::is_due_for_expiry(
+                aura.eff_kind,
+                aura.expires_at,
+                crate::time::now(ctx),
+            )
+    }) {
+        reflected.insert(shield.id);
         let (Some(bearer), Some(attacker), Some(spell), Some(effect)) = (
             ctx.db.game_world_entity().guid().find(bearer_guid),
             ctx.db.game_world_entity().guid().find(attacker_guid),
@@ -87,7 +84,7 @@ pub(crate) fn reflect(ctx: &ReducerContext, attacker_guid: u64, bearer_guid: u64
             &spell,
             &effect,
             bearer_guid,
-            points,
+            points as f32,
             false,
         );
         if !bearer.is_player() {
