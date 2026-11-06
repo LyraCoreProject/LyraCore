@@ -115,7 +115,7 @@ fn imported_mp5_ticks_on_equipment_and_casts_during_the_five_second_rule() {
 #[test]
 #[ignore = "requires local World Source, stock client MPQs, SpacetimeDB 2.14.0 and Wasm"]
 fn imported_demon_armor_regenerates_flat_health_and_carries_its_fraction() {
-    let mut character = Character::imported("imported-hp5-consumer", &[687]);
+    let mut character = Character::imported("imported-hp5-consumer", &[687, 12956]);
     character.cast(687);
     character.set_pools();
     character.shard.assert_sql(&format!("UPDATE game_world_entity SET unit_flags=524288,combat_until_ms=1800001000000 WHERE guid={}",character.guid));
@@ -141,5 +141,24 @@ fn imported_demon_armor_regenerates_flat_health_and_carries_its_fraction() {
         character.pool("health"),
         101,
         "repair converts the stale percentage consumer to flat HP5"
+    );
+    character.shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_flags=0,combat_until_ms=0 WHERE guid={}",
+        character.guid
+    ));
+    character.equip(12956);
+    character.set_pools();
+    character.shard.assert_sql(&format!("UPDATE game_world_entity SET unit_flags=524288,combat_until_ms=1800001000000 WHERE guid={}",character.guid));
+    character.advance(1);
+    assert_eq!(
+        character.pool("health"),
+        102,
+        "cast and equip each contribute 3 HP5 once"
+    );
+    character.advance(4);
+    assert_eq!(
+        character.pool("health"),
+        112,
+        "6 HP5 credits 12 health over five ticks"
     );
 }
