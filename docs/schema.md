@@ -851,8 +851,7 @@ spell or baseline combat calculation is complete.
 
 Unsupported cast effects import as `A_INERT` (0xB9). They keep their Aura holder, icon, duration,
 refresh, stack limit and dispel behavior; no numeric consumer reads this kind. This does not enable
-those effects on equipment. In particular, Thorns and Retribution Aura retain holders without
-reflection. Arcane Elixir, Greater Arcane Elixir and Ephemeral Power now add magic damage;
+those effects on equipment. Arcane Elixir, Greater Arcane Elixir and Ephemeral Power now add magic damage;
 Curse of Weakness reduces physical weapon damage. Dampen and Amplify Magic modify incoming
 spell damage and healing by school.
 Aspect of the Hawk contributes only its ranged AP to the separate ranged field. Unrestricted crit
@@ -894,7 +893,7 @@ Publish repair refreshes these projections; see
 | 8 PeriodicHeal | 8 | periodic healing bonus/cadence not certified | Inert | 5707 |
 | 13 ModDamageDone | 928 | signed school damage; weapon-slot restrictions; spell coefficients | Correct for 927 Items; area aura 28143 on Atiesh stays inert | 7685 |
 | 14 ModDamageTaken | 2 | flat incoming damage by school; spell coefficients and half-damage floor | Correct | 5102 |
-| 15 DamageShield | 10 | reflection needs mechanics; no absorb mapping | Inert | 15438 |
+| 15 DamageShield | 10 | qualifying melee hits reflect school damage; SMSG_SPELLDAMAGESHIELD | Correct | 15438 |
 | 17 ModStealthDetect | 8 | detection placeholder | Inert | 12418 |
 | 19 ModInvisibilityDetection | 2 | detection placeholder | Inert | 17623 |
 | 22 ModResistance | 74 | resistance_bonus; flat school mask | Correct | 12956 |
@@ -951,3 +950,15 @@ The class AP formulas and fractional damage follow
 [StatSystem.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/StatSystem.cpp).
 Mana regeneration follows the two-second `Player::Regenerate` cadence in
 [Player.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp).
+
+### Damage shields
+
+`A_DAMAGE_SHIELD` (0xC0) retains the source amount. Main-hand and off-hand swings trigger
+reflection when they deal damage or block. Weapon-proc spells trigger it when they deal damage.
+Ranged attacks and other spells do not trigger reflection. The bearer receives damage and threat
+credit. A reflected hit uses its own school and the shield packet, bypasses absorbs and partial
+resistance, cannot crit, and cannot trigger another shield. The shield amount is not consumed.
+
+For immunity Auras, `p1` retains the source aura id in its low byte and bit 0x100 when the source
+immunity also blocks friendly effects. Reflection uses this distinction to choose a spell miss or
+`SMSG_SPELLORDAMAGE_IMMUNE` before applying damage.

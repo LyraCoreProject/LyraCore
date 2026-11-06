@@ -16,5 +16,6 @@ pub(crate) use resolve::{
 pub(crate) use targeting::blink_forward;
 pub(crate) use targeting::{
     apply_direct_heal, apply_effect, aura_apply, aura_has_visible_slot, dynamic_object_guid,
-    faction_target_violation, recipe_reagents, revive_amount, select_targets, ItemGrantOutcome,
+    faction_target_violation, recipe_reagents, revive_amount, select_targets, spell_misses,
+    ItemGrantOutcome,
 };

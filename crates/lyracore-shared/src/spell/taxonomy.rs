@@ -100,6 +100,7 @@ effect_kinds! {
     A_MOD_HEALING => AuraModHealing = 0xB8,
     A_INERT => AuraInert = 0xB9,
     A_FLAG => AuraFlag = 0xBE,
+    A_DAMAGE_SHIELD => AuraDamageShield = 0xC0,
     A_MOD_DAMAGE_DONE_FLAT => AuraModDamageDoneFlat = 0xD0,
     A_MOD_DAMAGE_TAKEN_FLAT => AuraModDamageTakenFlat = 0xD1,
     A_MOD_SCHOOL_CRIT => AuraModSchoolCrit = 0xD2,
@@ -241,6 +242,7 @@ mod tests {
         assert_eq!(A_MOD_COMBAT, 0xA3);
         assert_eq!(A_MOD_POWER_REGEN_PCT, 0xB7);
         assert_eq!(A_FLAG, 0xBE);
+        assert_eq!(A_DAMAGE_SHIELD, 0xC0);
         assert_eq!(A_MOD_DAMAGE_DONE_FLAT, 0xD0);
         assert_eq!(A_MOD_DAMAGE_TAKEN_FLAT, 0xD1);
         assert_eq!(A_MOD_SCHOOL_CRIT, 0xD2);

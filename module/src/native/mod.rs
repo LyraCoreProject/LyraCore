@@ -13,6 +13,7 @@ pub(crate) use character_names::account_has_room as realm_account_has_room;
 mod chat;
 mod chat_flood;
 mod combat;
+pub(crate) use combat::{damage_shield, damage_shield_immune, damage_shield_miss};
 mod creature;
 mod death;
 #[cfg(feature = "conformance_test_fixture")]
