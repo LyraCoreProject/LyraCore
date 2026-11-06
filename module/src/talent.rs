@@ -627,6 +627,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                     enters_combat: false,
                     points_per_combo: 0.0,
                     bonus_coefficient: -1.0,
+                    equip_supported: false,
                 });
             }
         };
@@ -676,6 +677,13 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                 custom_flags: 0,
                 min_target_level: 0,
                 single_target_key: 0,
+                form_mask: 0,
+                form_exclude: 0,
+                attributes_ex_2: 0,
+                visual_id: 0,
+                duration_index: 0,
+                category: 0,
+                category_cooldown_ms: 0,
             });
             ctx.db.game_spell_effect().insert(SpellEffect {
                 id: packed_spell_effect_id(spell_id, 0),
@@ -698,6 +706,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                 enters_combat: false,
                 points_per_combo: 0.0,
                 bonus_coefficient: -1.0,
+                equip_supported: false,
             });
         }
     };

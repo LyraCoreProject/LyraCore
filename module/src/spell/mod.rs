@@ -2,6 +2,8 @@ pub(crate) mod cast;
 pub(crate) mod chance_on_hit;
 mod outcome;
 mod presentation;
+mod repair;
+pub(crate) use repair::repair_cast_auras;
 mod rolls;
 pub(crate) use outcome::{
     cast_readiness, pending_cast, request_cast, CastFinish, CastGateRefusal, CastHandle,
@@ -18,6 +20,8 @@ pub(crate) mod source_behavior;
 pub(crate) mod spellbook;
 pub(crate) mod stacking;
 mod tables;
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) use tables::{expire_item_aura, game_item_aura_expiry};
 mod taxonomy;
 
 #[cfg(test)]
@@ -26,13 +30,13 @@ mod tests;
 #[cfg(test)]
 pub(crate) use cast::passive_applies_effect_kind;
 pub(crate) use cast::{
-    apply_direct_heal, apply_effect, apply_spell_auras, aura_apply, begin_cast,
+    apply_direct_heal, apply_effect, apply_item_auras, apply_spell_auras, aura_apply, begin_cast,
     begin_cast_with_admission, begin_item_cast, cast_triggered, charge_spell_cost,
     check_cast_start_gates, check_pending_cast_los, clear_dead_callback_cast_admission,
-    faction_target_violation, recipe_reagents, resolve_cast_at, resolve_cast_at_typed,
-    revive_amount, select_targets, start_creature_spell, start_spell_cooldown,
-    CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
-    ItemGrantOutcome,
+    faction_target_violation, recipe_reagents, record_spell_cooldown, resolve_cast_at,
+    resolve_cast_at_typed, revive_amount, select_targets, start_creature_spell,
+    start_spell_cooldown, CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode,
+    CreatureSpellTarget, ItemGrantOutcome,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use cast::{blink_forward, resolve_cast};
@@ -105,13 +109,13 @@ pub use tables::{
 
 pub(crate) use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_COMBAT_HEALTH_REGEN_PCT, A_CONTROL, A_DISARM, A_FLAG, A_IMMUNITY, A_MOD_COMBAT,
-    A_MOD_DAMAGE_TAKEN, A_MOD_DETECT_RANGE, A_MOD_POWER_REGEN_PCT, A_MOD_RESISTANCE, A_MOD_SPEED,
-    A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL,
-    A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_RETALIATE, A_SEAL, A_SELF_RESURRECT,
-    A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_STEALTH, A_TRANSFORM, BEAST_TYPE, COMBAT_ATTACK_POWER,
-    COMBAT_BLOCK, COMBAT_CRIT, COMBAT_DEFENSE, COMBAT_DMG_DONE, COMBAT_DODGE, COMBAT_HIT,
-    COMBAT_PARRY, COMBAT_SPELL_POWER, COMBAT_THREAT, CRITTER_TYPE, E_ADD_COMBO, E_BLINK, E_CHARGE,
-    E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISMOUNT, E_DISTRACT, E_DUEL,
+    A_MOD_DAMAGE_TAKEN, A_MOD_DETECT_RANGE, A_MOD_HEALING, A_MOD_POWER_REGEN_PCT, A_MOD_RESISTANCE,
+    A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE,
+    A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_RETALIATE, A_SEAL,
+    A_SELF_RESURRECT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_STEALTH, A_TRANSFORM, BEAST_TYPE,
+    COMBAT_ATTACK_POWER, COMBAT_BLOCK, COMBAT_CRIT, COMBAT_DEFENSE, COMBAT_DMG_DONE, COMBAT_DODGE,
+    COMBAT_HIT, COMBAT_PARRY, COMBAT_SPELL_POWER, COMBAT_THREAT, CRITTER_TYPE, E_ADD_COMBO,
+    E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISMOUNT, E_DISTRACT, E_DUEL,
     E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_HEAL, E_HEAL_MAX_HEALTH,
     E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN,
     E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE,
@@ -139,7 +143,10 @@ pub(crate) use taxonomy::{
     STANCE_DEFENSIVE_THREAT_PCT,
 };
 
-pub(crate) use tables::{sweep_delete_game_aura, sweep_transfer_game_aura};
+pub(crate) use tables::{
+    sweep_delete_game_aura, sweep_delete_game_spell_cd, sweep_transfer_game_aura,
+    sweep_transfer_game_spell_cd,
+};
 
 pub(crate) use spellbook::{
     sweep_delete_game_player_spell, sweep_restamp_game_player_spell,

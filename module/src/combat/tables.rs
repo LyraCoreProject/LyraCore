@@ -108,26 +108,34 @@ pub(crate) fn melee_attack_power_for(class: u8, strength: u32, agility: u32, lev
     }
 }
 
-pub(crate) fn ranged_attack_power(agility: u32, level: u32) -> u32 {
-    (level * 2 + agility).saturating_sub(10)
+pub(crate) fn ranged_attack_power_for(class: u8, agility: u32, level: u32) -> u32 {
+    let raw = match class {
+        1 | CLASS_ROGUE => level + agility,
+        CLASS_HUNTER => level * 2 + agility * 2,
+        _ => agility,
+    };
+    raw.saturating_sub(10)
 }
 
 pub(crate) fn ranged_sheet_values(
+    class: u8,
     agility: u32,
     level: u32,
     weapon: Option<(u32, u32, u32, u8)>,
-) -> (u32, u32, u32) {
+    bonus: i32,
+) -> (u32, f32, f32) {
     use crate::items::weapon_subclass as ws;
 
     let Some((dmg_min, dmg_max, delay_ms, subclass)) = weapon else {
-        return (0, 0, 0);
+        return (0, 0.0, 0.0);
     };
-    if matches!(subclass, ws::BOW | ws::GUN | ws::CROSSBOW) {
-        let attack_power = ranged_attack_power(agility, level);
-        let (dmg_min, dmg_max) = weapon_swing_range_ap(attack_power, dmg_min, dmg_max, delay_ms);
-        (attack_power, dmg_min, dmg_max)
+    if matches!(subclass, ws::BOW | ws::GUN | ws::CROSSBOW | ws::THROWN) {
+        let base = ranged_attack_power_for(class, agility, level);
+        let attack_power = base.saturating_add_signed(bonus);
+        let bonus = attack_power as f32 / AP_PER_DPS as f32 * (delay_ms as f32 / 1000.0);
+        (base, dmg_min as f32 + bonus, dmg_max as f32 + bonus)
     } else {
-        (0, dmg_min, dmg_max)
+        (0, dmg_min as f32, dmg_max as f32)
     }
 }
 
@@ -544,34 +552,74 @@ mod tests {
     }
 
     #[test]
-    fn ranged_attack_power_scales_with_level_and_agility_and_floors_at_zero() {
-        assert_eq!(ranged_attack_power(20, 10), 30);
-        assert_eq!(ranged_attack_power(0, 5), 0);
-        assert_eq!(ranged_attack_power(0, 1), 0);
-        assert!(ranged_attack_power(40, 10) > ranged_attack_power(20, 10));
-        assert!(ranged_attack_power(20, 20) > ranged_attack_power(20, 10));
+    fn ranged_attack_power_uses_each_class_formula() {
+        for (class, expected) in [(1, 180), (4, 180), (3, 370), (7, 120)] {
+            assert_eq!(ranged_attack_power_for(class, 130, 60), expected);
+            assert_eq!(ranged_attack_power_for(class, 0, 1), 0);
+        }
     }
 
     #[test]
     fn ranged_sheet_launcher_uses_attack_power_and_weapon_speed() {
-        let values = ranged_sheet_values(
-            20,
-            10,
-            Some((8, 12, 2_800, crate::items::weapon_subclass::BOW)),
+        assert_eq!(
+            ranged_sheet_values(
+                3,
+                20,
+                10,
+                Some((8, 12, 2800, crate::items::weapon_subclass::BOW)),
+                0
+            ),
+            (50, 18.0, 22.0)
         );
+    }
 
-        assert_eq!(values, (30, 14, 18));
+    #[test]
+    fn spell_9329_adds_ranged_attack_power_to_thrown_damage_without_changing_its_base() {
+        assert_eq!(
+            ranged_sheet_values(
+                4,
+                0,
+                1,
+                Some((10, 10, 14000, crate::items::weapon_subclass::THROWN)),
+                16
+            ),
+            (0, 26.0, 26.0)
+        );
+    }
+
+    #[test]
+    fn spell_9329_with_wicked_throwing_dagger_uses_rogue_agility() {
+        for class in [1, 4, 3] {
+            let (ap, min, max) = ranged_sheet_values(
+                class,
+                130,
+                60,
+                Some((23, 43, 1800, crate::items::weapon_subclass::THROWN)),
+                16,
+            );
+            let (expected_ap, expected_min, expected_max) = if class == 3 {
+                (370, 72.62857, 92.62857)
+            } else {
+                (180, 48.2, 68.2)
+            };
+            assert_eq!(ap, expected_ap);
+            assert!((min - expected_min).abs() < 0.0001);
+            assert!((max - expected_max).abs() < 0.0001);
+        }
     }
 
     #[test]
     fn ranged_sheet_wand_keeps_flat_weapon_damage() {
-        let values = ranged_sheet_values(
-            20,
-            10,
-            Some((8, 12, 2_800, crate::items::weapon_subclass::WAND)),
+        assert_eq!(
+            ranged_sheet_values(
+                5,
+                130,
+                60,
+                Some((8, 12, 2800, crate::items::weapon_subclass::WAND)),
+                16
+            ),
+            (0, 8.0, 12.0)
         );
-
-        assert_eq!(values, (0, 8, 12));
     }
 
     #[test]
@@ -901,6 +949,11 @@ mod tests {
             sheet_spi_bonus: 0,
             sheet_ap_base: 0,
             sheet_ap_mods: 0,
+            sheet_ap_modifiers: 0,
+            sheet_ranged_ap_modifiers: 0,
+            sheet_ranged_dmg_min_fraction: 0.0,
+            sheet_ranged_dmg_max_fraction: 0.0,
+            sheet_ranged_crit_bp: 0,
             sheet_dmg_min: 0,
             sheet_dmg_max: 0,
             sheet_crit_bp: 0,

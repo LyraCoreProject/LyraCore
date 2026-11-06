@@ -138,6 +138,13 @@ fn blank_spell(spell_id: u32) -> Spell {
         custom_flags: 0,
         min_target_level: 0,
         single_target_key: 0,
+        form_mask: 0,
+        form_exclude: 0,
+        attributes_ex_2: 0,
+        visual_id: 0,
+        duration_index: 0,
+        category: 0,
+        category_cooldown_ms: 0,
     }
 }
 
@@ -163,6 +170,7 @@ fn blank_spell_effect(spell_id: u32, effect_index: u8) -> SpellEffect {
         enters_combat: false,
         points_per_combo: 0.0,
         bonus_coefficient: -1.0,
+        equip_supported: false,
     }
 }
 
@@ -192,6 +200,14 @@ fn apply_spell_field(spell: &mut Spell, field: &str, value: &FieldValue) -> Resu
         "proc_flags" => spell.proc_flags = as_u32(field, value)?,
         "proc_chance" => spell.proc_chance = as_u8(field, value)?,
         "single_target_key" => spell.single_target_key = as_u64(field, value)?,
+        "form_mask" => spell.form_mask = as_u32(field, value)?,
+        "form_exclude" => spell.form_exclude = as_u32(field, value)?,
+        "attributes_ex_2" => spell.attributes_ex_2 = as_u32(field, value)?,
+        "visual_id" => spell.visual_id = as_u32(field, value)?,
+        "duration_index" => spell.duration_index = as_u32(field, value)?,
+        "category" => spell.category = as_u32(field, value)?,
+        "category_cooldown_ms" => spell.category_cooldown_ms = as_u32(field, value)?,
+
         "custom_flags" => spell.custom_flags = as_u32(field, value)?,
         "min_target_level" => spell.min_target_level = as_u32(field, value)?,
         "proc_charges" => spell.proc_charges = as_u8(field, value)?,
@@ -221,6 +237,7 @@ fn apply_effect_field(
         "p1" => effect.p1 = as_i32(field, value)?,
         "script_id" => effect.script_id = as_u32(field, value)?,
         "bonus_coefficient" => effect.bonus_coefficient = as_f32(field, value)?,
+        "equip_supported" => effect.equip_supported = as_bool(field, value)?,
         "enters_combat" => effect.enters_combat = as_bool(field, value)?,
         other => {
             return Err(format!(

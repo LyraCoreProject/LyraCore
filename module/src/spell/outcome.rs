@@ -227,6 +227,7 @@ pub(crate) fn request_cast(
         false,
         None,
         None,
+        None,
         CreatureSpellCasterAdmission::Living,
     )
     .map_err(Into::into)

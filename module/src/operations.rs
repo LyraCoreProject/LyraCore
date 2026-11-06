@@ -1,5 +1,6 @@
 use spacetimedb::{log, reducer, ReducerContext, Table, TimeDuration};
 
+use crate::game_world_entity;
 use crate::spell::stacking::game_spell_group;
 use crate::{
     game_auction, game_auction_expiry, game_aura, game_aura_schedule, game_breath_schedule,
@@ -15,6 +16,22 @@ use crate::{
 pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::items::discard_legacy_buyback(ctx);
+    crate::spell::repair_cast_auras(ctx);
+    let guids: Vec<_> = ctx
+        .db
+        .game_world_entity()
+        .by_entry()
+        .filter(0u32)
+        .filter(|entity| entity.is_player())
+        .map(|entity| entity.guid)
+        .collect();
+    for guid in guids {
+        if crate::helpers::acting_entity_by_guid(ctx, guid).is_some() {
+            crate::items::equip::repair(ctx, guid);
+            crate::spell::recompute_vitals(ctx, guid);
+            crate::spell::recompute_sheet(ctx, guid);
+        }
+    }
 
     crate::seed::seed_crit_rates(ctx);
     crate::talent::seed_talents(ctx);

@@ -1,5 +1,6 @@
 mod buyback;
 mod economy;
+pub(crate) mod equip;
 mod exchange;
 mod guids;
 mod inventory;

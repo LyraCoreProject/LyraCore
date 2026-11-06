@@ -256,13 +256,16 @@ pub struct SheetStatsValues {
     pub int_bonus: i32,
     pub spi_bonus: i32,
     pub attack_power: u32,
-    pub ap_mods: i32,
+    // Positive i16 in the low half, negative i16 in the high half.
+    pub ap_modifiers: u32,
+    pub ranged_ap_modifiers: u32,
     pub dmg_min: u32,
     pub dmg_max: u32,
     pub ranged_attack_power: u32,
-    pub ranged_dmg_min: u32,
-    pub ranged_dmg_max: u32,
+    pub ranged_dmg_min: f32,
+    pub ranged_dmg_max: f32,
     pub crit_pct: f32,
+    pub ranged_crit_pct: f32,
 }
 
 pub fn build_sheet_stats_values(guid: u64, s: &SheetStatsValues) -> SMSG_UPDATE_OBJECT {
@@ -283,15 +286,19 @@ pub fn build_sheet_stats_values(guid: u64, s: &SheetStatsValues) -> SMSG_UPDATE_
         p.set_player_field_negstat3(s.int_bonus.min(0));
         p.set_player_field_negstat4(s.spi_bonus.min(0));
         p.set_unit_attack_power(s.attack_power as i32);
-        // ATTACK_POWER_MODS packs unsigned positive and negative magnitudes into two u16 fields.
-        p.set_unit_attack_power_mods(s.ap_mods.max(0) as u16, (-s.ap_mods).max(0) as u16);
+        // gtker writes its first short argument into the high half.
+        p.set_unit_attack_power_mods((s.ap_modifiers >> 16) as u16, s.ap_modifiers as u16);
         p.set_unit_mindamage(s.dmg_min as f32);
         p.set_unit_maxdamage(s.dmg_max as f32);
         p.set_unit_ranged_attack_power(s.ranged_attack_power as i32);
-        p.set_unit_ranged_attack_power_mods(0, 0);
-        p.set_unit_minrangeddamage(s.ranged_dmg_min as f32);
-        p.set_unit_maxrangeddamage(s.ranged_dmg_max as f32);
+        p.set_unit_ranged_attack_power_mods(
+            (s.ranged_ap_modifiers >> 16) as u16,
+            s.ranged_ap_modifiers as u16,
+        );
+        p.set_unit_minrangeddamage(s.ranged_dmg_min);
+        p.set_unit_maxrangeddamage(s.ranged_dmg_max);
         p.set_player_crit_percentage(s.crit_pct);
+        p.set_player_ranged_crit_percentage(s.ranged_crit_pct);
     })
 }
 

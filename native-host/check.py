@@ -3428,7 +3428,8 @@ def check_companion_actions(host, first, second, guid, other_guid):
     vitals = host.rows('SELECT health, power, money FROM game_world_entity WHERE guid = 1')
     relocate(entrance, 36, instance, 101)
     assert host.rows('SELECT map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = 1') == [[36, instance, 4000, 1000, 0]]
-    assert host.rows('SELECT health, power, money FROM game_world_entity WHERE guid = 1') == vitals
+    relocated_vitals = host.rows('SELECT health, power, money FROM game_world_entity WHERE guid = 1')
+    assert relocated_vitals == vitals, (vitals, relocated_vitals)
     assert host.rows('SELECT map_id, pending_instance_id, online FROM game_character WHERE guid = 1') == [[36, instance, False]]
     assert 1 in creates(first.collect())
     assert 1 in destroys(second.collect())

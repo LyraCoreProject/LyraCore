@@ -299,8 +299,17 @@ impl Table {
             (self, name),
             (
                 Self::Spell,
-                "custom_flags" | "min_target_level" | "single_target_key"
-            ) | (Self::SpellEffect, "bonus_coefficient")
+                "custom_flags"
+                    | "min_target_level"
+                    | "single_target_key"
+                    | "form_mask"
+                    | "form_exclude"
+                    | "attributes_ex_2"
+                    | "visual_id"
+                    | "duration_index"
+                    | "category"
+                    | "category_cooldown_ms"
+            ) | (Self::SpellEffect, "bonus_coefficient" | "equip_supported")
         )
     }
 
@@ -357,6 +366,13 @@ const SPELL_COLUMNS: &[Column] = &[
     column("custom_flags", FieldType::U32),
     column("min_target_level", FieldType::U32),
     column("single_target_key", FieldType::U64),
+    column("form_mask", FieldType::U32),
+    column("form_exclude", FieldType::U32),
+    column("attributes_ex_2", FieldType::U32),
+    column("visual_id", FieldType::U32),
+    column("duration_index", FieldType::U32),
+    column("category", FieldType::U32),
+    column("category_cooldown_ms", FieldType::U32),
 ];
 
 const SPELL_EFFECT_COLUMNS: &[Column] = &[
@@ -376,6 +392,7 @@ const SPELL_EFFECT_COLUMNS: &[Column] = &[
     column("script_id", FieldType::U32),
     column("enters_combat", FieldType::Bool),
     column("bonus_coefficient", FieldType::F32),
+    column("equip_supported", FieldType::Bool),
 ];
 
 const ITEM_COLUMNS: &[Column] = &[

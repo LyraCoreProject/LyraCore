@@ -28,6 +28,7 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
                     .has_dest
                     .then_some((sched.dest_x, sched.dest_y, sched.dest_z)),
                 (sched.item_target_guid != 0).then_some(sched.item_target_guid),
+                sched.cooldown_category,
             )
         });
     clear_dead_callback_cast_admission(ctx, sched.caster_guid, sched.spell_id);
@@ -214,8 +215,10 @@ pub(crate) fn do_cancel_aura(
         return Err("ghost effects end on resurrection".into());
     }
     if let Some(spell) = ctx.db.game_spell().spell_id().find(spell_id) {
-        if spell.attributes & SPELL_ATTR_PASSIVE != 0 {
-            return Err(format!("spell {spell_id} is passive and cannot be cancelled").into());
+        const NO_AURA_CANCEL: u32 = 0x80000000;
+        const DO_NOT_DISPLAY: u32 = 0x80;
+        if spell.attributes & (SPELL_ATTR_PASSIVE | NO_AURA_CANCEL | DO_NOT_DISPLAY) != 0 {
+            return Err(format!("spell {spell_id} cannot be cancelled").into());
         }
         if spell.negative() {
             return Err(format!("spell {spell_id} is a debuff and cannot be cancelled").into());

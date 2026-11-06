@@ -29,13 +29,25 @@ fn populated_old_module_upgrades_without_clearing() {
     let entity_before = entity(&shard);
     let spell_before = shard.query_rows("SELECT * FROM game_spell WHERE spell_id = 5090100");
     let effect_before = shard.query_rows("SELECT * FROM game_spell_effect WHERE id = 20360400");
-    for column in ["custom_flags", "min_target_level", "single_target_key"] {
+    for column in [
+        "custom_flags",
+        "min_target_level",
+        "single_target_key",
+        "form_mask",
+        "form_exclude",
+        "attributes_ex_2",
+        "visual_id",
+        "duration_index",
+        "category",
+        "category_cooldown_ms",
+    ] {
         assert!(
             !spell_before[0].contains_key(column),
             "the baseline already has {column}"
         );
     }
     assert!(!effect_before[0].contains_key("bonus_coefficient"));
+    assert!(!effect_before[0].contains_key("equip_supported"));
     let legacy_emotes = shard.query_rows("SELECT * FROM game_emote_event WHERE sender_guid = 1");
     assert!(legacy_emotes.is_empty(), "main emits only live emotes");
     let old_schema = shard.describe();
@@ -43,9 +55,31 @@ fn populated_old_module_upgrades_without_clearing() {
     shard.publish_module_bytes(current);
 
     assert_eq!(upgraded_character(&shard), character_before);
-    assert_eq!(entity(&shard), entity_before);
+    let mut entity_after = entity(&shard);
+    for column in [
+        "sheet_ap_modifiers",
+        "sheet_ranged_ap_modifiers",
+        "sheet_ranged_dmg_min_fraction",
+        "sheet_ranged_dmg_max_fraction",
+        "sheet_ranged_crit_bp",
+    ] {
+        assert!(!entity_before.contains_key(column));
+        assert_eq!(entity_after.remove(column).as_deref(), Some("0"));
+    }
+    assert_eq!(entity_after, entity_before);
     let mut spell_after = shard.query_rows("SELECT * FROM game_spell WHERE spell_id = 5090100");
-    for column in ["custom_flags", "min_target_level", "single_target_key"] {
+    for column in [
+        "custom_flags",
+        "min_target_level",
+        "single_target_key",
+        "form_mask",
+        "form_exclude",
+        "attributes_ex_2",
+        "visual_id",
+        "duration_index",
+        "category",
+        "category_cooldown_ms",
+    ] {
         assert_eq!(
             spell_after[0].remove(column).as_deref(),
             Some("0"),
@@ -60,6 +94,10 @@ fn populated_old_module_upgrades_without_clearing() {
     assert_eq!(
         effect_after[0].remove("bonus_coefficient").as_deref(),
         Some("-1")
+    );
+    assert_eq!(
+        effect_after[0].remove("equip_supported").as_deref(),
+        Some("false")
     );
     assert_eq!(
         effect_after, effect_before,

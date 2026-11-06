@@ -39,7 +39,7 @@ pub fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
     if kind == E_TAUNT && name == "Feint" {
         return E_REDUCE_THREAT;
     }
-    if kind != E_SCRIPTED && kind != A_FLAG {
+    if kind != E_SCRIPTED && kind != A_FLAG && kind != A_INERT {
         return kind;
     }
     match name {
@@ -90,22 +90,13 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         | ModBaseResistancePct
         | ModResistanceOfStatPercent => A_MOD_RESISTANCE,
 
-        SchoolAbsorb | DamageShield | ManaShield => A_ABSORB,
+        SchoolAbsorb | ManaShield => A_ABSORB,
 
-        ModAttackPower
-        | ModRangedAttackPower
-        | ModMeleeAttackPowerVersus
-        | ModRangedAttackPowerVersus
-        | ModAttackPowerPct
-        | ModRangedAttackPowerPct => A_MOD_COMBAT,
-        ModCritPercent | ModSpellCritChance | ModSpellCritChanceSchool | ModCritPercentVersus => {
-            A_MOD_COMBAT
-        }
-        ModHitChance | ModSpellHitChance => A_MOD_COMBAT,
-        ModDamageDone | ModDamagePercentDone | ModDamageDoneCreature | ModDamageDoneVersus => {
-            A_MOD_COMBAT
-        }
-        ModHealing | ModHealingDone => A_MOD_COMBAT,
+        ModAttackPower | ModRangedAttackPower => A_MOD_COMBAT,
+        ModCritPercent | ModSpellCritChance => A_MOD_COMBAT,
+        ModHitChance => A_MOD_COMBAT,
+        ModDamagePercentDone | ModDamageDoneCreature | ModDamageDoneVersus => A_MOD_COMBAT,
+        ModHealingDone => A_MOD_HEALING,
         ModDodgePercent | ModTotalThreat | ModThreat => A_MOD_COMBAT,
 
         ModIncreaseSpeed | ModDecreaseSpeed | ModSpeedAlways | ModSpeedNotStack => A_MOD_SPEED,
@@ -181,7 +172,21 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         | AllowChampionSpells
         | UseNormalMovementSpeed => A_FLAG,
 
-        _ => E_SCRIPTED,
+        _ => A_INERT,
+    }
+}
+
+pub fn equip_aura_supported(aura: u32, misc: u32, equipment: [u32; 3]) -> bool {
+    use AuraMod::*;
+    match AuraMod::from_int(aura).ok() {
+        Some(ModStat) => misc <= 4 || misc == u32::MAX,
+        Some(ModResistance) => misc != 0 && misc & !0x7f == 0,
+        Some(ModCritPercent) => equipment[0] == u32::MAX,
+        Some(
+            ModHitChance | ModAttackPower | ModRangedAttackPower | ModHealingDone
+            | ModSpellCritChance,
+        ) => true,
+        _ => false,
     }
 }
 
@@ -216,7 +221,10 @@ pub fn supported_effect(name: &str, slot: &EffectSlot) -> bool {
     } else {
         correct_script_effect_kind(name, kind)
     };
-    dismount_effect_kind(slot.effect, slot.misc as u32).unwrap_or(kind) != E_SCRIPTED
+    !matches!(
+        dismount_effect_kind(slot.effect, slot.misc as u32).unwrap_or(kind),
+        E_SCRIPTED | A_INERT
+    )
 }
 
 #[cfg(test)]

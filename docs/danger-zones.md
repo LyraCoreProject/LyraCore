@@ -218,6 +218,77 @@ expire this threat. The grid check uses the pinned Reference's default geometry,
 with no nearby Character or active creature enters evade and clears that combat. LyraCore keeps the
 creature object loaded; this does not implement grid unloading or change vendor stock lifetime.
 
+### Equip spell migration
+
+The seven END-appended source fields on `game_spell` and five category overrides on
+`game_item_template` default to zero. Reimport `spell` and `items` before play resumes so equip
+effects retain their forms, visibility, duration and category cooldown rules. No new spell effects
+are implemented.
+
+`game_spell_effect` END-appends `equip_supported` with a false default. Until the `spell`
+reimport, equipment effects remain inert. That reimport also separates melee and ranged AP,
+healing and spell crit, and marks source percentages for conversion to basis points after their
+amount is rolled. Healing retains its school mask in `A_MOD_HEALING` for the existing flat
+healing calculation. Flat school damage and damage shields no longer import as damage percentages
+or absorbs. The complete admitted/inert type list and Item counts are in
+[the equip aura support audit](schema.md#equip-aura-support).
+
+Before play resumes:
+
+1. Publish the Module through a planned additive update.
+2. Reimport `spell` and `items` with the updated importer.
+3. Call `debug_repair_after_publish` after the imports.
+
+A repair before reimport is safe; call it again after the imports. Each derived equip aura retains
+its source definition locally. Repair keeps unchanged effects and rebuilds stale definitions,
+including changed units, visibility and eligibility. It does not restart equip cooldowns or retain
+duplicate effects. Changed finite equip effects restart their source duration during this explicit
+repair. Unchanged aura identity and deadlines are preserved. Connected Characters and ghosts
+receive the rebuilt state.
+
+Repair also compares every ordinary cast Aura's frozen effect kind, parameters, units and cadence
+with its imported definition, including offline and permanent rows. It removes missing definitions,
+refreshes obsolete metadata, converts percentage units once and clears obsolete absorb capacity.
+Aura writes notify connected clients and refresh their sheets. Existing cast magnitudes, stacks,
+application times and remaining durations stay frozen, apart from the unit conversion. Buff and
+debuff slots follow the current definition. Missing learned passives are restored without stacking
+existing effects. No manual Aura cleanup or recast is required. Repeating repair is idempotent.
+Unsupported cast modifiers retain ordinary Aura holders with inert numeric effects; this includes
+flat school damage, damage shields, flat incoming damage and incoming healing. Reflection and flat
+spell damage remain unimplemented. Older Package Deltas default to inert equip effects; an author
+must supply a supported claim.
+
+`game_world_entity` END-appends `sheet_ap_modifiers` and `sheet_ranged_ap_modifiers` with
+zero defaults. These derived projections pack the positive signed-16 modifier in the low half
+and the negative signed-16 modifier in the high half. Ranged base AP no longer includes these
+modifiers. The final publish repair recomputes both projections for connected Characters; world
+entry recomputes them for returning Characters. Neither column is Character-owned Transfer state.
+Two further zero-default END columns, `sheet_ranged_dmg_min_fraction` and
+`sheet_ranged_dmg_max_fraction`, retain fractional ranged damage for the wire. They leave the
+existing integer columns intact. Publish repair recomputes them for connected Characters; world
+entry recomputes them on login. Both fields are derived and do not cross Character Transfer.
+The zero-default END field `sheet_ranged_crit_bp` keeps the ranged weapon's skill contribution
+separate from melee crit. Publish repair and world entry refresh it; weapon skill writes refresh
+the affected melee or ranged projection. It is also derived and does not cross Character Transfer.
+
+`game_item_aura` and its finite-expiry schedule `game_item_aura_expiry` start empty.
+`debug_repair_after_publish` reconciles equipment and refreshes the sheet of every online Character
+without starting an equip cooldown, including passive effects on ghosts. Fresh login, reconnect,
+resurrection and form changes also reconcile equipment. World entry restores passive effects
+for a ghost. World exit removes derived equip Auras;
+Transfer excludes them and world entry rebuilds them once. Ordinary Auras keep their published
+row layout and Transfer codec.
+
+Transfer now carries `game_spell_cd`, including an active equip cooldown. Old blobs that lack
+this table import with no spell cooldown rows. An older destination refuses the new manifest.
+Update both Shards before an active World Session crosses them. Keep a refused source Transfer
+until both ends can import it. The Native Host delivery layouts are unchanged.
+
+The category and category deadline on existing spell cooldown rows default to zero; their spell
+deadlines stay unchanged. A pending cast's new category override defaults to `None`, which uses
+the spell's category. New Item casts retain their Item category through completion. World entry
+sends remaining spell and category cooldowns in `SMSG_INITIAL_SPELLS`.
+
 ### Temporary enchantment migration
 
 Poisons, sharpening stones, weapon oils and shaman weapon spells need effect 54 imported as

@@ -26,7 +26,11 @@ fn fields(shard: &Standalone) -> Value {
         item(shard, 25)
             .unwrap()
             .into_iter()
-            .filter(|(key, _)| key != "entry" && !key.starts_with("spellppmrate_"))
+            .filter(|(key, _)| {
+                key != "entry"
+                    && !key.starts_with("spellppmrate_")
+                    && !key.starts_with("spellcategory_")
+            })
             .map(|(key, value)| {
                 let value = if key == "name" {
                     json!(value)

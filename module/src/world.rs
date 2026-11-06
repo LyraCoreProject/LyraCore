@@ -247,6 +247,16 @@ pub struct WorldEntity {
     pub combat_active: bool,
     #[default(false)]
     pub simulation_indexed: bool,
+    #[default(0u32)]
+    pub sheet_ap_modifiers: u32,
+    #[default(0u32)]
+    pub sheet_ranged_ap_modifiers: u32,
+    #[default(0.0f32)]
+    pub sheet_ranged_dmg_min_fraction: f32,
+    #[default(0.0f32)]
+    pub sheet_ranged_dmg_max_fraction: f32,
+    #[default(0u32)]
+    pub sheet_ranged_crit_bp: u32,
 }
 
 impl WorldEntity {

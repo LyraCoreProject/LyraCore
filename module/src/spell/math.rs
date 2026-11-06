@@ -99,7 +99,14 @@ pub(crate) fn spell_crit_chance(ctx: &ReducerContext, caster_guid: u64) -> f32 {
         effective_intellect(ctx, caster_guid).max(0) as u32,
         caster.level,
     );
-    (base + combat_field_bonus(ctx, caster_guid, COMBAT_CRIT) as f32 / 100.0).clamp(0.0, 100.0)
+    (base
+        + combat_field_bonus(
+            ctx,
+            caster_guid,
+            lyracore_shared::spell::taxonomy::COMBAT_SPELL_CRIT,
+        ) as f32
+            / 100.0)
+        .clamp(0.0, 100.0)
 }
 
 pub(crate) fn is_on_cooldown(now_micros: i64, ready_micros: i64) -> bool {
@@ -458,14 +465,16 @@ pub(crate) fn spell_power(ctx: &ReducerContext, caster_guid: u64, school_mask: u
 }
 
 pub(crate) fn healing_power(ctx: &ReducerContext, caster_guid: u64, school_mask: u8) -> i32 {
-    spell_power(ctx, caster_guid, school_mask).saturating_add(
-        crate::items::equipped_school_stat_bonus(
+    spell_power(ctx, caster_guid, school_mask)
+        .saturating_add(sum_active_auras(ctx, caster_guid, |aura| {
+            aura.eff_kind == A_MOD_HEALING && aura.eff_p0 & i32::from(school_mask) != 0
+        }))
+        .saturating_add(crate::items::equipped_school_stat_bonus(
             ctx,
             caster_guid,
             crate::items::EquipStat::HealingPower,
             school_mask,
-        ),
-    )
+        ))
 }
 
 pub(crate) fn effective_intellect(ctx: &ReducerContext, caster_guid: u64) -> i32 {

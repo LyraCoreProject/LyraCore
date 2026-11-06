@@ -1811,6 +1811,18 @@ fn ring_of_fire_resistance() -> ItemTemplateView {
 }
 
 #[test]
+fn item_query_preserves_the_five_spell_category_overrides() {
+    let mut item = ring_of_fire_resistance();
+    item.spell_categories = [30, 94, 1141, 0, 1160];
+    let response = build_item_query_response(item.entry, Some(&item));
+    let found = response.found.unwrap();
+    assert_eq!(
+        found.spells.map(|spell| spell.spell_category),
+        [30, 94, 1141, 0, 1160]
+    );
+}
+
+#[test]
 fn item_query_response_carries_the_work_item_213_columns() {
     let t = ring_of_fire_resistance();
     let msg = build_item_query_response(t.entry, Some(&t));
@@ -2969,8 +2981,8 @@ fn create_object_carries_stored_melee_and_ranged_sheet_projection() {
         sheet_dmg_min: 11,
         sheet_dmg_max: 13,
         sheet_ranged_ap: 30,
-        sheet_ranged_dmg_min: 14,
-        sheet_ranged_dmg_max: 18,
+        sheet_ranged_dmg_min: 14.0,
+        sheet_ranged_dmg_max: 18.0,
         ..warrior_entity()
     };
     let msg = build_create_object(&e, CreateKind::SelfPlayer, &[], &[]).unwrap();
@@ -3010,8 +3022,8 @@ fn create_object_carries_a_zero_stored_sheet_projection() {
 #[test]
 fn create_object_carries_a_flat_wand_projection() {
     let e = EntityView {
-        sheet_ranged_dmg_min: 8,
-        sheet_ranged_dmg_max: 12,
+        sheet_ranged_dmg_min: 8.0,
+        sheet_ranged_dmg_max: 12.0,
         ..warrior_entity()
     };
     let msg = build_create_object(&e, CreateKind::SelfPlayer, &[], &[]).unwrap();
@@ -3045,13 +3057,15 @@ fn ranged_sheet_stats(
         int_bonus: 0,
         spi_bonus: 0,
         attack_power: 50,
-        ap_mods: 0,
+        ap_modifiers: 0,
+        ranged_ap_modifiers: 0,
         dmg_min: 11,
         dmg_max: 13,
         ranged_attack_power,
-        ranged_dmg_min,
-        ranged_dmg_max,
+        ranged_dmg_min: ranged_dmg_min as f32,
+        ranged_dmg_max: ranged_dmg_max as f32,
         crit_pct: 5.0,
+        ranged_crit_pct: 5.0,
     }
 }
 
@@ -3077,6 +3091,23 @@ fn assert_sheet_values_projection(stats: SheetStatsValues, expected: (i32, f32, 
 #[test]
 fn sheet_values_carry_the_same_melee_and_ranged_projection() {
     assert_sheet_values_projection(ranged_sheet_stats(30, 14, 18), (30, 14.0, 18.0));
+}
+
+#[test]
+fn spell_7598_updates_both_melee_and_ranged_crit_fields() {
+    let mut stats = ranged_sheet_stats(180, 48, 68);
+    stats.crit_pct = 7.0;
+    stats.ranged_crit_pct = 7.0;
+    let msg = build_sheet_stats_values(1, &stats);
+    let Object::Values {
+        mask1: UpdateMask::Player(player),
+        ..
+    } = &msg.objects[0]
+    else {
+        panic!("expected Player Values")
+    };
+    assert_eq!(player.player_crit_percentage(), Some(7.0));
+    assert_eq!(player.player_ranged_crit_percentage(), Some(7.0));
 }
 
 #[test]
@@ -4243,4 +4274,52 @@ fn self_create_with_no_quests_matches_the_ordinary_create() {
         build_self_create_object(&entity, &[], &[], &[]).unwrap(),
         build_create_object(&entity, CreateKind::SelfPlayer, &[], &[]).unwrap(),
     );
+}
+
+#[test]
+fn demoralizing_shouts_negative_attack_power_is_signed_on_the_wire() {
+    let mut stats = ranged_sheet_stats(0, 0, 0);
+    stats.ap_modifiers = u32::from((-35i16) as u16) << 16;
+    let update = build_sheet_stats_values(1, &stats);
+    let Object::Values {
+        mask1: UpdateMask::Player(player),
+        ..
+    } = &update.objects[0]
+    else {
+        panic!("expected Player values");
+    };
+    assert_eq!(player.unit_attack_power_mods(), Some((0, (-35i16) as u16)));
+}
+
+#[test]
+fn spell_9329_and_demoralizing_shout_keep_both_attack_power_halves_in_create_and_values() {
+    let modifiers = 16 | (u32::from((-35i16) as u16) << 16);
+    let entity = EntityView {
+        sheet_ap_modifiers: modifiers,
+        sheet_ranged_ap_modifiers: 16,
+        ..warrior_entity()
+    };
+    let create = build_create_object(&entity, CreateKind::SelfPlayer, &[], &[]).unwrap();
+    let Object::CreateObject2 {
+        mask2: UpdateMask::Player(player),
+        ..
+    } = &create.objects[0]
+    else {
+        panic!("expected Player CREATE");
+    };
+    assert_eq!(player.unit_attack_power_mods(), Some((16, (-35i16) as u16)));
+    assert_eq!(player.unit_ranged_attack_power_mods(), Some((16, 0)));
+    let mut stats = ranged_sheet_stats(0, 0, 0);
+    stats.ap_modifiers = modifiers;
+    stats.ranged_ap_modifiers = 16;
+    let update = build_sheet_stats_values(1, &stats);
+    let Object::Values {
+        mask1: UpdateMask::Player(player),
+        ..
+    } = &update.objects[0]
+    else {
+        panic!("expected Player VALUES");
+    };
+    assert_eq!(player.unit_attack_power_mods(), Some((16, (-35i16) as u16)));
+    assert_eq!(player.unit_ranged_attack_power_mods(), Some((16, 0)));
 }

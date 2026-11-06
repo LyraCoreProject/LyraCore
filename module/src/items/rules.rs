@@ -502,6 +502,11 @@ pub(crate) mod tests {
             spellppmrate_3: 0.0,
             spellppmrate_4: 0.0,
             spellppmrate_5: 0.0,
+            spellcategory_1: 0,
+            spellcategory_2: 0,
+            spellcategory_3: 0,
+            spellcategory_4: 0,
+            spellcategory_5: 0,
         }
     }
 

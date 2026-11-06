@@ -13,6 +13,8 @@ mod buy_in_slot;
 mod buyback;
 #[path = "../../conformance/support/character_world.rs"]
 mod character_world;
+#[path = "conformance/item_equip.rs"]
+mod item_equip;
 #[path = "../../conformance/support/properties/mod.rs"]
 mod properties;
 #[path = "../../conformance/support/quest_world.rs"]

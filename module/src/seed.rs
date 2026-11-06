@@ -664,6 +664,13 @@ fn seed_spell_registry(ctx: &ReducerContext) {
             custom_flags: 0,
             min_target_level: 0,
             single_target_key: 0,
+            form_mask: 0,
+            form_exclude: 0,
+            attributes_ex_2: 0,
+            visual_id: 0,
+            duration_index: 0,
+            category: 0,
+            category_cooldown_ms: 0,
         });
     };
     let effect = |spell_id: u32,
@@ -695,6 +702,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
             enters_combat: false,
             points_per_combo: 0.0,
             bonus_coefficient: -1.0,
+            equip_supported: matches!(kind, 0xa0 | 0xa1),
         });
     };
     spell(

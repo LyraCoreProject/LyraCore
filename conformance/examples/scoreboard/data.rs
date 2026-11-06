@@ -115,7 +115,7 @@ fn coverage_keeps_ledger_gaps_and_source_occurrences_separate() -> Result<()> {
         .by_source
         .contains_key("module/src/creatures/cycle/mod.rs"));
     assert_eq!(
-        coverage.systems["inventory"].by_source["module/src/items/inventory.rs"].behavior,
+        coverage.systems["inventory"].by_source["module/src/spell/cast/resolve.rs"].behavior,
         1
     );
     let creatures = &coverage.systems["creatures"];

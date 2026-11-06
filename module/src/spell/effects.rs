@@ -60,52 +60,50 @@ pub(crate) fn apply_target_damage(
     (damage.amount, absorbed)
 }
 
-pub(crate) fn dispel_target(ctx: &ReducerContext, target_guid: u64, category: u8) -> u32 {
-    let auras = ctx.db.game_aura();
+pub(crate) fn dispel_target(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    target_guid: u64,
+    category: u8,
+) -> u32 {
+    let entities = ctx.db.game_world_entity();
+    let (Some(caster), Some(target)) = (
+        entities.guid().find(caster_guid),
+        entities.guid().find(target_guid),
+    ) else {
+        return 0;
+    };
+    let friendly = caster_guid == target_guid
+        || (!crate::duel::active_opponents(ctx, caster_guid, target_guid)
+            && crate::faction::is_friendly(ctx, target.faction_template, caster.faction_template));
     let spells = ctx.db.game_spell();
-    // Diminishing returns starts at removal, so inspect each aura before deleting it.
-    let debuffs: Vec<Aura> = auras
+    let dispelled: Vec<Aura> = ctx
+        .db
+        .game_aura()
         .by_target()
-        .filter(&target_guid)
-        .filter(|a| a.caster_guid != target_guid)
-        .filter(|a| {
-            let aura_cat = spells
-                .spell_id()
-                .find(a.spell_id)
-                .map(|s| s.dispel_type)
-                .unwrap_or(0);
-            dispel_category_matches(category, aura_cat)
+        .filter(target_guid)
+        .filter(|aura| {
+            spells.spell_id().find(aura.spell_id).is_some_and(|spell| {
+                spell.dispel_type != 0
+                    && dispel_category_matches(category, spell.dispel_type)
+                    && (!matches!(spell.dispel_type, 1 | 4) || spell.negative() == friendly)
+            })
         })
         .collect();
-    let removed = debuffs.len() as u32;
-    let redisplay = debuffs.iter().any(|a| a.eff_kind == A_TRANSFORM);
-    let moves_mount = debuffs
-        .iter()
-        .any(|a| crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0));
+    let removed = dispelled.len() as u32;
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
-    for a in debuffs {
-        if let Some(dr_category) = crate::spell::stacking::dr_category_for_effect(
+    for aura in &dispelled {
+        if let Some(category) = crate::spell::stacking::dr_category_for_effect(
             ctx,
-            a.eff_kind,
-            a.eff_p0_kind,
-            a.eff_p0,
-            a.target_guid,
+            aura.eff_kind,
+            aura.eff_p0_kind,
+            aura.eff_p0,
+            target_guid,
         ) {
-            crate::spell::stacking::dr_window_on_removal(
-                ctx,
-                a.target_guid,
-                dr_category,
-                now_micros,
-            );
+            crate::spell::stacking::dr_window_on_removal(ctx, target_guid, category, now_micros);
         }
-        crate::Aura::delete(ctx, a.id);
     }
-    if moves_mount {
-        crate::mount::recompute_mount(ctx, target_guid);
-    }
-    if redisplay {
-        recompute_display(ctx, target_guid);
-    }
+    shed_auras(ctx, target_guid, dispelled);
     removed
 }
 
@@ -203,14 +201,35 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
         .clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
 
     let ap_base = crate::combat::melee_attack_power_for(class, eff_str, eff_agi, e.level);
-    let ap_mods = crate::combat::aura_attack_power_bonus(ctx, unit_guid) as i32;
+    let ap_mods = crate::combat::aura_attack_power_bonus(ctx, unit_guid);
     let (dmg_min, dmg_max) = crate::combat::swing_range_ctx(ctx, &e);
+    let ap_modifiers = crate::combat::attack_power_modifiers(ctx, unit_guid, COMBAT_ATTACK_POWER);
+    // Priest, mage and warlock ignore ranged AP modifiers.
+    let ranged_ap_modifiers = if matches!(class, 5 | 8 | 9) {
+        0
+    } else {
+        crate::combat::attack_power_modifiers(
+            ctx,
+            unit_guid,
+            lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
+        )
+    };
     let (ranged_ap, ranged_dmg_min, ranged_dmg_max) = crate::combat::ranged_sheet_values(
+        class,
         eff_agi,
         e.level,
         crate::combat::equipped_ranged_weapon(ctx, unit_guid),
+        combat_field_bonus(
+            ctx,
+            unit_guid,
+            lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
+        ),
     );
+    let ranged_min_fraction = ranged_dmg_min.fract();
+    let ranged_max_fraction = ranged_dmg_max.fract();
+    let (ranged_dmg_min, ranged_dmg_max) = (ranged_dmg_min as u32, ranged_dmg_max as u32);
     let crit_bp = crate::combat::effective_crit_bp(ctx, &e);
+    let ranged_crit_bp = crate::combat::effective_ranged_crit_bp(ctx, &e);
 
     if str_bonus == e.sheet_str_bonus
         && agi_bonus == e.sheet_agi_bonus
@@ -219,12 +238,17 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
         && spi_bonus == e.sheet_spi_bonus
         && ap_base == e.sheet_ap_base
         && ap_mods == e.sheet_ap_mods
+        && ap_modifiers == e.sheet_ap_modifiers
+        && ranged_ap_modifiers == e.sheet_ranged_ap_modifiers
         && dmg_min == e.sheet_dmg_min
         && dmg_max == e.sheet_dmg_max
         && crit_bp == e.sheet_crit_bp
+        && ranged_crit_bp == e.sheet_ranged_crit_bp
         && ranged_ap == e.sheet_ranged_ap
         && ranged_dmg_min == e.sheet_ranged_dmg_min
         && ranged_dmg_max == e.sheet_ranged_dmg_max
+        && ranged_min_fraction == e.sheet_ranged_dmg_min_fraction
+        && ranged_max_fraction == e.sheet_ranged_dmg_max_fraction
     {
         return;
     }
@@ -235,12 +259,17 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     e.sheet_spi_bonus = spi_bonus;
     e.sheet_ap_base = ap_base;
     e.sheet_ap_mods = ap_mods;
+    e.sheet_ap_modifiers = ap_modifiers;
+    e.sheet_ranged_ap_modifiers = ranged_ap_modifiers;
     e.sheet_dmg_min = dmg_min;
     e.sheet_dmg_max = dmg_max;
     e.sheet_crit_bp = crit_bp;
+    e.sheet_ranged_crit_bp = ranged_crit_bp;
     e.sheet_ranged_ap = ranged_ap;
     e.sheet_ranged_dmg_min = ranged_dmg_min;
     e.sheet_ranged_dmg_max = ranged_dmg_max;
+    e.sheet_ranged_dmg_min_fraction = ranged_min_fraction;
+    e.sheet_ranged_dmg_max_fraction = ranged_max_fraction;
     e.update(ctx);
 }
 

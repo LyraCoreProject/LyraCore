@@ -9,6 +9,7 @@ use super::{next_item_guid, refuse, select_property};
 use crate::game_character;
 use crate::game_corpse_loot;
 use crate::game_gameobject;
+use crate::game_spell;
 use crate::game_spell_effect;
 use crate::game_start_item;
 use crate::game_world_entity;
@@ -424,7 +425,10 @@ pub(crate) fn remove_items(
 pub(crate) const RECENTLY_BANDAGED_SPELL: u32 = 11196;
 
 fn use_spell_for(tmpl: &ItemTemplate) -> Option<u32> {
-    (tmpl.spellid_1 != 0 && tmpl.spelltrigger_1 == 0).then_some(tmpl.spellid_1)
+    super::equip::spells(tmpl)
+        .into_iter()
+        .find(|(spell, trigger)| *spell != 0 && *trigger == 0)
+        .map(|(spell, _)| spell)
 }
 
 fn spell_keeps_item(ctx: &ReducerContext, spell_id: u32) -> bool {
@@ -547,6 +551,26 @@ pub(crate) fn apply_item_use_on(
             "only mana users can use that",
         ));
     }
+    if ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(spell_id)
+        .is_some_and(|spell| {
+            spell.attributes & crate::spell::SPELL_ATTR_PASSIVE == 0
+                && spell.cast_flags
+                    & lyracore_shared::spell::taxonomy::SPELL_ATTR_RANGED_AUTO_REPEAT
+                    == 0
+        })
+        && !super::equip::spell_ready(
+            ctx,
+            player_guid,
+            spell_id,
+            super::equip::use_category(&tmpl, spell_id),
+        )
+    {
+        return Err(ItemRefusal::SpellCooldown(spell_id));
+    }
     // Propagate cast Refusals so the reducer rolls back item consumption.
     if !spell_keeps_item(ctx, spell_id) {
         if inst.stack_count > 1 {
@@ -556,22 +580,12 @@ pub(crate) fn apply_item_use_on(
             crate::ItemInstance::delete(ctx, inst.guid);
         }
     }
-    let unit_guid = match target {
-        ItemUseTarget::Item(item_guid) => {
-            return crate::spell::begin_item_cast(
-                ctx,
-                player_guid,
-                spell_id,
-                player.level as u8,
-                item_guid,
-                false,
-            )
-            .map_err(|detail| refuse(ItemRefusal::NotRightNow, detail));
-        }
-        ItemUseTarget::User => player_guid,
-        ItemUseTarget::Unit(unit_guid) => unit_guid,
+    let (unit_guid, item_target) = match target {
+        ItemUseTarget::Item(item_guid) => (player_guid, Some(item_guid)),
+        ItemUseTarget::User => (player_guid, None),
+        ItemUseTarget::Unit(unit_guid) => (unit_guid, None),
     };
-    crate::spell::begin_cast(
+    crate::spell::begin_cast_with_admission(
         ctx,
         player_guid,
         spell_id,
@@ -579,7 +593,11 @@ pub(crate) fn apply_item_use_on(
         unit_guid,
         false,
         None,
+        item_target,
+        Some(super::equip::use_category(&tmpl, spell_id)),
+        crate::spell::CreatureSpellCasterAdmission::Living,
     )
+    .map(|_| ())
     .map_err(|detail| refuse(ItemRefusal::NotRightNow, detail))
 }
 

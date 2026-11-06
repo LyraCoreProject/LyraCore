@@ -1231,7 +1231,7 @@ fn the_instance_removal_dies_with_the_source_copy_and_is_not_carried() {
     assert!(NOT_TRANSPORTED.contains(&"game_instance_removal"));
 }
 
-const OLD_BLOBS_MAY_LACK: [&str; 11] = [
+const OLD_BLOBS_MAY_LACK: [&str; 12] = [
     "game_auction_bid_hold",
     "game_auction_hold",
     "game_buyback_item",
@@ -1243,6 +1243,7 @@ const OLD_BLOBS_MAY_LACK: [&str; 11] = [
     "game_guild_fee_hold",
     "game_instance_entry",
     "game_instance_removal",
+    "game_spell_cd",
 ];
 
 fn manifest_without(lacking: &[&str]) -> Vec<ManifestEntry> {
@@ -1352,6 +1353,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         ("game_guild_fee_hold", count),
         ("game_instance_entry", count),
         ("game_instance_removal", count),
+        ("game_spell_cd", count),
     ];
     let carried = [TableRows {
         table: "game_item_instance".to_owned(),
@@ -1366,7 +1368,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         arms,
     )
     .expect("the filled payload imports");
-    assert_eq!(applied.get(), 12);
+    assert_eq!(applied.get(), 13);
 }
 
 #[test]
@@ -1380,7 +1382,7 @@ fn the_tables_old_blobs_may_lack_are_pinned() {
     }
     #[cfg(not(has_packages))]
     {
-        assert_eq!(manifest().len(), 49);
+        assert_eq!(manifest().len(), 50);
         assert_eq!(manifest_without(&OLD_BLOBS_MAY_LACK).len(), 38);
     }
 }

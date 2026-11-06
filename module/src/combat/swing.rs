@@ -200,7 +200,8 @@ pub(crate) fn offhand_swing_range(
         effective_strength(ctx, attacker),
         effective_agility(ctx, attacker),
         attacker.level,
-    ) + aura_attack_power_bonus(ctx, attacker.guid);
+    )
+    .saturating_add_signed(aura_attack_power_bonus(ctx, attacker.guid));
     let (raw_min, raw_max) = weapon_swing_range_ap(ap, dmin, dmax, delay);
     apply_offhand_penalty(raw_min, raw_max)
 }
@@ -772,11 +773,17 @@ fn fire_ranged_shot(
 
     let (rdmin, rdmax) = if attacker.is_player() {
         let (_, rdmin, rdmax) = ranged_sheet_values(
+            attacker.class(),
             effective_agility(ctx, attacker),
             attacker.level,
             Some(weapon),
+            crate::spell::combat_field_bonus(
+                ctx,
+                attacker.guid,
+                lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
+            ),
         );
-        (rdmin, rdmax)
+        (rdmin as u32, rdmax as u32)
     } else {
         (dmin, dmax)
     };

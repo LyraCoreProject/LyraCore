@@ -18,26 +18,27 @@ use crate::spell_snapshot::{
     TrainerRow,
 };
 use lyracore_importer::spell_kind::{
-    aura_mod_to_kind, correct_script_effect_kind, dismount_effect_kind, instant_effect_to_kind,
+    aura_mod_to_kind, correct_script_effect_kind, dismount_effect_kind, equip_aura_supported,
+    instant_effect_to_kind,
 };
 use std::path::Path;
 
 use lyracore_shared::spell::taxonomy::{
-    A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN, A_MOD_HEALTH_POWER,
-    A_MOD_POWER_REGEN_PCT, A_MOD_RESISTANCE, A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED,
-    A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE,
-    A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_TRANSFORM,
-    COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DMG_DONE, COMBAT_DODGE, COMBAT_HIT,
-    COMBAT_SPELL_POWER, COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE,
-    E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL,
-    E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL,
-    E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
-    E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED,
-    E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_PET,
+    A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN,
+    A_MOD_HEALING, A_MOD_HEALTH_POWER, A_MOD_POWER_REGEN_PCT, A_MOD_RESISTANCE, A_MOD_SPEED,
+    A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL,
+    A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT,
+    A_SPELLMOD_PCT, A_TRANSFORM, COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DMG_DONE, COMBAT_DODGE,
+    COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO,
+    E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL,
+    E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE,
+    E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK,
+    E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT,
+    E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_PET,
     E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN,
-    P_COMBAT_FIELD, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_GAMEOBJECT_ENTRY,
-    P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK,
-    P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
+    P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
+    P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW,
+    P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
     SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_CHANNELED,
     SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER,
@@ -301,6 +302,7 @@ fn blank_effect(spell_id: u32, effect_index: u8) -> SpellEffectRow {
         enters_combat: false,
         points_per_combo: 0.0,
         bonus_coefficient: -1.0,
+        equip_supported: false,
     }
 }
 
@@ -404,7 +406,7 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
         }
         // SpellModOp, including 0 for damage and 10 for cast time.
         A_SPELLMOD_FLAT | A_SPELLMOD_PCT => (misc as i32, P_SPELLMOD_OP),
-        A_MOD_RESISTANCE => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
+        A_MOD_RESISTANCE | A_MOD_HEALING => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
         A_MOD_DAMAGE_TAKEN => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
         A_ABSORB => match aura {
             ManaShield => (0, P_NONE),
@@ -412,21 +414,26 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
         },
         A_MOD_COMBAT => {
             let field = match aura {
-                ModDamageDone
-                | ModDamagePercentDone
-                | ModDamageDoneCreature
-                | ModDamageDoneVersus => i32::from(COMBAT_DMG_DONE),
-                ModCritPercent
-                | ModSpellCritChance
-                | ModSpellCritChanceSchool
-                | ModCritPercentVersus => i32::from(COMBAT_CRIT),
+                ModDamagePercentDone | ModDamageDoneCreature | ModDamageDoneVersus => {
+                    i32::from(COMBAT_DMG_DONE)
+                }
+                ModCritPercent => i32::from(COMBAT_CRIT),
+                ModSpellCritChance => i32::from(COMBAT_SPELL_CRIT),
+                ModRangedAttackPower => i32::from(COMBAT_RANGED_ATTACK_POWER),
                 ModHitChance | ModSpellHitChance => i32::from(COMBAT_HIT),
-                ModHealing | ModHealingDone => i32::from(COMBAT_SPELL_POWER),
                 ModDodgePercent => i32::from(COMBAT_DODGE),
                 ModTotalThreat | ModThreat => i32::from(COMBAT_THREAT),
                 _ => i32::from(COMBAT_ATTACK_POWER),
             };
-            (field, P_COMBAT_FIELD)
+            let parameter = if matches!(
+                aura,
+                ModCritPercent | ModSpellCritChance | ModHitChance | ModDodgePercent
+            ) {
+                P_COMBAT_PERCENT
+            } else {
+                P_COMBAT_FIELD
+            };
+            (field, parameter)
         }
         A_MOD_SPEED => {
             let kind_v = match aura {
@@ -470,11 +477,14 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
 
 fn is_reducing_modifier_aura(effect_id: i32, aura: AuraMod, base_points: i32) -> bool {
     is_aura_effect(effect_id)
-        && base_points < 0
-        && matches!(
+        && base_points.saturating_add(1) < 0
+        && (matches!(
+            aura,
+            AuraMod::ModDamageDone | AuraMod::ModSkill | AuraMod::ModHealingPct
+        ) || matches!(
             aura_mod_to_kind(aura),
-            A_MOD_STAT | A_MOD_RESISTANCE | A_MOD_COMBAT
-        )
+            A_MOD_STAT | A_MOD_RESISTANCE | A_MOD_COMBAT | A_MOD_HEALING
+        ))
 }
 
 fn resolve_instant_params(kind: u8, misc: u32, item_type: i32) -> (i32, u8) {
@@ -904,6 +914,13 @@ fn push_spell_header_row(
         custom_flags: s.custom_flags,
         min_target_level: s.min_target_level,
         single_target_key: s.single_target_key,
+        form_mask: s.shapeshift_mask,
+        form_exclude: s.shapeshift_exclude,
+        attributes_ex_2: s.attributes_ex2,
+        visual_id: s.visual_id,
+        duration_index: s.duration,
+        category: s.category,
+        category_cooldown_ms: s.category_recovery_time,
     });
     if binding_summon_entry(
         spell_id,
@@ -952,6 +969,15 @@ fn spell_is_negative(s: &Spell) -> bool {
             continue;
         }
         let aura = AuraMod::from_int(s.effect_aura[i]).unwrap_or_default();
+        if aura == AuraMod::ModDamageTaken {
+            if s.effect_base_points[i].saturating_add(1) >= 0 {
+                is_negative |= matches!(
+                    resolve_target(s.implicit_target_a[i], false),
+                    T_TARGET_ENEMY | T_AREA_ENEMY
+                );
+            }
+            continue;
+        }
         if matches!(eff, 2 | 17 | 58 | 121 | 31) {
             is_negative = true;
         }
@@ -965,7 +991,6 @@ fn spell_is_negative(s: &Spell) -> bool {
                 | AuraMod::ModConfuse
                 | AuraMod::ModDecreaseSpeed
                 | AuraMod::ModSilence
-                | AuraMod::ModDamageTaken
         ) {
             is_negative = true;
         }
@@ -1115,11 +1140,15 @@ fn push_spell_effect_rows(
             enters_combat,
             points_per_combo: s.effect_points_per_combo[i],
             bonus_coefficient: s.bonus_coefficient.map_or(-1.0, |c| c[i]),
+            equip_supported: effect_id == 6
+                && s.implicit_target_a[i] == 1
+                && s.implicit_target_b[i] == 0
+                && equip_aura_supported(s.effect_aura[i], s.effect_misc_value[i], s.equipment),
         });
 
         cov.effects += 1;
         *cov.by_kind.entry(kind).or_default() += 1;
-        if kind == E_SCRIPTED {
+        if matches!(kind, E_SCRIPTED | A_INERT) {
             cov.scripted += 1;
         } else {
             cov.real += 1;
@@ -1165,8 +1194,12 @@ fn resolve_effect_kind(
     let school_mask = header.school_mask;
     let channeled = header.channeled;
     let (kind, (p0, p0_kind)) = if is_aura_effect(effect_id) || s.effect_aura[i] != 0 {
-        let k = aura_mod_to_kind(aura);
-        if k == E_SCRIPTED {
+        let k = if aura == AuraMod::ModCritPercent && s.equipment[0] != u32::MAX {
+            A_INERT
+        } else {
+            aura_mod_to_kind(aura)
+        };
+        if matches!(k, E_SCRIPTED | A_INERT) {
             *cov.unmapped_aura
                 .entry(format!("{} ({aura:?})", s.effect_aura[i]))
                 .or_default() += 1;
@@ -1243,12 +1276,6 @@ fn resolve_effect_kind(
         unset_temporary_enchantment_seconds(s.family_name as u8)
     } else {
         dbc_flat_amount(s.effect_base_points[i])
-    };
-    // DBC dodge modifiers use percent; durable combat values use basis points.
-    let base_points = if kind == A_MOD_COMBAT && p0 == i32::from(COMBAT_DODGE) {
-        base_points * 100
-    } else {
-        base_points
     };
     let die_sides = s.effect_die_sides[i];
     let per_level = s.effect_real_points_per_level[i];
@@ -1398,13 +1425,13 @@ fn assemble_spell_sql(
     push_insert(
         &mut stmts,
         "game_spell",
-        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key",
+        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex_2,visual_id,duration_index,category,category_cooldown_ms",
         &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
         &mut stmts,
         "game_spell_effect",
-        "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient",
+        "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient,equip_supported",
         &rows.effects.iter().map(SpellEffectRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
@@ -1434,7 +1461,7 @@ fn assemble_spell_sql(
             row.row_id()
         ));
         stmts.push(format!(
-            "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient) VALUES {}",
+            "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient,equip_supported) VALUES {}",
             row.sql_values()
         ));
     }
@@ -1546,6 +1573,8 @@ fn kind_name(kind: u8) -> &'static str {
         A_MOD_COMBAT => "A_MOD_COMBAT",
         A_MOD_SPEED => "A_MOD_SPEED",
         A_MOD_HEALTH_POWER => "A_MOD_HEALTH_POWER",
+        A_MOD_HEALING => "A_MOD_HEALING",
+        A_INERT => "A_INERT",
         A_MOD_DAMAGE_TAKEN => "A_MOD_DAMAGE_TAKEN",
         A_CONTROL => "A_CONTROL",
         A_IMMUNITY => "A_IMMUNITY",
@@ -1616,14 +1645,6 @@ pub(crate) fn selected_world_plan(
         }
     }
 
-    {
-        stmts.retain(|s| {
-            !s.starts_with("INSERT INTO game_spell (")
-                && !s.starts_with("INSERT INTO game_spell_effect (")
-        });
-        push_insert(&mut stmts, "game_spell", "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key", &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>());
-        push_insert(&mut stmts, "game_spell_effect", "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient", &rows.effects.iter().chain(&rows.fishing).map(SpellEffectRow::sql_values).collect::<Vec<_>>());
-    }
     Ok(crate::world_import::DumpPlan {
         stmts,
         stamps: vec![("spell", cov.spells as u64)],
@@ -1789,6 +1810,147 @@ mod tests {
     }
 
     #[test]
+    fn equip_review_vmangos_spell_plans_execute_with_import_defaults() {
+        let path = std::env::temp_dir().join(format!("equip-spell-plan-{}", std::process::id()));
+        std::fs::create_dir_all(&path).unwrap();
+        let tables = fixture_tables();
+        let mut archive = wow_mpq::ArchiveBuilder::new();
+        macro_rules! add {
+            ($table:expr, $name:literal) => {{
+                let mut bytes = Vec::new();
+                $table.write(&mut bytes).unwrap();
+                archive = archive.add_file_data(bytes, concat!("DBFilesClient\\", $name));
+            }};
+        }
+        add!(tables.cast_times, "SpellCastTimes.dbc");
+        add!(tables.ranges, "SpellRange.dbc");
+        add!(tables.durations, "SpellDuration.dbc");
+        add!(tables.radii, "SpellRadius.dbc");
+        archive.build(path.join("dbc.MPQ")).unwrap();
+        let source = crate::vmangos_spell::fixture();
+        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
+            unreachable!()
+        };
+        connection.execute_batch("DELETE FROM spell_template; INSERT INTO spell_template (entry,build,name,effect1,effectApplyAuraName1,effectBasePoints1,effectDieSides1,effectImplicitTargetA1,equippedItemClass) VALUES (7598,5875,'Increased Critical 2',6,52,1,1,1,-1)").unwrap();
+        let plans = [
+            world_plan(&source, path.to_str().unwrap()),
+            selected_world_plan(&source, path.to_str().unwrap(), &[7598], &[]),
+        ];
+        std::fs::remove_dir_all(path).unwrap();
+        for plan in plans {
+            let db = rusqlite::Connection::open_in_memory().unwrap();
+            db.execute_batch("CREATE TABLE game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient,equip_supported)").unwrap();
+            for sql in plan
+                .unwrap()
+                .stmts
+                .iter()
+                .filter(|sql| sql.contains("game_spell_effect"))
+            {
+                db.execute_batch(&lyracore_shared::import_sql::insert_defaults(sql))
+                    .unwrap();
+            }
+            let supported: bool = db
+                .query_row(
+                    "SELECT equip_supported FROM game_spell_effect WHERE spell_id = 7598",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            assert!(supported);
+        }
+    }
+
+    #[test]
+    fn equip_review_1719_and_17538_ignore_equipment_masks_when_class_is_unrestricted() {
+        for (spell, auras, points, misc) in [
+            (1719, [52, 87, 77], [99, 19, -1], [0, 127, 5]),
+            (17538, [29, 52, 0], [24, 1, 0], [1, 0, 0]),
+        ] {
+            let mut dbc = fixture_tables();
+            dbc.spells = vec![Spell {
+                id: spell,
+                equipment: [u32::MAX, u32::MAX, 0],
+                effect: [6, 6, if spell == 1719 { 6 } else { 0 }],
+                effect_aura: auras,
+                effect_base_points: points,
+                effect_die_sides: [1, 1, 1],
+                effect_misc_value: misc,
+                implicit_target_a: [1, 1, 1],
+                ..Default::default()
+            }];
+            let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+            let crit = rows
+                .effects
+                .iter()
+                .find(|effect| effect.kind == A_MOD_COMBAT && effect.p0 == i32::from(COMBAT_CRIT))
+                .expect("unrestricted cast must retain its crit modifier");
+            assert!(crit.equip_supported, "spell {spell}");
+        }
+    }
+
+    #[test]
+    fn equip_review_unsupported_cast_modifiers_retain_an_aura_kind() {
+        for (spell, aura, points, mask) in [
+            (467, 15, 2, 0),
+            (7294, 15, 4, 0),
+            (11390, 13, 19, 126),
+            (702, 13, -4, 1),
+            (604, 14, -11, 126),
+            (604, 115, -21, 126),
+            (1008, 14, 14, 126),
+            (1008, 115, 29, 126),
+            (23727, 55, 0, 0),
+            (18382, 71, 1, 126),
+            (14097, 102, 44, 4),
+            (14097, 131, 44, 4),
+        ] {
+            let effect = equip_review_effect(spell, aura, points, mask, (6, 1, 0));
+            assert!(
+                effect.kind & 0x80 != 0,
+                "spell {spell}, aura {aura} lost its holder"
+            );
+            assert!(!effect.equip_supported);
+        }
+    }
+
+    #[test]
+    fn equip_review_inert_curse_of_weakness_keeps_its_debuff_polarity() {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![Spell {
+            id: 702,
+            name: "Curse of Weakness".into(),
+            effect: [6, 0, 0],
+            effect_aura: [13, 0, 0],
+            effect_base_points: [-4, 0, 0],
+            effect_die_sides: [1, 0, 0],
+            effect_misc_value: [1, 0, 0],
+            implicit_target_a: [6, 0, 0],
+            ..Default::default()
+        }];
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        assert!(rows.headers[0].is_negative);
+    }
+
+    #[test]
+    fn equip_review_inert_dampen_and_amplify_magic_keep_their_buff_polarity() {
+        for (spell, points) in [(604, [-11, -21, 0]), (1008, [14, 29, 0])] {
+            let mut dbc = fixture_tables();
+            dbc.spells = vec![Spell {
+                id: spell,
+                effect: [6, 6, 0],
+                effect_aura: [14, 115, 0],
+                effect_base_points: points,
+                effect_die_sides: [1, 1, 0],
+                effect_misc_value: [126, 126, 0],
+                implicit_target_a: [57, 57, 0],
+                ..Default::default()
+            }];
+            let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+            assert!(!rows.headers[0].is_negative, "spell {spell}");
+        }
+    }
+
+    #[test]
     fn vmangos_finishers_keep_combo_scaling_and_source_flags_in_sql() {
         let source = crate::vmangos_spell::fixture();
         let crate::world_source::WorldSource::Vmangos(connection) = &source else {
@@ -1804,7 +1966,7 @@ mod tests {
         assert_eq!((header.duration_ms, header.max_duration_ms), (6000, 21000));
         let header_sql = header.sql_values();
         let values: Vec<_> = header_sql.trim_matches(['(', ')']).split(',').collect();
-        assert_eq!(values.len(), 29);
+        assert_eq!(values.len(), 36);
         assert_eq!(&values[25..28], &["21000", "1024", "7"]);
         let effect = &rows.effects[0];
         assert_eq!(effect.kind, E_FINISHER_DAMAGE);
@@ -1812,7 +1974,7 @@ mod tests {
             (effect.points_per_combo, effect.bonus_coefficient),
             (5.0, 0.5)
         );
-        assert!(effect.sql_values().ends_with(",5.0,0.5)"));
+        assert!(effect.sql_values().ends_with(",5.0,0.5,false)"));
     }
 
     #[test]
@@ -2391,6 +2553,25 @@ mod tests {
     }
 
     #[test]
+    fn equip_form_and_aura_metadata_reaches_the_imported_header() {
+        let mut dbc = fixture_tables();
+        dbc.spells[0].shapeshift_mask = 145;
+        dbc.spells[0].shapeshift_exclude = 671588450;
+        dbc.spells[0].attributes_ex2 = 0x80000;
+        dbc.spells[0].visual_id = 3580;
+        dbc.spells[0].duration = 21;
+        dbc.spells[0].category = 30;
+        dbc.spells[0].category_recovery_time = 60000;
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let header = &rows.headers[0];
+        assert_eq!((header.form_mask, header.form_exclude), (145, 671588450));
+        assert_eq!(header.attributes_ex_2, 0x80000);
+        assert_eq!(header.visual_id, 3580);
+        assert_eq!(header.duration_index, 21);
+        assert_eq!((header.category, header.category_cooldown_ms), (30, 60000));
+    }
+
+    #[test]
     fn source_references_and_fractional_magnitudes_reach_effect_parameters() {
         let mut bytes = source_spell_fixture();
         for (column, value) in [(61, 62u32), (62, 24), (63, 6), (91, 0), (92, 0), (93, 107)] {
@@ -2718,6 +2899,175 @@ mod tests {
             .iter()
             .find(|effect| effect.spell_id == spell_id)
             .unwrap()
+    }
+
+    fn equip_review_effect(
+        spell_id: u32,
+        aura: u32,
+        raw_points: i32,
+        misc: u32,
+        shape: (i32, i32, i32),
+    ) -> SpellEffectRow {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![Spell {
+            id: spell_id,
+            name: format!("Equip review {spell_id}"),
+            attributes: 192,
+            duration: 21,
+            equipment: [u32::MAX, 0, 0],
+            effect: [shape.0, 0, 0],
+            effect_aura: [aura, 0, 0],
+            effect_base_points: [raw_points, 0, 0],
+            effect_die_sides: [1, 0, 0],
+            effect_misc_value: [misc, 0, 0],
+            implicit_target_a: [shape.1, 0, 0],
+            implicit_target_b: [shape.2, 0, 0],
+            ..Default::default()
+        }];
+        let (mut rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        rows.effects.remove(0)
+    }
+
+    #[test]
+    fn equip_review_the_source_aura_census_enables_only_audited_consumers() {
+        let cases = [
+            (3, 19307, 99, 0, (6, 1, 0), false),
+            (4, 16372, 0, 0, (6, 1, 0), false),
+            (8, 5707, 9, 0, (6, 1, 0), false),
+            (13, 7685, 3, 4, (6, 1, 0), false),
+            (14, 5102, -2, 1, (6, 1, 0), false),
+            (15, 15438, 2, 0, (6, 1, 0), false),
+            (17, 12418, 17, 0, (6, 1, 0), false),
+            (19, 17623, 999, 4, (6, 1, 0), false),
+            (22, 12956, 9, 32, (6, 1, 0), true),
+            (23, 758, -1, 0, (6, 1, 0), false),
+            (29, 7363, 3, 4, (35, 1, 0), false),
+            (30, 7515, 2, 95, (6, 1, 0), false),
+            (31, 17625, 7, 0, (6, 1, 0), false),
+            (42, 4070, 0, 0, (6, 1, 0), false),
+            (43, 16550, 59, 0, (6, 1, 0), false),
+            (45, 4152, 0, 7, (6, 1, 0), false),
+            (47, 13665, 0, 0, (6, 1, 0), false),
+            (49, 13669, 0, 0, (6, 1, 0), false),
+            (51, 13674, 0, 0, (6, 1, 0), false),
+            (52, 7597, 0, 0, (6, 1, 0), true),
+            (54, 15464, 0, 0, (6, 1, 0), true),
+            (55, 23727, 0, 0, (6, 1, 0), false),
+            (56, 8299, 0, 10697, (6, 1, 0), false),
+            (57, 23434, 49, 0, (6, 1, 0), true),
+            (58, 8747, 14, 0, (6, 1, 0), false),
+            (64, 19307, 99, 0, (6, 1, 0), false),
+            (71, 18382, 1, 126, (6, 1, 0), false),
+            (77, 7219, -1, 3, (6, 1, 0), false),
+            (82, 11789, -1, 0, (6, 1, 0), false),
+            (85, 18378, 7, 0, (6, 1, 0), false),
+            (89, 28347, 9, 0, (6, 1, 0), false),
+            (99, 9138, 5, 0, (6, 1, 0), true),
+            (102, 14097, 44, 4, (6, 1, 0), false),
+            (107, 18388, -2001, 11, (6, 1, 0), false),
+            (108, 23043, 49, 9, (6, 1, 0), false),
+            (109, 17768, 99, 0, (6, 1, 0), false),
+            (112, 27853, 49, 4415, (6, 1, 0), false),
+            (117, 18985, 4, 9, (6, 1, 0), false),
+            (123, 25717, -301, 4, (6, 1, 0), false),
+            (124, 9138, 5, 0, (6, 1, 0), true),
+            (130, 13587, 2, 0, (6, 1, 0), false),
+            (131, 14097, 44, 4, (6, 1, 0), false),
+            (135, 7678, 8, 126, (6, 1, 0), true),
+            (138, 18065, 9, 0, (6, 1, 0), false),
+            (139, 28282, 0, 529, (6, 1, 0), false),
+            (140, 23674, 149, 0, (6, 1, 0), false),
+            (141, 14824, 9, 0, (6, 1, 0), false),
+            (144, 23409, 1, 0, (6, 1, 0), false),
+            (154, 17746, 4, 0, (6, 1, 0), false),
+            (158, 22852, 22, 0, (6, 1, 0), false),
+            (161, 12956, 2, 0, (6, 1, 0), false),
+            (180, 22849, 34, 32, (6, 1, 0), false),
+        ];
+        for (aura, spell, points, misc, shape, supported) in cases {
+            assert_eq!(
+                equip_review_effect(spell, aura, points, misc, shape).equip_supported,
+                supported,
+                "{spell}: {aura}"
+            );
+        }
+        assert!(!equip_aura_supported(52, 0, [2, 0, 0]));
+        assert!(!equip_aura_supported(85, 3, [u32::MAX, 0, 0]));
+    }
+
+    #[test]
+    fn equip_review_battle_shouts_area_target_stays_inert_on_equip() {
+        assert!(!equip_review_effect(6673, 99, 14, 0, (6, 20, 0)).equip_supported);
+    }
+
+    #[test]
+    fn equip_review_9132_weapon_restricted_crit_is_inert_for_casts_as_well_as_equipping() {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![Spell {
+            id: 9132,
+            attributes: 192,
+            duration: 21,
+            equipment: [2, 327692, 0],
+            effect: [6, 0, 0],
+            effect_aura: [52, 0, 0],
+            effect_die_sides: [1, 0, 0],
+            implicit_target_a: [1, 0, 0],
+            ..Default::default()
+        }];
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        assert_eq!(rows.effects[0].kind, A_INERT);
+        assert!(!rows.effects[0].equip_supported);
+    }
+
+    #[test]
+    fn equip_review_13669_dodge_stays_inert_until_its_paperdoll_projection_is_supported() {
+        assert!(!equip_review_effect(13669, 49, 0, 0, (6, 1, 0)).equip_supported);
+    }
+
+    #[test]
+    fn equip_review_unholy_aura_speed_is_inert_until_mounted_and_slow_stacking_match() {
+        assert!(!equip_review_effect(17625, 31, 7, 0, (6, 1, 0)).equip_supported);
+    }
+
+    #[test]
+    fn equip_review_18052_flat_school_damage_is_inert_until_its_bonus_is_supported() {
+        assert_eq!(
+            equip_review_effect(18052, 13, 33, 126, (6, 1, 0)).kind,
+            A_INERT
+        );
+    }
+
+    #[test]
+    fn equip_review_9329_ranged_attack_power_has_its_own_field() {
+        let melee = equip_review_effect(9329, 99, 15, 0, (6, 1, 0));
+        let ranged = equip_review_effect(9329, 124, 15, 0, (6, 1, 0));
+        assert_eq!((melee.base_points, melee.p0), (16, 0));
+        assert_eq!((ranged.base_points, ranged.p0), (16, 11));
+    }
+
+    #[test]
+    fn equip_review_7598_and_15464_keep_percentage_units_until_the_aura_roll() {
+        for (spell, aura, raw, points) in [(7598, 52, 1, 2), (15464, 54, 0, 1)] {
+            let effect = equip_review_effect(spell, aura, raw, 0, (6, 1, 0));
+            assert_eq!((effect.base_points, effect.p0_kind), (points, 17));
+        }
+    }
+
+    #[test]
+    fn equip_review_21142_damage_shields_are_inert_instead_of_absorbing() {
+        assert_eq!(
+            equip_review_effect(21142, 15, 4, 0, (6, 1, 0)).kind,
+            A_INERT
+        );
+    }
+
+    #[test]
+    fn equip_review_7678_healing_does_not_increase_spell_damage() {
+        let effect = equip_review_effect(7678, 135, 8, 126, (6, 1, 0));
+        assert_eq!(
+            (effect.kind, effect.base_points, effect.p0, effect.p0_kind),
+            (0xb8, 9, 126, P_SCHOOL_MASK)
+        );
     }
 
     #[test]
@@ -3297,10 +3647,10 @@ mod tests {
         assert_eq!(aura_mod_to_kind(SchoolImmunity), A_IMMUNITY);
         assert_eq!(aura_mod_to_kind(Dummy), A_FLAG);
         assert_eq!(aura_mod_to_kind(ModDamagePercentTaken), A_MOD_DAMAGE_TAKEN);
-        assert_eq!(aura_mod_to_kind(ModDamageTaken), E_SCRIPTED);
+        assert_eq!(aura_mod_to_kind(ModDamageTaken), A_INERT);
         assert_eq!(aura_mod_to_kind(AddFlatModifier), A_SPELLMOD_FLAT);
         assert_eq!(aura_mod_to_kind(AddPctModifier), A_SPELLMOD_PCT);
-        assert_eq!(aura_mod_to_kind(ModRating), E_SCRIPTED);
+        assert_eq!(aura_mod_to_kind(ModRating), A_INERT);
     }
 
     #[test]
@@ -3337,19 +3687,16 @@ mod tests {
         );
         assert_eq!(
             resolve_aura_params(A_MOD_COMBAT, ModCritPercent, 0),
-            (i32::from(COMBAT_CRIT), P_COMBAT_FIELD)
+            (i32::from(COMBAT_CRIT), P_COMBAT_PERCENT)
         );
         assert_eq!(
             resolve_aura_params(A_MOD_COMBAT, ModHitChance, 0),
-            (i32::from(COMBAT_HIT), P_COMBAT_FIELD)
+            (i32::from(COMBAT_HIT), P_COMBAT_PERCENT)
         );
+        assert_eq!(aura_mod_to_kind(ModDamageDone), A_INERT);
         assert_eq!(
-            resolve_aura_params(A_MOD_COMBAT, ModDamageDone, 0),
-            (i32::from(COMBAT_DMG_DONE), P_COMBAT_FIELD)
-        );
-        assert_eq!(
-            resolve_aura_params(A_MOD_COMBAT, ModHealing, 0),
-            (i32::from(COMBAT_SPELL_POWER), P_COMBAT_FIELD)
+            resolve_aura_params(A_MOD_HEALING, ModHealingDone, 126),
+            (126, P_SCHOOL_MASK)
         );
     }
 
@@ -3551,6 +3898,7 @@ mod tests {
         assert!(is_reducing_modifier_aura(6, ModResistance, -90));
         assert!(is_reducing_modifier_aura(6, ModAttackPower, -35));
         assert!(is_reducing_modifier_aura(6, ModStat, -10));
+        assert!(is_reducing_modifier_aura(6, ModHealingDone, -25));
         assert!(!is_reducing_modifier_aura(6, ModAttackPower, 15));
         assert!(!is_reducing_modifier_aura(6, ModResistance, 2000));
         assert!(!is_reducing_modifier_aura(6, PeriodicDamage, -5));

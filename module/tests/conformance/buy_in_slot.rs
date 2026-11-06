@@ -6,7 +6,7 @@ use super::{enter, fixture, Packet};
 const THREAD: u32 = 5090052;
 const ARMOR: u32 = 5090050;
 
-fn stage(name: &str) -> (Standalone, ReducerConnection, u64, u64) {
+pub(super) fn stage(name: &str) -> (Standalone, ReducerConnection, u64, u64) {
     stage_in(fixture(name))
 }
 
@@ -35,7 +35,7 @@ fn stage_in(
     (shard, connection, guid, vendor)
 }
 
-fn buy(
+pub(super) fn buy(
     connection: &mut ReducerConnection,
     vendor: u64,
     entry: u32,
@@ -50,7 +50,11 @@ fn buy(
     request(connection, 0x1a3, body)
 }
 
-fn request(connection: &mut ReducerConnection, opcode: u32, body: Vec<u8>) -> Vec<(u16, Vec<u8>)> {
+pub(super) fn request(
+    connection: &mut ReducerConnection,
+    opcode: u32,
+    body: Vec<u8>,
+) -> Vec<(u16, Vec<u8>)> {
     connection
         .call("native_world_receive", json!([0x1dcu32, vec![0u8; 8]]))
         .unwrap();
@@ -81,7 +85,7 @@ fn request(connection: &mut ReducerConnection, opcode: u32, body: Vec<u8>) -> Ve
         .collect()
 }
 
-fn grant(shard: &Standalone, guid: u64, entry: u32, count: u32, slot: u8) -> u64 {
+pub(super) fn grant(shard: &Standalone, guid: u64, entry: u32, count: u32, slot: u8) -> u64 {
     shard.assert_call(
         "debug_grant_item",
         &[&guid.to_string(), &entry.to_string(), &count.to_string()],
@@ -100,7 +104,10 @@ fn grant(shard: &Standalone, guid: u64, entry: u32, count: u32, slot: u8) -> u64
     item
 }
 
-fn inventory(shard: &Standalone, guid: u64) -> Vec<std::collections::BTreeMap<String, String>> {
+pub(super) fn inventory(
+    shard: &Standalone,
+    guid: u64,
+) -> Vec<std::collections::BTreeMap<String, String>> {
     shard.query_rows(&format!(
         "SELECT * FROM game_item_instance WHERE owner_guid = {guid}"
     ))
@@ -644,11 +651,11 @@ fn review_ordinary_unknown_purchase_uses_a_zero_vendor_guid() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn review_equipment_purchase_shares_ordinary_equip_effects_or_records_the_gap() {
+fn equipment_purchase_shares_ordinary_equip_auras_and_cooldowns() {
     fn effects(shard: &Standalone, guid: u64, packets: &[(u16, Vec<u8>)]) -> (bool, bool, bool) {
         let aura = !shard
             .query_rows(&format!(
-                "SELECT * FROM game_aura WHERE target_guid = {guid} AND spell_id = 168"
+                "SELECT id FROM game_aura WHERE target_guid = {guid} AND spell_id = 168"
             ))
             .is_empty();
         let cooldown = !shard
@@ -678,17 +685,7 @@ fn review_equipment_purchase_shares_ordinary_equip_effects_or_records_the_gap() 
         ordinary, purchased,
         "on-equip aura, cooldown and cooldown packet"
     );
-    if ordinary != (true, true, true) {
-        let ledger = include_str!("../../../conformance/features/inventory/bag_management.toml");
-        assert!(
-            ledger.split("[[known_gaps]]").skip(1).any(|gap| {
-                gap.contains("on-equip spells")
-                    && gap.contains("30-second equip cooldown")
-                    && gap.contains("symbol = \"apply_item_move\"")
-            }),
-            "ordinary equip also lacks these effects; record the shared gap on bag_management"
-        );
-    }
+    assert_eq!(ordinary, (true, true, true));
 }
 
 #[test]

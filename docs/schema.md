@@ -116,6 +116,23 @@ before enabling multiple hosts for existing leases.
 
 ## 2. Inventory
 
+`game_item_aura` associates a runtime Aura with the Item that applied it. Aura deletion deletes
+the association. Equipment changes reconcile these rows through `ItemInstance`; world entry,
+resurrection and form changes use the same reconciliation. World entry also restores passive
+effects for a ghost. Hidden passive effects use slot 255
+and do not consume a client Aura slot. The association and its derived Auras do not travel in
+Character Transfer. Finite equip Auras use `game_item_aura_expiry` to expire at their deadline,
+independent of the general Aura sweep. World entry rebuilds them from equipment. Spell cooldowns
+travel separately in `game_spell_cd` and keep their absolute deadlines.
+
+`game_spell.form_mask`, `form_exclude`, `attributes_ex_2`, `visual_id`, `duration_index`, `category`
+and `category_cooldown_ms` retain source fields needed by equip effects. The five
+`game_item_template.spellcategory_*` fields override category admission for an Item cast.
+`game_spell_cd.category` identifies the shared category owner; `category_ready_micros` keeps its
+absolute deadline. `game_pending_cast.cooldown_category` preserves an Item's override, including
+zero, through cast completion. Their typed defaults preserve old rows during an additive publish.
+See [equip spell migration](danger-zones.md#equip-spell-migration) before play resumes.
+
 Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully
 qualified `#[spacetimedb::table(...)]`; missing the second form undercounts.
 
@@ -797,3 +814,108 @@ transaction, so a partial seed never persists.
 
 Real world content is not seeded. It comes from the importer; see
 [`data-ingestion.md`](./data-ingestion.md).
+
+### Equip aura support
+
+`game_world_entity.sheet_ap_modifiers` and `sheet_ranged_ap_modifiers` cache the wire AP
+breakdown. The low signed-16 half is the positive modifier and the high signed-16 half is the
+negative modifier. They are END-appended with zero defaults and refreshed by publish repair.
+The ranged base AP stays separate. Damage uses the signed total; both CREATE and VALUES
+retain the individual modifier halves.
+
+`game_item_aura` retains the exact BSATN source definition for each active derived aura. Repair
+compares it with the current header and effect, so unchanged auras keep their identity and timing.
+The source bytes stay local to the Shard and are excluded from Character records and Transfer.
+
+`game_spell_effect.equip_supported` defaults to false. The spell importer enables only source
+shapes whose units, selection and consumer have been audited. Existing and authored rows stay
+inert on equip until reimport or an explicit supported claim. This does not enable instant effects.
+At patch 10 / build 5875, 2,645 Item entries name 640 equip spells. Of these, 2,643 entries
+name 638 spells with the 52 aura types below; two entries name spells without an aura type. Counts
+are distinct Item entries per type and overlap. One weapon-dependent crit Item stays inert; the
+other 383 use the shared melee/ranged crit bonus. One area stat Item and one area spell-crit Item
+also stay inert. Only ordinary self-targeted effect-6 shapes are enabled. Healing retains its
+school mask in `A_MOD_HEALING`. This is a source-to-consumer audit, not a claim that every
+spell or baseline combat calculation is complete.
+
+Unsupported cast effects import as `A_INERT` (0xB9). They keep their Aura holder, icon, duration,
+refresh, stack limit and dispel behavior; no numeric consumer reads this kind. This does not enable
+those effects on equipment. In particular, Thorns and Retribution Aura retain holders without
+reflection; Arcane Elixir and Curse of Weakness retain holders without flat damage modification;
+Dampen and Amplify Magic retain buff holders without flat incoming damage or healing modification.
+Aspect of the Hawk contributes only its ranged AP to the separate ranged field. Unrestricted crit
+checks only the source equipment class of -1; masks are ignored in that case, including Recklessness
+and Elixir of the Mongoose. Ranged AP uses the class formula, and ranged damage retains its fraction
+on the wire. The sheet sends both melee and ranged crit percentages, using each attack slot's weapon skill.
+
+`game_world_entity.sheet_ranged_dmg_min_fraction` and `sheet_ranged_dmg_max_fraction` are
+zero-default END-appended caches for the fractional parts. The existing integer damage columns and
+Character Transfer layout stay unchanged. The zero-default END cache `sheet_ranged_crit_bp`
+keeps ranged crit separate from melee crit and refreshes when the ranged weapon skill changes.
+Publish repair refreshes these projections; see
+[the migration order](danger-zones.md#equip-spell-migration).
+
+| Source aura type | Items | Consumer or missing behavior | Equip result | Example spell |
+| --- | ---: | --- | --- | ---: |
+| 3 PeriodicDamage | 1 | periodic damage / leech shape not certified | Inert | 19307 |
+| 4 Dummy | 12 | A_FLAG placeholder | Inert | 16372 |
+| 8 PeriodicHeal | 8 | periodic healing bonus/cadence not certified | Inert | 5707 |
+| 13 ModDamageDone | 928 | flat school damage and weapon restrictions need mechanics | Inert | 7685 |
+| 14 ModDamageTaken | 2 | flat incoming damage needs school-aware folding | Inert | 5102 |
+| 15 DamageShield | 10 | reflection needs mechanics; no absorb mapping | Inert | 15438 |
+| 17 ModStealthDetect | 8 | detection placeholder | Inert | 12418 |
+| 19 ModInvisibilityDetection | 2 | detection placeholder | Inert | 17623 |
+| 22 ModResistance | 74 | resistance_bonus; flat school mask | Correct | 12956 |
+| 23 PeriodicTriggerSpell | 9 | periodic trigger needs mechanics | Inert | 758 |
+| 29 ModStat | 1 | stat_bonus supports self auras; selected effect 35 needs area mechanics | Inert for the selected Item | 7363 |
+| 30 ModSkill | 206 | skill modifier needs mechanics | Inert | 7515 |
+| 31 ModIncreaseSpeed | 62 | run_speed lacks faithful mounted and slow composition | Inert | 17625 |
+| 42 ProcTriggerSpell | 52 | item proc restrictions not certified | Inert | 4070 |
+| 43 ProcTriggerDamage | 1 | item proc restrictions not certified | Inert | 16550 |
+| 45 TrackResources | 2 | tracking placeholder | Inert | 4152 |
+| 47 ModParryPercent | 28 | parry modifier not implemented | Inert | 13665 |
+| 49 ModDodgePercent | 89 | roll uses basis points; full dodge sheet projection is absent | Inert | 13669 |
+| 51 ModBlockPercent | 24 | block modifier not implemented | Inert | 13674 |
+| 52 ModCritPercent | 384 | effective_crit_bp / effective_ranged_crit_bp and both wire fields; percent to basis points | Correct when unrestricted; weapon-restricted 9132 inert | 7597 |
+| 54 ModHitChance | 192 | effective_miss_bp; percent to basis points | Correct | 15464 |
+| 55 ModSpellHitChance | 76 | spell hit needs its own consumer | Inert | 23727 |
+| 56 Transform | 7 | transform requirements not certified | Inert | 8299 |
+| 57 ModSpellCritChance | 2 | spell_crit_bp; separate spell basis points | Correct for 1 Item; 1 area Item inert | 23434 |
+| 58 ModIncreaseSwimSpeed | 1 | swim stacking not certified | Inert | 8747 |
+| 64 PeriodicManaLeech | 1 | mana leech needs drain and gain | Inert | 19307 |
+| 71 ModSpellCritChanceSchool | 215 | school crit needs a school-aware consumer | Inert | 18382 |
+| 77 MechanicImmunity | 4 | mechanic immunity representation not certified | Inert | 7219 |
+| 82 WaterBreathing | 3 | water breathing placeholder | Inert | 11789 |
+| 85 ModPowerRegen | 345 | MP5 needs two-second regeneration, not periodic energize | Inert | 18378 |
+| 89 PeriodicDamagePercent | 1 | percent damage must scale with health | Inert | 28347 |
+| 99 ModAttackPower | 291 | melee_attack_power; signed flat AP | Correct | 9138 |
+| 102 ModMeleeAttackPowerVersus | 40 | melee AP needs creature-type selection | Inert | 14097 |
+| 107 AddFlatModifier | 50 | SpellMod operation/mask semantics not certified | Inert | 18388 |
+| 108 AddPctModifier | 16 | SpellMod operation/mask semantics not certified | Inert | 23043 |
+| 109 AddTargetTrigger | 2 | target trigger needs mechanics | Inert | 17768 |
+| 112 OverrideClassScripts | 6 | class scripts need mechanics | Inert | 27853 |
+| 117 ModMechanicResistance | 5 | mechanic resistance needs mechanics | Inert | 18985 |
+| 123 ModTargetResistance | 30 | target resistance needs mechanics | Inert | 25717 |
+| 124 ModRangedAttackPower | 305 | class-specific ranged_sheet_values and ranged attacks; flat AP | Correct | 9138 |
+| 130 ModMountedSpeedAlways | 1 | mounted-speed stacking not certified | Inert | 13587 |
+| 131 ModRangedAttackPowerVersus | 39 | ranged AP needs creature-type selection | Inert | 14097 |
+| 135 ModHealingDone | 1017 | healing_power; flat healing by school mask | Correct | 7678 |
+| 138 ModMeleeHaste | 3 | melee haste must stay separate from ranged haste | Inert | 18065 |
+| 139 ForceReaction | 1 | faction reaction needs mechanics | Inert | 28282 |
+| 140 ModRangedHaste | 1 | ranged haste must stay separate from melee haste | Inert | 23674 |
+| 141 ModRangedAmmoHaste | 21 | ammo haste needs its own consumer | Inert | 14824 |
+| 144 SafeFall | 2 | safe fall placeholder | Inert | 23409 |
+| 154 ModStealthLevel | 5 | stealth level needs mechanics | Inert | 17746 |
+| 158 ModShieldBlockvalue | 21 | block value needs mechanics | Inert | 22852 |
+| 161 ModHealthRegenInCombat | 38 | flat combat regeneration must not be percent | Inert | 12956 |
+| 180 ModFlatSpellDamageVersus | 6 | flat damage needs creature-type selection | Inert | 22849 |
+
+The source handlers are in [SpellAuras.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellAuras.cpp).
+School damage, melee and ranged AP, healing and crit distinctions also follow
+[Unit.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp).
+Cast Aura polarity also follows
+[SpellEntry::IsPositiveEffect](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellEntry.cpp).
+The class AP formulas and fractional damage follow
+[StatSystem.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/StatSystem.cpp).
+Mana regeneration follows the two-second `Player::Regenerate` cadence in
+[Player.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp).

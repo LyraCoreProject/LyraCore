@@ -325,8 +325,14 @@ pub(crate) fn aura_apply(
     cast_target_guid: u64,
     level: u8,
     points: i32,
+    source_item: u64,
 ) {
     let now = crate::time::now(ctx);
+    let points = if e.p0_kind == lyracore_shared::spell::taxonomy::P_COMBAT_PERCENT {
+        points.saturating_mul(100)
+    } else {
+        points
+    };
     let points = if e.p0_kind == P_PCT_MAX_POWER {
         let max_power = ctx
             .db
@@ -413,7 +419,10 @@ pub(crate) fn aura_apply(
         displace_auras(ctx, target_guid, &other_seal_spell_ids);
     }
     // Ghost and Wisp Spirit share a DBC name but must coexist.
-    if !hdr.name.is_empty() && !crate::ghost::is_ghost_spell(hdr.spell_id) {
+    if !hdr.name.is_empty()
+        && !crate::ghost::is_ghost_spell(hdr.spell_id)
+        && !(source_item != 0 && hdr.equip_passive())
+    {
         let spells = ctx.db.game_spell();
         let other_rank_ids: std::collections::HashSet<u32> = auras
             .by_target()
@@ -433,18 +442,29 @@ pub(crate) fn aura_apply(
     let coexist = source_behavior::aura_casters_coexist(hdr, e.kind);
     let cross_caster_stack =
         hdr.custom_flags & custom::ALLOW_STACK_BETWEEN_CASTER != 0 && hdr.max_stacks > 0;
-    if !coexist && !cross_caster_stack {
+    if !coexist && !cross_caster_stack && !(source_item != 0 && hdr.equip_passive()) {
         let replaced = auras
             .by_target()
             .filter(&target_guid)
-            .filter(|a| a.effect_id == e.id && a.caster_guid != caster_guid)
+            .filter(|a| {
+                a.effect_id == e.id
+                    && (a.caster_guid != caster_guid
+                        || ((source_item != 0 || !hdr.equip_passive())
+                            && a.item_guid(ctx) != source_item))
+            })
             .collect();
         shed_auras(ctx, target_guid, replaced);
     }
-    let existing = auras
-        .by_target()
-        .filter(&target_guid)
-        .find(|a| a.effect_id == e.id && (cross_caster_stack || a.caster_guid == caster_guid));
+    let mut existing = auras.by_target().filter(&target_guid).find(|a| {
+        a.effect_id == e.id
+            && a.item_guid(ctx) == source_item
+            && (cross_caster_stack || a.caster_guid == caster_guid)
+    });
+    if existing.as_ref().is_some_and(|aura| {
+        (aura.eff_kind, aura.eff_p0, aura.eff_p0_kind) != (e.kind, e.p0, e.p0_kind)
+    }) {
+        shed_auras(ctx, target_guid, existing.take().into_iter().collect());
+    }
     let amount_remaining = if e.kind == A_ABSORB { points.max(0) } else { 0 };
     let channel_target =
         if e.kind == A_PERIODIC_TRIGGER || hdr.cast_flags & SPELL_ATTR_CHANNELED != 0 {
@@ -485,14 +505,16 @@ pub(crate) fn aura_apply(
         a.update(ctx);
     } else {
         // Evictions must free aura slots before this insert chooses one.
-        if !crate::spell::stacking::apply_group_conflict(
-            ctx,
-            hdr.spell_id,
-            caster_guid,
-            target_guid,
-            crate::spell::stacking::rank_of(ctx, hdr.spell_id),
-            points.saturating_abs(),
-        ) {
+        if !(source_item != 0 && hdr.equip_passive())
+            && !crate::spell::stacking::apply_group_conflict(
+                ctx,
+                hdr.spell_id,
+                caster_guid,
+                target_guid,
+                crate::spell::stacking::rank_of(ctx, hdr.spell_id),
+                points.saturating_abs(),
+            )
+        {
             return;
         }
         let existing: Vec<(u8, u32)> = auras
@@ -509,13 +531,18 @@ pub(crate) fn aura_apply(
                 )
             })
             .collect();
-        let Some(slot) = pick_aura_slot(
-            &existing,
-            hdr.spell_id,
-            hdr.negative(),
-            tracer_spell::BUFF_SLOT_COUNT,
-            tracer_spell::AURA_SLOTS,
-        ) else {
+        let visible = source_item == 0 || !hdr.equip_passive() || hdr.visual_id != 0;
+        let Some(slot) = (if !visible {
+            Some(u8::MAX)
+        } else {
+            pick_aura_slot(
+                &existing,
+                hdr.spell_id,
+                hdr.negative(),
+                tracer_spell::BUFF_SLOT_COUNT,
+                tracer_spell::AURA_SLOTS,
+            )
+        }) else {
             log::info!(
                 "aura slot overflow: all {} slots on {target_guid} full — dropping spell {} (loud: relayed to caster {caster_guid})",
                 tracer_spell::AURA_SLOTS,
@@ -568,7 +595,7 @@ pub(crate) fn aura_apply(
             proc_icd_ms: proc.icd_ms,
             proc_ready_micros: 0,
         }
-        .insert(ctx);
+        .insert_from_item(ctx, source_item);
     }
 
     source_behavior::finish_aura_apply(ctx, hdr, e, caster_guid, target_guid);
@@ -651,6 +678,7 @@ pub(crate) fn apply_linked_debuff(
             target_guid,
             level,
             points,
+            0,
         );
     }
 }
@@ -782,8 +810,8 @@ pub(crate) fn apply_effect(
             } else {
                 hdr.dispel_type
             };
-            let removed = dispel_target(ctx, target_guid, category);
-            log::info!("dispel (cat {category}) on {target_guid} removed {removed} debuff(s)");
+            let removed = dispel_target(ctx, caster_guid, target_guid, category);
+            log::info!("dispel (cat {category}) on {target_guid} removed {removed} aura(s)");
             EffectHit::none()
         }
         EffectKind::EnchantItemTemporary => {
@@ -809,6 +837,8 @@ pub(crate) fn apply_effect(
         | EffectKind::AuraModStat
         | EffectKind::AuraModResistance
         | EffectKind::AuraAbsorb
+        | EffectKind::AuraInert
+        | EffectKind::AuraModHealing
         | EffectKind::AuraModCombat
         | EffectKind::AuraModSpeed
         | EffectKind::AuraModHealthPower
@@ -874,6 +904,7 @@ fn apply_aura_effect(
         cast_target_guid,
         level,
         points,
+        0,
     );
     if e.p1 != 0 {
         apply_linked_debuff(ctx, e.p1 as u32, caster_guid, target_guid, level);

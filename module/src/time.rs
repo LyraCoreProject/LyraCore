@@ -1,3 +1,5 @@
+#[cfg(feature = "conformance_test_fixture")]
+use crate::spell::game_item_aura_expiry;
 use spacetimedb::{ReducerContext, ScheduleAt, TimeDuration, Timestamp};
 
 pub(crate) fn now(ctx: &ReducerContext) -> Timestamp {
@@ -192,6 +194,7 @@ macro_rules! schedule_tables {
         $macro!($ctx, 30, game_creature_ai_summon_expiry, scheduled_id, crate::creatures::expire_eventai_summon $(, $extra)*);
         $macro!($ctx, 31, game_creature_ai_forced_despawn, scheduled_id, crate::creatures::fire_eventai_forced_despawn $(, $extra)*);
         $macro!($ctx, 32, game_temporary_enchantment, scheduled_id, crate::items::expire_temporary_enchantment $(, $extra)*);
+        $macro!($ctx, 33, game_item_aura_expiry, aura_id, crate::spell::expire_item_aura $(, $extra)*);
     };
 }
 

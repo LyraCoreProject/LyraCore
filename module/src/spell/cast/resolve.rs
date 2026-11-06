@@ -1,3 +1,4 @@
+use lyracore_shared::spell::taxonomy::SPELL_ATTR_RANGED_AUTO_REPEAT;
 use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
@@ -31,6 +32,7 @@ pub(crate) fn resolve_cast_at(
         client_initiated,
         dest,
         None,
+        None,
     )
     .map_err(Into::into)
 }
@@ -46,6 +48,7 @@ pub(crate) fn resolve_cast_at_typed(
     client_initiated: bool,
     dest: Option<(f32, f32, f32)>,
     item_target: Option<u64>,
+    cooldown_category: Option<u32>,
 ) -> Result<(), CastGateRefusal> {
     let hdr = ctx
         .db
@@ -66,7 +69,16 @@ pub(crate) fn resolve_cast_at_typed(
         .collect();
     effects.sort_by_key(|e| (e.kind != E_INTERRUPT, e.effect_index));
 
-    check_cast_gates(ctx, &caster, &hdr, &effects, target_guid, spell_id, level)?;
+    check_cast_gates(
+        ctx,
+        &caster,
+        &hdr,
+        &effects,
+        target_guid,
+        spell_id,
+        level,
+        cooldown_category,
+    )?;
     check_item_target(ctx, caster_guid, &effects, item_target)?;
     check_source_cast_position(ctx, &caster, &hdr, target_guid)?;
     if !is_completion {
@@ -217,9 +229,17 @@ pub(crate) fn start_spell_cooldown(
     spell_id: u32,
     cooldown_ms: u32,
 ) {
-    if cooldown_ms == 0 {
-        return;
+    if cooldown_ms != 0 {
+        record_spell_cooldown(ctx, caster_guid, spell_id, cooldown_ms);
     }
+}
+
+pub(crate) fn record_spell_cooldown(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    cooldown_ms: u32,
+) {
     let ready_at = crate::time::now(ctx)
         .checked_add(TimeDuration::from_micros((cooldown_ms as i64) * 1000))
         .unwrap_or(crate::time::now(ctx));
@@ -237,6 +257,8 @@ pub(crate) fn start_spell_cooldown(
             caster_guid,
             spell_id,
             ready_at,
+            category: 0,
+            category_ready_micros: 0,
         });
     }
 }
@@ -747,6 +769,7 @@ pub(crate) fn start_creature_spell(
                     request.spell_id,
                     request.caster_level,
                     route.admission == CreatureSpellCasterAdmission::DeadCreatureCallback,
+                    None,
                 )?;
             }
             CreatureSpellStartMode::Triggered => {
@@ -773,6 +796,7 @@ pub(crate) fn start_creature_spell(
             false,
             None,
             None,
+            None,
             route.admission,
         )
         .map(|_| ())
@@ -796,6 +820,7 @@ pub(crate) fn start_creature_spell(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn check_cast_gates(
     ctx: &ReducerContext,
     caster: &WorldEntity,
@@ -804,11 +829,21 @@ fn check_cast_gates(
     target_guid: u64,
     spell_id: u32,
     level: u8,
+    cooldown_category: Option<u32>,
 ) -> Result<(), CastGateRefusal> {
     let allow_dead_creature = dead_callback_cast_admitted(ctx, caster.guid, spell_id);
     check_cast_gate_prefix(ctx, caster, effects, target_guid, allow_dead_creature)?;
     crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
-    check_cast_gate_suffix(ctx, caster, hdr, effects, target_guid, spell_id, level)
+    check_cast_gate_suffix(
+        ctx,
+        caster,
+        hdr,
+        effects,
+        target_guid,
+        spell_id,
+        level,
+        cooldown_category,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -821,12 +856,22 @@ fn check_cast_gates_with_admission(
     spell_id: u32,
     level: u8,
     allow_dead_creature: bool,
+    cooldown_category: Option<u32>,
 ) -> Result<(), CastGateRefusal> {
     check_cast_gate_prefix(ctx, caster, effects, target_guid, allow_dead_creature)?;
     crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
     check_source_cast_position(ctx, caster, hdr, target_guid)?;
     check_global_cooldown(ctx, caster.guid)?;
-    check_cast_gate_suffix(ctx, caster, hdr, effects, target_guid, spell_id, level)
+    check_cast_gate_suffix(
+        ctx,
+        caster,
+        hdr,
+        effects,
+        target_guid,
+        spell_id,
+        level,
+        cooldown_category,
+    )
 }
 
 fn check_unit_target(
@@ -1057,6 +1102,7 @@ pub(crate) fn check_cast_start_gates(
         spell_id,
         caster.level as u8,
         admission == CreatureSpellCasterAdmission::DeadCreatureCallback,
+        None,
     )?;
     check_targeted_los(ctx, caster, &effects, target_guid)
 }
@@ -1127,8 +1173,7 @@ fn check_cast_range(what: &str, dist: f32, range_yd: u32) -> Result<(), CastGate
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn check_cast_gate_suffix(
     ctx: &ReducerContext,
     caster: &WorldEntity,
@@ -1137,6 +1182,7 @@ fn check_cast_gate_suffix(
     target_guid: u64,
     spell_id: u32,
     level: u8,
+    cooldown_category: Option<u32>,
 ) -> Result<(), CastGateRefusal> {
     let caster_guid = caster.guid;
     for effect in effects
@@ -1196,25 +1242,20 @@ fn check_cast_gate_suffix(
         ));
     }
 
-    if hdr.cooldown_ms > 0 {
-        if let Some(cd) = ctx
-            .db
-            .game_spell_cd()
-            .by_caster()
-            .filter(&caster_guid)
-            .find(|r| r.spell_id == spell_id)
-        {
-            if !is_ready_at(
-                crate::time::now(ctx).to_micros_since_unix_epoch(),
-                cd.ready_at.to_micros_since_unix_epoch(),
-            ) {
-                return Err(CastGateRefusal::new(
-                    CastRefusalKind::Cooldown,
-                    CastRefusalReason::NotReady,
-                    "spell not ready (cooldown)".to_string(),
-                ));
-            }
-        }
+    if hdr.attributes & SPELL_ATTR_PASSIVE == 0
+        && hdr.cast_flags & SPELL_ATTR_RANGED_AUTO_REPEAT == 0
+        && !crate::items::equip::spell_ready(
+            ctx,
+            caster_guid,
+            spell_id,
+            cooldown_category.unwrap_or(hdr.category),
+        )
+    {
+        return Err(CastGateRefusal::new(
+            CastRefusalKind::Cooldown,
+            CastRefusalReason::NotReady,
+            "spell not ready (cooldown)".to_string(),
+        ));
     }
 
     if hdr.cast_flags & (SPELL_ATTR_REQ_OVERPOWER | SPELL_ATTR_REQ_REVENGE) != 0 {
@@ -1489,6 +1530,7 @@ pub(crate) fn begin_cast(
         client_initiated,
         dest,
         None,
+        None,
         CreatureSpellCasterAdmission::Living,
     )
     .map(|_| ())
@@ -1512,6 +1554,7 @@ pub(crate) fn begin_item_cast(
         client_initiated,
         None,
         Some(item_guid),
+        None,
         CreatureSpellCasterAdmission::Living,
     )
     .map(|_| ())
@@ -1552,6 +1595,7 @@ pub(crate) fn begin_cast_with_admission(
     client_initiated: bool,
     dest: Option<(f32, f32, f32)>,
     item_target: Option<u64>,
+    cooldown_category: Option<u32>,
     admission: CreatureSpellCasterAdmission,
 ) -> Result<CastStart, CastGateRefusal> {
     let hdr = ctx
@@ -1578,6 +1622,7 @@ pub(crate) fn begin_cast_with_admission(
         spell_id,
         level,
         admission == CreatureSpellCasterAdmission::DeadCreatureCallback,
+        cooldown_category,
     )?;
     check_targeted_los(ctx, &caster, &effects, target_guid)?;
     check_item_target(ctx, caster_guid, &effects, item_target)?;
@@ -1611,6 +1656,7 @@ pub(crate) fn begin_cast_with_admission(
             client_initiated,
             dest,
             item_target,
+            cooldown_category,
         );
         clear_dead_callback_cast_admission(ctx, caster_guid, spell_id);
         return result.map(|_| CastStart::Resolved);
@@ -1650,6 +1696,7 @@ pub(crate) fn begin_cast_with_admission(
         dest_y: dy,
         dest_z: dz,
         item_target_guid: item_target.unwrap_or(0),
+        cooldown_category,
     });
     start_global_cooldown(ctx, caster_guid, hdr.gcd_ms);
     crate::spell::SpellCastEvent::insert(
@@ -1769,7 +1816,50 @@ pub(crate) fn apply_spell_auras(
             target_guid,
             level,
             points,
+            0,
         );
+    }
+}
+
+pub(crate) fn apply_item_auras(
+    ctx: &ReducerContext,
+    header: &Spell,
+    guid: u64,
+    level: u8,
+    item: u64,
+) {
+    let mut header = header.clone();
+    if header.equip_passive() && (header.duration_index == 0 || header.visual_id == 0) {
+        header.duration_ms = u32::MAX;
+    } else if header.duration_ms < 200 {
+        header.duration_ms = 300;
+    }
+    for effect in ctx
+        .db
+        .game_spell_effect()
+        .by_spell()
+        .filter(header.spell_id)
+        .filter(|effect| effect.equip_supported && passive_applies_effect_kind(effect.kind))
+    {
+        if ctx
+            .db
+            .game_aura()
+            .by_target()
+            .filter(guid)
+            .any(|aura| aura.effect_id == effect.id && aura.item_guid(ctx) == item)
+        {
+            continue;
+        }
+        let points = effect_amount(
+            effect.base_points,
+            effect.die_sides,
+            effect.per_level,
+            level as u32,
+            header.spell_level,
+            header.max_level,
+            ctx.random::<u32>(),
+        );
+        aura_apply(ctx, &effect, &header, guid, guid, guid, level, points, item);
     }
 }
 
@@ -1799,6 +1889,7 @@ mod eventai_hit_tests {
             enters_combat: false,
             points_per_combo: 0.0,
             bonus_coefficient: -1.0,
+            equip_supported: false,
         }
     }
 
