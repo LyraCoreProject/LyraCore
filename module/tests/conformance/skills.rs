@@ -16,9 +16,13 @@ fn import_spell_plan(shard: &Standalone) -> bool {
     true
 }
 
-fn racial_spells(shard: &Standalone) {
+fn human_starting_stats(shard: &Standalone) {
     shard.assert_sql("DELETE FROM game_level_stats WHERE race_class_level = 65793");
     shard.assert_sql("INSERT INTO game_level_stats (race_class_level,race,class,level,strength,agility,stamina,intellect,spirit) VALUES (65793,1,1,1,23,20,22,20,20)");
+}
+
+fn racial_spells(shard: &Standalone) {
+    human_starting_stats(shard);
     shard.assert_sql("DELETE FROM game_crit_per_agility WHERE class_level = 257");
     shard.assert_sql(
         "INSERT INTO game_crit_per_agility (class_level,class,level,rate) VALUES (257,1,1,4.0)",
@@ -150,6 +154,7 @@ fn cast(shard: &Standalone, connection: &mut ReducerConnection, spell: u32) {
 fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_progress() {
     use super::buy_in_slot::{grant, request, stage};
     let (shard, mut connection, guid, _) = stage("skill-equipment-and-casts");
+    human_starting_stats(&shard);
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET agility = 20 WHERE guid = {guid}"
     ));
