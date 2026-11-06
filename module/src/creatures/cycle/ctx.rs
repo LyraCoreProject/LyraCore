@@ -85,26 +85,26 @@ fn aggro_target(ctx: &ReducerContext, entity: &WorldEntity) -> AggroTarget {
     }
 }
 
-pub(crate) fn player_arrived(ctx: &ReducerContext, guid: u64) {
-    let Some(player) = ctx.db.game_world_entity().guid().find(guid) else {
+pub(crate) fn character_arrived(ctx: &ReducerContext, guid: u64) {
+    let Some(character) = ctx.db.game_world_entity().guid().find(guid) else {
         return;
     };
-    let target = aggro_target(ctx, &player);
+    let target = aggro_target(ctx, &character);
     if !super::is_aggro_candidate(target.dead, target.godmode, target.taxi_flying) {
         return;
     }
     let radius = lyracore_shared::spatial::DEFAULT_VISIBILITY_RADIUS;
     let active = crate::helpers::entities_near(
         ctx,
-        player.map_id,
-        player.instance_id,
-        player.x,
-        player.y,
+        character.map_id,
+        character.instance_id,
+        character.x,
+        character.y,
         radius,
     )
     .into_iter()
     .filter(|entity| !entity.is_player())
-    .filter(|entity| crate::helpers::dist_sq(&player, entity) <= radius * radius)
+    .filter(|entity| crate::helpers::dist_sq(&character, entity) <= radius * radius)
     .map(|entity| entity.guid)
     .collect();
     let mut world = CtxWorld {
@@ -117,11 +117,13 @@ pub(crate) fn player_arrived(ctx: &ReducerContext, guid: u64) {
         profile: false,
         chase_expansions: std::cell::Cell::new(0),
     };
-    let (pulls, _) =
-        crate::vmap::with_query_cache(|| super::aggro_with_targets(&mut world, &active, &[target]));
-    for pull in pulls {
-        world.enter_combat(pull.guid);
-        world.enter_combat(pull.victim);
+    crate::vmap::with_query_cache(|| {
+        let (pulls, _) = super::aggro_with_targets(&mut world, &active, &[target]);
+        super::assist(&mut world, &active, pulls);
+    });
+    for attack in ctx.db.game_melee_attack().by_target().filter(&guid) {
+        world.enter_combat(attack.attacker_guid);
+        world.enter_combat(guid);
     }
 }
 

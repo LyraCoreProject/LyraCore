@@ -204,7 +204,7 @@ pub(crate) fn suspend_hostile_references(ctx: &ReducerContext, guid: u64) {
     disengage_with_combat_check(ctx, guid, true);
 }
 
-fn disengage_with_combat_check(ctx: &ReducerContext, guid: u64, defer_player_exit: bool) {
+fn disengage_with_combat_check(ctx: &ReducerContext, guid: u64, defer_character_exit: bool) {
     let melee = ctx.db.game_melee_attack();
     let attackers_of_guid: Vec<u64> = melee
         .by_target()
@@ -250,7 +250,7 @@ fn disengage_with_combat_check(ctx: &ReducerContext, guid: u64, defer_player_exi
         crate::creatures::reset_engagement(ctx, g);
         if let Some(mut e) = entities.guid().find(g) {
             if e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0 {
-                if defer_player_exit && g == guid && e.is_player() {
+                if defer_character_exit && g == guid && e.is_player() {
                     let due = Timestamp::from_micros_since_unix_epoch(
                         crate::time::now(ctx)
                             .to_micros_since_unix_epoch()

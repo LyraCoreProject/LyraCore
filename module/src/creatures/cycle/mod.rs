@@ -20,7 +20,7 @@ mod ctx;
 #[cfg(test)]
 mod harness;
 
-pub(crate) use ctx::{player_arrived, run, stop_on_stored_leg};
+pub(crate) use ctx::{character_arrived, run, stop_on_stored_leg};
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct Point {

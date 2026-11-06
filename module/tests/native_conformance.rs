@@ -86,6 +86,59 @@ fn enter(shard: &Standalone, guid: u64) -> ReducerConnection {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn native_login_calls_nearby_pack_assistance() {
+    use lyracore_shared::constants::unit_flags;
+
+    let (shard, character, _) = fixture("native-login-assistance");
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    shard.assert_sql("DELETE FROM game_faction_template WHERE id = 1 OR id = 14");
+    shard.assert_sql("INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (1,1,3,2,12,0,0,0,0,0,0,0,0),(14,14,8,0,1,0,0,0,0,0,0,0,0)");
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET x = 0, y = 0, z = 0, orientation = 0, level = 1 WHERE guid = {character}"
+    ));
+    shard.assert_call("debug_spawn_player_entity", &[&character.to_string()]);
+    for distance in [15, 23] {
+        shard.assert_call(
+            "debug_spawn_at_feet",
+            &[&character.to_string(), "51000", &distance.to_string()],
+        );
+    }
+    let creatures = shard.query_rows(
+        "SELECT guid FROM game_world_entity WHERE entry = 51000 AND (x = 15 OR x = 23)",
+    );
+    assert_eq!(creatures.len(), 2);
+    assert!(shard
+        .query_rows("SELECT * FROM game_melee_attack")
+        .is_empty());
+
+    let _connection = enter(&shard, character);
+    let mut engaged = shard
+        .query_rows(&format!(
+            "SELECT attacker_guid FROM game_melee_attack WHERE target_guid = {character}"
+        ))
+        .into_iter()
+        .map(|row| row["attacker_guid"].parse::<u64>().unwrap())
+        .collect::<Vec<_>>();
+    engaged.sort_unstable();
+    let mut expected = creatures
+        .iter()
+        .map(|row| row["guid"].parse::<u64>().unwrap())
+        .collect::<Vec<_>>();
+    expected.sort_unstable();
+    assert_eq!(engaged, expected, "both pack members must engage on login");
+    for guid in expected.into_iter().chain([character]) {
+        let flags = shard.query_rows(&format!(
+            "SELECT unit_flags FROM game_world_entity WHERE guid = {guid}"
+        ))[0]["unit_flags"]
+            .parse::<u32>()
+            .unwrap();
+        assert_ne!(flags & unit_flags::IN_COMBAT, 0, "{guid} must be in combat");
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn vendor_purchases_acknowledge_the_offer_before_the_npc_receipt() {
     let (shard, guid, _) = fixture("vendor-purchase-replies");
     shard.assert_call("debug_seed_scenario_fixtures", &[]);

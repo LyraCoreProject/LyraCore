@@ -84,7 +84,7 @@ pub(super) fn enter_character(
     crate::world::apply_player_login(ctx, &account, guid, owner, entry)?;
     super::instance_shard::arrived(ctx, guid, character.map_id, character.pending_instance_id);
     crate::aoi::enter_viewer(ctx, guid)?;
-    crate::creatures::cycle::player_arrived(ctx, guid);
+    crate::creatures::cycle::character_arrived(ctx, guid);
     let live = ctx
         .db
         .game_world_entity()
