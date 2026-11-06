@@ -185,11 +185,23 @@ pub fn debug_compute_spell(
     let sp = crate::spell::spell_power(ctx, caster_guid, hdr.school_mask);
     let scaled =
         crate::spell::compose_magnitude(eff.base_points, sp, crate::spell::SPELL_POWER_COEFF_PCT);
-    let normal =
-        crate::spell::apply_resistance(ctx, target_guid, caster_guid, hdr.school_mask, scaled);
+    let normal = crate::spell::apply_resistance(
+        ctx,
+        target_guid,
+        caster_guid,
+        hdr.school_mask,
+        scaled,
+        hdr.spell_id,
+    );
     let crit_raw = crate::spell::apply_spell_crit(scaled, true);
-    let crit =
-        crate::spell::apply_resistance(ctx, target_guid, caster_guid, hdr.school_mask, crit_raw);
+    let crit = crate::spell::apply_resistance(
+        ctx,
+        target_guid,
+        caster_guid,
+        hdr.school_mask,
+        crit_raw,
+        hdr.spell_id,
+    );
     let spell_crit_bp = crate::spell::spell_crit_bp(ctx, caster_guid);
     let readouts = ctx.db.game_debug_readout();
     let key = "spell".to_string();

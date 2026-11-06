@@ -144,34 +144,20 @@ fn stance_folds_only_defensive_contributes() {
 }
 
 #[test]
-fn spell_crit_chance_folds_aura_and_clamps() {
-    assert_eq!(spell_crit_bp_with_bonus(0), 0);
-    assert_eq!(spell_crit_bp_with_bonus(1000), 1000);
-    assert_eq!(spell_crit_bp_with_bonus(-5000), 0);
-    assert_eq!(spell_crit_bp_with_bonus(100_000), 10_000);
-}
-
-#[test]
-fn spell_crit_derives_from_intellect_and_level() {
-    assert_eq!(intellect_crit_bp(23, 2), 328);
-    assert_eq!(intellect_crit_bp(60, 2), 857);
-    assert_eq!(intellect_crit_bp(23, 10), 153);
-    assert_eq!(intellect_crit_bp(0, 2), 0);
-    assert_eq!(intellect_crit_bp(150, 60), 230);
-    assert!(intellect_crit_bp(60, 2) > intellect_crit_bp(23, 2));
-    assert!(intellect_crit_bp(23, 10) < intellect_crit_bp(23, 2));
-    assert!(intellect_crit_bp(23, 2) < 1000);
-}
-
-#[test]
 fn spell_miss_follows_the_level_hit_curve() {
     assert_eq!(spell_miss_chance_bp(10, 10), 400);
-    assert_eq!(spell_miss_chance_bp(10, 5), 400);
+    assert_eq!(spell_miss_chance_bp(10, 5), 100);
     assert_eq!(spell_miss_chance_bp(10, 11), 500);
     assert_eq!(spell_miss_chance_bp(10, 12), 600);
     assert_eq!(spell_miss_chance_bp(10, 13), 1700);
     assert!(spell_miss_chance_bp(10, 14) > spell_miss_chance_bp(10, 13));
-    assert_eq!(spell_miss_chance_bp(1, 60), 9900);
+    assert_eq!(spell_miss_chance_bp(1, 60), 7800);
+}
+
+#[test]
+fn magic_hit_uses_signed_levels_and_caps_base_full_resistance() {
+    assert_eq!(spell_miss_chance_bp(60, 1), 100);
+    assert_eq!(spell_miss_chance_bp(1, 60), 7800);
 }
 
 #[test]

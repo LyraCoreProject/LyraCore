@@ -57,6 +57,9 @@ fn source_spell(row: &Row) -> Result<Spell> {
         attributes: row.number("attributes")?,
         attributes_ex1: row.number("attributesEx")?,
         attributes_ex2: row.number("attributesEx2")?,
+        attributes_ex3: row.number("attributesEx3")?,
+        attributes_ex4: row.number("attributesEx4")?,
+        damage_class: row.number("dmgClass")?,
         shapeshift_mask: row.number("stances")?,
         targets: row.number("targets")?,
         requires_spell_focus: row.number("requiresSpellFocus")?,
@@ -187,6 +190,9 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
         "attributes",
         "attributesEx",
         "attributesEx2",
+        "attributesEx3",
+        "attributesEx4",
+        "dmgClass",
         "auraInterruptFlags",
         "castingTimeIndex",
         "categoryRecoveryTime",
@@ -329,7 +335,7 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
 #[cfg(test)]
 pub(crate) fn fixture() -> crate::world_source::WorldSource {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
-    let mut columns = "customFlags minTargetLevel spellIconId baseLevel spellVisual1 preventionType school dispel mechanic attributes attributesEx attributesEx2 stances targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime auraInterruptFlags procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    let mut columns = "customFlags minTargetLevel spellIconId baseLevel spellVisual1 preventionType school dispel mechanic attributes attributesEx attributesEx2 attributesEx3 attributesEx4 dmgClass stances targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime auraInterruptFlags procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
     for prefix in [
         "effectBonusCoefficient",
         "effect",
@@ -473,6 +479,21 @@ mod tests {
             manifest["findings"][1]["source_ids"],
             serde_json::json!(["10:1"])
         );
+    }
+
+    #[test]
+    fn spell_roll_fields_are_selected_from_the_source() {
+        let source = fixture();
+        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
+            unreachable!()
+        };
+        connection.execute_batch("UPDATE spell_template SET attributesEx2=536870912,attributesEx3=262144,attributesEx4=1,dmgClass=1 WHERE build=5875").unwrap();
+        let (spells, _) = read(&source).unwrap();
+        let spell = &spells[0];
+        assert_eq!(spell.attributes_ex2, 0x2000_0000);
+        assert_eq!(spell.attributes_ex3, 0x0004_0000);
+        assert_eq!(spell.attributes_ex4, 1);
+        assert_eq!(spell.damage_class, 1);
     }
 
     #[test]

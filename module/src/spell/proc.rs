@@ -418,6 +418,7 @@ fn fire_proc_damage(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) ->
         row.target_guid,
         school_mask,
         row.amount,
+        row.spell_id,
     );
     let (dealt, absorbed) = apply_target_damage(
         ctx,
@@ -426,7 +427,7 @@ fn fire_proc_damage(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) ->
         after_resist,
         Hit::spell(HitSource::Triggered, row.spell_id, false),
     );
-    if dealt > 0 || absorbed > 0 {
+    if dealt > 0 || absorbed > 0 || row.amount > after_resist {
         crate::spell::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {

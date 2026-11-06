@@ -322,7 +322,7 @@ fn run_spell_effects(
             let roll = if rolls_hit && t != caster_guid {
                 *target_rolls
                     .entry(t)
-                    .or_insert_with(|| hit_roll(ctx, caster_guid, level, t, table))
+                    .or_insert_with(|| hit_roll(ctx, caster_guid, level, t, table, hdr))
             } else {
                 crate::combat::HIT_NORMAL
             };
@@ -474,9 +474,10 @@ fn hit_roll(
     level: u8,
     target_guid: u64,
     table: HitTable,
+    spell: &Spell,
 ) -> u8 {
     let HitTable::Weapon { ranged } = table else {
-        return if super::targeting::spell_misses(ctx, level, target_guid) {
+        return if super::targeting::spell_misses(ctx, level, target_guid, spell) {
             crate::combat::HIT_MISS
         } else {
             crate::combat::HIT_NORMAL

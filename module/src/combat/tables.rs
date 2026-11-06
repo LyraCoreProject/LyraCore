@@ -195,15 +195,6 @@ pub(crate) fn armor_mitigated(damage: u32, mitigation_pct: u32) -> u32 {
     (damage * (100 - mitigation_pct) / 100).max(1)
 }
 
-pub(crate) fn resist_mitigation_pct(resistance: u32, caster_level: u32) -> u32 {
-    if resistance == 0 || caster_level == 0 {
-        return 0;
-    }
-    let cap = caster_level * 5;
-    let r = resistance.min(cap);
-    (75 * r / cap).min(75)
-}
-
 #[cfg(feature = "debug_reducers")]
 pub struct SwingProfile {
     pub base_min: u32,
@@ -693,19 +684,6 @@ mod tests {
         );
         assert_eq!(scale_swing_for_rank(1, 3, 1), (1, 4));
         assert_eq!(scale_swing_for_rank(10, 20, 3), (25, 50));
-    }
-
-    #[test]
-    fn resist_mitigation_scales_and_caps_at_75() {
-        assert_eq!(resist_mitigation_pct(0, 60), 0);
-        assert_eq!(resist_mitigation_pct(0, 2), 0);
-        assert_eq!(resist_mitigation_pct(100, 0), 0);
-        assert_eq!(resist_mitigation_pct(300, 60), 75);
-        assert_eq!(resist_mitigation_pct(10, 2), 75);
-        assert_eq!(resist_mitigation_pct(10_000, 60), 75);
-        assert_eq!(resist_mitigation_pct(5, 2), 37);
-        assert_eq!(resist_mitigation_pct(6, 2), 45);
-        assert!(resist_mitigation_pct(150, 60) > resist_mitigation_pct(75, 60));
     }
 
     #[test]
