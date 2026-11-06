@@ -206,6 +206,18 @@ Extra attacks need effect 19 imported as `E_ADD_EXTRA_ATTACKS`. Older spell rows
 `E_SCRIPTED`, so Hand of Justice, Ironfoe and Sword Specialization grant nothing until you reimport
 the `spell` family. The new `game_extra_attack` table starts empty and needs no repair.
 
+### Passive creature combat migration
+
+A plain Module publish adds the private `game_creature_combat_grid` table. It starts empty; the
+next melee tick arms a grid check for existing threat with no creature victim. No SQL repair is
+needed. Publish through a planned update; development reload requires an unchanged schema.
+
+Passive creatures retain threat and combat without a victim. Their ordinary melee leash does not
+expire this threat. The grid check uses the pinned Reference's default geometry, visibility distances
+(100 yards outdoors, 170 in dungeons, 533 in battlegrounds) and 30-second activity interval. A grid
+with no nearby Character or active creature enters evade and clears that combat. LyraCore keeps the
+creature object loaded; this does not implement grid unloading or change vendor stock lifetime.
+
 ### Temporary enchantment migration
 
 Poisons, sharpening stones, weapon oils and shaman weapon spells need effect 54 imported as

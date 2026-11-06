@@ -650,16 +650,20 @@ impl EngageSink for CtxWorld<'_> {
             .collect();
         use crate::game_threat;
         let threats = self.ctx.db.game_threat();
-        let members = engagements
+        let members = threats
             .iter()
-            .flat_map(|engagement| {
-                threats
-                    .by_creature()
-                    .filter(&engagement.attacker)
-                    .map(|threat| Engagement {
-                        attacker: engagement.attacker,
-                        victim: threat.source_guid,
-                        instance_id: engagement.instance_id,
+            .filter_map(|threat| {
+                let creature = entities.guid().find(threat.creature_guid)?;
+                let source = entities.guid().find(threat.source_guid)?;
+                (!creature.is_player()
+                    && !creature.dead
+                    && !source.dead
+                    && creature.map_id == source.map_id
+                    && creature.instance_id == source.instance_id)
+                    .then_some(Engagement {
+                        attacker: creature.guid,
+                        victim: source.guid,
+                        instance_id: creature.instance_id,
                         player_never_swung: false,
                     })
             })
@@ -873,15 +877,25 @@ impl CastSink for CtxWorld<'_> {
 
 impl ThreatSink for CtxWorld<'_> {
     fn fighters(&self, scope: &TickScope) -> Vec<Fighter> {
-        self.ctx
-            .db
-            .game_melee_attack()
-            .iter()
-            .filter_map(|a| {
-                tick::movable_creature(self.ctx, a.attacker_guid, scope).map(|c| Fighter {
-                    guid: c.guid,
-                    victim: a.target_guid,
-                })
+        use crate::game_threat;
+        let melee = self.ctx.db.game_melee_attack();
+        let mut candidates = melee.iter().map(|a| a.attacker_guid).collect::<Vec<_>>();
+        candidates.extend(self.ctx.db.game_threat().iter().map(|t| t.creature_guid));
+        candidates.sort_unstable();
+        candidates.dedup();
+        candidates
+            .into_iter()
+            .filter_map(|guid| {
+                let c = tick::movable_creature(self.ctx, guid, scope)?;
+                (crate::creatures::react_state(self.ctx, guid)
+                    != crate::creatures::CreatureReactState::Passive)
+                    .then(|| Fighter {
+                        guid: c.guid,
+                        victim: melee
+                            .attacker_guid()
+                            .find(guid)
+                            .map_or(0, |a| a.target_guid),
+                    })
             })
             .collect()
     }
@@ -900,6 +914,12 @@ impl ThreatSink for CtxWorld<'_> {
     }
     fn retarget(&mut self, creature: u64, victim: u64) {
         let melee = self.ctx.db.game_melee_attack();
+        if melee.attacker_guid().find(creature).is_none() {
+            if !crate::spell::is_action_blocked(self.ctx, creature) {
+                crate::combat::resume_creature_engagement(self.ctx, creature, victim);
+            }
+            return;
+        }
         if let Some(mut row) = melee.attacker_guid().find(creature) {
             row.target_guid = victim;
             crate::combat::MeleeAttack::update(self.ctx, row);

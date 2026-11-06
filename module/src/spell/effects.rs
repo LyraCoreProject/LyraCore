@@ -7,6 +7,7 @@ use crate::game_melee_attack;
 use super::*;
 
 pub(crate) fn arm_spell_retaliation(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
+    crate::combat::engage_passive_creature(ctx, target_guid, caster_guid);
     let entities = ctx.db.game_world_entity();
     let caster_is_player = entities
         .guid()
