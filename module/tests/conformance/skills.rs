@@ -5,13 +5,23 @@ use wire_client::decode::Field;
 
 use super::{decoded_taxi_entry_packets, enter, fixture};
 
-fn import_spell_plan(shard: &Standalone) -> bool {
+fn import_spell_plan(shard: &Standalone, mut connection: Option<&mut ReducerConnection>) -> bool {
     let Some(path) = std::env::var_os("LYRACORE_SKILL_SPELL_PLAN") else {
         return false;
     };
     let statements: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    for statement in statements {
+    for (index, statement) in statements.into_iter().enumerate() {
         shard.assert_sql(&statement);
+        if index % 50 == 0 {
+            if let Some(connection) = connection.as_mut() {
+                connection
+                    .call(
+                        "native_world_receive",
+                        serde_json::json!([0x1dcu32, vec![0u8; 8]]),
+                    )
+                    .unwrap();
+            }
+        }
     }
     true
 }
@@ -27,7 +37,7 @@ fn racial_spells(shard: &Standalone) {
     shard.assert_sql(
         "INSERT INTO game_crit_per_agility (class_level,class,level,rate) VALUES (257,1,1,4.0)",
     );
-    if import_spell_plan(shard) {
+    if import_spell_plan(shard, None) {
         return;
     }
     for (spell, name, lines) in [
@@ -158,7 +168,7 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET agility = 20 WHERE guid = {guid}"
     ));
-    let imported = import_spell_plan(&shard);
+    let imported = import_spell_plan(&shard, Some(&mut connection));
     if !imported {
         skill_spell(&shard, 7515, "Increased Defense", 95, 3, 192, false);
         skill_spell(&shard, 27720, "Buttermilk Delight", 95, 13, 0, false);
@@ -204,7 +214,7 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
     shard.assert_call("debug_repair_after_publish", &[]);
     assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 5, 13, 0));
     if imported {
-        import_spell_plan(&shard);
+        import_spell_plan(&shard, Some(&mut reconnect));
     } else {
         shard.assert_sql(
             "UPDATE game_spell_effect SET kind = 189, equip_supported = true WHERE spell_id = 7515",
@@ -304,7 +314,7 @@ fn ranged_skill_caps_and_empty_slots_survive_repair_and_reconnect() {
 fn a_skill_aura_does_not_grant_a_profession_but_applies_when_the_skill_is_learned() {
     use super::buy_in_slot::{grant, request, stage};
     let (shard, mut connection, guid, _) = stage("skill-profession-requirement");
-    if !import_spell_plan(&shard) {
+    if !import_spell_plan(&shard, Some(&mut connection)) {
         skill_spell(&shard, 7824, "Blacksmithing Skill +10", 164, 10, 128, false);
     }
     shard.assert_call("debug_learn_spell", &[&guid.to_string(), "7824"]);
