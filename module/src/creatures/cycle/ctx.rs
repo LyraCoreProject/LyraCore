@@ -1320,10 +1320,6 @@ impl CreatureWorld for CtxWorld<'_> {
     fn run_due_world_maintenance(&mut self) -> Vec<(&'static str, u64)> {
         vec![
             ("energy*", crate::combat::regenerate_energy(self.ctx) as u64),
-            (
-                "regeneration*",
-                crate::combat::regenerate_characters(self.ctx) as u64,
-            ),
             ("decay*", tick::pass_decay(self.ctx) as u64),
             ("respawn*", tick::pass_respawn(self.ctx) as u64),
             (

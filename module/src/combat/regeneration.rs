@@ -155,14 +155,13 @@ impl Bonuses {
     }
 }
 
-pub(crate) fn regenerate_characters(ctx: &ReducerContext) -> usize {
+pub(super) fn regenerate_characters(ctx: &ReducerContext) -> usize {
     let now = now_ms(ctx);
     let recovering: Vec<_> = ctx
         .db
         .game_world_entity()
-        .by_regeneration_pending()
-        .filter(true)
-        .filter(|e| e.is_player())
+        .by_regeneration_type()
+        .filter((lyracore_shared::constants::type_mask::PLAYER, true))
         .collect();
     let mut credited = 0;
     for mut e in recovering {

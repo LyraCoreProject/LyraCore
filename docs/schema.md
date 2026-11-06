@@ -951,6 +951,6 @@ regeneration by 1.5; polymorph uses 10% maximum health per tick before HP5.
 and next tick deadline. Full pools do not accumulate credit before a new deficit.
 It starts empty, travels with the Character across Transfer, and resets on a fresh login.
 Character deletion removes the row.
-Regeneration selects only the indexed entities with a deficit and reads each unit's indexed Auras;
+Regeneration selects Character deficits through the composite type/pending index and reads indexed Auras;
 it adds no whole-table scan. The source mana rates have no dedicated 5875 update fields. Health
 and power changes use the ordinary unit field updates.
