@@ -10,17 +10,15 @@ fn import_spell_plan(shard: &Standalone, mut connection: Option<&mut ReducerConn
         return false;
     };
     let statements: Vec<String> = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
-    for (index, statement) in statements.into_iter().enumerate() {
+    for statement in statements {
         shard.assert_sql(&statement);
-        if index % 50 == 0 {
-            if let Some(connection) = connection.as_mut() {
-                connection
-                    .call(
-                        "native_world_receive",
-                        serde_json::json!([0x1dcu32, vec![0u8; 8]]),
-                    )
-                    .unwrap();
-            }
+        if let Some(connection) = connection.as_mut() {
+            connection
+                .call(
+                    "native_world_receive",
+                    serde_json::json!([0x1dcu32, vec![0u8; 8]]),
+                )
+                .unwrap();
         }
     }
     true
