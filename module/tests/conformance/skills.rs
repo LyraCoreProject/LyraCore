@@ -173,6 +173,57 @@ fn cast(shard: &Standalone, connection: &mut ReducerConnection, spell: u32) {
     );
 }
 
+fn swing_hit_info(
+    shard: &Standalone,
+    connection: &mut ReducerConnection,
+    guid: u64,
+    target: u64,
+) -> u64 {
+    use super::buy_in_slot::request;
+    shard.assert_sql(&format!(
+        "DELETE FROM game_conformance_swing_random WHERE character_guid = {guid}"
+    ));
+    shard.assert_sql(&format!(
+        "INSERT INTO game_conformance_swing_random (character_guid,state) VALUES ({guid},7875)"
+    ));
+    request(connection, 0x141, target.to_le_bytes().to_vec());
+    connection
+        .call("debug_advance_roll_batch", serde_json::json!([4]))
+        .unwrap();
+    connection
+        .call(
+            "native_world_receive",
+            serde_json::json!([0x1dcu32, vec![0u8; 8]]),
+        )
+        .unwrap();
+    let packets = connection.drain_packets();
+    let hits: Vec<_> = packets
+        .into_iter()
+        .filter_map(|row| {
+            let super::Packet(_, _, (tag, opcode), body, _, _, _) =
+                serde_json::from_str(row.get()).unwrap();
+            if tag != 0 || serde_json::from_str::<u16>(opcode.get()).unwrap() != 0x14a {
+                return None;
+            }
+            let body: Vec<_> = (0..body.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&body[i..i + 2], 16).unwrap())
+                .collect();
+            let packet = wire_client::decode::decode(0x14a, &body).unwrap();
+            if packet.fields.get("attacker") != Some(&Field::Guid(guid)) {
+                return None;
+            }
+            match packet.fields.get("hit_info") {
+                Some(Field::Unsigned(info)) => Some(*info),
+                other => panic!("swing flags missing: {other:?}"),
+            }
+        })
+        .collect();
+    request(connection, 0x142, vec![]);
+    assert_eq!(hits.len(), 1, "expected one native white swing: {hits:?}");
+    hits[0]
+}
+
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_progress() {
@@ -250,6 +301,22 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
     ))[0]["sheet_crit_bp"]
         .parse::<u32>()
         .unwrap();
+    shard.assert_call("debug_spawn_at_feet", &[&guid.to_string(), "51000", "2"]);
+    let target = shard
+        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .into_iter()
+        .map(|row| row["guid"].parse::<u64>().unwrap())
+        .max()
+        .unwrap();
+    shard.assert_sql(&format!("UPDATE game_world_entity SET level = 20,health = 100000,max_health = 100000 WHERE guid = {target}"));
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_ai_state SET melee_enabled = false WHERE creature_guid = {target}"
+    ));
+    // Seed 7875 draws 2490: above the 2380/2480 miss bands, below the reduced-skill band 2500.
+    assert_eq!(
+        swing_hit_info(&shard, &mut reconnect, guid, target) & 0x10,
+        0
+    );
     cast(&shard, &mut reconnect, 7038);
     let reduction = shard.query_rows(&format!("SELECT eff_kind,eff_p0,amount FROM game_aura WHERE target_guid = {guid} AND spell_id = 7038"));
     assert_eq!(
@@ -275,10 +342,23 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
         ))[0]["sheet_crit_bp"],
         (before_crit - if imported { 24 } else { 4 }).to_string()
     );
+    assert_eq!(
+        swing_hit_info(&shard, &mut reconnect, guid, target) & 0x10,
+        0x10
+    );
+    shard.assert_call("debug_clear_creatures", &["0"]);
+    let defense_current = shard.query_rows(&format!(
+        "SELECT current FROM game_player_skill WHERE character_guid = {guid} AND skill_line = 95"
+    ))[0]["current"]
+        .parse::<u16>()
+        .unwrap();
     request(&mut reconnect, 0x10c, vec![255, 23, 255, 10]);
     request(&mut reconnect, 0x10c, vec![255, 24, 255, 11]);
     let mut reconnect = enter(&shard, guid);
-    assert_eq!(skill(&fields(&mut reconnect, guid), 95), (1, 100, 13, 0));
+    assert_eq!(
+        skill(&fields(&mut reconnect, guid), 95),
+        (defense_current, 100, 13, 0)
+    );
     let duration_ms = [27720, 7038]
         .into_iter()
         .map(|spell| {
@@ -298,7 +378,7 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
     }
     let mut reconnect = enter(&shard, guid);
     let values = fields(&mut reconnect, guid);
-    assert_eq!(skill(&values, 95), (1, 100, 0, 0));
+    assert_eq!(skill(&values, 95), (defense_current, 100, 0, 0));
     assert_eq!(
         skill(&values, 43),
         (1, 100, 0, if imported { 5 } else { 0 })
