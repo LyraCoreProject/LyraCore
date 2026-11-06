@@ -18,6 +18,8 @@ pub(crate) use lyracore_shared::aura::move_speed_with_pct;
 
 #[cfg(feature = "conformance_test_fixture")]
 pub(crate) use engage::check_combat;
+#[cfg(feature = "conformance_test_fixture")]
+pub use engage::game_combat_check_schedule;
 #[cfg(test)]
 pub(crate) use engage::COMBAT_DROP_MS;
 pub(crate) use engage::{
@@ -30,9 +32,9 @@ pub(crate) use engage::{
     SWING_ERROR_BAD_FACING, SWING_ERROR_NONE, SWING_ERROR_NOT_IN_RANGE,
 };
 pub use engage::{
-    game_combat_check_schedule, game_combat_event, game_combat_event_live, game_melee_attack,
-    game_melee_schedule, game_ranged_impact_schedule, AttackStart, CombatEvent, MeleeAttack,
-    MeleeSchedule, RangedImpactSchedule,
+    game_combat_event, game_combat_event_live, game_melee_attack, game_melee_schedule,
+    game_ranged_impact_schedule, AttackStart, CombatEvent, MeleeAttack, MeleeSchedule,
+    RangedImpactSchedule,
 };
 pub(crate) use folds::{
     arm_react, attack_power_modifiers, aura_attack_power_bonus, clear_queued_strike,
