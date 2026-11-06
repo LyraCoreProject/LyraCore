@@ -143,17 +143,26 @@ fn skill_spell(
 fn cast(shard: &Standalone, connection: &mut ReducerConnection, spell: u32) {
     let mut body = spell.to_le_bytes().to_vec();
     body.extend(0u16.to_le_bytes());
-    connection
-        .call("native_world_receive", serde_json::json!([0x12eu32, body]))
+    if let Err(reason) =
+        connection.call("native_world_receive", serde_json::json!([0x12eu32, body]))
+    {
+        let replies: Vec<(u16, Vec<u8>)> =
+            serde_json::from_str(reason.strip_prefix("native_reply:").expect(&reason)).unwrap();
+        connection
+            .call("native_world_reply", serde_json::json!([replies]))
+            .unwrap();
+    }
+    let header = shard
+        .query_rows(&format!(
+            "SELECT cast_time_ms,gcd_ms FROM game_spell WHERE spell_id = {spell}"
+        ))
+        .pop()
         .unwrap();
-    let cast_ms: u32 = shard.query_rows(&format!(
-        "SELECT cast_time_ms FROM game_spell WHERE spell_id = {spell}"
-    ))[0]["cast_time_ms"]
-        .parse()
-        .unwrap();
+    let cast_ms = header["cast_time_ms"].parse::<u32>().unwrap();
+    let gcd_ms = header["gcd_ms"].parse::<u32>().unwrap();
     shard.assert_call(
         "debug_advance_roll_batch",
-        &[&cast_ms.div_ceil(50).max(1).to_string()],
+        &[&cast_ms.max(gcd_ms).div_ceil(50).max(1).to_string()],
     );
 }
 
