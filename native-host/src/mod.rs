@@ -168,6 +168,11 @@ async fn attach(
         connected,
     )
     .await;
+    static RUNTIME_ID: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
+    let runtime_id = *RUNTIME_ID.get_or_init(|| u128::from_le_bytes(entropy()));
+    call(&client, "native_vendor_stock_runtime", &(runtime_id,))
+        .await?
+        .into_result()?;
     Ok(Shard {
         client,
         deliveries,

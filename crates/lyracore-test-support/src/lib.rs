@@ -263,6 +263,10 @@ impl Standalone {
         &self.database
     }
 
+    pub fn cli_config_path(&self) -> &Path {
+        &self.cli_config
+    }
+
     pub fn module_logs(&self, lines: usize) -> Output {
         self.command()
             .args([

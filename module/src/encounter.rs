@@ -664,6 +664,7 @@ pub(crate) fn encounter_reset_full(
 fn despawn_tracked(ctx: &ReducerContext, tracked: &[EncounterSpawn]) {
     for t in tracked {
         crate::creatures::despawn_creature_entity(ctx, t.guid);
+        crate::items::vendor_stock::forget(ctx, t.guid);
         ctx.db.game_creature_spawn().guid().delete(t.guid);
         EncounterEquip::delete(ctx, t.guid);
         ctx.db.game_encounter_spawn().id().delete(t.id);

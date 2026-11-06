@@ -343,9 +343,11 @@ had 20,034 item rows, a highest entry of 25,818, and no entries in this range. T
 the 24-bit creature-entry limit, 16,777,215. Creature, gameobject and quest template allocation can
 use this range later; this reducer allocates only item entries.
 
-Imports must not write template entries in this range. The items importer refuses such a source
-row before it emits SQL. An items import still removes Operator-created items when it clears the
-item table. After that import, a later create can reuse their entries.
+Imports must not write template entries at or above this range's floor. The items importer refuses
+such a source row before it emits SQL. An items import preserves these templates and their loot
+and vendor references, so a later create cannot reuse their entries. Before applying a plan, it
+checks owned Items and retained references for missing templates and retained row IDs for import
+collisions. See [vendor stock migration](danger-zones.md#vendor-stock-migration) before reimporting.
 
 The reducer returns no entry. Read new rows in the range after the call, or use the create log line
 to distinguish concurrent Operator calls. Later edits in the same batch can refer to an entry that

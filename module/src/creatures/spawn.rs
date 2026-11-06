@@ -738,6 +738,7 @@ pub fn import_creature_spawns(ctx: &ReducerContext, packed: String) -> Result<()
         if source_guid != 0 {
             crate::instance::remove_spawn_waypoints(ctx, guid);
         }
+        crate::items::vendor_stock::forget(ctx, guid);
         spawns.guid().delete(guid);
     }
     crate::threat::clear_all(ctx);

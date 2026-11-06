@@ -13,6 +13,13 @@ creature defense flags. Both are new catalogues. See the [white melee migration]
 before publishing to an existing Realm. The private `game_missing_crit_catalogue` singleton records
 the first missing crit rate and suppresses repeat warnings while the previous formula is in use.
 
+`game_npc_vendor.restock_seconds` and `stock_flags` default to zero, preserving legacy purchases
+until the items reimport. The private `game_vendor_stock` key combines spawn GUID and item entry;
+an open-world entry choice uses its source spawn GUID, while Instance copies keep their own GUID.
+Counts and whole-second timestamps are shared by all Characters buying from that spawn.
+`game_vendor_stock_runtime` records the Host process identity that owns those counters.
+See [vendor stock migration](danger-zones.md#vendor-stock-migration) for lifetime and import rules.
+
 ## 1. Conventions
 
 - **Naming.** Core tables take the `game_` prefix; Package tables take `pkg_<name>_`. External

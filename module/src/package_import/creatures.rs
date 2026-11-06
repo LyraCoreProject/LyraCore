@@ -119,6 +119,7 @@ pub(super) fn clear_package_range(ctx: &ReducerContext) {
     for guid in package_guids {
         crate::instance::remove_spawn_copies(ctx, guid);
         crate::creatures::despawn_creature_entity(ctx, guid);
+        crate::items::vendor_stock::forget(ctx, guid);
         spawns.guid().delete(guid);
     }
 

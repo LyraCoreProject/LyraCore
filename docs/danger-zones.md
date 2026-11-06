@@ -90,6 +90,57 @@ The first run on a Shard with Mail from before the Mail Timer applies the vanill
 its sender or is deleted with its copper, at 100 Mail a second. That is a maintainer decision, not
 a fault.
 
+### Vendor stock migration
+
+`game_npc_vendor` end-appends `restock_seconds` and `stock_flags` with typed zero defaults.
+The private `game_vendor_stock` and `game_vendor_stock_runtime` tables start empty. Publish the
+Module before starting the updated Native Host: its first connection announces a process identity
+through `native_vendor_stock_runtime`. A new process identity clears stock; reconnects and Module
+publication within one Host process retain it. An older Module lacks that reducer and the updated
+Host refuses the connection. No native delivery row or existing reducer argument changes. Upgrade both Module and Host for
+restart resets; an older Host does not announce a new process.
+
+Reimport the `items` Import Family once, with the updated importer, to gain stock and restock on
+an existing Realm. This is one cold import of the source item catalogue, creature loot and vendor
+offers; it clears current stock counters. Item templates at or above the Operator Template Range
+floor survive, including Operator-created items. Loot and offers that refer to those item entries
+or creature entries survive too. Imported rows must not collide with their retained row IDs.
+Before its first write, the importer refuses a plan that would leave any owned Item or retained
+loot/offer without an item template. A source entry removed from the new catalogue can therefore
+block the import; resolve it through a reviewed content migration before retrying. These checks
+assume a cold import with no concurrent content edits or Item grants.
+Package claims replay only when `--packages` is supplied; replay does not restore Operator edits.
+With that flag, the same preflight also refuses removal of an owned or referenced Package Item
+template that the enabled Package claims would not restore.
+The import does not replace Characters or their owned Items. Supply the same client Data directory
+(`--dbc`) required by the items import's Random Property validation; no separate DBC catalogue
+reimport is needed for vendor stock.
+Without that reimport, the zero restock interval preserves today's purchases: the list shows the
+configured maximum and purchases do not consume stock. Seeded and authored offers with a zero
+interval keep that behavior. Direct SQL INSERTs must supply both appended columns; shared import
+SQL defaults fill older inserts. Rust Packages that construct `NpcVendor` must supply both fields.
+
+Stock belongs to a vendor spawn and item, independently of other spawns with the same entry or
+shared offers. Ordinary death, corpse removal and respawn retain stock and elapsed time. Removing
+the spawn or its Instance discards stock. These lifetimes follow the in-memory creature object in
+vmangos; LyraCore does not implement vmangos grid unloading. Server restart restores full stock.
+The counter is lazy: each elapsed interval restores `buy_count` items, capped at the maximum.
+A partial refill observed by a list read or buy check resets its timestamp to that request,
+discarding the remainder. A refused buy can still observe restock, including this timestamp reset.
+It never pays for, stores or consumes the refused purchase. A failure during storage commit rolls
+back the payment, stock debit and queued acknowledgement together.
+A successful purchase resets the timestamp and selects the next interval. Offer flag 1 selects
+80 through 120 percent of the interval; flag 2 scales it above 2500 active, unqueued World Sessions.
+Integer truncation occurs after each scaling operation. A computed zero interval is floored to one
+second to avoid the Reference Server's division by zero for such source inputs, as agreed by the
+maintainer.
+
+These rules come from `Creature::GetVendorItemCurrentCount`, `UpdateVendorItemCurrentCount`,
+`VendorItemCount` and the creature destructor at
+[vmangos d9173eca](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Creature.cpp).
+List zero counts remain visible, as in
+[`SendListInventory`](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/ItemHandler.cpp).
+
 ### Buyback migration
 
 `game_buyback_item` and `game_buyback_state` are new private tables. Existing table layouts and the

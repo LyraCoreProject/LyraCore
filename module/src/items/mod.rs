@@ -8,6 +8,7 @@ mod properties;
 mod rules;
 mod tables;
 mod temporary_enchantment;
+pub(crate) mod vendor_stock;
 
 use lyracore_shared::item::ItemRefusal;
 

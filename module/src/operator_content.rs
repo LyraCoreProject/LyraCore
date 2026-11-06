@@ -384,6 +384,7 @@ fn delete_creature(ctx: &ReducerContext, guid: u64) -> Result<String, String> {
     retire_live_creature(ctx, guid);
     crate::instance::remove_spawn_copies(ctx, guid);
     crate::instance::remove_spawn_waypoints(ctx, guid);
+    crate::items::vendor_stock::forget(ctx, guid);
     ctx.db.game_creature_spawn().guid().delete(guid);
     Ok(format!(
         "deleted creature spawn {guid}: {} with {route} waypoint(s)",
@@ -657,6 +658,7 @@ fn retire_live_creature(ctx: &ReducerContext, guid: u64) {
     for copy in copies {
         crate::creatures::despawn_creature_entity(ctx, copy);
         crate::instance::remove_spawn_waypoints(ctx, copy);
+        crate::items::vendor_stock::forget(ctx, copy);
         spawns.guid().delete(copy);
     }
 }

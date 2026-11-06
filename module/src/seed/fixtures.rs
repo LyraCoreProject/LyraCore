@@ -1227,6 +1227,8 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             item_entry: FIXTURE_BLADE,
             slot: 0,
             max_count: 0,
+            restock_seconds: 0,
+            stock_flags: 0,
         });
     }
     if !vendor_rows
@@ -1241,6 +1243,8 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             item_entry: FIXTURE_JERKY,
             slot: 1,
             max_count: 0,
+            restock_seconds: 0,
+            stock_flags: 0,
         });
     }
 

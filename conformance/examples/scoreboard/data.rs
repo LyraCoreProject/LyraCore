@@ -109,8 +109,8 @@ fn coverage_keeps_ledger_gaps_and_source_occurrences_separate() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ledger = FeatureLedger::load(&root.join("features"))?;
     let coverage = coverage(&ledger)?;
-    assert_eq!(coverage.gaps.data_import, 2336);
-    assert_eq!(coverage.gaps.behavior, 87);
+    assert_eq!(coverage.gaps.data_import, 2334);
+    assert_eq!(coverage.gaps.behavior, 90);
     assert_eq!(
         coverage.systems["spells"].by_source["module/src/creatures/cycle/mod.rs"].behavior,
         1
