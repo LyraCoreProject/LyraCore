@@ -267,6 +267,7 @@ pub(super) fn item_template(t: crate::items::ItemTemplate) -> codec::ItemTemplat
         max_stack: t.max_stack,
         damage_min: t.damage_min,
         damage_max: t.damage_max,
+        damage_school: t.damage_school,
         delay_ms: t.delay_ms,
         stat_strength: t.stat_strength,
         stat_agility: t.stat_agility,

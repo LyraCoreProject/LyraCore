@@ -34,3 +34,10 @@ game_world_entity sheet_ranged_dmg_min_fraction 0.0
 game_world_entity sheet_ranged_dmg_max_fraction 0.0
 game_world_entity sheet_ranged_crit_bp 0
 game_active_taxi_flight first_destination_node_index 1
+game_spell equipped_item_class -1
+game_spell equipped_item_subclass_mask 0
+game_spell equipped_item_inventory_mask 0
+game_spell attributes_ex_3 0
+game_spell attributes_ex_4 0
+game_spell damage_class 0
+game_item_template damage_school 0

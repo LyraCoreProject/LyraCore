@@ -200,7 +200,11 @@ pub(crate) fn armor_mitigation_pct(armor: u32, attacker_level: u32) -> u32 {
 }
 
 pub(crate) fn armor_mitigated(damage: u32, mitigation_pct: u32) -> u32 {
-    (damage * (100 - mitigation_pct) / 100).max(1)
+    if damage == 0 {
+        0
+    } else {
+        (damage * (100 - mitigation_pct) / 100).max(1)
+    }
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -1356,5 +1360,13 @@ mod tests {
             assert_eq!(apply_offhand_penalty(0, 1), (1, 1));
             assert_eq!(apply_offhand_penalty(0, 0), (1, 1));
         }
+    }
+}
+
+#[cfg(test)]
+mod zero_damage_tests {
+    #[test]
+    fn a_flat_reduction_can_remove_all_physical_damage_before_armor() {
+        assert_eq!(super::armor_mitigated(0, 50), 0);
     }
 }

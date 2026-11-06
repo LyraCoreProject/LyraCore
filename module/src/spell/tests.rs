@@ -258,29 +258,6 @@ fn effect_amount_scales() {
 }
 
 #[test]
-fn int_spell_power_gates_at_floor() {
-    assert_eq!(int_spell_power(0), 0);
-    assert_eq!(int_spell_power(INT_SPELL_POWER_BASE), 0);
-    assert_eq!(int_spell_power(INT_SPELL_POWER_BASE - 1), 0);
-    assert_eq!(int_spell_power(20 + 5), 1);
-    assert_eq!(int_spell_power(20 + 9), 1);
-    assert_eq!(int_spell_power(20 + 10), 2);
-    assert_eq!(int_spell_power(150), 26);
-}
-
-#[test]
-fn compose_magnitude_scales_with_spell_power() {
-    assert_eq!(compose_magnitude(20, 0, SPELL_POWER_COEFF_PCT), 20);
-    assert_eq!(compose_magnitude(50, 0, SPELL_POWER_COEFF_PCT), 50);
-    assert_eq!(compose_magnitude(20, 26, 100), 46);
-    assert_eq!(compose_magnitude(50, 26, 100), 76);
-    assert_eq!(compose_magnitude(20, 26, 50), 33);
-    assert_eq!(compose_magnitude(-5, 26, 100), 21);
-    assert_eq!(compose_magnitude(20, 26, 0), 20);
-    assert_eq!(compose_magnitude(20, -100, 100), 20);
-}
-
-#[test]
 fn absorb_draw_soaks_then_overflows() {
     assert_eq!(absorb_draw(100, 20), (20, 80, 0));
     assert_eq!(absorb_draw(20, 20), (20, 0, 0));
@@ -336,7 +313,7 @@ fn aura_moves_vitals_gate() {
     assert!(aura_moves_vitals(A_MOD_STAT, STAT_ALL as i32));
     assert!(!aura_moves_vitals(A_MOD_STAT, STAT_STR as i32));
     assert!(!aura_moves_vitals(A_MOD_STAT, STAT_AGI as i32));
-    assert!(!aura_moves_vitals(A_MOD_STAT, STAT_SPI as i32));
+    assert!(aura_moves_vitals(A_MOD_STAT, STAT_SPI as i32));
     assert!(!aura_moves_vitals(A_MOD_COMBAT, STAT_STA as i32));
     assert!(!aura_moves_vitals(A_PERIODIC_DAMAGE, STAT_INT as i32));
     assert!(!aura_moves_vitals(A_MOD_RESISTANCE, STAT_ALL as i32));

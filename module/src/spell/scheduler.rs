@@ -346,12 +346,30 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     .find(a.spell_id)
                     .map(|s| s.school_mask)
                     .unwrap_or(0);
+                let points = ctx
+                    .db
+                    .game_spell()
+                    .spell_id()
+                    .find(a.spell_id)
+                    .zip(ctx.db.game_spell_effect().id().find(a.effect_id))
+                    .map_or(a.amount, |(hdr, effect)| {
+                        let damage = bonuses::spell_damage_taken(
+                            ctx,
+                            &hdr,
+                            &effect,
+                            a.caster_guid,
+                            a.target_guid,
+                            lyracore_shared::aura::stacked_amount(a.amount, a.stacks) as f32,
+                            a.stacks,
+                        );
+                        bonuses::round_damage(ctx, a.target_guid, damage)
+                    });
                 let amount = resist_magic_damage(
                     ctx,
                     a.target_guid,
                     school,
                     a.level as u32,
-                    a.amount,
+                    points,
                     a.spell_id,
                     true,
                 );
@@ -360,7 +378,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     SpellCastEvent {
                         damage: amount.max(0) as u32,
                         school: crate::spell::school_index(school),
-                        resisted: a.amount.saturating_sub(amount).max(0) as u32,
+                        resisted: points.saturating_sub(amount).max(0) as u32,
                         ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
                     },
                 );
@@ -430,13 +448,33 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     .get(&a.target_guid)
                     .copied()
                     .unwrap_or(target.health);
-                let new_health = healed_value(cur, target.max_health, a.amount);
+                let healing = lyracore_shared::aura::stacked_amount(a.amount, a.stacks);
+                let healing = ctx
+                    .db
+                    .game_spell()
+                    .spell_id()
+                    .find(a.spell_id)
+                    .zip(ctx.db.game_spell_effect().id().find(a.effect_id))
+                    .map_or(healing, |(hdr, effect)| {
+                        bonuses::round_damage(
+                            ctx,
+                            a.target_guid,
+                            bonuses::healing_taken(
+                                ctx,
+                                &hdr,
+                                &effect,
+                                a.target_guid,
+                                healing as f32,
+                            ),
+                        )
+                    });
+                let new_health = healed_value(cur, target.max_health, healing);
                 pending.insert(a.target_guid, new_health);
                 if cur < target.max_health {
                     crate::spell::SpellCastEvent::insert(
                         ctx,
                         SpellCastEvent {
-                            healed: a.amount.max(0) as u32,
+                            healed: healing.max(0) as u32,
                             ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
                         },
                     );

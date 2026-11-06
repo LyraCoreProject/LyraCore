@@ -222,8 +222,7 @@ creature object loaded; this does not implement grid unloading or change vendor 
 
 The seven END-appended source fields on `game_spell` and five category overrides on
 `game_item_template` default to zero. Reimport `spell` and `items` before play resumes so equip
-effects retain their forms, visibility, duration and category cooldown rules. No new spell effects
-are implemented.
+effects retain their forms, visibility, duration and category cooldown rules.
 
 Reimport `spell` after the passive visibility update to retain party and pet area-aura origins in
 `game_spell.cast_flags`. The translated target alone cannot recover that distinction. After the
@@ -259,9 +258,15 @@ application times and remaining durations stay frozen, apart from the unit conve
 debuff slots follow the current definition. Missing learned passives are restored without stacking
 existing effects. No manual Aura cleanup or recast is required. Repeating repair is idempotent.
 Unsupported cast modifiers retain ordinary Aura holders with inert numeric effects; this includes
-flat school damage, damage shields, flat incoming damage and incoming healing. Reflection and flat
-spell damage remain unimplemented. Older Package Deltas default to inert equip effects; an author
-must supply a supported claim.
+damage shields and the other source types listed as inert in the equip audit. Flat school damage,
+incoming school damage, incoming healing and school crit are active after the spell-power update.
+Reimport `spell` to fill the six END-appended source equipment, attribute and damage-class fields
+and derive missing coefficients. Equipment class defaults to -1 (unrestricted); the other new
+columns default to zero. Reimport `items` to populate the zero-default END column
+`game_item_template.damage_school` from `dmg_type1`. The zero-default END column
+`game_ranged_impact_schedule.school` freezes the damage school at launch. Run publish repair
+after reimport to refresh both cast and equip auras. Older Package Deltas default to inert equip
+effects; an author must supply a supported claim.
 
 `game_world_entity` END-appends `sheet_ap_modifiers` and `sheet_ranged_ap_modifiers` with
 zero defaults. These derived projections pack the positive signed-16 modifier in the low half

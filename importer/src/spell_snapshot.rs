@@ -44,6 +44,12 @@ pub(crate) struct SpellHeaderRow {
     pub(crate) duration_index: u32,
     pub(crate) category: u32,
     pub(crate) category_cooldown_ms: u32,
+    pub(crate) equipped_item_class: i32,
+    pub(crate) equipped_item_subclass_mask: u32,
+    pub(crate) equipped_item_inventory_mask: u32,
+    pub(crate) attributes_ex_3: u32,
+    pub(crate) attributes_ex_4: u32,
+    pub(crate) damage_class: u8,
 }
 
 impl SpellHeaderRow {
@@ -87,6 +93,21 @@ impl SpellHeaderRow {
                 "category_cooldown_ms",
                 FieldValue::U32(self.category_cooldown_ms),
             ),
+            (
+                "equipped_item_class",
+                FieldValue::I32(self.equipped_item_class),
+            ),
+            (
+                "equipped_item_subclass_mask",
+                FieldValue::U32(self.equipped_item_subclass_mask),
+            ),
+            (
+                "equipped_item_inventory_mask",
+                FieldValue::U32(self.equipped_item_inventory_mask),
+            ),
+            ("attributes_ex_3", FieldValue::U32(self.attributes_ex_3)),
+            ("attributes_ex_4", FieldValue::U32(self.attributes_ex_4)),
+            ("damage_class", FieldValue::U8(self.damage_class)),
         ]
     }
 
@@ -347,6 +368,12 @@ mod tests {
             duration_index: 0,
             category: 0,
             category_cooldown_ms: 0,
+            equipped_item_class: -1,
+            equipped_item_subclass_mask: 0,
+            equipped_item_inventory_mask: 0,
+            attributes_ex_3: 0,
+            attributes_ex_4: 0,
+            damage_class: 0,
         }
     }
 

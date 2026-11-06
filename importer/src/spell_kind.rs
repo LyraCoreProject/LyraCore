@@ -95,7 +95,11 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         ModAttackPower | ModRangedAttackPower => A_MOD_COMBAT,
         ModCritPercent | ModSpellCritChance => A_MOD_COMBAT,
         ModHitChance => A_MOD_COMBAT,
-        ModDamagePercentDone | ModDamageDoneCreature | ModDamageDoneVersus => A_MOD_COMBAT,
+        ModDamageDone => A_MOD_DAMAGE_DONE_FLAT,
+        ModDamageTaken => A_MOD_DAMAGE_TAKEN_FLAT,
+        ModDamagePercentDone => A_MOD_DAMAGE_DONE_PCT,
+        ModSpellCritChanceSchool => A_MOD_SCHOOL_CRIT,
+        ModHealing => A_MOD_HEALING_TAKEN,
         ModHealingDone => A_MOD_HEALING,
         ModDodgePercent | ModTotalThreat | ModThreat => A_MOD_COMBAT,
 
@@ -180,7 +184,9 @@ pub fn equip_aura_supported(aura: u32, misc: u32, equipment: [u32; 3]) -> bool {
     use AuraMod::*;
     match AuraMod::from_int(aura).ok() {
         Some(ModStat) => misc <= 4 || misc == u32::MAX,
-        Some(ModResistance) => misc != 0 && misc & !0x7f == 0,
+        Some(ModResistance | ModDamageDone | ModDamageTaken | ModSpellCritChanceSchool) => {
+            misc != 0 && misc & !0x7f == 0
+        }
         Some(ModCritPercent) => equipment[0] == u32::MAX,
         Some(
             ModHitChance | ModAttackPower | ModRangedAttackPower | ModHealingDone

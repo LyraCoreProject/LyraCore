@@ -55,20 +55,6 @@ pub(crate) fn effect_amount(
     scaled + die
 }
 
-pub(crate) fn int_spell_power(effective_int: i32) -> i32 {
-    let above = (effective_int - INT_SPELL_POWER_BASE).max(0);
-    if INT_PER_SPELL_POWER <= 0 {
-        0
-    } else {
-        above / INT_PER_SPELL_POWER
-    }
-}
-
-pub(crate) fn compose_magnitude(base_points: i32, spell_power: i32, coeff_pct: i32) -> i32 {
-    let sp = spell_power.max(0);
-    base_points + sp * coeff_pct / 100
-}
-
 pub(crate) fn apply_spell_crit(dmg: i32, is_crit: bool) -> i32 {
     if is_crit {
         dmg * 3 / 2
@@ -364,15 +350,12 @@ pub(crate) fn detect_range_mod(ctx: &ReducerContext, unit_guid: u64) -> f32 {
 }
 
 pub(crate) fn damage_taken_bonus(ctx: &ReducerContext, target_guid: u64) -> i32 {
-    let aura_pct = sum_active_auras(ctx, target_guid, |a| a.eff_kind == A_MOD_DAMAGE_TAKEN);
-    let stance_pct = ctx
-        .db
+    ctx.db
         .game_world_entity()
         .guid()
         .find(target_guid)
         .map(|t| stance_damage_taken_pct(t.stance))
-        .unwrap_or(0);
-    aura_pct + stance_pct
+        .unwrap_or(0)
 }
 
 pub(crate) fn apply_damage_pct(dmg: u32, pct: i32) -> u32 {
@@ -454,7 +437,7 @@ fn sum_active_auras(ctx: &ReducerContext, unit_guid: u64, pred: impl Fn(&Aura) -
 }
 
 pub(crate) fn spell_power(ctx: &ReducerContext, caster_guid: u64, school_mask: u8) -> i32 {
-    int_spell_power(effective_intellect(ctx, caster_guid))
+    bonuses::damage_power(ctx, caster_guid, school_mask)
         .saturating_add(combat_field_bonus(ctx, caster_guid, COMBAT_SPELL_POWER))
         .saturating_add(crate::items::equipped_school_stat_bonus(
             ctx,
@@ -465,7 +448,7 @@ pub(crate) fn spell_power(ctx: &ReducerContext, caster_guid: u64, school_mask: u
 }
 
 pub(crate) fn healing_power(ctx: &ReducerContext, caster_guid: u64, school_mask: u8) -> i32 {
-    spell_power(ctx, caster_guid, school_mask)
+    combat_field_bonus(ctx, caster_guid, COMBAT_SPELL_POWER)
         .saturating_add(sum_active_auras(ctx, caster_guid, |aura| {
             aura.eff_kind == A_MOD_HEALING && aura.eff_p0 & i32::from(school_mask) != 0
         }))
@@ -541,7 +524,10 @@ pub(crate) fn add_flat_pool_bonus(pool: u32, bonus: i32) -> u32 {
 }
 
 pub(crate) fn aura_moves_vitals(kind: u8, p0: i32) -> bool {
-    kind == A_MOD_STAT && (p0 == STAT_STA as i32 || p0 == STAT_INT as i32 || p0 == STAT_ALL as i32)
+    matches!(kind, A_MOD_STAT | A_MOD_STAT_PCT)
+        && [STAT_STA, STAT_INT, STAT_SPI, STAT_ALL]
+            .into_iter()
+            .any(|stat| p0 == i32::from(stat))
 }
 
 pub(crate) use lyracore_shared::aura::moves_sheet as aura_moves_sheet;
@@ -765,5 +751,18 @@ mod facing_tests {
     #[test]
     fn coincident_points_always_face() {
         assert!(is_facing(3.0, -4.0, 1.234, 3.0, -4.0));
+    }
+}
+
+#[cfg(test)]
+mod spirit_refresh_tests {
+    use super::*;
+
+    #[test]
+    fn spirit_and_percent_stat_auras_refresh_the_cached_vitals_and_sheet() {
+        for kind in [A_MOD_STAT, A_MOD_STAT_PCT] {
+            assert!(aura_moves_vitals(kind, i32::from(STAT_SPI)));
+            assert!(aura_moves_sheet(kind, i32::from(STAT_SPI)));
+        }
     }
 }

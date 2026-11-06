@@ -4323,3 +4323,19 @@ fn spell_9329_and_demoralizing_shout_keep_both_attack_power_halves_in_create_and
     assert_eq!(player.unit_attack_power_mods(), Some((16, (-35i16) as u16)));
     assert_eq!(player.unit_ranged_attack_power_mods(), Some((16, 0)));
 }
+
+#[test]
+fn school_damage_values_preserve_signed_bonuses_and_float_multipliers_without_type() {
+    let mut values = DamageBonusValues::default();
+    values.positive[2] = 20;
+    values.negative[0] = -3;
+    values.percent[0] = 1.3;
+    let (_, body) = build_damage_bonus_values(1, &values);
+    let updates = lyracore_shared::values_mask::parse_values_updates(&body);
+    let fields = &updates[0].fields;
+    assert!(!fields.iter().any(|(index, _)| *index == 2));
+    assert!(fields.contains(&(1203, 20)));
+    assert!(fields.contains(&(1208, (-3i32) as u32)));
+    assert!(fields.contains(&(1215, 1.3f32.to_bits())));
+    assert!(fields.contains(&(1221, 1.0f32.to_bits())));
+}

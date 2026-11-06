@@ -309,6 +309,12 @@ impl Table {
                     | "duration_index"
                     | "category"
                     | "category_cooldown_ms"
+                    | "equipped_item_class"
+                    | "equipped_item_subclass_mask"
+                    | "equipped_item_inventory_mask"
+                    | "attributes_ex_3"
+                    | "attributes_ex_4"
+                    | "damage_class"
             ) | (Self::SpellEffect, "bonus_coefficient" | "equip_supported")
         )
     }
@@ -373,6 +379,12 @@ const SPELL_COLUMNS: &[Column] = &[
     column("duration_index", FieldType::U32),
     column("category", FieldType::U32),
     column("category_cooldown_ms", FieldType::U32),
+    column("equipped_item_class", FieldType::I32),
+    column("equipped_item_subclass_mask", FieldType::U32),
+    column("equipped_item_inventory_mask", FieldType::U32),
+    column("attributes_ex_3", FieldType::U32),
+    column("attributes_ex_4", FieldType::U32),
+    column("damage_class", FieldType::U8),
 ];
 
 const SPELL_EFFECT_COLUMNS: &[Column] = &[
@@ -410,6 +422,7 @@ const ITEM_COLUMNS: &[Column] = &[
     column("max_stack", FieldType::U32),
     column("damage_min", FieldType::F32),
     column("damage_max", FieldType::F32),
+    column("damage_school", FieldType::U8),
     column("delay_ms", FieldType::U32),
     column("stat_strength", FieldType::I32),
     column("stat_agility", FieldType::I32),

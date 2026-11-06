@@ -43,12 +43,6 @@ impl EffectHit {
             ..Self::default()
         }
     }
-    fn heal(healed: u32) -> Self {
-        Self {
-            healed,
-            ..Self::default()
-        }
-    }
 }
 
 /// An absent target counts as equal level.
@@ -381,7 +375,17 @@ pub(crate) fn aura_apply(
         } else {
             spell_power(ctx, caster_guid, hdr.school_mask)
         };
-        source_behavior::bonus_magnitude(points, power, e.bonus_coefficient, hdr.custom_flags, true)
+        if e.kind == A_PERIODIC_DAMAGE {
+            bonuses::spell_damage_done_float(ctx, hdr, e, caster_guid, points, true) as i32
+        } else {
+            source_behavior::bonus_magnitude(
+                points,
+                power,
+                e.bonus_coefficient,
+                hdr.custom_flags,
+                true,
+            )
+        }
     } else {
         points
     };
@@ -867,6 +871,11 @@ pub(crate) fn apply_effect(
         | EffectKind::AuraModStat
         | EffectKind::AuraModResistance
         | EffectKind::AuraAbsorb
+        | EffectKind::AuraModDamageDoneFlat
+        | EffectKind::AuraModDamageTakenFlat
+        | EffectKind::AuraModSchoolCrit
+        | EffectKind::AuraModDamageDonePct
+        | EffectKind::AuraModHealingTaken
         | EffectKind::AuraInert
         | EffectKind::AuraModHealing
         | EffectKind::AuraModCombat
@@ -976,33 +985,58 @@ fn apply_damage_effect(
 ) -> EffectHit {
     match e.kind {
         E_DAMAGE => {
-            let sp = spell_power(ctx, caster_guid, hdr.school_mask);
-            let scaled = source_behavior::bonus_magnitude(
-                points,
-                sp,
-                e.bonus_coefficient,
-                hdr.custom_flags,
-                false,
-            );
-            let (dmg_flat, dmg_pct) =
-                crate::spell::math::spell_mod(ctx, caster_guid, SPELLMOD_OP_DAMAGE, hdr);
-            let scaled = if hdr.custom_flags & custom::FIXED_DAMAGE != 0 {
-                scaled
-            } else {
-                crate::spell::math::apply_spell_mod(scaled.max(0) as u32, dmg_flat, dmg_pct) as i32
-            };
+            let scaled = bonuses::spell_damage_done_float(ctx, hdr, e, caster_guid, points, false);
             #[cfg(feature = "conformance_test_fixture")]
             let draw = crate::conformance_rolls::spell_draw(ctx, caster_guid)
                 .unwrap_or_else(|| ctx.random::<u32>());
             #[cfg(not(feature = "conformance_test_fixture"))]
             let draw = ctx.random::<u32>();
+            let chance = match hdr.damage_class {
+                2 | 3 => {
+                    ctx.db
+                        .game_world_entity()
+                        .guid()
+                        .find(caster_guid)
+                        .map_or(0.0, |caster| {
+                            let base = if hdr.damage_class == 3 {
+                                crate::combat::effective_ranged_crit_bp(ctx, &caster)
+                            } else {
+                                crate::combat::effective_crit_bp(ctx, &caster)
+                            };
+                            base as f32 / 100.0
+                                + bonuses::school_crit(ctx, caster_guid, hdr.school_mask)
+                        })
+                }
+                _ if hdr.school_mask & RESIST_ARMOR != 0 => 0.0,
+                _ => {
+                    spell_crit_chance(ctx, caster_guid)
+                        + if hdr.damage_class == 1 {
+                            bonuses::school_crit(
+                                ctx,
+                                caster_guid,
+                                1 << school_index(hdr.school_mask),
+                            )
+                        } else {
+                            0.0
+                        }
+                }
+            };
             let is_crit = hdr.cast_flags & SPELL_ATTR_CANNOT_CRIT == 0
-                && hdr.school_mask & RESIST_ARMOR == 0
-                && crate::spell::rolls::chance_succeeds(spell_crit_chance(ctx, caster_guid), draw);
-            let crit_scaled = apply_spell_crit(scaled, is_crit);
-            let after_resist =
+                && hdr.attributes_ex_3 & 0x2000_0000 == 0
+                && crate::spell::rolls::chance_succeeds(chance, draw);
+            let scaled =
+                bonuses::spell_damage_taken(ctx, hdr, e, caster_guid, target_guid, scaled, 1);
+            let crit_scaled = if is_crit {
+                if matches!(hdr.damage_class, 2 | 3) {
+                    ((scaled as i32) * 2) as f32
+                } else {
+                    apply_spell_crit(scaled as i32, true) as f32
+                }
+            } else {
+                scaled
+            };
+            let (after_resist, resisted) =
                 source_behavior::mitigate_spell(ctx, hdr, caster_guid, target_guid, crit_scaled);
-            let resisted = crit_scaled.saturating_sub(after_resist).max(0) as u32;
 
             if hdr.range_yd > 0 && target_guid != caster_guid {
                 if let (Some(caster), Some(target)) = (
@@ -1167,7 +1201,7 @@ fn apply_restore_effect(
     triggered: bool,
 ) -> EffectHit {
     match e.kind {
-        E_HEAL => EffectHit::heal(apply_heal(ctx, hdr, e, caster_guid, target_guid, points)),
+        E_HEAL => apply_heal(ctx, hdr, e, caster_guid, target_guid, points),
         E_HEAL_MAX_HEALTH => {
             if let Some(mut t) = ctx.db.game_world_entity().guid().find(target_guid) {
                 let before = t.health;
@@ -1510,11 +1544,43 @@ fn apply_heal(
     caster_guid: u64,
     target_guid: u64,
     points: i32,
-) -> u32 {
-    let sp = healing_power(ctx, caster_guid, hdr.school_mask);
+) -> EffectHit {
+    let fixed =
+        hdr.custom_flags & custom::FIXED_DAMAGE != 0 || hdr.attributes_ex_3 & 0x2000_0000 != 0;
+    let power = if fixed {
+        0
+    } else {
+        healing_power(ctx, caster_guid, hdr.school_mask)
+    };
     let scaled =
-        source_behavior::bonus_magnitude(points, sp, e.bonus_coefficient, hdr.custom_flags, false);
-    apply_direct_heal(ctx, caster_guid, target_guid, scaled)
+        points as f32 + power as f32 * bonuses::spell_coefficient(ctx, hdr, e, caster_guid, true);
+    let scaled = bonuses::healing_taken(ctx, hdr, e, target_guid, scaled);
+    let chance = if hdr.family_name == 13 {
+        10.0
+    } else if hdr.damage_class == 1 {
+        spell_crit_chance(ctx, caster_guid)
+            + bonuses::school_crit(ctx, caster_guid, 1 << school_index(hdr.school_mask))
+    } else {
+        0.0
+    };
+    #[cfg(feature = "conformance_test_fixture")]
+    let draw = crate::conformance_rolls::spell_draw(ctx, caster_guid)
+        .unwrap_or_else(|| ctx.random::<u32>());
+    #[cfg(not(feature = "conformance_test_fixture"))]
+    let draw = ctx.random::<u32>();
+    let crit = !fixed
+        && hdr.cast_flags & SPELL_ATTR_CANNOT_CRIT == 0
+        && crate::spell::rolls::chance_succeeds(chance, draw);
+    let scaled = if crit {
+        apply_spell_crit(scaled as i32, true)
+    } else {
+        bonuses::round_damage(ctx, target_guid, scaled)
+    };
+    EffectHit {
+        healed: apply_direct_heal(ctx, caster_guid, target_guid, scaled),
+        crit,
+        ..EffectHit::default()
+    }
 }
 
 pub(crate) fn apply_direct_heal(

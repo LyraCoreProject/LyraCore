@@ -230,6 +230,10 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
             lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
         ),
     );
+    let ranged_dmg_min =
+        bonuses::weapon_damage(ctx, &e, crate::items::equip_slot::RANGED, ranged_dmg_min);
+    let ranged_dmg_max =
+        bonuses::weapon_damage(ctx, &e, crate::items::equip_slot::RANGED, ranged_dmg_max);
     let ranged_min_fraction = ranged_dmg_min.fract();
     let ranged_max_fraction = ranged_dmg_max.fract();
     let (ranged_dmg_min, ranged_dmg_max) = (ranged_dmg_min as u32, ranged_dmg_max as u32);

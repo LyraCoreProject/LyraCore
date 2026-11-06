@@ -415,6 +415,19 @@ pub(crate) fn swing_range_ctx(ctx: &ReducerContext, attacker: &WorldEntity) -> (
 }
 
 fn melee_range(ctx: &ReducerContext, attacker: &WorldEntity, normalized: bool) -> (u32, u32) {
+    let (min, max) = base_melee_range(ctx, attacker, normalized);
+    let apply = |base| {
+        crate::spell::bonuses::weapon_damage(
+            ctx,
+            attacker,
+            crate::items::equip_slot::MAINHAND,
+            base as f32,
+        ) as u32
+    };
+    (apply(min), apply(max))
+}
+
+fn base_melee_range(ctx: &ReducerContext, attacker: &WorldEntity, normalized: bool) -> (u32, u32) {
     let disarmed = crate::spell::is_disarmed(ctx, attacker.guid);
     if !attacker.is_player() {
         let tmpl = ctx.db.game_creature_template().entry().find(attacker.entry);
@@ -508,6 +521,7 @@ pub(crate) fn roll_strike_outcome(
     attacker: &WorldEntity,
     target: &WorldEntity,
     ranged: bool,
+    spell: &crate::spell::Spell,
 ) -> u8 {
     let sd = crate::skill::skill_diff_ctx(ctx, attacker, target);
     let (dodge, parry) = if ranged {
@@ -524,7 +538,15 @@ pub(crate) fn roll_strike_outcome(
         parry,
         glancing: 0,
         block: 0,
-        crit: effective_crit_bp(ctx, attacker),
+        crit: (if ranged {
+            effective_ranged_crit_bp(ctx, attacker)
+        } else {
+            effective_crit_bp(ctx, attacker)
+        })
+        .saturating_add_signed(
+            (crate::spell::bonuses::school_crit(ctx, attacker.guid, spell.school_mask) * 100.0)
+                as i32,
+        ),
         crushing: 0,
     };
     attack_outcome(ctx.random::<u32>() % 10_000, &table)
@@ -548,7 +570,9 @@ pub(crate) fn weapon_strike_spell_damage(
     } else {
         0
     };
-    strike_amount(weapon, strike.bonus, strike.percent, mods, crit, mit_pct)
+    let base = strike_amount(weapon, strike.bonus, strike.percent, mods, false, 0);
+    let base = crate::spell::bonuses::weapon_spell_damage_taken(ctx, spell, target.guid, base);
+    armor_mitigated(if crit { base * CRIT_MULT } else { base }, mit_pct)
 }
 
 /// A finisher's damage: `amount` with the damage spell mods, the strike's crit and the target's armor.
@@ -615,7 +639,12 @@ fn strike_weapon_range(
             lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
         ),
     );
-    (min as u32, max as u32)
+    (
+        crate::spell::bonuses::weapon_damage(ctx, attacker, crate::items::equip_slot::RANGED, min)
+            as u32,
+        crate::spell::bonuses::weapon_damage(ctx, attacker, crate::items::equip_slot::RANGED, max)
+            as u32,
+    )
 }
 
 fn strike_amount(
@@ -693,6 +722,7 @@ pub(crate) fn weapon_strike_damage(
     let total = (base as i32 + flat_bonus).max(1) as u32;
     let total = crate::spell::apply_spell_mod(total, mod_flat, mod_pct).max(1);
     let crit = (ctx.random::<u32>() % 10_000) < effective_crit_bp(ctx, caster);
+    let total = crate::spell::bonuses::weapon_damage_taken(ctx, target.guid, total);
     let pre_mit = if crit { total * CRIT_MULT } else { total };
     let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), caster.level);
     (armor_mitigated(pre_mit, mit_pct), crit)
@@ -791,7 +821,15 @@ pub(crate) fn roll_swing_with_range(
         block: draws[2] % 10_000,
     };
     let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), attacker.level);
-    resolve_swing(table, rolls, range, strike, mit_pct, block_value)
+    resolve_swing_with_damage_taken(
+        table,
+        rolls,
+        range,
+        strike,
+        mit_pct,
+        block_value,
+        |damage| crate::spell::bonuses::weapon_damage_taken(ctx, target.guid, damage),
+    )
 }
 
 pub(crate) fn white_swing_table(
@@ -994,13 +1032,34 @@ struct SwingRolls {
 }
 
 // Returns (damage, outcome, blocked); a blocked crit stays a crit.
+#[cfg(test)]
 fn resolve_swing(
+    table: AttackTable,
+    rolls: SwingRolls,
+    (min, max): (u32, u32),
+    strike: Option<QueuedStrikeDamage>,
+    mit_pct: u32,
+    block_value: u32,
+) -> (u32, u8, u32) {
+    resolve_swing_with_damage_taken(
+        table,
+        rolls,
+        (min, max),
+        strike,
+        mit_pct,
+        block_value,
+        |damage| damage,
+    )
+}
+
+fn resolve_swing_with_damage_taken(
     mut table: AttackTable,
     rolls: SwingRolls,
     (min, max): (u32, u32),
     strike: Option<QueuedStrikeDamage>,
     mit_pct: u32,
     block_value: u32,
+    damage_taken: impl FnOnce(u32) -> u32,
 ) -> (u32, u8, u32) {
     // vmangos rolls a queued strike's partial block after the table, so it can crit and block.
     let block_bp = table.block;
@@ -1019,6 +1078,7 @@ fn resolve_swing(
             strike.mod_pct,
         )
     });
+    let base = damage_taken(base);
     let pre_mit = match outcome {
         HIT_CRIT => base * CRIT_MULT,
         HIT_GLANCING => (base * GLANCING_DAMAGE_PCT / 100).max(1),
@@ -1042,6 +1102,12 @@ fn resolve_swing(
     (dmg - blocked, outcome, blocked)
 }
 
+pub(crate) fn ranged_school(ctx: &ReducerContext, guid: u64) -> u8 {
+    crate::items::item_in_slot(ctx, guid, crate::items::equip_slot::RANGED)
+        .and_then(|item| ctx.db.game_item_template().entry().find(item.entry))
+        .map_or(0, |weapon| weapon.damage_school.min(6))
+}
+
 pub(crate) fn roll_ranged_swing(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
@@ -1053,11 +1119,34 @@ pub(crate) fn roll_ranged_swing(
     if (ctx.random::<u32>() % 10_000) < effective_miss_bp(ctx, attacker, sd) {
         return (0, HIT_MISS);
     }
-    let is_crit = (ctx.random::<u32>() % 10_000) < effective_ranged_crit_bp(ctx, attacker);
+    let school = ranged_school(ctx, attacker.guid);
+    let crit = (effective_ranged_crit_bp(ctx, attacker) as f32
+        + crate::spell::bonuses::school_crit(ctx, attacker.guid, 1 << school) * 100.0)
+        .clamp(0.0, 10000.0) as u32;
+    let is_crit = (ctx.random::<u32>() % 10_000) < crit;
     let base = dmin + ctx.random::<u32>() % (dmax.saturating_sub(dmin) + 1);
-    let pre_mit = if is_crit { base * CRIT_MULT } else { base };
-    let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), attacker.level);
-    let dmg = armor_mitigated(pre_mit, mit_pct);
+    let base = if school == 0 {
+        crate::spell::bonuses::weapon_damage_taken(ctx, target.guid, base)
+    } else {
+        (base as f32
+            * crate::spell::bonuses::damage_taken_multiplier(ctx, target.guid, 1 << school))
+            as u32
+    };
+    let pre_mit = if is_crit {
+        if school == 0 {
+            base * CRIT_MULT
+        } else {
+            base + base / 2
+        }
+    } else {
+        base
+    };
+    let dmg = if school == 0 {
+        let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), attacker.level);
+        armor_mitigated(pre_mit, mit_pct)
+    } else {
+        pre_mit
+    };
     (dmg, if is_crit { HIT_CRIT } else { HIT_NORMAL })
 }
 

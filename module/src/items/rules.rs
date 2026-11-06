@@ -507,6 +507,7 @@ pub(crate) mod tests {
             spellcategory_3: 0,
             spellcategory_4: 0,
             spellcategory_5: 0,
+            damage_school: 0,
         }
     }
 

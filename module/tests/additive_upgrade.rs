@@ -63,6 +63,11 @@ fn populated_old_module_upgrades_without_clearing() {
         "duration_index",
         "category",
         "category_cooldown_ms",
+        "equipped_item_subclass_mask",
+        "equipped_item_inventory_mask",
+        "attributes_ex_3",
+        "attributes_ex_4",
+        "damage_class",
     ] {
         assert!(
             !spell_before[0].contains_key(column),
@@ -102,6 +107,11 @@ fn populated_old_module_upgrades_without_clearing() {
         "duration_index",
         "category",
         "category_cooldown_ms",
+        "equipped_item_subclass_mask",
+        "equipped_item_inventory_mask",
+        "attributes_ex_3",
+        "attributes_ex_4",
+        "damage_class",
     ] {
         assert_eq!(
             spell_after[0].remove(column).as_deref(),
@@ -109,6 +119,10 @@ fn populated_old_module_upgrades_without_clearing() {
             "{column}"
         );
     }
+    assert_eq!(
+        spell_after[0].remove("equipped_item_class").as_deref(),
+        Some("-1")
+    );
     assert_eq!(
         spell_after, spell_before,
         "published spell columns must survive"

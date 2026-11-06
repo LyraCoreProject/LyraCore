@@ -36,6 +36,7 @@ pub struct ItemTemplateView {
     pub max_stack: u32,
     pub damage_min: f32,
     pub damage_max: f32,
+    pub damage_school: u8,
     pub delay_ms: u32,
     pub stat_strength: i32,
     pub stat_agility: i32,
@@ -256,7 +257,7 @@ pub fn build_item_query_response(
                 d[0] = ItemDamageType {
                     damage_minimum: t.damage_min,
                     damage_maximum: t.damage_max,
-                    school: SpellSchool::Normal,
+                    school: SpellSchool::try_from(t.damage_school).unwrap_or(SpellSchool::Normal),
                 };
                 d
             },

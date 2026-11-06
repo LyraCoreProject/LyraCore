@@ -182,9 +182,23 @@ pub fn debug_compute_spell(
     else {
         return;
     };
-    let sp = crate::spell::spell_power(ctx, caster_guid, hdr.school_mask);
-    let scaled =
-        crate::spell::compose_magnitude(eff.base_points, sp, crate::spell::SPELL_POWER_COEFF_PCT);
+    let scaled = crate::spell::bonuses::spell_damage_done_float(
+        ctx,
+        &hdr,
+        &eff,
+        caster_guid,
+        eff.base_points,
+        false,
+    ) as i32;
+    let scaled = crate::spell::bonuses::spell_damage_taken(
+        ctx,
+        &hdr,
+        &eff,
+        caster_guid,
+        target_guid,
+        scaled as f32,
+        1,
+    ) as i32;
     let normal = crate::spell::apply_resistance(
         ctx,
         target_guid,

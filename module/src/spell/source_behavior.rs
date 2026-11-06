@@ -9,16 +9,14 @@ pub(crate) fn bonus_magnitude(
     power: i32,
     coefficient: f32,
     flags: u32,
-    periodic: bool,
+    _periodic: bool,
 ) -> i32 {
     if flags & custom::FIXED_DAMAGE != 0 {
         points
     } else if coefficient >= 0.0 {
         points.saturating_add((power as f32 * coefficient) as i32)
-    } else if periodic {
-        points
     } else {
-        compose_magnitude(points, power, SPELL_POWER_COEFF_PCT)
+        points
     }
 }
 
@@ -27,11 +25,11 @@ pub(crate) fn mitigate_spell(
     hdr: &Spell,
     caster: u64,
     target: u64,
-    damage: i32,
-) -> i32 {
+    mut damage: f32,
+) -> (i32, u32) {
     if hdr.school_mask & RESIST_ARMOR != 0
         && hdr.custom_flags & custom::IGNORE_ARMOR == 0
-        && damage > 0
+        && damage > 0.0
     {
         if let (Some(caster), Some(target)) = (
             ctx.db.game_world_entity().guid().find(caster),
@@ -41,10 +39,22 @@ pub(crate) fn mitigate_spell(
                 crate::combat::effective_armor(ctx, &target),
                 caster.level,
             );
-            return (i64::from(damage) * i64::from(100 - percent) / 100).max(1) as i32;
+            damage *= (100 - percent) as f32 / 100.0;
         }
     }
-    apply_resistance(ctx, target, caster, hdr.school_mask, damage, hdr.spell_id)
+    let before_resist = bonuses::round_damage(ctx, target, damage);
+    let after_resist = apply_resistance(
+        ctx,
+        target,
+        caster,
+        hdr.school_mask,
+        before_resist,
+        hdr.spell_id,
+    );
+    (
+        after_resist,
+        before_resist.saturating_sub(after_resist).max(0) as u32,
+    )
 }
 
 pub(crate) fn aura_casters_coexist(hdr: &Spell, kind: u8) -> bool {
@@ -182,10 +192,7 @@ mod tests {
         assert_eq!(bonus_magnitude(10, 100, 0.5, 0, false), 60);
         assert_eq!(bonus_magnitude(10, 100, 0.5, 0, true), 60);
         assert_eq!(bonus_magnitude(10, 100, 0.0, 0, false), 10);
-        assert_eq!(
-            bonus_magnitude(10, 100, -1.0, 0, false),
-            compose_magnitude(10, 100, SPELL_POWER_COEFF_PCT)
-        );
+        assert_eq!(bonus_magnitude(10, 100, -1.0, 0, false), 10);
         assert_eq!(bonus_magnitude(10, 100, -1.0, 0, true), 10);
     }
 

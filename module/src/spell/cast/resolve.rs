@@ -517,7 +517,7 @@ fn hit_roll(
         entities.guid().find(target_guid),
     ) {
         (Some(caster), Some(target)) => {
-            let roll = crate::combat::roll_strike_outcome(ctx, &caster, &target, ranged);
+            let roll = crate::combat::roll_strike_outcome(ctx, &caster, &target, ranged, spell);
             arm_avoidance_reacts(ctx, caster_guid, target_guid, roll);
             roll
         }

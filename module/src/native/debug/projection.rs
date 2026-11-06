@@ -195,6 +195,7 @@ fn entity_projection(
     view.movement_flags = 0;
     view.run_speed_mult_bp = 10_000;
     let stats = (viewer == guid).then(|| native::view::sheet_stats(&entity));
+    let damage_bonuses = (viewer == guid).then(|| crate::spell::bonuses::damage_fields(ctx, guid));
     let (body, extra) = encoded(
         ctx,
         connection_id,
@@ -208,15 +209,20 @@ fn entity_projection(
             &skills,
             &quests,
             &stats,
+            &damage_bonuses,
             stats.as_ref().map(|stats| stats.crit_pct.to_bits()),
         ),
         || {
-            let message = if viewer == guid {
+            let mut message = if viewer == guid {
                 codec::build_self_create_object(&view, &items, &skills, &quests)
             } else {
                 codec::build_create_object(&view, codec::CreateKind::Peer, &items, &[])
             }
             .map_err(|error| error.to_string())?;
+            if let Some(values) = &damage_bonuses {
+                codec::set_create_damage_bonuses(&mut message, values)
+                    .map_err(|error| error.to_string())?;
+            }
             let extra = stats
                 .as_ref()
                 .map(|stats| {
