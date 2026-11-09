@@ -14,17 +14,19 @@ pub(crate) struct Shard {
 }
 
 impl Shard {
-    // Returns the reducer's refusal text when the call fails.
     pub(crate) fn call(&self, reducer: &str, argument: &str) -> Result<Result<(), String>> {
+        self.call_with(reducer, &[argument.to_string()])
+    }
+
+    // Returns the reducer's refusal text when the call fails.
+    pub(crate) fn call_with(
+        &self,
+        reducer: &str,
+        arguments: &[String],
+    ) -> Result<Result<(), String>> {
         let output = spacetime()
-            .args([
-                "call",
-                "-s",
-                &self.server,
-                &self.database,
-                reducer,
-                argument,
-            ])
+            .args(["call", "-s", &self.server, &self.database, reducer])
+            .args(arguments)
             .output();
         let output = match output {
             Ok(output) => output,

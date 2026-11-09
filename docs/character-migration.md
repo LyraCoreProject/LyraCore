@@ -109,6 +109,17 @@ first keeps the copper and the cash on delivery price. `game_mail_migration` rec
 `<source>/<mail id>/<item guid>`, with item guid 0 for the first letter, so a rerun changes
 nothing. A refused letter leaves nothing behind.
 
+## Friends and ignores
+
+`migrate_contacts(source, source_guid, contacts)` gives one migrated Character its friends and
+ignores, once. `apply` sends contact lists after every letter. Every target must be a migrated
+Character, and the normal contact rules apply: no self, no friend of the other faction, at most 50
+friends and 25 ignores. `game_contact_migration` records the owner's `<source>/<source guid>`, so a
+rerun does not add back a contact that its player removed.
+
+The tool keeps a contact only when both Characters are in the migration, already migrated or
+planned. It reports the other contacts, friends of the other faction and contacts over a cap.
+
 Health starts full and power starts at its class default at the first world entry. The Character
 does not see the opening cinematic. GM levels, Auras, cooldowns, Instance bindings, temporary
 enchantments and item charges do not migrate.

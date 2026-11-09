@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::read::{Ban, LegacyAccount, LegacyCharacter, LegacyItem, LegacyLetter, LegacyPosition};
 
-pub(crate) const PLAN_FORMAT_VERSION: u32 = 3;
+pub(crate) const PLAN_FORMAT_VERSION: u32 = 4;
 // Linux limits one argv string to 128 KiB; `spacetime call` passes each argument as one.
 const MAX_REDUCER_ARGUMENT_BYTES: usize = 120_000;
 const SOULBOUND_FLAG: u32 = 0x1;
@@ -21,6 +21,10 @@ const HUNTER_CLASS: u8 = 3;
 // Vanilla MaNGOS keeps the active pet in slot 0 and stabled pets in slots 1 and 2.
 const ACTIVE_PET_SLOT: u32 = 0;
 const STABLE_SLOTS: std::ops::RangeInclusive<u32> = 1..=2;
+const SOCIAL_FLAG_FRIEND: u32 = 0x1;
+const SOCIAL_FLAG_IGNORED: u32 = 0x2;
+const MAX_FRIENDS: usize = 50;
+const MAX_IGNORED: usize = 25;
 const MAIL_NORMAL: u8 = 0;
 const MAIL_AUCTION: u8 = 2;
 const MAIL_CREATURE: u8 = 3;
@@ -199,6 +203,20 @@ pub(crate) struct CharacterMigration {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct MigratedContact {
+    pub(crate) target_source_guid: u64,
+    pub(crate) ignore: bool,
+}
+
+// The arguments of one migrate_contacts call.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ContactsMigration {
+    pub(crate) source: String,
+    pub(crate) source_guid: u64,
+    pub(crate) contacts: Vec<MigratedContact>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Outcome {
     Refused,
@@ -221,6 +239,7 @@ pub(crate) struct Plan {
     pub(crate) accounts: Vec<MigratedAccount>,
     pub(crate) characters: Vec<CharacterMigration>,
     pub(crate) letters: Vec<LetterMigration>,
+    pub(crate) contacts: Vec<ContactsMigration>,
     pub(crate) findings: Vec<Finding>,
 }
 
@@ -341,6 +360,17 @@ pub(crate) fn build(
         }
     }
     let senders: HashSet<u64> = recipients.iter().map(|character| character.guid).collect();
+    let races: HashMap<u64, u8> = recipients
+        .iter()
+        .map(|character| (character.guid, character.race))
+        .collect();
+    let contacts = recipients
+        .iter()
+        .filter_map(|character| {
+            let subject = format!("Character {} ({})", character.name, character.guid);
+            contact_list(source, &races, character, &subject, &mut report)
+        })
+        .collect();
     let mut letters = Vec::new();
     for character in recipients {
         for letter in &character.letters {
@@ -367,6 +397,7 @@ pub(crate) fn build(
         accounts,
         characters: planned,
         letters,
+        contacts,
         findings,
     }
 }
@@ -682,6 +713,85 @@ fn hunter_pet(
         })
 }
 
+// Vanilla friends are of the same faction, and each list has a cap.
+fn contact_list(
+    source: &str,
+    races: &HashMap<u64, u8>,
+    character: &LegacyCharacter,
+    subject: &str,
+    report: &mut Findings,
+) -> Option<ContactsMigration> {
+    let mut contacts = Vec::new();
+    let mut missing = Vec::new();
+    let (mut friends, mut ignored) = (0, 0);
+    for contact in &character.contacts {
+        let Some(&race) = races.get(&contact.target) else {
+            missing.push(contact.target);
+            continue;
+        };
+        if contact.flags & SOCIAL_FLAG_FRIEND != 0 {
+            if !same_team(character.race, race) {
+                report.add(
+                    subject,
+                    Outcome::Dropped,
+                    format!("friend {} is of the other faction", contact.target),
+                );
+            } else if friends == MAX_FRIENDS {
+                report.add(
+                    subject,
+                    Outcome::Dropped,
+                    format!("friend {} exceeds {MAX_FRIENDS} friends", contact.target),
+                );
+            } else {
+                friends += 1;
+                contacts.push(MigratedContact {
+                    target_source_guid: contact.target,
+                    ignore: false,
+                });
+            }
+        }
+        if contact.flags & SOCIAL_FLAG_IGNORED != 0 {
+            if ignored == MAX_IGNORED {
+                report.add(
+                    subject,
+                    Outcome::Dropped,
+                    format!("ignore {} exceeds {MAX_IGNORED} ignores", contact.target),
+                );
+            } else {
+                ignored += 1;
+                contacts.push(MigratedContact {
+                    target_source_guid: contact.target,
+                    ignore: true,
+                });
+            }
+        }
+    }
+    missing.sort_unstable();
+    missing.dedup();
+    if !missing.is_empty() {
+        let list: Vec<String> = missing.iter().map(u64::to_string).collect();
+        report.add(
+            subject,
+            Outcome::Dropped,
+            format!(
+                "contacts with Characters that do not migrate: {}",
+                list.join(", ")
+            ),
+        );
+    }
+    (!contacts.is_empty()).then(|| ContactsMigration {
+        source: source.to_string(),
+        source_guid: character.guid,
+        contacts,
+    })
+}
+
+// Races 1, 3, 4 and 7 are the Alliance; 2, 5, 6 and 8 are the Horde.
+fn same_team(a: u8, b: u8) -> bool {
+    let alliance = |race| matches!(race, 1 | 3 | 4 | 7);
+    alliance(a) == alliance(b)
+}
+
 fn position_of(position: &LegacyPosition) -> MigratedPosition {
     MigratedPosition {
         map_id: position.map,
@@ -994,6 +1104,7 @@ mod tests {
             quests: Vec::new(),
             letters: Vec::new(),
             pets: Vec::new(),
+            contacts: Vec::new(),
         }
     }
 
@@ -1397,6 +1508,49 @@ mod tests {
             .findings
             .iter()
             .any(|f| f.detail == "kill and object counters of quest 7 restart"));
+    }
+
+    #[test]
+    fn contacts_keep_migrated_targets_of_the_same_faction() {
+        let friend = |target, flags| crate::read::LegacyContact { target, flags };
+        let mut owner = character();
+        owner.contacts = vec![
+            friend(11, SOCIAL_FLAG_FRIEND | SOCIAL_FLAG_IGNORED),
+            friend(12, SOCIAL_FLAG_FRIEND),
+            friend(13, SOCIAL_FLAG_FRIEND),
+        ];
+        let mut ally = character();
+        ally.guid = 11;
+        ally.name = "Ally".to_string();
+        let mut horde = character();
+        horde.guid = 12;
+        horde.name = "Horde".to_string();
+        horde.race = 2;
+        let plan = build(
+            "vmangos-main",
+            &catalogue(),
+            &[account()],
+            &[owner, ally, horde],
+        );
+        assert_eq!(
+            plan.contacts[0].contacts,
+            [
+                MigratedContact {
+                    target_source_guid: 11,
+                    ignore: false
+                },
+                MigratedContact {
+                    target_source_guid: 11,
+                    ignore: true
+                }
+            ]
+        );
+        let details: Vec<_> = plan.findings.iter().map(|f| f.detail.as_str()).collect();
+        assert!(
+            details.contains(&"friend 12 is of the other faction"),
+            "{details:?}"
+        );
+        assert!(details.contains(&"contacts with Characters that do not migrate: 13"));
     }
 
     #[test]

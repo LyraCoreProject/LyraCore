@@ -187,6 +187,17 @@ fn apply(path: &str, shard: &Shard) -> Result<()> {
             );
         }
     }
+    for list in &plan.contacts {
+        let arguments = [
+            serde_json::to_string(&list.source)?,
+            list.source_guid.to_string(),
+            serde_json::to_string(&list.contacts)?,
+        ];
+        if let Err(refusal) = shard.call_with("migrate_contacts", &arguments)? {
+            refusals += 1;
+            eprintln!("refused: contacts of {}: {refusal}", list.source_guid);
+        }
+    }
     if refusals > 0 {
         bail!("{refusals} migrations were refused; fix them and apply the plan again");
     }

@@ -284,14 +284,9 @@ pub fn migrate_letter(ctx: &ReducerContext, letter: LetterMigration) -> Result<(
     {
         return Ok(());
     }
-    let recipient_guid = migrated_guid(ctx, &letter.source, letter.recipient_source_guid)?
-        .filter(|&guid| crate::helpers::character_by_guid(ctx, guid).is_some())
-        .ok_or_else(|| {
-            format!(
-                "letter {source_key}: recipient {} is not a migrated Character",
-                letter.recipient_source_guid
-            )
-        })?;
+    let recipient_guid = migrated_character(ctx, &letter.source, letter.recipient_source_guid)
+        .map_err(|refusal| format!("letter {source_key}: {refusal}"))?
+        .guid;
     let (sender_guid, sender_entry) = match letter.sender_kind {
         lyracore_shared::mail::SENDER_KIND_CHARACTER => (
             migrated_guid(ctx, &letter.source, letter.sender_source_guid)?.unwrap_or(0),
@@ -359,6 +354,83 @@ pub fn migrate_letter(ctx: &ReducerContext, letter: LetterMigration) -> Result<(
         migrated_at: ctx.timestamp,
     });
     Ok(())
+}
+
+#[derive(SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MigratedContact {
+    pub target_source_guid: u64,
+    pub ignore: bool,
+}
+
+#[table(accessor = game_contact_migration)]
+pub struct ContactMigrationRecord {
+    #[primary_key]
+    pub source_key: String,
+    pub migrated_at: Timestamp,
+}
+
+// One Character's friends and ignores, once; every target must be a migrated Character.
+#[reducer]
+pub fn migrate_contacts(
+    ctx: &ReducerContext,
+    source: String,
+    source_guid: u64,
+    contacts: Vec<MigratedContact>,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    require_single_shard(ctx)?;
+    let source_key = source_key(&source, source_guid)?;
+    if ctx
+        .db
+        .game_contact_migration()
+        .source_key()
+        .find(&source_key)
+        .is_some()
+    {
+        return Ok(());
+    }
+    let owner = migrated_character(ctx, &source, source_guid)?;
+    let owner = crate::chat::ContactOwner {
+        guid: owner.guid,
+        identity: owner.owner_identity,
+        race: owner.race,
+    };
+    for contact in contacts {
+        let target = migrated_character(ctx, &source, contact.target_source_guid)?;
+        match crate::chat::insert_contact(
+            ctx,
+            owner,
+            target.guid,
+            contact.ignore,
+            Some(target.race),
+        ) {
+            Ok(()) | Err(lyracore_shared::social::ContactRefusal::AlreadyOnList) => {}
+            Err(refusal) => {
+                return Err(format!(
+                    "contact {} of {source_key}: {}",
+                    contact.target_source_guid,
+                    refusal.as_tag()
+                ))
+            }
+        }
+    }
+    ctx.db
+        .game_contact_migration()
+        .insert(ContactMigrationRecord {
+            source_key,
+            migrated_at: ctx.timestamp,
+        });
+    Ok(())
+}
+
+fn migrated_character(
+    ctx: &ReducerContext,
+    source: &str,
+    source_guid: u64,
+) -> Result<Character, String> {
+    migrated_guid(ctx, source, source_guid)?
+        .and_then(|guid| crate::helpers::character_by_guid(ctx, guid))
+        .ok_or_else(|| format!("source Character {source_guid} is not a migrated Character"))
 }
 
 fn migrated_guid(
