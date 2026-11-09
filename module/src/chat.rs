@@ -333,8 +333,13 @@ pub(crate) fn add_contact(
     is_ignore: bool,
     target_race: Option<u8>,
 ) -> Result<(), ContactRefusal> {
-    let owner_guid = sender.guid;
-    add_contact_core(ctx, sender, target_guid, is_ignore, target_race).map_err(|refusal| {
+    let owner = ContactOwner {
+        guid: sender.guid,
+        identity: sender.owner_identity,
+        race: sender.race(),
+    };
+    let owner_guid = owner.guid;
+    insert_contact(ctx, owner, target_guid, is_ignore, target_race).map_err(|refusal| {
         refused_contact(
             refusal,
             &format!("{owner_guid} could not add {target_guid}"),
@@ -342,24 +347,30 @@ pub(crate) fn add_contact(
     })
 }
 
-fn add_contact_core(
+#[derive(Clone, Copy)]
+pub(crate) struct ContactOwner {
+    pub(crate) guid: u64,
+    pub(crate) identity: Identity,
+    pub(crate) race: u8,
+}
+
+pub(crate) fn insert_contact(
     ctx: &ReducerContext,
-    sender: crate::WorldEntity,
+    owner: ContactOwner,
     target_guid: u64,
     is_ignore: bool,
     target_race: Option<u8>,
 ) -> Result<(), ContactRefusal> {
-    if target_guid == sender.guid {
+    if target_guid == owner.guid {
         return Err(ContactRefusal::AddSelf);
     }
     let refuses_enemy = !is_ignore
-        && target_race
-            .is_some_and(|race| !lyracore_shared::faction::same_team(sender.race(), race));
+        && target_race.is_some_and(|race| !lyracore_shared::faction::same_team(owner.race, race));
     if refuses_enemy {
         return Err(ContactRefusal::Enemy);
     }
     let contacts = ctx.db.game_character_contact();
-    let existing: Vec<_> = contacts.by_owner().filter(&sender.guid).collect();
+    let existing: Vec<_> = contacts.by_owner().filter(&owner.guid).collect();
     if existing
         .iter()
         .any(|c| c.target_guid == target_guid && c.is_ignore == is_ignore)
@@ -372,8 +383,8 @@ fn add_contact_core(
     }
     contacts.insert(ContactEntry {
         id: 0,
-        owner_guid: sender.guid,
-        owner_identity: sender.owner_identity,
+        owner_guid: owner.guid,
+        owner_identity: owner.identity,
         target_guid,
         is_ignore,
     });

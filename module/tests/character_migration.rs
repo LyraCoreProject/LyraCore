@@ -539,3 +539,61 @@ fn a_pet_for_a_character_that_is_not_a_hunter_is_refused() {
         .query_rows("SELECT pet_id FROM game_hunter_pet")
         .is_empty());
 }
+
+fn migrate_contacts(shard: &Standalone, owner: u64, list: Value) -> std::process::Output {
+    let owner = owner.to_string();
+    let list = list.to_string();
+    shard.call("migrate_contacts", &["\"vmangos-main\"", &owner, &list])
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn friends_and_ignores_arrive_once_between_migrated_characters() {
+    let (shard, catalogue) = realm("character-migration-contacts");
+    shard.assert_output_success(
+        &migrate(&shard, &migration(&catalogue, 7, "Migrant")),
+        "Migrant",
+    );
+    shard.assert_output_success(&migrate(&shard, &migration(&catalogue, 8, "Alt")), "Alt");
+    let list = json!([
+        {"target_source_guid": 8, "ignore": false},
+        {"target_source_guid": 8, "ignore": true},
+    ]);
+    shard.assert_output_success(&migrate_contacts(&shard, 7, list.clone()), "contacts");
+
+    let owner = guid_of(&shard, "Migrant");
+    let rows = format!(
+        "SELECT target_guid, is_ignore FROM game_character_contact WHERE owner_guid = {owner}"
+    );
+    let contacts = shard.query_rows(&rows);
+    assert_eq!(contacts.len(), 2);
+    assert!(contacts
+        .iter()
+        .all(|row| row["target_guid"] == guid_of(&shard, "Alt")));
+
+    shard.assert_sql(&format!(
+        "DELETE FROM game_character_contact WHERE owner_guid = {owner}"
+    ));
+    shard.assert_output_success(&migrate_contacts(&shard, 7, list), "contacts rerun");
+    assert!(shard.query_rows(&rows).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_contact_with_a_character_that_was_not_migrated_is_skipped() {
+    let (shard, catalogue) = realm("character-migration-contact-target");
+    shard.assert_output_success(
+        &migrate(&shard, &migration(&catalogue, 7, "Migrant")),
+        "Migrant",
+    );
+    shard.assert_output_success(&migrate(&shard, &migration(&catalogue, 8, "Alt")), "Alt");
+
+    let list = json!([
+        {"target_source_guid": 99, "ignore": false},
+        {"target_source_guid": 8, "ignore": false},
+    ]);
+    shard.assert_output_success(&migrate_contacts(&shard, 7, list), "contacts");
+    let contacts = shard.query_rows("SELECT target_guid FROM game_character_contact");
+    assert_eq!(contacts.len(), 1);
+    assert_eq!(contacts[0]["target_guid"], guid_of(&shard, "Alt"));
+}

@@ -148,6 +148,13 @@ pub(crate) struct LegacyCharacter {
     pub(crate) quests: Vec<LegacyQuest>,
     pub(crate) letters: Vec<LegacyLetter>,
     pub(crate) pets: Vec<LegacyPet>,
+    pub(crate) contacts: Vec<LegacyContact>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LegacyContact {
+    pub(crate) target: u64,
+    pub(crate) flags: u32,
 }
 
 enum Appearance {
@@ -414,6 +421,10 @@ impl Dialect {
             ("item_text", vec![("id", Integer), ("text", Text)]),
             ("character_pet", self.pet_columns()),
             ("pet_spell", vec![("guid", Integer), ("spell", Integer)]),
+            (
+                "character_social",
+                vec![("guid", Integer), ("friend", Integer), ("flags", Integer)],
+            ),
         ]
     }
 
@@ -682,6 +693,16 @@ fn read_character(
         quests: read_quests(database, dialect, guid)?,
         letters: read_letters(database, dialect, guid)?,
         pets: read_pets(database, dialect, guid)?,
+        contacts: database
+            .select("character_social", &["friend", "flags"], by_guid)?
+            .into_iter()
+            .map(|contact| {
+                Ok(LegacyContact {
+                    target: contact.number("friend")?,
+                    flags: contact.number("flags")?,
+                })
+            })
+            .collect::<Result<_>>()?,
     })
 }
 
