@@ -82,6 +82,7 @@ rerun never brings back a Character that its player deleted.
 | Skills, action buttons | Kept. Buttons are 0 to 119. |
 | Reputation | Earned standing is added to the faction's base standing. The faction must have a reputation index. |
 | Quests | Rewarded quests and up to 20 quest log entries. A rewarded quest that cannot be repeated stays out of the log. Only a timed quest keeps its deadline. Kill and GameObject counters restart at zero, because the catalogue does not keep each objective's source slot; item objectives count the inventory as usual. |
+| Hunter pet | The active Hunter pet keeps its creature, name, rename right, level, XP, loyalty and happiness (capped at 1,000,000). Its care clock starts at migration. Only a Hunter may bring one, and the creature must be an imported beast. LyraCore has no stable, so stabled pets are reported and stay behind. Pet spells and summoned pets such as Warlock demons do not migrate. |
 | Explored zones, taxi nodes | Explored bits map to areas by area bit. Taxi nodes map by `TaxiNodes.dbc` id. |
 
 Every referenced item, spell, skill, faction, quest, area and taxi node must exist in the Shard's

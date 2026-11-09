@@ -8,10 +8,11 @@ use crate::auth::{account_has_room, check_new_character, next_character_guid};
 use crate::helpers::require_operator;
 use crate::{
     game_account, game_area, game_character, game_character_explored, game_character_talent,
-    game_character_taxi_node, game_faction, game_item_template, game_map, game_player_action,
-    game_quest_objective, game_quest_template, game_skill_line, game_spell, game_talent,
-    game_taxi_node, Account, Character, CharacterExplored, CharacterQuestEventCredit,
-    CharacterTalent, CharacterTaxiNode, ItemInstance, PlayerAction, PlayerReputation, PlayerSkill,
+    game_character_taxi_node, game_creature_template, game_faction, game_hunter_pet,
+    game_item_template, game_map, game_player_action, game_quest_objective, game_quest_template,
+    game_skill_line, game_spell, game_talent, game_taxi_node, Account, Character,
+    CharacterExplored, CharacterQuestEventCredit, CharacterTalent, CharacterTaxiNode, HunterPet,
+    ItemInstance, PlayerAction, PlayerReputation, PlayerSkill,
 };
 
 #[table(accessor = game_character_migration)]
@@ -111,6 +112,18 @@ pub struct MailMigrationRecord {
     pub migrated_at: Timestamp,
 }
 
+#[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub struct MigratedHunterPet {
+    pub creature_entry: u32,
+    pub name: String,
+    pub rename_allowed: bool,
+    pub level: u32,
+    pub xp: u32,
+    pub loyalty_level: u8,
+    pub loyalty_progress: u32,
+    pub happiness: u32,
+}
+
 #[derive(SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MigratedSkill {
     pub skill_line: u32,
@@ -183,12 +196,15 @@ pub struct CharacterMigration {
     pub explored_zones: Vec<u32>,
     // TaxiNodes.dbc ids.
     pub taxi_nodes: Vec<u32>,
+    pub hunter_pet: Option<MigratedHunterPet>,
 }
 
 const SOURCE_LABEL_MAX_LEN: usize = 64;
 const ACTION_BUTTONS: u8 = 120;
 const MAX_WATCHED_FACTION_INDEX: i32 = 63;
 const CONTINENT_MAP_TYPE: u32 = 0;
+const HUNTER_CLASS: u8 = 3;
+const MAX_PET_LOYALTY_LEVEL: u8 = 6;
 
 #[reducer]
 pub fn migrate_account(ctx: &ReducerContext, account: MigratedAccount) -> Result<(), String> {
@@ -233,6 +249,9 @@ pub fn migrate_character(
     character.quests(&migration.quests)?;
     character.explored(&migration.explored_zones)?;
     character.taxi_nodes(&migration.taxi_nodes)?;
+    if let Some(pet) = &migration.hunter_pet {
+        character.hunter_pet(pet, migration.class, migration.level)?;
+    }
     crate::native::directory::changed(ctx, account.id, character_guid, true);
     ctx.db
         .game_character_migration()
@@ -883,6 +902,52 @@ impl Arrival<'_> {
                     });
             }
         }
+        Ok(())
+    }
+
+    // A Hunter pet's identity is keyed by its owner's guid; calling the pet materializes it.
+    fn hunter_pet(&self, pet: &MigratedHunterPet, class: u8, level: u8) -> Result<(), String> {
+        if class != HUNTER_CLASS {
+            return Err("only a Hunter arrives with a Hunter pet".to_string());
+        }
+        let template = self
+            .ctx
+            .db
+            .game_creature_template()
+            .entry()
+            .find(pet.creature_entry)
+            .filter(|template| template.creature_family != 0)
+            .ok_or_else(|| {
+                format!(
+                    "pet creature {} is not an imported beast",
+                    pet.creature_entry
+                )
+            })?;
+        if !(1..=u32::from(level)).contains(&pet.level)
+            || !(1..=MAX_PET_LOYALTY_LEVEL).contains(&pet.loyalty_level)
+        {
+            return Err(format!(
+                "pet level {} or loyalty level {} is out of range",
+                pet.level, pet.loyalty_level
+            ));
+        }
+        self.ctx.db.game_hunter_pet().insert(HunterPet {
+            pet_id: self.guid,
+            owner_guid: self.guid,
+            creature_entry: pet.creature_entry,
+            creature_family: u32::from(template.creature_family),
+            name: pet.name.clone(),
+            rename_allowed: pet.rename_allowed,
+            level: pet.level,
+            pet_xp: pet.xp,
+            loyalty_level: pet.loyalty_level,
+            loyalty_progress: pet.loyalty_progress,
+            happiness: pet.happiness.min(crate::creatures::MAX_HAPPINESS),
+            created_at: self.ctx.timestamp,
+            care_updated_at: self.ctx.timestamp,
+            loyalty_updated_at: self.ctx.timestamp,
+            name_timestamp: 0,
+        });
         Ok(())
     }
 

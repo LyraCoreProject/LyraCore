@@ -50,6 +50,22 @@ pub(crate) struct LegacyItem {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LegacyPet {
+    pub(crate) id: u64,
+    pub(crate) entry: u32,
+    pub(crate) hunter: bool,
+    pub(crate) slot: u32,
+    pub(crate) name: String,
+    pub(crate) renamed: bool,
+    pub(crate) level: u32,
+    pub(crate) xp: u32,
+    pub(crate) loyalty: u8,
+    pub(crate) loyalty_points: u32,
+    pub(crate) happiness: u32,
+    pub(crate) spells: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LegacyLetter {
     pub(crate) id: u64,
     pub(crate) message_type: u8,
@@ -131,6 +147,7 @@ pub(crate) struct LegacyCharacter {
     pub(crate) actions: Vec<LegacyAction>,
     pub(crate) quests: Vec<LegacyQuest>,
     pub(crate) letters: Vec<LegacyLetter>,
+    pub(crate) pets: Vec<LegacyPet>,
 }
 
 enum Appearance {
@@ -159,6 +176,11 @@ pub(crate) struct Dialect {
     mail_sender: &'static str,
     mail_receiver: &'static str,
     mail_text: &'static str,
+    pet_owner: &'static str,
+    pet_type: &'static str,
+    pet_xp: &'static str,
+    pet_loyalty_points: &'static str,
+    pet_happiness: &'static str,
 }
 
 const VMANGOS: Dialect = Dialect {
@@ -181,6 +203,11 @@ const VMANGOS: Dialect = Dialect {
     mail_sender: "sender_guid",
     mail_receiver: "receiver_guid",
     mail_text: "item_text_id",
+    pet_owner: "owner_guid",
+    pet_type: "pet_type",
+    pet_xp: "xp",
+    pet_loyalty_points: "loyalty_points",
+    pet_happiness: "current_happiness",
 };
 
 const CMANGOS: Dialect = Dialect {
@@ -203,6 +230,11 @@ const CMANGOS: Dialect = Dialect {
     mail_sender: "sender",
     mail_receiver: "receiver",
     mail_text: "itemTextId",
+    pet_owner: "owner",
+    pet_type: "PetType",
+    pet_xp: "exp",
+    pet_loyalty_points: "loyaltypoints",
+    pet_happiness: "curhappiness",
 };
 
 impl Dialect {
@@ -380,6 +412,25 @@ impl Dialect {
                 vec![("mail_id", Integer), ("item_guid", Integer)],
             ),
             ("item_text", vec![("id", Integer), ("text", Text)]),
+            ("character_pet", self.pet_columns()),
+            ("pet_spell", vec![("guid", Integer), ("spell", Integer)]),
+        ]
+    }
+
+    fn pet_columns(&self) -> Vec<(&'static str, ColumnType)> {
+        vec![
+            ("id", Integer),
+            ("entry", Integer),
+            (self.pet_owner, Integer),
+            (self.pet_type, Integer),
+            ("level", Integer),
+            (self.pet_xp, Integer),
+            (self.pet_loyalty_points, Integer),
+            ("loyalty", Integer),
+            ("name", Text),
+            ("renamed", Integer),
+            ("slot", Integer),
+            (self.pet_happiness, Integer),
         ]
     }
 }
@@ -630,7 +681,49 @@ fn read_character(
             .collect::<Result<_>>()?,
         quests: read_quests(database, dialect, guid)?,
         letters: read_letters(database, dialect, guid)?,
+        pets: read_pets(database, dialect, guid)?,
     })
+}
+
+// MaNGOS pet_type 1 is a Hunter pet; 0 is a summoned pet such as a Warlock demon.
+const HUNTER_PET_TYPE: i64 = 1;
+
+fn read_pets(
+    database: &mut dyn SourceDatabase,
+    dialect: &Dialect,
+    guid: u64,
+) -> Result<Vec<LegacyPet>> {
+    let columns: Vec<&str> = dialect
+        .pet_columns()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    let rows = database.select(
+        "character_pet",
+        &columns,
+        Filter::Equals(dialect.pet_owner, guid),
+    )?;
+    let mut pets = Vec::new();
+    for row in rows {
+        let id: u64 = row.number("id")?;
+        pets.push(LegacyPet {
+            id,
+            entry: row.number("entry")?,
+            hunter: row.int(dialect.pet_type)? == HUNTER_PET_TYPE,
+            slot: row.number("slot")?,
+            name: row.text("name")?,
+            renamed: row.int("renamed")? != 0,
+            level: row.number("level")?,
+            xp: row.number(dialect.pet_xp)?,
+            loyalty: row.number("loyalty")?,
+            loyalty_points: row.number(dialect.pet_loyalty_points)?,
+            happiness: row.number(dialect.pet_happiness)?,
+            spells: database
+                .select("pet_spell", &["spell"], Filter::Equals("guid", id))?
+                .len(),
+        });
+    }
+    Ok(pets)
 }
 
 fn item_columns(dialect: &Dialect) -> [&'static str; 8] {
