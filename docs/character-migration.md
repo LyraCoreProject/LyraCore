@@ -112,8 +112,9 @@ nothing. A refused letter leaves nothing behind.
 ## Friends and ignores
 
 `migrate_contacts(source, source_guid, contacts)` gives one migrated Character its friends and
-ignores, once. `apply` sends contact lists after every letter. Every target must be a migrated
-Character, and the normal contact rules apply: no self, no friend of the other faction, at most 50
+ignores, once. `apply` sends contact lists after every letter. A target that is not a migrated
+Character, for example one the reducer refused or one its player deleted, is skipped. The normal
+contact rules apply: no self, no friend of the other faction, at most 50
 friends and 25 ignores. `game_contact_migration` records the owner's `<source>/<source guid>`, so a
 rerun does not add back a contact that its player removed.
 

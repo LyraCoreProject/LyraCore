@@ -580,20 +580,20 @@ fn friends_and_ignores_arrive_once_between_migrated_characters() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_contact_with_a_character_that_was_not_migrated_is_refused() {
+fn a_contact_with_a_character_that_was_not_migrated_is_skipped() {
     let (shard, catalogue) = realm("character-migration-contact-target");
     shard.assert_output_success(
         &migrate(&shard, &migration(&catalogue, 7, "Migrant")),
         "Migrant",
     );
+    shard.assert_output_success(&migrate(&shard, &migration(&catalogue, 8, "Alt")), "Alt");
 
-    let text = refusal(&migrate_contacts(
-        &shard,
-        7,
-        json!([{"target_source_guid": 99, "ignore": false}]),
-    ));
-    assert!(text.contains("is not a migrated Character"), "{text}");
-    assert!(shard
-        .query_rows("SELECT id FROM game_character_contact")
-        .is_empty());
+    let list = json!([
+        {"target_source_guid": 99, "ignore": false},
+        {"target_source_guid": 8, "ignore": false},
+    ]);
+    shard.assert_output_success(&migrate_contacts(&shard, 7, list), "contacts");
+    let contacts = shard.query_rows("SELECT target_guid FROM game_character_contact");
+    assert_eq!(contacts.len(), 1);
+    assert_eq!(contacts[0]["target_guid"], guid_of(&shard, "Alt"));
 }

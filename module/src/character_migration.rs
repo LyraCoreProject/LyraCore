@@ -369,7 +369,7 @@ pub struct ContactMigrationRecord {
     pub migrated_at: Timestamp,
 }
 
-// One Character's friends and ignores, once; every target must be a migrated Character.
+// One Character's friends and ignores, once; targets that are not migrated Characters are skipped.
 #[reducer]
 pub fn migrate_contacts(
     ctx: &ReducerContext,
@@ -396,7 +396,13 @@ pub fn migrate_contacts(
         race: owner.race,
     };
     for contact in contacts {
-        let target = migrated_character(ctx, &source, contact.target_source_guid)?;
+        let Ok(target) = migrated_character(ctx, &source, contact.target_source_guid) else {
+            spacetimedb::log::info!(
+                "migrate_contacts: {source_key} skips {}, which is not a migrated Character",
+                contact.target_source_guid
+            );
+            continue;
+        };
         match crate::chat::insert_contact(
             ctx,
             owner,
