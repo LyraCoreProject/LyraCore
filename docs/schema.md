@@ -406,6 +406,9 @@ the Character guid that the migration created. It is classified as not Character
 Character keeps the row, so a rerun of the migration does not recreate the Character. See
 [Character Migration](./character-migration.md).
 
+`game_mail_migration` is private, keyed by `<label>/<source mail id>/<source item guid>`, and names
+the Mail it created. Deleting the Mail keeps the row.
+
 ### Chat (`module/src/chat.rs`, `module/src/realm_chat.rs`, `module/src/channel.rs`)
 
 `game_chat_event_live` is the event row for one say, yell, `/e` or creature line. The chat handler

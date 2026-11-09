@@ -52,7 +52,7 @@ are in `migrator/src/read.rs`.
 
 ## Reducers
 
-Both reducers are Operator-only and refuse on a Shard with a Shard role.
+The reducers are Operator-only and refuse on a Shard with a Shard role.
 
 - `migrate_account(account)` creates an Account from a username, a 32-byte salt and a 32-byte
   verifier, both little-endian as the logon proof uses them. The username is normalized to upper
@@ -77,7 +77,7 @@ rerun never brings back a Character that its player deleted.
 | Home bind, rest | Kept. The last logout time and inn flag feed the normal offline rest at login. |
 | Items | Vanilla slots 0 to 62 and keyring slots 81 to 112 keep their address. Bag contents use the flat bag-content slot of their bag. |
 | Bank bags, large bags | This model has no bank bag slots and addresses 18 slots in each bag. A bank bag, its contents and Items past slot 18 of a bag move to the first free bank, backpack or bag slot, or the Character is refused. |
-| Item state | Entry, stack, durability (capped at the template), permanent enchantment, random property and soulbound. |
+| Item state | Entry, stack, durability (capped at the template), permanent enchantment, random property and soulbound. A Letter Copy gets its own Item Text row. |
 | Spells | Kept. A spell that is a talent rank becomes a talent row at its highest rank instead; world entry relearns the rank spell. Spent points cannot exceed the level's points. |
 | Skills, action buttons | Kept. Buttons are 0 to 119. |
 | Reputation | Earned standing is added to the faction's base standing. The faction must have a reputation index. |
@@ -87,6 +87,26 @@ rerun never brings back a Character that its player deleted.
 Every referenced item, spell, skill, faction, quest, area and taxi node must exist in the Shard's
 catalogues, or the reducer refuses the Character. The tool drops unknown spells, skills, factions,
 quests, explored areas and taxi nodes with a finding, and refuses a Character with an unknown Item.
+
+## Letters
+
+`migrate_letter(letter)` puts one source Mail in the inbox of a migrated Character, as one
+transaction. `apply` sends letters after every Character, so a letter from one migrated
+Character to another names the migrated sender. A letter whose sender is not migrated arrives
+with sender guid 0, and its expiry deletes it instead of returning it. Auction house, creature and
+GameObject senders keep their entry; other source message types are refused.
+
+The letter keeps its subject, body, copper, cash on delivery price, mail template and check flags.
+Its creation time is derived from the source expiry and its current cash on delivery price, so
+it expires when it would have expired at the source. A letter whose cash on delivery was already
+paid has no price left and gets the full 30 days. A cash on delivery letter needs a migrated sender
+to receive the copper; the tool drops the price when the sender does not migrate. A pending delivery keeps its delivery time. Stationery follows the sender
+kind. An attached Letter Copy gets its own Item Text row.
+
+1.12 Mail carries one Item. A source Mail with more Items becomes one letter for each Item; the
+first keeps the copper and the cash on delivery price. `game_mail_migration` records
+`<source>/<mail id>/<item guid>`, with item guid 0 for the first letter, so a rerun changes
+nothing. A refused letter leaves nothing behind.
 
 Health starts full and power starts at its class default at the first world entry. The Character
 does not see the opening cinematic. GM levels, Auras, cooldowns, Instance bindings, temporary
