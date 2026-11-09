@@ -33,7 +33,7 @@ impl PlayerReputation {
         }
     }
 
-    fn insert(ctx: &ReducerContext, row: Self) {
+    pub(crate) fn insert(ctx: &ReducerContext, row: Self) {
         crate::native::reputation_changed(ctx, None, &row);
         ctx.db.game_player_reputation().insert(row);
     }

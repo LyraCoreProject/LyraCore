@@ -7,13 +7,11 @@ use spacetimedb::{reducer, table, Identity, ReducerContext, SpacetimeType, Table
 use crate::auth::{account_has_room, check_new_character, next_character_guid};
 use crate::helpers::require_operator;
 use crate::{
-    game_account, game_area, game_character, game_character_explored,
-    game_character_quest_event_credit, game_character_talent, game_character_taxi_node,
-    game_faction, game_item_instance, game_item_template, game_map, game_player_action,
-    game_player_reputation, game_player_skill, game_player_spell, game_quest_objective,
-    game_quest_template, game_skill_line, game_spell, game_talent, game_taxi_node, Account,
-    Character, CharacterExplored, CharacterQuestEventCredit, CharacterTalent, CharacterTaxiNode,
-    ItemInstance, PlayerAction, PlayerReputation, PlayerSkill, PlayerSpell,
+    game_account, game_area, game_character, game_character_explored, game_character_talent,
+    game_character_taxi_node, game_faction, game_item_template, game_map, game_player_action,
+    game_quest_objective, game_quest_template, game_skill_line, game_spell, game_talent,
+    game_taxi_node, Account, Character, CharacterExplored, CharacterQuestEventCredit,
+    CharacterTalent, CharacterTaxiNode, ItemInstance, PlayerAction, PlayerReputation, PlayerSkill,
 };
 
 #[table(accessor = game_character_migration)]
@@ -186,8 +184,8 @@ pub fn migrate_character(
         owner,
     };
     character.items(&migration.items)?;
-    character.spells_and_talents(&migration.spells, migration.level)?;
     character.skills(&migration.skills)?;
+    character.spells_and_talents(&migration.spells, migration.level)?;
     character.reputations(&migration.reputations)?;
     character.actions(&migration.actions)?;
     character.quests(&migration.quests)?;
@@ -422,7 +420,7 @@ impl Arrival<'_> {
                             },
                         )?;
                     }
-                    self.ctx.db.game_item_instance().insert(row);
+                    ItemInstance::insert_split(self.ctx, row);
                 }
                 None => displaced.push(item),
             }
@@ -436,7 +434,7 @@ impl Arrival<'_> {
                     )
                 })?;
             let row = self.item(item, slot)?;
-            self.ctx.db.game_item_instance().insert(row);
+            ItemInstance::insert_split(self.ctx, row);
         }
         Ok(())
     }
@@ -483,7 +481,6 @@ impl Arrival<'_> {
             }
         }
         let mut learned_talents: HashMap<u32, u8> = HashMap::new();
-        let mut known = HashSet::new();
         for &spell_id in spells {
             if let Some(&(talent_id, rank)) = talent_ranks.get(&spell_id) {
                 let learned = learned_talents.entry(talent_id).or_default();
@@ -493,14 +490,7 @@ impl Arrival<'_> {
             if self.ctx.db.game_spell().spell_id().find(spell_id).is_none() {
                 return Err(format!("spell {spell_id} is not imported"));
             }
-            if known.insert(spell_id) {
-                self.ctx.db.game_player_spell().insert(PlayerSpell {
-                    id: 0,
-                    character_guid: self.guid,
-                    owner_identity: self.owner,
-                    spell_id,
-                });
-            }
+            crate::spell::learn_spell(self.ctx, self.guid, self.owner, spell_id);
         }
         let spent: u32 = learned_talents.values().map(|&rank| u32::from(rank)).sum();
         let earned = crate::talent::talent_points_available(u32::from(level), 0);
@@ -537,14 +527,17 @@ impl Arrival<'_> {
             {
                 return Err(format!("skill {} is not imported", skill.skill_line));
             }
-            self.ctx.db.game_player_skill().insert(PlayerSkill {
-                id: 0,
-                character_guid: self.guid,
-                owner_identity: self.owner,
-                skill_line: skill.skill_line,
-                current: skill.current.min(skill.max_rank),
-                max_rank: skill.max_rank,
-            });
+            PlayerSkill::insert(
+                self.ctx,
+                PlayerSkill {
+                    id: 0,
+                    character_guid: self.guid,
+                    owner_identity: self.owner,
+                    skill_line: skill.skill_line,
+                    current: skill.current.min(skill.max_rank),
+                    max_rank: skill.max_rank,
+                },
+            );
         }
         Ok(())
     }
@@ -563,10 +556,9 @@ impl Arrival<'_> {
                 .find(reputation.faction_id)
                 .filter(|faction| faction.reputation_index >= 0)
                 .ok_or_else(|| format!("faction {} has no reputation", reputation.faction_id))?;
-            self.ctx
-                .db
-                .game_player_reputation()
-                .insert(PlayerReputation {
+            PlayerReputation::insert(
+                self.ctx,
+                PlayerReputation {
                     id: 0,
                     character_guid: self.guid,
                     owner_identity: self.owner,
@@ -578,7 +570,8 @@ impl Arrival<'_> {
                     ),
                     reputation_index: faction.reputation_index,
                     at_war: reputation.at_war,
-                });
+                },
+            );
         }
         Ok(())
     }
@@ -631,7 +624,8 @@ impl Arrival<'_> {
                         ));
                     }
                     if entry.event_credit {
-                        self.ctx.db.game_character_quest_event_credit().insert(
+                        CharacterQuestEventCredit::insert(
+                            self.ctx,
                             CharacterQuestEventCredit {
                                 id: 0,
                                 character_guid: self.guid,

@@ -409,7 +409,7 @@ crate::character_owned!(transfer, fn sweep_transfer_game_character_quest_log(ctx
 });
 
 impl CharacterQuestEventCredit {
-    fn insert(ctx: &ReducerContext, row: Self) -> Self {
+    pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
         let row = ctx.db.game_character_quest_event_credit().insert(row);
         crate::native::quest_event_credit(ctx, &row, true);
         row
