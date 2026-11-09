@@ -287,6 +287,11 @@ pub fn migrate_letter(ctx: &ReducerContext, letter: LetterMigration) -> Result<(
             ))
         }
     };
+    if sender_kind_is_character(letter.sender_kind) && sender_guid == 0 && letter.cod > 0 {
+        return Err(format!(
+            "letter {source_key}: cash on delivery needs a migrated sender to receive the copper"
+        ));
+    }
     let item = match &letter.attachment {
         Some(attachment) => {
             checked_template(ctx, attachment.entry, attachment.stack_count)?;
@@ -348,6 +353,10 @@ fn migrated_guid(
         .source_key()
         .find(source_key(source, source_guid)?)
         .map(|record| record.character_guid))
+}
+
+fn sender_kind_is_character(kind: u8) -> bool {
+    kind == lyracore_shared::mail::SENDER_KIND_CHARACTER
 }
 
 fn checked_template(

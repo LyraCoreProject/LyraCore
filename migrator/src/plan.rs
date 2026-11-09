@@ -773,6 +773,7 @@ fn migrated_letters(
     subject: &str,
     report: &mut Findings,
 ) -> Result<Vec<LetterMigration>> {
+    let mut cod = letter.cod;
     let (sender_kind, sender_source_guid, sender_entry) = match letter.message_type {
         MAIL_NORMAL => {
             if !senders.contains(&letter.sender) {
@@ -784,6 +785,14 @@ fn migrated_letters(
                         letter.sender
                     ),
                 );
+                if cod > 0 {
+                    report.add(
+                        subject,
+                        Outcome::Dropped,
+                        format!("its cash on delivery price of {cod}, which nobody would receive"),
+                    );
+                    cod = 0;
+                }
             }
             (MAIL_NORMAL, letter.sender, 0)
         }
@@ -836,16 +845,13 @@ fn migrated_letters(
                 body: letter.body.clone(),
                 attachment: item.into(),
                 money: if first { letter.money } else { 0 },
-                cod: if first { letter.cod } else { 0 },
+                cod: if first { cod } else { 0 },
                 checked: letter.checked,
                 mail_template_id: letter.mail_template_id,
                 expire_secs: letter.expire_secs,
                 deliver_secs: letter.deliver_secs,
             };
-            let size = serde_json::to_string(&migrated)?.len();
-            if size > MAX_REDUCER_ARGUMENT_BYTES {
-                bail!("its plan is {size} bytes, more than one reducer call carries");
-            }
+            fits_one_call(&migrated)?;
             Ok(migrated)
         })
         .collect()
@@ -1217,6 +1223,21 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.detail.contains("cannot return")));
+    }
+
+    #[test]
+    fn cash_on_delivery_from_a_sender_outside_the_migration_is_dropped() {
+        let mut source = character();
+        let mut cod = letter(MAIL_NORMAL, 99, vec![letter_item(70, 2589)]);
+        cod.cod = 500;
+        source.letters = vec![cod];
+        let plan = plan_one(source);
+        assert_eq!(plan.letters[0].cod, 0);
+        assert!(plan
+            .findings
+            .iter()
+            .any(|f| f.outcome == Outcome::Dropped
+                && f.detail.contains("cash on delivery price of 500")));
     }
 
     #[test]

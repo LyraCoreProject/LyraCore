@@ -97,8 +97,10 @@ with sender guid 0, and its expiry deletes it instead of returning it. Auction h
 GameObject senders keep their entry; other source message types are refused.
 
 The letter keeps its subject, body, copper, cash on delivery price, mail template and check flags.
-Its creation time is derived from the source expiry, so the letter expires when it would have
-expired at the source. A pending delivery keeps its delivery time. Stationery follows the sender
+Its creation time is derived from the source expiry and its current cash on delivery price, so
+it expires when it would have expired at the source. A letter whose cash on delivery was already
+paid has no price left and gets the full 30 days. A cash on delivery letter needs a migrated sender
+to receive the copper; the tool drops the price when the sender does not migrate. A pending delivery keeps its delivery time. Stationery follows the sender
 kind. An attached Letter Copy gets its own Item Text row.
 
 1.12 Mail carries one Item. A source Mail with more Items becomes one letter for each Item; the
