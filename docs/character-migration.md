@@ -121,6 +121,20 @@ rerun does not add back a contact that its player removed.
 The tool keeps a contact only when both Characters are in the migration, already migrated or
 planned. It reports the other contacts, friends of the other faction and contacts over a cap.
 
+## Guilds
+
+`migrate_guild(guild)` founds one Guild of migrated Characters through the normal founding rules:
+a valid and unused name, and a leader in no Guild. It then sets the message of the day, the
+information text, the emblem and the source ranks, five to ten ids from 0 without gaps. Members
+join through the normal membership path with their rank and notes; only the leader holds rank 0,
+and every member must be on the leader's team. A member that is not a migrated Character is
+skipped; the leader must be one. `apply` sends Guilds last.
+`game_guild_migration` records `<source>/<source guild id>`, so a rerun changes nothing. A refusal
+leaves no Guild.
+
+The tool refuses a Guild whose leader does not migrate. It drops members that do not migrate and
+shortens text to the 1.12 limits, with a finding for each. The guild event log does not migrate.
+
 Health starts full and power starts at its class default at the first world entry. The Character
 does not see the opening cinematic. GM levels, Auras, cooldowns, Instance bindings, temporary
 enchantments and item charges do not migrate.

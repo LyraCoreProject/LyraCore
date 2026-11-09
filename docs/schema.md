@@ -410,6 +410,8 @@ Character keeps the row, so a rerun of the migration does not recreate the Chara
 the Mail it created. Deleting the Mail keeps the row.
 `game_contact_migration` is private and keyed by the owner's `<label>/<source guid>`. It marks a
 contact list as applied, so removed contacts stay removed after a rerun.
+`game_guild_migration` is private, keyed by `<label>/<source guild id>`, and names the Guild it
+founded.
 
 ### Chat (`module/src/chat.rs`, `module/src/realm_chat.rs`, `module/src/channel.rs`)
 
