@@ -470,7 +470,7 @@ pub struct GuildMigrationRecord {
     pub migrated_at: Timestamp,
 }
 
-// Founds one Guild of migrated Characters through the normal founding and membership rules.
+// Founds one Guild through the normal founding and membership rules, skipping unmigrated members.
 #[reducer]
 pub fn migrate_guild(ctx: &ReducerContext, guild: GuildMigration) -> Result<(), String> {
     use crate::{game_guild, game_guild_rank};
@@ -550,7 +550,13 @@ pub fn migrate_guild(ctx: &ReducerContext, guild: GuildMigration) -> Result<(), 
         });
     }
     for member in &guild.members {
-        let character = migrated_character(ctx, &guild.source, member.source_guid)?;
+        let Ok(character) = migrated_character(ctx, &guild.source, member.source_guid) else {
+            spacetimedb::log::info!(
+                "migrate_guild: {source_key} skips member {}, which is not a migrated Character",
+                member.source_guid
+            );
+            continue;
+        };
         if character.guid != leader.guid {
             if member.rank_id == 0 || member.rank_id as usize >= guild.ranks.len() {
                 return Err(refuse(

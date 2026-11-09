@@ -906,7 +906,7 @@ fn migrated_guild(
         );
     }
     let [emblem_style, emblem_color, border_style, border_color, background_color] = guild.emblem;
-    Some(GuildMigration {
+    let migration = GuildMigration {
         source: source.to_string(),
         source_guild_id: guild.id,
         name: guild.name.clone(),
@@ -920,7 +920,12 @@ fn migrated_guild(
         background_color,
         ranks,
         members,
-    })
+    };
+    if let Err(reason) = fits_one_call(&migration) {
+        report.add(&subject, Outcome::Refused, reason.to_string());
+        return None;
+    }
+    Some(migration)
 }
 
 fn position_of(position: &LegacyPosition) -> MigratedPosition {

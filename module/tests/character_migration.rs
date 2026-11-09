@@ -660,7 +660,7 @@ fn a_guild_of_migrated_characters_keeps_its_ranks_members_and_notes() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_guild_with_a_member_that_was_not_migrated_is_refused() {
+fn a_guild_member_that_was_not_migrated_is_skipped() {
     let (shard, catalogue) = realm("character-migration-guild-member");
     shard.assert_output_success(
         &migrate(&shard, &migration(&catalogue, 7, "Migrant")),
@@ -670,10 +670,13 @@ fn a_guild_with_a_member_that_was_not_migrated_is_refused() {
         {"source_guid": 7, "rank_id": 0, "public_note": "", "officer_note": ""},
         {"source_guid": 99, "rank_id": 4, "public_note": "", "officer_note": ""},
     ]));
+    shard.assert_call("migrate_guild", &[&plan]);
 
-    let text = refusal(&shard.call("migrate_guild", &[&plan]));
-    assert!(text.contains("is not a migrated Character"), "{text}");
-    assert!(shard
-        .query_rows("SELECT guild_id FROM game_guild WHERE name = 'Old Friends'")
-        .is_empty());
+    let guilds = shard.query_rows("SELECT guild_id FROM game_guild WHERE name = 'Old Friends'");
+    assert_eq!(guilds.len(), 1);
+    let members = shard.query_rows(&format!(
+        "SELECT character_guid FROM game_guild_member WHERE guild_id = {}",
+        guilds[0]["guild_id"]
+    ));
+    assert_eq!(members.len(), 1);
 }

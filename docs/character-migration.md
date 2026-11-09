@@ -127,7 +127,8 @@ planned. It reports the other contacts, friends of the other faction and contact
 a valid and unused name, and a leader in no Guild. It then sets the message of the day, the
 information text, the emblem and the source ranks, five to ten ids from 0 without gaps. Members
 join through the normal membership path with their rank and notes; only the leader holds rank 0,
-and every member must be on the leader's team. `apply` sends Guilds last.
+and every member must be on the leader's team. A member that is not a migrated Character is
+skipped; the leader must be one. `apply` sends Guilds last.
 `game_guild_migration` records `<source>/<source guild id>`, so a rerun changes nothing. A refusal
 leaves no Guild.
 
