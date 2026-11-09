@@ -1,0 +1,28 @@
+[package]
+name = "lyracore-migrator"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+repository.workspace = true
+homepage.workspace = true
+publish.workspace = true
+description = "LyraCore Character Migration: copies Accounts and Characters from a vmangos or cmangos server into a Shard."
+
+[[bin]]
+name = "lyracore-migrator"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+mysql = { version = "26", default-features = false, features = ["minimal-rust"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+
+[dev-dependencies]
+lyracore-protocol.workspace = true
+wow_srp = "0.7"
+
+[lints]
+workspace = true
