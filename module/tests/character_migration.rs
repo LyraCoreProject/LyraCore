@@ -597,3 +597,83 @@ fn a_contact_with_a_character_that_was_not_migrated_is_skipped() {
     assert_eq!(contacts.len(), 1);
     assert_eq!(contacts[0]["target_guid"], guid_of(&shard, "Alt"));
 }
+
+fn guild(members: Value) -> String {
+    let ranks: Vec<Value> = ["Leader", "Officer", "Veteran", "Member", "Initiate"]
+        .iter()
+        .enumerate()
+        .map(|(rank_id, name)| json!({"rank_id": rank_id, "name": name, "rights": 0x41}))
+        .collect();
+    json!({
+        "source": "vmangos-main",
+        "source_guild_id": 3,
+        "name": "Old Friends",
+        "leader_source_guid": 7,
+        "motd": "Welcome home",
+        "info": "From the old realm",
+        "emblem_style": 1,
+        "emblem_color": 2,
+        "border_style": 3,
+        "border_color": 4,
+        "background_color": 5,
+        "ranks": ranks,
+        "members": members,
+    })
+    .to_string()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_guild_of_migrated_characters_keeps_its_ranks_members_and_notes() {
+    let (shard, catalogue) = realm("character-migration-guild");
+    shard.assert_output_success(
+        &migrate(&shard, &migration(&catalogue, 7, "Migrant")),
+        "Migrant",
+    );
+    shard.assert_output_success(&migrate(&shard, &migration(&catalogue, 8, "Alt")), "Alt");
+    let plan = guild(json!([
+        {"source_guid": 7, "rank_id": 0, "public_note": "Founder", "officer_note": ""},
+        {"source_guid": 8, "rank_id": 3, "public_note": "Alt", "officer_note": "Trusted"},
+    ]));
+    shard.assert_call("migrate_guild", &[&plan]);
+    shard.assert_call("migrate_guild", &[&plan]);
+
+    let guilds = shard.query_rows("SELECT guild_id, leader_guid, motd, emblem_style FROM game_guild WHERE name = 'Old Friends'");
+    assert_eq!(guilds.len(), 1);
+    assert_eq!(guilds[0]["leader_guid"], guid_of(&shard, "Migrant"));
+    assert_eq!(guilds[0]["motd"], "Welcome home");
+    let id = &guilds[0]["guild_id"];
+    let ranks = shard.query_rows(&format!(
+        "SELECT rank_id, name FROM game_guild_rank WHERE guild_id = {id}"
+    ));
+    assert_eq!(ranks.len(), 5);
+    assert!(ranks
+        .iter()
+        .any(|rank| rank["rank_id"] == "1" && rank["name"] == "Officer"));
+    let alt = &shard.query_rows(&format!(
+        "SELECT rank_id, officer_note FROM game_guild_member WHERE character_guid = {}",
+        guid_of(&shard, "Alt")
+    ))[0];
+    assert_eq!(alt["rank_id"], "3");
+    assert_eq!(alt["officer_note"], "Trusted");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_guild_with_a_member_that_was_not_migrated_is_refused() {
+    let (shard, catalogue) = realm("character-migration-guild-member");
+    shard.assert_output_success(
+        &migrate(&shard, &migration(&catalogue, 7, "Migrant")),
+        "Migrant",
+    );
+    let plan = guild(json!([
+        {"source_guid": 7, "rank_id": 0, "public_note": "", "officer_note": ""},
+        {"source_guid": 99, "rank_id": 4, "public_note": "", "officer_note": ""},
+    ]));
+
+    let text = refusal(&shard.call("migrate_guild", &[&plan]));
+    assert!(text.contains("is not a migrated Character"), "{text}");
+    assert!(shard
+        .query_rows("SELECT guild_id FROM game_guild WHERE name = 'Old Friends'")
+        .is_empty());
+}

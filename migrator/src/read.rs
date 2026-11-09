@@ -66,6 +66,33 @@ pub(crate) struct LegacyPet {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LegacyGuildRank {
+    pub(crate) id: u32,
+    pub(crate) name: String,
+    pub(crate) rights: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LegacyGuildMember {
+    pub(crate) guid: u64,
+    pub(crate) rank: u32,
+    pub(crate) public_note: String,
+    pub(crate) officer_note: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LegacyGuild {
+    pub(crate) id: u64,
+    pub(crate) name: String,
+    pub(crate) leader: u64,
+    pub(crate) emblem: [u32; 5],
+    pub(crate) info: String,
+    pub(crate) motd: String,
+    pub(crate) ranks: Vec<LegacyGuildRank>,
+    pub(crate) members: Vec<LegacyGuildMember>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct LegacyLetter {
     pub(crate) id: u64,
     pub(crate) message_type: u8,
@@ -188,6 +215,12 @@ pub(crate) struct Dialect {
     pet_xp: &'static str,
     pet_loyalty_points: &'static str,
     pet_happiness: &'static str,
+    guild_id: &'static str,
+    guild_leader: &'static str,
+    guild_emblem: [&'static str; 5],
+    guild_member_notes: [&'static str; 2],
+    guild_rank_id: &'static str,
+    guild_rank_name: &'static str,
 }
 
 const VMANGOS: Dialect = Dialect {
@@ -215,6 +248,18 @@ const VMANGOS: Dialect = Dialect {
     pet_xp: "xp",
     pet_loyalty_points: "loyalty_points",
     pet_happiness: "current_happiness",
+    guild_id: "guild_id",
+    guild_leader: "leader_guid",
+    guild_emblem: [
+        "emblem_style",
+        "emblem_color",
+        "border_style",
+        "border_color",
+        "background_color",
+    ],
+    guild_member_notes: ["player_note", "officer_note"],
+    guild_rank_id: "id",
+    guild_rank_name: "name",
 };
 
 const CMANGOS: Dialect = Dialect {
@@ -242,6 +287,18 @@ const CMANGOS: Dialect = Dialect {
     pet_xp: "exp",
     pet_loyalty_points: "loyaltypoints",
     pet_happiness: "curhappiness",
+    guild_id: "guildid",
+    guild_leader: "leaderguid",
+    guild_emblem: [
+        "EmblemStyle",
+        "EmblemColor",
+        "BorderStyle",
+        "BorderColor",
+        "BackgroundColor",
+    ],
+    guild_member_notes: ["pnote", "offnote"],
+    guild_rank_id: "rid",
+    guild_rank_name: "rname",
 };
 
 impl Dialect {
@@ -425,7 +482,39 @@ impl Dialect {
                 "character_social",
                 vec![("guid", Integer), ("friend", Integer), ("flags", Integer)],
             ),
+            ("guild", self.guild_columns()),
+            (
+                "guild_rank",
+                vec![
+                    (self.guild_id, Integer),
+                    (self.guild_rank_id, Integer),
+                    (self.guild_rank_name, Text),
+                    ("rights", Integer),
+                ],
+            ),
+            (
+                "guild_member",
+                vec![
+                    (self.guild_id, Integer),
+                    ("guid", Integer),
+                    ("rank", Integer),
+                    (self.guild_member_notes[0], Text),
+                    (self.guild_member_notes[1], Text),
+                ],
+            ),
         ]
+    }
+
+    fn guild_columns(&self) -> Vec<(&'static str, ColumnType)> {
+        let mut columns = vec![
+            (self.guild_id, Integer),
+            ("name", Text),
+            (self.guild_leader, Integer),
+            ("info", Text),
+            ("motd", Text),
+        ];
+        columns.extend(self.guild_emblem.iter().map(|column| (*column, Integer)));
+        columns
     }
 
     fn pet_columns(&self) -> Vec<(&'static str, ColumnType)> {
@@ -540,6 +629,70 @@ pub(crate) fn check_characters_profile(
     dialect: &Dialect,
 ) -> Result<()> {
     check_profile(database, "characters", &dialect.characters_tables())
+}
+
+pub(crate) fn read_guilds(
+    database: &mut dyn SourceDatabase,
+    dialect: &Dialect,
+) -> Result<Vec<LegacyGuild>> {
+    let columns: Vec<&str> = dialect
+        .guild_columns()
+        .into_iter()
+        .map(|(name, _)| name)
+        .collect();
+    let mut guilds = Vec::new();
+    for row in database.select("guild", &columns, Filter::All)? {
+        let id: u64 = row.number(dialect.guild_id)?;
+        let by_guild = Filter::Equals(dialect.guild_id, id);
+        let mut emblem = [0; 5];
+        for (value, column) in emblem.iter_mut().zip(dialect.guild_emblem) {
+            *value = row.number(column)?;
+        }
+        let mut ranks = database
+            .select(
+                "guild_rank",
+                &[dialect.guild_rank_id, dialect.guild_rank_name, "rights"],
+                by_guild,
+            )?
+            .into_iter()
+            .map(|rank| {
+                Ok(LegacyGuildRank {
+                    id: rank.number(dialect.guild_rank_id)?,
+                    name: rank.text(dialect.guild_rank_name)?,
+                    rights: rank.number("rights")?,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        ranks.sort_by_key(|rank| rank.id);
+        let [public_note, officer_note] = dialect.guild_member_notes;
+        let members = database
+            .select(
+                "guild_member",
+                &["guid", "rank", public_note, officer_note],
+                by_guild,
+            )?
+            .into_iter()
+            .map(|member| {
+                Ok(LegacyGuildMember {
+                    guid: member.number("guid")?,
+                    rank: member.number("rank")?,
+                    public_note: member.text(public_note)?,
+                    officer_note: member.text(officer_note)?,
+                })
+            })
+            .collect::<Result<_>>()?;
+        guilds.push(LegacyGuild {
+            id,
+            name: row.text("name")?,
+            leader: row.number(dialect.guild_leader)?,
+            emblem,
+            info: row.text("info")?,
+            motd: row.text("motd")?,
+            ranks,
+            members,
+        });
+    }
+    Ok(guilds)
 }
 
 // Characters unlinked from their Account by a source deletion have account 0 and are skipped.

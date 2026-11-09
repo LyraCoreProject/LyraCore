@@ -1422,6 +1422,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "lyracore-protocol",
+ "lyracore-shared",
  "mysql",
  "serde",
  "serde_json",

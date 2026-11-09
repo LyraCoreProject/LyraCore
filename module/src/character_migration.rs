@@ -429,6 +429,161 @@ pub fn migrate_contacts(
     Ok(())
 }
 
+#[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub struct MigratedGuildRank {
+    pub rank_id: u32,
+    pub name: String,
+    pub rights: u32,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub struct MigratedGuildMember {
+    pub source_guid: u64,
+    pub rank_id: u32,
+    pub public_note: String,
+    pub officer_note: String,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub struct GuildMigration {
+    pub source: String,
+    pub source_guild_id: u64,
+    pub name: String,
+    pub leader_source_guid: u64,
+    pub motd: String,
+    pub info: String,
+    pub emblem_style: u32,
+    pub emblem_color: u32,
+    pub border_style: u32,
+    pub border_color: u32,
+    pub background_color: u32,
+    // Rank 0 is the Guild Master; ids run from 0 without gaps.
+    pub ranks: Vec<MigratedGuildRank>,
+    pub members: Vec<MigratedGuildMember>,
+}
+
+#[table(accessor = game_guild_migration)]
+pub struct GuildMigrationRecord {
+    #[primary_key]
+    pub source_key: String,
+    pub guild_id: u32,
+    pub migrated_at: Timestamp,
+}
+
+// Founds one Guild of migrated Characters through the normal founding and membership rules.
+#[reducer]
+pub fn migrate_guild(ctx: &ReducerContext, guild: GuildMigration) -> Result<(), String> {
+    use crate::{game_guild, game_guild_rank};
+    use lyracore_shared::guild::{
+        fits_length, MAX_INFO, MAX_MOTD, MAX_NOTE, MAX_RANKS, MAX_RANK_NAME, MIN_RANKS,
+    };
+    require_operator(ctx)?;
+    require_single_shard(ctx)?;
+    let source_key = source_key(&guild.source, guild.source_guild_id)?;
+    if ctx
+        .db
+        .game_guild_migration()
+        .source_key()
+        .find(&source_key)
+        .is_some()
+    {
+        return Ok(());
+    }
+    let refuse = |reason: &str| format!("guild {}: {reason}", guild.name);
+    if !(MIN_RANKS..=MAX_RANKS).contains(&guild.ranks.len())
+        || guild
+            .ranks
+            .iter()
+            .map(|rank| rank.rank_id)
+            .ne(0..guild.ranks.len() as u32)
+    {
+        return Err(refuse("ranks must be 5 to 10 ids from 0 without gaps"));
+    }
+    if !fits_length(&guild.motd, MAX_MOTD)
+        || !fits_length(&guild.info, MAX_INFO)
+        || guild
+            .ranks
+            .iter()
+            .any(|rank| !fits_length(&rank.name, MAX_RANK_NAME))
+        || guild.members.iter().any(|member| {
+            !fits_length(&member.public_note, MAX_NOTE)
+                || !fits_length(&member.officer_note, MAX_NOTE)
+        })
+    {
+        return Err(refuse("text is outside protocol limits"));
+    }
+    let leader = migrated_character(ctx, &guild.source, guild.leader_source_guid)?;
+    let team = lyracore_shared::faction::team_for_race(leader.race);
+    let guild_id = crate::guild::create_guild(
+        ctx,
+        leader.guid,
+        &leader.name,
+        team,
+        leader.account_id,
+        &guild.name,
+    )
+    .map_err(|refusal| refuse(refusal.as_tag()))?;
+    let guilds = ctx.db.game_guild();
+    let mut row = guilds
+        .guild_id()
+        .find(guild_id)
+        .ok_or_else(|| refuse("the founded Guild is missing"))?;
+    row.motd = guild.motd.clone();
+    row.info = guild.info.clone();
+    row.emblem_style = guild.emblem_style;
+    row.emblem_color = guild.emblem_color;
+    row.border_style = guild.border_style;
+    row.border_color = guild.border_color;
+    row.background_color = guild.background_color;
+    guilds.guild_id().update(row);
+    let ranks = ctx.db.game_guild_rank();
+    for rank in ranks.by_guild().filter(&guild_id).collect::<Vec<_>>() {
+        ranks.id().delete(rank.id);
+    }
+    for rank in &guild.ranks {
+        ranks.insert(crate::GuildRank {
+            id: 0,
+            guild_id,
+            rank_id: rank.rank_id,
+            name: rank.name.clone(),
+            rights: rank.rights,
+        });
+    }
+    for member in &guild.members {
+        let character = migrated_character(ctx, &guild.source, member.source_guid)?;
+        if character.guid != leader.guid {
+            if member.rank_id == 0 || member.rank_id as usize >= guild.ranks.len() {
+                return Err(refuse(
+                    "only the leader holds rank 0, and every rank must exist",
+                ));
+            }
+            if lyracore_shared::faction::team_for_race(character.race) != team {
+                return Err(refuse("every member must be on the leader's team"));
+            }
+            crate::guild::add_member(
+                ctx,
+                guild_id,
+                character.guid,
+                &character.name,
+                member.rank_id,
+                character.account_id,
+            )
+            .map_err(|refusal| refuse(refusal.as_tag()))?;
+        }
+        let mut row = crate::guild::member(ctx, character.guid)
+            .ok_or_else(|| refuse("a member is missing after joining"))?;
+        row.public_note = member.public_note.clone();
+        row.officer_note = member.officer_note.clone();
+        row.update(ctx);
+    }
+    ctx.db.game_guild_migration().insert(GuildMigrationRecord {
+        source_key,
+        guild_id,
+        migrated_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
 fn migrated_character(
     ctx: &ReducerContext,
     source: &str,
