@@ -124,6 +124,7 @@ fn item(entry: u32, location: Value, stack_count: u32) -> Value {
         "enchant_id": 0,
         "random_property_id": 0,
         "soulbound": true,
+        "text": {"none": []},
     })
 }
 
@@ -379,4 +380,99 @@ fn a_character_saved_in_an_instance_arrives_at_its_home_bind() {
         &shard.query_rows("SELECT map_id, x FROM game_character WHERE name = 'Migrant'")[0];
     assert_eq!(character["map_id"], "0");
     assert_eq!(character["x"], "50");
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+}
+
+fn letter(catalogue: &Catalogue, source_mail_id: u64, sender_kind: u8) -> Value {
+    json!({
+        "source": "vmangos-main",
+        "source_mail_id": source_mail_id,
+        "source_item_guid": 0,
+        "recipient_source_guid": 7,
+        "sender_kind": sender_kind,
+        "sender_source_guid": 8,
+        "sender_entry": 1234,
+        "subject": "Your reward",
+        "body": "Well done.",
+        "attachment": {"some": {
+            "entry": catalogue.stack,
+            "stack_count": 3,
+            "durability": 0,
+            "enchant_id": 0,
+            "random_property_id": 0,
+            "soulbound": false,
+            "text": {"some": "A copied letter"},
+        }},
+        "money": 500,
+        "cod": 0,
+        "checked": 0x11,
+        "mail_template_id": 0,
+        "expire_secs": now_secs() + 10 * 86_400,
+        "deliver_secs": 1_700_000_000u64,
+    })
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_migrated_letter_reaches_its_migrated_recipient_once() {
+    let (shard, catalogue) = realm("character-migration-letter");
+    shard.assert_output_success(
+        &migrate(&shard, &migration(&catalogue, 7, "Migrant")),
+        "Migrant",
+    );
+    shard.assert_output_success(&migrate(&shard, &migration(&catalogue, 8, "Alt")), "Alt");
+    let plan = letter(&catalogue, 40, 0).to_string();
+    shard.assert_call("migrate_letter", &[&plan]);
+    shard.assert_call("migrate_letter", &[&plan]);
+
+    let recipient = guid_of(&shard, "Migrant");
+    let mail = shard.query_rows(&format!(
+        "SELECT sender_guid, sender_kind, item_entry, item_text_id, money, was_read, check_flags FROM game_mail WHERE recipient_guid = {recipient}"
+    ));
+    assert_eq!(mail.len(), 1);
+    assert_eq!(mail[0]["sender_guid"], guid_of(&shard, "Alt"));
+    assert_eq!(mail[0]["item_entry"], catalogue.stack.to_string());
+    assert_eq!(mail[0]["money"], "500");
+    assert_eq!(mail[0]["was_read"], "true");
+    assert_eq!(mail[0]["check_flags"], "16");
+    let text = shard.query_rows(&format!(
+        "SELECT text FROM game_item_text WHERE id = {}",
+        mail[0]["item_text_id"]
+    ));
+    assert_eq!(text[0]["text"], "A copied letter");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_letter_for_a_character_that_was_not_migrated_is_refused() {
+    let (shard, catalogue) = realm("character-migration-letter-recipient");
+    let text = refusal(&shard.call("migrate_letter", &[&letter(&catalogue, 40, 3).to_string()]));
+    assert!(text.contains("is not a migrated Character"), "{text}");
+    assert!(shard.query_rows("SELECT id FROM game_mail").is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_letter_copy_in_the_inventory_keeps_its_text() {
+    let (shard, catalogue) = realm("character-migration-letter-copy");
+    let mut plan = migration(&catalogue, 7, "Migrant");
+    plan["items"][1]["text"] = json!({"some": "Dear Migrant"});
+    shard.assert_output_success(&migrate(&shard, &plan), "migrate_character");
+
+    let guid = guid_of(&shard, "Migrant");
+    let item = &shard.query_rows(&format!(
+        "SELECT item_text_id FROM game_item_instance WHERE owner_guid = {guid} AND slot = 123"
+    ))[0];
+    let text = shard.query_rows(&format!(
+        "SELECT text, letters FROM game_item_text WHERE id = {}",
+        item["item_text_id"]
+    ));
+    assert_eq!(text[0]["text"], "Dear Migrant");
+    assert_eq!(text[0]["letters"], "1");
 }

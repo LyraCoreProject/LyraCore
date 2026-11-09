@@ -130,9 +130,10 @@ fn write_plan(args: Args, shard: &Shard) -> Result<()> {
         .filter(|finding| finding.outcome == Outcome::Refused)
         .count();
     eprintln!(
-        "plan {out}: {} Accounts and {} Characters to migrate, {refused} refused",
+        "plan {out}: {} Accounts, {} Characters and {} letters to migrate, {refused} refused",
         plan.accounts.len(),
-        plan.characters.len()
+        plan.characters.len(),
+        plan.letters.len()
     );
     Ok(())
 }
@@ -175,6 +176,15 @@ fn apply(path: &str, shard: &Shard) -> Result<()> {
                     character.name, character.source_guid
                 );
             }
+        }
+    }
+    for letter in &plan.letters {
+        if let Err(refusal) = shard.call("migrate_letter", &serde_json::to_string(letter)?)? {
+            refusals += 1;
+            eprintln!(
+                "refused: letter {}/{}: {refusal}",
+                letter.source_mail_id, letter.source_item_guid
+            );
         }
     }
     if refusals > 0 {

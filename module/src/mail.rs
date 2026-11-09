@@ -338,9 +338,10 @@ fn store_letter(ctx: &ReducerContext, mut mail: Mail) -> Mail {
     }
 }
 
-pub(crate) fn receive_letter(ctx: &ReducerContext, mail: Mail) {
+pub(crate) fn receive_letter(ctx: &ReducerContext, mail: Mail) -> Mail {
     let mail = store_letter(ctx, mail);
     crate::mail_timer::start(ctx, &mail);
+    mail
 }
 
 pub(crate) fn deliver_or_route(ctx: &ReducerContext, mail: &Mail) {
