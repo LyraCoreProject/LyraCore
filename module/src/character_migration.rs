@@ -266,7 +266,7 @@ pub fn migrate_letter(ctx: &ReducerContext, letter: LetterMigration) -> Result<(
         return Ok(());
     }
     let recipient_guid = migrated_guid(ctx, &letter.source, letter.recipient_source_guid)?
-        .filter(|&guid| ctx.db.game_character().guid().find(guid).is_some())
+        .filter(|&guid| crate::helpers::character_by_guid(ctx, guid).is_some())
         .ok_or_else(|| {
             format!(
                 "letter {source_key}: recipient {} is not a migrated Character",
