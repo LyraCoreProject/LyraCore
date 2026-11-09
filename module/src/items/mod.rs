@@ -43,8 +43,8 @@ pub(crate) use exchange::{exchange_items, ItemStoragePlan};
 pub(crate) use guids::{allocate_item_guids, item_guid_exists, next_item_guid};
 pub(crate) use inventory::{
     apply_auto_bank_item, apply_equip_item, apply_equip_profile_upgrade, apply_item_destroy,
-    apply_item_move, apply_item_split, apply_unequip_item, count_free_inventory_slots,
-    is_carried_slot, validate_bag_dest_slot,
+    apply_item_move, apply_item_split, apply_unequip_item, bag_content_slot,
+    count_free_inventory_slots, first_free_storage_slot, is_carried_slot, validate_bag_dest_slot,
 };
 pub(crate) use ops::{
     apply_death_durability_loss, apply_item_use, apply_item_use_on,

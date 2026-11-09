@@ -5,7 +5,7 @@ use crate::game_config;
 use crate::game_world_entity;
 use crate::WorldEntity;
 
-const LEVEL_CAP: u32 = 60;
+pub(crate) const LEVEL_CAP: u32 = 60;
 
 #[table(accessor = game_xp_event, public, index(accessor = by_recipient, btree(columns = [recipient_identity])))]
 pub struct XpEvent {

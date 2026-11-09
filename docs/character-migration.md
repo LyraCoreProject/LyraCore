@@ -1,0 +1,46 @@
+# Character Migration
+
+A Character Migration copies Accounts and Characters from a vmangos or cmangos server, the
+Migration Source, into a single-Shard Realm. [ADR 0008](./adr/0008-migrate-characters-from-mangos-servers.md)
+records why the Module owns the translation. `module/src/character_migration.rs` holds the reducers.
+
+## Reducers
+
+Both reducers are Operator-only and refuse on a Shard with a Shard role.
+
+- `migrate_account(account)` creates an Account from a username, a 32-byte salt and a 32-byte
+  verifier, both little-endian as the logon proof uses them. The username is normalized to upper
+  case. An existing Account with the same name is reused only when salt and verifier match; a
+  source ban then also bans it. Any other existing Account refuses the migration.
+- `migrate_character(migration)` resolves the Account the same way, then writes one Character. Each
+  call is one transaction. A refusal names the first bad value and leaves no Account, Character or
+  record.
+
+`game_character_migration` is private and keyed by `<source>/<source guid>`. The source label is 1
+to 64 ASCII letters, digits, hyphens or underscores. A second call with a recorded key returns
+success and changes nothing. The record is not Character-owned: it outlives the Character, so a
+rerun never brings back a Character that its player deleted.
+
+## What arrives
+
+| Source state | LyraCore result |
+| --- | --- |
+| Name, race, class, appearance | Refused on a name in use (case-insensitive), an invalid race and class pair or a full Account. |
+| Level, XP, money, played time | Level 1 to 60. XP must stay below the next level; at the cap it is zero. |
+| Position | Kept on a continent. A Character in an Instance map, or with no position, arrives at its home bind. |
+| Home bind, rest | Kept. The last logout time and inn flag feed the normal offline rest at login. |
+| Items | Vanilla slots 0 to 62 and keyring slots 81 to 112 keep their address. Bag contents use the flat bag-content slot of their bag. |
+| Bank bags, large bags | This model has no bank bag slots and addresses 18 slots in each bag. A bank bag, its contents and Items past slot 18 of a bag move to the first free bank, backpack or bag slot, or the Character is refused. |
+| Item state | Entry, stack, durability (capped at the template), permanent enchantment, random property and soulbound. |
+| Spells | Kept. A spell that is a talent rank becomes a talent row at its highest rank instead; world entry relearns the rank spell. Spent points cannot exceed the level's points. |
+| Skills, action buttons | Kept. Buttons are 0 to 119. |
+| Reputation | Earned standing is added to the faction's base standing. The faction must have a reputation index. |
+| Quests | Rewarded quests and up to 20 quest log entries. A rewarded quest that cannot be repeated stays out of the log. Only a timed quest keeps its deadline. Kill and GameObject counters restart at zero, because the catalogue does not keep each objective's source slot; item objectives count the inventory as usual. |
+| Explored zones, taxi nodes | Explored bits map to areas by area bit. Taxi nodes map by `TaxiNodes.dbc` id. |
+
+Every referenced item, spell, skill, faction, quest, area and taxi node must exist in the Shard's
+catalogues, or the Character is refused.
+
+Health starts full and power starts at its class default at the first world entry. The Character
+does not see the opening cinematic. GM levels, Auras, cooldowns, Instance bindings, temporary
+enchantments and item charges do not migrate.

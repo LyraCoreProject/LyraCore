@@ -236,22 +236,32 @@ pub fn provision_account(
             accounts.id().update(acc);
         }
         None => {
-            accounts.insert(Account {
-                id: 0,
-                username,
-                salt,
-                verifier,
-                identity: None,
-                banned: false,
-                alpha_test_tools: provisioned_alpha_test_tools(
-                    None,
-                    current_alpha_test_tools_enrollment(ctx),
-                ),
-                gm_level: 0,
-            });
+            insert_provisioned_account(ctx, username, salt, verifier, false);
         }
     }
     Ok(())
+}
+
+pub(crate) fn insert_provisioned_account(
+    ctx: &ReducerContext,
+    username: String,
+    salt: Vec<u8>,
+    verifier: Vec<u8>,
+    banned: bool,
+) -> Account {
+    ctx.db.game_account().insert(Account {
+        id: 0,
+        username,
+        salt,
+        verifier,
+        identity: None,
+        banned,
+        alpha_test_tools: provisioned_alpha_test_tools(
+            None,
+            current_alpha_test_tools_enrollment(ctx),
+        ),
+        gm_level: 0,
+    })
 }
 
 #[reducer]

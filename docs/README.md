@@ -34,6 +34,7 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [module-build.md](./module-build.md) | Reference | You change Package discovery in `module/build.rs` |
 | [instance-lifecycle.md](./instance-lifecycle.md) | Reference | You change Instance leases, population or removal |
 | [character-transfer.md](./character-transfer.md) | Reference | You touch the retained Transfer reducers |
+| [character-migration.md](./character-migration.md) | Reference | You migrate Characters from vmangos or cmangos, or change the migration reducers |
 | [recipes/add-an-opcode.md](./recipes/add-an-opcode.md) | How-to | You handle a new client opcode |
 | [recipes/add-a-spell-effect.md](./recipes/add-a-spell-effect.md) | How-to | You implement a spell effect |
 | [agents/maintainer.md](./agents/maintainer.md) | Runbook | An agent works for a maintainer |
