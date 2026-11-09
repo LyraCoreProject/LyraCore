@@ -107,6 +107,15 @@ impl Shard {
                 continents.insert(map);
             }
         }
+        let mut beasts = HashSet::new();
+        for row in self.rows(
+            "SELECT entry, creature_family FROM game_creature_template",
+            &["entry", "creature_family"],
+        )? {
+            if row[1].as_u64().is_some_and(|family| family != 0) {
+                beasts.insert(number(&row[0])?);
+            }
+        }
         let area_bits = self
             .rows("SELECT area_bit FROM game_area", &["area_bit"])?
             .iter()
@@ -144,6 +153,7 @@ impl Shard {
             taxi_nodes: self.ids("game_taxi_node", "client_node_id")?,
             maps,
             continents,
+            beasts,
             character_names,
             accounts,
             migrated,

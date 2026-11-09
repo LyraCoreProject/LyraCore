@@ -3,9 +3,11 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::read::{Ban, LegacyAccount, LegacyCharacter, LegacyItem, LegacyLetter, LegacyPosition};
+use crate::read::{
+    Ban, LegacyAccount, LegacyCharacter, LegacyItem, LegacyLetter, LegacyPet, LegacyPosition,
+};
 
-pub(crate) const PLAN_FORMAT_VERSION: u32 = 2;
+pub(crate) const PLAN_FORMAT_VERSION: u32 = 3;
 // Linux limits one argv string to 128 KiB; `spacetime call` passes each argument as one.
 const MAX_REDUCER_ARGUMENT_BYTES: usize = 120_000;
 const SOULBOUND_FLAG: u32 = 0x1;
@@ -17,6 +19,10 @@ const QUEST_STATUS_INCOMPLETE: u32 = 3;
 const QUEST_STATUS_FAILED: u32 = 5;
 const ENCHANTMENT_WORDS_PER_SLOT: usize = 3;
 const TEMPORARY_ENCHANTMENT_SLOT: usize = 1;
+const HUNTER_CLASS: u8 = 3;
+// Vanilla MaNGOS keeps the active pet in slot 0 and stabled pets in slots 1 and 2.
+const ACTIVE_PET_SLOT: u32 = 0;
+const STABLE_SLOTS: std::ops::RangeInclusive<u32> = 1..=2;
 const MAIL_NORMAL: u8 = 0;
 const MAIL_AUCTION: u8 = 2;
 const MAIL_CREATURE: u8 = 3;
@@ -111,6 +117,18 @@ pub(crate) struct LetterMigration {
     pub(crate) deliver_secs: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct MigratedHunterPet {
+    pub(crate) creature_entry: u32,
+    pub(crate) name: String,
+    pub(crate) rename_allowed: bool,
+    pub(crate) level: u32,
+    pub(crate) xp: u32,
+    pub(crate) loyalty_level: u8,
+    pub(crate) loyalty_progress: u32,
+    pub(crate) happiness: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct MigratedSkill {
     pub(crate) skill_line: u32,
@@ -179,6 +197,7 @@ pub(crate) struct CharacterMigration {
     pub(crate) quests: Vec<MigratedQuest>,
     pub(crate) explored_zones: Vec<u32>,
     pub(crate) taxi_nodes: Vec<u32>,
+    pub(crate) hunter_pet: SatsOption<MigratedHunterPet>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -219,6 +238,7 @@ pub(crate) struct Catalogue {
     pub(crate) taxi_nodes: HashSet<u32>,
     pub(crate) maps: HashSet<u32>,
     pub(crate) continents: HashSet<u32>,
+    pub(crate) beasts: HashSet<u32>,
     pub(crate) character_names: HashSet<String>,
     // Upper-case username to little-endian salt and verifier hex.
     pub(crate) accounts: HashMap<String, (String, String)>,
@@ -595,6 +615,7 @@ fn migrated_character(
             );
             set_bits(&known, 1)
         },
+        hunter_pet: hunter_pet(catalogue, character, subject, report).into(),
     };
     fits_one_call(&migration)?;
     Ok(migration)
@@ -606,6 +627,61 @@ fn fits_one_call(argument: &impl Serialize) -> Result<()> {
         bail!("its plan is {size} bytes, more than one reducer call carries");
     }
     Ok(())
+}
+
+fn hunter_pet(
+    catalogue: &Catalogue,
+    character: &LegacyCharacter,
+    subject: &str,
+    report: &mut Findings,
+) -> Option<MigratedHunterPet> {
+    let active = character
+        .pets
+        .iter()
+        .filter(|pet| {
+            pet.hunter && character.class == HUNTER_CLASS && !STABLE_SLOTS.contains(&pet.slot)
+        })
+        .min_by_key(|pet| (pet.slot != ACTIVE_PET_SLOT, pet.id));
+    for pet in &character.pets {
+        let detail = if !pet.hunter {
+            format!(
+                "summoned pet {} does not migrate; it is summoned again",
+                pet.name
+            )
+        } else if Some(pet) != active {
+            format!(
+                "pet {} does not migrate, because LyraCore has no stable",
+                pet.name
+            )
+        } else if !catalogue.beasts.contains(&pet.entry) {
+            format!(
+                "pet {}: creature {} is not an imported beast",
+                pet.name, pet.entry
+            )
+        } else {
+            if pet.spells > 0 {
+                report.add(
+                    subject,
+                    Outcome::Dropped,
+                    format!("{} spells of pet {}", pet.spells, pet.name),
+                );
+            }
+            continue;
+        };
+        report.add(subject, Outcome::Dropped, detail);
+    }
+    active
+        .filter(|pet| catalogue.beasts.contains(&pet.entry))
+        .map(|pet| MigratedHunterPet {
+            creature_entry: pet.entry,
+            name: pet.name.clone(),
+            rename_allowed: !pet.renamed,
+            level: pet.level.min(u32::from(character.level)),
+            xp: pet.xp,
+            loyalty_level: pet.loyalty.clamp(1, 6),
+            loyalty_progress: pet.loyalty_points,
+            happiness: pet.happiness,
+        })
 }
 
 fn position_of(position: &LegacyPosition) -> MigratedPosition {
@@ -919,6 +995,7 @@ mod tests {
             actions: Vec::new(),
             quests: Vec::new(),
             letters: Vec::new(),
+            pets: Vec::new(),
         }
     }
 
@@ -932,6 +1009,7 @@ mod tests {
             taxi_nodes: [2].into(),
             maps: [0, 36].into(),
             continents: [0].into(),
+            beasts: [51_000].into(),
             ..Catalogue::default()
         }
     }
@@ -1250,6 +1328,52 @@ mod tests {
             plan.findings.last().map(|finding| finding.outcome),
             Some(Outcome::Refused)
         );
+    }
+
+    fn pet(id: u64, slot: u32, hunter: bool) -> LegacyPet {
+        LegacyPet {
+            id,
+            entry: 51_000,
+            hunter,
+            slot,
+            name: format!("Pet {id}"),
+            renamed: true,
+            level: 30,
+            xp: 10,
+            loyalty: 3,
+            loyalty_points: 100,
+            happiness: 500_000,
+            spells: 2,
+        }
+    }
+
+    #[test]
+    fn a_hunter_keeps_the_active_pet_and_the_stable_is_reported() {
+        let mut source = character();
+        source.class = HUNTER_CLASS;
+        source.pets = vec![pet(1, 1, true), pet(2, ACTIVE_PET_SLOT, true)];
+        let plan = plan_one(source);
+        let SatsOption::Some(active) = &plan.characters[0].hunter_pet else {
+            panic!("the active pet migrates");
+        };
+        assert_eq!(active.name, "Pet 2");
+        assert_eq!(active.level, 20);
+        assert!(!active.rename_allowed);
+        let details: Vec<_> = plan.findings.iter().map(|f| f.detail.as_str()).collect();
+        assert!(details.contains(&"pet Pet 1 does not migrate, because LyraCore has no stable"));
+        assert!(details.contains(&"2 spells of pet Pet 2"));
+    }
+
+    #[test]
+    fn a_summoned_demon_is_reported_and_not_migrated() {
+        let mut source = character();
+        source.pets = vec![pet(3, ACTIVE_PET_SLOT, false)];
+        let plan = plan_one(source);
+        assert_eq!(plan.characters[0].hunter_pet, SatsOption::None([]));
+        assert!(plan
+            .findings
+            .iter()
+            .any(|f| f.detail.contains("summoned again")));
     }
 
     #[test]
