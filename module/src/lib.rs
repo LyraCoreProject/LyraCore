@@ -148,6 +148,7 @@ mod fatigue;
 
 mod channel;
 mod character;
+mod character_migration;
 mod chat;
 mod combat;
 mod config;

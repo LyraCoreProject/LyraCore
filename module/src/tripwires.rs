@@ -16,6 +16,10 @@ pub(crate) mod character_owned_tripwire {
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
         (
+            &["game_character_migration"],
+            "Operator record of a Character Migration outlives the Character, so a rerun does not migrate a deleted Character again",
+        ),
+        (
             &["game_auction_deletion"],
             "Realm-owned deletion guard rejects late Auction requests until the World reports the deletion outcome, independent of the client connection",
         ),

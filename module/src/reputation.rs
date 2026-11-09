@@ -70,6 +70,10 @@ crate::character_owned!(restamp, fn sweep_restamp_game_player_reputation(ctx, ch
 const REP_MIN: i32 = -42000;
 const REP_MAX: i32 = 42000;
 
+pub(crate) fn clamped_standing(standing: i32) -> i32 {
+    standing.clamp(REP_MIN, REP_MAX)
+}
+
 pub(crate) fn reputation_rank(standing: i32) -> u8 {
     lyracore_shared::faction::reputation_rank(standing)
 }

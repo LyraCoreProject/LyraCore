@@ -399,6 +399,13 @@ Gateway table, and nothing writes it. Module tests and the native check still op
 `game_account_claim`. Operator reducers that act for a Character take a `SessionActor`; a null
 ownership refuses a Character with an active Account Claim.
 
+### Character Migration (`module/src/character_migration.rs`)
+
+Private. `game_character_migration` is keyed by `<Migration Source label>/<source guid>` and names
+the Character guid that the migration created. It is classified as not Character-owned: deleting the
+Character keeps the row, so a rerun of the migration does not recreate the Character. See
+[Character Migration](./character-migration.md).
+
 ### Chat (`module/src/chat.rs`, `module/src/realm_chat.rs`, `module/src/channel.rs`)
 
 `game_chat_event_live` is the event row for one say, yell, `/e` or creature line. The chat handler
