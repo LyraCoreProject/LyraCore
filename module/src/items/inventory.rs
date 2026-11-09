@@ -519,7 +519,7 @@ pub(crate) fn valid_split_dest_slot(to_slot: u8) -> bool {
     valid_dest_slot(to_slot) && to_slot > BAG_SLOT_END_INCL
 }
 
-// Returns None for a bank bag, whose contents have no address in this model.
+// Returns None for a position this flat model cannot address, such as inside a bank bag.
 pub(crate) fn bag_content_slot(bag_equip_slot: u8, slot_in_bag: u8) -> Option<u8> {
     ((BAG_SLOT_START..=BAG_SLOT_END_INCL).contains(&bag_equip_slot) && slot_in_bag < MAX_BAG_SIZE)
         .then(|| {

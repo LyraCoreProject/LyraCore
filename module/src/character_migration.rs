@@ -91,8 +91,6 @@ pub struct MigratedAction {
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
 pub struct MigratedQuestLogEntry {
-    // Source creature or GameObject objective counters, in source slot order.
-    pub creature_or_gameobject_counts: Vec<u32>,
     pub event_credit: bool,
     pub failed: bool,
     pub deadline_secs: u64,
@@ -122,7 +120,7 @@ pub struct CharacterMigration {
     pub level: u8,
     pub xp: u32,
     pub money: u32,
-    // None places the Character at its home bind.
+    // None, or a position off a continent, places the Character at its home bind.
     pub position: Option<MigratedPosition>,
     pub home: MigratedPosition,
     pub played_total_secs: u32,
@@ -604,17 +602,19 @@ impl Arrival<'_> {
             if !seen.insert(quest.quest_entry) {
                 return Err(format!("quest {} arrives twice", quest.quest_entry));
             }
-            if self
+            let template = self
                 .ctx
                 .db
                 .game_quest_template()
                 .entry()
                 .find(quest.quest_entry)
-                .is_none()
-            {
-                return Err(format!("quest {} is not imported", quest.quest_entry));
-            }
-            let (counts, rewarded, failed, deadline_micros) = match &quest.log {
+                .ok_or_else(|| format!("quest {} is not imported", quest.quest_entry))?;
+            // A rewarded quest returns to the log only when it can be taken again.
+            let log = quest
+                .log
+                .as_ref()
+                .filter(|_| !quest.rewarded || template.repeatable);
+            let (counts, rewarded, failed, deadline_micros) = match log {
                 Some(entry) => {
                     logged += 1;
                     if logged > crate::quest::MAX_QUEST_LOG_SIZE {
@@ -633,15 +633,18 @@ impl Arrival<'_> {
                             },
                         );
                     }
-                    let deadline_micros = i64::try_from(
-                        entry.deadline_secs.saturating_mul(1_000_000),
-                    )
-                    .map_err(|_| format!("quest {} deadline is out of range", quest.quest_entry))?;
+                    // MaNGOS saves a timer for every quest; only a timed quest has a deadline.
+                    let deadline_secs = if template.limit_time > 0 {
+                        entry.deadline_secs
+                    } else {
+                        0
+                    };
+                    let deadline_micros = i64::try_from(deadline_secs.saturating_mul(1_000_000))
+                        .map_err(|_| {
+                            format!("quest {} deadline is out of range", quest.quest_entry)
+                        })?;
                     (
-                        self.objective_counts(
-                            quest.quest_entry,
-                            &entry.creature_or_gameobject_counts,
-                        ),
+                        self.objective_counts(quest.quest_entry),
                         false,
                         entry.failed,
                         deadline_micros,
@@ -667,29 +670,16 @@ impl Arrival<'_> {
         Ok(())
     }
 
-    // The importer numbers creature and GameObject objectives first, in source slot order.
-    fn objective_counts(&self, quest_entry: u32, source_counts: &[u32]) -> Vec<u32> {
-        let mut objectives: Vec<_> = self
+    // Kill and GameObject counters restart: the catalogue does not keep source objective slots.
+    fn objective_counts(&self, quest_entry: u32) -> Vec<u32> {
+        let objectives = self
             .ctx
             .db
             .game_quest_objective()
             .by_quest()
             .filter(&quest_entry)
-            .collect();
-        objectives.sort_by_key(|objective| objective.obj_index);
-        let mut counts = vec![0; objectives.len().min(crate::quest::MAX_OBJECTIVES)];
-        let mut source = source_counts.iter();
-        for objective in objectives {
-            use lyracore_shared::quest::objective_kind::{KILL_CREATURE, USE_GAMEOBJECT};
-            if objective.kind != KILL_CREATURE && objective.kind != USE_GAMEOBJECT {
-                continue;
-            }
-            let have = source.next().copied().unwrap_or(0);
-            if let Some(count) = counts.get_mut(usize::from(objective.obj_index)) {
-                *count = have.min(objective.required_count);
-            }
-        }
-        counts
+            .count();
+        vec![0; objectives.min(crate::quest::MAX_OBJECTIVES)]
     }
 
     fn explored(&self, explored_zones: &[u32]) -> Result<(), String> {
@@ -753,6 +743,7 @@ impl Arrival<'_> {
 
 const BANK_BAG_SLOTS: std::ops::RangeInclusive<u8> = 63..=68;
 const KEYRING_SLOTS: std::ops::RangeInclusive<u8> = 81..=112;
+const EQUIPPED_BAG_SLOTS: std::ops::RangeInclusive<u8> = 19..=22;
 const LAST_BANK_SLOT: u8 = 62;
 
 // Returns None for an Item that this model cannot hold where the source kept it.
@@ -765,9 +756,10 @@ fn addressed_slot(location: MigratedItemLocation) -> Result<Option<u8>, String> 
         }
         MigratedItemLocation::Slot(slot) if BANK_BAG_SLOTS.contains(&slot) => Ok(None),
         MigratedItemLocation::Bag(bag) if BANK_BAG_SLOTS.contains(&bag.bag_slot) => Ok(None),
-        MigratedItemLocation::Bag(bag) => crate::items::bag_content_slot(bag.bag_slot, bag.slot)
-            .map(Some)
-            .ok_or_else(|| format!("bag position {bag:?} has no address")),
+        MigratedItemLocation::Bag(bag) if EQUIPPED_BAG_SLOTS.contains(&bag.bag_slot) => {
+            Ok(crate::items::bag_content_slot(bag.bag_slot, bag.slot))
+        }
+        MigratedItemLocation::Bag(bag) => Err(format!("bag position {bag:?} has no address")),
         MigratedItemLocation::Slot(slot) => Err(format!("slot {slot} cannot hold an Item")),
     }
 }
@@ -806,6 +798,17 @@ mod tests {
                 slot: 5
             })),
             Ok(Some(120 + 18 + 5))
+        );
+    }
+
+    #[test]
+    fn a_bag_slot_past_the_flat_model_is_displaced() {
+        assert_eq!(
+            addressed_slot(MigratedItemLocation::Bag(MigratedBagSlot {
+                bag_slot: 22,
+                slot: 20
+            })),
+            Ok(None)
         );
     }
 

@@ -30,12 +30,12 @@ rerun never brings back a Character that its player deleted.
 | Position | Kept on a continent. A Character in an Instance map, or with no position, arrives at its home bind. |
 | Home bind, rest | Kept. The last logout time and inn flag feed the normal offline rest at login. |
 | Items | Vanilla slots 0 to 62 and keyring slots 81 to 112 keep their address. Bag contents use the flat bag-content slot of their bag. |
-| Bank bags | This model has no bank bag slots. A bank bag and its contents move to the first free bank, backpack or bag slot, or the Character is refused. |
+| Bank bags, large bags | This model has no bank bag slots and addresses 18 slots in each bag. A bank bag, its contents and Items past slot 18 of a bag move to the first free bank, backpack or bag slot, or the Character is refused. |
 | Item state | Entry, stack, durability (capped at the template), permanent enchantment, random property and soulbound. |
 | Spells | Kept. A spell that is a talent rank becomes a talent row at its highest rank instead; world entry relearns the rank spell. Spent points cannot exceed the level's points. |
 | Skills, action buttons | Kept. Buttons are 0 to 119. |
 | Reputation | Earned standing is added to the faction's base standing. The faction must have a reputation index. |
-| Quests | Rewarded quests and up to 20 quest log entries. Creature and GameObject counters map to objectives in importer order and are capped at the required count. Item objectives count the inventory as usual. |
+| Quests | Rewarded quests and up to 20 quest log entries. A rewarded quest that cannot be repeated stays out of the log. Only a timed quest keeps its deadline. Kill and GameObject counters restart at zero, because the catalogue does not keep each objective's source slot; item objectives count the inventory as usual. |
 | Explored zones, taxi nodes | Explored bits map to areas by area bit. Taxi nodes map by `TaxiNodes.dbc` id. |
 
 Every referenced item, spell, skill, faction, quest, area and taxi node must exist in the Shard's

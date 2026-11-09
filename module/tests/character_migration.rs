@@ -157,12 +157,15 @@ fn migration(catalogue: &Catalogue, source_guid: u64, name: &str) -> Value {
         "reputations": [{"faction_id": FACTION, "earned_standing": 250, "at_war": false}],
         "actions": [{"button": 0, "action": catalogue.spell, "action_type": 0}],
         "quests": [
-            {"quest_entry": REWARDED_QUEST, "rewarded": true, "log": {"none": []}},
-            {"quest_entry": ACTIVE_QUEST, "rewarded": false, "log": {"some": {
-                "creature_or_gameobject_counts": [2, 0, 0, 0],
+            {"quest_entry": REWARDED_QUEST, "rewarded": true, "log": {"some": {
                 "event_credit": false,
                 "failed": false,
-                "deadline_secs": 0,
+                "deadline_secs": 1_700_000_000u64,
+            }}},
+            {"quest_entry": ACTIVE_QUEST, "rewarded": false, "log": {"some": {
+                "event_credit": false,
+                "failed": false,
+                "deadline_secs": 1_700_000_000u64,
             }}},
         ],
         "explored_zones": [0, 1u32 << (AREA_BIT - 32)],
@@ -241,7 +244,7 @@ fn a_migrated_character_arrives_with_its_source_state() {
         (FACTION_BASE + 250).to_string()
     );
     let quests = shard.query_rows(&format!(
-        "SELECT quest_entry, rewarded, counts FROM game_character_quest WHERE character_guid = {guid}"
+        "SELECT quest_entry, rewarded, failed, deadline_micros, counts FROM game_character_quest WHERE character_guid = {guid}"
     ));
     let quest = |entry: u32| {
         quests
@@ -257,7 +260,9 @@ fn a_migrated_character_arrives_with_its_source_state() {
         .filter(|value| !value.is_empty())
         .map(|value| value.parse().expect("quest count is a number"))
         .collect();
-    assert_eq!(counts, [2, 0]);
+    assert_eq!(counts, [0, 0]);
+    assert_eq!(quest(ACTIVE_QUEST)["deadline_micros"], "0");
+    assert_eq!(quest(ACTIVE_QUEST)["failed"], "false");
     assert_eq!(
         shard.query_rows(&format!(
             "SELECT area_bit FROM game_character_explored WHERE character_guid = {guid}"
