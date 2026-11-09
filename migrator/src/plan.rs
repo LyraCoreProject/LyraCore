@@ -98,7 +98,6 @@ pub(crate) struct MigratedAction {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct MigratedQuestLogEntry {
-    pub(crate) creature_or_gameobject_counts: Vec<u32>,
     pub(crate) event_credit: bool,
     pub(crate) failed: bool,
     pub(crate) deadline_secs: u64,
@@ -414,11 +413,10 @@ fn migrated_character(
         logout_resting: character.logout_resting,
         last_logout_secs: character.logout_secs,
         bank_bag_slots: character.bank_bag_slots.min(MAX_BANK_BAG_SLOTS),
-        watched_faction_index: if (0..64).contains(&character.watched_faction) {
-            character.watched_faction
-        } else {
-            -1
-        },
+        watched_faction_index: i32::try_from(character.watched_faction)
+            .ok()
+            .filter(|index| (0..64).contains(index))
+            .unwrap_or(-1),
         items: items(catalogue, &character.items, subject, report)?,
         spells: kept(
             &character.spells,
@@ -492,16 +490,24 @@ fn migrated_character(
         )
         .into_iter()
         .filter_map(|quest| {
-            let in_log = matches!(
-                quest.status,
-                QUEST_STATUS_COMPLETE | QUEST_STATUS_INCOMPLETE | QUEST_STATUS_FAILED
-            );
+            // MaNGOS keeps a rewarded quest at COMPLETE; only a repeat in progress is in the log.
+            let in_log = match quest.status {
+                QUEST_STATUS_INCOMPLETE | QUEST_STATUS_FAILED => true,
+                QUEST_STATUS_COMPLETE => !quest.rewarded,
+                _ => false,
+            };
+            if in_log && quest.mob_counts.iter().any(|count| *count != 0) {
+                report.add(
+                    subject,
+                    Outcome::Changed,
+                    format!("kill and object counters of quest {} restart", quest.quest),
+                );
+            }
             (in_log || quest.rewarded).then(|| MigratedQuest {
                 quest_entry: quest.quest,
                 rewarded: quest.rewarded,
                 log: in_log
-                    .then(|| MigratedQuestLogEntry {
-                        creature_or_gameobject_counts: quest.mob_counts.to_vec(),
+                    .then_some(MigratedQuestLogEntry {
                         event_credit: quest.explored,
                         failed: quest.status == QUEST_STATUS_FAILED,
                         deadline_secs: quest.timer_secs,
@@ -530,11 +536,16 @@ fn migrated_character(
             set_bits(&known, 1)
         },
     };
-    let size = serde_json::to_string(&migration)?.len();
+    fits_one_call(&migration)?;
+    Ok(migration)
+}
+
+fn fits_one_call(argument: &impl Serialize) -> Result<()> {
+    let size = serde_json::to_string(argument)?.len();
     if size > MAX_REDUCER_ARGUMENT_BYTES {
         bail!("its plan is {size} bytes, more than one reducer call carries");
     }
-    Ok(migration)
+    Ok(())
 }
 
 fn position_of(position: &LegacyPosition) -> MigratedPosition {
@@ -924,7 +935,10 @@ mod tests {
             timer_secs: 0,
             mob_counts: [2, 0, 0, 0],
         };
-        source.quests = vec![quest(7, QUEST_STATUS_FAILED, false), quest(8, 0, true)];
+        source.quests = vec![
+            quest(7, QUEST_STATUS_FAILED, false),
+            quest(8, QUEST_STATUS_COMPLETE, true),
+        ];
         let quests = &plan_one(source).characters[0].quests;
         let SatsOption::Some(log) = &quests[0].log else {
             panic!("quest 7 is in the log");
@@ -964,6 +978,31 @@ mod tests {
                 at_war: true
             }]
         );
+    }
+
+    #[test]
+    fn a_cmangos_unwatched_faction_arrives_as_no_watched_faction() {
+        let mut source = character();
+        source.watched_faction = i64::from(u32::MAX);
+        assert_eq!(plan_one(source).characters[0].watched_faction_index, -1);
+    }
+
+    #[test]
+    fn quest_counters_that_restart_are_reported() {
+        let mut source = character();
+        source.quests = vec![LegacyQuest {
+            quest: 7,
+            status: QUEST_STATUS_INCOMPLETE,
+            rewarded: false,
+            explored: false,
+            timer_secs: 0,
+            mob_counts: [2, 0, 0, 0],
+        }];
+        let plan = plan_one(source);
+        assert!(plan
+            .findings
+            .iter()
+            .any(|f| f.detail == "kill and object counters of quest 7 restart"));
     }
 
     #[test]

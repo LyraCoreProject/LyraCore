@@ -25,8 +25,11 @@ impl Shard {
                 reducer,
                 argument,
             ])
-            .output()
-            .with_context(|| format!("run spacetime call {reducer}"))?;
+            .output();
+        let output = match output {
+            Ok(output) => output,
+            Err(error) => return Ok(Err(format!("could not run spacetime call: {error}"))),
+        };
         if output.status.success() {
             return Ok(Ok(()));
         }

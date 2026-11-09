@@ -41,8 +41,10 @@ you can read the report before anything changes.
    Each Character is one reducer call. A refusal is printed and the next Character continues.
    Fix the cause, write a new plan and apply it again. Migrated Characters are skipped.
 
-The plan file holds each Account's SRP salt and verifier. Keep it as private as the realmd
-database.
+The plan file holds each Account's SRP salt and verifier. The tool creates it readable only by its
+owner; keep it as private as the realmd database. `apply` passes each reducer argument on the
+`spacetime` command line, where other local users can read it while the call runs, so run it on a
+host only Operators use. For a remote source, add `?require_ssl=true` to the MySQL URL.
 
 The tool checks every column that it reads against the Source Profile of `--source-kind` before it
 reads rows. A missing column or a column of another type stops the run with its name. The profiles

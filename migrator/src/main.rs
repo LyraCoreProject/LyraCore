@@ -116,7 +116,7 @@ fn write_plan(args: Args, shard: &Shard) -> Result<()> {
 
     let catalogue = shard.catalogue()?;
     let plan = plan::build(&source, &catalogue, &accounts, &characters);
-    std::fs::write(&out, serde_json::to_string_pretty(&plan)?)
+    write_private(&out, &serde_json::to_string_pretty(&plan)?)
         .with_context(|| format!("write {out}"))?;
     for finding in &plan.findings {
         eprintln!(
@@ -135,6 +135,16 @@ fn write_plan(args: Args, shard: &Shard) -> Result<()> {
         plan.characters.len()
     );
     Ok(())
+}
+
+// The plan holds SRP salts and verifiers, so only its owner may read it.
+fn write_private(path: &str, contents: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    options.open(path)?.write_all(contents.as_bytes())
 }
 
 fn apply(path: &str, shard: &Shard) -> Result<()> {
