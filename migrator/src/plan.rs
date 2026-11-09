@@ -3,9 +3,7 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::read::{
-    Ban, LegacyAccount, LegacyCharacter, LegacyItem, LegacyLetter, LegacyPet, LegacyPosition,
-};
+use crate::read::{Ban, LegacyAccount, LegacyCharacter, LegacyItem, LegacyLetter, LegacyPosition};
 
 pub(crate) const PLAN_FORMAT_VERSION: u32 = 3;
 // Linux limits one argv string to 128 KiB; `spacetime call` passes each argument as one.
@@ -936,7 +934,7 @@ fn migrated_letters(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::read::{LegacyQuest, LegacyReputation};
+    use crate::read::{LegacyPet, LegacyQuest, LegacyReputation};
 
     fn account() -> LegacyAccount {
         LegacyAccount {
