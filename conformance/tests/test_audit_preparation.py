@@ -1,6 +1,5 @@
 import importlib.util
 import json
-import os
 from pathlib import Path
 import subprocess
 import tempfile
@@ -11,6 +10,7 @@ import zipfile
 
 from conformance.audit_spacetime import deployment_arguments
 from conformance import reference_baseline
+from conformance.workspace import scratch
 
 
 class DeploymentArtifact(unittest.TestCase):
@@ -31,10 +31,9 @@ class DeploymentArtifact(unittest.TestCase):
 
 class PristinePreparation(unittest.TestCase):
     def test_dump_comes_from_verified_archive_in_a_new_disposable_volume(self):
-        scratch = Path(os.environ.get('LYRACORE_AUDIT_SCRATCH',
-                                      Path.home() / '.cache/lyracore-scratch/m5c'))
-        scratch.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+        parent = scratch('conformance')
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=parent) as directory:
             root = Path(directory)
             reference = root / 'reference'
             (reference / 'credentials').mkdir(parents=True)

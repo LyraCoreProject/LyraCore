@@ -19,11 +19,12 @@ import tempfile
 import time
 import tomllib
 
-from preflight import check_spacetime_version
+from workspace import check_spacetime_version, harness_pin, scratch
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRATCH = Path(os.environ.get('LYRACORE_AUDIT_SCRATCH', Path.home() / '.cache/lyracore-scratch/m5c'))
-REFERENCE = Path.home() / '.cache/lyracore-scratch/reference-server'
+SCRATCH = scratch('m5c', 'LYRACORE_AUDIT_SCRATCH')
+REFERENCE = scratch('reference-server')
+REVIEWED_CLI_REVISION = '30814fe814edbfa3a143102f93008080482df6a6'
 SCENARIO_CACHE = SCRATCH / 'scenario-audit'
 SNAPSHOT_STORE = Path.home() / '.cache/lyracore/conformance-worlds'
 
@@ -864,7 +865,7 @@ def prepare_scenario_realm(key, pins, client_data, peer_count, *, require_snapsh
                            use_snapshot=True, strict_world=False):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('clean core working tree required; commit changes before scenario capture')
-    if (ROOT / '.lyracore-cli-rev').read_text().strip() != '30814fe814edbfa3a143102f93008080482df6a6':
+    if (ROOT / '.lyracore-cli-rev').read_text().strip() != REVIEWED_CLI_REVISION:
         raise RuntimeError('audit Realm isolation needs review for this lyracore CLI revision')
     spacetime = shutil.which('spacetime')
     if spacetime is None:
@@ -1322,8 +1323,7 @@ def run_catalogue(args, harness, target, core_commit):
         if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
             raise RuntimeError('core changed during catalogue capture; commit and rerun')
         if not args.rehearse:
-            revision = next(line.split()[1] for line in (ROOT / '.wire-harness-rev').read_text().splitlines()
-                            if line.strip() and not line.startswith('#'))
+            _, revision = harness_pin(ROOT)
             (work / 'run.json').write_text(json.dumps(dict(
                 core_commit=core_commit, working_tree_dirty=False, harness_revision=revision,
                 recorded_at_unix_ms=time.time_ns() // 1_000_000, native_host_sha256=host_hash,
@@ -1354,8 +1354,7 @@ def scenario_main(args):
         os.environ['PATH'] = str(Path.home() / '.cargo/bin') + ':' + os.environ['PATH']
         os.chdir(ROOT)
         core_commit = git('rev-parse', 'HEAD')
-        revision = next(line.split()[1] for line in (ROOT / '.wire-harness-rev').read_text().splitlines()
-                        if line.strip() and not line.startswith('#'))
+        _, revision = harness_pin(ROOT)
         for directory in [ROOT, *ROOT.parents]:
             check_cargo_config(directory / '.cargo')
         cargo_home = Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo'))

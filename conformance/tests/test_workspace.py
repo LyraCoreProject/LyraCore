@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from conformance.preflight import check_spacetime_version
+from conformance.workspace import check_spacetime_version, harness_pin
 
 
 class SpacetimeVersionTests(unittest.TestCase):
@@ -31,3 +31,12 @@ class SpacetimeVersionTests(unittest.TestCase):
                 with patch("subprocess.run", **options):
                     with self.assertRaisesRegex(RuntimeError, "required .*version install"):
                         check_spacetime_version(root)
+
+
+class HarnessPinTests(unittest.TestCase):
+    def test_pin_skips_comment_and_blank_lines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / ".wire-harness-rev").write_text(
+                "# Read the notes first.\n\nv0.2.0-conformance.9 " + "b" * 40 + "\n")
+            self.assertEqual(harness_pin(root), ("v0.2.0-conformance.9", "b" * 40))

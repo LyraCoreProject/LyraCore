@@ -10,6 +10,8 @@ import shutil
 import subprocess
 import tomllib
 
+from workspace import harness_pin, tier1_scenarios
+
 
 ROOT = Path(__file__).resolve().parent.parent
 TAG = re.compile(r"refs/tags/(v0\.2\.0-conformance\.([0-9]+))(\^\{\})?$")
@@ -54,9 +56,7 @@ def apply_pin(tag, sha):
         raise ValueError("invalid conformance tag or commit")
     pin_path = ROOT / ".wire-harness-rev"
     pin = pin_path.read_text()
-    current_tag, current_sha = next(
-        line.split() for line in pin.splitlines() if line and not line.startswith("#")
-    )
+    current_tag, current_sha = harness_pin(ROOT)
     current_number = int(current_tag.rsplit(".", 1)[1])
     next_number = int(tag.rsplit(".", 1)[1])
     if next_number < current_number or (next_number == current_number and sha != current_sha):
@@ -96,8 +96,7 @@ def missing_scenarios():
     entries = re.findall(r'^\s+Entry\s*\{\s*id:\s*"([a-z0-9_]+)"', catalogue, re.MULTILINE)
     if not entries or len(entries) != catalogue.count("    Entry {") or len(entries) != len(set(entries)):
         raise ValueError("could not read the harness scenario catalogue")
-    tests = (ROOT / "module/tests/conformance/tier1.rs").read_text()
-    tested = set(re.findall(r'run_(?:multi_)?scenario\(\s*"([a-z0-9_]+)"', tests))
+    tested = tier1_scenarios(ROOT)
     ledger = set()
     for path in (ROOT / "conformance/features").glob("*/*.toml"):
         ledger.update(tomllib.loads(path.read_text())["scenarios"])
@@ -222,9 +221,7 @@ def describe(body_path, output):
         ["git", "show", "origin/main:conformance/tier1-baseline.json"], text=True,
     ))
     after = json.loads((ROOT / "conformance/tier1-baseline.json").read_text())
-    pin = next(line for line in (ROOT / ".wire-harness-rev").read_text().splitlines()
-               if line and not line.startswith("#"))
-    tag, sha = pin.split()
+    tag, sha = harness_pin(ROOT)
     changes = signature_changes(before, after)
     old_scenarios = {entry["scenario"] for entry in before["scenarios"]}
     new_scenarios = {entry["scenario"] for entry in after["scenarios"]}
@@ -233,7 +230,7 @@ def describe(body_path, output):
         "## What and why", "",
         "Core must use the same conformance harness revision for dev smoke and tier 1. "
         "This automated PR advances both pins and regenerates the Tier 1 baseline from the "
-        f"tested comparison at `{pin}`.", "",
+        f"tested comparison at `{tag} {sha}`.", "",
         "## What you verified", "",
         "- All tier 1 scenarios ran against a disposable Shard before and after baseline regeneration.",
         "- `./conformance/baseline` regenerated every catalogue entry.", "",
@@ -274,9 +271,7 @@ def proposal(output):
     baseline = (ROOT / "conformance/tier1-baseline.json").read_bytes()
     if len(baseline) > MAX_BASELINE_BYTES:
         raise ValueError("Tier 1 baseline exceeds job output limit")
-    pin = next(line for line in (ROOT / ".wire-harness-rev").read_text().splitlines()
-               if line and not line.startswith("#"))
-    _, sha = pin.split()
+    _, sha = harness_pin(ROOT)
     if not SHA.fullmatch(sha):
         raise ValueError("invalid harness revision")
     with open(output, "a") as stream:

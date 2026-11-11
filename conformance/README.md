@@ -103,12 +103,7 @@ dispatch result and open question in `known_gaps`.
 The scoreboard fails when a request is unclaimed or both claimed and out of scope. It also checks
 that every variant in the core `ClientOpcodeMessage` enum has the same number in the inventory.
 
-`tools/create_ledger_denominator.py` created the initial request Behaviors, inventory and scope
-files from the pinned vmangos raw sources and the core opcode dependency. It groups uncertain
-requests by system and records vmangos dispatch results in their known gaps. Its
-`tools/ledger-denominator-base.txt` input names the 23 Behaviors that already existed. Run it with
-`--output-dir` pointing to scratch to reproduce the initial set; it refuses to overwrite files.
-After creation, maintain the Behavior TOML files, inventory and scope decisions by hand. The coverage
+Maintain the Behavior TOML files, inventory and scope decisions by hand. The coverage
 check catches an inventory request with no Behavior or out-of-scope reason. New entries can leave
 `replies` empty until a scenario author
 checks the packets returned by the Reference Server. A vmangos dispatch entry marked unhandled
@@ -258,8 +253,10 @@ runner fetches the tag, validates the baseline and derives its signature summary
 or says when only provenance changed. Signature changes add the `ready-for-human` label. The
 workflow never merges the PR. Normal PR checks run on the bot PR.
 
-If the harness catalogue adds a scenario without a core tier 1 test, the workflow names the missing
-scenarios in its run summary and opens no PR. The scenario author makes one core PR that advances
+A scenario has a core tier 1 test when `module/tests/conformance/tier1.rs` defines
+`fn <scenario>_matches_its_golden_trace`, the test `./conformance/run` selects, and its Behavior
+lists the scenario. If the harness catalogue adds a scenario without one, the workflow names the
+missing scenarios in its run summary and opens no PR. The scenario author makes one core PR that advances
 the harness pin and `wire-client` revision, updates `Cargo.lock`, adds the test and Feature Ledger
 entry, and regenerates the Tier 1 baseline. The separate pin proposal workflow resumes for later
 harness revisions that core can already test.
@@ -903,29 +900,15 @@ captures remain unverified.
 
 ## Opcode coverage
 
-`tests/opcode_coverage.rs` checks every row of `client-requests-5875.tsv` against ledger request
-claims, `opcodes-out-of-scope.toml`, and `opcodes-unclaimed.txt`. It also checks every variant in
-the pinned `ClientOpcodeMessage` enum against the inventory. Out-of-scope entries map an opcode
-name to a reason and a pinned source. The initial allowance had 285 variants; it is now empty.
-Adding a Behavior or a scope decision requires removing its opcodes from the allowance in the same
-change. Unknown names, duplicate allowances and overlapping categories fail.
-
-The Architecture Test embeds the initial 285 unclaimed names and the initially empty out-of-scope
-set as constants. Current unclaimed membership must be a subset of that initial set. An
-out-of-scope addition requires `source` to name an existing `docs/adr/*.md` that mentions the opcode
-by name, or `https://github.com/vmangos/core/blob/<SHA>/src/<path>` with the same `source_commit`
-as the pinned Golden Traces.
-
-The test also compares both scope files with earlier versions reachable from `HEAD`. This extra
-history check needs no particular commit SHA. It catches restored allowances, exchanges of one
-opcode for another, and deletion followed by recreation. Scope files keep their canonical paths;
-renames cannot reset the embedded initial sets. A shallow checkout fails with an instruction to
-fetch full history; Rust CI uses `fetch-depth: 0`. The scanner uses `cargo metadata --locked`,
-which can download missing workspace dependency sources on a fresh checkout. It never changes
-the dependency lockfile.
-
-`feat/conformance` merges into `main` with a merge commit to retain the intermediate scope history.
-The embedded initial sets still enforce the starting limit after a squash or rebase merge.
+`tests/opcode_coverage.rs` checks that every row of `client-requests-5875.tsv` is claimed by a
+ledger Behavior or listed in `opcodes-out-of-scope.toml`, never both. It also checks every variant in
+the pinned `ClientOpcodeMessage` enum against the inventory. Unknown names and overlapping
+categories fail. Each out-of-scope entry maps an opcode name to a reason and a `source` that names
+an existing `docs/adr/*.md` mentioning the opcode by name, or
+`https://github.com/vmangos/core/blob/<SHA>/src/<path>` with the same `source_commit` as the pinned
+Golden Traces.
+The scanner uses `cargo metadata --locked`, which can download missing workspace dependency
+sources on a fresh checkout. It never changes the dependency lockfile.
 
 ## Trainable spells
 
