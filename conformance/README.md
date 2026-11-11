@@ -807,7 +807,7 @@ not turn a local check into a full audit.
 Mixed files stay in Tier A in full: `seed.rs`, `seed/fixtures.rs`, `operations.rs`, `config.rs`,
 `auth.rs`, `operator_content/spells.rs`, `auction.rs`, `mail_reward.rs`, `stats.rs`, `gossip.rs`,
 `transport/mod.rs`, `helpers.rs`, `time.rs`, `world.rs`, `world/{simulation,placement}.rs`,
-`character.rs`, `instance.rs`, `gameobject.rs`, `go_collider.rs`, `go_model.rs`, `region.rs`,
+`character.rs`, `instance.rs`, `gameobject.rs`, `go_collider.rs`, `go_model.rs`,
 `terrain.rs`, `nav.rs`, `vmap.rs`, `faction.rs`, `graveyard.rs`, `breath.rs`, `gc.rs`,
 `combat/engage.rs`, `skill.rs`, `skilldata.rs`, `action_bar.rs`, `xp.rs`, `talent.rs`, `weather.rs`,
 `duel.rs`, `motion.rs`, `gw.rs`, `quest.rs`, `areatrigger.rs`, `trainer.rs`, `meeting_stone/mod.rs`, `loot/mod.rs`,

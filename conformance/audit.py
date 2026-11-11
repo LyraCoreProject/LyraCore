@@ -243,7 +243,6 @@ IMPORT_CONTRACT = (
     'module/src/vmap.rs',
     'module/src/go_model.rs',
     'module/src/go_collider.rs',
-    'module/src/region.rs',
     'module/src/creatures/catalogue.rs',
     'module/src/creatures/spawn.rs',
     'module/src/creatures/eventai/fixtures.rs',
