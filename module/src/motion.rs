@@ -59,20 +59,6 @@ pub(crate) fn coalesce(queued: u16, incoming: u16) -> Coalesce {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum TickAction {
-    Publish,
-    DropStale,
-}
-
-pub(crate) fn tick_action(entity_alive: bool) -> TickAction {
-    if entity_alive {
-        TickAction::Publish
-    } else {
-        TickAction::DropStale
-    }
-}
-
 fn publish(ctx: &ReducerContext, p: &PendingMotion) {
     crate::native::motion(ctx, p);
     let motions = ctx.db.game_entity_motion();
@@ -173,14 +159,11 @@ pub(crate) fn queue_motion(
     }
 }
 
-/// Publishes the mover's staged motion now instead of at the next tick.
 pub(crate) fn flush(ctx: &ReducerContext, guid: u64) {
     let pending = ctx.db.game_entity_motion_pending();
     if let Some(row) = pending.guid().find(guid) {
         pending.guid().delete(guid);
-        if tick_action(ctx.db.game_world_entity().guid().find(guid).is_some())
-            == TickAction::Publish
-        {
+        if ctx.db.game_world_entity().guid().find(guid).is_some() {
             publish(ctx, &row);
         }
     }
@@ -204,9 +187,9 @@ pub(crate) fn publish_staged(ctx: &ReducerContext) {
     let queued: Vec<PendingMotion> = pending.iter().collect();
     for row in queued {
         pending.guid().delete(row.guid);
-        match tick_action(entities.guid().find(row.guid).is_some()) {
-            TickAction::Publish => publish(ctx, &row),
-            TickAction::DropStale => {}
+        // Publishing for a departed mover would recreate a motion row that nothing deletes.
+        if entities.guid().find(row.guid).is_some() {
+            publish(ctx, &row);
         }
     }
 }
@@ -313,16 +296,5 @@ mod tests {
         assert_eq!(coalesce(START, FACING), Coalesce::KeepQueued);
         assert_eq!(coalesce(START, JUMP), Coalesce::FlushThenReplace);
         assert_eq!(coalesce(JUMP, STOP), Coalesce::FlushThenReplace);
-    }
-
-    #[test]
-    fn the_tick_publishes_a_live_mover_and_drops_a_departed_one() {
-        assert_eq!(tick_action(true), TickAction::Publish);
-        assert_eq!(
-            tick_action(false),
-            TickAction::DropStale,
-            "publishing for a guid with no live entity row RESURRECTS a motion row nothing will \
-             ever delete again"
-        );
     }
 }

@@ -8,7 +8,7 @@ use super::{
 use crate::{game_creature_ai_state, game_creature_template, game_world_entity};
 
 const SUMMON_CHECK_MS: u32 = 500;
-const SUMMON_LOW_BAND: u64 = 0x40_0000;
+use crate::creatures::population::SUMMON_LOW_BAND;
 const SUMMON_SEQUENCE_MASK: u64 = SUMMON_LOW_BAND - 1;
 
 #[table(
@@ -471,20 +471,15 @@ fn place_summon_entity(
     };
 
     let spawn = crate::creatures::CreatureSpawn {
-        guid,
-        entry,
-        map_id: summoner.map_id,
-        x: location.x,
-        y: location.y,
-        z: location.z,
-        orientation: location.orientation,
-        respawn_at: crate::time::timer_never(ctx),
-        despawn_at: crate::time::timer_never(ctx),
-        movement_type: crate::creatures::MOVEMENT_IDLE,
         respawn_secs: u32::MAX,
-        life_seq: 0,
-        source_guid: 0,
-        instance_id: summoner.instance_id,
+        ..crate::creatures::CreatureSpawn::temporary(
+            ctx,
+            guid,
+            entry,
+            summoner.map_id,
+            summoner.instance_id,
+            [location.x, location.y, location.z, location.orientation],
+        )
     };
     let mut entity = crate::creatures::build_creature_entity(
         ctx,
@@ -596,9 +591,9 @@ fn place_owned_summon(
 
 fn summon_guid(entry: u32, scheduled_id: u64) -> Option<u64> {
     let sequence = scheduled_id.checked_sub(1)? % SUMMON_SEQUENCE_MASK + 1;
-    Some(crate::encounter::wave_guid(
+    Some(lyracore_package_delta::packed_creature_spawn_guid(
         entry,
-        SUMMON_LOW_BAND | sequence,
+        (SUMMON_LOW_BAND | sequence) as u32,
     ))
 }
 

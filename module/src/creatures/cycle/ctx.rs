@@ -6,17 +6,18 @@ use spacetimedb::{ReducerContext, Table};
 use super::{
     run_cycle, AggroTarget, CastSink, CastWhen, Caster, Combatant, CreatureWorld, CycleOutcome,
     EngageSink, Engagement, FearSink, Fighter, Gait, Home, IdleCreature, IdleSink, Leg,
-    LegInFlight, MotionSink, Panicked, Pet, PetCommand, PetOwner, PetReact, PetSink, Point, Pull,
+    LegInFlight, MotionSink, Panicked, Pet, PetOrder, PetOwner, PetReact, PetSink, Point, Pull,
     Pursuit, PursuitSink, Recovering, RegenSink, RoutSink, Router, Sensor, SpellOption, Stop,
     ThreatSink, TickContext, Waypoint,
 };
-use crate::creatures::ai::TickScope;
 use crate::creatures::cast_condition;
 use crate::creatures::distraction;
 use crate::creatures::eventai::movement::{AuthoredIdleMovement, AuthoredWalkingMode};
 use crate::creatures::eventai::{self, EventAiRequest};
+use crate::creatures::leg;
 use crate::creatures::pet;
 use crate::creatures::tick::{self, CreatureSpline, TickSweep};
+use crate::creatures::TickScope;
 use crate::world::MoveClock;
 use crate::{
     game_aura, game_creature_cast, game_creature_spawn, game_creature_spell, game_creature_spline,
@@ -29,7 +30,6 @@ use lyracore_shared::movement_flags::FORWARD;
 const CHASE_SEARCH_EXPANSIONS: u32 = 4_096;
 const CHASE_TICK_EXPANSIONS: u32 = 32_768;
 
-// Pass timings are logged for the first five seconds of each minute.
 const PROFILE_PERIOD_MICROS: u64 = 60_000_000;
 const PROFILE_WINDOW_MICROS: u64 = 5_000_000;
 
@@ -320,21 +320,9 @@ impl MotionSink for CtxWorld<'_> {
             self.advances.push((stored, advanced));
         }
     }
-    fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: u32) {
+    fn halt(&mut self, leg: &LegInFlight, at: Point) {
         if let Some(e) = self.place(leg.guid, at, None, None) {
-            tick::emit_move_spline(
-                self.ctx,
-                leg.guid,
-                (at.x, at.y, at.z),
-                (at.x, at.y, at.z),
-                0,
-                false,
-                spline_id,
-                leg.map_id,
-                leg.instance_id,
-                (e.grid_x, e.grid_y),
-                None,
-            );
+            leg::halt(self.ctx, &e);
         }
     }
     fn drop_leg(&mut self, guid: u64) {
@@ -587,18 +575,18 @@ impl IdleSink for CtxWorld<'_> {
     fn reached_home(&mut self, guid: u64) {
         crate::creatures::eventai_on_reached_home(self.ctx, guid);
     }
-    fn commit_leg(&mut self, guid: u64, leg: Leg, now_ms: u32) {
+    fn commit_leg(&mut self, guid: u64, planned: Leg) {
         if let Some(e) = self.ctx.db.game_world_entity().guid().find(guid) {
-            tick::emit_creature_leg(
+            let course = leg::Course::on_ground(
                 self.ctx,
-                e,
-                leg.to,
-                leg.z_fallback,
-                leg.dur_ms,
-                leg.gait == Gait::Run,
-                now_ms,
-                leg.hold_until_landed,
-            );
+                &e,
+                planned.to,
+                planned.z_fallback,
+                planned.dur_ms,
+                planned.gait == Gait::Run,
+            )
+            .held_until_landed(planned.hold_until_landed);
+            leg::start(self.ctx, e, course);
         }
     }
 }
@@ -1041,32 +1029,17 @@ impl PursuitSink for CtxWorld<'_> {
     fn casting(&self, guid: u64) -> bool {
         crate::spell::is_non_melee_spell_casting(self.ctx, guid)
     }
-    fn commit_back_off(
-        &mut self,
-        guid: u64,
-        victim: u64,
-        to: (f32, f32),
-        dur_ms: u32,
-        now_ms: u32,
-    ) {
+    fn commit_back_off(&mut self, guid: u64, victim: u64, to: (f32, f32), dur_ms: u32) {
         if let Some(e) = self.ctx.db.game_world_entity().guid().find(guid) {
-            tick::emit_back_off_leg(self.ctx, e, to, dur_ms, now_ms, victim);
+            let course = leg::Course::on_ground(self.ctx, &e, to, e.z, dur_ms, false)
+                .backing_off_from(victim);
+            leg::start(self.ctx, e, course);
         }
     }
-    fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32) {
-        let Some(e) = self.place(guid, at, None, Some(orientation)) else {
-            return;
-        };
-        tick::emit_facing_spline(
-            self.ctx,
-            guid,
-            (at.x, at.y, at.z),
-            orientation,
-            spline_id,
-            e.map_id,
-            e.instance_id,
-            (e.grid_x, e.grid_y),
-        );
+    fn face(&mut self, guid: u64, at: Point, orientation: f32) {
+        if let Some(mut e) = self.place(guid, at, None, Some(orientation)) {
+            leg::face(self.ctx, &mut e, orientation);
+        }
     }
 }
 
@@ -1219,7 +1192,7 @@ impl PetSink for CtxWorld<'_> {
                         }),
                     dead: p.dead,
                     suppressed: crate::spell::is_self_movement_suppressed(self.ctx, p.guid),
-                    command: PetCommand::of(command, command_target),
+                    command: PetOrder::of(command, command_target),
                     react: PetReact::of(react),
                     fighting: melee.attacker_guid().find(p.guid).is_some(),
                 }

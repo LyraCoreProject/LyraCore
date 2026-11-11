@@ -16,6 +16,7 @@ use crate::creatures::population::game_creature_population_member;
 use crate::creatures::{
     game_creature_spawn, game_creature_spawn_map, game_creature_template, game_creature_waypoint,
     CreatureSpawn, CreatureSpawnMap, CreatureWaypoint, MOVEMENT_IDLE, MOVEMENT_RANDOM,
+    MOVEMENT_WAYPOINT,
 };
 use crate::game_world_entity;
 use crate::gameobject::{game_gameobject, game_gameobject_template, GameObject, POOL_TAG};
@@ -26,8 +27,6 @@ const HIGHGUID_UNIT: u64 = 0xF130;
 const HIGHGUID_GAMEOBJECT: u64 = 0xF110;
 const CREATURE_SPAWN_ID_MASK: u64 = MAX_CREATURE_GUID_COMPONENT as u64;
 const GAMEOBJECT_SPAWN_ID_MASK: u64 = 0xFFFF_FFFF_FFFF;
-// The importer keeps the source's waypoint movement type; only MOVEMENT_RANDOM wanders.
-const MOVEMENT_WAYPOINT: u8 = 2;
 
 const MAX_SPAWN_EDITS: usize = 256;
 const MAX_WAYPOINTS_PER_SPAWN: usize = 256;

@@ -296,22 +296,14 @@ pub(crate) fn seed_taxi_fixture(ctx: &ReducerContext) {
     crate::WorldEntity::delete(ctx, taxi::FLIGHT_MASTER_GUID);
     let spawns = ctx.db.game_creature_spawn();
     spawns.guid().delete(taxi::FLIGHT_MASTER_GUID);
-    let spawn = spawns.insert(CreatureSpawn {
-        guid: taxi::FLIGHT_MASTER_GUID,
-        entry: taxi::FLIGHT_MASTER_ENTRY,
-        map_id: taxi::MAP_ID,
-        x: taxi::SOURCE_X,
-        y: taxi::SOURCE_Y,
-        z: taxi::SOURCE_Z,
-        orientation: 0.0,
-        respawn_at: crate::time::timer_never(ctx),
-        despawn_at: crate::time::timer_never(ctx),
-        movement_type: crate::creatures::MOVEMENT_IDLE,
-        respawn_secs: 0,
-        life_seq: 0,
-        source_guid: 0,
-        instance_id: 0,
-    });
+    let spawn = spawns.insert(CreatureSpawn::temporary(
+        ctx,
+        taxi::FLIGHT_MASTER_GUID,
+        taxi::FLIGHT_MASTER_ENTRY,
+        taxi::MAP_ID,
+        0,
+        [taxi::SOURCE_X, taxi::SOURCE_Y, taxi::SOURCE_Z, 0.0],
+    ));
     crate::creatures::insert_creature_entity(
         ctx,
         crate::creatures::build_creature_entity(ctx, &spawn, &template, 0, 0),

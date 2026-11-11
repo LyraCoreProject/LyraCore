@@ -8,17 +8,16 @@ use spacetimedb::{reducer, Identity, ReducerContext, Table, TimeDuration};
 
 use crate::{
     game_account, game_aura_schedule, game_breath_schedule, game_character, game_config,
-    game_creature_loot, game_creature_move_schedule, game_creature_spawn, game_creature_template,
-    game_creature_waypoint, game_duel_schedule, game_event_reaper_schedule, game_gameobject_pool,
+    game_creature_loot, game_creature_spawn, game_creature_template, game_creature_waypoint,
+    game_duel_schedule, game_event_reaper_schedule, game_gameobject_pool,
     game_gameobject_pool_member, game_gameobject_template, game_gateway_lease_reaper_schedule,
     game_graveyard, game_graveyard_zone, game_ground_area_schedule, game_instance_reaper_schedule,
     game_item_template, game_melee_schedule, game_motion_publish_schedule, game_pet_care_schedule,
     game_realm, game_spell, game_spell_effect, game_start_position, Account, AuraSchedule,
-    BreathSchedule, Character, CreatureLoot, CreatureMoveSchedule, CreatureSpawn, CreatureTemplate,
-    CreatureWaypoint, EventReaperSchedule, GameObject, GameObjectPool, GameObjectPoolMember,
-    GameObjectTemplate, GraveyardLoc, GraveyardZone, GroundAreaSchedule, ItemTemplate,
-    MeleeSchedule, PetCareSchedule, Realm, ServerConfig, Spell, SpellEffect, StartPosition,
-    EVENT_TTL_MICROS,
+    BreathSchedule, Character, CreatureLoot, CreatureSpawn, CreatureTemplate, CreatureWaypoint,
+    EventReaperSchedule, GameObject, GameObjectPool, GameObjectPoolMember, GameObjectTemplate,
+    GraveyardLoc, GraveyardZone, GroundAreaSchedule, ItemTemplate, MeleeSchedule, PetCareSchedule,
+    Realm, ServerConfig, Spell, SpellEffect, StartPosition, EVENT_TTL_MICROS,
 };
 use crate::{game_alpha_test_tools_enrollment, AlphaTestToolsEnrollment};
 
@@ -1197,16 +1196,10 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
             ),
         });
 
-    ctx.db
-        .game_creature_move_schedule()
-        .insert(CreatureMoveSchedule {
-            scheduled_id: 0,
-            scheduled_at: crate::time::schedule_interval(
-                ctx,
-                TimeDuration::from_micros(crate::creatures::SLICED_TICK_MICROS),
-            ),
-            instance_id: crate::creatures::GLOBAL_TICK_INSTANCE,
-        });
+    crate::creatures::tick::arm_creature_tick(
+        ctx,
+        TimeDuration::from_micros(crate::creatures::SLICED_TICK_MICROS),
+    );
 
     ctx.db.game_melee_schedule().insert(MeleeSchedule {
         scheduled_id: 0,

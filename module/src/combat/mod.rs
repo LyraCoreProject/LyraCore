@@ -3,6 +3,7 @@ mod energy;
 pub(crate) mod engage;
 mod folds;
 mod inactive_grid;
+mod leash;
 pub(crate) mod swing;
 mod tables;
 mod white_melee;
@@ -13,8 +14,11 @@ pub(crate) use death::{
     kill_player, lethal_floor_protects, set_lethal_damage_floor, Hit, HitSource,
     CORPSE_DECAY_MICROS, DRAIN_SOUL_SPELL_ID, RESPAWN_MICROS, SOUL_SHARD_ENTRY,
 };
+pub(crate) use leash::{beyond_combat_backstop, pursuit_deadline_ms, should_evade};
 #[cfg(test)]
 pub(crate) use lyracore_shared::aura::move_speed_with_pct;
+#[cfg(test)]
+pub(crate) use tables::PURSUIT_WINDOW_MS;
 
 #[cfg(test)]
 pub(crate) use engage::COMBAT_DROP_MS;
@@ -61,11 +65,11 @@ pub(crate) use tables::{
     parry_chance_bp, player_swing_range_ap, rage_from_damage, ranged_sheet_values,
     regen_entity_health, regen_entity_health_in_combat, regen_entity_power, scale_swing_for_rank,
     swing_time_with_haste, weapon_swing_range_ap, AttackTable, RegenWindow,
-    AUTO_SHOT_PROJECTILE_SPEED, COMBAT_BACKSTOP_SQ, CREATURE_MELEE_MAX, CREATURE_MELEE_MIN,
-    CRIT_MULT, CRUSH_DAMAGE_PCT, GLANCING_DAMAGE_PCT, HIT_BLOCK, HIT_CRIT, HIT_CRUSHING, HIT_DODGE,
-    HIT_GLANCING, HIT_MISS, HIT_NORMAL, HIT_PARRY, LEASH_RADIUS_SQ, MELEE_LEEWAY_WINDOW_MS,
-    MELEE_RANGE_LEEWAY_CREATURE_SQ, MELEE_RANGE_LEEWAY_SQ, MELEE_RANGE_SQ, PURSUIT_WINDOW_MS,
-    RANGED_INITIAL_SHOT_MS, RANGED_RANGE_SQ, WAND_PROJECTILE_SPEED,
+    AUTO_SHOT_PROJECTILE_SPEED, CREATURE_MELEE_MAX, CREATURE_MELEE_MIN, CRIT_MULT,
+    CRUSH_DAMAGE_PCT, GLANCING_DAMAGE_PCT, HIT_BLOCK, HIT_CRIT, HIT_CRUSHING, HIT_DODGE,
+    HIT_GLANCING, HIT_MISS, HIT_NORMAL, HIT_PARRY, MELEE_LEEWAY_WINDOW_MS,
+    MELEE_RANGE_LEEWAY_CREATURE_SQ, MELEE_RANGE_LEEWAY_SQ, MELEE_RANGE_SQ, RANGED_INITIAL_SHOT_MS,
+    RANGED_RANGE_SQ, WAND_PROJECTILE_SPEED,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use tables::{regen_health_in_combat, swing_profile};

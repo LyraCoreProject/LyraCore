@@ -1,9 +1,6 @@
 use spacetimedb::{table, ReducerContext, Table};
 
 use lyracore_package_delta::packed_creature_spawn_guid;
-use lyracore_shared::constants;
-
-use crate::game_item_template;
 
 use crate::{
     game_creature_spawn, game_creature_template, game_gameobject, game_gameobject_template,
@@ -207,7 +204,7 @@ pub struct EncounterEquip {
 }
 
 impl EncounterEquip {
-    fn replace(self, ctx: &ReducerContext) {
+    pub(crate) fn replace(self, ctx: &ReducerContext) {
         let table = ctx.db.game_encounter_equip();
         let row = if table.creature_guid().find(self.creature_guid).is_some() {
             table.creature_guid().update(self)
@@ -250,18 +247,6 @@ pub(crate) fn crossed_thresholds(watches: &[u8], lowest_fired: u32, new_pct: u32
     fired.sort_unstable_by(|a, b| b.cmp(a));
     fired.dedup();
     fired
-}
-
-pub(crate) fn next_wave_low(spawn_lows: impl Iterator<Item = u64>) -> u64 {
-    spawn_lows
-        .filter(|low| low & crate::instance::INSTANCE_POP_LOW_BAND == 0)
-        .max()
-        .unwrap_or(0)
-        + 1
-}
-
-pub(crate) fn wave_guid(entry: u32, next_low: u64) -> u64 {
-    packed_creature_spawn_guid(entry, next_low as u32)
 }
 
 #[allow(dead_code, reason = "retained Package API encounter choreography")]
@@ -499,35 +484,30 @@ pub(crate) fn spawn_wave(
             spacetimedb::log::warn!("spawn_wave: no creature template {entry} — skipped");
             continue;
         };
-        let next_low = next_wave_low(
+        let next_low = crate::creatures::population::next_spawn_low(
             ctx.db
                 .game_creature_spawn()
                 .iter()
                 .filter(|s| s.entry == entry)
                 .map(|s| s.guid & 0x00FF_FFFF),
         );
-        let guid = wave_guid(entry, next_low);
+        let guid = packed_creature_spawn_guid(entry, next_low as u32);
         let (dx, dy) = wave_offset(i);
         let spawn = crate::creatures::CreatureSpawn {
-            guid,
-            entry,
-            map_id,
-            x: x + dx,
-            y: y + dy,
-            z,
-            orientation,
-
             respawn_at: crate::time::now(ctx)
                 .checked_add(spacetimedb::TimeDuration::from_micros(
                     u32::MAX as i64 * 1_000_000,
                 ))
                 .unwrap_or(crate::time::now(ctx)),
-            despawn_at: crate::time::timer_never(ctx),
-            movement_type: crate::creatures::MOVEMENT_IDLE,
             respawn_secs: u32::MAX,
-            life_seq: 0,
-            source_guid: 0,
-            instance_id,
+            ..crate::creatures::CreatureSpawn::temporary(
+                ctx,
+                guid,
+                entry,
+                map_id,
+                instance_id,
+                [x + dx, y + dy, z, orientation],
+            )
         };
         let entity =
             crate::creatures::build_creature_entity(ctx, &spawn, &tmpl, ctx.random(), instance_id);
@@ -542,94 +522,6 @@ pub(crate) fn spawn_wave(
         guids.push(guid);
     }
     guids
-}
-
-pub(crate) fn equip_swap(
-    ctx: &ReducerContext,
-    creature_guid: u64,
-    main_hand: u32,
-    off_hand: u32,
-    ranged: u32,
-) -> Result<(), String> {
-    let e = crate::helpers::live_entity(ctx, creature_guid)
-        .map_err(|_| format!("no live entity {creature_guid}"))?;
-    if e.is_player() {
-        return Err("equip_swap targets creatures only".to_string());
-    }
-    let display = |entry: u32| -> Result<u32, String> {
-        if entry == 0 {
-            return Ok(0);
-        }
-        ctx.db
-            .game_item_template()
-            .entry()
-            .find(entry)
-            .map(|item| item.display_id)
-            .ok_or_else(|| format!("virtual equipment item {entry} is missing"))
-    };
-    let (main_hand, off_hand, ranged) = (display(main_hand)?, display(off_hand)?, display(ranged)?);
-    EncounterEquip {
-        creature_guid,
-        instance_id: e.instance_id,
-        main_hand,
-        off_hand,
-        ranged,
-    }
-    .replace(ctx);
-    Ok(())
-}
-
-pub(crate) fn move_to_point(
-    ctx: &ReducerContext,
-    creature_guid: u64,
-    x: f32,
-    y: f32,
-    z: f32,
-    run: bool,
-) -> Result<(), String> {
-    let entities = ctx.db.game_world_entity();
-    let Some(mut e) = entities.guid().find(creature_guid) else {
-        return Err(format!("no live entity {creature_guid}"));
-    };
-    if e.is_player() {
-        return Err("move_to_point targets creatures only".to_string());
-    }
-    if e.dead {
-        return Err("mover is dead".to_string());
-    }
-    let base = if run {
-        constants::speeds::RUN
-    } else {
-        constants::speeds::WALK
-    };
-    let speed = crate::combat::effective_move_speed(ctx, creature_guid, base);
-    if speed <= 0.0 {
-        return Ok(());
-    }
-    let spline_id = crate::creatures::tick::begin_leg(ctx, &mut e);
-    let (dx, dy) = (x - e.x, y - e.y);
-    let dist = (dx * dx + dy * dy).sqrt();
-    if dist <= f32::EPSILON {
-        crate::creatures::tick::stop_where_rendered(ctx, &mut e);
-        e.update(ctx);
-        return Ok(());
-    }
-    crate::creatures::tick::emit_move_spline(
-        ctx,
-        creature_guid,
-        (e.x, e.y, e.z),
-        (x, y, z),
-        ((dist / speed) * 1000.0) as u32,
-        run,
-        spline_id,
-        e.map_id,
-        e.instance_id,
-        (e.grid_x, e.grid_y),
-        None,
-    );
-    e.last_move_ms = crate::creatures::tick::move_clock_ms(ctx);
-    e.update(ctx);
-    Ok(())
 }
 
 #[allow(dead_code, reason = "retained Package API operation")]
@@ -777,20 +669,6 @@ mod tests {
         assert!(!is_reserved_encounter_id(1));
         assert!(!is_reserved_encounter_id(0x7FFF_FFFF));
         assert_ne!(hp_fired_key(639), hp_fired_key(646));
-    }
-
-    #[test]
-    fn wave_guid_carries_highguid_unit_entry_bits_and_a_bounded_low() {
-        let g = wave_guid(636, 7);
-        assert_eq!(
-            g >> 48,
-            0xF130,
-            "HIGHGUID_UNIT so the 5875 client classifies it as a Unit"
-        );
-        assert_eq!((g >> 24) & 0xFF_FFFF, 636);
-        assert_eq!(g & 0xFF_FFFF, 7);
-        assert_eq!((wave_guid(636, 0x0100_0000 + 5) >> 24) & 0xFF_FFFF, 636);
-        assert_eq!(wave_guid(636, 0x0100_0000 + 5) & 0xFF_FFFF, 5);
     }
 
     #[test]

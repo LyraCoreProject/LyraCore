@@ -4,6 +4,20 @@ use spacetimedb::{log, table, ReducerContext, SpacetimeType, Table};
 
 use super::{game_creature_template, CreatureSpawn};
 
+// Creature guid lows below these bits belong to authored, Operator, Package and wave spawns.
+// Bit 23 holds Instance copies; respawning copies still reserve their sequence.
+pub(crate) const INSTANCE_POP_LOW_BAND: u64 = 0x80_0000;
+// Bit 22 holds EventAI summons.
+pub(crate) const SUMMON_LOW_BAND: u64 = 0x40_0000;
+
+/// The low after the highest of `lows` outside the Instance copy and summon bands.
+pub(crate) fn next_spawn_low(lows: impl Iterator<Item = u64>) -> u64 {
+    lows.filter(|low| low & (INSTANCE_POP_LOW_BAND | SUMMON_LOW_BAND) == 0)
+        .max()
+        .unwrap_or(0)
+        + 1
+}
+
 #[table(accessor = game_creature_population)]
 pub struct CreaturePopulation {
     #[primary_key]

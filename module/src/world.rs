@@ -1,17 +1,19 @@
 use lyracore_protocol::codec::ClientMovement;
 use lyracore_shared::constants::sheath_state;
-use lyracore_shared::{movement_flags, spatial};
+use lyracore_shared::movement_flags;
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
 
 use crate::faction::game_faction_template;
 use crate::graveyard;
 use crate::helpers::entity_by_owner;
-use crate::{game_aura, game_character, game_creature_spline, game_instance};
+use crate::{game_aura, game_character, game_instance};
 
 mod placement;
+mod player_entity;
 mod simulation;
 
 pub(crate) use placement::MoveClock;
+pub(crate) use player_entity::build_player_entity;
 pub(crate) use simulation::backfill_simulation;
 
 #[table(accessor = game_world_state_name)]
@@ -582,25 +584,7 @@ fn teleport(
         chars.guid().update(c);
     }
 
-    if let Some(previous) = ctx.db.game_creature_spline().guid().find(player_guid) {
-        let spline_id = crate::creatures::tick::next_spline_id(
-            crate::creatures::tick::move_clock_ms(ctx),
-            previous.spline_id,
-        );
-        crate::creatures::tick::emit_move_spline(
-            ctx,
-            player_guid,
-            (x, y, z),
-            (x, y, z),
-            0,
-            false,
-            spline_id,
-            map_id,
-            instance_id,
-            spatial::grid_cell(x, y),
-            None,
-        );
-    }
+    crate::creatures::leg::halt_at(ctx, player_guid, map_id, instance_id, (x, y, z));
 
     crate::hooks::fire_on_character_relocated(
         ctx,
@@ -772,7 +756,7 @@ pub(crate) fn apply_player_login(
         crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(character_guid));
     }
 
-    let mut entity = crate::creatures::build_player_entity(ctx, &character, owner);
+    let mut entity = build_player_entity(ctx, &character, owner);
     if entry == WorldEntry::Login {
         crate::taxi::prepare_world_entry(ctx, &mut entity);
     }
@@ -1573,7 +1557,7 @@ pub fn on_disconnect(ctx: &ReducerContext) {
     }
     crate::native::close(ctx);
     if let Some(entity) = entity_by_owner(ctx, ctx.sender()) {
-        if !crate::native::is_player(ctx, entity.guid) {
+        if !crate::native::has_world_session(ctx, entity.guid) {
             remove_live_character(ctx, entity, CharacterDeparture::Logout);
         }
     }

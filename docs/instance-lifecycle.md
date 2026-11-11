@@ -33,8 +33,8 @@ Dungeon exits and graveyard release use imported Area Trigger, area, and graveya
 Missing exit metadata sends a reaped-instance login to the Character's home. The small fixture keeps
 its Deadmines bootstrap fallback. Raid admission uses map capacity.
 
-Creature copies use `encounter::wave_guid` with bit 23 set in the low field. This separates their
-identities from imported spawns and encounter wave allocation. A copy skips any guid that a spawn
+Creature copies set bit 23 (`INSTANCE_POP_LOW_BAND` in `module/src/creatures/population.rs`) in
+the low field. This separates their identities from imported spawns and encounter wave allocation. A copy skips any guid that a spawn
 row or entity already holds, because dormant instance-zero spawns in the Operator Spawn Range and
 the Package Creature Range carry bit 23 too. GameObject copies use `0xF110 | bit46 | seq`, below the
 pool band and above static and debug identifiers.

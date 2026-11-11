@@ -6,13 +6,14 @@ use lyracore_package_delta::{
     is_package_creature_ai_id, FieldValue, Operation, Table as ClaimTable, TracedRow,
 };
 
-use crate::creatures::{CreatureAiBroadcastText, CreatureAiSummon, CreatureInstruction};
+use crate::creatures::CreatureInstruction;
 use crate::encounter::EncounterBinding;
 use crate::quest::{game_quest_event_requirement, QuestEventRequirement};
 use crate::{
     game_creature_ai_broadcast_text, game_creature_ai_definition, game_creature_ai_summon,
     game_quest_template, CreatureAiDefinition,
 };
+use crate::{CreatureAiBroadcastText, CreatureAiSummon};
 
 use super::{as_f32, as_str, as_u32, as_u8, check_insert_is_whole, UpdateTarget};
 

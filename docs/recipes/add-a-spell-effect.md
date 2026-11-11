@@ -62,12 +62,13 @@ Only when the effect outlives the cast. Add the table in the owning family's mod
   with `#[default(...)]`. A `String` column cannot take a default, so string data goes in a new
   table. [`danger-zones.md`](../danger-zones.md) has the rules.
 - End the state on every path that ends it. Distract clears its row on death
-  (`module/src/combat/death.rs`), on a new Engagement (`module/src/combat/engage.rs`), when a pet
-  despawns (`module/src/creatures/pet.rs`) and when a creature's lifecycle resets
-  (`module/src/creatures/eventai/edges.rs`).
+  (`module/src/combat/death.rs`), on a new Engagement (`module/src/combat/engage.rs`) and when a
+  creature's lifecycle resets (`module/src/creatures/eventai/edges.rs`). Every creature removal
+  calls `despawn_creature_entity` (`module/src/creatures/tick/lifecycle.rs`); add a per-creature
+  row to it and to `creature_teardown_tripwire` in `module/src/tripwires.rs`.
 - Read it where behaviour changes. Distract holds idle movement in the creature behavior cycle's
   `IdleSink` (`module/src/creatures/cycle/ctx.rs`) and faces the point through
-  `module/src/creatures/tick/mod.rs`.
+  `module/src/creatures/leg.rs`.
 
 ## 7. Check schema and delivery
 

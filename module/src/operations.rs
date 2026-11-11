@@ -4,11 +4,10 @@ use crate::game_world_entity;
 use crate::spell::stacking::game_spell_group;
 use crate::{
     game_auction, game_auction_expiry, game_aura, game_aura_schedule, game_breath_schedule,
-    game_createinfo_spell, game_creature_move_schedule, game_duel_schedule, game_faction,
-    game_gateway_lease_reaper_schedule, game_ground_area_schedule, game_instance_reaper_schedule,
-    game_item_template, game_motion_publish_schedule, game_pet_care_schedule, game_spell,
-    game_talent, AuctionExpiry, AuraSchedule, BreathSchedule, CreatureMoveSchedule, DuelSchedule,
-    GroundAreaSchedule, PetCareSchedule,
+    game_createinfo_spell, game_duel_schedule, game_faction, game_gateway_lease_reaper_schedule,
+    game_ground_area_schedule, game_instance_reaper_schedule, game_item_template,
+    game_motion_publish_schedule, game_pet_care_schedule, game_spell, game_talent, AuctionExpiry,
+    AuraSchedule, BreathSchedule, DuelSchedule, GroundAreaSchedule, PetCareSchedule,
 };
 
 #[reducer]
@@ -206,23 +205,10 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         1
     };
 
-    let move_sched = ctx.db.game_creature_move_schedule();
-    let stale_move: Vec<u64> = move_sched
-        .iter()
-        .filter(|r| r.instance_id == crate::creatures::GLOBAL_TICK_INSTANCE)
-        .map(|r| r.scheduled_id)
-        .collect();
-    for id in stale_move {
-        move_sched.scheduled_id().delete(id);
-    }
-    move_sched.insert(CreatureMoveSchedule {
-        scheduled_id: 0,
-        scheduled_at: crate::time::schedule_interval(
-            ctx,
-            TimeDuration::from_micros(crate::creatures::SLICED_TICK_MICROS),
-        ),
-        instance_id: crate::creatures::GLOBAL_TICK_INSTANCE,
-    });
+    crate::creatures::tick::arm_creature_tick(
+        ctx,
+        TimeDuration::from_micros(crate::creatures::SLICED_TICK_MICROS),
+    );
 
     let reaper_sched = ctx.db.game_instance_reaper_schedule();
     let stale_reaper: Vec<u64> = reaper_sched.iter().map(|r| r.scheduled_id).collect();

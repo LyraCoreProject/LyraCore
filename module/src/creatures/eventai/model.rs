@@ -1,6 +1,6 @@
 use super::presentation::CreaturePresentationInstruction;
 use super::CreatureAiState;
-use crate::creatures::ai::TickScope;
+use crate::creatures::TickScope;
 use crate::quest::EventAiQuestCredit;
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]

@@ -42,7 +42,7 @@ fn leash_pass(ctx: &ReducerContext) {
             target.y - attacker.y,
             target.z - attacker.z,
         );
-        if crate::creatures::beyond_combat_backstop(dx * dx + dy * dy + dz * dz) {
+        if crate::combat::beyond_combat_backstop(dx * dx + dy * dy + dz * dz) {
             evaders.push(attacker.guid);
             continue;
         }
@@ -51,13 +51,13 @@ fn leash_pass(ctx: &ReducerContext) {
             continue;
         }
         let (rx, ry) = (target.x - atk.leash_x, target.y - atk.leash_y);
-        if crate::creatures::should_evade(now_ms, atk.pursuit_ends_ms, rx * rx + ry * ry) {
+        if crate::combat::should_evade(now_ms, atk.pursuit_ends_ms, rx * rx + ry * ry) {
             evaders.push(atk.attacker_guid);
         }
     }
     for (creature, x, y) in seeds {
         if let Some(mut row) = melee.attacker_guid().find(creature) {
-            row.pursuit_ends_ms = crate::creatures::pursuit_deadline_ms(now_ms);
+            row.pursuit_ends_ms = crate::combat::pursuit_deadline_ms(now_ms);
             row.leash_x = x;
             row.leash_y = y;
             crate::combat::MeleeAttack::update(ctx, row);

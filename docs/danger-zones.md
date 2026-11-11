@@ -54,7 +54,7 @@ Shard. An existing multi-Shard Realm needs a reviewed data migration first; see
    `error[E0493]` on stable. This blocks `#[default(String::new())]` and `#[default("")]` alike.
    Numeric and bool defaults are fine. Put new `String` data in a new table instead: it has no
    existing rows, so no column needs a default. `game_creature_waypoint` and `game_creature_spell`
-   use the same one-row-plus-child-rows shape. See `NpcTextSlot` in `module/src/creatures/spawn.rs`.
+   use the same one-row-plus-child-rows shape. See `NpcTextSlot` in `module/src/gossip.rs`.
 7. **Never `.iter()` or `.count()` a spatial table** (`game_world_entity`, `game_corpse`,
    `game_creature_spawn`, `game_gameobject`, `game_dynamic_object`). That includes the usual
    `let entities = ctx.db.game_world_entity();` handle, which is the same whole-world read one line

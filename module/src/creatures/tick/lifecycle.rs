@@ -5,17 +5,21 @@ use crate::{game_corpse_loot, game_gameobject, game_gameobject_pool_member, game
 
 use super::*;
 
+/// Removes a creature, pet or other owned unit from the world with every row kept for its life.
+/// Every removal path calls this; `creature_teardown_tripwire` names the rows it must clear.
 pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
     if ctx.db.game_creature_spawn().guid().find(guid).is_none() {
         crate::items::vendor_stock::forget(ctx, guid);
     }
+    // Combat and threat end before motion and entity state.
     crate::combat::disengage(ctx, guid);
     crate::threat::clear_taunt_lock(ctx, guid);
     crate::combat::clear_lethal_damage_floor(ctx, guid);
     crate::creatures::cancel_relay_runs_for_source(ctx, guid);
     crate::creatures::reset_creature_lifecycle(ctx, guid);
     crate::creatures::drop_summon_expiry(ctx, guid);
-    let _ = crate::creatures::set_creature_gossip_menu(ctx, guid, None);
+    crate::creatures::clear_gossip_menu_override(ctx, guid);
+    crate::creatures::clear_live_pet_kind(ctx, guid);
     crate::loot::tag::clear(ctx, guid);
     ctx.db.game_creature_spline().guid().delete(guid);
     crate::motion::drop_pending(ctx, guid);

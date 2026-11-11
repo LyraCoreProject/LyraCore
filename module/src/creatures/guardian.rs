@@ -99,7 +99,7 @@ pub(crate) fn die(ctx: &ReducerContext, guid: u64) -> bool {
     else {
         return false;
     };
-    super::tick::stop_where_rendered(ctx, &mut entity);
+    super::leg::stop(ctx, &mut entity);
     entity.health = 0;
     entity.dead = true;
     entity.dynamic_flags = 0;

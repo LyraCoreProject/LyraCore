@@ -189,7 +189,7 @@ pub(crate) fn refresh_leash(ctx: &ReducerContext, guid_a: u64, guid_b: u64) {
         if e.is_player() {
             continue;
         }
-        row.pursuit_ends_ms = crate::creatures::pursuit_deadline_ms(now_ms);
+        row.pursuit_ends_ms = crate::combat::pursuit_deadline_ms(now_ms);
         row.leash_x = e.x;
         row.leash_y = e.y;
         crate::combat::MeleeAttack::update(ctx, row);
@@ -668,25 +668,9 @@ fn face_requested_melee_target(ctx: &ReducerContext, attacker_guid: u64, target_
     ) {
         return;
     }
-    let now_ms = (now_micros / 1_000) as u32;
-    let spline_id = retained.as_ref().map_or(now_ms, |last| {
-        crate::creatures::tick::next_spline_id(now_ms, last.spline_id)
-    });
-    let position = (attacker.x, attacker.y, attacker.z);
-    let partition = (attacker.map_id, attacker.instance_id);
-    let grid = (attacker.grid_x, attacker.grid_y);
     attacker.orientation = orientation;
-    attacker.update(ctx);
-    crate::creatures::tick::emit_facing_spline(
-        ctx,
-        attacker_guid,
-        position,
-        orientation,
-        spline_id,
-        partition.0,
-        partition.1,
-        grid,
-    );
+    let mut attacker = attacker.update(ctx);
+    crate::creatures::leg::face(ctx, &mut attacker, orientation);
 }
 
 fn start_attack(

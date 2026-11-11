@@ -207,12 +207,13 @@ fn kill_creature_with_attribution(
         let guardian = crate::creatures::guardian::die(ctx, target_guid);
         crate::creatures::begin_death_dispatch(ctx, target_guid, killer);
         crate::creatures::on_pet_death(ctx, target_guid);
-        disengage(ctx, target_guid);
-        if !guardian {
-            crate::WorldEntity::delete(ctx, target_guid);
+        if guardian {
+            disengage(ctx, target_guid);
+            crate::creatures::clear_live_pet_kind(ctx, target_guid);
+            crate::creatures::distraction::clear(ctx, target_guid);
+        } else {
+            crate::creatures::despawn_creature_entity(ctx, target_guid);
         }
-        crate::creatures::clear_live_pet_kind(ctx, target_guid);
-        crate::creatures::distraction::clear(ctx, target_guid);
         crate::hooks::fire_on_death(
             ctx,
             &crate::hooks::DeathPayload {
@@ -225,7 +226,7 @@ fn kill_creature_with_attribution(
         crate::loot::tag::clear(ctx, target_guid);
         return true;
     }
-    crate::creatures::tick::stop_where_rendered(ctx, &mut target);
+    crate::creatures::leg::stop(ctx, &mut target);
     let victim_entry = target.entry;
     let victim_level = target.level;
     let victim_instance = target.instance_id;

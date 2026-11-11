@@ -226,42 +226,35 @@ pub fn debug_spawn_at_feet(
         .find(creature_entry)
         .ok_or_else(|| format!("no creature template for entry {creature_entry}"))?;
 
-    let spawn_max = ctx
-        .db
-        .game_creature_spawn()
-        .iter()
-        .filter(|s| s.entry == creature_entry)
-        .map(|s| s.guid & 0x00FF_FFFF)
-        .filter(|low| low & crate::instance::INSTANCE_POP_LOW_BAND == 0)
-        .max()
-        .unwrap_or(0);
-    let entity_max = entities
-        .iter()
-        .filter(|e| e.entry == creature_entry && !e.is_player())
-        .map(|e| e.guid & 0x00FF_FFFF)
-        .filter(|low| low & crate::instance::INSTANCE_POP_LOW_BAND == 0)
-        .max()
-        .unwrap_or(0);
-    let next_low = spawn_max.max(entity_max) + 1;
+    let next_low = crate::creatures::population::next_spawn_low(
+        ctx.db
+            .game_creature_spawn()
+            .iter()
+            .filter(|s| s.entry == creature_entry)
+            .map(|s| s.guid & 0x00FF_FFFF)
+            .chain(
+                entities
+                    .iter()
+                    .filter(|e| e.entry == creature_entry && !e.is_player())
+                    .map(|e| e.guid & 0x00FF_FFFF),
+            ),
+    );
     let new_guid = packed_creature_spawn_guid(creature_entry, next_low as u32);
 
     let (sin_o, cos_o) = player.orientation.sin_cos();
-    let spawn = CreatureSpawn {
-        guid: new_guid,
-        entry: creature_entry,
-        map_id: player.map_id,
-        x: player.x + offset * cos_o,
-        y: player.y + offset * sin_o,
-        z: player.z,
-        orientation: player.orientation,
-        respawn_at: crate::time::timer_never(ctx),
-        despawn_at: crate::time::timer_never(ctx),
-        movement_type: crate::creatures::MOVEMENT_IDLE,
-        respawn_secs: 0,
-        life_seq: 0,
-        source_guid: 0,
-        instance_id: player.instance_id,
-    };
+    let spawn = CreatureSpawn::temporary(
+        ctx,
+        new_guid,
+        creature_entry,
+        player.map_id,
+        player.instance_id,
+        [
+            player.x + offset * cos_o,
+            player.y + offset * sin_o,
+            player.z,
+            player.orientation,
+        ],
+    );
     let entity = build_creature_entity(ctx, &spawn, &tmpl, 0, player.instance_id);
     ctx.db.game_creature_spawn().insert(spawn);
     crate::creatures::insert_creature_entity(ctx, entity);
@@ -288,7 +281,7 @@ pub fn debug_spawn_player_entity(ctx: &ReducerContext, character_guid: u64) -> R
     let character = crate::helpers::require_character(ctx, character_guid)
         .map_err(|_| format!("no such character: {character_guid}"))?;
 
-    let entity = crate::creatures::build_player_entity(ctx, &character, character.owner_identity);
+    let entity = crate::world::build_player_entity(ctx, &character, character.owner_identity);
     let (level, max_health) = (entity.level, entity.max_health);
     entity.insert(ctx);
     crate::mount::restore_mount_on_rebuild(ctx, character_guid);
@@ -527,7 +520,7 @@ pub fn debug_enter_areatrigger(
     character_guid: u64,
     trigger_id: u32,
 ) -> Result<(), String> {
-    crate::quest::apply_enter_areatrigger(ctx, character_guid, trigger_id);
+    crate::areatrigger::apply_enter_areatrigger(ctx, character_guid, trigger_id);
     Ok(())
 }
 
@@ -543,7 +536,7 @@ pub fn debug_replay_sessionless_areatrigger(
     expected_relocation_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let relocation_id = crate::quest::enter_sessionless_areatrigger(
+    let relocation_id = crate::areatrigger::enter_sessionless_areatrigger(
         ctx,
         character_guid,
         trigger_id,
@@ -1195,7 +1188,7 @@ pub fn debug_creature_path(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let mover = crate::helpers::live_entity(ctx, guid)?;
-    crate::creatures::tick::emit_creature_path(ctx, mover, vec![(x, y, z)], run);
+    crate::creatures::leg::start_path(ctx, mover, vec![(x, y, z)], run);
     Ok(())
 }
 
@@ -1211,7 +1204,7 @@ pub fn debug_creature_waypoints(
     let points: Vec<_> = points.into_iter().map(|p| (p.x, p.y, p.z)).collect();
     let points = lyracore_shared::movement_path::wire_points(&points)
         .ok_or("creature path cannot be encoded")?;
-    crate::creatures::tick::emit_creature_path(ctx, mover, points, run);
+    crate::creatures::leg::start_path(ctx, mover, points, run);
     Ok(())
 }
 
@@ -1222,7 +1215,7 @@ pub fn debug_creature_face(ctx: &ReducerContext, guid: u64, x: f32, y: f32) -> R
         return Err("facing point is not finite".into());
     }
     let mut mover = crate::helpers::live_entity(ctx, guid)?;
-    crate::creatures::tick::stop_facing(ctx, &mut mover, (x, y));
+    crate::creatures::leg::stop_facing(ctx, &mut mover, (x, y));
     mover.update(ctx);
     Ok(())
 }
@@ -1265,21 +1258,29 @@ pub fn debug_skin_nearest(ctx: &ReducerContext, character_guid: u64) -> Result<(
     let looter = crate::helpers::live_entity(ctx, character_guid)
         .map_err(|_| format!("skinner {character_guid} not in world"))?;
     let corpse_guid = crate::helpers::nearest_entity(ctx, &looter, |e| {
-        e.dead && !e.is_player() && !e.skinned && crate::loot::entry_is_beast(ctx, e.entry)
+        e.dead && !e.is_player() && !e.skinned && crate::professions::entry_is_beast(ctx, e.entry)
     })
     .ok_or_else(|| "no skinnable beast corpse near".to_string())?
     .guid;
-    Ok(crate::loot::skin_corpse(ctx, character_guid, corpse_guid)?)
+    Ok(crate::professions::skin_corpse(
+        ctx,
+        character_guid,
+        corpse_guid,
+    )?)
 }
 
 #[reducer]
 pub fn debug_fish(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    Ok(crate::loot::apply_fish(ctx, character_guid)?)
+    Ok(crate::professions::apply_fish(ctx, character_guid)?)
 }
 
 #[reducer]
 pub fn debug_disenchant(ctx: &ReducerContext, character_guid: u64, slot: u8) -> Result<(), String> {
-    Ok(crate::loot::apply_disenchant(ctx, character_guid, slot)?)
+    Ok(crate::professions::apply_disenchant(
+        ctx,
+        character_guid,
+        slot,
+    )?)
 }
 
 #[reducer]
@@ -1289,7 +1290,7 @@ pub fn debug_enchant_item(
     target_slot: u8,
     enchant_id: u32,
 ) -> Result<(), String> {
-    Ok(crate::loot::apply_enchant_item(
+    Ok(crate::professions::apply_enchant_item(
         ctx,
         character_guid,
         target_slot,
@@ -1607,23 +1608,10 @@ pub fn debug_rearm_creature_tick(ctx: &ReducerContext, tick_ms: u64) -> Result<(
             "tick_ms {tick_ms} outside {INSTANCE_TICK_MS_FLOOR}..={INSTANCE_TICK_MS_CEIL}"
         ));
     }
-    let sched = ctx.db.game_creature_move_schedule();
-    let stale: Vec<u64> = sched
-        .iter()
-        .filter(|r| r.instance_id == crate::creatures::GLOBAL_TICK_INSTANCE)
-        .map(|r| r.scheduled_id)
-        .collect();
-    for id in stale {
-        sched.scheduled_id().delete(id);
-    }
-    sched.insert(CreatureMoveSchedule {
-        scheduled_id: 0,
-        scheduled_at: crate::time::schedule_interval(
-            ctx,
-            TimeDuration::from_micros(tick_ms as i64 * 1000),
-        ),
-        instance_id: crate::creatures::GLOBAL_TICK_INSTANCE,
-    });
+    crate::creatures::tick::arm_creature_tick(
+        ctx,
+        TimeDuration::from_micros(tick_ms as i64 * 1000),
+    );
     Ok(())
 }
 

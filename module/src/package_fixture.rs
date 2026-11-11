@@ -1,6 +1,6 @@
 #![cfg_attr(not(has_packages), allow(dead_code, unused_imports))]
 
-use spacetimedb::{ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{ReducerContext, Table, TimeDuration};
 
 use crate::creatures::{game_creature_move_schedule, GLOBAL_TICK_INSTANCE};
 use crate::import_meta::game_import_meta;
@@ -48,19 +48,29 @@ pub(crate) fn emit_move_spline(
     instance_id: u64,
     grid: (i32, i32),
 ) {
-    crate::creatures::tick::emit_move_spline(
-        ctx,
+    crate::CreatureSpline {
         guid,
-        start,
-        destination,
-        duration_ms,
-        run,
-        spline_id,
+        start_micros: crate::time::now(ctx).to_micros_since_unix_epoch() as u64,
+        dur_ms: duration_ms,
+        sx: start.0,
+        sy: start.1,
+        sz: start.2,
+        dx: destination.0,
+        dy: destination.1,
+        dz: destination.2,
         map_id,
         instance_id,
-        grid,
-        None,
-    );
+        grid_x: grid.0,
+        grid_y: grid.1,
+        cell: lyracore_shared::spatial::grid_cell_id(grid.0, grid.1),
+        spline_id,
+        run,
+        facing: false,
+        facing_angle: 0.0,
+        path: None,
+        back_off_from: 0,
+    }
+    .replace(ctx);
 }
 
 pub fn apply_damage(

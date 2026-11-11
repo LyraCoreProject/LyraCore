@@ -1,5 +1,6 @@
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
+use super::loader::{parse_i32, parse_u32, parse_u64, parse_u8};
 use crate::creatures::tick::game_creature_spline;
 
 use crate::{
@@ -1603,7 +1604,7 @@ fn apply_leaf_for_pair(
                 z,
                 orientation,
             }) => {
-                crate::encounter::move_to_point(
+                crate::creatures::leg::move_to_point(
                     ctx,
                     guid,
                     x,
@@ -1805,7 +1806,7 @@ fn apply_leaf_for_pair(
                 .guid()
                 .find(guid)
                 .map(|spline| spline.spline_id);
-            crate::encounter::move_to_point(
+            crate::creatures::leg::move_to_point(
                 ctx,
                 guid,
                 x,
@@ -1834,7 +1835,7 @@ fn apply_leaf_for_pair(
                 u32::try_from(entry)
                     .map_err(|_| format!("relay equipment item {entry} has a negative id"))
             };
-            crate::encounter::equip_swap(
+            crate::creatures::presentation::equip_swap(
                 ctx,
                 guid,
                 slot(equipment.main_hand)?,
@@ -1860,7 +1861,7 @@ fn apply_leaf_for_pair(
             crate::creatures::presentation::update_template_from_relay(ctx, guid, update.entry)
         }
         RelayInstruction::SetGossipMenu(menu) => {
-            crate::creatures::set_creature_gossip_menu(ctx, guid, Some(menu.menu_id))
+            crate::creatures::set_creature_gossip_menu(ctx, guid, menu.menu_id)
         }
         RelayInstruction::SetWorldState(world_state) => crate::world::set_relay_world_state(
             ctx,
@@ -2010,7 +2011,7 @@ pub(crate) fn run_relay_arrival(ctx: &ReducerContext, arrival: RelayArrival) {
         ArrivalCheck::OnDestination => {}
         ArrivalCheck::LegLanded => {
             // Land the leg before the arrival relay reads the mover's position.
-            crate::creatures::tick::place_stopped(
+            crate::creatures::leg::place_stopped(
                 &mut source,
                 crate::creatures::cycle::Stop {
                     at: crate::creatures::cycle::Point {
@@ -2503,26 +2504,6 @@ fn parse_flag_operation(value: &str) -> Result<RelayFlagOperation, String> {
         "toggle" => Ok(RelayFlagOperation::Toggle),
         _ => Err(format!("unknown relay flag operation: {value}")),
     }
-}
-fn parse_u8(value: &str) -> Result<u8, String> {
-    value
-        .parse()
-        .map_err(|_| format!("invalid relay u8: {value}"))
-}
-fn parse_u32(value: &str) -> Result<u32, String> {
-    value
-        .parse()
-        .map_err(|_| format!("invalid relay u32: {value}"))
-}
-fn parse_u64(value: &str) -> Result<u64, String> {
-    value
-        .parse()
-        .map_err(|_| format!("invalid relay u64: {value}"))
-}
-fn parse_i32(value: &str) -> Result<i32, String> {
-    value
-        .parse()
-        .map_err(|_| format!("invalid relay i32: {value}"))
 }
 fn parse_f32(value: &str) -> Result<f32, String> {
     value

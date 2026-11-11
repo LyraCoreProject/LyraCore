@@ -11,13 +11,13 @@ use super::{
     SummonLocation,
 };
 use crate::chat::{is_supported_chat_type, CHAT_SAY, CHAT_TEXT_EMOTE, CHAT_YELL};
-use crate::creatures::ai::TickScope;
+use crate::creatures::TickScope;
 use crate::quest::{EventAiQuestCredit, EventAiQuestCreditContext, QuestCreditOutcome};
 use crate::spell::{game_aura, game_spell};
 use crate::{
     game_creature_ai_broadcast_text, game_creature_ai_rule_state, game_creature_ai_spell_metadata,
     game_creature_ai_state, game_creature_ai_summon, game_creature_template, game_faction_template,
-    game_melee_attack, game_threat, game_world_entity, WorldEntity,
+    game_melee_attack, game_world_entity, WorldEntity,
 };
 
 pub(crate) trait EventAiWorld {
@@ -30,6 +30,7 @@ pub(crate) trait EventAiWorld {
     fn eventai_unit(&self, guid: u64) -> Option<EventAiUnit>;
     fn eventai_spawner_guid(&self, creature_guid: u64) -> Option<u64>;
     fn eventai_units_near(&self, center: &EventAiUnit, radius_yd: f32) -> Vec<EventAiUnit>;
+    /// Threat on the creature in `threat::rank` order.
     fn eventai_threat(&self, creature_guid: u64) -> Vec<(u64, i64)>;
     fn eventai_has_aura(&self, guid: u64, spell_id: u32) -> bool;
     fn eventai_aura_stacks(&self, guid: u64, spell_id: u32) -> u32;
@@ -1109,13 +1110,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
     }
 
     fn eventai_threat(&self, creature_guid: u64) -> Vec<(u64, i64)> {
-        self.ctx
-            .db
-            .game_threat()
-            .by_creature()
-            .filter(&creature_guid)
-            .map(|entry| (entry.source_guid, entry.threat))
-            .collect()
+        crate::threat::ranked(self.ctx, creature_guid)
     }
 
     fn eventai_scale_selected_threat(&mut self, operation: crate::threat::ScaleSelectedThreat) {
@@ -1233,12 +1228,13 @@ impl EventAiWorld for DatabaseWorld<'_> {
                 let Some(character) = crate::helpers::character_by_guid(self.ctx, guid) else {
                     return false;
                 };
-                let team = lyracore_shared::faction::team_for_race(character.race);
-                match predicate {
-                    EventPredicate::Alliance => team == 469,
-                    EventPredicate::Horde => team == 67,
-                    _ => unreachable!("team predicates handled in this branch"),
-                }
+                use lyracore_shared::faction::{team_for_race, TEAM_ALLIANCE, TEAM_HORDE};
+                let wanted = if predicate == EventPredicate::Alliance {
+                    TEAM_ALLIANCE
+                } else {
+                    TEAM_HORDE
+                };
+                team_for_race(character.race) == wanted
             }
             EventPredicate::QuestTaken(quest) => {
                 crate::quest::quest_is_taken(self.ctx, guid, quest.quest_entry)

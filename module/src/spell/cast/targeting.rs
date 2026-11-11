@@ -1713,27 +1713,17 @@ fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
     }
     let nz = crate::terrain::snap_z(ctx, caster.map_id, caster.instance_id, nx, ny, target.z);
     let duration_ms = ((dist / lyracore_shared::constants::speeds::CHARGE) * 1000.0) as u32;
-    let now_ms = crate::creatures::tick::move_clock_ms(ctx);
-    crate::creatures::tick::emit_move_spline(
-        ctx,
-        caster_guid,
-        (caster.x, caster.y, caster.z),
-        (nx, ny, nz),
-        duration_ms,
-        true,
-        now_ms,
-        caster.map_id,
-        caster.instance_id,
-        (caster.grid_x, caster.grid_y),
-        None,
-    );
-    // The spline animates the client; combat needs the authoritative landing position immediately.
-    if let Some(mut c) = entities.guid().find(caster_guid) {
-        let clock = crate::world::MoveClock::realm(ctx, caster_guid, now_ms);
-        c.place(nx, ny, nz, clock).unexplored();
-        c.orientation = facing;
-        c.update(ctx);
+    let course = crate::creatures::leg::Course::straight((nx, ny, nz), duration_ms, true);
+    let mut c = caster;
+    if !crate::creatures::leg::begin(ctx, &mut c, course) {
+        return;
     }
+    // The spline animates the client; combat needs the authoritative landing position immediately.
+    let now_ms = crate::creatures::tick::move_clock_ms(ctx);
+    let clock = crate::world::MoveClock::realm(ctx, caster_guid, now_ms);
+    c.place(nx, ny, nz, clock).unexplored();
+    c.orientation = facing;
+    c.update(ctx);
 }
 
 // Vanilla Charge stops at obstructions instead of routing around them.

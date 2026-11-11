@@ -366,22 +366,14 @@ pub fn debug_assert_floor_snap(
             .entry()
             .find(creature_entry)
             .ok_or_else(|| format!("no creature template for entry {creature_entry}"))?;
-        let spawn = CreatureSpawn {
-            guid: new_guid,
-            entry: creature_entry,
+        let spawn = CreatureSpawn::temporary(
+            ctx,
+            new_guid,
+            creature_entry,
             map_id,
-            x: ORIGIN.0,
-            y: ORIGIN.1,
-            z: TERRAIN_FALLBACK,
-            orientation: 0.0,
-            respawn_at: crate::time::timer_never(ctx),
-            despawn_at: crate::time::timer_never(ctx),
-            movement_type: crate::creatures::MOVEMENT_IDLE,
-            respawn_secs: 0,
-            life_seq: 0,
-            source_guid: 0,
-            instance_id: 0,
-        };
+            0,
+            [ORIGIN.0, ORIGIN.1, TERRAIN_FALLBACK, 0.0],
+        );
         let entity = build_creature_entity(ctx, &spawn, &tmpl, 0, 0);
         ctx.db.game_creature_spawn().insert(spawn);
         crate::creatures::insert_creature_entity(ctx, entity);

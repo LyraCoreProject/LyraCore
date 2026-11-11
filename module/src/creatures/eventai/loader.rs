@@ -1124,19 +1124,19 @@ fn parse_bool(value: &str) -> Result<bool, String> {
     }
 }
 
-fn parse_u64(value: &str) -> Result<u64, String> {
+pub(super) fn parse_u64(value: &str) -> Result<u64, String> {
     value.parse().map_err(|_| format!("invalid u64: {value}"))
 }
 
-fn parse_u32(value: &str) -> Result<u32, String> {
+pub(super) fn parse_u32(value: &str) -> Result<u32, String> {
     value.parse().map_err(|_| format!("invalid u32: {value}"))
 }
 
-fn parse_u8(value: &str) -> Result<u8, String> {
+pub(super) fn parse_u8(value: &str) -> Result<u8, String> {
     value.parse().map_err(|_| format!("invalid u8: {value}"))
 }
 
-fn parse_i32(value: &str) -> Result<i32, String> {
+pub(super) fn parse_i32(value: &str) -> Result<i32, String> {
     value.parse().map_err(|_| format!("invalid i32: {value}"))
 }
 

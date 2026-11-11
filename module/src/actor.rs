@@ -82,7 +82,7 @@ package_only! {
     pub(crate) use crate::quest::objective_kind as objective_kind;
     pub(crate) use crate::quest::quest_role as quest_role;
     pub(crate) use crate::quest::MAX_QUEST_LOG_SIZE as MAX_QUEST_LOG_SIZE;
-    pub(crate) use crate::quest::AreaTriggerRoute as AreaTriggerRoute;
+    pub(crate) use crate::areatrigger::AreaTriggerRoute as AreaTriggerRoute;
     pub(crate) use crate::creatures::creature_spawn_evidence as creature_spawn_evidence;
     pub(crate) use crate::gameobject::gameobject_destination_evidence as gameobject_destination_evidence;
 }
@@ -95,10 +95,10 @@ pub(crate) use crate::loot::open_creature_corpse as open_creature_loot;
 package_only! {
     pub(crate) use crate::items::apply_item_use as use_item;
     pub(crate) use crate::loot::request_open_creature_corpse as request_open_creature_loot;
-    pub(crate) use crate::items::apply_take_loot as take_loot;
+    pub(crate) use crate::loot::apply_take_loot as take_loot;
     pub(crate) use crate::items::request_profile_item as reconcile_profile_item;
     pub(crate) use crate::items::apply_equip_profile_upgrade as equip_profile_upgrade;
-    pub(crate) use crate::items::request_take_loot as request_take_loot;
+    pub(crate) use crate::loot::request_take_loot as request_take_loot;
     pub(crate) use crate::loot::apply_loot_money as loot_money;
 }
 pub(crate) use crate::creatures::apply_item_target_spell as cast_item_target;
@@ -218,8 +218,8 @@ package_only! {
     pub(crate) use crate::bridge::CommandOutcome as CommandOutcome;
     pub(crate) use crate::bridge::ParsedClientCommand as ParsedClientCommand;
     pub(crate) use crate::bridge::RECEIPT_CAPACITY as COMMAND_RECEIPT_CAPACITY;
-    pub(crate) use crate::quest::area_trigger_route as area_trigger_route;
-    pub(crate) use crate::quest::enter_sessionless_areatrigger as enter_sessionless_areatrigger;
+    pub(crate) use crate::areatrigger::area_trigger_route as area_trigger_route;
+    pub(crate) use crate::areatrigger::enter_sessionless_areatrigger as enter_sessionless_areatrigger;
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq, Eq)]
@@ -283,7 +283,7 @@ pub(crate) fn restore_sessionless_body(
         return Some(entity);
     }
     let character = crate::helpers::character_by_guid(ctx, character_guid)?;
-    let mut entity = crate::creatures::build_player_entity(ctx, &character, Identity::ZERO);
+    let mut entity = crate::world::build_player_entity(ctx, &character, Identity::ZERO);
     if character.pending_ghost {
         let (dead, health, player_flags, unit_bytes_1) =
             crate::world::ghost_restored_fields(entity.player_flags, entity.unit_bytes_1);
@@ -311,7 +311,7 @@ pub(crate) fn stop_movement(ctx: &ReducerContext, actor_guid: u64) {
         return;
     }
     if let Some(mut entity) = ctx.db.game_world_entity().guid().find(actor_guid) {
-        crate::creatures::tick::stop_where_rendered(ctx, &mut entity);
+        crate::creatures::leg::stop(ctx, &mut entity);
         entity.update(ctx);
     } else {
         ctx.db.game_creature_spline().guid().delete(actor_guid);

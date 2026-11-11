@@ -1,3 +1,5 @@
+use super::tick::cadence::MOVE_TICK_SECS;
+
 const FLEE_HEALTH_PCT: u32 = 15;
 
 const ASSIST_RADIUS: f32 = 10.0;
@@ -32,20 +34,6 @@ pub(crate) fn may_start_rout(eligible: bool, rout_ends_ms: u32) -> bool {
 // Zero means never started; wrapping onto it would allow a second rout.
 pub(crate) fn rout_close_ms(now_ms: u32) -> u32 {
     now_ms.wrapping_add(ROUT_DURATION_MS).max(1)
-}
-
-pub(crate) fn pursuit_deadline_ms(now_ms: u32) -> u32 {
-    now_ms.wrapping_add(crate::combat::PURSUIT_WINDOW_MS).max(1)
-}
-
-pub(crate) fn beyond_combat_backstop(dist_sq: f32) -> bool {
-    dist_sq > crate::combat::COMBAT_BACKSTOP_SQ
-}
-
-pub(crate) fn should_evade(now_ms: u32, pursuit_ends_ms: u32, target_dist_sq: f32) -> bool {
-    pursuit_ends_ms != 0
-        && now_ms >= pursuit_ends_ms
-        && target_dist_sq > crate::combat::LEASH_RADIUS_SQ
 }
 
 pub(crate) fn wounded_slow_factor(health: u32, max_health: u32) -> f32 {
@@ -196,132 +184,8 @@ pub(crate) fn wander_point(
     (home_x + r * angle.cos(), home_y + r * angle.sin())
 }
 
-pub(crate) const MOVE_TICK_SECS: f32 = 0.5;
-
-pub(crate) const MOVE_TICK_MICROS: i64 = 500_000;
-
-pub(crate) const SENSE_EVERY_N_TICKS: i64 = 8;
-
-pub(crate) const SENSE_PERIOD_MICROS: i64 = MOVE_TICK_MICROS * SENSE_EVERY_N_TICKS;
-
-pub(crate) fn is_sense_tick_for_interval(now_micros: i64, interval_micros: i64) -> bool {
-    let interval = if interval_micros > 0 {
-        interval_micros
-    } else {
-        MOVE_TICK_MICROS
-    };
-    let every_n = (SENSE_PERIOD_MICROS / interval).max(1);
-    (now_micros / interval) % every_n == 0
-}
-
-pub(crate) fn tick_secs_for_interval(interval_micros: i64) -> f32 {
-    let interval = if interval_micros > 0 {
-        interval_micros
-    } else {
-        MOVE_TICK_MICROS
-    };
-    interval as f32 / 1_000_000.0
-}
-
 pub(crate) fn fear_step_for_tick(tick_secs: f32) -> f32 {
     FEAR_STEP * (tick_secs / MOVE_TICK_SECS)
-}
-
-pub(crate) fn sense_period_secs_for_interval(interval_micros: i64) -> f32 {
-    let interval = if interval_micros > 0 {
-        interval_micros
-    } else {
-        MOVE_TICK_MICROS
-    };
-    let every_n = (SENSE_PERIOD_MICROS / interval).max(1);
-    (every_n * interval) as f32 / 1_000_000.0
-}
-
-pub(crate) const GLOBAL_TICK_INSTANCE: u64 = u64::MAX;
-
-pub(crate) const TICK_SLICES: u32 = 4;
-
-/// Each firing runs one slice, so every creature still runs once per `MOVE_TICK_MICROS`.
-pub(crate) const SLICED_TICK_MICROS: i64 = MOVE_TICK_MICROS / TICK_SLICES as i64;
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct TickSlice {
-    pub index: u32,
-    pub count: u32,
-}
-
-impl TickSlice {
-    pub(crate) const WHOLE: TickSlice = TickSlice { index: 0, count: 1 };
-
-    pub(crate) fn of_tick(tick: u64) -> Self {
-        TickSlice {
-            index: (tick % u64::from(TICK_SLICES)) as u32,
-            count: TICK_SLICES,
-        }
-    }
-
-    pub(crate) fn owns(self, guid: u64) -> bool {
-        self.count <= 1 || guid % u64::from(self.count) == u64::from(self.index)
-    }
-}
-
-pub(crate) enum TickScope {
-    CatchAll {
-        dedicated: std::collections::HashSet<u64>,
-        slice: TickSlice,
-    },
-    Only(u64),
-}
-
-impl TickScope {
-    #[cfg(test)]
-    pub(crate) fn from_rows(
-        row_instance_id: u64,
-        all_row_instance_ids: impl IntoIterator<Item = u64>,
-    ) -> Self {
-        Self::sliced(row_instance_id, all_row_instance_ids, TickSlice::WHOLE)
-    }
-
-    pub(crate) fn sliced(
-        row_instance_id: u64,
-        all_row_instance_ids: impl IntoIterator<Item = u64>,
-        slice: TickSlice,
-    ) -> Self {
-        if row_instance_id == GLOBAL_TICK_INSTANCE {
-            TickScope::CatchAll {
-                dedicated: all_row_instance_ids
-                    .into_iter()
-                    .filter(|&i| i != GLOBAL_TICK_INSTANCE)
-                    .collect(),
-                slice,
-            }
-        } else {
-            TickScope::Only(row_instance_id)
-        }
-    }
-
-    pub(crate) fn covers(&self, instance_id: u64) -> bool {
-        match self {
-            TickScope::CatchAll { dedicated, .. } => !dedicated.contains(&instance_id),
-            TickScope::Only(n) => instance_id == *n,
-        }
-    }
-
-    /// Whether this tick runs the creature: its instance is covered and its guid is in the slice.
-    pub(crate) fn owns(&self, guid: u64, instance_id: u64) -> bool {
-        self.covers(instance_id) && self.slice().owns(guid)
-    }
-
-    pub(crate) fn slice(&self) -> TickSlice {
-        match self {
-            TickScope::CatchAll { slice, .. } => *slice,
-            TickScope::Only(_) => TickSlice::WHOLE,
-        }
-    }
-
-    pub(crate) fn runs_global_passes(&self) -> bool {
-        matches!(self, TickScope::CatchAll { slice, .. } if slice.index == 0)
-    }
 }
 
 pub(crate) fn leg_in_flight(now_ms: u32, leg_ends_ms: u32) -> bool {
@@ -364,21 +228,6 @@ pub(crate) fn nearest_waypoint_idx(cx: f32, cy: f32, pts: &[(f32, f32)]) -> usiz
 mod tests {
     use super::*;
     use lyracore_shared::constants;
-
-    use crate::creatures::{
-        rank_hp_multiplier_permille, rolled_creature_stats, scale_creature_damage_for_level,
-        scale_health_for_rank,
-    };
-
-    #[test]
-    fn creature_damage_scales_from_template_to_live_level_without_overflow() {
-        assert_eq!(scale_creature_damage_for_level(5, 10, 10, 10), (5, 10));
-        assert_eq!(scale_creature_damage_for_level(5, 10, 10, 12), (6, 12));
-        assert_eq!(
-            scale_creature_damage_for_level(u32::MAX, u32::MAX, 1, 60),
-            (u32::MAX, u32::MAX)
-        );
-    }
 
     #[test]
     fn hp_pct_below_threshold_and_flee_delegation() {
@@ -480,54 +329,6 @@ mod tests {
         assert_eq!(stealth_detect_range(1, 60), 5.0);
         assert_eq!(stealth_detect_range(99, 1), STEALTH_DETECT_MAX);
         assert_eq!(stealth_detect_range(10, 10), MIN_AGGRO_RADIUS);
-    }
-
-    #[test]
-    fn level_roll_respects_range_and_interpolates_health() {
-        assert_eq!(rolled_creature_stats(3, 0, 42, 0, 12345), (3, 42));
-        assert_eq!(rolled_creature_stats(3, 3, 42, 60, 999), (3, 42));
-        for rand in 0..50u32 {
-            let (lvl, _) = rolled_creature_stats(1, 3, 40, 80, rand);
-            assert!(
-                (1..=3).contains(&lvl),
-                "level {lvl} out of [1,3] for rand {rand}"
-            );
-        }
-        assert_eq!(rolled_creature_stats(1, 3, 40, 80, 0).0, 1);
-        assert_eq!(rolled_creature_stats(1, 3, 40, 80, 2).0, 3);
-        assert_eq!(rolled_creature_stats(1, 3, 40, 80, 0), (1, 40));
-        assert_eq!(rolled_creature_stats(1, 3, 40, 80, 1), (2, 60));
-        assert_eq!(rolled_creature_stats(1, 3, 40, 80, 2), (3, 80));
-        assert_eq!(rolled_creature_stats(1, 3, 50, 0, 2), (3, 50));
-    }
-
-    #[test]
-    fn rank_scales_health_and_rank0_is_identity() {
-        for base in [0u32, 1, 42, 1000, 250_000, u32::MAX] {
-            assert_eq!(
-                scale_health_for_rank(base, 0),
-                base,
-                "rank-0 must be identity for base {base}"
-            );
-        }
-        assert_eq!(scale_health_for_rank(100, 1), 150);
-        assert_eq!(scale_health_for_rank(100, 2), 280);
-        assert_eq!(scale_health_for_rank(100, 3), 400);
-        assert_eq!(scale_health_for_rank(100, 4), 180);
-        assert_eq!(scale_health_for_rank(42, 1), 63);
-        assert_eq!(scale_health_for_rank(100, 7), 100);
-        assert_eq!(scale_health_for_rank(100, 255), 100);
-        assert_eq!(rank_hp_multiplier_permille(0), 1000);
-        assert!(rank_hp_multiplier_permille(1) > rank_hp_multiplier_permille(0));
-        assert!(rank_hp_multiplier_permille(3) > rank_hp_multiplier_permille(1));
-        assert_eq!(scale_health_for_rank(u32::MAX, 1), u32::MAX);
-        assert_eq!(scale_health_for_rank(u32::MAX, 2), u32::MAX);
-        assert_eq!(scale_health_for_rank(u32::MAX, 3), u32::MAX);
-        assert_eq!(scale_health_for_rank(u32::MAX, 4), u32::MAX);
-        assert_eq!(scale_health_for_rank(2_000_000_000, 1), 3_000_000_000);
-        assert_eq!(scale_health_for_rank(1_000_000_000, 2), 2_800_000_000);
-        assert_eq!(scale_health_for_rank(1_000_000_000, 3), 4_000_000_000);
-        assert_eq!(scale_health_for_rank(2_000_000_000, 4), 3_600_000_000);
     }
 
     #[test]
@@ -780,145 +581,6 @@ mod tests {
     }
 
     #[test]
-    fn tick_scope_dedicated_row_covers_exactly_its_instance() {
-        let rows = [GLOBAL_TICK_INSTANCE, 7, 9];
-        let scope = TickScope::from_rows(7, rows);
-        assert!(scope.covers(7), "a dedicated row covers its own instance");
-        assert!(!scope.covers(0), "…and never the open world");
-        assert!(!scope.covers(9), "…and never a SIBLING dedicated instance");
-        assert!(
-            !scope.covers(3),
-            "…and never an unrelated instance (that's the catch-all's)"
-        );
-        assert!(
-            !scope.runs_global_passes(),
-            "due-time passes (regen/decay/respawn) run only on the catch-all firing"
-        );
-    }
-
-    #[test]
-    fn tick_scope_catch_all_skips_dedicated_rows_and_covers_everything_else() {
-        let rows = [GLOBAL_TICK_INSTANCE, 7, 9];
-        let scope = TickScope::from_rows(GLOBAL_TICK_INSTANCE, rows);
-        assert!(
-            scope.covers(0),
-            "the catch-all covers instance 0 (the open world)"
-        );
-
-        assert!(
-            scope.covers(3),
-            "an instance with no row of its own is covered by the catch-all"
-        );
-        assert!(
-            scope.covers(u64::MAX - 1),
-            "…even a pathological huge instance id"
-        );
-        assert!(
-            !scope.covers(7),
-            "the catch-all SKIPS an instance with a dedicated row"
-        );
-        assert!(!scope.covers(9));
-        assert!(scope.runs_global_passes());
-    }
-
-    #[test]
-    fn tick_slices_run_every_creature_once_per_cycle_and_global_passes_once() {
-        let rows = [GLOBAL_TICK_INSTANCE];
-        let scopes: Vec<TickScope> = (0..u64::from(TICK_SLICES))
-            .map(|tick| TickScope::sliced(GLOBAL_TICK_INSTANCE, rows, TickSlice::of_tick(tick)))
-            .collect();
-        for guid in [0u64, 1, 2, 3, 0xF130_0003_3601_3B72, u64::MAX] {
-            let owners = scopes.iter().filter(|s| s.owns(guid, 0)).count();
-            assert_eq!(owners, 1, "guid {guid:#x} must run in exactly one slice");
-        }
-        let global = scopes.iter().filter(|s| s.runs_global_passes()).count();
-        assert_eq!(global, 1, "world-wide passes run once per cycle");
-        assert_eq!(
-            SLICED_TICK_MICROS * i64::from(TICK_SLICES),
-            MOVE_TICK_MICROS
-        );
-    }
-
-    #[test]
-    fn tick_scope_partitions_every_instance_exactly_once() {
-        let rows = [GLOBAL_TICK_INSTANCE, 7, 9];
-        let scopes: Vec<TickScope> = rows
-            .iter()
-            .map(|&r| TickScope::from_rows(r, rows))
-            .collect();
-        for instance in [0u64, 1, 3, 7, 9, 42, u64::MAX - 1] {
-            let covering = scopes.iter().filter(|s| s.covers(instance)).count();
-            assert_eq!(
-                covering, 1,
-                "instance {instance} must be covered by exactly one scope"
-            );
-        }
-    }
-
-    #[test]
-    fn tick_scope_default_config_visits_the_identical_candidate_set() {
-        let scope = TickScope::from_rows(GLOBAL_TICK_INSTANCE, [GLOBAL_TICK_INSTANCE]);
-        let candidates: Vec<(u64, u64)> = (0..50).map(|g| (g, 0u64)).collect();
-        let visited: Vec<(u64, u64)> = candidates
-            .iter()
-            .copied()
-            .filter(|&(_, inst)| scope.covers(inst))
-            .collect();
-        assert_eq!(
-            visited, candidates,
-            "default config must not drop a single candidate"
-        );
-        assert!(
-            scope.runs_global_passes(),
-            "…and the global passes still run every firing"
-        );
-    }
-
-    #[test]
-    fn sense_tick_for_interval_fires_on_the_documented_boundary_at_default_cadence() {
-        for now in [0, 499_999, 4_000_000, 4_499_999, 8_000_000] {
-            assert!(is_sense_tick_for_interval(now, 500_000), "{now}");
-        }
-        for now in [500_000, 1_234_567, 3_999_999, 4_500_000, 7_999_999] {
-            assert!(!is_sense_tick_for_interval(now, 500_000), "{now}");
-        }
-    }
-
-    #[test]
-    fn sense_tick_for_interval_keeps_the_4s_cadence_for_fast_and_slow_rows() {
-        let hits = (0..40i64)
-            .filter(|t| is_sense_tick_for_interval(t * 100_000, 100_000))
-            .count();
-        assert_eq!(hits, 1, "a 100ms row senses once per ~4s, not per firing");
-        assert!(is_sense_tick_for_interval(10_000_000, 10_000_000));
-        assert!(is_sense_tick_for_interval(20_000_000, 10_000_000));
-        assert_eq!(
-            is_sense_tick_for_interval(0, 0),
-            is_sense_tick_for_interval(0, MOVE_TICK_MICROS)
-        );
-        assert_eq!(
-            is_sense_tick_for_interval(4_000_000, -5),
-            is_sense_tick_for_interval(4_000_000, MOVE_TICK_MICROS)
-        );
-    }
-
-    #[test]
-    fn tick_secs_for_interval_is_exact_at_default_and_scales_linearly() {
-        assert_eq!(tick_secs_for_interval(MOVE_TICK_MICROS), MOVE_TICK_SECS);
-        assert_eq!(tick_secs_for_interval(100_000), 0.1);
-        assert_eq!(tick_secs_for_interval(1_000_000), 1.0);
-        let run = constants::speeds::RUN;
-        let default_net = (1.0 / MOVE_TICK_SECS) * (run * tick_secs_for_interval(MOVE_TICK_MICROS));
-        let fast_net = (1.0 / 0.1) * (run * tick_secs_for_interval(100_000));
-        assert!(
-            (default_net - fast_net).abs() < 1e-4,
-            "net yd/s must be cadence-invariant"
-        );
-        assert_eq!(tick_secs_for_interval(0), MOVE_TICK_SECS);
-        assert_eq!(tick_secs_for_interval(-1), MOVE_TICK_SECS);
-    }
-
-    #[test]
     fn fear_step_scales_with_tick_and_is_identity_at_default() {
         assert_eq!(
             fear_step_for_tick(MOVE_TICK_SECS),
@@ -929,43 +591,6 @@ mod tests {
             (fear_step_for_tick(0.1) - FEAR_STEP * 0.2).abs() < 1e-5,
             "100ms tick → 1/5 the dash"
         );
-    }
-
-    #[test]
-    fn sense_period_matches_actual_sense_tick_spacing() {
-        let spacing_micros = |interval: i64| {
-            let mut firings = (0..).map(|n| n * interval);
-            firings
-                .find(|&now| now > 0 && is_sense_tick_for_interval(now, interval))
-                .expect("every cadence senses again")
-        };
-        for (interval, period_secs) in [
-            (500_000, 4.0),
-            (100_000, 4.0),
-            (200_000, 4.0),
-            (2_500_000, 2.5),
-            (3_000_000, 3.0),
-            (10_000_000, 10.0),
-        ] {
-            assert_eq!(sense_period_secs_for_interval(interval), period_secs);
-            assert_eq!(spacing_micros(interval) as f32 / 1_000_000.0, period_secs);
-        }
-        assert!((sense_period_secs_for_interval(707_000) - 3.535).abs() < 1e-4);
-        assert_eq!(sense_period_secs_for_interval(0), 4.0);
-    }
-
-    #[test]
-    fn sense_tick_is_one_in_eight() {
-        let hits: Vec<bool> = (0..16)
-            .map(|t| is_sense_tick_for_interval(t * MOVE_TICK_MICROS, MOVE_TICK_MICROS))
-            .collect();
-        assert_eq!(
-            hits.iter().filter(|&&h| h).count(),
-            2,
-            "2 sense ticks in 16 (1-in-8)"
-        );
-        assert!(hits[0] && hits[8], "ticks 0 and 8 are sense ticks");
-        assert!(!hits[1] && !hits[7], "the 7 between are movement-only");
     }
 
     #[test]
@@ -1000,46 +625,9 @@ mod tests {
     }
 
     #[test]
-    fn evade_needs_both_an_expired_deadline_and_a_target_that_left_the_leash() {
-        let near = crate::combat::LEASH_RADIUS_SQ - 1.0;
-        let far = crate::combat::LEASH_RADIUS_SQ + 1.0;
-        assert!(!should_evade(50_000, 60_000, near));
-        assert!(!should_evade(50_000, 60_000, far));
-        assert!(!should_evade(60_000, 60_000, near));
-        assert!(should_evade(60_000, 60_000, far));
-    }
-
-    #[test]
-    fn the_backstop_is_the_only_raw_distance_that_still_ends_a_fight() {
-        let backstop = crate::combat::COMBAT_BACKSTOP_SQ;
-        assert!(!beyond_combat_backstop(backstop));
-        assert!(beyond_combat_backstop(backstop + 1.0));
-        assert!(!should_evade(50_000, 60_000, backstop - 1.0));
-    }
-
-    #[test]
-    fn a_pursuit_deadline_never_stamps_the_never_refreshed_sentinel() {
-        assert_eq!(
-            pursuit_deadline_ms(50_000),
-            50_000 + crate::combat::PURSUIT_WINDOW_MS
-        );
-        assert_eq!(
-            pursuit_deadline_ms(u32::MAX - crate::combat::PURSUIT_WINDOW_MS + 1),
-            1
-        );
-        assert!(!should_evade(
-            50_000,
-            pursuit_deadline_ms(50_000),
-            f32::INFINITY
-        ));
-    }
-
-    #[test]
-    fn the_leash_constants_hold_their_invariants() {
+    fn a_rout_ends_inside_the_pursuit_window() {
         const {
             assert!(ROUT_DURATION_MS < crate::combat::PURSUIT_WINDOW_MS);
-            assert!(crate::combat::LEASH_RADIUS_SQ < crate::combat::COMBAT_BACKSTOP_SQ);
-            assert!(crate::combat::RANGED_RANGE_SQ < crate::combat::COMBAT_BACKSTOP_SQ);
         }
     }
 

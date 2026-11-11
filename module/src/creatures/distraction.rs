@@ -1,7 +1,6 @@
 use lyracore_shared::constants::unit_flags;
 use spacetimedb::{table, ReducerContext, Table};
 
-use super::tick;
 use crate::{game_creature_spawn, game_world_entity};
 
 #[table(accessor = game_creature_distraction)]
@@ -47,7 +46,7 @@ pub(crate) fn distract(
     {
         return;
     }
-    tick::stop_facing(ctx, &mut creature, (dest.0, dest.1));
+    super::leg::stop_facing(ctx, &mut creature, (dest.0, dest.1));
     creature.update(ctx);
     let row = CreatureDistraction {
         creature_guid,

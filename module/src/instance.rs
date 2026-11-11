@@ -131,8 +131,7 @@ pub(crate) fn empty_reap_micros(hosts_populations: bool) -> i64 {
 
 const REAP_MAX_PER_FIRING: usize = 4;
 
-// Bit 23 separates Instance copies; respawning copies still reserve their sequence.
-pub(crate) const INSTANCE_POP_LOW_BAND: u64 = 0x80_0000;
+use crate::creatures::population::INSTANCE_POP_LOW_BAND;
 
 fn next_population_low(slot: &mut u64, mut taken: impl FnMut(u64) -> bool) -> Option<u64> {
     loop {
@@ -618,12 +617,12 @@ pub(crate) fn create_instance_with_id(
         let slot = max_band_low.entry(entry).or_insert(0);
         // Dormant instance-zero rows in the Operator and Package spawn ranges share this band.
         let low = next_population_low(slot, |low| {
-            let guid = crate::encounter::wave_guid(entry, low);
+            let guid = lyracore_package_delta::packed_creature_spawn_guid(entry, low as u32);
             ctx.db.game_creature_spawn().guid().find(guid).is_some()
                 || entities.guid().find(guid).is_some()
         })
         .ok_or_else(|| format!("instance population low exhausted for entry {entry}"))?;
-        copy.guid = crate::encounter::wave_guid(entry, low);
+        copy.guid = lyracore_package_delta::packed_creature_spawn_guid(entry, low as u32);
         copy.life_seq = 1;
         copy.respawn_at = crate::time::timer_never(ctx);
         copy.despawn_at = crate::time::timer_never(ctx);
@@ -1350,7 +1349,10 @@ mod tests {
         let population = next_population_low(&mut slot, |low| lows.contains(&low));
         assert_eq!(population, Some(0x80_0002));
         lows.push(0x80_0002);
-        assert_eq!(crate::encounter::next_wave_low(lows.into_iter()), 150_001);
+        assert_eq!(
+            crate::creatures::population::next_spawn_low(lows.into_iter()),
+            150_001
+        );
     }
 
     #[test]

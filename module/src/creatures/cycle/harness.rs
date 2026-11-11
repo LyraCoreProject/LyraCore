@@ -185,7 +185,7 @@ struct Scenario {
     threat: RefCell<HashMap<(u64, u64), i64>>,
     taunts: RefCell<HashMap<u64, u64>>,
     pet_owners: RefCell<HashMap<u64, u64>>,
-    pet_bars: RefCell<HashMap<u64, (PetCommand, PetReact)>>,
+    pet_bars: RefCell<HashMap<u64, (PetOrder, PetReact)>>,
     corpses: RefCell<HashSet<u64>>,
     pet_effects: RefCell<Vec<PetEffect>>,
     awake: RefCell<TickSweep>,
@@ -852,7 +852,7 @@ impl Scenario {
         s
     }
 
-    fn pet_bar(self, owner: u64, command: PetCommand, react: PetReact) -> Self {
+    fn pet_bar(self, owner: u64, command: PetOrder, react: PetReact) -> Self {
         self.pet_bars.borrow_mut().insert(owner, (command, react));
         self
     }
@@ -1033,7 +1033,7 @@ impl MotionSink for Scenario {
     fn commit_position(&mut self, guid: u64, at: Point, moved_ms: u32) {
         self.place(guid, at, Some(moved_ms), None);
     }
-    fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: u32) {
+    fn halt(&mut self, leg: &LegInFlight, at: Point) {
         let Some(c) = self.place(leg.guid, at, None, None) else {
             return;
         };
@@ -1042,7 +1042,7 @@ impl MotionSink for Scenario {
             start: at,
             dest: at,
             dur_ms: 0,
-            spline_id,
+            spline_id: self.next_spline_id(leg.guid),
             run: false,
             map_id: leg.map_id,
             instance_id: leg.instance_id,
@@ -1096,6 +1096,16 @@ impl Scenario {
             c.orientation = rad;
         }
         Some(*c)
+    }
+
+    fn next_spline_id(&self, guid: u64) -> u32 {
+        let now_ms = (self.now_micros.get() / 1000) as u32;
+        self.last_carrier
+            .borrow()
+            .get(&guid)
+            .map_or(now_ms, |(_, previous)| {
+                crate::creatures::leg::next_spline_id(now_ms, previous.spline_id)
+            })
     }
 
     fn record(&self, effect: MoveEffect) {
@@ -1482,15 +1492,14 @@ impl EventAiWorld for Scenario {
     }
 
     fn eventai_threat(&self, creature_guid: u64) -> Vec<(u64, i64)> {
-        let mut entries: Vec<(u64, i64)> = self
-            .threat
-            .borrow()
-            .iter()
-            .filter(|((owner, _), _)| *owner == creature_guid)
-            .map(|((_, source), threat)| (*source, *threat))
-            .collect();
-        entries.sort_unstable();
-        entries
+        crate::threat::rank(
+            self.threat
+                .borrow()
+                .iter()
+                .filter(|((owner, _), _)| *owner == creature_guid)
+                .map(|((_, source), threat)| (*source, *threat))
+                .collect(),
+        )
     }
 
     fn eventai_scale_selected_threat(&mut self, operation: crate::threat::ScaleSelectedThreat) {
@@ -2451,10 +2460,11 @@ impl IdleSink for Scenario {
             )),
         );
     }
-    fn commit_leg(&mut self, guid: u64, leg: Leg, now_ms: u32) {
+    fn commit_leg(&mut self, guid: u64, leg: Leg) {
         let Some(from) = self.creatures.borrow().get(&guid).copied() else {
             return;
         };
+        let now_ms = (self.now_micros.get() / 1000) as u32;
         let dest = Point {
             x: leg.to.0,
             y: leg.to.1,
@@ -2469,7 +2479,7 @@ impl IdleSink for Scenario {
             start: from.at,
             dest,
             dur_ms,
-            spline_id: now_ms,
+            spline_id: self.next_spline_id(guid),
             run: leg.gait == Gait::Run,
             map_id: MAP,
             instance_id: INSTANCE,
@@ -2812,12 +2822,16 @@ impl ThreatSink for Scenario {
         self.taunts.borrow().get(&guid).copied()
     }
     fn top_threat(&self, guid: u64) -> Option<u64> {
-        self.threat
-            .borrow()
-            .iter()
-            .filter(|((creature, _), _)| *creature == guid)
-            .max_by(|a, b| a.1.cmp(b.1).then(b.0 .1.cmp(&a.0 .1)))
-            .map(|((_, source), _)| *source)
+        crate::threat::rank(
+            self.threat
+                .borrow()
+                .iter()
+                .filter(|((creature, _), _)| *creature == guid)
+                .map(|((_, source), threat)| (*source, *threat))
+                .collect(),
+        )
+        .first()
+        .map(|&(source, _)| source)
     }
     fn threat_on(&self, creature: u64, source: u64) -> i64 {
         self.threat
@@ -2912,14 +2926,7 @@ impl PursuitSink for Scenario {
     fn casting(&self, guid: u64) -> bool {
         self.eventai_is_casting(guid)
     }
-    fn commit_back_off(
-        &mut self,
-        guid: u64,
-        victim: u64,
-        to: (f32, f32),
-        dur_ms: u32,
-        now_ms: u32,
-    ) {
+    fn commit_back_off(&mut self, guid: u64, victim: u64, to: (f32, f32), dur_ms: u32) {
         let z_fallback = self.at(guid).at.z;
         self.commit_leg(
             guid,
@@ -2930,7 +2937,6 @@ impl PursuitSink for Scenario {
                 gait: Gait::Walk,
                 hold_until_landed: false,
             },
-            now_ms,
         );
         for committed in self.legs.borrow_mut().iter_mut() {
             if committed.guid == guid {
@@ -2938,7 +2944,7 @@ impl PursuitSink for Scenario {
             }
         }
     }
-    fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32) {
+    fn face(&mut self, guid: u64, at: Point, orientation: f32) {
         let Some(c) = self.place(guid, at, None, Some(orientation)) else {
             return;
         };
@@ -2947,7 +2953,7 @@ impl PursuitSink for Scenario {
             start: at,
             dest: at,
             dur_ms: 0,
-            spline_id,
+            spline_id: self.next_spline_id(guid),
             run: false,
             map_id: c.map_id,
             instance_id: c.instance_id,
@@ -3031,7 +3037,7 @@ impl PetSink for Scenario {
                 let (command, react) = bars
                     .get(&owner_guid)
                     .copied()
-                    .unwrap_or((PetCommand::Follow, PetReact::Defensive));
+                    .unwrap_or((PetOrder::Follow, PetReact::Defensive));
                 scope.covers(c.instance_id).then_some(Pet {
                     guid: *guid,
                     at: c.at,
@@ -3080,7 +3086,7 @@ impl PetSink for Scenario {
             .push(PetEffect::OrderCleared(owner));
         let mut bars = self.pet_bars.borrow_mut();
         if let Some((command, _)) = bars.get_mut(&owner) {
-            *command = PetCommand::Follow;
+            *command = PetOrder::Follow;
         }
     }
     fn take_victim(&mut self, pet: u64, victim: u64) {
@@ -4567,12 +4573,12 @@ fn a_creature_does_not_walk_back_out_of_another_creature() {
 #[test]
 fn a_walk_back_rides_out_a_firing_that_comes_early() {
     let mut w = wolf_with_a_character_inside_it();
-    let tick = w.firing(SETTLED, crate::creatures::ai::MOVE_TICK_MICROS, catch_all());
+    let tick = w.firing(SETTLED, crate::creatures::MOVE_TICK_MICROS, catch_all());
     run_cycle(&mut w, tick);
 
     let tick = w.firing(
         SETTLED + 100_000,
-        crate::creatures::ai::MOVE_TICK_MICROS,
+        crate::creatures::MOVE_TICK_MICROS,
         catch_all(),
     );
     run_cycle(&mut w, tick);
@@ -4585,7 +4591,7 @@ fn a_walk_back_rides_out_a_firing_that_comes_early() {
 
     let tick = w.firing(
         SETTLED + 500_000,
-        crate::creatures::ai::MOVE_TICK_MICROS,
+        crate::creatures::MOVE_TICK_MICROS,
         catch_all(),
     );
     run_cycle(&mut w, tick);
@@ -4599,13 +4605,13 @@ fn a_walk_back_rides_out_a_firing_that_comes_early() {
 #[test]
 fn a_creature_that_starts_casting_stops_walking_back() {
     let mut w = wolf_with_a_character_inside_it();
-    let tick = w.firing(SETTLED, crate::creatures::ai::MOVE_TICK_MICROS, catch_all());
+    let tick = w.firing(SETTLED, crate::creatures::MOVE_TICK_MICROS, catch_all());
     run_cycle(&mut w, tick);
 
     w = w.mid_cast(WOLF);
     let tick = w.firing(
         SETTLED + 100_000,
-        crate::creatures::ai::MOVE_TICK_MICROS,
+        crate::creatures::MOVE_TICK_MICROS,
         catch_all(),
     );
     run_cycle(&mut w, tick);
@@ -4619,13 +4625,13 @@ fn a_creature_that_starts_casting_stops_walking_back() {
 #[test]
 fn a_creature_that_starts_casting_stops_walking_back_while_its_victim_moves_off() {
     let mut w = wolf_with_a_character_inside_it().caster(WOLF, 30.0);
-    let tick = w.firing(SETTLED, crate::creatures::ai::MOVE_TICK_MICROS, catch_all());
+    let tick = w.firing(SETTLED, crate::creatures::MOVE_TICK_MICROS, catch_all());
     run_cycle(&mut w, tick);
 
     w = w.mid_cast(WOLF).kiting(HUNTER, p(1.0, 0.0, 10.0));
     let tick = w.firing(
         SETTLED + 200_000,
-        crate::creatures::ai::MOVE_TICK_MICROS,
+        crate::creatures::MOVE_TICK_MICROS,
         catch_all(),
     );
     run_cycle(&mut w, tick);
@@ -4639,13 +4645,13 @@ fn a_creature_that_starts_casting_stops_walking_back_while_its_victim_moves_off(
 #[test]
 fn a_creature_that_switches_victim_stops_walking_back() {
     let mut w = wolf_with_a_character_inside_it().player(RANGER, p(0.3, 2.0, 10.0));
-    let tick = w.firing(SETTLED, crate::creatures::ai::MOVE_TICK_MICROS, catch_all());
+    let tick = w.firing(SETTLED, crate::creatures::MOVE_TICK_MICROS, catch_all());
     run_cycle(&mut w, tick);
 
     w.retarget(WOLF, RANGER);
     let tick = w.firing(
         SETTLED + 100_000,
-        crate::creatures::ai::MOVE_TICK_MICROS,
+        crate::creatures::MOVE_TICK_MICROS,
         catch_all(),
     );
     run_cycle(&mut w, tick);
@@ -4730,10 +4736,9 @@ fn the_fake_refuses_a_second_carrier_row_for_one_creature_in_one_firing() {
         waypoints: Vec::new(),
     };
     let at = p(5.0, 0.0, 10.0);
-    let spline_id = (SETTLED / 1000) as u32;
 
-    w.halt(&leg, at, spline_id);
-    w.face(WOLF, at, 0.0, spline_id);
+    w.halt(&leg, at);
+    w.face(WOLF, at, 0.0);
 }
 
 #[test]
@@ -5475,7 +5480,7 @@ fn only_a_pet_left_off_passive_assists_its_owner() {
         let mut w = warlock_and_imp(p(0.0, 0.0, 10.0))
             .creature(WOLF, p(20.0, 0.0, 10.0))
             .attacking(HUNTER, WOLF)
-            .pet_bar(HUNTER, PetCommand::Follow, react);
+            .pet_bar(HUNTER, PetOrder::Follow, react);
         let tick = w.tick(true, catch_all());
         run_cycle(&mut w, tick);
 
@@ -5493,7 +5498,7 @@ fn only_an_aggressive_pet_seeks_a_foe_its_owner_is_not_fighting() {
     for (react, seeks) in [(PetReact::Defensive, false), (PetReact::Aggressive, true)] {
         let mut w = warlock_and_imp(p(0.0, 0.0, 10.0))
             .creature(WOLF, p(6.0, 0.0, 10.0))
-            .pet_bar(HUNTER, PetCommand::Follow, react);
+            .pet_bar(HUNTER, PetOrder::Follow, react);
         let tick = w.tick(true, catch_all());
         run_cycle(&mut w, tick);
 
@@ -5513,7 +5518,7 @@ fn an_attack_order_wins_over_the_owners_fight_and_a_stale_one_is_dropped() {
             .creature(WOLF, p(20.0, 0.0, 10.0))
             .creature(PACK_MATE, p(-20.0, 0.0, 10.0))
             .attacking(HUNTER, WOLF)
-            .pet_bar(HUNTER, PetCommand::Attack(PACK_MATE), PetReact::Defensive)
+            .pet_bar(HUNTER, PetOrder::Attack(PACK_MATE), PetReact::Defensive)
     };
 
     let mut w = commanded();
@@ -5630,7 +5635,7 @@ fn a_frozen_pet_holds_still_and_a_feared_one_is_moved_by_fear_alone() {
 
 #[test]
 fn a_pet_told_to_stay_stops_trailing_its_owner_but_still_fights() {
-    let stay = |w: Scenario| w.pet_bar(HUNTER, PetCommand::Stay, PetReact::Defensive);
+    let stay = |w: Scenario| w.pet_bar(HUNTER, PetOrder::Stay, PetReact::Defensive);
 
     let mut w = stay(warlock_and_imp(p(-20.0, 0.0, 10.0)));
     let tick = w.tick(true, catch_all());
