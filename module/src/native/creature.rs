@@ -24,9 +24,14 @@ fn packet(row: &CreatureSpline, replay_at: Option<u64>) -> Option<Packet> {
         if !row.facing_angle.is_finite() {
             return None;
         }
-        return lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_MONSTER_MOVE(Box::new(
-            codec::build_monster_move_facing(row.guid, start, row.facing_angle, row.spline_id),
-        )))
+        return lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_MONSTER_MOVE(
+            Box::new(codec::build_monster_move_facing(
+                row.guid,
+                start,
+                row.facing_angle,
+                row.spline_id,
+            )),
+        ))
         .ok();
     }
     let mut duration_ms = row.dur_ms;
@@ -94,7 +99,7 @@ fn packet(row: &CreatureSpline, replay_at: Option<u64>) -> Option<Packet> {
     {
         return None;
     }
-    lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_MONSTER_MOVE(Box::new(
+    lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_MONSTER_MOVE(Box::new(
         codec::build_monster_move(
             row.guid,
             start,

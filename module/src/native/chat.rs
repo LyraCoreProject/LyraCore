@@ -9,7 +9,7 @@ use lyracore_protocol::{
 use lyracore_shared::chat::{broadcast_chat, chat_kind, chat_tag_for, language, ChatRefusal};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::{bounded as packet, game_native_player, NativeWorldConnection, Rollback};
+use super::{bounded as packet, game_native_player, NativeWorldConnection, Rollback, Unhandled};
 use crate::{
     aoi::game_aoi_viewer,
     away::game_character_away,
@@ -43,82 +43,54 @@ pub(super) fn kind(chat: &CMSG_MESSAGECHAT_ChatType) -> Option<u8> {
     })
 }
 
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_MESSAGECHAT(_)
-            | ClientOpcodeMessage::CMSG_TEXT_EMOTE(_)
-            | ClientOpcodeMessage::CMSG_EMOTE(_)
-            | ClientOpcodeMessage::CMSG_CHAT_IGNORED(_)
-    )
-}
-
 pub(super) fn receive(
     ctx: &ReducerContext,
-    connection: NativeWorldConnection,
+    connection: &NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    let actor = super::available_entity(ctx, guid)?;
+) -> Result<(), Unhandled> {
     let id = connection.connection_id;
-    if let Some(notice) = super::chat_flood::judge(ctx, connection, &actor, &message) {
-        return Ok(super::send(ctx, id, notice, false)?);
-    }
-    if matches!(&message, ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) if kind(&chat.chat_type).is_some_and(super::realm_party::is_realm_chat))
-        && super::realm_party::submit(ctx, id, guid, &message)?
-    {
-        return Ok(());
-    }
-    let needs_ground_actor = match &message {
-        ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) => matches!(
-            chat.chat_type,
-            CMSG_MESSAGECHAT_ChatType::Say
-                | CMSG_MESSAGECHAT_ChatType::Yell
-                | CMSG_MESSAGECHAT_ChatType::Emote
-                | CMSG_MESSAGECHAT_ChatType::Afk
-                | CMSG_MESSAGECHAT_ChatType::Dnd
-        ),
-        ClientOpcodeMessage::CMSG_TEXT_EMOTE(_) => true,
-        _ => false,
-    };
-    if needs_ground_actor && crate::taxi::reject_action_while_in_flight(ctx, guid).is_err() {
-        return Ok(());
-    }
-    let speaker = SpeakerFacts {
-        race: actor.race(),
-        chat_tag: chat_tag_for(actor.player_flags),
-    };
-    match message {
+    match &message {
         ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) => {
+            let Some((actor, speaker)) = admit(ctx, connection, guid, &message)? else {
+                return Ok(());
+            };
             let Some(kind) = kind(&chat.chat_type) else {
                 return Ok(());
             };
             if kind == chat_kind::SAY && chat.message.starts_with('.') {
                 if super::guild::is_dot_command(&chat.message) {
-                    return super::guild::dot_command(ctx, &actor, &chat.message);
+                    return Ok(super::guild::dot_command(ctx, &actor, &chat.message)?);
                 }
-                return crate::gm::apply_gm_command(ctx, actor, chat.message).map_err(|cause| {
-                    Rollback::reply(
-                        ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                            codec::build_gm_system_message(cause.clone()),
-                        )),
-                        cause,
-                    )
-                });
+                let applied = crate::gm::apply_gm_command(ctx, actor, chat.message.clone())
+                    .map_err(|cause| {
+                        Rollback::reply(
+                            ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                                codec::build_gm_system_message(cause.clone()),
+                            )),
+                            cause,
+                        )
+                    });
+                return Ok(applied?);
             }
             if matches!(kind, chat_kind::AFK | chat_kind::DND) {
-                return Ok(crate::away::apply_set_away(ctx, actor, kind, chat.message)?);
+                return Ok(crate::away::apply_set_away(
+                    ctx,
+                    actor,
+                    kind,
+                    chat.message.clone(),
+                )?);
             }
-            if let CMSG_MESSAGECHAT_ChatType::Whisper { target_player } = chat.chat_type {
-                return whisper(
+            if let CMSG_MESSAGECHAT_ChatType::Whisper { target_player } = &chat.chat_type {
+                return Ok(whisper(
                     ctx,
                     id,
                     guid,
                     speaker,
                     chat.language.as_int(),
-                    chat.message,
-                    target_player,
-                );
+                    chat.message.clone(),
+                    target_player.clone(),
+                )?);
             }
             if matches!(kind, chat_kind::SAY | chat_kind::YELL | chat_kind::EMOTE) {
                 let broadcast = match kind {
@@ -132,10 +104,10 @@ pub(super) fn receive(
                     actor,
                     broadcast,
                     chat.language.as_int(),
-                    chat.message,
+                    chat.message.clone(),
                 ) {
                     Err(SpeechRefusal::Language(refusal)) => {
-                        refused(ctx, id, guid, kind, String::new(), refusal)
+                        Ok(refused(ctx, id, guid, kind, String::new(), refusal)?)
                     }
                     // The client gets no reply for a dead speaker or an empty line.
                     Ok(())
@@ -146,8 +118,8 @@ pub(super) fn receive(
                     ) => Ok(()),
                 };
             }
-            let channel_name = match chat.chat_type {
-                CMSG_MESSAGECHAT_ChatType::Channel { channel } => channel,
+            let channel_name = match &chat.chat_type {
+                CMSG_MESSAGECHAT_ChatType::Channel { channel } => channel.clone(),
                 _ => String::new(),
             };
             if let Err(refusal) = crate::realm_chat::apply_chat(
@@ -158,14 +130,17 @@ pub(super) fn receive(
                     language: chat.language.as_int(),
                     channel_name: channel_name.clone(),
                     target_guid: 0,
-                    message: chat.message,
+                    message: chat.message.clone(),
                     speaker,
                 },
             ) {
-                return refused(ctx, id, guid, kind, channel_name, refusal);
+                return Ok(refused(ctx, id, guid, kind, channel_name, refusal)?);
             }
         }
         ClientOpcodeMessage::CMSG_TEXT_EMOTE(emote) => {
+            let Some((actor, _)) = admit(ctx, connection, guid, &message)? else {
+                return Ok(());
+            };
             if !actor.dead {
                 crate::chat::apply_send_emote(
                     ctx,
@@ -177,6 +152,9 @@ pub(super) fn receive(
             }
         }
         ClientOpcodeMessage::CMSG_CHAT_IGNORED(ignored) => {
+            let Some((_, speaker)) = admit(ctx, connection, guid, &message)? else {
+                return Ok(());
+            };
             if let Some(character) = crate::helpers::character_by_guid(ctx, guid) {
                 let _ = crate::realm_chat::apply_chat(
                     ctx,
@@ -192,10 +170,52 @@ pub(super) fn receive(
                 );
             }
         }
-        ClientOpcodeMessage::CMSG_EMOTE(_) => {}
-        _ => return Err("opcode is not a chat request".into()),
+        ClientOpcodeMessage::CMSG_EMOTE(_) => {
+            admit(ctx, connection, guid, &message)?;
+        }
+        _ => return Err(Unhandled::Declined(message)),
     }
     Ok(())
+}
+
+/// The Gates every chat request passes first; `None` when one of them ended the request.
+fn admit(
+    ctx: &ReducerContext,
+    connection: &NativeWorldConnection,
+    guid: u64,
+    message: &ClientOpcodeMessage,
+) -> Result<Option<(crate::WorldEntity, SpeakerFacts)>, Rollback> {
+    let actor = super::available_entity(ctx, guid)?;
+    let id = connection.connection_id;
+    if let Some(notice) = super::chat_flood::judge(ctx, connection.clone(), &actor, message) {
+        super::send(ctx, id, notice, false)?;
+        return Ok(None);
+    }
+    if matches!(message, ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) if kind(&chat.chat_type).is_some_and(super::realm_party::is_realm_chat))
+        && super::realm_party::submit(ctx, id, guid, message)?
+    {
+        return Ok(None);
+    }
+    let needs_ground_actor = match message {
+        ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) => matches!(
+            chat.chat_type,
+            CMSG_MESSAGECHAT_ChatType::Say
+                | CMSG_MESSAGECHAT_ChatType::Yell
+                | CMSG_MESSAGECHAT_ChatType::Emote
+                | CMSG_MESSAGECHAT_ChatType::Afk
+                | CMSG_MESSAGECHAT_ChatType::Dnd
+        ),
+        ClientOpcodeMessage::CMSG_TEXT_EMOTE(_) => true,
+        _ => false,
+    };
+    if needs_ground_actor && crate::taxi::reject_action_while_in_flight(ctx, guid).is_err() {
+        return Ok(None);
+    }
+    let speaker = SpeakerFacts {
+        race: actor.race(),
+        chat_tag: chat_tag_for(actor.player_flags),
+    };
+    Ok(Some((actor, speaker)))
 }
 
 fn refused(

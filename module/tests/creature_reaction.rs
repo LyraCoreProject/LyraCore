@@ -307,13 +307,9 @@ fn a_passive_creature_runs_its_script_once_on_each_combat_entry() {
     let shard = stage("passive-combat-script");
     let rules = "900001,aggro,100,4294967295,once,all,ordinary,any-posture,phase:1+help:20";
     let subject = &format!("entry:{TEST_WOLF_ENTRY}");
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(format!("{subject}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
     shard.assert_call(
         "import_creature_ai_definitions",
-        &[&format!("{subject}@{revision}@{rules}")],
+        &[&lyracore_shared::eventai::encode_definition(subject, rules)],
     );
     let target = creature(&shard, 0);
     let ally = creature(&shard, 2);
@@ -385,13 +381,9 @@ fn escape(shard: &Standalone, distance: f32) {
 
 fn script(shard: &Standalone, rules: &str) {
     let subject = &format!("entry:{TEST_WOLF_ENTRY}");
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(format!("{subject}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
     shard.assert_call(
         "import_creature_ai_definitions",
-        &[&format!("{subject}@{revision}@{rules}")],
+        &[&lyracore_shared::eventai::encode_definition(subject, rules)],
     );
 }
 

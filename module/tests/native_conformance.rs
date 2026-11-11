@@ -525,7 +525,7 @@ fn a_later_transaction_delivers_packets_without_another_client_request() {
     assert!(!connection.drain_packets().is_empty());
     shard.assert_call("debug_set_money", &[&guid.to_string(), "12345"]);
     let expected = lyracore_protocol::world::encode(
-        lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        &lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(lyracore_protocol::codec::build_coinage_values(guid, 12345)),
         ),
     )

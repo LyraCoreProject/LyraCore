@@ -1399,37 +1399,56 @@ pub(crate) use fixtures::{seed_taxi_fixture, tempered_blade_template, tough_jerk
 fn seed_createinfo_spells(ctx: &ReducerContext) {
     use crate::spell::spellbook::game_createinfo_spell;
     let table = ctx.db.game_createinfo_spell();
-    let base_kit = if table.count() == 0 {
-        CREATEINFO_KIT
-    } else {
-        &[]
-    };
-    let weapon_kit = CREATEINFO_WEAPON_KIT
+    let existing: Vec<CreateinfoRow> = table
         .iter()
-        .flat_map(|&(race, class, spells)| spells.iter().map(move |&spell| (race, class, spell)));
-    let present: std::collections::HashSet<(u8, u8, u32)> = table
-        .iter()
-        .map(|row| (row.race, row.class, row.spell_id))
+        .map(|row| (row.id, row.race, row.class, row.spell_id))
         .collect();
-    // Imported rows carry explicit ids, so the auto_inc sequence could collide with them.
-    let mut next_id = table
-        .iter()
-        .map(|row| row.id)
-        .filter(|&id| !lyracore_package_delta::is_package_globals_id(id))
-        .max()
-        .unwrap_or(0);
-    for (race, class, spell_id) in base_kit.iter().copied().chain(weapon_kit) {
-        if present.contains(&(race, class, spell_id)) {
-            continue;
-        }
-        next_id += 1;
+    for (id, race, class, spell_id) in missing_createinfo_rows(&existing) {
         table.insert(crate::spell::spellbook::CreateinfoSpell {
-            id: next_id,
+            id,
             race,
             class,
             spell_id,
         });
     }
+}
+
+/// `(id, race, class, spell_id)` of one `game_createinfo_spell` row.
+type CreateinfoRow = (u64, u8, u8, u32);
+
+/// The base kit goes in only while none of its rows exists; fixture and Package rows never count.
+fn missing_createinfo_rows(existing: &[CreateinfoRow]) -> Vec<CreateinfoRow> {
+    let present: std::collections::HashSet<(u8, u8, u32)> = existing
+        .iter()
+        .map(|&(_, race, class, spell)| (race, class, spell))
+        .collect();
+    let base_kit = if CREATEINFO_KIT.iter().any(|row| present.contains(row)) {
+        &[]
+    } else {
+        CREATEINFO_KIT
+    };
+    let weapon_kit = CREATEINFO_WEAPON_KIT
+        .iter()
+        .flat_map(|&(race, class, spells)| spells.iter().map(move |&spell| (race, class, spell)));
+    // Imported rows carry explicit ids, so the auto_inc sequence could collide with them.
+    let mut next_id = existing
+        .iter()
+        .filter(|&&(id, _, _, spell)| {
+            !lyracore_package_delta::is_package_globals_id(id)
+                && !lyracore_package_delta::ids::is_fixture_reserved_spell_id(spell)
+        })
+        .map(|&(id, _, _, _)| id)
+        .max()
+        .unwrap_or(0);
+    let mut missing = Vec::new();
+    for (race, class, spell_id) in base_kit.iter().copied().chain(weapon_kit) {
+        if present.contains(&(race, class, spell_id)) {
+            continue;
+        }
+        next_id += 1;
+        missing.push((next_id, race, class, spell_id));
+    }
+    missing
 }
 
 pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {
@@ -1627,6 +1646,26 @@ mod tests {
     use super::*;
 
     const VANILLA_CLASSES: &[u8] = &[1, 2, 3, 4, 5, 7, 8, 9, 11];
+
+    #[test]
+    fn a_fixture_grant_seeded_first_neither_blocks_nor_renumbers_the_starting_kit() {
+        let weapon_rows: usize = CREATEINFO_WEAPON_KIT.iter().map(|(_, _, s)| s.len()).sum();
+        let empty = missing_createinfo_rows(&[]);
+        assert_eq!(empty.len(), CREATEINFO_KIT.len() + weapon_rows);
+
+        let fixture_grant = (50_300, 0, 3, 50_300);
+        assert_eq!(missing_createinfo_rows(&[fixture_grant]), empty);
+
+        let mut seeded = empty.clone();
+        seeded.push(fixture_grant);
+        assert_eq!(missing_createinfo_rows(&seeded), Vec::new());
+
+        let (id, race, class, spell) = empty[0];
+        assert_eq!(
+            missing_createinfo_rows(&[(id, race, class, spell)]).len(),
+            weapon_rows
+        );
+    }
 
     #[test]
     fn every_playable_vanilla_class_has_a_starting_kit() {

@@ -32,6 +32,11 @@ pub mod trainer;
 pub mod values;
 pub mod weather;
 
+pub(crate) fn push_cstr(body: &mut Vec<u8>, s: &str) {
+    body.extend_from_slice(s.as_bytes());
+    body.push(0);
+}
+
 pub use social::{
     build_chat_message_to, build_emote_anim, build_friend_list_response, build_friend_status_raw,
     build_gm_system_message, build_group_decline, build_group_invite, build_group_list,

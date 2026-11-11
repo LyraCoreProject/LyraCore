@@ -486,7 +486,9 @@ pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
 
 #[cfg(test)]
 mod tests {
-    use super::{cc_blocks, CAST_PUSHBACK_MAX, CAST_PUSHBACK_MS};
+    use super::{
+        aura_survives_death, cc_blocks, CAST_PUSHBACK_MAX, CAST_PUSHBACK_MS, SPELL_ATTR_PASSIVE,
+    };
 
     #[test]
     fn cc_blocks_baseline_uncontrolled_unit_blocks_nothing() {
@@ -527,5 +529,15 @@ mod tests {
     fn pushback_constants_match_the_cmangos_convention() {
         assert_eq!(CAST_PUSHBACK_MS, 500);
         assert_eq!(CAST_PUSHBACK_MAX, 2);
+    }
+
+    #[test]
+    fn death_sheds_every_aura_except_a_passive_one() {
+        assert!(aura_survives_death(SPELL_ATTR_PASSIVE));
+        assert!(aura_survives_death(SPELL_ATTR_PASSIVE | 0x4 | 0x10000));
+
+        assert!(!aura_survives_death(0));
+        assert!(!aura_survives_death(0x4));
+        assert!(!aura_survives_death(!SPELL_ATTR_PASSIVE));
     }
 }

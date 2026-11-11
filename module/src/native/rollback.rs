@@ -1,4 +1,5 @@
-use lyracore_protocol::{messages::vanilla::opcodes::ServerOpcodeMessage, world::Packet};
+use lyracore_protocol::messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
+use lyracore_protocol::world::Packet;
 
 use crate::{actor::ActionRefusal, Refusal};
 
@@ -25,7 +26,7 @@ impl Rollback {
     ) -> Self {
         match messages
             .into_iter()
-            .map(lyracore_protocol::world::encode)
+            .map(|message| lyracore_protocol::world::encode(&message))
             .collect()
         {
             Ok(replies) => Self::replies(replies, cause),
@@ -72,6 +73,56 @@ impl From<Refusal> for Rollback {
 impl From<ActionRefusal> for Rollback {
     fn from(refusal: ActionRefusal) -> Self {
         Self::silent(refusal)
+    }
+}
+
+/// How a Protocol Family's `receive` ends a client message it does not complete.
+pub(super) enum Unhandled {
+    /// Not one of the family's messages; the dispatcher offers it to the next family.
+    Declined(ClientOpcodeMessage),
+    Rollback(Rollback),
+}
+
+impl Unhandled {
+    /// Hands a declined message to `next`; a Rollback stays.
+    pub(super) fn offer(
+        self,
+        next: impl FnOnce(ClientOpcodeMessage) -> Result<(), Unhandled>,
+    ) -> Result<(), Unhandled> {
+        match self {
+            Self::Declined(message) => next(message),
+            rollback @ Self::Rollback(_) => Err(rollback),
+        }
+    }
+}
+
+impl From<Rollback> for Unhandled {
+    fn from(rollback: Rollback) -> Self {
+        Self::Rollback(rollback)
+    }
+}
+
+impl From<String> for Unhandled {
+    fn from(cause: String) -> Self {
+        Self::Rollback(cause.into())
+    }
+}
+
+impl From<&str> for Unhandled {
+    fn from(cause: &str) -> Self {
+        Self::Rollback(cause.into())
+    }
+}
+
+impl From<Refusal> for Unhandled {
+    fn from(refusal: Refusal) -> Self {
+        Self::Rollback(refusal.into())
+    }
+}
+
+impl From<ActionRefusal> for Unhandled {
+    fn from(refusal: ActionRefusal) -> Self {
+        Self::Rollback(refusal.into())
     }
 }
 

@@ -214,7 +214,7 @@ pub fn create_with_movement(
 ) -> Result<Vec<u8>> {
     use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
     bytes_to_movement_info(movement)?;
-    let mut body = crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+    let mut body = crate::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
         create.clone(),
     )))?
     .body;

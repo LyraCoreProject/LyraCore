@@ -7,32 +7,23 @@ use lyracore_protocol::{
 };
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::{game_native_player, Rollback};
+use super::{game_native_player, Unhandled};
 use crate::{game_corpse, Corpse};
 use crate::{game_resurrect_request, game_self_resurrect_option, ResurrectRequest};
-
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_REPOP_REQUEST
-            | ClientOpcodeMessage::MSG_CORPSE_QUERY
-            | ClientOpcodeMessage::CMSG_RECLAIM_CORPSE(_)
-            | ClientOpcodeMessage::CMSG_RESURRECT_RESPONSE(_)
-            | ClientOpcodeMessage::CMSG_SELF_RES
-            | ClientOpcodeMessage::CMSG_SPIRIT_HEALER_ACTIVATE(_)
-    )
-}
 
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    let character = super::actor(ctx, guid)?;
+) -> Result<(), Unhandled> {
     let result = match message {
-        ClientOpcodeMessage::CMSG_REPOP_REQUEST => crate::ghost::do_repop(ctx, guid),
+        ClientOpcodeMessage::CMSG_REPOP_REQUEST => {
+            super::actor(ctx, guid)?;
+            crate::ghost::do_repop(ctx, guid)
+        }
         ClientOpcodeMessage::MSG_CORPSE_QUERY => {
+            super::actor(ctx, guid)?;
             let location = ctx
                 .db
                 .game_corpse()
@@ -50,9 +41,10 @@ pub(super) fn receive(
             )?);
         }
         ClientOpcodeMessage::CMSG_RECLAIM_CORPSE(_) => {
-            crate::corpse::apply_reclaim_corpse(ctx, character)
+            crate::corpse::apply_reclaim_corpse(ctx, super::actor(ctx, guid)?)
         }
         ClientOpcodeMessage::CMSG_RESURRECT_RESPONSE(request) => {
+            super::actor(ctx, guid)?;
             if ctx
                 .db
                 .game_resurrect_request()
@@ -64,12 +56,16 @@ pub(super) fn receive(
             }
             crate::spell::do_resurrect_response(ctx, guid, request.status != 0)
         }
-        ClientOpcodeMessage::CMSG_SELF_RES => crate::spell::do_self_resurrect(ctx, guid),
+        ClientOpcodeMessage::CMSG_SELF_RES => {
+            super::actor(ctx, guid)?;
+            crate::spell::do_self_resurrect(ctx, guid)
+        }
         ClientOpcodeMessage::CMSG_SPIRIT_HEALER_ACTIVATE(request) => {
+            super::actor(ctx, guid)?;
             crate::ghost::spirit_healer_gate(ctx, guid, request.guid.guid())?;
             crate::ghost::do_spirit_healer_res(ctx, guid)
         }
-        _ => return Err("not a native death request".into()),
+        other => return Err(Unhandled::Declined(other)),
     };
     Ok(result?)
 }

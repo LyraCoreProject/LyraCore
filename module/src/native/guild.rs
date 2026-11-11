@@ -11,7 +11,7 @@ use lyracore_shared::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{NativeWorldConnection, Rollback};
+use super::{NativeWorldConnection, Rollback, Unhandled};
 use crate::{
     chat::game_character_contact,
     game_world_entity,
@@ -57,38 +57,127 @@ pub(super) struct Invitee {
     pub ignores_actor: bool,
 }
 
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_GUILD_QUERY(_)
-            | ClientOpcodeMessage::CMSG_GUILD_ROSTER
-            | ClientOpcodeMessage::CMSG_GUILD_INFO
-            | ClientOpcodeMessage::CMSG_GUILD_CREATE(_)
-            | ClientOpcodeMessage::CMSG_GUILD_INVITE(_)
-            | ClientOpcodeMessage::CMSG_GUILD_ACCEPT
-            | ClientOpcodeMessage::CMSG_GUILD_DECLINE
-            | ClientOpcodeMessage::CMSG_GUILD_LEAVE
-            | ClientOpcodeMessage::CMSG_GUILD_REMOVE(_)
-            | ClientOpcodeMessage::CMSG_GUILD_PROMOTE(_)
-            | ClientOpcodeMessage::CMSG_GUILD_DEMOTE(_)
-            | ClientOpcodeMessage::CMSG_GUILD_LEADER(_)
-            | ClientOpcodeMessage::CMSG_GUILD_DISBAND
-            | ClientOpcodeMessage::CMSG_GUILD_MOTD(_)
-            | ClientOpcodeMessage::CMSG_GUILD_INFO_TEXT(_)
-            | ClientOpcodeMessage::CMSG_GUILD_SET_PUBLIC_NOTE(_)
-            | ClientOpcodeMessage::CMSG_GUILD_SET_OFFICER_NOTE(_)
-            | ClientOpcodeMessage::CMSG_GUILD_RANK(_)
-            | ClientOpcodeMessage::CMSG_GUILD_ADD_RANK(_)
-            | ClientOpcodeMessage::CMSG_GUILD_DEL_RANK
-    )
+pub(super) enum GuildRequest {
+    Query {
+        guild_id: u32,
+    },
+    Roster,
+    Info,
+    Create {
+        name: String,
+    },
+    Invite {
+        name: String,
+    },
+    Accept,
+    Decline,
+    Leave,
+    Remove {
+        name: String,
+    },
+    Promote {
+        name: String,
+    },
+    Demote {
+        name: String,
+    },
+    Leader {
+        name: String,
+    },
+    Disband,
+    Motd {
+        text: String,
+    },
+    InfoText {
+        text: String,
+    },
+    PublicNote {
+        name: String,
+        note: String,
+    },
+    OfficerNote {
+        name: String,
+        note: String,
+    },
+    Rank {
+        rank_id: u32,
+        rights: u32,
+        name: String,
+    },
+    AddRank {
+        name: String,
+    },
+    DeleteRank,
+}
+
+impl GuildRequest {
+    pub(super) fn of(message: &ClientOpcodeMessage) -> Option<Self> {
+        use ClientOpcodeMessage as C;
+        Some(match message {
+            C::CMSG_GUILD_QUERY(request) => Self::Query {
+                guild_id: request.guild_id,
+            },
+            C::CMSG_GUILD_ROSTER => Self::Roster,
+            C::CMSG_GUILD_INFO => Self::Info,
+            C::CMSG_GUILD_CREATE(request) => Self::Create {
+                name: request.guild_name.clone(),
+            },
+            C::CMSG_GUILD_INVITE(request) => Self::Invite {
+                name: request.invited_player.clone(),
+            },
+            C::CMSG_GUILD_ACCEPT => Self::Accept,
+            C::CMSG_GUILD_DECLINE => Self::Decline,
+            C::CMSG_GUILD_LEAVE => Self::Leave,
+            C::CMSG_GUILD_REMOVE(request) => Self::Remove {
+                name: request.player_name.clone(),
+            },
+            C::CMSG_GUILD_PROMOTE(request) => Self::Promote {
+                name: request.player_name.clone(),
+            },
+            C::CMSG_GUILD_DEMOTE(request) => Self::Demote {
+                name: request.player_name.clone(),
+            },
+            C::CMSG_GUILD_LEADER(request) => Self::Leader {
+                name: request.new_guild_leader_name.clone(),
+            },
+            C::CMSG_GUILD_DISBAND => Self::Disband,
+            C::CMSG_GUILD_MOTD(request) => Self::Motd {
+                text: request.message_of_the_day.clone(),
+            },
+            C::CMSG_GUILD_INFO_TEXT(request) => Self::InfoText {
+                text: request.guild_info.clone(),
+            },
+            C::CMSG_GUILD_SET_PUBLIC_NOTE(request) => Self::PublicNote {
+                name: request.player_name.clone(),
+                note: request.note.clone(),
+            },
+            C::CMSG_GUILD_SET_OFFICER_NOTE(request) => Self::OfficerNote {
+                name: request.player_name.clone(),
+                note: request.note.clone(),
+            },
+            C::CMSG_GUILD_RANK(request) => Self::Rank {
+                rank_id: request.rank_id,
+                rights: request.rights,
+                name: request.rank_name.clone(),
+            },
+            C::CMSG_GUILD_ADD_RANK(request) => Self::AddRank {
+                name: request.rank_name.clone(),
+            },
+            C::CMSG_GUILD_DEL_RANK => Self::DeleteRank,
+            _ => return None,
+        })
+    }
 }
 
 pub(super) fn receive(
     ctx: &ReducerContext,
-    connection: NativeWorldConnection,
+    connection: &NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
+) -> Result<(), Unhandled> {
+    let Some(guild_request) = GuildRequest::of(&message) else {
+        return Err(Unhandled::Declined(message));
+    };
     let character = super::available_character(ctx, guid)?;
     if super::realm_guild::submit(ctx, connection.connection_id, guid, &message)? {
         return Ok(());
@@ -98,7 +187,7 @@ pub(super) fn receive(
         ctx,
         &actor,
         crate::auth::gm_level(ctx, actor.account_id),
-        message,
+        guild_request,
         |name| invitee(ctx, guid, name),
     )?;
     if let Some(packet) = reply {
@@ -129,28 +218,28 @@ pub(super) fn request(
     ctx: &ReducerContext,
     actor: &Actor,
     gm_level: u8,
-    message: ClientOpcodeMessage,
+    request: GuildRequest,
     resolve_invitee: impl FnOnce(&str) -> Option<Invitee>,
 ) -> Result<Option<ServerOpcodeMessage>, Rollback> {
     let guid = actor.guid;
-    use ClientOpcodeMessage as C;
+    use GuildRequest as G;
     let mut typed_name = String::new();
     let mut target_name = String::new();
     let mut success = None;
-    let (op, reply) = match message {
-        C::CMSG_GUILD_QUERY(request) => {
-            let packet = view(ctx, request.guild_id).map_or_else(not_in_guild, |guild| {
+    let (op, reply) = match request {
+        G::Query { guild_id } => {
+            let packet = view(ctx, guild_id).map_or_else(not_in_guild, |guild| {
                 ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(Box::new(
                     codec::build_guild_query_response(&guild),
                 ))
             });
             return Ok(Some(packet));
         }
-        C::CMSG_GUILD_ROSTER => {
+        G::Roster => {
             return Ok(guild::member(ctx, guid)
                 .and_then(|member| roster(ctx, member.guild_id, member.rank_id)));
         }
-        C::CMSG_GUILD_INFO => {
+        G::Info => {
             let packet = own_guild(ctx, guid).map_or_else(not_in_guild, |guild| {
                 let members: Vec<_> = ctx
                     .db
@@ -175,11 +264,9 @@ pub(super) fn request(
             });
             return Ok(Some(packet));
         }
-        C::CMSG_GUILD_CREATE(request) => {
-            (create(actor, gm_level, request.guild_name), Reply::Silent)
-        }
-        C::CMSG_GUILD_INVITE(request) => {
-            typed_name = request.invited_player;
+        G::Create { name } => (create(actor, gm_level, name), Reply::Silent),
+        G::Invite { name } => {
+            typed_name = name;
             let Some(target) = resolve_invitee(&typed_name) else {
                 return Ok(Some(command(
                     GuildCommand::Invite,
@@ -198,20 +285,20 @@ pub(super) fn request(
                 Reply::Membership,
             )
         }
-        C::CMSG_GUILD_ACCEPT => (
+        G::Accept => (
             GuildOp::Accept(GuildAcceptRequest {
                 actor_name: actor.name.clone(),
                 actor_team: actor.team,
             }),
             Reply::Silent,
         ),
-        C::CMSG_GUILD_DECLINE => (
+        G::Decline => (
             GuildOp::Decline {
                 actor_name: actor.name.clone(),
             },
             Reply::Silent,
         ),
-        C::CMSG_GUILD_LEAVE => {
+        G::Leave => {
             let Some(guild) = own_guild(ctx, guid) else {
                 return Ok(Some(not_in_guild()));
             };
@@ -224,8 +311,8 @@ pub(super) fn request(
             }
             (GuildOp::Leave, Reply::Membership)
         }
-        C::CMSG_GUILD_REMOVE(request) => {
-            target_name = request.player_name;
+        G::Remove { name } => {
+            target_name = name;
             (
                 GuildOp::Remove {
                     target_guid: named_member(ctx, guid, &target_name),
@@ -233,8 +320,8 @@ pub(super) fn request(
                 Reply::Membership,
             )
         }
-        C::CMSG_GUILD_PROMOTE(request) => {
-            target_name = request.player_name;
+        G::Promote { name } => {
+            target_name = name;
             (
                 GuildOp::Promote {
                     target_guid: named_member(ctx, guid, &target_name),
@@ -242,8 +329,8 @@ pub(super) fn request(
                 Reply::Membership,
             )
         }
-        C::CMSG_GUILD_DEMOTE(request) => {
-            target_name = request.player_name;
+        G::Demote { name } => {
+            target_name = name;
             (
                 GuildOp::Demote {
                     target_guid: named_member(ctx, guid, &target_name),
@@ -251,8 +338,8 @@ pub(super) fn request(
                 Reply::Membership,
             )
         }
-        C::CMSG_GUILD_LEADER(request) => {
-            target_name = request.new_guild_leader_name;
+        G::Leader { name } => {
+            target_name = name;
             (
                 GuildOp::SetLeader {
                     target_guid: named_member(ctx, guid, &target_name),
@@ -260,55 +347,43 @@ pub(super) fn request(
                 Reply::Membership,
             )
         }
-        C::CMSG_GUILD_DISBAND => (GuildOp::Disband, Reply::Membership),
-        C::CMSG_GUILD_MOTD(request) => (
-            GuildOp::SetMotd {
-                text: request.message_of_the_day,
-            },
-            Reply::Motd,
-        ),
-        C::CMSG_GUILD_INFO_TEXT(request) => (
-            GuildOp::SetInfo {
-                text: request.guild_info,
-            },
-            Reply::Info,
-        ),
-        C::CMSG_GUILD_SET_PUBLIC_NOTE(request) => {
-            target_name = request.player_name;
+        G::Disband => (GuildOp::Disband, Reply::Membership),
+        G::Motd { text } => (GuildOp::SetMotd { text }, Reply::Motd),
+        G::InfoText { text } => (GuildOp::SetInfo { text }, Reply::Info),
+        G::PublicNote { name, note } => {
+            target_name = name;
             (
                 GuildOp::SetPublicNote(GuildNoteEdit {
                     target_guid: named_member(ctx, guid, &target_name),
-                    text: request.note,
+                    text: note,
                 }),
                 Reply::Note,
             )
         }
-        C::CMSG_GUILD_SET_OFFICER_NOTE(request) => {
-            target_name = request.player_name;
+        G::OfficerNote { name, note } => {
+            target_name = name;
             (
                 GuildOp::SetOfficerNote(GuildNoteEdit {
                     target_guid: named_member(ctx, guid, &target_name),
-                    text: request.note,
+                    text: note,
                 }),
                 Reply::Note,
             )
         }
-        C::CMSG_GUILD_RANK(request) => (
+        G::Rank {
+            rank_id,
+            rights,
+            name,
+        } => (
             GuildOp::EditRank(GuildRankEdit {
-                rank_id: request.rank_id,
-                rights: request.rights,
-                name: request.rank_name,
+                rank_id,
+                rights,
+                name,
             }),
             Reply::Rank,
         ),
-        C::CMSG_GUILD_ADD_RANK(request) => (
-            GuildOp::AddRank {
-                name: request.rank_name,
-            },
-            Reply::Rank,
-        ),
-        C::CMSG_GUILD_DEL_RANK => (GuildOp::DeleteRank, Reply::Rank),
-        _ => return Err("opcode is not a guild request".into()),
+        G::AddRank { name } => (GuildOp::AddRank { name }, Reply::Rank),
+        G::DeleteRank => (GuildOp::DeleteRank, Reply::Rank),
     };
     if let Err(refusal) = guild::apply_op(ctx, guid, actor.account_id, op.clone()) {
         let packet = refused(reply, &op, refusal, &typed_name, &target_name);

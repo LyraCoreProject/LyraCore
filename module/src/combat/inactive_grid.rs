@@ -6,7 +6,7 @@ use crate::{game_creature_ai_state, game_melee_attack, game_threat, game_world_e
 
 // vmangos GridStates checks active grids every GridCleanUpDelay / 10 (300 seconds / 10).
 const CHECK_INTERVAL_MS: u64 = 30_000;
-const GRID_SIZE: f32 = 533.333_3;
+const GRID_SIZE: f32 = lyracore_shared::terrain::ADT_SIZE;
 const CELLS_PER_GRID: i32 = 16;
 const CELL_SIZE: f32 = GRID_SIZE / CELLS_PER_GRID as f32;
 

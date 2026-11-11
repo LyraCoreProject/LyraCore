@@ -8,7 +8,7 @@ use lyracore_protocol::{
 use lyracore_shared::loot_roll as roll;
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{game_native_player, Rollback};
+use super::{game_native_player, Rollback, Unhandled};
 use crate::loot::LootRefusal;
 use crate::{game_corpse_loot, game_item_template, game_world_entity, Refusal};
 
@@ -68,34 +68,22 @@ fn refusal(target: u64, refusal: LootRefusal) -> Rollback {
     )
 }
 
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_LOOT(_)
-            | ClientOpcodeMessage::CMSG_LOOT_MONEY
-            | ClientOpcodeMessage::CMSG_LOOT_RELEASE(_)
-            | ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(_)
-            | ClientOpcodeMessage::CMSG_GAMEOBJ_USE(_)
-            | ClientOpcodeMessage::CMSG_LOOT_ROLL(_)
-            | ClientOpcodeMessage::CMSG_LOOT_MASTER_GIVE(_)
-    )
-}
-
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    super::actor(ctx, guid)?;
-    let current = ctx
-        .db
-        .game_native_player()
-        .connection_id()
-        .find(connection)
-        .map_or(0, |owner| owner.open_loot);
-    match message {
+) -> Result<(), Unhandled> {
+    let open_loot = || {
+        ctx.db
+            .game_native_player()
+            .connection_id()
+            .find(connection)
+            .map_or(0, |owner| owner.open_loot)
+    };
+    let handled: Result<(), Rollback> = match message {
         ClientOpcodeMessage::CMSG_LOOT(c) => {
+            super::actor(ctx, guid)?;
             let target = c.guid.guid();
             crate::loot::open_creature_corpse(ctx, guid, target)
                 .map_err(|reason| refusal(target, reason))?;
@@ -112,7 +100,8 @@ pub(super) fn receive(
                     return Err(Rollback::replies(
                         vec![lyracore_protocol::world::Packet { opcode, body }],
                         reason,
-                    ));
+                    )
+                    .into());
                 }
             }
             let (opcode, body) = codec::build_loot_response_raw(target, money, &items);
@@ -121,6 +110,7 @@ pub(super) fn receive(
             Ok(())
         }
         ClientOpcodeMessage::CMSG_GAMEOBJ_USE(c) => {
+            super::actor(ctx, guid)?;
             let target = c.guid.guid();
             crate::gameobject::request_use_gameobject(ctx, guid, target)?;
             let items = items(ctx, target, guid);
@@ -131,7 +121,12 @@ pub(super) fn receive(
             }
             Ok(())
         }
-        ClientOpcodeMessage::CMSG_LOOT_MONEY if current != 0 => {
+        ClientOpcodeMessage::CMSG_LOOT_MONEY => {
+            super::actor(ctx, guid)?;
+            let current = open_loot();
+            if current == 0 {
+                return Ok(());
+            }
             crate::loot::claim_money(ctx, guid, current)
                 .map_err(|reason| refusal(current, reason))?;
             for viewer in ctx.db.game_native_player().by_open_loot().filter(current) {
@@ -144,7 +139,12 @@ pub(super) fn receive(
             }
             Ok(())
         }
-        ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(c) if current != 0 => {
+        ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(c) => {
+            super::actor(ctx, guid)?;
+            let current = open_loot();
+            if current == 0 {
+                return Ok(());
+            }
             crate::loot::take_item(ctx, guid, current, c.item_slot)
                 .map_err(|reason| refusal(current, reason))?;
             Ok(super::send(
@@ -155,6 +155,7 @@ pub(super) fn receive(
             )?)
         }
         ClientOpcodeMessage::CMSG_LOOT_RELEASE(c) => {
+            super::actor(ctx, guid)?;
             open(ctx, connection, 0);
             Ok(super::send(
                 ctx,
@@ -166,6 +167,7 @@ pub(super) fn receive(
             )?)
         }
         ClientOpcodeMessage::CMSG_LOOT_ROLL(c) => {
+            super::actor(ctx, guid)?;
             let slot =
                 u8::try_from(c.item_slot).map_err(|_| Refusal::from("invalid Loot Roll slot"))?;
             Ok(crate::loot::cast_vote_on(
@@ -176,18 +178,19 @@ pub(super) fn receive(
                 c.vote.as_int(),
             )?)
         }
-        ClientOpcodeMessage::CMSG_LOOT_MASTER_GIVE(c) => Ok(crate::loot::apply_master_give(
-            ctx,
-            guid,
-            c.loot.guid(),
-            c.slot_id,
-            c.player.guid(),
-        )?),
-        ClientOpcodeMessage::CMSG_LOOT_MONEY | ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(_) => {
-            Ok(())
+        ClientOpcodeMessage::CMSG_LOOT_MASTER_GIVE(c) => {
+            super::actor(ctx, guid)?;
+            Ok(crate::loot::apply_master_give(
+                ctx,
+                guid,
+                c.loot.guid(),
+                c.slot_id,
+                c.player.guid(),
+            )?)
         }
-        _ => Err("invalid loot opcode".into()),
-    }
+        other => return Err(Unhandled::Declined(other)),
+    };
+    Ok(handled?)
 }
 
 pub(super) fn group_event(

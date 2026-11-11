@@ -41,13 +41,15 @@ fn stage(duration_ms: u32) -> (Standalone, String) {
     ));
     shard.assert_sql(&format!("UPDATE game_creature_template SET faction_template = 35, level = 19, max_level = 20 WHERE entry = {TEST_WOLF_ENTRY}"));
     let rules = "1,spawn,100,4294967295,once,all,ordinary,npc-flags:gossip-and-quest~2,aggro,100,4294967295,once,all,ordinary,phase:2";
-    let mut hash = blake3::Hasher::new();
-    hash.update(b"lyracore-eventai-definition-v1");
-    hash.update(format!("entry:{TEST_WOLF_ENTRY}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(hash.finalize().as_bytes()[..8].try_into().unwrap());
     shard.assert_call(
         "import_creature_ai_definitions",
-        &[&serde_json::to_string(&format!("entry:{TEST_WOLF_ENTRY}@{revision}@{rules}")).unwrap()],
+        &[
+            &serde_json::to_string(&lyracore_shared::eventai::encode_definition(
+                &format!("entry:{TEST_WOLF_ENTRY}"),
+                rules,
+            ))
+            .unwrap(),
+        ],
     );
     shard.assert_sql(&format!(
         "INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,\

@@ -112,7 +112,7 @@ fn start(ctx: &ReducerContext, guid: u64, operation: Operation, copper: u32) -> 
 
 pub(super) fn receive(
     ctx: &ReducerContext,
-    connection: NativeWorldConnection,
+    connection: &NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
 ) -> Result<(), Rollback> {

@@ -6,7 +6,7 @@ use spacetimedb::{ReducerContext, SpacetimeType};
 
 use super::{game_native_world_connection, NativeWorldConnection};
 
-#[derive(SpacetimeType, Default)]
+#[derive(SpacetimeType, Default, Clone)]
 pub struct ChatFlood {
     fast_until_micros: i64,
     fast_lines: u32,

@@ -9,7 +9,7 @@ use lyracore_protocol::{
 use lyracore_shared::item::ItemRefusal;
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::{bounded as packet, game_native_player, Rollback};
+use super::{bounded as packet, game_native_player, Rollback, Unhandled};
 use crate::items::{item_in_slot, ItemUseTarget};
 use crate::{game_item_template, game_spell, ItemInstance};
 
@@ -357,27 +357,12 @@ pub(crate) fn temporary_enchantment_changed(ctx: &ReducerContext, item: &ItemIns
     super::send_packets_to_character(ctx, item.owner_guid, packets);
 }
 
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_DESTROYITEM(_)
-            | ClientOpcodeMessage::CMSG_SPLIT_ITEM(_)
-            | ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(_)
-            | ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(_)
-            | ClientOpcodeMessage::CMSG_SWAP_INV_ITEM(_)
-            | ClientOpcodeMessage::CMSG_SWAP_ITEM(_)
-            | ClientOpcodeMessage::CMSG_USE_ITEM(_)
-            | ClientOpcodeMessage::CMSG_READ_ITEM(_)
-            | ClientOpcodeMessage::CMSG_ITEM_NAME_QUERY(_)
-    )
-}
-
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
+) -> Result<(), Unhandled> {
     let slots = match &message {
         ClientOpcodeMessage::CMSG_DESTROYITEM(c) => [codec::inventory_slot(c.bag, c.slot), None],
         ClientOpcodeMessage::CMSG_SPLIT_ITEM(c) => [
@@ -417,7 +402,7 @@ pub(super) fn receive(
             }
             return Ok(());
         }
-        _ => return Err("invalid inventory opcode".into()),
+        _ => return Err(Unhandled::Declined(message)),
     };
     let item_guids = slots.map(|slot| {
         slot.and_then(|slot| item_in_slot(ctx, guid, slot))
@@ -509,7 +494,7 @@ pub(super) fn receive(
             _ => Err(ItemRefusal::Internal),
         }
     })();
-    result.map_err(|reason| {
+    let handled = result.map_err(|reason| {
         if let ItemRefusal::SpellCooldown(spell) = reason {
             let failure = if ctx
                 .db
@@ -536,5 +521,6 @@ pub(super) fn receive(
             )),
             reason.as_tag(),
         )
-    })
+    });
+    Ok(handled?)
 }

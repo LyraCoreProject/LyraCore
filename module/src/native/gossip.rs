@@ -11,7 +11,7 @@ use lyracore_protocol::{
 use lyracore_shared::constants::{gossip_option, npc_flags, player_flags};
 use spacetimedb::{ConnectionId, ReducerContext, SpacetimeType};
 
-use super::{game_native_player, Rollback};
+use super::{game_native_player, Rollback, Unhandled};
 use crate::{game_gossip_menu, game_gossip_menu_profile_option, game_gossip_option, Refusal};
 
 #[derive(SpacetimeType)]
@@ -314,23 +314,13 @@ fn interaction_refusal(reason: String) -> Rollback {
     )
 }
 
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_GOSSIP_HELLO(_)
-            | ClientOpcodeMessage::CMSG_GOSSIP_SELECT_OPTION(_)
-            | ClientOpcodeMessage::CMSG_BINDER_ACTIVATE(_)
-            | ClientOpcodeMessage::MSG_TALENT_WIPE_CONFIRM(_)
-    )
-}
-
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    match message {
+) -> Result<(), Unhandled> {
+    let handled: Result<(), Rollback> = match message {
         ClientOpcodeMessage::CMSG_GOSSIP_HELLO(c) => {
             Ok(hello(ctx, connection, guid, c.guid.guid())?)
         }
@@ -367,6 +357,7 @@ pub(super) fn receive(
                 .map_err(interaction_refusal)?;
             Ok(complete(ctx, connection)?)
         }
-        _ => Err("invalid gossip opcode".into()),
-    }
+        other => return Err(Unhandled::Declined(other)),
+    };
+    Ok(handled?)
 }

@@ -55,9 +55,7 @@ pub(super) fn changed(
                     .account_id()
                     .find(character.account_id)
             })
-            .is_some_and(|owner| {
-                crate::package_teardown::runs(ctx, &owner.package_name.replace('-', "_"))
-            });
+            .is_some_and(|owner| crate::package_teardown::runs(ctx, &owner.package_name));
     let character = facts(ctx, guid, active)?;
     let authorities = ctx.db.game_package_party_authority();
     let authority = PackagePartyAuthority {
@@ -144,9 +142,7 @@ pub(super) fn admit(
     {
         return Err("World Shard does not hold this Package Character".into());
     }
-    if character.online
-        && !crate::package_teardown::runs(ctx, &owner.package_name.replace('-', "_"))
-    {
+    if character.online && !crate::package_teardown::runs(ctx, &owner.package_name) {
         return Err("Package is stopped on the Realm Shard".into());
     }
     let authorities = ctx.db.game_package_party_authority();

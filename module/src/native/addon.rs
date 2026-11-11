@@ -4,7 +4,7 @@ use spacetimedb::{ReducerContext, SpacetimeType};
 use super::{game_native_world_connection, NativeWorldConnection, Rollback};
 use crate::{bridge::AddonMessage, game_world_entity};
 
-#[derive(SpacetimeType)]
+#[derive(SpacetimeType, Clone)]
 pub struct AddonLimit {
     credit_micros: u64,
     updated_micros: i64,

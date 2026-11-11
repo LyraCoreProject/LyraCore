@@ -1,5 +1,5 @@
 // Cell indices count down from +MAP_COORD_MAX.
-pub const MAP_COORD_MAX: f32 = 17066.666;
+pub const MAP_COORD_MAX: f32 = 32.0 * crate::terrain::ADT_SIZE;
 
 // AOI cell side length in yards.
 pub const GRID_CELL_SIZE: f32 = 50.0;

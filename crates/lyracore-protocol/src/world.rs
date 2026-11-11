@@ -14,8 +14,8 @@ pub struct Packet {
     pub body: Vec<u8>,
 }
 
-pub fn encode(message: ServerOpcodeMessage) -> Result<Packet> {
-    if let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update) = &message {
+pub fn encode(message: &ServerOpcodeMessage) -> Result<Packet> {
+    if let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update) = message {
         if update.objects.iter().any(|object| {
             matches!(
                 object,
@@ -30,7 +30,7 @@ pub fn encode(message: ServerOpcodeMessage) -> Result<Packet> {
     }
     let mut frame = Vec::new();
     message.write_unencrypted_server(&mut frame)?;
-    if matches!(&message, ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(query) if query.found.is_some())
+    if matches!(message, ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(query) if query.found.is_some())
     {
         // Build 5875 needs 24 data words; wow_world_messages 0.3.0 emits six.
         frame.extend_from_slice(&[0; (24 - 6) * 4]);
@@ -351,7 +351,7 @@ mod tests {
                 ..
             }
         );
-        let packet = encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(update))).unwrap();
+        let packet = encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(update))).unwrap();
         let mut body = packet.body;
         if living {
             let flags_index = 8 + body[6].count_ones() as usize;
@@ -693,7 +693,7 @@ mod tests {
             data1: 52,
             data2: 1,
         };
-        let packet = encode(ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(
+        let packet = encode(&ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(
             Box::new(crate::codec::build_gameobject_query_response(
                 50100,
                 Some(&view),
@@ -743,7 +743,7 @@ mod tests {
 
     #[test]
     fn missing_gameobject_query_contains_only_the_flagged_entry() {
-        let packet = encode(ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(
+        let packet = encode(&ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(
             Box::new(crate::codec::build_gameobject_query_response(50100, None)),
         ))
         .unwrap();
@@ -753,7 +753,7 @@ mod tests {
 
     #[test]
     fn encoding_removes_only_the_transport_header() {
-        let packet = encode(ServerOpcodeMessage::SMSG_PONG(SMSG_PONG {
+        let packet = encode(&ServerOpcodeMessage::SMSG_PONG(SMSG_PONG {
             sequence_id: 42,
         }))
         .unwrap();

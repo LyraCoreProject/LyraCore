@@ -109,33 +109,41 @@ fn coverage_keeps_ledger_gaps_and_source_occurrences_separate() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ledger = FeatureLedger::load(&root.join("features"))?;
     let coverage = coverage(&ledger)?;
-    assert_eq!(coverage.gaps.data_import, 2334);
-    assert_eq!(coverage.gaps.behavior, 95);
-    assert!(!coverage.systems["spells"]
-        .by_source
-        .contains_key("module/src/creatures/cycle/mod.rs"));
-    assert_eq!(
-        coverage.systems["inventory"].by_source["module/src/spell/cast/resolve.rs"].behavior,
-        1
-    );
-    let creatures = &coverage.systems["creatures"];
-    assert_eq!(
-        creatures.by_source["importer/src/world_import_creatures.rs"].data_import,
-        2252
-    );
-    let quests =
-        &coverage.systems["quests"].port_census["conformance/vmangos-port-census/quests.md"];
-    assert_eq!(
-        quests.planned_import_rows_by_table["game_quest_template"],
-        4253
-    );
-    let breadcrumb = quests.manifest["findings"]
-        .as_array()
-        .unwrap()
+    let gaps: Vec<(&str, &str)> = ledger
+        .behaviors()
         .iter()
-        .find(|finding| finding["code"] == "quests.breadcrumb")
-        .unwrap();
-    assert_eq!(breadcrumb["classification"], "unsupported");
-    assert_eq!(breadcrumb["occurrences"], 23);
+        .flat_map(|behavior| {
+            behavior
+                .known_gaps
+                .iter()
+                .map(|gap| (behavior.system.as_str(), gap.path.as_str()))
+        })
+        .collect();
+    let data = gaps.iter().filter(|(_, path)| is_data_gap(path)).count();
+    assert!(
+        0 < data && data < gaps.len(),
+        "the ledger has both kinds of gap"
+    );
+    assert_eq!(coverage.gaps.data_import, data);
+    assert_eq!(coverage.gaps.behavior, gaps.len() - data);
+
+    let mut sources = BTreeSet::new();
+    for (system, covered) in &coverage.systems {
+        for (path, counts) in &covered.by_source {
+            let source = (system.as_str(), path.as_str());
+            let occurrences = gaps.iter().filter(|gap| **gap == source).count();
+            let (own, other) = if is_data_gap(path) {
+                (counts.data_import, counts.behavior)
+            } else {
+                (counts.behavior, counts.data_import)
+            };
+            assert_eq!((own, other), (occurrences, 0), "{system} {path}");
+            sources.insert(source);
+        }
+        if covered.gaps.data_import == 0 {
+            assert!(covered.port_census.is_empty(), "{system}");
+        }
+    }
+    assert_eq!(sources, gaps.into_iter().collect::<BTreeSet<_>>());
     Ok(())
 }

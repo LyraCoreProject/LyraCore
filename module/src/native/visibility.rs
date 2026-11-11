@@ -77,7 +77,7 @@ pub(crate) fn grant_removed(ctx: &ReducerContext, grant: &AoiGrant) {
         if player.teleport == Some(super::teleport::NativeTeleport::WorldPort) {
             return;
         }
-        let result = lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
+        let result = lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
             codec::build_destroy_object(grant.entity_guid),
         ));
         match result {
@@ -229,7 +229,7 @@ pub(super) fn create(
             body: codec::create_with_movement(&message, &movement)
                 .map_err(|error| error.to_string())?,
         },
-        None => lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        None => lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(message),
         ))
         .map_err(|error| error.to_string())?,
@@ -422,7 +422,7 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
             }
             message => (message, false),
         };
-        match lyracore_protocol::world::encode(message) {
+        match lyracore_protocol::world::encode(&message) {
             Ok(packet) => broadcast(ctx, new.guid, packet.opcode, packet.body, exclude_self),
             Err(error) => {
                 spacetimedb::log::error!("native VALUES failed for entity {}: {error}", new.guid)
@@ -443,7 +443,7 @@ pub(crate) fn loot_flags(ctx: &ReducerContext, entity: &WorldEntity) {
     {
         if super::has_world_session(ctx, grant.viewer_guid) {
             let flags = super::loot::dynamic_flags(ctx, entity, grant.viewer_guid);
-            match lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            match lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
                 Box::new(codec::build_dynamic_flags_values(entity.guid, flags)),
             )) {
                 Ok(packet) => {

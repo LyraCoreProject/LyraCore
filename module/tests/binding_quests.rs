@@ -77,11 +77,10 @@ fn load_startup_rule(node: &Standalone, entry: u32, variant: u32) {
         "spawn:always"
     };
     let rules = format!("{entry},{event},100,4294967295,once,all,ordinary,any-posture,faction:14+attack-start:spawner~{},aggro,100,4294967295,repeat:0:0,all,ordinary,any-posture,phase-inc:7", entry + 100);
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(format!("{subject}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
-    let packed = serde_json::to_string(&format!("{subject}@{revision}@{rules}")).unwrap();
+    let packed = serde_json::to_string(&lyracore_shared::eventai::encode_definition(
+        &subject, &rules,
+    ))
+    .unwrap();
     node.assert_call("import_creature_ai_definitions", &[&packed]);
 }
 

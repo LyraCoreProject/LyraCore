@@ -9,7 +9,7 @@ use lyracore_protocol::{
 use lyracore_shared::constants::taxi_protocol;
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::Rollback;
+use super::{Rollback, Unhandled};
 use crate::game_world_entity;
 use crate::taxi::TaxiPassengerSpline;
 use crate::Refusal;
@@ -164,22 +164,13 @@ pub(super) fn open(
     Ok(())
 }
 
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_TAXINODE_STATUS_QUERY(_)
-            | ClientOpcodeMessage::CMSG_TAXIQUERYAVAILABLENODES(_)
-            | ClientOpcodeMessage::CMSG_ACTIVATETAXI(_)
-    )
-}
-
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    match message {
+) -> Result<(), Unhandled> {
+    let handled: Result<(), Rollback> = match message {
         ClientOpcodeMessage::CMSG_TAXINODE_STATUS_QUERY(c) => {
             super::actor(ctx, guid)?;
             let reply = crate::taxi::taxi_node_status(ctx, guid, c.guid.guid(), 0);
@@ -244,6 +235,7 @@ pub(super) fn receive(
             }
             Ok(())
         }
-        _ => Err("invalid taxi opcode".into()),
-    }
+        other => return Err(Unhandled::Declined(other)),
+    };
+    Ok(handled?)
 }

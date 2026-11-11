@@ -326,7 +326,7 @@ pub fn idc_selection_request(
         .map_err(Rollback::into_reducer_error)?;
     if let Some(message) = reply {
         let packet =
-            lyracore_protocol::world::encode(message).map_err(|error| error.to_string())?;
+            lyracore_protocol::world::encode(&message).map_err(|error| error.to_string())?;
         ctx.db.game_selection_result().insert(SelectionResult {
             id: 0,
             database: remote::Identity(ctx.sender()),

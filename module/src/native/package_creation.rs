@@ -115,7 +115,7 @@ pub(crate) fn request_character(
     race: u8,
     class: u8,
 ) -> Result<u64, String> {
-    if !crate::package_teardown::runs(ctx, &package.replace('-', "_")) {
+    if !crate::package_teardown::runs(ctx, package) {
         return Err("Package is stopped".into());
     }
     if world_shard(ctx).is_some() {
@@ -177,13 +177,13 @@ pub(crate) fn take_character_result(
 }
 
 pub(crate) fn require_settled(ctx: &ReducerContext, package: &str) -> Result<(), String> {
-    let ident = package.replace('-', "_");
+    let ident = crate::package_teardown::ident(package);
     if ctx
         .db
         .game_package_character_request()
         .iter()
         .any(|request| {
-            request.package_name.replace('-', "_") == ident
+            crate::package_teardown::ident(&request.package_name) == ident
                 && request.result == CharacterCreation::Pending
         })
     {
@@ -197,7 +197,7 @@ pub(crate) fn require_settled(ctx: &ReducerContext, package: &str) -> Result<(),
             .db
             .game_package_account()
             .iter()
-            .filter(|owner| owner.package_name.replace('-', "_") == ident)
+            .filter(|owner| crate::package_teardown::ident(&owner.package_name) == ident)
         {
             if ctx
                 .db
@@ -215,10 +215,10 @@ pub(crate) fn require_settled(ctx: &ReducerContext, package: &str) -> Result<(),
 
 pub(crate) fn clear_results(ctx: &ReducerContext, package: &str) {
     let requests = ctx.db.game_package_character_request();
-    let ident = package.replace('-', "_");
+    let ident = crate::package_teardown::ident(package);
     let ids: Vec<_> = requests
         .iter()
-        .filter(|request| request.package_name.replace('-', "_") == ident)
+        .filter(|request| crate::package_teardown::ident(&request.package_name) == ident)
         .map(|request| request.id)
         .collect();
     for id in ids {
@@ -290,7 +290,7 @@ pub fn idc_package_creation(ctx: &ReducerContext, message: Vec<u8>) -> Result<()
     match message {
         Message::Request(request) => {
             directory::require_world(ctx)?;
-            if !crate::package_teardown::runs(ctx, &request.package.replace('-', "_")) {
+            if !crate::package_teardown::runs(ctx, &request.package) {
                 return Err("Package is stopped on the Realm Shard".into());
             }
             let account_id =
@@ -327,7 +327,7 @@ pub fn idc_package_creation(ctx: &ReducerContext, message: Vec<u8>) -> Result<()
             {
                 return Err("Package Character request changed".into());
             }
-            if !crate::package_teardown::runs(ctx, &request.package.replace('-', "_")) {
+            if !crate::package_teardown::runs(ctx, &request.package) {
                 return Err("Package is stopped on the World Shard".into());
             }
             let account = store_account(ctx, &request.package, &account)?;

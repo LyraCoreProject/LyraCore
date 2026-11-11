@@ -179,8 +179,7 @@ pub fn build_guild_event_raw(kind: u8, strings: &[String], subject_guid: u64) ->
     let strings = &strings[..strings.len().min(usize::from(u8::MAX))];
     let mut body = vec![kind, strings.len() as u8];
     for string in strings {
-        body.extend_from_slice(string.as_bytes());
-        body.push(0);
+        super::push_cstr(&mut body, string);
     }
     if subject_guid != 0 {
         body.extend_from_slice(&subject_guid.to_le_bytes());

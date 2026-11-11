@@ -31,7 +31,7 @@ fn benilla_reads_the_transport_path_progress_anchor() {
         orientation: 2.0,
         path_progress_ms: 4_000_000_000,
     });
-    let packet = lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+    let packet = lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
         Box::new(message),
     ))
     .unwrap();
@@ -99,7 +99,7 @@ fn benilla_reads_a_passenger_map_crossing_as_boat_local() {
     let messages =
         codec::build_cross_map_teleport(1, 1.5, -2.0, 6.25, 0.5, Some(crossing)).unwrap();
     let [pending, new_world] = messages.map(|message| {
-        let packet = lyracore_protocol::world::encode(message).unwrap();
+        let packet = lyracore_protocol::world::encode(&message).unwrap();
         let (packet, tail) = messages::parse_server_with_tail(packet.opcode, &packet.body).unwrap();
         assert_eq!(tail, 0, "unread bytes for {}", packet.name());
         packet

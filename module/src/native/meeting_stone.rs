@@ -11,28 +11,18 @@ use lyracore_shared::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::Rollback;
+use super::{Rollback, Unhandled};
 use crate::meeting_stone::{self, game_meeting_stone_seeker, SeekerFacts, StoneOpError};
-
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_MEETINGSTONE_JOIN(_)
-            | ClientOpcodeMessage::CMSG_MEETINGSTONE_LEAVE
-            | ClientOpcodeMessage::CMSG_MEETINGSTONE_INFO
-            | ClientOpcodeMessage::MSG_LOOKING_FOR_GROUP
-    )
-}
 
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    super::actor(ctx, guid)?;
+) -> Result<(), Unhandled> {
     let response = match message {
         ClientOpcodeMessage::CMSG_MEETINGSTONE_JOIN(request) => {
+            super::actor(ctx, guid)?;
             let area = meeting_stone::admit(ctx, guid, request.guid.guid())
                 .map_err(|refusal| Rollback::silent(refusal.as_tag()))?;
             if Area::try_from(area).is_err() {
@@ -70,6 +60,7 @@ pub(super) fn receive(
             return Ok(());
         }
         ClientOpcodeMessage::CMSG_MEETINGSTONE_LEAVE => {
+            super::actor(ctx, guid)?;
             if super::realm_party::submit_admitted(
                 ctx,
                 connection,
@@ -86,6 +77,7 @@ pub(super) fn receive(
             return Ok(());
         }
         ClientOpcodeMessage::CMSG_MEETINGSTONE_INFO => {
+            super::actor(ctx, guid)?;
             if super::realm_party::submit_admitted(
                 ctx,
                 connection,
@@ -110,9 +102,10 @@ pub(super) fn receive(
             ServerOpcodeMessage::SMSG_MEETINGSTONE_SETQUEUE(packet)
         }
         ClientOpcodeMessage::MSG_LOOKING_FOR_GROUP => {
+            super::actor(ctx, guid)?;
             ServerOpcodeMessage::MSG_LOOKING_FOR_GROUP(codec::build_looking_for_group())
         }
-        _ => return Err("opcode is not a meeting stone request".into()),
+        other => return Err(Unhandled::Declined(other)),
     };
     Ok(super::send(ctx, connection, response, false)?)
 }

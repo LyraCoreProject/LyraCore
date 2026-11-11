@@ -449,11 +449,13 @@ pub fn idc_realm_guild_command(
             super::realm_petition::request(ctx, &actor, message)
                 .map_err(Rollback::into_reducer_error)?
         } else {
+            let request =
+                super::guild::GuildRequest::of(&message).ok_or("opcode is not a guild request")?;
             super::guild::request(
                 ctx,
                 &actor,
                 crate::auth::gm_level(ctx, actor.account_id),
-                message,
+                request,
                 |name| invitee(ctx, actor.guid, name),
             )
             .map_err(Rollback::into_reducer_error)?
@@ -469,7 +471,7 @@ pub fn idc_realm_guild_command(
     );
     publish(ctx, guilds);
     if let Some(reply) = reply {
-        let packet = lyracore_protocol::world::encode(reply).map_err(|error| error.to_string())?;
+        let packet = lyracore_protocol::world::encode(&reply).map_err(|error| error.to_string())?;
         deliver(ctx, actor.guid, vec![(packet.opcode, packet.body)], None);
     }
     Ok(())

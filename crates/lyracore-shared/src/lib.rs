@@ -3,6 +3,7 @@ pub mod calendar;
 pub mod channel;
 pub mod chat;
 pub mod constants;
+pub mod eventai;
 pub mod faction;
 pub mod gossip;
 pub mod group;

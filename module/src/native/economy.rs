@@ -7,7 +7,7 @@ use lyracore_protocol::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::Rollback;
+use super::{Rollback, Unhandled};
 use crate::game_item_instance;
 use crate::items::{BankSlotRefusal, BuyRefusal, BuybackItem, BuybackRefusal, SellRefusal};
 use crate::npc_interaction::{NpcGate, NpcService};
@@ -234,7 +234,7 @@ fn purchase_failed(
             } else {
                 (vendor, buy_result(&refusal))
             };
-            lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(
+            lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(
                 codec::build_buy_failed(vendor, entry, result),
             )))
             .map_err(|cause| Rollback::Failure(cause.to_string()))?
@@ -292,29 +292,13 @@ fn purchase_in_slot(
     }
 }
 
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_LIST_INVENTORY(_)
-            | ClientOpcodeMessage::CMSG_BUY_ITEM(_)
-            | ClientOpcodeMessage::CMSG_BUY_ITEM_IN_SLOT(_)
-            | ClientOpcodeMessage::CMSG_SELL_ITEM(_)
-            | ClientOpcodeMessage::CMSG_BUYBACK_ITEM(_)
-            | ClientOpcodeMessage::CMSG_REPAIR_ITEM(_)
-            | ClientOpcodeMessage::CMSG_BANKER_ACTIVATE(_)
-            | ClientOpcodeMessage::CMSG_BUY_BANK_SLOT(_)
-            | ClientOpcodeMessage::CMSG_AUTOBANK_ITEM(_)
-            | ClientOpcodeMessage::CMSG_AUTOSTORE_BANK_ITEM(_)
-    )
-}
-
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    match message {
+) -> Result<(), Unhandled> {
+    let handled: Result<(), Rollback> = match message {
         ClientOpcodeMessage::CMSG_LIST_INVENTORY(c) => {
             Ok(vendor(ctx, connection, guid, c.guid.guid())?)
         }
@@ -438,8 +422,9 @@ pub(super) fn receive(
         ClientOpcodeMessage::CMSG_AUTOSTORE_BANK_ITEM(c) => {
             auto_bank(ctx, guid, c.bag_index, c.slot_index)
         }
-        _ => Err("invalid economy opcode".into()),
-    }
+        other => return Err(Unhandled::Declined(other)),
+    };
+    Ok(handled?)
 }
 
 fn buy_result(refusal: &BuyRefusal) -> BuyResult {

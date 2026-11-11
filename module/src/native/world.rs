@@ -12,7 +12,7 @@ use crate::spell::spellbook::game_player_spell;
 
 use super::{
     game_native_player, game_native_world_connection, NativeActive, NativePlayer,
-    NativeWorldConnection, NativeWorldState, Rollback,
+    NativeWorldConnection, NativeWorldState, Rollback, Unhandled,
 };
 
 pub(super) fn login(
@@ -431,63 +431,62 @@ pub(super) fn receive(
         return Ok(());
     }
     let id = connection.connection_id;
-    if super::auction::claims(&message) {
-        return super::auction::receive(ctx, id, guid, message);
-    }
-    if super::mail::claims(&message) {
-        return super::mail::receive(ctx, id, guid, message);
-    }
-    if super::meeting_stone::claims(&message) {
-        return super::meeting_stone::receive(ctx, id, guid, message);
-    }
-    if super::duel::claims(&message) {
-        return super::duel::receive(ctx, guid, message);
-    }
-    if super::trade::claims(&message) {
-        return super::trade::receive(ctx, guid, message);
-    }
-    if super::petition::claims(&message) {
-        return super::petition::receive(ctx, connection, guid, message);
-    }
-    if super::guild::claims(&message) {
-        return super::guild::receive(ctx, connection, guid, message);
-    }
-    if super::party::claims(&message) {
-        return super::party::receive(ctx, connection, guid, message);
-    }
-    if super::social::claims(&message) {
-        return super::social::receive(ctx, connection, guid, message);
-    }
-    if super::channel::claims(&message) {
-        return super::channel::receive(ctx, id, guid, message);
-    }
-    if super::chat::claims(&message) {
-        return super::chat::receive(ctx, connection, guid, message);
-    }
-    if super::death::claims(&message) {
-        return super::death::receive(ctx, id, guid, message);
-    }
-    if super::gossip::claims(&message) {
-        return super::gossip::receive(ctx, id, guid, message);
-    }
-    if super::taxi::claims(&message) {
-        return super::taxi::receive(ctx, id, guid, message);
-    }
-    if super::loot::claims(&message) {
-        return super::loot::receive(ctx, id, guid, message);
-    }
-    if super::trainer::claims(&message) {
-        return super::trainer::receive(ctx, id, guid, message);
-    }
-    if super::economy::claims(&message) {
-        return super::economy::receive(ctx, id, guid, message);
-    }
-    if super::inventory::claims(&message) {
-        return super::inventory::receive(ctx, id, guid, message);
-    }
-    if super::quest::claims(&message) {
-        return super::quest::receive(ctx, id, guid, message);
-    }
+    let routed = super::auction::receive(ctx, id, guid, message)
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::mail::receive(ctx, id, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::meeting_stone::receive(ctx, id, guid, message))
+        })
+        .or_else(|unhandled| unhandled.offer(|message| super::duel::receive(ctx, guid, message)))
+        .or_else(|unhandled| unhandled.offer(|message| super::trade::receive(ctx, guid, message)))
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::petition::receive(ctx, &connection, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::guild::receive(ctx, &connection, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::party::receive(ctx, &connection, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::social::receive(ctx, &connection, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::channel::receive(ctx, id, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::chat::receive(ctx, &connection, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::death::receive(ctx, id, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::gossip::receive(ctx, id, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::taxi::receive(ctx, id, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::loot::receive(ctx, id, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::trainer::receive(ctx, id, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::economy::receive(ctx, id, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::inventory::receive(ctx, id, guid, message))
+        })
+        .or_else(|unhandled| {
+            unhandled.offer(|message| super::quest::receive(ctx, id, guid, message))
+        });
+    let message = match routed {
+        Ok(()) => return Ok(()),
+        Err(Unhandled::Rollback(rollback)) => return Err(rollback),
+        Err(Unhandled::Declined(message)) => message,
+    };
     let response = match message {
         ClientOpcodeMessage::CMSG_RESET_INSTANCES => {
             return super::instance_reset::receive(ctx, connection.connection_id, guid);

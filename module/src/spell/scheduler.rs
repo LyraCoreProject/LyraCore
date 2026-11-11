@@ -699,6 +699,20 @@ pub fn debug_stage_virtual_spell_impact(
 }
 
 #[cfg(test)]
+mod expiry_tests {
+    use super::*;
+
+    #[test]
+    fn is_due_for_expiry_never_reaps_stealth() {
+        let expires_at = Timestamp::from_micros_since_unix_epoch(1_000_000);
+        let long_past = Timestamp::from_micros_since_unix_epoch(50_000_000);
+        assert!(!is_due_for_expiry(A_STEALTH, expires_at, expires_at));
+        assert!(!is_due_for_expiry(A_STEALTH, expires_at, long_past));
+        assert!(is_due_for_expiry(A_MOD_STAT, expires_at, long_past));
+    }
+}
+
+#[cfg(test)]
 mod energize_tests {
     use super::*;
     use lyracore_shared::packing::power_type::{MANA, RAGE};

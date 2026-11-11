@@ -17,7 +17,7 @@ use lyracore_shared::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{NativeWorldConnection, Rollback};
+use super::{NativeWorldConnection, Rollback, Unhandled};
 use crate::game_item_instance;
 use crate::{
     game_world_entity,
@@ -32,47 +32,28 @@ use crate::{
     },
 };
 
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(_)
-            | ClientOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(_)
-            | ClientOpcodeMessage::CMSG_PETITION_SHOWLIST(_)
-            | ClientOpcodeMessage::CMSG_PETITION_BUY(_)
-            | ClientOpcodeMessage::CMSG_PETITION_QUERY(_)
-            | ClientOpcodeMessage::CMSG_PETITION_SHOW_SIGNATURES(_)
-            | ClientOpcodeMessage::MSG_PETITION_RENAME(_)
-            | ClientOpcodeMessage::CMSG_OFFER_PETITION(_)
-            | ClientOpcodeMessage::CMSG_PETITION_SIGN(_)
-            | ClientOpcodeMessage::MSG_PETITION_DECLINE(_)
-            | ClientOpcodeMessage::CMSG_TURN_IN_PETITION(_)
-    )
-}
-
 pub(super) fn receive(
     ctx: &ReducerContext,
-    connection: NativeWorldConnection,
+    connection: &NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    let actor = super::available_character(ctx, guid)?;
-    if crate::peer::realm_shard(ctx).is_some()
-        && !matches!(
-            message,
-            ClientOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(_)
-                | ClientOpcodeMessage::CMSG_PETITION_SHOWLIST(_)
-        )
-    {
-        return super::realm_petition::receive(ctx, connection, guid, message);
-    }
+) -> Result<(), Unhandled> {
     let id = connection.connection_id;
     use ClientOpcodeMessage as C;
-    let run = |op, reply: &dyn Fn(GuildRefusal) -> Option<ServerOpcodeMessage>| {
+    let forward = |message| -> Result<(), Unhandled> {
+        Ok(super::realm_petition::receive(
+            ctx, connection, guid, message,
+        )?)
+    };
+    let run = |actor: &crate::Character,
+               op,
+               reply: &dyn Fn(GuildRefusal) -> Option<ServerOpcodeMessage>| {
         guild::apply_op(ctx, guid, actor.account_id, op)
             .map_err(|refusal| refused(refusal.as_tag().into(), reply))
     };
     match message {
         C::MSG_TABARDVENDOR_ACTIVATE(request) => {
+            super::available_character(ctx, guid)?;
             let npc = request.guid.guid();
             if fee::npc_serves(ctx, guid, npc, fee_kind::EMBLEM) {
                 super::send(
@@ -86,6 +67,7 @@ pub(super) fn receive(
             }
         }
         C::CMSG_PETITION_SHOWLIST(request) => {
+            super::available_character(ctx, guid)?;
             let npc = request.guid.guid();
             if fee::npc_serves(ctx, guid, npc, fee_kind::CHARTER) {
                 super::send(
@@ -99,6 +81,9 @@ pub(super) fn receive(
             }
         }
         C::MSG_SAVE_GUILD_EMBLEM(request) => {
+            let Some(_) = local(ctx, guid)? else {
+                return forward(C::MSG_SAVE_GUILD_EMBLEM(request));
+            };
             fee::purchase(
                 ctx,
                 guid,
@@ -126,6 +111,9 @@ pub(super) fn receive(
             super::send(ctx, id, emblem_result(GuildEmblemResult::Success), false)?;
         }
         C::CMSG_PETITION_BUY(request) => {
+            let Some(_) = local(ctx, guid)? else {
+                return forward(C::CMSG_PETITION_BUY(request));
+            };
             let npc = request.npc.guid();
             let name = request.name;
             fee::purchase(
@@ -139,11 +127,17 @@ pub(super) fn receive(
             .map_err(|cause| refused(cause, &|refusal| purchase_refusal(refusal, npc, &name)))?;
         }
         C::CMSG_PETITION_QUERY(request) => {
+            let Some(_) = local(ctx, guid)? else {
+                return forward(C::CMSG_PETITION_QUERY(request));
+            };
             if let Some(petition) = view(ctx, request.petition.guid()) {
                 super::send(ctx, id, query(&petition), false)?;
             }
         }
         C::CMSG_PETITION_SHOW_SIGNATURES(request) => {
+            let Some(_) = local(ctx, guid)? else {
+                return forward(C::CMSG_PETITION_SHOW_SIGNATURES(request));
+            };
             if guild::member(ctx, guid).is_none() {
                 if let Some(petition) = view(ctx, request.item.guid()) {
                     super::send(ctx, id, signatures(&petition), false)?;
@@ -151,12 +145,16 @@ pub(super) fn receive(
             }
         }
         C::MSG_PETITION_RENAME(request) => {
+            let Some(actor) = local(ctx, guid)? else {
+                return forward(C::MSG_PETITION_RENAME(request));
+            };
             let charter = request.petition.guid();
             if !core::holds_charter(ctx, guid, charter) {
                 return Ok(());
             }
             let name = request.new_name;
             run(
+                &actor,
                 GuildOp::RenamePetition(GuildPetitionRename {
                     charter_item_guid: charter,
                     name: name.clone(),
@@ -174,6 +172,9 @@ pub(super) fn receive(
             )?;
         }
         C::CMSG_OFFER_PETITION(request) => {
+            let Some(actor) = local(ctx, guid)? else {
+                return forward(C::CMSG_OFFER_PETITION(request));
+            };
             let charter = request.petition.guid();
             let Some(target) = crate::helpers::character_by_guid(ctx, request.target.guid())
                 .filter(|character| {
@@ -190,6 +191,7 @@ pub(super) fn receive(
                 return Ok(());
             }
             run(
+                &actor,
                 GuildOp::OfferPetition(GuildPetitionOffer {
                     charter_item_guid: charter,
                     target_guid: target.guid,
@@ -199,8 +201,12 @@ pub(super) fn receive(
             )?;
         }
         C::CMSG_PETITION_SIGN(request) => {
+            let Some(actor) = local(ctx, guid)? else {
+                return forward(C::CMSG_PETITION_SIGN(request));
+            };
             let charter = request.petition.guid();
             run(
+                &actor,
                 GuildOp::SignPetition(GuildPetitionSign {
                     charter_item_guid: charter,
                     actor_name: actor.name.clone(),
@@ -215,7 +221,11 @@ pub(super) fn receive(
             )?;
         }
         C::MSG_PETITION_DECLINE(request) => {
+            let Some(actor) = local(ctx, guid)? else {
+                return forward(C::MSG_PETITION_DECLINE(request));
+            };
             run(
+                &actor,
                 GuildOp::DeclinePetition {
                     charter_item_guid: request.petition.guid(),
                 },
@@ -223,11 +233,20 @@ pub(super) fn receive(
             )?;
         }
         C::CMSG_TURN_IN_PETITION(request) => {
+            let Some(actor) = local(ctx, guid)? else {
+                return forward(C::CMSG_TURN_IN_PETITION(request));
+            };
             turn_in(ctx, id, guid, actor.account_id, request.petition.guid())?;
         }
-        _ => return Err("opcode is not a guild purchase or petition request".into()),
+        other => return Err(Unhandled::Declined(other)),
     }
     Ok(())
+}
+
+/// Runs the Character Gate; `None` when the Realm, not this World, answers the request.
+fn local(ctx: &ReducerContext, guid: u64) -> Result<Option<crate::Character>, Rollback> {
+    let actor = super::available_character(ctx, guid)?;
+    Ok(crate::peer::realm_shard(ctx).is_none().then_some(actor))
 }
 
 fn turn_in(

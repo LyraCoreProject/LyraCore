@@ -112,8 +112,7 @@ fn route(
     guid: u64,
     trigger: u32,
 ) -> Result<Destination, String> {
-    if world_shard(ctx).is_some() || !crate::package_teardown::runs(ctx, &package.replace('-', "_"))
-    {
+    if world_shard(ctx).is_some() || !crate::package_teardown::runs(ctx, package) {
         return Err("Package relocation requires an active Package on its World".into());
     }
     crate::sessionless::transfer_authority_gate(ctx, guid).map_err(|e| e.to_string())?;
@@ -388,7 +387,7 @@ pub fn idc_package_relocation(ctx: &ReducerContext, message: Vec<u8>) -> Result<
         Message::Import(import) => {
             let crossing = import.crossing;
             require_source(ctx, &crossing)?;
-            if !crate::package_teardown::runs(ctx, &crossing.package.replace('-', "_")) {
+            if !crate::package_teardown::runs(ctx, &crossing.package) {
                 return Err("Package is stopped on destination".into());
             }
             let decoded = transfer::decode_blob(crossing.id, &import.blob)?;
@@ -572,9 +571,9 @@ pub fn retry_package_relocation(ctx: &ReducerContext, retry: RelocationRetry) {
 }
 
 pub(crate) fn require_settled(ctx: &ReducerContext, package: &str) -> Result<(), String> {
+    let ident = crate::package_teardown::ident(package);
     if ctx.db.game_package_relocation().iter().any(|r| {
-        r.package_name.replace('-', "_") == package.replace('-', "_")
-            && r.result == Relocation::Pending
+        crate::package_teardown::ident(&r.package_name) == ident && r.result == Relocation::Pending
     }) {
         return Err("Package relocation is pending; wait before teardown".into());
     }
@@ -583,9 +582,10 @@ pub(crate) fn require_settled(ctx: &ReducerContext, package: &str) -> Result<(),
 
 pub(crate) fn clear_results(ctx: &ReducerContext, package: &str) {
     let rows = ctx.db.game_package_relocation();
+    let ident = crate::package_teardown::ident(package);
     let ids: Vec<_> = rows
         .iter()
-        .filter(|r| r.package_name.replace('-', "_") == package.replace('-', "_"))
+        .filter(|r| crate::package_teardown::ident(&r.package_name) == ident)
         .map(|r| r.id)
         .collect();
     for id in ids {

@@ -275,7 +275,7 @@ mod tests {
         assert_eq!(mask.gameobject_pos_z(), Some(3.0));
         assert_eq!(mask.gameobject_facing(), Some(1.5));
         let packet =
-            crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+            crate::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
                 .unwrap();
         assert_eq!(&packet.body[..8], &[1, 0, 0, 0, 0, 0, 1, 1]);
         let bits = u32::from_le_bytes(packet.body[9..13].try_into().unwrap());
@@ -352,7 +352,7 @@ mod tests {
         assert_eq!(mask.gameobject_flags(), Some(40));
         assert_eq!(mask.gameobject_displayid(), Some(3015));
         let packet =
-            crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+            crate::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
                 .unwrap();
         // Block count, has_transport and CREATE_OBJECT2, then a 6-byte packed GUID and the type.
         assert_eq!(&packet.body[..6], &[1, 0, 0, 0, 1, 3]);

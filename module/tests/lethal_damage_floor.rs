@@ -216,15 +216,5 @@ fn verify(
 }
 
 fn packed_definition(rules: &str) -> String {
-    let subject = format!("entry:{TEST_WOLF_ENTRY}");
-    let material = format!("{subject}@{rules}");
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(material.as_bytes());
-    let revision = u64::from_le_bytes(
-        hasher.finalize().as_bytes()[..8]
-            .try_into()
-            .expect("a BLAKE3 digest has at least eight bytes"),
-    );
-    format!("{subject}@{revision}@{rules}")
+    lyracore_shared::eventai::encode_definition(&format!("entry:{TEST_WOLF_ENTRY}"), rules)
 }

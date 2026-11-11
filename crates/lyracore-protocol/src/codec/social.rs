@@ -18,11 +18,6 @@ pub struct WhoPlayerView {
 
 pub const SMSG_WHO_OPCODE: u16 = 0x0063;
 
-fn push_cstr(body: &mut Vec<u8>, s: &str) {
-    body.extend_from_slice(s.as_bytes());
-    body.push(0);
-}
-
 /// Build 5875 uses u32 class/race/zone and no party_status; gtker's row is two bytes short.
 pub fn build_who_response_raw(players: &[WhoPlayerView]) -> (u16, Vec<u8>) {
     let listed = &players[..players.len().min(49)];
@@ -30,8 +25,8 @@ pub fn build_who_response_raw(players: &[WhoPlayerView]) -> (u16, Vec<u8>) {
     body.extend_from_slice(&(listed.len() as u32).to_le_bytes());
     body.extend_from_slice(&(players.len() as u32).to_le_bytes());
     for p in listed {
-        push_cstr(&mut body, &p.name);
-        push_cstr(&mut body, &p.guild);
+        super::push_cstr(&mut body, &p.name);
+        super::push_cstr(&mut body, &p.guild);
         body.extend_from_slice(&u32::from(p.level).to_le_bytes());
         body.extend_from_slice(&u32::from(p.class).to_le_bytes());
         body.extend_from_slice(&u32::from(p.race).to_le_bytes());

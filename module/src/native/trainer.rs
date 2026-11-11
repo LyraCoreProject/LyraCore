@@ -8,7 +8,7 @@ use lyracore_protocol::{
 use lyracore_shared::trainer::TrainerRefusal;
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::Rollback;
+use super::{Rollback, Unhandled};
 use crate::{
     skill::game_player_skill, spell::spellbook::game_player_spell, trainer::game_trainer_spell,
     Refusal,
@@ -68,23 +68,13 @@ pub(super) fn list(
     )?)
 }
 
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_TRAINER_LIST(_)
-            | ClientOpcodeMessage::CMSG_TRAINER_BUY_SPELL(_)
-            | ClientOpcodeMessage::CMSG_LEARN_TALENT(_)
-            | ClientOpcodeMessage::CMSG_SET_ACTION_BUTTON(_)
-    )
-}
-
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    match message {
+) -> Result<(), Unhandled> {
+    let handled: Result<(), Rollback> = match message {
         ClientOpcodeMessage::CMSG_LEARN_TALENT(c) => {
             let actor = super::actor(ctx, guid)?;
             crate::talent::do_learn_talent(ctx, guid, actor.owner_identity, c.talent.as_int())?;
@@ -126,8 +116,9 @@ pub(super) fn receive(
                 c.action_type,
             )?)
         }
-        _ => Err("invalid trainer opcode".into()),
-    }
+        other => return Err(Unhandled::Declined(other)),
+    };
+    Ok(handled?)
 }
 
 fn failure_reason(refusal: TrainerRefusal) -> TrainingFailureReason {

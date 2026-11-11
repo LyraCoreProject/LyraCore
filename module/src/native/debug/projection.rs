@@ -43,7 +43,7 @@ pub(super) fn close(ctx: &ReducerContext, connection_id: ConnectionId) {
 }
 
 fn encode(message: SMSG_UPDATE_OBJECT) -> Result<Vec<u8>, String> {
-    lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+    lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
         .map(|packet| packet.body)
         .map_err(|error| error.to_string())
 }

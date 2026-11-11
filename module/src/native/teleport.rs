@@ -209,7 +209,7 @@ fn finish_near(
         entity.z,
         entity.orientation,
     );
-    let mut packet = lyracore_protocol::world::encode(ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(
+    let mut packet = lyracore_protocol::world::encode(&ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(
         Box::new(destination),
     ))
     .map_err(|error| error.to_string())?;

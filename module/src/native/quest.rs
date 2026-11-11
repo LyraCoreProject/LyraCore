@@ -5,7 +5,7 @@ use crate::{game_creature_template, game_item_template};
 use lyracore_shared::quest::AcceptanceRefusal;
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::Rollback;
+use super::{Rollback, Unhandled};
 use lyracore_protocol::{
     codec,
     messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
@@ -180,7 +180,7 @@ fn synthesized_objectives(ctx: &ReducerContext, quest_id: u32, imported: String)
 }
 
 fn packet(message: ServerOpcodeMessage) -> Result<Packet, String> {
-    lyracore_protocol::world::encode(message).map_err(|error| error.to_string())
+    lyracore_protocol::world::encode(&message).map_err(|error| error.to_string())
 }
 
 fn details(ctx: &ReducerContext, giver: u64, quest: u32) -> Vec<Packet> {
@@ -328,30 +328,12 @@ fn accept_refusal(refusal: &AcceptQuestRefusal) -> Vec<Packet> {
         .collect()
 }
 
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_QUESTGIVER_STATUS_QUERY(_)
-            | ClientOpcodeMessage::CMSG_QUESTGIVER_HELLO(_)
-            | ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(_)
-            | ClientOpcodeMessage::CMSG_QUEST_QUERY(_)
-            | ClientOpcodeMessage::CMSG_QUESTGIVER_ACCEPT_QUEST(_)
-            | ClientOpcodeMessage::CMSG_QUESTGIVER_CANCEL
-            | ClientOpcodeMessage::CMSG_QUESTGIVER_COMPLETE_QUEST(_)
-            | ClientOpcodeMessage::CMSG_QUESTGIVER_REQUEST_REWARD(_)
-            | ClientOpcodeMessage::CMSG_QUESTGIVER_CHOOSE_REWARD(_)
-            | ClientOpcodeMessage::CMSG_QUESTLOG_SWAP_QUEST(_)
-            | ClientOpcodeMessage::CMSG_QUESTLOG_REMOVE_QUEST(_)
-            | ClientOpcodeMessage::CMSG_PUSHQUESTTOPARTY(_)
-    )
-}
-
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
     request: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
+) -> Result<(), Unhandled> {
     let packets = match request {
         ClientOpcodeMessage::CMSG_QUESTGIVER_STATUS_QUERY(q) => vec![packet(
             ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(Box::new(codec::build_questgiver_status(
@@ -362,9 +344,20 @@ pub(super) fn receive(
         ClientOpcodeMessage::CMSG_QUESTGIVER_HELLO(q) => {
             let actor = super::actor(ctx, guid)?;
             let giver = q.guid.guid();
-            if crate::npc_interaction::serving_npc(ctx, &actor, giver, NpcService::QuestGiver)
-                .is_err()
-            {
+            let refused = if lyracore_shared::guid::is_creature(giver) {
+                crate::npc_interaction::serving_npc(ctx, &actor, giver, NpcService::QuestGiver)
+                    .is_err()
+            } else {
+                use crate::game_world_entity;
+                ctx.db
+                    .game_world_entity()
+                    .guid()
+                    .find(giver)
+                    .is_some_and(|npc| {
+                        crate::reputation::npc_refuses_interaction(ctx, &npc, &actor)
+                    })
+            };
+            if refused {
                 return Ok(());
             }
             menu(ctx, giver, guid)?
@@ -420,7 +413,7 @@ pub(super) fn receive(
                 crate::mail_reward::file_reward_letter(ctx, guid, q.guid.guid(), q.quest_id)
             }) {
                 let packets = reward_screen(ctx, q.guid.guid(), guid, q.quest_id)?;
-                return Err(Rollback::replies(packets, reason));
+                return Err(Rollback::replies(packets, reason).into());
             }
             let mut packets: Vec<Packet> = quest_detail_view(ctx, q.quest_id)
                 .map(|detail| {
@@ -466,7 +459,7 @@ pub(super) fn receive(
             apply_push_quest_to_party(ctx, guid, q.quest_id)?;
             Vec::new()
         }
-        _ => return Err("invalid quest opcode".into()),
+        other => return Err(Unhandled::Declined(other)),
     };
     for packet in packets {
         super::send_raw(ctx, connection, packet.opcode, packet.body, false);

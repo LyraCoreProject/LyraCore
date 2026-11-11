@@ -18,9 +18,14 @@ pub struct InstalledPackage {
     pub characters: Option<fn(&ReducerContext) -> Vec<u64>>,
 }
 
+/// The Package's Rust identifier: `-` and `_` name the same Package.
+pub(crate) fn ident(package: &str) -> String {
+    package.replace('-', "_")
+}
+
 pub(crate) fn runs(ctx: &ReducerContext, package: &str) -> bool {
     let torn_down = ctx.db.game_package_teardown();
-    torn_down.count() == 0 || torn_down.package_name().find(package.to_string()).is_none()
+    torn_down.count() == 0 || torn_down.package_name().find(ident(package)).is_none()
 }
 
 pub(crate) fn forget_removed_packages(ctx: &ReducerContext) {
@@ -41,7 +46,7 @@ pub(crate) fn forget_removed_packages(ctx: &ReducerContext) {
 #[reducer]
 pub fn teardown_package(ctx: &ReducerContext, package_name: String) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let ident = package_name.replace('-', "_");
+    let ident = ident(&package_name);
     let package = crate::GAME_PACKAGES
         .iter()
         .find(|package| package.name == ident)

@@ -419,9 +419,9 @@ pub fn build_attacker_state_update(
     if matches!(outcome, 3 | 4) || damage > 0 || blocked_amount > 0 {
         flags |= 0x2;
     }
-    let mut packet = crate::world::encode(ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(Box::new(
-        message,
-    )))
+    let mut packet = crate::world::encode(&ServerOpcodeMessage::SMSG_ATTACKERSTATEUPDATE(
+        Box::new(message),
+    ))
     .expect("one melee damage entry fits a world frame");
     // The binding's HitInfo enum cannot represent combined flags or HITINFO_BLOCK (0x800).
     packet.body[..4].copy_from_slice(&flags.to_le_bytes());

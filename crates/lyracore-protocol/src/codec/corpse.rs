@@ -129,7 +129,7 @@ mod tests {
     fn bones_update_contains_only_the_corpse_flags_descriptor() {
         let message =
             ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(build_corpse_flags_values(7, true)));
-        let packet = crate::world::encode(message).unwrap();
+        let packet = crate::world::encode(&message).unwrap();
         let mut expected = vec![1, 0, 0, 0, 0, 0, 1, 7, 2];
         expected.extend_from_slice(&0u32.to_le_bytes());
         expected.extend_from_slice(&(1u32 << 3).to_le_bytes());

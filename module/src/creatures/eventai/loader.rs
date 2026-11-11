@@ -178,7 +178,7 @@ fn parse_definition(line: &str) -> Result<ParsedDefinition, String> {
     if encoded_rules.is_empty() {
         return Err("definition has no rules".to_string());
     }
-    let expected_revision = definition_revision(&format!("{subject}@{encoded_rules}"));
+    let expected_revision = lyracore_shared::eventai::definition_revision(subject, encoded_rules);
     if revision != expected_revision {
         return Err(format!(
             "definition revision mismatch: supplied={revision} expected={expected_revision}"
@@ -1106,17 +1106,6 @@ fn parse_ai_event(value: &str) -> Result<AiEventKind, String> {
     }
 }
 
-fn definition_revision(material: &str) -> u64 {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(material.as_bytes());
-    u64::from_le_bytes(
-        hasher.finalize().as_bytes()[..8]
-            .try_into()
-            .expect("a BLAKE3 digest has at least eight bytes"),
-    )
-}
-
 fn parse_bool(value: &str) -> Result<bool, String> {
     match value {
         "0" => Ok(false),
@@ -1315,8 +1304,7 @@ mod tests {
     #[test]
     fn native_definition_decodes_more_than_three_ordered_instructions() {
         let rules = "17,aggro,100,4294967295,once,all,ordinary,emote:1:self+emote:2:self+emote:3:self+emote:4:self";
-        let material = format!("entry:6@{rules}");
-        let packed = format!("entry:6@{}@{rules}", definition_revision(&material));
+        let packed = lyracore_shared::eventai::encode_definition("entry:6", rules);
         let definition = parse_definition(&packed).unwrap();
         assert_eq!(definition.rules[0].instructions.len(), 4);
         for (index, instruction) in definition.rules[0].instructions.iter().enumerate() {
@@ -1330,8 +1318,7 @@ mod tests {
     #[test]
     fn native_definition_decodes_named_death_requests() {
         let rules = "900002,aggro,100,4294967295,once,all,ordinary,any-posture,lethal-floor:on+lethal-floor:off+force-death";
-        let material = format!("entry:6@{rules}");
-        let packed = format!("entry:6@{}@{rules}", definition_revision(&material));
+        let packed = lyracore_shared::eventai::encode_definition("entry:6", rules);
         let definition = parse_definition(&packed).unwrap();
 
         assert_eq!(
@@ -1350,9 +1337,13 @@ mod tests {
 
     #[test]
     fn revision_covers_the_normalized_definition() {
-        let first = "entry:6@17,aggro,100,1,once,all,ordinary,flee";
-        let second = "entry:6@17,aggro,100,1,once,all,ordinary,help:8";
-        assert_ne!(definition_revision(first), definition_revision(second));
+        use lyracore_shared::eventai::definition_revision;
+        let first = "17,aggro,100,1,once,all,ordinary,flee";
+        let second = "17,aggro,100,1,once,all,ordinary,help:8";
+        assert_ne!(
+            definition_revision("entry:6", first),
+            definition_revision("entry:6", second)
+        );
     }
 
     #[test]

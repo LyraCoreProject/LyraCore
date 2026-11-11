@@ -177,7 +177,7 @@ fn absorb_draw_soaks_then_overflows() {
 }
 
 #[test]
-fn rederive_pool_is_noop_at_zero_and_curve_exact() {
+fn rederive_pool_is_noop_for_an_unchanged_stat_and_follows_the_curve() {
     use crate::stats::{hp_from_stamina, mana_from_intellect};
     for base in [0u32, 5, 20, 22, 100] {
         let login = 60;

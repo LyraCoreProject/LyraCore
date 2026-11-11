@@ -148,10 +148,10 @@ use lyracore_protocol::world::Packet;
 use spacetimedb::{reducer, table, ConnectionId, ReducerContext, SpacetimeType, Table};
 
 use crate::{game_account, game_character, game_session, Refusal};
-use rollback::Rollback;
+use rollback::{Rollback, Unhandled};
 use transfer::game_native_transfer_pending;
 
-#[derive(SpacetimeType)]
+#[derive(SpacetimeType, Clone)]
 pub enum NativeWorldState {
     AwaitingProof,
     Queued { account_id: u64 },
@@ -160,6 +160,7 @@ pub enum NativeWorldState {
 }
 
 #[table(accessor = game_native_world_connection)]
+#[derive(Clone)]
 pub struct NativeWorldConnection {
     #[primary_key]
     pub connection_id: ConnectionId,
@@ -263,7 +264,7 @@ fn send(
     message: ServerOpcodeMessage,
     close_after: bool,
 ) -> Result<(), String> {
-    let packet = lyracore_protocol::world::encode(message).map_err(|error| error.to_string())?;
+    let packet = lyracore_protocol::world::encode(&message).map_err(|error| error.to_string())?;
     send_raw(ctx, connection_id, packet.opcode, packet.body, close_after);
     Ok(())
 }
@@ -288,7 +289,7 @@ fn send_raw(
 
 /// Encodes a server message whose size the Module bounds; a broken bound panics.
 fn bounded(message: ServerOpcodeMessage) -> Packet {
-    lyracore_protocol::world::encode(message).expect("bounded server message fits a world frame")
+    lyracore_protocol::world::encode(&message).expect("bounded server message fits a world frame")
 }
 
 /// What delivery does with a server message that does not fit a world frame.
@@ -316,11 +317,12 @@ fn send_to_character(
     let packet = match on_failure {
         EncodeFailure::Panic => bounded(message),
         EncodeFailure::Disconnect | EncodeFailure::Log => {
-            let name = message.to_string();
-            match lyracore_protocol::world::encode(message) {
+            match lyracore_protocol::world::encode(&message) {
                 Ok(packet) => packet,
                 Err(error) => {
-                    spacetimedb::log::error!("native {name} for {guid} does not encode: {error}");
+                    spacetimedb::log::error!(
+                        "native {message} for {guid} does not encode: {error}"
+                    );
                     if matches!(on_failure, EncodeFailure::Disconnect) {
                         disconnect(ctx, player.connection_id);
                     }

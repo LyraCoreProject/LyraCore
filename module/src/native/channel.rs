@@ -9,41 +9,18 @@ use lyracore_shared::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::Rollback;
+use super::{Rollback, Unhandled};
 use crate::{
     channel::{ChannelOp, ChannelRequest, ChatChannelNoticeEvent},
     realm_chat::SpeakerFacts,
 };
-
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_JOIN_CHANNEL(_)
-            | ClientOpcodeMessage::CMSG_LEAVE_CHANNEL(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_LIST(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_PASSWORD(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_SET_OWNER(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_OWNER(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_MODERATOR(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_UNMODERATOR(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_MUTE(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_UNMUTE(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_INVITE(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_KICK(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_BAN(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_UNBAN(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_ANNOUNCEMENTS(_)
-            | ClientOpcodeMessage::CMSG_CHANNEL_MODERATE(_)
-    )
-}
 
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    let actor = super::available_entity(ctx, guid)?;
+) -> Result<(), Unhandled> {
     let (op, channel_name, password, target_name) = match message {
         ClientOpcodeMessage::CMSG_JOIN_CHANNEL(c) => {
             (ChannelOp::Join, c.channel_name, c.channel_password, None)
@@ -121,13 +98,16 @@ pub(super) fn receive(
             (ChannelOp::Moderate, c.channel_name, String::new(), None)
         }
         ClientOpcodeMessage::CMSG_CHANNEL_LIST(c) => {
-            return roster(ctx, connection, &actor, c.channel_name, false)
+            let actor = super::available_entity(ctx, guid)?;
+            return Ok(roster(ctx, connection, &actor, c.channel_name, false)?);
         }
         ClientOpcodeMessage::CMSG_CHANNEL_OWNER(c) => {
-            return roster(ctx, connection, &actor, c.channel_name, true)
+            let actor = super::available_entity(ctx, guid)?;
+            return Ok(roster(ctx, connection, &actor, c.channel_name, true)?);
         }
-        _ => return Err("opcode is not a Chat Channel request".into()),
+        other => return Err(Unhandled::Declined(other)),
     };
+    let actor = super::available_entity(ctx, guid)?;
     if matches!(op, ChannelOp::Join | ChannelOp::Leave) && channel_name.is_empty() {
         return Ok(());
     }
@@ -160,7 +140,8 @@ pub(super) fn receive(
             if targeted { target_guid } else { guid },
             target_name,
         )
-    })
+    })?;
+    Ok(())
 }
 
 fn refusal_reply(

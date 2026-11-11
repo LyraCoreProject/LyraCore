@@ -1,7 +1,9 @@
 use crate::spatial::MAP_COORD_MAX;
 
+// ADT tile side length in yards.
+pub const ADT_SIZE: f32 = 533.333_3;
 // MCNK cell side length in yards.
-pub const CELL_SIZE: f32 = 533.333_3 / 16.0;
+pub const CELL_SIZE: f32 = ADT_SIZE / 16.0;
 // Nine outer corners per axis span eight terrain quads.
 pub const QUAD: f32 = CELL_SIZE / 8.0;
 

@@ -83,10 +83,11 @@ auto-migrating publish, so this reducer arms the interval schedules `init` arms
 the Gateway lease reaper, the weather schedule, the Meeting Stone reminder and the catch-all creature
 tick, which discards a cadence set with `debug_rearm_creature_tick`. It creates the event reaper,
 melee, pet care, aura, breath, duel, ground area and motion publish schedules only when missing, and
-a Transport crossing for each Transport without one. It also re-freezes Proc profiles, restores missing Auction expiries, re-tags legacy auction mail as Auction Mail before the
-Mail Timer pass (so a legacy "Auction won" is deleted, not returned), arms a Mail Timer for each
-Mail that has none, moves each legacy Character GM level onto its Account and re-seeds the curated
-content and fixtures `init` seeds. `packages apply` calls it for each Shard it publishes.
+a Transport crossing for each Transport without one. It also re-freezes Proc profiles, restores
+missing Auction expiries, re-tags legacy auction mail as Auction Mail before the Mail Timer pass
+(so a legacy "Auction won" is deleted, not returned), arms a Mail Timer for each Mail that has
+none, moves each legacy Character GM level onto its Account and re-seeds the curated content and
+fixtures `init` seeds. `packages apply` calls it for each Shard it publishes.
 A skipped call looks like a mid-session hang, not an error.
 
 Imported content wins over that re-seed. A seed that writes real ids skips once the importer has

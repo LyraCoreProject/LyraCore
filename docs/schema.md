@@ -884,7 +884,7 @@ Publish repair refreshes these projections; see
 | 19 ModInvisibilityDetection | 2 | detection placeholder | Inert | 17623 |
 | 22 ModResistance | 74 | resistance_bonus; flat school mask | Correct | 12956 |
 | 23 PeriodicTriggerSpell | 9 | periodic trigger needs mechanics | Inert | 758 |
-| 29 ModStat | 1 | stat_bonus supports self auras; selected effect 35 needs area mechanics | Inert for the selected Item | 7363 |
+| 29 ModStat | 1 | effective_stat supports self auras; selected effect 35 needs area mechanics | Inert for the selected Item | 7363 |
 | 30 ModSkill | 206 | skill modifier needs mechanics | Inert | 7515 |
 | 31 ModIncreaseSpeed | 62 | run_speed lacks faithful mounted and slow composition | Inert | 17625 |
 | 42 ProcTriggerSpell | 52 | item proc restrictions not certified | Inert | 4070 |

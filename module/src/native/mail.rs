@@ -8,7 +8,7 @@ use lyracore_protocol::{
 use lyracore_shared::{faction::same_team, mail as rules};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::Rollback;
+use super::{Rollback, Unhandled};
 use crate::{
     game_gameobject, game_gameobject_template, game_item_instance, game_item_template,
     mail::{self as core, game_mail, MailRefusal},
@@ -16,30 +16,13 @@ use crate::{
     Refusal,
 };
 
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_GET_MAIL_LIST(_)
-            | ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME
-            | ClientOpcodeMessage::CMSG_ITEM_TEXT_QUERY(_)
-            | ClientOpcodeMessage::CMSG_MAIL_MARK_AS_READ(_)
-            | ClientOpcodeMessage::CMSG_MAIL_DELETE(_)
-            | ClientOpcodeMessage::CMSG_MAIL_RETURN_TO_SENDER(_)
-            | ClientOpcodeMessage::CMSG_MAIL_TAKE_MONEY(_)
-            | ClientOpcodeMessage::CMSG_MAIL_TAKE_ITEM(_)
-            | ClientOpcodeMessage::CMSG_SEND_MAIL(_)
-            | ClientOpcodeMessage::CMSG_MAIL_CREATE_TEXT_ITEM(_)
-    )
-}
-
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    let actor = super::actor(ctx, guid)?;
-    let mailbox = |target| at_mailbox(ctx, &actor, target);
+) -> Result<(), Unhandled> {
+    let actor = || super::actor(ctx, guid);
     let run = |result: Result<(), Refusal>, reply: &dyn Fn(bool) -> SMSG_SEND_MAIL_RESULT| {
         result.map_err(|cause| Rollback::reply(response(reply(false)), cause))?;
         Ok::<_, Rollback>(response(reply(true)))
@@ -47,7 +30,7 @@ pub(super) fn receive(
     use ClientOpcodeMessage as C;
     let packet = match message {
         C::CMSG_GET_MAIL_LIST(request) => {
-            mailbox(request.mailbox.guid())?;
+            at_mailbox(ctx, &actor()?, request.mailbox.guid())?;
             let mails = ctx
                 .db
                 .game_mail()
@@ -61,37 +44,43 @@ pub(super) fn receive(
                 crate::time::now_secs(ctx) as i64,
             )))
         }
-        C::MSG_QUERY_NEXT_MAIL_TIME => ServerOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME(
-            codec::build_next_mail_time(core::has_unread(ctx, guid)),
-        ),
-        C::CMSG_ITEM_TEXT_QUERY(request) => ServerOpcodeMessage::SMSG_ITEM_TEXT_QUERY_RESPONSE(
-            Box::new(codec::build_item_text_response(
-                request.item_text_id,
-                item_text(ctx, guid, request.item_text_id, request.mail_id),
-            )),
-        ),
+        C::MSG_QUERY_NEXT_MAIL_TIME => {
+            actor()?;
+            ServerOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME(codec::build_next_mail_time(
+                core::has_unread(ctx, guid),
+            ))
+        }
+        C::CMSG_ITEM_TEXT_QUERY(request) => {
+            actor()?;
+            ServerOpcodeMessage::SMSG_ITEM_TEXT_QUERY_RESPONSE(Box::new(
+                codec::build_item_text_response(
+                    request.item_text_id,
+                    item_text(ctx, guid, request.item_text_id, request.mail_id),
+                ),
+            ))
+        }
         C::CMSG_MAIL_MARK_AS_READ(request) => {
-            mailbox(request.mailbox.guid())?;
+            at_mailbox(ctx, &actor()?, request.mailbox.guid())?;
             core::apply_mark_read(ctx, guid, request.mail_id.into())?;
             return Ok(());
         }
         C::CMSG_MAIL_DELETE(request) => run(
-            mailbox(request.mailbox_id.guid())
+            at_mailbox(ctx, &actor()?, request.mailbox_id.guid())
                 .and_then(|()| core::apply_delete(ctx, guid, request.mail_id.into())),
             &|ok| codec::build_mail_delete_result(request.mail_id, ok),
         )?,
         C::CMSG_MAIL_RETURN_TO_SENDER(request) => run(
-            mailbox(request.mailbox_id.guid())
+            at_mailbox(ctx, &actor()?, request.mailbox_id.guid())
                 .and_then(|()| core::apply_return(ctx, guid, request.mail_id.into())),
             &|ok| codec::build_mail_return_result(request.mail_id, ok),
         )?,
         C::CMSG_MAIL_TAKE_MONEY(request) => run(
-            mailbox(request.mailbox.guid())
+            at_mailbox(ctx, &actor()?, request.mailbox.guid())
                 .and_then(|()| core::apply_take_money(ctx, guid, request.mail_id.into())),
             &|ok| codec::build_mail_take_money_result(request.mail_id, ok),
         )?,
         C::CMSG_MAIL_TAKE_ITEM(request) => {
-            let taken = mailbox(request.mailbox.guid())
+            let taken = at_mailbox(ctx, &actor()?, request.mailbox.guid())
                 .map_err(MailRefusal::from)
                 .and_then(|()| {
                     let mail = core::delivered_mail(ctx, request.mail_id.into())
@@ -123,7 +112,7 @@ pub(super) fn receive(
             ))
         }
         C::CMSG_SEND_MAIL(request) => {
-            mailbox(request.mailbox.guid())?;
+            at_mailbox(ctx, &actor()?, request.mailbox.guid())?;
             send_letter(ctx, guid, *request).map_err(|refusal| {
                 Rollback::reply(
                     response(codec::build_mail_send_result(refusal)),
@@ -133,7 +122,7 @@ pub(super) fn receive(
             response(codec::build_mail_send_result(MailResult::Ok))
         }
         C::CMSG_MAIL_CREATE_TEXT_ITEM(request) => {
-            mailbox(request.mailbox.guid())?;
+            at_mailbox(ctx, &actor()?, request.mailbox.guid())?;
             crate::mail_text::apply_copy_letter(ctx, guid, request.mail_id.into()).map_err(
                 |refusal| {
                     let error = match refusal {
@@ -158,7 +147,7 @@ pub(super) fn receive(
                 Ok(()),
             ))
         }
-        _ => return Err("opcode is not a mail request".into()),
+        other => return Err(Unhandled::Declined(other)),
     };
     Ok(super::send(ctx, connection, packet, false)?)
 }

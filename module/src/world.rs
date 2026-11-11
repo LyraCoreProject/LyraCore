@@ -6,12 +6,12 @@ use spacetimedb::{table, Identity, ReducerContext, Table};
 use crate::character::{persist_entity, RUN_SPEED_BP_1X};
 use crate::game_character;
 
+mod character_entity;
 mod placement;
-mod player_entity;
 mod simulation;
 
+pub(crate) use character_entity::build_player_entity;
 pub(crate) use placement::MoveClock;
-pub(crate) use player_entity::build_player_entity;
 pub(crate) use simulation::backfill_simulation;
 
 #[table(accessor = game_world_state_name)]

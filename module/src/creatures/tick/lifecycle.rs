@@ -10,7 +10,7 @@ use crate::{game_creature_spawn, game_creature_template, CreatureSpawn};
 pub(crate) const CREATURE_CORPSE_DECAY_MICROS: i64 = 60_000_000;
 
 /// Removes a creature, pet or other owned unit from the world with every row kept for its life.
-/// Every removal path calls this; `creature_teardown_tripwire` names the rows it must clear.
+/// Every removal path calls this; `creature_teardown_architecture_test` names the rows it clears.
 pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
     if ctx.db.game_creature_spawn().guid().find(guid).is_none() {
         crate::items::vendor_stock::forget(ctx, guid);

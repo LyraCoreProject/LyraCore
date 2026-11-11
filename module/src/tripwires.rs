@@ -154,7 +154,7 @@ pub(crate) mod character_owned_tripwire {
                 "game_creature_quest_tap",
                 "game_creature_quest_tap_member",
             ],
-            "creature-owned state cleared by `despawn_creature_entity`; `creature_teardown_tripwire` checks each",
+            "creature-owned state cleared by `despawn_creature_entity`; `creature_teardown_architecture_test` checks each",
         ),
         (
             &["game_creature_move_event"],
@@ -1976,7 +1976,7 @@ pub(crate) mod package_name_tripwire {
 }
 
 #[cfg(test)]
-mod creature_teardown_tripwire {
+mod creature_teardown_architecture_test {
     use super::character_owned_tripwire::scanned_files;
     use crate::test_scan::repo_root;
     use lyracore_test_support::source_scan::code_only;

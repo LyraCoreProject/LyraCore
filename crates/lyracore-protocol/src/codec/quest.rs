@@ -264,8 +264,7 @@ pub fn build_quest_details_raw(giver_guid: u64, d: &QuestDetailView) -> (u16, Ve
     body.extend_from_slice(&giver_guid.to_le_bytes());
     body.extend_from_slice(&d.quest_id.to_le_bytes());
     for text in [&d.title, &d.details, &d.objectives_text] {
-        body.extend_from_slice(text.as_bytes());
-        body.push(0);
+        super::push_cstr(&mut body, text);
     }
     body.extend_from_slice(&1u32.to_le_bytes());
     for rewards in [&d.choice_rewards, &d.rewards] {
@@ -328,11 +327,6 @@ pub fn build_request_items(
 // gtker writes u16 reputation-faction fields; build 5875 reads u32.
 const SMSG_QUEST_QUERY_RESPONSE_OPCODE: u16 = 0x005D;
 
-fn push_cstr(body: &mut Vec<u8>, s: &str) {
-    body.extend_from_slice(s.as_bytes());
-    body.push(0);
-}
-
 pub fn build_quest_query_response_raw(d: &QuestDetailView) -> (u16, Vec<u8>) {
     let mut body = Vec::with_capacity(256);
     let u32le = |body: &mut Vec<u8>, v: u32| body.extend_from_slice(&v.to_le_bytes());
@@ -373,10 +367,10 @@ pub fn build_quest_query_response_raw(d: &QuestDetailView) -> (u16, Vec<u8>) {
     body.extend_from_slice(&0f32.to_le_bytes());
     body.extend_from_slice(&0f32.to_le_bytes());
     u32le(&mut body, 0);
-    push_cstr(&mut body, &d.title);
-    push_cstr(&mut body, &d.objectives_text);
-    push_cstr(&mut body, &d.details);
-    push_cstr(&mut body, "");
+    super::push_cstr(&mut body, &d.title);
+    super::push_cstr(&mut body, &d.objectives_text);
+    super::push_cstr(&mut body, &d.details);
+    super::push_cstr(&mut body, "");
     for i in 0..4 {
         let (creature_or_go, count, req_item, req_item_count) =
             d.objectives.get(i).copied().unwrap_or((0, 0, 0, 0));
@@ -386,7 +380,7 @@ pub fn build_quest_query_response_raw(d: &QuestDetailView) -> (u16, Vec<u8>) {
         u32le(&mut body, req_item_count);
     }
     for _ in 0..4 {
-        push_cstr(&mut body, "");
+        super::push_cstr(&mut body, "");
     }
     (SMSG_QUEST_QUERY_RESPONSE_OPCODE, body)
 }

@@ -16,12 +16,7 @@ fn definition(enabled: bool) -> String {
 }
 
 fn packed_definition(rules: &str) -> String {
-    let subject = format!("entry:{TEST_WOLF_ENTRY}");
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(format!("{subject}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
-    format!("{subject}@{revision}@{rules}")
+    lyracore_shared::eventai::encode_definition(&format!("entry:{TEST_WOLF_ENTRY}"), rules)
 }
 
 #[test]
@@ -150,13 +145,11 @@ fn instance_copies_inherit_the_source_guid_spawn_rule() {
     let source = guid::creature(TEST_WOLF_ENTRY, 1_000_036);
     let subject = format!("guid:{source}");
     let rules = "900002,spawn:always,100,4294967295,once,all,ordinary,any-posture,sheath:2";
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(format!("{subject}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
     shard.assert_call(
         "import_creature_ai_definitions",
-        &[&format!("{subject}@{revision}@{rules}")],
+        &[&lyracore_shared::eventai::encode_definition(
+            &subject, rules,
+        )],
     );
     shard.assert_call(
         "import_creature_spawns",

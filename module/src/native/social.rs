@@ -14,7 +14,7 @@ use super::{
     game_native_player, game_native_world_connection,
     realm_party::{game_party_character, PartyCharacter},
     who::{WhoCandidate, WhoFilter},
-    NativeWorldConnection, Rollback,
+    NativeWorldConnection, Rollback, Unhandled,
 };
 use crate::{
     chat::{game_character_contact, ContactRefusal},
@@ -23,51 +23,47 @@ use crate::{
     Character,
 };
 
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_WHO(_)
-            | ClientOpcodeMessage::CMSG_FRIEND_LIST
-            | ClientOpcodeMessage::CMSG_ADD_FRIEND(_)
-            | ClientOpcodeMessage::CMSG_DEL_FRIEND(_)
-            | ClientOpcodeMessage::CMSG_ADD_IGNORE(_)
-            | ClientOpcodeMessage::CMSG_DEL_IGNORE(_)
-    )
-}
-
 pub(super) fn receive(
     ctx: &ReducerContext,
-    mut connection: NativeWorldConnection,
+    connection: &NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    let actor = super::available_entity(ctx, guid)?;
+) -> Result<(), Unhandled> {
+    let actor = || super::available_entity(ctx, guid);
     let id = connection.connection_id;
-    match message {
+    let handled: Result<(), Rollback> = match message {
         ClientOpcodeMessage::CMSG_WHO(request) => {
+            let race = actor()?.race();
             let now = crate::time::now(ctx).to_micros_since_unix_epoch();
             if now < connection.who_until_micros {
                 return Ok(());
             }
-            connection.who_until_micros = now + 1_000_000;
             ctx.db
                 .game_native_world_connection()
                 .connection_id()
-                .update(connection);
-            who(ctx, id, actor.race(), &request)?;
+                .update(NativeWorldConnection {
+                    who_until_micros: now + 1_000_000,
+                    ..connection.clone()
+                });
+            who(ctx, id, race, &request)?;
             Ok(())
         }
-        ClientOpcodeMessage::CMSG_FRIEND_LIST => lists(ctx, id, &actor),
-        ClientOpcodeMessage::CMSG_ADD_FRIEND(request) => add(ctx, id, actor, &request.name, false),
-        ClientOpcodeMessage::CMSG_ADD_IGNORE(request) => add(ctx, id, actor, &request.name, true),
+        ClientOpcodeMessage::CMSG_FRIEND_LIST => lists(ctx, id, &actor()?),
+        ClientOpcodeMessage::CMSG_ADD_FRIEND(request) => {
+            add(ctx, id, actor()?, &request.name, false)
+        }
+        ClientOpcodeMessage::CMSG_ADD_IGNORE(request) => {
+            add(ctx, id, actor()?, &request.name, true)
+        }
         ClientOpcodeMessage::CMSG_DEL_FRIEND(request) => {
-            remove(ctx, id, actor, request.guid.guid(), false)
+            remove(ctx, id, actor()?, request.guid.guid(), false)
         }
         ClientOpcodeMessage::CMSG_DEL_IGNORE(request) => {
-            remove(ctx, id, actor, request.guid.guid(), true)
+            remove(ctx, id, actor()?, request.guid.guid(), true)
         }
-        _ => Err("opcode is not a contact or /who request".into()),
-    }
+        other => return Err(Unhandled::Declined(other)),
+    };
+    Ok(handled?)
 }
 
 pub(super) fn name_query(

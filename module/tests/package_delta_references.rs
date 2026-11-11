@@ -735,15 +735,7 @@ fn kelris_definition() -> String {
         "10,aggro,100,4294967295,once,all,ordinary,any-posture,\
          speak:yell:self:{KELRIS_TEXT}+notify-encounter:blackfathom-deeps-kelris:begin"
     );
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(format!("{subject}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(
-        hasher.finalize().as_bytes()[..8]
-            .try_into()
-            .expect("a BLAKE3 digest has at least eight bytes"),
-    );
-    format!("{subject}@{revision}@{rules}")
+    lyracore_shared::eventai::encode_definition(&subject, &rules)
 }
 
 fn quest_event_requirement_insert(quest_entry: u32) -> String {

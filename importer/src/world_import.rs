@@ -2450,7 +2450,10 @@ fn combined_vmangos_plan(source: &impl TableRows, args: &WorldImportArgs) -> Res
     let source = &cached;
     let mut combined = spell::world_plan(source, client)?;
     let catalogues = dbc::catalogue_statements(client, source)?;
-    combined.stamps.push(("dbc", insert_row_count(&catalogues)));
+    combined.stamps.push((
+        lyracore_package_delta::DBC_FAMILY,
+        insert_row_count(&catalogues),
+    ));
     combined.stmts.extend(catalogues);
     let mut manifests = vec![dbc::findings(source)?];
     if let Some(manifest) = combined.world_source_manifest.take() {

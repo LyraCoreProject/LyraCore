@@ -928,7 +928,7 @@ fn publish_repair_ends_legacy_world_sessions_before_buyback_resumes() {
     shard.assert_sql(&format!("INSERT INTO game_character_buyback (id,player_guid,item_entry,stack_count,price,soulbound,random_property_id) VALUES (5090001,{guid},{FIXTURE_BLADE},1,13,false,0)"));
     let synthetic = 0x4090_0000_0000_0000;
     let create = lyracore_protocol::world::encode(
-        lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        &lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(codec::build_item_create_object(&codec::ItemInstanceView {
                 guid: synthetic,
                 entry: FIXTURE_BLADE,

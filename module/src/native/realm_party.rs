@@ -413,8 +413,10 @@ pub fn idc_realm_party_command(
             .into_reducer_error()
         });
     }
+    let request =
+        super::party::PartyRequest::of(&message).ok_or("opcode is not a party or raid request")?;
     let Some((action, reply)) =
-        super::party::command(ctx, guid, class, message).map_err(Rollback::into_reducer_error)?
+        super::party::command(ctx, guid, class, request).map_err(Rollback::into_reducer_error)?
     else {
         return Ok(());
     };
@@ -946,7 +948,7 @@ pub(crate) fn relay_chat(ctx: &ReducerContext, line: &crate::realm_chat::RealmCh
         return;
     };
     let Ok(packet) =
-        lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(message)))
+        lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(message)))
     else {
         return;
     };

@@ -23,11 +23,11 @@ File: `crates/lyracore-shared/src/spell/taxonomy.rs`.
 
 ## 3. Map the raw effect in the importer
 
-File: `importer/src/spell.rs`.
+Files: `importer/src/spell_kind.rs`, `importer/src/spell.rs`.
 
 - Import the new byte name from `lyracore_shared::spell::taxonomy`.
 - Map the raw effect id in `instant_effect_to_kind`, or for an aura the raw aura id in
-  `aura_mod_to_kind`, and name the kind in `kind_name`.
+  `aura_mod_to_kind` (both in `spell_kind.rs`), and name the kind in `kind_name` (`spell.rs`).
 - If the effect needs parameters, set them in `resolve_instant_params` (`resolve_aura_params` for an
   aura). If it needs a header
   attribute (Distract keeps stealth), add it to the spell's entry in
@@ -65,7 +65,7 @@ Only when the effect outlives the cast. Add the table in the owning family's mod
   (`module/src/combat/death.rs`), on a new Engagement (`module/src/combat/engage.rs`) and when a
   creature's lifecycle resets (`module/src/creatures/eventai/edges.rs`). Every creature removal
   calls `despawn_creature_entity` (`module/src/creatures/tick/lifecycle.rs`); add a per-creature
-  row to it and to `creature_teardown_tripwire` in `module/src/tripwires.rs`.
+  row to it and to `creature_teardown_architecture_test` in `module/src/tripwires.rs`.
 - Read it where behaviour changes. Distract holds idle movement in the creature behavior cycle's
   `IdleSink` (`module/src/creatures/cycle/ctx.rs`) and faces the point through
   `module/src/creatures/leg.rs`.

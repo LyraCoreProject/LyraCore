@@ -244,10 +244,7 @@ pub(crate) fn select_targets(
             // Falling back to the explicit target on an empty enemy AoE would damage the caster.
             hits
         }
-        _ => {
-            let _ = ctx;
-            vec![one]
-        }
+        _ => vec![one],
     }
 }
 

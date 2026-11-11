@@ -82,7 +82,7 @@ pub(super) fn item(ctx: &ReducerContext, entry: u32) -> ServerOpcodeMessage {
 }
 
 pub(crate) fn broadcast_item_query(ctx: &ReducerContext, entry: u32) -> Result<(), String> {
-    let packet = lyracore_protocol::world::encode(item(ctx, entry))
+    let packet = lyracore_protocol::world::encode(&item(ctx, entry))
         .map_err(|reason| format!("item {entry} query response: {reason}"))?;
     for connection in ctx.db.game_native_world_connection().iter() {
         if matches!(
@@ -105,7 +105,7 @@ pub(crate) fn broadcast_item_query(ctx: &ReducerContext, entry: u32) -> Result<(
 pub(crate) fn broadcast_creature_query(ctx: &ReducerContext, entry: u32) -> Result<(), String> {
     let response =
         creature(ctx, entry).ok_or_else(|| format!("creature {entry} does not exist"))?;
-    let packet = lyracore_protocol::world::encode(response)
+    let packet = lyracore_protocol::world::encode(&response)
         .map_err(|reason| format!("creature {entry} query response: {reason}"))?;
     for connection in ctx.db.game_native_world_connection().iter() {
         if matches!(

@@ -89,6 +89,34 @@ fn oversized_movement_bodies_are_refused() {
 }
 
 #[test]
+fn every_generated_update_mask_round_trips_through_the_raw_values_decoder() {
+    let mut rng = Rng::new(0x5641_4C55);
+    for _ in 0..CASES {
+        let guid = rng.next_u64();
+        let mut mask = update_mask::UpdateMaskValues::new();
+        let mut expected: std::collections::BTreeMap<u16, u32> = Default::default();
+        for _ in 0..(1 + rng.below(24)) {
+            let mut idx = rng.below(1200) as u16;
+            if idx == update_mask::idx::OBJECT_TYPE {
+                idx += 1;
+            }
+            let value = rng.next_u32();
+            mask.set_u32(idx, value);
+            expected.insert(idx, value);
+        }
+
+        let (opcode, body) = values::build_values_update_raw(guid, &mask);
+        assert_eq!(opcode, 0x00A9, "SMSG_UPDATE_OBJECT");
+
+        let decoded = crate::codec::values_mask::parse_values_updates(&body);
+        assert_eq!(decoded.len(), 1, "body {body:02X?}");
+        assert_eq!(decoded[0].guid, guid);
+        let want: Vec<(u16, u32)> = expected.into_iter().collect();
+        assert_eq!(decoded[0].fields, want, "guid {guid:#X}");
+    }
+}
+
+#[test]
 fn every_truncation_of_an_encoded_mask_decodes_a_subset_and_never_invents_a_field() {
     let mut rng = Rng::new(0x5452_554E);
     for _ in 0..200 {

@@ -28,7 +28,7 @@ enum Route {
 }
 
 fn packet(message: ServerOpcodeMessage) -> Result<Packet, String> {
-    lyracore_protocol::world::encode(message).map_err(|error| error.to_string())
+    lyracore_protocol::world::encode(&message).map_err(|error| error.to_string())
 }
 
 fn failure(spell: u32, reason: CastRefusalReason) -> Packet {

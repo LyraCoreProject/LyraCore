@@ -33,7 +33,7 @@ fn a_new_map_object_beside_a_viewer_uses_create_kind_three() {
             "{name}"
         );
         assert_eq!(
-            crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+            crate::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
                 .unwrap()
                 .body[5],
             3,
@@ -51,7 +51,7 @@ fn a_later_sighting_uses_create_kind_two_for_every_world_type() {
             "{name}"
         );
         assert_eq!(
-            crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+            crate::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
                 .unwrap()
                 .body[5],
             2,
@@ -355,7 +355,7 @@ fn peer_create_uses_existing_object_type_and_unit_movement_flags() {
             Some(3.141_594_f32)
         );
         let packet =
-            crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+            crate::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
                 .unwrap();
         assert_eq!(packet.body[9], 0x70);
     }

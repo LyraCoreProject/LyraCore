@@ -2,11 +2,45 @@ use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
 use lyracore_shared::trade::event_kind;
 
-use crate::helpers::{player_interaction_gate, PlayerInteractionDenied};
 use crate::{
     game_character_contact, game_faction_template, game_item_instance, game_item_template,
     game_world_entity, WorldEntity,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlayerInteractionDenied {
+    ActorDead,
+    NoTarget,
+    TargetNotPlayer,
+    TargetDead,
+    DifferentPartition,
+    OutOfRange,
+}
+
+fn player_interaction_gate(
+    actor: &WorldEntity,
+    target: Option<&WorldEntity>,
+) -> Result<(), PlayerInteractionDenied> {
+    if actor.dead {
+        return Err(PlayerInteractionDenied::ActorDead);
+    }
+    let Some(target) = target else {
+        return Err(PlayerInteractionDenied::NoTarget);
+    };
+    if !target.is_player() {
+        return Err(PlayerInteractionDenied::TargetNotPlayer);
+    }
+    if target.dead {
+        return Err(PlayerInteractionDenied::TargetDead);
+    }
+    if !crate::helpers::in_same_partition(target, actor.map_id, actor.instance_id) {
+        return Err(PlayerInteractionDenied::DifferentPartition);
+    }
+    if crate::helpers::dist_sq(actor, target) > crate::npc_interaction::INTERACTION_RANGE_SQ {
+        return Err(PlayerInteractionDenied::OutOfRange);
+    }
+    Ok(())
+}
 
 #[table(accessor = game_trade_session,
         index(accessor = by_initiator, btree(columns = [initiator_guid])),
@@ -781,6 +815,77 @@ pub(crate) fn sweep_expired(ctx: &ReducerContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn player_at(guid: u64, x: f32) -> WorldEntity {
+        let mut e = crate::helpers::tests::entity(guid, 0, 0, 0, 0);
+        e.type_mask = lyracore_shared::constants::type_mask::PLAYER_BIT;
+        e.x = x;
+        e
+    }
+
+    #[test]
+    fn a_living_player_next_to_a_living_player_passes_and_an_absent_partner_is_no_target() {
+        let actor = player_at(1, 0.0);
+        let partner = player_at(2, 3.0);
+        assert_eq!(player_interaction_gate(&actor, Some(&partner)), Ok(()));
+        assert_eq!(
+            player_interaction_gate(&actor, None),
+            Err(PlayerInteractionDenied::NoTarget)
+        );
+    }
+
+    #[test]
+    fn the_gate_names_the_specific_refusal_and_holds_the_range_boundary_and_precedence() {
+        let actor = player_at(1, 0.0);
+
+        let mut dead_actor = player_at(1, 0.0);
+        dead_actor.dead = true;
+        let partner = player_at(2, 3.0);
+        assert_eq!(
+            player_interaction_gate(&dead_actor, Some(&partner)),
+            Err(PlayerInteractionDenied::ActorDead)
+        );
+        assert_eq!(
+            player_interaction_gate(&dead_actor, None),
+            Err(PlayerInteractionDenied::ActorDead)
+        );
+
+        let mut creature = player_at(2, 3.0);
+        creature.type_mask = 0;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&creature)),
+            Err(PlayerInteractionDenied::TargetNotPlayer)
+        );
+
+        let mut dead_partner = player_at(2, 3.0);
+        dead_partner.dead = true;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&dead_partner)),
+            Err(PlayerInteractionDenied::TargetDead)
+        );
+
+        let mut other_map = player_at(2, 3.0);
+        other_map.map_id = 1;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&other_map)),
+            Err(PlayerInteractionDenied::DifferentPartition)
+        );
+        let mut other_instance = player_at(2, 3.0);
+        other_instance.instance_id = 7;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&other_instance)),
+            Err(PlayerInteractionDenied::DifferentPartition)
+        );
+
+        let at_boundary = player_at(2, crate::npc_interaction::INTERACTION_RANGE_SQ.sqrt());
+        assert_eq!(player_interaction_gate(&actor, Some(&at_boundary)), Ok(()));
+        let mut past_boundary = player_at(2, crate::npc_interaction::INTERACTION_RANGE_SQ.sqrt());
+        past_boundary.z = 1.0;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&past_boundary)),
+            Err(PlayerInteractionDenied::OutOfRange)
+        );
+    }
 
     #[test]
     fn gold_after_refuses_underflow_and_the_u32_cap_exactly() {

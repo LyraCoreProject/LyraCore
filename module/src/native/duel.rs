@@ -12,30 +12,24 @@ use lyracore_protocol::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::Rollback;
+use super::Unhandled;
 use crate::{duel::DuelEvent, gameobject::game_gameobject_template};
-
-pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
-    matches!(
-        message,
-        ClientOpcodeMessage::CMSG_DUEL_ACCEPTED(_) | ClientOpcodeMessage::CMSG_DUEL_CANCELLED(_)
-    )
-}
 
 pub(super) fn receive(
     ctx: &ReducerContext,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    super::actor(ctx, guid)?;
+) -> Result<(), Unhandled> {
     match message {
         ClientOpcodeMessage::CMSG_DUEL_ACCEPTED(request) => {
+            super::actor(ctx, guid)?;
             crate::duel::accept_duel(ctx, guid, request.guid.guid());
         }
         ClientOpcodeMessage::CMSG_DUEL_CANCELLED(request) => {
+            super::actor(ctx, guid)?;
             crate::duel::cancel_duel(ctx, guid, request.guid.guid());
         }
-        _ => return Err("opcode is not a duel request".into()),
+        other => return Err(Unhandled::Declined(other)),
     }
     Ok(())
 }

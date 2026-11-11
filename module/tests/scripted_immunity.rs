@@ -14,15 +14,14 @@ fn spawn_commands_keep_quest_flags_when_clearing_immunity() {
         &format!("UPDATE game_creature_template SET npc_flags = 128, unit_flags = 256 WHERE entry = {FLIGHT_MASTER_ENTRY}"),
     );
     let rules = "1,spawn,100,4294967295,once,all,ordinary,npc-flags:2:add+unit-flags:clear:immune-to-players+faction:35";
-    let mut hash = blake3::Hasher::new();
-    hash.update(b"lyracore-eventai-definition-v1");
-    hash.update(format!("entry:{FLIGHT_MASTER_ENTRY}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(hash.finalize().as_bytes()[..8].try_into().unwrap());
     shard.assert_call(
         "import_creature_ai_definitions",
         &[
-            &serde_json::to_string(&format!("entry:{FLIGHT_MASTER_ENTRY}@{revision}@{rules}"))
-                .unwrap(),
+            &serde_json::to_string(&lyracore_shared::eventai::encode_definition(
+                &format!("entry:{FLIGHT_MASTER_ENTRY}"),
+                rules,
+            ))
+            .unwrap(),
         ],
     );
     let subscription = subscribe_with_fence(&shard, &["SELECT * FROM game_world_entity"]);
