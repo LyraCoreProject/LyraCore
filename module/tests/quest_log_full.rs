@@ -40,6 +40,10 @@ fn setup(name: &str) -> (Standalone, String) {
         ))
         .remove(0)["guid"]
         .clone();
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET npc_flags = {}, faction_template = 35 WHERE guid = {giver}",
+        lyracore_shared::constants::npc_flags::QUESTGIVER
+    ));
     for offset in 0..=LOG_SIZE + 1 {
         let entry = FIRST_QUEST + offset;
         let repeatable = entry == REPEATABLE;

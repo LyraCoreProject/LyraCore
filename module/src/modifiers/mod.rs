@@ -17,7 +17,9 @@ pub(crate) use speed::{
     effective_move_speed, holds_in_place, move_speed_with_pct, moves_run_speed, run_speed,
     speed_bonus, swim_speed,
 };
-pub(crate) use stats::{effective_stat, moves_sheet, moves_vitals, SHEET_STATS, VITALS_STATS};
+pub(crate) use stats::{
+    effective_stat, moves_sheet, moves_vitals, sheet_stat_bonus, SHEET_STATS, VITALS_STATS,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct AuraAmount {

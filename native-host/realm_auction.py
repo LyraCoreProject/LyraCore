@@ -221,7 +221,12 @@ def check(host, worlds, character, received):
     host.wait_until(lambda: host.rows(f'SELECT operation FROM game_auction_transaction WHERE guid = {buyer}', west), 'bid was not retained pending its answer')
     host.wait_until(lambda: not host.rows(f'SELECT id FROM game_auction WHERE id = {pending}'), 'Realm did not commit the buyout')
     assert money(west, buyer) == 8600
-    host.call('debug_teleport', [buyer, 0, 0, 0, 0, 0], database=west)
+    try:
+        host.call('debug_teleport', [buyer, 0, 0, 0, 0, 0], database=west)
+    except RuntimeError as refusal:
+        assert 'transaction is settling' in str(refusal), str(refusal)
+    else:
+        raise AssertionError('teleport was accepted while an auction transaction was settling')
     assert host.rows(f'SELECT map_id FROM game_world_entity WHERE guid = {buyer}', west) == [[1]]
     host.call('debug_set_money', [buyer, 4294967295], database=west)
     host.call('operator_add_peer_shard', [host.identity(), 'realm'], database=west)

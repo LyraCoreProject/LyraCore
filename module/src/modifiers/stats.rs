@@ -56,8 +56,11 @@ fn moves_stat(kind: u8, parameter: i32, stat: u8) -> bool {
     matches!(kind, A_MOD_STAT | A_MOD_STAT_PCT) && names_stat(parameter, stat)
 }
 
-// vmangos `Unit::GetTotalStatValue`: percent stat auras scale the base, gear and flat aura sum.
-fn stat_value(base: u32, gear: i32, auras: impl IntoIterator<Item = AuraAmount>, stat: u8) -> u32 {
+fn flat_and_percent(
+    gear: i32,
+    auras: impl IntoIterator<Item = AuraAmount>,
+    stat: u8,
+) -> (i128, i128) {
     let (mut flat, mut pct) = (i128::from(gear), 0i128);
     for aura in auras {
         if !names_stat(aura.parameter, stat) {
@@ -69,7 +72,28 @@ fn stat_value(base: u32, gear: i32, auras: impl IntoIterator<Item = AuraAmount>,
             _ => {}
         }
     }
+    (flat, pct)
+}
+
+// vmangos `Unit::GetTotalStatValue`: percent stat auras scale the base, gear and flat aura sum.
+fn stat_value(base: u32, gear: i32, auras: impl IntoIterator<Item = AuraAmount>, stat: u8) -> u32 {
+    let (flat, pct) = flat_and_percent(gear, auras, stat);
     ((i128::from(base) + flat) * (100 + pct) / 100).clamp(0, i128::from(u32::MAX)) as u32
+}
+
+// vmangos `ApplyStatPercentBuffMod`: the sheet's bonus field scales the flat bonus, not the base.
+fn sheet_bonus(gear: i32, auras: impl IntoIterator<Item = AuraAmount>, stat: u8) -> i32 {
+    let (flat, pct) = flat_and_percent(gear, auras, stat);
+    (flat * (100 + pct) / 100).clamp(i128::from(i32::MIN), i128::from(i32::MAX)) as i32
+}
+
+/// The gear and flat aura bonus the character sheet shows beside a stat.
+pub(crate) fn sheet_stat_bonus(ctx: &ReducerContext, unit: &WorldEntity, stat: u8) -> i32 {
+    sheet_bonus(
+        crate::items::equipped_stat_bonus(ctx, unit.guid, gear_stat(stat)),
+        aura_amounts(ctx, unit.guid),
+        stat,
+    )
 }
 
 pub(crate) fn moves_vitals(kind: u8, parameter: i32) -> bool {

@@ -1431,8 +1431,8 @@ fn assert_taxi_resumes_after_world_entry(packets: &[wire_client::decode::Packet]
     assert_eq!(
         flags,
         vec![
-            (Field::Unsigned(2), controlled | unit_flags::IN_COMBAT),
-            (Field::Unsigned(0), flying | unit_flags::IN_COMBAT)
+            (Field::Unsigned(2), controlled),
+            (Field::Unsigned(0), flying)
         ]
     );
     let sequence: Vec<_> = packets
