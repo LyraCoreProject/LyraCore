@@ -2,7 +2,7 @@ use lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
 use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
-use crate::combat::is_avoided;
+use crate::combat::AttackOutcome;
 use crate::geometry::{distance_3d, is_behind, is_facing};
 use crate::{game_creature_template, game_world_entity, WorldEntity};
 
@@ -293,7 +293,7 @@ fn run_spell_effects(
     let mut total_absorbed: u32 = 0;
     let mut total_energized: u32 = 0;
     let mut energized_power_type: u8 = 0;
-    let mut primary_avoided = crate::combat::HIT_NORMAL;
+    let mut primary_avoided = AttackOutcome::Normal;
     let mut any_crit = false;
     let mut item_grants = 0;
     let mut item_refused = false;
@@ -312,7 +312,8 @@ fn run_spell_effects(
     let rolls_hit = weapon_strike
         || effects.iter().any(|e| e.kind == E_DAMAGE)
         || (hdr.negative() && hdr.cast_flags & (CAST_FLAG_BINARY | CAST_FLAG_MAGIC_HIT) != 0);
-    let mut target_rolls: std::collections::HashMap<u64, u8> = std::collections::HashMap::new();
+    let mut target_rolls: std::collections::HashMap<u64, AttackOutcome> =
+        std::collections::HashMap::new();
     // vmangos rolls the main hand per target, landed or avoided. LyraCore skips a Chance on Hit cast.
     let rolls_weapon =
         hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0 && !matches!(origin, CastOrigin::ChanceOnHit);
@@ -341,12 +342,12 @@ fn run_spell_effects(
                     .entry(t)
                     .or_insert_with(|| hit_roll(ctx, caster_guid, level, t, table, hdr))
             } else {
-                crate::combat::HIT_NORMAL
+                AttackOutcome::Normal
             };
             if rolls_weapon && t != caster_guid {
                 remember_hit_target(&mut weapon_targets, &mut seen_weapon_targets, t);
             }
-            if is_avoided(roll) {
+            if roll.is_avoided() {
                 if t == target_guid {
                     primary_avoided = roll;
                 }
@@ -396,7 +397,7 @@ fn run_spell_effects(
                     points,
                     dest,
                     triggered,
-                    roll == crate::combat::HIT_CRIT,
+                    roll == AttackOutcome::Crit,
                     origin.item_target(),
                 )
             };
@@ -420,7 +421,7 @@ fn run_spell_effects(
         }
     }
     // Spend after every effect has read the points; vmangos keeps them when a finisher misses.
-    if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0 && !is_avoided(primary_avoided) {
+    if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0 && !primary_avoided.is_avoided() {
         crate::combo::spend_combo(ctx, caster_guid);
     }
     if !item_refused {
@@ -496,12 +497,12 @@ fn hit_roll(
     target_guid: u64,
     table: HitTable,
     spell: &Spell,
-) -> u8 {
+) -> AttackOutcome {
     let HitTable::Weapon { ranged } = table else {
         return if super::targeting::spell_misses(ctx, level, target_guid, spell) {
-            crate::combat::HIT_MISS
+            AttackOutcome::Miss
         } else {
-            crate::combat::HIT_NORMAL
+            AttackOutcome::Normal
         };
     };
     let entities = ctx.db.game_world_entity();
@@ -510,32 +511,58 @@ fn hit_roll(
         entities.guid().find(target_guid),
     ) {
         (Some(caster), Some(target)) => {
-            let roll = crate::combat::roll_strike_outcome(ctx, &caster, &target, ranged);
+            let attack_type = if ranged {
+                crate::combat::AttackType::Ranged
+            } else {
+                crate::combat::AttackType::Melee
+            };
+            let (roll, _) = crate::combat::roll_attack(
+                ctx,
+                &caster,
+                &target,
+                attack_type,
+                Some(crate::combat::DeliveredSpell::cast(spell)),
+            );
             arm_avoidance_reacts(ctx, caster_guid, target_guid, roll);
             roll
         }
-        _ => crate::combat::HIT_NORMAL,
+        _ => AttackOutcome::Normal,
     }
 }
 
-fn arm_avoidance_reacts(ctx: &ReducerContext, caster_guid: u64, target_guid: u64, roll: u8) {
-    use crate::combat::{arm_react, ReactKind, HIT_DODGE, HIT_PARRY};
-    if roll == HIT_DODGE {
-        arm_react(ctx, caster_guid, ReactKind::Overpower);
-    }
-    if matches!(roll, HIT_DODGE | HIT_PARRY) {
-        arm_react(ctx, target_guid, ReactKind::Revenge);
-    }
-}
-
-fn cast_miss(roll: u8, weapon_strike: bool, magic_hit: bool) -> u8 {
-    use crate::combat::{HIT_DODGE, HIT_MISS, HIT_PARRY};
+fn arm_avoidance_reacts(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    target_guid: u64,
+    roll: AttackOutcome,
+) {
+    use crate::combat::{arm_react, ReactKind};
     match roll {
-        HIT_DODGE => crate::spell::CAST_MISS_DODGE,
-        HIT_PARRY => crate::spell::CAST_MISS_PARRY,
-        HIT_MISS if weapon_strike || !magic_hit => crate::spell::CAST_MISS_MISS,
-        HIT_MISS => crate::spell::CAST_MISS_RESIST,
-        _ => crate::spell::CAST_MISS_NONE,
+        AttackOutcome::Dodge => {
+            arm_react(ctx, caster_guid, ReactKind::Overpower);
+            arm_react(ctx, target_guid, ReactKind::Revenge);
+        }
+        AttackOutcome::Parry => arm_react(ctx, target_guid, ReactKind::Revenge),
+        AttackOutcome::Normal
+        | AttackOutcome::Crit
+        | AttackOutcome::Miss
+        | AttackOutcome::Glancing
+        | AttackOutcome::Crushing
+        | AttackOutcome::Block => {}
+    }
+}
+
+fn cast_miss(roll: AttackOutcome, weapon_strike: bool, magic_hit: bool) -> u8 {
+    match roll {
+        AttackOutcome::Dodge => crate::spell::CAST_MISS_DODGE,
+        AttackOutcome::Parry => crate::spell::CAST_MISS_PARRY,
+        AttackOutcome::Miss if weapon_strike || !magic_hit => crate::spell::CAST_MISS_MISS,
+        AttackOutcome::Miss => crate::spell::CAST_MISS_RESIST,
+        AttackOutcome::Normal
+        | AttackOutcome::Crit
+        | AttackOutcome::Glancing
+        | AttackOutcome::Crushing
+        | AttackOutcome::Block => crate::spell::CAST_MISS_NONE,
     }
 }
 
@@ -1959,38 +1986,36 @@ mod cast_miss_tests {
 
     #[test]
     fn a_failed_hit_roll_misses_a_physical_spell_and_resists_a_magic_one() {
-        use crate::combat::{HIT_CRIT, HIT_MISS, HIT_NORMAL};
         assert_eq!(
-            cast_miss(HIT_NORMAL, false, true),
+            cast_miss(AttackOutcome::Normal, false, true),
             crate::spell::CAST_MISS_NONE
         );
         assert_eq!(
-            cast_miss(HIT_CRIT, true, false),
+            cast_miss(AttackOutcome::Crit, true, false),
             crate::spell::CAST_MISS_NONE
         );
         assert_eq!(
-            cast_miss(HIT_MISS, false, false),
+            cast_miss(AttackOutcome::Miss, false, false),
             crate::spell::CAST_MISS_MISS
         );
         assert_eq!(
-            cast_miss(HIT_MISS, false, true),
+            cast_miss(AttackOutcome::Miss, false, true),
             crate::spell::CAST_MISS_RESIST
         );
     }
 
     #[test]
     fn a_weapon_spell_reports_its_physical_avoidance_whatever_its_school() {
-        use crate::combat::{HIT_DODGE, HIT_MISS, HIT_PARRY};
         assert_eq!(
-            cast_miss(HIT_MISS, true, true),
+            cast_miss(AttackOutcome::Miss, true, true),
             crate::spell::CAST_MISS_MISS
         );
         assert_eq!(
-            cast_miss(HIT_DODGE, true, false),
+            cast_miss(AttackOutcome::Dodge, true, false),
             crate::spell::CAST_MISS_DODGE
         );
         assert_eq!(
-            cast_miss(HIT_PARRY, true, false),
+            cast_miss(AttackOutcome::Parry, true, false),
             crate::spell::CAST_MISS_PARRY
         );
     }

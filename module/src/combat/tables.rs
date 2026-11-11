@@ -22,22 +22,11 @@ pub(crate) const CREATURE_MELEE_MIN: u32 = 1;
 pub(crate) const CREATURE_MELEE_MAX: u32 = 3;
 pub(crate) const CRIT_MULT: u32 = 2;
 
-pub(crate) const BASE_MISS_BP: u32 = 500;
-pub(crate) const DUAL_WIELD_MISS_BP: u32 = 2400;
-const MAX_MISS_BP: u32 = 6000;
-const PARRY_BP: u32 = 500;
-const PARRY_BP_PER_SKILL: u32 = 10;
-const MAX_PARRY_BP: u32 = 3000;
-const BLOCK_BP: u32 = 500;
-const BLOCK_BP_PER_SKILL: u32 = 10;
-const MAX_BLOCK_BP: u32 = 3000;
+pub(super) const PARRY_BP: u32 = 500;
+pub(super) const BLOCK_BP: u32 = 500;
 const BASE_DODGE_BP: u32 = 500;
 const DODGE_BP_PER_AGILITY: u32 = 5;
 const MAX_DODGE_BP: u32 = 3000;
-#[cfg(test)]
-const SKILL_BP_PER_LEVEL: u32 = 5;
-const GLANCING_BP_PER_LEVEL: u32 = 1000;
-const MAX_GLANCING_BP: u32 = 4000;
 pub(crate) const GLANCING_DAMAGE_PCT: u32 = 70;
 
 const CRUSH_MIN_LEVEL_DIFF: u32 = 3;
@@ -49,42 +38,8 @@ const UNARMED_BASE_MIN: u32 = 1;
 const UNARMED_BASE_MAX: u32 = 3;
 const AP_PER_DPS: u32 = 14;
 
-pub(crate) const HIT_NORMAL: u8 = 0;
-pub(crate) const HIT_CRIT: u8 = 1;
-pub(crate) const HIT_MISS: u8 = 2;
-pub(crate) const HIT_DODGE: u8 = 3;
-pub(crate) const HIT_PARRY: u8 = 4;
-pub(crate) const HIT_GLANCING: u8 = 5;
-pub(crate) const HIT_CRUSHING: u8 = 6;
-pub(crate) const HIT_BLOCK: u8 = 7;
-
-pub(crate) fn is_avoided(hit_info: u8) -> bool {
-    matches!(hit_info, HIT_MISS | HIT_DODGE | HIT_PARRY)
-}
-
-pub(crate) fn miss_chance_bp(skill_diff: u32) -> u32 {
-    let raw = if skill_diff > 10 {
-        700 + (skill_diff - 10) * 40
-    } else {
-        BASE_MISS_BP + skill_diff * 10
-    };
-    raw.min(MAX_MISS_BP)
-}
-
-pub(crate) fn dodge_chance_bp(agility: u32, skill_diff: u32) -> u32 {
-    (BASE_DODGE_BP + agility * DODGE_BP_PER_AGILITY + skill_diff * 10).min(MAX_DODGE_BP)
-}
-
-pub(crate) fn parry_chance_bp(skill_diff: u32) -> u32 {
-    (PARRY_BP + skill_diff * PARRY_BP_PER_SKILL).min(MAX_PARRY_BP)
-}
-
-pub(crate) fn block_chance_bp(skill_diff: u32) -> u32 {
-    (BLOCK_BP + skill_diff * BLOCK_BP_PER_SKILL).min(MAX_BLOCK_BP)
-}
-
-pub(crate) fn glancing_chance_bp(attacker_level: u32, target_level: u32) -> u32 {
-    (target_level.saturating_sub(attacker_level) * GLANCING_BP_PER_LEVEL).min(MAX_GLANCING_BP)
+pub(crate) fn dodge_chance_bp(agility: u32) -> u32 {
+    (BASE_DODGE_BP + agility * DODGE_BP_PER_AGILITY).min(MAX_DODGE_BP)
 }
 
 pub(crate) fn crushing_chance_bp(attacker_level: u32, target_level: u32) -> u32 {
@@ -93,6 +48,32 @@ pub(crate) fn crushing_chance_bp(attacker_level: u32, target_level: u32) -> u32 
         return 0;
     }
     ((diff - CRUSH_MIN_LEVEL_DIFF + 1) * CRUSH_BP_PER_LEVEL).min(MAX_CRUSH_BP)
+}
+
+pub(super) fn sheet_crit_bp(
+    agility: u32,
+    class: u8,
+    level: u32,
+    rate: Option<f32>,
+    weapon: i32,
+    maximum: i32,
+    bonus: i32,
+) -> u32 {
+    let Some(rate) = rate.filter(|rate| rate.is_finite() && *rate > 0.0) else {
+        let agility_bp = i64::from(agility) * 100 / (i64::from(level) + 4);
+        return (1000 + agility_bp + i64::from(bonus)).clamp(0, 10_000) as u32;
+    };
+    let offset = match class {
+        2 => 70,
+        5 => 300,
+        7 => 170,
+        8 => 320,
+        9 => 200,
+        11 => 90,
+        _ => 0,
+    };
+    let agility = agility as f32 / rate * 100.0;
+    (agility + (offset + bonus + (weapon - maximum) * 4) as f32).clamp(0.0, 10_000.0) as u32
 }
 
 pub(crate) fn melee_attack_power(strength: u32, level: u32) -> u32 {
@@ -163,10 +144,6 @@ pub(crate) fn apply_offhand_penalty(min: u32, max: u32) -> (u32, u32) {
     ((min / 2).max(1), (max / 2).max(1))
 }
 
-pub(crate) fn miss_bp_with_bonus(miss: u32, bonus: i32) -> u32 {
-    (miss as i32 - bonus).max(0) as u32
-}
-
 pub(crate) fn swing_time_with_haste(base_ms: u32, haste_pct: i32) -> u32 {
     let denom = (100 + haste_pct).max(1) as u32;
     base_ms.saturating_mul(100) / denom
@@ -225,48 +202,6 @@ pub(crate) fn swing_profile(
         final_min: armor_mitigated(base_min, mitigation_pct),
         final_max: armor_mitigated(base_max, mitigation_pct),
     }
-}
-
-pub(crate) struct AttackTable {
-    pub(crate) miss: u32,
-    pub(crate) dodge: u32,
-    pub(crate) parry: u32,
-    pub(crate) glancing: u32,
-    pub(crate) block: u32,
-    pub(crate) crit: u32,
-    pub(crate) crushing: u32,
-}
-
-pub(crate) fn attack_outcome(roll: u32, t: &AttackTable) -> u8 {
-    let mut floor = t.miss;
-    if roll < floor {
-        return HIT_MISS;
-    }
-    floor += t.dodge;
-    if roll < floor {
-        return HIT_DODGE;
-    }
-    floor += t.parry;
-    if roll < floor {
-        return HIT_PARRY;
-    }
-    floor += t.glancing;
-    if roll < floor {
-        return HIT_GLANCING;
-    }
-    floor += t.block;
-    if roll < floor {
-        return HIT_BLOCK;
-    }
-    floor += t.crit;
-    if roll < floor {
-        return HIT_CRIT;
-    }
-    floor += t.crushing;
-    if roll < floor {
-        return HIT_CRUSHING;
-    }
-    HIT_NORMAL
 }
 
 pub(crate) fn is_rage_user(e: &WorldEntity) -> bool {
@@ -500,10 +435,6 @@ pub(crate) fn regen_entity_health_in_combat(
 mod tests {
     use super::*;
 
-    fn sd(attacker_level: u32, target_level: u32) -> u32 {
-        target_level.saturating_sub(attacker_level) * SKILL_BP_PER_LEVEL
-    }
-
     #[test]
     fn melee_leeway_covers_the_post_flee_tick_gap_for_a_pinned_chaser() {
         use crate::creatures::MOVE_TICK_SECS;
@@ -668,22 +599,29 @@ mod tests {
     }
 
     #[test]
-    fn dodge_scales_with_agility_level_and_caps() {
-        assert_eq!(dodge_chance_bp(0, sd(10, 10)), 500);
-        assert_eq!(dodge_chance_bp(20, sd(10, 10)), 600);
-        assert!(dodge_chance_bp(100, sd(10, 10)) > dodge_chance_bp(20, sd(10, 10)));
-        assert!(dodge_chance_bp(0, sd(10, 13)) > dodge_chance_bp(0, sd(10, 10)));
-        assert_eq!(dodge_chance_bp(0, sd(10, 5)), 500);
-        assert_eq!(dodge_chance_bp(1_000_000, sd(10, 10)), 3000);
+    fn crit_uses_class_rates_offsets_and_actual_weapon_skill() {
+        assert_eq!(sheet_crit_bp(100, 1, 60, Some(20.0), 300, 300, 0), 500);
+        assert_eq!(sheet_crit_bp(20, 1, 1, Some(4.0), 5, 5, 0), 500);
+        assert_eq!(sheet_crit_bp(100, 4, 60, Some(28.9855), 300, 300, 0), 345);
+        assert_eq!(sheet_crit_bp(100, 8, 60, Some(19.4553), 300, 300, 0), 833);
+        assert_eq!(sheet_crit_bp(100, 1, 60, Some(20.0), 295, 300, 0), 480);
+        assert_eq!(sheet_crit_bp(100, 1, 60, Some(20.0), 305, 300, 0), 520);
     }
 
     #[test]
-    fn parry_scales_with_defense_skill_not_agility_and_caps() {
-        assert_eq!(parry_chance_bp(sd(10, 10)), 500);
-        assert_eq!(parry_chance_bp(sd(10, 5)), 500);
-        assert_eq!(parry_chance_bp(sd(10, 11)), 550);
-        assert!(parry_chance_bp(sd(10, 13)) > parry_chance_bp(sd(10, 11)));
-        assert_eq!(parry_chance_bp(sd(1, 1_000_000)), 3000);
+    fn missing_crit_rate_preserves_the_previous_formula() {
+        assert_eq!(sheet_crit_bp(100, 8, 60, None, 300, 300, 0), 1156);
+        assert_eq!(sheet_crit_bp(100, 8, 60, None, 295, 300, 200), 1356);
+        assert_eq!(sheet_crit_bp(20, 4, 1, None, 5, 5, 0), 1400);
+        assert_eq!(sheet_crit_bp(100, 8, 60, None, 300, 300, -1500), 0);
+        assert_eq!(sheet_crit_bp(100, 8, 60, None, 300, 300, 10_000), 10_000);
+    }
+
+    #[test]
+    fn dodge_scales_with_agility_and_caps() {
+        assert_eq!(dodge_chance_bp(0), 500);
+        assert_eq!(dodge_chance_bp(20), 600);
+        assert_eq!(dodge_chance_bp(1_000_000), 3000);
     }
 
     #[test]
@@ -716,70 +654,7 @@ mod tests {
     }
 
     #[test]
-    fn miss_chance_follows_the_level_hit_curve() {
-        assert_eq!(miss_chance_bp(sd(10, 10)), 500);
-        assert_eq!(miss_chance_bp(sd(10, 5)), 500);
-        assert_eq!(miss_chance_bp(sd(10, 12)), 600);
-        assert_eq!(miss_chance_bp(sd(10, 13)), 900);
-        assert!(miss_chance_bp(sd(10, 14)) > miss_chance_bp(sd(10, 13)));
-        assert_eq!(miss_chance_bp(sd(1, 60)), 6000);
-    }
-
-    #[test]
-    fn hit_bonus_reduces_miss_chance() {
-        assert_eq!(miss_bp_with_bonus(600, 0), 600);
-        assert_eq!(miss_bp_with_bonus(600, 500), 100);
-        assert_eq!(miss_bp_with_bonus(500, 1500), 0);
-        assert_eq!(miss_bp_with_bonus(0, 100), 0);
-    }
-
-    #[test]
-    fn glancing_only_vs_higher_level_and_caps() {
-        assert_eq!(glancing_chance_bp(10, 10), 0);
-        assert_eq!(glancing_chance_bp(10, 5), 0);
-        assert_eq!(glancing_chance_bp(10, 11), 1000);
-        assert_eq!(glancing_chance_bp(10, 13), 3000);
-        assert_eq!(glancing_chance_bp(10, 60), 4000);
-    }
-
-    #[test]
-    fn attack_table_walks_miss_dodge_parry_glancing_crit_hit_in_order() {
-        let t = AttackTable {
-            miss: miss_chance_bp(sd(10, 13)),
-            dodge: dodge_chance_bp(20, sd(10, 13)),
-            parry: PARRY_BP,
-            glancing: glancing_chance_bp(10, 13),
-            block: 0,
-            crit: 1000,
-            crushing: 0,
-        };
-        let (m, d, p, g, c) = (t.miss, t.dodge, t.parry, t.glancing, t.crit);
-        assert_eq!(attack_outcome(0, &t), HIT_MISS);
-        assert_eq!(attack_outcome(m - 1, &t), HIT_MISS);
-        assert_eq!(attack_outcome(m, &t), HIT_DODGE);
-        assert_eq!(attack_outcome(m + d - 1, &t), HIT_DODGE);
-        assert_eq!(attack_outcome(m + d, &t), HIT_PARRY);
-        assert_eq!(attack_outcome(m + d + p, &t), HIT_GLANCING);
-        assert_eq!(attack_outcome(m + d + p + g - 1, &t), HIT_GLANCING);
-        assert_eq!(attack_outcome(m + d + p + g, &t), HIT_CRIT);
-        assert_eq!(attack_outcome(m + d + p + g + c, &t), HIT_NORMAL);
-        assert_eq!(attack_outcome(9_999, &t), HIT_NORMAL);
-
-        let eq = AttackTable {
-            miss: miss_chance_bp(sd(10, 10)),
-            dodge: dodge_chance_bp(0, sd(10, 10)),
-            parry: PARRY_BP,
-            glancing: glancing_chance_bp(10, 10),
-            block: 0,
-            crit: 1000,
-            crushing: 0,
-        };
-        assert_eq!(eq.glancing, 0);
-        assert_eq!(attack_outcome(eq.miss + eq.dodge + eq.parry, &eq), HIT_CRIT);
-    }
-
-    #[test]
-    fn crushing_blows_arm_only_for_higher_level_creatures_and_amplify() {
+    fn crushing_blows_arm_only_three_levels_above_and_cap() {
         assert_eq!(crushing_chance_bp(10, 10), 0);
         assert_eq!(crushing_chance_bp(10, 13), 0);
         assert_eq!(crushing_chance_bp(12, 10), 0);
@@ -787,66 +662,6 @@ mod tests {
         assert_eq!(crushing_chance_bp(14, 10), 2000);
         assert!(crushing_chance_bp(15, 10) > crushing_chance_bp(14, 10));
         assert_eq!(crushing_chance_bp(60, 1), 5000);
-
-        let t = AttackTable {
-            miss: 0,
-            dodge: 0,
-            parry: 0,
-            glancing: 0,
-            block: 0,
-            crit: 1000,
-            crushing: 2000,
-        };
-        assert_eq!(attack_outcome(999, &t), HIT_CRIT);
-        assert_eq!(attack_outcome(1000, &t), HIT_CRUSHING);
-        assert_eq!(attack_outcome(2999, &t), HIT_CRUSHING);
-        assert_eq!(attack_outcome(3000, &t), HIT_NORMAL);
-    }
-
-    #[test]
-    fn block_chance_mirrors_parry_structure_and_caps() {
-        assert_eq!(block_chance_bp(sd(10, 10)), 500);
-        assert_eq!(block_chance_bp(sd(13, 10)), 500);
-        assert_eq!(block_chance_bp(sd(10, 11)), 550);
-        assert_eq!(block_chance_bp(sd(10, 13)), 650);
-        assert!(block_chance_bp(sd(10, 14)) > block_chance_bp(sd(10, 13)));
-        assert_eq!(block_chance_bp(sd(1, 1_000_000)), 3000);
-        assert_eq!(block_chance_bp(sd(10, 13)), parry_chance_bp(sd(10, 13)));
-    }
-
-    #[test]
-    fn attack_table_inserts_block_after_glancing_before_crit() {
-        let t = AttackTable {
-            miss: 900,
-            dodge: 500,
-            parry: 500,
-            glancing: 3000,
-            block: 600,
-            crit: 1000,
-            crushing: 0,
-        };
-        let pre = t.miss + t.dodge + t.parry + t.glancing;
-        assert_eq!(attack_outcome(pre - 1, &t), HIT_GLANCING);
-        assert_eq!(attack_outcome(pre, &t), HIT_BLOCK);
-        assert_eq!(attack_outcome(pre + t.block - 1, &t), HIT_BLOCK);
-        assert_eq!(attack_outcome(pre + t.block, &t), HIT_CRIT);
-        assert_eq!(attack_outcome(pre + t.block + t.crit, &t), HIT_NORMAL);
-    }
-
-    #[test]
-    fn block_zero_band_is_baseline_identical() {
-        let t = AttackTable {
-            miss: 900,
-            dodge: 500,
-            parry: 500,
-            glancing: 3000,
-            block: 0,
-            crit: 1000,
-            crushing: 0,
-        };
-        let after_glancing = t.miss + t.dodge + t.parry + t.glancing;
-        assert_eq!(attack_outcome(after_glancing, &t), HIT_CRIT);
-        assert_eq!(attack_outcome(after_glancing + t.crit, &t), HIT_NORMAL);
     }
 
     #[allow(clippy::too_many_arguments)]

@@ -4,6 +4,12 @@ use crate::spell::SpellCastEventKind;
 use crate::{game_spell, game_spell_effect, game_world_entity, WorldEntity};
 use crate::{Spell, SpellCastEvent, SpellEffect};
 
+#[derive(Clone, Copy)]
+pub(crate) struct QueuedStrike {
+    pub(crate) damage: QueuedStrikeDamage,
+    pub(crate) spell: super::DeliveredSpell,
+}
+
 #[derive(Clone, Copy, Default)]
 pub(crate) struct QueuedStrikeDamage {
     pub(crate) bonus: u32,

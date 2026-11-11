@@ -158,7 +158,7 @@ fn resolve_offhand_swing(
         ctx,
         CombatEvent {
             damage: damage.amount(),
-            hit_info,
+            hit_info: hit_info.wire(),
             killing_blow,
             blocked_amount: blocked,
             ..CombatEvent::signal_at(ctx, attacker, target_guid)
@@ -171,7 +171,7 @@ fn resolve_offhand_swing(
             ctx,
             attacker_guid,
             target_guid,
-            Hit::weapon(HitSource::OffHand, hit_info == HIT_CRIT),
+            Hit::weapon(HitSource::OffHand, hit_info == AttackOutcome::Crit),
         )
         .combat_ended()
     {
@@ -535,8 +535,16 @@ fn record_swing_error(
     }
 }
 
-fn arms_revenge(hit_info: u8, blocked: u32) -> bool {
-    matches!(hit_info, HIT_DODGE | HIT_PARRY | HIT_BLOCK) || blocked > 0
+fn arms_revenge(hit_info: AttackOutcome, blocked: u32) -> bool {
+    let avoided = match hit_info {
+        AttackOutcome::Dodge | AttackOutcome::Parry | AttackOutcome::Block => true,
+        AttackOutcome::Normal
+        | AttackOutcome::Crit
+        | AttackOutcome::Miss
+        | AttackOutcome::Glancing
+        | AttackOutcome::Crushing => false,
+    };
+    avoided || blocked > 0
 }
 
 // vmangos AttackerStateUpdate; an extra attack never fires the queued strike.
@@ -555,17 +563,18 @@ fn fire_melee_swing(
     let queued_header = ctx.db.game_spell().spell_id().find(queued_spell);
     let swing_is_spell = queued_spell != 0
         && super::queued_strike::charge(ctx, attacker, queued_spell, queued_header.as_ref());
-    let strike = swing_is_spell.then(|| {
-        queued_header
+    let strike = swing_is_spell.then(|| super::queued_strike::QueuedStrike {
+        damage: queued_header
             .as_ref()
             .map_or_else(Default::default, |strike| {
                 super::queued_strike::damage(ctx, attacker, strike)
-            })
+            }),
+        spell: DeliveredSpell::queued_strike(queued_header.as_ref()),
     });
 
     let (mut rolled, hit_info, blocked) = roll_swing(ctx, attacker, target, strike);
 
-    if hit_info == HIT_DODGE {
+    if hit_info == AttackOutcome::Dodge {
         arm_react(ctx, attacker_guid, ReactKind::Overpower);
     }
 
@@ -595,7 +604,7 @@ fn fire_melee_swing(
         ctx,
         CombatEvent {
             damage: projected_swing,
-            hit_info,
+            hit_info: hit_info.wire(),
             killing_blow: is_killing_blow(ctx, attacker_guid, target, damage.amount()),
             blocked_amount: blocked,
             spell_swing: swing_is_spell,
@@ -611,8 +620,8 @@ fn fire_melee_swing(
                 target_guid,
                 is_completion: true,
                 damage: if queued_fired { projected_swing } else { 0 },
-                is_crit: hit_info == HIT_CRIT,
-                swing_hit_info: hit_info,
+                is_crit: hit_info == AttackOutcome::Crit,
+                swing_hit_info: hit_info.wire(),
                 cooldown_ms,
                 ..SpellCastEvent::signal_at(ctx, attacker, queued_spell, SpellCastEventKind::Go)
             },
@@ -638,9 +647,13 @@ fn fire_melee_swing(
             attacker_guid,
             target_guid,
             if swing_is_spell {
-                Hit::spell(HitSource::MainHand, queued_spell, hit_info == HIT_CRIT)
+                Hit::spell(
+                    HitSource::MainHand,
+                    queued_spell,
+                    hit_info == AttackOutcome::Crit,
+                )
             } else {
-                Hit::weapon(HitSource::MainHand, hit_info == HIT_CRIT)
+                Hit::weapon(HitSource::MainHand, hit_info == AttackOutcome::Crit)
             },
         )
         .combat_ended();
@@ -694,8 +707,8 @@ fn fire_melee_swing(
 }
 
 // vmangos HITINFO_AFFECTS_VICTIM: the swing connected and either dealt damage or was blocked.
-fn affects_victim(hit_info: u8, dealt: u32, blocked: u32) -> bool {
-    !is_avoided(hit_info) && (dealt > 0 || blocked > 0)
+fn affects_victim(hit_info: AttackOutcome, dealt: u32, blocked: u32) -> bool {
+    !hit_info.is_avoided() && (dealt > 0 || blocked > 0)
 }
 
 fn split_damage_projection(final_damage: u32, seal_portion: u32) -> (u32, u32) {
@@ -773,7 +786,7 @@ fn fire_ranged_shot(
         ctx,
         CombatEvent {
             damage: 0,
-            hit_info,
+            hit_info: hit_info.wire(),
             ranged_spell_id,
             ammo_display_id,
             impact_delay_ms: travel_ms,
@@ -786,7 +799,7 @@ fn fire_ranged_shot(
         target_guid,
         damage,
         ranged_spell_id,
-        hit_info == HIT_CRIT,
+        hit_info == AttackOutcome::Crit,
         travel_ms,
     );
     if let Some(mut fresh) = melee.attacker_guid().find(attacker_guid) {
@@ -923,12 +936,12 @@ mod damage_pipeline_drift_tests {
 
 #[cfg(test)]
 mod revenge_tests {
-    use super::{arms_revenge, HIT_CRIT, HIT_DODGE, HIT_NORMAL};
+    use super::{arms_revenge, AttackOutcome};
 
     #[test]
     fn a_blocked_crit_arms_revenge() {
-        assert!(arms_revenge(HIT_CRIT, 30));
-        assert!(arms_revenge(HIT_DODGE, 0));
-        assert!(!arms_revenge(HIT_NORMAL, 0));
+        assert!(arms_revenge(AttackOutcome::Crit, 30));
+        assert!(arms_revenge(AttackOutcome::Dodge, 0));
+        assert!(!arms_revenge(AttackOutcome::Normal, 0));
     }
 }
