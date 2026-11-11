@@ -27,6 +27,28 @@ pub(crate) fn character_by_guid(ctx: &ReducerContext, guid: u64) -> Option<Chara
     gate_by_guid(ctx, ctx.db.game_character().guid().find(guid), |c| c.guid)
 }
 
+/// Credits the live purse, or the stored Character's, and returns the copper that did not fit.
+pub(crate) fn credit_purse(ctx: &ReducerContext, guid: u64, copper: u32) -> u32 {
+    if let Some(mut entity) = acting_entity_by_guid(ctx, guid) {
+        let (money, unpaid) = purse_credit(entity.money, copper);
+        entity.money = money;
+        entity.update(ctx);
+        unpaid
+    } else if let Some(mut character) = character_by_guid(ctx, guid) {
+        let (money, unpaid) = purse_credit(character.money, copper);
+        character.money = money;
+        ctx.db.game_character().guid().update(character);
+        unpaid
+    } else {
+        copper
+    }
+}
+
+fn purse_credit(money: u32, copper: u32) -> (u32, u32) {
+    let credited = copper.min(u32::MAX - money);
+    (money + credited, copper - credited)
+}
+
 pub(crate) fn character_by_name(ctx: &ReducerContext, name: &str) -> Option<Character> {
     characters_by_name(ctx, name).next()
 }
@@ -151,6 +173,21 @@ pub(crate) fn entity_addr(e: &WorldEntity) -> (u32, u64, i32, i32) {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[test]
+    fn purse_credit_pays_copper_that_fits() {
+        assert_eq!(purse_credit(100, 50), (150, 0));
+    }
+
+    #[test]
+    fn purse_credit_returns_copper_beyond_a_full_purse() {
+        assert_eq!(purse_credit(u32::MAX - 10, 25), (u32::MAX, 15));
+    }
+
+    #[test]
+    fn purse_credit_pays_nothing_into_a_full_purse() {
+        assert_eq!(purse_credit(u32::MAX, 25), (u32::MAX, 25));
+    }
 
     pub(crate) fn entity(
         guid: u64,

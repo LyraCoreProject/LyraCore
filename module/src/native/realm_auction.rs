@@ -22,7 +22,7 @@ use crate::{
         self as auctions, game_auction, game_auction_expiry, game_auction_operation_receipt,
         Auction, AuctionOperationReceipt,
     },
-    game_character, game_item_instance,
+    game_item_instance,
     mail_text::game_item_text,
     peer::{realm_shard, require_sender},
     remote_bindings::peer as remote,
@@ -804,22 +804,6 @@ fn finish(
     settle(ctx, operation)
 }
 
-fn refund(ctx: &ReducerContext, guid: u64, copper: u32) -> u32 {
-    if let Some(mut entity) = crate::helpers::acting_entity_by_guid(ctx, guid) {
-        let credited = copper.min(u32::MAX - entity.money);
-        entity.money += credited;
-        entity.update(ctx);
-        copper - credited
-    } else if let Some(mut character) = crate::helpers::character_by_guid(ctx, guid) {
-        let credited = copper.min(u32::MAX - character.money);
-        character.money += credited;
-        ctx.db.game_character().guid().update(character);
-        copper - credited
-    } else {
-        copper
-    }
-}
-
 fn settle(ctx: &ReducerContext, operation: u64) -> Result<(), String> {
     let Some(mut row) = ctx
         .db
@@ -832,7 +816,7 @@ fn settle(ctx: &ReducerContext, operation: u64) -> Result<(), String> {
     let Some(outcome) = &row.outcome else {
         return Ok(());
     };
-    row.copper = refund(ctx, row.guid, row.copper);
+    row.copper = crate::helpers::credit_purse(ctx, row.guid, row.copper);
     if row.copper != 0 {
         ctx.db.game_auction_transaction().operation().update(row);
         later(ctx, Retry::Settle(operation));

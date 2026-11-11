@@ -326,10 +326,7 @@ pub fn idc_world_instance_entry(
         {
             return Err("World Session changed".into());
         }
-        if crate::taxi::is_in_flight(ctx, guid)
-            || super::realm_petition::pending(ctx, guid)
-            || super::realm_auction::pending(ctx, guid)
-        {
+        if crate::taxi::is_in_flight(ctx, guid) || super::payment_pending(ctx, guid) {
             return Err("Character cannot enter an Instance yet".into());
         }
         let trigger = ctx
@@ -528,8 +525,7 @@ fn finish_native(
             world != ctx.database_identity() && !crate::peer::is_peer(ctx, world)
         })
         || crate::taxi::is_in_flight(ctx, pending.guid)
-        || super::realm_petition::pending(ctx, pending.guid)
-        || super::realm_auction::pending(ctx, pending.guid)
+        || super::payment_pending(ctx, pending.guid)
     {
         notice(ctx, connection);
         return;
