@@ -1,10 +1,33 @@
 use lyracore_shared::mail::{QuestGiver, RewardHeader};
-use spacetimedb::{log, ReducerContext};
+use spacetimedb::{log, table, ReducerContext};
 
 use crate::game_item_template;
 use crate::items::ItemSnapshot;
-use crate::mail_catalogue::{game_mail_loot, game_mail_template, game_quest_reward_mail};
-use crate::mail_catalogue::{MailLoot, QuestRewardMail};
+
+#[table(accessor = game_mail_template)]
+pub struct MailTemplate {
+    #[primary_key]
+    pub id: u32,
+    pub body: String,
+}
+
+#[table(accessor = game_mail_loot)]
+pub struct MailLoot {
+    #[primary_key]
+    pub mail_template_id: u32,
+    pub item_entry: u32,
+    pub count: u32,
+}
+
+#[table(accessor = game_quest_reward_mail)]
+pub struct QuestRewardMail {
+    #[primary_key]
+    pub quest_entry: u32,
+    pub mail_template_id: u32,
+    pub delay_secs: u32,
+    pub sender_creature_entry: u32,
+    pub money: u32,
+}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct RewardLetter {
@@ -114,9 +137,9 @@ pub(crate) fn file_reward_letter(
 mod fixture {
     use spacetimedb::{ReducerContext, Table};
 
+    use super::{game_mail_loot, game_mail_template, game_quest_reward_mail};
+    use super::{MailLoot, MailTemplate, QuestRewardMail};
     use crate::game_world_entity;
-    use crate::mail_catalogue::{game_mail_loot, game_mail_template, game_quest_reward_mail};
-    use crate::mail_catalogue::{MailLoot, MailTemplate, QuestRewardMail};
     use crate::quest::{
         game_character_quest, game_creature_quest, game_quest_template, quest_role, CharacterQuest,
         CreatureQuest, QuestTemplate,
@@ -147,6 +170,7 @@ mod fixture {
             .ok_or_else(|| "reward letter fixture giver source is not live".to_string())?;
         crate::WorldEntity::delete(ctx, GIVER);
         giver.guid = GIVER;
+        giver.npc_flags |= lyracore_shared::constants::npc_flags::QUESTGIVER;
         giver.map_id = character.map_id;
         giver.instance_id = character.instance_id;
         giver

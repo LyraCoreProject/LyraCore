@@ -33,6 +33,7 @@ pub fn debug_stage_choice_reward_fixture(
         .ok_or_else(|| "choice fixture giver source is not live".to_string())?;
     crate::WorldEntity::delete(ctx, CHOICE_FIXTURE_GIVER);
     giver.guid = CHOICE_FIXTURE_GIVER;
+    giver.npc_flags |= lyracore_shared::constants::npc_flags::QUESTGIVER;
     giver.map_id = player.map_id;
     giver.instance_id = player.instance_id;
     giver

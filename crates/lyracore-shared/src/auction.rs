@@ -1,6 +1,3 @@
-// Squared interaction distance in yards.
-pub const INTERACTION_RANGE_SQ: f32 = 100.0;
-
 pub fn bid_increment(current_bid: u32) -> u32 {
     if current_bid == 0 {
         0

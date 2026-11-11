@@ -144,11 +144,14 @@ pub(crate) mod character_owned_tripwire {
                 "game_creature_ai_relay_arrival",
                 "game_creature_ai_relay_run",
                 "game_creature_ai_summon_origin",
-                "game_creature_move_event",
                 "game_creature_quest_tap",
                 "game_creature_quest_tap_member",
             ],
-            "creature-owned state cleared with its creature, engagement, or delivery",
+            "creature-owned state cleared by `despawn_creature_entity`; `creature_teardown_tripwire` checks each",
+        ),
+        (
+            &["game_creature_move_event"],
+            "retired creature movement event table that nothing writes",
         ),
         (
             &[
@@ -943,6 +946,18 @@ mod native_delivery_write_discipline {
         );
         writes.extend(crate::test_scan::raw_table_reads(
             &source,
+            &["game_mail"],
+            |source, offset| {
+                let tail: String = source[offset..]
+                    .chars()
+                    .take(16)
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                tail.starts_with(".insert(") || tail.starts_with(".try_insert(")
+            },
+        ));
+        writes.extend(crate::test_scan::raw_table_reads(
+            &source,
             &["game_creature_spline"],
             |source, offset| {
                 let tail: String = source[offset..]
@@ -1019,6 +1034,9 @@ mod native_delivery_write_discipline {
                 ctx.db.game_guild_member().character_guid().update(row);
                 ctx.db.game_resurrect_request().target_guid().delete(7);
                 ctx.db.game_self_resurrect_option().character_guid().update(row);
+                let mails = ctx.db.game_mail();
+                mails.insert(row);
+                mails.id().update(row);
                 // entities.insert(row);
                 row.update(ctx);
             }
@@ -1027,7 +1045,7 @@ mod native_delivery_write_discipline {
                 ctx.db.game_world_entity().insert(row);
             }
         "#;
-        assert_eq!(raw_writes(source).len(), 53);
+        assert_eq!(raw_writes(source).len(), 54);
     }
 
     #[test]
@@ -1059,6 +1077,7 @@ mod native_delivery_write_discipline {
                     "game_auction_notice" => "module/src/auction.rs",
                     "game_hunter_pet_protocol" => "module/src/creatures/hunter_pet.rs",
                     "game_mail_arrival" => "module/src/mail_timer.rs",
+                    "game_mail" => "module/src/mail.rs",
                     "game_guild_petition" => "module/src/guild/petition.rs",
                     "game_guild_event" | "game_guild_member" => "module/src/guild/mod.rs",
                     "game_player_skill" => "module/src/skill.rs",
@@ -2278,5 +2297,360 @@ pub(crate) mod package_name_tripwire {
         assert!(!is_exempt("native-host/src/feed.rs"));
         assert!(is_exempt("module/src/group_tests.rs"));
         assert!(is_exempt("module/tests/package_account.rs"));
+    }
+}
+
+#[cfg(test)]
+mod creature_teardown_tripwire {
+    use super::character_owned_tripwire::{production_code, scanned_files};
+    use crate::test_scan::repo_root;
+
+    const TEARDOWN: (&str, &str) = (
+        "module/src/creatures/tick/lifecycle.rs",
+        "despawn_creature_entity",
+    );
+
+    /// Each table a creature keeps for its life, and the call path from the teardown to the
+    /// function that deletes its row. An empty path means the teardown deletes the row itself.
+    const CLEARED: &[(&str, &[(&str, &str)])] = &[
+        ("game_creature_spline", &[]),
+        ("game_entity_motion", &[]),
+        (
+            "game_world_entity",
+            &[("module/src/world/simulation.rs", "delete")],
+        ),
+        (
+            "game_entity_motion_pending",
+            &[("module/src/motion.rs", "drop_pending")],
+        ),
+        (
+            "game_melee_attack",
+            &[
+                ("module/src/combat/engage.rs", "disengage"),
+                ("module/src/combat/engage.rs", "disengage_with_combat_check"),
+            ],
+        ),
+        (
+            "game_threat",
+            &[
+                ("module/src/combat/engage.rs", "disengage"),
+                ("module/src/combat/engage.rs", "disengage_with_combat_check"),
+            ],
+        ),
+        (
+            "game_taunt_lock",
+            &[("module/src/threat.rs", "clear_taunt_lock")],
+        ),
+        (
+            "game_creature_lethal_damage_floor",
+            &[("module/src/combat/death.rs", "clear_lethal_damage_floor")],
+        ),
+        (
+            "game_creature_ai_relay_arrival",
+            &[(
+                "module/src/creatures/eventai/relay.rs",
+                "cancel_relay_runs_for_source",
+            )],
+        ),
+        (
+            "game_creature_ai_relay_run",
+            &[
+                (
+                    "module/src/creatures/eventai/relay.rs",
+                    "cancel_relay_runs_for_source",
+                ),
+                ("module/src/creatures/eventai/relay.rs", "cancel_run_tree"),
+            ],
+        ),
+        (
+            "game_creature_presentation",
+            &[
+                (
+                    "module/src/creatures/eventai/edges.rs",
+                    "reset_creature_lifecycle",
+                ),
+                (
+                    "module/src/creatures/presentation.rs",
+                    "clear_eventai_presentation",
+                ),
+                ("module/src/creatures/presentation.rs", "clear_if"),
+            ],
+        ),
+        (
+            "game_creature_relay_temporary_faction",
+            &[
+                (
+                    "module/src/creatures/eventai/edges.rs",
+                    "reset_creature_lifecycle",
+                ),
+                (
+                    "module/src/creatures/presentation.rs",
+                    "clear_eventai_presentation",
+                ),
+            ],
+        ),
+        (
+            "game_creature_distraction",
+            &[
+                (
+                    "module/src/creatures/eventai/edges.rs",
+                    "reset_creature_lifecycle",
+                ),
+                ("module/src/creatures/distraction.rs", "clear"),
+            ],
+        ),
+        (
+            "game_creature_ai_movement_intent",
+            &[
+                (
+                    "module/src/creatures/eventai/edges.rs",
+                    "reset_creature_lifecycle",
+                ),
+                ("module/src/creatures/eventai/movement.rs", "drop_lifecycle"),
+                ("module/src/creatures/eventai/movement.rs", "reset_revision"),
+            ],
+        ),
+        (
+            "game_creature_ai_forced_despawn",
+            &[
+                (
+                    "module/src/creatures/eventai/edges.rs",
+                    "reset_creature_lifecycle",
+                ),
+                (
+                    "module/src/creatures/eventai/mobility.rs",
+                    "drop_forced_despawn",
+                ),
+            ],
+        ),
+        (
+            "game_creature_ai_returning_home",
+            &[(
+                "module/src/creatures/eventai/edges.rs",
+                "reset_creature_lifecycle",
+            )],
+        ),
+        (
+            "game_creature_ai_rule_state",
+            &[(
+                "module/src/creatures/eventai/edges.rs",
+                "reset_creature_lifecycle",
+            )],
+        ),
+        (
+            "game_creature_ai_state",
+            &[(
+                "module/src/creatures/eventai/edges.rs",
+                "reset_creature_lifecycle",
+            )],
+        ),
+        (
+            "game_creature_ai_summon_expiry",
+            &[(
+                "module/src/creatures/eventai/mobility.rs",
+                "drop_summon_expiry",
+            )],
+        ),
+        (
+            "game_creature_ai_summon_origin",
+            &[(
+                "module/src/creatures/eventai/mobility.rs",
+                "drop_summon_expiry",
+            )],
+        ),
+        (
+            "game_creature_gossip_menu_override",
+            &[(
+                "module/src/creatures/spawn.rs",
+                "clear_gossip_menu_override",
+            )],
+        ),
+        (
+            "game_live_pet_kind",
+            &[("module/src/creatures/hunter_pet.rs", "clear_live_pet_kind")],
+        ),
+        (
+            "game_creature_quest_tap",
+            &[("module/src/loot/tag.rs", "clear")],
+        ),
+        (
+            "game_creature_quest_tap_member",
+            &[("module/src/loot/tag.rs", "clear")],
+        ),
+        (
+            "game_creature_loot_tag_group",
+            &[("module/src/loot/tag.rs", "clear")],
+        ),
+        (
+            "game_corpse_loot",
+            &[("module/src/loot/mod.rs", "reap_corpse_loot_family")],
+        ),
+        (
+            "game_corpse_loot_eligible",
+            &[("module/src/loot/mod.rs", "reap_corpse_loot_family")],
+        ),
+    ];
+
+    const KEPT: &[(&str, &str)] = &[
+        (
+            "game_encounter_equip",
+            "encounter virtual equipment, removed by encounter reset",
+        ),
+        (
+            "game_creature_ai_reset_deferral",
+            "death dispatch marker, removed when the dispatch finishes",
+        ),
+    ];
+
+    fn body<'a>(code: &'a str, function: &str) -> Option<&'a str> {
+        let start = code.find(&format!("fn {function}("))?;
+        let open = start + code[start..].find('{')?;
+        let mut depth = 0usize;
+        for (offset, c) in code[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(&code[open..open + offset + 1]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn calls(body: &str, function: &str) -> bool {
+        body.match_indices(&format!("{function}(")).any(|(at, _)| {
+            body[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        })
+    }
+
+    fn function_body(file: &str, function: &str) -> String {
+        let code = production_code(
+            &std::fs::read_to_string(repo_root().join(file))
+                .unwrap_or_else(|e| panic!("cannot read {file}: {e}")),
+        );
+        body(&code, function)
+            .unwrap_or_else(|| panic!("{file} has no fn {function}"))
+            .to_string()
+    }
+
+    fn creature_keyed(code: &str) -> Vec<String> {
+        let mut tables = Vec::new();
+        for (at, _) in code.match_indices("#[table(") {
+            let declaration = &code[at..];
+            let Some(accessor) = declaration["#[table(".len()..]
+                .trim_start()
+                .strip_prefix("accessor")
+                .and_then(|rest| rest.trim_start().strip_prefix('='))
+                .and_then(|rest| {
+                    rest.trim_start()
+                        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .next()
+                })
+            else {
+                continue;
+            };
+            let Some(fields) = declaration
+                .find("pub struct")
+                .and_then(|s| declaration[s..].find('{').map(|o| s + o))
+            else {
+                continue;
+            };
+            let struct_body = &declaration[fields..];
+            let struct_body = &struct_body[..struct_body.find('}').unwrap_or(struct_body.len())];
+            let primary = struct_body
+                .split("#[primary_key]")
+                .nth(1)
+                .and_then(|rest| rest.split("pub ").nth(1))
+                .and_then(|field| field.split(':').next())
+                .unwrap_or_default();
+            if matches!(primary, "creature_guid" | "pet_guid") {
+                tables.push(accessor.to_string());
+            }
+        }
+        tables
+    }
+
+    fn creature_keyed_tables() -> Vec<String> {
+        scanned_files()
+            .iter()
+            .flat_map(|file| {
+                creature_keyed(&production_code(
+                    &std::fs::read_to_string(file).expect("readable source"),
+                ))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn despawn_clears_every_row_a_creature_keeps_for_its_life() {
+        let teardown = function_body(TEARDOWN.0, TEARDOWN.1);
+        let mut missing = Vec::new();
+        for (table, path) in CLEARED {
+            let mut caller = teardown.clone();
+            for (file, function) in path.iter() {
+                if !calls(&caller, function) {
+                    missing.push(format!("{table}: no call to {function}"));
+                }
+                caller = function_body(file, function);
+            }
+            if !caller.contains(&format!("{table}()")) {
+                missing.push(format!("{table}: the last step never names the table"));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "despawn_creature_entity lost a creature row: {}",
+            missing.join(", ")
+        );
+    }
+
+    #[test]
+    fn every_creature_keyed_table_is_cleared_or_kept_on_purpose() {
+        let unlisted: Vec<String> = creature_keyed_tables()
+            .into_iter()
+            .filter(|table| {
+                !CLEARED.iter().any(|(listed, _)| listed == table)
+                    && !KEPT.iter().any(|(listed, _)| listed == table)
+            })
+            .collect();
+        assert!(
+            unlisted.is_empty(),
+            "creature-keyed tables missing from the teardown inventory: {}",
+            unlisted.join(", ")
+        );
+    }
+
+    #[test]
+    fn the_scan_finds_creature_keyed_tables_and_skips_others() {
+        let source = r#"
+            #[table(accessor = game_kept, public)]
+            pub struct Kept {
+                #[primary_key]
+                pub creature_guid: u64,
+            }
+            #[table(accessor = game_other)]
+            pub struct Other {
+                #[primary_key]
+                #[auto_inc]
+                pub id: u64,
+                pub creature_guid: u64,
+            }
+            fn teardown(ctx: &ReducerContext) {
+                crate::creatures::clear_kept(ctx, guid);
+                ctx.db.game_kept().creature_guid().delete(guid);
+            }
+        "#;
+        assert_eq!(creature_keyed(source), ["game_kept"]);
+        let teardown = body(source, "teardown").expect("teardown body");
+        assert!(calls(teardown, "clear_kept"));
+        assert!(!calls(teardown, "kept"));
+        assert!(teardown.contains("game_kept()"));
     }
 }

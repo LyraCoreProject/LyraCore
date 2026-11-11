@@ -71,8 +71,6 @@ pub(crate) fn dist_sq(a: &WorldEntity, b: &WorldEntity) -> f32 {
     dx * dx + dy * dy + dz * dz
 }
 
-const PLAYER_INTERACTION_RANGE_SQ: f32 = 100.0;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PlayerInteractionDenied {
     ActorDead,
@@ -102,7 +100,7 @@ pub(crate) fn player_interaction_gate(
     if !in_same_partition(target, actor.map_id, actor.instance_id) {
         return Err(PlayerInteractionDenied::DifferentPartition);
     }
-    if dist_sq(actor, target) > PLAYER_INTERACTION_RANGE_SQ {
+    if dist_sq(actor, target) > crate::npc_interaction::INTERACTION_RANGE_SQ {
         return Err(PlayerInteractionDenied::OutOfRange);
     }
     Ok(())
@@ -421,9 +419,9 @@ pub(crate) mod tests {
             Err(PlayerInteractionDenied::DifferentPartition)
         );
 
-        let at_boundary = player_at(2, PLAYER_INTERACTION_RANGE_SQ.sqrt());
+        let at_boundary = player_at(2, crate::npc_interaction::INTERACTION_RANGE_SQ.sqrt());
         assert_eq!(player_interaction_gate(&actor, Some(&at_boundary)), Ok(()));
-        let mut past_boundary = player_at(2, PLAYER_INTERACTION_RANGE_SQ.sqrt());
+        let mut past_boundary = player_at(2, crate::npc_interaction::INTERACTION_RANGE_SQ.sqrt());
         past_boundary.z = 1.0;
         assert_eq!(
             player_interaction_gate(&actor, Some(&past_boundary)),

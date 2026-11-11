@@ -353,7 +353,7 @@ mod tests {
         assert_eq!(
             expires_at(&mid_second),
             at(SENT + MICROS_PER_SEC + 30 * DAY),
-            "the Gateway rounds a delivery up to the next second"
+            "the mail list rounds a delivery up to the next second"
         );
     }
 

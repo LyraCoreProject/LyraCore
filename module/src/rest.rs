@@ -34,7 +34,7 @@ fn in_rest_area(ctx: &ReducerContext, mover: &WorldEntity, area: Option<&GameAre
             .find(tavern.trigger_id)
             .is_some_and(|trigger| {
                 trigger.map_id == mover.map_id
-                    && crate::quest::AreaTriggerVolume::of(&trigger).contains(
+                    && crate::areatrigger::AreaTriggerVolume::of(&trigger).contains(
                         [trigger.x, trigger.y, trigger.z],
                         [mover.x, mover.y, mover.z],
                     )

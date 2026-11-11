@@ -138,6 +138,7 @@ include!(concat!(env!("OUT_DIR"), "/package_registries.rs"));
 mod account_ownership;
 mod action_bar;
 mod actor;
+mod areatrigger;
 mod auction;
 mod auth;
 mod away;
@@ -188,8 +189,6 @@ mod loot;
 
 mod mail;
 
-mod mail_catalogue;
-
 mod mail_escrow;
 
 mod mail_reward;
@@ -204,6 +203,7 @@ mod motion;
 
 mod mount;
 mod nav;
+mod npc_interaction;
 
 mod operations;
 mod operator_content;

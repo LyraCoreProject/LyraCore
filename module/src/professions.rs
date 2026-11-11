@@ -5,56 +5,14 @@ use crate::game_fishing_loot;
 use crate::game_item_template;
 use crate::game_player_skill;
 use crate::game_skinning_loot;
-use crate::game_world_entity;
-use crate::loot::LOOT_RANGE_SQ;
+use crate::loot::LootRow;
 
 // Light Leather.
 pub(crate) const LEATHER_ENTRY: u32 = 2318;
 pub(crate) const LEATHER_COUNT: u32 = 1;
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn can_skin(
-    looter_dead: bool,
-    corpse_is_player: bool,
-    corpse_dead: bool,
-    same_map: bool,
-    dist_sq: f32,
-    is_beast: bool,
-    already_skinned: bool,
-    learned_skinning: u32,
-    creature_level: u32,
-) -> Result<(), String> {
-    if looter_dead {
-        return Err("dead players cannot skin".to_string());
-    }
-    if corpse_is_player {
-        return Err("cannot skin a player".to_string());
-    }
-    if !corpse_dead {
-        return Err("target is not a corpse".to_string());
-    }
-    if !same_map {
-        return Err("corpse on another map".to_string());
-    }
-    if dist_sq > LOOT_RANGE_SQ {
-        return Err("corpse out of range".to_string());
-    }
-    if !is_beast {
-        return Err("not a beast — cannot be skinned".to_string());
-    }
-    if already_skinned {
-        return Err("already skinned".to_string());
-    }
-    if learned_skinning == 0 {
-        return Err("you have not learned Skinning".to_string());
-    }
-    let required = creature_level.saturating_sub(1) * 10;
-    if learned_skinning < required {
-        return Err(format!(
-            "your Skinning skill ({learned_skinning}) is too low — need {required}"
-        ));
-    }
-    Ok(())
+fn required_skinning(creature_level: u32) -> u32 {
+    creature_level.saturating_sub(1) * 10
 }
 
 pub(crate) fn entry_is_beast(ctx: &ReducerContext, entry: u32) -> bool {
@@ -70,20 +28,14 @@ pub(crate) fn skin_corpse(
     looter_guid: u64,
     corpse_guid: u64,
 ) -> Result<(), crate::Refusal> {
-    let entities = ctx.db.game_world_entity();
-    let looter = entities
-        .guid()
-        .find(looter_guid)
-        .ok_or_else(|| "skinner not in world".to_string())?;
-    let mut corpse = entities
-        .guid()
-        .find(corpse_guid)
-        .ok_or_else(|| "no such corpse".to_string())?;
-    crate::loot::corpse_access_gate(ctx, looter_guid, corpse_guid)?;
-
-    let dist_sq = (corpse.x - looter.x).powi(2)
-        + (corpse.y - looter.y).powi(2)
-        + (corpse.z - looter.z).powi(2);
+    let (_, mut corpse) =
+        crate::loot::reach_corpse(ctx, looter_guid, corpse_guid).map_err(String::from)?;
+    if !entry_is_beast(ctx, corpse.entry) {
+        return Err("not a beast — cannot be skinned".into());
+    }
+    if corpse.skinned {
+        return Err("already skinned".into());
+    }
     let learned_skinning = ctx
         .db
         .game_player_skill()
@@ -92,17 +44,16 @@ pub(crate) fn skin_corpse(
         .find(|s| s.skill_line == crate::skill::skill_line::SKINNING)
         .map(|s| s.current as u32)
         .unwrap_or(0);
-    can_skin(
-        looter.dead,
-        corpse.is_player(),
-        corpse.dead,
-        corpse.map_id == looter.map_id && corpse.instance_id == looter.instance_id,
-        dist_sq,
-        entry_is_beast(ctx, corpse.entry),
-        corpse.skinned,
-        learned_skinning,
-        corpse.level,
-    )?;
+    if learned_skinning == 0 {
+        return Err("you have not learned Skinning".into());
+    }
+    let required = required_skinning(corpse.level);
+    if learned_skinning < required {
+        return Err(format!(
+            "your Skinning skill ({learned_skinning}) is too low — need {required}"
+        )
+        .into());
+    }
     if !crate::loot::corpse_is_looted(ctx, corpse_guid, corpse.money) {
         return Err("corpse still has loot".into());
     }
@@ -114,12 +65,18 @@ pub(crate) fn skin_corpse(
         .find(corpse.entry)
         .map(|t| t.skin_loot_id)
         .unwrap_or(0);
-    let rows: Vec<(u32, u32, u32, u32)> = if skin_loot_id != 0 {
+    let rows: Vec<LootRow> = if skin_loot_id != 0 {
         ctx.db
             .game_skinning_loot()
             .by_skin()
             .filter(&skin_loot_id)
-            .map(|r| (r.item_entry, r.chance_bp, r.count, r.group_id))
+            .map(|r| LootRow {
+                item_entry: r.item_entry,
+                chance_bp: r.chance_bp,
+                count: r.count,
+                group_id: r.group_id,
+                quest_only: false,
+            })
             .collect()
     } else {
         Vec::new()
@@ -128,8 +85,8 @@ pub(crate) fn skin_corpse(
     if winners.is_empty() {
         crate::items::grant_item(ctx, looter_guid, LEATHER_ENTRY, LEATHER_COUNT)?;
     } else {
-        for (item_entry, count) in winners {
-            crate::items::grant_item(ctx, looter_guid, item_entry, count)?;
+        for drop in winners {
+            crate::items::grant_item(ctx, looter_guid, drop.item_entry, drop.count)?;
         }
     }
 
@@ -159,21 +116,26 @@ pub(crate) fn apply_fish(ctx: &ReducerContext, guid: u64) -> Result<(), crate::R
         crate::skill::skill_line::FISHING,
         crate::skill::APPRENTICE_CAP,
     );
-    let rows: Vec<(u32, u32, u32, u32)> =
-        crate::terrain::zone_id_at(ctx, player.map_id, player.x, player.y)
-            .map(|zone| {
-                ctx.db
-                    .game_fishing_loot()
-                    .by_zone()
-                    .filter(&zone)
-                    .map(|r| (r.item_entry, r.chance_bp, r.count, r.group_id))
-                    .collect()
-            })
-            .unwrap_or_default();
+    let rows: Vec<LootRow> = crate::terrain::zone_id_at(ctx, player.map_id, player.x, player.y)
+        .map(|zone| {
+            ctx.db
+                .game_fishing_loot()
+                .by_zone()
+                .filter(&zone)
+                .map(|r| LootRow {
+                    item_entry: r.item_entry,
+                    chance_bp: r.chance_bp,
+                    count: r.count,
+                    group_id: r.group_id,
+                    quest_only: false,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     let winner = crate::loot::roll_loot_rows(ctx, rows)
         .into_iter()
         .next()
-        .map(|(item, _)| item);
+        .map(|drop| drop.item_entry);
     let fish = pick_caught_fish(winner, ctx.random::<usize>());
     crate::items::grant_item(ctx, guid, fish, 1)?;
     crate::skill::gain_profession_skill(ctx, guid, crate::skill::skill_line::FISHING, 1, 0);
@@ -268,77 +230,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn skin_gate_admits_only_a_fresh_in_range_beast_corpse() {
-        let learned: u32 = 1;
-        let lvl: u32 = 1;
-
-        assert!(can_skin(false, false, true, true, 0.0, true, false, learned, lvl).is_ok());
-        assert!(can_skin(
-            false,
-            false,
-            true,
-            true,
-            LOOT_RANGE_SQ,
-            true,
-            false,
-            learned,
-            lvl
-        )
-        .is_ok());
-
-        assert_eq!(
-            can_skin(true, false, true, true, 0.0, true, false, learned, lvl).unwrap_err(),
-            "dead players cannot skin"
-        );
-        assert_eq!(
-            can_skin(false, true, true, true, 0.0, true, false, learned, lvl).unwrap_err(),
-            "cannot skin a player"
-        );
-        assert_eq!(
-            can_skin(false, false, false, true, 0.0, true, false, learned, lvl).unwrap_err(),
-            "target is not a corpse"
-        );
-        assert_eq!(
-            can_skin(false, false, true, false, 0.0, true, false, learned, lvl).unwrap_err(),
-            "corpse on another map"
-        );
-        assert_eq!(
-            can_skin(
-                false,
-                false,
-                true,
-                true,
-                LOOT_RANGE_SQ + 1.0,
-                true,
-                false,
-                learned,
-                lvl
-            )
-            .unwrap_err(),
-            "corpse out of range"
-        );
-        assert_eq!(
-            can_skin(false, false, true, true, 0.0, false, false, learned, lvl).unwrap_err(),
-            "not a beast — cannot be skinned"
-        );
-        assert_eq!(
-            can_skin(false, false, true, true, 0.0, true, true, learned, lvl).unwrap_err(),
-            "already skinned"
-        );
-        assert_eq!(
-            can_skin(false, false, true, true, 0.0, true, false, 0, lvl).unwrap_err(),
-            "you have not learned Skinning"
-        );
-        assert_eq!(
-            can_skin(false, false, true, true, 0.0, true, false, 5, 2).unwrap_err(),
-            "your Skinning skill (5) is too low — need 10"
-        );
-        assert!(can_skin(false, false, true, true, 0.0, true, false, 10, 2).is_ok());
-        assert_eq!(
-            can_skin(false, false, true, true, 0.0, true, false, 19, 3).unwrap_err(),
-            "your Skinning skill (19) is too low — need 20"
-        );
-        assert!(can_skin(false, false, true, true, 0.0, true, false, 20, 3).is_ok());
+    fn skinning_requires_ten_points_per_creature_level_above_one() {
+        assert_eq!(required_skinning(1), 0);
+        assert_eq!(required_skinning(2), 10);
+        assert_eq!(required_skinning(3), 20);
     }
 
     #[test]

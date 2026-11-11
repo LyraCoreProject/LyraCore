@@ -9,6 +9,7 @@ use crate::spell::{
     CastGateRefusal, CastRefusalReason, SpellEffect, A_MOD_SPEED, A_MOUNTED, SPEED_MOUNTED,
 };
 use crate::WorldEntity;
+use lyracore_shared::race_class::{mask_admits, ZeroMask};
 
 pub(crate) fn mount_aura_moves_mount(eff_kind: u8, eff_p0: i32) -> bool {
     eff_kind == A_MOUNTED || (eff_kind == A_MOD_SPEED && eff_p0 == SPEED_MOUNTED as i32)
@@ -91,10 +92,6 @@ pub(crate) fn spell_is_mount(ctx: &ReducerContext, spell_id: u32) -> bool {
         .any(|e| e.kind == A_MOUNTED)
 }
 
-fn mask_admits(mask: u32, id: u8) -> bool {
-    mask == 0 || ((1..=32).contains(&id) && mask & (1 << (id - 1)) != 0)
-}
-
 fn rank_satisfies(rank: u16, min_skill: i32) -> bool {
     i32::from(rank) >= min_skill.max(0)
 }
@@ -111,8 +108,8 @@ fn trained_for_spell(ctx: &ReducerContext, guid: u64, spell_id: u32, race: u8, c
                 .filter(&learned.skill_line)
                 .any(|a| {
                     a.spell_id == spell_id
-                        && mask_admits(a.race_mask, race)
-                        && mask_admits(a.class_mask, class)
+                        && mask_admits(a.race_mask, race, ZeroMask::AdmitsAll)
+                        && mask_admits(a.class_mask, class, ZeroMask::AdmitsAll)
                         && rank_satisfies(learned.current, a.min_skill)
                 })
         })
@@ -234,21 +231,6 @@ mod tests {
 
         assert!(rank_satisfies(0, 0));
         assert!(rank_satisfies(0, -1));
-    }
-
-    #[test]
-    fn mask_admits_treats_race_and_class_ids_as_one_based_bits() {
-        assert!(mask_admits(0, 1));
-        assert!(mask_admits(0, 11));
-
-        let human = 1u32 << 0;
-        let orc = 1u32 << 1;
-        assert!(mask_admits(human, 1));
-        assert!(!mask_admits(human, 2));
-        assert!(mask_admits(human | orc, 2));
-
-        assert!(!mask_admits(human, 0));
-        assert!(!mask_admits(u32::MAX, 33));
     }
 
     #[test]

@@ -31,13 +31,10 @@ pub(crate) use buyback::{
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use economy::apply_repair_item;
-#[cfg(test)]
-pub(crate) use economy::NpcRefusal;
 pub(crate) use economy::{
     apply_buy_bank_slot, apply_buy_item, apply_buy_item_to, apply_buyback_item, apply_item_sell,
-    apply_item_sell_count, apply_player_repair, innkeeper_access_gate, npc_interaction_gate,
-    vendor_offers, vendor_purchase_price, BankSlotRefusal, BuyRefusal, BuybackRefusal, NpcGate,
-    SellRefusal,
+    apply_item_sell_count, apply_player_repair, vendor_offers, vendor_purchase_price,
+    BankSlotRefusal, BuyRefusal, BuybackRefusal, SellRefusal,
 };
 pub(crate) use exchange::{exchange_items, ItemStoragePlan};
 pub(crate) use guids::{allocate_item_guids, item_guid_exists, next_item_guid};
@@ -48,11 +45,10 @@ pub(crate) use inventory::{
 };
 pub(crate) use ops::{
     apply_death_durability_loss, apply_item_use, apply_item_use_on,
-    apply_spirit_healer_durability_loss, apply_take_loot, equipped_school_stat_bonus,
-    equipped_stat_bonus, grant_item, grant_item_property, grant_letter_item, grant_starter_item,
-    has_free_slot, item_count, item_stat_bonus, remove_items, request_grant_item,
-    request_profile_item, request_take_loot, resistance_items, store_instance_state,
-    take_loot_item, ItemSnapshot, ItemUseTarget, StoreRefusal, TakeLootRefusal,
+    apply_spirit_healer_durability_loss, equipped_school_stat_bonus, equipped_stat_bonus,
+    grant_item, grant_item_property, grant_letter_item, grant_starter_item, has_free_slot,
+    item_count, item_stat_bonus, remove_items, request_grant_item, request_profile_item,
+    resistance_items, store_instance_state, ItemSnapshot, ItemUseTarget, StoreRefusal,
 };
 pub(crate) use properties::{
     enchant_stat, enchant_stat_for_school, is_known_enchant, property_stat,

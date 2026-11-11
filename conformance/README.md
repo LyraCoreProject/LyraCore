@@ -805,12 +805,12 @@ provenance take the cold path once. `world_origin: snapshot` means both source t
 not turn a local check into a full audit.
 
 Mixed files stay in Tier A in full: `seed.rs`, `seed/fixtures.rs`, `operations.rs`, `config.rs`,
-`auth.rs`, `operator_content/spells.rs`, `auction.rs`, `mail_catalogue.rs`, `stats.rs`, `gossip.rs`,
+`auth.rs`, `operator_content/spells.rs`, `auction.rs`, `mail_reward.rs`, `stats.rs`, `gossip.rs`,
 `transport/mod.rs`, `helpers.rs`, `time.rs`, `world.rs`, `world/{simulation,placement}.rs`,
 `character.rs`, `instance.rs`, `gameobject.rs`, `go_collider.rs`, `go_model.rs`, `region.rs`,
 `terrain.rs`, `nav.rs`, `vmap.rs`, `faction.rs`, `graveyard.rs`, `breath.rs`, `gc.rs`,
 `combat/engage.rs`, `skill.rs`, `skilldata.rs`, `action_bar.rs`, `xp.rs`, `talent.rs`, `weather.rs`,
-`duel.rs`, `motion.rs`, `gw.rs`, `quest.rs`, `trainer.rs`, `meeting_stone/mod.rs`, `loot/mod.rs`,
+`duel.rs`, `motion.rs`, `gw.rs`, `quest.rs`, `areatrigger.rs`, `trainer.rs`, `meeting_stone/mod.rs`, `loot/mod.rs`,
 `items/{tables,properties,temporary_enchantment}.rs`,
 `creatures/{catalogue,spawn,pet_care,population}.rs`, `creatures/tick/mod.rs`,
 `creatures/eventai/{fixtures,loader,model,stored,tables,relay,presentation}.rs`, and

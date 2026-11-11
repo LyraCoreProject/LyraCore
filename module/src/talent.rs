@@ -169,12 +169,10 @@ fn points_in_tree(
         .sum()
 }
 
-fn mask_admits(mask: u32, id: u8) -> bool {
-    id != 0 && (id as u32) <= u32::BITS && mask & (1u32 << (id - 1)) != 0
-}
-
 fn talent_tab_admits(tab: &TalentTab, race: u8, class: u8) -> bool {
-    mask_admits(tab.class_mask, class) && (tab.race_mask == 0 || mask_admits(tab.race_mask, race))
+    use lyracore_shared::race_class::{mask_admits, ZeroMask};
+    mask_admits(tab.class_mask, class, ZeroMask::AdmitsNone)
+        && mask_admits(tab.race_mask, race, ZeroMask::AdmitsAll)
 }
 
 fn admitted_talent_rank(

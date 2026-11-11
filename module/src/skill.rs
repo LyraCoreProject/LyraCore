@@ -428,11 +428,6 @@ pub(crate) fn raise_combat_caps(ctx: &ReducerContext, guid: u64, new_level: u32)
 }
 
 #[cfg_attr(not(has_packages), allow(dead_code))]
-fn profile_mask_admits(mask: u32, id: u8) -> bool {
-    mask == 0 || (id != 0 && (id as u32) <= u32::BITS && mask & (1u32 << (id - 1)) != 0)
-}
-
-#[cfg_attr(not(has_packages), allow(dead_code))]
 const PROFILE_SKILL_AVAILABILITY_LIMIT: usize = 16;
 
 #[cfg_attr(not(has_packages), allow(dead_code))]
@@ -470,8 +465,9 @@ pub(crate) fn reconcile_profile_skill(
                 overflow = true;
                 break;
             }
-            let identity_matches = profile_mask_admits(row.race_mask, actor.race())
-                && profile_mask_admits(row.class_mask, actor.class());
+            use lyracore_shared::race_class::{mask_admits, ZeroMask};
+            let identity_matches = mask_admits(row.race_mask, actor.race(), ZeroMask::AdmitsAll)
+                && mask_admits(row.class_mask, actor.class(), ZeroMask::AdmitsAll);
             identity_admitted |= identity_matches;
             if identity_matches && i64::from(row.min_level) <= i64::from(actor.level) {
                 admitted = true;

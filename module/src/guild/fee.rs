@@ -1,4 +1,3 @@
-use lyracore_shared::constants::npc_flags;
 use lyracore_shared::guild::{
     event_kind, fee_kind, name_key, validate_guild_name, GuildRefusal, CHARTER_COST_COPPER,
     EMBLEM_COST_COPPER, GUILD_CHARTER_ENTRY,
@@ -271,26 +270,13 @@ fn charter_gate(
 }
 
 pub(crate) fn npc_serves(ctx: &ReducerContext, payer_guid: u64, npc_guid: u64, kind: u8) -> bool {
-    let required_flags = match kind {
-        fee_kind::EMBLEM => npc_flags::TABARDDESIGNER,
-        fee_kind::CHARTER => npc_flags::PETITIONER | npc_flags::TABARDDESIGNER,
+    use crate::npc_interaction::NpcService;
+    let service = match kind {
+        fee_kind::EMBLEM => NpcService::GuildEmblem,
+        fee_kind::CHARTER => NpcService::GuildCharter,
         _ => return false,
     };
-    let Ok((payer, npc)) = crate::items::npc_interaction_gate(
-        ctx,
-        payer_guid,
-        npc_guid,
-        required_flags,
-        "guild NPC",
-        "target does not serve guild fees",
-        "pay a guild fee",
-    ) else {
-        return false;
-    };
-    npc.npc_flags & required_flags == required_flags
-        && !npc.dead
-        && npc.health != 0
-        && !crate::reputation::npc_refuses_interaction(ctx, &npc, &payer)
+    crate::npc_interaction::gate(ctx, payer_guid, npc_guid, service).is_ok()
 }
 
 struct CtxPurse<'a> {

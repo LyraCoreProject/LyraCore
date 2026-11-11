@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use spacetimedb::{table, ReducerContext, Table};
 
+use super::LootRefusal;
 use lyracore_shared::group::RAID_MAX_MEMBERS;
-use lyracore_shared::loot::LootRefusal;
 
 use crate::game_world_entity;
 
@@ -301,7 +301,7 @@ pub(crate) fn corpse_eligible_for_access(recipients: &[u64], actor_guid: u64) ->
     recipients.binary_search(&actor_guid).is_ok()
 }
 
-// Empty corpse eligibility refuses everyone; GameObjects do not use Loot Tags.
+#[cfg(feature = "debug_reducers")]
 pub(crate) fn corpse_access_gate(
     ctx: &ReducerContext,
     actor_guid: u64,
@@ -315,6 +315,7 @@ pub(crate) fn corpse_access_gate(
     })
 }
 
+// Empty corpse eligibility refuses everyone; GameObjects do not use Loot Tags.
 pub(crate) fn corpse_access(
     ctx: &ReducerContext,
     actor_guid: u64,
@@ -743,7 +744,7 @@ fn verify_corpse_loot_gates(
     for refusal in [
         crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse)
             .map_err(|refusal| refusal.as_tag().to_string()),
-        crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse, 0),
+        crate::loot::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse, 0),
         crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse),
         crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse)
             .map_err(String::from),
@@ -767,7 +768,7 @@ fn verify_corpse_loot_gates(
         return Err("a Loot Tag Refusal changed the party corpse".to_string());
     }
 
-    crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse, 0)?;
+    crate::loot::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse, 0)?;
     crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse)?;
     insert_fixture_skinning(ctx, LOOT_TAG_FIXTURE_CHARACTER_B);
     crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse)?;
@@ -790,7 +791,7 @@ fn verify_corpse_loot_gates(
     record_corpse_eligibility(ctx, solo_corpse, &[LOOT_TAG_FIXTURE_CHARACTER_A]);
     crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse)
         .map_err(|refusal| refusal.as_tag().to_string())?;
-    crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse, 0)?;
+    crate::loot::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse, 0)?;
     crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse)?;
     insert_fixture_skinning(ctx, LOOT_TAG_FIXTURE_CHARACTER_A);
     crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse)?;

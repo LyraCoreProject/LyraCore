@@ -39,6 +39,7 @@ pub mod player_flags {
 
 pub mod npc_flags {
     pub const GOSSIP: u32 = 0x0000_0001;
+    pub const QUESTGIVER: u32 = 0x0000_0002;
     // Vanilla VENDOR is 0x4; later expansions use a different numbering.
     pub const VENDOR: u32 = 0x0000_0004;
     pub const TAXI: u32 = 0x0000_0008;

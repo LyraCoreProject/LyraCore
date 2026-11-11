@@ -1,10 +1,10 @@
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
+use super::LootRefusal;
 use crate::game_corpse_loot;
 use crate::game_group;
 use crate::game_item_template;
 use crate::game_world_entity;
-use lyracore_shared::loot::LootRefusal;
 use lyracore_shared::loot_roll::{event_kind as roll_event_kind, vote_kind};
 
 use super::{refused, CorpseLoot};

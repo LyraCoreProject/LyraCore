@@ -1,3 +1,4 @@
+use lyracore_shared::quest::quest_role;
 use wow_world_base::shared::quest_party_message_vanilla_tbc::QuestPartyMessage;
 use wow_world_messages::vanilla::{
     Gold, Level, NpcTextUpdateEmote, QuestCompletable, QuestGiverStatus, QuestItem,
@@ -6,9 +7,6 @@ use wow_world_messages::vanilla::{
     SMSG_QUESTGIVER_STATUS, SMSG_QUESTUPDATE_ADD_KILL, SMSG_QUESTUPDATE_FAILEDTIMER,
 };
 use wow_world_messages::Guid;
-
-pub const ROLE_START: u8 = 0;
-pub const ROLE_END: u8 = 1;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuestRewardView {
@@ -50,7 +48,7 @@ pub struct GiverQuestEval {
 }
 
 pub fn eval_status(e: &GiverQuestEval) -> QuestGiverStatus {
-    if e.role == ROLE_END && e.active {
+    if e.role == quest_role::END && e.active {
         if e.complete {
             QuestGiverStatus::Reward2
         } else {
@@ -195,7 +193,7 @@ pub fn quest_menu_items(evals: &[GiverQuestEval]) -> Vec<QuestItem> {
 
 /// Completed quests use RewardRep, 4, in menus and Reward, 6, above the giver.
 fn menu_icon(e: &GiverQuestEval) -> QuestGiverStatus {
-    if e.role == ROLE_END && e.active {
+    if e.role == quest_role::END && e.active {
         if e.complete {
             QuestGiverStatus::RewardRep
         } else {
@@ -423,29 +421,29 @@ mod tests {
     #[test]
     fn status_picks_most_actionable() {
         assert_eq!(
-            quest_giver_status(&[ev(ROLE_START, true, false, false)]),
+            quest_giver_status(&[ev(quest_role::START, true, false, false)]),
             QuestGiverStatus::Available
         );
         assert_eq!(
             quest_giver_status(&[
-                ev(ROLE_START, true, false, false),
-                ev(ROLE_END, false, true, true)
+                ev(quest_role::START, true, false, false),
+                ev(quest_role::END, false, true, true)
             ]),
             QuestGiverStatus::Reward2
         );
         assert_eq!(
             quest_giver_status(&[
-                ev(ROLE_END, false, true, false),
-                ev(ROLE_START, true, false, false)
+                ev(quest_role::END, false, true, false),
+                ev(quest_role::START, true, false, false)
             ]),
             QuestGiverStatus::Available
         );
         assert_eq!(
-            quest_giver_status(&[ev(ROLE_END, false, true, false)]),
+            quest_giver_status(&[ev(quest_role::END, false, true, false)]),
             QuestGiverStatus::Incomplete
         );
         assert_eq!(
-            quest_giver_status(&[ev(ROLE_START, false, false, false)]),
+            quest_giver_status(&[ev(quest_role::START, false, false, false)]),
             QuestGiverStatus::None
         );
         assert_eq!(quest_giver_status(&[]), QuestGiverStatus::None);
@@ -461,9 +459,9 @@ mod tests {
     #[test]
     fn quest_list_filters_to_actionable_and_tags_icons() {
         let evals = [
-            ev(ROLE_START, true, false, false),
-            ev(ROLE_END, false, true, true),
-            ev(ROLE_START, false, false, false),
+            ev(quest_role::START, true, false, false),
+            ev(quest_role::END, false, true, true),
+            ev(quest_role::START, false, false, false),
         ];
         let list = build_quest_list(100, "Greetings", &evals);
         assert_eq!(list.quest_items.len(), 2);

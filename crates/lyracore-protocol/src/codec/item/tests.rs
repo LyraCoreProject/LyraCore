@@ -4,9 +4,9 @@ use crate::codec::test_fixtures::proficiency;
 use crate::codec::values::build_inv_slot_values;
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::{
-    AllowedClass, AllowedRace, BagFamily, Bonding, BuyBankSlotResult, Faction, InventoryType,
-    ItemClassAndSubClass, ItemFlag, ItemQuality, Level, Object, ObjectType, ServerMessage,
-    SheatheType, Skill, SpellTriggerType, UpdateMask,
+    AllowedClass, AllowedRace, BagFamily, Bonding, Faction, InventoryType, ItemClassAndSubClass,
+    ItemFlag, ItemQuality, Level, Object, ObjectType, ServerMessage, SheatheType, Skill,
+    SpellTriggerType, UpdateMask,
 };
 use wow_world_messages::Guid;
 
@@ -658,24 +658,6 @@ fn a_copied_letters_create_block_carries_its_item_text_id() {
         ),
         other => panic!("expected an Item CreateObject2, got {other:?}"),
     }
-}
-
-#[test]
-fn bank_result_constants_match_gtker_buy_bank_slot_result() {
-    use lyracore_shared::bank::result;
-    assert_eq!(
-        BuyBankSlotResult::FailedTooMany.as_int(),
-        result::FAILED_TOO_MANY as u32
-    );
-    assert_eq!(
-        BuyBankSlotResult::InsufficientFunds.as_int(),
-        result::INSUFFICIENT_FUNDS as u32
-    );
-    assert_eq!(
-        BuyBankSlotResult::NotBanker.as_int(),
-        result::NOT_BANKER as u32
-    );
-    assert_eq!(BuyBankSlotResult::Ok.as_int(), result::OK as u32);
 }
 
 #[test]

@@ -1,4 +1,3 @@
-use lyracore_shared::loot::LootBoundaryFailure;
 use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Timestamp};
 
 use crate::game_account;
@@ -210,11 +209,26 @@ fn loot_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntit
     })?;
     if crate::taxi::is_in_flight(ctx, actor_guid) {
         return Err(crate::loot::refused(
-            lyracore_shared::loot::LootRefusal::LooterUnavailable,
+            crate::loot::LootRefusal::LooterUnavailable,
             "looter is in taxi flight",
         ));
     }
     Ok(actor)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LootBoundaryFailure {
+    OperatorRejected,
+    MissingActor,
+}
+
+impl LootBoundaryFailure {
+    fn as_tag(self) -> &'static str {
+        match self {
+            Self::OperatorRejected => "loot:boundary_operator_rejected",
+            Self::MissingActor => "loot:boundary_missing_actor",
+        }
+    }
 }
 
 fn loot_boundary_failure(failure: LootBoundaryFailure, detail: &str) -> String {
@@ -1110,7 +1124,12 @@ pub fn gw_bind_home(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::items::innkeeper_access_gate(ctx, actor_guid, innkeeper_guid)?;
+    crate::npc_interaction::gate(
+        ctx,
+        actor_guid,
+        innkeeper_guid,
+        crate::npc_interaction::NpcService::Innkeeper,
+    )?;
     crate::world::set_home(ctx, actor_guid);
     Ok(())
 }
@@ -1375,7 +1394,7 @@ pub fn gw_enter_areatrigger(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    Ok(crate::quest::request_enter_areatrigger(
+    Ok(crate::areatrigger::request_enter_areatrigger(
         ctx, actor_guid, trigger_id,
     )?)
 }

@@ -8,7 +8,7 @@ use lyracore_shared::mail::{MailSender, CHECK_MASK_COPIED};
 
 use crate::import_meta::game_import_meta;
 use crate::mail::game_mail;
-use crate::{game_faction_template, game_item_instance, game_item_template, game_world_entity};
+use crate::{game_faction_template, game_item_instance, game_item_template};
 
 #[table(accessor = game_auction_house, public)]
 pub struct AuctionHouseDefinition {
@@ -293,26 +293,13 @@ pub(crate) fn auction_house_for_interaction(
     player_guid: u64,
     auctioneer_guid: u64,
 ) -> Option<AuctionHousePolicy> {
-    let player = crate::helpers::acting_entity_by_guid(ctx, player_guid)?;
-    let auctioneer = ctx.db.game_world_entity().guid().find(auctioneer_guid)?;
-    if !player.is_player()
-        || player.dead
-        || player.health == 0
-        || auctioneer.dead
-        || auctioneer.health == 0
-        || auctioneer.is_player()
-        || auctioneer.type_mask & lyracore_shared::constants::type_mask::CREATURE
-            != lyracore_shared::constants::type_mask::CREATURE
-        || auctioneer.npc_flags & lyracore_shared::constants::npc_flags::AUCTIONEER == 0
-        || auctioneer.unit_flags & lyracore_shared::constants::unit_flags::NOT_SELECTABLE != 0
-        || player.map_id != auctioneer.map_id
-        || player.instance_id != auctioneer.instance_id
-        || crate::helpers::dist_sq(&player, &auctioneer)
-            > lyracore_shared::auction::INTERACTION_RANGE_SQ
-        || crate::reputation::npc_refuses_interaction(ctx, &auctioneer, &player)
-    {
-        return None;
-    }
+    let (_, auctioneer) = crate::npc_interaction::gate(
+        ctx,
+        player_guid,
+        auctioneer_guid,
+        crate::npc_interaction::NpcService::Auctioneer,
+    )
+    .ok()?;
     let faction_group = ctx
         .db
         .game_faction_template()
@@ -379,13 +366,6 @@ struct PreparedListing {
 struct ListingReceipt {
     listing: PreparedListing,
     auction_id: u32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum OperationMatch {
-    Replay(u32),
-    Conflict,
-    Fresh,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -927,18 +907,7 @@ trait ListingSource {
 }
 
 trait LocalListingSink: ListingSource {
-    fn receipt(&self, operation_id: u64) -> Option<ListingReceipt>;
     fn commit_local(&mut self, listing: PreparedListing) -> u32;
-}
-
-fn operation_match<S: LocalListingSink>(sink: &S, request: ListingRequest) -> OperationMatch {
-    match sink.receipt(request.operation_id) {
-        None => OperationMatch::Fresh,
-        Some(receipt) if receipt.auction_id != 0 && receipt.listing.request == request => {
-            OperationMatch::Replay(receipt.auction_id)
-        }
-        Some(_) => OperationMatch::Conflict,
-    }
 }
 
 fn prepare_from_source<S: ListingSource>(
@@ -977,11 +946,6 @@ fn create_local_listing<S: LocalListingSink>(
     sink: &mut S,
     request: ListingRequest,
 ) -> Result<u32, AuctionRefusal> {
-    match operation_match(sink, request) {
-        OperationMatch::Replay(auction_id) => return Ok(auction_id),
-        OperationMatch::Conflict => return Err(AuctionRefusal::InvalidTerms),
-        OperationMatch::Fresh => {}
-    }
     let listing = prepare_from_source(sink, request)?;
     Ok(sink.commit_local(listing))
 }
@@ -1183,15 +1147,6 @@ fn consume_listing_value(ctx: &ReducerContext, listing: &PreparedListing) {
 }
 
 impl LocalListingSink for CtxSource<'_> {
-    fn receipt(&self, operation_id: u64) -> Option<ListingReceipt> {
-        self.ctx
-            .db
-            .game_auction_operation_receipt()
-            .operation_id()
-            .find(operation_id)
-            .map(listing_from_receipt)
-    }
-
     fn commit_local(&mut self, listing: PreparedListing) -> u32 {
         consume_listing_value(self.ctx, &listing);
         let auction_id = insert_active_auction(self.ctx, &listing);

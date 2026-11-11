@@ -397,7 +397,7 @@ pub fn arm_all_pools(ctx: &ReducerContext) -> Result<(), String> {
     Ok(())
 }
 
-const USE_RANGE_SQ: f32 = crate::loot::LOOT_RANGE_SQ;
+const USE_RANGE_SQ: f32 = crate::npc_interaction::INTERACTION_RANGE_SQ;
 
 const RESPAWN_WINDOW_MICROS: u64 = 180_000_000;
 
@@ -614,19 +614,29 @@ fn use_resolved_gameobject(
                 return Err("chest already looted".to_string());
             }
 
-            let raw: Vec<(u32, u32, u32, u32, bool)> = if tmpl.data1 != 0 {
+            let rows: Vec<crate::loot::LootRow> = if tmpl.data1 != 0 {
                 ctx.db
                     .game_gameobject_loot()
                     .by_loot()
                     .filter(&tmpl.data1)
-                    .map(|r| (r.item_entry, r.chance_bp, r.count, r.group_id, r.quest_only))
+                    .map(|r| crate::loot::LootRow {
+                        item_entry: r.item_entry,
+                        chance_bp: r.chance_bp,
+                        count: r.count,
+                        group_id: r.group_id,
+                        quest_only: r.quest_only,
+                    })
                     .collect()
             } else {
                 Vec::new()
             };
-            let mut winners = crate::loot::roll_loot_rows_quest_aware(ctx, raw);
+            let mut winners = crate::loot::roll_loot_rows(ctx, rows);
             if winners.is_empty() && tmpl.data0 != 0 {
-                winners.push((tmpl.data0, 1, false));
+                winners.push(crate::loot::LootDrop {
+                    item_entry: tmpl.data0,
+                    count: 1,
+                    quest_only: false,
+                });
             }
             crate::loot::insert_corpse_rows(ctx, go.guid, winners);
             go.state = 1;

@@ -1,10 +1,5 @@
 use super::tables::ItemTemplate;
 
-// Class/race IDs are one-based bit indices; a zero durable mask grants no eligibility.
-pub(crate) fn eligibility_mask_allows(mask: u32, id: u8) -> bool {
-    id != 0 && (id as u32) <= u32::BITS && mask & (1u32 << (id - 1)) != 0
-}
-
 pub(crate) fn meets_required_skill(
     required_skill: u32,
     required_skill_rank: u32,
@@ -327,24 +322,28 @@ pub(crate) mod tests {
 
     #[test]
     fn explicit_equip_requirements_fail_closed_and_admit_qualified_characters() {
-        assert!(eligibility_mask_allows(1 << 7, 8));
-        assert!(!eligibility_mask_allows(1 << 7, 9));
-        assert!(!eligibility_mask_allows(0, 8));
-        assert!(!eligibility_mask_allows(u32::MAX, 0));
+        use lyracore_shared::race_class::{mask_admits, ZeroMask};
+        assert!(mask_admits(1 << 7, 8, ZeroMask::AdmitsNone));
+        assert!(!mask_admits(1 << 7, 9, ZeroMask::AdmitsNone));
+        assert!(!mask_admits(0, 8, ZeroMask::AdmitsNone));
+        assert!(!mask_admits(u32::MAX, 0, ZeroMask::AdmitsNone));
 
         for class_id in [1u8, 2, 3, 4, 5, 7, 8, 9, 11] {
-            assert!(eligibility_mask_allows(
+            assert!(mask_admits(
                 crate::items::tables::ALL_PLAYABLE_CLASS_MASK,
-                class_id
+                class_id,
+                ZeroMask::AdmitsNone
             ));
         }
-        assert!(!eligibility_mask_allows(
+        assert!(!mask_admits(
             crate::items::tables::ALL_PLAYABLE_CLASS_MASK,
-            6
+            6,
+            ZeroMask::AdmitsNone
         ));
-        assert!(!eligibility_mask_allows(
+        assert!(!mask_admits(
             crate::items::tables::ALL_PLAYABLE_CLASS_MASK,
-            10
+            10,
+            ZeroMask::AdmitsNone
         ));
 
         assert!(!meets_required_skill(171, 50, None));

@@ -5,6 +5,7 @@ pub use crate::account_ownership::{
 pub use crate::action_bar::{
     game_createinfo_action, game_player_action, CreateinfoAction, PlayerAction,
 };
+pub use crate::areatrigger::{game_areatrigger_teleport, AreatriggerTeleport};
 pub use crate::auction::{
     game_auction, game_auction_bid_decision, game_auction_bid_hold, game_auction_expiry,
     game_auction_hold, game_auction_house, game_auction_notice, game_auction_operation_receipt,
@@ -52,7 +53,7 @@ pub use crate::config::{
 };
 pub use crate::corpse::{game_corpse, Corpse};
 pub use crate::creatures::distraction::{game_creature_distraction, CreatureDistraction};
-pub use crate::creatures::{
+pub use crate::creatures::eventai::{
     game_creature_ai_broadcast_text, game_creature_ai_definition, game_creature_ai_event,
     game_creature_ai_forced_despawn, game_creature_ai_movement_intent,
     game_creature_ai_movement_path_waypoint, game_creature_ai_relay_arrival,
@@ -60,22 +61,21 @@ pub use crate::creatures::{
     game_creature_ai_relay_run, game_creature_ai_reset_deferral, game_creature_ai_returning_home,
     game_creature_ai_rule_state, game_creature_ai_spell_metadata, game_creature_ai_state,
     game_creature_ai_summon, game_creature_ai_summon_expiry, game_creature_ai_summon_origin,
-    game_creature_cast, game_creature_family, game_creature_gossip_menu_override,
-    game_creature_move_event, game_creature_move_schedule, game_creature_presentation,
-    game_creature_relay_temporary_faction, game_creature_spawn, game_creature_spell,
-    game_creature_spline, game_creature_template, game_creature_waypoint, game_gossip_menu,
-    game_gossip_menu_profile, game_gossip_menu_profile_option, game_gossip_option, game_hunter_pet,
-    game_hunter_pet_protocol, game_live_pet_kind, game_npc_text, game_npc_text_slot,
-    game_pet_care_schedule, game_pet_command, CreatureAiBroadcastText, CreatureAiDefinition,
-    CreatureAiEvent, CreatureAiForcedDespawn, CreatureAiMovementIntent,
-    CreatureAiMovementPathWaypoint, CreatureAiResetDeferral, CreatureAiReturningHome,
-    CreatureAiRuleState, CreatureAiSpellMetadata, CreatureAiState, CreatureAiSummon,
-    CreatureAiSummonExpiry, CreatureAiSummonOrigin, CreatureCast, CreatureFamily,
-    CreatureGossipMenuOverride, CreatureMoveEvent, CreatureMoveSchedule, CreaturePresentation,
-    CreatureRelayTemporaryFaction, CreatureSpawn, CreatureSpawnMap, CreatureSpell, CreatureSpline,
-    CreatureTemplate, CreatureWaypoint, GossipMenu, GossipMenuProfile, GossipMenuProfileOption,
-    GossipOption, HunterPet, HunterPetProtocol, LivePetKind, NpcText, NpcTextSlot, PetCareSchedule,
-    PetCommand, RelayArrival, RelayContinuation, RelayDefinition, RelayRun,
+    CreatureAiBroadcastText, CreatureAiDefinition, CreatureAiEvent, CreatureAiForcedDespawn,
+    CreatureAiMovementIntent, CreatureAiMovementPathWaypoint, CreatureAiResetDeferral,
+    CreatureAiReturningHome, CreatureAiRuleState, CreatureAiSpellMetadata, CreatureAiState,
+    CreatureAiSummon, CreatureAiSummonExpiry, CreatureAiSummonOrigin, RelayArrival,
+    RelayContinuation, RelayDefinition, RelayRun,
+};
+pub use crate::creatures::{
+    game_creature_cast, game_creature_family, game_creature_move_event,
+    game_creature_move_schedule, game_creature_presentation, game_creature_relay_temporary_faction,
+    game_creature_spawn, game_creature_spell, game_creature_spline, game_creature_template,
+    game_creature_waypoint, game_hunter_pet, game_hunter_pet_protocol, game_live_pet_kind,
+    game_pet_care_schedule, game_pet_command, CreatureCast, CreatureFamily, CreatureMoveEvent,
+    CreatureMoveSchedule, CreaturePresentation, CreatureRelayTemporaryFaction, CreatureSpawn,
+    CreatureSpawnMap, CreatureSpell, CreatureSpline, CreatureTemplate, CreatureWaypoint, HunterPet,
+    HunterPetProtocol, LivePetKind, PetCareSchedule, PetCommand,
 };
 #[cfg(feature = "debug_reducers")]
 pub use crate::debug::{
@@ -100,7 +100,12 @@ pub use crate::gc::{game_event_reaper_schedule, EventReaperSchedule};
 pub use crate::gm::{game_world_config, GmWorldConfig};
 pub use crate::go_collider::{game_go_collider, GoCollider};
 pub use crate::go_model::{game_go_model, GoModel};
-pub use crate::gossip::{game_gossip_condition, GossipCondition};
+pub use crate::gossip::{
+    game_creature_gossip_menu_override, game_gossip_condition, game_gossip_menu,
+    game_gossip_menu_profile, game_gossip_menu_profile_option, game_gossip_option, game_npc_text,
+    game_npc_text_slot, CreatureGossipMenuOverride, GossipCondition, GossipMenu, GossipMenuProfile,
+    GossipMenuProfileOption, GossipOption, NpcText, NpcTextSlot,
+};
 pub use crate::graveyard::{game_graveyard, game_graveyard_zone, GraveyardLoc, GraveyardZone};
 pub use crate::group::{
     game_bot_invite_intent, game_group, game_group_event, game_group_invite, game_group_member,
@@ -146,13 +151,13 @@ pub use crate::loot::{
     LootRollVote,
 };
 pub use crate::mail::{game_mail, Mail};
-pub use crate::mail_catalogue::{
-    game_mail_loot, game_mail_template, game_quest_reward_mail, MailLoot, MailTemplate,
-    QuestRewardMail,
-};
 pub use crate::mail_escrow::{
     game_mail_delivery, game_mail_escrow, game_mail_escrow_reaper_schedule, MailDelivery,
     MailEscrow, MailEscrowReaperSchedule,
+};
+pub use crate::mail_reward::{
+    game_mail_loot, game_mail_template, game_quest_reward_mail, MailLoot, MailTemplate,
+    QuestRewardMail,
 };
 pub use crate::mail_text::{game_item_text, ItemText};
 pub use crate::mail_timer::{game_mail_arrival, game_mail_timer, MailArrival, MailTimer};
@@ -170,13 +175,13 @@ pub use crate::package_config::{game_package_config, PackageConfig};
 pub use crate::package_import::{game_package_import, PackageImport};
 pub use crate::package_teardown::{game_package_teardown, PackageTeardown};
 pub use crate::quest::{
-    game_areatrigger_teleport, game_character_quest, game_character_quest_event_credit,
-    game_creature_quest, game_gameobject_quest, game_quest_cast_objective,
-    game_quest_event_requirement, game_quest_objective, game_quest_reward_choice,
-    game_quest_reward_item, game_quest_reward_spell, game_quest_template, game_quest_text,
-    AreatriggerTeleport, CharacterQuest, CharacterQuestEventCredit, CreatureQuest, GameObjectQuest,
-    QuestCastObjective, QuestEventRequirement, QuestObjective, QuestRewardChoice, QuestRewardItem,
-    QuestRewardSpell, QuestTemplate, QuestText,
+    game_character_quest, game_character_quest_event_credit, game_creature_quest,
+    game_gameobject_quest, game_quest_cast_objective, game_quest_event_requirement,
+    game_quest_objective, game_quest_reward_choice, game_quest_reward_item,
+    game_quest_reward_spell, game_quest_template, game_quest_text, CharacterQuest,
+    CharacterQuestEventCredit, CreatureQuest, GameObjectQuest, QuestCastObjective,
+    QuestEventRequirement, QuestObjective, QuestRewardChoice, QuestRewardItem, QuestRewardSpell,
+    QuestTemplate, QuestText,
 };
 pub use crate::realm_chat::{game_realm_chat_event, RealmChatEvent};
 pub use crate::realm_core::{

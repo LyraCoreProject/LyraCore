@@ -1,7 +1,6 @@
 pub const HAS_UNREAD_MAIL: f32 = 0.0;
 pub const NO_UNREAD_MAIL: f32 = -86400.0;
 pub const MAILBOX_GO_TYPE: u8 = 19;
-pub const MAILBOX_RANGE_SQ: f32 = 100.0;
 pub const INBOX_CAPACITY: usize = 50;
 pub const CHECK_MASK_READ: u32 = 0x01;
 pub const CHECK_MASK_RETURNED: u32 = 0x02;
