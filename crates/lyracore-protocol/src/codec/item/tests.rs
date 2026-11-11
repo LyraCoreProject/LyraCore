@@ -580,7 +580,7 @@ fn item_query_response_unknown_entry_is_not_found() {
 #[test]
 fn item_create_object_is_item_typed_and_serializes() {
     let inst = ItemInstanceView {
-        guid: (0x4000u64 << 48) | (1 << 8) | 23,
+        guid: lyracore_shared::guid::compose(lyracore_shared::guid::ITEM, (1 << 8) | 23),
         entry: 25,
         owner_guid: 1,
         contained_guid: None,
@@ -620,7 +620,7 @@ fn item_create_object_is_item_typed_and_serializes() {
 #[test]
 fn a_copied_letters_create_block_carries_its_item_text_id() {
     let inst = ItemInstanceView {
-        guid: (0x4000u64 << 48) | (1 << 8) | 23,
+        guid: lyracore_shared::guid::compose(lyracore_shared::guid::ITEM, (1 << 8) | 23),
         entry: 8383,
         owner_guid: 1,
         contained_guid: None,
@@ -663,7 +663,7 @@ fn a_copied_letters_create_block_carries_its_item_text_id() {
 #[test]
 fn item_create_object_bag_slots_build_a_container_with_num_slots() {
     let inst = ItemInstanceView {
-        guid: (0x4000u64 << 48) | (1 << 8) | 19,
+        guid: lyracore_shared::guid::compose(lyracore_shared::guid::ITEM, (1 << 8) | 19),
         entry: 5000,
         owner_guid: 1,
         contained_guid: None,

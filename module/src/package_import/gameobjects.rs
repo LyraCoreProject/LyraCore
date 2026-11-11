@@ -2,6 +2,7 @@ use spacetimedb::{ReducerContext, Table};
 
 use lyracore_package_delta::{
     is_package_gameobject_id, FieldValue, Operation, PrimaryKey, Table as ClaimTable, TracedRow,
+    GAMEOBJECT_FAMILY,
 };
 
 use crate::{
@@ -9,11 +10,21 @@ use crate::{
     GameObjectTemplate, GameObjectTrap,
 };
 
-use super::{as_f32, as_str, as_u32, as_u8, check_insert_is_whole, UpdateTarget};
+use super::{as_f32, as_str, as_u32, as_u8, check_insert_is_whole, no_such_column, ClaimOps};
+
+pub(super) const OPS: ClaimOps = ClaimOps {
+    name: GAMEOBJECT_FAMILY,
+    in_package_range,
+    row_is_present,
+    check_references: Some(check_references),
+    clear_package_range,
+    write_row,
+    after_write: Some(crate::go_collider::rebuild_go_colliders),
+};
 
 const GAMEOBJECT_GUID_SPAWN_MASK: u64 = 0xFFFF_FFFF_FFFF;
 
-pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
     check_one_guid_per_spawn(rows)?;
     for row in rows {
         let entry = match row.key() {
@@ -94,17 +105,6 @@ fn template_exists_after_apply(ctx: &ReducerContext, rows: &[TracedRow], entry: 
         .is_some()
 }
 
-pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
-    if row.operation() == Operation::Update && updates_an_uninvented_package_row(row) {
-        return UpdateTarget::Uninvented;
-    }
-    if row_is_present(ctx, row) {
-        UpdateTarget::Present
-    } else {
-        UpdateTarget::Absent
-    }
-}
-
 fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
     match row.table() {
         ClaimTable::GameobjectTemplate => ctx
@@ -127,7 +127,7 @@ fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
     }
 }
 
-fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
+fn in_package_range(row: &TracedRow) -> bool {
     match row.key() {
         PrimaryKey::GameobjectTemplate { entry } | PrimaryKey::GameobjectTrap { entry } => {
             is_package_gameobject_id(entry)
@@ -137,7 +137,7 @@ fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
     }
 }
 
-pub(super) fn clear_package_range(ctx: &ReducerContext) {
+fn clear_package_range(ctx: &ReducerContext) {
     let spawns = ctx.db.game_gameobject();
     let package_guids: Vec<u64> = spawns
         .iter()
@@ -173,7 +173,7 @@ fn is_package_spawn_guid(guid: u64) -> bool {
     u32::try_from(guid & GAMEOBJECT_GUID_SPAWN_MASK).is_ok_and(is_package_gameobject_id)
 }
 
-pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     match (row.table(), row.operation()) {
         (ClaimTable::GameobjectTemplate, Operation::Insert) => {
             check_insert_is_whole(row)?;
@@ -369,10 +369,6 @@ fn apply_spawn_field(
     Ok(())
 }
 
-fn no_such_column(table: &str, column: &str) -> String {
-    format!("`{table}` has no claimable column `{column}`")
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
@@ -394,7 +390,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(in_package_range(&plan.rows[0]));
     }
 
     #[test]

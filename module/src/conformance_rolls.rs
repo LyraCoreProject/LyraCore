@@ -187,7 +187,7 @@ mod fixture {
             });
         }
 
-        let mut spell = crate::seed::base_spell(2948, "Fixture spell 2948");
+        let mut spell = crate::Spell::blank(2948, "Fixture spell 2948");
         spell.cost = 50;
         spell.cast_time_ms = 1500;
         spell.range_yd = 30;
@@ -205,7 +205,7 @@ mod fixture {
         for effect in effects.by_spell().filter(&2948u32).collect::<Vec<_>>() {
             effects.id().delete(effect.id);
         }
-        let mut effect = crate::seed::base_effect(2948, 0);
+        let mut effect = crate::SpellEffect::blank(2948, 0);
         effect.kind = 1;
         effect.base_points = 53;
         effect.die_sides = 13;
@@ -213,7 +213,8 @@ mod fixture {
         effect.target = 1;
         effect.bonus_coefficient = 0.429;
         effects.insert(effect);
-        crate::debug::debug_learn_spell(ctx, character_guid, 2948)?;
+        let learner = crate::helpers::live_entity(ctx, character_guid)?;
+        crate::spell::learn_spell(ctx, character_guid, learner.owner_identity, 2948);
         let table = ctx.db.game_conformance_spell_random();
         table.character_guid().delete(character_guid);
         table.insert(SpellRandom {

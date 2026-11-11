@@ -9,6 +9,7 @@ use lyracore_package_delta::{
     packed_creature_spawn_guid, packed_gameobject_spawn_guid, MAX_CREATURE_GUID_COMPONENT,
     OPERATOR_SPAWN_ID_CEIL, OPERATOR_SPAWN_ID_FLOOR,
 };
+use lyracore_shared::guid;
 use lyracore_shared::terrain::{cell_index, cell_key};
 use spacetimedb::{log, reducer, ReducerContext, SpacetimeType, Table};
 
@@ -26,9 +27,17 @@ use crate::gameobject::{
 use crate::nav::game_nav_chunk;
 use crate::terrain::game_terrain_chunk;
 
-const HIGHGUID_UNIT: u64 = 0xF130;
-const CREATURE_SPAWN_ID_MASK: u64 = MAX_CREATURE_GUID_COMPONENT as u64;
-const GAMEOBJECT_SPAWN_ID_MASK: u64 = 0xFFFF_FFFF_FFFF;
+fn next_template_id(last: u32) -> Result<u32, String> {
+    use lyracore_package_delta::ids::{OPERATOR_TEMPLATE_ID_CEIL, OPERATOR_TEMPLATE_ID_FLOOR};
+    let next = last.saturating_add(1);
+    if next > OPERATOR_TEMPLATE_ID_CEIL {
+        return Err(format!(
+            "the Operator Template Range ({OPERATOR_TEMPLATE_ID_FLOOR} to \
+             {OPERATOR_TEMPLATE_ID_CEIL}) is exhausted"
+        ));
+    }
+    Ok(next)
+}
 
 const MAX_SPAWN_EDITS: usize = 256;
 const MAX_WAYPOINTS_PER_SPAWN: usize = 256;
@@ -249,8 +258,8 @@ impl SpawnIds {
             ctx.db
                 .game_creature_spawn()
                 .iter()
-                .filter(|spawn| spawn.guid >> 48 == HIGHGUID_UNIT)
-                .map(|spawn| (spawn.guid & CREATURE_SPAWN_ID_MASK) as u32)
+                .filter(|spawn| guid::is_creature(spawn.guid))
+                .map(|spawn| guid::creature_spawn_id(spawn.guid))
                 .filter(|&id| is_operator_spawn_id(id))
                 .max()
                 .unwrap_or(OPERATOR_SPAWN_ID_FLOOR - 1)
@@ -266,7 +275,7 @@ impl SpawnIds {
                 .game_gameobject()
                 .iter()
                 .filter(|go| is_gameobject_guid(go.guid))
-                .filter_map(|go| u32::try_from(go.guid & GAMEOBJECT_SPAWN_ID_MASK).ok())
+                .filter_map(|go| u32::try_from(guid::low(go.guid)).ok())
                 .filter(|&id| is_operator_spawn_id(id))
                 .max()
                 .unwrap_or(OPERATOR_SPAWN_ID_FLOOR - 1)
@@ -474,10 +483,10 @@ fn delete_gameobject(ctx: &ReducerContext, guid: u64) -> Result<String, String> 
 
 /// Only an instance-zero spawn row outside the Package band that is not itself a copy.
 fn authored_creature_spawn(ctx: &ReducerContext, guid: u64) -> Result<CreatureSpawn, String> {
-    if guid >> 48 != HIGHGUID_UNIT {
+    if !guid::is_creature(guid) {
         return Err(format!("{guid} is not a creature spawn guid"));
     }
-    if is_package_creature_id((guid & CREATURE_SPAWN_ID_MASK) as u32) {
+    if is_package_creature_id(guid::creature_spawn_id(guid)) {
         return Err(format!(
             "creature spawn {guid} is in the Package Creature Range"
         ));
@@ -499,7 +508,7 @@ fn authored_gameobject(ctx: &ReducerContext, guid: u64) -> Result<GameObject, St
     if !is_gameobject_guid(guid) || guid & (POOL_TAG | GO_COPY_BAND) != 0 {
         return Err(format!("{guid} is not a gameobject spawn guid"));
     }
-    if u32::try_from(guid & GAMEOBJECT_SPAWN_ID_MASK).is_ok_and(is_package_gameobject_id) {
+    if u32::try_from(guid::low(guid)).is_ok_and(is_package_gameobject_id) {
         return Err(format!(
             "gameobject spawn {guid} is in the Package Gameobject Range"
         ));
@@ -734,6 +743,17 @@ fn describe_route(points: impl Iterator<Item = (f32, f32, f32)>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn template_allocation_starts_in_range_and_refuses_exhaustion() {
+        use lyracore_package_delta::ids::{OPERATOR_TEMPLATE_ID_CEIL, OPERATOR_TEMPLATE_ID_FLOOR};
+        assert_eq!(
+            next_template_id(OPERATOR_TEMPLATE_ID_FLOOR - 1),
+            Ok(5_200_500)
+        );
+        assert_eq!(next_template_id(5_200_541), Ok(5_200_542));
+        assert!(next_template_id(OPERATOR_TEMPLATE_ID_CEIL).is_err());
+    }
 
     #[test]
     fn the_next_spawn_id_starts_at_the_floor_and_refuses_past_the_ceiling() {

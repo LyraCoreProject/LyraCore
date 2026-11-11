@@ -61,6 +61,40 @@ pub struct CreatureTemplate {
     pub trainer_class: u8,
 }
 
+impl CreatureTemplate {
+    pub(crate) fn blank(entry: u32, name: &str) -> Self {
+        Self {
+            entry,
+            name: name.to_string(),
+            subname: String::new(),
+            display_id: 0,
+            level: 0,
+            health: 0,
+            faction_template: 0,
+            npc_flags: 0,
+            unit_flags: 0,
+            creature_type: 0,
+            creature_family: 0,
+            type_flags: 0,
+            rank: 0,
+            scale: 0.0,
+            base_attack_time_ms: 0,
+            money_min: 0,
+            money_max: 0,
+            max_level: 0,
+            max_level_health: 0,
+            aggro_range: 0,
+            damage_min: 0,
+            damage_max: 0,
+            armor: 0,
+            pickpocket_loot_id: 0,
+            skin_loot_id: 0,
+            trainer_type: 0,
+            trainer_class: 0,
+        }
+    }
+}
+
 #[table(accessor = game_creature_family, public)]
 pub struct CreatureFamily {
     #[primary_key]

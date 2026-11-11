@@ -2,6 +2,7 @@ use spacetimedb::{ReducerContext, Table};
 
 use lyracore_package_delta::{
     is_package_loot_id, FieldValue, Operation, PrimaryKey, Table as ClaimTable, TracedRow,
+    LOOT_FAMILY,
 };
 
 use crate::loot::{
@@ -10,9 +11,19 @@ use crate::loot::{
 };
 use crate::{game_creature_template, game_gameobject_template, game_item_template};
 
-use super::{as_bool, as_u32, check_insert_is_whole, UpdateTarget};
+use super::{as_bool, as_u32, check_insert_is_whole, missing_reference, ClaimOps};
 
-pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+pub(super) const OPS: ClaimOps = ClaimOps {
+    name: LOOT_FAMILY,
+    in_package_range,
+    row_is_present,
+    check_references: Some(check_references),
+    clear_package_range,
+    write_row,
+    after_write: None,
+};
+
+fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
     for row in rows {
         let item_entry = final_u32(ctx, row, "item_entry")?;
         if item_entry == 0
@@ -77,11 +88,7 @@ pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Resu
 }
 
 fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, String> {
-    if let Some(FieldValue::U32(value)) = row.fields().get(field).map(|claimed| &claimed.value) {
-        return Ok(*value);
-    }
-
-    let value = match row.table() {
+    super::final_u32(row, field, || match row.table() {
         ClaimTable::PickpocketLoot => {
             ctx.db
                 .game_pickpocket_loot()
@@ -126,30 +133,11 @@ fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, 
                 _ => 0,
             }),
         other => unreachable!("loot value lookup received {other}"),
-    };
-
-    value.ok_or_else(|| {
-        format!(
-            "`{}` row {} vanished during preflight",
-            row.table(),
-            row.key()
-        )
     })
 }
 
-fn missing_reference(row: &TracedRow, field: &str, value: u32) -> String {
-    format!(
-        "`{}` row {} references missing {field} {value}",
-        row.table(),
-        row.key()
-    )
-}
-
-pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
-    if updates_an_uninvented_package_row(row) {
-        return UpdateTarget::Uninvented;
-    }
-    let present = match row.table() {
+fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
+    match row.table() {
         ClaimTable::PickpocketLoot => ctx
             .db
             .game_pickpocket_loot()
@@ -173,19 +161,14 @@ pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarg
             "`check_claims_belong_to` refuses a non-loot row before the loot family's dispatch \
              runs, found {other}"
         ),
-    };
-    if present {
-        UpdateTarget::Present
-    } else {
-        UpdateTarget::Absent
     }
 }
 
-fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
-    row.operation() == Operation::Update && is_package_loot_id(row.row_id())
+fn in_package_range(row: &TracedRow) -> bool {
+    is_package_loot_id(row.row_id())
 }
 
-pub(super) fn clear_package_range(ctx: &ReducerContext) {
+fn clear_package_range(ctx: &ReducerContext) {
     let pickpocket = ctx.db.game_pickpocket_loot();
     let stale_pickpocket: Vec<u64> = pickpocket
         .iter()
@@ -227,7 +210,7 @@ pub(super) fn clear_package_range(ctx: &ReducerContext) {
     }
 }
 
-pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     match (row.table(), row.operation()) {
         (ClaimTable::PickpocketLoot, Operation::Insert) => {
             ctx.db
@@ -517,7 +500,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(in_package_range(&plan.rows[0]));
     }
 
     #[test]
@@ -532,7 +515,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(!updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(!in_package_range(&plan.rows[0]));
     }
 
     #[test]

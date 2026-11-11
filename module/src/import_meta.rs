@@ -2,8 +2,6 @@ use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use crate::helpers::require_operator;
 
-const WMO_MAPS: [u32; 1] = [36];
-
 #[table(accessor = game_import_meta)]
 pub struct ImportMeta {
     #[primary_key]
@@ -12,6 +10,17 @@ pub struct ImportMeta {
     pub file_hash: String,
     pub row_count: u64,
     pub imported_at: Timestamp,
+}
+
+/// The family the importer stamps for its DBC catalogues (importer/src/world_import.rs).
+pub(crate) const DBC_FAMILY: &str = "dbc";
+
+pub(crate) fn is_imported(ctx: &ReducerContext, family: &str) -> bool {
+    ctx.db
+        .game_import_meta()
+        .family()
+        .find(family.to_string())
+        .is_some()
 }
 
 pub(crate) fn stamp(
@@ -107,7 +116,7 @@ fn content_problem(
     if let Some(map) = map_ids
         .iter()
         .copied()
-        .find(|map| WMO_MAPS.contains(map) && !wmo_active(*map))
+        .find(|map| lyracore_shared::vmap::INSTANCE_SLICE_MAPS.contains(map) && !wmo_active(*map))
     {
         return Err(format!("missing imported WMO geometry for map {map}"));
     }

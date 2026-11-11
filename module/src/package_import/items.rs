@@ -1,33 +1,36 @@
 use spacetimedb::{ReducerContext, Table};
 
-use lyracore_package_delta::{is_package_item_id, FieldValue, Operation, PrimaryKey, TracedRow};
+use lyracore_package_delta::{
+    is_package_item_id, FieldValue, Operation, PrimaryKey, TracedRow, ITEM_FAMILY,
+};
 
 use crate::items::{game_item_template, ItemTemplate};
 
-use super::{as_bool, as_f32, as_i32, as_str, as_u32, as_u8, check_insert_is_whole, UpdateTarget};
+use super::{as_bool, as_f32, as_i32, as_str, as_u32, as_u8, check_insert_is_whole, ClaimOps};
 
-pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
-    if updates_an_uninvented_package_row(row) {
-        return UpdateTarget::Uninvented;
-    }
-    let present = ctx
-        .db
+pub(super) const OPS: ClaimOps = ClaimOps {
+    name: ITEM_FAMILY,
+    in_package_range,
+    row_is_present,
+    check_references: None,
+    clear_package_range,
+    write_row,
+    after_write: None,
+};
+
+fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
+    ctx.db
         .game_item_template()
         .entry()
         .find(entry_of(row))
-        .is_some();
-    if present {
-        UpdateTarget::Present
-    } else {
-        UpdateTarget::Absent
-    }
+        .is_some()
 }
 
-fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
-    row.operation() == Operation::Update && is_package_item_id(entry_of(row))
+fn in_package_range(row: &TracedRow) -> bool {
+    is_package_item_id(entry_of(row))
 }
 
-pub(super) fn clear_package_range(ctx: &ReducerContext) {
+fn clear_package_range(ctx: &ReducerContext) {
     let items = ctx.db.game_item_template();
     let stale: Vec<u32> = items
         .iter()
@@ -39,7 +42,7 @@ pub(super) fn clear_package_range(ctx: &ReducerContext) {
     }
 }
 
-pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     match row.operation() {
         Operation::Insert => {
             ctx.db
@@ -72,75 +75,10 @@ fn entry_of(row: &TracedRow) -> u32 {
 
 fn blank_item(entry: u32) -> ItemTemplate {
     ItemTemplate {
-        entry,
-        class: 0,
-        subclass: 0,
-        name: String::new(),
-        display_id: 0,
-        quality: 0,
-        inventory_type: 0,
-        item_level: 0,
-        required_level: 0,
-        max_durability: 0,
-        buy_price: 0,
-        sell_price: 0,
-        max_stack: 0,
-        damage_min: 0.0,
-        damage_max: 0.0,
-        delay_ms: 0,
-        stat_strength: 0,
-        stat_agility: 0,
-        stat_stamina: 0,
-        stat_intellect: 0,
-        stat_spirit: 0,
-        stat_crit: 0,
-        stat_hit: 0,
-        stat_armor: 0,
-        block_value: 0,
-        restores_power: false,
-        spellid_1: 0,
-        spelltrigger_1: 0,
-        spellid_2: 0,
-        spelltrigger_2: 0,
-        container_slots: 0,
-        sheath: 0,
-        bonding: 0,
-        holy_res: 0,
-        fire_res: 0,
-        nature_res: 0,
-        frost_res: 0,
-        shadow_res: 0,
-        arcane_res: 0,
-        spellid_3: 0,
-        spelltrigger_3: 0,
-        spellid_4: 0,
-        spelltrigger_4: 0,
-        spellid_5: 0,
-        spelltrigger_5: 0,
-        required_skill: 0,
-        required_skill_rank: 0,
-        required_reputation_faction: 0,
-        required_reputation_rank: 0,
-        max_count: 0,
-        item_flags: 0,
-        page_text: 0,
-        start_quest: 0,
-        bag_family: 0,
         buy_count: 0,
-        food_type: 0,
         allowed_class: 0,
         allowed_race: 0,
-        random_property: 0,
-        spellppmrate_1: 0.0,
-        spellppmrate_2: 0.0,
-        spellppmrate_3: 0.0,
-        spellppmrate_4: 0.0,
-        spellppmrate_5: 0.0,
-        spellcategory_1: 0,
-        spellcategory_2: 0,
-        spellcategory_3: 0,
-        spellcategory_4: 0,
-        spellcategory_5: 0,
+        ..ItemTemplate::blank(entry, "")
     }
 }
 
@@ -246,7 +184,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(in_package_range(&plan.rows[0]));
     }
 
     #[test]
@@ -261,7 +199,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(!updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(!in_package_range(&plan.rows[0]));
     }
 
     #[test]

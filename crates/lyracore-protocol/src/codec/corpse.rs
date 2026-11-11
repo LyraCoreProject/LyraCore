@@ -140,7 +140,7 @@ mod tests {
     #[test]
     fn corpse_create_is_a_corpse_object_with_race_in_bytes1() {
         let corpse = CorpseView {
-            guid: (0xF101u64 << 48) | 1,
+            guid: lyracore_shared::guid::compose(lyracore_shared::guid::CORPSE, 1),
             owner_guid: 1,
             x: -8949.0,
             y: -132.0,

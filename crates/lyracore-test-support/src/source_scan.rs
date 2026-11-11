@@ -1,4 +1,5 @@
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use rustc_lexer::{tokenize, TokenKind};
 
@@ -24,6 +25,28 @@ fn masked(src: &str, omit: impl Fn(TokenKind) -> bool) -> String {
         start = end;
     }
     String::from_utf8(bytes).expect("masking whole tokens preserves UTF-8")
+}
+
+/// Files under `dir` that `keep` accepts; it does not enter directories named in `skip_dirs`.
+pub fn files_under(dir: &Path, skip_dirs: &[&str], keep: &dyn Fn(&Path) -> bool) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    let entries =
+        std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
+    for entry in entries {
+        let path = entry.expect("readable dir entry").path();
+        if path.is_dir() {
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("");
+            if !skip_dirs.contains(&name) {
+                out.extend(files_under(&path, skip_dirs, keep));
+            }
+        } else if keep(&path) {
+            out.push(path);
+        }
+    }
+    out
 }
 
 // Inner cfg attributes, cfg_attr and macros are not expanded.
@@ -83,6 +106,35 @@ fn group_end(tokens: &[(&str, Range<usize>)], start: usize) -> usize {
     panic!("unterminated group in source scan");
 }
 
+// The outer attributes written before `#[cfg(..)]` belong to the same item.
+fn attributes_start(tokens: &[(&str, Range<usize>)], mut first: usize) -> usize {
+    while first >= 2 && tokens[first - 1].0 == "]" {
+        let mut depth = 0;
+        let mut open = first - 1;
+        loop {
+            match tokens[open].0 {
+                "]" => depth += 1,
+                "[" => {
+                    depth -= 1;
+                    if depth == 0 {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            if open == 0 {
+                return first;
+            }
+            open -= 1;
+        }
+        if open == 0 || tokens[open - 1].0 != "#" {
+            return first;
+        }
+        first = open - 1;
+    }
+    first
+}
+
 fn without_test_code(src: &str) -> String {
     let mut offset = 0;
     let tokens: Vec<_> = tokenize(src)
@@ -105,7 +157,7 @@ fn without_test_code(src: &str) -> String {
             i = attr_end + 1;
             continue;
         }
-        let start = tokens[i].1.start;
+        let start = tokens[attributes_start(&tokens, i)].1.start;
         i = attr_end + 1;
         let mut generic_depth = 0usize;
         let mut function = false;
@@ -298,6 +350,7 @@ mod tests {
     fn production_scans_exclude_test_configuration_and_resume_after_items() {
         let source = r#"
             #[cfg(all(unix, test))] #[allow(dead_code)] fn hidden() { hidden_call(); }
+            #[inline] #[cfg(test)] fn attributed() { hidden_call(); }
             #[cfg(test)] mod external;
             #[cfg(test)] fn generic<S, St>() { hidden_call(); }
             #[cfg(test)] fn fallible() -> Result<(), ()> { hidden_call(); Ok(()) }
@@ -318,6 +371,7 @@ mod tests {
         "#;
         let code = code_only(source);
         assert!(!code.contains("hidden_call"));
+        assert!(!code.contains("inline"));
         assert!(!code.contains("external"));
         assert!(body_of(&code, "fn last(").contains("last_call()"));
         assert!(body_of(&code, "fn local(").contains("after_helper()"));

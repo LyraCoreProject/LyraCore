@@ -1,22 +1,28 @@
 use spacetimedb::{ReducerContext, Table};
 
 use lyracore_package_delta::{
-    is_package_spell_id, packed_spell_effect_id, FieldValue, Operation, PrimaryKey,
-    Table as ClaimTable, TracedRow,
+    is_package_spell_id, FieldValue, Operation, PrimaryKey, Table as ClaimTable, TracedRow,
+    SPELL_FAMILY,
 };
 
 use crate::spell::{game_spell, game_spell_effect, Spell, SpellEffect};
 
 use super::{
-    as_bool, as_f32, as_i32, as_str, as_u16, as_u32, as_u64, as_u8, check_insert_is_whole,
-    UpdateTarget,
+    as_bool, as_f32, as_i32, as_str, as_u16, as_u32, as_u64, as_u8, check_insert_is_whole, ClaimOps,
 };
 
-pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
-    if updates_an_uninvented_package_row(row) {
-        return UpdateTarget::Uninvented;
-    }
-    let present = match row.table() {
+pub(super) const OPS: ClaimOps = ClaimOps {
+    name: SPELL_FAMILY,
+    in_package_range,
+    row_is_present,
+    check_references: None,
+    clear_package_range,
+    write_row,
+    after_write: None,
+};
+
+fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
+    match row.table() {
         ClaimTable::Spell => ctx
             .db
             .game_spell()
@@ -28,19 +34,14 @@ pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarg
             "`check_claims_belong_to` refuses a non-spell row before the spell family's dispatch \
              runs, found {other}"
         ),
-    };
-    if present {
-        UpdateTarget::Present
-    } else {
-        UpdateTarget::Absent
     }
 }
 
-fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
-    row.operation() == Operation::Update && is_package_spell_id(row.key().spell_id())
+fn in_package_range(row: &TracedRow) -> bool {
+    is_package_spell_id(row.key().spell_id())
 }
 
-pub(super) fn clear_package_range(ctx: &ReducerContext) {
+fn clear_package_range(ctx: &ReducerContext) {
     let effects = ctx.db.game_spell_effect();
     let stale_effects: Vec<u64> = effects
         .iter()
@@ -62,7 +63,7 @@ pub(super) fn clear_package_range(ctx: &ReducerContext) {
     }
 }
 
-pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     match (row.table(), row.operation()) {
         (ClaimTable::Spell, Operation::Insert) => {
             ctx.db
@@ -109,68 +110,8 @@ pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), Str
 
 fn blank_spell(spell_id: u32) -> Spell {
     Spell {
-        spell_id,
-        name: String::new(),
-        power_type: 0,
-        cost: 0,
-        cast_time_ms: 0,
         gcd_ms: 0,
-        cooldown_ms: 0,
-        range_yd: 0,
-        duration_ms: 0,
-        school_mask: 0,
-        dispel_type: 0,
-        mechanic: 0,
-        max_stacks: 0,
-        aura_interrupt: 0,
-        attributes: 0,
-        spell_level: 0,
-        max_level: 0,
-        is_negative: false,
-        cast_flags: 0,
-        stances: 0,
-        family_name: 0,
-        family_flags: 0,
-        proc_flags: 0,
-        proc_chance: 0,
-        proc_charges: 0,
-        max_duration_ms: 0,
-        custom_flags: 0,
-        min_target_level: 0,
-        single_target_key: 0,
-        form_mask: 0,
-        form_exclude: 0,
-        attributes_ex_2: 0,
-        visual_id: 0,
-        duration_index: 0,
-        category: 0,
-        category_cooldown_ms: 0,
-    }
-}
-
-fn blank_spell_effect(spell_id: u32, effect_index: u8) -> SpellEffect {
-    SpellEffect {
-        id: packed_spell_effect_id(spell_id, effect_index),
-        spell_id,
-        effect_index,
-        kind: 0,
-        base_points: 0,
-        die_sides: 0,
-        per_level: 0.0,
-        period_ms: 0,
-        target: 0,
-        radius_yd: 0.0,
-        chain_targets: 0,
-        trigger_spell: 0,
-        effect_mechanic: 0,
-        p0: 0,
-        p0_kind: 0,
-        p1: 0,
-        script_id: 0,
-        enters_combat: false,
-        points_per_combo: 0.0,
-        bonus_coefficient: -1.0,
-        equip_supported: false,
+        ..Spell::blank(spell_id, "")
     }
 }
 
@@ -269,7 +210,7 @@ fn built_spell_effect(row: &TracedRow) -> Result<SpellEffect, String> {
             row.key()
         ));
     };
-    let mut effect = blank_spell_effect(spell_id, effect_index);
+    let mut effect = SpellEffect::blank(spell_id, effect_index);
     for (field, claimed) in row.fields() {
         apply_effect_field(&mut effect, field, &claimed.value)?;
     }
@@ -296,7 +237,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(in_package_range(&plan.rows[0]));
     }
 
     #[test]
@@ -311,7 +252,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(!updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(!in_package_range(&plan.rows[0]));
     }
 
     #[test]
@@ -363,7 +304,7 @@ mod tests {
     fn every_claimable_effect_column_sets_its_own_field() {
         assert_each_column_sets_its_own_field(
             ClaimTable::SpellEffect,
-            || blank_spell_effect(PACKAGE_SPELL, 0),
+            || SpellEffect::blank(PACKAGE_SPELL, 0),
             apply_effect_field,
         );
     }

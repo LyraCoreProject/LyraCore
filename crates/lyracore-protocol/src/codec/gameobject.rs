@@ -285,7 +285,7 @@ mod tests {
     #[test]
     fn gameobject_create_object_carries_descriptor_fields_and_serializes() {
         let go = GameObjectView {
-            guid: (0xF110u64 << 48) | 1,
+            guid: lyracore_shared::guid::compose(lyracore_shared::guid::GAMEOBJECT, 1),
             template_entry: 50100,
             x: -8949.0,
             y: -139.0,
@@ -327,7 +327,7 @@ mod tests {
     #[test]
     fn transport_create_flags_the_packet_and_ends_its_movement_block_with_path_progress() {
         let transport = TransportView {
-            guid: (0x1FC0u64 << 48) | 176_244,
+            guid: lyracore_shared::guid::compose(lyracore_shared::guid::MO_TRANSPORT, 176_244),
             entry: 176_244,
             display_id: 3015,
             size: 1.0,
@@ -378,7 +378,7 @@ mod tests {
     #[test]
     fn gameobject_create_object_sends_scale_one_when_the_template_carries_no_size() {
         let go = GameObjectView {
-            guid: (0xF110u64 << 48) | 2,
+            guid: lyracore_shared::guid::compose(lyracore_shared::guid::GAMEOBJECT, 2),
             template_entry: 50101,
             display_id: 259,
             size: 0.0,

@@ -1245,6 +1245,7 @@ dependencies = [
 name = "lyracore-package-delta"
 version = "0.1.0"
 dependencies = [
+ "lyracore-shared",
  "serde_json",
 ]
 

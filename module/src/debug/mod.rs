@@ -13,21 +13,19 @@ mod taxi;
 
 pub use fingerprint::{game_catalogue_fingerprint, CatalogueFingerprint};
 
-pub use instance::debug_set_vmap_enabled;
-
 pub use readout::{game_debug_readout, DebugReadout};
 
-use lyracore_package_delta::{packed_creature_spawn_guid, packed_gameobject_spawn_guid};
+use lyracore_package_delta::{fixture_ids, packed_creature_spawn_guid};
 use lyracore_shared::{constants, spatial};
 use spacetimedb::{log, reducer, ReducerContext, Table, TimeDuration};
 
 use crate::{
-    game_character, game_config, game_corpse, game_creature_move_schedule, game_creature_spawn,
+    game_character, game_corpse, game_creature_move_schedule, game_creature_spawn,
     game_creature_spline, game_creature_template, game_dynamic_object, game_entity_motion,
     game_gameobject, game_gameobject_pool, game_gameobject_pool_member, game_gameobject_template,
-    game_gameobject_unlocked, game_ground_area, game_item_template, game_melee_attack,
-    game_quest_template, game_spell, game_spell_effect, game_world_entity, CreatureMoveSchedule,
-    CreatureSpawn, GroundArea, ItemInstance, ServerConfig,
+    game_ground_area, game_item_template, game_melee_attack, game_quest_template, game_spell,
+    game_spell_effect, game_world_entity, CreatureMoveSchedule, CreatureSpawn, GroundArea,
+    ItemInstance,
 };
 
 #[reducer]
@@ -104,23 +102,7 @@ pub fn debug_apply_damage(
     amount: u32,
     attacker_guid: u64,
 ) -> Result<(), String> {
-    let e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(target_guid)
-        .ok_or_else(|| format!("no live entity for guid {target_guid}"))?;
-    if e.dead {
-        return Err("target is dead".to_string());
-    }
-    let capped = amount.min(e.health.saturating_sub(1));
-    crate::combat::resolve_damage(ctx, attacker_guid, target_guid, capped).land(
-        ctx,
-        attacker_guid,
-        target_guid,
-        crate::combat::Hit::weapon(crate::combat::HitSource::MainHand, false),
-    );
-    Ok(())
+    crate::package_fixture::apply_damage(ctx, target_guid, amount, attacker_guid)
 }
 
 #[reducer]
@@ -590,53 +572,24 @@ pub fn debug_spawn_gameobject(
     respawn_secs: u32,
     gather_gray: u32,
 ) -> Result<(), String> {
-    if ctx
-        .db
-        .game_gameobject_template()
-        .entry()
-        .find(template_entry)
-        .is_none()
-    {
-        ctx.db
-            .game_gameobject_template()
-            .insert(crate::gameobject::GameObjectTemplate {
-                entry: template_entry,
-                type_id,
-                display_id,
-                name: format!("Debug GO {template_entry}"),
-                data0,
-                data1,
-                gather_skill_line,
-                respawn_secs,
-                gather_gray,
-                lock_id: 0,
-                size: 0.0,
-            });
-    }
-    let guid = packed_gameobject_spawn_guid(template_entry);
-    crate::GameObject::delete(ctx, guid);
-    ctx.db.game_gameobject_unlocked().go_guid().delete(guid);
-    crate::gameobject::GameObject {
-        guid,
-        template_entry,
+    crate::gameobject::spawn_standalone(
+        ctx,
+        crate::gameobject::GameObjectTemplate {
+            entry: template_entry,
+            type_id,
+            display_id,
+            name: format!("Debug GO {template_entry}"),
+            data0,
+            data1,
+            gather_skill_line,
+            respawn_secs,
+            gather_gray,
+            lock_id: 0,
+            size: 0.0,
+        },
         map_id,
-        x,
-        y,
-        z,
-        orientation: 0.0,
-        state: 0,
-        created_at: crate::time::now(ctx),
-        respawn_at_micros: 0,
-        instance_id: 0,
-        grid_x: 0,
-        grid_y: 0,
-        cell: 0,
-        rotation_0: 0.0,
-        rotation_1: 0.0,
-        rotation_2: 0.0,
-        rotation_3: 0.0,
-    }
-    .insert(ctx);
+        [x, y, z],
+    );
     Ok(())
 }
 
@@ -1328,24 +1281,9 @@ pub fn debug_learn_spell(
 #[reducer]
 pub fn debug_set_xp_rate(ctx: &ReducerContext, rate: f32) -> Result<(), String> {
     let rate = rate.max(0.0);
-    let cfg = ctx.db.game_config();
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.xp_rate = rate;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: rate,
-                nav_enabled: false,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: false,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let mut c = crate::config::server_config(ctx);
+    c.xp_rate = rate;
+    crate::config::save_server_config(ctx, c);
     Ok(())
 }
 
@@ -1697,20 +1635,22 @@ pub fn debug_sweep_slice_lens(_ctx: &ReducerContext) -> Result<(), String> {
 
 #[reducer]
 pub fn debug_seed_scenario_fixtures(ctx: &ReducerContext) {
+    crate::seed::seed_curated_content(ctx);
     crate::seed::seed_scenario_fixtures(ctx);
-    crate::seed::seed_regen_fixture(ctx);
-    crate::seed::seed_pw_shield_fixture(ctx);
-    crate::seed::seed_stacking_probe_fixture(ctx);
     let quest = ctx
         .db
         .game_quest_template()
         .entry()
-        .find(50900u32)
+        .find(fixture_ids::SCENARIO_QUEST)
         .is_some() as u64;
-    let npcs = [51003u32, 51004, 51005]
-        .iter()
-        .filter(|e| ctx.db.game_creature_template().entry().find(**e).is_some())
-        .count() as u64;
+    let npcs = [
+        fixture_ids::SCENARIO_QUESTGIVER_ENTRY,
+        fixture_ids::SCENARIO_VENDOR_ENTRY,
+        fixture_ids::WEAPON_MASTER_ENTRY,
+    ]
+    .iter()
+    .filter(|e| ctx.db.game_creature_template().entry().find(**e).is_some())
+    .count() as u64;
     crate::import_meta::stamp(ctx, "debug_seed_scenario_fixtures", "", "", quest + npcs);
 }
 

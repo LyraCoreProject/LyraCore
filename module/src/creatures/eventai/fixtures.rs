@@ -165,9 +165,11 @@ mod tests {
 
     #[test]
     fn fixture_rule_ids_stay_in_the_reserved_catalogue() {
+        use lyracore_package_delta::ids::{FIXTURE_RESERVED_ID_CEIL, FIXTURE_RESERVED_ID_FLOOR};
+        let reserved = u64::from(FIXTURE_RESERVED_ID_FLOOR)..=u64::from(FIXTURE_RESERVED_ID_CEIL);
         for id in FIRST_RULE_ID..=FIRST_RULE_ID + 8 {
-            assert!((5_090_000..=5_099_999).contains(&id));
+            assert!(reserved.contains(&id));
         }
-        assert!((5_090_000..=5_099_999).contains(&u64::from(FIRST_TEXT_ID)));
+        assert!(reserved.contains(&u64::from(FIRST_TEXT_ID)));
     }
 }

@@ -3,8 +3,8 @@ use std::collections::BTreeMap;
 use lyracore_package_delta::ids::{
     is_fixture_reserved_creature_id, is_fixture_reserved_loot_id, is_operator_template_id,
     is_package_cast_id, is_package_creature_id, is_package_loot_id, FIXTURE_RESERVED_ID_CEIL,
-    MAX_CREATURE_GUID_COMPONENT, OPERATOR_TEMPLATE_ID_CEIL, OPERATOR_TEMPLATE_ID_FLOOR,
-    PACKAGE_CAST_ID_CEIL, PACKAGE_LOOT_ID_CEIL,
+    MAX_CREATURE_GUID_COMPONENT, OPERATOR_TEMPLATE_ID_FLOOR, PACKAGE_CAST_ID_CEIL,
+    PACKAGE_LOOT_ID_CEIL,
 };
 use lyracore_protocol::messages::vanilla::{Class, CreatureFamily};
 use spacetimedb::{reducer, ReducerContext, SpacetimeType, Table};
@@ -295,14 +295,6 @@ fn next_row_id(
     Ok(next)
 }
 
-fn next_template_id(last: u32) -> Result<u32, String> {
-    let next = last.saturating_add(1);
-    if next > OPERATOR_TEMPLATE_ID_CEIL {
-        return Err("the Operator Template Range is exhausted".into());
-    }
-    Ok(next)
-}
-
 fn editable_creature(ctx: &ReducerContext, entry: u32) -> Result<CreatureTemplate, String> {
     if entry == 0 || entry > MAX_CREATURE_GUID_COMPONENT {
         return Err(format!("creature entry {entry} must be in 1..=16777215"));
@@ -339,7 +331,7 @@ fn apply(
                     .max()
                     .unwrap_or(OPERATOR_TEMPLATE_ID_FLOOR - 1)
             });
-            let entry = next_template_id(last)?;
+            let entry = super::next_template_id(last)?;
             ids.template = Some(entry);
             let change = create.fields.changes(None);
             ctx.db
@@ -532,8 +524,7 @@ fn respawn_changed(ctx: &ReducerContext, changed: &BTreeMap<u32, usize>) -> Resu
             if spawn.instance_id != 0 || spawn.source_guid != 0 {
                 continue;
             }
-            if is_package_creature_id((spawn.guid & u64::from(MAX_CREATURE_GUID_COMPONENT)) as u32)
-            {
+            if is_package_creature_id(lyracore_shared::guid::creature_spawn_id(spawn.guid)) {
                 continue;
             }
             spawns.push(spawn);
@@ -877,13 +868,7 @@ mod tests {
     }
 
     #[test]
-    fn allocation_starts_in_range_and_refuses_exhaustion() {
-        assert_eq!(
-            next_template_id(OPERATOR_TEMPLATE_ID_FLOOR - 1),
-            Ok(5_200_500)
-        );
-        assert_eq!(next_template_id(5_200_541), Ok(5_200_542));
-        assert!(next_template_id(OPERATOR_TEMPLATE_ID_CEIL).is_err());
+    fn loot_row_allocation_refuses_exhaustion() {
         assert!(RowBand::Loot.next(u64::MAX).is_err());
     }
 

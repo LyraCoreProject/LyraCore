@@ -188,7 +188,7 @@ fn creature_virtual_items_use_all_three_display_fields_without_object_type() {
 
 #[test]
 fn health_values_update_is_health_only_no_object_type() {
-    let guid = (0xF130u64 << 48) | (620u64 << 24) | 1;
+    let guid = lyracore_shared::guid::creature(620, 1);
     let msg = build_health_values(guid, 20);
     match &msg.objects[0] {
         Object::Values { guid1, mask1 } => {
@@ -211,7 +211,7 @@ fn health_values_update_is_health_only_no_object_type() {
 
 #[test]
 fn resistance_values_is_unit_only_no_object_type() {
-    let guid = (0xF130u64 << 48) | (620u64 << 24) | 1;
+    let guid = lyracore_shared::guid::creature(620, 1);
     let resistances = [0x1234u32, 1, 2, 3, 4, 5, 6];
     let msg = build_resistance_values(guid, resistances);
     match &msg.objects[0] {
@@ -240,7 +240,7 @@ fn resistance_values_is_unit_only_no_object_type() {
 
 #[test]
 fn dynamic_flags_values_is_unit_only_no_object_type() {
-    let guid = (0xF130u64 << 48) | (620u64 << 24) | 1;
+    let guid = lyracore_shared::guid::creature(620, 1);
     let msg = build_dynamic_flags_values(guid, 0x20);
     match &msg.objects[0] {
         Object::Values { guid1, mask1 } => {
@@ -643,7 +643,7 @@ fn container_slot_values_computes_the_field_index_from_the_bag_slot() {
 
 #[test]
 fn inv_slot_values_sets_the_slot_pointer_or_none_for_an_invalid_slot() {
-    let item_guid = (0x4000u64 << 48) | (1 << 8) | 23;
+    let item_guid = lyracore_shared::guid::compose(lyracore_shared::guid::ITEM, (1 << 8) | 23);
     let msg = build_inv_slot_values(1, 23, item_guid).expect("slot 23 (Inventory0) is valid");
     match &msg.objects[0] {
         Object::Values {

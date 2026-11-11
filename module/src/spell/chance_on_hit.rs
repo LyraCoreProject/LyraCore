@@ -328,7 +328,7 @@ mod tests {
             spelltrigger_3: SPELLTRIGGER_CHANCE_ON_HIT,
             spellid_5: 18104,
             spelltrigger_5: SPELLTRIGGER_CHANCE_ON_HIT,
-            ..crate::seed::base_item(19019, "Thunderfury, Blessed Blade of the Windseeker")
+            ..crate::ItemTemplate::blank(19019, "Thunderfury, Blessed Blade of the Windseeker")
         };
         assert_eq!(chance_on_hit_spells(&weapon), [(21992, 8.0), (18104, 0.0)]);
     }

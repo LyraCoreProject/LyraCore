@@ -178,7 +178,7 @@ mod tests {
 
     #[test]
     fn loot_response_envelope_matches_gtker() {
-        let guid = (0xF130u64 << 48) | (620u64 << 24) | 1;
+        let guid = lyracore_shared::guid::creature(620, 1);
         let (opcode, body) = build_loot_response_raw(guid, 13, &[]);
         let gtker = ServerOpcodeMessage::SMSG_LOOT_RESPONSE(Box::new(SMSG_LOOT_RESPONSE {
             guid: Guid::new(guid),

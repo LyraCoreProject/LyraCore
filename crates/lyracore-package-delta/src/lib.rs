@@ -9,6 +9,7 @@
 mod canonical;
 mod delta;
 mod error;
+pub mod fixture_ids;
 pub mod ids;
 mod schema;
 pub mod script;

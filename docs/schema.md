@@ -298,7 +298,7 @@ through `game_area_trigger` for its map and three-dimensional volume. The table 
 existing Realm gains an empty catalogue until the world import runs again. Inn rest applies only
 inside a selected trigger; a missing geometry row cannot grant rest.
 
-### Taxi catalogue (`module/src/config.rs`)
+### Taxi catalogue (`module/src/taxi.rs`)
 
 `game_taxi_node` comes from vmangos `taxi_nodes`. `game_taxi_path` and `game_taxi_path_node`
 come from the Operator's `TaxiPath.dbc` and `TaxiPathNode.dbc`. These rows are public.
@@ -774,7 +774,7 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_creature_ai_relay_continuation` | `resume_relay_run` | one-shot at the authored relay delay | `creatures/eventai/relay.rs` |
 | `game_creature_ai_relay_arrival` | `resume_relay_arrival` | one-shot on movement completion | `creatures/eventai/relay.rs` |
 
-`init` inserts the interval rows (`seed_scheduler_arming` in `module/src/seed.rs`). The transfer,
+`init` inserts the interval rows (`arm_interval_schedules` in `module/src/seed.rs`). The transfer,
 mail-escrow, session and native logon reapers, the native admission and member-stat ticks and the
 Transport carry schedules are armed by their own entry points, lazily and idempotently. Scheduled
 reducers check `ctx.sender() == ctx.database_identity()`, so nothing outside can drive them.
@@ -784,8 +784,8 @@ In a conformance build the virtual clock drives every scheduled table that is no
 [Module build](./module-build.md).
 
 `init` does not run again on an auto-migrating publish, so a schedule row can go stale.
-`debug_repair_after_publish` re-arms the interval schedules except the event reaper and melee
-schedules. Call it after every publish; see
+`debug_repair_after_publish` arms the same interval schedules as `init`, from one list in
+`module/src/seed.rs`. Call it after every publish; see
 [After every publish](./danger-zones.md#after-every-publish).
 
 Packages get a periodic hook without a table of their own: `game_tick_pass!` runs at the end of

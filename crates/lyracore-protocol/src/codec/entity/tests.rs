@@ -220,7 +220,7 @@ fn set_faction_standing_raw_sends_the_rep_index_not_the_faction_id() {
 #[test]
 fn create_object_builds_unit_for_a_creature() {
     let chicken = EntityView {
-        guid: (0xF130u64 << 48) | (620u64 << 24) | 1,
+        guid: lyracore_shared::guid::creature(620, 1),
         map_id: 0,
         type_mask: lyracore_shared::constants::type_mask::CREATURE,
         entry: 620,
@@ -258,7 +258,7 @@ fn create_object_builds_unit_for_a_creature() {
 #[test]
 fn creature_create_carries_npc_flags() {
     let vendor = EntityView {
-        guid: (0xF130u64 << 48) | (6741u64 << 24) | 1,
+        guid: lyracore_shared::guid::creature(6741, 1),
         map_id: 0,
         type_mask: lyracore_shared::constants::type_mask::CREATURE,
         entry: 6741,
@@ -578,7 +578,7 @@ fn destroy_object_carries_guid() {
 
 #[test]
 fn player_create_seeds_inventory_slot_descriptor() {
-    let item_guid = (0x4000u64 << 48) | (1 << 8) | 23;
+    let item_guid = lyracore_shared::guid::compose(lyracore_shared::guid::ITEM, (1 << 8) | 23);
     let msg = build_create_object(
         &warrior_entity(),
         CreateKind::SelfPlayer,
@@ -681,7 +681,7 @@ fn create_object_carries_the_sheath_state_for_player_and_creature() {
 
 #[test]
 fn player_create_equips_mainhand_renders_visible_item() {
-    let item_guid = (0x4000u64 << 48) | (1 << 8) | 15;
+    let item_guid = lyracore_shared::guid::compose(lyracore_shared::guid::ITEM, (1 << 8) | 15);
     let msg = build_create_object(
         &warrior_entity(),
         CreateKind::SelfPlayer,
@@ -1096,7 +1096,10 @@ fn a_land_mount_display_is_present_in_the_peer_create_mask() {
 
 #[test]
 fn visible_item_index_boundary_stops_after_equipment_slot_18() {
-    let (g18, g19) = ((0x4000u64 << 48) | 18, (0x4000u64 << 48) | 19);
+    let (g18, g19) = (
+        lyracore_shared::guid::compose(lyracore_shared::guid::ITEM, 18),
+        lyracore_shared::guid::compose(lyracore_shared::guid::ITEM, 19),
+    );
     let msg = build_create_object(
         &warrior_entity(),
         CreateKind::SelfPlayer,
@@ -1128,7 +1131,12 @@ fn visible_item_index_boundary_stops_after_equipment_slot_18() {
 
 #[test]
 fn player_create_carries_each_worn_items_permanent_enchant_for_self_and_peer() {
-    let bracer = worn_item(8, (0x4000u64 << 48) | 8, 25, 724);
+    let bracer = worn_item(
+        8,
+        lyracore_shared::guid::compose(lyracore_shared::guid::ITEM, 8),
+        25,
+        724,
+    );
     for kind in [CreateKind::SelfPlayer, CreateKind::Peer] {
         let msg = build_create_object(&warrior_entity(), kind, std::slice::from_ref(&bracer), &[])
             .unwrap();

@@ -118,7 +118,7 @@ fn movement(
     if touched(holds) && own {
         super::motion_permit::refresh_character(ctx, guid);
     }
-    if touched(holds) && (own || matches!(guid >> 48, 0xf130 | 0xf140)) {
+    if touched(holds) && (own || lyracore_shared::guid::is_unit(guid)) {
         let corpse = own
             && ctx
                 .db

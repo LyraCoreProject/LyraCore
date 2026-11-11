@@ -4,6 +4,7 @@ use spacetimedb::{ReducerContext, Table};
 
 use lyracore_package_delta::{
     is_package_creature_ai_id, FieldValue, Operation, Table as ClaimTable, TracedRow,
+    CREATURE_AI_FAMILY,
 };
 
 use crate::creatures::CreatureInstruction;
@@ -15,9 +16,19 @@ use crate::{
 };
 use crate::{CreatureAiBroadcastText, CreatureAiSummon};
 
-use super::{as_f32, as_str, as_u32, as_u8, check_insert_is_whole, UpdateTarget};
+use super::{as_f32, as_str, as_u32, as_u8, check_insert_is_whole, ClaimOps};
 
-pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+pub(super) const OPS: ClaimOps = ClaimOps {
+    name: CREATURE_AI_FAMILY,
+    in_package_range,
+    row_is_present,
+    check_references: Some(check_references),
+    clear_package_range,
+    write_row,
+    after_write: None,
+};
+
+fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
     check_quests_exist(ctx, rows)?;
     check_encounter_ownership(ctx, rows)
 }
@@ -163,15 +174,8 @@ fn subject_of(definition: &CreatureAiDefinition) -> String {
     }
 }
 
-pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
-    if row.operation() == Operation::Update && is_package_creature_ai_id(row.row_id()) {
-        return UpdateTarget::Uninvented;
-    }
-    if row_is_present(ctx, row) {
-        UpdateTarget::Present
-    } else {
-        UpdateTarget::Absent
-    }
+fn in_package_range(row: &TracedRow) -> bool {
+    is_package_creature_ai_id(row.row_id())
 }
 
 fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
@@ -201,7 +205,7 @@ fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
     }
 }
 
-pub(super) fn clear_package_range(ctx: &ReducerContext) {
+fn clear_package_range(ctx: &ReducerContext) {
     let texts = ctx.db.game_creature_ai_broadcast_text();
     let stale: Vec<u32> = texts
         .iter()
@@ -233,7 +237,7 @@ pub(super) fn clear_package_range(ctx: &ReducerContext) {
     }
 }
 
-pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     match (row.table(), row.operation()) {
         (ClaimTable::CreatureAiBroadcastText, Operation::Insert) => {
             check_insert_is_whole(row)?;

@@ -8,6 +8,7 @@ pub mod env;
 pub mod faction;
 pub mod gossip;
 pub mod group;
+pub mod guid;
 pub mod guild;
 pub mod instance;
 pub mod item;

@@ -251,8 +251,6 @@ pub struct GameObjectPoolMember {
     pub weight: u32,
 }
 
-/// The high part of every GameObject guid, in bits 48..63.
-pub(crate) const HIGHGUID_GAMEOBJECT: u64 = 0xF110;
 // Bit 47 keeps pool-point guids disjoint from imported and standalone gameobjects.
 pub const POOL_TAG: u64 = 1 << 47;
 // Bit 46 reserves gameobject Instance copies below pool bit 47.
@@ -261,11 +259,53 @@ pub(crate) const GO_COPY_BAND: u64 = 1 << 46;
 pub(crate) const DUEL_FLAG_BAND: u64 = 1 << 45;
 
 pub(crate) fn gameobject_guid(low: u64) -> u64 {
-    (HIGHGUID_GAMEOBJECT << 48) | low
+    lyracore_shared::guid::compose(lyracore_shared::guid::GAMEOBJECT, low)
 }
 
-pub(crate) fn is_gameobject_guid(guid: u64) -> bool {
-    guid >> 48 == HIGHGUID_GAMEOBJECT
+pub(crate) use lyracore_shared::guid::is_gameobject as is_gameobject_guid;
+
+/// Replaces the template's standalone spawn at its packed guid; keeps an existing template row.
+#[cfg(feature = "debug_reducers")]
+pub(crate) fn spawn_standalone(
+    ctx: &ReducerContext,
+    template: GameObjectTemplate,
+    map_id: u32,
+    [x, y, z]: [f32; 3],
+) -> GameObject {
+    let template_entry = template.entry;
+    if ctx
+        .db
+        .game_gameobject_template()
+        .entry()
+        .find(template_entry)
+        .is_none()
+    {
+        ctx.db.game_gameobject_template().insert(template);
+    }
+    let guid = lyracore_package_delta::packed_gameobject_spawn_guid(template_entry);
+    GameObject::delete(ctx, guid);
+    ctx.db.game_gameobject_unlocked().go_guid().delete(guid);
+    GameObject {
+        guid,
+        template_entry,
+        map_id,
+        x,
+        y,
+        z,
+        orientation: 0.0,
+        state: 0,
+        created_at: crate::time::now(ctx),
+        respawn_at_micros: 0,
+        instance_id: 0,
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
+        rotation_0: 0.0,
+        rotation_1: 0.0,
+        rotation_2: 0.0,
+        rotation_3: 0.0,
+    }
+    .insert(ctx)
 }
 
 pub(crate) fn pool_point_guid(point_id: u64) -> u64 {

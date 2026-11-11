@@ -4,17 +4,19 @@ use lyracore_shared::pet::{pet_guid_for, PET_NAME_INVALID};
 use support::{actor, number, poll_until, Row, Standalone, POLL_TIMEOUT};
 
 const HUNTER: &str = "1";
-const BOAR: &str = "51006";
+const BOAR: &str = "51008";
 const TAME: &str = "50300";
 /// `UNIT_FLAG_PET_RENAME`: the 1.12 client offers "Rename Pet" while the live pet carries it.
 const PET_RENAME_FLAG: u32 = 0x10;
 
 fn wild_boar(shard: &Standalone) -> String {
-    let before = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51006 AND owner_guid = 0");
+    let before = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {BOAR} AND owner_guid = 0"
+    ));
     shard.assert_call("debug_spawn_at_feet", &[HUNTER, BOAR, "5"]);
-    let rows = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51006 AND owner_guid = 0");
+    let rows = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {BOAR} AND owner_guid = 0"
+    ));
     let added: Vec<_> = rows
         .into_iter()
         .filter(|row| !before.contains(row))
@@ -29,7 +31,6 @@ fn hunter(name: &str) -> Standalone {
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
-    shard.assert_sql("UPDATE game_creature_template SET creature_family = 5, level = 5, health = 100, npc_flags = 0 WHERE entry = 51006");
     shard.assert_sql("UPDATE game_character SET class = 3, level = 10 WHERE guid = 1");
     shard.assert_call("debug_spawn_player_entity", &[HUNTER]);
     shard.assert_call("debug_set_level", &[HUNTER, "60"]);
@@ -189,7 +190,9 @@ fn a_hunter_renames_its_own_pet_once_and_the_name_outlives_logout() {
     shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
     let pet = pet_guid_for(1);
     let template_name = shard
-        .query_rows("SELECT name FROM game_creature_template WHERE entry = 51006")
+        .query_rows(&format!(
+            "SELECT name FROM game_creature_template WHERE entry = {BOAR}"
+        ))
         .remove(0)["name"]
         .clone();
     let tamed = identity(&shard);

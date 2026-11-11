@@ -6,7 +6,7 @@ use crate::nav::game_nav_chunk;
 use crate::vmap::game_vmap_chunk;
 use crate::{
     game_config, game_creature_spawn, game_creature_template, game_gameobject, game_instance,
-    game_world_entity, CreatureSpawn, ServerConfig,
+    game_world_entity, CreatureSpawn,
 };
 
 #[reducer]
@@ -107,24 +107,9 @@ pub fn debug_nav_probe(ctx: &ReducerContext, map: u32, x: f32, y: f32) {
 
 #[reducer]
 pub fn debug_set_nav_enabled(ctx: &ReducerContext, enabled: bool) -> Result<(), String> {
-    let cfg = ctx.db.game_config();
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.nav_enabled = enabled;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: enabled,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: false,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let mut c = crate::config::server_config(ctx);
+    c.nav_enabled = enabled;
+    crate::config::save_server_config(ctx, c);
     Ok(())
 }
 
@@ -144,47 +129,17 @@ pub fn debug_nav_leg(ctx: &ReducerContext, map: u32, x0: f32, y0: f32, x1: f32, 
 
 #[reducer]
 pub fn debug_set_vmap_enabled(ctx: &ReducerContext, enabled: bool) -> Result<(), String> {
-    let cfg = ctx.db.game_config();
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.vmap_enabled = enabled;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: false,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: enabled,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let mut c = crate::config::server_config(ctx);
+    c.vmap_enabled = enabled;
+    crate::config::save_server_config(ctx, c);
     Ok(())
 }
 
 #[reducer]
 pub fn debug_set_nav_coverage_enabled(ctx: &ReducerContext, enabled: bool) -> Result<(), String> {
-    let cfg = ctx.db.game_config();
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.nav_coverage_enabled = enabled;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: false,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: false,
-                nav_coverage_enabled: enabled,
-            });
-        }
-    }
+    let mut c = crate::config::server_config(ctx);
+    c.nav_coverage_enabled = enabled;
+    crate::config::save_server_config(ctx, c);
     Ok(())
 }
 
@@ -312,25 +267,10 @@ pub fn debug_assert_floor_snap(
         }
     }
 
-    let cfg = ctx.db.game_config();
-    let prior_vmap = cfg.id().find(0).map(|c| c.vmap_enabled);
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.vmap_enabled = true;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: false,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: true,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let prior_vmap = ctx.db.game_config().id().find(0).map(|c| c.vmap_enabled);
+    let mut c = crate::config::server_config(ctx);
+    c.vmap_enabled = true;
+    crate::config::save_server_config(ctx, c);
 
     let floor = crate::vmap::floor_z(ctx, map_id, 0, ORIGIN.0, ORIGIN.1, FLOOR_Z + 5.0);
     let snapped = crate::terrain::snap_z(ctx, map_id, 0, ORIGIN.0, ORIGIN.1, TERRAIN_FALLBACK);
@@ -492,25 +432,10 @@ pub fn debug_assert_blink_clamp(ctx: &ReducerContext, character_guid: u64) -> Re
         }
     }
 
-    let cfg = ctx.db.game_config();
-    let prior_vmap = cfg.id().find(0).map(|c| c.vmap_enabled);
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.vmap_enabled = true;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: true,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: true,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let prior_vmap = ctx.db.game_config().id().find(0).map(|c| c.vmap_enabled);
+    let mut c = crate::config::server_config(ctx);
+    c.vmap_enabled = true;
+    crate::config::save_server_config(ctx, c);
 
     crate::world::teleport(
         ctx,
@@ -626,25 +551,10 @@ pub fn debug_assert_chase_stops_at_column(
         }
     }
 
-    let cfg = ctx.db.game_config();
-    let prior_vmap = cfg.id().find(0).map(|c| c.vmap_enabled);
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.vmap_enabled = true;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: false,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: true,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let prior_vmap = ctx.db.game_config().id().find(0).map(|c| c.vmap_enabled);
+    let mut c = crate::config::server_config(ctx);
+    c.vmap_enabled = true;
+    crate::config::save_server_config(ctx, c);
 
     let stepped = crate::nav::nav_step(
         ctx,
@@ -742,26 +652,16 @@ pub fn debug_assert_unreachable_goal_stops_at_wall(
         obs,
     });
 
-    let cfg = ctx.db.game_config();
-    let prior_flags = cfg.id().find(0).map(|c| (c.nav_enabled, c.vmap_enabled));
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.nav_enabled = true;
-            c.vmap_enabled = false;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: true,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: false,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let prior_flags = ctx
+        .db
+        .game_config()
+        .id()
+        .find(0)
+        .map(|c| (c.nav_enabled, c.vmap_enabled));
+    let mut c = crate::config::server_config(ctx);
+    c.nav_enabled = true;
+    c.vmap_enabled = false;
+    crate::config::save_server_config(ctx, c);
 
     let stepped = crate::nav::nav_step(ctx, map_id, start.instance_id, cur, dest, 100.0, 0.0, 0.0);
 

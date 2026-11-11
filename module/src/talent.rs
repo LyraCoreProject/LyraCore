@@ -1,4 +1,3 @@
-use lyracore_package_delta::packed_spell_effect_id;
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::{game_character, game_spell, game_spell_effect, game_world_entity, Spell, SpellEffect};
@@ -591,31 +590,14 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                     school_mask: 1,
                     max_stacks: 1,
                     attributes: crate::spell::SPELL_ATTR_PASSIVE,
-                    ..crate::seed::base_spell(spell_id, name)
+                    ..Spell::blank(spell_id, name)
                 });
-                let effect_index: u8 = 0;
                 ctx.db.game_spell_effect().insert(SpellEffect {
-                    id: packed_spell_effect_id(spell_id, effect_index),
-                    spell_id,
-                    effect_index,
                     kind,
                     base_points: per_rank,
-                    die_sides: 0,
-                    per_level: 0.0,
-                    period_ms: 0,
-                    target: 0,
-                    radius_yd: 0.0,
-                    chain_targets: 0,
-                    trigger_spell: 0,
-                    effect_mechanic: 0,
                     p0,
                     p0_kind,
-                    p1: 0,
-                    script_id: 0,
-                    enters_combat: false,
-                    points_per_combo: 0.0,
-                    bonus_coefficient: -1.0,
-                    equip_supported: false,
+                    ..SpellEffect::blank(spell_id, 0)
                 });
             }
         };
@@ -636,65 +618,23 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                          p0_kind: u8| {
         if ctx.db.game_spell().spell_id().find(spell_id).is_none() {
             ctx.db.game_spell().insert(Spell {
-                spell_id,
-                family_name: 0,
-                family_flags: 0,
-                name: name.to_string(),
                 power_type,
                 cost,
-                cast_time_ms: 0,
-                gcd_ms: 1500,
                 cooldown_ms,
                 range_yd,
                 duration_ms,
                 school_mask: 1,
-                dispel_type: 0,
-                mechanic: 0,
                 max_stacks: 1,
-                aura_interrupt: 0,
-                attributes: 0,
-                spell_level: 0,
-                max_level: 0,
                 is_negative,
-                cast_flags: 0,
-                stances: 0,
-                proc_flags: 0,
-                proc_chance: 0,
-                proc_charges: 0,
-                max_duration_ms: 0,
-                custom_flags: 0,
-                min_target_level: 0,
-                single_target_key: 0,
-                form_mask: 0,
-                form_exclude: 0,
-                attributes_ex_2: 0,
-                visual_id: 0,
-                duration_index: 0,
-                category: 0,
-                category_cooldown_ms: 0,
+                ..Spell::blank(spell_id, name)
             });
             ctx.db.game_spell_effect().insert(SpellEffect {
-                id: packed_spell_effect_id(spell_id, 0),
-                spell_id,
-                effect_index: 0,
                 kind,
                 base_points: amount,
-                die_sides: 0,
-                per_level: 0.0,
-                period_ms: 0,
                 target,
-                radius_yd: 0.0,
-                chain_targets: 0,
-                trigger_spell: 0,
-                effect_mechanic: 0,
                 p0,
                 p0_kind,
-                p1: 0,
-                script_id: 0,
-                enters_combat: false,
-                points_per_combo: 0.0,
-                bonus_coefficient: -1.0,
-                equip_supported: false,
+                ..SpellEffect::blank(spell_id, 0)
             });
         }
     };

@@ -3,6 +3,8 @@ pub(crate) mod character_owned_tripwire {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    use lyracore_test_support::source_scan::{code_only, files_under};
+
     const NON_UNIT_GUID_FIELDS: &[&str] = &[
         "corpse_guid",
         "creature_guid",
@@ -275,8 +277,7 @@ pub(crate) mod character_owned_tripwire {
 
     pub(crate) fn scanned_files() -> Vec<PathBuf> {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let mut files = Vec::new();
-        collect_rs_files(&Path::new(manifest_dir).join("src"), &mut files);
+        let mut files = rust_files(&Path::new(manifest_dir).join("src"));
         let packages_dir = Path::new(manifest_dir)
             .parent()
             .expect("module/ has a parent (the repo root)")
@@ -285,212 +286,21 @@ pub(crate) mod character_owned_tripwire {
             for entry in fs::read_dir(&packages_dir).expect("readable packages/") {
                 let pkg_src = entry.expect("readable dir entry").path().join("src");
                 if pkg_src.is_dir() {
-                    collect_rs_files(&pkg_src, &mut files);
+                    files.extend(rust_files(&pkg_src));
                 }
             }
         }
         files
     }
 
-    pub(crate) fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
-        for entry in
-            fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read dir {}: {e}", dir.display()))
-        {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.is_dir() {
-                collect_rs_files(&path, out);
-            } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
-                out.push(path);
-            }
-        }
-    }
-
-    pub(super) fn production_code(content: &str) -> String {
-        fn blank(bytes: &mut [u8], start: usize, end: usize) {
-            for byte in &mut bytes[start..end] {
-                if *byte != b'\n' {
-                    *byte = b' ';
-                }
-            }
-        }
-
-        let source = content.as_bytes();
-        let mut code = source.to_vec();
-        let mut i = 0;
-        while i < source.len() {
-            if source[i..].starts_with(b"//") {
-                let end = source[i..]
-                    .iter()
-                    .position(|byte| *byte == b'\n')
-                    .map(|offset| i + offset)
-                    .unwrap_or(source.len());
-                blank(&mut code, i, end);
-                i = end;
-                continue;
-            }
-            if source[i..].starts_with(b"/*") {
-                let start = i;
-                i += 2;
-                let mut depth = 1usize;
-                while i < source.len() && depth > 0 {
-                    if source[i..].starts_with(b"/*") {
-                        depth += 1;
-                        i += 2;
-                    } else if source[i..].starts_with(b"*/") {
-                        depth -= 1;
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
-                }
-                blank(&mut code, start, i);
-                continue;
-            }
-            if source[i] == b'r' {
-                let mut quote = i + 1;
-                while source.get(quote) == Some(&b'#') {
-                    quote += 1;
-                }
-                if source.get(quote) == Some(&b'"') {
-                    let hashes = quote - i - 1;
-                    let start = i;
-                    i = quote + 1;
-                    while i < source.len() {
-                        if source[i] == b'"'
-                            && source.get(i + 1..i + 1 + hashes)
-                                == Some(&source[quote - hashes..quote])
-                        {
-                            i += 1 + hashes;
-                            break;
-                        }
-                        i += 1;
-                    }
-                    blank(&mut code, start, i);
-                    continue;
-                }
-            }
-            if source[i] == b'"' {
-                let start = i;
-                i += 1;
-                while i < source.len() {
-                    match source[i] {
-                        b'\\' => i = (i + 2).min(source.len()),
-                        b'"' => {
-                            i += 1;
-                            break;
-                        }
-                        _ => i += 1,
-                    }
-                }
-                blank(&mut code, start, i);
-                continue;
-            }
-            if source[i] == b'\'' {
-                let escaped = source.get(i + 1) == Some(&b'\\');
-                let close = if escaped { i + 3 } else { i + 2 };
-                if source.get(close) == Some(&b'\'') {
-                    blank(&mut code, i, close + 1);
-                    i = close + 1;
-                    continue;
-                }
-            }
-            i += 1;
-        }
-
-        let test_attr = b"#[cfg(test)]";
-        let mut search_from = 0usize;
-        while let Some(offset) = code[search_from..]
-            .windows(test_attr.len())
-            .position(|window| window == test_attr)
-        {
-            let test_start = search_from + offset;
-            let mut item_start = test_start;
-            while let Some(end) = code[..item_start]
-                .iter()
-                .rposition(|byte| !byte.is_ascii_whitespace())
-                .map(|position| position + 1)
-            {
-                if code.get(end - 1) != Some(&b']') {
-                    break;
-                }
-
-                let mut depth = 0usize;
-                let mut attribute_start = None;
-                for position in (0..end).rev() {
-                    match code[position] {
-                        b']' => depth += 1,
-                        b'[' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                if position > 0 && code[position - 1] == b'#' {
-                                    attribute_start = Some(position - 1);
-                                }
-                                break;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                let Some(start) = attribute_start else {
-                    break;
-                };
-                item_start = start;
-            }
-
-            let mut cursor = test_start + test_attr.len();
-            while code.get(cursor).is_some_and(u8::is_ascii_whitespace) {
-                cursor += 1;
-            }
-            while code.get(cursor..cursor + 2) == Some(b"#[") {
-                let Some(close) = code[cursor..].iter().position(|byte| *byte == b']') else {
-                    break;
-                };
-                cursor += close + 1;
-                while code.get(cursor).is_some_and(u8::is_ascii_whitespace) {
-                    cursor += 1;
-                }
-            }
-            let semicolon = code[cursor..]
-                .iter()
-                .position(|byte| *byte == b';')
-                .map(|offset| cursor + offset);
-            let open = code[cursor..]
-                .iter()
-                .position(|byte| *byte == b'{')
-                .map(|offset| cursor + offset);
-            let item_end = match (semicolon, open) {
-                (Some(end), None) => end + 1,
-                (Some(end), Some(open)) if end < open => end + 1,
-                (_, Some(open)) => {
-                    let mut depth = 0i32;
-                    let mut end = code.len();
-                    for (offset, byte) in code[open..].iter().enumerate() {
-                        match byte {
-                            b'{' => depth += 1,
-                            b'}' => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    end = open + offset + 1;
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    end
-                }
-                _ => code.len(),
-            };
-            blank(&mut code, item_start, item_end);
-            search_from = item_end;
-        }
-
-        String::from_utf8(code).expect("masking Rust source preserves UTF-8")
+    pub(crate) fn rust_files(dir: &Path) -> Vec<PathBuf> {
+        files_under(dir, &[], &|path| {
+            path.extension().is_some_and(|extension| extension == "rs")
+        })
     }
 
     pub(super) fn extract_tables(content: &str) -> Vec<(String, String, bool)> {
-        let code = production_code(content);
+        let code = code_only(content);
         let mut out = Vec::new();
         let mut search_from = 0usize;
         while let Some(rel) = code[search_from..].find("#[table(") {
@@ -557,7 +367,7 @@ pub(crate) mod character_owned_tripwire {
     }
 
     fn character_owned_markers(content: &str) -> Vec<String> {
-        let code = production_code(content);
+        let code = code_only(content);
         let needle = format!("{}{}(", "character_owned", "!");
         let mut markers = Vec::new();
         let mut search_from = 0usize;
@@ -1134,9 +944,9 @@ mod partition_discipline_tripwire {
         ("module/src/instance.rs", 7, "instance population spawn/teardown + the reaper's occupied-instance census — classifying every partition at once is the job"),
         ("module/src/operator_content.rs", 2, "Operator Spawn Range high-water marks over spawn and gameobject rows when allocating a spawn identifier, not live-world reads"),
         ("module/src/encounter.rs", 2, "guid high-water marks over spawn/gameobject TEMPLATE rows when allocating a wave guid, not live-world reads"),
-        ("module/src/creatures/pet.rs", 1, "`nearest_hostile_near` — KNOWN DEBT, a textbook `entities_near` radius search kept only because pets are rare (one per online warlock)"),
+        ("module/src/creatures/pet.rs", 1, "`nearest_hostile_near` scans the map for one pet's target; pets are rare (one per online warlock)"),
         ("packages/deadmines/src/choreography.rs", 1, "single instance-scoped boss-liveness check inside one encounter"),
-        ("module/src/spell/cast/targeting.rs", 1, "AoE/chain target resolution by full-iter + squared distance; a textbook `helpers::entities_near` call (perf-catalog Tier 1)"),
+        ("module/src/spell/cast/targeting.rs", 1, "AoE/chain target resolution by full-iter + squared distance"),
     ];
 
     fn opens_whole_table_read(content: &str, byte_idx: usize) -> bool {
@@ -1392,6 +1202,8 @@ mod character_fence_tripwire {
 
 #[cfg(test)]
 mod gc_reap_tripwire {
+    use lyracore_test_support::source_scan::code_only;
+
     const EXEMPT_ACCESSORS: &[&str] = &[
         "game_mail",
         // Keep source Intents until their Transfer completes.
@@ -1494,8 +1306,8 @@ mod gc_reap_tripwire {
     }
 
     fn unswept_tables(content: &str, module: &str, gc_src: &str) -> Vec<String> {
-        let code = super::character_owned_tripwire::production_code(content);
-        let gc_code = super::character_owned_tripwire::production_code(gc_src);
+        let code = code_only(content);
+        let gc_code = code_only(gc_src);
         let called = gc_code.contains(&format!("{module}::sweep_expired(ctx)"));
         let sweep = sweep_body(&code);
         super::character_owned_tripwire::extract_tables(content)
@@ -1984,8 +1796,8 @@ pub(crate) mod grid_cell_tripwire {
 pub(crate) mod grid_address_writes {
     use std::collections::BTreeSet;
 
-    use super::character_owned_tripwire::production_code;
     use crate::test_scan::line_of;
+    use lyracore_test_support::source_scan::code_only;
 
     /// Each function derives grid and cell from its row's position, or cell from its grid.
     const PLACEMENT_OPERATIONS: &[(&str, &str)] = &[
@@ -2073,7 +1885,7 @@ pub(crate) mod grid_address_writes {
     }
 
     fn violations(path: &str, source: &str) -> Vec<String> {
-        let code = production_code(source);
+        let code = code_only(source);
         grid_address_writes(&code)
             .into_iter()
             .filter(|(_, function)| {
@@ -2088,10 +1900,8 @@ pub(crate) mod grid_address_writes {
     #[test]
     fn only_placement_operations_write_a_grid_address() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut files = Vec::new();
-        super::character_owned_tripwire::collect_rs_files(&src, &mut files);
         let mut found = Vec::new();
-        for file in files {
+        for file in super::character_owned_tripwire::rust_files(&src) {
             let path = file.display().to_string().replace('\\', "/");
             if path.ends_with("module/src/tripwires.rs") || is_test_only_file(&file) {
                 continue;
@@ -2144,7 +1954,7 @@ pub(crate) mod grid_address_writes {
 
 #[cfg(test)]
 pub(crate) mod package_name_tripwire {
-    use std::path::{Path, PathBuf};
+    use lyracore_test_support::source_scan::files_under;
 
     const OFFICIAL_PACKAGES: &[&str] = &["playerbots"];
 
@@ -2170,26 +1980,12 @@ pub(crate) mod package_name_tripwire {
         found
     }
 
-    fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
-        let entries =
-            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
-        for entry in entries {
-            let path = entry.expect("readable dir entry").path();
-            if path.is_dir() {
-                collect_files(&path, out);
-            } else {
-                out.push(path);
-            }
-        }
-    }
-
     #[test]
     fn core_source_names_no_official_package() {
         let root = crate::test_scan::repo_root();
-        let mut files = Vec::new();
-        for tree in CORE_TREES {
-            collect_files(&root.join(tree), &mut files);
-        }
+        let files = CORE_TREES
+            .iter()
+            .flat_map(|tree| files_under(&root.join(tree), &[], &|_| true));
         let mut found = Vec::new();
         for file in files {
             let rel = file
@@ -2228,8 +2024,9 @@ pub(crate) mod package_name_tripwire {
 
 #[cfg(test)]
 mod creature_teardown_tripwire {
-    use super::character_owned_tripwire::{production_code, scanned_files};
+    use super::character_owned_tripwire::scanned_files;
     use crate::test_scan::repo_root;
+    use lyracore_test_support::source_scan::code_only;
 
     const TEARDOWN: (&str, &str) = (
         "module/src/creatures/tick/lifecycle.rs",
@@ -2463,7 +2260,7 @@ mod creature_teardown_tripwire {
     }
 
     fn function_body(file: &str, function: &str) -> String {
-        let code = production_code(
+        let code = code_only(
             &std::fs::read_to_string(repo_root().join(file))
                 .unwrap_or_else(|e| panic!("cannot read {file}: {e}")),
         );
@@ -2513,7 +2310,7 @@ mod creature_teardown_tripwire {
         scanned_files()
             .iter()
             .flat_map(|file| {
-                creature_keyed(&production_code(
+                creature_keyed(&code_only(
                     &std::fs::read_to_string(file).expect("readable source"),
                 ))
             })

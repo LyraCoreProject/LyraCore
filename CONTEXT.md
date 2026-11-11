@@ -1163,7 +1163,7 @@ _Avoid_: map claim, zoned claim, sharded claim
 **Fixture-Reserved Identifier**:
 An identifier the seeded fixtures own, which no Package may claim under any operation in any Import
 Family. It lies in the project-wide fixture band or in one family's own fixture cluster. See
-`crates/lyracore-package-delta/src/ids.rs`.
+`crates/lyracore-package-delta/src/ids.rs`; `fixture_ids.rs` beside it names each one Core uses.
 _Avoid_: test id, reserved id (unqualified)
 
 ### Client content

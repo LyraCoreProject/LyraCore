@@ -99,7 +99,7 @@ fn optional_owner(rel: &str) -> Option<String> {
     let mut segs = rel.split('/');
     match segs.next()? {
         "packages" => segs.next().map(|pkg| format!("packages/{pkg}")),
-        root @ ("scripts" | "tools" | "adapters" | "client-patch") => Some(root.to_string()),
+        "scripts" => Some("scripts".to_string()),
         _ => None,
     }
 }

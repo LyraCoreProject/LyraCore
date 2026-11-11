@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn cross_caster_stacks_override_separate_slots_but_ordinary_dots_coexist() {
-        let mut hdr = crate::seed::base_spell(1, "test");
+        let mut hdr = crate::Spell::blank(1, "test");
         assert!(aura_casters_coexist(&hdr, A_PERIODIC_DAMAGE));
         assert!(!aura_casters_coexist(&hdr, A_MOD_STAT));
         hdr.custom_flags = custom::SEPARATE_AURA_PER_CASTER;

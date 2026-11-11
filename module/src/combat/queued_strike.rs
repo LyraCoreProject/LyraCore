@@ -148,21 +148,21 @@ fn bonus_points(effect: &SpellEffect, strike: &Spell, attacker_level: u32, roll:
 #[cfg(test)]
 mod tests {
     use super::bonus_points;
-    use crate::seed::{base_effect, base_spell};
+    use crate::spell::{Spell, SpellEffect};
 
     fn bonus(base_points: i32, die_sides: i32, per_level: f32) -> crate::spell::SpellEffect {
         crate::spell::SpellEffect {
             base_points,
             die_sides,
             per_level,
-            ..base_effect(1, 0)
+            ..SpellEffect::blank(1, 0)
         }
     }
 
     fn strike(spell_level: u8) -> crate::spell::Spell {
         crate::spell::Spell {
             spell_level,
-            ..base_spell(1, "Strike")
+            ..Spell::blank(1, "Strike")
         }
     }
 

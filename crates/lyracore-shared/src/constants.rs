@@ -110,8 +110,6 @@ pub mod tracer_spell {
 
 pub mod starter_item {
     pub const ENTRY: u32 = 25;
-    // HIGHGUID_ITEM occupies bits 48..63 of an item GUID.
-    pub const HIGHGUID_ITEM: u64 = 0x4000;
     // Vanilla inventory slots: equipment 0..18, bags 19..22, backpack 23..38.
     pub const BACKPACK_SLOT_0: u8 = 23;
     pub const MAINHAND_SLOT: u8 = 15;
@@ -224,8 +222,7 @@ pub mod taxi_fixture {
     pub const MOUNT_DISPLAY_ALLIANCE: u32 = 1147;
 
     pub const FLIGHT_MASTER_ENTRY: u32 = 51_006;
-    pub const FLIGHT_MASTER_GUID: u64 =
-        (0xF130_u64 << 48) | ((FLIGHT_MASTER_ENTRY as u64) << 24) | 1;
+    pub const FLIGHT_MASTER_GUID: u64 = crate::guid::creature(FLIGHT_MASTER_ENTRY, 1);
 }
 
 pub mod gossip_option {

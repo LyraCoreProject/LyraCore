@@ -358,7 +358,7 @@ pub(crate) fn clear(ctx: &ReducerContext, creature_guid: u64) {
 }
 
 #[cfg(feature = "debug_reducers")]
-const LOOT_TAG_FIXTURE_ENTRY: u32 = 51_000;
+const LOOT_TAG_FIXTURE_ENTRY: u32 = lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 #[cfg(feature = "debug_reducers")]
 const LOOT_TAG_FIXTURE_GROUP: u64 = 5_093_850;
 #[cfg(feature = "debug_reducers")]
@@ -860,8 +860,8 @@ fn expect_live_loot_tag_eligibility(
 }
 
 #[cfg(feature = "debug_reducers")]
-fn fixture_creature_guid(low: u64) -> u64 {
-    (0xF130_u64 << 48) | (u64::from(LOOT_TAG_FIXTURE_ENTRY) << 24) | 0x00FE_0000 | low
+fn fixture_creature_guid(low: u32) -> u64 {
+    lyracore_shared::guid::creature(LOOT_TAG_FIXTURE_ENTRY, 0x00FE_0000 | low)
 }
 
 #[cfg(feature = "debug_reducers")]

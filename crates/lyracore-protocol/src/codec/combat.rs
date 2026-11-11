@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn attack_start_carries_attacker_and_victim() {
         let player = 1u64;
-        let chicken = (0xF130u64 << 48) | (620u64 << 24) | 1;
+        let chicken = lyracore_shared::guid::creature(620, 1);
         let msg = build_attack_start(player, chicken);
         assert_eq!(msg.attacker.guid(), player);
         assert_eq!(msg.victim.guid(), chicken);
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn attacker_state_update_is_one_physical_normal_swing() {
         let character = 1u64;
-        let chicken = (0xF130u64 << 48) | (620u64 << 24) | 1;
+        let chicken = lyracore_shared::guid::creature(620, 1);
         let swing = melee_packet(build_attacker_state_update(character, chicken, 7, 0, 0, 0));
         assert_eq!(swing.attacker, character);
         assert_eq!(swing.victim, chicken);

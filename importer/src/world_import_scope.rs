@@ -640,6 +640,20 @@ mod tests {
     }
 
     #[test]
+    fn the_instance_slice_maps_are_the_ones_the_module_checks_for_wmo_geometry() {
+        let maps: std::collections::BTreeSet<u32> = profile_data()
+            .instance_slices
+            .values()
+            .map(|slice| slice.map)
+            .collect();
+        let expected: std::collections::BTreeSet<u32> = lyracore_shared::vmap::INSTANCE_SLICE_MAPS
+            .iter()
+            .copied()
+            .collect();
+        assert_eq!(maps, expected);
+    }
+
+    #[test]
     fn canonical_profiles_have_stable_names_and_shapes() {
         let eastern =
             WorldImportScope::canonical(WorldImportProfile::parse("alliance-eastern").unwrap())

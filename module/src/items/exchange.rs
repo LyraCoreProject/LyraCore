@@ -792,8 +792,8 @@ mod tests {
     fn consumption_frees_capacity_for_the_complete_reward_set() {
         let mut plan = plan((23..39).map(|slot| item(slot, 1, 1)).collect());
         plan.consume(1, 2).unwrap();
-        grant(&mut plan, &crate::seed::base_item(2, "reward"), 1).unwrap();
-        grant(&mut plan, &crate::seed::base_item(3, "choice"), 1).unwrap();
+        grant(&mut plan, &crate::ItemTemplate::blank(2, "reward"), 1).unwrap();
+        grant(&mut plan, &crate::ItemTemplate::blank(3, "choice"), 1).unwrap();
         let rewards: Vec<_> = plan
             .items
             .iter()
@@ -812,8 +812,8 @@ mod tests {
     fn reward_set_refuses_when_only_the_first_reward_fits() {
         let mut plan = plan((23..39).map(|slot| item(slot, 1, 1)).collect());
         plan.consume(1, 1).unwrap();
-        grant(&mut plan, &crate::seed::base_item(2, "reward"), 1).unwrap();
-        let refusal = grant(&mut plan, &crate::seed::base_item(3, "choice"), 1).unwrap_err();
+        grant(&mut plan, &crate::ItemTemplate::blank(2, "reward"), 1).unwrap();
+        let refusal = grant(&mut plan, &crate::ItemTemplate::blank(3, "choice"), 1).unwrap_err();
         assert_eq!(refusal.kind, ActionRefusalKind::InventoryFull);
         assert_eq!(refusal.detail, lyracore_shared::mail::INVENTORY_FULL);
     }
@@ -846,7 +846,7 @@ mod tests {
     #[test]
     fn repeated_rewards_share_partial_stacks_without_exceeding_the_cap() {
         let mut plan = plan(vec![item(23, 1, 8)]);
-        let mut template = crate::seed::base_item(1, "stackable reward");
+        let mut template = crate::ItemTemplate::blank(1, "stackable reward");
         template.max_stack = 10;
         template.bonding = super::super::rules::bonding::BIND_ON_PICKUP;
         grant(&mut plan, &template, 7).unwrap();
@@ -863,7 +863,7 @@ mod tests {
     #[test]
     fn bank_ownership_counts_toward_a_unique_reward_limit() {
         let mut plan = plan(vec![item(39, 1, 1)]);
-        let mut template = crate::seed::base_item(1, "unique reward");
+        let mut template = crate::ItemTemplate::blank(1, "unique reward");
         template.max_count = 1;
         let refusal = grant(&mut plan, &template, 1).unwrap_err();
         assert_eq!(refusal.detail, "unique item limit 1 for item 1");
@@ -872,7 +872,7 @@ mod tests {
     #[test]
     fn duplicate_rewards_share_one_unique_limit() {
         let mut plan = plan(Vec::new());
-        let mut template = crate::seed::base_item(1, "unique reward");
+        let mut template = crate::ItemTemplate::blank(1, "unique reward");
         template.max_count = 1;
         grant(&mut plan, &template, 1).unwrap();
         assert!(grant(&mut plan, &template, 1).is_err());
@@ -881,7 +881,7 @@ mod tests {
     #[test]
     fn consuming_a_unique_item_allows_its_replacement() {
         let mut plan = plan(vec![item(23, 1, 1)]);
-        let mut template = crate::seed::base_item(1, "unique reward");
+        let mut template = crate::ItemTemplate::blank(1, "unique reward");
         template.max_count = 1;
         plan.consume(1, 1).unwrap();
         grant(&mut plan, &template, 1).unwrap();
@@ -894,7 +894,7 @@ mod tests {
     #[test]
     fn every_new_stack_resolves_its_property_before_a_grant_changes_items() {
         let mut plan = plan(vec![item(23, 1, 8)]);
-        let mut template = crate::seed::base_item(1, "stackable reward");
+        let mut template = crate::ItemTemplate::blank(1, "stackable reward");
         template.max_stack = 10;
         let mut properties = [Ok(0), Err("invalid property pool".to_string())].into_iter();
         let refusal = plan
@@ -915,7 +915,7 @@ mod tests {
     #[test]
     fn property_mismatch_does_not_fill_an_existing_stack() {
         let mut plan = plan(vec![item(23, 1, 8)]);
-        let mut template = crate::seed::base_item(1, "stackable reward");
+        let mut template = crate::ItemTemplate::blank(1, "stackable reward");
         template.max_stack = 10;
         plan.plan_grant(&template, 5, true, Some(7), || unreachable!(), |_| 0)
             .unwrap();
@@ -932,7 +932,7 @@ mod tests {
         owned.push(item(120, 3, 1));
         let mut plan = plan(owned);
         plan.plan_grant(
-            &crate::seed::base_item(4, "reward"),
+            &crate::ItemTemplate::blank(4, "reward"),
             1,
             false,
             None,

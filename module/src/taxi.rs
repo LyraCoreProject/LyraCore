@@ -2,15 +2,68 @@ use lyracore_shared::movement_flags;
 use lyracore_shared::movement_path::{
     catmull_rom, catmull_rom_slopes, catmull_rom_weights, extrapolated_start,
 };
-use spacetimedb::{table, ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use crate::world::MoveClock;
-use crate::{
-    game_character, game_taxi_node, game_taxi_path, game_taxi_path_node, game_world_entity,
-    GameTaxiNode, GameTaxiPath, GameTaxiPathNode, WorldEntity,
-};
+use crate::{game_character, game_world_entity, WorldEntity};
 
 const TAXI_NODE_RESOLVE_RANGE_SQ: f32 = 100.0;
+
+#[table(accessor = game_taxi_node, public)]
+pub struct GameTaxiNode {
+    #[primary_key]
+    pub id: u32,
+    #[unique]
+    pub client_node_id: u32,
+    pub map_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub name: String,
+    pub mount_display_horde: u32,
+    pub mount_display_alliance: u32,
+}
+
+#[table(
+    accessor = game_taxi_path,
+    public,
+    index(accessor = by_source, btree(columns = [source_node_id])),
+    index(accessor = by_route, btree(columns = [source_node_id, destination_node_id]))
+)]
+pub struct GameTaxiPath {
+    #[primary_key]
+    pub id: u32,
+    pub source_node_id: u32,
+    pub destination_node_id: u32,
+    pub fare: u32,
+}
+
+#[derive(Clone)]
+#[table(
+    accessor = game_taxi_path_node,
+    public,
+    index(accessor = by_path_id, btree(columns = [path_id])),
+    index(accessor = by_path, btree(columns = [path_id, node_index]))
+)]
+pub struct GameTaxiPathNode {
+    #[primary_key]
+    pub id: u32,
+    pub path_id: u32,
+    pub node_index: u32,
+    pub map_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub flags: i32,
+    pub delay_ms: i32,
+}
+
+#[reducer]
+pub fn restore_taxi_fixture(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    crate::seed::seed_taxi_fixture(ctx);
+    Ok(())
+}
 
 #[table(
     accessor = game_character_taxi_node,
@@ -672,6 +725,12 @@ fn remaining_spline(
 }
 
 impl WorldEntity {
+    /// The flight presentation is set. A passenger that enters the world mid-flight lacks it, and
+    /// can be targeted, until the flight resumes.
+    pub(crate) fn is_flying(&self) -> bool {
+        self.unit_flags & lyracore_shared::constants::unit_flags::TAXI_FLIGHT != 0
+    }
+
     /// Presents the Character riding `mount_display_id` on a taxi, out of client control.
     pub(crate) fn board_flight(&mut self, mount_display_id: u32) {
         self.mount_display_id = mount_display_id;

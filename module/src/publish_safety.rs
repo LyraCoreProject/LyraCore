@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use lyracore_test_support::source_scan::files_under;
 
 use crate::test_scan::repo_root;
 
@@ -85,8 +87,16 @@ fn scanned_roots() -> Vec<(&'static str, Vec<PathBuf>)> {
             path.is_dir(),
             "the destructive-publish scan cannot find {dir}/, so it would pass by looking at nothing"
         );
-        let mut files = Vec::new();
-        collect_scripts(&path, &mut files);
+        let mut files = files_under(
+            &path,
+            &["target", "node_modules", ".venv", "__pycache__", ".git"],
+            &|path| {
+                matches!(
+                    path.extension().and_then(|e| e.to_str()),
+                    Some("sh") | Some("py")
+                )
+            },
+        );
         files.sort();
         out.push((*dir, files));
     }
@@ -95,29 +105,6 @@ fn scanned_roots() -> Vec<(&'static str, Vec<PathBuf>)> {
 
 fn scanned_scripts() -> Vec<PathBuf> {
     scanned_roots().into_iter().flat_map(|(_, f)| f).collect()
-}
-
-fn collect_scripts(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries =
-        std::fs::read_dir(dir).unwrap_or_else(|e| panic!("readable {}: {e}", dir.display()));
-    for entry in entries {
-        let path = entry.expect("readable dir entry").path();
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if matches!(
-            name,
-            "target" | "node_modules" | ".venv" | "__pycache__" | ".git"
-        ) {
-            continue;
-        }
-        if path.is_dir() {
-            collect_scripts(&path, out);
-        } else if matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("sh") | Some("py")
-        ) {
-            out.push(path);
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -267,8 +254,9 @@ mod tests {
     #[test]
     fn module_tables_have_unique_published_column_names() {
         let src_root = repo_root().join("module/src");
-        let mut rust_files = Vec::new();
-        collect_rust_files(&src_root, &mut rust_files);
+        let rust_files = files_under(&src_root, &[], &|path| {
+            path.extension().and_then(|e| e.to_str()) == Some("rs")
+        });
         assert!(
             rust_files.len() >= 50,
             "found only {} Rust files under module/src; the snake-case publish preflight is looking at the wrong tree",
@@ -312,19 +300,6 @@ mod tests {
                 .expect("collision guard invocation")
                 < cli.find("exec \"$binary\"").expect("CLI handoff")
         );
-    }
-
-    fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-        for entry in
-            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("readable {}: {e}", dir.display()))
-        {
-            let path = entry.expect("readable dir entry").path();
-            if path.is_dir() {
-                collect_rust_files(&path, out);
-            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-                out.push(path);
-            }
-        }
     }
 
     #[test]

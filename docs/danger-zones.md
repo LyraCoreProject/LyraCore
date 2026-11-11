@@ -78,12 +78,21 @@ including a restored-copy rehearsal and the order of world import before Package
 ### After every publish
 
 Call `debug_repair_after_publish` as the Operator on the Shard. `init` does not run again on an
-auto-migrating publish, so this reducer re-arms the interval schedules, re-freezes Proc profiles,
-restores missing Auction expiries, re-tags legacy auction mail as Auction Mail before the Mail Timer
-pass (so a legacy "Auction won" is deleted, not returned), arms a Mail Timer for each Mail that has
-none, moves each legacy Character GM level onto its Account and re-seeds the fixtures `init`
-seeds. `packages apply` calls it for each Shard it publishes.
+auto-migrating publish, so this reducer arms the interval schedules `init` arms (the instance and
+Gateway lease reapers are re-armed, the others are created only when missing), re-freezes Proc
+profiles, restores missing Auction expiries, re-tags legacy auction mail as Auction Mail before the
+Mail Timer pass (so a legacy "Auction won" is deleted, not returned), arms a Mail Timer for each
+Mail that has none, moves each legacy Character GM level onto its Account and re-seeds the curated
+content and fixtures `init` seeds. `packages apply` calls it for each Shard it publishes.
 A skipped call looks like a mid-session hang, not an error.
+
+Imported content wins over that re-seed. A seed that writes real ids skips once the importer has
+stamped its family in `game_import_meta`: `spell` (Weakened Soul, Frost Armor, Chilled, Drain
+Soul, Mana Burn, Stealth, Demon Skin, the stacking probe spells, the synthetic Warrior talents),
+`items` (Soul Shard), `globals` (the starting spell kits, the Hunter Tame Beast kit row, the
+Warrior crit rates) and `dbc` (the Boar creature family, the Riding skill line). Fixtures on
+Fixture-Reserved Identifiers and the `SPELL_GROUPS` rules are written on every Shard; the
+importer does not import spell groups. `seed_curated_content` in `module/src/seed.rs` holds the list.
 
 The first run on a Shard with Mail from before the Mail Timer applies the vanilla 30-day rule
 (3 days with a cash on delivery price) to that Mail. Every Mail already past its life returns to
@@ -305,9 +314,9 @@ no repair.
 
 ### White melee catalogue migration
 
-`game_crit_per_agility` and `game_creature_defense` start empty after a publish. Run
-`debug_repair_after_publish` to seed warrior levels 1 and 60, then reimport the `globals` and
-`creatures` families before play resumes. Other class/level combinations need imported crit rates;
+`game_crit_per_agility` and `game_creature_defense` start empty after a publish. Reimport the
+`globals` and `creatures` families before play resumes; `debug_repair_after_publish` seeds warrior
+levels 1 and 60 only on a Shard that never imported `globals`. Other class/level combinations need imported crit rates;
 creatures need their no-parry, no-block and no-defense flags. Missing crit rates use the previous
 crit calculation in combat and on the sheet, with one warning per Shard. This fallback does not
 replace the globals reimport. Existing Character sheet values are refreshed on world entry,

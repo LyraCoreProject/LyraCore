@@ -804,7 +804,7 @@ mod tests {
 
     #[test]
     fn use_spell_for_reads_spellid_1_gated_on_the_on_use_trigger() {
-        let mut tmpl = crate::seed::base_item(1, "x");
+        let mut tmpl = crate::ItemTemplate::blank(1, "x");
         tmpl.spellid_1 = 50110;
         tmpl.spelltrigger_1 = 0;
         assert_eq!(use_spell_for(&tmpl), Some(50110));

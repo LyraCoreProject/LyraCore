@@ -102,7 +102,7 @@ pub(crate) fn combat_event(ctx: &ReducerContext, event: &CombatEvent) {
             false,
         );
     }
-    if event.killing_blow && !is_creature(event.attacker_guid) {
+    if event.killing_blow && !lyracore_shared::guid::is_unit(event.attacker_guid) {
         emit(
             ctx,
             event.attacker_guid,
@@ -113,10 +113,6 @@ pub(crate) fn combat_event(ctx: &ReducerContext, event: &CombatEvent) {
             true,
         );
     }
-}
-
-fn is_creature(guid: u64) -> bool {
-    matches!(guid >> 48, 0xf130 | 0xf140)
 }
 
 pub(crate) fn engagement_changed(
@@ -147,7 +143,7 @@ pub(crate) fn engagement_changed(
             }
         }
         if let Some(row) = row.filter(|row| row.ranged_spell_id == 0) {
-            if old.is_none() && is_creature(row.attacker_guid) {
+            if old.is_none() && lyracore_shared::guid::is_unit(row.attacker_guid) {
                 emit(
                     ctx,
                     row.attacker_guid,

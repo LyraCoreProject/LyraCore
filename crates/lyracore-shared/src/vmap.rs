@@ -1,5 +1,8 @@
 pub const VMAP_VERSION: u8 = 1;
 
+// Maps with imported WMO instance slices; importer/manifests/world-profiles.json lists them.
+pub const INSTANCE_SLICE_MAPS: &[u32] = &[36];
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TriClass {
     Wmo { group_id: u32, mogp_flags: u32 },

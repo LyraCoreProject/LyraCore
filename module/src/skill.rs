@@ -693,23 +693,12 @@ pub fn debug_learn_profession(
 
 // Synthetic profession markers name trainer offerings, never game_spell rows.
 #[cfg(feature = "debug_reducers")]
-const LEARN_COOKING_SPELL_ID: u32 = 50080;
-#[cfg(feature = "debug_reducers")]
-const LEARN_SKINNING_SPELL_ID: u32 = 50081;
-#[cfg(feature = "debug_reducers")]
-const LEARN_LEATHERWORKING_SPELL_ID: u32 = 50082;
-#[cfg(feature = "debug_reducers")]
-const LEARN_MINING_SPELL_ID: u32 = 50083;
-#[cfg(feature = "debug_reducers")]
-const LEARN_HERBALISM_SPELL_ID: u32 = 50084;
-#[cfg(feature = "debug_reducers")]
-const LEARN_ALCHEMY_SPELL_ID: u32 = 50085;
-#[cfg(feature = "debug_reducers")]
-const LEARN_FIRST_AID_SPELL_ID: u32 = 50086;
-#[cfg(feature = "debug_reducers")]
-const LEARN_TAILORING_SPELL_ID: u32 = 50087;
-#[cfg(feature = "debug_reducers")]
-const LEARN_BLACKSMITHING_SPELL_ID: u32 = 50088;
+use lyracore_package_delta::fixture_ids::{
+    LEARN_ALCHEMY_SPELL_ID, LEARN_AXE_1H_SPELL_ID, LEARN_BLACKSMITHING_SPELL_ID,
+    LEARN_COOKING_SPELL_ID, LEARN_FIRST_AID_SPELL_ID, LEARN_HERBALISM_SPELL_ID,
+    LEARN_LEATHERWORKING_SPELL_ID, LEARN_MINING_SPELL_ID, LEARN_POLEARM_SPELL_ID,
+    LEARN_SKINNING_SPELL_ID, LEARN_TAILORING_SPELL_ID,
+};
 
 #[cfg(feature = "debug_reducers")]
 #[spacetimedb::reducer]
@@ -747,11 +736,6 @@ pub fn debug_learn_profession_from_trainer(
 }
 
 #[cfg(feature = "debug_reducers")]
-const LEARN_AXE_1H_SPELL_ID: u32 = 50130;
-#[cfg(feature = "debug_reducers")]
-const LEARN_POLEARM_SPELL_ID: u32 = 50131;
-
-#[cfg(feature = "debug_reducers")]
 #[spacetimedb::reducer]
 pub fn debug_learn_weapon_from_trainer(
     ctx: &ReducerContext,
@@ -779,8 +763,9 @@ pub fn debug_learn_weapon_from_trainer(
         .map_err(|refusal| refusal.as_tag().into())
 }
 
-pub(crate) const LEARN_APPRENTICE_RIDING_SPELL_ID: u32 = 50132;
-pub(crate) const LEARN_JOURNEYMAN_RIDING_SPELL_ID: u32 = 50133;
+pub(crate) use lyracore_package_delta::fixture_ids::{
+    LEARN_APPRENTICE_RIDING_SPELL_ID, LEARN_JOURNEYMAN_RIDING_SPELL_ID,
+};
 
 pub(crate) fn riding_marker_rank(spell_id: u32) -> Option<u16> {
     match spell_id {

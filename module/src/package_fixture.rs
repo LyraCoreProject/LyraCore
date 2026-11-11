@@ -3,6 +3,7 @@
 use spacetimedb::{ReducerContext, Table, TimeDuration};
 
 use crate::creatures::{game_creature_move_schedule, GLOBAL_TICK_INSTANCE};
+use crate::game_world_entity;
 use crate::import_meta::game_import_meta;
 
 pub(crate) use crate::threat::top_threat_target;
@@ -19,13 +20,20 @@ pub(crate) use crate::group::sync_group_mirror;
 pub(crate) use crate::items::{grant_item, remove_items};
 pub(crate) use crate::loot::tag::clear as clear_loot_tag;
 pub(crate) use crate::nav::record_change as record_navigation_change;
-pub(crate) use crate::seed::{base_effect, base_spell};
 pub(crate) use crate::spell::{
     cast_triggered, forget_spell, learn_spell, start_creature_spell, CreatureSpellCasterAdmission,
     CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
 };
 pub(crate) use crate::time::timer_never;
 pub(crate) use crate::xp::grant_xp;
+
+pub(crate) fn base_spell(spell_id: u32, name: &str) -> crate::Spell {
+    crate::Spell::blank(spell_id, name)
+}
+
+pub(crate) fn base_effect(spell_id: u32, effect_index: u8) -> crate::SpellEffect {
+    crate::SpellEffect::blank(spell_id, effect_index)
+}
 
 pub(crate) fn do_cancel_aura(
     ctx: &ReducerContext,
@@ -79,7 +87,23 @@ pub fn apply_damage(
     amount: u32,
     attacker_guid: u64,
 ) -> Result<(), String> {
-    crate::debug::debug_apply_damage(ctx, target_guid, amount, attacker_guid)
+    let target = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(target_guid)
+        .ok_or_else(|| format!("no live entity for guid {target_guid}"))?;
+    if target.dead {
+        return Err("target is dead".to_string());
+    }
+    let capped = amount.min(target.health.saturating_sub(1));
+    crate::combat::resolve_damage(ctx, attacker_guid, target_guid, capped).land(
+        ctx,
+        attacker_guid,
+        target_guid,
+        crate::combat::Hit::weapon(crate::combat::HitSource::MainHand, false),
+    );
+    Ok(())
 }
 
 pub fn remove_live_character(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {

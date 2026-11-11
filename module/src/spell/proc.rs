@@ -752,7 +752,7 @@ mod tests {
     }
 
     fn proc_header() -> Spell {
-        let mut hdr = crate::seed::base_spell(168, "Frost Armor");
+        let mut hdr = crate::Spell::blank(168, "Frost Armor");
         hdr.proc_flags = 0x28;
         hdr.proc_chance = 100;
         hdr.proc_charges = 3;

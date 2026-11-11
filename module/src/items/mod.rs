@@ -67,7 +67,7 @@ pub use rules::weapon_subclass;
 
 pub use tables::{
     game_character_buyback, game_item_instance, game_item_template, game_npc_vendor, BuybackEntry,
-    ItemInstance, ItemTemplate, NpcVendor, ALL_PLAYABLE_CLASS_MASK, ALL_PLAYABLE_RACE_MASK,
+    ItemInstance, ItemTemplate, NpcVendor,
 };
 pub(crate) use tables::{item_in_slot, item_is_broken};
 pub(crate) use temporary_enchantment::{

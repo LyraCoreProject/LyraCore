@@ -73,6 +73,47 @@ pub struct Spell {
 }
 
 impl Spell {
+    pub(crate) fn blank(spell_id: u32, name: &str) -> Self {
+        Self {
+            spell_id,
+            name: name.to_string(),
+            power_type: 0,
+            cost: 0,
+            cast_time_ms: 0,
+            gcd_ms: 1500,
+            cooldown_ms: 0,
+            range_yd: 0,
+            duration_ms: 0,
+            school_mask: 0,
+            dispel_type: 0,
+            mechanic: 0,
+            max_stacks: 0,
+            aura_interrupt: 0,
+            attributes: 0,
+            spell_level: 0,
+            max_level: 0,
+            is_negative: false,
+            cast_flags: 0,
+            stances: 0,
+            family_name: 0,
+            family_flags: 0,
+            proc_flags: 0,
+            proc_chance: 0,
+            proc_charges: 0,
+            max_duration_ms: 0,
+            custom_flags: 0,
+            min_target_level: 0,
+            single_target_key: 0,
+            form_mask: 0,
+            form_exclude: 0,
+            attributes_ex_2: 0,
+            visual_id: 0,
+            duration_index: 0,
+            category: 0,
+            category_cooldown_ms: 0,
+        }
+    }
+
     pub(crate) fn negative(&self) -> bool {
         lyracore_shared::spell_custom::is_negative(self.custom_flags, self.is_negative)
     }
@@ -141,6 +182,34 @@ pub struct SpellEffect {
     // Reimport spell before enabling derived equip effects; see docs/danger-zones.md.
     #[default(false)]
     pub equip_supported: bool,
+}
+
+impl SpellEffect {
+    pub(crate) fn blank(spell_id: u32, effect_index: u8) -> Self {
+        Self {
+            id: lyracore_package_delta::packed_spell_effect_id(spell_id, effect_index),
+            spell_id,
+            effect_index,
+            kind: 0,
+            base_points: 0,
+            die_sides: 0,
+            per_level: 0.0,
+            period_ms: 0,
+            target: 0,
+            radius_yd: 0.0,
+            chain_targets: 0,
+            trigger_spell: 0,
+            effect_mechanic: 0,
+            p0: 0,
+            p0_kind: 0,
+            p1: 0,
+            script_id: 0,
+            enters_combat: false,
+            points_per_combo: 0.0,
+            bonus_coefficient: -1.0,
+            equip_supported: false,
+        }
+    }
 }
 
 #[table(accessor = game_spell_reagent, index(accessor = by_spell, btree(columns = [spell_id])))]

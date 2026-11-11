@@ -2,14 +2,13 @@ use lyracore_protocol::messages::vanilla::TransportInfo;
 use lyracore_shared::movement_flags::ON_TRANSPORT;
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 
-use crate::config::game_taxi_path_node;
+use crate::taxi::game_taxi_path_node;
 use crate::world::{game_world_entity, MoveClock, WorldEntity};
 
 pub(crate) mod timetable;
 
 use timetable::{PathPoint, Pose, Timetable};
 
-const HIGHGUID_MO_TRANSPORT: u64 = 0x1FC0;
 const CARRY_TICK_MICROS: i64 = 500_000;
 // CMaNGOS refuses movement with larger offsets, which can hold continent coordinates.
 const MAX_OFFSET_XY: f32 = 50.0;
@@ -88,12 +87,12 @@ crate::character_owned!(delete, fn sweep_delete_game_transport_passenger(ctx, ch
 crate::character_owned!(not_transported, fn sweep_transfer_game_transport_passenger());
 
 pub(crate) fn guid(entry: u32) -> u64 {
-    (HIGHGUID_MO_TRANSPORT << 48) | u64::from(entry)
+    lyracore_shared::guid::compose(lyracore_shared::guid::MO_TRANSPORT, u64::from(entry))
 }
 
 fn entry_of(guid: u64) -> Option<u32> {
-    (guid >> 48 == HIGHGUID_MO_TRANSPORT)
-        .then(|| u32::try_from(guid & 0xFFFF_FFFF_FFFF).ok())
+    (lyracore_shared::guid::high(guid) == lyracore_shared::guid::MO_TRANSPORT)
+        .then(|| u32::try_from(lyracore_shared::guid::low(guid)).ok())
         .flatten()
 }
 

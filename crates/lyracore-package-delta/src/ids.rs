@@ -463,24 +463,19 @@ pub const fn packed_race_class_id(race: u8, class: u8) -> u64 {
     ((race as u64) << 8) | class as u64
 }
 
-// Creature GUIDs allocate 24 bits each to the template entry and spawn identifier.
-pub const MAX_CREATURE_GUID_COMPONENT: u32 = 0x00FF_FFFF;
+pub const MAX_CREATURE_GUID_COMPONENT: u32 = lyracore_shared::guid::CREATURE_COMPONENT_MASK;
 
 const _: () = assert!(PACKAGE_CREATURE_ID_CEIL <= MAX_CREATURE_GUID_COMPONENT);
 const _: () = assert!(PACKAGE_CREATURE_AI_ID_CEIL <= u32::MAX as u64);
 
 #[must_use]
 pub const fn packed_creature_spawn_guid(entry: u32, spawn_id: u32) -> u64 {
-    const HIGHGUID_UNIT: u64 = 0xF130;
-    (HIGHGUID_UNIT << 48)
-        | (((entry & MAX_CREATURE_GUID_COMPONENT) as u64) << 24)
-        | (spawn_id & MAX_CREATURE_GUID_COMPONENT) as u64
+    lyracore_shared::guid::creature(entry, spawn_id)
 }
 
 #[must_use]
 pub const fn packed_gameobject_spawn_guid(spawn_id: u32) -> u64 {
-    const HIGHGUID_GAMEOBJECT: u64 = 0xF110;
-    (HIGHGUID_GAMEOBJECT << 48) | spawn_id as u64
+    lyracore_shared::guid::compose(lyracore_shared::guid::GAMEOBJECT, spawn_id as u64)
 }
 
 // Spawn identifiers the Operator Content API allocates; it shares numbers with spell metadata ids.

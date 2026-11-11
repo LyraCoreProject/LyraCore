@@ -146,15 +146,15 @@ mod fixture {
     };
 
     const CHARACTER: u64 = 1;
-    const GIVER_SOURCE: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) | 1;
-    const GIVER: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) | 0x00FF_FF01;
     const GIVER_ENTRY: u32 = 620;
-    const CARD_QUEST: u32 = 509_091;
+    const GIVER_SOURCE: u64 = lyracore_shared::guid::creature(GIVER_ENTRY, 1);
+    const GIVER: u64 = lyracore_shared::guid::creature(GIVER_ENTRY, 0x00FF_FF01);
+    const CARD_QUEST: u32 = lyracore_package_delta::fixture_ids::REWARD_LETTER_CARD_QUEST;
     const CARD_TEMPLATE: u32 = 509_091;
-    const CARD_ITEM: u32 = crate::seed::FIXTURE_BLADE;
-    const ELDER_QUEST: u32 = 509_092;
+    const CARD_ITEM: u32 = lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
+    const ELDER_QUEST: u32 = lyracore_package_delta::fixture_ids::REWARD_LETTER_ELDER_QUEST;
     const ELDER_TEMPLATE: u32 = 509_092;
-    const PLAIN_QUEST: u32 = 509_093;
+    const PLAIN_QUEST: u32 = lyracore_package_delta::fixture_ids::REWARD_LETTER_PLAIN_QUEST;
 
     #[spacetimedb::reducer]
     pub fn debug_stage_reward_letter_fixture(ctx: &ReducerContext) -> Result<(), String> {

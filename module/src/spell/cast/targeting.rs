@@ -168,7 +168,7 @@ pub(crate) fn select_targets(
                     .game_world_entity()
                     .guid()
                     .find(one)
-                    .is_some_and(|target| crate::taxi::is_in_flight(ctx, target.guid))
+                    .is_some_and(|target| target.is_flying())
             {
                 Vec::new()
             } else {
@@ -1673,9 +1673,8 @@ fn create_ground_area(
     .insert(ctx);
 }
 
-// Vanilla HIGHGUID_DYNAMICOBJECT occupies the top 16 bits as 0xF100.
 pub(crate) fn dynamic_object_guid(area_id: u64) -> u64 {
-    (0xF100u64 << 48) | area_id
+    lyracore_shared::guid::compose(lyracore_shared::guid::DYNAMIC_OBJECT, area_id)
 }
 
 fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
