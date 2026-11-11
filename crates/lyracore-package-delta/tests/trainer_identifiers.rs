@@ -3,10 +3,10 @@ mod common;
 use common::{
     trainer_spell_claim, PACKAGE_TRAINER_SPELL, REAL_TRAINER_SPELL, WHOLE_TRAINER_SPELL_ROW,
 };
-use lyracore_package_delta::{
-    is_fixture_reserved_trainer_id, is_package_trainer_id, DeltaError, PackageDelta, PrimaryKey,
-    Table, PACKAGE_TRAINER_ID_CEIL, PACKAGE_TRAINER_ID_FLOOR,
+use lyracore_package_delta::ids::{
+    is_fixture_reserved_trainer_id, PackageRange, PACKAGE_TRAINER_ID_CEIL, PACKAGE_TRAINER_ID_FLOOR,
 };
+use lyracore_package_delta::{is_package_trainer_id, DeltaError, PackageDelta, PrimaryKey, Table};
 
 fn artifact(package: &str, claims: &str) -> String {
     format!(
@@ -50,7 +50,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::TrainerIdNotClientSafe { id },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Trainer,
+                id
+            },
             "trainer spell row {id}"
         );
     }
@@ -74,7 +77,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         let update = artifact("example.pkg", &trainer_spell_claim(id, "update", A_COST));
         assert_eq!(
             PackageDelta::parse(&update).expect_err("the update must be refused"),
-            DeltaError::TrainerIdFixtureReserved { id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Trainer,
+                id
+            },
             "update on fixture trainer spell row {id}"
         );
 
@@ -84,7 +90,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         );
         assert_eq!(
             PackageDelta::parse(&insert).expect_err("the insert must be refused"),
-            DeltaError::TrainerIdFixtureReserved { id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Trainer,
+                id
+            },
             "insert on fixture trainer spell row {id}"
         );
     }

@@ -5,9 +5,11 @@ use common::{
     FOREIGN_MAP, PACKAGE_GAMEOBJECT, REAL_GAMEOBJECT, REAL_GAMEOBJECT_SPAWN, REAL_MAP,
     WHOLE_GAMEOBJECT_SPAWN_ROW, WHOLE_GAMEOBJECT_TEMPLATE_ROW, WHOLE_GAMEOBJECT_TRAP_ROW,
 };
+use lyracore_package_delta::ids::{
+    PackageRange, PACKAGE_GAMEOBJECT_ID_CEIL, PACKAGE_GAMEOBJECT_ID_FLOOR,
+};
 use lyracore_package_delta::{
-    is_fixture_reserved_gameobject_id, is_package_gameobject_id, DeltaError, PackageDelta,
-    PrimaryKey, Table, PACKAGE_GAMEOBJECT_ID_CEIL, PACKAGE_GAMEOBJECT_ID_FLOOR,
+    is_package_gameobject_id, DeltaError, PackageDelta, PrimaryKey, Table,
 };
 
 const A_NAME: &str = r#"{"name":{"type":"string","value":"Kindled Cache"}}"#;
@@ -68,7 +70,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::GameobjectIdNotClientSafe { id },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Gameobject,
+                id: u64::from(id)
+            },
             "gameobject {id}"
         );
     }
@@ -87,7 +92,10 @@ fn one_band_covers_every_insertable_gameobject_table() {
         assert_eq!(
             PackageDelta::parse(&artifact("example.pkg", &claim))
                 .expect_err("the insert must be refused"),
-            DeltaError::GameobjectIdNotClientSafe { id: out_of_band },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Gameobject,
+                id: u64::from(out_of_band)
+            },
             "{claim}"
         );
     }
@@ -123,7 +131,10 @@ fn a_fixture_reserved_gameobject_is_refused_under_every_operation() {
                 &gameobject_template_claim(5_090_001, operation, fields),
             ))
             .expect_err("the claim must be refused"),
-            DeltaError::GameobjectIdFixtureReserved { id: 5_090_001 },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Gameobject,
+                id: 5_090_001
+            },
             "{operation}"
         );
     }
@@ -133,7 +144,7 @@ fn a_fixture_reserved_gameobject_is_refused_under_every_operation() {
 fn the_package_gameobject_band_is_its_own() {
     assert!(is_package_gameobject_id(PACKAGE_GAMEOBJECT));
     assert!(!is_package_gameobject_id(PACKAGE_GAMEOBJECT_ID_CEIL + 1));
-    assert!(!is_fixture_reserved_gameobject_id(PACKAGE_GAMEOBJECT));
+    assert!(!PackageRange::Gameobject.is_fixture_reserved(u64::from(PACKAGE_GAMEOBJECT)));
 }
 
 #[test]

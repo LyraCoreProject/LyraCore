@@ -1,4 +1,12 @@
-use super::*;
+use super::update_mask;
+use super::values::build_values_update_raw;
+use wow_world_messages::vanilla::{
+    MovementBlock, MovementBlock_UpdateFlag, MovementBlock_UpdateFlag_All,
+    MovementBlock_UpdateFlag_Living, MovementBlock_UpdateFlag_Transport, Object, ObjectType,
+    SMSG_GAMEOBJECT_QUERY_RESPONSE_found, UpdateDynamicObject, UpdateGameObject, UpdateMask,
+    Vector3d, SMSG_GAMEOBJECT_QUERY_RESPONSE, SMSG_UPDATE_OBJECT,
+};
+use wow_world_messages::Guid;
 
 #[derive(Clone, Debug, Default)]
 pub struct GameObjectView {
@@ -238,6 +246,7 @@ pub fn build_dynamicobject_create_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::values::write_packed_guid_u64;
     use std::f32::consts::FRAC_1_SQRT_2;
     use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
@@ -386,7 +395,7 @@ mod tests {
 
     fn decode_rotation_floats(guid: u64, body: &[u8]) -> [f32; 4] {
         let mut packed_guid = Vec::new();
-        super::write_packed_guid_u64(&mut packed_guid, guid);
+        write_packed_guid_u64(&mut packed_guid, guid);
         let mask_start = 4 + 1 + 1 + packed_guid.len();
         let block_count = body[mask_start] as usize;
         let values_start = mask_start + 1 + block_count * 4;

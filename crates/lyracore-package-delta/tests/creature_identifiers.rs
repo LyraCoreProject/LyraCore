@@ -5,11 +5,13 @@ use common::{
     REAL_CREATURE, REAL_CREATURE_SPAWN, REAL_MAP, WHOLE_CREATURE_SPAWN_ROW,
     WHOLE_CREATURE_TEMPLATE_ROW,
 };
+use lyracore_package_delta::ids::{
+    PackageRange, FIXTURE_CREATURE_ID_CEIL, FIXTURE_CREATURE_ID_FLOOR, PACKAGE_CREATURE_ID_CEIL,
+    PACKAGE_CREATURE_ID_FLOOR,
+};
 use lyracore_package_delta::{
     is_fixture_reserved_creature_id, is_package_creature_id, packed_creature_spawn_guid,
-    DeltaError, PackageDelta, PrimaryKey, Table, FIXTURE_CREATURE_ID_CEIL,
-    FIXTURE_CREATURE_ID_FLOOR, MAX_CREATURE_GUID_COMPONENT, PACKAGE_CREATURE_ID_CEIL,
-    PACKAGE_CREATURE_ID_FLOOR,
+    DeltaError, PackageDelta, PrimaryKey, Table, MAX_CREATURE_GUID_COMPONENT,
 };
 
 const A_LEVEL: &str = r#"{"level":{"type":"u32","value":12}}"#;
@@ -94,7 +96,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::CreatureIdNotClientSafe { id },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Creature,
+                id: u64::from(id)
+            },
             "creature {id}"
         );
     }
@@ -116,7 +121,10 @@ fn one_band_covers_the_template_and_the_spawn_identifier() {
             ),
         ))
         .expect_err("the insert must be refused"),
-        DeltaError::CreatureIdNotClientSafe { id: out_of_band }
+        DeltaError::IdOutsidePackageRange {
+            range: PackageRange::Creature,
+            id: u64::from(out_of_band)
+        }
     );
 
     PackageDelta::parse(&artifact(
@@ -168,7 +176,10 @@ fn a_fixture_reserved_creature_is_refused_under_every_operation() {
                 &creature_template_claim(5_090_001, operation, fields),
             ))
             .expect_err("the claim must be refused"),
-            DeltaError::CreatureIdFixtureReserved { id: 5_090_001 },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Creature,
+                id: 5_090_001
+            },
             "{operation}"
         );
     }
@@ -185,7 +196,10 @@ fn a_fixture_cluster_creature_template_is_refused_under_every_operation() {
                 &creature_template_claim(id, "update", A_LEVEL),
             ))
             .expect_err("the claim must be refused"),
-            DeltaError::CreatureIdFixtureReserved { id }
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Creature,
+                id: u64::from(id)
+            }
         );
     }
 }
@@ -210,7 +224,10 @@ fn the_fixture_creature_cluster_does_not_reach_spawn_identifiers() {
             &creature_spawn_claim(REAL_MAP, REAL_CREATURE, 5_090_001, "update", A_POSITION),
         ))
         .expect_err("the project-wide band still holds"),
-        DeltaError::CreatureIdFixtureReserved { id: 5_090_001 }
+        DeltaError::IdFixtureReserved {
+            range: PackageRange::Creature,
+            id: 5_090_001
+        }
     );
 }
 

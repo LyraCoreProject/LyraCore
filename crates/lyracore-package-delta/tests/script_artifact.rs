@@ -1,4 +1,4 @@
-use lyracore_package_delta::{ScriptArtifact, HOOK_EVENT_NAMES, PACKAGE_SCRIPT_ID_FLOOR};
+use lyracore_package_delta::{ids::PACKAGE_SCRIPT_ID_FLOOR, ScriptArtifact, HOOK_EVENT_NAMES};
 
 const HASH_A: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 

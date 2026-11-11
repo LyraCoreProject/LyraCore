@@ -1,4 +1,11 @@
-use super::*;
+use anyhow::{anyhow, Result};
+use lyracore_shared::packing::unpack4;
+use wow_world_messages::vanilla::{
+    MSG_CORPSE_QUERY_Server, Map, MovementBlock, MovementBlock_UpdateFlag,
+    MovementBlock_UpdateFlag_All, MovementBlock_UpdateFlag_Living, Object, ObjectType,
+    UpdateCorpse, UpdateMask, Vector3d, SMSG_UPDATE_OBJECT,
+};
+use wow_world_messages::Guid;
 
 #[derive(Clone, Debug, Default)]
 pub struct CorpseView {
@@ -105,6 +112,10 @@ pub fn build_corpse_flags_values(guid: u64, is_bones: bool) -> SMSG_UPDATE_OBJEC
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    use wow_world_messages::vanilla::{
+        MSG_CORPSE_QUERY_Server, Object, ObjectType, ServerMessage, UpdateMask,
+    };
 
     #[test]
     fn reclaim_delay_is_milliseconds() {
@@ -124,5 +135,153 @@ mod tests {
         expected.extend_from_slice(&(1u32 << 3).to_le_bytes());
         expected.extend_from_slice(&1u32.to_le_bytes());
         assert_eq!(packet.body, expected);
+    }
+
+    #[test]
+    fn corpse_create_is_a_corpse_object_with_race_in_bytes1() {
+        let corpse = CorpseView {
+            guid: (0xF101u64 << 48) | 1,
+            owner_guid: 1,
+            x: -8949.0,
+            y: -132.0,
+            z: 83.0,
+            orientation: 0.0,
+            display_id: 49,
+            bytes_1: (1u32 << 8) | (1u32 << 16) | (5u32 << 24),
+            bytes_2: 0,
+            is_bones: false,
+        };
+        let msg = build_corpse_create_object(&corpse);
+        match &msg.objects[0] {
+            Object::CreateObject2 {
+                object_type, mask2, ..
+            } => {
+                assert!(
+                    matches!(object_type, ObjectType::Corpse),
+                    "must be a CORPSE object"
+                );
+                assert!(
+                    matches!(mask2, UpdateMask::Corpse(_)),
+                    "must carry an UpdateCorpse mask"
+                );
+            }
+            other => panic!("expected Object::CreateObject2, got {other:?}"),
+        }
+        let mut buf = Vec::new();
+        msg.write_unencrypted_server(&mut buf).unwrap();
+        assert!(
+            buf.windows(4).any(|w| w == [0x00, 0x01, 0x01, 0x05]),
+            "corpse BYTES_1 must carry race in byte 1 (not the player_bytes layout); buf {:02x?}",
+            buf
+        );
+    }
+
+    #[test]
+    fn corpse_create_object_flags_bones_state_work_item_201() {
+        let live = CorpseView {
+            guid: 1,
+            owner_guid: 1,
+            display_id: 49,
+            is_bones: false,
+            ..Default::default()
+        };
+        let msg = build_corpse_create_object(&live);
+        match &msg.objects[0] {
+            Object::CreateObject2 {
+                mask2: UpdateMask::Corpse(m),
+                ..
+            } => {
+                assert_eq!(
+                    m.corpse_flags(),
+                    Some(0x04),
+                    "a live body must carry CORPSE_FLAG_UNK2 (0x04)"
+                );
+            }
+            other => panic!("expected a Corpse CreateObject2, got {other:?}"),
+        }
+
+        let bones = CorpseView {
+            is_bones: true,
+            ..live
+        };
+        let msg2 = build_corpse_create_object(&bones);
+        match &msg2.objects[0] {
+            Object::CreateObject2 {
+                mask2: UpdateMask::Corpse(m),
+                ..
+            } => {
+                assert_eq!(
+                    m.corpse_flags(),
+                    Some(0x01),
+                    "decayed bones must carry CORPSE_FLAG_BONE (0x01)"
+                );
+            }
+            other => panic!("expected a Corpse CreateObject2, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn corpse_query_found_carries_position_else_not_found() {
+        match build_corpse_query_response(Some((0, -8949.0, -132.0, 83.0))).unwrap() {
+            MSG_CORPSE_QUERY_Server::Found { position, .. } => {
+                assert_eq!(position.x, -8949.0);
+            }
+            other => panic!("expected Found, got {other:?}"),
+        }
+        assert!(matches!(
+            build_corpse_query_response(None).unwrap(),
+            MSG_CORPSE_QUERY_Server::NotFound
+        ));
+    }
+
+    #[test]
+    fn resurrect_request_names_the_caster_without_sickness_or_delay() {
+        let (opcode, body) = build_resurrect_request_raw(42, "Priestly");
+        assert_eq!(opcode, 0x015b);
+        assert_eq!(
+            body,
+            [
+                42, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, b'P', b'r', b'i', b'e', b's', b't', b'l',
+                b'y', 0, 0, 0
+            ]
+        );
+    }
+
+    #[test]
+    fn corpse_create_object_falls_back_to_display_49_when_zero() {
+        let corpse = CorpseView {
+            guid: 1,
+            owner_guid: 1,
+            display_id: 0,
+            ..Default::default()
+        };
+        let msg = build_corpse_create_object(&corpse);
+        match &msg.objects[0] {
+            Object::CreateObject2 {
+                mask2: UpdateMask::Corpse(m),
+                ..
+            } => {
+                assert_eq!(
+                    m.corpse_display_id(),
+                    Some(49),
+                    "display_id 0 must fall back to 49"
+                );
+            }
+            other => panic!("expected a Corpse CreateObject2, got {other:?}"),
+        }
+        let real = CorpseView {
+            display_id: 304,
+            ..corpse
+        };
+        let msg2 = build_corpse_create_object(&real);
+        match &msg2.objects[0] {
+            Object::CreateObject2 {
+                mask2: UpdateMask::Corpse(m),
+                ..
+            } => {
+                assert_eq!(m.corpse_display_id(), Some(304));
+            }
+            other => panic!("expected a Corpse CreateObject2, got {other:?}"),
+        }
     }
 }

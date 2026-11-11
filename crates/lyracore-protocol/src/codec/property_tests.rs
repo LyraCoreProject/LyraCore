@@ -169,17 +169,6 @@ fn every_truncation_of_an_encoded_mask_decodes_a_subset_and_never_invents_a_fiel
 }
 
 #[test]
-fn the_outbound_frame_linter_never_panics_on_any_body() {
-    let mut rng = Rng::new(0x4C49_4E54);
-    let opcodes = [0x00A9u16, 0x0124, 0x0037];
-    for _ in 0..CASES {
-        let opcode = opcodes[rng.below(opcodes.len())];
-        let len = rng.below(128);
-        let _ = crate::packet_lint::lint_raw(opcode, &rng.bytes(len));
-    }
-}
-
-#[test]
 fn the_seeded_generator_is_reproducible_and_seed_dependent() {
     let a: Vec<u8> = Rng::new(7).bytes(64);
     let b: Vec<u8> = Rng::new(7).bytes(64);

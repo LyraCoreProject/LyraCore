@@ -1,4 +1,5 @@
-use super::*;
+use super::update_mask;
+use super::values::build_values_update_raw;
 
 pub fn build_duel_player_values(
     guid: u64,

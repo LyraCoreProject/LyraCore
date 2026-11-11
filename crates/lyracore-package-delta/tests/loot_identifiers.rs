@@ -1,10 +1,10 @@
 mod common;
 
 use common::{artifact, pickpocket_loot_claim, WHOLE_PICKPOCKET_LOOT_ROW};
-use lyracore_package_delta::{
-    is_fixture_reserved_loot_id, is_package_loot_id, DeltaError, PackageDelta, PrimaryKey, Table,
-    PACKAGE_LOOT_ID_CEIL, PACKAGE_LOOT_ID_FLOOR,
+use lyracore_package_delta::ids::{
+    is_fixture_reserved_loot_id, PackageRange, PACKAGE_LOOT_ID_CEIL, PACKAGE_LOOT_ID_FLOOR,
 };
+use lyracore_package_delta::{is_package_loot_id, DeltaError, PackageDelta, PrimaryKey, Table};
 
 const A_CHANCE: &str = r#"{"chance_bp":{"type":"u32","value":2500}}"#;
 
@@ -37,7 +37,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::LootIdNotClientSafe { id },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Loot,
+                id
+            },
             "loot row {id}"
         );
     }
@@ -61,7 +64,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         );
         assert_eq!(
             PackageDelta::parse(&update).expect_err("the update must be refused"),
-            DeltaError::LootIdFixtureReserved { id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Loot,
+                id
+            },
             "update on fixture loot row {id}"
         );
 
@@ -71,7 +77,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         );
         assert_eq!(
             PackageDelta::parse(&insert).expect_err("the insert must be refused"),
-            DeltaError::LootIdFixtureReserved { id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Loot,
+                id
+            },
             "insert on fixture loot row {id}"
         );
     }

@@ -1,10 +1,11 @@
-use super::*;
 use wow_world_messages::vanilla::{
-    GuildCommand, GuildCommandResult, GuildMember, GuildMember_GuildMemberStatus, PetitionResult,
-    PetitionShowlist, PetitionSignature, SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_INFO,
-    SMSG_GUILD_INVITE, SMSG_GUILD_QUERY_RESPONSE, SMSG_GUILD_ROSTER, SMSG_PETITION_QUERY_RESPONSE,
-    SMSG_PETITION_SHOWLIST, SMSG_PETITION_SHOW_SIGNATURES, SMSG_PETITION_SIGN_RESULTS,
+    Area, Class, GuildCommand, GuildCommandResult, GuildMember, GuildMember_GuildMemberStatus,
+    Level, PetitionResult, PetitionShowlist, PetitionSignature, SMSG_GUILD_COMMAND_RESULT,
+    SMSG_GUILD_INFO, SMSG_GUILD_INVITE, SMSG_GUILD_QUERY_RESPONSE, SMSG_GUILD_ROSTER,
+    SMSG_PETITION_QUERY_RESPONSE, SMSG_PETITION_SHOWLIST, SMSG_PETITION_SHOW_SIGNATURES,
+    SMSG_PETITION_SIGN_RESULTS,
 };
+use wow_world_messages::Guid;
 
 // SMSG_GUILD_EVENT needs a trailing guid that gtker's vanilla type omits.
 pub const SMSG_GUILD_EVENT_OPCODE: u16 = 0x0092;
@@ -255,6 +256,11 @@ pub fn build_petition_sign_results(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::char::{build_char_enum, CharacterView};
+    use crate::codec::entity::{build_create_object, CreateKind, EntityView};
+    use crate::codec::values::build_guild_values;
+    use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
+    use wow_world_messages::vanilla::{Object, UpdateMask};
 
     fn guild() -> GuildView {
         GuildView {

@@ -1,4 +1,8 @@
-use super::*;
+use wow_world_messages::vanilla::{
+    Skill, TrainerSpell, TrainerSpellState, TrainingFailureReason, SMSG_LEARNED_SPELL,
+    SMSG_TRAINER_BUY_FAILED, SMSG_TRAINER_BUY_SUCCEEDED, SMSG_TRAINER_LIST,
+};
+use wow_world_messages::Guid;
 
 #[derive(Clone, Copy, Debug)]
 pub struct TrainerSpellView {

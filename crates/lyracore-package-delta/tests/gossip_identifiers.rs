@@ -5,10 +5,11 @@ use common::{
     REAL_GOSSIP_MENU, REAL_NPC_TEXT, WHOLE_GOSSIP_OPTION_ROW, WHOLE_NPC_TEXT_ROW,
     WHOLE_NPC_TEXT_SLOT_ROW,
 };
+use lyracore_package_delta::ids::{
+    PackageRange, PACKAGE_GLOBALS_ID_FLOOR, PACKAGE_GOSSIP_ID_CEIL, PACKAGE_GOSSIP_ID_FLOOR,
+};
 use lyracore_package_delta::{
-    is_fixture_reserved_gossip_id, is_package_gossip_id, is_package_trainer_id, DeltaError,
-    PackageDelta, PrimaryKey, Table, PACKAGE_GLOBALS_ID_FLOOR, PACKAGE_GOSSIP_ID_CEIL,
-    PACKAGE_GOSSIP_ID_FLOOR,
+    is_package_gossip_id, is_package_trainer_id, DeltaError, PackageDelta, PrimaryKey, Table,
 };
 
 fn artifact(package: &str, claims: &str) -> String {
@@ -54,7 +55,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::GossipIdNotClientSafe { id },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Gossip,
+                id
+            },
             "npc text {id}"
         );
     }
@@ -73,7 +77,10 @@ fn one_band_covers_every_insertable_gossip_table() {
         assert_eq!(
             PackageDelta::parse(&artifact("example.pkg", &claim))
                 .expect_err("the insert must be refused"),
-            DeltaError::GossipIdNotClientSafe { id: out_of_band },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Gossip,
+                id: out_of_band
+            },
             "{claim}"
         );
     }
@@ -127,7 +134,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         let update = artifact("example.pkg", &npc_text_claim(id as u32, "update", A_TEXT));
         assert_eq!(
             PackageDelta::parse(&update).expect_err("the update must be refused"),
-            DeltaError::GossipIdFixtureReserved { id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Gossip,
+                id
+            },
             "update on fixture npc text {id}"
         );
 
@@ -137,7 +147,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         );
         assert_eq!(
             PackageDelta::parse(&insert).expect_err("the insert must be refused"),
-            DeltaError::GossipIdFixtureReserved { id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Gossip,
+                id
+            },
             "insert on fixture npc text {id}"
         );
     }
@@ -164,7 +177,7 @@ fn the_package_range_is_disjoint_from_every_reserved_identifier() {
 
     for id in [PACKAGE_GOSSIP_ID_FLOOR, PACKAGE_GOSSIP_ID_CEIL] {
         assert!(
-            !is_fixture_reserved_gossip_id(id),
+            !PackageRange::Gossip.is_fixture_reserved(id),
             "Package gossip row {id} must not be fixture-reserved"
         );
     }

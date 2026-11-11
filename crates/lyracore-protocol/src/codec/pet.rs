@@ -1,5 +1,5 @@
-use super::*;
-use wow_world_messages::vanilla::SMSG_PET_NAME_QUERY_RESPONSE;
+use super::values;
+use wow_world_messages::vanilla::{SMSG_PET_NAME_QUERY_RESPONSE, SMSG_UPDATE_OBJECT};
 
 const MAX_HAPPINESS: u32 = 1_000_000;
 
@@ -57,7 +57,7 @@ pub fn build_pet_name_query_response(pet: &PetNameView) -> SMSG_PET_NAME_QUERY_R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wow_world_messages::vanilla::ServerMessage;
+    use wow_world_messages::vanilla::{Object, ServerMessage, UpdateMask};
 
     fn hunter_pet() -> HunterPetProtocolView {
         HunterPetProtocolView {

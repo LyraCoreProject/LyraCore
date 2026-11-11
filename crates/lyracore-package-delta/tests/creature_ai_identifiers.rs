@@ -5,9 +5,11 @@ use common::{
     PACKAGE_CREATURE_AI, REAL_BROADCAST_TEXT, WHOLE_BROADCAST_TEXT_ROW,
     WHOLE_QUEST_EVENT_REQUIREMENT_ROW, WHOLE_SUMMON_ROW,
 };
+use lyracore_package_delta::ids::{
+    PackageRange, PACKAGE_CREATURE_AI_ID_CEIL, PACKAGE_CREATURE_AI_ID_FLOOR,
+};
 use lyracore_package_delta::{
-    is_fixture_reserved_creature_ai_id, is_package_creature_ai_id, DeltaError, PackageDelta,
-    PrimaryKey, Table, PACKAGE_CREATURE_AI_ID_CEIL, PACKAGE_CREATURE_AI_ID_FLOOR,
+    is_package_creature_ai_id, DeltaError, PackageDelta, PrimaryKey, Table,
 };
 
 const A_LINE: &str = r#"{"male_text":{"type":"string","value":"You will burn."}}"#;
@@ -70,7 +72,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::CreatureAiIdNotClientSafe { id },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::EventAi,
+                id
+            },
             "broadcast text {id}"
         );
     }
@@ -89,7 +94,10 @@ fn one_band_covers_every_insertable_creature_ai_table() {
         assert_eq!(
             PackageDelta::parse(&artifact("example.pkg", &claim))
                 .expect_err("the insert must be refused"),
-            DeltaError::CreatureAiIdNotClientSafe { id: out_of_band },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::EventAi,
+                id: out_of_band
+            },
             "{claim}"
         );
     }
@@ -119,7 +127,10 @@ fn a_fixture_reserved_creature_ai_row_is_refused_under_every_operation() {
                 &broadcast_text_claim(5_090_001, operation, fields),
             ))
             .expect_err("the claim must be refused"),
-            DeltaError::CreatureAiIdFixtureReserved { id: 5_090_001 },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::EventAi,
+                id: 5_090_001
+            },
             "{operation}"
         );
     }
@@ -130,7 +141,7 @@ fn the_package_creature_ai_band_is_its_own() {
     let id = u64::from(PACKAGE_CREATURE_AI);
     assert!(is_package_creature_ai_id(id));
     assert!(!is_package_creature_ai_id(PACKAGE_CREATURE_AI_ID_CEIL + 1));
-    assert!(!is_fixture_reserved_creature_ai_id(id));
+    assert!(!PackageRange::EventAi.is_fixture_reserved(id));
 }
 
 #[test]

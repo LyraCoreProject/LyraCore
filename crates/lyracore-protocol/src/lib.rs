@@ -1,5 +1,4 @@
 pub mod codec;
-pub mod packet_lint;
 pub mod srp;
 pub mod who;
 pub mod world;

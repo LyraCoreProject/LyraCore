@@ -1,10 +1,10 @@
 mod common;
 
 use common::{artifact, item_claim, WHOLE_ITEM_ROW};
-use lyracore_package_delta::{
-    is_fixture_reserved_item_id, is_package_item_id, DeltaError, PackageDelta, PrimaryKey,
-    PACKAGE_ITEM_ID_CEIL, PACKAGE_ITEM_ID_FLOOR,
+use lyracore_package_delta::ids::{
+    is_fixture_reserved_item_id, PackageRange, PACKAGE_ITEM_ID_CEIL, PACKAGE_ITEM_ID_FLOOR,
 };
+use lyracore_package_delta::{is_package_item_id, DeltaError, PackageDelta, PrimaryKey};
 
 const A_BUY_PRICE: &str = r#"{"buy_price":{"type":"u32","value":100}}"#;
 
@@ -31,7 +31,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::ItemIdNotClientSafe { entry },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Item,
+                id: u64::from(entry)
+            },
             "item {entry}"
         );
     }
@@ -52,14 +55,20 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         let update = artifact("example.pkg", &item_claim(entry, "update", A_BUY_PRICE));
         assert_eq!(
             PackageDelta::parse(&update).expect_err("the update must be refused"),
-            DeltaError::ItemIdFixtureReserved { entry },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Item,
+                id: u64::from(entry)
+            },
             "update on fixture item {entry}"
         );
 
         let insert = artifact("example.pkg", &item_claim(entry, "insert", WHOLE_ITEM_ROW));
         assert_eq!(
             PackageDelta::parse(&insert).expect_err("the insert must be refused"),
-            DeltaError::ItemIdFixtureReserved { entry },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Item,
+                id: u64::from(entry)
+            },
             "insert on fixture item {entry}"
         );
     }

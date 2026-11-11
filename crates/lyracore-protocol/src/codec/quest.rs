@@ -1,5 +1,11 @@
-use super::*;
 use wow_world_base::shared::quest_party_message_vanilla_tbc::QuestPartyMessage;
+use wow_world_messages::vanilla::{
+    Gold, Level, NpcTextUpdateEmote, QuestCompletable, QuestGiverStatus, QuestItem,
+    QuestItemRequirement, QuestItemReward, MSG_QUEST_PUSH_RESULT, SMSG_QUESTGIVER_OFFER_REWARD,
+    SMSG_QUESTGIVER_QUEST_COMPLETE, SMSG_QUESTGIVER_QUEST_LIST, SMSG_QUESTGIVER_REQUEST_ITEMS,
+    SMSG_QUESTGIVER_STATUS, SMSG_QUESTUPDATE_ADD_KILL, SMSG_QUESTUPDATE_FAILEDTIMER,
+};
+use wow_world_messages::Guid;
 
 pub const ROLE_START: u8 = 0;
 pub const ROLE_END: u8 = 1;
@@ -400,6 +406,7 @@ pub fn build_quest_complete(d: &QuestDetailView) -> SMSG_QUESTGIVER_QUEST_COMPLE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
     fn ev(role: u8, startable: bool, active: bool, complete: bool) -> GiverQuestEval {
         GiverQuestEval {

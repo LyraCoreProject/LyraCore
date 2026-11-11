@@ -4,10 +4,12 @@ use common::{
     spell_chain_claim, spell_learn_claim, spell_proc_event_claim, PACKAGE_SPELL, REAL_SPELL,
     REAL_SPELL_LEARN, WHOLE_SPELL_CHAIN_ROW, WHOLE_SPELL_LEARN_ROW,
 };
+use lyracore_package_delta::ids::{
+    PackageRange, PACKAGE_SPELLMETA_ID_CEIL, PACKAGE_SPELLMETA_ID_FLOOR, PACKAGE_SPELL_ID_CEIL,
+    PACKAGE_SPELL_ID_FLOOR,
+};
 use lyracore_package_delta::{
-    is_fixture_reserved_spellmeta_id, is_package_globals_id, is_package_spellmeta_id, DeltaError,
-    PackageDelta, PrimaryKey, Table, PACKAGE_SPELLMETA_ID_CEIL, PACKAGE_SPELLMETA_ID_FLOOR,
-    PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
+    is_package_globals_id, is_package_spellmeta_id, DeltaError, PackageDelta, PrimaryKey, Table,
 };
 
 fn artifact(package: &str, claims: &str) -> String {
@@ -59,7 +61,10 @@ fn a_spell_learn_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::SpellmetaIdNotClientSafe { id },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::SpellMetadata,
+                id
+            },
             "spell learn row {id}"
         );
     }
@@ -88,8 +93,9 @@ fn a_spell_chain_insert_takes_the_package_spell_band() {
     );
     assert_eq!(
         PackageDelta::parse(&json).expect_err("a spellmeta-band spell is not a spell"),
-        DeltaError::SpellIdNotClientSafe {
-            spell_id: PACKAGE_SPELLMETA_ID_FLOOR as u32
+        DeltaError::IdOutsidePackageRange {
+            range: PackageRange::Spell,
+            id: u64::from(PACKAGE_SPELLMETA_ID_FLOOR as u32)
         }
     );
 }
@@ -121,8 +127,9 @@ fn a_proc_overlay_for_a_real_spell_is_updatable_but_not_insertable() {
     );
     assert_eq!(
         PackageDelta::parse(&insert).expect_err("the insert must be refused"),
-        DeltaError::SpellIdNotClientSafe {
-            spell_id: REAL_SPELL
+        DeltaError::IdOutsidePackageRange {
+            range: PackageRange::Spell,
+            id: u64::from(REAL_SPELL)
         }
     );
 }
@@ -149,7 +156,10 @@ fn no_operation_may_claim_a_fixture_spells_metadata() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the update must be refused"),
-            DeltaError::SpellIdFixtureReserved { spell_id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Spell,
+                id: u64::from(spell_id)
+            },
             "fixture spell {spell_id}"
         );
     }
@@ -161,7 +171,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         let update = artifact("example.pkg", &spell_learn_claim(id, "update", A_LEARN));
         assert_eq!(
             PackageDelta::parse(&update).expect_err("the update must be refused"),
-            DeltaError::SpellmetaIdFixtureReserved { id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::SpellMetadata,
+                id
+            },
             "update on fixture spell learn row {id}"
         );
     }
@@ -191,7 +204,7 @@ fn the_package_range_is_disjoint_from_every_reserved_identifier() {
 
     for id in [PACKAGE_SPELLMETA_ID_FLOOR, PACKAGE_SPELLMETA_ID_CEIL] {
         assert!(
-            !is_fixture_reserved_spellmeta_id(id),
+            !PackageRange::SpellMetadata.is_fixture_reserved(id),
             "Package spell metadata row {id} must not be fixture-reserved"
         );
         assert!(

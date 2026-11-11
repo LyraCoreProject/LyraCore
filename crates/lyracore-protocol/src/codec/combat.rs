@@ -1,5 +1,15 @@
-use super::*;
-use wow_world_messages::vanilla::{AiReaction, SMSG_AI_REACTION, SMSG_SPELL_FAILED_OTHER};
+use super::values::write_packed_guid_u64;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+use wow_world_messages::vanilla::{
+    AiReaction, DamageInfo, HitInfo, SMSG_SPELL_GO_CastFlags, SMSG_SPELL_GO_CastFlags_Ammo,
+    SMSG_SPELL_START_CastFlags, SMSG_SPELL_START_CastFlags_Ammo, SpellCastTargets,
+    SpellCastTargets_SpellCastTargetFlags, SpellCastTargets_SpellCastTargetFlags_DestLocation,
+    SpellCastTargets_SpellCastTargetFlags_Unit, SpellCooldownStatus, SpellMiss, SpellMissInfo,
+    SpellSchool, Vector3d, SMSG_AI_REACTION, SMSG_ATTACKERSTATEUPDATE, SMSG_ATTACKSTART,
+    SMSG_ATTACKSTOP, SMSG_SPELLNONMELEEDAMAGELOG, SMSG_SPELL_COOLDOWN, SMSG_SPELL_DELAYED,
+    SMSG_SPELL_FAILED_OTHER, SMSG_SPELL_GO, SMSG_SPELL_START,
+};
+use wow_world_messages::Guid;
 
 /// The client manages the GCD from Spell.dbc; send this only for spell cooldowns.
 pub fn build_spell_cooldown(
@@ -471,6 +481,7 @@ const VICTIMSTATE_BLOCK: u8 = 5;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wow_world_messages::vanilla::{HitInfo, SpellSchool};
 
     #[test]
     fn spell_start_carries_cast_bar_timer() {
@@ -563,6 +574,107 @@ mod tests {
             msg.cooldowns[0].cooldown_time,
             std::time::Duration::from_millis(6000)
         );
+    }
+
+    #[test]
+    fn attack_start_carries_attacker_and_victim() {
+        let player = 1u64;
+        let chicken = (0xF130u64 << 48) | (620u64 << 24) | 1;
+        let msg = build_attack_start(player, chicken);
+        assert_eq!(msg.attacker.guid(), player);
+        assert_eq!(msg.victim.guid(), chicken);
+    }
+
+    fn melee_packet(packet: crate::world::Packet) -> benilla_protocol::messages::AttackerState {
+        let (decoded, tail) =
+            benilla_protocol::messages::parse_server_with_tail(packet.opcode, &packet.body)
+                .unwrap();
+        assert_eq!(tail, 0);
+        let benilla_protocol::messages::ServerPacket::AttackerState(swing) = decoded else {
+            panic!("expected SMSG_ATTACKERSTATEUPDATE");
+        };
+        swing
+    }
+
+    #[test]
+    fn attacker_state_update_is_one_physical_normal_swing() {
+        let character = 1u64;
+        let chicken = (0xF130u64 << 48) | (620u64 << 24) | 1;
+        let swing = melee_packet(build_attacker_state_update(character, chicken, 7, 0, 0, 0));
+        assert_eq!(swing.attacker, character);
+        assert_eq!(swing.victim, chicken);
+        assert_eq!(swing.hit_info, 0x2);
+        assert_eq!(swing.victim_state, 1);
+        assert_eq!(swing.damage, 7);
+        assert_eq!(swing.school, 0);
+        assert_eq!(swing.absorb, 0);
+        assert_eq!(swing.resist, 0);
+        assert_eq!(swing.blocked, 0);
+    }
+
+    #[test]
+    fn attacker_state_update_maps_hit_info_discriminant() {
+        for (outcome, damage, blocked, flags, state) in [
+            (0, 7, 0, 0x2, 1),
+            (1, 14, 0, 0x82, 1),
+            (2, 0, 0, 0x10, 0),
+            (3, 0, 0, 0x2, 2),
+            (4, 0, 0, 0x2, 3),
+            (5, 4, 0, 0x4002, 1),
+            (6, 15, 0, 0x8002, 1),
+            (7, 5, 25, 0x802, 1),
+            (7, 0, 25, 0x802, 5),
+            (7, 5, 0, 0x802, 1),
+        ] {
+            let packet = build_attacker_state_update(1, 2, damage, outcome, blocked, 0);
+            assert_eq!(packet.opcode, 0x14a);
+            assert_eq!(
+                u32::from_le_bytes(packet.body[..4].try_into().unwrap()),
+                flags
+            );
+            let state_offset = packet.body.len() - 16;
+            assert_eq!(
+                u32::from_le_bytes(
+                    packet.body[state_offset..state_offset + 4]
+                        .try_into()
+                        .unwrap()
+                ),
+                state
+            );
+            let swing = melee_packet(packet);
+            assert_eq!(swing.damage, damage);
+            assert_eq!(swing.hit_info, flags);
+            assert_eq!(swing.victim_state, state);
+            assert_eq!(swing.blocked, blocked);
+        }
+        let ranged = melee_packet(build_attacker_state_update(1, 2, 9, 0, 0, 75));
+        assert_eq!(ranged.melee_spell_id, 75);
+        assert_eq!(ranged.damage, 9);
+    }
+
+    #[test]
+    fn cast_result_failed_body_carries_the_spell_status_and_reason() {
+        assert_eq!(
+            build_cast_result_failed(100, 0x4D),
+            vec![100, 0, 0, 0, 0x02, 0x4D]
+        );
+    }
+
+    #[test]
+    fn spell_damage_log_renders_crit_and_breakdown() {
+        let crit = build_spell_non_melee_damage_log(0x42, 0x7, 133, 30, 4, true, 5, 3);
+        assert_eq!(crit.hit_info, HitInfo::AffectsVictim);
+        assert_eq!(crit.hit_info.as_int(), 0x2);
+        assert_eq!(crit.damage, 30);
+        assert_eq!(crit.resisted, 5);
+        assert_eq!(crit.absorbed_damage, 3);
+        assert_eq!(crit.blocked, 0);
+        assert_eq!(crit.school, SpellSchool::Frost);
+        let normal = build_spell_non_melee_damage_log(0x42, 0x7, 133, 20, 0, false, 0, 0);
+        assert_eq!(normal.hit_info, HitInfo::NormalSwing);
+        assert_eq!(normal.resisted, 0);
+        assert_eq!(normal.absorbed_damage, 0);
+        assert_eq!(normal.school, SpellSchool::Normal);
     }
 }
 

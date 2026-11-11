@@ -1,7 +1,7 @@
-use super::*;
 use wow_world_messages::vanilla::{
     ActivateTaxiReply, SMSG_ACTIVATETAXIREPLY, SMSG_SHOWTAXINODES, SMSG_TAXINODE_STATUS,
 };
+use wow_world_messages::Guid;
 
 pub const TAXI_MASK_WORDS: usize =
     lyracore_shared::constants::taxi_protocol::NODE_MASK_WORDS as usize;
@@ -93,6 +93,7 @@ pub fn build_show_taxi_nodes(view: &TaxiMapView) -> SMSG_SHOWTAXINODES {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
     use wow_world_messages::vanilla::ServerMessage;
 
     #[test]

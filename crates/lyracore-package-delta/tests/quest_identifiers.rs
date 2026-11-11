@@ -4,10 +4,8 @@ use common::{
     artifact, quest_cast_objective_claim, quest_claim, quest_objective_claim,
     quest_reward_choice_claim, quest_text_claim, WHOLE_QUEST_ROW,
 };
-use lyracore_package_delta::{
-    is_fixture_reserved_quest_id, is_package_quest_id, DeltaError, PackageDelta, PrimaryKey, Table,
-    PACKAGE_QUEST_ID_CEIL, PACKAGE_QUEST_ID_FLOOR,
-};
+use lyracore_package_delta::ids::{PackageRange, PACKAGE_QUEST_ID_CEIL, PACKAGE_QUEST_ID_FLOOR};
+use lyracore_package_delta::{is_package_quest_id, DeltaError, PackageDelta, PrimaryKey, Table};
 
 const A_TITLE: &str = r#"{"title":{"type":"string","value":"A Kindled Errand, Retitled"}}"#;
 
@@ -40,7 +38,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::QuestIdNotClientSafe { entry },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Quest,
+                id: u64::from(entry)
+            },
             "quest {entry}"
         );
     }
@@ -61,7 +62,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         let update = artifact("example.pkg", &quest_claim(entry, "update", A_TITLE));
         assert_eq!(
             PackageDelta::parse(&update).expect_err("the update must be refused"),
-            DeltaError::QuestIdFixtureReserved { entry },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Quest,
+                id: u64::from(entry)
+            },
             "update on fixture quest {entry}"
         );
 
@@ -71,7 +75,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         );
         assert_eq!(
             PackageDelta::parse(&insert).expect_err("the insert must be refused"),
-            DeltaError::QuestIdFixtureReserved { entry },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Quest,
+                id: u64::from(entry)
+            },
             "insert on fixture quest {entry}"
         );
     }
@@ -98,7 +105,7 @@ fn the_package_range_is_disjoint_from_every_reserved_identifier() {
 
     for entry in [PACKAGE_QUEST_ID_FLOOR, PACKAGE_QUEST_ID_CEIL] {
         assert!(
-            !is_fixture_reserved_quest_id(entry),
+            !PackageRange::Quest.is_fixture_reserved(u64::from(entry)),
             "Package quest {entry} must not be fixture-reserved"
         );
     }
@@ -156,7 +163,10 @@ fn quest_text_outside_the_package_range_may_not_be_inserted() {
 
     assert_eq!(
         PackageDelta::parse(&json).expect_err("the insert must be refused"),
-        DeltaError::QuestIdNotClientSafe { entry: 1 }
+        DeltaError::IdOutsidePackageRange {
+            range: PackageRange::Quest,
+            id: 1
+        }
     );
 }
 

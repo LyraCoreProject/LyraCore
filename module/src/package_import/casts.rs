@@ -1,5 +1,6 @@
 use spacetimedb::{ReducerContext, Table};
 
+use lyracore_package_delta::ids::PackageRange;
 use lyracore_package_delta::{
     is_fixture_reserved_creature_id, is_package_cast_id, DeltaError, FieldValue, Operation,
     PrimaryKey, Table as ClaimTable, TracedRow,
@@ -103,7 +104,10 @@ fn fixture_creature_reference(row: &TracedRow, entry: u32) -> String {
         "`{}` row {} references {}",
         row.table(),
         row.key(),
-        DeltaError::CreatureIdFixtureReserved { id: entry }
+        DeltaError::IdFixtureReserved {
+            range: PackageRange::Creature,
+            id: u64::from(entry),
+        }
     )
 }
 
