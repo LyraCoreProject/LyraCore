@@ -1081,7 +1081,7 @@ fn a_stone_add_into_the_party_that_owns_the_instance_cancels_the_countdown() {
             "realm_group_op",
             &[
                 op,
-                &support::actor(&actor.to_string()),
+                &support::actor(actor),
                 &target.to_string(),
                 "0",
                 "0",

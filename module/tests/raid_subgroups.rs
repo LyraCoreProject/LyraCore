@@ -18,7 +18,7 @@ fn realm_group_op_args(
 ) -> Vec<String> {
     vec![
         op.to_string(),
-        actor(&actor_guid.to_string()),
+        actor(actor_guid),
         target_guid.to_string(),
         arg_a.to_string(),
         "0".to_string(),

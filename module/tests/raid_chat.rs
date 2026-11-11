@@ -35,7 +35,7 @@ fn request(kind: u8, message: &str) -> String {
 fn recipients_of(node: &Standalone, actor_guid: u64, kind: u8, message: &str) -> Vec<u64> {
     let req = request(kind, message);
     let updates = node.capture_updates(REALM_CHAT_ROWS, 1, || {
-        node.assert_call("realm_chat", &[&actor(&actor_guid.to_string()), &req]);
+        node.assert_call("realm_chat", &[&actor(actor_guid), &req]);
     });
     let inserts = updates[0]["game_realm_chat_event"]["inserts"]
         .as_array()
@@ -60,7 +60,7 @@ fn recipients_of(node: &Standalone, actor_guid: u64, kind: u8, message: &str) ->
 
 fn refusal(node: &Standalone, actor_guid: u64, kind: u8) -> String {
     let req = request(kind, "anyone?");
-    let output = node.call("realm_chat", &[&actor(&actor_guid.to_string()), &req]);
+    let output = node.call("realm_chat", &[&actor(actor_guid), &req]);
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),

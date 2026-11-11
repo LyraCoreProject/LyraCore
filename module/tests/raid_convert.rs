@@ -10,7 +10,7 @@ const RAID_CONVERT: &str = "6";
 fn group_op_args(op: &str, actor_guid: u64, target_guid: u64) -> Vec<String> {
     vec![
         op.to_string(),
-        actor(&actor_guid.to_string()),
+        actor(actor_guid),
         target_guid.to_string(),
         "0".to_string(),
         "0".to_string(),

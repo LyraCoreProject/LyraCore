@@ -25,7 +25,7 @@ const OUTSIDER: u64 = 9;
 fn group_op_args(op: u8, actor_guid: u64, target_guid: u64, arg_a: u8, arg_c: u64) -> Vec<String> {
     vec![
         op.to_string(),
-        actor(&actor_guid.to_string()),
+        actor(actor_guid),
         target_guid.to_string(),
         arg_a.to_string(),
         "0".to_string(),

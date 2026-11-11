@@ -21,7 +21,7 @@ const DISBANDED: u64 = 8;
 const PETITION_CHANGED: u64 = 0x75;
 
 fn forget(realm: &Standalone, guid: u64) {
-    realm.assert_call("realm_guild_op", &[&actor(&guid.to_string()), FORGET]);
+    realm.assert_call("realm_guild_op", &[&actor(guid), FORGET]);
 }
 
 fn forget_events(realm: &Standalone, guid: u64, filter: &str) -> Vec<serde_json::Value> {

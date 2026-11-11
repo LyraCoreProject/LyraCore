@@ -70,7 +70,7 @@ fn request(kind: u8, message: &str) -> String {
 fn line_of(realm: &Standalone, actor_guid: u64, kind: u8, message: &str) -> (Vec<u64>, bool) {
     let req = request(kind, message);
     let updates = realm.capture_updates(REALM_CHAT_ROWS, 1, || {
-        realm.assert_call("realm_chat", &[&actor(&actor_guid.to_string()), &req]);
+        realm.assert_call("realm_chat", &[&actor(actor_guid), &req]);
     });
     let inserts = updates[0]["game_realm_chat_event"]["inserts"]
         .as_array()
@@ -98,7 +98,7 @@ fn line_of(realm: &Standalone, actor_guid: u64, kind: u8, message: &str) -> (Vec
 
 fn refused(realm: &Standalone, actor_guid: u64, kind: u8, tag: &str) {
     let req = request(kind, "anyone?");
-    let output = realm.call("realm_chat", &[&actor(&actor_guid.to_string()), &req]);
+    let output = realm.call("realm_chat", &[&actor(actor_guid), &req]);
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),

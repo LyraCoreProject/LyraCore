@@ -119,7 +119,7 @@ pub fn roster_revision(node: &Standalone) -> u64 {
 pub fn group_op_args(op: &str, actor_guid: u64, target_guid: u64, arg_a: u8) -> Vec<String> {
     vec![
         op.to_string(),
-        actor(&actor_guid.to_string()),
+        actor(actor_guid),
         target_guid.to_string(),
         arg_a.to_string(),
         "0".to_string(),
