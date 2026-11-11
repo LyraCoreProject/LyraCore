@@ -85,8 +85,8 @@ Report the smoke result.
      when the reply does not depend on the reason, or its Protocol Family's enum, which the handler
      maps to reply packets with an exhaustive `match`. A plain `String` error ends the World Session
      with a Transport Loss.
-   - A Relay is called from the Module code that writes the Relay row, and is re-exported in
-     `native/mod.rs`.
+   - A Relay lives in its family's `native/<family>.rs` and is called by that path from the Module
+     code that writes the Relay row.
    - Codecs go in `crates/lyracore-protocol`.
 8. When the old change added or changed a `gw_*` reducer only for the Gateway, put the logic in the
    native handler. Keep the `gw_*` change only when durable tests or `native-host/check.py` need it.

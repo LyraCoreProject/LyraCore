@@ -5,6 +5,9 @@ use crate::game_world_entity;
 use crate::combat::{Hit, HitSource};
 
 use super::*;
+use crate::{
+    game_aura, game_spell, game_spell_proc_event, Aura, Spell, SpellCastEvent, SpellProcEvent,
+};
 
 // Bit values match procFlags and procEx in cmangos SpellMgr.h.
 
@@ -327,8 +330,7 @@ fn fire_aura_procs(
     }
 }
 
-// vmangos fails a Proc that would grant Extra Attacks while the Carrier still holds some, so its
-// cooldown and charges stay untouched.
+// vmangos fails, without spending, a Proc granting Extra Attacks while the Carrier holds some.
 fn refuses_extra_attacks(ctx: &ReducerContext, row: &Aura) -> bool {
     row.eff_kind == A_PROC_TRIGGER
         && super::chance_on_hit::grants_extra_attacks(ctx, row.eff_p1.max(0) as u32)
@@ -420,15 +422,15 @@ fn fire_proc_damage(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) ->
         row.amount,
         row.spell_id,
     );
-    let (dealt, absorbed) = apply_target_damage(
+    let (dealt, absorbed) = crate::combat::deal_damage(
         ctx,
-        counterparty_guid,
         row.target_guid,
+        counterparty_guid,
         after_resist,
         Hit::spell(HitSource::Triggered, row.spell_id, false),
     );
     if dealt > 0 || absorbed > 0 || row.amount > after_resist {
-        crate::spell::SpellCastEvent::insert(
+        crate::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
                 target_guid: counterparty_guid,
@@ -454,7 +456,7 @@ fn remove_carrier_buff(ctx: &ReducerContext, carrier_guid: u64, spell_id: u32) {
     let spent: Vec<Aura> = auras_on(ctx, carrier_guid)
         .filter(|a| a.spell_id == spell_id)
         .collect();
-    shed_auras(ctx, carrier_guid, spent);
+    shed_auras(ctx, spent);
 }
 
 #[cfg(test)]
@@ -752,7 +754,7 @@ mod tests {
     }
 
     fn proc_header() -> Spell {
-        let mut hdr = crate::seed::base_spell(168, "Frost Armor");
+        let mut hdr = crate::Spell::blank(168, "Frost Armor");
         hdr.proc_flags = 0x28;
         hdr.proc_chance = 100;
         hdr.proc_charges = 3;

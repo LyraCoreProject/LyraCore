@@ -88,6 +88,14 @@ pub struct RelocationRetry {
     pub call: RelocationDelivery,
 }
 
+crate::outside_table_catalog!(
+    game_package_relocation,
+    game_package_arrival,
+    game_package_relocation_delivery,
+    game_package_relocation_retry
+);
+crate::virtual_clock_exempt!(game_package_relocation_retry);
+
 fn send(ctx: &ReducerContext, target: Identity, message: Message) {
     ctx.db
         .game_package_relocation_delivery()
@@ -104,8 +112,7 @@ fn route(
     guid: u64,
     trigger: u32,
 ) -> Result<Destination, String> {
-    if world_shard(ctx).is_some() || !crate::package_teardown::runs(ctx, &package.replace('-', "_"))
-    {
+    if world_shard(ctx).is_some() || !crate::package_teardown::runs(ctx, package) {
         return Err("Package relocation requires an active Package on its World".into());
     }
     crate::sessionless::transfer_authority_gate(ctx, guid).map_err(|e| e.to_string())?;
@@ -121,19 +128,19 @@ fn route(
     {
         return Err("Character belongs to another Package".into());
     }
-    if crate::taxi::movement_is_suppressed(ctx, guid)
+    if crate::taxi::is_in_flight(ctx, guid)
         || super::realm_petition::pending(ctx, guid)
         || super::realm_auction::pending(ctx, guid)
     {
         return Err("Character transaction is settling".into());
     }
-    let route =
-        crate::quest::area_trigger_route(ctx, trigger).ok_or("AreaTrigger route is missing")?;
+    let route = crate::areatrigger::area_trigger_route(ctx, trigger)
+        .ok_or("AreaTrigger route is missing")?;
     let entity = crate::helpers::live_entity(ctx, guid).map_err(|e| e.to_string())?;
     if route.source_map != entity.map_id || !route.contains(entity.x, entity.y, entity.z) {
         return Err("Character is outside the AreaTrigger".into());
     }
-    crate::quest::area_trigger_destination(ctx, trigger)
+    crate::areatrigger::area_trigger_destination(ctx, trigger)
         .ok_or("AreaTrigger route is missing".into())
 }
 
@@ -295,18 +302,14 @@ fn begin(
                 target,
             );
         }
-        crate::world::teleport_gate(ctx, request.guid, destination.map_id, instance)
-            .map_err(|e| e.to_string())?;
-        crate::world::teleport_player(
+        crate::world::teleport(
             ctx,
             request.guid,
             destination.map_id,
             instance,
-            destination.x,
-            destination.y,
-            destination.z,
-            destination.o,
-        );
+            [destination.x, destination.y, destination.z, destination.o],
+        )
+        .map_err(|e| e.to_string())?;
         instance_shard::arrived(ctx, request.guid, destination.map_id, instance);
         finish(ctx, request.id, Relocation::Arrived(target));
         return Ok(());
@@ -384,7 +387,7 @@ pub fn idc_package_relocation(ctx: &ReducerContext, message: Vec<u8>) -> Result<
         Message::Import(import) => {
             let crossing = import.crossing;
             require_source(ctx, &crossing)?;
-            if !crate::package_teardown::runs(ctx, &crossing.package.replace('-', "_")) {
+            if !crate::package_teardown::runs(ctx, &crossing.package) {
                 return Err("Package is stopped on destination".into());
             }
             let decoded = transfer::decode_blob(crossing.id, &import.blob)?;
@@ -568,9 +571,9 @@ pub fn retry_package_relocation(ctx: &ReducerContext, retry: RelocationRetry) {
 }
 
 pub(crate) fn require_settled(ctx: &ReducerContext, package: &str) -> Result<(), String> {
+    let ident = crate::package_teardown::ident(package);
     if ctx.db.game_package_relocation().iter().any(|r| {
-        r.package_name.replace('-', "_") == package.replace('-', "_")
-            && r.result == Relocation::Pending
+        crate::package_teardown::ident(&r.package_name) == ident && r.result == Relocation::Pending
     }) {
         return Err("Package relocation is pending; wait before teardown".into());
     }
@@ -579,9 +582,10 @@ pub(crate) fn require_settled(ctx: &ReducerContext, package: &str) -> Result<(),
 
 pub(crate) fn clear_results(ctx: &ReducerContext, package: &str) {
     let rows = ctx.db.game_package_relocation();
+    let ident = crate::package_teardown::ident(package);
     let ids: Vec<_> = rows
         .iter()
-        .filter(|r| r.package_name.replace('-', "_") == package.replace('-', "_"))
+        .filter(|r| crate::package_teardown::ident(&r.package_name) == ident)
         .map(|r| r.id)
         .collect();
     for id in ids {

@@ -12,30 +12,24 @@ source importer/scripts/import-manifest.sh
 # shellcheck source=importer/scripts/vmangos-source.sh
 source importer/scripts/vmangos-source.sh || exit 1
 
+cargo build -q --bin lyracore-importer || exit 1
 PROFILE_FLAGS=()
-PROFILE_MAPS=""
 if [ -n "$WORLD_PROFILE" ]; then
-  case "$WORLD_PROFILE" in
-    full-world) PROFILE_MAPS="$PROFILE_FULL_WORLD_MAPS"; MAP=0 ;;
-    full-eastern) PROFILE_MAPS="$PROFILE_FULL_EASTERN_MAPS"; MAP=0 ;;
-    full-kalimdor) PROFILE_MAPS="$PROFILE_FULL_KALIMDOR_MAPS"; MAP=1 ;;
-    full-instances) PROFILE_MAPS="$PROFILE_FULL_INSTANCES_MAPS"; MAP=36 ;;
-    alliance-eastern) PROFILE_MAPS="$PROFILE_ALLIANCE_EASTERN_MAPS"; MAP=0 ;;
-    alliance-kalimdor) PROFILE_MAPS="$PROFILE_ALLIANCE_KALIMDOR_MAPS"; MAP=1 ;;
-    alliance-single) PROFILE_MAPS="$PROFILE_ALLIANCE_SINGLE_MAPS"; MAP=0 ;;
-    instances) PROFILE_MAPS="$PROFILE_INSTANCES_MAPS"; MAP=36 ;;
-    *) echo "WORLD_PROFILE=$WORLD_PROFILE is unknown; valid profiles: $WORLD_PROFILES" >&2; exit 2 ;;
-  esac
+  MAP="$(./target/debug/lyracore-importer --print-primary-map --world-profile "$WORLD_PROFILE")" || exit 2
   export MAP SLICE=1
   source importer/scripts/import-manifest.sh
   PROFILE_FLAGS=(--world-profile "$WORLD_PROFILE")
-  echo "[world] canonical profile $WORLD_PROFILE (planned maps: $PROFILE_MAPS) → ${DB:-lyracore}"
 fi
 
 DBC="${DBC:-../wowclient/Data}"
-EVENTAI_PROFILE="${EVENTAI_PROFILE:-vmangos-4641790}"
-[ -z "$WORLD_PROFILE" ] && [ "$MAP" = 0 ] && BOX="${BOX:--11400,-8000,-3100,2000}"
-[ -z "$WORLD_PROFILE" ] && [ "$MAP" = 0 ] && INCLUDE_CREATURES="${INCLUDE_CREATURES-344,11406,266,415,1343,6966,5165,6166,6569,5149}"
+if [ -z "$WORLD_PROFILE" ] && [ "$MAP" = 0 ]; then
+  LEGACY_DEFAULTS="$(./target/debug/lyracore-importer --print-legacy-defaults)" || exit 1
+  legacy_default() { printf '%s\n' "$LEGACY_DEFAULTS" | sed -n "s/^$1=//p"; }
+  BOX="${BOX:-$(legacy_default BOX)}"
+  INCLUDE_CREATURES="${INCLUDE_CREATURES-$(legacy_default INCLUDE_CREATURES)}"
+  INCLUDE_MAPS="${INCLUDE_MAPS-$(legacy_default INCLUDE_MAPS)}"
+  GRAVEYARD_ZONE="${GRAVEYARD_ZONE:-12}"
+fi
 INCLUDE_CREATURES="${INCLUDE_CREATURES-}"
 DB="${DB:-lyracore}"
 # Bare spacetime commands can inherit a different node from the CLI configuration.
@@ -69,11 +63,9 @@ restore_taxi_fixture_or_fail() {
   fi
 }
 # TAXI RESTORE HELPERS END
-[ -z "$WORLD_PROFILE" ] && [ "$MAP" = 0 ] && INCLUDE_MAPS="${INCLUDE_MAPS-36}"
 INCLUDE_MAPS="${INCLUDE_MAPS-}"
 # CENTER must be inside the scope, with Z within 2 yards of the real ground height.
 CENTER="${CENTER:-}"
-[ -z "$WORLD_PROFILE" ] && [ "$MAP" = 0 ] && GRAVEYARD_ZONE="${GRAVEYARD_ZONE:-12}"
 GRAVEYARD_ZONE="${GRAVEYARD_ZONE:-}"
 
 if [ -z "$WORLD_PROFILE" ] && [ "$MAP" != 0 ]; then
@@ -101,7 +93,6 @@ if [ -n "$WORLD_PROFILE" ]; then
 else
   SCOPE_FLAGS=(--map "$MAP" --box "$BOX" ${INC_MAP_FLAGS[@]+"${INC_MAP_FLAGS[@]}"} ${INC_CREATURE_FLAGS[@]+"${INC_CREATURE_FLAGS[@]}"} ${CENTER_FLAGS[@]+"${CENTER_FLAGS[@]}"})
 fi
-cargo build -q --bin lyracore-importer || exit 1
 # The source decides which maps an all-maps scope such as full-world owns.
 if ! EXPECTED_MAPS="$(./target/debug/lyracore-importer --db "$DB" --dump "$DUMP" "${SCOPE_FLAGS[@]}" --print-scope-maps)" \
   || [ -z "$EXPECTED_MAPS" ]; then
@@ -110,6 +101,7 @@ if ! EXPECTED_MAPS="$(./target/debug/lyracore-importer --db "$DB" --dump "$DUMP"
 fi
 # comm requires both map lists in lexical order.
 EXPECTED_MAPS="$(printf '%s\n' $EXPECTED_MAPS | sort -u)"
+[ -z "$WORLD_PROFILE" ] || echo "[world] canonical profile $WORLD_PROFILE (maps: $(echo $EXPECTED_MAPS)) → $DB"
 
 # GUARD HELPERS BEGIN
 db_spatial_probe() {
@@ -186,7 +178,7 @@ run_checked_step "world content for $WORLD_PROFILE into $DB" \
   "filter:|mapped|applied|error|abort|WARNING" 12 \
   ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
   --dump "$DUMP" --dbc "$DBC" "${SCOPE_FLAGS[@]}" \
-  --eventai-profile "$EVENTAI_PROFILE" --source-sha "$SOURCE_SHA" --apply || exit 1
+  --source-sha "$SOURCE_SHA" --apply || exit 1
 # Map 36 has stacked floors that a single terrain height cannot represent.
 if { [ "$WORLD_PROFILE" = instances ] || [ "$WORLD_PROFILE" = full-instances ]; }; then
   echo "[world] terrain heightmap ETL SKIPPED — map 36 needs a floor-preserving representation"
@@ -467,7 +459,6 @@ spawned = {int(r[0]) for r in rows("SELECT entry FROM game_world_entity WHERE ow
 teach = {int(r[0]) for r in rows("SELECT trainer_entry FROM game_trainer_spell") if r[0].strip().isdigit()}
 sell  = {int(r[0]) for r in rows("SELECT creature_entry FROM game_npc_vendor") if r[0].strip().isdigit()}
 give  = {int(r[0]) for r in rows("SELECT creature_entry FROM game_creature_quest") if r[0].strip().isdigit()}
-# Trainers with NO offerings BY DESIGN (each has a system that isn't the class-spell path):
 KNOWN_EMPTY = {2485: "portal trainer (teleports not curated yet)",
                4732: "riding trainer (189 mounts)",
                2879: "pet trainer (188 pet system)",

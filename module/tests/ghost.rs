@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{SCENARIO_VENDOR_ENTRY, TEST_WOLF_ENTRY};
 use lyracore_shared::constants::{player_flags, unit_vis_flags};
 use lyracore_shared::spell::taxonomy::*;
 use support::{actor, number, Row, Standalone};
@@ -15,7 +16,7 @@ fn fixture(name: &str, race: u8) -> Standalone {
     ));
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_sql(
-        "UPDATE game_creature_template SET entry = 12861, display_id = 1825 WHERE entry = 51000",
+        &format!("UPDATE game_creature_template SET entry = 12861, display_id = 1825 WHERE entry = {TEST_WOLF_ENTRY}"),
     );
     for (spell, effects) in [
         (
@@ -72,24 +73,21 @@ fn assert_ghost(shard: &Standalone, wisp: bool) {
         0
     );
     assert_eq!(row["health"], "1");
-    let amounts: Vec<_> = shard
-        .query_rows("SELECT eff_kind, eff_p0, amount, stacks FROM game_aura WHERE target_guid = 1")
-        .iter()
-        .map(|a| lyracore_shared::aura::AuraAmount {
-            kind: number(a, "eff_kind"),
-            parameter: number(a, "eff_p0"),
-            amount: number(a, "amount"),
-            stacks: number(a, "stacks"),
-        })
-        .collect();
-    assert_eq!(
-        lyracore_shared::aura::run_speed(7.0, amounts.clone()),
-        if wisp { 10.5 } else { 8.75 }
-    );
-    assert_eq!(
-        lyracore_shared::aura::swim_speed(1.0, amounts),
-        if wisp { 1.5 } else { 1.25 }
-    );
+    let auras =
+        shard.query_rows("SELECT eff_kind, eff_p0, amount FROM game_aura WHERE target_guid = 1");
+    let strongest = |speed: u8| {
+        auras
+            .iter()
+            .filter(|a| {
+                number::<u8>(a, "eff_kind") == A_MOD_SPEED
+                    && number::<i32>(a, "eff_p0") == i32::from(speed)
+            })
+            .map(|a| number::<i32>(a, "amount"))
+            .max()
+    };
+    let bonus = if wisp { 50 } else { 25 };
+    assert_eq!(strongest(SPEED_MOVE), Some(bonus));
+    assert_eq!(strongest(SPEED_SWIM), Some(bonus));
     let native: u32 = number(&row, "native_display_id");
     assert_eq!(
         number::<u32>(&row, "display_id"),
@@ -337,7 +335,7 @@ fn accepting_resurrection_restores_native_form() {
 }
 
 const SPIRIT_HEALER_OPTION: u32 = 509_6740;
-const SPIRIT_HEALER_ENTRY: u32 = 51004;
+const SPIRIT_HEALER_ENTRY: u32 = SCENARIO_VENDOR_ENTRY;
 const RESURRECTION_SICKNESS: u32 = 15007;
 const BLADE: &str = "5090050";
 

@@ -37,7 +37,7 @@ fn insert_member(realm: &Standalone, guild_id: &str, guid: u64, rank_id: u32, na
 fn seeded_guild(realm: &Standalone) -> String {
     realm.assert_call(
         "realm_guild_op",
-        &[&actor(&LEADER.to_string()), &gm_create("Tracer Guild")],
+        &[&actor(LEADER), &gm_create("Tracer Guild")],
     );
     let guild_id = realm.query_rows("SELECT * FROM game_guild WHERE name = 'Tracer Guild'")[0]
         ["guild_id"]
@@ -47,10 +47,7 @@ fn seeded_guild(realm: &Standalone) -> String {
     insert_member(realm, &guild_id, MUTED, RANK_MUTED, "Muted");
     realm.assert_call(
         "realm_guild_op",
-        &[
-            &actor(&LEADER.to_string()),
-            &edit_rank(RANK_MUTED, 0, "Muted"),
-        ],
+        &[&actor(LEADER), &edit_rank(RANK_MUTED, 0, "Muted")],
     );
     guild_id
 }
@@ -70,7 +67,7 @@ fn request(kind: u8, message: &str) -> String {
 fn line_of(realm: &Standalone, actor_guid: u64, kind: u8, message: &str) -> (Vec<u64>, bool) {
     let req = request(kind, message);
     let updates = realm.capture_updates(REALM_CHAT_ROWS, 1, || {
-        realm.assert_call("realm_chat", &[&actor(&actor_guid.to_string()), &req]);
+        realm.assert_call("realm_chat", &[&actor(actor_guid), &req]);
     });
     let inserts = updates[0]["game_realm_chat_event"]["inserts"]
         .as_array()
@@ -98,7 +95,7 @@ fn line_of(realm: &Standalone, actor_guid: u64, kind: u8, message: &str) -> (Vec
 
 fn refused(realm: &Standalone, actor_guid: u64, kind: u8, tag: &str) {
     let req = request(kind, "anyone?");
-    let output = realm.call("realm_chat", &[&actor(&actor_guid.to_string()), &req]);
+    let output = realm.call("realm_chat", &[&actor(actor_guid), &req]);
     let text = format!(
         "{}{}",
         String::from_utf8_lossy(&output.stdout),
@@ -167,19 +164,13 @@ fn a_rank_edit_changes_the_very_next_line() {
 
     realm.assert_call(
         "realm_guild_op",
-        &[
-            &actor(&LEADER.to_string()),
-            &edit_rank(RANK_VETERAN, 0x41, "Veteran"),
-        ],
+        &[&actor(LEADER), &edit_rank(RANK_VETERAN, 0x41, "Veteran")],
     );
     refused(&realm, VETERAN, KIND_GUILD, "chat:no_guild_chat_right");
 
     realm.assert_call(
         "realm_guild_op",
-        &[
-            &actor(&LEADER.to_string()),
-            &edit_rank(RANK_VETERAN, 0x43, "Veteran"),
-        ],
+        &[&actor(LEADER), &edit_rank(RANK_VETERAN, 0x43, "Veteran")],
     );
     let (recipients, _) = line_of(&realm, VETERAN, KIND_GUILD, "after");
     assert_eq!(recipients, [LEADER, OFFICER, VETERAN]);

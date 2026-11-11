@@ -168,7 +168,7 @@ pub(super) fn named(ctx: &ReducerContext, name: &str) -> Option<u64> {
 }
 
 pub(super) fn facts(ctx: &ReducerContext, guid: u64, online: bool) -> Option<PartyCharacter> {
-    let player = ctx.db.game_native_player().character_guid().find(guid)?;
+    let player = super::world_session(ctx, guid)?;
     let character = crate::helpers::character_by_guid(ctx, guid)?;
     Some(PartyCharacter {
         guid,
@@ -372,7 +372,7 @@ pub fn idc_realm_party_command(
     let guid = actor.guid;
     let class = actor.class;
     store_character(ctx, actor.clone());
-    if opcode == 0x31d {
+    if opcode == codec::CMSG_RESET_INSTANCES_OPCODE {
         return super::instance_reset::dispatch(ctx, actor, &body);
     }
     if super::meeting_stone::is_realm_request(opcode) {
@@ -413,8 +413,10 @@ pub fn idc_realm_party_command(
             .into_reducer_error()
         });
     }
+    let request =
+        super::party::PartyRequest::of(&message).ok_or("opcode is not a party or raid request")?;
     let Some((action, reply)) =
-        super::party::command(ctx, guid, class, message).map_err(Rollback::into_reducer_error)?
+        super::party::command(ctx, guid, class, request).map_err(Rollback::into_reducer_error)?
     else {
         return Ok(());
     };
@@ -449,7 +451,7 @@ pub fn idc_realm_party_command(
     }
     let mut groups = group::action_groups(ctx, guid, action);
     let mark = event_mark(ctx);
-    group::apply_action(ctx, Plane::RealmCore, guid, action)
+    group::apply_action(ctx, Plane::RealmShard, guid, action)
         .map_err(|error| reply.refused(error).into_reducer_error())?;
     groups.extend(group::action_groups(ctx, guid, action));
     let mut characters = vec![guid];
@@ -484,7 +486,9 @@ pub fn realm_party_command_answered(
     }
     match result {
         Ok(()) => {
-            if call.opcode == 0x31d || super::meeting_stone::is_realm_request(call.opcode) {
+            if call.opcode == codec::CMSG_RESET_INSTANCES_OPCODE
+                || super::meeting_stone::is_realm_request(call.opcode)
+            {
                 return Ok(());
             }
             let message = lyracore_protocol::world::decode(call.opcode, &call.body)
@@ -511,7 +515,7 @@ pub fn realm_party_command_answered(
                     ctx,
                     connection,
                     ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(SMSG_NOTIFICATION {
-                        notification: if call.opcode == 0x31d {
+                        notification: if call.opcode == codec::CMSG_RESET_INSTANCES_OPCODE {
                             "Instance reset request unavailable. Please try again."
                         } else if super::meeting_stone::is_realm_request(call.opcode) {
                             "Meeting Stone request unavailable. Please try again."
@@ -674,13 +678,7 @@ pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), 
     }
     let before: Vec<_> = affected
         .into_iter()
-        .filter(|guid| {
-            ctx.db
-                .game_native_player()
-                .character_guid()
-                .find(*guid)
-                .is_some()
-        })
+        .filter(|guid| super::world_session(ctx, *guid).is_some())
         .map(|guid| (guid, super::party::roster_state(ctx, guid)))
         .collect();
     directory::observe_revision(ctx, update.revision);
@@ -711,14 +709,19 @@ pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), 
     for event in update.events {
         if event.connection == 0 && event.kind == event_kind::INVITE {
             if let Ok(id) = event.payload.parse() {
-                let _ = package::submit(
+                if let Err(error) = package::submit(
                     ctx,
                     event.recipient,
                     package::Action::Answer(package::Invitation {
                         id,
                         inviter: event.other,
                     }),
-                );
+                ) {
+                    spacetimedb::log::warn!(
+                        "Package party answer to invite {id} for {} failed: {error}",
+                        event.recipient
+                    );
+                }
             }
             continue;
         }
@@ -904,7 +907,7 @@ pub(super) fn deleted(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     };
     let groups = group::action_groups(ctx, guid, action);
     if group::group_of(ctx, guid).is_some() {
-        group::apply_action(ctx, Plane::RealmCore, guid, action)
+        group::apply_action(ctx, Plane::RealmShard, guid, action)
             .map_err(|error| error.to_string())?;
     }
     if let Some(mut character) = ctx.db.game_party_character().guid().find(guid) {
@@ -945,7 +948,7 @@ pub(crate) fn relay_chat(ctx: &ReducerContext, line: &crate::realm_chat::RealmCh
         return;
     };
     let Ok(packet) =
-        lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(message)))
+        lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(message)))
     else {
         return;
     };
@@ -1031,6 +1034,18 @@ pub struct PartyProjectionRetry {
     pub call: WorldPartyUpdate,
 }
 
+crate::outside_table_catalog!(
+    game_party_character,
+    game_party_membership,
+    game_party_projection,
+    game_party_presence,
+    game_realm_party_command,
+    game_world_party_update,
+    game_party_disband,
+    game_party_projection_retry
+);
+crate::virtual_clock_exempt!(game_party_projection_retry);
+
 #[reducer(on_result(game_world_party_update))]
 pub fn world_party_update_answered(
     ctx: &ReducerContext,
@@ -1059,7 +1074,7 @@ pub fn retry_party_projection(ctx: &ReducerContext, retry: PartyProjectionRetry)
     }
 }
 
-pub(crate) fn has_world_session(ctx: &ReducerContext, guid: u64) -> bool {
+pub(crate) fn has_world_session_in_realm(ctx: &ReducerContext, guid: u64) -> bool {
     ctx.db
         .game_character_directory()
         .guid()

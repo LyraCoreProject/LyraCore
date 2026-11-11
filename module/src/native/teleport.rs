@@ -57,7 +57,7 @@ pub(super) fn restore_origin(
 }
 
 pub(crate) fn begin(ctx: &ReducerContext, guid: u64, cross_map: bool) -> Option<u32> {
-    let mut player = ctx.db.game_native_player().character_guid().find(guid)?;
+    let mut player = super::world_session(ctx, guid)?;
     player.teleport_origin = cross_map
         .then(|| ctx.db.game_world_entity().guid().find(guid))
         .flatten()
@@ -95,12 +95,7 @@ pub(crate) fn changed(
     counter: Option<u32>,
     aboard: Option<&crate::transport::Aboard>,
 ) {
-    let Some(player) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(event.mover_guid)
-    else {
+    let Some(player) = super::world_session(ctx, event.mover_guid) else {
         return;
     };
     if counter != Some(player.teleport_counter) {
@@ -186,7 +181,7 @@ pub(super) fn acknowledge(
                 connection,
                 player.account_id,
                 player.character_guid,
-                crate::world::WorldEntry::WorldPort,
+                crate::character::WorldEntry::WorldPort,
                 player.teleport_counter,
             )
         }
@@ -214,7 +209,7 @@ fn finish_near(
         entity.z,
         entity.orientation,
     );
-    let mut packet = lyracore_protocol::world::encode(ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(
+    let mut packet = lyracore_protocol::world::encode(&ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(
         Box::new(destination),
     ))
     .map_err(|error| error.to_string())?;
@@ -234,7 +229,13 @@ fn finish_near(
         );
     }
     // MSG_MOVE_TELEPORT has packed GUID and MovementInfo without an acknowledgement counter.
-    super::visibility::broadcast(ctx, entity.guid, 0x00c5, packet.body, true);
+    super::visibility::broadcast(
+        ctx,
+        entity.guid,
+        codec::MSG_MOVE_TELEPORT_OPCODE,
+        packet.body,
+        true,
+    );
     ctx.db
         .game_native_player()
         .connection_id()

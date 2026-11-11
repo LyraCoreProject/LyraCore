@@ -38,12 +38,8 @@ fn baseline_from_result(
         result.core_commit == current_commit,
         "tier 1 result is from another commit"
     );
-    let pin = include_str!("../../.wire-harness-rev")
-        .split_whitespace()
-        .last()
-        .context("harness pin")?;
     ensure!(
-        result.harness_revision == pin,
+        result.harness_revision == lyracore_conformance::harness_pin().revision,
         "tier 1 result uses another harness revision"
     );
     let mut scenarios = Vec::new();
@@ -263,11 +259,7 @@ mod tests {
             schema_version: 2,
             tier: "tier1".into(),
             core_commit: "commit".into(),
-            harness_revision: include_str!("../../.wire-harness-rev")
-                .split_whitespace()
-                .last()
-                .unwrap()
-                .into(),
+            harness_revision: lyracore_conformance::harness_pin().revision.into(),
             scenarios: vec![],
         };
         assert!(baseline_from_result(result, "commit", Some("taxi_single_hop")).is_err());

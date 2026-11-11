@@ -9,7 +9,7 @@ use lyracore_protocol::{
 use lyracore_shared::constants::taxi_protocol;
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{game_native_player, Rollback};
+use super::{Rollback, Unhandled};
 use crate::game_world_entity;
 use crate::taxi::TaxiPassengerSpline;
 use crate::Refusal;
@@ -48,12 +48,7 @@ pub(crate) fn spline_changed(ctx: &ReducerContext, row: &TaxiPassengerSpline) {
 }
 
 pub(crate) fn resumed(ctx: &ReducerContext, row: &TaxiPassengerSpline) -> Result<(), String> {
-    if let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(row.character_guid)
-    {
+    if let Some(owner) = super::world_session(ctx, row.character_guid) {
         super::send(
             ctx,
             owner.connection_id,
@@ -72,11 +67,7 @@ fn dismount_result(
     character_guid: u64,
     result: DismountResult,
 ) -> Option<ConnectionId> {
-    let owner = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(character_guid)?;
+    let owner = super::world_session(ctx, character_guid)?;
     if let Err(error) = super::send(
         ctx,
         owner.connection_id,
@@ -178,8 +169,8 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    match message {
+) -> Result<(), Unhandled> {
+    let handled: Result<(), Rollback> = match message {
         ClientOpcodeMessage::CMSG_TAXINODE_STATUS_QUERY(c) => {
             super::actor(ctx, guid)?;
             let reply = crate::taxi::taxi_node_status(ctx, guid, c.guid.guid(), 0);
@@ -244,6 +235,7 @@ pub(super) fn receive(
             }
             Ok(())
         }
-        _ => Err("invalid taxi opcode".into()),
-    }
+        other => return Err(Unhandled::Declined(other)),
+    };
+    Ok(handled?)
 }

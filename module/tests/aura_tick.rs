@@ -3,10 +3,12 @@ mod support;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_shared::guid;
 use support::Standalone;
 
 const CHARACTER: u64 = 1;
-const WOLF: u64 = (0xF130_u64 << 48) | (51_000_u64 << 24) | 1;
+const WOLF: u64 = guid::creature(TEST_WOLF_ENTRY, 1);
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]

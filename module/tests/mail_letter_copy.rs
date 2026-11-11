@@ -1,6 +1,6 @@
 mod support;
 
-use support::Standalone;
+use support::{actor, Standalone};
 
 const CHECK_MASK_COPIED: u32 = 0x04;
 
@@ -14,10 +14,6 @@ fn fixture(name: &str) -> Standalone {
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     shard
-}
-
-fn actor(guid: u64) -> String {
-    format!(r#"{{"guid":{guid},"ownership":null}}"#)
 }
 
 fn assert_copy_refused(shard: &Standalone, mail_id: u64, reason: &str) {

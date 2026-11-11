@@ -9,33 +9,21 @@ use lyracore_protocol::{
 use lyracore_shared::item::ItemRefusal;
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::{game_native_player, Rollback};
+use super::{bounded as packet, game_native_player, Rollback, Unhandled};
 use crate::items::{item_in_slot, ItemUseTarget};
 use crate::{game_item_template, game_spell, ItemInstance};
 
 const SPELL_ATTR_COOLDOWN_ON_EVENT: u32 = 0x02000000;
 
-fn packet(message: ServerOpcodeMessage) -> Packet {
-    lyracore_protocol::world::encode(message).expect("bounded item message fits a world frame")
-}
-
 fn update(message: lyracore_protocol::messages::vanilla::SMSG_UPDATE_OBJECT) -> Packet {
     packet(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
 }
 
-fn send(ctx: &ReducerContext, connection: ConnectionId, packets: Vec<Packet>) {
-    for packet in packets {
-        super::send_raw(ctx, connection, packet.opcode, packet.body, false);
-    }
-}
-
 pub(crate) fn item_equip_cooldown(ctx: &ReducerContext, owner: u64, item: u64, spell: u32) {
-    if let Some(world_session) = ctx.db.game_native_player().character_guid().find(owner) {
-        // SMSG_ITEM_COOLDOWN: Item GUID (u64), spell id (u32).
-        let mut body = item.to_le_bytes().to_vec();
-        body.extend(spell.to_le_bytes());
-        super::send_raw(ctx, world_session.connection_id, 0xb0, body, false);
-    }
+    // SMSG_ITEM_COOLDOWN: Item GUID (u64), spell id (u32).
+    let mut body = item.to_le_bytes().to_vec();
+    body.extend(spell.to_le_bytes());
+    super::send_raw_to_character(ctx, owner, codec::SMSG_ITEM_COOLDOWN_OPCODE, body);
 }
 
 fn slot(
@@ -119,29 +107,20 @@ fn gain(
 }
 
 pub(crate) fn item_purchase_started(ctx: &ReducerContext, item: &ItemInstance, count: u32) {
-    if let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(item.owner_guid)
-    {
-        if let Some(toast) = quest_gain(ctx, item.owner_guid, item.entry, count) {
-            send(ctx, owner.connection_id, vec![toast]);
-        }
+    if !super::has_world_session(ctx, item.owner_guid) {
+        return;
+    }
+    if let Some(toast) = quest_gain(ctx, item.owner_guid, item.entry, count) {
+        super::send_packets_to_character(ctx, item.owner_guid, [toast]);
     }
 }
 
 pub(crate) fn item_purchased(ctx: &ReducerContext, item: &ItemInstance, count: u32) {
-    if let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(item.owner_guid)
-    {
-        send(
+    if super::has_world_session(ctx, item.owner_guid) {
+        super::send_packets_to_character(
             ctx,
-            owner.connection_id,
-            vec![receipt(
+            item.owner_guid,
+            [receipt(
                 item,
                 count,
                 item.stack_count != count,
@@ -170,14 +149,9 @@ pub(crate) fn item_sold(
     sold: &crate::items::BuybackItem,
     evicted: Option<&crate::items::BuybackItem>,
 ) {
-    let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(original.owner_guid)
-    else {
+    if !super::has_world_session(ctx, original.owner_guid) {
         return;
-    };
+    }
     let mut packets = Vec::new();
     if let Some(remaining) = remaining {
         create_item(&super::view::item(ctx, remaining), &mut packets);
@@ -193,7 +167,7 @@ pub(crate) fn item_sold(
     if remaining.is_none() && original.slot <= 18 {
         armor_and_resistances(ctx, original.owner_guid, &mut packets);
     }
-    send(ctx, owner.connection_id, packets);
+    super::send_packets_to_character(ctx, original.owner_guid, packets);
     super::economy::buyback_values(
         ctx,
         sold.character_guid,
@@ -206,14 +180,9 @@ pub(crate) fn item_sold(
 }
 
 pub(crate) fn item_restored(ctx: &ReducerContext, item: &ItemInstance, new_slot: bool) {
-    let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(item.owner_guid)
-    else {
+    if !super::has_world_session(ctx, item.owner_guid) {
         return;
-    };
+    }
     let mut packets = Vec::new();
     let view = super::view::item(ctx, item);
     create_item(&view, &mut packets);
@@ -223,11 +192,11 @@ pub(crate) fn item_restored(ctx: &ReducerContext, item: &ItemInstance, new_slot:
     if item.slot <= 18 {
         armor_and_resistances(ctx, item.owner_guid, &mut packets);
     }
-    send(ctx, owner.connection_id, packets);
+    super::send_packets_to_character(ctx, item.owner_guid, packets);
     super::quest::item_changed(ctx, item.owner_guid, item.entry);
 }
 
-pub(crate) fn changed(
+pub(crate) fn item_changed(
     ctx: &ReducerContext,
     previous: Option<&ItemInstance>,
     current: Option<&ItemInstance>,
@@ -253,21 +222,16 @@ pub(crate) fn changed(
         .zip(current)
         .is_some_and(|(old, row)| old.owner_guid != row.owner_guid)
     {
-        changed(ctx, previous, None, source);
-        changed(ctx, None, current, source);
+        item_changed(ctx, previous, None, source);
+        item_changed(ctx, None, current, source);
         return;
     }
     let Some(row) = current.or(previous) else {
         return;
     };
-    let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(row.owner_guid)
-    else {
+    if !super::has_world_session(ctx, row.owner_guid) {
         return;
-    };
+    }
     let mut packets = Vec::new();
     match (previous, current) {
         (None, Some(row)) => {
@@ -363,7 +327,7 @@ pub(crate) fn changed(
     if affects_resistances {
         armor_and_resistances(ctx, row.owner_guid, &mut packets);
     }
-    send(ctx, owner.connection_id, packets);
+    super::send_packets_to_character(ctx, row.owner_guid, packets);
     if previous.map(|row| (row.entry, row.stack_count))
         != current.map(|row| (row.entry, row.stack_count))
     {
@@ -375,14 +339,9 @@ pub(crate) fn changed(
 }
 
 pub(crate) fn temporary_enchantment_changed(ctx: &ReducerContext, item: &ItemInstance) {
-    let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(item.owner_guid)
-    else {
+    if !super::has_world_session(ctx, item.owner_guid) {
         return;
-    };
+    }
     let temporary = super::view::item(ctx, item).temporary_enchantment;
     let (opcode, body) = codec::build_temporary_enchantment_values(item.guid, temporary);
     let mut packets = vec![Packet { opcode, body }];
@@ -395,7 +354,7 @@ pub(crate) fn temporary_enchantment_changed(ctx: &ReducerContext, item: &ItemIns
             )),
         )));
     }
-    send(ctx, owner.connection_id, packets);
+    super::send_packets_to_character(ctx, item.owner_guid, packets);
 }
 
 pub(super) fn receive(
@@ -403,7 +362,7 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
+) -> Result<(), Unhandled> {
     let slots = match &message {
         ClientOpcodeMessage::CMSG_DESTROYITEM(c) => [codec::inventory_slot(c.bag, c.slot), None],
         ClientOpcodeMessage::CMSG_SPLIT_ITEM(c) => [
@@ -443,7 +402,7 @@ pub(super) fn receive(
             }
             return Ok(());
         }
-        _ => return Err("invalid inventory opcode".into()),
+        _ => return Err(Unhandled::Declined(message)),
     };
     let item_guids = slots.map(|slot| {
         slot.and_then(|slot| item_in_slot(ctx, guid, slot))
@@ -535,7 +494,7 @@ pub(super) fn receive(
             _ => Err(ItemRefusal::Internal),
         }
     })();
-    result.map_err(|reason| {
+    let handled = result.map_err(|reason| {
         if let ItemRefusal::SpellCooldown(spell) = reason {
             let failure = if ctx
                 .db
@@ -550,7 +509,7 @@ pub(super) fn receive(
             };
             return Rollback::replies(
                 vec![Packet {
-                    opcode: 0x130,
+                    opcode: codec::SMSG_CAST_RESULT_OPCODE,
                     body: codec::build_cast_result_failed(spell, failure),
                 }],
                 reason.as_tag(),
@@ -562,5 +521,6 @@ pub(super) fn receive(
             )),
             reason.as_tag(),
         )
-    })
+    });
+    Ok(handled?)
 }

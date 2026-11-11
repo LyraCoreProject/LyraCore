@@ -89,7 +89,7 @@ pub fn claim_account(
     };
     // End the old generation's admitted state before installing its successor.
     if let Some(row) = &prior {
-        claim_ended(ctx, row.character_guid);
+        crate::online::world_session_ended(ctx, row.character_guid);
     }
     let row = AccountClaim {
         account_id,
@@ -136,15 +136,10 @@ pub fn release_account_claim(ctx: &ReducerContext, token: WorldSessionToken) -> 
             let character_guid = row.character_guid;
             row.closed = true;
             ctx.db.game_account_claim().account_id().update(row);
-            claim_ended(ctx, character_guid);
+            crate::online::world_session_ended(ctx, character_guid);
         }
     }
     Ok(())
-}
-
-fn claim_ended(ctx: &ReducerContext, character_guid: u64) {
-    crate::channel::leave_all(ctx, character_guid);
-    crate::meeting_stone::remove_solo_seeker(ctx, character_guid);
 }
 
 // An open Account Claim makes its Character answer only to that claim's token.
@@ -212,30 +207,6 @@ pub(crate) fn reap_account_claims(ctx: &ReducerContext) {
         let character_guid = row.character_guid;
         row.closed = true;
         ctx.db.game_account_claim().account_id().update(row);
-        claim_ended(ctx, character_guid);
+        crate::online::world_session_ended(ctx, character_guid);
     }
-}
-
-// Retired Account Fence tables keep their declarations; see docs/danger-zones.md.
-#[table(accessor = game_account_fence, index(accessor = by_character, btree(columns = [character_guid])), index(accessor = by_closed, btree(columns = [closed])))]
-pub struct AccountFence {
-    #[primary_key]
-    pub account_id: u64,
-    pub account_name: String,
-    pub generation: u64,
-    pub request_nonce: u128,
-    pub character_guid: u64,
-    pub expires_micros: i64,
-    pub closed: bool,
-}
-
-#[table(
-    accessor = game_account_character_owner,
-    index(accessor = by_account, btree(columns = [account_id]))
-)]
-pub struct AccountCharacterOwner {
-    #[primary_key]
-    pub character_guid: u64,
-    pub account_id: u64,
-    pub account_name: String,
 }

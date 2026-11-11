@@ -47,16 +47,11 @@ package_only! { pub(crate) use crate::spell::request_cast as request_cast; }
 package_only! { pub(crate) use crate::spell::cast_readiness as cast_readiness; }
 debug_only! { pub(crate) use crate::combat::apply_start_ranged_attack as ranged_attack; }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn stop_attack(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
     crate::combat::stop_attack_for(ctx, actor_guid);
     Ok(())
 }
 
-#[allow(
-    dead_code,
-    reason = "Package API v1 retains the result-only cast_at adapter"
-)]
 pub(crate) fn cast_at(
     ctx: &ReducerContext,
     actor_guid: u64,
@@ -82,7 +77,7 @@ package_only! {
     pub(crate) use crate::quest::objective_kind as objective_kind;
     pub(crate) use crate::quest::quest_role as quest_role;
     pub(crate) use crate::quest::MAX_QUEST_LOG_SIZE as MAX_QUEST_LOG_SIZE;
-    pub(crate) use crate::quest::AreaTriggerRoute as AreaTriggerRoute;
+    pub(crate) use crate::areatrigger::AreaTriggerRoute as AreaTriggerRoute;
     pub(crate) use crate::creatures::creature_spawn_evidence as creature_spawn_evidence;
     pub(crate) use crate::gameobject::gameobject_destination_evidence as gameobject_destination_evidence;
 }
@@ -95,10 +90,10 @@ pub(crate) use crate::loot::open_creature_corpse as open_creature_loot;
 package_only! {
     pub(crate) use crate::items::apply_item_use as use_item;
     pub(crate) use crate::loot::request_open_creature_corpse as request_open_creature_loot;
-    pub(crate) use crate::items::apply_take_loot as take_loot;
+    pub(crate) use crate::loot::apply_take_loot as take_loot;
     pub(crate) use crate::items::request_profile_item as reconcile_profile_item;
     pub(crate) use crate::items::apply_equip_profile_upgrade as equip_profile_upgrade;
-    pub(crate) use crate::items::request_take_loot as request_take_loot;
+    pub(crate) use crate::loot::request_take_loot as request_take_loot;
     pub(crate) use crate::loot::apply_loot_money as loot_money;
 }
 pub(crate) use crate::creatures::apply_item_target_spell as cast_item_target;
@@ -128,7 +123,7 @@ package_only! {
     pub(crate) use crate::items::item_count as item_count;
     pub(crate) use crate::xp::xp_for_kill as xp_for_kill;
     pub(crate) use crate::xp::rank_xp_multiplier as rank_xp_multiplier;
-    pub(crate) use crate::gameobject::go_type as go_type;
+    pub(crate) use lyracore_shared::constants::go_type as go_type;
 }
 
 package_only! {
@@ -157,7 +152,7 @@ package_only! {
     pub(crate) use crate::spell::BuffUnavailableReason as BuffUnavailableReason;
     pub(crate) use crate::spell::ControlReadError as ControlReadError;
     pub(crate) use crate::spell::A_CONTROL as A_CONTROL;
-    pub(crate) use crate::spell::SPELL_ATTR_CHANNELED as SPELL_ATTR_CHANNELED;
+    pub(crate) use crate::spell::CAST_FLAG_CHANNELED as SPELL_ATTR_CHANNELED;
     pub(crate) use crate::spell::A_PERIODIC_HEAL as A_PERIODIC_HEAL;
     pub(crate) use crate::spell::A_PERIODIC_TRIGGER as A_PERIODIC_TRIGGER;
     pub(crate) use crate::spell::A_PROC_TRIGGER as A_PROC_TRIGGER;
@@ -201,8 +196,8 @@ package_only! {
 debug_only! { pub(crate) use crate::trainer::apply_trainer_buy as trainer_buy; }
 package_only! {
     pub(crate) use crate::spell::do_resurrect_response as respond_resurrect;
-    pub(crate) use crate::world::do_repop as repop;
-    pub(crate) use crate::world::do_spirit_healer_res as spirit_res;
+    pub(crate) use crate::ghost::do_repop as repop;
+    pub(crate) use crate::ghost::do_spirit_healer_res as spirit_res;
     pub(crate) use crate::spell::do_self_resurrect as self_resurrect;
 }
 
@@ -218,8 +213,8 @@ package_only! {
     pub(crate) use crate::bridge::CommandOutcome as CommandOutcome;
     pub(crate) use crate::bridge::ParsedClientCommand as ParsedClientCommand;
     pub(crate) use crate::bridge::RECEIPT_CAPACITY as COMMAND_RECEIPT_CAPACITY;
-    pub(crate) use crate::quest::area_trigger_route as area_trigger_route;
-    pub(crate) use crate::quest::enter_sessionless_areatrigger as enter_sessionless_areatrigger;
+    pub(crate) use crate::areatrigger::area_trigger_route as area_trigger_route;
+    pub(crate) use crate::areatrigger::enter_sessionless_areatrigger as enter_sessionless_areatrigger;
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq, Eq)]
@@ -271,7 +266,6 @@ impl std::fmt::Display for ActionRefusal {
     }
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn restore_sessionless_body(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -283,10 +277,10 @@ pub(crate) fn restore_sessionless_body(
         return Some(entity);
     }
     let character = crate::helpers::character_by_guid(ctx, character_guid)?;
-    let mut entity = crate::creatures::build_player_entity(ctx, &character, Identity::ZERO);
+    let mut entity = crate::world::build_player_entity(ctx, &character, Identity::ZERO);
     if character.pending_ghost {
         let (dead, health, player_flags, unit_bytes_1) =
-            crate::world::ghost_restored_fields(entity.player_flags, entity.unit_bytes_1);
+            crate::ghost::ghost_restored_fields(entity.player_flags, entity.unit_bytes_1);
         entity.dead = dead;
         entity.health = health;
         entity.player_flags = player_flags;
@@ -297,7 +291,6 @@ pub(crate) fn restore_sessionless_body(
     Some(entity)
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn stop_movement(ctx: &ReducerContext, actor_guid: u64) {
     use crate::tables::{game_creature_spline, game_world_entity};
 
@@ -311,7 +304,7 @@ pub(crate) fn stop_movement(ctx: &ReducerContext, actor_guid: u64) {
         return;
     }
     if let Some(mut entity) = ctx.db.game_world_entity().guid().find(actor_guid) {
-        crate::creatures::tick::stop_where_rendered(ctx, &mut entity);
+        crate::creatures::leg::stop(ctx, &mut entity);
         entity.update(ctx);
     } else {
         ctx.db.game_creature_spline().guid().delete(actor_guid);

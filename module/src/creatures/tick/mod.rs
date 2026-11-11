@@ -1,38 +1,20 @@
 use lyracore_shared::spatial;
-use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
+use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table};
 
-use crate::world::MoveClock;
 use crate::{
-    game_creature_ai_state, game_entity_motion, game_melee_attack, game_sessionless_action_consent,
-    game_world_entity, WorldEntity,
+    game_creature_ai_state, game_melee_attack, game_sessionless_action_consent, game_world_entity,
+    WorldEntity,
 };
 
 use super::*;
+use crate::game_creature_template;
 
+pub(crate) mod cadence;
 mod lifecycle;
 
 pub(crate) use lifecycle::{pass_decay, pass_gameobject_respawn, pass_respawn};
 
-pub(crate) use lifecycle::despawn_creature_entity;
-
-#[table(accessor = game_creature_move_event, public)]
-pub struct CreatureMoveEvent {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    pub mover_guid: u64,
-    pub start_x: f32,
-    pub start_y: f32,
-    pub start_z: f32,
-    pub dest_x: f32,
-    pub dest_y: f32,
-    pub dest_z: f32,
-    pub duration_ms: u32,
-    pub spline_id: u32,
-    pub created_at: Timestamp,
-    #[default(false)]
-    pub run: bool,
-}
+pub(crate) use lifecycle::{despawn_creature_entity, CREATURE_CORPSE_DECAY_MICROS};
 
 #[table(
     accessor = game_creature_spline,
@@ -87,14 +69,14 @@ impl CreatureSpline {
         ctx.db.game_creature_spline().guid().update(self);
     }
 
-    fn replace(self, ctx: &ReducerContext) {
+    pub(crate) fn replace(self, ctx: &ReducerContext) {
         let table = ctx.db.game_creature_spline();
         let row = if table.guid().find(self.guid).is_some() {
             table.guid().update(self)
         } else {
             table.insert(self)
         };
-        crate::native::creature_spline_changed(ctx, &row);
+        crate::native::creature::spline_changed(ctx, &row);
     }
 }
 
@@ -106,6 +88,24 @@ pub struct CreatureMoveSchedule {
     pub scheduled_at: ScheduleAt,
     #[default(18_446_744_073_709_551_615u64)]
     pub instance_id: u64,
+}
+
+/// Replaces the catch-all creature tick with one that fires every `interval`.
+pub(crate) fn arm_creature_tick(ctx: &ReducerContext, interval: spacetimedb::TimeDuration) {
+    let schedules = ctx.db.game_creature_move_schedule();
+    let catch_all: Vec<u64> = schedules
+        .iter()
+        .filter(|row| row.instance_id == cadence::GLOBAL_TICK_INSTANCE)
+        .map(|row| row.scheduled_id)
+        .collect();
+    for scheduled_id in catch_all {
+        schedules.scheduled_id().delete(scheduled_id);
+    }
+    schedules.insert(CreatureMoveSchedule {
+        scheduled_id: 0,
+        scheduled_at: crate::time::schedule_interval(ctx, interval),
+        instance_id: cadence::GLOBAL_TICK_INSTANCE,
+    });
 }
 
 #[reducer]
@@ -122,6 +122,8 @@ pub struct CreatureTickCursor {
     pub id: u8,
     pub tick: u64,
 }
+
+crate::outside_table_catalog!(game_creature_tick_cursor);
 
 fn next_tick(ctx: &ReducerContext) -> u64 {
     let cursors = ctx.db.game_creature_tick_cursor();
@@ -144,7 +146,7 @@ fn creature_pass(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
         ScheduleAt::Interval(d) => d.to_micros(),
         ScheduleAt::Time(_) => MOVE_TICK_MICROS,
     };
-    // A row still on the unsliced interval keeps the whole-world tick until repair re-arms it.
+    // A catch-all row armed at any other interval runs the whole world every firing.
     let sliced = schedule.instance_id == crate::creatures::GLOBAL_TICK_INSTANCE
         && interval_micros == crate::creatures::SLICED_TICK_MICROS;
     let tick_number = sliced.then(|| next_tick(ctx));
@@ -161,7 +163,7 @@ fn creature_pass(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let sense = match tick_number {
         Some(tick) => {
-            let every_n = (super::ai::SENSE_PERIOD_MICROS / period_micros).max(1) as u64;
+            let every_n = (cadence::SENSE_PERIOD_MICROS / period_micros).max(1) as u64;
             (tick / u64::from(slice.count)) % every_n == 0
         }
         None => is_sense_tick_for_interval(now_micros, interval_micros),
@@ -211,7 +213,7 @@ pub(crate) fn active_cell_creatures(
     let entities = ctx.db.game_world_entity();
     let consents = ctx.db.game_sessionless_action_consent();
     let package_controlled = |guid: u64| consents.character_guid().find(guid).is_some();
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = crate::time::now_ms_u32(ctx);
     let radius = active_cell_radius(ctx);
     let mut awake = std::collections::HashSet::new();
     let mut pets: Vec<u64> = Vec::new();
@@ -341,110 +343,6 @@ fn log_pass_stats(
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn emit_move_spline(
-    ctx: &ReducerContext,
-    guid: u64,
-    start: (f32, f32, f32),
-    dest: (f32, f32, f32),
-    dur_ms: u32,
-    run: bool,
-    spline_id: u32,
-    map_id: u32,
-    instance_id: u64,
-    grid: (i32, i32),
-    path: Option<CreaturePath>,
-) {
-    move_spline_row(
-        ctx,
-        guid,
-        start,
-        dest,
-        dur_ms,
-        run,
-        spline_id,
-        map_id,
-        instance_id,
-        grid,
-        path,
-    )
-    .replace(ctx);
-}
-
-#[allow(clippy::too_many_arguments)]
-fn move_spline_row(
-    ctx: &ReducerContext,
-    guid: u64,
-    start: (f32, f32, f32),
-    dest: (f32, f32, f32),
-    dur_ms: u32,
-    run: bool,
-    spline_id: u32,
-    map_id: u32,
-    instance_id: u64,
-    grid: (i32, i32),
-    path: Option<CreaturePath>,
-) -> CreatureSpline {
-    CreatureSpline {
-        guid,
-        start_micros: crate::time::now(ctx).to_micros_since_unix_epoch() as u64,
-        dur_ms,
-        sx: start.0,
-        sy: start.1,
-        sz: start.2,
-        dx: dest.0,
-        dy: dest.1,
-        dz: dest.2,
-        map_id,
-        instance_id,
-        grid_x: grid.0,
-        grid_y: grid.1,
-        cell: lyracore_shared::spatial::grid_cell_id(grid.0, grid.1),
-        spline_id,
-        run,
-        facing: false,
-        facing_angle: 0.0,
-        path,
-        back_off_from: 0,
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn emit_facing_spline(
-    ctx: &ReducerContext,
-    guid: u64,
-    pos: (f32, f32, f32),
-    angle_rad: f32,
-    spline_id: u32,
-    map_id: u32,
-    instance_id: u64,
-    grid: (i32, i32),
-) {
-    let row = CreatureSpline {
-        guid,
-        start_micros: crate::time::now(ctx).to_micros_since_unix_epoch() as u64,
-        dur_ms: 0,
-        sx: pos.0,
-        sy: pos.1,
-        sz: pos.2,
-        dx: pos.0,
-        dy: pos.1,
-        dz: pos.2,
-        map_id,
-        instance_id,
-        grid_x: grid.0,
-        grid_y: grid.1,
-        cell: lyracore_shared::spatial::grid_cell_id(grid.0, grid.1),
-        spline_id,
-        run: false,
-        facing: true,
-        facing_angle: angle_rad,
-        path: None,
-        back_off_from: 0,
-    };
-    row.replace(ctx);
-}
-
 #[derive(spacetimedb::SpacetimeType, Clone)]
 pub struct CreaturePath {
     pub points: Vec<CreaturePathPoint>,
@@ -456,215 +354,6 @@ pub struct CreaturePathPoint {
     pub x: f32,
     pub y: f32,
     pub z: f32,
-}
-
-#[cfg_attr(not(has_packages), allow(dead_code))]
-pub(crate) fn emit_creature_path(
-    ctx: &ReducerContext,
-    mut mover: WorldEntity,
-    points: Vec<(f32, f32, f32)>,
-    run: bool,
-) {
-    use lyracore_shared::{constants::speeds, movement_path};
-    let Some(&destination) = points.last() else {
-        return;
-    };
-    let spline_id = begin_leg(ctx, &mut mover);
-    let start = (mover.x, mover.y, mover.z);
-    let length = movement_path::length(start, &points);
-    if !length.is_finite() {
-        return;
-    }
-    if length <= 0.0 {
-        stop_where_rendered(ctx, &mut mover);
-        mover.update(ctx);
-        return;
-    }
-    let speed = if run { speeds::RUN } else { speeds::WALK };
-    let duration = (length / speed * 1000.0).ceil().max(1.0) as u32;
-    let path = CreaturePath {
-        navigation: crate::nav::inputs(ctx, mover.map_id),
-        points: points
-            .iter()
-            .map(|&(x, y, z)| CreaturePathPoint { x, y, z })
-            .collect(),
-    };
-    emit_move_spline(
-        ctx,
-        mover.guid,
-        start,
-        destination,
-        duration,
-        run,
-        spline_id,
-        mover.map_id,
-        mover.instance_id,
-        (mover.grid_x, mover.grid_y),
-        Some(path),
-    );
-    mover.orientation = (points[0].1 - mover.y).atan2(points[0].0 - mover.x);
-    mover.last_move_ms = now_ms(ctx);
-    mover.update(ctx);
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn emit_creature_leg(
-    ctx: &ReducerContext,
-    e: WorldEntity,
-    to: (f32, f32),
-    z_fallback: f32,
-    duration_ms: u32,
-    run: bool,
-    now_ms: u32,
-    set_leg_ends: bool,
-) {
-    emit_leg(
-        ctx,
-        e,
-        to,
-        z_fallback,
-        duration_ms,
-        run,
-        now_ms,
-        set_leg_ends,
-        0,
-    );
-}
-
-pub(crate) fn emit_back_off_leg(
-    ctx: &ReducerContext,
-    e: WorldEntity,
-    to: (f32, f32),
-    duration_ms: u32,
-    now_ms: u32,
-    victim: u64,
-) {
-    let z = e.z;
-    emit_leg(ctx, e, to, z, duration_ms, false, now_ms, false, victim);
-}
-
-#[allow(clippy::too_many_arguments)]
-fn emit_leg(
-    ctx: &ReducerContext,
-    mut e: WorldEntity,
-    to: (f32, f32),
-    z_fallback: f32,
-    duration_ms: u32,
-    run: bool,
-    now_ms: u32,
-    set_leg_ends: bool,
-    back_off_from: u64,
-) {
-    let nz = crate::terrain::snap_z(ctx, e.map_id, e.instance_id, to.0, to.1, z_fallback);
-    if !crate::creatures::ai::finite_point(to.0, to.1, nz) {
-        spacetimedb::log::error!(
-            "refused a non-finite leg for guid {} -> ({}, {}, {}) — creature left at its last good \
-             position; this means some movement maths produced inf/NaN upstream",
-            e.guid, to.0, to.1, nz
-        );
-        return;
-    }
-    CreatureSpline {
-        back_off_from,
-        ..move_spline_row(
-            ctx,
-            e.guid,
-            (e.x, e.y, e.z),
-            (to.0, to.1, nz),
-            duration_ms.max(1),
-            run,
-            now_ms,
-            e.map_id,
-            e.instance_id,
-            (e.grid_x, e.grid_y),
-            None,
-        )
-    }
-    .replace(ctx);
-    // A normal spline leaves the client facing along the leg.
-    if to != (e.x, e.y) {
-        e.orientation = (to.1 - e.y).atan2(to.0 - e.x);
-    }
-    e.last_move_ms = now_ms;
-    if set_leg_ends {
-        e.leg_ends_ms = now_ms + duration_ms;
-    }
-    e.update(ctx);
-}
-
-pub(crate) fn stop_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity) {
-    let Some(previous) = place_where_rendered(ctx, mover) else {
-        return;
-    };
-    let spline_id = next_spline_id(now_ms(ctx), previous);
-    let at = (mover.x, mover.y, mover.z);
-    emit_move_spline(
-        ctx,
-        mover.guid,
-        at,
-        at,
-        0,
-        false,
-        spline_id,
-        mover.map_id,
-        mover.instance_id,
-        (mover.grid_x, mover.grid_y),
-        None,
-    );
-}
-
-pub(crate) fn stop_facing(ctx: &ReducerContext, mover: &mut WorldEntity, point: (f32, f32)) {
-    stop_where_rendered(ctx, mover);
-    mover.leg_ends_ms = 0;
-    mover.orientation = (point.1 - mover.y).atan2(point.0 - mover.x);
-    let replaced = ctx
-        .db
-        .game_creature_spline()
-        .guid()
-        .find(mover.guid)
-        .map_or(0, |leg| leg.spline_id);
-    emit_facing_spline(
-        ctx,
-        mover.guid,
-        (mover.x, mover.y, mover.z),
-        mover.orientation,
-        next_spline_id(now_ms(ctx), replaced),
-        mover.map_id,
-        mover.instance_id,
-        (mover.grid_x, mover.grid_y),
-    );
-}
-
-pub(crate) fn begin_leg(ctx: &ReducerContext, mover: &mut WorldEntity) -> u32 {
-    let now_ms = now_ms(ctx);
-    place_where_rendered(ctx, mover).map_or(now_ms, |previous| next_spline_id(now_ms, previous))
-}
-
-fn place_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity) -> Option<u32> {
-    let leg = ctx.db.game_creature_spline().guid().find(mover.guid)?;
-    let spline_id = leg.spline_id;
-    if let Some(stop) = super::cycle::stop_on_stored_leg(ctx, leg) {
-        place_stopped(mover, stop, MoveClock::Unchanged);
-    }
-    Some(spline_id)
-}
-
-// The client ignores a replacement id that does not exceed the previous spline id.
-pub(crate) fn next_spline_id(now_ms: u32, previous: u32) -> u32 {
-    now_ms.max(previous.wrapping_add(1))
-}
-
-pub(crate) fn now_ms(ctx: &ReducerContext) -> u32 {
-    (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32
-}
-
-pub(crate) fn place_stopped(mover: &mut WorldEntity, stop: super::cycle::Stop, clock: MoveClock) {
-    mover
-        .place(stop.at.x, stop.at.y, stop.at.z, clock)
-        .unexplored();
-    if let Some(heading) = stop.heading {
-        mover.orientation = heading;
-    }
 }
 
 pub(crate) fn advance_needs_persist(
@@ -711,7 +400,7 @@ pub(crate) fn rout_eligible(ctx: &ReducerContext, c: &WorldEntity) -> bool {
 }
 
 pub(crate) fn creature_is_routing(ctx: &ReducerContext, c: &WorldEntity) -> bool {
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = crate::time::now_ms_u32(ctx);
     ctx.db
         .game_melee_attack()
         .attacker_guid()
@@ -768,19 +457,12 @@ mod relay_tripwire {
         assert!(cells.contains(&(0, 0, 338, 339)));
         assert!(cells.contains(&(0, 0, 343, 343)));
     }
-
-    #[test]
-    fn active_objects_enter_only_their_creature_partition_sweep() {
-        assert!(super::active_object_enters_scope(false, true, true));
-        assert!(!super::active_object_enters_scope(true, true, true));
-        assert!(!super::active_object_enters_scope(false, false, true));
-        assert!(!super::active_object_enters_scope(false, true, false));
-    }
 }
 
 #[cfg(test)]
 mod advance_persist_gate {
-    use super::{advance_needs_persist, CreatureSpline};
+    use super::advance_needs_persist;
+    use crate::CreatureSpline;
     use crate::WorldEntity;
     use lyracore_shared::constants::{type_mask, unit_flags};
     use lyracore_shared::spatial;
@@ -921,73 +603,6 @@ mod advance_persist_gate {
             row.type_mask = type_mask::PLAYER_BIT;
         }
         assert!(walk.persists());
-    }
-}
-
-#[cfg(test)]
-mod stop_between_firings {
-    use super::{next_spline_id, place_stopped};
-    use crate::creatures::cycle::{Point, Stop};
-    use crate::world::MoveClock;
-    use crate::WorldEntity;
-    use lyracore_shared::spatial;
-
-    fn creature_stored_at(x: f32) -> WorldEntity {
-        let (grid_x, grid_y) = spatial::grid_cell(x, 0.0);
-        let mut creature = crate::helpers::tests::entity(42, 0, 0, grid_x, grid_y);
-        creature.x = x;
-        creature.cell = spatial::grid_cell_id(grid_x, grid_y);
-        creature
-    }
-
-    #[test]
-    fn a_stop_past_a_cell_edge_moves_the_creature_into_the_next_cell() {
-        let mut creature = creature_stored_at(15.0);
-        let before = (creature.grid_x, creature.cell);
-        place_stopped(
-            &mut creature,
-            Stop {
-                at: Point {
-                    x: 20.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                heading: Some(1.5),
-            },
-            MoveClock::Unchanged,
-        );
-        let (grid_x, grid_y) = spatial::grid_cell(20.0, 0.0);
-        assert_ne!(before.0, grid_x, "the stop must cross the cell edge");
-        assert_eq!((creature.x, creature.y, creature.z), (20.0, 0.0, 0.0));
-        assert_eq!((creature.grid_x, creature.grid_y), (grid_x, grid_y));
-        assert_eq!(creature.cell, spatial::grid_cell_id(grid_x, grid_y));
-        assert_ne!(creature.cell, before.1);
-        assert_eq!(creature.orientation, 1.5);
-    }
-
-    #[test]
-    fn a_stop_without_a_heading_keeps_the_creatures_facing() {
-        let mut creature = creature_stored_at(15.0);
-        creature.orientation = 0.7;
-        place_stopped(
-            &mut creature,
-            Stop {
-                at: Point {
-                    x: 15.0,
-                    y: 0.0,
-                    z: 0.0,
-                },
-                heading: None,
-            },
-            MoveClock::Unchanged,
-        );
-        assert_eq!(creature.orientation, 0.7);
-    }
-
-    #[test]
-    fn a_stop_in_the_same_millisecond_as_its_leg_still_gets_a_newer_spline_id() {
-        assert_eq!(next_spline_id(60_000, 60_000), 60_001);
-        assert_eq!(next_spline_id(60_000, 59_000), 60_000);
     }
 }
 

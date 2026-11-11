@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 from pathlib import Path
 import re
 import sqlite3
@@ -32,12 +33,12 @@ def main():
     connection.execute('PRAGMA query_only=ON')
     templates = {row[0] for row in connection.execute('SELECT entry FROM creature_template WHERE patch <= 10')}
     spawns = list(connection.execute('SELECT id,id2,id3,id4,id5 FROM creature WHERE patch_min <= 10 AND patch_max >= 10 AND (spawn_flags & 2) = 0'))
-    script = (root / 'importer/scripts/import-world.sh').read_text()
-    defaults = re.search(r'INCLUDE_CREATURES-([0-9,]+)', script).group(1)
+    profiles = json.loads((root / 'importer/manifests/world-profiles.json').read_text())
+    forced = profiles['forced_creatures'][profiles['legacy_defaults']['forced_creatures']]
     presentation = (root / 'importer/src/eventai_presentation.rs').read_text()
     displays = re.search(r'DISPLAY_TEMPLATE_ENTRIES:.*?= &\[(.*?)\]', presentation, re.S).group(1)
     groups = {
-        'INCLUDE_CREATURES defaults': [int(value) for value in defaults.split(',')],
+        'INCLUDE_CREATURES defaults': forced,
         'Spell summon dependencies': [416, 1860, 1863, 5676, 5677, 12861],
         'Content checks and known empty services': [926,836,1681,3593,4200,328,377,906,913,917,927,295,491,589,449,476,474,644,643,642,1763,646,647,639,2485,4732,2879,15351],
         'EventAI display dependencies, behavior recheck due in S6': [int(value.replace('_','')) for value in re.findall(r'[0-9][0-9_]*', displays)],

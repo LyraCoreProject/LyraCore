@@ -4,14 +4,14 @@ use lyracore_shared::spell::taxonomy::{E_WEAPON_STRIKE, T_TARGET_ENEMY};
 
 use std::collections::BTreeMap;
 
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
+use lyracore_package_delta::packed_spell_effect_id;
 use support::{event_rows, poll_until, Standalone, TableSubscription, POLL_TIMEOUT};
 
 type SqlRow = BTreeMap<String, String>;
 
 const PLAYER: u64 = 1;
-const TEST_WOLF_ENTRY: u32 = 51000;
 const WOLF_HEALTH: u32 = 100_000;
-const FIXTURE_BLADE: u32 = 5_090_050;
 const RANGED_SLOT: u8 = 17;
 const THROW: u32 = 2764;
 const SINISTER_STRIKE: u32 = 1752;
@@ -138,7 +138,7 @@ fn stage_strike(
          p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({}, {spell_id}, 0, {E_WEAPON_STRIKE}, {bonus}, 0, 0.0, 0, {T_TARGET_ENEMY}, \
          0.0, 0, 0, 0, 100, 255, 0, 0, false, 0.0)",
-        (spell_id as u64) << 2
+        packed_spell_effect_id(spell_id, 0)
     ));
 }
 

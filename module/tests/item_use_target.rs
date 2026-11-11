@@ -2,6 +2,7 @@ mod support;
 
 use std::io::Cursor;
 
+use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{A_SELF_RESURRECT, P_SPELL_ID, T_TARGET_ALLY};
 use serde_json::json;
 use support::Standalone;
@@ -111,7 +112,7 @@ fn soulstone_item(shard: &Standalone, owner: u64) {
          p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({}, {SOULSTONE_AURA}, 0, {A_SELF_RESURRECT}, 0, 1, 0.0, 0, {T_TARGET_ALLY}, \
          0.0, 0, 0, 0, {SOULSTONE_SELF_RES}, {P_SPELL_ID}, 0, 0, false, 0.0)",
-        u64::from(SOULSTONE_AURA) << 2
+        packed_spell_effect_id(SOULSTONE_AURA, 0)
     ));
     shard.assert_sql(&format!(
         "UPDATE game_item_template SET spellid_1 = {SOULSTONE_AURA}, spelltrigger_1 = 0 \

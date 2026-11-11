@@ -1,8 +1,6 @@
 use spacetimedb::ReducerContext;
 
 use crate::game_npc_vendor;
-use crate::game_world_entity;
-use crate::WorldEntity;
 
 use super::inventory::is_carried_slot;
 use super::rules::{buy_cost, equip_slot, repair_cost, sell_value};
@@ -10,183 +8,10 @@ use super::tables::{
     game_item_instance, game_item_template, item_in_slot, ItemInstance, ItemTemplate, NpcVendor,
 };
 
-// Squared yards.
-const VENDOR_RANGE_SQ: f32 = 100.0;
+use crate::npc_interaction::{NpcRefusal, NpcService};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NpcGate {
-    CharacterAbsent,
-    CharacterDead,
-    NpcAbsent,
-    WrongService,
-    NpcDead,
-    OtherMap,
-    OutOfRange,
-    Unfriendly,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NpcRefusal {
-    pub(crate) gate: NpcGate,
-    message: String,
-}
-
-impl NpcRefusal {
-    pub(crate) fn new(gate: NpcGate, message: impl Into<String>) -> Self {
-        Self {
-            gate,
-            message: message.into(),
-        }
-    }
-}
-
-impl std::fmt::Display for NpcRefusal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.message.fmt(f)
-    }
-}
-
-impl From<NpcRefusal> for String {
-    fn from(refusal: NpcRefusal) -> Self {
-        refusal.message
-    }
-}
-
-impl From<NpcRefusal> for crate::Refusal {
-    fn from(refusal: NpcRefusal) -> Self {
-        refusal.message.into()
-    }
-}
-
-pub(crate) fn npc_interaction_gate(
-    ctx: &ReducerContext,
-    player_guid: u64,
-    npc_guid: u64,
-    required_flag: u32,
-    noun: &str,
-    flag_err: &str,
-    dead_verb: &str,
-) -> Result<(WorldEntity, WorldEntity), NpcRefusal> {
-    let entities = ctx.db.game_world_entity();
-    let player = entities
-        .guid()
-        .find(player_guid)
-        .ok_or_else(|| NpcRefusal::new(NpcGate::CharacterAbsent, "user not in world"))?;
-    if player.dead {
-        return Err(NpcRefusal::new(
-            NpcGate::CharacterDead,
-            format!("dead players cannot {dead_verb}"),
-        ));
-    }
-    let npc = entities
-        .guid()
-        .find(npc_guid)
-        .ok_or_else(|| NpcRefusal::new(NpcGate::NpcAbsent, format!("no such {noun}")))?;
-    if npc.is_player() || npc.npc_flags & required_flag == 0 {
-        return Err(NpcRefusal::new(NpcGate::WrongService, flag_err));
-    }
-    if npc.dead || npc.health == 0 {
-        return Err(NpcRefusal::new(NpcGate::NpcDead, format!("{noun} is dead")));
-    }
-    if npc.map_id != player.map_id || npc.instance_id != player.instance_id {
-        return Err(NpcRefusal::new(
-            NpcGate::OtherMap,
-            format!("{noun} on another map"),
-        ));
-    }
-    if crate::helpers::dist_sq(&player, &npc) > VENDOR_RANGE_SQ {
-        return Err(NpcRefusal::new(
-            NpcGate::OutOfRange,
-            format!("{noun} out of range"),
-        ));
-    }
-    if crate::reputation::npc_refuses_interaction(ctx, &npc, &player) {
-        return Err(NpcRefusal::new(
-            NpcGate::Unfriendly,
-            format!("{noun} refuses interaction"),
-        ));
-    }
-    Ok((player, npc))
-}
-
-pub(crate) fn bank_access_gate(ctx: &ReducerContext, player_guid: u64) -> Result<(), String> {
-    use lyracore_shared::constants::npc_flags;
-    flagged_npc_in_reach_gate(
-        ctx,
-        player_guid,
-        npc_flags::BANKER,
-        "banker",
-        "use the bank",
-    )
-}
-
-pub(crate) fn innkeeper_access_gate(
-    ctx: &ReducerContext,
-    character_guid: u64,
-    innkeeper_guid: u64,
-) -> Result<(), String> {
-    npc_interaction_gate(
-        ctx,
-        character_guid,
-        innkeeper_guid,
-        lyracore_shared::constants::npc_flags::INNKEEPER,
-        "innkeeper",
-        "target is not an innkeeper",
-        "bind a home",
-    )?;
-    Ok(())
-}
-
-fn flagged_npc_in_reach_gate(
-    ctx: &ReducerContext,
-    player_guid: u64,
-    flag: u32,
-    noun: &str,
-    verb: &str,
-) -> Result<(), String> {
-    let player = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(player_guid)
-        .ok_or_else(|| "user not in world".to_string())?;
-    if player.dead {
-        return Err(format!("dead players cannot {verb}"));
-    }
-    let near = crate::helpers::entities_near(
-        ctx,
-        player.map_id,
-        player.instance_id,
-        player.x,
-        player.y,
-        VENDOR_RANGE_SQ.sqrt(),
-    );
-    let open = near.iter().any(|e| {
-        let (dx, dy, dz) = (e.x - player.x, e.y - player.y, e.z - player.z);
-        flagged_npc_in_reach(
-            flag,
-            e.is_player(),
-            e.npc_flags,
-            e.dead,
-            dx * dx + dy * dy + dz * dz,
-        ) && e.health != 0
-            && !crate::reputation::npc_refuses_interaction(ctx, e, &player)
-    });
-    if !open {
-        return Err(format!("{noun} out of range"));
-    }
-    Ok(())
-}
-
-pub(crate) fn flagged_npc_in_reach(
-    flag: u32,
-    is_player: bool,
-    npc_flags: u32,
-    dead: bool,
-    dist_sq: f32,
-) -> bool {
-    !is_player && !dead && npc_flags & flag != 0 && dist_sq <= VENDOR_RANGE_SQ
-}
+// Prices are in copper.
+const BANK_SLOT_PRICES: [u32; 6] = [1_000, 10_000, 100_000, 250_000, 250_000, 250_000];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BankSlotRefusal {
@@ -195,22 +20,21 @@ pub(crate) enum BankSlotRefusal {
     Banker(NpcRefusal),
 }
 
-// Gateway Verbs return this text, led by the SMSG_BUY_BANK_SLOT_RESULT code.
 impl std::fmt::Display for BankSlotRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use lyracore_shared::bank::result;
+        use lyracore_protocol::messages::vanilla::BuyBankSlotResult as Code;
         match self {
             Self::AlreadyMaxed => write!(
                 f,
                 "[{}] no bank bag slots left to buy",
-                result::FAILED_TOO_MANY
+                Code::FailedTooMany.as_int()
             ),
             Self::CannotAfford { price } => write!(
                 f,
                 "[{}] not enough money (need {price})",
-                result::INSUFFICIENT_FUNDS
+                Code::InsufficientFunds.as_int()
             ),
-            Self::Banker(refusal) => write!(f, "[{}] {refusal}", result::NOT_BANKER),
+            Self::Banker(refusal) => write!(f, "[{}] {refusal}", Code::NotBanker.as_int()),
         }
     }
 }
@@ -226,17 +50,12 @@ pub(crate) fn apply_buy_bank_slot(
     player_guid: u64,
     banker_guid: u64,
 ) -> Result<(), BankSlotRefusal> {
-    let (mut player, _banker) = npc_interaction_gate(
-        ctx,
-        player_guid,
-        banker_guid,
-        lyracore_shared::constants::npc_flags::BANKER,
-        "banker",
-        "target is not a banker",
-        "use the bank",
-    )
-    .map_err(BankSlotRefusal::Banker)?;
-    let price = lyracore_shared::bank::next_bank_slot_price(player.bank_bag_slots)
+    let (mut player, _banker) =
+        crate::npc_interaction::gate(ctx, player_guid, banker_guid, NpcService::Banker)
+            .map_err(BankSlotRefusal::Banker)?;
+    let price = BANK_SLOT_PRICES
+        .get(usize::from(player.bank_bag_slots))
+        .copied()
         .ok_or(BankSlotRefusal::AlreadyMaxed)?;
     if player.money < price {
         return Err(BankSlotRefusal::CannotAfford { price });
@@ -327,15 +146,8 @@ pub(crate) fn apply_item_sell_count(
     slot: u8,
     count: u32,
 ) -> Result<(), SellRefusal> {
-    let (mut player, _vendor) = npc_interaction_gate(
-        ctx,
-        player_guid,
-        vendor_guid,
-        lyracore_shared::constants::npc_flags::VENDOR,
-        "vendor",
-        "target is not a vendor",
-        "sell",
-    )?;
+    let (mut player, _vendor) =
+        crate::npc_interaction::gate(ctx, player_guid, vendor_guid, NpcService::Vendor)?;
     let inst = item_in_slot(ctx, player_guid, slot).ok_or(SellRefusal::NoItemInSlot(slot))?;
     let count = if count == 0 { inst.stack_count } else { count };
     if count > inst.stack_count {
@@ -412,16 +224,9 @@ pub(crate) fn apply_buyback_item(
     vendor_guid: u64,
     slot_idx: u8,
 ) -> Result<(), BuybackRefusal> {
-    let (mut player, _vendor) = npc_interaction_gate(
-        ctx,
-        player_guid,
-        vendor_guid,
-        lyracore_shared::constants::npc_flags::VENDOR,
-        "vendor",
-        "target is not a vendor",
-        "use buyback",
-    )
-    .map_err(BuybackRefusal::Vendor)?;
+    let (mut player, _vendor) =
+        crate::npc_interaction::gate(ctx, player_guid, vendor_guid, NpcService::Vendor)
+            .map_err(BuybackRefusal::Vendor)?;
     let row = super::buyback::entries(ctx, player_guid)
         .into_iter()
         .find(|row| {
@@ -480,7 +285,7 @@ pub(crate) fn apply_buyback_item(
             super::temporary_enchantment::resume(ctx, &item, paused);
         }
     } else {
-        crate::native::buyback_destroyed(ctx, &row);
+        crate::native::economy::buyback_destroyed(ctx, &row);
         crate::mail_text::drop_letter_text(ctx, row.item.item_text_id);
     }
     Ok(())
@@ -600,15 +405,8 @@ pub(crate) fn apply_buy_item_to(
         .entry()
         .find(item_entry)
         .ok_or(BuyRefusal::UnknownItem)?;
-    let (mut character, vendor) = npc_interaction_gate(
-        ctx,
-        character_guid,
-        vendor_guid,
-        lyracore_shared::constants::npc_flags::VENDOR,
-        "vendor",
-        "target is not a vendor",
-        "buy",
-    )?;
+    let (mut character, vendor) =
+        crate::npc_interaction::gate(ctx, character_guid, vendor_guid, NpcService::Vendor)?;
     let lots = count.max(1);
     let offer = vendor_offers(ctx, vendor.entry)
         .into_iter()
@@ -661,7 +459,7 @@ pub(crate) fn apply_buy_item_to(
         plan.grant(ctx, &tmpl, total_count, false, None)?;
         None
     };
-    crate::native::vendor_purchase_started(ctx, character_guid, vendor_guid, item_entry, lots);
+    crate::native::economy::purchase_started(ctx, character_guid, vendor_guid, item_entry, lots);
     // A commit failure must roll back payment, stock debit and the queued reply.
     character.money = character.money.saturating_sub(cost);
     character.update(ctx);
@@ -712,15 +510,8 @@ pub(crate) fn apply_player_repair(
     npc_guid: u64,
     slot: u8,
 ) -> Result<(), String> {
-    let (mut player, _npc) = npc_interaction_gate(
-        ctx,
-        player_guid,
-        npc_guid,
-        lyracore_shared::constants::npc_flags::REPAIR,
-        "armorer",
-        "target cannot repair",
-        "repair",
-    )?;
+    let (mut player, _npc) =
+        crate::npc_interaction::gate(ctx, player_guid, npc_guid, NpcService::Repair)?;
     let instances = ctx.db.game_item_instance();
     let templates = ctx.db.game_item_template();
 
@@ -768,26 +559,23 @@ pub(crate) fn apply_player_repair(
 
 #[cfg(test)]
 mod tests {
-    use super::{flagged_npc_in_reach, BankSlotRefusal, NpcGate, NpcRefusal, VENDOR_RANGE_SQ};
-    use lyracore_shared::constants::npc_flags::{BANKER, VENDOR};
+    use super::{BankSlotRefusal, BANK_SLOT_PRICES};
+    use crate::npc_interaction::{NpcGate, NpcRefusal, NpcService};
 
     #[test]
-    fn banker_in_reach_accepts_only_a_live_banker_inside_the_radius() {
-        let edge = VENDOR_RANGE_SQ;
-        let banker_in_reach =
-            |is_player, flags, dead, d| flagged_npc_in_reach(BANKER, is_player, flags, dead, d);
-        assert!(banker_in_reach(false, BANKER, false, 0.0));
-        assert!(banker_in_reach(false, BANKER | VENDOR, false, edge));
-        assert!(!banker_in_reach(true, BANKER, false, 0.0));
-        assert!(!banker_in_reach(false, BANKER, true, 0.0));
-        assert!(!banker_in_reach(false, VENDOR, false, 0.0));
-        assert!(!banker_in_reach(false, 0, false, 0.0));
-        assert!(!banker_in_reach(false, BANKER, false, edge + 1.0));
+    fn the_bank_slot_ladder_charges_the_six_vanilla_rungs_in_order() {
+        assert_eq!(
+            BANK_SLOT_PRICES,
+            [1_000, 10_000, 100_000, 250_000, 250_000, 250_000]
+        );
     }
 
     #[test]
     fn bank_slot_refusal_text_leads_with_the_buy_bank_slot_result_code() {
-        let out_of_range = NpcRefusal::new(NpcGate::OutOfRange, "banker out of range");
+        let out_of_range = NpcRefusal {
+            gate: NpcGate::OutOfRange,
+            service: NpcService::Banker,
+        };
         for (refusal, text) in [
             (
                 BankSlotRefusal::AlreadyMaxed,

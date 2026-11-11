@@ -5,6 +5,8 @@ import sqlite3
 import tempfile
 import unittest
 
+from conformance.workspace import scratch
+
 
 spec = importlib.util.spec_from_file_location('spell_counts', Path(__file__).parents[1] / 'spell_counts.py')
 spells = importlib.util.module_from_spec(spec)
@@ -95,9 +97,9 @@ class SpellCountsTests(unittest.TestCase):
             self.totals()
 
     def test_discovery_missing_data_and_read_only_open(self):
-        scratch = Path.home() / '.cache/lyracore-scratch/conformance'
-        scratch.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+        parent = scratch('conformance')
+        parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=parent) as directory:
             root = Path(directory) / '.import/vmangos'
             root.mkdir(parents=True)
             self.assertEqual(spells.locate(None, root), (None, str(root / 'current.json')))

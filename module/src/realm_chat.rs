@@ -240,7 +240,7 @@ pub(crate) fn whisper_lines(
 }
 
 pub(crate) fn emit(ctx: &ReducerContext, line: RealmChatLine) {
-    crate::native::realm_chat_line(ctx, &line);
+    crate::native::chat::realm_chat_line(ctx, &line);
     crate::native::realm_party::relay_chat(ctx, &line);
     ctx.db.game_realm_chat_event().insert(RealmChatEvent {
         id: 0,
@@ -260,6 +260,10 @@ fn refused_chat(refusal: ChatRefusal, speaker_guid: u64) -> String {
     let tag = refusal.as_tag();
     spacetimedb::log::info!("chat refused {tag}: speaker {speaker_guid}");
     tag.to_string()
+}
+
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_realm_chat_event, crate::EVENT_TTL_MICROS);
 }
 
 #[cfg(test)]

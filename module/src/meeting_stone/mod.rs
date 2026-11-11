@@ -15,8 +15,9 @@ mod matching;
 
 use matching::{formation, next_stone_add, open_roles};
 
+use crate::game_group;
 use crate::group::{Departure, GroupAction, JoinPlan, JoinTarget};
-use crate::{game_account_claim, game_group};
+use crate::online::{is_online, Online};
 
 const REMINDER_INTERVAL_MICROS: i64 = 5 * 60 * 1_000_000;
 
@@ -449,10 +450,10 @@ fn read_bucket(
             group_ids.insert(seeker.group_id);
         } else if crate::group::group_of(ctx, seeker.character_guid).is_some() {
             seekers.character_guid().delete(seeker.character_guid);
-        } else if seeker_is_online(ctx, seeker.character_guid) {
+        } else if is_online(ctx, seeker.character_guid, Online::SessionOrClaim) {
             solos.push(seeker);
         } else if crate::peer::world_shard(ctx).is_none()
-            || !crate::native::realm_party::has_world_session(ctx, seeker.character_guid)
+            || !crate::native::realm_party::has_world_session_in_realm(ctx, seeker.character_guid)
         {
             seekers.character_guid().delete(seeker.character_guid);
         }
@@ -480,21 +481,6 @@ fn read_bucket(
         .collect();
     parties.sort_unstable_by_key(|party| (party.queued_at, party.group_id));
     (solos, parties)
-}
-
-fn seeker_is_online(ctx: &ReducerContext, character_guid: u64) -> bool {
-    if crate::peer::world_shard(ctx).is_some() {
-        return crate::native::realm_party::online(ctx, character_guid);
-    }
-    if crate::native::is_player(ctx, character_guid) {
-        return true;
-    }
-    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
-    ctx.db
-        .game_account_claim()
-        .by_character()
-        .filter(character_guid)
-        .any(|claim| !claim.closed && claim.expires_micros > now)
 }
 
 fn fill_party(
@@ -609,7 +595,7 @@ fn stone_add(
         .character_guid()
         .delete(joiner.character_guid);
     let plane = if crate::peer::world_shard(ctx).is_some() {
-        crate::group::Plane::RealmCore
+        crate::group::Plane::RealmShard
     } else {
         crate::group::Plane::Shard
     };
@@ -620,7 +606,7 @@ fn stone_add(
         GroupAction::StoneAdd(plan),
     )
     .map_err(|error| error.to_string())?;
-    crate::native::party_roster(ctx, joiner.character_guid, true);
+    crate::native::party::roster(ctx, joiner.character_guid, true);
     crate::group::group_of(ctx, joiner.character_guid)
         .map(|member| member.group_id)
         .ok_or_else(|| format!("stone add left {} outside a group", joiner.character_guid))
@@ -690,7 +676,7 @@ pub(crate) fn party_left(ctx: &ReducerContext, departed: PartyDeparture) -> Opti
                 );
             }
             dequeue_party(ctx, departed.group_id, queue_status::LEAVE_QUEUE);
-            if !seeker_is_online(ctx, guid) {
+            if !is_online(ctx, guid, Online::SessionOrClaim) {
                 return None;
             }
             push_queue(
@@ -822,16 +808,6 @@ pub(crate) fn remove_solo_seeker(ctx: &ReducerContext, character_guid: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_level_range_is_inclusive_and_a_zero_maximum_has_no_upper_bound() {
-        assert!(!level_in_range(14, 15, 20));
-        assert!(level_in_range(15, 15, 20));
-        assert!(level_in_range(20, 15, 20));
-        assert!(!level_in_range(21, 15, 20));
-        assert!(level_in_range(60, 15, 0));
-        assert!(!level_in_range(14, 15, 0));
-    }
 
     fn party(leads: bool, kind: GroupKind, members: usize) -> Membership {
         Membership {

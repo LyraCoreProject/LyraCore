@@ -1,6 +1,4 @@
 use std::collections::BTreeSet;
-use std::fs;
-use std::path::Path;
 
 use super::paths::{tokens, tree_leaves, RootedPath};
 use super::source::{strip_source, DEBUG_REDUCERS_FILE_CFG, TEST_FILE_CFG};
@@ -40,12 +38,6 @@ pub struct Contract {
 }
 
 impl Contract {
-    pub fn read(tables_rs: &Path) -> Self {
-        let source = fs::read_to_string(tables_rs)
-            .unwrap_or_else(|e| panic!("cannot read {}: {e}", tables_rs.display()));
-        Self::from_catalog(&source)
-    }
-
     pub fn from_catalog(source: &str) -> Self {
         let code = strip_source(source).code;
         let tokens = tokens(&code);
@@ -259,7 +251,7 @@ const VERSION_2_REPLACEMENTS: &[(&str, &str)] = &[
     ("spell::E_NEXT_SWING", "crate::actor::E_NEXT_SWING"),
     ("spell::E_SCRIPTED", "crate::actor::E_SCRIPTED"),
     ("spell::PlayerSpell", "crate::tables::PlayerSpell"),
-    ("spell::SPELL_ATTR_CHANNELED", "lyracore_shared::spell::SPELL_ATTR_CHANNELED"),
+    ("spell::SPELL_ATTR_CHANNELED", "crate::actor::SPELL_ATTR_CHANNELED"),
     ("spell::Spell", "crate::tables::Spell"),
     ("spell::SpellChain", "crate::tables::SpellChain"),
     ("spell::SpellEffect", "crate::tables::SpellEffect"),

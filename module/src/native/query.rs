@@ -2,9 +2,9 @@ use lyracore_protocol::{codec, messages::vanilla::opcodes::ServerOpcodeMessage};
 use spacetimedb::{ReducerContext, Table};
 
 use super::game_native_world_connection;
-use crate::creatures::game_hunter_pet_protocol;
+use crate::game_hunter_pet_protocol;
+use crate::game_item_template;
 use crate::gameobject::game_gameobject_template;
-use crate::items::game_item_template;
 use crate::transport::game_transport;
 use crate::{
     game_creature_template, game_meeting_stone, game_npc_text, game_npc_text_slot,
@@ -82,7 +82,7 @@ pub(super) fn item(ctx: &ReducerContext, entry: u32) -> ServerOpcodeMessage {
 }
 
 pub(crate) fn broadcast_item_query(ctx: &ReducerContext, entry: u32) -> Result<(), String> {
-    let packet = lyracore_protocol::world::encode(item(ctx, entry))
+    let packet = lyracore_protocol::world::encode(&item(ctx, entry))
         .map_err(|reason| format!("item {entry} query response: {reason}"))?;
     for connection in ctx.db.game_native_world_connection().iter() {
         if matches!(
@@ -105,7 +105,7 @@ pub(crate) fn broadcast_item_query(ctx: &ReducerContext, entry: u32) -> Result<(
 pub(crate) fn broadcast_creature_query(ctx: &ReducerContext, entry: u32) -> Result<(), String> {
     let response =
         creature(ctx, entry).ok_or_else(|| format!("creature {entry} does not exist"))?;
-    let packet = lyracore_protocol::world::encode(response)
+    let packet = lyracore_protocol::world::encode(&response)
         .map_err(|reason| format!("creature {entry} query response: {reason}"))?;
     for connection in ctx.db.game_native_world_connection().iter() {
         if matches!(

@@ -19,11 +19,6 @@ pub struct Script {
     pub source: String,
 }
 
-#[allow(dead_code, reason = "retained Package API event dispatch")]
-pub(crate) fn fire(ctx: &ReducerContext, event: &str, actor_guid: u64, target_guid: u64) {
-    dispatch(ctx, event, actor_guid, target_guid, ScriptPayload::default);
-}
-
 pub(crate) fn fire_hook(
     ctx: &ReducerContext,
     event: &str,
@@ -51,7 +46,11 @@ fn dispatch(
     target_guid: u64,
     payload: impl FnOnce() -> ScriptPayload,
 ) -> Option<f64> {
-    let bound = dispatch_order(ctx.db.game_script().by_event().filter(event).collect());
+    let bound = dispatch_order(
+        ctx.db.game_script().by_event().filter(event).collect(),
+        |script| script.enabled,
+        |script| (script.priority, script.script_id),
+    );
     if bound.is_empty() {
         return None;
     }
@@ -87,9 +86,14 @@ fn dispatch(
     answer
 }
 
-fn dispatch_order(mut bound: Vec<Script>) -> Vec<Script> {
-    bound.retain(|script| script.enabled);
-    bound.sort_by_key(|script| (script.priority, script.script_id));
+/// Bound scripts run enabled only, by ascending priority, then by script id.
+pub(crate) fn dispatch_order<T>(
+    mut bound: Vec<T>,
+    enabled: impl Fn(&T) -> bool,
+    priority_and_id: impl Fn(&T) -> (i32, u32),
+) -> Vec<T> {
+    bound.retain(|script| enabled(script));
+    bound.sort_by_key(|script| priority_and_id(script));
     bound
 }
 
@@ -112,10 +116,14 @@ mod tests {
     }
 
     fn ids(scripts: Vec<Script>) -> Vec<u32> {
-        dispatch_order(scripts)
-            .iter()
-            .map(|script| script.script_id)
-            .collect()
+        dispatch_order(
+            scripts,
+            |script| script.enabled,
+            |script| (script.priority, script.script_id),
+        )
+        .iter()
+        .map(|script| script.script_id)
+        .collect()
     }
 
     #[test]

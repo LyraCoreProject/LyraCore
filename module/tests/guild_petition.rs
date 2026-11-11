@@ -1,6 +1,6 @@
 mod support;
 
-use support::Standalone;
+use support::{actor, refused, Standalone};
 
 const TEAM_ALLIANCE: u32 = 469;
 const TEAM_HORDE: u32 = 67;
@@ -18,10 +18,6 @@ const SAME_ACCOUNT_SIGNER: u64 = 5_090_523;
 const VENDOR_ENTRY: &str = "51004";
 const PETITIONER_AND_TABARDDESIGNER: u32 = 0x200 | 0x400;
 const GUILD_CHARTER: u32 = 5863;
-
-fn actor(guid: u64) -> String {
-    format!(r#"{{"guid":{guid},"ownership":null}}"#)
-}
 
 fn signer_actors(shard: &Standalone, signers: &[u64]) -> Vec<String> {
     signers
@@ -70,19 +66,6 @@ fn gm_create(leader: u64, name: &str) -> String {
     format!(
         r#"{{"gmCreate":{{"leader_guid":{leader},"leader_name":"Leader{leader}","leader_team":{TEAM_ALLIANCE},"leader_realm_account":0,"gm_level":1,"name":"{name}"}}}}"#
     )
-}
-
-fn refused(shard: &Standalone, reducer: &str, args: &[&str], tag: &str) {
-    let result = shard.call(reducer, args);
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        !result.status.success() && output.contains(tag),
-        "{reducer}: expected {tag}: {output}"
-    );
 }
 
 fn purse(shard: &Standalone) -> u32 {

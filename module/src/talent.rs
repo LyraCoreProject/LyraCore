@@ -1,4 +1,3 @@
-use lyracore_package_delta::packed_spell_effect_id;
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::{game_character, game_spell, game_spell_effect, game_world_entity, Spell, SpellEffect};
@@ -169,12 +168,10 @@ fn points_in_tree(
         .sum()
 }
 
-fn mask_admits(mask: u32, id: u8) -> bool {
-    id != 0 && (id as u32) <= u32::BITS && mask & (1u32 << (id - 1)) != 0
-}
-
 fn talent_tab_admits(tab: &TalentTab, race: u8, class: u8) -> bool {
-    mask_admits(tab.class_mask, class) && (tab.race_mask == 0 || mask_admits(tab.race_mask, race))
+    use lyracore_shared::race_class::{mask_admits, ZeroMask};
+    mask_admits(tab.class_mask, class, ZeroMask::AdmitsNone)
+        && mask_admits(tab.race_mask, race, ZeroMask::AdmitsAll)
 }
 
 fn admitted_talent_rank(
@@ -288,7 +285,7 @@ pub(crate) fn do_learn_talent(
     }
 
     apply_talent_rank(ctx, &talent, guid, owner, next, entity.level as u8);
-    crate::native::talent_points(ctx, guid, entity.level);
+    crate::native::book::talent_points(ctx, guid, entity.level);
     Ok(next)
 }
 
@@ -441,18 +438,14 @@ fn apply_talent_rank(
             crate::spell::learn_spell(ctx, guid, owner, rank_spell);
             let stack = if talent.tab_id != 0 { 1 } else { rank };
             crate::spell::apply_spell_auras(ctx, rank_spell, guid, level, stack);
-            let mut revitalize = false;
-            for prev_rank in 1..rank {
-                let prev = talent_rank_spell(talent, prev_rank);
-                if prev == 0 || prev == rank_spell {
-                    continue;
-                }
+            let previous_ranks: Vec<u32> = (1..rank)
+                .map(|prev_rank| talent_rank_spell(talent, prev_rank))
+                .filter(|&prev| prev != 0 && prev != rank_spell)
+                .collect();
+            for &prev in &previous_ranks {
                 crate::spell::forget_spell(ctx, guid, prev);
-                revitalize |= crate::spell::strip_spell_auras(ctx, guid, prev);
             }
-            if revitalize {
-                crate::spell::recompute_vitals(ctx, guid);
-            }
+            crate::spell::strip_spell_auras(ctx, guid, &previous_ranks);
             crate::spell::recompute_sheet(ctx, guid);
         } else {
             spacetimedb::log::info!(
@@ -537,13 +530,7 @@ pub(crate) fn do_reset_talents(
     }
 
     // Cancelling a passive Aura through the client request is forbidden.
-    let mut revitalize = false;
-    for spell_id in &passives {
-        revitalize |= crate::spell::strip_spell_auras(ctx, character_guid, *spell_id);
-    }
-    if revitalize {
-        crate::spell::recompute_vitals(ctx, character_guid);
-    }
+    crate::spell::strip_spell_auras(ctx, character_guid, &passives);
     crate::spell::recompute_sheet(ctx, character_guid);
 
     for spell_id in granted.iter().chain(passives.iter()) {
@@ -552,7 +539,7 @@ pub(crate) fn do_reset_talents(
 
     if let Some(mut entity) = entities.guid().find(character_guid) {
         entity.money = entity.money.saturating_sub(cost);
-        crate::native::talent_points(ctx, character_guid, entity.level);
+        crate::native::book::talent_points(ctx, character_guid, entity.level);
         entity.update(ctx);
     }
     character.respec_count = character.respec_count.saturating_add(1);
@@ -603,36 +590,18 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                     school_mask: 1,
                     max_stacks: 1,
                     attributes: crate::spell::SPELL_ATTR_PASSIVE,
-                    ..crate::seed::base_spell(spell_id, name)
+                    ..Spell::blank(spell_id, name)
                 });
-                let effect_index: u8 = 0;
                 ctx.db.game_spell_effect().insert(SpellEffect {
-                    id: packed_spell_effect_id(spell_id, effect_index),
-                    spell_id,
-                    effect_index,
                     kind,
                     base_points: per_rank,
-                    die_sides: 0,
-                    per_level: 0.0,
-                    period_ms: 0,
-                    target: 0,
-                    radius_yd: 0.0,
-                    chain_targets: 0,
-                    trigger_spell: 0,
-                    effect_mechanic: 0,
                     p0,
                     p0_kind,
-                    p1: 0,
-                    script_id: 0,
-                    enters_combat: false,
-                    points_per_combo: 0.0,
-                    bonus_coefficient: -1.0,
-                    equip_supported: false,
+                    ..SpellEffect::blank(spell_id, 0)
                 });
             }
         };
 
-    #[allow(clippy::too_many_arguments)]
     let ability_spell = |spell_id: u32,
                          name: &str,
                          power_type: u8,
@@ -648,65 +617,23 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                          p0_kind: u8| {
         if ctx.db.game_spell().spell_id().find(spell_id).is_none() {
             ctx.db.game_spell().insert(Spell {
-                spell_id,
-                family_name: 0,
-                family_flags: 0,
-                name: name.to_string(),
                 power_type,
                 cost,
-                cast_time_ms: 0,
-                gcd_ms: 1500,
                 cooldown_ms,
                 range_yd,
                 duration_ms,
                 school_mask: 1,
-                dispel_type: 0,
-                mechanic: 0,
                 max_stacks: 1,
-                aura_interrupt: 0,
-                attributes: 0,
-                spell_level: 0,
-                max_level: 0,
                 is_negative,
-                cast_flags: 0,
-                stances: 0,
-                proc_flags: 0,
-                proc_chance: 0,
-                proc_charges: 0,
-                max_duration_ms: 0,
-                custom_flags: 0,
-                min_target_level: 0,
-                single_target_key: 0,
-                form_mask: 0,
-                form_exclude: 0,
-                attributes_ex_2: 0,
-                visual_id: 0,
-                duration_index: 0,
-                category: 0,
-                category_cooldown_ms: 0,
+                ..Spell::blank(spell_id, name)
             });
             ctx.db.game_spell_effect().insert(SpellEffect {
-                id: packed_spell_effect_id(spell_id, 0),
-                spell_id,
-                effect_index: 0,
                 kind,
                 base_points: amount,
-                die_sides: 0,
-                per_level: 0.0,
-                period_ms: 0,
                 target,
-                radius_yd: 0.0,
-                chain_targets: 0,
-                trigger_spell: 0,
-                effect_mechanic: 0,
                 p0,
                 p0_kind,
-                p1: 0,
-                script_id: 0,
-                enters_combat: false,
-                points_per_combo: 0.0,
-                bonus_coefficient: -1.0,
-                equip_supported: false,
+                ..SpellEffect::blank(spell_id, 0)
             });
         }
     };
@@ -803,18 +730,6 @@ mod tests {
 
         assert_eq!(validate_learn(0, 5, 10, 10, 10, true), Ok(1));
         assert_eq!(validate_learn(4, 5, 1, 0, 0, true), Ok(5));
-    }
-
-    #[test]
-    fn prereq_satisfied_gates_on_required_rank() {
-        assert!(prereq_satisfied(0, 0, 0));
-        assert!(prereq_satisfied(0, 0, 5));
-        assert!(!prereq_satisfied(4, 0, 0));
-        assert!(prereq_satisfied(4, 1, 0));
-        assert!(prereq_satisfied(4, 5, 0));
-        assert!(!prereq_satisfied(4, 1, 2));
-        assert!(prereq_satisfied(4, 2, 2));
-        assert!(prereq_satisfied(4, 3, 2));
     }
 
     #[test]

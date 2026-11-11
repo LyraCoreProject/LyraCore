@@ -2,15 +2,25 @@ use spacetimedb::{ReducerContext, Table};
 
 use lyracore_package_delta::{
     is_package_creature_id, FieldValue, Operation, PrimaryKey, Table as ClaimTable, TracedRow,
-    MAX_CREATURE_GUID_COMPONENT,
+    CREATURE_FAMILY, MAX_CREATURE_GUID_COMPONENT,
 };
 
-use crate::creatures::timer_never;
+use crate::time::timer_never;
 use crate::{game_creature_spawn, game_creature_template, CreatureSpawn, CreatureTemplate};
 
-use super::{as_f32, as_str, as_u32, as_u8, check_insert_is_whole, UpdateTarget};
+use super::{as_f32, as_str, as_u32, as_u8, check_insert_is_whole, no_such_column, ClaimOps};
 
-pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+pub(super) const OPS: ClaimOps = ClaimOps {
+    name: CREATURE_FAMILY,
+    in_package_range,
+    row_is_present,
+    check_references: Some(check_references),
+    clear_package_range,
+    write_row,
+    after_write: None,
+};
+
+fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
     check_one_guid_per_spawn(rows)?;
     for row in rows {
         match row.key() {
@@ -69,17 +79,6 @@ fn template_exists_after_apply(ctx: &ReducerContext, rows: &[TracedRow], entry: 
         .is_some()
 }
 
-pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
-    if row.operation() == Operation::Update && updates_an_uninvented_package_row(row) {
-        return UpdateTarget::Uninvented;
-    }
-    if row_is_present(ctx, row) {
-        UpdateTarget::Present
-    } else {
-        UpdateTarget::Absent
-    }
-}
-
 fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
     match row.table() {
         ClaimTable::CreatureTemplate => ctx
@@ -101,7 +100,7 @@ fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
     }
 }
 
-fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
+fn in_package_range(row: &TracedRow) -> bool {
     match row.key() {
         PrimaryKey::CreatureTemplate { entry } => is_package_creature_id(entry),
         PrimaryKey::CreatureSpawn { spawn_id, .. } => is_package_creature_id(spawn_id),
@@ -109,7 +108,7 @@ fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
     }
 }
 
-pub(super) fn clear_package_range(ctx: &ReducerContext) {
+fn clear_package_range(ctx: &ReducerContext) {
     let spawns = ctx.db.game_creature_spawn();
     let package_guids: Vec<u64> = spawns
         .iter()
@@ -138,11 +137,11 @@ fn is_package_spawn_guid(guid: u64) -> bool {
     is_package_creature_id((guid & u64::from(MAX_CREATURE_GUID_COMPONENT)) as u32)
 }
 
-pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     match (row.table(), row.operation()) {
         (ClaimTable::CreatureTemplate, Operation::Insert) => {
             check_insert_is_whole(row)?;
-            let mut template = blank_template(row.row_id() as u32);
+            let mut template = CreatureTemplate::blank(row.row_id() as u32, "");
             apply_fields(row, |field, value| {
                 apply_template_field(&mut template, field, value)
             })?;
@@ -210,38 +209,6 @@ fn apply_fields(
         set(field, &claimed.value)?;
     }
     Ok(())
-}
-
-fn blank_template(entry: u32) -> CreatureTemplate {
-    CreatureTemplate {
-        entry,
-        name: String::new(),
-        subname: String::new(),
-        display_id: 0,
-        level: 0,
-        health: 0,
-        faction_template: 0,
-        npc_flags: 0,
-        unit_flags: 0,
-        creature_type: 0,
-        creature_family: 0,
-        type_flags: 0,
-        rank: 0,
-        scale: 0.0,
-        base_attack_time_ms: 0,
-        money_min: 0,
-        money_max: 0,
-        max_level: 0,
-        max_level_health: 0,
-        aggro_range: 0,
-        damage_min: 0,
-        damage_max: 0,
-        armor: 0,
-        pickpocket_loot_id: 0,
-        skin_loot_id: 0,
-        trainer_type: 0,
-        trainer_class: 0,
-    }
 }
 
 fn apply_template_field(
@@ -321,10 +288,6 @@ fn apply_spawn_field(
     Ok(())
 }
 
-fn no_such_column(table: &str, column: &str) -> String {
-    format!("`{table}` has no claimable column `{column}`")
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
@@ -346,7 +309,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(in_package_range(&plan.rows[0]));
     }
 
     #[test]
@@ -374,8 +337,8 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(updates_an_uninvented_package_row(&package_spawn.rows[0]));
-        assert!(!updates_an_uninvented_package_row(&real_spawn.rows[0]));
+        assert!(in_package_range(&package_spawn.rows[0]));
+        assert!(!in_package_range(&real_spawn.rows[0]));
     }
 
     #[test]
@@ -426,7 +389,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        let mut template = blank_template(PACKAGE_CREATURE);
+        let mut template = CreatureTemplate::blank(PACKAGE_CREATURE, "");
         apply_fields(&plan.rows[0], |field, value| {
             apply_template_field(&mut template, field, value)
         })
@@ -441,7 +404,7 @@ mod tests {
     fn every_claimable_creature_column_sets_its_own_field() {
         assert_each_column_sets_its_own_field(
             ClaimTable::CreatureTemplate,
-            || blank_template(PACKAGE_CREATURE),
+            || CreatureTemplate::blank(PACKAGE_CREATURE, ""),
             apply_template_field,
         );
         assert_each_column_sets_its_own_field(

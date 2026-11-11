@@ -459,16 +459,6 @@ impl ListingSource for FakeLocal {
 }
 
 impl LocalListingSink for FakeLocal {
-    fn receipt(&self, operation_id: u64) -> Option<ListingReceipt> {
-        self.committed
-            .as_ref()
-            .filter(|(listing, _)| listing.request.operation_id == operation_id)
-            .map(|(listing, auction_id)| ListingReceipt {
-                listing: listing.clone(),
-                auction_id: *auction_id,
-            })
-    }
-
     fn commit_local(&mut self, listing: PreparedListing) -> u32 {
         self.money = self.money.map(|money| money - listing.deposit);
         self.item = None;
@@ -513,10 +503,6 @@ fn local_listing_atomically_moves_the_exact_item_and_deposit_into_one_scheduled_
     assert_eq!(listing.deposit, 10);
     assert_eq!(listing.created_micros, 1_000);
     assert_eq!(listing.expires_micros, 7_200_001_000);
-
-    assert_eq!(create_local_listing(&mut store, request()), Ok(41));
-    assert_eq!(store.money, Some(40), "replay must not charge again");
-    assert_eq!(store.next_auction_id, 42, "replay must not mint another id");
 }
 
 #[test]

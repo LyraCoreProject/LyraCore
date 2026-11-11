@@ -1,154 +1,114 @@
 use lyracore_protocol::codec;
 
-mod addon;
-mod admission;
-mod auction;
-mod aura;
-mod book;
+pub(crate) mod addon;
+pub(crate) mod admission;
+pub(crate) mod auction;
+pub(crate) mod aura;
+pub(crate) mod book;
 mod cast;
-mod channel;
+pub(crate) mod channel;
 mod character;
-mod character_names;
-pub(crate) use character_names::account_has_room as realm_account_has_room;
-mod chat;
+pub(crate) mod character_names;
+pub(crate) mod chat;
 mod chat_flood;
-mod combat;
-mod creature;
-mod death;
+pub(crate) mod combat;
+pub(crate) mod creature;
+pub(crate) mod death;
 #[cfg(feature = "conformance_test_fixture")]
-mod debug;
-pub(crate) mod realm_auction;
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use debug::record_birth as record_conformance_birth;
+pub(crate) mod debug;
 pub(crate) mod directory;
-mod duel;
-mod economy;
-mod environment;
+pub(crate) mod duel;
+pub(crate) mod economy;
+pub(crate) mod environment;
 mod gossip;
-mod guild;
+pub(crate) mod guild;
 mod handoff;
-mod realm_communication;
-mod realm_guild;
-pub(crate) mod realm_mail;
-pub(crate) mod realm_party;
-pub(crate) mod realm_petition;
-mod realm_shard;
-pub(crate) use realm_shard::account_changed;
-mod instance;
+pub(crate) mod instance;
 pub(crate) mod instance_allocation;
 mod instance_reset;
 pub(crate) mod instance_shard;
-pub(crate) use instance_shard::{
-    sweep_delete_game_instance_entry, sweep_transfer_game_instance_entry,
-};
-mod inventory;
-mod logon;
+pub(crate) mod inventory;
+pub(crate) mod logon;
 mod loot;
-mod mail;
+pub(crate) mod mail;
 mod meeting_stone;
-mod member_stats;
-mod motion_permit;
-mod object;
+pub(crate) mod member_stats;
+pub(crate) mod motion_permit;
+pub(crate) mod object;
 mod package_actor;
 pub(crate) mod package_creation;
 pub(crate) mod package_guild;
 pub(crate) mod package_relocation;
-mod party;
-mod pet;
-mod petition;
-mod progression;
-mod query;
-mod quest;
-mod reputation;
+pub(crate) mod party;
+pub(crate) mod pet;
+pub(crate) mod petition;
+pub(crate) mod progression;
+pub(crate) mod query;
+pub(crate) mod quest;
+pub(crate) mod realm_auction;
+mod realm_communication;
+pub(crate) mod realm_guild;
+pub(crate) mod realm_mail;
+pub(crate) mod realm_party;
+pub(crate) mod realm_petition;
+pub(crate) mod realm_shard;
+pub(crate) mod reputation;
 mod rollback;
 mod social;
-mod spell;
-mod taxi;
-mod teleport;
-mod trade;
+pub(crate) mod spell;
+pub(crate) mod taxi;
+pub(crate) mod teleport;
+pub(crate) mod trade;
 mod trainer;
 mod transfer;
 mod transport;
 mod unavailable;
 mod view;
-mod visibility;
+pub(crate) mod visibility;
+mod who;
 mod world;
-pub(crate) use addon::appeared as addon_message;
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use admission::{game_native_admission_tick, native_admission_tick};
-pub(crate) use auction::notice as auction_notice;
-pub(crate) use aura::changed as aura_changed;
-pub(crate) use book::{
-    forgotten as spell_forgotten, learned as spell_learned, skill_changed, talent_points,
+
+// `module/build.rs` names `character_owned!` and `game_tick_pass!` markers by their top-level module.
+pub(crate) use instance_shard::{
+    sweep_delete_game_instance_entry, sweep_transfer_game_instance_entry,
 };
-pub(crate) use channel::notice as channel_notice;
-pub(crate) use chat::{creature_sound, realm_chat_line, speech, system_message, text_emote};
-pub(crate) use combat::{combat_event, combo_points_changed, engagement_changed};
-pub(crate) use creature::{
-    changed as creature_spline_changed, equipment_changed as creature_equipment_changed,
-};
-pub(crate) use death::{
-    corpse_changed, corpse_created, corpse_removed, resurrect_offered, self_resurrection_changed,
-};
-pub(crate) use duel::event as duel_event;
-pub(crate) use economy::{
-    buyback_destroyed, buyback_removed, purchase_started as vendor_purchase_started,
-};
-pub(crate) use environment::{breath_event, fall_damage, weather_changed};
-pub(crate) use guild::{event as guild_event, membership_changed as guild_membership_changed};
-pub(crate) use instance::removal_changed as instance_removal_changed;
-pub(crate) use inventory::changed as item_changed;
-pub(crate) use inventory::item_equip_cooldown;
-pub(crate) use inventory::temporary_enchantment_changed;
-pub(crate) use inventory::{item_purchase_started, item_purchased, item_restored, item_sold};
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use logon::{game_native_logon_reaper, native_reap_logon_addresses};
-pub(crate) use mail::arrived as mail_arrived;
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use member_stats::{game_native_member_stats, tick_native_member_stats};
 pub(crate) use member_stats::{
     sweep_delete_game_native_member_stats, sweep_transfer_game_native_member_stats,
 };
 pub(crate) use motion_permit::{
-    refresh_character as refresh_motion_permit, sweep_delete_game_native_motion_permit,
-    sweep_transfer_game_native_motion_permit,
+    sweep_delete_game_native_motion_permit, sweep_transfer_game_native_motion_permit,
 };
-pub(crate) use object::changed as gameobject_changed;
-pub(crate) use party::roster as party_roster;
-pub(crate) use pet::changed as hunter_pet_changed;
-pub(crate) use petition::charter_opened as guild_charter_opened;
-pub(crate) use progression::{explored, levelup, xp};
-pub(crate) use query::{broadcast_creature_query, broadcast_item_query};
-pub(crate) use quest::{changed as quest_changed, event_credit as quest_event_credit};
-pub(crate) use realm_guild::member_changed as guild_member_changed;
-pub(crate) use reputation::{changed as reputation_changed, watched as watched_faction};
-pub(crate) use spell::{cast_event, spell_cooldown, spell_impact};
-pub(crate) use taxi::{
-    aborted as taxi_aborted, landed as taxi_landed, resumed as taxi_resumed,
-    spline_changed as taxi_spline_changed,
-};
-pub(crate) use teleport::{
-    begin as begin_teleport, changed as teleport_changed, expire_near_teleports_pass,
-};
-pub(crate) use trade::event as trade_event;
-pub(crate) use visibility::{
-    entity_changed, grant_added, grant_removed, loot_flags, motion, with_shared_creates,
-};
+pub(crate) use teleport::expire_near_teleports_pass;
 
 pub(crate) fn is_world_porting(ctx: &ReducerContext, guid: u64) -> bool {
-    ctx.db
-        .game_native_player()
-        .character_guid()
-        .find(guid)
+    world_session(ctx, guid)
         .is_some_and(|player| player.teleport == Some(teleport::NativeTeleport::WorldPort))
 }
 
-pub(crate) fn is_player(ctx: &ReducerContext, guid: u64) -> bool {
+pub(crate) fn has_world_session(ctx: &ReducerContext, guid: u64) -> bool {
+    world_session(ctx, guid).is_some()
+}
+
+pub(crate) fn is_teleporting(ctx: &ReducerContext, guid: u64) -> bool {
+    world_session(ctx, guid).is_some_and(|player| player.teleport.is_some())
+}
+
+pub(crate) fn world_session_characters(ctx: &ReducerContext) -> Vec<u64> {
     ctx.db
         .game_native_player()
-        .character_guid()
-        .find(guid)
-        .is_some()
+        .iter()
+        .map(|player| player.character_guid)
+        .collect()
+}
+
+pub(crate) fn end_world_session(ctx: &ReducerContext, guid: u64) {
+    if let Some(player) = world_session(ctx, guid) {
+        disconnect(ctx, player.connection_id);
+    }
+}
+
+fn world_session(ctx: &ReducerContext, guid: u64) -> Option<NativePlayer> {
+    ctx.db.game_native_player().character_guid().find(guid)
 }
 
 #[derive(SpacetimeType)]
@@ -184,13 +144,14 @@ use lyracore_protocol::messages::vanilla::{
     opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
     SMSG_AUTH_CHALLENGE, SMSG_AUTH_RESPONSE, SMSG_PONG, SMSG_QUERY_TIME_RESPONSE,
 };
+use lyracore_protocol::world::Packet;
 use spacetimedb::{reducer, table, ConnectionId, ReducerContext, SpacetimeType, Table};
 
 use crate::{game_account, game_character, game_session, Refusal};
-use rollback::Rollback;
+use rollback::{Rollback, Unhandled};
 use transfer::game_native_transfer_pending;
 
-#[derive(SpacetimeType)]
+#[derive(SpacetimeType, Clone)]
 pub enum NativeWorldState {
     AwaitingProof,
     Queued { account_id: u64 },
@@ -199,6 +160,7 @@ pub enum NativeWorldState {
 }
 
 #[table(accessor = game_native_world_connection)]
+#[derive(Clone)]
 pub struct NativeWorldConnection {
     #[primary_key]
     pub connection_id: ConnectionId,
@@ -254,9 +216,7 @@ pub(crate) fn group_event(
 }
 
 crate::character_owned!(delete, fn sweep_delete_game_native_player(ctx, character_guid) {
-    if let Some(player) = ctx.db.game_native_player().character_guid().find(character_guid) {
-        disconnect(ctx, player.connection_id);
-    }
+    end_world_session(ctx, character_guid);
 });
 
 // A World Session belongs to its native connection.
@@ -285,6 +245,13 @@ pub struct NativePacket {
     pub authentication_complete: bool,
 }
 
+crate::outside_table_catalog!(
+    game_native_world_connection,
+    game_native_player,
+    game_native_cipher,
+    game_native_packet
+);
+
 fn connection_id(ctx: &ReducerContext) -> Result<ConnectionId, String> {
     crate::helpers::require_operator(ctx)?;
     ctx.connection_id()
@@ -297,7 +264,7 @@ fn send(
     message: ServerOpcodeMessage,
     close_after: bool,
 ) -> Result<(), String> {
-    let packet = lyracore_protocol::world::encode(message).map_err(|error| error.to_string())?;
+    let packet = lyracore_protocol::world::encode(&message).map_err(|error| error.to_string())?;
     send_raw(ctx, connection_id, packet.opcode, packet.body, close_after);
     Ok(())
 }
@@ -320,23 +287,115 @@ fn send_raw(
     });
 }
 
+/// Encodes a server message whose size the Module bounds; a broken bound panics.
+fn bounded(message: ServerOpcodeMessage) -> Packet {
+    lyracore_protocol::world::encode(&message).expect("bounded server message fits a world frame")
+}
+
+/// What delivery does with a server message that does not fit a world frame.
+#[derive(Clone, Copy)]
+enum EncodeFailure {
+    /// The Module bounds the message, so the failure is a broken invariant.
+    Panic,
+    /// Log it and end the World Session.
+    Disconnect,
+    /// Log it; the World Session continues without the message.
+    Log,
+}
+
+/// Sends `message` to `guid`'s World Session; a Character without one on this Shard gets
+/// nothing. Returns whether it had one.
+fn send_to_character(
+    ctx: &ReducerContext,
+    guid: u64,
+    message: ServerOpcodeMessage,
+    on_failure: EncodeFailure,
+) -> bool {
+    let Some(player) = world_session(ctx, guid) else {
+        return false;
+    };
+    let packet = match on_failure {
+        EncodeFailure::Panic => bounded(message),
+        EncodeFailure::Disconnect | EncodeFailure::Log => {
+            match lyracore_protocol::world::encode(&message) {
+                Ok(packet) => packet,
+                Err(error) => {
+                    spacetimedb::log::error!(
+                        "native {message} for {guid} does not encode: {error}"
+                    );
+                    if matches!(on_failure, EncodeFailure::Disconnect) {
+                        disconnect(ctx, player.connection_id);
+                    }
+                    return true;
+                }
+            }
+        }
+    };
+    send_raw(ctx, player.connection_id, packet.opcode, packet.body, false);
+    true
+}
+
+fn send_raw_to_character(ctx: &ReducerContext, guid: u64, opcode: u16, body: Vec<u8>) -> bool {
+    send_packets_to_character(ctx, guid, [Packet { opcode, body }])
+}
+
+fn send_packets_to_character(
+    ctx: &ReducerContext,
+    guid: u64,
+    packets: impl IntoIterator<Item = Packet>,
+) -> bool {
+    let Some(player) = world_session(ctx, guid) else {
+        return false;
+    };
+    for packet in packets {
+        send_raw(ctx, player.connection_id, packet.opcode, packet.body, false);
+    }
+    true
+}
+
 pub(crate) fn disconnect(ctx: &ReducerContext, connection_id: ConnectionId) {
+    end_connection(ctx, connection_id, ConnectionEnd::Disconnect);
+}
+
+pub(crate) fn close(ctx: &ReducerContext) {
+    if let Some(connection_id) = ctx.connection_id() {
+        end_connection(ctx, connection_id, ConnectionEnd::Closed);
+    }
+}
+
+enum ConnectionEnd {
+    /// The Module ends the connection and asks the Host to close it.
+    Disconnect,
+    /// The Host has closed the connection.
+    Closed,
+}
+
+fn end_connection(ctx: &ReducerContext, connection_id: ConnectionId, end: ConnectionEnd) {
     realm_shard::closing(ctx, connection_id);
     realm_shard::clear_return(ctx, connection_id);
     realm_shard::cancel_selection(ctx, connection_id);
     #[cfg(feature = "conformance_test_fixture")]
     debug::close(ctx, connection_id);
-    ctx.db.game_native_packet().insert(NativePacket {
-        id: 0,
-        audience: NativeAudience::Connection(connection_id),
-        opcode: None,
-        body: Vec::new(),
-        close_after: true,
-        not_before_micros: 0,
-        authentication_complete: false,
-    });
+    match end {
+        ConnectionEnd::Disconnect => {
+            ctx.db.game_native_packet().insert(NativePacket {
+                id: 0,
+                audience: NativeAudience::Connection(connection_id),
+                opcode: None,
+                body: Vec::new(),
+                close_after: true,
+                not_before_micros: 0,
+                authentication_complete: false,
+            });
+        }
+        ConnectionEnd::Closed => logon::close(ctx, connection_id),
+    }
     admission::remove(ctx, connection_id);
-    world::leave(ctx, connection_id, crate::world::CharacterDeparture::Logout);
+    world::leave(
+        ctx,
+        connection_id,
+        crate::character::CharacterDeparture::Logout,
+    );
     ctx.db
         .game_native_transfer_pending()
         .connection_id()
@@ -471,56 +530,19 @@ fn receive(
         current_account(ctx, &connection, account_id)?;
     }
     if transfer::pending(ctx, connection_id)
-        || (realm_shard::returning(ctx, connection_id) && opcode != 0x01dc)
+        || (realm_shard::returning(ctx, connection_id) && opcode != codec::CMSG_PING_OPCODE)
     {
         return Ok(());
-    }
-    // World requests can remain in flight after logout; selection decodes only its own requests.
-    if matches!(
-        connection.state,
-        NativeWorldState::CharacterSelection { .. }
-    ) && !matches!(
-        opcode,
-        0x0036 | 0x0037 | 0x0038 | 0x003d | 0x01ce | 0x01dc | 0x02c7
-    ) {
-        return Ok(());
-    }
-    // Discard obsolete controls before readers inspect untrusted sizes, compressed data or enums.
-    if !matches!(connection.state, NativeWorldState::AwaitingProof)
-        && matches!(
-            opcode,
-            0x0008
-                | 0x0009
-                | 0x000a
-                | 0x0020
-                | 0x00c6
-                | 0x00d9
-                | 0x00e1
-                | 0x01f4
-                | 0x020b
-                | 0x022f
-                | 0x02ad
-                | 0x02ca
-                | 0x02f8
-                | 0x0331
-                | 0x0334
-        )
-    {
-        return Ok(());
-    }
-    if !matches!(connection.state, NativeWorldState::AwaitingProof) {
-        if let Some(packets) =
-            unavailable::raw_responses(opcode, &body).map_err(|error| error.to_string())?
-        {
-            for packet in packets {
-                send_raw(ctx, connection_id, packet.opcode, packet.body, false);
-            }
-            return Ok(());
-        }
     }
     match connection.state {
         NativeWorldState::AwaitingProof => Ok(authenticate(ctx, connection, opcode, &body)?),
+        NativeWorldState::CharacterSelection { account_id } => {
+            select(ctx, connection, account_id, opcode, body)
+        }
         NativeWorldState::Queued { .. } => {
+            if unavailable::intercept(ctx, connection_id, opcode, &body)? {
+                return Ok(());
+            }
             let message = lyracore_protocol::world::decode(opcode, &body)
                 .map_err(|error| error.to_string())?;
             if let ClientOpcodeMessage::CMSG_PING(ping) = message {
@@ -536,32 +558,52 @@ fn receive(
                 Err("World Session is waiting in the Login Queue".into())
             }
         }
-        NativeWorldState::CharacterSelection { account_id } => {
-            if crate::peer::world_shard(ctx).is_some() {
-                match opcode {
-                    0x003d => return realm_shard::enter_world(ctx, connection, &body),
-                    0x0036..=0x0038 => {
-                        return realm_shard::route_selection(
-                            ctx,
-                            connection_id,
-                            account_id,
-                            opcode,
-                            body,
-                        )
-                    }
-                    _ => {}
-                }
-            } else if opcode == 0x003d {
-                return world::login(ctx, connection, &body);
+        NativeWorldState::InWorld(NativeActive { character_guid, .. }) => {
+            if unavailable::intercept(ctx, connection_id, opcode, &body)? {
+                return Ok(());
             }
+            world::receive(ctx, connection, character_guid, relay, opcode, &body)
+        }
+    }
+}
+
+/// Character selection's routing table. World requests can remain in flight after logout, so it
+/// ignores, without decoding, every opcode it does not list.
+fn select(
+    ctx: &ReducerContext,
+    connection: NativeWorldConnection,
+    account_id: u64,
+    opcode: u32,
+    body: Vec<u8>,
+) -> Result<(), Rollback> {
+    use codec::{
+        CMSG_CHAR_CREATE_OPCODE, CMSG_CHAR_DELETE_OPCODE, CMSG_CHAR_ENUM_OPCODE,
+        CMSG_CHAR_RENAME_OPCODE, CMSG_PING_OPCODE, CMSG_PLAYER_LOGIN_OPCODE,
+        CMSG_QUERY_TIME_OPCODE,
+    };
+    let is_realm_shard = crate::peer::world_shard(ctx).is_some();
+    match opcode {
+        CMSG_PLAYER_LOGIN_OPCODE if is_realm_shard => {
+            realm_shard::enter_world(ctx, connection, &body)
+        }
+        CMSG_PLAYER_LOGIN_OPCODE => world::login(ctx, connection, &body),
+        CMSG_CHAR_CREATE_OPCODE | CMSG_CHAR_ENUM_OPCODE | CMSG_CHAR_DELETE_OPCODE
+            if is_realm_shard =>
+        {
+            realm_shard::route_selection(ctx, connection.connection_id, account_id, opcode, body)
+        }
+        CMSG_CHAR_CREATE_OPCODE
+        | CMSG_CHAR_ENUM_OPCODE
+        | CMSG_CHAR_DELETE_OPCODE
+        | CMSG_CHAR_RENAME_OPCODE
+        | CMSG_PING_OPCODE
+        | CMSG_QUERY_TIME_OPCODE => {
             let Some(reply) = selection_reply(ctx, account_id, opcode, &body)? else {
                 return Ok(());
             };
-            Ok(send(ctx, connection_id, reply, false)?)
+            Ok(send(ctx, connection.connection_id, reply, false)?)
         }
-        NativeWorldState::InWorld(NativeActive { character_guid, .. }) => {
-            world::receive(ctx, connection, character_guid, relay, opcode, &body)
-        }
+        _ => Ok(()),
     }
 }
 
@@ -580,7 +622,7 @@ fn selection_reply(
         }),
         ClientOpcodeMessage::CMSG_QUERY_TIME => {
             ServerOpcodeMessage::SMSG_QUERY_TIME_RESPONSE(SMSG_QUERY_TIME_RESPONSE {
-                time: (crate::time::now(ctx).to_micros_since_unix_epoch() / 1_000_000) as u32,
+                time: crate::time::now_secs(ctx) as u32,
             })
         }
         ClientOpcodeMessage::CMSG_CHAR_ENUM => {
@@ -812,39 +854,8 @@ fn local_session_accounts(ctx: &ReducerContext) -> std::collections::HashSet<u64
         .collect()
 }
 
-pub(crate) fn close(ctx: &ReducerContext) {
-    if let Some(connection_id) = ctx.connection_id() {
-        realm_shard::closing(ctx, connection_id);
-        realm_shard::clear_return(ctx, connection_id);
-        realm_shard::cancel_selection(ctx, connection_id);
-        #[cfg(feature = "conformance_test_fixture")]
-        debug::close(ctx, connection_id);
-        logon::close(ctx, connection_id);
-        admission::remove(ctx, connection_id);
-        world::leave(ctx, connection_id, crate::world::CharacterDeparture::Logout);
-        ctx.db
-            .game_native_transfer_pending()
-            .connection_id()
-            .delete(connection_id);
-        ctx.db
-            .game_native_cipher()
-            .connection_id()
-            .delete(connection_id);
-        ctx.db
-            .game_native_world_connection()
-            .connection_id()
-            .delete(connection_id);
-    }
-}
-
 fn actor(ctx: &ReducerContext, guid: u64) -> Result<crate::WorldEntity, Refusal> {
-    if ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(guid)
-        .is_some_and(|player| player.teleport.is_some())
-    {
+    if is_teleporting(ctx, guid) {
         return Err("Character is teleporting".into());
     }
     let entity = available_entity(ctx, guid)?;
@@ -859,14 +870,6 @@ fn available_entity(ctx: &ReducerContext, guid: u64) -> Result<crate::WorldEntit
 
 fn available_character(ctx: &ReducerContext, guid: u64) -> Result<crate::Character, Refusal> {
     crate::helpers::character_by_guid(ctx, guid).ok_or_else(|| "Character is not available".into())
-}
-
-pub(crate) fn has_world_session(ctx: &ReducerContext, guid: u64) -> bool {
-    ctx.db
-        .game_native_player()
-        .character_guid()
-        .find(guid)
-        .is_some()
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 use spacetimedb::{table, Identity, ReducerContext, SpacetimeType, Table};
 
 use super::directory::{self, game_character_directory, CharacterProfile};
-use crate::auth::CreateCharacterRefusal;
+use crate::character::CreateCharacterRefusal;
 
 #[table(accessor = game_character_name,
     index(accessor = by_guid, btree(columns = [guid])),
@@ -37,6 +37,12 @@ pub struct CharacterNameReport {
     pub total: u32,
     pub received: Vec<u32>,
 }
+
+crate::outside_table_catalog!(
+    game_character_name,
+    game_character_names_ready,
+    game_character_name_report
+);
 
 pub(super) fn reported(ctx: &ReducerContext, report: NameReport) -> Result<(), String> {
     if report.total == 0 || report.index >= report.total {
@@ -128,7 +134,7 @@ pub(crate) fn account_has_room(ctx: &ReducerContext, account_id: u64) -> bool {
         .by_account()
         .filter(account_id)
         .count();
-    existing + pending < crate::auth::CHARACTERS_PER_ACCOUNT
+    existing + pending < crate::character::CHARACTERS_PER_ACCOUNT
 }
 
 pub(super) fn release_package(ctx: &ReducerContext, name: &str, account_id: u64, world: Identity) {

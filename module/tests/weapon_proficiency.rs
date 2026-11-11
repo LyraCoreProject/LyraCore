@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
 use support::{actor, Standalone};
 
 const ACTOR: &str = r#"{"guid":1,"ownership":null}"#;
@@ -45,9 +46,9 @@ fn a_warrior_equips_a_two_handed_sword_only_after_learning_the_proficiency() {
     let shard = fixture("weapon-proficiency-equip");
     assert!(!spellbook(&shard, "1").contains(&TWO_HANDED_SWORDS.to_string()));
     shard.assert_sql(
-        "UPDATE game_item_template SET class = 2, subclass = 8, inventory_type = 17 WHERE entry = 5090050",
+        &format!("UPDATE game_item_template SET class = 2, subclass = 8, inventory_type = 17 WHERE entry = {FIXTURE_BLADE}"),
     );
-    shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
 
     let before = shard.query_rows("SELECT * FROM game_item_instance");
     assert_equip_lacks_proficiency(&shard);
@@ -84,7 +85,7 @@ fn a_new_character_learns_the_weapon_proficiencies_of_its_race_and_class() {
 fn login_restores_a_missing_kit_weapon_proficiency() {
     let shard = fixture("weapon-proficiency-login");
     shard.assert_sql("DELETE FROM game_player_spell WHERE character_guid = 1 AND spell_id = 201");
-    shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
     assert_equip_lacks_proficiency(&shard);
 
     let key = serde_json::to_string(&vec![7u8; 40]).unwrap();
@@ -96,7 +97,9 @@ fn login_restores_a_missing_kit_weapon_proficiency() {
 
     assert!(spellbook(&shard, "1").contains(&"201".to_string()));
     shard.assert_call("gw_equip_item", &[&actor("1"), "23"]);
-    let blade = shard.query_rows("SELECT slot FROM game_item_instance WHERE entry = 5090050");
+    let blade = shard.query_rows(&format!(
+        "SELECT slot FROM game_item_instance WHERE entry = {FIXTURE_BLADE}"
+    ));
     assert_eq!(blade[0]["slot"], "15");
 }
 

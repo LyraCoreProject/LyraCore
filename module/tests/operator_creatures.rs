@@ -1,10 +1,11 @@
 mod support;
 
+use lyracore_shared::guid;
 use serde_json::{json, Value};
 use support::{number, poll_until, Standalone, POLL_TIMEOUT};
 
 const FIRST: u32 = 5_200_500;
-const CHICKEN: u64 = (0xF130_u64 << 48) | (620 << 24) | 1;
+const CHICKEN: u64 = guid::creature(620, 1);
 
 fn realm(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);

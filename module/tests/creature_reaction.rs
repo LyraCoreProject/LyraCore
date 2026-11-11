@@ -1,5 +1,8 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{
+    FIXTURE_MOUNT_SPELL, MINOR_HEALING_SPELL, TEST_WOLF_ENTRY,
+};
 use serde_json::json;
 use support::{actor, number, Standalone};
 
@@ -16,9 +19,14 @@ fn stage(name: &str) -> Standalone {
 }
 
 fn creature(shard: &Standalone, reaction: u8) -> String {
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "2"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "2"],
+    );
     let target = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
         .into_iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
@@ -143,7 +151,10 @@ fn healing_adds_threat_to_a_passive_creatures_combat() {
     );
     shard.assert_call("debug_advance_virtual_clock", &["50000"]);
     shard.assert_sql("UPDATE game_world_entity SET health = 90, max_health = 100 WHERE guid = 1");
-    shard.assert_call("debug_cast_at", &["1", "50110", "1"]);
+    shard.assert_call(
+        "debug_cast_at",
+        &["1", &MINOR_HEALING_SPELL.to_string(), "1"],
+    );
     assert_eq!(
         shard.query_rows(&format!(
             "SELECT threat FROM game_threat WHERE creature_guid = {target} AND source_guid = 1"
@@ -167,7 +178,10 @@ fn natural_escape_from_passive_combat_restores_mounting_and_logout() {
         &["1", &target, "10", "50000"],
     );
     shard.assert_call("debug_advance_virtual_clock", &["50000"]);
-    let refused = shard.call("debug_cast_at", &["1", "50310", "1"]);
+    let refused = shard.call(
+        "debug_cast_at",
+        &["1", &FIXTURE_MOUNT_SPELL.to_string(), "1"],
+    );
     assert!(!refused.status.success());
     assert!(format!(
         "{}{}",
@@ -186,7 +200,10 @@ fn natural_escape_from_passive_combat_restores_mounting_and_logout() {
         "the wire refuses logout while the passive creature retains threat"
     );
     escape(&shard, 1000.0);
-    shard.assert_call("debug_cast_at", &["1", "50310", "1"]);
+    shard.assert_call(
+        "debug_cast_at",
+        &["1", &FIXTURE_MOUNT_SPELL.to_string(), "1"],
+    );
     let accepted = wire
         .call("native_world_receive", json!([0x4bu32, Vec::<u8>::new()]))
         .unwrap();
@@ -289,14 +306,10 @@ fn taxi_takeoff_clears_a_passive_creatures_threat_only_combat() {
 fn a_passive_creature_runs_its_script_once_on_each_combat_entry() {
     let shard = stage("passive-combat-script");
     let rules = "900001,aggro,100,4294967295,once,all,ordinary,any-posture,phase:1+help:20";
-    let subject = "entry:51000";
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(format!("{subject}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
+    let subject = &format!("entry:{TEST_WOLF_ENTRY}");
     shard.assert_call(
         "import_creature_ai_definitions",
-        &[&format!("{subject}@{revision}@{rules}")],
+        &[&lyracore_shared::eventai::encode_definition(subject, rules)],
     );
     let target = creature(&shard, 0);
     let ally = creature(&shard, 2);
@@ -367,14 +380,10 @@ fn escape(shard: &Standalone, distance: f32) {
 }
 
 fn script(shard: &Standalone, rules: &str) {
-    let subject = "entry:51000";
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(format!("{subject}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
+    let subject = &format!("entry:{TEST_WOLF_ENTRY}");
     shard.assert_call(
         "import_creature_ai_definitions",
-        &[&format!("{subject}@{revision}@{rules}")],
+        &[&lyracore_shared::eventai::encode_definition(subject, rules)],
     );
 }
 

@@ -21,7 +21,7 @@ const DISBANDED: u64 = 8;
 const PETITION_CHANGED: u64 = 0x75;
 
 fn forget(realm: &Standalone, guid: u64) {
-    realm.assert_call("realm_guild_op", &[&actor(&guid.to_string()), FORGET]);
+    realm.assert_call("realm_guild_op", &[&actor(guid), FORGET]);
 }
 
 fn forget_events(realm: &Standalone, guid: u64, filter: &str) -> Vec<serde_json::Value> {
@@ -59,7 +59,7 @@ fn seeded_guild(realm: &Standalone) -> String {
     realm.assert_call(
         "realm_guild_op",
         &[
-            &actor(&LEADER.to_string()),
+            &actor(LEADER),
             &format!(
                 r#"{{"gmCreate":{{"leader_guid":{LEADER},"leader_name":"Leader","leader_team":{TEAM_ALLIANCE},"leader_realm_account":{LEADER},"gm_level":1,"name":"Cleanup Guild"}}}}"#
             ),
@@ -75,7 +75,7 @@ fn seeded_guild(realm: &Standalone) -> String {
     realm.assert_call(
         "realm_guild_op",
         &[
-            &actor(&LEADER.to_string()),
+            &actor(LEADER),
             &format!(
                 r#"{{"invite":{{"target_guid":{INVITEE},"actor_team":{TEAM_ALLIANCE},"target_team":{TEAM_ALLIANCE},"target_ignores_actor":false}}}}"#
             ),

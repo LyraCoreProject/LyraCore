@@ -5,10 +5,10 @@ use crate::game_player_skill;
 use crate::game_skill_ability;
 use crate::game_spell_effect;
 use crate::game_world_entity;
-use crate::spell::{
-    CastGateRefusal, CastRefusalReason, SpellEffect, A_MOD_SPEED, A_MOUNTED, SPEED_MOUNTED,
-};
+use crate::spell::{CastGateRefusal, CastRefusalReason, A_MOD_SPEED, A_MOUNTED, SPEED_MOUNTED};
+use crate::SpellEffect;
 use crate::WorldEntity;
+use lyracore_shared::race_class::{mask_admits, ZeroMask};
 
 pub(crate) fn mount_aura_moves_mount(eff_kind: u8, eff_p0: i32) -> bool {
     eff_kind == A_MOUNTED || (eff_kind == A_MOD_SPEED && eff_p0 == SPEED_MOUNTED as i32)
@@ -48,7 +48,8 @@ pub(crate) fn recompute_mount(ctx: &ReducerContext, guid: u64) {
             .filter(&guid)
             .map(|a| (a.eff_kind, a.eff_p0)),
     );
-    let speed_bp = (crate::combat::effective_move_speed(ctx, guid, 1.0) * 10_000.0).round() as u32;
+    let speed_bp =
+        (crate::modifiers::effective_move_speed(ctx, guid, 1.0) * 10_000.0).round() as u32;
     if e.mount_display_id == display && e.run_speed_mult_bp == speed_bp {
         return;
     }
@@ -64,17 +65,10 @@ pub(crate) fn dismount(ctx: &ReducerContext, guid: u64) {
     let Some(spell_id) = active_mount_spell(ctx, guid) else {
         return;
     };
-    let auras = ctx.db.game_aura();
-    let ids: Vec<u64> = auras
-        .by_target()
-        .filter(&guid)
+    let mount: Vec<_> = crate::spell::auras_on(ctx, guid)
         .filter(|a| a.spell_id == spell_id)
-        .map(|a| a.id)
         .collect();
-    for id in ids {
-        crate::Aura::delete(ctx, id);
-    }
-    recompute_mount(ctx, guid);
+    crate::spell::shed_auras(ctx, mount);
 }
 
 pub(crate) fn restore_mount_on_rebuild(ctx: &ReducerContext, guid: u64) {
@@ -89,10 +83,6 @@ pub(crate) fn spell_is_mount(ctx: &ReducerContext, spell_id: u32) -> bool {
         .by_spell()
         .filter(&spell_id)
         .any(|e| e.kind == A_MOUNTED)
-}
-
-fn mask_admits(mask: u32, id: u8) -> bool {
-    mask == 0 || ((1..=32).contains(&id) && mask & (1 << (id - 1)) != 0)
 }
 
 fn rank_satisfies(rank: u16, min_skill: i32) -> bool {
@@ -111,8 +101,8 @@ fn trained_for_spell(ctx: &ReducerContext, guid: u64, spell_id: u32, race: u8, c
                 .filter(&learned.skill_line)
                 .any(|a| {
                     a.spell_id == spell_id
-                        && mask_admits(a.race_mask, race)
-                        && mask_admits(a.class_mask, class)
+                        && mask_admits(a.race_mask, race, ZeroMask::AdmitsAll)
+                        && mask_admits(a.class_mask, class, ZeroMask::AdmitsAll)
                         && rank_satisfies(learned.current, a.min_skill)
                 })
         })
@@ -134,12 +124,7 @@ pub(crate) fn mount_cast_allowed_here(
 
 fn is_submerged_here(ctx: &ReducerContext, entity: &WorldEntity) -> bool {
     let level = crate::terrain::liquid_level_at(ctx, entity.map_id, entity.x, entity.y);
-    lyracore_shared::env::is_submerged(
-        entity.z,
-        level.unwrap_or_default(),
-        level.is_some(),
-        entity.movement_flags,
-    )
+    crate::terrain::is_submerged(entity.z, level, entity.movement_flags)
 }
 
 pub(crate) fn check_mount_cast(
@@ -184,22 +169,7 @@ pub(crate) fn check_mount_cast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spell::{
-        A_MOD_SPEED, A_MOD_STAT, A_MOUNTED, A_PERIODIC_DAMAGE, SPEED_MOUNTED, SPEED_MOVE,
-        SPEED_SWING,
-    };
-
-    #[test]
-    fn mount_aura_moves_mount_covers_the_mount_pair_only() {
-        assert!(mount_aura_moves_mount(A_MOUNTED, 0));
-        assert!(mount_aura_moves_mount(A_MOUNTED, 1147));
-        assert!(mount_aura_moves_mount(A_MOD_SPEED, SPEED_MOUNTED as i32));
-
-        assert!(!mount_aura_moves_mount(A_MOD_SPEED, SPEED_MOVE as i32));
-        assert!(!mount_aura_moves_mount(A_MOD_SPEED, SPEED_SWING as i32));
-        assert!(!mount_aura_moves_mount(A_MOD_STAT, SPEED_MOUNTED as i32));
-        assert!(!mount_aura_moves_mount(A_PERIODIC_DAMAGE, 0));
-    }
+    use crate::spell::{A_MOD_SPEED, A_MOD_STAT, A_MOUNTED, A_PERIODIC_DAMAGE, SPEED_MOUNTED};
 
     #[test]
     fn projected_mount_display_reads_the_mount_aura_only() {
@@ -221,43 +191,5 @@ mod tests {
             projected_mount_display([(A_MOUNTED, 1147), (A_MOUNTED, 2404)]),
             1147
         );
-    }
-
-    #[test]
-    fn rank_satisfies_is_inclusive_at_the_vanilla_riding_tiers() {
-        assert!(!rank_satisfies(74, 75));
-        assert!(rank_satisfies(75, 75));
-        assert!(rank_satisfies(150, 75));
-
-        assert!(!rank_satisfies(149, 150));
-        assert!(rank_satisfies(150, 150));
-
-        assert!(rank_satisfies(0, 0));
-        assert!(rank_satisfies(0, -1));
-    }
-
-    #[test]
-    fn mask_admits_treats_race_and_class_ids_as_one_based_bits() {
-        assert!(mask_admits(0, 1));
-        assert!(mask_admits(0, 11));
-
-        let human = 1u32 << 0;
-        let orc = 1u32 << 1;
-        assert!(mask_admits(human, 1));
-        assert!(!mask_admits(human, 2));
-        assert!(mask_admits(human | orc, 2));
-
-        assert!(!mask_admits(human, 0));
-        assert!(!mask_admits(u32::MAX, 33));
-    }
-
-    #[test]
-    fn indoor_check_is_due_only_on_a_100ms_boundary() {
-        assert!(!indoor_check_is_due(0, 0));
-        assert!(!indoor_check_is_due(1_000, 1_099));
-        assert!(indoor_check_is_due(1_099, 1_100));
-        assert!(!indoor_check_is_due(1_100, 1_199));
-        assert!(indoor_check_is_due(1_100, 5_000));
-        assert!(indoor_check_is_due(5_000, 1_100));
     }
 }

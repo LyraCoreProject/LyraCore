@@ -3,6 +3,7 @@
 use anyhow::{ensure, Result};
 use lyracore_shared::movement_flags::{JUMPING, ON_TRANSPORT, SWIMMING};
 use std::io::Read;
+use wow_world_messages::vanilla::opcodes::ClientOpcodeMessage;
 use wow_world_messages::vanilla::{
     MovementInfo, MovementInfo_MovementFlags, MovementInfo_MovementFlags_Jumping,
     MovementInfo_MovementFlags_OnTransport, MovementInfo_MovementFlags_SplineElevation,
@@ -213,7 +214,7 @@ pub fn create_with_movement(
 ) -> Result<Vec<u8>> {
     use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
     bytes_to_movement_info(movement)?;
-    let mut body = crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+    let mut body = crate::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
         create.clone(),
     )))?
     .body;
@@ -254,12 +255,10 @@ fn acknowledgement(body: &[u8], trailing: usize) -> Result<(Guid, u32, MovementI
 }
 
 /// Read before the typed reader, which misreads the build-5875 transport tail.
-pub fn read_movement_client(
-    opcode: u32,
-    body: &[u8],
-) -> Result<Option<super::ClientOpcodeMessage>> {
-    use super::{movement_opcodes, ClientOpcodeMessage as C};
+pub fn read_movement_client(opcode: u32, body: &[u8]) -> Result<Option<ClientOpcodeMessage>> {
+    use lyracore_shared::opcodes::movement as movement_opcodes;
     use wow_world_messages::vanilla::*;
+    use ClientOpcodeMessage as C;
     macro_rules! speed_ack {
         ($variant:ident, $counter:ident) => {{
             let (guid, $counter, info, speed) = acknowledgement(body, 4)?;
@@ -371,4 +370,23 @@ pub fn read_movement_client(
         MSG_MOVE_SET_PITCH => MSG_MOVE_SET_PITCH_Client,
         MSG_MOVE_HEARTBEAT => MSG_MOVE_HEARTBEAT_Client,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn client_movement_keeps_the_flag_word_and_the_millisecond_fall_time() {
+        use lyracore_shared::movement_flags::{FORWARD, SWIMMING};
+        let flags = FORWARD | 0x8000 | SWIMMING;
+        let mut body = flags.to_le_bytes().to_vec();
+        body.extend_from_slice(&[0; 20]);
+        body.extend_from_slice(&0.5f32.to_le_bytes());
+        body.extend_from_slice(&2000u32.to_le_bytes());
+        let movement = ClientMovement::decode(&body).unwrap();
+        assert_eq!(movement.flags(), flags);
+        assert_eq!(movement.fall_time_ms(), 2000);
+        assert!(movement.transport().is_none());
+    }
 }

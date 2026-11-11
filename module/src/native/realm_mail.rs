@@ -35,6 +35,9 @@ pub struct MailForwardRetry {
     pub parcel: Vec<u8>,
 }
 
+crate::outside_table_catalog!(game_mail_forward, game_mail_forward_retry);
+crate::virtual_clock_exempt!(game_mail_forward_retry);
+
 fn encode(parcel: &MailParcel) -> Vec<u8> {
     bsatn::to_vec(parcel).expect("Mail parcel encodes")
 }

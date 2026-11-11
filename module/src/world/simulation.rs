@@ -1,11 +1,13 @@
 use spacetimedb::{ReducerContext, Table};
 
-use super::{game_world_entity, WorldEntity};
+use super::{game_entity_motion, game_world_entity, WorldEntity};
 
 impl WorldEntity {
     pub(crate) fn delete(ctx: &ReducerContext, guid: impl std::borrow::Borrow<u64>) -> bool {
         let guid = *guid.borrow();
         let removed = ctx.db.game_world_entity().guid().delete(guid);
+        crate::motion::drop_pending(ctx, guid);
+        ctx.db.game_entity_motion().guid().delete(guid);
         crate::items::equip::clear(ctx, guid);
         crate::breath::clear(ctx, guid);
         crate::combo::forget(ctx, guid);
@@ -36,7 +38,7 @@ impl WorldEntity {
         self.stamp_simulation();
         let entity = ctx.db.game_world_entity().insert(self);
         #[cfg(feature = "conformance_test_fixture")]
-        crate::native::record_conformance_birth(
+        crate::native::debug::record_birth(
             ctx,
             entity.guid,
             entity.map_id,
@@ -57,10 +59,7 @@ impl WorldEntity {
         let entity = ctx.db.game_world_entity().guid().update(self);
         crate::aoi::entity_changed(ctx, old.as_ref(), &entity);
         if let Some(old) = old {
-            if entity.is_player()
-                && (old.dead != entity.dead
-                    || old.unit_bytes_1 >> 16 & 0xff != entity.unit_bytes_1 >> 16 & 0xff)
-            {
+            if entity.is_player() && (old.dead != entity.dead || old.form() != entity.form()) {
                 crate::items::equip::reconcile(ctx, entity.guid);
             }
             if entity.is_player() && (old.level != entity.level || old.zone_id != entity.zone_id) {
@@ -69,7 +68,7 @@ impl WorldEntity {
             if crate::breath::eligible(&old) && !crate::breath::eligible(&entity) {
                 crate::breath::clear(ctx, entity.guid);
             }
-            crate::native::entity_changed(ctx, &old, &entity);
+            crate::native::visibility::entity_changed(ctx, &old, &entity);
         }
         entity
     }

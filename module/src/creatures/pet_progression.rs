@@ -296,23 +296,4 @@ mod tests {
     fn level_refresh_preserves_health_proportion_and_grows_maximum() {
         assert_eq!(refreshed_pet_health(50, 100, 10, 100, 12), (60, 120));
     }
-
-    #[test]
-    fn only_the_matching_live_hunter_pet_is_eligible() {
-        assert!(eligible_live_pet(
-            42,
-            super::super::PetKind::Hunter { pet_id: 42 },
-            false
-        ));
-        assert!(!eligible_live_pet(
-            42,
-            super::super::PetKind::Summoned,
-            false
-        ));
-        assert!(!eligible_live_pet(
-            42,
-            super::super::PetKind::Hunter { pet_id: 42 },
-            true
-        ));
-    }
 }

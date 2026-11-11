@@ -152,13 +152,21 @@ pub struct AuctionRetry {
     pub retry: Retry,
 }
 
+crate::outside_table_catalog!(
+    game_auction_transaction,
+    game_auction_deletion,
+    game_realm_auction_request,
+    game_world_auction_answer,
+    game_auction_retry
+);
+crate::virtual_clock_exempt!(game_auction_retry);
+
 fn encode<T: spacetimedb::Serialize>(value: &T) -> Vec<u8> {
     bsatn::to_vec(value).expect("auction request encodes")
 }
 
 fn packet(message: ServerOpcodeMessage) -> Vec<AuctionPacket> {
-    let packet = lyracore_protocol::world::encode(message)
-        .expect("bounded auction reply fits a world frame");
+    let packet = super::bounded(message);
     vec![AuctionPacket {
         opcode: packet.opcode,
         body: packet.body,
@@ -672,13 +680,7 @@ fn deliver(
 
 fn send(ctx: &ReducerContext, guid: u64, connection: u128, packets: Vec<AuctionPacket>) {
     let connection = ConnectionId::from_u128(connection);
-    if ctx
-        .db
-        .game_native_player()
-        .connection_id()
-        .find(connection)
-        .is_some_and(|player| player.character_guid == guid)
-    {
+    if super::world_session(ctx, guid).is_some_and(|player| player.connection_id == connection) {
         for AuctionPacket { opcode, body } in packets {
             super::send_raw(ctx, connection, opcode, body, false);
         }

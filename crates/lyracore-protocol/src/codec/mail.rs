@@ -351,7 +351,7 @@ mod tests {
         let list = build_mail_list(&mails, 1_000);
         assert_eq!(list.mails.len(), 31);
         let packet =
-            crate::world::encode(ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(Box::new(list)))
+            crate::world::encode(&ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(Box::new(list)))
                 .unwrap();
         assert_eq!(packet.body.len(), 1 + 31 * 2_075);
         let largest = build_mail_list(

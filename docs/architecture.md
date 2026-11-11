@@ -6,9 +6,10 @@ rules are in [danger zones](./danger-zones.md).
 
 ## Native host migration
 
-A Realm runs in one Shard, the SpacetimeDB database `lyracore`. Accounts, Characters, maps,
-Instances and Realm-wide state share one Module. Map and Instance identifiers are gameplay
-partitions inside that Shard. Request handlers and Relays run in the Module.
+A Realm runs in one Shard, the SpacetimeDB database `lyracore`, unless the Operator splits it into
+a Realm Shard and World Shards as [described below](#durable-state-and-extension-points).
+Every Shard runs the same Module. Map and Instance identifiers are gameplay partitions inside a
+Shard. Request handlers and Relays run in the Module.
 
 The [native Module](../module/src/native/mod.rs) owns SRP proof verification, logon limits,
 Sessions, world authentication, connection state, request dispatch and response packets. The Host

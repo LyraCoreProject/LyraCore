@@ -1,4 +1,5 @@
 use super::*;
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY, SCENARIO_VENDOR_ENTRY};
 use std::collections::BTreeMap;
 use std::io::Cursor;
 use wow_world_messages::vanilla::{ClientMessage, CMSG_AUTH_SESSION};
@@ -190,7 +191,7 @@ fn crossing_with_equipment(name: &str, equipment: bool) -> Crossing {
     source
         .assert_sql("UPDATE game_conformance_clock SET now_micros = 1800000005000000 WHERE id = 0");
     for index in 0..3 {
-        let item = grant(&source, guid, 5090050, 1);
+        let item = grant(&source, guid, FIXTURE_BLADE, 1);
         if index == 0 {
             poison(&source, &mut source_connection, guid, item);
         }
@@ -202,7 +203,7 @@ fn crossing_with_equipment(name: &str, equipment: bool) -> Crossing {
     if equipment {
         super::super::item_equip::configure(&source);
         source.assert_sql("UPDATE game_spell SET category = 30, category_cooldown_ms = 60000 WHERE spell_id = 5090901");
-        let item = grant(&source, guid, 5090050, 1);
+        let item = grant(&source, guid, FIXTURE_BLADE, 1);
         let slot: u8 = source.query_rows(&format!(
             "SELECT slot FROM game_item_instance WHERE guid = {item}"
         ))[0]["slot"]
@@ -426,11 +427,17 @@ fn handoff_keeps_buyback_ring_state_and_arrival_fields() {
     assert!(sold_rows(&c.source, c.guid).is_empty());
     c.destination.assert_call(
         "debug_spawn_at_feet",
-        &[&c.guid.to_string(), "51004", "2.0"],
+        &[
+            &c.guid.to_string(),
+            &SCENARIO_VENDOR_ENTRY.to_string(),
+            "2.0",
+        ],
     );
     let vendor = c
         .destination
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
@@ -476,16 +483,22 @@ fn sale_after_handoff_uses_the_original_login_time_and_current_slot() {
     let mut c = crossing("buyback-handoff-timestamp");
     c.destination.assert_call(
         "debug_spawn_at_feet",
-        &[&c.guid.to_string(), "51004", "2.0"],
+        &[
+            &c.guid.to_string(),
+            &SCENARIO_VENDOR_ENTRY.to_string(),
+            "2.0",
+        ],
     );
     let vendor = c
         .destination
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
         .unwrap();
-    let item = grant(&c.destination, c.guid, 5090050, 1);
+    let item = grant(&c.destination, c.guid, FIXTURE_BLADE, 1);
     let fields = values(&sell(&mut c.connection, vendor, item, 0), c.guid);
     let row = sold_rows(&c.destination, c.guid)
         .into_iter()
@@ -499,7 +512,7 @@ fn sale_after_handoff_uses_the_original_login_time_and_current_slot() {
 
 fn refuse_conflicting_buyback(location: &str) {
     let (source, guid, vendor) = sessionless(&format!("buyback-guid-source-{location}"));
-    let item = grant(&source, guid, 5090050, 1);
+    let item = grant(&source, guid, FIXTURE_BLADE, 1);
     source.assert_call(
         "debug_sell_item",
         &[&guid.to_string(), &vendor.to_string(), "23"],
@@ -507,7 +520,7 @@ fn refuse_conflicting_buyback(location: &str) {
     let source_items = sold_rows(&source, guid);
     let (destination, _, _) = sessionless(&format!("buyback-guid-target-{location}"));
     if location == "payload" {
-        let duplicate = grant(&source, guid, 5090052, 1);
+        let duplicate = grant(&source, guid, FIXTURE_JERKY, 1);
         source.assert_sql(&format!(
             "UPDATE game_item_instance SET guid = {item} WHERE guid = {duplicate}"
         ));
@@ -521,14 +534,23 @@ fn refuse_conflicting_buyback(location: &str) {
             .parse::<u64>()
             .unwrap();
         destination.assert_call("debug_spawn_player_entity", &[&other.to_string()]);
-        let duplicate = grant(&destination, other, 5090050, 1);
+        let duplicate = grant(&destination, other, FIXTURE_BLADE, 1);
         destination.assert_sql(&format!(
             "UPDATE game_item_instance SET guid = {item} WHERE guid = {duplicate}"
         ));
         if location == "buyback" {
-            destination.assert_call("debug_spawn_at_feet", &[&other.to_string(), "51004", "2.0"]);
+            destination.assert_call(
+                "debug_spawn_at_feet",
+                &[
+                    &other.to_string(),
+                    &SCENARIO_VENDOR_ENTRY.to_string(),
+                    "2.0",
+                ],
+            );
             let vendor = destination
-                .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004")
+                .query_rows(&format!(
+                    "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+                ))
                 .iter()
                 .map(|row| row["guid"].parse::<u64>().unwrap())
                 .max()
@@ -601,7 +623,7 @@ fn incoming_buyback_guid_conflicts_with_payload() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn transported_buyback_text_is_remapped_and_each_reference_is_released_once() {
     let (source, mut source_connection, guid, vendor) = stage("buyback-text-source");
-    let item = grant(&source, guid, 5090050, 1);
+    let item = grant(&source, guid, FIXTURE_BLADE, 1);
     source.assert_call(
         "create_character",
         &["1", "\"Other\"", "1", "1", "0", "0", "0", "0", "0", "0"],
@@ -611,7 +633,7 @@ fn transported_buyback_text_is_remapped_and_each_reference_is_released_once() {
         .parse::<u64>()
         .unwrap();
     source.assert_call("debug_spawn_player_entity", &[&other.to_string()]);
-    let kept = grant(&source, other, 5090050, 1);
+    let kept = grant(&source, other, FIXTURE_BLADE, 1);
     source.assert_sql(
         "INSERT INTO game_item_text (id,text,letters) VALUES (5090001,'A note in buyback',2)",
     );
@@ -653,9 +675,14 @@ fn transported_buyback_text_is_remapped_and_each_reference_is_released_once() {
         "1"
     );
     let (mut connection, _) = adopt(&destination, guid, "5090082", &blob, false);
-    destination.assert_call("debug_spawn_at_feet", &[&guid.to_string(), "51004", "2.0"]);
+    destination.assert_call(
+        "debug_spawn_at_feet",
+        &[&guid.to_string(), &SCENARIO_VENDOR_ENTRY.to_string(), "2.0"],
+    );
     let vendor = destination
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
@@ -697,7 +724,7 @@ fn transported_buyback_text_is_remapped_and_each_reference_is_released_once() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn world_port_without_buyback_session_state_refuses_import_atomically() {
     let (source, guid, _) = sessionless("buyback-state-required-source");
-    grant(&source, guid, 5090052, 3);
+    grant(&source, guid, FIXTURE_JERKY, 3);
     let inventory = source.query_rows("SELECT * FROM game_item_instance");
     let blob = freeze(&source, guid, 5090083);
     let (destination, _, _) = sessionless("buyback-state-required-target");
@@ -727,7 +754,9 @@ fn world_port_without_buyback_session_state_refuses_import_atomically() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn handoff_reconciliation_keeps_a_petition_whose_charter_is_in_buyback() {
     let (source, mut connection, guid, vendor) = stage("buyback-charter-handoff-source");
-    source.assert_sql("UPDATE game_item_template SET entry = 5863 WHERE entry = 5090050");
+    source.assert_sql(&format!(
+        "UPDATE game_item_template SET entry = 5863 WHERE entry = {FIXTURE_BLADE}"
+    ));
     let charter = grant(&source, guid, 5863, 1);
     sell(&mut connection, vendor, charter, 0);
     let blob = freeze(&source, guid, 5090084);

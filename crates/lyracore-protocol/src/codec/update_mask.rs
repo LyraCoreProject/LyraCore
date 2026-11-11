@@ -2,7 +2,6 @@
 
 use std::collections::BTreeMap;
 
-#[allow(dead_code)]
 pub mod idx {
     pub const OBJECT_GUID: u16 = 0;
     /// Never resend OBJECT_FIELD_TYPE in partial VALUES; it can strip PLAYER and crash build 5875.
@@ -84,7 +83,6 @@ impl UpdateMaskValues {
         self
     }
 
-    #[allow(dead_code)]
     pub fn set_f32(&mut self, index: u16, value: f32) -> &mut Self {
         self.set_u32(index, value.to_bits())
     }
@@ -124,7 +122,6 @@ impl UpdateMaskValues {
         }
     }
 
-    #[allow(dead_code)]
     pub fn to_bytes(&self) -> Vec<u8> {
         let mut out = Vec::new();
         self.write_to(&mut out);
@@ -330,7 +327,6 @@ mod tests {
 
     #[test]
     fn quest_log_field_indices() {
-        assert_eq!(idx::PLAYER_QUEST_LOG_1_1, 198);
         assert_eq!(quest_log_field(0, 0), 198);
         assert_eq!(quest_log_field(0, 1), 199);
         assert_eq!(quest_log_field(0, 2), 200);

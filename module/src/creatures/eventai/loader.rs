@@ -1,10 +1,11 @@
+use crate::CreatureAiDefinition;
 use std::collections::HashSet;
 
 use spacetimedb::{reducer, ReducerContext, Table};
 
 use super::stored::game_creature_ai_script_policy;
 use super::{
-    AiEventKind, AuraStackCondition, CallForHelpInstruction, CastInstruction, CreatureAiDefinition,
+    AiEventKind, AuraStackCondition, CallForHelpInstruction, CastInstruction,
     CreatureEntryCondition, CreatureHealthCondition, CreatureInstruction,
     CreaturePresentationInstruction, CreaturePresentationMount, CreatureReactState, DeathCondition,
     EmoteInstruction, EvadeInstruction, EventAiRule, EventCondition, EventPredicate,
@@ -177,7 +178,7 @@ fn parse_definition(line: &str) -> Result<ParsedDefinition, String> {
     if encoded_rules.is_empty() {
         return Err("definition has no rules".to_string());
     }
-    let expected_revision = definition_revision(&format!("{subject}@{encoded_rules}"));
+    let expected_revision = lyracore_shared::eventai::definition_revision(subject, encoded_rules);
     if revision != expected_revision {
         return Err(format!(
             "definition revision mismatch: supplied={revision} expected={expected_revision}"
@@ -1105,17 +1106,6 @@ fn parse_ai_event(value: &str) -> Result<AiEventKind, String> {
     }
 }
 
-fn definition_revision(material: &str) -> u64 {
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(material.as_bytes());
-    u64::from_le_bytes(
-        hasher.finalize().as_bytes()[..8]
-            .try_into()
-            .expect("a BLAKE3 digest has at least eight bytes"),
-    )
-}
-
 fn parse_bool(value: &str) -> Result<bool, String> {
     match value {
         "0" => Ok(false),
@@ -1124,19 +1114,19 @@ fn parse_bool(value: &str) -> Result<bool, String> {
     }
 }
 
-fn parse_u64(value: &str) -> Result<u64, String> {
+pub(super) fn parse_u64(value: &str) -> Result<u64, String> {
     value.parse().map_err(|_| format!("invalid u64: {value}"))
 }
 
-fn parse_u32(value: &str) -> Result<u32, String> {
+pub(super) fn parse_u32(value: &str) -> Result<u32, String> {
     value.parse().map_err(|_| format!("invalid u32: {value}"))
 }
 
-fn parse_u8(value: &str) -> Result<u8, String> {
+pub(super) fn parse_u8(value: &str) -> Result<u8, String> {
     value.parse().map_err(|_| format!("invalid u8: {value}"))
 }
 
-fn parse_i32(value: &str) -> Result<i32, String> {
+pub(super) fn parse_i32(value: &str) -> Result<i32, String> {
     value.parse().map_err(|_| format!("invalid i32: {value}"))
 }
 
@@ -1178,9 +1168,9 @@ pub fn debug_stage_eventai_revision_fixture(
         fight.last_offhand_swing_ms = 0;
         fight.rout_ends_ms = 0;
         fight.pursuit_ends_ms = 0;
-        crate::combat::MeleeAttack::update(ctx, fight);
+        crate::MeleeAttack::update(ctx, fight);
     } else {
-        crate::combat::MeleeAttack::insert(
+        crate::MeleeAttack::insert(
             ctx,
             crate::MeleeAttack {
                 attacker_guid: creature_guid,
@@ -1254,7 +1244,7 @@ pub fn debug_verify_eventai_revision_fixture(
                 rule_states.len()
             ));
         };
-        let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+        let now_ms = crate::time::now_ms(ctx);
         if rule_state.source_rule_id != source_rule_id
             || rule_state.consumed
             || rule_state.next_eligible_ms <= now_ms.saturating_add(50_000)
@@ -1314,8 +1304,7 @@ mod tests {
     #[test]
     fn native_definition_decodes_more_than_three_ordered_instructions() {
         let rules = "17,aggro,100,4294967295,once,all,ordinary,emote:1:self+emote:2:self+emote:3:self+emote:4:self";
-        let material = format!("entry:6@{rules}");
-        let packed = format!("entry:6@{}@{rules}", definition_revision(&material));
+        let packed = lyracore_shared::eventai::encode_definition("entry:6", rules);
         let definition = parse_definition(&packed).unwrap();
         assert_eq!(definition.rules[0].instructions.len(), 4);
         for (index, instruction) in definition.rules[0].instructions.iter().enumerate() {
@@ -1329,8 +1318,7 @@ mod tests {
     #[test]
     fn native_definition_decodes_named_death_requests() {
         let rules = "900002,aggro,100,4294967295,once,all,ordinary,any-posture,lethal-floor:on+lethal-floor:off+force-death";
-        let material = format!("entry:6@{rules}");
-        let packed = format!("entry:6@{}@{rules}", definition_revision(&material));
+        let packed = lyracore_shared::eventai::encode_definition("entry:6", rules);
         let definition = parse_definition(&packed).unwrap();
 
         assert_eq!(
@@ -1349,9 +1337,13 @@ mod tests {
 
     #[test]
     fn revision_covers_the_normalized_definition() {
-        let first = "entry:6@17,aggro,100,1,once,all,ordinary,flee";
-        let second = "entry:6@17,aggro,100,1,once,all,ordinary,help:8";
-        assert_ne!(definition_revision(first), definition_revision(second));
+        use lyracore_shared::eventai::definition_revision;
+        let first = "17,aggro,100,1,once,all,ordinary,flee";
+        let second = "17,aggro,100,1,once,all,ordinary,help:8";
+        assert_ne!(
+            definition_revision("entry:6", first),
+            definition_revision("entry:6", second)
+        );
     }
 
     #[test]

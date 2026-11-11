@@ -1,7 +1,7 @@
 mod support;
 
 use lyracore_shared::group::RaidSlot;
-use support::{actor, Standalone};
+use support::{actor, roster_revision, Standalone};
 
 const INVITE: &str = "0";
 const ACCEPT: &str = "1";
@@ -18,7 +18,7 @@ fn realm_group_op_args(
 ) -> Vec<String> {
     vec![
         op.to_string(),
-        actor(&actor_guid.to_string()),
+        actor(actor_guid),
         target_guid.to_string(),
         arg_a.to_string(),
         "0".to_string(),
@@ -96,12 +96,6 @@ fn slot_of(node: &Standalone, guid: u64) -> String {
         "SELECT raid_slot FROM game_group_member WHERE character_guid = {guid}"
     ))[0]["raid_slot"]
         .clone()
-}
-
-fn roster_revision(node: &Standalone) -> u64 {
-    node.query_rows("SELECT revision FROM game_group_roster_revision")[0]["revision"]
-        .parse()
-        .unwrap()
 }
 
 fn join(node: &Standalone, leader: u64, guid: u64) {

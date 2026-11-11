@@ -1,12 +1,13 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{TEST_POWER_WORD_SHIELD_SPELL, TEST_WOLF_ENTRY};
+use lyracore_shared::guid;
 use support::{event_rows, poll_until, Standalone, POLL_TIMEOUT};
 
 const PLAYER_GUID: u64 = 1;
-const WOLF_ENTRY: u32 = 51_000;
-const WOLF_GUID: u64 = (0xF130_u64 << 48) | ((WOLF_ENTRY as u64) << 24) | 1;
-const SECOND_WOLF_GUID: u64 = (0xF130_u64 << 48) | ((WOLF_ENTRY as u64) << 24) | 2;
-const THIRD_WOLF_GUID: u64 = (0xF130_u64 << 48) | ((WOLF_ENTRY as u64) << 24) | 3;
+const WOLF_GUID: u64 = guid::creature(TEST_WOLF_ENTRY, 1);
+const SECOND_WOLF_GUID: u64 = guid::creature(TEST_WOLF_ENTRY, 2);
+const THIRD_WOLF_GUID: u64 = guid::creature(TEST_WOLF_ENTRY, 3);
 const SOURCE_RULE_ID: u64 = 900_001;
 
 #[test]
@@ -22,7 +23,11 @@ fn authoritative_damage_honors_the_lethal_floor_and_its_lifetime() {
     stage(&standalone, WOLF_GUID);
     standalone.assert_call(
         "debug_cast_at",
-        &[&WOLF_GUID.to_string(), "50072", &WOLF_GUID.to_string()],
+        &[
+            &WOLF_GUID.to_string(),
+            &TEST_POWER_WORD_SHIELD_SPELL.to_string(),
+            &WOLF_GUID.to_string(),
+        ],
     );
     verify(&standalone, WOLF_GUID, 10, false, true, false, 50);
 
@@ -46,7 +51,11 @@ fn authoritative_damage_honors_the_lethal_floor_and_its_lifetime() {
 
     standalone.assert_call(
         "debug_spawn_at_feet",
-        &[&PLAYER_GUID.to_string(), &WOLF_ENTRY.to_string(), "1.0"],
+        &[
+            &PLAYER_GUID.to_string(),
+            &TEST_WOLF_ENTRY.to_string(),
+            "1.0",
+        ],
     );
     stage(&standalone, SECOND_WOLF_GUID);
     let replacement = definition("phase:2");
@@ -98,7 +107,11 @@ fn authoritative_damage_honors_the_lethal_floor_and_its_lifetime() {
 
     standalone.assert_call(
         "debug_spawn_at_feet",
-        &[&PLAYER_GUID.to_string(), &WOLF_ENTRY.to_string(), "1.0"],
+        &[
+            &PLAYER_GUID.to_string(),
+            &TEST_WOLF_ENTRY.to_string(),
+            "1.0",
+        ],
     );
     stage(&standalone, THIRD_WOLF_GUID);
     let casts = standalone.subscribe(&[&format!(
@@ -203,15 +216,5 @@ fn verify(
 }
 
 fn packed_definition(rules: &str) -> String {
-    let subject = format!("entry:{WOLF_ENTRY}");
-    let material = format!("{subject}@{rules}");
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(material.as_bytes());
-    let revision = u64::from_le_bytes(
-        hasher.finalize().as_bytes()[..8]
-            .try_into()
-            .expect("a BLAKE3 digest has at least eight bytes"),
-    );
-    format!("{subject}@{revision}@{rules}")
+    lyracore_shared::eventai::encode_definition(&format!("entry:{TEST_WOLF_ENTRY}"), rules)
 }

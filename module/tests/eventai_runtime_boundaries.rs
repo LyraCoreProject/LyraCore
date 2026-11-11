@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 #[test]
@@ -59,8 +60,8 @@ fn delayed_scripts_continue_after_failure_and_abort_without_canceling_child_scri
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_stage_script_failure_policies", &[]);
-    let first = lyracore_package_delta::packed_creature_spawn_guid(51_000, 1);
-    let second = lyracore_package_delta::packed_creature_spawn_guid(51_000, 2);
+    let first = lyracore_package_delta::packed_creature_spawn_guid(TEST_WOLF_ENTRY, 1);
+    let second = lyracore_package_delta::packed_creature_spawn_guid(TEST_WOLF_ENTRY, 2);
     let stand_state = |guid| {
         standalone
             .query_rows(&format!(

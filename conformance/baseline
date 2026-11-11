@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 
-from preflight import check_spacetime_version
+from workspace import check_spacetime_version, tier1_scratch
 
 
 def main():
@@ -25,10 +25,7 @@ def main():
         os.chdir(root)
         os.execvp("cargo", command)
 
-    scratch = Path(os.environ.get(
-        "LYRACORE_CONFORMANCE_SCRATCH",
-        Path.home() / ".cache/lyracore-scratch/conformance-run",
-    ))
+    scratch = tier1_scratch()
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="baseline-", dir=scratch) as directory:
         result = Path(directory) / "result.json"

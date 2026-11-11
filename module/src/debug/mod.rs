@@ -2,34 +2,26 @@ mod audit;
 mod auth;
 mod encounter;
 mod eventai;
-mod fingerprint;
+pub(crate) mod fingerprint;
 mod instance;
 mod mail;
 mod meeting_stone;
 mod package_config;
-mod readout;
+pub(crate) mod readout;
 mod runtime_script;
 mod taxi;
 
-pub use fingerprint::{game_catalogue_fingerprint, CatalogueFingerprint};
-
-pub use instance::debug_set_vmap_enabled;
-
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use readout::record_offhand_roll_range;
-pub use readout::{game_debug_readout, DebugReadout};
-
-use lyracore_package_delta::{packed_creature_spawn_guid, packed_gameobject_spawn_guid};
+use lyracore_package_delta::{fixture_ids, packed_creature_spawn_guid};
 use lyracore_shared::{constants, spatial};
 use spacetimedb::{log, reducer, ReducerContext, Table, TimeDuration};
 
 use crate::{
-    game_character, game_config, game_corpse, game_creature_move_schedule, game_creature_spawn,
+    game_character, game_corpse, game_creature_move_schedule, game_creature_spawn,
     game_creature_spline, game_creature_template, game_dynamic_object, game_entity_motion,
     game_gameobject, game_gameobject_pool, game_gameobject_pool_member, game_gameobject_template,
-    game_gameobject_unlocked, game_ground_area, game_item_template, game_melee_attack,
-    game_quest_template, game_spell, game_spell_effect, game_world_entity, CreatureMoveSchedule,
-    CreatureSpawn, GroundArea, ItemInstance, ServerConfig,
+    game_ground_area, game_item_template, game_melee_attack, game_quest_template, game_spell,
+    game_spell_effect, game_world_entity, CreatureMoveSchedule, CreatureSpawn, GroundArea,
+    ItemInstance,
 };
 
 #[reducer]
@@ -51,8 +43,8 @@ pub fn debug_teleport(
     {
         return Err(format!("no live entity for guid {character_guid}"));
     }
-    crate::world::teleport_player(ctx, character_guid, map_id, 0, x, y, z, o);
-    Ok(())
+    crate::world::teleport(ctx, character_guid, map_id, 0, [x, y, z, o])
+        .map_err(|refusal| refusal.to_string())
 }
 
 #[reducer]
@@ -106,27 +98,7 @@ pub fn debug_apply_damage(
     amount: u32,
     attacker_guid: u64,
 ) -> Result<(), String> {
-    let e = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(target_guid)
-        .ok_or_else(|| format!("no live entity for guid {target_guid}"))?;
-    if e.dead {
-        return Err("target is dead".to_string());
-    }
-    let capped = amount.min(e.health.saturating_sub(1));
-    let (dmg, _absorbed) =
-        crate::combat::fold_incoming_damage(ctx, attacker_guid, target_guid, capped);
-    let damage = crate::combat::final_damage(ctx, target_guid, dmg);
-    crate::combat::apply_hit(
-        ctx,
-        attacker_guid,
-        target_guid,
-        damage,
-        crate::combat::Hit::weapon(crate::combat::HitSource::MainHand, false),
-    );
-    Ok(())
+    crate::package_fixture::apply_damage(ctx, target_guid, amount, attacker_guid)
 }
 
 #[reducer]
@@ -226,42 +198,35 @@ pub fn debug_spawn_at_feet(
         .find(creature_entry)
         .ok_or_else(|| format!("no creature template for entry {creature_entry}"))?;
 
-    let spawn_max = ctx
-        .db
-        .game_creature_spawn()
-        .iter()
-        .filter(|s| s.entry == creature_entry)
-        .map(|s| s.guid & 0x00FF_FFFF)
-        .filter(|low| low & crate::instance::INSTANCE_POP_LOW_BAND == 0)
-        .max()
-        .unwrap_or(0);
-    let entity_max = entities
-        .iter()
-        .filter(|e| e.entry == creature_entry && !e.is_player())
-        .map(|e| e.guid & 0x00FF_FFFF)
-        .filter(|low| low & crate::instance::INSTANCE_POP_LOW_BAND == 0)
-        .max()
-        .unwrap_or(0);
-    let next_low = spawn_max.max(entity_max) + 1;
+    let next_low = crate::creatures::population::next_spawn_low(
+        ctx.db
+            .game_creature_spawn()
+            .iter()
+            .filter(|s| s.entry == creature_entry)
+            .map(|s| s.guid & 0x00FF_FFFF)
+            .chain(
+                entities
+                    .iter()
+                    .filter(|e| e.entry == creature_entry && !e.is_player())
+                    .map(|e| e.guid & 0x00FF_FFFF),
+            ),
+    );
     let new_guid = packed_creature_spawn_guid(creature_entry, next_low as u32);
 
     let (sin_o, cos_o) = player.orientation.sin_cos();
-    let spawn = CreatureSpawn {
-        guid: new_guid,
-        entry: creature_entry,
-        map_id: player.map_id,
-        x: player.x + offset * cos_o,
-        y: player.y + offset * sin_o,
-        z: player.z,
-        orientation: player.orientation,
-        respawn_at: crate::creatures::timer_never(ctx),
-        despawn_at: crate::creatures::timer_never(ctx),
-        movement_type: crate::creatures::MOVEMENT_IDLE,
-        respawn_secs: 0,
-        life_seq: 0,
-        source_guid: 0,
-        instance_id: player.instance_id,
-    };
+    let spawn = CreatureSpawn::temporary(
+        ctx,
+        new_guid,
+        creature_entry,
+        player.map_id,
+        player.instance_id,
+        [
+            player.x + offset * cos_o,
+            player.y + offset * sin_o,
+            player.z,
+            player.orientation,
+        ],
+    );
     let entity = build_creature_entity(ctx, &spawn, &tmpl, 0, player.instance_id);
     ctx.db.game_creature_spawn().insert(spawn);
     crate::creatures::insert_creature_entity(ctx, entity);
@@ -288,7 +253,7 @@ pub fn debug_spawn_player_entity(ctx: &ReducerContext, character_guid: u64) -> R
     let character = crate::helpers::require_character(ctx, character_guid)
         .map_err(|_| format!("no such character: {character_guid}"))?;
 
-    let entity = crate::creatures::build_player_entity(ctx, &character, character.owner_identity);
+    let entity = crate::world::build_player_entity(ctx, &character, character.owner_identity);
     let (level, max_health) = (entity.level, entity.max_health);
     entity.insert(ctx);
     crate::mount::restore_mount_on_rebuild(ctx, character_guid);
@@ -324,7 +289,10 @@ fn resolve_debug_cast_at(
         false,
         false,
         None,
+        None,
+        None,
     )
+    .map_err(Into::into)
 }
 
 #[reducer]
@@ -454,14 +422,13 @@ pub fn debug_grant_item(
 
 #[reducer]
 pub fn debug_bind_home(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::world::set_home(ctx, character_guid);
+    crate::character::set_home(ctx, character_guid);
     Ok(())
 }
 
 #[reducer]
 pub fn debug_use_hearthstone(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::world::recall_to_home(ctx, character_guid);
-    Ok(())
+    crate::character::recall_to_home(ctx, character_guid).map_err(|refusal| refusal.to_string())
 }
 
 #[reducer]
@@ -527,12 +494,11 @@ pub fn debug_enter_areatrigger(
     character_guid: u64,
     trigger_id: u32,
 ) -> Result<(), String> {
-    crate::quest::apply_enter_areatrigger(ctx, character_guid, trigger_id);
+    crate::areatrigger::apply_enter_areatrigger(ctx, character_guid, trigger_id);
     Ok(())
 }
 
 #[reducer]
-#[allow(clippy::too_many_arguments)]
 pub fn debug_replay_sessionless_areatrigger(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -543,7 +509,7 @@ pub fn debug_replay_sessionless_areatrigger(
     expected_relocation_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let relocation_id = crate::quest::enter_sessionless_areatrigger(
+    let relocation_id = crate::areatrigger::enter_sessionless_areatrigger(
         ctx,
         character_guid,
         trigger_id,
@@ -601,54 +567,24 @@ pub fn debug_spawn_gameobject(
     respawn_secs: u32,
     gather_gray: u32,
 ) -> Result<(), String> {
-    if ctx
-        .db
-        .game_gameobject_template()
-        .entry()
-        .find(template_entry)
-        .is_none()
-    {
-        ctx.db
-            .game_gameobject_template()
-            .insert(crate::gameobject::GameObjectTemplate {
-                entry: template_entry,
-                type_id,
-                display_id,
-                name: format!("Debug GO {template_entry}"),
-                data0,
-                data1,
-                gather_skill_line,
-                respawn_secs,
-                gather_gray,
-                lock_id: 0,
-                size: 0.0,
-            });
-    }
-    let guid = packed_gameobject_spawn_guid(template_entry);
-    crate::GameObject::delete(ctx, guid);
-    ctx.db.game_gameobject_unlocked().go_guid().delete(guid);
-    let go = crate::gameobject::GameObject {
-        guid,
-        template_entry,
+    crate::gameobject::spawn_standalone(
+        ctx,
+        crate::gameobject::GameObjectTemplate {
+            entry: template_entry,
+            type_id,
+            display_id,
+            name: format!("Debug GO {template_entry}"),
+            data0,
+            data1,
+            gather_skill_line,
+            respawn_secs,
+            gather_gray,
+            lock_id: 0,
+            size: 0.0,
+        },
         map_id,
-        x,
-        y,
-        z,
-        orientation: 0.0,
-        state: 0,
-        created_at: crate::time::now(ctx),
-        respawn_at_micros: 0,
-        instance_id: 0,
-        grid_x: lyracore_shared::spatial::grid_cell(x, y).0,
-        grid_y: lyracore_shared::spatial::grid_cell(x, y).1,
-        cell: lyracore_shared::spatial::cell_id_at(x, y),
-        rotation_0: 0.0,
-        rotation_1: 0.0,
-        rotation_2: 0.0,
-        rotation_3: 0.0,
-    }
-    .insert(ctx);
-    crate::go_collider::register(ctx, &go);
+        [x, y, z],
+    );
     Ok(())
 }
 
@@ -715,7 +651,7 @@ pub fn debug_setup_gather_pool(
         if tmpl_tbl.entry().find(template_entry).is_none() {
             tmpl_tbl.insert(crate::gameobject::GameObjectTemplate {
                 entry: template_entry,
-                type_id: crate::gameobject::go_type::GATHER,
+                type_id: lyracore_shared::constants::go_type::GATHER,
                 display_id,
                 name: format!("Pool GO {template_entry}"),
                 data0,
@@ -819,9 +755,9 @@ pub fn debug_engage(
         swing_error: 0,
     };
     if melee.attacker_guid().find(attacker_guid).is_some() {
-        crate::combat::MeleeAttack::update(ctx, row);
+        crate::MeleeAttack::update(ctx, row);
     } else {
-        crate::combat::MeleeAttack::insert(ctx, row);
+        crate::MeleeAttack::insert(ctx, row);
     }
     let entities = ctx.db.game_world_entity();
     if let Some(mut e) = entities.guid().find(attacker_guid) {
@@ -1158,7 +1094,7 @@ pub fn debug_gossip_select(
     source_menu_id: u32,
     selected_action: u32,
 ) -> Result<(), String> {
-    crate::world::apply_gossip_select(
+    crate::gossip::apply_gossip_select(
         ctx,
         character_guid,
         npc_guid,
@@ -1195,7 +1131,7 @@ pub fn debug_creature_path(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let mover = crate::helpers::live_entity(ctx, guid)?;
-    crate::creatures::tick::emit_creature_path(ctx, mover, vec![(x, y, z)], run);
+    crate::creatures::leg::start_path(ctx, mover, vec![(x, y, z)], run);
     Ok(())
 }
 
@@ -1211,7 +1147,7 @@ pub fn debug_creature_waypoints(
     let points: Vec<_> = points.into_iter().map(|p| (p.x, p.y, p.z)).collect();
     let points = lyracore_shared::movement_path::wire_points(&points)
         .ok_or("creature path cannot be encoded")?;
-    crate::creatures::tick::emit_creature_path(ctx, mover, points, run);
+    crate::creatures::leg::start_path(ctx, mover, points, run);
     Ok(())
 }
 
@@ -1222,7 +1158,7 @@ pub fn debug_creature_face(ctx: &ReducerContext, guid: u64, x: f32, y: f32) -> R
         return Err("facing point is not finite".into());
     }
     let mut mover = crate::helpers::live_entity(ctx, guid)?;
-    crate::creatures::tick::stop_facing(ctx, &mut mover, (x, y));
+    crate::creatures::leg::stop_facing(ctx, &mut mover, (x, y));
     mover.update(ctx);
     Ok(())
 }
@@ -1265,21 +1201,29 @@ pub fn debug_skin_nearest(ctx: &ReducerContext, character_guid: u64) -> Result<(
     let looter = crate::helpers::live_entity(ctx, character_guid)
         .map_err(|_| format!("skinner {character_guid} not in world"))?;
     let corpse_guid = crate::helpers::nearest_entity(ctx, &looter, |e| {
-        e.dead && !e.is_player() && !e.skinned && crate::loot::entry_is_beast(ctx, e.entry)
+        e.dead && !e.is_player() && !e.skinned && crate::professions::entry_is_beast(ctx, e.entry)
     })
     .ok_or_else(|| "no skinnable beast corpse near".to_string())?
     .guid;
-    Ok(crate::loot::skin_corpse(ctx, character_guid, corpse_guid)?)
+    Ok(crate::professions::skin_corpse(
+        ctx,
+        character_guid,
+        corpse_guid,
+    )?)
 }
 
 #[reducer]
 pub fn debug_fish(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    Ok(crate::loot::apply_fish(ctx, character_guid)?)
+    Ok(crate::professions::apply_fish(ctx, character_guid)?)
 }
 
 #[reducer]
 pub fn debug_disenchant(ctx: &ReducerContext, character_guid: u64, slot: u8) -> Result<(), String> {
-    Ok(crate::loot::apply_disenchant(ctx, character_guid, slot)?)
+    Ok(crate::professions::apply_disenchant(
+        ctx,
+        character_guid,
+        slot,
+    )?)
 }
 
 #[reducer]
@@ -1289,7 +1233,7 @@ pub fn debug_enchant_item(
     target_slot: u8,
     enchant_id: u32,
 ) -> Result<(), String> {
-    Ok(crate::loot::apply_enchant_item(
+    Ok(crate::professions::apply_enchant_item(
         ctx,
         character_guid,
         target_slot,
@@ -1332,24 +1276,9 @@ pub fn debug_learn_spell(
 #[reducer]
 pub fn debug_set_xp_rate(ctx: &ReducerContext, rate: f32) -> Result<(), String> {
     let rate = rate.max(0.0);
-    let cfg = ctx.db.game_config();
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.xp_rate = rate;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: rate,
-                nav_enabled: false,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: false,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let mut c = crate::config::server_config(ctx);
+    c.xp_rate = rate;
+    crate::config::save_server_config(ctx, c);
     Ok(())
 }
 
@@ -1607,23 +1536,10 @@ pub fn debug_rearm_creature_tick(ctx: &ReducerContext, tick_ms: u64) -> Result<(
             "tick_ms {tick_ms} outside {INSTANCE_TICK_MS_FLOOR}..={INSTANCE_TICK_MS_CEIL}"
         ));
     }
-    let sched = ctx.db.game_creature_move_schedule();
-    let stale: Vec<u64> = sched
-        .iter()
-        .filter(|r| r.instance_id == crate::creatures::GLOBAL_TICK_INSTANCE)
-        .map(|r| r.scheduled_id)
-        .collect();
-    for id in stale {
-        sched.scheduled_id().delete(id);
-    }
-    sched.insert(CreatureMoveSchedule {
-        scheduled_id: 0,
-        scheduled_at: crate::time::schedule_interval(
-            ctx,
-            TimeDuration::from_micros(tick_ms as i64 * 1000),
-        ),
-        instance_id: crate::creatures::GLOBAL_TICK_INSTANCE,
-    });
+    crate::creatures::tick::arm_creature_tick(
+        ctx,
+        TimeDuration::from_micros(tick_ms as i64 * 1000),
+    );
     Ok(())
 }
 
@@ -1646,7 +1562,7 @@ pub fn debug_reassign_pending_casts(
 #[reducer]
 pub fn debug_verify_combat_regen(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
     let e = crate::helpers::live_entity(ctx, character_guid)?;
-    let pct = crate::spell::combat_health_regen_pct(ctx, character_guid);
+    let pct = crate::modifiers::combat_health_regen_pct(ctx, character_guid);
     let pct_u32 = pct.max(0) as u32;
     let would_heal =
         crate::combat::regen_health_in_combat(e.health, e.max_health, e.spirit, e.level, pct_u32);
@@ -1714,20 +1630,22 @@ pub fn debug_sweep_slice_lens(_ctx: &ReducerContext) -> Result<(), String> {
 
 #[reducer]
 pub fn debug_seed_scenario_fixtures(ctx: &ReducerContext) {
+    crate::seed::seed_curated_content(ctx);
     crate::seed::seed_scenario_fixtures(ctx);
-    crate::seed::seed_regen_fixture(ctx);
-    crate::seed::seed_pw_shield_fixture(ctx);
-    crate::seed::seed_stacking_probe_fixture(ctx);
     let quest = ctx
         .db
         .game_quest_template()
         .entry()
-        .find(50900u32)
+        .find(fixture_ids::SCENARIO_QUEST)
         .is_some() as u64;
-    let npcs = [51003u32, 51004, 51005]
-        .iter()
-        .filter(|e| ctx.db.game_creature_template().entry().find(**e).is_some())
-        .count() as u64;
+    let npcs = [
+        fixture_ids::SCENARIO_QUESTGIVER_ENTRY,
+        fixture_ids::SCENARIO_VENDOR_ENTRY,
+        fixture_ids::WEAPON_MASTER_ENTRY,
+    ]
+    .iter()
+    .filter(|e| ctx.db.game_creature_template().entry().find(**e).is_some())
+    .count() as u64;
     crate::import_meta::stamp(ctx, "debug_seed_scenario_fixtures", "", "", quest + npcs);
 }
 

@@ -1,10 +1,33 @@
 use lyracore_shared::mail::{QuestGiver, RewardHeader};
-use spacetimedb::{log, ReducerContext};
+use spacetimedb::{log, table, ReducerContext};
 
 use crate::game_item_template;
 use crate::items::ItemSnapshot;
-use crate::mail_catalogue::{game_mail_loot, game_mail_template, game_quest_reward_mail};
-use crate::mail_catalogue::{MailLoot, QuestRewardMail};
+
+#[table(accessor = game_mail_template)]
+pub struct MailTemplate {
+    #[primary_key]
+    pub id: u32,
+    pub body: String,
+}
+
+#[table(accessor = game_mail_loot)]
+pub struct MailLoot {
+    #[primary_key]
+    pub mail_template_id: u32,
+    pub item_entry: u32,
+    pub count: u32,
+}
+
+#[table(accessor = game_quest_reward_mail)]
+pub struct QuestRewardMail {
+    #[primary_key]
+    pub quest_entry: u32,
+    pub mail_template_id: u32,
+    pub delay_secs: u32,
+    pub sender_creature_entry: u32,
+    pub money: u32,
+}
 
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct RewardLetter {
@@ -114,24 +137,24 @@ pub(crate) fn file_reward_letter(
 mod fixture {
     use spacetimedb::{ReducerContext, Table};
 
+    use super::{game_mail_loot, game_mail_template, game_quest_reward_mail};
+    use super::{MailLoot, MailTemplate, QuestRewardMail};
     use crate::game_world_entity;
-    use crate::mail_catalogue::{game_mail_loot, game_mail_template, game_quest_reward_mail};
-    use crate::mail_catalogue::{MailLoot, MailTemplate, QuestRewardMail};
     use crate::quest::{
         game_character_quest, game_creature_quest, game_quest_template, quest_role, CharacterQuest,
         CreatureQuest, QuestTemplate,
     };
 
     const CHARACTER: u64 = 1;
-    const GIVER_SOURCE: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) | 1;
-    const GIVER: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) | 0x00FF_FF01;
     const GIVER_ENTRY: u32 = 620;
-    const CARD_QUEST: u32 = 509_091;
+    const GIVER_SOURCE: u64 = lyracore_shared::guid::creature(GIVER_ENTRY, 1);
+    const GIVER: u64 = lyracore_shared::guid::creature(GIVER_ENTRY, 0x00FF_FF01);
+    const CARD_QUEST: u32 = lyracore_package_delta::fixture_ids::REWARD_LETTER_CARD_QUEST;
     const CARD_TEMPLATE: u32 = 509_091;
-    const CARD_ITEM: u32 = crate::seed::FIXTURE_BLADE;
-    const ELDER_QUEST: u32 = 509_092;
+    const CARD_ITEM: u32 = lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
+    const ELDER_QUEST: u32 = lyracore_package_delta::fixture_ids::REWARD_LETTER_ELDER_QUEST;
     const ELDER_TEMPLATE: u32 = 509_092;
-    const PLAIN_QUEST: u32 = 509_093;
+    const PLAIN_QUEST: u32 = lyracore_package_delta::fixture_ids::REWARD_LETTER_PLAIN_QUEST;
 
     #[spacetimedb::reducer]
     pub fn debug_stage_reward_letter_fixture(ctx: &ReducerContext) -> Result<(), String> {
@@ -147,6 +170,7 @@ mod fixture {
             .ok_or_else(|| "reward letter fixture giver source is not live".to_string())?;
         crate::WorldEntity::delete(ctx, GIVER);
         giver.guid = GIVER;
+        giver.npc_flags |= lyracore_shared::constants::npc_flags::QUESTGIVER;
         giver.map_id = character.map_id;
         giver.instance_id = character.instance_id;
         giver

@@ -1,5 +1,8 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_shared::guid;
 use std::collections::BTreeMap;
 use support::{poll_until, Standalone, POLL_TIMEOUT};
 
@@ -46,7 +49,7 @@ fn copy_template(
 
 fn insert_spell(node: &Standalone, spell: u32, entry: u32, kind: u8) {
     node.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Binding fixture',0,0,50,0,180000,10,360000,1,0,0,0,0,0,1,0,false,0,0,0,0,0,0,0,0)"));
-    let id = u64::from(spell) << 2;
+    let id = packed_spell_effect_id(spell, 0);
     node.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({id},{spell},0,{kind},1,0,0.0,0,0,0.0,0,0,0,{entry},9,83,0,false,0.0)"));
 }
 
@@ -74,11 +77,10 @@ fn load_startup_rule(node: &Standalone, entry: u32, variant: u32) {
         "spawn:always"
     };
     let rules = format!("{entry},{event},100,4294967295,once,all,ordinary,any-posture,faction:14+attack-start:spawner~{},aggro,100,4294967295,repeat:0:0,all,ordinary,any-posture,phase-inc:7", entry + 100);
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(format!("{subject}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
-    let packed = serde_json::to_string(&format!("{subject}@{revision}@{rules}")).unwrap();
+    let packed = serde_json::to_string(&lyracore_shared::eventai::encode_definition(
+        &subject, &rules,
+    ))
+    .unwrap();
     node.assert_call("import_creature_ai_definitions", &[&packed]);
 }
 
@@ -202,13 +204,13 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
     copy_template(
         &node,
         "game_creature_template",
-        51000,
+        TEST_WOLF_ENTRY,
         GIVER,
         &[("faction_template", "35".into()), ("npc_flags", "2".into())],
     );
     node.assert_call("debug_spawn_at_feet", &[PLAYER, &GIVER.to_string(), "1"]);
     let giver = summoned(&node, GIVER).remove(0)["guid"].clone();
-    copy_template(&node, "game_creature_template", 51000, PET, &[]);
+    copy_template(&node, "game_creature_template", TEST_WOLF_ENTRY, PET, &[]);
     insert_spell(&node, 50_943, PET, 0x15);
     node.assert_call("debug_force_cast", &[PLAYER, "50943"]);
     let pet = summoned(&node, PET).remove(0);
@@ -233,7 +235,7 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
             "0",
         ],
     );
-    let focus_guid = ((0xF110_u64 << 48) | u64::from(FOCUS)).to_string();
+    let focus_guid = guid::compose(guid::GAMEOBJECT, u64::from(FOCUS)).to_string();
 
     for (variant, reward) in [(0u32, 50_944), (1, 50_945)] {
         let quest = 5_091_041 + variant;
@@ -243,7 +245,7 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
         copy_template(
             &node,
             "game_creature_template",
-            51000,
+            TEST_WOLF_ENTRY,
             creature,
             &[
                 (

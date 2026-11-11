@@ -1,4 +1,5 @@
 use super::*;
+use crate::{game_pending_cast, game_spell, PendingCast};
 use spacetimedb::{ReducerContext, ScheduleAt};
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,7 +171,6 @@ pub enum CastFinish {
     Expired,
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn cast_readiness(
     ctx: &ReducerContext,
     caster_guid: u64,
@@ -189,7 +189,7 @@ pub(crate) fn cast_readiness(
         .game_spell()
         .spell_id()
         .find(spell_id)
-        .is_some_and(|spell| spell.cast_flags & SPELL_ATTR_CHANNELED != 0)
+        .is_some_and(|spell| spell.cast_flags & CAST_FLAG_CHANNELED != 0)
     {
         return Err(CastRefusal::new(
             CastRefusalKind::UnsupportedChannel,
@@ -206,7 +206,6 @@ pub(crate) fn cast_readiness(
     .map_err(Into::into)
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn request_cast(
     ctx: &ReducerContext,
     caster_guid: u64,

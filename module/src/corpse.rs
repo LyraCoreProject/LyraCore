@@ -1,11 +1,10 @@
 use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
+use lyracore_shared::guid;
 use lyracore_shared::packing::unpack4;
 
-pub const HIGHGUID_CORPSE: u64 = 0xF101;
-
 pub(crate) fn corpse_guid_for(owner_guid: u64) -> u64 {
-    (HIGHGUID_CORPSE << 48) | (owner_guid & 0x0000_FFFF_FFFF_FFFF)
+    guid::compose(guid::CORPSE, guid::low(owner_guid))
 }
 
 const RECLAIM_RADIUS_SQ: f32 = 1521.0;
@@ -100,15 +99,9 @@ impl Corpse {
         self.cell = self.position_cell();
         let row = ctx.db.game_corpse().insert(self);
         #[cfg(feature = "conformance_test_fixture")]
-        crate::native::record_conformance_birth(
-            ctx,
-            row.guid,
-            row.map_id,
-            row.instance_id,
-            row.cell,
-        );
+        crate::native::debug::record_birth(ctx, row.guid, row.map_id, row.instance_id, row.cell);
         crate::aoi::corpse_changed(ctx, &row, true);
-        crate::native::corpse_created(ctx, &row);
+        crate::native::death::corpse_created(ctx, &row);
         row
     }
 
@@ -118,7 +111,7 @@ impl Corpse {
         let row = ctx.db.game_corpse().guid().update(self);
         crate::aoi::corpse_changed(ctx, &row, previous.is_none());
         if previous.is_some_and(|old| old.is_bones != row.is_bones) {
-            crate::native::corpse_changed(ctx, &row);
+            crate::native::death::corpse_changed(ctx, &row);
         }
         row
     }
@@ -126,7 +119,7 @@ impl Corpse {
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {
         if let Some(corpse) = ctx.db.game_corpse().guid().find(guid) {
             ctx.db.game_corpse().guid().delete(guid);
-            crate::native::corpse_removed(ctx, corpse.owner_guid);
+            crate::native::death::corpse_removed(ctx, corpse.owner_guid);
         }
         crate::aoi::remove_subject(ctx, crate::aoi::CORPSE, guid);
     }
@@ -208,20 +201,20 @@ pub(crate) fn sweep_corpse_decay(ctx: &ReducerContext) {
 #[cfg(test)]
 mod tests {
     use super::{
-        corpse_appearance_bytes, corpse_guid_for, escalated_reclaim, HIGHGUID_CORPSE,
-        MAX_STREAK_RUNGS, STREAK_RUNG_MICROS,
+        corpse_appearance_bytes, corpse_guid_for, escalated_reclaim, guid, MAX_STREAK_RUNGS,
+        STREAK_RUNG_MICROS,
     };
 
     #[test]
     fn corpse_guid_puts_highguid_in_the_top_16_and_keeps_the_owner_low_48() {
         assert_eq!(corpse_guid_for(42), 0xF101_0000_0000_002A);
-        assert_eq!(corpse_guid_for(42) >> 48, HIGHGUID_CORPSE);
+        assert_eq!(guid::high(corpse_guid_for(42)), guid::CORPSE);
         assert_eq!(corpse_guid_for(42) & 0x0000_FFFF_FFFF_FFFF, 42);
         let owner = (0xABCD_u64 << 48) | 7;
         assert_eq!(corpse_guid_for(owner), 0xF101_0000_0000_0007);
         assert_eq!(
             corpse_guid_for(0x0000_FFFF_FFFF_FFFF),
-            (HIGHGUID_CORPSE << 48) | 0x0000_FFFF_FFFF_FFFF
+            guid::compose(guid::CORPSE, guid::LOW_MASK)
         );
     }
 

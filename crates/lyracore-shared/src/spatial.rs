@@ -1,5 +1,5 @@
 // Cell indices count down from +MAP_COORD_MAX.
-pub const MAP_COORD_MAX: f32 = 17066.666;
+pub const MAP_COORD_MAX: f32 = 32.0 * crate::terrain::ADT_SIZE;
 
 // AOI cell side length in yards.
 pub const GRID_CELL_SIZE: f32 = 50.0;
@@ -49,102 +49,6 @@ pub fn covering_cell_box(x: f32, y: f32, radius: f32) -> (i32, i32, i32, i32) {
     (gx0, gx1, gy0, gy1)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Box2 {
-    pub map_id: u32,
-    pub x0: f32,
-    pub x1: f32,
-    pub y0: f32,
-    pub y1: f32,
-}
-
-impl Box2 {
-    pub fn around(map_id: u32, x: f32, y: f32, radius: f32) -> Self {
-        Self {
-            map_id,
-            x0: x - radius,
-            x1: x + radius,
-            y0: y - radius,
-            y1: y + radius,
-        }
-    }
-
-    pub fn contains(&self, map_id: u32, x: f32, y: f32) -> bool {
-        map_id == self.map_id && x >= self.x0 && x <= self.x1 && y >= self.y0 && y <= self.y1
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GridBox {
-    pub map_id: u32,
-    pub gx: i32,
-    pub gy: i32,
-}
-
-impl GridBox {
-    pub fn around(map_id: u32, x: f32, y: f32) -> Self {
-        let (gx, gy) = grid_cell(x, y);
-        Self { map_id, gx, gy }
-    }
-
-    pub fn bounds(&self) -> (i32, i32, i32, i32) {
-        (
-            self.gx - BOX_HALF_SPAN,
-            self.gx + BOX_HALF_SPAN,
-            self.gy - BOX_HALF_SPAN,
-            self.gy + BOX_HALF_SPAN,
-        )
-    }
-
-    pub fn cells(self) -> impl Iterator<Item = (i32, i32)> {
-        let (gx_min, gx_max, gy_min, gy_max) = self.bounds();
-        (gx_min..=gx_max).flat_map(move |gx| (gy_min..=gy_max).map(move |gy| (gx, gy)))
-    }
-
-    pub fn cell_ids(self) -> impl Iterator<Item = i64> {
-        self.cells().map(|(gx, gy)| grid_cell_id(gx, gy))
-    }
-
-    pub fn needs_recenter(&self, map_id: u32, x: f32, y: f32) -> bool {
-        if map_id != self.map_id {
-            return true;
-        }
-        let (gx, gy) = grid_cell(x, y);
-        gx != self.gx || gy != self.gy
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct GridRect {
-    pub map_id: u32,
-    pub gx_min: i32,
-    pub gx_max: i32,
-    pub gy_min: i32,
-    pub gy_max: i32,
-}
-
-impl GridRect {
-    pub fn from_box(b: &GridBox) -> Self {
-        let (gx_min, gx_max, gy_min, gy_max) = b.bounds();
-        Self {
-            map_id: b.map_id,
-            gx_min,
-            gx_max,
-            gy_min,
-            gy_max,
-        }
-    }
-
-    pub fn bounds(&self) -> (i32, i32, i32, i32) {
-        (self.gx_min, self.gx_max, self.gy_min, self.gy_max)
-    }
-
-    pub fn cell_ids(self) -> impl Iterator<Item = i64> {
-        (self.gx_min..=self.gx_max)
-            .flat_map(move |gx| (self.gy_min..=self.gy_max).map(move |gy| grid_cell_id(gx, gy)))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -158,57 +62,6 @@ mod tests {
         assert!(!near_cell(cell, edge - 1.0, -180.0, 0.0));
         assert!(near_cell(cell, edge - 9.0, -180.0, AOI_HYSTERESIS_YD));
         assert!(!near_cell(cell, edge - 11.0, -180.0, AOI_HYSTERESIS_YD));
-    }
-
-    #[test]
-    fn grid_box_bounds_and_recenter() {
-        let b = GridBox::around(0, -8949.95, -132.493);
-        let (xmin, xmax, ymin, ymax) = b.bounds();
-        assert_eq!(xmax - xmin, 2 * BOX_HALF_SPAN);
-        assert_eq!(ymax - ymin, 2 * BOX_HALF_SPAN);
-        assert_eq!((xmin + BOX_HALF_SPAN, ymin + BOX_HALF_SPAN), (b.gx, b.gy));
-        assert!(!b.needs_recenter(0, -8945.0, -130.0));
-        assert!(b.needs_recenter(1, -8949.95, -132.493));
-        assert!(b.needs_recenter(0, -8949.95 - 600.0, -132.493));
-    }
-
-    #[test]
-    fn northshire_abbey_falls_in_grid_cell_520_343() {
-        assert_eq!(grid_cell(-8949.95, -132.493), (520, 343));
-        let b = GridBox::around(0, -8949.95, -132.493);
-        assert_eq!(b.bounds(), (518, 522, 341, 345));
-        assert_eq!(GridRect::from_box(&b).bounds(), (518, 522, 341, 345));
-    }
-
-    #[test]
-    fn grid_box_cells_are_exactly_the_cells_bounds_accepts() {
-        let b = GridBox::around(0, -8949.95, -132.493);
-        let (x0, x1, y0, y1) = b.bounds();
-        let cells: Vec<(i32, i32)> = b.cells().collect();
-        let side = (2 * BOX_HALF_SPAN + 1) as usize;
-        assert_eq!(cells.len(), side * side, "the box is {side}×{side} cells");
-        let unique: std::collections::HashSet<(i32, i32)> = cells.iter().copied().collect();
-        assert_eq!(
-            unique.len(),
-            cells.len(),
-            "a repeated cell would double a peer's movement rows"
-        );
-        for gx in (x0 - 2)..=(x1 + 2) {
-            for gy in (y0 - 2)..=(y1 + 2) {
-                let inside = gx >= x0 && gx <= x1 && gy >= y0 && gy <= y1;
-                assert_eq!(unique.contains(&(gx, gy)), inside, "cell ({gx},{gy})");
-            }
-        }
-        let neg = GridBox {
-            map_id: 0,
-            gx: -3,
-            gy: -7,
-        };
-        assert_eq!(neg.cells().count(), side * side);
-        assert!(
-            neg.cells().any(|c| c == (neg.gx, neg.gy)),
-            "the anchor cell must be in its own box"
-        );
     }
 
     #[test]
@@ -275,47 +128,6 @@ mod tests {
                 (i64::from(gx) << 32) | i64::from(gy as u32)
             );
         }
-    }
-
-    #[test]
-    fn box_and_rect_cell_ids_are_exactly_the_packed_cells() {
-        let b = GridBox::around(0, -8949.95, -132.493);
-        let got: Vec<i64> = b.cell_ids().collect();
-        let side = (2 * BOX_HALF_SPAN + 1) as usize;
-        assert_eq!(got.len(), side * side);
-        assert_eq!(got[0], (518 << 32) | 341);
-        assert_eq!(got[1], (518 << 32) | 342);
-        assert_eq!(got[side], (519 << 32) | 341);
-        assert_eq!(got[side * side - 1], (522 << 32) | 345);
-        assert_eq!(
-            got.iter()
-                .copied()
-                .collect::<std::collections::HashSet<_>>()
-                .len(),
-            got.len(),
-            "a duplicate id inside one box would double-deliver a cell"
-        );
-        assert_eq!(
-            GridRect::from_box(&b).cell_ids().collect::<Vec<_>>(),
-            got,
-            "rect-of-a-whole-box must equal the box's own id sequence"
-        );
-        let neg = GridBox {
-            map_id: 0,
-            gx: -3,
-            gy: -7,
-        };
-        assert_eq!(neg.cell_ids().count(), side * side);
-        assert!(neg.cell_ids().any(|id| id == grid_cell_id(neg.gx, neg.gy)));
-    }
-
-    #[test]
-    fn box_contains_center_and_edges() {
-        let b = Box2::around(0, 100.0, 200.0, 10.0);
-        assert!(b.contains(0, 100.0, 200.0));
-        assert!(b.contains(0, 110.0, 210.0));
-        assert!(!b.contains(0, 111.0, 200.0));
-        assert!(!b.contains(1, 100.0, 200.0));
     }
 
     #[test]

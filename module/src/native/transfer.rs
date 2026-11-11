@@ -72,7 +72,6 @@ pub(super) fn begin(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn begin_character(
     ctx: &ReducerContext,
     connection: &NativeWorldConnection,
@@ -124,7 +123,7 @@ pub(super) fn begin_character(
     super::world::leave(
         ctx,
         connection.connection_id,
-        crate::world::CharacterDeparture::Transfer,
+        crate::character::CharacterDeparture::Transfer,
     );
     let mut character = crate::helpers::character_by_guid(ctx, guid)
         .ok_or("Character vanished during departure")?;
@@ -336,7 +335,6 @@ fn move_is_current(
 }
 
 #[reducer]
-#[allow(clippy::too_many_arguments)]
 pub fn idc_native_transfer_moved(
     ctx: &ReducerContext,
     world: Identity,
@@ -401,6 +399,7 @@ pub struct NativeTransferMovedRetry {
     pub scheduled_at: ScheduleAt,
     pub call: NativeTransferMoved,
 }
+crate::virtual_clock_exempt!(game_native_transfer_moved_retry);
 
 #[reducer]
 pub fn retry_native_transfer_moved(
@@ -427,6 +426,7 @@ pub struct NativeTransferReleaseRetry {
     pub scheduled_at: ScheduleAt,
     pub call: NativeTransferRelease,
 }
+crate::virtual_clock_exempt!(game_native_transfer_release_retry);
 
 #[reducer]
 pub fn retry_native_transfer_release(
@@ -458,6 +458,15 @@ pub struct NativeTransferRelease {
     pub connection: u128,
     pub connected: bool,
 }
+
+crate::outside_table_catalog!(
+    game_native_transfer_pending,
+    game_native_transfer,
+    game_native_transfer_moved,
+    game_native_transfer_moved_retry,
+    game_native_transfer_release_retry,
+    game_native_transfer_release
+);
 
 #[reducer(on_result(game_native_transfer_moved))]
 pub fn native_transfer_moved_answered(
@@ -540,7 +549,7 @@ pub fn idc_native_transfer_release(
 
 fn clear_pending_playtest(ctx: &ReducerContext, guid: u64) {
     if let Some(mut character) = crate::helpers::character_by_guid(ctx, guid) {
-        let (godmode, speed) = crate::world::persisted_gm_playtest(
+        let (godmode, speed) = crate::character::persisted_gm_playtest(
             character.pending_godmode,
             character.pending_run_speed_mult_bp,
             true,

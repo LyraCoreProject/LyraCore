@@ -11,7 +11,7 @@ use lyracore_shared::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::Rollback;
+use super::{Rollback, Unhandled};
 use crate::meeting_stone::{self, game_meeting_stone_seeker, SeekerFacts, StoneOpError};
 
 pub(super) fn receive(
@@ -19,10 +19,10 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    super::actor(ctx, guid)?;
+) -> Result<(), Unhandled> {
     let response = match message {
         ClientOpcodeMessage::CMSG_MEETINGSTONE_JOIN(request) => {
+            super::actor(ctx, guid)?;
             let area = meeting_stone::admit(ctx, guid, request.guid.guid())
                 .map_err(|refusal| Rollback::silent(refusal.as_tag()))?;
             if Area::try_from(area).is_err() {
@@ -32,7 +32,7 @@ pub(super) fn receive(
                 ctx,
                 connection,
                 guid,
-                0x292,
+                codec::CMSG_MEETINGSTONE_JOIN_OPCODE,
                 area.to_le_bytes().to_vec(),
             )? {
                 return Ok(());
@@ -60,7 +60,14 @@ pub(super) fn receive(
             return Ok(());
         }
         ClientOpcodeMessage::CMSG_MEETINGSTONE_LEAVE => {
-            if super::realm_party::submit_admitted(ctx, connection, guid, 0x293, Vec::new())? {
+            super::actor(ctx, guid)?;
+            if super::realm_party::submit_admitted(
+                ctx,
+                connection,
+                guid,
+                codec::CMSG_MEETINGSTONE_LEAVE_OPCODE,
+                Vec::new(),
+            )? {
                 return Ok(());
             }
             meeting_stone::leave(ctx, guid).map_err(|error| match error {
@@ -70,7 +77,14 @@ pub(super) fn receive(
             return Ok(());
         }
         ClientOpcodeMessage::CMSG_MEETINGSTONE_INFO => {
-            if super::realm_party::submit_admitted(ctx, connection, guid, 0x296, Vec::new())? {
+            super::actor(ctx, guid)?;
+            if super::realm_party::submit_admitted(
+                ctx,
+                connection,
+                guid,
+                codec::CMSG_MEETINGSTONE_INFO_OPCODE,
+                Vec::new(),
+            )? {
                 return Ok(());
             }
             let (area, status) = ctx
@@ -88,15 +102,21 @@ pub(super) fn receive(
             ServerOpcodeMessage::SMSG_MEETINGSTONE_SETQUEUE(packet)
         }
         ClientOpcodeMessage::MSG_LOOKING_FOR_GROUP => {
+            super::actor(ctx, guid)?;
             ServerOpcodeMessage::MSG_LOOKING_FOR_GROUP(codec::build_looking_for_group())
         }
-        _ => return Err("opcode is not a meeting stone request".into()),
+        other => return Err(Unhandled::Declined(other)),
     };
     Ok(super::send(ctx, connection, response, false)?)
 }
 
 pub(super) fn is_realm_request(opcode: u32) -> bool {
-    matches!(opcode, 0x292 | 0x293 | 0x296)
+    matches!(
+        opcode,
+        codec::CMSG_MEETINGSTONE_JOIN_OPCODE
+            | codec::CMSG_MEETINGSTONE_LEAVE_OPCODE
+            | codec::CMSG_MEETINGSTONE_INFO_OPCODE
+    )
 }
 
 // JOIN carries the World-admitted area as u32, not the client's GameObject guid.
@@ -109,7 +129,7 @@ pub(super) fn apply_realm(
     use super::directory::game_character_profile;
     use super::realm_party::game_party_character;
     match opcode {
-        0x292 => {
+        codec::CMSG_MEETINGSTONE_JOIN_OPCODE => {
             let area = u32::from_le_bytes(
                 body.try_into()
                     .map_err(|_| "invalid admitted Meeting Stone area")?,
@@ -152,11 +172,12 @@ pub(super) fn apply_realm(
                 .collect();
             meeting_stone::join(ctx, guid, area, &facts).map_err(join_error)
         }
-        0x293 if body.is_empty() => meeting_stone::leave(ctx, guid).map_err(|error| match error {
-            StoneOpError::Refused(refusal) => Rollback::silent(refusal.as_tag()),
-            StoneOpError::Invalid(cause) => Rollback::from(cause),
-        }),
-        0x296 if body.is_empty() => {
+        codec::CMSG_MEETINGSTONE_LEAVE_OPCODE if body.is_empty() => meeting_stone::leave(ctx, guid)
+            .map_err(|error| match error {
+                StoneOpError::Refused(refusal) => Rollback::silent(refusal.as_tag()),
+                StoneOpError::Invalid(cause) => Rollback::from(cause),
+            }),
+        codec::CMSG_MEETINGSTONE_INFO_OPCODE if body.is_empty() => {
             let (area, status) = ctx
                 .db
                 .game_meeting_stone_seeker()

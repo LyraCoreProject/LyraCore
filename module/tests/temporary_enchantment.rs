@@ -7,16 +7,16 @@ use lyracore_shared::spell::taxonomy::{
 
 use std::collections::BTreeMap;
 
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY, TEST_WOLF_ENTRY};
+use lyracore_package_delta::packed_spell_effect_id;
 use support::{event_rows, poll_until, Standalone, TableSubscription, POLL_TIMEOUT};
 
 type SqlRow = BTreeMap<String, String>;
 
 const PLAYER: u64 = 1;
 const MAINHAND: &str = "15";
-const TEST_WOLF_ENTRY: u32 = 51000;
 const WOLF_HEALTH: u32 = 100_000;
-const FIXTURE_BLADE: u32 = 5_090_050;
-const FIXTURE_CONSUMABLE: u32 = 5_090_052;
+const FIXTURE_CONSUMABLE: u32 = FIXTURE_JERKY;
 const POISON: u32 = 5_090_200;
 // Instant Poison: enchantment 323 casts 8680 and puts 40 charges on the weapon.
 const INSTANT_POISON_ENCHANTMENT: u32 = 323;
@@ -204,7 +204,7 @@ fn stage_spell(
          p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({}, {spell_id}, 0, {kind}, {base_points}, 0, 0.0, 0, {target}, \
          0.0, 0, 0, 0, {p0}, {p0_kind}, 0, 0, false, 0.0)",
-        u64::from(spell_id) << 2
+        packed_spell_effect_id(spell_id, 0)
     ));
 }
 

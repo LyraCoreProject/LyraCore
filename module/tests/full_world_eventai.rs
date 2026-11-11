@@ -1,10 +1,11 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_shared::guid;
 use std::time::{Duration, Instant};
 use support::{event_rows, poll_until, Standalone, POLL_TIMEOUT};
 
-const ENTRY: u32 = 51_000;
-const CREATURE: u64 = (0xF130_u64 << 48) | ((ENTRY as u64) << 24) | 1;
+const CREATURE: u64 = guid::creature(TEST_WOLF_ENTRY, 1);
 
 fn definition(enabled: bool) -> String {
     let rules = format!(
@@ -15,12 +16,7 @@ fn definition(enabled: bool) -> String {
 }
 
 fn packed_definition(rules: &str) -> String {
-    let subject = format!("entry:{ENTRY}");
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(format!("{subject}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
-    format!("{subject}@{revision}@{rules}")
+    lyracore_shared::eventai::encode_definition(&format!("entry:{TEST_WOLF_ENTRY}"), rules)
 }
 
 #[test]
@@ -146,20 +142,18 @@ fn instance_copies_inherit_the_source_guid_spawn_rule() {
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
-    let source = (0xF130u64 << 48) | (u64::from(ENTRY) << 24) | 1_000_036;
+    let source = guid::creature(TEST_WOLF_ENTRY, 1_000_036);
     let subject = format!("guid:{source}");
     let rules = "900002,spawn:always,100,4294967295,once,all,ordinary,any-posture,sheath:2";
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(format!("{subject}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
     shard.assert_call(
         "import_creature_ai_definitions",
-        &[&format!("{subject}@{revision}@{rules}")],
+        &[&lyracore_shared::eventai::encode_definition(
+            &subject, rules,
+        )],
     );
     shard.assert_call(
         "import_creature_spawns",
-        &[&format!("{source},{ENTRY},36,10,20,30,0,0,300")],
+        &[&format!("{source},{TEST_WOLF_ENTRY},36,10,20,30,0,0,300")],
     );
     for instance in [901, 902] {
         shard.assert_call(

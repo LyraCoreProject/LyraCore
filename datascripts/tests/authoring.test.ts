@@ -96,13 +96,13 @@ test("a clone reads the source's values and an assignment overwrites just that c
 
 test("an inserted spell outside the Package Spell Range is refused", () => {
   expect(refusalKind(() => registry().spell(BOLT).clone(200_000))).toBe(
-    "SpellIdNotClientSafe",
+    "IdOutsidePackageRange",
   );
 });
 
 test("a fixture-reserved spell is refused even though the base data holds it", () => {
   expect(refusalKind(() => registry().spell(FIXTURE_SPELL))).toBe(
-    "SpellIdFixtureReserved",
+    "IdFixtureReserved",
   );
 });
 

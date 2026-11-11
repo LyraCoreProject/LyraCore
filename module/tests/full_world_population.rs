@@ -2,11 +2,13 @@ mod support;
 
 use std::time::Duration;
 
+use lyracore_package_delta::fixture_ids::{PROFESSION_TRAINER_ENTRY, TEST_WOLF_ENTRY};
+use lyracore_shared::guid;
 use lyracore_shared::instance::{BATTLEGROUND_MAPS, DUNGEON_MAPS};
 use support::{actor, poll_until, Standalone};
 
 fn source_guid(map_id: u32) -> u64 {
-    (0xF130u64 << 48) | (51000u64 << 24) | (1_000_000 + u64::from(map_id))
+    guid::creature(TEST_WOLF_ENTRY, 1_000_000 + map_id)
 }
 
 #[test]
@@ -22,8 +24,8 @@ fn legacy_pools_choose_one_position_and_keep_instance_lives_independent() {
         shard.assert_sql(&format!("INSERT INTO game_creature_population (population_id,max_count,world_state_condition,world_state_expression,flags,entries,is_pool) VALUES ({population},1,0,0,0,'',true)"));
         for index in 0..count {
             let guid = (0xF130u64 << 48) | (51000u64 << 24) | (pool * 100 + index);
-            shard.assert_sql(&format!("INSERT INTO game_creature_population_member (source_guid,population_id,entry,choices,chance_bp,event_ids) VALUES ({guid},{population},51000,'',0,'{event}')"));
-            packed.push(format!("{guid},51000,{map},10,20,30,0,0,1"));
+            shard.assert_sql(&format!("INSERT INTO game_creature_population_member (source_guid,population_id,entry,choices,chance_bp,event_ids) VALUES ({guid},{population},{TEST_WOLF_ENTRY},'',0,'{event}')"));
+            packed.push(format!("{guid},{TEST_WOLF_ENTRY},{map},10,20,30,0,0,1"));
         }
     }
     shard.assert_call("import_creature_spawns", &[&packed.join(";")]);
@@ -34,7 +36,9 @@ fn legacy_pools_choose_one_position_and_keep_instance_lives_independent() {
         15
     );
     assert!(poll_until(Duration::from_secs(10), || shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
         .len()
         == 1));
     let mut copies = Vec::new();
@@ -97,7 +101,12 @@ fn all_dungeon_populations_have_independent_spawn_and_patrol_lifecycles() {
         .collect();
     let packed = maps
         .iter()
-        .map(|&map_id| format!("{},51000,{map_id},10,20,30,0,2,1", source_guid(map_id)))
+        .map(|&map_id| {
+            format!(
+                "{},{TEST_WOLF_ENTRY},{map_id},10,20,30,0,2,1",
+                source_guid(map_id)
+            )
+        })
         .collect::<Vec<_>>()
         .join(";");
     shard.assert_call(
@@ -115,7 +124,9 @@ fn all_dungeon_populations_have_independent_spawn_and_patrol_lifecycles() {
     assert_eq!(imported_maps, expected_maps);
     assert!(poll_until(Duration::from_secs(10), || {
         shard
-            .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+            .query_rows(&format!(
+                "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+            ))
             .len()
             == 5
     }));
@@ -228,11 +239,12 @@ fn a_selected_world_entry_keeps_its_source_and_uses_its_own_guid_and_patrol() {
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     let source = source_guid(0);
-    let selected = (source & !(0xFF_FFFFu64 << 24)) | (51001u64 << 24);
+    let selected = guid::creature(PROFESSION_TRAINER_ENTRY, guid::creature_spawn_id(source));
     shard.assert_sql("INSERT INTO game_creature_population (population_id,max_count,world_state_condition,world_state_expression,flags,entries,is_pool) VALUES (5099000,1,0,0,0,'',false)");
-    shard.assert_sql(&format!("INSERT INTO game_creature_population_member (source_guid,population_id,entry,choices,chance_bp,event_ids) VALUES ({source},5099000,0,'51001',0,'')"));
+    shard.assert_sql(&format!("INSERT INTO game_creature_population_member (source_guid,population_id,entry,choices,chance_bp,event_ids) VALUES ({source},5099000,0,'{PROFESSION_TRAINER_ENTRY}',0,'')"));
     shard.assert_sql(&format!("INSERT INTO game_creature_waypoint (id,creature_guid,x,y,z) VALUES (5099000,{source},11,20,30)"));
-    let packed = serde_json::to_string(&format!("{source},51000,0,10,20,30,0,2,1")).unwrap();
+    let packed =
+        serde_json::to_string(&format!("{source},{TEST_WOLF_ENTRY},0,10,20,30,0,2,1")).unwrap();
     for _ in 0..2 {
         shard.assert_call("import_creature_spawns", &[&packed]);
         assert!(poll_until(Duration::from_secs(10), || {
@@ -250,7 +262,7 @@ fn a_selected_world_entry_keeps_its_source_and_uses_its_own_guid_and_patrol() {
         let rows = shard.query_rows(&format!(
             "SELECT entry,source_guid FROM game_creature_spawn WHERE guid = {selected}"
         ));
-        assert_eq!(rows[0]["entry"], "51001");
+        assert_eq!(rows[0]["entry"], PROFESSION_TRAINER_ENTRY.to_string());
         assert_eq!(rows[0]["source_guid"], source.to_string());
         assert_eq!(
             shard
@@ -277,8 +289,11 @@ fn a_selected_world_entry_keeps_its_source_and_uses_its_own_guid_and_patrol() {
             1
         );
     }
-    let extra =
-        serde_json::to_string(&format!("{},51000,533,10,20,30,0,0,1", source_guid(533))).unwrap();
+    let extra = serde_json::to_string(&format!(
+        "{},{TEST_WOLF_ENTRY},533,10,20,30,0,0,1",
+        source_guid(533)
+    ))
+    .unwrap();
     shard.assert_call("import_creature_spawns_append", &[&extra]);
     let mut maps: Vec<u32> = shard
         .query_rows("SELECT map_id FROM game_creature_spawn_map")

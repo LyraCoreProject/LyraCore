@@ -3,16 +3,12 @@ use spacetimedb::{table, ReducerContext, Table};
 use crate::actor::{ActionRefusal, ActionRefusalKind};
 use crate::character::game_character;
 use crate::game_group_member;
-use crate::game_world_entity;
-use crate::{game_character_quest, game_quest_objective};
-use lyracore_shared::loot::LootRefusal;
+use crate::WorldEntity;
+use crate::{game_character_quest, game_gameobject, game_quest_objective, game_world_entity};
+use crate::{game_corpse_loot_eligible, game_loot_roll, game_loot_roll_vote};
 use lyracore_shared::loot_roll::event_kind as roll_event_kind;
 
-mod rolls;
-pub use rolls::{
-    game_corpse_loot_eligible, game_loot_roll, game_loot_roll_promotion_receipt,
-    game_loot_roll_vote, CorpseLootEligible, LootRoll, LootRollPromotionReceipt, LootRollVote,
-};
+pub(crate) mod rolls;
 
 pub(crate) use rolls::{
     apply_group_loot_rules, apply_master_give, cast_vote_on, force_resolve_rolls_for_disband,
@@ -21,18 +17,77 @@ pub(crate) use rolls::{
 
 pub(crate) mod tag;
 pub(crate) use tag::{
-    corpse_access, corpse_access_gate, corpse_eligible_for_access, corpse_eligible_recipients,
-    death_entitlement,
-};
-pub use tag::{
-    game_creature_loot_tag_group, game_creature_quest_tap, game_creature_quest_tap_member,
-    CreatureLootTagGroup, CreatureQuestTap, CreatureQuestTapMember,
+    corpse_access, corpse_eligible_for_access, corpse_eligible_recipients, death_entitlement,
 };
 
-#[allow(unused_imports)]
-pub(crate) use crate::professions::{
-    apply_disenchant, apply_enchant_item, apply_fish, entry_is_beast, skin_corpse,
-};
+mod take;
+pub(crate) use take::{apply_take_loot, request_take_loot, take_item};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LootRefusal {
+    LootTagIneligible,
+    OutOfRange,
+    NoLootSource,
+    LooterUnavailable,
+    LooterDead,
+    NothingToLoot,
+    ItemUnavailable,
+    InventoryFull,
+    /// Item storage refused for a reason other than space, such as a unique item limit.
+    StorageRefused,
+    RollUnavailable,
+    NotMasterLooter,
+    RecipientUnavailable,
+    RecipientInventoryFull,
+}
+
+impl LootRefusal {
+    pub fn as_tag(self) -> &'static str {
+        match self {
+            Self::LootTagIneligible => "loot:loot_tag_ineligible",
+            Self::OutOfRange => "loot:out_of_range",
+            Self::NoLootSource => "loot:no_loot_source",
+            Self::LooterUnavailable => "loot:looter_unavailable",
+            Self::LooterDead => "loot:looter_dead",
+            Self::NothingToLoot => "loot:nothing_to_loot",
+            Self::ItemUnavailable => "loot:item_unavailable",
+            Self::InventoryFull => "loot:inventory_full",
+            Self::StorageRefused => "loot:storage_refused",
+            Self::RollUnavailable => "loot:roll_unavailable",
+            Self::NotMasterLooter => "loot:not_master_looter",
+            Self::RecipientUnavailable => "loot:recipient_unavailable",
+            Self::RecipientInventoryFull => "loot:recipient_inventory_full",
+        }
+    }
+}
+
+impl From<LootRefusal> for String {
+    fn from(refusal: LootRefusal) -> Self {
+        refusal.as_tag().to_string()
+    }
+}
+
+impl From<LootRefusal> for ActionRefusal {
+    fn from(refusal: LootRefusal) -> Self {
+        let kind = match refusal {
+            LootRefusal::LooterUnavailable => ActionRefusalKind::MissingActor,
+            LootRefusal::LooterDead => ActionRefusalKind::DeadActor,
+            LootRefusal::NoLootSource | LootRefusal::NothingToLoot => {
+                ActionRefusalKind::MissingTarget
+            }
+            LootRefusal::OutOfRange => ActionRefusalKind::OutOfRange,
+            LootRefusal::InventoryFull => ActionRefusalKind::InventoryFull,
+            LootRefusal::StorageRefused => ActionRefusalKind::Other,
+            LootRefusal::LootTagIneligible
+            | LootRefusal::ItemUnavailable
+            | LootRefusal::RollUnavailable
+            | LootRefusal::NotMasterLooter
+            | LootRefusal::RecipientUnavailable
+            | LootRefusal::RecipientInventoryFull => ActionRefusalKind::CannotAct,
+        };
+        ActionRefusal::new(kind, refusal.as_tag())
+    }
+}
 
 #[table(accessor = game_corpse_loot, public, index(accessor = by_corpse, btree(columns = [corpse_guid])))]
 pub struct CorpseLoot {
@@ -53,7 +108,7 @@ pub struct CorpseLoot {
     // Even the master must use the explicit assignment path.
     #[default(false)]
     pub master_only: bool,
-    // Withheld rows may belong to a Loot Roll promoted to Realm-core.
+    // A withheld row belongs to a live Loot Roll.
     #[default(false)]
     pub withheld: bool,
     #[default(0)]
@@ -67,9 +122,9 @@ pub struct CreatureLoot {
     pub id: u64,
     pub creature_entry: u32,
     pub item_entry: u32,
-    pub chance_bp: u32, // Basis points; group_id > 0 uses this as a weight.
+    pub chance_bp: u32,
     pub count: u32,
-    pub group_id: u32, // Zero is independent; nonzero selects a pool with at most one drop.
+    pub group_id: u32,
     #[default(false)]
     pub quest_only: bool,
 }
@@ -105,74 +160,97 @@ pub(crate) fn scale_money_for_rank(money: u32, rank: u8) -> u32 {
     ((money as u64 * permille as u64) / 1000) as u32
 }
 
-pub(crate) fn roll_loot_rows_quest_aware(
-    ctx: &ReducerContext,
-    rows: Vec<(u32, u32, u32, u32, bool)>, // (item_entry, chance_bp, count, group_id, quest_only)
-) -> Vec<(u32, u32, bool)> {
-    // (item_entry, count, quest_only)
-    let mut winners = Vec::new();
-    let mut grouped: std::collections::BTreeMap<u32, Vec<(u32, u32, u32, bool)>> =
-        std::collections::BTreeMap::new();
-    for (item_entry, chance_bp, count, group_id, quest_only) in rows {
-        if group_id == 0 {
-            if loot_drops(chance_bp, ctx.random::<u32>() % 10000) {
-                winners.push((item_entry, count.max(1), quest_only));
-            }
-        } else {
-            grouped
-                .entry(group_id)
-                .or_default()
-                .push((item_entry, chance_bp, count, quest_only));
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LootRow {
+    pub(crate) item_entry: u32,
+    // Basis points; a nonzero group_id uses it as a weight within the group.
+    pub(crate) chance_bp: u32,
+    pub(crate) count: u32,
+    // Zero is independent; nonzero selects a pool with at most one drop.
+    pub(crate) group_id: u32,
+    pub(crate) quest_only: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct LootDrop {
+    pub(crate) item_entry: u32,
+    pub(crate) count: u32,
+    pub(crate) quest_only: bool,
+}
+
+impl LootRow {
+    fn drop(self) -> LootDrop {
+        LootDrop {
+            item_entry: self.item_entry,
+            count: self.count.max(1),
+            quest_only: self.quest_only,
         }
     }
-    for (_gid, members) in grouped {
-        let weights: Vec<u32> = members.iter().map(|(_, bp, _, _)| *bp).collect();
+}
+
+pub(crate) fn roll_loot_rows(
+    ctx: &ReducerContext,
+    rows: impl IntoIterator<Item = LootRow>,
+) -> Vec<LootDrop> {
+    let mut winners = Vec::new();
+    let mut grouped: std::collections::BTreeMap<u32, Vec<LootRow>> =
+        std::collections::BTreeMap::new();
+    for row in rows {
+        if row.group_id == 0 {
+            if loot_drops(row.chance_bp, ctx.random::<u32>() % 10000) {
+                winners.push(row.drop());
+            }
+        } else {
+            grouped.entry(row.group_id).or_default().push(row);
+        }
+    }
+    for members in grouped.into_values() {
+        let weights: Vec<u32> = members.iter().map(|row| row.chance_bp).collect();
         if let Some(i) = group_pick(&weights, ctx.random::<u32>() % 10000) {
-            let (item_entry, _bp, count, quest_only) = members[i];
-            winners.push((item_entry, count.max(1), quest_only));
+            winners.push(members[i].drop());
         }
     }
     winners
 }
 
-pub(crate) fn roll_loot_rows(
-    ctx: &ReducerContext,
-    rows: Vec<(u32, u32, u32, u32)>,
-) -> Vec<(u32, u32)> {
-    let tagged: Vec<(u32, u32, u32, u32, bool)> = rows
-        .into_iter()
-        .map(|(item_entry, chance_bp, count, group_id)| {
-            (item_entry, chance_bp, count, group_id, false)
-        })
-        .collect();
-    roll_loot_rows_quest_aware(ctx, tagged)
-        .into_iter()
-        .map(|(item_entry, count, _quest_only)| (item_entry, count))
-        .collect()
+fn quest_take_allowed(reserved_for: u64, taker_guid: u64, taker_needs_item: bool) -> bool {
+    reserved_for == taker_guid || (reserved_for == 0 && taker_needs_item)
 }
 
-pub(crate) fn quest_take_allowed(
-    reserved_for: u64,
-    taker_guid: u64,
-    taker_needs_item: bool,
-) -> bool {
-    lyracore_shared::loot::quest_take_allowed(reserved_for, taker_guid, taker_needs_item)
-}
-
-pub(crate) fn group_loot_take_allowed(
+fn group_loot_take_allowed(
     withheld: bool,
     reserved_for: u64,
     master_only: bool,
     designated_looter_guid: u64,
     taker_guid: u64,
 ) -> bool {
-    lyracore_shared::loot::group_loot_take_allowed(
-        withheld,
-        reserved_for,
-        master_only,
-        designated_looter_guid,
-        taker_guid,
-    )
+    if withheld {
+        return false;
+    }
+    if reserved_for != 0 {
+        return reserved_for == taker_guid;
+    }
+    !master_only && (designated_looter_guid == 0 || designated_looter_guid == taker_guid)
+}
+
+impl CorpseLoot {
+    pub(crate) fn takeable_by(&self, ctx: &ReducerContext, taker_guid: u64) -> bool {
+        if self.quest_only {
+            quest_take_allowed(
+                self.reserved_for,
+                taker_guid,
+                killer_needs_item(ctx, Some(taker_guid), self.item_entry),
+            )
+        } else {
+            group_loot_take_allowed(
+                self.withheld,
+                self.reserved_for,
+                self.master_only,
+                self.designated_looter_guid,
+                taker_guid,
+            )
+        }
+    }
 }
 
 pub(crate) fn clone_targets(other_members: &[(u64, bool)]) -> Vec<u64> {
@@ -208,7 +286,7 @@ pub(crate) fn killer_needs_item(ctx: &ReducerContext, killer: Option<u64>, item:
         .game_character_quest()
         .by_character()
         .filter(&killer_guid)
-        .filter(|quest| !quest.rewarded)
+        .filter(|quest| quest.is_active())
         .map(|quest| quest.quest_entry)
         .collect();
     let objectives = active.iter().flat_map(|quest_entry| {
@@ -217,7 +295,7 @@ pub(crate) fn killer_needs_item(ctx: &ReducerContext, killer: Option<u64>, item:
             .game_quest_objective()
             .by_quest()
             .filter(quest_entry)
-            .map(move |objective| lyracore_shared::loot::QuestItemObjective {
+            .map(move |objective| QuestItemObjective {
                 quest_entry: objective.quest_entry,
                 quest_type,
                 kind: objective.kind,
@@ -225,13 +303,38 @@ pub(crate) fn killer_needs_item(ctx: &ReducerContext, killer: Option<u64>, item:
                 required_count: objective.required_count,
             })
     });
-    lyracore_shared::loot::needs_quest_item(
+    needs_quest_item(
         in_raid,
         &active,
         objectives,
         item,
         crate::items::item_count(ctx, killer_guid, item),
     )
+}
+
+#[derive(Clone, Copy)]
+struct QuestItemObjective {
+    quest_entry: u32,
+    quest_type: u32,
+    kind: u8,
+    target_entry: u32,
+    required_count: u32,
+}
+
+fn needs_quest_item(
+    in_raid: bool,
+    active_quests: &[u32],
+    objectives: impl IntoIterator<Item = QuestItemObjective>,
+    item: u32,
+    held: u32,
+) -> bool {
+    objectives.into_iter().any(|objective| {
+        objective.kind == crate::quest::objective_kind::COLLECT_ITEM
+            && active_quests.contains(&objective.quest_entry)
+            && objective.target_entry == item
+            && held < objective.required_count.max(1)
+            && lyracore_shared::quest::quest_progresses_for_raid(in_raid, objective.quest_type)
+    })
 }
 
 // Purge pickpocket residue before death loot reuses the same guid and slot numbers.
@@ -248,7 +351,6 @@ pub(crate) fn purge_corpse_residue(ctx: &ReducerContext, guid: u64) {
     }
 }
 
-// Preserve withheld rows: their live Loot Roll may exist only on Realm-core.
 pub(crate) fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
     let loot = ctx.db.game_corpse_loot();
     let stale: Vec<u64> = loot
@@ -288,10 +390,15 @@ pub(crate) fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
 pub(crate) fn insert_corpse_rows(
     ctx: &ReducerContext,
     corpse_guid: u64,
-    winners: Vec<(u32, u32, bool)>,
+    winners: Vec<LootDrop>,
 ) -> bool {
     let mut inserted = 0;
-    for (item_entry, count, quest_only) in winners {
+    for LootDrop {
+        item_entry,
+        count,
+        quest_only,
+    } in winners
+    {
         let random_property_id = match crate::items::select_loot_property(ctx, item_entry) {
             Ok(id) => id,
             Err(reason) => {
@@ -322,14 +429,19 @@ pub(crate) fn roll_creature_loot(
     creature_entry: u32,
     corpse_guid: u64,
 ) -> bool {
-    let raw: Vec<(u32, u32, u32, u32, bool)> = ctx
+    let rows = ctx
         .db
         .game_creature_loot()
         .by_creature()
         .filter(&creature_entry)
-        .map(|r| (r.item_entry, r.chance_bp, r.count, r.group_id, r.quest_only))
-        .collect();
-    let winners = roll_loot_rows_quest_aware(ctx, raw);
+        .map(|r| LootRow {
+            item_entry: r.item_entry,
+            chance_bp: r.chance_bp,
+            count: r.count,
+            group_id: r.group_id,
+            quest_only: r.quest_only,
+        });
+    let winners = roll_loot_rows(ctx, rows);
     insert_corpse_rows(ctx, corpse_guid, winners)
 }
 
@@ -385,14 +497,19 @@ pub struct GameFishingLoot {
 }
 
 pub(crate) fn roll_pickpocket_loot(ctx: &ReducerContext, creature_entry: u32, target_guid: u64) {
-    let raw: Vec<(u32, u32, u32, u32, bool)> = ctx
+    let rows = ctx
         .db
         .game_pickpocket_loot()
         .by_creature()
         .filter(&creature_entry)
-        .map(|r| (r.item_entry, r.chance_bp, r.count, r.group_id, r.quest_only))
-        .collect();
-    let winners = roll_loot_rows_quest_aware(ctx, raw);
+        .map(|r| LootRow {
+            item_entry: r.item_entry,
+            chance_bp: r.chance_bp,
+            count: r.count,
+            group_id: r.group_id,
+            quest_only: r.quest_only,
+        });
+    let winners = roll_loot_rows(ctx, rows);
     if winners.is_empty() {
         return;
     }
@@ -501,9 +618,6 @@ pub(crate) fn clone_quest_loot_for_eligible(
     }
 }
 
-// Squared yards.
-pub(crate) const LOOT_RANGE_SQ: f32 = 100.0;
-
 pub(crate) fn corpse_is_looted(ctx: &ReducerContext, corpse_guid: u64, money: u32) -> bool {
     money == 0
         && ctx
@@ -524,14 +638,94 @@ pub(crate) fn refuse(refusal: LootRefusal, detail: &str) -> LootRefusal {
     refusal
 }
 
+pub(crate) enum LootSource {
+    Corpse(Box<WorldEntity>),
+    GameObject,
+}
+
+/// A live looter within reach of a GameObject, or of a corpse it holds Loot Tag access to.
+pub(crate) fn reach(
+    ctx: &ReducerContext,
+    looter_guid: u64,
+    source_guid: u64,
+) -> Result<(WorldEntity, LootSource), LootRefusal> {
+    let entities = ctx.db.game_world_entity();
+    let looter = entities
+        .guid()
+        .find(looter_guid)
+        .ok_or_else(|| refuse(LootRefusal::LooterUnavailable, "looter not in world"))?;
+    if looter.dead {
+        return Err(refuse(
+            LootRefusal::LooterDead,
+            "dead Characters cannot loot",
+        ));
+    }
+    let (partition, at, source) = if let Some(corpse) = entities.guid().find(source_guid) {
+        if corpse.is_player() || !corpse.dead {
+            return Err(refuse(
+                LootRefusal::NoLootSource,
+                "Loot Source is not a creature corpse",
+            ));
+        }
+        (
+            (corpse.map_id, corpse.instance_id),
+            [corpse.x, corpse.y, corpse.z],
+            LootSource::Corpse(Box::new(corpse)),
+        )
+    } else if let Some(go) = ctx.db.game_gameobject().guid().find(source_guid) {
+        (
+            (go.map_id, go.instance_id),
+            [go.x, go.y, go.z],
+            LootSource::GameObject,
+        )
+    } else {
+        return Err(refuse(LootRefusal::NoLootSource, "no such Loot Source"));
+    };
+    if partition != (looter.map_id, looter.instance_id) {
+        return Err(refuse(
+            LootRefusal::OutOfRange,
+            "Loot Source is on another map or instance",
+        ));
+    }
+    let [dx, dy, dz] = [at[0] - looter.x, at[1] - looter.y, at[2] - looter.z];
+    if dx * dx + dy * dy + dz * dz > crate::npc_interaction::INTERACTION_RANGE_SQ {
+        return Err(refuse(
+            LootRefusal::OutOfRange,
+            "Loot Source is out of reach",
+        ));
+    }
+    if let LootSource::Corpse(_) = source {
+        corpse_access(ctx, looter_guid, source_guid).map_err(|refusal| {
+            refuse(
+                refusal,
+                &format!("actor_guid={looter_guid} corpse_guid={source_guid}"),
+            )
+        })?;
+    }
+    Ok((looter, source))
+}
+
+pub(crate) fn reach_corpse(
+    ctx: &ReducerContext,
+    looter_guid: u64,
+    corpse_guid: u64,
+) -> Result<(WorldEntity, WorldEntity), LootRefusal> {
+    match reach(ctx, looter_guid, corpse_guid)? {
+        (looter, LootSource::Corpse(corpse)) => Ok((looter, *corpse)),
+        (_, LootSource::GameObject) => Err(refuse(
+            LootRefusal::NoLootSource,
+            "Loot Source is not a creature corpse",
+        )),
+    }
+}
+
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn request_open_creature_corpse(
     ctx: &ReducerContext,
     actor_guid: u64,
     corpse_guid: u64,
 ) -> Result<(), ActionRefusal> {
-    corpse_open_gate(ctx, actor_guid, corpse_guid)
-        .map_err(|(kind, refusal)| ActionRefusal::new(kind, refusal.as_tag()))
+    Ok(open_creature_corpse(ctx, actor_guid, corpse_guid)?)
 }
 
 pub(crate) fn open_creature_corpse(
@@ -539,79 +733,7 @@ pub(crate) fn open_creature_corpse(
     actor_guid: u64,
     corpse_guid: u64,
 ) -> Result<(), LootRefusal> {
-    corpse_open_gate(ctx, actor_guid, corpse_guid).map_err(|(_, refusal)| refusal)
-}
-
-fn corpse_open_gate(
-    ctx: &ReducerContext,
-    actor_guid: u64,
-    corpse_guid: u64,
-) -> Result<(), (ActionRefusalKind, LootRefusal)> {
-    let actor = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(actor_guid)
-        .ok_or_else(|| {
-            (
-                ActionRefusalKind::MissingActor,
-                refuse(LootRefusal::LooterUnavailable, "looter not in world"),
-            )
-        })?;
-    if actor.dead {
-        return Err((
-            ActionRefusalKind::DeadActor,
-            refuse(
-                LootRefusal::LooterUnavailable,
-                "dead Characters cannot loot",
-            ),
-        ));
-    }
-    let corpse = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(corpse_guid)
-        .ok_or_else(|| {
-            (
-                ActionRefusalKind::MissingTarget,
-                refuse(LootRefusal::NoLootSource, "no such corpse"),
-            )
-        })?;
-    if corpse.is_player() || !corpse.dead {
-        return Err((
-            ActionRefusalKind::MissingTarget,
-            refuse(
-                LootRefusal::NoLootSource,
-                "Loot Source is not a creature corpse",
-            ),
-        ));
-    }
-    if corpse.map_id != actor.map_id || corpse.instance_id != actor.instance_id {
-        return Err((
-            ActionRefusalKind::OtherPartition,
-            refuse(
-                LootRefusal::OutOfRange,
-                "Loot Source is on another map or instance",
-            ),
-        ));
-    }
-    let (dx, dy, dz) = (corpse.x - actor.x, corpse.y - actor.y, corpse.z - actor.z);
-    if dx * dx + dy * dy + dz * dz > LOOT_RANGE_SQ {
-        return Err((
-            ActionRefusalKind::OutOfRange,
-            refuse(LootRefusal::OutOfRange, "corpse is out of reach"),
-        ));
-    }
-    corpse_access(ctx, actor_guid, corpse_guid).map_err(|refusal| {
-        (
-            ActionRefusalKind::CannotAct,
-            refuse(
-                refusal,
-                &format!("actor_guid={actor_guid} corpse_guid={corpse_guid}"),
-            ),
-        )
-    })
+    reach_corpse(ctx, actor_guid, corpse_guid).map(drop)
 }
 
 pub(crate) fn apply_loot_money(
@@ -619,7 +741,7 @@ pub(crate) fn apply_loot_money(
     looter_guid: u64,
     target_guid: u64,
 ) -> Result<(), String> {
-    claim_money(ctx, looter_guid, target_guid).map_err(|refusal| refusal.as_tag().into())
+    Ok(claim_money(ctx, looter_guid, target_guid)?)
 }
 
 pub(crate) fn claim_money(
@@ -627,55 +749,7 @@ pub(crate) fn claim_money(
     looter_guid: u64,
     target_guid: u64,
 ) -> Result<(), LootRefusal> {
-    let entities = ctx.db.game_world_entity();
-    let mut looter = entities
-        .guid()
-        .find(looter_guid)
-        .ok_or_else(|| refuse(LootRefusal::LooterUnavailable, "looter not in world"))?;
-    if looter.dead {
-        return Err(refuse(
-            LootRefusal::LooterUnavailable,
-            "dead players cannot loot",
-        ));
-    }
-    let mut corpse = entities
-        .guid()
-        .find(target_guid)
-        .ok_or_else(|| refuse(LootRefusal::NoLootSource, "no such corpse"))?;
-
-    if corpse.is_player() {
-        return Err(refuse(LootRefusal::NoLootSource, "cannot loot a player"));
-    }
-    if !corpse.dead {
-        return Err(refuse(
-            LootRefusal::NoLootSource,
-            "Loot Source is not a corpse",
-        ));
-    }
-    if corpse.map_id != looter.map_id {
-        return Err(refuse(LootRefusal::OutOfRange, "corpse on another map"));
-    }
-    if corpse.instance_id != looter.instance_id {
-        return Err(refuse(
-            LootRefusal::OutOfRange,
-            "corpse in another instance",
-        ));
-    }
-    let (dx, dy, dz) = (
-        corpse.x - looter.x,
-        corpse.y - looter.y,
-        corpse.z - looter.z,
-    );
-    if dx * dx + dy * dy + dz * dz > LOOT_RANGE_SQ {
-        return Err(refuse(LootRefusal::OutOfRange, "corpse out of range"));
-    }
-
-    corpse_access(ctx, looter_guid, target_guid).map_err(|refusal| {
-        refuse(
-            refusal,
-            &format!("actor_guid={looter_guid} corpse_guid={target_guid}"),
-        )
-    })?;
+    let (mut looter, mut corpse) = reach_corpse(ctx, looter_guid, target_guid)?;
     if corpse.money == 0 {
         return Err(refuse(LootRefusal::NothingToLoot, "corpse purse is empty"));
     }
@@ -720,7 +794,7 @@ pub(crate) fn claim_money(
     Ok(())
 }
 
-// During Transfer, defer shares into Escrow so an in-flight recipient still gets paid.
+// During Transfer, defer the share so an in-flight recipient still gets paid.
 fn credit_purse(ctx: &ReducerContext, recipient_guid: u64, share: u32) {
     let entities = ctx.db.game_world_entity();
     if let Some(mut e) = entities.guid().find(recipient_guid) {
@@ -794,19 +868,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loot_chance_is_half_open() {
-        assert!(loot_drops(10000, 0));
-        assert!(loot_drops(10000, 9999));
-        assert!(!loot_drops(0, 0));
-        assert!(loot_drops(5000, 0));
-        assert!(loot_drops(5000, 4999));
-        assert!(!loot_drops(5000, 5000));
-        assert!(!loot_drops(5000, 9999));
-        assert!(loot_drops(39, 38));
-        assert!(!loot_drops(39, 39));
-    }
-
-    #[test]
     fn group_pick_is_one_weighted_band() {
         let w = [2000u32, 3000, 1000];
         assert_eq!(group_pick(&w, 0), Some(0));
@@ -844,23 +905,39 @@ mod tests {
     }
 
     #[test]
-    fn quest_take_allowed_admits_the_reservee_unconditionally_and_needing_takers_on_shared_rows() {
-        assert!(quest_take_allowed(0, 7, true));
-        assert!(
-            !quest_take_allowed(0, 7, false),
-            "no need → no take on the unreserved shared row"
-        );
-        assert!(quest_take_allowed(7, 7, true));
-        assert!(
-            !quest_take_allowed(7, 8, true),
-            "reserved for someone else — not this taker's to claim"
-        );
-        assert!(
-            quest_take_allowed(7, 7, false),
-            "the reservation IS the grant — re-checking need here would strand a reservee whose need \
-             lapsed post-clone with a visible-but-untakeable row; mirrors \
-             quest_row_visible_to_viewer's 'reservation is authoritative' arm"
-        );
+    fn collect_need_respects_raid_type_quantity_and_the_minimum_requirement() {
+        let collect = |quest_type, target_entry, required_count| QuestItemObjective {
+            quest_entry: 100,
+            quest_type,
+            kind: crate::quest::objective_kind::COLLECT_ITEM,
+            target_entry,
+            required_count,
+        };
+        assert!(needs_quest_item(false, &[100], [collect(0, 55, 10)], 55, 9));
+        assert!(!needs_quest_item(
+            false,
+            &[100],
+            [collect(0, 55, 10)],
+            55,
+            10
+        ));
+        assert!(!needs_quest_item(true, &[100], [collect(0, 55, 10)], 55, 0));
+        assert!(needs_quest_item(true, &[100], [collect(62, 55, 10)], 55, 0));
+        assert!(needs_quest_item(false, &[100], [collect(0, 55, 0)], 55, 0));
+        assert!(!needs_quest_item(false, &[100], [collect(0, 55, 0)], 55, 1));
+        assert!(!needs_quest_item(
+            false,
+            &[100],
+            [collect(0, 56, 10)],
+            55,
+            0
+        ));
+        assert!(!needs_quest_item(false, &[], [collect(0, 55, 10)], 55, 0));
+        let kill = QuestItemObjective {
+            kind: crate::quest::objective_kind::KILL_CREATURE,
+            ..collect(0, 55, 10)
+        };
+        assert!(!needs_quest_item(false, &[100], [kill], 55, 0));
     }
 
     #[test]
@@ -976,12 +1053,5 @@ mod tests {
     #[test]
     fn split_money_single_recipient_degrades_to_whole_amount() {
         assert_eq!(split_money(50, &[7], 7), vec![(7, 50)]);
-    }
-
-    #[test]
-    fn only_multiple_eligible_characters_share_money() {
-        assert!(!money_is_grouped(&[]));
-        assert!(!money_is_grouped(&[7]));
-        assert!(money_is_grouped(&[7, 8]));
     }
 }

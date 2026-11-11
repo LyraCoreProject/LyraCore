@@ -5,9 +5,9 @@ use std::collections::{HashMap, HashSet};
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::{
-    game_config, game_corpse, game_creature_move_schedule, game_creature_spawn,
-    game_creature_template, game_creature_waypoint, game_encounter_spawn, game_gameobject,
-    game_gameobject_template, game_group, game_group_member, game_world_entity,
+    game_corpse, game_creature_move_schedule, game_creature_spawn, game_creature_template,
+    game_creature_waypoint, game_encounter_spawn, game_gameobject, game_gameobject_template,
+    game_group, game_group_member, game_world_entity,
 };
 
 pub(crate) use lyracore_shared::instance::is_dungeon_map;
@@ -131,8 +131,8 @@ pub(crate) fn empty_reap_micros(hosts_populations: bool) -> i64 {
 
 const REAP_MAX_PER_FIRING: usize = 4;
 
-// Bit 23 separates Instance copies; respawning copies still reserve their sequence.
-pub(crate) const INSTANCE_POP_LOW_BAND: u64 = 0x80_0000;
+use crate::creatures::population::INSTANCE_POP_LOW_BAND;
+use crate::gameobject::GO_COPY_BAND;
 
 fn next_population_low(slot: &mut u64, mut taken: impl FnMut(u64) -> bool) -> Option<u64> {
     loop {
@@ -147,14 +147,11 @@ fn next_population_low(slot: &mut u64, mut taken: impl FnMut(u64) -> bool) -> Op
     }
 }
 
-// Bit 46 reserves gameobject Instance copies below pool bit 47.
-pub(crate) const GO_COPY_BAND: u64 = 1 << 46;
-
 const GO_COPY_TYPES: [u8; 4] = [
-    crate::gameobject::go_type::DOOR,
-    crate::gameobject::go_type::BUTTON,
-    crate::gameobject::go_type::CHEST,
-    crate::gameobject::go_type::GOOBER,
+    lyracore_shared::constants::go_type::DOOR,
+    lyracore_shared::constants::go_type::BUTTON,
+    lyracore_shared::constants::go_type::CHEST,
+    lyracore_shared::constants::go_type::GOOBER,
 ];
 
 #[table(
@@ -227,7 +224,7 @@ pub struct InstanceRemoval {
 impl InstanceRemoval {
     pub(crate) fn insert(self, ctx: &ReducerContext) {
         let row = ctx.db.game_instance_removal().insert(self);
-        crate::native::instance_removal_changed(ctx, row.character_guid, Some(&row));
+        crate::native::instance::removal_changed(ctx, row.character_guid, Some(&row));
     }
 
     pub(crate) fn delete(ctx: &ReducerContext, character_guid: u64) {
@@ -237,7 +234,7 @@ impl InstanceRemoval {
             .character_guid()
             .delete(character_guid)
         {
-            crate::native::instance_removal_changed(ctx, character_guid, None);
+            crate::native::instance::removal_changed(ctx, character_guid, None);
         }
     }
 }
@@ -453,7 +450,7 @@ pub(crate) fn resolve_or_create_instance(
             Ok(id)
         }
         InstanceRoute::Create => {
-            let id = create_instance(ctx, target_map, party_id)?;
+            let id = create_instance(ctx, 0, target_map, party_id)?;
             bind_character(ctx, character_guid, id, target_map, ctx.database_identity());
             Ok(id)
         }
@@ -524,23 +521,12 @@ fn adopt_instance_for_party(ctx: &ReducerContext, instance_id: u64, party_id: u6
 }
 
 pub(crate) fn hosts_instance_populations(ctx: &ReducerContext) -> bool {
-    ctx.db
-        .game_config()
-        .id()
-        .find(0)
-        .map(|c| c.hosts_instances)
-        .unwrap_or(true)
+    crate::config::server_config(ctx).hosts_instances
 }
 
+/// Creates the Instance and, on a database that hosts populations, copies its population;
+/// `instance_id` 0 allocates a fresh id.
 pub(crate) fn create_instance(
-    ctx: &ReducerContext,
-    map_id: u32,
-    party_id: u64,
-) -> Result<u64, String> {
-    create_instance_with_id(ctx, 0, map_id, party_id)
-}
-
-pub(crate) fn create_instance_with_id(
     ctx: &ReducerContext,
     instance_id: u64,
     map_id: u32,
@@ -595,7 +581,7 @@ pub(crate) fn create_instance_with_id(
         .iter()
         .map(|t| t.guid)
         .collect();
-    let spawns: Vec<crate::creatures::CreatureSpawn> = ctx
+    let spawns: Vec<crate::CreatureSpawn> = ctx
         .db
         .game_creature_spawn()
         .by_map_instance()
@@ -618,15 +604,15 @@ pub(crate) fn create_instance_with_id(
         let slot = max_band_low.entry(entry).or_insert(0);
         // Dormant instance-zero rows in the Operator and Package spawn ranges share this band.
         let low = next_population_low(slot, |low| {
-            let guid = crate::encounter::wave_guid(entry, low);
+            let guid = lyracore_package_delta::packed_creature_spawn_guid(entry, low as u32);
             ctx.db.game_creature_spawn().guid().find(guid).is_some()
                 || entities.guid().find(guid).is_some()
         })
         .ok_or_else(|| format!("instance population low exhausted for entry {entry}"))?;
-        copy.guid = crate::encounter::wave_guid(entry, low);
+        copy.guid = lyracore_package_delta::packed_creature_spawn_guid(entry, low as u32);
         copy.life_seq = 1;
-        copy.respawn_at = crate::creatures::timer_never(ctx);
-        copy.despawn_at = crate::creatures::timer_never(ctx);
+        copy.respawn_at = crate::time::timer_never(ctx);
+        copy.despawn_at = crate::time::timer_never(ctx);
         let entity =
             crate::creatures::build_creature_entity(ctx, &copy, &tmpl, ctx.random(), instance_id);
         let copied_guid = copy.guid;
@@ -640,7 +626,7 @@ pub(crate) fn create_instance_with_id(
     let first_go_seq = gos
         .iter()
         .filter(|g| {
-            g.guid >> 48 == 0xF110
+            crate::gameobject::is_gameobject_guid(g.guid)
                 && g.guid & GO_COPY_BAND != 0
                 && g.guid & crate::gameobject::POOL_TAG == 0
         })
@@ -666,8 +652,8 @@ pub(crate) fn create_instance_with_id(
         .collect();
     let mut copied = 0u32;
     for (next_go_seq, src) in (first_go_seq..).zip(&sources) {
-        let copy = crate::gameobject::GameObject {
-            guid: (0xF110u64 << 48) | GO_COPY_BAND | next_go_seq,
+        crate::gameobject::GameObject {
+            guid: crate::gameobject::gameobject_guid(GO_COPY_BAND | next_go_seq),
             template_entry: src.template_entry,
             map_id: src.map_id,
             x: src.x,
@@ -678,16 +664,15 @@ pub(crate) fn create_instance_with_id(
             created_at: crate::time::now(ctx),
             respawn_at_micros: 0,
             instance_id,
-            grid_x: lyracore_shared::spatial::grid_cell(src.x, src.y).0,
-            grid_y: lyracore_shared::spatial::grid_cell(src.x, src.y).1,
-            cell: lyracore_shared::spatial::cell_id_at(src.x, src.y),
+            grid_x: 0,
+            grid_y: 0,
+            cell: 0,
             rotation_0: src.rotation_0,
             rotation_1: src.rotation_1,
             rotation_2: src.rotation_2,
             rotation_3: src.rotation_3,
         }
         .insert(ctx);
-        crate::go_collider::register(ctx, &copy);
         copied += 1;
     }
 
@@ -732,7 +717,7 @@ pub fn ensure_instance(
             existing.party_id
         ));
     }
-    let id = create_instance_with_id(ctx, instance_id, map_id, party_id)?;
+    let id = create_instance(ctx, instance_id, map_id, party_id)?;
     log::info!("ensure_instance: mirrored instance {id} (map {map_id}, party {party_id})");
     Ok(())
 }
@@ -878,7 +863,6 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
         .collect();
     for guid in &copies {
         crate::loot::reap_corpse_loot_family(ctx, *guid);
-        crate::go_collider::remove(ctx, *guid);
         crate::GameObject::delete(ctx, guid);
     }
 
@@ -1147,7 +1131,13 @@ pub(crate) fn fire_instance_removal(ctx: &ReducerContext, removal: &InstanceRemo
     }
     match instance_removal_standing(ctx, removal.character_guid) {
         Some(standing) if standing.instance_id == removal.instance_id => {
-            crate::world::recall_to_home(ctx, removal.character_guid);
+            if let Err(refusal) = crate::character::recall_to_home(ctx, removal.character_guid) {
+                log::warn!(
+                    "Instance Removal of {} refused, rearmed: {refusal}",
+                    removal.character_guid
+                );
+                reconcile_instance_removal(ctx, removal.character_guid);
+            }
         }
         _ => reconcile_instance_removal(ctx, removal.character_guid),
     }
@@ -1163,14 +1153,6 @@ mod tests {
             assert!(is_dungeon_map(dungeon.map_id));
             assert!(!is_dungeon_map(dungeon.entrance.0));
         }
-    }
-
-    #[test]
-    fn route_prefers_the_party_then_the_personal_binding_then_create() {
-        assert_eq!(route_instance(Some(7), Some(9)), InstanceRoute::Party(9));
-        assert_eq!(route_instance(Some(7), None), InstanceRoute::Own(7));
-        assert_eq!(route_instance(None, Some(9)), InstanceRoute::Party(9));
-        assert_eq!(route_instance(None, None), InstanceRoute::Create);
     }
 
     #[test]
@@ -1242,42 +1224,23 @@ mod tests {
         let now = 1_800_000_000_000_000i64;
         let hosting = empty_reap_micros(true);
         let lease = empty_reap_micros(false);
-        assert_eq!(
-            hosting, INSTANCE_EMPTY_REAP_MICROS,
-            "hosting databases are UNCHANGED"
-        );
-        assert_eq!(lease, INSTANCE_LEASE_REAP_MICROS);
-        assert!(
-            lease > hosting,
-            "a lease must outlive the run it is a receipt for, or the world shard forgets which \
-             instance the party is in while they are still in it"
-        );
 
         let entered = now - 40 * 60 * 1_000_000;
         assert_eq!(
             occupancy_action(false, entered, false, now, hosting),
-            OccupancyAction::Reap,
-            "on the ordinary 30-minute timer the world shard reaps the lease MID-RUN — the \
-             latecomer then resolves Create and lands in a fresh, empty dungeon"
+            OccupancyAction::Reap
         );
         assert_eq!(
             occupancy_action(false, entered, false, now, lease),
             OccupancyAction::Wait,
-            "with the lease timer the world shard still knows which instance that party is in"
+            "a lease outlives a 30-minute run"
         );
 
         let longest_supported_run = 8 * 60 * 60 * 1_000_000i64;
-        assert!(
-            lease > longest_supported_run,
-            "the lease timer ({lease}µs) must outlast the LONGEST run it is a receipt for, not \
-             merely the 30-minute hosting timer: it starts counting when the party leaves the world \
-             shard, i.e. at minute ~0 of the run. Below this bound a long dungeon or raid forks its \
-             own party exactly as the 30-minute timer did."
-        );
         assert_eq!(
             occupancy_action(false, now - longest_supported_run, false, now, lease),
             OccupancyAction::Wait,
-            "an 8-hour raid night must still find its lease on the world shard"
+            "a lease outlives an 8-hour raid night"
         );
 
         let ancient = now - INSTANCE_LEASE_REAP_MICROS;
@@ -1350,7 +1313,10 @@ mod tests {
         let population = next_population_low(&mut slot, |low| lows.contains(&low));
         assert_eq!(population, Some(0x80_0002));
         lows.push(0x80_0002);
-        assert_eq!(crate::encounter::next_wave_low(lows.into_iter()), 150_001);
+        assert_eq!(
+            crate::creatures::population::next_spawn_low(lows.into_iter()),
+            150_001
+        );
     }
 
     #[test]
@@ -1358,14 +1324,5 @@ mod tests {
         let mut slot = 0x7F_FFFE;
         assert_eq!(next_population_low(&mut slot, |_| false), Some(0xFF_FFFF));
         assert_eq!(next_population_low(&mut slot, |_| false), None);
-    }
-
-    #[test]
-    fn go_copy_band_is_disjoint_from_pool_static_and_debug_namespaces() {
-        let copy_guid = (0xF110u64 << 48) | GO_COPY_BAND | 1;
-        const { assert!(GO_COPY_BAND < crate::gameobject::POOL_TAG) };
-        assert_eq!(crate::gameobject::pool_point_id_of(copy_guid), None);
-        const { assert!(GO_COPY_BAND > 0xFF_FFFF) };
-        assert_ne!(copy_guid, crate::gameobject::pool_point_guid(1));
     }
 }

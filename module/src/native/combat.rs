@@ -5,7 +5,8 @@ use lyracore_protocol::{
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{game_native_player, Rollback};
-use crate::combat::{game_melee_attack, AttackRefusal, CombatEvent, MeleeAttack};
+use crate::combat::AttackRefusal;
+use crate::{game_melee_attack, CombatEvent, MeleeAttack};
 
 pub(super) fn attack(ctx: &ReducerContext, guid: u64, target: u64) -> Result<(), Rollback> {
     super::actor(ctx, guid)?;
@@ -57,12 +58,9 @@ fn emit(ctx: &ReducerContext, source: u64, message: ServerOpcodeMessage, source_
     if ctx.db.game_native_player().count() == 0 {
         return;
     }
-    let packet = lyracore_protocol::world::encode(message)
-        .expect("fixed-size combat packet fits a world frame");
+    let packet = super::bounded(message);
     if source_only {
-        if let Some(player) = ctx.db.game_native_player().character_guid().find(source) {
-            super::send_raw(ctx, player.connection_id, packet.opcode, packet.body, false);
-        }
+        super::send_raw_to_character(ctx, source, packet.opcode, packet.body);
     } else {
         super::visibility::broadcast(ctx, source, packet.opcode, packet.body, false);
     }
@@ -105,7 +103,7 @@ pub(crate) fn combat_event(ctx: &ReducerContext, event: &CombatEvent) {
             false,
         );
     }
-    if event.killing_blow && !is_creature(event.attacker_guid) {
+    if event.killing_blow && !lyracore_shared::guid::is_unit(event.attacker_guid) {
         emit(
             ctx,
             event.attacker_guid,
@@ -116,10 +114,6 @@ pub(crate) fn combat_event(ctx: &ReducerContext, event: &CombatEvent) {
             true,
         );
     }
-}
-
-fn is_creature(guid: u64) -> bool {
-    matches!(guid >> 48, 0xf130 | 0xf140)
 }
 
 pub(crate) fn engagement_changed(
@@ -150,7 +144,7 @@ pub(crate) fn engagement_changed(
             }
         }
         if let Some(row) = row.filter(|row| row.ranged_spell_id == 0) {
-            if old.is_none() && is_creature(row.attacker_guid) {
+            if old.is_none() && lyracore_shared::guid::is_unit(row.attacker_guid) {
                 emit(
                     ctx,
                     row.attacker_guid,
@@ -217,12 +211,7 @@ pub(crate) fn combo_points_changed(
     target_guid: u64,
     points: u32,
 ) {
-    if let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(owner_guid)
-    {
+    if let Some(owner) = super::world_session(ctx, owner_guid) {
         send_combo_points(ctx, owner.connection_id, owner_guid, target_guid, points);
     }
 }

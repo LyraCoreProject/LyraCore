@@ -178,13 +178,21 @@ pub struct VmapChunk {
     pub blob: Vec<u8>,
 }
 
-fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
+/// Decodes an Operator import blob of ASCII hex digit pairs.
+pub(crate) fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
     if !s.len().is_multiple_of(2) {
         return Err("odd-length hex blob".to_string());
     }
-    (0..s.len() / 2)
-        .map(|i| {
-            u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|_| format!("bad hex at {i}"))
+    s.as_bytes()
+        .chunks_exact(2)
+        .enumerate()
+        .map(|(i, pair)| {
+            let digit = |byte: u8| {
+                (byte as char)
+                    .to_digit(16)
+                    .ok_or_else(|| format!("bad hex at {i}"))
+            };
+            Ok((digit(pair[0])? * 16 + digit(pair[1])?) as u8)
         })
         .collect()
 }
@@ -529,8 +537,11 @@ fn coverage_neighborhood_tris(
             };
             let key = cell_key(map_id, nx, ny);
             for row in chunks.by_generation_cell().filter((generation_id, key)) {
-                if let Ok(mut t) = decode(&row.blob) {
-                    tris.append(&mut t);
+                match decode(&row.blob) {
+                    Ok(mut t) => tris.append(&mut t),
+                    Err(err) => spacetimedb::log::error!(
+                        "vmap generation {generation_id} chunk {key} does not decode: {err:?}"
+                    ),
                 }
             }
         }
@@ -706,8 +717,6 @@ pub fn import_vmap_chunks_append(ctx: &ReducerContext, packed: String) -> Result
     Ok(())
 }
 
-use crate::game_config;
-
 pub(crate) fn active_generation_id(ctx: &ReducerContext, map_id: u32) -> Option<u64> {
     ctx.db
         .game_vmap_generation()
@@ -722,11 +731,7 @@ pub(crate) fn vmap_enabled(ctx: &ReducerContext, map_id: u32) -> bool {
 }
 
 pub(crate) fn rays_enabled(ctx: &ReducerContext) -> bool {
-    ctx.db
-        .game_config()
-        .id()
-        .find(0)
-        .is_some_and(|c| c.vmap_enabled)
+    crate::config::server_config(ctx).vmap_enabled
 }
 
 enum CellTriangles {
@@ -761,8 +766,11 @@ fn fetcher(
                 .filter((generation_id, key))
             {
                 any = true;
-                if let Ok(mut t) = decode(&row.blob) {
-                    tris.append(&mut t);
+                match decode(&row.blob) {
+                    Ok(mut t) => tris.append(&mut t),
+                    Err(err) => spacetimedb::log::error!(
+                        "vmap generation {generation_id} chunk {key} does not decode: {err:?}"
+                    ),
                 }
             }
             any.then_some(tris)

@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use support::Standalone;
 
 #[test]
@@ -21,10 +22,19 @@ fn the_level_cap_discards_excess_xp_and_preserves_rested_xp_on_later_kills() {
     assert_capped(&standalone);
 
     standalone.assert_sql("UPDATE game_character SET rested_xp = 1000 WHERE guid = 1");
-    standalone.assert_sql("DELETE FROM game_creature_spawn WHERE entry = 51000");
-    standalone.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
-    standalone.assert_call("debug_spawn_at_feet", &["1", "51000", "1.0"]);
-    let creatures = standalone.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000");
+    standalone.assert_sql(&format!(
+        "DELETE FROM game_creature_spawn WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    standalone.assert_sql(&format!(
+        "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    standalone.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "1.0"],
+    );
+    let creatures = standalone.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
     assert_eq!(creatures.len(), 1, "the kill target must be unique");
     let creature = &creatures[0]["guid"];
     standalone.assert_sql(&format!(
@@ -34,7 +44,7 @@ fn the_level_cap_discards_excess_xp_and_preserves_rested_xp_on_later_kills() {
         "INSERT INTO game_creature_quest_tap (creature_guid, character_guid) \
          VALUES ({creature}, 1)"
     ));
-    standalone.assert_call("debug_kill_nearest", &["1", "51000"]);
+    standalone.assert_call("debug_kill_nearest", &["1", &TEST_WOLF_ENTRY.to_string()]);
 
     assert_capped(&standalone);
     let character = standalone.query_rows("SELECT rested_xp FROM game_character WHERE guid = 1");

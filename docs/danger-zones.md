@@ -54,7 +54,7 @@ Shard. An existing multi-Shard Realm needs a reviewed data migration first; see
    `error[E0493]` on stable. This blocks `#[default(String::new())]` and `#[default("")]` alike.
    Numeric and bool defaults are fine. Put new `String` data in a new table instead: it has no
    existing rows, so no column needs a default. `game_creature_waypoint` and `game_creature_spell`
-   use the same one-row-plus-child-rows shape. See `NpcTextSlot` in `module/src/creatures/spawn.rs`.
+   use the same one-row-plus-child-rows shape. See `NpcTextSlot` in `module/src/gossip.rs`.
 7. **Never `.iter()` or `.count()` a spatial table** (`game_world_entity`, `game_corpse`,
    `game_creature_spawn`, `game_gameobject`, `game_dynamic_object`). That includes the usual
    `let entities = ctx.db.game_world_entity();` handle, which is the same whole-world read one line
@@ -78,12 +78,25 @@ including a restored-copy rehearsal and the order of world import before Package
 ### After every publish
 
 Call `debug_repair_after_publish` as the Operator on the Shard. `init` does not run again on an
-auto-migrating publish, so this reducer re-arms the interval schedules, re-freezes Proc profiles,
-restores missing Auction expiries, re-tags legacy auction mail as Auction Mail before the Mail Timer
-pass (so a legacy "Auction won" is deleted, not returned), arms a Mail Timer for each Mail that has
-none, moves each legacy Character GM level onto its Account and re-seeds the fixtures `init`
-seeds. `packages apply` calls it for each Shard it publishes.
+auto-migrating publish, so this reducer arms the interval schedules `init` arms
+(`arm_interval_schedules` in `module/src/seed.rs`). It deletes and re-creates the instance reaper,
+the Gateway lease reaper, the weather schedule, the Meeting Stone reminder and the catch-all creature
+tick, which discards a cadence set with `debug_rearm_creature_tick`. It creates the event reaper,
+melee, pet care, aura, breath, duel, ground area and motion publish schedules only when missing, and
+a Transport crossing for each Transport without one. It also re-freezes Proc profiles, restores
+missing Auction expiries, re-tags legacy auction mail as Auction Mail before the Mail Timer pass
+(so a legacy "Auction won" is deleted, not returned), arms a Mail Timer for each Mail that has
+none, moves each legacy Character GM level onto its Account and re-seeds the curated content and
+fixtures `init` seeds. `packages apply` calls it for each Shard it publishes.
 A skipped call looks like a mid-session hang, not an error.
+
+Imported content wins over that re-seed. A seed that writes real ids skips once the importer has
+stamped its family in `game_import_meta`: `spell` (Weakened Soul, Frost Armor, Chilled, Drain
+Soul, Mana Burn, Stealth, Demon Skin, the stacking probe spells, the synthetic Warrior talents),
+`items` (Soul Shard), `globals` (the starting spell kits, the Hunter Tame Beast kit row, the
+Warrior crit rates) and `dbc` (the Boar creature family, the Riding skill line). Fixtures on
+Fixture-Reserved Identifiers and the `SPELL_GROUPS` rules are written on every Shard; the
+importer does not import spell groups. `seed_curated_content` in `module/src/seed.rs` holds the list.
 
 The first run on a Shard with Mail from before the Mail Timer applies the vanilla 30-day rule
 (3 days with a cash on delivery price) to that Mail. Every Mail already past its life returns to
@@ -184,7 +197,7 @@ expiry removes the DynamicObject and its Grants in the same transaction.
 ### Combo finisher migration
 
 `game_spell.max_duration_ms` and `game_spell_effect.points_per_combo` default to zero, and older
-spell rows mark only Slice and Dice with `SPELL_ATTR_COMBO_FINISHER`. Until spells are reimported,
+spell rows mark only Slice and Dice with `CAST_FLAG_COMBO_FINISHER`. Until spells are reimported,
 the other finishers skip the combo-point Gate and keep their points, no finisher scales with combo
 points, and Slice and Dice lasts its 6-second base. After you publish this schema to an existing
 Shard, reimport spells with `--dbc` before play resumes.
@@ -192,7 +205,7 @@ Shard, reimport spells with `--dbc` before play resumes.
 ### Chance on Hit migration
 
 `game_item_template.spellppmrate_1` through `spellppmrate_5` default to zero, and older spell rows
-lack `SPELL_ATTR_WEAPON_PROCS`. Until both are reimported, every Chance on Hit rolls its spell's
+lack `CAST_FLAG_WEAPON_PROCS`. Until both are reimported, every Chance on Hit rolls its spell's
 proc chance, which is one proc per minute for most weapons, and only white swings roll it. After you
 publish this schema to an existing Shard, reimport the `items` and `spell` families before play
 resumes.
@@ -305,9 +318,9 @@ no repair.
 
 ### White melee catalogue migration
 
-`game_crit_per_agility` and `game_creature_defense` start empty after a publish. Run
-`debug_repair_after_publish` to seed warrior levels 1 and 60, then reimport the `globals` and
-`creatures` families before play resumes. Other class/level combinations need imported crit rates;
+`game_crit_per_agility` and `game_creature_defense` start empty after a publish. Reimport the
+`globals` and `creatures` families before play resumes; `debug_repair_after_publish` seeds warrior
+levels 1 and 60 only on a Shard that never imported `globals`. Other class/level combinations need imported crit rates;
 creatures need their no-parry, no-block and no-defense flags. Missing crit rates use the previous
 crit calculation in combat and on the sheet, with one warning per Shard. This fallback does not
 replace the globals reimport. Existing Character sheet values are refreshed on world entry,
@@ -325,8 +338,8 @@ Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB
 adds `_live` to its original table name, such as `game_combat_event_live`. The original
 `game_combat_event`, `game_spell_cast_event`, `game_spell_impact_event`, `game_chat_event` and
 `game_emote_event` stay ordinary tables with their published schemas, and share each row type with
-the event table. The Module writes new notifications only to the event table. The event reaper
-expires rows left in the original tables after an upgrade.
+the event table. The Module writes new notifications only to the event table, and nothing reads
+or reaps the original tables.
 
 SpacetimeDB refuses a change to an existing table's event flag. Keep the old declarations and
 their indexes for additive schema compatibility. Do not clear a Shard to make this migration apply.

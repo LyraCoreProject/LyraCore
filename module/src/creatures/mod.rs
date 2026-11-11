@@ -2,33 +2,21 @@ mod ai;
 pub(crate) mod catalogue;
 pub(crate) mod cycle;
 pub(crate) mod distraction;
-mod eventai;
+pub(crate) mod eventai;
 pub(crate) mod guardian;
 mod hostile_summon;
-mod hunter_pet;
-mod pet;
-mod pet_care;
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use eventai::{
-    expire_eventai_summon, fire_eventai_forced_despawn, resume_relay_arrival, resume_relay_run,
-};
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use pet_care::tick_pet_care;
+pub(crate) mod hunter_pet;
+pub(crate) mod leg;
+pub(crate) mod pet;
+pub(crate) mod pet_care;
 mod pet_progression;
 pub(crate) mod population;
 pub(crate) mod presentation;
-mod spawn;
-pub(crate) use spawn::game_creature_spawn_map;
+pub(crate) mod spawn;
+
 pub(crate) mod tick;
 
-pub(crate) use ai::{
-    beyond_combat_backstop, chase_step, combat_active_radius, flee_eligible,
-    is_sense_tick_for_interval, pursuit_deadline_ms, rout_window_open,
-    sense_period_secs_for_interval, should_evade, should_flee, tick_secs_for_interval, TickScope,
-    TickSlice, GLOBAL_TICK_INSTANCE, MOVE_TICK_MICROS, SLICED_TICK_MICROS,
-};
-#[cfg(test)]
-pub(crate) use ai::{MOVE_TICK_SECS, SENSE_EVERY_N_TICKS};
+pub(crate) use ai::{combat_active_radius, flee_eligible, rout_window_open, should_flee};
 pub(crate) use eventai::{
     begin_death_dispatch, cancel_relay_runs_for_instance, cancel_relay_runs_for_new_life,
     cancel_relay_runs_for_source, creature_ai_on_aggro, creature_ai_on_creature_death,
@@ -42,18 +30,12 @@ pub(crate) use eventai::{
 pub(crate) use eventai::{
     run_relay_arrival, stage_script_failure_policies_for_debug, start_imported_relay,
 };
-
-pub use eventai::{
-    game_creature_ai_broadcast_text, game_creature_ai_definition, game_creature_ai_event,
-    game_creature_ai_relay_arrival, game_creature_ai_relay_continuation,
-    game_creature_ai_relay_definition, game_creature_ai_relay_run, game_creature_ai_rule_state,
-    game_creature_ai_spell_metadata, game_creature_ai_state, game_creature_ai_summon,
-    CreatureAiBroadcastText, CreatureAiDefinition, CreatureAiEvent, CreatureAiForcedDespawn,
-    CreatureAiMovementIntent, CreatureAiMovementPathWaypoint, CreatureAiResetDeferral,
-    CreatureAiReturningHome, CreatureAiRuleState, CreatureAiSpellMetadata, CreatureAiState,
-    CreatureAiSummon, CreatureAiSummonExpiry, CreatureAiSummonOrigin, RelayArrival,
-    RelayContinuation, RelayDefinition, RelayRun,
+pub(crate) use tick::cadence::{
+    is_sense_tick_for_interval, sense_period_secs_for_interval, tick_secs_for_interval, TickScope,
+    TickSlice, GLOBAL_TICK_INSTANCE, MOVE_TICK_MICROS, SLICED_TICK_MICROS,
 };
+#[cfg(test)]
+pub(crate) use tick::cadence::{MOVE_TICK_SECS, SENSE_EVERY_N_TICKS};
 
 #[cfg(feature = "debug_reducers")]
 pub(crate) use eventai::{
@@ -62,20 +44,17 @@ pub(crate) use eventai::{
     verify_summon_expiry_boundaries_for_debug,
 };
 pub(crate) use hostile_summon::{check_hostile_summon, summon_hostile};
-pub use hunter_pet::{
-    game_hunter_pet, game_hunter_pet_protocol, game_live_pet_kind, HunterPet, HunterPetProtocol,
-    LivePetKind, PetKind,
-};
+pub use hunter_pet::PetKind;
 
 pub(crate) use hunter_pet::{
     clear_live_pet_kind, hunter_pet_for_owner, live_pet_kind, mark_summoned_pet,
     publish_hunter_pet_protocol, rename_hunter_pet, tame_creature, validate_tame, PetRenameRefusal,
+    PET_NAME_INVALID,
 };
 
-pub(crate) use pet::{apply_pet_command, despawn_pets, pet_of, summon_pet};
-pub use pet::{game_pet_command, PetCommand};
+pub(crate) use pet::{apply_pet_command, despawn_pets, pet_guid_for, pet_of, summon_pet};
 
-pub use pet_care::{game_pet_care_schedule, PetCareSchedule, CARE_INTERVAL_MICROS};
+pub use pet_care::CARE_INTERVAL_MICROS;
 
 pub(crate) use pet_care::{apply_item_target_spell, on_pet_death, scale_hunter_pet_swing};
 
@@ -83,37 +62,18 @@ pub use pet_progression::PetHappinessState;
 pub(crate) use pet_progression::{
     award_hunter_pet_kill_progression, pet_xp_to_next_level, update_pet_loyalty_from_care,
 };
-pub use presentation::{
-    game_creature_presentation, game_creature_relay_temporary_faction, CreaturePresentation,
-    CreatureRelayTemporaryFaction,
-};
 
-pub use spawn::{
-    game_creature_cast, game_creature_family, game_creature_gossip_menu_override,
-    game_creature_spawn, game_creature_spell, game_creature_template, game_creature_waypoint,
-    game_gossip_menu, game_gossip_menu_profile, game_gossip_menu_profile_option,
-    game_gossip_option, game_npc_text, game_npc_text_slot, CreatureCast, CreatureFamily,
-    CreatureGossipMenuOverride, CreatureSpawn, CreatureSpawnMap, CreatureSpell, CreatureTemplate,
-    CreatureWaypoint, GossipMenu, GossipMenuProfile, GossipMenuProfileOption, GossipOption,
-    NpcText, NpcTextSlot, MOVEMENT_IDLE, MOVEMENT_RANDOM,
-};
+pub use spawn::{MOVEMENT_IDLE, MOVEMENT_RANDOM, MOVEMENT_WAYPOINT};
 
 #[cfg(feature = "debug_reducers")]
 pub(crate) use spawn::build_creature_from_template;
-#[cfg(test)]
-pub(crate) use spawn::rank_hp_multiplier_permille;
 pub(crate) use spawn::{
-    build_creature_entity, build_player_entity, clear_gossip_menu_overrides_for_instance,
+    build_creature_entity, clear_gossip_menu_override, clear_gossip_menu_overrides_for_instance,
     creature_spawn_evidence, current_life_seq, insert_creature_entity, rolled_creature_stats,
-    scale_creature_damage_for_level, scale_health_for_rank, set_creature_gossip_menu, timer_never,
+    scale_creature_damage_for_level, scale_health_for_rank, set_creature_gossip_menu,
 };
 
-pub use tick::{
-    game_creature_move_event, game_creature_move_schedule, game_creature_spline, CreatureMoveEvent,
-    CreatureMoveSchedule, CreatureSpline,
-};
-
-pub(crate) use tick::despawn_creature_entity;
+pub(crate) use tick::{despawn_creature_entity, CREATURE_CORPSE_DECAY_MICROS};
 
 pub(crate) use hunter_pet::{
     sweep_delete_game_hunter_pet, sweep_delete_game_hunter_pet_protocol,
@@ -123,11 +83,3 @@ pub(crate) use hunter_pet::{
 pub(crate) use pet::{sweep_delete_game_pet_command, sweep_transfer_game_pet_command};
 
 pub(crate) use spawn::cast_condition;
-
-pub use eventai::{game_creature_ai_reset_deferral, game_creature_ai_returning_home};
-
-pub use eventai::{
-    game_creature_ai_forced_despawn, game_creature_ai_summon_expiry, game_creature_ai_summon_origin,
-};
-
-pub use eventai::{game_creature_ai_movement_intent, game_creature_ai_movement_path_waypoint};

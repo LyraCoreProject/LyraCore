@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
 use lyracore_shared::vmap::{encode, TriClass, VmapTri};
 use std::path::Path;
 use wow_dbc::vanilla_tables::game_object_display_info::{
@@ -165,13 +165,11 @@ pub(crate) fn packed_rows(
 
 pub(crate) fn run(
     data_dir: &str,
-    dump_path: Option<&str>,
+    dump_path: &str,
     apply: bool,
     shard: &crate::shard::Shard,
 ) -> Result<()> {
     let data_dir = Path::new(data_dir);
-    let dump_path = dump_path
-        .context("--go-models needs --dump too (gameobject_template is the template source)")?;
     let dump = crate::world_source::WorldSource::open(Path::new(dump_path))?;
     let rows = packed_rows(data_dir, &dump)?;
     if rows.is_empty() && door_templates(&dump)?.is_empty() {

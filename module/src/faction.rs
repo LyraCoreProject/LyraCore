@@ -82,7 +82,6 @@ pub(crate) fn is_friendly(
 mod tests {
     use super::*;
 
-    #[allow(clippy::too_many_arguments)]
     fn ft(
         id: u32,
         faction: u32,

@@ -22,7 +22,7 @@ const ITEM: ItemSnapshot = ItemSnapshot {
     item_text_id: 0,
 };
 const BLADE: ItemSnapshot = ItemSnapshot {
-    entry: crate::seed::FIXTURE_BLADE,
+    entry: lyracore_package_delta::fixture_ids::FIXTURE_BLADE,
     stack_count: 1,
     durability: 17,
     enchant_id: 0,

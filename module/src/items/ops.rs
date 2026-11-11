@@ -1,4 +1,4 @@
-use crate::actor::{ActionRefusal, ActionRefusalKind};
+use crate::actor::ActionRefusal;
 use spacetimedb::{Identity, ReducerContext};
 
 use lyracore_package_delta::packed_race_class_id;
@@ -7,8 +7,6 @@ use lyracore_shared::item::ItemRefusal;
 
 use super::{next_item_guid, refuse, select_property};
 use crate::game_character;
-use crate::game_corpse_loot;
-use crate::game_gameobject;
 use crate::game_spell;
 use crate::game_spell_effect;
 use crate::game_start_item;
@@ -558,8 +556,7 @@ pub(crate) fn apply_item_use_on(
         .find(spell_id)
         .is_some_and(|spell| {
             spell.attributes & crate::spell::SPELL_ATTR_PASSIVE == 0
-                && spell.cast_flags
-                    & lyracore_shared::spell::taxonomy::SPELL_ATTR_RANGED_AUTO_REPEAT
+                && spell.cast_flags & lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT
                     == 0
         })
         && !super::equip::spell_ready(
@@ -604,9 +601,9 @@ pub(crate) fn apply_item_use_on(
 pub(crate) fn resistance_items(
     ctx: &ReducerContext,
     owner_guid: u64,
-) -> impl Iterator<Item = lyracore_shared::resistance::ResistanceItem> + '_ {
+) -> impl Iterator<Item = crate::modifiers::ResistanceItem> + '_ {
     use crate::game_item_random_property;
-    use lyracore_shared::resistance::ResistanceItem;
+    use crate::modifiers::ResistanceItem;
     ctx.db
         .game_item_instance()
         .by_owner_guid()
@@ -786,215 +783,9 @@ fn lose_durability(
     any_lost
 }
 
-pub(crate) enum TakeLootRefusal {
-    Loot(lyracore_shared::loot::LootRefusal),
-    Refused(ActionRefusal),
-}
-
-impl From<ActionRefusal> for TakeLootRefusal {
-    fn from(refusal: ActionRefusal) -> Self {
-        Self::Refused(refusal)
-    }
-}
-
-impl From<TakeLootRefusal> for ActionRefusal {
-    fn from(refusal: TakeLootRefusal) -> Self {
-        match refusal {
-            TakeLootRefusal::Loot(refusal) => {
-                ActionRefusal::new(ActionRefusalKind::CannotAct, refusal.as_tag())
-            }
-            TakeLootRefusal::Refused(refusal) => refusal,
-        }
-    }
-}
-
-pub(crate) fn request_take_loot(
-    ctx: &ReducerContext,
-    player_guid: u64,
-    corpse_guid: u64,
-    loot_slot: u8,
-) -> Result<(), ActionRefusal> {
-    take_loot_item(ctx, player_guid, corpse_guid, loot_slot).map_err(Into::into)
-}
-
-pub(crate) fn take_loot_item(
-    ctx: &ReducerContext,
-    player_guid: u64,
-    corpse_guid: u64,
-    loot_slot: u8,
-) -> Result<(), TakeLootRefusal> {
-    let entities = ctx.db.game_world_entity();
-    let player = entities.guid().find(player_guid).ok_or_else(|| {
-        ActionRefusal::new(ActionRefusalKind::MissingActor, "looter not in world")
-    })?;
-    if player.dead {
-        return Err(
-            ActionRefusal::new(ActionRefusalKind::DeadActor, "dead players cannot loot").into(),
-        );
-    }
-    let (src_map, src_instance, sx, sy, sz, source_is_corpse) = if let Some(corpse) =
-        entities.guid().find(corpse_guid)
-    {
-        if !corpse.dead {
-            return Err(ActionRefusal::new(
-                ActionRefusalKind::MissingTarget,
-                "target is not a corpse",
-            )
-            .into());
-        }
-        (
-            corpse.map_id,
-            corpse.instance_id,
-            corpse.x,
-            corpse.y,
-            corpse.z,
-            true,
-        )
-    } else if let Some(go) = ctx.db.game_gameobject().guid().find(corpse_guid) {
-        (go.map_id, go.instance_id, go.x, go.y, go.z, false)
-    } else {
-        return Err(
-            ActionRefusal::new(ActionRefusalKind::MissingTarget, "no such loot source").into(),
-        );
-    };
-    if source_is_corpse {
-        crate::loot::corpse_access(ctx, player_guid, corpse_guid).map_err(|refusal| {
-            TakeLootRefusal::Loot(crate::loot::refuse(
-                refusal,
-                &format!("actor_guid={player_guid} corpse_guid={corpse_guid}"),
-            ))
-        })?;
-    }
-    if src_map != player.map_id {
-        return Err(
-            ActionRefusal::new(ActionRefusalKind::OtherPartition, "loot on another map").into(),
-        );
-    }
-
-    if src_instance != player.instance_id {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::OtherPartition,
-            "loot in another instance",
-        )
-        .into());
-    }
-    let (dx, dy, dz) = (sx - player.x, sy - player.y, sz - player.z);
-    if dx * dx + dy * dy + dz * dz > crate::loot::LOOT_RANGE_SQ {
-        return Err(ActionRefusal::new(ActionRefusalKind::OutOfRange, "loot out of range").into());
-    }
-    let loot = ctx.db.game_corpse_loot();
-    let row = loot
-        .by_corpse()
-        .filter(&corpse_guid)
-        .find(|l| l.slot == loot_slot)
-        .ok_or_else(|| {
-            ActionRefusal::new(ActionRefusalKind::MissingTarget, "no loot in that slot")
-        })?;
-    if row.quest_only {
-        let needs = crate::loot::killer_needs_item(ctx, Some(player_guid), row.item_entry);
-        if !crate::loot::quest_take_allowed(row.reserved_for, player_guid, needs) {
-            return Err(ActionRefusal::new(
-                ActionRefusalKind::CannotAct,
-                if row.reserved_for != 0 && row.reserved_for != player_guid {
-                    "this item is reserved for another player"
-                } else {
-                    "you do not need this quest item"
-                },
-            )
-            .into());
-        }
-    } else if !crate::loot::group_loot_take_allowed(
-        row.withheld,
-        row.reserved_for,
-        row.master_only,
-        row.designated_looter_guid,
-        player_guid,
-    ) {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::CannotAct,
-            if row.master_only {
-                "this item requires the master looter to distribute it"
-            } else {
-                "this item belongs to another looter right now"
-            },
-        )
-        .into());
-    }
-    let tmpl = ctx
-        .db
-        .game_item_template()
-        .entry()
-        .find(row.item_entry)
-        .ok_or_else(|| {
-            ActionRefusal::new(
-                ActionRefusalKind::MissingTarget,
-                format!("no template for item entry {}", row.item_entry),
-            )
-        })?;
-    // Grant before deleting the loot row; failed storage leaves it available for retry.
-    store_item_typed(
-        ctx,
-        player_guid,
-        player.owner_identity,
-        &tmpl,
-        row.count.max(1),
-        false,
-        Some(row.random_property_id),
-    )?;
-    let (item_entry, count) = (row.item_entry, row.count.max(1));
-    let (was_quest_only, was_unreserved) = (row.quest_only, row.reserved_for == 0);
-    loot.id().delete(row.id);
-    if was_quest_only && was_unreserved {
-        if source_is_corpse {
-            crate::loot::clone_quest_loot_for_eligible(
-                ctx,
-                player_guid,
-                corpse_guid,
-                item_entry,
-                count,
-                row.random_property_id,
-            );
-        } else {
-            crate::loot::clone_quest_loot_for_group(
-                ctx,
-                player_guid,
-                corpse_guid,
-                item_entry,
-                count,
-                row.random_property_id,
-            );
-        }
-    }
-    if source_is_corpse {
-        crate::loot::refresh_lootable(ctx, corpse_guid);
-    }
-    crate::hooks::fire_on_loot(
-        ctx,
-        &crate::hooks::LootPayload {
-            looter_guid: player_guid,
-            corpse_guid,
-            item_entry,
-            count,
-        },
-    );
-    Ok(())
-}
-
-pub(crate) fn apply_take_loot(
-    ctx: &ReducerContext,
-    player_guid: u64,
-    corpse_guid: u64,
-    loot_slot: u8,
-) -> Result<(), String> {
-    request_take_loot(ctx, player_guid, corpse_guid, loot_slot).map_err(Into::into)
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{
-        bandage_cooldown_blocks, durability_loss, profile_item_target_admitted, use_spell_for,
-        RECENTLY_BANDAGED_SPELL,
-    };
+    use super::{durability_loss, profile_item_target_admitted, use_spell_for};
 
     #[test]
     fn profile_item_target_refuses_zero_and_over_limit_counts() {
@@ -1010,7 +801,7 @@ mod tests {
 
     #[test]
     fn use_spell_for_reads_spellid_1_gated_on_the_on_use_trigger() {
-        let mut tmpl = crate::seed::base_item(1, "x");
+        let mut tmpl = crate::ItemTemplate::blank(1, "x");
         tmpl.spellid_1 = 50110;
         tmpl.spelltrigger_1 = 0;
         assert_eq!(use_spell_for(&tmpl), Some(50110));
@@ -1021,29 +812,6 @@ mod tests {
         tmpl.spellid_1 = 50110;
         tmpl.spelltrigger_1 = 1;
         assert_eq!(use_spell_for(&tmpl), None);
-    }
-
-    #[test]
-    fn bandage_cooldown_gate_blocks_only_the_bandage_while_debuff_is_live() {
-        assert!(
-            bandage_cooldown_blocks(1251, true),
-            "re-bandage blocked while Recently Bandaged is live"
-        );
-        assert!(
-            !bandage_cooldown_blocks(1251, false),
-            "bandage usable once the cooldown expired"
-        );
-        assert!(
-            bandage_cooldown_blocks(2581, true),
-            "the rank-2 Heavy Linen shares the same lockout"
-        );
-        assert!(
-            !bandage_cooldown_blocks(2581, false),
-            "rank-2 bandage usable once the cooldown expired"
-        );
-        assert!(!bandage_cooldown_blocks(118, true));
-        assert!(!bandage_cooldown_blocks(2681, true));
-        assert_eq!(RECENTLY_BANDAGED_SPELL, 11196);
     }
 
     #[test]

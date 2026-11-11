@@ -23,14 +23,15 @@ File: `crates/lyracore-shared/src/spell/taxonomy.rs`.
 
 ## 3. Map the raw effect in the importer
 
-File: `importer/src/spell.rs`.
+Files: `importer/src/spell_kind.rs`, `importer/src/spell.rs`.
 
 - Import the new byte name from `lyracore_shared::spell::taxonomy`.
 - Map the raw effect id in `instant_effect_to_kind`, or for an aura the raw aura id in
-  `aura_mod_to_kind`, and name the kind in `kind_name`.
+  `aura_mod_to_kind` (both in `spell_kind.rs`), and name the kind in `kind_name` (`spell.rs`).
 - If the effect needs parameters, set them in `resolve_instant_params` (`resolve_aura_params` for an
   aura). If it needs a header
-  attribute (Distract keeps stealth), add it in `spell_flag_attributes`.
+  attribute (Distract keeps stealth), add it to the spell's entry in
+  `importer/src/spell_overrides.rs`.
 - Add a unit test for the mapping, and an ignored test that reads the real spell from
   `LYRACORE_VMANGOS_SQLITE` with auxiliary tables from `LYRACORE_TEST_DBC`, and asserts step 1.
 
@@ -38,7 +39,7 @@ File: `importer/src/spell.rs`.
 
 Files: `module/src/spell/cast/resolve.rs`, `module/src/spell/outcome.rs`.
 
-- An effect-specific Gate runs in `resolve_cast_at_typed` after `check_cast_gates` and before the
+- An effect-specific Gate runs in `resolve_cast_at` after `check_cast_gates` and before the
   cost is charged, so a Refusal leaves power and cooldown untouched.
 - A Gate returns a `CastGateRefusal` with a `CastRefusalReason` (`module/src/spell/outcome.rs`).
   Add a `CastRefusalKind` only when a Package caller must tell the new Refusal apart.
@@ -61,12 +62,13 @@ Only when the effect outlives the cast. Add the table in the owning family's mod
   with `#[default(...)]`. A `String` column cannot take a default, so string data goes in a new
   table. [`danger-zones.md`](../danger-zones.md) has the rules.
 - End the state on every path that ends it. Distract clears its row on death
-  (`module/src/combat/death.rs`), on a new Engagement (`module/src/combat/engage.rs`), when a pet
-  despawns (`module/src/creatures/pet.rs`) and when a creature's lifecycle resets
-  (`module/src/creatures/eventai/edges.rs`).
+  (`module/src/combat/death.rs`), on a new Engagement (`module/src/combat/engage.rs`) and when a
+  creature's lifecycle resets (`module/src/creatures/eventai/edges.rs`). Every creature removal
+  calls `despawn_creature_entity` (`module/src/creatures/tick/lifecycle.rs`); add a per-creature
+  row to it and to `creature_teardown_architecture_test` in `module/src/tripwires.rs`.
 - Read it where behaviour changes. Distract holds idle movement in the creature behavior cycle's
   `IdleSink` (`module/src/creatures/cycle/ctx.rs`) and faces the point through
-  `module/src/creatures/tick/mod.rs`.
+  `module/src/creatures/leg.rs`.
 
 ## 7. Check schema and delivery
 

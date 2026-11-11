@@ -124,42 +124,24 @@ impl Mail {
         }
     }
 }
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Attach {
-    Nothing,
-    NotYours,
-    Soulbound,
-    Detach,
-}
-pub(crate) fn plan_attach(item_guid: u64, owned: Option<(u64, bool)>, sender_guid: u64) -> Attach {
-    if item_guid == 0 {
-        return Attach::Nothing;
-    }
-    match owned {
-        None => Attach::NotYours,
-        Some((owner_guid, _)) if owner_guid != sender_guid => Attach::NotYours,
-        Some((_, true)) => Attach::Soulbound,
-        Some(_) => Attach::Detach,
-    }
-}
 pub(crate) fn detach_item(
     ctx: &ReducerContext,
     sender_guid: u64,
     item_guid: u64,
 ) -> Result<ItemSnapshot, MailRefusal> {
-    let items = ctx.db.game_item_instance();
-    let owned = items.guid().find(item_guid);
-    match plan_attach(
-        item_guid,
-        owned.as_ref().map(|i| (i.owner_guid, i.soulbound)),
-        sender_guid,
-    ) {
-        Attach::Nothing => return Ok(ItemSnapshot::default()),
-        Attach::NotYours => return Err(MailRefusal::NotYourItem),
-        Attach::Soulbound => return Err(MailRefusal::ItemIsSoulbound),
-        Attach::Detach => {}
+    if item_guid == 0 {
+        return Ok(ItemSnapshot::default());
     }
-    let inst = owned.expect("Detach is only reachable with a row");
+    let inst = ctx
+        .db
+        .game_item_instance()
+        .guid()
+        .find(item_guid)
+        .filter(|item| item.owner_guid == sender_guid)
+        .ok_or(MailRefusal::NotYourItem)?;
+    if inst.soulbound {
+        return Err(MailRefusal::ItemIsSoulbound);
+    }
     let snapshot = ItemSnapshot::from(&inst);
     if snapshot.item_text_id != 0 {
         use crate::mail_text::game_item_text;
@@ -441,66 +423,72 @@ pub(crate) fn debit_purse(
     payer.update(ctx);
     Ok(())
 }
-#[allow(clippy::too_many_arguments)]
+fn same_account(ctx: &ReducerContext, first: u64, second: u64) -> bool {
+    fn account(ctx: &ReducerContext, guid: u64) -> Option<u64> {
+        use crate::native::directory::game_character_profile;
+        crate::helpers::character_by_guid(ctx, guid)
+            .map(|character| character.account_id)
+            .or_else(|| {
+                ctx.db
+                    .game_character_profile()
+                    .guid()
+                    .find(guid)
+                    .map(|profile| profile.account_id)
+            })
+    }
+    matches!((account(ctx, first), account(ctx, second)), (Some(a), Some(b)) if a != 0 && a == b)
+}
+
+/// The Mail a Character sends; `item_guid` 0 attaches no item.
+pub(crate) struct OutgoingMail {
+    pub(crate) recipient_guid: u64,
+    pub(crate) subject: String,
+    pub(crate) body: String,
+    pub(crate) money: u32,
+    pub(crate) cod: u32,
+    pub(crate) item_guid: u64,
+}
+
 pub(crate) fn apply_send(
     ctx: &ReducerContext,
     sender_guid: u64,
-    recipient_guid: u64,
-    subject: String,
-    body: String,
-    money: u32,
-    cod: u32,
-    item_guid: u64,
+    mail: OutgoingMail,
+) -> Result<(), MailRefusal> {
+    let same_account = same_account(ctx, sender_guid, mail.recipient_guid);
+    send(ctx, sender_guid, mail, same_account)
+}
+
+fn send(
+    ctx: &ReducerContext,
+    sender_guid: u64,
+    mail: OutgoingMail,
     same_account: bool,
 ) -> Result<(), MailRefusal> {
-    let item = detach_item(ctx, sender_guid, item_guid)?;
+    let item = detach_item(ctx, sender_guid, mail.item_guid)?;
     debit_purse(
         ctx,
         sender_guid,
-        lyracore_shared::mail::total_cost(money),
+        lyracore_shared::mail::total_cost(mail.money),
         MailRefusal::NotEnoughMoney,
     )?;
     let delay_secs = delivery_delay_secs(!item.is_empty(), same_account);
     insert_letter(
         ctx,
-        Letter::from_character(sender_guid, recipient_guid, subject, body, money, cod, item)
-            .delayed(
-                crate::time::now(ctx).to_micros_since_unix_epoch(),
-                delay_secs,
-            ),
+        Letter::from_character(
+            sender_guid,
+            mail.recipient_guid,
+            mail.subject,
+            mail.body,
+            mail.money,
+            mail.cod,
+            item,
+        )
+        .delayed(
+            crate::time::now(ctx).to_micros_since_unix_epoch(),
+            delay_secs,
+        ),
     );
     Ok(())
-}
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum TakeMoney {
-    NotYours,
-    NothingToTake,
-    Take(u32),
-}
-pub(crate) fn plan_take_money(row: Option<(u64, u32)>, caller_guid: u64) -> TakeMoney {
-    match row {
-        Some((recipient_guid, _)) if recipient_guid != caller_guid => TakeMoney::NotYours,
-        Some((_, 0)) => TakeMoney::NothingToTake,
-        Some((_, money)) => TakeMoney::Take(money),
-        None => TakeMoney::NotYours,
-    }
-}
-pub(crate) fn mail_money(ctx: &ReducerContext, mail_id: u64) -> Option<(u64, u32)> {
-    delivered_mail(ctx, mail_id).map(|m| (m.recipient_guid, m.money))
-}
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum TakeItem {
-    NotYours,
-    NothingToTake,
-    Take,
-}
-pub(crate) fn plan_take_item(row: Option<(u64, u32)>, caller_guid: u64) -> TakeItem {
-    match row {
-        Some((recipient_guid, _)) if recipient_guid != caller_guid => TakeItem::NotYours,
-        Some((_, 0)) => TakeItem::NothingToTake,
-        Some(_) => TakeItem::Take,
-        None => TakeItem::NotYours,
-    }
 }
 pub(crate) fn clear_mail_item(ctx: &ReducerContext, mail_id: u64) {
     let mails = ctx.db.game_mail();
@@ -531,22 +519,21 @@ pub(crate) fn clear_mail_money(ctx: &ReducerContext, mail_id: u64) {
         mails.id().update(row);
     }
 }
-pub(crate) fn credited(purse: u32, amount: u32) -> u32 {
-    purse.saturating_add(amount)
-}
 pub(crate) fn apply_take_money(
     ctx: &ReducerContext,
     recipient_guid: u64,
     mail_id: u64,
 ) -> Result<(), crate::Refusal> {
-    let money = match plan_take_money(mail_money(ctx, mail_id), recipient_guid) {
-        TakeMoney::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.into()),
-        TakeMoney::NothingToTake => return Err(lyracore_shared::mail::NOTHING_TO_TAKE.into()),
-        TakeMoney::Take(money) => money,
-    };
+    let money = delivered_mail(ctx, mail_id)
+        .filter(|mail| mail.recipient_guid == recipient_guid)
+        .ok_or(lyracore_shared::mail::NOT_YOUR_MAIL)?
+        .money;
+    if money == 0 {
+        return Err(lyracore_shared::mail::NOTHING_TO_TAKE.into());
+    }
     let mut taker = crate::helpers::acting_entity_by_guid(ctx, recipient_guid)
         .ok_or_else(|| lyracore_shared::mail::NOT_IN_WORLD.to_string())?;
-    taker.money = credited(taker.money, money);
+    taker.money = taker.money.saturating_add(money);
     taker.update(ctx);
     clear_mail_money(ctx, mail_id);
     Ok(())
@@ -556,18 +543,12 @@ pub(crate) fn apply_take_item(
     recipient_guid: u64,
     mail_id: u64,
 ) -> Result<(), MailRefusal> {
-    let row = delivered_mail(ctx, mail_id);
-    match plan_take_item(
-        row.as_ref().map(|m| (m.recipient_guid, m.item_entry)),
-        recipient_guid,
-    ) {
-        TakeItem::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string().into()),
-        TakeItem::NothingToTake => {
-            return Err(lyracore_shared::mail::NOTHING_TO_TAKE.to_string().into())
-        }
-        TakeItem::Take => {}
+    let row = delivered_mail(ctx, mail_id)
+        .filter(|mail| mail.recipient_guid == recipient_guid)
+        .ok_or_else(|| lyracore_shared::mail::NOT_YOUR_MAIL.to_string())?;
+    if row.item_entry == 0 {
+        return Err(lyracore_shared::mail::NOTHING_TO_TAKE.to_string().into());
     }
-    let row = row.expect("Take is only reachable with a row");
     let settlement = lyracore_shared::mail::cod_settlement(
         row.cod,
         row.sender_guid,
@@ -665,6 +646,16 @@ pub(crate) fn apply_return(
     ctx: &ReducerContext,
     recipient_guid: u64,
     mail_id: u64,
+) -> Result<(), crate::Refusal> {
+    let same_account = delivered_mail(ctx, mail_id)
+        .is_some_and(|mail| same_account(ctx, recipient_guid, mail.sender_guid));
+    return_to_sender(ctx, recipient_guid, mail_id, same_account)
+}
+
+fn return_to_sender(
+    ctx: &ReducerContext,
+    recipient_guid: u64,
+    mail_id: u64,
     same_account: bool,
 ) -> Result<(), crate::Refusal> {
     let row = delivered_mail(ctx, mail_id);
@@ -735,15 +726,17 @@ pub fn realm_mail_send(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let sender_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    apply_send(
+    send(
         ctx,
         sender_guid,
-        recipient_guid,
-        subject,
-        body,
-        money,
-        cod,
-        item_guid,
+        OutgoingMail {
+            recipient_guid,
+            subject,
+            body,
+            money,
+            cod,
+            item_guid,
+        },
         same_account,
     )
     .map_err(String::from)
@@ -787,61 +780,17 @@ pub fn realm_mail_return(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    Ok(apply_return(ctx, recipient_guid, mail_id, same_account)?)
+    Ok(return_to_sender(
+        ctx,
+        recipient_guid,
+        mail_id,
+        same_account,
+    )?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn taking_money_is_refused_for_a_mail_the_caller_is_not_the_recipient_of() {
-        assert_eq!(plan_take_money(Some((7, 100)), 7), TakeMoney::Take(100));
-        assert_eq!(plan_take_money(Some((7, 100)), 8), TakeMoney::NotYours);
-        assert_eq!(plan_take_money(None, 7), TakeMoney::NotYours);
-    }
-
-    #[test]
-    fn a_mail_already_emptied_of_money_has_nothing_left_to_take() {
-        assert_eq!(plan_take_money(Some((7, 0)), 7), TakeMoney::NothingToTake);
-    }
-
-    #[test]
-    fn attaching_an_item_the_sender_does_not_own_is_refused() {
-        assert_eq!(plan_attach(4, Some((7, false)), 7), Attach::Detach);
-        assert_eq!(plan_attach(4, Some((8, false)), 7), Attach::NotYours);
-        assert_eq!(plan_attach(4, None, 7), Attach::NotYours);
-    }
-
-    #[test]
-    fn a_soulbound_instance_is_refused_and_an_unworn_bind_on_equip_item_is_mailable() {
-        assert_eq!(plan_attach(4, Some((7, true)), 7), Attach::Soulbound);
-        assert_eq!(plan_attach(4, Some((7, false)), 7), Attach::Detach);
-    }
-
-    #[test]
-    fn item_guid_zero_means_no_attachment_rather_than_a_missing_item() {
-        assert_eq!(plan_attach(0, None, 7), Attach::Nothing);
-        assert_eq!(plan_attach(0, Some((8, true)), 7), Attach::Nothing);
-    }
-
-    #[test]
-    fn taking_an_item_is_refused_for_a_mail_the_caller_is_not_the_recipient_of() {
-        assert_eq!(plan_take_item(Some((7, 509_0001)), 7), TakeItem::Take);
-        assert_eq!(plan_take_item(Some((7, 509_0001)), 8), TakeItem::NotYours);
-        assert_eq!(plan_take_item(None, 7), TakeItem::NotYours);
-        assert_eq!(plan_take_item(Some((7, 0)), 7), TakeItem::NothingToTake);
-    }
-
-    #[test]
-    fn an_attachment_with_no_entry_is_empty() {
-        assert!(ItemSnapshot::default().is_empty());
-        assert!(!ItemSnapshot {
-            entry: 509_0001,
-            ..Default::default()
-        }
-        .is_empty());
-    }
 
     fn row(recipient_guid: u64, sender: MailSender) -> Mail {
         let (sender_kind, sender_guid, sender_entry) = sender.columns();
@@ -979,12 +928,6 @@ mod tests {
         assert_eq!(payment.subject, "Your sword");
         assert_eq!(payment.check_flags, 0x08);
         assert_eq!(payment.money, 250);
-    }
-
-    #[test]
-    fn a_credited_purse_saturates_rather_than_wrapping() {
-        assert_eq!(credited(100, 30), 130);
-        assert_eq!(credited(u32::MAX, 1), u32::MAX);
     }
 
     #[test]

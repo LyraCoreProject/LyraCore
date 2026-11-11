@@ -127,8 +127,8 @@ An acknowledgement that arrives after a same-map teleport and before the
 client's `MSG_MOVE_TELEPORT_ACK` is not relayed. Its pose may be the old
 position: a release acknowledges the unroot at the corpse.
 
-Root, stun and polymorph follow `lyracore_shared::aura::holds_in_place`, the
-rule the Module's movement gate also uses. The importer gives confuse, pacify
+Root, stun and polymorph follow the Module's `modifiers::holds_in_place`, the
+rule its movement gate also uses. The importer gives confuse, pacify
 and charm the polymorph mechanic, so they root the client too. Telling them
 apart needs a distinct mechanic in the imported spell data.
 

@@ -137,17 +137,14 @@ fn gameobject_source() -> WorldSource {
 }
 
 fn gameobject_plan(source: &WorldSource) -> DumpPlan {
-    let args = crate::parse_args_from([
+    let args = crate::cli::world_import_args([
         "--dump",
         "fixture.sqlite",
         "--family",
         "gameobjects",
         "--world-profile",
         "full-world",
-    ])
-    .unwrap()
-    .world_import_args()
-    .unwrap();
+    ]);
     build_vmangos_plan(source, &args).unwrap()
 }
 
@@ -225,13 +222,12 @@ fn malformed_gameobject_numbers_do_not_create_an_unusable_spawn() {
         ),
     ] {
         let source = gameobject_source();
-        let WorldSource::Vmangos(connection) = &source else {
-            panic!("SQLite fixture")
-        };
+        let connection = source.fixture_connection();
         connection.pragma_update(None, "query_only", false).unwrap();
         connection.execute_batch(sql).unwrap();
         connection.pragma_update(None, "query_only", true).unwrap();
-        let scope = WorldImportScope::canonical(WorldImportProfile::FullWorld).unwrap();
+        let scope =
+            WorldImportScope::canonical(WorldImportProfile::parse("full-world").unwrap()).unwrap();
         let error = collect_gameobject_spawns(&source, &scope).err().unwrap();
         assert!(error.to_string().contains(column), "{error}");
     }

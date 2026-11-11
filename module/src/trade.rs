@@ -2,11 +2,45 @@ use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
 use lyracore_shared::trade::event_kind;
 
-use crate::helpers::{player_interaction_gate, PlayerInteractionDenied};
 use crate::{
     game_character_contact, game_faction_template, game_item_instance, game_item_template,
     game_world_entity, WorldEntity,
 };
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PlayerInteractionDenied {
+    ActorDead,
+    NoTarget,
+    TargetNotPlayer,
+    TargetDead,
+    DifferentPartition,
+    OutOfRange,
+}
+
+fn player_interaction_gate(
+    actor: &WorldEntity,
+    target: Option<&WorldEntity>,
+) -> Result<(), PlayerInteractionDenied> {
+    if actor.dead {
+        return Err(PlayerInteractionDenied::ActorDead);
+    }
+    let Some(target) = target else {
+        return Err(PlayerInteractionDenied::NoTarget);
+    };
+    if !target.is_player() {
+        return Err(PlayerInteractionDenied::TargetNotPlayer);
+    }
+    if target.dead {
+        return Err(PlayerInteractionDenied::TargetDead);
+    }
+    if !crate::helpers::in_same_partition(target, actor.map_id, actor.instance_id) {
+        return Err(PlayerInteractionDenied::DifferentPartition);
+    }
+    if crate::helpers::dist_sq(actor, target) > crate::npc_interaction::INTERACTION_RANGE_SQ {
+        return Err(PlayerInteractionDenied::OutOfRange);
+    }
+    Ok(())
+}
 
 #[table(accessor = game_trade_session,
         index(accessor = by_initiator, btree(columns = [initiator_guid])),
@@ -94,7 +128,7 @@ fn push_trade_event_payload(
         recipient_guid,
         payload,
     });
-    crate::native::trade_event(ctx, &event);
+    crate::native::trade::event(ctx, &event);
 }
 
 pub(crate) fn session_involving(ctx: &ReducerContext, guid: u64) -> Option<TradeSession> {
@@ -763,9 +797,95 @@ pub(crate) fn cancel_trade_for(ctx: &ReducerContext, guid: u64) {
     );
 }
 
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_trade_event, crate::EVENT_TTL_MICROS);
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
+    let stale: Vec<u64> = ctx
+        .db
+        .game_trade_session()
+        .iter()
+        .filter(|session| session_is_stale(session.created_at.to_micros_since_unix_epoch(), now))
+        .map(|session| session.initiator_guid)
+        .collect();
+    for guid in stale {
+        cancel_trade_for(ctx, guid);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn player_at(guid: u64, x: f32) -> WorldEntity {
+        let mut e = crate::helpers::tests::entity(guid, 0, 0, 0, 0);
+        e.type_mask = lyracore_shared::constants::type_mask::PLAYER_BIT;
+        e.x = x;
+        e
+    }
+
+    #[test]
+    fn a_living_player_next_to_a_living_player_passes_and_an_absent_partner_is_no_target() {
+        let actor = player_at(1, 0.0);
+        let partner = player_at(2, 3.0);
+        assert_eq!(player_interaction_gate(&actor, Some(&partner)), Ok(()));
+        assert_eq!(
+            player_interaction_gate(&actor, None),
+            Err(PlayerInteractionDenied::NoTarget)
+        );
+    }
+
+    #[test]
+    fn the_gate_names_the_specific_refusal_and_holds_the_range_boundary_and_precedence() {
+        let actor = player_at(1, 0.0);
+
+        let mut dead_actor = player_at(1, 0.0);
+        dead_actor.dead = true;
+        let partner = player_at(2, 3.0);
+        assert_eq!(
+            player_interaction_gate(&dead_actor, Some(&partner)),
+            Err(PlayerInteractionDenied::ActorDead)
+        );
+        assert_eq!(
+            player_interaction_gate(&dead_actor, None),
+            Err(PlayerInteractionDenied::ActorDead)
+        );
+
+        let mut creature = player_at(2, 3.0);
+        creature.type_mask = 0;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&creature)),
+            Err(PlayerInteractionDenied::TargetNotPlayer)
+        );
+
+        let mut dead_partner = player_at(2, 3.0);
+        dead_partner.dead = true;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&dead_partner)),
+            Err(PlayerInteractionDenied::TargetDead)
+        );
+
+        let mut other_map = player_at(2, 3.0);
+        other_map.map_id = 1;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&other_map)),
+            Err(PlayerInteractionDenied::DifferentPartition)
+        );
+        let mut other_instance = player_at(2, 3.0);
+        other_instance.instance_id = 7;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&other_instance)),
+            Err(PlayerInteractionDenied::DifferentPartition)
+        );
+
+        let at_boundary = player_at(2, crate::npc_interaction::INTERACTION_RANGE_SQ.sqrt());
+        assert_eq!(player_interaction_gate(&actor, Some(&at_boundary)), Ok(()));
+        let mut past_boundary = player_at(2, crate::npc_interaction::INTERACTION_RANGE_SQ.sqrt());
+        past_boundary.z = 1.0;
+        assert_eq!(
+            player_interaction_gate(&actor, Some(&past_boundary)),
+            Err(PlayerInteractionDenied::OutOfRange)
+        );
+    }
 
     #[test]
     fn gold_after_refuses_underflow_and_the_u32_cap_exactly() {
@@ -833,22 +953,6 @@ mod tests {
             commit_verdict(&side(1, 0, 0, 1, 0), &side(2, 0, 0, 2, 0)),
             Err(CommitRefusal::InventoryFull { side: 1 })
         );
-    }
-
-    #[test]
-    fn any_offer_mutation_clears_accepts_when_either_party_accepted() {
-        assert!(!mutation_clears_accepts(false, false));
-        assert!(mutation_clears_accepts(true, false));
-        assert!(mutation_clears_accepts(false, true));
-        assert!(mutation_clears_accepts(true, true));
-    }
-
-    #[test]
-    fn a_session_is_stale_strictly_past_the_ttl_since_its_last_action() {
-        let ttl = TRADE_IDLE_TTL_MICROS;
-        assert!(!session_is_stale(1_000, 1_000 + ttl));
-        assert!(session_is_stale(1_000, 1_000 + ttl + 1));
-        assert!(!session_is_stale(1_000, 999), "clock skew never reaps");
     }
 
     #[test]

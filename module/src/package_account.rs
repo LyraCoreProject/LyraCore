@@ -1,6 +1,7 @@
 use spacetimedb::{table, ReducerContext, Table};
 
-use crate::auth::{game_account, Account, Appearance};
+use crate::auth::{game_account, Account};
+use crate::character::Appearance;
 
 #[table(accessor = game_package_account)]
 pub struct PackageAccount {
@@ -18,9 +19,9 @@ pub(crate) fn create_package_character(
     race: u8,
     class: u8,
 ) -> Result<u64, String> {
-    crate::auth::check_new_character(ctx, name, race, class)?;
+    crate::character::check_new_character(ctx, name, race, class)?;
     let account_id = owned_account_with_room(ctx, package_name)?;
-    Ok(crate::auth::insert_new_character(
+    Ok(crate::character::insert_new_character(
         ctx,
         account_id,
         name.to_string(),
@@ -43,9 +44,9 @@ pub(crate) fn owned_account_with_room(
         .collect();
     if let Some(&id) = owned.iter().find(|&&id| {
         if crate::peer::world_shard(ctx).is_some() {
-            crate::native::realm_account_has_room(ctx, id)
+            crate::native::character_names::account_has_room(ctx, id)
         } else {
-            crate::auth::account_has_room(ctx, id)
+            crate::character::account_has_room(ctx, id)
         }
     }) {
         return Ok(id);
@@ -83,7 +84,6 @@ pub(crate) fn delete_package_character(
     guid: u64,
 ) -> Result<(), String> {
     use crate::game_world_entity;
-    use crate::guild::game_guild;
     use crate::native::package_relocation::{game_package_relocation, Relocation};
 
     if crate::peer::world_shard(ctx).is_some() {
@@ -109,21 +109,15 @@ pub(crate) fn delete_package_character(
     {
         return Err("Package relocation is pending".into());
     }
-    if ctx
-        .db
-        .game_guild()
-        .by_leader()
-        .filter(guid)
-        .next()
-        .is_some()
-    {
-        return Err("Guild Leader cannot delete their Character".into());
-    }
-    crate::auth::character_deletion_gate(ctx, character.account_id, guid)?;
+    crate::character::character_deletion_gate(ctx, character.account_id, guid)?;
     if let Some(entity) = ctx.db.game_world_entity().guid().find(guid) {
-        crate::world::remove_live_character(ctx, entity, crate::world::CharacterDeparture::Logout);
+        crate::character::remove_live_character(
+            ctx,
+            entity,
+            crate::character::CharacterDeparture::Logout,
+        );
     }
-    crate::auth::apply_delete_character(ctx, character.account_id, guid)
+    crate::character::apply_delete_character(ctx, character.account_id, guid)
 }
 
 #[cfg(feature = "debug_reducers")]

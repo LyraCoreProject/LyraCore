@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{FIXTURE_JERKY, SCENARIO_VENDOR_ENTRY, TEST_WOLF_ENTRY};
 use support::Standalone;
 
 const ITEM: &str = "5090050";
@@ -31,11 +32,17 @@ fn max_health(shard: &Standalone) -> u32 {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn loot_keeps_its_property_after_the_pool_changes_and_equipped_stats_follow_it() {
     let shard = fixture("property-loot");
-    shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,51000,{ITEM},10000,1,0,false)"));
-    shard.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
-    let wolf =
-        shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000 AND dead = false");
+    shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,{TEST_WOLF_ENTRY},{ITEM},10000,1,0,false)"));
+    shard.assert_sql(&format!(
+        "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "1"],
+    );
+    let wolf = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY} AND dead = false"
+    ));
     shard.assert_call("debug_apply_damage", &[&wolf[0]["guid"], "100", "1"]);
     assert_eq!(
         shard
@@ -44,7 +51,7 @@ fn loot_keeps_its_property_after_the_pool_changes_and_equipped_stats_follow_it()
         1,
         "damage must acquire the Loot Tag"
     );
-    shard.assert_call("debug_kill_nearest", &["1", "51000"]);
+    shard.assert_call("debug_kill_nearest", &["1", &TEST_WOLF_ENTRY.to_string()]);
     let loot = shard.query_rows(&format!(
         "SELECT * FROM game_corpse_loot WHERE item_entry = {ITEM}"
     ));
@@ -116,22 +123,32 @@ fn create_spell(shard: &Standalone) {
 fn a_missing_property_pool_does_not_leave_an_empty_loot_cursor() {
     let shard = fixture("property-missing-loot-pool");
     shard.assert_sql(
-        "UPDATE game_creature_template SET money_min = 0, money_max = 0 WHERE entry = 51000",
+        &format!("UPDATE game_creature_template SET money_min = 0, money_max = 0 WHERE entry = {TEST_WOLF_ENTRY}"),
     );
     shard.assert_sql("DELETE FROM game_item_property_weight WHERE id = 5090100");
-    shard.assert_sql("DELETE FROM game_creature_loot WHERE creature_entry = 51000");
-    shard.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
-    shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,51000,{ITEM},10000,1,0,false)"));
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
-    let wolf = shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000");
+    shard.assert_sql(&format!(
+        "DELETE FROM game_creature_loot WHERE creature_entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.assert_sql(&format!(
+        "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,{TEST_WOLF_ENTRY},{ITEM},10000,1,0,false)"));
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "1"],
+    );
+    let wolf = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
     let guid = &wolf[0]["guid"];
     shard.assert_call("debug_apply_damage", &[guid, "10", "1"]);
     shard.assert_call("debug_kill_creature", &["1", guid]);
     assert!(shard
         .query_rows("SELECT id FROM game_corpse_loot")
         .is_empty());
-    let corpse =
-        shard.query_rows("SELECT dynamic_flags FROM game_world_entity WHERE entry = 51000");
+    let corpse = shard.query_rows(&format!(
+        "SELECT dynamic_flags FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
     let flags: u32 = corpse[0]["dynamic_flags"].parse().unwrap();
     assert_eq!(flags & 1, 0, "an omitted drop must not set LOOTABLE");
 }
@@ -141,12 +158,23 @@ fn a_missing_property_pool_does_not_leave_an_empty_loot_cursor() {
 fn invalid_creature_drops_leave_valid_loot_at_slot_zero() {
     let shard = fixture("property-mixed-creature");
     shard.assert_sql("DELETE FROM game_item_property_weight WHERE id = 5090100");
-    shard.assert_sql("DELETE FROM game_creature_spawn WHERE entry = 51000");
-    shard.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
-    shard.assert_sql("DELETE FROM game_creature_loot WHERE creature_entry = 51000");
-    shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,51000,{ITEM},10000,1,0,false),(5090101,51000,5090052,10000,2,0,false)"));
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
-    let wolf = shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000");
+    shard.assert_sql(&format!(
+        "DELETE FROM game_creature_spawn WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.assert_sql(&format!(
+        "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.assert_sql(&format!(
+        "DELETE FROM game_creature_loot WHERE creature_entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,{TEST_WOLF_ENTRY},{ITEM},10000,1,0,false),(5090101,{TEST_WOLF_ENTRY},{FIXTURE_JERKY},10000,2,0,false)"));
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "1"],
+    );
+    let wolf = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
     assert_eq!(wolf.len(), 1);
     shard.assert_call("debug_apply_damage", &[&wolf[0]["guid"], "10", "1"]);
     shard.assert_call("debug_kill_creature", &["1", &wolf[0]["guid"]]);
@@ -154,7 +182,7 @@ fn invalid_creature_drops_leave_valid_loot_at_slot_zero() {
         shard.query_rows("SELECT slot,item_entry,count,random_property_id FROM game_corpse_loot");
     assert_eq!(loot.len(), 1);
     assert_eq!(loot[0]["slot"], "0");
-    assert_eq!(loot[0]["item_entry"], "5090052");
+    assert_eq!(loot[0]["item_entry"], FIXTURE_JERKY.to_string());
     assert_eq!(loot[0]["count"], "2");
     assert_eq!(loot[0]["random_property_id"], "0");
 }
@@ -165,7 +193,7 @@ fn invalid_chest_properties_preserve_valid_drops_and_finish_empty_fallbacks() {
     let shard = fixture("property-mixed-chest");
     shard.assert_sql("UPDATE game_world_entity SET x = 100, y = 100, z = 100 WHERE guid = 1");
     shard.assert_sql("DELETE FROM game_item_property_weight WHERE id = 5090100");
-    shard.assert_sql(&format!("INSERT INTO game_gameobject_loot (id,loot_id,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,5090100,{ITEM},10000,1,0,false),(5090101,5090100,5090052,10000,2,0,false)"));
+    shard.assert_sql(&format!("INSERT INTO game_gameobject_loot (id,loot_id,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,5090100,{ITEM},10000,1,0,false),(5090101,5090100,{FIXTURE_JERKY},10000,2,0,false)"));
     for (entry, loot_id) in [("5090110", "5090100"), ("5090111", "0")] {
         shard.assert_call(
             "debug_spawn_gameobject",
@@ -184,7 +212,7 @@ fn invalid_chest_properties_preserve_valid_drops_and_finish_empty_fallbacks() {
         } else {
             assert_eq!(loot.len(), 1);
             assert_eq!(loot[0]["slot"], "0");
-            assert_eq!(loot[0]["item_entry"], "5090052");
+            assert_eq!(loot[0]["item_entry"], FIXTURE_JERKY.to_string());
             assert_eq!(loot[0]["count"], "2");
             assert_eq!(loot[0]["random_property_id"], "0");
         }
@@ -297,8 +325,13 @@ fn splitting_and_moving_stacks_never_mix_properties() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn buyback_restores_the_saved_property_without_reading_the_current_pool() {
     let shard = fixture("property-buyback");
-    shard.assert_call("debug_spawn_at_feet", &["1", "51004", "1"]);
-    let vendor = shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004");
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &SCENARIO_VENDOR_ENTRY.to_string(), "1"],
+    );
+    let vendor = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+    ));
     for (index, property) in [PROPERTY, "0"].into_iter().enumerate() {
         shard.assert_call("debug_grant_item", &["1", ITEM, "1"]);
         shard.assert_sql(&format!(

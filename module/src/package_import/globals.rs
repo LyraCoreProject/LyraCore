@@ -1,7 +1,7 @@
 use spacetimedb::{ReducerContext, Table};
 
 use lyracore_package_delta::{
-    is_package_globals_id, FieldValue, Operation, Table as ClaimTable, TracedRow,
+    is_package_globals_id, FieldValue, Operation, Table as ClaimTable, TracedRow, GLOBALS_FAMILY,
 };
 
 use crate::{
@@ -11,9 +11,22 @@ use crate::{
     GraveyardZone, LevelStats, StartPosition,
 };
 
-use super::{as_f32, as_str, as_u32, as_u8, check_insert_is_whole, UpdateTarget};
+use super::{
+    as_f32, as_str, as_u32, as_u8, check_insert_is_whole, missing_reference, no_such_column,
+    ClaimOps,
+};
 
-pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+pub(super) const OPS: ClaimOps = ClaimOps {
+    name: GLOBALS_FAMILY,
+    in_package_range,
+    row_is_present,
+    check_references: Some(check_references),
+    clear_package_range,
+    write_row,
+    after_write: None,
+};
+
+fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
     for row in rows {
         match row.table() {
             ClaimTable::GraveyardZone => {
@@ -40,53 +53,24 @@ pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Resu
 }
 
 fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, String> {
-    if let Some(FieldValue::U32(value)) = row.fields().get(field).map(|claimed| &claimed.value) {
-        return Ok(*value);
-    }
-
-    let id = row.row_id();
-    let value = match row.table() {
-        ClaimTable::GraveyardZone => ctx
-            .db
-            .game_graveyard_zone()
-            .row_id()
-            .find(id)
-            .map(|zone| zone.safe_loc_id),
-        ClaimTable::CreateinfoSpell => ctx
-            .db
-            .game_createinfo_spell()
-            .id()
-            .find(id)
-            .map(|grant| grant.spell_id),
-        other => unreachable!("globals value lookup received {other}"),
-    };
-
-    value.ok_or_else(|| {
-        format!(
-            "`{}` row {} vanished during preflight",
-            row.table(),
-            row.key()
-        )
+    super::final_u32(row, field, || {
+        let id = row.row_id();
+        match row.table() {
+            ClaimTable::GraveyardZone => ctx
+                .db
+                .game_graveyard_zone()
+                .row_id()
+                .find(id)
+                .map(|zone| zone.safe_loc_id),
+            ClaimTable::CreateinfoSpell => ctx
+                .db
+                .game_createinfo_spell()
+                .id()
+                .find(id)
+                .map(|grant| grant.spell_id),
+            other => unreachable!("globals value lookup received {other}"),
+        }
     })
-}
-
-fn missing_reference(row: &TracedRow, field: &str, value: u32) -> String {
-    format!(
-        "`{}` row {} references missing {field} {value}",
-        row.table(),
-        row.key()
-    )
-}
-
-pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
-    if has_package_band(row.table()) && updates_an_uninvented_package_row(row) {
-        return UpdateTarget::Uninvented;
-    }
-    if row_is_present(ctx, row) {
-        UpdateTarget::Present
-    } else {
-        UpdateTarget::Absent
-    }
 }
 
 const fn has_package_band(table: ClaimTable) -> bool {
@@ -133,11 +117,11 @@ fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
     }
 }
 
-fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
-    row.operation() == Operation::Update && is_package_globals_id(row.row_id())
+fn in_package_range(row: &TracedRow) -> bool {
+    has_package_band(row.table()) && is_package_globals_id(row.row_id())
 }
 
-pub(super) fn clear_package_range(ctx: &ReducerContext) {
+fn clear_package_range(ctx: &ReducerContext) {
     let zones = ctx.db.game_graveyard_zone();
     let stale: Vec<u64> = zones
         .iter()
@@ -169,7 +153,7 @@ pub(super) fn clear_package_range(ctx: &ReducerContext) {
     }
 }
 
-pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     match row.operation() {
         Operation::Insert => insert_row(ctx, row),
         Operation::Update => update_row(ctx, row),
@@ -436,10 +420,6 @@ fn apply_createinfo_action_field(
     Ok(())
 }
 
-fn no_such_column(table: &str, column: &str) -> String {
-    format!("`{table}` has no claimable column `{column}`")
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
@@ -461,7 +441,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(in_package_range(&plan.rows[0]));
     }
 
     #[test]
@@ -476,7 +456,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(!updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(!in_package_range(&plan.rows[0]));
     }
 
     #[test]

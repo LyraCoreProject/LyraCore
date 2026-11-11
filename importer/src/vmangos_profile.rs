@@ -10,7 +10,15 @@ const PROFILE: &str = include_str!("../manifests/vmangos-4641790.json");
 
 pub(crate) struct SourceProfile {
     definition: Value,
+    tables: TableContracts,
     counts: RefCell<BTreeMap<String, Value>>,
+}
+
+enum TableContracts {
+    Pinned,
+    // A test fixture's own schema stands in for the pinned table contracts.
+    #[cfg(test)]
+    FixtureSchema,
 }
 
 impl SourceProfile {
@@ -22,15 +30,29 @@ impl SourceProfile {
         );
         Ok(Self {
             definition,
+            tables: TableContracts::Pinned,
             counts: RefCell::default(),
         })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture() -> Self {
+        Self {
+            definition: json!({"name": "fixture"}),
+            tables: TableContracts::FixtureSchema,
+            counts: RefCell::default(),
+        }
     }
 
     pub(crate) fn check_table(&self, connection: &Connection, table: &str) -> Result<()> {
         if self.counts.borrow().contains_key(table) {
             return Ok(());
         }
-        let contract = &self.definition["tables"][table];
+        let contract = &match self.tables {
+            TableContracts::Pinned => self.definition["tables"][table].clone(),
+            #[cfg(test)]
+            TableContracts::FixtureSchema => fixture_contract(connection, table)?,
+        };
         let columns = contract["columns"]
             .as_object()
             .with_context(|| format!("{NAME}: unapproved source table {table}"))?;
@@ -131,6 +153,22 @@ impl SourceProfile {
     }
 }
 
+#[cfg(test)]
+fn fixture_contract(connection: &Connection, table: &str) -> Result<Value> {
+    let mut statement = connection.prepare("SELECT name, type FROM pragma_table_info(?1)")?;
+    let mut columns = BTreeMap::<&str, Vec<String>>::new();
+    for column in statement.query_map([table], |row| {
+        Ok((row.get::<_, String>("name")?, row.get::<_, String>("type")?))
+    })? {
+        let (name, declaration) = column?;
+        columns
+            .entry(affinity(&declaration))
+            .or_default()
+            .push(name);
+    }
+    Ok(json!({ "columns": columns }))
+}
+
 fn check_values(
     connection: &Connection,
     table: &str,
@@ -206,6 +244,7 @@ mod tests {
                 "events": {"columns":{"integer":["kind","flags"]},"values":{"kind":[1,2]},"bits":{"flags":3},"locked_rows":1},
                 "other": {"columns":{"text":["name"]},"locked_rows":0}
             }}),
+            tables: TableContracts::Pinned,
             counts: RefCell::default(),
         }
     }
@@ -304,6 +343,7 @@ mod tests {
                 "target_bits":[{"target":4,"column":"target_param1","allowed":0}],
                 "locked_rows":1
             }}}),
+            tables: TableContracts::Pinned,
             counts: RefCell::default(),
         };
         make_profile().check_table(&database, "scripts").unwrap();

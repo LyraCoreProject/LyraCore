@@ -3,15 +3,14 @@ use lyracore_protocol::messages::vanilla::{opcodes::ServerOpcodeMessage, CMSG_CH
 use spacetimedb::ReducerContext;
 
 use super::Rollback;
-use crate::auth::CreateCharacterRefusal;
-use crate::guild::game_guild;
+use crate::character::CreateCharacterRefusal;
 
 pub(super) fn create(
     ctx: &ReducerContext,
     account_id: u64,
     request: CMSG_CHAR_CREATE,
 ) -> Result<ServerOpcodeMessage, Rollback> {
-    let appearance = crate::auth::Appearance {
+    let appearance = crate::character::Appearance {
         gender: request.gender.as_int(),
         skin: request.skin_color,
         face: request.face,
@@ -19,7 +18,7 @@ pub(super) fn create(
         hair_color: request.hair_color,
         facial_hair: request.facial_hair,
     };
-    crate::auth::insert_new_character(
+    crate::character::insert_new_character(
         ctx,
         account_id,
         request.name,
@@ -55,20 +54,7 @@ pub(super) fn delete(
     account_id: u64,
     guid: u64,
 ) -> Result<ServerOpcodeMessage, Rollback> {
-    let apply = || {
-        if ctx
-            .db
-            .game_guild()
-            .by_leader()
-            .filter(guid)
-            .next()
-            .is_some()
-        {
-            return Err("Guild Leader cannot delete their Character".into());
-        }
-        crate::auth::apply_delete_character(ctx, account_id, guid)
-    };
-    apply().map_err(|cause| {
+    crate::character::apply_delete_character(ctx, account_id, guid).map_err(|cause| {
         Rollback::reply(
             ServerOpcodeMessage::SMSG_CHAR_DELETE(codec::build_char_delete_response(
                 codec::CharDeleteOutcome::Failed,

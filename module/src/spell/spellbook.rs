@@ -1,6 +1,6 @@
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
-use crate::{game_aura, game_spell};
+use crate::game_spell;
 
 #[table(
     accessor = game_player_spell,
@@ -110,7 +110,7 @@ pub(crate) fn learn_spell(ctx: &ReducerContext, guid: u64, owner: Identity, spel
         owner_identity: owner,
         spell_id,
     });
-    crate::native::spell_learned(ctx, guid, spell_id);
+    crate::native::book::spell_learned(ctx, guid, spell_id);
     crate::skill::grant_lockpicking_on_learn(ctx, guid, owner, spell_id);
 }
 
@@ -122,43 +122,24 @@ pub(crate) fn forget_spell(ctx: &ReducerContext, guid: u64, spell_id: u32) {
         .collect::<Vec<_>>()
     {
         spells.id().delete(row.id);
-        crate::native::spell_forgotten(ctx, guid, spell_id);
+        crate::native::book::spell_forgotten(ctx, guid, spell_id);
     }
 }
 
-// The caller must recompute vitals once after stripping its batch of spells.
-pub(crate) fn strip_spell_auras(ctx: &ReducerContext, guid: u64, spell_id: u32) -> bool {
-    let auras = ctx.db.game_aura();
-    let redisplay = auras
-        .by_target()
-        .filter(&guid)
-        .any(|a| a.spell_id == spell_id && a.eff_kind == super::A_TRANSFORM);
-    let to_remove: Vec<(u64, bool, bool)> = auras
-        .by_target()
-        .filter(&guid)
-        .filter(|a| a.spell_id == spell_id)
-        .map(|a| {
-            (
-                a.id,
-                crate::spell::aura_moves_vitals(a.eff_kind, a.eff_p0),
-                crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0),
-            )
-        })
+pub(crate) fn strip_spell_auras(ctx: &ReducerContext, guid: u64, spell_ids: &[u32]) {
+    let stripped: Vec<_> = super::auras_on(ctx, guid)
+        .filter(|a| spell_ids.contains(&a.spell_id))
         .collect();
-    let mut moved_vitals = false;
-    let mut moved_mount = false;
-    for (id, mv, mm) in to_remove {
-        crate::Aura::delete(ctx, id);
-        moved_vitals |= mv;
-        moved_mount |= mm;
-    }
-    if moved_mount {
-        crate::mount::recompute_mount(ctx, guid);
-    }
-    if redisplay {
-        super::recompute_display(ctx, guid);
-    }
-    moved_vitals
+    super::shed_auras(ctx, stripped);
+}
+
+/// The first rank of `spell_id`'s chain; an unranked spell is its own first rank.
+pub(crate) fn first_rank(ctx: &ReducerContext, spell_id: u32) -> u32 {
+    ctx.db
+        .game_spell_chain()
+        .spell_id()
+        .find(spell_id)
+        .map_or(spell_id, |chain| chain.first_spell)
 }
 
 #[table(accessor = game_spell_chain, public, index(accessor = by_first, btree(columns = [first_spell])))]
@@ -208,7 +189,7 @@ pub(crate) fn dependent_spell_ids(rows: &[(u32, u32)], parent_spell: u32) -> Vec
 
 #[cfg(test)]
 mod tests {
-    use super::{createinfo_row_matches, dependent_spell_ids};
+    use super::dependent_spell_ids;
     use crate::seed::CREATEINFO_KIT;
 
     #[test]
@@ -248,35 +229,6 @@ mod tests {
             dependent_spell_ids(&rows, PLATE_PASSIVE_SPELL_ID),
             Vec::<u32>::new()
         );
-    }
-
-    #[test]
-    fn createinfo_row_matches_exact_race_and_class() {
-        assert!(createinfo_row_matches(1, 1, 1, 1));
-        assert!(!createinfo_row_matches(1, 1, 1, 4));
-        assert!(!createinfo_row_matches(1, 1, 3, 1));
-    }
-
-    #[test]
-    fn createinfo_row_matches_race_wildcard_matches_every_race() {
-        assert!(createinfo_row_matches(0, 1, 1, 1));
-        assert!(createinfo_row_matches(0, 1, 3, 1));
-        assert!(createinfo_row_matches(0, 1, 7, 1));
-        assert!(!createinfo_row_matches(0, 1, 1, 4));
-    }
-
-    #[test]
-    fn createinfo_row_matches_class_wildcard_matches_every_class() {
-        assert!(createinfo_row_matches(1, 0, 1, 1));
-        assert!(createinfo_row_matches(1, 0, 1, 8));
-        assert!(!createinfo_row_matches(1, 0, 3, 1));
-    }
-
-    #[test]
-    fn createinfo_row_matches_double_wildcard_matches_everyone() {
-        assert!(createinfo_row_matches(0, 0, 1, 1));
-        assert!(createinfo_row_matches(0, 0, 7, 4));
-        assert!(createinfo_row_matches(0, 0, 255, 255));
     }
 
     #[test]

@@ -767,8 +767,8 @@ fn unquote(value: &str) -> String {
         .to_string()
 }
 
-pub fn actor(guid: &str) -> String {
-    let guid: u64 = guid.parse().expect("fixture Character guid");
+pub fn actor(guid: impl std::fmt::Display) -> String {
+    let guid: u64 = guid.to_string().parse().expect("fixture Character guid");
     format!(r#"{{"guid":{guid},"ownership":null}}"#)
 }
 

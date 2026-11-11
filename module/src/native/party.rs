@@ -2,19 +2,22 @@ use lyracore_protocol::{
     codec,
     messages::vanilla::{
         opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
-        MSG_RAID_TARGET_UPDATE_Client, PartyOperation, PartyResult,
+        MSG_MINIMAP_PING_Client, MSG_RAID_READY_CHECK_Client, MSG_RAID_TARGET_UPDATE_Client,
+        MSG_RANDOM_ROLL_Client, PartyOperation, PartyResult, CMSG_GROUP_ASSISTANT_LEADER,
+        CMSG_GROUP_CHANGE_SUB_GROUP, CMSG_GROUP_INVITE, CMSG_GROUP_SET_LEADER,
+        CMSG_GROUP_SWAP_SUB_GROUP, CMSG_GROUP_UNINVITE, CMSG_GROUP_UNINVITE_GUID, CMSG_LOOT_METHOD,
     },
 };
 use lyracore_shared::group::{self, event_kind, GroupRefusal, RosterPayload};
 use spacetimedb::{log, ConnectionId, ReducerContext, SpacetimeType};
 
-use super::{game_native_player, game_native_world_connection, NativeWorldConnection, Rollback};
+use super::{game_native_world_connection, NativeWorldConnection, Rollback, Unhandled};
 use crate::{
     game_world_entity,
     group::{GroupAction, GroupOpError, Plane},
 };
 
-#[derive(SpacetimeType, Default)]
+#[derive(SpacetimeType, Default, Clone)]
 pub struct BroadcastCooldowns {
     ready_until_micros: i64,
     ping_until_micros: i64,
@@ -94,26 +97,72 @@ impl CommandReply {
     }
 }
 
+pub(super) enum PartyRequest<'a> {
+    Invite(&'a CMSG_GROUP_INVITE),
+    Accept,
+    Decline,
+    Disband,
+    Uninvite(&'a CMSG_GROUP_UNINVITE),
+    UninviteGuid(&'a CMSG_GROUP_UNINVITE_GUID),
+    LootMethod(&'a CMSG_LOOT_METHOD),
+    RaidConvert,
+    SetLeader(&'a CMSG_GROUP_SET_LEADER),
+    Assistant(&'a CMSG_GROUP_ASSISTANT_LEADER),
+    ChangeSubgroup(&'a CMSG_GROUP_CHANGE_SUB_GROUP),
+    SwapSubgroup(&'a CMSG_GROUP_SWAP_SUB_GROUP),
+    ReadyCheck(&'a MSG_RAID_READY_CHECK_Client),
+    TargetUpdate(&'a MSG_RAID_TARGET_UPDATE_Client),
+    MinimapPing(&'a MSG_MINIMAP_PING_Client),
+    RandomRoll(&'a MSG_RANDOM_ROLL_Client),
+}
+
+impl<'a> PartyRequest<'a> {
+    pub(super) fn of(message: &'a ClientOpcodeMessage) -> Option<Self> {
+        use ClientOpcodeMessage as M;
+        Some(match message {
+            M::CMSG_GROUP_INVITE(request) => Self::Invite(request),
+            M::CMSG_GROUP_ACCEPT => Self::Accept,
+            M::CMSG_GROUP_DECLINE => Self::Decline,
+            M::CMSG_GROUP_DISBAND => Self::Disband,
+            M::CMSG_GROUP_UNINVITE(request) => Self::Uninvite(request),
+            M::CMSG_GROUP_UNINVITE_GUID(request) => Self::UninviteGuid(request),
+            M::CMSG_LOOT_METHOD(request) => Self::LootMethod(request),
+            M::CMSG_GROUP_RAID_CONVERT => Self::RaidConvert,
+            M::CMSG_GROUP_SET_LEADER(request) => Self::SetLeader(request),
+            M::CMSG_GROUP_ASSISTANT_LEADER(request) => Self::Assistant(request),
+            M::CMSG_GROUP_CHANGE_SUB_GROUP(request) => Self::ChangeSubgroup(request),
+            M::CMSG_GROUP_SWAP_SUB_GROUP(request) => Self::SwapSubgroup(request),
+            M::MSG_RAID_READY_CHECK(request) => Self::ReadyCheck(request),
+            M::MSG_RAID_TARGET_UPDATE(request) => Self::TargetUpdate(request),
+            M::MSG_MINIMAP_PING(request) => Self::MinimapPing(request),
+            M::MSG_RANDOM_ROLL(request) => Self::RandomRoll(request),
+            _ => return None,
+        })
+    }
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
-    mut connection: NativeWorldConnection,
+    connection: &NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
+) -> Result<(), Unhandled> {
     use GroupAction as A;
+    let Some(request) = PartyRequest::of(&message) else {
+        return Err(Unhandled::Declined(message));
+    };
     let actor = super::available_entity(ctx, guid)?;
-    let limited_action = match &message {
-        ClientOpcodeMessage::MSG_RAID_READY_CHECK(request) if request.answer.is_none() => {
-            Some(GroupAction::ReadyCheckStart)
-        }
-        ClientOpcodeMessage::MSG_MINIMAP_PING(_) => Some(GroupAction::MinimapPing {
+    let limited_action = match &request {
+        PartyRequest::ReadyCheck(check) if check.answer.is_none() => Some(A::ReadyCheckStart),
+        PartyRequest::MinimapPing(_) => Some(A::MinimapPing {
             x_bits: 0,
             y_bits: 0,
         }),
-        ClientOpcodeMessage::MSG_RANDOM_ROLL(_) => Some(GroupAction::RandomRoll { min: 0, max: 0 }),
+        PartyRequest::RandomRoll(_) => Some(A::RandomRoll { min: 0, max: 0 }),
         _ => None,
     };
     if let Some(action) = limited_action {
+        let mut connection = connection.clone();
         if !connection
             .group_broadcasts
             .get_or_insert_default()
@@ -121,8 +170,7 @@ pub(super) fn receive(
         {
             return Ok(());
         }
-        connection = ctx
-            .db
+        ctx.db
             .game_native_world_connection()
             .connection_id()
             .update(connection);
@@ -130,7 +178,7 @@ pub(super) fn receive(
     if super::realm_party::submit(ctx, connection.connection_id, guid, &message)? {
         return Ok(());
     }
-    let Some((action, reply)) = command(ctx, guid, actor.class(), message)? else {
+    let Some((action, reply)) = command(ctx, guid, actor.class(), request)? else {
         return Ok(());
     };
     let limited = matches!(
@@ -142,7 +190,7 @@ pub(super) fn receive(
         if limited && matches!(error, GroupOpError::Refused(_)) {
             return Ok(());
         }
-        return Err(reply.refused(error));
+        return Err(reply.refused(error).into());
     }
     if let A::Invite(target) = action {
         crate::group::answer_sessionless_invite(ctx, target)
@@ -158,32 +206,32 @@ pub(super) fn command(
     ctx: &ReducerContext,
     guid: u64,
     class: u8,
-    message: ClientOpcodeMessage,
+    request: PartyRequest,
 ) -> Result<Option<(GroupAction, CommandReply)>, Rollback> {
-    use ClientOpcodeMessage as C;
     use GroupAction as A;
-    let command = match message {
-        C::CMSG_GROUP_INVITE(request) => {
+    use PartyRequest as P;
+    let command = match request {
+        P::Invite(request) => {
             let reply = CommandReply::Invite(request.name.clone());
             let target = named_character(ctx, &request.name)
                 .ok_or_else(|| reply.refused(GroupRefusal::NoSuchPlayer.into()))?;
             (A::Invite(target), reply)
         }
-        C::CMSG_GROUP_ACCEPT => (A::Accept { class }, CommandReply::Silent),
-        C::CMSG_GROUP_DECLINE => (A::Decline, CommandReply::Silent),
-        C::CMSG_GROUP_DISBAND => (
+        P::Accept => (A::Accept { class }, CommandReply::Silent),
+        P::Decline => (A::Decline, CommandReply::Silent),
+        P::Disband => (
             A::Leave {
                 cause: group::leave_cause::LEFT,
             },
             CommandReply::Leave(String::new()),
         ),
-        C::CMSG_GROUP_UNINVITE(request) => {
+        P::Uninvite(request) => {
             let reply = CommandReply::Leave(request.name.clone());
             let target = named_character(ctx, &request.name)
                 .ok_or_else(|| reply.refused(GroupRefusal::NoSuchPlayer.into()))?;
             (A::Uninvite(target), reply)
         }
-        C::CMSG_GROUP_UNINVITE_GUID(request) => {
+        P::UninviteGuid(request) => {
             if request.guid.guid() == guid {
                 return Ok(None);
             }
@@ -192,7 +240,7 @@ pub(super) fn command(
                 CommandReply::Leave(String::new()),
             )
         }
-        C::CMSG_LOOT_METHOD(request) => (
+        P::LootMethod(request) => (
             A::LootMethod {
                 method: request.loot_setting.as_int(),
                 master: request.loot_master.guid(),
@@ -200,18 +248,16 @@ pub(super) fn command(
             },
             CommandReply::Silent,
         ),
-        C::CMSG_GROUP_RAID_CONVERT => (A::RaidConvert, CommandReply::Convert),
-        C::CMSG_GROUP_SET_LEADER(request) => {
-            (A::SetLeader(request.guid.guid()), CommandReply::Silent)
-        }
-        C::CMSG_GROUP_ASSISTANT_LEADER(request) => (
+        P::RaidConvert => (A::RaidConvert, CommandReply::Convert),
+        P::SetLeader(request) => (A::SetLeader(request.guid.guid()), CommandReply::Silent),
+        P::Assistant(request) => (
             A::SetAssistant {
                 target: request.guid.guid(),
                 promote: request.set_assistant,
             },
             CommandReply::Silent,
         ),
-        C::CMSG_GROUP_CHANGE_SUB_GROUP(request) => {
+        P::ChangeSubgroup(request) => {
             let Some(target) = named_member(ctx, guid, &request.name) else {
                 return Ok(None);
             };
@@ -223,7 +269,7 @@ pub(super) fn command(
                 CommandReply::Silent,
             )
         }
-        C::CMSG_GROUP_SWAP_SUB_GROUP(request) => {
+        P::SwapSubgroup(request) => {
             let Some(first) = named_member(ctx, guid, &request.name) else {
                 return Ok(None);
             };
@@ -232,15 +278,15 @@ pub(super) fn command(
             };
             (A::SwapSubgroup { first, second }, CommandReply::Silent)
         }
-        C::MSG_RAID_READY_CHECK(request) => (
-            match request.answer {
+        P::ReadyCheck(request) => (
+            match &request.answer {
                 Some(answer) => A::ReadyCheckAnswer(answer.state),
                 None => A::ReadyCheckStart,
             },
             CommandReply::Silent,
         ),
-        C::MSG_RAID_TARGET_UPDATE(request) => (target_icon(*request), CommandReply::Silent),
-        C::MSG_MINIMAP_PING(request) => {
+        P::TargetUpdate(request) => (target_icon(*request), CommandReply::Silent),
+        P::MinimapPing(request) => {
             if !request.position_x.is_finite() || !request.position_y.is_finite() {
                 return Ok(None);
             }
@@ -252,14 +298,13 @@ pub(super) fn command(
                 CommandReply::Silent,
             )
         }
-        C::MSG_RANDOM_ROLL(request) => (
+        P::RandomRoll(request) => (
             A::RandomRoll {
                 min: u64::from(request.minimum),
                 max: u64::from(request.maximum),
             },
             CommandReply::Silent,
         ),
-        _ => return Err("opcode is not a party or raid request".into()),
     };
     Ok(Some(command))
 }
@@ -350,8 +395,8 @@ pub(super) fn roster_state(ctx: &ReducerContext, guid: u64) -> Option<RosterStat
     })
 }
 
-pub(super) fn enter(ctx: &ReducerContext, guid: u64, entry: crate::world::WorldEntry) {
-    if entry == crate::world::WorldEntry::WorldPort
+pub(super) fn enter(ctx: &ReducerContext, guid: u64, entry: crate::character::WorldEntry) {
+    if entry == crate::character::WorldEntry::WorldPort
         && crate::peer::realm_shard(ctx).is_some()
         && crate::group::group_of(ctx, guid).is_none()
     {
@@ -363,7 +408,7 @@ pub(super) fn enter(ctx: &ReducerContext, guid: u64, entry: crate::world::WorldE
             "",
         );
     }
-    roster(ctx, guid, entry == crate::world::WorldEntry::Login);
+    roster(ctx, guid, entry == crate::character::WorldEntry::Login);
     super::realm_party::presence(ctx, guid, true);
 }
 
@@ -380,26 +425,19 @@ pub(crate) fn roster(ctx: &ReducerContext, guid: u64, all_members: bool) {
         if !all_members && member.guid != guid {
             continue;
         }
-        if let Some(owner) = ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(member.guid)
-        {
+        if let Some(owner) = super::world_session(ctx, member.guid) {
             send_roster(ctx, owner.connection_id, member.guid, &roster);
         }
     }
-    if super::is_player(ctx, guid) && roster.kind == group::GroupKind::Raid {
+    if super::has_world_session(ctx, guid) && roster.kind == group::GroupKind::Raid {
         let icons = crate::group::target_icons_of(ctx, member.group_id);
         let (opcode, body) = codec::build_target_icon_list_raw(&icons);
-        if let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) {
-            super::send_raw(ctx, owner.connection_id, opcode, body, false);
-        }
+        super::send_raw_to_character(ctx, guid, opcode, body);
     }
 }
 
 pub(super) fn group_event(ctx: &ReducerContext, guid: u64, kind: u8, other: u64, payload: &str) {
-    let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) else {
+    let Some(owner) = super::world_session(ctx, guid) else {
         return;
     };
     let name = || super::realm_party::name(ctx, other).unwrap_or_default();

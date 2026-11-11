@@ -1,16 +1,27 @@
 use spacetimedb::{ReducerContext, Table};
 
+use lyracore_package_delta::ids::PackageRange;
 use lyracore_package_delta::{
     is_fixture_reserved_creature_id, is_package_cast_id, DeltaError, FieldValue, Operation,
-    PrimaryKey, Table as ClaimTable, TracedRow,
+    PrimaryKey, Table as ClaimTable, TracedRow, CAST_FAMILY,
 };
 
-use crate::creatures::{game_creature_cast, game_creature_spell, CreatureCast, CreatureSpell};
+use crate::{game_creature_cast, game_creature_spell, CreatureCast, CreatureSpell};
 use crate::{game_creature_template, game_spell};
 
-use super::{as_u32, as_u8, check_insert_is_whole, UpdateTarget};
+use super::{as_u32, as_u8, check_insert_is_whole, missing_reference, ClaimOps};
 
-pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+pub(super) const OPS: ClaimOps = ClaimOps {
+    name: CAST_FAMILY,
+    in_package_range,
+    row_is_present,
+    check_references: Some(check_references),
+    clear_package_range,
+    write_row,
+    after_write: None,
+};
+
+fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
     for row in rows {
         if row.table() == ClaimTable::CreatureSpell {
             check_creature_spell_target(ctx, row)?;
@@ -53,11 +64,7 @@ fn check_creature_spell_target(ctx: &ReducerContext, row: &TracedRow) -> Result<
 }
 
 fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, String> {
-    if let Some(FieldValue::U32(value)) = row.fields().get(field).map(|claimed| &claimed.value) {
-        return Ok(*value);
-    }
-
-    let value = match row.table() {
+    super::final_u32(row, field, || match row.table() {
         ClaimTable::CreatureCast => ctx
             .db
             .game_creature_cast()
@@ -79,23 +86,7 @@ fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, 
                 })
         }
         other => unreachable!("cast value lookup received {other}"),
-    };
-
-    value.ok_or_else(|| {
-        format!(
-            "`{}` row {} vanished during preflight",
-            row.table(),
-            row.key()
-        )
     })
-}
-
-fn missing_reference(row: &TracedRow, field: &str, value: u32) -> String {
-    format!(
-        "`{}` row {} references missing {field} {value}",
-        row.table(),
-        row.key()
-    )
 }
 
 fn fixture_creature_reference(row: &TracedRow, entry: u32) -> String {
@@ -103,15 +94,15 @@ fn fixture_creature_reference(row: &TracedRow, entry: u32) -> String {
         "`{}` row {} references {}",
         row.table(),
         row.key(),
-        DeltaError::CreatureIdFixtureReserved { id: entry }
+        DeltaError::IdFixtureReserved {
+            range: PackageRange::Creature,
+            id: u64::from(entry),
+        }
     )
 }
 
-pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
-    if row.table() == ClaimTable::CreatureSpell && updates_an_uninvented_package_row(row) {
-        return UpdateTarget::Uninvented;
-    }
-    let present = match row.table() {
+fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
+    match row.table() {
         ClaimTable::CreatureCast => ctx
             .db
             .game_creature_cast()
@@ -128,19 +119,14 @@ pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarg
             "`check_claims_belong_to` refuses a non-cast row before the casts family's dispatch \
              runs, found {other}"
         ),
-    };
-    if present {
-        UpdateTarget::Present
-    } else {
-        UpdateTarget::Absent
     }
 }
 
-fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
-    row.operation() == Operation::Update && is_package_cast_id(row.row_id())
+fn in_package_range(row: &TracedRow) -> bool {
+    row.table() == ClaimTable::CreatureSpell && is_package_cast_id(row.row_id())
 }
 
-pub(super) fn clear_package_range(ctx: &ReducerContext) {
+fn clear_package_range(ctx: &ReducerContext) {
     let spells = ctx.db.game_creature_spell();
     let stale: Vec<u64> = spells
         .iter()
@@ -152,7 +138,7 @@ pub(super) fn clear_package_range(ctx: &ReducerContext) {
     }
 }
 
-pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     match (row.table(), row.operation()) {
         (ClaimTable::CreatureCast, Operation::Update) => {
             let rows = ctx.db.game_creature_cast();
@@ -295,7 +281,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(in_package_range(&plan.rows[0]));
     }
 
     #[test]
@@ -310,7 +296,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(!updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(!in_package_range(&plan.rows[0]));
     }
 
     #[test]

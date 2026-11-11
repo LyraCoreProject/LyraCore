@@ -1,7 +1,7 @@
 mod support;
 
 use lyracore_shared::group::{event_kind, RaidSlot, RosterPayload};
-use support::{actor, Standalone};
+use support::{group_op, group_op_args, roster_revision, Standalone};
 
 const INVITE: &str = "0";
 const ACCEPT: &str = "1";
@@ -14,23 +14,6 @@ const SET_ASSISTANT: &str = "8";
 const CHANGE_SUBGROUP: &str = "9";
 const READY_CHECK_START: &str = "11";
 const TARGET_ICON: &str = "13";
-
-fn group_op_args(op: &str, actor_guid: u64, target_guid: u64, arg_a: u8) -> Vec<String> {
-    vec![
-        op.to_string(),
-        actor(&actor_guid.to_string()),
-        target_guid.to_string(),
-        arg_a.to_string(),
-        "0".to_string(),
-        "0".to_string(),
-    ]
-}
-
-fn group_op(node: &Standalone, op: &str, actor_guid: u64, target_guid: u64, arg_a: u8) {
-    let args = group_op_args(op, actor_guid, target_guid, arg_a);
-    let args: Vec<_> = args.iter().map(String::as_str).collect();
-    node.assert_call("realm_group_op", &args);
-}
 
 fn refusal(node: &Standalone, op: &str, actor_guid: u64, target_guid: u64, arg_a: u8) -> String {
     let args = group_op_args(op, actor_guid, target_guid, arg_a);
@@ -67,12 +50,6 @@ fn promote(node: &Standalone, leader: u64, guid: u64, assistant: bool) {
 
 fn leader(node: &Standalone) -> u64 {
     node.query_rows("SELECT leader_guid FROM game_group")[0]["leader_guid"]
-        .parse()
-        .unwrap()
-}
-
-fn roster_revision(node: &Standalone) -> u64 {
-    node.query_rows("SELECT revision FROM game_group_roster_revision")[0]["revision"]
         .parse()
         .unwrap()
 }

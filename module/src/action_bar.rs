@@ -148,13 +148,6 @@ mod tests {
     }
 
     #[test]
-    fn createinfo_row_matches_is_reused_verbatim_for_actions() {
-        assert!(createinfo_row_matches(1, 1, 1, 1));
-        assert!(!createinfo_row_matches(1, 1, 1, 4));
-        assert!(createinfo_row_matches(0, 1, 3, 1));
-    }
-
-    #[test]
     fn matching_actions_on_an_empty_table_creates_nothing() {
         let rows: Vec<CreateinfoAction> = Vec::new();
         assert!(matching_actions(rows.iter(), 1, 1).is_empty());

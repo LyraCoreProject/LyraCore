@@ -10,7 +10,8 @@ use super::{
     EventKind, FriendlyAuraSelection, InstructionTarget, PostureAdmission, SpawnCondition,
     SpellCastTarget, SpellCasterAdmission, SpellCasterRole, SpellStartMode, SpellTargetRole,
 };
-use crate::creatures::ai::{rout_close_ms, rout_window_open, TickScope};
+use crate::creatures::ai::{rout_close_ms, rout_window_open};
+use crate::creatures::TickScope;
 use crate::{game_creature_ai_definition, game_creature_spawn, game_world_entity};
 
 pub(super) fn cycle_contexts<W: EventAiWorld>(
@@ -772,17 +773,15 @@ fn ranked_threat<W: EventAiWorld>(
     cast: Option<&CastInstruction>,
     admission: SpellCasterAdmission,
 ) -> Vec<u64> {
-    let mut ranked: Vec<(u64, i64)> = world
+    world
         .eventai_threat(creature.guid)
         .into_iter()
-        .filter_map(|(guid, threat)| {
+        .filter_map(|(guid, _)| {
             let source = world.eventai_unit(guid)?;
             candidate_eligible(world, creature, &source, target, cast, admission, false)
-                .then_some((guid, threat))
+                .then_some(guid)
         })
-        .collect();
-    ranked.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-    ranked.into_iter().map(|(guid, _)| guid).collect()
+        .collect()
 }
 
 fn nearest_area<W: EventAiWorld>(

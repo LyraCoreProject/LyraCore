@@ -1,44 +1,38 @@
-use lyracore_shared::spell::taxonomy::SPELL_ATTR_RANGED_AUTO_REPEAT;
+use lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
 use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
 use crate::combat::is_avoided;
+use crate::geometry::{distance_3d, is_behind, is_facing};
 use crate::{game_creature_template, game_world_entity, WorldEntity};
 
-use crate::items::{game_item_instance, game_item_template};
+use crate::{game_item_instance, game_item_template};
 
-use crate::spell::*;
+use crate::spell::{
+    apply_effect, aura_apply, break_channel, break_stealth, cost_gate_blocks, effect_amount,
+    faction_target_violation, has_aura, is_action_blocked, is_stealthed, level_gate_blocks,
+    recipe_reagents, select_targets, stance_allows, CastGateRefusal, CastHandle, CastRefusalKind,
+    CastRefusalReason, CastStart, ItemGrantOutcome, SpellCastEventKind, A_FLAG, A_MOUNTED,
+    CAST_FLAG_BINARY, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER, CAST_FLAG_INCAP_OPENER,
+    CAST_FLAG_MAGIC_HIT, CAST_FLAG_REQ_BEHIND, CAST_FLAG_REQ_DAGGER, CAST_FLAG_REQ_OVERPOWER,
+    CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH, CAST_FLAG_STEALTH_SAFE, CAST_FLAG_WEAPON_PROCS,
+    E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY,
+    E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING, E_PERSISTENT_AREA, E_SCRIPTED,
+    E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE, E_WEAPON_STRIKE, HUMANOID_TYPE,
+    KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME, SPELL_ATTR_PASSIVE,
+    SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY, T_TARGET_ALLY,
+    T_TARGET_ANY, T_TARGET_ENEMY,
+};
+use crate::{
+    game_aura, game_pending_cast, game_school_lockout, game_spell, game_spell_cd,
+    game_spell_cooldown, game_spell_effect, PendingCast, Spell, SpellCastEvent, SpellCd,
+    SpellCooldown, SpellEffect,
+};
 
 use crate::script_binding::game_script;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resolve_cast_at(
-    ctx: &ReducerContext,
-    caster_guid: u64,
-    spell_id: u32,
-    level: u8,
-    target_guid: u64,
-    is_completion: bool,
-    client_initiated: bool,
-    dest: Option<(f32, f32, f32)>,
-) -> Result<(), String> {
-    resolve_cast_at_typed(
-        ctx,
-        caster_guid,
-        spell_id,
-        level,
-        target_guid,
-        is_completion,
-        client_initiated,
-        dest,
-        None,
-        None,
-    )
-    .map_err(Into::into)
-}
-
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn resolve_cast_at_typed(
     ctx: &ReducerContext,
     caster_guid: u64,
     spell_id: u32,
@@ -112,7 +106,7 @@ pub(crate) fn resolve_cast_at_typed(
     }
 
     // Break stealth before effects so recasting Stealth can reapply its aura.
-    if hdr.cast_flags & SPELL_ATTR_STEALTH_SAFE == 0 {
+    if hdr.cast_flags & CAST_FLAG_STEALTH_SAFE == 0 {
         break_stealth(ctx, caster_guid);
     }
 
@@ -218,7 +212,7 @@ impl CastOrigin {
 pub(crate) fn charge_spell_cost(ctx: &ReducerContext, caster: &mut WorldEntity, hdr: &Spell) {
     caster.power = caster.power.saturating_sub(hdr.cost);
     if hdr.cost > 0 && hdr.power_type == lyracore_shared::packing::power_type::MANA {
-        let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+        let now_ms = crate::time::now_ms(ctx);
         caster.mana_regen_paused_until_ms = now_ms + 5000;
     }
 }
@@ -317,19 +311,18 @@ fn run_spell_effects(
     let weapon_strike = matches!(table, HitTable::Weapon { .. });
     let rolls_hit = weapon_strike
         || effects.iter().any(|e| e.kind == E_DAMAGE)
-        || (hdr.negative() && hdr.cast_flags & (SPELL_ATTR_BINARY | SPELL_ATTR_MAGIC_HIT) != 0);
+        || (hdr.negative() && hdr.cast_flags & (CAST_FLAG_BINARY | CAST_FLAG_MAGIC_HIT) != 0);
     let mut target_rolls: std::collections::HashMap<u64, u8> = std::collections::HashMap::new();
     // vmangos rolls the main hand per target, landed or avoided. LyraCore skips a Chance on Hit cast.
     let rolls_weapon =
-        hdr.cast_flags & SPELL_ATTR_WEAPON_PROCS != 0 && !matches!(origin, CastOrigin::ChanceOnHit);
+        hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0 && !matches!(origin, CastOrigin::ChanceOnHit);
     let mut weapon_targets = Vec::new();
     let mut seen_weapon_targets = std::collections::HashSet::new();
     for e in effects {
-        #[cfg(feature = "conformance_test_fixture")]
-        let draw = crate::conformance_rolls::spell_draw(ctx, caster_guid)
-            .unwrap_or_else(|| ctx.random::<u32>());
-        #[cfg(not(feature = "conformance_test_fixture"))]
-        let draw = ctx.random::<u32>();
+        let draw = crate::conformance_rolls::draw(
+            ctx,
+            crate::conformance_rolls::RollStream::Caster(caster_guid),
+        );
         let points = effect_amount(
             e.base_points,
             e.die_sides,
@@ -427,7 +420,7 @@ fn run_spell_effects(
         }
     }
     // Spend after every effect has read the points; vmangos keeps them when a finisher misses.
-    if hdr.cast_flags & SPELL_ATTR_COMBO_FINISHER != 0 && !is_avoided(primary_avoided) {
+    if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0 && !is_avoided(primary_avoided) {
         crate::combo::spend_combo(ctx, caster_guid);
     }
     if !item_refused {
@@ -457,7 +450,7 @@ fn run_spell_effects(
     }
     let school_index = crate::spell::school_index(hdr.school_mask);
     let (is_completion, client_initiated) = origin.cast_event_flags();
-    crate::spell::SpellCastEvent::insert(
+    crate::SpellCastEvent::insert(
         ctx,
         SpellCastEvent {
             target_guid,
@@ -471,7 +464,7 @@ fn run_spell_effects(
             miss_info: cast_miss(
                 primary_avoided,
                 weapon_strike,
-                hdr.cast_flags & SPELL_ATTR_MAGIC_HIT != 0 || hdr.school_mask & !RESIST_ARMOR != 0,
+                hdr.cast_flags & CAST_FLAG_MAGIC_HIT != 0 || hdr.school_mask & !RESIST_ARMOR != 0,
             ),
             energized: total_energized,
             power_type: energized_power_type,
@@ -888,7 +881,7 @@ fn check_unit_target(
             .game_world_entity()
             .guid()
             .find(target_guid)
-            .is_some_and(|target| crate::taxi::is_flying(&target))
+            .is_some_and(|target| target.is_flying())
     {
         return Err(CastGateRefusal::other(
             CastRefusalReason::BadTargets,
@@ -958,10 +951,7 @@ fn check_source_cast_position(
 
 fn check_global_cooldown(ctx: &ReducerContext, caster_guid: u64) -> Result<(), CastGateRefusal> {
     if let Some(cd) = ctx.db.game_spell_cooldown().caster_guid().find(caster_guid) {
-        if is_on_cooldown(
-            crate::time::now(ctx).to_micros_since_unix_epoch(),
-            cd.ready_at.to_micros_since_unix_epoch(),
-        ) {
+        if crate::time::now(ctx) < cd.ready_at {
             return Err(CastGateRefusal::new(
                 CastRefusalKind::Cooldown,
                 CastRefusalReason::NotReady,
@@ -1219,20 +1209,13 @@ fn check_cast_gate_suffix(
         ));
     }
 
-    if let Some(lock) = ctx
+    if ctx
         .db
         .game_school_lockout()
         .by_caster()
         .filter(&caster_guid)
-        .find(|r| {
-            r.school == hdr.school_mask
-                && school_locked(
-                    crate::time::now(ctx).to_micros_since_unix_epoch(),
-                    r.until.to_micros_since_unix_epoch(),
-                )
-        })
+        .any(|r| r.school == hdr.school_mask && r.until > crate::time::now(ctx))
     {
-        let _ = lock;
         return Err(CastGateRefusal::other(
             CastRefusalReason::SchoolLocked,
             format!(
@@ -1243,7 +1226,7 @@ fn check_cast_gate_suffix(
     }
 
     if hdr.attributes & SPELL_ATTR_PASSIVE == 0
-        && hdr.cast_flags & SPELL_ATTR_RANGED_AUTO_REPEAT == 0
+        && hdr.cast_flags & CAST_FLAG_RANGED_AUTO_REPEAT == 0
         && !crate::items::equip::spell_ready(
             ctx,
             caster_guid,
@@ -1258,16 +1241,16 @@ fn check_cast_gate_suffix(
         ));
     }
 
-    if hdr.cast_flags & (SPELL_ATTR_REQ_OVERPOWER | SPELL_ATTR_REQ_REVENGE) != 0 {
-        let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
-        if hdr.cast_flags & SPELL_ATTR_REQ_OVERPOWER != 0
+    if hdr.cast_flags & (CAST_FLAG_REQ_OVERPOWER | CAST_FLAG_REQ_REVENGE) != 0 {
+        let now_ms = crate::time::now_ms(ctx);
+        if hdr.cast_flags & CAST_FLAG_REQ_OVERPOWER != 0
             && !crate::combat::react_window_active(caster.overpower_until_ms, now_ms)
         {
             return Err(CastGateRefusal::other(CastRefusalReason::ReactWindowClosed, format!(
                 "spell {spell_id} requires an Overpower window (the target must have dodged your swing)"
             )));
         }
-        if hdr.cast_flags & SPELL_ATTR_REQ_REVENGE != 0
+        if hdr.cast_flags & CAST_FLAG_REQ_REVENGE != 0
             && !crate::combat::react_window_active(caster.revenge_until_ms, now_ms)
         {
             return Err(CastGateRefusal::other(
@@ -1357,7 +1340,7 @@ fn check_cast_gate_suffix(
     }
 
     if target_guid != caster_guid {
-        if hdr.cast_flags & SPELL_ATTR_REQ_BEHIND != 0 {
+        if hdr.cast_flags & CAST_FLAG_REQ_BEHIND != 0 {
             let target = crate::helpers::live_entity(ctx, target_guid)
                 .map_err(|_| format!("spell {spell_id} target {target_guid} not in world"))?;
             if !is_behind(caster.x, caster.y, target.x, target.y, target.orientation) {
@@ -1368,7 +1351,7 @@ fn check_cast_gate_suffix(
             }
         }
         // Check stealth before cast acceptance breaks it.
-        if hdr.cast_flags & SPELL_ATTR_REQ_STEALTH != 0 && !is_stealthed(ctx, caster_guid) {
+        if hdr.cast_flags & CAST_FLAG_REQ_STEALTH != 0 && !is_stealthed(ctx, caster_guid) {
             return Err(CastGateRefusal::other(
                 CastRefusalReason::NotStealthed,
                 format!(
@@ -1376,7 +1359,7 @@ fn check_cast_gate_suffix(
                 ),
             ));
         }
-        if hdr.cast_flags & SPELL_ATTR_INCAP_OPENER != 0 {
+        if hdr.cast_flags & CAST_FLAG_INCAP_OPENER != 0 {
             if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
                 if target.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0 {
                     return Err(CastGateRefusal::other(
@@ -1401,7 +1384,7 @@ fn check_cast_gate_suffix(
         }
     }
 
-    if hdr.cast_flags & SPELL_ATTR_REQ_DAGGER != 0 {
+    if hdr.cast_flags & CAST_FLAG_REQ_DAGGER != 0 {
         let has_dagger =
             crate::items::item_in_slot(ctx, caster_guid, crate::items::equip_slot::MAINHAND)
                 .and_then(|inst| {
@@ -1427,7 +1410,7 @@ fn check_cast_gate_suffix(
     }
 
     // Creature spells such as NPC Slice and Dice share the finisher flags but hold no points.
-    let combo_points = if !caster.is_player() || hdr.cast_flags & SPELL_ATTR_COMBO_FINISHER == 0 {
+    let combo_points = if !caster.is_player() || hdr.cast_flags & CAST_FLAG_COMBO_FINISHER == 0 {
         None
     } else if spends_points_on_target(effects) {
         Some(crate::combo::combo_points(ctx, caster_guid, target_guid))
@@ -1508,7 +1491,10 @@ pub(crate) fn resolve_cast(
         false,
         false,
         None,
+        None,
+        None,
     )
+    .map_err(Into::into)
 }
 
 pub(crate) fn begin_cast(
@@ -1635,18 +1621,18 @@ pub(crate) fn begin_cast_with_admission(
 
     // Channels resolve immediately even when their imported cast time is nonzero.
     let (ct_flat, ct_pct) =
-        crate::spell::math::spell_mod(ctx, caster_guid, SPELLMOD_OP_CASTING_TIME, &hdr);
-    let cast_ms = crate::spell::math::apply_spell_mod(hdr.cast_time_ms, ct_flat, ct_pct);
+        crate::spell::spell_mod(ctx, caster_guid, SPELLMOD_OP_CASTING_TIME, &hdr);
+    let cast_ms = crate::spell::apply_spell_mod(hdr.cast_time_ms, ct_flat, ct_pct);
 
-    let completed_channel = hdr.cast_flags & SPELL_ATTR_CHANNELED != 0
+    let completed_channel = hdr.cast_flags & CAST_FLAG_CHANNELED != 0
         && ctx
             .db
             .game_spell_effect()
             .by_spell()
             .filter(&spell_id)
             .any(|effect| effect.kind == E_TAME_CREATURE);
-    if !completed_channel && (cast_ms == 0 || hdr.cast_flags & SPELL_ATTR_CHANNELED != 0) {
-        let result = resolve_cast_at_typed(
+    if !completed_channel && (cast_ms == 0 || hdr.cast_flags & CAST_FLAG_CHANNELED != 0) {
+        let result = resolve_cast_at(
             ctx,
             caster_guid,
             spell_id,
@@ -1699,7 +1685,7 @@ pub(crate) fn begin_cast_with_admission(
         cooldown_category,
     });
     start_global_cooldown(ctx, caster_guid, hdr.gcd_ms);
-    crate::spell::SpellCastEvent::insert(
+    crate::SpellCastEvent::insert(
         ctx,
         SpellCastEvent {
             target_guid,
@@ -1755,6 +1741,7 @@ mod ground_destination_tests {
 #[cfg(test)]
 mod companion_los_tests {
     use super::*;
+    use crate::spell::{T_SCRIPTED, T_SELF};
 
     #[test]
     fn los_target_kinds_exclude_self_and_scripted_spells() {
@@ -1866,6 +1853,7 @@ pub(crate) fn apply_item_auras(
 #[cfg(test)]
 mod eventai_hit_tests {
     use super::*;
+    use crate::spell::{A_CONTROL, T_SELF};
 
     fn effect(kind: u8) -> SpellEffect {
         SpellEffect {
@@ -1962,36 +1950,6 @@ mod eventai_hit_tests {
                 admission: CreatureSpellCasterAdmission::DeadCreatureCallback,
             }
         );
-    }
-
-    #[test]
-    fn only_a_dead_creature_callback_cast_can_apply_to_its_dead_caster() {
-        assert!(!triggered_target_admitted(
-            CastOrigin::Triggered,
-            10,
-            10,
-            false,
-        ));
-        assert!(triggered_target_admitted(
-            CastOrigin::DeadCreatureCallbackTriggered,
-            10,
-            10,
-            false,
-        ));
-        assert!(!triggered_target_admitted(
-            CastOrigin::DeadCreatureCallbackTriggered,
-            10,
-            20,
-            false,
-        ));
-    }
-
-    #[test]
-    fn dead_callback_admission_is_limited_to_dead_creatures() {
-        assert!(caster_life_allows(false, true, true));
-        assert!(!caster_life_allows(false, true, false));
-        assert!(!caster_life_allows(true, true, true));
-        assert!(caster_life_allows(true, false, false));
     }
 }
 

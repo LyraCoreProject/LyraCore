@@ -1,7 +1,7 @@
 use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::game_world_entity;
-use lyracore_shared::social::ContactRefusal;
+use lyracore_shared::chat::ChatRefusal;
 
 pub const CHAT_SAY: u8 = lyracore_shared::chat::broadcast_chat::SAY;
 pub const CHAT_YELL: u8 = lyracore_shared::chat::broadcast_chat::YELL;
@@ -54,6 +54,25 @@ pub(crate) fn addon_payload(raw: &str) -> Option<String> {
     (!raw.is_empty()).then(|| raw.chars().take(MAX_CHAT_LEN).collect())
 }
 
+#[derive(Debug)]
+pub(crate) enum SpeechRefusal {
+    UnsupportedChatType(u8),
+    Language(ChatRefusal),
+    DeadSpeaker,
+    EmptyMessage,
+}
+
+impl std::fmt::Display for SpeechRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnsupportedChatType(chat_type) => write!(f, "unsupported chat type {chat_type}"),
+            Self::Language(refusal) => f.write_str(refusal.as_tag()),
+            Self::DeadSpeaker => f.write_str("dead players cannot speak"),
+            Self::EmptyMessage => f.write_str("empty message"),
+        }
+    }
+}
+
 pub(crate) fn apply_send_chat(
     ctx: &ReducerContext,
     sender: crate::WorldEntity,
@@ -61,21 +80,32 @@ pub(crate) fn apply_send_chat(
     language: u8,
     message: String,
 ) -> Result<(), String> {
-    admit_player_line(chat_type, sender.race(), language)?;
-    write_chat_event(ctx, sender, 0, chat_type, language, message)
+    speak(ctx, sender, chat_type, u32::from(language), message).map_err(|r| r.to_string())
 }
 
-fn admit_player_line(chat_type: u8, race: u8, language: u8) -> Result<(), String> {
+// A player's say, yell or emote line; every Gate runs before the event or any entity change.
+pub(crate) fn speak(
+    ctx: &ReducerContext,
+    sender: crate::WorldEntity,
+    chat_type: u8,
+    language: u32,
+    message: String,
+) -> Result<(), SpeechRefusal> {
+    admit_player_line(chat_type, sender.race(), language)?;
+    write_chat_event(ctx, sender, 0, chat_type, language as u8, message)
+}
+
+fn admit_player_line(chat_type: u8, race: u8, language: u32) -> Result<(), SpeechRefusal> {
     use lyracore_shared::chat::chat_kind;
     let kind = match chat_type {
         CHAT_SAY => chat_kind::SAY,
         CHAT_YELL => chat_kind::YELL,
         CHAT_EMOTE => chat_kind::EMOTE,
-        _ => return Err(format!("unsupported chat type {chat_type}")),
+        _ => return Err(SpeechRefusal::UnsupportedChatType(chat_type)),
     };
-    lyracore_shared::chat::speakable_language(kind, race, u32::from(language))
+    lyracore_shared::chat::speakable_language(kind, race, language)
         .map(drop)
-        .map_err(|refusal| refusal.as_tag().to_string())
+        .map_err(SpeechRefusal::Language)
 }
 
 pub(crate) fn apply_send_chat_to(
@@ -100,6 +130,7 @@ pub(crate) fn apply_send_chat_to(
         return Err("creature whisper requires a Character recipient".to_string());
     }
     write_chat_event(ctx, sender, target_guid, chat_type, language, message)
+        .map_err(|refusal| refusal.to_string())
 }
 
 fn write_chat_event(
@@ -109,11 +140,11 @@ fn write_chat_event(
     chat_type: u8,
     language: u8,
     message: String,
-) -> Result<(), String> {
+) -> Result<(), SpeechRefusal> {
     if sender.dead && sender.is_player() {
-        return Err("dead players cannot speak".to_string());
+        return Err(SpeechRefusal::DeadSpeaker);
     }
-    let text = normalized_message(&message).ok_or_else(|| "empty message".to_string())?;
+    let text = normalized_message(&message).ok_or(SpeechRefusal::EmptyMessage)?;
     let language = if chat_type == CHAT_EMOTE {
         lyracore_shared::chat::language::UNIVERSAL as u8
     } else {
@@ -133,30 +164,8 @@ fn write_chat_event(
         created_at: crate::time::now(ctx),
         target_guid,
     });
-    crate::native::speech(ctx, &sender, &event);
+    crate::native::chat::speech(ctx, &sender, &event);
     Ok(())
-}
-
-#[table(accessor = game_channel_member, public, index(accessor = by_channel, btree(columns = [channel])))]
-pub struct ChannelMember {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    pub channel: String,
-    pub character_guid: u64,
-    pub owner_identity: Identity,
-}
-
-#[table(accessor = game_channel_event, public)]
-pub struct ChannelEvent {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    pub channel: String,
-    pub channel_display: String,
-    pub sender_guid: u64,
-    pub message: String,
-    pub created_at: Timestamp,
 }
 
 #[table(
@@ -208,25 +217,11 @@ pub(crate) fn apply_send_emote(
         grid_x,
         grid_y,
     });
-    crate::native::text_emote(ctx, &sender, &event);
+    crate::native::chat::text_emote(ctx, &sender, &event);
     if sender.is_player() && target_guid != 0 {
         crate::creatures::eventai_on_receive_emote(ctx, target_guid, sender.guid, text_emote);
     }
     Ok(())
-}
-
-#[table(accessor = game_whisper_event, public, index(accessor = by_recipient, btree(columns = [recipient_identity])))]
-pub struct WhisperEvent {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    pub recipient_identity: Identity,
-    pub other_guid: u64,
-    pub is_inform: bool,
-    pub message: String,
-    pub created_at: Timestamp,
-    #[default(0u64)]
-    pub recipient_guid: u64,
 }
 
 #[table(accessor = game_system_message_event, public, index(accessor = by_recipient, btree(columns = [recipient_identity])))]
@@ -240,7 +235,6 @@ pub struct SystemMessageEvent {
     pub created_at: Timestamp,
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn emit_system_message(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -250,7 +244,7 @@ pub(crate) fn emit_system_message(
         .map(|character| (character.owner_identity, character.online));
     let event = prepare_system_message(character_guid, recipient, &message, crate::time::now(ctx))?;
     let event = ctx.db.game_system_message_event().insert(event);
-    crate::native::system_message(ctx, &event);
+    crate::native::chat::system_message(ctx, &event);
     Ok(())
 }
 
@@ -320,6 +314,29 @@ crate::character_owned!(restamp, fn sweep_restamp_game_character_contact(ctx, ch
         }
     }
 });
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContactRefusal {
+    ActorUnavailable,
+    AddSelf,
+    AlreadyOnList,
+    ListFull,
+    NotOnList,
+    Enemy,
+}
+
+impl ContactRefusal {
+    pub(crate) fn as_tag(self) -> &'static str {
+        match self {
+            Self::ActorUnavailable => "social:actor_unavailable",
+            Self::AddSelf => "social:add_self",
+            Self::AlreadyOnList => "social:already_on_list",
+            Self::ListFull => "social:list_full",
+            Self::NotOnList => "social:not_on_list",
+            Self::Enemy => "social:enemy",
+        }
+    }
+}
 
 pub(crate) fn refused_contact(refusal: ContactRefusal, detail: &str) -> ContactRefusal {
     spacetimedb::log::info!("contact refused {}: {detail}", refusal.as_tag());
@@ -401,35 +418,8 @@ pub(crate) fn remove_contact(
     Ok(())
 }
 
-#[table(
-    accessor = game_roll_event,
-    public,
-    index(accessor = by_grid, btree(columns = [map_id, instance_id, grid_x, grid_y]))
-)]
-pub struct RollEvent {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    pub roller_guid: u64,
-    pub min_roll: u32,
-    pub max_roll: u32,
-    pub result: u32,
-    pub created_at: Timestamp,
-    #[default(0u32)]
-    pub map_id: u32,
-    #[default(0u64)]
-    pub instance_id: u64,
-    #[default(0i32)]
-    pub grid_x: i32,
-    #[default(0i32)]
-    pub grid_y: i32,
-}
-
-pub(crate) fn normalized_roll_range(min_roll: u32, max_roll: u32) -> (u32, u32) {
-    const ROLL_MAX: u32 = 10_000;
-    let lo = min_roll.min(max_roll).min(ROLL_MAX);
-    let hi = min_roll.max(max_roll).min(ROLL_MAX);
-    (lo, hi)
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_system_message_event, crate::EVENT_TTL_MICROS);
 }
 
 #[cfg(test)]
@@ -451,20 +441,29 @@ mod tests {
         const ORC: u8 = 2;
         for chat_type in [CHAT_SAY, CHAT_YELL, CHAT_EMOTE] {
             assert_eq!(
-                admit_player_line(chat_type, HUMAN, 1),
+                admit_player_line(chat_type, HUMAN, 1).map_err(|r| r.to_string()),
                 Err("chat:unknown_language".to_string()),
                 "a Human in Orcish, chat type {chat_type}"
             );
-            assert_eq!(admit_player_line(chat_type, HUMAN, 7), Ok(()));
-            assert_eq!(admit_player_line(chat_type, ORC, 1), Ok(()));
-            assert_eq!(admit_player_line(chat_type, HUMAN, 0), Ok(()));
+            assert_eq!(
+                admit_player_line(chat_type, HUMAN, 7).map_err(|r| r.to_string()),
+                Ok(())
+            );
+            assert_eq!(
+                admit_player_line(chat_type, ORC, 1).map_err(|r| r.to_string()),
+                Ok(())
+            );
+            assert_eq!(
+                admit_player_line(chat_type, HUMAN, 0).map_err(|r| r.to_string()),
+                Ok(())
+            );
         }
     }
 
     #[test]
     fn a_player_cannot_submit_the_creature_text_emote() {
         assert_eq!(
-            admit_player_line(CHAT_TEXT_EMOTE, 1, 0),
+            admit_player_line(CHAT_TEXT_EMOTE, 1, 0).map_err(|r| r.to_string()),
             Err("unsupported chat type 2".to_string())
         );
     }
@@ -548,19 +547,5 @@ mod tests {
                 .as_deref(),
             Some("empty system message")
         );
-    }
-
-    #[test]
-    fn roll_range_swaps_an_inverted_pair_and_caps_both_ends_at_10000() {
-        assert_eq!(normalized_roll_range(1, 100), (1, 100));
-        assert_eq!(normalized_roll_range(100, 1), (1, 100));
-        assert_eq!(normalized_roll_range(5, 5), (5, 5));
-        assert_eq!(normalized_roll_range(0, 0), (0, 0));
-        assert_eq!(normalized_roll_range(1, 2_000_000), (1, 10_000));
-        assert_eq!(
-            normalized_roll_range(3_000_000, 2_000_000),
-            (10_000, 10_000)
-        );
-        assert_eq!(normalized_roll_range(1, 10_000), (1, 10_000));
     }
 }

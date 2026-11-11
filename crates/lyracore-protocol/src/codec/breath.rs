@@ -79,3 +79,76 @@ pub fn build_fatigue_timer_stop() -> ServerOpcodeMessage {
 pub fn build_exhaustion_damage_log(character_guid: u64, damage: u32) -> ServerOpcodeMessage {
     environmental_damage_log(character_guid, EnvironmentalDamageType::Exhausted, damage)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    use wow_world_messages::vanilla::{EnvironmentalDamageType, TimerType};
+
+    #[test]
+    fn breath_mirror_timer_edges_carry_the_breath_timer() {
+        match build_breath_timer_start(57_000, 60_000) {
+            ServerOpcodeMessage::SMSG_START_MIRROR_TIMER(msg) => {
+                assert_eq!(msg.timer, TimerType::Breath);
+                assert_eq!(msg.time_remaining, 57_000);
+                assert_eq!(msg.duration, 60_000);
+                assert_eq!(msg.scale, u32::MAX, "wire bits for signed -1 drain scale");
+                assert!(!msg.is_frozen);
+            }
+            other => panic!("expected SMSG_START_MIRROR_TIMER, got {other}"),
+        }
+
+        match build_breath_timer_stop() {
+            ServerOpcodeMessage::SMSG_STOP_MIRROR_TIMER(msg) => {
+                assert_eq!(msg.timer, TimerType::Breath)
+            }
+            other => panic!("expected SMSG_STOP_MIRROR_TIMER, got {other}"),
+        }
+    }
+
+    #[test]
+    fn drowning_damage_log_carries_the_actual_damage() {
+        match build_drowning_damage_log(0xF00D, 19) {
+            ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(log) => {
+                assert_eq!(log.guid.guid(), 0xF00D);
+                assert_eq!(log.damage_type, EnvironmentalDamageType::Drowning);
+                assert_eq!(log.damage, 19);
+            }
+            other => panic!("expected SMSG_ENVIRONMENTAL_DAMAGE_LOG, got {other}"),
+        }
+    }
+
+    #[test]
+    fn fatigue_mirror_timer_drains_recovers_and_stops() {
+        for (in_deep_water, scale) in [(true, u32::MAX), (false, 10)] {
+            match build_fatigue_timer_start(in_deep_water, 42_000, 60_000) {
+                ServerOpcodeMessage::SMSG_START_MIRROR_TIMER(msg) => {
+                    assert_eq!(msg.timer, TimerType::Fatigue);
+                    assert_eq!(msg.time_remaining, 42_000);
+                    assert_eq!(msg.duration, 60_000);
+                    assert_eq!(msg.scale, scale);
+                }
+                other => panic!("expected SMSG_START_MIRROR_TIMER, got {other}"),
+            }
+        }
+        match build_fatigue_timer_stop() {
+            ServerOpcodeMessage::SMSG_STOP_MIRROR_TIMER(msg) => {
+                assert_eq!(msg.timer, TimerType::Fatigue)
+            }
+            other => panic!("expected SMSG_STOP_MIRROR_TIMER, got {other}"),
+        }
+    }
+
+    #[test]
+    fn exhaustion_damage_log_carries_the_actual_damage() {
+        match build_exhaustion_damage_log(0xF00D, 212) {
+            ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(log) => {
+                assert_eq!(log.guid.guid(), 0xF00D);
+                assert_eq!(log.damage_type, EnvironmentalDamageType::Exhausted);
+                assert_eq!(log.damage, 212);
+            }
+            other => panic!("expected SMSG_ENVIRONMENTAL_DAMAGE_LOG, got {other}"),
+        }
+    }
+}

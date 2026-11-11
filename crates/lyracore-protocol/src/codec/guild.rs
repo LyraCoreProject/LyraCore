@@ -1,10 +1,11 @@
-use super::*;
 use wow_world_messages::vanilla::{
-    GuildCommand, GuildCommandResult, GuildMember, GuildMember_GuildMemberStatus, PetitionResult,
-    PetitionShowlist, PetitionSignature, SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_INFO,
-    SMSG_GUILD_INVITE, SMSG_GUILD_QUERY_RESPONSE, SMSG_GUILD_ROSTER, SMSG_PETITION_QUERY_RESPONSE,
-    SMSG_PETITION_SHOWLIST, SMSG_PETITION_SHOW_SIGNATURES, SMSG_PETITION_SIGN_RESULTS,
+    Area, Class, GuildCommand, GuildCommandResult, GuildMember, GuildMember_GuildMemberStatus,
+    Level, PetitionResult, PetitionShowlist, PetitionSignature, SMSG_GUILD_COMMAND_RESULT,
+    SMSG_GUILD_INFO, SMSG_GUILD_INVITE, SMSG_GUILD_QUERY_RESPONSE, SMSG_GUILD_ROSTER,
+    SMSG_PETITION_QUERY_RESPONSE, SMSG_PETITION_SHOWLIST, SMSG_PETITION_SHOW_SIGNATURES,
+    SMSG_PETITION_SIGN_RESULTS,
 };
+use wow_world_messages::Guid;
 
 // SMSG_GUILD_EVENT needs a trailing guid that gtker's vanilla type omits.
 pub const SMSG_GUILD_EVENT_OPCODE: u16 = 0x0092;
@@ -178,8 +179,7 @@ pub fn build_guild_event_raw(kind: u8, strings: &[String], subject_guid: u64) ->
     let strings = &strings[..strings.len().min(usize::from(u8::MAX))];
     let mut body = vec![kind, strings.len() as u8];
     for string in strings {
-        body.extend_from_slice(string.as_bytes());
-        body.push(0);
+        super::push_cstr(&mut body, string);
     }
     if subject_guid != 0 {
         body.extend_from_slice(&subject_guid.to_le_bytes());
@@ -255,6 +255,11 @@ pub fn build_petition_sign_results(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::char::{build_char_enum, CharacterView};
+    use crate::codec::entity::{build_create_object, CreateKind, EntityView};
+    use crate::codec::values::build_guild_values;
+    use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
+    use wow_world_messages::vanilla::{Object, UpdateMask};
 
     fn guild() -> GuildView {
         GuildView {
@@ -426,7 +431,7 @@ mod tests {
     fn guild_values_carry_only_the_guild_id_and_rank() {
         let (opcode, body) = build_guild_values(0x0102, 7, 3);
         assert_eq!(opcode, 0x00A9);
-        let updates = lyracore_shared::values_mask::parse_values_updates(&body);
+        let updates = crate::codec::values_mask::parse_values_updates(&body);
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].guid, 0x0102);
         assert_eq!(updates[0].fields, vec![(191, 7), (192, 3)]);

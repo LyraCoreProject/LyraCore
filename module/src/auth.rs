@@ -1,12 +1,9 @@
-use lyracore_package_delta::packed_race_class_id;
 use spacetimedb::{
     reducer, table, Identity, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp,
 };
 
-use crate::items::game_item_instance;
-use crate::{
-    game_char_base_info, game_character, game_start_position, game_world_entity, Character,
-};
+use crate::game_item_instance;
+use crate::{game_character, Character};
 
 #[table(accessor = game_account)]
 pub struct Account {
@@ -331,25 +328,7 @@ pub(crate) fn adopt_character_gm_levels(ctx: &ReducerContext) -> u64 {
 
 #[cfg(test)]
 mod alpha_test_tools_tests {
-    use super::{
-        alpha_test_tools_enrollment, changed_alpha_test_tools, provisioned_alpha_test_tools,
-        realm_account_name,
-    };
-
-    #[test]
-    fn enrollment_starts_enabled_and_tracks_operator_changes() {
-        assert!(alpha_test_tools_enrollment(None));
-        assert!(alpha_test_tools_enrollment(Some(true)));
-        assert!(!alpha_test_tools_enrollment(Some(false)));
-    }
-
-    #[test]
-    fn new_accounts_copy_enrollment_while_existing_accounts_keep_their_authority() {
-        assert!(provisioned_alpha_test_tools(None, true));
-        assert!(!provisioned_alpha_test_tools(None, false));
-        assert!(provisioned_alpha_test_tools(Some(true), false));
-        assert!(!provisioned_alpha_test_tools(Some(false), true));
-    }
+    use super::{changed_alpha_test_tools, realm_account_name};
 
     #[test]
     fn explicit_grant_and_revoke_change_only_a_known_account() {
@@ -393,21 +372,14 @@ pub fn establish_session(
     } else {
         sessions.insert(row);
     }
-    crate::native::account_changed(ctx, account_id);
+    crate::native::realm_shard::account_changed(ctx, account_id);
     ensure_session_reaper_armed(ctx);
     Ok(())
 }
 
 #[cfg(test)]
 mod session_expiry_tests {
-    use super::{expired_sessions, session_expired};
-
-    #[test]
-    fn a_session_expires_at_its_deadline_and_not_before() {
-        assert!(!session_expired(999, 1_000));
-        assert!(session_expired(1_000, 1_000));
-        assert!(session_expired(1_001, 1_000));
-    }
+    use super::expired_sessions;
 
     #[test]
     fn the_reaper_selects_only_the_sessions_whose_window_closed() {
@@ -576,10 +548,12 @@ pub(crate) fn in_guid_range(range: Option<(u64, u64)>, guid: u64) -> bool {
     guid >= base && guid < base.saturating_add(size)
 }
 
+pub(crate) const GUID_RANGE_SIZE: u64 = 1_000_000_000;
+
 #[reducer]
 pub fn install_guid_range(ctx: &ReducerContext, base: u64) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let size = crate::realm_core::GUID_RANGE_SIZE;
+    let size = GUID_RANGE_SIZE;
     let ranges = ctx.db.game_guid_range();
     if let Some(row) = ranges.id().find(0) {
         if row.base == base && row.size == size {
@@ -681,8 +655,7 @@ mod guid_allocator_tests {
         assert_eq!(
             may_mint(None, 5_000).unwrap_err(),
             "NO_GUID_RANGE",
-            "having minted before is not a licence — that IS the shard that mints into someone \
-             else's range"
+            "a database that minted before still needs an assigned range"
         );
         assert!(may_mint(Some((1_000_000_000, 1_000_000_000)), 1_000_000_000).is_ok());
         assert!(may_mint(Some((1_000_000_000, 1_000_000_000)), 1_999_999_998).is_ok());
@@ -727,283 +700,4 @@ mod guid_allocator_tests {
         );
         assert_eq!(legacy_guid_seed(std::iter::empty(), std::iter::empty()), 0);
     }
-}
-
-// The 5875 client refuses a Character list longer than this limit.
-pub(crate) const CHARACTERS_PER_ACCOUNT: usize = 10;
-
-#[derive(Clone, Copy, Default)]
-pub(crate) struct Appearance {
-    pub gender: u8,
-    pub skin: u8,
-    pub face: u8,
-    pub hair_style: u8,
-    pub hair_color: u8,
-    pub facial_hair: u8,
-}
-
-#[reducer]
-#[allow(clippy::too_many_arguments)]
-pub fn create_character(
-    ctx: &ReducerContext,
-    account_id: u64,
-    name: String,
-    race: u8,
-    class: u8,
-    gender: u8,
-    skin: u8,
-    face: u8,
-    hair_style: u8,
-    hair_color: u8,
-    facial_hair: u8,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let appearance = Appearance {
-        gender,
-        skin,
-        face,
-        hair_style,
-        hair_color,
-        facial_hair,
-    };
-    insert_new_character(ctx, account_id, name, race, class, appearance)
-        .map(|_| ())
-        .map_err(String::from)
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CreateCharacterRefusal {
-    NameInUse,
-    InvalidRaceClass,
-    AccountFull,
-    Refused(crate::Refusal),
-}
-
-impl From<String> for CreateCharacterRefusal {
-    fn from(cause: String) -> Self {
-        Self::Refused(cause.into())
-    }
-}
-
-// The create_character reducer and the Package API return this text.
-impl std::fmt::Display for CreateCharacterRefusal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NameInUse => "NAME_IN_USE".fmt(f),
-            Self::InvalidRaceClass => "INVALID_RACE_CLASS".fmt(f),
-            Self::AccountFull => "SERVER_LIMIT".fmt(f),
-            Self::Refused(refusal) => refusal.fmt(f),
-        }
-    }
-}
-
-impl From<CreateCharacterRefusal> for String {
-    fn from(refusal: CreateCharacterRefusal) -> Self {
-        refusal.to_string()
-    }
-}
-
-pub(crate) fn check_new_character(
-    ctx: &ReducerContext,
-    name: &str,
-    race: u8,
-    class: u8,
-) -> Result<(), CreateCharacterRefusal> {
-    require_guid_range(ctx)?;
-    if crate::peer::role(ctx).is_some()
-        && crate::peer::require_sender(ctx, crate::peer::realm_shard(ctx)).is_err()
-    {
-        return Err("Character creation requires a Realm name reservation"
-            .to_string()
-            .into());
-    }
-    let folded = name.to_lowercase();
-    if ctx
-        .db
-        .game_character()
-        .iter()
-        .any(|character| character.name.to_lowercase() == folded)
-    {
-        return Err(CreateCharacterRefusal::NameInUse);
-    }
-    let cbi = ctx.db.game_char_base_info();
-    if cbi.count() > 0
-        && cbi
-            .race_class()
-            .find(packed_race_class_id(race, class) as u16)
-            .is_none()
-    {
-        return Err(CreateCharacterRefusal::InvalidRaceClass);
-    }
-    Ok(())
-}
-
-pub(crate) fn account_has_room(ctx: &ReducerContext, account_id: u64) -> bool {
-    ctx.db
-        .game_character()
-        .by_account()
-        .filter(&account_id)
-        .count()
-        < CHARACTERS_PER_ACCOUNT
-}
-
-pub(crate) fn insert_new_character(
-    ctx: &ReducerContext,
-    account_id: u64,
-    name: String,
-    race: u8,
-    class: u8,
-    appearance: Appearance,
-) -> Result<u64, CreateCharacterRefusal> {
-    check_new_character(ctx, &name, race, class)?;
-    if !account_has_room(ctx, account_id) {
-        return Err(CreateCharacterRefusal::AccountFull);
-    }
-    let chars = ctx.db.game_character();
-    let account = ctx
-        .db
-        .game_account()
-        .id()
-        .find(account_id)
-        .ok_or_else(|| format!("no such account id: {account_id}"))?;
-
-    let positions = ctx.db.game_start_position();
-    let race_class = packed_race_class_id(race, class) as u16;
-    let human_warrior = packed_race_class_id(1, 1) as u16;
-    let sp = positions
-        .race_class()
-        .find(race_class)
-        .or_else(|| positions.race_class().find(human_warrior))
-        .ok_or_else(|| "no start position seeded".to_string())?;
-
-    if !crate::native::directory::owns_map(ctx, sp.map_id) {
-        return Err("World Shard does not own the start map".to_string().into());
-    }
-    let next_guid = next_character_guid(ctx);
-
-    let row = Character {
-        guid: next_guid,
-        account_id,
-        owner_identity: account.identity.unwrap_or(Identity::ZERO),
-        name: name.clone(),
-        race,
-        class,
-        gender: appearance.gender,
-        skin: appearance.skin,
-        face: appearance.face,
-        hair_style: appearance.hair_style,
-        hair_color: appearance.hair_color,
-        facial_hair: appearance.facial_hair,
-        level: 1,
-        xp: 0,
-        next_level_xp: crate::xp::xp_to_next_level(1),
-        map_id: sp.map_id,
-        zone_id: sp.zone_id,
-        x: sp.x,
-        y: sp.y,
-        z: sp.z,
-        orientation: sp.orientation,
-        first_login: true,
-        online: false,
-        money: 0,
-        rested_xp: 0,
-        last_logout_micros: 0,
-        home_map: sp.map_id,
-        home_zone: sp.zone_id,
-        home_x: sp.x,
-        home_y: sp.y,
-        home_z: sp.z,
-        played_total_secs: 0,
-        session_start_micros: 0,
-        health: 0,
-        power: 0,
-        respec_count: 0,
-        death_expire_micros: 0,
-        pending_instance_id: 0,
-        gm_level: 0,
-        pending_ghost: false,
-        resting: false,
-        rested_since_micros: 0,
-        pending_godmode: false,
-        pending_run_speed_mult_bp: crate::world::RUN_SPEED_BP_1X,
-        bank_bag_slots: 0,
-        watched_faction_index: -1,
-        rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
-    };
-
-    if chars.try_insert(row).is_err() {
-        return if chars.name().find(&name).is_some() {
-            Err(CreateCharacterRefusal::NameInUse)
-        } else {
-            Err("character create failed".to_string().into())
-        };
-    }
-    let owner = account.identity.unwrap_or(Identity::ZERO);
-    crate::spell::spellbook::grant_createinfo_spells(ctx, next_guid, owner, race, class);
-    crate::action_bar::grant_createinfo_actions(ctx, next_guid, owner, race, class);
-
-    crate::items::grant_starter_item(ctx, next_guid, owner)?;
-    crate::native::directory::changed(ctx, account_id, next_guid, true);
-    Ok(next_guid)
-}
-
-#[reducer]
-pub fn delete_character(
-    ctx: &ReducerContext,
-    account_id: u64,
-    request_actor: crate::account_ownership::SessionActor,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    apply_delete_character(ctx, account_id, character_guid)
-}
-
-pub(crate) fn character_deletion_gate(
-    ctx: &ReducerContext,
-    account_id: u64,
-    character_guid: u64,
-) -> Result<(), String> {
-    let c = ctx
-        .db
-        .game_character()
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| "NO_SUCH_CHAR".to_string())?;
-    if c.account_id != account_id {
-        return Err("NOT_OWNER".to_string());
-    }
-    if crate::helpers::character_by_guid(ctx, character_guid).is_none() {
-        return Err("CHAR_IN_TRANSIT".to_string());
-    }
-    if crate::native::realm_auction::pending(ctx, character_guid) {
-        return Err("CHAR_AUCTION_TRANSACTION_PENDING".into());
-    }
-    if crate::native::realm_petition::pending(ctx, character_guid) {
-        return Err("CHAR_GUILD_TRANSACTION_PENDING".into());
-    }
-    if crate::auction::character_has_auction_value(ctx, character_guid) {
-        return Err("CHAR_HAS_AUCTION_VALUE".to_string());
-    }
-    Ok(())
-}
-
-pub(crate) fn apply_delete_character(
-    ctx: &ReducerContext,
-    account_id: u64,
-    character_guid: u64,
-) -> Result<(), String> {
-    character_deletion_gate(ctx, account_id, character_guid)?;
-    if ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(character_guid)
-        .is_some()
-    {
-        return Err("CHAR_IN_WORLD".into());
-    }
-    crate::mail_text::drop_character_letters(ctx, character_guid);
-    crate::world::cascade_delete_character(ctx, character_guid);
-    crate::native::directory::changed(ctx, account_id, character_guid, false);
-    Ok(())
 }

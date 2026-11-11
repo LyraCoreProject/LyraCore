@@ -68,7 +68,7 @@ mod tests {
     fn source() -> WorldSource {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         connection.execute_batch("CREATE TABLE map_template (entry INTEGER, patch INTEGER, parent INTEGER, map_type INTEGER, linked_zone INTEGER, player_limit INTEGER, reset_delay INTEGER, ghost_entrance_map INTEGER, ghost_entrance_x REAL, ghost_entrance_y REAL, map_name TEXT, PRIMARY KEY(entry,patch)); INSERT INTO map_template VALUES (36,0,0,1,7,40,0,0,-10,20,'Old'),(36,10,1,2,8,10,7,-1,-11,21,'Source'),(36,11,2,3,9,5,8,1,-12,22,'Future');").unwrap();
-        WorldSource::Vmangos(connection)
+        WorldSource::fixture(connection)
     }
 
     fn maps() -> Map {

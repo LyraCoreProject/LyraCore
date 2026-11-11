@@ -2,12 +2,14 @@ mod support;
 
 use lyracore_shared::item_property::COMBAT_SPELL;
 use lyracore_shared::spell::taxonomy::{
-    E_ADD_EXTRA_ATTACKS, E_DAMAGE, E_HEAL, E_WEAPON_STRIKE, P_NONE, P_RAW, SPELL_ATTR_WEAPON_PROCS,
+    CAST_FLAG_WEAPON_PROCS, E_ADD_EXTRA_ATTACKS, E_DAMAGE, E_HEAL, E_WEAPON_STRIKE, P_NONE, P_RAW,
     T_SELF, T_TARGET_ENEMY,
 };
 
 use std::collections::BTreeMap;
 
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
+use lyracore_package_delta::packed_spell_effect_id;
 use support::{
     event_rows, fence_subscription, poll_until, subscribe_with_fence, Standalone,
     TableSubscription, POLL_TIMEOUT,
@@ -16,9 +18,7 @@ use support::{
 type SqlRow = BTreeMap<String, String>;
 
 const PLAYER: u64 = 1;
-const TEST_WOLF_ENTRY: u32 = 51000;
 const WOLF_HEALTH: u32 = 100_000;
-const FIXTURE_BLADE: u32 = 5_090_050;
 const SINISTER_STRIKE: u32 = 1752;
 const THUNDERFURY_PROC: u32 = 21992;
 const CHANCE_ON_HIT: u8 = 2;
@@ -46,7 +46,7 @@ fn an_avoided_weapon_ability_still_casts_the_main_hand_chance_on_hit_spell() {
         &standalone,
         SINISTER_STRIKE,
         "Sinister Strike",
-        SPELL_ATTR_WEAPON_PROCS,
+        CAST_FLAG_WEAPON_PROCS,
         (E_WEAPON_STRIKE, T_TARGET_ENEMY),
         (100, P_RAW),
     );
@@ -299,7 +299,7 @@ fn stage_spell(
          p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({}, {spell_id}, 0, {kind}, 5, 0, 0.0, 0, {target}, \
          0.0, 0, 0, 0, {p0}, {p0_kind}, 0, 0, false, 0.0)",
-        (spell_id as u64) << 2
+        packed_spell_effect_id(spell_id, 0)
     ));
 }
 

@@ -73,6 +73,47 @@ pub struct Spell {
 }
 
 impl Spell {
+    pub(crate) fn blank(spell_id: u32, name: &str) -> Self {
+        Self {
+            spell_id,
+            name: name.to_string(),
+            power_type: 0,
+            cost: 0,
+            cast_time_ms: 0,
+            gcd_ms: 1500,
+            cooldown_ms: 0,
+            range_yd: 0,
+            duration_ms: 0,
+            school_mask: 0,
+            dispel_type: 0,
+            mechanic: 0,
+            max_stacks: 0,
+            aura_interrupt: 0,
+            attributes: 0,
+            spell_level: 0,
+            max_level: 0,
+            is_negative: false,
+            cast_flags: 0,
+            stances: 0,
+            family_name: 0,
+            family_flags: 0,
+            proc_flags: 0,
+            proc_chance: 0,
+            proc_charges: 0,
+            max_duration_ms: 0,
+            custom_flags: 0,
+            min_target_level: 0,
+            single_target_key: 0,
+            form_mask: 0,
+            form_exclude: 0,
+            attributes_ex_2: 0,
+            visual_id: 0,
+            duration_index: 0,
+            category: 0,
+            category_cooldown_ms: 0,
+        }
+    }
+
     pub(crate) fn negative(&self) -> bool {
         lyracore_shared::spell_custom::is_negative(self.custom_flags, self.is_negative)
     }
@@ -141,6 +182,34 @@ pub struct SpellEffect {
     // Reimport spell before enabling derived equip effects; see docs/danger-zones.md.
     #[default(false)]
     pub equip_supported: bool,
+}
+
+impl SpellEffect {
+    pub(crate) fn blank(spell_id: u32, effect_index: u8) -> Self {
+        Self {
+            id: lyracore_package_delta::packed_spell_effect_id(spell_id, effect_index),
+            spell_id,
+            effect_index,
+            kind: 0,
+            base_points: 0,
+            die_sides: 0,
+            per_level: 0.0,
+            period_ms: 0,
+            target: 0,
+            radius_yd: 0.0,
+            chain_targets: 0,
+            trigger_spell: 0,
+            effect_mechanic: 0,
+            p0: 0,
+            p0_kind: 0,
+            p1: 0,
+            script_id: 0,
+            enters_combat: false,
+            points_per_combo: 0.0,
+            bonus_coefficient: -1.0,
+            equip_supported: false,
+        }
+    }
 }
 
 #[table(accessor = game_spell_reagent, index(accessor = by_spell, btree(columns = [spell_id])))]
@@ -251,6 +320,8 @@ pub struct ItemAuraExpiry {
     pub scheduled_at: ScheduleAt,
 }
 
+crate::outside_table_catalog!(game_item_aura, game_item_aura_expiry);
+
 #[spacetimedb::reducer]
 pub(crate) fn expire_item_aura(ctx: &ReducerContext, expiry: ItemAuraExpiry) {
     if !crate::time::scheduler_authorized(ctx) {
@@ -258,7 +329,7 @@ pub(crate) fn expire_item_aura(ctx: &ReducerContext, expiry: ItemAuraExpiry) {
     }
     if let Some(aura) = ctx.db.game_aura().id().find(expiry.aura_id) {
         if aura.expires_at <= crate::time::now(ctx) {
-            super::shed_auras(ctx, aura.target_guid, vec![aura]);
+            shed_auras(ctx, vec![aura]);
         }
     }
 }
@@ -317,7 +388,7 @@ impl Aura {
         if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
             crate::aoi::refresh_entity(ctx, aura.target_guid);
         }
-        crate::native::aura_changed(ctx, None, Some(&aura));
+        crate::native::aura::changed(ctx, None, Some(&aura));
         aura
     }
 
@@ -337,31 +408,143 @@ impl Aura {
         {
             crate::aoi::refresh_entity(ctx, aura.target_guid);
         }
-        crate::native::aura_changed(ctx, previous.as_ref(), Some(&aura));
+        crate::native::aura::changed(ctx, previous.as_ref(), Some(&aura));
         aura
     }
 
+    /// Removes one Aura and refreshes what it derived; `shed_auras` removes a batch.
+    #[cfg_attr(not(has_packages), allow(dead_code))]
     pub(crate) fn delete(ctx: &ReducerContext, id: u64) -> bool {
-        let auras = ctx.db.game_aura();
-        let previous = auras.id().find(id);
-        let removed = auras.id().delete(id);
-        ctx.db.game_item_aura().aura_id().delete(id);
-        ctx.db.game_item_aura_expiry().aura_id().delete(id);
-        if let Some(aura) = previous {
-            if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
-                crate::aoi::refresh_entity(ctx, aura.target_guid);
+        let previous = ctx.db.game_aura().id().find(id);
+        let removed = previous.is_some();
+        match previous {
+            Some(aura) => shed_auras(ctx, vec![aura]),
+            None => {
+                Self::delete_row(ctx, id);
             }
-            crate::native::aura_changed(ctx, Some(&aura), None);
         }
         removed
     }
+
+    fn delete_row(ctx: &ReducerContext, id: u64) -> Option<Aura> {
+        let auras = ctx.db.game_aura();
+        let previous = auras.id().find(id);
+        auras.id().delete(id);
+        ctx.db.game_item_aura().aura_id().delete(id);
+        ctx.db.game_item_aura_expiry().aura_id().delete(id);
+        if let Some(aura) = &previous {
+            if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
+                crate::aoi::refresh_entity(ctx, aura.target_guid);
+            }
+            crate::native::aura::changed(ctx, Some(aura), None);
+        }
+        previous
+    }
+}
+
+/// The unit columns an Aura's effect feeds, which must be recomputed when it changes.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct AuraProjections {
+    vitals: bool,
+    sheet: bool,
+    mount: bool,
+    display: bool,
+}
+
+impl AuraProjections {
+    pub(crate) fn of(kind: u8, parameter: i32) -> Self {
+        Self {
+            vitals: crate::modifiers::moves_vitals(kind, parameter),
+            sheet: crate::modifiers::moves_sheet(kind, parameter),
+            mount: crate::mount::mount_aura_moves_mount(kind, parameter),
+            display: kind == lyracore_shared::spell::taxonomy::A_TRANSFORM,
+        }
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            vitals: self.vitals || other.vitals,
+            sheet: self.sheet || other.sheet,
+            mount: self.mount || other.mount,
+            display: self.display || other.display,
+        }
+    }
+
+    pub(crate) fn refresh(self, ctx: &ReducerContext, unit_guid: u64) {
+        if self.vitals {
+            super::recompute_vitals(ctx, unit_guid);
+        }
+        if self.sheet {
+            super::recompute_sheet(ctx, unit_guid);
+        }
+        if self.mount {
+            crate::mount::recompute_mount(ctx, unit_guid);
+        }
+        if self.display {
+            super::recompute_display(ctx, unit_guid);
+        }
+    }
+}
+
+/// Removes every Aura in `auras`, opens the diminishing-returns window of each control category
+/// that no longer holds the unit, and refreshes each touched unit's derived columns once.
+pub(crate) fn shed_auras(ctx: &ReducerContext, auras: Vec<Aura>) {
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
+    let mut touched = std::collections::BTreeMap::<u64, AuraProjections>::new();
+    for aura in auras {
+        let Some(aura) = Aura::delete_row(ctx, aura.id) else {
+            continue;
+        };
+        if let Some(category) = super::stacking::dr_category_for_effect(
+            ctx,
+            aura.eff_kind,
+            aura.eff_p0_kind,
+            aura.eff_p0,
+            aura.target_guid,
+        ) {
+            super::stacking::dr_window_on_removal(ctx, aura.target_guid, category, now_micros);
+        }
+        let projections = touched.entry(aura.target_guid).or_default();
+        *projections = projections.union(AuraProjections::of(aura.eff_kind, aura.eff_p0));
+    }
+    for (unit_guid, projections) in touched {
+        projections.refresh(ctx, unit_guid);
+    }
+}
+
+pub(crate) fn auras_on(ctx: &ReducerContext, unit_guid: u64) -> impl Iterator<Item = Aura> {
+    ctx.db.game_aura().by_target().filter(unit_guid)
+}
+
+pub(crate) fn is_stealthed(ctx: &ReducerContext, unit_guid: u64) -> bool {
+    auras_on(ctx, unit_guid).any(|a| a.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH)
+}
+
+pub(crate) fn break_stealth(ctx: &ReducerContext, unit_guid: u64) {
+    let stealth: Vec<Aura> = auras_on(ctx, unit_guid)
+        .filter(|a| a.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH)
+        .collect();
+    shed_auras(ctx, stealth);
+}
+
+pub(crate) fn remove_seal_auras(ctx: &ReducerContext, unit_guid: u64) -> u32 {
+    let seal_spell_ids: std::collections::HashSet<u32> = auras_on(ctx, unit_guid)
+        .filter(|a| a.eff_kind == lyracore_shared::spell::taxonomy::A_SEAL)
+        .map(|a| a.spell_id)
+        .collect();
+    let seals: Vec<Aura> = auras_on(ctx, unit_guid)
+        .filter(|a| seal_spell_ids.contains(&a.spell_id))
+        .collect();
+    let removed = seals.len() as u32;
+    shed_auras(ctx, seals);
+    removed
 }
 
 crate::character_owned!(delete, fn sweep_delete_game_aura(ctx, character_guid) {
     let auras = ctx.db.game_aura();
     let ids: Vec<u64> = auras.by_target().filter(&character_guid).map(|a| a.id).collect();
     for id in ids {
-        Aura::delete(ctx, id);
+        Aura::delete_row(ctx, id);
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_aura(ctx, character_guid, io) {
@@ -377,7 +560,7 @@ pub const CAST_FAIL_NONE: u8 = 0;
 pub const CAST_FAIL_NO_POWER: u8 = 1;
 pub const CAST_FAIL_INTERRUPTED: u8 = 2;
 
-// Codes are append-only for rolling Module and Gateway updates.
+// Codes are append-only for rolling Module updates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub(crate) enum SpellCastEventKind {
@@ -470,14 +653,14 @@ pub const CAST_MISS_PARRY: u8 = 4;
 
 impl SpellImpactEvent {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
-        crate::native::spell_impact(ctx, &row);
+        crate::native::spell::spell_impact(ctx, &row);
         ctx.db.game_spell_impact_event_live().insert(row)
     }
 }
 
 impl SpellCastEvent {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
-        crate::native::cast_event(ctx, &row);
+        crate::native::spell::cast_event(ctx, &row);
         ctx.db.game_spell_cast_event_live().insert(row)
     }
 
@@ -670,7 +853,7 @@ impl DynamicObject {
         self.cell = self.position_cell();
         let object = ctx.db.game_dynamic_object().insert(self);
         #[cfg(feature = "conformance_test_fixture")]
-        crate::native::record_conformance_birth(
+        crate::native::debug::record_birth(
             ctx,
             object.guid,
             object.map_id,
@@ -796,7 +979,7 @@ impl ResurrectRequest {
         let requests = ctx.db.game_resurrect_request();
         requests.target_guid().delete(self.target_guid);
         let row = requests.insert(self);
-        crate::native::resurrect_offered(ctx, &row);
+        crate::native::death::resurrect_offered(ctx, &row);
     }
 
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {
@@ -824,6 +1007,6 @@ impl SelfResurrectOption {
                 spell_id,
             });
         }
-        crate::native::self_resurrection_changed(ctx, guid, spell_id.unwrap_or(0));
+        crate::native::death::self_resurrection_changed(ctx, guid, spell_id.unwrap_or(0));
     }
 }

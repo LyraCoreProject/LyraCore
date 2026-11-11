@@ -108,8 +108,7 @@ mod tests {
         b.extend_from_slice(&CHAT_TYPE_WHISPER.to_le_bytes());
         b.extend_from_slice(&LANG_ADDON.to_le_bytes());
         b.extend_from_slice(b"Self\0");
-        b.extend_from_slice(text.as_bytes());
-        b.push(0);
+        crate::codec::push_cstr(&mut b, text);
         b
     }
 
@@ -131,8 +130,7 @@ mod tests {
         let mut b = Vec::new();
         b.extend_from_slice(&1u32.to_le_bytes());
         b.extend_from_slice(&LANG_ADDON.to_le_bytes());
-        b.extend_from_slice(text.as_bytes());
-        b.push(0);
+        crate::codec::push_cstr(&mut b, text);
         assert_eq!(
             parse_addon_client_chat(&b),
             Some((CHAT_TYPE_PARTY, text.to_string()))

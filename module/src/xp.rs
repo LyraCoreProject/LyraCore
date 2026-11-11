@@ -1,11 +1,10 @@
 use spacetimedb::{log, table, Identity, ReducerContext, Timestamp};
 
 use crate::game_character;
-use crate::game_config;
 use crate::game_world_entity;
 use crate::WorldEntity;
 
-const LEVEL_CAP: u32 = 60;
+pub(crate) const LEVEL_CAP: u32 = 60;
 
 #[table(accessor = game_xp_event, public, index(accessor = by_recipient, btree(columns = [recipient_identity])))]
 pub struct XpEvent {
@@ -47,13 +46,13 @@ pub struct LevelupEvent {
 
 impl XpEvent {
     pub(crate) fn send(ctx: &ReducerContext, guid: u64, event: Self) {
-        crate::native::xp(ctx, guid, &event);
+        crate::native::progression::xp(ctx, guid, &event);
     }
 }
 
 impl LevelupEvent {
     fn send(ctx: &ReducerContext, guid: u64, event: Self) {
-        crate::native::levelup(ctx, guid, &event);
+        crate::native::progression::levelup(ctx, guid, &event);
     }
 }
 
@@ -139,12 +138,7 @@ pub(crate) fn rank_xp_multiplier(rank: u8) -> u32 {
 }
 
 fn xp_rate(ctx: &ReducerContext) -> f32 {
-    ctx.db
-        .game_config()
-        .id()
-        .find(0)
-        .map(|c| c.xp_rate)
-        .unwrap_or(1.0)
+    crate::config::server_config(ctx).xp_rate
 }
 
 pub(crate) fn split_kill_xp(base: u32, share_count: u32) -> u32 {
@@ -169,7 +163,7 @@ fn explore_grey_taper_pct(levels_above_area: i32) -> u32 {
 }
 
 pub(crate) fn explore_xp(exploration_level: u32, player_level: u32) -> u32 {
-    if player_level >= 60 || exploration_level == 0 {
+    if player_level >= LEVEL_CAP || exploration_level == 0 {
         return 0;
     }
     let area_award = explore_base_xp(exploration_level);
@@ -379,20 +373,25 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
     }
 }
 
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_xp_event, crate::EVENT_TTL_MICROS);
+    crate::gc::reap_expired!(ctx, game_levelup_event, crate::EVENT_TTL_MICROS);
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        accrue_rested_on_login, explore_base_xp, explore_xp, max_health_for_level,
-        progression_after_award, rank_xp_multiplier, rest_bonus, rest_pool_after, split_kill_xp,
-        xp_for_kill, xp_to_next_level, XpProgression, REST_EIGHT_HOURS_MICROS,
+        accrue_rested_on_login, explore_xp, max_health_for_level, progression_after_award,
+        rank_xp_multiplier, rest_bonus, rest_pool_after, split_kill_xp, xp_for_kill,
+        xp_to_next_level, XpProgression, REST_EIGHT_HOURS_MICROS,
     };
 
     #[test]
     fn explore_xp_scales_off_area_level_and_caps() {
         assert_eq!(explore_xp(10, 10), 95);
         assert_eq!(explore_xp(10, 12), 95);
-        assert_eq!(explore_xp(20, 10), explore_base_xp(15));
-        assert_eq!(explore_xp(10, 16), 95 * 95 / 100);
+        assert_eq!(explore_xp(20, 10), 120);
+        assert_eq!(explore_xp(10, 16), 90);
         assert_eq!(explore_xp(2, 30), 0);
         assert_eq!(explore_xp(10, 60), 0);
         assert_eq!(explore_xp(0, 10), 0);

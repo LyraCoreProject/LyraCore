@@ -7,18 +7,16 @@ use lyracore_protocol::{
     world::Packet,
 };
 use lyracore_shared::spell::taxonomy::{
-    E_DISENCHANT, E_ENCHANT_ITEM, E_ENCHANT_ITEM_TEMPORARY, E_FISH, E_NEXT_SWING, E_OPEN_LOCK,
-    E_PERSISTENT_AREA, SPELL_ATTR_RANGED_AUTO_REPEAT,
+    CAST_FLAG_RANGED_AUTO_REPEAT, E_DISENCHANT, E_ENCHANT_ITEM, E_ENCHANT_ITEM_TEMPORARY, E_FISH,
+    E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::Rollback;
-use crate::combat::game_melee_attack;
+use crate::game_melee_attack;
 use crate::spell::{CastGateRefusal, CastRefusalReason};
 use crate::Refusal;
 use crate::{game_item_instance, game_item_template, game_spell, game_spell_effect};
-
-const CAST_RESULT: u16 = 0x0130;
 
 enum Route {
     Ordinary,
@@ -30,12 +28,12 @@ enum Route {
 }
 
 fn packet(message: ServerOpcodeMessage) -> Result<Packet, String> {
-    lyracore_protocol::world::encode(message).map_err(|error| error.to_string())
+    lyracore_protocol::world::encode(&message).map_err(|error| error.to_string())
 }
 
 fn failure(spell: u32, reason: CastRefusalReason) -> Packet {
     Packet {
-        opcode: CAST_RESULT,
+        opcode: codec::SMSG_CAST_RESULT_OPCODE,
         body: codec::build_cast_result_failed(spell, cast_result(reason)),
     }
 }
@@ -121,7 +119,7 @@ pub(super) fn receive(
         .collect();
     let route = if header
         .as_ref()
-        .is_some_and(|row| row.cast_flags & SPELL_ATTR_RANGED_AUTO_REPEAT != 0)
+        .is_some_and(|row| row.cast_flags & CAST_FLAG_RANGED_AUTO_REPEAT != 0)
     {
         Route::Ranged
     } else if let Some(effect) = effects
@@ -169,7 +167,7 @@ pub(super) fn receive(
         prelude = vec![
             packet(ServerOpcodeMessage::SMSG_SPELL_START(Box::new(start)))?,
             Packet {
-                opcode: CAST_RESULT,
+                opcode: codec::SMSG_CAST_RESULT_OPCODE,
                 body: codec::build_cast_result_ok(spell),
             },
             packet(ServerOpcodeMessage::SMSG_SPELL_GO(Box::new(go)))?,
@@ -279,7 +277,7 @@ pub(super) fn receive(
             super::send_raw(
                 ctx,
                 connection,
-                CAST_RESULT,
+                codec::SMSG_CAST_RESULT_OPCODE,
                 codec::build_cast_result_ok(spell),
                 false,
             );
@@ -304,7 +302,7 @@ pub(super) fn cancel_repeat(ctx: &ReducerContext, guid: u64) {
         .find(guid)
         .is_some_and(|row| row.ranged_spell_id != 0)
     {
-        crate::combat::MeleeAttack::end_auto_repeat(ctx, guid);
+        crate::MeleeAttack::end_auto_repeat(ctx, guid);
     }
 }
 

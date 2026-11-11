@@ -252,7 +252,6 @@ struct Relay {
     heartbeat: Option<u32>,
 }
 
-/// The movement flags and orientation of a MovementInfo.
 fn heading(movement_info: &[u8]) -> Option<(u32, f32)> {
     let flags = u32::from_le_bytes(movement_info.get(..4)?.try_into().ok()?);
     let orientation = f32::from_le_bytes(movement_info.get(20..24)?.try_into().ok()?);

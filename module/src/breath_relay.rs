@@ -47,7 +47,7 @@ fn insert(
         damage,
         created_at: crate::time::now(ctx),
     });
-    crate::native::breath_event(ctx, &row);
+    crate::native::environment::breath_event(ctx, &row);
 }
 
 pub(crate) fn start(
@@ -95,4 +95,8 @@ pub(crate) fn fatigue_stop(ctx: &ReducerContext, character_guid: u64) {
 
 pub(crate) fn exhaustion_damage(ctx: &ReducerContext, character_guid: u64, damage: u32) {
     insert(ctx, character_guid, KIND_EXHAUSTION_DAMAGE, 0, 0, damage);
+}
+
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_breath_relay_event, crate::EVENT_TTL_MICROS);
 }

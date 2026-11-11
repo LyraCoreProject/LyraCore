@@ -1,6 +1,3 @@
-// Squared interaction distance in yards.
-pub const INTERACTION_RANGE_SQ: f32 = 100.0;
-
 pub fn bid_increment(current_bid: u32) -> u32 {
     if current_bid == 0 {
         0
@@ -112,10 +109,6 @@ mod tests {
             assert_eq!(AuctionRefusal::parse_tag(refusal.as_tag()), Some(refusal));
         }
         assert_eq!(AuctionRefusal::parse_tag("auction:"), None);
-        assert_eq!(
-            AuctionRefusal::parse_tag("gw_auction_hold_bid reducer timed out after 10s"),
-            None
-        );
     }
 
     #[test]

@@ -116,7 +116,7 @@ data and archive names for Map lookup.
 **World Import Profile**:
 A named import plan that selects the maps and content one world import loads into a Shard.
 `full-world` imports every source map. The other profiles import part of the world. See
-`importer/src/world_import_scope.rs`.
+`importer/manifests/world-profiles.json`.
 
 **World Import Completion**:
 The record that a World Import loaded one map and passed its content checks. An import clears these
@@ -592,7 +592,7 @@ _Avoid_: proc cast, internal cast, free cast
 **Chance on Hit**:
 A weapon spell slot or a combat-spell enchantment that may cast when the weapon strikes a victim
 that is still alive. A white swing that lands and deals damage, or is blocked, rolls the weapon that
-swung. A spell that carries `SPELL_ATTR_WEAPON_PROCS` rolls the main hand once per target, even when
+swung. A spell that carries `CAST_FLAG_WEAPON_PROCS` rolls the main hand once per target, even when
 avoided and even as a Triggered Cast. A spell slot rolls its procs-per-minute rate at the weapon's
 speed, else the spell's proc chance. An enchantment rolls its `game_enchant_proc_rate`, else its
 own percent, else one proc per minute. The roll fires a Triggered Cast that rolls no further Chance
@@ -902,7 +902,7 @@ The five tabard design values of a Guild. Only the Guild Leader saves one, for a
 
 **Guild Invite**:
 A pending offer for one Character to join one Guild. It expires after a fixed time. See
-`module/src/gc.rs`.
+`module/src/guild/membership.rs`.
 
 **Public Note**:
 A short note a Guild Rank with EPNOTE sets on a member. Every member sees it on the roster.
@@ -1163,7 +1163,7 @@ _Avoid_: map claim, zoned claim, sharded claim
 **Fixture-Reserved Identifier**:
 An identifier the seeded fixtures own, which no Package may claim under any operation in any Import
 Family. It lies in the project-wide fixture band or in one family's own fixture cluster. See
-`crates/lyracore-package-delta/src/ids.rs`.
+`crates/lyracore-package-delta/src/ids.rs`; `fixture_ids.rs` beside it names each one Core uses.
 _Avoid_: test id, reserved id (unqualified)
 
 ### Client content
@@ -1336,11 +1336,11 @@ the names. [Migrating to the Native Host](docs/migrating-to-native-host.md) cove
 
 **Loot Roll Promotion Receipt**: retired. Realm-core's record that kept an old Loot Roll Promotion from recreating a roll. _Avoid_ in new text.
 
-**Realm-core**: retired. The Shard for Realm-wide state. A native Realm keeps that state in its one Shard. `module/src/realm_core.rs` keeps its tables and reducers. _Avoid_ in new text.
+**Realm-core**: retired. The Gateway-era Shard for Realm-wide state. A native Realm keeps that state in its one Shard or its Realm Shard. `module/src/realm_core.rs` keeps the Gateway Realm locator. _Avoid_ in new text.
 
 **Roster Revision Relay**: retired. The Gateway's push of a Realm-core roster to World Shard mirrors. `sync_group_mirror` remains. _Avoid_ in new text.
 
-**Transfer Intent**: retired. A row a Package wrote to ask the Gateway to Transfer a sessionless Character. Character Relocation replaced it. _Avoid_ in new text.
+**Transfer Intent**: retired. A row a Package wrote to ask the Gateway to Transfer a sessionless Character. Character Relocation replaced it. Only the `debug_bot_transfer` reducer still writes one, and the session-less Gates still refuse a Character that has one. _Avoid_ in new text.
 
 **World Session Token**: retired. The Realm-core ownership token a request carried across Shards. _Avoid_ in new text.
 

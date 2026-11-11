@@ -1,6 +1,29 @@
 use crate::game_area;
+use lyracore_shared::movement_flags::{ON_TRANSPORT, SWIMMING};
 use lyracore_shared::terrain::{cell_index, cell_key};
 use spacetimedb::{reducer, table, ReducerContext, Table};
+
+// Collision height in yards.
+const UNDERWATER_HEAD_HEIGHT: f32 = 2.0;
+
+pub(crate) fn is_submerged(player_z: f32, liquid_level: Option<f32>, movement_flags: u32) -> bool {
+    liquid_level.is_some_and(|level| {
+        movement_flags & SWIMMING != 0 && player_z + UNDERWATER_HEAD_HEIGHT < level
+    })
+}
+
+// Deep water still counts this many yards above its surface.
+const DEEP_WATER_SURFACE_REACH: f32 = 2.0;
+
+pub(crate) fn is_in_deep_water(
+    player_z: f32,
+    deep_water_level: Option<f32>,
+    movement_flags: u32,
+) -> bool {
+    deep_water_level.is_some_and(|level| {
+        movement_flags & ON_TRANSPORT == 0 && player_z <= level + DEEP_WATER_SURFACE_REACH
+    })
+}
 
 // MCVT stores 145 absolute heights, interleaving nine outer and eight inner points per row pair.
 #[table(accessor = game_terrain_chunk, public)]
@@ -24,6 +47,8 @@ pub struct TerrainDeepWater {
     pub key: u64,
     pub tiles: u64,
 }
+
+crate::outside_table_catalog!(game_terrain_deep_water);
 
 pub(crate) fn ground_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32> {
     let (cx, cy) = (cell_index(x)?, cell_index(y)?);
@@ -111,9 +136,7 @@ pub fn debug_check_submerged(ctx: &ReducerContext, guid: u64) -> Result<(), Stri
         return Err(format!("guid {guid} is not a player"));
     }
     let liquid_level = liquid_level_at(ctx, entity.map_id, entity.x, entity.y);
-    let submerged = liquid_level.is_some_and(|level| {
-        lyracore_shared::env::is_submerged(entity.z, level, true, entity.movement_flags)
-    });
+    let submerged = is_submerged(entity.z, liquid_level, entity.movement_flags);
     spacetimedb::log::info!(
         "submerged probe guid {guid} at map {} ({:.2},{:.2},{:.2}): liquid_level={liquid_level:?} movement_flags=0x{:08x} submerged={submerged}",
         entity.map_id,
@@ -232,4 +255,30 @@ pub fn import_terrain_chunks_append(ctx: &ReducerContext, packed: String) -> Res
         crate::nav::record_change(ctx)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn submerged_requires_swimming_liquid_and_head_below_surface() {
+        let surface = 10.0;
+        let swimming = SWIMMING;
+
+        assert!(!is_submerged(8.0, Some(surface), swimming));
+        assert!(is_submerged(7.99, Some(surface), swimming));
+        assert!(!is_submerged(8.01, Some(surface), swimming));
+        assert!(!is_submerged(0.0, None, swimming));
+        assert!(!is_submerged(0.0, Some(surface), 0));
+    }
+
+    #[test]
+    fn deep_water_counts_below_and_just_above_the_surface_but_not_on_a_transport() {
+        assert!(is_in_deep_water(-30.0, Some(0.0), SWIMMING));
+        assert!(is_in_deep_water(2.0, Some(0.0), 0));
+        assert!(!is_in_deep_water(2.01, Some(0.0), 0));
+        assert!(!is_in_deep_water(-1.0, None, SWIMMING));
+        assert!(!is_in_deep_water(-1.0, Some(0.0), ON_TRANSPORT));
+    }
 }

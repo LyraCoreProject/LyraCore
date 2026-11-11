@@ -1,5 +1,6 @@
 use crate::gameobject::{game_gameobject, game_gameobject_template, GameObject};
 use crate::go_model::game_go_model;
+use lyracore_shared::constants::go_type;
 use lyracore_shared::vmap::{decode, segment_tri_hit, supports_walking};
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
@@ -26,15 +27,19 @@ pub(crate) fn register(ctx: &ReducerContext, go: &GameObject) {
     else {
         return;
     };
-    if !matches!(template.type_id, 0 | 1) {
+    if !matches!(template.type_id, go_type::DOOR | go_type::BUTTON) {
         return;
     }
     let Some(model) = ctx.db.game_go_model().entry().find(go.template_entry) else {
         return;
     };
     // Derive an origin bound from vertices; the imported AABB radius lacks its off-center origin.
-    let Ok(tris) = decode(&model.blob) else {
-        return;
+    let tris = match decode(&model.blob) {
+        Ok(tris) => tris,
+        Err(err) => {
+            spacetimedb::log::error!("GameObject model {} does not decode: {err:?}", model.entry);
+            return;
+        }
     };
     let radius_world = tris
         .iter()
@@ -183,11 +188,7 @@ fn cast(
         let Some(go) = ctx.db.game_gameobject().guid().find(collider.go_guid) else {
             continue;
         };
-        if go.state != 0
-            || go.map_id != map_id
-            || go.instance_id != instance_id
-            || go.template_entry != collider.entry
-        {
+        if go.state != 0 {
             continue;
         }
         let Some(model) = ctx.db.game_go_model().entry().find(collider.entry) else {
@@ -201,8 +202,15 @@ fn cast(
         let Some(local_b) = local_point(b, pos, rotation, go.orientation, model.scale) else {
             continue;
         };
-        let Ok(tris) = decode(&model.blob) else {
-            continue;
+        let tris = match decode(&model.blob) {
+            Ok(tris) => tris,
+            Err(err) => {
+                spacetimedb::log::error!(
+                    "GameObject model {} does not decode: {err:?}",
+                    model.entry
+                );
+                continue;
+            }
         };
         let local_up = sub(local_a, local_b);
         for tri in tris {

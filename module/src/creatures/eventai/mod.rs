@@ -3,41 +3,33 @@ mod fixtures;
 mod loader;
 mod model;
 mod presentation;
-mod relay;
+pub(crate) mod relay;
 mod relay_control;
 mod stored;
-mod tables;
+pub(crate) mod tables;
 
 mod combat;
 mod death;
-mod edges;
-mod mobility;
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use mobility::{expire_eventai_summon, fire_eventai_forced_despawn};
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use relay::{resume_relay_arrival, resume_relay_run};
+pub(crate) mod edges;
+pub(crate) mod mobility;
 pub(crate) mod movement;
 mod quest_credit;
 mod threat;
+
+pub use self::relay::{RelayFlagChange, RelayFlagOperation, RelayForcedMovement, RelayMovement};
 
 pub(crate) use combat::{authored_combat, current_definition_revision};
 #[cfg(test)]
 pub(crate) use combat::{beneficiary_guid, condition, AuthoredCombat};
 pub(crate) use edges::reset_creature_lifecycle;
-pub use edges::CreatureAiResetDeferral;
-pub use edges::CreatureAiReturningHome;
 pub(crate) use edges::{
     begin_death_dispatch, creature_ai_on_aggro, creature_ai_on_creature_death,
     creature_ai_on_creature_spawn, creature_ai_on_unit_death, finish_death_dispatch,
     reset_engagement, runs_eventai,
 };
-#[allow(
-    unused_imports,
-    reason = "later EventAI actions call these typed edge producers"
-)]
 pub(crate) use edges::{
-    eventai_on_evade, eventai_on_reached_home, eventai_on_receive_ai_event,
-    eventai_on_receive_emote, eventai_on_spell_hit, eventai_on_target_not_reachable,
+    eventai_on_evade, eventai_on_reached_home, eventai_on_receive_emote, eventai_on_spell_hit,
+    eventai_on_target_not_reachable,
 };
 #[cfg(test)]
 pub(crate) use engine::{evaluate, EventAiWorld};
@@ -49,7 +41,6 @@ pub(crate) use mobility::summon_lifetime_after;
 #[cfg(feature = "debug_reducers")]
 pub(crate) use mobility::verify_summon_expiry_boundaries_for_debug;
 pub(crate) use mobility::{drop_summon_expiry, melee_enabled, ranged_posture, react_state};
-pub use mobility::{CreatureAiForcedDespawn, CreatureAiSummonExpiry, CreatureAiSummonOrigin};
 
 #[cfg(feature = "debug_reducers")]
 pub(crate) use mobility::{mark_summon_origin_for_debug, remove_guardians};
@@ -78,15 +69,8 @@ pub(crate) use model::{
     SummonInstruction, SummonLocation, TargetRangeCondition, ThrowAiEventInstruction, TimeWindow,
     WalkingMode,
 };
-pub use movement::{CreatureAiMovementIntent, CreatureAiMovementPathWaypoint};
 pub(crate) use presentation::{
     CreaturePresentationInstruction, CreaturePresentationMount, FlagOverride,
-};
-pub use relay::{
-    game_creature_ai_relay_arrival, game_creature_ai_relay_continuation,
-    game_creature_ai_relay_definition, game_creature_ai_relay_run, RelayArrival, RelayContinuation,
-    RelayDefinition, RelayFlagChange, RelayFlagOperation, RelayForcedMovement, RelayMovement,
-    RelayRun,
 };
 
 pub(crate) use relay::{
@@ -101,23 +85,9 @@ pub(crate) use relay::{
 pub(crate) use relay::{
     replace_relay_catalogue_for_debug, replace_relays_for_debug, replace_single_relay_for_debug,
 };
-pub use tables::{
-    game_creature_ai_broadcast_text, game_creature_ai_definition, game_creature_ai_event,
-    game_creature_ai_rule_state, game_creature_ai_spell_metadata, game_creature_ai_state,
-    game_creature_ai_summon, CreatureAiBroadcastText, CreatureAiDefinition, CreatureAiEvent,
-    CreatureAiRuleState, CreatureAiSpellMetadata, CreatureAiState, CreatureAiSummon,
-};
 
 use spacetimedb::ReducerContext;
 
 pub(crate) fn evaluate_context(ctx: &ReducerContext, request: EventAiRequest) -> u64 {
     engine::evaluate(&mut engine::DatabaseWorld::new(ctx), request)
 }
-
-pub use edges::{game_creature_ai_reset_deferral, game_creature_ai_returning_home};
-
-pub use mobility::{
-    game_creature_ai_forced_despawn, game_creature_ai_summon_expiry, game_creature_ai_summon_origin,
-};
-
-pub use movement::{game_creature_ai_movement_intent, game_creature_ai_movement_path_waypoint};

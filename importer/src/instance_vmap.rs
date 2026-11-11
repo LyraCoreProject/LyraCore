@@ -256,7 +256,7 @@ mod tests {
     #[test]
     fn transformed_group_bounds_select_only_route_cells() {
         let map_id = 36;
-        let origin = 32.0 * 533.333_3;
+        let origin = 32.0 * lyracore_shared::terrain::ADT_SIZE;
         let route_placement = placement([origin, 0.0, origin]);
         let convention = Convention {
             shuffle: false,

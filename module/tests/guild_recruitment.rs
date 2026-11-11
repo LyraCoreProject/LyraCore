@@ -19,10 +19,7 @@ fn join(realm: &Standalone, guid: u64, channel: &str) {
         "speaker": { "race": HUMAN, "chat_tag": 0 },
     })
     .to_string();
-    realm.assert_call(
-        "realm_channel_op",
-        &[&actor(&guid.to_string()), JOIN, &request],
-    );
+    realm.assert_call("realm_channel_op", &[&actor(guid), JOIN, &request]);
 }
 
 fn memberships(realm: &Standalone, guid: u64) -> usize {
@@ -43,7 +40,7 @@ fn a_guild_member_never_joins_guild_recruitment() {
     realm.assert_call(
         "realm_guild_op",
         &[
-            &actor(&MEMBER.to_string()),
+            &actor(MEMBER),
             &format!(
                 r#"{{"gmCreate":{{"leader_guid":{MEMBER},"leader_name":"Member","leader_team":469,"leader_realm_account":{MEMBER},"gm_level":1,"name":"Recruiters"}}}}"#
             ),

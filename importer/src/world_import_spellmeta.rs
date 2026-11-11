@@ -103,7 +103,10 @@ pub(super) fn plan(source: &impl TableRows) -> Result<DumpPlan> {
         push_insert(&mut statements,table,columns,&rows);
     }
     Ok(DumpPlan {
-        stamps: vec![("spellmeta", insert_row_count(&statements))],
+        stamps: vec![(
+            lyracore_package_delta::SPELLMETA_FAMILY,
+            insert_row_count(&statements),
+        )],
         stmts: statements,
         world_source_manifest: Some(serde_json::to_string_pretty(
             &serde_json::json!({"format_version":1,"source":"vmangos","family":"spellmeta","patch":10,"client_build":5875,"findings":[
@@ -276,7 +279,7 @@ mod tests {
             INSERT INTO spell_proc_item_enchant VALUES (20,1.6);
             CREATE TABLE spell_enchant_charges (entry INTEGER PRIMARY KEY,charges INTEGER);
             INSERT INTO spell_enchant_charges VALUES (20,40);").unwrap();
-        WorldSource::Vmangos(connection)
+        WorldSource::fixture(connection)
     }
 
     #[test]
@@ -303,9 +306,7 @@ mod tests {
     #[test]
     fn distinct_active_proc_masks_are_reported_without_loading_a_broader_mask() {
         let source = fixture();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection
             .execute(
                 "UPDATE spell_template SET effect2=6,effectApplyAuraName2=43 WHERE entry=10",
@@ -326,9 +327,7 @@ mod tests {
     #[test]
     fn rank_links_to_absent_spells_are_reported_without_phantom_ranks() {
         let source = fixture();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection
             .execute("INSERT INTO skill_line_ability VALUES (2,5875,40,999)", [])
             .unwrap();
@@ -345,9 +344,7 @@ mod tests {
     #[test]
     fn invalid_proc_numbers_fail_instead_of_dropping_the_overlay() {
         let source = fixture();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection
             .execute("UPDATE spell_proc_event SET CustomChance='invalid'", [])
             .unwrap();

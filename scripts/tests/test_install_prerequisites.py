@@ -4,10 +4,14 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import tomllib
 import unittest
 
 
-INSTALLER = Path(__file__).resolve().parents[2] / "install.sh"
+ROOT = Path(__file__).resolve().parents[2]
+INSTALLER = ROOT / "install.sh"
+SPACETIME_VERSION = tomllib.loads((ROOT / "module/Cargo.toml").read_text())[
+    "dependencies"]["spacetimedb"]["version"].removeprefix("=")
 
 # Keep these banners in step with proc/openssl.rs in lyracore-cli.
 ACCEPTED_OPENSSL = (
@@ -60,12 +64,12 @@ class InstallerPrerequisiteTests(unittest.TestCase):
                 **({"python3": "exit 0"} if python else {}),
                 "pkg-config": "exit 0",
                 "apt-get": "exit 99",
-                "cargo": "echo 'cargo 1.97.1'",
+                "cargo": "echo cargo",
                 "spacetime": (
-                    'case "$1" in --version) echo "spacetimedb tool version 2.14.0";; '
+                    f'case "$1" in --version) echo "spacetimedb tool version {SPACETIME_VERSION}";; '
                     f'*) echo "$*" >> {shlex.quote(str(spacetime_calls))}; exit 98;; esac'
                 ),
-                "wasm-opt": "echo 'wasm-opt version 131'",
+                "wasm-opt": "echo wasm-opt",
             }
             if banner is not None:
                 commands["openssl"] = (

@@ -4,13 +4,14 @@ use lyracore_shared::spell::taxonomy::{E_ENERGIZE, E_SCRIPTED, T_SELF, T_TARGET_
 
 use std::collections::BTreeMap;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::constants::unit_flags;
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
 type SqlRow = BTreeMap<String, String>;
 
 const PLAYER: u64 = 1;
-const TEST_WOLF_ENTRY: u32 = 51000;
 
 const E_HEAL_SCRIPT_SPELL: u32 = 50_900;
 const E_NOOP_SCRIPT_ID_ZERO_SPELL: u32 = 50_901;
@@ -319,7 +320,7 @@ fn insert_effect(
     target: u32,
     script_id: u32,
 ) {
-    let id = ((spell_id as u64) << 2) | effect_index as u64;
+    let id = packed_spell_effect_id(spell_id, effect_index);
     standalone.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \

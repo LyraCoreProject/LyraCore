@@ -18,6 +18,7 @@ use super::{
     game_native_player, guild::Actor, petition as wire, realm_guild,
     realm_guild::game_guild_character, NativeWorldConnection, Rollback,
 };
+use crate::game_item_instance;
 use crate::{
     game_character,
     guild::{
@@ -32,7 +33,6 @@ use crate::{
         },
         GuildOp,
     },
-    items::game_item_instance,
 };
 
 // Opcode one is private to Realm guild commands; client opcodes start above it in this path.
@@ -85,6 +85,9 @@ pub struct GuildTransactionRetry {
     pub guid: u64,
 }
 
+crate::outside_table_catalog!(game_guild_transaction, game_guild_transaction_retry);
+crate::virtual_clock_exempt!(game_guild_transaction_retry);
+
 pub(crate) fn pending(ctx: &ReducerContext, guid: u64) -> bool {
     ctx.db.game_guild_transaction().guid().find(guid).is_some()
 }
@@ -109,7 +112,7 @@ fn start(ctx: &ReducerContext, guid: u64, operation: Operation, copper: u32) -> 
 
 pub(super) fn receive(
     ctx: &ReducerContext,
-    connection: NativeWorldConnection,
+    connection: &NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
 ) -> Result<(), Rollback> {
@@ -247,7 +250,7 @@ pub(super) fn apply(
                     _ => None,
                 })
             })?;
-            let packet = super::guild::encode(wire::command(
+            let packet = super::bounded(wire::command(
                 GuildCommand::Create,
                 &name,
                 GuildCommandResult::PlayerNoMoreInGuild,
@@ -468,12 +471,7 @@ pub(crate) fn item_removed(ctx: &ReducerContext, item: &crate::ItemInstance) {
         || crate::peer::realm_shard(ctx).is_none()
         || pending(ctx, item.owner_guid)
         || crate::transfer::is_in_transit(ctx, item.owner_guid)
-        || ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(item.owner_guid)
-            .is_none()
+        || !super::has_world_session(ctx, item.owner_guid)
     {
         return;
     }
@@ -734,7 +732,7 @@ fn import(ctx: &ReducerContext, actor: &Actor, state: GuildPetitionImport) -> Re
             return Err("legacy petition signatures are inconsistent".into());
         }
     }
-    petition::observe_id(ctx, row.petition_id);
+    crate::guild::IdSequence::Petition.observe(ctx, row.petition_id);
     state.petition.insert(ctx);
     for signature in state.signatures {
         ctx.db.game_guild_petition_signature().insert(signature);

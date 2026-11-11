@@ -9,6 +9,7 @@ use wire_client::runner::{MultiTransport, Transport};
 use wire_client::scenario::{FixtureVerb, Observation, QuestState, Scenario};
 
 use super::properties::{self, Batch, CreateContext, Packet, Projection};
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 
 #[derive(Deserialize)]
 struct CreateRow {
@@ -1289,15 +1290,22 @@ fn item_fixture_requires_owned_backpack_stack_with_exact_count() {
 fn sold_buyback_items_remain_in_the_fresh_projection() -> Result<()> {
     let (shard, guid, _) = super::fixture("buyback-projection");
     shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
-    shard.assert_sql("UPDATE game_creature_template SET npc_flags = 4, faction_template = 35 WHERE entry = 51000");
+    shard.assert_sql(&format!("UPDATE game_creature_template SET npc_flags = 4, faction_template = 35 WHERE entry = {TEST_WOLF_ENTRY}"));
     let before: BTreeSet<_> = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
         .into_iter()
         .map(|row| row["guid"].clone())
         .collect();
-    shard.assert_call("debug_spawn_at_feet", &[&guid.to_string(), "51000", "2"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[&guid.to_string(), &TEST_WOLF_ENTRY.to_string(), "2"],
+    );
     let vendor = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
         .into_iter()
         .find(|row| !before.contains(&row["guid"]))
         .context("fixture vendor")?["guid"]

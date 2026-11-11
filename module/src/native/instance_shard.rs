@@ -64,10 +64,12 @@ pub struct InstanceEntry {
     pub guid: u64,
     pub request: Vec<u8>,
 }
+crate::virtual_clock_exempt!(game_instance_entry);
 
 crate::character_owned!(delete, fn sweep_delete_game_instance_entry(ctx, character_guid) {
     ctx.db.game_instance_entry().guid().delete(character_guid);
 });
+// Admission requests settle on the source Shard before Transfer.
 crate::character_owned!(not_transported, fn sweep_transfer_game_instance_entry());
 
 #[table(accessor = game_realm_instance_entry, outbox(remote::idc_realm_instance_entry))]
@@ -124,10 +126,6 @@ pub(super) fn enter_package(
     )
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "Native and Package admission share the same request"
-)]
 fn queue_entry(
     ctx: &ReducerContext,
     realm: Identity,
@@ -261,6 +259,7 @@ pub struct InstanceEntryLease {
     pub map_id: u32,
     pub expires: i64,
 }
+crate::virtual_clock_exempt!(game_instance_entry_lease);
 
 #[table(accessor = game_instance_entry_answer, outbox(remote::idc_instance_entry_answer))]
 pub struct InstanceEntryAnswer {
@@ -273,6 +272,14 @@ pub struct InstanceEntryAnswer {
     pub instance_id: u64,
     pub error: String,
 }
+
+crate::outside_table_catalog!(
+    game_instance_entry,
+    game_realm_instance_entry,
+    game_world_instance_entry,
+    game_instance_entry_lease,
+    game_instance_entry_answer
+);
 
 #[reducer]
 pub fn idc_world_instance_entry(
@@ -319,7 +326,7 @@ pub fn idc_world_instance_entry(
         {
             return Err("World Session changed".into());
         }
-        if crate::taxi::movement_is_suppressed(ctx, guid)
+        if crate::taxi::is_in_flight(ctx, guid)
             || super::realm_petition::pending(ctx, guid)
             || super::realm_auction::pending(ctx, guid)
         {
@@ -333,7 +340,7 @@ pub fn idc_world_instance_entry(
             .ok_or("Instance entrance is missing")?;
         let actor = super::available_entity(ctx, guid).map_err(|error| error.to_string())?;
         if actor.map_id != trigger.map_id
-            || !crate::quest::AreaTriggerVolume::of(&trigger).contains_client_position(
+            || !crate::areatrigger::AreaTriggerVolume::of(&trigger).contains_client_position(
                 [trigger.x, trigger.y, trigger.z],
                 [actor.x, actor.y, actor.z],
             )
@@ -520,7 +527,7 @@ fn finish_native(
         || world.is_some_and(|world| {
             world != ctx.database_identity() && !crate::peer::is_peer(ctx, world)
         })
-        || crate::taxi::movement_is_suppressed(ctx, pending.guid)
+        || crate::taxi::is_in_flight(ctx, pending.guid)
         || super::realm_petition::pending(ctx, pending.guid)
         || super::realm_auction::pending(ctx, pending.guid)
     {
@@ -534,7 +541,7 @@ fn finish_native(
         return;
     };
     if actor.map_id != trigger.map_id
-        || !crate::quest::AreaTriggerVolume::of(&trigger).contains_client_position(
+        || !crate::areatrigger::AreaTriggerVolume::of(&trigger).contains_client_position(
             [trigger.x, trigger.y, trigger.z],
             [actor.x, actor.y, actor.z],
         )
@@ -549,7 +556,14 @@ fn finish_native(
         world.unwrap_or(ctx.database_identity()),
     );
     let (x, y, z, o) = (decoded.x, decoded.y, decoded.z, decoded.o);
-    crate::world::teleport_player(ctx, pending.guid, decoded.map, instance_id, x, y, z, o);
+    if let Err(refusal) =
+        crate::world::teleport(ctx, pending.guid, decoded.map, instance_id, [x, y, z, o])
+    {
+        spacetimedb::log::warn!(
+            "instance entry: {} admitted to instance {instance_id} but teleport refused: {refusal}",
+            pending.guid
+        );
+    }
     if world == Some(ctx.database_identity()) && actor.map_id == decoded.map {
         arrived(ctx, pending.guid, decoded.map, instance_id);
     }
@@ -672,7 +686,7 @@ pub(super) fn return_from_reaped(
     ctx: &ReducerContext,
     connection: &super::NativeWorldConnection,
     guid: u64,
-    entry: crate::world::WorldEntry,
+    entry: crate::character::WorldEntry,
     teleport_counter: u32,
 ) -> Result<bool, String> {
     use crate::game_character;
@@ -689,7 +703,7 @@ pub(super) fn return_from_reaped(
         orientation: character.orientation,
     };
     let mut character = character;
-    crate::world::restore_reaped_instance(ctx, &mut character);
+    crate::character::restore_reaped_instance(ctx, &mut character);
     if character.map_id != origin.map_id
         && directory::transfer_target(ctx, character.map_id).is_some()
     {
@@ -701,7 +715,7 @@ pub(super) fn return_from_reaped(
             guid,
             teleport_counter,
             Some(origin),
-            entry == crate::world::WorldEntry::WorldPort,
+            entry == crate::character::WorldEntry::WorldPort,
         )? {
             return Ok(true);
         }

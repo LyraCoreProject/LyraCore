@@ -7,7 +7,7 @@ use crate::WorldEntity;
 pub(super) fn create(ctx: &ReducerContext, guid: u64) -> Result<SMSG_UPDATE_OBJECT, String> {
     let transport =
         crate::transport::find(ctx, guid).ok_or("AOI Grant refers to missing Transport")?;
-    let now_ms = crate::transport::now_ms(ctx);
+    let now_ms = crate::time::now_ms(ctx);
     let pose = crate::transport::pose(ctx, &transport, now_ms);
     let [x, y, z] = pose.map_or([0.0; 3], |pose| pose.position);
     Ok(codec::build_transport_create_object(

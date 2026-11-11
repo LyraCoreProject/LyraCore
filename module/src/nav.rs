@@ -1,3 +1,4 @@
+use lyracore_shared::movement_path::chase_step;
 #[cfg(feature = "debug_reducers")]
 use lyracore_shared::nav::OBS_DIM;
 use lyracore_shared::nav::{self, OBS_BYTES, WALK_BYTES, WALK_DIM};
@@ -95,17 +96,6 @@ pub(crate) fn obstruction_top(ctx: &ReducerContext, map_id: u32, x: f32, y: f32)
     nav::obs_top(&chunk.obs, chunk.base_z, ox, oy)
 }
 
-fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
-    if !s.len().is_multiple_of(2) {
-        return Err("odd-length hex blob".to_string());
-    }
-    (0..s.len() / 2)
-        .map(|i| {
-            u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).map_err(|_| format!("bad hex at {i}"))
-        })
-        .collect()
-}
-
 fn load_nav_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
     let chunks = ctx.db.game_nav_chunk();
     let mut loaded = 0u32;
@@ -176,26 +166,15 @@ pub fn import_nav_chunks_append(ctx: &ReducerContext, packed: String) -> Result<
     Ok(())
 }
 
-use crate::game_config;
-use crate::vmap::game_vmap_nav_coverage;
+use crate::vmap::{game_vmap_nav_coverage, hex_decode};
 use lyracore_shared::nav::NavCellData;
 
 pub(crate) fn nav_enabled(ctx: &ReducerContext) -> bool {
-    ctx.db
-        .game_config()
-        .id()
-        .find(0)
-        .map(|c| c.nav_enabled)
-        .unwrap_or(false)
+    crate::config::server_config(ctx).nav_enabled
 }
 
 pub(crate) fn nav_coverage_enabled(ctx: &ReducerContext) -> bool {
-    ctx.db
-        .game_config()
-        .id()
-        .find(0)
-        .map(|c| c.nav_coverage_enabled)
-        .unwrap_or(false)
+    crate::config::server_config(ctx).nav_coverage_enabled
 }
 
 pub(crate) fn coverage_generation(ctx: &ReducerContext, map_id: u32) -> Option<u64> {
@@ -357,10 +336,6 @@ impl From<(f32, f32)> for RoutePoint {
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
-#[cfg_attr(
-    not(has_packages),
-    allow(dead_code, reason = "retained Package API route value")
-)]
 pub struct RouteClip {
     pub attempted: RoutePoint,
     pub hit: RoutePoint,
@@ -388,6 +363,100 @@ pub struct RouteStep {
 pub struct RoutePath {
     pub step: RouteStep,
     pub points: Vec<(f32, f32, f32)>,
+}
+
+impl RouteStep {
+    fn unmoved(at: (f32, f32)) -> Self {
+        Self {
+            from: at.into(),
+            endpoint: at.into(),
+            first_waypoint: None,
+            status: RouteStatus::Blocked,
+            expansions: 0,
+            clipping: None,
+            coverage: CoverageEvidence::Unknown,
+        }
+    }
+}
+
+/// Finite inputs, a non-negative `stop_dist`, and both ends on the navigation grid.
+fn route_query_is_valid(cur: (f32, f32), dest: (f32, f32), stop_dist: f32, values: &[f32]) -> bool {
+    [cur.0, cur.1, dest.0, dest.1, stop_dist]
+        .iter()
+        .chain(values)
+        .all(|value| value.is_finite())
+        && stop_dist >= 0.0
+        && [cur.0, cur.1, dest.0, dest.1]
+            .iter()
+            .all(|&value| cell_index(value).is_some())
+}
+
+/// The cells one route query reads, and whether verified coverage backs all of them.
+struct RouteCells<'a> {
+    ctx: &'a ReducerContext,
+    map_id: u32,
+    generation: Option<u64>,
+    checked: std::collections::BTreeSet<(u16, u16)>,
+    all_covered: bool,
+}
+
+impl<'a> RouteCells<'a> {
+    fn new(ctx: &'a ReducerContext, map_id: u32, nav_enabled: bool) -> Self {
+        let generation = nav_enabled
+            .then(|| coverage_generation(ctx, map_id))
+            .flatten();
+        Self {
+            ctx,
+            map_id,
+            generation,
+            checked: std::collections::BTreeSet::new(),
+            all_covered: generation.is_some(),
+        }
+    }
+
+    fn fetch(&mut self, cx: u16, cy: u16) -> Option<NavCellData> {
+        let (cell, covered) = fetch_cell(self.ctx, self.map_id, self.generation, cx, cy);
+        self.checked.insert((cx, cy));
+        self.all_covered &= covered;
+        cell
+    }
+
+    /// Plans a leg from `cur`, reading its own cell first.
+    fn search(
+        &mut self,
+        cur: (f32, f32),
+        dest: (f32, f32),
+        stop_dist: f32,
+        max_expansions: u32,
+    ) -> (RouteStatus, u32, Vec<(f32, f32)>) {
+        if let (Some(cx), Some(cy)) = (cell_index(cur.0), cell_index(cur.1)) {
+            self.fetch(cx, cy);
+        }
+        let search = nav::find_leg_in_range_ex(
+            &mut |cx, cy| self.fetch(cx, cy),
+            cur,
+            dest,
+            stop_dist,
+            max_expansions,
+        );
+        match search.outcome {
+            nav::LegOutcome::Complete(path) => (RouteStatus::Complete, search.expansions, path),
+            nav::LegOutcome::Partial(path) => (RouteStatus::Partial, search.expansions, path),
+            nav::LegOutcome::Blocked => (RouteStatus::Blocked, search.expansions, Vec::new()),
+        }
+    }
+
+    fn evidence(&self) -> CoverageEvidence {
+        match self.generation {
+            Some(generation_id) if self.all_covered && !self.checked.is_empty() => {
+                CoverageEvidence::VerifiedCells(VerifiedRouteCells {
+                    generation_id,
+                    checked_cells: self.checked.len() as u32,
+                })
+            }
+            _ => CoverageEvidence::Unknown,
+        }
+    }
 }
 
 #[cfg_attr(
@@ -430,71 +499,23 @@ pub(crate) fn route_path_with_budget(
     let cur = (start.0, start.1);
     let dest = (destination.0, destination.1);
     let mut result = RoutePath {
-        step: RouteStep {
-            from: cur.into(),
-            endpoint: cur.into(),
-            first_waypoint: None,
-            status: RouteStatus::Blocked,
-            expansions: 0,
-            clipping: None,
-            coverage: CoverageEvidence::Unknown,
-        },
+        step: RouteStep::unmoved(cur),
         points: Vec::new(),
     };
-    if ![
-        start.0,
-        start.1,
-        start.2,
-        destination.0,
-        destination.1,
-        destination.2,
-        stop_dist,
-    ]
-    .iter()
-    .all(|v| v.is_finite())
-        || stop_dist < 0.0
-        || [cur.0, cur.1, dest.0, dest.1]
-            .iter()
-            .any(|&v| cell_index(v).is_none())
-    {
+    if !route_query_is_valid(cur, dest, stop_dist, &[start.2, destination.2]) {
         return result;
     }
     let enabled = nav_enabled(ctx);
-    let generation = enabled.then(|| coverage_generation(ctx, map_id)).flatten();
-    let mut checked = std::collections::BTreeSet::new();
-    let mut all_covered = generation.is_some();
-    let mut fetch = |cx, cy| {
-        let (cell, covered) = fetch_cell(ctx, map_id, generation, cx, cy);
-        checked.insert((cx, cy));
-        all_covered &= covered;
-        cell
-    };
+    let mut cells = RouteCells::new(ctx, map_id, enabled);
     let planned = if enabled {
-        if let (Some(cx), Some(cy)) = (cell_index(cur.0), cell_index(cur.1)) {
-            fetch(cx, cy);
-        }
-        let search = nav::find_leg_in_range_ex(
-            &mut fetch,
-            cur,
-            dest,
-            stop_dist,
-            max_expansions.min(LEG_MAX_EXPANSIONS),
-        );
-        result.step.expansions = search.expansions;
-        match search.outcome {
-            nav::LegOutcome::Complete(points) => {
-                result.step.status = RouteStatus::Complete;
-                points
-            }
-            nav::LegOutcome::Partial(points) => {
-                result.step.status = RouteStatus::Partial;
-                points
-            }
-            nav::LegOutcome::Blocked => Vec::new(),
-        }
+        let (status, expansions, points) =
+            cells.search(cur, dest, stop_dist, max_expansions.min(LEG_MAX_EXPANSIONS));
+        result.step.status = status;
+        result.step.expansions = expansions;
+        points
     } else {
         result.step.status = RouteStatus::Direct;
-        vec![crate::creatures::chase_step(
+        vec![chase_step(
             cur.0,
             cur.1,
             dest.0,
@@ -504,6 +525,7 @@ pub(crate) fn route_path_with_budget(
         )]
     };
     result.step.first_waypoint = planned.first().copied().map(RoutePoint::from);
+    let mut fetch = |cx, cy| cells.fetch(cx, cy);
     let mut from = start;
     let mut remaining = MAX_DISTANCE;
     'route: for point in planned {
@@ -573,14 +595,7 @@ pub(crate) fn route_path_with_budget(
     if let Some(last) = result.points.last() {
         result.step.endpoint = (last.0, last.1).into();
     }
-    if all_covered && !checked.is_empty() {
-        if let Some(generation_id) = generation {
-            result.step.coverage = CoverageEvidence::VerifiedCells(VerifiedRouteCells {
-                generation_id,
-                checked_cells: checked.len() as u32,
-            });
-        }
-    }
+    result.step.coverage = cells.evidence();
     result
 }
 
@@ -611,7 +626,7 @@ fn sample_walking_step(
         if reach >= distance {
             towards
         } else {
-            crate::creatures::chase_step(from.0, from.1, towards.0, towards.1, reach, 0.0)
+            chase_step(from.0, from.1, towards.0, towards.1, reach, 0.0)
         }
     };
     let original = sample(point(reach));
@@ -758,62 +773,25 @@ pub(crate) fn route_step(
     stop_dist: f32,
     z: f32,
 ) -> RouteStep {
-    let mut result = RouteStep {
-        from: cur.into(),
-        endpoint: cur.into(),
-        first_waypoint: None,
-        status: RouteStatus::Blocked,
-        expansions: 0,
-        clipping: None,
-        coverage: CoverageEvidence::Unknown,
-    };
-    if ![cur.0, cur.1, dest.0, dest.1, max_step, stop_dist, z]
-        .iter()
-        .all(|value| value.is_finite())
-        || max_step < 0.0
-        || stop_dist < 0.0
-        || [cur.0, cur.1, dest.0, dest.1]
-            .iter()
-            .any(|&value| cell_index(value).is_none())
-    {
+    let mut result = RouteStep::unmoved(cur);
+    if !route_query_is_valid(cur, dest, stop_dist, &[max_step, z]) || max_step < 0.0 {
         return result;
     }
     let enabled = nav_enabled(ctx);
-    let generation = enabled.then(|| coverage_generation(ctx, map_id)).flatten();
-    let mut checked = std::collections::BTreeSet::new();
-    let mut all_covered = generation.is_some();
-    let mut fetch = |cx, cy| {
-        let (cell, covered) = fetch_cell(ctx, map_id, generation, cx, cy);
-        checked.insert((cx, cy));
-        all_covered &= covered;
-        cell
-    };
+    let mut cells = RouteCells::new(ctx, map_id, enabled);
     let attempted = if enabled {
-        if let (Some(cx), Some(cy)) = (cell_index(cur.0), cell_index(cur.1)) {
-            fetch(cx, cy);
-        }
-        let search =
-            nav::find_leg_in_range_ex(&mut fetch, cur, dest, stop_dist, LEG_MAX_EXPANSIONS);
-        result.expansions = search.expansions;
-        let path = match search.outcome {
-            nav::LegOutcome::Complete(path) => {
-                result.status = RouteStatus::Complete;
-                path
-            }
-            nav::LegOutcome::Partial(path) => {
-                result.status = RouteStatus::Partial;
-                path
-            }
-            nav::LegOutcome::Blocked => Vec::new(),
-        };
+        let (status, expansions, path) = cells.search(cur, dest, stop_dist, LEG_MAX_EXPANSIONS);
+        result.status = status;
+        result.expansions = expansions;
         result.first_waypoint = path.first().copied().map(RoutePoint::from);
         result.first_waypoint.map_or(cur, |wp| {
-            crate::creatures::chase_step(cur.0, cur.1, wp.x, wp.y, max_step, 0.0)
+            chase_step(cur.0, cur.1, wp.x, wp.y, max_step, 0.0)
         })
     } else {
         result.status = RouteStatus::Direct;
-        crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
+        chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
     };
+    let mut fetch = |cx, cy| cells.fetch(cx, cy);
     let (endpoint, clipping) = step_gate_with_fetch(
         ctx,
         map_id,
@@ -829,14 +807,7 @@ pub(crate) fn route_step(
     }
     .into();
     result.clipping = clipping;
-    if all_covered && !checked.is_empty() {
-        if let Some(generation_id) = generation {
-            result.coverage = CoverageEvidence::VerifiedCells(VerifiedRouteCells {
-                generation_id,
-                checked_cells: checked.len() as u32,
-            });
-        }
-    }
+    result.coverage = cells.evidence();
     result
 }
 
@@ -878,7 +849,7 @@ pub(crate) fn nav_step_within(
 ) -> ((f32, f32), u32) {
     let (stepped, expansions) = if !nav_enabled(ctx) {
         (
-            crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist),
+            chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist),
             0,
         )
     } else {
@@ -892,10 +863,10 @@ pub(crate) fn nav_step_within(
         let stepped = match search.outcome {
             nav::LegOutcome::Complete(path) | nav::LegOutcome::Partial(path) => {
                 let wp = path[0];
-                crate::creatures::chase_step(cur.0, cur.1, wp.0, wp.1, max_step, 0.0)
+                chase_step(cur.0, cur.1, wp.0, wp.1, max_step, 0.0)
             }
             nav::LegOutcome::Blocked => {
-                crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
+                chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
             }
         };
         (stepped, search.expansions)

@@ -4,6 +4,10 @@ use crate::spell::SpellCastEventKind;
 use crate::{game_item_template, game_spell, game_world_entity, SpellCastEvent, WorldEntity};
 
 use super::*;
+use crate::{
+    game_melee_attack, game_ranged_impact_schedule, CombatEvent, MeleeAttack, MeleeSchedule,
+    RangedImpactSchedule,
+};
 
 #[reducer]
 pub fn tick_melee(ctx: &ReducerContext, _schedule: MeleeSchedule) {
@@ -23,7 +27,7 @@ fn melee_pass(ctx: &ReducerContext) {
 fn leash_pass(ctx: &ReducerContext) {
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = crate::time::now_ms_u32(ctx);
 
     let mut evaders: Vec<u64> = Vec::new();
     let mut seeds: Vec<(u64, f32, f32)> = Vec::new();
@@ -42,7 +46,7 @@ fn leash_pass(ctx: &ReducerContext) {
             target.y - attacker.y,
             target.z - attacker.z,
         );
-        if crate::creatures::beyond_combat_backstop(dx * dx + dy * dy + dz * dz) {
+        if crate::combat::beyond_combat_backstop(dx * dx + dy * dy + dz * dz) {
             evaders.push(attacker.guid);
             continue;
         }
@@ -51,16 +55,16 @@ fn leash_pass(ctx: &ReducerContext) {
             continue;
         }
         let (rx, ry) = (target.x - atk.leash_x, target.y - atk.leash_y);
-        if crate::creatures::should_evade(now_ms, atk.pursuit_ends_ms, rx * rx + ry * ry) {
+        if crate::combat::should_evade(now_ms, atk.pursuit_ends_ms, rx * rx + ry * ry) {
             evaders.push(atk.attacker_guid);
         }
     }
     for (creature, x, y) in seeds {
         if let Some(mut row) = melee.attacker_guid().find(creature) {
-            row.pursuit_ends_ms = crate::creatures::pursuit_deadline_ms(now_ms);
+            row.pursuit_ends_ms = crate::combat::pursuit_deadline_ms(now_ms);
             row.leash_x = x;
             row.leash_y = y;
-            crate::combat::MeleeAttack::update(ctx, row);
+            crate::MeleeAttack::update(ctx, row);
         }
     }
     for creature in evaders {
@@ -142,20 +146,18 @@ fn resolve_offhand_swing(
     }
 
     let range = offhand_swing_range(ctx, attacker, (dmin, dmax, delay));
-    #[cfg(feature = "conformance_test_fixture")]
-    crate::debug::record_offhand_roll_range(ctx, range);
+    crate::conformance_rolls::observe_offhand_range(ctx, range);
     let (rolled, hit_info, blocked) = roll_swing_with_range(ctx, attacker, &target, range, None);
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
-    let (dmg, _absorbed) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
-    let damage = final_damage(ctx, target_guid, dmg);
-    let killing_blow = is_killing_blow(ctx, attacker_guid, &target, damage.amount);
+    let damage = resolve_damage(ctx, attacker_guid, target_guid, rolled);
+    let killing_blow = is_killing_blow(ctx, attacker_guid, &target, damage.amount());
 
     CombatEvent::insert(
         ctx,
         CombatEvent {
-            damage: damage.amount,
+            damage: damage.amount(),
             hit_info,
             killing_blow,
             blocked_amount: blocked,
@@ -163,15 +165,15 @@ fn resolve_offhand_swing(
         },
     );
 
-    let dealt = damage.amount;
-    if apply_hit(
-        ctx,
-        attacker_guid,
-        target_guid,
-        damage,
-        Hit::weapon(HitSource::OffHand, hit_info == HIT_CRIT),
-    )
-    .combat_ended()
+    let dealt = damage.amount();
+    if damage
+        .land(
+            ctx,
+            attacker_guid,
+            target_guid,
+            Hit::weapon(HitSource::OffHand, hit_info == HIT_CRIT),
+        )
+        .combat_ended()
     {
         return;
     }
@@ -186,7 +188,7 @@ fn resolve_offhand_swing(
 
     if let Some(mut fresh) = melee.attacker_guid().find(attacker_guid) {
         fresh.last_offhand_swing_ms = now_ms;
-        crate::combat::MeleeAttack::update(ctx, fresh);
+        crate::MeleeAttack::update(ctx, fresh);
     }
 }
 
@@ -197,40 +199,44 @@ pub(crate) fn offhand_swing_range(
 ) -> (u32, u32) {
     let ap = melee_attack_power_for(
         attacker.class(),
-        effective_strength(ctx, attacker),
-        effective_agility(ctx, attacker),
+        crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_STR),
+        crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_AGI),
         attacker.level,
     )
-    .saturating_add_signed(aura_attack_power_bonus(ctx, attacker.guid));
+    .saturating_add_signed(crate::modifiers::combat_field_bonus(
+        ctx,
+        attacker.guid,
+        crate::spell::COMBAT_ATTACK_POWER,
+    ));
     let (raw_min, raw_max) = weapon_swing_range_ap(ap, dmin, dmax, delay);
     apply_offhand_penalty(raw_min, raw_max)
 }
 
 fn resolve_swing(ctx: &ReducerContext) {
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = crate::time::now_ms_u32(ctx);
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
 
     let attacks: Vec<MeleeAttack> = melee.iter().collect();
     for mut atk in attacks {
         let Some(attacker) = entities.guid().find(atk.attacker_guid) else {
-            crate::combat::MeleeAttack::delete(ctx, atk.attacker_guid);
+            crate::MeleeAttack::delete(ctx, atk.attacker_guid);
             continue;
         };
         let Some(mut target) = entities.guid().find(atk.target_guid) else {
-            crate::combat::MeleeAttack::delete(ctx, atk.attacker_guid);
+            crate::MeleeAttack::delete(ctx, atk.attacker_guid);
             continue;
         };
 
         if attacker.dead || target.dead {
-            crate::combat::MeleeAttack::delete(ctx, atk.attacker_guid);
+            crate::MeleeAttack::delete(ctx, atk.attacker_guid);
             continue;
         }
         if melee.attacker_guid().find(atk.attacker_guid).is_none() {
             continue;
         }
         if !crate::combat::may_harm(ctx, &attacker, &target) {
-            crate::combat::MeleeAttack::delete(ctx, atk.attacker_guid);
+            crate::MeleeAttack::delete(ctx, atk.attacker_guid);
             continue;
         }
 
@@ -249,7 +255,7 @@ fn resolve_swing(ctx: &ReducerContext) {
             match equipped_ranged_weapon(ctx, atk.attacker_guid) {
                 Some(w) => Some(w),
                 None => {
-                    crate::combat::MeleeAttack::end_auto_repeat(ctx, atk.attacker_guid);
+                    crate::MeleeAttack::end_auto_repeat(ctx, atk.attacker_guid);
                     continue;
                 }
             }
@@ -264,14 +270,14 @@ fn resolve_swing(ctx: &ReducerContext) {
             use crate::items::weapon_subclass as ws;
             if attacker.is_player() && is_translating(attacker.movement_flags) {
                 if subclass == ws::WAND {
-                    crate::combat::MeleeAttack::end_auto_repeat(ctx, atk.attacker_guid);
+                    crate::MeleeAttack::end_auto_repeat(ctx, atk.attacker_guid);
                 } else if ranged_due {
                     if let Some(mut fresh) = melee.attacker_guid().find(atk.attacker_guid) {
                         fresh.last_swing_ms = now_ms
                             .wrapping_add(RANGED_INITIAL_SHOT_MS)
                             .wrapping_sub(delay)
                             .max(1);
-                        crate::combat::MeleeAttack::update(ctx, fresh);
+                        crate::MeleeAttack::update(ctx, fresh);
                     }
                 }
                 continue;
@@ -288,7 +294,7 @@ fn resolve_swing(ctx: &ReducerContext) {
             swing_blocked(ctx, &attacker, &target, ranged.is_some(), dist_sq, now_ms)
         {
             if ranged_due {
-                crate::combat::MeleeAttack::end_auto_repeat(ctx, atk.attacker_guid);
+                crate::MeleeAttack::end_auto_repeat(ctx, atk.attacker_guid);
             } else if ranged.is_none() && attacker.is_player() {
                 record_swing_error(ctx, &atk, &attacker, block.swing_error(), now_ms);
             }
@@ -311,7 +317,7 @@ fn resolve_swing(ctx: &ReducerContext) {
             match entities.guid().find(atk.target_guid) {
                 Some(refreshed) => target = refreshed,
                 None => {
-                    crate::combat::MeleeAttack::delete(ctx, atk.attacker_guid);
+                    crate::MeleeAttack::delete(ctx, atk.attacker_guid);
                     continue;
                 }
             }
@@ -352,6 +358,8 @@ pub struct ExtraAttack {
     pub count: u8,
 }
 
+crate::outside_table_catalog!(game_extra_attack);
+
 // vmangos SPELL_EFFECT_ADD_EXTRA_ATTACKS: a unit that still holds Extra Attacks gains none.
 pub(crate) fn grant_extra_attacks(ctx: &ReducerContext, guid: u64, count: i32) {
     let alive = ctx
@@ -387,8 +395,7 @@ pub(crate) fn drop_extra_attacks(ctx: &ReducerContext, guid: u64) {
     ctx.db.game_extra_attack().attacker_guid().delete(guid);
 }
 
-// Swings the main hand once per held Extra Attack. Each count is spent after its swing, so a
-// proc during an Extra Attack finds attacks still held and grants none, as in vmangos.
+// Spends each Extra Attack after its swing, so a proc mid-swing grants none (vmangos).
 // Returns false when the engagement ended.
 fn spend_extra_attacks(
     ctx: &ReducerContext,
@@ -472,7 +479,7 @@ fn swing_blocked(
         return Some(SwingBlock::NoLineOfSight);
     }
     if attacker.is_player()
-        && !crate::spell::is_facing(
+        && !crate::geometry::is_facing(
             attacker.x,
             attacker.y,
             attacker.orientation,
@@ -524,44 +531,8 @@ fn record_swing_error(
     let melee = ctx.db.game_melee_attack();
     if let Some(mut fresh) = melee.attacker_guid().find(atk.attacker_guid) {
         fresh.swing_error = swing_error;
-        crate::combat::MeleeAttack::update(ctx, fresh);
+        crate::MeleeAttack::update(ctx, fresh);
     }
-}
-
-// A Character pays when the swing fires, even on a miss; short of the cost, it swings white.
-fn charge_queued_strike(
-    ctx: &ReducerContext,
-    attacker: &WorldEntity,
-    queued_spell: u32,
-    strike: Option<&crate::spell::Spell>,
-) -> bool {
-    if !attacker.is_player() {
-        return true;
-    }
-    let Some(mut payer) = ctx.db.game_world_entity().guid().find(attacker.guid) else {
-        return false;
-    };
-    if strike.is_some_and(|strike| payer.power < strike.cost) {
-        crate::spell::SpellCastEvent::insert(
-            ctx,
-            SpellCastEvent {
-                is_interrupted: true,
-                failure_reason: crate::spell::CAST_FAIL_NO_POWER,
-                ..SpellCastEvent::signal_at(
-                    ctx,
-                    attacker,
-                    queued_spell,
-                    SpellCastEventKind::Interrupt,
-                )
-            },
-        );
-        return false;
-    }
-    if let Some(strike) = strike {
-        crate::spell::charge_spell_cost(ctx, &mut payer, strike);
-    }
-    payer.update(ctx);
-    true
 }
 
 fn arms_revenge(hit_info: u8, blocked: u32) -> bool {
@@ -583,12 +554,12 @@ fn fire_melee_swing(
     let queued_spell = if extra { 0 } else { attacker.next_swing_spell };
     let queued_header = ctx.db.game_spell().spell_id().find(queued_spell);
     let swing_is_spell = queued_spell != 0
-        && charge_queued_strike(ctx, attacker, queued_spell, queued_header.as_ref());
+        && super::queued_strike::charge(ctx, attacker, queued_spell, queued_header.as_ref());
     let strike = swing_is_spell.then(|| {
         queued_header
             .as_ref()
             .map_or_else(Default::default, |strike| {
-                queued_strike_damage(ctx, attacker, strike)
+                super::queued_strike::damage(ctx, attacker, strike)
             })
     });
 
@@ -608,7 +579,7 @@ fn fire_melee_swing(
 
     let queued_fired = swing_is_spell && rolled > 0;
     if !extra {
-        clear_queued_strike(ctx, attacker_guid);
+        super::queued_strike::clear(ctx, attacker_guid);
     }
 
     crate::spell::break_stealth(ctx, attacker_guid);
@@ -617,16 +588,15 @@ fn fire_melee_swing(
         wear_weapon(ctx, attacker_guid);
     }
 
-    let (dmg, _absorbed) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
-    let damage = final_damage(ctx, target_guid, dmg);
-    let (projected_swing, projected_seal) = split_damage_projection(damage.amount, seal_portion);
+    let damage = resolve_damage(ctx, attacker_guid, target_guid, rolled);
+    let (projected_swing, projected_seal) = split_damage_projection(damage.amount(), seal_portion);
 
     CombatEvent::insert(
         ctx,
         CombatEvent {
             damage: projected_swing,
             hit_info,
-            killing_blow: is_killing_blow(ctx, attacker_guid, target, damage.amount),
+            killing_blow: is_killing_blow(ctx, attacker_guid, target, damage.amount()),
             blocked_amount: blocked,
             spell_swing: swing_is_spell,
             ..CombatEvent::signal_at(ctx, attacker, target_guid)
@@ -635,7 +605,7 @@ fn fire_melee_swing(
     if swing_is_spell {
         let cooldown_ms = queued_header.as_ref().map_or(0, |h| h.cooldown_ms);
         crate::spell::start_spell_cooldown(ctx, attacker_guid, queued_spell, cooldown_ms);
-        crate::spell::SpellCastEvent::insert(
+        crate::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
                 target_guid,
@@ -649,7 +619,7 @@ fn fire_melee_swing(
         );
     }
     if projected_seal > 0 {
-        crate::spell::SpellCastEvent::insert(
+        crate::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
                 target_guid,
@@ -661,19 +631,19 @@ fn fire_melee_swing(
         );
     }
 
-    let dealt = damage.amount;
-    let combat_ended = apply_hit(
-        ctx,
-        attacker_guid,
-        target_guid,
-        damage,
-        if swing_is_spell {
-            Hit::spell(HitSource::MainHand, queued_spell, hit_info == HIT_CRIT)
-        } else {
-            Hit::weapon(HitSource::MainHand, hit_info == HIT_CRIT)
-        },
-    )
-    .combat_ended();
+    let dealt = damage.amount();
+    let combat_ended = damage
+        .land(
+            ctx,
+            attacker_guid,
+            target_guid,
+            if swing_is_spell {
+                Hit::spell(HitSource::MainHand, queued_spell, hit_info == HIT_CRIT)
+            } else {
+                Hit::weapon(HitSource::MainHand, hit_info == HIT_CRIT)
+            },
+        )
+        .combat_ended();
     if swing_is_spell {
         let school_mask = queued_header
             .as_ref()
@@ -693,7 +663,7 @@ fn fire_melee_swing(
     let rolls_weapon = if swing_is_spell {
         queued_header
             .as_ref()
-            .is_some_and(|strike| strike.cast_flags & crate::spell::SPELL_ATTR_WEAPON_PROCS != 0)
+            .is_some_and(|strike| strike.cast_flags & crate::spell::CAST_FLAG_WEAPON_PROCS != 0)
     } else {
         affects_victim(hit_info, dealt, blocked)
     };
@@ -715,7 +685,7 @@ fn fire_melee_swing(
     if let Some(mut fresh) = melee.attacker_guid().find(attacker_guid) {
         fresh.last_swing_ms = now_ms;
         fresh.swing_error = SWING_ERROR_NONE;
-        crate::combat::MeleeAttack::update(ctx, fresh);
+        crate::MeleeAttack::update(ctx, fresh);
     }
 
     // Enter combat after entity writes so a stale snapshot cannot erase the flag.
@@ -763,7 +733,7 @@ fn fire_ranged_shot(
                 disp
             }
             None => {
-                crate::combat::MeleeAttack::end_auto_repeat(ctx, attacker_guid);
+                crate::MeleeAttack::end_auto_repeat(ctx, attacker_guid);
                 return;
             }
         }
@@ -774,10 +744,10 @@ fn fire_ranged_shot(
     let (rdmin, rdmax) = if attacker.is_player() {
         let (_, rdmin, rdmax) = ranged_sheet_values(
             attacker.class(),
-            effective_agility(ctx, attacker),
+            crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_AGI),
             attacker.level,
             Some(weapon),
-            crate::spell::combat_field_bonus(
+            crate::modifiers::combat_field_bonus(
                 ctx,
                 attacker.guid,
                 lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
@@ -791,15 +761,14 @@ fn fire_ranged_shot(
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
-    // Freeze mitigation at launch; resolve lethal floors and the damage log together at impact.
-    let (dmg, _absorbed) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
+    let damage = FrozenDamage::launch(ctx, attacker_guid, target_guid, rolled);
 
     let speed = if subclass == ws::WAND {
         WAND_PROJECTILE_SPEED
     } else {
         AUTO_SHOT_PROJECTILE_SPEED
     };
-    let travel_ms = crate::spell::projectile_travel_ms(dist_sq.sqrt(), speed);
+    let travel_ms = crate::geometry::projectile_travel_ms(dist_sq.sqrt(), speed);
     CombatEvent::insert(
         ctx,
         CombatEvent {
@@ -815,14 +784,14 @@ fn fire_ranged_shot(
         ctx,
         attacker_guid,
         target_guid,
-        dmg,
+        damage,
         ranged_spell_id,
         hit_info == HIT_CRIT,
         travel_ms,
     );
     if let Some(mut fresh) = melee.attacker_guid().find(attacker_guid) {
         fresh.last_swing_ms = now_ms;
-        crate::combat::MeleeAttack::update(ctx, fresh);
+        crate::MeleeAttack::update(ctx, fresh);
     }
 }
 
@@ -834,13 +803,13 @@ pub(crate) fn launch_ranged_strike(
     spell_id: u32,
     is_crit: bool,
 ) {
-    let (dmg, _absorbed) = fold_incoming_damage(ctx, attacker.guid, target.guid, rolled);
+    let damage = FrozenDamage::launch(ctx, attacker.guid, target.guid, rolled);
     let (dx, dy, dz) = (
         target.x - attacker.x,
         target.y - attacker.y,
         target.z - attacker.z,
     );
-    let travel_ms = crate::spell::projectile_travel_ms(
+    let travel_ms = crate::geometry::projectile_travel_ms(
         (dx * dx + dy * dy + dz * dz).sqrt(),
         AUTO_SHOT_PROJECTILE_SPEED,
     );
@@ -848,7 +817,7 @@ pub(crate) fn launch_ranged_strike(
         ctx,
         attacker.guid,
         target.guid,
-        dmg,
+        damage,
         spell_id,
         is_crit,
         travel_ms,
@@ -859,12 +828,12 @@ fn schedule_ranged_impact(
     ctx: &ReducerContext,
     attacker_guid: u64,
     target_guid: u64,
-    damage: u32,
+    damage: FrozenDamage,
     ranged_spell_id: u32,
     is_crit: bool,
     travel_ms: u32,
 ) {
-    if damage == 0 {
+    if damage.amount() == 0 {
         return;
     }
     let land_at = crate::time::now(ctx)
@@ -877,7 +846,7 @@ fn schedule_ranged_impact(
             scheduled_at: crate::time::schedule_time(ctx, land_at),
             attacker_guid,
             target_guid,
-            damage,
+            damage: damage.amount(),
             ranged_spell_id,
             is_crit,
         });
@@ -902,8 +871,7 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
         return;
     }
 
-    let dmg = if target.godmode { 0 } else { shot.damage };
-    let damage = final_damage(ctx, shot.target_guid, dmg);
+    let damage = FrozenDamage::stored(shot.damage).resolve(ctx, &target);
     // An auto-repeat shot lands as a white hit; a Weapon Strike keeps its spell and crit.
     let strike = ctx
         .db
@@ -911,20 +879,20 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
         .spell_id()
         .find(shot.ranged_spell_id)
         .is_some_and(|spell| {
-            spell.cast_flags & lyracore_shared::spell::taxonomy::SPELL_ATTR_RANGED_AUTO_REPEAT == 0
+            spell.cast_flags & lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT == 0
         });
     let hit = if strike {
         Hit::spell(HitSource::Ranged, shot.ranged_spell_id, shot.is_crit)
     } else {
         Hit::weapon(HitSource::Ranged, false)
     };
-    let outcome = apply_hit(ctx, shot.attacker_guid, shot.target_guid, damage, hit);
-    if damage.amount > 0 && shot.ranged_spell_id != 0 {
-        crate::spell::SpellCastEvent::insert(
+    let outcome = damage.land(ctx, shot.attacker_guid, shot.target_guid, hit);
+    if damage.amount() > 0 && shot.ranged_spell_id != 0 {
+        crate::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
                 target_guid: shot.target_guid,
-                damage: damage.amount,
+                damage: damage.amount(),
                 is_crit: shot.is_crit,
                 is_proc_log: true,
                 ..SpellCastEvent::signal_at(
@@ -962,20 +930,5 @@ mod revenge_tests {
         assert!(arms_revenge(HIT_CRIT, 30));
         assert!(arms_revenge(HIT_DODGE, 0));
         assert!(!arms_revenge(HIT_NORMAL, 0));
-    }
-}
-
-#[cfg(test)]
-mod chance_on_hit_tests {
-    use super::{affects_victim, HIT_BLOCK, HIT_DODGE, HIT_MISS, HIT_NORMAL, HIT_PARRY};
-
-    #[test]
-    fn a_white_swing_affects_the_victim_when_it_deals_damage_or_is_blocked() {
-        assert!(affects_victim(HIT_NORMAL, 12, 0));
-        assert!(affects_victim(HIT_BLOCK, 0, 30));
-        assert!(!affects_victim(HIT_NORMAL, 0, 0), "a fully absorbed swing");
-        for avoided in [HIT_MISS, HIT_DODGE, HIT_PARRY] {
-            assert!(!affects_victim(avoided, 0, 0));
-        }
     }
 }

@@ -37,6 +37,12 @@ pub struct NativeAdmissionTick {
     pub scheduled_at: ScheduleAt,
 }
 
+crate::outside_table_catalog!(
+    game_native_admission_limits,
+    game_native_admission,
+    game_native_admission_tick
+);
+
 fn limits(ctx: &ReducerContext) -> NativeAdmissionLimits {
     ctx.db
         .game_native_admission_limits()

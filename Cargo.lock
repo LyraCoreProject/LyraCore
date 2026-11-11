@@ -1188,7 +1188,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "lyracore-importer",
- "lyracore-shared",
  "serde",
  "serde_json",
  "sha2",
@@ -1245,6 +1244,7 @@ dependencies = [
 name = "lyracore-package-delta"
 version = "0.1.0"
 dependencies = [
+ "lyracore-shared",
  "serde_json",
 ]
 
@@ -1272,6 +1272,9 @@ dependencies = [
 [[package]]
 name = "lyracore-shared"
 version = "0.1.0"
+dependencies = [
+ "blake3",
+]
 
 [[package]]
 name = "lyracore-test-support"

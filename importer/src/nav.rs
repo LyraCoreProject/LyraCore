@@ -3,15 +3,17 @@ use lyracore_shared::nav::{
     derive_cell, merge_cells, sub_index, walk_set, NavCellData, OBS_BYTES, OBS_NONE, WALK_BYTES,
     WALK_DIM, WALK_MARGIN,
 };
-use lyracore_shared::terrain::{cell_index, cell_key, CELL_SIZE};
+use lyracore_shared::terrain::{cell_index, cell_key, ADT_SIZE, CELL_SIZE};
 use lyracore_shared::vmap::{TriClass, VmapTri};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::Cursor;
 use std::path::Path;
 use wow_mpq::PatchChain;
 
+use crate::collision::{offset_to_index, resolve_name};
+
 // ADT placement origin offset in yards.
-const PLACE_K: f32 = 32.0 * 533.333_3;
+const PLACE_K: f32 = 32.0 * ADT_SIZE;
 // A 50-degree slope rises about 4.97 yards over one 4.17-yard terrain quad.
 const MAX_QUAD_RISE: f32 = 4.97;
 const BATCH_BYTES: usize = 28_000;
@@ -295,27 +297,6 @@ pub(crate) struct TileSource {
     pub(crate) blake3: String,
 }
 
-fn offset_to_index(names: &[String]) -> BTreeMap<u32, usize> {
-    let mut map = BTreeMap::new();
-    let mut off = 0u32;
-    for (i, n) in names.iter().enumerate() {
-        map.insert(off, i);
-        off += n.len() as u32 + 1;
-    }
-    map
-}
-
-fn resolve<'a>(names: &'a [String], indices: &[u32], name_id: u32) -> Result<&'a str> {
-    let offsets = offset_to_index(names);
-    let off = *indices
-        .get(name_id as usize)
-        .with_context(|| format!("name_id {name_id} out of range"))?;
-    let idx = *offsets
-        .get(&off)
-        .with_context(|| format!("offset {off} doesn't start a name"))?;
-    Ok(&names[idx])
-}
-
 struct NavRow {
     map_id: u32,
     cell_x: u16,
@@ -509,12 +490,14 @@ pub(crate) fn scan_tiles(
                 (cell_x_min, cell_x_max, cell_y_min, cell_y_max),
                 &mut cells,
             )?;
+            let wmo_offsets = offset_to_index(&root.wmos);
             for p in &root.wmo_placements {
                 retain_placement(
                     &mut placements,
                     &mut seen_ids,
                     Placement {
-                        name: resolve(&root.wmos, &root.wmo_indices, p.name_id)?.to_string(),
+                        name: resolve_name(&root.wmos, &wmo_offsets, &root.wmo_indices, p.name_id)?
+                            .to_string(),
                         is_wmo: true,
                         unique_id: p.unique_id,
                         position: p.position,
@@ -531,12 +514,19 @@ pub(crate) fn scan_tiles(
                     &source_path,
                 )?;
             }
+            let model_offsets = offset_to_index(&root.models);
             for p in &root.doodad_placements {
                 retain_placement(
                     &mut placements,
                     &mut seen_ids,
                     Placement {
-                        name: resolve(&root.models, &root.model_indices, p.name_id)?.to_string(),
+                        name: resolve_name(
+                            &root.models,
+                            &model_offsets,
+                            &root.model_indices,
+                            p.name_id,
+                        )?
+                        .to_string(),
                         is_wmo: false,
                         unique_id: p.unique_id,
                         position: p.position,

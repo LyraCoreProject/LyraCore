@@ -3,6 +3,7 @@ use spacetimedb::{log, table, ReducerContext, Table};
 use crate::game_world_entity;
 
 use super::*;
+use crate::{game_aura, game_spell, game_spell_chain, game_spell_effect, Aura};
 
 #[table(accessor = game_spell_group, index(accessor = by_group, btree(columns = [group_id])), index(accessor = by_spell, btree(columns = [spell_id])))]
 pub struct SpellGroup {
@@ -23,7 +24,6 @@ pub struct SpellGroupRule {
     pub rank_is_comparable: bool,
 }
 
-#[allow(dead_code)]
 pub(crate) const RULE_STACKS: u8 = 0;
 pub(crate) const RULE_EXCLUSIVE: u8 = 1;
 pub(crate) const RULE_EXCLUSIVE_PER_CASTER: u8 = 2;
@@ -67,6 +67,7 @@ pub(crate) enum GroupRule {
 
 pub(crate) fn group_rule_from_u8(rule: u8) -> GroupRule {
     match rule {
+        RULE_STACKS => GroupRule::Stacks,
         RULE_EXCLUSIVE => GroupRule::Exclusive,
         RULE_EXCLUSIVE_PER_CASTER => GroupRule::ExclusivePerCaster,
         RULE_EXCLUSIVE_STRONGER => GroupRule::ExclusiveStronger,
@@ -402,7 +403,7 @@ pub(crate) fn apply_group_conflict(
                 .into_iter()
                 .filter_map(|id| auras.id().find(id))
                 .collect();
-            crate::spell::shed_auras(ctx, target_guid, shed);
+            crate::spell::shed_auras(ctx, shed);
             true
         }
     }
@@ -464,12 +465,27 @@ pub(crate) fn bump_dr_level(
     }
 }
 
+/// Opens the window only once no Aura of `category` remains on the target, as vmangos
+/// `Unit::ApplyDiminishingAura` does.
 pub(crate) fn dr_window_on_removal(
     ctx: &ReducerContext,
     target_guid: u64,
     category: u8,
     removed_at_micros: i64,
 ) {
+    let held = ctx
+        .db
+        .game_aura()
+        .by_target()
+        .filter(&target_guid)
+        .any(|aura| {
+            aura.eff_kind == A_CONTROL
+                && aura.eff_p0_kind == P_MECHANIC
+                && dr_category_for_mechanic(aura.eff_p0) == Some(category)
+        });
+    if held {
+        return;
+    }
     let table = ctx.db.game_dr_state();
     if let Some(mut row) = table
         .by_target()

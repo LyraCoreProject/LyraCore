@@ -5,7 +5,7 @@ use spacetimedb::{rand::Rng, reducer, ReducerContext, Table};
 use super::tables::{
     game_vendor_stock, game_vendor_stock_runtime, VendorStock, VendorStockRuntime,
 };
-use super::{ItemTemplate, NpcVendor};
+use crate::{ItemTemplate, NpcVendor};
 
 #[reducer]
 pub fn native_vendor_stock_runtime(ctx: &ReducerContext, runtime_id: u128) -> Result<(), String> {
@@ -25,10 +25,6 @@ pub fn native_vendor_stock_runtime(ctx: &ReducerContext, runtime_id: u128) -> Re
     runtime.id().delete(0);
     runtime.insert(VendorStockRuntime { id: 0, runtime_id });
     Ok(())
-}
-
-fn seconds(ctx: &ReducerContext) -> i64 {
-    crate::time::now(ctx).to_micros_since_unix_epoch() / 1_000_000
 }
 
 fn spawn_guid(ctx: &ReducerContext, vendor: u64) -> u64 {
@@ -62,7 +58,7 @@ pub(crate) fn available(
     let Some(mut row) = stock.key().find(key(vendor, item.entry)) else {
         return offer.max_count;
     };
-    let now = seconds(ctx);
+    let now = crate::time::now_secs(ctx) as i64;
     let elapsed = now.saturating_sub(row.last_increment_seconds).max(0) as u64;
     let increments = elapsed / u64::from(row.restock_seconds.max(1));
     if increments != 0 {
@@ -111,7 +107,7 @@ pub(crate) fn purchase(ctx: &ReducerContext, vendor: u64, offer: &NpcVendor, rem
         key: key(vendor, offer.item_entry),
         vendor_guid: vendor,
         count: remaining_count,
-        last_increment_seconds: seconds(ctx),
+        last_increment_seconds: crate::time::now_secs(ctx) as i64,
         restock_seconds: restock_delay(
             offer.restock_seconds,
             offer.stock_flags,

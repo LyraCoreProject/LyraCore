@@ -22,7 +22,8 @@ pub(crate) const CREATURE_MELEE_MIN: u32 = 1;
 pub(crate) const CREATURE_MELEE_MAX: u32 = 3;
 pub(crate) const CRIT_MULT: u32 = 2;
 
-const BASE_MISS_BP: u32 = 500;
+pub(crate) const BASE_MISS_BP: u32 = 500;
+pub(crate) const DUAL_WIELD_MISS_BP: u32 = 2400;
 const MAX_MISS_BP: u32 = 6000;
 const PARRY_BP: u32 = 500;
 const PARRY_BP_PER_SKILL: u32 = 10;
@@ -98,8 +99,12 @@ pub(crate) fn melee_attack_power(strength: u32, level: u32) -> u32 {
     (level * 3 + strength * 2).saturating_sub(20)
 }
 
+const CLASS_WARRIOR: u8 = 1;
 const CLASS_HUNTER: u8 = 3;
 const CLASS_ROGUE: u8 = 4;
+pub(crate) const CLASS_PRIEST: u8 = 5;
+pub(crate) const CLASS_MAGE: u8 = 8;
+pub(crate) const CLASS_WARLOCK: u8 = 9;
 
 pub(crate) fn melee_attack_power_for(class: u8, strength: u32, agility: u32, level: u32) -> u32 {
     match class {
@@ -110,7 +115,7 @@ pub(crate) fn melee_attack_power_for(class: u8, strength: u32, agility: u32, lev
 
 pub(crate) fn ranged_attack_power_for(class: u8, agility: u32, level: u32) -> u32 {
     let raw = match class {
-        1 | CLASS_ROGUE => level + agility,
+        CLASS_WARRIOR | CLASS_ROGUE => level + agility,
         CLASS_HUNTER => level * 2 + agility * 2,
         _ => agility,
     };
@@ -158,10 +163,6 @@ pub(crate) fn apply_offhand_penalty(min: u32, max: u32) -> (u32, u32) {
     ((min / 2).max(1), (max / 2).max(1))
 }
 
-pub(crate) fn effective_stat(base: i32, aura: i32, gear: i32) -> u32 {
-    (i64::from(base) + i64::from(aura) + i64::from(gear)).clamp(0, i64::from(u32::MAX)) as u32
-}
-
 pub(crate) fn miss_bp_with_bonus(miss: u32, bonus: i32) -> u32 {
     (miss as i32 - bonus).max(0) as u32
 }
@@ -170,9 +171,6 @@ pub(crate) fn swing_time_with_haste(base_ms: u32, haste_pct: i32) -> u32 {
     let denom = (100 + haste_pct).max(1) as u32;
     base_ms.saturating_mul(100) / denom
 }
-
-#[cfg(test)]
-use lyracore_shared::aura::move_speed_with_pct;
 
 pub(crate) fn rank_damage_multiplier_permille(rank: u8) -> u32 {
     match rank {
@@ -200,7 +198,7 @@ pub(crate) fn armor_mitigation_pct(armor: u32, attacker_level: u32) -> u32 {
 }
 
 pub(crate) fn armor_mitigated(damage: u32, mitigation_pct: u32) -> u32 {
-    (damage * (100 - mitigation_pct) / 100).max(1)
+    (u64::from(damage) * u64::from(100 - mitigation_pct) / 100).max(1) as u32
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -623,14 +621,6 @@ mod tests {
     }
 
     #[test]
-    fn effective_stat_sums_base_aura_gear_and_clamps_at_zero() {
-        assert_eq!(effective_stat(23, 0, 0), 23);
-        assert_eq!(effective_stat(23, 5, 7), 35);
-        assert_eq!(effective_stat(10, -25, 3), 0);
-        assert_eq!(effective_stat(10, -4, 2), 8);
-    }
-
-    #[test]
     fn player_swing_range_scales_with_stats_and_stays_sane() {
         let unarmed =
             |str: u32, level: u32, t: u32| player_swing_range_ap(melee_attack_power(str, level), t);
@@ -706,15 +696,6 @@ mod tests {
         assert!(swing_time_with_haste(2000, -50) > 2000);
         assert_eq!(swing_time_with_haste(2000, -100), 200_000);
         assert_eq!(swing_time_with_haste(2000, -150), 200_000);
-    }
-
-    #[test]
-    fn move_speed_snare_slows_and_is_baseline_safe_at_zero() {
-        assert_eq!(move_speed_with_pct(7.0, 0), 7.0);
-        assert!((move_speed_with_pct(7.0, -40) - 4.2).abs() < 1e-4);
-        assert!(move_speed_with_pct(7.0, 50) > 7.0);
-        assert!((move_speed_with_pct(7.0, -95) - 0.7).abs() < 1e-4);
-        assert!((move_speed_with_pct(7.0, -200) - 0.7).abs() < 1e-4);
     }
 
     #[test]
@@ -880,92 +861,15 @@ mod tests {
         mana_regen_paused_until_ms: u64,
     ) -> WorldEntity {
         WorldEntity {
-            guid: 1,
-            owner_identity: spacetimedb::Identity::ZERO,
-            account_id: 0,
-            map_id: 0,
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-            orientation: 0.0,
-            grid_x: 0,
-            grid_y: 0,
-            cell: lyracore_shared::spatial::grid_cell_id(0, 0),
-            last_move_ms: 0,
-            type_mask: 0,
-            entry: 0,
-            scale_x: 1.0,
             health,
             max_health,
             power,
             max_power,
             level,
-            faction_template: 0,
             unit_bytes_0,
-            display_id: 0,
-            native_display_id: 0,
-            unit_flags: 0,
-            base_attack_time_ms: 2000,
-            dynamic_flags: 0,
-            dead: false,
-            player_bytes: 0,
-            player_bytes_2: 0,
-            player_bytes_3: 0,
-            player_flags: 0,
-            xp: 0,
-            next_level_xp: 0,
-            target_guid: 0,
-            money: 0,
-            unit_bytes_1: 0,
-            unit_bytes_2: 0,
-            strength: 0,
-            agility: 0,
-            stamina: 0,
-            intellect: 0,
             spirit,
-            npc_flags: 0,
-            armor: 0,
-            leg_ends_ms: 0,
-            wp_target: 0,
-            movement_flags: 0,
-            combat_until_ms: 0,
-            pickpocketed: false,
-            next_swing_spell: 0,
-            overpower_until_ms: 0,
-            revenge_until_ms: 0,
-            stance: 0,
-            owner_guid: 0,
-            skinned: false,
             mana_regen_paused_until_ms,
-            death_expire_micros: 0,
-            instance_id: 0,
-            run_speed_mult_bp: 10_000,
-            godmode: false,
-            resting: false,
-            sheet_str_bonus: 0,
-            sheet_agi_bonus: 0,
-            sheet_sta_bonus: 0,
-            sheet_int_bonus: 0,
-            sheet_spi_bonus: 0,
-            sheet_ap_base: 0,
-            sheet_ap_mods: 0,
-            sheet_ap_modifiers: 0,
-            sheet_ranged_ap_modifiers: 0,
-            sheet_ranged_dmg_min_fraction: 0.0,
-            sheet_ranged_dmg_max_fraction: 0.0,
-            sheet_ranged_crit_bp: 0,
-            sheet_dmg_min: 0,
-            sheet_dmg_max: 0,
-            sheet_crit_bp: 0,
-            bank_bag_slots: 0,
-            mount_display_id: 0,
-            zone_id: 0,
-            sheet_ranged_ap: 0,
-            sheet_ranged_dmg_min: 0,
-            sheet_ranged_dmg_max: 0,
-            regeneration_pending: false,
-            combat_active: false,
-            simulation_indexed: false,
+            ..WorldEntity::blank(1, 0, 0, [0.0; 4])
         }
     }
 

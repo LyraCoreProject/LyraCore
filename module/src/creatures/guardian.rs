@@ -1,8 +1,9 @@
+use crate::game_creature_ai_summon_expiry;
 use spacetimedb::ReducerContext;
 
-use crate::creatures::eventai::game_creature_ai_summon_expiry;
-use crate::spell::{CastGateRefusal, Spell, SpellEffect, P_ENTRY, T_SELF};
+use crate::spell::{CastGateRefusal, P_ENTRY, T_SELF};
 use crate::{game_creature_template, game_world_entity, WorldEntity};
+use crate::{Spell, SpellEffect};
 
 pub(crate) fn is_guardian(ctx: &ReducerContext, guid: u64) -> bool {
     faction(ctx, guid).is_some()
@@ -99,13 +100,13 @@ pub(crate) fn die(ctx: &ReducerContext, guid: u64) -> bool {
     else {
         return false;
     };
-    super::tick::stop_where_rendered(ctx, &mut entity);
+    super::leg::stop(ctx, &mut entity);
     entity.health = 0;
     entity.dead = true;
     entity.dynamic_flags = 0;
     entity = entity.update(ctx);
     expiry.remaining_ms = 15_000;
-    expiry.last_checked_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+    expiry.last_checked_ms = crate::time::now_ms(ctx);
     expiries.scheduled_id().update(expiry);
     crate::spell::break_channel(ctx, entity.guid);
     crate::spell::remove_auras_on_death(ctx, entity.guid);

@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_test_support::{ReducerConnection, Standalone};
 use serde_json::json;
 
@@ -74,9 +75,13 @@ fn a_pending_cast_resolves_at_its_virtual_due_time() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_spell_projectile_impacts_at_its_virtual_due_time() {
     let shard = fixture("virtual-spell-impact");
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "2"]);
-    let target = shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")[0]
-        ["guid"]
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "2"],
+    );
+    let target = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ))[0]["guid"]
         .clone();
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET health = 100, max_health = 100 WHERE guid = {target}"

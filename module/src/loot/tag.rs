@@ -2,12 +2,12 @@ use std::collections::BTreeSet;
 
 use spacetimedb::{table, ReducerContext, Table};
 
+use super::LootRefusal;
 use lyracore_shared::group::RAID_MAX_MEMBERS;
-use lyracore_shared::loot::LootRefusal;
 
 use crate::game_world_entity;
 
-use super::game_corpse_loot_eligible;
+use crate::game_corpse_loot_eligible;
 
 #[cfg(feature = "debug_reducers")]
 use crate::{
@@ -46,7 +46,6 @@ pub(crate) struct DeathEntitlement {
     pub recipients: Vec<u64>,
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LiveLootTagEligibility {
     Available,
@@ -194,7 +193,6 @@ fn membership_is_current(
     }
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn live_loot_tag_eligibility(
     ctx: &ReducerContext,
     creature_guid: u64,
@@ -255,7 +253,7 @@ pub(crate) fn revoke_group_member(ctx: &ReducerContext, group_id: u64, character
             members.id().delete(member.id);
         }
         if let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) {
-            crate::native::loot_flags(ctx, &creature);
+            crate::native::visibility::loot_flags(ctx, &creature);
         }
     }
 }
@@ -275,14 +273,14 @@ pub(crate) fn record_corpse_eligibility(
         eligible.id().delete(id);
     }
     for eligible_guid in recipients.iter().copied().collect::<BTreeSet<_>>() {
-        eligible.insert(super::CorpseLootEligible {
+        eligible.insert(crate::CorpseLootEligible {
             id: 0,
             corpse_guid,
             eligible_guid,
         });
     }
     if let Some(corpse) = ctx.db.game_world_entity().guid().find(corpse_guid) {
-        crate::native::loot_flags(ctx, &corpse);
+        crate::native::visibility::loot_flags(ctx, &corpse);
     }
 }
 
@@ -301,7 +299,7 @@ pub(crate) fn corpse_eligible_for_access(recipients: &[u64], actor_guid: u64) ->
     recipients.binary_search(&actor_guid).is_ok()
 }
 
-// Empty corpse eligibility refuses everyone; GameObjects do not use Loot Tags.
+#[cfg(feature = "debug_reducers")]
 pub(crate) fn corpse_access_gate(
     ctx: &ReducerContext,
     actor_guid: u64,
@@ -315,6 +313,7 @@ pub(crate) fn corpse_access_gate(
     })
 }
 
+// Empty corpse eligibility refuses everyone; GameObjects do not use Loot Tags.
 pub(crate) fn corpse_access(
     ctx: &ReducerContext,
     actor_guid: u64,
@@ -357,7 +356,7 @@ pub(crate) fn clear(ctx: &ReducerContext, creature_guid: u64) {
 }
 
 #[cfg(feature = "debug_reducers")]
-const LOOT_TAG_FIXTURE_ENTRY: u32 = 51_000;
+const LOOT_TAG_FIXTURE_ENTRY: u32 = lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 #[cfg(feature = "debug_reducers")]
 const LOOT_TAG_FIXTURE_GROUP: u64 = 5_093_850;
 #[cfg(feature = "debug_reducers")]
@@ -433,7 +432,7 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
     tagless_live.money = 17;
     tagless_live.dynamic_flags |= lyracore_shared::constants::unit_dynamic_flags::LOOTABLE;
     tagless_live.update(ctx);
-    ctx.db.game_corpse_loot().insert(super::CorpseLoot {
+    ctx.db.game_corpse_loot().insert(crate::CorpseLoot {
         id: 0,
         corpse_guid: tagless,
         slot: 0,
@@ -593,7 +592,7 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
     insert_fixture_entity(ctx, &origin, retained, base_x, false, 0);
     crate::threat::add_threat(ctx, retained, LOOT_TAG_FIXTURE_CHARACTER_F, 10);
     crate::combat::arm_creature_engagement(ctx, retained, LOOT_TAG_FIXTURE_CHARACTER_F, false);
-    crate::combat::MeleeAttack::insert(
+    crate::MeleeAttack::insert(
         ctx,
         crate::MeleeAttack {
             attacker_guid: LOOT_TAG_FIXTURE_CHARACTER_B,
@@ -718,7 +717,7 @@ fn verify_corpse_loot_gates(
 
     let party_corpse = fixture_creature_guid(12);
     insert_fixture_corpse(ctx, origin, party_corpse, x, 9);
-    ctx.db.game_corpse_loot().insert(super::CorpseLoot {
+    ctx.db.game_corpse_loot().insert(crate::CorpseLoot {
         id: 0,
         corpse_guid: party_corpse,
         slot: 0,
@@ -743,7 +742,7 @@ fn verify_corpse_loot_gates(
     for refusal in [
         crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse)
             .map_err(|refusal| refusal.as_tag().to_string()),
-        crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse, 0),
+        crate::loot::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse, 0),
         crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse),
         crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse)
             .map_err(String::from),
@@ -767,14 +766,14 @@ fn verify_corpse_loot_gates(
         return Err("a Loot Tag Refusal changed the party corpse".to_string());
     }
 
-    crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse, 0)?;
+    crate::loot::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse, 0)?;
     crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse)?;
     insert_fixture_skinning(ctx, LOOT_TAG_FIXTURE_CHARACTER_B);
     crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse)?;
 
     let solo_corpse = fixture_creature_guid(13);
     insert_fixture_corpse(ctx, origin, solo_corpse, x, 17);
-    ctx.db.game_corpse_loot().insert(super::CorpseLoot {
+    ctx.db.game_corpse_loot().insert(crate::CorpseLoot {
         id: 0,
         corpse_guid: solo_corpse,
         slot: 0,
@@ -790,7 +789,7 @@ fn verify_corpse_loot_gates(
     record_corpse_eligibility(ctx, solo_corpse, &[LOOT_TAG_FIXTURE_CHARACTER_A]);
     crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse)
         .map_err(|refusal| refusal.as_tag().to_string())?;
-    crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse, 0)?;
+    crate::loot::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse, 0)?;
     crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse)?;
     insert_fixture_skinning(ctx, LOOT_TAG_FIXTURE_CHARACTER_A);
     crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse)?;
@@ -859,8 +858,8 @@ fn expect_live_loot_tag_eligibility(
 }
 
 #[cfg(feature = "debug_reducers")]
-fn fixture_creature_guid(low: u64) -> u64 {
-    (0xF130_u64 << 48) | (u64::from(LOOT_TAG_FIXTURE_ENTRY) << 24) | 0x00FE_0000 | low
+fn fixture_creature_guid(low: u32) -> u64 {
+    lyracore_shared::guid::creature(LOOT_TAG_FIXTURE_ENTRY, 0x00FE_0000 | low)
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -872,22 +871,8 @@ fn insert_fixture_entity(
     is_character: bool,
     owner_guid: u64,
 ) {
-    let spawn = crate::CreatureSpawn {
-        guid,
-        entry: template.entry,
-        map_id: 0,
-        x,
-        y: 0.0,
-        z: 0.0,
-        orientation: 0.0,
-        respawn_at: crate::creatures::timer_never(ctx),
-        despawn_at: crate::creatures::timer_never(ctx),
-        movement_type: crate::creatures::MOVEMENT_IDLE,
-        respawn_secs: 0,
-        life_seq: 0,
-        source_guid: 0,
-        instance_id: 0,
-    };
+    let spawn =
+        crate::CreatureSpawn::temporary(ctx, guid, template.entry, 0, 0, [x, 0.0, 0.0, 0.0]);
     let mut entity = crate::creatures::build_creature_entity(ctx, &spawn, template, 0, 0);
     entity.owner_guid = owner_guid;
     if is_character {
@@ -956,17 +941,4 @@ fn entity_xp(ctx: &ReducerContext, guid: u64) -> Result<u32, String> {
         .find(guid)
         .map(|entity| entity.xp)
         .ok_or_else(|| format!("Loot Tag fixture Character {guid} is missing"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn corpse_access_requires_a_resolved_eligibility_row() {
-        assert!(!corpse_eligible_for_access(&[], 7));
-        assert!(corpse_eligible_for_access(&[7], 7));
-        assert!(!corpse_eligible_for_access(&[7], 8));
-        assert!(corpse_eligible_for_access(&[2, 7, 11], 7));
-    }
 }

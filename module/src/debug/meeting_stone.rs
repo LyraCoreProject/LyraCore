@@ -51,9 +51,8 @@ pub fn debug_stage_meeting_stone(
         max_level,
         area_id,
     });
-    let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(x, y);
     crate::GameObject::delete(ctx, go_guid);
-    let go = crate::GameObject {
+    crate::GameObject {
         guid: go_guid,
         template_entry: entry,
         map_id,
@@ -65,16 +64,15 @@ pub fn debug_stage_meeting_stone(
         created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
-        grid_x,
-        grid_y,
-        cell: lyracore_shared::spatial::cell_id_at(x, y),
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
         rotation_3: 0.0,
     }
     .insert(ctx);
-    crate::go_collider::register(ctx, &go);
     Ok(())
 }
 

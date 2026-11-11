@@ -1,4 +1,5 @@
-use super::{game_item_template, EquipStat, ItemTemplate};
+use super::EquipStat;
+use crate::{game_item_template, ItemTemplate};
 use lyracore_shared::item_property as kind;
 use spacetimedb::{table, ReducerContext, Table};
 

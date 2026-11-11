@@ -3,6 +3,8 @@ pub(crate) mod character_owned_tripwire {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    use lyracore_test_support::source_scan::{code_only, files_under};
+
     const NON_UNIT_GUID_FIELDS: &[&str] = &[
         "corpse_guid",
         "creature_guid",
@@ -96,7 +98,7 @@ pub(crate) mod character_owned_tripwire {
         ),
         (
             &["game_bot_invite_intent"],
-            "short-lived Group Intent reaped by event GC",
+            "retired Group Intent table that nothing writes",
         ),
         (
             &["game_bot_transfer_intent"],
@@ -122,15 +124,9 @@ pub(crate) mod character_owned_tripwire {
                 "game_hunter_pet_protocol",
                 "game_chat_channel_notice_event",
                 "game_group_event",
-                "game_chat_event",
-                "game_combat_event",
-                "game_emote_event",
                 "game_guild_event",
                 "game_mail_arrival",
                 "game_realm_chat_event",
-                "game_roll_event",
-                "game_spell_cast_event",
-                "game_spell_impact_event",
                 "game_system_message_event",
                 "game_teleport_event",
                 "game_trade_event",
@@ -140,15 +136,29 @@ pub(crate) mod character_owned_tripwire {
         ),
         (
             &[
+                "game_chat_event",
+                "game_combat_event",
+                "game_emote_event",
+                "game_roll_event",
+                "game_spell_cast_event",
+                "game_spell_impact_event",
+            ],
+            "retired Relay event tables that nothing writes",
+        ),
+        (
+            &[
                 "game_creature_ai_movement_intent",
                 "game_creature_ai_relay_arrival",
                 "game_creature_ai_relay_run",
                 "game_creature_ai_summon_origin",
-                "game_creature_move_event",
                 "game_creature_quest_tap",
                 "game_creature_quest_tap_member",
             ],
-            "creature-owned state cleared with its creature, engagement, or delivery",
+            "creature-owned state cleared by `despawn_creature_entity`; `creature_teardown_architecture_test` checks each",
+        ),
+        (
+            &["game_creature_move_event"],
+            "retired creature movement event table that nothing writes",
         ),
         (
             &[
@@ -267,8 +277,7 @@ pub(crate) mod character_owned_tripwire {
 
     pub(crate) fn scanned_files() -> Vec<PathBuf> {
         let manifest_dir = env!("CARGO_MANIFEST_DIR");
-        let mut files = Vec::new();
-        collect_rs_files(&Path::new(manifest_dir).join("src"), &mut files);
+        let mut files = rust_files(&Path::new(manifest_dir).join("src"));
         let packages_dir = Path::new(manifest_dir)
             .parent()
             .expect("module/ has a parent (the repo root)")
@@ -277,212 +286,21 @@ pub(crate) mod character_owned_tripwire {
             for entry in fs::read_dir(&packages_dir).expect("readable packages/") {
                 let pkg_src = entry.expect("readable dir entry").path().join("src");
                 if pkg_src.is_dir() {
-                    collect_rs_files(&pkg_src, &mut files);
+                    files.extend(rust_files(&pkg_src));
                 }
             }
         }
         files
     }
 
-    pub(crate) fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
-        for entry in
-            fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read dir {}: {e}", dir.display()))
-        {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.is_dir() {
-                collect_rs_files(&path, out);
-            } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
-                out.push(path);
-            }
-        }
-    }
-
-    pub(super) fn production_code(content: &str) -> String {
-        fn blank(bytes: &mut [u8], start: usize, end: usize) {
-            for byte in &mut bytes[start..end] {
-                if *byte != b'\n' {
-                    *byte = b' ';
-                }
-            }
-        }
-
-        let source = content.as_bytes();
-        let mut code = source.to_vec();
-        let mut i = 0;
-        while i < source.len() {
-            if source[i..].starts_with(b"//") {
-                let end = source[i..]
-                    .iter()
-                    .position(|byte| *byte == b'\n')
-                    .map(|offset| i + offset)
-                    .unwrap_or(source.len());
-                blank(&mut code, i, end);
-                i = end;
-                continue;
-            }
-            if source[i..].starts_with(b"/*") {
-                let start = i;
-                i += 2;
-                let mut depth = 1usize;
-                while i < source.len() && depth > 0 {
-                    if source[i..].starts_with(b"/*") {
-                        depth += 1;
-                        i += 2;
-                    } else if source[i..].starts_with(b"*/") {
-                        depth -= 1;
-                        i += 2;
-                    } else {
-                        i += 1;
-                    }
-                }
-                blank(&mut code, start, i);
-                continue;
-            }
-            if source[i] == b'r' {
-                let mut quote = i + 1;
-                while source.get(quote) == Some(&b'#') {
-                    quote += 1;
-                }
-                if source.get(quote) == Some(&b'"') {
-                    let hashes = quote - i - 1;
-                    let start = i;
-                    i = quote + 1;
-                    while i < source.len() {
-                        if source[i] == b'"'
-                            && source.get(i + 1..i + 1 + hashes)
-                                == Some(&source[quote - hashes..quote])
-                        {
-                            i += 1 + hashes;
-                            break;
-                        }
-                        i += 1;
-                    }
-                    blank(&mut code, start, i);
-                    continue;
-                }
-            }
-            if source[i] == b'"' {
-                let start = i;
-                i += 1;
-                while i < source.len() {
-                    match source[i] {
-                        b'\\' => i = (i + 2).min(source.len()),
-                        b'"' => {
-                            i += 1;
-                            break;
-                        }
-                        _ => i += 1,
-                    }
-                }
-                blank(&mut code, start, i);
-                continue;
-            }
-            if source[i] == b'\'' {
-                let escaped = source.get(i + 1) == Some(&b'\\');
-                let close = if escaped { i + 3 } else { i + 2 };
-                if source.get(close) == Some(&b'\'') {
-                    blank(&mut code, i, close + 1);
-                    i = close + 1;
-                    continue;
-                }
-            }
-            i += 1;
-        }
-
-        let test_attr = b"#[cfg(test)]";
-        let mut search_from = 0usize;
-        while let Some(offset) = code[search_from..]
-            .windows(test_attr.len())
-            .position(|window| window == test_attr)
-        {
-            let test_start = search_from + offset;
-            let mut item_start = test_start;
-            while let Some(end) = code[..item_start]
-                .iter()
-                .rposition(|byte| !byte.is_ascii_whitespace())
-                .map(|position| position + 1)
-            {
-                if code.get(end - 1) != Some(&b']') {
-                    break;
-                }
-
-                let mut depth = 0usize;
-                let mut attribute_start = None;
-                for position in (0..end).rev() {
-                    match code[position] {
-                        b']' => depth += 1,
-                        b'[' => {
-                            depth -= 1;
-                            if depth == 0 {
-                                if position > 0 && code[position - 1] == b'#' {
-                                    attribute_start = Some(position - 1);
-                                }
-                                break;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                let Some(start) = attribute_start else {
-                    break;
-                };
-                item_start = start;
-            }
-
-            let mut cursor = test_start + test_attr.len();
-            while code.get(cursor).is_some_and(u8::is_ascii_whitespace) {
-                cursor += 1;
-            }
-            while code.get(cursor..cursor + 2) == Some(b"#[") {
-                let Some(close) = code[cursor..].iter().position(|byte| *byte == b']') else {
-                    break;
-                };
-                cursor += close + 1;
-                while code.get(cursor).is_some_and(u8::is_ascii_whitespace) {
-                    cursor += 1;
-                }
-            }
-            let semicolon = code[cursor..]
-                .iter()
-                .position(|byte| *byte == b';')
-                .map(|offset| cursor + offset);
-            let open = code[cursor..]
-                .iter()
-                .position(|byte| *byte == b'{')
-                .map(|offset| cursor + offset);
-            let item_end = match (semicolon, open) {
-                (Some(end), None) => end + 1,
-                (Some(end), Some(open)) if end < open => end + 1,
-                (_, Some(open)) => {
-                    let mut depth = 0i32;
-                    let mut end = code.len();
-                    for (offset, byte) in code[open..].iter().enumerate() {
-                        match byte {
-                            b'{' => depth += 1,
-                            b'}' => {
-                                depth -= 1;
-                                if depth == 0 {
-                                    end = open + offset + 1;
-                                    break;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    end
-                }
-                _ => code.len(),
-            };
-            blank(&mut code, item_start, item_end);
-            search_from = item_end;
-        }
-
-        String::from_utf8(code).expect("masking Rust source preserves UTF-8")
+    pub(crate) fn rust_files(dir: &Path) -> Vec<PathBuf> {
+        files_under(dir, &[], &|path| {
+            path.extension().is_some_and(|extension| extension == "rs")
+        })
     }
 
     pub(super) fn extract_tables(content: &str) -> Vec<(String, String, bool)> {
-        let code = production_code(content);
+        let code = code_only(content);
         let mut out = Vec::new();
         let mut search_from = 0usize;
         while let Some(rel) = code[search_from..].find("#[table(") {
@@ -549,7 +367,7 @@ pub(crate) mod character_owned_tripwire {
     }
 
     fn character_owned_markers(content: &str) -> Vec<String> {
-        let code = production_code(content);
+        let code = code_only(content);
         let needle = format!("{}{}(", "character_owned", "!");
         let mut markers = Vec::new();
         let mut search_from = 0usize;
@@ -664,12 +482,7 @@ pub(crate) mod character_owned_tripwire {
 
         assert!(
             missing.is_empty(),
-            "Invariant: deleting or re-owning a Character sweeps every table keyed by its guid.\n\
-             table(s) with a Character-capable guid have no matching `character_owned` sweep marker \
-             or `NOT_CHARACTER_OWNED` classification: {missing:?}\n\
-             Add a `crate::character_owned` `delete` marker invocation (and usually the `restamp` \
-             form too, see the macro doc at the top of lib.rs), or add the accessor to \
-             `NOT_CHARACTER_OWNED` with its actual owner or lifetime."
+            "table(s) with a Character-capable guid lack a `character_owned` sweep marker or a `NOT_CHARACTER_OWNED` entry: {missing:?}"
         );
     }
 
@@ -943,6 +756,18 @@ mod native_delivery_write_discipline {
         );
         writes.extend(crate::test_scan::raw_table_reads(
             &source,
+            &["game_mail"],
+            |source, offset| {
+                let tail: String = source[offset..]
+                    .chars()
+                    .take(16)
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                tail.starts_with(".insert(") || tail.starts_with(".try_insert(")
+            },
+        ));
+        writes.extend(crate::test_scan::raw_table_reads(
+            &source,
             &["game_creature_spline"],
             |source, offset| {
                 let tail: String = source[offset..]
@@ -1019,6 +844,9 @@ mod native_delivery_write_discipline {
                 ctx.db.game_guild_member().character_guid().update(row);
                 ctx.db.game_resurrect_request().target_guid().delete(7);
                 ctx.db.game_self_resurrect_option().character_guid().update(row);
+                let mails = ctx.db.game_mail();
+                mails.insert(row);
+                mails.id().update(row);
                 // entities.insert(row);
                 row.update(ctx);
             }
@@ -1027,7 +855,7 @@ mod native_delivery_write_discipline {
                 ctx.db.game_world_entity().insert(row);
             }
         "#;
-        assert_eq!(raw_writes(source).len(), 53);
+        assert_eq!(raw_writes(source).len(), 54);
     }
 
     #[test]
@@ -1059,6 +887,7 @@ mod native_delivery_write_discipline {
                     "game_auction_notice" => "module/src/auction.rs",
                     "game_hunter_pet_protocol" => "module/src/creatures/hunter_pet.rs",
                     "game_mail_arrival" => "module/src/mail_timer.rs",
+                    "game_mail" => "module/src/mail.rs",
                     "game_guild_petition" => "module/src/guild/petition.rs",
                     "game_guild_event" | "game_guild_member" => "module/src/guild/mod.rs",
                     "game_player_skill" => "module/src/skill.rs",
@@ -1089,7 +918,7 @@ mod native_delivery_write_discipline {
 
 #[cfg(test)]
 mod partition_discipline_tripwire {
-    use crate::test_scan::{line_of, on_comment_line, repo_root};
+    use crate::test_scan::repo_root;
 
     const SPATIAL_ACCESSORS: &[&str] = &[
         "game_world_entity",
@@ -1104,15 +933,15 @@ mod partition_discipline_tripwire {
         ("module/src/debug/instance.rs", 3, "Debug fixture setup and floor validation inspect template populations and guid allocation."),
         ("module/src/creatures/spawn.rs", 3, "World import replaces authored spawns and entities; timer normalization scans all spawns."),
         ("module/src/go_collider.rs", 1, "Operator reconciliation rebuilds derived colliders for every hosted partition"),
-        ("module/src/gameobject.rs", 2, "`import_gameobjects` drops every gameobject row before reloading the world; plus one by-`template_entry` lookup (an entry-keyed find, not a spatial query — no index on that column)"),
+        ("module/src/gameobject.rs", 2, "`import_gameobjects` drops every gameobject row before reloading the world; `debug_pick_lock_entry` finds any spawn of one entry"),
         ("module/src/package_import/creatures.rs", 1, "a Package Delta apply clears the whole Package creature range before it writes, so a Package that left the enabled set takes its spawns with it — realm-wide reconciliation, and the band has no index"),
         ("module/src/package_import/gameobjects.rs", 1, "the same whole-band clear for the Package gameobject range"),
         ("module/src/instance.rs", 7, "instance population spawn/teardown + the reaper's occupied-instance census — classifying every partition at once is the job"),
         ("module/src/operator_content.rs", 2, "Operator Spawn Range high-water marks over spawn and gameobject rows when allocating a spawn identifier, not live-world reads"),
         ("module/src/encounter.rs", 2, "guid high-water marks over spawn/gameobject TEMPLATE rows when allocating a wave guid, not live-world reads"),
-        ("module/src/creatures/pet.rs", 1, "`nearest_hostile_near` — KNOWN DEBT, a textbook `entities_near` radius search kept only because pets are rare (one per online warlock)"),
+        ("module/src/creatures/pet.rs", 1, "`nearest_hostile_near` scans the map for one pet's target; pets are rare (one per online warlock)"),
         ("packages/deadmines/src/choreography.rs", 1, "single instance-scoped boss-liveness check inside one encounter"),
-        ("module/src/spell/cast/targeting.rs", 1, "AoE/chain target resolution by full-iter + squared distance; a textbook `helpers::entities_near` call (perf-catalog Tier 1)"),
+        ("module/src/spell/cast/targeting.rs", 1, "AoE/chain target resolution by full-iter + squared distance"),
     ];
 
     fn opens_whole_table_read(content: &str, byte_idx: usize) -> bool {
@@ -1170,15 +999,7 @@ mod partition_discipline_tripwire {
 
         assert!(
             violations.is_empty(),
-            "Invariant: no whole-table scan of a spatial table outside the partition-scoped \
-             helpers.\nraw spatial-table scan(s) over budget:\n  {}\n\n\
-             A whole-table `.iter()` over a spatial table is not shardable: after a region or continent split it silently sees only the caller's own shard. Use \
-             `crate::helpers::entities_near(ctx, map_id, instance_id, x, y, radius)` for a radius \
-             search (grid-indexed, `(map_id, instance_id)`-scoped) and \
-             `crate::helpers::in_same_partition(&e, map_id, instance_id)` to test partition \
-             membership. If the scan is genuinely realm-wide or partition-managing, raise that \
-             file's budget in `WHITELIST` (module/src/tripwires.rs) WITH a one-line justification. \
-             Whitelisted today: {} scan(s) across {} file(s).",
+            "whole-table scan(s) of a spatial table over budget:\n  {}\nUse `helpers::entities_near` or `helpers::in_same_partition`, or raise the file's `WHITELIST` budget with a reason ({} scan(s) across {} file(s) today).",
             violations.join("\n  "),
             WHITELIST.iter().map(|(_, n, _)| n).sum::<usize>(),
             WHITELIST.len(),
@@ -1206,173 +1027,6 @@ mod partition_discipline_tripwire {
             stale.join("\n  ")
         );
     }
-
-    const SHARD_ID_OWNERS: &[&str] = &["module/src/region.rs", "module/src/load.rs"];
-
-    const SHARD_ID_FORMS: &[&str] = &[
-        "game_region_assignment",
-        ".shard",
-        "RegionAssignment",
-        "game_shard_load",
-        "ShardLoad",
-    ];
-
-    fn shard_id_reads(content: &str) -> Vec<(usize, &'static str)> {
-        let mut out = Vec::new();
-        for form in SHARD_ID_FORMS {
-            for (idx, _) in content.match_indices(form) {
-                if on_comment_line(content, idx) {
-                    continue;
-                }
-                let after_ok = content[idx + form.len()..]
-                    .chars()
-                    .next()
-                    .map(|c| !(c.is_alphanumeric() || c == '_'))
-                    .unwrap_or(true);
-                if after_ok {
-                    out.push((line_of(content, idx), *form));
-                }
-            }
-        }
-        out.sort();
-        out
-    }
-
-    fn shard_id_reads_in_file(path: &str, content: &str) -> Vec<(usize, &'static str)> {
-        if !matches!(path, "module/src/lib.rs" | "module/src/tables.rs") {
-            return shard_id_reads(content);
-        }
-        let code = super::character_owned_tripwire::production_code(content);
-        let mut masked = code.as_bytes().to_vec();
-        let mut depth = 0usize;
-        let mut i = 0;
-        while i < code.len() {
-            if depth == 0 && code[i..].starts_with("pub use ") {
-                if let Some(end) = code[i..].find(';').map(|end| i + end + 1) {
-                    let declaration = &code[i + 8..end - 1];
-                    let tokens: Vec<_> = declaration
-                        .split(|c: char| !c.is_alphanumeric() && c != '_')
-                        .filter(|token| !token.is_empty())
-                        .collect();
-                    if matches!(tokens.first(), Some(&"crate" | &"tables"))
-                        && !tokens.contains(&"as")
-                        && !declaration.contains('*')
-                    {
-                        for byte in &mut masked[i..end] {
-                            if *byte != b'\n' {
-                                *byte = b' ';
-                            }
-                        }
-                        i = end;
-                        continue;
-                    }
-                }
-            }
-            match code.as_bytes()[i] {
-                b'{' => depth += 1,
-                b'}' => depth = depth.saturating_sub(1),
-                _ => {}
-            }
-            i += code[i..].chars().next().unwrap().len_utf8();
-        }
-        shard_id_reads(std::str::from_utf8(&masked).unwrap())
-    }
-
-    #[test]
-    fn table_catalog_reexports_do_not_hide_shard_reads() {
-        let source = "pub use crate::region::{game_region_assignment, RegionAssignment};\n\
-                      fn f(row: Row) { let RegionAssignment { shard, .. } = row; row.shard; }\n";
-        for catalog in ["module/src/lib.rs", "module/src/tables.rs"] {
-            assert_eq!(
-                shard_id_reads_in_file(catalog, source),
-                vec![(2, ".shard"), (2, "RegionAssignment")]
-            );
-            for declaration in [
-                "pub use crate::region::RegionAssignment as Assignment;",
-                "fn f() { pub use crate::region::RegionAssignment; }",
-            ] {
-                assert_eq!(
-                    shard_id_reads_in_file(catalog, declaration),
-                    vec![(1, "RegionAssignment")]
-                );
-            }
-        }
-        assert_eq!(
-            shard_id_reads_in_file("module/src/quest.rs", source),
-            vec![
-                (1, "RegionAssignment"),
-                (1, "game_region_assignment"),
-                (2, ".shard"),
-                (2, "RegionAssignment"),
-            ]
-        );
-    }
-
-    #[test]
-    fn the_scan_finds_a_shard_field_read_but_not_prose_or_longer_names() {
-        let src = "fn f(ctx: &ReducerContext, row: Row) {\n    if row.shard == DB {}\n    \
-                   // row.shard is prose\n    let name = row.shard_name;\n    \
-                   let loc = ctx.db.game_character_shard();\n}\n";
-        assert_eq!(shard_id_reads(src), vec![(2, ".shard")]);
-    }
-
-    fn shard_id_scanned_files() -> Vec<std::path::PathBuf> {
-        let mut files = super::character_owned_tripwire::scanned_files();
-        let shared = repo_root().join("crates/lyracore-shared/src");
-        if shared.is_dir() {
-            super::character_owned_tripwire::collect_rs_files(&shared, &mut files);
-        }
-        files
-    }
-
-    #[test]
-    fn no_module_game_logic_reads_a_shard_id() {
-        let root = repo_root();
-        let mut violations = Vec::new();
-        for file in shard_id_scanned_files() {
-            if file.file_name().and_then(|n| n.to_str()) == Some("tripwires.rs") {
-                continue;
-            }
-            let rel = file
-                .strip_prefix(&root)
-                .unwrap_or(&file)
-                .to_string_lossy()
-                .replace('\\', "/");
-            if SHARD_ID_OWNERS.contains(&rel.as_str()) {
-                continue;
-            }
-            let content =
-                std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("cannot read {rel}: {e}"));
-            for (line, form) in shard_id_reads_in_file(&rel, &content) {
-                violations.push(format!("{rel}:{line} names a shard id (`{form}`)"));
-            }
-        }
-        assert!(
-            violations.is_empty(),
-            "Invariant: no Module game logic reads a shard id.\n\
-             module code outside {SHARD_ID_OWNERS:?} reads a SHARD ID:\n  {}\n\n\
-             A Realm Shard and a World Shard split a Realm by role, never by region. Partition gameplay \
-             by map and Instance through \
-             `crate::helpers`, and use indexed cells for nearby reads.",
-            violations.join("\n  ")
-        );
-    }
-
-    #[test]
-    fn shard_id_owner_list_has_no_stale_entries() {
-        let root = repo_root();
-        let stale: Vec<&str> = SHARD_ID_OWNERS
-            .iter()
-            .copied()
-            .filter(|rel| {
-                std::fs::read_to_string(root.join(rel)).is_ok_and(|c| shard_id_reads(&c).is_empty())
-            })
-            .collect();
-        assert!(
-            stale.is_empty(),
-            "SHARD_ID_OWNERS names file(s) that no longer touch a shard id — remove them: {stale:?}"
-        );
-    }
 }
 
 #[cfg(test)]
@@ -1383,9 +1037,10 @@ mod character_fence_tripwire {
         ("module/src/native/directory.rs", 1, "FENCED: the Operator directory census skips Characters behind the Transfer Gate"),
         ("module/src/helpers.rs", 2, "`character_by_guid` and `characters_by_name` apply the Transfer Gate to raw Character reads"),
         ("module/src/transfer/mod.rs", 4, "Transfer reads the fenced Character for export, destination materialization, durability checks, and the in-transit Instance census."),
-        ("module/src/world.rs", 8, "player_login carries its own `is_in_transit` fence (the re-materialisation chokepoint, 2 reads); teleport_player, set_home, persist_entity and is_gm_character take a guid already resolved through a fenced entity (persist_entity is called BY begin_transfer); debug_delete_character keeps a raw existence probe so a missing character stays a no-op while an in-transit one is REFUSED, with the fence on the same expression; cascade_delete_character's raw row DELETE is the sweep that probe guards. `recall_to_home` is now FENCED (character_by_guid) — it was the one teleport_player caller needing no live entity"),
+        ("module/src/world.rs", 2, "`teleport` and `is_gm_character` take a guid already resolved through a fenced live entity"),
+        ("module/src/character.rs", 9, "World entry carries its own `is_in_transit` fence (2 reads); `set_home` and `persist_entity` take a guid resolved through a fenced entity (`begin_transfer` calls `persist_entity`); `debug_delete_character` keeps a raw existence probe so a missing Character stays a no-op while an in-transit one is refused, and `cascade_delete_character`'s raw delete is the sweep that probe guards; creation checks name uniqueness; the deletion Gate distinguishes absence, ownership and the Transfer fence"),
         ("module/src/group.rs", 2, "Group events and departure read member identity while changing membership."),
-        ("module/src/auth.rs", 5, "Character creation checks name uniqueness and initializes the guid allocator. Character deletion distinguishes absence, ownership, and the Transfer fence. `adopt_character_gm_levels` is the Realm-wide repair scan that moves legacy Character GM levels onto Accounts."),
+        ("module/src/auth.rs", 2, "the guid allocator seeds from every Character guid; `adopt_character_gm_levels` is the Realm-wide repair scan that moves legacy Character GM levels onto Accounts"),
         ("module/src/items/ops.rs", 2, "race/class reads for the starter loadout and the mana-class gate — no write to the character"),
         ("module/src/spell/cast/targeting.rs", 1, "caster NAME for the resurrect prompt — no write"),
         ("module/src/reputation.rs", 1, "owner_identity fallback for RLS visibility of a new rep row — no write to the character"),
@@ -1489,21 +1144,7 @@ mod character_fence_tripwire {
 
         assert!(
             violations.is_empty(),
-            "Invariant: every Character lookup goes through the transfer fence.\n\
-             raw `game_character` lookup(s) outside the by-guid chokepoint:\n  {}\n\n\
-             A reducer that reaches a character by guid or by name passes NONE of the escrowed-\
-             transfer chokepoints, so cross-database it can write to a source \
-             copy the destination already serialized past — a lost write. Route the READ through \
-             `crate::helpers::character_by_guid(ctx, guid)` or \
-             `crate::helpers::character_by_name(ctx, name)`; both read an in-transit character as \
-             absent, so your existing not-found arm fires and no new error string reaches the \
-             client. If refusal is the WRONG answer for your path (it would drop a third party's \
-             value, or the field is connection-derived and regenerated at the destination), pick the \
-             DEFER or REGENERATE verdict instead and add the site WITH its verdict — to `WHITELIST` \
-             (module/src/tripwires.rs) for a Core file, or to `PACKAGE_FILE_BUDGET` for a Package \
-             file — see the table in `module/src/transfer/mod.rs`'s module doc. Whitelisted today: \
-             {} Core lookup(s) across {} Core file(s), plus {} Package lookup(s) across {} Package \
-             file shape(s).",
+            "raw `game_character` lookup(s) outside the Transfer fence:\n  {}\nRead through `helpers::character_by_guid` or `character_by_name`, or add the site with its reason to `WHITELIST` or `PACKAGE_FILE_BUDGET` ({} Core lookup(s) across {} Core file(s), {} Package lookup(s) across {} Package file shape(s) today).",
             violations.join("\n  "),
             WHITELIST.iter().map(|(_, n, _)| n).sum::<usize>(),
             WHITELIST.len(),
@@ -1534,33 +1175,61 @@ mod character_fence_tripwire {
 
 #[cfg(test)]
 mod gc_reap_tripwire {
+    use lyracore_test_support::source_scan::code_only;
+
     const EXEMPT_ACCESSORS: &[&str] = &[
-        "game_creature_move_event",
-        "game_channel_event",
         "game_mail",
         // Keep source Intents until their Transfer completes.
         "game_bot_transfer_intent",
+        // Nothing writes these; each shares its row type with its `_live` event table.
+        "game_chat_event",
+        "game_combat_event",
+        "game_emote_event",
+        "game_spell_cast_event",
+        "game_spell_impact_event",
     ];
 
-    // Sweep functions gc.rs calls that delete the table's rows in their own module.
-    const DELEGATED_REAPS: &[(&str, &str)] =
-        &[("game_trade_session", "crate::trade::cancel_trade_for(")];
+    // Sweep helpers that delete the table's rows in the owner's module.
+    const DELEGATED_REAPS: &[(&str, &str)] = &[("game_trade_session", "cancel_trade_for(")];
 
-    fn gc_reaps(gc_code: &str, accessor: &str) -> bool {
-        if gc_code.contains(&format!("reap!({accessor})")) {
+    fn sweep_body(code: &str) -> &str {
+        let Some(start) = code.find("fn sweep_expired(") else {
+            return "";
+        };
+        let Some(open) = code[start..].find('{').map(|i| start + i) else {
+            return "";
+        };
+        let mut depth = 0usize;
+        for (offset, byte) in code[open..].bytes().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &code[open..open + offset + 1];
+                    }
+                }
+                _ => {}
+            }
+        }
+        &code[open..]
+    }
+
+    fn sweep_reaps(sweep: &str, accessor: &str) -> bool {
+        if sweep.contains(&format!("reap_expired!(ctx, {accessor},")) {
             return true;
         }
         if DELEGATED_REAPS
             .iter()
-            .any(|&(table, sweep)| table == accessor && gc_code.contains(sweep))
+            .any(|&(table, helper)| table == accessor && sweep.contains(helper))
         {
             return true;
         }
         let handle = format!("ctx.db.{accessor}()");
-        gc_code.match_indices(&handle).any(|(at, _)| {
-            let line_start = gc_code[..at].rfind('\n').map_or(0, |i| i + 1);
-            let after = &gc_code[at + handle.len()..];
-            let binding = gc_code[line_start..at]
+        sweep.match_indices(&handle).any(|(at, _)| {
+            let line_start = sweep[..at].rfind('\n').map_or(0, |i| i + 1);
+            let after = &sweep[at + handle.len()..];
+            let binding = sweep[line_start..at]
                 .trim()
                 .strip_prefix("let ")
                 .and_then(|rest| rest.strip_suffix('='))
@@ -1600,96 +1269,145 @@ mod gc_reap_tripwire {
                 || fields.contains("pub created_at: spacetimedb::Timestamp,"))
     }
 
-    fn unreaped_tables(content: &str, gc_src: &str) -> Vec<String> {
-        let gc_code = super::character_owned_tripwire::production_code(gc_src);
+    fn module_path(relative: &str) -> String {
+        let path = relative
+            .strip_prefix("module/src/")
+            .unwrap_or(relative)
+            .trim_end_matches(".rs");
+        let path = path.strip_suffix("/mod").unwrap_or(path);
+        format!("crate::{}", path.replace('/', "::"))
+    }
+
+    fn unswept_tables(content: &str, module: &str, gc_src: &str) -> Vec<String> {
+        let code = code_only(content);
+        let gc_code = code_only(gc_src);
+        let called = gc_code.contains(&format!("{module}::sweep_expired(ctx)"));
+        let sweep = sweep_body(&code);
         super::character_owned_tripwire::extract_tables(content)
             .into_iter()
             .filter(|(accessor, fields, is_event)| {
                 !is_event
                     && is_ttl_shaped(fields)
                     && !EXEMPT_ACCESSORS.contains(&accessor.as_str())
-                    && !gc_reaps(&gc_code, accessor)
+                    && !(called && sweep_reaps(sweep, accessor))
             })
             .map(|(accessor, _, _)| accessor)
             .collect()
     }
 
     #[test]
-    fn every_ttl_shaped_table_is_reaped_by_gc_rs() {
+    fn every_ttl_shaped_table_is_reaped_by_its_owner_sweep() {
         let gc_src = crate::test_scan::read_scanned("module/src/gc.rs")
             .expect("module/src/gc.rs ships in every checkout — module/ is never optional");
+        let root = crate::test_scan::repo_root();
 
         let mut missing = Vec::new();
         for file in super::character_owned_tripwire::scanned_files() {
-            if file.file_name().and_then(|n| n.to_str()) == Some("gc.rs") {
+            if file.file_name().and_then(|n| n.to_str()) == Some("retired.rs") {
                 continue;
             }
+            let relative = file
+                .strip_prefix(&root)
+                .unwrap_or(&file)
+                .to_string_lossy()
+                .replace('\\', "/");
             let content = std::fs::read_to_string(&file)
                 .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
-            for accessor in unreaped_tables(&content, &gc_src) {
-                missing.push(format!("{accessor} (in {})", file.display()));
+            for accessor in unswept_tables(&content, &module_path(&relative), &gc_src) {
+                missing.push(format!("{accessor} (in {relative})"));
             }
         }
 
         assert!(
             missing.is_empty(),
-            "Invariant: every ordinary TTL-shaped event table is reaped in gc.rs.\n\
-             table(s) shaped `id: u64` PK + `created_at: Timestamp` — the TTL-reaped convention \
-             every existing short-lived event table uses — with no reap in gc.rs: {missing:?}\n\n\
-             A short-lived event table only stops growing without bound if something deletes its \
-             rows. Add `reap!(<accessor>);` to `reap_movement_events` in `gc.rs` (the 1s \
-             `EVENT_TTL_MICROS` default), or — if the table's lifecycle needs its own policy, like \
-             `game_group_invite`'s 2-minute dialog window or `game_corpse`'s decay-to-bones — a \
-             dedicated block or sweep fn called from there (see `corpse::sweep_corpse_decay` for the \
-             pattern: gc.rs calls it, it owns the policy). OR add the accessor to `EXEMPT_ACCESSORS` \
-             above with a comment justifying why it is intentionally unreaped."
+            "TTL-shaped table(s) without a `reap_expired!` in their module's `sweep_expired` called from gc.rs: {missing:?}; or list them in `EXEMPT_ACCESSORS` with a reason"
+        );
+    }
+
+    const FIXTURE_TABLE: &str = "#[table(accessor = game_fixture_event)]\n\
+                                 pub struct FixtureEvent {\n    #[primary_key]\n    pub id: u64,\n    \
+                                 pub created_at: Timestamp,\n}\n";
+    const FIXTURE_GC: &str = "fn reap(ctx: &ReducerContext) {\n    \
+                              crate::fixture::sweep_expired(ctx);\n}\n";
+
+    fn swept_by(sweep: &str) -> String {
+        format!(
+            "{FIXTURE_TABLE}pub(crate) fn sweep_expired(ctx: &ReducerContext) {{\n{sweep}\n}}\n"
+        )
+    }
+
+    #[test]
+    fn the_module_path_names_the_declaring_module() {
+        assert_eq!(module_path("module/src/xp.rs"), "crate::xp");
+        assert_eq!(module_path("module/src/guild/mod.rs"), "crate::guild");
+        assert_eq!(
+            module_path("module/src/guild/membership.rs"),
+            "crate::guild::membership"
         );
     }
 
     #[test]
-    fn the_scan_flags_a_ttl_table_that_gc_only_mentions_in_a_comment() {
-        let table = "#[table(accessor = game_fixture_event)]\n\
-                     pub struct FixtureEvent {\n    #[primary_key]\n    pub id: u64,\n    \
-                     pub created_at: Timestamp,\n}\n";
-        let mentioned = "fn reap(ctx: &ReducerContext) {\n    // reap!(game_fixture_event);\n}\n";
+    fn the_scan_flags_a_ttl_table_without_a_sweep_or_a_gc_call() {
+        let reaped = swept_by("    crate::gc::reap_expired!(ctx, game_fixture_event, TTL);");
+        assert!(unswept_tables(&reaped, "crate::fixture", FIXTURE_GC).is_empty());
         assert_eq!(
-            unreaped_tables(table, mentioned),
+            unswept_tables(FIXTURE_TABLE, "crate::fixture", FIXTURE_GC),
             vec!["game_fixture_event"]
         );
-
-        let reaped = "fn reap(ctx: &ReducerContext) {\n    reap!(game_fixture_event);\n}\n";
-        assert!(unreaped_tables(table, reaped).is_empty());
+        assert_eq!(
+            unswept_tables(
+                &reaped,
+                "crate::fixture",
+                "fn reap(ctx: &ReducerContext) {}\n"
+            ),
+            vec!["game_fixture_event"]
+        );
+        let elsewhere = format!(
+            "{FIXTURE_TABLE}fn other(ctx: &ReducerContext) {{\n    \
+             crate::gc::reap_expired!(ctx, game_fixture_event, TTL);\n}}\n\
+             pub(crate) fn sweep_expired(ctx: &ReducerContext) {{}}\n"
+        );
+        assert_eq!(
+            unswept_tables(&elsewhere, "crate::fixture", FIXTURE_GC),
+            vec!["game_fixture_event"]
+        );
     }
 
     #[test]
-    fn the_scan_flags_a_ttl_table_that_gc_only_reads() {
-        let table = "#[table(accessor = game_fixture_event)]\n\
-                     pub struct FixtureEvent {\n    #[primary_key]\n    pub id: u64,\n    \
-                     pub created_at: Timestamp,\n}\n";
-        let read_only = "fn reap(ctx: &ReducerContext) {\n    \
-                         let t = ctx.db.game_fixture_event();\n    \
-                         let count = t.iter().count();\n    \
-                         let t = ctx.db.game_other_event();\n    \
-                         t.id().delete(1);\n}\n";
+    fn the_scan_flags_a_ttl_table_that_the_sweep_only_mentions_in_a_comment() {
+        let mentioned = swept_by("    // crate::gc::reap_expired!(ctx, game_fixture_event, TTL);");
         assert_eq!(
-            unreaped_tables(table, read_only),
+            unswept_tables(&mentioned, "crate::fixture", FIXTURE_GC),
             vec!["game_fixture_event"]
         );
-        let chained_read = "fn reap(ctx: &ReducerContext) {\n    \
-                            for row in ctx.db.game_fixture_event().iter() {}\n}\n";
+    }
+
+    #[test]
+    fn the_scan_flags_a_ttl_table_that_the_sweep_only_reads() {
+        let read_only = swept_by(
+            "    let t = ctx.db.game_fixture_event();\n    \
+             let count = t.iter().count();\n    \
+             let t = ctx.db.game_other_event();\n    \
+             t.id().delete(1);",
+        );
         assert_eq!(
-            unreaped_tables(table, chained_read),
+            unswept_tables(&read_only, "crate::fixture", FIXTURE_GC),
+            vec!["game_fixture_event"]
+        );
+        let chained_read = swept_by("    for row in ctx.db.game_fixture_event().iter() {}");
+        assert_eq!(
+            unswept_tables(&chained_read, "crate::fixture", FIXTURE_GC),
             vec!["game_fixture_event"]
         );
 
-        let bound = "fn reap(ctx: &ReducerContext) {\n    \
-                     let t = ctx.db.game_fixture_event();\n    \
-                     for id in stale {\n        t.id().delete(id);\n    }\n}\n";
-        assert!(unreaped_tables(table, bound).is_empty());
+        let bound = swept_by(
+            "    let t = ctx.db.game_fixture_event();\n    \
+             for id in stale {\n        t.id().delete(id);\n    }",
+        );
+        assert!(unswept_tables(&bound, "crate::fixture", FIXTURE_GC).is_empty());
 
-        let chained = "fn reap(ctx: &ReducerContext) {\n    \
-                       ctx.db.game_fixture_event().id().delete(1);\n}\n";
-        assert!(unreaped_tables(table, chained).is_empty());
+        let chained = swept_by("    ctx.db.game_fixture_event().id().delete(1);");
+        assert!(unswept_tables(&chained, "crate::fixture", FIXTURE_GC).is_empty());
     }
 
     #[test]
@@ -1704,10 +1422,13 @@ mod gc_reap_tripwire {
                 pub created_at: Timestamp,
             }
         "#;
-        assert_eq!(unreaped_tables(source, ""), ["game_legacy_event"]);
+        assert_eq!(
+            unswept_tables(source, "crate::fixture", ""),
+            ["game_legacy_event"]
+        );
         let ordinary = source.replace("public, event)", "public)");
         assert_eq!(
-            unreaped_tables(&ordinary, ""),
+            unswept_tables(&ordinary, "crate::fixture", ""),
             ["game_legacy_event", "game_native_event"]
         );
     }
@@ -1925,16 +1646,7 @@ pub(crate) mod grid_cell_tripwire {
 
         assert!(
             violations.is_empty(),
-            "Invariant: a grid-coordinate write also writes the packed `cell`.\n\
-             a `grid_x` write with no `cell` write beside it:\n  {}\n\n\
-             `cell` packs `(grid_x, grid_y)` into the one indexed value the AOI subscription probes \
-             by equality — it is what makes the box query index-served instead of a full partition \
-             scan. It is a plain column, so nothing updates it for you: write it in the SAME \
-             statement run that writes `grid_x`/`grid_y`, via \
-             `lyracore_shared::spatial::grid_cell_id(grid_x, grid_y)` (or `cell_id_at(x, y)` when \
-             you have the world position rather than the cell). A row whose `cell` disagrees with \
-             its grid columns is not merely slow — it is addressed to the WRONG CELL, so it is \
-             invisible to the players standing on it.",
+            "a `grid_x` write without a `cell` write beside it:\n  {}\nWrite `cell` with `grid_cell_id` in the same statement run.",
             violations.join("\n  ")
         );
     }
@@ -2039,8 +1751,8 @@ pub(crate) mod grid_cell_tripwire {
 pub(crate) mod grid_address_writes {
     use std::collections::BTreeSet;
 
-    use super::character_owned_tripwire::production_code;
     use crate::test_scan::line_of;
+    use lyracore_test_support::source_scan::code_only;
 
     /// Each function derives grid and cell from its row's position, or cell from its grid.
     const PLACEMENT_OPERATIONS: &[(&str, &str)] = &[
@@ -2050,7 +1762,7 @@ pub(crate) mod grid_address_writes {
         ("module/src/spell/tables.rs", "insert"),
         ("module/src/spell/tables.rs", "repair_cell"),
         ("module/src/creatures/tick/mod.rs", "repair_cell"),
-        ("module/src/package_import/gameobjects.rs", "stamp_cell"),
+        ("module/src/gameobject.rs", "stamp_cell"),
         ("module/src/debug/instance.rs", "debug_backfill_go_grid"),
         ("module/src/debug/mod.rs", "debug_backfill_cell_ids"),
     ];
@@ -2128,7 +1840,7 @@ pub(crate) mod grid_address_writes {
     }
 
     fn violations(path: &str, source: &str) -> Vec<String> {
-        let code = production_code(source);
+        let code = code_only(source);
         grid_address_writes(&code)
             .into_iter()
             .filter(|(_, function)| {
@@ -2143,10 +1855,8 @@ pub(crate) mod grid_address_writes {
     #[test]
     fn only_placement_operations_write_a_grid_address() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut files = Vec::new();
-        super::character_owned_tripwire::collect_rs_files(&src, &mut files);
         let mut found = Vec::new();
-        for file in files {
+        for file in super::character_owned_tripwire::rust_files(&src) {
             let path = file.display().to_string().replace('\\', "/");
             if path.ends_with("module/src/tripwires.rs") || is_test_only_file(&file) {
                 continue;
@@ -2157,8 +1867,7 @@ pub(crate) mod grid_address_writes {
         }
         assert!(
             found.is_empty(),
-            "`grid_x`, `grid_y` and `cell` must agree with the row's position, so only a placement \
-             operation writes them. Call `WorldEntity::place` instead:\n  {}",
+            "only a placement operation writes `grid_x`, `grid_y` and `cell`; call `WorldEntity::place`:\n  {}",
             found.join("\n  ")
         );
     }
@@ -2199,7 +1908,7 @@ pub(crate) mod grid_address_writes {
 
 #[cfg(test)]
 pub(crate) mod package_name_tripwire {
-    use std::path::{Path, PathBuf};
+    use lyracore_test_support::source_scan::files_under;
 
     const OFFICIAL_PACKAGES: &[&str] = &["playerbots"];
 
@@ -2225,26 +1934,12 @@ pub(crate) mod package_name_tripwire {
         found
     }
 
-    fn collect_files(dir: &Path, out: &mut Vec<PathBuf>) {
-        let entries =
-            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("cannot read {}: {e}", dir.display()));
-        for entry in entries {
-            let path = entry.expect("readable dir entry").path();
-            if path.is_dir() {
-                collect_files(&path, out);
-            } else {
-                out.push(path);
-            }
-        }
-    }
-
     #[test]
     fn core_source_names_no_official_package() {
         let root = crate::test_scan::repo_root();
-        let mut files = Vec::new();
-        for tree in CORE_TREES {
-            collect_files(&root.join(tree), &mut files);
-        }
+        let files = CORE_TREES
+            .iter()
+            .flat_map(|tree| files_under(&root.join(tree), &[], &|_| true));
         let mut found = Vec::new();
         for file in files {
             let rel = file
@@ -2262,8 +1957,7 @@ pub(crate) mod package_name_tripwire {
         }
         assert!(
             found.is_empty(),
-            "Invariant: Core source names no official Package.\n\
-             Core source names an official Package:\n  {}\n\nName the capability instead.",
+            "Core source names an official Package; name the capability instead:\n  {}",
             found.join("\n  ")
         );
     }
@@ -2278,5 +1972,365 @@ pub(crate) mod package_name_tripwire {
         assert!(!is_exempt("native-host/src/feed.rs"));
         assert!(is_exempt("module/src/group_tests.rs"));
         assert!(is_exempt("module/tests/package_account.rs"));
+    }
+}
+
+#[cfg(test)]
+mod creature_teardown_architecture_test {
+    use super::character_owned_tripwire::scanned_files;
+    use crate::test_scan::repo_root;
+    use lyracore_test_support::source_scan::code_only;
+
+    const TEARDOWN: (&str, &str) = (
+        "module/src/creatures/tick/lifecycle.rs",
+        "despawn_creature_entity",
+    );
+
+    /// Each table a creature keeps for its life, and the call path from the teardown to the
+    /// function that deletes its row. An empty path means the teardown deletes the row itself.
+    const CLEARED: &[(&str, &[(&str, &str)])] = &[
+        ("game_creature_spline", &[]),
+        (
+            "game_encounter_equip",
+            &[("module/src/encounter.rs", "forget_equipment")],
+        ),
+        (
+            "game_entity_motion",
+            &[("module/src/world/simulation.rs", "delete")],
+        ),
+        (
+            "game_world_entity",
+            &[("module/src/world/simulation.rs", "delete")],
+        ),
+        (
+            "game_entity_motion_pending",
+            &[
+                ("module/src/world/simulation.rs", "delete"),
+                ("module/src/motion.rs", "drop_pending"),
+            ],
+        ),
+        (
+            "game_melee_attack",
+            &[
+                ("module/src/combat/engage.rs", "disengage"),
+                ("module/src/combat/engage.rs", "disengage_with_combat_check"),
+            ],
+        ),
+        (
+            "game_threat",
+            &[
+                ("module/src/combat/engage.rs", "disengage"),
+                ("module/src/combat/engage.rs", "disengage_with_combat_check"),
+            ],
+        ),
+        (
+            "game_taunt_lock",
+            &[("module/src/threat.rs", "clear_taunt_lock")],
+        ),
+        (
+            "game_creature_lethal_damage_floor",
+            &[("module/src/combat/damage.rs", "clear_lethal_damage_floor")],
+        ),
+        (
+            "game_creature_ai_relay_arrival",
+            &[(
+                "module/src/creatures/eventai/relay.rs",
+                "cancel_relay_runs_for_source",
+            )],
+        ),
+        (
+            "game_creature_ai_relay_run",
+            &[
+                (
+                    "module/src/creatures/eventai/relay.rs",
+                    "cancel_relay_runs_for_source",
+                ),
+                ("module/src/creatures/eventai/relay.rs", "cancel_run_tree"),
+            ],
+        ),
+        (
+            "game_creature_presentation",
+            &[
+                (
+                    "module/src/creatures/eventai/edges.rs",
+                    "reset_creature_lifecycle",
+                ),
+                (
+                    "module/src/creatures/presentation.rs",
+                    "clear_eventai_presentation",
+                ),
+                ("module/src/creatures/presentation.rs", "clear_if"),
+            ],
+        ),
+        (
+            "game_creature_relay_temporary_faction",
+            &[
+                (
+                    "module/src/creatures/eventai/edges.rs",
+                    "reset_creature_lifecycle",
+                ),
+                (
+                    "module/src/creatures/presentation.rs",
+                    "clear_eventai_presentation",
+                ),
+            ],
+        ),
+        (
+            "game_creature_distraction",
+            &[
+                (
+                    "module/src/creatures/eventai/edges.rs",
+                    "reset_creature_lifecycle",
+                ),
+                ("module/src/creatures/distraction.rs", "clear"),
+            ],
+        ),
+        (
+            "game_creature_ai_movement_intent",
+            &[
+                (
+                    "module/src/creatures/eventai/edges.rs",
+                    "reset_creature_lifecycle",
+                ),
+                ("module/src/creatures/eventai/movement.rs", "drop_lifecycle"),
+                ("module/src/creatures/eventai/movement.rs", "reset_revision"),
+            ],
+        ),
+        (
+            "game_creature_ai_forced_despawn",
+            &[
+                (
+                    "module/src/creatures/eventai/edges.rs",
+                    "reset_creature_lifecycle",
+                ),
+                (
+                    "module/src/creatures/eventai/mobility.rs",
+                    "drop_forced_despawn",
+                ),
+            ],
+        ),
+        (
+            "game_creature_ai_returning_home",
+            &[(
+                "module/src/creatures/eventai/edges.rs",
+                "reset_creature_lifecycle",
+            )],
+        ),
+        (
+            "game_creature_ai_rule_state",
+            &[(
+                "module/src/creatures/eventai/edges.rs",
+                "reset_creature_lifecycle",
+            )],
+        ),
+        (
+            "game_creature_ai_state",
+            &[(
+                "module/src/creatures/eventai/edges.rs",
+                "reset_creature_lifecycle",
+            )],
+        ),
+        (
+            "game_creature_ai_summon_expiry",
+            &[(
+                "module/src/creatures/eventai/mobility.rs",
+                "drop_summon_expiry",
+            )],
+        ),
+        (
+            "game_creature_ai_summon_origin",
+            &[(
+                "module/src/creatures/eventai/mobility.rs",
+                "drop_summon_expiry",
+            )],
+        ),
+        (
+            "game_creature_gossip_menu_override",
+            &[(
+                "module/src/creatures/spawn.rs",
+                "clear_gossip_menu_override",
+            )],
+        ),
+        (
+            "game_live_pet_kind",
+            &[("module/src/creatures/hunter_pet.rs", "clear_live_pet_kind")],
+        ),
+        (
+            "game_creature_quest_tap",
+            &[("module/src/loot/tag.rs", "clear")],
+        ),
+        (
+            "game_creature_quest_tap_member",
+            &[("module/src/loot/tag.rs", "clear")],
+        ),
+        (
+            "game_creature_loot_tag_group",
+            &[("module/src/loot/tag.rs", "clear")],
+        ),
+        (
+            "game_corpse_loot",
+            &[("module/src/loot/mod.rs", "reap_corpse_loot_family")],
+        ),
+        (
+            "game_corpse_loot_eligible",
+            &[("module/src/loot/mod.rs", "reap_corpse_loot_family")],
+        ),
+    ];
+
+    const KEPT: &[(&str, &str)] = &[(
+        "game_creature_ai_reset_deferral",
+        "death dispatch marker, removed when the dispatch finishes",
+    )];
+
+    fn body<'a>(code: &'a str, function: &str) -> Option<&'a str> {
+        let start = code.find(&format!("fn {function}("))?;
+        let open = start + code[start..].find('{')?;
+        let mut depth = 0usize;
+        for (offset, c) in code[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(&code[open..open + offset + 1]);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn calls(body: &str, function: &str) -> bool {
+        body.match_indices(&format!("{function}(")).any(|(at, _)| {
+            body[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'))
+        })
+    }
+
+    fn function_body(file: &str, function: &str) -> String {
+        let code = code_only(
+            &std::fs::read_to_string(repo_root().join(file))
+                .unwrap_or_else(|e| panic!("cannot read {file}: {e}")),
+        );
+        body(&code, function)
+            .unwrap_or_else(|| panic!("{file} has no fn {function}"))
+            .to_string()
+    }
+
+    fn creature_keyed(code: &str) -> Vec<String> {
+        let mut tables = Vec::new();
+        for (at, _) in code.match_indices("#[table(") {
+            let declaration = &code[at..];
+            let Some(accessor) = declaration["#[table(".len()..]
+                .trim_start()
+                .strip_prefix("accessor")
+                .and_then(|rest| rest.trim_start().strip_prefix('='))
+                .and_then(|rest| {
+                    rest.trim_start()
+                        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .next()
+                })
+            else {
+                continue;
+            };
+            let Some(fields) = declaration
+                .find("pub struct")
+                .and_then(|s| declaration[s..].find('{').map(|o| s + o))
+            else {
+                continue;
+            };
+            let struct_body = &declaration[fields..];
+            let struct_body = &struct_body[..struct_body.find('}').unwrap_or(struct_body.len())];
+            let primary = struct_body
+                .split("#[primary_key]")
+                .nth(1)
+                .and_then(|rest| rest.split("pub ").nth(1))
+                .and_then(|field| field.split(':').next())
+                .unwrap_or_default();
+            if matches!(primary, "creature_guid" | "pet_guid") {
+                tables.push(accessor.to_string());
+            }
+        }
+        tables
+    }
+
+    fn creature_keyed_tables() -> Vec<String> {
+        scanned_files()
+            .iter()
+            .flat_map(|file| {
+                creature_keyed(&code_only(
+                    &std::fs::read_to_string(file).expect("readable source"),
+                ))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn despawn_clears_every_row_a_creature_keeps_for_its_life() {
+        let teardown = function_body(TEARDOWN.0, TEARDOWN.1);
+        let mut missing = Vec::new();
+        for (table, path) in CLEARED {
+            let mut caller = teardown.clone();
+            for (file, function) in path.iter() {
+                if !calls(&caller, function) {
+                    missing.push(format!("{table}: no call to {function}"));
+                }
+                caller = function_body(file, function);
+            }
+            if !caller.contains(&format!("{table}()")) {
+                missing.push(format!("{table}: the last step never names the table"));
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "despawn_creature_entity lost a creature row: {}",
+            missing.join(", ")
+        );
+    }
+
+    #[test]
+    fn every_creature_keyed_table_is_cleared_or_kept_on_purpose() {
+        let unlisted: Vec<String> = creature_keyed_tables()
+            .into_iter()
+            .filter(|table| {
+                !CLEARED.iter().any(|(listed, _)| listed == table)
+                    && !KEPT.iter().any(|(listed, _)| listed == table)
+            })
+            .collect();
+        assert!(
+            unlisted.is_empty(),
+            "creature-keyed tables missing from the teardown inventory: {}",
+            unlisted.join(", ")
+        );
+    }
+
+    #[test]
+    fn the_scan_finds_creature_keyed_tables_and_skips_others() {
+        let source = r#"
+            #[table(accessor = game_kept, public)]
+            pub struct Kept {
+                #[primary_key]
+                pub creature_guid: u64,
+            }
+            #[table(accessor = game_other)]
+            pub struct Other {
+                #[primary_key]
+                #[auto_inc]
+                pub id: u64,
+                pub creature_guid: u64,
+            }
+            fn teardown(ctx: &ReducerContext) {
+                crate::creatures::clear_kept(ctx, guid);
+                ctx.db.game_kept().creature_guid().delete(guid);
+            }
+        "#;
+        assert_eq!(creature_keyed(source), ["game_kept"]);
+        let teardown = body(source, "teardown").expect("teardown body");
+        assert!(calls(teardown, "clear_kept"));
+        assert!(!calls(teardown, "kept"));
+        assert!(teardown.contains("game_kept()"));
     }
 }

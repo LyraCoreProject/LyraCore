@@ -5,7 +5,6 @@ use lyracore_protocol::{
     messages::vanilla::{
         opcodes::ServerOpcodeMessage, SMSG_CHAT_PLAYER_NOT_FOUND, SMSG_NOTIFICATION,
     },
-    who::WhoFilter,
     world::Packet,
 };
 use lyracore_shared::chat::chat_kind;
@@ -18,6 +17,7 @@ use super::{
     directory::{self, game_character_directory},
     game_native_player, game_native_world_connection,
     realm_shard::game_native_away,
+    who::WhoFilter,
     NativeActive, NativeWorldState, Rollback,
 };
 use crate::{
@@ -205,6 +205,7 @@ pub struct RealmQuery {
     pub remaining: Vec<Identity>,
     pub answers: Vec<WorldAnswer>,
 }
+crate::virtual_clock_exempt!(game_realm_query);
 
 #[derive(SpacetimeType, Clone)]
 pub struct WorldAnswer {
@@ -265,7 +266,7 @@ fn candidate(
     guid: u64,
     view: codec::WhoPlayerView,
 ) -> Option<OnlineCharacter> {
-    let player = ctx.db.game_native_player().character_guid().find(guid)?;
+    let player = super::world_session(ctx, guid)?;
     if super::transfer::pending(ctx, player.connection_id) {
         return None;
     }
@@ -480,7 +481,7 @@ fn unavailable() -> ServerOpcodeMessage {
 }
 
 fn packet(message: ServerOpcodeMessage) -> (u16, Vec<u8>) {
-    let packet = lyracore_protocol::world::encode(message).expect("bounded social reply encodes");
+    let packet = super::bounded(message);
     (packet.opcode, packet.body)
 }
 
@@ -551,6 +552,7 @@ pub struct RealmDelivery {
     pub scheduled_at: ScheduleAt,
     pub delivery: Delivery,
 }
+crate::virtual_clock_exempt!(game_realm_delivery);
 
 #[table(accessor = game_world_delivery, outbox(remote::idc_world_delivery))]
 pub struct WorldDelivery {
@@ -571,6 +573,17 @@ pub struct RealmDeliveryRetry {
     pub scheduled_at: ScheduleAt,
     pub delivery_id: u64,
 }
+
+crate::outside_table_catalog!(
+    game_realm_communication_request,
+    game_realm_query,
+    game_world_query,
+    game_world_query_answer,
+    game_realm_delivery,
+    game_world_delivery,
+    game_realm_delivery_retry
+);
+crate::virtual_clock_exempt!(game_realm_delivery_retry);
 
 pub(super) fn deliver(
     ctx: &ReducerContext,

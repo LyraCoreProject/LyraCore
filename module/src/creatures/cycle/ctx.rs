@@ -6,17 +6,18 @@ use spacetimedb::{ReducerContext, Table};
 use super::{
     run_cycle, AggroTarget, CastSink, CastWhen, Caster, Combatant, CreatureWorld, CycleOutcome,
     EngageSink, Engagement, FearSink, Fighter, Gait, Home, IdleCreature, IdleSink, Leg,
-    LegInFlight, MotionSink, Panicked, Pet, PetCommand, PetOwner, PetReact, PetSink, Point, Pull,
+    LegInFlight, MotionSink, Panicked, Pet, PetOrder, PetOwner, PetReact, PetSink, Point, Pull,
     Pursuit, PursuitSink, Recovering, RegenSink, RoutSink, Router, Sensor, SpellOption, Stop,
     ThreatSink, TickContext, Waypoint,
 };
-use crate::creatures::ai::TickScope;
 use crate::creatures::cast_condition;
 use crate::creatures::distraction;
 use crate::creatures::eventai::movement::{AuthoredIdleMovement, AuthoredWalkingMode};
 use crate::creatures::eventai::{self, EventAiRequest};
+use crate::creatures::leg;
 use crate::creatures::pet;
 use crate::creatures::tick::{self, CreatureSpline, TickSweep};
+use crate::creatures::TickScope;
 use crate::world::MoveClock;
 use crate::{
     game_aura, game_creature_cast, game_creature_spawn, game_creature_spell, game_creature_spline,
@@ -29,7 +30,6 @@ use lyracore_shared::movement_flags::FORWARD;
 const CHASE_SEARCH_EXPANSIONS: u32 = 4_096;
 const CHASE_TICK_EXPANSIONS: u32 = 32_768;
 
-// Pass timings are logged for the first five seconds of each minute.
 const PROFILE_PERIOD_MICROS: u64 = 60_000_000;
 const PROFILE_WINDOW_MICROS: u64 = 5_000_000;
 
@@ -80,7 +80,7 @@ fn aggro_target(ctx: &ReducerContext, entity: &WorldEntity) -> AggroTarget {
         instance_id: entity.instance_id,
         dead: entity.dead,
         godmode: entity.godmode,
-        taxi_flying: crate::taxi::is_flying(entity),
+        taxi_flying: entity.is_flying(),
         stealthed: crate::spell::is_stealthed(ctx, entity.guid),
     }
 }
@@ -109,10 +109,7 @@ pub(crate) fn character_arrived(ctx: &ReducerContext, guid: u64) {
     .collect();
     let mut world = CtxWorld {
         ctx,
-        regen_window: crate::combat::RegenWindow::new(
-            crate::time::now(ctx).to_micros_since_unix_epoch() as u64 / 1000,
-            0,
-        ),
+        regen_window: crate::combat::RegenWindow::new(crate::time::now_ms(ctx), 0),
         advances: Vec::new(),
         profile: false,
         chase_expansions: std::cell::Cell::new(0),
@@ -155,7 +152,7 @@ impl CtxWorld<'_> {
         let entities = self.ctx.db.game_world_entity();
         let mut e = entities.guid().find(guid)?;
         let clock = moved_ms.map_or(MoveClock::Unchanged, |ms| {
-            MoveClock::realm(self.ctx, guid, ms)
+            MoveClock::realm(self.ctx, &e, ms)
         });
         // Creature legs explore nothing, including those that move a sessionless Character.
         e.place(at.x, at.y, at.z, clock).unexplored();
@@ -323,21 +320,9 @@ impl MotionSink for CtxWorld<'_> {
             self.advances.push((stored, advanced));
         }
     }
-    fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: u32) {
+    fn halt(&mut self, leg: &LegInFlight, at: Point) {
         if let Some(e) = self.place(leg.guid, at, None, None) {
-            tick::emit_move_spline(
-                self.ctx,
-                leg.guid,
-                (at.x, at.y, at.z),
-                (at.x, at.y, at.z),
-                0,
-                false,
-                spline_id,
-                leg.map_id,
-                leg.instance_id,
-                (e.grid_x, e.grid_y),
-                None,
-            );
+            leg::halt(self.ctx, &e);
         }
     }
     fn drop_leg(&mut self, guid: u64) {
@@ -522,7 +507,7 @@ impl IdleSink for CtxWorld<'_> {
         crate::combat::is_engaged(self.ctx, guid)
     }
     fn speed_of(&self, guid: u64, gait: Gait) -> f32 {
-        crate::combat::effective_move_speed(
+        crate::modifiers::effective_move_speed(
             self.ctx,
             guid,
             match gait {
@@ -590,18 +575,18 @@ impl IdleSink for CtxWorld<'_> {
     fn reached_home(&mut self, guid: u64) {
         crate::creatures::eventai_on_reached_home(self.ctx, guid);
     }
-    fn commit_leg(&mut self, guid: u64, leg: Leg, now_ms: u32) {
+    fn commit_leg(&mut self, guid: u64, planned: Leg) {
         if let Some(e) = self.ctx.db.game_world_entity().guid().find(guid) {
-            tick::emit_creature_leg(
+            let course = leg::Course::on_ground(
                 self.ctx,
-                e,
-                leg.to,
-                leg.z_fallback,
-                leg.dur_ms,
-                leg.gait == Gait::Run,
-                now_ms,
-                leg.hold_until_landed,
-            );
+                &e,
+                planned.to,
+                planned.z_fallback,
+                planned.dur_ms,
+                planned.gait == Gait::Run,
+            )
+            .held_until_landed(planned.hold_until_landed);
+            leg::start(self.ctx, e, course);
         }
     }
 }
@@ -642,7 +627,7 @@ impl EngageSink for CtxWorld<'_> {
                 map_id: c.map_id,
                 instance_id: c.instance_id,
                 aggro_range: templates.entry().find(c.entry).map(|t| t.aggro_range),
-                detect_range_mod: crate::spell::detect_range_mod(self.ctx, c.guid),
+                detect_range_mod: crate::modifiers::detect_range_mod(self.ctx, c.guid),
                 would_rout: tick::rout_eligible(self.ctx, &c),
                 cannot_act: crate::spell::is_action_blocked(self.ctx, c.guid),
                 react_state: crate::creatures::react_state(self.ctx, c.guid),
@@ -780,7 +765,7 @@ impl RegenSink for CtxWorld<'_> {
     }
     fn combat_healed_to(&self, u: &Recovering) -> Option<u32> {
         let pct =
-            u32::try_from(crate::spell::combat_health_regen_pct(self.ctx, u.guid)).unwrap_or(0);
+            u32::try_from(crate::modifiers::combat_health_regen_pct(self.ctx, u.guid)).unwrap_or(0);
         let e = self.ctx.db.game_world_entity().guid().find(u.guid)?;
         let health_per_five = crate::items::equipped_stat_bonus(
             self.ctx,
@@ -808,7 +793,8 @@ impl RegenSink for CtxWorld<'_> {
                     e.guid,
                     crate::items::EquipStat::ManaPerFive,
                 );
-                let regen_rate = crate::spell::power_regen_rate(self.ctx, e.guid, e.power_type());
+                let regen_rate =
+                    crate::modifiers::power_regen_rate(self.ctx, e.guid, e.power_type());
                 crate::combat::regen_entity_power(
                     &e,
                     u.in_combat,
@@ -946,11 +932,7 @@ impl ThreatSink for CtxWorld<'_> {
             .collect()
     }
     fn taunted_onto(&self, guid: u64) -> Option<u64> {
-        crate::threat::forced_target(
-            self.ctx,
-            guid,
-            (crate::time::now(self.ctx).to_micros_since_unix_epoch() / 1000) as u64,
-        )
+        crate::threat::forced_target(self.ctx, guid, crate::time::now_ms(self.ctx))
     }
     fn top_threat(&self, guid: u64) -> Option<u64> {
         crate::threat::top_threat_target(self.ctx, guid)
@@ -968,7 +950,7 @@ impl ThreatSink for CtxWorld<'_> {
         }
         if let Some(mut row) = melee.attacker_guid().find(creature) {
             row.target_guid = victim;
-            crate::combat::MeleeAttack::update(self.ctx, row);
+            crate::MeleeAttack::update(self.ctx, row);
         }
         let entities = self.ctx.db.game_world_entity();
         if let Some(mut c) = entities.guid().find(creature) {
@@ -1048,32 +1030,17 @@ impl PursuitSink for CtxWorld<'_> {
     fn casting(&self, guid: u64) -> bool {
         crate::spell::is_non_melee_spell_casting(self.ctx, guid)
     }
-    fn commit_back_off(
-        &mut self,
-        guid: u64,
-        victim: u64,
-        to: (f32, f32),
-        dur_ms: u32,
-        now_ms: u32,
-    ) {
+    fn commit_back_off(&mut self, guid: u64, victim: u64, to: (f32, f32), dur_ms: u32) {
         if let Some(e) = self.ctx.db.game_world_entity().guid().find(guid) {
-            tick::emit_back_off_leg(self.ctx, e, to, dur_ms, now_ms, victim);
+            let course = leg::Course::on_ground(self.ctx, &e, to, e.z, dur_ms, false)
+                .backing_off_from(victim);
+            leg::start(self.ctx, e, course);
         }
     }
-    fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32) {
-        let Some(e) = self.place(guid, at, None, Some(orientation)) else {
-            return;
-        };
-        tick::emit_facing_spline(
-            self.ctx,
-            guid,
-            (at.x, at.y, at.z),
-            orientation,
-            spline_id,
-            e.map_id,
-            e.instance_id,
-            (e.grid_x, e.grid_y),
-        );
+    fn face(&mut self, guid: u64, at: Point, orientation: f32) {
+        if let Some(mut e) = self.place(guid, at, None, Some(orientation)) {
+            leg::face(self.ctx, &mut e, orientation);
+        }
     }
 }
 
@@ -1115,7 +1082,7 @@ impl RoutSink for CtxWorld<'_> {
         let melee = self.ctx.db.game_melee_attack();
         if let Some(mut row) = melee.attacker_guid().find(guid) {
             row.rout_ends_ms = ends_ms;
-            crate::combat::MeleeAttack::update(self.ctx, row);
+            crate::MeleeAttack::update(self.ctx, row);
         }
     }
 }
@@ -1226,7 +1193,7 @@ impl PetSink for CtxWorld<'_> {
                         }),
                     dead: p.dead,
                     suppressed: crate::spell::is_self_movement_suppressed(self.ctx, p.guid),
-                    command: PetCommand::of(command, command_target),
+                    command: PetOrder::of(command, command_target),
                     react: PetReact::of(react),
                     fighting: melee.attacker_guid().find(p.guid).is_some(),
                 }
@@ -1256,11 +1223,11 @@ impl PetSink for CtxWorld<'_> {
             Some(mut row) => {
                 if row.target_guid != victim {
                     row.target_guid = victim;
-                    crate::combat::MeleeAttack::update(self.ctx, row);
+                    crate::MeleeAttack::update(self.ctx, row);
                 }
             }
             None => {
-                crate::combat::MeleeAttack::insert(
+                crate::MeleeAttack::insert(
                     self.ctx,
                     MeleeAttack {
                         attacker_guid: guid,

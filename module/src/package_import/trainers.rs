@@ -1,14 +1,26 @@
 use spacetimedb::{ReducerContext, Table};
 
-use lyracore_package_delta::{is_package_trainer_id, FieldValue, Operation, TracedRow};
+use lyracore_package_delta::{
+    is_package_trainer_id, FieldValue, Operation, TracedRow, TRAINER_FAMILY,
+};
 
 use crate::trainer::{game_trainer_spell, TrainerSpell};
 use crate::{game_creature_template, game_spell};
 
-use super::{as_u32, as_u8, check_insert_is_whole, UpdateTarget};
+use super::{as_u32, as_u8, check_insert_is_whole, missing_reference, ClaimOps};
 
 // Profession offerings carry synthetic spell ids, so only class offerings join game_spell.
-pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+pub(super) const OPS: ClaimOps = ClaimOps {
+    name: TRAINER_FAMILY,
+    in_package_range,
+    row_is_present,
+    check_references: Some(check_references),
+    clear_package_range,
+    write_row,
+    after_write: None,
+};
+
+fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
     for row in rows {
         let trainer_entry = final_u32(ctx, row, "trainer_entry")?;
         if trainer_entry == 0
@@ -34,59 +46,33 @@ pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Resu
 }
 
 fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, String> {
-    if let Some(FieldValue::U32(value)) = row.fields().get(field).map(|claimed| &claimed.value) {
-        return Ok(*value);
-    }
+    super::final_u32(row, field, || {
+        ctx.db
+            .game_trainer_spell()
+            .id()
+            .find(row.row_id())
+            .map(|trainer| match field {
+                "trainer_entry" => trainer.trainer_entry,
+                "spell_id" => trainer.spell_id,
+                "learn_skill_line" => trainer.learn_skill_line,
+                _ => 0,
+            })
+    })
+}
 
+fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
     ctx.db
         .game_trainer_spell()
         .id()
         .find(row.row_id())
-        .map(|trainer| match field {
-            "trainer_entry" => trainer.trainer_entry,
-            "spell_id" => trainer.spell_id,
-            "learn_skill_line" => trainer.learn_skill_line,
-            _ => 0,
-        })
-        .ok_or_else(|| {
-            format!(
-                "`{}` row {} vanished during preflight",
-                row.table(),
-                row.key()
-            )
-        })
+        .is_some()
 }
 
-fn missing_reference(row: &TracedRow, field: &str, value: u32) -> String {
-    format!(
-        "`{}` row {} references missing {field} {value}",
-        row.table(),
-        row.key()
-    )
+fn in_package_range(row: &TracedRow) -> bool {
+    is_package_trainer_id(row.row_id())
 }
 
-pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
-    if updates_an_uninvented_package_row(row) {
-        return UpdateTarget::Uninvented;
-    }
-    let present = ctx
-        .db
-        .game_trainer_spell()
-        .id()
-        .find(row.row_id())
-        .is_some();
-    if present {
-        UpdateTarget::Present
-    } else {
-        UpdateTarget::Absent
-    }
-}
-
-fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
-    row.operation() == Operation::Update && is_package_trainer_id(row.row_id())
-}
-
-pub(super) fn clear_package_range(ctx: &ReducerContext) {
+fn clear_package_range(ctx: &ReducerContext) {
     let rows = ctx.db.game_trainer_spell();
     let stale: Vec<u64> = rows
         .iter()
@@ -98,7 +84,7 @@ pub(super) fn clear_package_range(ctx: &ReducerContext) {
     }
 }
 
-pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     match row.operation() {
         Operation::Insert => {
             ctx.db
@@ -185,7 +171,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(in_package_range(&plan.rows[0]));
     }
 
     #[test]
@@ -200,7 +186,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(!updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(!in_package_range(&plan.rows[0]));
     }
 
     #[test]

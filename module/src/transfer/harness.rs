@@ -327,7 +327,7 @@ impl BeginSink for FakeDb {
         self.live.borrow_mut().remove(&guid);
         self.froze.set(self.froze.get() + 1);
     }
-    fn export_rows(&self, guid: u64) -> Vec<TableRows> {
+    fn export_rows(&self, guid: u64) -> Result<Vec<TableRows>, String> {
         export_rows_via(self, guid, ARMS)
     }
     fn with_character<T>(
@@ -508,7 +508,7 @@ fn fixture_character(guid: u64, name: &str) -> crate::character::Character {
 }
 
 fn export(db: &FakeDb, guid: u64, transfer_id: u64, dest: Destination) -> ExportBlob {
-    let payload = export_rows_via(db, guid, ARMS);
+    let payload = export_rows_via(db, guid, ARMS).expect("the fixture rows serialize");
     db.with_char(guid, |c| {
         build_export_blob(transfer_id, c, dest, payload.clone())
     })
@@ -534,14 +534,11 @@ fn a_populated_character_crosses_a_database_with_every_row_and_value() {
     let names: Vec<&str> = blob.payload.iter().map(|t| t.table.as_str()).collect();
     assert_eq!(
         names, TRANSPORTED,
-        "the export payload must be exactly the transported registry, in registry order — \
-             `game_transfer_out` is MACHINERY and exporting the escrow inside its own blob is \
-             nonsense (MANIFEST_EXCLUDE)"
+        "the export payload is exactly the transported registry in order, without game_transfer_out"
     );
     assert!(
         !rows_named(&blob, "harness_gear").rows.is_empty(),
-        "a table with rows must ship a NON-EMPTY payload — an empty one is indistinguishable \
-             from 'this character owned nothing', and the source copy is deleted moments later"
+        "a table with rows ships a non-empty payload"
     );
     assert!(
         rows_named(&blob, "harness_relay").rows.is_empty(),
@@ -609,8 +606,7 @@ fn a_populated_character_crosses_a_database_with_every_row_and_value() {
                 item: 6098
             },
         ],
-        "the character's GEAR must arrive with its values, in order — this is the assertion \
-             that repointing an arm at `not_transported` (468 passed, 0 failed) had to defeat"
+        "the character's gear arrives with its values, in order"
     );
     assert_eq!(
         dst.quests_of(GUID),
@@ -628,8 +624,7 @@ fn a_populated_character_crosses_a_database_with_every_row_and_value() {
 
     assert!(
         dst.gear_of(NEIGHBOUR).is_empty() && dst.quests_of(NEIGHBOUR).is_empty(),
-        "another character's rows rode along — the export mover was handed the wrong guid, \
-             which on a real shard hands a stranger's inventory to the arriving player"
+        "only this character's rows are exported"
     );
 
     assert!(
@@ -644,8 +639,7 @@ fn a_populated_character_crosses_a_database_with_every_row_and_value() {
     assert_eq!(dst.in_row(XFER).unwrap().created_micros, NOW);
     assert!(
         dst.accounts.borrow().contains(&77),
-        "no shadow `game_account` row — `gw::gw_player_login` resolves the account by id, \
-             so the arriving player cannot log in at all"
+        "no shadow game_account row is imported"
     );
 }
 
@@ -735,12 +729,7 @@ fn export_import_export_produces_an_identical_blob() {
         first, second,
         "export -> import -> export lost or changed something"
     );
-    assert_eq!(
-        wire(&first),
-        wire(&second),
-        "the blobs compare equal but do not serialize equal — a f32 NaN or a field the \
-             PartialEq skips"
-    );
+    assert_eq!(wire(&first), wire(&second), "equal blobs serialize equally");
 
     let mut third_db = FakeDb::new();
     apply_import_blob(&mut third_db, XFER, wire(&second)).expect("hop 2 commits");
@@ -843,8 +832,7 @@ fn an_import_that_cannot_place_a_table_files_no_in_row() {
     assert!(err.contains("refusing a partial import"), "{err}");
     assert!(
         !dst.has_in_row(XFER),
-        "an in-row was filed for an import that could not place a table — that row is what \
-             licenses finish_transfer to destroy the source copy"
+        "no in-row is filed for an import that could not place a table"
     );
 }
 
@@ -869,9 +857,7 @@ fn a_payload_missing_a_manifest_table_is_refused_and_files_no_in_row() {
         );
         assert!(
             !dst.has_in_row(XFER),
-            "an in-row was filed for a payload missing {absent} — that row is what licenses \
-                 finish_transfer to destroy the COMPLETE source copy, so the character would be \
-                 left with only the partial one"
+            "no in-row is filed for a payload missing {absent}"
         );
     }
 
@@ -1036,8 +1022,7 @@ fn a_replayed_import_is_a_no_op_and_never_duplicates_a_row() {
     assert_eq!(
         (dst.gear_of(GUID), dst.quests_of(GUID)),
         before,
-        "a replayed import duplicated the character's rows — the driver that crashed without \
-             learning whether its call landed simply calls again, so this is the COMMON path"
+        "a replayed import does not duplicate rows"
     );
 }
 
@@ -1137,8 +1122,7 @@ fn orphaned_owned_rows_with_no_character_row_are_wiped_before_a_fresh_import_lan
                 item: 6098
             },
         ],
-        "the orphaned leftover survived alongside the arriving loadout — a real destination \
-             would have PANICKED inserting a duplicate game_item_instance primary key here"
+        "a leftover row is replaced by the arriving loadout"
     );
 }
 
@@ -1155,8 +1139,7 @@ fn money_folded_into_the_escrow_after_the_freeze_arrives_with_the_character() {
         assert_eq!(
             c.money,
             base + 1_500,
-            "the deferred copper died with the source copy — a party member's loot share, \
-                 silently dropped"
+            "deferred copper survives the source cascade"
         );
     });
 }
@@ -1189,10 +1172,7 @@ fn an_arrival_that_never_materialised_files_no_in_row() {
     assert!(err.contains("no durable row at the destination"), "{err}");
     assert!(
         !dst.has_in_row(XFER),
-        "an in-row was filed against an import that materialised nothing. That row is what \
-             licenses `confirm_import` and then `finish_transfer` to cascade-delete the SOURCE \
-             copy, so filing it here settles the transfer with ZERO durable copies — the one \
-             unrecoverable outcome in the whole protocol."
+        "no in-row is filed for an import that placed nothing"
     );
 }
 
@@ -1207,15 +1187,14 @@ fn a_corrupt_blob_is_refused_rather_than_half_applied() {
 #[test]
 fn the_export_loop_hands_each_mover_the_transferring_guid() {
     let src = FakeDb::populated(GUID);
-    let mine = export_rows_via(&src, GUID, ARMS);
-    let theirs = export_rows_via(&src, NEIGHBOUR, ARMS);
-    let nobody = export_rows_via(&src, 0, ARMS);
+    let mine = export_rows_via(&src, GUID, ARMS).expect("the fixture rows serialize");
+    let theirs = export_rows_via(&src, NEIGHBOUR, ARMS).expect("the fixture rows serialize");
+    let nobody = export_rows_via(&src, 0, ARMS).expect("the fixture rows serialize");
 
     assert_ne!(
         rows_named2(&mine, "harness_gear"),
         rows_named2(&theirs, "harness_gear"),
-        "two different characters exported the same gear — the mover is not being handed the \
-             guid it was asked for"
+        "each character exports its own gear"
     );
     assert!(
         decoded::<GearRow>(&nobody, "harness_gear").is_empty(),
@@ -1289,18 +1268,13 @@ fn finish_destroys_the_source_copy_for_a_cross_database_transfer() {
     );
     assert!(
         db.gear_of(GUID).is_empty() && db.quests_of(GUID).is_empty(),
-        "the cascade must take the character's OWNED rows with it — a half-swept source leaves \
-             orphan gear and quest rows under a guid that will be reissued"
+        "the cascade removes the character's owned rows"
     );
     assert!(
         !db.gear_of(NEIGHBOUR).is_empty(),
         "the cascade swept a character it was not given — the guid filter is gone"
     );
-    assert!(
-        db.settled(XFER),
-        "both escrow rows must be gone: the out-row is the source's CLAIM, and leaving it \
-             behind freezes the character out of every future transfer AND of its own login"
-    );
+    assert!(db.settled(XFER), "both escrow rows are gone after finish");
 }
 
 #[test]
@@ -1309,9 +1283,7 @@ fn a_same_database_finish_never_cascades_the_shared_character_row() {
     apply_finish(&mut db, XFER);
     assert!(
         db.has_character(GUID),
-        "same-database the two partitions SHARE `game_character`, so an unconditional cascade \
-             destroys the DESTINATION copy too — the escrow's `cross_database` gate is what stops \
-             `finish_transfer` from deleting the character it just moved"
+        "a same-database finish does not cascade the shared character row"
     );
     assert!(
         db.settled(XFER),
@@ -1329,17 +1301,12 @@ fn finish_detaches_the_party_before_the_cascade_so_the_party_survives_the_hop() 
 
     assert!(
         !db.is_disbanded(5),
-        "the party was DISBANDED by the hop. `apply_finish` must call `detach_for_transfer` \
-             BEFORE the cascade: the cascade's `game_group_member` sweep is `remove_member`, which \
-             fires DESTROYED at everyone left behind and tears down a two-person party the instant \
-             its first member steps through the portal — so the second member's export blob would \
-             carry no membership at all"
+        "the hop detaches the member before the cascade, so the party survives"
     );
     assert_eq!(
         db.party_of(NEIGHBOUR),
         Some(5),
-        "the members left behind must keep the SAME group_id, or the party cannot re-form at \
-             the destination"
+        "members left behind keep the same group_id"
     );
     assert_eq!(
         db.party_of(GUID),
@@ -1362,7 +1329,8 @@ fn the_forwarding_receipt_survives_the_cascade_that_would_sweep_it() {
 #[test]
 fn not_transported_exports_nothing_and_absorbs_anything() {
     let mut buf = vec![1, 2, 3];
-    not_transported(&mut RowIo::Export(&mut buf));
+    let mut exported = Ok(());
+    not_transported(&mut RowIo::Export(&mut buf, &mut exported));
     assert!(
         buf.is_empty(),
         "a declining arm must leave an EMPTY payload"
@@ -1387,30 +1355,16 @@ fn begin_freezes_the_live_entity_and_escrows_a_blob_the_destination_can_read() {
     let mut src = beginning(GUID);
     apply_begin(&mut src, XFER, GUID, DEST, true).expect("the escrow commits");
 
-    assert_eq!(
-        src.froze.get(),
-        1,
-        "begin did not freeze the live entity. That single delete of `game_world_entity` is \
-             what makes the character invisible to the ~50 map_id/instance_id target gates, the \
-             aggro candidate scan, the threat lists and the AOI relay — none of which consult the \
-             ledger. Without it the in-transit fence holds only for the ACTOR side."
-    );
+    assert_eq!(src.froze.get(), 1, "begin removes the live entity");
     assert!(
         !src.has_live_entity(GUID),
-        "the live entity survived the freeze — the character is still actable on the shard it \
-             is leaving"
+        "the live entity is gone after the freeze"
     );
     assert!(
         src.has_character(GUID),
-        "begin destroyed the source's DURABLE copy. Nothing may do that but finish_transfer, \
-             and only after the destination copy is committed (delete-last)"
+        "begin keeps the source's durable copy"
     );
-    assert!(
-        src.reaper_armed.get(),
-        "the first escrow did not arm the reaper. `seed::init` only runs on a FRESH database, \
-             so this lazy arming is the only thing that ever schedules recovery on a live one — \
-             without it an abandoned transfer is a frozen player nobody comes back for"
-    );
+    assert!(src.reaper_armed.get(), "the first escrow arms the reaper");
 
     let out = ShardLedger::out_row(&src, XFER).expect("the escrow row is filed");
     assert_eq!(out.character_guid, GUID);
@@ -1442,15 +1396,12 @@ fn a_replayed_begin_is_a_no_op_and_never_re_escrows() {
             .expect("still escrowed")
             .blob,
         first,
-        "a replayed begin rebuilt the blob. The driver that crashed without learning whether \
-             its call landed simply calls again, so this is the COMMON path — and re-exporting \
-             would snapshot a character that has been frozen since the first call"
+        "a replayed begin does not rebuild the blob"
     );
     assert_eq!(
         src.froze.get(),
         1,
-        "a replayed begin re-ran the freeze — harmless here, but it means the replay took the \
-             Escrow arm rather than the Replay one"
+        "a replayed begin does not re-run the freeze"
     );
 }
 
@@ -1470,9 +1421,7 @@ fn begin_refuses_a_transfer_id_already_escrowed_for_a_different_character() {
             .expect("still escrowed")
             .character_guid,
         GUID,
-        "the second call overwrote the first character's escrow — the driver would then drive \
-             import/finish on the id and move the OTHER character, reporting success for one that \
-             never moved"
+        "a second begin does not overwrite another character's escrow"
     );
 }
 
@@ -1485,8 +1434,7 @@ fn begin_refuses_a_character_that_is_already_in_transit_under_another_id() {
     assert!(err.contains("already in transit"), "{err}");
     assert!(
         ShardLedger::out_row(&src, XFER + 1).is_none(),
-        "a character escrowed twice has two destinations each holding a claim on it; \
-             cross-database BOTH import and the character is DUPLICATED"
+        "a character cannot be escrowed twice"
     );
 }
 
@@ -1503,8 +1451,7 @@ fn begin_refuses_a_character_with_no_durable_row_and_a_reserved_id() {
     assert_eq!(
         src.froze.get(),
         0,
-        "a refused begin froze the character anyway — it is now invisible to every target gate \
-             with no escrow row to recover it"
+        "a refused begin does not freeze the character"
     );
 }
 
@@ -1519,8 +1466,7 @@ fn confirm_files_the_attestation_from_the_escrowed_blob() {
     assert_eq!(
         inb.blob,
         ShardLedger::out_row(&src, XFER).expect("escrowed").blob,
-        "the attestation must carry the escrowed blob verbatim — it is the destination's own \
-             replay copy if an interrupted apply has to be re-driven"
+        "the attestation carries the escrowed blob verbatim"
     );
     apply_confirm(&mut src, XFER).expect("a replayed confirm must answer Ok");
 }
@@ -1533,8 +1479,7 @@ fn confirm_refuses_a_same_database_escrow_and_an_absent_one() {
     assert!(err.contains("refusing to forge an attestation"), "{err}");
     assert!(
         ShardLedger::in_row(&src, XFER).is_none(),
-        "same-database, `import_character` files the in-row itself as a fact it can READ. A \
-             forged one licenses finish_transfer with no import at all"
+        "a same-database in-row is not attested"
     );
 
     let mut empty = FakeDb::new();
@@ -1557,8 +1502,7 @@ fn release_drops_the_arrival_fence_but_refuses_on_the_source() {
     apply_release(&mut dst, XFER).expect("release");
     assert!(
         !BeginSink::is_in_transit(&dst, GUID),
-        "release did not drop the arrival fence — the character is durable at the destination \
-             and cannot log in anywhere"
+        "release drops the arrival fence"
     );
     apply_release(&mut dst, XFER).expect("a replayed release must answer Ok");
 
@@ -1659,8 +1603,7 @@ fn the_reaper_is_inert_before_the_stale_window() {
     apply_reap(&mut src);
     assert!(
         ShardLedger::out_row(&src, XFER).is_some(),
-        "the reaper raced a driver that may still be working — it is the net for a CRASHED \
-             driver, never a race against a slow one"
+        "the reaper leaves a young escrow alone"
     );
 }
 
@@ -1694,10 +1637,7 @@ fn the_reaper_holds_an_unattested_cross_database_escrow_forever() {
         apply_reap(&mut src);
         assert!(
             ShardLedger::out_row(&src, XFER).is_some(),
-            "the reaper rolled back an UNATTESTED cross-database escrow at {multiplier}x the \
-                 stale window. The destination copy is already durable and would go live, while \
-                 this rollback unfreezes the source copy — the character is now on two databases, \
-                 and nothing can tell which one is real."
+            "the reaper holds an unattested cross-database escrow at {multiplier}x the stale window"
         );
         assert!(src.has_character(GUID), "and the source copy is untouched");
     }
@@ -1711,15 +1651,10 @@ fn the_reaper_rolls_forward_an_attested_escrow_the_driver_abandoned() {
     go_stale(&src);
     apply_reap(&mut src);
 
-    assert!(
-        src.settled(XFER),
-        "an attested escrow must be COMPLETED, not left frozen — past the point of no return \
-             the transfer may only ever roll forward"
-    );
+    assert!(src.settled(XFER), "the reaper completes an attested escrow");
     assert!(
         !src.has_character(GUID),
-        "roll-forward is delete-last: the source copy goes, exactly as finish_transfer would \
-             have done it"
+        "roll-forward deletes the source copy"
     );
     assert_eq!(
         src.receipt(GUID),
@@ -1736,8 +1671,7 @@ fn finish_before_the_attestation_refuses_and_leaves_the_source_copy_alone() {
     assert!(err.contains("not imported"), "{err}");
     assert!(
         src.has_character(GUID) && ShardLedger::out_row(&src, XFER).is_some(),
-        "finish is the ONLY step that destroys the source copy, and doing it here would leave \
-             ZERO durable copies"
+        "finish before attestation keeps the source copy"
     );
 
     let mut elsewhere = FakeDb::new();

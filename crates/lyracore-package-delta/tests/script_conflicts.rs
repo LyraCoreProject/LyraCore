@@ -1,4 +1,4 @@
-use lyracore_package_delta::{trace_scripts, ScriptArtifact, ScriptConflict};
+use lyracore_package_delta::{script::ScriptConflict, trace_scripts, ScriptArtifact};
 
 const HASH_A: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 

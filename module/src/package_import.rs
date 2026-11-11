@@ -17,10 +17,7 @@ mod trainers;
 use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 
 use lyracore_package_delta::{
-    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, CAST_FAMILY,
-    CREATURE_AI_FAMILY, CREATURE_FAMILY, GAMEOBJECT_FAMILY, GLOBALS_FAMILY, GOSSIP_FAMILY,
-    ITEM_FAMILY, LOOT_FAMILY, QUEST_FAMILY, SCRIPT_FAMILY, SPELLMETA_FAMILY, SPELL_FAMILY,
-    TRAINER_FAMILY,
+    trace, ClaimCounts, FieldValue, Operation, PackageDelta, TracedRow, SCRIPT_FAMILY,
 };
 
 use crate::helpers::require_operator;
@@ -90,89 +87,42 @@ impl Family {
     }
 }
 
+type CheckReferences = fn(&ReducerContext, &[TracedRow]) -> Result<(), String>;
+type AfterWrite = fn(&ReducerContext) -> Result<(), String>;
+
+/// One Import Family's claim operations, in the order `apply_claims` runs them.
+struct ClaimOps {
+    name: &'static str,
+    /// Whether the row lies in the Package range, so only a Package can have inserted it.
+    in_package_range: fn(&TracedRow) -> bool,
+    row_is_present: fn(&ReducerContext, &TracedRow) -> bool,
+    check_references: Option<CheckReferences>,
+    clear_package_range: fn(&ReducerContext),
+    write_row: fn(&ReducerContext, &TracedRow) -> Result<(), String>,
+    /// Runs once after every row is written.
+    after_write: Option<AfterWrite>,
+}
+
 impl ClaimFamily {
+    const fn ops(self) -> &'static ClaimOps {
+        match self {
+            Self::Spell => &spell::OPS,
+            Self::Item => &items::OPS,
+            Self::Quest => &quest::OPS,
+            Self::Loot => &loot::OPS,
+            Self::Cast => &casts::OPS,
+            Self::Trainer => &trainers::OPS,
+            Self::Gossip => &gossip::OPS,
+            Self::Globals => &globals::OPS,
+            Self::Spellmeta => &spellmeta::OPS,
+            Self::Creatures => &creatures::OPS,
+            Self::Gameobjects => &gameobjects::OPS,
+            Self::CreatureAi => &creature_ai::OPS,
+        }
+    }
+
     const fn as_str(self) -> &'static str {
-        match self {
-            Self::Spell => SPELL_FAMILY,
-            Self::Item => ITEM_FAMILY,
-            Self::Quest => QUEST_FAMILY,
-            Self::Loot => LOOT_FAMILY,
-            Self::Cast => CAST_FAMILY,
-            Self::Trainer => TRAINER_FAMILY,
-            Self::Gossip => GOSSIP_FAMILY,
-            Self::Globals => GLOBALS_FAMILY,
-            Self::Spellmeta => SPELLMETA_FAMILY,
-            Self::Creatures => CREATURE_FAMILY,
-            Self::Gameobjects => GAMEOBJECT_FAMILY,
-            Self::CreatureAi => CREATURE_AI_FAMILY,
-        }
-    }
-
-    fn update_target(self, ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
-        match self {
-            Self::Spell => spell::update_target(ctx, row),
-            Self::Item => items::update_target(ctx, row),
-            Self::Quest => quest::update_target(ctx, row),
-            Self::Loot => loot::update_target(ctx, row),
-            Self::Cast => casts::update_target(ctx, row),
-            Self::Trainer => trainers::update_target(ctx, row),
-            Self::Gossip => gossip::update_target(ctx, row),
-            Self::Globals => globals::update_target(ctx, row),
-            Self::Spellmeta => spellmeta::update_target(ctx, row),
-            Self::Creatures => creatures::update_target(ctx, row),
-            Self::Gameobjects => gameobjects::update_target(ctx, row),
-            Self::CreatureAi => creature_ai::update_target(ctx, row),
-        }
-    }
-
-    fn clear_package_range(self, ctx: &ReducerContext) {
-        match self {
-            Self::Spell => spell::clear_package_range(ctx),
-            Self::Item => items::clear_package_range(ctx),
-            Self::Quest => quest::clear_package_range(ctx),
-            Self::Loot => loot::clear_package_range(ctx),
-            Self::Cast => casts::clear_package_range(ctx),
-            Self::Trainer => trainers::clear_package_range(ctx),
-            Self::Gossip => gossip::clear_package_range(ctx),
-            Self::Globals => globals::clear_package_range(ctx),
-            Self::Spellmeta => spellmeta::clear_package_range(ctx),
-            Self::Creatures => creatures::clear_package_range(ctx),
-            Self::Gameobjects => gameobjects::clear_package_range(ctx),
-            Self::CreatureAi => creature_ai::clear_package_range(ctx),
-        }
-    }
-
-    fn write_row(self, ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
-        match self {
-            Self::Spell => spell::write_row(ctx, row),
-            Self::Item => items::write_row(ctx, row),
-            Self::Quest => quest::write_row(ctx, row),
-            Self::Loot => loot::write_row(ctx, row),
-            Self::Cast => casts::write_row(ctx, row),
-            Self::Trainer => trainers::write_row(ctx, row),
-            Self::Gossip => gossip::write_row(ctx, row),
-            Self::Globals => globals::write_row(ctx, row),
-            Self::Spellmeta => spellmeta::write_row(ctx, row),
-            Self::Creatures => creatures::write_row(ctx, row),
-            Self::Gameobjects => gameobjects::write_row(ctx, row),
-            Self::CreatureAi => creature_ai::write_row(ctx, row),
-        }
-    }
-
-    fn check_references(self, ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
-        match self {
-            Self::Spell | Self::Item => Ok(()),
-            Self::Quest => quest::check_references(ctx, rows),
-            Self::Loot => loot::check_references(ctx, rows),
-            Self::Cast => casts::check_references(ctx, rows),
-            Self::Trainer => trainers::check_references(ctx, rows),
-            Self::Gossip => gossip::check_references(ctx, rows),
-            Self::Globals => globals::check_references(ctx, rows),
-            Self::Spellmeta => spellmeta::check_references(ctx, rows),
-            Self::Creatures => creatures::check_references(ctx, rows),
-            Self::Gameobjects => gameobjects::check_references(ctx, rows),
-            Self::CreatureAi => creature_ai::check_references(ctx, rows),
-        }
+        self.ops().name
     }
 }
 
@@ -186,13 +136,6 @@ fn known_families() -> String {
         Some((last, [])) => last.clone(),
         Some((last, rest)) => format!("{} or {last}", rest.join(", ")),
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum UpdateTarget {
-    Present,
-    Absent,
-    Uninvented,
 }
 
 #[table(accessor = game_package_import)]
@@ -235,18 +178,20 @@ fn apply_claims(
     family: ClaimFamily,
     packed: &str,
 ) -> Result<Vec<PlannedPackage>, String> {
+    let ops = family.ops();
     let plan = ApplyPlan::read(packed)?;
     check_claims_belong_to(family, &plan.rows)?;
-    check_update_targets(ctx, family, &plan)?;
-    family.check_references(ctx, &plan.rows)?;
-
-    family.clear_package_range(ctx);
-    for row in &plan.rows {
-        family.write_row(ctx, row)?;
+    check_update_targets(ctx, ops, &plan)?;
+    if let Some(check_references) = ops.check_references {
+        check_references(ctx, &plan.rows)?;
     }
-    if family == ClaimFamily::Gameobjects {
-        // Reconcile only after every spawn and template edit has finished.
-        crate::go_collider::rebuild_go_colliders(ctx)?;
+
+    (ops.clear_package_range)(ctx);
+    for row in &plan.rows {
+        (ops.write_row)(ctx, row)?;
+    }
+    if let Some(after_write) = ops.after_write {
+        after_write(ctx)?;
     }
     Ok(plan.packages)
 }
@@ -427,6 +372,36 @@ fn as_str(field: &str, value: &FieldValue) -> Result<String, String> {
     }
 }
 
+/// The value `field` holds once the plan applies: the claimed value, else the stored one.
+fn final_u32(
+    row: &TracedRow,
+    field: &str,
+    stored: impl FnOnce() -> Option<u32>,
+) -> Result<u32, String> {
+    if let Some(FieldValue::U32(value)) = row.fields().get(field).map(|claimed| &claimed.value) {
+        return Ok(*value);
+    }
+    stored().ok_or_else(|| {
+        format!(
+            "`{}` row {} vanished during preflight",
+            row.table(),
+            row.key()
+        )
+    })
+}
+
+fn missing_reference(row: &TracedRow, field: &str, value: u32) -> String {
+    format!(
+        "`{}` row {} references missing {field} {value}",
+        row.table(),
+        row.key()
+    )
+}
+
+fn no_such_column(table: &str, column: &str) -> String {
+    format!("`{table}` has no claimable column `{column}`")
+}
+
 fn wrong_type(field: &str, value: &FieldValue) -> String {
     format!(
         "column `{field}` was claimed as `{}`, which is not its type",
@@ -437,30 +412,27 @@ fn wrong_type(field: &str, value: &FieldValue) -> String {
 // Resolve every missing-row Refusal before the first write.
 fn check_update_targets(
     ctx: &ReducerContext,
-    family: ClaimFamily,
+    ops: &ClaimOps,
     plan: &ApplyPlan,
 ) -> Result<(), String> {
     for row in &plan.rows {
         if row.operation() != Operation::Update {
             continue;
         }
-        match family.update_target(ctx, row) {
-            UpdateTarget::Present => {}
-            UpdateTarget::Uninvented => {
-                return Err(format!(
-                    "`{}` row {}: an enabled Package tunes it, but no enabled Package inserts it",
-                    row.table(),
-                    row.key()
-                ))
-            }
-            UpdateTarget::Absent => {
-                return Err(format!(
-                    "`{}` row {} is not in this shard; the base import has to run before its \
-                     Package Deltas",
-                    row.table(),
-                    row.key()
-                ))
-            }
+        if (ops.in_package_range)(row) {
+            return Err(format!(
+                "`{}` row {}: an enabled Package tunes it, but no enabled Package inserts it",
+                row.table(),
+                row.key()
+            ));
+        }
+        if !(ops.row_is_present)(ctx, row) {
+            return Err(format!(
+                "`{}` row {} is not in this shard; the base import has to run before its \
+                 Package Deltas",
+                row.table(),
+                row.key()
+            ));
         }
     }
     Ok(())

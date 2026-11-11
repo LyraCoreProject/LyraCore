@@ -6,7 +6,7 @@ mod transport;
 pub(crate) use transport::{
     admit_command_issuer_import, decode_rows, encode_rows, export_rows_via, import_rows_via,
     manifest, CommandIssuerImportRefusal, ManifestEntry, TransportArm, HOT_TABLES,
-    MANIFEST_EXCLUDE, NOT_TRANSPORTED, TRANSFER_TABLES_OLD_BLOBS_MAY_LACK,
+    MANIFEST_EXCLUDE, TRANSFER_TABLES_OLD_BLOBS_MAY_LACK,
 };
 pub(crate) use transport::{
     build_export_blob, check_manifest, decode_blob, decode_character_row, export_rows, import_rows,
@@ -27,6 +27,7 @@ use crate::helpers::require_operator;
 use crate::{game_character, game_creature_spline, game_world_entity};
 
 const BOT_TRANSFER_CLAIM_MICROS: i64 = 5_000_000;
+const BOT_TRANSFER_PENDING_LIMIT: usize = 64;
 
 pub(crate) const TRANSFER_STALE_MICROS: i64 = 30_000_000;
 
@@ -97,7 +98,7 @@ crate::character_owned!(delete, fn sweep_delete_game_transfer_out(ctx, character
         let ids: Vec<_> = intents
 .by_bot()
 .filter(character_guid)
-.take(lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT + 1)
+.take(BOT_TRANSFER_PENDING_LIMIT + 1)
 .map(|intent| intent.id)
 .collect();
         for id in ids {
@@ -173,18 +174,15 @@ pub(crate) fn emit_bot_transfer_intent(
     if let Some(cast) = crate::spell::pending_cast(ctx, bot_guid) {
         crate::spell::cancel_cast_attempt(ctx, bot_guid, cast.scheduled_id);
     }
-    let _ = crate::actor::stop_attack(ctx, bot_guid);
+    crate::combat::stop_attack_for(ctx, bot_guid);
     ctx.db.game_creature_spline().guid().delete(bot_guid);
-    crate::world::teleport_player(
+    crate::world::teleport(
         ctx,
         bot_guid,
         destination.map_id,
         destination.instance_id,
-        destination.x,
-        destination.y,
-        destination.z,
-        destination.o,
-    );
+        [destination.x, destination.y, destination.z, destination.o],
+    )?;
     let intent = intents.insert(BotTransferIntent {
         id: 0,
         bot_guid,
@@ -231,12 +229,7 @@ pub(crate) fn bot_transfer_intent_gate(
             "Character already has a pending Transfer Intent",
         ));
     }
-    if intents
-        .iter()
-        .take(lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT)
-        .count()
-        == lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT
-    {
+    if intents.iter().take(BOT_TRANSFER_PENDING_LIMIT).count() == BOT_TRANSFER_PENDING_LIMIT {
         return Err(ActionRefusal::new(
             ActionRefusalKind::TransferPending,
             "World Shard has too many pending Transfer Intents",
@@ -533,9 +526,9 @@ pub(crate) fn in_transit_instances(
         .db
         .game_bot_transfer_intent()
         .iter()
-        .take(lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT + 1)
+        .take(BOT_TRANSFER_PENDING_LIMIT + 1)
         .collect();
-    if pending.len() > lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT {
+    if pending.len() > BOT_TRANSFER_PENDING_LIMIT {
         return Err(TransferClaimReadLimit);
     }
     for intent in pending {
@@ -608,7 +601,7 @@ pub(crate) trait BeginSink: ShardLedger {
     fn has_pending_transaction(&self, guid: u64) -> bool;
     fn is_in_transit(&self, guid: u64) -> bool;
     fn freeze_live_entity(&mut self, guid: u64);
-    fn export_rows(&self, guid: u64) -> Vec<TableRows>;
+    fn export_rows(&self, guid: u64) -> Result<Vec<TableRows>, String>;
     fn with_character<T>(
         &self,
         guid: u64,
@@ -720,11 +713,11 @@ impl BeginSink for CtxShard<'_> {
         // Persist vitals, position and ghost state before deleting the live entity.
         let entities = self.ctx.db.game_world_entity();
         if let Some(e) = entities.guid().find(guid) {
-            crate::world::persist_entity(self.ctx, &e, false);
+            crate::character::persist_entity(self.ctx, &e, false);
             crate::WorldEntity::delete(self.ctx, guid);
         }
     }
-    fn export_rows(&self, guid: u64) -> Vec<TableRows> {
+    fn export_rows(&self, guid: u64) -> Result<Vec<TableRows>, String> {
         export_rows(self.ctx, guid)
     }
     fn with_character<T>(
@@ -899,7 +892,12 @@ pub(crate) fn apply_begin<S: BeginSink>(
     sink.freeze_live_entity(character_guid);
 
     // Freeze and export in one transaction so the payload is a consistent snapshot.
-    let payload = sink.export_rows(character_guid);
+    let payload = sink.export_rows(character_guid).map_err(|e| {
+        format!(
+            "transfer {transfer_id}: cannot export character {character_guid}: {e} — nothing \
+             escrowed"
+        )
+    })?;
     let blob = sink
         .with_character(character_guid, |c| {
             build_export_blob(transfer_id, c, dest, payload)
@@ -1027,7 +1025,6 @@ pub fn import_character_blob(
 }
 
 #[reducer]
-#[allow(clippy::too_many_arguments)]
 pub fn import_player_character_blob(
     ctx: &ReducerContext,
     transfer_id: u64,
@@ -1501,7 +1498,7 @@ fn cascade_for_transfer(ctx: &ReducerContext, guid: u64, listing_holds: ListingH
             .collect(),
     };
     mail_text::release(ctx, guid, matches!(listing_holds, ListingHolds::Delete));
-    crate::world::cascade_delete_character(ctx, guid);
+    crate::character::cascade_delete_character(ctx, guid);
     for contact in incoming_contacts {
         ctx.db.game_character_contact().insert(contact);
     }

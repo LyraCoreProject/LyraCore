@@ -1,6 +1,7 @@
 use std::io::Cursor;
 use std::time::Duration;
 
+use lyracore_package_delta::fixture_ids::{FIXTURE_JERKY, SCENARIO_VENDOR_ENTRY, TEST_WOLF_ENTRY};
 use lyracore_test_support::{ReducerConnection, Standalone};
 use serde::Deserialize;
 use serde_json::json;
@@ -103,12 +104,16 @@ fn native_login_calls_nearby_pack_assistance() {
     for distance in [15, 23] {
         shard.assert_call(
             "debug_spawn_at_feet",
-            &[&character.to_string(), "51000", &distance.to_string()],
+            &[
+                &character.to_string(),
+                &TEST_WOLF_ENTRY.to_string(),
+                &distance.to_string(),
+            ],
         );
     }
-    let creatures = shard.query_rows(
-        "SELECT guid FROM game_world_entity WHERE entry = 51000 AND (x = 15 OR x = 23)",
-    );
+    let creatures = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY} AND (x = 15 OR x = 23)"
+    ));
     assert_eq!(creatures.len(), 2);
     assert!(shard
         .query_rows("SELECT * FROM game_melee_attack")
@@ -144,11 +149,18 @@ fn native_login_calls_nearby_pack_assistance() {
 fn vendor_purchases_acknowledge_the_offer_before_the_npc_receipt() {
     let (shard, guid, _) = fixture("vendor-purchase-replies");
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
-    shard.assert_sql("UPDATE game_item_template SET buy_count = 5 WHERE entry = 5090052");
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET buy_count = 5 WHERE entry = {FIXTURE_JERKY}"
+    ));
     shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
-    shard.assert_call("debug_spawn_at_feet", &[&guid.to_string(), "51004", "2.0"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[&guid.to_string(), &SCENARIO_VENDOR_ENTRY.to_string(), "2.0"],
+    );
     let vendor: u64 = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
@@ -160,7 +172,7 @@ fn vendor_purchases_acknowledge_the_offer_before_the_npc_receipt() {
     connection.drain_packets();
     for (count, expected_slot) in [(2u8, None), (1, Some(u32::MAX)), (0, Some(u32::MAX))] {
         let mut body = vendor.to_le_bytes().to_vec();
-        body.extend(5090052u32.to_le_bytes());
+        body.extend(FIXTURE_JERKY.to_le_bytes());
         body.extend([count, 1]);
         connection
             .call("native_world_receive", json!([0x1a2u32, body]))
@@ -195,7 +207,7 @@ fn vendor_purchases_acknowledge_the_offer_before_the_npc_receipt() {
         assert_eq!(u32::from_le_bytes(receipt[8..12].try_into().unwrap()), 1);
         assert_eq!(
             u32::from_le_bytes(receipt[25..29].try_into().unwrap()),
-            5090052
+            FIXTURE_JERKY
         );
         assert_eq!(
             u32::from_le_bytes(receipt[37..41].try_into().unwrap()),
@@ -513,7 +525,7 @@ fn a_later_transaction_delivers_packets_without_another_client_request() {
     assert!(!connection.drain_packets().is_empty());
     shard.assert_call("debug_set_money", &[&guid.to_string(), "12345"]);
     let expected = lyracore_protocol::world::encode(
-        lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+        &lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(lyracore_protocol::codec::build_coinage_values(guid, 12345)),
         ),
     )
@@ -1477,7 +1489,7 @@ fn a_reconnecting_passenger_enters_the_world_before_resuming_taxi() {
     }
     shard.assert_call(
         "debug_spawn_at_feet",
-        &[&passenger.to_string(), "51000", "2"],
+        &[&passenger.to_string(), &TEST_WOLF_ENTRY.to_string(), "2"],
     );
     drop(first);
     assert!(lyracore_test_support::poll_until(

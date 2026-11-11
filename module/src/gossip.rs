@@ -2,12 +2,88 @@ use lyracore_shared::constants::{gossip_option, npc_flags, MIN_TALENT_LEVEL};
 use lyracore_shared::gossip::{self, CharacterFacts, Condition, ConditionKind, QuestState};
 use spacetimedb::{table, ReducerContext};
 
-use crate::creatures::{
-    game_creature_gossip_menu_override, game_gossip_menu_profile, game_gossip_menu_profile_option,
-    game_gossip_option,
-};
-use crate::items::{game_item_template, game_npc_vendor};
 use crate::quest::{game_character_quest, game_quest_template};
+use crate::{game_item_template, game_npc_vendor};
+
+#[table(accessor = game_gossip_menu, public)]
+pub struct GossipMenu {
+    #[primary_key]
+    pub entry: u32,
+    pub text_id: u32,
+}
+
+#[table(accessor = game_gossip_menu_profile, public)]
+pub struct GossipMenuProfile {
+    #[primary_key]
+    pub menu_id: u32,
+    pub text_id: u32,
+}
+
+#[table(
+    accessor = game_gossip_menu_profile_option,
+    public,
+    index(accessor = by_menu, btree(columns = [menu_id]))
+)]
+pub struct GossipMenuProfileOption {
+    #[primary_key]
+    pub row_id: u32,
+    pub menu_id: u32,
+    pub option_index: u32,
+    pub icon: u32,
+    pub text: String,
+    pub action: u32,
+    pub action_menu_id: u32,
+    pub cond_type: u32,
+    pub cond_value1: u32,
+    pub cond_value2: u32,
+}
+
+#[table(
+    accessor = game_creature_gossip_menu_override,
+    public,
+    index(accessor = by_instance, btree(columns = [instance_id]))
+)]
+pub struct CreatureGossipMenuOverride {
+    #[primary_key]
+    pub creature_guid: u64,
+    pub menu_id: u32,
+    pub map_id: u32,
+    pub instance_id: u64,
+}
+
+#[table(accessor = game_npc_text, public)]
+pub struct NpcText {
+    #[primary_key]
+    pub text_id: u32,
+    pub text: String,
+}
+
+#[table(accessor = game_npc_text_slot, public, index(accessor = by_text_id, btree(columns = [text_id])))]
+pub struct NpcTextSlot {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub text_id: u32,
+    pub slot_index: u8,
+    pub text_male: String,
+    pub text_female: String,
+    pub probability: f32,
+}
+
+#[table(accessor = game_gossip_option, public, index(accessor = by_entry, btree(columns = [entry])))]
+pub struct GossipOption {
+    #[primary_key]
+    pub row_id: u32,
+    pub entry: u32,
+    pub option_index: u32,
+    pub icon: u32,
+    pub text: String,
+    pub action: u32,
+    pub action_menu_id: u32,
+    pub cond_type: u32,
+    pub cond_value1: u32,
+    pub cond_value2: u32,
+}
 
 #[table(accessor = game_gossip_condition, public)]
 pub struct GossipCondition {
@@ -46,14 +122,11 @@ pub(crate) fn select_gate(
     let (actor, npc) = if selected_action == gossip_option::SPIRITHEALER {
         crate::ghost::spirit_healer_gate(ctx, character_guid, npc_guid)?
     } else {
-        crate::items::npc_interaction_gate(
+        crate::npc_interaction::gate(
             ctx,
             character_guid,
             npc_guid,
-            u32::MAX,
-            "gossip creature",
-            "target has no gossip",
-            "use gossip",
+            crate::npc_interaction::NpcService::Gossip,
         )?
     };
     let active_menu = active_menu(ctx, &npc);
@@ -117,7 +190,7 @@ pub(crate) fn select_gate(
 pub(crate) fn active_menu(
     ctx: &ReducerContext,
     npc: &crate::WorldEntity,
-) -> Option<crate::creatures::GossipMenuProfile> {
+) -> Option<GossipMenuProfile> {
     ctx.db
         .game_creature_gossip_menu_override()
         .creature_guid()
@@ -273,4 +346,23 @@ fn quest_state(ctx: &ReducerContext, character_guid: u64, quest_entry: u32) -> Q
     } else {
         QuestState::Incomplete
     }
+}
+
+pub(crate) fn apply_gossip_select(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    npc_guid: u64,
+    selection: Selection,
+) -> Result<u32, String> {
+    let target_menu = select_gate(ctx, character_guid, npc_guid, &selection)?;
+    crate::hooks::fire_on_gossip_select(
+        ctx,
+        &crate::hooks::GossipSelectPayload {
+            character_guid,
+            npc_guid,
+            option_id: selection.option_id,
+            option_row_id: selection.row_id,
+        },
+    );
+    Ok(target_menu)
 }

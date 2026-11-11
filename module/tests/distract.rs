@@ -1,20 +1,21 @@
 mod support;
 
 use lyracore_shared::spell::taxonomy::{
-    A_STEALTH, E_DISTRACT, SPELL_ATTR_STEALTH_SAFE, T_AREA_ENEMY, T_SELF,
+    A_STEALTH, CAST_FLAG_STEALTH_SAFE, E_DISTRACT, T_AREA_ENEMY, T_SELF,
 };
 
 use std::collections::BTreeMap;
 use std::f32::consts::{FRAC_PI_4, TAU};
 use std::time::Duration;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::constants::unit_flags;
 use support::{poll_until, Standalone};
 
 type Row = BTreeMap<String, String>;
 
 const PLAYER: u64 = 1;
-const TEST_WOLF_ENTRY: u32 = 51000;
 const DISTRACT: u32 = 1725;
 const FIXTURE_STEALTH: u32 = 509_0700;
 
@@ -73,7 +74,7 @@ fn shard(name: &str) -> (Standalone, Line) {
         30_000,
         30,
         0,
-        SPELL_ATTR_STEALTH_SAFE,
+        CAST_FLAG_STEALTH_SAFE,
     );
     insert_effect(
         &shard,
@@ -126,7 +127,7 @@ fn insert_effect(
     target: u32,
     radius_yd: f32,
 ) {
-    let id = (spell_id as u64) << 2;
+    let id = packed_spell_effect_id(spell_id, 0);
     shard.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \

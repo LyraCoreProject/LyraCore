@@ -209,7 +209,7 @@ fn send_to_identity(ctx: &ReducerContext, recipient_identity: Identity, cmd: &st
         payload: payload.to_string(),
         created_at: crate::time::now(ctx),
     });
-    crate::native::addon_message(ctx, &row);
+    crate::native::addon::appeared(ctx, &row);
 }
 
 #[cfg(not(feature = "debug_reducers"))]
@@ -319,7 +319,7 @@ pub(crate) fn apply_client_command(
                             dispatch_lane,
                             dispatch_next: 0,
                         });
-                    if crate::native::is_player(ctx, character_guid) {
+                    if crate::native::has_world_session(ctx, character_guid) {
                         let outcome = apply_local_party_command(ctx, &inserted, handler);
                         if outcome == CommandOutcome::WaitingForCapacity {
                             return Err(outcome.tag().into());
@@ -924,4 +924,31 @@ pub fn party_command_fixture_expire_after_receipt_window(
         .saturating_sub(1);
     table.id().update(intent);
     Ok(())
+}
+
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_addon_message, crate::EVENT_TTL_MICROS);
+    // Pending commands retain i64::MAX; only terminal results enter this bounded expiry prefix.
+    const COMMAND_REAP_LIMIT: usize = 64;
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
+    let intents = ctx.db.game_party_command_intent();
+    for intent in intents
+        .by_result_reap()
+        .filter(..=now)
+        .take(COMMAND_REAP_LIMIT)
+        .collect::<Vec<_>>()
+    {
+        if matches!(intent.state, CommandIntentState::Finished(_)) {
+            intents.id().delete(intent.id);
+        }
+    }
+    let receipts = ctx.db.game_party_command_receipt();
+    for receipt in receipts
+        .by_retention()
+        .filter(..=now)
+        .take(COMMAND_REAP_LIMIT)
+        .collect::<Vec<_>>()
+    {
+        receipts.id().delete(receipt.id);
+    }
 }

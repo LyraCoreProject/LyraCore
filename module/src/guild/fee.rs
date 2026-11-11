@@ -1,4 +1,3 @@
-use lyracore_shared::constants::npc_flags;
 use lyracore_shared::guild::{
     event_kind, fee_kind, name_key, validate_guild_name, GuildRefusal, CHARTER_COST_COPPER,
     EMBLEM_COST_COPPER, GUILD_CHARTER_ENTRY,
@@ -7,7 +6,7 @@ use spacetimedb::{table, ReducerContext, SpacetimeType, Table};
 
 use super::petition::game_guild_petition;
 use super::{game_guild, member, petition, push_event};
-use crate::items::{game_item_instance, game_item_template};
+use crate::{game_item_instance, game_item_template};
 
 #[derive(SpacetimeType, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GuildEmblem {
@@ -271,26 +270,13 @@ fn charter_gate(
 }
 
 pub(crate) fn npc_serves(ctx: &ReducerContext, payer_guid: u64, npc_guid: u64, kind: u8) -> bool {
-    let required_flags = match kind {
-        fee_kind::EMBLEM => npc_flags::TABARDDESIGNER,
-        fee_kind::CHARTER => npc_flags::PETITIONER | npc_flags::TABARDDESIGNER,
+    use crate::npc_interaction::NpcService;
+    let service = match kind {
+        fee_kind::EMBLEM => NpcService::GuildEmblem,
+        fee_kind::CHARTER => NpcService::GuildCharter,
         _ => return false,
     };
-    let Ok((payer, npc)) = crate::items::npc_interaction_gate(
-        ctx,
-        payer_guid,
-        npc_guid,
-        required_flags,
-        "guild NPC",
-        "target does not serve guild fees",
-        "pay a guild fee",
-    ) else {
-        return false;
-    };
-    npc.npc_flags & required_flags == required_flags
-        && !npc.dead
-        && npc.health != 0
-        && !crate::reputation::npc_refuses_interaction(ctx, &npc, &payer)
+    crate::npc_interaction::gate(ctx, payer_guid, npc_guid, service).is_ok()
 }
 
 struct CtxPurse<'a> {
@@ -458,27 +444,3 @@ crate::character_owned!(transfer, fn sweep_transfer_game_guild_fee_hold(ctx, cha
     table = game_guild_fee_hold,
     primary_key = payer_guid,
 });
-
-#[table(accessor = game_guild_fee_decision)]
-pub struct GuildFeeDecision {
-    #[primary_key]
-    pub operation_id: u64,
-    pub payer_guid: u64,
-    pub kind: u8,
-    pub accepted: bool,
-    pub refusal: String,
-    pub petition_id: u32,
-    pub decided_micros: i64,
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_unique_charter_fits_only_under_its_max_count() {
-        assert!(charter_fits(1, 0));
-        assert!(!charter_fits(1, 1));
-        assert!(charter_fits(0, 7), "max_count 0 sets no limit");
-    }
-}

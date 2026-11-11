@@ -140,6 +140,82 @@ pub struct ItemTemplate {
     pub spellcategory_5: u32,
 }
 
+impl ItemTemplate {
+    pub(crate) fn blank(entry: u32, name: &str) -> Self {
+        Self {
+            entry,
+            class: 0,
+            subclass: 0,
+            name: name.to_string(),
+            display_id: 0,
+            quality: 0,
+            inventory_type: 0,
+            item_level: 0,
+            required_level: 0,
+            max_durability: 0,
+            buy_price: 0,
+            sell_price: 0,
+            max_stack: 0,
+            damage_min: 0.0,
+            damage_max: 0.0,
+            delay_ms: 0,
+            stat_strength: 0,
+            stat_agility: 0,
+            stat_stamina: 0,
+            stat_intellect: 0,
+            stat_spirit: 0,
+            stat_crit: 0,
+            stat_hit: 0,
+            stat_armor: 0,
+            block_value: 0,
+            restores_power: false,
+            spellid_1: 0,
+            spelltrigger_1: 0,
+            spellid_2: 0,
+            spelltrigger_2: 0,
+            container_slots: 0,
+            sheath: 0,
+            bonding: 0,
+            holy_res: 0,
+            fire_res: 0,
+            nature_res: 0,
+            frost_res: 0,
+            shadow_res: 0,
+            arcane_res: 0,
+            spellid_3: 0,
+            spelltrigger_3: 0,
+            spellid_4: 0,
+            spelltrigger_4: 0,
+            spellid_5: 0,
+            spelltrigger_5: 0,
+            required_skill: 0,
+            required_skill_rank: 0,
+            required_reputation_faction: 0,
+            required_reputation_rank: 0,
+            max_count: 0,
+            item_flags: 0,
+            page_text: 0,
+            start_quest: 0,
+            bag_family: 0,
+            buy_count: 1,
+            food_type: 0,
+            allowed_class: ALL_PLAYABLE_CLASS_MASK,
+            allowed_race: ALL_PLAYABLE_RACE_MASK,
+            random_property: 0,
+            spellppmrate_1: 0.0,
+            spellppmrate_2: 0.0,
+            spellppmrate_3: 0.0,
+            spellppmrate_4: 0.0,
+            spellppmrate_5: 0.0,
+            spellcategory_1: 0,
+            spellcategory_2: 0,
+            spellcategory_3: 0,
+            spellcategory_4: 0,
+            spellcategory_5: 0,
+        }
+    }
+}
+
 #[table(accessor = game_item_instance, public, index(accessor = by_owner_guid, btree(columns = [owner_guid])))]
 #[derive(Clone)]
 pub struct ItemInstance {
@@ -179,7 +255,7 @@ impl ItemInstance {
         source: Option<NewItemSource>,
     ) -> Self {
         let row = ctx.db.game_item_instance().insert(row);
-        crate::native::item_changed(ctx, None, Some(&row), source);
+        crate::native::inventory::item_changed(ctx, None, Some(&row), source);
         super::equip::changed(ctx, None, Some(&row));
         row
     }
@@ -197,7 +273,7 @@ impl ItemInstance {
         let items = ctx.db.game_item_instance();
         let previous = items.guid().find(self.guid);
         let row = items.guid().update(self);
-        crate::native::item_changed(ctx, previous.as_ref(), Some(&row), source);
+        crate::native::inventory::item_changed(ctx, previous.as_ref(), Some(&row), source);
         super::equip::changed(ctx, previous.as_ref(), Some(&row));
         row
     }
@@ -215,20 +291,20 @@ impl ItemInstance {
             ctx.db.game_item_instance().guid().delete(self.guid);
         }
         // Sale preserves Petitions and pauses enchantments; see docs/schema.md when changing buyback.
-        crate::native::item_sold(ctx, &self, remaining.as_ref(), sold, evicted);
+        crate::native::inventory::item_sold(ctx, &self, remaining.as_ref(), sold, evicted);
         super::equip::changed(ctx, Some(&self), remaining.as_ref());
     }
 
     pub(super) fn insert_restored(self, ctx: &ReducerContext) {
         let row = ctx.db.game_item_instance().insert(self);
-        crate::native::item_restored(ctx, &row, true);
+        crate::native::inventory::item_restored(ctx, &row, true);
         super::equip::changed(ctx, None, Some(&row));
     }
 
     pub(super) fn update_restored(self, ctx: &ReducerContext) {
         let previous = ctx.db.game_item_instance().guid().find(self.guid);
         let row = ctx.db.game_item_instance().guid().update(self);
-        crate::native::item_restored(ctx, &row, false);
+        crate::native::inventory::item_restored(ctx, &row, false);
         super::equip::changed(ctx, previous.as_ref(), Some(&row));
     }
 
@@ -239,7 +315,7 @@ impl ItemInstance {
         super::forget_temporary_enchantment(ctx, guid);
         if let Some(row) = previous {
             crate::native::realm_petition::item_removed(ctx, &row);
-            crate::native::item_changed(ctx, Some(&row), None, None);
+            crate::native::inventory::item_changed(ctx, Some(&row), None, None);
             super::equip::changed(ctx, Some(&row), None);
         }
         removed
@@ -323,6 +399,8 @@ pub struct VendorStockRuntime {
     pub id: u8,
     pub runtime_id: u128,
 }
+
+crate::outside_table_catalog!(game_vendor_stock, game_vendor_stock_runtime);
 
 #[table(accessor = game_character_buyback, index(accessor = by_player_guid, btree(columns = [player_guid])))]
 pub struct BuybackEntry {

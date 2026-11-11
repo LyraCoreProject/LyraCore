@@ -1,16 +1,16 @@
 use lyracore_protocol::codec::ClientMovement;
 use lyracore_shared::constants::sheath_state;
-use lyracore_shared::{movement_flags, spatial};
-use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
+use lyracore_shared::movement_flags;
+use spacetimedb::{table, Identity, ReducerContext, Table};
 
-use crate::faction::game_faction_template;
-use crate::graveyard;
-use crate::helpers::entity_by_owner;
-use crate::{game_aura, game_character, game_creature_spline, game_instance};
+use crate::character::{persist_entity, RUN_SPEED_BP_1X};
+use crate::game_character;
 
+mod character_entity;
 mod placement;
 mod simulation;
 
+pub(crate) use character_entity::build_player_entity;
 pub(crate) use placement::MoveClock;
 pub(crate) use simulation::backfill_simulation;
 
@@ -260,6 +260,101 @@ pub struct WorldEntity {
 }
 
 impl WorldEntity {
+    /// A unit at `pose` with every other column at its neutral value; builders override the rest.
+    pub(crate) fn blank(guid: u64, map_id: u32, instance_id: u64, pose: [f32; 4]) -> Self {
+        let [x, y, z, orientation] = pose;
+        let mut entity = Self {
+            guid,
+            owner_identity: Identity::ZERO,
+            account_id: 0,
+            map_id,
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+            orientation,
+            grid_x: 0,
+            grid_y: 0,
+            cell: 0,
+            last_move_ms: 0,
+            type_mask: 0,
+            entry: 0,
+            scale_x: 1.0,
+            health: 0,
+            max_health: 0,
+            power: 0,
+            max_power: 0,
+            level: 0,
+            faction_template: 0,
+            unit_bytes_0: 0,
+            display_id: 0,
+            native_display_id: 0,
+            unit_flags: 0,
+            base_attack_time_ms: crate::combat::DEFAULT_ATTACK_TIME_MS,
+            dynamic_flags: 0,
+            dead: false,
+            player_bytes: 0,
+            player_bytes_2: 0,
+            player_bytes_3: 0,
+            player_flags: 0,
+            xp: 0,
+            next_level_xp: 0,
+            target_guid: 0,
+            money: 0,
+            unit_bytes_1: 0,
+            unit_bytes_2: 0,
+            strength: 0,
+            agility: 0,
+            stamina: 0,
+            intellect: 0,
+            spirit: 0,
+            npc_flags: 0,
+            armor: 0,
+            leg_ends_ms: 0,
+            wp_target: 0,
+            movement_flags: 0,
+            combat_until_ms: 0,
+            pickpocketed: false,
+            next_swing_spell: 0,
+            overpower_until_ms: 0,
+            revenge_until_ms: 0,
+            stance: 0,
+            owner_guid: 0,
+            skinned: false,
+            mana_regen_paused_until_ms: 0,
+            death_expire_micros: 0,
+            instance_id,
+            run_speed_mult_bp: RUN_SPEED_BP_1X,
+            godmode: false,
+            resting: false,
+            sheet_str_bonus: 0,
+            sheet_agi_bonus: 0,
+            sheet_sta_bonus: 0,
+            sheet_int_bonus: 0,
+            sheet_spi_bonus: 0,
+            sheet_ap_base: 0,
+            sheet_ap_mods: 0,
+            sheet_ap_modifiers: 0,
+            sheet_ranged_ap_modifiers: 0,
+            sheet_ranged_dmg_min_fraction: 0.0,
+            sheet_ranged_dmg_max_fraction: 0.0,
+            sheet_ranged_crit_bp: 0,
+            sheet_dmg_min: 0,
+            sheet_dmg_max: 0,
+            sheet_crit_bp: 0,
+            bank_bag_slots: 0,
+            mount_display_id: 0,
+            zone_id: 0,
+            sheet_ranged_ap: 0,
+            sheet_ranged_dmg_min: 0,
+            sheet_ranged_dmg_max: 0,
+            regeneration_pending: false,
+            combat_active: false,
+            simulation_indexed: false,
+        };
+        entity.place(x, y, z, MoveClock::Unchanged).unexplored();
+        entity
+    }
+
     pub(crate) fn is_player(&self) -> bool {
         self.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0
     }
@@ -270,6 +365,11 @@ impl WorldEntity {
 
     pub(crate) fn class(&self) -> u8 {
         ((self.unit_bytes_0 >> 8) & 0xFF) as u8
+    }
+
+    /// The shapeshift form, byte 2 of `unit_bytes_1`.
+    pub(crate) fn form(&self) -> u32 {
+        self.unit_bytes_1 >> 16 & 0xff
     }
 
     /// The pool `power` holds (`lyracore_shared::packing::power_type`) — byte 3 of `unit_bytes_0`.
@@ -353,7 +453,7 @@ pub(crate) fn score_and_log_movement(ctx: &ReducerContext, guid: u64, delta: &Mo
         return;
     }
     let max_speed =
-        crate::combat::effective_move_speed(ctx, guid, lyracore_shared::constants::speeds::RUN);
+        crate::modifiers::effective_move_speed(ctx, guid, lyracore_shared::constants::speeds::RUN);
     let Some((kind, magnitude)) = movement_violation(dist_2d, dt_s, max_speed) else {
         return;
     };
@@ -409,20 +509,12 @@ pub struct TeleportEvent {
     pub cross_map: bool,
 }
 
-pub(crate) fn is_cross_map_teleport(current_map_id: u32, target_map_id: u32) -> bool {
-    current_map_id != target_map_id
-}
-
-pub(crate) fn zone_transition(current: u32, resolved: Option<u32>) -> Option<u32> {
-    resolved.filter(|zone| *zone != current)
-}
-
 pub(crate) fn apply_zone_transition(
     ctx: &ReducerContext,
     entity: &mut WorldEntity,
     resolved: Option<u32>,
 ) {
-    let Some(zone) = zone_transition(entity.zone_id, resolved) else {
+    let Some(zone) = resolved.filter(|zone| *zone != entity.zone_id) else {
         return;
     };
     entity.zone_id = zone;
@@ -432,18 +524,15 @@ pub(crate) fn apply_zone_transition(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn teleport_player(
+/// Moves a Character to `pose`; a `teleport_gate` refusal leaves everything unchanged.
+pub(crate) fn teleport(
     ctx: &ReducerContext,
     player_guid: u64,
     map_id: u32,
     instance_id: u64,
-    x: f32,
-    y: f32,
-    z: f32,
-    o: f32,
-) {
-    teleport(ctx, player_guid, map_id, instance_id, [x, y, z, o], None);
+    pose: [f32; 4],
+) -> Result<(), crate::actor::ActionRefusal> {
+    relocate(ctx, player_guid, map_id, instance_id, pose, None)
 }
 
 /// Carries a Passenger to `map_id` with its Transport; `pose` is its world pose there.
@@ -452,11 +541,12 @@ pub(crate) fn teleport_aboard(
     map_id: u32,
     pose: [f32; 4],
     aboard: crate::transport::Aboard,
-) {
+) -> Result<(), crate::actor::ActionRefusal> {
     let guid = aboard.passenger.character_guid;
-    teleport(ctx, guid, map_id, 0, pose, Some(aboard));
+    relocate(ctx, guid, map_id, 0, pose, Some(aboard))
 }
 
+/// The Gate `teleport` applies; call it first only to refuse before writes of your own.
 pub(crate) fn teleport_gate(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -479,7 +569,7 @@ pub(crate) fn teleport_gate(
             "destination requires a World Session Transfer or a locally owned map",
         ));
     }
-    if crate::taxi::movement_is_suppressed(ctx, player_guid) {
+    if crate::taxi::is_in_flight(ctx, player_guid) {
         return Err(ActionRefusal::new(
             ActionRefusalKind::CannotAct,
             "Character is in flight",
@@ -493,7 +583,7 @@ pub(crate) fn teleport_gate(
         .ok_or_else(|| {
             ActionRefusal::new(ActionRefusalKind::MissingActor, "Character is not in world")
         })?;
-    if (is_cross_map_teleport(entity.map_id, map_id) || destination.is_some())
+    if (entity.map_id != map_id || destination.is_some())
         && (crate::native::realm_petition::pending(ctx, player_guid)
             || crate::native::realm_auction::pending(ctx, player_guid))
     {
@@ -505,24 +595,22 @@ pub(crate) fn teleport_gate(
     Ok(destination)
 }
 
-fn teleport(
+fn relocate(
     ctx: &ReducerContext,
     player_guid: u64,
     map_id: u32,
     instance_id: u64,
     [x, y, z, o]: [f32; 4],
     aboard: Option<crate::transport::Aboard>,
-) {
-    let Ok(destination) = teleport_gate(ctx, player_guid, map_id, instance_id) else {
-        return;
-    };
+) -> Result<(), crate::actor::ActionRefusal> {
+    let destination = teleport_gate(ctx, player_guid, map_id, instance_id)?;
     let entities = ctx.db.game_world_entity();
     let e = entities
         .guid()
         .find(player_guid)
         .expect("teleport Gate requires a live entity");
     let recipient_identity = e.owner_identity;
-    let cross_map = is_cross_map_teleport(e.map_id, map_id) || destination.is_some();
+    let cross_map = e.map_id != map_id || destination.is_some();
     let sessionless = crate::helpers::character_by_guid(ctx, player_guid)
         .is_some_and(|character| !character.online);
     let changes_partition = e.map_id != map_id || e.instance_id != instance_id;
@@ -530,7 +618,7 @@ fn teleport(
         crate::duel::interrupt_duel_for(ctx, player_guid);
         crate::trade::cancel_trade_for(ctx, player_guid);
     }
-    let teleport_counter = crate::native::begin_teleport(ctx, player_guid, cross_map);
+    let teleport_counter = crate::native::teleport::begin(ctx, player_guid, cross_map);
     // Drop queued pre-teleport motion so the next publish cannot snap peers back.
     crate::motion::drop_pending(ctx, player_guid);
     crate::transport::leave(ctx, player_guid);
@@ -541,13 +629,15 @@ fn teleport(
         persist_entity(ctx, &e, false);
         crate::combat::disengage(ctx, player_guid);
         crate::spell::break_stealth(ctx, player_guid);
-        ctx.db.game_entity_motion().guid().delete(player_guid);
     }
     if cross_map && !sessionless {
         crate::WorldEntity::delete(ctx, player_guid);
     } else {
+        if cross_map {
+            ctx.db.game_entity_motion().guid().delete(player_guid);
+        }
         let Some(mut e) = entities.guid().find(player_guid) else {
-            return;
+            return Ok(());
         };
         e.map_id = map_id;
         // A teleport takes the destination zone below; it explores nothing.
@@ -582,25 +672,7 @@ fn teleport(
         chars.guid().update(c);
     }
 
-    if let Some(previous) = ctx.db.game_creature_spline().guid().find(player_guid) {
-        let spline_id = crate::creatures::tick::next_spline_id(
-            crate::creatures::tick::now_ms(ctx),
-            previous.spline_id,
-        );
-        crate::creatures::tick::emit_move_spline(
-            ctx,
-            player_guid,
-            (x, y, z),
-            (x, y, z),
-            0,
-            false,
-            spline_id,
-            map_id,
-            instance_id,
-            spatial::grid_cell(x, y),
-            None,
-        );
-    }
+    crate::creatures::leg::halt_at(ctx, player_guid, map_id, instance_id, (x, y, z));
 
     crate::hooks::fire_on_character_relocated(
         ctx,
@@ -621,7 +693,7 @@ fn teleport(
         created_micros: crate::time::now(ctx).to_micros_since_unix_epoch() as u64,
         cross_map,
     });
-    crate::native::teleport_changed(ctx, &event, teleport_counter, aboard.as_ref());
+    crate::native::teleport::changed(ctx, &event, teleport_counter, aboard.as_ref());
     if let Some(aboard) = aboard.filter(|_| cross_map && !sessionless) {
         crate::transport::reboard(ctx, aboard.passenger);
     }
@@ -629,300 +701,6 @@ fn teleport(
     if changes_partition {
         crate::instance::reconcile_instance_removal(ctx, player_guid);
     }
-}
-
-pub(crate) fn set_home(ctx: &ReducerContext, guid: u64) {
-    let Some(e) = ctx.db.game_world_entity().guid().find(guid) else {
-        return;
-    };
-    let chars = ctx.db.game_character();
-    if let Some(mut c) = chars.guid().find(guid) {
-        c.home_map = e.map_id;
-        c.home_x = e.x;
-        c.home_y = e.y;
-        c.home_z = e.z;
-        c.home_zone = c.zone_id;
-        chars.guid().update(c);
-    }
-}
-
-pub(crate) fn recall_to_home(ctx: &ReducerContext, guid: u64) {
-    let Some(mut c) = crate::helpers::character_by_guid(ctx, guid) else {
-        return;
-    };
-    if ctx.db.game_world_entity().guid().find(guid).is_some() {
-        teleport_player(
-            ctx,
-            guid,
-            c.home_map,
-            0,
-            c.home_x,
-            c.home_y,
-            c.home_z,
-            c.orientation,
-        );
-        return;
-    }
-    if !crate::native::directory::owns_map(ctx, c.home_map)
-        || crate::taxi::movement_is_suppressed(ctx, guid)
-    {
-        return;
-    }
-    c.map_id = c.home_map;
-    c.x = c.home_x;
-    c.y = c.home_y;
-    c.z = c.home_z;
-    c.zone_id = c.home_zone;
-    c.pending_instance_id = 0;
-    ctx.db.game_character().guid().update(c);
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum WorldEntry {
-    Login,
-    WorldPort,
-}
-
-pub(crate) fn restore_reaped_instance(
-    ctx: &ReducerContext,
-    character: &mut crate::character::Character,
-) {
-    if character.pending_instance_id != 0
-        && ctx
-            .db
-            .game_instance()
-            .instance_id()
-            .find(character.pending_instance_id)
-            .is_none_or(|instance| instance.map_id != character.map_id)
-    {
-        let reaped_id = character.pending_instance_id;
-        match crate::instance::stranding_fallback(
-            crate::instance::imported_entrance_fallback(ctx, character.map_id),
-            crate::instance::is_dungeon_map(character.map_id),
-        ) {
-            crate::instance::StrandingFallback::Entrance(m, x, y, z, o) => {
-                character.map_id = m;
-                character.x = x;
-                character.y = y;
-                character.z = z;
-                character.orientation = o;
-            }
-            crate::instance::StrandingFallback::InPlaceOpenWorld => {}
-            crate::instance::StrandingFallback::HearthstoneHome => {
-                spacetimedb::log::warn!(
-                    "player_login: dungeon map {} has no imported entrance; moving {} to hearthstone",
-                    character.map_id, character.guid
-                );
-                character.map_id = character.home_map;
-                character.x = character.home_x;
-                character.y = character.home_y;
-                character.z = character.home_z;
-                character.orientation = 0.0;
-            }
-        }
-        character.pending_instance_id = 0;
-        spacetimedb::log::info!(
-            "player_login: instance {reaped_id} was reaped — {} falls back to map {} at instance 0",
-            character.guid,
-            character.map_id
-        );
-    }
-}
-
-pub(crate) fn apply_player_login(
-    ctx: &ReducerContext,
-    account: &crate::Account,
-    character_guid: u64,
-    owner: spacetimedb::Identity,
-    entry: WorldEntry,
-) -> Result<(), String> {
-    let chars = ctx.db.game_character();
-    let mut character = chars
-        .guid()
-        .find(character_guid)
-        .ok_or_else(|| format!("no such character: {character_guid}"))?;
-    if character.account_id != account.id {
-        return Err("character does not belong to caller".to_string());
-    }
-
-    if crate::transfer::is_in_transit(ctx, character_guid) {
-        return Err(format!(
-            "character {character_guid} is in transit between shards"
-        ));
-    }
-
-    if entry == WorldEntry::Login {
-        crate::items::begin_buyback_session(ctx, character_guid);
-    }
-    restamp_owned_data(ctx, character_guid, owner);
-
-    let entities = ctx.db.game_world_entity();
-    // Persist the previous live entity before replacement so ghost relog cannot lose progression.
-    if let Some(stale) = entities.guid().find(character_guid) {
-        persist_entity(ctx, &stale, false);
-        crate::WorldEntity::delete(ctx, character_guid);
-        character = chars.guid().find(character_guid).unwrap_or(character);
-    }
-
-    restore_reaped_instance(ctx, &mut character);
-    if !crate::native::directory::owns_map(ctx, character.map_id) {
-        return Err("World Shard does not own the Character map".into());
-    }
-    if !character.pending_ghost {
-        crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(character_guid));
-    }
-
-    let mut entity = crate::creatures::build_player_entity(ctx, &character, owner);
-    if entry == WorldEntry::Login {
-        crate::taxi::prepare_world_entry(ctx, &mut entity);
-    }
-    if character.pending_ghost {
-        let (dead, health, player_flags, unit_bytes_1) =
-            ghost_restored_fields(entity.player_flags, entity.unit_bytes_1);
-        entity.dead = dead;
-        entity.health = health;
-        entity.player_flags = player_flags;
-        entity.unit_bytes_1 = unit_bytes_1;
-    }
-    crate::away::at_world_entry(ctx, &mut entity, entry);
-    entity.insert(ctx);
-    crate::ghost::restore(ctx, character_guid);
-    crate::spell::recompute_display(ctx, character_guid);
-    if entry == WorldEntry::WorldPort {
-        crate::taxi::arm_taxi_flight(ctx, character_guid);
-    }
-    crate::transport::arm_crossings(ctx);
-    crate::mount::restore_mount_on_rebuild(ctx, character_guid);
-
-    crate::items::grant_starter_item(ctx, character.guid, owner)?;
-    crate::spell::spellbook::grant_createinfo_spells(
-        ctx,
-        character.guid,
-        owner,
-        character.race,
-        character.class,
-    );
-
-    crate::skill::ensure_player_skills(
-        ctx,
-        character.guid,
-        owner,
-        character.level as u32,
-        character.class,
-    );
-
-    crate::talent::apply_learned_talents(ctx, character.guid, owner, character.level as u32);
-
-    crate::spell::apply_starting_passives(
-        ctx,
-        character.guid,
-        character.race,
-        character.class,
-        character.level,
-    );
-
-    crate::spell::recompute_vitals(ctx, character.guid);
-    crate::spell::recompute_sheet(ctx, character.guid);
-
-    let (rested, consumed) = crate::xp::accrue_rested_on_login(
-        crate::time::now(ctx).to_micros_since_unix_epoch(),
-        character.last_logout_micros,
-        character.rested_xp,
-        character.level as u32,
-        character.resting,
-    );
-    character.rested_xp = rested;
-    let previous_rest_state = match entry {
-        WorldEntry::Login => lyracore_shared::packing::REST_STATE_NORMAL,
-        WorldEntry::WorldPort => character.rest_state,
-    };
-    character.rest_state = crate::rest::rest_state_after_bonus(
-        previous_rest_state,
-        character.rested_xp,
-        character.level,
-    );
-    if consumed {
-        character.last_logout_micros = 0;
-    }
-    if character.resting {
-        character.rested_since_micros = crate::time::now(ctx).to_micros_since_unix_epoch() as u64;
-    }
-
-    character.session_start_micros = crate::time::now(ctx).to_micros_since_unix_epoch() as u64;
-
-    character.owner_identity = owner;
-    character.online = true;
-    character.first_login = false;
-    let rest_state = character.rest_state;
-    chars.guid().update(character);
-    if let Some(mut entity) = ctx.db.game_world_entity().guid().find(character_guid) {
-        let previous_bytes = entity.player_bytes_2;
-        crate::rest::set_rest_state_byte(&mut entity, rest_state);
-        let resolved_area = crate::terrain::area_at(ctx, entity.map_id, entity.x, entity.y);
-        let resolved_zone = resolved_area.as_ref().map(crate::terrain::zone_of);
-        let previous_zone = entity.zone_id;
-        let was_resting = entity.resting;
-        let previous_flags = entity.player_flags;
-        if resolved_zone.is_some() {
-            apply_zone_transition(ctx, &mut entity, resolved_zone);
-            crate::rest::check_rest_state(ctx, &mut entity, resolved_area.as_ref());
-        }
-        if previous_zone != entity.zone_id
-            || was_resting != entity.resting
-            || previous_flags != entity.player_flags
-            || previous_bytes != entity.player_bytes_2
-        {
-            entity.update(ctx);
-        }
-    }
-    crate::instance::reconcile_instance_removal(ctx, character_guid);
-    crate::hooks::fire_on_login(ctx, &crate::hooks::LoginPayload { character_guid });
-    Ok(())
-}
-
-fn restamp_owned_data(ctx: &ReducerContext, character_guid: u64, identity: Identity) {
-    for sweep in crate::CHARACTER_OWNED_RESTAMP_SWEEPS {
-        sweep(ctx, character_guid, identity);
-    }
-}
-
-pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64) {
-    // Preserve the issued GUID floor before deleting the last row that refers to it.
-    crate::auth::bump_guid_high_water(ctx, character_guid);
-    crate::guild::forget_deleted_character(ctx, character_guid);
-    for sweep in crate::CHARACTER_OWNED_DELETE_SWEEPS {
-        sweep(ctx, character_guid);
-    }
-
-    crate::combat::disengage(ctx, character_guid);
-    crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(character_guid));
-    crate::motion::drop_pending(ctx, character_guid);
-    ctx.db.game_entity_motion().guid().delete(character_guid);
-    crate::WorldEntity::delete(ctx, character_guid);
-    ctx.db.game_character().guid().delete(character_guid);
-}
-
-#[cfg(feature = "debug_reducers")]
-#[reducer]
-pub fn debug_delete_character(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    if crate::native::realm_auction::pending(ctx, character_guid) {
-        return Err("CHAR_AUCTION_TRANSACTION_PENDING".into());
-    }
-    if crate::native::realm_petition::pending(ctx, character_guid) {
-        return Err("CHAR_GUILD_TRANSACTION_PENDING".into());
-    }
-    if crate::helpers::character_by_guid(ctx, character_guid).is_none()
-        && ctx
-            .db
-            .game_character()
-            .guid()
-            .find(character_guid)
-            .is_some()
-    {
-        return Err("CHAR_IN_TRANSIT".to_string());
-    }
-    crate::mail_text::drop_character_letters(ctx, character_guid);
-    cascade_delete_character(ctx, character_guid);
     Ok(())
 }
 
@@ -955,15 +733,6 @@ pub(crate) fn resolve_environmental_damage(dmg: u32, health: u32) -> (u32, bool)
     }
 }
 
-// Relay every accepted heartbeat even when the entity snapshot needs no durable update.
-pub(crate) struct MovementPlan {
-    pub persist_entity: bool,
-
-    pub relay_motion: bool,
-    pub fall_lethal: bool,
-    pub moved: bool,
-}
-
 pub(crate) fn movement_is_accepted(
     last_move_ms: u32,
     move_time_ms: u32,
@@ -979,29 +748,6 @@ pub(crate) fn movement_is_accepted(
         && o.is_finite()
 }
 
-pub(crate) fn plan_movement(
-    opcode: u16,
-    grid_changed: bool,
-    flags_changed: bool,
-    state_changed: bool,
-    drift_sq: f32,
-    fall_lethal: bool,
-    delta: &MovementDelta,
-) -> MovementPlan {
-    MovementPlan {
-        persist_entity: snapshot_needs_persist(
-            opcode,
-            grid_changed,
-            flags_changed,
-            state_changed,
-            drift_sq,
-        ),
-        relay_motion: true,
-        fall_lethal,
-        moved: delta.moved(),
-    }
-}
-
 /// `relay_body` is the MovementInfo the motion Relay sends to observers unchanged; None when the
 /// Native Host already relayed it.
 pub(crate) fn apply_movement_update(
@@ -1014,7 +760,7 @@ pub(crate) fn apply_movement_update(
     let info = movement.info();
     let (x, y, z) = (info.position.x, info.position.y, info.position.z);
     let (o, move_time_ms) = (info.orientation, info.timestamp);
-    if crate::taxi::movement_is_suppressed(ctx, mover.guid) {
+    if crate::taxi::is_in_flight(ctx, mover.guid) {
         return Ok(());
     }
     {
@@ -1064,11 +810,11 @@ pub(crate) fn apply_movement_update(
         && mover.is_player()
         && !movement.carries(movement_flags::ON_TRANSPORT)
     {
-        let dmg = lyracore_shared::env::fall_damage(movement.fall_time_ms(), mover.max_health);
+        let dmg = fall_damage(movement.fall_time_ms(), mover.max_health);
         let (health, lethal) = resolve_environmental_damage(dmg, mover.health);
         mover.health = health;
         fall_lethal = lethal;
-        crate::native::fall_damage(ctx, mover.guid, dmg);
+        crate::native::environment::fall_damage(ctx, mover.guid, dmg);
     }
     crossing.explore(ctx, &mut mover);
     if mover.is_player() && !mover.dead && (move_time_ms / 1000 != old_move_ms / 1000) {
@@ -1082,19 +828,14 @@ pub(crate) fn apply_movement_update(
         && (move_time_ms / 1000 != old_move_ms / 1000)
     {
         let liquid_level = crate::terrain::liquid_level_at(ctx, mover.map_id, mover.x, mover.y);
-        let submerged = lyracore_shared::env::is_submerged(
-            mover.z,
-            liquid_level.unwrap_or_default(),
-            liquid_level.is_some(),
-            mover.movement_flags,
-        );
+        let submerged = crate::terrain::is_submerged(mover.z, liquid_level, mover.movement_flags);
         crate::breath::update_breath_edge(ctx, &mover, submerged);
     }
     if crate::fatigue::feels_fatigue(&mover) && (move_time_ms / 1000 != old_move_ms / 1000) {
         let deep_water_level =
             crate::terrain::deep_water_level_at(ctx, mover.map_id, mover.x, mover.y);
         let in_deep_water =
-            lyracore_shared::env::is_in_deep_water(mover.z, deep_water_level, mover.movement_flags);
+            crate::terrain::is_in_deep_water(mover.z, deep_water_level, mover.movement_flags);
         crate::fatigue::update_fatigue_edge(ctx, &mover, in_deep_water);
     }
     let mount_indoor_due = mover.is_player()
@@ -1111,20 +852,18 @@ pub(crate) fn apply_movement_update(
         old_move_ms,
         move_time_ms,
     };
-    let plan = plan_movement(
+    let moved = delta.moved();
+
+    if snapshot_needs_persist(
         opcode,
         grid_x != old_gx || grid_y != old_gy,
         mover.movement_flags != old_flags,
         mover.resting != old_resting || mover.health != old_health,
         drift_sq,
-        fall_lethal,
-        &delta,
-    );
-
-    if plan.persist_entity {
+    ) {
         mover.update(ctx);
     }
-    if plan.fall_lethal {
+    if fall_lethal {
         crate::combat::kill_player(ctx, mover_guid, mover_guid);
     }
 
@@ -1133,7 +872,7 @@ pub(crate) fn apply_movement_update(
         crate::mount::dismount(ctx, mover_guid);
     }
 
-    if plan.moved {
+    if moved {
         crate::spell::break_channel(ctx, mover_guid);
     }
     // Use client flags: a late stop can change stored position without breaking Shadowmeld.
@@ -1141,11 +880,11 @@ pub(crate) fn apply_movement_update(
         crate::spell::break_auras_on_move(ctx, mover_guid);
     }
 
-    if plan.moved && boarding == crate::transport::Boarding::Ashore {
+    if moved && boarding == crate::transport::Boarding::Ashore {
         score_and_log_movement(ctx, mover_guid, &delta);
     }
 
-    if let Some(relay_body) = relay_body.filter(|_| plan.relay_motion) {
+    if let Some(relay_body) = relay_body {
         crate::motion::queue_motion(
             ctx,
             mover_guid,
@@ -1159,148 +898,6 @@ pub(crate) fn apply_movement_update(
     }
 
     Ok(())
-}
-
-pub(crate) fn apply_set_target(
-    ctx: &ReducerContext,
-    mut player: WorldEntity,
-    target_guid: u64,
-) -> Result<(), String> {
-    player.target_guid = target_guid;
-    player.update(ctx);
-    Ok(())
-}
-
-const INSPECT_RANGE_SQ: f32 = 100.0;
-
-pub(crate) fn can_inspect(
-    target_is_player: bool,
-    same_map: bool,
-    dist_sq: f32,
-    friendly: bool,
-) -> Result<(), String> {
-    if !target_is_player {
-        return Err("inspect target is not a player".to_string());
-    }
-    if !same_map {
-        return Err("inspect target on another map".to_string());
-    }
-    if dist_sq > INSPECT_RANGE_SQ {
-        return Err("inspect target out of range".to_string());
-    }
-    if !friendly {
-        return Err("inspect target is not friendly".to_string());
-    }
-    Ok(())
-}
-
-pub(crate) fn apply_inspect(
-    ctx: &ReducerContext,
-    inspector: crate::WorldEntity,
-    target_guid: u64,
-) -> Result<(), crate::Refusal> {
-    let target = crate::helpers::live_entity(ctx, target_guid)
-        .map_err(|_| "no such inspect target".to_string())?;
-    let dist_sq = crate::helpers::dist_sq(&inspector, &target);
-    let friendly = ctx.db.game_faction_template().count() == 0
-        || crate::faction::is_friendly(ctx, inspector.faction_template, target.faction_template);
-    Ok(can_inspect(
-        target.is_player(),
-        target.map_id == inspector.map_id && target.instance_id == inspector.instance_id,
-        dist_sq,
-        friendly,
-    )?)
-}
-
-pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), crate::Refusal> {
-    use lyracore_shared::constants::{player_flags, unit_vis_flags};
-    let entities = ctx.db.game_world_entity();
-    let mut player = entities
-        .guid()
-        .find(guid)
-        .ok_or_else(|| "caller not in world".to_string())?;
-    if !player.dead {
-        return Ok(());
-    }
-    if player.player_flags & player_flags::GHOST != 0 {
-        return Ok(());
-    }
-
-    let (corpse_bytes_1, corpse_bytes_2) = crate::corpse::corpse_appearance_bytes(
-        player.unit_bytes_0,
-        player.player_bytes,
-        player.player_bytes_2,
-    );
-    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
-    let (new_expire, delay_micros) =
-        crate::corpse::escalated_reclaim(player.death_expire_micros, now_micros);
-
-    let corpse_guid = crate::corpse::corpse_guid_for(player.guid);
-    crate::Corpse::delete(ctx, corpse_guid);
-    crate::Corpse {
-        guid: corpse_guid,
-        owner_guid: player.guid,
-        map_id: player.map_id,
-        x: player.x,
-        y: player.y,
-        z: player.z,
-        orientation: player.orientation,
-        display_id: player.native_display_id,
-        bytes_1: corpse_bytes_1,
-        bytes_2: corpse_bytes_2,
-        created_at: crate::time::now(ctx),
-        reclaim_delay_micros: delay_micros,
-        is_bones: false,
-        instance_id: player.instance_id,
-        cell: 0,
-    }
-    .insert(ctx);
-
-    player.health = 1;
-    player.player_flags |= player_flags::GHOST;
-    player.unit_bytes_1 |= unit_vis_flags::GHOST;
-    player.death_expire_micros = new_expire;
-    let player_guid = player.guid;
-    let (death_x, death_y, death_map_id, death_race) =
-        (player.x, player.y, player.map_id, player.race());
-    player.update(ctx);
-    crate::ghost::restore(ctx, player_guid);
-
-    crate::creatures::despawn_pets(ctx, player_guid);
-
-    let gy = graveyard::resolve_graveyard(ctx, death_map_id, death_x, death_y, death_race);
-    teleport_player(ctx, player_guid, gy.map, 0, gy.x, gy.y, gy.z, gy.o);
-
-    crate::spell::clear_resurrect_request_and_option(ctx, player_guid);
-    Ok(())
-}
-
-pub(crate) fn persisted_pending_ghost(dead: bool, player_flags: u32) -> bool {
-    dead && player_flags & lyracore_shared::constants::player_flags::GHOST != 0
-}
-
-pub(crate) const RUN_SPEED_BP_1X: u32 = 10_000;
-
-pub(crate) fn persisted_gm_playtest(
-    godmode: bool,
-    run_speed_mult_bp: u32,
-    set_offline: bool,
-) -> (bool, u32) {
-    if set_offline {
-        (false, RUN_SPEED_BP_1X)
-    } else {
-        (godmode, run_speed_mult_bp)
-    }
-}
-
-pub(crate) fn ghost_restored_fields(player_flags: u32, unit_bytes_1: u32) -> (bool, u32, u32, u32) {
-    use lyracore_shared::constants::{player_flags as pf, unit_vis_flags};
-    (
-        true,
-        1,
-        player_flags | pf::GHOST,
-        unit_bytes_1 | unit_vis_flags::GHOST,
-    )
 }
 
 pub(crate) fn apply_set_sheathed(
@@ -1323,6 +920,9 @@ pub(crate) fn apply_set_sheathed(
 // The states a client may pick: stand, sit, sleep, kneel.
 const PLAYER_STAND_STATES: [u8; 4] = [0, 1, 3, 8];
 
+/// The stand state is the low byte of `unit_bytes_1`.
+pub(crate) const STAND_STATE_MASK: u32 = 0xFF;
+pub(crate) const STAND_STATE_STAND: u32 = 0;
 const STAND_STATE_DEAD: u32 = 7;
 
 // No alive check: the client sits a released ghost.
@@ -1334,7 +934,7 @@ pub(crate) fn apply_set_stand_state(
     if !PLAYER_STAND_STATES.contains(&state) {
         return Err(format!("invalid stand state {state}"));
     }
-    let packed = (actor.unit_bytes_1 & !0xFF) | u32::from(state);
+    let packed = (actor.unit_bytes_1 & !STAND_STATE_MASK) | u32::from(state);
     if packed == actor.unit_bytes_1 {
         return Ok(());
     }
@@ -1349,247 +949,61 @@ pub(crate) fn stand_up_on_damage(ctx: &ReducerContext, target_guid: u64) {
     let Some(mut target) = entities.guid().find(target_guid) else {
         return;
     };
-    let state = target.unit_bytes_1 & 0xFF;
+    let state = target.unit_bytes_1 & STAND_STATE_MASK;
     if !target.is_player()
         || target.mount_display_id != 0
-        || state == 0
+        || state == STAND_STATE_STAND
         || state == STAND_STATE_DEAD
     {
         return;
     }
-    target.unit_bytes_1 &= !0xFF;
+    target.unit_bytes_1 &= !STAND_STATE_MASK;
     target.update(ctx);
 }
 
-pub const RESURRECTION_SICKNESS_SPELL: u32 = 15007;
-
-fn spirit_res_vitals(max_health: u32, max_power: u32) -> (u32, u32) {
-    ((max_health / 2).max(1), max_power / 2)
-}
-
-// None below level 11; one minute per level above 10, up to the spell's ten minutes.
-fn resurrection_sickness_micros(level: u32) -> Option<i64> {
-    const MINUTE_MICROS: i64 = 60_000_000;
-    (level >= 11).then(|| i64::from(level.min(20) - 10) * MINUTE_MICROS)
-}
-
-pub(crate) fn do_spirit_healer_res(ctx: &ReducerContext, guid: u64) -> Result<(), crate::Refusal> {
-    use lyracore_shared::constants::player_flags;
-    let entities = ctx.db.game_world_entity();
-    let mut player = entities
-        .guid()
-        .find(guid)
-        .ok_or_else(|| "caller not in world".to_string())?;
-    if !player.dead || player.player_flags & player_flags::GHOST == 0 {
-        return Err("caller is not a ghost".into());
-    }
-    let (health, power) = spirit_res_vitals(player.max_health, player.max_power);
-    let player_level = player.level;
-    player.health = health;
-    player.power = power;
-    player.update(ctx);
-    crate::ghost::finish_resurrection(ctx, guid);
-    crate::items::apply_spirit_healer_durability_loss(ctx, guid);
-    let Some(sickness_micros) = resurrection_sickness_micros(player_level) else {
-        return Ok(());
-    };
-    crate::spell::apply_spell_auras(ctx, RESURRECTION_SICKNESS_SPELL, guid, 1, 1);
-    let expires_at = spacetimedb::Timestamp::from_micros_since_unix_epoch(
-        crate::time::now(ctx).to_micros_since_unix_epoch() + sickness_micros,
-    );
-    let sickness: Vec<_> = ctx
-        .db
-        .game_aura()
-        .by_target()
-        .filter(&guid)
-        .filter(|aura| aura.spell_id == RESURRECTION_SICKNESS_SPELL)
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_movement_violation, crate::EVENT_TTL_MICROS);
+    let cutoff = crate::time::now(ctx).to_micros_since_unix_epoch() - crate::EVENT_TTL_MICROS;
+    let teleports = ctx.db.game_teleport_event();
+    let stale: Vec<u64> = teleports
+        .iter()
+        .filter(|event| (event.created_micros as i64) < cutoff)
+        .map(|event| event.id)
         .collect();
-    for mut aura in sickness {
-        aura.expires_at = expires_at;
-        aura.update(ctx);
-    }
-    Ok(())
-}
-
-fn accrue_played_on_persist(now_micros: i64, session_start_micros: u64, pool: u32) -> u32 {
-    if session_start_micros == 0 {
-        return pool;
-    }
-    let elapsed_secs = (now_micros as u64).saturating_sub(session_start_micros) / 1_000_000;
-    pool.saturating_add(elapsed_secs as u32)
-}
-
-pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_offline: bool) {
-    let chars = ctx.db.game_character();
-    if let Some(mut c) = chars.guid().find(entity.guid) {
-        c.x = entity.x;
-        c.y = entity.y;
-        c.z = entity.z;
-        c.orientation = entity.orientation;
-        if let Some(z) = crate::terrain::zone_id_at(ctx, entity.map_id, entity.x, entity.y) {
-            c.zone_id = z;
-        }
-        c.level = entity.level as u8;
-        c.xp = entity.xp;
-        c.next_level_xp = entity.next_level_xp;
-        c.money = entity.money;
-        c.bank_bag_slots = entity.bank_bag_slots;
-        // Zero means uninitialized health; pending_ghost restores a released ghost separately.
-        c.health = entity.health.max(1);
-        c.power = entity.power;
-
-        c.death_expire_micros = entity.death_expire_micros;
-
-        c.pending_instance_id = entity.instance_id;
-        c.pending_ghost = persisted_pending_ghost(entity.dead, entity.player_flags);
-        let (pending_godmode, pending_speed_bp) =
-            persisted_gm_playtest(entity.godmode, entity.run_speed_mult_bp, set_offline);
-        c.pending_godmode = pending_godmode;
-        c.pending_run_speed_mult_bp = pending_speed_bp;
-        // Close the played-time span on every persist so relog cannot count it twice.
-        c.played_total_secs = accrue_played_on_persist(
-            crate::time::now(ctx).to_micros_since_unix_epoch(),
-            c.session_start_micros,
-            c.played_total_secs,
-        );
-        c.session_start_micros = 0;
-        c.resting = entity.resting;
-        if set_offline {
-            c.online = false;
-            c.last_logout_micros = crate::time::now(ctx).to_micros_since_unix_epoch() as u64;
-            crate::rest::materialize_on_logout(
-                &mut c,
-                crate::time::now(ctx).to_micros_since_unix_epoch(),
-            );
-        }
-        chars.guid().update(c);
+    for id in stale {
+        teleports.id().delete(id);
     }
 }
 
-pub(crate) fn remove_live_character(
-    ctx: &ReducerContext,
-    entity: WorldEntity,
-    departure: CharacterDeparture,
-) {
-    // Fire logout hooks before deletion while handlers can still read the live entity.
-    crate::hooks::fire_on_logout(
-        ctx,
-        &crate::hooks::LogoutPayload {
-            character_guid: entity.guid,
-        },
-    );
-    crate::duel::interrupt_duel_for(ctx, entity.guid);
-    persist_entity(ctx, &entity, true);
-
-    finish_logout(
-        ctx,
-        entity.guid,
-        persisted_pending_ghost(entity.dead, entity.player_flags),
-        departure,
-    );
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum CharacterDeparture {
-    Logout,
-    Transfer,
-}
-
-pub(crate) fn remove_loading_character(
-    ctx: &ReducerContext,
-    guid: u64,
-    departure: CharacterDeparture,
-) {
-    crate::hooks::fire_on_logout(
-        ctx,
-        &crate::hooks::LogoutPayload {
-            character_guid: guid,
-        },
-    );
-    let Some(mut character) = crate::helpers::character_by_guid(ctx, guid) else {
-        return;
-    };
-    character.online = false;
-    character.last_logout_micros = crate::time::now(ctx).to_micros_since_unix_epoch() as u64;
-    if departure == CharacterDeparture::Logout {
-        character.pending_godmode = false;
-        character.pending_run_speed_mult_bp = RUN_SPEED_BP_1X;
+// Client fall_time_ms includes jump ascent; gravity is about 19.29 yd/s^2.
+fn fall_damage(fall_time_ms: u32, max_health: u32) -> u32 {
+    let t = fall_time_ms as f32 / 1000.0;
+    let height_yd = 0.5 * 19.29 * t * t;
+    let perc = 0.018 * height_yd - 0.2426;
+    if perc <= 0.0 {
+        return 0;
     }
-    crate::rest::materialize_on_logout(
-        &mut character,
-        crate::time::now(ctx).to_micros_since_unix_epoch(),
-    );
-    let keep_corpse = character.pending_ghost;
-    ctx.db.game_character().guid().update(character);
-    finish_logout(ctx, guid, keep_corpse, departure);
-}
-
-fn finish_logout(
-    ctx: &ReducerContext,
-    guid: u64,
-    keep_corpse: bool,
-    departure: CharacterDeparture,
-) {
-    crate::combat::disengage(ctx, guid);
-    crate::trade::cancel_trade_for(ctx, guid);
-    if !keep_corpse {
-        crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(guid));
-    }
-    crate::spell::clear_resurrect_request_and_option(ctx, guid);
-    crate::spell::break_stealth(ctx, guid);
-    crate::creatures::despawn_pets(ctx, guid);
-    if departure == CharacterDeparture::Logout {
-        crate::items::clear_buyback(ctx, guid);
-    }
-    crate::motion::drop_pending(ctx, guid);
-    ctx.db.game_entity_motion().guid().delete(guid);
-    crate::WorldEntity::delete(ctx, guid);
-}
-
-pub(crate) fn apply_gossip_select(
-    ctx: &ReducerContext,
-    character_guid: u64,
-    npc_guid: u64,
-    selection: crate::gossip::Selection,
-) -> Result<u32, String> {
-    let target_menu = crate::gossip::select_gate(ctx, character_guid, npc_guid, &selection)?;
-    crate::hooks::fire_on_gossip_select(
-        ctx,
-        &crate::hooks::GossipSelectPayload {
-            character_guid,
-            npc_guid,
-            option_id: selection.option_id,
-            option_row_id: selection.row_id,
-        },
-    );
-    Ok(target_menu)
-}
-
-#[reducer(client_disconnected)]
-pub fn on_disconnect(ctx: &ReducerContext) {
-    // Every call from a Peer Shard connects and disconnects as that Shard; it holds no World Session.
-    if crate::peer::is_peer(ctx, ctx.sender()) {
-        return;
-    }
-    crate::native::close(ctx);
-    if let Some(entity) = entity_by_owner(ctx, ctx.sender()) {
-        if !crate::native::is_player(ctx, entity.guid) {
-            remove_live_character(ctx, entity, CharacterDeparture::Logout);
-        }
-    }
+    (max_health as f32 * perc.min(1.0)) as u32
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        accrue_played_on_persist, can_inspect, ghost_restored_fields, is_cross_map_teleport,
-        movement_violation, persisted_gm_playtest, persisted_pending_ghost, plan_movement,
-        resolve_environmental_damage, resurrection_sickness_micros, snapshot_needs_persist,
-        spirit_res_vitals, zone_transition, MovementDelta, INSPECT_RANGE_SQ, MOVE_VIOLATION_SPEED,
-        MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD, RUN_SPEED_BP_1X,
+        fall_damage, movement_violation, resolve_environmental_damage, snapshot_needs_persist,
+        MOVE_VIOLATION_SPEED, MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD,
     };
 
     const HEARTBEAT: u16 = lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16;
+
+    #[test]
+    fn fall_damage_curve() {
+        assert_eq!(fall_damage(0, 100), 0);
+        assert_eq!(fall_damage(800, 100), 0);
+        assert_eq!(fall_damage(1_180, 100), 0);
+        assert_eq!(fall_damage(1_500, 100), 14);
+        assert_eq!(fall_damage(1_500, 1_000), 148);
+        assert_eq!(fall_damage(10_000, 100), 100);
+    }
 
     #[test]
     fn a_heartbeat_that_changed_nothing_observable_is_not_persisted() {
@@ -1665,62 +1079,6 @@ mod tests {
     }
 
     #[test]
-    fn a_zone_transition_writes_only_when_the_resolved_zone_is_new() {
-        assert_eq!(zone_transition(12, Some(40)), Some(40));
-        assert_eq!(zone_transition(0, Some(12)), Some(12));
-        assert_eq!(zone_transition(12, Some(12)), None);
-        assert_eq!(zone_transition(12, None), None);
-        assert_eq!(zone_transition(0, None), None);
-    }
-
-    #[test]
-    fn plan_movement_persists_observable_changes_and_never_gates_the_relay() {
-        let stationary = MovementDelta {
-            old_x: 0.0,
-            old_y: 0.0,
-            old_z: 0.0,
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-            old_move_ms: 0,
-            move_time_ms: 0,
-        };
-        for &(grid, flags, state, drift, persist) in &[
-            (false, false, false, 0.0, false),
-            (true, false, false, 0.0, true),
-            (false, true, false, 0.0, true),
-            (false, false, true, 0.0, true),
-            (false, false, false, 17.0, true),
-        ] {
-            let plan = plan_movement(HEARTBEAT, grid, flags, state, drift, false, &stationary);
-            assert_eq!(plan.persist_entity, persist);
-            assert!(
-                plan.relay_motion,
-                "the motion relay must never be gated on the persist decision"
-            );
-        }
-        let lethal = plan_movement(HEARTBEAT, false, false, false, 0.0, true, &stationary);
-        assert!(lethal.fall_lethal);
-        assert!(!lethal.persist_entity);
-        assert!(
-            lethal.relay_motion,
-            "even a lethal-fall heartbeat still relays"
-        );
-        let moving = MovementDelta {
-            old_x: 0.0,
-            old_y: 0.0,
-            old_z: 0.0,
-            x: 10.0,
-            y: 0.0,
-            z: 0.0,
-            old_move_ms: 0,
-            move_time_ms: 500,
-        };
-        assert!(plan_movement(HEARTBEAT, false, false, false, 0.0, false, &moving).moved);
-        assert!(!plan_movement(HEARTBEAT, false, false, false, 0.0, false, &stationary).moved);
-    }
-
-    #[test]
     fn movement_clock_wrap_accepts_new_packets_and_refuses_stale_ones() {
         let accepted = |last, next| super::movement_is_accepted(last, next, 0.0, 0.0, 0.0, 0.0);
         assert!(accepted(0, u32::MAX - 10));
@@ -1787,124 +1145,5 @@ mod tests {
             movement_violation(run * 2.0 * 0.5, 0.5, run / 2.0).is_some(),
             "snared mover flagged sooner"
         );
-    }
-
-    #[test]
-    fn is_cross_map_teleport_only_when_target_map_differs() {
-        assert!(
-            !is_cross_map_teleport(0, 0),
-            "same map (both open world) is a same-map hop"
-        );
-        assert!(
-            !is_cross_map_teleport(36, 36),
-            "same map (both inside the same instance map) is a same-map hop"
-        );
-        assert!(
-            is_cross_map_teleport(0, 36),
-            "Elwynn -> Deadmines is cross-map"
-        );
-        assert!(
-            is_cross_map_teleport(36, 0),
-            "Deadmines -> Elwynn (exit) is cross-map"
-        );
-    }
-
-    #[test]
-    fn pending_ghost_preserves_only_released_ghosts() {
-        use lyracore_shared::constants::player_flags::GHOST;
-        assert!(persisted_pending_ghost(true, GHOST));
-        assert!(!persisted_pending_ghost(false, GHOST));
-        assert!(!persisted_pending_ghost(true, 0));
-    }
-
-    #[test]
-    fn gm_playtest_state_carries_across_a_map_change_and_resets_on_a_real_logout() {
-        assert_eq!(
-            persisted_gm_playtest(true, 30_000, false),
-            (true, 30_000),
-            "a cross-map hop carries godmode and the speed multiplier"
-        );
-        assert_eq!(
-            persisted_gm_playtest(true, 30_000, true),
-            (false, RUN_SPEED_BP_1X),
-            "a real logout resets GM playtest state to off / 1x"
-        );
-        assert_eq!(
-            persisted_gm_playtest(false, RUN_SPEED_BP_1X, false),
-            (false, RUN_SPEED_BP_1X)
-        );
-    }
-
-    #[test]
-    fn ghost_restored_fields_reapply_exactly_the_release_state_over_the_fresh_build() {
-        use lyracore_shared::constants::{player_flags, unit_vis_flags};
-        let (dead, health, pf, ub1) = ghost_restored_fields(0, 17u32 << 16);
-        assert!(dead, "a preserved ghost rebuilds dead");
-        assert_eq!(
-            health, 1,
-            "ghost HP is 1 (vanilla), matching do_repop's release"
-        );
-        assert_eq!(pf, player_flags::GHOST, "the GHOST player flag is set");
-        assert_eq!(
-            ub1,
-            (17u32 << 16) | unit_vis_flags::GHOST,
-            "the ghost render bit ORs over the stance byte"
-        );
-        let (_, _, pf2, ub2) = ghost_restored_fields(pf, ub1);
-        assert_eq!((pf2, ub2), (pf, ub1));
-    }
-
-    #[test]
-    fn inspect_gate_admits_only_an_in_range_friendly_player() {
-        assert!(can_inspect(true, true, 0.0, true).is_ok());
-        assert!(can_inspect(true, true, INSPECT_RANGE_SQ, true).is_ok());
-
-        assert_eq!(
-            can_inspect(false, true, 0.0, true).unwrap_err(),
-            "inspect target is not a player"
-        );
-        assert_eq!(
-            can_inspect(true, false, 0.0, true).unwrap_err(),
-            "inspect target on another map"
-        );
-        assert_eq!(
-            can_inspect(true, true, INSPECT_RANGE_SQ + 1.0, true).unwrap_err(),
-            "inspect target out of range"
-        );
-        assert_eq!(
-            can_inspect(true, true, 0.0, false).unwrap_err(),
-            "inspect target is not friendly"
-        );
-    }
-
-    #[test]
-    fn accrue_played_folds_elapsed_whole_seconds_into_the_pool() {
-        assert_eq!(accrue_played_on_persist(5_000_000, 0, 42), 42);
-        let now = 1_000_090_500_000_i64;
-        let session_start = 1_000_000_000_000_u64;
-        assert_eq!(accrue_played_on_persist(now, session_start, 10), 100);
-        assert_eq!(accrue_played_on_persist(1_000_000_500, 1_000_000_000, 0), 0);
-    }
-
-    #[test]
-    fn spirit_healer_res_restores_half_vitals() {
-        assert_eq!(spirit_res_vitals(200, 80), (100, 40));
-        assert_eq!(spirit_res_vitals(199, 81), (99, 40));
-        assert_eq!(spirit_res_vitals(1, 0), (1, 0));
-        assert_eq!(
-            spirit_res_vitals(0, 0),
-            (1, 0),
-            "the .max(1) floor keeps a 0-max res alive"
-        );
-    }
-
-    #[test]
-    fn resurrection_sickness_lasts_a_minute_per_level_above_ten_up_to_ten_minutes() {
-        const MINUTE: i64 = 60_000_000;
-        assert_eq!(resurrection_sickness_micros(10), None);
-        assert_eq!(resurrection_sickness_micros(11), Some(MINUTE));
-        assert_eq!(resurrection_sickness_micros(15), Some(5 * MINUTE));
-        assert_eq!(resurrection_sickness_micros(20), Some(10 * MINUTE));
-        assert_eq!(resurrection_sickness_micros(60), Some(10 * MINUTE));
     }
 }

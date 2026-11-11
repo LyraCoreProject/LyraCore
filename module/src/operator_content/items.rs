@@ -2,18 +2,15 @@ use std::collections::BTreeSet;
 
 use lyracore_package_delta::ids::{
     is_fixture_reserved_item_id, is_operator_template_id, is_package_item_id,
-    OPERATOR_TEMPLATE_ID_CEIL, OPERATOR_TEMPLATE_ID_FLOOR,
+    OPERATOR_TEMPLATE_ID_FLOOR,
 };
 use lyracore_protocol::messages::vanilla::{
     Bonding, InventoryType, ItemClassAndSubClass, ItemQuality, SheatheType, SpellTriggerType,
 };
 use spacetimedb::{reducer, ReducerContext, SpacetimeType, Table};
 
-use crate::items::{
-    game_item_instance, game_item_template, game_npc_vendor, ItemTemplate, NpcVendor,
-};
-use crate::native::game_native_player;
 use crate::{game_creature_template, game_spell};
+use crate::{game_item_instance, game_item_template, game_npc_vendor, ItemTemplate, NpcVendor};
 
 const MAX_ITEM_EDITS: usize = 64;
 const MAX_VENDOR_OFFERS: usize = 128;
@@ -161,8 +158,7 @@ pub fn operator_apply_item_edits(ctx: &ReducerContext, edits: Vec<ItemEdit>) -> 
         changes.push(change);
     }
     if !updated.is_empty() {
-        for connected in ctx.db.game_native_player().iter() {
-            let guid = connected.character_guid;
+        for guid in crate::native::world_session_characters(ctx) {
             if ctx
                 .db
                 .game_item_instance()
@@ -178,7 +174,7 @@ pub fn operator_apply_item_edits(ctx: &ReducerContext, edits: Vec<ItemEdit>) -> 
         }
     }
     for entry in changed {
-        crate::native::broadcast_item_query(ctx, entry)?;
+        crate::native::query::broadcast_item_query(ctx, entry)?;
     }
     for change in changes {
         super::log_change(ctx, &change);
@@ -225,7 +221,7 @@ impl ItemIds {
                 .max()
                 .unwrap_or(OPERATOR_TEMPLATE_ID_FLOOR - 1)
         });
-        let next = next_template_id(last)?;
+        let next = super::next_template_id(last)?;
         self.item = Some(next);
         Ok(next)
     }
@@ -243,14 +239,6 @@ impl ItemIds {
         self.vendor = Some(next);
         Ok(next)
     }
-}
-
-fn next_template_id(last: u32) -> Result<u32, String> {
-    let next = last.saturating_add(1);
-    if next > OPERATOR_TEMPLATE_ID_CEIL {
-        return Err(format!("the Operator Template Range ({OPERATOR_TEMPLATE_ID_FLOOR} to {OPERATOR_TEMPLATE_ID_CEIL}) is exhausted"));
-    }
-    Ok(next)
 }
 
 fn apply(
@@ -490,16 +478,6 @@ mod tests {
             buy_count: 1,
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn allocation_starts_in_range_and_refuses_exhaustion() {
-        assert_eq!(
-            next_template_id(OPERATOR_TEMPLATE_ID_FLOOR - 1),
-            Ok(5_200_500)
-        );
-        assert_eq!(next_template_id(5_200_541), Ok(5_200_542));
-        assert!(next_template_id(OPERATOR_TEMPLATE_ID_CEIL).is_err());
     }
 
     #[test]

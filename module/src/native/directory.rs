@@ -425,6 +425,19 @@ pub struct CharacterProfilesRetry {
     pub call: CharacterProfiles,
 }
 
+crate::outside_table_catalog!(
+    game_map_owner,
+    game_character_start_map,
+    game_character_directory,
+    game_character_directory_version,
+    game_character_directory_update,
+    game_directory_clock,
+    game_character_profile,
+    game_character_profiles,
+    game_character_profiles_retry
+);
+crate::virtual_clock_exempt!(game_character_profiles_retry);
+
 #[reducer]
 pub fn idc_character_profiles(ctx: &ReducerContext, profiles: Vec<u8>) -> Result<(), String> {
     let realm = world_shard(ctx).is_some();

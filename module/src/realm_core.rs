@@ -335,68 +335,8 @@ pub fn set_character_shard(
     Ok(())
 }
 
-pub const GUID_RANGE_SIZE: u64 = 1_000_000_000;
-
-pub(crate) fn slot_of(mark: u64) -> u32 {
-    (mark / GUID_RANGE_SIZE) as u32
-}
-
-// Prefer the Shard's existing slot so claim order cannot change already issued GUID ranges.
-pub(crate) fn assign_slot(taken: impl Iterator<Item = u32>, desired: u32) -> u32 {
-    let taken: Vec<u32> = taken.collect();
-    if !taken.contains(&desired) {
-        return desired;
-    }
-    taken.iter().max().map_or(0, |m| m + 1)
-}
-
-#[table(accessor = game_guid_range_registry)]
-pub struct GuidRangeAssignment {
-    #[primary_key]
-    pub shard_name: String,
-    // The unique slot aborts a concurrent claim rather than assigning the same range twice.
-    #[unique]
-    pub slot: u32,
-    pub base: u64,
-    pub size: u64,
-    pub assigned_micros: i64,
-}
-
-#[reducer]
-pub fn claim_guid_range(
-    ctx: &ReducerContext,
-    shard_name: String,
-    current_mark: u64,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let reg = ctx.db.game_guid_range_registry();
-    if let Some(row) = reg.shard_name().find(&shard_name) {
-        spacetimedb::log::info!(
-            "claim_guid_range: {shard_name} already holds slot {} (base {}) — no reassignment",
-            row.slot,
-            row.base
-        );
-        return Ok(());
-    }
-    let slot = assign_slot(reg.iter().map(|r| r.slot), slot_of(current_mark));
-    reg.try_insert(GuidRangeAssignment {
-        shard_name: shard_name.clone(),
-        slot,
-        base: slot as u64 * GUID_RANGE_SIZE,
-        size: GUID_RANGE_SIZE,
-        assigned_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
-    })
-    .map_err(|e| format!("claim_guid_range: slot {slot} was taken concurrently ({e}) — retry"))?;
-    spacetimedb::log::info!(
-        "claim_guid_range: {shard_name} assigned slot {slot} (base {}, size {GUID_RANGE_SIZE}); \
-         it was minting at {current_mark}",
-        slot as u64 * GUID_RANGE_SIZE
-    );
-    Ok(())
-}
-
 #[cfg(test)]
-mod guid_range_registry_tests {
+mod tests {
     use super::*;
 
     #[test]
@@ -417,39 +357,5 @@ mod guid_range_registry_tests {
         assert_eq!(next_shard_revision(None, 0, 0), 1);
         assert_eq!(next_shard_revision(Some(&current), 0, 0), 7);
         assert_eq!(next_shard_revision(Some(&current), 36, 1), 8);
-    }
-
-    #[test]
-    fn a_shard_keeps_the_slot_it_is_already_minting_from_whatever_the_claim_order() {
-        let live = [
-            ("world-1", 1_000_000_101u64),
-            ("instances", 2_000_000_000),
-            ("core", 213),
-        ];
-        let mut taken: Vec<u32> = vec![];
-        for (name, mark) in live {
-            let slot = assign_slot(taken.iter().copied(), slot_of(mark));
-            assert_eq!(
-                slot,
-                slot_of(mark),
-                "{name} (minting at {mark}) must keep slot {}, got {slot}",
-                slot_of(mark)
-            );
-            taken.push(slot);
-        }
-        let fresh = assign_slot(taken.iter().copied(), slot_of(0));
-        assert!(
-            !taken.contains(&fresh),
-            "a fresh shard was handed a slot already in use"
-        );
-        assert_eq!(fresh, 3);
-    }
-
-    #[test]
-    fn slots_partition_the_guid_space() {
-        assert_eq!(slot_of(0), 0);
-        assert_eq!(slot_of(GUID_RANGE_SIZE - 1), 0);
-        assert_eq!(slot_of(GUID_RANGE_SIZE), 1);
-        assert_eq!(slot_of(3 * GUID_RANGE_SIZE + 7), 3);
     }
 }

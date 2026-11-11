@@ -1,4 +1,5 @@
-use crate::creatures::eventai::{CreatureAiEvent, EventKind};
+use crate::creatures::eventai::EventKind;
+use crate::CreatureAiEvent;
 
 pub(crate) const EVENT_ON_AGGRO: u8 = 0;
 pub(crate) const EVENT_TIMED_IN_COMBAT: u8 = 1;

@@ -32,6 +32,9 @@ taxi resumption keeps the combat flag until the 1,200 ms check, including when t
   gtker crates keep their `wow_` names.
 - **`accessor`** is the Rust identifier the macro exposes as `ctx.db.<accessor>()`. SpacetimeDB 2.x
   syntax is `#[table(accessor = …)]`, with every index declared inside that one attribute.
+- **Catalog.** `module/build.rs` re-exports each Core table under `crate::tables` and the crate
+  root. A table Packages must not rely on goes in `crate::outside_table_catalog!(..)` in its
+  declaring file; [`module-build.md`](./module-build.md) has the rules.
 - **Visibility.** `public` means any connection can subscribe to the table. Without it the table
   is private, and only the Shard's owner can read it. The Native Host connects in process as that
   owner.
@@ -155,10 +158,10 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | World entity and movement | `world.rs`, `motion.rs` |
 | Terrain, nav and exact vmap | `terrain.rs`, `nav.rs`, `vmap.rs` |
 | Chat, social and addon bridge | `chat.rs`, `channel.rs`, `realm_chat.rs`, `away.rs`, `bridge.rs` |
-| Combat, threat and duel | `combat/engage.rs`, `combat/death.rs`, `combat/energy.rs`, `threat.rs`, `duel.rs` |
+| Combat, threat and duel | `combat/engage.rs`, `combat/damage.rs`, `combat/energy.rs`, `threat.rs`, `duel.rs` |
 | Spell and aura | `spell/tables.rs`, `spell/stacking.rs`, `spell/cast/resolve.rs` |
 | Quest | `quest.rs` |
-| Item, trade and mail | `items/tables.rs`, `items/buyback.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
+| Item, trade and mail | `items/tables.rs`, `items/buyback.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_reward.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
 | Auction house | `auction.rs` |
 | Creature (template, spawn, AI, pet, trainer) | `creatures/*`, `trainer.rs`, `gossip.rs` |
 | GameObject | `gameobject.rs`, `go_model.rs`, `go_collider.rs` |
@@ -169,12 +172,14 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | Packages | `package_account.rs`, `package_config.rs`, `package_import.rs`, `package_teardown.rs`, `script_binding.rs` |
 | Event GC | `gc.rs` |
 | Config, static data and diagnostics | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `import_meta.rs`, `debug/*` |
-| Guid ranges and retired coordination | `realm_core.rs`, `gw.rs`, `region.rs`, `load.rs`, `transfer/mod.rs` |
+| Gateway residue and Character Transfer | `realm_core.rs`, `gw.rs`, `transfer/mod.rs` |
+| Retired tables | `retired.rs` |
 
-`claim_guid_range` in `realm_core.rs` installs the Realm's guid range. The other tables in that
-last row held multi-Shard routing, Gateway leases, load samples and cross-Shard Transfers. They
-stay because dropping a table is a destructive migration. Native requests do not route through
-them.
+`install_guid_range` in `auth.rs` installs the Shard's guid range. `realm_core.rs` keeps the
+Gateway-era Realm locator, and `gw.rs` the Gateway Verbs that durable tests still call.
+`transfer/mod.rs` keeps the Transfer ledger: native Transfer between World Shards runs through its
+`apply_*` functions. Nothing writes the tables in `retired.rs`; they stay because dropping a table
+is a destructive migration.
 
 Two shapes recur:
 
@@ -183,8 +188,8 @@ Two shapes recur:
   other DBC-derived reference data. Only the importer writes them.
 - **Event tables**: transient outbound signals that a row diff cannot carry, such as a movement
   Relay's animation opcode. The Module inserts them inside the transaction that caused them. The
-  `*_live` tables are SpacetimeDB event tables and keep no rows; older event tables are reaped by
-  `gc.rs` about one second later. See [Native Relay events](./danger-zones.md#native-relay-events).
+  `*_live` tables are SpacetimeDB event tables and keep no rows; other event tables are reaped
+  about one second later by their owning module's `sweep_expired`, which `gc.rs` runs. See [Native Relay events](./danger-zones.md#native-relay-events).
 
 ## 3. Tables with rules the struct cannot show
 
@@ -296,7 +301,7 @@ through `game_area_trigger` for its map and three-dimensional volume. The table 
 existing Realm gains an empty catalogue until the world import runs again. Inn rest applies only
 inside a selected trigger; a missing geometry row cannot grant rest.
 
-### Taxi catalogue (`module/src/config.rs`)
+### Taxi catalogue (`module/src/taxi/catalogue.rs`)
 
 `game_taxi_node` comes from vmangos `taxi_nodes`. `game_taxi_path` and `game_taxi_path_node`
 come from the Operator's `TaxiPath.dbc` and `TaxiPathNode.dbc`. These rows are public.
@@ -358,7 +363,7 @@ decides which one owns it:
 - **Taxi flight** owns the field for the whole flight. Activation writes the faction mount display
   and sets `UNIT_FLAG_TAXI_FLIGHT` in `unit_flags`; landing clears both. The pair goes out in one
   partial VALUES mask without `OBJECT_FIELD_TYPE`. Route progress belongs to the active-flight row,
-  never to `game_creature_spline`.
+  never to `game_creature_spline`. That row, not the flag, decides whether a Character is in flight.
 - **Land mount** owns it the rest of the time, as a projection. The `A_MOUNTED` aura row is the
   mounted state, and `mount::recompute_mount` derives `mount_display_id` and `run_speed_mult_bp`
   from the current aura set. Every aura removal path ends in that one recompute. A land mount never
@@ -391,11 +396,8 @@ refuses an expired row like an absent one, and `reap_sessions` deletes expired r
 minutes. `game_operator` is a singleton holding the one Operator identity, captured by
 `claim_operator`.
 
-`game_account_character_owner` is keyed by Character guid and stores the exact Account id and name.
-Its rows remain across logout and Character deletion. Character guids are never reused, so retained
-rows are ownership tombstones. Each cleanup reads at most 4,097 rows and refuses when an Account
-already has more than 4,096; it never truncates. `game_account_fence` is a retired
-Gateway table, and nothing writes it. Module tests and the native check still open Account Claims in
+`game_account_fence` and `game_account_character_owner` are retired Gateway tables in
+`module/src/retired.rs`, and nothing writes them. Module tests and the native check still open Account Claims in
 `game_account_claim`. Operator reducers that act for a Character take a `SessionActor`; a null
 ownership refuses a Character with an active Account Claim.
 
@@ -423,8 +425,8 @@ last member to leave deletes the channel with its password and bans.
 
 `game_character_contact` (public) holds friend and ignore rows.
 
-`game_channel_member`, `game_channel_event` and `game_whisper_event` in `module/src/chat.rs` are
-retired. They stay because dropping a table is a destructive migration. Nothing writes them.
+`game_channel_member`, `game_channel_event` and `game_whisper_event` in `module/src/retired.rs`
+are retired. They stay because dropping a table is a destructive migration. Nothing writes them.
 
 ### Buyback (`module/src/items/buyback.rs`)
 
@@ -599,7 +601,7 @@ data the importer writes, the third is a per-aura snapshot.
 `game_spell` carries the selected vmangos `spell_template` fields: `proc_flags`, the vanilla
 `procFlags` bitmask with no translation table, `proc_chance` (a whole percent) and `proc_charges` (0 means unlimited).
 
-`game_spell.cast_flags` retains party and pet area-aura origins as `SPELL_ATTR_AREA_AURA`.
+`game_spell.cast_flags` retains party and pet area-aura origins as `CAST_FLAG_AREA_AURA`.
 Their translated target can be self, so slot visibility must use this flag instead of inferring
 the source effect from the target. Ordinary passives use slot 255; visual passives, recipient
 area auras and totem auras can use visible slots. Repair applies the same rule to stored cast auras.
@@ -638,7 +640,7 @@ refreshes on its own.
 ### Combo finishers (`module/src/combo.rs`)
 
 A finisher is a Rogue or Druid spell whose `Spell.dbc` AttributesEx carries 0x0010_0000 or
-0x0040_0000. The importer marks its `game_spell.cast_flags` with `SPELL_ATTR_COMBO_FINISHER`.
+0x0040_0000. The importer marks its `game_spell.cast_flags` with `CAST_FLAG_COMBO_FINISHER`.
 A Character cannot cast one without combo points, on the target for an enemy-targeted finisher and
 anywhere for Slice and Dice. A cast spends the points unless it misses its target.
 
@@ -747,7 +749,7 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_duel_schedule` | `tick_duels` | 250 ms | `duel.rs` |
 | `game_taxi_flight_schedule` | `advance_taxi_flight` | 100 ms while a passenger is active | `taxi.rs` |
 | `game_transport_carry_schedule` | `carry_transport_passengers` | 500 ms per Transport while it has Passengers, armed by boarding | `transport/mod.rs` |
-| `game_transport_crossing` | `cross_transport_map` | one-shot at a route's next map change, armed by world entry | `transport/mod.rs` |
+| `game_transport_crossing` | `cross_transport_map` | one-shot at a route's next map change, armed by `init`, `debug_repair_after_publish` and each firing | `transport/mod.rs` |
 | `game_creature_move_schedule` | `tick_creatures` | 500 ms (sensing every 8th pass, about 4 s) | `creatures/tick/mod.rs` |
 | `game_ground_area_schedule` | `tick_ground_areas` | 500 ms | `spell/tables.rs` |
 | `game_native_admission_tick` | `native_admission_tick` | 1 s while the Login Queue holds waiters | `native/admission.rs` |
@@ -775,14 +777,18 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_creature_ai_relay_continuation` | `resume_relay_run` | one-shot at the authored relay delay | `creatures/eventai/relay.rs` |
 | `game_creature_ai_relay_arrival` | `resume_relay_arrival` | one-shot on movement completion | `creatures/eventai/relay.rs` |
 
-`init` inserts the interval rows (`seed_scheduler_arming` in `module/src/seed.rs`). The transfer,
+`init` inserts the interval rows (`arm_interval_schedules` in `module/src/seed.rs`). The transfer,
 mail-escrow, session and native logon reapers, the native admission and member-stat ticks and the
 Transport carry schedules are armed by their own entry points, lazily and idempotently. Scheduled
 reducers check `ctx.sender() == ctx.database_identity()`, so nothing outside can drive them.
 
+In a conformance build the virtual clock drives every scheduled table that is not marked
+`virtual_clock_exempt!`. The build generates that registry; see
+[Module build](./module-build.md).
+
 `init` does not run again on an auto-migrating publish, so a schedule row can go stale.
-`debug_repair_after_publish` re-arms the interval schedules except the event reaper and melee
-schedules. Call it after every publish; see
+`debug_repair_after_publish` arms the same interval schedules as `init`, from one list in
+`module/src/seed.rs`. Call it after every publish; see
 [After every publish](./danger-zones.md#after-every-publish).
 
 Packages get a periodic hook without a table of their own: `game_tick_pass!` runs at the end of
@@ -878,7 +884,7 @@ Publish repair refreshes these projections; see
 | 19 ModInvisibilityDetection | 2 | detection placeholder | Inert | 17623 |
 | 22 ModResistance | 74 | resistance_bonus; flat school mask | Correct | 12956 |
 | 23 PeriodicTriggerSpell | 9 | periodic trigger needs mechanics | Inert | 758 |
-| 29 ModStat | 1 | stat_bonus supports self auras; selected effect 35 needs area mechanics | Inert for the selected Item | 7363 |
+| 29 ModStat | 1 | effective_stat supports self auras; selected effect 35 needs area mechanics | Inert for the selected Item | 7363 |
 | 30 ModSkill | 206 | skill modifier needs mechanics | Inert | 7515 |
 | 31 ModIncreaseSpeed | 62 | run_speed lacks faithful mounted and slow composition | Inert | 17625 |
 | 42 ProcTriggerSpell | 52 | item proc restrictions not certified | Inert | 4070 |

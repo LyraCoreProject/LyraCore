@@ -1,8 +1,10 @@
 #![cfg_attr(not(has_packages), allow(dead_code, unused_imports))]
 
-use spacetimedb::{ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{ReducerContext, Table, TimeDuration};
 
-use crate::creatures::{game_creature_move_schedule, GLOBAL_TICK_INSTANCE};
+use crate::creatures::GLOBAL_TICK_INSTANCE;
+use crate::game_creature_move_schedule;
+use crate::game_world_entity;
 use crate::import_meta::game_import_meta;
 
 pub(crate) use crate::threat::top_threat_target;
@@ -13,18 +15,26 @@ pub(crate) use crate::combat::{
 };
 pub(crate) use crate::creatures::{
     build_creature_from_template as build_creature_entity, despawn_creature_entity,
-    insert_creature_entity, timer_never,
+    insert_creature_entity,
 };
 pub(crate) use crate::group::sync_group_mirror;
 pub(crate) use crate::items::{grant_item, remove_items};
 pub(crate) use crate::loot::tag::clear as clear_loot_tag;
 pub(crate) use crate::nav::record_change as record_navigation_change;
-pub(crate) use crate::seed::{base_effect, base_spell};
 pub(crate) use crate::spell::{
     cast_triggered, forget_spell, learn_spell, start_creature_spell, CreatureSpellCasterAdmission,
     CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
 };
+pub(crate) use crate::time::timer_never;
 pub(crate) use crate::xp::grant_xp;
+
+pub(crate) fn base_spell(spell_id: u32, name: &str) -> crate::Spell {
+    crate::Spell::blank(spell_id, name)
+}
+
+pub(crate) fn base_effect(spell_id: u32, effect_index: u8) -> crate::SpellEffect {
+    crate::SpellEffect::blank(spell_id, effect_index)
+}
 
 pub(crate) fn do_cancel_aura(
     ctx: &ReducerContext,
@@ -47,19 +57,29 @@ pub(crate) fn emit_move_spline(
     instance_id: u64,
     grid: (i32, i32),
 ) {
-    crate::creatures::tick::emit_move_spline(
-        ctx,
+    crate::CreatureSpline {
         guid,
-        start,
-        destination,
-        duration_ms,
-        run,
-        spline_id,
+        start_micros: crate::time::now(ctx).to_micros_since_unix_epoch() as u64,
+        dur_ms: duration_ms,
+        sx: start.0,
+        sy: start.1,
+        sz: start.2,
+        dx: destination.0,
+        dy: destination.1,
+        dz: destination.2,
         map_id,
         instance_id,
-        grid,
-        None,
-    );
+        grid_x: grid.0,
+        grid_y: grid.1,
+        cell: lyracore_shared::spatial::grid_cell_id(grid.0, grid.1),
+        spline_id,
+        run,
+        facing: false,
+        facing_angle: 0.0,
+        path: None,
+        back_off_from: 0,
+    }
+    .replace(ctx);
 }
 
 pub fn apply_damage(
@@ -68,7 +88,23 @@ pub fn apply_damage(
     amount: u32,
     attacker_guid: u64,
 ) -> Result<(), String> {
-    crate::debug::debug_apply_damage(ctx, target_guid, amount, attacker_guid)
+    let target = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(target_guid)
+        .ok_or_else(|| format!("no live entity for guid {target_guid}"))?;
+    if target.dead {
+        return Err("target is dead".to_string());
+    }
+    let capped = amount.min(target.health.saturating_sub(1));
+    crate::combat::resolve_damage(ctx, attacker_guid, target_guid, capped).land(
+        ctx,
+        attacker_guid,
+        target_guid,
+        crate::combat::Hit::weapon(crate::combat::HitSource::MainHand, false),
+    );
+    Ok(())
 }
 
 pub fn remove_live_character(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
@@ -76,7 +112,11 @@ pub fn remove_live_character(ctx: &ReducerContext, character_guid: u64) -> Resul
     if !entity.is_player() {
         return Err(format!("live entity {character_guid} is not a Character"));
     }
-    crate::world::remove_live_character(ctx, entity, crate::world::CharacterDeparture::Logout);
+    crate::character::remove_live_character(
+        ctx,
+        entity,
+        crate::character::CharacterDeparture::Logout,
+    );
     Ok(())
 }
 

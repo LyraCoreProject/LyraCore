@@ -18,7 +18,6 @@ SPEC = importlib.util.spec_from_file_location('audit', os.environ.get(
     'LYRACORE_AUDIT_TEST_SOURCE', Path(__file__).parents[1] / 'audit.py'))
 audit = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(audit)
-audit.SCRATCH = Path(os.environ.get("LYRACORE_AUDIT_SCRATCH", audit.SCRATCH))
 
 
 class WorldReadiness(unittest.TestCase):
@@ -972,7 +971,7 @@ class ScenarioRealmReuse(unittest.TestCase):
         self.pins = {'database_commit': 'pin'}
         (self.cache / 'deployment-schema.json').write_text(
             json.dumps(audit.canonical_schema(self.schema)))
-        (self.root / '.lyracore-cli-rev').write_text('30814fe814edbfa3a143102f93008080482df6a6')
+        (self.root / '.lyracore-cli-rev').write_text(audit.REVIEWED_CLI_REVISION)
         for name, value in [('ROOT', self.root), ('SCENARIO_CACHE', self.cache),
                             ('SNAPSHOT_STORE', self.store)]:
             patched = patch.object(audit, name, value)

@@ -1,16 +1,18 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{
+    BATTERED_CHEST, FIXTURE_MOUNT_SPELL, LEARN_COOKING_SPELL_ID, PROFESSION_TRAINER_ENTRY,
+    SCENARIO_QUEST, TEST_WOLF_ENTRY,
+};
+use lyracore_shared::guid;
 use support::Standalone;
 
 const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-const FIXTURE_QUEST: u32 = 50_900;
-const FIXTURE_CREATURE: u32 = 51_000;
-const FIXTURE_TRAINER: u32 = 51_001;
 const IMPORTED_CREATURE: u32 = 620;
 const REAL_ITEM: u32 = 25;
 const MISSING_ITEM: u32 = 4_000_000;
 const PACKAGE_LOOT: u64 = 9_000_001;
-const REAL_SPELL: u32 = 50_310;
+const REAL_SPELL: u32 = FIXTURE_MOUNT_SPELL;
 const MISSING_SPELL: u32 = 4_000_000;
 const MISSING_CREATURE: u32 = 4_000_000;
 const PACKAGE_CREATURE_SPELL: u64 = 10_000_001;
@@ -40,7 +42,7 @@ fn quest_source_item(item_entry: u32) -> String {
     artifact(
         "example.quest",
         &format!(
-            r#"{{"table":"game_quest_template","key":{{"entry":{FIXTURE_QUEST}}},"operation":"update","fields":{{"src_item":{{"type":"u32","value":{item_entry}}}}}}}"#
+            r#"{{"table":"game_quest_template","key":{{"entry":{SCENARIO_QUEST}}},"operation":"update","fields":{{"src_item":{{"type":"u32","value":{item_entry}}}}}}}"#
         ),
     )
 }
@@ -49,7 +51,7 @@ fn pickpocket_loot(item_entry: u32) -> String {
     artifact(
         "example.loot",
         &format!(
-            r#"{{"table":"game_pickpocket_loot","key":{{"id":{PACKAGE_LOOT}}},"operation":"insert","fields":{{"creature_entry":{{"type":"u32","value":{FIXTURE_CREATURE}}},"item_entry":{{"type":"u32","value":{item_entry}}},"chance_bp":{{"type":"u32","value":10000}},"count":{{"type":"u32","value":1}},"group_id":{{"type":"u32","value":0}},"quest_only":{{"type":"bool","value":false}}}}}}"#
+            r#"{{"table":"game_pickpocket_loot","key":{{"id":{PACKAGE_LOOT}}},"operation":"insert","fields":{{"creature_entry":{{"type":"u32","value":{TEST_WOLF_ENTRY}}},"item_entry":{{"type":"u32","value":{item_entry}}},"chance_bp":{{"type":"u32","value":10000}},"count":{{"type":"u32","value":1}},"group_id":{{"type":"u32","value":0}},"quest_only":{{"type":"bool","value":false}}}}}}"#
         ),
     )
 }
@@ -76,7 +78,7 @@ fn trainer_spell_insert(spell_id: u32, learn_skill_line: u32) -> String {
     artifact(
         "example.trainer",
         &format!(
-            r#"{{"table":"game_trainer_spell","key":{{"id":{PACKAGE_TRAINER_SPELL}}},"operation":"insert","fields":{{"trainer_entry":{{"type":"u32","value":{FIXTURE_TRAINER}}},"spell_id":{{"type":"u32","value":{spell_id}}},"cost":{{"type":"u32","value":500}},"required_level":{{"type":"u8","value":10}},"learn_skill_line":{{"type":"u32","value":{learn_skill_line}}},"learn_skill_cap":{{"type":"u32","value":75}}}}}}"#
+            r#"{{"table":"game_trainer_spell","key":{{"id":{PACKAGE_TRAINER_SPELL}}},"operation":"insert","fields":{{"trainer_entry":{{"type":"u32","value":{PROFESSION_TRAINER_ENTRY}}},"spell_id":{{"type":"u32","value":{spell_id}}},"cost":{{"type":"u32","value":500}},"required_level":{{"type":"u8","value":10}},"learn_skill_line":{{"type":"u32","value":{learn_skill_line}}},"learn_skill_cap":{{"type":"u32","value":75}}}}}}"#
         ),
     )
 }
@@ -184,7 +186,7 @@ fn quest_and_loot_claims_refuse_missing_cross_table_references() {
     let accepted_quest = apply(&standalone, "quests", &quest_source_item(REAL_ITEM));
     assert!(accepted_quest.status.success());
     let quest = standalone.query_rows(&format!(
-        "SELECT * FROM game_quest_template WHERE entry = {FIXTURE_QUEST}"
+        "SELECT * FROM game_quest_template WHERE entry = {SCENARIO_QUEST}"
     ));
     assert_eq!(quest[0]["src_item"], REAL_ITEM.to_string());
 
@@ -296,7 +298,7 @@ fn creature_spell_updates_cannot_hide_their_fixture_creature_target() {
         "the imported target must exist"
     );
     standalone.assert_sql(&format!(
-        "INSERT INTO game_creature_spell (id, creature_entry, spell_id, priority, condition, condition_value) VALUES ({FIXTURE_TARGETED_CREATURE_SPELL}, {FIXTURE_CREATURE}, {REAL_SPELL}, 10, 0, 0)"
+        "INSERT INTO game_creature_spell (id, creature_entry, spell_id, priority, condition, condition_value) VALUES ({FIXTURE_TARGETED_CREATURE_SPELL}, {TEST_WOLF_ENTRY}, {REAL_SPELL}, 10, 0, 0)"
     ));
 
     let partial = apply(
@@ -325,13 +327,13 @@ fn creature_spell_updates_cannot_hide_their_fixture_creature_target() {
     for refusal in [&partial, &retargeted] {
         let text = refusal_text(refusal);
         assert!(text.contains("fixture-reserved"), "{text}");
-        assert!(text.contains(&FIXTURE_CREATURE.to_string()), "{text}");
+        assert!(text.contains(&TEST_WOLF_ENTRY.to_string()), "{text}");
     }
 
     let spell = standalone.query_rows(&format!(
         "SELECT * FROM game_creature_spell WHERE id = {FIXTURE_TARGETED_CREATURE_SPELL}"
     ));
-    assert_eq!(spell[0]["creature_entry"], FIXTURE_CREATURE.to_string());
+    assert_eq!(spell[0]["creature_entry"], TEST_WOLF_ENTRY.to_string());
     assert_eq!(spell[0]["priority"], "10");
 }
 
@@ -368,7 +370,7 @@ fn a_profession_offerings_marker_spell_is_exempt_but_a_class_offerings_is_not() 
     );
 
     const COOKING: u32 = 185;
-    const MARKER_SPELL_ID: u32 = 50_080;
+    const MARKER_SPELL_ID: u32 = LEARN_COOKING_SPELL_ID;
     let accepted_profession = apply(
         &standalone,
         "trainers",
@@ -423,7 +425,7 @@ fn gossip_claims_refuse_missing_cross_table_references() {
         "{}\n{}\n{}",
         npc_text_insert(),
         npc_text_slot_insert(PACKAGE_NPC_TEXT as u32),
-        gossip_option_insert(FIXTURE_CREATURE)
+        gossip_option_insert(TEST_WOLF_ENTRY)
     );
     let accepted = apply(&standalone, "gossip", &plan);
     assert!(accepted.status.success(), "{}", refusal_text(&accepted));
@@ -434,7 +436,7 @@ fn gossip_claims_refuse_missing_cross_table_references() {
     let option = standalone.query_rows(&format!(
         "SELECT * FROM game_gossip_option WHERE row_id = {PACKAGE_GOSSIP_OPTION}"
     ));
-    assert_eq!(option[0]["entry"], FIXTURE_CREATURE.to_string());
+    assert_eq!(option[0]["entry"], TEST_WOLF_ENTRY.to_string());
 }
 
 #[test]
@@ -534,15 +536,7 @@ const PACKAGE_CREATURE_TEMPLATE: u32 = 15_000_002;
 const PACKAGE_GAMEOBJECT_TEMPLATE: u32 = 16_000_001;
 const PACKAGE_GAMEOBJECT_SPAWN: u32 = 16_000_002;
 const MISSING_GAMEOBJECT: u32 = 4_000_000;
-const SEEDED_GAMEOBJECT: u32 = 50_100;
-
-fn creature_guid(entry: u32, spawn_id: u32) -> u64 {
-    (0xF130u64 << 48) | (u64::from(entry) << 24) | u64::from(spawn_id)
-}
-
-fn gameobject_guid(spawn_id: u32) -> u64 {
-    (0xF110u64 << 48) | u64::from(spawn_id)
-}
+const SEEDED_GAMEOBJECT: u32 = BATTERED_CHEST;
 
 fn creature_spawn_insert(map_id: u32, entry: u32, spawn_id: u32) -> String {
     artifact(
@@ -607,8 +601,8 @@ fn creature_spawn_claims_refuse_a_missing_template_and_one_row_claimed_on_two_ma
 
     let two_maps = format!(
         "{}\n{}",
-        creature_spawn_insert(0, FIXTURE_CREATURE, PACKAGE_CREATURE_SPAWN),
-        creature_spawn_insert(1, FIXTURE_CREATURE, PACKAGE_CREATURE_SPAWN)
+        creature_spawn_insert(0, TEST_WOLF_ENTRY, PACKAGE_CREATURE_SPAWN),
+        creature_spawn_insert(1, TEST_WOLF_ENTRY, PACKAGE_CREATURE_SPAWN)
             .replace("example.creatures.place", "example.creatures.elsewhere"),
     );
     let refused_twice = apply(&standalone, "creatures", &two_maps);
@@ -622,14 +616,14 @@ fn creature_spawn_claims_refuse_a_missing_template_and_one_row_claimed_on_two_ma
     let accepted = apply(
         &standalone,
         "creatures",
-        &creature_spawn_insert(REAL_MAP, FIXTURE_CREATURE, PACKAGE_CREATURE_SPAWN),
+        &creature_spawn_insert(REAL_MAP, TEST_WOLF_ENTRY, PACKAGE_CREATURE_SPAWN),
     );
     assert!(accepted.status.success(), "{}", refusal_text(&accepted));
-    let guid = creature_guid(FIXTURE_CREATURE, PACKAGE_CREATURE_SPAWN);
+    let guid = guid::creature(TEST_WOLF_ENTRY, PACKAGE_CREATURE_SPAWN);
     let spawn = standalone.query_rows(&format!(
         "SELECT * FROM game_creature_spawn WHERE guid = {guid}"
     ));
-    assert_eq!(spawn[0]["entry"], FIXTURE_CREATURE.to_string());
+    assert_eq!(spawn[0]["entry"], TEST_WOLF_ENTRY.to_string());
     assert_eq!(spawn[0]["map_id"], REAL_MAP.to_string());
 
     let cleared = apply(&standalone, "creatures", "");
@@ -646,7 +640,7 @@ fn creature_spawn_claims_refuse_a_missing_template_and_one_row_claimed_on_two_ma
         "SELECT * FROM game_creature_template WHERE entry = {PACKAGE_CREATURE_TEMPLATE}"
     ));
     assert_eq!(template[0]["name"], "Kindled Sentinel");
-    let invented_guid = creature_guid(PACKAGE_CREATURE_TEMPLATE, PACKAGE_CREATURE_SPAWN);
+    let invented_guid = guid::creature(PACKAGE_CREATURE_TEMPLATE, PACKAGE_CREATURE_SPAWN);
     assert!(!standalone
         .query_rows(&format!(
             "SELECT * FROM game_creature_spawn WHERE guid = {invented_guid}"
@@ -680,7 +674,7 @@ fn gameobject_claims_refuse_a_missing_template_and_place_an_invented_one() {
         &gameobject_spawn_insert(REAL_MAP, PACKAGE_GAMEOBJECT_SPAWN, SEEDED_GAMEOBJECT),
     );
     assert!(accepted.status.success(), "{}", refusal_text(&accepted));
-    let guid = gameobject_guid(PACKAGE_GAMEOBJECT_SPAWN);
+    let guid = guid::compose(guid::GAMEOBJECT, u64::from(PACKAGE_GAMEOBJECT_SPAWN));
     let spawn = standalone.query_rows(&format!(
         "SELECT * FROM game_gameobject WHERE guid = {guid}"
     ));
@@ -741,15 +735,7 @@ fn kelris_definition() -> String {
         "10,aggro,100,4294967295,once,all,ordinary,any-posture,\
          speak:yell:self:{KELRIS_TEXT}+notify-encounter:blackfathom-deeps-kelris:begin"
     );
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(format!("{subject}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(
-        hasher.finalize().as_bytes()[..8]
-            .try_into()
-            .expect("a BLAKE3 digest has at least eight bytes"),
-    );
-    format!("{subject}@{revision}@{rules}")
+    lyracore_shared::eventai::encode_definition(&subject, &rules)
 }
 
 fn quest_event_requirement_insert(quest_entry: u32) -> String {
@@ -795,13 +781,13 @@ fn creature_ai_claims_are_checked_against_quests_and_encounter_ownership() {
     let accepted = apply(
         &standalone,
         "creature-ai",
-        &quest_event_requirement_insert(FIXTURE_QUEST),
+        &quest_event_requirement_insert(SCENARIO_QUEST),
     );
     assert!(accepted.status.success(), "{}", refusal_text(&accepted));
     let requirement = standalone.query_rows(&format!(
         "SELECT * FROM game_quest_event_requirement WHERE id = {PACKAGE_QUEST_EVENT_REQUIREMENT}"
     ));
-    assert_eq!(requirement[0]["quest_entry"], FIXTURE_QUEST.to_string());
+    assert_eq!(requirement[0]["quest_entry"], SCENARIO_QUEST.to_string());
 
     standalone.assert_call(
         "import_creature_ai_definitions",

@@ -1,6 +1,6 @@
 mod support;
 
-use support::Standalone;
+use support::{refused, Standalone};
 
 fn token(generation: u64, nonce: u128) -> String {
     format!(r#"{{"account_id":1,"generation":{generation},"request_nonce":{nonce}}}"#)
@@ -12,19 +12,6 @@ fn actor(token: &str) -> String {
 
 fn claim(shard: &Standalone, nonce: &str) {
     shard.assert_call("claim_account", &["1", "1", nonce]);
-}
-
-fn refused(shard: &Standalone, reducer: &str, args: &[&str], reason: &str) {
-    let result = shard.call(reducer, args);
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        !result.status.success() && output.contains(reason),
-        "{reducer}: {output}"
-    );
 }
 
 #[test]

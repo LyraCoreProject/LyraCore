@@ -2,6 +2,7 @@ mod support;
 
 use std::time::{Duration, Instant};
 
+use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::packing::power_type::ENERGY;
 use lyracore_shared::spell::taxonomy::{A_MOD_POWER_REGEN_PCT, P_POWER_TYPE, T_SELF};
 use support::{number, poll_until, Standalone};
@@ -111,7 +112,7 @@ fn adrenaline_rush_doubles_each_energy_tick() {
          VALUES ({ADRENALINE_RUSH}, 'Adrenaline Rush', {ENERGY}, 0, 0, 0, 300000, 0, 60000, 1, \
          0, 0, 0, 0, 0, 20, 0, false, 0, 0, 8, 0, 0, 0, 0, 0)"
     ));
-    let effect_id = u64::from(ADRENALINE_RUSH) << 2;
+    let effect_id = packed_spell_effect_id(ADRENALINE_RUSH, 0);
     shard.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \

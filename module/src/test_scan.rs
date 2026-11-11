@@ -99,7 +99,7 @@ fn optional_owner(rel: &str) -> Option<String> {
     let mut segs = rel.split('/');
     match segs.next()? {
         "packages" => segs.next().map(|pkg| format!("packages/{pkg}")),
-        root @ ("scripts" | "tools" | "adapters" | "client-patch") => Some(root.to_string()),
+        "scripts" => Some("scripts".to_string()),
         _ => None,
     }
 }
@@ -120,9 +120,7 @@ pub(crate) fn read_scanned(rel: &str) -> Option<String> {
             None
         }
         Err(e) => panic!(
-            "cannot read {rel}: {e}. Its directory IS present in this checkout, so this is a path \
-             typo, not an uninstalled drop-in — a scan that cannot find its target has lost its \
-             pin, not passed it. Fix the path (or, if the file really moved, move the pin with it)."
+            "cannot read {rel}: {e}; its directory exists, so fix the path or move the pin with the file"
         ),
     }
 }
@@ -171,9 +169,7 @@ rows.insert(entity);
         assert_eq!(
             optional_owner("packages/sample_package/src/mod.rs").as_deref(),
             Some("packages/sample_package"),
-            "a package's absence is per-package: `packages/` itself carries a checked-in README, so \
-             keying the skip on `packages/` would wave through a typo'd file inside an INSTALLED \
-             package"
+            "a missing package is skipped per package, not for all of `packages/`"
         );
         assert_eq!(
             optional_owner("scripts/publish-module.sh").as_deref(),
@@ -195,7 +191,7 @@ rows.insert(entity);
     }
 
     #[test]
-    #[should_panic(expected = "path typo")]
+    #[should_panic(expected = "its directory exists")]
     fn read_scanned_panics_on_a_missing_file_whose_directory_is_installed() {
         let _ = read_scanned("module/src/no-such-file-exists.rs");
     }
@@ -204,8 +200,7 @@ rows.insert(entity);
     fn read_scanned_skips_a_package_that_is_not_installed() {
         assert!(
             read_scanned("packages/definitely-not-installed/src/mod.rs").is_none(),
-            "an uninstalled drop-in package must be skipped, not panicked on — a checkout with no \
-             packages is a designed state (module/build.rs discovers them dynamically)"
+            "an uninstalled package is skipped"
         );
     }
 }

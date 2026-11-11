@@ -7,7 +7,7 @@ use support::{
 
 const PLAYER: u64 = 1;
 const DUEL: u64 = 509_0001;
-/// `lyracore_shared::duel::state::ACTIVE`.
+/// `state::ACTIVE` in `module/src/duel.rs`.
 const ACTIVE: u8 = 2;
 
 #[test]
