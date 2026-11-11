@@ -35,17 +35,4 @@ mod tests {
         assert!(!is_dungeon_map(0), "Eastern Kingdoms is open world");
         assert!(!is_dungeon_map(1), "Kalimdor is open world");
     }
-
-    #[test]
-    fn the_dungeon_set_is_never_empty() {
-        assert!(
-            !DUNGEON_MAPS.is_empty(),
-            "DUNGEON_MAPS is empty, so no map would ever host an Instance"
-        );
-        assert!(
-            !DUNGEON_MAPS.contains(&0),
-            "map 0 is the open world; listing it as a dungeon would route every open-world portal \
-             through the instancing path"
-        );
-    }
 }

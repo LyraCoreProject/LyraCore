@@ -476,7 +476,7 @@ fn item_query_preserves_the_five_spell_category_overrides() {
 }
 
 #[test]
-fn item_query_response_carries_the_work_item_213_columns() {
+fn item_query_response_carries_resistances_extra_spells_and_requirements() {
     let t = ring_of_fire_resistance();
     let msg = build_item_query_response(t.entry, Some(&t));
     let mut buf = Vec::new();
@@ -514,10 +514,7 @@ fn item_query_response_carries_the_work_item_213_columns() {
                 "required_faction (69) must reach the wire"
             );
             assert_eq!(found.required_faction_rank, 3);
-            assert_eq!(
-                found.max_count, 1,
-                "max_count must reach the wire (was hardcoded 0 before)"
-            );
+            assert_eq!(found.max_count, 1, "max_count must reach the wire");
             assert_eq!(
                 found.flags,
                 ItemFlag::new(0x200),
@@ -534,7 +531,7 @@ fn item_query_response_carries_the_work_item_213_columns() {
 }
 
 #[test]
-fn item_query_response_default_template_keeps_the_work_item_213_columns_zero() {
+fn item_query_response_default_template_keeps_resistances_extra_spells_and_requirements_zero() {
     let t = worn_shortsword();
     let msg = build_item_query_response(t.entry, Some(&t));
     let mut buf = Vec::new();

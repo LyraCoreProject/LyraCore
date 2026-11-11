@@ -1,9 +1,7 @@
 mod common;
 
 use common::{artifact, item_claim, WHOLE_ITEM_ROW};
-use lyracore_package_delta::ids::{
-    is_fixture_reserved_item_id, PackageRange, PACKAGE_ITEM_ID_CEIL, PACKAGE_ITEM_ID_FLOOR,
-};
+use lyracore_package_delta::ids::{is_fixture_reserved_item_id, PackageRange};
 use lyracore_package_delta::{is_package_item_id, DeltaError, PackageDelta, PrimaryKey};
 
 const A_BUY_PRICE: &str = r#"{"buy_price":{"type":"u32","value":100}}"#;
@@ -17,7 +15,7 @@ fn an_item_header_key_is_the_entry_itself() {
 
 #[test]
 fn a_package_may_insert_an_item_inside_the_package_range() {
-    for entry in [PACKAGE_ITEM_ID_FLOOR, 7_500_000, PACKAGE_ITEM_ID_CEIL] {
+    for entry in [7_000_000u32, 7_500_000, 7_999_999u32] {
         let json = artifact("example.pkg", &item_claim(entry, "insert", WHOLE_ITEM_ROW));
 
         PackageDelta::parse(&json).unwrap_or_else(|e| panic!("item {entry} must insert: {e}"));
@@ -26,7 +24,7 @@ fn a_package_may_insert_an_item_inside_the_package_range() {
 
 #[test]
 fn an_insert_outside_the_package_range_is_refused() {
-    for entry in [25, PACKAGE_ITEM_ID_FLOOR - 1, PACKAGE_ITEM_ID_CEIL + 1] {
+    for entry in [25, 6_999_999u32, 8_000_000u32] {
         let json = artifact("example.pkg", &item_claim(entry, "insert", WHOLE_ITEM_ROW));
 
         assert_eq!(
@@ -103,7 +101,7 @@ fn the_package_range_is_disjoint_from_every_reserved_identifier() {
         );
     }
 
-    for entry in [PACKAGE_ITEM_ID_FLOOR, PACKAGE_ITEM_ID_CEIL] {
+    for entry in [7_000_000u32, 7_999_999u32] {
         assert!(
             !is_fixture_reserved_item_id(entry),
             "Package item {entry} must not be fixture-reserved"
@@ -115,7 +113,7 @@ fn the_package_range_is_disjoint_from_every_reserved_identifier() {
 fn an_incomplete_item_insert_is_refused() {
     let json = artifact(
         "example.pkg",
-        &item_claim(PACKAGE_ITEM_ID_FLOOR, "insert", A_BUY_PRICE),
+        &item_claim(7_000_000u32, "insert", A_BUY_PRICE),
     );
 
     match PackageDelta::parse(&json).expect_err("the insert must be refused") {

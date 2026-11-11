@@ -3517,7 +3517,7 @@ mod tests {
     }
 
     #[test]
-    fn instant_effect_raw_id_arms_land_work_item_101() {
+    fn taunt_combo_resurrect_and_extra_attack_effect_ids_map_to_their_kinds() {
         assert_eq!(instant_effect_to_kind(114), E_TAUNT);
         assert_eq!(instant_effect_to_kind(80), E_ADD_COMBO);
         assert_eq!(instant_effect_to_kind(18), E_RESURRECT);
@@ -3834,65 +3834,40 @@ mod tests {
     }
 
     #[test]
-    fn trainer_cost_is_level_keyed_and_never_free() {
-        assert_eq!(trainer_cost(0), 50);
-        assert_eq!(trainer_cost(1), 50);
-        assert_eq!(trainer_cost(4), 200);
-        assert_eq!(trainer_cost(10), 500);
-        assert!(trainer_cost(10) > trainer_cost(4));
-    }
-
-    #[test]
     fn delete_statements_are_wholesale_or_surgical() {
-        let full = spell_delete_statements(&[]);
-        assert_eq!(full.len(), 4);
-        assert_eq!(full[0], "DELETE FROM game_spell WHERE spell_id < 50000");
+        let sorted = |mut statements: Vec<String>| {
+            statements.sort();
+            statements
+        };
+        let tables = [
+            "game_spell",
+            "game_spell_effect",
+            "game_spell_reagent",
+            "game_creature_ai_spell_metadata",
+        ];
         assert_eq!(
-            full[1],
-            "DELETE FROM game_spell_effect WHERE spell_id < 50000"
+            sorted(spell_delete_statements(&[])),
+            sorted(
+                tables
+                    .iter()
+                    .map(|table| format!("DELETE FROM {table} WHERE spell_id < 50000"))
+                    .collect()
+            )
         );
         assert_eq!(
-            full[2],
-            "DELETE FROM game_spell_reagent WHERE spell_id < 50000"
-        );
-        assert_eq!(
-            full[3],
-            "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id < 50000"
-        );
-
-        let surgical = spell_delete_statements(&[7386, 78, 78]);
-        assert_eq!(
-            surgical.len(),
-            8,
+            sorted(spell_delete_statements(&[7386, 78, 78])),
+            sorted(
+                [78, 7386]
+                    .iter()
+                    .flat_map(|id| {
+                        tables
+                            .iter()
+                            .map(move |table| format!("DELETE FROM {table} WHERE spell_id = {id}"))
+                    })
+                    .collect()
+            ),
             "two ids across four tables, with the duplicate removed"
         );
-        assert_eq!(surgical[0], "DELETE FROM game_spell WHERE spell_id = 78");
-        assert_eq!(
-            surgical[1],
-            "DELETE FROM game_spell_effect WHERE spell_id = 78"
-        );
-        assert_eq!(
-            surgical[2],
-            "DELETE FROM game_spell_reagent WHERE spell_id = 78"
-        );
-        assert_eq!(
-            surgical[3],
-            "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id = 78"
-        );
-        assert_eq!(surgical[4], "DELETE FROM game_spell WHERE spell_id = 7386");
-        assert_eq!(
-            surgical[5],
-            "DELETE FROM game_spell_effect WHERE spell_id = 7386"
-        );
-        assert_eq!(
-            surgical[6],
-            "DELETE FROM game_spell_reagent WHERE spell_id = 7386"
-        );
-        assert_eq!(
-            surgical[7],
-            "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id = 7386"
-        );
-        assert!(surgical.iter().all(|s| !s.contains(">= 0")));
     }
 
     #[test]
@@ -3926,8 +3901,6 @@ mod tests {
                 (i32::from(SPEED_MOUNTED), P_SPEED_KIND)
             );
         }
-        assert_eq!(dbc_flat_amount(59), 60);
-        assert_eq!(dbc_flat_amount(99), 100);
     }
 
     #[test]

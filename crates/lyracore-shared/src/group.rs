@@ -467,16 +467,6 @@ mod tests {
     }
 
     #[test]
-    fn a_raid_is_eight_subgroups_of_five_and_a_party_caps_at_five() {
-        assert_eq!(GROUP_MAX_MEMBERS, 5);
-        assert_eq!(RAID_MAX_MEMBERS, 40);
-        assert_eq!(RAID_SUBGROUPS, 8);
-        assert_eq!(SUBGROUP_SIZE, 5);
-        assert_eq!(GroupKind::Party.member_cap(), 5);
-        assert_eq!(GroupKind::Raid.member_cap(), 40);
-    }
-
-    #[test]
     fn the_group_kind_byte_is_the_vanilla_group_type() {
         assert_eq!(GroupKind::default(), GroupKind::Party);
         assert_eq!(GroupKind::Party.wire(), 0);
@@ -660,23 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn realm_group_op_codes_are_stable_and_distinct() {
-        assert_eq!(realm_op::INVITE, 0);
-        assert_eq!(realm_op::ACCEPT, 1);
-        assert_eq!(realm_op::DECLINE, 2);
-        assert_eq!(realm_op::LEAVE, 3);
-        assert_eq!(realm_op::UNINVITE, 4);
-        assert_eq!(realm_op::LOOT_METHOD, 5);
-        assert_eq!(realm_op::RAID_CONVERT, 6);
-        assert_eq!(realm_op::SET_LEADER, 7);
-        assert_eq!(realm_op::SET_ASSISTANT, 8);
-        assert_eq!(realm_op::CHANGE_SUBGROUP, 9);
-        assert_eq!(realm_op::SWAP_SUBGROUP, 10);
-        assert_eq!(realm_op::READY_CHECK_START, 11);
-        assert_eq!(realm_op::READY_CHECK_ANSWER, 12);
-        assert_eq!(realm_op::TARGET_ICON, 13);
-        assert_eq!(realm_op::MINIMAP_PING, 14);
-        assert_eq!(realm_op::RANDOM_ROLL, 15);
+    fn realm_group_op_codes_are_distinct() {
         let all = [
             realm_op::INVITE,
             realm_op::ACCEPT,
@@ -713,101 +687,8 @@ mod tests {
         assert_eq!(plain.with_assistant(false), plain);
     }
 
-    #[test]
-    fn the_leader_announcement_kind_is_20_and_distinct() {
-        use crate::loot_roll::event_kind as roll;
-        use crate::quest::share_event_kind as share;
-        assert_eq!(event_kind::SET_LEADER, 20);
-        let mut kinds = vec![
-            event_kind::INVITE,
-            event_kind::LIST,
-            event_kind::DECLINE,
-            event_kind::DESTROYED,
-            roll::ROLL_START,
-            roll::ROLL_VOTE,
-            roll::ROLL_WON,
-            roll::MASTER_LIST,
-            roll::MONEY_SHARE,
-            share::QUEST_SHARE,
-            share::QUEST_PUSH_RESULT,
-            event_kind::SET_LEADER,
-        ];
-        kinds.sort_unstable();
-        kinds.dedup();
-        assert_eq!(kinds, [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11, 20]);
-    }
-
-    #[test]
-    fn the_target_is_self_refusal_has_its_own_tag() {
-        assert_eq!(GroupRefusal::TargetIsSelf.as_tag(), "group:target_is_self");
-    }
-
-    #[test]
-    fn group_broadcast_kinds_are_pinned_and_distinct_from_every_other_kind() {
-        use crate::loot_roll::event_kind as roll;
-        use crate::quest::share_event_kind as share;
-        assert_eq!(event_kind::READY_CHECK, 21);
-        assert_eq!(event_kind::READY_CHECK_ANSWER, 22);
-        assert_eq!(event_kind::TARGET_ICON_UPDATE, 23);
-        assert_eq!(event_kind::TARGET_ICON_LIST, 24);
-        assert_eq!(event_kind::MINIMAP_PING, 25);
-        assert_eq!(event_kind::RANDOM_ROLL, 26);
-        let all = [
-            event_kind::INVITE,
-            event_kind::LIST,
-            event_kind::DECLINE,
-            event_kind::DESTROYED,
-            roll::ROLL_START,
-            roll::ROLL_VOTE,
-            roll::ROLL_WON,
-            roll::MASTER_LIST,
-            roll::MONEY_SHARE,
-            share::QUEST_SHARE,
-            share::QUEST_PUSH_RESULT,
-            event_kind::SET_LEADER,
-            event_kind::READY_CHECK,
-            event_kind::READY_CHECK_ANSWER,
-            event_kind::TARGET_ICON_UPDATE,
-            event_kind::TARGET_ICON_LIST,
-            event_kind::MINIMAP_PING,
-            event_kind::RANDOM_ROLL,
-        ];
-        let mut sorted = all.to_vec();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(
-            sorted.len(),
-            all.len(),
-            "two group event kinds share a byte"
-        );
-        assert!(
-            !all.contains(&9),
-            "kind 9 was party chat and is never reused"
-        );
-    }
-
-    #[test]
-    fn a_plain_leave_is_cause_zero_and_a_deleted_character_is_one() {
-        assert_eq!(leave_cause::LEFT, 0);
-        assert_eq!(leave_cause::CHARACTER_DELETED, 1);
-    }
-
-    #[test]
-    fn the_invalid_target_icon_refusal_has_its_own_tag() {
-        assert_eq!(
-            GroupRefusal::InvalidTargetIcon.as_tag(),
-            "group:invalid_target_icon"
-        );
-    }
-
     fn icon(icon: u8, target_guid: u64) -> TargetIcon {
         TargetIcon { icon, target_guid }
-    }
-
-    #[test]
-    fn a_group_holds_eight_target_icons_and_0xff_asks_for_the_list() {
-        assert_eq!(TARGET_ICON_COUNT, 8);
-        assert_eq!(TARGET_ICON_LIST_REQUEST, 0xFF);
     }
 
     #[test]

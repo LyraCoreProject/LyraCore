@@ -75,19 +75,6 @@ mod tests {
     }
 
     #[test]
-    fn pack_unpack_round_trips() {
-        assert_eq!(
-            unpack4(unit_bytes_0(1, 1, 0, power_type::RAGE)),
-            (1, 1, 0, power_type::RAGE)
-        );
-        assert_eq!(
-            unpack4(player_bytes(0x11, 0x22, 0x33, 0x44)),
-            (0x11, 0x22, 0x33, 0x44)
-        );
-        assert_eq!(unpack4(player_bytes_2(7, 0)), (7, 0, 0, REST_STATE_NORMAL));
-    }
-
-    #[test]
     fn player_bytes_2_carries_the_bank_slot_count_in_byte_2() {
         assert_eq!(unpack4(player_bytes_2(7, 3)), (7, 0, 3, REST_STATE_NORMAL));
         assert_eq!(

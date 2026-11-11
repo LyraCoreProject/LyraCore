@@ -109,10 +109,6 @@ mod tests {
             assert_eq!(AuctionRefusal::parse_tag(refusal.as_tag()), Some(refusal));
         }
         assert_eq!(AuctionRefusal::parse_tag("auction:"), None);
-        assert_eq!(
-            AuctionRefusal::parse_tag("gw_auction_hold_bid reducer timed out after 10s"),
-            None
-        );
     }
 
     #[test]

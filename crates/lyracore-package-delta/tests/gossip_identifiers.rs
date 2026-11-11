@@ -1,22 +1,14 @@
 mod common;
 
 use common::{
-    gossip_menu_claim, gossip_option_claim, npc_text_claim, npc_text_slot_claim, PACKAGE_GOSSIP,
-    REAL_GOSSIP_MENU, REAL_NPC_TEXT, WHOLE_GOSSIP_OPTION_ROW, WHOLE_NPC_TEXT_ROW,
+    artifact, gossip_menu_claim, gossip_option_claim, npc_text_claim, npc_text_slot_claim,
+    PACKAGE_GOSSIP, REAL_GOSSIP_MENU, REAL_NPC_TEXT, WHOLE_GOSSIP_OPTION_ROW, WHOLE_NPC_TEXT_ROW,
     WHOLE_NPC_TEXT_SLOT_ROW,
 };
-use lyracore_package_delta::ids::{
-    PackageRange, PACKAGE_GLOBALS_ID_FLOOR, PACKAGE_GOSSIP_ID_CEIL, PACKAGE_GOSSIP_ID_FLOOR,
-};
+use lyracore_package_delta::ids::PackageRange;
 use lyracore_package_delta::{
     is_package_gossip_id, is_package_trainer_id, DeltaError, PackageDelta, PrimaryKey, Table,
 };
-
-fn artifact(package: &str, claims: &str) -> String {
-    format!(
-        r#"{{"version":1,"package":"{package}","source_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","claims":[{claims}]}}"#
-    )
-}
 
 const A_TEXT: &str = r#"{"text":{"type":"string","value":"Well met."}}"#;
 const A_TEXT_ID: &str = r#"{"text_id":{"type":"u32","value":12000001}}"#;
@@ -31,7 +23,7 @@ fn an_npc_text_key_is_the_text_id_itself() {
 
 #[test]
 fn a_package_may_insert_a_gossip_row_inside_the_package_range() {
-    for id in [PACKAGE_GOSSIP_ID_FLOOR, 12_500_000, PACKAGE_GOSSIP_ID_CEIL] {
+    for id in [12_000_000u64, 12_500_000, 12_999_999u64] {
         let json = artifact(
             "example.pkg",
             &npc_text_claim(id as u32, "insert", WHOLE_NPC_TEXT_ROW),
@@ -43,11 +35,7 @@ fn a_package_may_insert_a_gossip_row_inside_the_package_range() {
 
 #[test]
 fn an_insert_outside_the_package_range_is_refused() {
-    for id in [
-        1u64,
-        PACKAGE_GOSSIP_ID_FLOOR - 1,
-        PACKAGE_GOSSIP_ID_CEIL + 1,
-    ] {
+    for id in [1u64, 11_999_999u64, 13_000_000u64] {
         let json = artifact(
             "example.pkg",
             &npc_text_claim(id as u32, "insert", WHOLE_NPC_TEXT_ROW),
@@ -66,7 +54,7 @@ fn an_insert_outside_the_package_range_is_refused() {
 
 #[test]
 fn one_band_covers_every_insertable_gossip_table() {
-    let out_of_band = PACKAGE_GOSSIP_ID_FLOOR - 1;
+    let out_of_band = 11_999_999u64;
     let claims = [
         npc_text_claim(out_of_band as u32, "insert", WHOLE_NPC_TEXT_ROW),
         npc_text_slot_claim(out_of_band, "insert", WHOLE_NPC_TEXT_SLOT_ROW),
@@ -175,7 +163,7 @@ fn the_package_range_is_disjoint_from_every_reserved_identifier() {
         );
     }
 
-    for id in [PACKAGE_GOSSIP_ID_FLOOR, PACKAGE_GOSSIP_ID_CEIL] {
+    for id in [12_000_000u64, 12_999_999u64] {
         assert!(
             !PackageRange::Gossip.is_fixture_reserved(id),
             "Package gossip row {id} must not be fixture-reserved"
@@ -185,13 +173,13 @@ fn the_package_range_is_disjoint_from_every_reserved_identifier() {
 
 #[test]
 fn the_gossip_band_neighbours_do_not_overlap_it() {
-    for id in [PACKAGE_GOSSIP_ID_FLOOR, PACKAGE_GOSSIP_ID_CEIL] {
+    for id in [12_000_000u64, 12_999_999u64] {
         assert!(
             !is_package_trainer_id(id),
             "gossip row {id} reads as a trainer row"
         );
     }
-    assert!(!is_package_gossip_id(PACKAGE_GLOBALS_ID_FLOOR));
+    assert!(!is_package_gossip_id(13_000_000u64));
 }
 
 #[test]

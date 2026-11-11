@@ -459,7 +459,6 @@ spawned = {int(r[0]) for r in rows("SELECT entry FROM game_world_entity WHERE ow
 teach = {int(r[0]) for r in rows("SELECT trainer_entry FROM game_trainer_spell") if r[0].strip().isdigit()}
 sell  = {int(r[0]) for r in rows("SELECT creature_entry FROM game_npc_vendor") if r[0].strip().isdigit()}
 give  = {int(r[0]) for r in rows("SELECT creature_entry FROM game_creature_quest") if r[0].strip().isdigit()}
-# Trainers with NO offerings BY DESIGN (each has a system that isn't the class-spell path):
 KNOWN_EMPTY = {2485: "portal trainer (teleports not curated yet)",
                4732: "riding trainer (189 mounts)",
                2879: "pet trainer (188 pet system)",

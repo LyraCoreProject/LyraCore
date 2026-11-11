@@ -1,4 +1,4 @@
-use lyracore_package_delta::{ids::PACKAGE_SCRIPT_ID_FLOOR, ScriptArtifact, HOOK_EVENT_NAMES};
+use lyracore_package_delta::{ScriptArtifact, HOOK_EVENT_NAMES};
 
 const HASH_A: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -74,7 +74,7 @@ fn every_event_in_the_catalogue_is_bindable() {
     for event in HOOK_EVENT_NAMES {
         let json = artifact(
             "example.bolt",
-            &[script(PACKAGE_SCRIPT_ID_FLOOR, "bolt.one", event, 0, true)],
+            &[script(100_000u32, "bolt.one", event, 0, true)],
         );
 
         let parsed = ScriptArtifact::parse(&json)

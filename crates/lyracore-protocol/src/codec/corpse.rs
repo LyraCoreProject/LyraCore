@@ -177,7 +177,7 @@ mod tests {
     }
 
     #[test]
-    fn corpse_create_object_flags_bones_state_work_item_201() {
+    fn corpse_create_object_flags_a_body_and_its_bones_apart() {
         let live = CorpseView {
             guid: 1,
             owner_guid: 1,

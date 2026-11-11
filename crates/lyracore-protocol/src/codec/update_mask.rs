@@ -327,7 +327,6 @@ mod tests {
 
     #[test]
     fn quest_log_field_indices() {
-        assert_eq!(idx::PLAYER_QUEST_LOG_1_1, 198);
         assert_eq!(quest_log_field(0, 0), 198);
         assert_eq!(quest_log_field(0, 1), 199);
         assert_eq!(quest_log_field(0, 2), 200);

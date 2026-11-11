@@ -754,7 +754,7 @@ fn display_values_carries_only_the_current_appearance() {
 }
 
 #[test]
-fn visible_item_values_render_and_clear_equipment_slots_only_work_item_087() {
+fn visible_item_values_render_and_clear_equipment_slots_only() {
     let sword = ItemInstanceView {
         random_property_id: 117,
         ..worn_item(15, 1, 25, 0)

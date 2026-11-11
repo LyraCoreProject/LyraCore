@@ -888,7 +888,7 @@ fn login_sequence_folds_reputation_by_index_and_ignores_out_of_range_slots() {
 }
 
 #[test]
-fn login_sequence_empty_player_actions_is_byte_identical_to_the_pre_212_synth() {
+fn login_sequence_without_imported_actions_puts_attack_then_known_spells_on_the_bar() {
     let msgs = login_sequence_messages(
         &warrior_entity(),
         &[100, 200],
@@ -938,7 +938,7 @@ fn login_sequence_builds_the_bar_from_imported_player_actions_packing_the_type_b
     for slot in [2usize, 3, 4, 6, 7, 119] {
         assert_eq!(
             bar.data[slot], 0,
-            "slot {slot} must stay 0 — no synth fallback fill-in"
+            "slot {slot} must stay 0 when imported actions exist"
         );
     }
 }

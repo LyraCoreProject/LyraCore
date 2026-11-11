@@ -27,7 +27,6 @@ impl<'a> HarnessPin<'a> {
     }
 }
 
-/// The pin committed in this checkout's `.wire-harness-rev`.
 pub fn harness_pin() -> HarnessPin<'static> {
     HarnessPin::parse(include_str!("../../.wire-harness-rev"))
         .expect("the committed .wire-harness-rev is a valid pin")

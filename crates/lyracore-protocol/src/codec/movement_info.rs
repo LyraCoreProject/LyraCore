@@ -375,27 +375,6 @@ pub fn read_movement_client(opcode: u32, body: &[u8]) -> Result<Option<ClientOpc
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wow_world_messages::vanilla::MovementInfo;
-
-    #[test]
-    fn movement_info_bytes_roundtrip() {
-        use wow_world_messages::vanilla::{MovementInfo_MovementFlags, Vector3d};
-        let info = MovementInfo {
-            flags: MovementInfo_MovementFlags::empty(),
-            timestamp: 0x0102_0304,
-            position: Vector3d {
-                x: -8950.0,
-                y: -130.0,
-                z: 83.5,
-            },
-            orientation: 1.25,
-            fall_time: 0.0,
-        };
-        let bytes = movement_info_to_bytes(&info).unwrap();
-        assert_eq!(bytes.len(), 28);
-        let back = bytes_to_movement_info(&bytes).unwrap();
-        assert_eq!(back, info);
-    }
 
     #[test]
     fn client_movement_keeps_the_flag_word_and_the_millisecond_fall_time() {

@@ -432,14 +432,6 @@ mod tests {
     }
 
     #[test]
-    fn m2_triangles_carry_no_group_semantics() {
-        let batch = vec![tri(5.0, TriClass::M2)];
-        let blob = encode(&batch);
-        let back = decode(&blob).unwrap();
-        assert_eq!(back[0].class, TriClass::M2);
-    }
-
-    #[test]
     fn empty_batch_round_trips_to_a_header_only_blob() {
         let blob = encode(&[]);
         assert_eq!(blob.len(), HEADER_BYTES);

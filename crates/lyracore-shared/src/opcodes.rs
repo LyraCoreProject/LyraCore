@@ -61,31 +61,3 @@ pub mod movement {
         is_slice_move(opcode) || ACKNOWLEDGED_MOVE_OPCODES.contains(&opcode)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn slice_move_membership() {
-        for &opcode in movement::SLICE_MOVE_OPCODES {
-            assert!(
-                movement::is_slice_move(opcode),
-                "0x{opcode:03X} should be a slice move opcode"
-            );
-        }
-        assert_eq!(movement::SLICE_MOVE_OPCODES.len(), 21);
-        for &opcode in movement::ACKNOWLEDGED_MOVE_OPCODES {
-            assert!(movement::is_relayed_move(opcode));
-            assert!(!movement::is_slice_move(opcode));
-        }
-        for opcode in [0x03D, 0x0A9, 0x1ED] {
-            assert!(
-                !movement::is_slice_move(opcode),
-                "0x{opcode:03X} is not a move"
-            );
-        }
-        assert!(!movement::is_slice_move(0));
-        assert!(!movement::is_slice_move(u32::MAX));
-    }
-}

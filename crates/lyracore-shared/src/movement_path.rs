@@ -132,7 +132,6 @@ pub fn catmull_rom_slopes(t: f32) -> [f32; 4] {
     ]
 }
 
-/// Sums `controls` scaled by `weights`, axis by axis in control order.
 pub fn catmull_rom(controls: &[[f32; 3]; 4], weights: [f32; 4]) -> [f32; 3] {
     std::array::from_fn(|axis| {
         controls

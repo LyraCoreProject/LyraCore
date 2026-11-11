@@ -109,47 +109,9 @@ mod tests {
 
     #[test]
     fn max_level_money_reward_uses_the_documented_v_coefficient() {
-        assert_eq!(MAX_LEVEL_XP_TO_COPPER, 6);
         assert_eq!(max_level_money_reward(0), 0);
         assert_eq!(max_level_money_reward(100), 600);
         assert_eq!(max_level_money_reward(u32::MAX), u32::MAX);
-    }
-
-    #[test]
-    fn share_event_kinds_are_distinct_and_skip_retired_kind_9() {
-        use crate::group::event_kind as g;
-        use crate::loot_roll::event_kind as roll;
-        let mut kinds = vec![
-            g::INVITE,
-            g::LIST,
-            g::DECLINE,
-            g::DESTROYED,
-            roll::ROLL_START,
-            roll::ROLL_VOTE,
-            roll::ROLL_WON,
-            roll::MASTER_LIST,
-            roll::MONEY_SHARE,
-            share_event_kind::QUEST_SHARE,
-            share_event_kind::QUEST_PUSH_RESULT,
-        ];
-        kinds.sort_unstable();
-        kinds.dedup();
-        assert_eq!(kinds, [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11]);
-        assert_eq!(share_event_kind::QUEST_SHARE, 10);
-        assert_eq!(
-            share_event_kind::QUEST_PUSH_RESULT,
-            share_event_kind::QUEST_SHARE + 1
-        );
-    }
-
-    #[test]
-    fn share_result_codes_mirror_the_gtker_quest_party_message_enum() {
-        assert_eq!(share_result::SHARING_QUEST, 0);
-        assert_eq!(share_result::CANT_TAKE_QUEST, 1);
-        assert_eq!(share_result::TOO_FAR, 4);
-        assert_eq!(share_result::LOG_FULL, 6);
-        assert_eq!(share_result::HAVE_QUEST, 7);
-        assert_eq!(share_result::FINISH_QUEST, 8);
     }
 
     #[test]

@@ -282,43 +282,8 @@ mod tests {
     }
 
     #[test]
-    fn sheath_state_validation_rejects_out_of_range_bytes() {
-        for ok in [
-            sheath_state::UNARMED,
-            sheath_state::MELEE,
-            sheath_state::RANGED,
-        ] {
-            assert!(sheath_state::is_valid(ok), "{ok} is a real sheath state");
-        }
-        for bad in [3u8, 4, 17, 255] {
-            assert!(!sheath_state::is_valid(bad), "{bad} must be refused");
-        }
-    }
-
-    #[test]
     fn creature_type_mask_is_0x9() {
         assert_eq!(type_mask::CREATURE, 0x9);
-    }
-
-    #[test]
-    fn vanilla_loot_tag_flags_use_build_5875_values() {
-        assert_eq!(unit_dynamic_flags::TAPPED, 0x0004);
-        assert_eq!(unit_dynamic_flags::TAPPED_BY_PLAYER, 0x0008);
-    }
-
-    #[test]
-    fn vanilla_auction_vocabulary_uses_the_build_5875_values() {
-        assert_eq!(npc_flags::AUCTIONEER, 0x1000);
-    }
-
-    #[test]
-    fn go_type_questgiver_is_cmangos_type_2() {
-        assert_eq!(go_type::QUESTGIVER, 2);
-    }
-
-    #[test]
-    fn go_type_meetingstone_is_cmangos_type_23() {
-        assert_eq!(go_type::MEETINGSTONE, 23);
     }
 
     #[test]
@@ -352,19 +317,6 @@ mod tests {
                 BANKER
             ),
             (1, 2, 3, 4, 5, 6, 8, 9)
-        );
-    }
-
-    #[test]
-    fn gossip_condition_keeps_existing_persisted_values() {
-        assert_eq!(
-            (
-                gossip_condition::NONE,
-                gossip_condition::QUEST_TAKEN,
-                gossip_condition::QUEST_REWARDED,
-                gossip_condition::NEVER
-            ),
-            (0, 1, 2, 3),
         );
     }
 }

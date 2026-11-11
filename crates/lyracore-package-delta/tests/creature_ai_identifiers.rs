@@ -5,9 +5,7 @@ use common::{
     PACKAGE_CREATURE_AI, REAL_BROADCAST_TEXT, WHOLE_BROADCAST_TEXT_ROW,
     WHOLE_QUEST_EVENT_REQUIREMENT_ROW, WHOLE_SUMMON_ROW,
 };
-use lyracore_package_delta::ids::{
-    PackageRange, PACKAGE_CREATURE_AI_ID_CEIL, PACKAGE_CREATURE_AI_ID_FLOOR,
-};
+use lyracore_package_delta::ids::PackageRange;
 use lyracore_package_delta::{
     is_package_creature_ai_id, DeltaError, PackageDelta, PrimaryKey, Table,
 };
@@ -43,11 +41,7 @@ fn no_creature_ai_claim_states_a_map() {
 
 #[test]
 fn a_package_may_insert_a_creature_ai_row_inside_the_package_range() {
-    for id in [
-        PACKAGE_CREATURE_AI_ID_FLOOR,
-        17_500_000,
-        PACKAGE_CREATURE_AI_ID_CEIL,
-    ] {
+    for id in [17_000_000u64, 17_500_000, 17_999_999u64] {
         let json = artifact(
             "example.pkg",
             &broadcast_text_claim(id as u32, "insert", WHOLE_BROADCAST_TEXT_ROW),
@@ -60,11 +54,7 @@ fn a_package_may_insert_a_creature_ai_row_inside_the_package_range() {
 
 #[test]
 fn an_insert_outside_the_package_range_is_refused() {
-    for id in [
-        u64::from(REAL_BROADCAST_TEXT),
-        PACKAGE_CREATURE_AI_ID_FLOOR - 1,
-        PACKAGE_CREATURE_AI_ID_CEIL + 1,
-    ] {
+    for id in [u64::from(REAL_BROADCAST_TEXT), 16_999_999u64, 18_000_000u64] {
         let json = artifact(
             "example.pkg",
             &broadcast_text_claim(id as u32, "insert", WHOLE_BROADCAST_TEXT_ROW),
@@ -83,7 +73,7 @@ fn an_insert_outside_the_package_range_is_refused() {
 
 #[test]
 fn one_band_covers_every_insertable_creature_ai_table() {
-    let out_of_band = PACKAGE_CREATURE_AI_ID_FLOOR - 1;
+    let out_of_band = 16_999_999u64;
     let claims = [
         broadcast_text_claim(out_of_band as u32, "insert", WHOLE_BROADCAST_TEXT_ROW),
         summon_claim(out_of_band as u32, "insert", WHOLE_SUMMON_ROW),
@@ -140,7 +130,7 @@ fn a_fixture_reserved_creature_ai_row_is_refused_under_every_operation() {
 fn the_package_creature_ai_band_is_its_own() {
     let id = u64::from(PACKAGE_CREATURE_AI);
     assert!(is_package_creature_ai_id(id));
-    assert!(!is_package_creature_ai_id(PACKAGE_CREATURE_AI_ID_CEIL + 1));
+    assert!(!is_package_creature_ai_id(18_000_000u64));
     assert!(!PackageRange::EventAi.is_fixture_reserved(id));
 }
 

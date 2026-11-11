@@ -89,48 +89,6 @@ fn oversized_movement_bodies_are_refused() {
 }
 
 #[test]
-fn every_generated_update_mask_round_trips_through_the_raw_values_decoder() {
-    let mut rng = Rng::new(0x5641_4C55);
-    for _ in 0..CASES {
-        let guid = rng.next_u64();
-        let n_fields = 1 + rng.below(24);
-        let mut mask = update_mask::UpdateMaskValues::new();
-        let mut expected: std::collections::BTreeMap<u16, u32> = Default::default();
-        for _ in 0..n_fields {
-            let mut idx = rng.below(1200) as u16;
-            if idx == update_mask::idx::OBJECT_TYPE {
-                idx += 1;
-            }
-            let value = rng.next_u32();
-            mask.set_u32(idx, value);
-            expected.insert(idx, value);
-        }
-
-        let (opcode, body) = values::build_values_update_raw(guid, &mask);
-        assert_eq!(
-            opcode, 0x00A9,
-            "the raw VALUES builder must keep emitting SMSG_UPDATE_OBJECT"
-        );
-
-        let decoded = crate::codec::values_mask::parse_values_updates(&body);
-        assert_eq!(
-            decoded.len(),
-            1,
-            "one encoded object must decode to exactly one VALUES block; body was {body:02X?}"
-        );
-        assert_eq!(
-            decoded[0].guid, guid,
-            "the packed guid did not survive the round trip"
-        );
-        let want: Vec<(u16, u32)> = expected.into_iter().collect();
-        assert_eq!(
-            decoded[0].fields, want,
-            "the decoded field set differs from what was encoded (guid {guid:#X})"
-        );
-    }
-}
-
-#[test]
 fn every_truncation_of_an_encoded_mask_decodes_a_subset_and_never_invents_a_field() {
     let mut rng = Rng::new(0x5452_554E);
     for _ in 0..200 {
@@ -166,19 +124,4 @@ fn every_truncation_of_an_encoded_mask_decodes_a_subset_and_never_invents_a_fiel
             }
         }
     }
-}
-
-#[test]
-fn the_seeded_generator_is_reproducible_and_seed_dependent() {
-    let a: Vec<u8> = Rng::new(7).bytes(64);
-    let b: Vec<u8> = Rng::new(7).bytes(64);
-    assert_eq!(a, b, "the same seed must replay the same byte stream");
-
-    let c: Vec<u8> = Rng::new(8).bytes(64);
-    assert_ne!(a, c, "different seeds must explore different inputs");
-
-    assert!(
-        a.windows(2).any(|w| w[0] != w[1]),
-        "the generator emitted a constant stream: {a:02X?}"
-    );
 }

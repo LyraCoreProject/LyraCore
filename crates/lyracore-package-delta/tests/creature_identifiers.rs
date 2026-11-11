@@ -5,10 +5,7 @@ use common::{
     REAL_CREATURE, REAL_CREATURE_SPAWN, REAL_MAP, WHOLE_CREATURE_SPAWN_ROW,
     WHOLE_CREATURE_TEMPLATE_ROW,
 };
-use lyracore_package_delta::ids::{
-    PackageRange, FIXTURE_CREATURE_ID_CEIL, FIXTURE_CREATURE_ID_FLOOR, PACKAGE_CREATURE_ID_CEIL,
-    PACKAGE_CREATURE_ID_FLOOR,
-};
+use lyracore_package_delta::ids::PackageRange;
 use lyracore_package_delta::{
     is_fixture_reserved_creature_id, is_package_creature_id, packed_creature_spawn_guid,
     DeltaError, PackageDelta, PrimaryKey, Table, MAX_CREATURE_GUID_COMPONENT,
@@ -68,11 +65,7 @@ fn the_map_stays_out_of_the_derived_guid() {
 
 #[test]
 fn a_package_may_insert_a_creature_row_inside_the_package_range() {
-    for id in [
-        PACKAGE_CREATURE_ID_FLOOR,
-        15_500_000,
-        PACKAGE_CREATURE_ID_CEIL,
-    ] {
+    for id in [15_000_000u32, 15_500_000, 15_999_999u32] {
         let json = artifact(
             "example.pkg",
             &creature_template_claim(id, "insert", WHOLE_CREATURE_TEMPLATE_ROW),
@@ -84,11 +77,7 @@ fn a_package_may_insert_a_creature_row_inside_the_package_range() {
 
 #[test]
 fn an_insert_outside_the_package_range_is_refused() {
-    for id in [
-        REAL_CREATURE,
-        PACKAGE_CREATURE_ID_FLOOR - 1,
-        PACKAGE_CREATURE_ID_CEIL + 1,
-    ] {
+    for id in [REAL_CREATURE, 14_999_999u32, 16_000_000u32] {
         let json = artifact(
             "example.pkg",
             &creature_template_claim(id, "insert", WHOLE_CREATURE_TEMPLATE_ROW),
@@ -107,7 +96,7 @@ fn an_insert_outside_the_package_range_is_refused() {
 
 #[test]
 fn one_band_covers_the_template_and_the_spawn_identifier() {
-    let out_of_band = PACKAGE_CREATURE_ID_FLOOR - 1;
+    let out_of_band = 14_999_999u32;
 
     assert_eq!(
         PackageDelta::parse(&artifact(
@@ -187,7 +176,7 @@ fn a_fixture_reserved_creature_is_refused_under_every_operation() {
 
 #[test]
 fn a_fixture_cluster_creature_template_is_refused_under_every_operation() {
-    for id in [FIXTURE_CREATURE_ID_FLOOR, 51_001, FIXTURE_CREATURE_ID_CEIL] {
+    for id in [51_000u32, 51_001, 51_999u32] {
         assert!(is_fixture_reserved_creature_id(id), "creature {id}");
 
         assert_eq!(
@@ -208,13 +197,7 @@ fn a_fixture_cluster_creature_template_is_refused_under_every_operation() {
 fn the_fixture_creature_cluster_does_not_reach_spawn_identifiers() {
     PackageDelta::parse(&artifact(
         "example.pkg",
-        &creature_spawn_claim(
-            REAL_MAP,
-            REAL_CREATURE,
-            FIXTURE_CREATURE_ID_FLOOR,
-            "update",
-            A_POSITION,
-        ),
+        &creature_spawn_claim(REAL_MAP, REAL_CREATURE, 51_000u32, "update", A_POSITION),
     ))
     .expect("a real spawn identifier inside the template cluster is still a real spawn");
 
@@ -250,11 +233,11 @@ fn a_key_component_wider_than_the_guid_field_is_refused() {
 
 #[test]
 fn the_whole_package_creature_band_fits_the_guid_fields() {
-    const { assert!(PACKAGE_CREATURE_ID_CEIL <= MAX_CREATURE_GUID_COMPONENT) };
-    assert!(is_package_creature_id(PACKAGE_CREATURE_ID_FLOOR));
-    assert!(is_package_creature_id(PACKAGE_CREATURE_ID_CEIL));
-    assert!(!is_package_creature_id(PACKAGE_CREATURE_ID_CEIL + 1));
-    assert!(!is_fixture_reserved_creature_id(PACKAGE_CREATURE_ID_FLOOR));
+    const { assert!(15_999_999u32 <= MAX_CREATURE_GUID_COMPONENT) };
+    assert!(is_package_creature_id(15_000_000u32));
+    assert!(is_package_creature_id(15_999_999u32));
+    assert!(!is_package_creature_id(16_000_000u32));
+    assert!(!is_fixture_reserved_creature_id(15_000_000u32));
 }
 
 #[test]

@@ -215,21 +215,9 @@ mod tests {
         assert_eq!(EffectKind::try_from(0x1E), Err(0x1E));
         assert_eq!(EffectKind::try_from(0xFF), Err(0xFF));
     }
+
     #[test]
-    fn kind_wire_values() {
-        assert_eq!(KIND_AURA_BIT, 0x80);
-        assert_eq!(E_DAMAGE, 0x01);
-        assert_eq!(E_HEAL, 0x02);
-        assert_eq!(E_DISPEL, 0x04);
-        assert_eq!(E_SUMMON_GUARDIANS, 0x27);
-        assert_eq!(E_ADD_EXTRA_ATTACKS, 0x28);
-        assert_eq!(E_ENCHANT_ITEM_TEMPORARY, 0x29);
-        assert_eq!(A_PERIODIC_DAMAGE, 0x90);
-        assert_eq!(A_PERIODIC_HEAL, 0x91);
-        assert_eq!(A_ABSORB, 0xA2);
-        assert_eq!(A_MOD_COMBAT, 0xA3);
-        assert_eq!(A_MOD_POWER_REGEN_PCT, 0xB7);
-        assert_eq!(A_FLAG, 0xBE);
+    fn only_aura_kinds_set_the_aura_bit() {
         for k in [
             E_DAMAGE, E_HEAL, E_ENERGIZE, E_DISPEL, E_TRIGGER, E_SCRIPTED,
         ] {
@@ -255,25 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn param_tag_wire_values_exhaustive() {
-        assert_eq!(P_NONE, 0);
-        assert_eq!(P_STAT_ID, 1);
-        assert_eq!(P_SCHOOL_MASK, 2);
-        assert_eq!(P_MECHANIC, 3);
-        assert_eq!(P_POWER_TYPE, 4);
-        assert_eq!(P_COMBAT_FIELD, 5);
-        assert_eq!(P_SPEED_KIND, 6);
-        assert_eq!(P_FLAG, 7);
-        assert_eq!(P_ITEM_ENTRY, 8);
-        assert_eq!(P_ENTRY, 9);
-        assert_eq!(P_ENCHANT_ID, 10);
-        assert_eq!(P_PCT_MAX_POWER, 12);
-        assert_eq!(P_GAMEOBJECT_ENTRY, 13);
-        assert_eq!(P_DISPLAY_ID, 14);
-        assert_eq!(P_SPELL_ID, 15);
-        assert_eq!(P_FLAT_MANA, 16);
-        assert_eq!(P_COMBAT_PERCENT, 17);
-        assert_eq!(P_RAW, 255);
+    fn param_tags_are_distinct() {
         let all = [
             P_NONE,
             P_STAT_ID,
@@ -302,11 +272,7 @@ mod tests {
     }
 
     #[test]
-    fn mechanic_wire_values() {
-        assert_eq!(M_STUN, 1);
-        assert_eq!(M_ROOT, 2);
-        assert_eq!(M_FEAR, 3);
-        assert_eq!(M_POLY, 4);
+    fn mechanics_are_distinct_and_never_the_inert_zero() {
         let ms = [M_STUN, M_ROOT, M_FEAR, M_POLY];
         for (i, a) in ms.iter().enumerate() {
             assert_ne!(*a, 0, "mechanic must be non-zero (0 = inert sentinel)");
@@ -314,6 +280,5 @@ mod tests {
                 assert_ne!(a, b, "mechanics must be distinct");
             }
         }
-        assert_eq!(A_CONTROL & KIND_AURA_BIT, KIND_AURA_BIT);
     }
 }

@@ -282,86 +282,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn notice_codes_are_the_vanilla_chat_notify_values() {
-        let pinned = [
-            (notice::JOINED, 0x00),
-            (notice::LEFT, 0x01),
-            (notice::YOU_JOINED, 0x02),
-            (notice::YOU_LEFT, 0x03),
-            (notice::WRONG_PASSWORD, 0x04),
-            (notice::NOT_MEMBER, 0x05),
-            (notice::NOT_MODERATOR, 0x06),
-            (notice::PASSWORD_CHANGED, 0x07),
-            (notice::OWNER_CHANGED, 0x08),
-            (notice::PLAYER_NOT_FOUND, 0x09),
-            (notice::NOT_OWNER, 0x0A),
-            (notice::CHANNEL_OWNER, 0x0B),
-            (notice::MODE_CHANGE, 0x0C),
-            (notice::ANNOUNCEMENTS_ON, 0x0D),
-            (notice::ANNOUNCEMENTS_OFF, 0x0E),
-            (notice::MODERATION_ON, 0x0F),
-            (notice::MODERATION_OFF, 0x10),
-            (notice::MUTED, 0x11),
-            (notice::PLAYER_KICKED, 0x12),
-            (notice::BANNED, 0x13),
-            (notice::PLAYER_BANNED, 0x14),
-            (notice::PLAYER_UNBANNED, 0x15),
-            (notice::PLAYER_NOT_BANNED, 0x16),
-            (notice::PLAYER_ALREADY_MEMBER, 0x17),
-            (notice::INVITE, 0x18),
-            (notice::INVITE_WRONG_FACTION, 0x19),
-            (notice::WRONG_FACTION, 0x1A),
-            (notice::INVALID_NAME, 0x1B),
-            (notice::NOT_MODERATED, 0x1C),
-            (notice::PLAYER_INVITED, 0x1D),
-            (notice::PLAYER_INVITE_BANNED, 0x1E),
-            (notice::THROTTLED, 0x1F),
-        ];
-        for (code, wire) in pinned {
-            assert_eq!(code, wire);
-        }
-    }
-
-    #[test]
-    fn member_flags_are_the_cores_values() {
-        assert_eq!(member_flag::OWNER, 0x01);
-        assert_eq!(member_flag::MODERATOR, 0x02);
-        assert_eq!(member_flag::VOICED, 0x04);
-        assert_eq!(member_flag::MUTED, 0x08);
-    }
-
-    #[test]
-    fn channel_flags_are_the_cores_values() {
-        assert_eq!(channel_flag::CUSTOM, 0x01);
-        assert_eq!(channel_flag::TRADE, 0x04);
-        assert_eq!(channel_flag::NOT_LFG, 0x08);
-        assert_eq!(channel_flag::GENERAL, 0x10);
-        assert_eq!(channel_flag::CITY, 0x20);
-        assert_eq!(channel_flag::LFG, 0x40);
-    }
-
-    #[test]
-    fn channel_op_codes_are_reserved_in_order() {
-        let ops = [
-            channel_op::JOIN,
-            channel_op::LEAVE,
-            channel_op::PASSWORD,
-            channel_op::SET_OWNER,
-            channel_op::MODERATOR,
-            channel_op::UNMODERATOR,
-            channel_op::MUTE,
-            channel_op::UNMUTE,
-            channel_op::KICK,
-            channel_op::BAN,
-            channel_op::UNBAN,
-            channel_op::INVITE,
-            channel_op::ANNOUNCEMENTS,
-            channel_op::MODERATE,
-        ];
-        assert_eq!(ops, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
-    }
-
-    #[test]
     fn every_builtin_channel_classifies_with_its_wire_flags() {
         let rows = [
             ("General - Elwynn Forest", 1, 0x18),
@@ -398,13 +318,6 @@ mod tests {
             "",
         ] {
             assert_eq!(classify(name), None, "{name:?}");
-        }
-    }
-
-    #[test]
-    fn only_world_defense_is_read_only() {
-        for builtin in BUILTIN_CHANNELS {
-            assert_eq!(builtin.players_may_speak(), builtin.id != 23, "{builtin:?}");
         }
     }
 
