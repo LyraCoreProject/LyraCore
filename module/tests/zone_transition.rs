@@ -112,7 +112,7 @@ fn import_terrain(standalone: &Standalone) {
 
 fn move_to(standalone: &Standalone, (x, y, z): (f32, f32, f32), move_time_ms: u32) {
     let args = [
-        support::actor(&PLAYER_GUID.to_string()),
+        support::actor(PLAYER_GUID),
         HEARTBEAT.to_string(),
         "[]".to_string(),
         x.to_string(),

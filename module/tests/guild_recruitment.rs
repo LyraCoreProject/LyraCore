@@ -40,7 +40,7 @@ fn a_guild_member_never_joins_guild_recruitment() {
     realm.assert_call(
         "realm_guild_op",
         &[
-            &actor(&MEMBER.to_string()),
+            &actor(MEMBER),
             &format!(
                 r#"{{"gmCreate":{{"leader_guid":{MEMBER},"leader_name":"Member","leader_team":469,"leader_realm_account":{MEMBER},"gm_level":1,"name":"Recruiters"}}}}"#
             ),

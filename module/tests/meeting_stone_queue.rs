@@ -272,7 +272,7 @@ fn the_stone_admission_refuses_without_writing_anything() {
         "DELETE FROM game_account_claim WHERE account_id = {BRAM}"
     ));
     admission(
-        &support::actor(&BRAM.to_string()),
+        &support::actor(BRAM),
         &deadmines,
         "meeting_stone:actor_unavailable",
     );
@@ -281,7 +281,7 @@ fn the_stone_admission_refuses_without_writing_anything() {
         "realm_meeting_stone_op",
         &[
             JOIN,
-            &support::actor(&BRAM.to_string()),
+            &support::actor(BRAM),
             &DEADMINES.to_string(),
             &facts(&[(BRAM, MAGE)]),
         ],
