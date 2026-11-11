@@ -29,6 +29,12 @@ pub struct NativeConformanceBirth {
     pub added_at: spacetimedb::Timestamp,
 }
 
+crate::outside_table_catalog!(
+    game_native_conformance_connection,
+    game_native_conformance_create,
+    game_native_conformance_birth
+);
+
 pub(crate) fn record_birth(
     ctx: &ReducerContext,
     guid: u64,

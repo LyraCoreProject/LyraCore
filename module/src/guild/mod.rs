@@ -40,6 +40,8 @@ pub struct GuildSequence {
     pub last_id: u32,
 }
 
+crate::outside_table_catalog!(game_guild_sequence);
+
 #[derive(Clone, Copy)]
 pub(crate) enum IdSequence {
     Guild,

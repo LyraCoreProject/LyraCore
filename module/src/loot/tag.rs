@@ -7,7 +7,7 @@ use lyracore_shared::group::RAID_MAX_MEMBERS;
 
 use crate::game_world_entity;
 
-use super::game_corpse_loot_eligible;
+use crate::game_corpse_loot_eligible;
 
 #[cfg(feature = "debug_reducers")]
 use crate::{
@@ -275,7 +275,7 @@ pub(crate) fn record_corpse_eligibility(
         eligible.id().delete(id);
     }
     for eligible_guid in recipients.iter().copied().collect::<BTreeSet<_>>() {
-        eligible.insert(super::CorpseLootEligible {
+        eligible.insert(crate::CorpseLootEligible {
             id: 0,
             corpse_guid,
             eligible_guid,
@@ -434,7 +434,7 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
     tagless_live.money = 17;
     tagless_live.dynamic_flags |= lyracore_shared::constants::unit_dynamic_flags::LOOTABLE;
     tagless_live.update(ctx);
-    ctx.db.game_corpse_loot().insert(super::CorpseLoot {
+    ctx.db.game_corpse_loot().insert(crate::CorpseLoot {
         id: 0,
         corpse_guid: tagless,
         slot: 0,
@@ -594,7 +594,7 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
     insert_fixture_entity(ctx, &origin, retained, base_x, false, 0);
     crate::threat::add_threat(ctx, retained, LOOT_TAG_FIXTURE_CHARACTER_F, 10);
     crate::combat::arm_creature_engagement(ctx, retained, LOOT_TAG_FIXTURE_CHARACTER_F, false);
-    crate::combat::MeleeAttack::insert(
+    crate::MeleeAttack::insert(
         ctx,
         crate::MeleeAttack {
             attacker_guid: LOOT_TAG_FIXTURE_CHARACTER_B,
@@ -719,7 +719,7 @@ fn verify_corpse_loot_gates(
 
     let party_corpse = fixture_creature_guid(12);
     insert_fixture_corpse(ctx, origin, party_corpse, x, 9);
-    ctx.db.game_corpse_loot().insert(super::CorpseLoot {
+    ctx.db.game_corpse_loot().insert(crate::CorpseLoot {
         id: 0,
         corpse_guid: party_corpse,
         slot: 0,
@@ -775,7 +775,7 @@ fn verify_corpse_loot_gates(
 
     let solo_corpse = fixture_creature_guid(13);
     insert_fixture_corpse(ctx, origin, solo_corpse, x, 17);
-    ctx.db.game_corpse_loot().insert(super::CorpseLoot {
+    ctx.db.game_corpse_loot().insert(crate::CorpseLoot {
         id: 0,
         corpse_guid: solo_corpse,
         slot: 0,

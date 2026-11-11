@@ -400,6 +400,8 @@ pub struct VendorStockRuntime {
     pub runtime_id: u128,
 }
 
+crate::outside_table_catalog!(game_vendor_stock, game_vendor_stock_runtime);
+
 #[table(accessor = game_character_buyback, index(accessor = by_player_guid, btree(columns = [player_guid])))]
 pub struct BuybackEntry {
     #[primary_key]

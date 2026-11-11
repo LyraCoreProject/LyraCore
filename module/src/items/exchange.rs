@@ -3,10 +3,8 @@ use lyracore_protocol::messages::vanilla::NewItemSource;
 use spacetimedb::{Identity, ReducerContext, Timestamp};
 
 use super::inventory::{free_inventory_slots, is_carried_slot, item_fits_bag};
-use super::{
-    allocate_item_guids, binds_on_grant, game_item_instance, game_item_template, merge_amount,
-    select_property, ItemInstance, ItemTemplate,
-};
+use super::{allocate_item_guids, binds_on_grant, merge_amount, select_property};
+use crate::{game_item_instance, game_item_template, ItemInstance, ItemTemplate};
 
 // Refusals leave items unchanged; GUID reservations may still advance the range.
 pub(crate) fn exchange_items(

@@ -39,6 +39,16 @@ column. A table that schedules from `ctx.timestamp` instead of `time::schedule_t
 declaring file. A marker that names no scheduled table in that file fails the build. Packages
 cannot reach the crate-private Realm Clock, so their scheduled tables are not registered.
 
+Every `#[table]` declaration under `module/src/` generates one line of `table_catalog.rs`, which
+`module/src/tables.rs` includes: a re-export of the row type and its accessors from the declaring
+module, under the `cfg` gates of the struct, the file and each `mod` declaration on its path.
+`lib.rs` re-exports `tables::*`, so a new table needs no hand edit to be named as
+`crate::tables::<name>`, `crate::<name>` or `lyracore_module::<name>`. The declaring module must be
+visible from the crate root and the row type must be `pub`. The catalog is the table surface the
+Package API promises, so a table Packages must not rely on opts out with
+`crate::outside_table_catalog!(table_accessor, ..);` in its declaring file. A marker that names no
+table declared in that file fails the build.
+
 `datascripts/runtime-scripts/events.json` supplies the event catalogue. The build uses it to
 emit `hook_dispatch.rs`, including payload aliases, each `fire_*` function and the Runtime Script
 payload fields. `module/src/hooks.rs` includes it, so callers keep the same dispatch paths.

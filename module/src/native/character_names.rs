@@ -38,6 +38,12 @@ pub struct CharacterNameReport {
     pub received: Vec<u32>,
 }
 
+crate::outside_table_catalog!(
+    game_character_name,
+    game_character_names_ready,
+    game_character_name_report
+);
+
 pub(super) fn reported(ctx: &ReducerContext, report: NameReport) -> Result<(), String> {
     if report.total == 0 || report.index >= report.total {
         return Err("invalid Character name report batch".into());

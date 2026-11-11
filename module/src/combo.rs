@@ -1,7 +1,8 @@
 use spacetimedb::{table, ReducerContext, Table};
 
 use crate::game_world_entity;
-use crate::spell::{Spell, SpellEffect, A_PERIODIC_DAMAGE, E_FINISHER_DAMAGE};
+use crate::spell::{A_PERIODIC_DAMAGE, E_FINISHER_DAMAGE};
+use crate::{Spell, SpellEffect};
 use lyracore_shared::spell::taxonomy::{
     FAMILY_FLAG_DRUID_RIP_BITE, FAMILY_FLAG_ROGUE_EVISCERATE, FAMILY_FLAG_ROGUE_RUPTURE,
     SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE,

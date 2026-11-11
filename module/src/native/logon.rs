@@ -60,6 +60,12 @@ pub struct NativeLogonReaper {
     pub scheduled_at: ScheduleAt,
 }
 
+crate::outside_table_catalog!(
+    game_native_logon_connection,
+    game_native_logon_address,
+    game_native_logon_reaper
+);
+
 const WINDOW_MICROS: i64 = 60_000_000;
 
 fn address(ctx: &ReducerContext, peer: &str) -> NativeLogonAddress {

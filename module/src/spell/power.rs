@@ -3,9 +3,10 @@ use lyracore_shared::spell::taxonomy::{
 };
 use spacetimedb::ReducerContext;
 
+use super::auras_on;
 use super::formulas::int_spell_power;
-use super::{auras_on, Aura, Spell};
 use crate::{game_spell, game_world_entity};
+use crate::{Aura, Spell};
 
 #[cfg(feature = "debug_reducers")]
 pub(crate) fn spell_crit_bp(ctx: &ReducerContext, caster_guid: u64) -> u32 {

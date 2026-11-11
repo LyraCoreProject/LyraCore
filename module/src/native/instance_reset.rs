@@ -159,6 +159,8 @@ pub struct InstanceResetResult {
     pub result: Vec<u8>,
 }
 
+crate::outside_table_catalog!(game_world_instance_reset, game_instance_reset_result);
+
 #[reducer]
 pub fn idc_world_instance_reset(
     ctx: &ReducerContext,

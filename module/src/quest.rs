@@ -293,6 +293,8 @@ pub struct CharacterQuestLog {
     pub entries: Vec<u32>,
 }
 
+crate::outside_table_catalog!(game_quest_flags, game_character_quest_log);
+
 impl CharacterQuest {
     pub(crate) fn is_active(&self) -> bool {
         !self.rewarded && !self.failed

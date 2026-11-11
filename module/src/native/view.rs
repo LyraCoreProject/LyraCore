@@ -1,5 +1,5 @@
 use crate::guild::game_guild_member;
-use crate::items::{game_item_instance, game_item_random_property, game_item_template};
+use crate::{game_item_instance, game_item_random_property, game_item_template};
 use crate::{Character, WorldEntity};
 use lyracore_protocol::codec;
 use lyracore_protocol::messages::vanilla::{CharacterGear, InventoryType};
@@ -250,7 +250,7 @@ pub(super) fn quest_slot(
     }
 }
 
-pub(super) fn item_template(t: crate::items::ItemTemplate) -> codec::ItemTemplateView {
+pub(super) fn item_template(t: crate::ItemTemplate) -> codec::ItemTemplateView {
     codec::ItemTemplateView {
         entry: t.entry,
         class: t.class,

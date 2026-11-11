@@ -1,10 +1,11 @@
+use crate::CreatureAiDefinition;
 use std::collections::HashSet;
 
 use spacetimedb::{reducer, ReducerContext, Table};
 
 use super::stored::game_creature_ai_script_policy;
 use super::{
-    AiEventKind, AuraStackCondition, CallForHelpInstruction, CastInstruction, CreatureAiDefinition,
+    AiEventKind, AuraStackCondition, CallForHelpInstruction, CastInstruction,
     CreatureEntryCondition, CreatureHealthCondition, CreatureInstruction,
     CreaturePresentationInstruction, CreaturePresentationMount, CreatureReactState, DeathCondition,
     EmoteInstruction, EvadeInstruction, EventAiRule, EventCondition, EventPredicate,
@@ -1178,9 +1179,9 @@ pub fn debug_stage_eventai_revision_fixture(
         fight.last_offhand_swing_ms = 0;
         fight.rout_ends_ms = 0;
         fight.pursuit_ends_ms = 0;
-        crate::combat::MeleeAttack::update(ctx, fight);
+        crate::MeleeAttack::update(ctx, fight);
     } else {
-        crate::combat::MeleeAttack::insert(
+        crate::MeleeAttack::insert(
             ctx,
             crate::MeleeAttack {
                 attacker_guid: creature_guid,

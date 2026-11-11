@@ -3,6 +3,7 @@ use spacetimedb::{log, table, ReducerContext, Table};
 use crate::game_world_entity;
 
 use super::*;
+use crate::{game_aura, game_spell, game_spell_chain, game_spell_effect, Aura};
 
 #[table(accessor = game_spell_group, index(accessor = by_group, btree(columns = [group_id])), index(accessor = by_spell, btree(columns = [spell_id])))]
 pub struct SpellGroup {

@@ -461,6 +461,15 @@ pub struct NativeTransferRelease {
     pub connected: bool,
 }
 
+crate::outside_table_catalog!(
+    game_native_transfer_pending,
+    game_native_transfer,
+    game_native_transfer_moved,
+    game_native_transfer_moved_retry,
+    game_native_transfer_release_retry,
+    game_native_transfer_release
+);
+
 #[reducer(on_result(game_native_transfer_moved))]
 pub fn native_transfer_moved_answered(
     ctx: &ReducerContext,

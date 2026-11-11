@@ -7,6 +7,7 @@ use crate::{
 };
 
 use super::*;
+use crate::game_creature_template;
 
 pub(crate) mod cadence;
 mod lifecycle;
@@ -121,6 +122,8 @@ pub struct CreatureTickCursor {
     pub id: u8,
     pub tick: u64,
 }
+
+crate::outside_table_catalog!(game_creature_tick_cursor);
 
 fn next_tick(ctx: &ReducerContext) -> u64 {
     let cursors = ctx.db.game_creature_tick_cursor();
@@ -471,7 +474,8 @@ mod relay_tripwire {
 
 #[cfg(test)]
 mod advance_persist_gate {
-    use super::{advance_needs_persist, CreatureSpline};
+    use super::advance_needs_persist;
+    use crate::CreatureSpline;
     use crate::WorldEntity;
     use lyracore_shared::constants::{type_mask, unit_flags};
     use lyracore_shared::spatial;

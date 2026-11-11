@@ -2,18 +2,14 @@ mod audit;
 mod auth;
 mod encounter;
 mod eventai;
-mod fingerprint;
+pub(crate) mod fingerprint;
 mod instance;
 mod mail;
 mod meeting_stone;
 mod package_config;
-mod readout;
+pub(crate) mod readout;
 mod runtime_script;
 mod taxi;
-
-pub use fingerprint::{game_catalogue_fingerprint, CatalogueFingerprint};
-
-pub use readout::{game_debug_readout, DebugReadout};
 
 use lyracore_package_delta::{fixture_ids, packed_creature_spawn_guid};
 use lyracore_shared::{constants, spatial};
@@ -760,9 +756,9 @@ pub fn debug_engage(
         swing_error: 0,
     };
     if melee.attacker_guid().find(attacker_guid).is_some() {
-        crate::combat::MeleeAttack::update(ctx, row);
+        crate::MeleeAttack::update(ctx, row);
     } else {
-        crate::combat::MeleeAttack::insert(ctx, row);
+        crate::MeleeAttack::insert(ctx, row);
     }
     let entities = ctx.db.game_world_entity();
     if let Some(mut e) = entities.guid().find(attacker_guid) {

@@ -1026,6 +1026,17 @@ pub struct PartyProjectionRetry {
     pub scheduled_at: ScheduleAt,
     pub call: WorldPartyUpdate,
 }
+
+crate::outside_table_catalog!(
+    game_party_character,
+    game_party_membership,
+    game_party_projection,
+    game_party_presence,
+    game_realm_party_command,
+    game_world_party_update,
+    game_party_disband,
+    game_party_projection_retry
+);
 crate::virtual_clock_exempt!(game_party_projection_retry);
 
 #[reducer(on_result(game_world_party_update))]

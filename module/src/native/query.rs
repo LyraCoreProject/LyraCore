@@ -2,9 +2,9 @@ use lyracore_protocol::{codec, messages::vanilla::opcodes::ServerOpcodeMessage};
 use spacetimedb::{ReducerContext, Table};
 
 use super::game_native_world_connection;
-use crate::creatures::game_hunter_pet_protocol;
+use crate::game_hunter_pet_protocol;
+use crate::game_item_template;
 use crate::gameobject::game_gameobject_template;
-use crate::items::game_item_template;
 use crate::transport::game_transport;
 use crate::{
     game_creature_template, game_meeting_stone, game_npc_text, game_npc_text_slot,

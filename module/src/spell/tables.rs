@@ -320,6 +320,8 @@ pub struct ItemAuraExpiry {
     pub scheduled_at: ScheduleAt,
 }
 
+crate::outside_table_catalog!(game_item_aura, game_item_aura_expiry);
+
 #[spacetimedb::reducer]
 pub(crate) fn expire_item_aura(ctx: &ReducerContext, expiry: ItemAuraExpiry) {
     if !crate::time::scheduler_authorized(ctx) {

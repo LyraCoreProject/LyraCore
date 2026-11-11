@@ -7,7 +7,8 @@ use crate::game_item_template;
 use crate::game_world_entity;
 use lyracore_shared::loot_roll::{event_kind as roll_event_kind, vote_kind};
 
-use super::{refused, CorpseLoot};
+use super::refused;
+use crate::CorpseLoot;
 
 // Corpse lifetime owns these rows; they are not Character-owned state.
 #[table(accessor = game_corpse_loot_eligible, index(accessor = by_corpse, btree(columns = [corpse_guid])))]

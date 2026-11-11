@@ -950,7 +950,7 @@ impl ThreatSink for CtxWorld<'_> {
         }
         if let Some(mut row) = melee.attacker_guid().find(creature) {
             row.target_guid = victim;
-            crate::combat::MeleeAttack::update(self.ctx, row);
+            crate::MeleeAttack::update(self.ctx, row);
         }
         let entities = self.ctx.db.game_world_entity();
         if let Some(mut c) = entities.guid().find(creature) {
@@ -1082,7 +1082,7 @@ impl RoutSink for CtxWorld<'_> {
         let melee = self.ctx.db.game_melee_attack();
         if let Some(mut row) = melee.attacker_guid().find(guid) {
             row.rout_ends_ms = ends_ms;
-            crate::combat::MeleeAttack::update(self.ctx, row);
+            crate::MeleeAttack::update(self.ctx, row);
         }
     }
 }
@@ -1223,11 +1223,11 @@ impl PetSink for CtxWorld<'_> {
             Some(mut row) => {
                 if row.target_guid != victim {
                     row.target_guid = victim;
-                    crate::combat::MeleeAttack::update(self.ctx, row);
+                    crate::MeleeAttack::update(self.ctx, row);
                 }
             }
             None => {
-                crate::combat::MeleeAttack::insert(
+                crate::MeleeAttack::insert(
                     self.ctx,
                     MeleeAttack {
                         attacker_guid: guid,

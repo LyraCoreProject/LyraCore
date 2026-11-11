@@ -9,7 +9,12 @@ fn manifest_dir() -> PathBuf {
 }
 
 fn contract() -> Contract {
-    Contract::read(&manifest_dir().join("src/tables.rs"))
+    let hand_catalog =
+        std::fs::read_to_string(manifest_dir().join("src/tables.rs")).expect("read src/tables.rs");
+    Contract::from_catalog(&format!(
+        "{hand_catalog}{}",
+        include_str!(concat!(env!("OUT_DIR"), "/table_catalog.rs"))
+    ))
 }
 
 #[test]

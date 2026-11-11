@@ -6,7 +6,7 @@ use spacetimedb::{table, ReducerContext, SpacetimeType, Table};
 
 use super::petition::game_guild_petition;
 use super::{game_guild, member, petition, push_event};
-use crate::items::{game_item_instance, game_item_template};
+use crate::{game_item_instance, game_item_template};
 
 #[derive(SpacetimeType, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GuildEmblem {

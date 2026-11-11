@@ -1,6 +1,10 @@
 use spacetimedb::{log, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use super::*;
+use crate::{
+    game_aura, game_pending_cast, game_school_lockout, game_spell, game_spell_cooldown,
+    game_spell_effect, Aura, PendingCast, SchoolLockout, SpellCastEvent,
+};
 
 fn has_control_mechanic(ctx: &ReducerContext, unit_guid: u64, mechanic: i32) -> bool {
     auras_on(ctx, unit_guid).any(|a| a.eff_kind == A_CONTROL && a.eff_p0 == mechanic)
@@ -297,7 +301,7 @@ pub(crate) fn pushback_cast(ctx: &ReducerContext, caster_guid: u64) {
         let new_count = p.pushback_count;
         p.scheduled_at = crate::time::schedule_time(ctx, new_fire_at);
         pending.scheduled_id().update(p);
-        crate::spell::SpellCastEvent::insert(
+        crate::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
                 delay_ms: CAST_PUSHBACK_MS as u32,
@@ -343,7 +347,7 @@ fn interrupt_cast_with_outcome(
     for (id, spell_id, target_guid) in hits {
         pending.scheduled_id().delete(id);
         clear_dead_callback_cast_admission(ctx, caster_guid, spell_id);
-        crate::spell::SpellCastEvent::insert(
+        crate::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
                 is_interrupted: true,

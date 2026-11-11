@@ -5,9 +5,10 @@ use crate::game_world_entity;
 use crate::game_melee_attack;
 
 use super::{
-    add_flat_pool_bonus, dispel_category_matches, drain_shields, game_aura, game_spell,
-    rederive_pool, shed_auras, should_arm_spell_retaliation, Aura, A_ABSORB, COMBAT_ATTACK_POWER,
+    add_flat_pool_bonus, dispel_category_matches, drain_shields, rederive_pool, shed_auras,
+    should_arm_spell_retaliation, A_ABSORB, COMBAT_ATTACK_POWER,
 };
+use crate::{game_aura, game_spell, Aura};
 
 pub(crate) fn arm_spell_retaliation(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
     crate::combat::engage_passive_creature(ctx, target_guid, caster_guid);

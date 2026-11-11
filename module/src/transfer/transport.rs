@@ -4,7 +4,8 @@ use super::TransferOut;
 use crate::bridge::{
     game_party_command_issuer, game_party_command_receipt, PartyCommandIssuer, PartyCommandReceipt,
 };
-use crate::items::{item_guid_exists, BuybackItem, BuybackState, ItemInstance};
+use crate::items::{item_guid_exists, BuybackItem, BuybackState};
+use crate::ItemInstance;
 
 #[path = "legacy_item_rows.rs"]
 mod legacy_item_rows;

@@ -1,19 +1,19 @@
+use crate::{CreatureAiRuleState, CreatureAiState};
 use std::collections::{BTreeMap, HashSet};
 
 use spacetimedb::{ReducerContext, Table};
 
 use super::mobility::game_creature_ai_summon_origin;
 use super::{
-    ActionResult, BroadcastLine, CreatureAiRuleState, CreatureAiState, CreatureInstruction,
-    CreatureState, CycleActor, DefinitionRevision, EngagedFight, EventAiDefinition, EventAiRequest,
-    EventAiRule, EventAiUnit, EventCondition, EventContext, EventPredicate, ExecutionPolicy,
-    InstructionSelection, RecurrencePolicy, RuleState, SpeakInstruction, SpeechMode,
-    SummonLocation,
+    ActionResult, BroadcastLine, CreatureInstruction, CreatureState, CycleActor,
+    DefinitionRevision, EngagedFight, EventAiDefinition, EventAiRequest, EventAiRule, EventAiUnit,
+    EventCondition, EventContext, EventPredicate, ExecutionPolicy, InstructionSelection,
+    RecurrencePolicy, RuleState, SpeakInstruction, SpeechMode, SummonLocation,
 };
 use crate::chat::{is_supported_chat_type, CHAT_SAY, CHAT_TEXT_EMOTE, CHAT_YELL};
 use crate::creatures::TickScope;
 use crate::quest::{EventAiQuestCredit, EventAiQuestCreditContext, QuestCreditOutcome};
-use crate::spell::{game_aura, game_spell};
+use crate::{game_aura, game_spell};
 use crate::{
     game_creature_ai_broadcast_text, game_creature_ai_rule_state, game_creature_ai_spell_metadata,
     game_creature_ai_state, game_creature_ai_summon, game_creature_template, game_faction_template,
@@ -1560,7 +1560,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
         let melee = self.ctx.db.game_melee_attack();
         if let Some(mut fight) = melee.attacker_guid().find(creature_guid) {
             fight.rout_ends_ms = ends_ms;
-            crate::combat::MeleeAttack::update(self.ctx, fight);
+            crate::MeleeAttack::update(self.ctx, fight);
         }
     }
 

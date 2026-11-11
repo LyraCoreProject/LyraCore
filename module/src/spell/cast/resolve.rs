@@ -6,24 +6,27 @@ use crate::combat::is_avoided;
 use crate::geometry::{distance_3d, is_behind, is_facing};
 use crate::{game_creature_template, game_world_entity, WorldEntity};
 
-use crate::items::{game_item_instance, game_item_template};
+use crate::{game_item_instance, game_item_template};
 
 use crate::spell::{
     apply_effect, aura_apply, break_channel, break_stealth, cost_gate_blocks, effect_amount,
-    faction_target_violation, game_aura, game_pending_cast, game_school_lockout, game_spell,
-    game_spell_cd, game_spell_cooldown, game_spell_effect, has_aura, is_action_blocked,
-    is_stealthed, level_gate_blocks, recipe_reagents, select_targets, stance_allows,
-    CastGateRefusal, CastHandle, CastRefusalKind, CastRefusalReason, CastStart, ItemGrantOutcome,
-    PendingCast, Spell, SpellCastEvent, SpellCastEventKind, SpellCd, SpellCooldown, SpellEffect,
-    A_FLAG, A_MOUNTED, CAST_FLAG_BINARY, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER,
-    CAST_FLAG_INCAP_OPENER, CAST_FLAG_MAGIC_HIT, CAST_FLAG_REQ_BEHIND, CAST_FLAG_REQ_DAGGER,
-    CAST_FLAG_REQ_OVERPOWER, CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH, CAST_FLAG_STEALTH_SAFE,
-    CAST_FLAG_WEAPON_PROCS, E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT, E_DUEL,
-    E_ENCHANT_ITEM_TEMPORARY, E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING, E_PERSISTENT_AREA,
-    E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE, E_WEAPON_STRIKE,
-    HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME, SPELL_ATTR_PASSIVE,
+    faction_target_violation, has_aura, is_action_blocked, is_stealthed, level_gate_blocks,
+    recipe_reagents, select_targets, stance_allows, CastGateRefusal, CastHandle, CastRefusalKind,
+    CastRefusalReason, CastStart, ItemGrantOutcome, SpellCastEventKind, A_FLAG, A_MOUNTED,
+    CAST_FLAG_BINARY, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER, CAST_FLAG_INCAP_OPENER,
+    CAST_FLAG_MAGIC_HIT, CAST_FLAG_REQ_BEHIND, CAST_FLAG_REQ_DAGGER, CAST_FLAG_REQ_OVERPOWER,
+    CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH, CAST_FLAG_STEALTH_SAFE, CAST_FLAG_WEAPON_PROCS,
+    E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY,
+    E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING, E_PERSISTENT_AREA, E_SCRIPTED,
+    E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE, E_WEAPON_STRIKE, HUMANOID_TYPE,
+    KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY, T_TARGET_ALLY,
     T_TARGET_ANY, T_TARGET_ENEMY,
+};
+use crate::{
+    game_aura, game_pending_cast, game_school_lockout, game_spell, game_spell_cd,
+    game_spell_cooldown, game_spell_effect, PendingCast, Spell, SpellCastEvent, SpellCd,
+    SpellCooldown, SpellEffect,
 };
 
 use crate::script_binding::game_script;
@@ -447,7 +450,7 @@ fn run_spell_effects(
     }
     let school_index = crate::spell::school_index(hdr.school_mask);
     let (is_completion, client_initiated) = origin.cast_event_flags();
-    crate::spell::SpellCastEvent::insert(
+    crate::SpellCastEvent::insert(
         ctx,
         SpellCastEvent {
             target_guid,
@@ -1682,7 +1685,7 @@ pub(crate) fn begin_cast_with_admission(
         cooldown_category,
     });
     start_global_cooldown(ctx, caster_guid, hdr.gcd_ms);
-    crate::spell::SpellCastEvent::insert(
+    crate::SpellCastEvent::insert(
         ctx,
         SpellCastEvent {
             target_guid,

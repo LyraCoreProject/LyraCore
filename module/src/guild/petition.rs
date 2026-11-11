@@ -6,7 +6,7 @@ use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table};
 
 use super::membership::game_guild_invite;
 use super::{add_member, create_guild, game_guild, lowest_rank, member, push_event};
-use crate::items::game_item_instance;
+use crate::game_item_instance;
 
 #[table(accessor = game_guild_petition)]
 pub struct GuildPetition {
@@ -52,6 +52,8 @@ pub struct GuildPetitionSequence {
     pub id: u8,
     pub last_id: u32,
 }
+
+crate::outside_table_catalog!(game_guild_petition_sequence);
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
 pub struct GuildPetitionSign {

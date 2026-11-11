@@ -25,6 +25,8 @@ pub struct CharacterRelocation {
     pub instance_id: u64,
 }
 
+crate::outside_table_catalog!(game_character_relocation);
+
 crate::character_owned!(delete, fn sweep_delete_game_character_relocation(ctx, character_guid) {
     ctx.db.game_character_relocation().character_guid().delete(character_guid);
 });

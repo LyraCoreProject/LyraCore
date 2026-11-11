@@ -1,8 +1,9 @@
+use crate::game_creature_ai_summon_expiry;
 use spacetimedb::ReducerContext;
 
-use crate::creatures::eventai::game_creature_ai_summon_expiry;
-use crate::spell::{CastGateRefusal, Spell, SpellEffect, P_ENTRY, T_SELF};
+use crate::spell::{CastGateRefusal, P_ENTRY, T_SELF};
 use crate::{game_creature_template, game_world_entity, WorldEntity};
+use crate::{Spell, SpellEffect};
 
 pub(crate) fn is_guardian(ctx: &ReducerContext, guid: u64) -> bool {
     faction(ctx, guid).is_some()

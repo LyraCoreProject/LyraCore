@@ -96,6 +96,8 @@ pub struct ShardRoleRow {
     pub role: ShardRole,
 }
 
+crate::outside_table_catalog!(game_peer_shard, game_peer_hello, game_shard_role);
+
 pub(crate) fn role(ctx: &ReducerContext) -> Option<ShardRole> {
     ctx.db.game_shard_role().id().find(0).map(|row| row.role)
 }

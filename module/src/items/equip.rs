@@ -1,9 +1,9 @@
 use spacetimedb::ReducerContext;
 
-use super::{ItemInstance, ItemTemplate};
 use crate::{
     game_aura, game_item_instance, game_item_template, game_spell, game_spell_cd, game_world_entity,
 };
+use crate::{ItemInstance, ItemTemplate};
 
 const NO_EQUIP_COOLDOWN: u32 = 0x80;
 const SPELLMOD_COOLDOWN: i32 = 11;

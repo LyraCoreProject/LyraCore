@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use lyracore_shared::constants::go_type;
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
-use crate::creatures::game_creature_spawn_map;
+use crate::game_creature_spawn_map;
 use crate::game_gameobject_loot;
 use crate::game_player_skill;
 use crate::game_world_entity;

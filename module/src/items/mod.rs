@@ -5,9 +5,9 @@ mod exchange;
 mod guids;
 mod inventory;
 mod ops;
-mod properties;
+pub(crate) mod properties;
 mod rules;
-mod tables;
+pub(crate) mod tables;
 pub(crate) mod temporary_enchantment;
 pub(crate) mod vendor_stock;
 
@@ -55,20 +55,13 @@ pub(crate) use properties::{
     property_stat_for_school, seed_compatibility_enchantments, select_loot_property,
     select_property,
 };
-pub use properties::{
-    game_item_enchantment, game_item_property_weight, game_item_random_property, ItemEnchantment,
-    ItemPropertyWeight, ItemRandomProperty,
-};
+
 #[cfg(feature = "debug_reducers")]
 pub(crate) use rules::binds_on_equip;
 pub(crate) use rules::{binds_on_grant, merge_amount, EquipStat};
 
 pub use rules::weapon_subclass;
 
-pub use tables::{
-    game_character_buyback, game_item_instance, game_item_template, game_npc_vendor, BuybackEntry,
-    ItemInstance, ItemTemplate, NpcVendor,
-};
 pub(crate) use tables::{item_in_slot, item_is_broken};
 pub(crate) use temporary_enchantment::{
     enchant_item_temporarily, forget_item as forget_temporary_enchantment,

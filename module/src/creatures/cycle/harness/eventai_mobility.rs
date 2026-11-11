@@ -1,5 +1,4 @@
 use super::*;
-use crate::creatures::eventai::*;
 
 const CREATURE: u64 = 8_201;
 const TARGET: u64 = 8_202;

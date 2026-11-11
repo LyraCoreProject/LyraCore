@@ -8,8 +8,8 @@ use spacetimedb::{table, ReducerContext, Table};
 
 use crate::corpse::{game_corpse, Corpse};
 use crate::gameobject::{game_gameobject, GameObject};
-use crate::spell::{game_dynamic_object, DynamicObject};
 use crate::world::{game_world_entity, WorldEntity};
+use crate::{game_dynamic_object, DynamicObject};
 
 pub(crate) const WORLD_ENTITY: u8 = 0;
 pub(crate) const GAME_OBJECT: u8 = 1;
@@ -46,6 +46,8 @@ pub struct AoiViewer {
     pub cell: i64,
     pub is_ghost: bool,
 }
+
+crate::outside_table_catalog!(game_aoi_grant, game_aoi_viewer);
 
 crate::character_owned!(delete, fn sweep_delete_game_aoi_grant(ctx, character_guid) {
     remove_viewer_grants(ctx, character_guid);

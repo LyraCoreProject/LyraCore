@@ -5,13 +5,10 @@ use crate::character::game_character;
 use crate::game_group_member;
 use crate::WorldEntity;
 use crate::{game_character_quest, game_gameobject, game_quest_objective, game_world_entity};
+use crate::{game_corpse_loot_eligible, game_loot_roll, game_loot_roll_vote};
 use lyracore_shared::loot_roll::event_kind as roll_event_kind;
 
-mod rolls;
-pub use rolls::{
-    game_corpse_loot_eligible, game_loot_roll, game_loot_roll_vote, CorpseLootEligible, LootRoll,
-    LootRollVote,
-};
+pub(crate) mod rolls;
 
 pub(crate) use rolls::{
     apply_group_loot_rules, apply_master_give, cast_vote_on, force_resolve_rolls_for_disband,
@@ -21,10 +18,6 @@ pub(crate) use rolls::{
 pub(crate) mod tag;
 pub(crate) use tag::{
     corpse_access, corpse_eligible_for_access, corpse_eligible_recipients, death_entitlement,
-};
-pub use tag::{
-    game_creature_loot_tag_group, game_creature_quest_tap, game_creature_quest_tap_member,
-    CreatureLootTagGroup, CreatureQuestTap, CreatureQuestTapMember,
 };
 
 mod take;

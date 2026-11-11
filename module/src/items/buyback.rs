@@ -1,6 +1,6 @@
 use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
-use super::{game_character_buyback, ItemInstance, ItemTemplate};
+use crate::{game_character_buyback, ItemInstance, ItemTemplate};
 
 pub(crate) const BUYBACK_START: u8 = 69;
 pub(crate) const BUYBACK_END: u8 = 81;
@@ -24,6 +24,8 @@ pub struct BuybackState {
     pub login_at: Timestamp,
     pub current_slot: u8,
 }
+
+crate::outside_table_catalog!(game_buyback_item, game_buyback_state);
 
 pub(crate) fn begin_session(ctx: &ReducerContext, character_guid: u64) {
     clear(ctx, character_guid);

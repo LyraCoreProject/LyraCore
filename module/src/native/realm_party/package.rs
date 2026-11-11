@@ -17,6 +17,8 @@ pub struct PackagePartyRefresh {
     pub scheduled_at: ScheduleAt,
 }
 
+crate::outside_table_catalog!(game_package_party_refresh);
+
 pub(crate) fn membership_changed(ctx: &ReducerContext, guid: u64) {
     if realm_shard(ctx).is_none()
         || group::group_of(ctx, guid).is_none()

@@ -1,7 +1,8 @@
 use spacetimedb::ReducerContext;
 
-use crate::spell::{Spell, SpellCastEvent, SpellCastEventKind, SpellEffect};
+use crate::spell::SpellCastEventKind;
 use crate::{game_spell, game_spell_effect, game_world_entity, WorldEntity};
+use crate::{Spell, SpellCastEvent, SpellEffect};
 
 #[derive(Clone, Copy, Default)]
 pub(crate) struct QueuedStrikeDamage {
@@ -148,10 +149,10 @@ fn bonus_points(effect: &SpellEffect, strike: &Spell, attacker_level: u32, roll:
 #[cfg(test)]
 mod tests {
     use super::bonus_points;
-    use crate::spell::{Spell, SpellEffect};
+    use crate::{Spell, SpellEffect};
 
-    fn bonus(base_points: i32, die_sides: i32, per_level: f32) -> crate::spell::SpellEffect {
-        crate::spell::SpellEffect {
+    fn bonus(base_points: i32, die_sides: i32, per_level: f32) -> crate::SpellEffect {
+        crate::SpellEffect {
             base_points,
             die_sides,
             per_level,
@@ -159,8 +160,8 @@ mod tests {
         }
     }
 
-    fn strike(spell_level: u8) -> crate::spell::Spell {
-        crate::spell::Spell {
+    fn strike(spell_level: u8) -> crate::Spell {
+        crate::Spell {
             spell_level,
             ..Spell::blank(1, "Strike")
         }

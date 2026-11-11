@@ -5,9 +5,8 @@ use crate::game_player_skill;
 use crate::game_skill_ability;
 use crate::game_spell_effect;
 use crate::game_world_entity;
-use crate::spell::{
-    CastGateRefusal, CastRefusalReason, SpellEffect, A_MOD_SPEED, A_MOUNTED, SPEED_MOUNTED,
-};
+use crate::spell::{CastGateRefusal, CastRefusalReason, A_MOD_SPEED, A_MOUNTED, SPEED_MOUNTED};
+use crate::SpellEffect;
 use crate::WorldEntity;
 use lyracore_shared::race_class::{mask_admits, ZeroMask};
 

@@ -14,11 +14,7 @@ use lyracore_shared::terrain::{cell_index, cell_key};
 use spacetimedb::{log, reducer, ReducerContext, SpacetimeType, Table};
 
 use crate::creatures::population::game_creature_population_member;
-use crate::creatures::{
-    game_creature_spawn, game_creature_spawn_map, game_creature_template, game_creature_waypoint,
-    CreatureSpawn, CreatureSpawnMap, CreatureWaypoint, MOVEMENT_IDLE, MOVEMENT_RANDOM,
-    MOVEMENT_WAYPOINT,
-};
+use crate::creatures::{MOVEMENT_IDLE, MOVEMENT_RANDOM, MOVEMENT_WAYPOINT};
 use crate::game_world_entity;
 use crate::gameobject::{
     game_gameobject, game_gameobject_template, is_gameobject_guid, GameObject, GO_COPY_BAND,
@@ -26,6 +22,10 @@ use crate::gameobject::{
 };
 use crate::nav::game_nav_chunk;
 use crate::terrain::game_terrain_chunk;
+use crate::{
+    game_creature_spawn, game_creature_spawn_map, game_creature_template, game_creature_waypoint,
+    CreatureSpawn, CreatureSpawnMap, CreatureWaypoint,
+};
 
 fn next_template_id(last: u32) -> Result<u32, String> {
     use lyracore_package_delta::ids::{OPERATOR_TEMPLATE_ID_CEIL, OPERATOR_TEMPLATE_ID_FLOOR};

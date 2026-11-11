@@ -5,6 +5,9 @@ use crate::game_world_entity;
 use crate::combat::{Hit, HitSource};
 
 use super::*;
+use crate::{
+    game_aura, game_spell, game_spell_proc_event, Aura, Spell, SpellCastEvent, SpellProcEvent,
+};
 
 // Bit values match procFlags and procEx in cmangos SpellMgr.h.
 
@@ -428,7 +431,7 @@ fn fire_proc_damage(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) ->
         Hit::spell(HitSource::Triggered, row.spell_id, false),
     );
     if dealt > 0 || absorbed > 0 || row.amount > after_resist {
-        crate::spell::SpellCastEvent::insert(
+        crate::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
                 target_guid: counterparty_guid,

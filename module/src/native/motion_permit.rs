@@ -14,6 +14,8 @@ pub struct NativeMotionPermit {
     pub character_guid: u64,
 }
 
+crate::outside_table_catalog!(game_native_motion_permit);
+
 crate::character_owned!(delete, fn sweep_delete_game_native_motion_permit(ctx, character_guid) {
     ctx.db
         .game_native_motion_permit()

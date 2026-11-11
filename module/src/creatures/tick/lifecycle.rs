@@ -4,6 +4,7 @@ use spacetimedb::{ReducerContext, TimeDuration};
 use crate::{game_corpse_loot, game_gameobject, game_gameobject_pool_member, game_loot_roll};
 
 use super::*;
+use crate::{game_creature_spawn, game_creature_template, CreatureSpawn};
 
 /// Removes a creature, pet or other owned unit from the world with every row kept for its life.
 /// Every removal path calls this; `creature_teardown_tripwire` names the rows it must clear.

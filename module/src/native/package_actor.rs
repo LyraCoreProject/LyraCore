@@ -13,6 +13,8 @@ pub struct PackagePartyAuthority {
     pub active: bool,
 }
 
+crate::outside_table_catalog!(game_package_party_authority);
+
 pub(super) fn facts(ctx: &ReducerContext, guid: u64, active: bool) -> Option<PartyCharacter> {
     let character = crate::helpers::character_by_guid(ctx, guid)?;
     ctx.db

@@ -2,7 +2,7 @@ use spacetimedb::{
     reducer, table, ReducerContext, ScheduleAt, SpacetimeType, Table, TimeDuration, Timestamp,
 };
 
-use super::{game_item_instance, ItemInstance};
+use crate::{game_item_instance, ItemInstance};
 
 // vmangos spell_enchant_charges: the charges a temporary enchantment spell puts on its item.
 #[table(accessor = game_spell_enchant_charges)]
@@ -26,6 +26,8 @@ pub struct TemporaryEnchantment {
     // Zero means no charge limit.
     pub charges: u32,
 }
+
+crate::outside_table_catalog!(game_spell_enchant_charges, game_temporary_enchantment);
 
 pub(crate) fn temporary_enchantment(
     ctx: &ReducerContext,

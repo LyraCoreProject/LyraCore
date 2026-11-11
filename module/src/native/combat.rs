@@ -5,7 +5,8 @@ use lyracore_protocol::{
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{game_native_player, Rollback};
-use crate::combat::{game_melee_attack, AttackRefusal, CombatEvent, MeleeAttack};
+use crate::combat::AttackRefusal;
+use crate::{game_melee_attack, CombatEvent, MeleeAttack};
 
 pub(super) fn attack(ctx: &ReducerContext, guid: u64, target: u64) -> Result<(), Rollback> {
     super::actor(ctx, guid)?;

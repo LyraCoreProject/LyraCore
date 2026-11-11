@@ -1,4 +1,5 @@
 use super::*;
+use crate::{game_pending_cast, game_spell, PendingCast};
 use spacetimedb::{ReducerContext, ScheduleAt};
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]

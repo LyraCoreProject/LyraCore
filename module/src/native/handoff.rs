@@ -35,6 +35,8 @@ pub struct NativeHandoff {
     pub transfer_source: Option<Identity>,
 }
 
+crate::outside_table_catalog!(game_native_handoff);
+
 pub(super) fn write_marker(ctx: &ReducerContext, connection_id: ConnectionId, database: Identity) {
     ctx.db.game_native_packet().insert(super::NativePacket {
         id: 0,

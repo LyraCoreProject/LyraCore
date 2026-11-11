@@ -87,6 +87,13 @@ pub struct RelocationRetry {
     pub scheduled_at: ScheduleAt,
     pub call: RelocationDelivery,
 }
+
+crate::outside_table_catalog!(
+    game_package_relocation,
+    game_package_arrival,
+    game_package_relocation_delivery,
+    game_package_relocation_retry
+);
 crate::virtual_clock_exempt!(game_package_relocation_retry);
 
 fn send(ctx: &ReducerContext, target: Identity, message: Message) {

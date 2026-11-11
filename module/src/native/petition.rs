@@ -18,6 +18,7 @@ use lyracore_shared::{
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::{NativeWorldConnection, Rollback};
+use crate::game_item_instance;
 use crate::{
     game_world_entity,
     guild::{
@@ -29,7 +30,6 @@ use crate::{
         },
         GuildEvent, GuildOp,
     },
-    items::game_item_instance,
 };
 
 pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {

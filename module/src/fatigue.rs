@@ -34,6 +34,8 @@ pub struct FatigueState {
     pub in_deep_water: bool,
 }
 
+crate::outside_table_catalog!(game_fatigue_state);
+
 crate::character_owned!(delete, fn sweep_delete_game_fatigue_state(ctx, character_guid) {
     ctx.db.game_fatigue_state().entity_guid().delete(character_guid);
 });

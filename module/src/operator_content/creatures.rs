@@ -10,13 +10,13 @@ use lyracore_protocol::messages::vanilla::{Class, CreatureFamily};
 use spacetimedb::{reducer, ReducerContext, SpacetimeType, Table};
 
 use crate::creatures::catalogue::{game_creature_display, CreatureDisplay as DisplayRow};
-use crate::creatures::{
+use crate::faction::game_faction_template;
+use crate::game_item_template;
+use crate::{
     game_creature_cast, game_creature_spawn, game_creature_spell, game_creature_template,
     CreatureCast, CreatureSpell as SpellRow, CreatureTemplate,
 };
-use crate::faction::game_faction_template;
-use crate::items::game_item_template;
-use crate::loot::{
+use crate::{
     game_creature_loot, game_pickpocket_loot, game_skinning_loot, CreatureLoot, GamePickpocketLoot,
     GameSkinningLoot,
 };

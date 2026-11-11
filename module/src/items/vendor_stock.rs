@@ -5,7 +5,7 @@ use spacetimedb::{rand::Rng, reducer, ReducerContext, Table};
 use super::tables::{
     game_vendor_stock, game_vendor_stock_runtime, VendorStock, VendorStockRuntime,
 };
-use super::{ItemTemplate, NpcVendor};
+use crate::{ItemTemplate, NpcVendor};
 
 #[reducer]
 pub fn native_vendor_stock_runtime(ctx: &ReducerContext, runtime_id: u128) -> Result<(), String> {

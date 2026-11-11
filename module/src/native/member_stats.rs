@@ -7,8 +7,9 @@ use spacetimedb::{
 };
 
 use super::{game_native_player, Rollback};
+use crate::game_aura;
 use crate::game_hunter_pet_protocol;
-use crate::{aoi::game_aoi_grant, game_creature_template, game_world_entity, spell::game_aura};
+use crate::{aoi::game_aoi_grant, game_creature_template, game_world_entity};
 
 #[derive(SpacetimeType, Clone)]
 pub struct MemberAura {
@@ -79,6 +80,8 @@ pub struct NativeMemberStats {
     pub owner_guid: u64,
     pub snapshots: Vec<MemberSnapshot>,
 }
+
+crate::outside_table_catalog!(game_native_member_stats);
 
 crate::character_owned!(delete, fn sweep_delete_game_native_member_stats(ctx, character_guid) {
     ctx.db.game_native_member_stats().owner_guid().delete(character_guid);

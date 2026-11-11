@@ -294,6 +294,13 @@ pub struct NativePacket {
     pub authentication_complete: bool,
 }
 
+crate::outside_table_catalog!(
+    game_native_world_connection,
+    game_native_player,
+    game_native_cipher,
+    game_native_packet
+);
+
 fn connection_id(ctx: &ReducerContext) -> Result<ConnectionId, String> {
     crate::helpers::require_operator(ctx)?;
     ctx.connection_id()

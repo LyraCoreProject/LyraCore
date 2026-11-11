@@ -373,7 +373,7 @@ pub(super) fn receive(
             menu(ctx, q.guid.guid(), guid)?
         }
         ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(q) => {
-            use crate::items::game_item_instance;
+            use crate::game_item_instance;
             let giver = q.guid.guid();
             let related = giver_relations(ctx, giver)
                 .iter()

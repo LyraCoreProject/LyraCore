@@ -1,5 +1,5 @@
 use super::taxonomy::{INT_PER_SPELL_POWER, INT_SPELL_POWER_BASE};
-use super::Aura;
+use crate::Aura;
 
 pub(crate) fn cost_gate_blocks(is_player: bool, power: u32, cost: u32) -> bool {
     is_player && power < cost

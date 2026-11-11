@@ -4,7 +4,7 @@ use lyracore_package_delta::{
     is_package_item_id, FieldValue, Operation, PrimaryKey, TracedRow, ITEM_FAMILY,
 };
 
-use crate::items::{game_item_template, ItemTemplate};
+use crate::{game_item_template, ItemTemplate};
 
 use super::{as_bool, as_f32, as_i32, as_str, as_u32, as_u8, check_insert_is_whole, ClaimOps};
 

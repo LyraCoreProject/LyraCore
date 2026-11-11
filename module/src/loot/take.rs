@@ -1,7 +1,8 @@
 use spacetimedb::ReducerContext;
 
-use super::{game_corpse_loot, refuse, LootRefusal, LootSource};
+use super::{refuse, LootRefusal, LootSource};
 use crate::actor::ActionRefusal;
+use crate::game_corpse_loot;
 use crate::game_item_template;
 
 pub(crate) fn take_item(

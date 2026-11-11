@@ -399,7 +399,7 @@ pub(crate) fn weapon_strike_spell_damage(
     attacker: &WorldEntity,
     target: &WorldEntity,
     strike: WeaponStrike,
-    spell: &crate::spell::Spell,
+    spell: &crate::Spell,
     crit: bool,
 ) -> u32 {
     let (min, max) = strike_weapon_range(ctx, attacker, strike);
@@ -423,7 +423,7 @@ pub(crate) fn finisher_strike_damage(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
     target: &WorldEntity,
-    spell: &crate::spell::Spell,
+    spell: &crate::Spell,
     amount: i32,
     crit: bool,
 ) -> u32 {

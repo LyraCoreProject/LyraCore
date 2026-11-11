@@ -6,43 +6,17 @@ mod presentation;
 pub(crate) mod relay;
 mod relay_control;
 mod stored;
-mod tables;
+pub(crate) mod tables;
 
 mod combat;
 mod death;
-mod edges;
+pub(crate) mod edges;
 pub(crate) mod mobility;
 pub(crate) mod movement;
 mod quest_credit;
 mod threat;
 
-pub use self::{
-    edges::{
-        game_creature_ai_reset_deferral, game_creature_ai_returning_home, CreatureAiResetDeferral,
-        CreatureAiReturningHome,
-    },
-    mobility::{
-        game_creature_ai_forced_despawn, game_creature_ai_summon_expiry,
-        game_creature_ai_summon_origin, CreatureAiForcedDespawn, CreatureAiSummonExpiry,
-        CreatureAiSummonOrigin,
-    },
-    movement::{
-        game_creature_ai_movement_intent, game_creature_ai_movement_path_waypoint,
-        CreatureAiMovementIntent, CreatureAiMovementPathWaypoint,
-    },
-    relay::{
-        game_creature_ai_relay_arrival, game_creature_ai_relay_continuation,
-        game_creature_ai_relay_definition, game_creature_ai_relay_run, RelayArrival,
-        RelayContinuation, RelayDefinition, RelayFlagChange, RelayFlagOperation,
-        RelayForcedMovement, RelayMovement, RelayRun,
-    },
-    tables::{
-        game_creature_ai_broadcast_text, game_creature_ai_definition, game_creature_ai_event,
-        game_creature_ai_rule_state, game_creature_ai_spell_metadata, game_creature_ai_state,
-        game_creature_ai_summon, CreatureAiBroadcastText, CreatureAiDefinition, CreatureAiEvent,
-        CreatureAiRuleState, CreatureAiSpellMetadata, CreatureAiState, CreatureAiSummon,
-    },
-};
+pub use self::relay::{RelayFlagChange, RelayFlagOperation, RelayForcedMovement, RelayMovement};
 
 pub(crate) use combat::{authored_combat, current_definition_revision};
 #[cfg(test)]

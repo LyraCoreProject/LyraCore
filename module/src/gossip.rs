@@ -2,8 +2,8 @@ use lyracore_shared::constants::{gossip_option, npc_flags, MIN_TALENT_LEVEL};
 use lyracore_shared::gossip::{self, CharacterFacts, Condition, ConditionKind, QuestState};
 use spacetimedb::{table, ReducerContext};
 
-use crate::items::{game_item_template, game_npc_vendor};
 use crate::quest::{game_character_quest, game_quest_template};
+use crate::{game_item_template, game_npc_vendor};
 
 #[table(accessor = game_gossip_menu, public)]
 pub struct GossipMenu {

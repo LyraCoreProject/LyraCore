@@ -27,6 +27,8 @@ pub struct CreatureCombatGrid {
     pub check_at_ms: u64,
 }
 
+crate::outside_table_catalog!(game_creature_combat_grid);
+
 pub(super) fn evade_inactive_grids(ctx: &ReducerContext) {
     let now_ms = crate::time::now_ms(ctx);
     let entities = ctx.db.game_world_entity();

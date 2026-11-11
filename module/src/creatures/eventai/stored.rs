@@ -41,6 +41,8 @@ pub struct CreatureAiScriptPolicy {
     pub execution: ScriptEventPolicy,
 }
 
+crate::outside_table_catalog!(game_creature_ai_script_policy);
+
 fn policy_id(revision: u64, rule_id: u64) -> String {
     format!("{revision}:{rule_id}")
 }

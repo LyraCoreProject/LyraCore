@@ -68,6 +68,12 @@ pub struct PackageGuildRetry {
     pub scheduled_at: ScheduleAt,
     pub call: PackageGuildDelivery,
 }
+
+crate::outside_table_catalog!(
+    game_package_guild_invitation,
+    game_package_guild_delivery,
+    game_package_guild_retry
+);
 crate::virtual_clock_exempt!(game_package_guild_retry);
 
 fn encode<T: spacetimedb::Serialize>(value: &T) -> Vec<u8> {

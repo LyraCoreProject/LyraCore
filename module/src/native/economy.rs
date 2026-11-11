@@ -8,9 +8,8 @@ use lyracore_protocol::{
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::Rollback;
-use crate::items::{
-    game_item_instance, BankSlotRefusal, BuyRefusal, BuybackItem, BuybackRefusal, SellRefusal,
-};
+use crate::game_item_instance;
+use crate::items::{BankSlotRefusal, BuyRefusal, BuybackItem, BuybackRefusal, SellRefusal};
 use crate::npc_interaction::{NpcGate, NpcService};
 use crate::{game_world_entity, Refusal};
 

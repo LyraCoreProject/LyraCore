@@ -1,6 +1,6 @@
 pub(crate) mod damage;
 pub(crate) mod death;
-mod energy;
+pub(crate) mod energy;
 pub(crate) mod engage;
 mod folds;
 mod inactive_grid;
@@ -28,6 +28,7 @@ pub(crate) use leash::{beyond_combat_backstop, pursuit_deadline_ms, should_evade
 #[cfg(test)]
 pub(crate) use tables::PURSUIT_WINDOW_MS;
 
+pub use engage::AttackStart;
 #[cfg(test)]
 pub(crate) use engage::COMBAT_DROP_MS;
 pub(crate) use engage::{
@@ -38,11 +39,6 @@ pub(crate) use engage::{
     sweep_delete_game_combat_check_schedule, sweep_transfer_game_combat_check_schedule,
     validate_attack_target, AttackRefusal, Relation, SWING_ERROR_BAD_FACING, SWING_ERROR_NONE,
     SWING_ERROR_NOT_IN_RANGE,
-};
-pub use engage::{
-    game_combat_event, game_combat_event_live, game_melee_attack, game_melee_schedule,
-    game_ranged_impact_schedule, AttackStart, CombatEvent, MeleeAttack, MeleeSchedule,
-    RangedImpactSchedule,
 };
 pub(crate) use folds::{
     arm_react, attack_power_modifiers, effective_crit_bp, effective_ranged_crit_bp,
@@ -56,7 +52,7 @@ pub(crate) use folds::{
 pub(crate) use folds::{white_block_value, white_swing_table};
 
 pub(crate) use energy::regenerate_energy;
-pub use energy::{game_energy_clock, EnergyClock};
+
 #[cfg(feature = "debug_reducers")]
 pub(crate) use swing::offhand_swing_range;
 pub(crate) use swing::{

@@ -1,7 +1,7 @@
 use super::presentation::CreaturePresentationInstruction;
-use super::CreatureAiState;
 use crate::creatures::TickScope;
 use crate::quest::EventAiQuestCredit;
+use crate::CreatureAiState;
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum EventAiSubject {

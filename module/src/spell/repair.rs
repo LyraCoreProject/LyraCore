@@ -1,6 +1,7 @@
 use spacetimedb::{ReducerContext, Table};
 
 use super::*;
+use crate::{game_aura, game_spell, game_spell_effect};
 use crate::{game_character_talent, game_player_spell, game_talent};
 use lyracore_shared::spell::taxonomy::P_COMBAT_PERCENT;
 

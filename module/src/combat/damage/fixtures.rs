@@ -1,4 +1,5 @@
 use super::*;
+use crate::game_ranged_impact_schedule;
 use crate::{game_aura, game_corpse_loot, game_creature_spawn};
 use spacetimedb::TimeDuration;
 

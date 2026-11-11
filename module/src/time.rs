@@ -129,6 +129,13 @@ pub struct ConformanceScheduleRevision {
     pub revision: u64,
 }
 
+crate::outside_table_catalog!(
+    game_conformance_clock,
+    game_conformance_schedule,
+    game_conformance_arming,
+    game_conformance_schedule_revision
+);
+
 #[cfg(feature = "conformance_test_fixture")]
 fn schedule_revision(ctx: &ReducerContext) -> u64 {
     ctx.db

@@ -5,9 +5,10 @@ use spacetimedb::{ConnectionId, ReducerContext, Table};
 use super::{game_native_player, NativeAoi, Rollback};
 use crate::{
     aoi::{game_aoi_grant, WORLD_ENTITY},
-    creatures::{game_hunter_pet_protocol, HunterPetProtocol, PetRenameRefusal},
+    creatures::PetRenameRefusal,
     game_creature_cast, game_world_entity,
 };
+use crate::{game_hunter_pet_protocol, HunterPetProtocol};
 
 pub(super) fn rename(
     ctx: &ReducerContext,

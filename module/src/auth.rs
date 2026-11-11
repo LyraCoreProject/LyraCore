@@ -2,7 +2,7 @@ use spacetimedb::{
     reducer, table, Identity, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp,
 };
 
-use crate::items::game_item_instance;
+use crate::game_item_instance;
 use crate::{game_character, Character};
 
 #[table(accessor = game_account)]

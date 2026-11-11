@@ -1,5 +1,6 @@
 use super::{bounded as message, game_native_player};
-use crate::spell::{SpellCastEvent, SpellCastEventKind, SpellImpactEvent};
+use crate::spell::SpellCastEventKind;
+use crate::{SpellCastEvent, SpellImpactEvent};
 use lyracore_protocol::{codec, messages as wow_world_messages, world::Packet};
 use spacetimedb::{ReducerContext, Table};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -59,7 +60,7 @@ fn cooldown_message(caster_guid: u64, spell_id: u32, cooldown_ms: u32) -> Option
 
 // vmangos sets CAST_FLAG_AMMO on START and GO for every ranged-slot spell.
 fn projectile(ctx: &ReducerContext, event: &SpellCastEvent) -> Option<(u32, u32)> {
-    use crate::spell::game_spell;
+    use crate::game_spell;
     if event.kind != SpellCastEventKind::Start as u8 && event.kind != SpellCastEventKind::Go as u8 {
         return None;
     }

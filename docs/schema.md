@@ -32,6 +32,9 @@ taxi resumption keeps the combat flag until the 1,200 ms check, including when t
   gtker crates keep their `wow_` names.
 - **`accessor`** is the Rust identifier the macro exposes as `ctx.db.<accessor>()`. SpacetimeDB 2.x
   syntax is `#[table(accessor = …)]`, with every index declared inside that one attribute.
+- **Catalog.** `module/build.rs` re-exports each Core table under `crate::tables` and the crate
+  root. A table Packages must not rely on goes in `crate::outside_table_catalog!(..)` in its
+  declaring file; [`module-build.md`](./module-build.md) has the rules.
 - **Visibility.** `public` means any connection can subscribe to the table. Without it the table
   is private, and only the Shard's owner can read it. The Native Host connects in process as that
   owner.

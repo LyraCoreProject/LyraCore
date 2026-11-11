@@ -2,7 +2,8 @@
 
 use spacetimedb::{ReducerContext, Table, TimeDuration};
 
-use crate::creatures::{game_creature_move_schedule, GLOBAL_TICK_INSTANCE};
+use crate::creatures::GLOBAL_TICK_INSTANCE;
+use crate::game_creature_move_schedule;
 use crate::game_world_entity;
 use crate::import_meta::game_import_meta;
 

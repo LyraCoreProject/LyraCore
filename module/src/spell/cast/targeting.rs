@@ -4,7 +4,7 @@ use lyracore_shared::spell_custom as custom;
 
 use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
 
-use crate::items::game_item_instance;
+use crate::game_item_instance;
 use crate::{game_character, game_creature_template, game_world_entity};
 
 use crate::geometry::{distance_3d, projectile_travel_ms};
@@ -13,6 +13,11 @@ use crate::spell::*;
 use crate::skilldata::game_skill_ability;
 
 use crate::script_binding::game_script;
+use crate::{
+    game_aura, game_ground_area, game_pending_spell_impact, game_spell, game_spell_effect,
+    game_spell_reagent, Aura, GroundArea, PendingSpellImpact, ResurrectRequest, Spell,
+    SpellCastEvent, SpellEffect,
+};
 
 #[derive(Clone, Copy, Default)]
 pub(crate) enum ItemGrantOutcome {
@@ -579,7 +584,7 @@ pub(crate) fn aura_apply(
                 tracer_spell::AURA_SLOTS,
                 hdr.spell_id
             );
-            crate::spell::SpellCastEvent::insert(
+            crate::SpellCastEvent::insert(
                 ctx,
                 SpellCastEvent {
                     is_interrupted: true,
@@ -1658,7 +1663,7 @@ fn create_ground_area(
         next_tick_micros: now.to_micros_since_unix_epoch() + (period_ms as i64) * 1000,
         expires_at,
     });
-    crate::spell::DynamicObject {
+    crate::DynamicObject {
         guid: dynamic_object_guid(area.id),
         caster_guid,
         spell_id: e.spell_id,

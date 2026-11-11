@@ -8,11 +8,8 @@ use lyracore_protocol::{
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{game_native_player, Rollback};
-use crate::{
-    game_corpse,
-    spell::{game_resurrect_request, game_self_resurrect_option, ResurrectRequest},
-    Corpse,
-};
+use crate::{game_corpse, Corpse};
+use crate::{game_resurrect_request, game_self_resurrect_option, ResurrectRequest};
 
 pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
     matches!(

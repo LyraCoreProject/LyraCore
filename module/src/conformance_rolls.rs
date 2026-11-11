@@ -49,6 +49,8 @@ mod fixture {
         pub state: u64,
     }
 
+    crate::outside_table_catalog!(game_conformance_swing_random, game_conformance_spell_random);
+
     fn next(state: &mut u64) -> u32 {
         *state = state.wrapping_add(0x9e3779b97f4a7c15);
         let mut value = *state;
@@ -88,7 +90,7 @@ mod fixture {
     }
 
     pub(super) fn record_offhand_range(ctx: &ReducerContext, (base_min, base_max): (u32, u32)) {
-        use crate::debug::{game_debug_readout, DebugReadout};
+        use crate::{game_debug_readout, DebugReadout};
         let readouts = ctx.db.game_debug_readout();
         let key = "offhand_roll".to_string();
         readouts.key().delete(&key);

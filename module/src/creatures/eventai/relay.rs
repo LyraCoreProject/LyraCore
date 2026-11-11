@@ -1952,7 +1952,7 @@ enum ArrivalCheck {
 
 fn check_arrival(
     source: &crate::WorldEntity,
-    spline: Option<&crate::creatures::CreatureSpline>,
+    spline: Option<&crate::CreatureSpline>,
     arrival: &RelayArrival,
 ) -> ArrivalCheck {
     if source.dead || (source.map_id, source.instance_id) != (arrival.map_id, arrival.instance_id) {

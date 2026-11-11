@@ -5,11 +5,11 @@ use lyracore_package_delta::{
     LOOT_FAMILY,
 };
 
-use crate::loot::{
+use crate::{game_creature_template, game_gameobject_template, game_item_template};
+use crate::{
     game_fishing_loot, game_gameobject_loot, game_pickpocket_loot, game_skinning_loot,
     GameFishingLoot, GameObjectLoot, GamePickpocketLoot, GameSkinningLoot,
 };
-use crate::{game_creature_template, game_gameobject_template, game_item_template};
 
 use super::{as_bool, as_u32, check_insert_is_whole, missing_reference, ClaimOps};
 

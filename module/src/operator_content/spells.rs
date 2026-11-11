@@ -7,12 +7,10 @@ use lyracore_package_delta::ids::{
 use lyracore_shared::spell::taxonomy::{EffectKind, P_RAW, T_SCRIPTED};
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table};
 
-use crate::items::game_item_template;
-use crate::spell::{
-    game_spell, game_spell_effect, game_spell_reagent, Spell, SpellEffect, SpellReagent,
-};
+use crate::game_item_template;
 use crate::trainer::{game_trainer_spell, TrainerSpell};
 use crate::{game_creature_ai_spell_metadata, CreatureAiSpellMetadata};
+use crate::{game_spell, game_spell_effect, game_spell_reagent, Spell, SpellEffect, SpellReagent};
 
 #[derive(SpacetimeType, Clone)]
 pub struct SpellSourceField {
@@ -26,6 +24,8 @@ pub struct OperatorSpellSource {
     pub spell_id: u32,
     pub fields: Vec<SpellSourceField>,
 }
+
+crate::outside_table_catalog!(game_operator_spell_source);
 
 #[derive(SpacetimeType)]
 pub struct SpellEdit {

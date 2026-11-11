@@ -3,6 +3,11 @@ use spacetimedb::{log, reducer, ReducerContext, Table, TimeDuration, Timestamp};
 use crate::{game_world_entity, WorldEntity};
 
 use super::*;
+use crate::{
+    game_aura, game_ground_area, game_ground_area_schedule, game_pending_cast,
+    game_resurrect_request, game_spell, Aura, AuraSchedule, GroundArea, GroundAreaSchedule,
+    PendingCast, PendingSpellImpact, ResurrectRequest, SpellCastEvent, SpellImpactEvent,
+};
 
 #[reducer]
 pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
@@ -41,7 +46,7 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
             e
         );
         // Only a failed SMSG_CAST_RESULT clears the 1.12 client's filled cast bar.
-        crate::spell::SpellCastEvent::insert(
+        crate::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
                 is_interrupted: true,
@@ -90,7 +95,7 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
         ),
     );
     let (map_id, instance_id, grid_x, grid_y) = crate::helpers::grid_of(ctx, sched.caster_guid);
-    crate::spell::SpellImpactEvent::insert(
+    crate::SpellImpactEvent::insert(
         ctx,
         SpellImpactEvent {
             id: 0,
@@ -316,7 +321,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     a.spell_id,
                     true,
                 );
-                crate::spell::SpellCastEvent::insert(
+                crate::SpellCastEvent::insert(
                     ctx,
                     SpellCastEvent {
                         damage: amount.max(0) as u32,
@@ -394,7 +399,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 let new_health = healed_value(cur, target.max_health, a.amount);
                 pending.insert(a.target_guid, new_health);
                 if cur < target.max_health {
-                    crate::spell::SpellCastEvent::insert(
+                    crate::SpellCastEvent::insert(
                         ctx,
                         SpellCastEvent {
                             healed: a.amount.max(0) as u32,
@@ -414,7 +419,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     a.target_guid,
                     energized_value(cur, target.max_power, a.amount),
                 );
-                crate::spell::SpellCastEvent::insert(
+                crate::SpellCastEvent::insert(
                     ctx,
                     SpellCastEvent {
                         energized: a.amount.max(0) as u32,
@@ -537,7 +542,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
     }
     for id in expired {
         areas.id().delete(id);
-        crate::spell::DynamicObject::delete(ctx, crate::spell::cast::dynamic_object_guid(id));
+        crate::DynamicObject::delete(ctx, crate::spell::cast::dynamic_object_guid(id));
     }
 
     for a in &due {
@@ -578,16 +583,16 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 crate::combat::Hit::triggered(),
             );
             if dealt > 0 || absorbed > 0 || a.amount > resisted {
-                crate::spell::SpellCastEvent::insert(
+                crate::SpellCastEvent::insert(
                     ctx,
-                    crate::spell::SpellCastEvent {
+                    crate::SpellCastEvent {
                         target_guid: t,
                         damage: dealt,
                         school: crate::spell::school_index(a.school_mask),
                         resisted: (a.amount.max(0) as u32).saturating_sub(resisted.max(0) as u32),
                         absorbed,
                         is_proc_log: true,
-                        ..crate::spell::SpellCastEvent::signal(
+                        ..crate::SpellCastEvent::signal(
                             ctx,
                             a.caster_guid,
                             a.spell_id,
@@ -671,6 +676,8 @@ pub fn debug_stage_virtual_spell_impact(
     if !crate::time::is_virtual(ctx) || delay_micros <= 0 {
         return Err("spell impact requires a running virtual clock and positive delay".into());
     }
+    use crate::game_pending_spell_impact;
+
     let due = crate::time::now(ctx)
         .checked_add(TimeDuration::from_micros(delay_micros))
         .ok_or("spell impact due time overflows")?;

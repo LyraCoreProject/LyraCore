@@ -76,6 +76,13 @@ pub struct TransportCrossing {
     pub map_id: u32,
 }
 
+crate::outside_table_catalog!(
+    game_transport,
+    game_transport_passenger,
+    game_transport_carry_schedule,
+    game_transport_crossing
+);
+
 pub(crate) struct Aboard {
     pub(crate) passenger: TransportPassenger,
     pub(crate) from_map_id: u32,

@@ -795,6 +795,16 @@ pub struct GuildProjectionRetry {
     pub scheduled_at: ScheduleAt,
     pub call: WorldGuildUpdate,
 }
+
+crate::outside_table_catalog!(
+    game_guild_character,
+    game_guild_projection,
+    game_guild_membership_projection,
+    game_realm_guild_presence,
+    game_realm_guild_command,
+    game_world_guild_update,
+    game_guild_projection_retry
+);
 crate::virtual_clock_exempt!(game_guild_projection_retry);
 
 #[reducer(on_result(game_world_guild_update))]

@@ -6,13 +6,13 @@ use lyracore_shared::spell::taxonomy::{
 use spacetimedb::{log, table, ReducerContext};
 
 use crate::game_world_entity;
-use crate::items::{
+use crate::{
     game_item_enchantment, game_item_random_property, game_item_template, ItemInstance,
     ItemTemplate,
 };
 
 use super::proc::{proc_chance_bp, ProcProfile, ProcSide, BASIS_POINTS};
-use super::{game_spell, game_spell_effect};
+use crate::{game_spell, game_spell_effect};
 
 // vmangos ITEM_SPELLTRIGGER_CHANCE_ON_HIT.
 const SPELLTRIGGER_CHANCE_ON_HIT: u8 = 2;
@@ -26,6 +26,8 @@ pub struct EnchantProcRate {
     pub spell_id: u32,
     pub ppm_rate: f32,
 }
+
+crate::outside_table_catalog!(game_enchant_proc_rate);
 
 // Follows vmangos Player::CastItemCombatSpell. The caller picks the slot: the hand that swung,
 // or the main hand for a spell that triggers weapon procs.
@@ -137,7 +139,7 @@ fn known_spell(
     ctx: &ReducerContext,
     spell_id: u32,
     source: impl FnOnce() -> String,
-) -> Option<super::Spell> {
+) -> Option<crate::Spell> {
     let spell = ctx.db.game_spell().spell_id().find(spell_id);
     if spell.is_none() {
         log::info!("chance on hit: {} names unknown spell {spell_id}", source());

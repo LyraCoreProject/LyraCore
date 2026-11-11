@@ -48,6 +48,8 @@ pub struct TerrainDeepWater {
     pub tiles: u64,
 }
 
+crate::outside_table_catalog!(game_terrain_deep_water);
+
 pub(crate) fn ground_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32> {
     let (cx, cy) = (cell_index(x)?, cell_index(y)?);
     let chunk = ctx

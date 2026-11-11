@@ -929,6 +929,19 @@ pub struct SelectionReply {
     pub body: Vec<u8>,
 }
 
+crate::outside_table_catalog!(
+    game_native_away,
+    game_selection_request,
+    game_world_entry,
+    game_account_update,
+    game_selection_result,
+    game_return_to_selection,
+    game_native_return_pending,
+    game_world_session_closed,
+    game_pending_selection,
+    game_selection_reply
+);
+
 #[reducer]
 pub fn idc_selection_reply(
     ctx: &ReducerContext,

@@ -18,6 +18,7 @@ use super::{
     game_native_player, guild::Actor, petition as wire, realm_guild,
     realm_guild::game_guild_character, NativeWorldConnection, Rollback,
 };
+use crate::game_item_instance;
 use crate::{
     game_character,
     guild::{
@@ -32,7 +33,6 @@ use crate::{
         },
         GuildOp,
     },
-    items::game_item_instance,
 };
 
 // Opcode one is private to Realm guild commands; client opcodes start above it in this path.
@@ -84,6 +84,8 @@ pub struct GuildTransactionRetry {
     pub scheduled_at: ScheduleAt,
     pub guid: u64,
 }
+
+crate::outside_table_catalog!(game_guild_transaction, game_guild_transaction_retry);
 crate::virtual_clock_exempt!(game_guild_transaction_retry);
 
 pub(crate) fn pending(ctx: &ReducerContext, guid: u64) -> bool {

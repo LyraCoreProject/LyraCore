@@ -586,7 +586,7 @@ pub(crate) fn create_instance(
         .iter()
         .map(|t| t.guid)
         .collect();
-    let spawns: Vec<crate::creatures::CreatureSpawn> = ctx
+    let spawns: Vec<crate::CreatureSpawn> = ctx
         .db
         .game_creature_spawn()
         .by_map_instance()

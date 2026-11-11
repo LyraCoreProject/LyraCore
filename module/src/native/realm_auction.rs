@@ -151,6 +151,14 @@ pub struct AuctionRetry {
     pub scheduled_at: ScheduleAt,
     pub retry: Retry,
 }
+
+crate::outside_table_catalog!(
+    game_auction_transaction,
+    game_auction_deletion,
+    game_realm_auction_request,
+    game_world_auction_answer,
+    game_auction_retry
+);
 crate::virtual_clock_exempt!(game_auction_retry);
 
 fn encode<T: spacetimedb::Serialize>(value: &T) -> Vec<u8> {

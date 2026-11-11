@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use spacetimedb::{log, table, ReducerContext, SpacetimeType, Table};
 
-use super::{game_creature_template, CreatureSpawn};
+use crate::{game_creature_template, CreatureSpawn};
 
 // Creature guid lows below these bits belong to authored, Operator, Package and wave spawns.
 // Bit 23 holds Instance copies; respawning copies still reserve their sequence.
@@ -57,6 +57,12 @@ pub struct CreaturePopulationSelection {
     pub instance_id: u64,
     pub assignments: Vec<PopulationAssignment>,
 }
+
+crate::outside_table_catalog!(
+    game_creature_population,
+    game_creature_population_member,
+    game_creature_population_selection
+);
 
 #[derive(Clone)]
 struct EntryChoice {

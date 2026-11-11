@@ -1,9 +1,10 @@
+use crate::CreatureAiState;
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use super::engine::EventAiWorld;
 use super::{
-    ActionResult, CreatureAiState, CreatureInstruction, CreatureReactState, EventAiUnit,
-    EventContext, InstructionTarget, SummonLocation,
+    ActionResult, CreatureInstruction, CreatureReactState, EventAiUnit, EventContext,
+    InstructionTarget, SummonLocation,
 };
 use crate::{game_creature_ai_state, game_creature_template, game_world_entity};
 
@@ -470,9 +471,9 @@ fn place_summon_entity(
         return;
     };
 
-    let spawn = crate::creatures::CreatureSpawn {
+    let spawn = crate::CreatureSpawn {
         respawn_secs: u32::MAX,
-        ..crate::creatures::CreatureSpawn::temporary(
+        ..crate::CreatureSpawn::temporary(
             ctx,
             guid,
             entry,

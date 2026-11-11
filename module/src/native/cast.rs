@@ -13,7 +13,7 @@ use lyracore_shared::spell::taxonomy::{
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::Rollback;
-use crate::combat::game_melee_attack;
+use crate::game_melee_attack;
 use crate::spell::{CastGateRefusal, CastRefusalReason};
 use crate::Refusal;
 use crate::{game_item_instance, game_item_template, game_spell, game_spell_effect};
@@ -302,7 +302,7 @@ pub(super) fn cancel_repeat(ctx: &ReducerContext, guid: u64) {
         .find(guid)
         .is_some_and(|row| row.ranged_spell_id != 0)
     {
-        crate::combat::MeleeAttack::end_auto_repeat(ctx, guid);
+        crate::MeleeAttack::end_auto_repeat(ctx, guid);
     }
 }
 

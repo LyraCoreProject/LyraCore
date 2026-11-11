@@ -276,6 +276,14 @@ pub struct InstanceEntryAnswer {
     pub error: String,
 }
 
+crate::outside_table_catalog!(
+    game_instance_entry,
+    game_realm_instance_entry,
+    game_world_instance_entry,
+    game_instance_entry_lease,
+    game_instance_entry_answer
+);
+
 #[reducer]
 pub fn idc_world_instance_entry(
     ctx: &ReducerContext,

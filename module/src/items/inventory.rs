@@ -257,7 +257,7 @@ pub(crate) fn apply_item_move(
 pub(super) fn validate_equipment(
     ctx: &ReducerContext,
     character_guid: u64,
-    template: &super::ItemTemplate,
+    template: &crate::ItemTemplate,
     slot: u8,
 ) -> Result<(), lyracore_protocol::messages::vanilla::InventoryResult> {
     use lyracore_protocol::messages::vanilla::InventoryResult;
@@ -631,7 +631,7 @@ pub(super) fn free_inventory_slots(
     free
 }
 
-pub(super) fn item_fits_bag(item: &super::ItemTemplate, bag: &super::ItemTemplate) -> bool {
+pub(super) fn item_fits_bag(item: &crate::ItemTemplate, bag: &crate::ItemTemplate) -> bool {
     if bag.bag_family != 0 && item.container_slots != 0 {
         return false;
     }
@@ -763,9 +763,10 @@ pub(crate) fn apply_auto_bank_item(
 mod tests {
     use super::{
         bag_content_decompose, equip_slot, is_bank_slot, is_carried_slot, off_hand_after_move,
-        valid_dest_slot, valid_split_count, valid_split_dest_slot, ItemInstance, ItemRefusal,
-        BACKPACK_SLOT_END, BANK_SLOT_END_INCL, BANK_SLOT_START,
+        valid_dest_slot, valid_split_count, valid_split_dest_slot, ItemRefusal, BACKPACK_SLOT_END,
+        BANK_SLOT_END_INCL, BANK_SLOT_START,
     };
+    use crate::ItemInstance;
     use lyracore_shared::constants::starter_item::BACKPACK_SLOT_0;
     use spacetimedb::{Identity, Timestamp};
 

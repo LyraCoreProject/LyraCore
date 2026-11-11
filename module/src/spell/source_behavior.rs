@@ -2,13 +2,13 @@ use lyracore_shared::spell_custom as custom;
 use spacetimedb::ReducerContext;
 
 use super::{
-    apply_resistance, compose_magnitude, game_aura, game_spell, shed_auras, Aura, CastGateRefusal,
-    CastRefusalKind, CastRefusalReason, Spell, SpellEffect, A_FLAG, A_PERIODIC_DAMAGE,
-    A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_STEALTH, CAST_FLAG_CHANNELED, RESIST_ARMOR,
-    SPELL_POWER_COEFF_PCT,
+    apply_resistance, compose_magnitude, shed_auras, CastGateRefusal, CastRefusalKind,
+    CastRefusalReason, A_FLAG, A_PERIODIC_DAMAGE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_STEALTH,
+    CAST_FLAG_CHANNELED, RESIST_ARMOR, SPELL_POWER_COEFF_PCT,
 };
 use crate::game_world_entity;
 use crate::geometry::distance_3d;
+use crate::{game_aura, game_spell, Aura, Spell, SpellEffect};
 
 pub(crate) fn bonus_magnitude(
     points: i32,

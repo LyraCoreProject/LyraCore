@@ -1,11 +1,11 @@
 use lyracore_shared::{constants::player_flags, packing::power_type};
 use spacetimedb::ReducerContext;
 
-use super::{
-    auras_on, game_self_resurrect_option, game_spell, game_spell_cd, game_spell_effect,
-    SelfResurrectOption, A_SELF_RESURRECT, E_SELF_RESURRECT,
-};
+use super::{auras_on, A_SELF_RESURRECT, E_SELF_RESURRECT};
 use crate::game_world_entity;
+use crate::{
+    game_self_resurrect_option, game_spell, game_spell_cd, game_spell_effect, SelfResurrectOption,
+};
 
 const REINCARNATION_PASSIVE: u32 = 20608;
 const REINCARNATION: u32 = 21169;
@@ -131,7 +131,7 @@ pub(crate) fn self_resurrect_vitals(
 }
 
 pub(crate) fn clear_resurrect_request_and_option(ctx: &ReducerContext, character_guid: u64) {
-    super::ResurrectRequest::delete(ctx, character_guid);
+    crate::ResurrectRequest::delete(ctx, character_guid);
     SelfResurrectOption::set(ctx, character_guid, None);
 }
 

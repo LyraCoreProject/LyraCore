@@ -5,7 +5,7 @@ use lyracore_package_delta::{
     SPELL_FAMILY,
 };
 
-use crate::spell::{game_spell, game_spell_effect, Spell, SpellEffect};
+use crate::{game_spell, game_spell_effect, Spell, SpellEffect};
 
 use super::{
     as_bool, as_f32, as_i32, as_str, as_u16, as_u32, as_u64, as_u8, check_insert_is_whole, ClaimOps,

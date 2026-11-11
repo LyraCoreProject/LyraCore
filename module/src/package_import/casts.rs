@@ -6,7 +6,7 @@ use lyracore_package_delta::{
     PrimaryKey, Table as ClaimTable, TracedRow, CAST_FAMILY,
 };
 
-use crate::creatures::{game_creature_cast, game_creature_spell, CreatureCast, CreatureSpell};
+use crate::{game_creature_cast, game_creature_spell, CreatureCast, CreatureSpell};
 use crate::{game_creature_template, game_spell};
 
 use super::{as_u32, as_u8, check_insert_is_whole, missing_reference, ClaimOps};

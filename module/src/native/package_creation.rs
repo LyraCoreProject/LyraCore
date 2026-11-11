@@ -85,6 +85,12 @@ pub struct PackageCreationRetry {
     pub scheduled_at: ScheduleAt,
     pub call: PackageCreationDelivery,
 }
+
+crate::outside_table_catalog!(
+    game_package_character_request,
+    game_package_creation_delivery,
+    game_package_creation_retry
+);
 crate::virtual_clock_exempt!(game_package_creation_retry);
 
 fn encode<T: spacetimedb::Serialize>(value: &T) -> Vec<u8> {

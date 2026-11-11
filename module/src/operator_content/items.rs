@@ -9,10 +9,8 @@ use lyracore_protocol::messages::vanilla::{
 };
 use spacetimedb::{reducer, ReducerContext, SpacetimeType, Table};
 
-use crate::items::{
-    game_item_instance, game_item_template, game_npc_vendor, ItemTemplate, NpcVendor,
-};
 use crate::{game_creature_template, game_spell};
+use crate::{game_item_instance, game_item_template, game_npc_vendor, ItemTemplate, NpcVendor};
 
 const MAX_ITEM_EDITS: usize = 64;
 const MAX_VENDOR_OFFERS: usize = 128;

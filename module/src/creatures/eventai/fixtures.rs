@@ -1,12 +1,13 @@
+use crate::{CreatureAiBroadcastText, CreatureAiDefinition};
 use std::collections::{BTreeMap, HashSet};
 
 use spacetimedb::{ReducerContext, Table};
 
 use super::{
-    normalized_revision, CastInstruction, CreatureAiBroadcastText, CreatureAiDefinition,
-    CreatureInstruction, EventAiRule, EventAiSubject, EventCondition, ExecutionPolicy,
-    InstructionSelection, InstructionTarget, PhaseSet, PostureAdmission, RecurrencePolicy,
-    SpeakInstruction, SpeechMode, SpellCasterRole, SpellStartMode, SpellTargetRole, TimeWindow,
+    normalized_revision, CastInstruction, CreatureInstruction, EventAiRule, EventAiSubject,
+    EventCondition, ExecutionPolicy, InstructionSelection, InstructionTarget, PhaseSet,
+    PostureAdmission, RecurrencePolicy, SpeakInstruction, SpeechMode, SpellCasterRole,
+    SpellStartMode, SpellTargetRole, TimeWindow,
 };
 use crate::{
     game_creature_ai_broadcast_text, game_creature_ai_definition, game_creature_ai_rule_state,

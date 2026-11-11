@@ -573,6 +573,16 @@ pub struct RealmDeliveryRetry {
     pub scheduled_at: ScheduleAt,
     pub delivery_id: u64,
 }
+
+crate::outside_table_catalog!(
+    game_realm_communication_request,
+    game_realm_query,
+    game_world_query,
+    game_world_query_answer,
+    game_realm_delivery,
+    game_world_delivery,
+    game_realm_delivery_retry
+);
 crate::virtual_clock_exempt!(game_realm_delivery_retry);
 
 pub(super) fn deliver(

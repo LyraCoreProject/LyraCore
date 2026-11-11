@@ -126,6 +126,16 @@ fn main() {
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR is set by cargo");
 
+    let catalog: Vec<CatalogRow> = files
+        .iter()
+        .flat_map(|file| catalog_rows(&src_dir, file))
+        .collect();
+    write_out(
+        &out_dir,
+        "table_catalog.rs",
+        &table_catalog_source(&catalog),
+    );
+
     registries.delete.sort();
     registries.restamp.sort();
     let mut out = String::new();
@@ -635,6 +645,284 @@ fn virtual_schedules_source(schedules: &[(String, ScheduledTable)]) -> String {
         ));
     }
     out.push_str("    };\n}\n");
+    out
+}
+
+struct CatalogRow {
+    module: String,
+    cfgs: Vec<String>,
+    accessors: Vec<String>,
+    row: String,
+}
+
+struct DeclaredRow {
+    accessors: Vec<String>,
+    row: String,
+    public: bool,
+    cfgs: Vec<String>,
+}
+
+/// One row per struct, merging stacked `#[table]`s; `code` is `raw` without comments and strings.
+fn declared_rows(raw: &str, code: &str) -> Vec<DeclaredRow> {
+    let mut rows: Vec<(usize, DeclaredRow)> = Vec::new();
+    for (items, end) in table_attributes(code) {
+        let accessor = items
+            .iter()
+            .find_map(|item| {
+                let value = item
+                    .trim()
+                    .strip_prefix("accessor")?
+                    .trim_start()
+                    .strip_prefix('=')?;
+                Some(leading_ident(value.trim_start())?.to_string())
+            })
+            .unwrap_or_else(|| panic!("build.rs: a `#[table]` declaration has no `accessor`"));
+        let struct_at = code[end..]
+            .find("struct ")
+            .map(|at| end + at)
+            .unwrap_or_else(|| panic!("build.rs: table `{accessor}` declares no struct"));
+        if let Some((_, row)) = rows.iter_mut().find(|(at, _)| *at == struct_at) {
+            row.accessors.push(accessor);
+            continue;
+        }
+        let row = leading_ident(code[struct_at + "struct ".len()..].trim_start())
+            .unwrap_or_else(|| panic!("build.rs: table `{accessor}` declares an unnamed struct"))
+            .to_string();
+        let (attributes_end, visibility) = split_visibility(&code[..struct_at]);
+        let public = visibility == "pub";
+        let cfgs = cfg_attributes(raw, code, attributes_end.len());
+        rows.push((
+            struct_at,
+            DeclaredRow {
+                accessors: vec![accessor],
+                row,
+                public,
+                cfgs,
+            },
+        ));
+    }
+    rows.into_iter().map(|(_, row)| row).collect()
+}
+
+/// Splits the visibility (`pub`, `pub(..)` or nothing) that ends `code` from the code before it.
+fn split_visibility(code: &str) -> (&str, &str) {
+    let code = code.trim_end();
+    let before_pub = |end: usize| {
+        code[..end]
+            .strip_suffix("pub")
+            .filter(|rest| !rest.ends_with(|c: char| c.is_alphanumeric() || c == '_'))
+    };
+    let pub_end = if code.ends_with(')') {
+        code.rfind('(').map(|open| code[..open].trim_end().len())
+    } else {
+        Some(code.len())
+    };
+    match pub_end.and_then(|end| Some((before_pub(end)?, end))) {
+        Some((rest, end)) => (rest, code[end - 3..].trim_start()),
+        None => (code, ""),
+    }
+}
+
+/// The `#[cfg(..)]` attributes that end `code[..end]`, as written in `raw`.
+fn cfg_attributes(raw: &str, code: &str, end: usize) -> Vec<String> {
+    let mut cfgs: Vec<String> = preceding_attributes(&code[..end])
+        .into_iter()
+        .filter(|range| code[range.clone()].starts_with("#[cfg("))
+        .map(|range| {
+            let start = code[..range.start].chars().count();
+            let len = code[range].chars().count();
+            let text: String = raw.chars().skip(start).take(len).collect();
+            text.split_whitespace().collect::<Vec<_>>().join(" ")
+        })
+        .collect();
+    cfgs.reverse();
+    cfgs
+}
+
+/// The byte ranges of the outer attributes that end `code`, last first.
+fn preceding_attributes(code: &str) -> Vec<std::ops::Range<usize>> {
+    let mut attributes = Vec::new();
+    let mut rest = code.trim_end();
+    while rest.ends_with(']') {
+        let mut depth = 0usize;
+        let Some(open) = rest.char_indices().rev().find_map(|(index, c)| {
+            match c {
+                ']' => depth += 1,
+                '[' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(index);
+                    }
+                }
+                _ => {}
+            }
+            None
+        }) else {
+            break;
+        };
+        let Some(start) = rest[..open].strip_suffix('#').map(str::len) else {
+            break;
+        };
+        attributes.push(start..rest.len());
+        rest = rest[..start].trim_end();
+    }
+    attributes
+}
+
+/// The `#[cfg(..)]` gates a file inherits from its own `#![cfg(..)]` and each `mod` declaration
+/// on its path from the crate root.
+fn module_cfgs(src_root: &Path, file: &Path, raw: &str) -> Vec<String> {
+    let mut cfgs = Vec::new();
+    let rel = file
+        .strip_prefix(src_root)
+        .expect("scanned files sit under their scan root")
+        .with_extension("");
+    let mut segments: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    if segments.last().is_some_and(|last| last == "mod") {
+        segments.pop();
+    }
+    for depth in 0..segments.len() {
+        let parent = if depth == 0 {
+            src_root.join("lib.rs")
+        } else {
+            let dir = src_root.join(segments[..depth].join("/"));
+            if dir.join("mod.rs").is_file() {
+                dir.join("mod.rs")
+            } else {
+                dir.with_extension("rs")
+            }
+        };
+        let source = fs::read_to_string(&parent)
+            .unwrap_or_else(|e| panic!("build.rs: cannot read {}: {e}", parent.display()));
+        let parent_code = strip_comments_and_strings(&source);
+        let name = &segments[depth];
+        let declaration = parent_code
+            .match_indices("mod ")
+            .map(|(at, _)| at)
+            .find(|&at| {
+                let after = parent_code[at + 4..].trim_start();
+                leading_ident(after) == Some(name.as_str())
+                    && after[name.len()..].trim_start().starts_with(';')
+                    && !parent_code[..at].ends_with(|c: char| c.is_alphanumeric() || c == '_')
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "build.rs: {} declares no `mod {name};` for {}",
+                    parent.display(),
+                    file.display()
+                )
+            });
+        let (head, _) = split_visibility(&parent_code[..declaration]);
+        cfgs.extend(cfg_attributes(&source, &parent_code, head.len()));
+    }
+    if let Some(gate) = file_gate(raw)
+        .and_then(|line| line.strip_prefix("#![cfg("))
+        .and_then(|rest| rest.strip_suffix(")]"))
+    {
+        cfgs.push(format!("#[cfg({gate})]"));
+    }
+    cfgs
+}
+
+/// Accessors a file keeps out of `crate::tables` with `outside_table_catalog!`; each must name one
+/// of the file's `declared` tables.
+fn uncatalogued_accessors(code: &str, declared: &[DeclaredRow], file: &Path) -> Vec<String> {
+    let mut names = Vec::new();
+    scan_marker(code, file, "outside_table_catalog!", |head, line| {
+        let list = head
+            .strip_prefix('(')
+            .and_then(|rest| rest.split_once(')'))
+            .map(|(list, _)| list)
+            .unwrap_or_else(|| {
+                panic!(
+                    "build.rs: malformed `outside_table_catalog!` marker in {}:{line} — expected \
+                     `outside_table_catalog!(table_accessor, ..);`",
+                    file.display()
+                )
+            });
+        names.extend(
+            list.split(',')
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_string),
+        );
+    });
+    for name in &names {
+        if !declared.iter().any(|row| row.accessors.contains(name)) {
+            panic!(
+                "build.rs: `outside_table_catalog!` in {} names `{name}`, which no table in that \
+                 file declares",
+                file.display()
+            );
+        }
+    }
+    names
+}
+
+fn catalog_rows(src_root: &Path, file: &Path) -> Vec<CatalogRow> {
+    let raw = fs::read_to_string(file)
+        .unwrap_or_else(|e| panic!("build.rs: cannot read {}: {e}", file.display()));
+    let code = strip_comments_and_strings(&raw);
+    let declared = declared_rows(&raw, &code);
+    let uncatalogued = uncatalogued_accessors(&code, &declared, file);
+    if declared.is_empty() {
+        return Vec::new();
+    }
+    let module = module_path(src_root, file);
+    let module_cfgs = module_cfgs(src_root, file, &raw);
+    declared
+        .into_iter()
+        .filter_map(|row| {
+            let accessors: Vec<String> = row
+                .accessors
+                .into_iter()
+                .filter(|accessor| !uncatalogued.contains(accessor))
+                .collect();
+            if accessors.is_empty() {
+                return None;
+            }
+            if !row.public {
+                panic!(
+                    "build.rs: table `{}` in {} has a row type that is not `pub`; make `{}` pub \
+                     or name the table in `crate::outside_table_catalog!`",
+                    accessors[0],
+                    file.display(),
+                    row.row
+                );
+            }
+            let mut cfgs = module_cfgs.clone();
+            cfgs.extend(row.cfgs);
+            Some(CatalogRow {
+                module: module.clone(),
+                cfgs,
+                accessors,
+                row: row.row,
+            })
+        })
+        .collect()
+}
+
+/// Generates the table catalog `module/src/tables.rs` includes: one re-export per row type.
+fn table_catalog_source(rows: &[CatalogRow]) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "// GENERATED by module/build.rs from `#[table]` declarations under src/. DO NOT EDIT.\n",
+    );
+    for row in rows {
+        for cfg in &row.cfgs {
+            out.push_str(cfg);
+            out.push('\n');
+        }
+        out.push_str(&format!(
+            "pub use {}::{{{}, {}}};\n",
+            row.module,
+            row.accessors.join(", "),
+            row.row
+        ));
+    }
     out
 }
 
@@ -1241,6 +1529,97 @@ mod build_script_tests {
         scheduled_tables(
             "#[table(accessor = game_one, scheduled(fire_one, at = due))]\nstruct One {\n    #[primary_key]\n    id: u64,\n}\n",
         );
+    }
+
+    #[test]
+    fn the_table_catalog_names_each_row_once_with_its_accessors_and_gates() {
+        let raw = "#[table(accessor = game_chat, public)]\n\
+                   #[table(accessor = game_chat_live, public, event)]\n\
+                   pub struct Chat {\n    pub id: u64,\n}\n\
+                   #[cfg(feature = \"debug_reducers\")]\n\
+                   #[spacetimedb::table(\n    accessor = game_probe,\n    index(accessor = by_id, btree(columns = [id]))\n)]\n\
+                   #[derive(Clone)]\npub struct Probe {\n    pub id: u64,\n}\n\
+                   #[table(accessor = game_internal)]\npub(crate) struct Internal {\n    pub id: u64,\n}\n\
+                   crate::outside_table_catalog!(game_internal);\n";
+        let code = strip_comments_and_strings(raw);
+        let rows = declared_rows(raw, &code);
+        assert_eq!(
+            rows.iter()
+                .map(|row| (
+                    row.row.as_str(),
+                    row.accessors.clone(),
+                    row.public,
+                    row.cfgs.clone()
+                ))
+                .collect::<Vec<_>>(),
+            [
+                (
+                    "Chat",
+                    vec!["game_chat".to_string(), "game_chat_live".to_string()],
+                    true,
+                    vec![]
+                ),
+                (
+                    "Probe",
+                    vec!["game_probe".to_string()],
+                    true,
+                    vec!["#[cfg(feature = \"debug_reducers\")]".to_string()]
+                ),
+                ("Internal", vec!["game_internal".to_string()], false, vec![]),
+            ]
+        );
+        assert_eq!(
+            uncatalogued_accessors(&code, &rows, Path::new("demo.rs")),
+            ["game_internal"]
+        );
+        assert_eq!(
+            table_catalog_source(&[CatalogRow {
+                module: "crate::demo".to_string(),
+                cfgs: vec!["#[cfg(feature = \"debug_reducers\")]".to_string()],
+                accessors: vec!["game_probe".to_string()],
+                row: "Probe".to_string(),
+            }])
+            .lines()
+            .skip(1)
+            .collect::<Vec<_>>(),
+            [
+                "#[cfg(feature = \"debug_reducers\")]",
+                "pub use crate::demo::{game_probe, Probe};"
+            ]
+        );
+    }
+
+    #[test]
+    fn the_table_catalog_covers_every_table_declaration() {
+        let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        collect_rs_files(&src, &mut files);
+        let mut uncovered = Vec::new();
+        for file in &files {
+            let raw = fs::read_to_string(file).unwrap();
+            let code = strip_comments_and_strings(&raw);
+            let written =
+                code.matches("#[table(").count() + code.matches("#[spacetimedb::table(").count();
+            let catalogued: usize = catalog_rows(&src, file)
+                .iter()
+                .map(|row| row.accessors.len())
+                .sum();
+            let kept_out = uncatalogued_accessors(&code, &declared_rows(&raw, &code), file).len();
+            if catalogued + kept_out != written {
+                uncovered.push(format!(
+                    "{}: {written} declared, {catalogued} catalogued, {kept_out} kept out",
+                    file.display()
+                ));
+            }
+        }
+        assert!(uncovered.is_empty(), "{uncovered:#?}");
+    }
+
+    #[test]
+    #[should_panic(expected = "which no table in that file declares")]
+    fn keeping_out_an_undeclared_table_fails_the_build() {
+        let code = "crate::outside_table_catalog!(game_missing);\n";
+        uncatalogued_accessors(code, &declared_rows(code, code), Path::new("demo.rs"));
     }
 
     #[test]

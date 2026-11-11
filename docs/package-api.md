@@ -539,9 +539,10 @@ colliding. The accessor is also the table name Package Teardown empties, so the 
 Package table that sets its own `name`.
 
 Core table accessors and row types are named under `crate::tables`, for example
-`use crate::tables::{game_world_entity, WorldEntity};`. The catalog in
-`module/src/tables.rs` lists them explicitly. Crate-root row aliases remain for Core and schema
-checks; a Package uses the catalog path. `crate::CHARACTER_OWNED_TABLES` is the generated manifest
+`use crate::tables::{game_world_entity, WorldEntity};`. `module/build.rs` generates the catalog
+from the table declarations. A table its declaring file names in `crate::outside_table_catalog!` is
+not in the catalog and not promised. The crate root re-exports the same catalog for Core and schema
+checks; a Package uses the `crate::tables` path. `crate::CHARACTER_OWNED_TABLES` is the generated manifest
 of character-keyed tables.
 
 ### Creature stat edits
