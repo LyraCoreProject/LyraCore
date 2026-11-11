@@ -642,7 +642,7 @@ pub(crate) fn refuse(refusal: LootRefusal, detail: &str) -> LootRefusal {
 }
 
 pub(crate) enum LootSource {
-    Corpse(WorldEntity),
+    Corpse(Box<WorldEntity>),
     GameObject,
 }
 
@@ -673,7 +673,7 @@ pub(crate) fn reach(
         (
             (corpse.map_id, corpse.instance_id),
             [corpse.x, corpse.y, corpse.z],
-            LootSource::Corpse(corpse),
+            LootSource::Corpse(Box::new(corpse)),
         )
     } else if let Some(go) = ctx.db.game_gameobject().guid().find(source_guid) {
         (
@@ -714,7 +714,7 @@ pub(crate) fn reach_corpse(
     corpse_guid: u64,
 ) -> Result<(WorldEntity, WorldEntity), LootRefusal> {
     match reach(ctx, looter_guid, corpse_guid)? {
-        (looter, LootSource::Corpse(corpse)) => Ok((looter, corpse)),
+        (looter, LootSource::Corpse(corpse)) => Ok((looter, *corpse)),
         (_, LootSource::GameObject) => Err(refuse(
             LootRefusal::NoLootSource,
             "Loot Source is not a creature corpse",
