@@ -301,7 +301,7 @@ through `game_area_trigger` for its map and three-dimensional volume. The table 
 existing Realm gains an empty catalogue until the world import runs again. Inn rest applies only
 inside a selected trigger; a missing geometry row cannot grant rest.
 
-### Taxi catalogue (`module/src/taxi.rs`)
+### Taxi catalogue (`module/src/taxi/catalogue.rs`)
 
 `game_taxi_node` comes from vmangos `taxi_nodes`. `game_taxi_path` and `game_taxi_path_node`
 come from the Operator's `TaxiPath.dbc` and `TaxiPathNode.dbc`. These rows are public.

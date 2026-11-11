@@ -804,7 +804,7 @@ world's manifest, so preparing fixtures cannot erase earlier gameplay drift. Sna
 provenance take the cold path once. `world_origin: snapshot` means both source tiers match; it does
 not turn a local check into a full audit.
 
-Mixed files stay in Tier A in full: `seed.rs`, `seed/fixtures.rs`, `operations.rs`, `config.rs`,
+Mixed files stay in Tier A in full: `seed.rs`, `seed/fixtures.rs`, `operations.rs`, `config.rs`, `taxi/catalogue.rs`,
 `auth.rs`, `operator_content/spells.rs`, `auction.rs`, `mail_reward.rs`, `stats.rs`, `gossip.rs`,
 `transport/mod.rs`, `helpers.rs`, `time.rs`, `world.rs`, `world/{simulation,placement}.rs`,
 `character.rs`, `instance.rs`, `gameobject.rs`, `go_collider.rs`, `go_model.rs`,

@@ -87,17 +87,20 @@ impl Family {
     }
 }
 
+type CheckReferences = fn(&ReducerContext, &[TracedRow]) -> Result<(), String>;
+type AfterWrite = fn(&ReducerContext) -> Result<(), String>;
+
 /// One Import Family's claim operations, in the order `apply_claims` runs them.
 struct ClaimOps {
     name: &'static str,
     /// Whether the row lies in the Package range, so only a Package can have inserted it.
     in_package_range: fn(&TracedRow) -> bool,
     row_is_present: fn(&ReducerContext, &TracedRow) -> bool,
-    check_references: Option<fn(&ReducerContext, &[TracedRow]) -> Result<(), String>>,
+    check_references: Option<CheckReferences>,
     clear_package_range: fn(&ReducerContext),
     write_row: fn(&ReducerContext, &TracedRow) -> Result<(), String>,
     /// Runs once after every row is written.
-    after_write: Option<fn(&ReducerContext) -> Result<(), String>>,
+    after_write: Option<AfterWrite>,
 }
 
 impl ClaimFamily {

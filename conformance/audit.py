@@ -235,6 +235,7 @@ IMPORT_CONTRACT = (
     'module/src/lib.rs',
     'module/src/seed.rs',
     'module/src/config.rs',
+    'module/src/taxi/catalogue.rs',
     'module/src/operations.rs',
     'module/src/package_import.rs',
     'module/src/import_meta.rs',
