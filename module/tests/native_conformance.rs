@@ -1305,11 +1305,36 @@ fn a_reconnecting_passenger_applies_class_specific_starting_passives() {
     shard.assert_sql("DELETE FROM game_level_stats WHERE race = 1 AND class = 1 AND level = 1");
     shard.assert_sql("INSERT INTO game_level_stats (race_class_level,race,class,level,strength,agility,stamina,intellect,spirit) VALUES (65793,1,1,1,23,20,22,20,20)");
     shard.assert_sql("DELETE FROM game_createinfo_spell WHERE spell_id = 20598");
-    shard.assert_sql(
-        "INSERT INTO game_createinfo_spell (id,race,class,spell_id) VALUES (5090908,1,1,20598)",
+    shard.insert_row(
+        "game_createinfo_spell",
+        &[
+            ("id", &5090908),
+            ("race", &1),
+            ("class", &1),
+            ("spell_id", &20598),
+        ],
     );
-    shard.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (20598,'Spirit passive fixture',0,0,0,0,0,0,0,1,0,0,1,0,{SPELL_ATTR_PASSIVE},1,0,false,0,0,0,0,0,0,0,0)"));
-    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (82392,20598,0,{A_MOD_STAT_PCT},5,0,0.0,0,0,0.0,0,0,0,{STAT_SPI},0,0,0,false,0.0)"));
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &20598),
+            ("name", &"Spirit passive fixture"),
+            ("school_mask", &1),
+            ("max_stacks", &1),
+            ("attributes", &SPELL_ATTR_PASSIVE),
+            ("spell_level", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &82392),
+            ("spell_id", &20598),
+            ("kind", &A_MOD_STAT_PCT),
+            ("base_points", &5),
+            ("p_0", &STAT_SPI),
+        ],
+    );
     let spirit = || {
         shard.query_rows(&format!(
             "SELECT spirit FROM game_world_entity WHERE guid = {passenger}"

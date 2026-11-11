@@ -82,8 +82,9 @@ fn only_a_white_swing_that_connects_casts_the_chance_on_hit_spell() {
     let wolf = stage(&mut standalone);
     standalone.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     set_level(&standalone, wolf, OUT_OF_REACH_LEVEL);
-    standalone.assert_sql(
-        "INSERT INTO game_conformance_swing_random (character_guid,state) VALUES (1,1)",
+    standalone.insert_row(
+        "game_conformance_swing_random",
+        &[("character_guid", &1), ("state", &1)],
     );
     let events = subscribe_with_fence(&standalone, &[CAST_EVENTS, SWING_EVENTS]);
     standalone.assert_call("debug_engage", &["1", &wolf.to_string()]);
@@ -296,22 +297,29 @@ fn stage_spell(
     (p0, p0_kind): (i32, u8),
 ) {
     let is_negative = target != T_SELF;
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
-         cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
-         aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
-         VALUES ({spell_id}, '{name}', 0, 0, 0, 0, 0, 5, 0, 1, 0, 0, 0, 0, 0, \
-         0, 0, {is_negative}, {cast_flags}, 0, 0, 0, 0, 0, 0, 0)"
-    ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
-         per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-         VALUES ({}, {spell_id}, 0, {kind}, 5, 0, 0.0, 0, {target}, \
-         0.0, 0, 0, 0, {p0}, {p0_kind}, 0, 0, false, 0.0)",
-        packed_spell_effect_id(spell_id, 0)
-    ));
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell_id),
+            ("name", &name),
+            ("range_yd", &5),
+            ("school_mask", &1),
+            ("is_negative", &is_negative),
+            ("cast_flags", &cast_flags),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell_id, 0)),
+            ("spell_id", &spell_id),
+            ("kind", &kind),
+            ("base_points", &5),
+            ("target", &target),
+            ("p_0", &p0),
+            ("p_0_kind", &p0_kind),
+        ],
+    );
 }
 
 fn gos_of(events: &TableSubscription, spell_id: u32) -> usize {

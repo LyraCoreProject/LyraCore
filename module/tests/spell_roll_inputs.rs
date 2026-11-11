@@ -15,7 +15,14 @@ fn only_creatures_with_a_character_owner_can_crit_with_spells() {
     ));
     shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {CAST_FLAG_IGNORE_RESISTANCES}, range_yd = 0, gcd_ms = 0, cooldown_ms = 0 WHERE spell_id = 133"));
     shard.assert_sql("UPDATE game_spell_effect SET base_points = 400, die_sides = 0, per_level = 0.0 WHERE spell_id = 133");
-    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES ({caster},1,2)"));
+    shard.insert_row(
+        "game_conformance_spell_random",
+        &[
+            ("character_guid", &caster),
+            ("target_guid", &1),
+            ("state", &2),
+        ],
+    );
     let events = subscribe_with_fence(&shard, &["SELECT * FROM game_spell_cast_event_live"]);
     for (index, (owner, crit)) in [("0", false), (caster.as_str(), false), ("1", true)]
         .into_iter()
@@ -50,10 +57,23 @@ fn binary_periodic_damage_and_slow_share_one_resist_roll_at_cast() {
     shard.assert_sql(&format!("UPDATE game_world_entity SET level = 60, health = 10000, max_health = 10000 WHERE guid = {target}"));
     shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {CAST_FLAG_BINARY}, duration_ms = 10000, gcd_ms = 0, cooldown_ms = 0, is_negative = true WHERE spell_id = 133"));
     shard.assert_sql(&format!("UPDATE game_spell_effect SET kind = {A_PERIODIC_DAMAGE}, base_points = 10, die_sides = 0, per_level = 0.0, period_ms = 1000 WHERE spell_id = 133"));
-    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (533,133,1,{A_MOD_SPEED},-50,0,0.0,0,1,0.0,0,0,0,0,0,0,0,false,0.0)"));
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &533),
+            ("spell_id", &133),
+            ("effect_index", &1),
+            ("kind", &A_MOD_SPEED),
+            ("base_points", &-50),
+            ("target", &1),
+        ],
+    );
     shard.assert_call("debug_fill_aura_slots", &[&target, "1", "false", "1"]);
     shard.assert_sql(&format!("UPDATE game_aura SET eff_kind = {A_MOD_RESISTANCE}, amount = 300, eff_p0 = 4 WHERE target_guid = {target}"));
-    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES (1,{target},0)"));
+    shard.insert_row(
+        "game_conformance_spell_random",
+        &[("character_guid", &1), ("target_guid", &target)],
+    );
     let events = subscribe_with_fence(&shard, &["SELECT * FROM game_spell_cast_event_live"]);
     for (index, (resistance, seed, miss)) in [
         (300, 10161, "2"),
@@ -138,7 +158,14 @@ fn creature_levels_add_partial_resistance_without_gear() {
     let (shard, target) = stage("innate-spell-resistance");
     shard.assert_sql("UPDATE game_world_entity SET intellect = 0 WHERE guid = 1");
     shard.assert_sql("UPDATE game_spell_effect SET base_points = 400 WHERE spell_id = 133");
-    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES (1,{target},6)"));
+    shard.insert_row(
+        "game_conformance_spell_random",
+        &[
+            ("character_guid", &1),
+            ("target_guid", &target),
+            ("state", &6),
+        ],
+    );
     shard.assert_call("debug_compute_spell", &["1", &target, "133"]);
     assert_eq!(
         shard.query_rows("SELECT spell_hit_normal FROM game_debug_readout WHERE key = 'spell'")[0]
@@ -155,7 +182,14 @@ fn binary_damage_skips_the_innate_partial_resistance_roll() {
     let (shard, target) = stage("binary-spell-resistance");
     shard.assert_sql("UPDATE game_world_entity SET intellect = 0 WHERE guid = 1");
     shard.assert_sql("UPDATE game_spell_effect SET base_points = 400 WHERE spell_id = 133");
-    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES (1,{target},6)"));
+    shard.insert_row(
+        "game_conformance_spell_random",
+        &[
+            ("character_guid", &1),
+            ("target_guid", &target),
+            ("state", &6),
+        ],
+    );
     shard.assert_sql(&format!(
         "UPDATE game_spell SET cast_flags = {CAST_FLAG_BINARY} WHERE spell_id = 133"
     ));
@@ -186,7 +220,14 @@ fn a_partial_resist_that_removes_a_small_area_tick_still_reports_its_log() {
     ));
     shard.assert_sql("UPDATE game_spell SET duration_ms = 2000 WHERE spell_id = 133");
     shard.assert_sql("UPDATE game_spell_effect SET base_points = 1, period_ms = 500, radius_yd = 20.0 WHERE spell_id = 133");
-    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES (1,{target},149)"));
+    shard.insert_row(
+        "game_conformance_spell_random",
+        &[
+            ("character_guid", &1),
+            ("target_guid", &target),
+            ("state", &149),
+        ],
+    );
     let events = subscribe_with_fence(&shard, &["SELECT * FROM game_spell_cast_event_live"]);
     shard.assert_call("debug_spawn_ground_area", &["1", "133"]);
     shard.assert_call("debug_advance_roll_batch", &["10"]);
@@ -216,7 +257,14 @@ fn aura_cast_hit_testing_uses_damage_class_and_hostility() {
     ));
     shard.assert_sql("UPDATE game_spell SET duration_ms = 10000, gcd_ms = 0, cooldown_ms = 0 WHERE spell_id = 133");
     shard.assert_sql(&format!("UPDATE game_spell_effect SET kind = {A_MOD_SPEED}, base_points = -50, die_sides = 0, per_level = 0.0 WHERE spell_id = 133"));
-    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES (1,{target},20554)"));
+    shard.insert_row(
+        "game_conformance_spell_random",
+        &[
+            ("character_guid", &1),
+            ("target_guid", &target),
+            ("state", &20554),
+        ],
+    );
     let events = subscribe_with_fence(&shard, &["SELECT * FROM game_spell_cast_event_live"]);
     for (index, (flags, school, negative, miss)) in [
         (0, 4, true, "0"),

@@ -227,7 +227,14 @@ fn a_resisted_hostile_spell_keeps_initial_threat_without_a_loot_tag() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 60 WHERE guid = {target}"
     ));
-    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES (1,{target},1)"));
+    shard.insert_row(
+        "game_conformance_spell_random",
+        &[
+            ("character_guid", &1),
+            ("target_guid", &target),
+            ("state", &1),
+        ],
+    );
     shard.assert_call("debug_cast_at", &["1", "133", &target]);
     let threats = shard.query_rows(&format!(
         "SELECT threat FROM game_threat WHERE creature_guid = {target} AND source_guid = 1"
@@ -414,7 +421,14 @@ fn retained_passive_threat_retries_attack_start_after_becoming_defensive() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 60 WHERE guid = {target}"
     ));
-    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES (1,{target},1)"));
+    shard.insert_row(
+        "game_conformance_spell_random",
+        &[
+            ("character_guid", &1),
+            ("target_guid", &target),
+            ("state", &1),
+        ],
+    );
     shard.assert_call("debug_cast_at", &["1", "133", &target]);
     assert_eq!(
         shard.query_rows(&format!(

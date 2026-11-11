@@ -63,9 +63,34 @@ fn inventory_changes_preserve_accepted_trade_items() {
     let items = shard.query_rows("SELECT * FROM game_item_instance");
     let session = shard.query_rows("SELECT * FROM game_trade_session");
     assert_eq!(session[0]["target_accepted"], "true");
-    shard.assert_sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (5090171,'Fixture craft',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0)");
-    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360684,5090171,0,7,1,0,0.0,0,0,0.0,0,0,0,{FIXTURE_BLADE},8,0,0,false,0.0)"));
-    shard.assert_sql(&format!("INSERT INTO game_spell_reagent (id,spell_id,item_entry,count) VALUES (40721368,5090171,{FIXTURE_JERKY},1)"));
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &5090171),
+            ("name", &"Fixture craft"),
+            ("school_mask", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &20360684),
+            ("spell_id", &5090171),
+            ("kind", &7),
+            ("base_points", &1),
+            ("p_0", &FIXTURE_BLADE),
+            ("p_0_kind", &8),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_reagent",
+        &[
+            ("id", &40721368),
+            ("spell_id", &5090171),
+            ("item_entry", &FIXTURE_JERKY),
+            ("count", &1),
+        ],
+    );
     for (verb, args) in [
         ("gw_split_item", vec![ACTOR, "23", "25", "9"]),
         ("gw_destroy_item", vec![ACTOR, "23", "9"]),
@@ -96,7 +121,15 @@ fn inventory_changes_preserve_accepted_trade_items() {
     shard.assert_sql(&format!(
         "UPDATE game_spell_reagent SET item_entry = {FIXTURE_REINS} WHERE id = 40721368"
     ));
-    shard.assert_sql(&format!("INSERT INTO game_spell_reagent (id,spell_id,item_entry,count) VALUES (40721369,5090171,{FIXTURE_JERKY},1)"));
+    shard.insert_row(
+        "game_spell_reagent",
+        &[
+            ("id", &40721369),
+            ("spell_id", &5090171),
+            ("item_entry", &FIXTURE_JERKY),
+            ("count", &1),
+        ],
+    );
     shard.clear_schedule("game_creature_move_schedule");
     shard.assert_sql(
         "UPDATE game_world_entity SET simulation_indexed = false, power = 100 WHERE guid = 1",
@@ -170,7 +203,18 @@ fn inventory_changes_preserve_accepted_trade_items() {
     }
     shard.assert_call("debug_grant_item", &["1", &FIXTURE_REINS.to_string(), "1"]);
     shard.assert_call("gw_accept_trade", &[&buyer]);
-    shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360685,5090171,1,7,1,0,0.0,0,0,0.0,0,0,0,5090999,8,0,0,false,0.0)");
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &20360685),
+            ("spell_id", &5090171),
+            ("effect_index", &1),
+            ("kind", &7),
+            ("base_points", &1),
+            ("p_0", &5090999),
+            ("p_0_kind", &8),
+        ],
+    );
     let before_failed_product = shard.query_rows("SELECT * FROM game_item_instance");
     let accepted = shard.query_rows("SELECT * FROM game_trade_session");
     shard.clear_schedule("game_event_reaper_schedule");

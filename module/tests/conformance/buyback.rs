@@ -449,16 +449,32 @@ fn item_guid_allocation_cannot_collide_with_buyback() {
 fn poison(shard: &Standalone, connection: &mut ReducerConnection, guid: u64, item: u64) {
     use lyracore_shared::spell::taxonomy::{E_ENCHANT_ITEM_TEMPORARY, P_ENCHANT_ID, T_SELF};
     let spell: u32 = 5090200;
-    shard.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) VALUES ({spell}, 'Buyback poison', 0, 0, 0, 0, 0, 5, 0, 1, 0, 0, 0, 0, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, 0, 0)"
-    ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, p0, p0_kind, p1, script_id, enters_combat, points_per_combo) VALUES ({}, {spell}, 0, {E_ENCHANT_ITEM_TEMPORARY}, 60, 0, 0.0, 0, {T_SELF}, 0.0, 0, 0, 0, 323, {P_ENCHANT_ID}, 0, 0, false, 0.0)", packed_spell_effect_id(spell, 0)
-    ));
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell),
+            ("name", &"Buyback poison"),
+            ("range_yd", &5),
+            ("school_mask", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell, 0)),
+            ("spell_id", &spell),
+            ("kind", &E_ENCHANT_ITEM_TEMPORARY),
+            ("base_points", &60),
+            ("target", &T_SELF),
+            ("p_0", &323),
+            ("p_0_kind", &P_ENCHANT_ID),
+        ],
+    );
     shard.assert_sql("INSERT INTO game_item_enchantment (id,enchant_id,effect_index,kind,amount,spell_id,school_mask) VALUES (82688,323,0,1,0,0,0)");
-    shard.assert_sql(&format!(
-        "INSERT INTO game_spell_enchant_charges (spell_id, charges) VALUES ({spell}, 40)"
-    ));
+    shard.insert_row(
+        "game_spell_enchant_charges",
+        &[("spell_id", &spell), ("charges", &40)],
+    );
     shard.assert_sql(&format!("UPDATE game_item_template SET spellid_1 = {spell}, spelltrigger_1 = 0 WHERE entry = {FIXTURE_JERKY}"));
     grant(shard, guid, FIXTURE_JERKY, 1);
     shard.assert_call("debug_use_item_on_item", &[&guid.to_string(), "24", "23"]);

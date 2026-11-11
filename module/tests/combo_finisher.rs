@@ -35,26 +35,37 @@ fn a_finisher_adds_its_per_point_damage_and_spends_the_points() {
         "UPDATE game_world_entity SET simulation_indexed = false, armor = 0, health = 100000, \
          max_health = 100000 WHERE guid = {wolf}"
     ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
-         cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
-         aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
-         VALUES ({FINISHER}, 'Fixture Finisher', 0, 0, 0, 0, 0, 5, 0, 1, 0, 0, 0, 0, 0, 0, \
-         0, true, {CAST_FLAG_COMBO_FINISHER}, 0, 0, 0, 0, 0, 0, 0)"
-    ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, \
-         die_sides, per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, \
-         effect_mechanic, p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-         VALUES ({}, {FINISHER}, 0, {E_FINISHER_DAMAGE}, 1, 0, 0.0, 0, {T_TARGET_ENEMY}, 0.0, \
-         0, 0, 0, 0, 0, 0, 0, false, 5.0)",
-        packed_spell_effect_id(FINISHER, 0)
-    ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_combo_point (id, owner_guid, target_guid, points) \
-         VALUES (0, {CHARACTER}, {wolf}, 3)"
-    ));
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &FINISHER),
+            ("name", &"Fixture Finisher"),
+            ("range_yd", &5),
+            ("school_mask", &1),
+            ("is_negative", &true),
+            ("cast_flags", &CAST_FLAG_COMBO_FINISHER),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(FINISHER, 0)),
+            ("spell_id", &FINISHER),
+            ("kind", &E_FINISHER_DAMAGE),
+            ("base_points", &1),
+            ("target", &T_TARGET_ENEMY),
+            ("points_per_combo", &5.0),
+        ],
+    );
+    standalone.insert_row(
+        "game_combo_point",
+        &[
+            ("id", &0),
+            ("owner_guid", &CHARACTER),
+            ("target_guid", &wolf),
+            ("points", &3),
+        ],
+    );
 
     let held = format!("SELECT points FROM game_combo_point WHERE owner_guid = {CHARACTER}");
     for _ in 0..10 {
