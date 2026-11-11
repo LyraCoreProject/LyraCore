@@ -323,20 +323,8 @@ pub(super) fn answered(
     };
     if let Err(error) = &result {
         let connection = ConnectionId::from_u128(connection);
-        if ctx
-            .db
-            .game_native_player()
-            .connection_id()
-            .find(connection)
-            .is_some_and(|player| player.character_guid == guid)
-        {
-            if let Some(packets) = super::rollback::replies_in(error) {
-                for (opcode, body) in packets {
-                    super::send_raw(ctx, connection, opcode, body, false);
-                }
-            } else {
-                super::send(ctx, connection, realm_guild::unavailable(), false)?;
-            }
+        if super::rollback::connection_holds(ctx, connection, guid) {
+            super::rollback::replay_refusal(ctx, connection, error, realm_guild::unavailable());
         }
     }
     row.outcome = Some(result);

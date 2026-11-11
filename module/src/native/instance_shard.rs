@@ -6,7 +6,6 @@ use spacetimedb::{
 
 use super::{
     directory::{self, game_map_owner},
-    game_native_player,
     realm_party::{self, PartyCharacter},
 };
 use crate::{
@@ -317,12 +316,11 @@ pub fn idc_world_instance_entry(
         }
         if decoded.actor.connection == 0 {
             super::package_relocation::validate_admission(ctx, decoded.id)?;
-        } else if !ctx
-            .db
-            .game_native_player()
-            .connection_id()
-            .find(ConnectionId::from_u128(decoded.actor.connection))
-            .is_some_and(|player| player.character_guid == guid && player.teleport.is_none())
+        } else if !super::rollback::connection_holds(
+            ctx,
+            ConnectionId::from_u128(decoded.actor.connection),
+            guid,
+        ) || super::is_teleporting(ctx, guid)
         {
             return Err("World Session changed".into());
         }
@@ -511,12 +509,8 @@ fn finish_native(
     };
     ctx.db.game_instance_entry().id().delete(pending.id);
     let connection = ConnectionId::from_u128(decoded.actor.connection);
-    if !ctx
-        .db
-        .game_native_player()
-        .connection_id()
-        .find(connection)
-        .is_some_and(|player| player.character_guid == pending.guid && player.teleport.is_none())
+    if !super::rollback::connection_holds(ctx, connection, pending.guid)
+        || super::is_teleporting(ctx, pending.guid)
     {
         return;
     }
@@ -590,13 +584,7 @@ pub fn expire_instance_entry(ctx: &ReducerContext, entry: InstanceEntry) {
                 return;
             }
             let connection = ConnectionId::from_u128(request.actor.connection);
-            if ctx
-                .db
-                .game_native_player()
-                .connection_id()
-                .find(connection)
-                .is_some_and(|player| player.character_guid == pending.guid)
-            {
+            if super::rollback::connection_holds(ctx, connection, pending.guid) {
                 notice(ctx, connection);
             }
         }

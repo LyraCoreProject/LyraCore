@@ -522,8 +522,7 @@ pub fn realm_communication_answered(
         let request: Request =
             bsatn::from_slice(&call.request).map_err(|error| error.to_string())?;
         let connection = ConnectionId::from_u128(request.actor.connection);
-        if local_participant(ctx, connection).is_some_and(|actor| actor.guid == request.actor.guid)
-        {
+        if super::rollback::connection_holds(ctx, connection, request.actor.guid) {
             super::send(ctx, connection, unavailable(), false)?;
         }
     }

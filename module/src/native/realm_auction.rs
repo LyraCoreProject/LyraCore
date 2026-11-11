@@ -174,11 +174,7 @@ fn packet(message: ServerOpcodeMessage) -> Vec<AuctionPacket> {
 }
 
 fn unavailable() -> ServerOpcodeMessage {
-    ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(
-        lyracore_protocol::messages::vanilla::SMSG_NOTIFICATION {
-            notification: "Auction request unavailable. Please try again.".into(),
-        },
-    ))
+    super::rollback::unavailable("Auction")
 }
 
 pub(crate) fn pending(ctx: &ReducerContext, guid: u64) -> bool {
@@ -680,7 +676,7 @@ fn deliver(
 
 fn send(ctx: &ReducerContext, guid: u64, connection: u128, packets: Vec<AuctionPacket>) {
     let connection = ConnectionId::from_u128(connection);
-    if super::world_session(ctx, guid).is_some_and(|player| player.connection_id == connection) {
+    if super::rollback::connection_holds(ctx, connection, guid) {
         for AuctionPacket { opcode, body } in packets {
             super::send_raw(ctx, connection, opcode, body, false);
         }
@@ -765,14 +761,10 @@ pub fn realm_auction_request_answered(
     result: Result<(), String>,
 ) -> Result<(), String> {
     let Err(error) = result else { return Ok(()) };
-    let packets = super::rollback::replies_in(&error)
-        .map(|packets| {
-            packets
-                .into_iter()
-                .map(|(opcode, body)| AuctionPacket { opcode, body })
-                .collect()
-        })
-        .unwrap_or_else(|| packet(unavailable()));
+    let packets = super::rollback::refusal_replies(&error, unavailable())
+        .into_iter()
+        .map(|(opcode, body)| AuctionPacket { opcode, body })
+        .collect();
     if let Some(row) = ctx
         .db
         .game_auction_transaction()
