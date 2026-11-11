@@ -6,6 +6,9 @@ use crate::{game_corpse_loot, game_gameobject, game_gameobject_pool_member, game
 use super::*;
 use crate::{game_creature_spawn, game_creature_template, CreatureSpawn};
 
+/// How long a dead creature's corpse stays before decay; respawn timing counts from its death.
+pub(crate) const CREATURE_CORPSE_DECAY_MICROS: i64 = 60_000_000;
+
 /// Removes a creature, pet or other owned unit from the world with every row kept for its life.
 /// Every removal path calls this; `creature_teardown_tripwire` names the rows it must clear.
 pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
@@ -78,9 +81,7 @@ pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
             } else {
                 let death_ts = spawn
                     .despawn_at
-                    .checked_sub(TimeDuration::from_micros(
-                        crate::combat::CORPSE_DECAY_MICROS,
-                    ))
+                    .checked_sub(TimeDuration::from_micros(CREATURE_CORPSE_DECAY_MICROS))
                     .unwrap_or(spawn.despawn_at);
                 let armed = death_ts
                     .checked_add(TimeDuration::from_micros(

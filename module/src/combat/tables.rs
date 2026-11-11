@@ -22,7 +22,8 @@ pub(crate) const CREATURE_MELEE_MIN: u32 = 1;
 pub(crate) const CREATURE_MELEE_MAX: u32 = 3;
 pub(crate) const CRIT_MULT: u32 = 2;
 
-const BASE_MISS_BP: u32 = 500;
+pub(crate) const BASE_MISS_BP: u32 = 500;
+pub(crate) const DUAL_WIELD_MISS_BP: u32 = 2400;
 const MAX_MISS_BP: u32 = 6000;
 const PARRY_BP: u32 = 500;
 const PARRY_BP_PER_SKILL: u32 = 10;
@@ -98,8 +99,12 @@ pub(crate) fn melee_attack_power(strength: u32, level: u32) -> u32 {
     (level * 3 + strength * 2).saturating_sub(20)
 }
 
+const CLASS_WARRIOR: u8 = 1;
 const CLASS_HUNTER: u8 = 3;
 const CLASS_ROGUE: u8 = 4;
+pub(crate) const CLASS_PRIEST: u8 = 5;
+pub(crate) const CLASS_MAGE: u8 = 8;
+pub(crate) const CLASS_WARLOCK: u8 = 9;
 
 pub(crate) fn melee_attack_power_for(class: u8, strength: u32, agility: u32, level: u32) -> u32 {
     match class {
@@ -110,7 +115,7 @@ pub(crate) fn melee_attack_power_for(class: u8, strength: u32, agility: u32, lev
 
 pub(crate) fn ranged_attack_power_for(class: u8, agility: u32, level: u32) -> u32 {
     let raw = match class {
-        1 | CLASS_ROGUE => level + agility,
+        CLASS_WARRIOR | CLASS_ROGUE => level + agility,
         CLASS_HUNTER => level * 2 + agility * 2,
         _ => agility,
     };

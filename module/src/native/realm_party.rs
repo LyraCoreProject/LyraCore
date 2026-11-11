@@ -707,14 +707,19 @@ pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), 
     for event in update.events {
         if event.connection == 0 && event.kind == event_kind::INVITE {
             if let Ok(id) = event.payload.parse() {
-                let _ = package::submit(
+                if let Err(error) = package::submit(
                     ctx,
                     event.recipient,
                     package::Action::Answer(package::Invitation {
                         id,
                         inviter: event.other,
                     }),
-                );
+                ) {
+                    spacetimedb::log::warn!(
+                        "Package party answer to invite {id} for {} failed: {error}",
+                        event.recipient
+                    );
+                }
             }
             continue;
         }

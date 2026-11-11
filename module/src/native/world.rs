@@ -233,7 +233,8 @@ pub(super) fn enter_character(
     Ok(())
 }
 
-/// Feature state a Character sees on world entry; the order of these steps is free.
+/// Feature state a Character sees on world entry; runs after its `game_native_player` insert and
+/// grant CREATEs.
 fn replay_features(
     ctx: &ReducerContext,
     connection_id: ConnectionId,

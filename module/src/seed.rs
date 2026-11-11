@@ -13,11 +13,10 @@ use lyracore_package_delta::{
     packed_creature_spawn_guid, packed_gameobject_spawn_guid, packed_race_class_id,
     packed_spell_effect_id,
 };
-use lyracore_package_delta::{GLOBALS_FAMILY, ITEM_FAMILY, SPELL_FAMILY};
+use lyracore_package_delta::{DBC_FAMILY, GLOBALS_FAMILY, ITEM_FAMILY, SPELL_FAMILY};
 use lyracore_shared::constants;
 use spacetimedb::{reducer, Identity, ReducerContext, Table, TimeDuration};
 
-use crate::import_meta::DBC_FAMILY;
 use crate::{
     game_account, game_aura_schedule, game_breath_schedule, game_character, game_creature_loot,
     game_creature_spawn, game_creature_template, game_creature_waypoint, game_duel_schedule,
@@ -38,8 +37,16 @@ pub fn init(ctx: &ReducerContext) {
     seed_production_core(ctx);
     seed_map0_demo_content(ctx);
     seed_spell_registry(ctx);
+    grant_tester_kit(ctx);
     crate::items::seed_compatibility_enchantments(ctx);
     arm_interval_schedules(ctx);
+}
+
+/// Runs after `seed_curated_content`, which writes the starting spell kit the Tester learns.
+fn grant_tester_kit(ctx: &ReducerContext) {
+    use constants::start_human_warrior as hw;
+    crate::spell::spellbook::grant_createinfo_spells(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
+    crate::action_bar::grant_createinfo_actions(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
 }
 
 struct CuratedSeed {
@@ -210,8 +217,6 @@ fn seed_production_core(ctx: &ReducerContext) {
         gm_level: 3,
     });
 
-    seed_createinfo_spells(ctx);
-
     ctx.db.game_character().insert(Character {
         guid: 1,
         account_id: account.id,
@@ -261,9 +266,6 @@ fn seed_production_core(ctx: &ReducerContext) {
         watched_faction_index: -1,
         rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
     });
-    crate::spell::spellbook::grant_createinfo_spells(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
-    crate::action_bar::grant_createinfo_actions(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
-
     crate::creatures::seed_on_aggro_fixtures(ctx);
 }
 
@@ -1394,7 +1396,7 @@ use fixtures::{
 };
 pub(crate) use fixtures::{seed_taxi_fixture, tempered_blade_template, tough_jerky_template};
 
-pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {
+fn seed_createinfo_spells(ctx: &ReducerContext) {
     use crate::spell::spellbook::game_createinfo_spell;
     let table = ctx.db.game_createinfo_spell();
     let base_kit = if table.count() == 0 {

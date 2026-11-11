@@ -54,11 +54,10 @@ fn in_rest_area(ctx: &ReducerContext, mover: &WorldEntity, area: Option<&GameAre
     match zone.faction_group {
         AREA_TEAM_ALLIANCE => faction::team_for_race(mover.race()) == faction::TEAM_ALLIANCE,
         AREA_TEAM_HORDE => faction::team_for_race(mover.race()) == faction::TEAM_HORDE,
-        AREA_TEAM_NONE => !ctx
-            .db
-            .game_realm()
-            .iter()
-            .any(|realm| matches!(realm.realm_type, 1 | 8 | 16)),
+        AREA_TEAM_NONE => !ctx.db.game_realm().iter().any(|realm| {
+            use lyracore_shared::constants::realm_type::{FFA_PVP, PVP, RP_PVP};
+            matches!(realm.realm_type, PVP | RP_PVP | FFA_PVP)
+        }),
         _ => true,
     }
 }

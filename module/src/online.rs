@@ -11,8 +11,6 @@ pub(crate) enum Online {
     // Meeting Stone Seekers: the Realm party facts on a Realm Shard, otherwise a World Session
     // here or a live Account Claim.
     SessionOrClaim,
-    // Session-less Gates: the Character row's `online` flag.
-    CharacterFlag,
 }
 
 pub(crate) fn is_online(ctx: &ReducerContext, character_guid: u64, meaning: Online) -> bool {
@@ -40,8 +38,6 @@ pub(crate) fn is_online(ctx: &ReducerContext, character_guid: u64, meaning: Onli
                 .filter(character_guid)
                 .any(|claim| !claim.closed && claim.expires_micros > now)
         }
-        Online::CharacterFlag => crate::helpers::character_by_guid(ctx, character_guid)
-            .is_some_and(|character| character.online),
     }
 }
 

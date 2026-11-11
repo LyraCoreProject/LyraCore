@@ -2132,7 +2132,10 @@ fn vmangos_items_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
     push_item_statements(&mut stmts, &items.templates, &items.loot, &items.vendors);
     Ok(DumpPlan {
         stmts,
-        stamps: vec![("items", items.templates.len() as u64 + properties)],
+        stamps: vec![(
+            lyracore_package_delta::ITEM_FAMILY,
+            items.templates.len() as u64 + properties,
+        )],
         item_replacement: Some(items.replacement),
         world_source_manifest: Some(serde_json::to_string_pretty(&items_findings(
             dump, &entries,
@@ -2189,7 +2192,7 @@ fn vmangos_loot_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Du
     let count = insert_row_count(&stmts);
     Ok(DumpPlan {
         stmts,
-        stamps: vec![("loot", count)],
+        stamps: vec![(lyracore_package_delta::LOOT_FAMILY, count)],
         world_source_manifest: Some(serde_json::to_string_pretty(
             &serde_json::json!({"format_version":1,"source":"vmangos","family":"loot","patch":crate::source_selection::PATCH,"client_build":crate::source_selection::CLIENT_BUILD,"findings":loot_findings(dump, &["creature_loot_template", "reference_loot_template", "pickpocketing_loot_template", "skinning_loot_template", "gameobject_loot_template", "fishing_loot_template", "item_loot_template", "disenchant_loot_template", "mail_loot_template"])?}),
         )?),
@@ -2267,7 +2270,7 @@ fn vmangos_gameobjects_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Re
             .chunks(SPAWN_BATCH)
             .map(|rows| rows.join(";"))
             .collect(),
-        stamps: vec![("gameobjects", count)],
+        stamps: vec![(lyracore_package_delta::GAMEOBJECT_FAMILY, count)],
         world_source_manifest: Some(serde_json::to_string_pretty(&gameobject_findings(
             dump, args,
         )?)?),
@@ -2386,7 +2389,7 @@ fn vmangos_eventai_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result
     Ok(DumpPlan {
         stmts,
         stamps: vec![(
-            "creature-ai",
+            lyracore_package_delta::CREATURE_AI_FAMILY,
             eventai.row_count() + requirements.len() as u64,
         )],
         eventai_definition_count: eventai.definition_count(),
@@ -2425,7 +2428,7 @@ fn vmangos_family_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
             let count = insert_row_count(&stmts);
             Ok(DumpPlan {
                 stmts,
-                stamps: vec![("globals", count)],
+                stamps: vec![(lyracore_package_delta::GLOBALS_FAMILY, count)],
                 world_source_manifest: Some(serde_json::to_string_pretty(&globals_findings(
                     dump,
                 )?)?),

@@ -221,7 +221,7 @@ pub(crate) fn answer_sessionless_invite(
     let Some(character) = crate::helpers::character_by_guid(ctx, guid) else {
         return Ok(());
     };
-    if is_online(ctx, guid, Online::CharacterFlag)
+    if character.online
         || crate::sessionless::group_action_gate(ctx, guid).is_err()
         || ctx
             .db
@@ -1086,7 +1086,7 @@ fn invite_core_on(
 
 pub(crate) fn accept_invite_for(ctx: &ReducerContext, acceptor_guid: u64) -> Result<(), String> {
     let acceptor = crate::helpers::character_by_guid(ctx, acceptor_guid);
-    if acceptor.is_some() && !is_online(ctx, acceptor_guid, Online::CharacterFlag) {
+    if acceptor.as_ref().is_some_and(|acceptor| !acceptor.online) {
         crate::sessionless::group_action_gate(ctx, acceptor_guid)
             .map_err(|refusal| refused(refusal, "session-less group acceptance"))?;
         if crate::native::realm_party::package::submit(

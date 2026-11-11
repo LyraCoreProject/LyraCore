@@ -1594,7 +1594,7 @@ pub(crate) fn selected_world_plan(
 
     Ok(crate::world_import::DumpPlan {
         stmts,
-        stamps: vec![("spell", cov.spells as u64)],
+        stamps: vec![(lyracore_package_delta::SPELL_FAMILY, cov.spells as u64)],
         world_source_manifest: manifest,
         ..Default::default()
     })

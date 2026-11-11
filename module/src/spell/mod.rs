@@ -58,7 +58,7 @@ pub(crate) use formulas::{
     add_flat_pool_bonus, apply_damage_pct, apply_spell_crit, apply_spell_mod, compose_magnitude,
     cost_gate_blocks, damaged_value, dispel_category_matches, drain_shields, effect_amount,
     energized_value, healed_value, level_gate_blocks, rederive_pool, school_index,
-    should_arm_spell_retaliation,
+    should_arm_spell_retaliation, DISPEL_MAGIC, DISPEL_POISON,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use power::spell_crit_bp;

@@ -258,9 +258,9 @@ pub fn world_entry_answered(ctx: &ReducerContext, entry: WorldEntry, result: Res
     }
     let aways = ctx.db.game_native_away();
     if let Some(previous) = aways.account_id().find(account_id) {
-        crate::online::world_session_ended(ctx, previous.character_guid);
+        crate::meeting_stone::remove_solo_seeker(ctx, previous.character_guid);
     }
-    crate::online::world_session_ended(ctx, entry.character_guid);
+    crate::meeting_stone::remove_solo_seeker(ctx, entry.character_guid);
     aways.account_id().delete(account_id);
     aways.insert(NativeAway {
         account_id,
@@ -600,7 +600,7 @@ pub fn idc_return_to_selection(
     {
         return Err("World Session belongs to another World Shard".into());
     }
-    crate::online::world_session_ended(ctx, away.character_guid);
+    crate::meeting_stone::remove_solo_seeker(ctx, away.character_guid);
     ctx.db.game_native_away().account_id().delete(account_id);
     let handoffs = ctx.db.game_native_handoff();
     handoffs.connection_id().delete(connection_id);
@@ -631,7 +631,7 @@ pub fn idc_world_session_closed(
         away.connection_id == ConnectionId::from_u128(connection)
             && away.world.or_else(|| world_shard(ctx)) == Some(ctx.sender())
     }) {
-        crate::online::world_session_ended(ctx, away.character_guid);
+        crate::meeting_stone::remove_solo_seeker(ctx, away.character_guid);
         aways.account_id().delete(account_id);
     }
     Ok(())

@@ -11,6 +11,7 @@ use lyracore_protocol::login_messages::{
     Message,
 };
 use lyracore_protocol::srp;
+use lyracore_shared::constants::realm_type;
 use spacetimedb::{
     reducer, table, ConnectionId, Identity, ReducerContext, ScheduleAt, SpacetimeType, Table,
     TimeDuration,
@@ -187,9 +188,9 @@ pub fn native_logon_receive(
                 for realm in ctx.db.game_realm().iter() {
                     realms.push(Realm {
                         realm_type: match realm.realm_type {
-                            1 => RealmType::PlayerVsPlayer,
-                            6 => RealmType::Roleplaying,
-                            8 => RealmType::RoleplayingPlayerVsPlayer,
+                            realm_type::PVP => RealmType::PlayerVsPlayer,
+                            realm_type::RP => RealmType::Roleplaying,
+                            realm_type::RP_PVP => RealmType::RoleplayingPlayerVsPlayer,
                             _ => RealmType::PlayerVsEnvironment,
                         },
                         flag: RealmFlag::empty(),

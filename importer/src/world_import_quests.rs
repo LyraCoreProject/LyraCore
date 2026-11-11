@@ -208,7 +208,10 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
         event_requirements(dump, &quests.entries, &creature_ai.quest_event_entries)?;
     Ok(DumpPlan {
         stmts,
-        stamps: vec![("quests", quests.templates.len() as u64)],
+        stamps: vec![(
+            lyracore_package_delta::QUEST_FAMILY,
+            quests.templates.len() as u64,
+        )],
         world_source_manifest: Some(serde_json::to_string_pretty(&findings(
             dump,
             &quests,

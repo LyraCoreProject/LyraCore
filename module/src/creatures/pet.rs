@@ -8,7 +8,7 @@ use crate::{game_creature_template, game_melee_attack, game_world_entity, WorldE
 
 use super::spawn::{build_creature_entity, CreatureSpawn};
 
-// Creature-owned guardians use HIGHGUID_PET to avoid colliding with their owner guid.
+// Creature-owned guardians use `guid::PET` to avoid colliding with their owner guid.
 pub(crate) fn pet_guid_for(owner_guid: u64) -> u64 {
     let high = if guid::is_creature(owner_guid) {
         guid::PET

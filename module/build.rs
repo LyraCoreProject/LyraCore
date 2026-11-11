@@ -355,7 +355,7 @@ fn main() {
         .retain(|(_, table)| !registries.virtual_clock_exempt.contains(&table.accessor));
     registries
         .schedules
-        .sort_by(|a, b| a.1.accessor.cmp(&b.1.accessor));
+        .sort_by_key(|(_, table)| firing_rank(&table.accessor));
     for (_, table) in &mut registries.schedules {
         let mut modules: Vec<&String> = registries
             .reducers
@@ -510,16 +510,66 @@ fn table_accessors(content: &str) -> Vec<String> {
         .collect()
 }
 
+/// Schedules due at the same virtual instant fire in this order, then unlisted tables by accessor.
+/// Conformance traces observe that order, so keep each listed table where it stands.
+const SAME_INSTANT_FIRING_ORDER: &[&str] = &[
+    "game_motion_publish_schedule",
+    "game_melee_schedule",
+    "game_taxi_flight_schedule",
+    "game_creature_move_schedule",
+    "game_weather_schedule",
+    "game_aura_schedule",
+    "game_ground_area_schedule",
+    "game_pending_cast",
+    "game_pending_spell_impact",
+    "game_breath_schedule",
+    "game_transfer_reaper_schedule",
+    "game_instance_reaper_schedule",
+    "game_instance_removal",
+    "game_gateway_lease_reaper_schedule",
+    "game_transport_carry_schedule",
+    "game_transport_crossing",
+    "game_event_reaper_schedule",
+    "game_duel_schedule",
+    "game_mail_escrow_reaper_schedule",
+    "game_mail_timer",
+    "game_auction_expiry",
+    "game_session_reaper_schedule",
+    "game_meeting_stone_reminder_schedule",
+    "game_native_admission_tick",
+    "game_native_logon_reaper",
+    "game_native_member_stats",
+    "game_pet_care_schedule",
+    "game_ranged_impact_schedule",
+    "game_creature_ai_relay_continuation",
+    "game_creature_ai_relay_arrival",
+    "game_creature_ai_summon_expiry",
+    "game_creature_ai_forced_despawn",
+    "game_temporary_enchantment",
+    "game_item_aura_expiry",
+    "game_combat_check_schedule",
+];
+
+fn firing_rank(accessor: &str) -> (usize, String) {
+    let listed = SAME_INSTANT_FIRING_ORDER
+        .iter()
+        .position(|listed| *listed == accessor);
+    (listed.unwrap_or(usize::MAX), accessor.to_string())
+}
+
 #[derive(Debug, PartialEq)]
 struct ScheduledTable {
     accessor: String,
     reducer: String,
     primary_key: String,
+    /// The struct's `#[cfg(..)]` gates, after `scan_file` prepends its module path's.
+    cfgs: Vec<String>,
 }
 
-fn scheduled_tables(content: &str) -> Vec<ScheduledTable> {
+/// `code` is `raw` without comments and strings.
+fn scheduled_tables(raw: &str, code: &str) -> Vec<ScheduledTable> {
     let mut tables = Vec::new();
-    for (items, end) in table_attributes(content) {
+    for (items, end) in table_attributes(code) {
         let Some(reducer) = items.iter().find_map(|item| scheduled_item(item)) else {
             continue;
         };
@@ -536,16 +586,22 @@ fn scheduled_tables(content: &str) -> Vec<ScheduledTable> {
             .unwrap_or_else(|| {
                 panic!("build.rs: scheduled table for `{reducer}` has no `accessor`")
             });
-        let primary_key = primary_key_field(&content[end..]).unwrap_or_else(|| {
+        let primary_key = primary_key_field(&code[end..]).unwrap_or_else(|| {
             panic!(
                 "build.rs: scheduled table `{accessor}` has no `#[primary_key]` field the virtual \
                  clock can address its rows by"
             )
         });
+        let struct_at = code[end..]
+            .find("struct ")
+            .map(|at| end + at)
+            .unwrap_or_else(|| panic!("build.rs: table `{accessor}` declares no struct"));
+        let (attributes_end, _) = split_visibility(&code[..struct_at]);
         tables.push(ScheduledTable {
             accessor,
             reducer,
             primary_key,
+            cfgs: cfg_attributes(raw, code, attributes_end.len()),
         });
     }
     tables
@@ -625,8 +681,8 @@ fn leading_ident(text: &str) -> Option<&str> {
 }
 
 /// Generates the conformance virtual clock's registry, which `module/src/time.rs` includes: one
-/// `virtual_schedules!` arm per `(table module, table)`, numbered by position. Each table's
-/// `reducer` is already the path to its reducer.
+/// `virtual_schedules!` arm per `(table module, table)`, numbered by position and under the
+/// table's `cfg` gates. Each table's `reducer` is already the path to its reducer.
 fn virtual_schedules_source(schedules: &[(String, ScheduledTable)]) -> String {
     assert!(
         schedules.len() <= usize::from(u8::MAX) + 1,
@@ -639,6 +695,9 @@ fn virtual_schedules_source(schedules: &[(String, ScheduledTable)]) -> String {
     out.push_str("macro_rules! virtual_schedules {\n");
     out.push_str("    ($macro:ident, $ctx:ident $(, $extra:ident)*) => {\n");
     for (kind, (module, table)) in schedules.iter().enumerate() {
+        for cfg in &table.cfgs {
+            out.push_str(&format!("        {cfg}\n"));
+        }
         out.push_str(&format!(
             "        {{\n            use {module}::{};\n            $macro!($ctx, {kind}, {}, {}, {} $(, $extra)*);\n        }}\n",
             table.accessor, table.accessor, table.primary_key, table.reducer
@@ -1311,11 +1370,17 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
     }
 
     // Package rows cannot reach the crate-private Realm Clock, so they stay on the host clock.
-    let schedules = if in_package {
+    let mut schedules = if in_package {
         Vec::new()
     } else {
-        scheduled_tables(&content)
+        scheduled_tables(&raw, &content)
     };
+    if !schedules.is_empty() {
+        let module_cfgs = module_cfgs(scan_root, file, &raw);
+        for table in &mut schedules {
+            table.cfgs.splice(0..0, module_cfgs.iter().cloned());
+        }
+    }
     scan_marker(&content, file, "virtual_clock_exempt!", |head, line| {
         let accessor = head
             .strip_prefix('(')
@@ -1498,19 +1563,53 @@ mod build_script_tests {
     fn the_virtual_clock_registers_every_scheduled_table_declaration() {
         let source = "#[table(accessor = game_one, scheduled(fire_one))]\n\
                       pub struct One {\n    #[primary_key]\n    #[auto_inc]\n    pub scheduled_id: u64,\n    pub scheduled_at: ScheduleAt,\n}\n\
+                      #[cfg(feature = \"debug_reducers\")]\n\
                       #[table(\n    accessor = game_two,\n    scheduled(fire_two),\n    index(accessor = by_map, btree(columns = [map_id]))\n)]\n\
                       pub struct Two {\n    pub map_id: u32,\n    #[primary_key]\n    pub(crate) aura_id: u64,\n}\n\
                       #[table(accessor = game_plain)]\npub struct Plain {\n    #[primary_key]\n    pub id: u64,\n}\n";
-        let table = |accessor: &str, reducer: &str, primary_key: &str| ScheduledTable {
-            accessor: accessor.to_string(),
-            reducer: reducer.to_string(),
-            primary_key: primary_key.to_string(),
-        };
+        let table =
+            |accessor: &str, reducer: &str, primary_key: &str, cfgs: &[&str]| ScheduledTable {
+                accessor: accessor.to_string(),
+                reducer: reducer.to_string(),
+                primary_key: primary_key.to_string(),
+                cfgs: cfgs.iter().map(|cfg| cfg.to_string()).collect(),
+            };
+        let debug = "#[cfg(feature = \"debug_reducers\")]";
+        let tables = scheduled_tables(source, &strip_comments_and_strings(source));
         assert_eq!(
-            scheduled_tables(source),
+            tables,
             [
-                table("game_one", "fire_one", "scheduled_id"),
-                table("game_two", "fire_two", "aura_id"),
+                table("game_one", "fire_one", "scheduled_id", &[]),
+                table("game_two", "fire_two", "aura_id", &[debug]),
+            ]
+        );
+        let generated = virtual_schedules_source(
+            &tables
+                .into_iter()
+                .map(|table| ("crate::demo".to_string(), table))
+                .collect::<Vec<_>>(),
+        );
+        assert!(generated.contains(&format!(
+            "        {debug}\n        {{\n            use crate::demo::game_two;\n            $macro!($ctx, 1, game_two, aura_id, fire_two $(, $extra)*);"
+        )));
+    }
+
+    #[test]
+    fn unlisted_scheduled_tables_fire_after_the_listed_ones_by_accessor() {
+        let mut accessors = [
+            "game_package_party_refresh",
+            "game_combat_check_schedule",
+            "game_a_new_schedule",
+            "game_melee_schedule",
+        ];
+        accessors.sort_by_key(|accessor| firing_rank(accessor));
+        assert_eq!(
+            accessors,
+            [
+                "game_melee_schedule",
+                "game_combat_check_schedule",
+                "game_a_new_schedule",
+                "game_package_party_refresh",
             ]
         );
     }
@@ -1518,17 +1617,16 @@ mod build_script_tests {
     #[test]
     #[should_panic(expected = "no `#[primary_key]`")]
     fn a_scheduled_table_the_virtual_clock_cannot_address_fails_the_build() {
-        scheduled_tables(
-            "#[table(accessor = game_one, scheduled(fire_one))]\nstruct One {\n    id: u64,\n}\n",
-        );
+        let source =
+            "#[table(accessor = game_one, scheduled(fire_one))]\nstruct One {\n    id: u64,\n}\n";
+        scheduled_tables(source, source);
     }
 
     #[test]
     #[should_panic(expected = "supports no `at = ..` column")]
     fn a_renamed_schedule_column_fails_the_build() {
-        scheduled_tables(
-            "#[table(accessor = game_one, scheduled(fire_one, at = due))]\nstruct One {\n    #[primary_key]\n    id: u64,\n}\n",
-        );
+        let source = "#[table(accessor = game_one, scheduled(fire_one, at = due))]\nstruct One {\n    #[primary_key]\n    id: u64,\n}\n";
+        scheduled_tables(source, source);
     }
 
     #[test]

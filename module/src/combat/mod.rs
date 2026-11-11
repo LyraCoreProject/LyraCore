@@ -21,8 +21,8 @@ pub(crate) use damage::{
     FrozenDamage, Hit, HitSource,
 };
 pub(crate) use death::{
-    force_creature_death, kill_creature, kill_player, CORPSE_DECAY_MICROS, DRAIN_SOUL_SPELL_ID,
-    RESPAWN_MICROS, SOUL_SHARD_ENTRY,
+    force_creature_death, kill_creature, kill_player, DRAIN_SOUL_SPELL_ID, RESPAWN_MICROS,
+    SOUL_SHARD_ENTRY,
 };
 pub(crate) use leash::{beyond_combat_backstop, pursuit_deadline_ms, should_evade};
 #[cfg(test)]
@@ -65,11 +65,12 @@ pub(crate) use tables::{
     is_translating, melee_attack_power_for, miss_bp_with_bonus, miss_chance_bp, parry_chance_bp,
     player_swing_range_ap, rage_from_damage, ranged_sheet_values, regen_entity_health,
     regen_entity_health_in_combat, regen_entity_power, scale_swing_for_rank, swing_time_with_haste,
-    weapon_swing_range_ap, AttackTable, RegenWindow, AUTO_SHOT_PROJECTILE_SPEED,
-    CREATURE_MELEE_MAX, CREATURE_MELEE_MIN, CRIT_MULT, CRUSH_DAMAGE_PCT, GLANCING_DAMAGE_PCT,
-    HIT_BLOCK, HIT_CRIT, HIT_CRUSHING, HIT_DODGE, HIT_GLANCING, HIT_MISS, HIT_NORMAL, HIT_PARRY,
-    MELEE_LEEWAY_WINDOW_MS, MELEE_RANGE_LEEWAY_CREATURE_SQ, MELEE_RANGE_LEEWAY_SQ, MELEE_RANGE_SQ,
-    RANGED_INITIAL_SHOT_MS, RANGED_RANGE_SQ, WAND_PROJECTILE_SPEED,
+    weapon_swing_range_ap, AttackTable, RegenWindow, AUTO_SHOT_PROJECTILE_SPEED, BASE_MISS_BP,
+    CLASS_MAGE, CLASS_PRIEST, CLASS_WARLOCK, CREATURE_MELEE_MAX, CREATURE_MELEE_MIN, CRIT_MULT,
+    CRUSH_DAMAGE_PCT, DUAL_WIELD_MISS_BP, GLANCING_DAMAGE_PCT, HIT_BLOCK, HIT_CRIT, HIT_CRUSHING,
+    HIT_DODGE, HIT_GLANCING, HIT_MISS, HIT_NORMAL, HIT_PARRY, MELEE_LEEWAY_WINDOW_MS,
+    MELEE_RANGE_LEEWAY_CREATURE_SQ, MELEE_RANGE_LEEWAY_SQ, MELEE_RANGE_SQ, RANGED_INITIAL_SHOT_MS,
+    RANGED_RANGE_SQ, WAND_PROJECTILE_SPEED,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use tables::{regen_health_in_combat, swing_profile};

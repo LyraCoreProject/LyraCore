@@ -6,7 +6,7 @@ use crate::game_melee_attack;
 
 use super::{
     add_flat_pool_bonus, dispel_category_matches, drain_shields, rederive_pool, shed_auras,
-    should_arm_spell_retaliation, A_ABSORB, COMBAT_ATTACK_POWER,
+    should_arm_spell_retaliation, A_ABSORB, COMBAT_ATTACK_POWER, DISPEL_MAGIC, DISPEL_POISON,
 };
 use crate::{game_aura, game_spell, Aura};
 
@@ -57,7 +57,8 @@ pub(crate) fn dispel_target(
             spells.spell_id().find(aura.spell_id).is_some_and(|spell| {
                 spell.dispel_type != 0
                     && dispel_category_matches(category, spell.dispel_type)
-                    && (!matches!(spell.dispel_type, 1 | 4) || spell.negative() == friendly)
+                    && (!matches!(spell.dispel_type, DISPEL_MAGIC | DISPEL_POISON)
+                        || spell.negative() == friendly)
             })
         })
         .collect();
@@ -83,7 +84,7 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
         rederive_pool(
             crate::stats::max_health_for(ctx, race, class, e.level),
             e.stamina,
-            stat_bonus(e.stamina, stamina),
+            stamina,
             crate::stats::hp_from_stamina,
         ),
         gear(crate::items::EquipStat::Health),
@@ -96,7 +97,7 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
             rederive_pool(
                 crate::stats::max_power_for(ctx, race, class, e.level),
                 e.intellect,
-                stat_bonus(e.intellect, intellect),
+                intellect,
                 crate::stats::mana_from_intellect,
             ),
             gear(crate::items::EquipStat::Mana),
@@ -115,10 +116,6 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
     e.power = e.power.min(new_max_power);
     e.spirit = new_spirit;
     e.update(ctx);
-}
-
-fn stat_bonus(base: u32, effective: u32) -> i32 {
-    (i64::from(effective) - i64::from(base)).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
 }
 
 pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
@@ -142,7 +139,10 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     let (dmg_min, dmg_max) = crate::combat::swing_range_ctx(ctx, &e);
     let ap_modifiers = crate::combat::attack_power_modifiers(ctx, unit_guid, COMBAT_ATTACK_POWER);
     // Priest, mage and warlock ignore ranged AP modifiers.
-    let ranged_ap_modifiers = if matches!(class, 5 | 8 | 9) {
+    let ranged_ap_modifiers = if matches!(
+        class,
+        crate::combat::CLASS_PRIEST | crate::combat::CLASS_MAGE | crate::combat::CLASS_WARLOCK
+    ) {
         0
     } else {
         crate::combat::attack_power_modifiers(

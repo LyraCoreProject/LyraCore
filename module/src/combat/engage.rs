@@ -182,7 +182,7 @@ pub(crate) fn engage_passive_creature(ctx: &ReducerContext, creature_guid: u64, 
 pub(crate) fn refresh_leash(ctx: &ReducerContext, guid_a: u64, guid_b: u64) {
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
-    let now_ms = crate::creatures::tick::move_clock_ms(ctx);
+    let now_ms = crate::time::now_ms_u32(ctx);
     for guid in [guid_a, guid_b] {
         let (Some(mut row), Some(e)) =
             (melee.attacker_guid().find(guid), entities.guid().find(guid))
@@ -853,7 +853,7 @@ pub(crate) fn apply_start_ranged_attack(
     }
     crate::mount::dismount(ctx, attacker.guid);
     // Delay the first Auto Shot by its initial wind-up; zero is the immediate-swing sentinel.
-    let now_ms = crate::creatures::tick::move_clock_ms(ctx);
+    let now_ms = crate::time::now_ms_u32(ctx);
     let ranged_delay = ranged_weapon.2;
     let first_swing_seed = now_ms
         .saturating_sub(ranged_delay.saturating_sub(RANGED_INITIAL_SHOT_MS))

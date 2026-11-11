@@ -12,8 +12,8 @@ pub(crate) enum MoveClock {
 
 impl MoveClock {
     /// Native World Sessions supply client time; bots and creatures use the Realm Clock.
-    pub(crate) fn realm(ctx: &ReducerContext, guid: u64, now_ms: u32) -> Self {
-        if crate::native::has_world_session(ctx, guid) {
+    pub(crate) fn realm(ctx: &ReducerContext, mover: &WorldEntity, now_ms: u32) -> Self {
+        if mover.is_player() && crate::native::has_world_session(ctx, mover.guid) {
             Self::Unchanged
         } else {
             Self::At(now_ms)

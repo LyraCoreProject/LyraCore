@@ -275,7 +275,10 @@ pub(crate) fn world_plan(
         s.starts_with("DELETE FROM game_taxi_node ") || s.starts_with("INSERT INTO game_taxi_node ")
     }));
     Ok(crate::world_import::DumpPlan {
-        stamps: vec![("dbc", crate::dump::insert_row_count(&statements))],
+        stamps: vec![(
+            lyracore_package_delta::DBC_FAMILY,
+            crate::dump::insert_row_count(&statements),
+        )],
         stmts: statements,
         world_source_manifest: Some(serde_json::to_string_pretty(&findings(source)?)?),
         ..Default::default()

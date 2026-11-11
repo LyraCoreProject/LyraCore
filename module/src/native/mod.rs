@@ -316,10 +316,11 @@ fn send_to_character(
     let packet = match on_failure {
         EncodeFailure::Panic => bounded(message),
         EncodeFailure::Disconnect | EncodeFailure::Log => {
+            let name = message.to_string();
             match lyracore_protocol::world::encode(message) {
                 Ok(packet) => packet,
                 Err(error) => {
-                    spacetimedb::log::error!("native message for {guid} does not encode: {error}");
+                    spacetimedb::log::error!("native {name} for {guid} does not encode: {error}");
                     if matches!(on_failure, EncodeFailure::Disconnect) {
                         disconnect(ctx, player.connection_id);
                     }

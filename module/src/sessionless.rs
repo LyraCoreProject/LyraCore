@@ -2,7 +2,7 @@ use lyracore_shared::group::GroupRefusal;
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
 use crate::game_world_entity;
-use crate::online::{is_online, Online};
+
 use crate::transfer::game_bot_transfer_intent;
 
 #[table(accessor = game_sessionless_action_consent)]
@@ -119,7 +119,7 @@ pub(crate) fn set_sessionless_action_consent(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum TransferIntent {
+enum PendingBotTransfer {
     Refuses,
     Ignored,
 }
@@ -127,7 +127,7 @@ enum TransferIntent {
 fn admit_sessionless_character(
     ctx: &ReducerContext,
     character_guid: u64,
-    transfer_intent: TransferIntent,
+    pending_bot_transfer: PendingBotTransfer,
 ) -> Result<(), crate::actor::ActionRefusal> {
     use crate::actor::{ActionRefusal, ActionRefusalKind};
     crate::account_ownership::require_actor(
@@ -138,7 +138,7 @@ fn admit_sessionless_character(
         },
     )
     .map_err(|detail| ActionRefusal::new(ActionRefusalKind::CannotAct, detail))?;
-    if transfer_intent == TransferIntent::Refuses
+    if pending_bot_transfer == PendingBotTransfer::Refuses
         && ctx
             .db
             .game_bot_transfer_intent()
@@ -152,13 +152,13 @@ fn admit_sessionless_character(
             "Character has a pending Transfer Intent",
         ));
     }
-    if crate::helpers::character_by_guid(ctx, character_guid).is_none() {
+    let Some(character) = crate::helpers::character_by_guid(ctx, character_guid) else {
         return Err(ActionRefusal::new(
             ActionRefusalKind::MissingActor,
             "Character unavailable",
         ));
-    }
-    if is_online(ctx, character_guid, Online::CharacterFlag) {
+    };
+    if character.online {
         return Err(ActionRefusal::new(
             ActionRefusalKind::CannotAct,
             "Character has a World Session",
@@ -179,7 +179,7 @@ pub(crate) fn action_gate(
     ctx: &ReducerContext,
     character_guid: u64,
 ) -> Result<(), crate::actor::ActionRefusal> {
-    admit_sessionless_character(ctx, character_guid, TransferIntent::Refuses)
+    admit_sessionless_character(ctx, character_guid, PendingBotTransfer::Refuses)
 }
 
 pub(crate) fn movement_gate(
@@ -214,7 +214,7 @@ pub(crate) fn transfer_authority_gate(
     character_guid: u64,
 ) -> Result<(), crate::actor::ActionRefusal> {
     use crate::actor::{ActionRefusal, ActionRefusalKind};
-    admit_sessionless_character(ctx, character_guid, TransferIntent::Ignored)?;
+    admit_sessionless_character(ctx, character_guid, PendingBotTransfer::Ignored)?;
     if consent_withheld(ctx, character_guid) {
         return Err(ActionRefusal::new(
             ActionRefusalKind::CannotAct,

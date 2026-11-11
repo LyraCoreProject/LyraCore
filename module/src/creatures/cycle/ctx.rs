@@ -152,7 +152,7 @@ impl CtxWorld<'_> {
         let entities = self.ctx.db.game_world_entity();
         let mut e = entities.guid().find(guid)?;
         let clock = moved_ms.map_or(MoveClock::Unchanged, |ms| {
-            MoveClock::realm(self.ctx, guid, ms)
+            MoveClock::realm(self.ctx, &e, ms)
         });
         // Creature legs explore nothing, including those that move a sessionless Character.
         e.place(at.x, at.y, at.z, clock).unexplored();

@@ -2021,7 +2021,7 @@ pub(crate) fn run_relay_arrival(ctx: &ReducerContext, arrival: RelayArrival) {
                     },
                     heading: None,
                 },
-                crate::world::MoveClock::At(crate::creatures::tick::move_clock_ms(ctx)),
+                crate::world::MoveClock::At(crate::time::now_ms_u32(ctx)),
             );
             source.update(ctx);
             ctx.db

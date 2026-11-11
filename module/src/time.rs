@@ -13,6 +13,11 @@ pub(crate) fn now_ms(ctx: &ReducerContext) -> u64 {
     now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1_000
 }
 
+/// `now_ms` truncated to the u32 width of the movement and swing clock columns; it wraps.
+pub(crate) fn now_ms_u32(ctx: &ReducerContext) -> u32 {
+    now_ms(ctx) as u32
+}
+
 /// Realm Clock seconds since the Unix epoch; a pre-epoch clock reads as 0.
 pub(crate) fn now_secs(ctx: &ReducerContext) -> u64 {
     now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1_000_000

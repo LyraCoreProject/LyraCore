@@ -1444,8 +1444,8 @@ pub(crate) fn on_areatrigger_entered(ctx: &ReducerContext, player_guid: u64, tri
     );
 }
 
-fn is_expired(now_micros: i64, deadline_micros: i64, rewarded: bool, failed: bool) -> bool {
-    deadline_micros != 0 && !rewarded && !failed && now_micros >= deadline_micros
+fn is_expired(now_micros: i64, quest: &CharacterQuest) -> bool {
+    quest.deadline_micros != 0 && quest.is_active() && now_micros >= quest.deadline_micros
 }
 
 crate::game_tick_pass!(fn quest_timer_pass(ctx) {
@@ -1453,7 +1453,7 @@ crate::game_tick_pass!(fn quest_timer_pass(ctx) {
     let log = ctx.db.game_character_quest();
     let expired: Vec<CharacterQuest> = log
 .iter()
-.filter(|q| is_expired(now, q.deadline_micros, q.rewarded, q.failed))
+.filter(|q| is_expired(now, q))
 .filter(|q| !crate::transfer::is_in_transit(ctx, q.character_guid))
 .collect();
     for mut cq in expired {
@@ -1558,7 +1558,7 @@ pub(crate) fn debug_force_expire(
 ) -> Result<(), String> {
     let mut cq = character_quest_row(ctx, character_guid, quest_entry)
         .ok_or_else(|| "you are not on that quest".to_string())?;
-    if cq.rewarded || cq.failed {
+    if !cq.is_active() {
         return Err("quest is already terminal".to_string());
     }
     cq.failed = true;

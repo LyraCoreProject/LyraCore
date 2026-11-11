@@ -465,12 +465,27 @@ pub(crate) fn bump_dr_level(
     }
 }
 
+/// Opens the window only once no Aura of `category` remains on the target, as vmangos
+/// `Unit::ApplyDiminishingAura` does.
 pub(crate) fn dr_window_on_removal(
     ctx: &ReducerContext,
     target_guid: u64,
     category: u8,
     removed_at_micros: i64,
 ) {
+    let held = ctx
+        .db
+        .game_aura()
+        .by_target()
+        .filter(&target_guid)
+        .any(|aura| {
+            aura.eff_kind == A_CONTROL
+                && aura.eff_p0_kind == P_MECHANIC
+                && dr_category_for_mechanic(aura.eff_p0) == Some(category)
+        });
+    if held {
+        return;
+    }
     let table = ctx.db.game_dr_state();
     if let Some(mut row) = table
         .by_target()

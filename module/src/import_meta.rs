@@ -12,9 +12,6 @@ pub struct ImportMeta {
     pub imported_at: Timestamp,
 }
 
-/// The family the importer stamps for its DBC catalogues (importer/src/world_import.rs).
-pub(crate) const DBC_FAMILY: &str = "dbc";
-
 pub(crate) fn is_imported(ctx: &ReducerContext, family: &str) -> bool {
     ctx.db
         .game_import_meta()

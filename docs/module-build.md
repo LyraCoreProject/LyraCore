@@ -15,7 +15,9 @@ as one more Package module.
 - `CHARACTER_OWNED_TABLES` names the tables in the Character transport manifest.
 - `CHARACTER_OWNED_TRANSFERS` pairs each table name with its row mover.
 - `CHARACTER_OWNED_TRANSFER_NAMES` exposes those names without function pointers for native tests.
-- `CHARACTER_OWNED_NOT_TRANSPORTED` names the deliberate exclusions whose reasons the tests check.
+- `CHARACTER_OWNED_NOT_TRANSPORTED` names the deliberate exclusions. No test restates the list or
+  checks a reason: the `character_owned!(not_transported, ..)` marker in the declaring file is the
+  one statement of each decision, with a comment beside it when the reason is not obvious.
 
 A delete marker must use `sweep_delete_<table_accessor>`; a transport marker must use
 `sweep_transfer_<table_accessor>`. Prefix stripping derives the table names, keeping the
@@ -37,7 +39,14 @@ from the crate root. The table needs a `#[primary_key]` field and the default `s
 column. A table that schedules from `ctx.timestamp` instead of `time::schedule_time` or
 `time::schedule_interval` opts out with `crate::virtual_clock_exempt!(table_accessor);` in its
 declaring file. A marker that names no scheduled table in that file fails the build. Packages
-cannot reach the crate-private Realm Clock, so their scheduled tables are not registered.
+cannot reach the crate-private Realm Clock, so their scheduled tables are not registered. Each arm
+sits under the `cfg` gates of its struct and of its module path, as in the table catalog below.
+
+Schedules due at the same virtual instant fire in arm order, and conformance traces observe that
+order. `SAME_INSTANT_FIRING_ORDER` in `build.rs` fixes it for the tables that existed when the
+registry became generated; a table it does not list fires after them, ordered by accessor. Adding a
+scheduled table therefore needs no edit there. Removing or reordering a listed entry changes
+recorded traces.
 
 Every `#[table]` declaration under `module/src/` generates one line of `table_catalog.rs`, which
 `module/src/tables.rs` includes: a re-export of the row type and its accessors from the declaring

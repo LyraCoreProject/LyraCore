@@ -563,7 +563,6 @@ fn finish_native(
             "instance entry: {} admitted to instance {instance_id} but teleport refused: {refusal}",
             pending.guid
         );
-        return;
     }
     if world == Some(ctx.database_identity()) && actor.map_id == decoded.map {
         arrived(ctx, pending.guid, decoded.map, instance_id);

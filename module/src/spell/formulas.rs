@@ -87,6 +87,10 @@ pub(crate) fn school_index(school_mask: u8) -> u8 {
     }
 }
 
+/// Spell.dbc `DispelType` values.
+pub(crate) const DISPEL_MAGIC: u8 = 1;
+pub(crate) const DISPEL_POISON: u8 = 4;
+
 pub(crate) fn dispel_category_matches(dispel_cat: u8, aura_cat: u8) -> bool {
     dispel_cat == 0 || dispel_cat == aura_cat
 }
@@ -104,13 +108,12 @@ pub(crate) fn apply_damage_pct(dmg: u32, pct: i32) -> u32 {
 pub(crate) fn rederive_pool(
     login_max: u32,
     base_attr: u32,
-    bonus: i32,
+    effective_attr: u32,
     per_point: fn(u32) -> u32,
 ) -> u32 {
-    let effective = (base_attr as i64 + bonus as i64).max(0) as u32;
     let from_base = per_point(base_attr);
-    let from_eff = per_point(effective);
-    // Signed arithmetic preserves a zero-bonus no-op even when login_max is below from_base.
+    let from_eff = per_point(effective_attr);
+    // Signed arithmetic keeps an unchanged attribute a no-op even when login_max is below from_base.
     (i128::from(login_max) - i128::from(from_base) + i128::from(from_eff))
         .clamp(0, i128::from(u32::MAX)) as u32
 }

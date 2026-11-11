@@ -27,7 +27,7 @@ fn melee_pass(ctx: &ReducerContext) {
 fn leash_pass(ctx: &ReducerContext) {
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
-    let now_ms = crate::creatures::tick::move_clock_ms(ctx);
+    let now_ms = crate::time::now_ms_u32(ctx);
 
     let mut evaders: Vec<u64> = Vec::new();
     let mut seeds: Vec<(u64, f32, f32)> = Vec::new();
@@ -213,7 +213,7 @@ pub(crate) fn offhand_swing_range(
 }
 
 fn resolve_swing(ctx: &ReducerContext) {
-    let now_ms = crate::creatures::tick::move_clock_ms(ctx);
+    let now_ms = crate::time::now_ms_u32(ctx);
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
 

@@ -708,9 +708,9 @@ pub(crate) fn white_swing_table(
                 && attacker.next_swing_spell == 0
                 && equipped_offhand_weapon_damage(ctx, attacker.guid).is_some()
             {
-                2400
+                DUAL_WIELD_MISS_BP
             } else {
-                500
+                BASE_MISS_BP
             },
             dodge,
             parry,
@@ -729,7 +729,7 @@ pub(crate) fn white_swing_table(
     if target_is_character && !facing {
         table.dodge = 0;
     }
-    if target.unit_bytes_1 & 0xff != 0 {
+    if target.unit_bytes_1 & crate::world::STAND_STATE_MASK != crate::world::STAND_STATE_STAND {
         table.miss = 0;
     }
     table

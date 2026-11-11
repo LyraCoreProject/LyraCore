@@ -486,8 +486,8 @@ impl AuraProjections {
     }
 }
 
-/// Removes every Aura in `auras`, opens each removed control's diminishing-returns window and
-/// refreshes each touched unit's derived columns once.
+/// Removes every Aura in `auras`, opens the diminishing-returns window of each control category
+/// that no longer holds the unit, and refreshes each touched unit's derived columns once.
 pub(crate) fn shed_auras(ctx: &ReducerContext, auras: Vec<Aura>) {
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let mut touched = std::collections::BTreeMap::<u64, AuraProjections>::new();

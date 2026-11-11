@@ -181,14 +181,14 @@ fn rederive_pool_is_noop_at_zero_and_curve_exact() {
     use crate::stats::{hp_from_stamina, mana_from_intellect};
     for base in [0u32, 5, 20, 22, 100] {
         let login = 60;
-        assert_eq!(rederive_pool(login, base, 0, hp_from_stamina), login);
+        assert_eq!(rederive_pool(login, base, base, hp_from_stamina), login);
     }
-    assert_eq!(rederive_pool(60, 22, 5, hp_from_stamina), 110);
-    assert_eq!(rederive_pool(60, 22, 5, hp_from_stamina) - 60, 5 * 10);
-    assert_eq!(rederive_pool(60, 22, -5, hp_from_stamina), 37);
-    assert_eq!(rederive_pool(100, 3, -10, hp_from_stamina), 97);
-    assert_eq!(rederive_pool(120, 20, 10, mana_from_intellect), 270);
-    assert_eq!(rederive_pool(120, 20, 0, mana_from_intellect), 120);
+    assert_eq!(rederive_pool(60, 22, 27, hp_from_stamina), 110);
+    assert_eq!(rederive_pool(60, 22, 27, hp_from_stamina) - 60, 5 * 10);
+    assert_eq!(rederive_pool(60, 22, 17, hp_from_stamina), 37);
+    assert_eq!(rederive_pool(100, 3, 0, hp_from_stamina), 97);
+    assert_eq!(rederive_pool(120, 20, 30, mana_from_intellect), 270);
+    assert_eq!(rederive_pool(120, 20, 20, mana_from_intellect), 120);
 }
 
 #[test]

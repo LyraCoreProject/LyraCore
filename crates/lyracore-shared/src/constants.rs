@@ -259,6 +259,14 @@ pub mod gossip_condition {
     pub const QUEST_NONE: u32 = 8;
 }
 
+/// `game_realm.realm_type` values, as vmangos `RealmType` numbers them.
+pub mod realm_type {
+    pub const PVP: u32 = 1;
+    pub const RP: u32 = 6;
+    pub const RP_PVP: u32 = 8;
+    pub const FFA_PVP: u32 = 16;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -317,6 +325,20 @@ mod tests {
                 BANKER
             ),
             (1, 2, 3, 4, 5, 6, 8, 9)
+        );
+    }
+
+    // Imported `game_gossip_condition.kind` rows store these values.
+    #[test]
+    fn gossip_condition_keeps_existing_persisted_values() {
+        assert_eq!(
+            (
+                gossip_condition::NONE,
+                gossip_condition::QUEST_TAKEN,
+                gossip_condition::QUEST_REWARDED,
+                gossip_condition::NEVER
+            ),
+            (0, 1, 2, 3),
         );
     }
 }

@@ -175,7 +175,7 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
     let findings = findings.into_iter().map(|(code, keys)| serde_json::json!({"code":code,"classification":"unsupported","occurrences":keys.len()})).collect::<Vec<_>>();
     Ok(DumpPlan {
         stmts,
-        stamps: vec![("trainers", rows.len() as u64)],
+        stamps: vec![(lyracore_package_delta::TRAINER_FAMILY, rows.len() as u64)],
         world_source_manifest: Some(serde_json::to_string_pretty(
             &serde_json::json!({"format_version":1,"source":"vmangos","family":"trainers","patch":crate::source_selection::PATCH,"client_build":crate::source_selection::CLIENT_BUILD,"findings":findings}),
         )?),

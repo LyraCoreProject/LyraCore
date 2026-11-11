@@ -1,7 +1,7 @@
 use spacetimedb::ReducerContext;
 
 use super::{refuse, LootRefusal, LootSource};
-use crate::actor::ActionRefusal;
+use crate::actor::{ActionRefusal, ActionRefusalKind};
 use crate::game_corpse_loot;
 use crate::game_item_template;
 
@@ -47,7 +47,14 @@ pub(crate) fn take_item(
     let mut plan = crate::items::ItemStoragePlan::read(ctx, looter_guid, looter.owner_identity);
     plan.grant(ctx, &tmpl, count, false, Some(row.random_property_id))
         .and_then(|()| plan.commit(ctx))
-        .map_err(|cause| refuse(LootRefusal::InventoryFull, &cause.to_string()))?;
+        .map_err(|cause| {
+            let refusal = if cause.kind == ActionRefusalKind::InventoryFull {
+                LootRefusal::InventoryFull
+            } else {
+                LootRefusal::StorageRefused
+            };
+            refuse(refusal, &cause.detail)
+        })?;
     loot.id().delete(row.id);
     if row.quest_only && row.reserved_for == 0 {
         let clone = if source_is_corpse {

@@ -54,6 +54,7 @@ fn refusal(target: u64, refusal: LootRefusal) -> Rollback {
         | LootRefusal::NothingToLoot
         | LootRefusal::ItemUnavailable
         | LootRefusal::InventoryFull
+        | LootRefusal::StorageRefused
         | LootRefusal::RollUnavailable
         | LootRefusal::NotMasterLooter
         | LootRefusal::RecipientUnavailable

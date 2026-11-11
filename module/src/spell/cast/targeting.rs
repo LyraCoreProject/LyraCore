@@ -1710,8 +1710,8 @@ fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
         return;
     }
     // The spline animates the client; combat needs the authoritative landing position immediately.
-    let now_ms = crate::creatures::tick::move_clock_ms(ctx);
-    let clock = crate::world::MoveClock::realm(ctx, caster_guid, now_ms);
+    let now_ms = crate::time::now_ms_u32(ctx);
+    let clock = crate::world::MoveClock::realm(ctx, &c, now_ms);
     c.place(nx, ny, nz, clock).unexplored();
     c.orientation = facing;
     c.update(ctx);

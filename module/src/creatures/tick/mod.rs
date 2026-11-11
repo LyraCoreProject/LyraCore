@@ -14,7 +14,7 @@ mod lifecycle;
 
 pub(crate) use lifecycle::{pass_decay, pass_gameobject_respawn, pass_respawn};
 
-pub(crate) use lifecycle::despawn_creature_entity;
+pub(crate) use lifecycle::{despawn_creature_entity, CREATURE_CORPSE_DECAY_MICROS};
 
 #[table(
     accessor = game_creature_spline,
@@ -213,7 +213,7 @@ pub(crate) fn active_cell_creatures(
     let entities = ctx.db.game_world_entity();
     let consents = ctx.db.game_sessionless_action_consent();
     let package_controlled = |guid: u64| consents.character_guid().find(guid).is_some();
-    let now_ms = move_clock_ms(ctx);
+    let now_ms = crate::time::now_ms_u32(ctx);
     let radius = active_cell_radius(ctx);
     let mut awake = std::collections::HashSet::new();
     let mut pets: Vec<u64> = Vec::new();
@@ -356,11 +356,6 @@ pub struct CreaturePathPoint {
     pub z: f32,
 }
 
-/// The Realm Clock in milliseconds, truncated to the u32 width of the creature move clock columns.
-pub(crate) fn move_clock_ms(ctx: &ReducerContext) -> u32 {
-    crate::time::now_ms(ctx) as u32
-}
-
 pub(crate) fn advance_needs_persist(
     stored: &WorldEntity,
     advanced: &WorldEntity,
@@ -405,7 +400,7 @@ pub(crate) fn rout_eligible(ctx: &ReducerContext, c: &WorldEntity) -> bool {
 }
 
 pub(crate) fn creature_is_routing(ctx: &ReducerContext, c: &WorldEntity) -> bool {
-    let now_ms = move_clock_ms(ctx);
+    let now_ms = crate::time::now_ms_u32(ctx);
     ctx.db
         .game_melee_attack()
         .attacker_guid()

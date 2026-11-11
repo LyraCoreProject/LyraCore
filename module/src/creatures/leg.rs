@@ -1,6 +1,6 @@
 use spacetimedb::ReducerContext;
 
-use super::tick::{game_creature_spline, move_clock_ms, CreaturePath, CreaturePathPoint};
+use super::tick::{game_creature_spline, CreaturePath, CreaturePathPoint};
 use crate::world::MoveClock;
 use crate::{game_world_entity, CreatureSpline, WorldEntity};
 
@@ -70,7 +70,7 @@ pub(crate) fn begin(ctx: &ReducerContext, mover: &mut WorldEntity, course: Cours
         );
         return false;
     }
-    let now_ms = move_clock_ms(ctx);
+    let now_ms = crate::time::now_ms_u32(ctx);
     let facing_point = course
         .path
         .as_ref()
@@ -87,7 +87,7 @@ pub(crate) fn begin(ctx: &ReducerContext, mover: &mut WorldEntity, course: Cours
     if facing_point != (mover.x, mover.y) {
         mover.orientation = (facing_point.1 - mover.y).atan2(facing_point.0 - mover.x);
     }
-    if let MoveClock::At(ms) = MoveClock::realm(ctx, mover.guid, now_ms) {
+    if let MoveClock::At(ms) = MoveClock::realm(ctx, mover, now_ms) {
         mover.last_move_ms = ms;
     }
     if course.held_until_landed {
@@ -277,7 +277,7 @@ impl Origin {
     }
 
     fn row(&self, ctx: &ReducerContext, to: (f32, f32, f32), dur_ms: u32) -> CreatureSpline {
-        let now_ms = move_clock_ms(ctx);
+        let now_ms = crate::time::now_ms_u32(ctx);
         let spline_id = ctx
             .db
             .game_creature_spline()

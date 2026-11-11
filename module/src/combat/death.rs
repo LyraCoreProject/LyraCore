@@ -6,7 +6,6 @@ use crate::{
 };
 
 pub(crate) const RESPAWN_MICROS: i64 = 15_000_000;
-pub(crate) const CORPSE_DECAY_MICROS: i64 = 60_000_000;
 
 pub(crate) const DRAIN_SOUL_SPELL_ID: u32 = 1120;
 pub(crate) const SOUL_SHARD_ENTRY: u32 = 6265;
@@ -82,13 +81,12 @@ fn kill_creature_with_attribution(
         let guardian = crate::creatures::guardian::die(ctx, target_guid);
         crate::creatures::begin_death_dispatch(ctx, target_guid, killer);
         crate::creatures::on_pet_death(ctx, target_guid);
-        if guardian {
-            disengage(ctx, target_guid);
-            crate::creatures::clear_live_pet_kind(ctx, target_guid);
-            crate::creatures::distraction::clear(ctx, target_guid);
-        } else {
-            crate::creatures::despawn_creature_entity(ctx, target_guid);
+        disengage(ctx, target_guid);
+        if !guardian {
+            crate::WorldEntity::delete(ctx, target_guid);
         }
+        crate::creatures::clear_live_pet_kind(ctx, target_guid);
+        crate::creatures::distraction::clear(ctx, target_guid);
         crate::hooks::fire_on_death(
             ctx,
             &crate::hooks::DeathPayload {
@@ -98,7 +96,12 @@ fn kill_creature_with_attribution(
             },
         );
         crate::creatures::finish_death_dispatch(ctx, target_guid, killer);
-        crate::loot::tag::clear(ctx, target_guid);
+        if guardian {
+            crate::loot::tag::clear(ctx, target_guid);
+        } else {
+            // After the hooks: the teardown deletes the summon origin `OnSummonedDeath` reads.
+            crate::creatures::despawn_creature_entity(ctx, target_guid);
+        }
         return true;
     }
     crate::creatures::leg::stop(ctx, &mut target);
@@ -141,7 +144,9 @@ fn kill_creature_with_attribution(
     let spawns = ctx.db.game_creature_spawn();
     if let Some(mut spawn) = spawns.guid().find(target_guid) {
         spawn.despawn_at = crate::time::now(ctx)
-            .checked_add(TimeDuration::from_micros(CORPSE_DECAY_MICROS))
+            .checked_add(TimeDuration::from_micros(
+                crate::creatures::CREATURE_CORPSE_DECAY_MICROS,
+            ))
             .unwrap_or(crate::time::now(ctx));
         spawns.guid().update(spawn);
     }

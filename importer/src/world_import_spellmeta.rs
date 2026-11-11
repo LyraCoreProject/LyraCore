@@ -103,7 +103,10 @@ pub(super) fn plan(source: &impl TableRows) -> Result<DumpPlan> {
         push_insert(&mut statements,table,columns,&rows);
     }
     Ok(DumpPlan {
-        stamps: vec![("spellmeta", insert_row_count(&statements))],
+        stamps: vec![(
+            lyracore_package_delta::SPELLMETA_FAMILY,
+            insert_row_count(&statements),
+        )],
         stmts: statements,
         world_source_manifest: Some(serde_json::to_string_pretty(
             &serde_json::json!({"format_version":1,"source":"vmangos","family":"spellmeta","patch":10,"client_build":5875,"findings":[

@@ -443,14 +443,22 @@ pub(crate) fn loot_flags(ctx: &ReducerContext, entity: &WorldEntity) {
     {
         if super::has_world_session(ctx, grant.viewer_guid) {
             let flags = super::loot::dynamic_flags(ctx, entity, grant.viewer_guid);
-            super::send_to_character(
-                ctx,
-                grant.viewer_guid,
-                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                    codec::build_dynamic_flags_values(entity.guid, flags),
-                )),
-                super::EncodeFailure::Log,
-            );
+            match lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                Box::new(codec::build_dynamic_flags_values(entity.guid, flags)),
+            )) {
+                Ok(packet) => {
+                    super::send_raw_to_character(
+                        ctx,
+                        grant.viewer_guid,
+                        packet.opcode,
+                        packet.body,
+                    );
+                }
+                Err(error) => spacetimedb::log::error!(
+                    "native Loot Tag values failed for {}: {error}",
+                    entity.guid
+                ),
+            }
         }
     }
 }

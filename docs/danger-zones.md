@@ -78,9 +78,12 @@ including a restored-copy rehearsal and the order of world import before Package
 ### After every publish
 
 Call `debug_repair_after_publish` as the Operator on the Shard. `init` does not run again on an
-auto-migrating publish, so this reducer arms the interval schedules `init` arms (the instance and
-Gateway lease reapers are re-armed, the others are created only when missing), re-freezes Proc
-profiles, restores missing Auction expiries, re-tags legacy auction mail as Auction Mail before the
+auto-migrating publish, so this reducer arms the interval schedules `init` arms
+(`arm_interval_schedules` in `module/src/seed.rs`). It deletes and re-creates the instance reaper,
+the Gateway lease reaper, the weather schedule, the Meeting Stone reminder and the catch-all creature
+tick, which discards a cadence set with `debug_rearm_creature_tick`. It creates the event reaper,
+melee, pet care, aura, breath, duel, ground area and motion publish schedules only when missing, and
+a Transport crossing for each Transport without one. It also re-freezes Proc profiles, restores missing Auction expiries, re-tags legacy auction mail as Auction Mail before the
 Mail Timer pass (so a legacy "Auction won" is deleted, not returned), arms a Mail Timer for each
 Mail that has none, moves each legacy Character GM level onto its Account and re-seeds the curated
 content and fixtures `init` seeds. `packages apply` calls it for each Shard it publishes.

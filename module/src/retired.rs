@@ -1,4 +1,4 @@
-// Tables nothing writes. A publish that removes a table aborts, so their declarations stay.
+// Tables nothing writes; removing one aborts publish (docs/danger-zones.md).
 use spacetimedb::{table, Identity, Timestamp};
 
 #[table(accessor = game_gateway_lease)]

@@ -24,6 +24,9 @@ pub const GAMEOBJECT_FAMILY: &str = "gameobjects";
 
 pub const CREATURE_AI_FAMILY: &str = "creature-ai";
 
+/// The family the importer stamps for its DBC catalogues.
+pub const DBC_FAMILY: &str = "dbc";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Table {
     Spell,
