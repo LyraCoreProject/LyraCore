@@ -742,6 +742,39 @@ fn energizes_pool(eff_p0_kind: u8, eff_p0: i32, power_type: u8) -> bool {
     eff_p0_kind != P_POWER_TYPE || eff_p0 == i32::from(power_type)
 }
 
+#[cfg(feature = "conformance_test_fixture")]
+#[reducer]
+pub fn debug_stage_virtual_spell_impact(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    target_guid: u64,
+    damage: i32,
+    delay_micros: i64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    if !crate::time::is_virtual(ctx) || delay_micros <= 0 {
+        return Err("spell impact requires a running virtual clock and positive delay".into());
+    }
+    let due = crate::time::now(ctx)
+        .checked_add(TimeDuration::from_micros(delay_micros))
+        .ok_or("spell impact due time overflows")?;
+    ctx.db
+        .game_pending_spell_impact()
+        .insert(PendingSpellImpact {
+            scheduled_id: 0,
+            scheduled_at: crate::time::schedule_time(ctx, due),
+            caster_guid,
+            target_guid,
+            spell_id: 6136,
+            school_index: 0,
+            is_crit: false,
+            resisted: 0,
+            after_resist: damage,
+            triggered: false,
+        });
+    Ok(())
+}
+
 #[cfg(test)]
 mod energize_tests {
     use super::*;

@@ -780,6 +780,10 @@ mail-escrow, session and native logon reapers, the native admission and member-s
 Transport carry schedules are armed by their own entry points, lazily and idempotently. Scheduled
 reducers check `ctx.sender() == ctx.database_identity()`, so nothing outside can drive them.
 
+In a conformance build the virtual clock drives every scheduled table that is not marked
+`virtual_clock_exempt!`. The build generates that registry; see
+[Module build](./module-build.md).
+
 `init` does not run again on an auto-migrating publish, so a schedule row can go stale.
 `debug_repair_after_publish` re-arms the interval schedules except the event reaper and melee
 schedules. Call it after every publish; see

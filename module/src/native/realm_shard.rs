@@ -646,6 +646,7 @@ pub struct PendingSelection {
     /// The World Shard of each entry in `bodies`.
     pub answered: Vec<Identity>,
 }
+crate::virtual_clock_exempt!(game_pending_selection);
 
 pub(super) fn cancel_selection(ctx: &ReducerContext, connection_id: ConnectionId) {
     ctx.db

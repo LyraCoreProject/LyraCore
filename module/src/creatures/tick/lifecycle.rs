@@ -90,7 +90,7 @@ pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
                     now_ts
                 }
             };
-            spawn.despawn_at = crate::creatures::timer_never(ctx);
+            spawn.despawn_at = crate::time::timer_never(ctx);
             spawns.guid().update(spawn);
         }
     }
@@ -118,17 +118,17 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
             && lyracore_shared::instance::has_instance_population(spawn.map_id))
             || entities.guid().find(guid).is_some()
         {
-            spawn.respawn_at = crate::creatures::timer_never(ctx);
+            spawn.respawn_at = crate::time::timer_never(ctx);
             spawns.guid().update(spawn);
             continue;
         }
         let Some(entry) = crate::creatures::population::entry_for_spawn(ctx, &spawn) else {
-            spawn.respawn_at = crate::creatures::timer_never(ctx);
+            spawn.respawn_at = crate::time::timer_never(ctx);
             spawns.guid().update(spawn);
             continue;
         };
         if spawn.source_guid == 0 && entry != spawn.entry {
-            spawn.respawn_at = crate::creatures::timer_never(ctx);
+            spawn.respawn_at = crate::time::timer_never(ctx);
             spawns.guid().update(spawn.clone());
             spawn.source_guid = guid;
             spawn.guid = packed_creature_spawn_guid(entry, guid as u32);
@@ -149,7 +149,7 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
         crate::creatures::cancel_relay_runs_for_new_life(ctx, guid);
         // Advance and disarm the spawn before the new entity exposes this life.
         if let Some(mut s) = spawns.guid().find(guid) {
-            s.respawn_at = crate::creatures::timer_never(ctx);
+            s.respawn_at = crate::time::timer_never(ctx);
             s.life_seq = s.life_seq.saturating_add(1);
             spawns.guid().update(s);
         }

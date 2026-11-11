@@ -1,7 +1,7 @@
 use lyracore_protocol::codec;
 
 mod addon;
-mod admission;
+pub(crate) mod admission;
 mod auction;
 mod aura;
 mod book;
@@ -42,11 +42,11 @@ pub(crate) use instance_shard::{
     sweep_delete_game_instance_entry, sweep_transfer_game_instance_entry,
 };
 mod inventory;
-mod logon;
+pub(crate) mod logon;
 mod loot;
 mod mail;
 mod meeting_stone;
-mod member_stats;
+pub(crate) mod member_stats;
 mod motion_permit;
 mod object;
 mod package_actor;
@@ -74,8 +74,6 @@ mod view;
 mod visibility;
 mod world;
 pub(crate) use addon::appeared as addon_message;
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use admission::{game_native_admission_tick, native_admission_tick};
 pub(crate) use auction::notice as auction_notice;
 pub(crate) use aura::changed as aura_changed;
 pub(crate) use book::{
@@ -101,11 +99,7 @@ pub(crate) use inventory::changed as item_changed;
 pub(crate) use inventory::item_equip_cooldown;
 pub(crate) use inventory::temporary_enchantment_changed;
 pub(crate) use inventory::{item_purchase_started, item_purchased, item_restored, item_sold};
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use logon::{game_native_logon_reaper, native_reap_logon_addresses};
 pub(crate) use mail::arrived as mail_arrived;
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use member_stats::{game_native_member_stats, tick_native_member_stats};
 pub(crate) use member_stats::{
     sweep_delete_game_native_member_stats, sweep_transfer_game_native_member_stats,
 };
@@ -580,7 +574,7 @@ fn selection_reply(
         }),
         ClientOpcodeMessage::CMSG_QUERY_TIME => {
             ServerOpcodeMessage::SMSG_QUERY_TIME_RESPONSE(SMSG_QUERY_TIME_RESPONSE {
-                time: (crate::time::now(ctx).to_micros_since_unix_epoch() / 1_000_000) as u32,
+                time: crate::time::now_secs(ctx) as u32,
             })
         }
         ClientOpcodeMessage::CMSG_CHAR_ENUM => {

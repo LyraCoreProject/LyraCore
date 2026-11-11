@@ -796,6 +796,7 @@ pub struct GuildProjectionRetry {
     pub scheduled_at: ScheduleAt,
     pub call: WorldGuildUpdate,
 }
+crate::virtual_clock_exempt!(game_guild_projection_retry);
 
 #[reducer(on_result(game_world_guild_update))]
 pub fn world_guild_update_answered(

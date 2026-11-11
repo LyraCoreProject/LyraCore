@@ -205,6 +205,7 @@ pub struct RealmQuery {
     pub remaining: Vec<Identity>,
     pub answers: Vec<WorldAnswer>,
 }
+crate::virtual_clock_exempt!(game_realm_query);
 
 #[derive(SpacetimeType, Clone)]
 pub struct WorldAnswer {
@@ -551,6 +552,7 @@ pub struct RealmDelivery {
     pub scheduled_at: ScheduleAt,
     pub delivery: Delivery,
 }
+crate::virtual_clock_exempt!(game_realm_delivery);
 
 #[table(accessor = game_world_delivery, outbox(remote::idc_world_delivery))]
 pub struct WorldDelivery {
@@ -571,6 +573,7 @@ pub struct RealmDeliveryRetry {
     pub scheduled_at: ScheduleAt,
     pub delivery_id: u64,
 }
+crate::virtual_clock_exempt!(game_realm_delivery_retry);
 
 pub(super) fn deliver(
     ctx: &ReducerContext,

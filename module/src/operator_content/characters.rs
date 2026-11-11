@@ -69,7 +69,7 @@ pub fn operator_teleport_character(
         if entity.dead {
             return Err("character is dead".into());
         }
-        let now_ms = crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1_000;
+        let now_ms = crate::time::now_ms(ctx);
         if entity.combat_active || entity.combat_until_ms > now_ms {
             return Err("character is in combat".into());
         }

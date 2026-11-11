@@ -522,7 +522,7 @@ pub(crate) fn spawn_wave(
                     u32::MAX as i64 * 1_000_000,
                 ))
                 .unwrap_or(crate::time::now(ctx)),
-            despawn_at: crate::creatures::timer_never(ctx),
+            despawn_at: crate::time::timer_never(ctx),
             movement_type: crate::creatures::MOVEMENT_IDLE,
             respawn_secs: u32::MAX,
             life_seq: 0,
@@ -627,7 +627,7 @@ pub(crate) fn move_to_point(
         (e.grid_x, e.grid_y),
         None,
     );
-    e.last_move_ms = crate::creatures::tick::now_ms(ctx);
+    e.last_move_ms = crate::creatures::tick::move_clock_ms(ctx);
     e.update(ctx);
     Ok(())
 }

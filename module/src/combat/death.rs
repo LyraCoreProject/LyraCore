@@ -272,8 +272,7 @@ fn kill_creature_with_attribution(
     if let Some(killer_guid) = killer {
         if !is_engaged(ctx, killer_guid) {
             if let Some(mut k) = entities.guid().find(killer_guid) {
-                k.combat_until_ms =
-                    (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+                k.combat_until_ms = crate::time::now_ms(ctx);
                 k.update(ctx);
             }
         }
@@ -411,7 +410,7 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     victim.health = 0;
     victim.dead = true;
     victim.next_swing_spell = 0;
-    victim.combat_until_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+    victim.combat_until_ms = crate::time::now_ms(ctx);
     victim.update(ctx);
     let killer = (killer_guid != 0).then_some(killer_guid);
     crate::creatures::begin_death_dispatch(ctx, victim_guid, killer);

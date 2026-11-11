@@ -241,7 +241,7 @@ pub fn debug_normalize_spawn_timers(ctx: &ReducerContext, limit: u32) -> Result<
     crate::helpers::require_operator(ctx)?;
     let spawns = ctx.db.game_creature_spawn();
     let entities = ctx.db.game_world_entity();
-    let never = timer_never(ctx);
+    let never = crate::time::timer_never(ctx);
     let cap = if limit == 0 { u32::MAX } else { limit } as usize;
 
     let mut changed = 0usize;
@@ -273,14 +273,6 @@ pub fn debug_normalize_spawn_timers(ctx: &ReducerContext, limit: u32) -> Result<
          re-run until it reports 0"
     );
     Ok(())
-}
-
-pub(crate) fn timer_never(ctx: &spacetimedb::ReducerContext) -> spacetimedb::Timestamp {
-    crate::time::now(ctx)
-        .checked_add(spacetimedb::TimeDuration::from_micros(
-            u32::MAX as i64 * 1_000_000,
-        ))
-        .unwrap_or(crate::time::now(ctx))
 }
 
 #[table(accessor = game_creature_spawn_map, public)]
@@ -797,11 +789,11 @@ fn load_spawn_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
             z: pf32(f[5])?,
             orientation: pf32(f[6])?,
             respawn_at: if lyracore_shared::instance::has_instance_population(map_id) {
-                timer_never(ctx)
+                crate::time::timer_never(ctx)
             } else {
                 now
             },
-            despawn_at: timer_never(ctx),
+            despawn_at: crate::time::timer_never(ctx),
             movement_type: pu8(f[7])?,
             respawn_secs: if f.len() == 9 { pu32(f[8])? } else { 0 },
             life_seq: 0,

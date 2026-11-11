@@ -84,6 +84,7 @@ pub struct GuildTransactionRetry {
     pub scheduled_at: ScheduleAt,
     pub guid: u64,
 }
+crate::virtual_clock_exempt!(game_guild_transaction_retry);
 
 pub(crate) fn pending(ctx: &ReducerContext, guid: u64) -> bool {
     ctx.db.game_guild_transaction().guid().find(guid).is_some()

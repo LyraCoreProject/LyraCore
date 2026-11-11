@@ -87,6 +87,7 @@ pub struct RelocationRetry {
     pub scheduled_at: ScheduleAt,
     pub call: RelocationDelivery,
 }
+crate::virtual_clock_exempt!(game_package_relocation_retry);
 
 fn send(ctx: &ReducerContext, target: Identity, message: Message) {
     ctx.db

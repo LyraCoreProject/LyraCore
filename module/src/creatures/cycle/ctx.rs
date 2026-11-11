@@ -109,10 +109,7 @@ pub(crate) fn character_arrived(ctx: &ReducerContext, guid: u64) {
     .collect();
     let mut world = CtxWorld {
         ctx,
-        regen_window: crate::combat::RegenWindow::new(
-            crate::time::now(ctx).to_micros_since_unix_epoch() as u64 / 1000,
-            0,
-        ),
+        regen_window: crate::combat::RegenWindow::new(crate::time::now_ms(ctx), 0),
         advances: Vec::new(),
         profile: false,
         chase_expansions: std::cell::Cell::new(0),
@@ -946,11 +943,7 @@ impl ThreatSink for CtxWorld<'_> {
             .collect()
     }
     fn taunted_onto(&self, guid: u64) -> Option<u64> {
-        crate::threat::forced_target(
-            self.ctx,
-            guid,
-            (crate::time::now(self.ctx).to_micros_since_unix_epoch() / 1000) as u64,
-        )
+        crate::threat::forced_target(self.ctx, guid, crate::time::now_ms(self.ctx))
     }
     fn top_threat(&self, guid: u64) -> Option<u64> {
         crate::threat::top_threat_target(self.ctx, guid)

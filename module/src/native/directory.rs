@@ -424,6 +424,7 @@ pub struct CharacterProfilesRetry {
     pub scheduled_at: ScheduleAt,
     pub call: CharacterProfiles,
 }
+crate::virtual_clock_exempt!(game_character_profiles_retry);
 
 #[reducer]
 pub fn idc_character_profiles(ctx: &ReducerContext, profiles: Vec<u8>) -> Result<(), String> {

@@ -166,7 +166,7 @@ fn next_crossing(
     transport: &Transport,
     timetable: &Timetable,
 ) -> Option<TransportCrossing> {
-    let progress_ms = path_progress_ms(transport, now_ms(ctx));
+    let progress_ms = path_progress_ms(transport, crate::time::now_ms(ctx));
     let (wait_ms, _) = timetable.next_map_change(progress_ms)?;
     Some(TransportCrossing {
         scheduled_id: 0,
@@ -204,7 +204,7 @@ pub fn cross_transport_map(ctx: &ReducerContext, fired: TransportCrossing) {
     let timetable = timetable(ctx, &transport);
     let pose = timetable
         .as_ref()
-        .map(|timetable| timetable.pose(path_progress_ms(&transport, now_ms(ctx))));
+        .map(|timetable| timetable.pose(path_progress_ms(&transport, crate::time::now_ms(ctx))));
     let next = timetable
         .as_ref()
         .and_then(|timetable| next_crossing(ctx, &transport, timetable));
@@ -264,10 +264,6 @@ fn carry_across(ctx: &ReducerContext, passenger: TransportPassenger, from_map_id
             from_map_id,
         },
     );
-}
-
-pub(crate) fn now_ms(ctx: &ReducerContext) -> u64 {
-    u64::try_from(crate::time::now(ctx).to_micros_since_unix_epoch() / 1000).unwrap_or(0)
 }
 
 pub(crate) fn find(ctx: &ReducerContext, guid: u64) -> Option<Transport> {
@@ -416,7 +412,7 @@ fn within_reach(
     mover: &WorldEntity,
     offset: [f32; 4],
 ) -> bool {
-    pose(ctx, transport, now_ms(ctx)).is_some_and(|pose| {
+    pose(ctx, transport, crate::time::now_ms(ctx)).is_some_and(|pose| {
         let [x, y, _, _] = pose.carry(offset);
         (x - mover.x).hypot(y - mover.y) <= BOARDING_REACH_YD
     })
@@ -443,7 +439,7 @@ pub(crate) fn rejoin(ctx: &ReducerContext, character_guid: u64) {
     let target = transport.as_ref().and_then(|transport| {
         Some((
             current_map(ctx, transport),
-            pose(ctx, transport, now_ms(ctx))?,
+            pose(ctx, transport, crate::time::now_ms(ctx))?,
         ))
     });
     // During a pending crossing the client already holds a self CREATE without the Transport.
@@ -490,7 +486,7 @@ pub fn carry_transport_passengers(ctx: &ReducerContext, schedule: TransportCarry
     let pose = transport.as_ref().and_then(|transport| {
         Some((
             current_map(ctx, transport),
-            pose(ctx, transport, now_ms(ctx))?,
+            pose(ctx, transport, crate::time::now_ms(ctx))?,
         ))
     });
     let Some((map_id, pose)) = pose.filter(|_| !passengers.is_empty()) else {

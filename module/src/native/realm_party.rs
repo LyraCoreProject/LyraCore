@@ -1030,6 +1030,7 @@ pub struct PartyProjectionRetry {
     pub scheduled_at: ScheduleAt,
     pub call: WorldPartyUpdate,
 }
+crate::virtual_clock_exempt!(game_party_projection_retry);
 
 #[reducer(on_result(game_world_party_update))]
 pub fn world_party_update_answered(

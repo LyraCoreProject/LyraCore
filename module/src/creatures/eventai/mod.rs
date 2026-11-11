@@ -3,7 +3,7 @@ mod fixtures;
 mod loader;
 mod model;
 mod presentation;
-mod relay;
+pub(crate) mod relay;
 mod relay_control;
 mod stored;
 mod tables;
@@ -11,11 +11,7 @@ mod tables;
 mod combat;
 mod death;
 mod edges;
-mod mobility;
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use mobility::{expire_eventai_summon, fire_eventai_forced_despawn};
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use relay::{resume_relay_arrival, resume_relay_run};
+pub(crate) mod mobility;
 pub(crate) mod movement;
 mod quest_credit;
 mod threat;

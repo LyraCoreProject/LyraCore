@@ -68,6 +68,7 @@ pub struct PackageGuildRetry {
     pub scheduled_at: ScheduleAt,
     pub call: PackageGuildDelivery,
 }
+crate::virtual_clock_exempt!(game_package_guild_retry);
 
 fn encode<T: spacetimedb::Serialize>(value: &T) -> Vec<u8> {
     bsatn::to_vec(value).expect("Package guild message encodes")

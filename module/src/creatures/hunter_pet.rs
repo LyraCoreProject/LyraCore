@@ -330,8 +330,8 @@ pub(crate) fn tame_creature(
         };
         spawn.respawn_at = crate::time::now(ctx)
             .checked_add(TimeDuration::from_micros(delay_micros))
-            .unwrap_or_else(|| super::timer_never(ctx));
-        spawn.despawn_at = super::timer_never(ctx);
+            .unwrap_or_else(|| crate::time::timer_never(ctx));
+        spawn.despawn_at = crate::time::timer_never(ctx);
         ctx.db.game_creature_spawn().guid().update(spawn);
     }
     target.guid = pet_guid;

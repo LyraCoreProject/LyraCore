@@ -29,6 +29,16 @@ Registration wrappers stop Package work after Package Teardown. `GAME_PACKAGES` 
 Packages, their tables, and their Character reads. A Package table that sets its own `name` fails
 the build, because Package Teardown addresses tables by accessor.
 
+Every `#[table(.., scheduled(REDUCER))]` declaration under `module/src/` generates one arm of
+`virtual_schedules.rs`. `module/src/time.rs` includes it in conformance builds, so the virtual clock
+captures, parks and fires the table's rows. Each arm names the table by its declaring module and
+the reducer by the module that defines `#[reducer] fn REDUCER`, so both modules must be visible
+from the crate root. The table needs a `#[primary_key]` field and the default `scheduled_at`
+column. A table that schedules from `ctx.timestamp` instead of `time::schedule_time` or
+`time::schedule_interval` opts out with `crate::virtual_clock_exempt!(table_accessor);` in its
+declaring file. A marker that names no scheduled table in that file fails the build. Packages
+cannot reach the crate-private Realm Clock, so their scheduled tables are not registered.
+
 `datascripts/runtime-scripts/events.json` supplies the event catalogue. The build uses it to
 emit `hook_dispatch.rs`, including payload aliases, each `fire_*` function and the Runtime Script
 payload fields. `module/src/hooks.rs` includes it, so callers keep the same dispatch paths.

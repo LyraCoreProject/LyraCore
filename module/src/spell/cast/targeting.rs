@@ -1713,7 +1713,7 @@ fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
     }
     let nz = crate::terrain::snap_z(ctx, caster.map_id, caster.instance_id, nx, ny, target.z);
     let duration_ms = ((dist / lyracore_shared::constants::speeds::CHARGE) * 1000.0) as u32;
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = crate::creatures::tick::move_clock_ms(ctx);
     crate::creatures::tick::emit_move_spline(
         ctx,
         caster_guid,

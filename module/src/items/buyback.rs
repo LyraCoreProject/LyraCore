@@ -152,8 +152,8 @@ pub(super) fn sell(
     if state.current_slot < BUYBACK_END - 1 {
         state.current_slot += 1;
     }
-    let elapsed = crate::time::now(ctx).to_micros_since_unix_epoch() / 1_000_000
-        - state.login_at.to_micros_since_unix_epoch() / 1_000_000;
+    let elapsed =
+        crate::time::now_secs(ctx) as i64 - state.login_at.to_micros_since_unix_epoch() / 1_000_000;
     let row = ctx.db.game_buyback_item().insert(BuybackItem {
         item_guid: item.guid,
         character_guid,

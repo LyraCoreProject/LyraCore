@@ -43,7 +43,7 @@ pub fn check_combat(ctx: &ReducerContext, schedule: CombatCheckSchedule) {
     else {
         return;
     };
-    let now_ms = crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1000;
+    let now_ms = crate::time::now_ms(ctx);
     if now_ms >= character.combat_until_ms && !is_engaged(ctx, character.guid) {
         character.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
         character.combat_until_ms = 0;
@@ -59,7 +59,7 @@ pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     if e.dead || crate::taxi::is_flying(&e) {
         return;
     }
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+    let now_ms = crate::time::now_ms(ctx);
     let already = e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0;
     if already && e.combat_until_ms > now_ms + COMBAT_DROP_MS / 2 {
         return;
@@ -179,7 +179,7 @@ pub(crate) fn engage_passive_creature(ctx: &ReducerContext, creature_guid: u64, 
 pub(crate) fn refresh_leash(ctx: &ReducerContext, guid_a: u64, guid_b: u64) {
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = crate::creatures::tick::move_clock_ms(ctx);
     for guid in [guid_a, guid_b] {
         let (Some(mut row), Some(e)) =
             (melee.attacker_guid().find(guid), entities.guid().find(guid))
@@ -855,7 +855,7 @@ pub(crate) fn apply_start_ranged_attack(
     }
     crate::mount::dismount(ctx, attacker.guid);
     // Delay the first Auto Shot by its initial wind-up; zero is the immediate-swing sentinel.
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = crate::creatures::tick::move_clock_ms(ctx);
     let ranged_delay = ranged_weapon.2;
     let first_swing_seed = now_ms
         .saturating_sub(ranged_delay.saturating_sub(RANGED_INITIAL_SHOT_MS))

@@ -1,5 +1,3 @@
-#[cfg(feature = "conformance_test_fixture")]
-use crate::spell::game_item_aura_expiry;
 use spacetimedb::{ReducerContext, ScheduleAt, TimeDuration, Timestamp};
 
 pub(crate) fn now(ctx: &ReducerContext) -> Timestamp {
@@ -8,6 +6,31 @@ pub(crate) fn now(ctx: &ReducerContext) -> Timestamp {
         return Timestamp::from_micros_since_unix_epoch(clock.now_micros);
     }
     ctx.timestamp
+}
+
+/// Realm Clock milliseconds since the Unix epoch; a pre-epoch clock reads as 0.
+pub(crate) fn now_ms(ctx: &ReducerContext) -> u64 {
+    now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1_000
+}
+
+/// Realm Clock seconds since the Unix epoch; a pre-epoch clock reads as 0.
+pub(crate) fn now_secs(ctx: &ReducerContext) -> u64 {
+    now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1_000_000
+}
+
+/// A due time far enough ahead that a timer armed with it never fires.
+pub(crate) fn timer_never(ctx: &ReducerContext) -> Timestamp {
+    now(ctx)
+        .checked_add(TimeDuration::from_micros(u32::MAX as i64 * 1_000_000))
+        .unwrap_or(now(ctx))
+}
+
+/// Keeps a scheduled table declared in the same file off the conformance virtual clock.
+/// `module/build.rs` registers every other scheduled table with it. An exempt table schedules
+/// from the host clock (`ctx.timestamp`), not through `schedule_time` or `schedule_interval`.
+#[macro_export]
+macro_rules! virtual_clock_exempt {
+    ($table:ident) => {};
 }
 
 pub(crate) fn schedule_interval(ctx: &ReducerContext, interval: TimeDuration) -> ScheduleAt {
@@ -57,16 +80,6 @@ pub(crate) fn scheduler_authorized(ctx: &ReducerContext) -> bool {
     ctx.sender() == ctx.database_identity()
 }
 
-#[cfg(feature = "conformance_test_fixture")]
-use crate::items::game_temporary_enchantment;
-#[cfg(feature = "conformance_test_fixture")]
-use crate::native::{
-    game_native_admission_tick, game_native_logon_reaper, game_native_member_stats,
-};
-#[cfg(feature = "conformance_test_fixture")]
-use crate::tables::*;
-#[cfg(feature = "conformance_test_fixture")]
-use crate::transport::{game_transport_carry_schedule, game_transport_crossing};
 #[cfg(feature = "conformance_test_fixture")]
 use spacetimedb::{reducer, table, Table};
 
@@ -159,45 +172,7 @@ fn park_at(ctx: &ReducerContext, due_micros: i64, interval_micros: i64) -> Sched
 }
 
 #[cfg(feature = "conformance_test_fixture")]
-macro_rules! schedule_tables {
-    ($macro:ident, $ctx:ident $(, $extra:ident)*) => {
-        $macro!($ctx, 0, game_motion_publish_schedule, scheduled_id, crate::motion::publish_motion $(, $extra)*);
-        $macro!($ctx, 1, game_melee_schedule, scheduled_id, crate::combat::tick_melee $(, $extra)*);
-        $macro!($ctx, 2, game_taxi_flight_schedule, scheduled_id, crate::taxi::advance_taxi_flight $(, $extra)*);
-        $macro!($ctx, 3, game_creature_move_schedule, scheduled_id, crate::creatures::tick::tick_creatures $(, $extra)*);
-        $macro!($ctx, 4, game_weather_schedule, scheduled_id, crate::weather::tick_weather $(, $extra)*);
-        $macro!($ctx, 5, game_aura_schedule, scheduled_id, crate::spell::tick_auras $(, $extra)*);
-        $macro!($ctx, 6, game_ground_area_schedule, scheduled_id, crate::spell::tick_ground_areas $(, $extra)*);
-        $macro!($ctx, 7, game_pending_cast, scheduled_id, crate::spell::fire_pending_cast $(, $extra)*);
-        $macro!($ctx, 8, game_pending_spell_impact, scheduled_id, crate::spell::fire_spell_impact $(, $extra)*);
-        $macro!($ctx, 9, game_breath_schedule, scheduled_id, crate::breath::tick_breath $(, $extra)*);
-        $macro!($ctx, 10, game_transfer_reaper_schedule, scheduled_id, crate::transfer::reap_transfers $(, $extra)*);
-        $macro!($ctx, 11, game_instance_reaper_schedule, scheduled_id, crate::instance::reap_instances $(, $extra)*);
-        $macro!($ctx, 12, game_instance_removal, scheduled_id, crate::instance::expire_instance_removal $(, $extra)*);
-        $macro!($ctx, 13, game_gateway_lease_reaper_schedule, scheduled_id, crate::gw::reap_gateway_leases $(, $extra)*);
-        $macro!($ctx, 14, game_transport_carry_schedule, scheduled_id, crate::transport::carry_transport_passengers $(, $extra)*);
-        $macro!($ctx, 15, game_transport_crossing, scheduled_id, crate::transport::cross_transport_map $(, $extra)*);
-        $macro!($ctx, 16, game_event_reaper_schedule, scheduled_id, crate::gc::reap_movement_events $(, $extra)*);
-        $macro!($ctx, 17, game_duel_schedule, scheduled_id, crate::duel::tick_duels $(, $extra)*);
-        $macro!($ctx, 18, game_mail_escrow_reaper_schedule, scheduled_id, crate::mail_escrow::reap_mail_escrows $(, $extra)*);
-        $macro!($ctx, 19, game_mail_timer, scheduled_id, crate::mail_timer::fire_mail_timer $(, $extra)*);
-        $macro!($ctx, 20, game_auction_expiry, scheduled_id, crate::auction::expire_auction $(, $extra)*);
-        $macro!($ctx, 21, game_session_reaper_schedule, scheduled_id, crate::auth::reap_sessions $(, $extra)*);
-        $macro!($ctx, 22, game_meeting_stone_reminder_schedule, scheduled_id, crate::meeting_stone::remind_queued_parties $(, $extra)*);
-        $macro!($ctx, 23, game_native_admission_tick, id, crate::native::native_admission_tick $(, $extra)*);
-        $macro!($ctx, 24, game_native_logon_reaper, id, crate::native::native_reap_logon_addresses $(, $extra)*);
-        $macro!($ctx, 25, game_native_member_stats, id, crate::native::tick_native_member_stats $(, $extra)*);
-        $macro!($ctx, 26, game_pet_care_schedule, scheduled_id, crate::creatures::tick_pet_care $(, $extra)*);
-        $macro!($ctx, 27, game_ranged_impact_schedule, scheduled_id, crate::combat::ranged_impact $(, $extra)*);
-        $macro!($ctx, 28, game_creature_ai_relay_continuation, scheduled_id, crate::creatures::resume_relay_run $(, $extra)*);
-        $macro!($ctx, 29, game_creature_ai_relay_arrival, scheduled_id, crate::creatures::resume_relay_arrival $(, $extra)*);
-        $macro!($ctx, 30, game_creature_ai_summon_expiry, scheduled_id, crate::creatures::expire_eventai_summon $(, $extra)*);
-        $macro!($ctx, 31, game_creature_ai_forced_despawn, scheduled_id, crate::creatures::fire_eventai_forced_despawn $(, $extra)*);
-        $macro!($ctx, 32, game_temporary_enchantment, scheduled_id, crate::items::expire_temporary_enchantment $(, $extra)*);
-        $macro!($ctx, 33, game_item_aura_expiry, aura_id, crate::spell::expire_item_aura $(, $extra)*);
-        $macro!($ctx, 34, game_combat_check_schedule, scheduled_id, crate::combat::check_combat $(, $extra)*);
-    };
-}
+include!(concat!(env!("OUT_DIR"), "/virtual_schedules.rs"));
 
 #[cfg(feature = "conformance_test_fixture")]
 macro_rules! capture_schedule {
@@ -247,7 +222,7 @@ macro_rules! capture_schedule {
 
 #[cfg(feature = "conformance_test_fixture")]
 fn capture_schedules(ctx: &ReducerContext, now_micros: i64, initial: bool) -> Result<(), String> {
-    schedule_tables!(capture_schedule, ctx, now_micros, initial);
+    virtual_schedules!(capture_schedule, ctx, now_micros, initial);
     Ok(())
 }
 
@@ -309,7 +284,7 @@ fn fire_schedule(
 ) -> Result<(), String> {
     let kind = (key >> 64) as u8;
     let id = key as u64;
-    schedule_tables!(fire_schedule, ctx, kind, id, interval_micros, parked_micros);
+    virtual_schedules!(fire_schedule, ctx, kind, id, interval_micros, parked_micros);
     Err(format!("unknown virtual schedule kind {kind}"))
 }
 
@@ -340,39 +315,6 @@ pub fn debug_advance_virtual_clock(ctx: &ReducerContext, delta_micros: i64) -> R
         return Err("virtual clock must advance to the next 50 ms boundary".into());
     }
     advance_virtual_clock(ctx, delta_micros)
-}
-
-#[cfg(feature = "conformance_test_fixture")]
-#[reducer]
-pub fn debug_stage_virtual_spell_impact(
-    ctx: &ReducerContext,
-    caster_guid: u64,
-    target_guid: u64,
-    damage: i32,
-    delay_micros: i64,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    if !is_virtual(ctx) || delay_micros <= 0 {
-        return Err("spell impact requires a running virtual clock and positive delay".into());
-    }
-    let due = now(ctx)
-        .checked_add(TimeDuration::from_micros(delay_micros))
-        .ok_or("spell impact due time overflows")?;
-    ctx.db
-        .game_pending_spell_impact()
-        .insert(crate::PendingSpellImpact {
-            scheduled_id: 0,
-            scheduled_at: schedule_time(ctx, due),
-            caster_guid,
-            target_guid,
-            spell_id: 6136,
-            school_index: 0,
-            is_crit: false,
-            resisted: 0,
-            after_resist: damage,
-            triggered: false,
-        });
-    Ok(())
 }
 
 #[cfg(feature = "conformance_test_fixture")]

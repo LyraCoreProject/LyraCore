@@ -84,6 +84,7 @@ pub struct PackageCreationRetry {
     pub scheduled_at: ScheduleAt,
     pub call: PackageCreationDelivery,
 }
+crate::virtual_clock_exempt!(game_package_creation_retry);
 
 fn encode<T: spacetimedb::Serialize>(value: &T) -> Vec<u8> {
     bsatn::to_vec(value).expect("Package creation message encodes")

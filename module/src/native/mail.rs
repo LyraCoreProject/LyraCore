@@ -42,9 +42,7 @@ pub(super) fn receive(
                 .collect::<Vec<_>>();
             ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(Box::new(codec::build_mail_list(
                 &mails,
-                crate::time::now(ctx)
-                    .to_micros_since_unix_epoch()
-                    .div_euclid(1_000_000),
+                crate::time::now_secs(ctx) as i64,
             )))
         }
         C::MSG_QUERY_NEXT_MAIL_TIME => ServerOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME(

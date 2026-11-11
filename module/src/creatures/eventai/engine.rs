@@ -953,10 +953,6 @@ impl<'a> DatabaseWorld<'a> {
         Self { ctx }
     }
 
-    fn now_ms(&self) -> u64 {
-        (crate::time::now(self.ctx).to_micros_since_unix_epoch() / 1000) as u64
-    }
-
     fn state_row(&self, creature_guid: u64) -> Option<CreatureAiState> {
         self.ctx
             .db
@@ -992,7 +988,7 @@ pub(super) fn unit_of(entity: &WorldEntity) -> EventAiUnit {
 
 impl EventAiWorld for DatabaseWorld<'_> {
     fn eventai_now_ms(&self) -> u64 {
-        self.now_ms()
+        crate::time::now_ms(self.ctx)
     }
 
     fn eventai_fights(&self, scope: &TickScope) -> Vec<EngagedFight> {

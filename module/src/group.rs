@@ -818,7 +818,7 @@ pub(crate) fn party_facts(
         }
     }
     let mut enemies = Vec::new();
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000).max(0) as u64;
+    let now_ms = crate::time::now_ms(ctx);
     for guid in enemy_guids {
         let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
             continue;

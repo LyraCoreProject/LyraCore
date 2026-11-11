@@ -28,7 +28,7 @@ pub struct CreatureCombatGrid {
 }
 
 pub(super) fn evade_inactive_grids(ctx: &ReducerContext) {
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+    let now_ms = crate::time::now_ms(ctx);
     let entities = ctx.db.game_world_entity();
     let melee = ctx.db.game_melee_attack();
     let candidates: BTreeSet<_> = ctx

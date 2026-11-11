@@ -64,6 +64,7 @@ pub struct InstanceEntry {
     pub guid: u64,
     pub request: Vec<u8>,
 }
+crate::virtual_clock_exempt!(game_instance_entry);
 
 crate::character_owned!(delete, fn sweep_delete_game_instance_entry(ctx, character_guid) {
     ctx.db.game_instance_entry().guid().delete(character_guid);
@@ -261,6 +262,7 @@ pub struct InstanceEntryLease {
     pub map_id: u32,
     pub expires: i64,
 }
+crate::virtual_clock_exempt!(game_instance_entry_lease);
 
 #[table(accessor = game_instance_entry_answer, outbox(remote::idc_instance_entry_answer))]
 pub struct InstanceEntryAnswer {

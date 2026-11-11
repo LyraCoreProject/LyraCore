@@ -218,7 +218,7 @@ impl CastOrigin {
 pub(crate) fn charge_spell_cost(ctx: &ReducerContext, caster: &mut WorldEntity, hdr: &Spell) {
     caster.power = caster.power.saturating_sub(hdr.cost);
     if hdr.cost > 0 && hdr.power_type == lyracore_shared::packing::power_type::MANA {
-        let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+        let now_ms = crate::time::now_ms(ctx);
         caster.mana_regen_paused_until_ms = now_ms + 5000;
     }
 }
@@ -1259,7 +1259,7 @@ fn check_cast_gate_suffix(
     }
 
     if hdr.cast_flags & (SPELL_ATTR_REQ_OVERPOWER | SPELL_ATTR_REQ_REVENGE) != 0 {
-        let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+        let now_ms = crate::time::now_ms(ctx);
         if hdr.cast_flags & SPELL_ATTR_REQ_OVERPOWER != 0
             && !crate::combat::react_window_active(caster.overpower_until_ms, now_ms)
         {

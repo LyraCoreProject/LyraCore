@@ -211,7 +211,7 @@ pub(crate) fn active_cell_creatures(
     let entities = ctx.db.game_world_entity();
     let consents = ctx.db.game_sessionless_action_consent();
     let package_controlled = |guid: u64| consents.character_guid().find(guid).is_some();
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = move_clock_ms(ctx);
     let radius = active_cell_radius(ctx);
     let mut awake = std::collections::HashSet::new();
     let mut pets: Vec<u64> = Vec::new();
@@ -503,7 +503,7 @@ pub(crate) fn emit_creature_path(
         Some(path),
     );
     mover.orientation = (points[0].1 - mover.y).atan2(points[0].0 - mover.x);
-    mover.last_move_ms = now_ms(ctx);
+    mover.last_move_ms = move_clock_ms(ctx);
     mover.update(ctx);
 }
 
@@ -596,7 +596,7 @@ pub(crate) fn stop_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity)
     let Some(previous) = place_where_rendered(ctx, mover) else {
         return;
     };
-    let spline_id = next_spline_id(now_ms(ctx), previous);
+    let spline_id = next_spline_id(move_clock_ms(ctx), previous);
     let at = (mover.x, mover.y, mover.z);
     emit_move_spline(
         ctx,
@@ -628,7 +628,7 @@ pub(crate) fn stop_facing(ctx: &ReducerContext, mover: &mut WorldEntity, point: 
         mover.guid,
         (mover.x, mover.y, mover.z),
         mover.orientation,
-        next_spline_id(now_ms(ctx), replaced),
+        next_spline_id(move_clock_ms(ctx), replaced),
         mover.map_id,
         mover.instance_id,
         (mover.grid_x, mover.grid_y),
@@ -636,7 +636,7 @@ pub(crate) fn stop_facing(ctx: &ReducerContext, mover: &mut WorldEntity, point: 
 }
 
 pub(crate) fn begin_leg(ctx: &ReducerContext, mover: &mut WorldEntity) -> u32 {
-    let now_ms = now_ms(ctx);
+    let now_ms = move_clock_ms(ctx);
     place_where_rendered(ctx, mover).map_or(now_ms, |previous| next_spline_id(now_ms, previous))
 }
 
@@ -654,8 +654,9 @@ pub(crate) fn next_spline_id(now_ms: u32, previous: u32) -> u32 {
     now_ms.max(previous.wrapping_add(1))
 }
 
-pub(crate) fn now_ms(ctx: &ReducerContext) -> u32 {
-    (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32
+/// The Realm Clock in milliseconds, truncated to the u32 width of the creature move clock columns.
+pub(crate) fn move_clock_ms(ctx: &ReducerContext) -> u32 {
+    crate::time::now_ms(ctx) as u32
 }
 
 pub(crate) fn place_stopped(mover: &mut WorldEntity, stop: super::cycle::Stop, clock: MoveClock) {
@@ -711,7 +712,7 @@ pub(crate) fn rout_eligible(ctx: &ReducerContext, c: &WorldEntity) -> bool {
 }
 
 pub(crate) fn creature_is_routing(ctx: &ReducerContext, c: &WorldEntity) -> bool {
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = move_clock_ms(ctx);
     ctx.db
         .game_melee_attack()
         .attacker_guid()

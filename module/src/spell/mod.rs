@@ -14,14 +14,12 @@ mod control;
 mod effects;
 mod math;
 pub(crate) mod proc;
-mod scheduler;
+pub(crate) mod scheduler;
 mod self_resurrect;
 pub(crate) mod source_behavior;
 pub(crate) mod spellbook;
 pub(crate) mod stacking;
-mod tables;
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use tables::{expire_item_aura, game_item_aura_expiry};
+pub(crate) mod tables;
 mod taxonomy;
 
 #[cfg(test)]

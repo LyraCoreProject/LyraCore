@@ -5,7 +5,7 @@ use lyracore_package_delta::{
     MAX_CREATURE_GUID_COMPONENT,
 };
 
-use crate::creatures::timer_never;
+use crate::time::timer_never;
 use crate::{game_creature_spawn, game_creature_template, CreatureSpawn, CreatureTemplate};
 
 use super::{as_f32, as_str, as_u32, as_u8, check_insert_is_whole, UpdateTarget};

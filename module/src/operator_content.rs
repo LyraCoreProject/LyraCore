@@ -636,11 +636,11 @@ fn place_creature(
 // An instance map's source rows stay dormant; each Instance copies them when it is created.
 fn rearm_respawn(ctx: &ReducerContext, spawn: &mut CreatureSpawn) {
     spawn.respawn_at = if lyracore_shared::instance::has_instance_population(spawn.map_id) {
-        crate::creatures::timer_never(ctx)
+        crate::time::timer_never(ctx)
     } else {
         crate::time::now(ctx)
     };
-    spawn.despawn_at = crate::creatures::timer_never(ctx);
+    spawn.despawn_at = crate::time::timer_never(ctx);
 }
 
 // Running Instances keep their copies until they reset.

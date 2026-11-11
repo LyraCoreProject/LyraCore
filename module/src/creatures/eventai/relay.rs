@@ -1409,7 +1409,7 @@ fn advance_run(ctx: &ReducerContext, run_id: u64) -> Result<(), String> {
                 run.definition_version
             )
         })?;
-    let now_ms = crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1000;
+    let now_ms = crate::time::now_ms(ctx);
     let start_ms = run.started_at.to_micros_since_unix_epoch().max(0) as u64 / 1000;
     while let Some(step) = definition.steps.get(run.next_step as usize) {
         let due_ms = start_ms.saturating_add(u64::from(step.offset_ms));
@@ -1643,7 +1643,7 @@ fn apply_leaf_for_pair(
                 ..super::EventContext::empty(
                     super::EventKind::OnSpawn,
                     guid,
-                    crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1000,
+                    crate::time::now_ms(ctx),
                 )
             };
             if super::engine::execute_instruction(
@@ -1674,7 +1674,7 @@ fn apply_leaf_for_pair(
                         super::EventKind::OnSpawn
                     },
                     guid,
-                    crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1000,
+                    crate::time::now_ms(ctx),
                 )
             };
             let result = super::combat::cast(
@@ -2020,7 +2020,7 @@ pub(crate) fn run_relay_arrival(ctx: &ReducerContext, arrival: RelayArrival) {
                     },
                     heading: None,
                 },
-                crate::world::MoveClock::At(crate::creatures::tick::now_ms(ctx)),
+                crate::world::MoveClock::At(crate::creatures::tick::move_clock_ms(ctx)),
             );
             source.update(ctx);
             ctx.db

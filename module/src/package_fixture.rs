@@ -13,7 +13,7 @@ pub(crate) use crate::combat::{
 };
 pub(crate) use crate::creatures::{
     build_creature_from_template as build_creature_entity, despawn_creature_entity,
-    insert_creature_entity, timer_never,
+    insert_creature_entity,
 };
 pub(crate) use crate::group::sync_group_mirror;
 pub(crate) use crate::items::{grant_item, remove_items};
@@ -24,6 +24,7 @@ pub(crate) use crate::spell::{
     cast_triggered, forget_spell, learn_spell, start_creature_spell, CreatureSpellCasterAdmission,
     CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
 };
+pub(crate) use crate::time::timer_never;
 pub(crate) use crate::xp::grant_xp;
 
 pub(crate) fn do_cancel_aura(

@@ -207,7 +207,7 @@ pub(crate) fn react_window_active(until_ms: u64, now_ms: u64) -> bool {
 
 pub(crate) fn arm_react(ctx: &ReducerContext, guid: u64, kind: ReactKind) {
     let entities = ctx.db.game_world_entity();
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+    let now_ms = crate::time::now_ms(ctx);
     if let Some(mut e) = entities.guid().find(guid) {
         let until = now_ms + REACT_WINDOW_MS;
         match kind {

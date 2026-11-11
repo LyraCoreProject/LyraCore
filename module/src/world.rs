@@ -584,7 +584,7 @@ fn teleport(
 
     if let Some(previous) = ctx.db.game_creature_spline().guid().find(player_guid) {
         let spline_id = crate::creatures::tick::next_spline_id(
-            crate::creatures::tick::now_ms(ctx),
+            crate::creatures::tick::move_clock_ms(ctx),
             previous.spline_id,
         );
         crate::creatures::tick::emit_move_spline(

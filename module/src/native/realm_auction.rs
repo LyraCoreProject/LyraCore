@@ -151,6 +151,7 @@ pub struct AuctionRetry {
     pub scheduled_at: ScheduleAt,
     pub retry: Retry,
 }
+crate::virtual_clock_exempt!(game_auction_retry);
 
 fn encode<T: spacetimedb::Serialize>(value: &T) -> Vec<u8> {
     bsatn::to_vec(value).expect("auction request encodes")

@@ -2,18 +2,12 @@ mod ai;
 pub(crate) mod catalogue;
 pub(crate) mod cycle;
 pub(crate) mod distraction;
-mod eventai;
+pub(crate) mod eventai;
 pub(crate) mod guardian;
 mod hostile_summon;
 mod hunter_pet;
 mod pet;
-mod pet_care;
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use eventai::{
-    expire_eventai_summon, fire_eventai_forced_despawn, resume_relay_arrival, resume_relay_run,
-};
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use pet_care::tick_pet_care;
+pub(crate) mod pet_care;
 mod pet_progression;
 pub(crate) mod population;
 pub(crate) mod presentation;
@@ -105,7 +99,7 @@ pub(crate) use spawn::rank_hp_multiplier_permille;
 pub(crate) use spawn::{
     build_creature_entity, build_player_entity, clear_gossip_menu_overrides_for_instance,
     creature_spawn_evidence, current_life_seq, insert_creature_entity, rolled_creature_stats,
-    scale_creature_damage_for_level, scale_health_for_rank, set_creature_gossip_menu, timer_never,
+    scale_creature_damage_for_level, scale_health_for_rank, set_creature_gossip_menu,
 };
 
 pub use tick::{

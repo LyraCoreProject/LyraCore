@@ -417,7 +417,7 @@ pub(super) fn claim_summon_sequence(ctx: &ReducerContext, lifetime_ms: u32) -> u
             creature_guid: 0,
             lifetime_ms,
             remaining_ms: lifetime_ms,
-            last_checked_ms: timestamp_ms(ctx),
+            last_checked_ms: crate::time::now_ms(ctx),
             life_seq: 0,
             guardian_faction: None,
         })
@@ -478,8 +478,8 @@ fn place_summon_entity(
         y: location.y,
         z: location.z,
         orientation: location.orientation,
-        respawn_at: crate::creatures::timer_never(ctx),
-        despawn_at: crate::creatures::timer_never(ctx),
+        respawn_at: crate::time::timer_never(ctx),
+        despawn_at: crate::time::timer_never(ctx),
         movement_type: crate::creatures::MOVEMENT_IDLE,
         respawn_secs: u32::MAX,
         life_seq: 0,
@@ -626,10 +626,6 @@ fn schedule_after(ctx: &ReducerContext, delay_ms: u32) -> ScheduleAt {
     crate::time::schedule_time(ctx, fire_at)
 }
 
-fn timestamp_ms(ctx: &ReducerContext) -> u64 {
-    (crate::time::now(ctx).to_micros_since_unix_epoch() / 1_000) as u64
-}
-
 #[reducer]
 pub fn expire_eventai_summon(ctx: &ReducerContext, expiry: CreatureAiSummonExpiry) {
     if !crate::time::scheduler_authorized(ctx) {
@@ -675,7 +671,7 @@ fn apply_summon_expiry(ctx: &ReducerContext, expiry: CreatureAiSummonExpiry) {
         return;
     }
 
-    let now_ms = timestamp_ms(ctx);
+    let now_ms = crate::time::now_ms(ctx);
     let elapsed_ms = now_ms
         .saturating_sub(expiry.last_checked_ms)
         .min(u64::from(u32::MAX)) as u32;

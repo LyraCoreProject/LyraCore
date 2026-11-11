@@ -401,6 +401,7 @@ pub struct NativeTransferMovedRetry {
     pub scheduled_at: ScheduleAt,
     pub call: NativeTransferMoved,
 }
+crate::virtual_clock_exempt!(game_native_transfer_moved_retry);
 
 #[reducer]
 pub fn retry_native_transfer_moved(
@@ -427,6 +428,7 @@ pub struct NativeTransferReleaseRetry {
     pub scheduled_at: ScheduleAt,
     pub call: NativeTransferRelease,
 }
+crate::virtual_clock_exempt!(game_native_transfer_release_retry);
 
 #[reducer]
 pub fn retry_native_transfer_release(

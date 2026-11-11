@@ -625,8 +625,8 @@ pub(crate) fn create_instance_with_id(
         .ok_or_else(|| format!("instance population low exhausted for entry {entry}"))?;
         copy.guid = crate::encounter::wave_guid(entry, low);
         copy.life_seq = 1;
-        copy.respawn_at = crate::creatures::timer_never(ctx);
-        copy.despawn_at = crate::creatures::timer_never(ctx);
+        copy.respawn_at = crate::time::timer_never(ctx);
+        copy.despawn_at = crate::time::timer_never(ctx);
         let entity =
             crate::creatures::build_creature_entity(ctx, &copy, &tmpl, ctx.random(), instance_id);
         let copied_guid = copy.guid;

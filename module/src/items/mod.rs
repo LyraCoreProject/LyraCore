@@ -8,7 +8,7 @@ mod ops;
 mod properties;
 mod rules;
 mod tables;
-mod temporary_enchantment;
+pub(crate) mod temporary_enchantment;
 pub(crate) mod vendor_stock;
 
 use lyracore_shared::item::ItemRefusal;
@@ -79,8 +79,6 @@ pub(crate) use temporary_enchantment::{
     spend_charge as spend_temporary_enchantment_charge, temporary_enchant_id,
     temporary_enchantment,
 };
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use temporary_enchantment::{expire_temporary_enchantment, game_temporary_enchantment};
 
 pub(crate) use tables::{
     sweep_delete_game_character_buyback, sweep_delete_game_item_instance,
