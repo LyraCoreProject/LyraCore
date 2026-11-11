@@ -1,4 +1,4 @@
-use lyracore_test_support::{ReducerConnection, Standalone};
+use lyracore_test_support::{Field, ReducerConnection, Standalone};
 use serde_json::json;
 
 use super::buy_in_slot::{delivered, money, request};
@@ -470,7 +470,10 @@ fn poison(shard: &Standalone, connection: &mut ReducerConnection, guid: u64, ite
             ("p_0_kind", &P_ENCHANT_ID),
         ],
     );
-    shard.assert_sql("INSERT INTO game_item_enchantment (id,enchant_id,effect_index,kind,amount,spell_id,school_mask) VALUES (82688,323,0,1,0,0,0)");
+    shard.insert_row(
+        "game_item_enchantment",
+        &[("id", &82688), ("enchant_id", &323), ("kind", &1)],
+    );
     shard.insert_row(
         "game_spell_enchant_charges",
         &[("spell_id", &spell), ("charges", &40)],
@@ -576,7 +579,15 @@ fn auction_cannot_list_a_buyback_item() {
         .query_rows("SELECT * FROM game_auction_house WHERE id = 7")
         .is_empty()
     {
-        shard.assert_sql("INSERT INTO game_auction_house (id,faction,deposit_rate,consignment_rate,name) VALUES (7,0,15,5,'Buyback auction')");
+        shard.insert_row(
+            "game_auction_house",
+            &[
+                ("id", &7),
+                ("deposit_rate", &15),
+                ("consignment_rate", &5),
+                ("name", &"Buyback auction"),
+            ],
+        );
     }
     let mut body = vendor.to_le_bytes().to_vec();
     body.extend(item.to_le_bytes());
@@ -594,7 +605,10 @@ fn auction_cannot_list_a_buyback_item() {
 fn character_deletion_releases_buyback_items_and_letter_text() {
     let (shard, mut connection, guid, vendor) = stage("buyback-character-delete");
     let item = grant(&shard, guid, FIXTURE_BLADE, 1);
-    shard.assert_sql("INSERT INTO game_item_text (id,text,letters) VALUES (5090001,'Kept text',1)");
+    shard.insert_row(
+        "game_item_text",
+        &[("id", &5090001), ("text", &"Kept text"), ("letters", &1)],
+    );
     shard.assert_sql(&format!(
         "UPDATE game_item_instance SET item_text_id = 5090001 WHERE guid = {item}"
     ));
@@ -941,7 +955,16 @@ fn publish_repair_ends_legacy_world_sessions_before_buyback_resumes() {
     shard.assert_sql(&format!(
         "DELETE FROM game_buyback_state WHERE character_guid = {guid}"
     ));
-    shard.assert_sql(&format!("INSERT INTO game_character_buyback (id,player_guid,item_entry,stack_count,price,soulbound,random_property_id) VALUES (5090001,{guid},{FIXTURE_BLADE},1,13,false,0)"));
+    shard.insert_row(
+        "game_character_buyback",
+        &[
+            ("id", &5090001),
+            ("player_guid", &guid),
+            ("item_entry", &FIXTURE_BLADE),
+            ("stack_count", &1),
+            ("price", &13),
+        ],
+    );
     let synthetic = 0x4090_0000_0000_0000;
     let create = lyracore_protocol::world::encode(
         &lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
@@ -1061,21 +1084,11 @@ fn selling_a_guild_charter_preserves_its_petition_for_buyback() {
     template.insert("entry".into(), "5863".into());
     template.insert("name".into(), "Guild Charter".into());
     let columns = "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property,spellppmrate_1,spellppmrate_2,spellppmrate_3,spellppmrate_4,spellppmrate_5";
-    let values = columns
+    let fields: Vec<Field> = columns
         .split(',')
-        .map(|key| {
-            let value = &template[key];
-            if key == "name" {
-                format!("'{value}'")
-            } else {
-                value.clone()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    shard.assert_sql(&format!(
-        "INSERT INTO game_item_template ({columns}) VALUES ({values})"
-    ));
+        .map(|key| (key, &template[key] as _))
+        .collect();
+    shard.insert_row("game_item_template", &fields);
     let charter = grant(&shard, guid, 5863, 1);
     shard.assert_sql(&format!("INSERT INTO game_guild_petition (petition_id,charter_item_guid,owner_guid,owner_name,team,name,created_micros) VALUES (123,{charter},{guid},'Conformance',469,'Buyback Charter',1800000000000000)"));
     shard.assert_sql(&format!(
@@ -1157,21 +1170,19 @@ fn buyback_price_is_the_sale_payment_even_after_the_template_price_changes() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_letter_grant_retry_cannot_duplicate_a_copy_in_buyback() {
     let (shard, mut connection, guid, vendor) = stage("buyback-letter-retry");
-    shard.assert_sql(
-        "INSERT INTO game_item_template (entry,class,subclass,name,display_id,quality,\
-         inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,\
-         damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,\
-         stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,\
-         spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,\
-         nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,\
-         spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,\
-         required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,\
-         start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property) \
-         VALUES (8383,0,0,'Plain Letter',0,0,0,0,0,0,0,13,1,0.0,0.0,0,0,0,0,0,0,0,0,0,0,false,0,0,\
-         0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1503,255,0)",
+    shard.insert_row(
+        "game_item_template",
+        &[
+            ("entry", &8383),
+            ("name", &"Plain Letter"),
+            ("sell_price", &13),
+            ("max_stack", &1),
+        ],
     );
-    shard
-        .assert_sql("INSERT INTO game_item_text (id,text,letters) VALUES (5090001,'Retry once',1)");
+    shard.insert_row(
+        "game_item_text",
+        &[("id", &5090001), ("text", &"Retry once"), ("letters", &1)],
+    );
     let actor = format!(r#"{{"guid":{guid},"ownership":null}}"#);
     shard.assert_call("gw_mail_grant_letter", &[&actor, "5090001"]);
     let item = shard.query_rows(&format!(

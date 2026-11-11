@@ -365,7 +365,14 @@ fn synthesized_services_require_current_capability_and_resolvable_stock() {
         "DELETE FROM game_npc_vendor WHERE creature_entry = {SCENARIO_VENDOR_ENTRY}"
     ));
     select(&shard, &npc, u32::MAX, SERVICE_GONE);
-    shard.assert_sql(&format!("INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count,restock_seconds,stock_flags) VALUES (5099001,{SCENARIO_VENDOR_ENTRY},5099999,0,0,0,0)"));
+    shard.insert_row(
+        "game_npc_vendor",
+        &[
+            ("id", &5099001),
+            ("creature_entry", &SCENARIO_VENDOR_ENTRY),
+            ("item_entry", &5099999),
+        ],
+    );
     select(&shard, &npc, u32::MAX, SERVICE_GONE);
     shard.assert_sql(&format!(
         "UPDATE game_npc_vendor SET item_entry = {FIXTURE_BLADE} WHERE id = 5099001"

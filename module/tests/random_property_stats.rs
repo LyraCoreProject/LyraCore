@@ -3,7 +3,7 @@ mod support;
 use std::collections::BTreeMap;
 
 use lyracore_package_delta::fixture_ids::{BATTERED_BUCKLER, TEST_WOLF_ENTRY};
-use support::{poll_until, Standalone, POLL_TIMEOUT};
+use support::{poll_until, Field, Standalone, POLL_TIMEOUT};
 
 const ITEM: &str = "5090050";
 const POOL: u32 = 5090200;
@@ -21,30 +21,43 @@ fn fixture(name: &str, class: u8) -> Standalone {
         "UPDATE game_character SET class = {class} WHERE guid = 1"
     ));
     shard.assert_call("debug_spawn_player_entity", &["1"]);
-    shard.assert_sql(&format!(
-        "INSERT INTO game_item_random_property (property_id,enchant_id_1,enchant_id_2,enchant_id_3,suffix) VALUES ({PROPERTY},{ENCHANT},0,0,'of the Stat Fixture')"
-    ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_item_property_weight (id,pool_id,property_id,weight) VALUES ({POOL},{POOL},{PROPERTY},10000)"
-    ));
+    shard.insert_row(
+        "game_item_random_property",
+        &[
+            ("property_id", &PROPERTY),
+            ("enchant_id_1", &ENCHANT),
+            ("suffix", &"of the Stat Fixture"),
+        ],
+    );
+    shard.insert_row(
+        "game_item_property_weight",
+        &[
+            ("id", &POOL),
+            ("pool_id", &POOL),
+            ("property_id", &PROPERTY),
+            ("weight", &10000),
+        ],
+    );
     shard
 }
 
 fn enchantments(shard: &Standalone, effects: &[(u8, i32, u32)]) {
-    let values = effects
-        .iter()
-        .enumerate()
-        .map(|(index, (kind, amount, school_mask))| {
-            format!(
-                "({},{ENCHANT},{index},{kind},{amount},0,{school_mask})",
-                u64::from(ENCHANT) * 256 + index as u64
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    shard.assert_sql(&format!(
-        "INSERT INTO game_item_enchantment (id,enchant_id,effect_index,kind,amount,spell_id,school_mask) VALUES {values}"
-    ));
+    let ids: Vec<_> = (0..effects.len())
+        .map(|index| (u64::from(ENCHANT) * 256 + index as u64, index))
+        .collect();
+    let mut rows: Vec<[Field; 6]> = Vec::new();
+    for ((id, index), (kind, amount, school_mask)) in ids.iter().zip(effects) {
+        rows.push([
+            ("id", id),
+            ("enchant_id", &ENCHANT),
+            ("effect_index", index),
+            ("kind", kind),
+            ("amount", amount),
+            ("school_mask", school_mask),
+        ]);
+    }
+    let rows: Vec<&[Field]> = rows.iter().map(|row| &row[..]).collect();
+    shard.insert_rows("game_item_enchantment", &rows);
 }
 
 fn grant_and_equip(shard: &Standalone) {

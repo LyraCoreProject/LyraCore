@@ -154,16 +154,22 @@ fn stage(standalone: &mut Standalone, seconds: i32) -> u64 {
         "game_spell_enchant_charges",
         &[("spell_id", &POISON), ("charges", &INSTANT_POISON_CHARGES)],
     );
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_item_enchantment (id, enchant_id, effect_index, kind, amount, spell_id, \
-         school_mask) VALUES ({}, {INSTANT_POISON_ENCHANTMENT}, 0, {COMBAT_SPELL}, 0, \
-         {INSTANT_POISON_PROC}, 0)",
-        u64::from(INSTANT_POISON_ENCHANTMENT) << 8
-    ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_enchant_proc_rate (spell_id, ppm_rate) \
-         VALUES ({INSTANT_POISON_PROC}, {CERTAIN_PPM:.1})"
-    ));
+    standalone.insert_row(
+        "game_item_enchantment",
+        &[
+            ("id", &(u64::from(INSTANT_POISON_ENCHANTMENT) << 8)),
+            ("enchant_id", &INSTANT_POISON_ENCHANTMENT),
+            ("kind", &COMBAT_SPELL),
+            ("spell_id", &INSTANT_POISON_PROC),
+        ],
+    );
+    standalone.insert_row(
+        "game_enchant_proc_rate",
+        &[
+            ("spell_id", &INSTANT_POISON_PROC),
+            ("ppm_rate", &CERTAIN_PPM),
+        ],
+    );
 
     standalone.assert_sql(&format!(
         "UPDATE game_item_template SET delay_ms = {WEAPON_DELAY_MS}, spellid_1 = 0 \

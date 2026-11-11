@@ -9,9 +9,15 @@ fn starting_items_fill_the_backpack_including_the_hearthstone() {
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_sql("DELETE FROM game_start_item WHERE race_class = 257");
     for (id, entry, count) in [(1, 52, 5), (2, 6948, 1)] {
-        shard.assert_sql(&format!(
-            "INSERT INTO game_start_item (id,race_class,item_entry,count) VALUES ({id},257,{entry},{count})"
-        ));
+        shard.insert_row(
+            "game_start_item",
+            &[
+                ("id", &id),
+                ("race_class", &257),
+                ("item_entry", &entry),
+                ("count", &count),
+            ],
+        );
     }
     let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
     shard.assert_call(

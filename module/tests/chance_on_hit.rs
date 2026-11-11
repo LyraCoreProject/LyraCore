@@ -136,13 +136,19 @@ fn a_helpful_enchantment_spell_casts_on_the_wielder() {
     standalone.assert_sql(&format!(
         "UPDATE game_item_template SET spelltrigger_1 = 0 WHERE entry = {FIXTURE_BLADE}"
     ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_item_enchantment (id, enchant_id, effect_index, kind, amount, spell_id, \
-         school_mask) VALUES ({CRUSADER}, {CRUSADER}, 0, {COMBAT_SPELL}, 0, {HOLY_STRENGTH}, 0)"
-    ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_enchant_proc_rate (spell_id, ppm_rate) VALUES ({HOLY_STRENGTH}, {CERTAIN_PPM:.1})"
-    ));
+    standalone.insert_row(
+        "game_item_enchantment",
+        &[
+            ("id", &CRUSADER),
+            ("enchant_id", &CRUSADER),
+            ("kind", &COMBAT_SPELL),
+            ("spell_id", &HOLY_STRENGTH),
+        ],
+    );
+    standalone.insert_row(
+        "game_enchant_proc_rate",
+        &[("spell_id", &HOLY_STRENGTH), ("ppm_rate", &CERTAIN_PPM)],
+    );
     standalone.assert_sql(&format!(
         "UPDATE game_item_instance SET enchant_id = {CRUSADER} \
          WHERE owner_guid = {PLAYER} AND entry = {FIXTURE_BLADE}"

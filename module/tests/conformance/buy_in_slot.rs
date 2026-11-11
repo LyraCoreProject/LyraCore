@@ -1086,7 +1086,16 @@ fn vendor_stock_a_changed_entry_keeps_the_source_spawns_counter() {
     shard.assert_sql(&format!(
         "DELETE FROM game_world_entity WHERE guid = {vendor}"
     ));
-    shard.assert_sql(&format!("INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count,restock_seconds,stock_flags) VALUES (99999999,{PROFESSION_TRAINER_ENTRY},{THREAD},0,10,10,0)"));
+    shard.insert_row(
+        "game_npc_vendor",
+        &[
+            ("id", &99999999),
+            ("creature_entry", &PROFESSION_TRAINER_ENTRY),
+            ("item_entry", &THREAD),
+            ("max_count", &10),
+            ("restock_seconds", &10),
+        ],
+    );
     assert_eq!(listed_stock(&mut connection, replacement), 4);
     stock_ack(&ordinary_buy(&mut connection, replacement, 1), 2);
 }

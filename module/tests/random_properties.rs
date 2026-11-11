@@ -15,9 +15,47 @@ fn fixture(name: &str) -> Standalone {
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
-    shard.assert_sql("INSERT INTO game_item_random_property (property_id,enchant_id_1,enchant_id_2,enchant_id_3,suffix) VALUES (5090101,5090103,0,0,'of the Fixture'),(5090102,0,0,0,'of the Other Fixture')");
-    shard.assert_sql("INSERT INTO game_item_enchantment (id,enchant_id,effect_index,kind,amount,spell_id,school_mask) VALUES (1303066368,5090103,0,3,7,0,0),(1303066369,5090103,1,5,9,0,0)");
-    shard.assert_sql("INSERT INTO game_item_property_weight (id,pool_id,property_id,weight) VALUES (5090100,5090100,5090101,10000)");
+    shard.insert_rows(
+        "game_item_random_property",
+        &[
+            &[
+                ("property_id", &5090101),
+                ("enchant_id_1", &5090103),
+                ("suffix", &"of the Fixture"),
+            ],
+            &[
+                ("property_id", &5090102),
+                ("suffix", &"of the Other Fixture"),
+            ],
+        ],
+    );
+    shard.insert_rows(
+        "game_item_enchantment",
+        &[
+            &[
+                ("id", &1303066368),
+                ("enchant_id", &5090103),
+                ("kind", &3),
+                ("amount", &7),
+            ],
+            &[
+                ("id", &1303066369),
+                ("enchant_id", &5090103),
+                ("effect_index", &1),
+                ("kind", &5),
+                ("amount", &9),
+            ],
+        ],
+    );
+    shard.insert_row(
+        "game_item_property_weight",
+        &[
+            ("id", &5090100),
+            ("pool_id", &5090100),
+            ("property_id", &5090101),
+            ("weight", &10000),
+        ],
+    );
     shard.assert_sql(&format!("UPDATE game_item_template SET random_property = {POOL}, stat_stamina = 0, bonding = 0 WHERE entry = {ITEM}"));
     shard
 }

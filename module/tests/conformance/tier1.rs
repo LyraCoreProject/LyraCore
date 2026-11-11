@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{ensure, Context, Result};
-use lyracore_test_support::{core_root, Standalone};
+use lyracore_test_support::{core_root, Field, Standalone};
 use serde_json::json;
 use wire_client::runner::Transport;
 use wire_client::scenario::FixtureVerb;
@@ -351,21 +351,11 @@ fn seed_visibility_world(
         ] {
             template.insert(field.into(), value);
         }
-        let values = columns
+        let fields: Vec<Field> = columns
             .split(',')
-            .map(|field| {
-                let value = &template[field];
-                if field == "name" {
-                    format!("'{value}'")
-                } else {
-                    value.clone()
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(",");
-        shard.assert_sql(&format!(
-            "INSERT INTO game_item_template ({columns}) VALUES ({values})"
-        ));
+            .map(|field| (field, &template[field] as _))
+            .collect();
+        shard.insert_row("game_item_template", &fields);
     }
     let mut id = 0;
     for race in races {
@@ -377,9 +367,14 @@ fn seed_visibility_world(
         };
         for entry in items {
             id += 1;
-            shard.assert_sql(&format!(
-                "INSERT INTO game_start_item (id,race_class,item_entry,count) VALUES ({id},{race_class},{entry},1)"
-            ));
+            shard.insert_row(
+                "game_start_item",
+                &[
+                    ("id", &id),
+                    ("race_class", &race_class),
+                    ("item_entry", &entry),
+                ],
+            );
         }
     }
     Ok(())

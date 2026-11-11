@@ -4,7 +4,7 @@ use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::guid;
 use std::collections::BTreeMap;
-use support::{poll_until, Standalone, POLL_TIMEOUT};
+use support::{poll_until, Field, Standalone, POLL_TIMEOUT};
 
 const PLAYER: &str = "1";
 const FOCUS: u32 = 5_091_040;
@@ -30,21 +30,11 @@ fn copy_template(
         "game_item_template" => "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property",
         _ => panic!("unsupported fixture catalogue {table}"),
     };
-    let values = columns
+    let fields: Vec<Field> = columns
         .split(',')
-        .map(|key| {
-            let value = &row[key];
-            if matches!(key, "name" | "subname") {
-                format!("'{}'", value.replace('\'', "''"))
-            } else {
-                value.clone()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    node.assert_sql(&format!(
-        "INSERT INTO {table} ({columns}) VALUES ({values})"
-    ));
+        .map(|key| (key, &row[key] as _))
+        .collect();
+    node.insert_row(table, &fields);
 }
 
 fn insert_spell(node: &Standalone, spell: u32, entry: u32, kind: u8) {
