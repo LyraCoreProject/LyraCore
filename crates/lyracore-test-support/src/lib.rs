@@ -367,7 +367,7 @@ impl Standalone {
                     ))
                 }),
         );
-        self.assert_ok(&self.sql_database_exact(database, &schema.insert(table, rows)));
+        self.assert_sql_database(database, &schema.insert(table, rows));
     }
 
     pub fn call(&self, reducer: &str, args: &[&str]) -> Output {
@@ -484,11 +484,6 @@ impl Standalone {
 
     pub fn assert_sql_database(&self, database: &str, query: &str) {
         self.assert_ok(&self.sql_database(database, query));
-    }
-
-    // Baseline fixtures need their published columns, without current migration defaults.
-    pub fn assert_sql_exact(&self, query: &str) {
-        self.assert_ok(&self.sql_database_exact(&self.database, query));
     }
 
     pub fn query_rows(&self, query: &str) -> Vec<BTreeMap<String, String>> {
@@ -621,11 +616,6 @@ impl Standalone {
     }
 
     fn sql_database(&self, database: &str, query: &str) -> Output {
-        let query = lyracore_shared::import_sql::insert_defaults(query);
-        self.sql_database_exact(database, &query)
-    }
-
-    fn sql_database_exact(&self, database: &str, query: &str) -> Output {
         self.command()
             .args([
                 "sql",

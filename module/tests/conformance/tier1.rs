@@ -6,6 +6,8 @@ use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{ensure, Context, Result};
+// The spell and transaction support worlds omit defaulted columns; see docs/danger-zones.md §1.2.
+use lyracore_shared::import_sql::insert_defaults;
 use lyracore_test_support::{core_root, Field, Standalone};
 use serde_json::json;
 use wire_client::runner::Transport;
@@ -507,7 +509,7 @@ fn seed_transaction_world(shard: &Standalone, _: &wire_client::scenario::Scenari
         .iter()
         .chain(super::character_world::STATEMENTS)
     {
-        shard.assert_sql(statement);
+        shard.assert_sql(&insert_defaults(statement));
     }
     Ok(())
 }
@@ -529,7 +531,7 @@ fn seed_quest_transaction_world(
 fn seed_spell_world(shard: &Standalone, scenario: &wire_client::scenario::Scenario) -> Result<()> {
     seed_transaction_world(shard, scenario)?;
     for statement in super::spell_world::STATEMENTS {
-        shard.assert_sql(statement);
+        shard.assert_sql(&insert_defaults(statement));
     }
     Ok(())
 }
