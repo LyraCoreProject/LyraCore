@@ -50,9 +50,17 @@ fn rows(realm: &Standalone, query: &str) -> Vec<std::collections::BTreeMap<Strin
 }
 
 fn insert_member(realm: &Standalone, guild_id: &str, guid: u64, name: &str, joined_micros: i64) {
-    realm.assert_sql(&format!(
-        "INSERT INTO game_guild_member (character_guid,guild_id,rank_id,name,public_note,officer_note,realm_account_id,joined_micros) VALUES ({guid},{guild_id},1,'{name}','','',{guid},{joined_micros})"
-    ));
+    realm.insert_row(
+        "game_guild_member",
+        &[
+            ("character_guid", &guid),
+            ("guild_id", &guild_id),
+            ("rank_id", &1),
+            ("name", &name),
+            ("realm_account_id", &guid),
+            ("joined_micros", &joined_micros),
+        ],
+    );
 }
 
 fn seeded_guild(realm: &Standalone) -> String {
@@ -169,13 +177,28 @@ fn a_deleted_signer_and_owner_leave_no_petition_behind() {
     let mut realm = Standalone::start("guild-cleanup-petition");
     realm.publish_module();
     realm.assert_call("claim_operator", &[]);
-    realm.assert_sql(&format!(
-        "INSERT INTO game_guild_petition (petition_id,charter_item_guid,owner_guid,owner_name,team,name,created_micros) VALUES ({PETITION},{CHARTER},{OWNER},'Owner',{TEAM_ALLIANCE},'Cleanup Charter',0)"
-    ));
+    realm.insert_row(
+        "game_guild_petition",
+        &[
+            ("petition_id", &PETITION),
+            ("charter_item_guid", &CHARTER),
+            ("owner_guid", &OWNER),
+            ("owner_name", &"Owner"),
+            ("team", &TEAM_ALLIANCE),
+            ("name", &"Cleanup Charter"),
+        ],
+    );
     let signature_key = u64::from(PETITION) << 8;
-    realm.assert_sql(&format!(
-        "INSERT INTO game_guild_petition_signature (signature_key,petition_id,signer_guid,signer_name,signer_realm_account,signed_micros) VALUES ({signature_key},{PETITION},{SIGNER},'Signer',{SIGNER},0)"
-    ));
+    realm.insert_row(
+        "game_guild_petition_signature",
+        &[
+            ("signature_key", &signature_key),
+            ("petition_id", &PETITION),
+            ("signer_guid", &SIGNER),
+            ("signer_name", &"Signer"),
+            ("signer_realm_account", &SIGNER),
+        ],
+    );
 
     let events = forget_events(&realm, SIGNER, &format!("recipient_guid = {OWNER}"));
     assert_eq!(events.len(), 1);

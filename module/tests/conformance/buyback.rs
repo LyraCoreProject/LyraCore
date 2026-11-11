@@ -1090,7 +1090,18 @@ fn selling_a_guild_charter_preserves_its_petition_for_buyback() {
         .collect();
     shard.insert_row("game_item_template", &fields);
     let charter = grant(&shard, guid, 5863, 1);
-    shard.assert_sql(&format!("INSERT INTO game_guild_petition (petition_id,charter_item_guid,owner_guid,owner_name,team,name,created_micros) VALUES (123,{charter},{guid},'Conformance',469,'Buyback Charter',1800000000000000)"));
+    shard.insert_row(
+        "game_guild_petition",
+        &[
+            ("petition_id", &123),
+            ("charter_item_guid", &charter),
+            ("owner_guid", &guid),
+            ("owner_name", &"Conformance"),
+            ("team", &469),
+            ("name", &"Buyback Charter"),
+            ("created_micros", &1800000000000000u64),
+        ],
+    );
     shard.assert_sql(&format!(
         "UPDATE game_item_instance SET enchant_id = 123 WHERE guid = {charter}"
     ));

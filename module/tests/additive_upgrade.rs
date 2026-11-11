@@ -19,7 +19,19 @@ const LEGACY_NOTIFICATIONS: &[&str] = &[
 fn assert_saved_taxi_flight_upgrade(baseline: &[u8]) {
     let mut shard = Standalone::start("taxi-resume-schema-upgrade");
     shard.publish_module_bytes(baseline);
-    shard.assert_sql_exact("INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros) VALUES (42,6,2,4,6852,110,17,1800000000000000)");
+    shard.insert_row(
+        "game_active_taxi_flight",
+        &[
+            ("character_guid", &42),
+            ("path_id", &6),
+            ("source_node_id", &2),
+            ("destination_node_id", &4),
+            ("mount_display_id", &6852),
+            ("fare", &110),
+            ("current_node_index", &17),
+            ("started_micros", &1800000000000000i64),
+        ],
+    );
     let before = shard
         .query_rows("SELECT * FROM game_active_taxi_flight WHERE character_guid = 42")
         .pop()

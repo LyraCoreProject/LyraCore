@@ -62,7 +62,14 @@ fn zone_speech_resolves_terrain_imported_after_the_creature_spawn() {
     let cell_x = lyracore_shared::terrain::cell_index(creature["x"].parse().unwrap()).unwrap();
     let cell_y = lyracore_shared::terrain::cell_index(creature["y"].parse().unwrap()).unwrap();
     for zone in [5099001, 5099002] {
-        shard.assert_sql(&format!("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES ({zone},{},0,0,0,0,0,'Speech zone')", creature["map_id"]));
+        shard.insert_row(
+            "game_area",
+            &[
+                ("id", &zone),
+                ("map_id", &creature["map_id"]),
+                ("name", &"Speech zone"),
+            ],
+        );
         let heights = vec!["0"; 145].join(":");
         shard.assert_call(
             "import_terrain_chunks",

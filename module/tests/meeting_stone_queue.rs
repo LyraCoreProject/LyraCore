@@ -253,12 +253,15 @@ fn the_stone_admission_refuses_without_writing_anything() {
     stage_character(&realm, BRAM, MAGE, 20, 0, 0.0);
     admit(&realm, &session(BRAM), DEADMINES_STONE);
 
-    realm.assert_sql(&format!(
-        "INSERT INTO game_active_taxi_flight (character_guid, path_id, source_node_id, \
-         destination_node_id, mount_display_id, fare, current_node_index, started_micros, \
-         origin_x, origin_y, origin_z, origin_recorded,first_destination_node_index) \
-         VALUES ({BRAM}, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, false,1)"
-    ));
+    realm.insert_row(
+        "game_active_taxi_flight",
+        &[
+            ("character_guid", &BRAM),
+            ("path_id", &1),
+            ("source_node_id", &1),
+            ("destination_node_id", &2),
+        ],
+    );
     admission(
         &session(BRAM),
         &deadmines,

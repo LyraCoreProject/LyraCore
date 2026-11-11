@@ -328,9 +328,14 @@ fn the_last_member_leaving_deletes_the_channel_its_password_and_its_bans() {
     op(&realm, &actor("1"), PASSWORD, "Raiders", "sesame", HUMAN);
     let channel_id =
         realm.query_rows("SELECT channel_id FROM game_chat_channel")[0]["channel_id"].clone();
-    realm.assert_sql(&format!(
-        "INSERT INTO game_chat_channel_ban (id, channel_id, character_guid) VALUES (9001, {channel_id}, 9)"
-    ));
+    realm.insert_row(
+        "game_chat_channel_ban",
+        &[
+            ("id", &9001),
+            ("channel_id", &channel_id),
+            ("character_guid", &9),
+        ],
+    );
     refused(
         &realm,
         "realm_channel_op",

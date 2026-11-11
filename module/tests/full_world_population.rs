@@ -233,11 +233,69 @@ fn all_dungeon_populations_have_independent_spawn_and_patrol_lifecycles() {
             .len(),
         1
     );
-    shard.assert_sql("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES (5099000,33,0,0,0,0,0,'Fixture dungeon')");
-    shard.assert_sql("INSERT INTO game_area_trigger (id,map_id,x,y,z,radius,box_length,box_width,box_height,box_yaw) VALUES (5099000,33,10,20,30,1,0,0,0,0)");
-    shard.assert_sql("INSERT INTO game_areatrigger_teleport (trigger_id,target_map,x,y,z,o,name) VALUES (5099000,0,100,200,30,0,'Fixture exit')");
-    shard.assert_sql("INSERT INTO game_graveyard (id,map_id,x,y,z,o,name) VALUES (5099001,0,10,20,30,0,'Near dungeon coordinates'),(5099002,0,110,200,30,0,'Near outside entrance')");
-    shard.assert_sql("INSERT INTO game_graveyard_zone (row_id,safe_loc_id,zone_id,faction) VALUES (5099001,5099001,5099000,0),(5099002,5099002,5099000,0)");
+    shard.insert_row(
+        "game_area",
+        &[
+            ("id", &5099000),
+            ("map_id", &33),
+            ("name", &"Fixture dungeon"),
+        ],
+    );
+    shard.insert_row(
+        "game_area_trigger",
+        &[
+            ("id", &5099000),
+            ("map_id", &33),
+            ("x", &10),
+            ("y", &20),
+            ("z", &30),
+            ("radius", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_areatrigger_teleport",
+        &[
+            ("trigger_id", &5099000),
+            ("x", &100),
+            ("y", &200),
+            ("z", &30),
+            ("name", &"Fixture exit"),
+        ],
+    );
+    shard.insert_rows(
+        "game_graveyard",
+        &[
+            &[
+                ("id", &5099001),
+                ("x", &10),
+                ("y", &20),
+                ("z", &30),
+                ("name", &"Near dungeon coordinates"),
+            ],
+            &[
+                ("id", &5099002),
+                ("x", &110),
+                ("y", &200),
+                ("z", &30),
+                ("name", &"Near outside entrance"),
+            ],
+        ],
+    );
+    shard.insert_rows(
+        "game_graveyard_zone",
+        &[
+            &[
+                ("row_id", &5099001),
+                ("safe_loc_id", &5099001),
+                ("zone_id", &5099000),
+            ],
+            &[
+                ("row_id", &5099002),
+                ("safe_loc_id", &5099002),
+                ("zone_id", &5099000),
+            ],
+        ],
+    );
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_call("debug_teleport", &["1", "33", "10", "20", "30", "0"]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);

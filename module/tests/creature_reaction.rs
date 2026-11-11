@@ -285,15 +285,17 @@ fn taxi_takeoff_clears_a_passive_creatures_threat_only_combat() {
             != 0
     };
     assert!(in_combat(&target));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_active_taxi_flight \
-         (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,\
-          current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded,first_destination_node_index) \
-         VALUES (1,{},{},{},1147,25,0,0,0,0,0,false,1)",
-        taxi::PATH_ID,
-        taxi::SOURCE_NODE_STORAGE_ID,
-        taxi::DESTINATION_NODE_STORAGE_ID
-    ));
+    shard.insert_row(
+        "game_active_taxi_flight",
+        &[
+            ("character_guid", &1),
+            ("path_id", &taxi::PATH_ID),
+            ("source_node_id", &taxi::SOURCE_NODE_STORAGE_ID),
+            ("destination_node_id", &taxi::DESTINATION_NODE_STORAGE_ID),
+            ("mount_display_id", &1147),
+            ("fare", &25),
+        ],
+    );
     shard.assert_call("gw_arm_taxi_flight", &[r#"{"guid":1,"ownership":null}"#]);
     assert!(shard
         .query_rows(&format!(
