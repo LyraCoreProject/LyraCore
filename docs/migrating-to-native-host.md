@@ -91,8 +91,11 @@ Melee is in `combat.rs`. Casts are in `cast.rs`.
 To find the handler for an opcode, read the start of `receive` in `native/world.rs` first. It routes
 movement, teleport acknowledgements, auction browsing, reputation and addon chat on the raw opcode
 number, before it decodes the packet. Search there for the hex opcode or its `*_OPCODE` constant.
-During a teleport, `receive` drops every opcode except `0x01dc`, `0x004a` and `0x004b`. It routes the other requests
-by `ClientOpcodeMessage` variant, so `grep -n CMSG_YOUR_OPCODE module/src/native/world.rs` finds them.
+During a teleport, `receive` drops every opcode except `CMSG_PING`, `CMSG_PLAYER_LOGOUT` and
+`CMSG_LOGOUT_REQUEST`. It routes the other requests by `ClientOpcodeMessage` variant: each Protocol
+Family's `claims` lists the variants its `receive` handles, so
+`grep -rn CMSG_YOUR_OPCODE module/src/native/` finds the family. Opcodes the Realm ignores or
+answers as unavailable are in `native/unavailable.rs`.
 
 ### Patterns
 
@@ -119,8 +122,8 @@ inserts the row also calls the native Relay function. `module/src/breath_relay.r
 then calls `crate::native::breath_event`. Put a new Relay function in a file under
 `module/src/native/` and re-export it with `pub(crate) use` in `native/mod.rs`, as `breath_event`
 is. The function selects the recipient and builds the packet with the protocol crate. For one
-Character, look up its connection in `game_native_player` and use `send_raw`. For nearby observers,
-use `visibility::broadcast`.
+Character, use `send_to_character` or `send_raw_to_character` in `native/mod.rs`. For nearby
+observers, use `visibility::broadcast`.
 
 **Gateway Verb.** The `gw_*` reducers in `module/src/gw.rs` still exist. Durable tests and
 `native-host/check.py` call them as the Operator. The native runtime does not call them. If your

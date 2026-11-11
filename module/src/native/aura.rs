@@ -2,7 +2,7 @@ use lyracore_protocol::{codec, messages::vanilla::opcodes::ServerOpcodeMessage, 
 use lyracore_shared::{aura::AuraAmount, spell::taxonomy::*};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::game_native_player;
+use super::{bounded as packet, game_native_player};
 use crate::{game_aura, game_spell, game_world_entity, Aura};
 
 fn amount(aura: &Aura) -> AuraAmount {
@@ -12,10 +12,6 @@ fn amount(aura: &Aura) -> AuraAmount {
         amount: aura.amount,
         stacks: aura.stacks,
     }
-}
-
-fn packet(message: ServerOpcodeMessage) -> Packet {
-    lyracore_protocol::world::encode(message).expect("bounded aura message fits a world frame")
 }
 
 fn modifiers(current: &[Aura], previous: &[&Aura]) -> Vec<Packet> {
@@ -71,14 +67,9 @@ fn duration(ctx: &ReducerContext, aura: &Aura) -> Option<Packet> {
 }
 
 fn channel(ctx: &ReducerContext, aura: &Aura, removed: bool) {
-    let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(aura.caster_guid)
-    else {
+    if !super::has_world_session(ctx, aura.caster_guid) {
         return;
-    };
+    }
     let is_channel = |row: &Aura| {
         let flags = ctx
             .db
@@ -120,8 +111,7 @@ fn channel(ctx: &ReducerContext, aura: &Aura, removed: bool) {
             duration: duration.clamp(0, u32::MAX as i64) as u32,
         })
     };
-    let packet = packet(message);
-    super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
+    super::send_to_character(ctx, aura.caster_guid, message, super::EncodeFailure::Panic);
 }
 
 fn movement(
@@ -216,10 +206,7 @@ pub(super) fn life_changed(
         return;
     }
     super::motion_permit::refresh_character(ctx, new.guid);
-    let Some(owner) = ctx.db.game_native_player().character_guid().find(new.guid) else {
-        return;
-    };
-    if owner.teleport == Some(super::teleport::NativeTeleport::WorldPort) {
+    if !super::has_world_session(ctx, new.guid) || super::is_world_porting(ctx, new.guid) {
         return;
     }
     let held = crate::spell::auras_on(ctx, new.guid)
@@ -227,11 +214,15 @@ pub(super) fn life_changed(
     let rooted = (new.dead && !ghost) || held;
     if old.dead != new.dead || ((old.dead && !was_ghost) || held) != rooted {
         let (opcode, body) = codec::build_force_move_root_raw(new.guid, rooted);
-        super::send_raw(ctx, owner.connection_id, opcode, body, false);
+        super::send_raw_to_character(ctx, new.guid, opcode, body);
     }
     if was_ghost != ghost {
-        let packet = packet(codec::build_move_water_walk(new.guid, ghost));
-        super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
+        super::send_to_character(
+            ctx,
+            new.guid,
+            codec::build_move_water_walk(new.guid, ghost),
+            super::EncodeFailure::Panic,
+        );
     }
 }
 
@@ -295,12 +286,7 @@ pub(crate) fn changed(ctx: &ReducerContext, previous: Option<&Aura>, current: Op
     for packet in movement(ctx, row.target_guid, &auras, &changed, false) {
         super::visibility::broadcast(ctx, row.target_guid, packet.opcode, packet.body, true);
     }
-    if let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(row.target_guid)
-    {
+    if super::has_world_session(ctx, row.target_guid) {
         let mut packets = movement(ctx, row.target_guid, &auras, &changed, true);
         if changed
             .iter()
@@ -320,9 +306,7 @@ pub(crate) fn changed(ctx: &ReducerContext, previous: Option<&Aura>, current: Op
         {
             packets.extend(armor(ctx, row.target_guid, &auras));
         }
-        for packet in packets {
-            super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
-        }
+        super::send_packets_to_character(ctx, row.target_guid, packets);
     }
 }
 

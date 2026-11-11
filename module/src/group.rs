@@ -4,7 +4,6 @@ pub use mirror::sync_group_mirror;
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
-use crate::native::game_native_player;
 use crate::{game_character, game_melee_attack, game_pending_cast, game_threat, game_world_entity};
 
 pub use lyracore_shared::group::GROUP_MAX_MEMBERS;
@@ -1045,11 +1044,7 @@ pub(crate) fn push_list_to_all(ctx: &ReducerContext, group_id: u64) {
 }
 
 fn character_online(ctx: &ReducerContext, guid: u64) -> bool {
-    ctx.db
-        .game_native_player()
-        .character_guid()
-        .find(guid)
-        .is_some()
+    crate::native::has_world_session(ctx, guid)
         || ctx.db.game_world_entity().guid().find(guid).is_some()
 }
 

@@ -319,7 +319,7 @@ pub(crate) fn apply_client_command(
                             dispatch_lane,
                             dispatch_next: 0,
                         });
-                    if crate::native::is_player(ctx, character_guid) {
+                    if crate::native::has_world_session(ctx, character_guid) {
                         let outcome = apply_local_party_command(ctx, &inserted, handler);
                         if outcome == CommandOutcome::WaitingForCapacity {
                             return Err(outcome.tag().into());

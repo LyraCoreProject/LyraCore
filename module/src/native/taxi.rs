@@ -9,7 +9,7 @@ use lyracore_protocol::{
 use lyracore_shared::constants::taxi_protocol;
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{game_native_player, Rollback};
+use super::Rollback;
 use crate::game_world_entity;
 use crate::taxi::TaxiPassengerSpline;
 use crate::Refusal;
@@ -48,12 +48,7 @@ pub(crate) fn spline_changed(ctx: &ReducerContext, row: &TaxiPassengerSpline) {
 }
 
 pub(crate) fn resumed(ctx: &ReducerContext, row: &TaxiPassengerSpline) -> Result<(), String> {
-    if let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(row.character_guid)
-    {
+    if let Some(owner) = super::world_session(ctx, row.character_guid) {
         super::send(
             ctx,
             owner.connection_id,
@@ -72,11 +67,7 @@ fn dismount_result(
     character_guid: u64,
     result: DismountResult,
 ) -> Option<ConnectionId> {
-    let owner = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(character_guid)?;
+    let owner = super::world_session(ctx, character_guid)?;
     if let Err(error) = super::send(
         ctx,
         owner.connection_id,
@@ -171,6 +162,15 @@ pub(super) fn open(
         )?;
     }
     Ok(())
+}
+
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::CMSG_TAXINODE_STATUS_QUERY(_)
+            | ClientOpcodeMessage::CMSG_TAXIQUERYAVAILABLENODES(_)
+            | ClientOpcodeMessage::CMSG_ACTIVATETAXI(_)
+    )
 }
 
 pub(super) fn receive(

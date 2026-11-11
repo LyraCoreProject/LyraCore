@@ -335,7 +335,7 @@ pub fn idc_world_instance_entry(
             .ok_or("Instance entrance is missing")?;
         let actor = super::available_entity(ctx, guid).map_err(|error| error.to_string())?;
         if actor.map_id != trigger.map_id
-            || !crate::quest::AreaTriggerVolume::of(&trigger).contains_client_position(
+            || !crate::areatrigger::AreaTriggerVolume::of(&trigger).contains_client_position(
                 [trigger.x, trigger.y, trigger.z],
                 [actor.x, actor.y, actor.z],
             )
@@ -536,7 +536,7 @@ fn finish_native(
         return;
     };
     if actor.map_id != trigger.map_id
-        || !crate::quest::AreaTriggerVolume::of(&trigger).contains_client_position(
+        || !crate::areatrigger::AreaTriggerVolume::of(&trigger).contains_client_position(
             [trigger.x, trigger.y, trigger.z],
             [actor.x, actor.y, actor.z],
         )

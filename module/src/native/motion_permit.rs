@@ -26,7 +26,7 @@ crate::character_owned!(not_transported, fn sweep_transfer_game_native_motion_pe
 
 /// Refreshes the Motion Permit of the Character's World Session, if it has one.
 pub(crate) fn refresh_character(ctx: &ReducerContext, guid: u64) {
-    if let Some(player) = ctx.db.game_native_player().character_guid().find(guid) {
+    if let Some(player) = super::world_session(ctx, guid) {
         refresh(ctx, player.connection_id, guid);
     }
 }

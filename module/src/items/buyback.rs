@@ -71,17 +71,15 @@ pub(crate) fn clear(ctx: &ReducerContext, character_guid: u64) {
 }
 
 pub(crate) fn discard_legacy(ctx: &ReducerContext) {
-    use crate::native::game_native_player;
-
-    for player in ctx.db.game_native_player().iter().collect::<Vec<_>>() {
+    for guid in crate::native::world_session_characters(ctx) {
         if ctx
             .db
             .game_buyback_state()
             .character_guid()
-            .find(player.character_guid)
+            .find(guid)
             .is_none()
         {
-            crate::native::disconnect(ctx, player.connection_id);
+            crate::native::end_world_session(ctx, guid);
         }
     }
     let rows = ctx.db.game_character_buyback();

@@ -1,7 +1,6 @@
 use lyracore_shared::constants::player_flags;
 use spacetimedb::{log, reducer, ReducerContext};
 
-use crate::native::game_native_player;
 use crate::transport::game_transport_passenger;
 use crate::{game_character, game_map, game_world_entity};
 
@@ -39,13 +38,7 @@ pub fn operator_teleport_character(
         ));
     }
     let guid = character.guid;
-    if ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(guid)
-        .is_some_and(|native| native.teleport.is_some())
-    {
+    if crate::native::is_teleporting(ctx, guid) {
         return Err("character is already teleporting".into());
     }
     if crate::taxi::is_in_flight(ctx, guid) {

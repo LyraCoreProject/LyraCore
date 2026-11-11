@@ -1,4 +1,4 @@
-use super::game_native_player;
+use super::{bounded as message, game_native_player};
 use crate::spell::{SpellCastEvent, SpellCastEventKind, SpellImpactEvent};
 use lyracore_protocol::{codec, messages as wow_world_messages, world::Packet};
 use spacetimedb::{ReducerContext, Table};
@@ -11,16 +11,10 @@ enum EventAudience {
     Peers,
 }
 
-fn message(value: ServerOpcodeMessage) -> Packet {
-    lyracore_protocol::world::encode(value).expect("bounded spell event fits a world frame")
-}
-
 fn deliver(ctx: &ReducerContext, caster: u64, audience: EventAudience, packet: Packet) {
     match audience {
         EventAudience::Source => {
-            if let Some(player) = ctx.db.game_native_player().character_guid().find(caster) {
-                super::send_raw(ctx, player.connection_id, packet.opcode, packet.body, false);
-            }
+            super::send_raw_to_character(ctx, caster, packet.opcode, packet.body);
         }
         EventAudience::Everyone | EventAudience::Peers => {
             super::visibility::broadcast(
@@ -141,7 +135,7 @@ fn cast_event_messages(
             out.push((
                 EventAudience::Source,
                 Packet {
-                    opcode: 0x0130,
+                    opcode: codec::SMSG_CAST_RESULT_OPCODE,
                     body: codec::build_cast_result_failed(row.spell_id, reason),
                 },
             ));
@@ -190,7 +184,7 @@ fn cast_event_messages(
         out.push((
             EventAudience::Source,
             Packet {
-                opcode: 0x0130,
+                opcode: codec::SMSG_CAST_RESULT_OPCODE,
                 body: codec::build_cast_result_ok(row.spell_id),
             },
         ));
@@ -282,13 +276,9 @@ fn cast_event_messages(
     out
 }
 
-/// Codes are lockstep with `CAST_MISS_*` in `module/src/spell/tables.rs`.
 fn cast_miss_info(code: u8) -> Option<wow_world_messages::vanilla::SpellMissInfo> {
+    use crate::spell::{CAST_MISS_DODGE, CAST_MISS_MISS, CAST_MISS_PARRY, CAST_MISS_RESIST};
     use wow_world_messages::vanilla::SpellMissInfo;
-    const CAST_MISS_MISS: u8 = 1;
-    const CAST_MISS_RESIST: u8 = 2;
-    const CAST_MISS_DODGE: u8 = 3;
-    const CAST_MISS_PARRY: u8 = 4;
     match code {
         CAST_MISS_MISS => Some(SpellMissInfo::Miss),
         CAST_MISS_RESIST => Some(SpellMissInfo::Resist),

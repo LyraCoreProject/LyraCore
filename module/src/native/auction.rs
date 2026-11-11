@@ -15,7 +15,7 @@ use lyracore_protocol::{
 use lyracore_shared::auction::{auction_notice, bid_increment, market_of, AuctionRefusal};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::{game_native_player, Rollback};
+use super::Rollback;
 use crate::{
     auction::{self as auctions, game_auction, native::BidRefusal, AuctionNotice},
     game_item_template, game_player_spell, game_world_entity,
@@ -53,6 +53,18 @@ pub(super) fn browse(
         ))),
         false,
     )?)
+}
+
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::MSG_AUCTION_HELLO(_)
+            | ClientOpcodeMessage::CMSG_AUCTION_LIST_OWNER_ITEMS(_)
+            | ClientOpcodeMessage::CMSG_AUCTION_LIST_BIDDER_ITEMS(_)
+            | ClientOpcodeMessage::CMSG_AUCTION_SELL_ITEM(_)
+            | ClientOpcodeMessage::CMSG_AUCTION_PLACE_BID(_)
+            | ClientOpcodeMessage::CMSG_AUCTION_REMOVE_ITEM(_)
+    )
 }
 
 pub(super) fn receive(
@@ -397,16 +409,7 @@ pub(crate) fn notice(ctx: &ReducerContext, row: &AuctionNotice) {
         super::realm_auction::notice(ctx, row.recipient_guid, packet);
         return;
     }
-    let Some(recipient) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(row.recipient_guid)
-    else {
-        return;
-    };
-    super::send(ctx, recipient.connection_id, packet, false)
-        .expect("bounded auction notice fits a world frame");
+    super::send_to_character(ctx, row.recipient_guid, packet, super::EncodeFailure::Panic);
 }
 
 pub(super) fn bid_refusal(id: u32, refusal: &BidRefusal) -> ServerOpcodeMessage {

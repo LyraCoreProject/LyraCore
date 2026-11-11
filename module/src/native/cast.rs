@@ -18,8 +18,6 @@ use crate::spell::{CastGateRefusal, CastRefusalReason};
 use crate::Refusal;
 use crate::{game_item_instance, game_item_template, game_spell, game_spell_effect};
 
-const CAST_RESULT: u16 = 0x0130;
-
 enum Route {
     Ordinary,
     Ranged,
@@ -35,7 +33,7 @@ fn packet(message: ServerOpcodeMessage) -> Result<Packet, String> {
 
 fn failure(spell: u32, reason: CastRefusalReason) -> Packet {
     Packet {
-        opcode: CAST_RESULT,
+        opcode: codec::SMSG_CAST_RESULT_OPCODE,
         body: codec::build_cast_result_failed(spell, cast_result(reason)),
     }
 }
@@ -169,7 +167,7 @@ pub(super) fn receive(
         prelude = vec![
             packet(ServerOpcodeMessage::SMSG_SPELL_START(Box::new(start)))?,
             Packet {
-                opcode: CAST_RESULT,
+                opcode: codec::SMSG_CAST_RESULT_OPCODE,
                 body: codec::build_cast_result_ok(spell),
             },
             packet(ServerOpcodeMessage::SMSG_SPELL_GO(Box::new(go)))?,
@@ -279,7 +277,7 @@ pub(super) fn receive(
             super::send_raw(
                 ctx,
                 connection,
-                CAST_RESULT,
+                codec::SMSG_CAST_RESULT_OPCODE,
                 codec::build_cast_result_ok(spell),
                 false,
             );

@@ -107,8 +107,8 @@ pub(super) fn removed(ctx: &ReducerContext, connection: ConnectionId, viewer: u6
         ))),
         ServerOpcodeMessage::SMSG_PET_SPELLS(Box::new(codec::build_pet_spells_clear())),
     ] {
-        super::send(ctx, connection, packet, false)
-            .expect("bounded pet removal fits a world frame");
+        let packet = super::bounded(packet);
+        super::send_raw(ctx, connection, packet.opcode, packet.body, false);
     }
 }
 
@@ -120,30 +120,28 @@ pub(crate) fn changed(
     if ctx.db.game_native_player().count() == 0 {
         return;
     }
-    let owner = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(row.owner_guid);
-    if let Some(owner) = &owner {
-        if ctx
+    let owner = super::world_session(ctx, row.owner_guid);
+    if owner.is_some()
+        && ctx
             .db
             .game_aoi_grant()
             .by_viewer()
             .filter(row.owner_guid)
             .any(|grant| grant.layer == WORLD_ENTITY && grant.entity_guid == row.live_pet_guid)
-        {
-            super::send(ctx, owner.connection_id, values(row, true), false)
-                .expect("bounded pet values fit a world frame");
-        }
+    {
+        super::send_to_character(
+            ctx,
+            row.owner_guid,
+            values(row, true),
+            super::EncodeFailure::Panic,
+        );
     }
     if previous.is_none_or(|old| {
         old.pet_id != row.pet_id
             || old.live_pet_guid != row.live_pet_guid
             || old.name_timestamp != row.name_timestamp
     }) {
-        let packet = lyracore_protocol::world::encode(values(row, false))
-            .expect("bounded pet identity fits a world frame");
+        let packet = super::bounded(values(row, false));
         super::visibility::broadcast_aoi(
             ctx,
             NativeAoi {

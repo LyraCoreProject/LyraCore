@@ -1,8 +1,6 @@
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
-use super::{
-    directory, game_native_player, realm_party::PartyCharacter, realm_shard::game_native_away,
-};
+use super::{directory, realm_party::PartyCharacter, realm_shard::game_native_away};
 use crate::{package_account::game_package_account, peer::realm_shard};
 
 #[table(accessor = game_package_party_authority)]
@@ -21,14 +19,7 @@ pub(super) fn facts(ctx: &ReducerContext, guid: u64, active: bool) -> Option<Par
         .game_package_account()
         .account_id()
         .find(character.account_id)?;
-    if character.online
-        || ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(guid)
-            .is_some()
-    {
+    if character.online || super::has_world_session(ctx, guid) {
         return None;
     }
     Some(PartyCharacter {

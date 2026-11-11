@@ -452,7 +452,7 @@ fn read_bucket(
         } else if seeker_is_online(ctx, seeker.character_guid) {
             solos.push(seeker);
         } else if crate::peer::world_shard(ctx).is_none()
-            || !crate::native::realm_party::has_world_session(ctx, seeker.character_guid)
+            || !crate::native::realm_party::has_world_session_in_realm(ctx, seeker.character_guid)
         {
             seekers.character_guid().delete(seeker.character_guid);
         }
@@ -486,7 +486,7 @@ fn seeker_is_online(ctx: &ReducerContext, character_guid: u64) -> bool {
     if crate::peer::world_shard(ctx).is_some() {
         return crate::native::realm_party::online(ctx, character_guid);
     }
-    if crate::native::is_player(ctx, character_guid) {
+    if crate::native::has_world_session(ctx, character_guid) {
         return true;
     }
     let now = crate::time::now(ctx).to_micros_since_unix_epoch();

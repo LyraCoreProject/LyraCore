@@ -8,7 +8,7 @@ use lyracore_protocol::{
 use lyracore_shared::group::{self, event_kind, GroupRefusal, RosterPayload};
 use spacetimedb::{log, ConnectionId, ReducerContext, SpacetimeType};
 
-use super::{game_native_player, game_native_world_connection, NativeWorldConnection, Rollback};
+use super::{game_native_world_connection, NativeWorldConnection, Rollback};
 use crate::{
     game_world_entity,
     group::{GroupAction, GroupOpError, Plane},
@@ -92,6 +92,28 @@ impl CommandReply {
         };
         Rollback::messages(self.packet(result), error.to_string())
     }
+}
+
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::CMSG_GROUP_INVITE(_)
+            | ClientOpcodeMessage::CMSG_GROUP_ACCEPT
+            | ClientOpcodeMessage::CMSG_GROUP_DECLINE
+            | ClientOpcodeMessage::CMSG_GROUP_DISBAND
+            | ClientOpcodeMessage::CMSG_GROUP_UNINVITE(_)
+            | ClientOpcodeMessage::CMSG_GROUP_UNINVITE_GUID(_)
+            | ClientOpcodeMessage::CMSG_LOOT_METHOD(_)
+            | ClientOpcodeMessage::CMSG_GROUP_RAID_CONVERT
+            | ClientOpcodeMessage::CMSG_GROUP_SET_LEADER(_)
+            | ClientOpcodeMessage::CMSG_GROUP_ASSISTANT_LEADER(_)
+            | ClientOpcodeMessage::CMSG_GROUP_CHANGE_SUB_GROUP(_)
+            | ClientOpcodeMessage::CMSG_GROUP_SWAP_SUB_GROUP(_)
+            | ClientOpcodeMessage::MSG_RAID_READY_CHECK(_)
+            | ClientOpcodeMessage::MSG_RAID_TARGET_UPDATE(_)
+            | ClientOpcodeMessage::MSG_MINIMAP_PING(_)
+            | ClientOpcodeMessage::MSG_RANDOM_ROLL(_)
+    )
 }
 
 pub(super) fn receive(
@@ -380,26 +402,19 @@ pub(crate) fn roster(ctx: &ReducerContext, guid: u64, all_members: bool) {
         if !all_members && member.guid != guid {
             continue;
         }
-        if let Some(owner) = ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(member.guid)
-        {
+        if let Some(owner) = super::world_session(ctx, member.guid) {
             send_roster(ctx, owner.connection_id, member.guid, &roster);
         }
     }
-    if super::is_player(ctx, guid) && roster.kind == group::GroupKind::Raid {
+    if super::has_world_session(ctx, guid) && roster.kind == group::GroupKind::Raid {
         let icons = crate::group::target_icons_of(ctx, member.group_id);
         let (opcode, body) = codec::build_target_icon_list_raw(&icons);
-        if let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) {
-            super::send_raw(ctx, owner.connection_id, opcode, body, false);
-        }
+        super::send_raw_to_character(ctx, guid, opcode, body);
     }
 }
 
 pub(super) fn group_event(ctx: &ReducerContext, guid: u64, kind: u8, other: u64, payload: &str) {
-    let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) else {
+    let Some(owner) = super::world_session(ctx, guid) else {
         return;
     };
     let name = || super::realm_party::name(ctx, other).unwrap_or_default();

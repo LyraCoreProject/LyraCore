@@ -12,7 +12,6 @@ use spacetimedb::{reducer, ReducerContext, SpacetimeType, Table};
 use crate::items::{
     game_item_instance, game_item_template, game_npc_vendor, ItemTemplate, NpcVendor,
 };
-use crate::native::game_native_player;
 use crate::{game_creature_template, game_spell};
 
 const MAX_ITEM_EDITS: usize = 64;
@@ -161,8 +160,7 @@ pub fn operator_apply_item_edits(ctx: &ReducerContext, edits: Vec<ItemEdit>) -> 
         changes.push(change);
     }
     if !updated.is_empty() {
-        for connected in ctx.db.game_native_player().iter() {
-            let guid = connected.character_guid;
+        for guid in crate::native::world_session_characters(ctx) {
             if ctx
                 .db
                 .game_item_instance()

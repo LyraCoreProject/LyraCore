@@ -248,7 +248,7 @@ pub(super) fn apply(
                     _ => None,
                 })
             })?;
-            let packet = super::guild::encode(wire::command(
+            let packet = super::bounded(wire::command(
                 GuildCommand::Create,
                 &name,
                 GuildCommandResult::PlayerNoMoreInGuild,
@@ -469,12 +469,7 @@ pub(crate) fn item_removed(ctx: &ReducerContext, item: &crate::ItemInstance) {
         || crate::peer::realm_shard(ctx).is_none()
         || pending(ctx, item.owner_guid)
         || crate::transfer::is_in_transit(ctx, item.owner_guid)
-        || ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(item.owner_guid)
-            .is_none()
+        || !super::has_world_session(ctx, item.owner_guid)
     {
         return;
     }

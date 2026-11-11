@@ -168,7 +168,7 @@ pub(super) fn named(ctx: &ReducerContext, name: &str) -> Option<u64> {
 }
 
 pub(super) fn facts(ctx: &ReducerContext, guid: u64, online: bool) -> Option<PartyCharacter> {
-    let player = ctx.db.game_native_player().character_guid().find(guid)?;
+    let player = super::world_session(ctx, guid)?;
     let character = crate::helpers::character_by_guid(ctx, guid)?;
     Some(PartyCharacter {
         guid,
@@ -372,7 +372,7 @@ pub fn idc_realm_party_command(
     let guid = actor.guid;
     let class = actor.class;
     store_character(ctx, actor.clone());
-    if opcode == 0x31d {
+    if opcode == codec::CMSG_RESET_INSTANCES_OPCODE {
         return super::instance_reset::dispatch(ctx, actor, &body);
     }
     if super::meeting_stone::is_realm_request(opcode) {
@@ -484,7 +484,9 @@ pub fn realm_party_command_answered(
     }
     match result {
         Ok(()) => {
-            if call.opcode == 0x31d || super::meeting_stone::is_realm_request(call.opcode) {
+            if call.opcode == codec::CMSG_RESET_INSTANCES_OPCODE
+                || super::meeting_stone::is_realm_request(call.opcode)
+            {
                 return Ok(());
             }
             let message = lyracore_protocol::world::decode(call.opcode, &call.body)
@@ -511,7 +513,7 @@ pub fn realm_party_command_answered(
                     ctx,
                     connection,
                     ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(SMSG_NOTIFICATION {
-                        notification: if call.opcode == 0x31d {
+                        notification: if call.opcode == codec::CMSG_RESET_INSTANCES_OPCODE {
                             "Instance reset request unavailable. Please try again."
                         } else if super::meeting_stone::is_realm_request(call.opcode) {
                             "Meeting Stone request unavailable. Please try again."
@@ -674,13 +676,7 @@ pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), 
     }
     let before: Vec<_> = affected
         .into_iter()
-        .filter(|guid| {
-            ctx.db
-                .game_native_player()
-                .character_guid()
-                .find(*guid)
-                .is_some()
-        })
+        .filter(|guid| super::world_session(ctx, *guid).is_some())
         .map(|guid| (guid, super::party::roster_state(ctx, guid)))
         .collect();
     directory::observe_revision(ctx, update.revision);
@@ -1060,7 +1056,7 @@ pub fn retry_party_projection(ctx: &ReducerContext, retry: PartyProjectionRetry)
     }
 }
 
-pub(crate) fn has_world_session(ctx: &ReducerContext, guid: u64) -> bool {
+pub(crate) fn has_world_session_in_realm(ctx: &ReducerContext, guid: u64) -> bool {
     ctx.db
         .game_character_directory()
         .guid()

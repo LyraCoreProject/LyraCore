@@ -46,15 +46,7 @@ fn hello(
     let (_, npc) = if character.player_flags & player_flags::GHOST != 0 {
         crate::ghost::spirit_healer_gate(ctx, guid, npc)?
     } else {
-        crate::items::npc_interaction_gate(
-            ctx,
-            guid,
-            npc,
-            u32::MAX,
-            "gossip creature",
-            "target has no gossip",
-            "use gossip",
-        )?
+        crate::npc_interaction::gate(ctx, guid, npc, crate::npc_interaction::NpcService::Gossip)?
     };
     let menu = crate::gossip::active_menu(ctx, &npc);
     let source = menu.as_ref().map_or(0, |menu| menu.menu_id);
@@ -254,7 +246,13 @@ fn select(
         gossip_option::TAXI => Ok(super::taxi::open(ctx, connection, guid, npc)?),
         gossip_option::INNKEEPER => {
             complete(ctx, connection)?;
-            super::send_raw(ctx, connection, 0x02eb, npc.to_le_bytes().to_vec(), false);
+            super::send_raw(
+                ctx,
+                connection,
+                codec::SMSG_BINDER_CONFIRM_OPCODE,
+                npc.to_le_bytes().to_vec(),
+                false,
+            );
             Ok(())
         }
         gossip_option::UNLEARNTALENTS => {
@@ -265,7 +263,13 @@ fn select(
             body.extend_from_slice(
                 &crate::talent::respec_cost_copper(character.respec_count).to_le_bytes(),
             );
-            super::send_raw(ctx, connection, 0x02aa, body, false);
+            super::send_raw(
+                ctx,
+                connection,
+                codec::MSG_TALENT_WIPE_CONFIRM_OPCODE,
+                body,
+                false,
+            );
             Ok(())
         }
         gossip_option::SPIRITHEALER => {
@@ -310,6 +314,16 @@ fn interaction_refusal(reason: String) -> Rollback {
     )
 }
 
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::CMSG_GOSSIP_HELLO(_)
+            | ClientOpcodeMessage::CMSG_GOSSIP_SELECT_OPTION(_)
+            | ClientOpcodeMessage::CMSG_BINDER_ACTIVATE(_)
+            | ClientOpcodeMessage::MSG_TALENT_WIPE_CONFIRM(_)
+    )
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
@@ -328,7 +342,16 @@ pub(super) fn receive(
         ClientOpcodeMessage::CMSG_BINDER_ACTIVATE(c) => {
             super::actor(ctx, guid)
                 .map_err(String::from)
-                .and_then(|_| crate::items::innkeeper_access_gate(ctx, guid, c.guid.guid()))
+                .and_then(|_| {
+                    crate::npc_interaction::gate(
+                        ctx,
+                        guid,
+                        c.guid.guid(),
+                        crate::npc_interaction::NpcService::Innkeeper,
+                    )
+                    .map(drop)
+                    .map_err(String::from)
+                })
                 .map_err(interaction_refusal)?;
             crate::world::set_home(ctx, guid);
             if let Some(character) = crate::helpers::character_by_guid(ctx, guid) {

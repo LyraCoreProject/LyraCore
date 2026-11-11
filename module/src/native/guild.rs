@@ -11,7 +11,7 @@ use lyracore_shared::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{game_native_player, NativeWorldConnection, Rollback};
+use super::{NativeWorldConnection, Rollback};
 use crate::{
     chat::game_character_contact,
     game_world_entity,
@@ -55,6 +55,32 @@ pub(super) struct Invitee {
     pub name: String,
     pub team: u32,
     pub ignores_actor: bool,
+}
+
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::CMSG_GUILD_QUERY(_)
+            | ClientOpcodeMessage::CMSG_GUILD_ROSTER
+            | ClientOpcodeMessage::CMSG_GUILD_INFO
+            | ClientOpcodeMessage::CMSG_GUILD_CREATE(_)
+            | ClientOpcodeMessage::CMSG_GUILD_INVITE(_)
+            | ClientOpcodeMessage::CMSG_GUILD_ACCEPT
+            | ClientOpcodeMessage::CMSG_GUILD_DECLINE
+            | ClientOpcodeMessage::CMSG_GUILD_LEAVE
+            | ClientOpcodeMessage::CMSG_GUILD_REMOVE(_)
+            | ClientOpcodeMessage::CMSG_GUILD_PROMOTE(_)
+            | ClientOpcodeMessage::CMSG_GUILD_DEMOTE(_)
+            | ClientOpcodeMessage::CMSG_GUILD_LEADER(_)
+            | ClientOpcodeMessage::CMSG_GUILD_DISBAND
+            | ClientOpcodeMessage::CMSG_GUILD_MOTD(_)
+            | ClientOpcodeMessage::CMSG_GUILD_INFO_TEXT(_)
+            | ClientOpcodeMessage::CMSG_GUILD_SET_PUBLIC_NOTE(_)
+            | ClientOpcodeMessage::CMSG_GUILD_SET_OFFICER_NOTE(_)
+            | ClientOpcodeMessage::CMSG_GUILD_RANK(_)
+            | ClientOpcodeMessage::CMSG_GUILD_ADD_RANK(_)
+            | ClientOpcodeMessage::CMSG_GUILD_DEL_RANK
+    )
 }
 
 pub(super) fn receive(
@@ -459,7 +485,7 @@ fn roster_lines(ctx: &ReducerContext, id: u32) -> Vec<codec::GuildRosterLine> {
                     .as_ref()
                     .map_or(character.zone_id, |entity| entity.zone_id);
                 line.days_offline = if entity.is_some()
-                    || super::is_player(ctx, member.character_guid)
+                    || super::has_world_session(ctx, member.character_guid)
                 {
                     None
                 } else {
@@ -524,15 +550,11 @@ fn rosters(ctx: &ReducerContext, guild_id: u32, recipients: &[(ConnectionId, u32
         if recipients.is_empty() {
             continue;
         }
-        let packet = encode(roster_message(&guild, &lines, show_notes));
+        let packet = super::bounded(roster_message(&guild, &lines, show_notes));
         for (connection, _) in recipients {
             super::send_raw(ctx, *connection, packet.opcode, packet.body.clone(), false);
         }
     }
-}
-
-pub(super) fn encode(message: ServerOpcodeMessage) -> lyracore_protocol::world::Packet {
-    lyracore_protocol::world::encode(message).expect("bounded guild message fits a world frame")
 }
 
 pub(crate) fn membership_changed(ctx: &ReducerContext, guid: u64) {
@@ -551,10 +573,7 @@ pub(crate) fn event(ctx: &ReducerContext, event: &GuildEvent) {
         return;
     }
     let recipients: Vec<_> = if event.recipient_guid != 0 {
-        ctx.db
-            .game_native_player()
-            .character_guid()
-            .find(event.recipient_guid)
+        super::world_session(ctx, event.recipient_guid)
             .into_iter()
             .collect()
     } else {
@@ -565,12 +584,7 @@ pub(crate) fn event(ctx: &ReducerContext, event: &GuildEvent) {
             .filter(|member| {
                 event.kind != event_kind::SIGNED_ON || member.character_guid != event.subject_guid
             })
-            .filter_map(|member| {
-                ctx.db
-                    .game_native_player()
-                    .character_guid()
-                    .find(member.character_guid)
-            })
+            .filter_map(|member| super::world_session(ctx, member.character_guid))
             .collect()
     };
     if recipients.is_empty() {
@@ -590,9 +604,9 @@ pub(crate) fn event(ctx: &ReducerContext, event: &GuildEvent) {
             .collect();
         if event.kind == event_kind::ROSTER_REFRESH {
             if let Some(guild) = view(ctx, event.guild_id) {
-                let query = encode(ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(Box::new(
-                    codec::build_guild_query_response(&guild),
-                )));
+                let query = super::bounded(ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(
+                    Box::new(codec::build_guild_query_response(&guild)),
+                ));
                 for (connection, _) in &recipients {
                     super::send_raw(ctx, *connection, query.opcode, query.body.clone(), false);
                 }
@@ -603,7 +617,7 @@ pub(crate) fn event(ctx: &ReducerContext, event: &GuildEvent) {
     }
     let (opcode, body) = match event.kind {
         event_kind::INVITE => {
-            let packet = encode(ServerOpcodeMessage::SMSG_GUILD_INVITE(Box::new(
+            let packet = super::bounded(ServerOpcodeMessage::SMSG_GUILD_INVITE(Box::new(
                 codec::build_guild_invite(
                     event.strings.first().cloned().unwrap_or_default(),
                     event.strings.get(1).cloned().unwrap_or_default(),
@@ -620,7 +634,7 @@ pub(crate) fn event(ctx: &ReducerContext, event: &GuildEvent) {
         .then(|| view(ctx, event.guild_id))
         .flatten()
         .map(|guild| {
-            encode(ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(Box::new(
+            super::bounded(ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(Box::new(
                 codec::build_guild_query_response(&guild),
             )))
         });
@@ -659,12 +673,9 @@ pub(super) fn presence(ctx: &ReducerContext, guid: u64, online: bool) {
         spacetimedb::log::warn!("guild presence of {guid}: {}", refusal.as_tag());
     }
     if online {
-        if let (Some(guild), Some(player)) = (
-            own_guild(ctx, guid),
-            ctx.db.game_native_player().character_guid().find(guid),
-        ) {
+        if let Some(guild) = own_guild(ctx, guid) {
             let (opcode, body) = codec::build_guild_event_raw(event_kind::MOTD, &[guild.motd], 0);
-            super::send_raw(ctx, player.connection_id, opcode, body, false);
+            super::send_raw_to_character(ctx, guid, opcode, body);
         }
     }
 }

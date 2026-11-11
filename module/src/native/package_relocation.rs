@@ -128,13 +128,13 @@ fn route(
     {
         return Err("Character transaction is settling".into());
     }
-    let route =
-        crate::quest::area_trigger_route(ctx, trigger).ok_or("AreaTrigger route is missing")?;
+    let route = crate::areatrigger::area_trigger_route(ctx, trigger)
+        .ok_or("AreaTrigger route is missing")?;
     let entity = crate::helpers::live_entity(ctx, guid).map_err(|e| e.to_string())?;
     if route.source_map != entity.map_id || !route.contains(entity.x, entity.y, entity.z) {
         return Err("Character is outside the AreaTrigger".into());
     }
-    crate::quest::area_trigger_destination(ctx, trigger)
+    crate::areatrigger::area_trigger_destination(ctx, trigger)
         .ok_or("AreaTrigger route is missing".into())
 }
 

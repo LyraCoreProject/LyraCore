@@ -266,7 +266,7 @@ fn candidate(
     guid: u64,
     view: codec::WhoPlayerView,
 ) -> Option<OnlineCharacter> {
-    let player = ctx.db.game_native_player().character_guid().find(guid)?;
+    let player = super::world_session(ctx, guid)?;
     if super::transfer::pending(ctx, player.connection_id) {
         return None;
     }
@@ -481,7 +481,7 @@ fn unavailable() -> ServerOpcodeMessage {
 }
 
 fn packet(message: ServerOpcodeMessage) -> (u16, Vec<u8>) {
-    let packet = lyracore_protocol::world::encode(message).expect("bounded social reply encodes");
+    let packet = super::bounded(message);
     (packet.opcode, packet.body)
 }
 

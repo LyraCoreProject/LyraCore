@@ -9,7 +9,7 @@ use lyracore_protocol::{
 use lyracore_shared::chat::{broadcast_chat, chat_kind, chat_tag_for, language, ChatRefusal};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::{game_native_player, NativeWorldConnection, Rollback};
+use super::{bounded as packet, game_native_player, NativeWorldConnection, Rollback};
 use crate::{
     aoi::game_aoi_viewer,
     away::game_character_away,
@@ -41,6 +41,16 @@ pub(super) fn kind(chat: &CMSG_MESSAGECHAT_ChatType) -> Option<u8> {
         CMSG_MESSAGECHAT_ChatType::Dnd => chat_kind::DND,
         _ => return None,
     })
+}
+
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::CMSG_MESSAGECHAT(_)
+            | ClientOpcodeMessage::CMSG_TEXT_EMOTE(_)
+            | ClientOpcodeMessage::CMSG_EMOTE(_)
+            | ClientOpcodeMessage::CMSG_CHAT_IGNORED(_)
+    )
 }
 
 pub(super) fn receive(
@@ -265,7 +275,7 @@ fn whisper(
         return Ok(());
     }
     let target = crate::helpers::character_by_name(ctx, &target_name)
-        .filter(|target| super::is_player(ctx, target.guid));
+        .filter(|target| super::has_world_session(ctx, target.guid));
     let Some(target) = target else {
         return Ok(super::send(
             ctx,
@@ -312,22 +322,6 @@ fn whisper(
     }
 }
 
-fn packet(message: ServerOpcodeMessage) -> lyracore_protocol::world::Packet {
-    lyracore_protocol::world::encode(message).expect("bounded chat fits a world frame")
-}
-
-fn deliver(ctx: &ReducerContext, guid: u64, packet: &lyracore_protocol::world::Packet) {
-    if let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) {
-        super::send_raw(
-            ctx,
-            owner.connection_id,
-            packet.opcode,
-            packet.body.clone(),
-            false,
-        );
-    }
-}
-
 pub(crate) fn realm_chat_line(ctx: &ReducerContext, line: &RealmChatLine) {
     let Some(message) = codec::build_realm_chat_line(
         line.kind,
@@ -342,7 +336,7 @@ pub(crate) fn realm_chat_line(ctx: &ReducerContext, line: &RealmChatLine) {
     let packet = packet(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(message)));
     for &recipient in &line.recipients {
         if !line.ignorable || !ignores(ctx, recipient, line.speaker_guid) {
-            deliver(ctx, recipient, &packet);
+            super::send_raw_to_character(ctx, recipient, packet.opcode, packet.body.clone());
         }
     }
 }
@@ -365,13 +359,10 @@ pub(super) fn replay_system_messages(ctx: &ReducerContext, guid: u64) {
 }
 
 pub(crate) fn system_message(ctx: &ReducerContext, event: &SystemMessageEvent) {
-    deliver(
-        ctx,
-        event.recipient_guid,
-        &packet(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-            codec::build_gm_system_message(event.message.clone()),
-        ))),
-    );
+    let packet = packet(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+        codec::build_gm_system_message(event.message.clone()),
+    )));
+    super::send_raw_to_character(ctx, event.recipient_guid, packet.opcode, packet.body);
 }
 
 fn nearby(ctx: &ReducerContext, speaker: &WorldEntity, radius: f32) -> Vec<WorldEntity> {
@@ -442,7 +433,12 @@ pub(crate) fn speech(ctx: &ReducerContext, speaker: &WorldEntity, event: &ChatEv
                 crate::helpers::in_same_partition(&target, speaker.map_id, speaker.instance_id)
             })
         {
-            deliver(ctx, event.target_guid, &message);
+            super::send_raw_to_character(
+                ctx,
+                event.target_guid,
+                message.opcode,
+                message.body.clone(),
+            );
         }
     } else if broadcast_chat::is_zone_wide(event.chat_type) {
         if speaker.zone_id == 0 {
@@ -463,7 +459,12 @@ pub(crate) fn speech(ctx: &ReducerContext, speaker: &WorldEntity, event: &ChatEv
                     crate::helpers::in_same_partition(&target, speaker.map_id, speaker.instance_id)
                 })
             {
-                deliver(ctx, owner.character_guid, &message);
+                super::send_raw_to_character(
+                    ctx,
+                    owner.character_guid,
+                    message.opcode,
+                    message.body.clone(),
+                );
             }
         }
     } else {
@@ -479,7 +480,12 @@ pub(crate) fn speech(ctx: &ReducerContext, speaker: &WorldEntity, event: &ChatEv
             if event.chat_type != broadcast_chat::EMOTE
                 || lyracore_shared::faction::same_team(speaker.race(), listener.race())
             {
-                deliver(ctx, listener.guid, &message);
+                super::send_raw_to_character(
+                    ctx,
+                    listener.guid,
+                    message.opcode,
+                    message.body.clone(),
+                );
             }
         }
     }
@@ -507,10 +513,15 @@ pub(crate) fn text_emote(ctx: &ReducerContext, speaker: &WorldEntity, event: &Em
         .map(|message| packet(ServerOpcodeMessage::SMSG_EMOTE(Box::new(message))));
     for listener in nearby(ctx, speaker, broadcast_chat::TEXT_EMOTE_RANGE_YD) {
         if let Some(text) = &text {
-            deliver(ctx, listener.guid, text);
+            super::send_raw_to_character(ctx, listener.guid, text.opcode, text.body.clone());
         }
         if let Some(animation) = &animation {
-            deliver(ctx, listener.guid, animation);
+            super::send_raw_to_character(
+                ctx,
+                listener.guid,
+                animation.opcode,
+                animation.body.clone(),
+            );
         }
     }
 }
@@ -551,7 +562,12 @@ pub(crate) fn creature_sound(ctx: &ReducerContext, source_guid: u64, sound_id: u
                 crate::helpers::in_same_partition(&target, source.map_id, source.instance_id)
             })
         {
-            deliver(ctx, owner.character_guid, &packet);
+            super::send_raw_to_character(
+                ctx,
+                owner.character_guid,
+                packet.opcode,
+                packet.body.clone(),
+            );
         }
     }
 }

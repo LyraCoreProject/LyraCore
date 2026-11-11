@@ -9,11 +9,33 @@ use lyracore_shared::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{game_native_player, Rollback};
+use super::Rollback;
 use crate::{
     channel::{ChannelOp, ChannelRequest, ChatChannelNoticeEvent},
     realm_chat::SpeakerFacts,
 };
+
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::CMSG_JOIN_CHANNEL(_)
+            | ClientOpcodeMessage::CMSG_LEAVE_CHANNEL(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_LIST(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_PASSWORD(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_SET_OWNER(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_OWNER(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_MODERATOR(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_UNMODERATOR(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_MUTE(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_UNMUTE(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_INVITE(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_KICK(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_BAN(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_UNBAN(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_ANNOUNCEMENTS(_)
+            | ClientOpcodeMessage::CMSG_CHANNEL_MODERATE(_)
+    )
+}
 
 pub(super) fn receive(
     ctx: &ReducerContext,
@@ -113,16 +135,12 @@ pub(super) fn receive(
     let target = target_name
         .as_deref()
         .and_then(|name| crate::helpers::character_by_name(ctx, name))
-        .filter(|target| super::is_player(ctx, target.guid));
+        .filter(|target| super::has_world_session(ctx, target.guid));
     let target_guid = target.as_ref().map_or(0, |target| target.guid);
     let target_race = target.as_ref().map_or(0, |target| target.race);
     let target_name = target.map_or_else(|| target_name.unwrap_or_default(), |target| target.name);
-    let player = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(guid)
-        .ok_or("native World Session is no longer current")?;
+    let player =
+        super::world_session(ctx, guid).ok_or("native World Session is no longer current")?;
     let request = ChannelRequest {
         channel_name: channel_name.clone(),
         password,
@@ -222,8 +240,6 @@ pub(crate) fn notice(ctx: &ReducerContext, event: &ChatChannelNoticeEvent) {
         text: event.text.clone(),
     });
     for &guid in &event.recipients {
-        if let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) {
-            super::send_raw(ctx, owner.connection_id, opcode, body.clone(), false);
-        }
+        super::send_raw_to_character(ctx, guid, opcode, body.clone());
     }
 }

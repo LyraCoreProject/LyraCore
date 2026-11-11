@@ -14,6 +14,18 @@ use crate::{
     Corpse,
 };
 
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::CMSG_REPOP_REQUEST
+            | ClientOpcodeMessage::MSG_CORPSE_QUERY
+            | ClientOpcodeMessage::CMSG_RECLAIM_CORPSE(_)
+            | ClientOpcodeMessage::CMSG_RESURRECT_RESPONSE(_)
+            | ClientOpcodeMessage::CMSG_SELF_RES
+            | ClientOpcodeMessage::CMSG_SPIRIT_HEALER_ACTIVATE(_)
+    )
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
@@ -96,14 +108,6 @@ pub(super) fn create(corpse: &Corpse) -> SMSG_UPDATE_OBJECT {
 }
 
 pub(crate) fn corpse_created(ctx: &ReducerContext, corpse: &Corpse) {
-    let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(corpse.owner_guid)
-    else {
-        return;
-    };
     if corpse.is_bones {
         return;
     }
@@ -114,7 +118,7 @@ pub(crate) fn corpse_created(ctx: &ReducerContext, corpse: &Corpse) {
     let remaining = corpse.reclaim_delay_micros.saturating_sub(elapsed).max(0) as u64;
     let (opcode, body) =
         codec::build_corpse_reclaim_delay_raw(std::time::Duration::from_micros(remaining));
-    super::send_raw(ctx, owner.connection_id, opcode, body, false);
+    super::send_raw_to_character(ctx, corpse.owner_guid, opcode, body);
 }
 
 pub(crate) fn corpse_changed(ctx: &ReducerContext, corpse: &Corpse) {
@@ -124,11 +128,9 @@ pub(crate) fn corpse_changed(ctx: &ReducerContext, corpse: &Corpse) {
     if corpse.is_bones {
         corpse_removed(ctx, corpse.owner_guid);
     }
-    let packet =
-        lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-            codec::build_corpse_flags_values(corpse.guid, corpse.is_bones),
-        )))
-        .expect("corpse flags fit a world frame");
+    let packet = super::bounded(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+        codec::build_corpse_flags_values(corpse.guid, corpse.is_bones),
+    )));
     super::visibility::broadcast_aoi(
         ctx,
         super::NativeAoi {
@@ -142,50 +144,40 @@ pub(crate) fn corpse_changed(ctx: &ReducerContext, corpse: &Corpse) {
 }
 
 pub(crate) fn corpse_removed(ctx: &ReducerContext, owner: u64) {
-    send(
+    super::send_to_character(
         ctx,
         owner,
         ServerOpcodeMessage::MSG_CORPSE_QUERY(Box::new(
             lyracore_protocol::messages::vanilla::MSG_CORPSE_QUERY_Server::NotFound,
         )),
+        super::EncodeFailure::Disconnect,
     );
 }
 
-fn send(ctx: &ReducerContext, guid: u64, message: ServerOpcodeMessage) {
-    if let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) {
-        if let Err(error) = super::send(ctx, owner.connection_id, message, false) {
-            spacetimedb::log::error!("native resurrection message failed for {guid}: {error}");
-            super::disconnect(ctx, owner.connection_id);
-        }
-    }
-}
-
 pub(crate) fn resurrect_offered(ctx: &ReducerContext, offer: &ResurrectRequest) {
-    if let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(offer.target_guid)
-    {
-        let (opcode, body) =
-            codec::build_resurrect_request_raw(offer.caster_guid, &offer.caster_name);
-        super::send_raw(ctx, owner.connection_id, opcode, body, false);
-    }
+    let (opcode, body) = codec::build_resurrect_request_raw(offer.caster_guid, &offer.caster_name);
+    super::send_raw_to_character(ctx, offer.target_guid, opcode, body);
 }
 
 pub(super) fn group_event(ctx: &ReducerContext, guid: u64, kind: u8) {
     if kind == lyracore_shared::group::event_kind::DEATH_DURABILITY {
-        send(ctx, guid, ServerOpcodeMessage::SMSG_DURABILITY_DAMAGE_DEATH);
+        super::send_to_character(
+            ctx,
+            guid,
+            ServerOpcodeMessage::SMSG_DURABILITY_DAMAGE_DEATH,
+            super::EncodeFailure::Disconnect,
+        );
     }
 }
 
 pub(crate) fn self_resurrection_changed(ctx: &ReducerContext, guid: u64, spell_id: u32) {
-    send(
+    super::send_to_character(
         ctx,
         guid,
         ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_self_res_spell_values(
             guid, spell_id,
         ))),
+        super::EncodeFailure::Disconnect,
     );
 }
 

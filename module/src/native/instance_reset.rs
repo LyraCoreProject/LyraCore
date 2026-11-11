@@ -37,12 +37,18 @@ pub(super) fn receive(
     if realm_shard(ctx).is_some() {
         let expires = ctx.timestamp.to_micros_since_unix_epoch() + RESET_MICROS;
         let body = bsatn::to_vec(&(bindings, expires)).expect("Instance reset bindings encode");
-        realm_party::submit_admitted(ctx, connection, guid, 0x31d, body)?;
+        realm_party::submit_admitted(
+            ctx,
+            connection,
+            guid,
+            lyracore_protocol::codec::CMSG_RESET_INSTANCES_OPCODE,
+            body,
+        )?;
     } else {
         let offline = group::group_of(ctx, guid).is_some_and(|member| {
             group::members_of(ctx, member.group_id)
                 .iter()
-                .any(|member| !super::is_player(ctx, member.character_guid))
+                .any(|member| !super::has_world_session(ctx, member.character_guid))
         });
         reply(
             ctx,

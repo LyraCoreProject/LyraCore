@@ -5,13 +5,12 @@ use lyracore_protocol::{
         LootMethodError,
     },
 };
-use lyracore_shared::{loot::LootRefusal, loot_roll as roll};
+use lyracore_shared::loot_roll as roll;
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::{game_native_player, Rollback};
-use crate::{
-    game_corpse_loot, game_item_template, game_world_entity, items::TakeLootRefusal, Refusal,
-};
+use crate::loot::LootRefusal;
+use crate::{game_corpse_loot, game_item_template, game_world_entity, Refusal};
 
 fn items(ctx: &ReducerContext, target: u64, guid: u64) -> Vec<codec::LootItemView> {
     let mut items: Vec<_> = ctx
@@ -19,23 +18,7 @@ fn items(ctx: &ReducerContext, target: u64, guid: u64) -> Vec<codec::LootItemVie
         .game_corpse_loot()
         .by_corpse()
         .filter(target)
-        .filter(|row| {
-            if row.quest_only {
-                crate::loot::quest_take_allowed(
-                    row.reserved_for,
-                    guid,
-                    crate::loot::killer_needs_item(ctx, Some(guid), row.item_entry),
-                )
-            } else {
-                crate::loot::group_loot_take_allowed(
-                    row.withheld,
-                    row.reserved_for,
-                    row.master_only,
-                    row.designated_looter_guid,
-                    guid,
-                )
-            }
-        })
+        .filter(|row| row.takeable_by(ctx, guid))
         .map(|row| {
             (
                 row.slot,
@@ -67,7 +50,10 @@ fn refusal(target: u64, refusal: LootRefusal) -> Rollback {
         LootRefusal::OutOfRange => LootMethodError::TooFar,
         LootRefusal::NoLootSource
         | LootRefusal::LooterUnavailable
+        | LootRefusal::LooterDead
         | LootRefusal::NothingToLoot
+        | LootRefusal::ItemUnavailable
+        | LootRefusal::InventoryFull
         | LootRefusal::RollUnavailable
         | LootRefusal::NotMasterLooter
         | LootRefusal::RecipientUnavailable
@@ -78,6 +64,19 @@ fn refusal(target: u64, refusal: LootRefusal) -> Rollback {
             target, failure,
         ))),
         refusal.as_tag(),
+    )
+}
+
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::CMSG_LOOT(_)
+            | ClientOpcodeMessage::CMSG_LOOT_MONEY
+            | ClientOpcodeMessage::CMSG_LOOT_RELEASE(_)
+            | ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(_)
+            | ClientOpcodeMessage::CMSG_GAMEOBJ_USE(_)
+            | ClientOpcodeMessage::CMSG_LOOT_ROLL(_)
+            | ClientOpcodeMessage::CMSG_LOOT_MASTER_GIVE(_)
     )
 }
 
@@ -145,30 +144,8 @@ pub(super) fn receive(
             Ok(())
         }
         ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(c) if current != 0 => {
-            crate::items::take_loot_item(ctx, guid, current, c.item_slot).map_err(|reason| {
-                use crate::actor::ActionRefusalKind as Kind;
-                match reason {
-                    TakeLootRefusal::Loot(reason) => refusal(current, reason),
-                    TakeLootRefusal::Refused(reason) => match reason.kind {
-                        Kind::OutOfRange | Kind::OtherPartition => {
-                            refusal(current, LootRefusal::OutOfRange)
-                        }
-                        Kind::MissingActor
-                        | Kind::MissingTarget
-                        | Kind::DeadActor
-                        | Kind::DeadTarget
-                        | Kind::CannotAct
-                        | Kind::InventoryFull
-                        | Kind::Other
-                        | Kind::MissingResource
-                        | Kind::Class
-                        | Kind::Level
-                        | Kind::Prerequisite
-                        | Kind::ProfileLimit
-                        | Kind::TransferPending => Rollback::silent(reason),
-                    },
-                }
-            })?;
+            crate::loot::take_item(ctx, guid, current, c.item_slot)
+                .map_err(|reason| refusal(current, reason))?;
             Ok(super::send(
                 ctx,
                 connection,
@@ -219,9 +196,9 @@ pub(super) fn group_event(
     other: u64,
     payload: &str,
 ) {
-    let Some(owner) = ctx.db.game_native_player().character_guid().find(recipient) else {
+    if !super::has_world_session(ctx, recipient) {
         return;
-    };
+    }
     let message = match kind {
         roll::event_kind::ROLL_START => {
             roll::decode_start(payload).map(|(corpse, slot, entry, countdown, property)| {
@@ -262,9 +239,7 @@ pub(super) fn group_event(
         _ => return,
     };
     if let Some(message) = message {
-        let packet = lyracore_protocol::world::encode(message)
-            .expect("bounded Loot Roll message fits a world frame");
-        super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
+        super::send_to_character(ctx, recipient, message, super::EncodeFailure::Panic);
     } else {
         spacetimedb::log::error!("invalid native Loot Roll event {kind} for Character {recipient}");
     }

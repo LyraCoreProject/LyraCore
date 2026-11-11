@@ -12,8 +12,15 @@ use lyracore_protocol::{
 use lyracore_shared::duel::{completion_kind, event_kind};
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{game_native_player, Rollback};
+use super::Rollback;
 use crate::{duel::DuelEvent, gameobject::game_gameobject_template};
+
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::CMSG_DUEL_ACCEPTED(_) | ClientOpcodeMessage::CMSG_DUEL_CANCELLED(_)
+    )
+}
 
 pub(super) fn receive(
     ctx: &ReducerContext,
@@ -34,12 +41,7 @@ pub(super) fn receive(
 }
 
 pub(crate) fn event(ctx: &ReducerContext, row: &DuelEvent) {
-    if let Some(player) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(row.recipient_guid)
-    {
+    if let Some(player) = super::world_session(ctx, row.recipient_guid) {
         participant(ctx, player.connection_id, row);
     }
     if row.kind != event_kind::COMPLETE || row.recipient_guid != row.initiator_guid {
@@ -48,35 +50,20 @@ pub(crate) fn event(ctx: &ReducerContext, row: &DuelEvent) {
     let Some(winner) = winner(row) else {
         return;
     };
-    let packet =
-        lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_DUEL_WINNER(Box::new(winner)))
-            .expect("duel winner names fit a world frame");
+    let packet = super::bounded(ServerOpcodeMessage::SMSG_DUEL_WINNER(Box::new(winner)));
     let cell = lyracore_shared::spatial::cell_id_at(row.flag_x, row.flag_y);
     for viewer in crate::aoi::nearby_viewers(ctx, row.map_id, row.instance_id, cell) {
         if viewer.guid == row.initiator_guid || viewer.guid == row.challenged_guid {
             continue;
         }
-        if let Some(player) = ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(viewer.guid)
-        {
-            super::send_raw(
-                ctx,
-                player.connection_id,
-                packet.opcode,
-                packet.body.clone(),
-                false,
-            );
-        }
+        super::send_raw_to_character(ctx, viewer.guid, packet.opcode, packet.body.clone());
     }
 }
 
 fn participant(ctx: &ReducerContext, connection: ConnectionId, row: &DuelEvent) {
     let send = |message| {
-        super::send(ctx, connection, message, false)
-            .expect("bounded duel message fits a world frame");
+        let packet = super::bounded(message);
+        super::send_raw(ctx, connection, packet.opcode, packet.body, false);
     };
     let values = |guid, arbiter, team| {
         let (opcode, body) = codec::build_duel_player_values(guid, arbiter, team);

@@ -130,7 +130,7 @@ enum Presence {
 }
 
 fn presence(ctx: &ReducerContext, guid: u64) -> Presence {
-    if let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) {
+    if let Some(owner) = super::world_session(ctx, guid) {
         if owner.teleport == Some(super::teleport::NativeTeleport::WorldPort) {
             return Presence::Loading;
         }

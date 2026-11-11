@@ -58,12 +58,7 @@ fn peer_parts(ctx: &ReducerContext, entity: &WorldEntity) -> PeerParts {
 }
 
 pub(crate) fn grant_added(ctx: &ReducerContext, grant: &AoiGrant, newly_added: bool) {
-    if let Some(player) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(grant.viewer_guid)
-    {
+    if let Some(player) = super::world_session(ctx, grant.viewer_guid) {
         if player.teleport == Some(super::teleport::NativeTeleport::WorldPort) {
             return;
         }
@@ -78,12 +73,7 @@ pub(crate) fn grant_added(ctx: &ReducerContext, grant: &AoiGrant, newly_added: b
 }
 
 pub(crate) fn grant_removed(ctx: &ReducerContext, grant: &AoiGrant) {
-    if let Some(player) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(grant.viewer_guid)
-    {
+    if let Some(player) = super::world_session(ctx, grant.viewer_guid) {
         if player.teleport == Some(super::teleport::NativeTeleport::WorldPort) {
             return;
         }
@@ -294,13 +284,7 @@ pub(super) fn broadcast(
         layer: WORLD_ENTITY,
         entity_guid: guid,
         exclude_connection: exclude_self
-            .then(|| {
-                ctx.db
-                    .game_native_player()
-                    .character_guid()
-                    .find(guid)
-                    .map(|p| p.connection_id)
-            })
+            .then(|| super::world_session(ctx, guid).map(|p| p.connection_id))
             .flatten(),
     };
     broadcast_aoi(ctx, audience, opcode, body);
@@ -343,21 +327,13 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
     if new.is_player() {
         super::aura::life_changed(ctx, old, new);
         if let Some(update) = codec::stand_state_changed(old.unit_bytes_1, new.unit_bytes_1) {
-            if let Some(owner) = ctx
-                .db
-                .game_native_player()
-                .character_guid()
-                .find(new.guid)
-                .filter(|owner| owner.teleport != Some(super::teleport::NativeTeleport::WorldPort))
-            {
-                if let Err(error) = super::send(
+            if !super::is_world_porting(ctx, new.guid) {
+                super::send_to_character(
                     ctx,
-                    owner.connection_id,
+                    new.guid,
                     ServerOpcodeMessage::SMSG_STANDSTATE_UPDATE(update),
-                    false,
-                ) {
-                    spacetimedb::log::error!("native stand state failed for {}: {error}", new.guid);
-                }
+                    super::EncodeFailure::Log,
+                );
             }
         }
         if old.zone_id != new.zone_id {
@@ -373,7 +349,7 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
         if old.level != new.level {
             super::book::talent_points(ctx, new.guid, new.level);
         }
-        if let Some(owner) = ctx.db.game_native_player().character_guid().find(new.guid) {
+        if super::has_world_session(ctx, new.guid) {
             let mut private = Vec::new();
             if old.xp != new.xp || old.next_level_xp != new.next_level_xp {
                 private.push(codec::build_player_xp_values(
@@ -390,40 +366,30 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
                 });
             }
             for values in private {
-                if let Err(error) = super::send(
+                super::send_to_character(
                     ctx,
-                    owner.connection_id,
+                    new.guid,
                     ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)),
-                    false,
-                ) {
-                    spacetimedb::log::error!(
-                        "native private VALUES failed for {}: {error}",
-                        new.guid
-                    );
-                }
+                    super::EncodeFailure::Log,
+                );
             }
         }
-        if old.armor != new.armor {
-            if let Some(owner) = ctx.db.game_native_player().character_guid().find(new.guid) {
-                let current: Vec<_> = crate::spell::auras_on(ctx, new.guid).collect();
-                if let Some(packet) = super::aura::armor(ctx, new.guid, &current) {
-                    super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
-                }
+        if old.armor != new.armor && super::has_world_session(ctx, new.guid) {
+            let current: Vec<_> = crate::spell::auras_on(ctx, new.guid).collect();
+            if let Some(packet) = super::aura::armor(ctx, new.guid, &current) {
+                super::send_raw_to_character(ctx, new.guid, packet.opcode, packet.body);
             }
         }
         let sheet = super::view::sheet_stats(new);
         if super::view::sheet_stats(old) != sheet {
-            if let Some(owner) = ctx.db.game_native_player().character_guid().find(new.guid) {
-                let message = ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                    codec::build_sheet_stats_values(new.guid, &sheet),
-                ));
-                if let Err(error) = super::send(ctx, owner.connection_id, message, false) {
-                    spacetimedb::log::error!(
-                        "native sheet values failed for {}: {error}",
-                        new.guid
-                    );
-                }
-            }
+            super::send_to_character(
+                ctx,
+                new.guid,
+                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_sheet_stats_values(
+                    new.guid, &sheet,
+                ))),
+                super::EncodeFailure::Log,
+            );
         }
     }
     if old.dynamic_flags != new.dynamic_flags || old.dead != new.dead {
@@ -444,26 +410,13 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
             ServerOpcodeMessage::SMSG_FORCE_RUN_SPEED_CHANGE(change) => {
                 let observed =
                     codec::build_spline_speed(new.guid, codec::ObservedSpeed::Run, change.speed);
-                if let Some(owner) = ctx
-                    .db
-                    .game_native_player()
-                    .character_guid()
-                    .find(new.guid)
-                    .filter(|owner| {
-                        owner.teleport != Some(super::teleport::NativeTeleport::WorldPort)
-                    })
-                {
-                    if let Err(error) = super::send(
+                if !super::is_world_porting(ctx, new.guid) {
+                    super::send_to_character(
                         ctx,
-                        owner.connection_id,
+                        new.guid,
                         ServerOpcodeMessage::SMSG_FORCE_RUN_SPEED_CHANGE(change),
-                        false,
-                    ) {
-                        spacetimedb::log::error!(
-                            "native run speed failed for {}: {error}",
-                            new.guid
-                        );
-                    }
+                        super::EncodeFailure::Log,
+                    );
                 }
                 (observed, true)
             }
@@ -488,22 +441,16 @@ pub(crate) fn loot_flags(ctx: &ReducerContext, entity: &WorldEntity) {
         .by_subject()
         .filter((WORLD_ENTITY, entity.guid))
     {
-        if let Some(owner) = ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(grant.viewer_guid)
-        {
+        if super::has_world_session(ctx, grant.viewer_guid) {
             let flags = super::loot::dynamic_flags(ctx, entity, grant.viewer_guid);
-            let message = ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                codec::build_dynamic_flags_values(entity.guid, flags),
-            ));
-            if let Err(error) = super::send(ctx, owner.connection_id, message, false) {
-                spacetimedb::log::error!(
-                    "native Loot Tag values failed for {}: {error}",
-                    entity.guid
-                );
-            }
+            super::send_to_character(
+                ctx,
+                grant.viewer_guid,
+                ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                    codec::build_dynamic_flags_values(entity.guid, flags),
+                )),
+                super::EncodeFailure::Log,
+            );
         }
     }
 }

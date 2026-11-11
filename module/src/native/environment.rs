@@ -11,10 +11,9 @@ fn weather_packet(
     weather: codec::ZoneWeatherView,
     change: WeatherChangeType,
 ) -> lyracore_protocol::world::Packet {
-    lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_WEATHER(Box::new(
+    super::bounded(ServerOpcodeMessage::SMSG_WEATHER(Box::new(
         codec::build_weather(weather, change),
     )))
-    .expect("weather fits a world frame")
 }
 
 pub(super) fn enter_zone(ctx: &ReducerContext, connection: ConnectionId, map: u32, zone: u32) {
@@ -35,12 +34,7 @@ pub(super) fn enter_zone(ctx: &ReducerContext, connection: ConnectionId, map: u3
 }
 
 pub(super) fn zone_changed(ctx: &ReducerContext, entity: &WorldEntity) {
-    if let Some(mut owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(entity.guid)
-    {
+    if let Some(mut owner) = super::world_session(ctx, entity.guid) {
         owner.zone_id = entity.zone_id;
         let connection = owner.connection_id;
         ctx.db.game_native_player().connection_id().update(owner);
@@ -68,14 +62,6 @@ pub(crate) fn weather_changed(ctx: &ReducerContext, row: &ZoneWeather) {
 }
 
 pub(crate) fn breath_event(ctx: &ReducerContext, row: &BreathRelayEvent) {
-    let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(row.character_guid)
-    else {
-        return;
-    };
     let message = match row.kind {
         crate::breath_relay::KIND_START => {
             codec::build_breath_timer_start(row.time_remaining_ms, row.duration_ms)
@@ -96,17 +82,22 @@ pub(crate) fn breath_event(ctx: &ReducerContext, row: &BreathRelayEvent) {
         }
         _ => return,
     };
-    let packet =
-        lyracore_protocol::world::encode(message).expect("breath event fits a world frame");
-    super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
+    super::send_to_character(
+        ctx,
+        row.character_guid,
+        message,
+        super::EncodeFailure::Panic,
+    );
 }
 
 pub(crate) fn fall_damage(ctx: &ReducerContext, guid: u64, damage: u32) {
     if damage == 0 {
         return;
     }
-    if let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) {
-        let message = ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(Box::new(
+    super::send_to_character(
+        ctx,
+        guid,
+        ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(Box::new(
             lyracore_protocol::messages::vanilla::SMSG_ENVIRONMENTAL_DAMAGE_LOG {
                 guid: lyracore_protocol::messages::Guid::new(guid),
                 damage_type: lyracore_protocol::messages::vanilla::EnvironmentalDamageType::Fall,
@@ -114,9 +105,7 @@ pub(crate) fn fall_damage(ctx: &ReducerContext, guid: u64, damage: u32) {
                 absorb: 0,
                 resist: 0,
             },
-        ));
-        if let Err(error) = super::send(ctx, owner.connection_id, message, false) {
-            spacetimedb::log::error!("native fall damage failed for {guid}: {error}");
-        }
-    }
+        )),
+        super::EncodeFailure::Log,
+    );
 }

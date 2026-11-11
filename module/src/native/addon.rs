@@ -1,7 +1,7 @@
 use lyracore_protocol::codec::addon;
 use spacetimedb::{ReducerContext, SpacetimeType};
 
-use super::{game_native_player, game_native_world_connection, NativeWorldConnection, Rollback};
+use super::{game_native_world_connection, NativeWorldConnection, Rollback};
 use crate::{bridge::AddonMessage, game_world_entity};
 
 #[derive(SpacetimeType)]
@@ -67,15 +67,8 @@ pub(crate) fn appeared(ctx: &ReducerContext, row: &AddonMessage) {
         .filter(row.recipient_identity)
         .filter(|entity| entity.is_player())
     {
-        if let Some(player) = ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(entity.guid)
-        {
-            let (opcode, body) = addon::build_addon_smsg_raw(entity.guid, &text);
-            super::send_raw(ctx, player.connection_id, opcode, body, false);
-        }
+        let (opcode, body) = addon::build_addon_smsg_raw(entity.guid, &text);
+        super::send_raw_to_character(ctx, entity.guid, opcode, body);
     }
 }
 

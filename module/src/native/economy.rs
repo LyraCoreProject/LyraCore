@@ -5,34 +5,25 @@ use lyracore_protocol::{
         BuyBankSlotResult, BuyResult, SellItemResult,
     },
 };
-use lyracore_shared::constants::npc_flags;
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{game_native_player, Rollback};
+use super::Rollback;
 use crate::items::{
-    game_item_instance, BankSlotRefusal, BuyRefusal, BuybackItem, BuybackRefusal, NpcGate,
-    SellRefusal,
+    game_item_instance, BankSlotRefusal, BuyRefusal, BuybackItem, BuybackRefusal, SellRefusal,
 };
+use crate::npc_interaction::{NpcGate, NpcService};
 use crate::{game_world_entity, Refusal};
 
 fn interaction(
     ctx: &ReducerContext,
     guid: u64,
     npc: u64,
-    flag: u32,
+    service: NpcService,
 ) -> Result<crate::WorldEntity, Refusal> {
     super::actor(ctx, guid)?;
-    crate::items::npc_interaction_gate(
-        ctx,
-        guid,
-        npc,
-        flag,
-        "NPC",
-        "NPC does not offer that service",
-        "use this service",
-    )
-    .map(|(_, npc)| npc)
-    .map_err(Refusal::from)
+    crate::npc_interaction::gate(ctx, guid, npc, service)
+        .map(|(_, npc)| npc)
+        .map_err(Refusal::from)
 }
 
 pub(super) fn vendor(
@@ -41,7 +32,7 @@ pub(super) fn vendor(
     guid: u64,
     npc: u64,
 ) -> Result<(), Refusal> {
-    let npc = interaction(ctx, guid, npc, npc_flags::VENDOR)?;
+    let npc = interaction(ctx, guid, npc, NpcService::Vendor)?;
     let items = crate::items::vendor_offers(ctx, npc.entry)
         .into_iter()
         .map(|(row, item)| codec::VendorItemView {
@@ -69,7 +60,7 @@ pub(super) fn bank(
     guid: u64,
     npc: u64,
 ) -> Result<(), Refusal> {
-    interaction(ctx, guid, npc, npc_flags::BANKER)?;
+    interaction(ctx, guid, npc, NpcService::Banker)?;
     Ok(super::send(
         ctx,
         connection,
@@ -133,14 +124,6 @@ pub(super) fn buyback_values(
     price: u32,
     timestamp: u32,
 ) {
-    let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(character_guid)
-    else {
-        return;
-    };
     let index = u16::from(slot - crate::items::BUYBACK_START);
     let mut mask = codec::update_mask::UpdateMaskValues::new();
     // Build 5875: buyback links at 624, prices at 1226 and timestamps at 1238.
@@ -148,7 +131,7 @@ pub(super) fn buyback_values(
     mask.set_u32(1226 + index, price);
     mask.set_u32(1238 + index, timestamp);
     let (opcode, body) = codec::build_values_update_raw(character_guid, &mask);
-    super::send_raw(ctx, owner.connection_id, opcode, body, false);
+    super::send_raw_to_character(ctx, character_guid, opcode, body);
 }
 
 pub(crate) fn buyback_removed(ctx: &ReducerContext, row: &BuybackItem) {
@@ -156,21 +139,12 @@ pub(crate) fn buyback_removed(ctx: &ReducerContext, row: &BuybackItem) {
 }
 
 pub(crate) fn buyback_destroyed(ctx: &ReducerContext, row: &BuybackItem) {
-    let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(row.character_guid)
-    else {
-        return;
-    };
-    super::send(
+    super::send_to_character(
         ctx,
-        owner.connection_id,
+        row.character_guid,
         ServerOpcodeMessage::SMSG_DESTROY_OBJECT(codec::build_destroy_object(row.item_guid)),
-        false,
-    )
-    .expect("bounded item message fits a world frame");
+        super::EncodeFailure::Panic,
+    );
 }
 
 fn owned_slot(ctx: &ReducerContext, guid: u64, item: u64) -> Result<u8, String> {
@@ -217,13 +191,12 @@ pub(crate) fn purchase_started(
     entry: u32,
     lots: u32,
 ) {
-    let Some(owner) = ctx.db.game_native_player().character_guid().find(character) else {
+    if !super::has_world_session(ctx, character) {
         return;
-    };
+    }
     let reply =
         purchase_reply(ctx, vendor, entry, lots).expect("purchase preflight checked the offer");
-    super::send(ctx, owner.connection_id, reply, false)
-        .expect("the fixed purchase reply fits a world frame");
+    super::send_to_character(ctx, character, reply, super::EncodeFailure::Panic);
 }
 
 // Refusals can advance restock; see docs/danger-zones.md#vendor-stock-migration.
@@ -250,7 +223,7 @@ fn purchase_failed(
             }
             body.extend([0; 17]);
             lyracore_protocol::world::Packet {
-                opcode: 0x112,
+                opcode: codec::SMSG_INVENTORY_CHANGE_FAILURE_OPCODE,
                 body,
             }
         }
@@ -318,6 +291,22 @@ fn purchase_in_slot(
         Ok(()) => Ok(()),
         Err(refusal) => purchase_failed(ctx, connection, vendor, request.item, refusal, true),
     }
+}
+
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::CMSG_LIST_INVENTORY(_)
+            | ClientOpcodeMessage::CMSG_BUY_ITEM(_)
+            | ClientOpcodeMessage::CMSG_BUY_ITEM_IN_SLOT(_)
+            | ClientOpcodeMessage::CMSG_SELL_ITEM(_)
+            | ClientOpcodeMessage::CMSG_BUYBACK_ITEM(_)
+            | ClientOpcodeMessage::CMSG_REPAIR_ITEM(_)
+            | ClientOpcodeMessage::CMSG_BANKER_ACTIVATE(_)
+            | ClientOpcodeMessage::CMSG_BUY_BANK_SLOT(_)
+            | ClientOpcodeMessage::CMSG_AUTOBANK_ITEM(_)
+            | ClientOpcodeMessage::CMSG_AUTOSTORE_BANK_ITEM(_)
+    )
 }
 
 pub(super) fn receive(
@@ -463,6 +452,7 @@ fn buy_result(refusal: &BuyRefusal) -> BuyResult {
             | NpcGate::NpcAbsent
             | NpcGate::WrongService
             | NpcGate::NpcDead
+            | NpcGate::NotSelectable
             | NpcGate::Unfriendly => BuyResult::CantFindItem,
         },
         BuyRefusal::NotEnoughMoney { .. } => BuyResult::NotEnoughMoney,
@@ -483,6 +473,7 @@ fn sell_result(refusal: &SellRefusal) -> SellItemResult {
             | NpcGate::NpcAbsent
             | NpcGate::WrongService
             | NpcGate::NpcDead
+            | NpcGate::NotSelectable
             | NpcGate::OtherMap
             | NpcGate::OutOfRange
             | NpcGate::Unfriendly => SellItemResult::CantFindVendor,
@@ -520,10 +511,13 @@ fn auto_bank(ctx: &ReducerContext, guid: u64, bag: u8, slot: u8) -> Result<(), R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::items::NpcRefusal;
+    use crate::npc_interaction::NpcRefusal;
 
-    fn npc(gate: NpcGate, message: &str) -> NpcRefusal {
-        NpcRefusal::new(gate, message)
+    fn npc(gate: NpcGate) -> NpcRefusal {
+        NpcRefusal {
+            gate,
+            service: NpcService::Vendor,
+        }
     }
 
     #[test]
@@ -531,20 +525,14 @@ mod tests {
         use BuyRefusal as R;
         use NpcGate as G;
         for (refusal, code) in [
-            (R::Vendor(npc(G::CharacterAbsent, "user not in world")), 0),
-            (
-                R::Vendor(npc(G::CharacterDead, "dead players cannot buy")),
-                0,
-            ),
-            (R::Vendor(npc(G::NpcAbsent, "no such vendor")), 0),
-            (R::Vendor(npc(G::WrongService, "target is not a vendor")), 0),
-            (R::Vendor(npc(G::NpcDead, "vendor is dead")), 0),
-            (R::Vendor(npc(G::OtherMap, "vendor on another map")), 5),
-            (R::Vendor(npc(G::OutOfRange, "vendor out of range")), 5),
-            (
-                R::Vendor(npc(G::Unfriendly, "vendor refuses interaction")),
-                0,
-            ),
+            (R::Vendor(npc(G::CharacterAbsent)), 0),
+            (R::Vendor(npc(G::CharacterDead)), 0),
+            (R::Vendor(npc(G::NpcAbsent)), 0),
+            (R::Vendor(npc(G::WrongService)), 0),
+            (R::Vendor(npc(G::NpcDead)), 0),
+            (R::Vendor(npc(G::OtherMap)), 5),
+            (R::Vendor(npc(G::OutOfRange)), 5),
+            (R::Vendor(npc(G::Unfriendly)), 0),
             (R::NotEnoughMoney { have: 9, need: 10 }, 2),
             (R::InventoryFull, 8),
             (R::CommitFailed(Box::new(R::InventoryFull)), 8),
@@ -560,20 +548,14 @@ mod tests {
         use NpcGate as G;
         use SellRefusal as R;
         for (refusal, code) in [
-            (R::Vendor(npc(G::CharacterAbsent, "user not in world")), 2),
-            (
-                R::Vendor(npc(G::CharacterDead, "dead players cannot sell")),
-                3,
-            ),
-            (R::Vendor(npc(G::NpcAbsent, "no such vendor")), 3),
-            (R::Vendor(npc(G::WrongService, "target is not a vendor")), 3),
-            (R::Vendor(npc(G::NpcDead, "vendor is dead")), 3),
-            (R::Vendor(npc(G::OtherMap, "vendor on another map")), 3),
-            (R::Vendor(npc(G::OutOfRange, "vendor out of range")), 3),
-            (
-                R::Vendor(npc(G::Unfriendly, "vendor refuses interaction")),
-                3,
-            ),
+            (R::Vendor(npc(G::CharacterAbsent)), 2),
+            (R::Vendor(npc(G::CharacterDead)), 3),
+            (R::Vendor(npc(G::NpcAbsent)), 3),
+            (R::Vendor(npc(G::WrongService)), 3),
+            (R::Vendor(npc(G::NpcDead)), 3),
+            (R::Vendor(npc(G::OtherMap)), 3),
+            (R::Vendor(npc(G::OutOfRange)), 3),
+            (R::Vendor(npc(G::Unfriendly)), 3),
             (R::NoItemInSlot(40), 1),
             (R::Refused("item has no sell value".into()), 2),
         ] {
@@ -587,10 +569,7 @@ mod tests {
         for (refusal, code) in [
             (R::AlreadyMaxed, 0),
             (R::CannotAfford { price: 1_000 }, 1),
-            (
-                R::Banker(npc(NpcGate::OutOfRange, "banker out of range")),
-                2,
-            ),
+            (R::Banker(npc(NpcGate::OutOfRange)), 2),
         ] {
             assert_eq!(bank_slot_result(&refusal).as_int(), code, "{refusal}");
         }

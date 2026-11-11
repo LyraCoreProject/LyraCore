@@ -313,7 +313,7 @@ pub(super) fn leave(
 
 #[allow(
     clippy::too_many_lines,
-    reason = "World opcode dispatch stays in one match"
+    reason = "World opcode dispatch stays in one routing table"
 )]
 pub(super) fn receive(
     ctx: &ReducerContext,
@@ -331,12 +331,22 @@ pub(super) fn receive(
         .filter(|player| player.character_guid == guid)
         .ok_or("native World Session is no longer current")?;
     let player = super::teleport::expire(ctx, player)?;
-    if matches!(opcode, 0x00c7 | 0x00dc) {
+    if matches!(
+        opcode,
+        codec::MSG_MOVE_TELEPORT_ACK_OPCODE | codec::MSG_MOVE_WORLDPORT_ACK_OPCODE
+    ) {
         return Ok(super::teleport::acknowledge(
             ctx, connection, player, opcode, body,
         )?);
     }
-    if player.teleport.is_some() && !matches!(opcode, 0x01dc | 0x004a | 0x004b) {
+    if player.teleport.is_some()
+        && !matches!(
+            opcode,
+            codec::CMSG_PING_OPCODE
+                | codec::CMSG_PLAYER_LOGOUT_OPCODE
+                | codec::CMSG_LOGOUT_REQUEST_OPCODE
+        )
+    {
         return Ok(());
     }
     if opcode == codec::addon::CMSG_MESSAGECHAT_OPCODE {
@@ -365,7 +375,10 @@ pub(super) fn receive(
     if opcode == codec::CMSG_AUCTION_LIST_ITEMS_OPCODE {
         return super::auction::browse(ctx, connection.connection_id, guid, body);
     }
-    if matches!(opcode, 0x0125 | 0x0318) {
+    if matches!(
+        opcode,
+        codec::CMSG_SET_FACTION_ATWAR_OPCODE | codec::CMSG_SET_WATCHED_FACTION_OPCODE
+    ) {
         return super::reputation::receive(ctx, guid, opcode, body);
     }
     let message =
@@ -378,7 +391,7 @@ pub(super) fn receive(
     ) {
         return movement_receipt(ctx, guid, &message);
     }
-    if super::unavailable::is_control_receipt(&message) {
+    if super::unavailable::is_ignored(&message) {
         return Ok(());
     }
     let previous_notices = connection.unavailable_notices;
@@ -402,87 +415,67 @@ pub(super) fn receive(
         }
         return Ok(());
     }
+    let id = connection.connection_id;
+    if super::auction::claims(&message) {
+        return super::auction::receive(ctx, id, guid, message);
+    }
+    if super::mail::claims(&message) {
+        return super::mail::receive(ctx, id, guid, message);
+    }
+    if super::meeting_stone::claims(&message) {
+        return super::meeting_stone::receive(ctx, id, guid, message);
+    }
+    if super::duel::claims(&message) {
+        return super::duel::receive(ctx, guid, message);
+    }
+    if super::trade::claims(&message) {
+        return super::trade::receive(ctx, guid, message);
+    }
+    if super::petition::claims(&message) {
+        return super::petition::receive(ctx, connection, guid, message);
+    }
+    if super::guild::claims(&message) {
+        return super::guild::receive(ctx, connection, guid, message);
+    }
+    if super::party::claims(&message) {
+        return super::party::receive(ctx, connection, guid, message);
+    }
+    if super::social::claims(&message) {
+        return super::social::receive(ctx, connection, guid, message);
+    }
+    if super::channel::claims(&message) {
+        return super::channel::receive(ctx, id, guid, message);
+    }
+    if super::chat::claims(&message) {
+        return super::chat::receive(ctx, connection, guid, message);
+    }
+    if super::death::claims(&message) {
+        return super::death::receive(ctx, id, guid, message);
+    }
+    if super::gossip::claims(&message) {
+        return super::gossip::receive(ctx, id, guid, message);
+    }
+    if super::taxi::claims(&message) {
+        return super::taxi::receive(ctx, id, guid, message);
+    }
+    if super::loot::claims(&message) {
+        return super::loot::receive(ctx, id, guid, message);
+    }
+    if super::trainer::claims(&message) {
+        return super::trainer::receive(ctx, id, guid, message);
+    }
+    if super::economy::claims(&message) {
+        return super::economy::receive(ctx, id, guid, message);
+    }
+    if super::inventory::claims(&message) {
+        return super::inventory::receive(ctx, id, guid, message);
+    }
+    if super::quest::claims(&message) {
+        return super::quest::receive(ctx, id, guid, message);
+    }
     let response = match message {
         ClientOpcodeMessage::CMSG_RESET_INSTANCES => {
             return super::instance_reset::receive(ctx, connection.connection_id, guid);
-        }
-        message @ (ClientOpcodeMessage::MSG_AUCTION_HELLO(_)
-        | ClientOpcodeMessage::CMSG_AUCTION_LIST_OWNER_ITEMS(_)
-        | ClientOpcodeMessage::CMSG_AUCTION_LIST_BIDDER_ITEMS(_)
-        | ClientOpcodeMessage::CMSG_AUCTION_SELL_ITEM(_)
-        | ClientOpcodeMessage::CMSG_AUCTION_PLACE_BID(_)
-        | ClientOpcodeMessage::CMSG_AUCTION_REMOVE_ITEM(_)) => {
-            return super::auction::receive(ctx, connection.connection_id, guid, message);
-        }
-
-        message @ (ClientOpcodeMessage::CMSG_GET_MAIL_LIST(_)
-        | ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME
-        | ClientOpcodeMessage::CMSG_ITEM_TEXT_QUERY(_)
-        | ClientOpcodeMessage::CMSG_MAIL_MARK_AS_READ(_)
-        | ClientOpcodeMessage::CMSG_MAIL_DELETE(_)
-        | ClientOpcodeMessage::CMSG_MAIL_RETURN_TO_SENDER(_)
-        | ClientOpcodeMessage::CMSG_MAIL_TAKE_MONEY(_)
-        | ClientOpcodeMessage::CMSG_MAIL_TAKE_ITEM(_)
-        | ClientOpcodeMessage::CMSG_SEND_MAIL(_)
-        | ClientOpcodeMessage::CMSG_MAIL_CREATE_TEXT_ITEM(_)) => {
-            return super::mail::receive(ctx, connection.connection_id, guid, message);
-        }
-        message @ (ClientOpcodeMessage::CMSG_MEETINGSTONE_JOIN(_)
-        | ClientOpcodeMessage::CMSG_MEETINGSTONE_LEAVE
-        | ClientOpcodeMessage::CMSG_MEETINGSTONE_INFO
-        | ClientOpcodeMessage::MSG_LOOKING_FOR_GROUP) => {
-            return super::meeting_stone::receive(ctx, connection.connection_id, guid, message);
-        }
-        message @ (ClientOpcodeMessage::CMSG_DUEL_ACCEPTED(_)
-        | ClientOpcodeMessage::CMSG_DUEL_CANCELLED(_)) => {
-            return super::duel::receive(ctx, guid, message);
-        }
-        message @ (ClientOpcodeMessage::CMSG_INITIATE_TRADE(_)
-        | ClientOpcodeMessage::CMSG_BEGIN_TRADE
-        | ClientOpcodeMessage::CMSG_CANCEL_TRADE
-        | ClientOpcodeMessage::CMSG_SET_TRADE_ITEM(_)
-        | ClientOpcodeMessage::CMSG_CLEAR_TRADE_ITEM(_)
-        | ClientOpcodeMessage::CMSG_SET_TRADE_GOLD(_)
-        | ClientOpcodeMessage::CMSG_ACCEPT_TRADE(_)
-        | ClientOpcodeMessage::CMSG_UNACCEPT_TRADE
-        | ClientOpcodeMessage::CMSG_BUSY_TRADE
-        | ClientOpcodeMessage::CMSG_IGNORE_TRADE) => {
-            return super::trade::receive(ctx, guid, message);
-        }
-        message @ (ClientOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(_)
-        | ClientOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(_)
-        | ClientOpcodeMessage::CMSG_PETITION_SHOWLIST(_)
-        | ClientOpcodeMessage::CMSG_PETITION_BUY(_)
-        | ClientOpcodeMessage::CMSG_PETITION_QUERY(_)
-        | ClientOpcodeMessage::CMSG_PETITION_SHOW_SIGNATURES(_)
-        | ClientOpcodeMessage::MSG_PETITION_RENAME(_)
-        | ClientOpcodeMessage::CMSG_OFFER_PETITION(_)
-        | ClientOpcodeMessage::CMSG_PETITION_SIGN(_)
-        | ClientOpcodeMessage::MSG_PETITION_DECLINE(_)
-        | ClientOpcodeMessage::CMSG_TURN_IN_PETITION(_)) => {
-            return super::petition::receive(ctx, connection, guid, message);
-        }
-        message @ (ClientOpcodeMessage::CMSG_GUILD_QUERY(_)
-        | ClientOpcodeMessage::CMSG_GUILD_ROSTER
-        | ClientOpcodeMessage::CMSG_GUILD_INFO
-        | ClientOpcodeMessage::CMSG_GUILD_CREATE(_)
-        | ClientOpcodeMessage::CMSG_GUILD_INVITE(_)
-        | ClientOpcodeMessage::CMSG_GUILD_ACCEPT
-        | ClientOpcodeMessage::CMSG_GUILD_DECLINE
-        | ClientOpcodeMessage::CMSG_GUILD_LEAVE
-        | ClientOpcodeMessage::CMSG_GUILD_REMOVE(_)
-        | ClientOpcodeMessage::CMSG_GUILD_PROMOTE(_)
-        | ClientOpcodeMessage::CMSG_GUILD_DEMOTE(_)
-        | ClientOpcodeMessage::CMSG_GUILD_LEADER(_)
-        | ClientOpcodeMessage::CMSG_GUILD_DISBAND
-        | ClientOpcodeMessage::CMSG_GUILD_MOTD(_)
-        | ClientOpcodeMessage::CMSG_GUILD_INFO_TEXT(_)
-        | ClientOpcodeMessage::CMSG_GUILD_SET_PUBLIC_NOTE(_)
-        | ClientOpcodeMessage::CMSG_GUILD_SET_OFFICER_NOTE(_)
-        | ClientOpcodeMessage::CMSG_GUILD_RANK(_)
-        | ClientOpcodeMessage::CMSG_GUILD_ADD_RANK(_)
-        | ClientOpcodeMessage::CMSG_GUILD_DEL_RANK) => {
-            return super::guild::receive(ctx, connection, guid, message);
         }
         ClientOpcodeMessage::CMSG_REQUEST_PARTY_MEMBER_STATS(request) => {
             return super::member_stats::request(
@@ -492,135 +485,13 @@ pub(super) fn receive(
                 request.guid.guid(),
             );
         }
-        message @ (ClientOpcodeMessage::CMSG_GROUP_INVITE(_)
-        | ClientOpcodeMessage::CMSG_GROUP_ACCEPT
-        | ClientOpcodeMessage::CMSG_GROUP_DECLINE
-        | ClientOpcodeMessage::CMSG_GROUP_DISBAND
-        | ClientOpcodeMessage::CMSG_GROUP_UNINVITE(_)
-        | ClientOpcodeMessage::CMSG_GROUP_UNINVITE_GUID(_)
-        | ClientOpcodeMessage::CMSG_LOOT_METHOD(_)
-        | ClientOpcodeMessage::CMSG_GROUP_RAID_CONVERT
-        | ClientOpcodeMessage::CMSG_GROUP_SET_LEADER(_)
-        | ClientOpcodeMessage::CMSG_GROUP_ASSISTANT_LEADER(_)
-        | ClientOpcodeMessage::CMSG_GROUP_CHANGE_SUB_GROUP(_)
-        | ClientOpcodeMessage::CMSG_GROUP_SWAP_SUB_GROUP(_)
-        | ClientOpcodeMessage::MSG_RAID_READY_CHECK(_)
-        | ClientOpcodeMessage::MSG_RAID_TARGET_UPDATE(_)
-        | ClientOpcodeMessage::MSG_MINIMAP_PING(_)
-        | ClientOpcodeMessage::MSG_RANDOM_ROLL(_)) => {
-            return super::party::receive(ctx, connection, guid, message);
-        }
-        message @ (ClientOpcodeMessage::CMSG_WHO(_)
-        | ClientOpcodeMessage::CMSG_FRIEND_LIST
-        | ClientOpcodeMessage::CMSG_ADD_FRIEND(_)
-        | ClientOpcodeMessage::CMSG_DEL_FRIEND(_)
-        | ClientOpcodeMessage::CMSG_ADD_IGNORE(_)
-        | ClientOpcodeMessage::CMSG_DEL_IGNORE(_)) => {
-            return super::social::receive(ctx, connection, guid, message);
-        }
-        message @ (ClientOpcodeMessage::CMSG_JOIN_CHANNEL(_)
-        | ClientOpcodeMessage::CMSG_LEAVE_CHANNEL(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_LIST(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_PASSWORD(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_SET_OWNER(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_OWNER(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_MODERATOR(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_UNMODERATOR(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_MUTE(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_UNMUTE(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_INVITE(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_KICK(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_BAN(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_UNBAN(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_ANNOUNCEMENTS(_)
-        | ClientOpcodeMessage::CMSG_CHANNEL_MODERATE(_)) => {
-            return super::channel::receive(ctx, connection.connection_id, guid, message);
-        }
-        message @ (ClientOpcodeMessage::CMSG_MESSAGECHAT(_)
-        | ClientOpcodeMessage::CMSG_TEXT_EMOTE(_)
-        | ClientOpcodeMessage::CMSG_EMOTE(_)
-        | ClientOpcodeMessage::CMSG_CHAT_IGNORED(_)) => {
-            return super::chat::receive(ctx, connection, guid, message);
-        }
-        message @ (ClientOpcodeMessage::CMSG_REPOP_REQUEST
-        | ClientOpcodeMessage::MSG_CORPSE_QUERY
-        | ClientOpcodeMessage::CMSG_RECLAIM_CORPSE(_)
-        | ClientOpcodeMessage::CMSG_RESURRECT_RESPONSE(_)
-        | ClientOpcodeMessage::CMSG_SELF_RES
-        | ClientOpcodeMessage::CMSG_SPIRIT_HEALER_ACTIVATE(_)) => {
-            return super::death::receive(ctx, connection.connection_id, guid, message);
-        }
-
-        message @ (ClientOpcodeMessage::CMSG_GOSSIP_HELLO(_)
-        | ClientOpcodeMessage::CMSG_GOSSIP_SELECT_OPTION(_)
-        | ClientOpcodeMessage::CMSG_BINDER_ACTIVATE(_)
-        | ClientOpcodeMessage::MSG_TALENT_WIPE_CONFIRM(_)) => {
-            return super::gossip::receive(ctx, connection.connection_id, guid, message);
-        }
-        message @ (ClientOpcodeMessage::CMSG_TAXINODE_STATUS_QUERY(_)
-        | ClientOpcodeMessage::CMSG_TAXIQUERYAVAILABLENODES(_)
-        | ClientOpcodeMessage::CMSG_ACTIVATETAXI(_)) => {
-            return super::taxi::receive(ctx, connection.connection_id, guid, message);
-        }
         ClientOpcodeMessage::CMSG_AREATRIGGER(request) => {
             super::actor(ctx, guid)?;
-            return Ok(crate::quest::request_enter_areatrigger(
+            return Ok(crate::areatrigger::request_enter_areatrigger(
                 ctx,
                 guid,
                 request.trigger_id,
             )?);
-        }
-        message @ (ClientOpcodeMessage::CMSG_LOOT(_)
-        | ClientOpcodeMessage::CMSG_LOOT_MONEY
-        | ClientOpcodeMessage::CMSG_LOOT_RELEASE(_)
-        | ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(_)
-        | ClientOpcodeMessage::CMSG_GAMEOBJ_USE(_)
-        | ClientOpcodeMessage::CMSG_LOOT_ROLL(_)
-        | ClientOpcodeMessage::CMSG_LOOT_MASTER_GIVE(_)) => {
-            return super::loot::receive(ctx, connection.connection_id, guid, message);
-        }
-        message @ (ClientOpcodeMessage::CMSG_TRAINER_LIST(_)
-        | ClientOpcodeMessage::CMSG_TRAINER_BUY_SPELL(_)
-        | ClientOpcodeMessage::CMSG_LEARN_TALENT(_)
-        | ClientOpcodeMessage::CMSG_SET_ACTION_BUTTON(_)) => {
-            return super::trainer::receive(ctx, connection.connection_id, guid, message);
-        }
-        message @ (ClientOpcodeMessage::CMSG_LIST_INVENTORY(_)
-        | ClientOpcodeMessage::CMSG_BUY_ITEM(_)
-        | ClientOpcodeMessage::CMSG_BUY_ITEM_IN_SLOT(_)
-        | ClientOpcodeMessage::CMSG_SELL_ITEM(_)
-        | ClientOpcodeMessage::CMSG_BUYBACK_ITEM(_)
-        | ClientOpcodeMessage::CMSG_REPAIR_ITEM(_)
-        | ClientOpcodeMessage::CMSG_BANKER_ACTIVATE(_)
-        | ClientOpcodeMessage::CMSG_BUY_BANK_SLOT(_)
-        | ClientOpcodeMessage::CMSG_AUTOBANK_ITEM(_)
-        | ClientOpcodeMessage::CMSG_AUTOSTORE_BANK_ITEM(_)) => {
-            return super::economy::receive(ctx, connection.connection_id, guid, message);
-        }
-        message @ (ClientOpcodeMessage::CMSG_DESTROYITEM(_)
-        | ClientOpcodeMessage::CMSG_SPLIT_ITEM(_)
-        | ClientOpcodeMessage::CMSG_AUTOEQUIP_ITEM(_)
-        | ClientOpcodeMessage::CMSG_AUTOSTORE_BAG_ITEM(_)
-        | ClientOpcodeMessage::CMSG_SWAP_INV_ITEM(_)
-        | ClientOpcodeMessage::CMSG_SWAP_ITEM(_)
-        | ClientOpcodeMessage::CMSG_USE_ITEM(_)
-        | ClientOpcodeMessage::CMSG_READ_ITEM(_)
-        | ClientOpcodeMessage::CMSG_ITEM_NAME_QUERY(_)) => {
-            return super::inventory::receive(ctx, connection.connection_id, guid, message);
-        }
-        message @ (ClientOpcodeMessage::CMSG_QUESTGIVER_STATUS_QUERY(_)
-        | ClientOpcodeMessage::CMSG_QUESTGIVER_HELLO(_)
-        | ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(_)
-        | ClientOpcodeMessage::CMSG_QUEST_QUERY(_)
-        | ClientOpcodeMessage::CMSG_QUESTGIVER_ACCEPT_QUEST(_)
-        | ClientOpcodeMessage::CMSG_QUESTGIVER_CANCEL
-        | ClientOpcodeMessage::CMSG_QUESTGIVER_COMPLETE_QUEST(_)
-        | ClientOpcodeMessage::CMSG_QUESTGIVER_REQUEST_REWARD(_)
-        | ClientOpcodeMessage::CMSG_QUESTGIVER_CHOOSE_REWARD(_)
-        | ClientOpcodeMessage::CMSG_QUESTLOG_SWAP_QUEST(_)
-        | ClientOpcodeMessage::CMSG_QUESTLOG_REMOVE_QUEST(_)
-        | ClientOpcodeMessage::CMSG_PUSHQUESTTOPARTY(_)) => {
-            return super::quest::receive(ctx, connection.connection_id, guid, message);
         }
         ClientOpcodeMessage::CMSG_CAST_SPELL(request) => {
             return super::cast::receive(ctx, connection.connection_id, guid, &request)
@@ -696,9 +567,6 @@ pub(super) fn receive(
                 request.target.guid(),
             )?);
         }
-        ClientOpcodeMessage::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(_)
-        | ClientOpcodeMessage::CMSG_CANCEL_GROWTH_AURA
-        | ClientOpcodeMessage::CMSG_REQUEST_PET_INFO => return Ok(()),
         ClientOpcodeMessage::CMSG_PING(ping) => {
             ServerOpcodeMessage::SMSG_PONG(lyracore_protocol::messages::vanilla::SMSG_PONG {
                 sequence_id: ping.sequence_id,
@@ -793,7 +661,6 @@ pub(super) fn receive(
     };
     Ok(super::send(ctx, connection.connection_id, response, false)?)
 }
-
 fn movement_receipt(
     ctx: &ReducerContext,
     guid: u64,

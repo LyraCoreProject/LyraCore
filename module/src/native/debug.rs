@@ -1,6 +1,6 @@
 use spacetimedb::{reducer, table, ConnectionId, Identity, ReducerContext, Table};
 
-use super::{game_native_player, game_native_world_connection, NativeWorldState};
+use super::{game_native_world_connection, NativeWorldState};
 use crate::{game_account, game_world_entity};
 mod projection;
 
@@ -42,11 +42,7 @@ pub(crate) fn record_birth(
         .is_some_and(|_| crate::spell::is_stealthed(ctx, guid));
     let viewers = crate::aoi::nearby_viewers(ctx, map_id, instance_id, cell)
         .filter(|viewer| {
-            ctx.db
-                .game_native_player()
-                .character_guid()
-                .find(viewer.guid)
-                .is_some()
+            super::world_session(ctx, viewer.guid).is_some()
                 && entity
                     .as_ref()
                     .is_none_or(|entity| viewer.sees_entity(entity, stealthed))

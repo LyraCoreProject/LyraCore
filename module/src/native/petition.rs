@@ -17,7 +17,7 @@ use lyracore_shared::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{game_native_player, NativeWorldConnection, Rollback};
+use super::{NativeWorldConnection, Rollback};
 use crate::{
     game_world_entity,
     guild::{
@@ -31,6 +31,23 @@ use crate::{
     },
     items::game_item_instance,
 };
+
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(_)
+            | ClientOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(_)
+            | ClientOpcodeMessage::CMSG_PETITION_SHOWLIST(_)
+            | ClientOpcodeMessage::CMSG_PETITION_BUY(_)
+            | ClientOpcodeMessage::CMSG_PETITION_QUERY(_)
+            | ClientOpcodeMessage::CMSG_PETITION_SHOW_SIGNATURES(_)
+            | ClientOpcodeMessage::MSG_PETITION_RENAME(_)
+            | ClientOpcodeMessage::CMSG_OFFER_PETITION(_)
+            | ClientOpcodeMessage::CMSG_PETITION_SIGN(_)
+            | ClientOpcodeMessage::MSG_PETITION_DECLINE(_)
+            | ClientOpcodeMessage::CMSG_TURN_IN_PETITION(_)
+    )
+}
 
 pub(super) fn receive(
     ctx: &ReducerContext,
@@ -390,18 +407,16 @@ pub(super) fn view(ctx: &ReducerContext, charter: u64) -> Option<codec::Petition
 }
 
 pub(crate) fn event(ctx: &ReducerContext, event: &GuildEvent) {
-    let Some(recipient) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(event.recipient_guid)
-    else {
+    if !super::has_world_session(ctx, event.recipient_guid) {
         return;
-    };
-    let packet = event_packet(ctx, event);
-    if let Some(packet) = packet {
-        super::send(ctx, recipient.connection_id, packet, false)
-            .expect("bounded petition message fits a world frame");
+    }
+    if let Some(packet) = event_packet(ctx, event) {
+        super::send_to_character(
+            ctx,
+            event.recipient_guid,
+            packet,
+            super::EncodeFailure::Panic,
+        );
     }
 }
 
@@ -447,12 +462,7 @@ pub(crate) fn charter_opened(ctx: &ReducerContext, petition: &GuildPetition) {
         super::realm_guild::deliver(ctx, petition.owner_guid, vec![packet], None);
         return;
     }
-    if let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(petition.owner_guid)
-    {
+    if let Some(owner) = super::world_session(ctx, petition.owner_guid) {
         charter_values(
             ctx,
             owner.connection_id,

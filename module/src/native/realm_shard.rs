@@ -2,6 +2,10 @@
 //! Sessions, the Login Queue and the Character directory. It routes Character selection to the
 //! World Shards and hands World Sessions to them to enter the world.
 
+use lyracore_protocol::codec::{
+    CMSG_CHAR_CREATE_OPCODE, CMSG_CHAR_DELETE_OPCODE, CMSG_CHAR_ENUM_OPCODE,
+    SMSG_CHAR_CREATE_OPCODE, SMSG_CHAR_DELETE_OPCODE, SMSG_CHAR_ENUM_OPCODE,
+};
 use spacetimedb::sats::bsatn;
 use spacetimedb::{
     reducer, table, ConnectionId, Identity, ReducerContext, ScheduleAt, Table, TimeDuration,
@@ -129,12 +133,13 @@ pub fn selection_answered(
         return;
     };
     // IDC retries Transport Loss; this callback carries the receiver's durable outcome.
-    if request.opcode == 0x36 {
+    if request.opcode == CMSG_CHAR_CREATE_OPCODE {
         super::character_names::refused(ctx, request.selection_id, request.database.0);
     }
     super::realm_auction::finish_deletion(ctx, request.selection_id, request.database.0);
     if request.selection_id != 0 {
-        if request.opcode == 0x37 || super::rollback::replies_in(&error).is_none() {
+        if request.opcode == CMSG_CHAR_ENUM_OPCODE || super::rollback::replies_in(&error).is_none()
+        {
             fail_selection(ctx, request.selection_id);
             return;
         }
@@ -347,7 +352,7 @@ pub fn idc_selection_request(
                 changes.extend(
                     after
                         .into_iter()
-                        .filter(|guid| opcode != 0x36 || !before.contains(guid))
+                        .filter(|guid| opcode != CMSG_CHAR_CREATE_OPCODE || !before.contains(guid))
                         .map(|guid| (guid, true)),
                 );
                 blob(&changes)
@@ -557,10 +562,10 @@ pub fn idc_selection_result(
 ) -> Result<(), String> {
     directory::require_world(ctx)?;
     directory::apply(ctx, account_id, &directory_changes, revision)?;
-    if opcode == 0x3a && body == [0x2e] {
+    if opcode == SMSG_CHAR_CREATE_OPCODE && body == [0x2e] {
         super::character_names::created(ctx, selection_id, account_id, &directory_changes)?;
     }
-    if opcode == 0x3a && body.len() == 1 && body[0] != 0x2e {
+    if opcode == SMSG_CHAR_CREATE_OPCODE && body.len() == 1 && body[0] != 0x2e {
         super::character_names::refused(ctx, selection_id, ctx.sender());
     }
     super::realm_auction::finish_deletion(ctx, selection_id, ctx.sender());
@@ -721,7 +726,7 @@ pub(super) fn route_selection(
             worlds.sort();
             worlds.dedup();
             if worlds.is_empty() {
-                super::send_raw(ctx, connection_id, 0x3b, vec![0], false);
+                super::send_raw(ctx, connection_id, SMSG_CHAR_ENUM_OPCODE, vec![0], false);
                 return Ok(());
             }
             let pending = ctx.db.game_pending_selection().insert(PendingSelection {
@@ -825,10 +830,10 @@ fn selection_answer(
     else {
         return Err("unexpected World Shard selection reply".into());
     };
-    if pending.request_opcode != 0x37 {
+    if pending.request_opcode != CMSG_CHAR_ENUM_OPCODE {
         let expected = match pending.request_opcode {
-            0x36 => 0x3a,
-            0x38 => 0x3c,
+            CMSG_CHAR_CREATE_OPCODE => SMSG_CHAR_CREATE_OPCODE,
+            CMSG_CHAR_DELETE_OPCODE => SMSG_CHAR_DELETE_OPCODE,
             _ => 0,
         };
         if opcode != expected {
@@ -841,7 +846,7 @@ fn selection_answer(
         }
         return Ok(());
     }
-    if opcode != 0x3b || body.is_empty() {
+    if opcode != SMSG_CHAR_ENUM_OPCODE || body.is_empty() {
         fail_selection(ctx, id);
         return Ok(());
     }
@@ -857,7 +862,7 @@ fn selection_answer(
             Ok(body) => {
                 cancel_selection(ctx, connection_id);
                 if at_selection(ctx, connection_id).is_some() {
-                    super::send_raw(ctx, connection_id, 0x3b, body, false);
+                    super::send_raw(ctx, connection_id, SMSG_CHAR_ENUM_OPCODE, body, false);
                 }
             }
             Err(_) => fail_selection(ctx, id),

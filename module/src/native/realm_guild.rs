@@ -673,7 +673,7 @@ pub(super) fn event(ctx: &ReducerContext, event: &guild::GuildEvent) -> bool {
     }
     if event_kind::is_petition(event.kind) {
         if let Some(packet) = super::petition::event_packet(ctx, event) {
-            let packet = super::guild::encode(packet);
+            let packet = super::bounded(packet);
             deliver(
                 ctx,
                 event.recipient_guid,
@@ -704,10 +704,9 @@ pub(super) fn event(ctx: &ReducerContext, event: &guild::GuildEvent) -> bool {
         ) {
             if event.kind == event_kind::ROSTER_REFRESH {
                 if let Some(guild) = super::guild::view(ctx, event.guild_id) {
-                    let packet =
-                        super::guild::encode(ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(
-                            Box::new(codec::build_guild_query_response(&guild)),
-                        ));
+                    let packet = super::bounded(ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(
+                        Box::new(codec::build_guild_query_response(&guild)),
+                    ));
                     packets.push((packet.opcode, packet.body));
                 }
             }
@@ -715,12 +714,12 @@ pub(super) fn event(ctx: &ReducerContext, event: &guild::GuildEvent) -> bool {
                 guild::member(ctx, guid).filter(|member| member.guild_id == event.guild_id)
             {
                 if let Some(packet) = super::guild::roster(ctx, event.guild_id, member.rank_id) {
-                    let packet = super::guild::encode(packet);
+                    let packet = super::bounded(packet);
                     packets.push((packet.opcode, packet.body));
                 }
             }
         } else if event.kind == event_kind::INVITE {
-            let packet = super::guild::encode(ServerOpcodeMessage::SMSG_GUILD_INVITE(Box::new(
+            let packet = super::bounded(ServerOpcodeMessage::SMSG_GUILD_INVITE(Box::new(
                 codec::build_guild_invite(
                     event.strings.first().cloned().unwrap_or_default(),
                     event.strings.get(1).cloned().unwrap_or_default(),

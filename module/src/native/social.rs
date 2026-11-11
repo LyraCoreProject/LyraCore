@@ -20,6 +20,18 @@ use crate::{
     chat::game_character_contact, game_area, game_world_entity, guild::game_guild, Character,
 };
 
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::CMSG_WHO(_)
+            | ClientOpcodeMessage::CMSG_FRIEND_LIST
+            | ClientOpcodeMessage::CMSG_ADD_FRIEND(_)
+            | ClientOpcodeMessage::CMSG_DEL_FRIEND(_)
+            | ClientOpcodeMessage::CMSG_ADD_IGNORE(_)
+            | ClientOpcodeMessage::CMSG_DEL_IGNORE(_)
+    )
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
     mut connection: NativeWorldConnection,
@@ -87,11 +99,7 @@ pub(super) fn name_query(
 }
 
 fn online(ctx: &ReducerContext, character: &Character) -> Option<codec::FriendOnline> {
-    let owner = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(character.guid)?;
+    let owner = super::world_session(ctx, character.guid)?;
     let entity = ctx
         .db
         .game_world_entity()
@@ -358,12 +366,7 @@ fn notify_presence(ctx: &ReducerContext, guid: u64, race: u8, fields: Option<cod
         .filter(guid)
         .filter(|contact| !contact.is_ignore && contact.owner_guid != guid)
     {
-        let Some(owner) = ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(contact.owner_guid)
-        else {
+        let Some(owner) = super::world_session(ctx, contact.owner_guid) else {
             continue;
         };
         if crate::helpers::character_by_guid(ctx, owner.character_guid)
@@ -436,12 +439,7 @@ fn prune_deleted(ctx: &ReducerContext, guid: u64) {
 pub(super) fn deleted(ctx: &ReducerContext, guid: u64) {
     let contacts = ctx.db.game_character_contact();
     for contact in contacts.by_target().filter(guid).collect::<Vec<_>>() {
-        if let Some(owner) = ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(contact.owner_guid)
-        {
+        if let Some(owner) = super::world_session(ctx, contact.owner_guid) {
             result(
                 ctx,
                 owner.connection_id,

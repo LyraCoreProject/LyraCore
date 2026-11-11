@@ -68,6 +68,16 @@ pub(super) fn list(
     )?)
 }
 
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::CMSG_TRAINER_LIST(_)
+            | ClientOpcodeMessage::CMSG_TRAINER_BUY_SPELL(_)
+            | ClientOpcodeMessage::CMSG_LEARN_TALENT(_)
+            | ClientOpcodeMessage::CMSG_SET_ACTION_BUTTON(_)
+    )
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,

@@ -57,12 +57,9 @@ fn emit(ctx: &ReducerContext, source: u64, message: ServerOpcodeMessage, source_
     if ctx.db.game_native_player().count() == 0 {
         return;
     }
-    let packet = lyracore_protocol::world::encode(message)
-        .expect("fixed-size combat packet fits a world frame");
+    let packet = super::bounded(message);
     if source_only {
-        if let Some(player) = ctx.db.game_native_player().character_guid().find(source) {
-            super::send_raw(ctx, player.connection_id, packet.opcode, packet.body, false);
-        }
+        super::send_raw_to_character(ctx, source, packet.opcode, packet.body);
     } else {
         super::visibility::broadcast(ctx, source, packet.opcode, packet.body, false);
     }
@@ -217,12 +214,7 @@ pub(crate) fn combo_points_changed(
     target_guid: u64,
     points: u32,
 ) {
-    if let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(owner_guid)
-    {
+    if let Some(owner) = super::world_session(ctx, owner_guid) {
         send_combo_points(ctx, owner.connection_id, owner_guid, target_guid, points);
     }
 }

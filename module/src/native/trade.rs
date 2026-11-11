@@ -1,8 +1,24 @@
 use lyracore_protocol::{codec, messages::vanilla::opcodes::ClientOpcodeMessage};
 use spacetimedb::ReducerContext;
 
-use super::{game_native_player, Rollback};
+use super::Rollback;
 use crate::trade::{self, TradeEvent};
+
+pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
+    matches!(
+        message,
+        ClientOpcodeMessage::CMSG_INITIATE_TRADE(_)
+            | ClientOpcodeMessage::CMSG_BEGIN_TRADE
+            | ClientOpcodeMessage::CMSG_CANCEL_TRADE
+            | ClientOpcodeMessage::CMSG_SET_TRADE_ITEM(_)
+            | ClientOpcodeMessage::CMSG_CLEAR_TRADE_ITEM(_)
+            | ClientOpcodeMessage::CMSG_SET_TRADE_GOLD(_)
+            | ClientOpcodeMessage::CMSG_ACCEPT_TRADE(_)
+            | ClientOpcodeMessage::CMSG_UNACCEPT_TRADE
+            | ClientOpcodeMessage::CMSG_BUSY_TRADE
+            | ClientOpcodeMessage::CMSG_IGNORE_TRADE
+    )
+}
 
 pub(super) fn receive(
     ctx: &ReducerContext,
@@ -37,18 +53,17 @@ pub(super) fn receive(
 }
 
 pub(crate) fn event(ctx: &ReducerContext, event: &TradeEvent) {
-    let Some(recipient) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(event.recipient_guid)
-    else {
+    if !super::has_world_session(ctx, event.recipient_guid) {
         return;
-    };
+    }
     match codec::build_trade_event(event.kind, event.other_guid, &event.payload) {
         Some(packet) => {
-            super::send(ctx, recipient.connection_id, packet, false)
-                .expect("bounded trade message fits a world frame");
+            super::send_to_character(
+                ctx,
+                event.recipient_guid,
+                packet,
+                super::EncodeFailure::Panic,
+            );
         }
         None => spacetimedb::log::warn!(
             "trade event {} has an unknown kind or malformed offer: {}",
