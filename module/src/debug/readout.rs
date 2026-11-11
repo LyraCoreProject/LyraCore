@@ -52,8 +52,14 @@ pub fn debug_compute_swing(ctx: &ReducerContext, attacker_guid: u64, target_guid
     let (bmin, bmax) = crate::combat::swing_range_ctx(ctx, &attacker);
     let eff_armor = crate::modifiers::effective_armor(ctx, &target);
     let p = crate::combat::swing_profile(bmin, bmax, eff_armor, attacker.level);
-    let block_value = crate::combat::white_block_value(ctx, &target);
-    let table = crate::combat::white_swing_table(ctx, &attacker, &target, block_value);
+    let block_value = crate::combat::defender_block_value(ctx, &target);
+    let table = crate::combat::attack_table_for(
+        ctx,
+        &attacker,
+        &target,
+        crate::combat::AttackType::Melee,
+        None,
+    );
     let crit_bp = table.crit;
     let attacker_weapon_skill = crate::skill::effective_weapon_skill(ctx, &attacker);
     let defender_defense_skill = crate::skill::effective_defense_skill(ctx, &target);

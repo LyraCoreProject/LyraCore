@@ -1,3 +1,4 @@
+mod attack_table;
 pub(crate) mod damage;
 pub(crate) mod death;
 pub(crate) mod energy;
@@ -8,8 +9,10 @@ mod leash;
 pub(crate) mod queued_strike;
 pub(crate) mod swing;
 mod tables;
-mod white_melee;
 
+#[cfg(feature = "debug_reducers")]
+pub(crate) use attack_table::attack_table_for;
+pub(crate) use attack_table::{roll_attack, AttackOutcome, AttackType, DeliveredSpell};
 #[cfg_attr(
     not(any(has_packages, feature = "debug_reducers")),
     allow(unused_imports)
@@ -40,16 +43,16 @@ pub(crate) use engage::{
     validate_attack_target, AttackRefusal, Relation, SWING_ERROR_BAD_FACING, SWING_ERROR_NONE,
     SWING_ERROR_NOT_IN_RANGE,
 };
+#[cfg(feature = "debug_reducers")]
+pub(crate) use folds::defender_block_value;
 pub(crate) use folds::{
     arm_react, attack_power_modifiers, effective_crit_bp, effective_ranged_crit_bp,
     effective_swing_time, equipped_offhand_weapon_damage, equipped_ranged_weapon, find_ammo,
     finisher_strike_damage, melee_attack_power, ranged_projectile, react_window_active,
-    retaliate_on_hit, roll_money, roll_ranged_swing, roll_strike_outcome, roll_swing,
-    roll_swing_with_range, seal_holy_on_swing, spend_ranged_ammo, swing_range_ctx,
-    weapon_strike_spell_damage, wear_weapon, ReactKind, WeaponStrike,
+    retaliate_on_hit, roll_money, roll_ranged_swing, roll_swing, roll_swing_with_range,
+    seal_holy_on_swing, spend_ranged_ammo, swing_range_ctx, weapon_strike_spell_damage,
+    wear_weapon, ReactKind, WeaponStrike,
 };
-#[cfg(feature = "debug_reducers")]
-pub(crate) use folds::{white_block_value, white_swing_table};
 
 pub(crate) use energy::regenerate_energy;
 
@@ -60,17 +63,14 @@ pub(crate) use swing::{
 };
 pub use swing::{ranged_impact, tick_melee};
 pub(crate) use tables::{
-    apply_offhand_penalty, armor_mitigated, armor_mitigation_pct, attack_outcome, block_chance_bp,
-    crushing_chance_bp, dodge_chance_bp, glancing_chance_bp, is_avoided, is_rage_user,
-    is_translating, melee_attack_power_for, miss_bp_with_bonus, miss_chance_bp, parry_chance_bp,
-    player_swing_range_ap, rage_from_damage, ranged_sheet_values, regen_entity_health,
-    regen_entity_health_in_combat, regen_entity_power, scale_swing_for_rank, swing_time_with_haste,
-    weapon_swing_range_ap, AttackTable, RegenWindow, AUTO_SHOT_PROJECTILE_SPEED, BASE_MISS_BP,
+    apply_offhand_penalty, armor_mitigated, armor_mitigation_pct, is_rage_user, is_translating,
+    melee_attack_power_for, player_swing_range_ap, rage_from_damage, ranged_sheet_values,
+    regen_entity_health, regen_entity_health_in_combat, regen_entity_power, scale_swing_for_rank,
+    swing_time_with_haste, weapon_swing_range_ap, RegenWindow, AUTO_SHOT_PROJECTILE_SPEED,
     CLASS_MAGE, CLASS_PRIEST, CLASS_WARLOCK, CREATURE_MELEE_MAX, CREATURE_MELEE_MIN, CRIT_MULT,
-    CRUSH_DAMAGE_PCT, DUAL_WIELD_MISS_BP, GLANCING_DAMAGE_PCT, HIT_BLOCK, HIT_CRIT, HIT_CRUSHING,
-    HIT_DODGE, HIT_GLANCING, HIT_MISS, HIT_NORMAL, HIT_PARRY, MELEE_LEEWAY_WINDOW_MS,
-    MELEE_RANGE_LEEWAY_CREATURE_SQ, MELEE_RANGE_LEEWAY_SQ, MELEE_RANGE_SQ, RANGED_INITIAL_SHOT_MS,
-    RANGED_RANGE_SQ, WAND_PROJECTILE_SPEED,
+    CRUSH_DAMAGE_PCT, GLANCING_DAMAGE_PCT, MELEE_LEEWAY_WINDOW_MS, MELEE_RANGE_LEEWAY_CREATURE_SQ,
+    MELEE_RANGE_LEEWAY_SQ, MELEE_RANGE_SQ, RANGED_INITIAL_SHOT_MS, RANGED_RANGE_SQ,
+    WAND_PROJECTILE_SPEED,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use tables::{regen_health_in_combat, swing_profile};

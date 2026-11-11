@@ -89,10 +89,6 @@ pub(crate) fn skill_cap_for_level(level: u32) -> u32 {
     level * SKILL_PER_LEVEL
 }
 
-pub(crate) fn skill_diff(defense_skill: u32, weapon_skill: u32) -> u32 {
-    defense_skill.saturating_sub(weapon_skill)
-}
-
 pub(crate) fn next_skill(current: u32, cap: u32) -> u32 {
     (current + 1).min(cap)
 }
@@ -299,17 +295,6 @@ pub(crate) fn effective_defense_skill(ctx: &ReducerContext, target: &WorldEntity
     let gear =
         crate::items::equipped_stat_bonus(ctx, target.guid, crate::items::EquipStat::Defense);
     (i64::from(base) + i64::from(aura) + i64::from(gear)).clamp(0, i64::from(u32::MAX)) as u32
-}
-
-pub(crate) fn skill_diff_ctx(
-    ctx: &ReducerContext,
-    attacker: &WorldEntity,
-    target: &WorldEntity,
-) -> u32 {
-    skill_diff(
-        effective_defense_skill(ctx, target),
-        effective_weapon_skill(ctx, attacker),
-    )
 }
 
 fn raise_skill(ctx: &ReducerContext, guid: u64, line: u32) -> Option<u32> {
@@ -1142,13 +1127,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn skill_diff_is_defense_minus_weapon_clamped() {
-        assert_eq!(skill_diff(300, 300), 0);
-        assert_eq!(skill_diff(315, 300), 15);
-        assert_eq!(skill_diff(300, 315), 0);
     }
 
     #[test]

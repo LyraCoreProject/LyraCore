@@ -5,67 +5,8 @@ use crate::{
     ItemInstance, WorldEntity,
 };
 
-use super::queued_strike::QueuedStrikeDamage;
+use super::queued_strike::{QueuedStrike, QueuedStrikeDamage};
 use super::*;
-
-fn fold_band(
-    ctx: &ReducerContext,
-    target_guid: u64,
-    base: u32,
-    field: u8,
-    gear: crate::items::EquipStat,
-) -> u32 {
-    (i64::from(base)
-        + i64::from(crate::modifiers::combat_field_bonus(
-            ctx,
-            target_guid,
-            field,
-        ))
-        + i64::from(crate::items::equipped_stat_bonus(ctx, target_guid, gear)))
-    .clamp(0, 10_000) as u32
-}
-
-pub(crate) fn effective_dodge_bp(ctx: &ReducerContext, target: &WorldEntity, sd: u32) -> u32 {
-    fold_band(
-        ctx,
-        target.guid,
-        dodge_chance_bp(
-            crate::modifiers::effective_stat(ctx, target, crate::spell::STAT_AGI),
-            sd,
-        ),
-        crate::spell::COMBAT_DODGE,
-        crate::items::EquipStat::Dodge,
-    )
-}
-
-pub(crate) fn effective_parry_bp(ctx: &ReducerContext, target: &WorldEntity, sd: u32) -> u32 {
-    fold_band(
-        ctx,
-        target.guid,
-        parry_chance_bp(sd),
-        crate::spell::COMBAT_PARRY,
-        crate::items::EquipStat::Parry,
-    )
-}
-
-pub(crate) fn effective_block_bp(
-    ctx: &ReducerContext,
-    target: &WorldEntity,
-    sd: u32,
-    block_value: u32,
-) -> u32 {
-    if block_value > 0 {
-        fold_band(
-            ctx,
-            target.guid,
-            block_chance_bp(sd),
-            crate::spell::COMBAT_BLOCK,
-            crate::items::EquipStat::Block,
-        )
-    } else {
-        0
-    }
-}
 
 pub(crate) fn attack_power_modifiers(ctx: &ReducerContext, guid: u64, field: u8) -> u32 {
     let (positive, negative) = crate::spell::auras_on(ctx, guid)
@@ -119,7 +60,7 @@ pub(crate) fn arm_react(ctx: &ReducerContext, guid: u64, kind: ReactKind) {
     }
 }
 
-pub(crate) fn effective_block_value(ctx: &ReducerContext, defender: &WorldEntity) -> u32 {
+fn effective_block_value(ctx: &ReducerContext, defender: &WorldEntity) -> u32 {
     let Some(inst) =
         crate::items::item_in_slot(ctx, defender.guid, crate::items::equip_slot::OFFHAND)
     else {
@@ -165,7 +106,7 @@ fn crit_bp_for_weapon_skill(
         return (500 + bonus).clamp(0, 10_000) as u32;
     }
     let rate = crate::stats::crit_per_agility_for(ctx, attacker.class(), attacker.level);
-    super::white_melee::sheet_crit_bp(
+    super::tables::sheet_crit_bp(
         crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_AGI),
         attacker.class(),
         attacker.level,
@@ -174,16 +115,6 @@ fn crit_bp_for_weapon_skill(
         crate::skill::skill_cap_for_level(attacker.level) as i32,
         bonus,
     )
-}
-
-pub(crate) fn effective_miss_bp(
-    ctx: &ReducerContext,
-    attacker: &WorldEntity,
-    skill_diff: u32,
-) -> u32 {
-    let bonus = crate::modifiers::combat_field_bonus(ctx, attacker.guid, crate::spell::COMBAT_HIT)
-        + crate::items::equipped_stat_bonus(ctx, attacker.guid, crate::items::EquipStat::Hit);
-    miss_bp_with_bonus(miss_chance_bp(skill_diff), bonus)
 }
 
 pub(crate) fn effective_swing_time(ctx: &ReducerContext, attacker: &WorldEntity) -> u32 {
@@ -364,34 +295,6 @@ pub(crate) struct WeaponStrike {
     pub(crate) percent: u32,
     pub(crate) normalized: bool,
     pub(crate) ranged: bool,
-}
-
-// vmangos MeleeSpellHitResult: no glancing or crushing; ranged strikes skip dodge and parry.
-pub(crate) fn roll_strike_outcome(
-    ctx: &ReducerContext,
-    attacker: &WorldEntity,
-    target: &WorldEntity,
-    ranged: bool,
-) -> u8 {
-    let sd = crate::skill::skill_diff_ctx(ctx, attacker, target);
-    let (dodge, parry) = if ranged {
-        (0, 0)
-    } else {
-        (
-            effective_dodge_bp(ctx, target, sd),
-            effective_parry_bp(ctx, target, sd),
-        )
-    };
-    let table = AttackTable {
-        miss: effective_miss_bp(ctx, attacker, sd),
-        dodge,
-        parry,
-        glancing: 0,
-        block: 0,
-        crit: effective_crit_bp(ctx, attacker),
-        crushing: 0,
-    };
-    attack_outcome(ctx.random::<u32>() % 10_000, &table)
 }
 
 pub(crate) fn weapon_strike_spell_damage(
@@ -603,13 +506,13 @@ pub(crate) fn retaliate_on_hit(ctx: &ReducerContext, victim_guid: u64, attacker_
     );
 }
 
-// `strike` is a firing queued strike's damage; `None` rolls a white swing.
+// `strike` is a firing queued strike; `None` rolls a white swing.
 pub(crate) fn roll_swing(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
     target: &WorldEntity,
-    strike: Option<QueuedStrikeDamage>,
-) -> (u32, u8, u32) {
+    strike: Option<QueuedStrike>,
+) -> (u32, AttackOutcome, u32) {
     let range = crate::creatures::scale_hunter_pet_swing(
         ctx,
         attacker.guid,
@@ -623,34 +526,17 @@ pub(crate) fn roll_swing_with_range(
     attacker: &WorldEntity,
     target: &WorldEntity,
     range: (u32, u32),
-    strike: Option<QueuedStrikeDamage>,
-) -> (u32, u8, u32) {
-    let block_value = if strike.is_none() {
-        white_block_value(ctx, target)
-    } else {
-        effective_block_value(ctx, target)
-    };
-    let table = if strike.is_none() {
-        white_swing_table(ctx, attacker, target, block_value)
-    } else {
-        let sd = crate::skill::skill_diff_ctx(ctx, attacker, target);
-        AttackTable {
-            miss: effective_miss_bp(ctx, attacker, sd),
-            dodge: effective_dodge_bp(ctx, target, sd),
-            parry: effective_parry_bp(ctx, target, sd),
-            glancing: glancing_chance_bp(attacker.level, target.level),
-            block: effective_block_bp(ctx, target, sd, block_value),
-            crit: effective_crit_bp(ctx, attacker),
-            crushing: if !attacker.is_player() && target.is_player() {
-                crushing_chance_bp(attacker.level, target.level)
-            } else {
-                0
-            },
-        }
-    };
+    strike: Option<QueuedStrike>,
+) -> (u32, AttackOutcome, u32) {
+    let (outcome, table) = roll_attack(
+        ctx,
+        attacker,
+        target,
+        AttackType::Melee,
+        strike.map(|strike| strike.spell),
+    );
     let stream = crate::conformance_rolls::RollStream::Swing(attacker.guid);
     let rolls = SwingRolls {
-        outcome: crate::conformance_rolls::draw(ctx, stream) % 10_000,
         weapon: crate::conformance_rolls::draw(ctx, stream),
         block: crate::conformance_rolls::draw(ctx, stream) % 10_000,
     };
@@ -658,168 +544,18 @@ pub(crate) fn roll_swing_with_range(
         crate::modifiers::effective_armor(ctx, target),
         attacker.level,
     );
-    resolve_swing(table, rolls, range, strike, mit_pct, block_value)
-}
-
-pub(crate) fn white_swing_table(
-    ctx: &ReducerContext,
-    attacker: &WorldEntity,
-    target: &WorldEntity,
-    block_value: u32,
-) -> AttackTable {
-    use crate::creatures::catalogue::game_creature_defense;
-
-    let target_is_character = target.is_player();
-    let weapon = crate::skill::effective_weapon_skill(ctx, attacker) as i32;
-    let maximum = crate::skill::skill_cap_for_level(attacker.level) as i32;
-    let defense_maximum = crate::skill::skill_cap_for_level(target.level) as i32;
-    let flags = (!target_is_character)
-        .then(|| ctx.db.game_creature_defense().entry().find(target.entry))
-        .flatten();
-    let defense = white_defense_skill(
-        ctx,
-        attacker,
-        target,
-        flags.as_ref().is_some_and(|flags| flags.no_defense),
-    );
-    let facing = crate::geometry::is_facing(
-        target.x,
-        target.y,
-        target.orientation,
-        attacker.x,
-        attacker.y,
-    );
-    let (dodge, parry, block) =
-        white_defense_bands(ctx, target, block_value, facing, flags.as_ref());
-    let hit_bonus =
-        crate::modifiers::combat_field_bonus(ctx, attacker.guid, crate::spell::COMBAT_HIT)
-            + crate::items::equipped_stat_bonus(ctx, attacker.guid, crate::items::EquipStat::Hit);
-    let mut table = super::white_melee::attack_table(
-        super::white_melee::Skills {
-            weapon,
-            maximum,
-            defense,
-            defense_maximum,
-            target_level: target.level,
-            target_is_character,
-        },
-        AttackTable {
-            miss: if attacker.is_player()
-                && attacker.next_swing_spell == 0
-                && equipped_offhand_weapon_damage(ctx, attacker.guid).is_some()
-            {
-                DUAL_WIELD_MISS_BP
-            } else {
-                BASE_MISS_BP
-            },
-            dodge,
-            parry,
-            glancing: 0,
-            block,
-            crit: effective_crit_bp(ctx, attacker),
-            crushing: if !attacker.is_player() && target_is_character {
-                crushing_chance_bp(attacker.level, target.level)
-            } else {
-                0
-            },
-        },
-        hit_bonus,
-        character_controls(ctx, attacker) && !character_controls(ctx, target),
-    );
-    if target_is_character && !facing {
-        table.dodge = 0;
-    }
-    if target.unit_bytes_1 & crate::world::STAND_STATE_MASK != crate::world::STAND_STATE_STAND {
-        table.miss = 0;
-    }
-    table
-}
-
-fn character_controls(ctx: &ReducerContext, unit: &WorldEntity) -> bool {
-    unit.is_player()
-        || unit.owner_guid != 0
-            && ctx
-                .db
-                .game_world_entity()
-                .guid()
-                .find(unit.owner_guid)
-                .is_some_and(|owner| owner.is_player())
-}
-
-fn white_defense_bands(
-    ctx: &ReducerContext,
-    target: &WorldEntity,
-    block_value: u32,
-    facing: bool,
-    flags: Option<&crate::creatures::catalogue::CreatureDefense>,
-) -> (u32, u32, u32) {
-    let target_is_character = target.is_player();
-    let totem = !target_is_character
-        && ctx
-            .db
-            .game_creature_template()
-            .entry()
-            .find(target.entry)
-            .is_some_and(|template| {
-                template.creature_type == lyracore_shared::spell::taxonomy::TOTEM_TYPE
-            });
-    let can_defend = !totem
-        && !crate::spell::is_stunned(ctx, target.guid)
-        && !crate::spell::is_non_melee_spell_casting(ctx, target.guid);
-    let dodge = if target_is_character {
-        effective_dodge_bp(ctx, target, 0)
-    } else {
-        fold_band(
-            ctx,
-            target.guid,
-            500,
-            crate::spell::COMBAT_DODGE,
-            crate::items::EquipStat::Dodge,
-        )
-    };
-    let parry = effective_parry_bp(ctx, target, 0);
-    let block = if target_is_character {
-        effective_block_bp(ctx, target, 0, block_value)
-    } else {
-        fold_band(
-            ctx,
-            target.guid,
-            500,
-            crate::spell::COMBAT_BLOCK,
-            crate::items::EquipStat::Block,
-        )
-    };
-    let defense_bonus = if target_is_character {
-        (i64::from(crate::skill::effective_defense_skill(ctx, target))
-            - i64::from(crate::skill::skill_cap_for_level(target.level)))
-            * 4
-    } else {
-        0
-    };
-    let with_defense = |chance| (i64::from(chance) + defense_bonus).clamp(0, 10_000) as u32;
-    let dodge = with_defense(dodge);
-    let parry = with_defense(parry);
-    let block = if !target_is_character || block_value > 0 {
-        with_defense(block)
-    } else {
-        0
-    };
-    (
-        if can_defend { dodge } else { 0 },
-        if can_defend && facing && !flags.is_some_and(|flags| flags.no_parry) {
-            parry
-        } else {
-            0
-        },
-        if can_defend && facing && !flags.is_some_and(|flags| flags.no_block) {
-            block
-        } else {
-            0
-        },
+    resolve_swing(
+        outcome,
+        table.partial_block,
+        rolls,
+        range,
+        strike.map(|strike| strike.damage),
+        mit_pct,
+        defender_block_value(ctx, target),
     )
 }
 
-pub(crate) fn white_block_value(ctx: &ReducerContext, target: &WorldEntity) -> u32 {
+pub(crate) fn defender_block_value(ctx: &ReducerContext, target: &WorldEntity) -> u32 {
     if target.is_player() {
         effective_block_value(ctx, target)
     } else {
@@ -828,61 +564,21 @@ pub(crate) fn white_block_value(ctx: &ReducerContext, target: &WorldEntity) -> u
     }
 }
 
-fn white_defense_skill(
-    ctx: &ReducerContext,
-    attacker: &WorldEntity,
-    target: &WorldEntity,
-    no_defense: bool,
-) -> i32 {
-    use crate::skill::game_player_skill;
-    let maximum = crate::skill::skill_cap_for_level(target.level) as i32;
-    if no_defense {
-        0
-    } else if target.is_player() && attacker.is_player() {
-        let maximum = ctx
-            .db
-            .game_player_skill()
-            .by_character()
-            .filter(target.guid)
-            .find(|skill| skill.skill_line == crate::skill::skill_line::DEFENSE)
-            .map_or(maximum, |skill| i32::from(skill.max_rank));
-        let aura =
-            crate::modifiers::combat_field_bonus(ctx, target.guid, crate::spell::COMBAT_DEFENSE);
-        let gear =
-            crate::items::equipped_stat_bonus(ctx, target.guid, crate::items::EquipStat::Defense);
-        (i64::from(maximum) + i64::from(aura) + i64::from(gear)).clamp(0, i64::from(i32::MAX))
-            as i32
-    } else if target.is_player() {
-        crate::skill::effective_defense_skill(ctx, target) as i32
-    } else {
-        maximum
-    }
-}
-
 struct SwingRolls {
-    outcome: u32,
     weapon: u32,
     block: u32,
 }
 
 // Returns (damage, outcome, blocked); a blocked crit stays a crit.
 fn resolve_swing(
-    mut table: AttackTable,
+    outcome: AttackOutcome,
+    partial_block_bp: u32,
     rolls: SwingRolls,
     (min, max): (u32, u32),
     strike: Option<QueuedStrikeDamage>,
     mit_pct: u32,
     block_value: u32,
-) -> (u32, u8, u32) {
-    // vmangos rolls a queued strike's partial block after the table, so it can crit and block.
-    let block_bp = table.block;
-    if strike.is_some() {
-        table.block = 0;
-    }
-    let outcome = attack_outcome(rolls.outcome, &table);
-    if matches!(outcome, HIT_MISS | HIT_DODGE | HIT_PARRY) {
-        return (0, outcome, 0);
-    }
+) -> (u32, AttackOutcome, u32) {
     let weapon = min + rolls.weapon % (max - min + 1);
     let base = strike.map_or(weapon, |strike| {
         crate::spell::apply_spell_mod(
@@ -892,24 +588,28 @@ fn resolve_swing(
         )
     });
     let pre_mit = match outcome {
-        HIT_CRIT => base * CRIT_MULT,
-        HIT_GLANCING => (base * GLANCING_DAMAGE_PCT / 100).max(1),
-        HIT_CRUSHING => base * CRUSH_DAMAGE_PCT / 100,
-        _ => base,
+        AttackOutcome::Miss | AttackOutcome::Dodge | AttackOutcome::Parry => {
+            return (0, outcome, 0)
+        }
+        AttackOutcome::Crit => base * CRIT_MULT,
+        AttackOutcome::Glancing => (base * GLANCING_DAMAGE_PCT / 100).max(1),
+        AttackOutcome::Crushing => base * CRUSH_DAMAGE_PCT / 100,
+        AttackOutcome::Normal | AttackOutcome::Block => base,
     };
     let dmg = armor_mitigated(pre_mit, mit_pct);
+    // vmangos rolls a queued strike's partial block after the table, so it can crit and block.
     let blocks = match strike {
-        Some(_) => rolls.block < block_bp,
-        None => outcome == HIT_BLOCK,
+        Some(_) => rolls.block < partial_block_bp,
+        None => outcome == AttackOutcome::Block,
     };
     if !blocks {
         return (dmg, outcome, 0);
     }
     let blocked = block_value.min(dmg);
-    let outcome = if outcome == HIT_CRIT {
-        HIT_CRIT
+    let outcome = if outcome == AttackOutcome::Crit {
+        AttackOutcome::Crit
     } else {
-        HIT_BLOCK
+        AttackOutcome::Block
     };
     (dmg - blocked, outcome, blocked)
 }
@@ -920,20 +620,26 @@ pub(crate) fn roll_ranged_swing(
     target: &WorldEntity,
     dmin: u32,
     dmax: u32,
-) -> (u32, u8) {
-    let sd = crate::skill::skill_diff_ctx(ctx, attacker, target);
-    if (ctx.random::<u32>() % 10_000) < effective_miss_bp(ctx, attacker, sd) {
-        return (0, HIT_MISS);
-    }
-    let is_crit = (ctx.random::<u32>() % 10_000) < effective_ranged_crit_bp(ctx, attacker);
-    let base = dmin + ctx.random::<u32>() % (dmax.saturating_sub(dmin) + 1);
-    let pre_mit = if is_crit { base * CRIT_MULT } else { base };
+) -> (u32, AttackOutcome) {
+    let (outcome, _) = roll_attack(ctx, attacker, target, AttackType::Ranged, None);
+    let weapon = crate::conformance_rolls::draw(
+        ctx,
+        crate::conformance_rolls::RollStream::Swing(attacker.guid),
+    );
+    let base = dmin + weapon % (dmax.saturating_sub(dmin) + 1);
+    let pre_mit = match outcome {
+        AttackOutcome::Miss | AttackOutcome::Dodge | AttackOutcome::Parry => return (0, outcome),
+        AttackOutcome::Crit => base * CRIT_MULT,
+        AttackOutcome::Normal
+        | AttackOutcome::Glancing
+        | AttackOutcome::Crushing
+        | AttackOutcome::Block => base,
+    };
     let mit_pct = armor_mitigation_pct(
         crate::modifiers::effective_armor(ctx, target),
         attacker.level,
     );
-    let dmg = armor_mitigated(pre_mit, mit_pct);
-    (dmg, if is_crit { HIT_CRIT } else { HIT_NORMAL })
+    (armor_mitigated(pre_mit, mit_pct), outcome)
 }
 
 pub(crate) fn roll_money(ctx: &ReducerContext, min: u32, max: u32) -> u32 {
@@ -1005,26 +711,10 @@ mod seal_tests {
 #[cfg(test)]
 mod queued_strike_tests {
     use super::{resolve_swing, QueuedStrikeDamage, SwingRolls};
-    use crate::combat::{AttackTable, HIT_BLOCK, HIT_CRIT, HIT_GLANCING, HIT_NORMAL};
-
-    fn table(block: u32, crit: u32, glancing: u32) -> AttackTable {
-        AttackTable {
-            miss: 0,
-            dodge: 0,
-            parry: 0,
-            glancing,
-            block,
-            crit,
-            crushing: 0,
-        }
-    }
+    use crate::combat::AttackOutcome;
 
     fn rolls(block: u32) -> SwingRolls {
-        SwingRolls {
-            outcome: 0,
-            weapon: 0,
-            block,
-        }
+        SwingRolls { weapon: 0, block }
     }
 
     fn heroic_strike(bonus: u32) -> Option<QueuedStrikeDamage> {
@@ -1039,22 +729,23 @@ mod queued_strike_tests {
         // (100 + 11) doubled by the crit, halved by armor, then 30 blocked.
         assert_eq!(
             resolve_swing(
-                table(10_000, 10_000, 0),
+                AttackOutcome::Crit,
+                10_000,
                 rolls(0),
                 (100, 100),
                 heroic_strike(11),
                 50,
                 30
             ),
-            (81, HIT_CRIT, 30)
+            (81, AttackOutcome::Crit, 30)
         );
     }
 
     #[test]
-    fn a_white_swing_blocks_before_it_can_crit() {
+    fn a_white_swing_blocks_from_its_table_band() {
         assert_eq!(
-            resolve_swing(table(10_000, 10_000, 0), rolls(0), (100, 100), None, 50, 30),
-            (20, HIT_BLOCK, 30)
+            resolve_swing(AttackOutcome::Block, 0, rolls(0), (100, 100), None, 50, 30),
+            (20, AttackOutcome::Block, 30)
         );
     }
 
@@ -1062,14 +753,15 @@ mod queued_strike_tests {
     fn a_queued_strike_misses_its_block_roll_above_the_block_chance() {
         assert_eq!(
             resolve_swing(
-                table(5_000, 0, 0),
+                AttackOutcome::Normal,
+                5_000,
                 rolls(5_000),
                 (100, 100),
                 heroic_strike(11),
                 0,
                 30
             ),
-            (111, HIT_NORMAL, 0)
+            (111, AttackOutcome::Normal, 0)
         );
     }
 
@@ -1081,8 +773,8 @@ mod queued_strike_tests {
             mod_pct: 100,
         });
         assert_eq!(
-            resolve_swing(table(0, 0, 0), rolls(9_999), (1, 1), maul, 0, 0),
-            (2002, HIT_NORMAL, 0)
+            resolve_swing(AttackOutcome::Normal, 0, rolls(9_999), (1, 1), maul, 0, 0),
+            (2002, AttackOutcome::Normal, 0)
         );
     }
 
@@ -1090,14 +782,15 @@ mod queued_strike_tests {
     fn a_glancing_strike_reduces_the_whole_hit() {
         assert_eq!(
             resolve_swing(
-                table(0, 0, 10_000),
+                AttackOutcome::Glancing,
+                0,
                 rolls(9_999),
                 (100, 100),
                 heroic_strike(100),
                 0,
                 0
             ),
-            (140, HIT_GLANCING, 0)
+            (140, AttackOutcome::Glancing, 0)
         );
     }
 }

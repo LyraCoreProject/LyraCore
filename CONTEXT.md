@@ -13,7 +13,7 @@ entry in both files.
 
 ## Index
 
-**A** [Account](CORE_TERMS.md#account) · [Account Character Owner](#retired-terms) · [Account Claim](#retired-terms) · [Account Fence](#retired-terms) · [Action Outcome](#procs) · [Actor](CORE_TERMS.md#actor) · [Alpha Test Tools](#accounts-characters-and-sessions) · [AOI](CORE_TERMS.md#aoi) · [AOI Grant](CORE_TERMS.md#aoi-grant) · [Architecture Test](CORE_TERMS.md#architecture-test) · [Assistant](#groups) · [Auction Cut](#auctions) · [Auction House](#auctions) · [Auction Mail](#auctions) · [Auction Market](#auctions) · [Auction Notice](#auctions) · [Authored Casting](#creature-ai) · [Authored Combat](#creature-ai) · [Authored Flee](#creature-ai) · [Authored Spawn](#requests-and-delivery) · [Authoring Library](#packages) · [Auto-Reply](#chat) · [Away Status](#chat)
+**A** [Account](CORE_TERMS.md#account) · [Account Character Owner](#retired-terms) · [Account Claim](#retired-terms) · [Account Fence](#retired-terms) · [Action Outcome](#procs) · [Actor](CORE_TERMS.md#actor) · [Alpha Test Tools](#accounts-characters-and-sessions) · [AOI](CORE_TERMS.md#aoi) · [AOI Grant](CORE_TERMS.md#aoi-grant) · [Architecture Test](CORE_TERMS.md#architecture-test) · [Assistant](#groups) · [Attack Table](#procs) · [Auction Cut](#auctions) · [Auction House](#auctions) · [Auction Mail](#auctions) · [Auction Market](#auctions) · [Auction Notice](#auctions) · [Authored Casting](#creature-ai) · [Authored Combat](#creature-ai) · [Authored Flee](#creature-ai) · [Authored Spawn](#requests-and-delivery) · [Authoring Library](#packages) · [Auto-Reply](#chat) · [Away Status](#chat)
 
 **B** [Base Snapshot](#packages) · [Baseline](#client-content) · [Behavior](#conformance) · [Bot Capacity Lease](#bots) · [Bot Controller](#bots) · [Bounded Map Slice](#realm-topology) · [Build Identity](#packages)
 
@@ -621,6 +621,13 @@ roll runs once per target, and a missed target takes none of the spell's effects
 misses; a magic spell is resisted outright. A Weapon Strike rolls the physical attack table, so its
 target can also dodge or parry it.
 _Avoid_: spell miss flag, resist flag
+
+**Attack Table**:
+The one roll that decides a weapon attack's outcome: miss, dodge, parry, glancing, block, crit,
+crushing or hit. White swings, queued strikes, Weapon Strikes and ranged attacks share it; the
+attack type and the delivered Spell's facts select which bands apply. A ranged attack rolls only
+miss and crit. Damage stays with the caller. See `module/src/combat/attack_table.rs`.
+_Avoid_: combat table, swing table
 
 **Weapon Strike**:
 A spell effect that deals the caster's weapon damage plus the spell's flat bonus, scaled by its

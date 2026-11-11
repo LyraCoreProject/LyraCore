@@ -51,6 +51,7 @@ fn an_avoided_weapon_ability_still_casts_the_main_hand_chance_on_hit_spell() {
         (100, P_RAW),
     );
     set_level(&standalone, wolf, OUT_OF_REACH_LEVEL);
+    face_player(&standalone, wolf);
     let events = standalone.subscribe(&[CAST_EVENTS]);
 
     standalone.assert_call(
@@ -268,6 +269,16 @@ fn stage(standalone: &mut Standalone) -> u64 {
     ));
     standalone.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
     wolf
+}
+
+// Only a target that faces the attacker parries, and parry makes this avoidance certain.
+fn face_player(standalone: &Standalone, wolf: u64) {
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = 0, y = 0, orientation = 0 WHERE guid = {PLAYER}"
+    ));
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = 1, y = 0, orientation = 3.1415927 WHERE guid = {wolf}"
+    ));
 }
 
 fn set_level(standalone: &Standalone, guid: u64, level: u32) {
