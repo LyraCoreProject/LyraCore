@@ -233,7 +233,7 @@ pub(super) fn apply(
         }
     }
     let mut groups = group::action_groups(ctx, guid, action);
-    group::apply_action(ctx, Plane::RealmCore, guid, action).map_err(|error| error.to_string())?;
+    group::apply_action(ctx, Plane::RealmShard, guid, action).map_err(|error| error.to_string())?;
     groups.extend(group::action_groups(ctx, guid, action));
     let mut characters = vec![guid];
     characters.extend(target);

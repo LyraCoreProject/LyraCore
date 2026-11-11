@@ -96,7 +96,7 @@ pub(crate) mod character_owned_tripwire {
         ),
         (
             &["game_bot_invite_intent"],
-            "short-lived Group Intent reaped by event GC",
+            "retired Group Intent table that nothing writes",
         ),
         (
             &["game_bot_transfer_intent"],
@@ -122,21 +122,26 @@ pub(crate) mod character_owned_tripwire {
                 "game_hunter_pet_protocol",
                 "game_chat_channel_notice_event",
                 "game_group_event",
-                "game_chat_event",
-                "game_combat_event",
-                "game_emote_event",
                 "game_guild_event",
                 "game_mail_arrival",
                 "game_realm_chat_event",
-                "game_roll_event",
-                "game_spell_cast_event",
-                "game_spell_impact_event",
                 "game_system_message_event",
                 "game_teleport_event",
                 "game_trade_event",
                 "game_xp_event",
             ],
             "short-lived Relay event reaped by event GC",
+        ),
+        (
+            &[
+                "game_chat_event",
+                "game_combat_event",
+                "game_emote_event",
+                "game_roll_event",
+                "game_spell_cast_event",
+                "game_spell_impact_event",
+            ],
+            "retired Relay event tables that nothing writes",
         ),
         (
             &[
@@ -1108,7 +1113,7 @@ mod native_delivery_write_discipline {
 
 #[cfg(test)]
 mod partition_discipline_tripwire {
-    use crate::test_scan::{line_of, on_comment_line, repo_root};
+    use crate::test_scan::repo_root;
 
     const SPATIAL_ACCESSORS: &[&str] = &[
         "game_world_entity",
@@ -1223,173 +1228,6 @@ mod partition_discipline_tripwire {
             stale.is_empty(),
             "WHITELIST budget(s) larger than the scans that actually exist — lower them:\n  {}",
             stale.join("\n  ")
-        );
-    }
-
-    const SHARD_ID_OWNERS: &[&str] = &["module/src/region.rs", "module/src/load.rs"];
-
-    const SHARD_ID_FORMS: &[&str] = &[
-        "game_region_assignment",
-        ".shard",
-        "RegionAssignment",
-        "game_shard_load",
-        "ShardLoad",
-    ];
-
-    fn shard_id_reads(content: &str) -> Vec<(usize, &'static str)> {
-        let mut out = Vec::new();
-        for form in SHARD_ID_FORMS {
-            for (idx, _) in content.match_indices(form) {
-                if on_comment_line(content, idx) {
-                    continue;
-                }
-                let after_ok = content[idx + form.len()..]
-                    .chars()
-                    .next()
-                    .map(|c| !(c.is_alphanumeric() || c == '_'))
-                    .unwrap_or(true);
-                if after_ok {
-                    out.push((line_of(content, idx), *form));
-                }
-            }
-        }
-        out.sort();
-        out
-    }
-
-    fn shard_id_reads_in_file(path: &str, content: &str) -> Vec<(usize, &'static str)> {
-        if !matches!(path, "module/src/lib.rs" | "module/src/tables.rs") {
-            return shard_id_reads(content);
-        }
-        let code = super::character_owned_tripwire::production_code(content);
-        let mut masked = code.as_bytes().to_vec();
-        let mut depth = 0usize;
-        let mut i = 0;
-        while i < code.len() {
-            if depth == 0 && code[i..].starts_with("pub use ") {
-                if let Some(end) = code[i..].find(';').map(|end| i + end + 1) {
-                    let declaration = &code[i + 8..end - 1];
-                    let tokens: Vec<_> = declaration
-                        .split(|c: char| !c.is_alphanumeric() && c != '_')
-                        .filter(|token| !token.is_empty())
-                        .collect();
-                    if matches!(tokens.first(), Some(&"crate" | &"tables"))
-                        && !tokens.contains(&"as")
-                        && !declaration.contains('*')
-                    {
-                        for byte in &mut masked[i..end] {
-                            if *byte != b'\n' {
-                                *byte = b' ';
-                            }
-                        }
-                        i = end;
-                        continue;
-                    }
-                }
-            }
-            match code.as_bytes()[i] {
-                b'{' => depth += 1,
-                b'}' => depth = depth.saturating_sub(1),
-                _ => {}
-            }
-            i += code[i..].chars().next().unwrap().len_utf8();
-        }
-        shard_id_reads(std::str::from_utf8(&masked).unwrap())
-    }
-
-    #[test]
-    fn table_catalog_reexports_do_not_hide_shard_reads() {
-        let source = "pub use crate::region::{game_region_assignment, RegionAssignment};\n\
-                      fn f(row: Row) { let RegionAssignment { shard, .. } = row; row.shard; }\n";
-        for catalog in ["module/src/lib.rs", "module/src/tables.rs"] {
-            assert_eq!(
-                shard_id_reads_in_file(catalog, source),
-                vec![(2, ".shard"), (2, "RegionAssignment")]
-            );
-            for declaration in [
-                "pub use crate::region::RegionAssignment as Assignment;",
-                "fn f() { pub use crate::region::RegionAssignment; }",
-            ] {
-                assert_eq!(
-                    shard_id_reads_in_file(catalog, declaration),
-                    vec![(1, "RegionAssignment")]
-                );
-            }
-        }
-        assert_eq!(
-            shard_id_reads_in_file("module/src/quest.rs", source),
-            vec![
-                (1, "RegionAssignment"),
-                (1, "game_region_assignment"),
-                (2, ".shard"),
-                (2, "RegionAssignment"),
-            ]
-        );
-    }
-
-    #[test]
-    fn the_scan_finds_a_shard_field_read_but_not_prose_or_longer_names() {
-        let src = "fn f(ctx: &ReducerContext, row: Row) {\n    if row.shard == DB {}\n    \
-                   // row.shard is prose\n    let name = row.shard_name;\n    \
-                   let loc = ctx.db.game_character_shard();\n}\n";
-        assert_eq!(shard_id_reads(src), vec![(2, ".shard")]);
-    }
-
-    fn shard_id_scanned_files() -> Vec<std::path::PathBuf> {
-        let mut files = super::character_owned_tripwire::scanned_files();
-        let shared = repo_root().join("crates/lyracore-shared/src");
-        if shared.is_dir() {
-            super::character_owned_tripwire::collect_rs_files(&shared, &mut files);
-        }
-        files
-    }
-
-    #[test]
-    fn no_module_game_logic_reads_a_shard_id() {
-        let root = repo_root();
-        let mut violations = Vec::new();
-        for file in shard_id_scanned_files() {
-            if file.file_name().and_then(|n| n.to_str()) == Some("tripwires.rs") {
-                continue;
-            }
-            let rel = file
-                .strip_prefix(&root)
-                .unwrap_or(&file)
-                .to_string_lossy()
-                .replace('\\', "/");
-            if SHARD_ID_OWNERS.contains(&rel.as_str()) {
-                continue;
-            }
-            let content =
-                std::fs::read_to_string(&file).unwrap_or_else(|e| panic!("cannot read {rel}: {e}"));
-            for (line, form) in shard_id_reads_in_file(&rel, &content) {
-                violations.push(format!("{rel}:{line} names a shard id (`{form}`)"));
-            }
-        }
-        assert!(
-            violations.is_empty(),
-            "Invariant: no Module game logic reads a shard id.\n\
-             module code outside {SHARD_ID_OWNERS:?} reads a SHARD ID:\n  {}\n\n\
-             A Realm Shard and a World Shard split a Realm by role, never by region. Partition gameplay \
-             by map and Instance through \
-             `crate::helpers`, and use indexed cells for nearby reads.",
-            violations.join("\n  ")
-        );
-    }
-
-    #[test]
-    fn shard_id_owner_list_has_no_stale_entries() {
-        let root = repo_root();
-        let stale: Vec<&str> = SHARD_ID_OWNERS
-            .iter()
-            .copied()
-            .filter(|rel| {
-                std::fs::read_to_string(root.join(rel)).is_ok_and(|c| shard_id_reads(&c).is_empty())
-            })
-            .collect();
-        assert!(
-            stale.is_empty(),
-            "SHARD_ID_OWNERS names file(s) that no longer touch a shard id — remove them: {stale:?}"
         );
     }
 }
@@ -1555,32 +1393,58 @@ mod character_fence_tripwire {
 #[cfg(test)]
 mod gc_reap_tripwire {
     const EXEMPT_ACCESSORS: &[&str] = &[
-        "game_creature_move_event",
-        "game_channel_event",
         "game_mail",
         // Keep source Intents until their Transfer completes.
         "game_bot_transfer_intent",
+        // Nothing writes these; each shares its row type with its `_live` event table.
+        "game_chat_event",
+        "game_combat_event",
+        "game_emote_event",
+        "game_spell_cast_event",
+        "game_spell_impact_event",
     ];
 
-    // Sweep functions gc.rs calls that delete the table's rows in their own module.
-    const DELEGATED_REAPS: &[(&str, &str)] =
-        &[("game_trade_session", "crate::trade::cancel_trade_for(")];
+    // Sweep helpers that delete the table's rows in the owner's module.
+    const DELEGATED_REAPS: &[(&str, &str)] = &[("game_trade_session", "cancel_trade_for(")];
 
-    fn gc_reaps(gc_code: &str, accessor: &str) -> bool {
-        if gc_code.contains(&format!("reap!({accessor})")) {
+    fn sweep_body(code: &str) -> &str {
+        let Some(start) = code.find("fn sweep_expired(") else {
+            return "";
+        };
+        let Some(open) = code[start..].find('{').map(|i| start + i) else {
+            return "";
+        };
+        let mut depth = 0usize;
+        for (offset, byte) in code[open..].bytes().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &code[open..open + offset + 1];
+                    }
+                }
+                _ => {}
+            }
+        }
+        &code[open..]
+    }
+
+    fn sweep_reaps(sweep: &str, accessor: &str) -> bool {
+        if sweep.contains(&format!("reap_expired!(ctx, {accessor},")) {
             return true;
         }
         if DELEGATED_REAPS
             .iter()
-            .any(|&(table, sweep)| table == accessor && gc_code.contains(sweep))
+            .any(|&(table, helper)| table == accessor && sweep.contains(helper))
         {
             return true;
         }
         let handle = format!("ctx.db.{accessor}()");
-        gc_code.match_indices(&handle).any(|(at, _)| {
-            let line_start = gc_code[..at].rfind('\n').map_or(0, |i| i + 1);
-            let after = &gc_code[at + handle.len()..];
-            let binding = gc_code[line_start..at]
+        sweep.match_indices(&handle).any(|(at, _)| {
+            let line_start = sweep[..at].rfind('\n').map_or(0, |i| i + 1);
+            let after = &sweep[at + handle.len()..];
+            let binding = sweep[line_start..at]
                 .trim()
                 .strip_prefix("let ")
                 .and_then(|rest| rest.strip_suffix('='))
@@ -1620,96 +1484,154 @@ mod gc_reap_tripwire {
                 || fields.contains("pub created_at: spacetimedb::Timestamp,"))
     }
 
-    fn unreaped_tables(content: &str, gc_src: &str) -> Vec<String> {
+    fn module_path(relative: &str) -> String {
+        let path = relative
+            .strip_prefix("module/src/")
+            .unwrap_or(relative)
+            .trim_end_matches(".rs");
+        let path = path.strip_suffix("/mod").unwrap_or(path);
+        format!("crate::{}", path.replace('/', "::"))
+    }
+
+    fn unswept_tables(content: &str, module: &str, gc_src: &str) -> Vec<String> {
+        let code = super::character_owned_tripwire::production_code(content);
         let gc_code = super::character_owned_tripwire::production_code(gc_src);
+        let called = gc_code.contains(&format!("{module}::sweep_expired(ctx)"));
+        let sweep = sweep_body(&code);
         super::character_owned_tripwire::extract_tables(content)
             .into_iter()
             .filter(|(accessor, fields, is_event)| {
                 !is_event
                     && is_ttl_shaped(fields)
                     && !EXEMPT_ACCESSORS.contains(&accessor.as_str())
-                    && !gc_reaps(&gc_code, accessor)
+                    && !(called && sweep_reaps(sweep, accessor))
             })
             .map(|(accessor, _, _)| accessor)
             .collect()
     }
 
     #[test]
-    fn every_ttl_shaped_table_is_reaped_by_gc_rs() {
+    fn every_ttl_shaped_table_is_reaped_by_its_owner_sweep() {
         let gc_src = crate::test_scan::read_scanned("module/src/gc.rs")
             .expect("module/src/gc.rs ships in every checkout — module/ is never optional");
+        let root = crate::test_scan::repo_root();
 
         let mut missing = Vec::new();
         for file in super::character_owned_tripwire::scanned_files() {
-            if file.file_name().and_then(|n| n.to_str()) == Some("gc.rs") {
+            if file.file_name().and_then(|n| n.to_str()) == Some("retired.rs") {
                 continue;
             }
+            let relative = file
+                .strip_prefix(&root)
+                .unwrap_or(&file)
+                .to_string_lossy()
+                .replace('\\', "/");
             let content = std::fs::read_to_string(&file)
                 .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
-            for accessor in unreaped_tables(&content, &gc_src) {
-                missing.push(format!("{accessor} (in {})", file.display()));
+            for accessor in unswept_tables(&content, &module_path(&relative), &gc_src) {
+                missing.push(format!("{accessor} (in {relative})"));
             }
         }
 
         assert!(
             missing.is_empty(),
-            "Invariant: every ordinary TTL-shaped event table is reaped in gc.rs.\n\
-             table(s) shaped `id: u64` PK + `created_at: Timestamp` — the TTL-reaped convention \
-             every existing short-lived event table uses — with no reap in gc.rs: {missing:?}\n\n\
-             A short-lived event table only stops growing without bound if something deletes its \
-             rows. Add `reap!(<accessor>);` to `reap_movement_events` in `gc.rs` (the 1s \
-             `EVENT_TTL_MICROS` default), or — if the table's lifecycle needs its own policy, like \
-             `game_group_invite`'s 2-minute dialog window or `game_corpse`'s decay-to-bones — a \
-             dedicated block or sweep fn called from there (see `corpse::sweep_corpse_decay` for the \
-             pattern: gc.rs calls it, it owns the policy). OR add the accessor to `EXEMPT_ACCESSORS` \
-             above with a comment justifying why it is intentionally unreaped."
+            "Invariant: the module that declares a TTL-shaped table reaps it in its `sweep_expired`, \
+             and `reap_movement_events` in gc.rs calls that sweep.\n\
+             table(s) shaped `id: u64` PK + `created_at: Timestamp` without that reap: {missing:?}\n\n\
+             A short-lived table only stops growing without bound if something deletes its rows. \
+             Add `crate::gc::reap_expired!(ctx, <accessor>, crate::EVENT_TTL_MICROS);` to the \
+             declaring module's `pub(crate) fn sweep_expired(ctx: &ReducerContext)` (or a dedicated \
+             policy there, like `game_group_invite`'s 2-minute dialog window) and call \
+             `<module>::sweep_expired(ctx)` from gc.rs. A table nothing writes any more belongs in \
+             `retired.rs`. Otherwise add the accessor to `EXEMPT_ACCESSORS` with a comment \
+             justifying why it is intentionally unreaped."
+        );
+    }
+
+    const FIXTURE_TABLE: &str = "#[table(accessor = game_fixture_event)]\n\
+                                 pub struct FixtureEvent {\n    #[primary_key]\n    pub id: u64,\n    \
+                                 pub created_at: Timestamp,\n}\n";
+    const FIXTURE_GC: &str = "fn reap(ctx: &ReducerContext) {\n    \
+                              crate::fixture::sweep_expired(ctx);\n}\n";
+
+    fn swept_by(sweep: &str) -> String {
+        format!(
+            "{FIXTURE_TABLE}pub(crate) fn sweep_expired(ctx: &ReducerContext) {{\n{sweep}\n}}\n"
+        )
+    }
+
+    #[test]
+    fn the_module_path_names_the_declaring_module() {
+        assert_eq!(module_path("module/src/xp.rs"), "crate::xp");
+        assert_eq!(module_path("module/src/guild/mod.rs"), "crate::guild");
+        assert_eq!(
+            module_path("module/src/guild/membership.rs"),
+            "crate::guild::membership"
         );
     }
 
     #[test]
-    fn the_scan_flags_a_ttl_table_that_gc_only_mentions_in_a_comment() {
-        let table = "#[table(accessor = game_fixture_event)]\n\
-                     pub struct FixtureEvent {\n    #[primary_key]\n    pub id: u64,\n    \
-                     pub created_at: Timestamp,\n}\n";
-        let mentioned = "fn reap(ctx: &ReducerContext) {\n    // reap!(game_fixture_event);\n}\n";
+    fn the_scan_flags_a_ttl_table_without_a_sweep_or_a_gc_call() {
+        let reaped = swept_by("    crate::gc::reap_expired!(ctx, game_fixture_event, TTL);");
+        assert!(unswept_tables(&reaped, "crate::fixture", FIXTURE_GC).is_empty());
         assert_eq!(
-            unreaped_tables(table, mentioned),
+            unswept_tables(FIXTURE_TABLE, "crate::fixture", FIXTURE_GC),
             vec!["game_fixture_event"]
         );
-
-        let reaped = "fn reap(ctx: &ReducerContext) {\n    reap!(game_fixture_event);\n}\n";
-        assert!(unreaped_tables(table, reaped).is_empty());
+        assert_eq!(
+            unswept_tables(
+                &reaped,
+                "crate::fixture",
+                "fn reap(ctx: &ReducerContext) {}\n"
+            ),
+            vec!["game_fixture_event"]
+        );
+        let elsewhere = format!(
+            "{FIXTURE_TABLE}fn other(ctx: &ReducerContext) {{\n    \
+             crate::gc::reap_expired!(ctx, game_fixture_event, TTL);\n}}\n\
+             pub(crate) fn sweep_expired(ctx: &ReducerContext) {{}}\n"
+        );
+        assert_eq!(
+            unswept_tables(&elsewhere, "crate::fixture", FIXTURE_GC),
+            vec!["game_fixture_event"]
+        );
     }
 
     #[test]
-    fn the_scan_flags_a_ttl_table_that_gc_only_reads() {
-        let table = "#[table(accessor = game_fixture_event)]\n\
-                     pub struct FixtureEvent {\n    #[primary_key]\n    pub id: u64,\n    \
-                     pub created_at: Timestamp,\n}\n";
-        let read_only = "fn reap(ctx: &ReducerContext) {\n    \
-                         let t = ctx.db.game_fixture_event();\n    \
-                         let count = t.iter().count();\n    \
-                         let t = ctx.db.game_other_event();\n    \
-                         t.id().delete(1);\n}\n";
+    fn the_scan_flags_a_ttl_table_that_the_sweep_only_mentions_in_a_comment() {
+        let mentioned = swept_by("    // crate::gc::reap_expired!(ctx, game_fixture_event, TTL);");
         assert_eq!(
-            unreaped_tables(table, read_only),
+            unswept_tables(&mentioned, "crate::fixture", FIXTURE_GC),
             vec!["game_fixture_event"]
         );
-        let chained_read = "fn reap(ctx: &ReducerContext) {\n    \
-                            for row in ctx.db.game_fixture_event().iter() {}\n}\n";
+    }
+
+    #[test]
+    fn the_scan_flags_a_ttl_table_that_the_sweep_only_reads() {
+        let read_only = swept_by(
+            "    let t = ctx.db.game_fixture_event();\n    \
+             let count = t.iter().count();\n    \
+             let t = ctx.db.game_other_event();\n    \
+             t.id().delete(1);",
+        );
         assert_eq!(
-            unreaped_tables(table, chained_read),
+            unswept_tables(&read_only, "crate::fixture", FIXTURE_GC),
+            vec!["game_fixture_event"]
+        );
+        let chained_read = swept_by("    for row in ctx.db.game_fixture_event().iter() {}");
+        assert_eq!(
+            unswept_tables(&chained_read, "crate::fixture", FIXTURE_GC),
             vec!["game_fixture_event"]
         );
 
-        let bound = "fn reap(ctx: &ReducerContext) {\n    \
-                     let t = ctx.db.game_fixture_event();\n    \
-                     for id in stale {\n        t.id().delete(id);\n    }\n}\n";
-        assert!(unreaped_tables(table, bound).is_empty());
+        let bound = swept_by(
+            "    let t = ctx.db.game_fixture_event();\n    \
+             for id in stale {\n        t.id().delete(id);\n    }",
+        );
+        assert!(unswept_tables(&bound, "crate::fixture", FIXTURE_GC).is_empty());
 
-        let chained = "fn reap(ctx: &ReducerContext) {\n    \
-                       ctx.db.game_fixture_event().id().delete(1);\n}\n";
-        assert!(unreaped_tables(table, chained).is_empty());
+        let chained = swept_by("    ctx.db.game_fixture_event().id().delete(1);");
+        assert!(unswept_tables(&chained, "crate::fixture", FIXTURE_GC).is_empty());
     }
 
     #[test]
@@ -1724,10 +1646,13 @@ mod gc_reap_tripwire {
                 pub created_at: Timestamp,
             }
         "#;
-        assert_eq!(unreaped_tables(source, ""), ["game_legacy_event"]);
+        assert_eq!(
+            unswept_tables(source, "crate::fixture", ""),
+            ["game_legacy_event"]
+        );
         let ordinary = source.replace("public, event)", "public)");
         assert_eq!(
-            unreaped_tables(&ordinary, ""),
+            unswept_tables(&ordinary, "crate::fixture", ""),
             ["game_legacy_event", "game_native_event"]
         );
     }

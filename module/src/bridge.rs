@@ -925,3 +925,30 @@ pub fn party_command_fixture_expire_after_receipt_window(
     table.id().update(intent);
     Ok(())
 }
+
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_addon_message, crate::EVENT_TTL_MICROS);
+    // Pending commands retain i64::MAX; only terminal results enter this bounded expiry prefix.
+    const COMMAND_REAP_LIMIT: usize = 64;
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
+    let intents = ctx.db.game_party_command_intent();
+    for intent in intents
+        .by_result_reap()
+        .filter(..=now)
+        .take(COMMAND_REAP_LIMIT)
+        .collect::<Vec<_>>()
+    {
+        if matches!(intent.state, CommandIntentState::Finished(_)) {
+            intents.id().delete(intent.id);
+        }
+    }
+    let receipts = ctx.db.game_party_command_receipt();
+    for receipt in receipts
+        .by_retention()
+        .filter(..=now)
+        .take(COMMAND_REAP_LIMIT)
+        .collect::<Vec<_>>()
+    {
+        receipts.id().delete(receipt.id);
+    }
+}

@@ -169,12 +169,14 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | Packages | `package_account.rs`, `package_config.rs`, `package_import.rs`, `package_teardown.rs`, `script_binding.rs` |
 | Event GC | `gc.rs` |
 | Config, static data and diagnostics | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `import_meta.rs`, `debug/*` |
-| Guid ranges and retired coordination | `realm_core.rs`, `gw.rs`, `region.rs`, `load.rs`, `transfer/mod.rs` |
+| Gateway residue and Character Transfer | `realm_core.rs`, `gw.rs`, `transfer/mod.rs` |
+| Retired tables | `retired.rs` |
 
-`claim_guid_range` in `realm_core.rs` installs the Realm's guid range. The other tables in that
-last row held multi-Shard routing, Gateway leases, load samples and cross-Shard Transfers. They
-stay because dropping a table is a destructive migration. Native requests do not route through
-them.
+`install_guid_range` in `auth.rs` installs the Shard's guid range. `realm_core.rs` keeps the
+Gateway-era Realm locator, and `gw.rs` the Gateway Verbs that durable tests still call.
+`transfer/mod.rs` keeps the Transfer ledger: native Transfer between World Shards runs through its
+`apply_*` functions. Nothing writes the tables in `retired.rs`; they stay because dropping a table
+is a destructive migration.
 
 Two shapes recur:
 
@@ -183,8 +185,8 @@ Two shapes recur:
   other DBC-derived reference data. Only the importer writes them.
 - **Event tables**: transient outbound signals that a row diff cannot carry, such as a movement
   Relay's animation opcode. The Module inserts them inside the transaction that caused them. The
-  `*_live` tables are SpacetimeDB event tables and keep no rows; older event tables are reaped by
-  `gc.rs` about one second later. See [Native Relay events](./danger-zones.md#native-relay-events).
+  `*_live` tables are SpacetimeDB event tables and keep no rows; other event tables are reaped
+  about one second later by their owning module's `sweep_expired`, which `gc.rs` runs. See [Native Relay events](./danger-zones.md#native-relay-events).
 
 ## 3. Tables with rules the struct cannot show
 
@@ -391,11 +393,8 @@ refuses an expired row like an absent one, and `reap_sessions` deletes expired r
 minutes. `game_operator` is a singleton holding the one Operator identity, captured by
 `claim_operator`.
 
-`game_account_character_owner` is keyed by Character guid and stores the exact Account id and name.
-Its rows remain across logout and Character deletion. Character guids are never reused, so retained
-rows are ownership tombstones. Each cleanup reads at most 4,097 rows and refuses when an Account
-already has more than 4,096; it never truncates. `game_account_fence` is a retired
-Gateway table, and nothing writes it. Module tests and the native check still open Account Claims in
+`game_account_fence` and `game_account_character_owner` are retired Gateway tables in
+`module/src/retired.rs`, and nothing writes them. Module tests and the native check still open Account Claims in
 `game_account_claim`. Operator reducers that act for a Character take a `SessionActor`; a null
 ownership refuses a Character with an active Account Claim.
 
@@ -423,8 +422,8 @@ last member to leave deletes the channel with its password and bans.
 
 `game_character_contact` (public) holds friend and ignore rows.
 
-`game_channel_member`, `game_channel_event` and `game_whisper_event` in `module/src/chat.rs` are
-retired. They stay because dropping a table is a destructive migration. Nothing writes them.
+`game_channel_member`, `game_channel_event` and `game_whisper_event` in `module/src/retired.rs`
+are retired. They stay because dropping a table is a destructive migration. Nothing writes them.
 
 ### Buyback (`module/src/items/buyback.rs`)
 

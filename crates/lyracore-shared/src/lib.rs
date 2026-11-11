@@ -22,7 +22,6 @@ pub mod packing;
 pub mod pet;
 pub mod quest;
 pub mod race_class;
-pub mod region;
 pub mod social;
 pub mod spatial;
 pub mod terrain;

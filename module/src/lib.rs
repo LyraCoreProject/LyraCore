@@ -186,7 +186,6 @@ mod ghost;
 mod inspect;
 mod instance;
 mod items;
-mod load;
 mod loot;
 
 mod mail;
@@ -207,6 +206,7 @@ mod modifiers;
 mod mount;
 mod nav;
 mod npc_interaction;
+mod online;
 
 mod operations;
 mod operator_content;
@@ -237,9 +237,9 @@ mod realm_core;
 mod refusal;
 mod remote_bindings;
 pub(crate) use refusal::Refusal;
-mod region;
 mod reputation;
 mod rest;
+mod retired;
 
 mod runtime_script;
 

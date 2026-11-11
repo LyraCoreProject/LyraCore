@@ -445,18 +445,6 @@ crate::character_owned!(transfer, fn sweep_transfer_game_guild_fee_hold(ctx, cha
     primary_key = payer_guid,
 });
 
-#[table(accessor = game_guild_fee_decision)]
-pub struct GuildFeeDecision {
-    #[primary_key]
-    pub operation_id: u64,
-    pub payer_guid: u64,
-    pub kind: u8,
-    pub accepted: bool,
-    pub refusal: String,
-    pub petition_id: u32,
-    pub decided_micros: i64,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

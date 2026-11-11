@@ -21,7 +21,7 @@ fn remap(
                     row.$($field).+ = map(row.$($field).+)?;
                 }
             }
-            $entry.rows = encode_rows(rows);
+            $entry.rows = encode_rows(rows)?;
         }};
     }
     for entry in payload {
@@ -37,15 +37,14 @@ fn remap(
     Ok(())
 }
 
-pub(super) fn export(ctx: &ReducerContext, payload: &mut Vec<TableRows>) {
+pub(super) fn export(ctx: &ReducerContext, payload: &mut Vec<TableRows>) -> Result<(), String> {
     let mut ids = std::collections::BTreeSet::new();
     remap(payload, |id| {
         ids.insert(id);
         Ok(id)
-    })
-    .expect("exported item rows decode");
+    })?;
     if ids.is_empty() {
-        return;
+        return Ok(());
     }
     payload.push(TableRows {
         table: TEXT_TABLE.into(),
@@ -53,8 +52,9 @@ pub(super) fn export(ctx: &ReducerContext, payload: &mut Vec<TableRows>) {
             ids.into_iter()
                 .filter_map(|id| ctx.db.game_item_text().id().find(id))
                 .collect::<Vec<_>>(),
-        ),
+        )?,
     });
+    Ok(())
 }
 
 pub(super) fn import(ctx: &ReducerContext, payload: &mut Vec<TableRows>) -> Result<(), String> {
@@ -104,7 +104,15 @@ pub(super) fn release(ctx: &ReducerContext, guid: u64, include_holds: bool) {
         return;
     }
     let mut payload =
-        super::transport::export_rows_via(ctx, guid, crate::CHARACTER_OWNED_TRANSFERS);
+        match super::transport::export_rows_via(ctx, guid, crate::CHARACTER_OWNED_TRANSFERS) {
+            Ok(payload) => payload,
+            Err(error) => {
+                spacetimedb::log::error!(
+                    "Item Text release for {guid} cannot export rows: {error}"
+                );
+                return;
+            }
+        };
     // The buyback deletion sweep releases its own Item Text references.
     payload.retain(|entry| entry.table != "game_buyback_item");
     if !include_holds {
@@ -114,5 +122,5 @@ pub(super) fn release(ctx: &ReducerContext, guid: u64, include_holds: bool) {
         crate::mail_text::drop_letter_text(ctx, id);
         Ok(id)
     })
-    .expect("exported item rows decode");
+    .expect("exported item rows decode and encode");
 }

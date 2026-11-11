@@ -1,16 +1,13 @@
-pub use crate::account_ownership::{
-    game_account_character_owner, game_account_claim, game_account_fence, AccountCharacterOwner,
-    AccountClaim, AccountFence,
-};
+pub use crate::account_ownership::{game_account_claim, AccountClaim};
 pub use crate::action_bar::{
     game_createinfo_action, game_player_action, CreateinfoAction, PlayerAction,
 };
 pub use crate::areatrigger::{game_areatrigger_teleport, AreatriggerTeleport};
 pub use crate::auction::{
-    game_auction, game_auction_bid_decision, game_auction_bid_hold, game_auction_expiry,
-    game_auction_hold, game_auction_house, game_auction_notice, game_auction_operation_receipt,
-    Auction, AuctionBidDecision, AuctionBidHold, AuctionExpiry, AuctionHold,
-    AuctionHouseDefinition, AuctionNotice, AuctionOperationReceipt,
+    game_auction, game_auction_bid_hold, game_auction_expiry, game_auction_hold,
+    game_auction_house, game_auction_notice, game_auction_operation_receipt, Auction,
+    AuctionBidHold, AuctionExpiry, AuctionHold, AuctionHouseDefinition, AuctionNotice,
+    AuctionOperationReceipt,
 };
 pub use crate::auth::{
     game_account, game_alpha_test_tools_enrollment, game_guid_allocator, game_guid_range,
@@ -32,10 +29,9 @@ pub use crate::channel::{
 };
 pub use crate::character::{game_character, Character};
 pub use crate::chat::{
-    game_channel_event, game_channel_member, game_character_contact, game_chat_event,
-    game_chat_event_live, game_emote_event, game_emote_event_live, game_roll_event,
-    game_system_message_event, game_whisper_event, ChannelEvent, ChannelMember, ChatEvent,
-    ContactEntry, EmoteEvent, RollEvent, SystemMessageEvent, WhisperEvent,
+    game_character_contact, game_chat_event, game_chat_event_live, game_emote_event,
+    game_emote_event_live, game_system_message_event, ChatEvent, ContactEntry, EmoteEvent,
+    SystemMessageEvent,
 };
 pub use crate::combat::damage::{game_creature_lethal_damage_floor, CreatureLethalDamageFloor};
 pub use crate::combat::{
@@ -68,14 +64,14 @@ pub use crate::creatures::eventai::{
     RelayContinuation, RelayDefinition, RelayRun,
 };
 pub use crate::creatures::{
-    game_creature_cast, game_creature_family, game_creature_move_event,
-    game_creature_move_schedule, game_creature_presentation, game_creature_relay_temporary_faction,
-    game_creature_spawn, game_creature_spell, game_creature_spline, game_creature_template,
-    game_creature_waypoint, game_hunter_pet, game_hunter_pet_protocol, game_live_pet_kind,
-    game_pet_care_schedule, game_pet_command, CreatureCast, CreatureFamily, CreatureMoveEvent,
-    CreatureMoveSchedule, CreaturePresentation, CreatureRelayTemporaryFaction, CreatureSpawn,
-    CreatureSpawnMap, CreatureSpell, CreatureSpline, CreatureTemplate, CreatureWaypoint, HunterPet,
-    HunterPetProtocol, LivePetKind, PetCareSchedule, PetCommand,
+    game_creature_cast, game_creature_family, game_creature_move_schedule,
+    game_creature_presentation, game_creature_relay_temporary_faction, game_creature_spawn,
+    game_creature_spell, game_creature_spline, game_creature_template, game_creature_waypoint,
+    game_hunter_pet, game_hunter_pet_protocol, game_live_pet_kind, game_pet_care_schedule,
+    game_pet_command, CreatureCast, CreatureFamily, CreatureMoveSchedule, CreaturePresentation,
+    CreatureRelayTemporaryFaction, CreatureSpawn, CreatureSpawnMap, CreatureSpell, CreatureSpline,
+    CreatureTemplate, CreatureWaypoint, HunterPet, HunterPetProtocol, LivePetKind, PetCareSchedule,
+    PetCommand,
 };
 #[cfg(feature = "debug_reducers")]
 pub use crate::debug::{
@@ -108,14 +104,12 @@ pub use crate::gossip::{
 };
 pub use crate::graveyard::{game_graveyard, game_graveyard_zone, GraveyardLoc, GraveyardZone};
 pub use crate::group::{
-    game_bot_invite_intent, game_group, game_group_event, game_group_invite, game_group_member,
-    game_group_member_partition, game_group_roster_revision, game_group_target_icon,
-    BotInviteIntent, Group, GroupEvent, GroupInvite, GroupMember, GroupMemberPartition,
-    GroupRosterRevision, GroupTargetIcon, PartyPartitionState,
+    game_group, game_group_event, game_group_invite, game_group_member,
+    game_group_member_partition, game_group_roster_revision, game_group_target_icon, Group,
+    GroupEvent, GroupInvite, GroupMember, GroupMemberPartition, GroupRosterRevision,
+    GroupTargetIcon, PartyPartitionState,
 };
-pub use crate::guild::fee::{
-    game_guild_fee_decision, game_guild_fee_hold, GuildFeeDecision, GuildFeeHold,
-};
+pub use crate::guild::fee::{game_guild_fee_hold, GuildFeeHold};
 pub use crate::guild::membership::{game_guild_invite, GuildInvite};
 pub use crate::guild::petition::{
     game_guild_petition, game_guild_petition_signature, GuildPetition, GuildPetitionSignature,
@@ -124,10 +118,7 @@ pub use crate::guild::{
     game_guild, game_guild_event, game_guild_member, game_guild_rank, Guild, GuildEvent,
     GuildMember, GuildRank,
 };
-pub use crate::gw::{
-    game_gateway_lease, game_gateway_lease_reaper_schedule, game_gateway_session, GatewayLease,
-    GatewayLeaseReaperSchedule, GatewaySession,
-};
+pub use crate::gw::{game_gateway_lease_reaper_schedule, GatewayLeaseReaperSchedule};
 pub use crate::import_meta::{game_import_meta, game_world_import, ImportMeta, WorldImport};
 pub use crate::instance::{
     game_instance, game_instance_binding, game_instance_reaper_schedule, game_instance_removal,
@@ -138,17 +129,13 @@ pub use crate::items::{
     game_item_random_property, game_item_template, game_npc_vendor, BuybackEntry, ItemEnchantment,
     ItemInstance, ItemPropertyWeight, ItemRandomProperty, ItemTemplate, NpcVendor,
 };
-pub use crate::load::{
-    game_region_load, game_shard_load, game_shard_load_total, RegionLoad, ShardLoad, ShardLoadTotal,
-};
 pub use crate::loot::{
     game_corpse_loot, game_corpse_loot_eligible, game_creature_loot, game_creature_loot_tag_group,
     game_creature_quest_tap, game_creature_quest_tap_member, game_fishing_loot,
-    game_gameobject_loot, game_loot_roll, game_loot_roll_promotion_receipt, game_loot_roll_vote,
-    game_pickpocket_loot, game_skinning_loot, CorpseLoot, CorpseLootEligible, CreatureLoot,
-    CreatureLootTagGroup, CreatureQuestTap, CreatureQuestTapMember, GameFishingLoot,
-    GameObjectLoot, GamePickpocketLoot, GameSkinningLoot, LootRoll, LootRollPromotionReceipt,
-    LootRollVote,
+    game_gameobject_loot, game_loot_roll, game_loot_roll_vote, game_pickpocket_loot,
+    game_skinning_loot, CorpseLoot, CorpseLootEligible, CreatureLoot, CreatureLootTagGroup,
+    CreatureQuestTap, CreatureQuestTapMember, GameFishingLoot, GameObjectLoot, GamePickpocketLoot,
+    GameSkinningLoot, LootRoll, LootRollVote,
 };
 pub use crate::mail::{game_mail, Mail};
 pub use crate::mail_escrow::{
@@ -184,12 +171,20 @@ pub use crate::quest::{
     QuestTemplate, QuestText,
 };
 pub use crate::realm_chat::{game_realm_chat_event, RealmChatEvent};
-pub use crate::realm_core::{
-    game_character_shard, game_guid_range_registry, CharacterShard, GuidRangeAssignment,
-};
-pub use crate::region::{game_map_region, game_region_assignment, MapRegion, RegionAssignment};
+pub use crate::realm_core::{game_character_shard, CharacterShard};
 pub use crate::reputation::{game_player_reputation, PlayerReputation};
 pub use crate::rest::{game_rest_state_event, RestStateEvent};
+pub use crate::retired::{
+    game_account_character_owner, game_account_fence, game_auction_bid_decision,
+    game_bot_invite_intent, game_channel_event, game_channel_member, game_creature_move_event,
+    game_gateway_lease, game_gateway_session, game_guid_range_registry, game_guild_fee_decision,
+    game_loot_roll_promotion_receipt, game_map_region, game_region_assignment, game_region_load,
+    game_roll_event, game_shard_load, game_shard_load_total, game_whisper_event,
+    AccountCharacterOwner, AccountFence, AuctionBidDecision, BotInviteIntent, ChannelEvent,
+    ChannelMember, CreatureMoveEvent, GatewayLease, GatewaySession, GuidRangeAssignment,
+    GuildFeeDecision, LootRollPromotionReceipt, MapRegion, RegionAssignment, RegionLoad, RollEvent,
+    ShardLoad, ShardLoadTotal, WhisperEvent,
+};
 pub use crate::script_binding::{game_script, Script};
 pub use crate::sessionless::{game_sessionless_action_consent, SessionlessActionConsent};
 pub use crate::skill::{game_player_skill, PlayerSkill};

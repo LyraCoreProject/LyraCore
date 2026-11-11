@@ -449,7 +449,7 @@ pub fn idc_realm_party_command(
     }
     let mut groups = group::action_groups(ctx, guid, action);
     let mark = event_mark(ctx);
-    group::apply_action(ctx, Plane::RealmCore, guid, action)
+    group::apply_action(ctx, Plane::RealmShard, guid, action)
         .map_err(|error| reply.refused(error).into_reducer_error())?;
     groups.extend(group::action_groups(ctx, guid, action));
     let mut characters = vec![guid];
@@ -900,7 +900,7 @@ pub(super) fn deleted(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     };
     let groups = group::action_groups(ctx, guid, action);
     if group::group_of(ctx, guid).is_some() {
-        group::apply_action(ctx, Plane::RealmCore, guid, action)
+        group::apply_action(ctx, Plane::RealmShard, guid, action)
             .map_err(|error| error.to_string())?;
     }
     if let Some(mut character) = ctx.db.game_party_character().guid().find(guid) {

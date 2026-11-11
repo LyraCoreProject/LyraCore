@@ -262,6 +262,10 @@ fn refused_chat(refusal: ChatRefusal, speaker_guid: u64) -> String {
     tag.to_string()
 }
 
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_realm_chat_event, crate::EVENT_TTL_MICROS);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

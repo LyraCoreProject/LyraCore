@@ -40,7 +40,6 @@ pub struct ChatChannelMember {
     pub channel_id: u64,
     pub character_guid: u64,
     pub member_flags: u8,
-    // A nonzero generation ties membership to a Gateway Account Claim.
     pub account_id: u64,
     pub claim_generation: u64,
 }
@@ -94,9 +93,6 @@ pub fn realm_channel_op(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let admission = request_actor
-        .ownership
-        .map_or((0, 0), |token| (token.account_id, token.generation));
     let op = match op {
         channel_op::JOIN => ChannelOp::Join,
         channel_op::LEAVE => ChannelOp::Leave,
@@ -114,7 +110,7 @@ pub fn realm_channel_op(
         channel_op::MODERATE => ChannelOp::Moderate,
         other => return Err(format!("unknown channel op {other}")),
     };
-    apply_op(ctx, actor_guid, admission, op, request).map_err(|refusal| refusal.as_tag().into())
+    apply_op(ctx, actor_guid, op, request).map_err(|refusal| refusal.as_tag().into())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -138,13 +134,12 @@ pub(crate) enum ChannelOp {
 pub(crate) fn apply_op(
     ctx: &ReducerContext,
     actor_guid: u64,
-    admission: (u64, u64),
     op: ChannelOp,
     request: ChannelRequest,
 ) -> Result<(), ChannelRefusal> {
     let team = team_for_race(request.speaker.race);
     match op {
-        ChannelOp::Join => join(ctx, team, actor_guid, admission, &request),
+        ChannelOp::Join => join(ctx, team, actor_guid, &request),
         ChannelOp::Leave => leave(ctx, team, actor_guid, &request.channel_name),
         ChannelOp::Password => set_password(ctx, team, actor_guid, &request),
         ChannelOp::SetOwner => set_owner(ctx, team, actor_guid, &request),
@@ -187,7 +182,6 @@ fn join(
     ctx: &ReducerContext,
     team: u32,
     joiner: u64,
-    (account_id, claim_generation): (u64, u64),
     request: &ChannelRequest,
 ) -> Result<(), ChannelRefusal> {
     let name = channel_name(&request.channel_name)?;
@@ -230,8 +224,8 @@ fn join(
         channel_id: channel.channel_id,
         character_guid: joiner,
         member_flags: 0,
-        account_id,
-        claim_generation,
+        account_id: 0,
+        claim_generation: 0,
     });
     notify(
         ctx,
@@ -803,6 +797,10 @@ pub(crate) fn notify(
             created_at: crate::time::now(ctx),
         });
     crate::native::channel_notice(ctx, &event);
+}
+
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_chat_channel_notice_event, crate::EVENT_TTL_MICROS);
 }
 
 #[cfg(test)]

@@ -902,7 +902,7 @@ The five tabard design values of a Guild. Only the Guild Leader saves one, for a
 
 **Guild Invite**:
 A pending offer for one Character to join one Guild. It expires after a fixed time. See
-`module/src/gc.rs`.
+`module/src/guild/membership.rs`.
 
 **Public Note**:
 A short note a Guild Rank with EPNOTE sets on a member. Every member sees it on the roster.
@@ -1336,11 +1336,11 @@ the names. [Migrating to the Native Host](docs/migrating-to-native-host.md) cove
 
 **Loot Roll Promotion Receipt**: retired. Realm-core's record that kept an old Loot Roll Promotion from recreating a roll. _Avoid_ in new text.
 
-**Realm-core**: retired. The Shard for Realm-wide state. A native Realm keeps that state in its one Shard. `module/src/realm_core.rs` keeps its tables and reducers. _Avoid_ in new text.
+**Realm-core**: retired. The Gateway-era Shard for Realm-wide state. A native Realm keeps that state in its one Shard or its Realm Shard. `module/src/realm_core.rs` keeps the Gateway Realm locator. _Avoid_ in new text.
 
 **Roster Revision Relay**: retired. The Gateway's push of a Realm-core roster to World Shard mirrors. `sync_group_mirror` remains. _Avoid_ in new text.
 
-**Transfer Intent**: retired. A row a Package wrote to ask the Gateway to Transfer a sessionless Character. Character Relocation replaced it. _Avoid_ in new text.
+**Transfer Intent**: retired. A row a Package wrote to ask the Gateway to Transfer a sessionless Character. Character Relocation replaced it. Only the `debug_bot_transfer` reducer still writes one, and the session-less Gates still refuse a Character that has one. _Avoid_ in new text.
 
 **World Session Token**: retired. The Realm-core ownership token a request carried across Shards. _Avoid_ in new text.
 

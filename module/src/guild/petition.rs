@@ -53,13 +53,6 @@ pub struct GuildPetitionSequence {
     pub last_id: u32,
 }
 
-pub(crate) fn observe_id(ctx: &ReducerContext, id: u32) {
-    let table = ctx.db.game_guild_petition_sequence();
-    let last_id = table.id().find(0).map_or(id, |old| old.last_id.max(id));
-    table.id().delete(0);
-    table.insert(GuildPetitionSequence { id: 0, last_id });
-}
-
 #[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
 pub struct GuildPetitionSign {
     pub charter_item_guid: u64,
@@ -234,20 +227,7 @@ pub(crate) fn open(
     name: &str,
     charter_item_guid: u64,
 ) -> Result<u32, GuildRefusal> {
-    let petition_id = if crate::peer::world_shard(ctx).is_some() {
-        let next = ctx
-            .db
-            .game_guild_petition_sequence()
-            .id()
-            .find(0)
-            .map_or(0, |row| row.last_id)
-            .checked_add(1)
-            .ok_or(GuildRefusal::NoPermission)?;
-        observe_id(ctx, next);
-        next
-    } else {
-        0
-    };
+    let petition_id = super::IdSequence::Petition.next(ctx)?;
     let petition = GuildPetition {
         petition_id,
         charter_item_guid,

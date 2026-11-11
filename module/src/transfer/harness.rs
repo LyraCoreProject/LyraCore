@@ -327,7 +327,7 @@ impl BeginSink for FakeDb {
         self.live.borrow_mut().remove(&guid);
         self.froze.set(self.froze.get() + 1);
     }
-    fn export_rows(&self, guid: u64) -> Vec<TableRows> {
+    fn export_rows(&self, guid: u64) -> Result<Vec<TableRows>, String> {
         export_rows_via(self, guid, ARMS)
     }
     fn with_character<T>(
@@ -508,7 +508,7 @@ fn fixture_character(guid: u64, name: &str) -> crate::character::Character {
 }
 
 fn export(db: &FakeDb, guid: u64, transfer_id: u64, dest: Destination) -> ExportBlob {
-    let payload = export_rows_via(db, guid, ARMS);
+    let payload = export_rows_via(db, guid, ARMS).expect("the fixture rows serialize");
     db.with_char(guid, |c| {
         build_export_blob(transfer_id, c, dest, payload.clone())
     })
@@ -1207,9 +1207,9 @@ fn a_corrupt_blob_is_refused_rather_than_half_applied() {
 #[test]
 fn the_export_loop_hands_each_mover_the_transferring_guid() {
     let src = FakeDb::populated(GUID);
-    let mine = export_rows_via(&src, GUID, ARMS);
-    let theirs = export_rows_via(&src, NEIGHBOUR, ARMS);
-    let nobody = export_rows_via(&src, 0, ARMS);
+    let mine = export_rows_via(&src, GUID, ARMS).expect("the fixture rows serialize");
+    let theirs = export_rows_via(&src, NEIGHBOUR, ARMS).expect("the fixture rows serialize");
+    let nobody = export_rows_via(&src, 0, ARMS).expect("the fixture rows serialize");
 
     assert_ne!(
         rows_named2(&mine, "harness_gear"),
@@ -1362,7 +1362,8 @@ fn the_forwarding_receipt_survives_the_cascade_that_would_sweep_it() {
 #[test]
 fn not_transported_exports_nothing_and_absorbs_anything() {
     let mut buf = vec![1, 2, 3];
-    not_transported(&mut RowIo::Export(&mut buf));
+    let mut exported = Ok(());
+    not_transported(&mut RowIo::Export(&mut buf, &mut exported));
     assert!(
         buf.is_empty(),
         "a declining arm must leave an EMPTY payload"

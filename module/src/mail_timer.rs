@@ -210,6 +210,10 @@ pub(crate) fn fire(ctx: &ReducerContext, timer: &MailTimer) {
     }
 }
 
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_mail_arrival, crate::EVENT_TTL_MICROS);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

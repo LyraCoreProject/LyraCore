@@ -210,31 +210,6 @@ crate::character_owned!(transfer, fn sweep_transfer_game_auction_bid_hold(ctx, c
     keep_key,
 });
 
-#[table(accessor = game_auction_bid_decision)]
-pub struct AuctionBidDecision {
-    #[primary_key]
-    pub operation_id: u64,
-    pub bidder_guid: u64,
-    pub auction_id: u32,
-    pub offer: u32,
-    pub outcome: u8,
-    pub revision: u64,
-    pub result_bidder_guid: u64,
-    pub result_bid: u32,
-    pub minimum_increment: u32,
-    #[default(0)]
-    pub deferred_refund: u32,
-    #[default(0)]
-    pub accepted_price: u32,
-    pub house: u32,
-    #[default(0u32)]
-    pub item_entry: u32,
-    #[default(0u32)]
-    pub random_property_id: u32,
-    #[default(0u8)]
-    pub operation: u8,
-}
-
 fn duration_multiplier(duration_minutes: u32) -> Option<u64> {
     match duration_minutes {
         120 => Some(1),
@@ -1712,6 +1687,10 @@ fn prepare_listing(
 
 #[cfg(feature = "debug_reducers")]
 mod fixtures;
+
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_auction_notice, crate::EVENT_TTL_MICROS);
+}
 
 #[cfg(test)]
 mod tests;

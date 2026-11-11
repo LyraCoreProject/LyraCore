@@ -730,7 +730,7 @@ fn import(ctx: &ReducerContext, actor: &Actor, state: GuildPetitionImport) -> Re
             return Err("legacy petition signatures are inconsistent".into());
         }
     }
-    petition::observe_id(ctx, row.petition_id);
+    crate::guild::IdSequence::Petition.observe(ctx, row.petition_id);
     state.petition.insert(ctx);
     for signature in state.signatures {
         ctx.db.game_guild_petition_signature().insert(signature);

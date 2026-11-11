@@ -121,27 +121,30 @@ pub(super) fn receive(
                 );
             }
             if matches!(kind, chat_kind::SAY | chat_kind::YELL | chat_kind::EMOTE) {
-                if let Err(refusal) = lyracore_shared::chat::speakable_language(
-                    kind,
-                    speaker.race,
-                    chat.language.as_int(),
-                ) {
-                    return refused(ctx, id, guid, kind, String::new(), refusal);
-                }
                 let broadcast = match kind {
                     chat_kind::YELL => broadcast_chat::YELL,
                     chat_kind::EMOTE => broadcast_chat::EMOTE,
                     _ => broadcast_chat::SAY,
                 };
-                // Speech Gates run before the event or any entity change.
-                let _ = crate::chat::apply_send_chat(
+                use crate::chat::SpeechRefusal;
+                return match crate::chat::speak(
                     ctx,
                     actor,
                     broadcast,
-                    chat.language.as_int() as u8,
+                    chat.language.as_int(),
                     chat.message,
-                );
-                return Ok(());
+                ) {
+                    Err(SpeechRefusal::Language(refusal)) => {
+                        refused(ctx, id, guid, kind, String::new(), refusal)
+                    }
+                    // The client gets no reply for a dead speaker or an empty line.
+                    Ok(())
+                    | Err(
+                        SpeechRefusal::DeadSpeaker
+                        | SpeechRefusal::EmptyMessage
+                        | SpeechRefusal::UnsupportedChatType(_),
+                    ) => Ok(()),
+                };
             }
             let channel_name = match chat.chat_type {
                 CMSG_MESSAGECHAT_ChatType::Channel { channel } => channel,

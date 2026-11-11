@@ -183,6 +183,10 @@ crate::game_tick_pass!(fn rested_accrue_pass(ctx) {
     }
 });
 
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_rest_state_event, crate::EVENT_TTL_MICROS);
+}
+
 #[cfg(test)]
 mod tests {
     use super::rest_state_after_bonus;

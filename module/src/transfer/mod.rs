@@ -173,7 +173,7 @@ pub(crate) fn emit_bot_transfer_intent(
     if let Some(cast) = crate::spell::pending_cast(ctx, bot_guid) {
         crate::spell::cancel_cast_attempt(ctx, bot_guid, cast.scheduled_id);
     }
-    let _ = crate::actor::stop_attack(ctx, bot_guid);
+    crate::combat::stop_attack_for(ctx, bot_guid);
     ctx.db.game_creature_spline().guid().delete(bot_guid);
     crate::world::teleport(
         ctx,
@@ -605,7 +605,7 @@ pub(crate) trait BeginSink: ShardLedger {
     fn has_pending_transaction(&self, guid: u64) -> bool;
     fn is_in_transit(&self, guid: u64) -> bool;
     fn freeze_live_entity(&mut self, guid: u64);
-    fn export_rows(&self, guid: u64) -> Vec<TableRows>;
+    fn export_rows(&self, guid: u64) -> Result<Vec<TableRows>, String>;
     fn with_character<T>(
         &self,
         guid: u64,
@@ -721,7 +721,7 @@ impl BeginSink for CtxShard<'_> {
             crate::WorldEntity::delete(self.ctx, guid);
         }
     }
-    fn export_rows(&self, guid: u64) -> Vec<TableRows> {
+    fn export_rows(&self, guid: u64) -> Result<Vec<TableRows>, String> {
         export_rows(self.ctx, guid)
     }
     fn with_character<T>(
@@ -896,7 +896,12 @@ pub(crate) fn apply_begin<S: BeginSink>(
     sink.freeze_live_entity(character_guid);
 
     // Freeze and export in one transaction so the payload is a consistent snapshot.
-    let payload = sink.export_rows(character_guid);
+    let payload = sink.export_rows(character_guid).map_err(|e| {
+        format!(
+            "transfer {transfer_id}: cannot export character {character_guid}: {e} — nothing \
+             escrowed"
+        )
+    })?;
     let blob = sink
         .with_character(character_guid, |c| {
             build_export_blob(transfer_id, c, dest, payload)

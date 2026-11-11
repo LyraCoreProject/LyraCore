@@ -172,7 +172,7 @@ fn aura_absolute_expiry_survives_the_export_import_round_trip_with_the_same_rema
         proc_ready_micros: 0,
     };
 
-    let bytes = encode_rows(vec![aura]);
+    let bytes = encode_rows(vec![aura]).expect("an Aura serializes");
     assert!(
         !bytes.is_empty(),
         "encode_rows produced an empty buffer for a non-empty Vec<Aura>"
@@ -918,7 +918,7 @@ fn the_row_codec_round_trips_and_refuses_garbage() {
             hot: false,
         },
     ];
-    let bytes = encode_rows(rows.clone());
+    let bytes = encode_rows(rows.clone()).expect("manifest rows serialize");
     assert!(
         !bytes.is_empty(),
         "a non-empty table must serialize to a non-empty payload"

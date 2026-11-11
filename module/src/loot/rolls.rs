@@ -51,18 +51,6 @@ pub struct LootRollVote {
     pub rolled: u8, // 1..=100 for Need or Greed; zero otherwise.
 }
 
-// Retired Loot Roll promotion table keeps its declaration; see docs/danger-zones.md.
-#[table(accessor = game_loot_roll_promotion_receipt, index(accessor = by_source_slot, btree(columns = [promotion_source, corpse_guid, slot])))]
-pub struct LootRollPromotionReceipt {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    pub promotion_source: Identity,
-    pub corpse_guid: u64,
-    pub slot: u8,
-    pub source_roll_id: u64,
-}
-
 pub(crate) const ROLL_WINDOW_MICROS: i64 = 60_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

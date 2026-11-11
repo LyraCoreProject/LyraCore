@@ -959,6 +959,20 @@ pub(crate) fn stand_up_on_damage(ctx: &ReducerContext, target_guid: u64) {
     target.update(ctx);
 }
 
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_movement_violation, crate::EVENT_TTL_MICROS);
+    let cutoff = crate::time::now(ctx).to_micros_since_unix_epoch() - crate::EVENT_TTL_MICROS;
+    let teleports = ctx.db.game_teleport_event();
+    let stale: Vec<u64> = teleports
+        .iter()
+        .filter(|event| (event.created_micros as i64) < cutoff)
+        .map(|event| event.id)
+        .collect();
+    for id in stale {
+        teleports.id().delete(id);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{

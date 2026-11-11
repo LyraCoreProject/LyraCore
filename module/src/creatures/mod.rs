@@ -86,8 +86,7 @@ pub(crate) use spawn::{
 };
 
 pub use tick::{
-    game_creature_move_event, game_creature_move_schedule, game_creature_spline, CreatureMoveEvent,
-    CreatureMoveSchedule, CreatureSpline,
+    game_creature_move_schedule, game_creature_spline, CreatureMoveSchedule, CreatureSpline,
 };
 
 pub(crate) use tick::despawn_creature_entity;

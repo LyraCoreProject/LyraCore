@@ -939,7 +939,7 @@ pub fn operator_import_guild(ctx: &ReducerContext, state: Import) -> Result<(), 
     {
         return Err("guild invitations conflict with Realm state".into());
     }
-    guild::observe_guild_id(ctx, id);
+    guild::IdSequence::Guild.observe(ctx, id);
     ctx.db.game_guild().insert(state.guild);
     for rank in state.ranks {
         ctx.db.game_guild_rank().insert(GuildRank { id: 0, ..rank });

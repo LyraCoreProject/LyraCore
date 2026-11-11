@@ -189,7 +189,7 @@ fn active_pair(duel: &Duel, attacker_guid: u64, target_guid: u64) -> bool {
 
 fn duel_flag_guid(initiator_guid: u64, duel_id: u64) -> Option<u64> {
     // Shard-local Duel ids need the realm-wide GUID slot to make their arbiters unique.
-    let range_size = crate::realm_core::GUID_RANGE_SIZE;
+    let range_size = crate::auth::GUID_RANGE_SIZE;
     if duel_id >= range_size {
         return None;
     }
@@ -571,6 +571,10 @@ pub fn tick_duels(ctx: &ReducerContext, _schedule: DuelSchedule) {
     }
 }
 
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_duel_event, crate::EVENT_TTL_MICROS);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -789,6 +793,6 @@ mod tests {
             duel_flag_guid(2_000_000_007, 99),
             "realm-wide character GUID ranges must produce distinct flag GUIDs across shards"
         );
-        assert_eq!(duel_flag_guid(7, crate::realm_core::GUID_RANGE_SIZE), None);
+        assert_eq!(duel_flag_guid(7, crate::auth::GUID_RANGE_SIZE), None);
     }
 }

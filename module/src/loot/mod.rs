@@ -9,8 +9,8 @@ use lyracore_shared::loot_roll::event_kind as roll_event_kind;
 
 mod rolls;
 pub use rolls::{
-    game_corpse_loot_eligible, game_loot_roll, game_loot_roll_promotion_receipt,
-    game_loot_roll_vote, CorpseLootEligible, LootRoll, LootRollPromotionReceipt, LootRollVote,
+    game_corpse_loot_eligible, game_loot_roll, game_loot_roll_vote, CorpseLootEligible, LootRoll,
+    LootRollVote,
 };
 
 pub(crate) use rolls::{

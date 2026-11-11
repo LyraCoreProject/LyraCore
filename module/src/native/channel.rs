@@ -139,8 +139,7 @@ pub(super) fn receive(
     let target_guid = target.as_ref().map_or(0, |target| target.guid);
     let target_race = target.as_ref().map_or(0, |target| target.race);
     let target_name = target.map_or_else(|| target_name.unwrap_or_default(), |target| target.name);
-    let player =
-        super::world_session(ctx, guid).ok_or("native World Session is no longer current")?;
+    super::world_session(ctx, guid).ok_or("native World Session is no longer current")?;
     let request = ChannelRequest {
         channel_name: channel_name.clone(),
         password,
@@ -154,7 +153,7 @@ pub(super) fn receive(
             chat_tag: chat_tag_for(actor.player_flags),
         },
     };
-    crate::channel::apply_op(ctx, guid, (player.account_id, 0), op, request).map_err(|refusal| {
+    crate::channel::apply_op(ctx, guid, op, request).map_err(|refusal| {
         refusal_reply(
             refusal,
             channel_name,

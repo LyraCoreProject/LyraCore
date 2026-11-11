@@ -293,8 +293,7 @@ pub(super) fn leave(
         super::teleport::restore_origin(ctx, player.character_guid, player.teleport_origin);
         players.connection_id().delete(connection_id);
         super::motion_permit::withdraw(ctx, connection_id);
-        crate::meeting_stone::remove_solo_seeker(ctx, player.character_guid);
-        crate::channel::leave_all(ctx, player.character_guid);
+        crate::online::world_session_ended(ctx, player.character_guid);
         super::social::presence(ctx, player.character_guid, false);
         super::guild::presence(ctx, player.character_guid, false);
         if let Some(entity) = ctx

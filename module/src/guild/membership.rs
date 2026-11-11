@@ -450,6 +450,20 @@ fn rank_name(ctx: &ReducerContext, guild_id: u32, rank_id: u32) -> String {
         .map_or(String::new(), |rank| rank.name)
 }
 
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    let cutoff = crate::time::now(ctx).to_micros_since_unix_epoch() - crate::INVITE_TTL_MICROS;
+    let stale: Vec<u64> = ctx
+        .db
+        .game_guild_invite()
+        .iter()
+        .filter(|invite| invite.created_at.to_micros_since_unix_epoch() < cutoff)
+        .map(|invite| invite.target_guid)
+        .collect();
+    for target_guid in stale {
+        GuildInvite::delete(ctx, target_guid);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

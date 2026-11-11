@@ -396,11 +396,6 @@ fn channel_membership_ends_with_the_account_claim_that_admitted_it() {
     let first = claimed_actor(&generation, "101");
     op(&realm, &first, JOIN, "Raiders", "", HUMAN);
     op(&realm, &first, JOIN, "Trade - City", "", HUMAN);
-    let member = &realm.query_rows(
-        "SELECT account_id, claim_generation FROM game_chat_channel_member WHERE character_guid = 1",
-    )[0];
-    assert_eq!(member["account_id"], "1");
-    assert_eq!(member["claim_generation"], generation);
     let released = notices_of(&realm, || {
         realm.assert_call("release_account_claim", &[&token(&generation, "101")])
     });

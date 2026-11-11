@@ -573,10 +573,12 @@ pub(crate) fn in_guid_range(range: Option<(u64, u64)>, guid: u64) -> bool {
     guid >= base && guid < base.saturating_add(size)
 }
 
+pub(crate) const GUID_RANGE_SIZE: u64 = 1_000_000_000;
+
 #[reducer]
 pub fn install_guid_range(ctx: &ReducerContext, base: u64) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let size = crate::realm_core::GUID_RANGE_SIZE;
+    let size = GUID_RANGE_SIZE;
     let ranges = ctx.db.game_guid_range();
     if let Some(row) = ranges.id().find(0) {
         if row.base == base && row.size == size {

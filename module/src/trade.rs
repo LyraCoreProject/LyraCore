@@ -763,6 +763,21 @@ pub(crate) fn cancel_trade_for(ctx: &ReducerContext, guid: u64) {
     );
 }
 
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_trade_event, crate::EVENT_TTL_MICROS);
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
+    let stale: Vec<u64> = ctx
+        .db
+        .game_trade_session()
+        .iter()
+        .filter(|session| session_is_stale(session.created_at.to_micros_since_unix_epoch(), now))
+        .map(|session| session.initiator_guid)
+        .collect();
+    for guid in stale {
+        cancel_trade_for(ctx, guid);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -6,7 +6,7 @@ use crate::transfer::{decode_rows, encode_rows, import_rows_via, RowIo, Transpor
 fn entry<R: SpacetimeType + spacetimedb::sats::Serialize>(table: &str, rows: Vec<R>) -> TableRows {
     TableRows {
         table: table.to_owned(),
-        rows: encode_rows(rows),
+        rows: encode_rows(rows).expect("fixture rows serialize"),
     }
 }
 
@@ -588,7 +588,7 @@ fn malformed_legacy_rows_and_duplicate_format_aliases_are_refused() {
 
 #[test]
 fn neither_row_format_accepts_an_unconsumed_suffix() {
-    let mut bytes = encode_rows(Vec::<LegacyMail>::new());
+    let mut bytes = encode_rows(Vec::<LegacyMail>::new()).expect("an empty table serializes");
     bytes.extend_from_slice(&[1, 2, 3, 4]);
     let entry = TableRows {
         table: "game_mail".to_owned(),

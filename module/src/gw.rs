@@ -1,28 +1,10 @@
-use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Timestamp};
+use spacetimedb::{reducer, table, ReducerContext, ScheduleAt};
 
 use crate::game_account;
 use crate::group::GroupAction;
 use crate::helpers::{acting_entity_by_guid, require_operator};
 
-// Retired Gateway lease tables keep their declarations; see docs/danger-zones.md.
-#[table(accessor = game_gateway_lease)]
-pub struct GatewayLease {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    #[unique]
-    pub identity: Identity,
-    pub last_heartbeat: Timestamp,
-}
-
-#[table(accessor = game_gateway_session)]
-pub struct GatewaySession {
-    #[primary_key]
-    pub entity_guid: u64,
-    pub lease_id: u64,
-}
-
-// The schedule keeps its published name; it now reaps expired Account Claims only.
+// The schedule keeps its published name although it reaps expired Account Claims.
 #[table(accessor = game_gateway_lease_reaper_schedule, scheduled(reap_gateway_leases))]
 pub struct GatewayLeaseReaperSchedule {
     #[primary_key]

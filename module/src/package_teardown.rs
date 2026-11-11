@@ -144,7 +144,6 @@ fn make_dormant(ctx: &ReducerContext, guid: u64) {
     for intent in intents.by_bot().filter(guid).collect::<Vec<_>>() {
         intents.id().delete(intent.id);
     }
-    crate::group::clear_unclaimed_group_intents(ctx, guid);
     ctx.db
         .game_sessionless_action_consent()
         .character_guid()

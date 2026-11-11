@@ -1,5 +1,5 @@
 use lyracore_shared::spatial;
-use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
+use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table};
 
 use crate::{
     game_creature_ai_state, game_melee_attack, game_sessionless_action_consent, game_world_entity,
@@ -14,25 +14,6 @@ mod lifecycle;
 pub(crate) use lifecycle::{pass_decay, pass_gameobject_respawn, pass_respawn};
 
 pub(crate) use lifecycle::despawn_creature_entity;
-
-#[table(accessor = game_creature_move_event, public)]
-pub struct CreatureMoveEvent {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    pub mover_guid: u64,
-    pub start_x: f32,
-    pub start_y: f32,
-    pub start_z: f32,
-    pub dest_x: f32,
-    pub dest_y: f32,
-    pub dest_z: f32,
-    pub duration_ms: u32,
-    pub spline_id: u32,
-    pub created_at: Timestamp,
-    #[default(false)]
-    pub run: bool,
-}
 
 #[table(
     accessor = game_creature_spline,

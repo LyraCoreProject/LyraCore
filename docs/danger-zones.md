@@ -325,8 +325,8 @@ Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB
 adds `_live` to its original table name, such as `game_combat_event_live`. The original
 `game_combat_event`, `game_spell_cast_event`, `game_spell_impact_event`, `game_chat_event` and
 `game_emote_event` stay ordinary tables with their published schemas, and share each row type with
-the event table. The Module writes new notifications only to the event table. The event reaper
-expires rows left in the original tables after an upgrade.
+the event table. The Module writes new notifications only to the event table, and nothing reads
+or reaps the original tables.
 
 SpacetimeDB refuses a change to an existing table's event flag. Keep the old declarations and
 their indexes for additive schema compatibility. Do not clear a Shard to make this migration apply.
