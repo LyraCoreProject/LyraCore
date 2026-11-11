@@ -96,7 +96,24 @@ fn native_login_calls_nearby_pack_assistance() {
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_sql("DELETE FROM game_faction_template WHERE id = 1 OR id = 14");
-    shard.assert_sql("INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (1,1,3,2,12,0,0,0,0,0,0,0,0),(14,14,8,0,1,0,0,0,0,0,0,0,0)");
+    shard.insert_rows(
+        "game_faction_template",
+        &[
+            &[
+                ("id", &1),
+                ("faction", &1),
+                ("faction_group", &3),
+                ("friend_group", &2),
+                ("enemy_group", &12),
+            ],
+            &[
+                ("id", &14),
+                ("faction", &14),
+                ("faction_group", &8),
+                ("enemy_group", &1),
+            ],
+        ],
+    );
     shard.assert_sql(&format!(
         "UPDATE game_character SET x = 0, y = 0, z = 0, orientation = 0, level = 1 WHERE guid = {character}"
     ));
@@ -1303,7 +1320,20 @@ fn a_reconnecting_passenger_applies_class_specific_starting_passives() {
         "UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {passenger}"
     ));
     shard.assert_sql("DELETE FROM game_level_stats WHERE race = 1 AND class = 1 AND level = 1");
-    shard.assert_sql("INSERT INTO game_level_stats (race_class_level,race,class,level,strength,agility,stamina,intellect,spirit) VALUES (65793,1,1,1,23,20,22,20,20)");
+    shard.insert_row(
+        "game_level_stats",
+        &[
+            ("race_class_level", &65793),
+            ("race", &1),
+            ("class", &1),
+            ("level", &1),
+            ("strength", &23),
+            ("agility", &20),
+            ("stamina", &22),
+            ("intellect", &20),
+            ("spirit", &20),
+        ],
+    );
     shard.assert_sql("DELETE FROM game_createinfo_spell WHERE spell_id = 20598");
     shard.insert_row(
         "game_createinfo_spell",
@@ -1498,7 +1528,24 @@ fn a_reconnecting_passenger_enters_the_world_before_resuming_taxi() {
     let (shard, passenger, _) = fixture("taxi-entry-order");
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_sql("DELETE FROM game_faction_template WHERE id = 1 OR id = 14");
-    shard.assert_sql("INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (1,1,3,2,12,0,0,0,0,0,0,0,0),(14,14,8,0,1,0,0,0,0,0,0,0,0)");
+    shard.insert_rows(
+        "game_faction_template",
+        &[
+            &[
+                ("id", &1),
+                ("faction", &1),
+                ("faction_group", &3),
+                ("friend_group", &2),
+                ("enemy_group", &12),
+            ],
+            &[
+                ("id", &14),
+                ("faction", &14),
+                ("faction_group", &8),
+                ("enemy_group", &1),
+            ],
+        ],
+    );
     shard.assert_sql(&format!(
         "UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {passenger}"
     ));

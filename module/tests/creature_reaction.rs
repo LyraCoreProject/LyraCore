@@ -39,12 +39,14 @@ fn creature(shard: &Standalone, reaction: u8) -> String {
     shard.assert_sql(&format!(
         "DELETE FROM game_creature_ai_state WHERE creature_guid = {target}"
     ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_creature_ai_state \
-         (creature_guid,phase,lifecycle_id,engagement_id,ranged_distance,ranged_angle,\
-          ranged_posture_active,definition_revision,active_object,react_state,melee_enabled) \
-         VALUES ({target},0,0,1,0,0,false,0,false,{reaction},true)"
-    ));
+    shard.insert_row(
+        "game_creature_ai_state",
+        &[
+            ("creature_guid", &target),
+            ("engagement_id", &1),
+            ("react_state", &reaction),
+        ],
+    );
     target
 }
 

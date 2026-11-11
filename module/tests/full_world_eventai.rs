@@ -43,7 +43,14 @@ fn zone_speech_resolves_terrain_imported_after_the_creature_spawn() {
             "0",
         ],
     );
-    shard.assert_sql("INSERT INTO game_creature_ai_broadcast_text (id,male_text,female_text,chat_type,language_id,emote_delay_1_ms,emote_id_1,emote_delay_2_ms,emote_id_2,emote_delay_3_ms,emote_id_3) VALUES (5099000,'Zone speech','',6,0,0,0,0,0,0,0)");
+    shard.insert_row(
+        "game_creature_ai_broadcast_text",
+        &[
+            ("id", &5099000),
+            ("male_text", &"Zone speech"),
+            ("chat_type", &6),
+        ],
+    );
     let speech = shard.subscribe(&[&format!(
         "SELECT * FROM game_chat_event_live WHERE sender_guid = {CREATURE} AND chat_type = 6"
     )]);

@@ -155,12 +155,16 @@ fn seed_hostile_factions(shard: &Standalone) {
         shard.assert_sql(&format!(
             "DELETE FROM game_faction_template WHERE id = {id}"
         ));
-        shard.assert_sql(&format!(
-            "INSERT INTO game_faction_template (id, faction, faction_group, friend_group, \
-             enemy_group, enemy_0, enemy_1, enemy_2, enemy_3, friend_0, friend_1, friend_2, \
-             friend_3) VALUES ({id}, {faction}, {group}, {friends}, {enemies}, 0, 0, 0, 0, 0, 0, \
-             0, 0)"
-        ));
+        shard.insert_row(
+            "game_faction_template",
+            &[
+                ("id", &id),
+                ("faction", &faction),
+                ("faction_group", &group),
+                ("friend_group", &friends),
+                ("enemy_group", &enemies),
+            ],
+        );
     }
 }
 
@@ -281,9 +285,10 @@ fn distract_turns_only_the_idle_creatures_near_the_point_and_keeps_the_rogue_hid
     let homing = spawn_wolf(&shard, 16.0);
     let outside = spawn_wolf(&shard, 32.0);
     hold_in_combat(&shard, fighting);
-    shard.assert_sql(&format!(
-        "INSERT INTO game_creature_ai_returning_home (creature_guid) VALUES ({homing})"
-    ));
+    shard.insert_row(
+        "game_creature_ai_returning_home",
+        &[("creature_guid", &homing)],
+    );
 
     insert_spell(
         &shard,
@@ -421,10 +426,16 @@ fn a_distraction_holds_idle_movement_until_its_expiry_and_ends_on_an_engagement(
         shard.assert_sql(&format!(
             "DELETE FROM game_creature_waypoint WHERE id = {id}"
         ));
-        shard.assert_sql(&format!(
-            "INSERT INTO game_creature_waypoint (id, creature_guid, x, y, z) \
-             VALUES ({id}, {patroller}, {x}, {y}, {z})"
-        ));
+        shard.insert_row(
+            "game_creature_waypoint",
+            &[
+                ("id", &id),
+                ("creature_guid", &patroller),
+                ("x", &x),
+                ("y", &y),
+                ("z", &z),
+            ],
+        );
     }
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET wp_target = 5090702 WHERE guid = {patroller}"

@@ -404,18 +404,42 @@ fn seed_taxi_single_hop_world(
 ) -> Result<()> {
     seed_taxi_world(shard, scenario)?;
     shard.assert_sql("DELETE FROM game_faction_template WHERE id = 1 OR id = 14");
-    shard.assert_sql(
-        "INSERT INTO game_faction_template \
-         (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) \
-         VALUES (1,1,3,2,12,0,0,0,0,0,0,0,0),(14,14,8,0,1,0,0,0,0,0,0,0,0)",
+    shard.insert_rows(
+        "game_faction_template",
+        &[
+            &[
+                ("id", &1),
+                ("faction", &1),
+                ("faction_group", &3),
+                ("friend_group", &2),
+                ("enemy_group", &12),
+            ],
+            &[
+                ("id", &14),
+                ("faction", &14),
+                ("faction_group", &8),
+                ("enemy_group", &1),
+            ],
+        ],
     );
-    shard.assert_sql(
-        "INSERT INTO game_creature_template \
-         (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,\
-          creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,\
-          money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,\
-          pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) \
-         VALUES (990002,'Fixture creature 990002','',1,1,100,14,0,0,1,0,0,0,1,2000,0,0,1,100,80,1,1,0,0,0,0,0)",
+    shard.insert_row(
+        "game_creature_template",
+        &[
+            ("entry", &990002),
+            ("name", &"Fixture creature 990002"),
+            ("display_id", &1),
+            ("level", &1),
+            ("health", &100),
+            ("faction_template", &14),
+            ("creature_type", &1),
+            ("scale", &1),
+            ("base_attack_time_ms", &2000),
+            ("max_level", &1),
+            ("max_level_health", &100),
+            ("aggro_range", &80),
+            ("damage_min", &1),
+            ("damage_max", &1),
+        ],
     );
     let guid = lyracore_shared::guid::creature(990002, 1);
     shard.assert_call(
@@ -428,13 +452,22 @@ fn seed_taxi_single_hop_world(
 }
 
 fn seed_bank_world(shard: &Standalone, _: &wire_client::scenario::Scenario) -> Result<()> {
-    shard.assert_sql(
-        "INSERT INTO game_creature_template \
-         (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,\
-          creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,\
-          money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,\
-          pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) \
-         VALUES (5099,'Bank fixture','',1,1,100,35,256,0,7,0,0,0,1,2000,0,0,1,100,0,0,0,0,0,0,0,0)",
+    shard.insert_row(
+        "game_creature_template",
+        &[
+            ("entry", &5099),
+            ("name", &"Bank fixture"),
+            ("display_id", &1),
+            ("level", &1),
+            ("health", &100),
+            ("faction_template", &35),
+            ("npc_flags", &256),
+            ("creature_type", &7),
+            ("scale", &1),
+            ("base_attack_time_ms", &2000),
+            ("max_level", &1),
+            ("max_level_health", &100),
+        ],
     );
     Ok(())
 }
@@ -486,8 +519,9 @@ fn seed_quest_transaction_world(
     seed_transaction_world(shard, scenario)?;
     seed_quest_world(shard, scenario)?;
     shard.assert_sql("DELETE FROM game_faction WHERE faction_id = 72");
-    shard.assert_sql(
-        "INSERT INTO game_faction (faction_id,reputation_index,base_standing) VALUES (72,19,0)",
+    shard.insert_row(
+        "game_faction",
+        &[("faction_id", &72), ("reputation_index", &19)],
     );
     Ok(())
 }

@@ -17,11 +17,16 @@ fn stage(duration_ms: u32) -> (Standalone, String) {
         shard.assert_sql(&format!(
             "DELETE FROM game_faction_template WHERE id = {id}"
         ));
-        shard.assert_sql(&format!(
-            "INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,\
-             enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) \
-             VALUES ({id},{faction},{group},{friends},{enemies},0,0,0,0,0,0,0,0)"
-        ));
+        shard.insert_row(
+            "game_faction_template",
+            &[
+                ("id", &id),
+                ("faction", &faction),
+                ("faction_group", &group),
+                ("friend_group", &friends),
+                ("enemy_group", &enemies),
+            ],
+        );
     }
     shard.assert_call(
         "debug_spawn_at_feet",

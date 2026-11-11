@@ -337,11 +337,17 @@ fn insert_effect(
 }
 
 fn insert_script(standalone: &Standalone, script_id: u32, name: &str, enabled: bool, source: &str) {
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_script (script_id, name, package, source_hash, content_hash, event, \
-         priority, enabled, source) \
-         VALUES ({script_id}, '{name}', 'fixture.spellscript', '', '', 'on_login', 0, {enabled}, '{source}')"
-    ));
+    standalone.insert_row(
+        "game_script",
+        &[
+            ("script_id", &script_id),
+            ("name", &name),
+            ("package", &"fixture.spellscript"),
+            ("event", &"on_login"),
+            ("enabled", &enabled),
+            ("source", &source),
+        ],
+    );
 }
 
 fn spawn_wolf(standalone: &Standalone) -> u64 {

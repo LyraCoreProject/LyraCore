@@ -13,7 +13,20 @@ use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 fn starting_passives(shard: &Standalone) {
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.assert_sql("DELETE FROM game_level_stats WHERE race = 1 AND class = 1 AND level = 1");
-    shard.assert_sql("INSERT INTO game_level_stats (race_class_level,race,class,level,strength,agility,stamina,intellect,spirit) VALUES (65793,1,1,1,23,20,22,20,20)");
+    shard.insert_row(
+        "game_level_stats",
+        &[
+            ("race_class_level", &65793),
+            ("race", &1),
+            ("class", &1),
+            ("level", &1),
+            ("strength", &23),
+            ("agility", &20),
+            ("stamina", &22),
+            ("intellect", &20),
+            ("spirit", &20),
+        ],
+    );
     for (spell, kind, points, stat, visual) in [
         (20598, A_MOD_STAT_PCT, 5, STAT_SPI, 0),
         (28330, A_MOD_STAT, 3, STAT_STR, 3580),

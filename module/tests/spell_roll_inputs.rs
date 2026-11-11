@@ -213,7 +213,25 @@ fn binary_damage_skips_the_innate_partial_resistance_roll() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_partial_resist_that_removes_a_small_area_tick_still_reports_its_log() {
     let (shard, target) = stage("resisted-area-log");
-    shard.assert_sql("INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (5090300,5090300,1,1,2,0,0,0,0,0,0,0,0),(5090301,5090301,2,2,1,0,0,0,0,0,0,0,0)");
+    shard.insert_rows(
+        "game_faction_template",
+        &[
+            &[
+                ("id", &5090300),
+                ("faction", &5090300),
+                ("faction_group", &1),
+                ("friend_group", &1),
+                ("enemy_group", &2),
+            ],
+            &[
+                ("id", &5090301),
+                ("faction", &5090301),
+                ("faction_group", &2),
+                ("friend_group", &2),
+                ("enemy_group", &1),
+            ],
+        ],
+    );
     shard.assert_sql("UPDATE game_world_entity SET faction_template = 5090300 WHERE guid = 1");
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET faction_template = 5090301 WHERE guid = {target}"

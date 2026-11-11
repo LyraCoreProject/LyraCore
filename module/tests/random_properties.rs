@@ -70,7 +70,16 @@ fn max_health(shard: &Standalone) -> u32 {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn loot_keeps_its_property_after_the_pool_changes_and_equipped_stats_follow_it() {
     let shard = fixture("property-loot");
-    shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,{TEST_WOLF_ENTRY},{ITEM},10000,1,0,false)"));
+    shard.insert_row(
+        "game_creature_loot",
+        &[
+            ("id", &5090100),
+            ("creature_entry", &TEST_WOLF_ENTRY),
+            ("item_entry", &ITEM),
+            ("chance_bp", &10000),
+            ("count", &1),
+        ],
+    );
     shard.assert_sql(&format!(
         "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
     ));
@@ -187,7 +196,16 @@ fn a_missing_property_pool_does_not_leave_an_empty_loot_cursor() {
     shard.assert_sql(&format!(
         "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
     ));
-    shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,{TEST_WOLF_ENTRY},{ITEM},10000,1,0,false)"));
+    shard.insert_row(
+        "game_creature_loot",
+        &[
+            ("id", &5090100),
+            ("creature_entry", &TEST_WOLF_ENTRY),
+            ("item_entry", &ITEM),
+            ("chance_bp", &10000),
+            ("count", &1),
+        ],
+    );
     shard.assert_call(
         "debug_spawn_at_feet",
         &["1", &TEST_WOLF_ENTRY.to_string(), "1"],
@@ -222,7 +240,25 @@ fn invalid_creature_drops_leave_valid_loot_at_slot_zero() {
     shard.assert_sql(&format!(
         "DELETE FROM game_creature_loot WHERE creature_entry = {TEST_WOLF_ENTRY}"
     ));
-    shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,{TEST_WOLF_ENTRY},{ITEM},10000,1,0,false),(5090101,{TEST_WOLF_ENTRY},{FIXTURE_JERKY},10000,2,0,false)"));
+    shard.insert_rows(
+        "game_creature_loot",
+        &[
+            &[
+                ("id", &5090100),
+                ("creature_entry", &TEST_WOLF_ENTRY),
+                ("item_entry", &ITEM),
+                ("chance_bp", &10000),
+                ("count", &1),
+            ],
+            &[
+                ("id", &5090101),
+                ("creature_entry", &TEST_WOLF_ENTRY),
+                ("item_entry", &FIXTURE_JERKY),
+                ("chance_bp", &10000),
+                ("count", &2),
+            ],
+        ],
+    );
     shard.assert_call(
         "debug_spawn_at_feet",
         &["1", &TEST_WOLF_ENTRY.to_string(), "1"],
@@ -248,7 +284,25 @@ fn invalid_chest_properties_preserve_valid_drops_and_finish_empty_fallbacks() {
     let shard = fixture("property-mixed-chest");
     shard.assert_sql("UPDATE game_world_entity SET x = 100, y = 100, z = 100 WHERE guid = 1");
     shard.assert_sql("DELETE FROM game_item_property_weight WHERE id = 5090100");
-    shard.assert_sql(&format!("INSERT INTO game_gameobject_loot (id,loot_id,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,5090100,{ITEM},10000,1,0,false),(5090101,5090100,{FIXTURE_JERKY},10000,2,0,false)"));
+    shard.insert_rows(
+        "game_gameobject_loot",
+        &[
+            &[
+                ("id", &5090100),
+                ("loot_id", &5090100),
+                ("item_entry", &ITEM),
+                ("chance_bp", &10000),
+                ("count", &1),
+            ],
+            &[
+                ("id", &5090101),
+                ("loot_id", &5090100),
+                ("item_entry", &FIXTURE_JERKY),
+                ("chance_bp", &10000),
+                ("count", &2),
+            ],
+        ],
+    );
     for (entry, loot_id) in [("5090110", "5090100"), ("5090111", "0")] {
         shard.assert_call(
             "debug_spawn_gameobject",

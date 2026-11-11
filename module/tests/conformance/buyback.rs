@@ -571,7 +571,7 @@ fn auction_cannot_list_a_buyback_item() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET npc_flags = 4100 WHERE guid = {vendor}"
     ));
-    shard.assert_sql("INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (5090001,0,0,0,0,0,0,0,0,0,0,0,0)");
+    shard.insert_row("game_faction_template", &[("id", &5090001)]);
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET faction_template = 5090001 WHERE guid = {vendor}"
     ));
