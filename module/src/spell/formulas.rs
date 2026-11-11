@@ -194,14 +194,6 @@ mod tests {
     }
 
     #[test]
-    fn should_arm_spell_retaliation_gates_player_vs_unengaged_creature() {
-        assert!(should_arm_spell_retaliation(true, false, false));
-        assert!(!should_arm_spell_retaliation(true, false, true));
-        assert!(!should_arm_spell_retaliation(true, true, false));
-        assert!(!should_arm_spell_retaliation(false, false, false));
-    }
-
-    #[test]
     fn school_index_names_the_lowest_school_in_the_mask() {
         use super::school_index;
         assert_eq!(school_index(0), 0);

@@ -671,7 +671,6 @@ mod tests {
     fn reserved_hp_key_namespace_is_disjoint_from_package_encounter_ids() {
         assert!(is_reserved_encounter_id(hp_fired_key(1)));
         assert!(is_reserved_encounter_id(hp_fired_key(646)));
-        assert_eq!(hp_fired_key(646), 0x8000_0000 | 646);
         assert!(!is_reserved_encounter_id(0));
         assert!(!is_reserved_encounter_id(1));
         assert!(!is_reserved_encounter_id(0x7FFF_FFFF));

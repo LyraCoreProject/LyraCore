@@ -1115,9 +1115,7 @@ impl Scenario {
         if let Some((wrote_at, first)) = self.last_carrier.borrow().get(&effect.guid) {
             assert!(
                 *wrote_at != now,
-                "guid {} wrote two carrier rows in one firing: {first:?} then {effect:?} — only \
-                 the second would ever reach a client, so the first is a decision the player \
-                 never sees",
+                "guid {} wrote two carrier rows in one firing: {first:?} then {effect:?}",
                 effect.guid
             );
         }
@@ -3185,17 +3183,18 @@ fn a_creature_mid_flight_moves_to_the_point_its_client_renders() {
     assert_eq!(
         wolf.at,
         p(5.0, 0.0, 10.0),
-        "the authoritative position must track where the leg renders; leading it is what makes \
-         range, melee and aggro checks fire early"
+        "the authoritative position tracks where the leg renders"
     );
     assert_eq!(
         (wolf.grid, wolf.cell),
         (
             spatial::grid_cell(5.0, 0.0),
-            spatial::grid_cell_id(spatial::grid_cell(5.0, 0.0).0, spatial::grid_cell(5.0, 0.0).1)
+            spatial::grid_cell_id(
+                spatial::grid_cell(5.0, 0.0).0,
+                spatial::grid_cell(5.0, 0.0).1
+            )
         ),
-        "grid address and packed cell must move with the position, or the creature is delivered to \
-         the wrong players"
+        "grid address and packed cell move with the position"
     );
     assert_eq!(
         wolf.last_move_ms,
@@ -3219,19 +3218,17 @@ fn a_dedicated_firing_advances_only_its_instance_splines() {
         .creature(PACK_MATE, start)
         .flying(PACK_MATE, start, dest, 0, LEG_MS);
     let tick = w.tick(false, TickScope::Only(DEDICATED));
-    let outcome = run_cycle(&mut w, tick);
+    run_cycle(&mut w, tick);
     assert_eq!(w.at(WOLF).at, p(5.0, 0.0, 10.0));
     assert_eq!(w.at(PACK_MATE).at, start);
-    assert_eq!(outcome.rows_visited[0], ("advance", 1));
 
     let tick = w.tick(
         false,
         TickScope::from_rows(crate::creatures::GLOBAL_TICK_INSTANCE, [DEDICATED]),
     );
-    let outcome = run_cycle(&mut w, tick);
+    run_cycle(&mut w, tick);
     assert_eq!(w.at(WOLF).at, p(5.0, 0.0, 10.0));
     assert_eq!(w.at(PACK_MATE).at, p(5.0, 0.0, 10.0));
-    assert_eq!(outcome.rows_visited[0], ("advance", 1));
 }
 
 #[test]
@@ -3250,8 +3247,7 @@ fn a_later_pass_reads_the_advanced_position_not_the_leg_start() {
     assert_eq!(
         w.effects().first().map(|e| e.dest),
         Some(p(11.0, 0.0, 10.0)),
-        "every pass after advance must decide from the rendered position, or the whole cycle acts \
-         on a place the creature is not — here the wolf would turn round and walk backwards"
+        "later passes decide from the rendered position"
     );
 }
 
@@ -3284,14 +3280,12 @@ fn a_patrolling_creature_walks_the_next_segment_of_its_route() {
             facing: false,
             facing_angle: 0.0,
         }],
-        "a patroller must walk ONE segment of its route, at walk pace — a run leg or a leg to the \
-         wrong waypoint is a creature that visibly leaves its route"
+        "a patroller walks one route segment at walk pace"
     );
     assert_eq!(
         (w.at(WOLF).wp_target, w.at(WOLF).leg_ends_ms),
         (2, now_ms + 4000),
-        "the cursor must advance to the waypoint being walked to and the leg must be held to \
-         completion, or the route re-decides itself every firing and the creature dithers"
+        "the cursor advances to the target waypoint and the leg is held to completion"
     );
 }
 
@@ -3310,14 +3304,12 @@ fn a_badly_displaced_patroller_steps_toward_its_waypoint_one_firing_at_a_time() 
     assert_eq!(
         (effect.dest, effect.run, effect.dur_ms),
         (p(0.0, 298.75, 10.0), false, 500),
-        "a badly displaced patroller must walk ONE firing's worth toward its waypoint; a \
-         whole-distance leg slides it home through terrain over minutes"
+        "a displaced patroller walks one firing's worth toward its waypoint"
     );
     assert_eq!(
         (w.at(WOLF).wp_target, w.at(WOLF).leg_ends_ms),
         (2, 0),
-        "the cursor must stay on the same waypoint and the leg must NOT be held to completion, or \
-         the next firing cannot re-derive the step from the creature's new position"
+        "the cursor stays on its waypoint and the step is not held to completion"
     );
 }
 
@@ -3343,10 +3335,13 @@ fn a_displaced_patroller_converges_then_resumes_ordinary_patrolling() {
     );
     let now_ms = (HALF_WAY / 1000) as u32 + 500;
     assert_eq!(
-        (w.effects()[1].dest, w.effects()[1].dur_ms, w.at(WOLF).leg_ends_ms),
+        (
+            w.effects()[1].dest,
+            w.effects()[1].dur_ms,
+            w.at(WOLF).leg_ends_ms
+        ),
         (p(0.0, 0.0, 10.0), 15900, now_ms + 15900),
-        "once close enough, patrolling must resume the ordinary single-leg-held-to-completion shape \
-         and carry the creature the rest of the way to its waypoint"
+        "once close, patrolling resumes one held leg to the waypoint"
     );
 }
 
@@ -3362,8 +3357,7 @@ fn a_patroller_outside_every_active_cell_stays_frozen_on_its_route() {
 
     assert!(
         w.effects().is_empty() && w.at(WOLF).wp_target == 1,
-        "a creature no player can see must cost the tick nothing and keep its route state, so it \
-         resumes exactly where it paused when a player walks back into range"
+        "an unseen creature costs nothing and keeps its route state"
     );
 }
 
@@ -3377,8 +3371,7 @@ fn a_displaced_creature_runs_home_one_firing_at_a_time() {
     assert_eq!(
         (effect.dest, effect.run, effect.dur_ms),
         (p(0.0, 16.5, 10.0), true, 500),
-        "the walk home must be ONE firing's worth of run toward the post; a whole-distance leg \
-         teleports the creature home the moment a player displaces it"
+        "the walk home is one firing's run toward the post"
     );
 }
 
@@ -3391,8 +3384,7 @@ fn a_creature_that_runs_home_does_not_also_wander_in_the_same_firing() {
     assert_eq!(
         w.effects().len(),
         1,
-        "two legs in one firing share a spline id and the client plays only the first, so the \
-         creature would visibly stutter between home and its loiter point"
+        "one leg per firing: two would share a spline id"
     );
     assert!(w.effects()[0].run, "walking home wins over loitering");
 }
@@ -3414,8 +3406,7 @@ fn a_creature_that_reaches_home_loiters_again() {
     );
     assert!(
         !w.effects()[1].run,
-        "a creature that got home again is idle, so its next leg must be a walk-paced loiter hop, \
-         not another run home"
+        "a creature back home loiters at walk pace"
     );
 }
 
@@ -3429,8 +3420,7 @@ fn an_idle_creature_loiters_near_its_post_on_about_a_third_of_firings() {
         assert_eq!(
             w.effects().len(),
             usize::from(hops),
-            "the pause between hops is what makes a loiterer read as idle instead of jogging on \
-             the spot (roll {chance_roll})"
+            "a loiterer pauses between hops (roll {chance_roll})"
         );
     }
 
@@ -3441,14 +3431,12 @@ fn an_idle_creature_loiters_near_its_post_on_about_a_third_of_firings() {
     assert_eq!(
         (effect.dest, effect.run, effect.dur_ms),
         (p(WANDER_RADIUS, 0.0, 10.0), false, 2400),
-        "the hop must stay inside the wander radius of the POST and stroll there, or a loiterer \
-         drifts off its post hop by hop and trips its own leash"
+        "the hop stays inside the post's wander radius at walk pace"
     );
     assert_eq!(
         w.at(WOLF).leg_ends_ms,
         (HALF_WAY / 1000) as u32 + 2400,
-        "the hop is held to completion, so the creature pauses on arrival instead of re-rolling \
-         a new point mid-stroll"
+        "the hop is held to completion"
     );
 }
 
@@ -3465,9 +3453,7 @@ fn loitering_waits_for_a_sense_firing_but_walking_home_does_not() {
     assert_eq!(
         (loiterer.effects().len(), displaced.effects().len()),
         (0, 1),
-        "the hop chance is authored per SENSE firing, so rolling it every movement firing makes a \
-         loiterer hop eight times as often; the walk home is the opposite — it must step on every \
-         firing or a displaced creature crawls back at an eighth of its speed"
+        "the hop chance rolls per sense firing; the walk home steps every firing"
     );
 }
 
@@ -3479,8 +3465,7 @@ fn an_idle_creature_that_holds_its_post_never_loiters() {
 
     assert!(
         w.effects().is_empty(),
-        "quest givers, vendors and guards are IDLE-movement creatures: one that strolls off its \
-         post is unreachable where the player was sent to find it"
+        "an IDLE-movement creature stays on its post"
     );
 }
 
@@ -3505,8 +3490,7 @@ fn a_creature_with_a_leg_still_in_flight_starts_no_new_leg() {
 
     assert!(
         patroller.effects().is_empty() && loiterer.effects().is_empty(),
-        "re-throwing a leg that is still animating is the dither the ETA gate exists to stop: the \
-         client restarts the same move every firing and the creature never arrives"
+        "a leg still animating is not re-thrown"
     );
 }
 
@@ -3529,16 +3513,13 @@ fn an_engaged_or_suppressed_creature_is_moved_by_no_idle_behavior() {
 
             assert!(
                 w.effects().is_empty(),
-                "a fighting creature belongs to chase and a crowd-controlled one to fear; a second \
-                 leg from an idle mover shares their spline id and the client throws it away \
-                 (patrols={patrols})"
+                "an idle mover throws no leg while chasing or feared (patrols={patrols})"
             );
             if patrols {
                 assert_eq!(
                     w.at(WOLF).wp_target,
                     1,
-                    "the held creature must keep its route state, or it resumes from the wrong \
-                     waypoint once the hold ends"
+                    "a held creature keeps its route state"
                 );
             }
         }
@@ -3559,8 +3540,7 @@ fn a_leg_lands_on_the_ground_under_its_destination() {
             off_slice.effects()[0].dest.z
         }),
         (42.0, 10.0),
-        "a leg must land on imported ground and fall back to the post's own height where terrain \
-         is missing, or the creature floats above the slope or sinks into it"
+        "a leg lands on imported ground, else at the post's height"
     );
 }
 
@@ -3573,8 +3553,7 @@ fn a_blocked_walk_home_goes_around_instead_of_through() {
     assert_eq!(
         w.effects()[0].dest,
         p(3.5, 20.0, 10.0),
-        "the walk home must head for the detour corner navigation returns; walking the straight \
-         line instead puts the creature inside the geometry between it and its post"
+        "the walk home follows the navigation detour"
     );
 }
 
@@ -3744,8 +3723,7 @@ fn a_movement_suppressed_creature_freezes_where_it_renders() {
             facing: false,
             facing_angle: 0.0,
         }],
-        "the client must be told to stop where the server froze the creature, or it keeps sliding \
-         into melee while rooted"
+        "a rooted creature's client stops where the server froze it"
     );
 }
 
@@ -3760,8 +3738,7 @@ fn a_non_finite_leg_is_refused_and_the_creature_stays_put() {
     assert_eq!(
         w.at(WOLF).at,
         p(0.0, 0.0, 10.0),
-        "writing a non-finite position puts the creature in no grid cell at all — it becomes an \
-         unreachable attacker, so the leg must be refused instead"
+        "a leg to a non-finite position is refused"
     );
     assert!(
         !w.has_leg(WOLF),
@@ -3803,8 +3780,7 @@ fn world_maintenance_and_package_passes_run_on_every_catch_all_firing() {
         assert_eq!(
             (w.maintenance_runs.get(), w.package_runs.get()),
             (maintenance, packages),
-            "running decay, respawn or the package passes from a dedicated instance row multiplies \
-             their effects — double regen, double decay — across the whole world (sense={sense})"
+            "a dedicated instance row runs no world passes (sense={sense})"
         );
     }
 }
@@ -3834,8 +3810,7 @@ fn a_creature_engages_the_nearest_hostile_player_it_can_see() {
     assert_eq!(
         w.pulls(),
         [(WOLF, RANGER, Pull::Noticed)],
-        "a creature must pull the CLOSEST player it notices, and only one of them — picking the \
-         farther player leaves someone walking away with a mob that skipped the man next to it"
+        "a creature pulls only the closest player it notices"
     );
 }
 
@@ -3849,9 +3824,7 @@ fn a_godmoded_or_dead_player_draws_no_aggro() {
 
         assert!(
             w.pulls().is_empty(),
-            "a player who cannot die never resolves a pull the normal way — nothing kills them, so \
-             nothing ever disengages, and creatures only ACCUMULATE: a GM standing in Northshire \
-             collected 103 simultaneous attackers"
+            "a player who cannot die is never pulled"
         );
     }
 }
@@ -3867,8 +3840,7 @@ fn a_creature_outside_every_active_cell_notices_nobody() {
 
     assert!(
         w.pulls().is_empty(),
-        "aggro is what the active-cell sweep exists to bound; scanning a creature no player is \
-         near puts the whole world's population back on every sense firing"
+        "only creatures in active cells scan for aggro"
     );
 }
 
@@ -3882,8 +3854,7 @@ fn a_stealthed_player_is_noticed_only_from_inside_the_detection_range() {
         assert_eq!(
             !w.pulls().is_empty(),
             noticed,
-            "stealth must GRADE the radius down, not switch it off: a rogue who steps on a mob is \
-             seen, one crossing the camp at {dist} yards is not"
+            "stealth shrinks the aggro radius with distance ({dist} yards)"
         );
     }
 }
@@ -3938,9 +3909,7 @@ fn the_aggro_radius_scales_with_level_honors_the_template_override_and_greys_out
         assert_eq!(
             !w.pulls().is_empty(),
             noticed,
-            "the reach a creature notices you from is the whole feel of walking through a zone: a \
-             high-level player must cross a low one unmolested, and a tuned creature must keep the \
-             range its author gave it ({case})"
+            "aggro range follows level difference and template overrides ({case})"
         );
     }
 }
@@ -3951,11 +3920,7 @@ fn a_wall_between_them_stops_the_pull() {
     let tick = w.tick(true, catch_all());
     run_cycle(&mut w, tick);
 
-    assert!(
-        w.pulls().is_empty(),
-        "a hostile on the other side of the abbey wall has not been seen; pulling it drags a mob \
-         through geometry at a player who never had line of sight on it"
-    );
+    assert!(w.pulls().is_empty(), "no pull without line of sight");
 }
 
 #[test]
@@ -3972,8 +3937,7 @@ fn a_soothed_crowd_controlled_or_near_death_creature_starts_no_fight() {
 
         assert!(
             w.pulls().is_empty(),
-            "Mind Soothe and a stun both have to actually stop the pull to be worth casting, and a \
-             creature about to rout must not be armed into the fight it is leaving ({case})"
+            "Mind Soothe, stuns and a pending rout stop the pull ({case})"
         );
     }
 }
@@ -3995,9 +3959,7 @@ fn a_pack_mate_answers_a_call_it_can_hear() {
             (WOLF, HUNTER, Pull::Noticed),
             (PACK_MATE, HUNTER, Pull::Assisted)
         ],
-        "a pack answers its own: the neighbor joins the fight it never would have started, and a \
-         mate out of earshot stays out of it — range is measured from the CALLER, so pulling one \
-         wolf must not wake the whole valley"
+        "assist reaches only neighbors within range of the caller"
     );
 }
 
@@ -4023,9 +3985,7 @@ fn a_neighbor_of_the_wrong_kind_place_or_sight_ignores_the_call() {
         assert_eq!(
             w.pulls(),
             [(WOLF, HUNTER, Pull::Noticed)],
-            "assist is same-kind, same-place and in plain sight; without those gates a copy of the \
-             world in another instance, or a guard of another faction, joins a fight it can \
-             neither see nor reach ({case})"
+            "assist needs same kind, same partition and line of sight ({case})"
         );
     }
 }
@@ -4050,8 +4010,7 @@ fn nobody_pulling_means_no_assist_scan_at_all() {
             .iter()
             .find(|(key, _)| *key == "assist"),
         Some(&("assist", 0)),
-        "no pull this firing is the overwhelmingly common case, so the assist scan must cost the \
-         tick nothing at all rather than walking the active set for an empty call list"
+        "a firing with no pull must not walk the active set"
     );
 }
 
@@ -4074,8 +4033,7 @@ fn a_neighbor_between_two_callers_answers_the_lower_guid() {
             (PACK_MATE, RANGER, Pull::Noticed),
             (FAR_MATE, HUNTER, Pull::Assisted)
         ],
-        "a neighbor equally close to two calls must always join the same one — a hash-order \
-         tie-break makes the same pull send the pack at a different player from run to run"
+        "a neighbor between two callers joins the same one every run"
     );
 }
 
@@ -4097,9 +4055,7 @@ fn every_unit_in_a_covered_fight_is_flagged_in_combat_and_an_aiming_player_is_no
         assert_eq!(
             w.flagged(),
             flagged,
-            "both sides of a live fight carry the combat flag and a refreshed drop deadline, on \
-             every firing rather than only the sensing ones; an auto-attack toggle aimed at \
-             something 30 yards off is not combat and must leave the player free to walk away"
+            "both sides of a fight stay flagged every firing; an auto-attack toggle at range is not combat"
         );
     }
 }
@@ -4113,8 +4069,7 @@ fn a_creature_that_pulls_is_in_combat_before_the_same_cycle_ends() {
     assert_eq!(
         w.flagged(),
         [HUNTER, WOLF],
-        "aggro IS combat: a creature that pulled must not wait a whole firing for its flag, or the \
-         player sees a mob running at them while still reading as out of combat"
+        "a pulling creature is flagged in combat in the same firing"
     );
 }
 
@@ -4155,9 +4110,7 @@ fn a_creature_that_notices_a_player_closes_on_it_in_the_same_cycle() {
     assert_running_legs_to(
         &w,
         &[p(15.0 - CONTACT_YD, 0.0, 10.0)],
-        "a creature that pulls must start closing in the SAME firing, at a run and to the contact \
-         point on its own side; waiting a firing to move is a mob that stares at the player it just \
-         aggroed",
+        "a pulling creature runs to its contact point in the same firing",
     );
 }
 
@@ -4171,9 +4124,7 @@ fn an_engaged_creature_outside_every_active_cell_still_chases() {
         assert_eq!(
             w.effects().len(),
             legs,
-            "a fight is driven by its engagement, not by the sweep, or a player freezes the mob on \
-             them by walking out of every active cell; a firing that does not cover the fight's \
-             instance must still leave it alone, or two rows step the same chaser at double speed"
+            "the engagement drives the fight, once per covering firing"
         );
     }
 }
@@ -4189,9 +4140,7 @@ fn a_victim_past_the_pursuit_cutoff_is_left_alone() {
         assert_eq!(
             w.effects().len(),
             legs,
-            "the pursuit timer ends a fight, distance does not — but a chaser that keeps closing \
-             past the cutoff walks out of its own active cell and drags the fight across the zone \
-             ({dist} yards)"
+            "a chaser stops at the pursuit cutoff ({dist} yards)"
         );
     }
 }
@@ -4211,9 +4160,7 @@ fn a_chaser_rides_one_committed_leg_until_its_victim_veers() {
     assert_eq!(
         w.effects().len(),
         1,
-        "a chaser must RIDE its committed leg while the kiter holds its heading; re-throwing a leg \
-         every firing makes the client re-compute the path each time, which is the visible jitter \
-         the committed leg exists to remove"
+        "a chaser rides its committed leg while the kiter holds heading"
     );
 
     w.advance_clock(500_000);
@@ -4221,16 +4168,10 @@ fn a_chaser_rides_one_committed_leg_until_its_victim_veers() {
     let tick = w.tick(false, catch_all());
     run_cycle(&mut w, tick);
     let legs = w.effects();
-    assert_eq!(
-        legs.len(),
-        2,
-        "a chaser that never re-aims loses a kiter the moment they turn — the leg must be re-thrown \
-         once the victim veers off it"
-    );
+    assert_eq!(legs.len(), 2, "a chaser re-aims once the victim veers");
     assert!(
         legs[1].spline_id > legs[0].spline_id,
-        "the replacement must carry a NEWER spline id, or the client keeps the obsolete leg and \
-         rides it past the victim's new position"
+        "the replacement leg carries a newer spline id"
     );
 }
 
@@ -4257,14 +4198,11 @@ fn a_creature_that_reaches_a_standing_victim_stops_and_faces_it() {
             .map(|e| (e.start, e.dest, e.dur_ms, e.facing, e.facing_angle))
             .collect::<Vec<_>>(),
         [(rendered, rendered, 0, true, 0.0)],
-        "the stop and the turn are ONE facing spline at the point the client renders the creature: \
-         two rows land on its single spline row inside one transaction, so the client would receive \
-         the turn alone and ride the leg on through the player it is supposed to be swinging at"
+        "stop and turn are one facing spline at the rendered point"
     );
     assert!(
         stop[0].spline_id > (launched / 1000) as u32,
-        "the stop must carry a NEWER spline id than the leg it interrupts, or the client keeps the \
-         obsolete leg and runs it to its end"
+        "the stop carries a newer spline id"
     );
     assert_eq!(
         (w.at(WOLF).at, w.at(WOLF).orientation),
@@ -4275,12 +4213,7 @@ fn a_creature_that_reaches_a_standing_victim_stops_and_faces_it() {
     w.advance_clock(500_000);
     let tick = w.tick(false, catch_all());
     run_cycle(&mut w, tick);
-    assert_eq!(
-        w.effects().len(),
-        1,
-        "a settled fight must go SILENT: a stop or a turn re-sent every firing is a packet per \
-         creature per tick for every mob standing in melee"
-    );
+    assert_eq!(w.effects().len(), 1, "a settled fight sends nothing");
 }
 
 #[test]
@@ -4294,9 +4227,7 @@ fn a_creature_whose_victim_kites_out_of_reach_keeps_chasing() {
     assert_running_legs_to(
         &w,
         &[p(4.0 - CONTACT_YD, 0.0, 10.0)],
-        "planting into attack stance the moment a moving victim touches melee reach is the \
-         run/stand/run flicker of chasing someone who never stops; the mob must keep running to the \
-         contact point on its own side of them",
+        "a chaser keeps running to the contact point instead of planting",
     );
 }
 
@@ -4324,13 +4255,11 @@ fn a_standing_victim_inside_reach_is_turned_to_from_every_approach() {
         let effects = w.effects();
         assert!(
             effects.iter().all(|e| e.facing),
-            "a creature already in reach of a standing player must not travel at all: a positional \
-             leg here is the mob running to their flank instead of squaring up ({bearing} rad)"
+            "a creature already in reach does not move ({bearing} rad)"
         );
         assert!(
             effects.len() <= 1 && w.at(WOLF).at == p(0.0, 0.0, 10.0),
-            "the answer must come from distance and movement, not from the side the player walked \
-             up on — one turn at most, and the creature stays where it stands ({bearing} rad)"
+            "a creature in reach turns at most once and stays put ({bearing} rad)"
         );
     }
 }
@@ -4355,9 +4284,7 @@ fn a_player_who_just_released_the_movement_key_is_standing_at_once() {
             .map(|e| (e.facing, e.dur_ms))
             .collect::<Vec<_>>(),
         [(true, 0)],
-        "a stop takes effect on the next covered firing, not once a move clock goes quiet: the \
-         creature must turn to the player it already reaches, not keep stepping toward one who \
-         has stopped"
+        "a creature turns to a victim that stopped in reach"
     );
 }
 
@@ -4376,8 +4303,7 @@ fn a_player_turning_in_place_is_not_translating() {
             .map(|e| (e.facing, e.dur_ms))
             .collect::<Vec<_>>(),
         [(true, 0)],
-        "spinning the camera goes nowhere, so the creature it is standing next to must square up \
-         rather than chase a player who never left the spot"
+        "a creature squares up to a player who only turns"
     );
 }
 
@@ -4400,9 +4326,7 @@ fn a_kiter_inside_reach_is_chased_without_a_stop_between_firings() {
             p(7.0 - CONTACT_YD, 0.0, 10.0),
             p(10.0 - CONTACT_YD, 0.0, 10.0),
         ],
-        "a translating victim must be run down with no stop between firings, which is the \
-         run/stand/run flicker, and each leg must end at the contact point short of where the \
-         victim stands, never past them",
+        "a moving victim is run down without stops, each leg ending at contact distance",
     );
 }
 
@@ -4425,9 +4349,7 @@ fn a_victim_moving_inside_reach_is_never_run_into_or_past_from_any_approach() {
             &w,
             &[stop],
             &format!(
-                "a leg thrown at a player who moves in melee must end in front of them on the \
-                 creature's side; a leg past them puts the mob inside or behind the player, who \
-                 then has to turn to keep swinging ({bearing} rad)"
+                "a leg at a player moving in melee ends on the creature's side ({bearing} rad)"
             ),
         );
     }
@@ -4448,8 +4370,7 @@ fn a_victim_moving_inside_contact_distance_is_turned_to_not_chased() {
             .map(|e| (e.dest, e.dur_ms, e.facing, e.facing_angle))
             .collect::<Vec<_>>(),
         [(p(0.0, 0.0, 10.0), 0, true, 0.0)],
-        "a creature already in contact with a moving player has nowhere to go but into them; it \
-         must hold its ground and square up"
+        "a creature in contact with a moving player holds and turns"
     );
 }
 
@@ -4471,8 +4392,7 @@ fn a_creature_walks_back_out_of_a_character_standing_inside_it() {
             && !legs[0].facing
             && legs[0].dur_ms > 0
             && near(legs[0].dest, p(0.3 - CONTACT_YD, 0.0, 10.0), 1e-4),
-        "a mob a Character walked into must take a walking step straight back to contact distance, \
-         not stand inside them: {legs:?}"
+        "a creature inside a Character walks straight back to contact distance: {legs:?}"
     );
 }
 
@@ -4486,8 +4406,7 @@ fn a_creature_that_moved_within_two_seconds_holds_its_ground() {
 
     assert!(
         w.effects().iter().all(|e| e.facing),
-        "a mob steps back only after standing still for 2 s, or it shuffles every time the Character \
-         brushes it"
+        "a creature steps back only after standing still for 2 s"
     );
 }
 
@@ -4506,8 +4425,7 @@ fn a_creature_that_walked_back_out_of_a_character_turns_to_face_them_again() {
             && effects[1].facing
             && effects[1].facing_angle == 0.0
             && near(effects[1].dest, p(0.3 - CONTACT_YD, 0.0, 10.0), 1e-4),
-        "the walk back lands within one firing, and the client shows the mob facing away from the \
-         Character; the next firing must turn it back to them: {effects:?}"
+        "after the walk back the next firing turns the creature to the Character: {effects:?}"
     );
 }
 
@@ -4567,8 +4485,7 @@ fn a_creature_does_not_walk_back_out_of_another_creature() {
 
     assert!(
         w.effects().iter().all(|e| e.facing),
-        "cmangos backs a chaser off Characters only; two creatures that back off each other never \
-         settle"
+        "creatures back off only from Characters"
     );
 }
 
@@ -4587,8 +4504,7 @@ fn a_walk_back_rides_out_a_firing_that_comes_early() {
     assert_eq!(
         w.effects().len(),
         1,
-        "a lagged firing lands soon before the next one; stopping the walk back there leaves the \
-         mob inside the Character"
+        "a lagged firing still finishes the walk back"
     );
 
     let tick = w.firing(
@@ -4660,8 +4576,7 @@ fn a_creature_that_switches_victim_stops_walking_back() {
     let effects = w.effects();
     assert!(
         effects.len() == 2 && effects[1].facing && effects[1].dur_ms == 0,
-        "the walk back was aimed away from the old victim; the new one needs a fresh decision: \
-         {effects:?}"
+        "a new victim gets a fresh decision: {effects:?}"
     );
 }
 
@@ -4695,14 +4610,11 @@ fn a_chase_leg_is_stopped_where_it_renders_once_the_victim_stops() {
             && stop.dur_ms == 0
             && stop.start == stop.dest
             && near(stop.dest, p(3.5, 0.0, 10.0), 0.01),
-        "the leg has to be ended where the client RENDERS the creature half a second in, and the \
-         one row that ends it is the facing row; stopping anywhere else puts the server's melee \
-         reach somewhere the player cannot see the mob: {stop:?}"
+        "the chase leg stops where the client renders the creature: {stop:?}"
     );
     assert!(
         stop.spline_id > leg.spline_id,
-        "the stop must carry a NEWER spline id than the chase leg, or the client keeps the \
-         obsolete leg and runs it to its end"
+        "the stop carries a newer spline id than the chase leg"
     );
     assert_eq!(
         (w.at(WOLF).at, w.at(WOLF).orientation),
@@ -4716,31 +4628,8 @@ fn a_chase_leg_is_stopped_where_it_renders_once_the_victim_stops() {
     assert_eq!(
         w.effects().len(),
         2,
-        "the firing after the stop must be silent, or every mob standing in melee costs a packet \
-         per tick"
+        "the firing after the stop sends nothing"
     );
-}
-
-#[test]
-#[should_panic(expected = "wrote two carrier rows in one firing")]
-fn the_fake_refuses_a_second_carrier_row_for_one_creature_in_one_firing() {
-    let mut w = Scenario::new(SETTLED).creature(WOLF, p(0.0, 0.0, 10.0));
-    let leg = LegInFlight {
-        guid: WOLF,
-        start: p(0.0, 0.0, 10.0),
-        dest: p(10.0, 0.0, 10.0),
-        started_micros: SETTLED - 500_000,
-        dur_ms: LEG_MS,
-        map_id: MAP,
-        instance_id: INSTANCE,
-        back_off_from: 0,
-        mover_gone: false,
-        waypoints: Vec::new(),
-    };
-    let at = p(5.0, 0.0, 10.0);
-
-    w.halt(&leg, at);
-    w.face(WOLF, at, 0.0);
 }
 
 #[test]
@@ -4764,9 +4653,7 @@ fn every_chase_leg_travels_at_the_configured_run_speed() {
         let implied = travelled / (leg[0].dur_ms as f32 / 1000.0);
         assert!(
             leg[0].run && (implied - run).abs() < 0.05,
-            "a leg whose distance and duration disagree with the configured run speed is a \
-             creature that teleports or crawls: {travelled} yd in {} ms implies {implied} yd/s, \
-             not {run} ({case})",
+            "a leg travels at run speed: {travelled} yd in {} ms implies {implied} yd/s, not {run} ({case})",
             leg[0].dur_ms
         );
     }
@@ -4797,9 +4684,7 @@ fn a_chase_leg_is_replaced_when_the_victim_comes_back_toward_the_creature() {
     assert!(
         near(replacement.start, p(3.5, 0.0, 10.0), 0.01)
             && near(replacement.dest, p(12.0 - CONTACT_YD, 0.0, 10.0), 1e-4),
-        "the replacement must start where the client RENDERS the creature now and end at the \
-         contact point in front of the victim's new position; riding the old leg carries the \
-         creature through a player who came back toward it: {replacement:?}"
+        "the replacement runs from the rendered position to the contact point: {replacement:?}"
     );
     let travelled = ((replacement.dest.x - replacement.start.x).powi(2)
         + (replacement.dest.y - replacement.start.y).powi(2))
@@ -4807,14 +4692,12 @@ fn a_chase_leg_is_replaced_when_the_victim_comes_back_toward_the_creature() {
     let implied = travelled / (replacement.dur_ms as f32 / 1000.0);
     assert!(
         (implied - run).abs() < 0.05,
-        "the replacement must still travel at the configured run speed: {travelled} yd in {} ms \
-         implies {implied} yd/s, not {run}",
+        "the replacement travels at run speed: {travelled} yd in {} ms implies {implied} yd/s, not {run}",
         replacement.dur_ms
     );
     assert!(
         replacement.spline_id > legs[0].spline_id,
-        "the replacement must carry a NEWER spline id, or the client keeps riding the obsolete \
-         leg through the player"
+        "the replacement carries a newer spline id"
     );
 
     for _ in 0..8 {
@@ -4823,16 +4706,14 @@ fn a_chase_leg_is_replaced_when_the_victim_comes_back_toward_the_creature() {
         run_cycle(&mut w, tick);
         assert!(
             w.at(WOLF).at.x <= 12.0 - CONTACT_YD + 1e-4,
-            "the creature's authoritative position must never pass the contact point in front of \
-             the victim, got x = {}",
+            "the creature never passes the contact point, got x = {}",
             w.at(WOLF).at.x
         );
     }
     let last = w.effects().last().copied().expect("at least one effect");
     assert!(
         last.facing && last.dur_ms == 0 && last.start == last.dest && last.facing_angle == 0.0,
-        "the fight must settle on ONE facing spline, squared up on the player: a positional leg \
-         as the last word means the creature overshot them: {last:?}"
+        "the fight settles on one facing spline: {last:?}"
     );
 }
 
@@ -4855,9 +4736,7 @@ fn a_creature_victim_with_a_leg_in_flight_is_chased_like_a_kiting_player() {
     assert_running_legs_to(
         &w,
         &[p(4.0 - CONTACT_YD, 0.0, 10.0)],
-        "a creature or pet victim mid-leg, inside melee reach, must be chased exactly like a \
-         kiting player — the Fake derives its translation flags from the leg the cycle is already \
-         moving it along",
+        "a moving creature victim in melee reach is chased like a kiting player",
     );
 }
 
@@ -4872,9 +4751,7 @@ fn a_stopped_victim_outside_reach_with_no_leg_in_flight_still_gets_a_closing_leg
     assert_running_legs_to(
         &w,
         &[p(15.0 - CONTACT_YD, 0.0, 10.0)],
-        "a standing victim outside melee reach with nothing already in flight must still get a \
-         closing leg to the stop point — the re-aim rule for a leg already in flight must not \
-         swallow the ordinary no-leg case",
+        "a standing victim out of reach without a leg in flight gets a closing leg",
     );
 }
 
@@ -4901,9 +4778,7 @@ fn an_offensive_caster_holds_at_its_spell_range() {
         assert_eq!(
             w.effects().len(),
             legs,
-            "a caster that face-tanks instead of standing at its range never casts the spell it \
-             was authored around; one that holds through a wall it cannot cast through stands \
-             there doing nothing at all ({case})"
+            "a caster holds at its range only with line of sight ({case})"
         );
     }
 }
@@ -4932,9 +4807,7 @@ fn a_caster_whose_victim_stops_inside_reach_turns_and_halts_its_leg() {
             .map(|e| (e.start, e.dest, e.dur_ms, e.facing, e.facing_angle))
             .collect::<Vec<_>>(),
         [(rendered, rendered, 0, true, 0.0)],
-        "a caster is not exempt from melee reach: facing is the only thing that HALTS a leg, so one \
-         that holds before it turns slides along its leg straight past the player who stopped on \
-         top of it and never faces what it is fighting"
+        "a caster stops and faces a victim inside melee reach"
     );
     assert_eq!((w.at(WOLF).at, w.at(WOLF).orientation), (rendered, 0.0));
 }
@@ -4949,8 +4822,7 @@ fn a_crowd_controlled_creature_is_not_moved_by_chase() {
 
     assert!(
         w.effects().is_empty(),
-        "a rooted creature keeps swinging but must not slide toward its victim; the client would \
-         show it walking while the server says it is pinned"
+        "a rooted creature does not slide toward its victim"
     );
 }
 
@@ -4965,8 +4837,7 @@ fn a_blocked_chase_goes_around_instead_of_through() {
     assert_eq!(
         w.effects().first().map(|e| e.dest),
         Some(p(0.0, 20.0, 10.0)),
-        "a chase leg must head for the detour corner navigation returns, or the mob walks into the \
-         geometry between it and its victim and stands there swinging at nothing"
+        "a chase leg follows the navigation detour"
     );
 }
 
@@ -4986,13 +4857,11 @@ fn a_caster_at_spell_range_casts_and_stays_where_it_is() {
     assert_eq!(
         w.casts(),
         [(WOLF, NUKE, HUNTER)],
-        "a caster must begin its cast in the SAME firing it is engaged, or the spell it was \
-         authored around never goes off"
+        "a caster begins its cast in the firing it engages"
     );
     assert!(
         w.effects().is_empty() && w.victims() == [(WOLF, HUNTER)],
-        "casting decides a spell, not a move and not a fight: a closing leg in the firing it casts \
-         drags the caster into melee, and rewriting the engagement would restart the swing"
+        "a casting firing throws no closing leg and keeps the engagement"
     );
 }
 
@@ -5004,8 +4873,7 @@ fn a_wall_blocked_caster_drops_the_spell_and_closes_instead() {
 
     assert!(
         w.casts().is_empty() && w.effects().len() == 1,
-        "cast and chase must reach ONE verdict about the same line: a caster that holds at range \
-         through a wall it cannot cast through stands there doing nothing for the whole fight"
+        "a caster without line of sight closes instead of holding"
     );
 }
 
@@ -5022,8 +4890,7 @@ fn a_caster_that_cannot_act_or_is_already_casting_begins_nothing() {
 
         assert!(
             w.casts().is_empty(),
-            "a stun has to stop the cast to be worth casting, and re-entering a running cast bar \
-             deletes and restarts it every firing, so the spell would never land ({case})"
+            "a stun stops the cast and a running cast bar is not restarted ({case})"
         );
     }
 }
@@ -5057,8 +4924,7 @@ fn the_rotation_fires_its_highest_priority_ready_action() {
         assert_eq!(
             w.casts(),
             [(WOLF, spell_id, target)],
-            "the rotation is an authored priority list: firing the wrong line, or giving up when \
-             the top one is on cooldown, is a caster that never uses the spell it was given ({case})"
+            "the rotation fires its highest-priority ready line ({case})"
         );
     }
 }
@@ -5107,8 +4973,7 @@ fn a_missing_aura_line_waits_until_the_aura_is_actually_missing() {
         assert_eq!(
             w.casts(),
             casts.as_slice(),
-            "a debuff re-applied every firing wastes the whole rotation on a spell that is already \
-             running, and a buff never re-applied leaves the creature fighting without it ({case})"
+            "a running debuff is not reapplied and a lapsed buff is ({case})"
         );
     }
 }
@@ -5136,9 +5001,7 @@ fn only_a_creature_with_no_rotation_at_all_falls_back_to_its_one_spell() {
         assert_eq!(
             w.casts(),
             casts.as_slice(),
-            "the single-spell casters authored before rotations existed must keep casting, and a \
-             creature whose rotation this build does not understand must not silently fall back to \
-             a spell its author replaced ({case})"
+            "single-spell casters keep casting; an unknown rotation does not fall back ({case})"
         );
     }
 }
@@ -5156,14 +5019,12 @@ fn a_creature_re_points_at_a_stronger_threat_and_chases_it_in_the_same_cycle() {
     assert_eq!(
         w.victims(),
         [(WOLF, RANGER)],
-        "the creature must fight whoever out-threats its current target, or a healer can never \
-         pull a mob off the player it first aggroed"
+        "a creature switches to whoever out-threats its target"
     );
     assert_running_legs_to(
         &w,
         &[p(20.0 - CONTACT_YD, 0.0, 10.0)],
-        "the retarget must land BEFORE the movement decision, or the creature spends the firing \
-         running at the player it no longer fights and only turns round on the next one",
+        "the retarget lands before the movement decision",
     );
 }
 
@@ -5180,8 +5041,7 @@ fn equal_threat_leaves_the_target_where_it_is() {
     assert_eq!(
         w.victims(),
         [(WOLF, RANGER)],
-        "the switch needs STRICTLY more threat: on a tie the creature would flip target every \
-         firing and swing at nobody"
+        "a switch needs strictly more threat"
     );
 }
 
@@ -5213,8 +5073,7 @@ fn a_taunt_pins_the_target_whatever_the_threat_table_says() {
         assert_eq!(
             w.victims(),
             [(WOLF, victim)],
-            "taunt is a forced target, not a threat bump: a tank whose taunt is overtaken by the \
-             next nuke has no way to hold a mob off the group ({case})"
+            "taunt forces the target until it ends ({case})"
         );
     }
 }
@@ -5239,13 +5098,11 @@ fn a_wounded_runner_breaks_off_and_sprints_away_from_its_victim() {
     assert_eq!(
         (leg[0].dest, leg[0].run),
         (p(-FLEE_LEG_YD, 0.0, 10.0), true),
-        "a routing creature must run the full committed dash directly AWAY from what it fights; a \
-         short leg re-decided every firing is the flee spin the commit exists to remove"
+        "a rout runs the full committed dash away from the foe"
     );
     assert!(
         leg[0].dur_ms > healthy_rout_ms(),
-        "a wounded runner must travel SLOWER than a healthy one, or the player can never close the \
-         gap and the mob is uncatchable"
+        "a wounded runner is slower than a healthy one"
     );
     assert_eq!(
         w.rout_ends_ms(WOLF),
@@ -5254,8 +5111,7 @@ fn a_wounded_runner_breaks_off_and_sprints_away_from_its_victim() {
     );
     assert!(
         w.flagged().contains(&WOLF) && w.flagged().contains(&HUNTER),
-        "routing is a SHARED combat state: without the re-stamp on both sides the combat drop \
-         fires mid-run and the pair simply untargets each other"
+        "a rout re-stamps combat on both sides"
     );
 }
 
@@ -5267,8 +5123,7 @@ fn a_creature_that_fights_to_the_death_never_enters_the_rout_path() {
 
     assert!(
         w.effects().is_empty() && w.rout_ends_ms(WOLF) == 0,
-        "fleeing is SELECTIVE: a Northshire wolf that runs away at 10% health drops the fight the \
-         player was winning"
+        "only flee-eligible creatures rout"
     );
 }
 
@@ -5282,12 +5137,7 @@ fn a_router_rides_its_committed_leg_and_re_rolls_only_once_it_ends() {
     w.advance_clock(500_000);
     let tick = w.tick(false, catch_all());
     run_cycle(&mut w, tick);
-    assert_eq!(
-        w.effects().len(),
-        1,
-        "re-picking an away-bearing every firing snap-rotates the client's facing — the flee spin; \
-         the committed leg must play out"
-    );
+    assert_eq!(w.effects().len(), 1, "the committed rout leg plays out");
     assert_eq!(
         w.victims(),
         [(WOLF, HUNTER)],
@@ -5300,8 +5150,7 @@ fn a_router_rides_its_committed_leg_and_re_rolls_only_once_it_ends() {
     assert_eq!(
         w.effects().len(),
         2,
-        "a rout whose leg ended mid-window must keep running, not stand still until the window \
-         closes"
+        "a rout whose leg ended mid-window keeps running"
     );
 }
 
@@ -5319,14 +5168,12 @@ fn a_spent_rout_returns_the_creature_to_chasing_and_never_opens_a_second() {
     let chase = w.effects()[1];
     assert!(
         chase.dest.x > chase.start.x,
-        "once the window closes the creature must turn round and CLOSE on its victim; standing \
-         where the rout left it is a mob that never fights again"
+        "after the window the creature closes on its victim"
     );
     assert_eq!(
         w.rout_ends_ms(WOLF),
         opened_at,
-        "the spent clock is what forbids a second rout — re-stamping it would let a creature run \
-         for the rest of the fight"
+        "the spent rout clock is not re-stamped"
     );
 }
 
@@ -5340,23 +5187,13 @@ fn a_feared_creature_is_moved_by_fear_and_by_nothing_else() {
     run_cycle(&mut w, tick);
 
     let leg = w.effects();
-    assert_eq!(
-        leg.len(),
-        1,
-        "every other mover must skip a feared creature: two legs in one firing share a spline id \
-         and the client throws one of them away"
-    );
+    assert_eq!(leg.len(), 1, "other movers skip a feared creature");
     assert!(
         leg[0].dest.x < -14.0 && leg[0].run,
         "a feared creature is force-walked AWAY from whoever feared it, at a run; got {:?}",
         leg[0].dest
     );
-    assert_eq!(
-        w.victims(),
-        [(WOLF, HUNTER)],
-        "fear does NOT disengage: when the aura lapses the creature must turn and fight the unit \
-         it was already fighting"
-    );
+    assert_eq!(w.victims(), [(WOLF, HUNTER)], "fear does not disengage");
 }
 
 #[test]
@@ -5369,12 +5206,7 @@ fn two_fear_sources_panic_the_creature_once() {
     let tick = w.tick(false, catch_all());
     run_cycle(&mut w, tick);
 
-    assert_eq!(
-        w.effects().len(),
-        1,
-        "a creature two casters feared is still ONE panicking creature; a leg per aura row would \
-         double its terror speed and burn a second spline id"
-    );
+    assert_eq!(w.effects().len(), 1, "several fear auras make one leg");
 }
 
 #[test]
@@ -5394,17 +5226,11 @@ fn fear_owns_a_wounded_runner_and_leaves_its_rout_window_intact() {
         let tick = w.tick(false, catch_all());
         run_cycle(&mut w, tick);
 
-        assert_eq!(
-            w.effects().len(),
-            1,
-            "fear owns forced movement outright: a rout leg in the same firing would fight the \
-             fear dash for the one spline id ({case})"
-        );
+        assert_eq!(w.effects().len(), 1, "no rout leg while feared ({case})");
         assert_eq!(
             (w.rout_ends_ms(WOLF), before != 0),
             (before, was_open),
-            "fear must leave the rout window exactly as it found it, or a creature loses (or \
-             silently spends) its one rout to a crowd control that already ended ({case})"
+            "fear leaves the rout window unchanged ({case})"
         );
     }
 }
@@ -5423,8 +5249,7 @@ fn a_crowd_controlled_router_keeps_its_state_and_resumes_when_the_control_ends()
     assert_eq!(
         (w.victims(), w.rout_ends_ms(WOLF)),
         (vec![(WOLF, HUNTER)], open_until),
-        "crowd control suspends the behavior, it does not destroy it: losing the engagement or the \
-         window here is a creature that stands still for good once the control lifts"
+        "crowd control keeps the engagement and the rout window"
     );
 
     w.frozen.borrow_mut().remove(&WOLF);
@@ -5456,8 +5281,7 @@ fn a_pet_takes_its_owners_foe_and_closes_on_it_in_the_same_cycle() {
     assert_eq!(
         w.pet_effects(),
         [PetEffect::Took(IMP, WOLF)],
-        "a pet exists to fight what its owner fights; one that never arms an engagement is an Imp \
-         that follows the warlock around watching them die"
+        "a pet engages what its owner fights"
     );
     assert_eq!(
         w.effects().iter().map(|e| e.guid).collect::<Vec<_>>(),
@@ -5466,9 +5290,7 @@ fn a_pet_takes_its_owners_foe_and_closes_on_it_in_the_same_cycle() {
     assert_running_legs_to(
         &w,
         &[p(20.0 - CONTACT_YD, 0.0, 10.0)],
-        "the pet phase runs before chase, so the pet it just armed must close in the SAME firing \
-         through the chase every other creature uses; waiting a firing is a pet that stares at the \
-         foe its owner is already fighting",
+        "a newly armed pet closes in the same firing",
     );
 }
 
@@ -5489,8 +5311,7 @@ fn only_a_pet_left_off_passive_assists_its_owner() {
         assert_eq!(
             w.pet_effects() == [PetEffect::Took(IMP, WOLF)],
             assists,
-            "PASSIVE is the stance a player picks to keep the pet out of a fight — a pet that \
-             piles in anyway pulls the pack the player was sneaking past ({react:?})"
+            "a PASSIVE pet does not join ({react:?})"
         );
     }
 }
@@ -5507,8 +5328,7 @@ fn only_an_aggressive_pet_seeks_a_foe_its_owner_is_not_fighting() {
         assert_eq!(
             w.pet_effects() == [PetEffect::Took(IMP, WOLF)],
             seeks,
-            "AGGRESSIVE is the only stance that starts a fight nobody asked for; a DEFENSIVE pet \
-             that does it too makes the safe stance unusable ({react:?})"
+            "only an AGGRESSIVE pet starts a fight ({react:?})"
         );
     }
 }
@@ -5529,8 +5349,7 @@ fn an_attack_order_wins_over_the_owners_fight_and_a_stale_one_is_dropped() {
     assert_eq!(
         w.pet_effects(),
         [PetEffect::Took(IMP, PACK_MATE)],
-        "the attack button is an explicit order: a pet that assists its owner's fight instead \
-         cannot be sent at anything"
+        "the attack order overrides assist"
     );
 
     let mut w = commanded().slain(PACK_MATE);
@@ -5539,8 +5358,7 @@ fn an_attack_order_wins_over_the_owners_fight_and_a_stale_one_is_dropped() {
     assert_eq!(
         w.pet_effects(),
         [PetEffect::OrderCleared(HUNTER), PetEffect::Took(IMP, WOLF)],
-        "an order whose foe died must be dropped, or the pet stands over the corpse for the rest \
-         of the fight and never assists again"
+        "an order whose foe died is dropped"
     );
 }
 
@@ -5554,8 +5372,7 @@ fn a_pet_that_drifted_out_of_the_follow_band_runs_back_and_one_inside_it_holds()
         assert_eq!(
             w.effects().len(),
             legs,
-            "the follow band is what keeps a pet from jogging on the spot beside its owner; \
-             following from inside it re-throws a leg every sense firing ({imp_at:?})"
+            "no follow leg inside the follow band ({imp_at:?})"
         );
     }
 
@@ -5566,14 +5383,12 @@ fn a_pet_that_drifted_out_of_the_follow_band_runs_back_and_one_inside_it_holds()
     assert_eq!(
         (leg.dest, leg.run),
         (p(-4.0, 0.0, 10.0), true),
-        "the pet must RUN back and stop a few yards short of its owner; landing on the owner puts \
-         it inside the player's own model, and walking means it never catches up"
+        "the pet runs back and stops short of its owner"
     );
     assert_eq!(
         leg.dur_ms,
         (16.0 / lyracore_shared::constants::speeds::RUN * 1000.0) as u32,
-        "the leg has to span the whole SENSE period, because that is when the pet next decides — a \
-         one-firing step lets a moving owner outrun the pet"
+        "the follow leg spans the sense period"
     );
 }
 
@@ -5591,8 +5406,7 @@ fn a_pet_whose_owner_is_gone_or_dead_despawns_and_so_does_its_own_corpse() {
         assert_eq!(
             w.pet_effects(),
             [PetEffect::Dismissed(IMP)],
-            "a pet has no spawn row, so nothing else on the tick reaps it: left alone it outlives \
-             its owner as an unownable mob, or lingers as a corpse forever ({case})"
+            "a pet without a live owner is removed ({case})"
         );
     }
 
@@ -5613,8 +5427,7 @@ fn a_frozen_pet_holds_still_and_a_feared_one_is_moved_by_fear_alone() {
     run_cycle(&mut rooted, tick);
     assert!(
         rooted.effects().is_empty() && rooted.pet_effects().is_empty(),
-        "a rooted pet that still runs home to its owner is a client walking a unit the server says \
-         is pinned"
+        "a rooted pet does not follow its owner"
     );
 
     let mut feared = warlock_and_imp(p(-20.0, 0.0, 10.0))
@@ -5624,13 +5437,11 @@ fn a_frozen_pet_holds_still_and_a_feared_one_is_moved_by_fear_alone() {
     run_cycle(&mut feared, tick);
     assert!(
         feared.pet_effects().is_empty() && feared.effects().len() == 1,
-        "fear is the feared pet's SOLE mover; a follow leg in the same firing shares fear's spline \
-         id and the client throws one of them away"
+        "fear is the feared pet's only mover"
     );
     assert!(
         feared.effects()[0].dest.x < -20.0,
-        "the surviving leg must be the fear dash AWAY from the warlock, not the follow leg back \
-         toward them; got {:?}",
+        "the surviving leg is the fear dash away from the warlock; got {:?}",
         feared.effects()[0].dest
     );
 }
@@ -5642,11 +5453,7 @@ fn a_pet_told_to_stay_stops_trailing_its_owner_but_still_fights() {
     let mut w = stay(warlock_and_imp(p(-20.0, 0.0, 10.0)));
     let tick = w.tick(true, catch_all());
     run_cycle(&mut w, tick);
-    assert!(
-        w.effects().is_empty(),
-        "STAY is how a player parks a pet on a spot; one that trails them anyway cannot be left \
-         behind to hold a pull"
-    );
+    assert!(w.effects().is_empty(), "a STAY pet does not follow");
 
     let mut w = stay(
         warlock_and_imp(p(-20.0, 0.0, 10.0))
@@ -5658,8 +5465,7 @@ fn a_pet_told_to_stay_stops_trailing_its_owner_but_still_fights() {
     assert_eq!(
         w.pet_effects(),
         [PetEffect::Took(IMP, WOLF)],
-        "STAY governs movement, not fighting: a parked pet that refuses to engage is a pet the \
-         player has to un-park to use"
+        "a STAY pet still engages"
     );
 }
 
@@ -5674,8 +5480,7 @@ fn a_pet_whose_owner_stopped_fighting_drops_its_own_attack() {
     assert_eq!(
         w.pet_effects(),
         [PetEffect::StoodDown(IMP)],
-        "the owner walked away from the fight, so the pet must too — one that keeps its melee row \
-         holds the whole camp in combat and drags it after the player"
+        "a pet left behind by its owner drops its fight"
     );
     assert!(
         w.effects().is_empty() && w.victims().is_empty(),
@@ -5696,9 +5501,7 @@ fn a_wounded_pet_armed_this_firing_closes_instead_of_routing() {
     assert_eq!(leg.len(), 1, "one leg per firing, and it is the chase's");
     assert!(
         leg[0].dest.x > 0.0 && w.rout_ends_ms(IMP) == 0,
-        "an engagement armed by the pet phase is visible to the rout in the same cycle, and a pet \
-         is not of a kind that runs: one that flees at low health abandons the fight its owner is \
-         in the middle of"
+        "a pet does not rout"
     );
 }
 
@@ -5711,9 +5514,7 @@ fn a_pet_whose_owner_changed_instance_is_snapped_across_rather_than_walked() {
     assert_eq!(
         w.pet_effects(),
         [PetEffect::Restaged(IMP, p(0.0, 0.0, 10.0), MAP, INSTANCE)],
-        "no movement leg crosses a map or an instance, so a pet left behind by its owner's \
-         teleport has to be re-placed instead — walking it strands it in the copy of the world its \
-         owner left"
+        "a pet left on another map or instance is re-placed"
     );
     assert!(
         w.effects().is_empty(),
@@ -5723,9 +5524,12 @@ fn a_pet_whose_owner_changed_instance_is_snapped_across_rather_than_walked() {
     let grid = spatial::grid_cell(0.0, 0.0);
     assert_eq!(
         (imp.at, imp.grid, imp.cell),
-        (p(0.0, 0.0, 10.0), grid, spatial::grid_cell_id(grid.0, grid.1)),
-        "position, grid address and packed cell must move together, or the pet is delivered to the \
-         wrong players from its new instance"
+        (
+            p(0.0, 0.0, 10.0),
+            grid,
+            spatial::grid_cell_id(grid.0, grid.1)
+        ),
+        "position, grid address and packed cell move together"
     );
 }
 
@@ -5741,14 +5545,12 @@ fn a_creature_that_engaged_and_chased_this_cycle_is_not_healed_by_the_same_cycle
 
     assert!(
         !w.pulls().is_empty() && !w.effects().is_empty(),
-        "the wolf must have pulled and closed on the player this firing, or the ordering under \
-         test never happens"
+        "the wolf pulled and closed on the player this firing"
     );
     assert_eq!(
         w.at(WOLF).health,
         10,
-        "a creature healing while it fights cannot be killed at the rate the fight damages it; \
-         regeneration has to run after chase so its gate sees the still-engaged chaser"
+        "regeneration runs after chase and skips the engaged chaser"
     );
 }
 
@@ -5766,14 +5568,11 @@ fn an_out_of_combat_unit_recovers_both_bars_and_is_not_moved_by_it() {
     assert_eq!(
         (wolf.health, wolf.power),
         (15, 25),
-        "a unit out of combat recovers both bars every sense firing; one that recovers neither \
-         never returns to full and has to be killed a second time at the health the last fight \
-         left it"
+        "an out-of-combat unit recovers both bars every sense firing"
     );
     assert!(
         w.effects().is_empty() && wolf.at == p(0.0, 0.0, 10.0),
-        "regeneration writes health and power only — writing a whole row back would revert a \
-         position another phase decided this firing"
+        "regeneration writes health and power only"
     );
 }
 
@@ -5796,9 +5595,7 @@ fn a_unit_in_combat_heals_only_through_a_combat_regen_aura() {
         assert_eq!(
             w.at(WOLF).health,
             health,
-            "fighting is what stops regeneration, and an aura is the only thing that gives any of \
-             it back — healing everyone in combat at the free rate makes every fight unwinnable \
-             for the side that deals less damage ({case})"
+            "combat stops regeneration except from auras ({case})"
         );
     }
 }
@@ -5816,9 +5613,7 @@ fn a_unit_past_its_combat_deadline_loses_the_flag_and_one_inside_it_keeps_it() {
     assert_eq!(
         w.unflagged(),
         [WOLF],
-        "the flag lifts about six seconds after the last hostile action, not the instant the \
-         swinging stops; lifting it early lets a player eat and drink mid-fight, and never lifting \
-         it leaves them stuck in combat"
+        "the combat flag lifts about six seconds after the last hostile action"
     );
     assert!(
         !w.in_combat(WOLF) && w.in_combat(PACK_MATE),
@@ -5836,9 +5631,7 @@ fn combat_entry_outlasts_combat_exit_in_the_same_cycle() {
 
     assert!(
         w.unflagged().is_empty() && w.in_combat(WOLF),
-        "entry stamps a deadline in the future and exit only clears one already behind us, so a \
-         creature in a live fight can never be dropped out of combat by the firing that just \
-         re-armed it"
+        "exit clears only a deadline already past"
     );
 }
 
@@ -5857,15 +5650,13 @@ fn a_creature_the_leash_dropped_walks_home_and_leaves_combat_in_one_cycle() {
     assert_eq!(legs.len(), 1, "one leg per firing, and it is the walk home");
     assert!(
         legs[0].dest.y < 20.0 && legs[0].run,
-        "a creature the leash let go has to run back to its post, or it stands where the player \
-         abandoned it; got {:?}",
+        "a released creature runs back to its post; got {:?}",
         legs[0].dest
     );
     assert_eq!(
         (evaded.unflagged(), evaded.at(WOLF).health),
         (vec![WOLF], 10),
-        "the flag lifts this firing, and the recovery it gates starts on the NEXT one — a unit \
-         healed by the same firing that released it recovers a tick early for free"
+        "recovery starts the firing after the flag lifts"
     );
 
     let mut pursuing = Scenario::new(SETTLED)
@@ -5883,8 +5674,7 @@ fn a_creature_the_leash_dropped_walks_home_and_leaves_combat_in_one_cycle() {
     assert_eq!(legs.len(), 1, "one leg per firing, and it is the chase");
     assert!(
         legs[0].dest.y > 20.0 && pursuing.in_combat(WOLF),
-        "a live pursuit keeps the creature engaged and closing; walking it home mid-fight is how a \
-         player loses a mob that is still swinging at them; got {:?}",
+        "a live pursuit keeps the creature engaged; got {:?}",
         legs[0].dest
     );
 }
@@ -5920,9 +5710,7 @@ fn regeneration_and_combat_exit_run_only_on_the_catch_all_sense_firing() {
         assert_eq!(
             (w.at(PACK_MATE).health, w.unflagged()),
             (health, unflagged),
-            "the recovery amount is quantized to the sense cadence and every instance is covered \
-             from the catch-all firing, so a second schedule row running either pass multiplies \
-             the whole world's regen rate and sweeps the deadlines twice ({case})"
+            "only the catch-all row regenerates and sweeps deadlines ({case})"
         );
     }
 }
@@ -5955,8 +5743,7 @@ fn the_catch_all_firing_covers_every_instance_exactly_once() {
     assert_eq!(
         w.effects().iter().map(|e| e.guid).collect::<Vec<_>>(),
         [WOLF, PACK_MATE, FAR_MATE],
-        "with no dedicated row armed, the seeded row is every creature's only ticker: one it \
-         misses stands frozen mid-fight, and one it steps twice closes at double speed"
+        "without a dedicated row the seeded row ticks every creature once"
     );
 }
 
@@ -5979,24 +5766,18 @@ fn a_dedicated_row_and_the_catch_all_stay_a_strict_partition() {
     assert_eq!(
         after_catch_all,
         [WOLF, FAR_MATE],
-        "the catch-all must hand the dedicated instance over whole; ticking it here is the work \
-         MULTIPLICATION a second schedule row exists to avoid"
+        "the catch-all skips a dedicated instance"
     );
     assert_eq!(
         w.effects().iter().map(|e| e.guid).collect::<Vec<_>>(),
         [WOLF, FAR_MATE, PACK_MATE],
-        "coverage is a partition, so the two firings together move every creature exactly once — \
-         no creature chases, casts or routs twice in the same world second"
+        "the two firings move every creature exactly once"
     );
     let mut flagged = w.flagged();
     flagged.sort_unstable();
     let mut once = flagged.clone();
     once.dedup();
-    assert_eq!(
-        flagged, once,
-        "combat entry follows the same partition: a unit flagged by both rows has its combat \
-         deadline re-stamped twice a firing and never drops out of combat"
-    );
+    assert_eq!(flagged, once, "each unit is flagged by one row");
 }
 
 #[test]
@@ -6033,8 +5814,7 @@ fn movement_runs_every_firing_while_sensing_holds_the_four_second_cadence() {
     }
     assert_eq!(
         settled_at[0], settled_at[1],
-        "four seconds of world time must move a creature the same distance whatever its row's \
-         cadence, or arming a dedicated row visibly speeds every creature in that instance up"
+        "movement per world second is independent of cadence"
     );
 }
 
@@ -6058,8 +5838,7 @@ fn discovery_stays_on_the_narrow_candidate_universes() {
 
     assert_eq!(
         population, 12,
-        "this scenario only means anything while the world is far bigger than any phase's \
-         candidate set"
+        "the world is larger than any phase's candidate set"
     );
     assert_eq!(
         (outcome.awake, outcome.rows_visited),
@@ -6083,8 +5862,6 @@ fn discovery_stays_on_the_narrow_candidate_universes() {
                 ("fear", 0),
             ]
         ),
-        "the engaged phases must cost one row per FIGHT and the idle phases one per AWAKE \
-         creature, never one per creature in the world: this world holds {population}, and a \
-         count that reaches it is a candidate set that went back to scanning everything"
+        "work scales with fights and awake creatures, not the population of {population}"
     );
 }

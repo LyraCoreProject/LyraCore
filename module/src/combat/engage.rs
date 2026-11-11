@@ -26,6 +26,7 @@ crate::outside_table_catalog!(game_combat_check_schedule);
 crate::character_owned!(delete, fn sweep_delete_game_combat_check_schedule(ctx, character_guid) {
     ctx.db.game_combat_check_schedule().character_guid().delete(character_guid);
 });
+// Combat checks belong to the live entity and do not survive Transfer.
 crate::character_owned!(not_transported, fn sweep_transfer_game_combat_check_schedule());
 
 #[spacetimedb::reducer]

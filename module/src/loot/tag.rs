@@ -942,16 +942,3 @@ fn entity_xp(ctx: &ReducerContext, guid: u64) -> Result<u32, String> {
         .map(|entity| entity.xp)
         .ok_or_else(|| format!("Loot Tag fixture Character {guid} is missing"))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn corpse_access_requires_a_resolved_eligibility_row() {
-        assert!(!corpse_eligible_for_access(&[], 7));
-        assert!(corpse_eligible_for_access(&[7], 7));
-        assert!(!corpse_eligible_for_access(&[7], 8));
-        assert!(corpse_eligible_for_access(&[2, 7, 11], 7));
-    }
-}

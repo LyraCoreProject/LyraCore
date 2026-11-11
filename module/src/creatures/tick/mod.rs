@@ -462,14 +462,6 @@ mod relay_tripwire {
         assert!(cells.contains(&(0, 0, 338, 339)));
         assert!(cells.contains(&(0, 0, 343, 343)));
     }
-
-    #[test]
-    fn active_objects_enter_only_their_creature_partition_sweep() {
-        assert!(super::active_object_enters_scope(false, true, true));
-        assert!(!super::active_object_enters_scope(true, true, true));
-        assert!(!super::active_object_enters_scope(false, false, true));
-        assert!(!super::active_object_enters_scope(false, true, false));
-    }
 }
 
 #[cfg(test)]

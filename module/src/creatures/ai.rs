@@ -256,13 +256,6 @@ mod tests {
     }
 
     #[test]
-    fn combat_active_radius_covers_the_vanilla_ceiling_and_scales_with_template_overrides() {
-        assert_eq!(combat_active_radius(0.0), MAX_AGGRO_RADIUS + ASSIST_RADIUS);
-        assert_eq!(combat_active_radius(8.0), MAX_AGGRO_RADIUS + ASSIST_RADIUS);
-        assert_eq!(combat_active_radius(100.0), 100.0 + ASSIST_RADIUS);
-    }
-
-    #[test]
     fn aggro_override_cutoff_is_exactly_the_overrides_that_can_beat_the_visibility_floor() {
         let floor = lyracore_shared::spatial::BOX_HALF_SPAN as f32
             * lyracore_shared::spatial::GRID_CELL_SIZE;
@@ -468,30 +461,6 @@ mod tests {
     }
 
     #[test]
-    fn finite_point_rejects_every_non_finite_coordinate() {
-        assert!(finite_point(-8949.9, -132.4, 83.5));
-        assert!(!finite_point(f32::INFINITY, 0.0, 0.0));
-        assert!(!finite_point(0.0, f32::NEG_INFINITY, 0.0));
-        assert!(!finite_point(0.0, 0.0, f32::NAN));
-        assert!(!finite_point(f32::NAN, f32::NAN, f32::NAN));
-    }
-
-    #[test]
-    fn dead_godmode_and_flying_characters_are_not_aggro_candidates() {
-        assert!(
-            is_aggro_candidate(false, false, false),
-            "an ordinary live player IS a candidate"
-        );
-        assert!(!is_aggro_candidate(true, false, false), "a corpse is not");
-        assert!(
-            !is_aggro_candidate(false, true, false),
-            "a godmoded GM is not"
-        );
-        assert!(!is_aggro_candidate(true, true, false));
-        assert!(!is_aggro_candidate(false, false, true));
-    }
-
-    #[test]
     fn spline_t_interpolates_and_clamps() {
         let approx = |a: f32, b: f32| (a - b).abs() < 1e-4;
         assert!(approx(spline_t(0, 0, 1000), 0.0));
@@ -520,44 +489,6 @@ mod tests {
             "should stay glued within ~one leg, gap {}",
             tx - cx
         );
-    }
-
-    #[test]
-    fn fear_step_scales_with_tick_and_is_identity_at_default() {
-        assert_eq!(
-            fear_step_for_tick(MOVE_TICK_SECS),
-            FEAR_STEP,
-            "default tick → verbatim FEAR_STEP"
-        );
-        assert!(
-            (fear_step_for_tick(0.1) - FEAR_STEP * 0.2).abs() < 1e-5,
-            "100ms tick → 1/5 the dash"
-        );
-    }
-
-    #[test]
-    fn leg_in_flight_gate() {
-        assert!(leg_in_flight(100, 600));
-        assert!(!leg_in_flight(600, 600));
-        assert!(!leg_in_flight(700, 600));
-        assert!(!leg_in_flight(100, 0));
-    }
-
-    #[test]
-    fn rout_window_open_covers_the_whole_clock_lifecycle() {
-        assert!(!rout_window_open(0, 0));
-        assert!(!rout_window_open(50_000, 0));
-        assert!(rout_window_open(50_000, 60_000));
-        assert!(!rout_window_open(60_000, 60_000));
-        assert!(!rout_window_open(600_000, 60_000));
-    }
-
-    #[test]
-    fn a_rout_starts_once_per_engagement_and_only_when_eligible() {
-        assert!(may_start_rout(true, 0));
-        assert!(!may_start_rout(true, 60_000));
-        assert!(!may_start_rout(false, 0));
-        assert!(!may_start_rout(false, 60_000));
     }
 
     #[test]

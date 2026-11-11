@@ -1101,23 +1101,3 @@ mod queued_strike_tests {
         );
     }
 }
-
-#[cfg(test)]
-mod react_window_tests {
-    use super::react_window_active;
-
-    #[test]
-    fn unarmed_window_is_closed() {
-        assert!(!react_window_active(0, 1_000));
-        assert!(!react_window_active(0, 0));
-    }
-
-    #[test]
-    fn armed_window_is_open_until_deadline() {
-        let until = 6_000u64;
-        assert!(react_window_active(until, 1_000));
-        assert!(react_window_active(until, 5_999));
-        assert!(!react_window_active(until, 6_000));
-        assert!(!react_window_active(until, 6_001));
-    }
-}

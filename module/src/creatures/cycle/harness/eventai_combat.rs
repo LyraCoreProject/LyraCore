@@ -1173,8 +1173,7 @@ fn farthest_hostile_skips_a_target_inside_melee_reach() {
 
     assert!(
         scenario.casts().is_empty(),
-        "a knockback-shaped cast aimed at the farthest hostile must never land on the victim \
-         already standing in melee reach"
+        "a cast at the farthest hostile skips the victim in melee reach"
     );
 }
 
@@ -1519,8 +1518,7 @@ fn an_authored_flee_runs_a_creature_the_fixed_rout_would_leave_standing() {
     assert_eq!(
         legs.len(),
         1,
-        "an authored flee that stamps a window nothing then reads leaves the creature standing in \
-         melee, which is the fixed rout's own gate deciding a fight the script owns"
+        "an authored flee moves the creature out of melee"
     );
     assert!(
         legs[0].dest.x < 0.0,
@@ -1712,8 +1710,7 @@ fn edge_cast_rows_do_not_suppress_the_default_rotation() {
     assert_eq!(
         scenario.casts(),
         vec![(CREATURE, 120, TARGET)],
-        "an on-death or on-spawn cast fires at a moment the rotation never covers, so it takes \
-         nothing over: silencing the rotation for it would leave the creature swinging in silence"
+        "an on-death or on-spawn cast does not silence the rotation"
     );
 }
 

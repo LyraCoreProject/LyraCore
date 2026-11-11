@@ -560,7 +560,7 @@ pub const CAST_FAIL_NONE: u8 = 0;
 pub const CAST_FAIL_NO_POWER: u8 = 1;
 pub const CAST_FAIL_INTERRUPTED: u8 = 2;
 
-// Codes are append-only for rolling Module and Gateway updates.
+// Codes are append-only for rolling Module updates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 pub(crate) enum SpellCastEventKind {

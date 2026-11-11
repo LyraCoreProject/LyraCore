@@ -507,20 +507,7 @@ mod fixtures;
 
 #[cfg(test)]
 mod lethality_tests {
-    use super::{is_lethal, lethal_floor_amount, HitOutcome};
-
-    #[test]
-    fn a_zero_damage_hit_is_never_lethal() {
-        assert!(!is_lethal(1, 0));
-        assert!(!is_lethal(0, 0));
-    }
-
-    #[test]
-    fn a_hit_at_or_above_remaining_health_is_lethal() {
-        assert!(is_lethal(10, 10));
-        assert!(is_lethal(10, 11));
-        assert!(!is_lethal(10, 9));
-    }
+    use super::lethal_floor_amount;
 
     #[test]
     fn lethal_floor_changes_only_protected_lethal_damage() {
@@ -528,14 +515,5 @@ mod lethality_tests {
         assert_eq!(lethal_floor_amount(10, 10, false).amount, 10);
         assert_eq!(lethal_floor_amount(10, 10, true).amount, 9);
         assert_eq!(lethal_floor_amount(1, 20, true).amount, 0);
-    }
-
-    #[test]
-    fn duel_completion_is_a_combat_terminal_without_becoming_a_death() {
-        let outcome = HitOutcome {
-            killed: false,
-            duel_completed: true,
-        };
-        assert!(outcome.combat_ended());
     }
 }

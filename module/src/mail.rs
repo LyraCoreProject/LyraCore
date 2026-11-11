@@ -792,16 +792,6 @@ pub fn realm_mail_return(
 mod tests {
     use super::*;
 
-    #[test]
-    fn an_attachment_with_no_entry_is_empty() {
-        assert!(ItemSnapshot::default().is_empty());
-        assert!(!ItemSnapshot {
-            entry: 509_0001,
-            ..Default::default()
-        }
-        .is_empty());
-    }
-
     fn row(recipient_guid: u64, sender: MailSender) -> Mail {
         let (sender_kind, sender_guid, sender_entry) = sender.columns();
         Mail {

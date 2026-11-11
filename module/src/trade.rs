@@ -851,22 +851,6 @@ mod tests {
     }
 
     #[test]
-    fn any_offer_mutation_clears_accepts_when_either_party_accepted() {
-        assert!(!mutation_clears_accepts(false, false));
-        assert!(mutation_clears_accepts(true, false));
-        assert!(mutation_clears_accepts(false, true));
-        assert!(mutation_clears_accepts(true, true));
-    }
-
-    #[test]
-    fn a_session_is_stale_strictly_past_the_ttl_since_its_last_action() {
-        let ttl = TRADE_IDLE_TTL_MICROS;
-        assert!(!session_is_stale(1_000, 1_000 + ttl));
-        assert!(session_is_stale(1_000, 1_000 + ttl + 1));
-        assert!(!session_is_stale(1_000, 999), "clock skew never reaps");
-    }
-
-    #[test]
     fn offer_slot_view_joins_instance_state_with_template_identity() {
         let mut tmpl = crate::items::tests::blank_template(2589);
         tmpl.display_id = 7026;

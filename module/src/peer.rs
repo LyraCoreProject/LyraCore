@@ -102,7 +102,6 @@ pub(crate) fn role(ctx: &ReducerContext) -> Option<ShardRole> {
     ctx.db.game_shard_role().id().find(0).map(|row| row.role)
 }
 
-/// The default World Shard of this Realm Shard.
 pub(crate) fn world_shard(ctx: &ReducerContext) -> Option<Identity> {
     match role(ctx) {
         Some(ShardRole::Realm { world }) => Some(world),
@@ -110,7 +109,6 @@ pub(crate) fn world_shard(ctx: &ReducerContext) -> Option<Identity> {
     }
 }
 
-/// The Realm Shard of this World Shard.
 pub(crate) fn realm_shard(ctx: &ReducerContext) -> Option<Identity> {
     match role(ctx) {
         Some(ShardRole::World { realm }) => Some(realm),

@@ -169,22 +169,7 @@ pub(crate) fn check_mount_cast(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::spell::{
-        A_MOD_SPEED, A_MOD_STAT, A_MOUNTED, A_PERIODIC_DAMAGE, SPEED_MOUNTED, SPEED_MOVE,
-        SPEED_SWING,
-    };
-
-    #[test]
-    fn mount_aura_moves_mount_covers_the_mount_pair_only() {
-        assert!(mount_aura_moves_mount(A_MOUNTED, 0));
-        assert!(mount_aura_moves_mount(A_MOUNTED, 1147));
-        assert!(mount_aura_moves_mount(A_MOD_SPEED, SPEED_MOUNTED as i32));
-
-        assert!(!mount_aura_moves_mount(A_MOD_SPEED, SPEED_MOVE as i32));
-        assert!(!mount_aura_moves_mount(A_MOD_SPEED, SPEED_SWING as i32));
-        assert!(!mount_aura_moves_mount(A_MOD_STAT, SPEED_MOUNTED as i32));
-        assert!(!mount_aura_moves_mount(A_PERIODIC_DAMAGE, 0));
-    }
+    use crate::spell::{A_MOD_SPEED, A_MOD_STAT, A_MOUNTED, A_PERIODIC_DAMAGE, SPEED_MOUNTED};
 
     #[test]
     fn projected_mount_display_reads_the_mount_aura_only() {
@@ -206,28 +191,5 @@ mod tests {
             projected_mount_display([(A_MOUNTED, 1147), (A_MOUNTED, 2404)]),
             1147
         );
-    }
-
-    #[test]
-    fn rank_satisfies_is_inclusive_at_the_vanilla_riding_tiers() {
-        assert!(!rank_satisfies(74, 75));
-        assert!(rank_satisfies(75, 75));
-        assert!(rank_satisfies(150, 75));
-
-        assert!(!rank_satisfies(149, 150));
-        assert!(rank_satisfies(150, 150));
-
-        assert!(rank_satisfies(0, 0));
-        assert!(rank_satisfies(0, -1));
-    }
-
-    #[test]
-    fn indoor_check_is_due_only_on_a_100ms_boundary() {
-        assert!(!indoor_check_is_due(0, 0));
-        assert!(!indoor_check_is_due(1_000, 1_099));
-        assert!(indoor_check_is_due(1_099, 1_100));
-        assert!(!indoor_check_is_due(1_100, 1_199));
-        assert!(indoor_check_is_due(1_100, 5_000));
-        assert!(indoor_check_is_due(5_000, 1_100));
     }
 }

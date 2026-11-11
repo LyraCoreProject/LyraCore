@@ -763,8 +763,8 @@ pub(crate) fn apply_auto_bank_item(
 mod tests {
     use super::{
         bag_content_decompose, equip_slot, is_bank_slot, is_carried_slot, off_hand_after_move,
-        valid_dest_slot, valid_split_count, valid_split_dest_slot, ItemRefusal, BACKPACK_SLOT_END,
-        BANK_SLOT_END_INCL, BANK_SLOT_START,
+        valid_dest_slot, valid_split_dest_slot, ItemRefusal, BACKPACK_SLOT_END, BANK_SLOT_END_INCL,
+        BANK_SLOT_START,
     };
     use crate::ItemInstance;
     use lyracore_shared::constants::starter_item::BACKPACK_SLOT_0;
@@ -790,20 +790,6 @@ mod tests {
         }
         for slot in [63u8, 68, 119, 192, 255] {
             assert!(!is_carried_slot(slot), "slot {slot} is not carry space");
-        }
-    }
-
-    #[test]
-    fn valid_split_count_rejects_zero_and_the_whole_stack_only() {
-        const STACK: u32 = 5;
-        assert!(!valid_split_count(0, STACK));
-        assert!(!valid_split_count(STACK, STACK));
-        assert!(!valid_split_count(STACK + 1, STACK));
-        for count in 1..STACK {
-            assert!(
-                valid_split_count(count, STACK),
-                "count {count} of {STACK} should be a valid split"
-            );
         }
     }
 

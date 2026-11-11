@@ -69,6 +69,7 @@ crate::virtual_clock_exempt!(game_instance_entry);
 crate::character_owned!(delete, fn sweep_delete_game_instance_entry(ctx, character_guid) {
     ctx.db.game_instance_entry().guid().delete(character_guid);
 });
+// Admission requests settle on the source Shard before Transfer.
 crate::character_owned!(not_transported, fn sweep_transfer_game_instance_entry());
 
 #[table(accessor = game_realm_instance_entry, outbox(remote::idc_realm_instance_entry))]

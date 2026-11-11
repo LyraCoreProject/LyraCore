@@ -568,7 +568,6 @@ fn check_gameobject_fields(
             fields.template_entry
         ));
     }
-    // A door or button toggles between 0 and 1.
     if fields.state > 1 {
         return Err(format!("gameobject state {} is not 0 or 1", fields.state));
     }

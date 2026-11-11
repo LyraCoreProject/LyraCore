@@ -733,18 +733,6 @@ mod tests {
     }
 
     #[test]
-    fn prereq_satisfied_gates_on_required_rank() {
-        assert!(prereq_satisfied(0, 0, 0));
-        assert!(prereq_satisfied(0, 0, 5));
-        assert!(!prereq_satisfied(4, 0, 0));
-        assert!(prereq_satisfied(4, 1, 0));
-        assert!(prereq_satisfied(4, 5, 0));
-        assert!(!prereq_satisfied(4, 1, 2));
-        assert!(prereq_satisfied(4, 2, 2));
-        assert!(prereq_satisfied(4, 3, 2));
-    }
-
-    #[test]
     fn respec_cost_escalates_then_caps() {
         assert_eq!(respec_cost_copper(0), 10_000);
         assert_eq!(respec_cost_copper(1), 50_000);

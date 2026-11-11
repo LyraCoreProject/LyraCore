@@ -20,7 +20,6 @@ pub(crate) enum BankSlotRefusal {
     Banker(NpcRefusal),
 }
 
-// Gateway Verbs return this text, led by the SMSG_BUY_BANK_SLOT_RESULT code.
 impl std::fmt::Display for BankSlotRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         use lyracore_protocol::messages::vanilla::BuyBankSlotResult as Code;

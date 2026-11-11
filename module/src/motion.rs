@@ -120,7 +120,6 @@ pub(crate) fn queue_motion(
         return;
     };
     match coalesce(prev.opcode, opcode) {
-        // Keep the queued transition but update its AOI address to the current cell.
         Coalesce::KeepQueued => {
             pending.guid().update(PendingMotion {
                 map_id,
@@ -274,8 +273,7 @@ mod tests {
             .contains(&op);
             assert_eq!(
                 discrete, expected,
-                "0x{op:03X}: a discrete transition is anything a peer animates off; only \
-                 HEARTBEAT, SET_FACING and SET_PITCH carry nothing a later packet does not"
+                "0x{op:03X}: only HEARTBEAT, SET_FACING and SET_PITCH coalesce"
             );
         }
     }

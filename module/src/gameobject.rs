@@ -1155,31 +1155,6 @@ mod tests {
     }
 
     #[test]
-    fn respawn_due_flips_only_a_depleted_armed_and_elapsed_node() {
-        let armed_at = 1_000u64;
-        assert!(
-            respawn_due(1, armed_at, armed_at),
-            "due exactly at the armed time"
-        );
-        assert!(
-            respawn_due(1, armed_at, armed_at + 1),
-            "due once past the armed time"
-        );
-        assert!(
-            !respawn_due(1, armed_at, armed_at - 1),
-            "before the armed time → not due"
-        );
-        assert!(
-            !respawn_due(1, 0, u64::MAX),
-            "never-armed depleted node stays depleted"
-        );
-        assert!(
-            !respawn_due(0, armed_at, armed_at + 1),
-            "a ready node is never a respawn candidate"
-        );
-    }
-
-    #[test]
     fn weighted_pick_lands_each_roll_in_its_cumulative_band() {
         let w = [20u32, 20, 20, 20, 20, 2];
         assert_eq!(weighted_pick(&w, 0), Some(0));

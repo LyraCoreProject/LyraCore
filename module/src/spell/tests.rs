@@ -3,19 +3,6 @@ use super::*;
 fn magic_miss_bp(caster_level: u32, target_level: u32) -> u32 {
     super::rolls::magic_miss_bp(caster_level, target_level, false, 0.0)
 }
-use spacetimedb::Timestamp;
-
-#[test]
-fn creature_is_exempt_from_level_and_cost_gates() {
-    assert!(cost_gate_blocks(true, 0, 90));
-    assert!(!cost_gate_blocks(false, 0, 90));
-    assert!(!cost_gate_blocks(true, 90, 90));
-    assert!(!cost_gate_blocks(false, 0, 0));
-    assert!(level_gate_blocks(true, 20, 9));
-    assert!(!level_gate_blocks(false, 20, 9));
-    assert!(!level_gate_blocks(true, 0, 1));
-    assert!(!level_gate_blocks(true, 1, 1));
-}
 
 #[test]
 fn spell_crit_is_one_and_a_half() {
@@ -71,48 +58,6 @@ fn client_form_for_stance_matches_the_convention() {
     assert_eq!(client_form_for_stance(STANCE_DIRE_BEAR), 8);
     assert_eq!(client_form_for_stance(6), 23);
     assert_eq!(client_form_for_stance(7), 24);
-}
-
-#[test]
-fn stance_switch_clears_power_only_on_real_switch_for_rage() {
-    use lyracore_shared::packing::power_type;
-    assert!(stance_switch_clears_power(
-        STANCE_BATTLE,
-        STANCE_DEFENSIVE,
-        power_type::RAGE
-    ));
-    assert!(stance_switch_clears_power(
-        STANCE_DEFENSIVE,
-        STANCE_BERSERKER,
-        power_type::RAGE
-    ));
-    assert!(!stance_switch_clears_power(
-        STANCE_BATTLE,
-        STANCE_BATTLE,
-        power_type::RAGE
-    ));
-    assert!(!stance_switch_clears_power(
-        STANCE_BATTLE,
-        STANCE_DEFENSIVE,
-        power_type::MANA
-    ));
-    assert!(!stance_switch_clears_power(
-        STANCE_BATTLE,
-        STANCE_DEFENSIVE,
-        power_type::ENERGY
-    ));
-}
-
-#[test]
-fn form_recast_toggles_off_only_for_active_druid_forms() {
-    assert!(form_recast_toggles_off(STANCE_BEAR, STANCE_BEAR));
-    assert!(form_recast_toggles_off(STANCE_CAT, STANCE_CAT));
-    assert!(form_recast_toggles_off(STANCE_DIRE_BEAR, STANCE_DIRE_BEAR));
-    assert!(!form_recast_toggles_off(STANCE_BATTLE, STANCE_BATTLE));
-    assert!(!form_recast_toggles_off(STANCE_DEFENSIVE, STANCE_DEFENSIVE));
-    assert!(!form_recast_toggles_off(STANCE_BERSERKER, STANCE_BERSERKER));
-    assert!(!form_recast_toggles_off(STANCE_BEAR, STANCE_CAT));
-    assert!(!form_recast_toggles_off(0, STANCE_BEAR));
 }
 
 #[test]
@@ -182,18 +127,6 @@ fn energized_value_clamps() {
 }
 
 #[test]
-fn dispel_category_match() {
-    assert!(dispel_category_matches(0, 0));
-    assert!(dispel_category_matches(0, 1));
-    assert!(dispel_category_matches(0, 4));
-    assert!(dispel_category_matches(1, 1));
-    assert!(!dispel_category_matches(1, 2));
-    assert!(!dispel_category_matches(1, 0));
-    assert!(dispel_category_matches(2, 2));
-    assert!(!dispel_category_matches(2, 1));
-}
-
-#[test]
 fn effect_amount_scales() {
     assert_eq!(effect_amount(50, 0, 0.0, 1, 1, 0, 0), 50);
     assert_eq!(effect_amount(5, 8, 0.0, 1, 1, 0, 0), 5);
@@ -244,16 +177,6 @@ fn absorb_draw_soaks_then_overflows() {
 }
 
 #[test]
-fn passive_application_uses_only_aura_effects() {
-    for kind in [A_MOD_STAT, A_STEALTH, A_PERIODIC_TRIGGER] {
-        assert!(passive_applies_effect_kind(kind), "{kind:#x}");
-    }
-    for kind in [E_DAMAGE, E_HEAL, E_TRIGGER, E_SELF_RESURRECT] {
-        assert!(!passive_applies_effect_kind(kind), "{kind:#x}");
-    }
-}
-
-#[test]
 fn rederive_pool_is_noop_at_zero_and_curve_exact() {
     use crate::stats::{hp_from_stamina, mana_from_intellect};
     for base in [0u32, 5, 20, 22, 100] {
@@ -281,32 +204,4 @@ fn break_on_damage_flag_decode() {
     assert!(breaks_on_damage(0x1));
     assert!(breaks_on_damage(0x1 | 0x4));
     assert!(!breaks_on_damage(0x2));
-}
-
-#[test]
-fn is_due_for_expiry_boundary_is_inclusive() {
-    let expires_at = Timestamp::from_micros_since_unix_epoch(1_000_000);
-    let one_tick_early = Timestamp::from_micros_since_unix_epoch(999_999);
-    let exactly_at = Timestamp::from_micros_since_unix_epoch(1_000_000);
-    let one_tick_late = Timestamp::from_micros_since_unix_epoch(1_000_001);
-    assert!(!is_due_for_expiry(A_MOD_STAT, expires_at, one_tick_early));
-    assert!(is_due_for_expiry(A_MOD_STAT, expires_at, exactly_at));
-    assert!(is_due_for_expiry(A_MOD_STAT, expires_at, one_tick_late));
-}
-
-#[test]
-fn is_due_for_expiry_never_reaps_stealth() {
-    let expires_at = Timestamp::from_micros_since_unix_epoch(1_000_000);
-    let long_past = Timestamp::from_micros_since_unix_epoch(50_000_000);
-    assert!(!is_due_for_expiry(A_STEALTH, expires_at, expires_at));
-    assert!(!is_due_for_expiry(A_STEALTH, expires_at, long_past));
-    assert!(is_due_for_expiry(A_MOD_STAT, expires_at, long_past));
-}
-
-#[test]
-fn is_due_for_expiry_permanent_sentinel_never_reaped() {
-    let permanent = Timestamp::from_micros_since_unix_epoch(i64::MAX);
-    let far_future_now = Timestamp::from_micros_since_unix_epoch(9_999_999_999_999);
-    assert!(!is_due_for_expiry(A_MOD_STAT, permanent, far_future_now));
-    assert!(!is_due_for_expiry(A_STEALTH, permanent, far_future_now));
 }

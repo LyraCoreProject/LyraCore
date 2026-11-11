@@ -347,8 +347,7 @@ fn a_creature_standing_on_its_authored_hold_point_turns_to_its_victim() {
             .map(|effect| (effect.dur_ms, effect.facing))
             .collect::<Vec<_>>(),
         [(0, true)],
-        "arriving at an authored hold point is an arrival like reaching melee: a creature that only \
-         ever stops there renders with its back to what it is shooting at"
+        "a creature arriving at its hold point faces its target"
     );
     assert!((effects[0].facing_angle + std::f32::consts::FRAC_PI_2).abs() < 0.01);
     assert_eq!(

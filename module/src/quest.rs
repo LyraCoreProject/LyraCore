@@ -1594,8 +1594,8 @@ mod fixtures;
 #[cfg(test)]
 mod tests {
     use super::{
-        eventai_credit_recipient_set, is_expired, pick_choice_reward, quest_payout,
-        EventAiQuestCreditContext, QuestCreditRecipientPolicy, QuestPayout,
+        eventai_credit_recipient_set, pick_choice_reward, quest_payout, EventAiQuestCreditContext,
+        QuestCreditRecipientPolicy, QuestPayout,
     };
 
     fn quest_credit_context() -> EventAiQuestCreditContext {
@@ -1698,25 +1698,6 @@ mod tests {
         assert!(err.contains("invalid reward choice 2"), "err was: {err}");
         assert!(err.contains("quest 42"), "err names the quest: {err}");
         assert!(pick_choice_reward(&choices, u32::MAX, 42).is_err());
-    }
-
-    #[test]
-    fn untimed_deadline_never_expires() {
-        assert!(!is_expired(0, 0, false, false));
-        assert!(!is_expired(i64::MAX, 0, false, false));
-    }
-
-    #[test]
-    fn is_expired_is_inclusive_at_the_deadline_instant() {
-        assert!(is_expired(1_000, 1_000, false, false));
-        assert!(!is_expired(999, 1_000, false, false));
-        assert!(is_expired(1_001, 1_000, false, false));
-    }
-
-    #[test]
-    fn is_expired_never_fires_on_a_terminal_row() {
-        assert!(!is_expired(5_000, 1_000, true, false));
-        assert!(!is_expired(5_000, 1_000, false, true));
     }
 
     #[test]

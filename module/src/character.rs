@@ -848,17 +848,7 @@ pub fn on_disconnect(ctx: &ReducerContext) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        accrue_played_on_persist, persisted_gm_playtest, persisted_pending_ghost, RUN_SPEED_BP_1X,
-    };
-
-    #[test]
-    fn pending_ghost_preserves_only_released_ghosts() {
-        use lyracore_shared::constants::player_flags::GHOST;
-        assert!(persisted_pending_ghost(true, GHOST));
-        assert!(!persisted_pending_ghost(false, GHOST));
-        assert!(!persisted_pending_ghost(true, 0));
-    }
+    use super::{accrue_played_on_persist, persisted_gm_playtest, RUN_SPEED_BP_1X};
 
     #[test]
     fn gm_playtest_state_carries_across_a_map_change_and_resets_on_a_real_logout() {

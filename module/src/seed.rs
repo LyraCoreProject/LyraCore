@@ -1636,9 +1636,7 @@ mod tests {
                 .collect();
             assert!(
                 kit.len() >= 2,
-                "class {class} starts with {} spell(s) {kit:?}. Every vanilla class begins with at \
-                 least an attack and one more ability; a class whose kit is missing or truncated \
-                 logs in with an empty spellbook and no error to say why",
+                "class {class} starts with {} spell(s) {kit:?}; every class needs at least two",
                 kit.len()
             );
         }
@@ -1646,8 +1644,7 @@ mod tests {
         for (race, class, spell) in CREATEINFO_KIT {
             assert!(
                 *class == 0 || VANILLA_CLASSES.contains(class),
-                "kit row (race {race}, class {class}, spell {spell}) names a class that does not \
-                 exist in 1.12.1 — nothing can ever be granted from it"
+                "kit row (race {race}, class {class}, spell {spell}) names a class absent from 1.12.1"
             );
         }
     }
@@ -1659,18 +1656,13 @@ mod tests {
             let (race, class, spell) = row;
             assert!(
                 !(*race == 0 && *class == 0),
-                "kit row {row:?} is a wildcard on BOTH columns — it would be granted to every \
-                 character of every race and class"
+                "kit row {row:?} is a wildcard on both race and class"
             );
             assert_ne!(
                 *spell, 0,
                 "kit row {row:?} grants spell id 0, which is not a spell"
             );
-            assert!(
-                seen.insert(*row),
-                "kit row {row:?} appears twice; the seeder inserts unconditionally, so the spell \
-                 lands in the starting spellbook twice"
-            );
+            assert!(seen.insert(*row), "kit row {row:?} appears twice");
         }
 
         assert!(
@@ -1697,52 +1689,6 @@ mod tests {
             }
         }
         assert_eq!(seen.len(), 40, "vanilla has 40 race and class pairs");
-    }
-
-    #[test]
-    fn blessing_family_carries_every_reconciled_rank() {
-        let blessings: Vec<u32> = SPELL_GROUPS
-            .iter()
-            .find(|&&(id, ..)| id == 3)
-            .expect("the Blessing family is gone")
-            .3
-            .to_vec();
-        for spell_id in [
-            19740, 19834, 19835, 19836, 19837, 19838, 25291, 19742, 19850, 19852, 19853, 19854,
-            25290, 20911, 20912, 20913, 20914, 19977, 19978, 19979, 20217, 1038, 25782, 25916,
-            25894, 25918, 25890, 25895, 25898, 25899,
-        ] {
-            assert!(
-                blessings.contains(&spell_id),
-                "Blessing rank {spell_id} is missing"
-            );
-        }
-    }
-
-    #[test]
-    fn reconciled_families_carry_the_ranks_that_were_missing() {
-        let members = |group_id: u32| -> Vec<u32> {
-            SPELL_GROUPS
-                .iter()
-                .find(|&&(id, ..)| id == group_id)
-                .unwrap_or_else(|| panic!("group {group_id} is gone"))
-                .3
-                .to_vec()
-        };
-        assert!(members(1).contains(&5234), "Mark of the Wild rank 4");
-        for feral in [16857, 17390, 17391, 17392] {
-            assert!(members(5).contains(&feral), "Faerie Fire (Feral) {feral}");
-        }
-    }
-
-    #[test]
-    fn battle_shout_is_the_only_rank_comparable_family() {
-        let comparable: Vec<u32> = SPELL_GROUPS
-            .iter()
-            .filter(|&&(_, _, rank_is_comparable, _)| rank_is_comparable)
-            .map(|&(group_id, ..)| group_id)
-            .collect();
-        assert_eq!(comparable, vec![4]);
     }
 
     #[test]

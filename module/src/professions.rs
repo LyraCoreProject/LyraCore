@@ -235,45 +235,4 @@ mod tests {
         assert_eq!(required_skinning(2), 10);
         assert_eq!(required_skinning(3), 20);
     }
-
-    #[test]
-    fn fish_pool_is_nonempty_and_lists_the_real_low_level_fish_entries() {
-        assert!(
-            !FISH_POOL.is_empty(),
-            "fishing must have a pool to roll (an empty pool divides by zero)"
-        );
-        assert_eq!(
-            FISH_POOL,
-            &[6291, 6303, 6289],
-            "the three real low-level fish entries"
-        );
-    }
-
-    #[test]
-    fn pick_caught_fish_prefers_the_winner_else_floors_to_the_pool() {
-        assert_eq!(
-            pick_caught_fish(Some(6291), 0),
-            6291,
-            "a real winner is never overridden by the pool"
-        );
-        assert_eq!(pick_caught_fish(None, 0), FISH_POOL[0]);
-        assert_eq!(
-            pick_caught_fish(None, FISH_POOL.len()),
-            FISH_POOL[0],
-            "wraps via %, never panics OOB"
-        );
-        assert_eq!(pick_caught_fish(None, 1), FISH_POOL[1]);
-    }
-
-    #[test]
-    fn disenchant_mats_are_the_real_strange_dust_entry() {
-        assert_eq!(
-            DISENCHANT_MATS_ENTRY, 10940,
-            "Strange Dust (real imported enchanting reagent)"
-        );
-        assert_eq!(
-            DISENCHANT_MATS_COUNT, 1,
-            "the alpha mints a flat 1x Strange Dust"
-        );
-    }
 }

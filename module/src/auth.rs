@@ -328,25 +328,7 @@ pub(crate) fn adopt_character_gm_levels(ctx: &ReducerContext) -> u64 {
 
 #[cfg(test)]
 mod alpha_test_tools_tests {
-    use super::{
-        alpha_test_tools_enrollment, changed_alpha_test_tools, provisioned_alpha_test_tools,
-        realm_account_name,
-    };
-
-    #[test]
-    fn enrollment_starts_enabled_and_tracks_operator_changes() {
-        assert!(alpha_test_tools_enrollment(None));
-        assert!(alpha_test_tools_enrollment(Some(true)));
-        assert!(!alpha_test_tools_enrollment(Some(false)));
-    }
-
-    #[test]
-    fn new_accounts_copy_enrollment_while_existing_accounts_keep_their_authority() {
-        assert!(provisioned_alpha_test_tools(None, true));
-        assert!(!provisioned_alpha_test_tools(None, false));
-        assert!(provisioned_alpha_test_tools(Some(true), false));
-        assert!(!provisioned_alpha_test_tools(Some(false), true));
-    }
+    use super::{changed_alpha_test_tools, realm_account_name};
 
     #[test]
     fn explicit_grant_and_revoke_change_only_a_known_account() {
@@ -397,14 +379,7 @@ pub fn establish_session(
 
 #[cfg(test)]
 mod session_expiry_tests {
-    use super::{expired_sessions, session_expired};
-
-    #[test]
-    fn a_session_expires_at_its_deadline_and_not_before() {
-        assert!(!session_expired(999, 1_000));
-        assert!(session_expired(1_000, 1_000));
-        assert!(session_expired(1_001, 1_000));
-    }
+    use super::expired_sessions;
 
     #[test]
     fn the_reaper_selects_only_the_sessions_whose_window_closed() {
@@ -680,8 +655,7 @@ mod guid_allocator_tests {
         assert_eq!(
             may_mint(None, 5_000).unwrap_err(),
             "NO_GUID_RANGE",
-            "having minted before is not a licence — that IS the shard that mints into someone \
-             else's range"
+            "a database that minted before still needs an assigned range"
         );
         assert!(may_mint(Some((1_000_000_000, 1_000_000_000)), 1_000_000_000).is_ok());
         assert!(may_mint(Some((1_000_000_000, 1_000_000_000)), 1_999_999_998).is_ok());

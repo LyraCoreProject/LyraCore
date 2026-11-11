@@ -482,12 +482,7 @@ pub(crate) mod character_owned_tripwire {
 
         assert!(
             missing.is_empty(),
-            "Invariant: deleting or re-owning a Character sweeps every table keyed by its guid.\n\
-             table(s) with a Character-capable guid have no matching `character_owned` sweep marker \
-             or `NOT_CHARACTER_OWNED` classification: {missing:?}\n\
-             Add a `crate::character_owned` `delete` marker invocation (and usually the `restamp` \
-             form too, see the macro doc at the top of lib.rs), or add the accessor to \
-             `NOT_CHARACTER_OWNED` with its actual owner or lifetime."
+            "table(s) with a Character-capable guid lack a `character_owned` sweep marker or a `NOT_CHARACTER_OWNED` entry: {missing:?}"
         );
     }
 
@@ -1004,15 +999,7 @@ mod partition_discipline_tripwire {
 
         assert!(
             violations.is_empty(),
-            "Invariant: no whole-table scan of a spatial table outside the partition-scoped \
-             helpers.\nraw spatial-table scan(s) over budget:\n  {}\n\n\
-             A whole-table `.iter()` over a spatial table is not shardable: after a region or continent split it silently sees only the caller's own shard. Use \
-             `crate::helpers::entities_near(ctx, map_id, instance_id, x, y, radius)` for a radius \
-             search (grid-indexed, `(map_id, instance_id)`-scoped) and \
-             `crate::helpers::in_same_partition(&e, map_id, instance_id)` to test partition \
-             membership. If the scan is genuinely realm-wide or partition-managing, raise that \
-             file's budget in `WHITELIST` (module/src/tripwires.rs) WITH a one-line justification. \
-             Whitelisted today: {} scan(s) across {} file(s).",
+            "whole-table scan(s) of a spatial table over budget:\n  {}\nUse `helpers::entities_near` or `helpers::in_same_partition`, or raise the file's `WHITELIST` budget with a reason ({} scan(s) across {} file(s) today).",
             violations.join("\n  "),
             WHITELIST.iter().map(|(_, n, _)| n).sum::<usize>(),
             WHITELIST.len(),
@@ -1157,21 +1144,7 @@ mod character_fence_tripwire {
 
         assert!(
             violations.is_empty(),
-            "Invariant: every Character lookup goes through the transfer fence.\n\
-             raw `game_character` lookup(s) outside the by-guid chokepoint:\n  {}\n\n\
-             A reducer that reaches a character by guid or by name passes NONE of the escrowed-\
-             transfer chokepoints, so cross-database it can write to a source \
-             copy the destination already serialized past — a lost write. Route the READ through \
-             `crate::helpers::character_by_guid(ctx, guid)` or \
-             `crate::helpers::character_by_name(ctx, name)`; both read an in-transit character as \
-             absent, so your existing not-found arm fires and no new error string reaches the \
-             client. If refusal is the WRONG answer for your path (it would drop a third party's \
-             value, or the field is connection-derived and regenerated at the destination), pick the \
-             DEFER or REGENERATE verdict instead and add the site WITH its verdict — to `WHITELIST` \
-             (module/src/tripwires.rs) for a Core file, or to `PACKAGE_FILE_BUDGET` for a Package \
-             file — see the table in `module/src/transfer/mod.rs`'s module doc. Whitelisted today: \
-             {} Core lookup(s) across {} Core file(s), plus {} Package lookup(s) across {} Package \
-             file shape(s).",
+            "raw `game_character` lookup(s) outside the Transfer fence:\n  {}\nRead through `helpers::character_by_guid` or `character_by_name`, or add the site with its reason to `WHITELIST` or `PACKAGE_FILE_BUDGET` ({} Core lookup(s) across {} Core file(s), {} Package lookup(s) across {} Package file shape(s) today).",
             violations.join("\n  "),
             WHITELIST.iter().map(|(_, n, _)| n).sum::<usize>(),
             WHITELIST.len(),
@@ -1347,16 +1320,7 @@ mod gc_reap_tripwire {
 
         assert!(
             missing.is_empty(),
-            "Invariant: the module that declares a TTL-shaped table reaps it in its `sweep_expired`, \
-             and `reap_movement_events` in gc.rs calls that sweep.\n\
-             table(s) shaped `id: u64` PK + `created_at: Timestamp` without that reap: {missing:?}\n\n\
-             A short-lived table only stops growing without bound if something deletes its rows. \
-             Add `crate::gc::reap_expired!(ctx, <accessor>, crate::EVENT_TTL_MICROS);` to the \
-             declaring module's `pub(crate) fn sweep_expired(ctx: &ReducerContext)` (or a dedicated \
-             policy there, like `game_group_invite`'s 2-minute dialog window) and call \
-             `<module>::sweep_expired(ctx)` from gc.rs. A table nothing writes any more belongs in \
-             `retired.rs`. Otherwise add the accessor to `EXEMPT_ACCESSORS` with a comment \
-             justifying why it is intentionally unreaped."
+            "TTL-shaped table(s) without a `reap_expired!` in their module's `sweep_expired` called from gc.rs: {missing:?}; or list them in `EXEMPT_ACCESSORS` with a reason"
         );
     }
 
@@ -1682,16 +1646,7 @@ pub(crate) mod grid_cell_tripwire {
 
         assert!(
             violations.is_empty(),
-            "Invariant: a grid-coordinate write also writes the packed `cell`.\n\
-             a `grid_x` write with no `cell` write beside it:\n  {}\n\n\
-             `cell` packs `(grid_x, grid_y)` into the one indexed value the AOI subscription probes \
-             by equality — it is what makes the box query index-served instead of a full partition \
-             scan. It is a plain column, so nothing updates it for you: write it in the SAME \
-             statement run that writes `grid_x`/`grid_y`, via \
-             `lyracore_shared::spatial::grid_cell_id(grid_x, grid_y)` (or `cell_id_at(x, y)` when \
-             you have the world position rather than the cell). A row whose `cell` disagrees with \
-             its grid columns is not merely slow — it is addressed to the WRONG CELL, so it is \
-             invisible to the players standing on it.",
+            "a `grid_x` write without a `cell` write beside it:\n  {}\nWrite `cell` with `grid_cell_id` in the same statement run.",
             violations.join("\n  ")
         );
     }
@@ -1912,8 +1867,7 @@ pub(crate) mod grid_address_writes {
         }
         assert!(
             found.is_empty(),
-            "`grid_x`, `grid_y` and `cell` must agree with the row's position, so only a placement \
-             operation writes them. Call `WorldEntity::place` instead:\n  {}",
+            "only a placement operation writes `grid_x`, `grid_y` and `cell`; call `WorldEntity::place`:\n  {}",
             found.join("\n  ")
         );
     }
@@ -2003,8 +1957,7 @@ pub(crate) mod package_name_tripwire {
         }
         assert!(
             found.is_empty(),
-            "Invariant: Core source names no official Package.\n\
-             Core source names an official Package:\n  {}\n\nName the capability instead.",
+            "Core source names an official Package; name the capability instead:\n  {}",
             found.join("\n  ")
         );
     }

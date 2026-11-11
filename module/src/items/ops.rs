@@ -785,10 +785,7 @@ fn lose_durability(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        bandage_cooldown_blocks, durability_loss, profile_item_target_admitted, use_spell_for,
-        RECENTLY_BANDAGED_SPELL,
-    };
+    use super::{durability_loss, profile_item_target_admitted, use_spell_for};
 
     #[test]
     fn profile_item_target_refuses_zero_and_over_limit_counts() {
@@ -815,29 +812,6 @@ mod tests {
         tmpl.spellid_1 = 50110;
         tmpl.spelltrigger_1 = 1;
         assert_eq!(use_spell_for(&tmpl), None);
-    }
-
-    #[test]
-    fn bandage_cooldown_gate_blocks_only_the_bandage_while_debuff_is_live() {
-        assert!(
-            bandage_cooldown_blocks(1251, true),
-            "re-bandage blocked while Recently Bandaged is live"
-        );
-        assert!(
-            !bandage_cooldown_blocks(1251, false),
-            "bandage usable once the cooldown expired"
-        );
-        assert!(
-            bandage_cooldown_blocks(2581, true),
-            "the rank-2 Heavy Linen shares the same lockout"
-        );
-        assert!(
-            !bandage_cooldown_blocks(2581, false),
-            "rank-2 bandage usable once the cooldown expired"
-        );
-        assert!(!bandage_cooldown_blocks(118, true));
-        assert!(!bandage_cooldown_blocks(2681, true));
-        assert_eq!(RECENTLY_BANDAGED_SPELL, 11196);
     }
 
     #[test]

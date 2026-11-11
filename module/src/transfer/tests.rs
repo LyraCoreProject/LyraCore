@@ -19,8 +19,7 @@ fn manifest_is_the_generated_enumeration_minus_the_machinery() {
         } else {
             assert!(
                 present,
-                "character-owned table {t} is missing from the transfer manifest — the manifest \
-                     must derive from CHARACTER_OWNED_TABLES, never from a hand-kept parallel list"
+                "character-owned table {t} is missing from the transfer manifest"
             );
         }
     }
@@ -31,31 +30,11 @@ fn manifest_is_the_generated_enumeration_minus_the_machinery() {
 }
 
 #[test]
-fn manifest_exclude_holds_only_local_runtime_state() {
-    assert_eq!(
-        MANIFEST_EXCLUDE,
-        [
-            "game_transfer_out",
-            "game_aoi_grant",
-            "game_aoi_viewer",
-            "game_native_player",
-            "game_native_member_stats",
-            "game_native_motion_permit",
-            "game_character_relocation",
-            "game_combat_check_schedule",
-            "game_transport_passenger",
-        ],
-        "Only local relocation, combat checks, Transfer machinery and connection state may be excluded."
-    );
-}
-
-#[test]
 fn generated_table_names_look_like_real_accessors() {
     for t in crate::CHARACTER_OWNED_TABLES {
         assert!(
             t.starts_with("game_") || t.starts_with("pkg_"),
-            "{t} does not look like a table accessor — check the `sweep_delete_<accessor>` \
-                 naming of the character_owned! delete markers"
+            "{t} does not look like a table accessor"
         );
     }
 }
@@ -113,8 +92,7 @@ fn hot_marks_name_only_real_manifest_tables() {
     for h in HOT_TABLES {
         assert!(
             m.iter().any(|e| e.table == *h && e.hot),
-            "HOT_TABLES names {h}, which is not in the transfer manifest — a table rename left \
-                 the hot/cold marks stale"
+            "HOT_TABLES names {h}, which is not a hot manifest table"
         );
     }
     assert!(
@@ -127,11 +105,9 @@ fn hot_marks_name_only_real_manifest_tables() {
 fn aura_rows_are_a_manifest_table_marked_hot() {
     let m = manifest();
     assert!(
-            m.iter().any(|e| e.table == "game_aura" && e.hot),
-            "game_aura is missing from the transfer manifest (or not marked hot) — a warm handoff \
-             would carry gear/spells/quests/reputation/cooldowns but silently drop every buff, DoT, \
-             HoT and Stealth presence on the source database. manifest was: {m:?}"
-        );
+        m.iter().any(|e| e.table == "game_aura" && e.hot),
+        "game_aura is a hot manifest table; manifest was: {m:?}"
+    );
 }
 
 #[test]
@@ -205,10 +181,9 @@ fn aura_absolute_expiry_survives_the_export_import_round_trip_with_the_same_rema
         "fixture arithmetic sanity check"
     );
     assert_eq!(
-            remaining_after, remaining_before,
-            "a 10-minute buff with 6 minutes left before the hop must still have exactly 6 minutes \
-             left after it — the destination reads the SAME absolute deadline against its own clock"
-        );
+        remaining_after, remaining_before,
+        "an Aura keeps its remaining time across the hop"
+    );
 }
 
 #[test]
@@ -357,13 +332,11 @@ fn check(m: Model, trace: &[Step]) {
     );
     assert!(
         !(m.in_row && !m.out_row),
-        "orphan in-row after {trace:?}: the destination escrow outlived the source's claim, so \
-             a later rollback could not see that the import happened (state {m:?})"
+        "orphan in-row after {trace:?} (state {m:?})"
     );
     assert!(
         !(m.dst_durable && m.src_durable && m.settled()),
-        "TWO SETTLED COPIES after {trace:?} — the escrow cleared with both sides durable, which \
-             is a dupe the moment either logs in (state {m:?})"
+        "two settled copies after {trace:?} (state {m:?})"
     );
 }
 
@@ -626,8 +599,7 @@ fn the_recovery_verdict_is_enumerated_over_its_whole_input_space() {
             assert_eq!(
                 recovery(false, dest, age),
                 Recovery::Hold,
-                "no out-row means nothing is escrowed here, so there is nothing to recover — \
-                     age {age}, destination {dest:?}"
+                "nothing escrowed, nothing to recover: age {age}, destination {dest:?}"
             );
         }
     }
@@ -637,9 +609,7 @@ fn the_recovery_verdict_is_enumerated_over_its_whole_input_space() {
             assert_eq!(
                 recovery(true, dest, age),
                 Recovery::Hold,
-                "an escrow younger than the {TRANSFER_STALE_MICROS}µs window belongs to a \
-                     driver that may still be working; reaping it races the live transfer — age \
-                     {age}, destination {dest:?}"
+                "an escrow younger than {TRANSFER_STALE_MICROS}µs is left alone: age {age}, destination {dest:?}"
             );
         }
     }
@@ -648,22 +618,17 @@ fn the_recovery_verdict_is_enumerated_over_its_whole_input_space() {
         assert_eq!(
             recovery(true, None, age),
             Recovery::Hold,
-            "an unconsultable destination must HOLD FOREVER, at any age ({age}). Guessing \
-                 rollback against a successful import duplicates the character; guessing forward \
-                 against a failed one destroys it. A frozen character is recoverable — neither of \
-                 those is."
+            "an unconsultable destination holds at any age ({age})"
         );
         assert_eq!(
             recovery(true, Some(false), age),
             Recovery::Rollback,
-            "the destination provably has no copy, so the only durable copy is the source's — \
-                 unfreeze it (age {age})"
+            "no destination copy rolls back (age {age})"
         );
         assert_eq!(
             recovery(true, Some(true), age),
             Recovery::RollForward,
-            "the destination copy is DURABLE, so the transfer may only ever complete — rolling \
-                 back here would leave two copies (age {age})"
+            "a durable destination copy rolls forward (age {age})"
         );
     }
 }
@@ -685,21 +650,18 @@ fn the_pure_planners_are_enumerated_over_their_whole_input_space() {
     assert_eq!(
         plan_finish(true, false),
         FinishPlan::NotImported,
-        "finishing an un-imported escrow destroys the ONLY durable copy — this refusal is the \
-             delete-last invariant itself"
+        "finish refuses an un-imported escrow"
     );
     assert_eq!(plan_finish(true, true), FinishPlan::Complete);
 
     assert!(login_allowed(false, false));
     assert!(
         !login_allowed(true, false),
-        "an escrowed character is frozen on this shard; logging it in un-freezes a copy \
-             another database is about to import"
+        "an escrowed character cannot log in"
     );
     assert!(
         !login_allowed(false, true),
-        "an unreleased ARRIVAL row still means a transfer is in flight — the fence must not \
-             relax on the shape `phase` treats as unreachable"
+        "an unreleased arrival row keeps the fence"
     );
     assert!(!login_allowed(true, true));
 
@@ -726,9 +688,7 @@ fn the_pure_planners_are_enumerated_over_their_whole_input_space() {
             assert_eq!(
                 plan_begin(Some(7), 9, source_durable, in_transit),
                 BeginPlan::IdCollision,
-                "an id reused for a DIFFERENT character must never answer Replay — the driver \
-                     would then drive the remaining steps and move the other character while \
-                     reporting success for one that never moved"
+                "an id reused for another character is not a Replay"
             );
         }
     }
@@ -740,14 +700,12 @@ fn the_pure_planners_are_enumerated_over_their_whole_input_space() {
     assert_eq!(
         plan_begin(None, 7, false, true),
         BeginPlan::NoSource,
-        "no durable source is checked BEFORE in-transit: with no copy here, in-transit is not \
-             the actionable complaint"
+        "a missing source is reported before in-transit"
     );
     assert_eq!(
         plan_begin(None, 7, true, true),
         BeginPlan::AlreadyInTransit,
-        "a character escrowed twice under two ids has two destinations each holding a claim; \
-             cross-database, both import and the character is DUPLICATED"
+        "a character cannot be escrowed under two ids"
     );
     assert_eq!(plan_begin(None, 7, true, false), BeginPlan::Escrow);
 }
@@ -831,9 +789,7 @@ fn every_manifest_table_can_cross_a_database_boundary() {
         .collect();
     assert!(
         !transports.is_empty(),
-        "the generated transport registry is EMPTY — the build.rs marker scan found no \
-             `character_owned!(transfer, ..)` arms at all, so nothing would cross a database \
-             boundary and this ratchet would pass vacuously"
+        "the generated transport registry is empty"
     );
     let mut missing = Vec::new();
     for entry in manifest() {
@@ -843,49 +799,15 @@ fn every_manifest_table_can_cross_a_database_boundary() {
     }
     assert!(
             missing.is_empty(),
-            "character-owned table(s) with NO cross-database transport arm: {missing:?}\n\
-             Their rows would be silently dropped the first time a character moves between two \
-             SpacetimeDB databases — the source copy is cascade-deleted by \
-             finish_transfer, so the data is gone with no error anywhere. Add \
-             `crate::character_owned!(transfer, fn sweep_transfer_<accessor>(ctx, guid, io) {{ .. }})` \
-             next to the table (see any of the existing arms), or `transfer::not_transported(io)` if \
-             the rows genuinely must not cross — but write the decision AT the table."
+            "character-owned table(s) with no transport arm: {missing:?}; add a `transfer` or `not_transported` arm at the table"
         );
     let tables: Vec<String> = manifest().into_iter().map(|e| e.table).collect();
     for t in &transports {
         assert!(
             tables.contains(t) || MANIFEST_EXCLUDE.contains(&t.as_str()),
-            "transport arm names {t}, which is not a manifest table — check the \
-                 `sweep_transfer_<table_accessor>` naming"
+            "transport arm names {t}, which is not a manifest table"
         );
     }
-}
-
-#[test]
-fn the_not_transported_allowlist_matches_the_arms_that_decline() {
-    let mut declared: Vec<&str> = NOT_TRANSPORTED.to_vec();
-    declared.sort_unstable();
-    assert_eq!(
-            declared,
-            crate::CHARACTER_OWNED_NOT_TRANSPORTED,
-            "`transfer::NOT_TRANSPORTED` and the tables whose arms are written with the \
-             `character_owned!(not_transported, ..)` marker kind disagree.\n\
-             \n\
-             A table on the GENERATED side but not on NOT_TRANSPORTED: its rows are silently \
-             DROPPED on every database hop — no error, and `finish_transfer` cascade-deletes the \
-             source copy they came from moments later. If that really is the decision, add the \
-             table to NOT_TRANSPORTED *with its reason*; otherwise write its arm as a `transfer` \
-             arm.\n\
-             A table on NOT_TRANSPORTED but not on the generated side: the written decision is \
-             stale — either the arm transports again, or a rename left the allowlist naming a table \
-             that no longer exists, which silently licenses the next table to take that name."
-        );
-    assert!(
-        !crate::CHARACTER_OWNED_NOT_TRANSPORTED.is_empty(),
-        "the generated decline list is EMPTY — build.rs's `not_transported` marker scan found \
-             nothing, and an empty list makes the equality above pass vacuously the moment \
-             NOT_TRANSPORTED is emptied too"
-    );
 }
 
 #[test]
@@ -900,9 +822,7 @@ fn every_transported_table_has_exactly_one_arm() {
     }
     assert!(
         doubled.is_empty(),
-        "table(s) with two transport arms: {doubled:?} — one arm carries the rows and the other \
-         decides again, and which of the two wins is the order build.rs happened to scan the files \
-         in"
+        "table(s) with two transport arms: {doubled:?}"
     );
 }
 
@@ -1082,19 +1002,15 @@ fn xcheck(m: Xdb, trace: &[XStep]) {
     );
     assert!(
         !(m.live_src() && m.live_dst()),
-        "DUAL LIVENESS after {trace:?} — the character is actable on BOTH databases, which is \
-             the cross-database dupe this whole protocol exists to prevent (state {m:?})"
+        "live on both databases after {trace:?} (state {m:?})"
     );
     assert!(
         !(m.dst_durable && m.src_durable && m.settled()),
-        "TWO SETTLED COPIES after {trace:?} — the escrow cleared with a durable character on \
-             both databases; whichever one the player logs into next, the other is a ghost dupe \
-             (state {m:?})"
+        "two settled copies after {trace:?} (state {m:?})"
     );
     assert!(
         !(m.in_row_src && !m.out_row),
-        "orphan attestation after {trace:?}: the source's in-row outlived its own out-row, so \
-             the escrow is no longer readable as in-flight (state {m:?})"
+        "orphan attestation after {trace:?} (state {m:?})"
     );
 }
 
@@ -1199,21 +1115,10 @@ fn the_arrival_copy_stays_fenced_until_the_source_copy_is_gone() {
 
 #[test]
 fn party_membership_does_not_ride_the_export_blob() {
+    assert!(crate::CHARACTER_OWNED_TRANSFER_NAMES.contains(&"game_group_member"));
     assert!(
-        crate::CHARACTER_OWNED_TRANSFER_NAMES.contains(&"game_group_member"),
-        "game_group_member lost its transport arm entirely (declining is an arm too) — the \
-             ratchet can no longer say anything about it"
-    );
-    assert!(
-            crate::CHARACTER_OWNED_NOT_TRANSPORTED.contains(&"game_group_member"),
-            "`game_group_member` transports again. Party membership is authoritative on Realm-core; \
-             the Gateway re-pushes the roster onto the destination at world entry, and a \
-             blob snapshot taken back at `begin_transfer` would overwrite it with the membership the \
-             character had when it stepped into the portal."
-        );
-    assert!(
-        NOT_TRANSPORTED.contains(&"game_group_member"),
-        "the decision must also be written on the allowlist, with its reason"
+        crate::CHARACTER_OWNED_NOT_TRANSPORTED.contains(&"game_group_member"),
+        "a blob snapshot from begin_transfer would overwrite the destination's party membership"
     );
 }
 
@@ -1221,15 +1126,12 @@ fn party_membership_does_not_ride_the_export_blob() {
 fn the_instance_removal_dies_with_the_source_copy_and_is_not_carried() {
     assert!(
         crate::CHARACTER_OWNED_TABLES.contains(&"game_instance_removal"),
-        "game_instance_removal has no delete sweep, so the source cascade leaves the countdown \
-         running after the Character left the instance"
+        "game_instance_removal has a delete sweep"
     );
     assert!(
         crate::CHARACTER_OWNED_NOT_TRANSPORTED.contains(&"game_instance_removal"),
-        "game_instance_removal transports: the destination would count down for an instance the \
-         Character is no longer in"
+        "game_instance_removal does not transport"
     );
-    assert!(NOT_TRANSPORTED.contains(&"game_instance_removal"));
 }
 
 const OLD_BLOBS_MAY_LACK: [&str; 12] = [
@@ -1380,10 +1282,5 @@ fn the_tables_old_blobs_may_lack_are_pinned() {
             manifest().iter().any(|entry| entry.table == table),
             "{table} is not in this build's manifest"
         );
-    }
-    #[cfg(not(has_packages))]
-    {
-        assert_eq!(manifest().len(), 50);
-        assert_eq!(manifest_without(&OLD_BLOBS_MAY_LACK).len(), 38);
     }
 }

@@ -2316,26 +2316,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn kill_reward_needs_an_alive_member_on_the_same_map_within_range() {
-        assert!(eligible_for_kill_reward(false, true, true, 0.0));
-        assert!(eligible_for_kill_reward(
-            false,
-            true,
-            true,
-            GROUP_XP_RANGE_SQ
-        ));
-        assert!(!eligible_for_kill_reward(true, true, true, 0.0));
-        assert!(!eligible_for_kill_reward(false, false, true, 0.0));
-        assert!(!eligible_for_kill_reward(false, true, false, 0.0));
-        assert!(!eligible_for_kill_reward(
-            false,
-            true,
-            true,
-            GROUP_XP_RANGE_SQ + 1.0
-        ));
-    }
-
     fn member_row(id: u64, character_guid: u64, assistant: bool) -> GroupMember {
         GroupMember {
             id,

@@ -6,7 +6,7 @@ mod transport;
 pub(crate) use transport::{
     admit_command_issuer_import, decode_rows, encode_rows, export_rows_via, import_rows_via,
     manifest, CommandIssuerImportRefusal, ManifestEntry, TransportArm, HOT_TABLES,
-    MANIFEST_EXCLUDE, NOT_TRANSPORTED, TRANSFER_TABLES_OLD_BLOBS_MAY_LACK,
+    MANIFEST_EXCLUDE, TRANSFER_TABLES_OLD_BLOBS_MAY_LACK,
 };
 pub(crate) use transport::{
     build_export_blob, check_manifest, decode_blob, decode_character_row, export_rows, import_rows,

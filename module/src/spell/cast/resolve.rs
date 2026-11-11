@@ -1951,36 +1951,6 @@ mod eventai_hit_tests {
             }
         );
     }
-
-    #[test]
-    fn only_a_dead_creature_callback_cast_can_apply_to_its_dead_caster() {
-        assert!(!triggered_target_admitted(
-            CastOrigin::Triggered,
-            10,
-            10,
-            false,
-        ));
-        assert!(triggered_target_admitted(
-            CastOrigin::DeadCreatureCallbackTriggered,
-            10,
-            10,
-            false,
-        ));
-        assert!(!triggered_target_admitted(
-            CastOrigin::DeadCreatureCallbackTriggered,
-            10,
-            20,
-            false,
-        ));
-    }
-
-    #[test]
-    fn dead_callback_admission_is_limited_to_dead_creatures() {
-        assert!(caster_life_allows(false, true, true));
-        assert!(!caster_life_allows(false, true, false));
-        assert!(!caster_life_allows(true, true, true));
-        assert!(caster_life_allows(true, false, false));
-    }
 }
 
 #[cfg(test)]

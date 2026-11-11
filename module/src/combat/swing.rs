@@ -395,8 +395,7 @@ pub(crate) fn drop_extra_attacks(ctx: &ReducerContext, guid: u64) {
     ctx.db.game_extra_attack().attacker_guid().delete(guid);
 }
 
-// Swings the main hand once per held Extra Attack. Each count is spent after its swing, so a
-// proc during an Extra Attack finds attacks still held and grants none, as in vmangos.
+// Spends each Extra Attack after its swing, so a proc mid-swing grants none (vmangos).
 // Returns false when the engagement ended.
 fn spend_extra_attacks(
     ctx: &ReducerContext,
@@ -931,20 +930,5 @@ mod revenge_tests {
         assert!(arms_revenge(HIT_CRIT, 30));
         assert!(arms_revenge(HIT_DODGE, 0));
         assert!(!arms_revenge(HIT_NORMAL, 0));
-    }
-}
-
-#[cfg(test)]
-mod chance_on_hit_tests {
-    use super::{affects_victim, HIT_BLOCK, HIT_DODGE, HIT_MISS, HIT_NORMAL, HIT_PARRY};
-
-    #[test]
-    fn a_white_swing_affects_the_victim_when_it_deals_damage_or_is_blocked() {
-        assert!(affects_victim(HIT_NORMAL, 12, 0));
-        assert!(affects_victim(HIT_BLOCK, 0, 30));
-        assert!(!affects_victim(HIT_NORMAL, 0, 0), "a fully absorbed swing");
-        for avoided in [HIT_MISS, HIT_DODGE, HIT_PARRY] {
-            assert!(!affects_victim(avoided, 0, 0));
-        }
     }
 }

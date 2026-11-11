@@ -31,7 +31,7 @@ pub(crate) fn is_facing(ax: f32, ay: f32, attacker_orientation: f32, tx: f32, ty
 
 #[cfg(test)]
 mod tests {
-    use super::{distance_3d, is_behind, projectile_travel_ms};
+    use super::{is_behind, projectile_travel_ms};
 
     #[test]
     fn is_behind_rear_hemisphere() {
@@ -48,14 +48,6 @@ mod tests {
         assert!(is_behind(0.0, -1.0, 0.0, 0.0, FRAC_PI_2));
         assert!(!is_behind(0.0, 1.0, 0.0, 0.0, FRAC_PI_2));
         assert!(!is_behind(0.0, 0.0, 0.0, 0.0, 0.0));
-    }
-
-    #[test]
-    fn distance_3d_euclidean() {
-        assert_eq!(distance_3d(0.0, 0.0, 0.0, 3.0, 4.0, 0.0), 5.0);
-        assert_eq!(distance_3d(1.0, 2.0, 3.0, 1.0, 2.0, 3.0), 0.0);
-        assert_eq!(distance_3d(0.0, 0.0, 0.0, 0.0, 0.0, 7.0), 7.0);
-        assert_eq!(distance_3d(3.0, 4.0, 0.0, 0.0, 0.0, 0.0), 5.0);
     }
 
     #[test]

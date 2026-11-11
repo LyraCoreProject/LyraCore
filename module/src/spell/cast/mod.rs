@@ -1,8 +1,6 @@
 pub(crate) mod resolve;
 mod targeting;
 
-#[cfg(test)]
-pub(crate) use resolve::passive_applies_effect_kind;
 #[cfg(feature = "debug_reducers")]
 pub(crate) use resolve::resolve_cast;
 pub(crate) use resolve::{

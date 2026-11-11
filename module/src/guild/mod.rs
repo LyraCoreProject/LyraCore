@@ -652,8 +652,7 @@ mod tests {
             assert_eq!(
                 encoded.first().copied(),
                 Some(expected_tag),
-                "GuildOp::{name} moved off BSATN tag {expected_tag}; a client still on the old \
-                 wire schema would silently decode a different variant after this ships"
+                "GuildOp::{name} moved off BSATN tag {expected_tag}"
             );
         }
     }

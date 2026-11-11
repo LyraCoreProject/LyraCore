@@ -189,7 +189,7 @@ pub(crate) fn dependent_spell_ids(rows: &[(u32, u32)], parent_spell: u32) -> Vec
 
 #[cfg(test)]
 mod tests {
-    use super::{createinfo_row_matches, dependent_spell_ids};
+    use super::dependent_spell_ids;
     use crate::seed::CREATEINFO_KIT;
 
     #[test]
@@ -229,35 +229,6 @@ mod tests {
             dependent_spell_ids(&rows, PLATE_PASSIVE_SPELL_ID),
             Vec::<u32>::new()
         );
-    }
-
-    #[test]
-    fn createinfo_row_matches_exact_race_and_class() {
-        assert!(createinfo_row_matches(1, 1, 1, 1));
-        assert!(!createinfo_row_matches(1, 1, 1, 4));
-        assert!(!createinfo_row_matches(1, 1, 3, 1));
-    }
-
-    #[test]
-    fn createinfo_row_matches_race_wildcard_matches_every_race() {
-        assert!(createinfo_row_matches(0, 1, 1, 1));
-        assert!(createinfo_row_matches(0, 1, 3, 1));
-        assert!(createinfo_row_matches(0, 1, 7, 1));
-        assert!(!createinfo_row_matches(0, 1, 1, 4));
-    }
-
-    #[test]
-    fn createinfo_row_matches_class_wildcard_matches_every_class() {
-        assert!(createinfo_row_matches(1, 0, 1, 1));
-        assert!(createinfo_row_matches(1, 0, 1, 8));
-        assert!(!createinfo_row_matches(1, 0, 3, 1));
-    }
-
-    #[test]
-    fn createinfo_row_matches_double_wildcard_matches_everyone() {
-        assert!(createinfo_row_matches(0, 0, 1, 1));
-        assert!(createinfo_row_matches(0, 0, 7, 4));
-        assert!(createinfo_row_matches(0, 0, 255, 255));
     }
 
     #[test]

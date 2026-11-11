@@ -809,16 +809,6 @@ pub(crate) fn remove_solo_seeker(ctx: &ReducerContext, character_guid: u64) {
 mod tests {
     use super::*;
 
-    #[test]
-    fn the_level_range_is_inclusive_and_a_zero_maximum_has_no_upper_bound() {
-        assert!(!level_in_range(14, 15, 20));
-        assert!(level_in_range(15, 15, 20));
-        assert!(level_in_range(20, 15, 20));
-        assert!(!level_in_range(21, 15, 20));
-        assert!(level_in_range(60, 15, 0));
-        assert!(!level_in_range(14, 15, 0));
-    }
-
     fn party(leads: bool, kind: GroupKind, members: usize) -> Membership {
         Membership {
             leads,

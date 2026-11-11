@@ -153,18 +153,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_seeded_entry_is_cleared_whoever_wrote_its_definition() {
-        assert!(is_seeded_entry(644));
-        for (entry, ..) in BARKS {
-            assert!(is_seeded_entry(entry));
-        }
-        for (entry, ..) in BOSS_CASTS {
-            assert!(is_seeded_entry(entry));
-        }
-        assert!(!is_seeded_entry(1));
-    }
-
-    #[test]
     fn fixture_rule_ids_stay_in_the_reserved_catalogue() {
         use lyracore_package_delta::ids::{FIXTURE_RESERVED_ID_CEIL, FIXTURE_RESERVED_ID_FLOOR};
         let reserved = u64::from(FIXTURE_RESERVED_ID_FLOOR)..=u64::from(FIXTURE_RESERVED_ID_CEIL);

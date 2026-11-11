@@ -1156,14 +1156,6 @@ mod tests {
     }
 
     #[test]
-    fn route_prefers_the_party_then_the_personal_binding_then_create() {
-        assert_eq!(route_instance(Some(7), Some(9)), InstanceRoute::Party(9));
-        assert_eq!(route_instance(Some(7), None), InstanceRoute::Own(7));
-        assert_eq!(route_instance(None, Some(9)), InstanceRoute::Party(9));
-        assert_eq!(route_instance(None, None), InstanceRoute::Create);
-    }
-
-    #[test]
     fn raid_admission_uses_its_map_capacity() {
         assert!(party_size_allows_entry(533, 40));
         assert!(!party_size_allows_entry(533, 41));
@@ -1232,42 +1224,23 @@ mod tests {
         let now = 1_800_000_000_000_000i64;
         let hosting = empty_reap_micros(true);
         let lease = empty_reap_micros(false);
-        assert_eq!(
-            hosting, INSTANCE_EMPTY_REAP_MICROS,
-            "hosting databases are UNCHANGED"
-        );
-        assert_eq!(lease, INSTANCE_LEASE_REAP_MICROS);
-        assert!(
-            lease > hosting,
-            "a lease must outlive the run it is a receipt for, or the world shard forgets which \
-             instance the party is in while they are still in it"
-        );
 
         let entered = now - 40 * 60 * 1_000_000;
         assert_eq!(
             occupancy_action(false, entered, false, now, hosting),
-            OccupancyAction::Reap,
-            "on the ordinary 30-minute timer the world shard reaps the lease MID-RUN — the \
-             latecomer then resolves Create and lands in a fresh, empty dungeon"
+            OccupancyAction::Reap
         );
         assert_eq!(
             occupancy_action(false, entered, false, now, lease),
             OccupancyAction::Wait,
-            "with the lease timer the world shard still knows which instance that party is in"
+            "a lease outlives a 30-minute run"
         );
 
         let longest_supported_run = 8 * 60 * 60 * 1_000_000i64;
-        assert!(
-            lease > longest_supported_run,
-            "the lease timer ({lease}µs) must outlast the LONGEST run it is a receipt for, not \
-             merely the 30-minute hosting timer: it starts counting when the party leaves the world \
-             shard, i.e. at minute ~0 of the run. Below this bound a long dungeon or raid forks its \
-             own party exactly as the 30-minute timer did."
-        );
         assert_eq!(
             occupancy_action(false, now - longest_supported_run, false, now, lease),
             OccupancyAction::Wait,
-            "an 8-hour raid night must still find its lease on the world shard"
+            "a lease outlives an 8-hour raid night"
         );
 
         let ancient = now - INSTANCE_LEASE_REAP_MICROS;

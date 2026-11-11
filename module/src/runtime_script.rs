@@ -1765,8 +1765,7 @@ welcome(event)
                     amount: 30,
                 },
             ],
-            "only the scripts that finished may reach the world, and the one after the failures \
-             still runs"
+            "finished scripts commit and the one after the failures still runs"
         );
         assert_eq!(
             diagnostics

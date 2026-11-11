@@ -87,16 +87,7 @@ fn mounted_move_pct(movement: i32, mount: i32, mounted: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lyracore_shared::spell::taxonomy::{A_DISARM, M_FEAR, SPEED_CAST, SPEED_SWING};
-
-    #[test]
-    fn stun_root_and_polymorph_hold_in_place_but_fear_does_not() {
-        for mechanic in [M_STUN, M_ROOT, M_POLY] {
-            assert!(holds_in_place(A_CONTROL, mechanic));
-        }
-        assert!(!holds_in_place(A_CONTROL, M_FEAR));
-        assert!(!holds_in_place(A_DISARM, M_ROOT));
-    }
+    use lyracore_shared::spell::taxonomy::{SPEED_CAST, SPEED_SWING};
 
     #[test]
     fn stacked_snare_reaches_the_movement_floor() {

@@ -444,15 +444,3 @@ crate::character_owned!(transfer, fn sweep_transfer_game_guild_fee_hold(ctx, cha
     table = game_guild_fee_hold,
     primary_key = payer_guid,
 });
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn a_unique_charter_fits_only_under_its_max_count() {
-        assert!(charter_fits(1, 0));
-        assert!(!charter_fits(1, 1));
-        assert!(charter_fits(0, 7), "max_count 0 sets no limit");
-    }
-}

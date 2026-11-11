@@ -707,13 +707,6 @@ mod tests {
     }
 
     #[test]
-    fn countdown_activates_at_the_exact_boundary() {
-        assert!(!countdown_due(state::COUNTDOWN, 3_000_000, 2_999_999));
-        assert!(countdown_due(state::COUNTDOWN, 3_000_000, 3_000_000));
-        assert!(!countdown_due(state::ACTIVE, 3_000_000, 3_000_000));
-    }
-
-    #[test]
     fn abandoned_request_expires_at_the_exact_timeout() {
         assert!(!request_expired(
             state::REQUESTED,

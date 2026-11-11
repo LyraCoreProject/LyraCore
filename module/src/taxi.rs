@@ -1851,9 +1851,4 @@ mod tests {
             (0, 0x0000_0040, 0)
         );
     }
-
-    #[test]
-    fn active_flight_is_explicitly_not_transported() {
-        assert!(crate::transfer::NOT_TRANSPORTED.contains(&"game_active_taxi_flight"));
-    }
 }

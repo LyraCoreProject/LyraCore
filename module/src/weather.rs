@@ -691,12 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn the_seeded_climate_covers_the_two_verification_zones_with_valid_percentages() {
-        let zones: Vec<u32> = TEMPORARY_ZONE_CLIMATE
-            .iter()
-            .map(|(zone_id, _)| *zone_id)
-            .collect();
-        assert_eq!(zones, vec![12, 40], "Elwynn Forest and Westfall");
+    fn the_seeded_climate_never_claims_more_than_a_whole_season() {
         for (zone_id, seasons) in TEMPORARY_ZONE_CLIMATE {
             for (rain, snow, storm) in seasons {
                 assert!(

@@ -28,8 +28,6 @@ mod taxonomy;
 #[cfg(test)]
 mod tests;
 
-#[cfg(test)]
-pub(crate) use cast::passive_applies_effect_kind;
 pub(crate) use cast::{
     apply_direct_heal, apply_effect, apply_item_auras, apply_spell_auras, aura_apply, begin_cast,
     begin_cast_with_admission, begin_item_cast, cast_triggered, charge_spell_cost,

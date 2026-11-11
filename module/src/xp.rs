@@ -381,17 +381,17 @@ pub(crate) fn sweep_expired(ctx: &ReducerContext) {
 #[cfg(test)]
 mod tests {
     use super::{
-        accrue_rested_on_login, explore_base_xp, explore_xp, max_health_for_level,
-        progression_after_award, rank_xp_multiplier, rest_bonus, rest_pool_after, split_kill_xp,
-        xp_for_kill, xp_to_next_level, XpProgression, REST_EIGHT_HOURS_MICROS,
+        accrue_rested_on_login, explore_xp, max_health_for_level, progression_after_award,
+        rank_xp_multiplier, rest_bonus, rest_pool_after, split_kill_xp, xp_for_kill,
+        xp_to_next_level, XpProgression, REST_EIGHT_HOURS_MICROS,
     };
 
     #[test]
     fn explore_xp_scales_off_area_level_and_caps() {
         assert_eq!(explore_xp(10, 10), 95);
         assert_eq!(explore_xp(10, 12), 95);
-        assert_eq!(explore_xp(20, 10), explore_base_xp(15));
-        assert_eq!(explore_xp(10, 16), 95 * 95 / 100);
+        assert_eq!(explore_xp(20, 10), 120);
+        assert_eq!(explore_xp(10, 16), 90);
         assert_eq!(explore_xp(2, 30), 0);
         assert_eq!(explore_xp(10, 60), 0);
         assert_eq!(explore_xp(0, 10), 0);

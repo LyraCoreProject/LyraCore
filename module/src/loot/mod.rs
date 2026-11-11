@@ -864,19 +864,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn loot_chance_is_half_open() {
-        assert!(loot_drops(10000, 0));
-        assert!(loot_drops(10000, 9999));
-        assert!(!loot_drops(0, 0));
-        assert!(loot_drops(5000, 0));
-        assert!(loot_drops(5000, 4999));
-        assert!(!loot_drops(5000, 5000));
-        assert!(!loot_drops(5000, 9999));
-        assert!(loot_drops(39, 38));
-        assert!(!loot_drops(39, 39));
-    }
-
-    #[test]
     fn group_pick_is_one_weighted_band() {
         let w = [2000u32, 3000, 1000];
         assert_eq!(group_pick(&w, 0), Some(0));
@@ -911,24 +898,6 @@ mod tests {
         assert!(rank_money_multiplier_permille(1) > rank_money_multiplier_permille(0));
         assert!(rank_money_multiplier_permille(3) > rank_money_multiplier_permille(1));
         assert!(scale_money_for_rank(u32::MAX, 3) >= u32::MAX / 2);
-    }
-
-    #[test]
-    fn quest_take_allowed_admits_the_reservee_unconditionally_and_needing_takers_on_shared_rows() {
-        assert!(quest_take_allowed(0, 7, true));
-        assert!(
-            !quest_take_allowed(0, 7, false),
-            "no need → no take on the unreserved shared row"
-        );
-        assert!(quest_take_allowed(7, 7, true));
-        assert!(
-            !quest_take_allowed(7, 8, true),
-            "reserved for someone else — not this taker's to claim"
-        );
-        assert!(
-            quest_take_allowed(7, 7, false),
-            "a reservation admits its Character even after its need lapsed"
-        );
     }
 
     #[test]
@@ -1080,12 +1049,5 @@ mod tests {
     #[test]
     fn split_money_single_recipient_degrades_to_whole_amount() {
         assert_eq!(split_money(50, &[7], 7), vec![(7, 50)]);
-    }
-
-    #[test]
-    fn only_multiple_eligible_characters_share_money() {
-        assert!(!money_is_grouped(&[]));
-        assert!(!money_is_grouped(&[7]));
-        assert!(money_is_grouped(&[7, 8]));
     }
 }

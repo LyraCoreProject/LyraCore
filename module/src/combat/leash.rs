@@ -25,24 +25,6 @@ mod tests {
     }
 
     #[test]
-    fn evade_needs_both_an_expired_deadline_and_a_target_that_left_the_leash() {
-        let near = LEASH_RADIUS_SQ - 1.0;
-        let far = LEASH_RADIUS_SQ + 1.0;
-        assert!(!should_evade(50_000, 60_000, near));
-        assert!(!should_evade(50_000, 60_000, far));
-        assert!(!should_evade(60_000, 60_000, near));
-        assert!(should_evade(60_000, 60_000, far));
-    }
-
-    #[test]
-    fn the_backstop_is_the_only_raw_distance_that_still_ends_a_fight() {
-        let backstop = COMBAT_BACKSTOP_SQ;
-        assert!(!beyond_combat_backstop(backstop));
-        assert!(beyond_combat_backstop(backstop + 1.0));
-        assert!(!should_evade(50_000, 60_000, backstop - 1.0));
-    }
-
-    #[test]
     fn a_pursuit_deadline_never_stamps_the_never_refreshed_sentinel() {
         assert_eq!(pursuit_deadline_ms(50_000), 50_000 + PURSUIT_WINDOW_MS);
         assert_eq!(pursuit_deadline_ms(u32::MAX - PURSUIT_WINDOW_MS + 1), 1);

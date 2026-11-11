@@ -330,8 +330,7 @@ fn fire_aura_procs(
     }
 }
 
-// vmangos fails a Proc that would grant Extra Attacks while the Carrier still holds some, so its
-// cooldown and charges stay untouched.
+// vmangos fails, without spending, a Proc granting Extra Attacks while the Carrier holds some.
 fn refuses_extra_attacks(ctx: &ReducerContext, row: &Aura) -> bool {
     row.eff_kind == A_PROC_TRIGGER
         && super::chance_on_hit::grants_extra_attacks(ctx, row.eff_p1.max(0) as u32)

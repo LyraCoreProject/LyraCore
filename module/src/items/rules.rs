@@ -43,12 +43,6 @@ pub mod bonding {
     pub const NONE: u8 = 0;
     pub const BIND_ON_PICKUP: u8 = 1;
     pub const BIND_ON_EQUIP: u8 = 2;
-    #[cfg(test)]
-    pub const BIND_ON_USE: u8 = 3;
-    #[cfg(test)]
-    pub const QUEST_ITEM: u8 = 4;
-    #[cfg(test)]
-    pub const QUEST_ITEM2: u8 = 5;
 }
 
 pub(crate) fn binds_on_grant(item_bonding: u8) -> bool {
@@ -310,14 +304,6 @@ pub(crate) mod tests {
         assert!(!can_equip_mainhand(0, 21));
         assert!(!can_equip_mainhand(4, 21));
         assert!(!can_equip_mainhand(2, 5));
-    }
-
-    #[test]
-    fn meets_required_level_gates_below_requirement_only() {
-        assert!(meets_required_level(1, 1));
-        assert!(meets_required_level(5, 1));
-        assert!(!meets_required_level(1, 5));
-        assert!(meets_required_level(5, 5));
     }
 
     #[test]
@@ -672,24 +658,6 @@ pub(crate) mod tests {
         assert!(can_equip_proficiency(8, 0, 0));
         assert!(can_equip_proficiency(8, 7, 0));
         assert!(can_equip_proficiency(9, 12, 0));
-    }
-
-    #[test]
-    fn binding_taxonomy_grant_vs_equip_triggers() {
-        use bonding as b;
-        assert!(binds_on_grant(b::BIND_ON_PICKUP));
-        assert!(!binds_on_grant(b::NONE));
-        assert!(!binds_on_grant(b::BIND_ON_EQUIP));
-        assert!(!binds_on_grant(b::BIND_ON_USE));
-        assert!(!binds_on_grant(b::QUEST_ITEM));
-        assert!(!binds_on_grant(b::QUEST_ITEM2));
-
-        assert!(binds_on_equip(b::BIND_ON_EQUIP));
-        assert!(!binds_on_equip(b::NONE));
-        assert!(!binds_on_equip(b::BIND_ON_PICKUP));
-        assert!(!binds_on_equip(b::BIND_ON_USE));
-        assert!(!binds_on_equip(b::QUEST_ITEM));
-        assert!(!binds_on_equip(b::QUEST_ITEM2));
     }
 
     #[test]

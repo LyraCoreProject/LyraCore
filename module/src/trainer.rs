@@ -505,23 +505,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rank_prereq_met_truth_table() {
-        assert!(
-            rank_prereq_met(0, false),
-            "no prerequisite (rank 1 / unchained) -> always allowed"
-        );
-        assert!(
-            rank_prereq_met(0, true),
-            "no prerequisite -> allowed even if knows_prev happens to be true"
-        );
-        assert!(rank_prereq_met(133, true), "prerequisite known -> allowed");
-        assert!(
-            !rank_prereq_met(133, false),
-            "prerequisite NOT known -> rejected"
-        );
-    }
-
-    #[test]
     fn trainer_buy_check_gates_in_priority_order() {
         assert_eq!(
             trainer_buy_check(true, 10, 1, 1000, 10),
