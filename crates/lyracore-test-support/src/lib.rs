@@ -1,11 +1,13 @@
 mod rng;
 pub use rng::Rng;
 
+mod fixture_rows;
 mod module_wasm;
 mod reducer_connection;
 pub mod source_scan;
 mod subscription;
 
+pub use fixture_rows::Field;
 pub use module_wasm::{module_bytes, module_bytes_with_features};
 pub use reducer_connection::{ReducerConnection, ReducerRows};
 pub use subscription::TableSubscription;
@@ -185,6 +187,7 @@ pub struct Standalone {
     server: String,
     database: String,
     storage: Storage,
+    fixture_schemas: Mutex<BTreeMap<String, Arc<fixture_rows::FixtureSchema>>>,
 }
 
 impl Standalone {
@@ -249,6 +252,7 @@ impl Standalone {
             server,
             database: name,
             storage,
+            fixture_schemas: Mutex::new(BTreeMap::new()),
         };
         standalone.wait_for_server();
         drop(startup);
@@ -325,13 +329,45 @@ impl Standalone {
     }
 
     pub fn describe(&self) -> serde_json::Value {
+        self.describe_database(&self.database)
+    }
+
+    fn describe_database(&self, database: &str) -> serde_json::Value {
         let output = self
             .command()
-            .args(["describe", "-s", &self.server, "--json", &self.database])
+            .args(["describe", "-s", &self.server, "--json", database])
             .output()
             .expect("failed to describe the database");
         self.assert_ok(&output);
         serde_json::from_slice(&output.stdout).expect("the schema is not JSON")
+    }
+
+    /// Unnamed columns take their declared default or their type's zero; String values are quoted.
+    pub fn insert_row(&self, table: &str, fields: &[Field]) {
+        self.insert_rows(table, &[fields]);
+    }
+
+    pub fn insert_rows(&self, table: &str, rows: &[&[Field]]) {
+        self.insert_rows_database(&self.database, table, rows);
+    }
+
+    pub fn insert_row_database(&self, database: &str, table: &str, fields: &[Field]) {
+        self.insert_rows_database(database, table, &[fields]);
+    }
+
+    fn insert_rows_database(&self, database: &str, table: &str, rows: &[&[Field]]) {
+        let schema = Arc::clone(
+            self.fixture_schemas
+                .lock()
+                .unwrap()
+                .entry(database.to_owned())
+                .or_insert_with(|| {
+                    Arc::new(fixture_rows::FixtureSchema::from_describe(
+                        &self.describe_database(database),
+                    ))
+                }),
+        );
+        self.assert_ok(&self.sql_database_exact(database, &schema.insert(table, rows)));
     }
 
     pub fn call(&self, reducer: &str, args: &[&str]) -> Output {
@@ -508,6 +544,7 @@ impl Standalone {
             command.args(["-y", database]);
             let output = command.output().expect("failed to start spacetime publish");
             if output.status.success() {
+                self.fixture_schemas.get_mut().unwrap().remove(database);
                 self.published = true;
                 self.published_databases.insert(database.to_owned());
                 return;
