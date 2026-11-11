@@ -72,7 +72,6 @@ pub(super) fn begin(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) fn begin_character(
     ctx: &ReducerContext,
     connection: &NativeWorldConnection,
@@ -336,7 +335,6 @@ fn move_is_current(
 }
 
 #[reducer]
-#[allow(clippy::too_many_arguments)]
 pub fn idc_native_transfer_moved(
     ctx: &ReducerContext,
     world: Identity,

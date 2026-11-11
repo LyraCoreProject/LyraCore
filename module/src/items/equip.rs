@@ -236,6 +236,6 @@ fn cooldown(ctx: &ReducerContext, item: &ItemInstance) {
                 }
             }
         }
-        crate::native::item_equip_cooldown(ctx, item.owner_guid, item.guid, spell_id);
+        crate::native::inventory::item_equip_cooldown(ctx, item.owner_guid, item.guid, spell_id);
     }
 }

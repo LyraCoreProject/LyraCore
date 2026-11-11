@@ -1,134 +1,84 @@
 use lyracore_protocol::codec;
 
-mod addon;
+pub(crate) mod addon;
 pub(crate) mod admission;
-mod auction;
-mod aura;
-mod book;
+pub(crate) mod auction;
+pub(crate) mod aura;
+pub(crate) mod book;
 mod cast;
-mod channel;
+pub(crate) mod channel;
 mod character;
-mod character_names;
-pub(crate) use character_names::account_has_room as realm_account_has_room;
-mod chat;
+pub(crate) mod character_names;
+pub(crate) mod chat;
 mod chat_flood;
-mod combat;
-mod creature;
-mod death;
+pub(crate) mod combat;
+pub(crate) mod creature;
+pub(crate) mod death;
 #[cfg(feature = "conformance_test_fixture")]
-mod debug;
-pub(crate) mod realm_auction;
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use debug::record_birth as record_conformance_birth;
+pub(crate) mod debug;
 pub(crate) mod directory;
-mod duel;
-mod economy;
-mod environment;
+pub(crate) mod duel;
+pub(crate) mod economy;
+pub(crate) mod environment;
 mod gossip;
-mod guild;
+pub(crate) mod guild;
 mod handoff;
-mod realm_communication;
-mod realm_guild;
-pub(crate) mod realm_mail;
-pub(crate) mod realm_party;
-pub(crate) mod realm_petition;
-mod realm_shard;
-pub(crate) use realm_shard::account_changed;
-mod instance;
+pub(crate) mod instance;
 pub(crate) mod instance_allocation;
 mod instance_reset;
 pub(crate) mod instance_shard;
-pub(crate) use instance_shard::{
-    sweep_delete_game_instance_entry, sweep_transfer_game_instance_entry,
-};
-mod inventory;
+pub(crate) mod inventory;
 pub(crate) mod logon;
 mod loot;
-mod mail;
+pub(crate) mod mail;
 mod meeting_stone;
 pub(crate) mod member_stats;
-mod motion_permit;
-mod object;
+pub(crate) mod motion_permit;
+pub(crate) mod object;
 mod package_actor;
 pub(crate) mod package_creation;
 pub(crate) mod package_guild;
 pub(crate) mod package_relocation;
-mod party;
-mod pet;
-mod petition;
-mod progression;
-mod query;
-mod quest;
-mod reputation;
+pub(crate) mod party;
+pub(crate) mod pet;
+pub(crate) mod petition;
+pub(crate) mod progression;
+pub(crate) mod query;
+pub(crate) mod quest;
+pub(crate) mod realm_auction;
+mod realm_communication;
+pub(crate) mod realm_guild;
+pub(crate) mod realm_mail;
+pub(crate) mod realm_party;
+pub(crate) mod realm_petition;
+pub(crate) mod realm_shard;
+pub(crate) mod reputation;
 mod rollback;
 mod social;
-mod spell;
-mod taxi;
-mod teleport;
-mod trade;
+pub(crate) mod spell;
+pub(crate) mod taxi;
+pub(crate) mod teleport;
+pub(crate) mod trade;
 mod trainer;
 mod transfer;
 mod transport;
 mod unavailable;
 mod view;
-mod visibility;
+pub(crate) mod visibility;
 mod who;
 mod world;
-pub(crate) use addon::appeared as addon_message;
-pub(crate) use auction::notice as auction_notice;
-pub(crate) use aura::changed as aura_changed;
-pub(crate) use book::{
-    forgotten as spell_forgotten, learned as spell_learned, skill_changed, talent_points,
+
+// `module/build.rs` names `character_owned!` and `game_tick_pass!` markers by their top-level module.
+pub(crate) use instance_shard::{
+    sweep_delete_game_instance_entry, sweep_transfer_game_instance_entry,
 };
-pub(crate) use channel::notice as channel_notice;
-pub(crate) use chat::{creature_sound, realm_chat_line, speech, system_message, text_emote};
-pub(crate) use combat::{combat_event, combo_points_changed, engagement_changed};
-pub(crate) use creature::{
-    changed as creature_spline_changed, equipment_changed as creature_equipment_changed,
-};
-pub(crate) use death::{
-    corpse_changed, corpse_created, corpse_removed, resurrect_offered, self_resurrection_changed,
-};
-pub(crate) use duel::event as duel_event;
-pub(crate) use economy::{
-    buyback_destroyed, buyback_removed, purchase_started as vendor_purchase_started,
-};
-pub(crate) use environment::{breath_event, fall_damage, weather_changed};
-pub(crate) use guild::{event as guild_event, membership_changed as guild_membership_changed};
-pub(crate) use instance::removal_changed as instance_removal_changed;
-pub(crate) use inventory::changed as item_changed;
-pub(crate) use inventory::item_equip_cooldown;
-pub(crate) use inventory::temporary_enchantment_changed;
-pub(crate) use inventory::{item_purchase_started, item_purchased, item_restored, item_sold};
-pub(crate) use mail::arrived as mail_arrived;
 pub(crate) use member_stats::{
     sweep_delete_game_native_member_stats, sweep_transfer_game_native_member_stats,
 };
 pub(crate) use motion_permit::{
-    refresh_character as refresh_motion_permit, sweep_delete_game_native_motion_permit,
-    sweep_transfer_game_native_motion_permit,
+    sweep_delete_game_native_motion_permit, sweep_transfer_game_native_motion_permit,
 };
-pub(crate) use object::changed as gameobject_changed;
-pub(crate) use party::roster as party_roster;
-pub(crate) use pet::changed as hunter_pet_changed;
-pub(crate) use petition::charter_opened as guild_charter_opened;
-pub(crate) use progression::{explored, levelup, xp};
-pub(crate) use query::{broadcast_creature_query, broadcast_item_query};
-pub(crate) use quest::{changed as quest_changed, event_credit as quest_event_credit};
-pub(crate) use realm_guild::member_changed as guild_member_changed;
-pub(crate) use reputation::{changed as reputation_changed, watched as watched_faction};
-pub(crate) use spell::{cast_event, spell_cooldown, spell_impact};
-pub(crate) use taxi::{
-    aborted as taxi_aborted, landed as taxi_landed, resumed as taxi_resumed,
-    spline_changed as taxi_spline_changed,
-};
-pub(crate) use teleport::{
-    begin as begin_teleport, changed as teleport_changed, expire_near_teleports_pass,
-};
-pub(crate) use trade::event as trade_event;
-pub(crate) use visibility::{
-    entity_changed, grant_added, grant_removed, loot_flags, motion, with_shared_creates,
-};
+pub(crate) use teleport::expire_near_teleports_pass;
 
 pub(crate) fn is_world_porting(ctx: &ReducerContext, guid: u64) -> bool {
     world_session(ctx, guid)

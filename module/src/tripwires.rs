@@ -2038,6 +2038,10 @@ mod creature_teardown_tripwire {
     const CLEARED: &[(&str, &[(&str, &str)])] = &[
         ("game_creature_spline", &[]),
         (
+            "game_encounter_equip",
+            &[("module/src/encounter.rs", "forget_equipment")],
+        ),
+        (
             "game_entity_motion",
             &[("module/src/world/simulation.rs", "delete")],
         ),
@@ -2220,16 +2224,10 @@ mod creature_teardown_tripwire {
         ),
     ];
 
-    const KEPT: &[(&str, &str)] = &[
-        (
-            "game_encounter_equip",
-            "encounter virtual equipment, removed by encounter reset",
-        ),
-        (
-            "game_creature_ai_reset_deferral",
-            "death dispatch marker, removed when the dispatch finishes",
-        ),
-    ];
+    const KEPT: &[(&str, &str)] = &[(
+        "game_creature_ai_reset_deferral",
+        "death dispatch marker, removed when the dispatch finishes",
+    )];
 
     fn body<'a>(code: &'a str, function: &str) -> Option<&'a str> {
         let start = code.find(&format!("fn {function}("))?;

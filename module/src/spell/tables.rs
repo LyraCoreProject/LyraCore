@@ -388,7 +388,7 @@ impl Aura {
         if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
             crate::aoi::refresh_entity(ctx, aura.target_guid);
         }
-        crate::native::aura_changed(ctx, None, Some(&aura));
+        crate::native::aura::changed(ctx, None, Some(&aura));
         aura
     }
 
@@ -408,7 +408,7 @@ impl Aura {
         {
             crate::aoi::refresh_entity(ctx, aura.target_guid);
         }
-        crate::native::aura_changed(ctx, previous.as_ref(), Some(&aura));
+        crate::native::aura::changed(ctx, previous.as_ref(), Some(&aura));
         aura
     }
 
@@ -436,7 +436,7 @@ impl Aura {
             if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
                 crate::aoi::refresh_entity(ctx, aura.target_guid);
             }
-            crate::native::aura_changed(ctx, Some(aura), None);
+            crate::native::aura::changed(ctx, Some(aura), None);
         }
         previous
     }
@@ -653,14 +653,14 @@ pub const CAST_MISS_PARRY: u8 = 4;
 
 impl SpellImpactEvent {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
-        crate::native::spell_impact(ctx, &row);
+        crate::native::spell::spell_impact(ctx, &row);
         ctx.db.game_spell_impact_event_live().insert(row)
     }
 }
 
 impl SpellCastEvent {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
-        crate::native::cast_event(ctx, &row);
+        crate::native::spell::cast_event(ctx, &row);
         ctx.db.game_spell_cast_event_live().insert(row)
     }
 
@@ -853,7 +853,7 @@ impl DynamicObject {
         self.cell = self.position_cell();
         let object = ctx.db.game_dynamic_object().insert(self);
         #[cfg(feature = "conformance_test_fixture")]
-        crate::native::record_conformance_birth(
+        crate::native::debug::record_birth(
             ctx,
             object.guid,
             object.map_id,
@@ -979,7 +979,7 @@ impl ResurrectRequest {
         let requests = ctx.db.game_resurrect_request();
         requests.target_guid().delete(self.target_guid);
         let row = requests.insert(self);
-        crate::native::resurrect_offered(ctx, &row);
+        crate::native::death::resurrect_offered(ctx, &row);
     }
 
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {
@@ -1007,6 +1007,6 @@ impl SelfResurrectOption {
                 spell_id,
             });
         }
-        crate::native::self_resurrection_changed(ctx, guid, spell_id.unwrap_or(0));
+        crate::native::death::self_resurrection_changed(ctx, guid, spell_id.unwrap_or(0));
     }
 }

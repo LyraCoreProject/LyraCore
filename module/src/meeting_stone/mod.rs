@@ -606,7 +606,7 @@ fn stone_add(
         GroupAction::StoneAdd(plan),
     )
     .map_err(|error| error.to_string())?;
-    crate::native::party_roster(ctx, joiner.character_guid, true);
+    crate::native::party::roster(ctx, joiner.character_guid, true);
     crate::group::group_of(ctx, joiner.character_guid)
         .map(|member| member.group_id)
         .ok_or_else(|| format!("stone add left {} outside a group", joiner.character_guid))

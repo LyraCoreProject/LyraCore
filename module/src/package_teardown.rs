@@ -18,7 +18,6 @@ pub struct InstalledPackage {
     pub characters: Option<fn(&ReducerContext) -> Vec<u64>>,
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn runs(ctx: &ReducerContext, package: &str) -> bool {
     let torn_down = ctx.db.game_package_teardown();
     torn_down.count() == 0 || torn_down.package_name().find(package.to_string()).is_none()

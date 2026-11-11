@@ -24,7 +24,7 @@ pub(crate) fn changed(
     }
 }
 
-pub(crate) fn watched(ctx: &ReducerContext, guid: u64, index: i32) {
+pub(crate) fn watched_faction(ctx: &ReducerContext, guid: u64, index: i32) {
     super::send_to_character(
         ctx,
         guid,

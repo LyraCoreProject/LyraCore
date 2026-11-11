@@ -667,11 +667,11 @@ impl ItemStoragePlan {
             .iter()
             .find(|item| item.slot == last_slot)
             .expect("the purchase plan has a final destination");
-        crate::native::item_purchase_started(ctx, purchased, count);
+        crate::native::inventory::item_purchase_started(ctx, purchased, count);
         self.commit_planned(ctx, None, false)?;
         let item = super::item_in_slot(ctx, character_guid, last_slot)
             .expect("the purchase plan committed its final destination");
-        crate::native::item_purchased(ctx, &item, count);
+        crate::native::inventory::item_purchased(ctx, &item, count);
         if last_slot < 19 {
             crate::spell::recompute_vitals(ctx, character_guid);
             crate::spell::recompute_sheet(ctx, character_guid);

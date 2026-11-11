@@ -182,7 +182,6 @@ pub(crate) fn action_gate(
     admit_sessionless_character(ctx, character_guid, TransferIntent::Refuses)
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn movement_gate(
     ctx: &ReducerContext,
     character_guid: u64,

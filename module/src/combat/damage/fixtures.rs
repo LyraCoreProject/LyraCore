@@ -167,7 +167,6 @@ pub fn debug_respawn_lethal_damage_floor_fixture(
 }
 
 #[spacetimedb::reducer]
-#[allow(clippy::too_many_arguments)]
 pub fn debug_verify_lethal_damage_floor_fixture(
     ctx: &ReducerContext,
     creature_guid: u64,

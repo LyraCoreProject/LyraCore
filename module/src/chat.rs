@@ -164,7 +164,7 @@ fn write_chat_event(
         created_at: crate::time::now(ctx),
         target_guid,
     });
-    crate::native::speech(ctx, &sender, &event);
+    crate::native::chat::speech(ctx, &sender, &event);
     Ok(())
 }
 
@@ -217,7 +217,7 @@ pub(crate) fn apply_send_emote(
         grid_x,
         grid_y,
     });
-    crate::native::text_emote(ctx, &sender, &event);
+    crate::native::chat::text_emote(ctx, &sender, &event);
     if sender.is_player() && target_guid != 0 {
         crate::creatures::eventai_on_receive_emote(ctx, target_guid, sender.guid, text_emote);
     }
@@ -235,7 +235,6 @@ pub struct SystemMessageEvent {
     pub created_at: Timestamp,
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn emit_system_message(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -245,7 +244,7 @@ pub(crate) fn emit_system_message(
         .map(|character| (character.owner_identity, character.online));
     let event = prepare_system_message(character_guid, recipient, &message, crate::time::now(ctx))?;
     let event = ctx.db.game_system_message_event().insert(event);
-    crate::native::system_message(ctx, &event);
+    crate::native::chat::system_message(ctx, &event);
     Ok(())
 }
 

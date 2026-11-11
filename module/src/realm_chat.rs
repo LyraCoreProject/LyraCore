@@ -240,7 +240,7 @@ pub(crate) fn whisper_lines(
 }
 
 pub(crate) fn emit(ctx: &ReducerContext, line: RealmChatLine) {
-    crate::native::realm_chat_line(ctx, &line);
+    crate::native::chat::realm_chat_line(ctx, &line);
     crate::native::realm_party::relay_chat(ctx, &line);
     ctx.db.game_realm_chat_event().insert(RealmChatEvent {
         id: 0,

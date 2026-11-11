@@ -67,7 +67,7 @@ pub(crate) fn talent_points(ctx: &ReducerContext, guid: u64, level: u32) {
     );
 }
 
-pub(crate) fn learned(ctx: &ReducerContext, guid: u64, spell: u32) {
+pub(crate) fn spell_learned(ctx: &ReducerContext, guid: u64, spell: u32) {
     if !super::has_world_session(ctx, guid) {
         return;
     }
@@ -100,7 +100,7 @@ pub(crate) fn learned(ctx: &ReducerContext, guid: u64, spell: u32) {
     proficiency(ctx, guid);
 }
 
-pub(crate) fn forgotten(ctx: &ReducerContext, guid: u64, spell: u32) {
+pub(crate) fn spell_forgotten(ctx: &ReducerContext, guid: u64, spell: u32) {
     // SMSG_REMOVED_SPELL uses a u16 spell id in build 5875.
     if super::send_raw_to_character(
         ctx,

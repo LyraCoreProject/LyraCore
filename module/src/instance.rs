@@ -5,9 +5,9 @@ use std::collections::{HashMap, HashSet};
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::{
-    game_config, game_corpse, game_creature_move_schedule, game_creature_spawn,
-    game_creature_template, game_creature_waypoint, game_encounter_spawn, game_gameobject,
-    game_gameobject_template, game_group, game_group_member, game_world_entity,
+    game_corpse, game_creature_move_schedule, game_creature_spawn, game_creature_template,
+    game_creature_waypoint, game_encounter_spawn, game_gameobject, game_gameobject_template,
+    game_group, game_group_member, game_world_entity,
 };
 
 pub(crate) use lyracore_shared::instance::is_dungeon_map;
@@ -224,7 +224,7 @@ pub struct InstanceRemoval {
 impl InstanceRemoval {
     pub(crate) fn insert(self, ctx: &ReducerContext) {
         let row = ctx.db.game_instance_removal().insert(self);
-        crate::native::instance_removal_changed(ctx, row.character_guid, Some(&row));
+        crate::native::instance::removal_changed(ctx, row.character_guid, Some(&row));
     }
 
     pub(crate) fn delete(ctx: &ReducerContext, character_guid: u64) {
@@ -234,7 +234,7 @@ impl InstanceRemoval {
             .character_guid()
             .delete(character_guid)
         {
-            crate::native::instance_removal_changed(ctx, character_guid, None);
+            crate::native::instance::removal_changed(ctx, character_guid, None);
         }
     }
 }
@@ -521,12 +521,7 @@ fn adopt_instance_for_party(ctx: &ReducerContext, instance_id: u64, party_id: u6
 }
 
 pub(crate) fn hosts_instance_populations(ctx: &ReducerContext) -> bool {
-    ctx.db
-        .game_config()
-        .id()
-        .find(0)
-        .map(|c| c.hosts_instances)
-        .unwrap_or(true)
+    crate::config::server_config(ctx).hosts_instances
 }
 
 /// Creates the Instance and, on a database that hosts populations, copies its population;

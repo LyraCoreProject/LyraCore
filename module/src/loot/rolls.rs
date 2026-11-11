@@ -239,7 +239,6 @@ pub(crate) fn apply_group_loot_rules(ctx: &ReducerContext, corpse_guid: u64, gro
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn insert_roll_rows(
     ctx: &ReducerContext,
     corpse_guid: u64,

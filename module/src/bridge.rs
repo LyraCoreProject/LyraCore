@@ -209,7 +209,7 @@ fn send_to_identity(ctx: &ReducerContext, recipient_identity: Identity, cmd: &st
         payload: payload.to_string(),
         created_at: crate::time::now(ctx),
     });
-    crate::native::addon_message(ctx, &row);
+    crate::native::addon::appeared(ctx, &row);
 }
 
 #[cfg(not(feature = "debug_reducers"))]

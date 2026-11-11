@@ -276,23 +276,20 @@ pub fn debug_assert_floor_snap(
     let snapped = crate::terrain::snap_z(ctx, map_id, 0, ORIGIN.0, ORIGIN.1, TERRAIN_FALLBACK);
     let ground = crate::terrain::ground_z(ctx, map_id, ORIGIN.0, ORIGIN.1);
 
-    let spawn_max = ctx
-        .db
-        .game_creature_spawn()
-        .iter()
-        .filter(|s| s.entry == creature_entry)
-        .map(|s| s.guid & 0x00FF_FFFF)
-        .max()
-        .unwrap_or(0);
-    let entity_max = ctx
-        .db
-        .game_world_entity()
-        .iter()
-        .filter(|e| e.entry == creature_entry && !e.is_player())
-        .map(|e| e.guid & 0x00FF_FFFF)
-        .max()
-        .unwrap_or(0);
-    let next_low = spawn_max.max(entity_max) + 1;
+    let next_low = crate::creatures::population::next_spawn_low(
+        ctx.db
+            .game_creature_spawn()
+            .iter()
+            .filter(|s| s.entry == creature_entry)
+            .map(|s| s.guid & 0x00FF_FFFF)
+            .chain(
+                ctx.db
+                    .game_world_entity()
+                    .iter()
+                    .filter(|e| e.entry == creature_entry && !e.is_player())
+                    .map(|e| e.guid & 0x00FF_FFFF),
+            ),
+    );
     let new_guid = packed_creature_spawn_guid(creature_entry, next_low as u32);
     let mut spawned_entity_guid = None;
     let spawn_result: Result<(), String> = (|| {

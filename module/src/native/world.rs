@@ -67,6 +67,7 @@ pub(super) fn enter_character(
     if character.account_id != account_id || account.banned {
         return Err("Account cannot log in this Character".into());
     }
+    // A reaped Instance sends the Character to a map this Shard may not own.
     if super::instance_shard::return_from_reaped(ctx, &connection, guid, entry, teleport_counter)? {
         return Ok(());
     }
@@ -77,6 +78,7 @@ pub(super) fn enter_character(
         .first_login
         .then(|| codec::opening_cinematic(character.race))
         .flatten();
+    // `game_native_player.account_id` is unique: an Account holds one World Session.
     if let Some(previous) = ctx.db.game_native_player().account_id().find(account_id) {
         super::disconnect(ctx, previous.connection_id);
     }
@@ -212,6 +214,8 @@ pub(super) fn enter_character(
         teleport_started_micros: 0,
         teleport_origin: None,
     });
+
+    // Relays find the Character through its `game_native_player` row, so they follow its insert.
     for grant in grants {
         super::visibility::create(ctx, connection.connection_id, &grant, false)?;
     }
@@ -221,21 +225,33 @@ pub(super) fn enter_character(
     if carrier.is_none() {
         crate::transport::rejoin(ctx, guid);
     }
-    super::economy::replay_buyback(ctx, connection.connection_id, guid)?;
-    super::progression::replay_exploration(ctx, connection.connection_id, guid);
-    super::combat::replay_combo_points(ctx, connection.connection_id, guid);
+    replay_features(ctx, connection.connection_id, account_id, guid, entry)?;
+    if let Some(sequence) = cinematic {
+        let (opcode, body) = codec::build_trigger_cinematic(sequence);
+        super::send_raw(ctx, connection.connection_id, opcode, body, false);
+    }
+    Ok(())
+}
+
+/// Feature state a Character sees on world entry; the order of these steps is free.
+fn replay_features(
+    ctx: &ReducerContext,
+    connection_id: ConnectionId,
+    account_id: u64,
+    guid: u64,
+    entry: crate::character::WorldEntry,
+) -> Result<(), String> {
+    super::economy::replay_buyback(ctx, connection_id, guid)?;
+    super::progression::replay_exploration(ctx, connection_id, guid);
+    super::combat::replay_combo_points(ctx, connection_id, guid);
     super::death::replay(ctx, guid);
     super::instance::replay(ctx, guid);
-    super::petition::replay(ctx, guid, connection.connection_id);
+    super::petition::replay(ctx, guid, connection_id);
     super::chat::replay_system_messages(ctx, guid);
     super::social::enter(ctx, account_id, guid, entry);
     super::party::enter(ctx, guid, entry);
     if entry == crate::character::WorldEntry::Login {
         super::guild::presence(ctx, guid, true);
-    }
-    if let Some(sequence) = cinematic {
-        let (opcode, body) = codec::build_trigger_cinematic(sequence);
-        super::send_raw(ctx, connection.connection_id, opcode, body, false);
     }
     Ok(())
 }
@@ -286,28 +302,27 @@ pub(super) fn leave(
     departure: CharacterDeparture,
 ) {
     let players = ctx.db.game_native_player();
-    if let Some(player) = players.connection_id().find(connection_id) {
-        super::realm_party::presence(ctx, player.character_guid, false);
-        super::clear_audience(ctx, connection_id);
-        super::member_stats::stop(ctx, connection_id);
-        super::teleport::restore_origin(ctx, player.character_guid, player.teleport_origin);
-        players.connection_id().delete(connection_id);
-        super::motion_permit::withdraw(ctx, connection_id);
-        crate::online::world_session_ended(ctx, player.character_guid);
-        super::social::presence(ctx, player.character_guid, false);
-        super::guild::presence(ctx, player.character_guid, false);
-        if let Some(entity) = ctx
-            .db
-            .game_world_entity()
-            .guid()
-            .find(player.character_guid)
-        {
-            crate::character::remove_live_character(ctx, entity, departure);
-        } else {
-            crate::character::remove_loading_character(ctx, player.character_guid, departure);
-        }
-        super::party::roster(ctx, player.character_guid, true);
+    let Some(player) = players.connection_id().find(connection_id) else {
+        return;
+    };
+    let guid = player.character_guid;
+    super::realm_party::presence(ctx, guid, false);
+    super::clear_audience(ctx, connection_id);
+    super::member_stats::stop(ctx, connection_id);
+    super::teleport::restore_origin(ctx, guid, player.teleport_origin);
+    players.connection_id().delete(connection_id);
+    super::motion_permit::withdraw(ctx, connection_id);
+    crate::online::world_session_ended(ctx, guid);
+    super::social::presence(ctx, guid, false);
+    super::guild::presence(ctx, guid, false);
+
+    if let Some(entity) = ctx.db.game_world_entity().guid().find(guid) {
+        crate::character::remove_live_character(ctx, entity, departure);
+    } else {
+        crate::character::remove_loading_character(ctx, guid, departure);
     }
+    // The roster counts a member online while its world entity exists.
+    super::party::roster(ctx, guid, true);
 }
 
 #[allow(

@@ -171,7 +171,7 @@ pub(crate) fn publish_hunter_pet_protocol(
     } else {
         table.insert(row)
     };
-    crate::native::hunter_pet_changed(ctx, previous.as_ref(), &row);
+    crate::native::pet::changed(ctx, previous.as_ref(), &row);
 }
 
 pub(crate) fn live_pet_kind(ctx: &ReducerContext, pet_guid: u64) -> PetKind {

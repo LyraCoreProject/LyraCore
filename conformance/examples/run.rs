@@ -322,12 +322,8 @@ fn main() -> Result<()> {
         result.core_commit == String::from_utf8(output.stdout)?.trim(),
         "tier 1 result is from another commit"
     );
-    let pin = include_str!("../../.wire-harness-rev")
-        .split_whitespace()
-        .last()
-        .context("harness pin")?;
     ensure!(
-        result.harness_revision == pin,
+        result.harness_revision == lyracore_conformance::harness_pin().revision,
         "tier 1 result uses another harness revision"
     );
     let [entry] = <[ScenarioResult; 1]>::try_from(result.scenarios)

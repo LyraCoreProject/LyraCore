@@ -119,9 +119,8 @@ Do not send a packet with `send` and then return `Err`, because the rollback del
 
 **Relay.** The Gateway subscribed to a Relay table and encoded each new row. Now the Module code that
 inserts the row also calls the native Relay function. `module/src/breath_relay.rs` inserts the row,
-then calls `crate::native::breath_event`. Put a new Relay function in a file under
-`module/src/native/` and re-export it with `pub(crate) use` in `native/mod.rs`, as `breath_event`
-is. The function selects the recipient and builds the packet with the protocol crate. For one
+then calls `crate::native::environment::breath_event`. Put a new Relay function in its family's
+file under `module/src/native/` and call it by that path. The function selects the recipient and builds the packet with the protocol crate. For one
 Character, use `send_to_character` or `send_raw_to_character` in `native/mod.rs`. For nearby
 observers, use `visibility::broadcast`.
 

@@ -159,7 +159,7 @@ pub(crate) fn expire_temporary_enchantment(ctx: &ReducerContext, row: TemporaryE
 }
 
 fn changed(ctx: &ReducerContext, item: &ItemInstance) {
-    crate::native::temporary_enchantment_changed(ctx, item);
+    crate::native::inventory::temporary_enchantment_changed(ctx, item);
     if item.slot <= super::equip_slot::END {
         crate::spell::recompute_vitals(ctx, item.owner_guid);
         crate::spell::recompute_sheet(ctx, item.owner_guid);

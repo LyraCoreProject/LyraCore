@@ -28,19 +28,19 @@ impl PlayerReputation {
                 .find(row.faction_id)
                 .map_or(0, |faction| faction.base_standing.clamp(REP_MIN, REP_MAX));
             row.at_war = false;
-            crate::native::reputation_changed(ctx, None, &row);
+            crate::native::reputation::changed(ctx, None, &row);
             ctx.db.game_player_reputation().id().delete(id);
         }
     }
 
     fn insert(ctx: &ReducerContext, row: Self) {
-        crate::native::reputation_changed(ctx, None, &row);
+        crate::native::reputation::changed(ctx, None, &row);
         ctx.db.game_player_reputation().insert(row);
     }
 
     fn update(self, ctx: &ReducerContext) {
         let previous = ctx.db.game_player_reputation().id().find(self.id);
-        crate::native::reputation_changed(ctx, previous.as_ref(), &self);
+        crate::native::reputation::changed(ctx, previous.as_ref(), &self);
         ctx.db.game_player_reputation().id().update(self);
     }
 }
@@ -248,7 +248,7 @@ pub(crate) fn apply_set_watched_faction(
         .ok_or_else(|| "Character not found".to_string())?;
     character.watched_faction_index = reputation_index;
     characters.guid().update(character);
-    crate::native::watched_faction(ctx, character_guid, reputation_index);
+    crate::native::reputation::watched_faction(ctx, character_guid, reputation_index);
     Ok(())
 }
 

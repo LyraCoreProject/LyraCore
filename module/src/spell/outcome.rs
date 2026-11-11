@@ -171,7 +171,6 @@ pub enum CastFinish {
     Expired,
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn cast_readiness(
     ctx: &ReducerContext,
     caster_guid: u64,
@@ -207,7 +206,6 @@ pub(crate) fn cast_readiness(
     .map_err(Into::into)
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn request_cast(
     ctx: &ReducerContext,
     caster_guid: u64,

@@ -286,7 +286,7 @@ pub(crate) fn apply_buyback_item(
             super::temporary_enchantment::resume(ctx, &item, paused);
         }
     } else {
-        crate::native::buyback_destroyed(ctx, &row);
+        crate::native::economy::buyback_destroyed(ctx, &row);
         crate::mail_text::drop_letter_text(ctx, row.item.item_text_id);
     }
     Ok(())
@@ -460,7 +460,7 @@ pub(crate) fn apply_buy_item_to(
         plan.grant(ctx, &tmpl, total_count, false, None)?;
         None
     };
-    crate::native::vendor_purchase_started(ctx, character_guid, vendor_guid, item_entry, lots);
+    crate::native::economy::purchase_started(ctx, character_guid, vendor_guid, item_entry, lots);
     // A commit failure must roll back payment, stock debit and the queued reply.
     character.money = character.money.saturating_sub(cost);
     character.update(ctx);

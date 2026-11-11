@@ -254,7 +254,7 @@ fn push_event(
             .map(|character| character.name)
             .unwrap_or_default(),
     };
-    crate::native::duel_event(ctx, &event);
+    crate::native::duel::event(ctx, &event);
 }
 
 fn push_both(ctx: &ReducerContext, duel: &Duel, kind: u8) {

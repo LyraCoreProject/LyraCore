@@ -1025,7 +1025,6 @@ pub fn import_character_blob(
 }
 
 #[reducer]
-#[allow(clippy::too_many_arguments)]
 pub fn import_player_character_blob(
     ctx: &ReducerContext,
     transfer_id: u64,

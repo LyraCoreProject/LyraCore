@@ -43,7 +43,6 @@ impl AreaTriggerRoute {
         coordinates.into_iter().all(f32::is_finite) && self.volume.valid()
     }
 
-    #[cfg_attr(not(has_packages), allow(dead_code))]
     pub(crate) fn contains(self, x: f32, y: f32, z: f32) -> bool {
         self.valid()
             && self
@@ -110,7 +109,6 @@ impl AreaTriggerVolume {
     }
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn area_trigger_route(
     ctx: &ReducerContext,
     trigger_id: u32,

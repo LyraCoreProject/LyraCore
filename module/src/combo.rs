@@ -133,12 +133,12 @@ pub(crate) fn add_combo_point(ctx: &ReducerContext, owner_guid: u64, target_guid
         target_guid,
         points,
     });
-    crate::native::combo_points_changed(ctx, owner_guid, target_guid, points);
+    crate::native::combat::combo_points_changed(ctx, owner_guid, target_guid, points);
 }
 
 pub(crate) fn spend_combo(ctx: &ReducerContext, owner_guid: u64) {
     if let Some(target_guid) = delete_rows(ctx, owner_guid) {
-        crate::native::combo_points_changed(ctx, owner_guid, target_guid, 0);
+        crate::native::combat::combo_points_changed(ctx, owner_guid, target_guid, 0);
     }
 }
 

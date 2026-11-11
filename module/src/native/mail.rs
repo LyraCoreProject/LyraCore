@@ -239,12 +239,14 @@ fn send_letter(
     core::apply_send(
         ctx,
         sender_guid,
-        recipient.0,
-        request.subject,
-        request.body,
-        request.money.as_int(),
-        rules::cod_at_send(request.cash_on_delivery_amount, request.item.guid() != 0),
-        request.item.guid(),
+        core::OutgoingMail {
+            recipient_guid: recipient.0,
+            subject: request.subject,
+            body: request.body,
+            money: request.money.as_int(),
+            cod: rules::cod_at_send(request.cash_on_delivery_amount, request.item.guid() != 0),
+            item_guid: request.item.guid(),
+        },
     )
     .map_err(|refusal| match refusal {
         MailRefusal::NotEnoughMoney => MailResult::ErrNotEnoughMoney,

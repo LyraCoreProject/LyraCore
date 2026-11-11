@@ -303,7 +303,7 @@ impl CharacterQuest {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
         let slot = set_quest_log_entry(ctx, row.character_guid, row.quest_entry, !row.rewarded);
         let row = ctx.db.game_character_quest().insert(row);
-        crate::native::quest_changed(ctx, None, Some(&row), slot);
+        crate::native::quest::changed(ctx, None, Some(&row), slot);
         row
     }
     pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
@@ -311,7 +311,7 @@ impl CharacterQuest {
         let table = ctx.db.game_character_quest();
         let old = table.id().find(self.id);
         let row = table.id().update(self);
-        crate::native::quest_changed(ctx, old.as_ref(), Some(&row), slot);
+        crate::native::quest::changed(ctx, old.as_ref(), Some(&row), slot);
         row
     }
     pub(crate) fn delete(ctx: &ReducerContext, id: u64) -> bool {
@@ -323,7 +323,7 @@ impl CharacterQuest {
             .unwrap_or(255);
         let removed = table.id().delete(id);
         if let Some(row) = old {
-            crate::native::quest_changed(ctx, Some(&row), None, slot);
+            crate::native::quest::changed(ctx, Some(&row), None, slot);
         }
         removed
     }
@@ -409,7 +409,7 @@ crate::character_owned!(transfer, fn sweep_transfer_game_character_quest_log(ctx
 impl CharacterQuestEventCredit {
     fn insert(ctx: &ReducerContext, row: Self) -> Self {
         let row = ctx.db.game_character_quest_event_credit().insert(row);
-        crate::native::quest_event_credit(ctx, &row, true);
+        crate::native::quest::event_credit(ctx, &row, true);
         row
     }
     fn delete(ctx: &ReducerContext, id: u64) -> bool {
@@ -417,7 +417,7 @@ impl CharacterQuestEventCredit {
         let old = table.id().find(id);
         let removed = table.id().delete(id);
         if let Some(row) = old {
-            crate::native::quest_event_credit(ctx, &row, false);
+            crate::native::quest::event_credit(ctx, &row, false);
         }
         removed
     }
@@ -746,7 +746,6 @@ impl From<AcceptQuestRefusal> for ActionRefusal {
     }
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn apply_accept_quest(
     ctx: &ReducerContext,
     player_guid: u64,

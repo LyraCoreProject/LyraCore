@@ -26,7 +26,7 @@ pub struct GuildPetition {
 impl GuildPetition {
     pub(crate) fn insert(self, ctx: &ReducerContext) -> Self {
         let petition = ctx.db.game_guild_petition().insert(self);
-        crate::native::guild_charter_opened(ctx, &petition);
+        crate::native::petition::charter_opened(ctx, &petition);
         petition
     }
 }

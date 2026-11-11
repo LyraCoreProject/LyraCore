@@ -1,4 +1,5 @@
 use anyhow::{ensure, Context, Result};
+use lyracore_conformance::HarnessPin;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use toml::Value;
@@ -7,20 +8,7 @@ use toml::Value;
 mod scratch;
 
 fn agrees(pin: &str, workspace: &str) -> Result<String> {
-    let fields: Vec<_> = pin
-        .lines()
-        .map(|line| line.split('#').next().unwrap().trim())
-        .flat_map(str::split_whitespace)
-        .collect();
-    ensure!(fields.len() == 2, "pin needs one tag and full SHA");
-    let [tag, sha] = fields.as_slice() else {
-        unreachable!()
-    };
-    ensure!(tag.starts_with('v'), "pin must name a release tag");
-    ensure!(
-        sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()),
-        "pin needs a full SHA"
-    );
+    let sha = HarnessPin::parse(pin)?.revision;
     let manifest: Value = toml::from_str(workspace)?;
     let dependency = &manifest["workspace"]["dependencies"]["wire-client"];
     ensure!(

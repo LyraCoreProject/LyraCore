@@ -115,7 +115,7 @@ fn current(ctx: &ReducerContext, row: &CreatureSpline) -> bool {
         .is_some_and(|entity| entity.map_id == row.map_id && entity.instance_id == row.instance_id)
 }
 
-pub(crate) fn changed(ctx: &ReducerContext, row: &CreatureSpline) {
+pub(crate) fn spline_changed(ctx: &ReducerContext, row: &CreatureSpline) {
     if ctx.db.game_native_player().count() == 0
         || !current(ctx, row)
         || ctx

@@ -47,16 +47,11 @@ package_only! { pub(crate) use crate::spell::request_cast as request_cast; }
 package_only! { pub(crate) use crate::spell::cast_readiness as cast_readiness; }
 debug_only! { pub(crate) use crate::combat::apply_start_ranged_attack as ranged_attack; }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn stop_attack(ctx: &ReducerContext, actor_guid: u64) -> Result<(), String> {
     crate::combat::stop_attack_for(ctx, actor_guid);
     Ok(())
 }
 
-#[allow(
-    dead_code,
-    reason = "Package API v1 retains the result-only cast_at adapter"
-)]
 pub(crate) fn cast_at(
     ctx: &ReducerContext,
     actor_guid: u64,
@@ -271,7 +266,6 @@ impl std::fmt::Display for ActionRefusal {
     }
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn restore_sessionless_body(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -297,7 +291,6 @@ pub(crate) fn restore_sessionless_body(
     Some(entity)
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn stop_movement(ctx: &ReducerContext, actor_guid: u64) {
     use crate::tables::{game_creature_spline, game_world_entity};
 

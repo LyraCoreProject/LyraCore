@@ -1570,7 +1570,7 @@ fn apply_leaf_for_pair(
                 RelayInstruction::TalkAs(overridden) => overridden.chat_type,
                 _ => line.chat_type,
             };
-            crate::native::creature_sound(ctx, guid, line.sound_id, chat_type);
+            crate::native::chat::creature_sound(ctx, guid, line.sound_id, chat_type);
             crate::chat::apply_send_chat_to(
                 ctx,
                 source,

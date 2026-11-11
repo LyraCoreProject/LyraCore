@@ -35,7 +35,6 @@ pub mod share_result {
     pub const FINISH_QUEST: u8 = 8;
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn share_result(
     member_online: bool,
     same_map_instance: bool,

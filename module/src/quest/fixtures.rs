@@ -1220,22 +1220,14 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         .entry()
         .find(RQC_WOLF_TEMPLATE)
         .ok_or_else(|| "the seeded Test Wolf template is missing".to_string())?;
-    let spawn = crate::CreatureSpawn {
-        guid: RQC_WOLF_GUID,
-        entry: RQC_WOLF_TEMPLATE,
-        map_id: player.map_id,
-        x: player.x + 2.0,
-        y: player.y,
-        z: player.z,
-        orientation: player.orientation,
-        respawn_at: crate::time::timer_never(ctx),
-        despawn_at: crate::time::timer_never(ctx),
-        movement_type: crate::creatures::MOVEMENT_IDLE,
-        respawn_secs: 0,
-        life_seq: 0,
-        source_guid: 0,
-        instance_id: player.instance_id,
-    };
+    let spawn = crate::CreatureSpawn::temporary(
+        ctx,
+        RQC_WOLF_GUID,
+        RQC_WOLF_TEMPLATE,
+        player.map_id,
+        player.instance_id,
+        [player.x + 2.0, player.y, player.z, player.orientation],
+    );
     let wolf_entity =
         crate::creatures::build_creature_entity(ctx, &spawn, &wolf_template, 0, player.instance_id);
     ctx.db.game_creature_spawn().insert(spawn);

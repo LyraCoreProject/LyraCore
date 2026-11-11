@@ -439,58 +439,54 @@ fn same_account(ctx: &ReducerContext, first: u64, second: u64) -> bool {
     matches!((account(ctx, first), account(ctx, second)), (Some(a), Some(b)) if a != 0 && a == b)
 }
 
-#[allow(clippy::too_many_arguments)]
+/// The Mail a Character sends; `item_guid` 0 attaches no item.
+pub(crate) struct OutgoingMail {
+    pub(crate) recipient_guid: u64,
+    pub(crate) subject: String,
+    pub(crate) body: String,
+    pub(crate) money: u32,
+    pub(crate) cod: u32,
+    pub(crate) item_guid: u64,
+}
+
 pub(crate) fn apply_send(
     ctx: &ReducerContext,
     sender_guid: u64,
-    recipient_guid: u64,
-    subject: String,
-    body: String,
-    money: u32,
-    cod: u32,
-    item_guid: u64,
+    mail: OutgoingMail,
 ) -> Result<(), MailRefusal> {
-    let same_account = same_account(ctx, sender_guid, recipient_guid);
-    send(
-        ctx,
-        sender_guid,
-        recipient_guid,
-        subject,
-        body,
-        money,
-        cod,
-        item_guid,
-        same_account,
-    )
+    let same_account = same_account(ctx, sender_guid, mail.recipient_guid);
+    send(ctx, sender_guid, mail, same_account)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn send(
     ctx: &ReducerContext,
     sender_guid: u64,
-    recipient_guid: u64,
-    subject: String,
-    body: String,
-    money: u32,
-    cod: u32,
-    item_guid: u64,
+    mail: OutgoingMail,
     same_account: bool,
 ) -> Result<(), MailRefusal> {
-    let item = detach_item(ctx, sender_guid, item_guid)?;
+    let item = detach_item(ctx, sender_guid, mail.item_guid)?;
     debit_purse(
         ctx,
         sender_guid,
-        lyracore_shared::mail::total_cost(money),
+        lyracore_shared::mail::total_cost(mail.money),
         MailRefusal::NotEnoughMoney,
     )?;
     let delay_secs = delivery_delay_secs(!item.is_empty(), same_account);
     insert_letter(
         ctx,
-        Letter::from_character(sender_guid, recipient_guid, subject, body, money, cod, item)
-            .delayed(
-                crate::time::now(ctx).to_micros_since_unix_epoch(),
-                delay_secs,
-            ),
+        Letter::from_character(
+            sender_guid,
+            mail.recipient_guid,
+            mail.subject,
+            mail.body,
+            mail.money,
+            mail.cod,
+            item,
+        )
+        .delayed(
+            crate::time::now(ctx).to_micros_since_unix_epoch(),
+            delay_secs,
+        ),
     );
     Ok(())
 }
@@ -733,12 +729,14 @@ pub fn realm_mail_send(
     send(
         ctx,
         sender_guid,
-        recipient_guid,
-        subject,
-        body,
-        money,
-        cod,
-        item_guid,
+        OutgoingMail {
+            recipient_guid,
+            subject,
+            body,
+            money,
+            cod,
+            item_guid,
+        },
         same_account,
     )
     .map_err(String::from)

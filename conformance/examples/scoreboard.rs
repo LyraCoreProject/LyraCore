@@ -633,13 +633,7 @@ fn main() -> Result<()> {
     ensure!(output.status.success(), "git rev-parse HEAD failed");
     let head = String::from_utf8(output.stdout)?;
     let head = head.trim();
-    let pin = std::fs::read_to_string(root.join(".wire-harness-rev"))?;
-    let revision = pin
-        .lines()
-        .filter(|line| !line.starts_with('#'))
-        .flat_map(str::split_whitespace)
-        .nth(1)
-        .context("harness SHA")?;
+    let revision = lyracore_conformance::harness_pin().revision;
     let ledger = FeatureLedger::load(&root.join("conformance/features"))?;
     let catalogue = wire_client::catalogue::ENTRIES
         .iter()
@@ -1332,7 +1326,7 @@ fn json_keeps_committed_audit_evidence() -> Result<()> {
         audit: Some((&path, &report)),
         tier1_head: "head",
         audit_head: "head",
-        revision: evidence::harness_revision(),
+        revision: lyracore_conformance::harness_pin().revision,
         work: &[],
     })?;
     assert_eq!(

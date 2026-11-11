@@ -60,7 +60,7 @@ pub(crate) fn coalesce(queued: u16, incoming: u16) -> Coalesce {
 }
 
 fn publish(ctx: &ReducerContext, p: &PendingMotion) {
-    crate::native::motion(ctx, p);
+    crate::native::visibility::motion(ctx, p);
     let motions = ctx.db.game_entity_motion();
     match motions.guid().find(p.guid) {
         Some(prev) => {

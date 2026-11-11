@@ -40,7 +40,6 @@ pub enum ControlReadError {
     EffectLimit,
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn control_status(
     ctx: &ReducerContext,
     unit_guid: u64,
@@ -371,7 +370,6 @@ fn interrupt_cast_with_outcome(
     interrupted
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn cancel_cast_attempt(
     ctx: &ReducerContext,
     caster_guid: u64,

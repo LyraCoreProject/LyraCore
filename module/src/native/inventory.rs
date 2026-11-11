@@ -196,7 +196,7 @@ pub(crate) fn item_restored(ctx: &ReducerContext, item: &ItemInstance, new_slot:
     super::quest::item_changed(ctx, item.owner_guid, item.entry);
 }
 
-pub(crate) fn changed(
+pub(crate) fn item_changed(
     ctx: &ReducerContext,
     previous: Option<&ItemInstance>,
     current: Option<&ItemInstance>,
@@ -222,8 +222,8 @@ pub(crate) fn changed(
         .zip(current)
         .is_some_and(|(old, row)| old.owner_guid != row.owner_guid)
     {
-        changed(ctx, previous, None, source);
-        changed(ctx, None, current, source);
+        item_changed(ctx, previous, None, source);
+        item_changed(ctx, None, current, source);
         return;
     }
     let Some(row) = current.or(previous) else {

@@ -44,7 +44,7 @@ pub(crate) fn owned_account_with_room(
         .collect();
     if let Some(&id) = owned.iter().find(|&&id| {
         if crate::peer::world_shard(ctx).is_some() {
-            crate::native::realm_account_has_room(ctx, id)
+            crate::native::character_names::account_has_room(ctx, id)
         } else {
             crate::character::account_has_room(ctx, id)
         }

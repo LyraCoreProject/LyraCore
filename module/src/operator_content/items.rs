@@ -174,7 +174,7 @@ pub fn operator_apply_item_edits(ctx: &ReducerContext, edits: Vec<ItemEdit>) -> 
         }
     }
     for entry in changed {
-        crate::native::broadcast_item_query(ctx, entry)?;
+        crate::native::query::broadcast_item_query(ctx, entry)?;
     }
     for change in changes {
         super::log_change(ctx, &change);

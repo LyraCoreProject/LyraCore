@@ -38,7 +38,7 @@ impl WorldEntity {
         self.stamp_simulation();
         let entity = ctx.db.game_world_entity().insert(self);
         #[cfg(feature = "conformance_test_fixture")]
-        crate::native::record_conformance_birth(
+        crate::native::debug::record_birth(
             ctx,
             entity.guid,
             entity.map_id,
@@ -68,7 +68,7 @@ impl WorldEntity {
             if crate::breath::eligible(&old) && !crate::breath::eligible(&entity) {
                 crate::breath::clear(ctx, entity.guid);
             }
-            crate::native::entity_changed(ctx, &old, &entity);
+            crate::native::visibility::entity_changed(ctx, &old, &entity);
         }
         entity
     }

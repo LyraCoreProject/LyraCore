@@ -1,7 +1,6 @@
 use spacetimedb::{log, table, Identity, ReducerContext, Timestamp};
 
 use crate::game_character;
-use crate::game_config;
 use crate::game_world_entity;
 use crate::WorldEntity;
 
@@ -47,13 +46,13 @@ pub struct LevelupEvent {
 
 impl XpEvent {
     pub(crate) fn send(ctx: &ReducerContext, guid: u64, event: Self) {
-        crate::native::xp(ctx, guid, &event);
+        crate::native::progression::xp(ctx, guid, &event);
     }
 }
 
 impl LevelupEvent {
     fn send(ctx: &ReducerContext, guid: u64, event: Self) {
-        crate::native::levelup(ctx, guid, &event);
+        crate::native::progression::levelup(ctx, guid, &event);
     }
 }
 
@@ -139,12 +138,7 @@ pub(crate) fn rank_xp_multiplier(rank: u8) -> u32 {
 }
 
 fn xp_rate(ctx: &ReducerContext) -> f32 {
-    ctx.db
-        .game_config()
-        .id()
-        .find(0)
-        .map(|c| c.xp_rate)
-        .unwrap_or(1.0)
+    crate::config::server_config(ctx).xp_rate
 }
 
 pub(crate) fn split_kill_xp(base: u32, share_count: u32) -> u32 {

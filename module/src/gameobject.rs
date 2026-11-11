@@ -147,7 +147,7 @@ impl GameObject {
         self.stamp_cell();
         let object = ctx.db.game_gameobject().try_insert(self)?;
         #[cfg(feature = "conformance_test_fixture")]
-        crate::native::record_conformance_birth(
+        crate::native::debug::record_birth(
             ctx,
             object.guid,
             object.map_id,
@@ -195,7 +195,7 @@ impl GameObject {
             crate::aoi::gameobject_changed(ctx, &object, old.is_none());
         }
         if let Some(old) = old {
-            crate::native::gameobject_changed(ctx, &old, &object);
+            crate::native::object::changed(ctx, &old, &object);
         }
         object
     }
@@ -647,7 +647,6 @@ pub(crate) fn request_use_gameobject(
     use_resolved_gameobject(ctx, caster_guid, go, tmpl).map_err(Into::into)
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn apply_use_gameobject(
     ctx: &ReducerContext,
     caster_guid: u64,

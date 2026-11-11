@@ -285,7 +285,7 @@ pub(crate) fn do_learn_talent(
     }
 
     apply_talent_rank(ctx, &talent, guid, owner, next, entity.level as u8);
-    crate::native::talent_points(ctx, guid, entity.level);
+    crate::native::book::talent_points(ctx, guid, entity.level);
     Ok(next)
 }
 
@@ -539,7 +539,7 @@ pub(crate) fn do_reset_talents(
 
     if let Some(mut entity) = entities.guid().find(character_guid) {
         entity.money = entity.money.saturating_sub(cost);
-        crate::native::talent_points(ctx, character_guid, entity.level);
+        crate::native::book::talent_points(ctx, character_guid, entity.level);
         entity.update(ctx);
     }
     character.respec_count = character.respec_count.saturating_add(1);
@@ -602,7 +602,6 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
             }
         };
 
-    #[allow(clippy::too_many_arguments)]
     let ability_spell = |spell_id: u32,
                          name: &str,
                          power_type: u8,

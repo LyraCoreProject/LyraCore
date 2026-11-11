@@ -1241,11 +1241,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
             }
             EventPredicate::QuestIncomplete(quest_entry) => {
                 crate::quest::character_quest_row(self.ctx, guid, quest_entry).is_some_and(
-                    |quest| {
-                        !quest.rewarded
-                            && !quest.failed
-                            && !crate::quest::quest_is_complete(self.ctx, &quest)
-                    },
+                    |quest| quest.is_active() && !crate::quest::quest_is_complete(self.ctx, &quest),
                 )
             }
             EventPredicate::Map(map_id) => self
@@ -1505,7 +1501,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
     }
 
     fn eventai_deliver_sound(&mut self, source_guid: u64, sound_id: u32, chat_type: u8) {
-        crate::native::creature_sound(self.ctx, source_guid, sound_id, chat_type);
+        crate::native::chat::creature_sound(self.ctx, source_guid, sound_id, chat_type);
     }
 
     fn eventai_deliver_emote(&mut self, source_guid: u64, emote_id: u32, target_guid: u64) -> bool {

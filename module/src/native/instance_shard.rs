@@ -125,10 +125,6 @@ pub(super) fn enter_package(
     )
 }
 
-#[allow(
-    clippy::too_many_arguments,
-    reason = "Native and Package admission share the same request"
-)]
 fn queue_entry(
     ctx: &ReducerContext,
     realm: Identity,

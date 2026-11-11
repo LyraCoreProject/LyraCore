@@ -195,7 +195,7 @@ pub fn operator_apply_creature_edits(
     }
     respawn_changed(ctx, &changed)?;
     for (entry, index) in changed {
-        crate::native::broadcast_creature_query(ctx, entry)
+        crate::native::query::broadcast_creature_query(ctx, entry)
             .map_err(|reason| format!("creature edit {index}: {reason}"))?;
     }
     for change in changes {

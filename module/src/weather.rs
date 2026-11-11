@@ -255,7 +255,7 @@ fn apply_zone_weather(ctx: &ReducerContext, zone_id: u32, state: WeatherState, n
     } else {
         rows.insert(row)
     };
-    crate::native::weather_changed(ctx, &row);
+    crate::native::environment::weather_changed(ctx, &row);
 }
 
 fn current_state(ctx: &ReducerContext, zone_id: u32) -> WeatherState {

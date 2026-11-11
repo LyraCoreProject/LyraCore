@@ -416,7 +416,7 @@ pub struct MeleeAttack {
 impl MeleeAttack {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
         let row = ctx.db.game_melee_attack().insert(row);
-        crate::native::engagement_changed(ctx, None, Some(&row));
+        crate::native::combat::engagement_changed(ctx, None, Some(&row));
         row
     }
 
@@ -424,7 +424,7 @@ impl MeleeAttack {
         let table = ctx.db.game_melee_attack();
         let old = table.attacker_guid().find(row.attacker_guid);
         let row = table.attacker_guid().update(row);
-        crate::native::engagement_changed(ctx, old.as_ref(), Some(&row));
+        crate::native::combat::engagement_changed(ctx, old.as_ref(), Some(&row));
         row
     }
 
@@ -445,7 +445,7 @@ impl MeleeAttack {
         };
         table.attacker_guid().delete(guid);
         crate::combat::drop_extra_attacks(ctx, guid);
-        crate::native::engagement_changed(ctx, Some(&old), None);
+        crate::native::combat::engagement_changed(ctx, Some(&old), None);
         true
     }
 }
@@ -492,7 +492,7 @@ pub struct CombatEvent {
 
 impl CombatEvent {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
-        crate::native::combat_event(ctx, &row);
+        crate::native::combat::combat_event(ctx, &row);
         ctx.db.game_combat_event_live().insert(row)
     }
 

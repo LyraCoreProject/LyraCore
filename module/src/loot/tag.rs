@@ -46,7 +46,6 @@ pub(crate) struct DeathEntitlement {
     pub recipients: Vec<u64>,
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LiveLootTagEligibility {
     Available,
@@ -194,7 +193,6 @@ fn membership_is_current(
     }
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn live_loot_tag_eligibility(
     ctx: &ReducerContext,
     creature_guid: u64,
@@ -255,7 +253,7 @@ pub(crate) fn revoke_group_member(ctx: &ReducerContext, group_id: u64, character
             members.id().delete(member.id);
         }
         if let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) {
-            crate::native::loot_flags(ctx, &creature);
+            crate::native::visibility::loot_flags(ctx, &creature);
         }
     }
 }
@@ -282,7 +280,7 @@ pub(crate) fn record_corpse_eligibility(
         });
     }
     if let Some(corpse) = ctx.db.game_world_entity().guid().find(corpse_guid) {
-        crate::native::loot_flags(ctx, &corpse);
+        crate::native::visibility::loot_flags(ctx, &corpse);
     }
 }
 
@@ -873,22 +871,8 @@ fn insert_fixture_entity(
     is_character: bool,
     owner_guid: u64,
 ) {
-    let spawn = crate::CreatureSpawn {
-        guid,
-        entry: template.entry,
-        map_id: 0,
-        x,
-        y: 0.0,
-        z: 0.0,
-        orientation: 0.0,
-        respawn_at: crate::time::timer_never(ctx),
-        despawn_at: crate::time::timer_never(ctx),
-        movement_type: crate::creatures::MOVEMENT_IDLE,
-        respawn_secs: 0,
-        life_seq: 0,
-        source_guid: 0,
-        instance_id: 0,
-    };
+    let spawn =
+        crate::CreatureSpawn::temporary(ctx, guid, template.entry, 0, 0, [x, 0.0, 0.0, 0.0]);
     let mut entity = crate::creatures::build_creature_entity(ctx, &spawn, template, 0, 0);
     entity.owner_guid = owner_guid;
     if is_character {

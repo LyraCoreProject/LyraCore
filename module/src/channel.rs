@@ -796,7 +796,7 @@ pub(crate) fn notify(
             recipients,
             created_at: crate::time::now(ctx),
         });
-    crate::native::channel_notice(ctx, &event);
+    crate::native::channel::notice(ctx, &event);
 }
 
 pub(crate) fn sweep_expired(ctx: &ReducerContext) {

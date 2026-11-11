@@ -23,6 +23,7 @@ pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
     crate::creatures::clear_live_pet_kind(ctx, guid);
     crate::loot::tag::clear(ctx, guid);
     ctx.db.game_creature_spline().guid().delete(guid);
+    crate::encounter::forget_equipment(ctx, guid);
     crate::loot::reap_corpse_loot_family(ctx, guid);
     // Delete last; its Relay destroys the client object.
     crate::WorldEntity::delete(ctx, guid);

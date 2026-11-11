@@ -124,25 +124,25 @@ pub struct GuildMember {
 impl GuildMember {
     pub(crate) fn insert(self, ctx: &ReducerContext) -> Self {
         let row = ctx.db.game_guild_member().insert(self);
-        crate::native::guild_member_changed(ctx, row.character_guid);
-        crate::native::guild_membership_changed(ctx, row.character_guid);
+        crate::native::realm_guild::member_changed(ctx, row.character_guid);
+        crate::native::guild::membership_changed(ctx, row.character_guid);
         row
     }
 
     pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
         let previous = member(ctx, self.character_guid);
         let row = ctx.db.game_guild_member().character_guid().update(self);
-        crate::native::guild_member_changed(ctx, row.character_guid);
+        crate::native::realm_guild::member_changed(ctx, row.character_guid);
         if previous.is_none_or(|old| (old.guild_id, old.rank_id) != (row.guild_id, row.rank_id)) {
-            crate::native::guild_membership_changed(ctx, row.character_guid);
+            crate::native::guild::membership_changed(ctx, row.character_guid);
         }
         row
     }
 
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {
         if ctx.db.game_guild_member().character_guid().delete(guid) {
-            crate::native::guild_member_changed(ctx, guid);
-            crate::native::guild_membership_changed(ctx, guid);
+            crate::native::realm_guild::member_changed(ctx, guid);
+            crate::native::guild::membership_changed(ctx, guid);
         }
     }
 }
@@ -482,7 +482,7 @@ pub(crate) fn push_event(
         strings,
         created_at: crate::time::now(ctx),
     });
-    crate::native::guild_event(ctx, &event);
+    crate::native::guild::event(ctx, &event);
 }
 
 pub(crate) fn sweep_expired(ctx: &ReducerContext) {

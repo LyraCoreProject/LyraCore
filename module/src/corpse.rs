@@ -99,15 +99,9 @@ impl Corpse {
         self.cell = self.position_cell();
         let row = ctx.db.game_corpse().insert(self);
         #[cfg(feature = "conformance_test_fixture")]
-        crate::native::record_conformance_birth(
-            ctx,
-            row.guid,
-            row.map_id,
-            row.instance_id,
-            row.cell,
-        );
+        crate::native::debug::record_birth(ctx, row.guid, row.map_id, row.instance_id, row.cell);
         crate::aoi::corpse_changed(ctx, &row, true);
-        crate::native::corpse_created(ctx, &row);
+        crate::native::death::corpse_created(ctx, &row);
         row
     }
 
@@ -117,7 +111,7 @@ impl Corpse {
         let row = ctx.db.game_corpse().guid().update(self);
         crate::aoi::corpse_changed(ctx, &row, previous.is_none());
         if previous.is_some_and(|old| old.is_bones != row.is_bones) {
-            crate::native::corpse_changed(ctx, &row);
+            crate::native::death::corpse_changed(ctx, &row);
         }
         row
     }
@@ -125,7 +119,7 @@ impl Corpse {
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {
         if let Some(corpse) = ctx.db.game_corpse().guid().find(guid) {
             ctx.db.game_corpse().guid().delete(guid);
-            crate::native::corpse_removed(ctx, corpse.owner_guid);
+            crate::native::death::corpse_removed(ctx, corpse.owner_guid);
         }
         crate::aoi::remove_subject(ctx, crate::aoi::CORPSE, guid);
     }

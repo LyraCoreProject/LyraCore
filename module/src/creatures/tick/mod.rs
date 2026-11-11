@@ -76,7 +76,7 @@ impl CreatureSpline {
         } else {
             table.insert(self)
         };
-        crate::native::creature_spline_changed(ctx, &row);
+        crate::native::creature::spline_changed(ctx, &row);
     }
 }
 

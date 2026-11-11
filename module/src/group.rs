@@ -508,7 +508,6 @@ pub struct CompanionTargetFacts {
     pub max_health: u32,
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn companion_target_facts(
     ctx: &ReducerContext,
     bot_guid: u64,

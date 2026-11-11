@@ -1,4 +1,5 @@
 use crate::actor::ActionRefusal;
+use crate::npc_interaction::NpcService;
 use crate::quest::*;
 use crate::{game_creature_template, game_item_template};
 use lyracore_shared::quest::AcceptanceRefusal;
@@ -359,18 +360,14 @@ pub(super) fn receive(
             ))),
         )?],
         ClientOpcodeMessage::CMSG_QUESTGIVER_HELLO(q) => {
-            use crate::game_world_entity;
             let actor = super::actor(ctx, guid)?;
-            if ctx
-                .db
-                .game_world_entity()
-                .guid()
-                .find(q.guid.guid())
-                .is_some_and(|npc| crate::reputation::npc_refuses_interaction(ctx, &npc, &actor))
+            let giver = q.guid.guid();
+            if crate::npc_interaction::serving_npc(ctx, &actor, giver, NpcService::QuestGiver)
+                .is_err()
             {
                 return Ok(());
             }
-            menu(ctx, q.guid.guid(), guid)?
+            menu(ctx, giver, guid)?
         }
         ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(q) => {
             use crate::game_item_instance;

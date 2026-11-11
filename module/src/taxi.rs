@@ -748,7 +748,7 @@ pub(crate) fn resume_flight(ctx: &ReducerContext, character_guid: u64) -> Result
         .game_active_taxi_flight()
         .character_guid()
         .update(flight);
-    crate::native::taxi_resumed(ctx, &spline)?;
+    crate::native::taxi::resumed(ctx, &spline)?;
     character.board_flight(mount_display_id);
     character.movement_flags = if points.len() > 1 {
         movement_flags::FORWARD
@@ -756,7 +756,7 @@ pub(crate) fn resume_flight(ctx: &ReducerContext, character_guid: u64) -> Result
         0
     };
     character.update(ctx);
-    crate::native::refresh_motion_permit(ctx, character_guid);
+    crate::native::motion_permit::refresh_character(ctx, character_guid);
     write_passenger_spline(ctx, spline);
     if ctx
         .db
@@ -876,7 +876,7 @@ fn clear_flight(ctx: &ReducerContext, player: WorldEntity) {
             zone_id: None,
         },
     );
-    crate::native::taxi_aborted(ctx, character_guid, mounted);
+    crate::native::taxi::aborted(ctx, character_guid, mounted);
 }
 
 fn exact_landing(destination: &GameTaxiNode, orientation: f32) -> LandingPosition {
@@ -908,7 +908,7 @@ fn land_flight(
             zone_id,
         },
     );
-    crate::native::taxi_landed(ctx, character_guid);
+    crate::native::taxi::landed(ctx, character_guid);
 }
 
 pub(crate) fn is_in_flight(ctx: &ReducerContext, character_guid: u64) -> bool {
@@ -1200,7 +1200,7 @@ pub(crate) fn activate_taxi(
             first_destination_node_index: 1,
         };
         ctx.db.game_active_taxi_flight().insert(flight);
-        crate::native::refresh_motion_permit(ctx, character_guid);
+        crate::native::motion_permit::refresh_character(ctx, character_guid);
         player.money = player_state.money;
         player.update(ctx);
         Ok(())
@@ -1259,7 +1259,7 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
         .character_guid()
         .update(flight);
     player.update(ctx);
-    crate::native::taxi_spline_changed(ctx, &spline);
+    crate::native::taxi::spline_changed(ctx, &spline);
     write_passenger_spline(ctx, spline);
     ctx.db
         .game_taxi_flight_schedule()

@@ -166,26 +166,15 @@ pub fn import_nav_chunks_append(ctx: &ReducerContext, packed: String) -> Result<
     Ok(())
 }
 
-use crate::game_config;
 use crate::vmap::{game_vmap_nav_coverage, hex_decode};
 use lyracore_shared::nav::NavCellData;
 
 pub(crate) fn nav_enabled(ctx: &ReducerContext) -> bool {
-    ctx.db
-        .game_config()
-        .id()
-        .find(0)
-        .map(|c| c.nav_enabled)
-        .unwrap_or(false)
+    crate::config::server_config(ctx).nav_enabled
 }
 
 pub(crate) fn nav_coverage_enabled(ctx: &ReducerContext) -> bool {
-    ctx.db
-        .game_config()
-        .id()
-        .find(0)
-        .map(|c| c.nav_coverage_enabled)
-        .unwrap_or(false)
+    crate::config::server_config(ctx).nav_coverage_enabled
 }
 
 pub(crate) fn coverage_generation(ctx: &ReducerContext, map_id: u32) -> Option<u64> {
@@ -347,10 +336,6 @@ impl From<(f32, f32)> for RoutePoint {
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
-#[cfg_attr(
-    not(has_packages),
-    allow(dead_code, reason = "retained Package API route value")
-)]
 pub struct RouteClip {
     pub attempted: RoutePoint,
     pub hit: RoutePoint,

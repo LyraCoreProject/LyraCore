@@ -47,7 +47,7 @@ fn insert(
         damage,
         created_at: crate::time::now(ctx),
     });
-    crate::native::breath_event(ctx, &row);
+    crate::native::environment::breath_event(ctx, &row);
 }
 
 pub(crate) fn start(

@@ -717,8 +717,6 @@ pub fn import_vmap_chunks_append(ctx: &ReducerContext, packed: String) -> Result
     Ok(())
 }
 
-use crate::game_config;
-
 pub(crate) fn active_generation_id(ctx: &ReducerContext, map_id: u32) -> Option<u64> {
     ctx.db
         .game_vmap_generation()
@@ -733,11 +731,7 @@ pub(crate) fn vmap_enabled(ctx: &ReducerContext, map_id: u32) -> bool {
 }
 
 pub(crate) fn rays_enabled(ctx: &ReducerContext) -> bool {
-    ctx.db
-        .game_config()
-        .id()
-        .find(0)
-        .is_some_and(|c| c.vmap_enabled)
+    crate::config::server_config(ctx).vmap_enabled
 }
 
 enum CellTriangles {

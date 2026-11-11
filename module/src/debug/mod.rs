@@ -499,7 +499,6 @@ pub fn debug_enter_areatrigger(
 }
 
 #[reducer]
-#[allow(clippy::too_many_arguments)]
 pub fn debug_replay_sessionless_areatrigger(
     ctx: &ReducerContext,
     character_guid: u64,

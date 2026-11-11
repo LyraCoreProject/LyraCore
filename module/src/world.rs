@@ -618,7 +618,7 @@ fn relocate(
         crate::duel::interrupt_duel_for(ctx, player_guid);
         crate::trade::cancel_trade_for(ctx, player_guid);
     }
-    let teleport_counter = crate::native::begin_teleport(ctx, player_guid, cross_map);
+    let teleport_counter = crate::native::teleport::begin(ctx, player_guid, cross_map);
     // Drop queued pre-teleport motion so the next publish cannot snap peers back.
     crate::motion::drop_pending(ctx, player_guid);
     crate::transport::leave(ctx, player_guid);
@@ -693,7 +693,7 @@ fn relocate(
         created_micros: crate::time::now(ctx).to_micros_since_unix_epoch() as u64,
         cross_map,
     });
-    crate::native::teleport_changed(ctx, &event, teleport_counter, aboard.as_ref());
+    crate::native::teleport::changed(ctx, &event, teleport_counter, aboard.as_ref());
     if let Some(aboard) = aboard.filter(|_| cross_map && !sessionless) {
         crate::transport::reboard(ctx, aboard.passenger);
     }
@@ -814,7 +814,7 @@ pub(crate) fn apply_movement_update(
         let (health, lethal) = resolve_environmental_damage(dmg, mover.health);
         mover.health = health;
         fall_lethal = lethal;
-        crate::native::fall_damage(ctx, mover.guid, dmg);
+        crate::native::environment::fall_damage(ctx, mover.guid, dmg);
     }
     crossing.explore(ctx, &mut mover);
     if mover.is_player() && !mover.dead && (move_time_ms / 1000 != old_move_ms / 1000) {

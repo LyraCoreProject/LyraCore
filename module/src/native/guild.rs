@@ -125,10 +125,6 @@ pub(super) fn invitee(ctx: &ReducerContext, actor: u64, name: &str) -> Option<In
 }
 
 // The caller owns authentication, invitee Gates and rollback on error.
-#[allow(
-    clippy::too_many_lines,
-    reason = "Guild opcode dispatch stays in one match"
-)]
 pub(super) fn request(
     ctx: &ReducerContext,
     actor: &Actor,

@@ -94,7 +94,7 @@ fn push_trade_event_payload(
         recipient_guid,
         payload,
     });
-    crate::native::trade_event(ctx, &event);
+    crate::native::trade::event(ctx, &event);
 }
 
 pub(crate) fn session_involving(ctx: &ReducerContext, guid: u64) -> Option<TradeSession> {

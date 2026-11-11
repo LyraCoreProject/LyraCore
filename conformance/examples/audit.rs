@@ -130,7 +130,7 @@ fn check(directory: &Path, scenario: &str) -> Result<()> {
         "schema_version": 2,
         "tier": "tier1",
         "core_commit": core_commit,
-        "harness_revision": evidence::harness_revision(),
+        "harness_revision": lyracore_conformance::harness_pin().revision,
         "scenarios": [{
             "id": scenario,
             "behavior": golden.scenario().behavior.clone(),
@@ -192,15 +192,8 @@ fn compare_run(
     run: Run,
     previous: Option<(&str, &Report)>,
 ) -> Result<Report> {
-    let pin = include_str!("../../.wire-harness-rev")
-        .lines()
-        .find(|line| !line.starts_with('#'))
-        .context("harness pin")?
-        .split_whitespace()
-        .nth(1)
-        .context("harness SHA")?;
     ensure!(
-        run.harness_revision == pin,
+        run.harness_revision == lyracore_conformance::harness_pin().revision,
         "run used another harness revision"
     );
     let mut report = Report {
@@ -471,10 +464,7 @@ mod tests {
         let Origin::Golden { provenance } = &golden.trace().header.origin else {
             bail!("Golden Trace");
         };
-        let revision = include_str!("../../.wire-harness-rev")
-            .split_whitespace()
-            .last()
-            .context("revision")?;
+        let revision = lyracore_conformance::harness_pin().revision;
         std::fs::write(
             directory.join("run.json"),
             serde_json::to_vec(&serde_json::json!({
@@ -558,7 +548,7 @@ mod tests {
             serde_json::to_vec(&serde_json::json!({
                 "core_commit": core_commit,
                 "working_tree_dirty": false,
-                "harness_revision": evidence::harness_revision(),
+                "harness_revision": lyracore_conformance::harness_pin().revision,
                 "recorded_at_unix_ms": committed.recorded_at_unix_ms + 1,
                 "native_host_sha256": audit.native_host_sha256,
                 "module_sha256": audit.module_sha256,

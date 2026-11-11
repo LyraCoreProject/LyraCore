@@ -644,10 +644,9 @@ fn insert_auction_notice(ctx: &ReducerContext, draft: AuctionNoticeDraft) {
         bidder_guid: draft.bidder_guid,
         created_at: crate::time::now(ctx),
     });
-    crate::native::auction_notice(ctx, &notice);
+    crate::native::auction::notice(ctx, &notice);
 }
 
-#[allow(clippy::too_many_arguments)]
 fn settlement_notices(
     house: u32,
     auction_id: u32,
@@ -684,7 +683,6 @@ fn settlement_notices(
     ]
 }
 
-#[allow(clippy::too_many_arguments)]
 fn outbid_notice(
     house: u32,
     auction_id: u32,
@@ -1415,8 +1413,10 @@ pub fn expire_auction(ctx: &ReducerContext, schedule: AuctionExpiry) -> Result<(
                 .delete(schedule.auction_id);
             ctx.db.game_auction_expiry().insert(AuctionExpiry {
                 scheduled_id: 0,
-                scheduled_at: (ctx.timestamp + spacetimedb::TimeDuration::from_micros(1_000_000))
-                    .into(),
+                scheduled_at: crate::time::schedule_time(
+                    ctx,
+                    crate::time::now(ctx) + spacetimedb::TimeDuration::from_micros(1_000_000),
+                ),
                 auction_id: schedule.auction_id,
             });
         }

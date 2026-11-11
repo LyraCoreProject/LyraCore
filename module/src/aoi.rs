@@ -187,7 +187,7 @@ fn shift_subject(ctx: &ReducerContext, from: i64, entity: &WorldEntity) {
         }
     }
     let stealthed = crate::spell::is_stealthed(ctx, entity.guid);
-    crate::native::with_shared_creates(|| {
+    crate::native::visibility::with_shared_creates(|| {
         for cell in cells(entity.cell).filter(|&cell| !before.contains(map_id, instance_id, cell)) {
             for viewer in ctx
                 .db
@@ -365,7 +365,7 @@ fn replace_subject(
             revoke(ctx, &grant);
         }
     }
-    crate::native::with_shared_creates(|| {
+    crate::native::visibility::with_shared_creates(|| {
         for viewer_guid in wanted {
             grant(ctx, viewer_guid, layer, entity_guid, newly_added);
         }
@@ -423,13 +423,13 @@ fn grant(ctx: &ReducerContext, viewer_guid: u64, layer: u8, entity_guid: u64, ne
         layer,
         entity_guid,
     });
-    crate::native::grant_added(ctx, &grant, newly_added);
+    crate::native::visibility::grant_added(ctx, &grant, newly_added);
 }
 
 /// Revokes a Grant and relays its DESTROY.
 fn revoke(ctx: &ReducerContext, grant: &AoiGrant) {
     ctx.db.game_aoi_grant().id().delete(grant.id);
-    crate::native::grant_removed(ctx, grant);
+    crate::native::visibility::grant_removed(ctx, grant);
 }
 
 #[cfg(test)]

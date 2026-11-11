@@ -53,8 +53,8 @@ pub(crate) fn clear(ctx: &ReducerContext, character_guid: u64) {
         super::forget_temporary_enchantment(ctx, row.item_guid);
         crate::mail_text::drop_letter_text(ctx, row.item.item_text_id);
         if !crate::transfer::is_in_transit(ctx, character_guid) {
-            crate::native::buyback_removed(ctx, &row);
-            crate::native::buyback_destroyed(ctx, &row);
+            crate::native::economy::buyback_removed(ctx, &row);
+            crate::native::economy::buyback_destroyed(ctx, &row);
         }
     }
     ctx.db
@@ -205,7 +205,7 @@ pub(super) fn take(ctx: &ReducerContext, row: &BuybackItem) {
             ctx.db.game_buyback_state().character_guid().update(state);
         }
     }
-    crate::native::buyback_removed(ctx, row);
+    crate::native::economy::buyback_removed(ctx, row);
 }
 
 crate::character_owned!(delete, fn sweep_delete_game_buyback_item(ctx, character_guid) {

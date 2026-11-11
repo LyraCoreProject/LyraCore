@@ -211,16 +211,24 @@ impl EncounterEquip {
         } else {
             table.insert(self)
         };
-        crate::native::creature_equipment_changed(ctx, &row, false);
+        crate::native::creature::equipment_changed(ctx, &row, false);
     }
 
     fn delete(ctx: &ReducerContext, guid: u64) {
         let table = ctx.db.game_encounter_equip();
         if let Some(row) = table.creature_guid().find(guid) {
             table.creature_guid().delete(guid);
-            crate::native::creature_equipment_changed(ctx, &row, true);
+            crate::native::creature::equipment_changed(ctx, &row, true);
         }
     }
+}
+
+/// Drops a departing creature's virtual equipment; its destroy already clears the client's view.
+pub(crate) fn forget_equipment(ctx: &ReducerContext, creature_guid: u64) {
+    ctx.db
+        .game_encounter_equip()
+        .creature_guid()
+        .delete(creature_guid);
 }
 
 pub(crate) fn hp_fired_key(entry: u32) -> u32 {
@@ -558,7 +566,6 @@ fn despawn_tracked(ctx: &ReducerContext, tracked: &[EncounterSpawn]) {
         crate::creatures::despawn_creature_entity(ctx, t.guid);
         crate::items::vendor_stock::forget(ctx, t.guid);
         ctx.db.game_creature_spawn().guid().delete(t.guid);
-        EncounterEquip::delete(ctx, t.guid);
         ctx.db.game_encounter_spawn().id().delete(t.id);
     }
 }
