@@ -84,8 +84,26 @@ fn fixture(name: &str) -> (Standalone, String) {
         "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
     ))[0]["guid"]
         .clone();
-    shard.assert_sql(&format!("INSERT INTO game_gossip_option (row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({OPTION},{SCENARIO_VENDOR_ENTRY},0,0,'Quest supplies',3,0,7,{CONDITION},0)"));
-    shard.assert_sql(&format!("INSERT INTO game_gossip_condition (condition_id,kind,value1,value2,value3,value4,flags) VALUES ({CONDITION},{},{SCENARIO_QUEST},1,0,0,0)", ConditionKind::QuestTaken.code()));
+    shard.insert_row(
+        "game_gossip_option",
+        &[
+            ("row_id", &OPTION),
+            ("entry", &SCENARIO_VENDOR_ENTRY),
+            ("text", &"Quest supplies"),
+            ("action", &3),
+            ("cond_type", &7),
+            ("cond_value_1", &CONDITION),
+        ],
+    );
+    shard.insert_row(
+        "game_gossip_condition",
+        &[
+            ("condition_id", &CONDITION),
+            ("kind", &ConditionKind::QuestTaken.code()),
+            ("value_1", &SCENARIO_QUEST),
+            ("value_2", &1),
+        ],
+    );
     let artifact = serde_json::json!({
         "kind": "script", "version": 1, "package": "test_fixture.gossip",
         "source_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -132,7 +150,14 @@ fn imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction(
     ));
     select(&shard, &npc, OPTION + 1, NOT_IN_MENU);
     shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {not}, value1 = 5099002, value2 = 0 WHERE condition_id = {CONDITION}"));
-    shard.assert_sql(&format!("INSERT INTO game_gossip_condition (condition_id,kind,value1,value2,value3,value4,flags) VALUES (5099002,{},0,0,0,0,1)", ConditionKind::Unsupported(99).code()));
+    shard.insert_row(
+        "game_gossip_condition",
+        &[
+            ("condition_id", &5099002),
+            ("kind", &ConditionKind::Unsupported(99).code()),
+            ("flags", &1),
+        ],
+    );
     select(
         &shard,
         &npc,
@@ -165,14 +190,36 @@ fn a_menu_switch_refuses_colliding_rows_and_synthesized_options_before_the_hook(
     const SECOND_MENU: u32 = 509_9002;
     let (shard, npc) = fixture("gossip-menu-source");
     shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {always}, value1 = 0, value2 = 0 WHERE condition_id = {CONDITION}"));
-    shard.assert_sql(&format!("INSERT INTO game_gossip_menu_profile (menu_id,text_id) VALUES ({FIRST_MENU},1),({SECOND_MENU},1)"));
-    shard.assert_sql(&format!("INSERT INTO game_gossip_menu_profile_option (row_id,menu_id,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({OPTION},{FIRST_MENU},0,0,'Profile supplies',3,0,0,0,0)"));
+    shard.insert_rows(
+        "game_gossip_menu_profile",
+        &[
+            &[("menu_id", &FIRST_MENU), ("text_id", &1)],
+            &[("menu_id", &SECOND_MENU), ("text_id", &1)],
+        ],
+    );
+    shard.insert_row(
+        "game_gossip_menu_profile_option",
+        &[
+            ("row_id", &OPTION),
+            ("menu_id", &FIRST_MENU),
+            ("text", &"Profile supplies"),
+            ("action", &3),
+        ],
+    );
     select_from(&shard, &npc, OPTION, 0, gossip_option::VENDOR, ALLOWED);
 
     let entity = &shard.query_rows(&format!(
         "SELECT map_id,instance_id FROM game_world_entity WHERE guid = {npc}"
     ))[0];
-    shard.assert_sql(&format!("INSERT INTO game_creature_gossip_menu_override (creature_guid,menu_id,map_id,instance_id) VALUES ({npc},{FIRST_MENU},{},{})", entity["map_id"], entity["instance_id"]));
+    shard.insert_row(
+        "game_creature_gossip_menu_override",
+        &[
+            ("creature_guid", &npc),
+            ("menu_id", &FIRST_MENU),
+            ("map_id", &entity["map_id"]),
+            ("instance_id", &entity["instance_id"]),
+        ],
+    );
     select_from(&shard, &npc, OPTION, 0, gossip_option::VENDOR, MENU_CHANGED);
     select_from(
         &shard,
@@ -285,10 +332,19 @@ fn changed_service_actions_and_new_authored_services_refuse_stale_clicks() {
     const MENU: u32 = 509_9001;
     let (shard, npc) = fixture("gossip-service-identity");
     shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {always}, value1 = 0, value2 = 0 WHERE condition_id = {CONDITION}"));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_gossip_menu_profile (menu_id,text_id) VALUES ({MENU},1)"
-    ));
-    shard.assert_sql(&format!("INSERT INTO game_gossip_menu_profile_option (row_id,menu_id,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({OPTION},{MENU},0,0,'Profile supplies',3,0,0,0,0)"));
+    shard.insert_row(
+        "game_gossip_menu_profile",
+        &[("menu_id", &MENU), ("text_id", &1)],
+    );
+    shard.insert_row(
+        "game_gossip_menu_profile_option",
+        &[
+            ("row_id", &OPTION),
+            ("menu_id", &MENU),
+            ("text", &"Profile supplies"),
+            ("action", &3),
+        ],
+    );
     let entity = &shard.query_rows(&format!(
         "SELECT map_id,instance_id FROM game_world_entity WHERE guid = {npc}"
     ))[0];
@@ -298,7 +354,15 @@ fn changed_service_actions_and_new_authored_services_refuse_stale_clicks() {
         ("game_gossip_menu_profile_option", MENU),
     ] {
         if source != 0 {
-            shard.assert_sql(&format!("INSERT INTO game_creature_gossip_menu_override (creature_guid,menu_id,map_id,instance_id) VALUES ({npc},{MENU},{},{})", entity["map_id"], entity["instance_id"]));
+            shard.insert_row(
+                "game_creature_gossip_menu_override",
+                &[
+                    ("creature_guid", &npc),
+                    ("menu_id", &MENU),
+                    ("map_id", &entity["map_id"]),
+                    ("instance_id", &entity["instance_id"]),
+                ],
+            );
         }
         select_from(&shard, &npc, OPTION, source, gossip_option::VENDOR, ALLOWED);
         shard.assert_sql(&format!(
@@ -418,10 +482,19 @@ fn authored_services_require_current_capability_before_the_hook() {
     shard.assert_sql(&format!(
         "UPDATE game_gossip_option SET cond_type = 0 WHERE row_id = {OPTION}"
     ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_gossip_menu_profile (menu_id,text_id) VALUES ({MENU},1)"
-    ));
-    shard.assert_sql(&format!("INSERT INTO game_gossip_menu_profile_option (row_id,menu_id,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({OPTION},{MENU},0,0,'Profile supplies',3,0,0,0,0)"));
+    shard.insert_row(
+        "game_gossip_menu_profile",
+        &[("menu_id", &MENU), ("text_id", &1)],
+    );
+    shard.insert_row(
+        "game_gossip_menu_profile_option",
+        &[
+            ("row_id", &OPTION),
+            ("menu_id", &MENU),
+            ("text", &"Profile supplies"),
+            ("action", &3),
+        ],
+    );
     let entity = &shard.query_rows(&format!(
         "SELECT map_id,instance_id FROM game_world_entity WHERE guid = {npc}"
     ))[0];
@@ -431,7 +504,15 @@ fn authored_services_require_current_capability_before_the_hook() {
         ("game_gossip_menu_profile_option", MENU),
     ] {
         if source != 0 {
-            shard.assert_sql(&format!("INSERT INTO game_creature_gossip_menu_override (creature_guid,menu_id,map_id,instance_id) VALUES ({npc},{MENU},{},{})", entity["map_id"], entity["instance_id"]));
+            shard.insert_row(
+                "game_creature_gossip_menu_override",
+                &[
+                    ("creature_guid", &npc),
+                    ("menu_id", &MENU),
+                    ("map_id", &entity["map_id"]),
+                    ("instance_id", &entity["instance_id"]),
+                ],
+            );
         }
         for (action, flag) in [
             (gossip_option::VENDOR, npc_flags::VENDOR),

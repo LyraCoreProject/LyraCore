@@ -40,10 +40,10 @@ fn the_level_cap_discards_excess_xp_and_preserves_rested_xp_on_later_kills() {
     standalone.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 60 WHERE guid = {creature}"
     ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_creature_quest_tap (creature_guid, character_guid) \
-         VALUES ({creature}, 1)"
-    ));
+    standalone.insert_row(
+        "game_creature_quest_tap",
+        &[("creature_guid", &creature), ("character_guid", &1)],
+    );
     standalone.assert_call("debug_kill_nearest", &["1", &TEST_WOLF_ENTRY.to_string()]);
 
     assert_capped(&standalone);

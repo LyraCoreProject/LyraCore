@@ -297,12 +297,49 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
                 ("learn_spell", &50946),
             ],
         );
-        node.assert_sql(&format!("INSERT INTO game_quest_template (entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level,quest_type) VALUES ({quest},1,20,'Binding fixture',0,0,0,1,256,-61,0,0,0,0,{item},1,false,0,0,0,0)"));
-        node.assert_sql(&format!("INSERT INTO game_quest_objective (id,quest_entry,obj_index,kind,target_entry,required_count) VALUES ({quest},{quest},0,0,{creature},1)"));
-        node.assert_sql(&format!("INSERT INTO game_creature_quest (id,creature_entry,quest_entry,role) VALUES ({},{GIVER},{quest},0),({},{GIVER},{quest},1)", quest * 2, quest * 2 + 1));
-        node.assert_sql(&format!(
-            "INSERT INTO game_quest_reward_spell (quest_entry,spell_id) VALUES ({quest},{reward})"
-        ));
+        node.insert_row(
+            "game_quest_template",
+            &[
+                ("entry", &quest),
+                ("min_level", &1),
+                ("quest_level", &20),
+                ("title", &"Binding fixture"),
+                ("required_races", &1),
+                ("required_classes", &256),
+                ("zone_or_sort", &-61),
+                ("src_item", &item),
+                ("src_item_count", &1),
+            ],
+        );
+        node.insert_row(
+            "game_quest_objective",
+            &[
+                ("id", &quest),
+                ("quest_entry", &quest),
+                ("target_entry", &creature),
+                ("required_count", &1),
+            ],
+        );
+        node.insert_rows(
+            "game_creature_quest",
+            &[
+                &[
+                    ("id", &(quest * 2)),
+                    ("creature_entry", &GIVER),
+                    ("quest_entry", &quest),
+                ],
+                &[
+                    ("id", &(quest * 2 + 1)),
+                    ("creature_entry", &GIVER),
+                    ("quest_entry", &quest),
+                    ("role", &1),
+                ],
+            ],
+        );
+        node.insert_row(
+            "game_quest_reward_spell",
+            &[("quest_entry", &quest), ("spell_id", &reward)],
+        );
         node.assert_call("debug_accept_quest", &[PLAYER, &giver, &quest.to_string()]);
         abandon_and_reaccept(&node, &giver, quest, item);
         let inventory = node.query_rows(&format!(

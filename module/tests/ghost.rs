@@ -410,7 +410,18 @@ fn timestamp(value: &str) -> i64 {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_ghost_chooses_a_spirit_healer_in_reach_and_pays_its_penalties() {
     let shard = fixture("ghost-spirit-healer", 1);
-    shard.assert_sql(&format!("INSERT INTO game_gossip_option (row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({SPIRIT_HEALER_OPTION},{SPIRIT_HEALER_ENTRY},0,0,'Return me to life.',{},0,0,0,0)", lyracore_shared::constants::gossip_option::SPIRITHEALER));
+    shard.insert_row(
+        "game_gossip_option",
+        &[
+            ("row_id", &SPIRIT_HEALER_OPTION),
+            ("entry", &SPIRIT_HEALER_ENTRY),
+            ("text", &"Return me to life."),
+            (
+                "action",
+                &lyracore_shared::constants::gossip_option::SPIRITHEALER,
+            ),
+        ],
+    );
     shard.assert_call("debug_set_level", &["1", "15"]);
     let beside_the_living = spirit_healer(&shard, 2.0);
     assert!(
