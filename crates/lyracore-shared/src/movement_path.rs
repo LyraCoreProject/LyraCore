@@ -80,7 +80,7 @@ pub fn packed_offset(destination: Point, point: Point) -> Option<u32> {
     Some(x | (y << 11) | (z << 22))
 }
 
-pub fn unpacked_point(destination: Point, packed: u32) -> Point {
+fn unpacked_point(destination: Point, packed: u32) -> Point {
     let x = ((packed << 21) as i32 >> 21) as f32 * 0.25;
     let y = ((packed << 10) as i32 >> 21) as f32 * 0.25;
     let z = (packed as i32 >> 22) as f32 * 0.25;

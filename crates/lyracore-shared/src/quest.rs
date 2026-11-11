@@ -1,19 +1,19 @@
 use crate::race_class::{mask_admits, ZeroMask};
 
 // Placeholder XP curve for templates without an explicit reward.
-pub fn xp_reward(quest_level: u32) -> u32 {
+fn xp_reward(quest_level: u32) -> u32 {
     quest_level.saturating_mul(45).saturating_add(40)
 }
 
 // Placeholder conversion of six copper per XP at the level cap.
-pub const MAX_LEVEL_XP_TO_COPPER: u32 = 6;
+const MAX_LEVEL_XP_TO_COPPER: u32 = 6;
 
 pub fn max_level_money_reward(xp: u32) -> u32 {
     xp.saturating_mul(MAX_LEVEL_XP_TO_COPPER)
 }
 
 // Vanilla XP is ceil(RewMoneyMaxLevel / 0.6).
-pub fn quest_xp(reward_money_max_level: u32) -> u32 {
+fn quest_xp(reward_money_max_level: u32) -> u32 {
     if reward_money_max_level == 0 {
         return 0;
     }

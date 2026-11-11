@@ -140,7 +140,7 @@ fn a_second_charter_answers_cant_carry_more_of_this() {
 fn the_petition_values_update_sets_only_word_twenty_two_of_the_charter() {
     let (opcode, body) = build_charter_petition_values(0x4000_0000_0000_0101, 42);
     assert_eq!(opcode, 0x00A9);
-    let updates = lyracore_shared::values_mask::parse_values_updates(&body);
+    let updates = crate::codec::values_mask::parse_values_updates(&body);
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0].guid, 0x4000_0000_0000_0101);
     assert_eq!(updates[0].fields, vec![(22, 42)]);
@@ -162,7 +162,7 @@ fn suffix_item(random_property_enchant_ids: [u32; 3]) -> ItemInstanceView {
 fn enchantment_slot_fields(inst: &ItemInstanceView) -> Vec<(u16, u32)> {
     let (opcode, body) = build_enchantment_slot_values(inst).expect("a slot update");
     assert_eq!(opcode, 0x00A9);
-    let updates = lyracore_shared::values_mask::parse_values_updates(&body);
+    let updates = crate::codec::values_mask::parse_values_updates(&body);
     assert_eq!(updates.len(), 1);
     assert_eq!(updates[0].guid, inst.guid);
     updates[0].fields.clone()
@@ -211,7 +211,7 @@ fn a_temporary_enchantment_fills_slot_one_with_its_id_duration_and_charges() {
 #[test]
 fn clearing_a_temporary_enchantment_zeroes_all_three_words() {
     let (_, body) = build_temporary_enchantment_values(7, TemporaryEnchantmentView::default());
-    let updates = lyracore_shared::values_mask::parse_values_updates(&body);
+    let updates = crate::codec::values_mask::parse_values_updates(&body);
     assert_eq!(updates[0].fields, vec![(25, 0), (26, 0), (27, 0)]);
 }
 

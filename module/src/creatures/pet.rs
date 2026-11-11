@@ -1,5 +1,5 @@
 use lyracore_shared::constants;
-use lyracore_shared::pet::pet_guid_for;
+use lyracore_shared::guid;
 #[cfg(feature = "debug_reducers")]
 use spacetimedb::reducer;
 use spacetimedb::{table, ReducerContext, Table};
@@ -7,6 +7,16 @@ use spacetimedb::{table, ReducerContext, Table};
 use crate::{game_creature_template, game_melee_attack, game_world_entity, WorldEntity};
 
 use super::spawn::{build_creature_entity, CreatureSpawn};
+
+// Creature-owned guardians use HIGHGUID_PET to avoid colliding with their owner guid.
+pub(crate) fn pet_guid_for(owner_guid: u64) -> u64 {
+    let high = if guid::is_creature(owner_guid) {
+        guid::PET
+    } else {
+        guid::UNIT
+    };
+    guid::compose(high, guid::low(owner_guid))
+}
 
 #[table(accessor = game_pet_command)]
 pub struct PetCommand {
@@ -280,4 +290,22 @@ pub(crate) fn despawn_pet(ctx: &ReducerContext, pet_guid: u64) {
     let owner_guid = pet.owner_guid;
     super::despawn_creature_entity(ctx, pet.guid);
     ctx.db.game_pet_command().owner_guid().delete(owner_guid);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_player_owners_pet_keeps_the_unit_namespace() {
+        let owner = 7;
+        assert_eq!(guid::high(pet_guid_for(owner)), guid::UNIT);
+        assert_eq!(guid::low(pet_guid_for(owner)), 7);
+    }
+
+    #[test]
+    fn a_creature_owners_guardian_uses_the_pet_namespace() {
+        let owner = guid::compose(guid::UNIT, 11);
+        assert_eq!(guid::high(pet_guid_for(owner)), guid::PET);
+    }
 }

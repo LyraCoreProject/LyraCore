@@ -31,7 +31,7 @@ mod tests {
         assert_ne!(arbiter.1, team.1);
         assert_ne!(team.1, clear.1);
 
-        let arbiter_values = lyracore_shared::values_mask::parse_values_updates(&arbiter.1);
+        let arbiter_values = crate::codec::values_mask::parse_values_updates(&arbiter.1);
         assert_eq!(
             arbiter_values[0].fields,
             vec![
@@ -42,12 +42,12 @@ mod tests {
                 ),
             ]
         );
-        let team_values = lyracore_shared::values_mask::parse_values_updates(&team.1);
+        let team_values = crate::codec::values_mask::parse_values_updates(&team.1);
         assert_eq!(
             team_values[0].fields,
             vec![(update_mask::idx::PLAYER_DUEL_TEAM, 1)]
         );
-        let clear_values = lyracore_shared::values_mask::parse_values_updates(&clear.1);
+        let clear_values = crate::codec::values_mask::parse_values_updates(&clear.1);
         assert_eq!(
             clear_values[0].fields,
             vec![

@@ -1,6 +1,6 @@
 mod support;
 
-use lyracore_shared::pet::{pet_guid_for, PET_NAME_INVALID};
+use lyracore_shared::guid;
 use support::{actor, number, poll_until, Row, Standalone, POLL_TIMEOUT};
 
 const HUNTER: &str = "1";
@@ -8,6 +8,9 @@ const BOAR: &str = "51008";
 const TAME: &str = "50300";
 /// `UNIT_FLAG_PET_RENAME`: the 1.12 client offers "Rename Pet" while the live pet carries it.
 const PET_RENAME_FLAG: u32 = 0x10;
+const PET_NAME_INVALID: &str = "PET_NAME_INVALID";
+/// A player's hunter pet keeps the owner's low guid under the unit high part.
+const HUNTER_PET: u64 = guid::compose(guid::UNIT, 1);
 
 fn wild_boar(shard: &Standalone) -> String {
     let before = shard.query_rows(&format!(
@@ -43,7 +46,7 @@ fn tame_dismiss_and_retame_preserve_one_durable_identity_and_clean_live_state() 
     let shard = hunter("hunter-pet-lifetime");
     let wild = wild_boar(&shard);
     shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
-    let pet = pet_guid_for(1).to_string();
+    let pet = HUNTER_PET.to_string();
     assert!(shard
         .query_rows(&format!(
             "SELECT guid FROM game_world_entity WHERE guid = {wild}"
@@ -83,10 +86,7 @@ fn tame_dismiss_and_retame_preserve_one_durable_identity_and_clean_live_state() 
     );
     let protocol =
         shard.query_rows("SELECT live_pet_guid FROM game_hunter_pet_protocol WHERE owner_guid = 1");
-    assert_eq!(
-        number::<u64>(&protocol[0], "live_pet_guid"),
-        pet_guid_for(1)
-    );
+    assert_eq!(number::<u64>(&protocol[0], "live_pet_guid"), HUNTER_PET);
 
     shard.assert_call("debug_pet_command", &[HUNTER, "117440515", "0"]);
     for table in [
@@ -132,10 +132,7 @@ fn tame_dismiss_and_retame_preserve_one_durable_identity_and_clean_live_state() 
     );
     let protocol =
         shard.query_rows("SELECT live_pet_guid FROM game_hunter_pet_protocol WHERE owner_guid = 1");
-    assert_eq!(
-        number::<u64>(&protocol[0], "live_pet_guid"),
-        pet_guid_for(1)
-    );
+    assert_eq!(number::<u64>(&protocol[0], "live_pet_guid"), HUNTER_PET);
 }
 
 fn identity(shard: &Standalone) -> Row {
@@ -159,7 +156,7 @@ fn live_pet_flags(shard: &Standalone) -> u32 {
     let row = shard
         .query_rows(&format!(
             "SELECT unit_flags FROM game_world_entity WHERE guid = {}",
-            pet_guid_for(1)
+            HUNTER_PET
         ))
         .remove(0);
     number(&row, "unit_flags")
@@ -188,7 +185,7 @@ fn a_hunter_renames_its_own_pet_once_and_the_name_outlives_logout() {
     let shard = hunter("hunter-pet-rename");
     let wild = wild_boar(&shard);
     shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
-    let pet = pet_guid_for(1);
+    let pet = HUNTER_PET;
     let template_name = shard
         .query_rows(&format!(
             "SELECT name FROM game_creature_template WHERE entry = {BOAR}"
@@ -255,7 +252,7 @@ fn a_summoned_pet_cannot_be_renamed_as_a_hunter_pet() {
         "UPDATE game_spell_effect SET kind = {E_SUMMON_PET}, target = {T_SELF}, p0 = {BOAR} WHERE spell_id = {TAME}"
     ));
     shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, HUNTER]);
-    let pet = pet_guid_for(1);
+    let pet = HUNTER_PET;
     assert_eq!(
         shard.query_rows(&format!(
             "SELECT hunter_pet_id FROM game_live_pet_kind WHERE pet_guid = {pet}"
@@ -283,7 +280,7 @@ fn existing_live_pet_recovers_rename_eligibility_without_losing_other_flags() {
     let shard = hunter("hunter-pet-name-upgrade");
     let wild = wild_boar(&shard);
     shard.assert_call("debug_force_cast_at", &[HUNTER, TAME, &wild]);
-    let pet = pet_guid_for(1);
+    let pet = HUNTER_PET;
     let original_name = protocol_name(&shard);
     shard.assert_sql("UPDATE game_hunter_pet SET name_timestamp = 0 WHERE owner_guid = 1");
     shard.assert_sql(&format!(

@@ -1,11 +1,11 @@
+use lyracore_protocol::messages::vanilla::CMSG_WHO;
 use lyracore_shared::faction;
-use wow_world_messages::vanilla::CMSG_WHO;
 
 const MAX_ZONES: usize = 10;
 const MAX_SEARCH_STRINGS: usize = 4;
 const NO_UPPER_BOUND_AT: u8 = 100;
 
-pub struct WhoCandidate<'a> {
+pub(crate) struct WhoCandidate<'a> {
     pub name: &'a str,
     pub guild_name: &'a str,
     pub race: u8,
@@ -15,7 +15,7 @@ pub struct WhoCandidate<'a> {
     pub zone_name: &'a str,
 }
 
-pub struct WhoFilter<'a> {
+pub(crate) struct WhoFilter<'a> {
     pub requester_team: u32,
     pub min_level: u8,
     pub max_level: u8,
@@ -49,7 +49,7 @@ fn search_strings_match(strings: &[String], candidate: &WhoCandidate) -> bool {
     !any_real
 }
 
-pub fn matches(filter: &WhoFilter, candidate: &WhoCandidate) -> bool {
+pub(crate) fn matches(filter: &WhoFilter, candidate: &WhoCandidate) -> bool {
     faction::team_for_race(candidate.race) == filter.requester_team
         && candidate.level >= filter.min_level
         && candidate.level <= filter.max_level
@@ -75,7 +75,7 @@ fn effective_max_level(wire_max_level: u8) -> u8 {
 }
 
 impl<'a> WhoFilter<'a> {
-    pub fn from_request(requester_race: u8, request: &'a CMSG_WHO) -> Option<Self> {
+    pub(crate) fn from_request(requester_race: u8, request: &'a CMSG_WHO) -> Option<Self> {
         if is_oversized(request) {
             return None;
         }
@@ -96,8 +96,8 @@ impl<'a> WhoFilter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lyracore_protocol::messages::vanilla::Level;
     use lyracore_shared::faction::{TEAM_ALLIANCE, TEAM_HORDE};
-    use wow_world_messages::vanilla::Level;
 
     fn baseline() -> (WhoFilter<'static>, WhoCandidate<'static>) {
         let filter = WhoFilter {

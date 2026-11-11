@@ -432,7 +432,7 @@ mod tests {
     fn guild_values_carry_only_the_guild_id_and_rank() {
         let (opcode, body) = build_guild_values(0x0102, 7, 3);
         assert_eq!(opcode, 0x00A9);
-        let updates = lyracore_shared::values_mask::parse_values_updates(&body);
+        let updates = crate::codec::values_mask::parse_values_updates(&body);
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].guid, 0x0102);
         assert_eq!(updates[0].fields, vec![(191, 7), (192, 3)]);

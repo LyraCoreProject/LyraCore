@@ -810,7 +810,7 @@ pub(crate) fn apply_movement_update(
         && mover.is_player()
         && !movement.carries(movement_flags::ON_TRANSPORT)
     {
-        let dmg = lyracore_shared::env::fall_damage(movement.fall_time_ms(), mover.max_health);
+        let dmg = fall_damage(movement.fall_time_ms(), mover.max_health);
         let (health, lethal) = resolve_environmental_damage(dmg, mover.health);
         mover.health = health;
         fall_lethal = lethal;
@@ -828,15 +828,14 @@ pub(crate) fn apply_movement_update(
         && (move_time_ms / 1000 != old_move_ms / 1000)
     {
         let liquid_level = crate::terrain::liquid_level_at(ctx, mover.map_id, mover.x, mover.y);
-        let submerged =
-            lyracore_shared::env::is_submerged(mover.z, liquid_level, mover.movement_flags);
+        let submerged = crate::terrain::is_submerged(mover.z, liquid_level, mover.movement_flags);
         crate::breath::update_breath_edge(ctx, &mover, submerged);
     }
     if crate::fatigue::feels_fatigue(&mover) && (move_time_ms / 1000 != old_move_ms / 1000) {
         let deep_water_level =
             crate::terrain::deep_water_level_at(ctx, mover.map_id, mover.x, mover.y);
         let in_deep_water =
-            lyracore_shared::env::is_in_deep_water(mover.z, deep_water_level, mover.movement_flags);
+            crate::terrain::is_in_deep_water(mover.z, deep_water_level, mover.movement_flags);
         crate::fatigue::update_fatigue_edge(ctx, &mover, in_deep_water);
     }
     let mount_indoor_due = mover.is_player()
@@ -973,14 +972,35 @@ pub(crate) fn sweep_expired(ctx: &ReducerContext) {
     }
 }
 
+// Client fall_time_ms includes jump ascent; gravity is about 19.29 yd/s^2.
+fn fall_damage(fall_time_ms: u32, max_health: u32) -> u32 {
+    let t = fall_time_ms as f32 / 1000.0;
+    let height_yd = 0.5 * 19.29 * t * t;
+    let perc = 0.018 * height_yd - 0.2426;
+    if perc <= 0.0 {
+        return 0;
+    }
+    (max_health as f32 * perc.min(1.0)) as u32
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        movement_violation, resolve_environmental_damage, snapshot_needs_persist,
+        fall_damage, movement_violation, resolve_environmental_damage, snapshot_needs_persist,
         MOVE_VIOLATION_SPEED, MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD,
     };
 
     const HEARTBEAT: u16 = lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16;
+
+    #[test]
+    fn fall_damage_curve() {
+        assert_eq!(fall_damage(0, 100), 0);
+        assert_eq!(fall_damage(800, 100), 0);
+        assert_eq!(fall_damage(1_180, 100), 0);
+        assert_eq!(fall_damage(1_500, 100), 14);
+        assert_eq!(fall_damage(1_500, 1_000), 148);
+        assert_eq!(fall_damage(10_000, 100), 100);
+    }
 
     #[test]
     fn a_heartbeat_that_changed_nothing_observable_is_not_persisted() {

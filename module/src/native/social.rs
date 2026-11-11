@@ -4,20 +4,23 @@ use lyracore_protocol::{
         opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
         FriendResult, CMSG_WHO,
     },
-    who::{WhoCandidate, WhoFilter},
     AwayStatus,
 };
-use lyracore_shared::{chat::chat_tag_for, faction::same_team, social::ContactRefusal};
+use lyracore_shared::{chat::chat_tag_for, faction::same_team};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{
     directory::game_character_profile,
     game_native_player, game_native_world_connection,
     realm_party::{game_party_character, PartyCharacter},
+    who::{WhoCandidate, WhoFilter},
     NativeWorldConnection, Rollback,
 };
 use crate::{
-    chat::game_character_contact, game_area, game_world_entity, guild::game_guild, Character,
+    chat::{game_character_contact, ContactRefusal},
+    game_area, game_world_entity,
+    guild::game_guild,
+    Character,
 };
 
 pub(super) fn claims(message: &ClientOpcodeMessage) -> bool {
@@ -510,7 +513,7 @@ pub(super) fn who_matches(
         } else {
             String::new()
         };
-        if lyracore_protocol::who::matches(
+        if super::who::matches(
             filter,
             &WhoCandidate {
                 name: &character.name,

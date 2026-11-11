@@ -642,7 +642,7 @@ fn contact_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEn
         acting_entity_by_guid(ctx, actor_guid).ok_or_else(|| "mover not in world".to_string())?;
     if crate::taxi::is_in_flight(ctx, actor_guid) {
         return Err(crate::chat::refused_contact(
-            lyracore_shared::social::ContactRefusal::ActorUnavailable,
+            crate::chat::ContactRefusal::ActorUnavailable,
             &format!("actor {actor_guid} is in taxi flight"),
         )
         .as_tag()

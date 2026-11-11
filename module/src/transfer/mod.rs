@@ -27,6 +27,7 @@ use crate::helpers::require_operator;
 use crate::{game_character, game_creature_spline, game_world_entity};
 
 const BOT_TRANSFER_CLAIM_MICROS: i64 = 5_000_000;
+const BOT_TRANSFER_PENDING_LIMIT: usize = 64;
 
 pub(crate) const TRANSFER_STALE_MICROS: i64 = 30_000_000;
 
@@ -97,7 +98,7 @@ crate::character_owned!(delete, fn sweep_delete_game_transfer_out(ctx, character
         let ids: Vec<_> = intents
 .by_bot()
 .filter(character_guid)
-.take(lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT + 1)
+.take(BOT_TRANSFER_PENDING_LIMIT + 1)
 .map(|intent| intent.id)
 .collect();
         for id in ids {
@@ -228,12 +229,7 @@ pub(crate) fn bot_transfer_intent_gate(
             "Character already has a pending Transfer Intent",
         ));
     }
-    if intents
-        .iter()
-        .take(lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT)
-        .count()
-        == lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT
-    {
+    if intents.iter().take(BOT_TRANSFER_PENDING_LIMIT).count() == BOT_TRANSFER_PENDING_LIMIT {
         return Err(ActionRefusal::new(
             ActionRefusalKind::TransferPending,
             "World Shard has too many pending Transfer Intents",
@@ -530,9 +526,9 @@ pub(crate) fn in_transit_instances(
         .db
         .game_bot_transfer_intent()
         .iter()
-        .take(lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT + 1)
+        .take(BOT_TRANSFER_PENDING_LIMIT + 1)
         .collect();
-    if pending.len() > lyracore_shared::transfer::BOT_TRANSFER_PENDING_LIMIT {
+    if pending.len() > BOT_TRANSFER_PENDING_LIMIT {
         return Err(TransferClaimReadLimit);
     }
     for intent in pending {

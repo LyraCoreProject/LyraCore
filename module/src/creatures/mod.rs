@@ -52,9 +52,10 @@ pub use hunter_pet::{
 pub(crate) use hunter_pet::{
     clear_live_pet_kind, hunter_pet_for_owner, live_pet_kind, mark_summoned_pet,
     publish_hunter_pet_protocol, rename_hunter_pet, tame_creature, validate_tame, PetRenameRefusal,
+    PET_NAME_INVALID,
 };
 
-pub(crate) use pet::{apply_pet_command, despawn_pets, pet_of, summon_pet};
+pub(crate) use pet::{apply_pet_command, despawn_pets, pet_guid_for, pet_of, summon_pet};
 pub use pet::{game_pet_command, PetCommand};
 
 pub use pet_care::{game_pet_care_schedule, PetCareSchedule, CARE_INTERVAL_MICROS};

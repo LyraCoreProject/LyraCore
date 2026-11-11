@@ -1,3 +1,4 @@
+use crate::duel::{completion_kind, event_kind};
 use lyracore_protocol::{
     codec,
     messages::{
@@ -9,7 +10,6 @@ use lyracore_protocol::{
         Guid,
     },
 };
-use lyracore_shared::duel::{completion_kind, event_kind};
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::Rollback;

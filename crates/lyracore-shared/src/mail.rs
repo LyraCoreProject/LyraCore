@@ -1,5 +1,5 @@
-pub const HAS_UNREAD_MAIL: f32 = 0.0;
-pub const NO_UNREAD_MAIL: f32 = -86400.0;
+const HAS_UNREAD_MAIL: f32 = 0.0;
+const NO_UNREAD_MAIL: f32 = -86400.0;
 pub const MAILBOX_GO_TYPE: u8 = 19;
 pub const INBOX_CAPACITY: usize = 50;
 pub const CHECK_MASK_READ: u32 = 0x01;
@@ -19,8 +19,8 @@ pub const SENDER_KIND_CHARACTER: u8 = 0;
 pub const SENDER_KIND_AUCTION: u8 = 2;
 pub const SENDER_KIND_CREATURE: u8 = 3;
 pub const SENDER_KIND_GAMEOBJECT: u8 = 4;
-pub const STATIONERY_DEFAULT: u32 = 41;
-pub const STATIONERY_AUCTION: u32 = 62;
+const STATIONERY_DEFAULT: u32 = 41;
+const STATIONERY_AUCTION: u32 = 62;
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum MailSender {
     Character(u64),
@@ -115,7 +115,7 @@ pub fn expires_at_secs(created_secs: i64, deliver_secs: i64, cod: u32) -> i64 {
     let lifetime_days = if cod > 0 { 3 } else { 30 };
     arrived_at_secs(created_secs, deliver_secs).saturating_add(lifetime_days * DAY_SECS)
 }
-pub const POSTAGE_COPPER: u32 = 30;
+const POSTAGE_COPPER: u32 = 30;
 pub fn postage() -> u32 {
     POSTAGE_COPPER
 }
@@ -154,14 +154,6 @@ pub fn cod_settlement(
         copper: cod,
         subject: subject.to_string(),
     })
-}
-pub fn no_recipient_named(name: &str) -> String {
-    format!("mail: no character named {name}")
-}
-pub const CANNOT_SEND_TO_SELF: &str = "mail: cannot send to yourself";
-pub const NOT_YOUR_TEAM: &str = "mail: recipient is not your team";
-pub fn ambiguous_recipient(name: &str) -> String {
-    format!("mail: {name} names more than one character on the realm")
 }
 pub fn unread_mail_signal(has_unread: bool) -> f32 {
     if has_unread {

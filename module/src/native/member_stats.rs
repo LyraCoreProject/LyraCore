@@ -189,7 +189,7 @@ fn auras(ctx: &ReducerContext, guid: u64) -> Vec<MemberAura> {
 }
 
 fn pet(ctx: &ReducerContext, guid: u64) -> Option<MemberPet> {
-    let pet_guid = lyracore_shared::pet::pet_guid_for(guid);
+    let pet_guid = crate::creatures::pet_guid_for(guid);
     let pet = ctx
         .db
         .game_world_entity()

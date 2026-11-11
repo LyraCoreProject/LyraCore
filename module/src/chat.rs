@@ -2,7 +2,6 @@ use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
 use crate::game_world_entity;
 use lyracore_shared::chat::ChatRefusal;
-use lyracore_shared::social::ContactRefusal;
 
 pub const CHAT_SAY: u8 = lyracore_shared::chat::broadcast_chat::SAY;
 pub const CHAT_YELL: u8 = lyracore_shared::chat::broadcast_chat::YELL;
@@ -316,6 +315,29 @@ crate::character_owned!(restamp, fn sweep_restamp_game_character_contact(ctx, ch
         }
     }
 });
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ContactRefusal {
+    ActorUnavailable,
+    AddSelf,
+    AlreadyOnList,
+    ListFull,
+    NotOnList,
+    Enemy,
+}
+
+impl ContactRefusal {
+    pub(crate) fn as_tag(self) -> &'static str {
+        match self {
+            Self::ActorUnavailable => "social:actor_unavailable",
+            Self::AddSelf => "social:add_self",
+            Self::AlreadyOnList => "social:already_on_list",
+            Self::ListFull => "social:list_full",
+            Self::NotOnList => "social:not_on_list",
+            Self::Enemy => "social:enemy",
+        }
+    }
+}
 
 pub(crate) fn refused_contact(refusal: ContactRefusal, detail: &str) -> ContactRefusal {
     spacetimedb::log::info!("contact refused {}: {detail}", refusal.as_tag());

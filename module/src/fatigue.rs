@@ -1,8 +1,29 @@
 use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
+use crate::breath::{advance_mirror_timer, MirrorTimerAdvance};
 use crate::{game_world_entity, world::WorldEntity};
 use lyracore_shared::constants::player_flags;
-use lyracore_shared::env::{advance_fatigue, exhaustion_damage, FULL_FATIGUE_MICROS};
+
+const FULL_FATIGUE_MICROS: i64 = 60_000_000;
+const FATIGUE_RECOVERY_MICROS: i64 = FULL_FATIGUE_MICROS / 10;
+
+fn advance_fatigue(
+    remaining_micros: i64,
+    in_deep_water: bool,
+    elapsed_micros: i64,
+) -> MirrorTimerAdvance {
+    advance_mirror_timer(
+        remaining_micros,
+        FULL_FATIGUE_MICROS,
+        FATIGUE_RECOVERY_MICROS,
+        in_deep_water,
+        elapsed_micros,
+    )
+}
+
+fn exhaustion_damage(max_health: u32, level: u32, roll: u32) -> u32 {
+    (max_health / 5).saturating_add(roll % level.max(1))
+}
 
 #[table(accessor = game_fatigue_state)]
 pub struct FatigueState {
@@ -132,4 +153,47 @@ fn exhaust(ctx: &ReducerContext, mut entity: WorldEntity, ticks: u32) -> bool {
         entity.update(ctx);
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fatigue_drains_for_a_minute_then_exhausts_each_second() {
+        assert_eq!(
+            advance_fatigue(FULL_FATIGUE_MICROS, true, 59_000_000),
+            MirrorTimerAdvance {
+                remaining_micros: 1_000_000,
+                expired_ticks: 0
+            }
+        );
+        assert_eq!(
+            advance_fatigue(1_000_000, true, 3_000_000),
+            MirrorTimerAdvance {
+                remaining_micros: 0,
+                expired_ticks: 3
+            }
+        );
+    }
+
+    #[test]
+    fn fatigue_recovers_in_six_seconds_outside_deep_water() {
+        assert_eq!(
+            advance_fatigue(0, false, 3_000_000).remaining_micros,
+            30_000_000
+        );
+        assert_eq!(
+            advance_fatigue(0, false, 6_000_000).remaining_micros,
+            FULL_FATIGUE_MICROS
+        );
+    }
+
+    #[test]
+    fn exhaustion_damage_is_a_fifth_of_health_plus_a_level_roll() {
+        assert_eq!(exhaustion_damage(1000, 60, 0), 200);
+        assert_eq!(exhaustion_damage(1000, 60, 59), 259);
+        assert_eq!(exhaustion_damage(1000, 60, 60), 200);
+        assert_eq!(exhaustion_damage(1000, 1, 7), 200);
+    }
 }

@@ -63,7 +63,7 @@ files.
 | Old location | New location |
 | --- | --- |
 | `gateway/src/codec/*` | `crates/lyracore-protocol/src/codec/*`, mostly unchanged |
-| `gateway/src/world/who.rs` | `crates/lyracore-protocol/src/` |
+| `gateway/src/world/who.rs` | `module/src/native/who.rs` |
 | `packet_lint.rs` | deleted; nothing called it |
 | `gateway/examples/*` | `crates/lyracore-protocol/examples/*` |
 | `gateway/src/world/entry.rs` | `login` and `enter` in `module/src/native/world.rs` |

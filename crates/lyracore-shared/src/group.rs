@@ -177,11 +177,6 @@ pub mod leave_cause {
 }
 
 // Older game_bot_invite_intent rows default to INVITE.
-pub mod bot_op {
-    pub const INVITE: u8 = 0;
-    pub const LEAVE: u8 = 1;
-}
-
 pub const COMMAND_DISPATCH_LANES: u8 = 8;
 
 pub const COMMAND_RESULT_WINDOW_MICROS: i64 = 30_000_000;
@@ -662,13 +657,6 @@ mod tests {
         ] {
             assert_eq!(RosterPayload::decode(payload), None, "{payload:?}");
         }
-    }
-
-    #[test]
-    fn bot_group_intent_op_codes_are_stable_and_distinct() {
-        assert_eq!(bot_op::INVITE, 0, "the END-appended column defaults to 0");
-        assert_eq!(bot_op::LEAVE, 1);
-        assert_ne!(bot_op::INVITE, bot_op::LEAVE);
     }
 
     #[test]

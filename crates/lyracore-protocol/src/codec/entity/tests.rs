@@ -1343,7 +1343,7 @@ fn self_create_preserves_non_quest_fields_and_movement() {
         };
         let mut bytes = Vec::new();
         values.write_unencrypted_server(&mut bytes).unwrap();
-        let mut updates = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
+        let mut updates = crate::codec::values_mask::parse_values_updates(&bytes[4..]);
         updates[0]
             .fields
             .retain(|(index, _)| !(198..258).contains(index));

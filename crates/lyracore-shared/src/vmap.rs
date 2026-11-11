@@ -1,4 +1,4 @@
-pub const VMAP_VERSION: u8 = 1;
+const VMAP_VERSION: u8 = 1;
 
 // Maps with imported WMO instance slices; importer/manifests/world-profiles.json lists them.
 pub const INSTANCE_SLICE_MAPS: &[u32] = &[36];

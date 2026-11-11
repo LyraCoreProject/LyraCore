@@ -83,10 +83,10 @@ pub struct BuiltinChannel {
     pub zoned: bool,
 }
 
-pub const WORLD_DEFENSE_ID: u32 = 23;
+const WORLD_DEFENSE_ID: u32 = 23;
 pub const GUILD_RECRUITMENT_ID: u32 = 25;
 
-pub const BUILTIN_CHANNELS: [BuiltinChannel; 6] = [
+const BUILTIN_CHANNELS: [BuiltinChannel; 6] = [
     BuiltinChannel {
         id: 1,
         dbc_flags: 0x3,
@@ -159,8 +159,8 @@ pub fn classify(name: &str) -> Option<BuiltinChannel> {
     })
 }
 
-pub const MAX_NAME_CHARS: usize = 128;
-pub const MAX_PASSWORD_CHARS: usize = 128;
+const MAX_NAME_CHARS: usize = 128;
+const MAX_PASSWORD_CHARS: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChannelName {

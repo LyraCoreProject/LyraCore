@@ -1,5 +1,5 @@
+use crate::creatures::{pet_guid_for, PET_NAME_INVALID};
 use lyracore_protocol::{codec, messages::vanilla::opcodes::ServerOpcodeMessage};
-use lyracore_shared::pet::{pet_guid_for, PET_NAME_INVALID};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{game_native_player, NativeAoi, Rollback};

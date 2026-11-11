@@ -618,7 +618,7 @@ pub fn set_create_sheet_stats(
 
     let mut bytes = Vec::new();
     build_sheet_stats_values(guid, stats).write_unencrypted_server(&mut bytes)?;
-    let updates = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
+    let updates = crate::codec::values_mask::parse_values_updates(&bytes[4..]);
     let fields = &updates
         .first()
         .ok_or_else(|| anyhow!("could not read sheet descriptor"))?
@@ -652,7 +652,7 @@ fn add_create_fields(
     };
     let mut bytes = Vec::new();
     envelope.write_unencrypted_server(&mut bytes)?;
-    let decoded = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
+    let decoded = crate::codec::values_mask::parse_values_updates(&bytes[4..]);
     let fields = &decoded
         .first()
         .ok_or_else(|| anyhow!("could not read CREATE descriptor"))?

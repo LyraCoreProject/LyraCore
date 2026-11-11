@@ -8,10 +8,6 @@ macro_rules! effect_kinds {
 
         impl EffectKind {
             pub const ALL: &[Self] = &[$(Self::$variant),+];
-
-            pub const fn is_aura(self) -> bool {
-                self as u8 & KIND_AURA_BIT != 0
-            }
         }
 
         impl TryFrom<u8> for EffectKind {

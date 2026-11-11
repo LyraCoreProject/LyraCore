@@ -5,7 +5,6 @@ use lyracore_protocol::{
     messages::vanilla::{
         opcodes::ServerOpcodeMessage, SMSG_CHAT_PLAYER_NOT_FOUND, SMSG_NOTIFICATION,
     },
-    who::WhoFilter,
     world::Packet,
 };
 use lyracore_shared::chat::chat_kind;
@@ -18,6 +17,7 @@ use super::{
     directory::{self, game_character_directory},
     game_native_player, game_native_world_connection,
     realm_shard::game_native_away,
+    who::WhoFilter,
     NativeActive, NativeWorldState, Rollback,
 };
 use crate::{

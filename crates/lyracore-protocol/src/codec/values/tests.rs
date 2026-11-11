@@ -71,7 +71,7 @@ fn every_values_builder_serializes_without_the_object_type_bit() {
         let mut buf = Vec::new();
         m.write_unencrypted_server(&mut buf).unwrap();
         let body = &buf[4..];
-        let updates = lyracore_shared::values_mask::parse_values_updates(body);
+        let updates = crate::codec::values_mask::parse_values_updates(body);
         assert!(
             !updates.is_empty(),
             "{name}: no VALUES block decoded — framing drift?"
@@ -398,7 +398,7 @@ fn player_flags_values_only_write_changed_fields() {
         let msg = build_player_flags_values(guid, flags, bytes);
         let mut packet = Vec::new();
         msg.write_unencrypted_server(&mut packet).unwrap();
-        let updates = lyracore_shared::values_mask::parse_values_updates(&packet[4..]);
+        let updates = crate::codec::values_mask::parse_values_updates(&packet[4..]);
         assert_eq!(updates[0].fields, expected);
     }
 }
@@ -746,7 +746,7 @@ fn display_values_carries_only_the_current_appearance() {
         let msg = build_display_values(0x1234, display);
         let mut bytes = Vec::new();
         msg.write_unencrypted_server(&mut bytes).unwrap();
-        let updates = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
+        let updates = crate::codec::values_mask::parse_values_updates(&bytes[4..]);
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0].guid, 0x1234);
         assert_eq!(updates[0].fields, vec![(131, display)]);
@@ -822,7 +822,7 @@ fn visible_item_values_carry_the_permanent_enchant_in_the_first_enchant_word() {
     }
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    let updates = lyracore_shared::values_mask::parse_values_updates(&buf[4..]);
+    let updates = crate::codec::values_mask::parse_values_updates(&buf[4..]);
     let fields = &updates[0].fields;
     assert!(
         !fields.iter().any(|&(idx, _)| idx == 2),
@@ -843,7 +843,7 @@ fn item_enchantment_values_set_only_the_first_enchantment_word() {
     }
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    let updates = lyracore_shared::values_mask::parse_values_updates(&buf[4..]);
+    let updates = crate::codec::values_mask::parse_values_updates(&buf[4..]);
     assert_eq!(
         updates[0].fields,
         vec![(22, 823)],

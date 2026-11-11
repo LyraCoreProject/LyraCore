@@ -125,7 +125,7 @@ pub(crate) fn mount_cast_allowed_here(
 
 fn is_submerged_here(ctx: &ReducerContext, entity: &WorldEntity) -> bool {
     let level = crate::terrain::liquid_level_at(ctx, entity.map_id, entity.x, entity.y);
-    lyracore_shared::env::is_submerged(entity.z, level, entity.movement_flags)
+    crate::terrain::is_submerged(entity.z, level, entity.movement_flags)
 }
 
 pub(crate) fn check_mount_cast(

@@ -1,6 +1,5 @@
 pub mod codec;
 pub mod srp;
-pub mod who;
 pub mod world;
 pub use wow_login_messages as login_messages;
 pub use wow_world_messages as messages;

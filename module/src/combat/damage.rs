@@ -333,7 +333,7 @@ pub(crate) fn apply_hit(
             crate::duel::complete_duel(
                 ctx,
                 duel.id,
-                crate::duel::duel_completion_kind::WON,
+                crate::duel::completion_kind::WON,
                 attacker_guid,
                 target_guid,
             );

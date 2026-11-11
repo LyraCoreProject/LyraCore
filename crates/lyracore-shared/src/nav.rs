@@ -9,7 +9,7 @@ pub const OBS_DIM: usize = 32;
 pub const WALK_BYTES: usize = WALK_DIM * WALK_DIM / 8;
 pub const OBS_BYTES: usize = OBS_DIM * OBS_DIM;
 // Height quantum in yards, spanning 127 yards above base_z.
-pub const OBS_STEP: f32 = 0.5;
+const OBS_STEP: f32 = 0.5;
 pub const OBS_NONE: u8 = 255;
 // Geometry below WALK_STEP_UP is a step; geometry above WALK_HEIGHT is headroom.
 pub const WALK_STEP_UP: f32 = 0.9;

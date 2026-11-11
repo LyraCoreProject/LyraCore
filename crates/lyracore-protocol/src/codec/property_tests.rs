@@ -112,7 +112,7 @@ fn every_generated_update_mask_round_trips_through_the_raw_values_decoder() {
             "the raw VALUES builder must keep emitting SMSG_UPDATE_OBJECT"
         );
 
-        let decoded = lyracore_shared::values_mask::parse_values_updates(&body);
+        let decoded = crate::codec::values_mask::parse_values_updates(&body);
         assert_eq!(
             decoded.len(),
             1,
@@ -149,7 +149,7 @@ fn every_truncation_of_an_encoded_mask_decodes_a_subset_and_never_invents_a_fiel
         let (_, body) = values::build_values_update_raw(guid, &mask);
 
         for cut in 0..=body.len() {
-            let decoded = lyracore_shared::values_mask::parse_values_updates(&body[..cut]);
+            let decoded = crate::codec::values_mask::parse_values_updates(&body[..cut]);
             assert!(
                 decoded.len() <= 1,
                 "a single-object frame truncated to {cut} bytes decoded {} objects",

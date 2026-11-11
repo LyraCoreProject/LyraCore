@@ -72,6 +72,7 @@ mod transport;
 mod unavailable;
 mod view;
 mod visibility;
+mod who;
 mod world;
 pub(crate) use addon::appeared as addon_message;
 pub(crate) use auction::notice as auction_notice;

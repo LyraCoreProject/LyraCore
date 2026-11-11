@@ -100,12 +100,10 @@ pub mod unit_flags {
 
 pub mod tracer_spell {
     pub const SPELL_ID: u32 = 6673;
-    pub const AURA_SLOT: u8 = 0;
     pub const AURA_SLOTS: u8 = 48; // Total UNIT_FIELD_AURA slots.
                                    // Slots 0..32 render buffs; slots 32..48 render debuffs.
     pub const BUFF_SLOT_COUNT: u8 = 32;
     pub const AURA_FLAGS: u8 = 0x09;
-    pub const AURA_DURATION_MICROS: i64 = 30_000_000;
 }
 
 pub mod starter_item {
