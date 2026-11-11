@@ -116,7 +116,7 @@ data and archive names for Map lookup.
 **World Import Profile**:
 A named import plan that selects the maps and content one world import loads into a Shard.
 `full-world` imports every source map. The other profiles import part of the world. See
-`importer/src/world_import_scope.rs`.
+`importer/manifests/world-profiles.json`.
 
 **World Import Completion**:
 The record that a World Import loaded one map and passed its content checks. An import clears these

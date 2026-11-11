@@ -1,73 +1,169 @@
+use std::collections::BTreeMap;
+use std::sync::OnceLock;
+
 use anyhow::{bail, Context, Result};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WorldImportProfile {
-    FullWorld,
-    FullEastern,
-    FullKalimdor,
-    FullInstances,
-    AllianceEastern,
-    AllianceKalimdor,
-    AllianceSingle,
-    StartingEastern,
-    StartingKalimdor,
-    Instances,
+const PROFILES: &str = include_str!("../manifests/world-profiles.json");
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileData {
+    format_version: u32,
+    slices: BTreeMap<String, SliceData>,
+    instance_slices: BTreeMap<String, InstanceSliceData>,
+    forced_creatures: BTreeMap<String, Vec<u64>>,
+    profiles: Vec<ProfileDefinition>,
+    legacy_defaults: LegacyDefaults,
 }
 
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SliceData {
+    map: i64,
+    #[serde(rename = "box")]
+    bounds: String,
+    center: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct InstanceSliceData {
+    map: u32,
+    entry: String,
+    exit: String,
+    exit_radius: String,
+    collar_cells: u16,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileDefinition {
+    name: String,
+    primary_map: i64,
+    #[serde(default)]
+    all_maps: bool,
+    #[serde(default)]
+    all_templates: bool,
+    #[serde(default)]
+    slices: Vec<String>,
+    #[serde(default)]
+    whole_maps: Vec<i64>,
+    #[serde(default)]
+    instance_maps: bool,
+    #[serde(default)]
+    instance_slices: Vec<String>,
+    forced_creatures: Option<String>,
+    quest_catalogue: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyDefaults {
+    slice: String,
+    include_maps: Vec<i64>,
+    forced_creatures: String,
+}
+
+fn profile_data() -> &'static ProfileData {
+    static DATA: OnceLock<ProfileData> = OnceLock::new();
+    DATA.get_or_init(|| {
+        let data: ProfileData =
+            serde_json::from_str(PROFILES).expect("manifests/world-profiles.json parses");
+        assert_eq!(data.format_version, 1, "world profile format version");
+        data
+    })
+}
+
+/// A World Import Profile from `manifests/world-profiles.json`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct WorldImportProfile(usize);
+
 impl WorldImportProfile {
-    pub(crate) const NAMES: &[&str] = &[
-        "full-world",
-        "full-eastern",
-        "full-kalimdor",
-        "full-instances",
-        "alliance-eastern",
-        "alliance-kalimdor",
-        "alliance-single",
-        "starting-eastern",
-        "starting-kalimdor",
-        "instances",
-    ];
+    pub(crate) fn names() -> impl Iterator<Item = &'static str> {
+        profile_data()
+            .profiles
+            .iter()
+            .map(|profile| profile.name.as_str())
+    }
 
     pub(crate) fn parse(name: &str) -> Result<Self> {
-        match name {
-            "full-world" => Ok(Self::FullWorld),
-            "full-eastern" => Ok(Self::FullEastern),
-            "full-kalimdor" => Ok(Self::FullKalimdor),
-            "full-instances" => Ok(Self::FullInstances),
-            "alliance-eastern" => Ok(Self::AllianceEastern),
-            "alliance-kalimdor" => Ok(Self::AllianceKalimdor),
-            "alliance-single" => Ok(Self::AllianceSingle),
-            "starting-eastern" => Ok(Self::StartingEastern),
-            "starting-kalimdor" => Ok(Self::StartingKalimdor),
-            "instances" => Ok(Self::Instances),
-            _ => bail!(
+        match profile_data()
+            .profiles
+            .iter()
+            .position(|profile| profile.name == name)
+        {
+            Some(index) => Ok(Self(index)),
+            None => bail!(
                 "--world-profile {name}: unknown profile (valid: {})",
-                Self::NAMES.join(", ")
+                Self::names().collect::<Vec<_>>().join(", ")
             ),
         }
     }
 
+    fn definition(self) -> &'static ProfileDefinition {
+        &profile_data().profiles[self.0]
+    }
+
     pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::FullWorld => "full-world",
-            Self::FullEastern => "full-eastern",
-            Self::FullKalimdor => "full-kalimdor",
-            Self::FullInstances => "full-instances",
-            Self::AllianceEastern => "alliance-eastern",
-            Self::AllianceKalimdor => "alliance-kalimdor",
-            Self::AllianceSingle => "alliance-single",
-            Self::StartingEastern => "starting-eastern",
-            Self::StartingKalimdor => "starting-kalimdor",
-            Self::Instances => "instances",
-        }
+        &self.definition().name
+    }
+
+    pub(crate) fn primary_map(self) -> i64 {
+        self.definition().primary_map
     }
 
     pub(crate) fn imports_all_templates(self) -> bool {
-        matches!(
-            self,
-            Self::FullWorld | Self::FullEastern | Self::FullKalimdor | Self::FullInstances
-        )
+        self.definition().all_templates
     }
+}
+
+/// `KEY=value` lines for `import-world.sh`'s default map-0 legacy slice.
+pub(crate) fn legacy_defaults_for_shell() -> String {
+    let data = profile_data();
+    let defaults = &data.legacy_defaults;
+    let join = |values: &[i64]| {
+        values
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join(",")
+    };
+    let creatures = forced_creature_set(&defaults.forced_creatures)
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "BOX={}\nINCLUDE_MAPS={}\nINCLUDE_CREATURES={creatures}\n",
+        slice_data(&defaults.slice).bounds,
+        join(&defaults.include_maps)
+    )
+}
+
+fn slice_data(name: &str) -> &'static SliceData {
+    profile_data()
+        .slices
+        .get(name)
+        .unwrap_or_else(|| panic!("world profile slice {name} is defined"))
+}
+
+fn forced_creature_set(name: &str) -> &'static [u64] {
+    profile_data()
+        .forced_creatures
+        .get(name)
+        .unwrap_or_else(|| panic!("forced creature set {name} is defined"))
+}
+
+fn coordinates<T: std::str::FromStr>(text: &str, count: usize) -> Result<Vec<T>> {
+    let values = text
+        .split(',')
+        .map(|value| value.trim().parse::<T>().ok())
+        .collect::<Option<Vec<_>>>()
+        .with_context(|| format!("world profile coordinates {text:?} are not numbers"))?;
+    if values.len() != count {
+        bail!("world profile coordinates {text:?} need {count} numbers");
+    }
+    Ok(values)
 }
 
 #[derive(Clone, Debug)]
@@ -112,16 +208,22 @@ enum SliceGeometry {
 }
 
 impl WorldImportScope {
-    pub(crate) fn quest_catalogue() -> Result<Self> {
+    /// The scope whose quests and placed givers form this profile's quest catalogue.
+    pub(crate) fn quest_catalogue(profile: WorldImportProfile) -> Result<Self> {
+        let members = profile
+            .definition()
+            .quest_catalogue
+            .iter()
+            .map(|name| WorldImportProfile::parse(name))
+            .collect::<Result<Vec<_>>>()?;
+        if let [member] = members.as_slice() {
+            return Self::canonical(*member);
+        }
         let mut bounded_slices = Vec::new();
         let mut whole_maps = Vec::new();
         let mut forced_creature_entries = Vec::new();
-        for profile in [
-            WorldImportProfile::StartingEastern,
-            WorldImportProfile::StartingKalimdor,
-            WorldImportProfile::Instances,
-        ] {
-            let scope = Self::canonical(profile)?;
+        for member in members {
+            let scope = Self::canonical(member)?;
             bounded_slices.extend(scope.bounded_slices);
             whole_maps.extend(scope.whole_maps);
             forced_creature_entries.extend(scope.forced_creature_entries);
@@ -136,166 +238,64 @@ impl WorldImportScope {
     }
 
     pub(crate) fn canonical(profile: WorldImportProfile) -> Result<Self> {
-        let eastern = || -> Result<Vec<BoundedMapSlice>> {
-            Ok(vec![
+        let definition = profile.definition();
+        let bounded_slices = definition
+            .slices
+            .iter()
+            .map(|name| {
+                let slice = slice_data(name);
+                let bounds = coordinates::<f64>(&slice.bounds, 4)?;
+                let center = coordinates::<f64>(&slice.center, 3)?;
                 BoundedMapSlice::rectangle(
-                    "human-elwynn-westfall-redridge",
-                    0,
-                    (-11_400.0, -8_000.0, -3_100.0, 2_000.0),
-                    (-8_949.95, -132.493, 83.5312),
-                )?,
-                BoundedMapSlice::rectangle(
-                    "dun-morogh",
-                    0,
-                    (-7_000.0, -4_500.0, -1_600.0, 1_600.0),
-                    (-6_240.32, 331.03, 382.76),
-                )?,
-                BoundedMapSlice::rectangle(
-                    "loch-modan",
-                    0,
-                    (-6_000.0, -4_000.0, -4_500.0, -1_601.0),
-                    (-5_367.58, -2_936.21, 327.64),
-                )?,
-            ])
-        };
-        let kalimdor = || -> Result<Vec<BoundedMapSlice>> {
-            Ok(vec![
-                BoundedMapSlice::rectangle(
-                    "teldrassil",
-                    1,
-                    (8_301.0, 12_000.0, -2_500.0, 3_500.0),
-                    (10_311.30, 831.46, 1_326.41),
-                )?,
-                BoundedMapSlice::rectangle(
-                    "darkshore",
-                    1,
-                    (3_500.0, 8_300.0, -2_500.0, 3_500.0),
-                    (5_625.44, -485.95, 378.34),
-                )?,
-            ])
-        };
-
-        let eastern_forced_creatures = || {
-            vec![
-                344, 11_406, 266, 415, 1_343, 6_966, 5_165, 6_166, 6_569, 5_149,
-            ]
-        };
-
-        let deadmines = || {
-            vec![InstanceVmapSlice {
-                name: "deadmines-entry-exit".to_owned(),
-                map_id: 36,
-                entry: [-14.573_2, -385.475, 62.456_1],
-                exit: [-14.362_8, -393.38, 64.560_5],
-                exit_radius: 6.0,
-                collar_cells: 1,
-            }]
-        };
-        let (bounded_slices, whole_maps, instance_vmap_slices, forced_creature_entries) =
-            match profile {
-                WorldImportProfile::FullWorld
-                | WorldImportProfile::FullEastern
-                | WorldImportProfile::FullKalimdor
-                | WorldImportProfile::FullInstances => {
-                    return Self::full(profile);
-                }
-                WorldImportProfile::AllianceEastern => {
-                    (eastern()?, vec![369], vec![], eastern_forced_creatures())
-                }
-                WorldImportProfile::AllianceKalimdor => (kalimdor()?, vec![], vec![], vec![]),
-                WorldImportProfile::StartingEastern => {
-                    let mut slices = eastern()?;
-                    slices.push(BoundedMapSlice::rectangle(
-                        "deathknell",
-                        0,
-                        (1_300.0, 2_300.0, 900.0, 2_200.0),
-                        (1_814.55, 1_485.20, 90.66),
-                    )?);
-                    (slices, vec![369], vec![], eastern_forced_creatures())
-                }
-                WorldImportProfile::StartingKalimdor => {
-                    let mut slices = kalimdor()?;
-                    slices.push(BoundedMapSlice::rectangle(
-                        "valley-of-trials",
-                        1,
-                        (-1_300.0, 200.0, -5_000.0, -3_700.0),
-                        (-514.34, -4_344.96, 38.31),
-                    )?);
-                    slices.push(BoundedMapSlice::rectangle(
-                        "red-cloud-mesa",
-                        1,
-                        (-3_600.0, -2_300.0, -1_200.0, 500.0),
-                        (-2_951.82, -350.50, 55.86),
-                    )?);
-                    (slices, vec![], vec![], vec![])
-                }
-                WorldImportProfile::AllianceSingle => {
-                    let mut slices = eastern()?;
-                    slices.extend(kalimdor()?);
-                    (
-                        slices,
-                        vec![36, 369],
-                        deadmines(),
-                        eastern_forced_creatures(),
-                    )
-                }
-                WorldImportProfile::Instances => (vec![], vec![36], deadmines(), vec![]),
-            };
-        Self::new(
+                    name.as_str(),
+                    slice.map,
+                    (bounds[0], bounds[1], bounds[2], bounds[3]),
+                    (center[0], center[1], center[2]),
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let mut whole_maps = definition.whole_maps.clone();
+        if definition.instance_maps {
+            whole_maps.extend(
+                lyracore_shared::instance::DUNGEON_MAPS
+                    .iter()
+                    .chain(lyracore_shared::instance::BATTLEGROUND_MAPS)
+                    .map(|map| i64::from(*map)),
+            );
+        }
+        let instance_vmap_slices = definition
+            .instance_slices
+            .iter()
+            .map(|name| {
+                let slice = profile_data()
+                    .instance_slices
+                    .get(name)
+                    .with_context(|| format!("instance vmap slice {name} is not defined"))?;
+                let entry = coordinates::<f32>(&slice.entry, 3)?;
+                let exit = coordinates::<f32>(&slice.exit, 3)?;
+                Ok(InstanceVmapSlice {
+                    name: name.clone(),
+                    map_id: slice.map,
+                    entry: [entry[0], entry[1], entry[2]],
+                    exit: [exit[0], exit[1], exit[2]],
+                    exit_radius: coordinates::<f32>(&slice.exit_radius, 1)?[0],
+                    collar_cells: slice.collar_cells,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let forced_creature_entries = definition
+            .forced_creatures
+            .as_deref()
+            .map(|name| forced_creature_set(name).to_vec())
+            .unwrap_or_default();
+        let mut scope = Self::new(
             profile.name(),
             bounded_slices,
             whole_maps,
             instance_vmap_slices,
             forced_creature_entries,
-        )
-    }
-
-    fn full(profile: WorldImportProfile) -> Result<Self> {
-        // Stay inside the 64-tile client grid so inclusive cell indices remain below 1024.
-        let bounds = (-17_066.66, 17_066.66, -17_066.66, 17_066.66);
-        let mut slices = Vec::new();
-        if matches!(
-            profile,
-            WorldImportProfile::FullWorld | WorldImportProfile::FullEastern
-        ) {
-            slices.push(BoundedMapSlice::rectangle(
-                "eastern-kingdoms",
-                0,
-                bounds,
-                (-8_949.95, -132.493, 83.5312),
-            )?);
-        }
-        if matches!(
-            profile,
-            WorldImportProfile::FullWorld | WorldImportProfile::FullKalimdor
-        ) {
-            slices.push(BoundedMapSlice::rectangle(
-                "kalimdor",
-                1,
-                bounds,
-                (-514.34, -4_344.96, 38.31),
-            )?);
-        }
-        let maps = match profile {
-            WorldImportProfile::FullEastern => vec![369, 449],
-            WorldImportProfile::FullKalimdor => vec![450],
-            _ => lyracore_shared::instance::DUNGEON_MAPS
-                .iter()
-                .copied()
-                .chain(lyracore_shared::instance::BATTLEGROUND_MAPS.iter().copied())
-                .map(i64::from)
-                .collect(),
-        };
-        let instance_slices = if matches!(
-            profile,
-            WorldImportProfile::FullWorld | WorldImportProfile::FullInstances
-        ) {
-            Self::canonical(WorldImportProfile::Instances)?.instance_vmap_slices
-        } else {
-            Vec::new()
-        };
-        let mut scope = Self::new(profile.name(), slices, maps, instance_slices, vec![])?;
-        scope.all_maps = profile == WorldImportProfile::FullWorld;
+        )?;
+        scope.all_maps = definition.all_maps;
         Ok(scope)
     }
 
@@ -627,9 +627,23 @@ mod tests {
     }
 
     #[test]
+    fn every_profile_resolves_and_the_legacy_defaults_are_the_human_slice() {
+        for name in WorldImportProfile::names() {
+            let profile = WorldImportProfile::parse(name).unwrap();
+            assert_eq!(WorldImportScope::canonical(profile).unwrap().name(), name);
+            WorldImportScope::quest_catalogue(profile).unwrap();
+        }
+        assert_eq!(
+            legacy_defaults_for_shell(),
+            "BOX=-11400,-8000,-3100,2000\nINCLUDE_MAPS=36\nINCLUDE_CREATURES=344,11406,266,415,1343,6966,5165,6166,6569,5149\n"
+        );
+    }
+
+    #[test]
     fn canonical_profiles_have_stable_names_and_shapes() {
-        let eastern = WorldImportScope::canonical(WorldImportProfile::AllianceEastern)
-            .expect("eastern profile");
+        let eastern =
+            WorldImportScope::canonical(WorldImportProfile::parse("alliance-eastern").unwrap())
+                .expect("eastern profile");
         assert_eq!(eastern.name(), "alliance-eastern");
         assert_eq!(eastern.bounded_slices.len(), 3);
         assert_eq!(eastern.whole_maps, vec![369]);
@@ -639,8 +653,9 @@ mod tests {
             vec![266, 344, 415, 1_343, 5_149, 5_165, 6_166, 6_569, 6_966, 11_406]
         );
 
-        let kalimdor = WorldImportScope::canonical(WorldImportProfile::AllianceKalimdor)
-            .expect("kalimdor profile");
+        let kalimdor =
+            WorldImportScope::canonical(WorldImportProfile::parse("alliance-kalimdor").unwrap())
+                .expect("kalimdor profile");
         assert_eq!(kalimdor.bounded_slices.len(), 2);
         assert!(kalimdor
             .bounded_slices
@@ -648,8 +663,9 @@ mod tests {
             .all(|slice| slice.map_id == 1));
         assert!(kalimdor.instance_vmap_slices.is_empty());
 
-        let single = WorldImportScope::canonical(WorldImportProfile::AllianceSingle)
-            .expect("single profile");
+        let single =
+            WorldImportScope::canonical(WorldImportProfile::parse("alliance-single").unwrap())
+                .expect("single profile");
         assert_eq!(single.bounded_slices.len(), 5);
         assert_eq!(single.whole_maps, vec![36, 369]);
         assert_eq!(single.instance_vmap_slices.len(), 1);
@@ -659,7 +675,8 @@ mod tests {
         );
 
         let instances =
-            WorldImportScope::canonical(WorldImportProfile::Instances).expect("instances profile");
+            WorldImportScope::canonical(WorldImportProfile::parse("instances").unwrap())
+                .expect("instances profile");
         assert!(instances.bounded_slices.is_empty());
         assert_eq!(instances.whole_maps, vec![36]);
         assert_eq!(instances.instance_vmap_slices.len(), 1);
@@ -679,12 +696,19 @@ mod tests {
 
     #[test]
     fn full_profiles_partition_spawns_and_share_all_definitions() {
-        let all = WorldImportScope::canonical(WorldImportProfile::FullWorld).unwrap();
+        let all =
+            WorldImportScope::canonical(WorldImportProfile::parse("full-world").unwrap()).unwrap();
         assert!(all.contains(999, 50_000.0, 50_000.0, 0.0));
         assert!(!all.contains(-1, 0.0, 0.0, 0.0));
-        let eastern = WorldImportScope::canonical(WorldImportProfile::FullEastern).unwrap();
-        let kalimdor = WorldImportScope::canonical(WorldImportProfile::FullKalimdor).unwrap();
-        let instances = WorldImportScope::canonical(WorldImportProfile::FullInstances).unwrap();
+        let eastern =
+            WorldImportScope::canonical(WorldImportProfile::parse("full-eastern").unwrap())
+                .unwrap();
+        let kalimdor =
+            WorldImportScope::canonical(WorldImportProfile::parse("full-kalimdor").unwrap())
+                .unwrap();
+        let instances =
+            WorldImportScope::canonical(WorldImportProfile::parse("full-instances").unwrap())
+                .unwrap();
         for map in [0, 1, 369, 449, 450]
             .into_iter()
             .chain(lyracore_shared::instance::DUNGEON_MAPS.iter().copied())
@@ -734,11 +758,20 @@ mod tests {
         );
         full_world.sort_unstable();
         full_world.dedup();
-        assert_eq!(maps(WorldImportProfile::FullWorld), full_world);
-        assert_eq!(maps(WorldImportProfile::FullEastern), vec![0, 369, 449]);
-        assert_eq!(maps(WorldImportProfile::FullKalimdor), vec![1, 450]);
         assert_eq!(
-            maps(WorldImportProfile::AllianceSingle),
+            maps(WorldImportProfile::parse("full-world").unwrap()),
+            full_world
+        );
+        assert_eq!(
+            maps(WorldImportProfile::parse("full-eastern").unwrap()),
+            vec![0, 369, 449]
+        );
+        assert_eq!(
+            maps(WorldImportProfile::parse("full-kalimdor").unwrap()),
+            vec![1, 450]
+        );
+        assert_eq!(
+            maps(WorldImportProfile::parse("alliance-single").unwrap()),
             vec![0, 1, 36, 369]
         );
     }
@@ -747,13 +780,13 @@ mod tests {
     fn starting_profiles_preserve_alliance_content_and_add_horde_starts() {
         for (base, expanded, additions) in [
             (
-                WorldImportProfile::AllianceEastern,
-                WorldImportProfile::StartingEastern,
+                WorldImportProfile::parse("alliance-eastern").unwrap(),
+                WorldImportProfile::parse("starting-eastern").unwrap(),
                 vec![(0, 1_676.35, 1_677.45, 121.67)],
             ),
             (
-                WorldImportProfile::AllianceKalimdor,
-                WorldImportProfile::StartingKalimdor,
+                WorldImportProfile::parse("alliance-kalimdor").unwrap(),
+                WorldImportProfile::parse("starting-kalimdor").unwrap(),
                 vec![
                     (1, -618.518, -4_251.67, 38.718),
                     (1, -2_917.58, -257.98, 52.9968),
@@ -790,8 +823,9 @@ mod tests {
     #[test]
     fn loch_modan_anchor_is_the_thelsamar_road_spawn_inside_its_own_slice() {
         let kadrell = (-5_367.58, -2_936.21, 327.64);
-        let eastern = WorldImportScope::canonical(WorldImportProfile::AllianceEastern)
-            .expect("eastern profile");
+        let eastern =
+            WorldImportScope::canonical(WorldImportProfile::parse("alliance-eastern").unwrap())
+                .expect("eastern profile");
         let loch_modan = eastern
             .bounded_slices
             .iter()

@@ -31,41 +31,25 @@ pub fn instant_effect_to_kind(effect_id: i32) -> u8 {
     }
 }
 
-pub fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
-    // vmangos scripts Reckoning: crits taken stack up to four swings that follow the next swing.
-    if kind == E_ADD_EXTRA_ATTACKS && name == "Reckoning" {
-        return E_SCRIPTED;
-    }
-    if kind == E_TAUNT && name == "Feint" {
-        return E_REDUCE_THREAT;
-    }
-    if kind != E_SCRIPTED && kind != A_FLAG && kind != A_INERT {
+pub fn correct_script_effect_kind(name: &str, kind: u8, aura: AuraMod) -> u8 {
+    let Some(spell) = crate::spell_overrides::named(name) else {
+        return kind;
+    };
+    if spell
+        .script_kind_aura
+        .is_some_and(|required| required != aura)
+    {
         return kind;
     }
-    match name {
-        "Holy Light" | "Flash of Light" => E_HEAL,
-        "Life Tap" => E_CONVERT_RESOURCE,
-        "Charge" => E_CHARGE,
-        "Blink" => E_BLINK,
-        "Seal of Righteousness" => A_SEAL,
-        "Stealth" => A_STEALTH,
-        "Retaliation" => A_RETALIATE,
-
-        "Battle Stance" | "Defensive Stance" | "Berserker Stance" | "Bear Form"
-        | "Dire Bear Form" | "Cat Form" => E_SET_STANCE,
-        "Judgement" => E_JUDGEMENT,
-        "Sinister Strike" | "Backstab" | "Gouge" | "Garrote" => E_ADD_COMBO,
-
-        "Resurrection" | "Redemption" | "Rebirth" | "Ancestral Spirit" => E_RESURRECT,
-        "Pick Pocket" => E_PICKPOCKET,
-        "Create Healthstone"
-        | "Create Healthstone (Minor)"
-        | "Create Healthstone (Lesser)"
-        | "Create Healthstone (Greater)"
-        | "Create Healthstone (Major)" => E_CREATE_ITEM,
-        "Soulstone Resurrection" => A_SELF_RESURRECT,
-        _ => kind,
+    if let Some((from, to)) = spell.kind_swap {
+        if kind == from {
+            return to;
+        }
     }
+    if !matches!(kind, E_SCRIPTED | A_FLAG | A_INERT) {
+        return kind;
+    }
+    spell.script_kind.unwrap_or(kind)
 }
 
 pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
@@ -216,11 +200,7 @@ pub fn supported_effect(name: &str, slot: &EffectSlot) -> bool {
     } else {
         instant_effect_to_kind(slot.effect)
     };
-    let kind = if name == "Stealth" && aura != AuraMod::ModStealth {
-        kind
-    } else {
-        correct_script_effect_kind(name, kind)
-    };
+    let kind = correct_script_effect_kind(name, kind, aura);
     !matches!(
         dismount_effect_kind(slot.effect, slot.misc as u32).unwrap_or(kind),
         E_SCRIPTED | A_INERT

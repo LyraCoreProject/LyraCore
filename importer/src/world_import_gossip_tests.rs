@@ -297,17 +297,14 @@ fn patch_constants_and_unsupported_predicates_keep_boolean_gates() {
 
 #[test]
 fn named_gossip_rows_preserve_slots_literal_text_flags_and_default_options() {
-    let args = crate::parse_args_from([
+    let args = crate::cli::world_import_args([
         "--dump",
         "fixture.sqlite",
         "--family",
         "gossip",
         "--world-profile",
         "full-world",
-    ])
-    .unwrap()
-    .world_import_args()
-    .unwrap();
+    ]);
     let plan = plan(&source(), &args).unwrap();
     let insert = |table| {
         plan.stmts

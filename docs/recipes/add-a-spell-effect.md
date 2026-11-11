@@ -30,7 +30,8 @@ File: `importer/src/spell.rs`.
   `aura_mod_to_kind`, and name the kind in `kind_name`.
 - If the effect needs parameters, set them in `resolve_instant_params` (`resolve_aura_params` for an
   aura). If it needs a header
-  attribute (Distract keeps stealth), add it in `spell_flag_attributes`.
+  attribute (Distract keeps stealth), add it to the spell's entry in
+  `importer/src/spell_overrides.rs`.
 - Add a unit test for the mapping, and an ignored test that reads the real spell from
   `LYRACORE_VMANGOS_SQLITE` with auxiliary tables from `LYRACORE_TEST_DBC`, and asserts step 1.
 

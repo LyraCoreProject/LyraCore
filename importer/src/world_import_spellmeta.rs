@@ -276,7 +276,7 @@ mod tests {
             INSERT INTO spell_proc_item_enchant VALUES (20,1.6);
             CREATE TABLE spell_enchant_charges (entry INTEGER PRIMARY KEY,charges INTEGER);
             INSERT INTO spell_enchant_charges VALUES (20,40);").unwrap();
-        WorldSource::Vmangos(connection)
+        WorldSource::fixture(connection)
     }
 
     #[test]
@@ -303,9 +303,7 @@ mod tests {
     #[test]
     fn distinct_active_proc_masks_are_reported_without_loading_a_broader_mask() {
         let source = fixture();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection
             .execute(
                 "UPDATE spell_template SET effect2=6,effectApplyAuraName2=43 WHERE entry=10",
@@ -326,9 +324,7 @@ mod tests {
     #[test]
     fn rank_links_to_absent_spells_are_reported_without_phantom_ranks() {
         let source = fixture();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection
             .execute("INSERT INTO skill_line_ability VALUES (2,5875,40,999)", [])
             .unwrap();
@@ -345,9 +341,7 @@ mod tests {
     #[test]
     fn invalid_proc_numbers_fail_instead_of_dropping_the_overlay() {
         let source = fixture();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection
             .execute("UPDATE spell_proc_event SET CustomChance='invalid'", [])
             .unwrap();

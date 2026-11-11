@@ -493,8 +493,9 @@ mod tests {
         let found = read_enabled(&t.0).expect("discovery succeeds");
         let creatures = artifacts_for_family(found, "creatures").expect("the creatures plan");
 
-        let eastern = WorldImportScope::canonical(WorldImportProfile::AllianceEastern)
-            .expect("eastern profile");
+        let eastern =
+            WorldImportScope::canonical(WorldImportProfile::parse("alliance-eastern").unwrap())
+                .expect("eastern profile");
         let (kept, routed_away) =
             routed_to_this_shard(&eastern, creatures).expect("routing succeeds");
 
@@ -516,7 +517,8 @@ mod tests {
         let creatures = artifacts_for_family(found, "creatures").expect("the creatures plan");
 
         let instances =
-            WorldImportScope::canonical(WorldImportProfile::Instances).expect("instances profile");
+            WorldImportScope::canonical(WorldImportProfile::parse("instances").unwrap())
+                .expect("instances profile");
         let (kept, routed_away) =
             routed_to_this_shard(&instances, creatures).expect("routing succeeds");
 
@@ -536,8 +538,8 @@ mod tests {
         assert_eq!(creature_ai[0].delta.claims().len(), 2);
 
         for profile in [
-            WorldImportProfile::Instances,
-            WorldImportProfile::AllianceEastern,
+            WorldImportProfile::parse("instances").unwrap(),
+            WorldImportProfile::parse("alliance-eastern").unwrap(),
         ] {
             let scope = WorldImportScope::canonical(profile).expect("a canonical profile");
             let (kept, routed_away) = routed_to_this_shard(
@@ -563,7 +565,8 @@ mod tests {
         let creatures = artifacts_for_family(found, "creatures").expect("the creatures plan");
 
         let instances =
-            WorldImportScope::canonical(WorldImportProfile::Instances).expect("instances profile");
+            WorldImportScope::canonical(WorldImportProfile::parse("instances").unwrap())
+                .expect("instances profile");
         let (kept, routed_away) =
             routed_to_this_shard(&instances, creatures).expect("routing succeeds");
 
@@ -582,7 +585,8 @@ mod tests {
         let creatures = artifacts_for_family(found, "creatures").expect("the creatures plan");
 
         let instances =
-            WorldImportScope::canonical(WorldImportProfile::Instances).expect("instances profile");
+            WorldImportScope::canonical(WorldImportProfile::parse("instances").unwrap())
+                .expect("instances profile");
         let (kept, routed_away) =
             routed_to_this_shard(&instances, creatures).expect("routing succeeds");
 

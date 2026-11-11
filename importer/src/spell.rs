@@ -21,6 +21,7 @@ use lyracore_importer::spell_kind::{
     aura_mod_to_kind, correct_script_effect_kind, dismount_effect_kind, equip_aura_supported,
     instant_effect_to_kind,
 };
+use lyracore_importer::spell_overrides::{self, NamedSpell};
 use std::path::Path;
 
 use lyracore_shared::spell::taxonomy::{
@@ -40,24 +41,12 @@ use lyracore_shared::spell::taxonomy::{
     P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW,
     P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
     SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_AREA_AURA,
-    SPELL_ATTR_CHANNELED, SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_PASSIVE,
-    SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER,
-    SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE, SPELL_ATTR_REQ_STEALTH,
-    SPELL_ATTR_STEALTH_SAFE, SPELL_ATTR_USES_RANGED_SLOT, SPELL_ATTR_WEAPON_PROCS,
+    SPELL_ATTR_CHANNELED, SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_PASSIVE,
+    SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_USES_RANGED_SLOT, SPELL_ATTR_WEAPON_PROCS,
     SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER,
     STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY,
     T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
-
-fn binding_summon_entry(spell_id: u32, effect: i32, event: u32, focus: u32) -> Option<i32> {
-    match (spell_id, effect, event, focus) {
-        (7728, 61, 1131, 83) => Some(5676),
-        (8674, 61, 1134, 83) => Some(5677),
-        _ => None,
-    }
-}
-
-const GOUGE_RANK_IDS: [u32; 5] = [1776, 1777, 8629, 11285, 11286];
 
 // Vanilla form ids differ from durable stance ids.
 const FORM_CAT: i32 = 1;
@@ -111,7 +100,7 @@ fn roll_cast_flags(spell: &Spell) -> u32 {
     };
     let binary = spell.damage_class == 1
         && spell.school != 0
-        && (matches!(spell.id, 26143 | 26478)
+        && (spell_overrides::BINARY_SPELLS.contains(&spell.id)
             || (0..3).any(|index| match spell.effect[index] {
                 68 | 98 => true,
                 6 => matches!(
@@ -243,42 +232,17 @@ fn aura_interrupt_bits(raw: u32) -> u16 {
     u16::from(raw & 0x2 != 0) | (u16::from(raw & 0x8 != 0) << 1)
 }
 
-fn spell_flag_attributes(name: &str) -> u32 {
-    let mut bits = 0u32;
-    if matches!(name, "Backstab" | "Garrote" | "Ambush") {
-        bits |= SPELL_ATTR_REQ_BEHIND;
-    }
-    if name == "Backstab" {
-        bits |= SPELL_ATTR_REQ_DAGGER;
-    }
-    if matches!(name, "Sap" | "Garrote") {
-        bits |= SPELL_ATTR_REQ_STEALTH;
-    }
-    if name == "Sap" {
-        bits |= SPELL_ATTR_INCAP_OPENER;
-    }
-    if matches!(name, "Sap" | "Pick Pocket" | "Distract") {
-        bits |= SPELL_ATTR_STEALTH_SAFE;
-    }
-    if name == "Overpower" {
-        bits |= SPELL_ATTR_REQ_OVERPOWER;
-    }
-    if name == "Revenge" {
-        bits |= SPELL_ATTR_REQ_REVENGE;
-    }
-    bits
-}
-
-fn is_channeled(attributes_ex1: u32, name: &str) -> bool {
-    attributes_ex1 & ATTR_EX1_CHANNELED_MASK != 0 || matches!(name, "Arcane Missiles" | "Evocation")
+fn is_channeled(attributes_ex1: u32, overrides: Option<&NamedSpell>) -> bool {
+    attributes_ex1 & ATTR_EX1_CHANNELED_MASK != 0 || overrides.is_some_and(|spell| spell.channeled)
 }
 
 fn excludes_eventai_caster(attributes_ex1: u32) -> bool {
     attributes_ex1 & ATTR_EX1_EXCLUDE_CASTER != 0
 }
 
-fn is_ranged_auto_repeat(attributes_ex2: u32, name: &str) -> bool {
-    attributes_ex2 & ATTR_EX2_AUTOREPEAT != 0 || matches!(name, "Auto Shot" | "Shoot")
+fn is_ranged_auto_repeat(attributes_ex2: u32, overrides: Option<&NamedSpell>) -> bool {
+    attributes_ex2 & ATTR_EX2_AUTOREPEAT != 0
+        || overrides.is_some_and(|spell| spell.ranged_auto_repeat)
 }
 
 fn blank_effect(spell_id: u32, effect_index: u8) -> SpellEffectRow {
@@ -306,14 +270,11 @@ fn blank_effect(spell_id: u32, effect_index: u8) -> SpellEffectRow {
     }
 }
 
-// The client Dummy magnitude names a spell; the curated seal marker needs flat damage.
 fn synthetic_seal_effect(spell_id: u32, name: &str, used_index: u8) -> Option<SpellEffectRow> {
-    if !(spell_id == 21082 && name == "Seal of the Crusader") {
-        return None;
-    }
+    let damage = spell_overrides::by_id(spell_id, name)?.seal_damage?;
     Some(SpellEffectRow {
         kind: A_SEAL,
-        base_points: 20,
+        base_points: damage,
         ..blank_effect(spell_id, used_index)
     })
 }
@@ -328,12 +289,13 @@ fn recently_bandaged_effect(s: &Spell, target: u8, used_index: u8) -> Option<Spe
     })
 }
 
-// Power Word: Shield effects omit their linked Weakened Soul debuff.
-fn power_word_shield_p1_override(spell_id: u32, name: &str, kind: u8, p1: i32) -> i32 {
-    if spell_id == 17 && name == "Power Word: Shield" && kind == A_ABSORB {
-        return 6788;
+fn absorb_debuff_p1(spell_id: u32, name: &str, kind: u8) -> i32 {
+    if kind != A_ABSORB {
+        return 0;
     }
-    p1
+    spell_overrides::by_id(spell_id, name)
+        .and_then(|spell| spell.absorb_debuff)
+        .unwrap_or(0)
 }
 
 // Store EffectMultipleValue in hundredths: 0.5 becomes 50.
@@ -342,14 +304,10 @@ fn power_burn_ratio_bp(multiple: f32) -> i32 {
 }
 
 fn soulstone_option_spell(aura_spell_id: u32) -> Option<i32> {
-    match aura_spell_id {
-        20707 => Some(3026),
-        20762 => Some(20758),
-        20763 => Some(20759),
-        20764 => Some(20760),
-        20765 => Some(20761),
-        _ => None,
-    }
+    spell_overrides::SOULSTONE_OPTIONS
+        .iter()
+        .find(|(aura, _)| *aura == aura_spell_id)
+        .map(|(_, option)| *option)
 }
 
 // Vanilla Stances stores 1 << (form_id - 1).
@@ -372,16 +330,6 @@ fn stance_p0(kind: u8, p0: i32) -> i32 {
     } else {
         p0
     }
-}
-
-fn mount_display_p0(kind: u8, p0: i32, creature_displays: &BTreeMap<u32, u32>) -> i32 {
-    if kind != A_MOUNTED {
-        return p0;
-    }
-    creature_displays
-        .get(&(p0 as u32))
-        .map(|&display| display as i32)
-        .unwrap_or(p0)
 }
 
 // Aura 43 takes its school from the proc spell header, not effect misc.
@@ -628,7 +576,6 @@ pub(crate) fn derive_spell_rows(
 ) -> Result<(SpellRows, Coverage, Vec<String>)> {
     let allow: std::collections::HashSet<u32> = only.iter().copied().collect();
     let mut acc = SpellAccumulator::default();
-    let creature_displays: BTreeMap<u32, u32> = BTreeMap::new();
 
     for s in &dbc.spells {
         let spell_id = s.id;
@@ -653,7 +600,7 @@ pub(crate) fn derive_spell_rows(
         }
 
         let header = push_spell_header_row(s, dbc, &allow, &mut acc);
-        push_spell_effect_rows(s, &header, dbc, &creature_displays, &allow, &mut acc);
+        push_spell_effect_rows(s, &header, dbc, &allow, &mut acc);
     }
 
     let trainer_rows = trainer_offering_rows(trainers, &acc.spell_levels, &acc.wrapper_to_rank);
@@ -780,6 +727,7 @@ struct SpellAccumulator {
 
 struct SpellHeader {
     name: String,
+    overrides: Option<&'static NamedSpell>,
     school_mask: u8,
     is_negative: bool,
     channeled: bool,
@@ -811,9 +759,10 @@ fn push_spell_header_row(
     } = acc;
     let spell_id = s.id;
     let name = s.name.clone();
+    let overrides = spell_overrides::named(&name);
     let power_type = s.power_type as u8;
     let cost = s.mana_cost;
-    let auto_repeat = is_ranged_auto_repeat(s.attributes_ex2, &name);
+    let auto_repeat = is_ranged_auto_repeat(s.attributes_ex2, overrides);
     let cast_time_ms = dbc
         .cast_times
         .get(SpellCastTimesKey::new(s.casting_time_index))
@@ -852,14 +801,14 @@ fn push_spell_header_row(
     } else {
         1500
     };
-    let channeled = is_channeled(s.attributes_ex1, &name);
+    let channeled = is_channeled(s.attributes_ex1, overrides);
     if excludes_eventai_caster(s.attributes_ex1) {
         eventai_metadata_rows.push(AiMetadataRow {
             spell_id,
             exclude_caster: true,
         });
     }
-    let mut cast_flags = spell_flag_attributes(&name);
+    let mut cast_flags = overrides.map_or(0, |spell| spell.cast_flags);
     if channeled {
         cast_flags |= SPELL_ATTR_CHANNELED;
     }
@@ -934,7 +883,7 @@ fn push_spell_header_row(
         category: s.category,
         category_cooldown_ms: s.category_recovery_time,
     });
-    if binding_summon_entry(
+    if spell_overrides::binding_summon(
         spell_id,
         s.effect[0],
         s.effect_misc_value[0],
@@ -945,8 +894,8 @@ fn push_spell_header_row(
         let row = spell_rows
             .last_mut()
             .expect("the spell header was just inserted");
-        row.duration_ms = 360_000;
-        row.cooldown_ms = 180_000;
+        row.duration_ms = spell_overrides::BINDING_SUMMON_DURATION_MS;
+        row.cooldown_ms = spell_overrides::BINDING_SUMMON_COOLDOWN_MS;
     }
     cov.spells += 1;
 
@@ -959,6 +908,7 @@ fn push_spell_header_row(
 
     SpellHeader {
         name,
+        overrides,
         school_mask,
         is_negative,
         channeled,
@@ -1017,7 +967,6 @@ fn push_spell_effect_rows(
     s: &Spell,
     header: &SpellHeader,
     dbc: &SpellTables,
-    creature_displays: &BTreeMap<u32, u32>,
     allow: &std::collections::HashSet<u32>,
     acc: &mut SpellAccumulator,
 ) {
@@ -1032,7 +981,7 @@ fn push_spell_effect_rows(
     let name = header.name.as_str();
     let resolved: Vec<(usize, ResolvedEffect)> = (0..3)
         .filter(|&i| s.effect[i] != 0)
-        .map(|i| (i, resolve_effect_kind(s, i, header, creature_displays, cov)))
+        .map(|i| (i, resolve_effect_kind(s, i, header, cov)))
         .collect();
     let effect_kinds: Vec<u8> = resolved.iter().map(|(_, effect)| effect.kind).collect();
     let queued_strike = queues_on_next_swing(s.attributes, header.school_mask, &effect_kinds);
@@ -1076,7 +1025,7 @@ fn push_spell_effect_rows(
             }
             None => (kind, base_points, die_sides, per_level, p0, p0_kind),
         };
-        let binding_entry = binding_summon_entry(
+        let binding_entry = spell_overrides::binding_summon(
             spell_id,
             effect_id,
             s.effect_misc_value[i],
@@ -1090,19 +1039,21 @@ fn push_spell_effect_rows(
         if kind == A_PERIODIC_HEAL {
             healed_target = target;
         }
-        let (kind, period_ms, base_points, target, p0, p0_kind) =
-            if name == "Evocation" && effect_index == 0 {
-                (
-                    A_PERIODIC_ENERGIZE,
-                    2000u32,
-                    15i32,
-                    T_SELF,
-                    0i32,
-                    P_PCT_MAX_POWER,
-                )
-            } else {
-                (kind, period_ms, base_points, target, p0, p0_kind)
-            };
+        let energize = header
+            .overrides
+            .and_then(|spell| spell.first_effect_energize)
+            .filter(|_| effect_index == 0);
+        let (kind, period_ms, base_points, target, p0, p0_kind) = match energize {
+            Some((percent, period)) => (
+                A_PERIODIC_ENERGIZE,
+                period,
+                percent,
+                T_SELF,
+                0i32,
+                P_PCT_MAX_POWER,
+            ),
+            None => (kind, period_ms, base_points, target, p0, p0_kind),
+        };
         let radius_yd = if s.effect_radius[i] > 0 {
             dbc.radii
                 .get(SpellRadiusKey::new(s.effect_radius[i]))
@@ -1127,10 +1078,10 @@ fn push_spell_effect_rows(
         } else if let Some(row) = strike_row {
             i32::from(row.normalized)
         } else {
-            power_word_shield_p1_override(spell_id, name, kind, 0i32)
+            absorb_debuff_p1(spell_id, name, kind)
         };
         let script_id = 0u32;
-        let enters_combat = name == "Bloodrage";
+        let enters_combat = header.overrides.is_some_and(|spell| spell.enters_combat);
 
         effect_rows.push(SpellEffectRow {
             spell_id,
@@ -1197,7 +1148,6 @@ fn resolve_effect_kind(
     s: &Spell,
     i: usize,
     header: &SpellHeader,
-    creature_displays: &BTreeMap<u32, u32>,
     cov: &mut Coverage,
 ) -> ResolvedEffect {
     let effect_id = s.effect[i];
@@ -1233,11 +1183,7 @@ fn resolve_effect_kind(
             resolve_instant_params(k, s.effect_misc_value[i], s.effect_item_type[i] as i32),
         )
     };
-    let kind = if name == "Stealth" && aura != AuraMod::ModStealth {
-        kind
-    } else {
-        correct_script_effect_kind(name, kind)
-    };
+    let kind = correct_script_effect_kind(name, kind, aura);
     let kind = if effect_id == EFFECT_SCHOOL_DAMAGE
         && school_mask == SCHOOL_MASK_PHYSICAL
         && is_combo_finisher(s)
@@ -1246,36 +1192,21 @@ fn resolve_effect_kind(
     } else {
         kind
     };
-    let p0 = if GOUGE_RANK_IDS.contains(&s.id) && name == "Gouge" && kind == A_CONTROL {
-        M_POLY
-    } else {
-        p0
+    let p0 = match spell_overrides::by_id(s.id, name).and_then(|spell| spell.control_mechanic) {
+        Some(mechanic) if kind == A_CONTROL => mechanic,
+        _ => p0,
     };
 
     let kind = dismount_effect_kind(effect_id, s.effect_misc_value[i]).unwrap_or(kind);
 
     let p0 = stance_p0(kind, p0);
 
-    let p0 = mount_display_p0(kind, p0, creature_displays);
-
     let (p0, p0_kind) = proc_damage_school_p0(kind, p0, p0_kind, school_mask);
 
-    // Healthstone script effects omit effect_item_type; supply their item entries here.
-    let (p0, p0_kind) = if kind == E_CREATE_ITEM {
-        let item = match name {
-            "Create Healthstone (Minor)" => Some(5512),
-            "Create Healthstone (Lesser)" => Some(5511),
-            "Create Healthstone" => Some(5509),
-            "Create Healthstone (Greater)" => Some(5510),
-            "Create Healthstone (Major)" => Some(9421),
-            _ => None,
-        };
-        match item {
-            Some(entry) => (entry, P_ITEM_ENTRY),
-            None => (p0, p0_kind),
-        }
-    } else {
-        (p0, p0_kind)
+    let created_item = header.overrides.and_then(|spell| spell.created_item);
+    let (p0, p0_kind) = match created_item {
+        Some(entry) if kind == E_CREATE_ITEM => (entry, P_ITEM_ENTRY),
+        _ => (p0, p0_kind),
     };
 
     let (p0, p0_kind) = if kind == A_SELF_RESURRECT {
@@ -1306,7 +1237,11 @@ fn resolve_effect_kind(
     } else {
         kind
     };
-    let kind = if kind == A_PERIODIC_DAMAGE && matches!(name, "Consecration" | "Flamestrike") {
+    let kind = if kind == A_PERIODIC_DAMAGE
+        && header
+            .overrides
+            .is_some_and(|spell| spell.periodic_damage_as_persistent_area)
+    {
         E_PERSISTENT_AREA
     } else {
         kind
@@ -1323,7 +1258,6 @@ fn resolve_effect_kind(
 }
 
 fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) -> u8 {
-    let name = header.name.as_str();
     let is_negative = header.is_negative;
     let channeled = header.channeled;
     let target_a = s.implicit_target_a[i];
@@ -1351,15 +1285,16 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
         E_DUEL => T_TARGET_ANY,
         _ => target,
     };
-    let target = if name == "Slice and Dice" && target == T_TARGET_ALLY {
-        T_TARGET_ENEMY
-    } else {
-        target
-    };
-    let target = if name == "Flamestrike" && kind == E_DAMAGE {
-        T_AREA_ENEMY
-    } else {
-        target
+    let overrides = header.overrides;
+    let target =
+        if target == T_TARGET_ALLY && overrides.is_some_and(|spell| spell.ally_target_as_enemy) {
+            T_TARGET_ENEMY
+        } else {
+            target
+        };
+    let target = match overrides.and_then(|spell| spell.direct_damage_target) {
+        Some(area) if kind == E_DAMAGE => area,
+        _ => target,
     };
     if channeled && kind == A_FLAG {
         T_SELF
@@ -1418,9 +1353,9 @@ fn trainer_offering_rows(
 }
 
 fn fishing_marker_rows() -> Vec<SpellEffectRow> {
-    [7620u32, 7731, 7732]
-        .into_iter()
-        .map(|spell_id| SpellEffectRow {
+    spell_overrides::FISHING_MARKERS
+        .iter()
+        .map(|&spell_id| SpellEffectRow {
             kind: E_FISH,
             p0_kind: 255,
             ..blank_effect(spell_id, 0)
@@ -1840,9 +1775,7 @@ mod tests {
         add!(tables.radii, "SpellRadius.dbc");
         archive.build(path.join("dbc.MPQ")).unwrap();
         let source = crate::vmangos_spell::fixture();
-        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch("DELETE FROM spell_template; INSERT INTO spell_template (entry,build,name,effect1,effectApplyAuraName1,effectBasePoints1,effectDieSides1,effectImplicitTargetA1,equippedItemClass) VALUES (7598,5875,'Increased Critical 2',6,52,1,1,1,-1)").unwrap();
         let plans = [
             world_plan(&source, path.to_str().unwrap()),
@@ -1965,9 +1898,7 @@ mod tests {
     #[test]
     fn vmangos_finishers_keep_combo_scaling_and_source_flags_in_sql() {
         let source = crate::vmangos_spell::fixture();
-        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch("UPDATE spell_template SET school=0, attributesEx=1049088, spellFamilyName=8, effect2=0, effectPointsPerComboPoint1=5, customFlags=1024, minTargetLevel=7, effectBonusCoefficient1=0.5 WHERE build=5875").unwrap();
         let mut tables = fixture_tables();
         tables.spells = crate::vmangos_spell::read(&source).unwrap().0;
@@ -1992,9 +1923,7 @@ mod tests {
     #[test]
     fn an_extra_attack_effect_grants_its_points_to_the_caster() {
         let source = crate::vmangos_spell::fixture();
-        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         // Hand of Justice 15601: one extra attack on the caster.
         connection.execute_batch("UPDATE spell_template SET effect1=19, effectApplyAuraName1=0, effectBasePoints1=0, effectBaseDice1=1, effectDieSides1=1, effectImplicitTargetA1=1, effectImplicitTargetB1=0, effect2=0 WHERE build=5875").unwrap();
         let mut tables = fixture_tables();
@@ -2014,9 +1943,7 @@ mod tests {
 
     fn temporary_enchantment_effect(update: &str) -> SpellEffectRow {
         let source = crate::vmangos_spell::fixture();
-        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch(update).unwrap();
         let mut tables = fixture_tables();
         tables.spells = crate::vmangos_spell::read(&source).unwrap().0;
@@ -2320,7 +2247,10 @@ mod tests {
             ),
             (30, 3, 30, 30_000, 0)
         );
-        assert_ne!(header.cast_flags & SPELL_ATTR_STEALTH_SAFE, 0);
+        assert_ne!(
+            header.cast_flags & lyracore_shared::spell::taxonomy::SPELL_ATTR_STEALTH_SAFE,
+            0
+        );
     }
 
     #[test]
@@ -2686,62 +2616,88 @@ mod tests {
 
     #[test]
     fn curated_correction_reclassifies_script_effects_by_name() {
-        assert_eq!(correct_script_effect_kind("Holy Light", E_SCRIPTED), E_HEAL);
         assert_eq!(
-            correct_script_effect_kind("Life Tap", E_SCRIPTED),
+            correct_script_effect_kind("Holy Light", E_SCRIPTED, AuraMod::default()),
+            E_HEAL
+        );
+        assert_eq!(
+            correct_script_effect_kind("Life Tap", E_SCRIPTED, AuraMod::default()),
             E_CONVERT_RESOURCE
         );
-        assert_eq!(correct_script_effect_kind("Charge", E_SCRIPTED), E_CHARGE);
         assert_eq!(
-            correct_script_effect_kind("Feint", E_TAUNT),
+            correct_script_effect_kind("Charge", E_SCRIPTED, AuraMod::default()),
+            E_CHARGE
+        );
+        assert_eq!(
+            correct_script_effect_kind("Feint", E_TAUNT, AuraMod::default()),
             E_REDUCE_THREAT
         );
-        assert_eq!(correct_script_effect_kind("Growl", E_TAUNT), E_TAUNT);
         assert_eq!(
-            correct_script_effect_kind("Garrote", E_SCRIPTED),
+            correct_script_effect_kind("Growl", E_TAUNT, AuraMod::default()),
+            E_TAUNT
+        );
+        assert_eq!(
+            correct_script_effect_kind("Garrote", E_SCRIPTED, AuraMod::default()),
             E_ADD_COMBO
         );
         assert_eq!(
-            correct_script_effect_kind("Sinister Strike", E_SCRIPTED),
+            correct_script_effect_kind("Sinister Strike", E_SCRIPTED, AuraMod::default()),
             E_ADD_COMBO
         );
         assert_eq!(
-            correct_script_effect_kind("Backstab", E_SCRIPTED),
+            correct_script_effect_kind("Backstab", E_SCRIPTED, AuraMod::default()),
             E_ADD_COMBO
         );
-        assert_eq!(correct_script_effect_kind("Gouge", E_SCRIPTED), E_ADD_COMBO);
         assert_eq!(
-            correct_script_effect_kind("Pick Pocket", E_SCRIPTED),
+            correct_script_effect_kind("Gouge", E_SCRIPTED, AuraMod::default()),
+            E_ADD_COMBO
+        );
+        assert_eq!(
+            correct_script_effect_kind("Pick Pocket", E_SCRIPTED, AuraMod::default()),
             E_PICKPOCKET
         );
-        assert_eq!(correct_script_effect_kind("Holy Light", E_HEAL), E_HEAL);
-        assert_eq!(correct_script_effect_kind("Frostbolt", E_DAMAGE), E_DAMAGE);
         assert_eq!(
-            correct_script_effect_kind("Some Other Spell", E_SCRIPTED),
+            correct_script_effect_kind("Holy Light", E_HEAL, AuraMod::default()),
+            E_HEAL
+        );
+        assert_eq!(
+            correct_script_effect_kind("Frostbolt", E_DAMAGE, AuraMod::default()),
+            E_DAMAGE
+        );
+        assert_eq!(
+            correct_script_effect_kind("Some Other Spell", E_SCRIPTED, AuraMod::default()),
             E_SCRIPTED
         );
         assert_eq!(
-            correct_script_effect_kind("Battle Stance", A_FLAG),
+            correct_script_effect_kind("Battle Stance", A_FLAG, AuraMod::default()),
             E_SET_STANCE
         );
         assert_eq!(
-            correct_script_effect_kind("Defensive Stance", A_FLAG),
+            correct_script_effect_kind("Defensive Stance", A_FLAG, AuraMod::default()),
             E_SET_STANCE
         );
         assert_eq!(
-            correct_script_effect_kind("Berserker Stance", A_FLAG),
+            correct_script_effect_kind("Berserker Stance", A_FLAG, AuraMod::default()),
             E_SET_STANCE
         );
         assert_eq!(
-            correct_script_effect_kind("Create Healthstone (Minor)", E_SCRIPTED),
+            correct_script_effect_kind(
+                "Create Healthstone (Minor)",
+                E_SCRIPTED,
+                AuraMod::default()
+            ),
             E_CREATE_ITEM
         );
         assert_eq!(
-            correct_script_effect_kind("Create Healthstone", E_SCRIPTED),
+            correct_script_effect_kind("Create Healthstone", E_SCRIPTED, AuraMod::default()),
             E_CREATE_ITEM
         );
         assert_eq!(
-            correct_script_effect_kind("Create Healthstone (Major)", E_SCRIPTED),
+            correct_script_effect_kind(
+                "Create Healthstone (Major)",
+                E_SCRIPTED,
+                AuraMod::default()
+            ),
             E_CREATE_ITEM
         );
     }
@@ -2852,24 +2808,24 @@ mod tests {
     #[test]
     fn rez_name_rescue_covers_every_class_resurrect_and_guards_others() {
         assert_eq!(
-            correct_script_effect_kind("Resurrection", E_SCRIPTED),
+            correct_script_effect_kind("Resurrection", E_SCRIPTED, AuraMod::default()),
             E_RESURRECT
         );
         assert_eq!(
-            correct_script_effect_kind("Redemption", E_SCRIPTED),
+            correct_script_effect_kind("Redemption", E_SCRIPTED, AuraMod::default()),
             E_RESURRECT
         );
         assert_eq!(
-            correct_script_effect_kind("Rebirth", E_SCRIPTED),
+            correct_script_effect_kind("Rebirth", E_SCRIPTED, AuraMod::default()),
             E_RESURRECT
         );
         assert_eq!(
-            correct_script_effect_kind("Ancestral Spirit", E_SCRIPTED),
+            correct_script_effect_kind("Ancestral Spirit", E_SCRIPTED, AuraMod::default()),
             E_RESURRECT
         );
 
         assert_eq!(
-            correct_script_effect_kind("Reincarnation", E_SCRIPTED),
+            correct_script_effect_kind("Reincarnation", E_SCRIPTED, AuraMod::default()),
             E_SCRIPTED
         );
     }
@@ -3222,17 +3178,29 @@ mod tests {
     #[test]
     fn druid_form_switches_name_rescue_to_set_stance() {
         assert_eq!(
-            correct_script_effect_kind("Bear Form", A_FLAG),
+            correct_script_effect_kind("Bear Form", A_FLAG, AuraMod::default()),
             E_SET_STANCE
         );
         assert_eq!(
-            correct_script_effect_kind("Dire Bear Form", A_FLAG),
+            correct_script_effect_kind("Dire Bear Form", A_FLAG, AuraMod::default()),
             E_SET_STANCE
         );
-        assert_eq!(correct_script_effect_kind("Cat Form", A_FLAG), E_SET_STANCE);
-        assert_eq!(correct_script_effect_kind("Aquatic Form", A_FLAG), A_FLAG);
-        assert_eq!(correct_script_effect_kind("Travel Form", A_FLAG), A_FLAG);
-        assert_eq!(correct_script_effect_kind("Moonkin Form", A_FLAG), A_FLAG);
+        assert_eq!(
+            correct_script_effect_kind("Cat Form", A_FLAG, AuraMod::default()),
+            E_SET_STANCE
+        );
+        assert_eq!(
+            correct_script_effect_kind("Aquatic Form", A_FLAG, AuraMod::default()),
+            A_FLAG
+        );
+        assert_eq!(
+            correct_script_effect_kind("Travel Form", A_FLAG, AuraMod::default()),
+            A_FLAG
+        );
+        assert_eq!(
+            correct_script_effect_kind("Moonkin Form", A_FLAG, AuraMod::default()),
+            A_FLAG
+        );
     }
 
     #[test]
@@ -3252,68 +3220,16 @@ mod tests {
     }
 
     #[test]
-    fn rogue_cast_gate_flags_set_by_name() {
-        assert_eq!(
-            spell_flag_attributes("Backstab") & SPELL_ATTR_REQ_BEHIND,
-            SPELL_ATTR_REQ_BEHIND
-        );
-        assert_eq!(
-            spell_flag_attributes("Garrote") & SPELL_ATTR_REQ_BEHIND,
-            SPELL_ATTR_REQ_BEHIND
-        );
-        assert_eq!(
-            spell_flag_attributes("Ambush") & SPELL_ATTR_REQ_BEHIND,
-            SPELL_ATTR_REQ_BEHIND
-        );
-        assert_eq!(
-            spell_flag_attributes("Backstab") & SPELL_ATTR_REQ_DAGGER,
-            SPELL_ATTR_REQ_DAGGER
-        );
-        assert_eq!(spell_flag_attributes("Garrote") & SPELL_ATTR_REQ_DAGGER, 0);
-        assert_eq!(spell_flag_attributes("Ambush") & SPELL_ATTR_REQ_DAGGER, 0);
-        assert_eq!(
-            spell_flag_attributes("Sap") & SPELL_ATTR_REQ_STEALTH,
-            SPELL_ATTR_REQ_STEALTH
-        );
-        assert_eq!(
-            spell_flag_attributes("Sap") & SPELL_ATTR_STEALTH_SAFE,
-            SPELL_ATTR_STEALTH_SAFE
-        );
-        assert_eq!(
-            spell_flag_attributes("Sap") & SPELL_ATTR_INCAP_OPENER,
-            SPELL_ATTR_INCAP_OPENER
-        );
-        assert_eq!(spell_flag_attributes("Sap") & SPELL_ATTR_REQ_BEHIND, 0);
-        assert_eq!(
-            spell_flag_attributes("Garrote") & SPELL_ATTR_REQ_STEALTH,
-            SPELL_ATTR_REQ_STEALTH
-        );
-        assert_eq!(
-            spell_flag_attributes("Garrote") & SPELL_ATTR_STEALTH_SAFE,
-            0
-        );
-        assert_eq!(
-            spell_flag_attributes("Garrote") & SPELL_ATTR_INCAP_OPENER,
-            0
-        );
-        assert_eq!(
-            spell_flag_attributes("Garrote"),
-            SPELL_ATTR_REQ_BEHIND | SPELL_ATTR_REQ_STEALTH
-        );
-        assert_eq!(
-            spell_flag_attributes("Pick Pocket"),
-            SPELL_ATTR_STEALTH_SAFE
-        );
-        assert_eq!(spell_flag_attributes("Fireball"), 0);
-    }
-
-    #[test]
     fn ranged_auto_repeat_flagged_by_dbc_bit_or_name() {
-        assert!(is_ranged_auto_repeat(ATTR_EX2_AUTOREPEAT, "Whatever"));
-        assert!(is_ranged_auto_repeat(0, "Auto Shot"));
-        assert!(is_ranged_auto_repeat(0, "Shoot"));
-        assert!(!is_ranged_auto_repeat(0, "Fireball"));
-        assert!(!is_ranged_auto_repeat(0x1, "Frostbolt"));
+        let named = spell_overrides::named;
+        assert!(is_ranged_auto_repeat(
+            ATTR_EX2_AUTOREPEAT,
+            named("Whatever")
+        ));
+        assert!(is_ranged_auto_repeat(0, named("Auto Shot")));
+        assert!(is_ranged_auto_repeat(0, named("Shoot")));
+        assert!(!is_ranged_auto_repeat(0, named("Fireball")));
+        assert!(!is_ranged_auto_repeat(0x1, named("Frostbolt")));
     }
 
     fn melee_ability(id: u32, name: &str, attributes: u32, effect: [i32; 3]) -> Spell {
@@ -3444,32 +3360,13 @@ mod tests {
     }
 
     #[test]
-    fn react_window_flags_set_by_name() {
-        assert_eq!(
-            spell_flag_attributes("Overpower") & SPELL_ATTR_REQ_OVERPOWER,
-            SPELL_ATTR_REQ_OVERPOWER
-        );
-        assert_eq!(
-            spell_flag_attributes("Overpower") & SPELL_ATTR_REQ_REVENGE,
-            0
-        );
-        assert_eq!(
-            spell_flag_attributes("Revenge") & SPELL_ATTR_REQ_REVENGE,
-            SPELL_ATTR_REQ_REVENGE
-        );
-        assert_eq!(
-            spell_flag_attributes("Revenge") & SPELL_ATTR_REQ_OVERPOWER,
-            0
-        );
-        assert_eq!(spell_flag_attributes("Overpower"), SPELL_ATTR_REQ_OVERPOWER);
-        assert_eq!(spell_flag_attributes("Revenge"), SPELL_ATTR_REQ_REVENGE);
-    }
-
-    #[test]
     fn kick_interrupt_effect_maps_to_e_interrupt() {
         assert_eq!(instant_effect_to_kind(68), E_INTERRUPT);
         assert_eq!(instant_effect_to_kind(2), E_DAMAGE);
-        assert_eq!(correct_script_effect_kind("Kick", E_INTERRUPT), E_INTERRUPT);
+        assert_eq!(
+            correct_script_effect_kind("Kick", E_INTERRUPT, AuraMod::default()),
+            E_INTERRUPT
+        );
     }
 
     #[test]
@@ -3477,7 +3374,7 @@ mod tests {
         assert_eq!(instant_effect_to_kind(56), E_SUMMON_PET);
         assert_eq!(resolve_instant_params(E_SUMMON_PET, 416, 0), (416, P_ENTRY));
         assert_eq!(
-            correct_script_effect_kind("Summon Imp", E_SUMMON_PET),
+            correct_script_effect_kind("Summon Imp", E_SUMMON_PET, AuraMod::default()),
             E_SUMMON_PET
         );
     }
@@ -3500,7 +3397,6 @@ mod tests {
             T_AREA_ENEMY
         );
         assert_eq!(resolve_instant_params(E_DISTRACT, 0, 0), (0, P_NONE));
-        assert_eq!(spell_flag_attributes("Distract"), SPELL_ATTR_STEALTH_SAFE);
     }
 
     #[test]
@@ -3539,7 +3435,7 @@ mod tests {
         assert_eq!(instant_effect_to_kind(67), E_HEAL_MAX_HEALTH);
         assert_eq!(instant_effect_to_kind(10), E_HEAL);
         assert_eq!(
-            correct_script_effect_kind("Lay on Hands", E_HEAL_MAX_HEALTH),
+            correct_script_effect_kind("Lay on Hands", E_HEAL_MAX_HEALTH, AuraMod::default()),
             E_HEAL_MAX_HEALTH
         );
     }
@@ -3550,11 +3446,11 @@ mod tests {
         assert_eq!(aura_mod_to_kind(AuraMod::ProcTriggerDamage), A_PROC_DAMAGE);
         assert_eq!(aura_mod_to_kind(AuraMod::PeriodicTriggerSpell), E_TRIGGER);
         assert_eq!(
-            correct_script_effect_kind("Some Other Spell", A_PROC_TRIGGER),
+            correct_script_effect_kind("Some Other Spell", A_PROC_TRIGGER, AuraMod::default()),
             A_PROC_TRIGGER
         );
         assert_eq!(
-            correct_script_effect_kind("Some Other Spell", A_PROC_DAMAGE),
+            correct_script_effect_kind("Some Other Spell", A_PROC_DAMAGE, AuraMod::default()),
             A_PROC_DAMAGE
         );
     }
@@ -3594,22 +3490,10 @@ mod tests {
 
     #[test]
     fn power_word_shield_p1_links_weakened_soul() {
-        assert_eq!(
-            power_word_shield_p1_override(17, "Power Word: Shield", A_ABSORB, 0),
-            6788
-        );
-        assert_eq!(
-            power_word_shield_p1_override(18, "Power Word: Shield", A_ABSORB, 0),
-            0
-        );
-        assert_eq!(
-            power_word_shield_p1_override(17, "Power Word: Fortitude", A_ABSORB, 0),
-            0
-        );
-        assert_eq!(
-            power_word_shield_p1_override(17, "Power Word: Shield", A_FLAG, 0),
-            0
-        );
+        assert_eq!(absorb_debuff_p1(17, "Power Word: Shield", A_ABSORB), 6788);
+        assert_eq!(absorb_debuff_p1(18, "Power Word: Shield", A_ABSORB), 0);
+        assert_eq!(absorb_debuff_p1(17, "Power Word: Fortitude", A_ABSORB), 0);
+        assert_eq!(absorb_debuff_p1(17, "Power Word: Shield", A_FLAG), 0);
     }
 
     #[test]
@@ -3848,11 +3732,12 @@ mod tests {
 
     #[test]
     fn is_channeled_reads_the_attributes_ex1_bit_and_the_arcane_missiles_fallback() {
-        assert!(is_channeled(0x44, "Some Spell"));
-        assert!(is_channeled(0x04, "Some Spell"));
-        assert!(is_channeled(0x40, "Some Spell"));
-        assert!(!is_channeled(0, "Some Spell"));
-        assert!(is_channeled(0, "Arcane Missiles"));
+        let named = spell_overrides::named;
+        assert!(is_channeled(0x44, named("Some Spell")));
+        assert!(is_channeled(0x04, named("Some Spell")));
+        assert!(is_channeled(0x40, named("Some Spell")));
+        assert!(!is_channeled(0, named("Some Spell")));
+        assert!(is_channeled(0, named("Arcane Missiles")));
     }
 
     #[test]
@@ -4020,15 +3905,6 @@ mod tests {
     }
 
     #[test]
-    fn mount_display_p0_resolves_creature_template_indirection_and_falls_through() {
-        let mut displays: BTreeMap<u32, u32> = BTreeMap::new();
-        displays.insert(1234, 5678);
-        assert_eq!(mount_display_p0(A_MOUNTED, 1234, &displays), 5678);
-        assert_eq!(mount_display_p0(A_MOUNTED, 723, &displays), 723);
-        assert_eq!(mount_display_p0(E_DAMAGE, 1234, &displays), 1234);
-    }
-
-    #[test]
     fn dispel_mechanic_reclassifies_the_mount_parameter_only() {
         assert_eq!(dismount_effect_kind(108, 21), Some(E_DISMOUNT));
         assert_eq!(dismount_effect_kind(108, 1), None);
@@ -4123,7 +3999,7 @@ mod binding_tests {
             let mut acc = SpellAccumulator::default();
             let allow = std::collections::HashSet::new();
             let header = push_spell_header_row(&row, &dbc, &allow, &mut acc);
-            push_spell_effect_rows(&row, &header, &dbc, &BTreeMap::new(), &allow, &mut acc);
+            push_spell_effect_rows(&row, &header, &dbc, &allow, &mut acc);
             let summons: Vec<_> = acc
                 .effect_rows
                 .iter()
@@ -4156,7 +4032,10 @@ mod binding_tests {
             (999, 61, 1131, 83),
             (7728, 86, 1131, 83),
         ] {
-            assert_eq!(binding_summon_entry(spell, effect, event, focus), None);
+            assert_eq!(
+                spell_overrides::binding_summon(spell, effect, event, focus),
+                None
+            );
         }
         assert_eq!(instant_effect_to_kind(56), E_SUMMON_PET);
         assert_eq!(resolve_instant_params(E_SUMMON_PET, 416, 0), (416, P_ENTRY));

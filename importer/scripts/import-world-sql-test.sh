@@ -40,6 +40,19 @@ cat >"$checkout/target/debug/lyracore-importer" <<'STUB'
 #!/bin/sh
 echo "lyracore-importer $*" >>"$STUB_LOG"
 case " $* " in
+    *" --print-primary-map "*)
+        case " $* " in
+            *" full-kalimdor "*|*" alliance-kalimdor "*|*" starting-kalimdor "*) echo 1 ;;
+            *" full-instances "*|*" instances "*) echo 36 ;;
+            *) echo 0 ;;
+        esac
+        exit 0
+        ;;
+    *" --print-legacy-defaults "*)
+        printf '%s\n' BOX=-11400,-8000,-3100,2000 INCLUDE_MAPS=36 \
+            INCLUDE_CREATURES=344,11406,266,415,1343,6966,5165,6166,6569,5149
+        exit 0
+        ;;
     *" --print-scope-maps "*)
         [ "${STUB_SCOPE_MODE:-succeed}" = fail ] && exit 1
         for map_id in ${STUB_SCOPE_MAPS:-0}; do echo "$map_id"; done
@@ -168,7 +181,7 @@ echo "import-world.sh — canonical profile argument"
 STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=alliance-single STUB_SCOPE_MAPS="0 1 36 369" run_import
 check "the profile run reaches the assertion stage" not_contains "$out" '[world] ABORT'
 check "the profile is displayed with all of its planned maps" \
-    contains "$out" 'canonical profile alliance-single (planned maps: 0 1 36 369)'
+    contains "$out" 'canonical profile alliance-single (maps: 0 1 36 369)'
 check "the standalone DBC catalogue receives the full taxi mount dump" \
     grep -q -- '--dbc .*--taxi-mounts .*source.sqlite --source-sha 0123456789012345678901234567890123456789 --apply' "$stub_log"
 check "the dump ETL receives the canonical profile name" \
@@ -179,7 +192,7 @@ plain_spell_passes="$(count_matches "$stub_log" '^lyracore-importer .*--spells -
 check "the profile skips the duplicate standalone spell catalogue pass" test "$plain_spell_passes" -eq 0
 check "the dump ETL does not recreate a profile as legacy spatial flags" \
     bash -c '! grep "lyracore-importer .*--world-profile alliance-single" "$0" | grep -qE -- "--map|--box|--include-map|--include-creatures"' "$stub_log"
-unserved_importers="$(grep '^lyracore-importer ' "$stub_log" | grep -v -- '--print-scope-maps' | grep -vc -- '--server http://127.0.0.1:3000' || true)"
+unserved_importers="$(grep '^lyracore-importer ' "$stub_log" | grep -v -- '--print-' | grep -vc -- '--server http://127.0.0.1:3000' || true)"
 check "every profile importer invocation names the loopback server" \
     test "${unserved_importers:-0}" -eq 0
 : >"$stub_log"

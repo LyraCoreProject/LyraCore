@@ -77,7 +77,7 @@ lyracore-importer --dump "$DUMP" --dbc "$CLIENT_DATA" \
 Package spell Deltas still apply after the base family import. Datascripts can load the complete
 Snapshot even when a core synthetic effect uses slot 3. The Package API continues to accept slots
 0 through 2; a Datascript that opens a spell with a core-only fourth slot is refused. At the pin,
-this affects the curated Seal of the Crusader marker on spell 21082.
+this affects the Seal marker in `importer/src/spell_overrides.rs`.
 
 Spells with `script_name` remain unsupported. Source `effectItemType` can hold a 64-bit spell-family mask,
 as declared in [SpellEntry.h at the pinned vmangos commit](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Spells/SpellEntry.h#L656).
@@ -161,8 +161,8 @@ import path; the manifest counts them as unsupported.
 The gameobjects import selects template patches and spawn ranges, skips disabled spawns, and
 translates source READY/ACTIVE states to the Module's closed/open states. A source ACTIVE chest
 starts lootable because vmangos tracks its loot state separately from its animation state. Native packets convert
-these back to the client's numbering. The eight authored gather entries retain their skill and
-item rules; real type-25 fishing holes remain unsupported. Game-event schedules, pool selection,
+these back to the client's numbering. The authored gather entries (`GATHER_NODES` in
+`importer/src/world_import.rs`) retain their skill and item rules; real type-25 fishing holes remain unsupported. Game-event schedules, pool selection,
 remaining spawn flags, animation, visibility, respawn ranges and script names appear in the
 Compatibility Manifest. The import retains those placements at current parity.
 
@@ -282,7 +282,10 @@ export DUMP SOURCE_SHA
 
 ## Full source import
 
-`--world-profile` selects the World Import Scope. `lyracore import` uses `alliance-single` on
+`--world-profile` selects the World Import Scope. `importer/manifests/world-profiles.json` defines
+every profile: its bounded slices, whole maps, Deadmines route slice, forced creatures, primary map
+and quest catalogue. Full-continent slices stop at ±17066.66 yards so inclusive cell indices stay
+below 1024. `lyracore import` uses `alliance-single` on
 `lyracore`; `full-world` imports every source map into one database. `full-eastern`,
 `full-kalimdor` and `full-instances` still parse; they are the legacy multi-Shard scopes. Each full profile imports
 every creature definition and builds a shared quest catalogue from the full source. Runnable AI
@@ -298,6 +301,9 @@ cargo run -p lyracore-importer -- \
   --world-profile full-world
 ```
 
+Each invocation runs one mode, such as `--terrain`, `--spells` or the default `--dump` import. Two
+mode flags, or a flag the mode does not use, are refused.
+
 This prints the plan. Add `--apply --server <local-node> --db <database>` to load it. Full profiles
 load the client reference catalogues from the same dump and client inputs, including taxi mount
 models. They do not require a separate `--taxi-mounts` argument. A complete import with `--dbc`
@@ -311,6 +317,8 @@ WORLD_PROFILE=full-world DBC=/path/to/client/Data \
   bash importer/scripts/import-world.sh
 ```
 
+The script reads the profile's primary map with `--print-primary-map`. Without a profile on map 0,
+it reads the default slice, forced creatures and Deadmines map from `--print-legacy-defaults`.
 Before and after the import, the script compares the database's spatial maps with the maps that
 `--print-scope-maps` reports for the same scope and source. Before the import it stops on any other
 map unless `ALLOW_MAP_SWITCH=1` is set or the database is a fresh Shard. After the import any other
@@ -525,10 +533,10 @@ correction now addresses source slot 0.
 The authored seal marker and Power Word: Shield's linked Weakened Soul rule remain because their
 Module behavior is not an equivalent DBC effect.
 
-The two authored binding corrections map spell 7728, event 1131 and focus 83 to creature 5676,
-and spell 8674, event 1134 and focus 83 to creature 5677. They emit `E_SUMMON_HOSTILE`, retain the
-focus requirement and use a 360000 ms despawn delay. A changed spell shape does not receive this
-correction.
+`importer/src/spell_overrides.rs` holds every per-spell correction: name-keyed rules apply to all
+ranks of a spell, id-keyed rules to one spell. The binding corrections there map a summon event and
+focus to the binding creature. They emit `E_SUMMON_HOSTILE`, retain the focus requirement and use a
+360000 ms despawn delay. A changed spell shape does not receive this correction.
 
 Every World Import Profile loads the same full Spell catalogue. Publishing the Module alone does not
 correct stored Spell rows; that needs the Spell reimport and the curated class-spell pass.

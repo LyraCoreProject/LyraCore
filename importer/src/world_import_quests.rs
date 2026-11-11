@@ -107,10 +107,7 @@ struct Catalogue {
 
 fn catalogue_scope(args: &WorldImportArgs) -> Result<WorldImportScope> {
     let mut scope = match args.world_profile {
-        Some(profile) if profile.imports_all_templates() => {
-            WorldImportScope::canonical(WorldImportProfile::FullWorld)?
-        }
-        Some(_) => WorldImportScope::quest_catalogue()?,
+        Some(profile) => WorldImportScope::quest_catalogue(profile)?,
         None => args.scope.clone(),
     };
     scope.extend_forced_creatures(&args.include_creatures);

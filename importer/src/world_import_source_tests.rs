@@ -5,7 +5,7 @@ use crate::standalone_support;
 fn tavern_import_selects_patch_and_replaces_rows() {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
     connection.execute_batch("CREATE TABLE areatrigger_tavern (id INTEGER, patch_min INTEGER, PRIMARY KEY (id, patch_min)); INSERT INTO areatrigger_tavern VALUES (71,0),(71,10),(72,10),(73,11)").unwrap();
-    let source = WorldSource::Vmangos(connection);
+    let source = WorldSource::fixture(connection);
     let statements = build_tavern_area_trigger_sql(&source).unwrap();
     assert_eq!(
         statements,
@@ -20,17 +20,14 @@ fn source_args(profile: &str) -> (WorldSource, WorldImportArgs) {
     let path = std::env::var("LYRACORE_VMANGOS_SQLITE").unwrap();
     let client = std::env::var("LYRACORE_TEST_DBC").unwrap();
     let source = WorldSource::open(std::path::Path::new(&path)).unwrap();
-    let args = crate::parse_args_from([
+    let args = crate::cli::world_import_args([
         "--dump",
         &path,
         "--dbc",
         &client,
         "--world-profile",
         profile,
-    ])
-    .unwrap()
-    .world_import_args()
-    .unwrap();
+    ]);
     (source, args)
 }
 
@@ -152,16 +149,14 @@ fn full_world_source_loads_every_definition_and_spawn_locally() {
 fn crit_catalogue_interpolates_missing_levels_and_refuses_invalid_rates() {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
     connection.execute_batch("CREATE TABLE player_crit_per_agility (class INTEGER, level INTEGER, rate REAL); INSERT INTO player_crit_per_agility VALUES (1,1,4),(1,3,6),(1,60,20),(8,1,10),(8,60,20)").unwrap();
-    let source = WorldSource::Vmangos(connection);
+    let source = WorldSource::fixture(connection);
     let statements = build_crit_per_agility_sql(&source).unwrap();
     let inserts = statements.join(";");
     assert!(inserts.contains("(258,1,2,5)"));
     assert!(inserts.contains("(316,1,60,20)"));
     assert!(inserts.contains("(2108,8,60,20)"));
     assert_eq!(inserts.matches("),(").count(), 119);
-    let WorldSource::Vmangos(connection) = &source else {
-        panic!("expected the unprofiled fixture source");
-    };
+    let connection = source.fixture_connection();
     connection
         .execute(
             "UPDATE player_crit_per_agility SET rate = 0 WHERE level = 60",

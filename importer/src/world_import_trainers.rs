@@ -317,17 +317,14 @@ mod tests {
             },
         ])
         .unwrap();
-        let args = crate::parse_args_from([
+        let args = crate::cli::world_import_args([
             "--dump",
             "fixture.sqlite",
             "--family",
             "trainers",
             "--world-profile",
             "full-world",
-        ])
-        .unwrap()
-        .world_import_args()
-        .unwrap();
+        ]);
         let plan = plan(&source, &args).unwrap();
         assert_eq!(plan.stamps, [("trainers", 3)]);
         assert_eq!(plan.stmts[1], "INSERT INTO game_trainer_spell (id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap) VALUES (1,100,700,30,10,0,75),(2,100,701,40,15,186,150),(3,101,702,5,20,0,75)");

@@ -241,10 +241,9 @@ impl<T: TableRows> TableRows for CachedSource<'_, T> {
     }
 }
 
-pub(crate) enum WorldSource {
-    #[cfg(test)]
-    Vmangos(Connection),
-    ProfiledVmangos(Connection, crate::vmangos_profile::SourceProfile),
+pub(crate) struct WorldSource {
+    connection: Connection,
+    profile: crate::vmangos_profile::SourceProfile,
 }
 
 impl WorldSource {
@@ -253,53 +252,42 @@ impl WorldSource {
             .with_context(|| format!("open World Source {}", path.display()))?;
         connection.pragma_update(None, "trusted_schema", false)?;
         connection.pragma_update(None, "query_only", true)?;
-        Ok(Self::ProfiledVmangos(
+        Ok(Self {
             connection,
-            crate::vmangos_profile::SourceProfile::load()?,
-        ))
+            profile: crate::vmangos_profile::SourceProfile::load()?,
+        })
     }
 
-    fn connection(&self) -> &Connection {
-        match self {
-            #[cfg(test)]
-            Self::Vmangos(connection) => connection,
-            Self::ProfiledVmangos(connection, _) => connection,
+    #[cfg(test)]
+    pub(crate) fn fixture(connection: Connection) -> Self {
+        Self {
+            connection,
+            profile: crate::vmangos_profile::SourceProfile::fixture(),
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixture_connection(&self) -> &Connection {
+        &self.connection
     }
 }
 
 impl TableRows for WorldSource {
     fn rows(&self, table: &str) -> Result<Cow<'_, [Row]>> {
-        match self {
-            #[cfg(test)]
-            Self::Vmangos(connection) => read_rows(connection, table, None, None).map(Cow::Owned),
-            Self::ProfiledVmangos(connection, profile) => {
-                read_rows(connection, table, None, Some(profile)).map(Cow::Owned)
-            }
-        }
+        read_rows(&self.connection, table, None, &self.profile).map(Cow::Owned)
     }
+
     fn columns(&self, table: &str, columns: &[&str]) -> Result<Cow<'_, [Row]>> {
-        match self {
-            #[cfg(test)]
-            Self::Vmangos(connection) => {
-                read_rows(connection, table, Some(columns), None).map(Cow::Owned)
-            }
-            Self::ProfiledVmangos(connection, profile) => {
-                read_rows(connection, table, Some(columns), Some(profile)).map(Cow::Owned)
-            }
-        }
+        read_rows(&self.connection, table, Some(columns), &self.profile).map(Cow::Owned)
     }
+
     fn source_profile_report(&self) -> Option<serde_json::Value> {
-        match self {
-            Self::ProfiledVmangos(_, profile) => Some(profile.report()),
-            #[cfg(test)]
-            Self::Vmangos(_) => None,
-        }
+        Some(self.profile.report())
     }
 
     fn source_hash(&self) -> Result<String> {
         let path = self
-            .connection()
+            .connection
             .path()
             .filter(|path| !path.is_empty())
             .context("World Source has no file to hash")?;
@@ -311,12 +299,10 @@ fn read_rows(
     connection: &Connection,
     table: &str,
     requested: Option<&[&str]>,
-    profile: Option<&crate::vmangos_profile::SourceProfile>,
+    profile: &crate::vmangos_profile::SourceProfile,
 ) -> Result<Vec<Row>> {
     check_table(connection, table)?;
-    if let Some(profile) = profile {
-        profile.check_table(connection, table)?;
-    }
+    profile.check_table(connection, table)?;
     let mut metadata =
         connection.prepare("SELECT name, pk FROM pragma_table_info(?1) ORDER BY pk")?;
     let metadata = metadata
@@ -489,7 +475,7 @@ pub(crate) fn sqlite_fixture(tables: &[FixtureTable<'_>]) -> Result<WorldSource>
     }
     connection.pragma_update(None, "trusted_schema", false)?;
     connection.pragma_update(None, "query_only", true)?;
-    Ok(WorldSource::Vmangos(connection))
+    Ok(WorldSource::fixture(connection))
 }
 
 #[cfg(test)]
@@ -500,7 +486,7 @@ pub(crate) fn fixture_sql(schema_and_rows: &str) -> WorldSource {
         .pragma_update(None, "trusted_schema", false)
         .unwrap();
     connection.pragma_update(None, "query_only", true).unwrap();
-    WorldSource::Vmangos(connection)
+    WorldSource::fixture(connection)
 }
 
 #[cfg(test)]
@@ -677,7 +663,7 @@ mod tests {
             source.rows("indirect").unwrap_err().to_string(),
             "indirect: expected a source table, got view"
         );
-        let connection = source.connection();
+        let connection = source.fixture_connection();
         assert_eq!(
             connection
                 .query_row("SELECT entry FROM example", [], |row| row
@@ -737,10 +723,10 @@ mod tests {
     fn profiled_reads_reject_unapproved_conditions_before_row_selection() {
         let connection = Connection::open_in_memory().unwrap();
         connection.execute_batch("CREATE TABLE conditions (condition_entry INTEGER, type INTEGER, value1 INTEGER, value2 INTEGER, value3 INTEGER, value4 INTEGER, flags INTEGER); INSERT INTO conditions VALUES (1,999,0,0,0,0,0);").unwrap();
-        let source = WorldSource::ProfiledVmangos(
+        let source = WorldSource {
             connection,
-            crate::vmangos_profile::SourceProfile::load().unwrap(),
-        );
+            profile: crate::vmangos_profile::SourceProfile::load().unwrap(),
+        };
         let error = source.rows("conditions").unwrap_err().to_string();
         let finding: serde_json::Value = serde_json::from_str(&error).unwrap();
         assert_eq!(finding["table"], "conditions");
