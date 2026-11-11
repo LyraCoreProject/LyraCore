@@ -22,7 +22,7 @@ pub struct MissingCritCatalogue {
 }
 
 pub(crate) fn crit_per_agility_for(ctx: &ReducerContext, class: u8, level: u32) -> Option<f32> {
-    let level = level.clamp(1, 60);
+    let level = level.clamp(1, crate::xp::LEVEL_CAP);
     let rate = ctx
         .db
         .game_crit_per_agility()

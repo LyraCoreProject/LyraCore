@@ -157,7 +157,7 @@ pub(crate) fn move_to_point(
         return Err("mover is dead".to_string());
     }
     let base = if run { speeds::RUN } else { speeds::WALK };
-    let speed = crate::combat::effective_move_speed(ctx, creature_guid, base);
+    let speed = crate::modifiers::effective_move_speed(ctx, creature_guid, base);
     if speed <= 0.0 {
         return Ok(());
     }

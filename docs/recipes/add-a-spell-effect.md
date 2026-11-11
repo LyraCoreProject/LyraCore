@@ -39,7 +39,7 @@ File: `importer/src/spell.rs`.
 
 Files: `module/src/spell/cast/resolve.rs`, `module/src/spell/outcome.rs`.
 
-- An effect-specific Gate runs in `resolve_cast_at_typed` after `check_cast_gates` and before the
+- An effect-specific Gate runs in `resolve_cast_at` after `check_cast_gates` and before the
   cost is charged, so a Refusal leaves power and cooldown untouched.
 - A Gate returns a `CastGateRefusal` with a `CastRefusalReason` (`module/src/spell/outcome.rs`).
   Add a `CastRefusalKind` only when a Package caller must tell the new Refusal apart.

@@ -184,7 +184,7 @@ expiry removes the DynamicObject and its Grants in the same transaction.
 ### Combo finisher migration
 
 `game_spell.max_duration_ms` and `game_spell_effect.points_per_combo` default to zero, and older
-spell rows mark only Slice and Dice with `SPELL_ATTR_COMBO_FINISHER`. Until spells are reimported,
+spell rows mark only Slice and Dice with `CAST_FLAG_COMBO_FINISHER`. Until spells are reimported,
 the other finishers skip the combo-point Gate and keep their points, no finisher scales with combo
 points, and Slice and Dice lasts its 6-second base. After you publish this schema to an existing
 Shard, reimport spells with `--dbc` before play resumes.
@@ -192,7 +192,7 @@ Shard, reimport spells with `--dbc` before play resumes.
 ### Chance on Hit migration
 
 `game_item_template.spellppmrate_1` through `spellppmrate_5` default to zero, and older spell rows
-lack `SPELL_ATTR_WEAPON_PROCS`. Until both are reimported, every Chance on Hit rolls its spell's
+lack `CAST_FLAG_WEAPON_PROCS`. Until both are reimported, every Chance on Hit rolls its spell's
 proc chance, which is one proc per minute for most weapons, and only white swings roll it. After you
 publish this schema to an existing Shard, reimport the `items` and `spell` families before play
 resumes.

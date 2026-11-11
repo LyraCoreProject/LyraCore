@@ -5,6 +5,7 @@ use lyracore_shared::constants::{npc_flags, player_flags, unit_vis_flags};
 
 const GHOST: u32 = 8326;
 const WISP_SPIRIT: u32 = 20584;
+const NIGHT_ELF: u8 = 4;
 const SPIRIT_HEALER_RANGE_SQ: f32 = 100.0;
 
 pub(crate) fn spirit_healer_gate(
@@ -51,7 +52,7 @@ pub(crate) fn restore(ctx: &ReducerContext, guid: u64) {
         return;
     }
     crate::spell::apply_spell_auras(ctx, GHOST, guid, character.level as u8, 1);
-    if character.race() == 4 {
+    if character.race() == NIGHT_ELF {
         crate::spell::apply_spell_auras(ctx, WISP_SPIRIT, guid, character.level as u8, 1);
     }
     crate::spell::recompute_display(ctx, guid);
@@ -71,7 +72,7 @@ pub(crate) fn finish_resurrection(ctx: &ReducerContext, guid: u64) {
         .filter(&guid)
         .filter(|a| is_ghost_spell(a.spell_id))
         .collect();
-    crate::spell::shed_auras(ctx, guid, auras);
+    crate::spell::shed_auras(ctx, auras);
     crate::spell::recompute_display(ctx, guid);
     crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(guid));
     crate::spell::clear_resurrect_request_and_option(ctx, guid);

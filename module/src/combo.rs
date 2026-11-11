@@ -119,8 +119,8 @@ pub(crate) fn add_combo_point(ctx: &ReducerContext, owner_guid: u64, target_guid
     };
     // A builder that ends a Duel leaves the loser alive but no longer an enemy.
     if player_side.is_some_and(|side| {
-        !crate::duel::active_opponents(ctx, owner_guid, side)
-            && !crate::faction::is_hostile(ctx, owner.faction_template, target.faction_template)
+        crate::combat::relation(ctx, &owner, &target) != crate::combat::Relation::Hostile
+            && !crate::duel::active_opponents(ctx, owner_guid, side)
     }) {
         return;
     }

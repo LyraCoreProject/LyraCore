@@ -259,7 +259,7 @@ const VERSION_2_REPLACEMENTS: &[(&str, &str)] = &[
     ("spell::E_NEXT_SWING", "crate::actor::E_NEXT_SWING"),
     ("spell::E_SCRIPTED", "crate::actor::E_SCRIPTED"),
     ("spell::PlayerSpell", "crate::tables::PlayerSpell"),
-    ("spell::SPELL_ATTR_CHANNELED", "lyracore_shared::spell::SPELL_ATTR_CHANNELED"),
+    ("spell::SPELL_ATTR_CHANNELED", "crate::actor::SPELL_ATTR_CHANNELED"),
     ("spell::Spell", "crate::tables::Spell"),
     ("spell::SpellChain", "crate::tables::SpellChain"),
     ("spell::SpellEffect", "crate::tables::SpellEffect"),

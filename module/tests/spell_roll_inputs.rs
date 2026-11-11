@@ -5,14 +5,14 @@ use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn only_creatures_with_a_character_owner_can_crit_with_spells() {
-    use lyracore_shared::spell::taxonomy::SPELL_ATTR_IGNORE_RESISTANCES;
+    use lyracore_shared::spell::taxonomy::CAST_FLAG_IGNORE_RESISTANCES;
 
     let (shard, caster) = stage("creature-spell-crit-owner");
     shard.assert_sql("UPDATE game_world_entity SET godmode = false, health = 10000, max_health = 10000 WHERE guid = 1");
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 60 WHERE guid = {caster}"
     ));
-    shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {SPELL_ATTR_IGNORE_RESISTANCES}, range_yd = 0, gcd_ms = 0, cooldown_ms = 0 WHERE spell_id = 133"));
+    shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {CAST_FLAG_IGNORE_RESISTANCES}, range_yd = 0, gcd_ms = 0, cooldown_ms = 0 WHERE spell_id = 133"));
     shard.assert_sql("UPDATE game_spell_effect SET base_points = 400, die_sides = 0, per_level = 0.0 WHERE spell_id = 133");
     shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES ({caster},1,2)"));
     let events = subscribe_with_fence(&shard, &["SELECT * FROM game_spell_cast_event_live"]);
@@ -42,12 +42,12 @@ fn only_creatures_with_a_character_owner_can_crit_with_spells() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn binary_periodic_damage_and_slow_share_one_resist_roll_at_cast() {
     use lyracore_shared::spell::taxonomy::{
-        A_MOD_RESISTANCE, A_MOD_SPEED, A_PERIODIC_DAMAGE, SPELL_ATTR_BINARY,
+        A_MOD_RESISTANCE, A_MOD_SPEED, A_PERIODIC_DAMAGE, CAST_FLAG_BINARY,
     };
 
     let (shard, target) = stage("binary-aura-hit");
     shard.assert_sql(&format!("UPDATE game_world_entity SET level = 60, health = 10000, max_health = 10000 WHERE guid = {target}"));
-    shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {SPELL_ATTR_BINARY}, duration_ms = 10000, gcd_ms = 0, cooldown_ms = 0, is_negative = true WHERE spell_id = 133"));
+    shard.assert_sql(&format!("UPDATE game_spell SET cast_flags = {CAST_FLAG_BINARY}, duration_ms = 10000, gcd_ms = 0, cooldown_ms = 0, is_negative = true WHERE spell_id = 133"));
     shard.assert_sql(&format!("UPDATE game_spell_effect SET kind = {A_PERIODIC_DAMAGE}, base_points = 10, die_sides = 0, per_level = 0.0, period_ms = 1000 WHERE spell_id = 133"));
     shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (533,133,1,{A_MOD_SPEED},-50,0,0.0,0,1,0.0,0,0,0,0,0,0,0,false,0.0)"));
     shard.assert_call("debug_fill_aura_slots", &[&target, "1", "false", "1"]);
@@ -144,14 +144,14 @@ fn creature_levels_add_partial_resistance_without_gear() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn binary_damage_skips_the_innate_partial_resistance_roll() {
-    use lyracore_shared::spell::taxonomy::SPELL_ATTR_BINARY;
+    use lyracore_shared::spell::taxonomy::CAST_FLAG_BINARY;
 
     let (shard, target) = stage("binary-spell-resistance");
     shard.assert_sql("UPDATE game_world_entity SET intellect = 0 WHERE guid = 1");
     shard.assert_sql("UPDATE game_spell_effect SET base_points = 400 WHERE spell_id = 133");
     shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES (1,{target},6)"));
     shard.assert_sql(&format!(
-        "UPDATE game_spell SET cast_flags = {SPELL_ATTR_BINARY} WHERE spell_id = 133"
+        "UPDATE game_spell SET cast_flags = {CAST_FLAG_BINARY} WHERE spell_id = 133"
     ));
     shard.assert_call("debug_compute_spell", &["1", &target, "133"]);
     assert_eq!(
@@ -203,7 +203,7 @@ fn a_partial_resist_that_removes_a_small_area_tick_still_reports_its_log() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn aura_cast_hit_testing_uses_damage_class_and_hostility() {
-    use lyracore_shared::spell::taxonomy::{A_MOD_SPEED, SPELL_ATTR_MAGIC_HIT};
+    use lyracore_shared::spell::taxonomy::{A_MOD_SPEED, CAST_FLAG_MAGIC_HIT};
     let (shard, target) = stage("aura-damage-class");
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 60 WHERE guid = {target}"
@@ -214,9 +214,9 @@ fn aura_cast_hit_testing_uses_damage_class_and_hostility() {
     let events = subscribe_with_fence(&shard, &["SELECT * FROM game_spell_cast_event_live"]);
     for (index, (flags, school, negative, miss)) in [
         (0, 4, true, "0"),
-        (SPELL_ATTR_MAGIC_HIT, 4, true, "2"),
-        (SPELL_ATTR_MAGIC_HIT, 4, false, "0"),
-        (SPELL_ATTR_MAGIC_HIT, 1, true, "2"),
+        (CAST_FLAG_MAGIC_HIT, 4, true, "2"),
+        (CAST_FLAG_MAGIC_HIT, 4, false, "0"),
+        (CAST_FLAG_MAGIC_HIT, 1, true, "2"),
     ]
     .into_iter()
     .enumerate()

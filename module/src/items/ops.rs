@@ -556,8 +556,7 @@ pub(crate) fn apply_item_use_on(
         .find(spell_id)
         .is_some_and(|spell| {
             spell.attributes & crate::spell::SPELL_ATTR_PASSIVE == 0
-                && spell.cast_flags
-                    & lyracore_shared::spell::taxonomy::SPELL_ATTR_RANGED_AUTO_REPEAT
+                && spell.cast_flags & lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT
                     == 0
         })
         && !super::equip::spell_ready(
@@ -602,9 +601,9 @@ pub(crate) fn apply_item_use_on(
 pub(crate) fn resistance_items(
     ctx: &ReducerContext,
     owner_guid: u64,
-) -> impl Iterator<Item = lyracore_shared::resistance::ResistanceItem> + '_ {
+) -> impl Iterator<Item = crate::modifiers::ResistanceItem> + '_ {
     use crate::game_item_random_property;
-    use lyracore_shared::resistance::ResistanceItem;
+    use crate::modifiers::ResistanceItem;
     ctx.db
         .game_item_instance()
         .by_owner_guid()

@@ -4740,7 +4740,7 @@ def check_combo_points(host):
 
     def effect(kind):
         host.sql(f'UPDATE game_spell_effect SET kind = {kind} WHERE spell_id = 133')
-        finisher = 0x08 if kind == 0x0d else 0  # SPELL_ATTR_COMBO_FINISHER.
+        finisher = 0x08 if kind == 0x0d else 0  # CAST_FLAG_COMBO_FINISHER.
         host.sql(f'UPDATE game_spell SET cast_flags = {finisher} WHERE spell_id = 133')
 
     def shown(packets=()):

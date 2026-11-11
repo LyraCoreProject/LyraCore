@@ -4,7 +4,10 @@ use crate::game_world_entity;
 
 use crate::game_melee_attack;
 
-use super::*;
+use super::{
+    add_flat_pool_bonus, dispel_category_matches, drain_shields, game_aura, game_spell,
+    rederive_pool, shed_auras, should_arm_spell_retaliation, Aura, A_ABSORB, COMBAT_ATTACK_POWER,
+};
 
 pub(crate) fn arm_spell_retaliation(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
     crate::combat::engage_passive_creature(ctx, target_guid, caster_guid);
@@ -26,40 +29,6 @@ pub(crate) fn arm_spell_retaliation(ctx: &ReducerContext, caster_guid: u64, targ
     }
 }
 
-pub(crate) fn apply_target_damage(
-    ctx: &ReducerContext,
-    target_guid: u64,
-    caster_guid: u64,
-    basis: i32,
-    hit: crate::combat::Hit,
-) -> (u32, u32) {
-    let entities = ctx.db.game_world_entity();
-    let Some(target) = entities.guid().find(target_guid) else {
-        return (0, 0);
-    };
-    if target.dead {
-        return (0, 0);
-    }
-    if entities
-        .guid()
-        .find(caster_guid)
-        .is_some_and(|caster| !crate::combat::may_harm(ctx, &caster, &target))
-    {
-        return (0, 0);
-    }
-
-    let (dmg, absorbed) =
-        crate::combat::fold_incoming_damage(ctx, caster_guid, target_guid, basis.max(0) as u32);
-    let damage = crate::combat::final_damage(ctx, target_guid, dmg);
-    if damage.amount == 0 && dmg == 0 {
-        return (0, absorbed);
-    }
-    // Enter combat before applying a lethal hit, which may remove the target.
-    crate::combat::enter_combat(ctx, caster_guid);
-    crate::combat::apply_hit(ctx, caster_guid, target_guid, damage, hit);
-    (damage.amount, absorbed)
-}
-
 pub(crate) fn dispel_target(
     ctx: &ReducerContext,
     caster_guid: u64,
@@ -73,9 +42,10 @@ pub(crate) fn dispel_target(
     ) else {
         return 0;
     };
-    let friendly = caster_guid == target_guid
-        || (!crate::duel::active_opponents(ctx, caster_guid, target_guid)
-            && crate::faction::is_friendly(ctx, target.faction_template, caster.faction_template));
+    let friendly = matches!(
+        crate::combat::relation(ctx, &target, &caster),
+        crate::combat::Relation::SelfUnit | crate::combat::Relation::Friendly
+    );
     let spells = ctx.db.game_spell();
     let dispelled: Vec<Aura> = ctx
         .db
@@ -91,19 +61,7 @@ pub(crate) fn dispel_target(
         })
         .collect();
     let removed = dispelled.len() as u32;
-    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
-    for aura in &dispelled {
-        if let Some(category) = crate::spell::stacking::dr_category_for_effect(
-            ctx,
-            aura.eff_kind,
-            aura.eff_p0_kind,
-            aura.eff_p0,
-            target_guid,
-        ) {
-            crate::spell::stacking::dr_window_on_removal(ctx, target_guid, category, now_micros);
-        }
-    }
-    shed_auras(ctx, target_guid, dispelled);
+    shed_auras(ctx, dispelled);
     removed
 }
 
@@ -116,52 +74,35 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
         return;
     }
     let (race, class, _gender, _pt) = lyracore_shared::packing::unpack4(e.unit_bytes_0);
+    let [stamina, intellect, new_spirit] =
+        crate::modifiers::VITALS_STATS.map(|stat| crate::modifiers::effective_stat(ctx, &e, stat));
+    let gear = |which| crate::items::equipped_stat_bonus(ctx, unit_guid, which);
 
-    let login_max_health = crate::stats::max_health_for(ctx, race, class, e.level);
-
-    let sta_bonus = stat_bonus(ctx, unit_guid, STAT_STA).saturating_add(
-        crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Stamina),
-    );
     let new_max_health = add_flat_pool_bonus(
         rederive_pool(
-            login_max_health,
+            crate::stats::max_health_for(ctx, race, class, e.level),
             e.stamina,
-            sta_bonus,
+            stat_bonus(e.stamina, stamina),
             crate::stats::hp_from_stamina,
         ),
-        crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Health),
+        gear(crate::items::EquipStat::Health),
     );
 
     let is_mana = lyracore_shared::packing::power_type::for_class(class)
         == lyracore_shared::packing::power_type::MANA;
     let new_max_power = if is_mana {
-        let login_max_power = crate::stats::max_power_for(ctx, race, class, e.level);
-        let int_bonus = stat_bonus(ctx, unit_guid, STAT_INT).saturating_add(
-            crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Intellect),
-        );
         add_flat_pool_bonus(
             rederive_pool(
-                login_max_power,
+                crate::stats::max_power_for(ctx, race, class, e.level),
                 e.intellect,
-                int_bonus,
+                stat_bonus(e.intellect, intellect),
                 crate::stats::mana_from_intellect,
             ),
-            crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Mana),
+            gear(crate::items::EquipStat::Mana),
         )
     } else {
         e.max_power
     };
-
-    let base_spirit = i128::from(crate::stats::base_attributes_for(ctx, race, class, e.level).4);
-    let spi_flat = i128::from(stat_bonus(ctx, unit_guid, STAT_SPI))
-        + i128::from(crate::items::equipped_stat_bonus(
-            ctx,
-            unit_guid,
-            crate::items::EquipStat::Spirit,
-        ));
-    let spi_pct = i128::from(stat_pct_bonus(ctx, unit_guid, STAT_SPI));
-    let new_spirit =
-        (((base_spirit + spi_flat) * (100 + spi_pct)) / 100).clamp(0, i128::from(u32::MAX)) as u32;
 
     if new_max_health == e.max_health && new_max_power == e.max_power && new_spirit == e.spirit {
         return;
@@ -175,6 +116,10 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
     e.update(ctx);
 }
 
+fn stat_bonus(base: u32, effective: u32) -> i32 {
+    (i64::from(effective) - i64::from(base)).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
 pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     let entities = ctx.db.game_world_entity();
     let Some(mut e) = entities.guid().find(unit_guid) else {
@@ -183,30 +128,20 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     if !e.is_player() {
         return;
     }
-    let (_, class, _, _) = lyracore_shared::packing::unpack4(e.unit_bytes_0);
-
-    let eff_str = crate::combat::effective_strength(ctx, &e);
-    let eff_agi = crate::combat::effective_agility(ctx, &e);
-    let str_bonus = eff_str as i32 - e.strength as i32;
-    let agi_bonus = eff_agi as i32 - e.agility as i32;
-    let sta_bonus = stat_bonus(ctx, unit_guid, STAT_STA).saturating_add(
-        crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Stamina),
+    let (race, class, _, _) = lyracore_shared::packing::unpack4(e.unit_bytes_0);
+    let [eff_str, eff_agi, eff_sta, eff_int, eff_spi] =
+        crate::modifiers::SHEET_STATS.map(|stat| crate::modifiers::effective_stat(ctx, &e, stat));
+    let str_bonus = stat_bonus(e.strength, eff_str);
+    let agi_bonus = stat_bonus(e.agility, eff_agi);
+    let sta_bonus = stat_bonus(e.stamina, eff_sta);
+    let int_bonus = stat_bonus(e.intellect, eff_int);
+    let spi_bonus = stat_bonus(
+        crate::stats::base_attributes_for(ctx, race, class, e.level).4,
+        eff_spi,
     );
-    let int_bonus = stat_bonus(ctx, unit_guid, STAT_INT).saturating_add(
-        crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Intellect),
-    );
-    let spi_flat = i128::from(stat_bonus(ctx, unit_guid, STAT_SPI))
-        + i128::from(crate::items::equipped_stat_bonus(
-            ctx,
-            unit_guid,
-            crate::items::EquipStat::Spirit,
-        ));
-    let spi_bonus = ((spi_flat * (100 + i128::from(stat_pct_bonus(ctx, unit_guid, STAT_SPI))))
-        / 100)
-        .clamp(i128::from(i32::MIN), i128::from(i32::MAX)) as i32;
 
     let ap_base = crate::combat::melee_attack_power_for(class, eff_str, eff_agi, e.level);
-    let ap_mods = crate::combat::aura_attack_power_bonus(ctx, unit_guid);
+    let ap_mods = crate::modifiers::combat_field_bonus(ctx, unit_guid, COMBAT_ATTACK_POWER);
     let (dmg_min, dmg_max) = crate::combat::swing_range_ctx(ctx, &e);
     let ap_modifiers = crate::combat::attack_power_modifiers(ctx, unit_guid, COMBAT_ATTACK_POWER);
     // Priest, mage and warlock ignore ranged AP modifiers.
@@ -224,7 +159,7 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
         eff_agi,
         e.level,
         crate::combat::equipped_ranged_weapon(ctx, unit_guid),
-        combat_field_bonus(
+        crate::modifiers::combat_field_bonus(
             ctx,
             unit_guid,
             lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
@@ -291,13 +226,15 @@ pub(crate) fn absorb_incoming(ctx: &ReducerContext, target_guid: u64, incoming: 
     if shields.is_empty() {
         return incoming;
     }
-    shields.sort_by_key(|a| a.id); // Drain the oldest shield first.
+    shields.sort_by_key(|a| a.id);
     let (updated, deleted, remaining_damage) = drain_shields(shields, incoming);
     for shield in updated {
         shield.update(ctx);
     }
-    for id in deleted {
-        crate::Aura::delete(ctx, id);
-    }
+    let depleted = deleted
+        .into_iter()
+        .filter_map(|id| ctx.db.game_aura().id().find(id))
+        .collect();
+    shed_auras(ctx, depleted);
     remaining_damage
 }

@@ -193,7 +193,7 @@ pub(crate) fn is_action_blocked(ctx: &ReducerContext, unit_guid: u64) -> bool {
 }
 
 pub(crate) fn is_movement_blocked(ctx: &ReducerContext, unit_guid: u64) -> bool {
-    auras_on(ctx, unit_guid).any(|a| lyracore_shared::aura::holds_in_place(a.eff_kind, a.eff_p0))
+    auras_on(ctx, unit_guid).any(|a| crate::modifiers::holds_in_place(a.eff_kind, a.eff_p0))
 }
 
 pub(crate) fn is_self_movement_suppressed(ctx: &ReducerContext, unit_guid: u64) -> bool {
@@ -228,19 +228,7 @@ fn break_flagged_auras(ctx: &ReducerContext, target_guid: u64, breaks: fn(u16) -
                     .is_some_and(|s| breaks(s.aura_interrupt))
         })
         .collect();
-    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
-    for a in &to_break {
-        if let Some(category) = crate::spell::stacking::dr_category_for_effect(
-            ctx,
-            a.eff_kind,
-            a.eff_p0_kind,
-            a.eff_p0,
-            a.target_guid,
-        ) {
-            crate::spell::stacking::dr_window_on_removal(ctx, a.target_guid, category, now_micros);
-        }
-    }
-    shed_auras(ctx, target_guid, to_break);
+    shed_auras(ctx, to_break);
 }
 
 pub(crate) fn break_auras_on_move(ctx: &ReducerContext, mover_guid: u64) {
@@ -345,7 +333,7 @@ fn interrupt_cast_with_outcome(
             .game_spell()
             .spell_id()
             .find(*spell_id)
-            .is_some_and(|spell| spell.gcd_ms > 0 && spell.cast_flags & SPELL_ATTR_CHANNELED == 0)
+            .is_some_and(|spell| spell.gcd_ms > 0 && spell.cast_flags & CAST_FLAG_CHANNELED == 0)
     }) {
         ctx.db
             .game_spell_cooldown()
@@ -414,13 +402,7 @@ pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
         .filter(|aura| is_channel_aura(ctx, aura))
         .collect();
     let broke_channel = !removed.is_empty();
-    let mut targets = std::collections::BTreeMap::<u64, Vec<Aura>>::new();
-    for aura in removed {
-        targets.entry(aura.target_guid).or_default().push(aura);
-    }
-    for (target, auras) in targets {
-        shed_auras(ctx, target, auras);
-    }
+    shed_auras(ctx, removed);
     let broke_cast = interrupt_cast(ctx, caster_guid);
     if broke_channel {
         log::info!("channel broken: caster {caster_guid}'s channel cancelled");
@@ -497,37 +479,7 @@ pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
                 .unwrap_or(false)
         })
         .collect();
-    shed_auras(ctx, unit_guid, shed);
-}
-
-pub(crate) fn shed_auras(ctx: &ReducerContext, unit_guid: u64, shed: Vec<Aura>) {
-    if shed.is_empty() {
-        return;
-    }
-    let mut revitalize = false;
-    let mut resheet = false;
-    let mut remount = false;
-    let redisplay = shed.iter().any(|a| a.eff_kind == A_TRANSFORM);
-    for a in &shed {
-        revitalize |= aura_moves_vitals(a.eff_kind, a.eff_p0);
-        resheet |= crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0);
-        remount |= crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0);
-    }
-    for a in shed {
-        crate::Aura::delete(ctx, a.id);
-    }
-    if revitalize {
-        recompute_vitals(ctx, unit_guid);
-    }
-    if resheet {
-        recompute_sheet(ctx, unit_guid);
-    }
-    if remount {
-        crate::mount::recompute_mount(ctx, unit_guid);
-    }
-    if redisplay {
-        recompute_display(ctx, unit_guid);
-    }
+    shed_auras(ctx, shed);
 }
 
 #[cfg(test)]

@@ -37,7 +37,7 @@ pub use crate::chat::{
     game_system_message_event, game_whisper_event, ChannelEvent, ChannelMember, ChatEvent,
     ContactEntry, EmoteEvent, RollEvent, SystemMessageEvent, WhisperEvent,
 };
-pub use crate::combat::death::{game_creature_lethal_damage_floor, CreatureLethalDamageFloor};
+pub use crate::combat::damage::{game_creature_lethal_damage_floor, CreatureLethalDamageFloor};
 pub use crate::combat::{
     game_combat_event, game_combat_event_live, game_melee_attack, game_melee_schedule,
     game_ranged_impact_schedule, CombatEvent, MeleeAttack, MeleeSchedule, RangedImpactSchedule,

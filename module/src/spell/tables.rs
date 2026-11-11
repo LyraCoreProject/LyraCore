@@ -258,7 +258,7 @@ pub(crate) fn expire_item_aura(ctx: &ReducerContext, expiry: ItemAuraExpiry) {
     }
     if let Some(aura) = ctx.db.game_aura().id().find(expiry.aura_id) {
         if aura.expires_at <= crate::time::now(ctx) {
-            super::shed_auras(ctx, aura.target_guid, vec![aura]);
+            shed_auras(ctx, vec![aura]);
         }
     }
 }
@@ -341,27 +341,139 @@ impl Aura {
         aura
     }
 
+    /// Removes one Aura and refreshes what it derived; `shed_auras` removes a batch.
+    #[cfg_attr(not(has_packages), allow(dead_code))]
     pub(crate) fn delete(ctx: &ReducerContext, id: u64) -> bool {
-        let auras = ctx.db.game_aura();
-        let previous = auras.id().find(id);
-        let removed = auras.id().delete(id);
-        ctx.db.game_item_aura().aura_id().delete(id);
-        ctx.db.game_item_aura_expiry().aura_id().delete(id);
-        if let Some(aura) = previous {
-            if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
-                crate::aoi::refresh_entity(ctx, aura.target_guid);
+        let previous = ctx.db.game_aura().id().find(id);
+        let removed = previous.is_some();
+        match previous {
+            Some(aura) => shed_auras(ctx, vec![aura]),
+            None => {
+                Self::delete_row(ctx, id);
             }
-            crate::native::aura_changed(ctx, Some(&aura), None);
         }
         removed
     }
+
+    fn delete_row(ctx: &ReducerContext, id: u64) -> Option<Aura> {
+        let auras = ctx.db.game_aura();
+        let previous = auras.id().find(id);
+        auras.id().delete(id);
+        ctx.db.game_item_aura().aura_id().delete(id);
+        ctx.db.game_item_aura_expiry().aura_id().delete(id);
+        if let Some(aura) = &previous {
+            if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
+                crate::aoi::refresh_entity(ctx, aura.target_guid);
+            }
+            crate::native::aura_changed(ctx, Some(aura), None);
+        }
+        previous
+    }
+}
+
+/// The unit columns an Aura's effect feeds, which must be recomputed when it changes.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct AuraProjections {
+    vitals: bool,
+    sheet: bool,
+    mount: bool,
+    display: bool,
+}
+
+impl AuraProjections {
+    pub(crate) fn of(kind: u8, parameter: i32) -> Self {
+        Self {
+            vitals: crate::modifiers::moves_vitals(kind, parameter),
+            sheet: crate::modifiers::moves_sheet(kind, parameter),
+            mount: crate::mount::mount_aura_moves_mount(kind, parameter),
+            display: kind == lyracore_shared::spell::taxonomy::A_TRANSFORM,
+        }
+    }
+
+    fn union(self, other: Self) -> Self {
+        Self {
+            vitals: self.vitals || other.vitals,
+            sheet: self.sheet || other.sheet,
+            mount: self.mount || other.mount,
+            display: self.display || other.display,
+        }
+    }
+
+    pub(crate) fn refresh(self, ctx: &ReducerContext, unit_guid: u64) {
+        if self.vitals {
+            super::recompute_vitals(ctx, unit_guid);
+        }
+        if self.sheet {
+            super::recompute_sheet(ctx, unit_guid);
+        }
+        if self.mount {
+            crate::mount::recompute_mount(ctx, unit_guid);
+        }
+        if self.display {
+            super::recompute_display(ctx, unit_guid);
+        }
+    }
+}
+
+/// Removes every Aura in `auras`, opens each removed control's diminishing-returns window and
+/// refreshes each touched unit's derived columns once.
+pub(crate) fn shed_auras(ctx: &ReducerContext, auras: Vec<Aura>) {
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
+    let mut touched = std::collections::BTreeMap::<u64, AuraProjections>::new();
+    for aura in auras {
+        let Some(aura) = Aura::delete_row(ctx, aura.id) else {
+            continue;
+        };
+        if let Some(category) = super::stacking::dr_category_for_effect(
+            ctx,
+            aura.eff_kind,
+            aura.eff_p0_kind,
+            aura.eff_p0,
+            aura.target_guid,
+        ) {
+            super::stacking::dr_window_on_removal(ctx, aura.target_guid, category, now_micros);
+        }
+        let projections = touched.entry(aura.target_guid).or_default();
+        *projections = projections.union(AuraProjections::of(aura.eff_kind, aura.eff_p0));
+    }
+    for (unit_guid, projections) in touched {
+        projections.refresh(ctx, unit_guid);
+    }
+}
+
+pub(crate) fn auras_on(ctx: &ReducerContext, unit_guid: u64) -> impl Iterator<Item = Aura> {
+    ctx.db.game_aura().by_target().filter(unit_guid)
+}
+
+pub(crate) fn is_stealthed(ctx: &ReducerContext, unit_guid: u64) -> bool {
+    auras_on(ctx, unit_guid).any(|a| a.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH)
+}
+
+pub(crate) fn break_stealth(ctx: &ReducerContext, unit_guid: u64) {
+    let stealth: Vec<Aura> = auras_on(ctx, unit_guid)
+        .filter(|a| a.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH)
+        .collect();
+    shed_auras(ctx, stealth);
+}
+
+pub(crate) fn remove_seal_auras(ctx: &ReducerContext, unit_guid: u64) -> u32 {
+    let seal_spell_ids: std::collections::HashSet<u32> = auras_on(ctx, unit_guid)
+        .filter(|a| a.eff_kind == lyracore_shared::spell::taxonomy::A_SEAL)
+        .map(|a| a.spell_id)
+        .collect();
+    let seals: Vec<Aura> = auras_on(ctx, unit_guid)
+        .filter(|a| seal_spell_ids.contains(&a.spell_id))
+        .collect();
+    let removed = seals.len() as u32;
+    shed_auras(ctx, seals);
+    removed
 }
 
 crate::character_owned!(delete, fn sweep_delete_game_aura(ctx, character_guid) {
     let auras = ctx.db.game_aura();
     let ids: Vec<u64> = auras.by_target().filter(&character_guid).map(|a| a.id).collect();
     for id in ids {
-        Aura::delete(ctx, id);
+        Aura::delete_row(ctx, id);
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_aura(ctx, character_guid, io) {

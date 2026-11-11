@@ -1682,7 +1682,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
             .filter(&target_guid)
             .filter(|aura| aura.spell_id == spell_id)
             .collect::<Vec<_>>();
-        crate::spell::shed_auras(self.ctx, target_guid, rows);
+        crate::spell::shed_auras(self.ctx, rows);
         true
     }
 

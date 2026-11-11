@@ -336,29 +336,43 @@ pub(crate) fn is_engaged(ctx: &ReducerContext, guid: u64) -> bool {
         || threats.by_source().filter(&guid).next().is_some()
 }
 
-fn may_harm_decision(same_unit: bool, active_duel: bool, friendly: bool) -> bool {
-    same_unit || active_duel || !friendly
+/// How `unit` stands toward `other`: an active Duel makes opponents hostile, and hostility wins
+/// over friendliness as in vmangos `Unit::GetReactionTo`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Relation {
+    SelfUnit,
+    Friendly,
+    Neutral,
+    Hostile,
 }
 
-fn may_help_decision(same_unit: bool, active_duel: bool, hostile: bool) -> bool {
-    same_unit || (!active_duel && !hostile)
+pub(crate) fn relation(ctx: &ReducerContext, unit: &WorldEntity, other: &WorldEntity) -> Relation {
+    if unit.guid == other.guid {
+        return Relation::SelfUnit;
+    }
+    relation_from(
+        crate::duel::active_opponents(ctx, unit.guid, other.guid),
+        crate::faction::is_hostile(ctx, unit.faction_template, other.faction_template),
+        || crate::faction::is_friendly(ctx, unit.faction_template, other.faction_template),
+    )
+}
+
+fn relation_from(duel: bool, hostile: bool, friendly: impl FnOnce() -> bool) -> Relation {
+    if duel || hostile {
+        Relation::Hostile
+    } else if friendly() {
+        Relation::Friendly
+    } else {
+        Relation::Neutral
+    }
 }
 
 pub(crate) fn may_harm(ctx: &ReducerContext, attacker: &WorldEntity, target: &WorldEntity) -> bool {
-    !crate::taxi::is_flying(target)
-        && may_harm_decision(
-            attacker.guid == target.guid,
-            crate::duel::active_opponents(ctx, attacker.guid, target.guid),
-            crate::faction::is_friendly(ctx, attacker.faction_template, target.faction_template),
-        )
+    !crate::taxi::is_flying(target) && relation(ctx, attacker, target) != Relation::Friendly
 }
 
 pub(crate) fn may_help(ctx: &ReducerContext, helper: &WorldEntity, target: &WorldEntity) -> bool {
-    may_help_decision(
-        helper.guid == target.guid,
-        crate::duel::active_opponents(ctx, helper.guid, target.guid),
-        crate::faction::is_hostile(ctx, helper.faction_template, target.faction_template),
-    )
+    relation(ctx, helper, target) != Relation::Hostile
 }
 
 pub(crate) fn is_hostile_target(
@@ -366,10 +380,7 @@ pub(crate) fn is_hostile_target(
     attacker: &WorldEntity,
     target: &WorldEntity,
 ) -> bool {
-    !crate::taxi::is_flying(target)
-        && attacker.guid != target.guid
-        && (crate::duel::active_opponents(ctx, attacker.guid, target.guid)
-            || crate::faction::is_hostile(ctx, attacker.faction_template, target.faction_template))
+    !crate::taxi::is_flying(target) && relation(ctx, attacker, target) == Relation::Hostile
 }
 
 #[table(
@@ -419,7 +430,7 @@ impl MeleeAttack {
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) -> bool {
         let deleted = Self::end_auto_repeat(ctx, guid);
         if deleted {
-            crate::combat::interrupt_queued_strike_of(ctx, guid);
+            crate::combat::queued_strike::interrupt_of(ctx, guid);
         }
         deleted
     }
@@ -659,7 +670,7 @@ fn face_requested_melee_target(ctx: &ReducerContext, attacker_guid: u64, target_
     }
 
     let orientation = dy.atan2(dx);
-    if crate::spell::is_facing(
+    if crate::geometry::is_facing(
         attacker.x,
         attacker.y,
         attacker.orientation,
@@ -802,7 +813,7 @@ pub(crate) fn apply_start_ranged_attack(
                 "ranged target too close",
             ));
         }
-        if !crate::spell::is_facing(
+        if !crate::geometry::is_facing(
             attacker.x,
             attacker.y,
             attacker.orientation,
@@ -871,21 +882,12 @@ pub(crate) fn stop_attack_for(ctx: &ReducerContext, attacker_guid: u64) {
 
 #[cfg(test)]
 mod duel_relation_tests {
-    use super::{may_harm_decision, may_help_decision};
+    use super::{relation_from, Relation};
 
     #[test]
-    fn active_duel_is_the_only_friendly_fire_exception() {
-        assert!(!may_harm_decision(false, false, true));
-        assert!(may_harm_decision(false, true, true));
-        assert!(may_harm_decision(false, false, false));
-        assert!(may_harm_decision(true, false, true));
-    }
-
-    #[test]
-    fn active_opponents_stop_being_helpful_targets() {
-        assert!(may_help_decision(false, false, false));
-        assert!(!may_help_decision(false, true, false));
-        assert!(!may_help_decision(false, false, true));
-        assert!(may_help_decision(true, false, true));
+    fn an_active_duel_makes_a_friendly_opponent_hostile() {
+        assert_eq!(relation_from(true, false, || true), Relation::Hostile);
+        assert_eq!(relation_from(false, false, || true), Relation::Friendly);
+        assert_eq!(relation_from(false, false, || false), Relation::Neutral);
     }
 }

@@ -439,18 +439,14 @@ fn apply_talent_rank(
             crate::spell::learn_spell(ctx, guid, owner, rank_spell);
             let stack = if talent.tab_id != 0 { 1 } else { rank };
             crate::spell::apply_spell_auras(ctx, rank_spell, guid, level, stack);
-            let mut revitalize = false;
-            for prev_rank in 1..rank {
-                let prev = talent_rank_spell(talent, prev_rank);
-                if prev == 0 || prev == rank_spell {
-                    continue;
-                }
+            let previous_ranks: Vec<u32> = (1..rank)
+                .map(|prev_rank| talent_rank_spell(talent, prev_rank))
+                .filter(|&prev| prev != 0 && prev != rank_spell)
+                .collect();
+            for &prev in &previous_ranks {
                 crate::spell::forget_spell(ctx, guid, prev);
-                revitalize |= crate::spell::strip_spell_auras(ctx, guid, prev);
             }
-            if revitalize {
-                crate::spell::recompute_vitals(ctx, guid);
-            }
+            crate::spell::strip_spell_auras(ctx, guid, &previous_ranks);
             crate::spell::recompute_sheet(ctx, guid);
         } else {
             spacetimedb::log::info!(
@@ -535,13 +531,7 @@ pub(crate) fn do_reset_talents(
     }
 
     // Cancelling a passive Aura through the client request is forbidden.
-    let mut revitalize = false;
-    for spell_id in &passives {
-        revitalize |= crate::spell::strip_spell_auras(ctx, character_guid, *spell_id);
-    }
-    if revitalize {
-        crate::spell::recompute_vitals(ctx, character_guid);
-    }
+    crate::spell::strip_spell_auras(ctx, character_guid, &passives);
     crate::spell::recompute_sheet(ctx, character_guid);
 
     for spell_id in granted.iter().chain(passives.iter()) {

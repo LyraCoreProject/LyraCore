@@ -21,7 +21,7 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
         let Some((effect, header)) = definition.filter(|(effect, _)| {
             effect.spell_id == aura.spell_id && effect.kind & KIND_AURA_BIT != 0
         }) else {
-            shed_auras(ctx, aura.target_guid, vec![aura]);
+            shed_auras(ctx, vec![aura]);
             continue;
         };
         let p1 = if matches!(effect.kind, A_PERIODIC_TRIGGER | A_PROC_TRIGGER) {
@@ -29,7 +29,7 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
         } else {
             effect.p1
         };
-        let period_ms = if effect.period_ms == 0 && header.cast_flags & SPELL_ATTR_CHANNELED != 0 {
+        let period_ms = if effect.period_ms == 0 && header.cast_flags & CAST_FLAG_CHANNELED != 0 {
             100
         } else {
             effect.period_ms
@@ -76,7 +76,7 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
                 .map(|other| other.slot)
                 .or_else(|| slots.find(|slot| current.iter().all(|other| other.slot != *slot)));
             let Some(slot) = slot else {
-                shed_auras(ctx, aura.target_guid, vec![aura]);
+                shed_auras(ctx, vec![aura]);
                 continue;
             };
             aura.slot = slot;

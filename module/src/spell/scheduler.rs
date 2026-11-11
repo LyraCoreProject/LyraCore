@@ -16,7 +16,7 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
         .delete(sched.scheduled_id);
     let result = check_pending_cast_los(ctx, sched.caster_guid, sched.spell_id, sched.target_guid)
         .and_then(|()| {
-            resolve_cast_at_typed(
+            resolve_cast_at(
                 ctx,
                 sched.caster_guid,
                 sched.spell_id,
@@ -74,10 +74,10 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
     if !crate::time::scheduler_authorized(ctx) {
         return;
     }
-    let (dealt, absorbed) = apply_target_damage(
+    let (dealt, absorbed) = crate::combat::deal_damage(
         ctx,
-        sched.target_guid,
         sched.caster_guid,
+        sched.target_guid,
         sched.after_resist,
         crate::combat::Hit::spell(
             if sched.triggered {
@@ -198,11 +198,7 @@ pub(crate) fn do_cancel_cast(
 ) -> Result<(), crate::Refusal> {
     interrupt_cast(ctx, caster.guid);
     break_channel(ctx, caster.guid);
-    if caster.next_swing_spell != 0 {
-        let mut c = caster;
-        c.next_swing_spell = 0;
-        c.update(ctx);
-    }
+    crate::combat::queued_strike::interrupt_of(ctx, caster.guid);
     Ok(())
 }
 
@@ -224,48 +220,13 @@ pub(crate) fn do_cancel_aura(
             return Err(format!("spell {spell_id} is a debuff and cannot be cancelled").into());
         }
     }
-    let auras = ctx.db.game_aura();
-    let redisplay = auras
-        .by_target()
-        .filter(&player_guid)
-        .any(|a| a.spell_id == spell_id && a.eff_kind == A_TRANSFORM);
-    let to_remove: Vec<(u64, bool, bool, bool)> = auras
-        .by_target()
-        .filter(&player_guid)
+    let cancelled: Vec<Aura> = auras_on(ctx, player_guid)
         .filter(|a| a.spell_id == spell_id)
-        .map(|a| {
-            (
-                a.id,
-                aura_moves_vitals(a.eff_kind, a.eff_p0),
-                crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0),
-                crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0),
-            )
-        })
         .collect();
-    if to_remove.is_empty() {
+    if cancelled.is_empty() {
         return Err(format!("no cancelable aura {spell_id} on the caller").into());
     }
-    let mut revitalize = false;
-    let mut resheet = false;
-    let mut remount = false;
-    for (id, moves_vitals, moves_sheet, moves_mount) in to_remove {
-        crate::Aura::delete(ctx, id);
-        revitalize |= moves_vitals;
-        resheet |= moves_sheet;
-        remount |= moves_mount;
-    }
-    if revitalize {
-        recompute_vitals(ctx, player_guid);
-    }
-    if resheet {
-        recompute_sheet(ctx, player_guid);
-    }
-    if remount {
-        crate::mount::recompute_mount(ctx, player_guid);
-    }
-    if redisplay {
-        recompute_display(ctx, player_guid);
-    }
+    shed_auras(ctx, cancelled);
     Ok(())
 }
 
@@ -503,9 +464,11 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         a2.update(ctx);
     }
 
-    for id in channel_end {
-        crate::Aura::delete(ctx, id);
-    }
+    let ended = channel_end
+        .into_iter()
+        .filter_map(|id| auras.id().find(id))
+        .collect();
+    shed_auras(ctx, ended);
     for (caster_guid, trigger_spell, level, channel_target) in channel_fires {
         if trigger_spell == 0 {
             continue;
@@ -528,54 +491,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         expired.len(),
         auras.count()
     );
-    let redisplay: std::collections::BTreeSet<u64> = expired
-        .iter()
-        .filter(|a| a.eff_kind == A_TRANSFORM)
-        .map(|a| a.target_guid)
-        .collect();
-    let mut revitalize: Vec<u64> = Vec::new();
-    let mut resheet: Vec<u64> = Vec::new();
-    let mut remount: Vec<u64> = Vec::new();
-    for a in &expired {
-        if aura_moves_vitals(a.eff_kind, a.eff_p0) && !revitalize.contains(&a.target_guid) {
-            revitalize.push(a.target_guid);
-        }
-        if crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0) && !resheet.contains(&a.target_guid)
-        {
-            resheet.push(a.target_guid);
-        }
-        if crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0)
-            && !remount.contains(&a.target_guid)
-        {
-            remount.push(a.target_guid);
-        }
-    }
-    for a in &expired {
-        if let Some(category) = crate::spell::stacking::dr_category_for_effect(
-            ctx,
-            a.eff_kind,
-            a.eff_p0_kind,
-            a.eff_p0,
-            a.target_guid,
-        ) {
-            crate::spell::stacking::dr_window_on_removal(ctx, a.target_guid, category, now_micros);
-        }
-    }
-    for a in &expired {
-        crate::Aura::delete(ctx, a.id);
-    }
-    for target_guid in revitalize {
-        recompute_vitals(ctx, target_guid);
-    }
-    for target_guid in resheet {
-        recompute_sheet(ctx, target_guid);
-    }
-    for target_guid in remount {
-        crate::mount::recompute_mount(ctx, target_guid);
-    }
-    for target_guid in redisplay {
-        recompute_display(ctx, target_guid);
-    }
+    shed_auras(ctx, expired);
 
     // Break auras after cadence advancement to avoid advancing or deleting them twice.
     for target_guid in dot_damaged {
@@ -654,10 +570,10 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 a.spell_id,
                 true,
             );
-            let (dealt, absorbed) = apply_target_damage(
+            let (dealt, absorbed) = crate::combat::deal_damage(
                 ctx,
-                t,
                 a.caster_guid,
+                t,
                 resisted,
                 crate::combat::Hit::triggered(),
             );

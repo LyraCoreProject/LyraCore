@@ -592,7 +592,7 @@ _Avoid_: proc cast, internal cast, free cast
 **Chance on Hit**:
 A weapon spell slot or a combat-spell enchantment that may cast when the weapon strikes a victim
 that is still alive. A white swing that lands and deals damage, or is blocked, rolls the weapon that
-swung. A spell that carries `SPELL_ATTR_WEAPON_PROCS` rolls the main hand once per target, even when
+swung. A spell that carries `CAST_FLAG_WEAPON_PROCS` rolls the main hand once per target, even when
 avoided and even as a Triggered Cast. A spell slot rolls its procs-per-minute rate at the weapon's
 speed, else the spell's proc chance. An enchantment rolls its `game_enchant_proc_rate`, else its
 own percent, else one proc per minute. The roll fires a Triggered Cast that rolls no further Chance

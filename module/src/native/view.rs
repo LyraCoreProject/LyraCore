@@ -95,7 +95,7 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
                 .map(|(_, _, delay)| delay)
                 .filter(|delay| *delay != 0)
                 .unwrap_or(crate::combat::DEFAULT_ATTACK_TIME_MS);
-            let haste = crate::spell::speed_bonus(ctx, e.guid, crate::spell::SPEED_SWING);
+            let haste = crate::modifiers::speed_bonus(ctx, e.guid, crate::spell::SPEED_SWING);
             Some(crate::combat::swing_time_with_haste(delay, haste))
         } else {
             None
@@ -124,11 +124,11 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
         sheet_ranged_dmg_min: e.sheet_ranged_dmg_min as f32 + e.sheet_ranged_dmg_min_fraction,
         sheet_ranged_dmg_max: e.sheet_ranged_dmg_max as f32 + e.sheet_ranged_dmg_max_fraction,
         npc_flags: e.npc_flags,
-        effective_armor: crate::combat::effective_armor(ctx, e),
+        effective_armor: crate::modifiers::effective_armor(ctx, e),
         magic_resistances: std::array::from_fn(|index| {
-            lyracore_shared::resistance::effective_resistance(
+            crate::modifiers::effective_resistance(
                 0,
-                crate::spell::resistance_bonus(ctx, e.guid, 1 << (index + 1)),
+                crate::modifiers::resistance_bonus(ctx, e.guid, 1 << (index + 1)),
             )
         }),
         owner_guid: e.owner_guid,

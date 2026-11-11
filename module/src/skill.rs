@@ -295,7 +295,7 @@ pub(crate) fn effective_ranged_weapon_skill(ctx: &ReducerContext, attacker: &Wor
 
 pub(crate) fn effective_defense_skill(ctx: &ReducerContext, target: &WorldEntity) -> u32 {
     let base = skill_value_or_cap(ctx, target.guid, skill_line::DEFENSE, target.level);
-    let aura = crate::spell::combat_field_bonus(ctx, target.guid, crate::spell::COMBAT_DEFENSE);
+    let aura = crate::modifiers::combat_field_bonus(ctx, target.guid, crate::spell::COMBAT_DEFENSE);
     let gear =
         crate::items::equipped_stat_bonus(ctx, target.guid, crate::items::EquipStat::Defense);
     (i64::from(base) + i64::from(aura) + i64::from(gear)).clamp(0, i64::from(u32::MAX)) as u32

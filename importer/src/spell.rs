@@ -29,23 +29,23 @@ use lyracore_shared::spell::taxonomy::{
     A_MOD_HEALING, A_MOD_HEALTH_POWER, A_MOD_POWER_REGEN_PCT, A_MOD_RESISTANCE, A_MOD_SPEED,
     A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL,
     A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT,
-    A_SPELLMOD_PCT, A_TRANSFORM, COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DMG_DONE, COMBAT_DODGE,
-    COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO,
-    E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL,
-    E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE,
-    E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK,
-    E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT,
-    E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_PET,
+    A_SPELLMOD_PCT, A_TRANSFORM, CAST_FLAG_AREA_AURA, CAST_FLAG_CHANNELED,
+    CAST_FLAG_COMBO_FINISHER, CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_WEAPON_PROCS,
+    COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DMG_DONE, COMBAT_DODGE, COMBAT_HIT,
+    COMBAT_RANGED_ATTACK_POWER, COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS,
+    E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL,
+    E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL,
+    E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
+    E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED,
+    E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_PET,
     E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN,
     P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
     P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW,
     P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
-    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_AREA_AURA,
-    SPELL_ATTR_CHANNELED, SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_PASSIVE,
-    SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_USES_RANGED_SLOT, SPELL_ATTR_WEAPON_PROCS,
-    SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER,
-    STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY,
-    T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
+    SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STANCE_BATTLE,
+    STANCE_BEAR, STANCE_BERSERKER, STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL,
+    T_AREA_ALLY, T_AREA_ENEMY, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 
 // Vanilla form ids differ from durable stance ids.
@@ -95,8 +95,8 @@ fn triggers_weapon_procs(s: &Spell) -> bool {
 
 fn roll_cast_flags(spell: &Spell) -> u32 {
     use lyracore_shared::spell::taxonomy::{
-        SPELL_ATTR_ALWAYS_HIT, SPELL_ATTR_BINARY, SPELL_ATTR_CANNOT_CRIT,
-        SPELL_ATTR_IGNORE_RESISTANCES, SPELL_ATTR_MAGIC_HIT,
+        CAST_FLAG_ALWAYS_HIT, CAST_FLAG_BINARY, CAST_FLAG_CANNOT_CRIT,
+        CAST_FLAG_IGNORE_RESISTANCES, CAST_FLAG_MAGIC_HIT,
     };
     let binary = spell.damage_class == 1
         && spell.school != 0
@@ -117,11 +117,11 @@ fn roll_cast_flags(spell: &Spell) -> u32 {
                 ),
                 _ => false,
             }));
-    (u32::from(binary) * SPELL_ATTR_BINARY)
-        | (u32::from(spell.damage_class == 1) * SPELL_ATTR_MAGIC_HIT)
-        | (u32::from(spell.attributes_ex2 & 0x2000_0000 != 0) * SPELL_ATTR_CANNOT_CRIT)
-        | (u32::from(spell.attributes_ex3 & 0x0004_0000 != 0) * SPELL_ATTR_ALWAYS_HIT)
-        | (u32::from(spell.attributes_ex4 & 1 != 0) * SPELL_ATTR_IGNORE_RESISTANCES)
+    (u32::from(binary) * CAST_FLAG_BINARY)
+        | (u32::from(spell.damage_class == 1) * CAST_FLAG_MAGIC_HIT)
+        | (u32::from(spell.attributes_ex2 & 0x2000_0000 != 0) * CAST_FLAG_CANNOT_CRIT)
+        | (u32::from(spell.attributes_ex3 & 0x0004_0000 != 0) * CAST_FLAG_ALWAYS_HIT)
+        | (u32::from(spell.attributes_ex4 & 1 != 0) * CAST_FLAG_IGNORE_RESISTANCES)
 }
 
 // Overpower carries the finisher bit for its dodge window; passive talents are never cast.
@@ -810,16 +810,16 @@ fn push_spell_header_row(
     }
     let mut cast_flags = overrides.map_or(0, |spell| spell.cast_flags);
     if channeled {
-        cast_flags |= SPELL_ATTR_CHANNELED;
+        cast_flags |= CAST_FLAG_CHANNELED;
     }
     if auto_repeat {
-        cast_flags |= SPELL_ATTR_RANGED_AUTO_REPEAT;
+        cast_flags |= CAST_FLAG_RANGED_AUTO_REPEAT;
     }
     if is_combo_finisher(s) {
-        cast_flags |= SPELL_ATTR_COMBO_FINISHER;
+        cast_flags |= CAST_FLAG_COMBO_FINISHER;
     }
     if triggers_weapon_procs(s) {
-        cast_flags |= SPELL_ATTR_WEAPON_PROCS;
+        cast_flags |= CAST_FLAG_WEAPON_PROCS;
     }
     cast_flags |= roll_cast_flags(s);
     if s.effect
@@ -832,7 +832,7 @@ fn push_spell_header_row(
             ) && *aura != 0
         })
     {
-        cast_flags |= SPELL_ATTR_AREA_AURA;
+        cast_flags |= CAST_FLAG_AREA_AURA;
     }
     let stances = translate_stance_mask(s.shapeshift_mask);
     let spell_level = s.spell_level.min(255) as u8;
@@ -1905,7 +1905,7 @@ mod tests {
         tables.durations = authored_table(4, &[&[1, 6000, 0, 21000]]);
         let (rows, _, _) = derive_spell_rows(&tables, &[], &[]).unwrap();
         let header = &rows.headers[0];
-        assert_ne!(header.cast_flags & SPELL_ATTR_COMBO_FINISHER, 0);
+        assert_ne!(header.cast_flags & CAST_FLAG_COMBO_FINISHER, 0);
         assert_eq!((header.duration_ms, header.max_duration_ms), (6000, 21000));
         let header_sql = header.sql_values();
         let values: Vec<_> = header_sql.trim_matches(['(', ')']).split(',').collect();
@@ -2248,7 +2248,7 @@ mod tests {
             (30, 3, 30, 30_000, 0)
         );
         assert_ne!(
-            header.cast_flags & lyracore_shared::spell::taxonomy::SPELL_ATTR_STEALTH_SAFE,
+            header.cast_flags & lyracore_shared::spell::taxonomy::CAST_FLAG_STEALTH_SAFE,
             0
         );
     }
@@ -2441,7 +2441,7 @@ mod tests {
             (header.attributes, header.gcd_ms, header.stances),
             (64, 0, 1)
         );
-        assert_eq!(header.cast_flags, SPELL_ATTR_RANGED_AUTO_REPEAT);
+        assert_eq!(header.cast_flags, CAST_FLAG_RANGED_AUTO_REPEAT);
         assert_eq!(
             rows.eventai_metadata
                 .iter()
@@ -2731,7 +2731,7 @@ mod tests {
                 .find(|h| h.spell_id == id)
                 .unwrap()
                 .cast_flags
-                & SPELL_ATTR_WEAPON_PROCS
+                & CAST_FLAG_WEAPON_PROCS
                 != 0
         };
         assert!(procs(1715), "a melee weapon ability rolls weapon procs");
@@ -2786,7 +2786,7 @@ mod tests {
 
         let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
         let header = |id| rows.headers.iter().find(|h| h.spell_id == id).unwrap();
-        let finishes = |id| header(id).cast_flags & SPELL_ATTR_COMBO_FINISHER != 0;
+        let finishes = |id| header(id).cast_flags & CAST_FLAG_COMBO_FINISHER != 0;
         assert!(finishes(2098) && finishes(31018) && finishes(5171));
         assert!(
             !finishes(7384),
@@ -2972,8 +2972,8 @@ mod tests {
     fn area_aura_visibility_preserves_party_and_pet_effect_origins() {
         for (effect, aura, expected) in [
             (6, 137, 0),
-            (35, 137, SPELL_ATTR_AREA_AURA),
-            (119, 137, SPELL_ATTR_AREA_AURA),
+            (35, 137, CAST_FLAG_AREA_AURA),
+            (119, 137, CAST_FLAG_AREA_AURA),
             (35, 0, 0),
         ] {
             let mut dbc = fixture_tables();
@@ -2988,7 +2988,7 @@ mod tests {
                 ..Default::default()
             }];
             let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
-            assert_eq!(rows.headers[0].cast_flags & SPELL_ATTR_AREA_AURA, expected);
+            assert_eq!(rows.headers[0].cast_flags & CAST_FLAG_AREA_AURA, expected);
         }
     }
 
@@ -4046,8 +4046,8 @@ mod binding_tests {
 mod roll_metadata_tests {
     use super::*;
     use lyracore_shared::spell::taxonomy::{
-        SPELL_ATTR_ALWAYS_HIT, SPELL_ATTR_BINARY, SPELL_ATTR_CANNOT_CRIT,
-        SPELL_ATTR_IGNORE_RESISTANCES, SPELL_ATTR_MAGIC_HIT,
+        CAST_FLAG_ALWAYS_HIT, CAST_FLAG_BINARY, CAST_FLAG_CANNOT_CRIT,
+        CAST_FLAG_IGNORE_RESISTANCES, CAST_FLAG_MAGIC_HIT,
     };
 
     #[test]
@@ -4060,45 +4060,30 @@ mod roll_metadata_tests {
             effect_aura: [0, 33, 0],
             ..Default::default()
         };
-        assert_eq!(
-            roll_cast_flags(&spell) & SPELL_ATTR_BINARY,
-            SPELL_ATTR_BINARY
-        );
+        assert_eq!(roll_cast_flags(&spell) & CAST_FLAG_BINARY, CAST_FLAG_BINARY);
         for aura in [7, 12, 14, 22, 25, 26, 27, 33, 67] {
             spell.effect_aura[1] = aura;
-            assert_eq!(
-                roll_cast_flags(&spell) & SPELL_ATTR_BINARY,
-                SPELL_ATTR_BINARY
-            );
+            assert_eq!(roll_cast_flags(&spell) & CAST_FLAG_BINARY, CAST_FLAG_BINARY);
         }
         for aura in [3, 5, 8, 101] {
             spell.effect_aura[1] = aura;
-            assert_eq!(roll_cast_flags(&spell) & SPELL_ATTR_BINARY, 0);
+            assert_eq!(roll_cast_flags(&spell) & CAST_FLAG_BINARY, 0);
         }
         spell.effect = [2, 68, 0];
-        assert_eq!(
-            roll_cast_flags(&spell) & SPELL_ATTR_BINARY,
-            SPELL_ATTR_BINARY
-        );
+        assert_eq!(roll_cast_flags(&spell) & CAST_FLAG_BINARY, CAST_FLAG_BINARY);
         spell.effect[1] = 98;
-        assert_eq!(
-            roll_cast_flags(&spell) & SPELL_ATTR_BINARY,
-            SPELL_ATTR_BINARY
-        );
+        assert_eq!(roll_cast_flags(&spell) & CAST_FLAG_BINARY, CAST_FLAG_BINARY);
         spell.damage_class = 2;
-        assert_eq!(roll_cast_flags(&spell) & SPELL_ATTR_BINARY, 0);
+        assert_eq!(roll_cast_flags(&spell) & CAST_FLAG_BINARY, 0);
         spell.damage_class = 1;
         spell.school = 0;
-        assert_eq!(roll_cast_flags(&spell) & SPELL_ATTR_BINARY, 0);
+        assert_eq!(roll_cast_flags(&spell) & CAST_FLAG_BINARY, 0);
         spell.school = 2;
         spell.effect = [2, 0, 0];
-        assert_eq!(roll_cast_flags(&spell) & SPELL_ATTR_BINARY, 0);
+        assert_eq!(roll_cast_flags(&spell) & CAST_FLAG_BINARY, 0);
         for id in [26143, 26478] {
             spell.id = id;
-            assert_eq!(
-                roll_cast_flags(&spell) & SPELL_ATTR_BINARY,
-                SPELL_ATTR_BINARY
-            );
+            assert_eq!(roll_cast_flags(&spell) & CAST_FLAG_BINARY, CAST_FLAG_BINARY);
         }
     }
 
@@ -4111,12 +4096,12 @@ mod roll_metadata_tests {
             ..Default::default()
         };
         assert_eq!(
-            roll_cast_flags(&spell) & SPELL_ATTR_MAGIC_HIT,
-            SPELL_ATTR_MAGIC_HIT
+            roll_cast_flags(&spell) & CAST_FLAG_MAGIC_HIT,
+            CAST_FLAG_MAGIC_HIT
         );
         for class in [0, 2, 3] {
             spell.damage_class = class;
-            assert_eq!(roll_cast_flags(&spell) & SPELL_ATTR_MAGIC_HIT, 0);
+            assert_eq!(roll_cast_flags(&spell) & CAST_FLAG_MAGIC_HIT, 0);
         }
     }
 
@@ -4130,7 +4115,7 @@ mod roll_metadata_tests {
         };
         assert_eq!(
             roll_cast_flags(&spell),
-            SPELL_ATTR_CANNOT_CRIT | SPELL_ATTR_ALWAYS_HIT | SPELL_ATTR_IGNORE_RESISTANCES
+            CAST_FLAG_CANNOT_CRIT | CAST_FLAG_ALWAYS_HIT | CAST_FLAG_IGNORE_RESISTANCES
         );
     }
 }

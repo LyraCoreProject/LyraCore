@@ -23,7 +23,6 @@ pub struct SpellGroupRule {
     pub rank_is_comparable: bool,
 }
 
-#[allow(dead_code)]
 pub(crate) const RULE_STACKS: u8 = 0;
 pub(crate) const RULE_EXCLUSIVE: u8 = 1;
 pub(crate) const RULE_EXCLUSIVE_PER_CASTER: u8 = 2;
@@ -67,6 +66,7 @@ pub(crate) enum GroupRule {
 
 pub(crate) fn group_rule_from_u8(rule: u8) -> GroupRule {
     match rule {
+        RULE_STACKS => GroupRule::Stacks,
         RULE_EXCLUSIVE => GroupRule::Exclusive,
         RULE_EXCLUSIVE_PER_CASTER => GroupRule::ExclusivePerCaster,
         RULE_EXCLUSIVE_STRONGER => GroupRule::ExclusiveStronger,
@@ -402,7 +402,7 @@ pub(crate) fn apply_group_conflict(
                 .into_iter()
                 .filter_map(|id| auras.id().find(id))
                 .collect();
-            crate::spell::shed_auras(ctx, target_guid, shed);
+            crate::spell::shed_auras(ctx, shed);
             true
         }
     }

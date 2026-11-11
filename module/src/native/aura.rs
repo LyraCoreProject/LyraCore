@@ -1,18 +1,9 @@
 use lyracore_protocol::{codec, messages::vanilla::opcodes::ServerOpcodeMessage, world::Packet};
-use lyracore_shared::{aura::AuraAmount, spell::taxonomy::*};
+use lyracore_shared::spell::taxonomy::*;
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{bounded as packet, game_native_player};
 use crate::{game_aura, game_spell, game_world_entity, Aura};
-
-fn amount(aura: &Aura) -> AuraAmount {
-    AuraAmount {
-        kind: aura.eff_kind,
-        parameter: aura.eff_p0,
-        amount: aura.amount,
-        stacks: aura.stacks,
-    }
-}
 
 fn modifiers(current: &[Aura], previous: &[&Aura]) -> Vec<Packet> {
     let rows = current
@@ -123,7 +114,7 @@ fn movement(
 ) -> Vec<Packet> {
     let mut out = Vec::new();
     let touched = |rule: fn(&Aura) -> bool| changed.iter().any(|aura| rule(aura));
-    let holds = |aura: &Aura| lyracore_shared::aura::holds_in_place(aura.eff_kind, aura.eff_p0);
+    let holds = |aura: &Aura| crate::modifiers::holds_in_place(aura.eff_kind, aura.eff_p0);
     if touched(holds) && own {
         super::motion_permit::refresh_character(ctx, guid);
     }
@@ -145,8 +136,11 @@ fn movement(
         };
         out.push(Packet { opcode, body });
     }
-    if touched(|aura| lyracore_shared::aura::moves_run_speed(aura.eff_kind, aura.eff_p0)) {
-        let speed = lyracore_shared::aura::run_speed(7.0, current.iter().map(amount));
+    if touched(|aura| crate::modifiers::moves_run_speed(aura.eff_kind, aura.eff_p0)) {
+        let speed = crate::modifiers::run_speed(
+            7.0,
+            current.iter().map(crate::modifiers::AuraAmount::from),
+        );
         out.push(packet(if own {
             ServerOpcodeMessage::SMSG_FORCE_RUN_SPEED_CHANGE(Box::new(
                 codec::build_force_run_speed(guid, speed),
@@ -158,15 +152,15 @@ fn movement(
     let slows = |aura: &Aura| {
         aura.eff_kind == A_MOD_SPEED
             && aura.eff_p0 == i32::from(SPEED_MOVE)
-            && lyracore_shared::aura::stacked_amount(aura.amount, aura.stacks) < 0
+            && crate::modifiers::stacked_amount(aura.amount, aura.stacks) < 0
     };
     if touched(slows) {
         let slow = current
             .iter()
             .filter(|aura| slows(aura))
-            .map(|aura| lyracore_shared::aura::stacked_amount(aura.amount, aura.stacks))
+            .map(|aura| crate::modifiers::stacked_amount(aura.amount, aura.stacks))
             .sum();
-        let speed = lyracore_shared::aura::move_speed_with_pct(
+        let speed = crate::modifiers::move_speed_with_pct(
             lyracore_shared::constants::speeds::RUN_BACK,
             slow,
         );
@@ -179,9 +173,9 @@ fn movement(
         }));
     }
     if touched(|aura| aura.eff_kind == A_MOD_SPEED && aura.eff_p0 == i32::from(SPEED_SWIM)) {
-        let speed = lyracore_shared::aura::swim_speed(
+        let speed = crate::modifiers::swim_speed(
             lyracore_shared::constants::speeds::SWIM,
-            current.iter().map(amount),
+            current.iter().map(crate::modifiers::AuraAmount::from),
         );
         out.push(packet(if own {
             ServerOpcodeMessage::SMSG_FORCE_SWIM_SPEED_CHANGE(Box::new(
@@ -210,7 +204,7 @@ pub(super) fn life_changed(
         return;
     }
     let held = crate::spell::auras_on(ctx, new.guid)
-        .any(|aura| lyracore_shared::aura::holds_in_place(aura.eff_kind, aura.eff_p0));
+        .any(|aura| crate::modifiers::holds_in_place(aura.eff_kind, aura.eff_p0));
     let rooted = (new.dead && !ghost) || held;
     if old.dead != new.dead || ((old.dead && !was_ghost) || held) != rooted {
         let (opcode, body) = codec::build_force_move_root_raw(new.guid, rooted);
@@ -229,16 +223,18 @@ pub(super) fn life_changed(
 pub(super) fn armor(ctx: &ReducerContext, guid: u64, current: &[Aura]) -> Option<Packet> {
     let entity = ctx.db.game_world_entity().guid().find(guid)?;
     let resistances = std::array::from_fn(|index| {
-        lyracore_shared::resistance::effective_resistance(
+        crate::modifiers::effective_resistance(
             if index == 0 { entity.armor } else { 0 },
-            crate::spell::resistance_bonus(ctx, guid, 1 << index),
+            crate::modifiers::resistance_bonus(ctx, guid, 1 << index),
         )
     });
     Some(packet(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
         codec::build_armor_values(
             guid,
             resistances,
-            lyracore_shared::resistance::positive_armor(current.iter().map(amount)),
+            crate::modifiers::positive_armor(
+                current.iter().map(crate::modifiers::AuraAmount::from),
+            ),
         ),
     ))))
 }

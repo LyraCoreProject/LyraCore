@@ -85,7 +85,8 @@ pub(crate) fn add_threat(ctx: &ReducerContext, creature_guid: u64, source_guid: 
         .map(|s| crate::spell::stance_threat_pct(s.stance))
         .unwrap_or(0);
     let threat_mult = (100
-        + crate::spell::combat_field_bonus(ctx, source_guid, crate::spell::COMBAT_THREAT) as i64
+        + crate::modifiers::combat_field_bonus(ctx, source_guid, crate::spell::COMBAT_THREAT)
+            as i64
         + source_stance as i64)
         .max(0);
     let amount = amount * threat_mult / 100;

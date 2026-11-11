@@ -5,7 +5,7 @@ use crate::game_config;
 use crate::game_world_entity;
 use crate::WorldEntity;
 
-const LEVEL_CAP: u32 = 60;
+pub(crate) const LEVEL_CAP: u32 = 60;
 
 #[table(accessor = game_xp_event, public, index(accessor = by_recipient, btree(columns = [recipient_identity])))]
 pub struct XpEvent {
@@ -169,7 +169,7 @@ fn explore_grey_taper_pct(levels_above_area: i32) -> u32 {
 }
 
 pub(crate) fn explore_xp(exploration_level: u32, player_level: u32) -> u32 {
-    if player_level >= 60 || exploration_level == 0 {
+    if player_level >= LEVEL_CAP || exploration_level == 0 {
         return 0;
     }
     let area_award = explore_base_xp(exploration_level);

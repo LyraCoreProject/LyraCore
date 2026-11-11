@@ -49,7 +49,8 @@ pub(crate) fn recompute_mount(ctx: &ReducerContext, guid: u64) {
             .filter(&guid)
             .map(|a| (a.eff_kind, a.eff_p0)),
     );
-    let speed_bp = (crate::combat::effective_move_speed(ctx, guid, 1.0) * 10_000.0).round() as u32;
+    let speed_bp =
+        (crate::modifiers::effective_move_speed(ctx, guid, 1.0) * 10_000.0).round() as u32;
     if e.mount_display_id == display && e.run_speed_mult_bp == speed_bp {
         return;
     }
@@ -65,17 +66,10 @@ pub(crate) fn dismount(ctx: &ReducerContext, guid: u64) {
     let Some(spell_id) = active_mount_spell(ctx, guid) else {
         return;
     };
-    let auras = ctx.db.game_aura();
-    let ids: Vec<u64> = auras
-        .by_target()
-        .filter(&guid)
+    let mount: Vec<_> = crate::spell::auras_on(ctx, guid)
         .filter(|a| a.spell_id == spell_id)
-        .map(|a| a.id)
         .collect();
-    for id in ids {
-        crate::Aura::delete(ctx, id);
-    }
-    recompute_mount(ctx, guid);
+    crate::spell::shed_auras(ctx, mount);
 }
 
 pub(crate) fn restore_mount_on_rebuild(ctx: &ReducerContext, guid: u64) {

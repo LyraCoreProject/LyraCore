@@ -1,5 +1,6 @@
 use super::*;
-use crate::game_corpse_loot;
+use crate::{game_aura, game_corpse_loot, game_creature_spawn};
+use spacetimedb::TimeDuration;
 
 #[spacetimedb::reducer]
 pub fn debug_stage_lethal_damage_floor_fixture(
@@ -120,13 +121,10 @@ pub fn debug_apply_lethal_damage_floor_fixture(
     if target.dead {
         return Err("fixture target is dead".to_string());
     }
-    let (post_mitigation, _) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
-    let damage = final_damage(ctx, target_guid, post_mitigation);
-    apply_hit(
+    resolve_damage(ctx, attacker_guid, target_guid, rolled).land(
         ctx,
         attacker_guid,
         target_guid,
-        damage,
         Hit::weapon(HitSource::MainHand, false),
     );
     Ok(())

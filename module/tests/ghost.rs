@@ -72,24 +72,21 @@ fn assert_ghost(shard: &Standalone, wisp: bool) {
         0
     );
     assert_eq!(row["health"], "1");
-    let amounts: Vec<_> = shard
-        .query_rows("SELECT eff_kind, eff_p0, amount, stacks FROM game_aura WHERE target_guid = 1")
-        .iter()
-        .map(|a| lyracore_shared::aura::AuraAmount {
-            kind: number(a, "eff_kind"),
-            parameter: number(a, "eff_p0"),
-            amount: number(a, "amount"),
-            stacks: number(a, "stacks"),
-        })
-        .collect();
-    assert_eq!(
-        lyracore_shared::aura::run_speed(7.0, amounts.clone()),
-        if wisp { 10.5 } else { 8.75 }
-    );
-    assert_eq!(
-        lyracore_shared::aura::swim_speed(1.0, amounts),
-        if wisp { 1.5 } else { 1.25 }
-    );
+    let auras =
+        shard.query_rows("SELECT eff_kind, eff_p0, amount FROM game_aura WHERE target_guid = 1");
+    let strongest = |speed: u8| {
+        auras
+            .iter()
+            .filter(|a| {
+                number::<u8>(a, "eff_kind") == A_MOD_SPEED
+                    && number::<i32>(a, "eff_p0") == i32::from(speed)
+            })
+            .map(|a| number::<i32>(a, "amount"))
+            .max()
+    };
+    let bonus = if wisp { 50 } else { 25 };
+    assert_eq!(strongest(SPEED_MOVE), Some(bonus));
+    assert_eq!(strongest(SPEED_SWIM), Some(bonus));
     let native: u32 = number(&row, "native_display_id");
     assert_eq!(
         number::<u32>(&row, "display_id"),

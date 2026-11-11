@@ -164,6 +164,7 @@ mod encounter;
 mod faction;
 mod gameobject;
 mod gc;
+mod geometry;
 mod gm;
 
 mod go_collider;
@@ -201,6 +202,7 @@ mod meeting_stone;
 
 mod motion;
 
+mod modifiers;
 mod mount;
 mod nav;
 mod npc_interaction;
@@ -240,7 +242,6 @@ mod rest;
 
 mod runtime_script;
 
-#[cfg(feature = "conformance_test_fixture")]
 mod conformance_rolls;
 mod script_binding;
 mod seed;

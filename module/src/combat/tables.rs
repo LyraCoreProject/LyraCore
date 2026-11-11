@@ -158,10 +158,6 @@ pub(crate) fn apply_offhand_penalty(min: u32, max: u32) -> (u32, u32) {
     ((min / 2).max(1), (max / 2).max(1))
 }
 
-pub(crate) fn effective_stat(base: i32, aura: i32, gear: i32) -> u32 {
-    (i64::from(base) + i64::from(aura) + i64::from(gear)).clamp(0, i64::from(u32::MAX)) as u32
-}
-
 pub(crate) fn miss_bp_with_bonus(miss: u32, bonus: i32) -> u32 {
     (miss as i32 - bonus).max(0) as u32
 }
@@ -170,9 +166,6 @@ pub(crate) fn swing_time_with_haste(base_ms: u32, haste_pct: i32) -> u32 {
     let denom = (100 + haste_pct).max(1) as u32;
     base_ms.saturating_mul(100) / denom
 }
-
-#[cfg(test)]
-use lyracore_shared::aura::move_speed_with_pct;
 
 pub(crate) fn rank_damage_multiplier_permille(rank: u8) -> u32 {
     match rank {
@@ -200,7 +193,7 @@ pub(crate) fn armor_mitigation_pct(armor: u32, attacker_level: u32) -> u32 {
 }
 
 pub(crate) fn armor_mitigated(damage: u32, mitigation_pct: u32) -> u32 {
-    (damage * (100 - mitigation_pct) / 100).max(1)
+    (u64::from(damage) * u64::from(100 - mitigation_pct) / 100).max(1) as u32
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -623,14 +616,6 @@ mod tests {
     }
 
     #[test]
-    fn effective_stat_sums_base_aura_gear_and_clamps_at_zero() {
-        assert_eq!(effective_stat(23, 0, 0), 23);
-        assert_eq!(effective_stat(23, 5, 7), 35);
-        assert_eq!(effective_stat(10, -25, 3), 0);
-        assert_eq!(effective_stat(10, -4, 2), 8);
-    }
-
-    #[test]
     fn player_swing_range_scales_with_stats_and_stays_sane() {
         let unarmed =
             |str: u32, level: u32, t: u32| player_swing_range_ap(melee_attack_power(str, level), t);
@@ -706,15 +691,6 @@ mod tests {
         assert!(swing_time_with_haste(2000, -50) > 2000);
         assert_eq!(swing_time_with_haste(2000, -100), 200_000);
         assert_eq!(swing_time_with_haste(2000, -150), 200_000);
-    }
-
-    #[test]
-    fn move_speed_snare_slows_and_is_baseline_safe_at_zero() {
-        assert_eq!(move_speed_with_pct(7.0, 0), 7.0);
-        assert!((move_speed_with_pct(7.0, -40) - 4.2).abs() < 1e-4);
-        assert!(move_speed_with_pct(7.0, 50) > 7.0);
-        assert!((move_speed_with_pct(7.0, -95) - 0.7).abs() < 1e-4);
-        assert!((move_speed_with_pct(7.0, -200) - 0.7).abs() < 1e-4);
     }
 
     #[test]

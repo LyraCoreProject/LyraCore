@@ -1,11 +1,12 @@
-use crate::spell::taxonomy::A_MOD_RESISTANCE;
-use crate::{
-    aura::{stacked_amount, AuraAmount},
-    item_property as stat,
-};
+use lyracore_shared::item_property as stat;
+use lyracore_shared::spell::taxonomy::{A_MOD_RESISTANCE, RESIST_ARMOR};
+use spacetimedb::ReducerContext;
 
-pub const SCHOOL_BITS: [u8; 7] = [1, 2, 4, 8, 16, 32, 64];
-pub const STAT_KINDS: [u8; 7] = [
+use super::{aura_amounts, AuraAmount};
+use crate::WorldEntity;
+
+const SCHOOL_BITS: [u8; 7] = [1, 2, 4, 8, 16, 32, 64];
+const STAT_KINDS: [u8; 7] = [
     stat::ARMOR,
     stat::HOLY_RESISTANCE,
     stat::FIRE_RESISTANCE,
@@ -16,13 +17,38 @@ pub const STAT_KINDS: [u8; 7] = [
 ];
 
 #[derive(Clone, Copy, Debug)]
-pub struct ResistanceItem {
-    pub slot: u8,
-    pub max_durability: u32,
-    pub durability: u32,
-    pub template: [i32; 7],
-    pub enchant_id: u32,
-    pub property_enchants: [u32; 3],
+pub(crate) struct ResistanceItem {
+    pub(crate) slot: u8,
+    pub(crate) max_durability: u32,
+    pub(crate) durability: u32,
+    pub(crate) template: [i32; 7],
+    pub(crate) enchant_id: u32,
+    pub(crate) property_enchants: [u32; 3],
+}
+
+pub(crate) fn resistance_bonus(ctx: &ReducerContext, unit_guid: u64, school_mask: u8) -> i32 {
+    aura_and_gear_resistance(
+        school_mask,
+        aura_amounts(ctx, unit_guid),
+        crate::items::resistance_items(ctx, unit_guid),
+        |id, kind| crate::items::enchant_stat(ctx, id, kind),
+    )
+}
+
+pub(crate) fn effective_armor(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+    effective_resistance(unit.armor, resistance_bonus(ctx, unit.guid, RESIST_ARMOR))
+}
+
+pub(crate) fn effective_resistance(base: u32, bonus: i32) -> u32 {
+    (i64::from(base) + i64::from(bonus)).clamp(0, i64::from(u32::MAX)) as u32
+}
+
+pub(crate) fn positive_armor(auras: impl IntoIterator<Item = AuraAmount>) -> u32 {
+    auras
+        .into_iter()
+        .map(|a| aura_contribution(a, SCHOOL_BITS[0]))
+        .filter(|&amount| amount > 0)
+        .fold(0u32, |sum, amount| sum.saturating_add(amount as u32))
 }
 
 fn school_index(school_mask: u8) -> Option<usize> {
@@ -30,15 +56,15 @@ fn school_index(school_mask: u8) -> Option<usize> {
     (index < SCHOOL_BITS.len()).then_some(index)
 }
 
-pub fn aura_contribution(aura: AuraAmount, school_mask: u8) -> i32 {
+fn aura_contribution(aura: AuraAmount, school_mask: u8) -> i32 {
     if aura.kind == A_MOD_RESISTANCE && aura.parameter as u32 & u32::from(school_mask) != 0 {
-        stacked_amount(aura.amount, aura.stacks)
+        aura.total()
     } else {
         0
     }
 }
 
-pub fn resistance_bonus(
+fn aura_and_gear_resistance(
     school_mask: u8,
     auras: impl IntoIterator<Item = AuraAmount>,
     items: impl IntoIterator<Item = ResistanceItem>,
@@ -54,7 +80,7 @@ pub fn resistance_bonus(
             items
                 .into_iter()
                 .filter(|item| {
-                    crate::item::grants_equipped_stats(
+                    lyracore_shared::item::grants_equipped_stats(
                         item.slot,
                         item.max_durability,
                         item.durability,
@@ -83,18 +109,6 @@ pub fn resistance_bonus(
         )
     });
     aura.saturating_add(gear)
-}
-
-pub fn effective_resistance(base: u32, bonus: i32) -> u32 {
-    (i64::from(base) + i64::from(bonus)).clamp(0, i64::from(u32::MAX)) as u32
-}
-
-pub fn positive_armor(auras: impl IntoIterator<Item = AuraAmount>) -> u32 {
-    auras
-        .into_iter()
-        .map(|a| aura_contribution(a, SCHOOL_BITS[0]))
-        .filter(|&amount| amount > 0)
-        .fold(0u32, |sum, amount| sum.saturating_add(amount as u32))
 }
 
 #[cfg(test)]
@@ -161,11 +175,11 @@ mod tests {
             _ => 0,
         };
         assert_eq!(
-            effective_resistance(40, resistance_bonus(1, auras, items, enchant)),
+            effective_resistance(40, aura_and_gear_resistance(1, auras, items, enchant)),
             171
         );
-        assert_eq!(resistance_bonus(4, auras, items, enchant), 36);
-        assert_eq!(resistance_bonus(5, auras, items, enchant), 131);
+        assert_eq!(aura_and_gear_resistance(4, auras, items, enchant), 36);
+        assert_eq!(aura_and_gear_resistance(5, auras, items, enchant), 131);
         assert_eq!(positive_armor(auras), 20);
     }
 
@@ -182,12 +196,12 @@ mod tests {
             stacks: 1,
         };
         assert_eq!(
-            effective_resistance(40, resistance_bonus(1, [aura], [item], |_, _| 0)),
+            effective_resistance(40, aura_and_gear_resistance(1, [aura], [item], |_, _| 0)),
             i32::MAX as u32 + 40
         );
         assert_eq!(effective_resistance(40, -100), 0);
         assert_eq!(effective_resistance(u32::MAX, 10), u32::MAX);
-        assert_eq!(resistance_bonus(0, [aura], [item], |_, _| 100), 0);
-        assert_eq!(resistance_bonus(128, [aura], [item], |_, _| 100), 0);
+        assert_eq!(aura_and_gear_resistance(0, [aura], [item], |_, _| 100), 0);
+        assert_eq!(aura_and_gear_resistance(128, [aura], [item], |_, _| 100), 0);
     }
 }

@@ -2343,7 +2343,7 @@ mod creature_teardown_tripwire {
         ),
         (
             "game_creature_lethal_damage_floor",
-            &[("module/src/combat/death.rs", "clear_lethal_damage_floor")],
+            &[("module/src/combat/damage.rs", "clear_lethal_damage_floor")],
         ),
         (
             "game_creature_ai_relay_arrival",

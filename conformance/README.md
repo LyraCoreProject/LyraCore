@@ -947,7 +947,7 @@ Class skill lines follow vmangos at
 `src/game/SharedDefines.h`.
 
 The Module dispatch is `module/src/spell/cast/targeting.rs::apply_effect`; aura consumers live in
-`module/src/spell/` and `crates/lyracore-shared/src/aura.rs`. This is a kind-coverage count. It does
+`module/src/spell/` and `module/src/modifiers/`. This is a kind-coverage count. It does
 not verify parameters, targeting, triggered spell dependencies, quests, talents or complete spell
 behavior. Only counts are printed; spell names and SQLite records stay local.
 

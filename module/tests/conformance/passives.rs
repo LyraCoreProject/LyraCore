@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use lyracore_shared::spell::taxonomy::{
-    A_MOD_STAT, A_MOD_STAT_PCT, SPELL_ATTR_AREA_AURA, SPELL_ATTR_PASSIVE, STAT_SPI, STAT_STR,
+    A_MOD_STAT, A_MOD_STAT_PCT, CAST_FLAG_AREA_AURA, SPELL_ATTR_PASSIVE, STAT_SPI, STAT_STR,
     TOTEM_TYPE,
 };
 use lyracore_test_support::{poll_until, ReducerConnection, Standalone};
@@ -173,7 +173,7 @@ fn passive_area_and_totem_auras_keep_their_visible_slots() {
         .max()
         .unwrap();
     shard.assert_sql("UPDATE game_spell_effect SET target = 3 WHERE spell_id = 20598");
-    shard.assert_sql(&format!("UPDATE game_spell SET duration_ms = 4294967295, cast_flags = {SPELL_ATTR_AREA_AURA}, visual_id = 3580 WHERE spell_id = 20598"));
+    shard.assert_sql(&format!("UPDATE game_spell SET duration_ms = 4294967295, cast_flags = {CAST_FLAG_AREA_AURA}, visual_id = 3580 WHERE spell_id = 20598"));
     let apply = |caster: u64, target: u64, visible: bool| {
         shard.assert_sql(&format!(
             "DELETE FROM game_aura WHERE target_guid = {target} AND spell_id = 20598"

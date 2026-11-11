@@ -355,7 +355,7 @@ pub(crate) fn score_and_log_movement(ctx: &ReducerContext, guid: u64, delta: &Mo
         return;
     }
     let max_speed =
-        crate::combat::effective_move_speed(ctx, guid, lyracore_shared::constants::speeds::RUN);
+        crate::modifiers::effective_move_speed(ctx, guid, lyracore_shared::constants::speeds::RUN);
     let Some((kind, magnitude)) = movement_violation(dist_2d, dt_s, max_speed) else {
         return;
     };

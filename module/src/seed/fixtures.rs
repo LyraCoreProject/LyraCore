@@ -154,7 +154,7 @@ pub(crate) fn seed_hunter_tame_fixture(ctx: &ReducerContext) {
     let header = Spell {
         range_yd: 30,
         duration_ms: 10_000,
-        cast_flags: crate::spell::SPELL_ATTR_CHANNELED,
+        cast_flags: crate::spell::CAST_FLAG_CHANNELED,
         ..base_spell(TEST_TAME_BEAST_SPELL, "Test Tame Beast")
     };
     if ctx

@@ -157,7 +157,7 @@ package_only! {
     pub(crate) use crate::spell::BuffUnavailableReason as BuffUnavailableReason;
     pub(crate) use crate::spell::ControlReadError as ControlReadError;
     pub(crate) use crate::spell::A_CONTROL as A_CONTROL;
-    pub(crate) use crate::spell::SPELL_ATTR_CHANNELED as SPELL_ATTR_CHANNELED;
+    pub(crate) use crate::spell::CAST_FLAG_CHANNELED as SPELL_ATTR_CHANNELED;
     pub(crate) use crate::spell::A_PERIODIC_HEAL as A_PERIODIC_HEAL;
     pub(crate) use crate::spell::A_PERIODIC_TRIGGER as A_PERIODIC_TRIGGER;
     pub(crate) use crate::spell::A_PROC_TRIGGER as A_PROC_TRIGGER;

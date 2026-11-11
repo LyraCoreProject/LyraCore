@@ -65,7 +65,7 @@ fn credit_energy(ctx: &ReducerContext, ticks: u64) -> usize {
         .collect();
     let credited = regenerating.len();
     for mut e in regenerating {
-        let regen_rate = crate::spell::power_regen_rate(ctx, e.guid, ENERGY);
+        let regen_rate = crate::modifiers::power_regen_rate(ctx, e.guid, ENERGY);
         e.power = regen_energy(e.power, e.max_power, ticks, regen_rate);
         e.update(ctx);
     }

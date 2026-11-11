@@ -1,5 +1,4 @@
 pub mod auction;
-pub mod aura;
 pub mod calendar;
 pub mod channel;
 pub mod chat;
@@ -24,7 +23,6 @@ pub mod pet;
 pub mod quest;
 pub mod race_class;
 pub mod region;
-pub mod resistance;
 pub mod social;
 pub mod spatial;
 pub mod terrain;

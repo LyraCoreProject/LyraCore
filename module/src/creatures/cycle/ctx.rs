@@ -507,7 +507,7 @@ impl IdleSink for CtxWorld<'_> {
         crate::combat::is_engaged(self.ctx, guid)
     }
     fn speed_of(&self, guid: u64, gait: Gait) -> f32 {
-        crate::combat::effective_move_speed(
+        crate::modifiers::effective_move_speed(
             self.ctx,
             guid,
             match gait {
@@ -627,7 +627,7 @@ impl EngageSink for CtxWorld<'_> {
                 map_id: c.map_id,
                 instance_id: c.instance_id,
                 aggro_range: templates.entry().find(c.entry).map(|t| t.aggro_range),
-                detect_range_mod: crate::spell::detect_range_mod(self.ctx, c.guid),
+                detect_range_mod: crate::modifiers::detect_range_mod(self.ctx, c.guid),
                 would_rout: tick::rout_eligible(self.ctx, &c),
                 cannot_act: crate::spell::is_action_blocked(self.ctx, c.guid),
                 react_state: crate::creatures::react_state(self.ctx, c.guid),
@@ -765,7 +765,7 @@ impl RegenSink for CtxWorld<'_> {
     }
     fn combat_healed_to(&self, u: &Recovering) -> Option<u32> {
         let pct =
-            u32::try_from(crate::spell::combat_health_regen_pct(self.ctx, u.guid)).unwrap_or(0);
+            u32::try_from(crate::modifiers::combat_health_regen_pct(self.ctx, u.guid)).unwrap_or(0);
         let e = self.ctx.db.game_world_entity().guid().find(u.guid)?;
         let health_per_five = crate::items::equipped_stat_bonus(
             self.ctx,
@@ -793,7 +793,8 @@ impl RegenSink for CtxWorld<'_> {
                     e.guid,
                     crate::items::EquipStat::ManaPerFive,
                 );
-                let regen_rate = crate::spell::power_regen_rate(self.ctx, e.guid, e.power_type());
+                let regen_rate =
+                    crate::modifiers::power_regen_rate(self.ctx, e.guid, e.power_type());
                 crate::combat::regen_entity_power(
                     &e,
                     u.in_combat,

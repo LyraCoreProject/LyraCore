@@ -2,7 +2,7 @@ mod support;
 
 use lyracore_shared::item_property::COMBAT_SPELL;
 use lyracore_shared::spell::taxonomy::{
-    E_ADD_EXTRA_ATTACKS, E_DAMAGE, E_HEAL, E_WEAPON_STRIKE, P_NONE, P_RAW, SPELL_ATTR_WEAPON_PROCS,
+    CAST_FLAG_WEAPON_PROCS, E_ADD_EXTRA_ATTACKS, E_DAMAGE, E_HEAL, E_WEAPON_STRIKE, P_NONE, P_RAW,
     T_SELF, T_TARGET_ENEMY,
 };
 
@@ -46,7 +46,7 @@ fn an_avoided_weapon_ability_still_casts_the_main_hand_chance_on_hit_spell() {
         &standalone,
         SINISTER_STRIKE,
         "Sinister Strike",
-        SPELL_ATTR_WEAPON_PROCS,
+        CAST_FLAG_WEAPON_PROCS,
         (E_WEAPON_STRIKE, T_TARGET_ENEMY),
         (100, P_RAW),
     );

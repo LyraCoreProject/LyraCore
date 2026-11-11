@@ -12,7 +12,7 @@ use crate::items::{
 };
 
 use super::proc::{proc_chance_bp, ProcProfile, ProcSide, BASIS_POINTS};
-use super::{game_spell, game_spell_chain, game_spell_effect};
+use super::{game_spell, game_spell_effect};
 
 // vmangos ITEM_SPELLTRIGGER_CHANCE_ON_HIT.
 const SPELLTRIGGER_CHANCE_ON_HIT: u8 = 2;
@@ -147,12 +147,7 @@ fn known_spell(
 
 // vmangos keys the rate on the first rank and gives it to every higher rank.
 fn enchant_rate(ctx: &ReducerContext, spell_id: u32) -> f32 {
-    let first_rank = ctx
-        .db
-        .game_spell_chain()
-        .spell_id()
-        .find(spell_id)
-        .map_or(spell_id, |chain| chain.first_spell);
+    let first_rank = super::first_rank(ctx, spell_id);
     ctx.db
         .game_enchant_proc_rate()
         .spell_id()

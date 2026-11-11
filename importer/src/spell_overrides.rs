@@ -61,45 +61,45 @@ const fn healthstone(name: &'static str, item: i32) -> NamedSpell {
 pub const NAMED_SPELLS: &[NamedSpell] = &[
     NamedSpell {
         name: "Backstab",
-        cast_flags: SPELL_ATTR_REQ_BEHIND | SPELL_ATTR_REQ_DAGGER,
+        cast_flags: CAST_FLAG_REQ_BEHIND | CAST_FLAG_REQ_DAGGER,
         script_kind: Some(E_ADD_COMBO),
         ..NAMED
     },
     NamedSpell {
         name: "Garrote",
-        cast_flags: SPELL_ATTR_REQ_BEHIND | SPELL_ATTR_REQ_STEALTH,
+        cast_flags: CAST_FLAG_REQ_BEHIND | CAST_FLAG_REQ_STEALTH,
         script_kind: Some(E_ADD_COMBO),
         ..NAMED
     },
     NamedSpell {
         name: "Ambush",
-        cast_flags: SPELL_ATTR_REQ_BEHIND,
+        cast_flags: CAST_FLAG_REQ_BEHIND,
         ..NAMED
     },
     NamedSpell {
         name: "Sap",
-        cast_flags: SPELL_ATTR_REQ_STEALTH | SPELL_ATTR_INCAP_OPENER | SPELL_ATTR_STEALTH_SAFE,
+        cast_flags: CAST_FLAG_REQ_STEALTH | CAST_FLAG_INCAP_OPENER | CAST_FLAG_STEALTH_SAFE,
         ..NAMED
     },
     NamedSpell {
         name: "Pick Pocket",
-        cast_flags: SPELL_ATTR_STEALTH_SAFE,
+        cast_flags: CAST_FLAG_STEALTH_SAFE,
         script_kind: Some(E_PICKPOCKET),
         ..NAMED
     },
     NamedSpell {
         name: "Distract",
-        cast_flags: SPELL_ATTR_STEALTH_SAFE,
+        cast_flags: CAST_FLAG_STEALTH_SAFE,
         ..NAMED
     },
     NamedSpell {
         name: "Overpower",
-        cast_flags: SPELL_ATTR_REQ_OVERPOWER,
+        cast_flags: CAST_FLAG_REQ_OVERPOWER,
         ..NAMED
     },
     NamedSpell {
         name: "Revenge",
-        cast_flags: SPELL_ATTR_REQ_REVENGE,
+        cast_flags: CAST_FLAG_REQ_REVENGE,
         ..NAMED
     },
     NamedSpell {

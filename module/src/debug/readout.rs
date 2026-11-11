@@ -40,35 +40,6 @@ pub struct DebugReadout {
     pub defender_defense_skill: u32,
 }
 
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) fn record_offhand_roll_range(ctx: &ReducerContext, (base_min, base_max): (u32, u32)) {
-    let readouts = ctx.db.game_debug_readout();
-    let key = "offhand_roll".to_string();
-    readouts.key().delete(&key);
-    readouts.insert(DebugReadout {
-        key,
-        base_min,
-        base_max,
-        mitigation_pct: 0,
-        final_min: 0,
-        final_max: 0,
-        note: String::new(),
-        dodge_bp: 0,
-        crit_bp: 0,
-        hit_miss_bp: 0,
-        parry_bp: 0,
-        attack_time_ms: 0,
-        spell_crit_bp: 0,
-        spell_hit_normal: 0,
-        spell_hit_crit: 0,
-        damage_taken_pct: 0,
-        block_bp: 0,
-        block_value: 0,
-        attacker_weapon_skill: 0,
-        defender_defense_skill: 0,
-    });
-}
-
 #[reducer]
 pub fn debug_compute_swing(ctx: &ReducerContext, attacker_guid: u64, target_guid: u64) {
     let entities = ctx.db.game_world_entity();
@@ -79,7 +50,7 @@ pub fn debug_compute_swing(ctx: &ReducerContext, attacker_guid: u64, target_guid
         return;
     };
     let (bmin, bmax) = crate::combat::swing_range_ctx(ctx, &attacker);
-    let eff_armor = crate::combat::effective_armor(ctx, &target);
+    let eff_armor = crate::modifiers::effective_armor(ctx, &target);
     let p = crate::combat::swing_profile(bmin, bmax, eff_armor, attacker.level);
     let block_value = crate::combat::white_block_value(ctx, &target);
     let table = crate::combat::white_swing_table(ctx, &attacker, &target, block_value);
@@ -92,7 +63,7 @@ pub fn debug_compute_swing(ctx: &ReducerContext, attacker_guid: u64, target_guid
     let block_bp = table.block;
     let attack_time_ms = crate::combat::effective_swing_time(ctx, &attacker);
     let damage_done_pct = crate::spell::stance_damage_done_pct(attacker.stance)
-        + crate::spell::combat_field_bonus(ctx, attacker_guid, crate::spell::COMBAT_DMG_DONE);
+        + crate::modifiers::combat_field_bonus(ctx, attacker_guid, crate::spell::COMBAT_DMG_DONE);
     let outgoing_min = crate::spell::apply_damage_pct(p.final_min, damage_done_pct);
     let outgoing_max = crate::spell::apply_damage_pct(p.final_max, damage_done_pct);
     let damage_taken_pct = crate::spell::damage_taken_bonus(ctx, target_guid);
@@ -172,7 +143,7 @@ pub fn debug_compute_spell(
     let Some(hdr) = ctx.db.game_spell().spell_id().find(spell_id) else {
         return;
     };
-    let spell_miss_bp = crate::spell::spell_miss_chance_bp(caster.level, target.level);
+    let spell_miss_bp = crate::spell::magic_miss_bp(caster.level, target.level, false, 0.0);
     let Some(eff) = ctx
         .db
         .game_spell_effect()

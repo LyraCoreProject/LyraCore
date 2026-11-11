@@ -1,12 +1,9 @@
 use super::*;
-use spacetimedb::Timestamp;
 
-#[test]
-fn can_afford_gate() {
-    assert!(can_afford(10, 0));
-    assert!(can_afford(10, 10));
-    assert!(!can_afford(10, 11));
+fn magic_miss_bp(caster_level: u32, target_level: u32) -> u32 {
+    super::rolls::magic_miss_bp(caster_level, target_level, false, 0.0)
 }
+use spacetimedb::Timestamp;
 
 #[test]
 fn creature_is_exempt_from_level_and_cost_gates() {
@@ -145,19 +142,19 @@ fn stance_folds_only_defensive_contributes() {
 
 #[test]
 fn spell_miss_follows_the_level_hit_curve() {
-    assert_eq!(spell_miss_chance_bp(10, 10), 400);
-    assert_eq!(spell_miss_chance_bp(10, 5), 100);
-    assert_eq!(spell_miss_chance_bp(10, 11), 500);
-    assert_eq!(spell_miss_chance_bp(10, 12), 600);
-    assert_eq!(spell_miss_chance_bp(10, 13), 1700);
-    assert!(spell_miss_chance_bp(10, 14) > spell_miss_chance_bp(10, 13));
-    assert_eq!(spell_miss_chance_bp(1, 60), 7800);
+    assert_eq!(magic_miss_bp(10, 10), 400);
+    assert_eq!(magic_miss_bp(10, 5), 100);
+    assert_eq!(magic_miss_bp(10, 11), 500);
+    assert_eq!(magic_miss_bp(10, 12), 600);
+    assert_eq!(magic_miss_bp(10, 13), 1700);
+    assert!(magic_miss_bp(10, 14) > magic_miss_bp(10, 13));
+    assert_eq!(magic_miss_bp(1, 60), 7800);
 }
 
 #[test]
 fn magic_hit_uses_signed_levels_and_caps_base_full_resistance() {
-    assert_eq!(spell_miss_chance_bp(60, 1), 100);
-    assert_eq!(spell_miss_chance_bp(1, 60), 7800);
+    assert_eq!(magic_miss_bp(60, 1), 100);
+    assert_eq!(magic_miss_bp(1, 60), 7800);
 }
 
 #[test]
@@ -185,31 +182,6 @@ fn energized_value_clamps() {
 }
 
 #[test]
-fn distance_3d_euclidean() {
-    assert_eq!(distance_3d(0.0, 0.0, 0.0, 3.0, 4.0, 0.0), 5.0);
-    assert_eq!(distance_3d(1.0, 2.0, 3.0, 1.0, 2.0, 3.0), 0.0);
-    assert_eq!(distance_3d(0.0, 0.0, 0.0, 0.0, 0.0, 7.0), 7.0);
-    assert_eq!(distance_3d(3.0, 4.0, 0.0, 0.0, 0.0, 0.0), 5.0);
-}
-
-#[test]
-fn is_behind_rear_hemisphere() {
-    use std::f32::consts::{FRAC_PI_2, PI};
-    assert!(is_behind(-1.0, 0.0, 0.0, 0.0, 0.0));
-    assert!(!is_behind(1.0, 0.0, 0.0, 0.0, 0.0));
-    assert!(is_behind(0.0, 1.0, 0.0, 0.0, 0.0));
-    assert!(is_behind(0.0, -1.0, 0.0, 0.0, 0.0));
-    assert!(!is_behind(1.0, 0.5, 0.0, 0.0, 0.0));
-    assert!(!is_behind(1.0, -0.5, 0.0, 0.0, 0.0));
-    assert!(is_behind(1.0, 0.0, 0.0, 0.0, PI));
-    assert!(!is_behind(-1.0, 0.0, 0.0, 0.0, PI));
-    assert!(is_behind(1.0, 0.0, 0.0, 0.0, -PI));
-    assert!(is_behind(0.0, -1.0, 0.0, 0.0, FRAC_PI_2));
-    assert!(!is_behind(0.0, 1.0, 0.0, 0.0, FRAC_PI_2));
-    assert!(!is_behind(0.0, 0.0, 0.0, 0.0, 0.0));
-}
-
-#[test]
 fn dispel_category_match() {
     assert!(dispel_category_matches(0, 0));
     assert!(dispel_category_matches(0, 1));
@@ -219,32 +191,6 @@ fn dispel_category_match() {
     assert!(!dispel_category_matches(1, 0));
     assert!(dispel_category_matches(2, 2));
     assert!(!dispel_category_matches(2, 1));
-}
-
-#[test]
-fn is_on_cooldown_strict() {
-    assert!(is_on_cooldown(1000, 2000));
-    assert!(!is_on_cooldown(2000, 2000));
-    assert!(!is_on_cooldown(3000, 2000));
-}
-
-#[test]
-fn is_ready_at_is_inverse_of_on_cooldown() {
-    assert!(!is_ready_at(1000, 2000));
-    assert!(is_ready_at(2000, 2000));
-    assert!(is_ready_at(3000, 2000));
-    for (now, ready) in [(0, 0), (1000, 2000), (2000, 2000), (3000, 2000), (5, 4)] {
-        assert_ne!(is_ready_at(now, ready), is_on_cooldown(now, ready));
-    }
-}
-
-#[test]
-fn school_locked_is_active_until_the_boundary() {
-    assert!(school_locked(1000, 2000));
-    assert!(!school_locked(2000, 2000));
-    assert!(!school_locked(3000, 2000));
-    assert!(!school_locked(0, 0));
-    assert!(!school_locked(5000, 0));
 }
 
 #[test]
@@ -327,36 +273,6 @@ fn direct_pool_bonus_clamps_at_imported_integer_boundaries() {
     assert_eq!(add_flat_pool_bonus(100, 25), 125);
     assert_eq!(add_flat_pool_bonus(100, -150), 0);
     assert_eq!(add_flat_pool_bonus(u32::MAX, i32::MAX), u32::MAX);
-}
-
-#[test]
-fn aura_moves_vitals_gate() {
-    assert!(aura_moves_vitals(A_MOD_STAT, STAT_STA as i32));
-    assert!(aura_moves_vitals(A_MOD_STAT, STAT_INT as i32));
-    assert!(aura_moves_vitals(A_MOD_STAT, STAT_ALL as i32));
-    assert!(!aura_moves_vitals(A_MOD_STAT, STAT_STR as i32));
-    assert!(!aura_moves_vitals(A_MOD_STAT, STAT_AGI as i32));
-    assert!(!aura_moves_vitals(A_MOD_STAT, STAT_SPI as i32));
-    assert!(!aura_moves_vitals(A_MOD_COMBAT, STAT_STA as i32));
-    assert!(!aura_moves_vitals(A_PERIODIC_DAMAGE, STAT_INT as i32));
-    assert!(!aura_moves_vitals(A_MOD_RESISTANCE, STAT_ALL as i32));
-}
-
-#[test]
-fn aura_moves_sheet_gate() {
-    assert!(aura_moves_sheet(A_MOD_STAT, STAT_STR as i32));
-    assert!(aura_moves_sheet(A_MOD_STAT, STAT_AGI as i32));
-    assert!(aura_moves_sheet(A_MOD_STAT, STAT_STA as i32));
-    assert!(aura_moves_sheet(A_MOD_STAT, STAT_INT as i32));
-    assert!(aura_moves_sheet(A_MOD_STAT, STAT_SPI as i32));
-    assert!(aura_moves_sheet(A_MOD_STAT, STAT_ALL as i32));
-    assert!(aura_moves_sheet(A_MOD_COMBAT, COMBAT_ATTACK_POWER as i32));
-    assert!(aura_moves_sheet(A_MOD_COMBAT, COMBAT_CRIT as i32));
-    assert!(!aura_moves_sheet(A_MOD_COMBAT, COMBAT_HIT as i32));
-    assert!(!aura_moves_sheet(
-        A_PERIODIC_DAMAGE,
-        COMBAT_ATTACK_POWER as i32
-    ));
 }
 
 #[test]

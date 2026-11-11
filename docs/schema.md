@@ -155,7 +155,7 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | World entity and movement | `world.rs`, `motion.rs` |
 | Terrain, nav and exact vmap | `terrain.rs`, `nav.rs`, `vmap.rs` |
 | Chat, social and addon bridge | `chat.rs`, `channel.rs`, `realm_chat.rs`, `away.rs`, `bridge.rs` |
-| Combat, threat and duel | `combat/engage.rs`, `combat/death.rs`, `combat/energy.rs`, `threat.rs`, `duel.rs` |
+| Combat, threat and duel | `combat/engage.rs`, `combat/damage.rs`, `combat/energy.rs`, `threat.rs`, `duel.rs` |
 | Spell and aura | `spell/tables.rs`, `spell/stacking.rs`, `spell/cast/resolve.rs` |
 | Quest | `quest.rs` |
 | Item, trade and mail | `items/tables.rs`, `items/buyback.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_reward.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
@@ -599,7 +599,7 @@ data the importer writes, the third is a per-aura snapshot.
 `game_spell` carries the selected vmangos `spell_template` fields: `proc_flags`, the vanilla
 `procFlags` bitmask with no translation table, `proc_chance` (a whole percent) and `proc_charges` (0 means unlimited).
 
-`game_spell.cast_flags` retains party and pet area-aura origins as `SPELL_ATTR_AREA_AURA`.
+`game_spell.cast_flags` retains party and pet area-aura origins as `CAST_FLAG_AREA_AURA`.
 Their translated target can be self, so slot visibility must use this flag instead of inferring
 the source effect from the target. Ordinary passives use slot 255; visual passives, recipient
 area auras and totem auras can use visible slots. Repair applies the same rule to stored cast auras.
@@ -638,7 +638,7 @@ refreshes on its own.
 ### Combo finishers (`module/src/combo.rs`)
 
 A finisher is a Rogue or Druid spell whose `Spell.dbc` AttributesEx carries 0x0010_0000 or
-0x0040_0000. The importer marks its `game_spell.cast_flags` with `SPELL_ATTR_COMBO_FINISHER`.
+0x0040_0000. The importer marks its `game_spell.cast_flags` with `CAST_FLAG_COMBO_FINISHER`.
 A Character cannot cast one without combo points, on the target for an enemy-targeted finisher and
 anywhere for Slice and Dice. A cast spends the points unless it misses its target.
 

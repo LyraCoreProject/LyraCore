@@ -1,61 +1,50 @@
-use crate::spell::taxonomy::*;
+use lyracore_shared::spell::taxonomy::{
+    A_CONTROL, A_MOD_SPEED, A_MOUNTED, M_POLY, M_ROOT, M_STUN, SPEED_MOUNTED, SPEED_MOVE,
+    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM,
+};
+use spacetimedb::ReducerContext;
 
-#[derive(Clone, Copy, Debug)]
-pub struct AuraAmount {
-    pub kind: u8,
-    pub parameter: i32,
-    pub amount: i32,
-    pub stacks: u8,
+use super::{aura_amounts, AuraAmount};
+
+pub(crate) fn speed_bonus(ctx: &ReducerContext, unit_guid: u64, speed_kind: u8) -> i32 {
+    speed_total(aura_amounts(ctx, unit_guid), speed_kind)
 }
 
-// Legacy zero-stack rows contribute once.
-pub fn stacked_amount(amount: i32, stacks: u8) -> i32 {
-    amount * i32::from(stacks.max(1))
-}
-
-pub fn moves_sheet(kind: u8, parameter: i32) -> bool {
-    (kind == A_MOD_STAT
-        && [STAT_STR, STAT_AGI, STAT_STA, STAT_INT, STAT_SPI, STAT_ALL]
-            .into_iter()
-            .any(|stat| parameter == i32::from(stat)))
-        || (kind == A_MOD_COMBAT
-            && [COMBAT_ATTACK_POWER, COMBAT_RANGED_ATTACK_POWER, COMBAT_CRIT]
-                .into_iter()
-                .any(|field| parameter == i32::from(field)))
-}
-
-pub fn speed_bonus(auras: impl IntoIterator<Item = AuraAmount>, speed_kind: u8) -> i32 {
+fn speed_total(auras: impl IntoIterator<Item = AuraAmount>, speed_kind: u8) -> i32 {
     auras
         .into_iter()
         .filter(|a| a.kind == A_MOD_SPEED && a.parameter == i32::from(speed_kind))
-        .map(|a| stacked_amount(a.amount, a.stacks))
+        .map(AuraAmount::total)
         .sum()
 }
 
-pub fn move_speed_with_pct(base: f32, pct: i32) -> f32 {
+pub(crate) fn effective_move_speed(ctx: &ReducerContext, guid: u64, base: f32) -> f32 {
+    run_speed(base, aura_amounts(ctx, guid))
+}
+
+pub(crate) fn move_speed_with_pct(base: f32, pct: i32) -> f32 {
     base * (100 + pct).max(10) as f32 / 100.0
 }
 
-pub fn run_speed(base: f32, auras: impl IntoIterator<Item = AuraAmount>) -> f32 {
+pub(crate) fn run_speed(base: f32, auras: impl IntoIterator<Item = AuraAmount>) -> f32 {
     let (mut movement, mut slow, mut mount, mut mounted) = (0, 0, 0, false);
     let (mut always, mut not_stack) = (1.0_f32, 1.0_f32);
     for aura in auras {
         mounted |= aura.kind == A_MOUNTED;
         if aura.kind == A_MOD_SPEED {
             if aura.parameter == i32::from(SPEED_MOVE) {
-                let amount = stacked_amount(aura.amount, aura.stacks);
+                let amount = aura.total();
                 if amount > 0 {
                     movement = movement.max(amount);
                 } else {
                     slow += amount;
                 }
             } else if aura.parameter == i32::from(SPEED_MOUNTED) {
-                mount += stacked_amount(aura.amount, aura.stacks);
+                mount += aura.total();
             } else if aura.parameter == i32::from(SPEED_MOVE_ALWAYS) {
-                always *= (100 + stacked_amount(aura.amount, aura.stacks)) as f32 / 100.0;
+                always *= (100 + aura.total()) as f32 / 100.0;
             } else if aura.parameter == i32::from(SPEED_MOVE_NOT_STACK) {
-                not_stack =
-                    not_stack.max((100 + stacked_amount(aura.amount, aura.stacks)) as f32 / 100.0);
+                not_stack = not_stack.max((100 + aura.total()) as f32 / 100.0);
             }
         }
     }
@@ -64,24 +53,24 @@ pub fn run_speed(base: f32, auras: impl IntoIterator<Item = AuraAmount>) -> f32 
 }
 
 /// Stun, root and polymorph hold a unit in place. Fear moves it, so it is absent here.
-pub fn holds_in_place(kind: u8, parameter: i32) -> bool {
+pub(crate) fn holds_in_place(kind: u8, parameter: i32) -> bool {
     kind == A_CONTROL && matches!(parameter, M_STUN | M_ROOT | M_POLY)
 }
 
-pub fn moves_run_speed(kind: u8, parameter: i32) -> bool {
+pub(crate) fn moves_run_speed(kind: u8, parameter: i32) -> bool {
     kind == A_MOD_SPEED
         && [SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK]
             .into_iter()
             .any(|speed| parameter == i32::from(speed))
 }
 
-pub fn swim_speed(base: f32, auras: impl IntoIterator<Item = AuraAmount>) -> f32 {
+pub(crate) fn swim_speed(base: f32, auras: impl IntoIterator<Item = AuraAmount>) -> f32 {
     let (mut bonus, mut slow) = (0, 0);
     for aura in auras {
         if aura.kind != A_MOD_SPEED || aura.parameter != i32::from(SPEED_SWIM) {
             continue;
         }
-        let amount = stacked_amount(aura.amount, aura.stacks);
+        let amount = aura.total();
         if amount > 0 {
             bonus = bonus.max(amount);
         } else {
@@ -91,13 +80,14 @@ pub fn swim_speed(base: f32, auras: impl IntoIterator<Item = AuraAmount>) -> f32
     move_speed_with_pct(base, bonus + slow)
 }
 
-pub fn mounted_move_pct(movement: i32, mount: i32, mounted: bool) -> i32 {
+fn mounted_move_pct(movement: i32, mount: i32, mounted: bool) -> i32 {
     movement + if mounted { mount } else { 0 }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lyracore_shared::spell::taxonomy::{A_DISARM, M_FEAR, SPEED_CAST, SPEED_SWING};
 
     #[test]
     fn stun_root_and_polymorph_hold_in_place_but_fear_does_not() {
@@ -106,17 +96,6 @@ mod tests {
         }
         assert!(!holds_in_place(A_CONTROL, M_FEAR));
         assert!(!holds_in_place(A_DISARM, M_ROOT));
-    }
-
-    #[test]
-    fn sheet_changes_include_crit_and_only_valid_stats() {
-        assert!(moves_sheet(A_MOD_COMBAT, i32::from(COMBAT_CRIT)));
-        assert!(moves_sheet(A_MOD_COMBAT, i32::from(COMBAT_ATTACK_POWER)));
-        assert!(!moves_sheet(A_MOD_COMBAT, i32::from(COMBAT_HIT)));
-        assert!(moves_sheet(A_MOD_STAT, i32::from(STAT_ALL)));
-        assert!(moves_sheet(A_MOD_STAT, i32::from(STAT_SPI)));
-        assert!(!moves_sheet(A_MOD_STAT, 5));
-        assert!(!moves_sheet(A_MOD_STAT, -1));
     }
 
     #[test]
@@ -141,9 +120,39 @@ mod tests {
                 stacks: 1,
             },
         ];
-        assert_eq!(speed_bonus(auras, SPEED_MOVE), -110);
-        assert!((move_speed_with_pct(7.0, speed_bonus(auras, SPEED_MOVE)) - 0.7).abs() < 0.0001);
+        assert_eq!(speed_total(auras, SPEED_MOVE), -110);
+        assert!((move_speed_with_pct(7.0, speed_total(auras, SPEED_MOVE)) - 0.7).abs() < 0.0001);
     }
+
+    #[test]
+    fn move_speed_pct_floors_at_ten_percent() {
+        assert_eq!(move_speed_with_pct(7.0, 0), 7.0);
+        assert!((move_speed_with_pct(7.0, -40) - 4.2).abs() < 1e-4);
+        assert!(move_speed_with_pct(7.0, 50) > 7.0);
+        assert!((move_speed_with_pct(7.0, -95) - 0.7).abs() < 1e-4);
+        assert!((move_speed_with_pct(7.0, -200) - 0.7).abs() < 1e-4);
+    }
+
+    #[test]
+    fn mounted_speed_folds_only_while_mounted() {
+        assert_eq!(mounted_move_pct(0, 60, true), 60);
+        assert_eq!(mounted_move_pct(0, 100, true), 100);
+        assert_eq!(mounted_move_pct(0, 60, false), 0);
+        assert_eq!(mounted_move_pct(-20, 60, true), 40);
+    }
+
+    #[test]
+    fn dismounting_keeps_an_ordinary_move_speed_buff_instead_of_forcing_bare_base() {
+        assert_eq!(mounted_move_pct(20, 0, false), 20);
+        assert_eq!(mounted_move_pct(20, 60, false), 20);
+    }
+
+    #[test]
+    fn nominal_60_and_100_percent_mount_tiers_yield_the_exact_run_speed() {
+        assert!((move_speed_with_pct(7.0, mounted_move_pct(0, 60, true)) - 11.2).abs() < 1e-4);
+        assert!((move_speed_with_pct(7.0, mounted_move_pct(0, 100, true)) - 14.0).abs() < 1e-4);
+    }
+
     #[test]
     fn running_applies_mount_speed_only_while_mounted() {
         let movement = AuraAmount {

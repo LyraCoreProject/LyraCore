@@ -7,8 +7,8 @@ use lyracore_protocol::{
     world::Packet,
 };
 use lyracore_shared::spell::taxonomy::{
-    E_DISENCHANT, E_ENCHANT_ITEM, E_ENCHANT_ITEM_TEMPORARY, E_FISH, E_NEXT_SWING, E_OPEN_LOCK,
-    E_PERSISTENT_AREA, SPELL_ATTR_RANGED_AUTO_REPEAT,
+    CAST_FLAG_RANGED_AUTO_REPEAT, E_DISENCHANT, E_ENCHANT_ITEM, E_ENCHANT_ITEM_TEMPORARY, E_FISH,
+    E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
@@ -119,7 +119,7 @@ pub(super) fn receive(
         .collect();
     let route = if header
         .as_ref()
-        .is_some_and(|row| row.cast_flags & SPELL_ATTR_RANGED_AUTO_REPEAT != 0)
+        .is_some_and(|row| row.cast_flags & CAST_FLAG_RANGED_AUTO_REPEAT != 0)
     {
         Route::Ranged
     } else if let Some(effect) = effects

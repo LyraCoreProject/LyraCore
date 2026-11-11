@@ -420,10 +420,10 @@ fn fire_proc_damage(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) ->
         row.amount,
         row.spell_id,
     );
-    let (dealt, absorbed) = apply_target_damage(
+    let (dealt, absorbed) = crate::combat::deal_damage(
         ctx,
-        counterparty_guid,
         row.target_guid,
+        counterparty_guid,
         after_resist,
         Hit::spell(HitSource::Triggered, row.spell_id, false),
     );
@@ -454,7 +454,7 @@ fn remove_carrier_buff(ctx: &ReducerContext, carrier_guid: u64, spell_id: u32) {
     let spent: Vec<Aura> = auras_on(ctx, carrier_guid)
         .filter(|a| a.spell_id == spell_id)
         .collect();
-    shed_auras(ctx, carrier_guid, spent);
+    shed_auras(ctx, spent);
 }
 
 #[cfg(test)]

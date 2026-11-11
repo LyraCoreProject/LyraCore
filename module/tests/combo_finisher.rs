@@ -1,7 +1,7 @@
 mod support;
 
 use lyracore_shared::spell::taxonomy::{
-    E_FINISHER_DAMAGE, SPELL_ATTR_COMBO_FINISHER, T_TARGET_ENEMY,
+    CAST_FLAG_COMBO_FINISHER, E_FINISHER_DAMAGE, T_TARGET_ENEMY,
 };
 
 use support::{number, wait_for_event_rows, Standalone};
@@ -37,7 +37,7 @@ fn a_finisher_adds_its_per_point_damage_and_spends_the_points() {
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
          family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
          VALUES ({FINISHER}, 'Fixture Finisher', 0, 0, 0, 0, 0, 5, 0, 1, 0, 0, 0, 0, 0, 0, \
-         0, true, {SPELL_ATTR_COMBO_FINISHER}, 0, 0, 0, 0, 0, 0, 0)"
+         0, true, {CAST_FLAG_COMBO_FINISHER}, 0, 0, 0, 0, 0, 0, 0)"
     ));
     standalone.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, \

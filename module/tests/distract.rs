@@ -1,7 +1,7 @@
 mod support;
 
 use lyracore_shared::spell::taxonomy::{
-    A_STEALTH, E_DISTRACT, SPELL_ATTR_STEALTH_SAFE, T_AREA_ENEMY, T_SELF,
+    A_STEALTH, CAST_FLAG_STEALTH_SAFE, E_DISTRACT, T_AREA_ENEMY, T_SELF,
 };
 
 use std::collections::BTreeMap;
@@ -73,7 +73,7 @@ fn shard(name: &str) -> (Standalone, Line) {
         30_000,
         30,
         0,
-        SPELL_ATTR_STEALTH_SAFE,
+        CAST_FLAG_STEALTH_SAFE,
     );
     insert_effect(
         &shard,

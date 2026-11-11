@@ -1,10 +1,11 @@
 use spacetimedb::ReducerContext;
 
 use crate::{
-    game_aura, game_creature_template, game_item_instance, game_item_template, game_spell,
-    game_spell_effect, game_world_entity, ItemInstance, WorldEntity,
+    game_aura, game_creature_template, game_item_instance, game_item_template, game_world_entity,
+    ItemInstance, WorldEntity,
 };
 
+use super::queued_strike::QueuedStrikeDamage;
 use super::*;
 
 fn fold_band(
@@ -15,7 +16,11 @@ fn fold_band(
     gear: crate::items::EquipStat,
 ) -> u32 {
     (i64::from(base)
-        + i64::from(crate::spell::combat_field_bonus(ctx, target_guid, field))
+        + i64::from(crate::modifiers::combat_field_bonus(
+            ctx,
+            target_guid,
+            field,
+        ))
         + i64::from(crate::items::equipped_stat_bonus(ctx, target_guid, gear)))
     .clamp(0, 10_000) as u32
 }
@@ -24,7 +29,10 @@ pub(crate) fn effective_dodge_bp(ctx: &ReducerContext, target: &WorldEntity, sd:
     fold_band(
         ctx,
         target.guid,
-        dodge_chance_bp(effective_agility(ctx, target), sd),
+        dodge_chance_bp(
+            crate::modifiers::effective_stat(ctx, target, crate::spell::STAT_AGI),
+            sd,
+        ),
         crate::spell::COMBAT_DODGE,
         crate::items::EquipStat::Dodge,
     )
@@ -64,7 +72,7 @@ pub(crate) fn attack_power_modifiers(ctx: &ReducerContext, guid: u64, field: u8)
         .filter(|aura| {
             aura.eff_kind == crate::spell::A_MOD_COMBAT && aura.eff_p0 == i32::from(field)
         })
-        .map(|aura| lyracore_shared::aura::stacked_amount(aura.amount, aura.stacks))
+        .map(|aura| crate::modifiers::stacked_amount(aura.amount, aura.stacks))
         .fold((0i32, 0i32), |(positive, negative), amount| {
             (
                 positive.saturating_add(amount.max(0)),
@@ -72,10 +80,6 @@ pub(crate) fn attack_power_modifiers(ctx: &ReducerContext, guid: u64, field: u8)
             )
         });
     u32::from(positive as u16) | (u32::from(negative as u16) << 16)
-}
-
-pub(crate) fn aura_attack_power_bonus(ctx: &ReducerContext, unit_guid: u64) -> i32 {
-    crate::spell::combat_field_bonus(ctx, unit_guid, crate::spell::COMBAT_ATTACK_POWER)
 }
 
 pub(crate) fn seal_holy_on_swing(ctx: &ReducerContext, attacker: &WorldEntity) -> (u32, u32) {
@@ -88,109 +92,6 @@ fn seal_swing_holy(seal: i32, attack_time_ms: u32) -> u32 {
         return 0;
     }
     ((seal as u64 * attack_time_ms as u64) / 100_000) as u32
-}
-
-#[derive(Clone, Copy, Default)]
-pub(crate) struct QueuedStrikeDamage {
-    pub(crate) bonus: u32,
-    pub(crate) mod_flat: i32,
-    pub(crate) mod_pct: i32,
-}
-
-pub(crate) fn queued_strike_damage(
-    ctx: &ReducerContext,
-    attacker: &WorldEntity,
-    strike: &crate::spell::Spell,
-) -> QueuedStrikeDamage {
-    let (mod_flat, mod_pct) =
-        crate::spell::spell_mod(ctx, attacker.guid, crate::spell::SPELLMOD_OP_DAMAGE, strike);
-    QueuedStrikeDamage {
-        bonus: queued_strike_bonus(ctx, attacker, strike),
-        mod_flat,
-        mod_pct,
-    }
-}
-
-// vmangos interrupts a form-bound queued strike whenever its form is lost, even for a sibling form.
-pub(crate) fn interrupt_form_bound_queued_strike(ctx: &ReducerContext, unit: &WorldEntity) {
-    let Some(strike) = ctx.db.game_spell().spell_id().find(unit.next_swing_spell) else {
-        return;
-    };
-    if strike.stances != 0 {
-        interrupt_queued_strike(ctx, unit);
-    }
-}
-
-// vmangos AttackStop interrupts the queued melee spell.
-pub(crate) fn interrupt_queued_strike_of(ctx: &ReducerContext, guid: u64) {
-    if let Some(unit) = ctx.db.game_world_entity().guid().find(guid) {
-        interrupt_queued_strike(ctx, &unit);
-    }
-}
-
-fn interrupt_queued_strike(ctx: &ReducerContext, unit: &WorldEntity) {
-    if unit.next_swing_spell == 0 {
-        return;
-    }
-    clear_queued_strike(ctx, unit.guid);
-    crate::spell::SpellCastEvent::insert(
-        ctx,
-        crate::spell::SpellCastEvent {
-            is_interrupted: true,
-            failure_reason: crate::spell::CAST_FAIL_INTERRUPTED,
-            ..crate::spell::SpellCastEvent::signal_at(
-                ctx,
-                unit,
-                unit.next_swing_spell,
-                crate::spell::SpellCastEventKind::Interrupt,
-            )
-        },
-    );
-}
-
-fn queued_strike_bonus(
-    ctx: &ReducerContext,
-    attacker: &WorldEntity,
-    strike: &crate::spell::Spell,
-) -> u32 {
-    let Some(effect) = ctx
-        .db
-        .game_spell_effect()
-        .by_spell()
-        .filter(&strike.spell_id)
-        .find(|e| e.kind == crate::spell::E_NEXT_SWING)
-    else {
-        return 0;
-    };
-    strike_bonus_points(&effect, strike, attacker.level, ctx.random::<u32>())
-}
-
-fn strike_bonus_points(
-    effect: &crate::spell::SpellEffect,
-    strike: &crate::spell::Spell,
-    attacker_level: u32,
-    roll: u32,
-) -> u32 {
-    crate::spell::effect_amount(
-        effect.base_points,
-        effect.die_sides,
-        effect.per_level,
-        attacker_level,
-        strike.spell_level,
-        strike.max_level,
-        roll,
-    )
-    .max(0) as u32
-}
-
-pub(crate) fn clear_queued_strike(ctx: &ReducerContext, guid: u64) {
-    let entities = ctx.db.game_world_entity();
-    if let Some(mut e) = entities.guid().find(guid) {
-        if e.next_swing_spell != 0 {
-            e.next_swing_spell = 0;
-            e.update(ctx);
-        }
-    }
 }
 
 pub(crate) const REACT_WINDOW_MS: u64 = 5000;
@@ -218,29 +119,6 @@ pub(crate) fn arm_react(ctx: &ReducerContext, guid: u64, kind: ReactKind) {
     }
 }
 
-pub(crate) fn effective_strength(ctx: &ReducerContext, e: &WorldEntity) -> u32 {
-    effective_stat(
-        e.strength as i32,
-        crate::spell::stat_bonus(ctx, e.guid, crate::spell::STAT_STR),
-        crate::items::equipped_stat_bonus(ctx, e.guid, crate::items::EquipStat::Strength),
-    )
-}
-
-pub(crate) fn effective_agility(ctx: &ReducerContext, e: &WorldEntity) -> u32 {
-    effective_stat(
-        e.agility as i32,
-        crate::spell::stat_bonus(ctx, e.guid, crate::spell::STAT_AGI),
-        crate::items::equipped_stat_bonus(ctx, e.guid, crate::items::EquipStat::Agility),
-    )
-}
-
-pub(crate) fn effective_armor(ctx: &ReducerContext, e: &WorldEntity) -> u32 {
-    lyracore_shared::resistance::effective_resistance(
-        e.armor,
-        crate::spell::resistance_bonus(ctx, e.guid, crate::spell::RESIST_ARMOR),
-    )
-}
-
 pub(crate) fn effective_block_value(ctx: &ReducerContext, defender: &WorldEntity) -> u32 {
     let Some(inst) =
         crate::items::item_in_slot(ctx, defender.guid, crate::items::equip_slot::OFFHAND)
@@ -255,7 +133,8 @@ pub(crate) fn effective_block_value(ctx: &ReducerContext, defender: &WorldEntity
     {
         return 0;
     }
-    let from_strength = effective_strength(ctx, defender) / 20;
+    let from_strength =
+        crate::modifiers::effective_stat(ctx, defender, crate::spell::STAT_STR) / 20;
     (tmpl.block_value.max(0) as u32).saturating_add(from_strength)
 }
 
@@ -280,14 +159,14 @@ fn crit_bp_for_weapon_skill(
     attacker: &WorldEntity,
     weapon_skill: u32,
 ) -> u32 {
-    let bonus = crate::spell::combat_field_bonus(ctx, attacker.guid, crate::spell::COMBAT_CRIT)
+    let bonus = crate::modifiers::combat_field_bonus(ctx, attacker.guid, crate::spell::COMBAT_CRIT)
         + crate::items::equipped_stat_bonus(ctx, attacker.guid, crate::items::EquipStat::Crit);
     if !attacker.is_player() {
         return (500 + bonus).clamp(0, 10_000) as u32;
     }
     let rate = crate::stats::crit_per_agility_for(ctx, attacker.class(), attacker.level);
     super::white_melee::sheet_crit_bp(
-        effective_agility(ctx, attacker),
+        crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_AGI),
         attacker.class(),
         attacker.level,
         rate,
@@ -302,30 +181,15 @@ pub(crate) fn effective_miss_bp(
     attacker: &WorldEntity,
     skill_diff: u32,
 ) -> u32 {
-    let bonus = crate::spell::combat_field_bonus(ctx, attacker.guid, crate::spell::COMBAT_HIT)
+    let bonus = crate::modifiers::combat_field_bonus(ctx, attacker.guid, crate::spell::COMBAT_HIT)
         + crate::items::equipped_stat_bonus(ctx, attacker.guid, crate::items::EquipStat::Hit);
     miss_bp_with_bonus(miss_chance_bp(skill_diff), bonus)
 }
 
 pub(crate) fn effective_swing_time(ctx: &ReducerContext, attacker: &WorldEntity) -> u32 {
-    let speed = crate::spell::speed_bonus(ctx, attacker.guid, crate::spell::SPEED_SWING);
+    let speed = crate::modifiers::speed_bonus(ctx, attacker.guid, crate::spell::SPEED_SWING);
     swing_time_with_haste(attacker.base_attack_time_ms, speed)
 }
-
-pub(crate) fn effective_move_speed(ctx: &ReducerContext, guid: u64, base: f32) -> f32 {
-    lyracore_shared::aura::run_speed(
-        base,
-        crate::spell::auras_on(ctx, guid).map(|aura| lyracore_shared::aura::AuraAmount {
-            kind: aura.eff_kind,
-            parameter: aura.eff_p0,
-            amount: aura.amount,
-            stacks: aura.stacks,
-        }),
-    )
-}
-
-#[cfg(test)]
-use lyracore_shared::aura::mounted_move_pct;
 
 fn weapon_profile_in_slot(
     ctx: &ReducerContext,
@@ -544,7 +408,10 @@ pub(crate) fn weapon_strike_spell_damage(
     let mit_pct = if spell.school_mask == SCHOOL_MASK_PHYSICAL
         && spell.custom_flags & lyracore_shared::spell_custom::IGNORE_ARMOR == 0
     {
-        armor_mitigation_pct(effective_armor(ctx, target), attacker.level)
+        armor_mitigation_pct(
+            crate::modifiers::effective_armor(ctx, target),
+            attacker.level,
+        )
     } else {
         0
     };
@@ -564,7 +431,10 @@ pub(crate) fn finisher_strike_damage(
     let mit_pct = if spell.custom_flags & lyracore_shared::spell_custom::IGNORE_ARMOR != 0 {
         0
     } else {
-        armor_mitigation_pct(effective_armor(ctx, target), attacker.level)
+        armor_mitigation_pct(
+            crate::modifiers::effective_armor(ctx, target),
+            attacker.level,
+        )
     };
     strike_amount(0, amount, 100, mods, crit, mit_pct)
 }
@@ -572,11 +442,15 @@ pub(crate) fn finisher_strike_damage(
 pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
     melee_attack_power_for(
         unit.class(),
-        effective_strength(ctx, unit),
-        effective_agility(ctx, unit),
+        crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_STR),
+        crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_AGI),
         unit.level,
     )
-    .saturating_add_signed(aura_attack_power_bonus(ctx, unit.guid))
+    .saturating_add_signed(crate::modifiers::combat_field_bonus(
+        ctx,
+        unit.guid,
+        crate::spell::COMBAT_ATTACK_POWER,
+    ))
 }
 
 const SCHOOL_MASK_PHYSICAL: u8 = 1;
@@ -606,10 +480,10 @@ fn strike_weapon_range(
     };
     let (_, min, max) = ranged_sheet_values(
         attacker.class(),
-        effective_agility(ctx, attacker),
+        crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_AGI),
         attacker.level,
         Some((dmin, dmax, delay, subclass)),
-        crate::spell::combat_field_bonus(
+        crate::modifiers::combat_field_bonus(
             ctx,
             attacker.guid,
             lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
@@ -694,7 +568,8 @@ pub(crate) fn weapon_strike_damage(
     let total = crate::spell::apply_spell_mod(total, mod_flat, mod_pct).max(1);
     let crit = (ctx.random::<u32>() % 10_000) < effective_crit_bp(ctx, caster);
     let pre_mit = if crit { total * CRIT_MULT } else { total };
-    let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), caster.level);
+    let mit_pct =
+        armor_mitigation_pct(crate::modifiers::effective_armor(ctx, target), caster.level);
     (armor_mitigated(pre_mit, mit_pct), crit)
 }
 
@@ -719,12 +594,12 @@ pub(crate) fn retaliate_on_hit(ctx: &ReducerContext, victim_guid: u64, attacker_
         return;
     }
     let (dmg, _crit) = weapon_strike_damage(ctx, &victim, &attacker, 0, (0, 0));
-    crate::spell::apply_target_damage(
+    deal_damage(
         ctx,
-        attacker_guid,
         victim_guid,
+        attacker_guid,
         dmg as i32,
-        crate::combat::Hit::triggered(),
+        Hit::triggered(),
     );
 }
 
@@ -773,24 +648,16 @@ pub(crate) fn roll_swing_with_range(
             },
         }
     };
-    let production_draws = || {
-        [
-            ctx.random::<u32>(),
-            ctx.random::<u32>(),
-            ctx.random::<u32>(),
-        ]
-    };
-    #[cfg(feature = "conformance_test_fixture")]
-    let draws =
-        crate::conformance_rolls::swing_draws(ctx, attacker.guid).unwrap_or_else(production_draws);
-    #[cfg(not(feature = "conformance_test_fixture"))]
-    let draws = production_draws();
+    let stream = crate::conformance_rolls::RollStream::Swing(attacker.guid);
     let rolls = SwingRolls {
-        outcome: draws[0] % 10_000,
-        weapon: draws[1],
-        block: draws[2] % 10_000,
+        outcome: crate::conformance_rolls::draw(ctx, stream) % 10_000,
+        weapon: crate::conformance_rolls::draw(ctx, stream),
+        block: crate::conformance_rolls::draw(ctx, stream) % 10_000,
     };
-    let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), attacker.level);
+    let mit_pct = armor_mitigation_pct(
+        crate::modifiers::effective_armor(ctx, target),
+        attacker.level,
+    );
     resolve_swing(table, rolls, range, strike, mit_pct, block_value)
 }
 
@@ -815,7 +682,7 @@ pub(crate) fn white_swing_table(
         target,
         flags.as_ref().is_some_and(|flags| flags.no_defense),
     );
-    let facing = crate::spell::is_facing(
+    let facing = crate::geometry::is_facing(
         target.x,
         target.y,
         target.orientation,
@@ -824,8 +691,9 @@ pub(crate) fn white_swing_table(
     );
     let (dodge, parry, block) =
         white_defense_bands(ctx, target, block_value, facing, flags.as_ref());
-    let hit_bonus = crate::spell::combat_field_bonus(ctx, attacker.guid, crate::spell::COMBAT_HIT)
-        + crate::items::equipped_stat_bonus(ctx, attacker.guid, crate::items::EquipStat::Hit);
+    let hit_bonus =
+        crate::modifiers::combat_field_bonus(ctx, attacker.guid, crate::spell::COMBAT_HIT)
+            + crate::items::equipped_stat_bonus(ctx, attacker.guid, crate::items::EquipStat::Hit);
     let mut table = super::white_melee::attack_table(
         super::white_melee::Skills {
             weapon,
@@ -892,7 +760,9 @@ fn white_defense_bands(
             .game_creature_template()
             .entry()
             .find(target.entry)
-            .is_some_and(|template| template.creature_type == 11);
+            .is_some_and(|template| {
+                template.creature_type == lyracore_shared::spell::taxonomy::TOTEM_TYPE
+            });
     let can_defend = !totem
         && !crate::spell::is_stunned(ctx, target.guid)
         && !crate::spell::is_non_melee_spell_casting(ctx, target.guid);
@@ -953,7 +823,8 @@ pub(crate) fn white_block_value(ctx: &ReducerContext, target: &WorldEntity) -> u
     if target.is_player() {
         effective_block_value(ctx, target)
     } else {
-        target.level / 2 + effective_strength(ctx, target) / 20
+        target.level / 2
+            + crate::modifiers::effective_stat(ctx, target, crate::spell::STAT_STR) / 20
     }
 }
 
@@ -975,7 +846,8 @@ fn white_defense_skill(
             .filter(target.guid)
             .find(|skill| skill.skill_line == crate::skill::skill_line::DEFENSE)
             .map_or(maximum, |skill| i32::from(skill.max_rank));
-        let aura = crate::spell::combat_field_bonus(ctx, target.guid, crate::spell::COMBAT_DEFENSE);
+        let aura =
+            crate::modifiers::combat_field_bonus(ctx, target.guid, crate::spell::COMBAT_DEFENSE);
         let gear =
             crate::items::equipped_stat_bonus(ctx, target.guid, crate::items::EquipStat::Defense);
         (i64::from(maximum) + i64::from(aura) + i64::from(gear)).clamp(0, i64::from(i32::MAX))
@@ -1056,7 +928,10 @@ pub(crate) fn roll_ranged_swing(
     let is_crit = (ctx.random::<u32>() % 10_000) < effective_ranged_crit_bp(ctx, attacker);
     let base = dmin + ctx.random::<u32>() % (dmax.saturating_sub(dmin) + 1);
     let pre_mit = if is_crit { base * CRIT_MULT } else { base };
-    let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), attacker.level);
+    let mit_pct = armor_mitigation_pct(
+        crate::modifiers::effective_armor(ctx, target),
+        attacker.level,
+    );
     let dmg = armor_mitigated(pre_mit, mit_pct);
     (dmg, if is_crit { HIT_CRIT } else { HIT_NORMAL })
 }
@@ -1129,42 +1004,8 @@ mod seal_tests {
 
 #[cfg(test)]
 mod queued_strike_tests {
-    use super::{resolve_swing, strike_bonus_points, QueuedStrikeDamage, SwingRolls};
+    use super::{resolve_swing, QueuedStrikeDamage, SwingRolls};
     use crate::combat::{AttackTable, HIT_BLOCK, HIT_CRIT, HIT_GLANCING, HIT_NORMAL};
-    use crate::seed::{base_effect, base_spell};
-
-    fn bonus(base_points: i32, die_sides: i32, per_level: f32) -> crate::spell::SpellEffect {
-        crate::spell::SpellEffect {
-            base_points,
-            die_sides,
-            per_level,
-            ..base_effect(1, 0)
-        }
-    }
-
-    fn strike(spell_level: u8) -> crate::spell::Spell {
-        crate::spell::Spell {
-            spell_level,
-            ..base_spell(1, "Strike")
-        }
-    }
-
-    #[test]
-    fn heroic_strike_rank_one_adds_its_flat_eleven() {
-        assert_eq!(
-            strike_bonus_points(&bonus(11, 1, 0.0), &strike(1), 60, 7),
-            11
-        );
-    }
-
-    #[test]
-    fn a_creature_strike_scales_with_the_attacker_level() {
-        // Strike 11976: 5 points plus 1.5 per level above 1; level 60 adds 5 + 88.
-        assert_eq!(
-            strike_bonus_points(&bonus(5, 1, 1.5), &strike(1), 60, 0),
-            93
-        );
-    }
 
     fn table(block: u32, crit: u32, glancing: u32) -> AttackTable {
         AttackTable {
@@ -1278,30 +1119,5 @@ mod react_window_tests {
         assert!(react_window_active(until, 5_999));
         assert!(!react_window_active(until, 6_000));
         assert!(!react_window_active(until, 6_001));
-    }
-}
-
-#[cfg(test)]
-mod mounted_speed_tests {
-    use super::{mounted_move_pct, move_speed_with_pct};
-
-    #[test]
-    fn mounted_speed_folds_only_while_mounted() {
-        assert_eq!(mounted_move_pct(0, 60, true), 60);
-        assert_eq!(mounted_move_pct(0, 100, true), 100);
-        assert_eq!(mounted_move_pct(0, 60, false), 0);
-        assert_eq!(mounted_move_pct(-20, 60, true), 40);
-    }
-
-    #[test]
-    fn dismounting_keeps_an_ordinary_move_speed_buff_instead_of_forcing_bare_base() {
-        assert_eq!(mounted_move_pct(20, 0, false), 20);
-        assert_eq!(mounted_move_pct(20, 60, false), 20);
-    }
-
-    #[test]
-    fn nominal_60_and_100_percent_mount_tiers_yield_the_exact_run_speed() {
-        assert!((move_speed_with_pct(7.0, mounted_move_pct(0, 60, true)) - 11.2).abs() < 1e-4);
-        assert!((move_speed_with_pct(7.0, mounted_move_pct(0, 100, true)) - 14.0).abs() < 1e-4);
     }
 }

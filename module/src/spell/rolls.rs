@@ -1,22 +1,20 @@
 use spacetimedb::ReducerContext;
 
-pub(super) fn target_draw(ctx: &ReducerContext, _target_guid: u64) -> u32 {
-    #[cfg(feature = "conformance_test_fixture")]
-    if let Some(draw) = crate::conformance_rolls::spell_target_draw(ctx, _target_guid) {
-        return draw;
-    }
-    ctx.random::<u32>()
-}
-
 pub(super) fn integer_roll(ctx: &ReducerContext, target_guid: u64, maximum: u32) -> u32 {
     loop {
-        if let Some(roll) = integer_candidate(target_draw(ctx, target_guid), maximum) {
+        if let Some(roll) = integer_candidate(
+            crate::conformance_rolls::draw(
+                ctx,
+                crate::conformance_rolls::RollStream::Target(target_guid),
+            ),
+            maximum,
+        ) {
             return roll;
         }
     }
 }
 
-pub(super) fn magic_miss_bp(
+pub(crate) fn magic_miss_bp(
     caster_level: u32,
     target_level: u32,
     target_is_character: bool,

@@ -1,6 +1,6 @@
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
-use crate::{game_aura, game_spell};
+use crate::game_spell;
 
 #[table(
     accessor = game_player_spell,
@@ -126,39 +126,20 @@ pub(crate) fn forget_spell(ctx: &ReducerContext, guid: u64, spell_id: u32) {
     }
 }
 
-// The caller must recompute vitals once after stripping its batch of spells.
-pub(crate) fn strip_spell_auras(ctx: &ReducerContext, guid: u64, spell_id: u32) -> bool {
-    let auras = ctx.db.game_aura();
-    let redisplay = auras
-        .by_target()
-        .filter(&guid)
-        .any(|a| a.spell_id == spell_id && a.eff_kind == super::A_TRANSFORM);
-    let to_remove: Vec<(u64, bool, bool)> = auras
-        .by_target()
-        .filter(&guid)
-        .filter(|a| a.spell_id == spell_id)
-        .map(|a| {
-            (
-                a.id,
-                crate::spell::aura_moves_vitals(a.eff_kind, a.eff_p0),
-                crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0),
-            )
-        })
+pub(crate) fn strip_spell_auras(ctx: &ReducerContext, guid: u64, spell_ids: &[u32]) {
+    let stripped: Vec<_> = super::auras_on(ctx, guid)
+        .filter(|a| spell_ids.contains(&a.spell_id))
         .collect();
-    let mut moved_vitals = false;
-    let mut moved_mount = false;
-    for (id, mv, mm) in to_remove {
-        crate::Aura::delete(ctx, id);
-        moved_vitals |= mv;
-        moved_mount |= mm;
-    }
-    if moved_mount {
-        crate::mount::recompute_mount(ctx, guid);
-    }
-    if redisplay {
-        super::recompute_display(ctx, guid);
-    }
-    moved_vitals
+    super::shed_auras(ctx, stripped);
+}
+
+/// The first rank of `spell_id`'s chain; an unranked spell is its own first rank.
+pub(crate) fn first_rank(ctx: &ReducerContext, spell_id: u32) -> u32 {
+    ctx.db
+        .game_spell_chain()
+        .spell_id()
+        .find(spell_id)
+        .map_or(spell_id, |chain| chain.first_spell)
 }
 
 #[table(accessor = game_spell_chain, public, index(accessor = by_first, btree(columns = [first_spell])))]

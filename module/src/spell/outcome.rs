@@ -189,7 +189,7 @@ pub(crate) fn cast_readiness(
         .game_spell()
         .spell_id()
         .find(spell_id)
-        .is_some_and(|spell| spell.cast_flags & SPELL_ATTR_CHANNELED != 0)
+        .is_some_and(|spell| spell.cast_flags & CAST_FLAG_CHANNELED != 0)
     {
         return Err(CastRefusal::new(
             CastRefusalKind::UnsupportedChannel,

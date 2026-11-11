@@ -15,8 +15,6 @@ pub use fingerprint::{game_catalogue_fingerprint, CatalogueFingerprint};
 
 pub use instance::debug_set_vmap_enabled;
 
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) use readout::record_offhand_roll_range;
 pub use readout::{game_debug_readout, DebugReadout};
 
 use lyracore_package_delta::{packed_creature_spawn_guid, packed_gameobject_spawn_guid};
@@ -116,14 +114,10 @@ pub fn debug_apply_damage(
         return Err("target is dead".to_string());
     }
     let capped = amount.min(e.health.saturating_sub(1));
-    let (dmg, _absorbed) =
-        crate::combat::fold_incoming_damage(ctx, attacker_guid, target_guid, capped);
-    let damage = crate::combat::final_damage(ctx, target_guid, dmg);
-    crate::combat::apply_hit(
+    crate::combat::resolve_damage(ctx, attacker_guid, target_guid, capped).land(
         ctx,
         attacker_guid,
         target_guid,
-        damage,
         crate::combat::Hit::weapon(crate::combat::HitSource::MainHand, false),
     );
     Ok(())
@@ -317,7 +311,10 @@ fn resolve_debug_cast_at(
         false,
         false,
         None,
+        None,
+        None,
     )
+    .map_err(Into::into)
 }
 
 #[reducer]
@@ -1634,7 +1631,7 @@ pub fn debug_reassign_pending_casts(
 #[reducer]
 pub fn debug_verify_combat_regen(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
     let e = crate::helpers::live_entity(ctx, character_guid)?;
-    let pct = crate::spell::combat_health_regen_pct(ctx, character_guid);
+    let pct = crate::modifiers::combat_health_regen_pct(ctx, character_guid);
     let pct_u32 = pct.max(0) as u32;
     let would_heal =
         crate::combat::regen_health_in_combat(e.health, e.max_health, e.spirit, e.level, pct_u32);

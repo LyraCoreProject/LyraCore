@@ -841,7 +841,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
         duration_ms: 8000,
         school_mask: 2,
         aura_interrupt: 1,
-        cast_flags: crate::spell::SPELL_ATTR_CHANNELED,
+        cast_flags: crate::spell::CAST_FLAG_CHANNELED,
         ..base_spell(50111, "Linen Bandage")
     });
     effect(50111, 0, 0x91, 8, 1000, 0, 0, 0);
@@ -893,7 +893,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
         duration_ms: 8000,
         school_mask: 2,
         aura_interrupt: 1,
-        cast_flags: crate::spell::SPELL_ATTR_CHANNELED,
+        cast_flags: crate::spell::CAST_FLAG_CHANNELED,
         ..base_spell(50118, "Heavy Linen Bandage")
     });
     effect(50118, 0, 0x91, 18, 1000, 0, 0, 0);
