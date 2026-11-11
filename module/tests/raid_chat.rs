@@ -1,7 +1,7 @@
 mod support;
 
 use serde_json::json;
-use support::{actor, Standalone};
+use support::{actor, group_op, Standalone};
 
 const REALM_CHAT_ROWS: &str = "SELECT * FROM game_realm_chat_event";
 
@@ -14,23 +14,6 @@ const KIND_PARTY: u8 = 1;
 const KIND_RAID: u8 = 2;
 const KIND_RAID_LEADER: u8 = 87;
 const KIND_RAID_WARNING: u8 = 88;
-
-fn group_op_args(op: &str, actor_guid: u64, target_guid: u64, arg_a: u8) -> Vec<String> {
-    vec![
-        op.to_string(),
-        actor(&actor_guid.to_string()),
-        target_guid.to_string(),
-        arg_a.to_string(),
-        "0".to_string(),
-        "0".to_string(),
-    ]
-}
-
-fn group_op(node: &Standalone, op: &str, actor_guid: u64, target_guid: u64, arg_a: u8) {
-    let args = group_op_args(op, actor_guid, target_guid, arg_a);
-    let args: Vec<_> = args.iter().map(String::as_str).collect();
-    node.assert_call("realm_group_op", &args);
-}
 
 fn join(node: &Standalone, inviter: u64, guid: u64) {
     group_op(node, INVITE, inviter, guid, 0);

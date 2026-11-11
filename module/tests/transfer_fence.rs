@@ -2,7 +2,8 @@ mod support;
 
 use std::time::Duration;
 
-use support::{actor, poll_until, Row, Standalone};
+use lyracore_package_delta::fixture_ids::SCENARIO_QUEST;
+use support::{actor, poll_until, refused, Row, Standalone};
 
 const ESCROWED: &str = "1";
 const BYSTANDER: &str = "2";
@@ -45,19 +46,6 @@ fn begin_transfer(shard: &Standalone, guid: &str) {
     );
 }
 
-fn refused(shard: &Standalone, reducer: &str, args: &[&str], tag: &str) {
-    let output = shard.call(reducer, args);
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        !output.status.success() && text.contains(tag),
-        "{reducer} should refuse with {tag}: {text}"
-    );
-}
-
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn login_refuses_a_character_in_escrow() {
@@ -87,7 +75,7 @@ fn background_passes_leave_a_character_in_escrow_unchanged() {
     let shard = start("transfer-fence-background", true);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     for guid in [ESCROWED, BYSTANDER] {
-        shard.assert_call("debug_grant_quest", &[guid, "50900"]);
+        shard.assert_call("debug_grant_quest", &[guid, &SCENARIO_QUEST.to_string()]);
     }
     begin_transfer(&shard, ESCROWED);
     shard.assert_sql("UPDATE game_character_quest SET deadline_micros = 1");

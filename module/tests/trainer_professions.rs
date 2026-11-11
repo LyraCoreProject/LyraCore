@@ -1,5 +1,7 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::PROFESSION_TRAINER_ENTRY;
+use lyracore_package_delta::packed_spell_effect_id;
 use support::{actor, Standalone};
 
 fn fixture(name: &str) -> (Standalone, String) {
@@ -11,18 +13,23 @@ fn fixture(name: &str) -> (Standalone, String) {
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_call("debug_set_level", &["1", "60"]);
     shard.assert_call("debug_set_money", &["1", "1000000"]);
-    shard.assert_call("debug_spawn_at_feet", &["1", "51001", "2"]);
-    let npc = shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51001")[0]["guid"]
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &PROFESSION_TRAINER_ENTRY.to_string(), "2"],
+    );
+    let npc = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {PROFESSION_TRAINER_ENTRY}"
+    ))[0]["guid"]
         .clone();
     (shard, npc)
 }
 
 fn offer(shard: &Standalone, id: u32, spell: u32, line: u32, cap: u32) {
-    shard.assert_sql(&format!("INSERT INTO game_trainer_spell (id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap) VALUES ({id},51001,{spell},10,1,{line},{cap})"));
+    shard.assert_sql(&format!("INSERT INTO game_trainer_spell (id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap) VALUES ({id},{PROFESSION_TRAINER_ENTRY},{spell},10,1,{line},{cap})"));
 }
 
 fn wrapper(shard: &Standalone, wrapper: u32, target: u32) {
-    let id = u64::from(wrapper) << 2;
+    let id = packed_spell_effect_id(wrapper, 0);
     let kind = lyracore_shared::spell::taxonomy::E_SCRIPTED;
     shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({id},{wrapper},0,{kind},0,0,0.0,0,0,0.0,0,{target},0,0,0,0,0,false,0.0)"));
 }

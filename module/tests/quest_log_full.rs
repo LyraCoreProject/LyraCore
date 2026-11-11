@@ -1,11 +1,11 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use support::{actor, Standalone};
 
 const CHARACTER: &str = "1";
 const FIRST_QUEST: u32 = 5_096_500;
 const LOG_SIZE: u32 = 20;
-const WOLF: u32 = 51_000;
 const REPEATABLE: u32 = FIRST_QUEST + LOG_SIZE + 1;
 
 fn quest_rows(shard: &Standalone) -> usize {
@@ -31,12 +31,15 @@ fn setup(name: &str) -> (Standalone, String) {
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &[CHARACTER]);
     shard.assert_sql(&format!(
-        "DELETE FROM game_world_entity WHERE entry = {WOLF}"
+        "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
     ));
-    shard.assert_call("debug_spawn_at_feet", &[CHARACTER, &WOLF.to_string(), "3"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[CHARACTER, &TEST_WOLF_ENTRY.to_string(), "3"],
+    );
     let giver = shard
         .query_rows(&format!(
-            "SELECT guid FROM game_world_entity WHERE entry = {WOLF}"
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
         ))
         .remove(0)["guid"]
         .clone();
@@ -57,7 +60,7 @@ fn setup(name: &str) -> (Standalone, String) {
         ));
         shard.assert_sql(&format!(
             "INSERT INTO game_creature_quest (id,creature_entry,quest_entry,role) \
-             VALUES ({},{WOLF},{entry},0)",
+             VALUES ({},{TEST_WOLF_ENTRY},{entry},0)",
             u64::from(entry)
         ));
     }

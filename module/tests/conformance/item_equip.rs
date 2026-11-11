@@ -1,11 +1,12 @@
 use super::buy_in_slot::{buy, grant, inventory, request, stage};
 use super::enter;
-use lyracore_test_support::{poll_until, ReducerConnection, Standalone, POLL_TIMEOUT};
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY};
+use lyracore_test_support::{actor, poll_until, ReducerConnection, Standalone, POLL_TIMEOUT};
 use wow_world_messages::vanilla::{
     ClientMessage, SpellCastTargets, SpellCastTargets_SpellCastTargetFlags, CMSG_USE_ITEM,
 };
 
-const ITEM: u32 = 5090050;
+const ITEM: u32 = FIXTURE_BLADE;
 const EQUIP: u32 = 5090900;
 const USE: u32 = 5090901;
 const FORM: u32 = 5090902;
@@ -284,8 +285,8 @@ fn equip_retains_source_category_cooldowns_and_item_category_overrides() {
     ));
     grant(&shard, guid, ITEM, 1, 23);
     equip(&mut connection, 23);
-    shard.assert_sql(&format!("UPDATE game_item_template SET class = 4, subclass = 1, inventory_type = 11, required_level = 1, max_stack = 1, bonding = 0, spellid_1 = {FORM}, spelltrigger_1 = 0, spellcategory_1 = 0 WHERE entry = 5090052"));
-    grant(&shard, guid, 5090052, 1, 23);
+    shard.assert_sql(&format!("UPDATE game_item_template SET class = 4, subclass = 1, inventory_type = 11, required_level = 1, max_stack = 1, bonding = 0, spellid_1 = {FORM}, spelltrigger_1 = 0, spellcategory_1 = 0 WHERE entry = {FIXTURE_JERKY}"));
+    grant(&shard, guid, FIXTURE_JERKY, 1, 23);
     equip(&mut connection, 23);
     advance(&shard, 30000);
     assert!(!shard
@@ -570,10 +571,6 @@ fn partner(shard: &Standalone) -> u64 {
     shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
     shard.assert_call("debug_set_money", &[&guid.to_string(), "1000"]);
     guid
-}
-
-fn actor(guid: u64) -> String {
-    format!(r#"{{"guid":{guid},"ownership":null}}"#)
 }
 
 #[test]

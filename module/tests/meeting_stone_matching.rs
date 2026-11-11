@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde_json::json;
-use support::Standalone;
+use support::{stage_group, Standalone};
 
 const DEADMINES: u32 = 1581;
 const STOCKADE: u32 = 717;
@@ -64,13 +64,6 @@ fn stage(realm: &Standalone, guid: u64, race: u8, class: u8) {
             &y.to_string(),
             &z.to_string(),
         ],
-    );
-}
-
-fn stage_group(realm: &Standalone, leader: u64, members: &[u64]) {
-    realm.assert_call(
-        "debug_stage_meeting_stone_group",
-        &[&leader.to_string(), &json!(members).to_string(), "false"],
     );
 }
 

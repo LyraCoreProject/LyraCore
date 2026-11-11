@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::packed_spell_effect_id;
 use support::{actor, number, Standalone};
 
 const CHARACTER: &str = "1";
@@ -48,7 +49,7 @@ fn fixture(name: &str) -> (Standalone, [f32; 3]) {
              effect_mechanic, p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
              VALUES ({}, {spell_id}, 0, {kind}, 0, 0, 0.0, 0, 0, 0.0, 0, 0, 0, {p0}, 3, 0, 0, \
              false, 0.0)",
-            u64::from(spell_id) << 2
+            packed_spell_effect_id(spell_id, 0)
         ));
     }
     let rows = shard.query_rows("SELECT x, y, z FROM game_world_entity WHERE guid = 1");

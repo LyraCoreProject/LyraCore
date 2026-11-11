@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
 #[test]
@@ -100,9 +101,14 @@ fn stage(name: &str) -> (Standalone, String) {
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.assert_sql("UPDATE game_world_entity SET unit_bytes_0 = 2049, level = 60, intellect = 125, godmode = true WHERE guid = 1");
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "2"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "2"],
+    );
     let target = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
         .into_iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()

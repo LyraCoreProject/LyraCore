@@ -1,5 +1,8 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{
+    FIXTURE_BLADE, FIXTURE_JERKY, FIXTURE_REINS, SCENARIO_QUESTGIVER_ENTRY,
+};
 use lyracore_shared::trade::{decode_offer, event_kind};
 use support::{number, poll_until, Standalone};
 
@@ -35,13 +38,17 @@ fn inventory_changes_preserve_accepted_trade_items() {
     shard.assert_sql(
         "UPDATE game_world_entity SET simulation_indexed = false, health = 1 WHERE guid = 1",
     );
-    shard.assert_call("debug_grant_item", &["1", "5090052", "15"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_JERKY.to_string(), "15"]);
     shard.assert_call("debug_split_item", &["1", "23", "5", "24"]);
-    shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
     shard.assert_call("gw_move_item", &[ACTOR, "25", "26"]);
-    shard.assert_call("debug_spawn_at_feet", &["1", "51003", "0"]);
-    let vendor = shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51003")[0]
-        ["guid"]
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &SCENARIO_QUESTGIVER_ENTRY.to_string(), "0"],
+    );
+    let vendor = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_QUESTGIVER_ENTRY}"
+    ))[0]["guid"]
         .clone();
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET npc_flags = 4 WHERE guid = {vendor}"
@@ -57,8 +64,8 @@ fn inventory_changes_preserve_accepted_trade_items() {
     let session = shard.query_rows("SELECT * FROM game_trade_session");
     assert_eq!(session[0]["target_accepted"], "true");
     shard.assert_sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (5090171,'Fixture craft',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0)");
-    shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360684,5090171,0,7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false,0.0)");
-    shard.assert_sql("INSERT INTO game_spell_reagent (id,spell_id,item_entry,count) VALUES (40721368,5090171,5090052,1)");
+    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360684,5090171,0,7,1,0,0.0,0,0,0.0,0,0,0,{FIXTURE_BLADE},8,0,0,false,0.0)"));
+    shard.assert_sql(&format!("INSERT INTO game_spell_reagent (id,spell_id,item_entry,count) VALUES (40721368,5090171,{FIXTURE_JERKY},1)"));
     for (verb, args) in [
         ("gw_split_item", vec![ACTOR, "23", "25", "9"]),
         ("gw_destroy_item", vec![ACTOR, "23", "9"]),
@@ -84,10 +91,12 @@ fn inventory_changes_preserve_accepted_trade_items() {
             session
         );
     }
-    shard.assert_call("debug_grant_item", &["1", "5090054", "1"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_REINS.to_string(), "1"]);
     shard.assert_sql("UPDATE game_spell SET cast_time_ms = 1000, cost = 10, power_type = 1 WHERE spell_id = 5090171");
-    shard.assert_sql("UPDATE game_spell_reagent SET item_entry = 5090054 WHERE id = 40721368");
-    shard.assert_sql("INSERT INTO game_spell_reagent (id,spell_id,item_entry,count) VALUES (40721369,5090171,5090052,1)");
+    shard.assert_sql(&format!(
+        "UPDATE game_spell_reagent SET item_entry = {FIXTURE_REINS} WHERE id = 40721368"
+    ));
+    shard.assert_sql(&format!("INSERT INTO game_spell_reagent (id,spell_id,item_entry,count) VALUES (40721369,5090171,{FIXTURE_JERKY},1)"));
     shard.clear_schedule("game_creature_move_schedule");
     shard.assert_sql(
         "UPDATE game_world_entity SET simulation_indexed = false, power = 100 WHERE guid = 1",
@@ -116,7 +125,9 @@ fn inventory_changes_preserve_accepted_trade_items() {
         session
     );
     shard.assert_sql("DELETE FROM game_spell_reagent WHERE id = 40721369");
-    shard.assert_sql("UPDATE game_spell_effect SET p0 = 5090052 WHERE id = 20360684");
+    shard.assert_sql(&format!(
+        "UPDATE game_spell_effect SET p0 = {FIXTURE_JERKY} WHERE id = 20360684"
+    ));
     shard.assert_call("debug_begin_cast", &["1", "5090171", "1"]);
     assert_eq!(
         shard
@@ -157,7 +168,7 @@ fn inventory_changes_preserve_accepted_trade_items() {
             11
         );
     }
-    shard.assert_call("debug_grant_item", &["1", "5090054", "1"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_REINS.to_string(), "1"]);
     shard.assert_call("gw_accept_trade", &[&buyer]);
     shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360685,5090171,1,7,1,0,0.0,0,0,0.0,0,0,0,5090999,8,0,0,false,0.0)");
     let before_failed_product = shard.query_rows("SELECT * FROM game_item_instance");
@@ -182,11 +193,11 @@ fn inventory_changes_preserve_accepted_trade_items() {
     shard.assert_call("gw_split_item", &[ACTOR, "24", "27", "1"]);
     shard.assert_call("gw_accept_trade", &[ACTOR]);
     let received = shard.query_rows(&format!(
-        "SELECT stack_count FROM game_item_instance WHERE owner_guid = {other} AND entry = 5090052"
+        "SELECT stack_count FROM game_item_instance WHERE owner_guid = {other} AND entry = {FIXTURE_JERKY}"
     ));
     assert_eq!(received.len(), 1);
     assert_eq!(received[0]["stack_count"], "11");
-    assert_eq!(shard.query_rows(&format!("SELECT stack_count FROM game_item_instance WHERE owner_guid = {other} AND entry = 5090050"))[0]["stack_count"], "1");
+    assert_eq!(shard.query_rows(&format!("SELECT stack_count FROM game_item_instance WHERE owner_guid = {other} AND entry = {FIXTURE_BLADE}"))[0]["stack_count"], "1");
     assert_eq!(
         shard.query_rows("SELECT money FROM game_world_entity WHERE guid = 1")[0]["money"],
         "100"
@@ -228,9 +239,9 @@ fn slot_of(shard: &Standalone, entry: u32) -> Vec<String> {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_two_handed_weapon_moves_the_off_hand_item_to_a_free_slot() {
-    const TWO_HANDER: u32 = 5090050;
-    const ONE_HANDER: u32 = 5090052;
-    const SHIELD: u32 = 5090054;
+    const TWO_HANDER: u32 = FIXTURE_BLADE;
+    const ONE_HANDER: u32 = FIXTURE_JERKY;
+    const SHIELD: u32 = FIXTURE_REINS;
     let shard = fixture("inventory-two-hand");
     shard.assert_call("debug_learn_spell", &["1", "201"]);
     shard.assert_call("debug_learn_spell", &["1", "202"]);

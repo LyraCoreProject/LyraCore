@@ -1,14 +1,15 @@
 mod support;
 
+use lyracore_shared::guid;
 use serde_json::{json, Value};
 use support::{number, poll_until, Standalone, POLL_TIMEOUT};
 
 const CHICKEN_ENTRY: u32 = 620;
-const CHICKEN: u64 = (0xF130_u64 << 48) | ((CHICKEN_ENTRY as u64) << 24) | 1;
-const CHEST: u64 = (0xF110_u64 << 48) | 1;
+const CHICKEN: u64 = guid::creature(CHICKEN_ENTRY, 1);
+const CHEST: u64 = guid::compose(guid::GAMEOBJECT, 1);
 const FIRST_OPERATOR_CHICKEN: u64 =
     (0xF130_u64 << 48) | ((CHICKEN_ENTRY as u64) << 24) | 14_000_000;
-const FIRST_OPERATOR_GAMEOBJECT: u64 = (0xF110_u64 << 48) | 14_000_000;
+const FIRST_OPERATOR_GAMEOBJECT: u64 = guid::compose(guid::GAMEOBJECT, 14_000_000);
 
 fn realm(test_name: &str) -> Standalone {
     let mut shard = Standalone::start(test_name);
@@ -267,7 +268,7 @@ fn spawn_edits_refuse_bad_targets_and_bad_input() {
         (
             "operator_update_creature_spawn",
             vec![
-                (((0xF130_u64 << 48) | ((CHICKEN_ENTRY as u64) << 24)) | 15_000_000).to_string(),
+                guid::creature(CHICKEN_ENTRY, 15_000_000).to_string(),
                 good.clone(),
             ],
             "Package Creature Range",

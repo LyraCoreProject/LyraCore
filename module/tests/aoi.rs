@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use support::{number, Row, Standalone};
 
 fn fixture(name: &str) -> (Standalone, String) {
@@ -15,9 +16,14 @@ fn fixture(name: &str) -> (Standalone, String) {
     assert!(shard.query_rows("SELECT id FROM game_aoi_grant").is_empty());
     shard.assert_call("debug_register_aoi_viewer", &["1"]);
     teleport(&shard, "0");
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "0"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "0"],
+    );
     let wolf = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000 AND x = 0")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY} AND x = 0"
+        ))
         .remove(0)["guid"]
         .clone();
     (shard, wolf)

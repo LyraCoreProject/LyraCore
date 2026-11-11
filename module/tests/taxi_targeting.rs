@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{TEST_ROOT_SPELL, TEST_WOLF_ENTRY};
 use lyracore_shared::constants::taxi_fixture as taxi;
 use lyracore_shared::spell::taxonomy::{T_AREA_ENEMY, T_TARGET_ENEMY};
 use support::Standalone;
@@ -14,16 +15,24 @@ fn a_taxi_passenger_leaves_combat_and_cannot_be_targeted_until_landing() {
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "2"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "2"],
+    );
     let wolf = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
         .pop()
         .unwrap()["guid"]
         .clone();
     shard.assert_sql(
-        "UPDATE game_spell SET cast_time_ms = 500, gcd_ms = 0, cost = 0, range_yd = 100 WHERE spell_id = 50021",
+        &format!("UPDATE game_spell SET cast_time_ms = 500, gcd_ms = 0, cost = 0, range_yd = 100 WHERE spell_id = {TEST_ROOT_SPELL}"),
     );
-    shard.assert_call("debug_begin_cast", &[&wolf, "50021", "1"]);
+    shard.assert_call(
+        "debug_begin_cast",
+        &[&wolf, &TEST_ROOT_SPELL.to_string(), "1"],
+    );
     shard.assert_call("debug_engage", &[&wolf, "1"]);
     shard.assert_sql(&format!(
         "INSERT INTO game_active_taxi_flight \
@@ -42,17 +51,23 @@ fn a_taxi_passenger_leaves_combat_and_cannot_be_targeted_until_landing() {
         "takeoff must stop attacks already aimed at the passenger"
     );
     let before = shard.query_rows("SELECT health FROM game_world_entity WHERE guid = 1");
-    let refused = shard.call("debug_begin_cast", &[&wolf, "50021", "1"]);
+    let refused = shard.call(
+        "debug_begin_cast",
+        &[&wolf, &TEST_ROOT_SPELL.to_string(), "1"],
+    );
     assert!(
         !refused.status.success(),
         "a hostile spell must refuse a taxi passenger"
     );
     shard.assert_sql(&format!(
-        "UPDATE game_spell_effect SET target = {T_AREA_ENEMY}, radius_yd = 100 WHERE spell_id = 50021"
+        "UPDATE game_spell_effect SET target = {T_AREA_ENEMY}, radius_yd = 100 WHERE spell_id = {TEST_ROOT_SPELL}"
     ));
-    shard.assert_call("debug_force_cast_at", &[&wolf, "50021", &wolf]);
+    shard.assert_call(
+        "debug_force_cast_at",
+        &[&wolf, &TEST_ROOT_SPELL.to_string(), &wolf],
+    );
     shard.assert_sql(&format!(
-        "UPDATE game_spell_effect SET target = {T_TARGET_ENEMY} WHERE spell_id = 50021"
+        "UPDATE game_spell_effect SET target = {T_TARGET_ENEMY} WHERE spell_id = {TEST_ROOT_SPELL}"
     ));
     for _ in 0..20 {
         shard.assert_call("debug_advance_virtual_clock", &["50000"]);
@@ -79,7 +94,10 @@ fn a_taxi_passenger_leaves_combat_and_cannot_be_targeted_until_landing() {
             )
             .is_empty()
         {
-            shard.assert_call("debug_begin_cast", &[&wolf, "50021", "1"]);
+            shard.assert_call(
+                "debug_begin_cast",
+                &[&wolf, &TEST_ROOT_SPELL.to_string(), "1"],
+            );
             return;
         }
     }

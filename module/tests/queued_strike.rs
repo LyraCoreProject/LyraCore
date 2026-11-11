@@ -7,12 +7,13 @@ use lyracore_shared::spell::taxonomy::{
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
+use lyracore_package_delta::packed_spell_effect_id;
 use support::{event_rows, poll_until, Standalone, TableSubscription, POLL_TIMEOUT};
 
 type SqlRow = BTreeMap<String, String>;
 
 const PLAYER: u64 = 1;
-const TEST_WOLF_ENTRY: u32 = 51000;
 const HEROIC_STRIKE: u32 = 78;
 const CLEAVE: u32 = 845;
 const RAPTOR_STRIKE: u32 = 2973;
@@ -430,7 +431,6 @@ fn ending_auto_shot_keeps_a_queued_raptor_strike() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_auto_shot_target_dying_interrupts_a_queued_raptor_strike() {
     const AUTO_SHOT: u32 = 75;
-    const FIXTURE_BLADE: u32 = 5_090_050;
     const RANGED_SLOT: u8 = 17;
     let mut standalone = Standalone::start("queued-strike-auto-shot-death");
     standalone.publish_module();
@@ -496,7 +496,6 @@ fn an_auto_shot_target_dying_interrupts_a_queued_raptor_strike() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn running_out_of_ammo_keeps_a_queued_raptor_strike() {
     const AUTO_SHOT: u32 = 75;
-    const FIXTURE_BLADE: u32 = 5_090_050;
     const BOW: u8 = 2;
     const RANGED_SLOT: u8 = 17;
     let mut standalone = Standalone::start("queued-strike-no-ammo");
@@ -581,7 +580,7 @@ fn stage_form(standalone: &Standalone, spell_id: u32, name: &str, stance: u8) {
          p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({}, {spell_id}, 0, {E_SET_STANCE}, 0, 0, 0.0, 0, {T_SELF}, 0.0, 0, 0, 0, \
          {stance}, 0, 0, 0, false, 0.0)",
-        (spell_id as u64) << 2
+        packed_spell_effect_id(spell_id, 0)
     ));
 }
 
@@ -701,7 +700,7 @@ fn stage_on_next_swing_spell(standalone: &Standalone, strike: QueuedStrike) {
          p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({}, {spell_id}, 0, {E_NEXT_SWING}, 11, 0, 0.0, 0, {T_TARGET_ENEMY}, 0.0, 0, 0, 0, \
          0, 0, 0, 0, false, 0.0)",
-        (spell_id as u64) << 2
+        packed_spell_effect_id(spell_id, 0)
     ));
 }
 

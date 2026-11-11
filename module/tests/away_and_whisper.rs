@@ -1,7 +1,7 @@
 mod support;
 
 use serde_json::{json, Value};
-use support::{actor, Standalone};
+use support::{actor, refused, Standalone};
 
 const WHISPER: u64 = 0x06;
 const WHISPER_INFORM: u64 = 0x07;
@@ -19,19 +19,6 @@ fn start(name: &str) -> Standalone {
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     shard
-}
-
-fn refused(shard: &Standalone, reducer: &str, args: &[&str], tag: &str) {
-    let output = shard.call(reducer, args);
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        !output.status.success() && text.contains(tag),
-        "{reducer} should refuse with {tag}: {text}"
-    );
 }
 
 fn player_flags(shard: &Standalone) -> String {

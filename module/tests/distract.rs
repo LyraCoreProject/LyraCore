@@ -8,13 +8,14 @@ use std::collections::BTreeMap;
 use std::f32::consts::{FRAC_PI_4, TAU};
 use std::time::Duration;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::constants::unit_flags;
 use support::{poll_until, Standalone};
 
 type Row = BTreeMap<String, String>;
 
 const PLAYER: u64 = 1;
-const TEST_WOLF_ENTRY: u32 = 51000;
 const DISTRACT: u32 = 1725;
 const FIXTURE_STEALTH: u32 = 509_0700;
 
@@ -126,7 +127,7 @@ fn insert_effect(
     target: u32,
     radius_yd: f32,
 ) {
-    let id = (spell_id as u64) << 2;
+    let id = packed_spell_effect_id(spell_id, 0);
     shard.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \

@@ -1,7 +1,10 @@
 use lyracore_test_support::{ReducerConnection, Standalone};
 use serde_json::json;
 
+use super::buy_in_slot::{delivered, money, request};
 use super::{enter, fixture, Packet};
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY, SCENARIO_VENDOR_ENTRY};
+use lyracore_package_delta::packed_spell_effect_id;
 
 #[path = "buyback_handoff.rs"]
 mod handoff;
@@ -15,11 +18,18 @@ fn stage_in(
 ) -> (Standalone, ReducerConnection, u64, u64) {
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
-    shard.assert_sql("UPDATE game_item_template SET sell_price = 13 WHERE entry = 5090050");
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET sell_price = 13 WHERE entry = {FIXTURE_BLADE}"
+    ));
     shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
-    shard.assert_call("debug_spawn_at_feet", &[&guid.to_string(), "51004", "2.0"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[&guid.to_string(), &SCENARIO_VENDOR_ENTRY.to_string(), "2.0"],
+    );
     let vendor = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
@@ -36,41 +46,6 @@ fn stage_in(
     ));
     connection.drain_packets();
     (shard, connection, guid, vendor)
-}
-
-fn request(connection: &mut ReducerConnection, opcode: u32, body: Vec<u8>) -> Vec<(u16, Vec<u8>)> {
-    connection
-        .call("native_world_receive", json!([0x1dcu32, vec![0u8; 8]]))
-        .unwrap();
-    connection.drain_packets();
-    if let Err(reason) = connection.call("native_world_receive", json!([opcode, body])) {
-        let replies: Vec<(u16, Vec<u8>)> =
-            serde_json::from_str(reason.strip_prefix("native_reply:").expect(&reason)).unwrap();
-        connection
-            .call("native_world_reply", json!([replies]))
-            .unwrap();
-    }
-    delivered(connection)
-}
-
-fn delivered(connection: &mut ReducerConnection) -> Vec<(u16, Vec<u8>)> {
-    connection
-        .drain_packets()
-        .into_iter()
-        .filter_map(|row| {
-            let Packet(_, _, (tag, opcode), body, _, _, _) =
-                serde_json::from_str(row.get()).unwrap();
-            (tag == 0).then(|| {
-                (
-                    serde_json::from_str(opcode.get()).unwrap(),
-                    (0..body.len())
-                        .step_by(2)
-                        .map(|i| u8::from_str_radix(&body[i..i + 2], 16).unwrap())
-                        .collect(),
-                )
-            })
-        })
-        .collect()
 }
 
 fn grant(shard: &Standalone, guid: u64, entry: u32, count: u32) -> u64 {
@@ -103,18 +78,11 @@ fn sold_rows(shard: &Standalone, guid: u64) -> Vec<std::collections::BTreeMap<St
     ))
 }
 
-fn money(shard: &Standalone, guid: u64) -> String {
-    shard.query_rows(&format!(
-        "SELECT money FROM game_world_entity WHERE guid = {guid}"
-    ))[0]["money"]
-        .clone()
-}
-
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_partial_sale_clones_and_buyback_merges_without_an_item_receipt() {
     let (shard, mut connection, guid, vendor) = stage("buyback-partial");
-    let item = grant(&shard, guid, 5090052, 5);
+    let item = grant(&shard, guid, FIXTURE_JERKY, 5);
     shard.assert_sql(&format!(
         "UPDATE game_item_instance SET enchant_id = 2564, soulbound = true WHERE guid = {item}"
     ));
@@ -148,7 +116,7 @@ fn ring_slots_timestamps_and_full_ring_eviction_follow_the_reference() {
     let (shard, mut connection, guid, vendor) = stage("buyback-ring");
     let mut items = Vec::new();
     for _ in 0..12 {
-        let item = grant(&shard, guid, 5090050, 1);
+        let item = grant(&shard, guid, FIXTURE_BLADE, 1);
         items.push(item);
         sell(&mut connection, vendor, item, 0);
     }
@@ -163,7 +131,7 @@ fn ring_slots_timestamps_and_full_ring_eviction_follow_the_reference() {
         assert_eq!(row["timestamp"], "108000");
     }
     for _ in 0..2 {
-        let item = grant(&shard, guid, 5090050, 1);
+        let item = grant(&shard, guid, FIXTURE_BLADE, 1);
         let packets = sell(&mut connection, vendor, item, 0);
         assert_eq!(values(&packets, guid)[&624], item as u32);
         assert!(packets.iter().any(|(opcode, _)| *opcode == 0xaa));
@@ -179,7 +147,7 @@ fn ring_slots_timestamps_and_full_ring_eviction_follow_the_reference() {
     buyback(&mut connection, vendor, 70);
     shard
         .assert_sql("UPDATE game_conformance_clock SET now_micros = 1800000005000000 WHERE id = 0");
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     let packets = sell(&mut connection, vendor, item, 0);
     assert_eq!(values(&packets, guid)[&626], item as u32);
     assert_eq!(values(&packets, guid)[&1239], 108005);
@@ -215,9 +183,9 @@ fn empty_and_invalid_vendor_buyback_return_the_reference_refusals() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn money_is_checked_before_capacity_and_any_item_or_ring_change() {
     let (shard, mut connection, guid, vendor) = stage("buyback-money");
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     sell(&mut connection, vendor, item, 0);
-    grant(&shard, guid, 5090050, 16);
+    grant(&shard, guid, FIXTURE_BLADE, 16);
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET money = 0 WHERE guid = {guid}"
     ));
@@ -227,7 +195,7 @@ fn money_is_checked_before_capacity_and_any_item_or_ring_change() {
     ));
     let packets = buyback(&mut connection, vendor, 69);
     let mut expected = vendor.to_le_bytes().to_vec();
-    expected.extend(5090050u32.to_le_bytes());
+    expected.extend(FIXTURE_BLADE.to_le_bytes());
     expected.push(2);
     assert_eq!(packets, vec![(0x1a5, expected)]);
     assert_eq!(sold_rows(&shard, guid), before);
@@ -244,9 +212,9 @@ fn money_is_checked_before_capacity_and_any_item_or_ring_change() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn full_inventory_buyback_does_not_debit_or_release_the_item() {
     let (shard, mut connection, guid, vendor) = stage("buyback-full");
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     sell(&mut connection, vendor, item, 0);
-    grant(&shard, guid, 5090050, 16);
+    grant(&shard, guid, FIXTURE_BLADE, 16);
     let before = sold_rows(&shard, guid);
     let copper = money(&shard, guid);
     let packets = buyback(&mut connection, vendor, 69);
@@ -261,10 +229,12 @@ fn full_inventory_buyback_does_not_debit_or_release_the_item() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn sold_items_do_not_count_toward_unique_grants_but_restoration_does() {
     let (shard, mut connection, guid, vendor) = stage("buyback-unique");
-    shard.assert_sql("UPDATE game_item_template SET max_count = 1 WHERE entry = 5090050");
-    let item = grant(&shard, guid, 5090050, 1);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET max_count = 1 WHERE entry = {FIXTURE_BLADE}"
+    ));
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     sell(&mut connection, vendor, item, 0);
-    grant(&shard, guid, 5090050, 1);
+    grant(&shard, guid, FIXTURE_BLADE, 1);
     let before = sold_rows(&shard, guid);
     let copper = money(&shard, guid);
     let packets = buyback(&mut connection, vendor, 69);
@@ -278,10 +248,10 @@ fn sold_items_do_not_count_toward_unique_grants_but_restoration_does() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn granting_another_stack_cannot_merge_into_buyback() {
     let (shard, mut connection, guid, vendor) = stage("buyback-storage");
-    let item = grant(&shard, guid, 5090052, 2);
+    let item = grant(&shard, guid, FIXTURE_JERKY, 2);
     sell(&mut connection, vendor, item, 0);
     let before = sold_rows(&shard, guid);
-    let fresh = grant(&shard, guid, 5090052, 3);
+    let fresh = grant(&shard, guid, FIXTURE_JERKY, 3);
     assert_ne!(fresh, item);
     assert_eq!(
         shard.query_rows(&format!(
@@ -299,7 +269,7 @@ fn equipment_swap_bank_destroy_and_repair_cannot_reach_a_sold_item() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET npc_flags = 16644 WHERE guid = {vendor}"
     ));
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     sell(&mut connection, vendor, item, 0);
     let before = sold_rows(&shard, guid);
     let actor = format!(r#"{{"guid":{guid},"ownership":null}}"#);
@@ -332,7 +302,7 @@ fn equipment_swap_bank_destroy_and_repair_cannot_reach_a_sold_item() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn logout_destroys_buyback_and_relogin_starts_an_empty_ring() {
     let (shard, mut connection, guid, vendor) = stage("buyback-logout");
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     sell(&mut connection, vendor, item, 0);
     request(&mut connection, 0x4b, Vec::new());
     assert!(sold_rows(&shard, guid).is_empty());
@@ -344,7 +314,7 @@ fn logout_destroys_buyback_and_relogin_starts_an_empty_ring() {
     drop(connection);
     let mut connection = enter(&shard, guid);
     assert!(sold_rows(&shard, guid).is_empty());
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     let packets = sell(&mut connection, vendor, item, 0);
     assert_eq!(values(&packets, guid)[&624], item as u32);
 }
@@ -371,7 +341,10 @@ fn buyback(connection: &mut ReducerConnection, vendor: u64, slot: u32) -> Vec<(u
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_full_sale_returns_the_same_item_with_its_instance_state() {
     let (shard, mut connection, guid, vendor) = stage("buyback-identity");
-    shard.assert_call("debug_grant_item", &[&guid.to_string(), "5090050", "1"]);
+    shard.assert_call(
+        "debug_grant_item",
+        &[&guid.to_string(), &FIXTURE_BLADE.to_string(), "1"],
+    );
     shard.assert_sql(&format!(
         "UPDATE game_item_instance SET durability = 7, enchant_id = 2564, soulbound = true WHERE owner_guid = {guid}"
     ));
@@ -410,7 +383,7 @@ fn a_full_sale_returns_the_same_item_with_its_instance_state() {
 fn crash_recovery_discards_buyback_before_the_next_login() {
     let fixture = super::fixture_in(Standalone::start_persistent("buyback-crash"));
     let (mut shard, mut connection, guid, vendor) = stage_in(fixture);
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     sell(&mut connection, vendor, item, 0);
     assert_eq!(sold_rows(&shard, guid).len(), 1);
     shard.restart_persistent();
@@ -430,7 +403,7 @@ fn crash_recovery_discards_buyback_before_the_next_login() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn transport_loss_discards_buyback_without_a_logout_request() {
     let (shard, mut connection, guid, vendor) = stage("buyback-disconnect");
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     sell(&mut connection, vendor, item, 0);
     drop(connection);
     assert!(lyracore_test_support::poll_until(
@@ -448,14 +421,17 @@ fn transport_loss_discards_buyback_without_a_logout_request() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn item_guid_allocation_cannot_collide_with_buyback() {
     let (shard, mut connection, guid, vendor) = stage("buyback-guid-conflict");
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     sell(&mut connection, vendor, item, 0);
     let before = sold_rows(&shard, guid);
     let low = (item & ((1 << 47) - 1)) - 1;
     shard.assert_sql(&format!(
         "UPDATE game_guid_allocator SET high_water = {low} WHERE id = 0"
     ));
-    let refusal = shard.call("debug_grant_item", &[&guid.to_string(), "5090050", "1"]);
+    let refusal = shard.call(
+        "debug_grant_item",
+        &[&guid.to_string(), &FIXTURE_BLADE.to_string(), "1"],
+    );
     assert!(!refusal.status.success());
     assert!(
         String::from_utf8_lossy(&refusal.stderr).contains("ITEM_GUID_CONFLICT"),
@@ -477,14 +453,14 @@ fn poison(shard: &Standalone, connection: &mut ReducerConnection, guid: u64, ite
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) VALUES ({spell}, 'Buyback poison', 0, 0, 0, 0, 0, 5, 0, 1, 0, 0, 0, 0, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, 0, 0)"
     ));
     shard.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, p0, p0_kind, p1, script_id, enters_combat, points_per_combo) VALUES ({}, {spell}, 0, {E_ENCHANT_ITEM_TEMPORARY}, 60, 0, 0.0, 0, {T_SELF}, 0.0, 0, 0, 0, 323, {P_ENCHANT_ID}, 0, 0, false, 0.0)", u64::from(spell) << 2
+        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, p0, p0_kind, p1, script_id, enters_combat, points_per_combo) VALUES ({}, {spell}, 0, {E_ENCHANT_ITEM_TEMPORARY}, 60, 0, 0.0, 0, {T_SELF}, 0.0, 0, 0, 0, 323, {P_ENCHANT_ID}, 0, 0, false, 0.0)", packed_spell_effect_id(spell, 0)
     ));
     shard.assert_sql("INSERT INTO game_item_enchantment (id,enchant_id,effect_index,kind,amount,spell_id,school_mask) VALUES (82688,323,0,1,0,0,0)");
     shard.assert_sql(&format!(
         "INSERT INTO game_spell_enchant_charges (spell_id, charges) VALUES ({spell}, 40)"
     ));
-    shard.assert_sql(&format!("UPDATE game_item_template SET spellid_1 = {spell}, spelltrigger_1 = 0 WHERE entry = 5090052"));
-    grant(shard, guid, 5090052, 1);
+    shard.assert_sql(&format!("UPDATE game_item_template SET spellid_1 = {spell}, spelltrigger_1 = 0 WHERE entry = {FIXTURE_JERKY}"));
+    grant(shard, guid, FIXTURE_JERKY, 1);
     shard.assert_call("debug_use_item_on_item", &[&guid.to_string(), "24", "23"]);
     for _ in 0..20 {
         if !shard
@@ -511,7 +487,7 @@ fn poison(shard: &Standalone, connection: &mut ReducerConnection, guid: u64, ite
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn temporary_enchantment_duration_pauses_in_buyback() {
     let (shard, mut connection, guid, vendor) = stage("buyback-enchantment");
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     poison(&shard, &mut connection, guid, item);
     sell(&mut connection, vendor, item, 0);
     assert!(shard
@@ -540,7 +516,7 @@ fn temporary_enchantment_duration_pauses_in_buyback() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn mail_cannot_detach_a_buyback_item() {
     let (shard, mut connection, guid, vendor) = stage("buyback-detach");
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     sell(&mut connection, vendor, item, 0);
     let before = sold_rows(&shard, guid);
     let actor = format!(r#"{{"guid":{guid},"ownership":null}}"#);
@@ -570,7 +546,7 @@ fn mail_cannot_detach_a_buyback_item() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn auction_cannot_list_a_buyback_item() {
     let (shard, mut connection, guid, vendor) = stage("buyback-auction");
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     sell(&mut connection, vendor, item, 0);
     let before = sold_rows(&shard, guid);
     shard.assert_sql(&format!(
@@ -601,7 +577,7 @@ fn auction_cannot_list_a_buyback_item() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn character_deletion_releases_buyback_items_and_letter_text() {
     let (shard, mut connection, guid, vendor) = stage("buyback-character-delete");
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     shard.assert_sql("INSERT INTO game_item_text (id,text,letters) VALUES (5090001,'Kept text',1)");
     shard.assert_sql(&format!(
         "UPDATE game_item_instance SET item_text_id = 5090001 WHERE guid = {item}"
@@ -618,7 +594,7 @@ fn character_deletion_releases_buyback_items_and_letter_text() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn login_discards_orphaned_buyback_without_any_previous_world_presence() {
     let (shard, mut connection, guid, vendor) = stage("buyback-orphaned-login");
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     sell(&mut connection, vendor, item, 0);
     shard.assert_sql(&format!(
         "DELETE FROM game_native_player WHERE character_guid = {guid}"
@@ -639,13 +615,20 @@ fn sessionless(name: &str) -> (Standalone, u64, u64) {
     let (shard, guid, _) = fixture(name);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
-    shard.assert_call("debug_spawn_at_feet", &[&guid.to_string(), "51004", "2.0"]);
-    shard.assert_sql("UPDATE game_item_template SET sell_price = 13 WHERE entry = 5090050");
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[&guid.to_string(), &SCENARIO_VENDOR_ENTRY.to_string(), "2.0"],
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET sell_price = 13 WHERE entry = {FIXTURE_BLADE}"
+    ));
     shard.assert_sql(&format!(
         "DELETE FROM game_item_instance WHERE owner_guid = {guid}"
     ));
     let vendor = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
@@ -680,12 +663,12 @@ fn freeze(shard: &Standalone, guid: u64, transfer: u64) -> String {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn transfer_without_a_world_session_carries_inventory_and_discards_buyback() {
     let (source, guid, vendor) = sessionless("buyback-transfer-source");
-    let sold = grant(&source, guid, 5090050, 1);
+    let sold = grant(&source, guid, FIXTURE_BLADE, 1);
     source.assert_call(
         "debug_sell_item",
         &[&guid.to_string(), &vendor.to_string(), "23"],
     );
-    let carried = grant(&source, guid, 5090052, 3);
+    let carried = grant(&source, guid, FIXTURE_JERKY, 3);
     assert!(source
         .query_rows("SELECT * FROM game_native_player")
         .is_empty());
@@ -763,21 +746,30 @@ fn transfer_refuses_an_incoming_inventory_guid_already_in_buyback() {
     destination.assert_sql(&format!(
         "DELETE FROM game_item_instance WHERE owner_guid = {other}"
     ));
-    destination.assert_call("debug_spawn_at_feet", &[&other.to_string(), "51004", "2.0"]);
+    destination.assert_call(
+        "debug_spawn_at_feet",
+        &[
+            &other.to_string(),
+            &SCENARIO_VENDOR_ENTRY.to_string(),
+            "2.0",
+        ],
+    );
     let vendor: u64 = destination
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
         .unwrap();
-    let sold = grant(&destination, other, 5090050, 1);
+    let sold = grant(&destination, other, FIXTURE_BLADE, 1);
     destination.assert_call(
         "debug_sell_item",
         &[&other.to_string(), &vendor.to_string(), "23"],
     );
     let before = sold_rows(&destination, other);
     let (source, guid, _) = sessionless("buyback-import-source");
-    let carried = grant(&source, guid, 5090052, 3);
+    let carried = grant(&source, guid, FIXTURE_JERKY, 3);
     source.assert_sql(&format!(
         "UPDATE game_item_instance SET guid = {sold} WHERE guid = {carried}"
     ));
@@ -814,14 +806,19 @@ fn package_teardown_clears_sessionless_buyback_while_keeping_the_character() {
     shard.assert_sql(&format!(
         "DELETE FROM game_item_instance WHERE owner_guid = {guid}"
     ));
-    shard.assert_call("debug_spawn_at_feet", &[&guid.to_string(), "51004", "2.0"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[&guid.to_string(), &SCENARIO_VENDOR_ENTRY.to_string(), "2.0"],
+    );
     let vendor: u64 = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
         .unwrap();
-    grant(&shard, guid, 5090050, 1);
+    grant(&shard, guid, FIXTURE_BLADE, 1);
     shard.assert_call(
         "debug_sell_item",
         &[&guid.to_string(), &vendor.to_string(), "23"],
@@ -841,7 +838,7 @@ fn package_teardown_clears_sessionless_buyback_while_keeping_the_character() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn trade_cannot_offer_a_buyback_item() {
     let (shard, mut connection, guid, vendor) = stage("buyback-trade");
-    let item = grant(&shard, guid, 5090050, 1);
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     sell(&mut connection, vendor, item, 0);
     let before = sold_rows(&shard, guid);
     let account = shard.query_rows("SELECT id FROM game_account WHERE username = 'CONFORMANCE'")[0]
@@ -894,14 +891,19 @@ fn package_teardown_also_clears_buyback_after_sessionless_presence_is_lost() {
     shard.assert_sql(&format!(
         "DELETE FROM game_item_instance WHERE owner_guid = {guid}"
     ));
-    shard.assert_call("debug_spawn_at_feet", &[&guid.to_string(), "51004", "2.0"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[&guid.to_string(), &SCENARIO_VENDOR_ENTRY.to_string(), "2.0"],
+    );
     let vendor: u64 = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
         .unwrap();
-    grant(&shard, guid, 5090050, 1);
+    grant(&shard, guid, FIXTURE_BLADE, 1);
     shard.assert_call(
         "debug_sell_item",
         &[&guid.to_string(), &vendor.to_string(), "23"],
@@ -919,17 +921,17 @@ fn publish_repair_ends_legacy_world_sessions_before_buyback_resumes() {
     use lyracore_protocol::codec;
 
     let (mut shard, mut connection, guid, vendor) = stage("buyback-legacy");
-    let inventory = grant(&shard, guid, 5090050, 1);
+    let inventory = grant(&shard, guid, FIXTURE_BLADE, 1);
     shard.assert_sql(&format!(
         "DELETE FROM game_buyback_state WHERE character_guid = {guid}"
     ));
-    shard.assert_sql(&format!("INSERT INTO game_character_buyback (id,player_guid,item_entry,stack_count,price,soulbound,random_property_id) VALUES (5090001,{guid},5090050,1,13,false,0)"));
+    shard.assert_sql(&format!("INSERT INTO game_character_buyback (id,player_guid,item_entry,stack_count,price,soulbound,random_property_id) VALUES (5090001,{guid},{FIXTURE_BLADE},1,13,false,0)"));
     let synthetic = 0x4090_0000_0000_0000;
     let create = lyracore_protocol::world::encode(
         lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
             Box::new(codec::build_item_create_object(&codec::ItemInstanceView {
                 guid: synthetic,
-                entry: 5090050,
+                entry: FIXTURE_BLADE,
                 owner_guid: guid,
                 slot: 69,
                 stack_count: 1,
@@ -998,8 +1000,8 @@ fn publish_repair_ends_legacy_world_sessions_before_buyback_resumes() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn selling_equipped_gear_relays_client_armor_and_every_resistance() {
     let (shard, mut connection, guid, vendor) = stage("buyback-equipped-resistances");
-    shard.assert_sql("UPDATE game_item_template SET stat_armor = 100, holy_res = 11, fire_res = 12, nature_res = 13, frost_res = 14, shadow_res = 15, arcane_res = 16 WHERE entry = 5090050");
-    let item = grant(&shard, guid, 5090050, 1);
+    shard.assert_sql(&format!("UPDATE game_item_template SET stat_armor = 100, holy_res = 11, fire_res = 12, nature_res = 13, frost_res = 14, shadow_res = 15, arcane_res = 16 WHERE entry = {FIXTURE_BLADE}"));
+    let item = grant(&shard, guid, FIXTURE_BLADE, 1);
     let base: u32 = shard.query_rows(&format!(
         "SELECT armor FROM game_world_entity WHERE guid = {guid}"
     ))[0]["armor"]
@@ -1036,7 +1038,9 @@ fn selling_equipped_gear_relays_client_armor_and_every_resistance() {
 fn selling_a_guild_charter_preserves_its_petition_for_buyback() {
     let (shard, mut connection, guid, vendor) = stage("buyback-charter");
     let mut template = shard
-        .query_rows("SELECT * FROM game_item_template WHERE entry = 5090050")
+        .query_rows(&format!(
+            "SELECT * FROM game_item_template WHERE entry = {FIXTURE_BLADE}"
+        ))
         .remove(0);
     template.insert("entry".into(), "5863".into());
     template.insert("name".into(), "Guild Charter".into());
@@ -1095,11 +1099,11 @@ fn selling_a_guild_charter_preserves_its_petition_for_buyback() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn buyback_merging_keeps_the_destination_property_and_binding() {
     let (shard, mut connection, guid, vendor) = stage("buyback-merge-state");
-    let destination = grant(&shard, guid, 5090052, 2);
+    let destination = grant(&shard, guid, FIXTURE_JERKY, 2);
     shard.assert_sql(&format!(
         "UPDATE game_item_instance SET random_property_id = 1 WHERE guid = {destination}"
     ));
-    let sold = grant(&shard, guid, 5090052, 2);
+    let sold = grant(&shard, guid, FIXTURE_JERKY, 2);
     shard.assert_sql(&format!("UPDATE game_item_instance SET random_property_id = 2, soulbound = true WHERE guid = {sold}"));
     sell(&mut connection, vendor, sold, 0);
     buyback(&mut connection, vendor, 69);
@@ -1115,11 +1119,13 @@ fn buyback_merging_keeps_the_destination_property_and_binding() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn buyback_price_is_the_sale_payment_even_after_the_template_price_changes() {
     let (shard, mut connection, guid, vendor) = stage("buyback-price");
-    let item = grant(&shard, guid, 5090052, 2);
+    let item = grant(&shard, guid, FIXTURE_JERKY, 2);
     let sold = sell(&mut connection, vendor, item, 0);
     assert_eq!(values(&sold, guid)[&1226], 4);
     assert_eq!(money(&shard, guid), "50004");
-    shard.assert_sql("UPDATE game_item_template SET sell_price = 999 WHERE entry = 5090052");
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET sell_price = 999 WHERE entry = {FIXTURE_JERKY}"
+    ));
     let returned = buyback(&mut connection, vendor, 69);
     assert_eq!(money(&shard, guid), "50000");
     assert_eq!(values(&returned, guid)[&1226], 0);
@@ -1179,10 +1185,10 @@ fn a_letter_grant_retry_cannot_duplicate_a_copy_in_buyback() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_nonempty_equipped_bag_cannot_be_sold_into_buyback() {
     let (shard, mut connection, guid, vendor) = stage("buyback-filled-bag");
-    shard.assert_sql("UPDATE game_item_template SET class = 1, subclass = 0, inventory_type = 18, container_slots = 4, max_durability = 0 WHERE entry = 5090050");
-    let bag = grant(&shard, guid, 5090050, 1);
+    shard.assert_sql(&format!("UPDATE game_item_template SET class = 1, subclass = 0, inventory_type = 18, container_slots = 4, max_durability = 0 WHERE entry = {FIXTURE_BLADE}"));
+    let bag = grant(&shard, guid, FIXTURE_BLADE, 1);
     shard.assert_call("debug_move_item", &[&guid.to_string(), "23", "19"]);
-    grant(&shard, guid, 5090052, 1);
+    grant(&shard, guid, FIXTURE_JERKY, 1);
     shard.assert_call("debug_move_item", &[&guid.to_string(), "23", "120"]);
     let inventory = shard.query_rows(&format!(
         "SELECT * FROM game_item_instance WHERE owner_guid = {guid}"
@@ -1211,10 +1217,10 @@ fn selling_from_an_equipped_bag_clears_the_container_link_and_keeps_identity() {
     use wire_client::runner::Transport;
 
     let (shard, _connection, guid, vendor) = stage("buyback-bag-sale");
-    shard.assert_sql("UPDATE game_item_template SET class = 1, subclass = 0, inventory_type = 18, container_slots = 4, max_durability = 0 WHERE entry = 5090050");
-    let bag = grant(&shard, guid, 5090050, 1);
+    shard.assert_sql(&format!("UPDATE game_item_template SET class = 1, subclass = 0, inventory_type = 18, container_slots = 4, max_durability = 0 WHERE entry = {FIXTURE_BLADE}"));
+    let bag = grant(&shard, guid, FIXTURE_BLADE, 1);
     shard.assert_call("debug_move_item", &[&guid.to_string(), "23", "19"]);
-    let item = grant(&shard, guid, 5090052, 1);
+    let item = grant(&shard, guid, FIXTURE_JERKY, 1);
     shard.assert_call("debug_move_item", &[&guid.to_string(), "23", "120"]);
     let mut transport = OperatorTransport::connect(&shard, guid, BTreeMap::new()).unwrap();
     let opening = &transport.batches().last().unwrap().projections;

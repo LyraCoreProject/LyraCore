@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use support::Standalone;
 
 fn chances(shard: &Standalone, attacker: &str, target: &str) -> [u32; 5] {
@@ -30,9 +31,13 @@ fn white_melee_chances_follow_catalogue_skills_and_defender_eligibility() {
     shard.assert_sql("UPDATE game_world_entity SET simulation_indexed = false, level = 60, agility = 100, x = 0, y = 0, orientation = 0 WHERE guid = 1");
     shard.assert_call("debug_set_skill", &["1", "162", "300"]);
     shard.assert_call("debug_set_skill", &["1", "95", "300"]);
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "2"]);
-    let target = shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")[0]
-        ["guid"]
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "2"],
+    );
+    let target = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ))[0]["guid"]
         .clone();
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET simulation_indexed = false, level = 60, agility = 0, x = 2, y = 0, orientation = 3.1415927 WHERE guid = {target}"
@@ -49,10 +54,10 @@ fn white_melee_chances_follow_catalogue_skills_and_defender_eligibility() {
     assert_eq!(chances(&shard, "1", &target), [900, 700, 1700, 500, 80]);
     shard.assert_call("debug_set_skill", &["1", "162", "300"]);
     assert_eq!(sheet_crit(&shard), "500");
-    shard.assert_sql("INSERT INTO game_creature_defense (entry,no_parry,no_block,no_defense) VALUES (51000,true,true,false)");
+    shard.assert_sql(&format!("INSERT INTO game_creature_defense (entry,no_parry,no_block,no_defense) VALUES ({TEST_WOLF_ENTRY},true,true,false)"));
     assert_eq!(chances(&shard, "1", &target), [800, 650, 0, 0, 200]);
     shard.assert_sql(
-        "UPDATE game_creature_defense SET no_parry = false, no_block = false WHERE entry = 51000",
+        &format!("UPDATE game_creature_defense SET no_parry = false, no_block = false WHERE entry = {TEST_WOLF_ENTRY}"),
     );
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET orientation = 0 WHERE guid = {target}"
@@ -61,12 +66,20 @@ fn white_melee_chances_follow_catalogue_skills_and_defender_eligibility() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET orientation = 3.1415927 WHERE guid = {target}"
     ));
-    shard.assert_sql("UPDATE game_creature_template SET creature_type = 11 WHERE entry = 51000");
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_template SET creature_type = 11 WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
     assert_eq!(chances(&shard, "1", &target)[3], 0);
-    shard.assert_sql("UPDATE game_creature_template SET creature_type = 1 WHERE entry = 51000");
-    shard.assert_sql("UPDATE game_creature_defense SET no_defense = true WHERE entry = 51000");
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_template SET creature_type = 1 WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_defense SET no_defense = true WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
     assert_eq!(chances(&shard, "1", &target)[0], 0);
-    shard.assert_sql("UPDATE game_creature_defense SET no_defense = false WHERE entry = 51000");
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_defense SET no_defense = false WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
     shard.assert_sql("INSERT INTO game_crit_per_agility (class_level,class,level,rate) VALUES (2108,8,60,19.4553)");
     shard.assert_sql("UPDATE game_world_entity SET unit_bytes_0 = 2049 WHERE guid = 1");
     shard.assert_call("debug_set_skill", &["1", "162", "300"]);

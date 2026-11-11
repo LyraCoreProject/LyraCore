@@ -13,6 +13,7 @@ pub use contract::ROOTS;
 pub use paths::UnsupportedSyntax;
 use source::{collect_rs_files, file_gate, strip_source};
 
+pub const VERSION: u32 = 5;
 const PACKAGE_API_EXEMPT: &str = "// package-api: exempt";
 
 #[derive(Debug, PartialEq, Eq)]
@@ -51,8 +52,8 @@ impl fmt::Display for Diagnostic {
             Finding::Outside { path, replacement } => {
                 write!(
                     f,
-                    "Package `{package}` names `{path}` at {at}, outside Package API version 4 \
-                     (docs/package-api.md). "
+                    "Package `{package}` names `{path}` at {at}, outside Package API version \
+                     {VERSION} (docs/package-api.md). "
                 )?;
                 match replacement {
                     Some(replacement) => write!(f, "Use `{replacement}`."),

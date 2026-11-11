@@ -8,6 +8,8 @@ use lyracore_shared::spell::taxonomy::{
 
 use std::collections::BTreeMap;
 
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
+use lyracore_package_delta::packed_spell_effect_id;
 use support::{
     event_rows, fence_subscription, poll_until, subscribe_with_fence, Standalone,
     TableSubscription, POLL_TIMEOUT,
@@ -16,9 +18,7 @@ use support::{
 type SqlRow = BTreeMap<String, String>;
 
 const PLAYER: u64 = 1;
-const TEST_WOLF_ENTRY: u32 = 51000;
 const WOLF_HEALTH: u32 = 100_000;
-const FIXTURE_BLADE: u32 = 5_090_050;
 const SINISTER_STRIKE: u32 = 1752;
 const THUNDERFURY_PROC: u32 = 21992;
 const CHANCE_ON_HIT: u8 = 2;
@@ -299,7 +299,7 @@ fn stage_spell(
          p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({}, {spell_id}, 0, {kind}, 5, 0, 0.0, 0, {target}, \
          0.0, 0, 0, 0, {p0}, {p0_kind}, 0, 0, false, 0.0)",
-        (spell_id as u64) << 2
+        packed_spell_effect_id(spell_id, 0)
     ));
 }
 

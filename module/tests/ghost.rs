@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{SCENARIO_VENDOR_ENTRY, TEST_WOLF_ENTRY};
 use lyracore_shared::constants::{player_flags, unit_vis_flags};
 use lyracore_shared::spell::taxonomy::*;
 use support::{actor, number, Row, Standalone};
@@ -15,7 +16,7 @@ fn fixture(name: &str, race: u8) -> Standalone {
     ));
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_sql(
-        "UPDATE game_creature_template SET entry = 12861, display_id = 1825 WHERE entry = 51000",
+        &format!("UPDATE game_creature_template SET entry = 12861, display_id = 1825 WHERE entry = {TEST_WOLF_ENTRY}"),
     );
     for (spell, effects) in [
         (
@@ -334,7 +335,7 @@ fn accepting_resurrection_restores_native_form() {
 }
 
 const SPIRIT_HEALER_OPTION: u32 = 509_6740;
-const SPIRIT_HEALER_ENTRY: u32 = 51004;
+const SPIRIT_HEALER_ENTRY: u32 = SCENARIO_VENDOR_ENTRY;
 const RESURRECTION_SICKNESS: u32 = 15007;
 const BLADE: &str = "5090050";
 

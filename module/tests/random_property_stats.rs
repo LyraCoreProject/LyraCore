@@ -2,6 +2,7 @@ mod support;
 
 use std::collections::BTreeMap;
 
+use lyracore_package_delta::fixture_ids::{BATTERED_BUCKLER, TEST_WOLF_ENTRY};
 use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 const ITEM: &str = "5090050";
@@ -134,9 +135,14 @@ fn direct_pools_and_regeneration_follow_working_equipment() {
         "flat mana regeneration stopped during the five-second rule"
     );
 
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "1"],
+    );
     let wolf = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000 AND dead = false")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY} AND dead = false"
+        ))
         .pop()
         .unwrap()["guid"]
         .clone();
@@ -171,11 +177,16 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
         ],
     );
     shard.assert_sql(&format!(
-        "UPDATE game_item_template SET random_property = {POOL}, stat_armor = 920, holy_res = 1, fire_res = 2, nature_res = 3, frost_res = 4, shadow_res = 5, arcane_res = 6 WHERE entry = 50053"
+        "UPDATE game_item_template SET random_property = {POOL}, stat_armor = 920, holy_res = 1, fire_res = 2, nature_res = 3, frost_res = 4, shadow_res = 5, arcane_res = 6 WHERE entry = {BATTERED_BUCKLER}"
     ));
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "1"],
+    );
     let wolf = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000 AND dead = false")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY} AND dead = false"
+        ))
         .pop()
         .unwrap()["guid"]
         .clone();
@@ -185,7 +196,7 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
     let bare = readout(&shard, "swing");
     shard.assert_call("debug_compute_swing", &["1", "1"]);
     let bare_pvp = readout(&shard, "swing");
-    shard.assert_call("debug_equip_offhand", &["1", "50053"]);
+    shard.assert_call("debug_equip_offhand", &["1", &BATTERED_BUCKLER.to_string()]);
     shard.assert_call("debug_compute_swing", &[&wolf, "1"]);
     let equipped = readout(&shard, "swing");
     assert_eq!(
@@ -283,9 +294,14 @@ fn spell_power_selects_school_and_healing_power_only_affects_heals() {
     shard.assert_sql(&format!(
         "UPDATE game_item_template SET random_property = {POOL} WHERE entry = {ITEM}"
     ));
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "1"],
+    );
     let wolf = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000 AND dead = false")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY} AND dead = false"
+        ))
         .pop()
         .unwrap()["guid"]
         .clone();
@@ -344,9 +360,14 @@ fn weapon_damage_uses_the_selected_main_off_and_ranged_item() {
     ));
     shard.assert_sql("UPDATE game_world_entity SET strength = 0, agility = 0 WHERE guid = 1");
     shard.assert_call("debug_equip_weapon", &["1", ITEM]);
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "1"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "1"],
+    );
     let wolf = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000 AND dead = false")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY} AND dead = false"
+        ))
         .pop()
         .unwrap()["guid"]
         .clone();

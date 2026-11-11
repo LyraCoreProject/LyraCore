@@ -8,6 +8,7 @@ use lyracore_test_support::{poll_until, ReducerConnection, Standalone};
 use wire_client::decode::Field;
 
 use super::{decoded_taxi_entry_packets, enter, fixture};
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 
 fn starting_passives(shard: &Standalone) {
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
@@ -160,14 +161,16 @@ fn login_delivers_sheet_stats_in_create() {
 fn passive_area_and_totem_auras_keep_their_visible_slots() {
     let (shard, character, _) = fixture("native-area-passive-visibility");
     starting_passives(&shard);
-    shard.assert_sql(&format!("UPDATE game_creature_template SET creature_type = {TOTEM_TYPE}, faction_template = 1 WHERE entry = 51000"));
+    shard.assert_sql(&format!("UPDATE game_creature_template SET creature_type = {TOTEM_TYPE}, faction_template = 1 WHERE entry = {TEST_WOLF_ENTRY}"));
     let _connection = enter(&shard, character);
     shard.assert_call(
         "debug_spawn_at_feet",
-        &[&character.to_string(), "51000", "2"],
+        &[&character.to_string(), &TEST_WOLF_ENTRY.to_string(), "2"],
     );
     let totem = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()

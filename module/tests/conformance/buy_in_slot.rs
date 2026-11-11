@@ -2,9 +2,13 @@ use lyracore_test_support::{ReducerConnection, Standalone};
 use serde_json::json;
 
 use super::{enter, fixture, Packet};
+use lyracore_package_delta::fixture_ids::{
+    FIXTURE_BLADE, FIXTURE_JERKY, FIXTURE_REINS, PROFESSION_TRAINER_ENTRY, SCENARIO_QUEST,
+    SCENARIO_VENDOR_ENTRY, TEST_POWER_WORD_SHIELD_SPELL,
+};
 
-const THREAD: u32 = 5090052;
-const ARMOR: u32 = 5090050;
+const THREAD: u32 = FIXTURE_JERKY;
+const ARMOR: u32 = FIXTURE_BLADE;
 
 pub(super) fn stage(name: &str) -> (Standalone, ReducerConnection, u64, u64) {
     stage_in(fixture(name))
@@ -16,9 +20,14 @@ fn stage_in(
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
-    shard.assert_call("debug_spawn_at_feet", &[&guid.to_string(), "51004", "2.0"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[&guid.to_string(), &SCENARIO_VENDOR_ENTRY.to_string(), "2.0"],
+    );
     let vendor = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
@@ -66,6 +75,10 @@ pub(super) fn request(
             .call("native_world_reply", json!([replies]))
             .unwrap();
     }
+    delivered(connection)
+}
+
+pub(super) fn delivered(connection: &mut ReducerConnection) -> Vec<(u16, Vec<u8>)> {
     connection
         .drain_packets()
         .into_iter()
@@ -113,7 +126,7 @@ pub(super) fn inventory(
     ))
 }
 
-fn money(shard: &Standalone, guid: u64) -> String {
+pub(super) fn money(shard: &Standalone, guid: u64) -> String {
     shard.query_rows(&format!(
         "SELECT money FROM game_world_entity WHERE guid = {guid}"
     ))[0]["money"]
@@ -512,8 +525,8 @@ fn review_two_hander_cannot_store_a_shield_in_a_quiver() {
     shard.assert_sql(&format!("UPDATE game_item_template SET class = 2, subclass = 1, inventory_type = 17, required_level = 1, max_stack = 1 WHERE entry = {ARMOR}"));
     shard.assert_call("debug_learn_spell", &[&guid.to_string(), "197"]);
     shard.assert_sql(&format!("UPDATE game_item_template SET class = 4, subclass = 6, inventory_type = 14, max_stack = 1 WHERE entry = {THREAD}"));
-    shard.assert_sql("UPDATE game_item_template SET class = 11, subclass = 2, inventory_type = 18, container_slots = 4 WHERE entry = 5090054");
-    grant(&shard, guid, 5090054, 1, 19);
+    shard.assert_sql(&format!("UPDATE game_item_template SET class = 11, subclass = 2, inventory_type = 18, container_slots = 4 WHERE entry = {FIXTURE_REINS}"));
+    grant(&shard, guid, FIXTURE_REINS, 1, 19);
     let shield = grant(&shard, guid, THREAD, 1, 16);
     for slot in 23..39 {
         grant(&shard, guid, ARMOR, 1, slot);
@@ -522,7 +535,9 @@ fn review_two_hander_cannot_store_a_shield_in_a_quiver() {
     refusal(&buy(&mut connection, vendor, ARMOR, guid, 15, 1), 50);
     assert_eq!(inventory(&shard, guid), before);
     assert_eq!(money(&shard, guid), "50000");
-    shard.assert_sql("UPDATE game_item_template SET class = 1, subclass = 0 WHERE entry = 5090054");
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET class = 1, subclass = 0 WHERE entry = {FIXTURE_REINS}"
+    ));
     buy(&mut connection, vendor, ARMOR, guid, 15, 1);
     assert!(inventory(&shard, guid)
         .iter()
@@ -534,7 +549,10 @@ fn review_two_hander_cannot_store_a_shield_in_a_quiver() {
 fn review_quest_toast_precedes_item_updates_and_one_total_receipt() {
     let (shard, mut connection, guid, vendor) = stage("purchase-quest-order");
     shard.assert_sql(&format!("UPDATE game_quest_objective SET kind = 1, target_entry = {THREAD}, required_count = 20 WHERE id = 5090000"));
-    shard.assert_call("debug_grant_quest", &[&guid.to_string(), "50900"]);
+    shard.assert_call(
+        "debug_grant_quest",
+        &[&guid.to_string(), &SCENARIO_QUEST.to_string()],
+    );
     grant(&shard, guid, THREAD, 19, 30);
     let packets = buy(&mut connection, vendor, THREAD, guid, 30, 3);
     let toast = packets
@@ -660,7 +678,7 @@ fn equipment_purchase_shares_ordinary_equip_auras_and_cooldowns() {
             .is_empty();
         let cooldown = !shard
             .query_rows(&format!(
-                "SELECT * FROM game_spell_cd WHERE caster_guid = {guid} AND spell_id = 50072"
+                "SELECT * FROM game_spell_cd WHERE caster_guid = {guid} AND spell_id = {TEST_POWER_WORD_SHIELD_SPELL}"
             ))
             .is_empty();
         (
@@ -670,7 +688,7 @@ fn equipment_purchase_shares_ordinary_equip_auras_and_cooldowns() {
         )
     }
     let (shard, mut connection, guid, vendor) = stage("purchase-shared-equip-effects");
-    shard.assert_sql(&format!("UPDATE game_item_template SET class = 4, subclass = 1, inventory_type = 1, required_level = 1, spellid_1 = 168, spelltrigger_1 = 1, spellid_2 = 50072, spelltrigger_2 = 0 WHERE entry = {ARMOR}"));
+    shard.assert_sql(&format!("UPDATE game_item_template SET class = 4, subclass = 1, inventory_type = 1, required_level = 1, spellid_1 = 168, spelltrigger_1 = 1, spellid_2 = {TEST_POWER_WORD_SHIELD_SPELL}, spelltrigger_2 = 0 WHERE entry = {ARMOR}"));
     grant(&shard, guid, ARMOR, 1, 23);
     let packets = request(&mut connection, 0x10a, vec![255, 23]);
     assert_eq!(inventory(&shard, guid)[0]["slot"], "0");
@@ -898,9 +916,14 @@ fn vendor_stock_is_per_spawn_and_only_a_new_runtime_resets_it() {
     stock_offer(&shard);
     shard.assert_call("native_vendor_stock_runtime", &["123"]);
     ordinary_buy(&mut connection, vendor, 3);
-    shard.assert_call("debug_spawn_at_feet", &[&guid.to_string(), "51004", "2.0"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[&guid.to_string(), &SCENARIO_VENDOR_ENTRY.to_string(), "2.0"],
+    );
     let other: u64 = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51004")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
@@ -1039,11 +1062,20 @@ fn vendor_stock_a_changed_entry_keeps_the_source_spawns_counter() {
     ordinary_buy(&mut connection, vendor, 3);
     let vendor_flag = lyracore_shared::constants::npc_flags::VENDOR;
     shard.assert_sql(&format!(
-        "UPDATE game_creature_template SET npc_flags = {vendor_flag} WHERE entry = 51001"
+        "UPDATE game_creature_template SET npc_flags = {vendor_flag} WHERE entry = {PROFESSION_TRAINER_ENTRY}"
     ));
-    shard.assert_call("debug_spawn_at_feet", &[&guid.to_string(), "51001", "2.0"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[
+            &guid.to_string(),
+            &PROFESSION_TRAINER_ENTRY.to_string(),
+            "2.0",
+        ],
+    );
     let replacement: u64 = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51001")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {PROFESSION_TRAINER_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
@@ -1054,7 +1086,7 @@ fn vendor_stock_a_changed_entry_keeps_the_source_spawns_counter() {
     shard.assert_sql(&format!(
         "DELETE FROM game_world_entity WHERE guid = {vendor}"
     ));
-    shard.assert_sql(&format!("INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count,restock_seconds,stock_flags) VALUES (99999999,51001,{THREAD},0,10,10,0)"));
+    shard.assert_sql(&format!("INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count,restock_seconds,stock_flags) VALUES (99999999,{PROFESSION_TRAINER_ENTRY},{THREAD},0,10,10,0)"));
     assert_eq!(listed_stock(&mut connection, replacement), 4);
     stock_ack(&ordinary_buy(&mut connection, replacement, 1), 2);
 }

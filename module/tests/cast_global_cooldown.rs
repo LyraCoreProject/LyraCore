@@ -1,12 +1,14 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_shared::guid;
 use spacetimedb::Timestamp;
 use support::{
     event_rows, fence_subscription, poll_until, subscribe_with_fence, wait_for_event_rows, Row,
     Standalone, TableSubscription, POLL_TIMEOUT,
 };
 
-const WOLF: u64 = (0xF130_u64 << 48) | (51000_u64 << 24) | 1;
+const WOLF: u64 = guid::creature(TEST_WOLF_ENTRY, 1);
 const ACTOR: &str = r#"{"guid":1,"ownership":null}"#;
 
 #[test]

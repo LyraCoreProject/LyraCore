@@ -6,6 +6,7 @@ use lyracore_shared::spell::taxonomy::{
 
 use std::collections::BTreeMap;
 
+use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::constants::{player_flags, unit_flags, unit_vis_flags};
 use serde_json::{json, value::RawValue};
 use support::{ReducerConnection, Standalone};
@@ -625,7 +626,7 @@ fn insert_effect(
     p0: i32,
     p0_kind: u32,
 ) {
-    let id = (spell_id as u64) << 2;
+    let id = packed_spell_effect_id(spell_id, 0);
     standalone.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \

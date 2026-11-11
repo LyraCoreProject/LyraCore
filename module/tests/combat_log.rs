@@ -6,13 +6,16 @@ use lyracore_shared::spell::taxonomy::{
     A_PERIODIC_DAMAGE, E_DAMAGE, E_ENERGIZE, T_SELF, T_TARGET_ENEMY,
 };
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_shared::guid;
 use support::{
     event_rows, fence_subscription, number, poll_until, subscribe_with_fence, wait_for_event_rows,
     Row, Standalone, TableSubscription, POLL_TIMEOUT,
 };
 
 const CHARACTER: u64 = 1;
-const WOLF: u64 = (0xF130_u64 << 48) | (51_000_u64 << 24) | 1;
+const WOLF: u64 = guid::creature(TEST_WOLF_ENTRY, 1);
 /// `SpellCastEventKind::PeriodicLog`.
 const PERIODIC_LOG: u8 = 6;
 /// `debug_fill_aura_slots` spell ids: `9_000_000 + slot`; debuff slots start at 32.
@@ -144,7 +147,7 @@ fn a_direct_energize_records_the_power_given_on_the_go() {
          p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({}, {SELF_ENERGIZE}, 0, {E_ENERGIZE}, 9, 0, 0.0, 0, {T_SELF}, 0.0, 0, 0, 0, \
          0, 0, 0, 0, false, 0.0)",
-        (SELF_ENERGIZE as u64) << 2
+        packed_spell_effect_id(SELF_ENERGIZE, 0)
     ));
     standalone.assert_sql(&format!(
         "UPDATE game_world_entity SET simulation_indexed = false, power = 0, max_power = 100 WHERE guid = {CHARACTER}"
@@ -207,10 +210,12 @@ fn a_resisted_spell_lands_none_of_its_effects_and_reports_the_resist() {
     standalone.assert_call("debug_spawn_player_entity", &[&CHARACTER.to_string()]);
     standalone.assert_call(
         "debug_spawn_at_feet",
-        &[&CHARACTER.to_string(), "51000", "5.0"],
+        &[&CHARACTER.to_string(), &TEST_WOLF_ENTRY.to_string(), "5.0"],
     );
     let wolf = standalone
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
         .iter()
         .map(|row| number::<u64>(row, "guid"))
         .max()
@@ -231,14 +236,14 @@ fn a_resisted_spell_lands_none_of_its_effects_and_reports_the_resist() {
          VALUES ({FIRE_WITH_DOT}, 'Fixture Fire', 0, 0, 0, 0, 0, 30, 12000, 4, 0, 0, 0, 0, 0, 0, \
          0, true, 0, 0, 0, 0, 0, 0, 0, 0)"
     ));
-    for (index, kind, period_ms) in [(0u64, E_DAMAGE, 0), (1, A_PERIODIC_DAMAGE, 3000)] {
+    for (index, kind, period_ms) in [(0u8, E_DAMAGE, 0), (1, A_PERIODIC_DAMAGE, 3000)] {
         standalone.assert_sql(&format!(
             "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, \
              die_sides, per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, \
              effect_mechanic, p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
              VALUES ({}, {FIRE_WITH_DOT}, {index}, {kind}, 9, 0, 0.0, {period_ms}, \
              {T_TARGET_ENEMY}, 0.0, 0, 0, 0, 0, 0, 0, 0, false, 0.0)",
-            ((FIRE_WITH_DOT as u64) << 2) | index
+            packed_spell_effect_id(FIRE_WITH_DOT, index)
         ));
     }
 

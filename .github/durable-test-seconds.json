@@ -17,6 +17,7 @@
   "creature_advance_persist": 11,
   "creature_death_stop": 5,
   "creature_path_renewal": 3,
+  "creature_reaction": 11,
   "deadmines_package": 1,
   "death_durability_notice": 3,
   "diminishing_returns": 3,
@@ -109,8 +110,11 @@
   "session_expiry": 5,
   "sessionless_consent": 12,
   "simulation_activity": 13,
+  "spell_roll_inputs": 7,
   "stand_state": 3,
+  "starting_inventory": 3,
   "swing_error": 3,
+  "taxi_targeting": 6,
   "teleport_motion": 4,
   "temporary_enchantment": 5,
   "trainer_professions": 7,
@@ -121,6 +125,7 @@
   "weapon_proficiency": 4,
   "weapon_strike": 3,
   "weather": 3,
+  "white_melee": 6,
   "xp_cap": 3,
   "zone_transition": 3
 }

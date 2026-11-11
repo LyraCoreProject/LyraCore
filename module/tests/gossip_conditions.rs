@@ -1,13 +1,14 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{
+    FIXTURE_BLADE, SCENARIO_QUEST, SCENARIO_QUESTGIVER_ENTRY, SCENARIO_VENDOR_ENTRY,
+};
 use lyracore_shared::constants::{gossip_option, npc_flags};
 use lyracore_shared::gossip::ConditionKind;
 use support::Standalone;
 
 const OPTION: u32 = 509_9001;
 const CONDITION: u32 = 509_9001;
-const QUEST: u32 = 50_900;
-const VENDOR: u32 = 51_004;
 
 fn xp(shard: &Standalone) -> u32 {
     shard.query_rows("SELECT xp FROM game_world_entity WHERE guid = 1")[0]["xp"]
@@ -72,16 +73,19 @@ fn fixture(name: &str) -> (Standalone, String) {
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_sql(&format!(
-        "UPDATE game_quest_template SET repeatable = false WHERE entry = {QUEST}"
+        "UPDATE game_quest_template SET repeatable = false WHERE entry = {SCENARIO_QUEST}"
     ));
     shard.assert_call("debug_spawn_player_entity", &["1"]);
-    shard.assert_call("debug_spawn_at_feet", &["1", &VENDOR.to_string(), "2"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &SCENARIO_VENDOR_ENTRY.to_string(), "2"],
+    );
     let npc = shard.query_rows(&format!(
-        "SELECT guid FROM game_world_entity WHERE entry = {VENDOR}"
+        "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_VENDOR_ENTRY}"
     ))[0]["guid"]
         .clone();
-    shard.assert_sql(&format!("INSERT INTO game_gossip_option (row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({OPTION},{VENDOR},0,0,'Quest supplies',3,0,7,{CONDITION},0)"));
-    shard.assert_sql(&format!("INSERT INTO game_gossip_condition (condition_id,kind,value1,value2,value3,value4,flags) VALUES ({CONDITION},{},{QUEST},1,0,0,0)", ConditionKind::QuestTaken.code()));
+    shard.assert_sql(&format!("INSERT INTO game_gossip_option (row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({OPTION},{SCENARIO_VENDOR_ENTRY},0,0,'Quest supplies',3,0,7,{CONDITION},0)"));
+    shard.assert_sql(&format!("INSERT INTO game_gossip_condition (condition_id,kind,value1,value2,value3,value4,flags) VALUES ({CONDITION},{},{SCENARIO_QUEST},1,0,0,0)", ConditionKind::QuestTaken.code()));
     let artifact = serde_json::json!({
         "kind": "script", "version": 1, "package": "test_fixture.gossip",
         "source_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -102,7 +106,7 @@ fn imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction(
     let not = ConditionKind::Not.code();
     let (shard, npc) = fixture("gossip-conditions");
     select(&shard, &npc, OPTION, CONDITION_FAILS);
-    shard.assert_call("debug_grant_quest", &["1", &QUEST.to_string()]);
+    shard.assert_call("debug_grant_quest", &["1", &SCENARIO_QUEST.to_string()]);
     select(&shard, &npc, OPTION, ALLOWED);
     shard.assert_sql(&format!(
         "UPDATE game_gossip_condition SET value2 = 2 WHERE condition_id = {CONDITION}"
@@ -111,7 +115,7 @@ fn imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction(
     shard.assert_sql("UPDATE game_quest_objective SET required_count = 0 WHERE id = 5090000");
     select(&shard, &npc, OPTION, ALLOWED);
     shard.assert_sql(&format!(
-        "UPDATE game_character_quest SET rewarded = true WHERE quest_entry = {QUEST}"
+        "UPDATE game_character_quest SET rewarded = true WHERE quest_entry = {SCENARIO_QUEST}"
     ));
     select(&shard, &npc, OPTION, CONDITION_FAILS);
     shard.assert_sql(&format!(
@@ -120,11 +124,11 @@ fn imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction(
     select(&shard, &npc, OPTION, ALLOWED);
 
     shard.assert_sql(&format!(
-        "UPDATE game_gossip_option SET entry = 51003 WHERE row_id = {OPTION}"
+        "UPDATE game_gossip_option SET entry = {SCENARIO_QUESTGIVER_ENTRY} WHERE row_id = {OPTION}"
     ));
     select(&shard, &npc, OPTION, NOT_IN_MENU);
     shard.assert_sql(&format!(
-        "UPDATE game_gossip_option SET entry = {VENDOR} WHERE row_id = {OPTION}"
+        "UPDATE game_gossip_option SET entry = {SCENARIO_VENDOR_ENTRY} WHERE row_id = {OPTION}"
     ));
     select(&shard, &npc, OPTION + 1, NOT_IN_MENU);
     shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {not}, value1 = 5099002, value2 = 0 WHERE condition_id = {CONDITION}"));
@@ -233,20 +237,24 @@ fn a_menu_switch_refuses_colliding_rows_and_synthesized_options_before_the_hook(
 fn a_rewarded_repeatable_quest_is_neither_current_nor_rewarded_for_gossip() {
     let (shard, npc) = fixture("gossip-repeatable-quest");
     shard.assert_sql(&format!(
-        "UPDATE game_quest_template SET repeatable = true WHERE entry = {QUEST}"
+        "UPDATE game_quest_template SET repeatable = true WHERE entry = {SCENARIO_QUEST}"
     ));
-    shard.assert_call("debug_grant_quest", &["1", &QUEST.to_string()]);
+    shard.assert_call("debug_grant_quest", &["1", &SCENARIO_QUEST.to_string()]);
     shard.assert_sql("UPDATE game_quest_objective SET required_count = 0 WHERE id = 5090000");
-    shard.assert_call("debug_spawn_at_feet", &["1", "51003", "2"]);
-    let giver =
-        &shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51003")[0]["guid"];
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &SCENARIO_QUESTGIVER_ENTRY.to_string(), "2"],
+    );
+    let giver = &shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_QUESTGIVER_ENTRY}"
+    ))[0]["guid"];
     shard.assert_call(
         "debug_turn_in_quest",
-        &["1", giver, &QUEST.to_string(), "0"],
+        &["1", giver, &SCENARIO_QUEST.to_string(), "0"],
     );
     assert_eq!(
         shard.query_rows(&format!(
-            "SELECT rewarded FROM game_character_quest WHERE quest_entry = {QUEST}"
+            "SELECT rewarded FROM game_character_quest WHERE quest_entry = {SCENARIO_QUEST}"
         ))[0]["rewarded"],
         "true"
     );
@@ -354,12 +362,14 @@ fn synthesized_services_require_current_capability_and_resolvable_stock() {
     ));
     select(&shard, &npc, u32::MAX, ALLOWED);
     shard.assert_sql(&format!(
-        "DELETE FROM game_npc_vendor WHERE creature_entry = {VENDOR}"
+        "DELETE FROM game_npc_vendor WHERE creature_entry = {SCENARIO_VENDOR_ENTRY}"
     ));
     select(&shard, &npc, u32::MAX, SERVICE_GONE);
-    shard.assert_sql(&format!("INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count,restock_seconds,stock_flags) VALUES (5099001,{VENDOR},5099999,0,0,0,0)"));
+    shard.assert_sql(&format!("INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count,restock_seconds,stock_flags) VALUES (5099001,{SCENARIO_VENDOR_ENTRY},5099999,0,0,0,0)"));
     select(&shard, &npc, u32::MAX, SERVICE_GONE);
-    shard.assert_sql("UPDATE game_npc_vendor SET item_entry = 5090050 WHERE id = 5099001");
+    shard.assert_sql(&format!(
+        "UPDATE game_npc_vendor SET item_entry = {FIXTURE_BLADE} WHERE id = 5099001"
+    ));
     select(&shard, &npc, u32::MAX, ALLOWED);
 
     shard.assert_sql(&format!(
@@ -395,7 +405,7 @@ fn authored_services_require_current_capability_before_the_hook() {
     const MENU: u32 = 509_9001;
     let (shard, npc) = fixture("gossip-authored-capability");
     shard.assert_sql(&format!(
-        "UPDATE game_creature_template SET trainer_type = 0, trainer_class = 1 WHERE entry = {VENDOR}"
+        "UPDATE game_creature_template SET trainer_type = 0, trainer_class = 1 WHERE entry = {SCENARIO_VENDOR_ENTRY}"
     ));
     shard.assert_sql("UPDATE game_world_entity SET level = 20 WHERE guid = 1");
     shard.assert_sql(&format!(
@@ -450,7 +460,7 @@ fn authored_services_require_current_capability_before_the_hook() {
         "UPDATE game_gossip_menu_profile_option SET action = 3 WHERE row_id = {OPTION}"
     ));
     shard.assert_sql(&format!(
-        "DELETE FROM game_npc_vendor WHERE creature_entry = {VENDOR}"
+        "DELETE FROM game_npc_vendor WHERE creature_entry = {SCENARIO_VENDOR_ENTRY}"
     ));
     select_from(
         &shard,
@@ -474,11 +484,11 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
         "UPDATE game_gossip_option SET action = 5, cond_type = 0 WHERE row_id = {OPTION}"
     ));
     shard.assert_sql(&format!(
-        "UPDATE game_creature_template SET trainer_type = 0, trainer_class = 1 WHERE entry = {VENDOR}"
+        "UPDATE game_creature_template SET trainer_type = 0, trainer_class = 1 WHERE entry = {SCENARIO_VENDOR_ENTRY}"
     ));
     select_from(&shard, &npc, OPTION, 0, gossip_option::TRAINER, ALLOWED);
     shard.assert_sql(&format!(
-        "UPDATE game_creature_template SET trainer_class = 8 WHERE entry = {VENDOR}"
+        "UPDATE game_creature_template SET trainer_class = 8 WHERE entry = {SCENARIO_VENDOR_ENTRY}"
     ));
     select_from(
         &shard,
@@ -501,7 +511,7 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
         SERVICE_GONE,
     );
     shard.assert_sql(&format!(
-        "UPDATE game_creature_template SET trainer_class = 1 WHERE entry = {VENDOR}"
+        "UPDATE game_creature_template SET trainer_class = 1 WHERE entry = {SCENARIO_VENDOR_ENTRY}"
     ));
     select_from(
         &shard,
@@ -513,7 +523,7 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
     );
     for trainer_type in [1, 2, 3] {
         shard.assert_sql(&format!(
-            "UPDATE game_creature_template SET trainer_type = {trainer_type} WHERE entry = {VENDOR}"
+            "UPDATE game_creature_template SET trainer_type = {trainer_type} WHERE entry = {SCENARIO_VENDOR_ENTRY}"
         ));
         select_from(
             &shard,
@@ -525,7 +535,7 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
         );
     }
     shard.assert_sql(&format!(
-        "UPDATE game_creature_template SET trainer_type = 0 WHERE entry = {VENDOR}"
+        "UPDATE game_creature_template SET trainer_type = 0 WHERE entry = {SCENARIO_VENDOR_ENTRY}"
     ));
     shard.assert_sql("UPDATE game_world_entity SET level = 9 WHERE guid = 1");
     select_from(
@@ -542,10 +552,10 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_missing_quest_subject_refuses_selection_even_with_retained_progress() {
     let (shard, npc) = fixture("gossip-missing-quest");
-    shard.assert_call("debug_grant_quest", &["1", &QUEST.to_string()]);
+    shard.assert_call("debug_grant_quest", &["1", &SCENARIO_QUEST.to_string()]);
     select(&shard, &npc, OPTION, ALLOWED);
     shard.assert_sql(&format!(
-        "DELETE FROM game_quest_template WHERE entry = {QUEST}"
+        "DELETE FROM game_quest_template WHERE entry = {SCENARIO_QUEST}"
     ));
     for kind in [
         ConditionKind::QuestRewarded,
@@ -564,7 +574,7 @@ fn a_missing_quest_subject_refuses_selection_even_with_retained_progress() {
         }
     }
     shard.assert_sql(&format!(
-        "DELETE FROM game_character_quest WHERE quest_entry = {QUEST}"
+        "DELETE FROM game_character_quest WHERE quest_entry = {SCENARIO_QUEST}"
     ));
     shard.assert_sql(&format!(
         "UPDATE game_gossip_condition SET flags = 0 WHERE condition_id = {CONDITION}"

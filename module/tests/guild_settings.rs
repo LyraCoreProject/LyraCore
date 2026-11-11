@@ -1,15 +1,11 @@
 mod support;
 
 use std::collections::BTreeMap;
-use support::Standalone;
+use support::{actor, guild_op_refused, Standalone};
 
 const GM: u64 = 5_091_001;
 const LOW_RANK: u64 = 5_091_002;
 const STRANGER: u64 = 5_091_003;
-
-fn actor(guid: u64) -> String {
-    format!(r#"{{"guid":{guid},"ownership":null}}"#)
-}
 
 fn gm_create(leader: u64, leader_name: &str, name: &str) -> String {
     format!(
@@ -42,19 +38,6 @@ fn add_rank(name: &str) -> String {
 }
 
 const DELETE_RANK: &str = r#"{"deleteRank":{}}"#;
-
-fn refused(realm: &Standalone, args: &[&str], tag: &str) {
-    let result = realm.call("realm_guild_op", args);
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        !result.status.success() && output.contains(tag),
-        "expected {tag}: {output}"
-    );
-}
 
 fn found(realm: &Standalone, name: &str) -> String {
     realm.assert_call(
@@ -118,14 +101,14 @@ fn motd_and_info_text_gate_on_rank_rights_and_length_caps() {
         "MOTD broadcasts one event"
     );
 
-    refused(
+    guild_op_refused(
         &realm,
         &[&actor(LOW_RANK), &set_motd("Nope")],
         "guild:no_permission",
     );
     assert_eq!(guild_row(&realm, &guild_id)["motd"], "Assemble!");
 
-    refused(
+    guild_op_refused(
         &realm,
         &[&actor(GM), &set_motd(&"x".repeat(129))],
         "guild:too_long",
@@ -146,12 +129,12 @@ fn motd_and_info_text_gate_on_rank_rights_and_length_caps() {
         "guild info text changes push no event of its own"
     );
 
-    refused(
+    guild_op_refused(
         &realm,
         &[&actor(LOW_RANK), &set_info("Nope")],
         "guild:no_permission",
     );
-    refused(
+    guild_op_refused(
         &realm,
         &[&actor(GM), &set_info(&"x".repeat(501))],
         "guild:too_long",
@@ -191,12 +174,12 @@ fn notes_gate_on_rank_rights_and_target_membership_and_answer_the_editor_with_a_
     );
     assert_eq!(event_count(&realm, &guild_id), 2);
 
-    refused(
+    guild_op_refused(
         &realm,
         &[&actor(LOW_RANK), &set_public_note(GM, "nope")],
         "guild:no_permission",
     );
-    refused(
+    guild_op_refused(
         &realm,
         &[&actor(LOW_RANK), &set_officer_note(GM, "nope")],
         "guild:no_permission",
@@ -204,13 +187,13 @@ fn notes_gate_on_rank_rights_and_target_membership_and_answer_the_editor_with_a_
     assert_eq!(member_row(&realm, GM)["public_note"], "");
     assert_eq!(member_row(&realm, GM)["officer_note"], "");
 
-    refused(
+    guild_op_refused(
         &realm,
         &[&actor(GM), &set_public_note(STRANGER, "nope")],
         "guild:target_not_in_guild",
     );
 
-    refused(
+    guild_op_refused(
         &realm,
         &[&actor(GM), &set_public_note(LOW_RANK, &"x".repeat(32))],
         "guild:too_long",
@@ -228,7 +211,7 @@ fn rank_edit_add_and_delete_respect_leadership_five_to_ten_bounds_and_move_membe
     let guild_id = found(&realm, "Tracer Guild");
     insert_member(&realm, &guild_id, LOW_RANK, 4, "Rookie");
 
-    refused(
+    guild_op_refused(
         &realm,
         &[&actor(LOW_RANK), &edit_rank(2, 0x43, "Veteran+")],
         "guild:not_leader",
@@ -274,7 +257,7 @@ fn rank_edit_add_and_delete_respect_leadership_five_to_ten_bounds_and_move_membe
         "an unknown rank id pushes no event"
     );
 
-    refused(
+    guild_op_refused(
         &realm,
         &[&actor(GM), &edit_rank(2, 0, &"x".repeat(16))],
         "guild:too_long",
@@ -310,14 +293,14 @@ fn rank_edit_add_and_delete_respect_leadership_five_to_ten_bounds_and_move_membe
         "a deleted rank's members move to the new lowest rank"
     );
 
-    refused(&realm, &[&actor(GM), DELETE_RANK], "guild:ranks_at_limit");
-    refused(
+    guild_op_refused(&realm, &[&actor(GM), DELETE_RANK], "guild:ranks_at_limit");
+    guild_op_refused(
         &realm,
         &[&actor(LOW_RANK), &add_rank("Nope")],
         "guild:not_leader",
     );
-    refused(&realm, &[&actor(LOW_RANK), DELETE_RANK], "guild:not_leader");
-    refused(
+    guild_op_refused(&realm, &[&actor(LOW_RANK), DELETE_RANK], "guild:not_leader");
+    guild_op_refused(
         &realm,
         &[&actor(GM), &add_rank(&"x".repeat(16))],
         "guild:too_long",
@@ -337,7 +320,7 @@ fn rank_edit_add_and_delete_respect_leadership_five_to_ten_bounds_and_move_membe
             .len(),
         10
     );
-    refused(
+    guild_op_refused(
         &realm,
         &[&actor(GM), &add_rank("Overflow")],
         "guild:ranks_at_limit",

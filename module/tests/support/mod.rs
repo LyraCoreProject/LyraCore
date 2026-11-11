@@ -3,8 +3,10 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_shared::spatial::{grid_cell, GRID_CELL_SIZE, MAP_COORD_MAX};
 pub use lyracore_test_support::*;
+use serde_json::json;
 
 pub const LEG_YD: f32 = 20.0;
 
@@ -91,33 +93,91 @@ pub fn number<T: std::str::FromStr>(row: &Row, column: &str) -> T {
         .unwrap_or_else(|_| panic!("{column} is not a number in {row:?}"))
 }
 
+pub fn refused(shard: &Standalone, reducer: &str, args: &[&str], tag: &str) {
+    let output = shard.call(reducer, args);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success() && text.contains(tag),
+        "{reducer} should refuse with {tag}: {text}"
+    );
+}
+
+pub fn guild_op_refused(realm: &Standalone, args: &[&str], tag: &str) {
+    refused(realm, "realm_guild_op", args, tag);
+}
+
+pub fn roster_revision(node: &Standalone) -> u64 {
+    node.query_rows("SELECT revision FROM game_group_roster_revision")[0]["revision"]
+        .parse()
+        .unwrap()
+}
+
+pub fn group_op_args(op: &str, actor_guid: u64, target_guid: u64, arg_a: u8) -> Vec<String> {
+    vec![
+        op.to_string(),
+        actor(&actor_guid.to_string()),
+        target_guid.to_string(),
+        arg_a.to_string(),
+        "0".to_string(),
+        "0".to_string(),
+    ]
+}
+
+pub fn group_op(node: &Standalone, op: &str, actor_guid: u64, target_guid: u64, arg_a: u8) {
+    let args = group_op_args(op, actor_guid, target_guid, arg_a);
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    node.assert_call("realm_group_op", &args);
+}
+
+pub fn stage_group(realm: &Standalone, leader: u64, members: &[u64]) {
+    realm.assert_call(
+        "debug_stage_meeting_stone_group",
+        &[&leader.to_string(), &json!(members).to_string(), "false"],
+    );
+}
+
 pub fn wolves(shard: &mut Standalone, offsets: &[f32]) -> Vec<Row> {
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
-    shard.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
+    shard.assert_sql(&format!(
+        "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
     for offset in offsets {
-        shard.assert_call("debug_spawn_at_feet", &["1", "51000", &offset.to_string()]);
+        shard.assert_call(
+            "debug_spawn_at_feet",
+            &["1", &TEST_WOLF_ENTRY.to_string(), &offset.to_string()],
+        );
     }
     shard.assert_sql("DELETE FROM game_world_entity WHERE guid = 1");
-    let mut wolves = shard.query_rows("SELECT * FROM game_world_entity WHERE entry = 51000");
+    let mut wolves = shard.query_rows(&format!(
+        "SELECT * FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
     assert_eq!(wolves.len(), offsets.len(), "{wolves:?}");
     wolves.sort_by_key(|wolf| number::<u64>(wolf, "guid"));
     wolves
 }
 
 pub fn wolves_beside(shard: &Standalone, character: &str, offsets: &[f32]) -> Vec<String> {
-    shard.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
+    shard.assert_sql(&format!(
+        "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
     for offset in offsets {
         shard.assert_call(
             "debug_spawn_at_feet",
-            &[character, "51000", &offset.to_string()],
+            &[character, &TEST_WOLF_ENTRY.to_string(), &offset.to_string()],
         );
     }
     let mut guids: Vec<u64> = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
         .iter()
         .map(|wolf| number(wolf, "guid"))
         .collect();

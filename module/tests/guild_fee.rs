@@ -1,32 +1,15 @@
 mod support;
 
-use support::Standalone;
+use support::{actor, refused, Standalone};
 
 const PAYER: u64 = 1;
 const VENDOR_ENTRY: &str = "51004";
 const TABARDDESIGNER: u32 = 0x400;
 
-fn actor(guid: u64) -> String {
-    format!(r#"{{"guid":{guid},"ownership":null}}"#)
-}
-
 fn emblem_request(npc_guid: &str) -> String {
     format!(
         r#"{{"emblem":{{"npc_guid":{npc_guid},"emblem":{{"emblem_style":11,"emblem_color":12,"border_style":3,"border_color":14,"background_color":15}}}}}}"#
     )
-}
-
-fn refused(shard: &Standalone, reducer: &str, args: &[&str], tag: &str) {
-    let result = shard.call(reducer, args);
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        !result.status.success() && output.contains(tag),
-        "{reducer}: expected {tag}: {output}"
-    );
 }
 
 fn purse(shard: &Standalone) -> u32 {

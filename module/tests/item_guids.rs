@@ -1,5 +1,8 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{
+    FIXTURE_BLADE, FIXTURE_JERKY, TEST_POWER_WORD_SHIELD_SPELL,
+};
 use support::Standalone;
 
 fn fixture(name: &str) -> Standalone {
@@ -27,8 +30,11 @@ fn fixture_in_range(name: &str, base: &str) -> Standalone {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn characters_above_bit_24_can_receive_items_together() {
     let shard = fixture("item-guid-owners");
-    shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
-    shard.assert_call("debug_grant_item", &["16777217", "5090050", "1"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
+    shard.assert_call(
+        "debug_grant_item",
+        &["16777217", &FIXTURE_BLADE.to_string(), "1"],
+    );
     let rows = shard.query_rows("SELECT guid FROM game_item_instance");
     assert_eq!(rows.len(), 2);
     assert_ne!(rows[0]["guid"], rows[1]["guid"]);
@@ -38,12 +44,12 @@ fn characters_above_bit_24_can_receive_items_together() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn legacy_items_keep_their_identity_and_no_longer_control_new_grants() {
     let shard = fixture("item-guid-legacy");
-    shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
     let legacy = 0x4000_0000_0000_01ffu64;
     shard.assert_sql(&format!(
         "UPDATE game_item_instance SET guid = {legacy} WHERE owner_guid = 1"
     ));
-    shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
     let rows = shard.query_rows("SELECT guid FROM game_item_instance WHERE owner_guid = 1");
     assert_eq!(rows.len(), 2);
     assert!(rows.iter().any(|row| row["guid"] == legacy.to_string()));
@@ -65,7 +71,7 @@ fn legacy_items_keep_their_identity_and_no_longer_control_new_grants() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn split_and_debug_equipment_allocate_distinct_items_after_slot_moves() {
     let shard = fixture("item-guid-split");
-    shard.assert_call("debug_grant_item", &["1", "5090052", "5"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_JERKY.to_string(), "5"]);
     let before = shard.query_rows("SELECT guid FROM game_item_instance WHERE owner_guid = 1")[0]
         ["guid"]
         .clone();
@@ -79,12 +85,12 @@ fn split_and_debug_equipment_allocate_distinct_items_after_slot_moves() {
     assert!(rows
         .iter()
         .any(|row| row["guid"] != before && row["stack_count"] == "2"));
-    shard.assert_call("debug_equip_weapon", &["1", "5090050"]);
+    shard.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
     shard.assert_call("debug_unequip_item", &["1", "15"]);
-    shard.assert_call("debug_equip_weapon", &["1", "5090050"]);
-    let weapons = shard.query_rows(
-        "SELECT guid,slot FROM game_item_instance WHERE owner_guid = 1 AND entry = 5090050",
-    );
+    shard.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
+    let weapons = shard.query_rows(&format!(
+        "SELECT guid,slot FROM game_item_instance WHERE owner_guid = 1 AND entry = {FIXTURE_BLADE}"
+    ));
     assert_eq!(weapons.len(), 2);
     assert_ne!(weapons[0]["guid"], weapons[1]["guid"]);
     assert!(weapons.iter().any(|row| row["slot"] == "15"));
@@ -94,8 +100,11 @@ fn split_and_debug_equipment_allocate_distinct_items_after_slot_moves() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn trade_remints_for_each_recipient_before_deleting_outgoing_items() {
     let shard = fixture("item-guid-trade");
-    shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
-    shard.assert_call("debug_grant_item", &["16777217", "5090052", "5"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
+    shard.assert_call(
+        "debug_grant_item",
+        &["16777217", &FIXTURE_JERKY.to_string(), "5"],
+    );
     let before = shard.query_rows("SELECT guid FROM game_item_instance");
     shard.assert_sql("UPDATE game_world_entity SET x = 100, y = 100, z = 100 WHERE guid = 1");
     shard
@@ -136,9 +145,16 @@ fn trade_remints_for_each_recipient_before_deleting_outgoing_items() {
         let guid: u64 = row["guid"].parse().unwrap();
         let owner: u64 = row["owner_guid"].parse().unwrap();
         assert_eq!(guid >> 47, 0x8001);
-        assert_eq!(row["entry"], if owner == 1 { "5090052" } else { "5090050" });
+        assert_eq!(
+            row["entry"],
+            if owner == 1 {
+                FIXTURE_JERKY.to_string()
+            } else {
+                FIXTURE_BLADE.to_string()
+            }
+        );
     }
-    shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
     let items = shard.query_rows("SELECT guid FROM game_item_instance");
     assert_eq!(items.len(), 3);
 }
@@ -170,18 +186,21 @@ fn finish(source: &Standalone, destination: &Standalone, id: &str) {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn transfer_refuses_legacy_collision_then_preserves_both_formats_on_round_trip() {
     let source = fixture("item-guid-transfer-source");
-    source.assert_call("debug_grant_item", &["1", "5090050", "1"]);
+    source.assert_call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
     let legacy = 0x4000_0000_0000_0117u64;
     source.assert_sql(&format!(
         "UPDATE game_item_instance SET guid = {legacy} WHERE owner_guid = 1"
     ));
-    source.assert_call("debug_grant_item", &["1", "5090050", "1"]);
+    source.assert_call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
     let before =
         source.query_rows("SELECT guid,entry,slot FROM game_item_instance WHERE owner_guid = 1");
     let blob = freeze(&source, "5090171");
     let destination = fixture_in_range("item-guid-transfer-destination", "1000000000");
     destination.assert_sql("DELETE FROM game_world_entity WHERE guid = 1");
-    destination.assert_call("debug_grant_item", &["16777217", "5090050", "1"]);
+    destination.assert_call(
+        "debug_grant_item",
+        &["16777217", &FIXTURE_BLADE.to_string(), "1"],
+    );
     destination.assert_sql(&format!(
         "UPDATE game_item_instance SET guid = {legacy} WHERE owner_guid = 16777217"
     ));
@@ -216,13 +235,16 @@ fn transfer_refuses_legacy_collision_then_preserves_both_formats_on_round_trip()
         before
     );
     finish(&source, &destination, "5090171");
-    source.assert_call("debug_grant_item", &["16777217", "5090050", "1"]);
+    source.assert_call(
+        "debug_grant_item",
+        &["16777217", &FIXTURE_BLADE.to_string(), "1"],
+    );
     let next = source.query_rows("SELECT guid FROM game_item_instance WHERE owner_guid = 16777217");
     assert!(next.iter().all(|row| before
         .iter()
         .all(|departed| row["guid"] != departed["guid"])));
     destination.assert_call("debug_spawn_player_entity", &["1"]);
-    destination.assert_call("debug_grant_item", &["1", "5090050", "1"]);
+    destination.assert_call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
     let before = destination
         .query_rows("SELECT guid,entry,slot FROM game_item_instance WHERE owner_guid = 1");
     assert_eq!(before.len(), 3);
@@ -234,7 +256,7 @@ fn transfer_refuses_legacy_collision_then_preserves_both_formats_on_round_trip()
         before
     );
     source.assert_call("debug_spawn_player_entity", &["1"]);
-    source.assert_call("debug_grant_item", &["1", "5090050", "1"]);
+    source.assert_call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
     assert_eq!(
         source
             .query_rows("SELECT guid FROM game_item_instance WHERE owner_guid = 1")
@@ -252,19 +274,22 @@ fn transfer_remints_an_aura_id_without_changing_a_foreign_aura() {
     let destination = fixture_in_range("aura-guid-transfer-destination", "1000000000");
     for (shard, guid) in [(&source, "1"), (&destination, FOREIGN)] {
         shard.assert_call("debug_set_level", &[guid, "20"]);
-        shard.assert_sql("UPDATE game_spell SET duration_ms = 3600000 WHERE spell_id = 50072");
-        shard.assert_call("debug_force_cast_at", &[guid, "50072", guid]);
+        shard.assert_sql(&format!("UPDATE game_spell SET duration_ms = 3600000 WHERE spell_id = {TEST_POWER_WORD_SHIELD_SPELL}"));
+        shard.assert_call(
+            "debug_force_cast_at",
+            &[guid, &TEST_POWER_WORD_SHIELD_SPELL.to_string(), guid],
+        );
     }
 
     let departing =
-        source.query_rows("SELECT * FROM game_aura WHERE target_guid = 1 AND spell_id = 50072");
+        source.query_rows(&format!("SELECT * FROM game_aura WHERE target_guid = 1 AND spell_id = {TEST_POWER_WORD_SHIELD_SPELL}"));
     assert_eq!(departing.len(), 1);
     destination.assert_sql(&format!(
-        "UPDATE game_aura SET id = {} WHERE target_guid = {FOREIGN} AND spell_id = 50072",
+        "UPDATE game_aura SET id = {} WHERE target_guid = {FOREIGN} AND spell_id = {TEST_POWER_WORD_SHIELD_SPELL}",
         departing[0]["id"]
     ));
     let foreign = destination.query_rows(&format!(
-        "SELECT * FROM game_aura WHERE target_guid = {FOREIGN} AND spell_id = 50072"
+        "SELECT * FROM game_aura WHERE target_guid = {FOREIGN} AND spell_id = {TEST_POWER_WORD_SHIELD_SPELL}"
     ));
     assert_eq!(foreign.len(), 1);
     assert_eq!(foreign[0]["id"], departing[0]["id"]);
@@ -274,7 +299,7 @@ fn transfer_remints_an_aura_id_without_changing_a_foreign_aura() {
     let operator = r#"{"guid":0,"ownership":null}"#;
     destination.assert_call("import_character_blob", &[TRANSFER, &blob, operator]);
     let arriving = destination
-        .query_rows("SELECT * FROM game_aura WHERE target_guid = 1 AND spell_id = 50072");
+        .query_rows(&format!("SELECT * FROM game_aura WHERE target_guid = 1 AND spell_id = {TEST_POWER_WORD_SHIELD_SPELL}"));
     assert_eq!(arriving.len(), 1);
     assert_ne!(arriving[0]["id"], foreign[0]["id"]);
     let mut expected = departing[0].clone();
@@ -284,7 +309,7 @@ fn transfer_remints_an_aura_id_without_changing_a_foreign_aura() {
     assert_eq!(actual, expected);
     assert_eq!(
         destination.query_rows(&format!(
-            "SELECT * FROM game_aura WHERE target_guid = {FOREIGN} AND spell_id = 50072"
+            "SELECT * FROM game_aura WHERE target_guid = {FOREIGN} AND spell_id = {TEST_POWER_WORD_SHIELD_SPELL}"
         )),
         foreign
     );
@@ -293,7 +318,7 @@ fn transfer_remints_an_aura_id_without_changing_a_foreign_aura() {
     finish(&source, &destination, TRANSFER);
     assert_eq!(
         destination
-            .query_rows("SELECT * FROM game_aura WHERE target_guid = 1 AND spell_id = 50072"),
+            .query_rows(&format!("SELECT * FROM game_aura WHERE target_guid = 1 AND spell_id = {TEST_POWER_WORD_SHIELD_SPELL}")),
         arriving
     );
     assert!(source
@@ -305,12 +330,14 @@ fn transfer_remints_an_aura_id_without_changing_a_foreign_aura() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn item_and_character_creation_share_exhaustion_without_changing_partial_stacks() {
     let shard = fixture("item-guid-exhaustion");
-    shard.assert_call("debug_grant_item", &["1", "5090052", "1"]);
-    shard.assert_sql("UPDATE game_item_template SET max_stack = 2 WHERE entry = 5090052");
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_JERKY.to_string(), "1"]);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET max_stack = 2 WHERE entry = {FIXTURE_JERKY}"
+    ));
     shard.assert_sql("UPDATE game_guid_allocator SET high_water = 999999998 WHERE id = 0");
     let before =
         shard.query_rows("SELECT guid,stack_count FROM game_item_instance WHERE owner_guid = 1");
-    let refusal = shard.call("debug_grant_item", &["1", "5090052", "4"]);
+    let refusal = shard.call("debug_grant_item", &["1", &FIXTURE_JERKY.to_string(), "4"]);
     assert!(!refusal.status.success());
     assert_eq!(
         shard.query_rows("SELECT guid,stack_count FROM game_item_instance WHERE owner_guid = 1"),
@@ -320,7 +347,7 @@ fn item_and_character_creation_share_exhaustion_without_changing_partial_stacks(
         shard.query_rows("SELECT high_water FROM game_guid_allocator")[0]["high_water"],
         "999999998"
     );
-    shard.assert_call("debug_grant_item", &["1", "5090052", "2"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_JERKY.to_string(), "2"]);
     let issued =
         shard.query_rows("SELECT guid FROM game_item_instance WHERE owner_guid = 1 AND slot = 24");
     assert_eq!(
@@ -329,7 +356,7 @@ fn item_and_character_creation_share_exhaustion_without_changing_partial_stacks(
     );
     shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
     assert!(!shard
-        .call("debug_grant_item", &["1", "5090050", "1"])
+        .call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"])
         .status
         .success());
     assert!(!shard
@@ -350,7 +377,7 @@ fn item_and_character_creation_share_exhaustion_without_changing_partial_stacks(
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn crafting_does_not_reuse_the_consumed_reagents_identity() {
     let shard = fixture("item-guid-craft");
-    shard.assert_call("debug_grant_item", &["1", "5090052", "1"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_JERKY.to_string(), "1"]);
     let old_guid = shard.query_rows("SELECT guid FROM game_item_instance WHERE owner_guid = 1")[0]
         ["guid"]
         .clone();
@@ -359,14 +386,14 @@ fn crafting_does_not_reuse_the_consumed_reagents_identity() {
     let created =
         shard.query_rows("SELECT guid,entry FROM game_item_instance WHERE owner_guid = 1");
     assert_eq!(created.len(), 1);
-    assert_eq!(created[0]["entry"], "5090050");
+    assert_eq!(created[0]["entry"], FIXTURE_BLADE.to_string());
     assert_ne!(created[0]["guid"], old_guid);
 }
 
 fn seed_craft(shard: &Standalone) {
     shard.assert_sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (5090171,'Fixture craft',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0)");
-    shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360684,5090171,0,7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false,0.0)");
-    shard.assert_sql("INSERT INTO game_spell_reagent (id,spell_id,item_entry,count) VALUES (40721368,5090171,5090052,1)");
+    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360684,5090171,0,7,1,0,0.0,0,0,0.0,0,0,0,{FIXTURE_BLADE},8,0,0,false,0.0)"));
+    shard.assert_sql(&format!("INSERT INTO game_spell_reagent (id,spell_id,item_entry,count) VALUES (40721368,5090171,{FIXTURE_JERKY},1)"));
 }
 
 #[test]
@@ -374,10 +401,10 @@ fn seed_craft(shard: &Standalone) {
 fn a_failed_craft_keeps_reagents_without_skill_or_partial_products() {
     let shard = fixture("item-guid-craft-refund");
     seed_craft(&shard);
-    shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360685,5090171,1,7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false,0.0)");
+    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360685,5090171,1,7,1,0,0.0,0,0,0.0,0,0,0,{FIXTURE_BLADE},8,0,0,false,0.0)"));
     shard.assert_sql("INSERT INTO game_skill_ability (id,spell_id,skill_line,race_mask,class_mask,min_skill,acquire_method,gray,green) VALUES (5090171,5090171,185,0,0,0,0,0,0)");
     shard.assert_call("debug_set_skill", &["1", "185", "1"]);
-    shard.assert_call("debug_grant_item", &["1", "5090052", "1"]);
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_JERKY.to_string(), "1"]);
     shard.assert_sql("UPDATE game_guid_allocator SET high_water = 999999998 WHERE id = 0");
     let items = shard.query_rows("SELECT * FROM game_item_instance WHERE owner_guid = 1");
     let skills = shard.query_rows("SELECT * FROM game_player_skill WHERE character_guid = 1");
@@ -432,7 +459,10 @@ fn a_high_range_character_arrives_and_receives_items_from_the_destinations_own_r
         mark.to_string()
     );
     destination.assert_call("debug_spawn_player_entity", &[&traveler]);
-    destination.assert_call("debug_grant_item", &[&traveler, "5090050", "1"]);
+    destination.assert_call(
+        "debug_grant_item",
+        &[&traveler, &FIXTURE_BLADE.to_string(), "1"],
+    );
     assert_eq!(
         destination.query_rows("SELECT high_water FROM game_guid_allocator")[0]["high_water"],
         (mark + 1).to_string()
@@ -454,7 +484,10 @@ fn a_high_range_character_arrives_and_receives_items_from_the_destinations_own_r
         destination.query_rows("SELECT high_water FROM game_guid_allocator")[0]["high_water"],
         (mark + 1).to_string()
     );
-    destination.assert_call("debug_grant_item", &["16777217", "5090050", "1"]);
+    destination.assert_call(
+        "debug_grant_item",
+        &["16777217", &FIXTURE_BLADE.to_string(), "1"],
+    );
     assert_eq!(
         destination.query_rows("SELECT high_water FROM game_guid_allocator")[0]["high_water"],
         (mark + 2).to_string()
@@ -466,7 +499,7 @@ fn a_high_range_character_arrives_and_receives_items_from_the_destinations_own_r
 fn item_format_exhaustion_does_not_advance_the_range() {
     let shard = fixture_in_range("item-guid-format-limit", "140737000000000");
     shard.assert_sql("UPDATE game_guid_allocator SET high_water = 140737488355327 WHERE id = 0");
-    let refusal = shard.call("debug_grant_item", &["1", "5090050", "1"]);
+    let refusal = shard.call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
     assert!(!refusal.status.success());
     assert!(String::from_utf8_lossy(&refusal.stderr).contains("ITEM_GUID_EXHAUSTED"));
     assert_eq!(
@@ -482,7 +515,10 @@ fn item_format_exhaustion_does_not_advance_the_range() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_local_legacy_collision_refuses_without_replacing_either_owners_items() {
     let shard = fixture("item-guid-local-conflict");
-    shard.assert_call("debug_grant_item", &["16777217", "5090050", "1"]);
+    shard.assert_call(
+        "debug_grant_item",
+        &["16777217", &FIXTURE_BLADE.to_string(), "1"],
+    );
     let mark: u64 = shard.query_rows("SELECT high_water FROM game_guid_allocator")[0]["high_water"]
         .parse()
         .unwrap();
@@ -491,7 +527,7 @@ fn a_local_legacy_collision_refuses_without_replacing_either_owners_items() {
         "UPDATE game_item_instance SET guid = {collision} WHERE owner_guid = 16777217"
     ));
     let before = shard.query_rows("SELECT * FROM game_item_instance");
-    let refusal = shard.call("debug_grant_item", &["1", "5090050", "1"]);
+    let refusal = shard.call("debug_grant_item", &["1", &FIXTURE_BLADE.to_string(), "1"]);
     assert!(!refusal.status.success());
     assert!(format!(
         "{}{}",

@@ -3,6 +3,7 @@ mod support;
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
 use support::{actor, Standalone};
 
 const TESTER: &str = "1";
@@ -86,7 +87,7 @@ fn a_turn_in_files_one_reward_letter_that_arrives_from_its_quest_giver() {
         ("body", CARD_BODY),
         ("mail_template_id", "509091"),
         ("check_flags", "16"),
-        ("item_entry", "5090050"),
+        ("item_entry", &FIXTURE_BLADE.to_string()),
         ("item_stack_count", "1"),
         ("item_durability", "70"),
         ("money", "0"),

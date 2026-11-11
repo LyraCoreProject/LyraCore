@@ -1,7 +1,7 @@
 mod support;
 
 use serde_json::json;
-use support::Standalone;
+use support::{stage_group, Standalone};
 
 const HUMAN: u8 = 1;
 const WARRIOR: u8 = 1;
@@ -34,13 +34,6 @@ fn stage(realm: &Standalone, guid: u64) {
             &y.to_string(),
             &z.to_string(),
         ],
-    );
-}
-
-fn stage_group(realm: &Standalone, leader: u64, members: &[u64]) {
-    realm.assert_call(
-        "debug_stage_meeting_stone_group",
-        &[&leader.to_string(), &json!(members).to_string(), "false"],
     );
 }
 
