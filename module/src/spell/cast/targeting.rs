@@ -168,7 +168,7 @@ pub(crate) fn select_targets(
                     .game_world_entity()
                     .guid()
                     .find(one)
-                    .is_some_and(|target| crate::taxi::is_flying(&target))
+                    .is_some_and(|target| crate::taxi::is_in_flight(ctx, target.guid))
             {
                 Vec::new()
             } else {
@@ -1280,7 +1280,9 @@ fn apply_reposition_effect(
             EffectHit::none()
         }
         E_RECALL_HOME => {
-            crate::world::recall_to_home(ctx, caster_guid);
+            if let Err(refusal) = crate::character::recall_to_home(ctx, caster_guid) {
+                spacetimedb::log::info!("recall: {caster_guid} stays put: {refusal}");
+            }
             EffectHit::none()
         }
         E_DISMOUNT => {
@@ -1586,16 +1588,13 @@ pub(crate) fn blink_forward(ctx: &ReducerContext, caster_guid: u64, dist_yd: f32
                 (nx, ny, caster.z),
             )
         {
-            crate::world::teleport_player(
-                ctx,
-                caster_guid,
-                caster.map_id,
-                caster.instance_id,
-                nx,
-                ny,
-                caster.z,
-                caster.orientation,
-            );
+            let pose = [nx, ny, caster.z, caster.orientation];
+            let (map_id, instance_id) = (caster.map_id, caster.instance_id);
+            if let Err(refusal) =
+                crate::world::teleport(ctx, caster_guid, map_id, instance_id, pose)
+            {
+                spacetimedb::log::info!("blink: {caster_guid} stays put: {refusal}");
+            }
             return;
         }
         yd -= 2.0;

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 
+use lyracore_shared::constants::go_type;
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
 use crate::creatures::game_creature_spawn_map;
@@ -9,20 +10,6 @@ use crate::game_world_entity;
 use crate::nav::game_nav_chunk;
 use crate::spell::{CastGateRefusal, CastRefusalReason};
 use crate::terrain::game_terrain_chunk;
-
-pub mod go_type {
-
-    pub const DOOR: u8 = 0;
-    pub const BUTTON: u8 = 1;
-    #[cfg(any(test, feature = "debug_reducers"))]
-    #[cfg_attr(not(has_packages), allow(dead_code))]
-    pub const QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER;
-    pub const CHEST: u8 = lyracore_shared::constants::go_type::CHEST;
-    pub const TRAP: u8 = 6;
-    pub const GOOBER: u8 = 10;
-    pub const GATHER: u8 = 25;
-    // Source type 25 is FISHINGHOLE; import drops it before using GATHER.
-}
 
 pub(crate) fn can_gather(learned: u32, required: u32) -> Result<(), String> {
     if learned == 0 {
@@ -147,7 +134,17 @@ pub struct GameObject {
 }
 
 impl GameObject {
-    pub(crate) fn try_insert(self, ctx: &ReducerContext) -> Result<Self, String> {
+    fn stamp_cell(&mut self) {
+        let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(self.x, self.y);
+        self.grid_x = grid_x;
+        self.grid_y = grid_y;
+        self.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
+    }
+
+    /// Inserts the object with its grid address stamped from its position and registers its
+    /// collider; `Err` on a guid already in use.
+    pub(crate) fn try_insert(mut self, ctx: &ReducerContext) -> Result<Self, String> {
+        self.stamp_cell();
         let object = ctx.db.game_gameobject().try_insert(self)?;
         #[cfg(feature = "conformance_test_fixture")]
         crate::native::record_conformance_birth(
@@ -157,27 +154,40 @@ impl GameObject {
             object.instance_id,
             object.cell,
         );
+        crate::go_collider::register(ctx, &object);
         crate::aoi::gameobject_changed(ctx, &object, true);
         Ok(object)
     }
 
     pub(crate) fn insert(self, ctx: &ReducerContext) -> Self {
-        let object = ctx.db.game_gameobject().insert(self);
-        #[cfg(feature = "conformance_test_fixture")]
-        crate::native::record_conformance_birth(
-            ctx,
-            object.guid,
-            object.map_id,
-            object.instance_id,
-            object.cell,
-        );
-        crate::aoi::gameobject_changed(ctx, &object, true);
-        object
+        let guid = self.guid;
+        self.try_insert(ctx)
+            .unwrap_or_else(|e| panic!("gameobject {guid} did not insert: {e}"))
     }
 
-    pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
+    pub(crate) fn update(mut self, ctx: &ReducerContext) -> Self {
+        self.stamp_cell();
         let old = ctx.db.game_gameobject().guid().find(self.guid);
         let object = ctx.db.game_gameobject().guid().update(self);
+        if old.as_ref().is_none_or(|old| {
+            (
+                old.template_entry,
+                old.map_id,
+                old.instance_id,
+                old.x,
+                old.y,
+                old.z,
+            ) != (
+                object.template_entry,
+                object.map_id,
+                object.instance_id,
+                object.x,
+                object.y,
+                object.z,
+            )
+        }) {
+            crate::go_collider::register(ctx, &object);
+        }
         if old.as_ref().is_none_or(|old| {
             (old.map_id, old.instance_id, old.cell)
                 != (object.map_id, object.instance_id, object.cell)
@@ -193,6 +203,7 @@ impl GameObject {
     pub(crate) fn delete(ctx: &ReducerContext, guid: impl std::borrow::Borrow<u64>) -> bool {
         let guid = *guid.borrow();
         let removed = ctx.db.game_gameobject().guid().delete(guid);
+        crate::go_collider::remove(ctx, guid);
         crate::aoi::remove_subject(ctx, crate::aoi::GAME_OBJECT, guid);
         removed
     }
@@ -240,15 +251,29 @@ pub struct GameObjectPoolMember {
     pub weight: u32,
 }
 
+/// The high part of every GameObject guid, in bits 48..63.
+pub(crate) const HIGHGUID_GAMEOBJECT: u64 = 0xF110;
 // Bit 47 keeps pool-point guids disjoint from imported and standalone gameobjects.
 pub const POOL_TAG: u64 = 1 << 47;
+// Bit 46 reserves gameobject Instance copies below pool bit 47.
+pub(crate) const GO_COPY_BAND: u64 = 1 << 46;
+// Bit 45 reserves Duel flags below the Instance copies.
+pub(crate) const DUEL_FLAG_BAND: u64 = 1 << 45;
+
+pub(crate) fn gameobject_guid(low: u64) -> u64 {
+    (HIGHGUID_GAMEOBJECT << 48) | low
+}
+
+pub(crate) fn is_gameobject_guid(guid: u64) -> bool {
+    guid >> 48 == HIGHGUID_GAMEOBJECT
+}
 
 pub(crate) fn pool_point_guid(point_id: u64) -> u64 {
-    (0xF110u64 << 48) | POOL_TAG | (point_id & 0x7FFF_FFFF_FFFF)
+    gameobject_guid(POOL_TAG | (point_id & 0x7FFF_FFFF_FFFF))
 }
 
 pub(crate) fn pool_point_id_of(guid: u64) -> Option<u64> {
-    if (guid >> 48) == 0xF110 && (guid & POOL_TAG) != 0 {
+    if is_gameobject_guid(guid) && (guid & POOL_TAG) != 0 {
         Some(guid & 0x7FFF_FFFF_FFFF)
     } else {
         None
@@ -269,7 +294,6 @@ pub(crate) fn weighted_pick(weights: &[u32], roll: u32) -> Option<usize> {
 pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64) {
     let gos = ctx.db.game_gameobject();
     let members = ctx.db.game_gameobject_pool_member();
-    crate::go_collider::remove(ctx, gathered_guid);
     crate::GameObject::delete(ctx, gathered_guid);
     let candidates: Vec<GameObjectPoolMember> = members
         .by_pool()
@@ -288,7 +312,7 @@ pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64
 }
 
 fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
-    let go = GameObject {
+    GameObject {
         guid: pool_point_guid(m.point_id),
         template_entry: m.template_entry,
         map_id: m.map_id,
@@ -300,16 +324,15 @@ fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
         created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
-        grid_x: lyracore_shared::spatial::grid_cell(m.x, m.y).0,
-        grid_y: lyracore_shared::spatial::grid_cell(m.x, m.y).1,
-        cell: lyracore_shared::spatial::cell_id_at(m.x, m.y),
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
         rotation_3: 0.0,
     }
     .insert(ctx);
-    crate::go_collider::register(ctx, &go);
 }
 
 fn imported_spatial_maps(ctx: &ReducerContext) -> HashSet<u32> {
@@ -358,7 +381,6 @@ pub(crate) fn arm_pool(ctx: &ReducerContext, pool_id: u32) {
         .map(|p| p.max_active)
         .unwrap_or(0);
     for m in members.by_pool().filter(&pool_id) {
-        crate::go_collider::remove(ctx, pool_point_guid(m.point_id));
         crate::GameObject::delete(ctx, pool_point_guid(m.point_id));
     }
     for _ in 0..max_active {
@@ -396,8 +418,6 @@ pub fn arm_all_pools(ctx: &ReducerContext) -> Result<(), String> {
     }
     Ok(())
 }
-
-const USE_RANGE_SQ: f32 = crate::npc_interaction::INTERACTION_RANGE_SQ;
 
 const RESPAWN_WINDOW_MICROS: u64 = 180_000_000;
 
@@ -498,7 +518,7 @@ fn reachable_go(
         return Err(ReachRefusal::OtherInstance);
     }
     let (dx, dy, dz) = (go.x - player.x, go.y - player.y, go.z - player.z);
-    if dx * dx + dy * dy + dz * dz > USE_RANGE_SQ {
+    if dx * dx + dy * dy + dz * dz > crate::npc_interaction::INTERACTION_RANGE_SQ {
         return Err(ReachRefusal::OutOfRange);
     }
     let tmpl = ctx
@@ -725,7 +745,6 @@ pub(crate) fn despawn_from_relay(ctx: &ReducerContext, go_guid: u64) -> Result<(
         .game_gameobject_trap_cooldown()
         .go_guid()
         .delete(go_guid);
-    crate::go_collider::remove(ctx, go_guid);
     GameObject::delete(ctx, go_guid);
     Ok(())
 }
@@ -854,7 +873,6 @@ pub fn import_gameobjects(ctx: &ReducerContext, packed: String) -> Result<(), St
     let gos = ctx.db.game_gameobject();
     let guids: Vec<u64> = gos.iter().map(|g| g.guid).collect();
     for g in guids {
-        crate::go_collider::remove(ctx, g);
         crate::GameObject::delete(ctx, g);
     }
     if load_go_batch(ctx, &packed)? == 0 {
@@ -886,8 +904,7 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
         let pf32 = |s: &str| s.parse::<f32>().map_err(|_| format!("bad f32: {s}"));
         let pu8 = |s: &str| s.parse::<u8>().map_err(|_| format!("bad u8 state: {s}"));
 
-        let (gx_src, gy_src) = (pf32(f[3])?, pf32(f[4])?);
-        let go = GameObject {
+        GameObject {
             guid: pu64(f[0])?,
             template_entry: pu32(f[1])?,
             map_id: pu32(f[2])?,
@@ -899,10 +916,9 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
             created_at: now,
             respawn_at_micros: 0,
             instance_id: 0,
-
-            grid_x: lyracore_shared::spatial::grid_cell(gx_src, gy_src).0,
-            grid_y: lyracore_shared::spatial::grid_cell(gx_src, gy_src).1,
-            cell: lyracore_shared::spatial::cell_id_at(gx_src, gy_src),
+            grid_x: 0,
+            grid_y: 0,
+            cell: 0,
             rotation_0: pf32(f[8])?,
             rotation_1: pf32(f[9])?,
             rotation_2: pf32(f[10])?,
@@ -910,7 +926,6 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
         }
         .try_insert(ctx)
         .map_err(|e| format!("gameobject insert failed (dup guid?): {e}"))?;
-        crate::go_collider::register(ctx, &go);
         loaded += 1;
     }
     Ok(loaded)
@@ -919,6 +934,38 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stamp_derives_the_grid_cell_from_the_position() {
+        let mut object = GameObject {
+            guid: 1,
+            template_entry: 0,
+            map_id: 1,
+            x: 2_133.0,
+            y: -4_477.0,
+            z: 0.0,
+            orientation: 0.0,
+            state: 0,
+            created_at: Timestamp::UNIX_EPOCH,
+            respawn_at_micros: 0,
+            instance_id: 0,
+            grid_x: 0,
+            grid_y: 0,
+            cell: 0,
+            rotation_0: 0.0,
+            rotation_1: 0.0,
+            rotation_2: 0.0,
+            rotation_3: 0.0,
+        };
+        object.stamp_cell();
+        let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(2_133.0, -4_477.0);
+        assert_eq!((object.grid_x, object.grid_y), (grid_x, grid_y));
+        assert_eq!(
+            object.cell,
+            lyracore_shared::spatial::cell_id_at(2_133.0, -4_477.0)
+        );
+        assert_ne!(object.cell, 0, "a real position is not cell (0, 0)");
+    }
 
     #[test]
     fn relay_trap_uses_the_source_default_only_for_zero_cooldown() {
@@ -934,15 +981,6 @@ mod tests {
         assert_eq!(go_type::CHEST, 3);
         assert_eq!(go_type::TRAP, 6);
         assert_eq!(go_type::GOOBER, 10);
-    }
-
-    #[test]
-    fn questgiver_type_id_matches_the_shared_constant_and_is_cmangos_type_2() {
-        assert_eq!(go_type::QUESTGIVER, 2);
-        assert_eq!(
-            go_type::QUESTGIVER,
-            lyracore_shared::constants::go_type::QUESTGIVER
-        );
     }
 
     #[test]
@@ -1119,14 +1157,9 @@ mod tests {
 
     #[test]
     fn pool_point_guid_tagged_namespace_is_disjoint_from_standalone() {
-        const GO_HIGH: u64 = 0xF110u64 << 48;
         for point_id in [1u64, 2, 3, 4, 42, 9999] {
             let guid = pool_point_guid(point_id);
-            assert_eq!(
-                guid >> 48,
-                0xF110,
-                "carries HIGHGUID_GAMEOBJECT in bits 48..63"
-            );
+            assert!(is_gameobject_guid(guid));
             assert_ne!(guid & POOL_TAG, 0, "tagged as a pool point");
             assert_eq!(
                 pool_point_id_of(guid),
@@ -1134,7 +1167,7 @@ mod tests {
                 "round-trips to point_id"
             );
         }
-        for standalone in [GO_HIGH | 3, GO_HIGH | 4, GO_HIGH | 50102, GO_HIGH | 1234] {
+        for standalone in [3, 4, 50102, 1234].map(gameobject_guid) {
             assert_eq!(
                 pool_point_id_of(standalone),
                 None,
@@ -1156,7 +1189,7 @@ mod tests {
             Some(1_000_000),
             "pooled point → consult the pool's in_place"
         );
-        let standalone = (0xF110u64 << 48) | 50102;
+        let standalone = gameobject_guid(50102);
         assert_eq!(
             pool_point_id_of(standalone),
             None,
@@ -1230,5 +1263,14 @@ mod tests {
             can_gather(0, copper_req).unwrap_err(),
             "you have not learned this gathering skill"
         );
+    }
+
+    #[test]
+    fn go_copy_band_is_disjoint_from_pool_static_and_debug_namespaces() {
+        let copy_guid = gameobject_guid(GO_COPY_BAND | 1);
+        const { assert!(DUEL_FLAG_BAND < GO_COPY_BAND && GO_COPY_BAND < POOL_TAG) };
+        assert_eq!(pool_point_id_of(copy_guid), None);
+        const { assert!(GO_COPY_BAND > 0xFF_FFFF) };
+        assert_ne!(copy_guid, pool_point_guid(1));
     }
 }

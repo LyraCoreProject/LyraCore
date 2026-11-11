@@ -109,6 +109,61 @@ pub fn wire_points(points: &[Point]) -> Option<Vec<Point>> {
     Some(result)
 }
 
+/// Catmull-Rom position weights of the four controls around a segment at `t` in `[0, 1]`.
+pub fn catmull_rom_weights(t: f32) -> [f32; 4] {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    [
+        -0.5 * t3 + t2 - 0.5 * t,
+        1.5 * t3 - 2.5 * t2 + 1.0,
+        -1.5 * t3 + 2.0 * t2 + 0.5 * t,
+        0.5 * t3 - 0.5 * t2,
+    ]
+}
+
+/// Catmull-Rom tangent weights: the derivative of `catmull_rom_weights` in `t`.
+pub fn catmull_rom_slopes(t: f32) -> [f32; 4] {
+    let t2 = t * t;
+    [
+        -1.5 * t2 + 2.0 * t - 0.5,
+        4.5 * t2 - 5.0 * t,
+        -4.5 * t2 + 4.0 * t + 0.5,
+        1.5 * t2 - t,
+    ]
+}
+
+/// Sums `controls` scaled by `weights`, axis by axis in control order.
+pub fn catmull_rom(controls: &[[f32; 3]; 4], weights: [f32; 4]) -> [f32; 3] {
+    std::array::from_fn(|axis| {
+        controls
+            .iter()
+            .zip(weights)
+            .map(|(point, weight)| point[axis] * weight)
+            .sum()
+    })
+}
+
+/// The control before `first` on an open path: `first` mirrored away from `second`.
+pub fn extrapolated_start(first: [f32; 3], second: [f32; 3]) -> [f32; 3] {
+    [
+        2.0 * first[0] - second[0],
+        2.0 * first[1] - second[1],
+        2.0 * first[2] - second[2],
+    ]
+}
+
+/// One straight 2D step of at most `max_step` from `(cx, cy)` toward `(tx, ty)`, stopping
+/// `stop_dist` short of it.
+pub fn chase_step(cx: f32, cy: f32, tx: f32, ty: f32, max_step: f32, stop_dist: f32) -> (f32, f32) {
+    let (dx, dy) = (tx - cx, ty - cy);
+    let len = (dx * dx + dy * dy).sqrt();
+    if len <= stop_dist {
+        return (cx, cy);
+    }
+    let travel = (len - stop_dist).min(max_step);
+    (cx + dx / len * travel, cy + dy / len * travel)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -156,5 +211,61 @@ mod tests {
             Some(vec![(0.0, 1.25, 0.0), (5.0, 5.0, 0.0)])
         );
         assert_eq!(wire_points(&[(0.0, 0.0, 0.0), (300.0, 0.0, 0.0)]), None);
+    }
+
+    #[test]
+    fn chase_step_closes_to_just_inside_melee() {
+        let (x, y) = chase_step(
+            0.0,
+            0.0,
+            20.0,
+            0.0,
+            crate::constants::speeds::RUN * 4.0,
+            4.0,
+        );
+        assert!(
+            (x - 16.0).abs() < 0.01,
+            "x {x} expected ~16.0 (4 yd short of the target)"
+        );
+        assert!(
+            (y - 0.0).abs() < 0.01,
+            "y {y} expected ~0.0 (straight-line approach)"
+        );
+
+        let (x, y) = chase_step(
+            0.0,
+            0.0,
+            100.0,
+            0.0,
+            crate::constants::speeds::RUN * 4.0,
+            4.0,
+        );
+        assert!(
+            (x - 28.0).abs() < 0.01,
+            "x {x} expected ~28.0 (one tick of run, capped)"
+        );
+        assert!((y - 0.0).abs() < 0.01, "y {y} expected ~0.0");
+
+        let (x, y) = chase_step(0.0, 0.0, 3.0, 0.0, 28.0, 4.0);
+        assert_eq!((x, y), (0.0, 0.0), "within stop_dist must hold position");
+
+        let (x, y) = chase_step(0.0, 0.0, 4.0, 0.0, 28.0, 4.0);
+        assert_eq!(
+            (x, y),
+            (0.0, 0.0),
+            "at the stop_dist boundary must hold position"
+        );
+
+        let (x, y) = chase_step(5.0, 5.0, 5.0, 5.0, 28.0, 4.0);
+        assert_eq!(
+            (x, y),
+            (5.0, 5.0),
+            "coincident must hold position, never NaN"
+        );
+        assert!(x.is_finite() && y.is_finite());
+
+        let (x, y) = chase_step(0.0, 0.0, 30.0, 40.0, 100.0, 5.0);
+        assert!((x - 27.0).abs() < 0.01, "x {x} expected ~27.0");
+        assert!((y - 36.0).abs() < 0.01, "y {y} expected ~36.0");
     }
 }

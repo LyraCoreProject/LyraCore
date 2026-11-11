@@ -194,7 +194,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         resting: false,
         rested_since_micros: 0,
         pending_godmode: false,
-        pending_run_speed_mult_bp: crate::world::RUN_SPEED_BP_1X,
+        pending_run_speed_mult_bp: crate::character::RUN_SPEED_BP_1X,
         bank_bag_slots: 0,
         watched_faction_index: -1,
         rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
@@ -430,7 +430,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         .game_gameobject_template()
         .insert(GameObjectTemplate {
             entry: 50100,
-            type_id: crate::gameobject::go_type::CHEST,
+            type_id: lyracore_shared::constants::go_type::CHEST,
             display_id: 259,
             name: "Battered Chest".to_string(),
             data0: 52,
@@ -453,9 +453,9 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
-        grid_x: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).0,
-        grid_y: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).1,
-        cell: lyracore_shared::spatial::cell_id_at(hw::X + 5.0, hw::Y),
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
@@ -466,7 +466,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         .game_gameobject_template()
         .insert(GameObjectTemplate {
             entry: 50101,
-            type_id: crate::gameobject::go_type::GOOBER,
+            type_id: lyracore_shared::constants::go_type::GOOBER,
             display_id: 259,
             name: "Suspicious Lever".to_string(),
             data0: 0,
@@ -489,9 +489,9 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
-        grid_x: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).0,
-        grid_y: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).1,
-        cell: lyracore_shared::spatial::cell_id_at(hw::X + 8.0, hw::Y),
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
@@ -503,7 +503,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         .game_gameobject_template()
         .insert(GameObjectTemplate {
             entry: 50102,
-            type_id: crate::gameobject::go_type::GATHER,
+            type_id: lyracore_shared::constants::go_type::GATHER,
             display_id: 259,
             name: "Copper Vein".to_string(),
             data0: 2770,
@@ -526,9 +526,9 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
-        grid_x: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).0,
-        grid_y: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).1,
-        cell: lyracore_shared::spatial::cell_id_at(hw::X + 6.0, hw::Y),
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
@@ -539,7 +539,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         .game_gameobject_template()
         .insert(GameObjectTemplate {
             entry: 50103,
-            type_id: crate::gameobject::go_type::GATHER,
+            type_id: lyracore_shared::constants::go_type::GATHER,
             display_id: 259,
             name: "Peacebloom".to_string(),
             data0: 2447,
@@ -562,9 +562,9 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
-        grid_x: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).0,
-        grid_y: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).1,
-        cell: lyracore_shared::spatial::cell_id_at(hw::X + 7.0, hw::Y),
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
@@ -581,7 +581,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
                 .game_gameobject_template()
                 .insert(GameObjectTemplate {
                     entry: e,
-                    type_id: crate::gameobject::go_type::GATHER,
+                    type_id: lyracore_shared::constants::go_type::GATHER,
                     display_id: 259,
                     name: name.to_string(),
                     data0: item,
@@ -1264,6 +1264,8 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
     crate::weather::rearm_weather_schedule(ctx);
 
     crate::meeting_stone::rearm_reminder_schedule(ctx);
+
+    crate::transport::arm_crossings(ctx);
 }
 
 mod fixtures;

@@ -135,7 +135,6 @@ pub(crate) fn current_map(ctx: &ReducerContext, transport: &Transport) -> u32 {
         .map_or(transport.map_id, |crossing| crossing.map_id)
 }
 
-/// Arms the map change of every route that crosses maps and has none armed.
 pub(crate) fn arm_crossings(ctx: &ReducerContext) {
     let transports: Vec<_> = ctx
         .db
@@ -181,7 +180,6 @@ fn next_crossing(
     })
 }
 
-/// Moves a Transport that reached another map, its Passengers and its AOI Grants there.
 #[reducer]
 pub fn cross_transport_map(ctx: &ReducerContext, fired: TransportCrossing) {
     if !crate::time::scheduler_authorized(ctx) {
@@ -255,15 +253,14 @@ pub fn cross_transport_map(ctx: &ReducerContext, fired: TransportCrossing) {
 
 fn carry_across(ctx: &ReducerContext, passenger: TransportPassenger, from_map_id: u32, pose: Pose) {
     let world = pose.carry(offset(&passenger));
-    crate::world::teleport_aboard(
-        ctx,
-        pose.map_id,
-        world,
-        Aboard {
-            passenger,
-            from_map_id,
-        },
-    );
+    let guid = passenger.character_guid;
+    let aboard = Aboard {
+        passenger,
+        from_map_id,
+    };
+    if let Err(refusal) = crate::world::teleport_aboard(ctx, pose.map_id, world, aboard) {
+        spacetimedb::log::warn!("Transport crossing left Passenger {guid} behind: {refusal}");
+    }
 }
 
 pub(crate) fn find(ctx: &ReducerContext, guid: u64) -> Option<Transport> {
@@ -312,7 +309,6 @@ pub(crate) enum Boarding {
     Ashore,
 }
 
-/// Boards, moves or removes a Passenger from the Transport its movement names.
 pub(crate) fn passenger_moved(
     ctx: &ReducerContext,
     mover: &WorldEntity,
@@ -453,7 +449,6 @@ pub(crate) fn rejoin(ctx: &ReducerContext, character_guid: u64) {
     }
 }
 
-/// Restores the attachment a map crossing's teleport ended.
 pub(crate) fn reboard(ctx: &ReducerContext, passenger: TransportPassenger) {
     leave(ctx, passenger.character_guid);
     ctx.db.game_transport_passenger().insert(passenger);

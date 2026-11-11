@@ -56,25 +56,22 @@ pub(crate) fn relocate(
     trigger_id: u32,
     destination: crate::transfer::Destination,
     controller_generation: u64,
-) -> u64 {
+) -> Result<u64, crate::actor::ActionRefusal> {
     if let Some(cast) = crate::spell::pending_cast(ctx, character_guid) {
         crate::spell::cancel_cast_attempt(ctx, character_guid, cast.scheduled_id);
     }
     let _ = crate::actor::stop_attack(ctx, character_guid);
     crate::actor::stop_movement(ctx, character_guid);
-    crate::world::teleport_player(
+    crate::world::teleport(
         ctx,
         character_guid,
         destination.map_id,
         destination.instance_id,
-        destination.x,
-        destination.y,
-        destination.z,
-        destination.o,
-    );
+        [destination.x, destination.y, destination.z, destination.o],
+    )?;
     let receipts = ctx.db.game_character_relocation();
     receipts.character_guid().delete(character_guid);
-    receipts
+    Ok(receipts
         .insert(CharacterRelocation {
             id: 0,
             character_guid,
@@ -83,7 +80,7 @@ pub(crate) fn relocate(
             map_id: destination.map_id,
             instance_id: destination.instance_id,
         })
-        .id
+        .id)
 }
 
 crate::character_owned!(delete, fn sweep_delete_game_sessionless_action_consent(ctx, character_guid) {

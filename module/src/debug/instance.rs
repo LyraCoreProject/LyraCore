@@ -18,16 +18,14 @@ pub fn debug_create_fixture_instance(
     let player = crate::helpers::live_entity(ctx, character_guid)?;
     let map_id = player.map_id;
     let instance_id = crate::instance::resolve_or_create_instance(ctx, character_guid, map_id)?;
-    crate::world::teleport_player(
+    crate::world::teleport(
         ctx,
         character_guid,
         map_id,
         instance_id,
-        player.x,
-        player.y,
-        player.z,
-        player.orientation,
-    );
+        [player.x, player.y, player.z, player.orientation],
+    )
+    .map_err(|refusal| refusal.to_string())?;
     log::info!("debug_create_fixture_instance: character {character_guid} → instance {instance_id} on map {map_id}");
     Ok(())
 }
@@ -54,16 +52,14 @@ pub fn debug_enter_instance(
             ));
         }
     }
-    crate::world::teleport_player(
+    crate::world::teleport(
         ctx,
         character_guid,
         player.map_id,
         instance_id,
-        player.x,
-        player.y,
-        player.z,
-        player.orientation,
-    );
+        [player.x, player.y, player.z, player.orientation],
+    )
+    .map_err(|refusal| refusal.to_string())?;
     Ok(())
 }
 
@@ -516,16 +512,14 @@ pub fn debug_assert_blink_clamp(ctx: &ReducerContext, character_guid: u64) -> Re
         }
     }
 
-    crate::world::teleport_player(
+    crate::world::teleport(
         ctx,
         character_guid,
         map_id,
         0,
-        ORIGIN.0,
-        ORIGIN.1,
-        ORIGIN.2,
-        0.0,
-    );
+        [ORIGIN.0, ORIGIN.1, ORIGIN.2, 0.0],
+    )
+    .map_err(|refusal| refusal.to_string())?;
     crate::spell::blink_forward(ctx, character_guid, BLINK_YD);
 
     let landed = ctx.db.game_world_entity().guid().find(character_guid);
@@ -1063,6 +1057,10 @@ pub fn debug_logout_character(ctx: &ReducerContext, character_guid: u64) -> Resu
         .guid()
         .find(character_guid)
         .ok_or_else(|| format!("{character_guid} is not in the world"))?;
-    crate::world::remove_live_character(ctx, entity, crate::world::CharacterDeparture::Logout);
+    crate::character::remove_live_character(
+        ctx,
+        entity,
+        crate::character::CharacterDeparture::Logout,
+    );
     Ok(())
 }

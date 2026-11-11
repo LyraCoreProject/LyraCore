@@ -668,7 +668,7 @@ fn validate_trap_dependency(
         .game_gameobject_template()
         .entry()
         .find(entry)
-        .filter(|template| template.type_id == crate::gameobject::go_type::TRAP)
+        .filter(|template| template.type_id == lyracore_shared::constants::go_type::TRAP)
         .ok_or_else(|| missing_dependency(definition, step, "trap_template", entry))?;
     let trap = ctx
         .db

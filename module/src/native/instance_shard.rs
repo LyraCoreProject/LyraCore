@@ -321,7 +321,7 @@ pub fn idc_world_instance_entry(
         {
             return Err("World Session changed".into());
         }
-        if crate::taxi::movement_is_suppressed(ctx, guid)
+        if crate::taxi::is_in_flight(ctx, guid)
             || super::realm_petition::pending(ctx, guid)
             || super::realm_auction::pending(ctx, guid)
         {
@@ -522,7 +522,7 @@ fn finish_native(
         || world.is_some_and(|world| {
             world != ctx.database_identity() && !crate::peer::is_peer(ctx, world)
         })
-        || crate::taxi::movement_is_suppressed(ctx, pending.guid)
+        || crate::taxi::is_in_flight(ctx, pending.guid)
         || super::realm_petition::pending(ctx, pending.guid)
         || super::realm_auction::pending(ctx, pending.guid)
     {
@@ -551,7 +551,15 @@ fn finish_native(
         world.unwrap_or(ctx.database_identity()),
     );
     let (x, y, z, o) = (decoded.x, decoded.y, decoded.z, decoded.o);
-    crate::world::teleport_player(ctx, pending.guid, decoded.map, instance_id, x, y, z, o);
+    if let Err(refusal) =
+        crate::world::teleport(ctx, pending.guid, decoded.map, instance_id, [x, y, z, o])
+    {
+        spacetimedb::log::warn!(
+            "instance entry: {} admitted to instance {instance_id} but teleport refused: {refusal}",
+            pending.guid
+        );
+        return;
+    }
     if world == Some(ctx.database_identity()) && actor.map_id == decoded.map {
         arrived(ctx, pending.guid, decoded.map, instance_id);
     }
@@ -674,7 +682,7 @@ pub(super) fn return_from_reaped(
     ctx: &ReducerContext,
     connection: &super::NativeWorldConnection,
     guid: u64,
-    entry: crate::world::WorldEntry,
+    entry: crate::character::WorldEntry,
     teleport_counter: u32,
 ) -> Result<bool, String> {
     use crate::game_character;
@@ -691,7 +699,7 @@ pub(super) fn return_from_reaped(
         orientation: character.orientation,
     };
     let mut character = character;
-    crate::world::restore_reaped_instance(ctx, &mut character);
+    crate::character::restore_reaped_instance(ctx, &mut character);
     if character.map_id != origin.map_id
         && directory::transfer_target(ctx, character.map_id).is_some()
     {
@@ -703,7 +711,7 @@ pub(super) fn return_from_reaped(
             guid,
             teleport_counter,
             Some(origin),
-            entry == crate::world::WorldEntry::WorldPort,
+            entry == crate::character::WorldEntry::WorldPort,
         )? {
             return Ok(true);
         }

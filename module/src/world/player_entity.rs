@@ -1,4 +1,4 @@
-use lyracore_shared::{constants, packing, spatial};
+use lyracore_shared::{constants, packing};
 use spacetimedb::{Identity, ReducerContext};
 
 use crate::{game_active_taxi_flight, game_race_info, Character, WorldEntity};
@@ -20,27 +20,10 @@ pub(crate) fn build_player_entity(
         .as_ref()
         .map(|ri| ri.faction_template)
         .unwrap_or(1);
-    let (grid_x, grid_y) = spatial::grid_cell(character.x, character.y);
     let mut entity = WorldEntity {
-        guid: character.guid,
         owner_identity,
         account_id: character.account_id,
-        map_id: character.map_id,
-        x: character.x,
-        y: character.y,
-        z: character.z,
-        orientation: character.orientation,
-        grid_x,
-        grid_y,
-        cell: lyracore_shared::spatial::grid_cell_id(grid_x, grid_y),
-        last_move_ms: 0,
         type_mask: constants::type_mask::PLAYER,
-        entry: 0,
-        scale_x: 1.0,
-        health: 0,
-        max_health: 0,
-        power: 0,
-        max_power: 0,
         level,
         faction_template: faction,
         unit_bytes_0: packing::unit_bytes_0(
@@ -52,9 +35,6 @@ pub(crate) fn build_player_entity(
         display_id: display,
         native_display_id: display,
         unit_flags: constants::unit_flags::PLAYER_CONTROLLED,
-        base_attack_time_ms: crate::combat::DEFAULT_ATTACK_TIME_MS,
-        dynamic_flags: 0,
-        dead: false,
         player_bytes: packing::player_bytes(
             character.skin,
             character.face,
@@ -78,7 +58,6 @@ pub(crate) fn build_player_entity(
         },
         xp: character.xp,
         next_level_xp: character.next_level_xp,
-        target_guid: 0,
         money: character.money,
         bank_bag_slots: character.bank_bag_slots,
         unit_bytes_1: if power_type == packing::power_type::RAGE {
@@ -86,57 +65,19 @@ pub(crate) fn build_player_entity(
         } else {
             0
         },
-        unit_bytes_2: 0,
-        strength: 0,
-        agility: 0,
-        stamina: 0,
-        intellect: 0,
-        spirit: 0,
-        npc_flags: 0,
-        armor: 0,
-        leg_ends_ms: 0,
-        wp_target: 0,
-        movement_flags: 0,
-        combat_until_ms: 0,
-        pickpocketed: false,
-        next_swing_spell: 0,
-        overpower_until_ms: 0,
-        revenge_until_ms: 0,
-        stance: 0,
-        owner_guid: 0,
-        skinned: false,
-        mana_regen_paused_until_ms: 0,
         // Retain reclaim escalation across relog so repeated deaths cannot reset the delay.
         death_expire_micros: character.death_expire_micros,
-
-        instance_id: character.pending_instance_id,
         run_speed_mult_bp: character.pending_run_speed_mult_bp,
         godmode: character.pending_godmode,
         resting: character.resting,
-        sheet_str_bonus: 0,
-        sheet_agi_bonus: 0,
-        sheet_sta_bonus: 0,
-        sheet_int_bonus: 0,
-        sheet_spi_bonus: 0,
-        sheet_ap_base: 0,
-        sheet_ap_mods: 0,
-        sheet_ap_modifiers: 0,
-        sheet_ranged_ap_modifiers: 0,
-        sheet_ranged_dmg_min_fraction: 0.0,
-        sheet_ranged_dmg_max_fraction: 0.0,
-        sheet_ranged_crit_bp: 0,
-        sheet_dmg_min: 0,
-        sheet_dmg_max: 0,
-        sheet_crit_bp: 0,
-        mount_display_id: 0,
         zone_id: crate::terrain::zone_id_at(ctx, character.map_id, character.x, character.y)
             .unwrap_or(character.zone_id),
-        sheet_ranged_ap: 0,
-        sheet_ranged_dmg_min: 0,
-        sheet_ranged_dmg_max: 0,
-        regeneration_pending: false,
-        combat_active: false,
-        simulation_indexed: false,
+        ..WorldEntity::blank(
+            character.guid,
+            character.map_id,
+            character.pending_instance_id,
+            [character.x, character.y, character.z, character.orientation],
+        )
     };
     if let Some(flight) = ctx
         .db

@@ -19,12 +19,14 @@ use crate::creatures::{
     MOVEMENT_WAYPOINT,
 };
 use crate::game_world_entity;
-use crate::gameobject::{game_gameobject, game_gameobject_template, GameObject, POOL_TAG};
+use crate::gameobject::{
+    game_gameobject, game_gameobject_template, is_gameobject_guid, GameObject, GO_COPY_BAND,
+    POOL_TAG,
+};
 use crate::nav::game_nav_chunk;
 use crate::terrain::game_terrain_chunk;
 
 const HIGHGUID_UNIT: u64 = 0xF130;
-const HIGHGUID_GAMEOBJECT: u64 = 0xF110;
 const CREATURE_SPAWN_ID_MASK: u64 = MAX_CREATURE_GUID_COMPONENT as u64;
 const GAMEOBJECT_SPAWN_ID_MASK: u64 = 0xFFFF_FFFF_FFFF;
 
@@ -263,7 +265,7 @@ impl SpawnIds {
             ctx.db
                 .game_gameobject()
                 .iter()
-                .filter(|go| go.guid >> 48 == HIGHGUID_GAMEOBJECT)
+                .filter(|go| is_gameobject_guid(go.guid))
                 .filter_map(|go| u32::try_from(go.guid & GAMEOBJECT_SPAWN_ID_MASK).ok())
                 .filter(|&id| is_operator_spawn_id(id))
                 .max()
@@ -494,7 +496,7 @@ fn authored_creature_spawn(ctx: &ReducerContext, guid: u64) -> Result<CreatureSp
 
 /// Only an instance-zero row outside the pool and instance-copy bands and the Package band.
 fn authored_gameobject(ctx: &ReducerContext, guid: u64) -> Result<GameObject, String> {
-    if guid >> 48 != HIGHGUID_GAMEOBJECT || guid & (POOL_TAG | crate::instance::GO_COPY_BAND) != 0 {
+    if !is_gameobject_guid(guid) || guid & (POOL_TAG | GO_COPY_BAND) != 0 {
         return Err(format!("{guid} is not a gameobject spawn guid"));
     }
     if u32::try_from(guid & GAMEOBJECT_SPAWN_ID_MASK).is_ok_and(is_package_gameobject_id) {
@@ -667,8 +669,7 @@ fn insert_gameobject(
     guid: u64,
     fields: &GameObjectSpawnFields,
 ) -> Result<GameObject, String> {
-    let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(fields.x, fields.y);
-    let go = GameObject {
+    GameObject {
         guid,
         template_entry: fields.template_entry,
         map_id: fields.map_id,
@@ -680,18 +681,16 @@ fn insert_gameobject(
         created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
-        grid_x,
-        grid_y,
-        cell: lyracore_shared::spatial::grid_cell_id(grid_x, grid_y),
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
         rotation_0: fields.rotation_0,
         rotation_1: fields.rotation_1,
         rotation_2: fields.rotation_2,
         rotation_3: fields.rotation_3,
     }
     .try_insert(ctx)
-    .map_err(|e| format!("gameobject spawn {guid} cannot be inserted: {e}"))?;
-    crate::go_collider::register(ctx, &go);
-    Ok(go)
+    .map_err(|e| format!("gameobject spawn {guid} cannot be inserted: {e}"))
 }
 
 fn describe_creature(spawn: &CreatureSpawn) -> String {

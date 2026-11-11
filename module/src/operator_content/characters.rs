@@ -66,7 +66,8 @@ pub fn operator_teleport_character(
         if entity.combat_active || entity.combat_until_ms > now_ms {
             return Err("character is in combat".into());
         }
-        crate::world::teleport_player(ctx, guid, map_id, 0, x, y, z, o);
+        crate::world::teleport(ctx, guid, map_id, 0, [x, y, z, o])
+            .map_err(|refusal| refusal.to_string())?;
     } else {
         if character.online {
             return Err("character is online without a world entity; retry after logout".into());

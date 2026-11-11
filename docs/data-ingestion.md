@@ -465,7 +465,7 @@ brings in. So the fixture reuses real vanilla ids and, for a few rows, real name
   and 133 Fireball.
 - Gameobjects: the Goldshire gather-node demo, entries 1731 and 1732 (Copper and Tin Vein).
 - Graveyards: five real Elwynn and Westfall world-safe-locations with their names and coordinates,
-  in `module/src/seed.rs` and as fallback constants in `module/src/world.rs`.
+  in `module/src/seed.rs` and as fallback constants in `module/src/graveyard.rs`.
 - The start position: the Northshire Valley coordinates where a new Human Warrior spawns.
 - The taxi fixture: two reserved nodes, one one-way route with three points and a fare, and a
   nearby flight master. [Schema](./schema.md#7-the-seeded-fixture) gives its id rules.

@@ -5,7 +5,8 @@ use spacetimedb::{
 
 use super::{character_names, directory, realm_shard};
 use crate::{
-    auth::{game_account, Account, Appearance},
+    auth::{game_account, Account},
+    character::Appearance,
     package_account::{game_package_account, PackageAccount},
     peer::{realm_shard as realm, require_sender, world_shard},
     remote_bindings::peer as remote,
@@ -324,7 +325,7 @@ pub fn idc_package_creation(ctx: &ReducerContext, message: Vec<u8>) -> Result<()
                 return Err("Package is stopped on the World Shard".into());
             }
             let account = store_account(ctx, &request.package, &account)?;
-            let guid = crate::auth::insert_new_character(
+            let guid = crate::character::insert_new_character(
                 ctx,
                 account.id,
                 request.name.clone(),

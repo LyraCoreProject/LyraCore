@@ -160,7 +160,7 @@ pub fn debug_native_enter_world(ctx: &ReducerContext, character_guid: u64) -> Re
         connection,
         account.id,
         character_guid,
-        crate::world::WorldEntry::Login,
+        crate::character::WorldEntry::Login,
         0,
     )
 }

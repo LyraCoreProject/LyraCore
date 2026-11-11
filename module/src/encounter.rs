@@ -430,8 +430,8 @@ pub(crate) fn open_door(
         .entry()
         .find(go_entry)
         .ok_or_else(|| format!("no gameobject template {go_entry}"))?;
-    if tmpl.type_id != crate::gameobject::go_type::DOOR
-        && tmpl.type_id != crate::gameobject::go_type::BUTTON
+    if tmpl.type_id != lyracore_shared::constants::go_type::DOOR
+        && tmpl.type_id != lyracore_shared::constants::go_type::BUTTON
     {
         return Err(format!(
             "gameobject {go_entry} is type {} — open_door flips DOOR/BUTTON only",

@@ -122,7 +122,7 @@ fn route(
     {
         return Err("Character belongs to another Package".into());
     }
-    if crate::taxi::movement_is_suppressed(ctx, guid)
+    if crate::taxi::is_in_flight(ctx, guid)
         || super::realm_petition::pending(ctx, guid)
         || super::realm_auction::pending(ctx, guid)
     {
@@ -296,18 +296,14 @@ fn begin(
                 target,
             );
         }
-        crate::world::teleport_gate(ctx, request.guid, destination.map_id, instance)
-            .map_err(|e| e.to_string())?;
-        crate::world::teleport_player(
+        crate::world::teleport(
             ctx,
             request.guid,
             destination.map_id,
             instance,
-            destination.x,
-            destination.y,
-            destination.z,
-            destination.o,
-        );
+            [destination.x, destination.y, destination.z, destination.o],
+        )
+        .map_err(|e| e.to_string())?;
         instance_shard::arrived(ctx, request.guid, destination.map_id, instance);
         finish(ctx, request.id, Relocation::Arrived(target));
         return Ok(());

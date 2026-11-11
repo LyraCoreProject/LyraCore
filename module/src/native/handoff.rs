@@ -104,9 +104,9 @@ pub fn native_world_adopt(ctx: &ReducerContext) -> Result<(), String> {
             account.id,
             guid,
             if handoff.world_port {
-                crate::world::WorldEntry::WorldPort
+                crate::character::WorldEntry::WorldPort
             } else {
-                crate::world::WorldEntry::Login
+                crate::character::WorldEntry::Login
             },
             handoff.teleport_counter,
         ),

@@ -111,9 +111,8 @@ pub fn debug_check_submerged(ctx: &ReducerContext, guid: u64) -> Result<(), Stri
         return Err(format!("guid {guid} is not a player"));
     }
     let liquid_level = liquid_level_at(ctx, entity.map_id, entity.x, entity.y);
-    let submerged = liquid_level.is_some_and(|level| {
-        lyracore_shared::env::is_submerged(entity.z, level, true, entity.movement_flags)
-    });
+    let submerged =
+        lyracore_shared::env::is_submerged(entity.z, liquid_level, entity.movement_flags);
     spacetimedb::log::info!(
         "submerged probe guid {guid} at map {} ({:.2},{:.2},{:.2}): liquid_level={liquid_level:?} movement_flags=0x{:08x} submerged={submerged}",
         entity.map_id,

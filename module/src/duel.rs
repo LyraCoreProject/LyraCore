@@ -188,8 +188,6 @@ fn active_pair(duel: &Duel, attacker_guid: u64, target_guid: u64) -> bool {
 }
 
 fn duel_flag_guid(initiator_guid: u64, duel_id: u64) -> Option<u64> {
-    const HIGHGUID_GAMEOBJECT: u64 = 0xF110u64 << 48;
-    const DUEL_FLAG_BAND: u64 = 1u64 << 45;
     // Shard-local Duel ids need the realm-wide GUID slot to make their arbiters unique.
     let range_size = crate::realm_core::GUID_RANGE_SIZE;
     if duel_id >= range_size {
@@ -197,7 +195,8 @@ fn duel_flag_guid(initiator_guid: u64, duel_id: u64) -> Option<u64> {
     }
     let shard_slot = initiator_guid / range_size;
     let payload = shard_slot.checked_mul(range_size)?.checked_add(duel_id)?;
-    (payload < DUEL_FLAG_BAND).then_some(HIGHGUID_GAMEOBJECT | DUEL_FLAG_BAND | payload)
+    use crate::gameobject::{gameobject_guid, DUEL_FLAG_BAND};
+    (payload < DUEL_FLAG_BAND).then_some(gameobject_guid(DUEL_FLAG_BAND | payload))
 }
 
 fn push_event(
@@ -784,7 +783,7 @@ mod tests {
         assert_eq!(first, duel_flag_guid(7, 1).unwrap());
         assert_ne!(first, duel_flag_guid(7, 2).unwrap());
         assert_ne!(first, duel_flag_guid(1_000_000_007, 1).unwrap());
-        assert_eq!(first >> 48, 0xF110);
+        assert!(crate::gameobject::is_gameobject_guid(first));
         assert_ne!(
             duel_flag_guid(1_000_000_007, 99),
             duel_flag_guid(2_000_000_007, 99),

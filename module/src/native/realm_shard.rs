@@ -880,7 +880,7 @@ fn merge_enumerations(bodies: &[Vec<u8>]) -> Result<Vec<u8>, &'static str> {
         merged[0] = merged[0]
             .checked_add(count)
             .ok_or("Character count overflow")?;
-        if usize::from(merged[0]) > crate::auth::CHARACTERS_PER_ACCOUNT
+        if usize::from(merged[0]) > crate::character::CHARACTERS_PER_ACCOUNT
             || (count == 0) != entries.is_empty()
         {
             return Err("invalid Character list");

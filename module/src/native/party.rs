@@ -372,8 +372,8 @@ pub(super) fn roster_state(ctx: &ReducerContext, guid: u64) -> Option<RosterStat
     })
 }
 
-pub(super) fn enter(ctx: &ReducerContext, guid: u64, entry: crate::world::WorldEntry) {
-    if entry == crate::world::WorldEntry::WorldPort
+pub(super) fn enter(ctx: &ReducerContext, guid: u64, entry: crate::character::WorldEntry) {
+    if entry == crate::character::WorldEntry::WorldPort
         && crate::peer::realm_shard(ctx).is_some()
         && crate::group::group_of(ctx, guid).is_none()
     {
@@ -385,7 +385,7 @@ pub(super) fn enter(ctx: &ReducerContext, guid: u64, entry: crate::world::WorldE
             "",
         );
     }
-    roster(ctx, guid, entry == crate::world::WorldEntry::Login);
+    roster(ctx, guid, entry == crate::character::WorldEntry::Login);
     super::realm_party::presence(ctx, guid, true);
 }
 

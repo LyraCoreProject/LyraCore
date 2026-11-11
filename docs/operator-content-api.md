@@ -86,7 +86,7 @@ unique name index is case-sensitive, so older or directly created rows can diffe
 More than one matching Character is a Refusal, even when one spelling matches exactly.
 Characters in Transfer are hidden by the existing Character read Gate.
 
-A Character with a `game_world_entity` uses `world::teleport_player`. Same-map moves send
+A Character with a `game_world_entity` uses `world::teleport`. Same-map moves send
 `MSG_MOVE_TELEPORT_ACK`; map changes send `SMSG_TRANSFER_PENDING` and `SMSG_NEW_WORLD` and
 wait for `MSG_MOVE_WORLDPORT_ACK` before rebuilding a connected Character's entity.
 A live Character without a World Session moves immediately. The normal teleport path

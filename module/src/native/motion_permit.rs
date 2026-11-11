@@ -48,7 +48,7 @@ pub(super) fn refresh(ctx: &ReducerContext, connection_id: ConnectionId, guid: u
             .is_some_and(|entity| {
                 (!entity.dead || entity.player_flags & GHOST != 0)
                     && entity.movement_flags & ON_TRANSPORT == 0
-                    && !crate::taxi::movement_is_suppressed(ctx, guid)
+                    && !crate::taxi::is_in_flight(ctx, guid)
                     && !crate::spell::is_movement_blocked(ctx, guid)
             });
     if permitted {

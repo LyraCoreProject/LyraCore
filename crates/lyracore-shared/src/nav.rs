@@ -301,16 +301,6 @@ pub fn walkable_prefix(
     from
 }
 
-/// May return a partial leg; use `find_leg_ex` to distinguish complete and partial plans.
-pub fn find_leg(
-    fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
-    from: (f32, f32),
-    to: (f32, f32),
-    max_expansions: u32,
-) -> Option<Vec<(f32, f32)>> {
-    find_leg_ex(fetch, from, to, max_expansions).map(|(path, _, _)| path)
-}
-
 /// Returns (waypoints, expansions, reached_goal); `None` means no usable leg.
 #[allow(clippy::type_complexity)]
 pub fn find_leg_ex(
@@ -327,6 +317,30 @@ pub fn find_leg_ex(
     }
 }
 
+#[cfg(test)]
+fn find_leg(
+    fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
+    from: (f32, f32),
+    to: (f32, f32),
+    max_expansions: u32,
+) -> Option<Vec<(f32, f32)>> {
+    find_leg_ex(fetch, from, to, max_expansions).map(|(path, _, _)| path)
+}
+
+#[cfg(test)]
+fn find_leg_in_range(
+    fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
+    from: (f32, f32),
+    to: (f32, f32),
+    stop_dist: f32,
+    max_expansions: u32,
+) -> Option<Vec<(f32, f32)>> {
+    match find_leg_in_range_ex(fetch, from, to, stop_dist, max_expansions).outcome {
+        LegOutcome::Complete(path) | LegOutcome::Partial(path) => Some(path),
+        LegOutcome::Blocked => None,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum LegOutcome {
     Complete(Vec<(f32, f32)>),
@@ -338,19 +352,6 @@ pub enum LegOutcome {
 pub struct LegSearch {
     pub outcome: LegOutcome,
     pub expansions: u32,
-}
-
-pub fn find_leg_in_range(
-    fetch: &mut impl FnMut(u16, u16) -> Option<NavCellData>,
-    from: (f32, f32),
-    to: (f32, f32),
-    stop_dist: f32,
-    max_expansions: u32,
-) -> Option<Vec<(f32, f32)>> {
-    match find_leg_in_range_ex(fetch, from, to, stop_dist, max_expansions).outcome {
-        LegOutcome::Complete(path) | LegOutcome::Partial(path) => Some(path),
-        LegOutcome::Blocked => None,
-    }
 }
 
 pub fn find_leg_in_range_ex(

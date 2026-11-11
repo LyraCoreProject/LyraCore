@@ -225,7 +225,6 @@ pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), Str
             apply_fields(row, |field, value| {
                 apply_spawn_field(&mut spawn, field, value)
             })?;
-            stamp_cell(&mut spawn);
             spawn.try_insert(ctx).map_err(|e| insert_failed(row, &e))?;
         }
         (ClaimTable::GameobjectSpawn, Operation::Update) => {
@@ -234,7 +233,6 @@ pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), Str
             apply_fields(row, |field, value| {
                 apply_spawn_field(&mut spawn, field, value)
             })?;
-            stamp_cell(&mut spawn);
             spawn.update(ctx);
         }
         (other, _) => unreachable!(
@@ -243,13 +241,6 @@ pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), Str
         ),
     }
     Ok(())
-}
-
-fn stamp_cell(spawn: &mut GameObject) {
-    let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(spawn.x, spawn.y);
-    spawn.grid_x = grid_x;
-    spawn.grid_y = grid_y;
-    spawn.cell = lyracore_shared::spatial::cell_id_at(spawn.x, spawn.y);
 }
 
 fn insert_failed(row: &TracedRow, e: &dyn std::fmt::Display) -> String {
@@ -447,23 +438,6 @@ mod tests {
         assert_eq!(template.name, "Kindled Cache");
         assert_eq!(template.type_id, 3);
         assert_eq!(template.data0, 25);
-    }
-
-    #[test]
-    fn a_written_position_restamps_the_grid_cell() {
-        let mut spawn = blank_spawn_for_test();
-        spawn.x = 2_133.0;
-        spawn.y = -4_477.0;
-
-        stamp_cell(&mut spawn);
-
-        let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(spawn.x, spawn.y);
-        assert_eq!((spawn.grid_x, spawn.grid_y), (grid_x, grid_y));
-        assert_eq!(
-            spawn.cell,
-            lyracore_shared::spatial::cell_id_at(2_133.0, -4_477.0)
-        );
-        assert_ne!(spawn.cell, 0, "a real position is not cell (0, 0)");
     }
 
     #[test]

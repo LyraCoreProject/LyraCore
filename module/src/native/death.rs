@@ -34,7 +34,7 @@ pub(super) fn receive(
 ) -> Result<(), Rollback> {
     let character = super::actor(ctx, guid)?;
     let result = match message {
-        ClientOpcodeMessage::CMSG_REPOP_REQUEST => crate::world::do_repop(ctx, guid),
+        ClientOpcodeMessage::CMSG_REPOP_REQUEST => crate::ghost::do_repop(ctx, guid),
         ClientOpcodeMessage::MSG_CORPSE_QUERY => {
             let location = ctx
                 .db
@@ -70,7 +70,7 @@ pub(super) fn receive(
         ClientOpcodeMessage::CMSG_SELF_RES => crate::spell::do_self_resurrect(ctx, guid),
         ClientOpcodeMessage::CMSG_SPIRIT_HEALER_ACTIVATE(request) => {
             crate::ghost::spirit_healer_gate(ctx, guid, request.guid.guid())?;
-            crate::world::do_spirit_healer_res(ctx, guid)
+            crate::ghost::do_spirit_healer_res(ctx, guid)
         }
         _ => return Err("not a native death request".into()),
     };

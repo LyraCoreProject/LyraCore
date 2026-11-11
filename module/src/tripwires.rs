@@ -1123,7 +1123,7 @@ mod partition_discipline_tripwire {
         ("module/src/debug/instance.rs", 3, "Debug fixture setup and floor validation inspect template populations and guid allocation."),
         ("module/src/creatures/spawn.rs", 3, "World import replaces authored spawns and entities; timer normalization scans all spawns."),
         ("module/src/go_collider.rs", 1, "Operator reconciliation rebuilds derived colliders for every hosted partition"),
-        ("module/src/gameobject.rs", 2, "`import_gameobjects` drops every gameobject row before reloading the world; plus one by-`template_entry` lookup (an entry-keyed find, not a spatial query — no index on that column)"),
+        ("module/src/gameobject.rs", 2, "`import_gameobjects` drops every gameobject row before reloading the world; `debug_pick_lock_entry` finds any spawn of one entry"),
         ("module/src/package_import/creatures.rs", 1, "a Package Delta apply clears the whole Package creature range before it writes, so a Package that left the enabled set takes its spawns with it — realm-wide reconciliation, and the band has no index"),
         ("module/src/package_import/gameobjects.rs", 1, "the same whole-band clear for the Package gameobject range"),
         ("module/src/instance.rs", 7, "instance population spawn/teardown + the reaper's occupied-instance census — classifying every partition at once is the job"),
@@ -1402,9 +1402,10 @@ mod character_fence_tripwire {
         ("module/src/native/directory.rs", 1, "FENCED: the Operator directory census skips Characters behind the Transfer Gate"),
         ("module/src/helpers.rs", 2, "`character_by_guid` and `characters_by_name` apply the Transfer Gate to raw Character reads"),
         ("module/src/transfer/mod.rs", 4, "Transfer reads the fenced Character for export, destination materialization, durability checks, and the in-transit Instance census."),
-        ("module/src/world.rs", 8, "player_login carries its own `is_in_transit` fence (the re-materialisation chokepoint, 2 reads); teleport_player, set_home, persist_entity and is_gm_character take a guid already resolved through a fenced entity (persist_entity is called BY begin_transfer); debug_delete_character keeps a raw existence probe so a missing character stays a no-op while an in-transit one is REFUSED, with the fence on the same expression; cascade_delete_character's raw row DELETE is the sweep that probe guards. `recall_to_home` is now FENCED (character_by_guid) — it was the one teleport_player caller needing no live entity"),
+        ("module/src/world.rs", 2, "`teleport` and `is_gm_character` take a guid already resolved through a fenced live entity"),
+        ("module/src/character.rs", 9, "World entry carries its own `is_in_transit` fence (2 reads); `set_home` and `persist_entity` take a guid resolved through a fenced entity (`begin_transfer` calls `persist_entity`); `debug_delete_character` keeps a raw existence probe so a missing Character stays a no-op while an in-transit one is refused, and `cascade_delete_character`'s raw delete is the sweep that probe guards; creation checks name uniqueness; the deletion Gate distinguishes absence, ownership and the Transfer fence"),
         ("module/src/group.rs", 2, "Group events and departure read member identity while changing membership."),
-        ("module/src/auth.rs", 5, "Character creation checks name uniqueness and initializes the guid allocator. Character deletion distinguishes absence, ownership, and the Transfer fence. `adopt_character_gm_levels` is the Realm-wide repair scan that moves legacy Character GM levels onto Accounts."),
+        ("module/src/auth.rs", 2, "the guid allocator seeds from every Character guid; `adopt_character_gm_levels` is the Realm-wide repair scan that moves legacy Character GM levels onto Accounts"),
         ("module/src/items/ops.rs", 2, "race/class reads for the starter loadout and the mana-class gate — no write to the character"),
         ("module/src/spell/cast/targeting.rs", 1, "caster NAME for the resurrect prompt — no write"),
         ("module/src/reputation.rs", 1, "owner_identity fallback for RLS visibility of a new rep row — no write to the character"),
@@ -2069,7 +2070,7 @@ pub(crate) mod grid_address_writes {
         ("module/src/spell/tables.rs", "insert"),
         ("module/src/spell/tables.rs", "repair_cell"),
         ("module/src/creatures/tick/mod.rs", "repair_cell"),
-        ("module/src/package_import/gameobjects.rs", "stamp_cell"),
+        ("module/src/gameobject.rs", "stamp_cell"),
         ("module/src/debug/instance.rs", "debug_backfill_go_grid"),
         ("module/src/debug/mod.rs", "debug_backfill_cell_ids"),
     ];
@@ -2314,14 +2315,20 @@ mod creature_teardown_tripwire {
     /// function that deletes its row. An empty path means the teardown deletes the row itself.
     const CLEARED: &[(&str, &[(&str, &str)])] = &[
         ("game_creature_spline", &[]),
-        ("game_entity_motion", &[]),
+        (
+            "game_entity_motion",
+            &[("module/src/world/simulation.rs", "delete")],
+        ),
         (
             "game_world_entity",
             &[("module/src/world/simulation.rs", "delete")],
         ),
         (
             "game_entity_motion_pending",
-            &[("module/src/motion.rs", "drop_pending")],
+            &[
+                ("module/src/world/simulation.rs", "delete"),
+                ("module/src/motion.rs", "drop_pending"),
+            ],
         ),
         (
             "game_melee_attack",

@@ -239,6 +239,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::weather::rearm_weather_schedule(ctx);
 
     crate::meeting_stone::rearm_reminder_schedule(ctx);
+    crate::transport::arm_crossings(ctx);
 
     let (legacy_auction_mail, _unmapped_auction_mail) =
         crate::auction::repair_legacy_auction_mail(ctx);

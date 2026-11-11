@@ -67,7 +67,7 @@ pub fn gw_movement_update(
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    if crate::taxi::movement_is_suppressed(ctx, actor_guid) {
+    if crate::taxi::is_in_flight(ctx, actor_guid) {
         return Ok(());
     }
     let mover = actor(ctx, actor_guid)?;
@@ -135,7 +135,7 @@ pub fn gw_movement_batch(ctx: &ReducerContext, moves: Vec<GwMove>) -> Result<(),
     require_operator(ctx)?;
     apply_movement_batch(
         moves,
-        |actor_guid| crate::taxi::movement_is_suppressed(ctx, actor_guid),
+        |actor_guid| crate::taxi::is_in_flight(ctx, actor_guid),
         |m| {
             let actor_guid = crate::account_ownership::require_actor(ctx, m.actor)?;
             let mover = actor(ctx, actor_guid)?;
@@ -547,9 +547,11 @@ pub fn gw_set_target(
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let entity =
+    let mut entity =
         acting_entity_by_guid(ctx, actor_guid).ok_or_else(|| "mover not in world".to_string())?;
-    crate::world::apply_set_target(ctx, entity, target_guid)
+    entity.target_guid = target_guid;
+    entity.update(ctx);
+    Ok(())
 }
 
 #[reducer]
@@ -597,7 +599,7 @@ pub fn gw_player_login(
         ctx,
         account_id,
         request_actor,
-        crate::world::WorldEntry::Login,
+        crate::character::WorldEntry::Login,
     )
 }
 
@@ -612,7 +614,7 @@ pub fn gw_player_world_port(
         ctx,
         account_id,
         request_actor,
-        crate::world::WorldEntry::WorldPort,
+        crate::character::WorldEntry::WorldPort,
     )
 }
 
@@ -620,7 +622,7 @@ fn enter_world(
     ctx: &ReducerContext,
     account_id: u64,
     request_actor: crate::account_ownership::SessionActor,
-    entry: crate::world::WorldEntry,
+    entry: crate::character::WorldEntry,
 ) -> Result<(), String> {
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let account = ctx
@@ -632,8 +634,8 @@ fn enter_world(
     let owner = account.identity.ok_or_else(|| {
         "account has no bound identity — establish_session must run before login".to_string()
     })?;
-    crate::world::apply_player_login(ctx, &account, character_guid, owner, entry)?;
-    if entry == crate::world::WorldEntry::Login {
+    crate::character::apply_player_login(ctx, &account, character_guid, owner, entry)?;
+    if entry == crate::character::WorldEntry::Login {
         crate::taxi::resume_flight(ctx, character_guid)?;
     }
     Ok(())
@@ -1130,7 +1132,7 @@ pub fn gw_bind_home(
         innkeeper_guid,
         crate::npc_interaction::NpcService::Innkeeper,
     )?;
-    crate::world::set_home(ctx, actor_guid);
+    crate::character::set_home(ctx, actor_guid);
     Ok(())
 }
 
@@ -1244,7 +1246,7 @@ pub fn gw_gossip_select(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::world::apply_gossip_select(
+    crate::gossip::apply_gossip_select(
         ctx,
         actor_guid,
         npc_guid,
@@ -1268,7 +1270,7 @@ pub fn gw_inspect(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let inspector = actor(ctx, actor_guid)?;
-    Ok(crate::world::apply_inspect(ctx, inspector, target_guid)?)
+    Ok(crate::inspect::apply_inspect(ctx, inspector, target_guid)?)
 }
 
 #[reducer]

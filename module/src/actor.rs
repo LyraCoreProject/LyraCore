@@ -128,7 +128,7 @@ package_only! {
     pub(crate) use crate::items::item_count as item_count;
     pub(crate) use crate::xp::xp_for_kill as xp_for_kill;
     pub(crate) use crate::xp::rank_xp_multiplier as rank_xp_multiplier;
-    pub(crate) use crate::gameobject::go_type as go_type;
+    pub(crate) use lyracore_shared::constants::go_type as go_type;
 }
 
 package_only! {
@@ -201,8 +201,8 @@ package_only! {
 debug_only! { pub(crate) use crate::trainer::apply_trainer_buy as trainer_buy; }
 package_only! {
     pub(crate) use crate::spell::do_resurrect_response as respond_resurrect;
-    pub(crate) use crate::world::do_repop as repop;
-    pub(crate) use crate::world::do_spirit_healer_res as spirit_res;
+    pub(crate) use crate::ghost::do_repop as repop;
+    pub(crate) use crate::ghost::do_spirit_healer_res as spirit_res;
     pub(crate) use crate::spell::do_self_resurrect as self_resurrect;
 }
 
@@ -286,7 +286,7 @@ pub(crate) fn restore_sessionless_body(
     let mut entity = crate::world::build_player_entity(ctx, &character, Identity::ZERO);
     if character.pending_ghost {
         let (dead, health, player_flags, unit_bytes_1) =
-            crate::world::ghost_restored_fields(entity.player_flags, entity.unit_bytes_1);
+            crate::ghost::ghost_restored_fields(entity.player_flags, entity.unit_bytes_1);
         entity.dead = dead;
         entity.health = health;
         entity.player_flags = player_flags;

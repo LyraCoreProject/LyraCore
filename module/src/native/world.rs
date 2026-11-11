@@ -4,11 +4,11 @@ use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use crate::action_bar::game_player_action;
 use crate::aoi::game_aoi_grant;
+use crate::character::CharacterDeparture;
 use crate::game_world_entity;
 use crate::reputation::game_player_reputation;
 use crate::skill::game_player_skill;
 use crate::spell::spellbook::game_player_spell;
-use crate::world::CharacterDeparture;
 
 use super::{
     game_native_player, game_native_world_connection, NativeActive, NativePlayer,
@@ -45,7 +45,7 @@ fn enter(
         connection,
         account_id,
         guid,
-        crate::world::WorldEntry::Login,
+        crate::character::WorldEntry::Login,
         0,
     )
 }
@@ -55,7 +55,7 @@ pub(super) fn enter_character(
     connection: NativeWorldConnection,
     account_id: u64,
     guid: u64,
-    entry: crate::world::WorldEntry,
+    entry: crate::character::WorldEntry,
     teleport_counter: u32,
 ) -> Result<(), String> {
     let account = super::current_account(ctx, &connection, account_id)?;
@@ -81,7 +81,7 @@ pub(super) fn enter_character(
         super::disconnect(ctx, previous.connection_id);
     }
     super::realm_party::restore(ctx, guid);
-    crate::world::apply_player_login(ctx, &account, guid, owner, entry)?;
+    crate::character::apply_player_login(ctx, &account, guid, owner, entry)?;
     super::instance_shard::arrived(ctx, guid, character.map_id, character.pending_instance_id);
     crate::aoi::enter_viewer(ctx, guid)?;
     crate::creatures::cycle::character_arrived(ctx, guid);
@@ -128,8 +128,8 @@ pub(super) fn enter_character(
         &reputations,
         &actions,
         match entry {
-            crate::world::WorldEntry::Login => codec::WorldEntry::FreshLogin,
-            crate::world::WorldEntry::WorldPort => codec::WorldEntry::WorldPort,
+            crate::character::WorldEntry::Login => codec::WorldEntry::FreshLogin,
+            crate::character::WorldEntry::WorldPort => codec::WorldEntry::WorldPort,
         },
         crate::time::now_secs(ctx),
     )
@@ -215,7 +215,7 @@ pub(super) fn enter_character(
     for grant in grants {
         super::visibility::create(ctx, connection.connection_id, &grant, false)?;
     }
-    if entry == crate::world::WorldEntry::Login {
+    if entry == crate::character::WorldEntry::Login {
         crate::taxi::resume_flight(ctx, guid)?;
     }
     if carrier.is_none() {
@@ -230,7 +230,7 @@ pub(super) fn enter_character(
     super::chat::replay_system_messages(ctx, guid);
     super::social::enter(ctx, account_id, guid, entry);
     super::party::enter(ctx, guid, entry);
-    if entry == crate::world::WorldEntry::Login {
+    if entry == crate::character::WorldEntry::Login {
         super::guild::presence(ctx, guid, true);
     }
     if let Some(sequence) = cinematic {
@@ -303,9 +303,9 @@ pub(super) fn leave(
             .guid()
             .find(player.character_guid)
         {
-            crate::world::remove_live_character(ctx, entity, departure);
+            crate::character::remove_live_character(ctx, entity, departure);
         } else {
-            crate::world::remove_loading_character(ctx, player.character_guid, departure);
+            crate::character::remove_loading_character(ctx, player.character_guid, departure);
         }
         super::party::roster(ctx, player.character_guid, true);
     }
@@ -541,7 +541,7 @@ pub(super) fn receive(
         }
         ClientOpcodeMessage::CMSG_INSPECT(request) => {
             let entity = crate::helpers::live_entity(ctx, guid)?;
-            crate::world::apply_inspect(ctx, entity, request.guid.guid())?;
+            crate::inspect::apply_inspect(ctx, entity, request.guid.guid())?;
             ServerOpcodeMessage::SMSG_INSPECT(codec::build_inspect_response(request.guid.guid()))
         }
         ClientOpcodeMessage::CMSG_ATTACKSWING(request) => {
@@ -644,11 +644,9 @@ pub(super) fn receive(
             return Ok(());
         }
         ClientOpcodeMessage::CMSG_SET_SELECTION(selection) => {
-            crate::world::apply_set_target(
-                ctx,
-                crate::helpers::live_entity(ctx, guid)?,
-                selection.target.guid(),
-            )?;
+            let mut entity = crate::helpers::live_entity(ctx, guid)?;
+            entity.target_guid = selection.target.guid();
+            entity.update(ctx);
             return Ok(());
         }
         ClientOpcodeMessage::CMSG_REQUEST_ACCOUNT_DATA(request) => {

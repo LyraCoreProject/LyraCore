@@ -27,7 +27,6 @@ impl MoveClock {
 pub(crate) struct CellCrossing(bool);
 
 impl WorldEntity {
-    /// Moves to a position and derives its grid address and packed cell together.
     pub(crate) fn place(&mut self, x: f32, y: f32, z: f32, clock: MoveClock) -> CellCrossing {
         let previous_grid = (self.grid_x, self.grid_y);
         let (grid_x, grid_y) = spatial::grid_cell(x, y);

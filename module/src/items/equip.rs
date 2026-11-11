@@ -143,7 +143,7 @@ fn reconcile_item(ctx: &ReducerContext, guid: u64, changed_item: Option<u64>, re
             if spell != 0 && trigger == 1 {
                 if let Some(header) = ctx.db.game_spell().spell_id().find(spell) {
                     if (!entity.dead || header.equip_passive())
-                        && header.allows_equip_form(entity.unit_bytes_1 >> 16 & 0xff)
+                        && header.allows_equip_form(entity.form())
                     {
                         desired.insert((item.guid, spell), header);
                     }

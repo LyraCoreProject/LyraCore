@@ -124,7 +124,7 @@ pub(super) fn begin_character(
     super::world::leave(
         ctx,
         connection.connection_id,
-        crate::world::CharacterDeparture::Transfer,
+        crate::character::CharacterDeparture::Transfer,
     );
     let mut character = crate::helpers::character_by_guid(ctx, guid)
         .ok_or("Character vanished during departure")?;
@@ -542,7 +542,7 @@ pub fn idc_native_transfer_release(
 
 fn clear_pending_playtest(ctx: &ReducerContext, guid: u64) {
     if let Some(mut character) = crate::helpers::character_by_guid(ctx, guid) {
-        let (godmode, speed) = crate::world::persisted_gm_playtest(
+        let (godmode, speed) = crate::character::persisted_gm_playtest(
             character.pending_godmode,
             character.pending_run_speed_mult_bp,
             true,

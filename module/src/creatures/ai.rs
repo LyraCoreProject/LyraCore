@@ -149,23 +149,6 @@ pub(crate) fn spline_t(now_us: u64, start_micros: u64, dur_ms: u32) -> f32 {
     (now_us.saturating_sub(start_micros) as f32 / dur_us as f32).clamp(0.0, 1.0)
 }
 
-pub(crate) fn chase_step(
-    cx: f32,
-    cy: f32,
-    tx: f32,
-    ty: f32,
-    max_step: f32,
-    stop_dist: f32,
-) -> (f32, f32) {
-    let (dx, dy) = (tx - cx, ty - cy);
-    let len = (dx * dx + dy * dy).sqrt();
-    if len <= stop_dist {
-        return (cx, cy);
-    }
-    let travel = (len - stop_dist).min(max_step);
-    (cx + dx / len * travel, cy + dy / len * travel)
-}
-
 pub(crate) const RETURN_LEASH_SQ: f32 = 225.0;
 
 pub(crate) const WANDER_RADIUS: f32 = 6.0;
@@ -228,6 +211,7 @@ pub(crate) fn nearest_waypoint_idx(cx: f32, cy: f32, pts: &[(f32, f32)]) -> usiz
 mod tests {
     use super::*;
     use lyracore_shared::constants;
+    use lyracore_shared::movement_path::chase_step;
 
     #[test]
     fn hp_pct_below_threshold_and_flee_delegation() {
@@ -420,48 +404,6 @@ mod tests {
             (d - 12.0).abs() < 0.05,
             "coincident leg distance {d} expected ~12.0 (still moves)"
         );
-    }
-
-    #[test]
-    fn chase_step_closes_to_just_inside_melee() {
-        let (x, y) = chase_step(0.0, 0.0, 20.0, 0.0, constants::speeds::RUN * 4.0, 4.0);
-        assert!(
-            (x - 16.0).abs() < 0.01,
-            "x {x} expected ~16.0 (4 yd short of the target)"
-        );
-        assert!(
-            (y - 0.0).abs() < 0.01,
-            "y {y} expected ~0.0 (straight-line approach)"
-        );
-
-        let (x, y) = chase_step(0.0, 0.0, 100.0, 0.0, constants::speeds::RUN * 4.0, 4.0);
-        assert!(
-            (x - 28.0).abs() < 0.01,
-            "x {x} expected ~28.0 (one tick of run, capped)"
-        );
-        assert!((y - 0.0).abs() < 0.01, "y {y} expected ~0.0");
-
-        let (x, y) = chase_step(0.0, 0.0, 3.0, 0.0, 28.0, 4.0);
-        assert_eq!((x, y), (0.0, 0.0), "within stop_dist must hold position");
-
-        let (x, y) = chase_step(0.0, 0.0, 4.0, 0.0, 28.0, 4.0);
-        assert_eq!(
-            (x, y),
-            (0.0, 0.0),
-            "at the stop_dist boundary must hold position"
-        );
-
-        let (x, y) = chase_step(5.0, 5.0, 5.0, 5.0, 28.0, 4.0);
-        assert_eq!(
-            (x, y),
-            (5.0, 5.0),
-            "coincident must hold position, never NaN"
-        );
-        assert!(x.is_finite() && y.is_finite());
-
-        let (x, y) = chase_step(0.0, 0.0, 30.0, 40.0, 100.0, 5.0);
-        assert!((x - 27.0).abs() < 0.01, "x {x} expected ~27.0");
-        assert!((y - 36.0).abs() < 0.01, "y {y} expected ~36.0");
     }
 
     #[test]

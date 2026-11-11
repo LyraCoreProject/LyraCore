@@ -175,16 +175,13 @@ pub(crate) fn emit_bot_transfer_intent(
     }
     let _ = crate::actor::stop_attack(ctx, bot_guid);
     ctx.db.game_creature_spline().guid().delete(bot_guid);
-    crate::world::teleport_player(
+    crate::world::teleport(
         ctx,
         bot_guid,
         destination.map_id,
         destination.instance_id,
-        destination.x,
-        destination.y,
-        destination.z,
-        destination.o,
-    );
+        [destination.x, destination.y, destination.z, destination.o],
+    )?;
     let intent = intents.insert(BotTransferIntent {
         id: 0,
         bot_guid,
@@ -720,7 +717,7 @@ impl BeginSink for CtxShard<'_> {
         // Persist vitals, position and ghost state before deleting the live entity.
         let entities = self.ctx.db.game_world_entity();
         if let Some(e) = entities.guid().find(guid) {
-            crate::world::persist_entity(self.ctx, &e, false);
+            crate::character::persist_entity(self.ctx, &e, false);
             crate::WorldEntity::delete(self.ctx, guid);
         }
     }
@@ -1501,7 +1498,7 @@ fn cascade_for_transfer(ctx: &ReducerContext, guid: u64, listing_holds: ListingH
             .collect(),
     };
     mail_text::release(ctx, guid, matches!(listing_holds, ListingHolds::Delete));
-    crate::world::cascade_delete_character(ctx, guid);
+    crate::character::cascade_delete_character(ctx, guid);
     for contact in incoming_contacts {
         ctx.db.game_character_contact().insert(contact);
     }

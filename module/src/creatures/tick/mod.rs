@@ -2,8 +2,8 @@ use lyracore_shared::spatial;
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::{
-    game_creature_ai_state, game_entity_motion, game_melee_attack, game_sessionless_action_consent,
-    game_world_entity, WorldEntity,
+    game_creature_ai_state, game_melee_attack, game_sessionless_action_consent, game_world_entity,
+    WorldEntity,
 };
 
 use super::*;

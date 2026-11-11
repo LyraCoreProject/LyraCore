@@ -76,7 +76,7 @@ pub(crate) fn tick_fatigue(ctx: &ReducerContext) {
             crate::breath_relay::fatigue_stop(ctx, guid);
             continue;
         }
-        let draining = state.in_deep_water && !crate::taxi::movement_is_suppressed(ctx, guid);
+        let draining = state.in_deep_water && !crate::taxi::is_in_flight(ctx, guid);
         let elapsed =
             now.to_micros_since_unix_epoch() - state.last_evaluated.to_micros_since_unix_epoch();
         let advanced = advance_fatigue(state.remaining_micros, draining, elapsed);
@@ -103,16 +103,10 @@ fn exhaust(ctx: &ReducerContext, mut entity: WorldEntity, ticks: u32) -> bool {
             entity.y,
             entity.race(),
         );
-        crate::world::teleport_player(
-            ctx,
-            guid,
-            graveyard.map,
-            0,
-            graveyard.x,
-            graveyard.y,
-            graveyard.z,
-            graveyard.o,
-        );
+        let pose = [graveyard.x, graveyard.y, graveyard.z, graveyard.o];
+        if let Err(refusal) = crate::world::teleport(ctx, guid, graveyard.map, 0, pose) {
+            spacetimedb::log::warn!("fatigue: ghost {guid} graveyard return refused: {refusal}");
+        }
         return true;
     }
     let start_health = entity.health;

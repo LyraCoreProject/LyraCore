@@ -430,7 +430,11 @@ fn end_connection(ctx: &ReducerContext, connection_id: ConnectionId, end: Connec
         ConnectionEnd::Closed => logon::close(ctx, connection_id),
     }
     admission::remove(ctx, connection_id);
-    world::leave(ctx, connection_id, crate::world::CharacterDeparture::Logout);
+    world::leave(
+        ctx,
+        connection_id,
+        crate::character::CharacterDeparture::Logout,
+    );
     ctx.db
         .game_native_transfer_pending()
         .connection_id()

@@ -358,7 +358,7 @@ decides which one owns it:
 - **Taxi flight** owns the field for the whole flight. Activation writes the faction mount display
   and sets `UNIT_FLAG_TAXI_FLIGHT` in `unit_flags`; landing clears both. The pair goes out in one
   partial VALUES mask without `OBJECT_FIELD_TYPE`. Route progress belongs to the active-flight row,
-  never to `game_creature_spline`.
+  never to `game_creature_spline`. That row, not the flag, decides whether a Character is in flight.
 - **Land mount** owns it the rest of the time, as a projection. The `A_MOUNTED` aura row is the
   mounted state, and `mount::recompute_mount` derives `mount_display_id` and `run_speed_mult_bp`
   from the current aura set. Every aura removal path ends in that one recompute. A land mount never
@@ -747,7 +747,7 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_duel_schedule` | `tick_duels` | 250 ms | `duel.rs` |
 | `game_taxi_flight_schedule` | `advance_taxi_flight` | 100 ms while a passenger is active | `taxi.rs` |
 | `game_transport_carry_schedule` | `carry_transport_passengers` | 500 ms per Transport while it has Passengers, armed by boarding | `transport/mod.rs` |
-| `game_transport_crossing` | `cross_transport_map` | one-shot at a route's next map change, armed by world entry | `transport/mod.rs` |
+| `game_transport_crossing` | `cross_transport_map` | one-shot at a route's next map change, armed by `init`, `debug_repair_after_publish` and each firing | `transport/mod.rs` |
 | `game_creature_move_schedule` | `tick_creatures` | 500 ms (sensing every 8th pass, about 4 s) | `creatures/tick/mod.rs` |
 | `game_ground_area_schedule` | `tick_ground_areas` | 500 ms | `spell/tables.rs` |
 | `game_native_admission_tick` | `native_admission_tick` | 1 s while the Login Queue holds waiters | `native/admission.rs` |

@@ -40,8 +40,7 @@ mod tests {
     fn the_dungeon_set_is_never_empty() {
         assert!(
             !DUNGEON_MAPS.is_empty(),
-            "DUNGEON_MAPS is empty — the gateway's instance-hosting check iterates it, so an \
-             empty set silently turns that check into a no-op"
+            "DUNGEON_MAPS is empty, so no map would ever host an Instance"
         );
         assert!(
             !DUNGEON_MAPS.contains(&0),

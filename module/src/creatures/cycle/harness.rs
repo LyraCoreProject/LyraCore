@@ -13,9 +13,10 @@ use crate::creatures::eventai::{
     SpellCasterRole, SpellStartMode, SpellTargetRole, SummonInstruction, SummonLocation,
     TargetRangeCondition, TimeWindow, WalkingMode,
 };
-use crate::creatures::{chase_step, rout_window_open};
+use crate::creatures::rout_window_open;
 use crate::quest::{EventAiQuestCredit, EventAiQuestCreditContext, QuestCreditOutcome};
 use lyracore_shared::movement_flags::FORWARD;
+use lyracore_shared::movement_path::chase_step;
 use lyracore_shared::spatial;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, VecDeque};

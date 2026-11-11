@@ -49,8 +49,8 @@ pub fn debug_teleport(
     {
         return Err(format!("no live entity for guid {character_guid}"));
     }
-    crate::world::teleport_player(ctx, character_guid, map_id, 0, x, y, z, o);
-    Ok(())
+    crate::world::teleport(ctx, character_guid, map_id, 0, [x, y, z, o])
+        .map_err(|refusal| refusal.to_string())
 }
 
 #[reducer]
@@ -444,14 +444,13 @@ pub fn debug_grant_item(
 
 #[reducer]
 pub fn debug_bind_home(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::world::set_home(ctx, character_guid);
+    crate::character::set_home(ctx, character_guid);
     Ok(())
 }
 
 #[reducer]
 pub fn debug_use_hearthstone(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::world::recall_to_home(ctx, character_guid);
-    Ok(())
+    crate::character::recall_to_home(ctx, character_guid).map_err(|refusal| refusal.to_string())
 }
 
 #[reducer]
@@ -617,7 +616,7 @@ pub fn debug_spawn_gameobject(
     let guid = packed_gameobject_spawn_guid(template_entry);
     crate::GameObject::delete(ctx, guid);
     ctx.db.game_gameobject_unlocked().go_guid().delete(guid);
-    let go = crate::gameobject::GameObject {
+    crate::gameobject::GameObject {
         guid,
         template_entry,
         map_id,
@@ -629,16 +628,15 @@ pub fn debug_spawn_gameobject(
         created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
-        grid_x: lyracore_shared::spatial::grid_cell(x, y).0,
-        grid_y: lyracore_shared::spatial::grid_cell(x, y).1,
-        cell: lyracore_shared::spatial::cell_id_at(x, y),
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
         rotation_3: 0.0,
     }
     .insert(ctx);
-    crate::go_collider::register(ctx, &go);
     Ok(())
 }
 
@@ -705,7 +703,7 @@ pub fn debug_setup_gather_pool(
         if tmpl_tbl.entry().find(template_entry).is_none() {
             tmpl_tbl.insert(crate::gameobject::GameObjectTemplate {
                 entry: template_entry,
-                type_id: crate::gameobject::go_type::GATHER,
+                type_id: lyracore_shared::constants::go_type::GATHER,
                 display_id,
                 name: format!("Pool GO {template_entry}"),
                 data0,
@@ -1148,7 +1146,7 @@ pub fn debug_gossip_select(
     source_menu_id: u32,
     selected_action: u32,
 ) -> Result<(), String> {
-    crate::world::apply_gossip_select(
+    crate::gossip::apply_gossip_select(
         ctx,
         character_guid,
         npc_guid,

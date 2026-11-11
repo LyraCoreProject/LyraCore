@@ -56,12 +56,18 @@ pub mod npc_flags {
 }
 
 pub mod go_type {
+    pub const DOOR: u8 = 0;
+    pub const BUTTON: u8 = 1;
     pub const QUESTGIVER: u8 = 2;
     pub const CHEST: u8 = 3;
+    pub const TRAP: u8 = 6;
+    pub const GOOBER: u8 = 10;
     pub const ELEVATOR: u8 = 11;
     pub const MO_TRANSPORT: u8 = 15;
     // Meeting Stones send CMSG_MEETINGSTONE_JOIN, not CMSG_GAMEOBJ_USE.
     pub const MEETINGSTONE: u8 = 23;
+    // Source type 25 is FISHINGHOLE; import drops it before using GATHER.
+    pub const GATHER: u8 = 25;
 }
 
 // Build 5875 stores visibility flags in byte 3 of UNIT_FIELD_BYTES_1.

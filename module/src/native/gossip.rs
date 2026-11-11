@@ -203,7 +203,7 @@ fn select(
         return complete(ctx, connection);
     };
     super::actor(ctx, guid)?;
-    let target_menu = crate::world::apply_gossip_select(
+    let target_menu = crate::gossip::apply_gossip_select(
         ctx,
         guid,
         npc,
@@ -353,7 +353,7 @@ pub(super) fn receive(
                     .map_err(String::from)
                 })
                 .map_err(interaction_refusal)?;
-            crate::world::set_home(ctx, guid);
+            crate::character::set_home(ctx, guid);
             if let Some(character) = crate::helpers::character_by_guid(ctx, guid) {
                 let (opcode, body) = codec::build_player_bound(c.guid.guid(), character.zone_id);
                 super::send_raw(ctx, connection, opcode, body, false);

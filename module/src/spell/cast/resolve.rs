@@ -878,7 +878,7 @@ fn check_unit_target(
             .game_world_entity()
             .guid()
             .find(target_guid)
-            .is_some_and(|target| crate::taxi::is_flying(&target))
+            .is_some_and(|target| crate::taxi::is_in_flight(ctx, target.guid))
     {
         return Err(CastGateRefusal::other(
             CastRefusalReason::BadTargets,

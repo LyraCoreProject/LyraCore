@@ -87,7 +87,11 @@ pub fn remove_live_character(ctx: &ReducerContext, character_guid: u64) -> Resul
     if !entity.is_player() {
         return Err(format!("live entity {character_guid} is not a Character"));
     }
-    crate::world::remove_live_character(ctx, entity, crate::world::CharacterDeparture::Logout);
+    crate::character::remove_live_character(
+        ctx,
+        entity,
+        crate::character::CharacterDeparture::Logout,
+    );
     Ok(())
 }
 

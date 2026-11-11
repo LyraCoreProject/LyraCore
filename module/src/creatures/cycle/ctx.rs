@@ -80,7 +80,7 @@ fn aggro_target(ctx: &ReducerContext, entity: &WorldEntity) -> AggroTarget {
         instance_id: entity.instance_id,
         dead: entity.dead,
         godmode: entity.godmode,
-        taxi_flying: crate::taxi::is_flying(entity),
+        taxi_flying: crate::taxi::is_in_flight(ctx, entity.guid),
         stealthed: crate::spell::is_stealthed(ctx, entity.guid),
     }
 }

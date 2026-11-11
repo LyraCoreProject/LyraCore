@@ -203,7 +203,7 @@ pub(crate) fn enter_sessionless_areatrigger(
             "dead Characters cannot enter an AreaTrigger",
         ));
     }
-    if crate::taxi::movement_is_suppressed(ctx, character_guid)
+    if crate::taxi::is_in_flight(ctx, character_guid)
         || crate::spell::is_action_blocked(ctx, character_guid)
     {
         return Err(ActionRefusal::new(
@@ -260,7 +260,7 @@ pub(crate) fn enter_sessionless_areatrigger(
             "AreaTrigger resolves to a different party instance",
         ));
     }
-    Ok(crate::sessionless::relocate(
+    crate::sessionless::relocate(
         ctx,
         character_guid,
         trigger_id,
@@ -269,7 +269,7 @@ pub(crate) fn enter_sessionless_areatrigger(
             ..destination
         },
         controller_generation,
-    ))
+    )
 }
 
 pub(crate) fn request_enter_areatrigger(
@@ -328,7 +328,13 @@ pub(crate) fn apply_enter_areatrigger(ctx: &ReducerContext, player_guid: u64, tr
         } else {
             0
         };
-        crate::world::teleport_player(ctx, player_guid, target_map, instance_id, x, y, z, o);
+        if let Err(refusal) =
+            crate::world::teleport(ctx, player_guid, target_map, instance_id, [x, y, z, o])
+        {
+            spacetimedb::log::info!(
+                "areatrigger {trigger_id}: teleport refused for {player_guid}: {refusal}"
+            );
+        }
     }
 }
 

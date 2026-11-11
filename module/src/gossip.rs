@@ -347,3 +347,22 @@ fn quest_state(ctx: &ReducerContext, character_guid: u64, quest_entry: u32) -> Q
         QuestState::Incomplete
     }
 }
+
+pub(crate) fn apply_gossip_select(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    npc_guid: u64,
+    selection: Selection,
+) -> Result<u32, String> {
+    let target_menu = select_gate(ctx, character_guid, npc_guid, &selection)?;
+    crate::hooks::fire_on_gossip_select(
+        ctx,
+        &crate::hooks::GossipSelectPayload {
+            character_guid,
+            npc_guid,
+            option_id: selection.option_id,
+            option_row_id: selection.row_id,
+        },
+    );
+    Ok(target_menu)
+}

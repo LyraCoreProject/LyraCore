@@ -3,13 +3,10 @@ use crate::movement_flags::{ON_TRANSPORT, SWIMMING};
 // Collision height in yards.
 pub const UNDERWATER_HEAD_HEIGHT: f32 = 2.0;
 
-pub fn is_submerged(
-    player_z: f32,
-    liquid_level: f32,
-    has_liquid: bool,
-    movement_flags: u32,
-) -> bool {
-    has_liquid && movement_flags & SWIMMING != 0 && player_z + UNDERWATER_HEAD_HEIGHT < liquid_level
+pub fn is_submerged(player_z: f32, liquid_level: Option<f32>, movement_flags: u32) -> bool {
+    liquid_level.is_some_and(|level| {
+        movement_flags & SWIMMING != 0 && player_z + UNDERWATER_HEAD_HEIGHT < level
+    })
 }
 
 // Deep water still counts this many yards above its surface.
@@ -136,11 +133,11 @@ mod tests {
         let surface = 10.0;
         let swimming = SWIMMING;
 
-        assert!(!is_submerged(8.0, surface, true, swimming));
-        assert!(is_submerged(7.99, surface, true, swimming));
-        assert!(!is_submerged(8.01, surface, true, swimming));
-        assert!(!is_submerged(0.0, surface, false, swimming));
-        assert!(!is_submerged(0.0, surface, true, 0));
+        assert!(!is_submerged(8.0, Some(surface), swimming));
+        assert!(is_submerged(7.99, Some(surface), swimming));
+        assert!(!is_submerged(8.01, Some(surface), swimming));
+        assert!(!is_submerged(0.0, None, swimming));
+        assert!(!is_submerged(0.0, Some(surface), 0));
     }
 
     #[test]

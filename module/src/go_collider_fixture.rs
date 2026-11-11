@@ -303,7 +303,7 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
     rays(ctx, 0, None)?;
     crate::debug::debug_set_vmap_enabled(ctx, true)?;
 
-    let nearer_guid = (0xF110u64 << 48) | u64::from(ENTRY + 99);
+    let nearer_guid = crate::gameobject::gameobject_guid(u64::from(ENTRY + 99));
     crate::gameobject::import_gameobjects_append(
         ctx,
         format!("{nearer_guid},{ENTRY},{MAP},-2,0,0,0,0,0,0,0,0"),
@@ -322,8 +322,8 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
 
     package_lifecycle(ctx)?;
     pool_lifecycle(ctx)?;
-    let first = crate::instance::create_instance(ctx, MAP, 0)?;
-    let sibling = crate::instance::create_instance(ctx, MAP, 0)?;
+    let first = crate::instance::create_instance(ctx, 0, MAP, 0)?;
+    let sibling = crate::instance::create_instance(ctx, 0, MAP, 0)?;
     rays(ctx, first, Some(1.0))?;
     rays(ctx, sibling, Some(1.0))?;
     require(
@@ -420,7 +420,6 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
     transformed.y = 20.0;
     transformed.z = 30.0;
     transformed.orientation = std::f32::consts::FRAC_PI_2;
-    crate::go_collider::register(ctx, &transformed);
     transformed.update(ctx);
     for hit in [
         crate::vmap::los_ray(ctx, MAP, 0, [10.0, 16.0, 30.0], [10.0, 24.0, 30.0]),
@@ -452,7 +451,7 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
             ctx, entry, type_id, 0, 0, MAP, 0.0, 0.0, 0.0, 0, 0, 0, 0,
         )?;
         crate::go_model::import_go_models_append(ctx, packed_model(entry, 1.0))?;
-        let guid = (0xF110u64 << 48) | u64::from(entry);
+        let guid = crate::gameobject::gameobject_guid(u64::from(entry));
         require(
             ctx.db.game_go_collider().go_guid().find(guid).is_some() == expected,
             "template type gate failed",
@@ -460,7 +459,7 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
         crate::gameobject::despawn_from_relay(ctx, guid)?;
         ctx.db.game_go_model().entry().delete(entry);
     }
-    let imported_guid = (0xF110u64 << 48) | u64::from(ENTRY);
+    let imported_guid = crate::gameobject::gameobject_guid(u64::from(ENTRY));
     crate::gameobject::import_gameobjects(
         ctx,
         format!("{imported_guid},{ENTRY},{MAP},0,0,0,0,0,0,0,0,0"),

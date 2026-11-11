@@ -181,7 +181,7 @@ pub(super) fn acknowledge(
                 connection,
                 player.account_id,
                 player.character_guid,
-                crate::world::WorldEntry::WorldPort,
+                crate::character::WorldEntry::WorldPort,
                 player.teleport_counter,
             )
         }

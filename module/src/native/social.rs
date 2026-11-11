@@ -338,11 +338,11 @@ pub(super) fn enter(
     ctx: &ReducerContext,
     account_id: u64,
     guid: u64,
-    entry: crate::world::WorldEntry,
+    entry: crate::character::WorldEntry,
 ) {
     prune_deleted(ctx, guid);
     super::directory::changed(ctx, account_id, guid, true);
-    if entry == crate::world::WorldEntry::Login {
+    if entry == crate::character::WorldEntry::Login {
         presence(ctx, guid, true);
     }
 }

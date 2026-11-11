@@ -56,7 +56,7 @@ pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     let Some(mut e) = entities.guid().find(guid) else {
         return;
     };
-    if e.dead || crate::taxi::is_flying(&e) {
+    if e.dead || crate::taxi::is_in_flight(ctx, e.guid) {
         return;
     }
     let now_ms = crate::time::now_ms(ctx);
@@ -105,7 +105,7 @@ pub(crate) fn resume_creature_engagement(
         .game_world_entity()
         .guid()
         .find(target_guid)
-        .is_some_and(|target| crate::taxi::is_flying(&target))
+        .is_some_and(|target| crate::taxi::is_in_flight(ctx, target.guid))
     {
         return false;
     }
@@ -368,7 +368,8 @@ fn relation_from(duel: bool, hostile: bool, friendly: impl FnOnce() -> bool) -> 
 }
 
 pub(crate) fn may_harm(ctx: &ReducerContext, attacker: &WorldEntity, target: &WorldEntity) -> bool {
-    !crate::taxi::is_flying(target) && relation(ctx, attacker, target) != Relation::Friendly
+    !crate::taxi::is_in_flight(ctx, target.guid)
+        && relation(ctx, attacker, target) != Relation::Friendly
 }
 
 pub(crate) fn may_help(ctx: &ReducerContext, helper: &WorldEntity, target: &WorldEntity) -> bool {
@@ -380,7 +381,8 @@ pub(crate) fn is_hostile_target(
     attacker: &WorldEntity,
     target: &WorldEntity,
 ) -> bool {
-    !crate::taxi::is_flying(target) && relation(ctx, attacker, target) == Relation::Hostile
+    !crate::taxi::is_in_flight(ctx, target.guid)
+        && relation(ctx, attacker, target) == Relation::Hostile
 }
 
 #[table(

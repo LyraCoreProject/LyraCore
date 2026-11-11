@@ -21,9 +21,9 @@ pub(crate) use crate::package_account::{
 pub(crate) use crate::package_config::ensure_package_config_default as ensure_config_default;
 
 pub(crate) mod character {
+    pub(crate) use crate::character::cascade_delete_character;
     pub(crate) use crate::stats::set_character_level;
     pub(crate) use crate::world::build_player_entity;
-    pub(crate) use crate::world::cascade_delete_character;
 }
 
 pub(crate) mod encounter {

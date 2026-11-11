@@ -1925,6 +1925,7 @@ def check_transport_crossings(host):
             f'VALUES ({path + 1 + index},{path},{index},{map_id},{x},7000,0,{flags},{delay * 1000})')
     host.sql(f"INSERT INTO game_transport (entry,name,display_id,size,flags,taxi_path_id,move_speed,accel_rate,"
         f"period_ms,map_id) VALUES ({entry},'Native crossing',3015,1,40,{path},10,5,24000,0)")
+    host.call('debug_repair_after_publish', [])
     try:
         sailor = host.enter_world('Sailor', at=(0, 7020, 7000, 0))
         docker = host.enter_world('Docker', at=(0, 6900, 7000, 0))

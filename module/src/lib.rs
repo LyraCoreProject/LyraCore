@@ -183,6 +183,7 @@ mod import_meta;
 
 mod combo;
 mod ghost;
+mod inspect;
 mod instance;
 mod items;
 mod load;
