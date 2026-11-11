@@ -14,11 +14,8 @@ use spacetimedb::{
 };
 
 use super::{
-    directory::{self, game_character_directory},
-    game_native_player, game_native_world_connection,
-    realm_shard::game_native_away,
-    who::WhoFilter,
-    NativeActive, NativeWorldState, Rollback,
+    directory, game_native_player, game_native_world_connection, who::WhoFilter, NativeActive,
+    NativeWorldState, Rollback,
 };
 use crate::{
     away::game_character_away,
@@ -117,23 +114,12 @@ fn local_participant(ctx: &ReducerContext, connection: ConnectionId) -> Option<P
 }
 
 fn current_world(ctx: &ReducerContext, participant: &Participant) -> Option<Identity> {
-    let away = ctx
-        .db
-        .game_native_away()
-        .account_id()
-        .find(participant.account_id)?;
-    if away.connection_id.to_u128() != participant.connection
-        || away.character_guid != participant.guid
-    {
-        return None;
-    }
-    let entry = ctx
-        .db
-        .game_character_directory()
-        .guid()
-        .find(participant.guid)?;
-    (entry.account_id == participant.account_id && away.world == Some(entry.world))
-        .then_some(entry.world)
+    directory::current_world(
+        ctx,
+        participant.account_id,
+        participant.guid,
+        participant.connection,
+    )
 }
 
 pub(super) fn who(

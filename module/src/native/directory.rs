@@ -3,6 +3,7 @@ use spacetimedb::{
     reducer, table, Identity, ReducerContext, ScheduleAt, SpacetimeType, Table, TimeDuration,
 };
 
+use super::realm_shard::{game_native_away, NativeAway};
 use crate::game_character;
 use crate::peer::{is_peer, realm_shard, role, world_shard, ShardRole};
 use crate::remote_bindings::peer as remote;
@@ -174,6 +175,41 @@ pub(super) fn character_world(
         world_shard(ctx),
         explicit,
     )
+}
+
+/// The World Shard of the World Session a request claims, while it is still current.
+pub(super) fn current_world(
+    ctx: &ReducerContext,
+    account_id: u64,
+    guid: u64,
+    connection: u128,
+) -> Option<Identity> {
+    session_world(
+        account_id,
+        guid,
+        connection,
+        ctx.db.game_character_directory().guid().find(guid).as_ref(),
+        ctx.db
+            .game_native_away()
+            .account_id()
+            .find(account_id)
+            .as_ref(),
+    )
+}
+
+fn session_world(
+    account_id: u64,
+    guid: u64,
+    connection: u128,
+    entry: Option<&CharacterDirectory>,
+    away: Option<&NativeAway>,
+) -> Option<Identity> {
+    let (entry, away) = (entry?, away?);
+    (entry.account_id == account_id
+        && away.character_guid == guid
+        && away.connection_id.to_u128() == connection
+        && away.world == Some(entry.world))
+    .then_some(entry.world)
 }
 
 fn route_character(
@@ -590,5 +626,85 @@ mod tests {
         );
         assert_eq!(route_character(None, 7, Some(world), true), None);
         assert_eq!(route_character(None, 7, Some(world), false), Some(world));
+    }
+
+    const ACCOUNT: u64 = 7;
+    const GUID: u64 = 42;
+    const CONNECTION: u128 = 9;
+
+    fn world(byte: u8) -> Identity {
+        Identity::from_byte_array([byte; 32])
+    }
+
+    fn entry() -> CharacterDirectory {
+        CharacterDirectory {
+            guid: GUID,
+            account_id: ACCOUNT,
+            world: world(1),
+        }
+    }
+
+    fn away() -> NativeAway {
+        NativeAway {
+            account_id: ACCOUNT,
+            connection_id: spacetimedb::ConnectionId::from_u128(CONNECTION),
+            world: Some(world(1)),
+            character_guid: GUID,
+        }
+    }
+
+    fn claim(entry: Option<&CharacterDirectory>, away: Option<&NativeAway>) -> Option<Identity> {
+        session_world(ACCOUNT, GUID, CONNECTION, entry, away)
+    }
+
+    #[test]
+    fn a_current_world_session_names_its_world_shard() {
+        assert_eq!(claim(Some(&entry()), Some(&away())), Some(world(1)));
+    }
+
+    #[test]
+    fn a_stale_connection_is_not_current() {
+        let away = NativeAway {
+            connection_id: spacetimedb::ConnectionId::from_u128(CONNECTION + 1),
+            ..away()
+        };
+        assert_eq!(claim(Some(&entry()), Some(&away)), None);
+    }
+
+    #[test]
+    fn a_replaced_world_session_is_not_current() {
+        let away = NativeAway {
+            character_guid: GUID + 1,
+            ..away()
+        };
+        assert_eq!(claim(Some(&entry()), Some(&away)), None);
+    }
+
+    #[test]
+    fn a_character_moved_to_another_world_shard_is_not_current() {
+        let entry = CharacterDirectory {
+            world: world(2),
+            ..entry()
+        };
+        assert_eq!(claim(Some(&entry), Some(&away())), None);
+    }
+
+    #[test]
+    fn a_character_of_another_account_is_not_current() {
+        let entry = CharacterDirectory {
+            account_id: ACCOUNT + 1,
+            ..entry()
+        };
+        assert_eq!(claim(Some(&entry), Some(&away())), None);
+    }
+
+    #[test]
+    fn a_character_without_a_directory_entry_is_not_current() {
+        assert_eq!(claim(None, Some(&away())), None);
+    }
+
+    #[test]
+    fn an_account_without_an_away_row_is_not_current() {
+        assert_eq!(claim(Some(&entry()), None), None);
     }
 }

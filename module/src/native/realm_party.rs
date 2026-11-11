@@ -136,16 +136,12 @@ pub(super) fn current(ctx: &ReducerContext, character: &PartyCharacter) -> Optio
             && super::package_actor::current(ctx, character))
         .then_some(entry.world);
     }
-    let away = ctx
-        .db
-        .game_native_away()
-        .account_id()
-        .find(character.account_id)?;
-    (entry.account_id == character.account_id
-        && away.character_guid == character.guid
-        && away.connection_id.to_u128() == character.connection
-        && away.world == Some(entry.world))
-    .then_some(entry.world)
+    directory::current_world(
+        ctx,
+        character.account_id,
+        character.guid,
+        character.connection,
+    )
 }
 
 pub(crate) fn online(ctx: &ReducerContext, guid: u64) -> bool {
