@@ -4,8 +4,8 @@ use lyracore_protocol::{
         vanilla::{
             opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
             BuyResult, GuildCommand, GuildCommandResult, GuildEmblemResult,
-            MSG_SAVE_GUILD_EMBLEM_Server, PetitionResult, MSG_PETITION_DECLINE,
-            MSG_PETITION_RENAME, MSG_TABARDVENDOR_ACTIVATE, SMSG_BUY_FAILED,
+            MSG_SAVE_GUILD_EMBLEM_Client, MSG_SAVE_GUILD_EMBLEM_Server, PetitionResult,
+            MSG_PETITION_DECLINE, MSG_PETITION_RENAME, MSG_TABARDVENDOR_ACTIVATE, SMSG_BUY_FAILED,
             SMSG_TURN_IN_PETITION_RESULTS,
         },
         Guid,
@@ -31,6 +31,40 @@ use crate::{
         GuildEvent, GuildOp,
     },
 };
+
+fn save_emblem(
+    ctx: &ReducerContext,
+    id: ConnectionId,
+    guid: u64,
+    request: &MSG_SAVE_GUILD_EMBLEM_Client,
+) -> Result<(), Rollback> {
+    fee::purchase(
+        ctx,
+        guid,
+        GuildFeeRequest::Emblem(GuildEmblemPurchase {
+            npc_guid: request.vendor.guid(),
+            emblem: GuildEmblem {
+                emblem_style: request.emblem_style,
+                emblem_color: request.emblem_color,
+                border_style: request.border_style,
+                border_color: request.border_color,
+                background_color: request.background_color,
+            },
+        }),
+    )
+    .map_err(|cause| {
+        refused(cause, &|refusal| {
+            Some(emblem_result(match refusal {
+                GuildRefusal::NotInGuild => GuildEmblemResult::NoGuild,
+                GuildRefusal::NotLeader => GuildEmblemResult::NotGuildMaster,
+                GuildRefusal::NotEnoughMoney => GuildEmblemResult::NotEnoughMoney,
+                _ => GuildEmblemResult::NoMessage,
+            }))
+        })
+    })?;
+    super::send(ctx, id, emblem_result(GuildEmblemResult::Success), false)?;
+    Ok(())
+}
 
 pub(super) fn receive(
     ctx: &ReducerContext,
@@ -84,31 +118,7 @@ pub(super) fn receive(
             let Some(_) = local(ctx, guid)? else {
                 return forward(C::MSG_SAVE_GUILD_EMBLEM(request));
             };
-            fee::purchase(
-                ctx,
-                guid,
-                GuildFeeRequest::Emblem(GuildEmblemPurchase {
-                    npc_guid: request.vendor.guid(),
-                    emblem: GuildEmblem {
-                        emblem_style: request.emblem_style,
-                        emblem_color: request.emblem_color,
-                        border_style: request.border_style,
-                        border_color: request.border_color,
-                        background_color: request.background_color,
-                    },
-                }),
-            )
-            .map_err(|cause| {
-                refused(cause, &|refusal| {
-                    Some(emblem_result(match refusal {
-                        GuildRefusal::NotInGuild => GuildEmblemResult::NoGuild,
-                        GuildRefusal::NotLeader => GuildEmblemResult::NotGuildMaster,
-                        GuildRefusal::NotEnoughMoney => GuildEmblemResult::NotEnoughMoney,
-                        _ => GuildEmblemResult::NoMessage,
-                    }))
-                })
-            })?;
-            super::send(ctx, id, emblem_result(GuildEmblemResult::Success), false)?;
+            save_emblem(ctx, id, guid, &request)?;
         }
         C::CMSG_PETITION_BUY(request) => {
             let Some(_) = local(ctx, guid)? else {

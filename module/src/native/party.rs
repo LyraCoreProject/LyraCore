@@ -285,7 +285,7 @@ pub(super) fn command(
             },
             CommandReply::Silent,
         ),
-        P::TargetUpdate(request) => (target_icon(request.clone()), CommandReply::Silent),
+        P::TargetUpdate(request) => (target_icon(*request), CommandReply::Silent),
         P::MinimapPing(request) => {
             if !request.position_x.is_finite() || !request.position_y.is_finite() {
                 return Ok(None);

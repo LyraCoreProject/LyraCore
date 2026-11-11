@@ -128,6 +128,7 @@ fn coverage_keeps_ledger_gaps_and_source_occurrences_separate() -> Result<()> {
     assert_eq!(coverage.gaps.behavior, gaps.len() - data);
 
     let mut sources = BTreeSet::new();
+    let mut parsed_rows = false;
     for (system, covered) in &coverage.systems {
         for (path, counts) in &covered.by_source {
             let source = (system.as_str(), path.as_str());
@@ -143,7 +144,18 @@ fn coverage_keeps_ledger_gaps_and_source_occurrences_separate() -> Result<()> {
         if covered.gaps.data_import == 0 {
             assert!(covered.port_census.is_empty(), "{system}");
         }
+        for (family, census) in &covered.port_census {
+            parsed_rows |= !census.planned_import_rows_by_table.is_empty();
+            assert!(census.manifest["findings"].is_array(), "{system} {family}");
+        }
     }
+    assert!(parsed_rows, "a port census lists planned import rows");
     assert_eq!(sources, gaps.into_iter().collect::<BTreeSet<_>>());
     Ok(())
+}
+
+#[test]
+fn only_importer_paths_are_data_import_gaps() {
+    assert!(is_data_gap("importer/src/world_import_creatures.rs"));
+    assert!(!is_data_gap("module/src/spell/cast/resolve.rs"));
 }
