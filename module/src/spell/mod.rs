@@ -28,17 +28,16 @@ mod taxonomy;
 #[cfg(test)]
 mod tests;
 
+#[cfg(feature = "debug_reducers")]
+pub(crate) use cast::blink_forward;
 pub(crate) use cast::{
     apply_direct_heal, apply_effect, apply_item_auras, apply_spell_auras, aura_apply, begin_cast,
-    begin_cast_with_admission, begin_item_cast, cast_triggered, charge_spell_cost,
-    check_cast_start_gates, check_pending_cast_los, clear_dead_callback_cast_admission,
-    faction_target_violation, recipe_reagents, record_spell_cooldown, resolve_cast_at,
-    revive_amount, select_targets, start_creature_spell, start_spell_cooldown,
-    CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
-    ItemGrantOutcome,
+    begin_loaded_cast, cast_triggered, charge_spell_cost, check_cast_start_gates,
+    clear_dead_callback_cast_admission, complete_cast, faction_target_violation, recipe_reagents,
+    record_spell_cooldown, resolve_cast, revive_amount, select_targets, start_creature_spell,
+    start_spell_cooldown, CastRequest, CreatureSpellCasterAdmission, CreatureSpellStart,
+    CreatureSpellStartMode, CreatureSpellTarget, ItemGrantOutcome, LoadedSpell,
 };
-#[cfg(feature = "debug_reducers")]
-pub(crate) use cast::{blink_forward, resolve_cast};
 pub(crate) use control::{
     break_auras_on_damage, break_auras_on_move, break_channel, buff_status, cancel_cast_attempt,
     control_status, expire_cast_attempt, fear_source, has_aura, interrupt_cast,

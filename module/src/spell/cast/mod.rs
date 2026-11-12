@@ -1,14 +1,12 @@
 pub(crate) mod resolve;
 mod targeting;
 
-#[cfg(feature = "debug_reducers")]
-pub(crate) use resolve::resolve_cast;
 pub(crate) use resolve::{
-    apply_item_auras, apply_spell_auras, begin_cast, begin_cast_with_admission, begin_item_cast,
-    cast_triggered, charge_spell_cost, check_cast_start_gates, check_pending_cast_los,
-    clear_dead_callback_cast_admission, record_spell_cooldown, resolve_cast_at,
-    start_creature_spell, start_spell_cooldown, CreatureSpellCasterAdmission, CreatureSpellStart,
-    CreatureSpellStartMode, CreatureSpellTarget,
+    apply_item_auras, apply_spell_auras, begin_cast, begin_loaded_cast, cast_triggered,
+    charge_spell_cost, check_cast_start_gates, clear_dead_callback_cast_admission, complete_cast,
+    record_spell_cooldown, resolve_cast, start_creature_spell, start_spell_cooldown, CastRequest,
+    CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
+    LoadedSpell,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use targeting::blink_forward;
