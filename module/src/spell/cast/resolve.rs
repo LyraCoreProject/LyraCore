@@ -293,15 +293,8 @@ fn run_spell_effects(
     origin: CastOrigin,
     mut craft: Option<crate::items::ItemStoragePlan>,
 ) {
-    let CastRequest {
-        caster_guid,
-        target_guid,
-        level,
-        dest,
-        item_target,
-        client_initiated,
-        ..
-    } = *request;
+    let (caster_guid, target_guid) = (request.caster_guid, request.target_guid);
+    let (level, dest) = (request.level, request.dest);
     let (hdr, effects) = (&spell.header, spell.effects.as_slice());
     let mut hit_targets = Vec::new();
     let mut seen_hit_targets = std::collections::HashSet::new();
@@ -417,7 +410,7 @@ fn run_spell_effects(
                     dest,
                     triggered,
                     roll == AttackOutcome::Crit,
-                    item_target,
+                    request.item_target,
                 )
             };
             match hit.item {
@@ -488,7 +481,7 @@ fn run_spell_effects(
             energized: total_energized,
             power_type: energized_power_type,
             cooldown_ms: hdr.cooldown_ms,
-            client_initiated,
+            client_initiated: request.client_initiated,
             ..SpellCastEvent::signal(ctx, caster_guid, hdr.spell_id, SpellCastEventKind::Go)
         },
     );
