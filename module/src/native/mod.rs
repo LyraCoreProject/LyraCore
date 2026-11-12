@@ -85,6 +85,11 @@ pub(crate) fn is_world_porting(ctx: &ReducerContext, guid: u64) -> bool {
         .is_some_and(|player| player.teleport == Some(teleport::NativeTeleport::WorldPort))
 }
 
+/// Whether a guild or Auction payment of this Character still awaits its Realm result.
+pub(crate) fn payment_pending(ctx: &ReducerContext, guid: u64) -> bool {
+    realm_petition::pending(ctx, guid) || realm_auction::pending(ctx, guid)
+}
+
 pub(crate) fn has_world_session(ctx: &ReducerContext, guid: u64) -> bool {
     world_session(ctx, guid).is_some()
 }

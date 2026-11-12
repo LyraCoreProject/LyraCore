@@ -128,10 +128,7 @@ fn route(
     {
         return Err("Character belongs to another Package".into());
     }
-    if crate::taxi::is_in_flight(ctx, guid)
-        || super::realm_petition::pending(ctx, guid)
-        || super::realm_auction::pending(ctx, guid)
-    {
+    if crate::taxi::is_in_flight(ctx, guid) || super::payment_pending(ctx, guid) {
         return Err("Character transaction is settling".into());
     }
     let route = crate::areatrigger::area_trigger_route(ctx, trigger)

@@ -6,7 +6,7 @@ use lyracore_protocol::{
     codec,
     messages::vanilla::{
         opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
-        PartyResult, SMSG_NOTIFICATION,
+        PartyResult,
     },
 };
 use lyracore_shared::chat::chat_kind;
@@ -17,7 +17,7 @@ use spacetimedb::{
 };
 
 use super::directory::game_character_directory;
-use super::{directory, game_native_player, realm_shard::game_native_away, Rollback};
+use super::{directory, realm_shard::game_native_away, Rollback};
 use crate::{
     group::{
         self, game_group, game_group_event, game_group_invite, game_group_member,
@@ -136,16 +136,12 @@ pub(super) fn current(ctx: &ReducerContext, character: &PartyCharacter) -> Optio
             && super::package_actor::current(ctx, character))
         .then_some(entry.world);
     }
-    let away = ctx
-        .db
-        .game_native_away()
-        .account_id()
-        .find(character.account_id)?;
-    (entry.account_id == character.account_id
-        && away.character_guid == character.guid
-        && away.connection_id.to_u128() == character.connection
-        && away.world == Some(entry.world))
-    .then_some(entry.world)
+    directory::current_world(
+        ctx,
+        character.account_id,
+        character.guid,
+        character.connection,
+    )
 }
 
 pub(crate) fn online(ctx: &ReducerContext, guid: u64) -> bool {
@@ -322,12 +318,18 @@ pub(super) fn submit(
     if realm_shard(ctx).is_none() {
         return Ok(false);
     }
+    let (opcode, body) = client_frame(message)?;
+    submit_admitted(ctx, connection, guid, opcode, body)
+}
+
+/// The opcode and body a client message has in its unencrypted world frame.
+pub(super) fn client_frame(message: &ClientOpcodeMessage) -> Result<(u32, Vec<u8>), String> {
     let mut frame = Vec::new();
     message
         .write_unencrypted_client(&mut frame)
         .map_err(|error| error.to_string())?;
     let opcode = u32::from_le_bytes(frame[2..6].try_into().expect("encoded client header"));
-    submit_admitted(ctx, connection, guid, opcode, frame[6..].to_vec())
+    Ok((opcode, frame[6..].to_vec()))
 }
 
 pub(super) fn submit_admitted(
@@ -475,13 +477,7 @@ pub fn realm_party_command_answered(
         return Ok(());
     }
     let connection = ConnectionId::from_u128(actor.connection);
-    if !ctx
-        .db
-        .game_native_player()
-        .connection_id()
-        .find(connection)
-        .is_some_and(|player| player.character_guid == actor.guid)
-    {
+    if !super::rollback::connection_holds(ctx, connection, actor.guid) {
         return Ok(());
     }
     match result {
@@ -506,27 +502,14 @@ pub fn realm_party_command_answered(
             }
         }
         Err(error) => {
-            if let Some(packets) = super::rollback::replies_in(&error) {
-                for (opcode, body) in packets {
-                    super::send_raw(ctx, connection, opcode, body, false);
-                }
+            let unavailable = if call.opcode == codec::CMSG_RESET_INSTANCES_OPCODE {
+                super::instance_reset::unavailable()
+            } else if super::meeting_stone::is_realm_request(call.opcode) {
+                super::rollback::unavailable("Meeting Stone")
             } else {
-                super::send(
-                    ctx,
-                    connection,
-                    ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(SMSG_NOTIFICATION {
-                        notification: if call.opcode == codec::CMSG_RESET_INSTANCES_OPCODE {
-                            "Instance reset request unavailable. Please try again."
-                        } else if super::meeting_stone::is_realm_request(call.opcode) {
-                            "Meeting Stone request unavailable. Please try again."
-                        } else {
-                            "Party request unavailable. Please try again."
-                        }
-                        .into(),
-                    })),
-                    false,
-                )?;
-            }
+                super::rollback::unavailable("Party")
+            };
+            super::rollback::replay_refusal(ctx, connection, &error, unavailable);
         }
     }
     Ok(())
@@ -740,13 +723,11 @@ pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), 
         {
             continue;
         }
-        if ctx
-            .db
-            .game_native_player()
-            .connection_id()
-            .find(ConnectionId::from_u128(event.connection))
-            .is_some_and(|player| player.character_guid == event.recipient)
-        {
+        if super::rollback::connection_holds(
+            ctx,
+            ConnectionId::from_u128(event.connection),
+            event.recipient,
+        ) {
             super::party::group_event(
                 ctx,
                 event.recipient,

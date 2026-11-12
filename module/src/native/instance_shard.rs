@@ -6,7 +6,6 @@ use spacetimedb::{
 
 use super::{
     directory::{self, game_map_owner},
-    game_native_player,
     realm_party::{self, PartyCharacter},
 };
 use crate::{
@@ -317,19 +316,15 @@ pub fn idc_world_instance_entry(
         }
         if decoded.actor.connection == 0 {
             super::package_relocation::validate_admission(ctx, decoded.id)?;
-        } else if !ctx
-            .db
-            .game_native_player()
-            .connection_id()
-            .find(ConnectionId::from_u128(decoded.actor.connection))
-            .is_some_and(|player| player.character_guid == guid && player.teleport.is_none())
+        } else if !super::rollback::connection_holds(
+            ctx,
+            ConnectionId::from_u128(decoded.actor.connection),
+            guid,
+        ) || super::is_teleporting(ctx, guid)
         {
             return Err("World Session changed".into());
         }
-        if crate::taxi::is_in_flight(ctx, guid)
-            || super::realm_petition::pending(ctx, guid)
-            || super::realm_auction::pending(ctx, guid)
-        {
+        if crate::taxi::is_in_flight(ctx, guid) || super::payment_pending(ctx, guid) {
             return Err("Character cannot enter an Instance yet".into());
         }
         let trigger = ctx
@@ -514,12 +509,8 @@ fn finish_native(
     };
     ctx.db.game_instance_entry().id().delete(pending.id);
     let connection = ConnectionId::from_u128(decoded.actor.connection);
-    if !ctx
-        .db
-        .game_native_player()
-        .connection_id()
-        .find(connection)
-        .is_some_and(|player| player.character_guid == pending.guid && player.teleport.is_none())
+    if !super::rollback::connection_holds(ctx, connection, pending.guid)
+        || super::is_teleporting(ctx, pending.guid)
     {
         return;
     }
@@ -528,8 +519,7 @@ fn finish_native(
             world != ctx.database_identity() && !crate::peer::is_peer(ctx, world)
         })
         || crate::taxi::is_in_flight(ctx, pending.guid)
-        || super::realm_petition::pending(ctx, pending.guid)
-        || super::realm_auction::pending(ctx, pending.guid)
+        || super::payment_pending(ctx, pending.guid)
     {
         notice(ctx, connection);
         return;
@@ -594,13 +584,7 @@ pub fn expire_instance_entry(ctx: &ReducerContext, entry: InstanceEntry) {
                 return;
             }
             let connection = ConnectionId::from_u128(request.actor.connection);
-            if ctx
-                .db
-                .game_native_player()
-                .connection_id()
-                .find(connection)
-                .is_some_and(|player| player.character_guid == pending.guid)
-            {
+            if super::rollback::connection_holds(ctx, connection, pending.guid) {
                 notice(ctx, connection);
             }
         }
