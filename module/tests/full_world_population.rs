@@ -233,6 +233,21 @@ fn all_dungeon_populations_have_independent_spawn_and_patrol_lifecycles() {
             .len(),
         1
     );
+    seed_dungeon_exit(&shard);
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    shard.assert_call("debug_teleport", &["1", "33", "10", "20", "30", "0"]);
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    shard.assert_call("debug_set_health", &["1", "0"]);
+    shard.assert_call("debug_repop", &["1"]);
+    let ghost = shard
+        .query_rows("SELECT map_id,x,y FROM game_character WHERE guid = 1")
+        .remove(0);
+    assert_eq!(ghost["map_id"], "0");
+    assert_eq!(ghost["x"].parse::<f32>().unwrap(), 110.0);
+    assert_eq!(ghost["y"].parse::<f32>().unwrap(), 200.0);
+}
+
+fn seed_dungeon_exit(shard: &Standalone) {
     shard.insert_row(
         "game_area",
         &[
@@ -296,17 +311,6 @@ fn all_dungeon_populations_have_independent_spawn_and_patrol_lifecycles() {
             ],
         ],
     );
-    shard.assert_call("debug_spawn_player_entity", &["1"]);
-    shard.assert_call("debug_teleport", &["1", "33", "10", "20", "30", "0"]);
-    shard.assert_call("debug_spawn_player_entity", &["1"]);
-    shard.assert_call("debug_set_health", &["1", "0"]);
-    shard.assert_call("debug_repop", &["1"]);
-    let ghost = shard
-        .query_rows("SELECT map_id,x,y FROM game_character WHERE guid = 1")
-        .remove(0);
-    assert_eq!(ghost["map_id"], "0");
-    assert_eq!(ghost["x"].parse::<f32>().unwrap(), 110.0);
-    assert_eq!(ghost["y"].parse::<f32>().unwrap(), 200.0);
 }
 
 #[test]

@@ -66,6 +66,60 @@ fn insert_spell(node: &Standalone, spell: u32, entry: u32, kind: u8) {
     );
 }
 
+fn insert_binding_quest(node: &Standalone, quest: u32, reward: u32, item: u32, creature: u32) {
+    node.insert_row(
+        "game_spell_learn",
+        &[
+            ("id", &quest),
+            ("parent_spell", &reward),
+            ("learn_spell", &50946),
+        ],
+    );
+    node.insert_row(
+        "game_quest_template",
+        &[
+            ("entry", &quest),
+            ("min_level", &1),
+            ("quest_level", &20),
+            ("title", &"Binding fixture"),
+            ("required_races", &1),
+            ("required_classes", &256),
+            ("zone_or_sort", &-61),
+            ("src_item", &item),
+            ("src_item_count", &1),
+        ],
+    );
+    node.insert_row(
+        "game_quest_objective",
+        &[
+            ("id", &quest),
+            ("quest_entry", &quest),
+            ("target_entry", &creature),
+            ("required_count", &1),
+        ],
+    );
+    node.insert_rows(
+        "game_creature_quest",
+        &[
+            &[
+                ("id", &(quest * 2)),
+                ("creature_entry", &GIVER),
+                ("quest_entry", &quest),
+            ],
+            &[
+                ("id", &(quest * 2 + 1)),
+                ("creature_entry", &GIVER),
+                ("quest_entry", &quest),
+                ("role", &1),
+            ],
+        ],
+    );
+    node.insert_row(
+        "game_quest_reward_spell",
+        &[("quest_entry", &quest), ("spell_id", &reward)],
+    );
+}
+
 fn actor(node: &Standalone) -> BTreeMap<String, String> {
     node.query_rows("SELECT * FROM game_world_entity WHERE guid = 1")
         .remove(0)
@@ -289,57 +343,7 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
         load_startup_rule(&node, creature, variant);
         insert_spell(&node, spell, creature, 0x24);
         insert_spell(&node, reward, PET, 0x15);
-        node.insert_row(
-            "game_spell_learn",
-            &[
-                ("id", &quest),
-                ("parent_spell", &reward),
-                ("learn_spell", &50946),
-            ],
-        );
-        node.insert_row(
-            "game_quest_template",
-            &[
-                ("entry", &quest),
-                ("min_level", &1),
-                ("quest_level", &20),
-                ("title", &"Binding fixture"),
-                ("required_races", &1),
-                ("required_classes", &256),
-                ("zone_or_sort", &-61),
-                ("src_item", &item),
-                ("src_item_count", &1),
-            ],
-        );
-        node.insert_row(
-            "game_quest_objective",
-            &[
-                ("id", &quest),
-                ("quest_entry", &quest),
-                ("target_entry", &creature),
-                ("required_count", &1),
-            ],
-        );
-        node.insert_rows(
-            "game_creature_quest",
-            &[
-                &[
-                    ("id", &(quest * 2)),
-                    ("creature_entry", &GIVER),
-                    ("quest_entry", &quest),
-                ],
-                &[
-                    ("id", &(quest * 2 + 1)),
-                    ("creature_entry", &GIVER),
-                    ("quest_entry", &quest),
-                    ("role", &1),
-                ],
-            ],
-        );
-        node.insert_row(
-            "game_quest_reward_spell",
-            &[("quest_entry", &quest), ("spell_id", &reward)],
-        );
+        insert_binding_quest(&node, quest, reward, item, creature);
         node.assert_call("debug_accept_quest", &[PLAYER, &giver, &quest.to_string()]);
         abandon_and_reaccept(&node, &giver, quest, item);
         let inventory = node.query_rows(&format!(
