@@ -9,7 +9,6 @@ use anyhow::{ensure, Context, Result};
 // The spell and transaction support worlds omit defaulted columns; see docs/danger-zones.md §1.2.
 use lyracore_shared::import_sql::insert_defaults;
 use lyracore_test_support::{core_root, Field, Standalone};
-use serde_json::json;
 use wire_client::runner::Transport;
 use wire_client::scenario::FixtureVerb;
 use wire_client::{catalogue, compare, runner};
@@ -20,17 +19,12 @@ use super::transport::{MultiOperatorTransport, OperatorTransport};
 #[path = "../../../conformance/support/ratchet.rs"]
 pub(super) mod ratchet;
 
+#[path = "../../../conformance/support/report.rs"]
+mod report;
+use report::{Report, ScenarioResult, SchemaVersion};
+
 static REPORT: Mutex<()> = Mutex::new(());
 const VIRTUAL_START_MICROS: u64 = 1_800_000_000_000_000;
-
-pub(super) fn harness_revision() -> Result<&'static str> {
-    include_str!("../../../.wire-harness-rev")
-        .lines()
-        .filter(|line| !line.starts_with('#'))
-        .flat_map(str::split_whitespace)
-        .nth(1)
-        .context("harness SHA")
-}
 
 fn git(arguments: &[&str]) -> Result<String> {
     let output = Command::new("git")
@@ -49,49 +43,49 @@ pub(super) fn update_result(
     now: u64,
 ) -> Result<()> {
     let _lock = REPORT.lock().unwrap();
-    let revision = harness_revision()?;
-    let mut result = json!({
-        "schema_version": 2,
-        "tier": "tier1",
-        "core_commit": git(&["rev-parse", "HEAD"] )?,
-        "working_tree_dirty": !git(&["status", "--porcelain", "--untracked-files=normal"] )?.is_empty(),
-        "harness_revision": revision,
-        "recorded_at_unix_ms": now,
-        "scenarios": [],
-    });
+    let mut result = Report {
+        schema_version: SchemaVersion,
+        tier: "tier1".into(),
+        core_commit: git(&["rev-parse", "HEAD"])?,
+        working_tree_dirty: !git(&["status", "--porcelain", "--untracked-files=normal"])?
+            .is_empty(),
+        harness_revision: lyracore_conformance::harness_pin().revision.into(),
+        recorded_at_unix_ms: now,
+        scenarios: Vec::new(),
+        audit: None,
+    };
     match std::fs::read(path) {
         Ok(bytes) => {
-            let old: serde_json::Value = serde_json::from_slice(&bytes)?;
-            if [
-                "schema_version",
-                "tier",
-                "core_commit",
-                "working_tree_dirty",
-                "harness_revision",
-            ]
-            .iter()
-            .all(|field| old[field] == result[field])
+            let old: Report = serde_json::from_slice(&bytes)?;
+            if old
+                .ensure_current("tier1", &result.core_commit, &result.harness_revision)
+                .is_ok()
+                && old.working_tree_dirty == result.working_tree_dirty
             {
-                result["scenarios"] = old["scenarios"].clone();
+                result.scenarios = old.scenarios;
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
         Err(error) => return Err(error.into()),
     }
-    let scenarios = result["scenarios"]
-        .as_array_mut()
-        .context("result scenarios")?;
-    scenarios.retain(|entry| entry["id"] != golden.scenario().id);
+    result
+        .scenarios
+        .retain(|entry| entry.id != golden.scenario().id);
     if let Some(comparison) = comparison {
-        scenarios.push(json!({
-            "id": golden.scenario().id,
-            "behavior": golden.scenario().behavior,
-            "scenario_sha256": golden.trace().header.scenario_sha256,
-            "comparison": comparison,
-            "properties": violations,
-        }));
+        result.scenarios.push(ScenarioResult {
+            id: golden.scenario().id.clone(),
+            behavior: golden.scenario().behavior.clone(),
+            scenario_sha256: golden.trace().header.scenario_sha256.clone(),
+            comparison: comparison.clone(),
+            properties: Some(violations.to_vec()),
+            reference_comparison: None,
+            capture: None,
+            reference_sha256: None,
+        });
     }
-    scenarios.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+    result.scenarios.sort_by(|a, b| a.id.cmp(&b.id));
+    // Serializing through a Value keeps the sorted key order of earlier results.
+    let result = serde_json::to_value(&result)?;
     let temporary = path.with_extension("json.pending");
     std::fs::write(&temporary, serde_json::to_vec_pretty(&result)?)?;
     std::fs::rename(temporary, path)?;
@@ -235,7 +229,7 @@ pub(super) fn record_and_check(
     baseline.check(&ratchet::ScenarioBaseline::from_comparison(
         id,
         &golden.scenario().behavior,
-        harness_revision()?,
+        lyracore_conformance::harness_pin().revision,
         &golden.trace().header.scenario_sha256,
         comparison,
     ))?;

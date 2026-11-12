@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{bail, ensure, Context, Result};
 use lyracore_conformance::FeatureLedger;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use wire_client::{
     catalogue, compare,
     scenario::FixtureVerb,
@@ -12,7 +12,7 @@ use wire_client::{
 
 #[path = "scoreboard/evidence.rs"]
 mod evidence;
-use evidence::{Audit, BehaviorAudit, CandidateCapture, Report, ScenarioResult};
+use evidence::{ratchet, Audit, BehaviorAudit, CandidateCapture, Report, ScenarioResult};
 
 #[cfg(test)]
 #[path = "../support/scratch.rs"]
@@ -29,22 +29,6 @@ struct Run {
     module_sha256: Sha256Digest,
     content: String,
     reference: Provenance,
-}
-
-#[derive(Serialize)]
-struct AuditBaseline<'a> {
-    schema_version: u32,
-    scenarios: Vec<AuditScenarioBaseline<'a>>,
-}
-
-#[derive(Serialize)]
-struct AuditScenarioBaseline<'a> {
-    scenario: &'a str,
-    behavior: &'a str,
-    harness_revision: &'a str,
-    scenario_sha256: &'a Sha256Digest,
-    rule: Vec<evidence::Signature>,
-    data: Vec<evidence::Signature>,
 }
 
 fn export(directory: &Path) -> Result<()> {
@@ -120,25 +104,37 @@ fn check(directory: &Path, scenario: &str) -> Result<()> {
     };
     let comparison = candidate("lyracore")?;
     let reference = candidate("vmangos")?;
-    let head = std::process::Command::new("git")
-        .args(["rev-parse", "HEAD"])
-        .current_dir(root)
-        .output()?;
-    ensure!(head.status.success(), "git rev-parse HEAD failed");
-    let core_commit = String::from_utf8(head.stdout)?.trim().to_owned();
-    let result = serde_json::json!({
-        "schema_version": 2,
-        "tier": "tier1",
-        "core_commit": core_commit,
-        "harness_revision": lyracore_conformance::harness_pin().revision,
-        "scenarios": [{
-            "id": scenario,
-            "behavior": golden.scenario().behavior.clone(),
-            "scenario_sha256": golden.trace().header.scenario_sha256.clone(),
-            "comparison": comparison,
-            "properties": [],
+    let git = |arguments: &[&str]| -> Result<String> {
+        let output = std::process::Command::new("git")
+            .args(arguments)
+            .current_dir(root)
+            .output()?;
+        ensure!(output.status.success(), "git {arguments:?} failed");
+        Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+    };
+    let result = Report {
+        schema_version: evidence::SchemaVersion,
+        tier: "tier1".into(),
+        core_commit: git(&["rev-parse", "HEAD"])?,
+        working_tree_dirty: !git(&["status", "--porcelain", "--untracked-files=normal"])?
+            .is_empty(),
+        harness_revision: lyracore_conformance::harness_pin().revision.into(),
+        recorded_at_unix_ms: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis()
+            .try_into()?,
+        scenarios: vec![ScenarioResult {
+            id: scenario.into(),
+            behavior: golden.scenario().behavior.clone(),
+            scenario_sha256: golden.trace().header.scenario_sha256.clone(),
+            comparison,
+            properties: Some(vec![]),
+            reference_comparison: None,
+            capture: None,
+            reference_sha256: None,
         }],
-    });
+        audit: None,
+    };
     std::fs::write(directory.join("result.json"), serde_json::to_vec(&result)?)?;
     std::fs::write(
         directory.join("reference-comparison.json"),
@@ -158,14 +154,18 @@ fn check(directory: &Path, scenario: &str) -> Result<()> {
     let summary = previous.map_or_else(evidence::Summary::default, |entry| {
         evidence::Summary::collect(entry.comparison.differences.iter())
     });
-    let unrecorded = Sha256Digest::of(b"not in the latest full audit");
-    let baseline = AuditBaseline {
+    let baseline = ratchet::Baseline {
         schema_version: 1,
-        scenarios: vec![AuditScenarioBaseline {
-            scenario,
-            behavior: previous.map_or(golden.scenario().behavior.as_str(), |entry| &entry.behavior),
-            harness_revision: &committed.harness_revision,
-            scenario_sha256: previous.map_or(&unrecorded, |entry| &entry.scenario_sha256),
+        scenarios: vec![ratchet::ScenarioBaseline {
+            scenario: scenario.into(),
+            behavior: previous
+                .map_or(&golden.scenario().behavior, |entry| &entry.behavior)
+                .clone(),
+            harness_revision: committed.harness_revision.clone(),
+            scenario_sha256: previous.map_or_else(
+                || Sha256Digest::of(b"not in the latest full audit"),
+                |entry| entry.scenario_sha256.clone(),
+            ),
             rule: summary
                 .rule
                 .signatures
@@ -180,9 +180,7 @@ fn check(directory: &Path, scenario: &str) -> Result<()> {
                 .collect(),
         }],
     };
-    let mut bytes = serde_json::to_vec_pretty(&baseline)?;
-    bytes.push(b'\n');
-    std::fs::write(directory.join("baseline.json"), bytes)?;
+    std::fs::write(directory.join("baseline.json"), baseline.canonical_bytes()?)?;
     Ok(())
 }
 
@@ -197,7 +195,7 @@ fn compare_run(
         "run used another harness revision"
     );
     let mut report = Report {
-        schema_version: 2,
+        schema_version: evidence::SchemaVersion,
         tier: "conformance_audit".into(),
         core_commit: run.core_commit,
         working_tree_dirty: run.working_tree_dirty,
@@ -379,8 +377,10 @@ mod tests {
             serde_json::to_vec(&reference)?,
         )?;
         check(&directory, scenario)?;
-        let result: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(directory.join("result.json"))?)?;
+        let bytes = std::fs::read(directory.join("result.json"))?;
+        let ledger = FeatureLedger::load(&root.join("features"))?;
+        Report::parse(&bytes, "tier1", &ledger)?;
+        let result: serde_json::Value = serde_json::from_slice(&bytes)?;
         let baseline: serde_json::Value =
             serde_json::from_slice(&std::fs::read(directory.join("baseline.json"))?)?;
         assert_eq!(result["scenarios"][0]["id"], scenario);

@@ -579,7 +579,7 @@ pub(super) fn merge_seed(commit: &str) -> Result<()> {
     let current = super::tier1::ratchet::ScenarioBaseline::from_comparison(
         "spell_direct_damage_outcomes",
         "cast_and_interrupt",
-        super::tier1::harness_revision()?,
+        lyracore_conformance::harness_pin().revision,
         &golden.trace().header.scenario_sha256,
         &comparison,
     );
