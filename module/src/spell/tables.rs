@@ -1,5 +1,6 @@
 use spacetimedb::{table, Identity, ReducerContext, ScheduleAt, Table, Timestamp};
 
+use super::CastRequest;
 use super::{fire_pending_cast, fire_spell_impact, tick_auras, tick_ground_areas};
 use crate::WorldEntity;
 
@@ -916,6 +917,46 @@ pub struct PendingCast {
     pub cooldown_category: Option<u32>,
 }
 
+impl PendingCast {
+    pub(crate) fn scheduled(request: &CastRequest, scheduled_at: ScheduleAt) -> Self {
+        let (has_dest, (dest_x, dest_y, dest_z)) = match request.dest {
+            Some(point) => (true, point),
+            None => (false, (0.0, 0.0, 0.0)),
+        };
+        Self {
+            scheduled_id: 0,
+            scheduled_at,
+            caster_guid: request.caster_guid,
+            spell_id: request.spell_id,
+            level: request.level,
+            target_guid: request.target_guid,
+            pushback_count: 0,
+            has_dest,
+            dest_x,
+            dest_y,
+            dest_z,
+            item_target_guid: request.item_target.unwrap_or(0),
+            cooldown_category: request.cooldown_category,
+        }
+    }
+
+    /// The stored request. The row keeps no client initiation, so a completion reports none.
+    pub(crate) fn request(&self) -> CastRequest {
+        CastRequest {
+            caster_guid: self.caster_guid,
+            spell_id: self.spell_id,
+            level: self.level,
+            target_guid: self.target_guid,
+            client_initiated: false,
+            dest: self
+                .has_dest
+                .then_some((self.dest_x, self.dest_y, self.dest_z)),
+            item_target: (self.item_target_guid != 0).then_some(self.item_target_guid),
+            cooldown_category: self.cooldown_category,
+        }
+    }
+}
+
 #[table(accessor = game_pending_spell_impact, scheduled(fire_spell_impact))]
 pub struct PendingSpellImpact {
     #[primary_key]
@@ -1008,5 +1049,39 @@ impl SelfResurrectOption {
             });
         }
         crate::native::death::self_resurrection_changed(ctx, guid, spell_id.unwrap_or(0));
+    }
+}
+
+#[cfg(test)]
+mod pending_cast_tests {
+    use super::*;
+
+    fn round_trip(request: CastRequest) -> CastRequest {
+        let at = ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(1_000_000));
+        PendingCast::scheduled(&request, at).request()
+    }
+
+    #[test]
+    fn a_pending_cast_keeps_its_ground_point_item_and_cooldown_category() {
+        let request = CastRequest {
+            dest: Some((0.0, 0.0, 0.0)),
+            item_target: Some(7),
+            cooldown_category: Some(11),
+            ..CastRequest::new(1, 2, 3, 4)
+        };
+        assert_eq!(round_trip(request), request);
+        assert_eq!(
+            round_trip(CastRequest::new(1, 2, 3, 1)),
+            CastRequest::new(1, 2, 3, 1)
+        );
+    }
+
+    #[test]
+    fn a_pending_cast_does_not_keep_client_initiation() {
+        let request = CastRequest {
+            client_initiated: true,
+            ..CastRequest::new(1, 2, 3, 4)
+        };
+        assert_eq!(round_trip(request), CastRequest::new(1, 2, 3, 4));
     }
 }

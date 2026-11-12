@@ -1374,17 +1374,9 @@ fn apply_delegating_effect(
     match e.kind {
         E_TRIGGER => {
             if e.trigger_spell != 0 && e.trigger_spell != e.spell_id {
-                if let Err(err) = resolve_cast_at(
+                if let Err(err) = resolve_cast(
                     ctx,
-                    caster_guid,
-                    e.trigger_spell,
-                    level,
-                    target_guid,
-                    false,
-                    false,
-                    None,
-                    None,
-                    None,
+                    &CastRequest::new(caster_guid, e.trigger_spell, level, target_guid),
                 ) {
                     log::info!(
                         "spell {} triggered {} which did not resolve: {}",

@@ -582,16 +582,13 @@ pub(crate) fn apply_item_use_on(
         ItemUseTarget::User => (player_guid, None),
         ItemUseTarget::Unit(unit_guid) => (unit_guid, None),
     };
-    crate::spell::begin_cast_with_admission(
+    crate::spell::begin_cast(
         ctx,
-        player_guid,
-        spell_id,
-        player.level as u8,
-        unit_guid,
-        false,
-        None,
-        item_target,
-        Some(super::equip::use_category(&tmpl, spell_id)),
+        &crate::spell::CastRequest {
+            item_target,
+            cooldown_category: Some(super::equip::use_category(&tmpl, spell_id)),
+            ..crate::spell::CastRequest::new(player_guid, spell_id, player.level as u8, unit_guid)
+        },
         crate::spell::CreatureSpellCasterAdmission::Living,
     )
     .map(|_| ())

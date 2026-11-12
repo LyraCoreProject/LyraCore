@@ -896,12 +896,8 @@ impl CastSink for CtxWorld<'_> {
     fn begin_cast(&mut self, caster: &Caster, spell_id: u32, target: u64) -> bool {
         crate::spell::begin_cast(
             self.ctx,
-            caster.guid,
-            spell_id,
-            caster.level,
-            target,
-            false,
-            None,
+            &crate::spell::CastRequest::new(caster.guid, spell_id, caster.level, target),
+            crate::spell::CreatureSpellCasterAdmission::Living,
         )
         .is_ok()
     }

@@ -270,7 +270,11 @@ pub fn debug_force_cast(
     spell_id: u32,
 ) -> Result<(), String> {
     let e = crate::helpers::live_entity(ctx, character_guid)?;
-    crate::spell::resolve_cast(ctx, character_guid, spell_id, e.level as u8)
+    crate::spell::resolve_cast(
+        ctx,
+        &crate::spell::CastRequest::new(character_guid, spell_id, e.level as u8, character_guid),
+    )
+    .map_err(Into::into)
 }
 
 fn resolve_debug_cast_at(
@@ -280,17 +284,9 @@ fn resolve_debug_cast_at(
     target_guid: u64,
 ) -> Result<(), String> {
     let caster = crate::helpers::live_entity(ctx, caster_guid)?;
-    crate::spell::resolve_cast_at(
+    crate::spell::resolve_cast(
         ctx,
-        caster_guid,
-        spell_id,
-        caster.level as u8,
-        target_guid,
-        false,
-        false,
-        None,
-        None,
-        None,
+        &crate::spell::CastRequest::new(caster_guid, spell_id, caster.level as u8, target_guid),
     )
     .map_err(Into::into)
 }
@@ -785,15 +781,12 @@ pub fn debug_begin_cast(
     target_guid: u64,
 ) -> Result<(), String> {
     let e = crate::helpers::live_entity(ctx, caster_guid)?;
-    Ok(crate::spell::begin_cast(
+    crate::spell::begin_cast(
         ctx,
-        caster_guid,
-        spell_id,
-        e.level as u8,
-        target_guid,
-        false,
-        None,
-    )?)
+        &crate::spell::CastRequest::new(caster_guid, spell_id, e.level as u8, target_guid),
+        crate::spell::CreatureSpellCasterAdmission::Living,
+    )?;
+    Ok(())
 }
 
 #[reducer]
@@ -812,15 +805,15 @@ pub fn debug_cast_spell_at(
     } else {
         target_guid
     };
-    Ok(crate::spell::begin_cast(
+    crate::spell::begin_cast(
         ctx,
-        caster_guid,
-        spell_id,
-        e.level as u8,
-        target,
-        false,
-        Some((x, y, z)),
-    )?)
+        &crate::spell::CastRequest {
+            dest: Some((x, y, z)),
+            ..crate::spell::CastRequest::new(caster_guid, spell_id, e.level as u8, target)
+        },
+        crate::spell::CreatureSpellCasterAdmission::Living,
+    )?;
+    Ok(())
 }
 
 #[reducer]
@@ -1601,15 +1594,12 @@ pub fn debug_cast_spell(
     } else {
         target_guid
     };
-    Ok(crate::spell::begin_cast(
+    crate::spell::begin_cast(
         ctx,
-        character_guid,
-        spell_id,
-        e.level as u8,
-        target,
-        false,
-        None,
-    )?)
+        &crate::spell::CastRequest::new(character_guid, spell_id, e.level as u8, target),
+        crate::spell::CreatureSpellCasterAdmission::Living,
+    )?;
+    Ok(())
 }
 
 #[reducer]

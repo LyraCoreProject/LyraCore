@@ -211,14 +211,16 @@ pub(super) fn receive(
                     let item = item_target(ctx, guid, request).map_err(|refusal| {
                         CastGateRefusal::other(CastRefusalReason::ItemGone, String::from(refusal))
                     })?;
-                    crate::spell::begin_item_cast(
+                    crate::spell::begin_cast(
                         ctx,
-                        guid,
-                        spell,
-                        caster.level as u8,
-                        item.guid,
-                        true,
+                        &crate::spell::CastRequest {
+                            client_initiated: true,
+                            item_target: Some(item.guid),
+                            ..crate::spell::CastRequest::new(guid, spell, caster.level as u8, guid)
+                        },
+                        crate::spell::CreatureSpellCasterAdmission::Living,
                     )
+                    .map(|_| ())
                 } else if matches!(
                     request.targets.target_flags.get_item(),
                     Some(ItemTarget::Item { .. })

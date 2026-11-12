@@ -1,5 +1,5 @@
 use super::*;
-use crate::{game_pending_cast, game_spell, PendingCast};
+use crate::{game_pending_cast, PendingCast};
 use spacetimedb::{ReducerContext, ScheduleAt};
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
@@ -171,6 +171,7 @@ pub enum CastFinish {
     Expired,
 }
 
+#[allow(dead_code, reason = "Packages call it as actor::cast_readiness")]
 pub(crate) fn cast_readiness(
     ctx: &ReducerContext,
     caster_guid: u64,
@@ -178,19 +179,23 @@ pub(crate) fn cast_readiness(
     target_guid: u64,
 ) -> Result<(), CastRefusal> {
     let caster = crate::helpers::live_entity(ctx, caster_guid)?;
-    if caster.is_player() && !knows_spell(ctx, caster_guid, spell_id) {
+    ready_spell(ctx, &caster, spell_id, target_guid).map(|_| ())
+}
+
+fn ready_spell(
+    ctx: &ReducerContext,
+    caster: &crate::WorldEntity,
+    spell_id: u32,
+    target_guid: u64,
+) -> Result<LoadedSpell, CastRefusal> {
+    if caster.is_player() && !knows_spell(ctx, caster.guid, spell_id) {
         return Err(CastRefusal::new(
             CastRefusalKind::UnlearnedSpell,
             format!("spell {spell_id} is not in the caster's spellbook"),
         ));
     }
-    if ctx
-        .db
-        .game_spell()
-        .spell_id()
-        .find(spell_id)
-        .is_some_and(|spell| spell.cast_flags & CAST_FLAG_CHANNELED != 0)
-    {
+    let spell = LoadedSpell::load(ctx, spell_id)?;
+    if spell.header.cast_flags & CAST_FLAG_CHANNELED != 0 {
         return Err(CastRefusal::new(
             CastRefusalKind::UnsupportedChannel,
             "bot cast requests do not yet retain channels".to_string(),
@@ -198,12 +203,12 @@ pub(crate) fn cast_readiness(
     }
     check_cast_start_gates(
         ctx,
-        &caster,
-        spell_id,
+        caster,
+        &spell,
         target_guid,
         CreatureSpellCasterAdmission::Living,
-    )
-    .map_err(Into::into)
+    )?;
+    Ok(spell)
 }
 
 pub(crate) fn request_cast(
@@ -216,17 +221,11 @@ pub(crate) fn request_cast(
         return Ok(CastStart::Waiting(cast));
     }
     let caster = crate::helpers::live_entity(ctx, caster_guid)?;
-    cast_readiness(ctx, caster_guid, spell_id, target_guid)?;
-    begin_cast_with_admission(
+    let spell = ready_spell(ctx, &caster, spell_id, target_guid)?;
+    begin_loaded_cast(
         ctx,
-        caster_guid,
-        spell_id,
-        caster.level as u8,
-        target_guid,
-        false,
-        None,
-        None,
-        None,
+        &CastRequest::new(caster_guid, spell_id, caster.level as u8, target_guid),
+        &spell,
         CreatureSpellCasterAdmission::Living,
     )
     .map_err(Into::into)
