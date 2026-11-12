@@ -65,7 +65,23 @@ fn prepare(
         "debug_start_virtual_clock",
         &["1800000000000000"],
     );
-    shard.assert_sql_database(shard_name, "INSERT INTO game_creature_template (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) VALUES (38,'White melee target','',1,60,1000000000,7,0,0,7,0,0,0,1,2000,0,0,60,1000000000,0,0,0,0,0,0,0,0)");
+    shard.insert_row_database(
+        shard_name,
+        "game_creature_template",
+        &[
+            ("entry", &38),
+            ("name", &"White melee target"),
+            ("display_id", &1),
+            ("level", &60),
+            ("health", &1000000000),
+            ("faction_template", &7),
+            ("creature_type", &7),
+            ("scale", &1),
+            ("base_attack_time_ms", &2000),
+            ("max_level", &60),
+            ("max_level_health", &1000000000),
+        ],
+    );
     let FixtureVerb::Character { at, .. } = &scenario.fixtures[0] else {
         anyhow::bail!("roll Character fixture")
     };

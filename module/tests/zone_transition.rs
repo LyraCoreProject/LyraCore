@@ -85,12 +85,33 @@ fn terrain_cell(x: f32, y: f32) -> (u16, u16) {
 }
 
 fn import_areas(standalone: &Standalone) {
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) \
-         VALUES ({ELWYNN},{MAP_ID},0,1,0,0,2,'Elwynn Forest'),\
-                ({GOLDSHIRE},{MAP_ID},{ELWYNN},2,0,0,2,'Goldshire'),\
-                ({WESTFALL},{MAP_ID},0,3,0,0,2,'Westfall')"
-    ));
+    standalone.insert_rows(
+        "game_area",
+        &[
+            &[
+                ("id", &ELWYNN),
+                ("map_id", &MAP_ID),
+                ("area_bit", &1),
+                ("faction_group", &2),
+                ("name", &"Elwynn Forest"),
+            ],
+            &[
+                ("id", &GOLDSHIRE),
+                ("map_id", &MAP_ID),
+                ("parent_area_id", &ELWYNN),
+                ("area_bit", &2),
+                ("faction_group", &2),
+                ("name", &"Goldshire"),
+            ],
+            &[
+                ("id", &WESTFALL),
+                ("map_id", &MAP_ID),
+                ("area_bit", &3),
+                ("faction_group", &2),
+                ("name", &"Westfall"),
+            ],
+        ],
+    );
 }
 
 fn import_terrain(standalone: &Standalone) {

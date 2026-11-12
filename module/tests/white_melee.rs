@@ -54,7 +54,14 @@ fn white_melee_chances_follow_catalogue_skills_and_defender_eligibility() {
     assert_eq!(chances(&shard, "1", &target), [900, 700, 1700, 500, 80]);
     shard.assert_call("debug_set_skill", &["1", "162", "300"]);
     assert_eq!(sheet_crit(&shard), "500");
-    shard.assert_sql(&format!("INSERT INTO game_creature_defense (entry,no_parry,no_block,no_defense) VALUES ({TEST_WOLF_ENTRY},true,true,false)"));
+    shard.insert_row(
+        "game_creature_defense",
+        &[
+            ("entry", &TEST_WOLF_ENTRY),
+            ("no_parry", &true),
+            ("no_block", &true),
+        ],
+    );
     assert_eq!(chances(&shard, "1", &target), [800, 650, 0, 0, 200]);
     shard.assert_sql(
         &format!("UPDATE game_creature_defense SET no_parry = false, no_block = false WHERE entry = {TEST_WOLF_ENTRY}"),
@@ -80,7 +87,15 @@ fn white_melee_chances_follow_catalogue_skills_and_defender_eligibility() {
     shard.assert_sql(&format!(
         "UPDATE game_creature_defense SET no_defense = false WHERE entry = {TEST_WOLF_ENTRY}"
     ));
-    shard.assert_sql("INSERT INTO game_crit_per_agility (class_level,class,level,rate) VALUES (2108,8,60,19.4553)");
+    shard.insert_row(
+        "game_crit_per_agility",
+        &[
+            ("class_level", &2108),
+            ("class", &8),
+            ("level", &60),
+            ("rate", &19.4553),
+        ],
+    );
     shard.assert_sql("UPDATE game_world_entity SET unit_bytes_0 = 2049 WHERE guid = 1");
     shard.assert_call("debug_set_skill", &["1", "162", "300"]);
     assert_eq!(sheet_crit(&shard), "833");

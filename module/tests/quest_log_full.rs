@@ -50,19 +50,24 @@ fn setup(name: &str) -> (Standalone, String) {
     for offset in 0..=LOG_SIZE + 1 {
         let entry = FIRST_QUEST + offset;
         let repeatable = entry == REPEATABLE;
-        shard.assert_sql(&format!(
-            "INSERT INTO game_quest_template \
-             (entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,\
-             required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,\
-             rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,\
-             limit_time,reward_money_max_level,quest_type) \
-             VALUES ({entry},0,2,'Full log quest',0,0,0,0,0,12,0,0,0,0,0,0,{repeatable},0,0,0,0)"
-        ));
-        shard.assert_sql(&format!(
-            "INSERT INTO game_creature_quest (id,creature_entry,quest_entry,role) \
-             VALUES ({},{TEST_WOLF_ENTRY},{entry},0)",
-            u64::from(entry)
-        ));
+        shard.insert_row(
+            "game_quest_template",
+            &[
+                ("entry", &entry),
+                ("quest_level", &2),
+                ("title", &"Full log quest"),
+                ("zone_or_sort", &12),
+                ("repeatable", &repeatable),
+            ],
+        );
+        shard.insert_row(
+            "game_creature_quest",
+            &[
+                ("id", &u64::from(entry)),
+                ("creature_entry", &TEST_WOLF_ENTRY),
+                ("quest_entry", &entry),
+            ],
+        );
     }
     (shard, giver)
 }

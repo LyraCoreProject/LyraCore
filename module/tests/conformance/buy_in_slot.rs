@@ -506,7 +506,7 @@ fn purchase_admission_checks_items_vendors_and_reputation_before_storage() {
         "debug_grant_reputation",
         &[&guid.to_string(), "50900", "9000"],
     );
-    shard.assert_sql("INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (35,50900,0,0,0,0,0,0,0,0,0,0,0)");
+    shard.insert_row("game_faction_template", &[("id", &35), ("faction", &50900)]);
     shard.assert_sql(&format!(
         "UPDATE game_item_template SET buy_price = 11 WHERE entry = {THREAD}"
     ));
@@ -1086,7 +1086,16 @@ fn vendor_stock_a_changed_entry_keeps_the_source_spawns_counter() {
     shard.assert_sql(&format!(
         "DELETE FROM game_world_entity WHERE guid = {vendor}"
     ));
-    shard.assert_sql(&format!("INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count,restock_seconds,stock_flags) VALUES (99999999,{PROFESSION_TRAINER_ENTRY},{THREAD},0,10,10,0)"));
+    shard.insert_row(
+        "game_npc_vendor",
+        &[
+            ("id", &99999999),
+            ("creature_entry", &PROFESSION_TRAINER_ENTRY),
+            ("item_entry", &THREAD),
+            ("max_count", &10),
+            ("restock_seconds", &10),
+        ],
+    );
     assert_eq!(listed_stock(&mut connection, replacement), 4);
     stock_ack(&ordinary_buy(&mut connection, replacement, 1), 2);
 }

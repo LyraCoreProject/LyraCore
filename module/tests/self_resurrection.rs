@@ -133,8 +133,9 @@ fn a_ghost_cannot_spend_a_stale_reincarnation_option_through_the_native_protocol
         .call("native_world_receive", json!([0x00c7u32, acknowledgement]))
         .unwrap();
     shard.assert_sql("DELETE FROM game_self_resurrect_option WHERE character_guid = 1");
-    shard.assert_sql(
-        "INSERT INTO game_self_resurrect_option (character_guid, spell_id) VALUES (1, 21169)",
+    shard.insert_row(
+        "game_self_resurrect_option",
+        &[("character_guid", &1), ("spell_id", &21169)],
     );
     let ghost = entity(&shard);
     let corpses = shard.query_rows("SELECT * FROM game_corpse WHERE owner_guid = 1");
@@ -207,9 +208,13 @@ fn a_spirit_healer_resurrection_or_a_logout_spends_the_option() {
     soulstone(&standalone);
     standalone.assert_call("debug_set_health", &[&PLAYER.to_string(), "0"]);
     standalone.assert_call("debug_repop", &[&PLAYER.to_string()]);
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_self_resurrect_option (character_guid, spell_id) VALUES ({PLAYER}, {SOULSTONE_SELF_RES})"
-    ));
+    standalone.insert_row(
+        "game_self_resurrect_option",
+        &[
+            ("character_guid", &PLAYER),
+            ("spell_id", &SOULSTONE_SELF_RES),
+        ],
+    );
     standalone.assert_call("debug_spirit_healer_res", &[&PLAYER.to_string()]);
     assert_eq!(
         option_spell(&standalone),
@@ -404,7 +409,15 @@ fn reincarnation_uses_edited_reagents_and_cooldown_without_partial_consumption()
     shard.assert_sql(
         "UPDATE game_spell_reagent SET item_entry = 6948, count = 2 WHERE spell_id = 21169",
     );
-    shard.assert_sql("INSERT INTO game_spell_reagent (id, spell_id, item_entry, count) VALUES (169353, 21169, 17030, 3)");
+    shard.insert_row(
+        "game_spell_reagent",
+        &[
+            ("id", &169353),
+            ("spell_id", &21169),
+            ("item_entry", &17030),
+            ("count", &3),
+        ],
+    );
     shard.assert_call("debug_grant_item", &["1", "6948", "1"]);
     shard.assert_sql(
         "UPDATE game_item_instance SET stack_count = 2 WHERE owner_guid = 1 AND entry = 6948",
@@ -508,11 +521,22 @@ fn cooldown_packets(rows: &[Box<RawValue>], connection_id: u128) -> Vec<(u64, u3
 fn reincarnation(shard: &Standalone) {
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
-    shard.assert_sql("INSERT INTO game_conformance_clock (id, now_micros, elapsed_micros) VALUES (0, 1000000000000, 0)");
+    shard.insert_row(
+        "game_conformance_clock",
+        &[("id", &0), ("now_micros", &1000000000000u64)],
+    );
     set_class(shard, 7, MANA, 2000);
     insert_spell(shard, 21169, "Reincarnation", 0);
     shard.assert_sql("UPDATE game_spell SET cooldown_ms = 3600000 WHERE spell_id = 21169");
-    shard.assert_sql("INSERT INTO game_spell_reagent (id, spell_id, item_entry, count) VALUES (169352, 21169, 17030, 1)");
+    shard.insert_row(
+        "game_spell_reagent",
+        &[
+            ("id", &169352),
+            ("spell_id", &21169),
+            ("item_entry", &17030),
+            ("count", &1),
+        ],
+    );
     insert_effect(
         shard,
         21169,
@@ -607,14 +631,15 @@ fn assert_alive_in_place(player: &SqlRow) {
 }
 
 fn insert_spell(standalone: &Standalone, spell_id: u32, name: &str, duration_ms: u32) {
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
-         cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
-         aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
-         VALUES ({spell_id}, '{name}', 0, 0, 0, 0, 0, 0, {duration_ms}, 32, 0, 0, 0, 0, 0, 0, 0, \
-         false, 0, 0, 0, 0, 0, 0, 0, 0)"
-    ));
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell_id),
+            ("name", &name),
+            ("duration_ms", &duration_ms),
+            ("school_mask", &32),
+        ],
+    );
 }
 
 fn insert_effect(
@@ -627,13 +652,19 @@ fn insert_effect(
     p0_kind: u32,
 ) {
     let id = packed_spell_effect_id(spell_id, 0);
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
-         per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-         VALUES ({id}, {spell_id}, 0, {kind}, {base_points}, 1, 0.0, 0, {target}, \
-         0.0, 0, 0, 0, {p0}, {p0_kind}, 0, 0, false, 0.0)"
-    ));
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &id),
+            ("spell_id", &spell_id),
+            ("kind", &kind),
+            ("base_points", &base_points),
+            ("die_sides", &1),
+            ("target", &target),
+            ("p_0", &p0),
+            ("p_0_kind", &p0_kind),
+        ],
+    );
 }
 
 fn entity(standalone: &Standalone) -> SqlRow {

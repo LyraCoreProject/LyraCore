@@ -42,14 +42,30 @@ fn fixture(name: &str, race: u8) -> Standalone {
 }
 
 fn insert_spell(shard: &Standalone, spell: u32, name: &str, effects: &[(u8, i32, i32, u8)]) {
-    shard.assert_sql(&format!(
-            "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) VALUES ({spell}, '{name}', 0, 0, 0, 0, 0, 0, 4294967295, 1, 0, 0, 0, 0, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, 0, 0)"
-        ));
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell),
+            ("name", &name),
+            ("duration_ms", &4294967295u64),
+            ("school_mask", &1),
+        ],
+    );
     for (index, (kind, amount, parameter, parameter_kind)) in effects.iter().copied().enumerate() {
         let id = (spell as u64) * 4 + index as u64;
-        shard.assert_sql(&format!(
-                "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, p0, p0_kind, p1, script_id, enters_combat, points_per_combo) VALUES ({id}, {spell}, {index}, {kind}, {amount}, 1, 0.0, 0, 0, 0.0, 0, 0, 0, {parameter}, {parameter_kind}, 0, 0, false, 0.0)"
-            ));
+        shard.insert_row(
+            "game_spell_effect",
+            &[
+                ("id", &id),
+                ("spell_id", &spell),
+                ("effect_index", &index),
+                ("kind", &kind),
+                ("base_points", &amount),
+                ("die_sides", &1),
+                ("p_0", &parameter),
+                ("p_0_kind", &parameter_kind),
+            ],
+        );
     }
 }
 
@@ -188,8 +204,9 @@ fn a_ghost_cannot_use_a_stale_self_resurrection_option() {
         "Self resurrection",
         &[(E_SELF_RESURRECT, 50, 0, P_NONE)],
     );
-    shard.assert_sql(
-        "INSERT INTO game_self_resurrect_option (character_guid, spell_id) VALUES (1, 5090000)",
+    shard.insert_row(
+        "game_self_resurrect_option",
+        &[("character_guid", &1), ("spell_id", &5090000)],
     );
     let refusal = shard.call("gw_self_resurrect", &[&actor("1")]);
     assert!(!refusal.status.success());
@@ -393,7 +410,18 @@ fn timestamp(value: &str) -> i64 {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_ghost_chooses_a_spirit_healer_in_reach_and_pays_its_penalties() {
     let shard = fixture("ghost-spirit-healer", 1);
-    shard.assert_sql(&format!("INSERT INTO game_gossip_option (row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({SPIRIT_HEALER_OPTION},{SPIRIT_HEALER_ENTRY},0,0,'Return me to life.',{},0,0,0,0)", lyracore_shared::constants::gossip_option::SPIRITHEALER));
+    shard.insert_row(
+        "game_gossip_option",
+        &[
+            ("row_id", &SPIRIT_HEALER_OPTION),
+            ("entry", &SPIRIT_HEALER_ENTRY),
+            ("text", &"Return me to life."),
+            (
+                "action",
+                &lyracore_shared::constants::gossip_option::SPIRITHEALER,
+            ),
+        ],
+    );
     shard.assert_call("debug_set_level", &["1", "15"]);
     let beside_the_living = spirit_healer(&shard, 2.0);
     assert!(

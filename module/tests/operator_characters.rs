@@ -10,11 +10,15 @@ fn realm(name: &str) -> Standalone {
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_start_virtual_clock", &["1700000000000000"]);
     for map in [0, 1, 36, 489] {
-        shard.assert_sql(&format!(
-            "INSERT INTO game_map (id, internal_name, name, map_type, linked_zone, parent, player_limit, reset_delay, ghost_entrance_map, ghost_entrance_x, ghost_entrance_y) \
-             VALUES ({map}, 'Test', 'Test', {}, 0, 0, 0, 0, -1, 0, 0)",
-            if map < 2 { 0 } else { 1 }
-        ));
+        shard.insert_row(
+            "game_map",
+            &[
+                ("id", &map),
+                ("internal_name", &"Test"),
+                ("name", &"Test"),
+                ("map_type", &if map < 2 { 0 } else { 1 }),
+            ],
+        );
         let cell = cell_index(100.0).unwrap();
         let terrain = format!(
             "{map},{cell},{cell},0,0,0,{},{}",
@@ -25,11 +29,15 @@ fn realm(name: &str) -> Standalone {
             "import_terrain_chunks_append",
             &[&serde_json::to_string(&terrain).unwrap()],
         );
-        shard.assert_sql(&format!(
-            "INSERT INTO game_area (id, map_id, parent_area_id, area_bit, flags, exploration_level, faction_group, name) \
-             VALUES ({}, {map}, {}, 0, 0, 0, 0, 'Destination')",
-            5000 + map, 6000 + map
-        ));
+        shard.insert_row(
+            "game_area",
+            &[
+                ("id", &(5000 + map)),
+                ("map_id", &map),
+                ("parent_area_id", &(6000 + map)),
+                ("name", &"Destination"),
+            ],
+        );
     }
     shard
 }
@@ -217,10 +225,24 @@ fn dead_ghost_combat_taxi_and_transport_states_refuse_without_changes() {
             "UPDATE game_world_entity SET {reset} WHERE guid = 1"
         ));
     }
-    shard.assert_sql("INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded,first_destination_node_index) VALUES (1,1,1,2,1,0,0,1700000000000000,0,0,0,true,1)");
+    shard.insert_row(
+        "game_active_taxi_flight",
+        &[
+            ("character_guid", &1),
+            ("path_id", &1),
+            ("source_node_id", &1),
+            ("destination_node_id", &2),
+            ("mount_display_id", &1),
+            ("started_micros", &1700000000000000u64),
+            ("origin_recorded", &true),
+        ],
+    );
     refused(&shard, ARGS, "character is on a taxi flight");
     shard.assert_sql("DELETE FROM game_active_taxi_flight");
-    shard.assert_sql("INSERT INTO game_transport_passenger (character_guid,transport_entry,x,y,z,orientation) VALUES (1,1,0,0,0,0)");
+    shard.insert_row(
+        "game_transport_passenger",
+        &[("character_guid", &1), ("transport_entry", &1)],
+    );
     refused(&shard, ARGS, "character is aboard a transport");
 }
 

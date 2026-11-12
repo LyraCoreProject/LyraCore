@@ -131,9 +131,15 @@ fn locked_goober_use_is_atomic_until_an_opener_unlocks_it() {
     standalone.assert_sql(&format!(
         "UPDATE game_gameobject_template SET lock_id = {LOCK_ID} WHERE entry = {LOCKED_GOOBER_ENTRY}"
     ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_lock (id, lock_id, index, kind, property, required_skill) VALUES (5093671, {LOCK_ID}, 0, 1, {KEY_ITEM_ENTRY}, 0)"
-    ));
+    standalone.insert_row(
+        "game_lock",
+        &[
+            ("id", &5093671),
+            ("lock_id", &LOCK_ID),
+            ("kind", &1),
+            ("property", &KEY_ITEM_ENTRY),
+        ],
+    );
     standalone.assert_sql(&format!(
         "UPDATE game_quest_objective SET kind = 2, target_entry = {LOCKED_GOOBER_ENTRY}, required_count = 2 WHERE id = {QUEST_OBJECTIVE_ID}"
     ));
