@@ -4,10 +4,9 @@ use std::process::Command;
 
 use anyhow::{ensure, Context, Result};
 use lyracore_conformance::{Behavior, FeatureLedger};
-use serde::{Deserialize, Serialize};
-use wire_client::compare::{Comparison, Difference, DifferenceClass};
+use wire_client::compare::{Difference, DifferenceClass};
 use wire_client::scenario::Stream;
-use wire_client::trace::{Origin, Provenance, Sha256Digest, Trace};
+use wire_client::trace::{Origin, Sha256Digest, Trace};
 
 #[path = "markdown.rs"]
 mod rendering;
@@ -16,6 +15,16 @@ pub use rendering::markdown;
 #[path = "../../support/property_violation.rs"]
 mod property_violation;
 use property_violation::Violation;
+
+// The scoreboard uses only the ratchet's Signature; the audit also writes its Baseline.
+#[allow(dead_code)]
+#[path = "../../support/ratchet.rs"]
+pub mod ratchet;
+use ratchet::Signature;
+
+#[path = "../../support/report.rs"]
+mod report;
+pub use report::*;
 
 fn roll_difference(scenario: &wire_client::scenario::Scenario, difference: &Difference) -> bool {
     use wire_client::trace::RecordedField;
@@ -108,111 +117,6 @@ fn spell_difference(scenario: &wire_client::scenario::Scenario, difference: &Dif
         && matches!(difference.actual, Some(RecordedField::Unsigned(count)) if count <= u64::from(spec.samples_per_level))
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Report {
-    pub schema_version: u32,
-    pub tier: String,
-    pub core_commit: String,
-    pub working_tree_dirty: bool,
-    pub harness_revision: String,
-    pub recorded_at_unix_ms: u64,
-    pub scenarios: Vec<ScenarioResult>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub audit: Option<Audit>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ScenarioResult {
-    pub id: String,
-    pub behavior: String,
-    pub scenario_sha256: Sha256Digest,
-    pub comparison: Comparison,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub properties: Option<Vec<Violation>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reference_comparison: Option<Comparison>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capture: Option<CandidateCapture>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reference_sha256: Option<Sha256Digest>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct CandidateCapture {
-    pub sha256: Sha256Digest,
-    pub core_commit: String,
-    pub native_host_sha256: Sha256Digest,
-    pub module_sha256: Sha256Digest,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Audit {
-    pub native_host_sha256: Sha256Digest,
-    pub module_sha256: Sha256Digest,
-    pub content: String,
-    pub reference: Provenance,
-    pub previous_report: Option<String>,
-    pub behaviors: BTreeMap<String, BehaviorAudit>,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct BehaviorAudit {
-    pub candidate: Summary,
-    pub reference: Summary,
-    pub changes: Option<Changes>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Summary {
-    pub rule: ClassSummary,
-    pub data: ClassSummary,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct ClassSummary {
-    pub raw_records: usize,
-    pub signatures: Vec<SignatureCount>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SignatureCount {
-    pub signature: Signature,
-    pub raw_records: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Signature {
-    pub rule: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub character: Option<String>,
-    pub checkpoint: String,
-    pub stream: Option<Stream>,
-    pub opcode: Option<u16>,
-    pub field_path: Vec<String>,
-}
-
-impl From<&Difference> for Signature {
-    fn from(difference: &Difference) -> Self {
-        Self {
-            rule: difference.rule.clone(),
-            character: difference.character.clone(),
-            checkpoint: difference.checkpoint.clone(),
-            stream: difference.stream.clone(),
-            opcode: difference.opcode,
-            field_path: difference.field_path.clone(),
-        }
-    }
-}
-
 impl Summary {
     pub fn collect<'a>(differences: impl Iterator<Item = &'a Difference>) -> Self {
         let mut rules = BTreeMap::<Signature, usize>::new();
@@ -254,20 +158,6 @@ impl std::fmt::Display for Summary {
     }
 }
 
-#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct Changes {
-    pub rule: SignatureChanges,
-    pub data: SignatureChanges,
-}
-
-#[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct SignatureChanges {
-    pub fixed: BTreeSet<Signature>,
-    pub regressed: BTreeSet<Signature>,
-}
-
 impl Changes {
     pub fn between(previous: &Summary, current: &Summary) -> Self {
         let changes = |before: &ClassSummary, after: &ClassSummary| {
@@ -300,10 +190,7 @@ impl Report {
     }
 
     fn validate_structure(&self, tier: &str) -> Result<()> {
-        ensure!(
-            self.schema_version == 2 && self.tier == tier,
-            "wrong evidence schema or tier"
-        );
+        ensure!(self.tier == tier, "wrong evidence tier");
         for sha in [&self.core_commit, &self.harness_revision] {
             ensure!(
                 sha.len() == 40 && sha.bytes().all(|byte| byte.is_ascii_hexdigit()),
@@ -581,7 +468,7 @@ impl Report {
         if behavior.scenarios.is_empty() {
             return Ok(State::NoScenario);
         }
-        if self.core_commit != head || self.harness_revision != revision {
+        if self.ensure_current(&self.tier, head, revision).is_err() {
             return Ok(State::Stale);
         }
         let mut missing = false;

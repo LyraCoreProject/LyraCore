@@ -205,6 +205,38 @@ fn evidence_requires_current_revisions_complete_scenarios_and_clean_capture() {
 }
 
 #[test]
+fn evidence_is_current_only_for_its_tier_commit_and_harness_pin() -> Result<()> {
+    let (ledger, value) = example();
+    let report = parse(&value, &ledger)?;
+    let commit = "1".repeat(40);
+    let other = "3".repeat(40);
+    let pin = lyracore_conformance::harness_pin().revision;
+    report.ensure_current("tier1", &commit, pin)?;
+    for (tier, commit, pin) in [
+        ("conformance_audit", commit.as_str(), pin),
+        ("tier1", other.as_str(), pin),
+        ("tier1", commit.as_str(), other.as_str()),
+    ] {
+        assert!(report.ensure_current(tier, commit, pin).is_err());
+    }
+    let mut other_schema = value.clone();
+    other_schema["schema_version"] = json!(1);
+    assert!(parse(&other_schema, &ledger).is_err());
+    Ok(())
+}
+
+#[test]
+fn a_written_tier1_result_parses_as_the_same_report() -> Result<()> {
+    let (ledger, value) = example();
+    let written = serde_json::to_value(parse(&value, &ledger)?)?;
+    assert_eq!(written, value);
+    let mut extra = value.clone();
+    extra["unknown"] = json!(true);
+    assert!(parse(&extra, &ledger).is_err());
+    Ok(())
+}
+
+#[test]
 fn reference_rule_failures_prevent_a_pass_but_data_records_do_not() {
     let (ledger, mut value) = audit_example();
     for class in ["rule", "data"] {

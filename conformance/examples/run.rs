@@ -7,33 +7,19 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
 use lyracore_conformance::{FeatureLedger, SourceReference};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use wire_client::catalogue;
 use wire_client::compare::{Comparison, DifferenceClass};
 use wire_client::scenario::Stream;
 use wire_client::trace::{RecordedField, Sha256Digest};
 
-#[derive(Deserialize)]
-struct Tier1Result {
-    schema_version: u32,
-    tier: String,
-    core_commit: String,
-    harness_revision: String,
-    scenarios: Vec<ScenarioResult>,
-}
-
-#[derive(Deserialize)]
-struct ScenarioResult {
-    id: String,
-    behavior: String,
-    scenario_sha256: Sha256Digest,
-    comparison: Comparison,
-    properties: Vec<PropertyViolation>,
-}
-
 #[path = "../support/property_violation.rs"]
 mod property_violation;
-use property_violation::Violation as PropertyViolation;
+use property_violation::Violation;
+
+#[path = "../support/report.rs"]
+mod report;
+use report::{Report, ScenarioResult};
 
 #[derive(Serialize)]
 struct RunOutput<'a> {
@@ -44,7 +30,7 @@ struct RunOutput<'a> {
     conforms: bool,
     baseline: BaselineOutput,
     groups: Vec<Group>,
-    properties: &'a [PropertyViolation],
+    properties: &'a [Violation],
 }
 
 #[derive(Serialize)]
@@ -308,24 +294,17 @@ fn main() -> Result<()> {
     let path = std::env::var_os("LYRACORE_CONFORMANCE_RESULT")
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join(".lyracore/conformance/tier1.json"));
-    let result: Tier1Result = serde_json::from_slice(&std::fs::read(&path)?)?;
-    ensure!(
-        result.schema_version == 2 && result.tier == "tier1",
-        "expected schema 2 tier 1 result"
-    );
+    let result: Report = serde_json::from_slice(&std::fs::read(&path)?)?;
     let output = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
         .current_dir(root)
         .output()?;
     ensure!(output.status.success(), "git rev-parse HEAD failed");
-    ensure!(
-        result.core_commit == String::from_utf8(output.stdout)?.trim(),
-        "tier 1 result is from another commit"
-    );
-    ensure!(
-        result.harness_revision == lyracore_conformance::harness_pin().revision,
-        "tier 1 result uses another harness revision"
-    );
+    result.ensure_current(
+        "tier1",
+        String::from_utf8(output.stdout)?.trim(),
+        lyracore_conformance::harness_pin().revision,
+    )?;
     let [entry] = <[ScenarioResult; 1]>::try_from(result.scenarios)
         .map_err(|_| anyhow::anyhow!("expected one scenario result"))?;
     ensure!(
@@ -336,6 +315,9 @@ fn main() -> Result<()> {
         entry.scenario_sha256 == golden.trace().header.scenario_sha256,
         "tier 1 result uses another scenario revision"
     );
+    let properties = entry
+        .properties
+        .context("tier 1 result has no property results")?;
     let audit_baseline = std::env::var_os("LYRACORE_CONFORMANCE_AUDIT_BASELINE");
     let baseline_path = audit_baseline
         .as_ref()
@@ -348,7 +330,7 @@ fn main() -> Result<()> {
         BaselineSource::Tier1(&baseline)
     };
     let output = RunOutput {
-        properties: &entry.properties,
+        properties: &properties,
         ..assemble(
             &scenario,
             &behavior.id,
@@ -528,7 +510,7 @@ mod tests {
     #[test]
     fn a_property_failure_is_reported_even_when_the_baseline_matches() -> Result<()> {
         let (source, comparison, baseline) = fixture();
-        let violations = [PropertyViolation {
+        let violations = [Violation {
             property: "client_view_consistency".into(),
             recipient: 7,
             guid: 9,
