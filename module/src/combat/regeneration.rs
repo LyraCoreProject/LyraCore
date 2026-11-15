@@ -162,6 +162,10 @@ pub(super) fn regenerate_characters(ctx: &ReducerContext) {
         .collect();
     for mut e in recovering {
         let mut row = state(ctx, &e);
+        // A deadline over one tick ahead was stamped before the clock stepped back.
+        if row.next_tick_ms > now.saturating_add(TICK_MS) {
+            row.next_tick_ms = now;
+        }
         if row.next_tick_ms > now {
             continue;
         }
@@ -287,6 +291,13 @@ mod tests {
         bonuses.spirit_mana_rate = 5.0;
         assert_eq!(bonuses.mana_per_tick(8, 100, false), 192);
         assert_eq!(bonuses.mana_per_tick(8, 100, true), 61);
+    }
+
+    #[test]
+    fn a_late_tick_keeps_the_character_grid_and_drops_missed_ticks() {
+        assert_eq!(next_tick_after(1000, 1000), 3000);
+        assert_eq!(next_tick_after(1000, 1100), 3000);
+        assert_eq!(next_tick_after(1000, 7500), 9000);
     }
 
     #[test]

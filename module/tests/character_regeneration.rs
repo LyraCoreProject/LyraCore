@@ -22,8 +22,8 @@ fn stage(name: &str) -> Standalone {
     shard.assert_sql(&format!(
         "UPDATE game_character SET class = {MAGE} WHERE guid = 1"
     ));
-    shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard
 }
 

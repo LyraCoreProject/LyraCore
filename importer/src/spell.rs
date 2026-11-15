@@ -1157,9 +1157,10 @@ fn resolve_effect_kind(
     let name = header.name.as_str();
     let school_mask = header.school_mask;
     let channeled = header.channeled;
+    // vmangos ticks aura 85 rage every 3 s for 3/5 of its five-second amount.
+    let rage_regen =
+        aura == AuraMod::ModPowerRegen && s.effect_misc_value[i] == u32::from(power_type::RAGE);
     let (kind, (p0, p0_kind)) = if is_aura_effect(effect_id) || s.effect_aura[i] != 0 {
-        let rage_regen =
-            aura == AuraMod::ModPowerRegen && s.effect_misc_value[i] == u32::from(power_type::RAGE);
         let k = if rage_regen {
             A_PERIODIC_ENERGIZE
         } else if (aura == AuraMod::ModCritPercent && s.equipment[0] != u32::MAX)
@@ -1224,8 +1225,6 @@ fn resolve_effect_kind(
         (p0, p0_kind)
     };
 
-    // vmangos ticks aura 85 rage every 3 s for 3/5 of its five-second amount.
-    let rage_regen = aura == AuraMod::ModPowerRegen && kind == A_PERIODIC_ENERGIZE;
     let base_points = if kind == E_ENCHANT_ITEM_TEMPORARY && s.effect_base_points[i] == 0 {
         unset_temporary_enchantment_seconds(s.family_name as u8)
     } else if rage_regen {
