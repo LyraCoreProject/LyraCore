@@ -56,12 +56,13 @@ pub(super) fn update_result(
     };
     match std::fs::read(path) {
         Ok(bytes) => {
-            let old: Report = serde_json::from_slice(&bytes)?;
-            if old
-                .ensure_current("tier1", &result.core_commit, &result.harness_revision)
-                .is_ok()
-                && old.working_tree_dirty == result.working_tree_dirty
-            {
+            // A result that does not parse cannot be current, so it is replaced like a stale one.
+            let current = serde_json::from_slice::<Report>(&bytes).ok().filter(|old| {
+                old.ensure_current("tier1", &result.core_commit, &result.harness_revision)
+                    .is_ok()
+                    && old.working_tree_dirty == result.working_tree_dirty
+            });
+            if let Some(old) = current {
                 result.scenarios = old.scenarios;
             }
         }
