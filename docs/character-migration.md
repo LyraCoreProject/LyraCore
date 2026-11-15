@@ -33,7 +33,8 @@ you can read the report before anything changes.
    or Character is not in the plan. `dropped` names source state the Shard does not hold, such as
    spells, quests, areas or taxi nodes that are not imported. `changed` names a value the
    migration changes, such as a Character that arrives at its home bind or a temporary ban that
-   becomes permanent. `skipped` means the Character is already migrated.
+   becomes permanent. `skipped` means the Character is already migrated. Fix refusals before you
+   apply: a Character that does not migrate loses its place in what other Characters bring.
 6. Apply the plan:
 
    ```bash

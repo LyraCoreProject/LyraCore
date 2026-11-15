@@ -166,7 +166,7 @@ fn number(value: &Value) -> Result<u32> {
         .with_context(|| format!("{value} is not a 32-bit id"))
 }
 
-// Reads a byte array as either a hex string or an array of numbers.
+// SATS JSON writes a byte array as a hex string; an array of numbers is accepted too.
 fn hex(value: &Value) -> Result<String> {
     match value {
         Value::String(text) => Ok(text.to_ascii_lowercase()),

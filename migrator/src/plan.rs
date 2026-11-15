@@ -974,6 +974,7 @@ mod tests {
         let plan = plan_one(source);
         assert!(plan.characters.is_empty());
         assert_eq!(plan.findings[0].outcome, Outcome::Refused);
+        assert!(plan.findings[0].detail.contains("character transfer"));
     }
 
     #[test]
