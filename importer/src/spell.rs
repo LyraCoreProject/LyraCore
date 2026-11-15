@@ -31,6 +31,7 @@ use lyracore_importer::spell_kind::{
 use lyracore_importer::spell_overrides::{self, NamedSpell};
 use std::path::Path;
 
+use lyracore_shared::packing::power_type;
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MANA_REGEN_INTERRUPT, A_MOD_COMBAT,
     A_MOD_DAMAGE_TAKEN, A_MOD_HEALING, A_MOD_HEALTH_POWER, A_MOD_HEALTH_REGEN,
@@ -1157,8 +1158,13 @@ fn resolve_effect_kind(
     let school_mask = header.school_mask;
     let channeled = header.channeled;
     let (kind, (p0, p0_kind)) = if is_aura_effect(effect_id) || s.effect_aura[i] != 0 {
-        let k = if (aura == AuraMod::ModCritPercent && s.equipment[0] != u32::MAX)
-            || (aura == AuraMod::ModPowerRegen && s.effect_misc_value[i] != 0)
+        let rage_regen =
+            aura == AuraMod::ModPowerRegen && s.effect_misc_value[i] == u32::from(power_type::RAGE);
+        let k = if rage_regen {
+            A_PERIODIC_ENERGIZE
+        } else if (aura == AuraMod::ModCritPercent && s.equipment[0] != u32::MAX)
+            || (aura == AuraMod::ModPowerRegen
+                && s.effect_misc_value[i] != u32::from(power_type::MANA))
         {
             A_INERT
         } else {
@@ -1218,8 +1224,12 @@ fn resolve_effect_kind(
         (p0, p0_kind)
     };
 
+    // vmangos ticks aura 85 rage every 3 s for 3/5 of its five-second amount.
+    let rage_regen = aura == AuraMod::ModPowerRegen && kind == A_PERIODIC_ENERGIZE;
     let base_points = if kind == E_ENCHANT_ITEM_TEMPORARY && s.effect_base_points[i] == 0 {
         unset_temporary_enchantment_seconds(s.family_name as u8)
+    } else if rage_regen {
+        dbc_flat_amount(s.effect_base_points[i]) * 3 / 5
     } else {
         dbc_flat_amount(s.effect_base_points[i])
     };
@@ -1228,6 +1238,8 @@ fn resolve_effect_kind(
     let period_ms = s.effect_amplitude[i];
     let period_ms = if matches!(kind, A_MOD_REGEN | A_MOD_POWER_REGEN | A_MOD_HEALTH_REGEN) {
         0
+    } else if rage_regen && period_ms == 0 {
+        3000
     } else {
         period_ms
     };
@@ -3115,6 +3127,35 @@ mod tests {
         assert_eq!(
             (drink.kind, drink.period_ms, drink.p0, drink.p0_kind),
             (A_MOD_POWER_REGEN, 0, 0, P_POWER_TYPE)
+        );
+    }
+
+    #[test]
+    fn anger_management_restores_three_fifths_of_its_rage_every_three_seconds() {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![Spell {
+            id: 12296,
+            name: "Anger Management".into(),
+            effect: [EFFECT_APPLY_AURA, 0, 0],
+            effect_aura: [AuraMod::ModPowerRegen as u32, 0, 0],
+            effect_base_points: [14, 0, 0],
+            effect_die_sides: [1, 0, 0],
+            effect_misc_value: [1, 0, 0],
+            implicit_target_a: [1, 0, 0],
+            ..Default::default()
+        }];
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let rage = first_effect(&rows, 12296);
+        assert_eq!(
+            (
+                rage.kind,
+                rage.base_points,
+                rage.period_ms,
+                rage.p0,
+                rage.p0_kind
+            ),
+            (A_PERIODIC_ENERGIZE, 9, 3000, 1, P_POWER_TYPE)
         );
     }
 

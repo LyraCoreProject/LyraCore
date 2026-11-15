@@ -120,7 +120,7 @@ fn imported_mp5_ticks_on_equipment_and_casts_during_the_five_second_rule() {
 
 #[test]
 #[ignore = "requires local World Source, stock client MPQs, SpacetimeDB 2.14.0 and Wasm"]
-fn imported_demon_armor_regenerates_flat_health_and_carries_its_fraction() {
+fn imported_demon_skin_regenerates_flat_health_and_carries_its_fraction() {
     let mut character = Character::imported("imported-hp5-consumer", &[687, 12956]);
     character.cast(687);
     character.set_pools();
@@ -129,7 +129,7 @@ fn imported_demon_armor_regenerates_flat_health_and_carries_its_fraction() {
     assert_eq!(
         character.pool("health"),
         101,
-        "Demon Armor grants 1.2 health per tick"
+        "Demon Skin grants 1.2 health per tick"
     );
     character.advance(4);
     assert_eq!(

@@ -20,13 +20,6 @@ crate::character_owned!(transfer, fn sweep_transfer_game_character_regeneration(
     primary_key = character_guid,
 });
 
-pub(crate) fn clear_character_regeneration(ctx: &ReducerContext, guid: u64) {
-    ctx.db
-        .game_character_regeneration()
-        .character_guid()
-        .delete(guid);
-}
-
 const TICK_MS: u64 = 2000;
 
 fn now_ms(ctx: &ReducerContext) -> u64 {
@@ -67,9 +60,7 @@ pub(crate) fn activate_character_regeneration(
     if old.dead && !e.dead {
         row.next_tick_ms = now;
     } else if row.next_tick_ms <= now {
-        row.next_tick_ms = row
-            .next_tick_ms
-            .saturating_add(((now - row.next_tick_ms) / TICK_MS + 1) * TICK_MS);
+        row.next_tick_ms = next_tick_after(row.next_tick_ms, now);
     } else {
         return;
     }
@@ -156,7 +147,12 @@ impl Bonuses {
     }
 }
 
-pub(super) fn regenerate_characters(ctx: &ReducerContext) -> usize {
+// The first grid point after `now`; missed ticks are dropped, not paid out in a burst.
+fn next_tick_after(deadline_ms: u64, now: u64) -> u64 {
+    deadline_ms.saturating_add(((now - deadline_ms) / TICK_MS + 1) * TICK_MS)
+}
+
+pub(super) fn regenerate_characters(ctx: &ReducerContext) {
     let now = now_ms(ctx);
     let recovering: Vec<_> = ctx
         .db
@@ -164,14 +160,19 @@ pub(super) fn regenerate_characters(ctx: &ReducerContext) -> usize {
         .by_regeneration_type()
         .filter((lyracore_shared::constants::type_mask::PLAYER, true))
         .collect();
-    let mut credited = 0;
     for mut e in recovering {
         let mut row = state(ctx, &e);
         if row.next_tick_ms > now {
             continue;
         }
-        row.next_tick_ms = row.next_tick_ms.saturating_add(TICK_MS);
-        credited += 1;
+        row.next_tick_ms = next_tick_after(row.next_tick_ms, now);
+        if e.health >= e.max_health && (e.power_type() != MANA || e.power >= e.max_power) {
+            ctx.db
+                .game_character_regeneration()
+                .character_guid()
+                .update(row);
+            continue;
+        }
         let bonuses = Bonuses::read(ctx, &e);
         let in_combat = e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
             || super::is_engaged(ctx, e.guid);
@@ -202,7 +203,6 @@ pub(super) fn regenerate_characters(ctx: &ReducerContext) -> usize {
             e.update(ctx);
         }
     }
-    credited
 }
 
 fn mana_per_second(class: u8, spirit: u32) -> f32 {

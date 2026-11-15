@@ -5,7 +5,7 @@ pub(crate) mod energy;
 pub(crate) mod engage;
 pub(crate) mod regeneration;
 pub(crate) use regeneration::{
-    activate_character_regeneration, clear_character_regeneration, enter_character_regeneration,
+    activate_character_regeneration, enter_character_regeneration,
     sweep_delete_game_character_regeneration, sweep_transfer_game_character_regeneration,
 };
 mod folds;

@@ -511,7 +511,7 @@ pub(crate) fn apply_player_login(
 
     if entry == WorldEntry::Login {
         crate::items::begin_buyback_session(ctx, character_guid);
-        crate::combat::clear_character_regeneration(ctx, character_guid);
+        crate::combat::sweep_delete_game_character_regeneration(ctx, character_guid);
     }
     restamp_owned_data(ctx, character_guid, owner);
 

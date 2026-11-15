@@ -943,8 +943,10 @@ Mana regeneration follows the two-second `Player::Regenerate` cadence in
 timer, independent of energy. Mana adds MP5 to class-specific spirit regeneration and
 truncates each tick. The five-second rule suppresses only spirit regeneration; aura 134 permits a
 percentage of spirit while that rule is active. Aura 110 multiplies spirit, without multiplying
-MP5. Evocation therefore uses its source spirit multiplier and casting allowance. Non-mana aura
-85 shapes import as inert; energy and rage retain their separate calculations.
+MP5. Evocation therefore uses its source spirit multiplier and casting allowance. Aura 85 on rage
+(Anger Management) stays a periodic energize: vmangos adds 3/5 of the five-second amount every
+3 s. Other non-mana aura 85 shapes import as inert, because vmangos gives them no effect. Energy
+and rage decay keep their separate calculations.
 
 `A_MOD_HEALTH_REGEN` (0xC2) stores HP5 that applies in and out of combat. `A_MOD_REGEN` (0xC3)
 stores out-of-combat regeneration, with the source period in `p1` (zero defaults to 5,000 ms).
