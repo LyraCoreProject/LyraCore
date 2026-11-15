@@ -566,6 +566,7 @@ pub(crate) fn apply_player_login(
         owner,
         character.level as u32,
         character.class,
+        character.first_login,
     );
 
     crate::talent::apply_learned_talents(ctx, character.guid, owner, character.level as u32);

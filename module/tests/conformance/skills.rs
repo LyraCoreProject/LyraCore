@@ -559,10 +559,10 @@ fn stored_skill(shard: &Standalone, guid: u64, line: u32) -> Option<(u16, u16)> 
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_known_proficiency_grants_its_skill_at_one_and_backfills_an_existing_character_at_cap() {
+fn a_learned_proficiency_starts_at_one_and_a_missing_known_skill_backfills_at_cap() {
     let (shard, guid, _) = fixture("proficiency-skill-rows");
     racial_spells(&shard);
-    // SkillLineAbility.dbc acquire method 2 grants the line with the spell; 0 does not.
+    // Acquire method 2 grants the line with the spell; the method-0 Wand row is made up.
     for (id, spell, line, acquire_method) in [(999_991, 1180, 173, 2), (999_992, 5009, 228, 0)] {
         shard.insert_row(
             "game_skill_ability",
@@ -593,4 +593,16 @@ fn a_known_proficiency_grants_its_skill_at_one_and_backfills_an_existing_charact
     shard.assert_call("debug_repair_after_publish", &[]);
     assert_eq!(stored_skill(&shard, guid, 173), Some((10, 10)));
     assert_eq!(stored_skill(&shard, guid, 95), Some((1, 10)));
+
+    shard.insert_row(
+        "game_skill_ability",
+        &[
+            ("id", &999_993),
+            ("spell_id", &202),
+            ("skill_line", &55),
+            ("acquire_method", &2),
+        ],
+    );
+    shard.assert_call("debug_learn_spell", &[&guid.to_string(), "202"]);
+    assert_eq!(stored_skill(&shard, guid, 55), Some((1, 10)));
 }

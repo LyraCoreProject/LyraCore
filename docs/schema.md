@@ -873,11 +873,11 @@ Publish repair refreshes these projections; see
 [the migration order](danger-zones.md#equip-spell-migration).
 
 `game_player_skill.current` stores earned progress without bonuses; `max_rank` stores the level
-or profession cap. On a Character's first world entry, its weapon, ranged, unarmed and defense
-skills start at 1 with a cap of five per level. A known spell grants its combat skill line when
-`game_skill_ability.acquire_method` is 2. A row that login or repair adds to an existing Character
-starts at the level cap, the value a missing row used to give. Existing progress survives login
-and publish repair. Ranged skills also follow the level cap.
+or profession cap. A new weapon, ranged, unarmed or defense skill starts at 1 with a cap of five
+per level. Learning a spell grants its combat skill line when `game_skill_ability.acquire_method`
+is 2, as a weapon master's wrapper spell does. Login and publish repair also add a known combat
+skill that an existing Character never stored; that row starts at the level cap, the value a
+missing row used to give. Existing progress survives login and publish repair. Ranged skills also follow the level cap.
 An empty or broken ranged weapon slot contributes zero attack skill; an empty main hand uses
 unarmed. Feral forms use the level cap for melee skill.
 

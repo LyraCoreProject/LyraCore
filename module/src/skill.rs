@@ -4,7 +4,7 @@ use lyracore_shared::constants::starter_item;
 use lyracore_shared::race_class::{mask_admits, ZeroMask};
 use lyracore_shared::spell::taxonomy::{A_MOD_SKILL, STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR};
 
-use crate::skilldata::{game_skill_ability, game_skill_availability};
+use crate::skilldata::{game_skill_ability, game_skill_availability, SkillAbility};
 use crate::{
     game_aura, game_item_template, game_player_spell, game_world_entity, Aura, WorldEntity,
 };
@@ -517,6 +517,51 @@ fn starting_skill_value(ctx: &ReducerContext, entity: &WorldEntity, line: u32, c
     }
 }
 
+fn grants_combat_skill(ability: &SkillAbility, entity: &WorldEntity) -> bool {
+    ability.acquire_method == ACQUIRED_WITH_RACE_OR_CLASS_SKILL
+        && mask_admits(ability.race_mask, entity.race(), ZeroMask::AdmitsAll)
+        && mask_admits(ability.class_mask, entity.class(), ZeroMask::AdmitsAll)
+}
+
+pub(crate) fn grant_combat_skill_on_learn(
+    ctx: &ReducerContext,
+    guid: u64,
+    owner: Identity,
+    spell_id: u32,
+) {
+    let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
+        return;
+    };
+    let cap = skill_cap_for_level(entity.level) as u16;
+    let skills = ctx.db.game_player_skill();
+    for line in lyracore_shared::trainer::COMBAT_SKILL_LINES {
+        let granted = ctx
+            .db
+            .game_skill_ability()
+            .by_skill_line()
+            .filter(line)
+            .any(|ability| ability.spell_id == spell_id && grants_combat_skill(&ability, &entity));
+        if granted
+            && !skills
+                .by_character()
+                .filter(&guid)
+                .any(|skill| skill.skill_line == line)
+        {
+            PlayerSkill::insert(
+                ctx,
+                PlayerSkill {
+                    id: 0,
+                    character_guid: guid,
+                    owner_identity: owner,
+                    skill_line: line,
+                    current: starting_skill_value(ctx, &entity, line, cap),
+                    max_rank: cap,
+                },
+            );
+        }
+    }
+}
+
 pub(crate) fn raise_combat_caps(ctx: &ReducerContext, guid: u64, new_level: u32) {
     let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
         return;
@@ -969,6 +1014,7 @@ pub(crate) fn ensure_player_skills(
     owner: Identity,
     level: u32,
     class: u8,
+    first_login: bool,
 ) {
     let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
         return;
@@ -976,7 +1022,6 @@ pub(crate) fn ensure_player_skills(
     let cap = skill_cap_for_level(level) as u16;
     let equipped_weapon = equipped_weapon_skill_line(ctx, guid);
     let skills = ctx.db.game_player_skill();
-    let first_world_entry = skills.by_character().filter(&guid).next().is_none();
 
     let mut lines = std::collections::BTreeSet::new();
     lines.insert(skill_line::DEFENSE);
@@ -1000,10 +1045,7 @@ pub(crate) fn ensure_player_skills(
             .by_skill_line()
             .filter(line)
             .any(|ability| {
-                ability.acquire_method == ACQUIRED_WITH_RACE_OR_CLASS_SKILL
-                    && known.contains(&ability.spell_id)
-                    && mask_admits(ability.race_mask, entity.race(), ZeroMask::AdmitsAll)
-                    && mask_admits(ability.class_mask, class, ZeroMask::AdmitsAll)
+                known.contains(&ability.spell_id) && grants_combat_skill(&ability, &entity)
             })
         {
             lines.insert(line);
@@ -1017,7 +1059,7 @@ pub(crate) fn ensure_player_skills(
             .any(|s| s.skill_line == line);
         if !present {
             // A missing row used to read as the level cap; an existing Character keeps that value.
-            let current = if first_world_entry {
+            let current = if first_login {
                 starting_skill_value(ctx, &entity, line, cap)
             } else {
                 cap
@@ -1085,7 +1127,14 @@ pub fn debug_reseed_skills(ctx: &ReducerContext, character_guid: u64) -> Result<
     // Refuse after Transfer begins because a reseed would miss the exported skill snapshot.
     let ch = crate::helpers::require_character(ctx, character_guid)
         .map_err(|_| format!("no game_character row for guid {character_guid}"))?;
-    ensure_player_skills(ctx, ch.guid, ctx.sender(), ch.level as u32, ch.class);
+    ensure_player_skills(
+        ctx,
+        ch.guid,
+        ctx.sender(),
+        ch.level as u32,
+        ch.class,
+        ch.first_login,
+    );
     spacetimedb::log::info!(
         "debug_reseed_skills: guid={character_guid} class={} level={}",
         ch.class,

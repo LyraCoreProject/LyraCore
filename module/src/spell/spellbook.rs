@@ -112,6 +112,7 @@ pub(crate) fn learn_spell(ctx: &ReducerContext, guid: u64, owner: Identity, spel
     });
     crate::native::book::spell_learned(ctx, guid, spell_id);
     crate::skill::grant_lockpicking_on_learn(ctx, guid, owner, spell_id);
+    crate::skill::grant_combat_skill_on_learn(ctx, guid, owner, spell_id);
 }
 
 pub(crate) fn forget_spell(ctx: &ReducerContext, guid: u64, spell_id: u32) {
