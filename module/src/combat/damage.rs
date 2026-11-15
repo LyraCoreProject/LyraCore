@@ -291,7 +291,7 @@ pub(crate) fn apply_hit(
     let dmg = damage.amount;
     let weapon = hit.source.is_weapon();
     let attacker = entities.guid().find(attacker_guid);
-    // vmangos deals shield damage even after the swing ended a Duel and made the units friendly.
+    // vmangos TriggerDamageShields checks no hostility, so shield damage lands after a Duel ends.
     if hit.source != HitSource::DamageShield
         && attacker
             .as_ref()

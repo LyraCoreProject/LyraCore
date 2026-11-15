@@ -6,7 +6,7 @@ use spacetimedb::ReducerContext;
 use crate::{game_spell, game_spell_effect, game_world_entity};
 
 // docs/schema.md#damage-shields gives the importer's A_IMMUNITY p1 encoding.
-const IMMUNITY_SOURCE_AURA: i32 = 0xff;
+const IMMUNITY_SOURCE_AURA_MASK: i32 = 0xff;
 const SOURCE_SCHOOL_IMMUNITY: i32 = 39;
 const SOURCE_DAMAGE_IMMUNITY: i32 = 40;
 const IMMUNE_TO_HOSTILE_AND_FRIENDLY: i32 = 0x100;
@@ -52,8 +52,8 @@ pub(crate) fn reflect(ctx: &ReducerContext, attacker_guid: u64, bearer_guid: u64
         }) {
             let source = ctx.db.game_spell().spell_id().find(immunity.spell_id);
             let both_polarities = immunity.eff_p1 & IMMUNE_TO_HOSTILE_AND_FRIENDLY != 0;
-            let source_aura = immunity.eff_p1 & IMMUNITY_SOURCE_AURA;
-            // vmangos IsImmuneToDamage: a school immunity blocks a shield only from a helpful source.
+            let source_aura = immunity.eff_p1 & IMMUNITY_SOURCE_AURA_MASK;
+            // vmangos IsImmuneToDamage: school immunity needs a helpful or absent Spell, or 0x100.
             damage_immune |= source_aura != SOURCE_SCHOOL_IMMUNITY
                 || both_polarities
                 || source.as_ref().is_none_or(|source| !source.negative());
