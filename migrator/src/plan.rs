@@ -1654,6 +1654,9 @@ mod tests {
     fn a_contact_migrated_in_an_earlier_run_is_kept() {
         let mut catalogue = catalogue();
         catalogue.migrated.insert("vmangos-main/13".to_string());
+        catalogue
+            .live_migrated
+            .insert("vmangos-main/13".to_string());
         let mut owner = character();
         owner.contacts = vec![crate::read::LegacyContact {
             target: 13,
