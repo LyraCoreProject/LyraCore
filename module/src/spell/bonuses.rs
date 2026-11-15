@@ -134,7 +134,6 @@ fn weapon_damage_mods(ctx: &ReducerContext, unit: &crate::WorldEntity, slot: u8)
     (flat, multiplier)
 }
 
-// Returns fractional damage; direct damage keeps the fraction until mitigation and dithering.
 pub(crate) fn spell_damage_done_float(
     ctx: &ReducerContext,
     hdr: &Spell,

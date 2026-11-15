@@ -580,8 +580,8 @@ The additive Module schema defaults old rows to flags 0, minimum level 0, single
 and coefficient -1.
 Package Deltas created before these columns remain valid. New Base Snapshots and Datascript
 clones include them. A negative coefficient adds no spell power. The importer writes the vmangos
-computed coefficient for damage and healing effects, so an authored spell must set an explicit
-coefficient to scale with spell power.
+computed coefficient for direct and periodic damage and healing effects, so an authored spell must
+set an explicit coefficient to scale with spell power.
 
 Direct SQL INSERTs must supply `custom_flags`, `min_target_level`, `single_target_key` and
 `bonus_coefficient` on their respective tables; SQL INSERT does not use migration defaults.

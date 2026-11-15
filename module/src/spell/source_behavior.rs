@@ -39,8 +39,8 @@ pub(crate) fn mitigate_spell(
                 crate::modifiers::effective_armor(ctx, &target),
                 caster.level,
             );
-            // vmangos CalcArmorReducedDamage truncates to whole damage before and after armor.
-            damage = crate::combat::armor_mitigated(damage as u32, percent) as f32;
+            // vmangos CalcArmorReducedDamage truncates before and after armor and floors at 1.
+            damage = crate::combat::armor_mitigated((damage as u32).max(1), percent) as f32;
         }
     }
     let before_resist = bonuses::round_damage(ctx, target, damage);
