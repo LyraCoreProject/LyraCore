@@ -39,7 +39,8 @@ rerun never brings back a Character that its player deleted.
 | Explored zones, taxi nodes | Explored bits map to areas by area bit. Taxi nodes map by `TaxiNodes.dbc` id. |
 
 Every referenced item, spell, skill, faction, quest, area and taxi node must exist in the Shard's
-catalogues, or the Character is refused.
+catalogues, or the Character is refused. Enchantment, random property and action button ids are
+copied without a check; an id the Shard does not know has no effect.
 
 Health starts full and power starts at its class default at the first world entry. The Character
 does not see the opening cinematic. GM levels, Auras, cooldowns, Instance bindings, temporary

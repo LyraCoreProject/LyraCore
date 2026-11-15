@@ -94,6 +94,7 @@ pub struct MigratedAction {
 pub struct MigratedQuestLogEntry {
     pub event_credit: bool,
     pub failed: bool,
+    // Unix seconds, as MaNGOS stores a timed quest's `timer`.
     pub deadline_secs: u64,
 }
 
@@ -201,6 +202,26 @@ pub fn migrate_character(
             migrated_at: ctx.timestamp,
         });
     Ok(())
+}
+
+fn checked_template(
+    ctx: &ReducerContext,
+    entry: u32,
+    stack_count: u32,
+) -> Result<crate::ItemTemplate, String> {
+    let template = ctx
+        .db
+        .game_item_template()
+        .entry()
+        .find(entry)
+        .ok_or_else(|| format!("Item entry {entry} is not imported"))?;
+    if stack_count == 0 || stack_count > template.max_stack.max(1) {
+        return Err(format!(
+            "Item {entry}: stack of {stack_count} exceeds {}",
+            template.max_stack
+        ));
+    }
+    Ok(template)
 }
 
 fn require_single_shard(ctx: &ReducerContext) -> Result<(), String> {
@@ -425,11 +446,12 @@ impl Arrival<'_> {
             }
         }
         for item in displaced {
-            let slot =
-                crate::items::first_free_storage_slot(self.ctx, self.guid).ok_or_else(|| {
+            let template = checked_template(self.ctx, item.entry, item.stack_count)?;
+            let slot = crate::items::first_free_storage_slot(self.ctx, self.guid, &template)
+                .ok_or_else(|| {
                     format!(
-                        "Item {} from a bank bag has no free bank or bag slot",
-                        item.entry
+                        "Item {} at {:?} has no free bank, backpack or bag slot to move to",
+                        item.entry, item.location
                     )
                 })?;
             let row = self.item(item, slot)?;
@@ -439,19 +461,7 @@ impl Arrival<'_> {
     }
 
     fn item(&self, item: &MigratedItem, slot: u8) -> Result<ItemInstance, String> {
-        let template = self
-            .ctx
-            .db
-            .game_item_template()
-            .entry()
-            .find(item.entry)
-            .ok_or_else(|| format!("Item entry {} is not imported", item.entry))?;
-        if item.stack_count == 0 || item.stack_count > template.max_stack.max(1) {
-            return Err(format!(
-                "Item {}: stack of {} exceeds {}",
-                item.entry, item.stack_count, template.max_stack
-            ));
-        }
+        let template = checked_template(self.ctx, item.entry, item.stack_count)?;
         Ok(ItemInstance {
             guid: crate::items::next_item_guid(self.ctx)?,
             entry: item.entry,
