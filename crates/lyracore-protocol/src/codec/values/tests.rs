@@ -2,7 +2,8 @@ use super::*;
 use crate::codec::item::ItemInstanceView;
 use crate::codec::test_fixtures::{ranged_sheet_stats, worn_item};
 use wow_world_messages::vanilla::{
-    ItemSlot, Object, ServerMessage, UpdateMask, UpdatePlayer, VisibleItemIndex, SMSG_UPDATE_OBJECT,
+    ItemSlot, Object, ServerMessage, Skill, UpdateMask, UpdatePlayer, VisibleItemIndex,
+    SMSG_UPDATE_OBJECT,
 };
 use wow_world_messages::Guid;
 

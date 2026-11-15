@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 
+use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_shared::spell::taxonomy::{A_MOD_SKILL, P_SKILL_LINE};
 use lyracore_test_support::{ReducerConnection, Standalone};
 use wire_client::decode::Field;
 
@@ -24,17 +26,86 @@ fn import_spell_plan(shard: &Standalone, mut connection: Option<&mut ReducerConn
     true
 }
 
-fn human_starting_stats(shard: &Standalone) {
-    shard.assert_sql("DELETE FROM game_level_stats WHERE race_class_level = 65793");
-    shard.assert_sql("INSERT INTO game_level_stats (race_class_level,race,class,level,strength,agility,stamina,intellect,spirit) VALUES (65793,1,1,1,23,20,22,20,20)");
+fn human_warrior_stats(
+    shard: &Standalone,
+    level: u32,
+    [strength, agility, stamina, intellect, spirit]: [u32; 5],
+) {
+    let race_class_level = (1 << 16) | (1 << 8) | level;
+    shard.assert_sql(&format!(
+        "DELETE FROM game_level_stats WHERE race_class_level = {race_class_level}"
+    ));
+    shard.insert_row(
+        "game_level_stats",
+        &[
+            ("race_class_level", &race_class_level),
+            ("race", &1),
+            ("class", &1),
+            ("level", &level),
+            ("strength", &strength),
+            ("agility", &agility),
+            ("stamina", &stamina),
+            ("intellect", &intellect),
+            ("spirit", &spirit),
+        ],
+    );
+}
+
+fn warrior_crit_per_agility(shard: &Standalone, level: u32, rate: f32) {
+    let class_level = (1 << 8) | level;
+    shard.assert_sql(&format!(
+        "DELETE FROM game_crit_per_agility WHERE class_level = {class_level}"
+    ));
+    shard.insert_row(
+        "game_crit_per_agility",
+        &[
+            ("class_level", &class_level),
+            ("class", &1),
+            ("level", &level),
+            ("rate", &rate),
+        ],
+    );
+}
+
+fn starting_spell(shard: &Standalone, id: u32, spell: u32) {
+    shard.insert_row(
+        "game_createinfo_spell",
+        &[
+            ("id", &id),
+            ("race", &1),
+            ("class", &1),
+            ("spell_id", &spell),
+        ],
+    );
+}
+
+fn skill_effect(
+    shard: &Standalone,
+    spell: u32,
+    index: u8,
+    line: u32,
+    points: i32,
+    permanent: bool,
+) {
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell, index)),
+            ("spell_id", &spell),
+            ("effect_index", &index),
+            ("kind", &A_MOD_SKILL),
+            ("base_points", &points),
+            ("die_sides", &1),
+            ("p_0", &line),
+            ("p_0_kind", &P_SKILL_LINE),
+            ("p_1", &u8::from(permanent)),
+        ],
+    );
 }
 
 fn racial_spells(shard: &Standalone) {
-    human_starting_stats(shard);
-    shard.assert_sql("DELETE FROM game_crit_per_agility WHERE class_level = 257");
-    shard.assert_sql(
-        "INSERT INTO game_crit_per_agility (class_level,class,level,rate) VALUES (257,1,1,4.0)",
-    );
+    human_warrior_stats(shard, 1, [23, 20, 22, 20, 20]);
+    warrior_crit_per_agility(shard, 1, 4.0);
     if import_spell_plan(shard, None) {
         return;
     }
@@ -42,11 +113,20 @@ fn racial_spells(shard: &Standalone) {
         (20597, "Sword Specialization", [43, 55]),
         (20864, "Mace Specialization", [54, 160]),
     ] {
-        shard.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'{name}',0,0,0,0,0,0,0,1,0,0,0,0,80,1,0,false,0,0,0,0,0,0,0,0)"));
-        for (index, line) in lines.into_iter().enumerate() {
-            shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({},{spell},{index},189,5,1,0.0,0,0,0.0,0,0,0,{line},18,1,0,false,0.0)", spell * 4 + index));
+        shard.insert_row(
+            "game_spell",
+            &[
+                ("spell_id", &spell),
+                ("name", &name),
+                ("school_mask", &1),
+                ("attributes", &80),
+                ("spell_level", &1),
+            ],
+        );
+        for (index, line) in (0u8..).zip(lines) {
+            skill_effect(shard, spell, index, line, 5, true);
         }
-        shard.assert_sql(&format!("INSERT INTO game_createinfo_spell (id,race,class,spell_id) VALUES ({spell},1,1,{spell})"));
+        starting_spell(shard, spell, spell);
     }
 }
 
@@ -134,8 +214,19 @@ fn skill_spell(
     attributes: u32,
     permanent: bool,
 ) {
-    shard.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'{name}',0,0,0,0,0,0,900000,1,0,0,0,0,{attributes},1,0,false,0,0,0,0,0,0,0,900000)"));
-    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({},{spell},0,189,{points},1,0.0,0,0,0.0,0,0,0,{line},18,{},0,false,0.0)",spell*4,u8::from(permanent)));
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell),
+            ("name", &name),
+            ("duration_ms", &900_000),
+            ("school_mask", &1),
+            ("attributes", &attributes),
+            ("spell_level", &1),
+            ("max_duration_ms", &900_000),
+        ],
+    );
+    skill_effect(shard, spell, 0, line, points, permanent);
     shard.assert_sql(&format!(
         "UPDATE game_spell_effect SET equip_supported = true WHERE spell_id = {spell}"
     ));
@@ -183,9 +274,10 @@ fn swing_hit_info(
     shard.assert_sql(&format!(
         "DELETE FROM game_conformance_swing_random WHERE character_guid = {guid}"
     ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_conformance_swing_random (character_guid,state) VALUES ({guid},7875)"
-    ));
+    shard.insert_row(
+        "game_conformance_swing_random",
+        &[("character_guid", &guid), ("state", &7875)],
+    );
     request(connection, 0x141, target.to_le_bytes().to_vec());
     connection
         .call("debug_advance_roll_batch", serde_json::json!([4]))
@@ -229,10 +321,8 @@ fn swing_hit_info(
 fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_progress() {
     use super::buy_in_slot::{grant, request, stage};
     let (shard, mut connection, guid, _) = stage("skill-equipment-and-casts");
-    shard.assert_sql("DELETE FROM game_level_stats WHERE race_class_level = 65812");
-    shard.assert_sql("INSERT INTO game_level_stats (race_class_level,race,class,level,strength,agility,stamina,intellect,spirit) VALUES (65812,1,1,20,47,35,43,22,27)");
-    shard.assert_sql("DELETE FROM game_crit_per_agility WHERE class_level = 276");
-    shard.assert_sql("INSERT INTO game_crit_per_agility (class_level,class,level,rate) VALUES (276,1,20,7.80031)");
+    human_warrior_stats(&shard, 20, [47, 35, 43, 22, 27]);
+    warrior_crit_per_agility(&shard, 20, 7.80031);
     shard.assert_sql(&format!(
         "UPDATE game_character SET level = 20 WHERE guid = {guid}"
     ));
@@ -254,10 +344,7 @@ fn equipped_and_cast_skill_bonuses_stack_expire_and_repair_without_changing_prog
             false,
         );
     }
-    shard.assert_sql("DELETE FROM game_crit_per_agility WHERE class_level = 257");
-    shard.assert_sql(
-        "INSERT INTO game_crit_per_agility (class_level,class,level,rate) VALUES (257,1,1,4.0)",
-    );
+    warrior_crit_per_agility(&shard, 1, 4.0);
     for spell in [27720, 7038] {
         shard.assert_call(
             "debug_learn_spell",
@@ -392,10 +479,18 @@ fn ranged_skill_caps_and_empty_slots_survive_repair_and_reconnect() {
     let (shard, guid, _) = fixture("ranged-skill-caps");
     racial_spells(&shard);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
-    shard.assert_sql("INSERT INTO game_skill_ability (id,spell_id,skill_line,race_mask,class_mask,min_skill,acquire_method,gray,green) VALUES (999990,264,45,0,13,1,2,0,0)");
-    shard.assert_sql(
-        "INSERT INTO game_createinfo_spell (id,race,class,spell_id) VALUES (999990,1,1,264)",
+    shard.insert_row(
+        "game_skill_ability",
+        &[
+            ("id", &999_990),
+            ("spell_id", &264),
+            ("skill_line", &45),
+            ("class_mask", &13),
+            ("min_skill", &1),
+            ("acquire_method", &2),
+        ],
     );
+    starting_spell(&shard, 999_990, 264);
     let mut connection = enter(&shard, guid);
     let values = fields(&mut connection, guid);
     assert_eq!(skill(&values, 45), (1, 5, 0, 0));
@@ -407,12 +502,8 @@ fn ranged_skill_caps_and_empty_slots_survive_repair_and_reconnect() {
     shard.assert_sql(&format!(
         "UPDATE game_character SET level = 2 WHERE guid = {guid}"
     ));
-    shard.assert_sql("DELETE FROM game_level_stats WHERE race_class_level = 65794");
-    shard.assert_sql("INSERT INTO game_level_stats (race_class_level,race,class,level,strength,agility,stamina,intellect,spirit) VALUES (65794,1,1,2,24,21,23,20,20)");
-    shard.assert_sql("DELETE FROM game_crit_per_agility WHERE class_level = 258");
-    shard.assert_sql(
-        "INSERT INTO game_crit_per_agility (class_level,class,level,rate) VALUES (258,1,2,4.0)",
-    );
+    human_warrior_stats(&shard, 2, [24, 21, 23, 20, 20]);
+    warrior_crit_per_agility(&shard, 2, 4.0);
     shard.assert_call("debug_repair_after_publish", &[]);
     let mut connection = enter(&shard, guid);
     assert_eq!(skill(&fields(&mut connection, guid), 45), (4, 10, 0, 0));

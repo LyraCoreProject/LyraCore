@@ -4,8 +4,8 @@ use super::item::ItemInstanceView;
 use super::update_mask;
 use lyracore_shared::packing::unpack4;
 use wow_world_messages::vanilla::{
-    ItemSlot, Object, Skill, SkillInfo, SkillInfoIndex, UpdateItem, UpdateMask, UpdatePlayer,
-    UpdateUnit, SMSG_UPDATE_AURA_DURATION, SMSG_UPDATE_OBJECT,
+    ItemSlot, Object, SkillInfo, SkillInfoIndex, UpdateItem, UpdateMask, UpdatePlayer, UpdateUnit,
+    SMSG_UPDATE_AURA_DURATION, SMSG_UPDATE_OBJECT,
 };
 use wow_world_messages::Guid;
 
