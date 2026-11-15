@@ -686,9 +686,10 @@ pub(crate) fn read_guilds(
     for row in database.select("guild", &columns, Filter::All)? {
         let id: u64 = row.number(dialect.guild_id)?;
         let by_guild = Filter::Equals(dialect.guild_id, id);
+        // MaNGOS stores -1 for a Guild without a tabard; LyraCore founds Guilds with 0.
         let mut emblem = [0; 5];
         for (value, column) in emblem.iter_mut().zip(dialect.guild_emblem) {
-            *value = row.number(column)?;
+            *value = u32::try_from(row.int(column)?).unwrap_or(0);
         }
         let mut ranks = database
             .select(
@@ -1263,6 +1264,21 @@ pub(crate) mod tests {
             &read_characters(&mut database, Dialect::of(SourceKind::Vmangos), &[1]).unwrap()[0];
         assert!(character.items.is_empty());
         assert_eq!(character.orphan_items, [777]);
+    }
+
+    #[test]
+    fn a_guild_without_a_tabard_reads_as_the_default_emblem() {
+        let mut database = source(SourceKind::Vmangos);
+        let mut row = vec![("guild_id", Value::Int(3))];
+        row.extend(
+            Dialect::of(SourceKind::Vmangos)
+                .guild_emblem
+                .iter()
+                .map(|column| (*column, Value::Int(-1))),
+        );
+        database.row("guild", &row);
+        let guilds = read_guilds(&mut database, Dialect::of(SourceKind::Vmangos)).unwrap();
+        assert_eq!(guilds[0].emblem, [0; 5]);
     }
 
     #[test]

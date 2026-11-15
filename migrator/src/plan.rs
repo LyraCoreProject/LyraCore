@@ -454,7 +454,7 @@ pub(crate) fn build(
         contacts,
         guilds: guilds
             .iter()
-            .filter_map(|guild| migrated_guild(source, &races, guild, &mut report))
+            .filter_map(|guild| migrated_guild(source, &senders, &races, guild, &mut report))
             .collect(),
         findings,
     }
@@ -857,8 +857,11 @@ fn contact_list(
     })
 }
 
+// A member is planned in this run or migrated in an earlier one; the Module checks the team of a
+// member whose race this run did not read.
 fn migrated_guild(
     source: &str,
+    migrated: &HashSet<u64>,
     races: &HashMap<u64, u8>,
     guild: &LegacyGuild,
     report: &mut Findings,
@@ -867,10 +870,11 @@ fn migrated_guild(
         MAX_INFO, MAX_MOTD, MAX_NOTE, MAX_RANKS, MAX_RANK_NAME, MIN_RANKS,
     };
     let subject = format!("Guild {} ({})", guild.name, guild.id);
-    if !races.contains_key(&guild.leader) {
+    if !migrated.contains(&guild.leader) {
         report.add(&subject, Outcome::Refused, "its leader does not migrate");
         return None;
     }
+    let leader_race = races.get(&guild.leader).copied();
     let ids = guild.ranks.iter().map(|rank| rank.id);
     if !(MIN_RANKS..=MAX_RANKS).contains(&guild.ranks.len()) || ids.ne(0..guild.ranks.len() as u32)
     {
@@ -900,14 +904,43 @@ fn migrated_guild(
         .collect();
     let mut missing = Vec::new();
     let mut members = Vec::new();
+    let lowest_rank = guild.ranks.len() as u32 - 1;
     for member in &guild.members {
-        if !races.contains_key(&member.guid) {
+        if !migrated.contains(&member.guid) {
             missing.push(member.guid.to_string());
             continue;
         }
+        let other_team = leader_race
+            .zip(races.get(&member.guid))
+            .is_some_and(|(leader, &race)| !lyracore_shared::faction::same_team(leader, race));
+        if other_team {
+            report.add(
+                &subject,
+                Outcome::Dropped,
+                format!("member {} is of the other faction", member.guid),
+            );
+            continue;
+        }
+        // MaNGOS deletes a rank without moving its members and demotes a second rank 0 only when
+        // it loads the Guild.
+        let rank_id = if member.guid == guild.leader {
+            0
+        } else {
+            member.rank.clamp(1, lowest_rank)
+        };
+        if member.guid != guild.leader && rank_id != member.rank {
+            report.add(
+                &subject,
+                Outcome::Changed,
+                format!(
+                    "member {} holds rank {}, which it cannot hold; arrives at rank {rank_id}",
+                    member.guid, member.rank
+                ),
+            );
+        }
         members.push(MigratedGuildMember {
             source_guid: member.guid,
-            rank_id: member.rank,
+            rank_id,
             public_note: fit(
                 &member.public_note,
                 MAX_NOTE,
@@ -1822,6 +1855,40 @@ mod tests {
             "{details:?}"
         );
         assert!(details.contains(&"shortened to the 1.12 limits: message of the day"));
+    }
+
+    #[test]
+    fn a_member_of_the_other_faction_is_dropped_and_stale_ranks_are_moved() {
+        let mut leader = character();
+        leader.guid = 10;
+        let mut horde = character();
+        horde.guid = 11;
+        horde.name = "Horde".to_string();
+        horde.race = 2;
+        let mut officer = character();
+        officer.guid = 12;
+        officer.name = "Officer".to_string();
+        let mut recruit = character();
+        recruit.guid = 13;
+        recruit.name = "Recruit".to_string();
+        let plan = build(
+            "vmangos-main",
+            &catalogue(),
+            &[account()],
+            &[leader, horde, officer, recruit],
+            &[guild(10, &[(10, 0), (11, 2), (12, 0), (13, 7)])],
+        );
+        let ranks: Vec<_> = plan.guilds[0]
+            .members
+            .iter()
+            .map(|member| (member.source_guid, member.rank_id))
+            .collect();
+        assert_eq!(ranks, [(10, 0), (12, 1), (13, 4)]);
+        let details: Vec<_> = plan.findings.iter().map(|f| f.detail.as_str()).collect();
+        assert!(
+            details.contains(&"member 11 is of the other faction"),
+            "{details:?}"
+        );
     }
 
     #[test]

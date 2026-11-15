@@ -233,6 +233,12 @@ fn apply(path: &str, shard: &Shard) -> Result<()> {
         }
     }
     for guild in &plan.guilds {
+        let mut linked: Vec<u64> = guild.members.iter().map(|m| m.source_guid).collect();
+        linked.push(guild.leader_source_guid);
+        if deferred(&format!("Guild {}", guild.name), &linked, &failed) {
+            refusals += 1;
+            continue;
+        }
         if let Err(refusal) = shard.call("migrate_guild", &serde_json::to_string(guild)?)? {
             refusals += 1;
             eprintln!("refused: Guild {}: {refusal}", guild.name);

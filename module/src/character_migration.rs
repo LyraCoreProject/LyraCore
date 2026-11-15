@@ -476,7 +476,8 @@ pub struct GuildMigrationRecord {
     pub migrated_at: Timestamp,
 }
 
-// Founds one Guild through the normal founding and membership rules, skipping unmigrated members.
+// Founds one Guild through the normal founding and membership rules. A member that is not a
+// migrated Character, is on the other team or is in another Guild is skipped.
 #[reducer]
 pub fn migrate_guild(ctx: &ReducerContext, guild: GuildMigration) -> Result<(), String> {
     use crate::{game_guild, game_guild_rank};
@@ -552,7 +553,11 @@ pub fn migrate_guild(ctx: &ReducerContext, guild: GuildMigration) -> Result<(), 
             guild_id,
             rank_id: rank.rank_id,
             name: rank.name.clone(),
-            rights: rank.rights,
+            rights: if rank.rank_id == 0 {
+                lyracore_shared::guild::rights::ALL
+            } else {
+                rank.rights
+            },
         });
     }
     for member in &guild.members {
@@ -570,17 +575,30 @@ pub fn migrate_guild(ctx: &ReducerContext, guild: GuildMigration) -> Result<(), 
                 ));
             }
             if lyracore_shared::faction::team_for_race(character.race) != team {
-                return Err(refuse("every member must be on the leader's team"));
+                spacetimedb::log::info!(
+                    "migrate_guild: {source_key} skips member {}, which is on the other team",
+                    member.source_guid
+                );
+                continue;
             }
-            crate::guild::add_member(
+            match crate::guild::add_member(
                 ctx,
                 guild_id,
                 character.guid,
                 &character.name,
                 member.rank_id,
                 character.account_id,
-            )
-            .map_err(|refusal| refuse(refusal.as_tag()))?;
+            ) {
+                Ok(()) => {}
+                Err(lyracore_shared::guild::GuildRefusal::AlreadyInGuild) => {
+                    spacetimedb::log::info!(
+                        "migrate_guild: {source_key} skips member {}, which is in another Guild",
+                        member.source_guid
+                    );
+                    continue;
+                }
+                Err(refusal) => return Err(refuse(refusal.as_tag())),
+            }
         }
         let mut row = crate::guild::member(ctx, character.guid)
             .ok_or_else(|| refuse("a member is missing after joining"))?;
