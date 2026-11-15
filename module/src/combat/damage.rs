@@ -321,8 +321,10 @@ pub(crate) fn apply_hit(
                     fresh.update(ctx);
                 }
             }
-            if attacker_is_player && !target_is_player {
-                crate::skill::gain_weapon_skill(ctx, a);
+            if attacker_is_player
+                && crate::loot::tag::controlling_character(ctx, target_guid).is_none()
+            {
+                crate::skill::gain_weapon_skill(ctx, a, hit.source);
             }
         }
     }
@@ -367,7 +369,7 @@ pub(crate) fn apply_hit(
         };
     }
     let accrues_threat = !target_is_player && reward_source.is_some();
-    if weapon && target_is_player {
+    if weapon && target_is_player && reward_source.is_none() {
         crate::skill::gain_defense_skill(ctx, &target);
     }
     let before = target.health;

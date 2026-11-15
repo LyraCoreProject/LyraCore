@@ -45,7 +45,14 @@ pub fn init(ctx: &ReducerContext) {
 /// Runs after `seed_curated_content`, which writes the starting spell kit the Tester learns.
 fn grant_tester_kit(ctx: &ReducerContext) {
     use constants::start_human_warrior as hw;
-    crate::spell::spellbook::grant_createinfo_spells(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
+    crate::spell::spellbook::grant_createinfo_spells(
+        ctx,
+        1,
+        Identity::ZERO,
+        hw::RACE,
+        hw::CLASS,
+        crate::skill::SkillStart::Starting,
+    );
     crate::action_bar::grant_createinfo_actions(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
 }
 
