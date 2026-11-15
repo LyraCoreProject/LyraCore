@@ -144,7 +144,7 @@ pub(crate) struct LegacyCharacter {
     pub(crate) explored_zones: Vec<u32>,
     pub(crate) home: Option<LegacyPosition>,
     pub(crate) items: Vec<LegacyItem>,
-    // Inventory rows whose item guid has no item_instance row.
+    // Inventory rows whose item guid has no item_instance row at all.
     pub(crate) orphan_items: Vec<u64>,
     pub(crate) spells: Vec<u32>,
     pub(crate) skills: Vec<LegacySkill>,
@@ -909,16 +909,17 @@ fn read_letters(
     Ok(letters)
 }
 
-// MaNGOS joins inventory to item_instance and skips a row without a match; so does this read.
+// MaNGOS joins inventory to item_instance by item guid alone and skips a row without a match.
 fn read_items(
     database: &mut dyn SourceDatabase,
     dialect: &Dialect,
     guid: u64,
 ) -> Result<(Vec<LegacyItem>, Vec<u64>)> {
+    let columns = item_columns(dialect);
     let instances: BTreeMap<u64, Row> = database
         .select(
             "item_instance",
-            &item_columns(dialect),
+            &columns,
             Filter::Equals("owner_guid", guid),
         )?
         .into_iter()
@@ -932,9 +933,20 @@ fn read_items(
         Filter::Equals("guid", guid),
     )? {
         let item_guid: u64 = slot.number(dialect.inventory_item)?;
-        let Some(instance) = instances.get(&item_guid) else {
-            orphans.push(item_guid);
-            continue;
+        let other_owner;
+        let instance = match instances.get(&item_guid) {
+            Some(instance) => instance,
+            None => {
+                other_owner = database
+                    .select("item_instance", &columns, Filter::Equals("guid", item_guid))?
+                    .into_iter()
+                    .next();
+                let Some(instance) = &other_owner else {
+                    orphans.push(item_guid);
+                    continue;
+                };
+                instance
+            }
         };
         items.push(legacy_item(
             database,
@@ -1089,6 +1101,35 @@ pub(crate) mod tests {
             .map(|character| (character.logout_resting, character.locked_for_transfer))
             .collect();
         assert_eq!(flags, [(true, false), (false, true), (false, true)]);
+    }
+
+    #[test]
+    fn an_item_instance_with_another_owner_still_arrives() {
+        let mut database = source(SourceKind::Vmangos);
+        database.row(
+            "characters",
+            &[("guid", Value::Int(10)), ("account", Value::Int(1))],
+        );
+        database.row(
+            "character_inventory",
+            &[
+                ("guid", Value::Int(10)),
+                ("slot", Value::Int(23)),
+                ("item_guid", Value::Int(501)),
+            ],
+        );
+        database.row(
+            "item_instance",
+            &[
+                ("guid", Value::Int(501)),
+                ("owner_guid", Value::Int(99)),
+                ("item_id", Value::Int(2589)),
+            ],
+        );
+        let character =
+            &read_characters(&mut database, Dialect::of(SourceKind::Vmangos), &[1]).unwrap()[0];
+        assert_eq!(character.items.len(), 1);
+        assert!(character.orphan_items.is_empty());
     }
 
     #[test]

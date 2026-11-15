@@ -261,12 +261,14 @@ pub(crate) struct Catalogue {
     // Upper-case username to little-endian salt and verifier hex.
     pub(crate) accounts: HashMap<String, (String, String)>,
     pub(crate) migrated: HashSet<String>,
+    // The migrated keys whose Character still exists.
+    pub(crate) live_migrated: HashSet<String>,
 }
 
 impl Catalogue {
     pub(crate) fn migrated_guids(&self, source: &str) -> HashSet<u64> {
         let prefix = format!("{source}/");
-        self.migrated
+        self.live_migrated
             .iter()
             .filter_map(|key| key.strip_prefix(&prefix)?.parse().ok())
             .collect()
@@ -338,12 +340,18 @@ pub(crate) fn build(
     let mut names = HashSet::new();
     for character in characters {
         let subject = format!("Character {} ({})", character.name, character.guid);
-        if catalogue
-            .migrated
-            .contains(&format!("{source}/{}", character.guid))
-        {
-            report.add(&subject, Outcome::Skipped, "already migrated");
-            recipients.push(character);
+        let key = format!("{source}/{}", character.guid);
+        if catalogue.migrated.contains(&key) {
+            if catalogue.live_migrated.contains(&key) {
+                report.add(&subject, Outcome::Skipped, "already migrated");
+                recipients.push(character);
+            } else {
+                report.add(
+                    &subject,
+                    Outcome::Skipped,
+                    "already migrated, and its player deleted it",
+                );
+            }
             continue;
         }
         let Some(account) = migrated_accounts.get(&character.account) else {
@@ -1362,6 +1370,7 @@ mod tests {
         let plan = plan_one(source);
         assert!(plan.characters.is_empty());
         assert_eq!(plan.findings[0].outcome, Outcome::Refused);
+        assert!(plan.findings[0].detail.contains("character transfer"));
     }
 
     #[test]
@@ -1477,12 +1486,27 @@ mod tests {
     fn a_sender_migrated_in_an_earlier_run_keeps_cash_on_delivery() {
         let mut catalogue = catalogue();
         catalogue.migrated.insert("vmangos-main/99".to_string());
+        catalogue
+            .live_migrated
+            .insert("vmangos-main/99".to_string());
         let mut source = character();
         let mut cod = letter(MAIL_NORMAL, 99, vec![letter_item(70, 2589)]);
         cod.cod = 500;
         source.letters = vec![cod];
         let plan = build("vmangos-main", &catalogue, &[account()], &[source]);
         assert_eq!(plan.letters[0].cod, 500);
+    }
+
+    #[test]
+    fn a_sender_migrated_earlier_and_since_deleted_counts_as_not_migrated() {
+        let mut catalogue = catalogue();
+        catalogue.migrated.insert("vmangos-main/99".to_string());
+        let mut source = character();
+        let mut cod = letter(MAIL_NORMAL, 99, vec![letter_item(70, 2589)]);
+        cod.cod = 500;
+        source.letters = vec![cod];
+        let plan = build("vmangos-main", &catalogue, &[account()], &[source]);
+        assert_eq!(plan.letters[0].cod, 0);
     }
 
     #[test]
