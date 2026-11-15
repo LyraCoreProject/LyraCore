@@ -1,47 +1,30 @@
 #[path = "../support/ratchet.rs"]
 mod ratchet;
 
+#[path = "../support/property_violation.rs"]
+mod property_violation;
+use property_violation::Violation;
+
+#[path = "../support/report.rs"]
+mod report;
+use report::Report;
+
 use std::path::Path;
 use std::{fs::OpenOptions, io::Write};
 
 use anyhow::{ensure, Context, Result};
-use serde::Deserialize;
-use wire_client::{catalogue, compare::Comparison, trace::Sha256Digest};
-
-#[derive(Deserialize)]
-struct Tier1Result {
-    schema_version: u32,
-    tier: String,
-    core_commit: String,
-    harness_revision: String,
-    scenarios: Vec<ScenarioResult>,
-}
-
-#[derive(Deserialize)]
-struct ScenarioResult {
-    id: String,
-    behavior: String,
-    scenario_sha256: Sha256Digest,
-    comparison: Comparison,
-}
+use wire_client::catalogue;
 
 fn baseline_from_result(
-    result: Tier1Result,
+    result: Report,
     current_commit: &str,
     requested: Option<&str>,
 ) -> Result<ratchet::Baseline> {
-    ensure!(
-        result.schema_version == 2 && result.tier == "tier1",
-        "expected a schema 2 tier 1 result"
-    );
-    ensure!(
-        result.core_commit == current_commit,
-        "tier 1 result is from another commit"
-    );
-    ensure!(
-        result.harness_revision == lyracore_conformance::harness_pin().revision,
-        "tier 1 result uses another harness revision"
-    );
+    result.ensure_current(
+        "tier1",
+        current_commit,
+        lyracore_conformance::harness_pin().revision,
+    )?;
     let mut scenarios = Vec::new();
     for entry in result.scenarios {
         let golden = catalogue::get(&entry.id)?;
@@ -171,7 +154,7 @@ fn main() -> Result<()> {
         .map(Path::new)
         .map(Path::to_path_buf)
         .unwrap_or_else(|| root.join(".lyracore/conformance/tier1.json"));
-    let result: Tier1Result = serde_json::from_slice(&std::fs::read(result_path)?)?;
+    let result: Report = serde_json::from_slice(&std::fs::read(result_path)?)?;
     let output = std::process::Command::new("git")
         .args(["rev-parse", "HEAD"])
         .current_dir(root)
@@ -190,6 +173,7 @@ mod tests {
     use super::*;
     use std::sync::{mpsc, Arc, Barrier};
     use std::time::Duration;
+    use wire_client::{compare::Comparison, trace::Sha256Digest};
 
     fn entry(id: &str) -> ratchet::ScenarioBaseline {
         ratchet::ScenarioBaseline::from_comparison(
@@ -255,12 +239,15 @@ mod tests {
 
     #[test]
     fn incomplete_result_cannot_replace_scenario() {
-        let result = Tier1Result {
-            schema_version: 2,
+        let result = Report {
+            schema_version: report::SchemaVersion,
             tier: "tier1".into(),
             core_commit: "commit".into(),
+            working_tree_dirty: false,
             harness_revision: lyracore_conformance::harness_pin().revision.into(),
+            recorded_at_unix_ms: 1,
             scenarios: vec![],
+            audit: None,
         };
         assert!(baseline_from_result(result, "commit", Some("taxi_single_hop")).is_err());
     }
