@@ -9,7 +9,7 @@ def check_operator_items(host):
     assert selection.read()[0] == 0x1ee
     template = host.sql('SELECT * FROM game_item_template WHERE entry = 25')[0]
     fields = dict(zip([column['name']['some'] for column in template['schema']['elements']], template['rows'][0]))
-    for column in ['entry'] + [
+    for column in ['entry', 'damage_school'] + [
         f'{prefix}_{slot}'
         for prefix in ['spellppmrate', 'spellcategory']
         for slot in range(1, 6)

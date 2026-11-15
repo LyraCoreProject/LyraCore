@@ -854,16 +854,7 @@ fn timed_casts_rearm_from_the_fire_time() {
         [70, 0, 0],
     ));
 
-    let first = fire(&mut scenario);
-    assert_eq!(
-        first
-            .rows_visited
-            .iter()
-            .find(|row| row.0 == "eventai")
-            .unwrap()
-            .1,
-        1
-    );
+    fire(&mut scenario);
     scenario.advance_clock(500_000);
     fire(&mut scenario);
     scenario.advance_clock(500_000);

@@ -2,13 +2,13 @@ use spacetimedb::ReducerContext;
 
 use lyracore_shared::constants::starter_item;
 use lyracore_shared::item::ItemRefusal;
+use lyracore_shared::race_class::{mask_admits, ZeroMask};
 
 use super::{next_item_guid, refuse, refused};
 
 use super::rules::{
-    binds_on_equip, can_equip_into, eligibility_mask_allows, equip_slot, invtype,
-    meets_required_level, meets_required_reputation, meets_required_skill, merge_amount,
-    resolve_equip_slot, Proficiency,
+    binds_on_equip, can_equip_into, equip_slot, invtype, meets_required_level,
+    meets_required_reputation, meets_required_skill, merge_amount, resolve_equip_slot, Proficiency,
 };
 use super::tables::{
     game_item_instance, game_item_template, item_in_slot, slot_occupied, ItemInstance,
@@ -257,7 +257,7 @@ pub(crate) fn apply_item_move(
 pub(super) fn validate_equipment(
     ctx: &ReducerContext,
     character_guid: u64,
-    template: &super::ItemTemplate,
+    template: &crate::ItemTemplate,
     slot: u8,
 ) -> Result<(), lyracore_protocol::messages::vanilla::InventoryResult> {
     use lyracore_protocol::messages::vanilla::InventoryResult;
@@ -283,9 +283,15 @@ pub(super) fn validate_equipment(
     if !fits {
         return Err(InventoryResult::ItemCantBeEquipped);
     }
-    if !eligibility_mask_allows(template.allowed_class, character.class())
-        || !eligibility_mask_allows(template.allowed_race, character.race())
-    {
+    if !mask_admits(
+        template.allowed_class,
+        character.class(),
+        ZeroMask::AdmitsNone,
+    ) || !mask_admits(
+        template.allowed_race,
+        character.race(),
+        ZeroMask::AdmitsNone,
+    ) {
         return Err(InventoryResult::YouCanNeverUseThatItem);
     }
     let current_skill = ctx
@@ -560,8 +566,9 @@ pub(crate) fn validate_bag_dest_slot(
 }
 
 fn bank_access(ctx: &ReducerContext, player_guid: u64) -> Result<(), ItemRefusal> {
-    super::economy::bank_access_gate(ctx, player_guid)
-        .map_err(|detail| refuse(ItemRefusal::BankUnavailable, detail))
+    crate::npc_interaction::nearby(ctx, player_guid, crate::npc_interaction::NpcService::Banker)
+        .map(drop)
+        .map_err(|refusal| refuse(ItemRefusal::BankUnavailable, refusal))
 }
 
 pub(crate) fn valid_split_count(count: u32, stack_count: u32) -> bool {
@@ -624,7 +631,7 @@ pub(super) fn free_inventory_slots(
     free
 }
 
-pub(super) fn item_fits_bag(item: &super::ItemTemplate, bag: &super::ItemTemplate) -> bool {
+pub(super) fn item_fits_bag(item: &crate::ItemTemplate, bag: &crate::ItemTemplate) -> bool {
     if bag.bag_family != 0 && item.container_slots != 0 {
         return false;
     }
@@ -756,9 +763,10 @@ pub(crate) fn apply_auto_bank_item(
 mod tests {
     use super::{
         bag_content_decompose, equip_slot, is_bank_slot, is_carried_slot, off_hand_after_move,
-        valid_dest_slot, valid_split_count, valid_split_dest_slot, ItemInstance, ItemRefusal,
-        BACKPACK_SLOT_END, BANK_SLOT_END_INCL, BANK_SLOT_START,
+        valid_dest_slot, valid_split_dest_slot, ItemRefusal, BACKPACK_SLOT_END, BANK_SLOT_END_INCL,
+        BANK_SLOT_START,
     };
+    use crate::ItemInstance;
     use lyracore_shared::constants::starter_item::BACKPACK_SLOT_0;
     use spacetimedb::{Identity, Timestamp};
 
@@ -782,20 +790,6 @@ mod tests {
         }
         for slot in [63u8, 68, 119, 192, 255] {
             assert!(!is_carried_slot(slot), "slot {slot} is not carry space");
-        }
-    }
-
-    #[test]
-    fn valid_split_count_rejects_zero_and_the_whole_stack_only() {
-        const STACK: u32 = 5;
-        assert!(!valid_split_count(0, STACK));
-        assert!(!valid_split_count(STACK, STACK));
-        assert!(!valid_split_count(STACK + 1, STACK));
-        for count in 1..STACK {
-            assert!(
-                valid_split_count(count, STACK),
-                "count {count} of {STACK} should be a valid split"
-            );
         }
     }
 

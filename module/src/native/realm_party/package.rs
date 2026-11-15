@@ -17,6 +17,8 @@ pub struct PackagePartyRefresh {
     pub scheduled_at: ScheduleAt,
 }
 
+crate::outside_table_catalog!(game_package_party_refresh);
+
 pub(crate) fn membership_changed(ctx: &ReducerContext, guid: u64) {
     if realm_shard(ctx).is_none()
         || group::group_of(ctx, guid).is_none()
@@ -233,7 +235,7 @@ pub(super) fn apply(
         }
     }
     let mut groups = group::action_groups(ctx, guid, action);
-    group::apply_action(ctx, Plane::RealmCore, guid, action).map_err(|error| error.to_string())?;
+    group::apply_action(ctx, Plane::RealmShard, guid, action).map_err(|error| error.to_string())?;
     groups.extend(group::action_groups(ctx, guid, action));
     let mut characters = vec![guid];
     characters.extend(target);

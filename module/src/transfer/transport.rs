@@ -4,7 +4,8 @@ use super::TransferOut;
 use crate::bridge::{
     game_party_command_issuer, game_party_command_receipt, PartyCommandIssuer, PartyCommandReceipt,
 };
-use crate::items::{item_guid_exists, BuybackItem, BuybackState, ItemInstance};
+use crate::items::{item_guid_exists, BuybackItem, BuybackState};
+use crate::ItemInstance;
 
 #[path = "legacy_item_rows.rs"]
 mod legacy_item_rows;
@@ -31,42 +32,6 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &[
     "game_character_relocation",
     "game_combat_check_schedule",
     "game_transport_passenger",
-];
-
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) const NOT_TRANSPORTED: &[&str] = &[
-    "game_character_buyback",
-    "game_aoi_grant",
-    "game_aoi_viewer",
-    "game_native_player",
-    "game_native_member_stats",
-    "game_native_motion_permit",
-    "game_character_relocation",
-    // Combat checks belong to the live entity and do not survive Transfer.
-    "game_combat_check_schedule",
-    "game_rest_state_event",
-    "game_breath_relay_event",
-    "game_breath_state",
-    "game_fatigue_state",
-    "game_group_invite",
-    "game_group_member",
-    "game_group_member_partition",
-    "game_group_target_icon",
-    // Admission requests settle on the source Shard before Transfer.
-    "game_instance_entry",
-    "game_instance_removal",
-    "game_pet_command",
-    "game_mail_delivery",
-    "game_character_shard",
-    "game_active_taxi_flight",
-    "game_taxi_flight_schedule",
-    "game_taxi_passenger_spline",
-    "game_taxi_service_reply",
-    "game_trade_session",
-    "game_trade_slot",
-    "game_transport_passenger",
-    "game_duel",
-    "game_duel_event",
 ];
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
@@ -133,7 +98,7 @@ pub(crate) fn admit_command_issuer_import(
 }
 
 pub enum RowIo<'a> {
-    Export(&'a mut Vec<u8>),
+    Export(&'a mut Vec<u8>, &'a mut Result<(), String>),
     Import(&'a [u8], &'a mut Result<(), String>),
 }
 
@@ -149,7 +114,14 @@ pub(crate) fn move_rows<C, R>(
         + for<'de> spacetimedb::sats::Deserialize<'de>,
 {
     match io {
-        RowIo::Export(out) => **out = encode_rows(export()),
+        RowIo::Export(out, outcome) => match encode_rows(export()) {
+            Ok(bytes) => **out = bytes,
+            Err(error) => {
+                if outcome.is_ok() {
+                    **outcome = Err(error);
+                }
+            }
+        },
         RowIo::Import(bytes, outcome) => {
             for r in decode_rows::<R>(bytes, outcome) {
                 insert(ctx, r);
@@ -158,17 +130,11 @@ pub(crate) fn move_rows<C, R>(
     }
 }
 
-pub(crate) fn encode_rows<R>(rows: Vec<R>) -> Vec<u8>
+pub(crate) fn encode_rows<R>(rows: Vec<R>) -> Result<Vec<u8>, String>
 where
     R: spacetimedb::SpacetimeType + spacetimedb::sats::Serialize,
 {
-    match spacetimedb::sats::bsatn::to_vec(&rows) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            log::error!("transfer export: cannot serialize rows: {e}");
-            Vec::new()
-        }
-    }
+    spacetimedb::sats::bsatn::to_vec(&rows).map_err(|e| format!("cannot serialize rows: {e}"))
 }
 
 pub(crate) fn decode_rows<R>(bytes: &[u8], outcome: &mut Result<(), String>) -> Vec<R>
@@ -198,7 +164,7 @@ where
 
 pub(crate) fn not_transported(io: &mut RowIo<'_>) {
     match io {
-        RowIo::Export(out) => out.clear(),
+        RowIo::Export(out, _) => out.clear(),
         RowIo::Import(..) => {}
     }
 }
@@ -209,27 +175,36 @@ pub(crate) fn export_rows_via<C>(
     ctx: &C,
     character_guid: u64,
     arms: &[TransportArm<'_, C>],
-) -> Vec<TableRows> {
+) -> Result<Vec<TableRows>, String> {
     let mut out = Vec::new();
     for (table, mover) in arms {
         if MANIFEST_EXCLUDE.contains(table) {
             continue;
         }
         let mut rows = Vec::new();
-        mover(ctx, character_guid, &mut RowIo::Export(&mut rows));
+        let mut outcome = Ok(());
+        mover(
+            ctx,
+            character_guid,
+            &mut RowIo::Export(&mut rows, &mut outcome),
+        );
+        outcome.map_err(|e| format!("{table}: {e}"))?;
         out.push(TableRows {
             table: (*table).to_string(),
             rows,
         });
     }
-    out
+    Ok(out)
 }
 
-pub(crate) fn export_rows(ctx: &ReducerContext, character_guid: u64) -> Vec<TableRows> {
-    let mut payload = export_rows_via(ctx, character_guid, crate::CHARACTER_OWNED_TRANSFERS);
-    super::mail_text::export(ctx, &mut payload);
+pub(crate) fn export_rows(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<Vec<TableRows>, String> {
+    let mut payload = export_rows_via(ctx, character_guid, crate::CHARACTER_OWNED_TRANSFERS)?;
+    super::mail_text::export(ctx, &mut payload)?;
     legacy_item_rows::mark_current(&mut payload);
-    payload
+    Ok(payload)
 }
 
 pub(crate) fn import_rows_via<C>(

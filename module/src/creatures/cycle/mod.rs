@@ -7,13 +7,13 @@ use super::ai::{
     aggro_radius, fear_step_for_tick, feared_flee_step, finite_point, flee_step, hp_pct_below,
     is_aggro_candidate, leg_in_flight, leg_toward, may_start_rout, nearest_waypoint_idx,
     next_waypoint_idx, rout_close_ms, spline_t, stealth_detect_range, wander_point,
-    within_assist_radius, wounded_slow_factor, TickScope, CHASE_LEASH_SQ, CHASE_MELEE_SQ,
-    CHASE_REPATH_COS, FLEE_LEG_YD, MOVE_TICK_SECS, RETURN_LEASH_SQ, SENSE_EVERY_N_TICKS,
-    WANDER_CHANCE_PCT, WANDER_RADIUS,
+    within_assist_radius, wounded_slow_factor, CHASE_LEASH_SQ, CHASE_MELEE_SQ, CHASE_REPATH_COS,
+    FLEE_LEG_YD, RETURN_LEASH_SQ, WANDER_CHANCE_PCT, WANDER_RADIUS,
 };
 use super::cast_condition;
 use super::eventai::EventAiRequest;
 use super::pet;
+use super::tick::cadence::{TickScope, MOVE_TICK_SECS, SENSE_EVERY_N_TICKS};
 use super::tick::TickSweep;
 
 mod ctx;
@@ -120,7 +120,7 @@ pub(crate) trait MotionSink {
     fn path_obstruction(&self, leg: &LegInFlight, now_micros: u64) -> Option<Point>;
     fn movement_suppressed(&self, guid: u64) -> bool;
     fn commit_position(&mut self, guid: u64, at: Point, moved_ms: u32);
-    fn halt(&mut self, leg: &LegInFlight, at: Point, spline_id: u32);
+    fn halt(&mut self, leg: &LegInFlight, at: Point);
     fn drop_leg(&mut self, guid: u64);
 }
 
@@ -205,7 +205,7 @@ pub(crate) trait IdleSink {
     fn roll(&self) -> u32;
     fn aim_at_waypoint(&mut self, guid: u64, waypoint_id: u64);
     fn reached_home(&mut self, guid: u64);
-    fn commit_leg(&mut self, guid: u64, leg: Leg, now_ms: u32);
+    fn commit_leg(&mut self, guid: u64, leg: Leg);
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -380,8 +380,8 @@ pub(crate) trait PursuitSink {
     fn target_not_reachable(&mut self, _guid: u64) {}
     fn caster_hold_range(&self, guid: u64) -> f32;
     fn casting(&self, guid: u64) -> bool;
-    fn commit_back_off(&mut self, guid: u64, victim: u64, to: (f32, f32), dur_ms: u32, now_ms: u32);
-    fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32);
+    fn commit_back_off(&mut self, guid: u64, victim: u64, to: (f32, f32), dur_ms: u32);
+    fn face(&mut self, guid: u64, at: Point, orientation: f32);
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -424,7 +424,7 @@ pub(crate) struct Pet {
     pub owner: Option<PetOwner>,
     pub dead: bool,
     pub suppressed: bool,
-    pub command: PetCommand,
+    pub command: PetOrder,
     pub react: PetReact,
     pub fighting: bool,
 }
@@ -439,7 +439,7 @@ pub(crate) struct PetOwner {
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) enum PetCommand {
+pub(crate) enum PetOrder {
     Stay,
     Follow,
     Attack(u64),
@@ -452,12 +452,12 @@ pub(crate) enum PetReact {
     Aggressive,
 }
 
-impl PetCommand {
-    fn of(command: u8, command_target: u64) -> PetCommand {
+impl PetOrder {
+    fn of(command: u8, command_target: u64) -> PetOrder {
         match command {
-            pet::CMD_STAY => PetCommand::Stay,
-            pet::CMD_ATTACK => PetCommand::Attack(command_target),
-            _ => PetCommand::Follow,
+            pet::CMD_STAY => PetOrder::Stay,
+            pet::CMD_ATTACK => PetOrder::Attack(command_target),
+            _ => PetOrder::Follow,
         }
     }
 }
@@ -629,7 +629,7 @@ fn advance_legs<W: MotionSink>(w: &mut W, tick: &TickContext) -> usize {
         }
         let (at, arrived) = leg.rendered_at(tick.now_micros);
         if let Some(stopped) = w.path_obstruction(&leg, tick.now_micros) {
-            w.halt(&leg, stopped, tick.now_ms);
+            w.halt(&leg, stopped);
             continue;
         }
         if !finite_point(at.x, at.y, at.z) {
@@ -641,7 +641,7 @@ fn advance_legs<W: MotionSink>(w: &mut W, tick: &TickContext) -> usize {
             continue;
         }
         if w.movement_suppressed(leg.guid) {
-            w.halt(&leg, at, tick.now_ms);
+            w.halt(&leg, at);
             continue;
         }
         w.commit_position(leg.guid, at, tick.now_ms);
@@ -731,7 +731,7 @@ fn patrol<W: IdleSink + MotionSink>(w: &mut W, tick: &TickContext, active: &Hash
                 hold_until_landed: false,
             }
         };
-        w.commit_leg(c.guid, leg, tick.now_ms);
+        w.commit_leg(c.guid, leg);
     }
     visited
 }
@@ -915,7 +915,7 @@ fn pet_behavior<W: PetSink + IdleSink>(w: &mut W, tick: &TickContext, candidates
             actions.push((pet.guid, PetAction::StandDown));
             continue;
         }
-        if pet.command == PetCommand::Stay {
+        if pet.command == PetOrder::Stay {
             continue;
         }
         if let Some(action) = follow(w, tick, pet, &owner) {
@@ -932,14 +932,14 @@ fn pet_behavior<W: PetSink + IdleSink>(w: &mut W, tick: &TickContext, candidates
                 map_id,
                 instance_id,
             } => w.restage(guid, at, map_id, instance_id, tick.now_ms),
-            PetAction::Follow(leg) => w.commit_leg(guid, leg, tick.now_ms),
+            PetAction::Follow(leg) => w.commit_leg(guid, leg),
         }
     }
     visited
 }
 
 fn pet_victim<W: PetSink>(w: &mut W, pet: &Pet, owner: &PetOwner) -> Option<u64> {
-    if let PetCommand::Attack(target) = pet.command {
+    if let PetOrder::Attack(target) = pet.command {
         if w.pet_may_attack(pet, target) {
             return Some(target);
         }
@@ -1123,7 +1123,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         }
         let back_off_from = c.leg.as_ref().map_or(0, |leg| leg.back_off_from);
         if back_off_from != 0 && (back_off_from != c.victim || w.casting(c.guid)) {
-            stand_and_face(w, tick, &c);
+            stand_and_face(w, &c);
             continue;
         }
         let gap_sq = dist_sq(c.at, c.victim_at);
@@ -1136,9 +1136,9 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
                 .then(|| ranged_hold_point(&c, distance, angle))
         }) {
             if dist_sq(c.at, aim) <= RANGED_HOLD_ARRIVED_SQ {
-                stand_and_face(w, tick, &c);
+                stand_and_face(w, &c);
             } else {
-                commit_chase_leg(w, &c, aim, 0.0, tick.now_ms);
+                commit_chase_leg(w, &c, aim, 0.0);
             }
             continue;
         }
@@ -1146,7 +1146,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         let in_contact = gap_sq <= CHASE_CONTACT_YD * CHASE_CONTACT_YD;
         if in_contact || (gap_sq <= CHASE_MELEE_SQ && !victim_moving) {
             if back_off_from == 0 && !back_off(w, tick, &c, gap_sq) {
-                stand_and_face(w, tick, &c);
+                stand_and_face(w, &c);
             }
             continue;
         }
@@ -1156,7 +1156,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
                 continue;
             }
         }
-        commit_chase_leg(w, &c, c.victim_at, CHASE_CONTACT_YD, tick.now_ms);
+        commit_chase_leg(w, &c, c.victim_at, CHASE_CONTACT_YD);
     }
     visited
 }
@@ -1166,7 +1166,6 @@ fn commit_chase_leg<W: MotionSink + IdleSink + PursuitSink>(
     c: &Pursuit,
     target: Point,
     stop_dist: f32,
-    now_ms: u32,
 ) {
     let gap = dist_sq(c.at, target).sqrt();
     if gap <= stop_dist {
@@ -1200,7 +1199,6 @@ fn commit_chase_leg<W: MotionSink + IdleSink + PursuitSink>(
             gait,
             hold_until_landed: false,
         },
-        now_ms,
     );
 }
 
@@ -1237,7 +1235,7 @@ fn back_off<W: IdleSink + PursuitSink>(
     let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, speed) else {
         return false;
     };
-    w.commit_back_off(c.guid, c.victim, (x, y), dur_ms, tick.now_ms);
+    w.commit_back_off(c.guid, c.victim, (x, y), dur_ms);
     true
 }
 
@@ -1266,9 +1264,9 @@ fn needs_new_leg(leg: Option<&LegInFlight>, dir: (f32, f32), stop_at: (f32, f32)
     len <= 0.001 || (lx / len) * dir.0 + (ly / len) * dir.1 < CHASE_REPATH_COS
 }
 
-fn stand_and_face<W: PursuitSink>(w: &mut W, tick: &TickContext, c: &Pursuit) {
+fn stand_and_face<W: PursuitSink>(w: &mut W, c: &Pursuit) {
     if let Some(bearing) = stand_and_face_bearing(c) {
-        w.face(c.guid, c.at, bearing, tick.now_ms);
+        w.face(c.guid, c.at, bearing);
     }
 }
 
@@ -1321,7 +1319,7 @@ fn idle_movement<W: IdleSink + MotionSink + PursuitSink>(
             continue;
         }
         if let Some(orientation) = w.pending_facing(c.guid) {
-            w.face(c.guid, c.at, orientation, tick.now_ms);
+            w.face(c.guid, c.at, orientation);
             w.clear_pending_facing(c.guid);
             continue;
         }
@@ -1375,7 +1373,6 @@ fn follow_authored<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature,
             gait,
             hold_until_landed: false,
         },
-        tick.now_ms,
     );
 }
 
@@ -1392,7 +1389,7 @@ fn walk_home<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home:
         gait: Gait::Run,
         hold_until_landed: false,
     };
-    w.commit_leg(c.guid, leg, tick.now_ms);
+    w.commit_leg(c.guid, leg);
 }
 
 fn loiter<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home: Home) {
@@ -1417,7 +1414,7 @@ fn loiter<W: IdleSink>(w: &mut W, tick: &TickContext, c: &IdleCreature, home: Ho
         gait,
         hold_until_landed: true,
     };
-    w.commit_leg(c.guid, leg, tick.now_ms);
+    w.commit_leg(c.guid, leg);
 }
 
 fn regenerate<W: RegenSink>(w: &mut W, flagged: &[u64]) -> usize {
@@ -1492,7 +1489,7 @@ fn rout<W: RoutSink + MotionSink + IdleSink + EngageSink>(w: &mut W, tick: &Tick
             gait: Gait::Run,
             hold_until_landed: false,
         };
-        w.commit_leg(c.guid, leg, tick.now_ms);
+        w.commit_leg(c.guid, leg);
     }
     visited
 }
@@ -1527,7 +1524,7 @@ fn fear<W: FearSink + IdleSink>(w: &mut W, tick: &TickContext) -> usize {
             gait: Gait::Run,
             hold_until_landed: false,
         };
-        w.commit_leg(c.guid, leg, tick.now_ms);
+        w.commit_leg(c.guid, leg);
     }
     visited
 }

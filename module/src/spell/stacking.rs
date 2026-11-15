@@ -3,6 +3,7 @@ use spacetimedb::{log, table, ReducerContext, Table};
 use crate::game_world_entity;
 
 use super::*;
+use crate::{game_aura, game_spell, game_spell_chain, game_spell_effect, Aura};
 
 #[table(accessor = game_spell_group, index(accessor = by_group, btree(columns = [group_id])), index(accessor = by_spell, btree(columns = [spell_id])))]
 pub struct SpellGroup {
@@ -11,6 +12,8 @@ pub struct SpellGroup {
     pub id: u64,
     pub group_id: u32,
     pub spell_id: u32,
+    #[default(0)]
+    pub power_rank: u32,
 }
 
 #[table(accessor = game_spell_group_rule)]
@@ -23,7 +26,6 @@ pub struct SpellGroupRule {
     pub rank_is_comparable: bool,
 }
 
-#[allow(dead_code)]
 pub(crate) const RULE_STACKS: u8 = 0;
 pub(crate) const RULE_EXCLUSIVE: u8 = 1;
 pub(crate) const RULE_EXCLUSIVE_PER_CASTER: u8 = 2;
@@ -67,6 +69,7 @@ pub(crate) enum GroupRule {
 
 pub(crate) fn group_rule_from_u8(rule: u8) -> GroupRule {
     match rule {
+        RULE_STACKS => GroupRule::Stacks,
         RULE_EXCLUSIVE => GroupRule::Exclusive,
         RULE_EXCLUSIVE_PER_CASTER => GroupRule::ExclusivePerCaster,
         RULE_EXCLUSIVE_STRONGER => GroupRule::ExclusiveStronger,
@@ -183,26 +186,30 @@ pub(crate) fn buff_group_status(
     if aura_effects.is_empty() {
         return BuffGroupStatus::Unavailable;
     }
-    let incoming = aura_effects
-        .into_iter()
-        .map(|effect| {
-            compute_group_strength(
-                rule.rank_is_comparable,
-                rank_of(ctx, spell_id),
-                effect_amount(
-                    effect.base_points,
-                    effect.die_sides,
-                    effect.per_level,
-                    u32::from(caster_level),
-                    header.spell_level,
-                    header.max_level,
-                    0,
+    let incoming = if membership.power_rank > 0 {
+        membership.power_rank.min(i32::MAX as u32) as i32
+    } else {
+        aura_effects
+            .into_iter()
+            .map(|effect| {
+                compute_group_strength(
+                    rule.rank_is_comparable,
+                    rank_of(ctx, spell_id),
+                    effect_amount(
+                        effect.base_points,
+                        effect.die_sides,
+                        effect.per_level,
+                        u32::from(caster_level),
+                        header.spell_level,
+                        header.max_level,
+                        0,
+                    )
+                    .saturating_abs(),
                 )
-                .saturating_abs(),
-            )
-        })
-        .max()
-        .unwrap_or(0);
+            })
+            .max()
+            .unwrap_or(0)
+    };
     let family_rows: Vec<_> = groups
         .by_group()
         .filter(&group_id)
@@ -211,20 +218,26 @@ pub(crate) fn buff_group_status(
     if family_rows.len() > family_limit {
         return BuffGroupStatus::Unavailable;
     }
-    let family: std::collections::HashSet<_> =
-        family_rows.into_iter().map(|row| row.spell_id).collect();
+    let family: std::collections::BTreeMap<_, _> = family_rows
+        .into_iter()
+        .map(|row| (row.spell_id, row.power_rank))
+        .collect();
     let existing: Vec<_> = auras
         .iter()
-        .filter(|aura| family.contains(&aura.spell_id))
+        .filter(|aura| family.contains_key(&aura.spell_id))
         .map(|aura| AuraSummary {
             aura_id: aura.id,
             caster_guid: aura.caster_guid,
-            strength: stacked_group_strength(
-                rule.rank_is_comparable,
-                rank_of(ctx, aura.spell_id),
-                aura.amount,
-                aura.stacks,
-            ),
+            strength: if membership.power_rank > 0 {
+                family[&aura.spell_id].min(i32::MAX as u32) as i32
+            } else {
+                stacked_group_strength(
+                    rule.rank_is_comparable,
+                    rank_of(ctx, aura.spell_id),
+                    aura.amount,
+                    aura.stacks,
+                )
+            },
         })
         .collect();
     if group_strength_satisfied(incoming, &existing) {
@@ -348,64 +361,71 @@ pub(crate) fn apply_group_conflict(
     incoming_magnitude: i32,
 ) -> bool {
     let groups = ctx.db.game_spell_group();
-    let Some(group_id) = groups
+    let memberships: std::collections::BTreeSet<_> = groups
         .by_spell()
         .filter(&spell_id)
-        .map(|g| g.group_id)
-        .next()
-    else {
-        return true;
-    };
-    let rule_row = ctx
-        .db
-        .game_spell_group_rule()
-        .group_id()
-        .find(group_id)
-        .map(|r| (group_rule_from_u8(r.rule), r.rank_is_comparable))
-        .unwrap_or((GroupRule::Stacks, true));
-    let (rule, rank_is_comparable) = rule_row;
-    if rule == GroupRule::Stacks {
-        return true;
-    }
-    let member_ids: std::collections::HashSet<u32> = groups
-        .by_group()
-        .filter(&group_id)
-        .map(|g| g.spell_id)
+        .map(|group| group.group_id)
         .collect();
     let auras = ctx.db.game_aura();
-    let members: Vec<AuraSummary> = auras
-        .by_target()
-        .filter(&target_guid)
-        // Earlier effects of the same cast must not conflict with its later effects.
-        .filter(|a| a.spell_id != spell_id && member_ids.contains(&a.spell_id))
-        .map(|a| AuraSummary {
-            aura_id: a.id,
-            caster_guid: a.caster_guid,
-            strength: stacked_group_strength(
-                rank_is_comparable,
-                rank_of(ctx, a.spell_id),
-                a.amount,
-                a.stacks,
-            ),
-        })
-        .collect();
-    let strength = compute_group_strength(rank_is_comparable, incoming_rank, incoming_magnitude);
-    match resolve_group_conflict(caster_guid, strength, rule, &members) {
-        ApplyDecision::Refuse { reason } => {
-            log::info!(
-                "stacking group {group_id}: spell {spell_id} onto {target_guid} refused ({reason})"
-            );
-            false
+    let mut evictions = std::collections::BTreeSet::new();
+    // Resolve every group before removing any aura.
+    for group_id in memberships {
+        let (rule, rank_is_comparable) = ctx
+            .db
+            .game_spell_group_rule()
+            .group_id()
+            .find(group_id)
+            .map_or((GroupRule::Stacks, true), |rule| {
+                (group_rule_from_u8(rule.rule), rule.rank_is_comparable)
+            });
+        if rule == GroupRule::Stacks {
+            continue;
         }
-        ApplyDecision::Apply { evict, .. } => {
-            let shed = evict
-                .into_iter()
-                .filter_map(|id| auras.id().find(id))
-                .collect();
-            crate::spell::shed_auras(ctx, target_guid, shed);
-            true
+        let member_ranks: std::collections::BTreeMap<_, _> = groups
+            .by_group()
+            .filter(&group_id)
+            .map(|group| (group.spell_id, group.power_rank))
+            .collect();
+        let source_rank = member_ranks.get(&spell_id).copied().unwrap_or(0);
+        let members = auras
+            .by_target()
+            .filter(&target_guid)
+            // Earlier effects of the same cast must not conflict with its later effects.
+            .filter(|aura| aura.spell_id != spell_id && member_ranks.contains_key(&aura.spell_id))
+            .map(|aura| AuraSummary {
+                aura_id: aura.id,
+                caster_guid: aura.caster_guid,
+                strength: if source_rank > 0 {
+                    member_ranks[&aura.spell_id].min(i32::MAX as u32) as i32
+                } else {
+                    stacked_group_strength(
+                        rank_is_comparable,
+                        rank_of(ctx, aura.spell_id),
+                        aura.amount,
+                        aura.stacks,
+                    )
+                },
+            })
+            .collect::<Vec<_>>();
+        let strength = if source_rank > 0 {
+            source_rank.min(i32::MAX as u32) as i32
+        } else {
+            compute_group_strength(rank_is_comparable, incoming_rank, incoming_magnitude)
+        };
+        match resolve_group_conflict(caster_guid, strength, rule, &members) {
+            ApplyDecision::Refuse { reason } => {
+                log::info!("stacking group {group_id}: spell {spell_id} onto {target_guid} refused ({reason})");
+                return false;
+            }
+            ApplyDecision::Apply { evict, .. } => evictions.extend(evict),
         }
     }
+    let shed = evictions
+        .into_iter()
+        .filter_map(|id| auras.id().find(id))
+        .collect();
+    crate::spell::shed_auras(ctx, shed);
+    true
 }
 
 pub(crate) fn resolve_dr_for_target(
@@ -464,12 +484,27 @@ pub(crate) fn bump_dr_level(
     }
 }
 
+/// Opens the window only once no Aura of `category` remains on the target, as vmangos
+/// `Unit::ApplyDiminishingAura` does.
 pub(crate) fn dr_window_on_removal(
     ctx: &ReducerContext,
     target_guid: u64,
     category: u8,
     removed_at_micros: i64,
 ) {
+    let held = ctx
+        .db
+        .game_aura()
+        .by_target()
+        .filter(&target_guid)
+        .any(|aura| {
+            aura.eff_kind == A_CONTROL
+                && aura.eff_p0_kind == P_MECHANIC
+                && dr_category_for_mechanic(aura.eff_p0) == Some(category)
+        });
+    if held {
+        return;
+    }
     let table = ctx.db.game_dr_state();
     if let Some(mut row) = table
         .by_target()

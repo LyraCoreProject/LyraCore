@@ -1,5 +1,7 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_shared::guid;
 use support::{
     event_rows, fence_subscription, lone_wolf, number, poll_until, subscribe_with_fence,
     Standalone, POLL_TIMEOUT,
@@ -86,9 +88,9 @@ fn backfill_batches_pause_regeneration_until_every_entity_is_indexed() {
     let wolf = lone_wolf(&mut shard);
     let packed = (1..=512)
         .map(|index| {
-            let guid = (0xF130u64 << 48) | (51000u64 << 24) | (1_000_000 + index);
+            let guid = guid::creature(TEST_WOLF_ENTRY, 1_000_000 + index);
             format!(
-                "{guid},51000,{},{},{},{},0,0",
+                "{guid},{TEST_WOLF_ENTRY},{},{},{},{},0,0",
                 wolf["map_id"], wolf["x"], wolf["y"], wolf["z"]
             )
         })
@@ -100,13 +102,17 @@ fn backfill_batches_pause_regeneration_until_every_entity_is_indexed() {
     );
     assert!(poll_until(POLL_TIMEOUT, || {
         shard
-            .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+            .query_rows(&format!(
+                "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+            ))
             .len()
             == 513
     }));
     shard.clear_schedule("game_creature_move_schedule");
     shard.assert_sql("DELETE FROM game_creature_spawn");
-    shard.assert_sql("DELETE FROM game_world_entity WHERE entry != 51000");
+    shard.assert_sql(&format!(
+        "DELETE FROM game_world_entity WHERE entry != {TEST_WOLF_ENTRY}"
+    ));
     assert_eq!(
         shard.query_rows("SELECT guid FROM game_world_entity").len(),
         513

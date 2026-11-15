@@ -60,6 +60,12 @@ export const SPELL_COLUMNS: { readonly [K in SpellField]: Column } = {
   durationIndex: { column: "duration_index", type: "u32", defaultValue: 0 },
   category: { column: "category", type: "u32", defaultValue: 0 },
   categoryCooldownMs: { column: "category_cooldown_ms", type: "u32", defaultValue: 0 },
+  equippedItemClass: { column: "equipped_item_class", type: "i32", defaultValue: -1 },
+  equippedItemSubclassMask: { column: "equipped_item_subclass_mask", type: "u32", defaultValue: 0 },
+  equippedItemInventoryMask: { column: "equipped_item_inventory_mask", type: "u32", defaultValue: 0 },
+  attributesEx3: { column: "attributes_ex_3", type: "u32", defaultValue: 0 },
+  attributesEx4: { column: "attributes_ex_4", type: "u32", defaultValue: 0 },
+  damageClass: { column: "damage_class", type: "u8", defaultValue: 0 },
 };
 
 export const SPELL_EFFECT_COLUMNS: {

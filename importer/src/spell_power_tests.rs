@@ -120,7 +120,7 @@ fn fireball(shard: &crate::standalone_support::Standalone, seed: u64) -> u32 {
 #[test]
 #[ignore = "requires World Source, client DBCs, SpacetimeDB 2.14.0 and Wasm"]
 fn actual_spell_power_world_plan_scales_cast_and_equipped_damage_once() {
-    let shard = imported_spells(&[133, 11390, 23271, 7685]);
+    let shard = imported_spells(&[133, 11390, 23271, 7685, 17539]);
     let ordinary = fireball(&shard, 0);
     assert!(ordinary > 0);
     cast(&shard, 1, 11390, 1);
@@ -152,19 +152,68 @@ fn actual_spell_power_world_plan_scales_cast_and_equipped_damage_once() {
     assert_eq!(fireball(&shard, 0), ordinary + 25);
     shard.assert_call("debug_repair_after_publish", &[]);
     assert_eq!(fireball(&shard, 0), ordinary + 25);
+    cast(&shard, 1, 17539, 1);
+    assert!((26..=27).contains(&(fireball(&shard, 0) - ordinary)));
+    cast(&shard, 1, 11390, 1);
+    assert!((26..=27).contains(&(fireball(&shard, 0) - ordinary)));
+    let greater = shard.query_rows(
+        "SELECT id,applied_at,expires_at FROM game_aura WHERE target_guid = 1 AND spell_id = 17539",
+    );
+    shard.assert_sql("UPDATE game_spell_group_rule SET rule = 0 WHERE group_id = 1023");
+    cast(&shard, 1, 11390, 1);
+    assert_eq!(
+        shard
+            .query_rows("SELECT id FROM game_aura WHERE target_guid = 1 AND spell_id = 11390")
+            .len(),
+        1
+    );
+    shard.assert_sql("UPDATE game_spell_group_rule SET rule = 3 WHERE group_id = 1023");
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert!(shard
+        .query_rows("SELECT id FROM game_aura WHERE target_guid = 1 AND spell_id = 11390")
+        .is_empty());
+    assert_eq!(shard.query_rows("SELECT id,applied_at,expires_at FROM game_aura WHERE target_guid = 1 AND spell_id = 17539"), greater);
+    assert!((26..=27).contains(&(fireball(&shard, 0) - ordinary)));
 }
 
 #[test]
 #[ignore = "requires World Source, client DBCs, SpacetimeDB 2.14.0 and Wasm"]
 fn actual_spell_power_world_plan_dampen_and_amplify_scale_incoming_damage() {
-    let shard = imported_spells(&[133, 604, 1008]);
+    let shard = imported_spells(&[133, 604, 1008, 20911, 25899]);
     let wolf = (0xf130u64 << 48) | (51000u64 << 24) | 1;
     let ordinary = fireball(&shard, 0);
     cast(&shard, wolf, 604, wolf);
     assert_eq!(fireball(&shard, 0), ordinary - 1);
-    shard.assert_sql("DELETE FROM game_aura WHERE spell_id = 604");
     cast(&shard, wolf, 1008, wolf);
     assert_eq!(fireball(&shard, 0), ordinary + 2);
+    shard.assert_sql("UPDATE game_spell_group_rule SET rule = 0 WHERE group_id = 1073741827");
+    cast(&shard, wolf, 604, wolf);
+    let dampen =
+        shard.query_rows("SELECT id,applied_at,expires_at FROM game_aura WHERE spell_id = 604");
+    shard.assert_sql("UPDATE game_spell_group_rule SET rule = 1 WHERE group_id = 1073741827");
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert!(shard
+        .query_rows("SELECT id FROM game_aura WHERE spell_id = 1008")
+        .is_empty());
+    assert_eq!(
+        shard.query_rows("SELECT id,applied_at,expires_at FROM game_aura WHERE spell_id = 604"),
+        dampen
+    );
+    assert_eq!(fireball(&shard, 0), ordinary - 1);
+    cast(&shard, wolf, 25899, wolf);
+    let sanctuary = shard
+        .query_rows("SELECT id,amount,applied_at,expires_at FROM game_aura WHERE spell_id = 25899");
+    assert!(!sanctuary.is_empty());
+    cast(&shard, wolf, 20911, wolf);
+    assert!(shard
+        .query_rows("SELECT id FROM game_aura WHERE spell_id = 20911")
+        .is_empty());
+    assert_eq!(
+        shard.query_rows(
+            "SELECT id,amount,applied_at,expires_at FROM game_aura WHERE spell_id = 25899"
+        ),
+        sanctuary
+    );
 }
 
 #[test]
@@ -243,7 +292,7 @@ fn sheet_min(shard: &crate::standalone_support::Standalone) -> u32 {
 #[test]
 #[ignore = "requires World Source, client DBCs, SpacetimeDB 2.14.0 and Wasm"]
 fn actual_spell_power_world_plan_curse_enrage_and_weapon_requirements_change_weapon_damage() {
-    let shard = imported_spells(&[702, 8599, 4334, 196, 201]);
+    let shard = imported_spells(&[702, 8599, 4334, 196, 201, 1680, 11708]);
     let wolf = (0xf130u64 << 48) | (51000u64 << 24) | 1;
     let ordinary = sheet_min(&shard);
     assert!(ordinary > 3);
@@ -268,6 +317,24 @@ fn actual_spell_power_world_plan_curse_enrage_and_weapon_requirements_change_wea
     );
     cast(&shard, wolf, 702, 1);
     assert_eq!(sheet_min(&shard), 0);
+    cast(&shard, wolf, 11708, 1);
+    shard.assert_sql(
+        "INSERT INTO game_conformance_swing_random (character_guid,state) VALUES (1,1)",
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 36, stance = {}, power = 100000 WHERE guid = 1",
+        lyracore_shared::spell::taxonomy::STANCE_BERSERKER
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 36, health = 100000 WHERE guid = {wolf}"
+    ));
+    cast(&shard, 1, 1680, wolf);
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT health FROM game_world_entity WHERE guid = {wolf}"
+        ))[0]["health"],
+        "100000"
+    );
 }
 
 #[test]
@@ -311,7 +378,7 @@ fn damage_values(
             .step_by(2)
             .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16).unwrap())
             .collect();
-        for update in lyracore_shared::values_mask::parse_values_updates(&body) {
+        for update in lyracore_protocol::codec::values_mask::parse_values_updates(&body) {
             if update.guid == 1 && update.fields.iter().any(|(index, _)| *index == 1201) {
                 assert!(!update.fields.iter().any(|(index, _)| *index == 2));
                 fields.extend(update.fields);
@@ -382,7 +449,10 @@ fn actual_spell_power_world_plan_snapshots_corruption_with_its_dot_coefficient()
     assert_eq!(corruption(), ordinary + 2);
 }
 
-fn seal_damage(connection: &mut lyracore_test_support::ReducerConnection) -> Vec<u32> {
+fn spell_hits(
+    connection: &mut lyracore_test_support::ReducerConnection,
+    id: u32,
+) -> Vec<(u32, u8, bool)> {
     let mut hits = Vec::new();
     for packet in connection.drain_packets() {
         let packet: serde_json::Value = serde_json::from_str(packet.get()).unwrap();
@@ -399,9 +469,12 @@ fn seal_damage(connection: &mut lyracore_test_support::ReducerConnection) -> Vec
             offset += 1 + body[offset].count_ones() as usize;
         }
         let spell = u32::from_le_bytes(body[offset..offset + 4].try_into().unwrap());
-        if spell == 25742 {
-            hits.push(u32::from_le_bytes(
-                body[offset + 4..offset + 8].try_into().unwrap(),
+        if spell == id {
+            // Spell crit uses hit-info bit 0x2 after the blocked-damage field.
+            hits.push((
+                u32::from_le_bytes(body[offset + 4..offset + 8].try_into().unwrap()),
+                body[offset + 8],
+                u32::from_le_bytes(body[offset + 23..offset + 27].try_into().unwrap()) & 2 != 0,
             ));
         }
     }
@@ -457,10 +530,14 @@ fn actual_spell_power_world_plan_scales_righteousness_with_its_weapon_coefficien
         wire.call("debug_advance_roll_batch", json!([45])).unwrap();
         wire.call("native_world_receive", json!([0x142, Vec::<u8>::new()]))
             .unwrap();
-        let hits = seal_damage(&mut wire);
+        let hits = spell_hits(&mut wire, 25742);
         assert!(!hits.is_empty());
         let expected = if bonus { [5, 6] } else { [3, 4] };
-        assert!(hits.iter().all(|hit| expected.contains(hit)), "{hits:?}");
+        assert!(
+            hits.iter()
+                .all(|(damage, school, _)| expected.contains(damage) && *school == 1),
+            "{hits:?}"
+        );
     }
 }
 
@@ -535,4 +612,110 @@ fn actual_spell_power_world_plan_scales_eviscerate_as_nonweapon_damage() {
     assert_eq!(eviscerate(), ordinary - 3);
     cast(&shard, 1, 8599, 1);
     assert_eq!(eviscerate(), ordinary + 57);
+}
+
+#[test]
+#[ignore = "requires World Source, client DBCs, SpacetimeDB 2.14.0 and Wasm"]
+fn actual_spell_power_world_plan_wand_keeps_arcane_school_without_spell_power() {
+    use lyracore_protocol::messages::{
+        vanilla::{
+            Guid, SpellCastTargets, SpellCastTargets_SpellCastTargetFlags,
+            SpellCastTargets_SpellCastTargetFlags_Unit, CMSG_CAST_SPELL,
+        },
+        Message,
+    };
+    use serde_json::json;
+    let shard = imported_spell_fixture(&[5019, 11390, 702], true);
+    let wolf = (0xf130u64 << 48) | (51000u64 << 24) | 1;
+    shard.assert_sql("UPDATE game_character SET class = 8 WHERE guid = 1");
+    shard.assert_call("debug_learn_spell", &["1", "5009"]);
+    shard.assert_call("debug_learn_spell", &["1", "5019"]);
+    shard.assert_call("debug_set_skill", &["1", "228", "300"]);
+    import_items(&shard, &[25, 50, 51, 52, 11287]);
+    shard.assert_call("debug_grant_item", &["1", "11287", "1"]);
+    let wand = shard
+        .query_rows("SELECT slot FROM game_item_instance WHERE owner_guid = 1 AND entry = 11287");
+    shard.assert_call("debug_equip_item", &["1", &wand[0]["slot"]]);
+    shard.assert_sql(
+        "INSERT INTO game_conformance_swing_random (character_guid,state) VALUES (1,1)",
+    );
+    let mut wire = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
+    wire.call("native_world_open", json!([42])).unwrap();
+    wire.call("debug_native_enter_world", json!([1])).unwrap();
+    let (gx, gy) = lyracore_shared::spatial::grid_cell(-8934.95, -132.493);
+    shard.assert_sql(&format!("UPDATE game_world_entity SET x = -8934.95, grid_x = {gx}, grid_y = {gy}, level = 1 WHERE guid = {wolf}"));
+    shard.assert_sql("UPDATE game_world_entity SET orientation = 0, power = 100000, max_power = 100000 WHERE guid = 1");
+    shard.assert_sql(
+        "UPDATE game_player_skill SET current = 300, max_rank = 300 WHERE character_guid = 1",
+    );
+    shard.clear_schedule("game_creature_move_schedule");
+    let mut request = Vec::new();
+    CMSG_CAST_SPELL {
+        spell: 5019,
+        targets: SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::default().set_unit(
+                SpellCastTargets_SpellCastTargetFlags_Unit {
+                    unit_target: Guid::new(wolf),
+                },
+            ),
+        },
+    }
+    .write_into_vec(&mut request)
+    .unwrap();
+    wire.drain_packets();
+    let shoot = |wire: &mut lyracore_test_support::ReducerConnection| {
+        shard.assert_sql(
+            "UPDATE game_conformance_swing_random SET state = 1 WHERE character_guid = 1",
+        );
+        shard.assert_sql(
+            "UPDATE game_conformance_spell_random SET state = 0 WHERE character_guid = 1",
+        );
+        wire.call("native_world_receive", json!([0x12e, request]))
+            .unwrap();
+        wire.call("debug_advance_roll_batch", json!([61])).unwrap();
+        wire.call("native_world_receive", json!([0x26d, Vec::<u8>::new()]))
+            .unwrap();
+        wire.call("debug_advance_roll_batch", json!([40])).unwrap();
+        let hits = spell_hits(wire, 5019);
+        assert!(!hits.is_empty());
+        assert!(hits.iter().all(|(_, school, _)| *school == 6), "{hits:?}");
+        hits
+    };
+    let sheet = || {
+        shard.query_rows("SELECT sheet_ranged_dmg_min,sheet_ranged_dmg_max FROM game_world_entity WHERE guid = 1")
+    };
+    let ordinary = sheet();
+    assert_eq!(ordinary[0]["sheet_ranged_dmg_min"], "12");
+    assert_eq!(ordinary[0]["sheet_ranged_dmg_max"], "22");
+    let check_hits = |hits: Vec<(u32, u8, bool)>, min: u32, max: u32| {
+        for (damage, _, crit) in hits {
+            let (min, max) = if crit {
+                (min * 3 / 2, max * 3 / 2)
+            } else {
+                (min, max)
+            };
+            assert!(
+                (min..=max).contains(&damage),
+                "{damage} outside {min}..={max}"
+            );
+        }
+    };
+    check_hits(shoot(&mut wire), 12, 22);
+    wire.call("debug_begin_cast", json!([1, 11390, 1])).unwrap();
+    wire.call("debug_advance_roll_batch", json!([61])).unwrap();
+    assert_eq!(sheet(), ordinary);
+    check_hits(shoot(&mut wire), 12, 22);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 60 WHERE guid = {wolf}"
+    ));
+    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES ({wolf},1,0)"));
+    wire.call("debug_begin_cast", json!([wolf, 702, 1]))
+        .unwrap();
+    wire.call("debug_advance_roll_batch", json!([61])).unwrap();
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 1 WHERE guid = {wolf}"
+    ));
+    assert_eq!(sheet()[0]["sheet_ranged_dmg_min"], "9");
+    assert_eq!(sheet()[0]["sheet_ranged_dmg_max"], "19");
+    check_hits(shoot(&mut wire), 9, 19);
 }

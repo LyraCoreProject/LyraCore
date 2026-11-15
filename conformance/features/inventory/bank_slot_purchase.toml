@@ -10,7 +10,7 @@ scenarios = ["bank_slot_purchase", "bank_slot_purchase__observer", "bank_slot_pu
 deliberate_deviations = []
 prerequisites = ["A friendly banker template 5099 with the banker NPC flag, within interaction range"]
 tests = [
-    { path = "crates/lyracore-protocol/src/codec/tests.rs", function = "bank_purchase_values_combine_coinage_and_bank_slots_without_object_type", rung = "codec" },
+    { path = "crates/lyracore-protocol/src/codec/values/tests.rs", function = "bank_purchase_values_combine_coinage_and_bank_slots_without_object_type", rung = "codec" },
 ]
 
 [vmangos]

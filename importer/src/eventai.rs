@@ -3,7 +3,6 @@ pub(crate) mod vmangos;
 
 use std::collections::BTreeSet;
 
-const DEFINITION_REVISION_DOMAIN: &[u8] = b"lyracore-eventai-definition-v1";
 const DEFINITION_BATCH_BYTES: usize = 64 * 1024;
 const RELAY_MAX_DEPTH: usize = 16;
 const RELAY_STEP_BUDGET: usize = 4_096;
@@ -67,18 +66,7 @@ fn encoded_catalogue_version(rows: &[String]) -> u64 {
     u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap())
 }
 fn encode_definition(entry: u32, rules: &[String]) -> String {
-    let subject = format!("entry:{entry}");
-    let rules = rules.join("~");
-    let material = format!("{subject}@{rules}");
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(DEFINITION_REVISION_DOMAIN);
-    hasher.update(material.as_bytes());
-    let revision = u64::from_le_bytes(
-        hasher.finalize().as_bytes()[..8]
-            .try_into()
-            .expect("a BLAKE3 digest has at least eight bytes"),
-    );
-    format!("{subject}@{revision}@{rules}")
+    lyracore_shared::eventai::encode_definition(&format!("entry:{entry}"), &rules.join("~"))
 }
 fn pack_definition_batches(rows: &[String]) -> Vec<String> {
     let mut batches = Vec::new();

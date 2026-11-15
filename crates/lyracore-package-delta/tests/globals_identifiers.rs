@@ -1,21 +1,14 @@
 mod common;
 
 use common::{
-    areatrigger_teleport_claim, class_level_stats_claim, createinfo_spell_claim,
+    areatrigger_teleport_claim, artifact, class_level_stats_claim, createinfo_spell_claim,
     graveyard_zone_claim, start_position_claim, PACKAGE_GLOBALS, REAL_GRAVEYARD_ZONE,
     WHOLE_CREATEINFO_SPELL_ROW, WHOLE_GRAVEYARD_ZONE_ROW,
 };
+use lyracore_package_delta::ids::{PackageRange, MAX_STATS_LEVEL};
 use lyracore_package_delta::{
-    is_fixture_reserved_globals_id, is_package_globals_id, is_package_gossip_id, DeltaError,
-    PackageDelta, PrimaryKey, Table, MAX_STATS_LEVEL, PACKAGE_GLOBALS_ID_CEIL,
-    PACKAGE_GLOBALS_ID_FLOOR, PACKAGE_SPELLMETA_ID_FLOOR,
+    is_package_globals_id, is_package_gossip_id, DeltaError, PackageDelta, PrimaryKey, Table,
 };
-
-fn artifact(package: &str, claims: &str) -> String {
-    format!(
-        r#"{{"version":1,"package":"{package}","source_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","claims":[{claims}]}}"#
-    )
-}
 
 const A_ZONE: &str = r#"{"zone_id":{"type":"u32","value":40}}"#;
 const A_BASE_HEALTH: &str = r#"{"base_health":{"type":"u32","value":120}}"#;
@@ -24,11 +17,7 @@ const A_TARGET_MAP: &str = r#"{"target_map":{"type":"u32","value":36}}"#;
 
 #[test]
 fn a_package_may_insert_a_globals_row_inside_the_package_range() {
-    for row_id in [
-        PACKAGE_GLOBALS_ID_FLOOR,
-        13_500_000,
-        PACKAGE_GLOBALS_ID_CEIL,
-    ] {
+    for row_id in [13_000_000u64, 13_500_000, 13_999_999u64] {
         let json = artifact(
             "example.pkg",
             &graveyard_zone_claim(row_id, "insert", WHOLE_GRAVEYARD_ZONE_ROW),
@@ -41,11 +30,7 @@ fn a_package_may_insert_a_globals_row_inside_the_package_range() {
 
 #[test]
 fn an_insert_outside_the_package_range_is_refused() {
-    for id in [
-        1u64,
-        PACKAGE_GLOBALS_ID_FLOOR - 1,
-        PACKAGE_GLOBALS_ID_CEIL + 1,
-    ] {
+    for id in [1u64, 12_999_999u64, 14_000_000u64] {
         let json = artifact(
             "example.pkg",
             &graveyard_zone_claim(id, "insert", WHOLE_GRAVEYARD_ZONE_ROW),
@@ -53,7 +38,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::GlobalsIdNotClientSafe { id },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Globals,
+                id
+            },
             "graveyard zone {id}"
         );
     }
@@ -61,7 +49,7 @@ fn an_insert_outside_the_package_range_is_refused() {
 
 #[test]
 fn one_band_covers_every_insertable_globals_table() {
-    let out_of_band = PACKAGE_GLOBALS_ID_FLOOR - 1;
+    let out_of_band = 12_999_999u64;
     let claims = [
         graveyard_zone_claim(out_of_band, "insert", WHOLE_GRAVEYARD_ZONE_ROW),
         createinfo_spell_claim(out_of_band, "insert", WHOLE_CREATEINFO_SPELL_ROW),
@@ -71,7 +59,10 @@ fn one_band_covers_every_insertable_globals_table() {
         assert_eq!(
             PackageDelta::parse(&artifact("example.pkg", &claim))
                 .expect_err("the insert must be refused"),
-            DeltaError::GlobalsIdNotClientSafe { id: out_of_band },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Globals,
+                id: out_of_band
+            },
             "{claim}"
         );
     }
@@ -163,7 +154,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         let update = artifact("example.pkg", &graveyard_zone_claim(id, "update", A_ZONE));
         assert_eq!(
             PackageDelta::parse(&update).expect_err("the update must be refused"),
-            DeltaError::GlobalsIdFixtureReserved { id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Globals,
+                id
+            },
             "update on fixture graveyard zone {id}"
         );
 
@@ -173,7 +167,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         );
         assert_eq!(
             PackageDelta::parse(&insert).expect_err("the insert must be refused"),
-            DeltaError::GlobalsIdFixtureReserved { id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Globals,
+                id
+            },
             "insert on fixture graveyard zone {id}"
         );
     }
@@ -198,9 +195,9 @@ fn the_package_range_is_disjoint_from_every_reserved_identifier() {
         );
     }
 
-    for id in [PACKAGE_GLOBALS_ID_FLOOR, PACKAGE_GLOBALS_ID_CEIL] {
+    for id in [13_000_000u64, 13_999_999u64] {
         assert!(
-            !is_fixture_reserved_globals_id(id),
+            !PackageRange::Globals.is_fixture_reserved(id),
             "Package globals row {id} must not be fixture-reserved"
         );
     }
@@ -208,13 +205,13 @@ fn the_package_range_is_disjoint_from_every_reserved_identifier() {
 
 #[test]
 fn the_globals_band_neighbours_do_not_overlap_it() {
-    for id in [PACKAGE_GLOBALS_ID_FLOOR, PACKAGE_GLOBALS_ID_CEIL] {
+    for id in [13_000_000u64, 13_999_999u64] {
         assert!(
             !is_package_gossip_id(id),
             "globals row {id} reads as a gossip row"
         );
     }
-    assert!(!is_package_globals_id(PACKAGE_SPELLMETA_ID_FLOOR));
+    assert!(!is_package_globals_id(14_000_000u64));
 }
 
 #[test]

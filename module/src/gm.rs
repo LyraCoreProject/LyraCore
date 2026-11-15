@@ -323,7 +323,8 @@ pub(crate) fn apply_gm_command(
         }
         GmCommand::Tele(spot) => {
             let (map_id, x, y, z, o) = spot.coords();
-            crate::world::teleport_player(ctx, caller.guid, map_id, 0, x, y, z, o);
+            crate::world::teleport(ctx, caller.guid, map_id, 0, [x, y, z, o])
+                .map_err(|refusal| refusal.to_string())?;
         }
     }
     Ok(())
@@ -607,7 +608,6 @@ mod tests {
         ] {
             let (map_id, ..) = spot.coords();
             assert_eq!(map_id, 0, "{spot:?} must be a same-map move");
-            assert!(!crate::world::is_cross_map_teleport(0, map_id));
         }
     }
 
@@ -621,7 +621,6 @@ mod tests {
         ] {
             let (map_id, ..) = spot.coords();
             assert_eq!(map_id, 1, "{spot:?} must be a cross-map move");
-            assert!(crate::world::is_cross_map_teleport(0, map_id));
         }
     }
 }

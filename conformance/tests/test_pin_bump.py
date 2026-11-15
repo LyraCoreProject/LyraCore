@@ -7,17 +7,22 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 
+from conformance.workspace import scratch, tier1_scenarios
 
+
+ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = Path(__file__).resolve().parents[1] / "pin_bump.py"
+sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location("pin_bump", SCRIPT)
 PIN_BUMP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PIN_BUMP)
-SCRATCH = Path(os.environ.get("LYRACORE_PIN_TEST_SCRATCH",
-                              Path.home() / ".cache/lyracore-scratch/conformance-pin-tests"))
+SCRATCH = scratch("conformance")
 
 
 class PinBumpTests(unittest.TestCase):
@@ -34,8 +39,11 @@ class PinBumpTests(unittest.TestCase):
             )
             tests = root / "module/tests/conformance/tier1.rs"
             tests.parent.mkdir(parents=True)
-            tests.write_text('run_scenario("existing", |_, _| Ok(()))\n'
-                             'run_multi_scenario("existing_multi", seed_world)\n')
+            tests.write_text('fn existing_matches_its_golden_trace() -> Result<()> {\n'
+                             '    super::rolls::public_seeds()\n}\n'
+                             'fn existing_multi_matches_its_golden_trace() -> Result<()> {\n'
+                             '    run_multi_scenario("existing_multi", seed_world)\n}\n'
+                             'fn existing_merge_seed() -> Result<()> {\n    Ok(())\n}\n')
             ledger = root / "conformance/features/system/existing.toml"
             ledger.parent.mkdir(parents=True)
             ledger.write_text('scenarios = ["existing", "existing_multi"]\n')
@@ -47,6 +55,12 @@ class PinBumpTests(unittest.TestCase):
                 with mock.patch.object(PIN_BUMP.subprocess, "check_output",
                                        return_value=json.dumps(metadata)):
                     self.assertEqual(PIN_BUMP.missing_scenarios(), ["new_scenario"])
+
+    def test_every_feature_ledger_scenario_has_a_tier1_test(self):
+        ledger = set()
+        for path in (ROOT / "conformance/features").glob("*/*.toml"):
+            ledger.update(tomllib.loads(path.read_text())["scenarios"])
+        self.assertLessEqual(ledger, tier1_scenarios(ROOT))
 
     def test_missing_scenarios_emit_a_workflow_warning(self):
         SCRATCH.mkdir(parents=True, exist_ok=True)

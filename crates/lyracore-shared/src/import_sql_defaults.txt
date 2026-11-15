@@ -42,3 +42,4 @@ game_spell attributes_ex_4 0
 game_spell damage_class 0
 game_item_template damage_school 0
 game_ground_area effect_id 0
+game_spell_group power_rank 0

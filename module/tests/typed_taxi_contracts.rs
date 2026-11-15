@@ -19,11 +19,17 @@ fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_spawn_player_entity", &[ACTOR]);
-    standalone.assert_sql(
-        "INSERT INTO game_active_taxi_flight \
-         (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,\
-          current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded,first_destination_node_index) \
-         VALUES (1,5090102,5090100,5090101,1147,25,0,1,0,0,0,false,1)",
+    standalone.insert_row(
+        "game_active_taxi_flight",
+        &[
+            ("character_guid", &1),
+            ("path_id", &5090102),
+            ("source_node_id", &5090100),
+            ("destination_node_id", &5090101),
+            ("mount_display_id", &1147),
+            ("fare", &25),
+            ("started_micros", &1),
+        ],
     );
 
     for (reducer, args, tag) in taxi_cases() {

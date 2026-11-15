@@ -1,7 +1,9 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use lyracore_package_delta::{canonicalize, trace, DeltaError, PackageDelta, Table};
+use lyracore_package_delta::{
+    canonicalize, ids::PackageRange, trace, DeltaError, PackageDelta, Table,
+};
 
 fn fixture(name: &str) -> String {
     let path: PathBuf = [
@@ -161,7 +163,10 @@ fn a_fixture_reserved_spell_is_refused_by_the_parser_too() {
 
     assert_eq!(
         refusal,
-        DeltaError::SpellIdFixtureReserved { spell_id: 50_000 }
+        DeltaError::IdFixtureReserved {
+            range: PackageRange::Spell,
+            id: 50_000
+        }
     );
 }
 

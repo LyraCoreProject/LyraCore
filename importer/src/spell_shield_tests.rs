@@ -198,13 +198,7 @@ fn imported_thorns_reflects_melee_with_its_school_packet_and_bearer_credit() {
         .is_empty());
 }
 
-#[test]
-#[ignore = "requires local World Source, stock client MPQs, SpacetimeDB 2.14.0 and Wasm"]
-fn imported_shields_do_not_recurse_and_can_kill_the_attacker() {
-    let mut character = Character::imported(
-        "imported-shield-death",
-        &[467, 15279, 11976, 22572, 642, 1044, 77, 133],
-    );
+fn passive_shield_target(character: &Character) -> u64 {
     character
         .shard
         .assert_call("debug_seed_scenario_fixtures", &[]);
@@ -249,6 +243,17 @@ fn imported_shields_do_not_recurse_and_can_kill_the_attacker() {
             "UPDATE game_creature_ai_state SET react_state=0,melee_enabled=false WHERE creature_guid={target}"
         ));
     }
+    target
+}
+
+#[test]
+#[ignore = "requires local World Source, stock client MPQs, SpacetimeDB 2.14.0 and Wasm"]
+fn imported_shields_do_not_recurse_and_can_kill_the_attacker() {
+    let mut character = Character::imported(
+        "imported-shield-death",
+        &[467, 15279, 11976, 22572, 642, 1044, 77, 133],
+    );
+    let target = passive_shield_target(&character);
     character.equip_staff();
     character.cast(467);
     character.advance(1);

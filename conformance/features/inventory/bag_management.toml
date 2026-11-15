@@ -189,3 +189,8 @@ rung = "durable_module"
 path = "importer/src/spell_power_tests.rs"
 function = "actual_spell_power_world_plan_scales_eviscerate_as_nonweapon_damage"
 rung = "durable_module"
+
+[[tests]]
+path = "importer/src/spell_power_tests.rs"
+function = "actual_spell_power_world_plan_wand_keeps_arcane_school_without_spell_power"
+rung = "durable_module"

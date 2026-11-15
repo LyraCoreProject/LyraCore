@@ -60,7 +60,7 @@ pub(crate) fn check_area_exploration(
         area_id: area.id,
         experience: xp,
     });
-    crate::native::explored(ctx, &explored);
+    crate::native::progression::explored(ctx, &explored);
     if xp > 0 {
         crate::xp::grant_xp(ctx, mover, xp);
         XpEvent::send(

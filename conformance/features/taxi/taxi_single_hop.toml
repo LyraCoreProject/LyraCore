@@ -26,7 +26,7 @@ function = "init_world_states_sends_the_defaults_in_every_zone"
 rung = "codec"
 
 [[tests]]
-path = "crates/lyracore-protocol/src/codec/tests.rs"
+path = "crates/lyracore-protocol/src/codec/values/tests.rs"
 function = "player_flags_values_only_write_changed_fields"
 rung = "codec"
 

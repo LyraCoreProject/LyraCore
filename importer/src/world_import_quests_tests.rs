@@ -324,7 +324,8 @@ fn local_givers_use_selected_enabled_spawn_choices_inside_the_profile() {
         ],
     }])
     .unwrap();
-    let scope = WorldImportScope::canonical(WorldImportProfile::StartingEastern).unwrap();
+    let scope = WorldImportScope::canonical(WorldImportProfile::parse("starting-eastern").unwrap())
+        .unwrap();
     assert_eq!(
         placed_creatures(&source, &scope).unwrap(),
         HashSet::from([100, 101])
@@ -411,9 +412,7 @@ fn invalid_reward_numbers_cannot_silently_remove_a_spell_or_item() {
         ),
     ] {
         let source = source();
-        let WorldSource::Vmangos(connection) = &source else {
-            panic!("SQLite fixture")
-        };
+        let connection = source.fixture_connection();
         connection.pragma_update(None, "query_only", false).unwrap();
         connection.execute_batch(sql).unwrap();
         connection.pragma_update(None, "query_only", true).unwrap();

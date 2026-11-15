@@ -24,8 +24,8 @@ Use indexes and partition-scoped spatial helpers. A request must not supply its 
 Preserve atomicity. An expected Refusal must leave durable state unchanged unless the behavior
 explicitly defines a partial result. Return the Refusal as a type: the Protocol Family's Refusal
 enum when the reply depends on the reason, or `crate::Refusal` when it does not. The
-handler returns `Result<(), Rollback>` and maps a family enum to its reply packets with an
-exhaustive `match`. The Native Host sends those packets after the transaction rolls back.
+handler returns `Result<(), Unhandled>` and maps a family enum to the reply packets of a
+`Rollback` with an exhaustive `match`. The Native Host sends those packets after the transaction rolls back.
 A transport or decoding failure is a `String` error, which ends the World Session; it remains
 distinct from a gameplay Refusal.
 
@@ -39,9 +39,14 @@ transient notifications have different replay requirements.
 
 ## 4. Dispatch and deliver
 
-Dispatch lives in `receive` in `module/src/native/world.rs`. Add a `ClientOpcodeMessage::CMSG_...`
-arm to its `match message` that returns your Protocol Family's `receive` under `module/src/native/`.
-An opcode without an arm falls to `_ => return Ok(())` and the Module drops the request silently.
+Dispatch lives in `receive` in `module/src/native/world.rs`. It offers each message to the Protocol
+Families under `module/src/native/` in a fixed order; each family's `receive` matches the message
+first and hands back `Unhandled::Declined` for one it does not own. Add the opcode in one place: a
+`ClientOpcodeMessage::CMSG_...` arm in your family's `receive` (in `GuildRequest::of` or
+`PartyRequest::of` for those families). Run the family's Gates and Realm forwarding inside the arm,
+never before the match. A new family joins the `or_else` chain in `world.rs`; a message no family
+owns reaches the dispatcher's own `match message` and, without an arm there, falls to
+`_ => return Ok(())`: the Module drops the request silently.
 
 A raw `opcode` check before `lyracore_protocol::world::decode` is for the few opcodes whose layout
 the generated codec cannot read (addon chat, movement, auction browse, reputation, teleport

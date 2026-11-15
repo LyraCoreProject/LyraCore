@@ -13,7 +13,7 @@ const AREA_TEAM_HORDE: u32 = 4;
 const AREA_TEAM_NONE: u32 = 0;
 
 pub(crate) fn rest_state_after_bonus(previous: u8, bonus: u32, level: u8) -> u8 {
-    if level >= 60 || bonus <= 1 {
+    if u32::from(level) >= crate::xp::LEVEL_CAP || bonus <= 1 {
         packing::REST_STATE_NORMAL
     } else if bonus > 10 || previous == packing::REST_STATE_RESTED {
         packing::REST_STATE_RESTED
@@ -34,7 +34,7 @@ fn in_rest_area(ctx: &ReducerContext, mover: &WorldEntity, area: Option<&GameAre
             .find(tavern.trigger_id)
             .is_some_and(|trigger| {
                 trigger.map_id == mover.map_id
-                    && crate::quest::AreaTriggerVolume::of(&trigger).contains(
+                    && crate::areatrigger::AreaTriggerVolume::of(&trigger).contains(
                         [trigger.x, trigger.y, trigger.z],
                         [mover.x, mover.y, mover.z],
                     )
@@ -54,11 +54,10 @@ fn in_rest_area(ctx: &ReducerContext, mover: &WorldEntity, area: Option<&GameAre
     match zone.faction_group {
         AREA_TEAM_ALLIANCE => faction::team_for_race(mover.race()) == faction::TEAM_ALLIANCE,
         AREA_TEAM_HORDE => faction::team_for_race(mover.race()) == faction::TEAM_HORDE,
-        AREA_TEAM_NONE => !ctx
-            .db
-            .game_realm()
-            .iter()
-            .any(|realm| matches!(realm.realm_type, 1 | 8 | 16)),
+        AREA_TEAM_NONE => !ctx.db.game_realm().iter().any(|realm| {
+            use lyracore_shared::constants::realm_type::{FFA_PVP, PVP, RP_PVP};
+            matches!(realm.realm_type, PVP | RP_PVP | FFA_PVP)
+        }),
         _ => true,
     }
 }
@@ -182,6 +181,10 @@ crate::game_tick_pass!(fn rested_accrue_pass(ctx) {
         }
     }
 });
+
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_rest_state_event, crate::EVENT_TTL_MICROS);
+}
 
 #[cfg(test)]
 mod tests {

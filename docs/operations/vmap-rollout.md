@@ -10,8 +10,8 @@ false while importing and checking. A successful import is data, not permission 
   `game_config.hosts_instances` true (the default). The importer refuses a map the Shard does not
   own.
 - Set `CLIENT_DATA` to the approved 1.12.1 client's `Data` directory, and `SPACETIME_SERVER` to the
-  Realm's loopback HTTP URI. `importer/src/world_import_scope.rs` owns the canonical profiles, so do
-  not copy their rectangles here.
+  Realm's loopback HTTP URI. `importer/manifests/world-profiles.json` owns the canonical profiles, so
+  do not copy their rectangles here.
 - Use the Realm's World Import Profile. `alliance-single` covers both continent corridors and the
   `deadmines-entry-exit` Instance Vmap Slice (Map 36, cells x 511 to 513 and y 522 to 524). The slice
   supplies no terrain, Navigation Coverage or collision for the rest of Deadmines.

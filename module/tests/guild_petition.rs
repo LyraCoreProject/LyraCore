@@ -1,6 +1,6 @@
 mod support;
 
-use support::Standalone;
+use support::{actor, refused, Field, Standalone};
 
 const TEAM_ALLIANCE: u32 = 469;
 const TEAM_HORDE: u32 = 67;
@@ -18,10 +18,6 @@ const SAME_ACCOUNT_SIGNER: u64 = 5_090_523;
 const VENDOR_ENTRY: &str = "51004";
 const PETITIONER_AND_TABARDDESIGNER: u32 = 0x200 | 0x400;
 const GUILD_CHARTER: u32 = 5863;
-
-fn actor(guid: u64) -> String {
-    format!(r#"{{"guid":{guid},"ownership":null}}"#)
-}
 
 fn signer_actors(shard: &Standalone, signers: &[u64]) -> Vec<String> {
     signers
@@ -72,19 +68,6 @@ fn gm_create(leader: u64, name: &str) -> String {
     )
 }
 
-fn refused(shard: &Standalone, reducer: &str, args: &[&str], tag: &str) {
-    let result = shard.call(reducer, args);
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        !result.status.success() && output.contains(tag),
-        "{reducer}: expected {tag}: {output}"
-    );
-}
-
 fn purse(shard: &Standalone) -> u32 {
     shard.query_rows(&format!(
         "SELECT money FROM game_world_entity WHERE guid = {OWNER}"
@@ -123,20 +106,11 @@ fn stage_charter_template(shard: &Standalone) {
     row.insert("max_count".into(), "1".into());
     row.insert("bonding".into(), "1".into());
     let columns = "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property";
-    let values = columns
+    let fields: Vec<Field> = columns
         .split(',')
-        .map(|key| {
-            if key == "name" {
-                format!("'{}'", row[key])
-            } else {
-                row[key].clone()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    shard.assert_sql(&format!(
-        "INSERT INTO game_item_template ({columns}) VALUES ({values})"
-    ));
+        .map(|key| (key, &row[key] as _))
+        .collect();
+    shard.insert_row("game_item_template", &fields);
 }
 
 fn fixture(name: &str, copper: u32) -> (Standalone, String) {

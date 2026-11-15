@@ -1,5 +1,5 @@
 use lyracore_shared::spell::taxonomy::{
-    A_DAMAGE_SHIELD, A_IMMUNITY, A_MOD_DAMAGE_TAKEN_FLAT, P_SCHOOL_MASK, SPELL_ATTR_MAGIC_HIT,
+    A_DAMAGE_SHIELD, A_IMMUNITY, A_MOD_DAMAGE_TAKEN_FLAT, CAST_FLAG_MAGIC_HIT, P_SCHOOL_MASK,
 };
 use spacetimedb::ReducerContext;
 
@@ -51,13 +51,14 @@ pub(crate) fn reflect(ctx: &ReducerContext, attacker_guid: u64, bearer_guid: u64
             spell_immune |= (immunity.eff_p1 & 0xff == 39 && blocks_spell)
                 || (immunity.eff_p1 & 0xff == 40 && spell.negative());
         }
-        let miss = if !attacker.is_player() && crate::creatures::returning_home(ctx, attacker_guid)
+        let miss = if !attacker.is_player()
+            && crate::creatures::eventai::movement::returning_home(ctx, attacker_guid)
         {
             Some(6)
         } else if spell_immune {
             Some(7)
         } else if spell.negative()
-            && spell.cast_flags & SPELL_ATTR_MAGIC_HIT != 0
+            && spell.cast_flags & CAST_FLAG_MAGIC_HIT != 0
             && crate::spell::cast::spell_misses(ctx, bearer.level as u8, attacker_guid, &spell)
         {
             Some(2)
@@ -65,7 +66,7 @@ pub(crate) fn reflect(ctx: &ReducerContext, attacker_guid: u64, bearer_guid: u64
             None
         };
         if let Some(miss) = miss {
-            crate::native::damage_shield_miss(
+            crate::native::combat::damage_shield_miss(
                 ctx,
                 bearer_guid,
                 attacker_guid,
@@ -75,10 +76,15 @@ pub(crate) fn reflect(ctx: &ReducerContext, attacker_guid: u64, bearer_guid: u64
             continue;
         }
         if damage_immune {
-            crate::native::damage_shield_immune(ctx, bearer_guid, attacker_guid, spell.spell_id);
+            crate::native::combat::damage_shield_immune(
+                ctx,
+                bearer_guid,
+                attacker_guid,
+                spell.spell_id,
+            );
             continue;
         }
-        let points = lyracore_shared::aura::stacked_amount(shield.amount, shield.stacks);
+        let points = crate::modifiers::stacked_amount(shield.amount, shield.stacks);
         let mut damage = crate::spell::bonuses::spell_damage_done_float(
             ctx,
             &spell,
@@ -93,18 +99,18 @@ pub(crate) fn reflect(ctx: &ReducerContext, attacker_guid: u64, bearer_guid: u64
                     aura.eff_kind == A_MOD_DAMAGE_TAKEN_FLAT
                         && aura.eff_p0 & i32::from(spell.school_mask) != 0
                 })
-                .map(|aura| lyracore_shared::aura::stacked_amount(aura.amount, aura.stacks))
+                .map(|aura| crate::modifiers::stacked_amount(aura.amount, aura.stacks))
                 .sum();
             damage += flat_taken.max(0) as f32;
         }
         let damage = crate::spell::bonuses::round_damage(ctx, attacker_guid, damage).max(0) as u32;
-        let damage = if attacker.dead || attacker.godmode || crate::taxi::is_flying(&attacker) {
+        let damage = if attacker.dead || attacker.godmode || attacker.is_flying() {
             0
         } else {
             damage
         };
         let damage = super::final_damage(ctx, attacker_guid, damage);
-        crate::native::damage_shield(
+        crate::native::combat::damage_shield(
             ctx,
             bearer_guid,
             attacker_guid,
