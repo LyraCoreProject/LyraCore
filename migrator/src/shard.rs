@@ -18,7 +18,7 @@ impl Shard {
         self.call_with(reducer, &[argument.to_string()])
     }
 
-    // Returns the reducer's refusal text when the call fails.
+    // Returns the refusal, transport or spawn error text when the call fails.
     pub(crate) fn call_with(
         &self,
         reducer: &str,
@@ -178,7 +178,7 @@ fn number(value: &Value) -> Result<u32> {
         .with_context(|| format!("{value} is not a 32-bit id"))
 }
 
-// SATS JSON writes a byte array as a hex string or as an array of numbers.
+// Reads a byte array as either a hex string or an array of numbers.
 fn hex(value: &Value) -> Result<String> {
     match value {
         Value::String(text) => Ok(text.to_ascii_lowercase()),

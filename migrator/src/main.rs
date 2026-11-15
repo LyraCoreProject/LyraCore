@@ -4,6 +4,7 @@ mod read;
 mod shard;
 mod source;
 
+use std::collections::HashSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Context, Result};
@@ -138,14 +139,25 @@ fn write_plan(args: Args, shard: &Shard) -> Result<()> {
     Ok(())
 }
 
-// The plan holds SRP salts and verifiers, so only its owner may read it.
+// The plan holds SRP salts and verifiers: a new owner-only file replaces any old one at once.
 fn write_private(path: &str, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
+    let staging = format!("{path}.{}.tmp", std::process::id());
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(path)?.write_all(contents.as_bytes())
+    let written = options.open(&staging).and_then(|mut file| {
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()
+    });
+    match written.and_then(|()| std::fs::rename(&staging, path)) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&staging);
+            Err(error)
+        }
+    }
 }
 
 fn apply(path: &str, shard: &Shard) -> Result<()> {
@@ -160,6 +172,7 @@ fn apply(path: &str, shard: &Shard) -> Result<()> {
         );
     }
     let mut refusals = 0;
+    let mut failed = HashSet::new();
     for account in &plan.accounts {
         if let Err(refusal) = shard.call("migrate_account", &serde_json::to_string(account)?)? {
             refusals += 1;
@@ -171,6 +184,7 @@ fn apply(path: &str, shard: &Shard) -> Result<()> {
             Ok(()) => eprintln!("migrated: {} ({})", character.name, character.source_guid),
             Err(refusal) => {
                 refusals += 1;
+                failed.insert(character.source_guid);
                 eprintln!(
                     "refused: Character {} ({}): {refusal}",
                     character.name, character.source_guid
@@ -179,6 +193,15 @@ fn apply(path: &str, shard: &Shard) -> Result<()> {
         }
     }
     for letter in &plan.letters {
+        let what = format!(
+            "letter {}/{}",
+            letter.source_mail_id, letter.source_item_guid
+        );
+        let linked = [letter.recipient_source_guid, letter.sender_source_guid];
+        if deferred(&what, &linked, &failed) {
+            refusals += 1;
+            continue;
+        }
         if let Err(refusal) = shard.call("migrate_letter", &serde_json::to_string(letter)?)? {
             refusals += 1;
             eprintln!(
@@ -188,6 +211,16 @@ fn apply(path: &str, shard: &Shard) -> Result<()> {
         }
     }
     for list in &plan.contacts {
+        let mut linked: Vec<u64> = list.contacts.iter().map(|c| c.target_source_guid).collect();
+        linked.push(list.source_guid);
+        if deferred(
+            &format!("contacts of {}", list.source_guid),
+            &linked,
+            &failed,
+        ) {
+            refusals += 1;
+            continue;
+        }
         let arguments = [
             serde_json::to_string(&list.source)?,
             list.source_guid.to_string(),
@@ -202,4 +235,13 @@ fn apply(path: &str, shard: &Shard) -> Result<()> {
         bail!("{refusals} migrations were refused; fix them and apply the plan again");
     }
     Ok(())
+}
+
+// A record written while a linked Character is missing would drop that link for good.
+fn deferred(what: &str, linked: &[u64], failed: &HashSet<u64>) -> bool {
+    let Some(missing) = linked.iter().find(|guid| failed.contains(guid)) else {
+        return false;
+    };
+    eprintln!("deferred: {what}: source Character {missing} did not migrate in this run");
+    true
 }

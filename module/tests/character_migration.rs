@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use serde_json::{json, Value};
 use support::Standalone;
 
@@ -255,7 +256,7 @@ fn a_migrated_character_arrives_with_its_source_state() {
     assert_eq!(character["account_id"], accounts[0]["id"]);
     assert_eq!(character["level"], "20");
     assert_eq!(character["money"], "12345");
-    assert_eq!(character["x"], "10");
+    assert_eq!(character["x"].parse::<f32>().unwrap(), 10.0);
     assert_eq!(character["home_x"], "50");
     assert_eq!(character["first_login"], "false");
     let guid = &character["guid"];
@@ -426,7 +427,7 @@ fn a_character_saved_in_an_instance_arrives_at_its_home_bind() {
     let character =
         &shard.query_rows("SELECT map_id, x FROM game_character WHERE name = 'Migrant'")[0];
     assert_eq!(character["map_id"], "0");
-    assert_eq!(character["x"], "50");
+    assert_eq!(character["x"].parse::<f32>().unwrap(), 50.0);
 }
 
 fn now_secs() -> u64 {
@@ -524,21 +525,13 @@ fn a_letter_copy_in_the_inventory_keeps_its_text() {
     assert_eq!(text[0]["letters"], "1");
 }
 
-fn hunter(shard: &Standalone, catalogue: &Catalogue) -> Value {
-    if shard
-        .query_rows("SELECT race_class FROM game_char_base_info WHERE race_class = 771")
-        .is_empty()
-    {
-        shard.insert_row(
-            "game_char_base_info",
-            &[("race_class", &771), ("race", &3), ("class", &3)],
-        );
-    }
+// An empty game_char_base_info admits every race and class pair, Dwarf Hunter included.
+fn hunter(catalogue: &Catalogue) -> Value {
     let mut plan = migration(catalogue, 7, "Migrant");
     plan["race"] = json!(3);
     plan["class"] = json!(3);
     plan["hunter_pet"] = json!({"some": {
-        "creature_entry": SEEDED_WOLF,
+        "creature_entry": TEST_WOLF_ENTRY,
         "name": "Wolfie",
         "rename_allowed": false,
         "level": 18,
@@ -550,13 +543,11 @@ fn hunter(shard: &Standalone, catalogue: &Catalogue) -> Value {
     plan
 }
 
-const SEEDED_WOLF: u32 = 51_000;
-
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_hunter_arrives_with_its_pet() {
     let (shard, catalogue) = realm("character-migration-hunter-pet");
-    let plan = hunter(&shard, &catalogue);
+    let plan = hunter(&catalogue);
     shard.assert_output_success(&migrate(&shard, &plan), "migrate_character");
 
     let guid = guid_of(&shard, "Migrant");
@@ -576,7 +567,7 @@ fn a_hunter_arrives_with_its_pet() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_pet_for_a_character_that_is_not_a_hunter_is_refused() {
     let (shard, catalogue) = realm("character-migration-warrior-pet");
-    let mut plan = hunter(&shard, &catalogue);
+    let mut plan = hunter(&catalogue);
     plan["race"] = json!(1);
     plan["class"] = json!(1);
 
