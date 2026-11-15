@@ -10,14 +10,16 @@ pub(crate) struct MysqlDatabase {
 }
 
 impl MysqlDatabase {
-    // Every read through this connection sees one snapshot and cannot write.
+    // InnoDB tables read from one snapshot; MyISAM tables stay consistent only while the source is
+    // stopped. MySQL before 5.6.5 has no READ ONLY transactions, so a SELECT-only user guards those.
     pub(crate) fn open(url: &str) -> Result<Self> {
         let opts = mysql::Opts::from_url(url).context("parse the MySQL URL")?;
         let mut conn = mysql::Conn::new(opts).context("connect to the Migration Source")?;
         conn.query_drop("SET SESSION TRANSACTION ISOLATION LEVEL REPEATABLE READ")
             .context("select repeatable reads")?;
         conn.query_drop("START TRANSACTION WITH CONSISTENT SNAPSHOT, READ ONLY")
-            .context("open a read-only snapshot")?;
+            .or_else(|_| conn.query_drop("START TRANSACTION WITH CONSISTENT SNAPSHOT"))
+            .context("open a snapshot")?;
         Ok(Self { conn })
     }
 }

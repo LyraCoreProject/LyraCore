@@ -215,9 +215,15 @@ impl Findings<'_> {
         self.dropped_ids_because(subject, what, "not imported", ids);
     }
 
-    fn dropped_ids_because(&mut self, subject: &str, what: &str, why: &str, ids: &[u32]) {
+    fn dropped_ids_because<T: ToString>(
+        &mut self,
+        subject: &str,
+        what: &str,
+        why: &str,
+        ids: &[T],
+    ) {
         if !ids.is_empty() {
-            let list: Vec<String> = ids.iter().map(u32::to_string).collect();
+            let list: Vec<String> = ids.iter().map(T::to_string).collect();
             self.add(
                 subject,
                 Outcome::Dropped,
@@ -354,6 +360,9 @@ fn migrated_character(
     if character.online {
         bail!("is online at the source; stop the source server first");
     }
+    if character.locked_for_transfer {
+        bail!("is locked or deleted by a character transfer at the source");
+    }
     if catalogue
         .character_names
         .contains(&character.name.to_lowercase())
@@ -417,7 +426,15 @@ fn migrated_character(
             .ok()
             .filter(|index| (0..64).contains(index))
             .unwrap_or(-1),
-        items: items(catalogue, &character.items, subject, report)?,
+        items: {
+            report.dropped_ids_because(
+                subject,
+                "inventory rows",
+                "name an item guid with no item_instance row",
+                &character.orphan_items,
+            );
+            items(catalogue, &character.items, subject, report)?
+        },
         spells: kept(
             &character.spells,
             &catalogue.spells,
@@ -490,13 +507,12 @@ fn migrated_character(
         )
         .into_iter()
         .filter_map(|quest| {
-            // MaNGOS keeps a rewarded quest at COMPLETE; only a repeat in progress is in the log.
-            let in_log = match quest.status {
-                QUEST_STATUS_INCOMPLETE | QUEST_STATUS_FAILED => true,
-                QUEST_STATUS_COMPLETE => !quest.rewarded,
-                _ => false,
-            };
-            if in_log && quest.mob_counts.iter().any(|count| *count != 0) {
+            // MaNGOS keeps a rewarded quest at COMPLETE; the Module logs it only when repeatable.
+            let in_log = matches!(
+                quest.status,
+                QUEST_STATUS_INCOMPLETE | QUEST_STATUS_FAILED | QUEST_STATUS_COMPLETE
+            );
+            if in_log && !quest.rewarded && quest.mob_counts.iter().any(|count| *count != 0) {
                 report.add(
                     subject,
                     Outcome::Changed,
@@ -730,6 +746,7 @@ mod tests {
             played_total_secs: 60,
             logout_secs: 1_700_000_000,
             logout_resting: false,
+            locked_for_transfer: false,
             rest_bonus: 12.7,
             bank_bag_slots: 1,
             watched_faction: -1,
@@ -737,6 +754,7 @@ mod tests {
             explored_zones: vec![0b11],
             home: Some(here(0)),
             items: Vec::new(),
+            orphan_items: Vec::new(),
             spells: vec![100, 200],
             skills: Vec::new(),
             reputations: Vec::new(),
@@ -945,8 +963,28 @@ mod tests {
         };
         assert!(log.failed);
         assert!(log.event_credit);
-        assert_eq!(quests[1].log, SatsOption::None([]));
+        assert!(matches!(quests[1].log, SatsOption::Some(_)));
         assert!(quests[1].rewarded);
+    }
+
+    #[test]
+    fn a_character_locked_by_a_source_transfer_is_refused() {
+        let mut source = character();
+        source.locked_for_transfer = true;
+        let plan = plan_one(source);
+        assert!(plan.characters.is_empty());
+        assert_eq!(plan.findings[0].outcome, Outcome::Refused);
+    }
+
+    #[test]
+    fn an_inventory_row_without_its_item_is_dropped_and_reported() {
+        let mut source = character();
+        source.orphan_items = vec![9_000_000_001];
+        let plan = plan_one(source);
+        assert_eq!(plan.characters.len(), 1);
+        assert!(plan.findings.iter().any(|f| f.outcome == Outcome::Dropped
+            && f.detail
+                == "1 inventory rows name an item guid with no item_instance row: 9000000001"));
     }
 
     #[test]

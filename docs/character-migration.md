@@ -12,9 +12,11 @@ you can read the report before anything changes.
 
 1. Import the world into the Realm first. A plan only keeps content that the Shard's catalogues
    hold.
-2. Stop the source server. A Character that is online at the source is refused.
+2. Stop the source server. A Character that is online at the source is refused. MaNGOS keeps many
+   characters tables in MyISAM, which has no snapshots, so a running source can change rows while
+   the tool reads them.
 3. Give the tool a MySQL user that can only `SELECT` from realmd and characters. It reads each
-   database in one read-only snapshot and never executes source SQL. Pass the URLs with
+   database in one transaction and never executes source SQL. Pass the URLs with
    `--realmd` and `--characters`, or in `LYRACORE_MIGRATION_REALMD_URL` and
    `LYRACORE_MIGRATION_CHARACTERS_URL` to keep the password off the command line.
 4. Write a plan:
@@ -39,16 +41,20 @@ you can read the report before anything changes.
    ```
 
    Each Character is one reducer call. A refusal is printed and the next Character continues.
-   Fix the cause, write a new plan and apply it again. Migrated Characters are skipped.
+   Fix the cause, write a new plan and apply it again. Migrated Characters are skipped. `apply`
+   creates every Account in the plan before any Character, so an Account stays on the Shard when
+   its Characters are refused.
 
-The plan file holds each Account's SRP salt and verifier. The tool creates it readable only by its
-owner; keep it as private as the realmd database. `apply` passes each reducer argument on the
+The plan file holds each Account's SRP salt and verifier. The tool writes it as a new file that only
+its owner can read; keep it as private as the realmd database. `apply` passes each reducer argument on the
 `spacetime` command line, where other local users can read it while the call runs, so run it on a
 host only Operators use. For a remote source, add `?require_ssl=true` to the MySQL URL.
 
 The tool checks every column that it reads against the Source Profile of `--source-kind` before it
 reads rows. A missing column or a column of another type stops the run with its name. The profiles
-are in `migrator/src/read.rs`.
+are in `migrator/src/read.rs`. The vmangos profile follows vmangos after its 2025-04-28 migration,
+which moved the inn flag into `characters.character_flags`; an older vmangos source must apply its
+migrations first.
 
 ## Reducers
 

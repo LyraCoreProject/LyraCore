@@ -137,14 +137,25 @@ fn write_plan(args: Args, shard: &Shard) -> Result<()> {
     Ok(())
 }
 
-// The plan holds SRP salts and verifiers, so only its owner may read it.
+// The plan holds SRP salts and verifiers: a new owner-only file replaces any old one at once.
 fn write_private(path: &str, contents: &str) -> std::io::Result<()> {
     use std::io::Write;
+    let staging = format!("{path}.{}.tmp", std::process::id());
     let mut options = std::fs::OpenOptions::new();
-    options.write(true).create(true).truncate(true);
+    options.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    options.open(path)?.write_all(contents.as_bytes())
+    let written = options.open(&staging).and_then(|mut file| {
+        file.write_all(contents.as_bytes())?;
+        file.sync_all()
+    });
+    match written.and_then(|()| std::fs::rename(&staging, path)) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            let _ = std::fs::remove_file(&staging);
+            Err(error)
+        }
+    }
 }
 
 fn apply(path: &str, shard: &Shard) -> Result<()> {
