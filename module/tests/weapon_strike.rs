@@ -30,19 +30,7 @@ fn a_throw_strikes_with_the_thrown_weapon_and_spends_one_from_its_stack() {
     let mut standalone = Standalone::start("weapon-strike-throw");
     let wolf = stage(&mut standalone);
     stage_strike(&standalone, THROW, "Throw", THROW_ATTRIBUTES, 30, 0);
-    standalone.assert_sql(&format!(
-        "UPDATE game_item_template SET subclass = {THROWN}, inventory_type = {INVTYPE_THROWN}, \
-         max_stack = 200, damage_min = {WEAPON_DAMAGE}.0, damage_max = {WEAPON_DAMAGE}.0 \
-         WHERE entry = {FIXTURE_BLADE}"
-    ));
-    standalone.assert_call(
-        "debug_grant_item",
-        &["1", &FIXTURE_BLADE.to_string(), &THROWN_STACK.to_string()],
-    );
-    standalone.assert_sql(&format!(
-        "UPDATE game_item_instance SET slot = {RANGED_SLOT} \
-         WHERE owner_guid = {PLAYER} AND entry = {FIXTURE_BLADE}"
-    ));
+    equip_thrown(&standalone, THROWN_STACK);
 
     let (throws, damage) = strike_until_hit(&standalone, THROW, wolf);
 
@@ -59,6 +47,37 @@ fn a_throw_strikes_with_the_thrown_weapon_and_spends_one_from_its_stack() {
         (THROWN_STACK - throws).to_string(),
         "each Throw spends one thrown weapon"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_landed_throw_trains_the_thrown_skill_and_not_the_main_hand_line() {
+    const THROWN_SKILL: &str = "176";
+    const UNARMED_SKILL: &str = "162";
+    const LANDED_THROWS: u32 = 8;
+    let mut standalone = Standalone::start("weapon-strike-thrown-skill");
+    let wolf = stage(&mut standalone);
+    stage_strike(&standalone, THROW, "Throw", THROW_ATTRIBUTES, 30, 0);
+    equip_thrown(&standalone, LANDED_THROWS * ATTEMPTS);
+    // At level 10 a skill of 1 out of 50 rises on most hits.
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 10 WHERE guid = {PLAYER}"
+    ));
+    for line in [THROWN_SKILL, UNARMED_SKILL] {
+        standalone.assert_call("debug_set_skill", &["1", line, "1"]);
+    }
+
+    let mut thrown = 1;
+    for _ in 0..LANDED_THROWS {
+        strike_until_hit(&standalone, THROW, wolf);
+        thrown = stored_skill(&standalone, THROWN_SKILL);
+        if thrown > 1 {
+            break;
+        }
+    }
+
+    assert!(thrown > 1, "no landed Throw raised the Thrown skill");
+    assert_eq!(stored_skill(&standalone, UNARMED_SKILL), 1);
 }
 
 #[test]
@@ -114,6 +133,22 @@ fn stage(standalone: &mut Standalone) -> u64 {
          health = {WOLF_HEALTH}, max_health = {WOLF_HEALTH} WHERE guid = {wolf}"
     ));
     wolf
+}
+
+fn equip_thrown(standalone: &Standalone, stack: u32) {
+    standalone.assert_sql(&format!(
+        "UPDATE game_item_template SET subclass = {THROWN}, inventory_type = {INVTYPE_THROWN}, \
+         max_stack = 200, damage_min = {WEAPON_DAMAGE}.0, damage_max = {WEAPON_DAMAGE}.0 \
+         WHERE entry = {FIXTURE_BLADE}"
+    ));
+    standalone.assert_call(
+        "debug_grant_item",
+        &["1", &FIXTURE_BLADE.to_string(), &stack.to_string()],
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_item_instance SET slot = {RANGED_SLOT} \
+         WHERE owner_guid = {PLAYER} AND entry = {FIXTURE_BLADE}"
+    ));
 }
 
 fn stage_strike(
@@ -188,4 +223,13 @@ fn health(standalone: &Standalone, guid: u64) -> u32 {
     ))[0]["health"]
         .parse()
         .expect("health must be a number")
+}
+
+fn stored_skill(standalone: &Standalone, line: &str) -> u32 {
+    standalone.query_rows(&format!(
+        "SELECT current FROM game_player_skill \
+         WHERE character_guid = {PLAYER} AND skill_line = {line}"
+    ))[0]["current"]
+        .parse()
+        .expect("a skill value must be a number")
 }
