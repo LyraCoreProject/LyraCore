@@ -192,11 +192,17 @@ fn selection_and_clear_survive_a_map_change_and_world_port() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_character_can_choose_the_watched_faction_during_a_taxi_flight() {
     let shard = start("watched-faction-taxi");
-    shard.assert_sql(
-        "INSERT INTO game_active_taxi_flight \
-         (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,\
-          current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded,first_destination_node_index) \
-         VALUES (1,5090102,5090100,5090101,1147,25,0,1,0,0,0,false,1)",
+    shard.insert_row(
+        "game_active_taxi_flight",
+        &[
+            ("character_guid", &1),
+            ("path_id", &5090102),
+            ("source_node_id", &5090100),
+            ("destination_node_id", &5090101),
+            ("mount_display_id", &1147),
+            ("fare", &25),
+            ("started_micros", &1),
+        ],
     );
     select(&shard, 19);
     assert_eq!(watched(&shard, CHARACTER), 19);

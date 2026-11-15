@@ -1,39 +1,16 @@
-use super::*;
+use super::movement_info::{movement_info_to_bytes, ClientMovement};
+use anyhow::{anyhow, Result};
+use lyracore_shared::opcodes::movement as movement_opcodes;
+use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
 use wow_world_messages::vanilla::{
-    MSG_MOVE_SET_PITCH_Server, MSG_MOVE_START_PITCH_DOWN_Server, MSG_MOVE_START_PITCH_UP_Server,
-    MSG_MOVE_STOP_PITCH_Server, SMSG_TRANSFER_PENDING_has_transport,
-    SMSG_FORCE_RUN_BACK_SPEED_CHANGE, SMSG_FORCE_SWIM_SPEED_CHANGE, SMSG_MOVE_LAND_WALK,
-    SMSG_MOVE_WATER_WALK, SMSG_SPLINE_SET_RUN_BACK_SPEED, SMSG_SPLINE_SET_RUN_SPEED,
-    SMSG_SPLINE_SET_SWIM_SPEED,
+    MSG_MOVE_TELEPORT_ACK_Server, Map, MovementInfo, MovementInfo_MovementFlags,
+    SMSG_MONSTER_MOVE_MonsterMoveType, SMSG_TRANSFER_PENDING_has_transport, SplineFlag,
+    TransferAbortReason, Vector3d, SMSG_FORCE_RUN_BACK_SPEED_CHANGE, SMSG_FORCE_RUN_SPEED_CHANGE,
+    SMSG_FORCE_SWIM_SPEED_CHANGE, SMSG_MONSTER_MOVE, SMSG_MOVE_LAND_WALK, SMSG_MOVE_WATER_WALK,
+    SMSG_NEW_WORLD, SMSG_SPLINE_SET_RUN_BACK_SPEED, SMSG_SPLINE_SET_RUN_SPEED,
+    SMSG_SPLINE_SET_SWIM_SPEED, SMSG_TRANSFER_PENDING,
 };
-
-pub fn relayed_move_opcode(msg: &ClientOpcodeMessage) -> Option<u32> {
-    use movement_opcodes as m;
-    Some(match msg {
-        ClientOpcodeMessage::MSG_MOVE_START_FORWARD(_) => m::MSG_MOVE_START_FORWARD,
-        ClientOpcodeMessage::MSG_MOVE_START_BACKWARD(_) => m::MSG_MOVE_START_BACKWARD,
-        ClientOpcodeMessage::MSG_MOVE_STOP(_) => m::MSG_MOVE_STOP,
-        ClientOpcodeMessage::MSG_MOVE_START_STRAFE_LEFT(_) => m::MSG_MOVE_START_STRAFE_LEFT,
-        ClientOpcodeMessage::MSG_MOVE_START_STRAFE_RIGHT(_) => m::MSG_MOVE_START_STRAFE_RIGHT,
-        ClientOpcodeMessage::MSG_MOVE_STOP_STRAFE(_) => m::MSG_MOVE_STOP_STRAFE,
-        ClientOpcodeMessage::MSG_MOVE_JUMP(_) => m::MSG_MOVE_JUMP,
-        ClientOpcodeMessage::MSG_MOVE_START_TURN_LEFT(_) => m::MSG_MOVE_START_TURN_LEFT,
-        ClientOpcodeMessage::MSG_MOVE_START_TURN_RIGHT(_) => m::MSG_MOVE_START_TURN_RIGHT,
-        ClientOpcodeMessage::MSG_MOVE_STOP_TURN(_) => m::MSG_MOVE_STOP_TURN,
-        ClientOpcodeMessage::MSG_MOVE_START_PITCH_UP(_) => m::MSG_MOVE_START_PITCH_UP,
-        ClientOpcodeMessage::MSG_MOVE_START_PITCH_DOWN(_) => m::MSG_MOVE_START_PITCH_DOWN,
-        ClientOpcodeMessage::MSG_MOVE_STOP_PITCH(_) => m::MSG_MOVE_STOP_PITCH,
-        ClientOpcodeMessage::MSG_MOVE_SET_RUN_MODE(_) => m::MSG_MOVE_SET_RUN_MODE,
-        ClientOpcodeMessage::MSG_MOVE_SET_WALK_MODE(_) => m::MSG_MOVE_SET_WALK_MODE,
-        ClientOpcodeMessage::MSG_MOVE_FALL_LAND(_) => m::MSG_MOVE_FALL_LAND,
-        ClientOpcodeMessage::MSG_MOVE_START_SWIM(_) => m::MSG_MOVE_START_SWIM,
-        ClientOpcodeMessage::MSG_MOVE_STOP_SWIM(_) => m::MSG_MOVE_STOP_SWIM,
-        ClientOpcodeMessage::MSG_MOVE_SET_FACING(_) => m::MSG_MOVE_SET_FACING,
-        ClientOpcodeMessage::MSG_MOVE_SET_PITCH(_) => m::MSG_MOVE_SET_PITCH,
-        ClientOpcodeMessage::MSG_MOVE_HEARTBEAT(_) => m::MSG_MOVE_HEARTBEAT,
-        _ => return None,
-    })
-}
+use wow_world_messages::Guid;
 
 /// Observer relay for an acknowledgement; see docs/benilla-compatibility.md#root-receipts.
 pub fn acknowledged_move(msg: &ClientOpcodeMessage) -> Option<(u64, u32, ClientMovement)> {
@@ -58,125 +35,6 @@ pub fn acknowledged_move(msg: &ClientOpcodeMessage) -> Option<(u64, u32, ClientM
         bytes[..4].copy_from_slice(&flags.to_le_bytes());
     }
     Some((guid.guid(), opcode, ClientMovement::decode(&bytes).ok()?))
-}
-
-/// The typed transport layout belongs to later clients; use the build-5875 codec.
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn build_movement_relay(
-    opcode: u32,
-    mover_guid: u64,
-    info: MovementInfo,
-) -> Option<ServerOpcodeMessage> {
-    use movement_opcodes as m;
-    let guid = Guid::new(mover_guid);
-    Some(match opcode {
-        m::MSG_MOVE_START_FORWARD => {
-            ServerOpcodeMessage::MSG_MOVE_START_FORWARD(Box::new(MSG_MOVE_START_FORWARD_Server {
-                guid,
-                info,
-            }))
-        }
-        m::MSG_MOVE_START_BACKWARD => {
-            ServerOpcodeMessage::MSG_MOVE_START_BACKWARD(Box::new(MSG_MOVE_START_BACKWARD_Server {
-                guid,
-                info,
-            }))
-        }
-        m::MSG_MOVE_STOP => {
-            ServerOpcodeMessage::MSG_MOVE_STOP(Box::new(MSG_MOVE_STOP_Server { guid, info }))
-        }
-        m::MSG_MOVE_START_STRAFE_LEFT => ServerOpcodeMessage::MSG_MOVE_START_STRAFE_LEFT(Box::new(
-            MSG_MOVE_START_STRAFE_LEFT_Server { guid, info },
-        )),
-        m::MSG_MOVE_START_STRAFE_RIGHT => ServerOpcodeMessage::MSG_MOVE_START_STRAFE_RIGHT(
-            Box::new(MSG_MOVE_START_STRAFE_RIGHT_Server { guid, info }),
-        ),
-        m::MSG_MOVE_STOP_STRAFE => {
-            ServerOpcodeMessage::MSG_MOVE_STOP_STRAFE(Box::new(MSG_MOVE_STOP_STRAFE_Server {
-                guid,
-                info,
-            }))
-        }
-        m::MSG_MOVE_JUMP => {
-            ServerOpcodeMessage::MSG_MOVE_JUMP(Box::new(MSG_MOVE_JUMP_Server { guid, info }))
-        }
-        m::MSG_MOVE_START_TURN_LEFT => ServerOpcodeMessage::MSG_MOVE_START_TURN_LEFT(Box::new(
-            MSG_MOVE_START_TURN_LEFT_Server { guid, info },
-        )),
-        m::MSG_MOVE_START_TURN_RIGHT => ServerOpcodeMessage::MSG_MOVE_START_TURN_RIGHT(Box::new(
-            MSG_MOVE_START_TURN_RIGHT_Server { guid, info },
-        )),
-        m::MSG_MOVE_STOP_TURN => {
-            ServerOpcodeMessage::MSG_MOVE_STOP_TURN(Box::new(MSG_MOVE_STOP_TURN_Server {
-                guid,
-                info,
-            }))
-        }
-        m::MSG_MOVE_START_PITCH_UP => {
-            ServerOpcodeMessage::MSG_MOVE_START_PITCH_UP(Box::new(MSG_MOVE_START_PITCH_UP_Server {
-                guid,
-                info,
-            }))
-        }
-        m::MSG_MOVE_START_PITCH_DOWN => ServerOpcodeMessage::MSG_MOVE_START_PITCH_DOWN(Box::new(
-            MSG_MOVE_START_PITCH_DOWN_Server { guid, info },
-        )),
-        m::MSG_MOVE_STOP_PITCH => {
-            ServerOpcodeMessage::MSG_MOVE_STOP_PITCH(Box::new(MSG_MOVE_STOP_PITCH_Server {
-                guid,
-                info,
-            }))
-        }
-        m::MSG_MOVE_SET_RUN_MODE => {
-            ServerOpcodeMessage::MSG_MOVE_SET_RUN_MODE(Box::new(MSG_MOVE_SET_RUN_MODE_Server {
-                guid,
-                info,
-            }))
-        }
-        m::MSG_MOVE_SET_WALK_MODE => {
-            ServerOpcodeMessage::MSG_MOVE_SET_WALK_MODE(Box::new(MSG_MOVE_SET_WALK_MODE_Server {
-                guid,
-                info,
-            }))
-        }
-        m::MSG_MOVE_FALL_LAND => {
-            ServerOpcodeMessage::MSG_MOVE_FALL_LAND(Box::new(MSG_MOVE_FALL_LAND_Server {
-                guid,
-                info,
-            }))
-        }
-        m::MSG_MOVE_START_SWIM => {
-            ServerOpcodeMessage::MSG_MOVE_START_SWIM(Box::new(MSG_MOVE_START_SWIM_Server {
-                guid,
-                info,
-            }))
-        }
-        m::MSG_MOVE_STOP_SWIM => {
-            ServerOpcodeMessage::MSG_MOVE_STOP_SWIM(Box::new(MSG_MOVE_STOP_SWIM_Server {
-                guid,
-                info,
-            }))
-        }
-        m::MSG_MOVE_SET_FACING => {
-            ServerOpcodeMessage::MSG_MOVE_SET_FACING(Box::new(MSG_MOVE_SET_FACING_Server {
-                guid,
-                info,
-            }))
-        }
-        m::MSG_MOVE_SET_PITCH => {
-            ServerOpcodeMessage::MSG_MOVE_SET_PITCH(Box::new(MSG_MOVE_SET_PITCH_Server {
-                guid,
-                info,
-            }))
-        }
-        m::MSG_MOVE_HEARTBEAT => {
-            ServerOpcodeMessage::MSG_MOVE_HEARTBEAT(Box::new(MSG_MOVE_HEARTBEAT_Server {
-                guid,
-                info,
-            }))
-        }
-        _ => return None,
-    })
 }
 
 // Fixed MovementInfo fields require 28 bytes before any optional tails.
@@ -516,6 +374,7 @@ mod ground_path_tests {
 #[cfg(test)]
 mod control_tests {
     use super::*;
+    use crate::codec::movement_info::read_movement_client;
 
     /// The plaintext frame a client receives: big-endian size of opcode and body, then the opcode.
     fn framed(opcode: u16, body: &[u8]) -> Vec<u8> {
@@ -645,5 +504,227 @@ mod control_tests {
         }
         root.push(0);
         assert!(read_movement_client(0x00E9, &root).is_err());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codec::movement_info::movement_info_to_bytes;
+    use lyracore_shared::opcodes::movement as movement_opcodes;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    use wow_world_messages::vanilla::{
+        MovementInfo, MovementInfo_MovementFlags, SMSG_MONSTER_MOVE_MonsterMoveType, ServerMessage,
+        SplineFlag, Vector3d,
+    };
+
+    #[test]
+    fn a_truncated_movement_block_is_never_framed() {
+        let info = MovementInfo {
+            flags: MovementInfo_MovementFlags::empty(),
+            timestamp: 0x1122_3344,
+            position: Vector3d {
+                x: -8949.95,
+                y: -132.493,
+                z: 83.5312,
+            },
+            orientation: 1.75,
+            fall_time: 0.25,
+        };
+        let stored = movement_info_to_bytes(&info).unwrap();
+        assert_eq!(stored.len(), 28, "the minimum MovementInfo body");
+        let op = movement_opcodes::MSG_MOVE_HEARTBEAT;
+        assert!(
+            build_movement_relay_raw(op, 7, &stored).is_some(),
+            "a full block relays"
+        );
+        assert!(
+            build_movement_relay_raw(op, 7, &stored[..27]).is_none(),
+            "one byte short must not relay"
+        );
+        assert!(
+            build_movement_relay_raw(op, 7, &[]).is_none(),
+            "an empty block must not relay"
+        );
+    }
+
+    #[test]
+    fn teleport_ack_carries_target_position_with_no_movement_flags() {
+        let msg = build_teleport_ack(7, 99, 1.0, 2.0, 3.0, 0.5);
+        assert_eq!(msg.guid.guid(), 7);
+        assert_eq!(msg.movement_counter, 99);
+        assert_eq!(msg.info.position.x, 1.0);
+        assert_eq!(msg.info.position.y, 2.0);
+        assert_eq!(msg.info.position.z, 3.0);
+        assert_eq!(msg.info.orientation, 0.5);
+        assert!(
+            msg.info.flags.is_empty(),
+            "a teleport arrival is a clean stand-still, no movement flags"
+        );
+        let mut buf = Vec::new();
+        msg.write_unencrypted_server(&mut buf).unwrap();
+        assert!(!buf.is_empty());
+    }
+
+    #[test]
+    fn cross_map_teleport_sends_transfer_pending_then_new_world_carrying_target_map_and_position() {
+        let [pending, new_world] =
+            build_cross_map_teleport(36, 10.0, 20.0, 30.0, 1.5, None).unwrap();
+        match pending {
+            ServerOpcodeMessage::SMSG_TRANSFER_PENDING(p) => {
+                assert_eq!(p.map.as_int(), 36);
+                assert!(
+                    p.has_transport.is_none(),
+                    "a teleport that is not a Transport map crossing names no Transport"
+                );
+                let mut buf = Vec::new();
+                p.write_unencrypted_server(&mut buf).unwrap();
+                assert!(!buf.is_empty());
+            }
+            _ => panic!("expected SMSG_TRANSFER_PENDING"),
+        }
+        match new_world {
+            ServerOpcodeMessage::SMSG_NEW_WORLD(w) => {
+                assert_eq!(w.map.as_int(), 36);
+                assert_eq!(w.position.x, 10.0);
+                assert_eq!(w.position.y, 20.0);
+                assert_eq!(w.position.z, 30.0);
+                assert_eq!(w.orientation, 1.5);
+                let mut buf = Vec::new();
+                w.write_unencrypted_server(&mut buf).unwrap();
+                assert!(!buf.is_empty());
+            }
+            _ => panic!("expected SMSG_NEW_WORLD"),
+        }
+    }
+
+    #[test]
+    fn cross_map_teleport_rejects_an_unknown_map_id() {
+        assert!(build_cross_map_teleport(u32::MAX, 0.0, 0.0, 0.0, 0.0, None).is_err());
+    }
+
+    #[test]
+    fn force_run_speed_carries_guid_speed_and_zero_move_event() {
+        let msg = build_force_run_speed(7, 8.0);
+        assert_eq!(msg.guid.guid(), 7);
+        assert_eq!(msg.speed, 8.0);
+        assert_eq!(msg.move_event, 0);
+        let mut buf = Vec::new();
+        msg.write_unencrypted_server(&mut buf).unwrap();
+        assert!(!buf.is_empty());
+    }
+
+    #[test]
+    fn force_swim_speed_serializes_the_vanilla_opcode_and_speed() {
+        let msg = build_force_swim_speed(7, 6.0);
+        assert_eq!(msg.guid.guid(), 7);
+        assert_eq!(msg.move_event, 0);
+        let mut bytes = Vec::new();
+        msg.write_unencrypted_server(&mut bytes).unwrap();
+        assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), 0x00e6);
+        assert_eq!(&bytes[4..6], &[1, 7]);
+        assert_eq!(&bytes[6..10], &0u32.to_le_bytes());
+        assert_eq!(&bytes[10..14], &6.0f32.to_le_bytes());
+    }
+
+    #[test]
+    fn monster_move_run_flag_selects_the_run_spline_bit() {
+        let start = Vector3d {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        };
+        let dest = Vector3d {
+            x: 10.0,
+            y: 0.0,
+            z: 0.0,
+        };
+        let walking = build_monster_move(1, start, dest, 1000, 1, false);
+        assert_eq!(
+            walking.spline_flags,
+            SplineFlag::new(0),
+            "a walking leg carries no RUN_MODE bit"
+        );
+        let running = build_monster_move(1, start, dest, 1000, 2, true);
+        assert_eq!(
+            running.spline_flags,
+            SplineFlag::new(0x100),
+            "a running leg sets RUN_MODE (0x100)"
+        );
+        assert_eq!(
+            running.splines,
+            vec![dest],
+            "exactly one destination point (no multi-point spline)"
+        );
+        assert_eq!(running.spline_id, 2);
+        assert_eq!(running.move_type, SMSG_MONSTER_MOVE_MonsterMoveType::Normal);
+    }
+
+    #[test]
+    fn monster_move_facing_carries_the_angle_and_a_degenerate_single_point_spline() {
+        let pos = Vector3d {
+            x: 5.0,
+            y: -3.0,
+            z: 12.0,
+        };
+        let msg = build_monster_move_facing(9, pos, 1.75, 42);
+        assert_eq!(msg.guid.guid(), 9);
+        assert_eq!(msg.spline_point, pos);
+        assert_eq!(msg.spline_id, 42);
+        assert_eq!(
+            msg.move_type,
+            SMSG_MONSTER_MOVE_MonsterMoveType::FacingAngle { angle: 1.75 }
+        );
+        assert_eq!(msg.duration, 0, "facing-only — nothing to interpolate");
+        assert_eq!(
+            msg.splines,
+            vec![pos],
+            "degenerate one-point spline at the mover's own position"
+        );
+    }
+
+    #[test]
+    fn taxi_move_writes_absolute_catmull_rom_points_byte_for_byte() {
+        let start = Vector3d {
+            x: -9465.0,
+            y: -1300.0,
+            z: 50.0,
+        };
+        let points = vec![
+            Vector3d {
+                x: -9460.0,
+                y: -1298.0,
+                z: 52.0,
+            },
+            Vector3d {
+                x: -9450.0,
+                y: -1290.0,
+                z: 54.0,
+            },
+            Vector3d {
+                x: -9440.0,
+                y: -1280.0,
+                z: 56.0,
+            },
+        ];
+        let (opcode, bytes) =
+            build_taxi_move_raw(0xF00D, start, points.clone(), 12_345, 77).unwrap();
+        assert_eq!(opcode, 0x00DD);
+
+        let mut expected = vec![0x03, 0x0D, 0xF0];
+        for value in [start.x, start.y, start.z] {
+            expected.extend_from_slice(&value.to_le_bytes());
+        }
+        expected.extend_from_slice(&77u32.to_le_bytes());
+        expected.push(0);
+        expected.extend_from_slice(&0x300u32.to_le_bytes());
+        expected.extend_from_slice(&12_345u32.to_le_bytes());
+        expected.extend_from_slice(&3u32.to_le_bytes());
+        for point in points {
+            for value in [point.x, point.y, point.z] {
+                expected.extend_from_slice(&value.to_le_bytes());
+            }
+        }
+        assert_eq!(bytes, expected);
     }
 }

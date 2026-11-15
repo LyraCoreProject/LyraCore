@@ -1,6 +1,7 @@
-use lyracore_shared::{aura::stacked_amount, packing::power_type::MANA, spell::taxonomy::*};
+use lyracore_shared::{packing::power_type::MANA, spell::taxonomy::*};
 use spacetimedb::{table, ReducerContext, Table};
 
+use crate::modifiers::stacked_amount;
 use crate::{game_spell, game_world_entity, WorldEntity};
 
 #[table(accessor = game_character_regeneration)]

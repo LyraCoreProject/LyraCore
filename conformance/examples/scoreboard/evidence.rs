@@ -17,13 +17,6 @@ pub use rendering::markdown;
 mod property_violation;
 use property_violation::Violation;
 
-pub fn harness_revision() -> &'static str {
-    include_str!("../../../.wire-harness-rev")
-        .split_whitespace()
-        .last()
-        .expect("harness pin")
-}
-
 fn roll_difference(scenario: &wire_client::scenario::Scenario, difference: &Difference) -> bool {
     use wire_client::trace::RecordedField;
     if scenario.spell_rolls.is_some() {
@@ -393,7 +386,7 @@ impl Report {
                 behavior.scenarios.contains(&result.id),
                 "result scenario is not listed by its Behavior"
             );
-            if self.harness_revision == harness_revision() {
+            if self.harness_revision == lyracore_conformance::harness_pin().revision {
                 let golden = wire_client::catalogue::get(&result.id)?;
                 if result.scenario_sha256 == golden.trace().header.scenario_sha256 {
                     for comparison in
@@ -461,7 +454,7 @@ impl Report {
             std::fs::read_to_string(path.with_extension("md"))? == markdown(self, date)?,
             "Markdown report differs from JSON rendering"
         );
-        if self.harness_revision == harness_revision() {
+        if self.harness_revision == lyracore_conformance::harness_pin().revision {
             let ids: BTreeSet<_> = self.scenarios.iter().map(|s| s.id.as_str()).collect();
             ensure!(
                 ids == wire_client::catalogue::ENTRIES
@@ -482,7 +475,7 @@ impl Report {
                 Sha256Digest::of(&bytes) == capture.sha256,
                 "candidate SHA-256 differs from the audit run"
             );
-            if self.harness_revision != harness_revision() {
+            if self.harness_revision != lyracore_conformance::harness_pin().revision {
                 continue;
             }
             let golden = wire_client::catalogue::get(&result.id)?;
@@ -572,7 +565,7 @@ impl Report {
         };
         let previous_path = history.join(previous_name);
         let previous = Report::load_structure(&previous_path, "conformance_audit")?;
-        if previous.harness_revision == harness_revision() {
+        if previous.harness_revision == lyracore_conformance::harness_pin().revision {
             previous.verify_capture(&previous_path)?;
         }
         for (behavior, result) in &audit.behaviors {

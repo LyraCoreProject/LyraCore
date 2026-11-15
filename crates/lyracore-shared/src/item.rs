@@ -107,7 +107,7 @@ pub mod weapon_subclass {
 }
 
 // Spell.dbc: each spell's Proficiency effect sets one weapon subclass bit.
-pub const WEAPON_PROFICIENCY_SPELLS: [(u8, u32); 15] = {
+const WEAPON_PROFICIENCY_SPELLS: [(u8, u32); 15] = {
     use weapon_subclass::*;
     [
         (AXE_1H, 196),
@@ -197,10 +197,6 @@ impl Proficiency {
             _ => true,
         }
     }
-
-    pub const fn allows_armor(self, subclass: u8) -> bool {
-        has_subclass(self.armor_subclass_mask, subclass)
-    }
 }
 
 const fn bit(subclass: u8) -> u32 {
@@ -254,7 +250,7 @@ mod tests {
 
     fn armor_set(proficiency: Proficiency) -> Vec<u8> {
         (0..=SHIELD)
-            .filter(|&subclass| proficiency.allows_armor(subclass))
+            .filter(|&subclass| proficiency.can_equip(item_class::ARMOR, subclass))
             .collect()
     }
 
@@ -283,11 +279,11 @@ mod tests {
             let trained = Proficiency::derive(class, true, false);
             if matches!(class, 1 | 2) {
                 assert!(
-                    !untrained.allows_armor(PLATE),
+                    !untrained.can_equip(item_class::ARMOR, PLATE),
                     "class {class} starts unplated"
                 );
                 assert!(
-                    trained.allows_armor(PLATE),
+                    trained.can_equip(item_class::ARMOR, PLATE),
                     "class {class} trains plate at 40"
                 );
             } else {
@@ -307,11 +303,11 @@ mod tests {
             let trained = Proficiency::derive(class, false, true);
             if matches!(class, 3 | 7) {
                 assert!(
-                    !untrained.allows_armor(MAIL),
+                    !untrained.can_equip(item_class::ARMOR, MAIL),
                     "class {class} starts in leather"
                 );
                 assert!(
-                    trained.allows_armor(MAIL),
+                    trained.can_equip(item_class::ARMOR, MAIL),
                     "class {class} trains mail at 40"
                 );
             } else {
@@ -345,7 +341,7 @@ mod tests {
         let warrior = Proficiency::derive(1, true, true);
         for subclass in [5u8, 7, 31, 32, 200, 255] {
             assert!(
-                !warrior.allows_armor(subclass),
+                !warrior.can_equip(item_class::ARMOR, subclass),
                 "armor subclass {subclass} is not a tier and must be refused"
             );
         }

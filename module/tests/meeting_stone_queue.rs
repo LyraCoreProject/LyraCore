@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde_json::json;
-use support::Standalone;
+use support::{refused, Standalone};
 
 const DEADMINES_STONE: (u32, u64) = (509_6000, 509_6001);
 const STOCKADE_STONE: (u32, u64) = (509_6002, 509_6003);
@@ -122,19 +122,6 @@ fn stone_op(realm: &Standalone, op: &str, actor: &str, area: u32, seekers: &[(u6
     realm.assert_call(
         "realm_meeting_stone_op",
         &[op, actor, &area.to_string(), &facts(seekers)],
-    );
-}
-
-fn refused(realm: &Standalone, reducer: &str, args: &[&str], tag: &str) {
-    let result = realm.call(reducer, args);
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        !result.status.success() && output.contains(tag),
-        "{reducer} should refuse with {tag}: {output}"
     );
 }
 
@@ -266,12 +253,15 @@ fn the_stone_admission_refuses_without_writing_anything() {
     stage_character(&realm, BRAM, MAGE, 20, 0, 0.0);
     admit(&realm, &session(BRAM), DEADMINES_STONE);
 
-    realm.assert_sql(&format!(
-        "INSERT INTO game_active_taxi_flight (character_guid, path_id, source_node_id, \
-         destination_node_id, mount_display_id, fare, current_node_index, started_micros, \
-         origin_x, origin_y, origin_z, origin_recorded,first_destination_node_index) \
-         VALUES ({BRAM}, 1, 1, 2, 0, 0, 0, 0, 0, 0, 0, false,1)"
-    ));
+    realm.insert_row(
+        "game_active_taxi_flight",
+        &[
+            ("character_guid", &BRAM),
+            ("path_id", &1),
+            ("source_node_id", &1),
+            ("destination_node_id", &2),
+        ],
+    );
     admission(
         &session(BRAM),
         &deadmines,
@@ -285,7 +275,7 @@ fn the_stone_admission_refuses_without_writing_anything() {
         "DELETE FROM game_account_claim WHERE account_id = {BRAM}"
     ));
     admission(
-        &support::actor(&BRAM.to_string()),
+        &support::actor(BRAM),
         &deadmines,
         "meeting_stone:actor_unavailable",
     );
@@ -294,7 +284,7 @@ fn the_stone_admission_refuses_without_writing_anything() {
         "realm_meeting_stone_op",
         &[
             JOIN,
-            &support::actor(&BRAM.to_string()),
+            &support::actor(BRAM),
             &DEADMINES.to_string(),
             &facts(&[(BRAM, MAGE)]),
         ],

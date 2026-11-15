@@ -1,7 +1,10 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_shared::guid;
 use std::collections::BTreeMap;
-use support::{poll_until, Standalone, POLL_TIMEOUT};
+use support::{poll_until, Field, Standalone, POLL_TIMEOUT};
 
 const PLAYER: &str = "1";
 const FOCUS: u32 = 5_091_040;
@@ -27,27 +30,94 @@ fn copy_template(
         "game_item_template" => "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property",
         _ => panic!("unsupported fixture catalogue {table}"),
     };
-    let values = columns
+    let fields: Vec<Field> = columns
         .split(',')
-        .map(|key| {
-            let value = &row[key];
-            if matches!(key, "name" | "subname") {
-                format!("'{}'", value.replace('\'', "''"))
-            } else {
-                value.clone()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    node.assert_sql(&format!(
-        "INSERT INTO {table} ({columns}) VALUES ({values})"
-    ));
+        .map(|key| (key, &row[key] as _))
+        .collect();
+    node.insert_row(table, &fields);
 }
 
 fn insert_spell(node: &Standalone, spell: u32, entry: u32, kind: u8) {
-    node.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Binding fixture',0,0,50,0,180000,10,360000,1,0,0,0,0,0,1,0,false,0,0,0,0,0,0,0,0)"));
-    let id = u64::from(spell) << 2;
-    node.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({id},{spell},0,{kind},1,0,0.0,0,0,0.0,0,0,0,{entry},9,83,0,false,0.0)"));
+    node.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell),
+            ("name", &"Binding fixture"),
+            ("cast_time_ms", &50),
+            ("cooldown_ms", &180000),
+            ("range_yd", &10),
+            ("duration_ms", &360000),
+            ("school_mask", &1),
+            ("spell_level", &1),
+        ],
+    );
+    let id = packed_spell_effect_id(spell, 0);
+    node.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &id),
+            ("spell_id", &spell),
+            ("kind", &kind),
+            ("base_points", &1),
+            ("p_0", &entry),
+            ("p_0_kind", &9),
+            ("p_1", &83),
+        ],
+    );
+}
+
+fn insert_binding_quest(node: &Standalone, quest: u32, reward: u32, item: u32, creature: u32) {
+    node.insert_row(
+        "game_spell_learn",
+        &[
+            ("id", &quest),
+            ("parent_spell", &reward),
+            ("learn_spell", &50946),
+        ],
+    );
+    node.insert_row(
+        "game_quest_template",
+        &[
+            ("entry", &quest),
+            ("min_level", &1),
+            ("quest_level", &20),
+            ("title", &"Binding fixture"),
+            ("required_races", &1),
+            ("required_classes", &256),
+            ("zone_or_sort", &-61),
+            ("src_item", &item),
+            ("src_item_count", &1),
+        ],
+    );
+    node.insert_row(
+        "game_quest_objective",
+        &[
+            ("id", &quest),
+            ("quest_entry", &quest),
+            ("target_entry", &creature),
+            ("required_count", &1),
+        ],
+    );
+    node.insert_rows(
+        "game_creature_quest",
+        &[
+            &[
+                ("id", &(quest * 2)),
+                ("creature_entry", &GIVER),
+                ("quest_entry", &quest),
+            ],
+            &[
+                ("id", &(quest * 2 + 1)),
+                ("creature_entry", &GIVER),
+                ("quest_entry", &quest),
+                ("role", &1),
+            ],
+        ],
+    );
+    node.insert_row(
+        "game_quest_reward_spell",
+        &[("quest_entry", &quest), ("spell_id", &reward)],
+    );
 }
 
 fn actor(node: &Standalone) -> BTreeMap<String, String> {
@@ -74,11 +144,10 @@ fn load_startup_rule(node: &Standalone, entry: u32, variant: u32) {
         "spawn:always"
     };
     let rules = format!("{entry},{event},100,4294967295,once,all,ordinary,any-posture,faction:14+attack-start:spawner~{},aggro,100,4294967295,repeat:0:0,all,ordinary,any-posture,phase-inc:7", entry + 100);
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(format!("{subject}@{rules}").as_bytes());
-    let revision = u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
-    let packed = serde_json::to_string(&format!("{subject}@{revision}@{rules}")).unwrap();
+    let packed = serde_json::to_string(&lyracore_shared::eventai::encode_definition(
+        &subject, &rules,
+    ))
+    .unwrap();
     node.assert_call("import_creature_ai_definitions", &[&packed]);
 }
 
@@ -202,13 +271,13 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
     copy_template(
         &node,
         "game_creature_template",
-        51000,
+        TEST_WOLF_ENTRY,
         GIVER,
         &[("faction_template", "35".into()), ("npc_flags", "2".into())],
     );
     node.assert_call("debug_spawn_at_feet", &[PLAYER, &GIVER.to_string(), "1"]);
     let giver = summoned(&node, GIVER).remove(0)["guid"].clone();
-    copy_template(&node, "game_creature_template", 51000, PET, &[]);
+    copy_template(&node, "game_creature_template", TEST_WOLF_ENTRY, PET, &[]);
     insert_spell(&node, 50_943, PET, 0x15);
     node.assert_call("debug_force_cast", &[PLAYER, "50943"]);
     let pet = summoned(&node, PET).remove(0);
@@ -233,7 +302,7 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
             "0",
         ],
     );
-    let focus_guid = ((0xF110_u64 << 48) | u64::from(FOCUS)).to_string();
+    let focus_guid = guid::compose(guid::GAMEOBJECT, u64::from(FOCUS)).to_string();
 
     for (variant, reward) in [(0u32, 50_944), (1, 50_945)] {
         let quest = 5_091_041 + variant;
@@ -243,7 +312,7 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
         copy_template(
             &node,
             "game_creature_template",
-            51000,
+            TEST_WOLF_ENTRY,
             creature,
             &[
                 (
@@ -274,13 +343,7 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
         load_startup_rule(&node, creature, variant);
         insert_spell(&node, spell, creature, 0x24);
         insert_spell(&node, reward, PET, 0x15);
-        node.assert_sql(&format!("INSERT INTO game_spell_learn (id,parent_spell,learn_spell) VALUES ({quest},{reward},50946)"));
-        node.assert_sql(&format!("INSERT INTO game_quest_template (entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level,quest_type) VALUES ({quest},1,20,'Binding fixture',0,0,0,1,256,-61,0,0,0,0,{item},1,false,0,0,0,0)"));
-        node.assert_sql(&format!("INSERT INTO game_quest_objective (id,quest_entry,obj_index,kind,target_entry,required_count) VALUES ({quest},{quest},0,0,{creature},1)"));
-        node.assert_sql(&format!("INSERT INTO game_creature_quest (id,creature_entry,quest_entry,role) VALUES ({},{GIVER},{quest},0),({},{GIVER},{quest},1)", quest * 2, quest * 2 + 1));
-        node.assert_sql(&format!(
-            "INSERT INTO game_quest_reward_spell (quest_entry,spell_id) VALUES ({quest},{reward})"
-        ));
+        insert_binding_quest(&node, quest, reward, item, creature);
         node.assert_call("debug_accept_quest", &[PLAYER, &giver, &quest.to_string()]);
         abandon_and_reaccept(&node, &giver, quest, item);
         let inventory = node.query_rows(&format!(

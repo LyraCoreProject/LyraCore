@@ -28,7 +28,8 @@ export async function run(
     await readFile(snapshotPath, "utf8").catch((cause) => {
       throw new Error(
         `cannot read the Base Snapshot at ${snapshotPath}: ${cause}. Generate it with ` +
-          `\`lyracore-importer --dbc <client Data/ dir> --spell-snapshot ${snapshotPath}\`.`,
+          `\`lyracore-importer --dump <vmangos.sqlite> --dbc <client Data/ dir> --spell-snapshot ` +
+          `${snapshotPath}\`.`,
       );
     }),
     snapshotPath,

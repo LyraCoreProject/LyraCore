@@ -3,10 +3,13 @@ use serde_json::json;
 
 fn fixture(name: &str) -> (Standalone, u64) {
     let (shard, guid, _) = super::fixture(name);
-    shard.assert_sql(
-        "INSERT INTO game_taxi_node \
-         (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) \
-         VALUES (5090099,99,0,0,0,0,'Discovery fixture',0,0)",
+    shard.insert_row(
+        "game_taxi_node",
+        &[
+            ("id", &5090099),
+            ("client_node_id", &99),
+            ("name", &"Discovery fixture"),
+        ],
     );
     (shard, guid)
 }
