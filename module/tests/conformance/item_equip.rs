@@ -1021,10 +1021,10 @@ fn equip_review_7678_healing_respects_its_magic_school_mask() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn equip_review_inert_thorns_keeps_its_visible_refreshable_dispellable_aura() {
-    let (shard, mut connection, guid, vendor) = fixture("equip-review-inert-thorns");
+fn equip_review_an_inert_cast_aura_keeps_its_visible_refreshable_dispellable_holder() {
+    let (shard, mut connection, guid, vendor) = fixture("equip-review-inert-aura");
     review_spell(&shard, 467, &[(0xb9, 3, 0, 0)], false);
-    shard.assert_sql("UPDATE game_spell SET name = 'Thorns', attributes = 65536, school_mask = 8, duration_ms = 600000, dispel_type = 1, cost = 35 WHERE spell_id = 467");
+    shard.assert_sql("UPDATE game_spell SET name = 'Inert review aura', attributes = 65536, school_mask = 8, duration_ms = 600000, dispel_type = 1, cost = 35 WHERE spell_id = 467");
     let unit_bytes = shard.query_rows(&format!(
         "SELECT unit_bytes_0 FROM game_world_entity WHERE guid = {guid}"
     ))[0]["unit_bytes_0"]
@@ -1043,7 +1043,7 @@ fn equip_review_inert_thorns_keeps_its_visible_refreshable_dispellable_aura() {
     assert_eq!(
         first.len(),
         1,
-        "unsupported Thorns must keep its aura holder"
+        "an inert cast aura must keep its aura holder"
     );
     assert!(first[0]["slot"].parse::<u8>().unwrap() < 32);
     assert_eq!(first[0]["amount_remaining"], "0");
@@ -1075,7 +1075,7 @@ fn equip_review_inert_thorns_keeps_its_visible_refreshable_dispellable_aura() {
         "debug_begin_cast",
         &[&guid.to_string(), "527", &guid.to_string()],
     );
-    assert_eq!(read().len(), 1, "a helpful dispel must keep Thorns");
+    assert_eq!(read().len(), 1, "a helpful dispel must keep the inert aura");
     request(&mut connection, 0x136, 467u32.to_le_bytes().to_vec());
     assert!(read().is_empty());
     shard.assert_sql("UPDATE game_spell SET cost = 0 WHERE spell_id = 467");
@@ -1093,7 +1093,7 @@ fn equip_review_inert_thorns_keeps_its_visible_refreshable_dispellable_aura() {
     );
     assert!(
         read().is_empty(),
-        "an enemy dispel must remove self-cast Thorns"
+        "an enemy dispel must remove the self-cast inert aura"
     );
     review_spell(&shard, 24659, &[(0xb9, 17, 0, 0)], false);
     shard.assert_sql("UPDATE game_spell SET attributes = 0, duration_ms = 20000, max_stacks = 12 WHERE spell_id = 24659");

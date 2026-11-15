@@ -83,6 +83,7 @@ fn form_to_stance(form_id: i32) -> Option<i32> {
 // AttributesEx1 bits 0x04 and 0x40 both mark a channeled spell.
 const ATTR_EX1_CHANNELED_MASK: u32 = 0x0000_0044;
 const ATTR_EX1_EXCLUDE_CASTER: u32 = 0x0008_0000;
+const ATTR_EX1_IMMUNITY_TO_HOSTILE_AND_FRIENDLY: u32 = 0x0001_0000;
 // AttributesEx1 0x0010_0000 and 0x0040_0000 mark a finishing move.
 const ATTR_EX1_FINISHER_MASK: u32 = 0x0050_0000;
 const ATTR_EX2_AUTOREPEAT: u32 = 0x0000_0020;
@@ -1100,9 +1101,10 @@ fn push_spell_effect_rows(
             wrapper_to_rank.entry(spell_id).or_insert(trigger_spell);
         }
         let effect_mechanic = s.effect_mechanic[i] as u8;
+        // docs/schema.md#damage-shields gives this A_IMMUNITY p1 encoding.
         let p1 = if kind == A_IMMUNITY {
             s.effect_aura[i] as i32
-                | if s.attributes_ex1 & 0x0001_0000 != 0 {
+                | if s.attributes_ex1 & ATTR_EX1_IMMUNITY_TO_HOSTILE_AND_FRIENDLY != 0 {
                     0x100
                 } else {
                     0

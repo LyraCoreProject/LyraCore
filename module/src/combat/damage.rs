@@ -291,9 +291,11 @@ pub(crate) fn apply_hit(
     let dmg = damage.amount;
     let weapon = hit.source.is_weapon();
     let attacker = entities.guid().find(attacker_guid);
-    if attacker
-        .as_ref()
-        .is_some_and(|attacker| !crate::combat::may_harm(ctx, attacker, &target))
+    // vmangos deals shield damage even after the swing ended a Duel and made the units friendly.
+    if hit.source != HitSource::DamageShield
+        && attacker
+            .as_ref()
+            .is_some_and(|attacker| !crate::combat::may_harm(ctx, attacker, &target))
     {
         return miss;
     }

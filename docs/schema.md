@@ -971,4 +971,6 @@ resistance, cannot crit, and cannot trigger another shield. The shield amount is
 
 For immunity Auras, `p1` retains the source aura id in its low byte and bit 0x100 when the source
 immunity also blocks friendly effects. Reflection uses this distinction to choose a spell miss or
-`SMSG_SPELLORDAMAGE_IMMUNE` before applying damage.
+`SMSG_SPELLORDAMAGE_IMMUNE` before applying damage. A damage immunity always blocks the reflected
+damage; a school immunity blocks it only when its source is helpful or carries bit 0x100. Shield
+damage still lands when the reflected swing ended a Duel.

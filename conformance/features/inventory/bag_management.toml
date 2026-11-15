@@ -107,7 +107,7 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/conformance/item_equip.rs"
-function = "equip_review_inert_thorns_keeps_its_visible_refreshable_dispellable_aura"
+function = "equip_review_an_inert_cast_aura_keeps_its_visible_refreshable_dispellable_holder"
 rung = "durable_module"
 
 [[tests]]
