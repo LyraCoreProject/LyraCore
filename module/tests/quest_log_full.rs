@@ -1,11 +1,11 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use support::{actor, Standalone};
 
 const CHARACTER: &str = "1";
 const FIRST_QUEST: u32 = 5_096_500;
 const LOG_SIZE: u32 = 20;
-const WOLF: u32 = 51_000;
 const REPEATABLE: u32 = FIRST_QUEST + LOG_SIZE + 1;
 
 fn quest_rows(shard: &Standalone) -> usize {
@@ -31,31 +31,43 @@ fn setup(name: &str) -> (Standalone, String) {
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &[CHARACTER]);
     shard.assert_sql(&format!(
-        "DELETE FROM game_world_entity WHERE entry = {WOLF}"
+        "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
     ));
-    shard.assert_call("debug_spawn_at_feet", &[CHARACTER, &WOLF.to_string(), "3"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[CHARACTER, &TEST_WOLF_ENTRY.to_string(), "3"],
+    );
     let giver = shard
         .query_rows(&format!(
-            "SELECT guid FROM game_world_entity WHERE entry = {WOLF}"
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
         ))
         .remove(0)["guid"]
         .clone();
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET npc_flags = {}, faction_template = 35 WHERE guid = {giver}",
+        lyracore_shared::constants::npc_flags::QUESTGIVER
+    ));
     for offset in 0..=LOG_SIZE + 1 {
         let entry = FIRST_QUEST + offset;
         let repeatable = entry == REPEATABLE;
-        shard.assert_sql(&format!(
-            "INSERT INTO game_quest_template \
-             (entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,\
-             required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,\
-             rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,\
-             limit_time,reward_money_max_level,quest_type) \
-             VALUES ({entry},0,2,'Full log quest',0,0,0,0,0,12,0,0,0,0,0,0,{repeatable},0,0,0,0)"
-        ));
-        shard.assert_sql(&format!(
-            "INSERT INTO game_creature_quest (id,creature_entry,quest_entry,role) \
-             VALUES ({},{WOLF},{entry},0)",
-            u64::from(entry)
-        ));
+        shard.insert_row(
+            "game_quest_template",
+            &[
+                ("entry", &entry),
+                ("quest_level", &2),
+                ("title", &"Full log quest"),
+                ("zone_or_sort", &12),
+                ("repeatable", &repeatable),
+            ],
+        );
+        shard.insert_row(
+            "game_creature_quest",
+            &[
+                ("id", &u64::from(entry)),
+                ("creature_entry", &TEST_WOLF_ENTRY),
+                ("quest_entry", &entry),
+            ],
+        );
     }
     (shard, giver)
 }

@@ -7,7 +7,7 @@ pub(crate) fn item_guid_exists(ctx: &ReducerContext, guid: u64) -> bool {
         || ctx.db.game_buyback_item().item_guid().find(guid).is_some()
 }
 
-const ITEM_PREFIX: u64 = lyracore_shared::constants::starter_item::HIGHGUID_ITEM << 48;
+const ITEM_PREFIX: u64 = lyracore_shared::guid::compose(lyracore_shared::guid::ITEM, 0);
 const FORMAT_BIT: u64 = 1 << 47;
 const MAX_LOW_ID: u64 = FORMAT_BIT - 1;
 

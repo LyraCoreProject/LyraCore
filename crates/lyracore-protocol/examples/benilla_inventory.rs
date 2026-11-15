@@ -12,6 +12,7 @@ type References = BTreeMap<String, BTreeSet<String>>;
 
 #[derive(Default)]
 struct SourceScan {
+    client_message_aliases: BTreeSet<String>,
     references: References,
     references_only: bool,
     dispatch: References,
@@ -42,7 +43,10 @@ impl SourceScan {
         if self.references_only {
             return;
         }
-        let mut pattern = SourceScan::default();
+        let mut pattern = SourceScan {
+            client_message_aliases: self.client_message_aliases.clone(),
+            ..SourceScan::default()
+        };
         pattern.visit_pat(pat);
         for name in pattern.client_variants {
             let location = self.location();
@@ -62,6 +66,7 @@ impl SourceScan {
 
     fn scan(&mut self, path: &Path, root: &Path) -> Result<()> {
         self.file = path.strip_prefix(root)?.to_string_lossy().into_owned();
+        self.client_message_aliases.clear();
         let source = std::fs::read_to_string(path)?;
         let syntax =
             syn::parse_file(&source).with_context(|| format!("parse {}", path.display()))?;
@@ -71,7 +76,26 @@ impl SourceScan {
 }
 
 impl<'ast> Visit<'ast> for SourceScan {
-    fn visit_item_use(&mut self, _: &'ast syn::ItemUse) {}
+    fn visit_item_use(&mut self, item: &'ast syn::ItemUse) {
+        fn renames<'a>(tree: &'a syn::UseTree, found: &mut Vec<&'a syn::UseRename>) {
+            match tree {
+                syn::UseTree::Path(path) => renames(&path.tree, found),
+                syn::UseTree::Group(group) => {
+                    group.items.iter().for_each(|tree| renames(tree, found))
+                }
+                syn::UseTree::Rename(rename) => found.push(rename),
+                syn::UseTree::Name(_) | syn::UseTree::Glob(_) => {}
+            }
+        }
+        let mut found = Vec::new();
+        renames(&item.tree, &mut found);
+        for rename in found {
+            if rename.ident == "ClientOpcodeMessage" {
+                self.client_message_aliases
+                    .insert(rename.rename.to_string());
+            }
+        }
+    }
     fn visit_attribute(&mut self, _: &'ast syn::Attribute) {}
     fn visit_item_const(&mut self, _: &'ast syn::ItemConst) {}
 
@@ -134,10 +158,12 @@ impl<'ast> Visit<'ast> for SourceScan {
     }
 
     fn visit_path(&mut self, path: &'ast syn::Path) {
-        let client_variant = path
-            .segments
-            .iter()
-            .any(|segment| segment.ident == "ClientOpcodeMessage");
+        let client_variant = path.segments.iter().any(|segment| {
+            segment.ident == "ClientOpcodeMessage"
+                || self
+                    .client_message_aliases
+                    .contains(&segment.ident.to_string())
+        });
         for segment in &path.segments {
             let name = segment.ident.to_string();
             if ["CMSG_", "SMSG_", "MSG_"]

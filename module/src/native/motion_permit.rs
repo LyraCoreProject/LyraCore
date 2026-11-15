@@ -14,6 +14,8 @@ pub struct NativeMotionPermit {
     pub character_guid: u64,
 }
 
+crate::outside_table_catalog!(game_native_motion_permit);
+
 crate::character_owned!(delete, fn sweep_delete_game_native_motion_permit(ctx, character_guid) {
     ctx.db
         .game_native_motion_permit()
@@ -26,7 +28,7 @@ crate::character_owned!(not_transported, fn sweep_transfer_game_native_motion_pe
 
 /// Refreshes the Motion Permit of the Character's World Session, if it has one.
 pub(crate) fn refresh_character(ctx: &ReducerContext, guid: u64) {
-    if let Some(player) = ctx.db.game_native_player().character_guid().find(guid) {
+    if let Some(player) = super::world_session(ctx, guid) {
         refresh(ctx, player.connection_id, guid);
     }
 }
@@ -48,7 +50,7 @@ pub(super) fn refresh(ctx: &ReducerContext, connection_id: ConnectionId, guid: u
             .is_some_and(|entity| {
                 (!entity.dead || entity.player_flags & GHOST != 0)
                     && entity.movement_flags & ON_TRANSPORT == 0
-                    && !crate::taxi::movement_is_suppressed(ctx, guid)
+                    && !crate::taxi::is_in_flight(ctx, guid)
                     && !crate::spell::is_movement_blocked(ctx, guid)
             });
     if permitted {

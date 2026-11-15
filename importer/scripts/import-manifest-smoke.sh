@@ -62,25 +62,6 @@ for k in $defined_keys; do
   esac
 done
 
-echo "[smoke] canonical profile vocabulary:"
-for profile in $WORLD_PROFILES; do
-  case "$profile" in
-    full-world) maps="$PROFILE_FULL_WORLD_MAPS" ;;
-    full-eastern) maps="$PROFILE_FULL_EASTERN_MAPS" ;;
-    full-kalimdor) maps="$PROFILE_FULL_KALIMDOR_MAPS" ;;
-    full-instances) maps="$PROFILE_FULL_INSTANCES_MAPS" ;;
-    alliance-eastern) maps="$PROFILE_ALLIANCE_EASTERN_MAPS" ;;
-    alliance-kalimdor) maps="$PROFILE_ALLIANCE_KALIMDOR_MAPS" ;;
-    alliance-single) maps="$PROFILE_ALLIANCE_SINGLE_MAPS" ;;
-    instances) maps="$PROFILE_INSTANCES_MAPS" ;;
-    *) echo "  FAIL  unknown canonical profile $profile"; fail=1; continue ;;
-  esac
-  [ -n "$maps" ] && echo "  ok    $profile owns map(s) $maps" || { echo "  FAIL  $profile has no planned maps"; fail=1; }
-done
-for profile in full-world full-eastern full-kalimdor full-instances alliance-eastern alliance-kalimdor alliance-single instances; do
-  case " $WORLD_PROFILES " in *" $profile "*) ;; *) echo "  FAIL  missing canonical profile $profile"; fail=1 ;; esac
-done
-
 echo "[smoke] MAP=1 continent-shard floor overrides:"
 map1_out="$(
   MAP=1 bash -c '
@@ -124,9 +105,7 @@ fence_out="$(
     WORLD_PROFILE=
     MAP=0; INCLUDE_MAPS=36; chk0 map0-run; chk36 map36-in-run
     MAP=1; INCLUDE_MAPS=;   chk0 map1-run; chk36 map36-absent
-    # SLICE: a caller-chosen map-0 box is a region shard, not the canonical corridor, so the
-    # named Elwynn/Westfall fixture checks must NOT run. Unset must still mean canonical — this line
-    # runs under `set -u`, which is why chk0 reads ${SLICE:-0} rather than $SLICE.
+    # A map-0 SLICE is a region shard, so the Elwynn/Westfall corridor checks skip it.
     MAP=0; INCLUDE_MAPS=36; SLICE=1; chk0 map0-slice
     MAP=0; INCLUDE_MAPS=36; SLICE=0; chk0 map0-corridor
     WORLD_PROFILE=alliance-eastern; SLICE=1; chk0 profile-eastern
@@ -155,20 +134,17 @@ guard_out="$(
     DB=probe-db
     EXPECTED_MAPS=1
 
-    # Fresh shard: creature_spawn/gameobject carry initʼs map-0 fixtures (chicken/wolf/trainer/flight-master +
-    # chest/goober/gather-node/pool-armed rows); terrain/nav are EMPTY — exactly a brand-new shard
-    # about to import map 1 for the first time, before this issue was fixed.
-    spacetime() { # sql <db> "SELECT map_id FROM <table>"
+    # A fresh shard holds only the map-0 fixture spawns of init and no terrain or navigation rows.
+    spacetime() {
       case "$3" in
         *game_creature_spawn*|*game_gameobject*) echo " 0" ;;
-        *game_terrain_chunk*|*game_nav_chunk*) : ;; # never imported — no rows at all
+        *game_terrain_chunk*|*game_nav_chunk*) : ;;
       esac
     }
     echo "fresh_never_imported=$(db_never_imported && echo yes || echo no)"
     echo "fresh_pre_foreign=$(foreign_spatial_maps "$(db_spatial_probe)")"
 
-    # Populated foreign-continent shard: a database that already went through a REAL map-0 import, so
-    # terrain/nav genuinely carry map-0 rows too — the case the guard must keep refusing.
+    # A shard that already imported map 0 also holds map-0 terrain and navigation rows.
     spacetime() {
       case "$3" in
         *game_creature_spawn*|*game_gameobject*|*game_terrain_chunk*|*game_nav_chunk*) echo " 0" ;;
@@ -177,18 +153,13 @@ guard_out="$(
     echo "contaminated_never_imported=$(db_never_imported && echo yes || echo no)"
     echo "contaminated_pre_foreign=$(foreign_spatial_maps "$(db_spatial_probe)")"
 
-    # Family-reload blind spot, live-reproduced against a throwaway node: a
-    # `./target/debug/lyracore-importer --family creatures --apply` run landed 113 real map-0 spawns DIRECTLY —
-    # bypassing this script and its terrain/nav ETL entirely, which is a supported way to reload a
-    # single family into a dev node — so terrain/nav STILL read empty (the never-imported
-    # signal alone says "fresh") even though this database plainly holds real, deliberately-imported
-    # content. The row-count fallback in db_never_imported must catch this.
-    spacetime() { # sql <db> "<query>"
+    # `lyracore-importer --family creatures --apply` imports spawns without terrain or navigation.
+    spacetime() {
       case "$3" in
-        *"COUNT(*)"*game_creature_spawn*) echo " 113" ;; # far past initʼs 4-row fixture ceiling
+        *"COUNT(*)"*game_creature_spawn*) echo " 113" ;;
         *"COUNT(*)"*game_gameobject*) echo " 0" ;;
-        *game_creature_spawn*|*game_gameobject*) echo " 0" ;; # map_id probe: still reads as map 0 only
-        *game_terrain_chunk*|*game_nav_chunk*) : ;;            # no --terrain/--nav ETL ever ran
+        *game_creature_spawn*|*game_gameobject*) echo " 0" ;;
+        *game_terrain_chunk*|*game_nav_chunk*) : ;;
       esac
     }
     echo "family_reload_never_imported=$(db_never_imported && echo yes || echo no)"

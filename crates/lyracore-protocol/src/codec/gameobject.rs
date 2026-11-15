@@ -1,4 +1,12 @@
-use super::*;
+use super::update_mask;
+use super::values::build_values_update_raw;
+use wow_world_messages::vanilla::{
+    MovementBlock, MovementBlock_UpdateFlag, MovementBlock_UpdateFlag_All,
+    MovementBlock_UpdateFlag_Living, MovementBlock_UpdateFlag_Transport, Object, ObjectType,
+    SMSG_GAMEOBJECT_QUERY_RESPONSE_found, UpdateDynamicObject, UpdateGameObject, UpdateMask,
+    Vector3d, SMSG_GAMEOBJECT_QUERY_RESPONSE, SMSG_UPDATE_OBJECT,
+};
+use wow_world_messages::Guid;
 
 #[derive(Clone, Debug, Default)]
 pub struct GameObjectView {
@@ -238,6 +246,7 @@ pub fn build_dynamicobject_create_object(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::values::write_packed_guid_u64;
     use std::f32::consts::FRAC_1_SQRT_2;
     use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
@@ -266,7 +275,7 @@ mod tests {
         assert_eq!(mask.gameobject_pos_z(), Some(3.0));
         assert_eq!(mask.gameobject_facing(), Some(1.5));
         let packet =
-            crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+            crate::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
                 .unwrap();
         assert_eq!(&packet.body[..8], &[1, 0, 0, 0, 0, 0, 1, 1]);
         let bits = u32::from_le_bytes(packet.body[9..13].try_into().unwrap());
@@ -276,7 +285,7 @@ mod tests {
     #[test]
     fn gameobject_create_object_carries_descriptor_fields_and_serializes() {
         let go = GameObjectView {
-            guid: (0xF110u64 << 48) | 1,
+            guid: lyracore_shared::guid::compose(lyracore_shared::guid::GAMEOBJECT, 1),
             template_entry: 50100,
             x: -8949.0,
             y: -139.0,
@@ -318,7 +327,7 @@ mod tests {
     #[test]
     fn transport_create_flags_the_packet_and_ends_its_movement_block_with_path_progress() {
         let transport = TransportView {
-            guid: (0x1FC0u64 << 48) | 176_244,
+            guid: lyracore_shared::guid::compose(lyracore_shared::guid::MO_TRANSPORT, 176_244),
             entry: 176_244,
             display_id: 3015,
             size: 1.0,
@@ -343,7 +352,7 @@ mod tests {
         assert_eq!(mask.gameobject_flags(), Some(40));
         assert_eq!(mask.gameobject_displayid(), Some(3015));
         let packet =
-            crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+            crate::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
                 .unwrap();
         // Block count, has_transport and CREATE_OBJECT2, then a 6-byte packed GUID and the type.
         assert_eq!(&packet.body[..6], &[1, 0, 0, 0, 1, 3]);
@@ -369,7 +378,7 @@ mod tests {
     #[test]
     fn gameobject_create_object_sends_scale_one_when_the_template_carries_no_size() {
         let go = GameObjectView {
-            guid: (0xF110u64 << 48) | 2,
+            guid: lyracore_shared::guid::compose(lyracore_shared::guid::GAMEOBJECT, 2),
             template_entry: 50101,
             display_id: 259,
             size: 0.0,
@@ -386,7 +395,7 @@ mod tests {
 
     fn decode_rotation_floats(guid: u64, body: &[u8]) -> [f32; 4] {
         let mut packed_guid = Vec::new();
-        super::write_packed_guid_u64(&mut packed_guid, guid);
+        write_packed_guid_u64(&mut packed_guid, guid);
         let mask_start = 4 + 1 + 1 + packed_guid.len();
         let block_count = body[mask_start] as usize;
         let values_start = mask_start + 1 + block_count * 4;

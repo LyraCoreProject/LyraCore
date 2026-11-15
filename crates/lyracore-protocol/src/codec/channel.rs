@@ -23,7 +23,7 @@ pub struct ChannelNoticeView {
 pub fn notify(view: &ChannelNoticeView) -> (u16, Vec<u8>) {
     let mut body = Vec::with_capacity(2 + view.channel_name.len() + 18);
     body.push(view.notice);
-    push_cstr(&mut body, &view.channel_name);
+    super::push_cstr(&mut body, &view.channel_name);
     match view.notice {
         notice::JOINED
         | notice::LEFT
@@ -52,7 +52,7 @@ pub fn notify(view: &ChannelNoticeView) -> (u16, Vec<u8>) {
         | notice::CHANNEL_OWNER
         | notice::PLAYER_NOT_BANNED
         | notice::PLAYER_INVITED
-        | notice::PLAYER_INVITE_BANNED => push_cstr(&mut body, &view.text),
+        | notice::PLAYER_INVITE_BANNED => super::push_cstr(&mut body, &view.text),
         _ => {}
     }
     (SMSG_CHANNEL_NOTIFY_OPCODE, body)
@@ -75,11 +75,6 @@ pub fn build_channel_list(
             })
             .collect(),
     }
-}
-
-fn push_cstr(body: &mut Vec<u8>, s: &str) {
-    body.extend_from_slice(s.as_bytes());
-    body.push(0);
 }
 
 fn push_guid(body: &mut Vec<u8>, guid: u64) {

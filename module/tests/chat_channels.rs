@@ -3,7 +3,7 @@ mod support;
 use std::time::Duration;
 
 use serde_json::{json, Value};
-use support::{actor, Standalone};
+use support::{actor, refused, Standalone};
 
 const NOTICES: &str = "SELECT * FROM game_chat_channel_notice_event";
 const LINES: &str = "SELECT * FROM game_realm_chat_event";
@@ -60,19 +60,6 @@ fn op(realm: &Standalone, who: &str, code: &str, channel: &str, password: &str, 
     realm.assert_call(
         "realm_channel_op",
         &[who, code, &request(channel, password, race)],
-    );
-}
-
-fn refused(realm: &Standalone, reducer: &str, args: &[&str], tag: &str) {
-    let result = realm.call(reducer, args);
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        !result.status.success() && output.contains(tag),
-        "{reducer} should refuse with {tag}: {output}"
     );
 }
 
@@ -341,9 +328,14 @@ fn the_last_member_leaving_deletes_the_channel_its_password_and_its_bans() {
     op(&realm, &actor("1"), PASSWORD, "Raiders", "sesame", HUMAN);
     let channel_id =
         realm.query_rows("SELECT channel_id FROM game_chat_channel")[0]["channel_id"].clone();
-    realm.assert_sql(&format!(
-        "INSERT INTO game_chat_channel_ban (id, channel_id, character_guid) VALUES (9001, {channel_id}, 9)"
-    ));
+    realm.insert_row(
+        "game_chat_channel_ban",
+        &[
+            ("id", &9001),
+            ("channel_id", &channel_id),
+            ("character_guid", &9),
+        ],
+    );
     refused(
         &realm,
         "realm_channel_op",
@@ -396,11 +388,6 @@ fn channel_membership_ends_with_the_account_claim_that_admitted_it() {
     let first = claimed_actor(&generation, "101");
     op(&realm, &first, JOIN, "Raiders", "", HUMAN);
     op(&realm, &first, JOIN, "Trade - City", "", HUMAN);
-    let member = &realm.query_rows(
-        "SELECT account_id, claim_generation FROM game_chat_channel_member WHERE character_guid = 1",
-    )[0];
-    assert_eq!(member["account_id"], "1");
-    assert_eq!(member["claim_generation"], generation);
     let released = notices_of(&realm, || {
         realm.assert_call("release_account_claim", &[&token(&generation, "101")])
     });

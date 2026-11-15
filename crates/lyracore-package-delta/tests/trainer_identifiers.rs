@@ -1,18 +1,11 @@
 mod common;
 
 use common::{
-    trainer_spell_claim, PACKAGE_TRAINER_SPELL, REAL_TRAINER_SPELL, WHOLE_TRAINER_SPELL_ROW,
+    artifact, trainer_spell_claim, PACKAGE_TRAINER_SPELL, REAL_TRAINER_SPELL,
+    WHOLE_TRAINER_SPELL_ROW,
 };
-use lyracore_package_delta::{
-    is_fixture_reserved_trainer_id, is_package_trainer_id, DeltaError, PackageDelta, PrimaryKey,
-    Table, PACKAGE_TRAINER_ID_CEIL, PACKAGE_TRAINER_ID_FLOOR,
-};
-
-fn artifact(package: &str, claims: &str) -> String {
-    format!(
-        r#"{{"version":1,"package":"{package}","source_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","claims":[{claims}]}}"#
-    )
-}
+use lyracore_package_delta::ids::{is_fixture_reserved_trainer_id, PackageRange};
+use lyracore_package_delta::{is_package_trainer_id, DeltaError, PackageDelta, PrimaryKey, Table};
 
 const A_COST: &str = r#"{"cost":{"type":"u32","value":750}}"#;
 
@@ -25,11 +18,7 @@ fn a_trainer_spell_key_is_the_id_itself() {
 
 #[test]
 fn a_package_may_insert_a_trainer_spell_row_inside_the_package_range() {
-    for id in [
-        PACKAGE_TRAINER_ID_FLOOR,
-        11_500_000,
-        PACKAGE_TRAINER_ID_CEIL,
-    ] {
+    for id in [11_000_000u64, 11_500_000, 11_999_999u64] {
         let json = artifact(
             "example.pkg",
             &trainer_spell_claim(id, "insert", WHOLE_TRAINER_SPELL_ROW),
@@ -42,7 +31,7 @@ fn a_package_may_insert_a_trainer_spell_row_inside_the_package_range() {
 
 #[test]
 fn an_insert_outside_the_package_range_is_refused() {
-    for id in [1, PACKAGE_TRAINER_ID_FLOOR - 1, PACKAGE_TRAINER_ID_CEIL + 1] {
+    for id in [1, 10_999_999u64, 12_000_000u64] {
         let json = artifact(
             "example.pkg",
             &trainer_spell_claim(id, "insert", WHOLE_TRAINER_SPELL_ROW),
@@ -50,7 +39,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::TrainerIdNotClientSafe { id },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Trainer,
+                id
+            },
             "trainer spell row {id}"
         );
     }
@@ -74,7 +66,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         let update = artifact("example.pkg", &trainer_spell_claim(id, "update", A_COST));
         assert_eq!(
             PackageDelta::parse(&update).expect_err("the update must be refused"),
-            DeltaError::TrainerIdFixtureReserved { id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Trainer,
+                id
+            },
             "update on fixture trainer spell row {id}"
         );
 
@@ -84,7 +79,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         );
         assert_eq!(
             PackageDelta::parse(&insert).expect_err("the insert must be refused"),
-            DeltaError::TrainerIdFixtureReserved { id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Trainer,
+                id
+            },
             "insert on fixture trainer spell row {id}"
         );
     }
@@ -109,7 +107,7 @@ fn the_package_range_is_disjoint_from_every_reserved_identifier() {
         );
     }
 
-    for id in [PACKAGE_TRAINER_ID_FLOOR, PACKAGE_TRAINER_ID_CEIL] {
+    for id in [11_000_000u64, 11_999_999u64] {
         assert!(
             !is_fixture_reserved_trainer_id(id),
             "Package trainer spell row {id} must not be fixture-reserved"
@@ -139,7 +137,7 @@ fn an_incomplete_trainer_spell_insert_is_refused() {
 fn the_cast_and_trainer_bands_do_not_overlap() {
     use lyracore_package_delta::is_package_cast_id;
 
-    for id in [PACKAGE_TRAINER_ID_FLOOR, PACKAGE_TRAINER_ID_CEIL] {
+    for id in [11_000_000u64, 11_999_999u64] {
         assert!(
             !is_package_cast_id(id),
             "trainer row {id} reads as a cast row"

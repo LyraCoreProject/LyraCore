@@ -4,7 +4,8 @@ use std::collections::{HashMap, HashSet};
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, SpacetimeType, Table, Timestamp};
 
-use crate::auth::{account_has_room, check_new_character, next_character_guid};
+use crate::auth::next_character_guid;
+use crate::character::{account_has_room, check_new_character, RUN_SPEED_BP_1X};
 use crate::helpers::require_operator;
 use crate::{
     game_account, game_area, game_character, game_character_explored, game_character_talent,
@@ -410,7 +411,7 @@ pub fn migrate_contacts(
             contact.ignore,
             Some(target.race),
         ) {
-            Ok(()) | Err(lyracore_shared::social::ContactRefusal::AlreadyOnList) => {}
+            Ok(()) | Err(crate::chat::ContactRefusal::AlreadyOnList) => {}
             Err(refusal) => {
                 return Err(format!(
                     "contact {} of {source_key}: {}",
@@ -732,12 +733,12 @@ fn insert_character(
             migration.name
         ));
     }
-    if migration.bank_bag_slots > lyracore_shared::bank::MAX_BANK_BAG_SLOTS {
+    if migration.bank_bag_slots > crate::items::MAX_BANK_BAG_SLOTS {
         return Err(format!(
             "Character {}: {} bank bag slots exceed {}",
             migration.name,
             migration.bank_bag_slots,
-            lyracore_shared::bank::MAX_BANK_BAG_SLOTS
+            crate::items::MAX_BANK_BAG_SLOTS
         ));
     }
     if !(-1..=MAX_WATCHED_FACTION_INDEX).contains(&migration.watched_faction_index) {
@@ -798,7 +799,7 @@ fn insert_character(
         resting: migration.logout_resting,
         rested_since_micros: 0,
         pending_godmode: false,
-        pending_run_speed_mult_bp: crate::world::RUN_SPEED_BP_1X,
+        pending_run_speed_mult_bp: RUN_SPEED_BP_1X,
         bank_bag_slots: migration.bank_bag_slots,
         watched_faction_index: migration.watched_faction_index,
         rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
@@ -1181,7 +1182,7 @@ impl Arrival<'_> {
             pet_xp: pet.xp,
             loyalty_level: pet.loyalty_level,
             loyalty_progress: pet.loyalty_progress,
-            happiness: pet.happiness.min(crate::creatures::MAX_HAPPINESS),
+            happiness: pet.happiness.min(crate::creatures::pet_care::MAX_HAPPINESS),
             created_at: self.ctx.timestamp,
             care_updated_at: self.ctx.timestamp,
             loyalty_updated_at: self.ctx.timestamp,

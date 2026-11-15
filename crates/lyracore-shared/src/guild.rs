@@ -37,8 +37,8 @@ pub const LEADER_RANK: u32 = 0;
 pub const DEFAULT_MOTD: &str = "No message set.";
 
 // Name lengths count Unicode scalars.
-pub const MIN_GUILD_NAME: usize = 2;
-pub const MAX_GUILD_NAME: usize = 24;
+const MIN_GUILD_NAME: usize = 2;
+const MAX_GUILD_NAME: usize = 24;
 
 // Text lengths count Unicode scalars, vm:src/game/Guild/Guild.h:36-40.
 pub const MAX_RANK_NAME: usize = 15;
@@ -65,16 +65,16 @@ pub fn validate_guild_name(name: &str) -> Result<(), GuildRefusal> {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum Script {
+pub enum Script {
     Latin,
     Cyrillic,
     EastAsian,
 }
 
 impl Script {
-    pub(crate) const ALL: [Self; 3] = [Self::Latin, Self::Cyrillic, Self::EastAsian];
+    pub const ALL: [Self; 3] = [Self::Latin, Self::Cyrillic, Self::EastAsian];
 
-    pub(crate) fn holds(self, c: char) -> bool {
+    pub fn holds(self, c: char) -> bool {
         let c = u32::from(c);
         let ranges: &[(u32, u32)] = match self {
             Self::Latin => &[

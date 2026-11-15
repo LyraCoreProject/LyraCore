@@ -33,7 +33,7 @@ fn clock_step(credited_through_ms: u64, now_ms: u64) -> ClockStep {
 
 // Call on every catch-all firing; returns the energy users it credited.
 pub(crate) fn regenerate_energy(ctx: &ReducerContext) -> usize {
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch().max(0) / 1_000) as u64;
+    let now_ms = crate::time::now_ms(ctx);
     let clocks = ctx.db.game_energy_clock();
     let Some(clock) = clocks.id().find(CLOCK_ID) else {
         clocks.insert(EnergyClock {
@@ -65,7 +65,7 @@ fn credit_energy(ctx: &ReducerContext, ticks: u64) -> usize {
         .collect();
     let credited = regenerating.len();
     for mut e in regenerating {
-        let regen_rate = crate::spell::power_regen_rate(ctx, e.guid, ENERGY);
+        let regen_rate = crate::modifiers::power_regen_rate(ctx, e.guid, ENERGY);
         e.power = regen_energy(e.power, e.max_power, ticks, regen_rate);
         e.update(ctx);
     }

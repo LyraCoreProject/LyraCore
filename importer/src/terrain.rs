@@ -473,8 +473,9 @@ mod tests {
     fn alliance_eastern_terrain_dry_run_passes_every_slice_self_check() {
         let data_dir = client_data_dir()
             .expect("LYRACORE_CLIENT_DATA must name the owned client Data directory");
-        let scope = WorldImportScope::canonical(WorldImportProfile::AllianceEastern)
-            .expect("eastern profile");
+        let scope =
+            WorldImportScope::canonical(WorldImportProfile::parse("alliance-eastern").unwrap())
+                .expect("eastern profile");
         let mut chain = open_terrain_chain(&data_dir).expect("terrain patch chain");
         let (rows, tiles_read) =
             collect_scope(&mut chain, &scope).expect("every alliance-eastern slice self-check");
@@ -498,8 +499,8 @@ mod tests {
             .expect("LYRACORE_CLIENT_DATA must name the owned client Data directory");
         let mut chain = open_terrain_chain(&data_dir).expect("terrain patch chain");
         for profile in [
-            WorldImportProfile::StartingEastern,
-            WorldImportProfile::StartingKalimdor,
+            WorldImportProfile::parse("starting-eastern").unwrap(),
+            WorldImportProfile::parse("starting-kalimdor").unwrap(),
         ] {
             let scope = WorldImportScope::canonical(profile).unwrap();
             let (rows, tiles_read) =

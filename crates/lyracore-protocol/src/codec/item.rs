@@ -1,9 +1,19 @@
-use super::*;
+use super::update_mask;
+use super::values::build_values_update_raw;
 use lyracore_shared::item::{ItemRefusal, Proficiency};
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 pub use wow_world_messages::vanilla::SellItemResult;
 use wow_world_messages::vanilla::{
-    SMSG_ITEM_ENCHANT_TIME_UPDATE, SMSG_ITEM_NAME_QUERY_RESPONSE, SMSG_SELL_ITEM,
+    AllowedClass, AllowedRace, BagFamily, Bonding, BuyBankSlotResult, BuyResult, Faction, Gold,
+    InventoryType, ItemClass, ItemClassAndSubClass, ItemDamageType, ItemFlag, ItemQuality,
+    ItemSpells, ItemStat, ItemStatType, Level, MovementBlock, MovementBlock_UpdateFlag,
+    MovementBlock_UpdateFlag_All, Object, ObjectType, SMSG_ITEM_QUERY_SINGLE_RESPONSE_found,
+    SheatheType, Skill, SpellSchool, SpellTriggerType, UpdateContainer, UpdateItem, UpdateMask,
+    SMSG_BUY_BANK_SLOT_RESULT, SMSG_BUY_FAILED, SMSG_INVENTORY_CHANGE_FAILURE,
+    SMSG_ITEM_ENCHANT_TIME_UPDATE, SMSG_ITEM_NAME_QUERY_RESPONSE, SMSG_ITEM_QUERY_SINGLE_RESPONSE,
+    SMSG_SELL_ITEM, SMSG_SET_PROFICIENCY, SMSG_SHOW_BANK, SMSG_UPDATE_OBJECT,
 };
+use wow_world_messages::Guid;
 
 pub fn inventory_slot(bag: u8, slot: u8) -> Option<u8> {
     match (bag, slot) {
@@ -553,226 +563,4 @@ pub fn build_armor_proficiency_msg(player_class: u8, learned: &[u32]) -> ServerO
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn framed(message: ServerOpcodeMessage) -> Vec<u8> {
-        let mut wire = Vec::new();
-        message.write_unencrypted_server(&mut wire).unwrap();
-        wire
-    }
-
-    #[test]
-    fn sell_refusal_is_a_seventeen_byte_body_under_its_size_header() {
-        let reply = build_sell_item_refusal(
-            0xF130_0000_0000_0001,
-            0x4000_0000_0000_0007,
-            SellItemResult::CantSellItem,
-        );
-        assert_eq!(
-            framed(ServerOpcodeMessage::SMSG_SELL_ITEM(Box::new(reply))),
-            [
-                0x00, 0x13, 0xA1, 0x01, // size 19 (big endian), opcode 0x01A1
-                0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0xF1, // vendor guid
-                0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, // item guid
-                0x02, // CantSellItem
-            ]
-        );
-    }
-
-    #[test]
-    fn item_name_response_is_the_entry_then_a_terminated_name() {
-        let reply = build_item_name_query_response(25, "Axe".into());
-        assert_eq!(
-            framed(ServerOpcodeMessage::SMSG_ITEM_NAME_QUERY_RESPONSE(
-                Box::new(reply)
-            )),
-            [
-                0x00, 0x0A, 0xC5, 0x02, // size 10, opcode 0x02C5
-                0x19, 0x00, 0x00, 0x00, // item entry 25
-                b'A', b'x', b'e', 0x00,
-            ]
-        );
-    }
-
-    #[test]
-    fn read_item_failure_carries_the_guid_and_a_closing_reason() {
-        let (opcode, body) = build_read_item_failed_raw(0x4000_0000_0000_0009);
-        assert_eq!(opcode, 0x00AF);
-        assert_eq!(body, [0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, 0x02]);
-    }
-
-    #[test]
-    fn hearthstone_query_names_the_client_use_spell() {
-        let template = ItemTemplateView {
-            entry: 6948,
-            class: 15,
-            spellid_1: 8690,
-            spelltrigger_1: 0,
-            ..Default::default()
-        };
-        let reply = build_item_query_response(6948, Some(&template));
-        let message = ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(Box::new(reply));
-        let mut wire = Vec::new();
-        message.write_unencrypted_server(&mut wire).unwrap();
-        let ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(reply) =
-            ServerOpcodeMessage::read_unencrypted(&mut wire.as_slice()).unwrap()
-        else {
-            panic!("expected item query response");
-        };
-        let spell = reply.found.unwrap().spells[0];
-        assert_eq!(spell.spell, 8690);
-        assert_eq!(spell.spell_trigger, SpellTriggerType::OnUse);
-    }
-
-    fn charter(enchantment: u32) -> ItemInstanceView {
-        ItemInstanceView {
-            guid: 0x4000_0000_0000_0101,
-            entry: lyracore_shared::guild::GUILD_CHARTER_ENTRY,
-            owner_guid: 1,
-            slot: 23,
-            stack_count: 1,
-            enchantment,
-            ..ItemInstanceView::default()
-        }
-    }
-
-    fn item_mask(inst: &ItemInstanceView) -> wow_world_messages::vanilla::UpdateItem {
-        match build_item_create_object(inst).objects.as_slice() {
-            [Object::CreateObject {
-                mask2: UpdateMask::Item(item),
-                ..
-            }] => item.clone(),
-            other => panic!("expected one Item CREATE, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn a_charter_create_carries_its_petition_id_in_the_first_enchantment_word() {
-        assert_eq!(item_mask(&charter(42)).item_enchantment(), Some(42));
-    }
-
-    #[test]
-    fn a_permanent_enchant_create_carries_the_client_enchantment_id_in_word_22() {
-        let bracer = ItemInstanceView {
-            entry: 25,
-            slot: 8,
-            enchantment: 823,
-            ..charter(0)
-        };
-        assert_eq!(item_mask(&bracer).item_enchantment(), Some(823));
-    }
-
-    #[test]
-    fn an_item_without_an_enchantment_leaves_the_word_unwritten() {
-        assert_eq!(item_mask(&charter(0)).item_enchantment(), None);
-    }
-
-    #[test]
-    fn a_second_charter_answers_cant_carry_more_of_this() {
-        let message = ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
-            build_cant_carry_more_of_this(),
-        ));
-        let mut wire = Vec::new();
-        message.write_unencrypted_server(&mut wire).unwrap();
-        let mut expected = vec![0x11];
-        expected.extend_from_slice(&[0; 16]);
-        expected.push(0);
-        assert_eq!(u16::from_le_bytes([wire[2], wire[3]]), 0x0112);
-        assert_eq!(&wire[4..], expected.as_slice());
-    }
-
-    #[test]
-    fn the_petition_values_update_sets_only_word_twenty_two_of_the_charter() {
-        let (opcode, body) = build_charter_petition_values(0x4000_0000_0000_0101, 42);
-        assert_eq!(opcode, 0x00A9);
-        let updates = lyracore_shared::values_mask::parse_values_updates(&body);
-        assert_eq!(updates.len(), 1);
-        assert_eq!(updates[0].guid, 0x4000_0000_0000_0101);
-        assert_eq!(updates[0].fields, vec![(22, 42)]);
-    }
-
-    fn suffix_item(random_property_enchant_ids: [u32; 3]) -> ItemInstanceView {
-        ItemInstanceView {
-            guid: 0x4000_0000_0000_0102,
-            entry: 25,
-            owner_guid: 1,
-            slot: 23,
-            stack_count: 1,
-            random_property_id: 22,
-            random_property_enchant_ids,
-            ..ItemInstanceView::default()
-        }
-    }
-
-    fn enchantment_slot_fields(inst: &ItemInstanceView) -> Vec<(u16, u32)> {
-        let (opcode, body) = build_enchantment_slot_values(inst).expect("a slot update");
-        assert_eq!(opcode, 0x00A9);
-        let updates = lyracore_shared::values_mask::parse_values_updates(&body);
-        assert_eq!(updates.len(), 1);
-        assert_eq!(updates[0].guid, inst.guid);
-        updates[0].fields.clone()
-    }
-
-    /// Enchantment slot k uses word 22 + 3k in the vanilla item descriptor.
-    #[test]
-    fn a_random_property_fills_enchantment_slots_three_to_five() {
-        assert_eq!(
-            enchantment_slot_fields(&suffix_item([73, 74, 75])),
-            vec![(31, 73), (34, 74), (37, 75)]
-        );
-    }
-
-    #[test]
-    fn a_single_enchant_random_property_leaves_the_other_slots_unwritten() {
-        assert_eq!(
-            enchantment_slot_fields(&suffix_item([73, 0, 0])),
-            vec![(31, 73)]
-        );
-    }
-
-    #[test]
-    fn an_item_without_property_or_temporary_enchantments_sends_no_slot_update() {
-        assert_eq!(build_enchantment_slot_values(&suffix_item([0; 3])), None);
-    }
-
-    const INSTANT_POISON: TemporaryEnchantmentView = TemporaryEnchantmentView {
-        enchantment: 323,
-        duration_ms: 1_800_000,
-        charges: 40,
-    };
-
-    #[test]
-    fn a_temporary_enchantment_fills_slot_one_with_its_id_duration_and_charges() {
-        let dagger = ItemInstanceView {
-            temporary_enchantment: INSTANT_POISON,
-            ..suffix_item([73, 0, 0])
-        };
-        assert_eq!(
-            enchantment_slot_fields(&dagger),
-            vec![(25, 323), (26, 1_800_000), (27, 40), (31, 73)]
-        );
-    }
-
-    #[test]
-    fn clearing_a_temporary_enchantment_zeroes_all_three_words() {
-        let (_, body) = build_temporary_enchantment_values(7, TemporaryEnchantmentView::default());
-        let updates = lyracore_shared::values_mask::parse_values_updates(&body);
-        assert_eq!(updates[0].fields, vec![(25, 0), (26, 0), (27, 0)]);
-    }
-
-    #[test]
-    fn the_enchant_time_update_names_slot_one_in_seconds() {
-        let message = ServerOpcodeMessage::SMSG_ITEM_ENCHANT_TIME_UPDATE(Box::new(
-            build_item_enchant_time_update(0x4000_0000_0000_0102, 1, 1800),
-        ));
-        let mut wire = Vec::new();
-        message.write_unencrypted_server(&mut wire).unwrap();
-        assert_eq!(u16::from_le_bytes([wire[2], wire[3]]), 0x01EB);
-        let mut expected = 0x4000_0000_0000_0102u64.to_le_bytes().to_vec();
-        expected.extend_from_slice(&1u32.to_le_bytes());
-        expected.extend_from_slice(&1800u32.to_le_bytes());
-        expected.extend_from_slice(&1u64.to_le_bytes());
-        assert_eq!(&wire[4..], expected.as_slice());
-    }
-}
+mod tests;

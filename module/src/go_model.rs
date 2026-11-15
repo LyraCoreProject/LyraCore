@@ -1,5 +1,7 @@
 use spacetimedb::{reducer, table, ReducerContext, Table};
 
+use crate::vmap::hex_decode;
+
 #[table(accessor = game_go_model)]
 pub struct GoModel {
     #[primary_key]
@@ -7,24 +9,6 @@ pub struct GoModel {
     pub scale: f32,
     pub radius: f32,
     pub blob: Vec<u8>,
-}
-
-fn hex_decode(s: &str) -> Result<Vec<u8>, String> {
-    if !s.len().is_multiple_of(2) {
-        return Err("odd-length hex blob".to_string());
-    }
-    s.as_bytes()
-        .chunks_exact(2)
-        .enumerate()
-        .map(|(i, pair)| {
-            let digit = |byte: u8| {
-                (byte as char)
-                    .to_digit(16)
-                    .ok_or_else(|| format!("bad hex at {i}"))
-            };
-            Ok((digit(pair[0])? * 16 + digit(pair[1])?) as u8)
-        })
-        .collect()
 }
 
 fn parse_row(row: &str) -> Result<(u32, f32, f32, Vec<u8>), String> {

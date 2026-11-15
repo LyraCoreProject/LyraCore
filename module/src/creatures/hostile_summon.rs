@@ -1,9 +1,10 @@
 use spacetimedb::ReducerContext;
 
-use crate::spell::{CastGateRefusal, CastRefusalReason, Spell, SpellEffect, P_ENTRY};
+use crate::spell::{CastGateRefusal, CastRefusalReason, P_ENTRY};
 use crate::{
     game_creature_template, game_gameobject, game_gameobject_template, GameObject, WorldEntity,
 };
+use crate::{Spell, SpellEffect};
 
 pub(crate) fn check_hostile_summon(
     ctx: &ReducerContext,

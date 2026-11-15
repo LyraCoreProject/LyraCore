@@ -1,6 +1,6 @@
 use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
-use super::{game_character_buyback, ItemInstance, ItemTemplate};
+use crate::{game_character_buyback, ItemInstance, ItemTemplate};
 
 pub(crate) const BUYBACK_START: u8 = 69;
 pub(crate) const BUYBACK_END: u8 = 81;
@@ -24,6 +24,8 @@ pub struct BuybackState {
     pub login_at: Timestamp,
     pub current_slot: u8,
 }
+
+crate::outside_table_catalog!(game_buyback_item, game_buyback_state);
 
 pub(crate) fn begin_session(ctx: &ReducerContext, character_guid: u64) {
     clear(ctx, character_guid);
@@ -51,8 +53,8 @@ pub(crate) fn clear(ctx: &ReducerContext, character_guid: u64) {
         super::forget_temporary_enchantment(ctx, row.item_guid);
         crate::mail_text::drop_letter_text(ctx, row.item.item_text_id);
         if !crate::transfer::is_in_transit(ctx, character_guid) {
-            crate::native::buyback_removed(ctx, &row);
-            crate::native::buyback_destroyed(ctx, &row);
+            crate::native::economy::buyback_removed(ctx, &row);
+            crate::native::economy::buyback_destroyed(ctx, &row);
         }
     }
     ctx.db
@@ -71,17 +73,15 @@ pub(crate) fn clear(ctx: &ReducerContext, character_guid: u64) {
 }
 
 pub(crate) fn discard_legacy(ctx: &ReducerContext) {
-    use crate::native::game_native_player;
-
-    for player in ctx.db.game_native_player().iter().collect::<Vec<_>>() {
+    for guid in crate::native::world_session_characters(ctx) {
         if ctx
             .db
             .game_buyback_state()
             .character_guid()
-            .find(player.character_guid)
+            .find(guid)
             .is_none()
         {
-            crate::native::disconnect(ctx, player.connection_id);
+            crate::native::end_world_session(ctx, guid);
         }
     }
     let rows = ctx.db.game_character_buyback();
@@ -152,8 +152,8 @@ pub(super) fn sell(
     if state.current_slot < BUYBACK_END - 1 {
         state.current_slot += 1;
     }
-    let elapsed = crate::time::now(ctx).to_micros_since_unix_epoch() / 1_000_000
-        - state.login_at.to_micros_since_unix_epoch() / 1_000_000;
+    let elapsed =
+        crate::time::now_secs(ctx) as i64 - state.login_at.to_micros_since_unix_epoch() / 1_000_000;
     let row = ctx.db.game_buyback_item().insert(BuybackItem {
         item_guid: item.guid,
         character_guid,
@@ -205,7 +205,7 @@ pub(super) fn take(ctx: &ReducerContext, row: &BuybackItem) {
             ctx.db.game_buyback_state().character_guid().update(state);
         }
     }
-    crate::native::buyback_removed(ctx, row);
+    crate::native::economy::buyback_removed(ctx, row);
 }
 
 crate::character_owned!(delete, fn sweep_delete_game_buyback_item(ctx, character_guid) {

@@ -1,32 +1,15 @@
 mod support;
 
-use support::Standalone;
+use support::{actor, guild_op_refused, Standalone};
 
 const GM: u64 = 5_090_001;
 const LEADER: u64 = 5_090_002;
 const OTHER: u64 = 5_090_003;
 
-fn actor(guid: u64) -> String {
-    format!(r#"{{"guid":{guid},"ownership":null}}"#)
-}
-
 fn gm_create(leader: u64, leader_name: &str, gm_level: u8, name: &str) -> String {
     format!(
         r#"{{"gmCreate":{{"leader_guid":{leader},"leader_name":"{leader_name}","leader_team":469,"leader_realm_account":{leader},"gm_level":{gm_level},"name":"{name}"}}}}"#
     )
-}
-
-fn refused(realm: &Standalone, args: &[&str], tag: &str) {
-    let result = realm.call("realm_guild_op", args);
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        !result.status.success() && output.contains(tag),
-        "expected {tag}: {output}"
-    );
 }
 
 fn guild_rows(realm: &Standalone) -> (usize, usize, usize) {
@@ -95,27 +78,27 @@ fn a_gm_founds_a_guild_on_realm_core_and_refusals_change_nothing() {
 
     let founded = guild_rows(&realm);
     assert_eq!(founded, (1, 5, 1));
-    refused(
+    guild_op_refused(
         &realm,
         &[&gm, &gm_create(OTHER, "Other", 1, "tracer guild")],
         "guild:name_exists",
     );
-    refused(
+    guild_op_refused(
         &realm,
         &[&gm, &gm_create(LEADER, "Leader", 1, "tracer guild")],
         "guild:name_exists",
     );
-    refused(
+    guild_op_refused(
         &realm,
         &[&gm, &gm_create(OTHER, "Other", 0, "Knights")],
         "guild:not_game_master",
     );
-    refused(
+    guild_op_refused(
         &realm,
         &[&gm, &gm_create(LEADER, "Leader", 1, "Knights")],
         "guild:already_in_guild",
     );
-    refused(
+    guild_op_refused(
         &realm,
         &[&gm, &gm_create(OTHER, "Other", 1, "Knights!")],
         "guild:name_invalid",
@@ -131,7 +114,7 @@ fn a_gm_founds_a_guild_on_realm_core_and_refusals_change_nothing() {
         "Renamed"
     );
     realm.assert_call("realm_guild_op", &[&actor(LEADER), r#"{"signOff":{}}"#]);
-    refused(
+    guild_op_refused(
         &realm,
         &[&actor(OTHER), r#"{"signOn":"Other"}"#],
         "guild:not_in_guild",

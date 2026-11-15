@@ -28,39 +28,80 @@ fn realm(name: &str) -> (Standalone, Catalogue) {
         .query_rows("SELECT id FROM game_map WHERE id = 0")
         .is_empty()
     {
-        shard.assert_sql(
-            "INSERT INTO game_map (id, internal_name, name, map_type, linked_zone, parent, player_limit, reset_delay, ghost_entrance_map, ghost_entrance_x, ghost_entrance_y) \
-             VALUES (0, 'Test', 'Test', 0, 0, 0, 0, 0, -1, 0, 0)",
+        shard.insert_row(
+            "game_map",
+            &[("id", &0), ("internal_name", &"Test"), ("name", &"Test")],
         );
     }
-    shard.assert_sql(
-        "INSERT INTO game_map (id, internal_name, name, map_type, linked_zone, parent, player_limit, reset_delay, ghost_entrance_map, ghost_entrance_x, ghost_entrance_y) \
-         VALUES (5099036, 'Dungeon', 'Dungeon', 1, 0, 0, 5, 0, -1, 0, 0)",
+    shard.insert_row(
+        "game_map",
+        &[
+            ("id", &5_099_036),
+            ("internal_name", &"Dungeon"),
+            ("name", &"Dungeon"),
+            ("map_type", &1),
+            ("player_limit", &5),
+        ],
     );
-    shard.assert_sql(&format!(
-        "INSERT INTO game_area (id, map_id, parent_area_id, area_bit, flags, exploration_level, faction_group, name) \
-         VALUES (5099300, 0, 0, {AREA_BIT}, 0, 0, 0, 'Migrated area')"
-    ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_faction (faction_id, reputation_index, base_standing) VALUES ({FACTION}, 50, {FACTION_BASE})"
-    ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_skill_line (skill_line, category, name) VALUES ({SKILL}, 0, 'Migrated skill')"
-    ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_taxi_node (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) \
-         VALUES (5099600,{TAXI_CLIENT_NODE},0,0,0,0,'Migrated node',0,1147)"
-    ));
+    shard.insert_row(
+        "game_area",
+        &[
+            ("id", &5_099_300),
+            ("area_bit", &AREA_BIT),
+            ("name", &"Migrated area"),
+        ],
+    );
+    shard.insert_row(
+        "game_faction",
+        &[
+            ("faction_id", &FACTION),
+            ("reputation_index", &50),
+            ("base_standing", &FACTION_BASE),
+        ],
+    );
+    shard.insert_row(
+        "game_skill_line",
+        &[("skill_line", &SKILL), ("name", &"Migrated skill")],
+    );
+    shard.insert_row(
+        "game_taxi_node",
+        &[
+            ("id", &5_099_600),
+            ("client_node_id", &TAXI_CLIENT_NODE),
+            ("name", &"Migrated node"),
+            ("mount_display_alliance", &1147),
+        ],
+    );
     for (quest, title) in [(ACTIVE_QUEST, "Active"), (REWARDED_QUEST, "Rewarded")] {
-        shard.assert_sql(&format!(
-            "INSERT INTO game_quest_template (entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level,quest_type) \
-             VALUES ({quest},1,10,'{title}',0,0,0,0,0,0,0,0,0,0,0,0,false,0,0,0,0)"
-        ));
+        shard.insert_row(
+            "game_quest_template",
+            &[
+                ("entry", &quest),
+                ("min_level", &1),
+                ("quest_level", &10),
+                ("title", &title),
+            ],
+        );
     }
-    shard.assert_sql(&format!(
-        "INSERT INTO game_quest_objective (id,quest_entry,obj_index,kind,target_entry,required_count) \
-         VALUES (5099201,{ACTIVE_QUEST},0,0,1,3),(5099202,{ACTIVE_QUEST},1,1,1,1)"
-    ));
+    shard.insert_rows(
+        "game_quest_objective",
+        &[
+            &[
+                ("id", &5_099_201),
+                ("quest_entry", &ACTIVE_QUEST),
+                ("target_entry", &1),
+                ("required_count", &3),
+            ],
+            &[
+                ("id", &5_099_202),
+                ("quest_entry", &ACTIVE_QUEST),
+                ("obj_index", &1),
+                ("kind", &1),
+                ("target_entry", &1),
+                ("required_count", &1),
+            ],
+        ],
+    );
 
     let items = shard.query_rows("SELECT entry, max_stack FROM game_item_template");
     let entry = |pick: fn(u32) -> bool| -> u32 {
@@ -87,10 +128,15 @@ fn realm(name: &str) -> (Standalone, Catalogue) {
         .map(|row| row["spell_id"].parse().unwrap())
         .collect();
     let (spell, talent_spell) = (spells[0], spells[1]);
-    shard.assert_sql(&format!(
-        "INSERT INTO game_talent (talent_id,name,tree_id,tier,column,max_rank,spell_id,required_talent_id,required_points_in_tree) \
-         VALUES ({TALENT},'Migrated talent',0,0,0,1,{talent_spell},0,0)"
-    ));
+    shard.insert_row(
+        "game_talent",
+        &[
+            ("talent_id", &TALENT),
+            ("name", &"Migrated talent"),
+            ("max_rank", &1),
+            ("spell_id", &talent_spell),
+        ],
+    );
     (
         shard,
         Catalogue {
@@ -483,8 +529,9 @@ fn hunter(shard: &Standalone, catalogue: &Catalogue) -> Value {
         .query_rows("SELECT race_class FROM game_char_base_info WHERE race_class = 771")
         .is_empty()
     {
-        shard.assert_sql(
-            "INSERT INTO game_char_base_info (race_class, race, class) VALUES (771, 3, 3)",
+        shard.insert_row(
+            "game_char_base_info",
+            &[("race_class", &771), ("race", &3), ("class", &3)],
         );
     }
     let mut plan = migration(catalogue, 7, "Migrant");
