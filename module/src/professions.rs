@@ -3,7 +3,6 @@ use spacetimedb::ReducerContext;
 use crate::game_creature_template;
 use crate::game_fishing_loot;
 use crate::game_item_template;
-use crate::game_player_skill;
 use crate::game_skinning_loot;
 use crate::loot::LootRow;
 
@@ -36,14 +35,8 @@ pub(crate) fn skin_corpse(
     if corpse.skinned {
         return Err("already skinned".into());
     }
-    let learned_skinning = ctx
-        .db
-        .game_player_skill()
-        .by_character()
-        .filter(&looter_guid)
-        .find(|s| s.skill_line == crate::skill::skill_line::SKINNING)
-        .map(|s| s.current as u32)
-        .unwrap_or(0);
+    let learned_skinning =
+        crate::skill::skill_value(ctx, looter_guid, crate::skill::skill_line::SKINNING, false);
     if learned_skinning == 0 {
         return Err("you have not learned Skinning".into());
     }
