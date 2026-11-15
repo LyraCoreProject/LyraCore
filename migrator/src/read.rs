@@ -58,6 +58,8 @@ pub(crate) struct LegacyLetter {
     pub(crate) subject: String,
     pub(crate) body: String,
     pub(crate) attachments: Vec<LegacyItem>,
+    // mail_items rows whose item guid has no item_instance row.
+    pub(crate) orphan_items: Vec<u64>,
     pub(crate) expire_secs: u64,
     pub(crate) deliver_secs: u64,
     pub(crate) money: u32,
@@ -118,6 +120,7 @@ pub(crate) struct LegacyCharacter {
     pub(crate) played_total_secs: u32,
     pub(crate) logout_secs: u64,
     pub(crate) logout_resting: bool,
+    pub(crate) locked_for_transfer: bool,
     pub(crate) rest_bonus: f64,
     pub(crate) bank_bag_slots: u8,
     pub(crate) watched_faction: i64,
@@ -125,6 +128,8 @@ pub(crate) struct LegacyCharacter {
     pub(crate) explored_zones: Vec<u32>,
     pub(crate) home: Option<LegacyPosition>,
     pub(crate) items: Vec<LegacyItem>,
+    // Inventory rows whose item guid has no item_instance row.
+    pub(crate) orphan_items: Vec<u64>,
     pub(crate) spells: Vec<u32>,
     pub(crate) skills: Vec<LegacySkill>,
     pub(crate) reputations: Vec<LegacyReputation>,
@@ -139,8 +144,21 @@ enum Appearance {
     PlayerBytes,
 }
 
+enum CharacterFlags {
+    // cmangos keeps the inn flag in its own column.
+    LogoutResting,
+    // vmangos keeps it in character_flags since its 2025-04-28 migration.
+    CharacterFlags,
+}
+
+// vmangos CHARACTER_FLAG_* bits.
+const CHARACTER_FLAG_RESTING: i64 = 0x2;
+const CHARACTER_FLAG_LOCKED_FOR_TRANSFER: i64 = 0x4;
+const CHARACTER_FLAG_DELETED_BY_TRANSFER: i64 = 0x4_0000;
+
 pub(crate) struct Dialect {
     appearance: Appearance,
+    character_flags: CharacterFlags,
     taxi_mask: &'static str,
     played_total: &'static str,
     transport_guid: &'static str,
@@ -163,6 +181,7 @@ pub(crate) struct Dialect {
 
 const VMANGOS: Dialect = Dialect {
     appearance: Appearance::Columns,
+    character_flags: CharacterFlags::CharacterFlags,
     taxi_mask: "known_taxi_mask",
     played_total: "played_time_total",
     transport_guid: "transport_guid",
@@ -185,6 +204,7 @@ const VMANGOS: Dialect = Dialect {
 
 const CMANGOS: Dialect = Dialect {
     appearance: Appearance::PlayerBytes,
+    character_flags: CharacterFlags::LogoutResting,
     taxi_mask: "taximask",
     played_total: "totaltime",
     transport_guid: "transguid",
@@ -204,6 +224,28 @@ const CMANGOS: Dialect = Dialect {
     mail_receiver: "receiver",
     mail_text: "itemTextId",
 };
+
+impl CharacterFlags {
+    fn column(&self) -> &'static str {
+        match self {
+            Self::LogoutResting => "is_logout_resting",
+            Self::CharacterFlags => "character_flags",
+        }
+    }
+
+    // Returns whether the Character logged out resting and whether a transfer locked it.
+    fn read(&self, row: &Row) -> Result<(bool, bool)> {
+        let value = row.int(self.column())?;
+        Ok(match self {
+            Self::LogoutResting => (value != 0, false),
+            Self::CharacterFlags => (
+                value & CHARACTER_FLAG_RESTING != 0,
+                value & (CHARACTER_FLAG_LOCKED_FOR_TRANSFER | CHARACTER_FLAG_DELETED_BY_TRANSFER)
+                    != 0,
+            ),
+        })
+    }
+}
 
 impl Dialect {
     pub(crate) fn of(kind: SourceKind) -> &'static Self {
@@ -258,7 +300,7 @@ impl Dialect {
             ("online", Integer),
             (self.played_total, Integer),
             ("logout_time", Integer),
-            ("is_logout_resting", Integer),
+            (self.character_flags.column(), Integer),
             ("rest_bonus", Float),
             (self.watched_faction, Integer),
             (self.taxi_mask, Text),
@@ -435,7 +477,7 @@ pub(crate) fn read_accounts(
         }
         let banned_at: u64 = row.number(dialect.ban_date)?;
         let expires_at: u64 = row.number(dialect.ban_expiry)?;
-        let ban = if expires_at <= banned_at {
+        let ban = if expires_at == banned_at {
             Ban::Permanent
         } else if expires_at > now_secs {
             Ban::Until(expires_at)
@@ -547,6 +589,8 @@ fn read_character(
             })
         })
         .transpose()?;
+    let (logout_resting, locked_for_transfer) = dialect.character_flags.read(row)?;
+    let (items, orphan_items) = read_items(database, dialect, guid)?;
     Ok(LegacyCharacter {
         guid,
         account: row.number("account")?,
@@ -574,14 +618,16 @@ fn read_character(
         online: row.int("online")? != 0,
         played_total_secs: row.number(dialect.played_total)?,
         logout_secs: row.number("logout_time")?,
-        logout_resting: row.int("is_logout_resting")? != 0,
+        logout_resting,
+        locked_for_transfer,
         rest_bonus: row.float("rest_bonus")?,
         bank_bag_slots,
         watched_faction: row.int(dialect.watched_faction)?,
         taxi_mask: row.words(dialect.taxi_mask)?,
         explored_zones: row.words(dialect.explored_zones)?,
         home,
-        items: read_items(database, dialect, guid)?,
+        items,
+        orphan_items,
         spells: database
             .select("character_spell", &["spell", "disabled"], by_guid)?
             .into_iter()
@@ -710,6 +756,7 @@ fn read_letters(
     for row in mail {
         let id: u64 = row.number("id")?;
         let mut attachments = Vec::new();
+        let mut orphan_items = Vec::new();
         for attachment in
             database.select("mail_items", &["item_guid"], Filter::Equals("mail_id", id))?
         {
@@ -721,11 +768,13 @@ fn read_letters(
                     Filter::Equals("guid", item_guid),
                 )?
                 .into_iter()
-                .next()
-                .with_context(|| {
-                    format!("mail {id} attaches item {item_guid}, which has no item_instance row")
-                })?;
-            attachments.push(legacy_item(database, dialect, &instance, 0, 0)?);
+                .next();
+            match instance {
+                Some(instance) => {
+                    attachments.push(legacy_item(database, dialect, &instance, 0, 0)?)
+                }
+                None => orphan_items.push(item_guid),
+            }
         }
         letters.push(LegacyLetter {
             id,
@@ -735,6 +784,7 @@ fn read_letters(
             subject: row.text("subject")?,
             body: item_text(database, row.number(dialect.mail_text)?)?.unwrap_or_default(),
             attachments,
+            orphan_items,
             expire_secs: row.number("expire_time")?,
             deliver_secs: row.number("deliver_time")?,
             money: row.number("money")?,
@@ -745,11 +795,12 @@ fn read_letters(
     Ok(letters)
 }
 
+// MaNGOS joins inventory to item_instance and skips a row without a match; so does this read.
 fn read_items(
     database: &mut dyn SourceDatabase,
     dialect: &Dialect,
     guid: u64,
-) -> Result<Vec<LegacyItem>> {
+) -> Result<(Vec<LegacyItem>, Vec<u64>)> {
     let instances: BTreeMap<u64, Row> = database
         .select(
             "item_instance",
@@ -759,27 +810,27 @@ fn read_items(
         .into_iter()
         .map(|row| Ok((row.number("guid")?, row)))
         .collect::<Result<_>>()?;
-    let slots = database.select(
+    let mut items = Vec::new();
+    let mut orphans = Vec::new();
+    for slot in database.select(
         "character_inventory",
         &["bag", "slot", dialect.inventory_item],
         Filter::Equals("guid", guid),
-    )?;
-    slots
-        .into_iter()
-        .map(|slot| {
-            let item_guid: u64 = slot.number(dialect.inventory_item)?;
-            let instance = instances.get(&item_guid).with_context(|| {
-                format!("inventory names item {item_guid}, which has no item_instance row")
-            })?;
-            legacy_item(
-                database,
-                dialect,
-                instance,
-                slot.number("bag")?,
-                slot.number("slot")?,
-            )
-        })
-        .collect()
+    )? {
+        let item_guid: u64 = slot.number(dialect.inventory_item)?;
+        let Some(instance) = instances.get(&item_guid) else {
+            orphans.push(item_guid);
+            continue;
+        };
+        items.push(legacy_item(
+            database,
+            dialect,
+            instance,
+            slot.number("bag")?,
+            slot.number("slot")?,
+        )?);
+    }
+    Ok((items, orphans))
 }
 
 fn read_quests(
@@ -903,6 +954,48 @@ pub(crate) mod tests {
             ),
             (1, 2, 3, 4, 5, 6)
         );
+    }
+
+    #[test]
+    fn vmangos_rest_and_transfer_lock_come_from_character_flags() {
+        let mut database = source(SourceKind::Vmangos);
+        for (guid, flags) in [(10, 0x2), (11, 0x4), (12, 0x4_0000)] {
+            database.row(
+                "characters",
+                &[
+                    ("guid", Value::Int(guid)),
+                    ("account", Value::Int(1)),
+                    ("character_flags", Value::Int(flags)),
+                ],
+            );
+        }
+        let flags: Vec<_> = read_characters(&mut database, Dialect::of(SourceKind::Vmangos), &[1])
+            .unwrap()
+            .iter()
+            .map(|character| (character.logout_resting, character.locked_for_transfer))
+            .collect();
+        assert_eq!(flags, [(true, false), (false, true), (false, true)]);
+    }
+
+    #[test]
+    fn an_inventory_row_without_its_item_instance_is_skipped() {
+        let mut database = source(SourceKind::Vmangos);
+        database.row(
+            "characters",
+            &[("guid", Value::Int(10)), ("account", Value::Int(1))],
+        );
+        database.row(
+            "character_inventory",
+            &[
+                ("guid", Value::Int(10)),
+                ("slot", Value::Int(23)),
+                ("item_guid", Value::Int(777)),
+            ],
+        );
+        let character =
+            &read_characters(&mut database, Dialect::of(SourceKind::Vmangos), &[1]).unwrap()[0];
+        assert!(character.items.is_empty());
+        assert_eq!(character.orphan_items, [777]);
     }
 
     #[test]

@@ -32,8 +32,8 @@ skips the reference checks a foreign source needs.
    even after the player deleted the migrated Character.
 3. An Account name that already exists is the same Account only when its salt and verifier match.
    Otherwise the migration refuses. GM levels never migrate.
-4. A separate tool reads the Migration Source through a read-only MySQL connection in one
-   consistent snapshot. It never executes source SQL or scripts
+4. A separate tool reads the Migration Source through a read-only MySQL connection while the
+   source server is stopped. It never executes source SQL or scripts
    ([ADR 0003](./0003-parse-world-data-never-execute.md)). It checks each consumed column against
    a Source Profile, builds the reducer arguments, reports what it drops and why, and calls the
    reducers.
