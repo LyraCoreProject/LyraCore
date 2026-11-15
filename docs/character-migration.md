@@ -87,6 +87,8 @@ rerun never brings back a Character that its player deleted.
 Every referenced item, spell, skill, faction, quest, area and taxi node must exist in the Shard's
 catalogues, or the reducer refuses the Character. The tool drops unknown spells, skills, factions,
 quests, explored areas and taxi nodes with a finding, and refuses a Character with an unknown Item.
+Enchantment, random property and action button ids are copied without a check; an id the Shard
+does not know has no effect.
 
 Health starts full and power starts at its class default at the first world entry. The Character
 does not see the opening cinematic. GM levels, Auras, cooldowns, Instance bindings, temporary
