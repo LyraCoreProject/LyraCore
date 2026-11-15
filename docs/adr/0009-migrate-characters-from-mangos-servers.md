@@ -1,4 +1,4 @@
-# 0008. Migrate Characters from MaNGOS-family servers
+# 0009. Migrate Characters from MaNGOS-family servers
 
 ## Status
 
