@@ -5,9 +5,9 @@ use common::{
     FOREIGN_MAP, PACKAGE_GAMEOBJECT, REAL_GAMEOBJECT, REAL_GAMEOBJECT_SPAWN, REAL_MAP,
     WHOLE_GAMEOBJECT_SPAWN_ROW, WHOLE_GAMEOBJECT_TEMPLATE_ROW, WHOLE_GAMEOBJECT_TRAP_ROW,
 };
+use lyracore_package_delta::ids::PackageRange;
 use lyracore_package_delta::{
-    is_fixture_reserved_gameobject_id, is_package_gameobject_id, DeltaError, PackageDelta,
-    PrimaryKey, Table, PACKAGE_GAMEOBJECT_ID_CEIL, PACKAGE_GAMEOBJECT_ID_FLOOR,
+    is_package_gameobject_id, DeltaError, PackageDelta, PrimaryKey, Table,
 };
 
 const A_NAME: &str = r#"{"name":{"type":"string","value":"Kindled Cache"}}"#;
@@ -40,11 +40,7 @@ fn only_the_spawn_states_a_map() {
 
 #[test]
 fn a_package_may_insert_a_gameobject_row_inside_the_package_range() {
-    for id in [
-        PACKAGE_GAMEOBJECT_ID_FLOOR,
-        16_500_000,
-        PACKAGE_GAMEOBJECT_ID_CEIL,
-    ] {
+    for id in [16_000_000u32, 16_500_000, 16_999_999u32] {
         let json = artifact(
             "example.pkg",
             &gameobject_template_claim(id, "insert", WHOLE_GAMEOBJECT_TEMPLATE_ROW),
@@ -56,11 +52,7 @@ fn a_package_may_insert_a_gameobject_row_inside_the_package_range() {
 
 #[test]
 fn an_insert_outside_the_package_range_is_refused() {
-    for id in [
-        REAL_GAMEOBJECT,
-        PACKAGE_GAMEOBJECT_ID_FLOOR - 1,
-        PACKAGE_GAMEOBJECT_ID_CEIL + 1,
-    ] {
+    for id in [REAL_GAMEOBJECT, 15_999_999u32, 17_000_000u32] {
         let json = artifact(
             "example.pkg",
             &gameobject_template_claim(id, "insert", WHOLE_GAMEOBJECT_TEMPLATE_ROW),
@@ -68,7 +60,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::GameobjectIdNotClientSafe { id },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Gameobject,
+                id: u64::from(id)
+            },
             "gameobject {id}"
         );
     }
@@ -76,7 +71,7 @@ fn an_insert_outside_the_package_range_is_refused() {
 
 #[test]
 fn one_band_covers_every_insertable_gameobject_table() {
-    let out_of_band = PACKAGE_GAMEOBJECT_ID_FLOOR - 1;
+    let out_of_band = 15_999_999u32;
     let claims = [
         gameobject_template_claim(out_of_band, "insert", WHOLE_GAMEOBJECT_TEMPLATE_ROW),
         gameobject_trap_claim(out_of_band, "insert", WHOLE_GAMEOBJECT_TRAP_ROW),
@@ -87,7 +82,10 @@ fn one_band_covers_every_insertable_gameobject_table() {
         assert_eq!(
             PackageDelta::parse(&artifact("example.pkg", &claim))
                 .expect_err("the insert must be refused"),
-            DeltaError::GameobjectIdNotClientSafe { id: out_of_band },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Gameobject,
+                id: u64::from(out_of_band)
+            },
             "{claim}"
         );
     }
@@ -123,7 +121,10 @@ fn a_fixture_reserved_gameobject_is_refused_under_every_operation() {
                 &gameobject_template_claim(5_090_001, operation, fields),
             ))
             .expect_err("the claim must be refused"),
-            DeltaError::GameobjectIdFixtureReserved { id: 5_090_001 },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Gameobject,
+                id: 5_090_001
+            },
             "{operation}"
         );
     }
@@ -132,8 +133,8 @@ fn a_fixture_reserved_gameobject_is_refused_under_every_operation() {
 #[test]
 fn the_package_gameobject_band_is_its_own() {
     assert!(is_package_gameobject_id(PACKAGE_GAMEOBJECT));
-    assert!(!is_package_gameobject_id(PACKAGE_GAMEOBJECT_ID_CEIL + 1));
-    assert!(!is_fixture_reserved_gameobject_id(PACKAGE_GAMEOBJECT));
+    assert!(!is_package_gameobject_id(17_000_000u32));
+    assert!(!PackageRange::Gameobject.is_fixture_reserved(u64::from(PACKAGE_GAMEOBJECT)));
 }
 
 #[test]

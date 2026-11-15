@@ -1,7 +1,69 @@
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::{game_world_entity, world::WorldEntity};
-use lyracore_shared::env::{advance_breath, drowning_damage, FULL_AIR_MICROS};
+
+const FULL_AIR_MICROS: i64 = 60_000_000;
+const REFILL_MICROS: i64 = 10_000_000;
+const DROWNING_INTERVAL_MICROS: i64 = 1_000_000;
+const MAX_CATCHUP_TICKS: u32 = 5;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct MirrorTimerAdvance {
+    pub remaining_micros: i64,
+    pub expired_ticks: u32,
+}
+
+fn advance_breath(
+    remaining_micros: i64,
+    draining: bool,
+    elapsed_micros: i64,
+) -> MirrorTimerAdvance {
+    advance_mirror_timer(
+        remaining_micros,
+        FULL_AIR_MICROS,
+        REFILL_MICROS,
+        draining,
+        elapsed_micros,
+    )
+}
+
+pub(crate) fn advance_mirror_timer(
+    remaining_micros: i64,
+    full_micros: i64,
+    refill_micros: i64,
+    draining: bool,
+    elapsed_micros: i64,
+) -> MirrorTimerAdvance {
+    let elapsed = elapsed_micros.max(0);
+    let remaining = remaining_micros.clamp(0, full_micros);
+    if !draining {
+        let restored = elapsed.saturating_mul(full_micros) / refill_micros;
+        return MirrorTimerAdvance {
+            remaining_micros: remaining.saturating_add(restored).min(full_micros),
+            expired_ticks: 0,
+        };
+    }
+    if remaining >= elapsed {
+        return MirrorTimerAdvance {
+            remaining_micros: remaining - elapsed,
+            expired_ticks: 0,
+        };
+    }
+    let after_empty = elapsed - remaining;
+    let ticks = if remaining == 0 {
+        after_empty / DROWNING_INTERVAL_MICROS
+    } else {
+        1 + after_empty / DROWNING_INTERVAL_MICROS
+    };
+    MirrorTimerAdvance {
+        remaining_micros: 0,
+        expired_ticks: ticks.min(MAX_CATCHUP_TICKS as i64) as u32,
+    }
+}
+
+fn drowning_damage(max_health: u32) -> u32 {
+    max_health.saturating_mul(20).saturating_add(99) / 100
+}
 
 #[table(accessor = game_breath_state)]
 pub struct BreathState {
@@ -159,7 +221,6 @@ pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lyracore_shared::env::{MirrorTimerAdvance, MAX_CATCHUP_TICKS};
 
     #[test]
     fn breath_drains_then_crosses_zero_once() {

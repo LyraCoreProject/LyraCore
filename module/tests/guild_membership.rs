@@ -1,6 +1,6 @@
 mod support;
 
-use support::Standalone;
+use support::{actor, guild_op_refused, Standalone};
 
 const TEAM_ALLIANCE: u32 = 469;
 const TEAM_HORDE: u32 = 67;
@@ -13,10 +13,6 @@ const EVE: u64 = 5_091_005;
 const FRANK: u64 = 5_091_006;
 const GRACE: u64 = 5_091_007;
 const HORDE_TARGET: u64 = 5_091_008;
-
-fn actor(guid: u64) -> String {
-    format!(r#"{{"guid":{guid},"ownership":null}}"#)
-}
 
 fn gm_create(leader: u64, leader_name: &str, name: &str) -> String {
     format!(
@@ -57,19 +53,6 @@ fn set_leader(target: u64) -> String {
     format!(r#"{{"setLeader":{target}}}"#)
 }
 
-fn refused(realm: &Standalone, args: &[&str], tag: &str) {
-    let result = realm.call("realm_guild_op", args);
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        !result.status.success() && output.contains(tag),
-        "expected {tag}: {output}"
-    );
-}
-
 fn member_row(realm: &Standalone, guid: u64) -> Option<std::collections::BTreeMap<String, String>> {
     let rows = realm.query_rows(&format!(
         "SELECT * FROM game_guild_member WHERE character_guid = {guid}"
@@ -97,7 +80,7 @@ fn invite_and_accept_phase(realm: &Standalone, guild_id: &str) {
     assert_eq!(invites[0]["guild_id"], guild_id);
     assert_eq!(invites[0]["inviter_guid"], LEADER.to_string());
 
-    refused(
+    guild_op_refused(
         realm,
         &[
             &actor(LEADER),
@@ -106,7 +89,7 @@ fn invite_and_accept_phase(realm: &Standalone, guild_id: &str) {
         "guild:already_invited",
     );
 
-    refused(
+    guild_op_refused(
         realm,
         &[
             &actor(LEADER),
@@ -147,13 +130,13 @@ fn invite_and_accept_phase(realm: &Standalone, guild_id: &str) {
         ))
         .is_empty());
 
-    refused(
+    guild_op_refused(
         realm,
         &[&actor(BOB), &accept("Bob", TEAM_ALLIANCE)],
         "guild:no_pending_invite",
     );
 
-    refused(
+    guild_op_refused(
         realm,
         &[
             &actor(LEADER),
@@ -211,7 +194,7 @@ fn promote_and_demote_phase(realm: &Standalone) {
     realm.assert_call("realm_guild_op", &[&actor(LEADER), &promote(BOB)]);
     realm.assert_call("realm_guild_op", &[&actor(LEADER), &promote(DAVE)]);
     realm.assert_call("realm_guild_op", &[&actor(LEADER), &promote(DAVE)]);
-    refused(realm, &[&actor(BOB), &promote(DAVE)], "guild:rank_too_high");
+    guild_op_refused(realm, &[&actor(BOB), &promote(DAVE)], "guild:rank_too_high");
 
     realm.assert_call("realm_guild_op", &[&actor(LEADER), &demote(BOB)]);
     realm.assert_call("realm_guild_op", &[&actor(LEADER), &demote(BOB)]);
@@ -220,7 +203,7 @@ fn promote_and_demote_phase(realm: &Standalone) {
     realm.assert_call("realm_guild_op", &[&actor(LEADER), &demote(DAVE)]);
     realm.assert_call("realm_guild_op", &[&actor(LEADER), &demote(DAVE)]);
 
-    refused(
+    guild_op_refused(
         realm,
         &[&actor(LEADER), &demote(DAVE)],
         "guild:rank_too_low",
@@ -228,12 +211,12 @@ fn promote_and_demote_phase(realm: &Standalone) {
 }
 
 fn remove_and_set_leader_phase(realm: &Standalone, guild_id: &str) {
-    refused(realm, &[&actor(BOB), &remove(DAVE)], "guild:no_permission");
+    guild_op_refused(realm, &[&actor(BOB), &remove(DAVE)], "guild:no_permission");
 
     realm.assert_call("realm_guild_op", &[&actor(LEADER), &remove(DAVE)]);
     assert!(member_row(realm, DAVE).is_none());
 
-    refused(
+    guild_op_refused(
         realm,
         &[&actor(LEADER), &remove(LEADER)],
         "guild:leader_cannot_leave",
@@ -251,7 +234,7 @@ fn remove_and_set_leader_phase(realm: &Standalone, guild_id: &str) {
 }
 
 fn disband_phase(realm: &Standalone, guild_id: &str) {
-    refused(realm, &[&actor(LEADER), DISBAND], "guild:not_leader");
+    guild_op_refused(realm, &[&actor(LEADER), DISBAND], "guild:not_leader");
 
     realm.assert_call(
         "realm_guild_op",
@@ -353,7 +336,7 @@ fn leave_disbands_a_lone_leader_and_refuses_a_leader_with_company() {
         "realm_guild_op",
         &[&actor(GRACE), &accept("Grace", TEAM_ALLIANCE)],
     );
-    refused(&realm, &[&actor(FRANK), LEAVE], "guild:leader_cannot_leave");
+    guild_op_refused(&realm, &[&actor(FRANK), LEAVE], "guild:leader_cannot_leave");
     assert!(!realm
         .query_rows("SELECT * FROM game_guild WHERE name = 'Company Guild'")
         .is_empty());

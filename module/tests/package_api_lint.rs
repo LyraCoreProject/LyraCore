@@ -9,14 +9,22 @@ fn manifest_dir() -> PathBuf {
 }
 
 fn contract() -> Contract {
-    Contract::read(&manifest_dir().join("src/tables.rs"))
+    let hand_catalog =
+        std::fs::read_to_string(manifest_dir().join("src/tables.rs")).expect("read src/tables.rs");
+    Contract::from_catalog(&format!(
+        "{hand_catalog}{}",
+        include_str!(concat!(env!("OUT_DIR"), "/table_catalog.rs"))
+    ))
 }
 
 #[test]
 fn the_documented_version_and_roots_match_the_lint() {
     let document = std::fs::read_to_string(manifest_dir().join("../docs/package-api.md"))
         .expect("read the Package API contract");
-    assert_eq!(document.lines().next(), Some("# Package API, version 5"));
+    assert_eq!(
+        document.lines().next(),
+        Some(format!("# Package API, version {}", package_api::VERSION).as_str())
+    );
     let roots = document
         .split_once("### Module roots")
         .expect("the contract documents Module roots")
@@ -194,7 +202,10 @@ fn the_fixture_inventory_reports_each_finding_with_its_location() {
     let fixtures = manifest_dir().join("tests/package_api/fixtures");
     let diagnostics = check_inventory(&contract(), &fixtures).expect_err("denied has findings");
     let lines: Vec<String> = diagnostics.iter().map(Diagnostic::to_string).collect();
-    let outside = "outside Package API version 4 (docs/package-api.md).";
+    let outside = format!(
+        "outside Package API version {} (docs/package-api.md).",
+        package_api::VERSION
+    );
     let any_root = "Name a path under `crate::actor`, `crate::hooks`, `crate::package`, \
                     `crate::tables`, `crate::script_binding`, or write `// package-api: exempt \
                     <reason>` on that line and raise the gap with the maintainers.";
@@ -245,7 +256,7 @@ fn the_fixture_inventory_reports_each_finding_with_its_location() {
 }
 
 #[test]
-fn version_3_roots_tables_markers_and_generated_roots_are_allowed() {
+fn package_api_roots_tables_markers_and_generated_roots_are_allowed() {
     let source = "use crate::actor::movement::route_step;\n\
                   use crate::tables::{game_spell, Spell};\n\
                   use crate::tables::{game_character, Character, PartyPartitionState};\n\
@@ -261,7 +272,7 @@ fn version_3_roots_tables_markers_and_generated_roots_are_allowed() {
 }
 
 #[test]
-fn a_removed_family_root_names_its_version_3_replacement() {
+fn a_removed_family_root_names_its_replacement() {
     let diagnostics = diagnostics_at(
         "mod.rs",
         "let cast = crate::spell::pending_cast(ctx, guid);\n\

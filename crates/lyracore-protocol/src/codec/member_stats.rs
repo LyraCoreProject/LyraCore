@@ -326,11 +326,6 @@ impl MemberStatsPacket {
     }
 }
 
-fn push_cstr(body: &mut Vec<u8>, s: &str) {
-    body.extend_from_slice(s.as_bytes());
-    body.push(0);
-}
-
 fn positive_dirty_mask(
     previous: Option<&[u16; POSITIVE_AURA_SLOTS]>,
     current: &[u16; POSITIVE_AURA_SLOTS],
@@ -436,7 +431,7 @@ pub fn build_member_stats(
         body.extend_from_slice(&stats.pet.guid.to_le_bytes());
     }
     if mask.contains(GroupUpdateMask::PET_NAME) {
-        push_cstr(&mut body, &stats.pet.name);
+        super::push_cstr(&mut body, &stats.pet.name);
     }
     if mask.contains(GroupUpdateMask::PET_MODEL_ID) {
         body.extend_from_slice(&stats.pet.model_id.to_le_bytes());

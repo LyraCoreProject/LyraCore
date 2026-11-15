@@ -1,7 +1,13 @@
-use super::*;
+use anyhow::{anyhow, Result};
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::{
-    UnitStandState, SMSG_CHARACTER_LOGIN_FAILED, SMSG_CHAR_RENAME, SMSG_STANDSTATE_UPDATE,
+    Area, Character, CharacterFlags, CharacterGear, Class, CreatureFamily, Gender, Level,
+    LogoutResult, LogoutSpeed, Map, Race, UnitStandState, Vector3d, WorldResult,
+    SMSG_CHARACTER_LOGIN_FAILED, SMSG_CHAR_CREATE, SMSG_CHAR_DELETE, SMSG_CHAR_ENUM,
+    SMSG_CHAR_RENAME, SMSG_INSPECT, SMSG_LOGOUT_RESPONSE, SMSG_NAME_QUERY_RESPONSE,
+    SMSG_PLAYED_TIME, SMSG_STANDSTATE_UPDATE,
 };
+use wow_world_messages::Guid;
 
 #[derive(Clone, Debug, Default)]
 pub struct CharacterView {
@@ -360,6 +366,7 @@ pub fn build_played_time(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wow_world_messages::vanilla::{Class, Gender, Race, SMSG_CHAR_ENUM};
 
     use wow_world_messages::vanilla::ServerMessage;
 
@@ -538,6 +545,69 @@ mod tests {
         assert_eq!(
             msg.total_played_time, 100,
             "backward clock must not inflate the total"
+        );
+    }
+
+    #[test]
+    fn name_query_response_maps_seeded_warrior() {
+        let c = CharacterView {
+            guid: 1,
+            name: "Tester".into(),
+            race: 1,
+            class: 1,
+            gender: 0,
+            ..Default::default()
+        };
+        let r =
+            build_name_query_response(c.guid, c.name.clone(), c.race, c.gender, c.class).unwrap();
+        assert_eq!(r.guid.guid(), 1);
+        assert_eq!(r.character_name, "Tester");
+        assert!(r.realm_name.is_empty());
+        assert_eq!(r.race, Race::Human);
+        assert_eq!(r.class, Class::Warrior);
+        assert_eq!(r.gender, Gender::Male);
+    }
+
+    #[test]
+    fn char_enum_maps_seeded_warrior() {
+        let view = CharacterView {
+            guid: 1,
+            name: "Tester".into(),
+            race: 1,
+            class: 1,
+            gender: 0,
+            level: 1,
+            map_id: 0,
+            zone_id: 12,
+            ..Default::default()
+        };
+        let msg = build_char_enum(&[view]).unwrap();
+        assert_eq!(msg.characters.len(), 1);
+        assert_eq!(msg.characters[0].name, "Tester");
+        assert_eq!(msg.characters[0].guid.guid(), 1);
+    }
+
+    #[test]
+    fn char_enum_orders_the_characters_by_ascending_guid() {
+        let view = |guid: u64| CharacterView {
+            guid,
+            name: format!("Tester{guid}"),
+            race: 1,
+            class: 1,
+            level: 1,
+            ..Default::default()
+        };
+        let guids = |msg: &SMSG_CHAR_ENUM| -> Vec<u64> {
+            msg.characters.iter().map(|c| c.guid.guid()).collect()
+        };
+
+        assert_eq!(
+            guids(&build_char_enum(&[view(30), view(10), view(20)]).unwrap()),
+            vec![10, 20, 30]
+        );
+        assert_eq!(
+            guids(&build_char_enum(&[view(10), view(20), view(30)]).unwrap()),
+            vec![10, 20, 30]
         );
     }
 }

@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
+
+use lyracore_test_support::source_scan::files_under;
 
 use crate::test_scan::repo_root;
 
@@ -85,8 +87,16 @@ fn scanned_roots() -> Vec<(&'static str, Vec<PathBuf>)> {
             path.is_dir(),
             "the destructive-publish scan cannot find {dir}/, so it would pass by looking at nothing"
         );
-        let mut files = Vec::new();
-        collect_scripts(&path, &mut files);
+        let mut files = files_under(
+            &path,
+            &["target", "node_modules", ".venv", "__pycache__", ".git"],
+            &|path| {
+                matches!(
+                    path.extension().and_then(|e| e.to_str()),
+                    Some("sh") | Some("py")
+                )
+            },
+        );
         files.sort();
         out.push((*dir, files));
     }
@@ -95,29 +105,6 @@ fn scanned_roots() -> Vec<(&'static str, Vec<PathBuf>)> {
 
 fn scanned_scripts() -> Vec<PathBuf> {
     scanned_roots().into_iter().flat_map(|(_, f)| f).collect()
-}
-
-fn collect_scripts(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries =
-        std::fs::read_dir(dir).unwrap_or_else(|e| panic!("readable {}: {e}", dir.display()));
-    for entry in entries {
-        let path = entry.expect("readable dir entry").path();
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        if matches!(
-            name,
-            "target" | "node_modules" | ".venv" | "__pycache__" | ".git"
-        ) {
-            continue;
-        }
-        if path.is_dir() {
-            collect_scripts(&path, out);
-        } else if matches!(
-            path.extension().and_then(|e| e.to_str()),
-            Some("sh") | Some("py")
-        ) {
-            out.push(path);
-        }
-    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -267,8 +254,9 @@ mod tests {
     #[test]
     fn module_tables_have_unique_published_column_names() {
         let src_root = repo_root().join("module/src");
-        let mut rust_files = Vec::new();
-        collect_rust_files(&src_root, &mut rust_files);
+        let rust_files = files_under(&src_root, &[], &|path| {
+            path.extension().and_then(|e| e.to_str()) == Some("rs")
+        });
         assert!(
             rust_files.len() >= 50,
             "found only {} Rust files under module/src; the snake-case publish preflight is looking at the wrong tree",
@@ -314,19 +302,6 @@ mod tests {
         );
     }
 
-    fn collect_rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-        for entry in
-            std::fs::read_dir(dir).unwrap_or_else(|e| panic!("readable {}: {e}", dir.display()))
-        {
-            let path = entry.expect("readable dir entry").path();
-            if path.is_dir() {
-                collect_rust_files(&path, out);
-            } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
-                out.push(path);
-            }
-        }
-    }
-
     #[test]
     fn strip_shell_comment_drops_a_whole_line_comment() {
         assert_eq!(
@@ -341,8 +316,7 @@ mod tests {
         assert_eq!(
             strip_shell_comment(line).trim_end(),
             "spacetime publish --yes lyracore",
-            "the live half of a line carrying a trailing comment must survive; eating it would \
-             hide real publish invocations from the destructive-flag scan"
+            "the code before a trailing comment survives"
         );
     }
 
@@ -352,8 +326,7 @@ mod tests {
         assert_eq!(
             strip_shell_comment(line),
             line,
-            "a `#` inside a quoted string is literal text, not a comment. Truncating there would \
-             blind the scan to a destructive publish sitting later on the same line"
+            "a `#` inside a quoted string is not a comment"
         );
     }
 
@@ -399,15 +372,12 @@ spacetime publish -cy lyracore
         assert_eq!(
             lines,
             vec![5, 6, 7],
-            "the destructive-publish extractor must flag the bare `-c`, the `--clear-database` long \
-             form and the `-cy` short-flag bundle, and must flag NEITHER the safe wrapper \
-             invocation NOR the two comment/echo mentions. Got: {found:?}"
+            "flags bare `-c`, `--clear-database` and `-cy`, not the wrapper or the comment and echo mentions. Got: {found:?}"
         );
         assert_eq!(
             publish_lines(fixture),
             vec![3, 4, 5, 6, 7],
-            "the publish-line counter must see every non-comment publish mention (its job is to \
-             stop the real scan below from passing vacuously)"
+            "counts every non-comment publish mention"
         );
     }
 
@@ -422,9 +392,7 @@ spacetime publish -cy lyracore
                 .expect("scanned_roots only yields SCAN_ROOTS entries");
             assert!(
                 files.len() >= floor,
-                "found only {} shell/python file(s) under {dir}/ — expected at least {floor}. The \
-                 destructive-publish scan is looking at the wrong place, so its green result means \
-                 nothing and a `spacetime publish -c` could reach the deploy path unchallenged",
+                "found only {} shell/python file(s) under {dir}/, expected at least {floor}",
                 files.len()
             );
         }
@@ -448,14 +416,7 @@ spacetime publish -cy lyracore
         }
         assert!(
             violations.is_empty(),
-            "a destructive `spacetime publish` flag reached the repo's tooling:\n  {}\n\n\
-             `-c` / `--clear-database` CLEARS the database: every account, character, item, quest \
-             and reputation row is destroyed, and login stays broken afterwards until the operator \
-             identity is re-claimed. There is no undo and no backup in this deployment. Plain \
-             `spacetime publish` already auto-migrates an additive schema change, or aborts safely \
-             if it cannot. Publish through `./lyracore publish`. If publish refuses a \
-             genuinely breaking change, take the wipe as a deliberate operator decision typed by \
-             hand, never as a flag committed to a script. See docs/danger-zones.md §1.",
+            "a destructive `spacetime publish` flag reached the repo's tooling:\n  {}\nPublish through `./lyracore publish`; see docs/danger-zones.md §1.",
             violations.join("\n  "),
         );
     }

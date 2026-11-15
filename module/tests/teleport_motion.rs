@@ -108,7 +108,7 @@ fn sessionless_map_change_keeps_the_character_live_and_discards_previous_motion(
 
 fn move_to(standalone: &Standalone, x: f32, y: f32, move_time_ms: u32) {
     let args = [
-        support::actor(&CHARACTER_GUID.to_string()),
+        support::actor(CHARACTER_GUID),
         HEARTBEAT.to_string(),
         "[]".to_string(),
         x.to_string(),

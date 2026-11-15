@@ -1,13 +1,53 @@
 use anyhow::{anyhow, Result};
 use lyracore_protocol::{
-    codec,
+    codec::{self, *},
     messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
     world::Packet,
 };
+use spacetimedb::{ConnectionId, ReducerContext};
 
-fn message(value: ServerOpcodeMessage) -> Packet {
-    lyracore_protocol::world::encode(value)
-        .expect("bounded unavailable-service response fits a world frame")
+use super::bounded as message;
+
+/// Ignores an obsolete control or answers an unavailable service from the raw opcode, before any
+/// decode. Returns whether it did.
+pub(super) fn intercept(
+    ctx: &ReducerContext,
+    connection_id: ConnectionId,
+    opcode: u32,
+    body: &[u8],
+) -> Result<bool, String> {
+    if is_obsolete(opcode) {
+        return Ok(true);
+    }
+    let Some(packets) = raw_responses(opcode, body).map_err(|error| error.to_string())? else {
+        return Ok(false);
+    };
+    for packet in packets {
+        super::send_raw(ctx, connection_id, packet.opcode, packet.body, false);
+    }
+    Ok(true)
+}
+
+// Obsolete controls are discarded before readers inspect untrusted sizes, compressed data or enums.
+fn is_obsolete(opcode: u32) -> bool {
+    matches!(
+        opcode,
+        CMSG_WORLD_TELEPORT_OPCODE
+            | CMSG_TELEPORT_TO_UNIT_OPCODE
+            | CMSG_ZONE_MAP_OPCODE
+            | CMSG_UNDRESSPLAYER_OPCODE
+            | MSG_MOVE_TELEPORT_CHEAT_OPCODE
+            | MSG_MOVE_TOGGLE_COLLISION_CHEAT_OPCODE
+            | CMSG_MOVE_SET_RAW_POSITION_OPCODE
+            | CMSG_ZONEUPDATE_OPCODE
+            | CMSG_UPDATE_ACCOUNT_DATA_OPCODE
+            | CMSG_GM_REQUEST_PLAYER_INFO_OPCODE
+            | MSG_MOVE_TOGGLE_GRAVITY_CHEAT_OPCODE
+            | CMSG_MOVE_FALL_RESET_OPCODE
+            | CMSG_MINIGAME_MOVE_OPCODE
+            | CMSG_CHAT_FILTERED_OPCODE
+            | CMSG_LOTTERY_QUERY_OBSOLETE_OPCODE
+    )
 }
 
 fn word(opcode: u16, value: u32) -> Packet {
@@ -17,7 +57,7 @@ fn word(opcode: u16, value: u32) -> Packet {
     }
 }
 
-pub fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<Vec<Packet>> {
+pub(super) fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<Vec<Packet>> {
     let notice = match msg {
         ClientOpcodeMessage::CMSG_SET_ACTIONBAR_TOGGLES(_) => {
             Some((1, "Action bar visibility preferences"))
@@ -38,15 +78,19 @@ pub fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<Vec<Pack
         ClientOpcodeMessage::CMSG_TUTORIAL_FLAG(_) | ClientOpcodeMessage::CMSG_TUTORIAL_CLEAR => {
             return Some(vec![])
         }
-        ClientOpcodeMessage::CMSG_GMTICKET_SYSTEMSTATUS => word(0x021b, 0),
-        ClientOpcodeMessage::CMSG_GMTICKET_GETTICKET => word(0x0212, 10),
-        ClientOpcodeMessage::CMSG_GMTICKET_DELETETICKET => word(0x0218, 9),
+        ClientOpcodeMessage::CMSG_GMTICKET_SYSTEMSTATUS => {
+            word(SMSG_GMTICKET_SYSTEMSTATUS_OPCODE, 0)
+        }
+        ClientOpcodeMessage::CMSG_GMTICKET_GETTICKET => word(SMSG_GMTICKET_GETTICKET_OPCODE, 10),
+        ClientOpcodeMessage::CMSG_GMTICKET_DELETETICKET => {
+            word(SMSG_GMTICKET_DELETETICKET_OPCODE, 9)
+        }
         ClientOpcodeMessage::MSG_LIST_STABLED_PETS(_)
         | ClientOpcodeMessage::CMSG_STABLE_PET(_)
         | ClientOpcodeMessage::CMSG_UNSTABLE_PET(_)
         | ClientOpcodeMessage::CMSG_BUY_STABLE_SLOT(_)
         | ClientOpcodeMessage::CMSG_STABLE_SWAP_PET(_) => Packet {
-            opcode: 0x0273,
+            opcode: SMSG_STABLE_RESULT_OPCODE,
             body: vec![6],
         },
         ClientOpcodeMessage::CMSG_OPEN_ITEM(_) | ClientOpcodeMessage::CMSG_WRAP_ITEM(_) => {
@@ -63,7 +107,7 @@ pub fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<Vec<Pack
             body.extend_from_slice(&request.map.as_int().to_le_bytes());
             body.extend_from_slice(&[0; 5]);
             Packet {
-                opcode: 0x023d,
+                opcode: SMSG_BATTLEFIELD_LIST_OPCODE,
                 body,
             }
         }
@@ -75,11 +119,11 @@ pub fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<Vec<Pack
         | ClientOpcodeMessage::CMSG_AREA_SPIRIT_HEALER_QUERY(_)
         | ClientOpcodeMessage::CMSG_AREA_SPIRIT_HEALER_QUEUE(_) => unavailable("Battlegrounds"),
         ClientOpcodeMessage::MSG_PVP_LOG_DATA => Packet {
-            opcode: 0x02e0,
+            opcode: MSG_PVP_LOG_DATA_OPCODE,
             body: vec![0; 5],
         },
         ClientOpcodeMessage::MSG_BATTLEGROUND_PLAYER_POSITIONS => Packet {
-            opcode: 0x02e9,
+            opcode: MSG_BATTLEGROUND_PLAYER_POSITIONS_OPCODE,
             body: vec![0; 5],
         },
         ClientOpcodeMessage::CMSG_PET_SET_ACTION(_) => unavailable("Pet action bar changes"),
@@ -94,7 +138,7 @@ pub fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<Vec<Pack
             body.extend_from_slice(&[0x02, 0x17]);
             return Some(vec![
                 Packet {
-                    opcode: 0x0138,
+                    opcode: SMSG_PET_CAST_FAILED_OPCODE,
                     body,
                 },
                 unavailable("Pet spell casts"),
@@ -135,7 +179,7 @@ fn empty_battlefield_status() -> Vec<Packet> {
             let mut body = slot.to_le_bytes().to_vec();
             body.extend_from_slice(&0u32.to_le_bytes());
             Packet {
-                opcode: 0x02d4,
+                opcode: SMSG_BATTLEFIELD_STATUS_OPCODE,
                 body,
             }
         })
@@ -148,37 +192,37 @@ fn battlefield_refusal() -> Vec<Packet> {
     replies
 }
 
-pub fn raw_responses(opcode: u32, body: &[u8]) -> Result<Option<Vec<Packet>>> {
+fn raw_responses(opcode: u32, body: &[u8]) -> Result<Option<Vec<Packet>>> {
     match opcode {
-        0x0205 => {
+        CMSG_GMTICKET_CREATE_OPCODE => {
             anyhow::ensure!(body.len() >= 19, "short CMSG_GMTICKET_CREATE body");
             let tail = after_cstring(after_cstring(&body[17..])?)?;
             anyhow::ensure!(
                 tail.is_empty() || (body[0] == 2 && tail.len() >= 8),
                 "invalid CMSG_GMTICKET_CREATE transcript"
             );
-            Ok(Some(vec![word(0x0206, 3)]))
+            Ok(Some(vec![word(SMSG_GMTICKET_CREATE_OPCODE, 3)]))
         }
-        0x0207 => {
+        CMSG_GMTICKET_UPDATETEXT_OPCODE => {
             anyhow::ensure!(body.len() >= 2, "short CMSG_GMTICKET_UPDATETEXT body");
             anyhow::ensure!(
                 after_cstring(&body[1..])?.is_empty(),
                 "invalid CMSG_GMTICKET_UPDATETEXT body"
             );
-            Ok(Some(vec![word(0x0208, 5)]))
+            Ok(Some(vec![word(SMSG_GMTICKET_UPDATETEXT_OPCODE, 5)]))
         }
-        0x023e => {
+        CMSG_BATTLEFIELD_JOIN_OPCODE => {
             anyhow::ensure!(
                 body.len() == 9 && body[8] <= 1,
                 "invalid CMSG_BATTLEFIELD_JOIN body"
             );
             Ok(Some(battlefield_refusal()))
         }
-        0x00f9 => {
+        CMSG_OPENING_CINEMATIC_OPCODE => {
             anyhow::ensure!(body.is_empty(), "invalid CMSG_OPENING_CINEMATIC body");
             Ok(Some(vec![unavailable("Opening cinematics")]))
         }
-        0x0200 => {
+        CMSG_SET_LOOKING_FOR_GROUP_OPCODE => {
             anyhow::ensure!(
                 body.len() >= 13
                     && body.last() == Some(&0)
@@ -188,16 +232,16 @@ pub fn raw_responses(opcode: u32, body: &[u8]) -> Result<Option<Vec<Packet>>> {
             std::str::from_utf8(&body[12..body.len() - 1])?;
             Ok(Some(vec![unavailable("Looking-for-group preferences")]))
         }
-        0x0312 => {
+        CMSG_ACTIVATETAXIEXPRESS_OPCODE => {
             anyhow::ensure!(body.len() >= 16, "short CMSG_ACTIVATETAXIEXPRESS body");
             let count = u32::from_le_bytes(body[12..16].try_into()?);
             anyhow::ensure!(
                 u64::from(count) * 4 + 16 == body.len() as u64,
                 "invalid CMSG_ACTIVATETAXIEXPRESS node count"
             );
-            Ok(Some(vec![word(0x01ae, 1)]))
+            Ok(Some(vec![word(SMSG_ACTIVATETAXIREPLY_OPCODE, 1)]))
         }
-        0x0317 => {
+        CMSG_SET_FACTION_INACTIVE_OPCODE => {
             anyhow::ensure!(
                 body.len() == 5 && body[4] <= 1,
                 "invalid CMSG_SET_FACTION_INACTIVE body"
@@ -205,8 +249,12 @@ pub fn raw_responses(opcode: u32, body: &[u8]) -> Result<Option<Vec<Packet>>> {
             Ok(Some(vec![unavailable("Reputation display preferences")]))
         }
         // Unhandled in vmangos and cmangos: ground-item and loot-slot stores, skill-point purchases, lottery.
-        0x0107 | 0x0109 | 0x021f | 0x0220 | 0x0336 => Ok(Some(vec![])),
-        0x005a => {
+        CMSG_AUTOSTORE_GROUND_ITEM_OPCODE
+        | CMSG_STORE_LOOT_IN_SLOT_OPCODE
+        | CMSG_SKILL_BUY_STEP_OPCODE
+        | CMSG_SKILL_BUY_RANK_OPCODE
+        | CMSG_BUY_LOTTERY_TICKET_OBSOLETE_OPCODE => Ok(Some(vec![])),
+        CMSG_PAGE_TEXT_QUERY_OPCODE => {
             anyhow::ensure!(body.len() == 12, "invalid CMSG_PAGE_TEXT_QUERY body");
             Ok(Some(vec![page_unavailable(u32::from_le_bytes(
                 body[..4].try_into()?,
@@ -230,15 +278,17 @@ fn page_unavailable(page_id: u32) -> Packet {
     body.extend_from_slice(b"Page text is not available on this realm.\0");
     body.extend_from_slice(&0u32.to_le_bytes());
     Packet {
-        opcode: 0x005b,
+        opcode: SMSG_PAGE_TEXT_QUERY_RESPONSE_OPCODE,
         body,
     }
 }
 
-pub fn is_control_receipt(msg: &ClientOpcodeMessage) -> bool {
+/// In-world requests the Realm accepts without an answer.
+pub(super) fn is_ignored(msg: &ClientOpcodeMessage) -> bool {
     matches!(
         msg,
         ClientOpcodeMessage::MSG_MOVE_TELEPORT_ACK(_)
+            | ClientOpcodeMessage::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(_)
             | ClientOpcodeMessage::CMSG_FORCE_RUN_BACK_SPEED_CHANGE_ACK(_)
             | ClientOpcodeMessage::CMSG_FORCE_SWIM_SPEED_CHANGE_ACK(_)
             | ClientOpcodeMessage::CMSG_MOVE_KNOCK_BACK_ACK(_)
@@ -252,5 +302,7 @@ pub fn is_control_receipt(msg: &ClientOpcodeMessage) -> bool {
             | ClientOpcodeMessage::CMSG_MOVE_NOT_ACTIVE_MOVER(_)
             | ClientOpcodeMessage::CMSG_NEXT_CINEMATIC_CAMERA
             | ClientOpcodeMessage::CMSG_COMPLETE_CINEMATIC
+            | ClientOpcodeMessage::CMSG_CANCEL_GROWTH_AURA
+            | ClientOpcodeMessage::CMSG_REQUEST_PET_INFO
     )
 }

@@ -5,9 +5,9 @@ use crate::{game_creature_spawn, game_creature_template};
 use lyracore_shared::quest::QUEST_TYPE_RAID;
 
 const CHOICE_FIXTURE_PLAYER: u64 = 1;
-const CHOICE_FIXTURE_GIVER: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) | 0x00FF_FF00;
+const CHOICE_FIXTURE_GIVER: u64 = lyracore_shared::guid::creature(620, 0x00FF_FF00);
 const CHOICE_FIXTURE_GIVER_ENTRY: u32 = 620;
-const CHOICE_FIXTURE_GIVER_SOURCE: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) | 1;
+const CHOICE_FIXTURE_GIVER_SOURCE: u64 = lyracore_shared::guid::creature(620, 1);
 const CHOICE_FIXTURE_QUEST: u32 = 509_033;
 const CHOICE_FIXTURE_OBJECTIVE_ITEM: u32 = 5_090_330;
 const CHOICE_FIXTURE_CHOICE_0: u32 = 5_090_331;
@@ -33,6 +33,7 @@ pub fn debug_stage_choice_reward_fixture(
         .ok_or_else(|| "choice fixture giver source is not live".to_string())?;
     crate::WorldEntity::delete(ctx, CHOICE_FIXTURE_GIVER);
     giver.guid = CHOICE_FIXTURE_GIVER;
+    giver.npc_flags |= lyracore_shared::constants::npc_flags::QUESTGIVER;
     giver.map_id = player.map_id;
     giver.instance_id = player.instance_id;
     giver
@@ -320,7 +321,7 @@ const EVENTAI_CREDIT_FIXTURE_PLAYER: u64 = 1;
 const EVENTAI_CREDIT_FIXTURE_MEMBER: u64 = 509_296_001;
 const EVENTAI_CREDIT_FIXTURE_DISTANT_MEMBER: u64 = 509_296_002;
 const EVENTAI_CREDIT_FIXTURE_BENEFICIARY: u64 = 509_296_003;
-const EVENTAI_CREDIT_FIXTURE_SOURCE: u64 = (0xF130_u64 << 48) | ((620_u64) << 24) | 1;
+const EVENTAI_CREDIT_FIXTURE_SOURCE: u64 = lyracore_shared::guid::creature(620, 1);
 const EVENTAI_CREDIT_FIXTURE_GROUP: u64 = 509_296;
 const EVENTAI_CREDIT_FIXTURE_CREATURE: u32 = 509_296;
 const EVENTAI_CREDIT_FIXTURE_OTHER_CREATURE: u32 = 509_297;
@@ -878,8 +879,8 @@ const RQC_TRIGGER_ID: u32 = 509_299;
 const RQC_ITEM_NORMAL: u32 = 509_300;
 const RQC_ITEM_RAID: u32 = 509_301;
 const RQC_CAST_SPELL: u32 = 509_302;
-const RQC_WOLF_TEMPLATE: u32 = 51_000;
-const RQC_WOLF_GUID: u64 = (0xF130_u64 << 48) | ((RQC_WOLF_TEMPLATE as u64) << 24) | 509_297;
+const RQC_WOLF_TEMPLATE: u32 = lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+const RQC_WOLF_GUID: u64 = lyracore_shared::guid::creature(RQC_WOLF_TEMPLATE, 509_297);
 
 fn rqc_progress(
     ctx: &ReducerContext,
@@ -1219,22 +1220,14 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         .entry()
         .find(RQC_WOLF_TEMPLATE)
         .ok_or_else(|| "the seeded Test Wolf template is missing".to_string())?;
-    let spawn = crate::CreatureSpawn {
-        guid: RQC_WOLF_GUID,
-        entry: RQC_WOLF_TEMPLATE,
-        map_id: player.map_id,
-        x: player.x + 2.0,
-        y: player.y,
-        z: player.z,
-        orientation: player.orientation,
-        respawn_at: crate::creatures::timer_never(ctx),
-        despawn_at: crate::creatures::timer_never(ctx),
-        movement_type: crate::creatures::MOVEMENT_IDLE,
-        respawn_secs: 0,
-        life_seq: 0,
-        source_guid: 0,
-        instance_id: player.instance_id,
-    };
+    let spawn = crate::CreatureSpawn::temporary(
+        ctx,
+        RQC_WOLF_GUID,
+        RQC_WOLF_TEMPLATE,
+        player.map_id,
+        player.instance_id,
+        [player.x + 2.0, player.y, player.z, player.orientation],
+    );
     let wolf_entity =
         crate::creatures::build_creature_entity(ctx, &spawn, &wolf_template, 0, player.instance_id);
     ctx.db.game_creature_spawn().insert(spawn);

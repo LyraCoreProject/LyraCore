@@ -1,14 +1,15 @@
 mod support;
 
+use lyracore_shared::guid;
 use serde_json::{json, Value};
 use support::{number, poll_until, Standalone, POLL_TIMEOUT};
 
 const CHICKEN_ENTRY: u32 = 620;
-const CHICKEN: u64 = (0xF130_u64 << 48) | ((CHICKEN_ENTRY as u64) << 24) | 1;
-const CHEST: u64 = (0xF110_u64 << 48) | 1;
+const CHICKEN: u64 = guid::creature(CHICKEN_ENTRY, 1);
+const CHEST: u64 = guid::compose(guid::GAMEOBJECT, 1);
 const FIRST_OPERATOR_CHICKEN: u64 =
     (0xF130_u64 << 48) | ((CHICKEN_ENTRY as u64) << 24) | 14_000_000;
-const FIRST_OPERATOR_GAMEOBJECT: u64 = (0xF110_u64 << 48) | 14_000_000;
+const FIRST_OPERATOR_GAMEOBJECT: u64 = guid::compose(guid::GAMEOBJECT, 14_000_000);
 
 fn realm(test_name: &str) -> Standalone {
     let mut shard = Standalone::start(test_name);
@@ -267,7 +268,7 @@ fn spawn_edits_refuse_bad_targets_and_bad_input() {
         (
             "operator_update_creature_spawn",
             vec![
-                (((0xF130_u64 << 48) | ((CHICKEN_ENTRY as u64) << 24)) | 15_000_000).to_string(),
+                guid::creature(CHICKEN_ENTRY, 15_000_000).to_string(),
                 good.clone(),
             ],
             "Package Creature Range",
@@ -412,7 +413,7 @@ fn an_instance_copy_skips_the_guid_of_a_dormant_operator_spawn() {
         FIRST_OPERATOR_CHICKEN
     )
     .is_some()));
-    shard.assert_sql("INSERT INTO game_creature_spawn_map (map_id) VALUES (36)");
+    shard.insert_row("game_creature_spawn_map", &[("map_id", &36)]);
     shard.assert_call(
         "operator_create_creature_spawn",
         &[
@@ -441,10 +442,10 @@ fn an_instance_copy_skips_the_guid_of_a_dormant_operator_spawn() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_population_member_can_move_but_not_be_deleted() {
     let shard = realm("operator-content-population-member");
-    shard.assert_sql(&format!(
-        "INSERT INTO game_creature_population_member (source_guid, population_id, entry, \
-         choices, chance_bp, event_ids) VALUES ({CHICKEN}, 7, 0, '', 0, '')"
-    ));
+    shard.insert_row(
+        "game_creature_population_member",
+        &[("source_guid", &CHICKEN), ("population_id", &7)],
+    );
     let text = refusal(
         &shard,
         "operator_delete_creature_spawn",

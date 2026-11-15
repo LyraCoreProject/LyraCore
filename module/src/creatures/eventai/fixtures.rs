@@ -1,12 +1,13 @@
+use crate::{CreatureAiBroadcastText, CreatureAiDefinition};
 use std::collections::{BTreeMap, HashSet};
 
 use spacetimedb::{ReducerContext, Table};
 
 use super::{
-    normalized_revision, CastInstruction, CreatureAiBroadcastText, CreatureAiDefinition,
-    CreatureInstruction, EventAiRule, EventAiSubject, EventCondition, ExecutionPolicy,
-    InstructionSelection, InstructionTarget, PhaseSet, PostureAdmission, RecurrencePolicy,
-    SpeakInstruction, SpeechMode, SpellCasterRole, SpellStartMode, SpellTargetRole, TimeWindow,
+    normalized_revision, CastInstruction, CreatureInstruction, EventAiRule, EventAiSubject,
+    EventCondition, ExecutionPolicy, InstructionSelection, InstructionTarget, PhaseSet,
+    PostureAdmission, RecurrencePolicy, SpeakInstruction, SpeechMode, SpellCasterRole,
+    SpellStartMode, SpellTargetRole, TimeWindow,
 };
 use crate::{
     game_creature_ai_broadcast_text, game_creature_ai_definition, game_creature_ai_rule_state,
@@ -152,22 +153,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_seeded_entry_is_cleared_whoever_wrote_its_definition() {
-        assert!(is_seeded_entry(644));
-        for (entry, ..) in BARKS {
-            assert!(is_seeded_entry(entry));
-        }
-        for (entry, ..) in BOSS_CASTS {
-            assert!(is_seeded_entry(entry));
-        }
-        assert!(!is_seeded_entry(1));
-    }
-
-    #[test]
     fn fixture_rule_ids_stay_in_the_reserved_catalogue() {
+        use lyracore_package_delta::ids::{FIXTURE_RESERVED_ID_CEIL, FIXTURE_RESERVED_ID_FLOOR};
+        let reserved = u64::from(FIXTURE_RESERVED_ID_FLOOR)..=u64::from(FIXTURE_RESERVED_ID_CEIL);
         for id in FIRST_RULE_ID..=FIRST_RULE_ID + 8 {
-            assert!((5_090_000..=5_099_999).contains(&id));
+            assert!(reserved.contains(&id));
         }
-        assert!((5_090_000..=5_099_999).contains(&u64::from(FIRST_TEXT_ID)));
+        assert!(reserved.contains(&u64::from(FIRST_TEXT_ID)));
     }
 }

@@ -81,7 +81,7 @@ pub fn debug_encounter_equip(
     ranged: u32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    crate::encounter::equip_swap(ctx, creature_guid, main_hand, off_hand, ranged)
+    crate::creatures::presentation::equip_swap(ctx, creature_guid, main_hand, off_hand, ranged)
 }
 
 #[reducer]
@@ -94,7 +94,7 @@ pub fn debug_encounter_move(
     run: bool,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    crate::encounter::move_to_point(ctx, creature_guid, x, y, z, run)
+    crate::creatures::leg::move_to_point(ctx, creature_guid, x, y, z, run)
 }
 
 #[reducer]

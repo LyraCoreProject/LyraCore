@@ -35,6 +35,8 @@ pub struct NativeHandoff {
     pub transfer_source: Option<Identity>,
 }
 
+crate::outside_table_catalog!(game_native_handoff);
+
 pub(super) fn write_marker(ctx: &ReducerContext, connection_id: ConnectionId, database: Identity) {
     ctx.db.game_native_packet().insert(super::NativePacket {
         id: 0,
@@ -104,9 +106,9 @@ pub fn native_world_adopt(ctx: &ReducerContext) -> Result<(), String> {
             account.id,
             guid,
             if handoff.world_port {
-                crate::world::WorldEntry::WorldPort
+                crate::character::WorldEntry::WorldPort
             } else {
-                crate::world::WorldEntry::Login
+                crate::character::WorldEntry::Login
             },
             handoff.teleport_counter,
         ),

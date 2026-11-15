@@ -1,4 +1,4 @@
-use spacetimedb::{table, ReducerContext, Table, TimeDuration};
+use spacetimedb::{ReducerContext, Table, TimeDuration};
 
 use crate::{
     game_aura, game_creature_spawn, game_creature_template, game_threat, game_world_entity,
@@ -6,25 +6,9 @@ use crate::{
 };
 
 pub(crate) const RESPAWN_MICROS: i64 = 15_000_000;
-pub(crate) const CORPSE_DECAY_MICROS: i64 = 60_000_000;
 
 pub(crate) const DRAIN_SOUL_SPELL_ID: u32 = 1120;
 pub(crate) const SOUL_SHARD_ENTRY: u32 = 6265;
-
-#[table(accessor = game_creature_lethal_damage_floor)]
-pub struct CreatureLethalDamageFloor {
-    #[primary_key]
-    #[unique]
-    pub creature_guid: u64,
-    pub definition_revision: u64,
-    pub notification_sent: bool,
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct FinalDamage {
-    pub amount: u32,
-    lethal_prevented: bool,
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct CreatureDeathAttribution {
@@ -48,61 +32,6 @@ impl CreatureDeathAttribution {
     }
 }
 
-pub(crate) fn set_lethal_damage_floor(
-    ctx: &ReducerContext,
-    creature_guid: u64,
-    definition_revision: u64,
-    enabled: bool,
-) -> bool {
-    let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
-        return false;
-    };
-    if creature.is_player() || creature.dead {
-        return false;
-    }
-    let floors = ctx.db.game_creature_lethal_damage_floor();
-    if !enabled {
-        floors.creature_guid().delete(creature_guid);
-        return true;
-    }
-    let row = CreatureLethalDamageFloor {
-        creature_guid,
-        definition_revision,
-        notification_sent: false,
-    };
-    match floors.creature_guid().find(creature_guid) {
-        Some(_) => {
-            floors.creature_guid().update(row);
-        }
-        None => {
-            floors.insert(row);
-        }
-    }
-    true
-}
-
-pub(crate) fn clear_lethal_damage_floor(ctx: &ReducerContext, creature_guid: u64) {
-    ctx.db
-        .game_creature_lethal_damage_floor()
-        .creature_guid()
-        .delete(creature_guid);
-}
-
-pub(crate) fn clear_stale_lethal_damage_floor(
-    ctx: &ReducerContext,
-    creature_guid: u64,
-    current_revision: u64,
-) {
-    let floors = ctx.db.game_creature_lethal_damage_floor();
-    if floors
-        .creature_guid()
-        .find(creature_guid)
-        .is_some_and(|row| row.definition_revision != current_revision)
-    {
-        floors.creature_guid().delete(creature_guid);
-    }
-}
-
 pub(crate) fn force_creature_death(ctx: &ReducerContext, creature_guid: u64) -> bool {
     kill_creature_with_attribution(
         ctx,
@@ -111,81 +40,26 @@ pub(crate) fn force_creature_death(ctx: &ReducerContext, creature_guid: u64) -> 
     )
 }
 
-pub(crate) fn final_damage(
-    ctx: &ReducerContext,
-    target_guid: u64,
-    post_mitigation: u32,
-) -> FinalDamage {
-    let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) else {
-        return FinalDamage {
-            amount: post_mitigation,
-            lethal_prevented: false,
-        };
-    };
-    lethal_floor_amount(
-        target.health,
-        post_mitigation,
-        lethal_floor_protects(ctx, target_guid),
-    )
-}
-
-pub(crate) fn lethal_floor_protects(ctx: &ReducerContext, target_guid: u64) -> bool {
-    let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) else {
-        return false;
-    };
-    let floors = ctx.db.game_creature_lethal_damage_floor();
-    !target.is_player()
-        && !target.dead
-        && floors.creature_guid().find(target_guid).is_some_and(|row| {
-            let current = crate::creatures::current_definition_revision(ctx, target_guid);
-            if row.definition_revision == current.value {
-                true
-            } else {
-                floors.creature_guid().delete(target_guid);
-                false
-            }
-        })
-}
-
-fn lethal_floor_amount(health: u32, post_mitigation: u32, protected: bool) -> FinalDamage {
-    let lethal_prevented = protected && is_lethal(health, post_mitigation);
-    FinalDamage {
-        amount: if lethal_prevented {
-            health.saturating_sub(1)
-        } else {
-            post_mitigation
-        },
-        lethal_prevented,
-    }
-}
-
-pub(crate) fn commit_death_prevention(
-    ctx: &ReducerContext,
-    creature_guid: u64,
-    attacker_guid: u64,
-) {
-    let floors = ctx.db.game_creature_lethal_damage_floor();
-    let Some(mut row) = floors.creature_guid().find(creature_guid) else {
-        return;
-    };
-    if row.notification_sent {
-        return;
-    }
-    row.notification_sent = true;
-    floors.creature_guid().update(row);
-    crate::hooks::fire_on_death_prevented(
-        ctx,
-        &crate::hooks::DeathPreventedPayload {
-            creature_guid,
-            attacker_guid,
-        },
-    );
-}
-
 use super::*;
 
 pub(crate) fn kill_creature(ctx: &ReducerContext, target_guid: u64, killer: Option<u64>) -> bool {
     kill_creature_with_attribution(ctx, target_guid, CreatureDeathAttribution::credited(killer))
+}
+
+pub(super) fn kill_creature_by(
+    ctx: &ReducerContext,
+    target_guid: u64,
+    source_guid: Option<u64>,
+    reward_guid: Option<u64>,
+) -> bool {
+    kill_creature_with_attribution(
+        ctx,
+        target_guid,
+        CreatureDeathAttribution {
+            source_guid,
+            reward_guid,
+        },
+    )
 }
 
 fn kill_creature_with_attribution(
@@ -222,10 +96,15 @@ fn kill_creature_with_attribution(
             },
         );
         crate::creatures::finish_death_dispatch(ctx, target_guid, killer);
-        crate::loot::tag::clear(ctx, target_guid);
+        if guardian {
+            crate::loot::tag::clear(ctx, target_guid);
+        } else {
+            // After the hooks: the teardown deletes the summon origin `OnSummonedDeath` reads.
+            crate::creatures::despawn_creature_entity(ctx, target_guid);
+        }
         return true;
     }
-    crate::creatures::tick::stop_where_rendered(ctx, &mut target);
+    crate::creatures::leg::stop(ctx, &mut target);
     let victim_entry = target.entry;
     let victim_level = target.level;
     let victim_instance = target.instance_id;
@@ -265,15 +144,16 @@ fn kill_creature_with_attribution(
     let spawns = ctx.db.game_creature_spawn();
     if let Some(mut spawn) = spawns.guid().find(target_guid) {
         spawn.despawn_at = crate::time::now(ctx)
-            .checked_add(TimeDuration::from_micros(CORPSE_DECAY_MICROS))
+            .checked_add(TimeDuration::from_micros(
+                crate::creatures::CREATURE_CORPSE_DECAY_MICROS,
+            ))
             .unwrap_or(crate::time::now(ctx));
         spawns.guid().update(spawn);
     }
     if let Some(killer_guid) = killer {
         if !is_engaged(ctx, killer_guid) {
             if let Some(mut k) = entities.guid().find(killer_guid) {
-                k.combat_until_ms =
-                    (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+                k.combat_until_ms = crate::time::now_ms(ctx);
                 k.update(ctx);
             }
         }
@@ -350,14 +230,27 @@ fn award_tag_rewards(
             .map(|character| character.level)
             .unwrap_or(0);
         let yields_xp = crate::xp::xp_for_kill(target.level, reward_level) > 0;
+        // vmangos `spell_chain` ranks Drain Soul from 1120; every rank grants the shard.
         let draining_soul = ctx
             .db
             .game_aura()
             .by_target()
             .filter(&target_guid)
-            .any(|a| a.spell_id == DRAIN_SOUL_SPELL_ID && a.caster_guid == reward_guid);
+            .any(|a| {
+                a.caster_guid == reward_guid
+                    && crate::spell::first_rank(ctx, a.spell_id) == DRAIN_SOUL_SPELL_ID
+            });
         if !is_critter && yields_xp && draining_soul {
-            let _ = crate::items::grant_item(ctx, reward_guid, SOUL_SHARD_ENTRY, 1);
+            if let Err(refusal) =
+                crate::items::request_grant_item(ctx, reward_guid, SOUL_SHARD_ENTRY, 1, None)
+            {
+                if refusal.kind != crate::actor::ActionRefusalKind::InventoryFull {
+                    spacetimedb::log::warn!(
+                        "soul shard for {reward_guid} after killing {target_guid} refused: {}",
+                        refusal.detail
+                    );
+                }
+            }
         }
     }
 }
@@ -410,8 +303,8 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     crate::duel::interrupt_duel_for(ctx, victim_guid);
     victim.health = 0;
     victim.dead = true;
-    victim.next_swing_spell = 0;
-    victim.combat_until_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+    super::queued_strike::forget(&mut victim);
+    victim.combat_until_ms = crate::time::now_ms(ctx);
     victim.update(ctx);
     let killer = (killer_guid != 0).then_some(killer_guid);
     crate::creatures::begin_death_dispatch(ctx, victim_guid, killer);
@@ -442,303 +335,14 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     true
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum HitSource {
-    MainHand,
-    OffHand,
-    Ranged,
-    MeleeSpell,
-    Spell,
-    Triggered,
-}
-
-impl HitSource {
-    pub(crate) fn is_weapon(self) -> bool {
-        matches!(self, Self::MainHand | Self::OffHand | Self::Ranged)
-    }
-}
-
-#[derive(Clone, Copy)]
-pub(crate) struct Hit {
-    pub source: HitSource,
-    pub spell_id: u32,
-    pub crit: bool,
-}
-
-impl Hit {
-    pub(crate) fn weapon(source: HitSource, crit: bool) -> Self {
-        Self {
-            source,
-            spell_id: 0,
-            crit,
-        }
-    }
-
-    pub(crate) fn spell(source: HitSource, spell_id: u32, crit: bool) -> Self {
-        Self {
-            source,
-            spell_id,
-            crit,
-        }
-    }
-
-    pub(crate) fn triggered() -> Self {
-        Self {
-            source: HitSource::Triggered,
-            spell_id: 0,
-            crit: false,
-        }
-    }
-}
-
-pub(crate) struct HitOutcome {
-    pub killed: bool,
-    pub duel_completed: bool,
-}
-
-impl HitOutcome {
-    pub(crate) fn combat_ended(self) -> bool {
-        self.killed || self.duel_completed
-    }
-}
-
-pub(crate) fn is_lethal(health: u32, dmg: u32) -> bool {
-    dmg > 0 && health <= dmg
-}
-
-/// A lethal hit between active Duel opponents ends the Duel instead: `apply_hit` floors the loser.
-pub(crate) fn duel_takes_lethal_hit(
-    ctx: &ReducerContext,
-    attacker_guid: u64,
-    target: &WorldEntity,
-) -> bool {
-    target.is_player() && crate::duel::active_opponents(ctx, attacker_guid, target.guid)
-}
-
-pub(crate) fn is_killing_blow(
-    ctx: &ReducerContext,
-    attacker_guid: u64,
-    target: &WorldEntity,
-    dmg: u32,
-) -> bool {
-    is_lethal(target.health, dmg) && !duel_takes_lethal_hit(ctx, attacker_guid, target)
-}
-
-// Absorb before lethal checks and godmode so even a zeroed hit drains shields.
-pub(crate) fn fold_incoming_damage(
-    ctx: &ReducerContext,
-    attacker_guid: u64,
-    target_guid: u64,
-    rolled: u32,
-) -> (u32, u32) {
-    let entities = ctx.db.game_world_entity();
-    let attacker_stance = entities
-        .guid()
-        .find(attacker_guid)
-        .map(|a| a.stance)
-        .unwrap_or(0);
-    let outgoing_pct = crate::spell::stance_damage_done_pct(attacker_stance)
-        + crate::spell::combat_field_bonus(ctx, attacker_guid, crate::spell::COMBAT_DMG_DONE);
-    let after_outgoing = crate::spell::apply_damage_pct(rolled, outgoing_pct);
-    let incoming = crate::spell::apply_damage_pct(
-        after_outgoing,
-        crate::spell::damage_taken_bonus(ctx, target_guid),
-    );
-    let dealt = crate::spell::absorb_incoming(ctx, target_guid, incoming);
-    let godmode = entities
-        .guid()
-        .find(target_guid)
-        .map(|t| t.godmode)
-        .unwrap_or(false);
-    let dealt = if godmode { 0 } else { dealt };
-    (dealt, incoming - dealt)
-}
-
-// vmangos rewards a Character taken rage for health lost to another unit, weapon or not.
-fn reward_taken_rage(target: &mut WorldEntity, attacker_guid: u64, health_before: u32) {
-    if attacker_guid != target.guid && target.is_player() && is_rage_user(target) {
-        let lost = health_before.saturating_sub(target.health);
-        target.power = (target.power + rage_from_damage(lost, false)).min(target.max_power);
-    }
-}
-
-pub(crate) fn apply_hit(
-    ctx: &ReducerContext,
-    attacker_guid: u64,
-    target_guid: u64,
-    damage: FinalDamage,
-    hit: Hit,
-) -> HitOutcome {
-    let miss = HitOutcome {
-        killed: false,
-        duel_completed: false,
-    };
-    let entities = ctx.db.game_world_entity();
-    let Some(mut target) = entities.guid().find(target_guid) else {
-        return miss;
-    };
-    if target.dead || (damage.amount == 0 && !damage.lethal_prevented) {
-        return miss;
-    }
-    let dmg = damage.amount;
-    let weapon = hit.source.is_weapon();
-    let attacker = entities.guid().find(attacker_guid);
-    if attacker
-        .as_ref()
-        .is_some_and(|attacker| !crate::combat::may_harm(ctx, attacker, &target))
-    {
-        return miss;
-    }
-    let attacker_is_player = attacker.as_ref().map(|a| a.is_player()).unwrap_or(false);
-    let reward_source = crate::loot::tag::controlling_character(ctx, attacker_guid);
-    let target_is_player = target.is_player();
-    if damage.lethal_prevented && dmg == 0 {
-        // A lethal floor still refreshes pursuit so the scripted fight cannot evade.
-        refresh_leash(ctx, attacker_guid, target_guid);
-        commit_death_prevention(ctx, target_guid, attacker_guid);
-        return miss;
-    }
-    if !target_is_player {
-        crate::loot::tag::record_first_threat(ctx, target_guid, attacker_guid);
-    }
-
-    if weapon {
-        if let Some(a) = &attacker {
-            // vmangos rewards dealt rage for white swings only, not for a queued strike.
-            if hit.spell_id == 0 && is_rage_user(a) {
-                if let Some(mut fresh) = entities.guid().find(attacker_guid) {
-                    fresh.power = (fresh.power + rage_from_damage(dmg, true)).min(fresh.max_power);
-                    fresh.update(ctx);
-                }
-            }
-            if attacker_is_player && !target_is_player {
-                crate::skill::gain_weapon_skill(ctx, a);
-            }
-        }
-    }
-
-    if is_lethal(target.health, dmg) && duel_takes_lethal_hit(ctx, attacker_guid, &target) {
-        let before = target.health;
-        target.health = 1;
-        reward_taken_rage(&mut target, attacker_guid, before);
-        target.update(ctx);
-        if let Some(duel) = crate::duel::active_duel_between(ctx, attacker_guid, target_guid) {
-            crate::duel::complete_duel(
-                ctx,
-                duel.id,
-                crate::duel::duel_completion_kind::WON,
-                attacker_guid,
-                target_guid,
-            );
-        }
-        crate::spell::proc::run_proc_pass(ctx, attacker_guid, target_guid, &hit, true);
-        return HitOutcome {
-            killed: false,
-            duel_completed: true,
-        };
-    }
-    let killed = is_lethal(target.health, dmg) && (weapon || !target_is_player);
-    if killed {
-        if target_is_player {
-            kill_player(ctx, target_guid, attacker_guid);
-        } else {
-            kill_creature_with_attribution(
-                ctx,
-                target_guid,
-                CreatureDeathAttribution {
-                    source_guid: attacker.as_ref().map(|_| attacker_guid),
-                    reward_guid: reward_source,
-                },
-            );
-        }
-        crate::spell::proc::run_proc_pass(ctx, attacker_guid, target_guid, &hit, false);
-        return HitOutcome {
-            killed: true,
-            duel_completed: false,
-        };
-    }
-    let accrues_threat = !target_is_player && reward_source.is_some();
-    if weapon && target_is_player {
-        crate::skill::gain_defense_skill(ctx, &target);
-    }
-    let before = target.health;
-    target.health = crate::spell::damaged_value(target.health, dmg as i32);
-    reward_taken_rage(&mut target, attacker_guid, before);
-    target.update(ctx);
-    if damage.lethal_prevented {
-        commit_death_prevention(ctx, target_guid, attacker_guid);
-    }
-    refresh_leash(ctx, attacker_guid, target_guid);
-    engage_passive_creature(ctx, target_guid, attacker_guid);
-    if !weapon {
-        enter_combat(ctx, target_guid);
-    }
-
-    crate::spell::break_auras_on_damage(
-        ctx,
-        target_guid,
-        if weapon { attacker_guid } else { 0 },
-        false,
-    );
-    if accrues_threat {
-        crate::threat::add_threat(
-            ctx,
-            target_guid,
-            attacker_guid,
-            crate::threat::threat_from_damage(dmg),
-        );
-        if !weapon {
-            crate::spell::arm_spell_retaliation(ctx, attacker_guid, target_guid);
-        }
-    }
-    crate::spell::proc::run_proc_pass(ctx, attacker_guid, target_guid, &hit, true);
-    HitOutcome {
-        killed: false,
-        duel_completed: false,
-    }
-}
-
-#[cfg(feature = "debug_reducers")]
-mod fixtures;
-
 #[cfg(test)]
-mod lethality_tests {
-    use super::{is_lethal, lethal_floor_amount, CreatureDeathAttribution, HitOutcome};
-
-    #[test]
-    fn a_zero_damage_hit_is_never_lethal() {
-        assert!(!is_lethal(1, 0));
-        assert!(!is_lethal(0, 0));
-    }
-
-    #[test]
-    fn a_hit_at_or_above_remaining_health_is_lethal() {
-        assert!(is_lethal(10, 10));
-        assert!(is_lethal(10, 11));
-        assert!(!is_lethal(10, 9));
-    }
-
-    #[test]
-    fn lethal_floor_changes_only_protected_lethal_damage() {
-        assert_eq!(lethal_floor_amount(10, 4, true).amount, 4);
-        assert_eq!(lethal_floor_amount(10, 10, false).amount, 10);
-        assert_eq!(lethal_floor_amount(10, 10, true).amount, 9);
-        assert_eq!(lethal_floor_amount(1, 20, true).amount, 0);
-    }
+mod tests {
+    use super::CreatureDeathAttribution;
 
     #[test]
     fn forced_death_names_self_without_granting_kill_rewards() {
         let attribution = CreatureDeathAttribution::suicide(77);
         assert_eq!(attribution.source_guid, Some(77));
         assert_eq!(attribution.reward_guid, None);
-    }
-
-    #[test]
-    fn duel_completion_is_a_combat_terminal_without_becoming_a_death() {
-        let outcome = HitOutcome {
-            killed: false,
-            duel_completed: true,
-        };
-        assert!(outcome.combat_ended());
     }
 }

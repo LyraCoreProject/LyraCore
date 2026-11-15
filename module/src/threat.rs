@@ -85,7 +85,8 @@ pub(crate) fn add_threat(ctx: &ReducerContext, creature_guid: u64, source_guid: 
         .map(|s| crate::spell::stance_threat_pct(s.stance))
         .unwrap_or(0);
     let threat_mult = (100
-        + crate::spell::combat_field_bonus(ctx, source_guid, crate::spell::COMBAT_THREAT) as i64
+        + crate::modifiers::combat_field_bonus(ctx, source_guid, crate::spell::COMBAT_THREAT)
+            as i64
         + source_stance as i64)
         .max(0);
     let amount = amount * threat_mult / 100;
@@ -147,23 +148,39 @@ pub(crate) fn threat_of(ctx: &ReducerContext, creature_guid: u64, source_guid: u
         .unwrap_or(0)
 }
 
-pub(crate) fn top_threat_target(ctx: &ReducerContext, creature_guid: u64) -> Option<u64> {
+/// Orders `(source_guid, threat)` pairs highest threat first; the lower guid wins a tie.
+pub(crate) fn rank(mut sources: Vec<(u64, i64)>) -> Vec<(u64, i64)> {
+    sources.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    sources
+}
+
+/// The creature's threat from living sources on its map and Instance, ranked.
+pub(crate) fn ranked(ctx: &ReducerContext, creature_guid: u64) -> Vec<(u64, i64)> {
     let entities = ctx.db.game_world_entity();
-    let creature = entities.guid().find(creature_guid)?;
-    let (creature_map, creature_instance) = (creature.map_id, creature.instance_id);
-    ctx.db
-        .game_threat()
-        .by_creature()
-        .filter(&creature_guid)
-        .filter_map(|r| {
-            let src = entities.guid().find(r.source_guid)?;
-            if src.dead || src.map_id != creature_map || src.instance_id != creature_instance {
-                return None;
-            }
-            Some((r.source_guid, r.threat))
-        })
-        .max_by(|a, b| a.1.cmp(&b.1).then(b.0.cmp(&a.0)))
-        .map(|(g, _)| g)
+    let Some(creature) = entities.guid().find(creature_guid) else {
+        return Vec::new();
+    };
+    rank(
+        ctx.db
+            .game_threat()
+            .by_creature()
+            .filter(&creature_guid)
+            .filter(|row| {
+                entities.guid().find(row.source_guid).is_some_and(|source| {
+                    !source.dead
+                        && (source.map_id, source.instance_id)
+                            == (creature.map_id, creature.instance_id)
+                })
+            })
+            .map(|row| (row.source_guid, row.threat))
+            .collect(),
+    )
+}
+
+pub(crate) fn top_threat_target(ctx: &ReducerContext, creature_guid: u64) -> Option<u64> {
+    ranked(ctx, creature_guid)
+        .first()
+        .map(|&(source, _)| source)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -178,40 +195,27 @@ pub(crate) fn party_threat_facts(
     party_guids: &std::collections::BTreeSet<u64>,
     limit: usize,
 ) -> Result<PartyThreatFacts, ()> {
-    let entities = ctx.db.game_world_entity();
-    let creature = entities.guid().find(creature_guid).ok_or(())?;
-    let rows: Vec<_> = ctx
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(creature_guid)
+        .ok_or(())?;
+    let rows = ctx
         .db
         .game_threat()
         .by_creature()
         .filter(&creature_guid)
         .take(limit.saturating_add(1))
-        .collect();
-    if rows.len() > limit {
+        .count();
+    if rows > limit {
         return Err(());
     }
-    let valid: Vec<_> = rows
-        .into_iter()
-        .filter(|row| {
-            entities.guid().find(row.source_guid).is_some_and(|source| {
-                !source.dead
-                    && (source.map_id, source.instance_id)
-                        == (creature.map_id, creature.instance_id)
-            })
-        })
-        .collect();
+    let ranked = ranked(ctx, creature_guid);
     Ok(PartyThreatFacts {
-        top_target_guid: valid
+        top_target_guid: ranked.first().map(|&(source, _)| source),
+        party_has_threat: ranked
             .iter()
-            .max_by(|a, b| {
-                a.threat
-                    .cmp(&b.threat)
-                    .then(b.source_guid.cmp(&a.source_guid))
-            })
-            .map(|row| row.source_guid),
-        party_has_threat: valid
-            .iter()
-            .any(|row| party_guids.contains(&row.source_guid)),
+            .any(|(source, _)| party_guids.contains(source)),
     })
 }
 
@@ -230,7 +234,7 @@ pub(crate) fn taunt(ctx: &ReducerContext, creature_guid: u64, source_guid: u64) 
     if current < target {
         add_threat(ctx, creature_guid, source_guid, target - current);
     }
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+    let now_ms = crate::time::now_ms(ctx);
     let locks = ctx.db.game_taunt_lock();
     let row = TauntLock {
         creature_guid,

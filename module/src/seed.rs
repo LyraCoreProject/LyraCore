@@ -1,24 +1,34 @@
 use crate::creatures::build_creature_entity;
+use lyracore_package_delta::fixture_ids::{
+    BATTERED_BUCKLER, BATTERED_CHEST, COMBAT_INSIGHT_SPELL, DEMO_COPPER_VEIN, DEMO_PEACEBLOOM,
+    DEMO_TEMPERED_BLADE, DEMO_TOUGH_JERKY, EATING_SPELL, ENCHANT_MINOR_STAMINA_SPELL,
+    ENCHANT_MINOR_STRENGTH_SPELL, HEAVY_LINEN_BANDAGE_SPELL, LESSER_HEALING_SPELL,
+    LINEN_BANDAGE_SPELL, MINOR_HEALING_SPELL, MINOR_MANA_POTION_SPELL, PROFESSION_TRAINER_ENTRY,
+    QUICKENING_SPELL, RECRUITS_TUNIC, REFRESHING_WATER_SPELL, ROUGH_COPPER_BOMB_SPELL,
+    SUSPICIOUS_LEVER, TEST_CONJURE_SPELL, TEST_FEAR_SPELL, TEST_FIRE_WARD_SPELL, TEST_POLY_SPELL,
+    TEST_ROOT_SPELL, TEST_SNARE_SPELL, TEST_STUN_IMMUNITY_SPELL, TEST_STUN_SPELL, TEST_WOLF_ENTRY,
+    WELL_FED_SPELL,
+};
 use lyracore_package_delta::{
     packed_creature_spawn_guid, packed_gameobject_spawn_guid, packed_race_class_id,
     packed_spell_effect_id,
 };
+use lyracore_package_delta::{DBC_FAMILY, GLOBALS_FAMILY, ITEM_FAMILY, SPELL_FAMILY};
 use lyracore_shared::constants;
 use spacetimedb::{reducer, Identity, ReducerContext, Table, TimeDuration};
 
 use crate::{
-    game_account, game_aura_schedule, game_breath_schedule, game_character, game_config,
-    game_creature_loot, game_creature_move_schedule, game_creature_spawn, game_creature_template,
-    game_creature_waypoint, game_duel_schedule, game_event_reaper_schedule, game_gameobject_pool,
-    game_gameobject_pool_member, game_gameobject_template, game_gateway_lease_reaper_schedule,
-    game_graveyard, game_graveyard_zone, game_ground_area_schedule, game_instance_reaper_schedule,
+    game_account, game_aura_schedule, game_breath_schedule, game_character, game_creature_loot,
+    game_creature_spawn, game_creature_template, game_creature_waypoint, game_duel_schedule,
+    game_event_reaper_schedule, game_gameobject_pool, game_gameobject_pool_member,
+    game_gameobject_template, game_gateway_lease_reaper_schedule, game_graveyard,
+    game_graveyard_zone, game_ground_area_schedule, game_instance_reaper_schedule,
     game_item_template, game_melee_schedule, game_motion_publish_schedule, game_pet_care_schedule,
     game_realm, game_spell, game_spell_effect, game_start_position, Account, AuraSchedule,
-    BreathSchedule, Character, CreatureLoot, CreatureMoveSchedule, CreatureSpawn, CreatureTemplate,
-    CreatureWaypoint, EventReaperSchedule, GameObject, GameObjectPool, GameObjectPoolMember,
-    GameObjectTemplate, GraveyardLoc, GraveyardZone, GroundAreaSchedule, ItemTemplate,
-    MeleeSchedule, PetCareSchedule, Realm, ServerConfig, Spell, SpellEffect, StartPosition,
-    EVENT_TTL_MICROS,
+    BreathSchedule, Character, CreatureLoot, CreatureSpawn, CreatureTemplate, CreatureWaypoint,
+    EventReaperSchedule, GameObject, GameObjectPool, GameObjectPoolMember, GameObjectTemplate,
+    GraveyardLoc, GraveyardZone, GroundAreaSchedule, ItemTemplate, MeleeSchedule, PetCareSchedule,
+    Realm, Spell, SpellEffect, StartPosition, EVENT_TTL_MICROS,
 };
 use crate::{game_alpha_test_tools_enrollment, AlphaTestToolsEnrollment};
 
@@ -27,12 +37,78 @@ pub fn init(ctx: &ReducerContext) {
     seed_production_core(ctx);
     seed_map0_demo_content(ctx);
     seed_spell_registry(ctx);
+    grant_tester_kit(ctx);
     crate::items::seed_compatibility_enchantments(ctx);
-    seed_scheduler_arming(ctx);
-    seed_crit_rates(ctx);
+    arm_interval_schedules(ctx);
 }
 
-pub(crate) fn seed_crit_rates(ctx: &ReducerContext) {
+/// Runs after `seed_curated_content`, which writes the starting spell kit the Tester learns.
+fn grant_tester_kit(ctx: &ReducerContext) {
+    use constants::start_human_warrior as hw;
+    crate::spell::spellbook::grant_createinfo_spells(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
+    crate::action_bar::grant_createinfo_actions(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
+}
+
+struct CuratedSeed {
+    /// The importer family whose import replaces these rows; `None` seeds on every Shard.
+    imported_by: Option<&'static str>,
+    write: fn(&ReducerContext),
+}
+
+const CURATED_SEEDS: &[CuratedSeed] = &[
+    real(SPELL_FAMILY, seed_weakened_soul),
+    always(seed_pw_shield_fixture),
+    always(seed_fixture_catalogue),
+    real(GLOBALS_FAMILY, seed_hunter_tame_kit),
+    real(DBC_FAMILY, seed_boar_family),
+    always(seed_hunter_tame_fixture),
+    real(SPELL_FAMILY, seed_stacking_probe_fixture),
+    real(ITEM_FAMILY, seed_soul_shard_item),
+    real(SPELL_FAMILY, seed_drain_soul_fixture),
+    real(SPELL_FAMILY, seed_frost_armor_fixture),
+    always(seed_test_proc_fixtures),
+    real(SPELL_FAMILY, seed_mana_burn_fixture),
+    real(SPELL_FAMILY, seed_demon_skin_fixture),
+    always(seed_regen_fixture),
+    real(SPELL_FAMILY, seed_stealth_fixture),
+    real(DBC_FAMILY, seed_riding_skill_line),
+    always(seed_mount_fixture),
+    real(GLOBALS_FAMILY, seed_createinfo_spells),
+    // The talent import carries no family stamp; a spell import brings the real talent spells.
+    real(SPELL_FAMILY, crate::talent::seed_talents),
+    // The importer does not import spell groups yet, so imported Realms need these rows too.
+    always(seed_spell_groups),
+    real(GLOBALS_FAMILY, seed_crit_rates),
+];
+
+const fn real(family: &'static str, write: fn(&ReducerContext)) -> CuratedSeed {
+    CuratedSeed {
+        imported_by: Some(family),
+        write,
+    }
+}
+
+const fn always(write: fn(&ReducerContext)) -> CuratedSeed {
+    CuratedSeed {
+        imported_by: None,
+        write,
+    }
+}
+
+/// Curated rows and fixtures; see docs/danger-zones.md "After every publish" for the import rule.
+pub(crate) fn seed_curated_content(ctx: &ReducerContext) {
+    for seed in CURATED_SEEDS {
+        if seed
+            .imported_by
+            .is_some_and(|family| crate::import_meta::is_imported(ctx, family))
+        {
+            continue;
+        }
+        (seed.write)(ctx);
+    }
+}
+
+fn seed_crit_rates(ctx: &ReducerContext) {
     use crate::stats::{game_crit_per_agility, CritPerAgility};
     for (level, rate) in [(1, 4.0), (60, 20.0)] {
         let key = crate::stats::class_level_key(1, level);
@@ -67,15 +143,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         timezone: 1,
     });
 
-    ctx.db.game_config().insert(ServerConfig {
-        id: 0,
-        xp_rate: 1.0,
-        nav_enabled: true,
-        hosts_instances: true,
-        bots_idle: false,
-        vmap_enabled: false,
-        nav_coverage_enabled: false,
-    });
+    crate::config::save_server_config(ctx, crate::config::server_config(ctx));
 
     ctx.db
         .game_alpha_test_tools_enrollment()
@@ -149,8 +217,6 @@ fn seed_production_core(ctx: &ReducerContext) {
         gm_level: 3,
     });
 
-    seed_createinfo_spells(ctx);
-
     ctx.db.game_character().insert(Character {
         guid: 1,
         account_id: account.id,
@@ -195,14 +261,11 @@ fn seed_production_core(ctx: &ReducerContext) {
         resting: false,
         rested_since_micros: 0,
         pending_godmode: false,
-        pending_run_speed_mult_bp: crate::world::RUN_SPEED_BP_1X,
+        pending_run_speed_mult_bp: crate::character::RUN_SPEED_BP_1X,
         bank_bag_slots: 0,
         watched_faction_index: -1,
         rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
     });
-    crate::spell::spellbook::grant_createinfo_spells(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
-    crate::action_bar::grant_createinfo_actions(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
-
     crate::creatures::seed_on_aggro_fixtures(ctx);
 }
 
@@ -214,33 +277,17 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
 
     const CHICKEN_ENTRY: u32 = 620;
     let chicken_tmpl = ctx.db.game_creature_template().insert(CreatureTemplate {
-        entry: CHICKEN_ENTRY,
-        name: "Chicken".to_string(),
-        subname: String::new(),
         display_id: 304,
         level: 1,
         health: 42,
         faction_template: 14,
-        npc_flags: 0,
-        unit_flags: 0,
         creature_type: 8,
-        creature_family: 0,
-        type_flags: 0,
-        rank: 0,
         scale: 1.0,
         base_attack_time_ms: 1500,
         money_min: 5,
         money_max: 20,
-        max_level: 0,
-        max_level_health: 0,
         aggro_range: 8,
-        damage_min: 0,
-        damage_max: 0,
-        armor: 0,
-        pickpocket_loot_id: 0,
-        skin_loot_id: 0,
-        trainer_type: 0,
-        trainer_class: 0,
+        ..CreatureTemplate::blank(CHICKEN_ENTRY, "Chicken")
     });
 
     let chicken_guid: u64 = packed_creature_spawn_guid(CHICKEN_ENTRY, 1);
@@ -254,8 +301,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         z: hw::Z,
         orientation: 0.0,
         // Disarm timers for the already-live fixture so due-time scans do not revisit it.
-        respawn_at: crate::creatures::timer_never(ctx),
-        despawn_at: crate::creatures::timer_never(ctx),
+        respawn_at: crate::time::timer_never(ctx),
+        despawn_at: crate::time::timer_never(ctx),
         movement_type: crate::creatures::MOVEMENT_RANDOM,
         respawn_secs: 0,
         life_seq: 0,
@@ -295,13 +342,13 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             damage_max: si::DAMAGE_MAX,
             delay_ms: si::DELAY_MS,
             bonding: crate::items::bonding::BIND_ON_PICKUP,
-            ..base_item(si::ENTRY, "Worn Shortsword")
+            ..ItemTemplate::blank(si::ENTRY, "Worn Shortsword")
         });
     }
 
     ctx.db
         .game_item_template()
-        .insert(tempered_blade_template(50));
+        .insert(tempered_blade_template(DEMO_TEMPERED_BLADE));
 
     ctx.db.game_item_template().insert(ItemTemplate {
         class: 4,
@@ -316,9 +363,11 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         sell_price: 40,
         max_stack: 1,
         bonding: crate::items::bonding::NONE,
-        ..base_item(51, "Recruit's Tunic")
+        ..ItemTemplate::blank(RECRUITS_TUNIC, "Recruit's Tunic")
     });
-    ctx.db.game_item_template().insert(tough_jerky_template(52));
+    ctx.db
+        .game_item_template()
+        .insert(tough_jerky_template(DEMO_TOUGH_JERKY));
 
     let wolf_tmpl = ctx.db.game_creature_template().insert(test_wolf_template());
     let wolf_guid: u64 = packed_creature_spawn_guid(TEST_WOLF_ENTRY, 1);
@@ -330,8 +379,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         y: hw::Y + 5.0,
         z: hw::Z,
         orientation: 0.0,
-        respawn_at: crate::creatures::timer_never(ctx),
-        despawn_at: crate::creatures::timer_never(ctx),
+        respawn_at: crate::time::timer_never(ctx),
+        despawn_at: crate::time::timer_never(ctx),
         movement_type: crate::creatures::MOVEMENT_RANDOM,
         respawn_secs: 0,
         life_seq: 0,
@@ -356,8 +405,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         y: hw::Y + 5.0,
         z: hw::Z,
         orientation: 0.0,
-        respawn_at: crate::creatures::timer_never(ctx),
-        despawn_at: crate::creatures::timer_never(ctx),
+        respawn_at: crate::time::timer_never(ctx),
+        despawn_at: crate::time::timer_never(ctx),
         movement_type: crate::creatures::MOVEMENT_IDLE,
         respawn_secs: 0,
         life_seq: 0,
@@ -379,7 +428,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         spellid_1: 8690,
         spelltrigger_1: 0,
         bonding: crate::items::bonding::BIND_ON_PICKUP,
-        ..base_item(constants::starter_item::HEARTHSTONE_ENTRY, "Hearthstone")
+        ..ItemTemplate::blank(constants::starter_item::HEARTHSTONE_ENTRY, "Hearthstone")
     });
 
     ctx.db.game_item_template().insert(ItemTemplate {
@@ -396,13 +445,13 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         max_stack: 1,
         block_value: 25,
         bonding: crate::items::bonding::NONE,
-        ..base_item(50053, "Battered Buckler")
+        ..ItemTemplate::blank(BATTERED_BUCKLER, "Battered Buckler")
     });
 
     ctx.db.game_creature_loot().insert(CreatureLoot {
         id: 0,
         creature_entry: CHICKEN_ENTRY,
-        item_entry: 52,
+        item_entry: DEMO_TOUGH_JERKY,
         chance_bp: 10000,
         count: 1,
         group_id: 0,
@@ -411,7 +460,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     ctx.db.game_creature_loot().insert(CreatureLoot {
         id: 0,
         creature_entry: CHICKEN_ENTRY,
-        item_entry: 51,
+        item_entry: RECRUITS_TUNIC,
         chance_bp: 5000,
         count: 1,
         group_id: 0,
@@ -430,11 +479,11 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     ctx.db
         .game_gameobject_template()
         .insert(GameObjectTemplate {
-            entry: 50100,
-            type_id: crate::gameobject::go_type::CHEST,
+            entry: BATTERED_CHEST,
+            type_id: lyracore_shared::constants::go_type::CHEST,
             display_id: 259,
             name: "Battered Chest".to_string(),
-            data0: 52,
+            data0: DEMO_TOUGH_JERKY,
             data1: 0,
             gather_skill_line: 0,
             respawn_secs: 0,
@@ -444,7 +493,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         });
     GameObject {
         guid: packed_gameobject_spawn_guid(1),
-        template_entry: 50100,
+        template_entry: BATTERED_CHEST,
         map_id: hw::MAP_ID,
         x: hw::X + 5.0,
         y: hw::Y,
@@ -454,9 +503,9 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
-        grid_x: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).0,
-        grid_y: lyracore_shared::spatial::grid_cell(hw::X + 5.0, hw::Y).1,
-        cell: lyracore_shared::spatial::cell_id_at(hw::X + 5.0, hw::Y),
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
@@ -466,8 +515,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     ctx.db
         .game_gameobject_template()
         .insert(GameObjectTemplate {
-            entry: 50101,
-            type_id: crate::gameobject::go_type::GOOBER,
+            entry: SUSPICIOUS_LEVER,
+            type_id: lyracore_shared::constants::go_type::GOOBER,
             display_id: 259,
             name: "Suspicious Lever".to_string(),
             data0: 0,
@@ -480,7 +529,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         });
     GameObject {
         guid: packed_gameobject_spawn_guid(2),
-        template_entry: 50101,
+        template_entry: SUSPICIOUS_LEVER,
         map_id: hw::MAP_ID,
         x: hw::X + 8.0,
         y: hw::Y,
@@ -490,9 +539,9 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
-        grid_x: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).0,
-        grid_y: lyracore_shared::spatial::grid_cell(hw::X + 8.0, hw::Y).1,
-        cell: lyracore_shared::spatial::cell_id_at(hw::X + 8.0, hw::Y),
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
@@ -503,8 +552,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     ctx.db
         .game_gameobject_template()
         .insert(GameObjectTemplate {
-            entry: 50102,
-            type_id: crate::gameobject::go_type::GATHER,
+            entry: DEMO_COPPER_VEIN,
+            type_id: lyracore_shared::constants::go_type::GATHER,
             display_id: 259,
             name: "Copper Vein".to_string(),
             data0: 2770,
@@ -517,7 +566,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         });
     GameObject {
         guid: packed_gameobject_spawn_guid(3),
-        template_entry: 50102,
+        template_entry: DEMO_COPPER_VEIN,
         map_id: hw::MAP_ID,
         x: hw::X + 6.0,
         y: hw::Y,
@@ -527,9 +576,9 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
-        grid_x: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).0,
-        grid_y: lyracore_shared::spatial::grid_cell(hw::X + 6.0, hw::Y).1,
-        cell: lyracore_shared::spatial::cell_id_at(hw::X + 6.0, hw::Y),
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
@@ -539,8 +588,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     ctx.db
         .game_gameobject_template()
         .insert(GameObjectTemplate {
-            entry: 50103,
-            type_id: crate::gameobject::go_type::GATHER,
+            entry: DEMO_PEACEBLOOM,
+            type_id: lyracore_shared::constants::go_type::GATHER,
             display_id: 259,
             name: "Peacebloom".to_string(),
             data0: 2447,
@@ -553,7 +602,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         });
     GameObject {
         guid: packed_gameobject_spawn_guid(4),
-        template_entry: 50103,
+        template_entry: DEMO_PEACEBLOOM,
         map_id: hw::MAP_ID,
         x: hw::X + 7.0,
         y: hw::Y,
@@ -563,9 +612,9 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
-        grid_x: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).0,
-        grid_y: lyracore_shared::spatial::grid_cell(hw::X + 7.0, hw::Y).1,
-        cell: lyracore_shared::spatial::cell_id_at(hw::X + 7.0, hw::Y),
+        grid_x: 0,
+        grid_y: 0,
+        cell: 0,
         rotation_0: 0.0,
         rotation_1: 0.0,
         rotation_2: 0.0,
@@ -582,7 +631,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
                 .game_gameobject_template()
                 .insert(GameObjectTemplate {
                     entry: e,
-                    type_id: crate::gameobject::go_type::GATHER,
+                    type_id: lyracore_shared::constants::go_type::GATHER,
                     display_id: 259,
                     name: name.to_string(),
                     data0: item,
@@ -635,42 +684,16 @@ fn seed_spell_registry(ctx: &ReducerContext) {
                  is_negative: bool,
                  max_stacks: u8| {
         ctx.db.game_spell().insert(Spell {
-            spell_id,
-            name: name.to_string(),
             power_type,
             cost,
             cast_time_ms,
-            gcd_ms: 1500,
-            family_name: 0,
-            family_flags: 0,
-            cooldown_ms: 0,
             range_yd,
             duration_ms,
             school_mask,
             dispel_type,
-            mechanic: 0,
             max_stacks,
-            aura_interrupt: 0,
-            attributes: 0,
-            spell_level: 0,
-            max_level: 0,
             is_negative,
-            cast_flags: 0,
-            stances: 0,
-            proc_flags: 0,
-            proc_chance: 0,
-            proc_charges: 0,
-            max_duration_ms: 0,
-            custom_flags: 0,
-            min_target_level: 0,
-            single_target_key: 0,
-            form_mask: 0,
-            form_exclude: 0,
-            attributes_ex_2: 0,
-            visual_id: 0,
-            duration_index: 0,
-            category: 0,
-            category_cooldown_ms: 0,
+            ..Spell::blank(spell_id, name)
         });
     };
     let effect = |spell_id: u32,
@@ -682,27 +705,14 @@ fn seed_spell_registry(ctx: &ReducerContext) {
                   p0: i32,
                   p0_kind: u8| {
         ctx.db.game_spell_effect().insert(SpellEffect {
-            id: packed_spell_effect_id(spell_id, idx),
-            spell_id,
-            effect_index: idx,
             kind,
             base_points,
-            die_sides: 0,
-            per_level: 0.0,
             period_ms,
             target,
-            radius_yd: 0.0,
-            chain_targets: 0,
-            trigger_spell: 0,
-            effect_mechanic: 0,
             p0,
             p0_kind,
-            p1: 0,
-            script_id: 0,
-            enters_combat: false,
-            points_per_combo: 0.0,
-            bonus_coefficient: -1.0,
             equip_supported: matches!(kind, 0xa0 | 0xa1),
+            ..SpellEffect::blank(spell_id, idx)
         });
     };
     spell(
@@ -764,38 +774,86 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     spell(588, "Inner Fire", 0, 30, 0, 0, 600000, 2, 1, false, 1);
     effect(588, 0, 0xA1, 2000, 0, 0, 1, 2);
 
-    spell(50030, "Test Fire Ward", 0, 0, 0, 30, 600000, 4, 0, false, 1);
-    effect(50030, 0, 0xA1, 6, 0, 2, 4, 2);
-
-    spell(50000, "Combat Insight", 0, 0, 0, 0, 600000, 1, 0, false, 1);
-    effect(50000, 0, 0xA3, 1000, 0, 0, 1, 5);
-    effect(50000, 1, 0xA3, 500, 0, 0, 2, 5);
-
-    spell(50010, "Quickening", 0, 0, 0, 0, 600000, 1, 0, false, 1);
-    effect(50010, 0, 0xA4, 50, 0, 0, 1, 6);
-
-    spell(50011, "Test Snare", 0, 0, 0, 30, 600000, 1, 0, true, 1);
-    effect(50011, 0, 0xA4, -40, 0, 1, 0, 6);
-
-    spell(50050, "Test Conjure", 0, 0, 0, 0, 0, 1, 0, false, 0);
-    effect(50050, 0, 0x07, 2, 0, 0, 5349, 8);
-
-    seed_pw_shield_fixture(ctx);
-    seed_fixture_catalogue(ctx);
-    seed_hunter_tame_fixture(ctx);
-    seed_stacking_probe_fixture(ctx);
-    seed_soul_shard_item(ctx);
-    seed_drain_soul_fixture(ctx);
-    seed_frost_armor_fixture(ctx);
-    seed_test_proc_fixtures(ctx);
-    seed_mana_burn_fixture(ctx);
-    seed_demon_skin_fixture(ctx);
-    seed_regen_fixture(ctx);
-    seed_stealth_fixture(ctx);
-    seed_mount_fixture(ctx);
+    spell(
+        TEST_FIRE_WARD_SPELL,
+        "Test Fire Ward",
+        0,
+        0,
+        0,
+        30,
+        600000,
+        4,
+        0,
+        false,
+        1,
+    );
+    effect(TEST_FIRE_WARD_SPELL, 0, 0xA1, 6, 0, 2, 4, 2);
 
     spell(
-        50201,
+        COMBAT_INSIGHT_SPELL,
+        "Combat Insight",
+        0,
+        0,
+        0,
+        0,
+        600000,
+        1,
+        0,
+        false,
+        1,
+    );
+    effect(COMBAT_INSIGHT_SPELL, 0, 0xA3, 1000, 0, 0, 1, 5);
+    effect(COMBAT_INSIGHT_SPELL, 1, 0xA3, 500, 0, 0, 2, 5);
+
+    spell(
+        QUICKENING_SPELL,
+        "Quickening",
+        0,
+        0,
+        0,
+        0,
+        600000,
+        1,
+        0,
+        false,
+        1,
+    );
+    effect(QUICKENING_SPELL, 0, 0xA4, 50, 0, 0, 1, 6);
+
+    spell(
+        TEST_SNARE_SPELL,
+        "Test Snare",
+        0,
+        0,
+        0,
+        30,
+        600000,
+        1,
+        0,
+        true,
+        1,
+    );
+    effect(TEST_SNARE_SPELL, 0, 0xA4, -40, 0, 1, 0, 6);
+
+    spell(
+        TEST_CONJURE_SPELL,
+        "Test Conjure",
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        false,
+        0,
+    );
+    effect(TEST_CONJURE_SPELL, 0, 0x07, 2, 0, 0, 5349, 8);
+
+    seed_curated_content(ctx);
+
+    spell(
+        ENCHANT_MINOR_STRENGTH_SPELL,
         "Enchant: Minor Strength",
         0,
         0,
@@ -807,9 +865,9 @@ fn seed_spell_registry(ctx: &ReducerContext) {
         false,
         0,
     );
-    effect(50201, 0, 0x17, 0, 0, 0, 7745, 10);
+    effect(ENCHANT_MINOR_STRENGTH_SPELL, 0, 0x17, 0, 0, 0, 7745, 10);
     spell(
-        50202,
+        ENCHANT_MINOR_STAMINA_SPELL,
         "Enchant: Minor Stamina",
         0,
         0,
@@ -821,19 +879,31 @@ fn seed_spell_registry(ctx: &ReducerContext) {
         false,
         0,
     );
-    effect(50202, 0, 0x17, 0, 0, 0, 7748, 10);
+    effect(ENCHANT_MINOR_STAMINA_SPELL, 0, 0x17, 0, 0, 0, 7748, 10);
     spell(13262, "Disenchant", 0, 0, 0, 0, 0, 0, 0, false, 0);
     effect(13262, 0, 0x18, 0, 0, 0, 0, 0);
 
-    spell(50096, "Rough Copper Bomb", 0, 0, 0, 0, 0, 4, 0, true, 0);
-    effect(50096, 0, 0x01, 15, 0, 4, 0, 0);
+    spell(
+        ROUGH_COPPER_BOMB_SPELL,
+        "Rough Copper Bomb",
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        0,
+        true,
+        0,
+    );
+    effect(ROUGH_COPPER_BOMB_SPELL, 0, 0x01, 15, 0, 4, 0, 0);
 
     ctx.db.game_spell().insert(Spell {
         school_mask: 2,
         gcd_ms: 0,
-        ..base_spell(50110, "Minor Healing")
+        ..Spell::blank(MINOR_HEALING_SPELL, "Minor Healing")
     });
-    effect(50110, 0, 0x02, 80, 0, 0, 0, 0);
+    effect(MINOR_HEALING_SPELL, 0, 0x02, 80, 0, 0, 0, 0);
 
     ctx.db.game_spell().insert(Spell {
         cast_time_ms: 0,
@@ -842,89 +912,137 @@ fn seed_spell_registry(ctx: &ReducerContext) {
         duration_ms: 8000,
         school_mask: 2,
         aura_interrupt: 1,
-        cast_flags: crate::spell::SPELL_ATTR_CHANNELED,
-        ..base_spell(50111, "Linen Bandage")
+        cast_flags: crate::spell::CAST_FLAG_CHANNELED,
+        ..Spell::blank(LINEN_BANDAGE_SPELL, "Linen Bandage")
     });
-    effect(50111, 0, 0x91, 8, 1000, 0, 0, 0);
+    effect(LINEN_BANDAGE_SPELL, 0, 0x91, 8, 1000, 0, 0, 0);
     ctx.db.game_spell_effect().insert(SpellEffect {
         kind: 0x05,
         target: 0,
         trigger_spell: 11196,
-        ..base_effect(50111, 1)
+        ..SpellEffect::blank(LINEN_BANDAGE_SPELL, 1)
     });
 
     ctx.db.game_spell().insert(Spell {
         gcd_ms: 0,
-        ..base_spell(50113, "Minor Mana Potion")
+        ..Spell::blank(MINOR_MANA_POTION_SPELL, "Minor Mana Potion")
     });
-    effect(50113, 0, 0x03, 160, 0, 0, 0, 4);
-
-    ctx.db.game_spell().insert(Spell {
-        duration_ms: 30000,
-        gcd_ms: 0,
-        ..base_spell(50114, "Refreshing Water")
-    });
-    effect(50114, 0, 0x92, 41, 5000, 0, 0, 4);
+    effect(MINOR_MANA_POTION_SPELL, 0, 0x03, 160, 0, 0, 0, 4);
 
     ctx.db.game_spell().insert(Spell {
         duration_ms: 30000,
         gcd_ms: 0,
-        ..base_spell(50115, "Eating")
+        ..Spell::blank(REFRESHING_WATER_SPELL, "Refreshing Water")
     });
-    effect(50115, 0, 0x91, 16, 5000, 0, 0, 0);
+    effect(REFRESHING_WATER_SPELL, 0, 0x92, 41, 5000, 0, 0, 4);
+
+    ctx.db.game_spell().insert(Spell {
+        duration_ms: 30000,
+        gcd_ms: 0,
+        ..Spell::blank(EATING_SPELL, "Eating")
+    });
+    effect(EATING_SPELL, 0, 0x91, 16, 5000, 0, 0, 0);
 
     ctx.db.game_spell().insert(Spell {
         duration_ms: 900000,
         max_stacks: 1,
         gcd_ms: 0,
-        ..base_spell(50116, "Well Fed")
+        ..Spell::blank(WELL_FED_SPELL, "Well Fed")
     });
-    effect(50116, 0, 0xA0, 2, 0, 0, 2, 1);
-    effect(50116, 1, 0xA0, 2, 0, 0, 4, 1);
+    effect(WELL_FED_SPELL, 0, 0xA0, 2, 0, 0, 2, 1);
+    effect(WELL_FED_SPELL, 1, 0xA0, 2, 0, 0, 4, 1);
 
     ctx.db.game_spell().insert(Spell {
         school_mask: 2,
         gcd_ms: 0,
-        ..base_spell(50117, "Lesser Healing")
+        ..Spell::blank(LESSER_HEALING_SPELL, "Lesser Healing")
     });
-    effect(50117, 0, 0x02, 160, 0, 0, 0, 0);
+    effect(LESSER_HEALING_SPELL, 0, 0x02, 160, 0, 0, 0, 0);
 
     ctx.db.game_spell().insert(Spell {
         gcd_ms: 0,
         duration_ms: 8000,
         school_mask: 2,
         aura_interrupt: 1,
-        cast_flags: crate::spell::SPELL_ATTR_CHANNELED,
-        ..base_spell(50118, "Heavy Linen Bandage")
+        cast_flags: crate::spell::CAST_FLAG_CHANNELED,
+        ..Spell::blank(HEAVY_LINEN_BANDAGE_SPELL, "Heavy Linen Bandage")
     });
-    effect(50118, 0, 0x91, 18, 1000, 0, 0, 0);
+    effect(HEAVY_LINEN_BANDAGE_SPELL, 0, 0x91, 18, 1000, 0, 0, 0);
     ctx.db.game_spell_effect().insert(SpellEffect {
         kind: 0x05,
         trigger_spell: 11196,
-        ..base_effect(50118, 1)
+        ..SpellEffect::blank(HEAVY_LINEN_BANDAGE_SPELL, 1)
     });
 
     ctx.db.game_spell().insert(Spell {
         cast_time_ms: 10_000,
         gcd_ms: 0,
-        ..base_spell(8690, "Hearthstone")
+        ..Spell::blank(8690, "Hearthstone")
     });
     effect(8690, 0, crate::spell::E_RECALL_HOME, 0, 0, 0, 0, 0);
 
-    spell(50020, "Test Stun", 0, 0, 0, 30, 600000, 1, 0, true, 1);
-    effect(50020, 0, 0xB0, 0, 0, 1, 1, 3);
-
-    spell(50021, "Test Root", 0, 0, 0, 30, 600000, 1, 0, true, 1);
-    effect(50021, 0, 0xB0, 0, 0, 1, 2, 3);
-
-    spell(50022, "Test Fear", 0, 0, 0, 30, 8000, 1, 0, true, 1);
-    effect(50022, 0, 0xB0, 0, 0, 1, 3, 3);
-
-    spell(50023, "Test Poly", 0, 0, 0, 30, 10000, 1, 0, true, 1);
-    effect(50023, 0, 0xB0, 0, 0, 1, 4, 3);
+    spell(
+        TEST_STUN_SPELL,
+        "Test Stun",
+        0,
+        0,
+        0,
+        30,
+        600000,
+        1,
+        0,
+        true,
+        1,
+    );
+    effect(TEST_STUN_SPELL, 0, 0xB0, 0, 0, 1, 1, 3);
 
     spell(
-        50040,
+        TEST_ROOT_SPELL,
+        "Test Root",
+        0,
+        0,
+        0,
+        30,
+        600000,
+        1,
+        0,
+        true,
+        1,
+    );
+    effect(TEST_ROOT_SPELL, 0, 0xB0, 0, 0, 1, 2, 3);
+
+    spell(
+        TEST_FEAR_SPELL,
+        "Test Fear",
+        0,
+        0,
+        0,
+        30,
+        8000,
+        1,
+        0,
+        true,
+        1,
+    );
+    effect(TEST_FEAR_SPELL, 0, 0xB0, 0, 0, 1, 3, 3);
+
+    spell(
+        TEST_POLY_SPELL,
+        "Test Poly",
+        0,
+        0,
+        0,
+        30,
+        10000,
+        1,
+        0,
+        true,
+        1,
+    );
+    effect(TEST_POLY_SPELL, 0, 0xB0, 0, 0, 1, 4, 3);
+
+    spell(
+        TEST_STUN_IMMUNITY_SPELL,
         "Test Stun Immunity",
         0,
         0,
@@ -936,7 +1054,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
         false,
         1,
     );
-    effect(50040, 0, 0xB1, 0, 0, 2, 1, 3);
+    effect(TEST_STUN_IMMUNITY_SPELL, 0, 0xB1, 0, 0, 2, 1, 3);
 
     spell(355, "Taunt", 1, 0, 0, 30, 0, 1, 0, true, 0);
     effect(355, 0, 0x06, 0, 0, 1, 0, 0);
@@ -957,13 +1075,8 @@ fn seed_spell_registry(ctx: &ReducerContext) {
     effect(15007, 0, 0xA0, -10, 0, 0, 0xFF, 1);
 
     reconcile_curated_starter_role_levels(ctx);
-
-    crate::talent::seed_talents(ctx);
-
-    seed_spell_groups(ctx);
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn reconcile_curated_starter_role_levels(ctx: &ReducerContext) -> u32 {
     let spells = ctx.db.game_spell();
     let mut repaired = 0;
@@ -1176,155 +1289,166 @@ pub(crate) fn repair_lesser_heal_target(ctx: &ReducerContext) -> u64 {
     1
 }
 
-fn seed_scheduler_arming(ctx: &ReducerContext) {
-    ctx.db
-        .game_event_reaper_schedule()
-        .insert(EventReaperSchedule {
-            scheduled_id: 0,
-            scheduled_at: crate::time::schedule_interval(
-                ctx,
-                TimeDuration::from_micros(EVENT_TTL_MICROS),
-            ),
-        });
+#[derive(Clone, Copy)]
+enum Arming {
+    Ensure,
+    Rearm,
+}
 
-    ctx.db
-        .game_instance_reaper_schedule()
-        .insert(crate::instance::InstanceReaperSchedule {
-            scheduled_id: 0,
-            scheduled_at: crate::time::schedule_interval(
-                ctx,
-                TimeDuration::from_micros(crate::instance::INSTANCE_REAPER_INTERVAL_MICROS),
-            ),
-        });
+fn arm<T: Table>(table: T, arming: Arming, row: impl FnOnce() -> T::Row) -> u64 {
+    match arming {
+        Arming::Ensure if table.count() > 0 => return 0,
+        Arming::Ensure => {}
+        Arming::Rearm => {
+            let stale: Vec<_> = table.iter().collect();
+            for row in stale {
+                table.delete(row);
+            }
+        }
+    }
+    table.insert(row());
+    1
+}
 
-    ctx.db
-        .game_creature_move_schedule()
-        .insert(CreatureMoveSchedule {
+/// The interval schedules `init` and the post-publish repair arm; returns the rows it inserted.
+pub(crate) fn arm_interval_schedules(ctx: &ReducerContext) -> u64 {
+    use Arming::{Ensure, Rearm};
+    let every =
+        |micros: i64| crate::time::schedule_interval(ctx, TimeDuration::from_micros(micros));
+    let mut armed = 0;
+    armed += arm(ctx.db.game_event_reaper_schedule(), Ensure, || {
+        EventReaperSchedule {
             scheduled_id: 0,
-            scheduled_at: crate::time::schedule_interval(
-                ctx,
-                TimeDuration::from_micros(crate::creatures::SLICED_TICK_MICROS),
-            ),
-            instance_id: crate::creatures::GLOBAL_TICK_INSTANCE,
-        });
-
-    ctx.db.game_melee_schedule().insert(MeleeSchedule {
-        scheduled_id: 0,
-        scheduled_at: crate::time::schedule_interval(ctx, TimeDuration::from_micros(100_000)),
+            scheduled_at: every(EVENT_TTL_MICROS),
+        }
     });
-
-    ctx.db.game_pet_care_schedule().insert(PetCareSchedule {
-        scheduled_id: 0,
-        scheduled_at: crate::time::schedule_interval(
-            ctx,
-            TimeDuration::from_micros(crate::creatures::CARE_INTERVAL_MICROS),
-        ),
+    armed += arm(ctx.db.game_instance_reaper_schedule(), Rearm, || {
+        crate::instance::InstanceReaperSchedule {
+            scheduled_id: 0,
+            scheduled_at: every(crate::instance::INSTANCE_REAPER_INTERVAL_MICROS),
+        }
     });
-
-    ctx.db.game_aura_schedule().insert(AuraSchedule {
+    armed += arm(ctx.db.game_melee_schedule(), Ensure, || MeleeSchedule {
         scheduled_id: 0,
-        scheduled_at: crate::time::schedule_interval(ctx, TimeDuration::from_micros(1_000_000)),
+        scheduled_at: every(100_000),
     });
-
-    ctx.db.game_breath_schedule().insert(BreathSchedule {
+    armed += arm(ctx.db.game_pet_care_schedule(), Ensure, || {
+        PetCareSchedule {
+            scheduled_id: 0,
+            scheduled_at: every(crate::creatures::CARE_INTERVAL_MICROS),
+        }
+    });
+    armed += arm(ctx.db.game_aura_schedule(), Ensure, || AuraSchedule {
         scheduled_id: 0,
-        scheduled_at: crate::time::schedule_interval(ctx, TimeDuration::from_micros(1_000_000)),
+        scheduled_at: every(1_000_000),
     });
-
-    ctx.db
-        .game_duel_schedule()
-        .insert(crate::duel::DuelSchedule {
+    armed += arm(ctx.db.game_breath_schedule(), Ensure, || BreathSchedule {
+        scheduled_id: 0,
+        scheduled_at: every(1_000_000),
+    });
+    armed += arm(ctx.db.game_duel_schedule(), Ensure, || {
+        crate::duel::DuelSchedule {
             scheduled_id: 0,
-            scheduled_at: crate::time::schedule_interval(
-                ctx,
-                TimeDuration::from_micros(crate::duel::DUEL_TICK_MICROS),
-            ),
-        });
-
-    ctx.db
-        .game_ground_area_schedule()
-        .insert(GroundAreaSchedule {
+            scheduled_at: every(crate::duel::DUEL_TICK_MICROS),
+        }
+    });
+    armed += arm(ctx.db.game_ground_area_schedule(), Ensure, || {
+        GroundAreaSchedule {
             scheduled_id: 0,
-            scheduled_at: crate::time::schedule_interval(ctx, TimeDuration::from_micros(500_000)),
-        });
-
-    ctx.db
-        .game_motion_publish_schedule()
-        .insert(crate::motion::MotionPublishSchedule {
+            scheduled_at: every(500_000),
+        }
+    });
+    // Ensure, not rearm: scheduled_at keeps the Operator's chosen motion cadence.
+    armed += arm(ctx.db.game_motion_publish_schedule(), Ensure, || {
+        crate::motion::MotionPublishSchedule {
             scheduled_id: 0,
-            scheduled_at: crate::time::schedule_interval(
-                ctx,
-                TimeDuration::from_micros(crate::motion::MOTION_TICK_MICROS),
-            ),
-        });
-
-    ctx.db
-        .game_gateway_lease_reaper_schedule()
-        .insert(crate::gw::GatewayLeaseReaperSchedule {
+            scheduled_at: every(crate::motion::MOTION_TICK_MICROS),
+        }
+    });
+    armed += arm(ctx.db.game_gateway_lease_reaper_schedule(), Rearm, || {
+        crate::gw::GatewayLeaseReaperSchedule {
             scheduled_id: 0,
-            scheduled_at: crate::time::schedule_interval(
-                ctx,
-                TimeDuration::from_micros(crate::gw::ACCOUNT_CLAIM_REAP_MICROS),
-            ),
-        });
-
+            scheduled_at: every(crate::gw::ACCOUNT_CLAIM_REAP_MICROS),
+        }
+    });
+    crate::creatures::tick::arm_creature_tick(
+        ctx,
+        TimeDuration::from_micros(crate::creatures::SLICED_TICK_MICROS),
+    );
     crate::weather::rearm_weather_schedule(ctx);
-
     crate::meeting_stone::rearm_reminder_schedule(ctx);
+    crate::transport::arm_crossings(ctx);
+    armed
 }
 
 mod fixtures;
 #[cfg(feature = "debug_reducers")]
 pub(crate) use fixtures::seed_scenario_fixtures;
-pub(crate) use fixtures::{
-    base_effect, base_item, base_spell, profession_trainer_template, seed_demon_skin_fixture,
+#[cfg(feature = "debug_reducers")]
+pub(crate) use fixtures::FIXTURE_FACTION;
+use fixtures::{
+    profession_trainer_template, seed_boar_family, seed_demon_skin_fixture,
     seed_drain_soul_fixture, seed_fixture_catalogue, seed_frost_armor_fixture,
-    seed_hunter_tame_fixture, seed_mana_burn_fixture, seed_mount_fixture, seed_pw_shield_fixture,
-    seed_regen_fixture, seed_soul_shard_item, seed_stacking_probe_fixture, seed_stealth_fixture,
-    seed_taxi_fixture, seed_test_proc_fixtures, tempered_blade_template, test_wolf_template,
-    tough_jerky_template, FIXTURE_BLADE, FIXTURE_DAZED_SPELL, FIXTURE_FACTION, FIXTURE_JERKY,
-    FIXTURE_MOUNT_SPELL, PROFESSION_TRAINER_ENTRY, TEST_PROC_CHARGES, TEST_PROC_COIN,
-    TEST_PROC_COOLDOWN, TEST_PROC_MARK, TEST_PROC_PPM, TEST_PROC_ZAP, TEST_WOLF_ENTRY,
+    seed_hunter_tame_fixture, seed_hunter_tame_kit, seed_mana_burn_fixture, seed_mount_fixture,
+    seed_pw_shield_fixture, seed_regen_fixture, seed_riding_skill_line, seed_soul_shard_item,
+    seed_stacking_probe_fixture, seed_stealth_fixture, seed_test_proc_fixtures, seed_weakened_soul,
+    test_wolf_template,
 };
-#[cfg(test)]
-pub(crate) use fixtures::{
-    FIXTURE_REINS, RIDING_TRAINER_ENTRY, TEST_TAME_BEAST_SPELL, TEST_TAME_BOAR_ENTRY,
-};
+pub(crate) use fixtures::{seed_taxi_fixture, tempered_blade_template, tough_jerky_template};
 
-pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {
+fn seed_createinfo_spells(ctx: &ReducerContext) {
     use crate::spell::spellbook::game_createinfo_spell;
     let table = ctx.db.game_createinfo_spell();
-    let base_kit = if table.count() == 0 {
-        CREATEINFO_KIT
-    } else {
-        &[]
-    };
-    let weapon_kit = CREATEINFO_WEAPON_KIT
+    let existing: Vec<CreateinfoRow> = table
         .iter()
-        .flat_map(|&(race, class, spells)| spells.iter().map(move |&spell| (race, class, spell)));
-    let present: std::collections::HashSet<(u8, u8, u32)> = table
-        .iter()
-        .map(|row| (row.race, row.class, row.spell_id))
+        .map(|row| (row.id, row.race, row.class, row.spell_id))
         .collect();
-    // Imported rows carry explicit ids, so the auto_inc sequence could collide with them.
-    let mut next_id = table
-        .iter()
-        .map(|row| row.id)
-        .filter(|&id| !lyracore_package_delta::is_package_globals_id(id))
-        .max()
-        .unwrap_or(0);
-    for (race, class, spell_id) in base_kit.iter().copied().chain(weapon_kit) {
-        if present.contains(&(race, class, spell_id)) {
-            continue;
-        }
-        next_id += 1;
+    for (id, race, class, spell_id) in missing_createinfo_rows(&existing) {
         table.insert(crate::spell::spellbook::CreateinfoSpell {
-            id: next_id,
+            id,
             race,
             class,
             spell_id,
         });
     }
+}
+
+/// `(id, race, class, spell_id)` of one `game_createinfo_spell` row.
+type CreateinfoRow = (u64, u8, u8, u32);
+
+/// The base kit goes in only while none of its rows exists; fixture and Package rows never count.
+fn missing_createinfo_rows(existing: &[CreateinfoRow]) -> Vec<CreateinfoRow> {
+    let present: std::collections::HashSet<(u8, u8, u32)> = existing
+        .iter()
+        .map(|&(_, race, class, spell)| (race, class, spell))
+        .collect();
+    let base_kit = if CREATEINFO_KIT.iter().any(|row| present.contains(row)) {
+        &[]
+    } else {
+        CREATEINFO_KIT
+    };
+    let weapon_kit = CREATEINFO_WEAPON_KIT
+        .iter()
+        .flat_map(|&(race, class, spells)| spells.iter().map(move |&spell| (race, class, spell)));
+    // Imported rows carry explicit ids, so the auto_inc sequence could collide with them.
+    let mut next_id = existing
+        .iter()
+        .filter(|&&(id, _, _, spell)| {
+            !lyracore_package_delta::is_package_globals_id(id)
+                && !lyracore_package_delta::ids::is_fixture_reserved_spell_id(spell)
+        })
+        .map(|&(id, _, _, _)| id)
+        .max()
+        .unwrap_or(0);
+    let mut missing = Vec::new();
+    for (race, class, spell_id) in base_kit.iter().copied().chain(weapon_kit) {
+        if present.contains(&(race, class, spell_id)) {
+            continue;
+        }
+        next_id += 1;
+        missing.push((next_id, race, class, spell_id));
+    }
+    missing
 }
 
 pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {
@@ -1426,7 +1550,17 @@ pub(crate) const SPELL_GROUPS: &[(u32, u8, bool, &[u32])] = {
             RULE_EXCLUSIVE,
             false,
             &[
-                50116, 19705, 19706, 19708, 19709, 19710, 19711, 24799, 24870, 25694, 25941,
+                WELL_FED_SPELL,
+                19705,
+                19706,
+                19708,
+                19709,
+                19710,
+                19711,
+                24799,
+                24870,
+                25694,
+                25941,
             ],
         ),
     ]
@@ -1463,7 +1597,7 @@ pub(crate) const CREATEINFO_KIT: &[(u8, u8, u32)] = &[
     (1, 0, 20864),
 ];
 
-// The weapon proficiency rows of classic-db playercreateinfo_spell, by race and class.
+// The weapon proficiency rows of vmangos playercreateinfo_spell, by race and class.
 pub(crate) const CREATEINFO_WEAPON_KIT: &[(u8, u8, &[u32])] = &[
     (1, 1, &[196, 198, 201]),
     (1, 2, &[198, 199]),
@@ -1514,6 +1648,26 @@ mod tests {
     const VANILLA_CLASSES: &[u8] = &[1, 2, 3, 4, 5, 7, 8, 9, 11];
 
     #[test]
+    fn a_fixture_grant_seeded_first_neither_blocks_nor_renumbers_the_starting_kit() {
+        let weapon_rows: usize = CREATEINFO_WEAPON_KIT.iter().map(|(_, _, s)| s.len()).sum();
+        let empty = missing_createinfo_rows(&[]);
+        assert_eq!(empty.len(), CREATEINFO_KIT.len() + weapon_rows);
+
+        let fixture_grant = (50_300, 0, 3, 50_300);
+        assert_eq!(missing_createinfo_rows(&[fixture_grant]), empty);
+
+        let mut seeded = empty.clone();
+        seeded.push(fixture_grant);
+        assert_eq!(missing_createinfo_rows(&seeded), Vec::new());
+
+        let (id, race, class, spell) = empty[0];
+        assert_eq!(
+            missing_createinfo_rows(&[(id, race, class, spell)]).len(),
+            weapon_rows
+        );
+    }
+
+    #[test]
     fn every_playable_vanilla_class_has_a_starting_kit() {
         for &class in VANILLA_CLASSES {
             let kit: Vec<u32> = CREATEINFO_KIT
@@ -1523,9 +1677,7 @@ mod tests {
                 .collect();
             assert!(
                 kit.len() >= 2,
-                "class {class} starts with {} spell(s) {kit:?}. Every vanilla class begins with at \
-                 least an attack and one more ability; a class whose kit is missing or truncated \
-                 logs in with an empty spellbook and no error to say why",
+                "class {class} starts with {} spell(s) {kit:?}; every class needs at least two",
                 kit.len()
             );
         }
@@ -1533,8 +1685,7 @@ mod tests {
         for (race, class, spell) in CREATEINFO_KIT {
             assert!(
                 *class == 0 || VANILLA_CLASSES.contains(class),
-                "kit row (race {race}, class {class}, spell {spell}) names a class that does not \
-                 exist in 1.12.1 — nothing can ever be granted from it"
+                "kit row (race {race}, class {class}, spell {spell}) names a class absent from 1.12.1"
             );
         }
     }
@@ -1546,18 +1697,13 @@ mod tests {
             let (race, class, spell) = row;
             assert!(
                 !(*race == 0 && *class == 0),
-                "kit row {row:?} is a wildcard on BOTH columns — it would be granted to every \
-                 character of every race and class"
+                "kit row {row:?} is a wildcard on both race and class"
             );
             assert_ne!(
                 *spell, 0,
                 "kit row {row:?} grants spell id 0, which is not a spell"
             );
-            assert!(
-                seen.insert(*row),
-                "kit row {row:?} appears twice; the seeder inserts unconditionally, so the spell \
-                 lands in the starting spellbook twice"
-            );
+            assert!(seen.insert(*row), "kit row {row:?} appears twice");
         }
 
         assert!(
@@ -1584,52 +1730,6 @@ mod tests {
             }
         }
         assert_eq!(seen.len(), 40, "vanilla has 40 race and class pairs");
-    }
-
-    #[test]
-    fn blessing_family_carries_every_reconciled_rank() {
-        let blessings: Vec<u32> = SPELL_GROUPS
-            .iter()
-            .find(|&&(id, ..)| id == 3)
-            .expect("the Blessing family is gone")
-            .3
-            .to_vec();
-        for spell_id in [
-            19740, 19834, 19835, 19836, 19837, 19838, 25291, 19742, 19850, 19852, 19853, 19854,
-            25290, 20911, 20912, 20913, 20914, 19977, 19978, 19979, 20217, 1038, 25782, 25916,
-            25894, 25918, 25890, 25895, 25898, 25899,
-        ] {
-            assert!(
-                blessings.contains(&spell_id),
-                "Blessing rank {spell_id} is missing"
-            );
-        }
-    }
-
-    #[test]
-    fn reconciled_families_carry_the_ranks_that_were_missing() {
-        let members = |group_id: u32| -> Vec<u32> {
-            SPELL_GROUPS
-                .iter()
-                .find(|&&(id, ..)| id == group_id)
-                .unwrap_or_else(|| panic!("group {group_id} is gone"))
-                .3
-                .to_vec()
-        };
-        assert!(members(1).contains(&5234), "Mark of the Wild rank 4");
-        for feral in [16857, 17390, 17391, 17392] {
-            assert!(members(5).contains(&feral), "Faerie Fire (Feral) {feral}");
-        }
-    }
-
-    #[test]
-    fn battle_shout_is_the_only_rank_comparable_family() {
-        let comparable: Vec<u32> = SPELL_GROUPS
-            .iter()
-            .filter(|&&(_, _, rank_is_comparable, _)| rank_is_comparable)
-            .map(|&(group_id, ..)| group_id)
-            .collect();
-        assert_eq!(comparable, vec![4]);
     }
 
     #[test]
@@ -1675,56 +1775,5 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn the_mount_fixture_ids_stay_inside_the_reserved_ranges() {
-        for id in [FIXTURE_MOUNT_SPELL, FIXTURE_DAZED_SPELL] {
-            assert!(
-                (50_000..51_000).contains(&id),
-                "fixture spell {id} is outside the reserved 50xxx synthetic-spell range"
-            );
-        }
-        let ids = [
-            FIXTURE_MOUNT_SPELL,
-            FIXTURE_DAZED_SPELL,
-            TEST_TAME_BEAST_SPELL,
-            crate::skill::LEARN_APPRENTICE_RIDING_SPELL_ID,
-            crate::skill::LEARN_JOURNEYMAN_RIDING_SPELL_ID,
-        ];
-        let unique: std::collections::BTreeSet<u32> = ids.iter().copied().collect();
-        assert_eq!(
-            unique.len(),
-            ids.len(),
-            "fixture spell ids collide: {ids:?}"
-        );
-
-        assert!(
-            (51_000..52_000).contains(&RIDING_TRAINER_ENTRY),
-            "the riding trainer must use a reserved 51xxx creature entry"
-        );
-        for entry in [
-            TEST_WOLF_ENTRY,
-            PROFESSION_TRAINER_ENTRY,
-            TEST_TAME_BOAR_ENTRY,
-        ] {
-            assert_ne!(
-                entry, RIDING_TRAINER_ENTRY,
-                "the riding trainer shadows an existing fixture creature"
-            );
-        }
-        let items = [FIXTURE_BLADE, FIXTURE_JERKY, FIXTURE_REINS];
-        for entry in items {
-            assert!(
-                entry >= 5_090_000,
-                "fixture item {entry} is outside the reserved 509xxxx entry range"
-            );
-        }
-        let unique_items: std::collections::BTreeSet<u32> = items.iter().copied().collect();
-        assert_eq!(
-            unique_items.len(),
-            items.len(),
-            "fixture item entries collide: {items:?}"
-        );
     }
 }

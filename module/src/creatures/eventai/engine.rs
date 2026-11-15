@@ -1,23 +1,23 @@
+use crate::{CreatureAiRuleState, CreatureAiState};
 use std::collections::{BTreeMap, HashSet};
 
 use spacetimedb::{ReducerContext, Table};
 
 use super::mobility::game_creature_ai_summon_origin;
 use super::{
-    ActionResult, BroadcastLine, CreatureAiRuleState, CreatureAiState, CreatureInstruction,
-    CreatureState, CycleActor, DefinitionRevision, EngagedFight, EventAiDefinition, EventAiRequest,
-    EventAiRule, EventAiUnit, EventCondition, EventContext, EventPredicate, ExecutionPolicy,
-    InstructionSelection, RecurrencePolicy, RuleState, SpeakInstruction, SpeechMode,
-    SummonLocation,
+    ActionResult, BroadcastLine, CreatureInstruction, CreatureState, CycleActor,
+    DefinitionRevision, EngagedFight, EventAiDefinition, EventAiRequest, EventAiRule, EventAiUnit,
+    EventCondition, EventContext, EventPredicate, ExecutionPolicy, InstructionSelection,
+    RecurrencePolicy, RuleState, SpeakInstruction, SpeechMode, SummonLocation,
 };
 use crate::chat::{is_supported_chat_type, CHAT_SAY, CHAT_TEXT_EMOTE, CHAT_YELL};
-use crate::creatures::ai::TickScope;
+use crate::creatures::TickScope;
 use crate::quest::{EventAiQuestCredit, EventAiQuestCreditContext, QuestCreditOutcome};
-use crate::spell::{game_aura, game_spell};
+use crate::{game_aura, game_spell};
 use crate::{
     game_creature_ai_broadcast_text, game_creature_ai_rule_state, game_creature_ai_spell_metadata,
     game_creature_ai_state, game_creature_ai_summon, game_creature_template, game_faction_template,
-    game_melee_attack, game_threat, game_world_entity, WorldEntity,
+    game_melee_attack, game_world_entity, WorldEntity,
 };
 
 pub(crate) trait EventAiWorld {
@@ -30,6 +30,7 @@ pub(crate) trait EventAiWorld {
     fn eventai_unit(&self, guid: u64) -> Option<EventAiUnit>;
     fn eventai_spawner_guid(&self, creature_guid: u64) -> Option<u64>;
     fn eventai_units_near(&self, center: &EventAiUnit, radius_yd: f32) -> Vec<EventAiUnit>;
+    /// Threat on the creature in `threat::rank` order.
     fn eventai_threat(&self, creature_guid: u64) -> Vec<(u64, i64)>;
     fn eventai_has_aura(&self, guid: u64, spell_id: u32) -> bool;
     fn eventai_aura_stacks(&self, guid: u64, spell_id: u32) -> u32;
@@ -953,10 +954,6 @@ impl<'a> DatabaseWorld<'a> {
         Self { ctx }
     }
 
-    fn now_ms(&self) -> u64 {
-        (crate::time::now(self.ctx).to_micros_since_unix_epoch() / 1000) as u64
-    }
-
     fn state_row(&self, creature_guid: u64) -> Option<CreatureAiState> {
         self.ctx
             .db
@@ -992,7 +989,7 @@ pub(super) fn unit_of(entity: &WorldEntity) -> EventAiUnit {
 
 impl EventAiWorld for DatabaseWorld<'_> {
     fn eventai_now_ms(&self) -> u64 {
-        self.now_ms()
+        crate::time::now_ms(self.ctx)
     }
 
     fn eventai_fights(&self, scope: &TickScope) -> Vec<EngagedFight> {
@@ -1113,13 +1110,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
     }
 
     fn eventai_threat(&self, creature_guid: u64) -> Vec<(u64, i64)> {
-        self.ctx
-            .db
-            .game_threat()
-            .by_creature()
-            .filter(&creature_guid)
-            .map(|entry| (entry.source_guid, entry.threat))
-            .collect()
+        crate::threat::ranked(self.ctx, creature_guid)
     }
 
     fn eventai_scale_selected_threat(&mut self, operation: crate::threat::ScaleSelectedThreat) {
@@ -1237,23 +1228,20 @@ impl EventAiWorld for DatabaseWorld<'_> {
                 let Some(character) = crate::helpers::character_by_guid(self.ctx, guid) else {
                     return false;
                 };
-                let team = lyracore_shared::faction::team_for_race(character.race);
-                match predicate {
-                    EventPredicate::Alliance => team == 469,
-                    EventPredicate::Horde => team == 67,
-                    _ => unreachable!("team predicates handled in this branch"),
-                }
+                use lyracore_shared::faction::{team_for_race, TEAM_ALLIANCE, TEAM_HORDE};
+                let wanted = if predicate == EventPredicate::Alliance {
+                    TEAM_ALLIANCE
+                } else {
+                    TEAM_HORDE
+                };
+                team_for_race(character.race) == wanted
             }
             EventPredicate::QuestTaken(quest) => {
                 crate::quest::quest_is_taken(self.ctx, guid, quest.quest_entry)
             }
             EventPredicate::QuestIncomplete(quest_entry) => {
                 crate::quest::character_quest_row(self.ctx, guid, quest_entry).is_some_and(
-                    |quest| {
-                        !quest.rewarded
-                            && !quest.failed
-                            && !crate::quest::quest_is_complete(self.ctx, &quest)
-                    },
+                    |quest| quest.is_active() && !crate::quest::quest_is_complete(self.ctx, &quest),
                 )
             }
             EventPredicate::Map(map_id) => self
@@ -1513,7 +1501,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
     }
 
     fn eventai_deliver_sound(&mut self, source_guid: u64, sound_id: u32, chat_type: u8) {
-        crate::native::creature_sound(self.ctx, source_guid, sound_id, chat_type);
+        crate::native::chat::creature_sound(self.ctx, source_guid, sound_id, chat_type);
     }
 
     fn eventai_deliver_emote(&mut self, source_guid: u64, emote_id: u32, target_guid: u64) -> bool {
@@ -1568,7 +1556,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
         let melee = self.ctx.db.game_melee_attack();
         if let Some(mut fight) = melee.attacker_guid().find(creature_guid) {
             fight.rout_ends_ms = ends_ms;
-            crate::combat::MeleeAttack::update(self.ctx, fight);
+            crate::MeleeAttack::update(self.ctx, fight);
         }
     }
 
@@ -1690,7 +1678,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
             .filter(&target_guid)
             .filter(|aura| aura.spell_id == spell_id)
             .collect::<Vec<_>>();
-        crate::spell::shed_auras(self.ctx, target_guid, rows);
+        crate::spell::shed_auras(self.ctx, rows);
         true
     }
 
