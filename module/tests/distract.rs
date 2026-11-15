@@ -1,20 +1,21 @@
 mod support;
 
 use lyracore_shared::spell::taxonomy::{
-    A_STEALTH, E_DISTRACT, SPELL_ATTR_STEALTH_SAFE, T_AREA_ENEMY, T_SELF,
+    A_STEALTH, CAST_FLAG_STEALTH_SAFE, E_DISTRACT, T_AREA_ENEMY, T_SELF,
 };
 
 use std::collections::BTreeMap;
 use std::f32::consts::{FRAC_PI_4, TAU};
 use std::time::Duration;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::constants::unit_flags;
 use support::{poll_until, Standalone};
 
 type Row = BTreeMap<String, String>;
 
 const PLAYER: u64 = 1;
-const TEST_WOLF_ENTRY: u32 = 51000;
 const DISTRACT: u32 = 1725;
 const FIXTURE_STEALTH: u32 = 509_0700;
 
@@ -73,7 +74,7 @@ fn shard(name: &str) -> (Standalone, Line) {
         30_000,
         30,
         0,
-        SPELL_ATTR_STEALTH_SAFE,
+        CAST_FLAG_STEALTH_SAFE,
     );
     insert_effect(
         &shard,
@@ -107,14 +108,22 @@ fn insert_spell(
     duration_ms: u32,
     cast_flags: u32,
 ) {
-    shard.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
-         cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
-         aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
-         VALUES ({spell_id}, '{name}', {power_type}, {cost}, 0, 0, {cooldown_ms}, {range_yd}, \
-         {duration_ms}, 1, 0, 0, 0, 0, 0, 22, 0, false, {cast_flags}, 0, 8, 0, 0, 0, 0, 0)"
-    ));
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell_id),
+            ("name", &name),
+            ("power_type", &power_type),
+            ("cost", &cost),
+            ("cooldown_ms", &cooldown_ms),
+            ("range_yd", &range_yd),
+            ("duration_ms", &duration_ms),
+            ("school_mask", &1),
+            ("spell_level", &22),
+            ("cast_flags", &cast_flags),
+            ("family_name", &8),
+        ],
+    );
 }
 
 fn insert_effect(
@@ -126,14 +135,19 @@ fn insert_effect(
     target: u32,
     radius_yd: f32,
 ) {
-    let id = (spell_id as u64) << 2;
-    shard.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
-         per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-         VALUES ({id}, {spell_id}, 0, {kind}, {base_points}, {die_sides}, 0.0, 0, {target}, \
-         {radius_yd}, 0, 0, 0, 0, 0, 0, 0, false, 0.0)"
-    ));
+    let id = packed_spell_effect_id(spell_id, 0);
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &id),
+            ("spell_id", &spell_id),
+            ("kind", &kind),
+            ("base_points", &base_points),
+            ("die_sides", &die_sides),
+            ("target", &target),
+            ("radius_yd", &radius_yd),
+        ],
+    );
 }
 
 fn seed_hostile_factions(shard: &Standalone) {
@@ -141,12 +155,16 @@ fn seed_hostile_factions(shard: &Standalone) {
         shard.assert_sql(&format!(
             "DELETE FROM game_faction_template WHERE id = {id}"
         ));
-        shard.assert_sql(&format!(
-            "INSERT INTO game_faction_template (id, faction, faction_group, friend_group, \
-             enemy_group, enemy_0, enemy_1, enemy_2, enemy_3, friend_0, friend_1, friend_2, \
-             friend_3) VALUES ({id}, {faction}, {group}, {friends}, {enemies}, 0, 0, 0, 0, 0, 0, \
-             0, 0)"
-        ));
+        shard.insert_row(
+            "game_faction_template",
+            &[
+                ("id", &id),
+                ("faction", &faction),
+                ("faction_group", &group),
+                ("friend_group", &friends),
+                ("enemy_group", &enemies),
+            ],
+        );
     }
 }
 
@@ -267,9 +285,10 @@ fn distract_turns_only_the_idle_creatures_near_the_point_and_keeps_the_rogue_hid
     let homing = spawn_wolf(&shard, 16.0);
     let outside = spawn_wolf(&shard, 32.0);
     hold_in_combat(&shard, fighting);
-    shard.assert_sql(&format!(
-        "INSERT INTO game_creature_ai_returning_home (creature_guid) VALUES ({homing})"
-    ));
+    shard.insert_row(
+        "game_creature_ai_returning_home",
+        &[("creature_guid", &homing)],
+    );
 
     insert_spell(
         &shard,
@@ -407,10 +426,16 @@ fn a_distraction_holds_idle_movement_until_its_expiry_and_ends_on_an_engagement(
         shard.assert_sql(&format!(
             "DELETE FROM game_creature_waypoint WHERE id = {id}"
         ));
-        shard.assert_sql(&format!(
-            "INSERT INTO game_creature_waypoint (id, creature_guid, x, y, z) \
-             VALUES ({id}, {patroller}, {x}, {y}, {z})"
-        ));
+        shard.insert_row(
+            "game_creature_waypoint",
+            &[
+                ("id", &id),
+                ("creature_guid", &patroller),
+                ("x", &x),
+                ("y", &y),
+                ("z", &z),
+            ],
+        );
     }
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET wp_target = 5090702 WHERE guid = {patroller}"

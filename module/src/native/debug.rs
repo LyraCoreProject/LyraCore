@@ -1,6 +1,6 @@
 use spacetimedb::{reducer, table, ConnectionId, Identity, ReducerContext, Table};
 
-use super::{game_native_player, game_native_world_connection, NativeWorldState};
+use super::{game_native_world_connection, NativeWorldState};
 use crate::{game_account, game_world_entity};
 mod projection;
 
@@ -29,6 +29,12 @@ pub struct NativeConformanceBirth {
     pub added_at: spacetimedb::Timestamp,
 }
 
+crate::outside_table_catalog!(
+    game_native_conformance_connection,
+    game_native_conformance_create,
+    game_native_conformance_birth
+);
+
 pub(crate) fn record_birth(
     ctx: &ReducerContext,
     guid: u64,
@@ -42,11 +48,7 @@ pub(crate) fn record_birth(
         .is_some_and(|_| crate::spell::is_stealthed(ctx, guid));
     let viewers = crate::aoi::nearby_viewers(ctx, map_id, instance_id, cell)
         .filter(|viewer| {
-            ctx.db
-                .game_native_player()
-                .character_guid()
-                .find(viewer.guid)
-                .is_some()
+            super::world_session(ctx, viewer.guid).is_some()
                 && entity
                     .as_ref()
                     .is_none_or(|entity| viewer.sees_entity(entity, stealthed))
@@ -164,7 +166,7 @@ pub fn debug_native_enter_world(ctx: &ReducerContext, character_guid: u64) -> Re
         connection,
         account.id,
         character_guid,
-        crate::world::WorldEntry::Login,
+        crate::character::WorldEntry::Login,
         0,
     )
 }

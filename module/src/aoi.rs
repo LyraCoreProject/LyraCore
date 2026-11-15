@@ -8,8 +8,8 @@ use spacetimedb::{table, ReducerContext, Table};
 
 use crate::corpse::{game_corpse, Corpse};
 use crate::gameobject::{game_gameobject, GameObject};
-use crate::spell::{game_dynamic_object, DynamicObject};
 use crate::world::{game_world_entity, WorldEntity};
+use crate::{game_dynamic_object, DynamicObject};
 
 pub(crate) const WORLD_ENTITY: u8 = 0;
 pub(crate) const GAME_OBJECT: u8 = 1;
@@ -46,6 +46,8 @@ pub struct AoiViewer {
     pub cell: i64,
     pub is_ghost: bool,
 }
+
+crate::outside_table_catalog!(game_aoi_grant, game_aoi_viewer);
 
 crate::character_owned!(delete, fn sweep_delete_game_aoi_grant(ctx, character_guid) {
     remove_viewer_grants(ctx, character_guid);
@@ -180,13 +182,12 @@ fn shift_subject(ctx: &ReducerContext, from: i64, entity: &WorldEntity) {
             .filter((map_id, instance_id, cell))
         {
             if let Some(grant) = find(viewer.guid) {
-                grants.id().delete(grant.id);
-                crate::native::grant_removed(ctx, &grant);
+                revoke(ctx, &grant);
             }
         }
     }
     let stealthed = crate::spell::is_stealthed(ctx, entity.guid);
-    crate::native::with_shared_creates(|| {
+    crate::native::visibility::with_shared_creates(|| {
         for cell in cells(entity.cell).filter(|&cell| !before.contains(map_id, instance_id, cell)) {
             for viewer in ctx
                 .db
@@ -195,13 +196,7 @@ fn shift_subject(ctx: &ReducerContext, from: i64, entity: &WorldEntity) {
                 .filter((map_id, instance_id, cell))
             {
                 if viewer.sees_entity(entity, stealthed) && find(viewer.guid).is_none() {
-                    let grant = grants.insert(AoiGrant {
-                        id: 0,
-                        viewer_guid: viewer.guid,
-                        layer: WORLD_ENTITY,
-                        entity_guid: entity.guid,
-                    });
-                    crate::native::grant_added(ctx, &grant, false);
+                    grant(ctx, viewer.guid, WORLD_ENTITY, entity.guid, false);
                 }
             }
         }
@@ -316,21 +311,14 @@ fn shift_viewer(ctx: &ReducerContext, from: &AoiViewer, to: &AoiViewer) {
     for cell in cells_within(from.cell, KEEP_HALF_SPAN).filter(gone) {
         for (layer, guid) in subjects_in(ctx, from, cell, true) {
             if let Some(grant) = find(layer, guid) {
-                grants.id().delete(grant.id);
-                crate::native::grant_removed(ctx, &grant);
+                revoke(ctx, &grant);
             }
         }
     }
     for cell in cells(to.cell).filter(|&cell| !from.contains(from.map_id, from.instance_id, cell)) {
         for (layer, entity_guid) in subjects_in(ctx, to, cell, false) {
             if find(layer, entity_guid).is_none() {
-                let grant = grants.insert(AoiGrant {
-                    id: 0,
-                    viewer_guid: to.guid,
-                    layer,
-                    entity_guid,
-                });
-                crate::native::grant_added(ctx, &grant, false);
+                grant(ctx, to.guid, layer, entity_guid, false);
             }
         }
     }
@@ -351,8 +339,7 @@ fn refresh_viewer(ctx: &ReducerContext, viewer: &AoiViewer) {
         .collect();
     for (subject, grant) in existing {
         if !wanted.remove(&subject) {
-            grants.id().delete(grant.id);
-            crate::native::grant_removed(ctx, &grant);
+            revoke(ctx, &grant);
         }
     }
     // A Passenger's CREATE names its Transport, so the client must already have that Transport.
@@ -360,13 +347,7 @@ fn refresh_viewer(ctx: &ReducerContext, viewer: &AoiViewer) {
         .into_iter()
         .partition(|(layer, _)| *layer == TRANSPORT);
     for (layer, entity_guid) in transports.into_iter().chain(others) {
-        let grant = grants.insert(AoiGrant {
-            id: 0,
-            viewer_guid: viewer.guid,
-            layer,
-            entity_guid,
-        });
-        crate::native::grant_added(ctx, &grant, false);
+        grant(ctx, viewer.guid, layer, entity_guid, false);
     }
 }
 
@@ -381,19 +362,12 @@ fn replace_subject(
     let existing: Vec<_> = grants.by_subject().filter((layer, entity_guid)).collect();
     for grant in existing {
         if !wanted.remove(&grant.viewer_guid) {
-            grants.id().delete(grant.id);
-            crate::native::grant_removed(ctx, &grant);
+            revoke(ctx, &grant);
         }
     }
-    crate::native::with_shared_creates(|| {
+    crate::native::visibility::with_shared_creates(|| {
         for viewer_guid in wanted {
-            let grant = grants.insert(AoiGrant {
-                id: 0,
-                viewer_guid,
-                layer,
-                entity_guid,
-            });
-            crate::native::grant_added(ctx, &grant, newly_added);
+            grant(ctx, viewer_guid, layer, entity_guid, newly_added);
         }
     });
 }
@@ -429,8 +403,7 @@ pub(crate) fn remove_subject(ctx: &ReducerContext, layer: u8, guid: u64) {
     let grants = ctx.db.game_aoi_grant();
     let rows: Vec<_> = grants.by_subject().filter((layer, guid)).collect();
     for grant in rows {
-        grants.id().delete(grant.id);
-        crate::native::grant_removed(ctx, &grant);
+        revoke(ctx, &grant);
     }
 }
 
@@ -438,9 +411,25 @@ fn remove_viewer_grants(ctx: &ReducerContext, guid: u64) {
     let grants = ctx.db.game_aoi_grant();
     let rows: Vec<_> = grants.by_viewer().filter(guid).collect();
     for grant in rows {
-        grants.id().delete(grant.id);
-        crate::native::grant_removed(ctx, &grant);
+        revoke(ctx, &grant);
     }
+}
+
+/// Grants `viewer_guid` the subject and relays its CREATE.
+fn grant(ctx: &ReducerContext, viewer_guid: u64, layer: u8, entity_guid: u64, newly_added: bool) {
+    let grant = ctx.db.game_aoi_grant().insert(AoiGrant {
+        id: 0,
+        viewer_guid,
+        layer,
+        entity_guid,
+    });
+    crate::native::visibility::grant_added(ctx, &grant, newly_added);
+}
+
+/// Revokes a Grant and relays its DESTROY.
+fn revoke(ctx: &ReducerContext, grant: &AoiGrant) {
+    ctx.db.game_aoi_grant().id().delete(grant.id);
+    crate::native::visibility::grant_removed(ctx, grant);
 }
 
 #[cfg(test)]

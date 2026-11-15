@@ -464,8 +464,10 @@ mod tests {
     use super::*;
 
     fn full_scope() -> WorldImportScope {
-        WorldImportScope::canonical(crate::WorldImportProfile::parse("full-world").unwrap())
-            .unwrap()
+        WorldImportScope::canonical(
+            crate::world_import_scope::WorldImportProfile::parse("full-world").unwrap(),
+        )
+        .unwrap()
     }
 
     fn vmangos_source() -> crate::world_source::WorldSource {
@@ -482,7 +484,7 @@ mod tests {
             CREATE TABLE pool_pool (pool_id INTEGER, mother_pool INTEGER, chance REAL);
             CREATE TABLE pool_gameobject (guid INTEGER, pool_entry INTEGER, patch_min INTEGER, patch_max INTEGER);
             CREATE TABLE pool_gameobject_template (id INTEGER, pool_entry INTEGER, patch_min INTEGER, patch_max INTEGER);").unwrap();
-        crate::world_source::WorldSource::Vmangos(connection)
+        crate::world_source::WorldSource::fixture(connection)
     }
 
     #[test]
@@ -504,9 +506,7 @@ mod tests {
     fn vmangos_population_stops_choices_at_the_first_empty_slot() {
         for (slots, expected) in [("10,0,20,0,0", vec![10]), ("0,0,20,0,0", vec![])] {
             let source = vmangos_source();
-            let crate::world_source::WorldSource::Vmangos(connection) = &source else {
-                unreachable!()
-            };
+            let connection = source.fixture_connection();
             connection.execute_batch(&format!(
                 "DELETE FROM creature; INSERT INTO creature VALUES (1,{slots},0,1,2,3,0,0,60,0,0,10)"
             )).unwrap();
@@ -528,9 +528,7 @@ mod tests {
     #[test]
     fn unrepresentable_vmangos_nested_pool_is_retained_but_inactive() {
         let source = vmangos_source();
-        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch("INSERT INTO pool_template VALUES (1,1,0,10),(2,2,0,10); INSERT INTO pool_pool VALUES (2,1,0); INSERT INTO pool_creature VALUES (1,2,0,0,10);").unwrap();
         let plan = collect(&source, &full_scope()).unwrap();
         assert_eq!(plan.spawns.len(), 1);

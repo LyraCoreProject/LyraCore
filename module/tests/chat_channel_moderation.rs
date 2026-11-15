@@ -1,7 +1,7 @@
 mod support;
 
 use serde_json::{json, Value};
-use support::{actor, Standalone};
+use support::{actor, refused, Standalone};
 
 const NOTICES: &str = "SELECT * FROM game_chat_channel_notice_event";
 const LINES: &str = "SELECT * FROM game_realm_chat_event";
@@ -130,19 +130,6 @@ fn invite(
             OP_INVITE,
             &request(channel, target, target_ignores_actor, race),
         ],
-    );
-}
-
-fn refused(realm: &Standalone, reducer: &str, args: &[&str], tag: &str) {
-    let result = realm.call(reducer, args);
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&result.stdout),
-        String::from_utf8_lossy(&result.stderr)
-    );
-    assert!(
-        !result.status.success() && output.contains(tag),
-        "{reducer} should refuse with {tag}: {output}"
     );
 }
 
@@ -459,9 +446,14 @@ fn mute_kick_and_ban_remove_or_silence_members() {
     join(&realm, &actor("4"), "Raiders", HUMAN);
 
     let raiders = channel_id(&realm, "Raiders");
-    realm.assert_sql(&format!(
-        "INSERT INTO game_chat_channel_ban (id, channel_id, character_guid) VALUES (9101, {raiders}, 4)"
-    ));
+    realm.insert_row(
+        "game_chat_channel_ban",
+        &[
+            ("id", &9101),
+            ("channel_id", &raiders),
+            ("character_guid", &4),
+        ],
+    );
     let second_ban = notices_of(&realm, || {
         op(
             &realm,

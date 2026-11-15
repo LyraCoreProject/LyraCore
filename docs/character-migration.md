@@ -1,7 +1,7 @@
 # Character Migration
 
 A Character Migration copies Accounts and Characters from a vmangos or cmangos server, the
-Migration Source, into a single-Shard Realm. [ADR 0008](./adr/0008-migrate-characters-from-mangos-servers.md)
+Migration Source, into a single-Shard Realm. [ADR 0009](./adr/0009-migrate-characters-from-mangos-servers.md)
 records why the Module owns the translation. `module/src/character_migration.rs` holds the reducers,
 and `migrator/` holds the tool that reads the source.
 

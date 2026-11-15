@@ -2,7 +2,9 @@ use spacetimedb::{table, ReducerContext, Table};
 
 use super::eventai::RelayFlagOperation;
 use super::eventai::{CreaturePresentationInstruction, CreaturePresentationMount, FlagOverride};
-use crate::{game_creature_ai_state, game_creature_template, game_world_entity};
+use crate::{
+    game_creature_ai_state, game_creature_template, game_item_template, game_world_entity,
+};
 
 const NOT_ATTACKABLE: u32 = 0x0000_0002;
 const IMMUNE_TO_PLAYERS: u32 = 0x0000_0100;
@@ -14,6 +16,42 @@ const PRESENTATION_UNIT_FLAGS: u32 = NOT_ATTACKABLE
     | IMMUNE_TO_CREATURES
     | RAJAXX_CLIENT_PROJECTION
     | NOT_SELECTABLE;
+
+/// Shows the virtual equipment of three item entries on a creature; entry 0 clears a slot.
+pub(crate) fn equip_swap(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    main_hand: u32,
+    off_hand: u32,
+    ranged: u32,
+) -> Result<(), String> {
+    let e = crate::helpers::live_entity(ctx, creature_guid)
+        .map_err(|_| format!("no live entity {creature_guid}"))?;
+    if e.is_player() {
+        return Err("equip_swap targets creatures only".to_string());
+    }
+    let display = |entry: u32| -> Result<u32, String> {
+        if entry == 0 {
+            return Ok(0);
+        }
+        ctx.db
+            .game_item_template()
+            .entry()
+            .find(entry)
+            .map(|item| item.display_id)
+            .ok_or_else(|| format!("virtual equipment item {entry} is missing"))
+    };
+    let (main_hand, off_hand, ranged) = (display(main_hand)?, display(off_hand)?, display(ranged)?);
+    crate::EncounterEquip {
+        creature_guid,
+        instance_id: e.instance_id,
+        main_hand,
+        off_hand,
+        ranged,
+    }
+    .replace(ctx);
+    Ok(())
+}
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NpcFlagsProjection {
@@ -330,7 +368,7 @@ pub(crate) fn update_template_from_relay(
     entity.base_attack_time_ms = template.base_attack_time_ms;
     entity.armor = stats.map_or(template.armor, |stats| stats.armor);
     entity.update(ctx);
-    let _ = crate::creatures::set_creature_gossip_menu(ctx, creature_guid, None);
+    crate::creatures::clear_gossip_menu_override(ctx, creature_guid);
     Ok(())
 }
 

@@ -1,4 +1,3 @@
-use lyracore_shared::pet::{is_valid_pet_name, pet_guid_for, PET_NAME_INVALID};
 use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration, Timestamp};
 
 use crate::{
@@ -6,10 +5,27 @@ use crate::{
     WorldEntity,
 };
 
+use super::pet_guid_for;
+
 const CLASS_HUNTER: u8 = 3;
 const INITIAL_HAPPINESS: u32 = 166_500;
 // In 1.12, Rename Pet eligibility uses UNIT_FIELD_FLAGS rather than UNIT_FIELD_BYTES_2.
 const UNIT_FLAG_PET_RENAME: u32 = 0x0000_0010;
+
+// Unicode scalar limits: CMaNGOS defaults to 2; the 1.12 client caps names at 12.
+const MIN_PET_NAME: usize = 2;
+const MAX_PET_NAME: usize = 12;
+
+pub(crate) const PET_NAME_INVALID: &str = "PET_NAME_INVALID";
+
+/// Uses one allowed script; ASCII digits and spaces are refused.
+fn is_valid_pet_name(name: &str) -> bool {
+    let length = name.chars().count();
+    (MIN_PET_NAME..=MAX_PET_NAME).contains(&length)
+        && lyracore_shared::guild::Script::ALL
+            .into_iter()
+            .any(|script| name.chars().all(|c| script.holds(c)))
+}
 
 #[derive(Clone)]
 #[table(
@@ -155,7 +171,7 @@ pub(crate) fn publish_hunter_pet_protocol(
     } else {
         table.insert(row)
     };
-    crate::native::hunter_pet_changed(ctx, previous.as_ref(), &row);
+    crate::native::pet::changed(ctx, previous.as_ref(), &row);
 }
 
 pub(crate) fn live_pet_kind(ctx: &ReducerContext, pet_guid: u64) -> PetKind {
@@ -330,8 +346,8 @@ pub(crate) fn tame_creature(
         };
         spawn.respawn_at = crate::time::now(ctx)
             .checked_add(TimeDuration::from_micros(delay_micros))
-            .unwrap_or_else(|| super::timer_never(ctx));
-        spawn.despawn_at = super::timer_never(ctx);
+            .unwrap_or_else(|| crate::time::timer_never(ctx));
+        spawn.despawn_at = crate::time::timer_never(ctx);
         ctx.db.game_creature_spawn().guid().update(spawn);
     }
     target.guid = pet_guid;
@@ -456,6 +472,25 @@ pub fn gw_pet_rename(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_pet_name_is_two_to_twelve_letters_of_one_script() {
+        for name in ["Wo", "Wolf", "Fenrisúlfrxx", "Волк", "ウルフ"] {
+            assert!(is_valid_pet_name(name), "{name} should be valid");
+        }
+        for name in [
+            "",
+            "W",
+            "Wolfwolfwolfw",
+            "Wolf 2",
+            "Wolf2",
+            " Wolf",
+            "Wo-lf",
+            "WКlf", // Cyrillic U+041A amid Latin letters.
+        ] {
+            assert!(!is_valid_pet_name(name), "{name:?} should be refused");
+        }
+    }
 
     #[test]
     fn a_new_name_timestamp_advances_until_the_protocol_limit() {

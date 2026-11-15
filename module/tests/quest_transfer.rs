@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use support::{actor, number, Row, Standalone};
 
 const CHARACTER: &str = "1";
@@ -27,38 +28,55 @@ fn quests(shard: &Standalone) -> Vec<Row> {
 fn seed_quests(shard: &Standalone) {
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &[CHARACTER]);
-    shard.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
-    shard.assert_sql("UPDATE game_creature_template SET faction_template = 35 WHERE entry = 51000");
+    shard.assert_sql(&format!(
+        "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_template SET faction_template = 35 WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
 
     for offset in 0..4 {
         let entry = FIRST_QUEST + offset;
-        shard.assert_sql(&format!(
-            "INSERT INTO game_quest_template \
-             (entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,\
-             required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,\
-             rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,\
-             limit_time,reward_money_max_level,quest_type) \
-             VALUES ({entry},0,2,'Transfer quest',0,0,0,0,0,12,0,0,0,0,0,0,false,0,0,0,0)"
-        ));
+        shard.insert_row(
+            "game_quest_template",
+            &[
+                ("entry", &entry),
+                ("quest_level", &2),
+                ("title", &"Transfer quest"),
+                ("zone_or_sort", &12),
+            ],
+        );
         for objective in 0..4 {
             let id = u64::from(entry) * 4 + objective;
             let required_count = 4 - objective;
-            shard.assert_sql(&format!(
-                "INSERT INTO game_quest_objective \
-                 (id,quest_entry,obj_index,kind,target_entry,required_count) \
-                 VALUES ({id},{entry},{objective},0,51000,{required_count})"
-            ));
+            shard.insert_row(
+                "game_quest_objective",
+                &[
+                    ("id", &id),
+                    ("quest_entry", &entry),
+                    ("obj_index", &objective),
+                    ("target_entry", &TEST_WOLF_ENTRY),
+                    ("required_count", &required_count),
+                ],
+            );
         }
         let objectives = shard.query_rows(&format!(
             "SELECT * FROM game_quest_objective WHERE quest_entry = {entry}"
         ));
         assert_eq!(objectives.len(), 4, "{objectives:?}");
         shard.assert_call("debug_grant_quest", &[CHARACTER, &entry.to_string()]);
-        shard.assert_call("debug_spawn_at_feet", &[CHARACTER, "51000", "5"]);
-        let wolf = shard
-            .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000 AND dead = false");
+        shard.assert_call(
+            "debug_spawn_at_feet",
+            &[CHARACTER, &TEST_WOLF_ENTRY.to_string(), "5"],
+        );
+        let wolf = shard.query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY} AND dead = false"
+        ));
         shard.assert_call("debug_apply_damage", &[&wolf[0]["guid"], "1", CHARACTER]);
-        shard.assert_call("debug_kill_nearest", &[CHARACTER, "51000"]);
+        shard.assert_call(
+            "debug_kill_nearest",
+            &[CHARACTER, &TEST_WOLF_ENTRY.to_string()],
+        );
     }
 
     shard.assert_sql(&format!(

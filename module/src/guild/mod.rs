@@ -10,6 +10,7 @@ pub mod fee;
 pub mod membership;
 pub mod petition;
 pub(crate) use fee::{sweep_delete_game_guild_fee_hold, sweep_transfer_game_guild_fee_hold};
+use petition::game_guild_petition_sequence;
 mod settings;
 
 #[table(accessor = game_guild, index(accessor = by_leader, btree(columns = [leader_guid])))]
@@ -39,11 +40,61 @@ pub struct GuildSequence {
     pub last_id: u32,
 }
 
-pub(crate) fn observe_guild_id(ctx: &ReducerContext, id: u32) {
-    let sequence = ctx.db.game_guild_sequence();
-    let last_id = sequence.id().find(0).map_or(id, |row| row.last_id.max(id));
-    sequence.id().delete(0);
-    sequence.insert(GuildSequence { id: 0, last_id });
+crate::outside_table_catalog!(game_guild_sequence);
+
+#[derive(Clone, Copy)]
+pub(crate) enum IdSequence {
+    Guild,
+    Petition,
+}
+
+impl IdSequence {
+    fn last_id(self, ctx: &ReducerContext) -> Option<u32> {
+        match self {
+            Self::Guild => ctx
+                .db
+                .game_guild_sequence()
+                .id()
+                .find(0)
+                .map(|row| row.last_id),
+            Self::Petition => ctx
+                .db
+                .game_guild_petition_sequence()
+                .id()
+                .find(0)
+                .map(|row| row.last_id),
+        }
+    }
+
+    pub(crate) fn observe(self, ctx: &ReducerContext, id: u32) {
+        let last_id = self.last_id(ctx).map_or(id, |last| last.max(id));
+        match self {
+            Self::Guild => {
+                let sequence = ctx.db.game_guild_sequence();
+                sequence.id().delete(0);
+                sequence.insert(GuildSequence { id: 0, last_id });
+            }
+            Self::Petition => {
+                let sequence = ctx.db.game_guild_petition_sequence();
+                sequence.id().delete(0);
+                sequence.insert(petition::GuildPetitionSequence { id: 0, last_id });
+            }
+        }
+    }
+
+    // A Realm Shard mints Realm-wide ids; any other Shard returns 0 and lets `auto_inc` choose.
+    pub(crate) fn next(self, ctx: &ReducerContext) -> Result<u32, GuildRefusal> {
+        if crate::peer::world_shard(ctx).is_none() {
+            return Ok(0);
+        }
+        let next = self
+            .last_id(ctx)
+            .unwrap_or(0)
+            .checked_add(1)
+            .ok_or(GuildRefusal::NoPermission)?;
+        self.observe(ctx, next);
+        Ok(next)
+    }
 }
 
 #[table(accessor = game_guild_rank, index(accessor = by_guild, btree(columns = [guild_id])))]
@@ -73,25 +124,25 @@ pub struct GuildMember {
 impl GuildMember {
     pub(crate) fn insert(self, ctx: &ReducerContext) -> Self {
         let row = ctx.db.game_guild_member().insert(self);
-        crate::native::guild_member_changed(ctx, row.character_guid);
-        crate::native::guild_membership_changed(ctx, row.character_guid);
+        crate::native::realm_guild::member_changed(ctx, row.character_guid);
+        crate::native::guild::membership_changed(ctx, row.character_guid);
         row
     }
 
     pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
         let previous = member(ctx, self.character_guid);
         let row = ctx.db.game_guild_member().character_guid().update(self);
-        crate::native::guild_member_changed(ctx, row.character_guid);
+        crate::native::realm_guild::member_changed(ctx, row.character_guid);
         if previous.is_none_or(|old| (old.guild_id, old.rank_id) != (row.guild_id, row.rank_id)) {
-            crate::native::guild_membership_changed(ctx, row.character_guid);
+            crate::native::guild::membership_changed(ctx, row.character_guid);
         }
         row
     }
 
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {
         if ctx.db.game_guild_member().character_guid().delete(guid) {
-            crate::native::guild_member_changed(ctx, guid);
-            crate::native::guild_membership_changed(ctx, guid);
+            crate::native::realm_guild::member_changed(ctx, guid);
+            crate::native::guild::membership_changed(ctx, guid);
         }
     }
 }
@@ -313,20 +364,7 @@ pub(crate) fn create_guild(
         },
         member(ctx, leader_guid).is_some(),
     )?;
-    let guild_id = if crate::peer::world_shard(ctx).is_some() {
-        let next = ctx
-            .db
-            .game_guild_sequence()
-            .id()
-            .find(0)
-            .map_or(0, |row| row.last_id)
-            .checked_add(1)
-            .ok_or(GuildRefusal::NoPermission)?;
-        observe_guild_id(ctx, next);
-        next
-    } else {
-        0
-    };
+    let guild_id = IdSequence::Guild.next(ctx)?;
     let guild = ctx.db.game_guild().insert(Guild {
         guild_id,
         name_key: key,
@@ -444,7 +482,11 @@ pub(crate) fn push_event(
         strings,
         created_at: crate::time::now(ctx),
     });
-    crate::native::guild_event(ctx, &event);
+    crate::native::guild::event(ctx, &event);
+}
+
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_guild_event, crate::EVENT_TTL_MICROS);
 }
 
 #[cfg(test)]
@@ -610,8 +652,7 @@ mod tests {
             assert_eq!(
                 encoded.first().copied(),
                 Some(expected_tag),
-                "GuildOp::{name} moved off BSATN tag {expected_tag}; a client still on the old \
-                 wire schema would silently decode a different variant after this ships"
+                "GuildOp::{name} moved off BSATN tag {expected_tag}"
             );
         }
     }

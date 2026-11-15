@@ -378,15 +378,13 @@ pub(crate) fn fixture() -> crate::world_source::WorldSource {
     connection.execute_batch(&format!("CREATE TABLE spell_template (entry INTEGER,build INTEGER,name TEXT,script_name TEXT DEFAULT '',{declarations},PRIMARY KEY(entry,build));
         INSERT INTO spell_template (entry,build,name,effect1,effectBasePoints1) VALUES (10,4222,'Old',2,1),(10,5875,'Selected',2,19),(10,6000,'Future',2,99);
         UPDATE spell_template SET school=4,spellLevel=7,castingTimeIndex=1,rangeIndex=1,durationIndex=1,effectDieSides1=1,effectRealPointsPerLevel1=1.25,reagent1=123,reagentCount1=2,powerType=-2,script_name='fixture_script',effect2=6,effectApplyAuraName2=107,effectItemType2=4294967297 WHERE build=5875;")).unwrap();
-    crate::world_source::WorldSource::Vmangos(connection)
+    crate::world_source::WorldSource::fixture(connection)
 }
 
 #[cfg(test)]
 pub(crate) fn guardian_fixture() -> crate::world_source::WorldSource {
     let source = fixture();
-    let crate::world_source::WorldSource::Vmangos(connection) = &source else {
-        unreachable!()
-    };
+    let connection = source.fixture_connection();
     connection.execute_batch("INSERT INTO spell_template (entry,build,name,effect1,effectMiscValue1,effectImplicitTargetA1,effectMultipleValue1,effectBasePoints1,effectBaseDice1,effectDieSides1,castingTimeIndex,rangeIndex,durationIndex) VALUES (5200,4222,'Guardian fixture',42,636,32,1000,1,1,1,1,1,1)").unwrap();
     source
 }
@@ -408,9 +406,7 @@ mod tests {
             "effectMiscValue1=5099001",
         ] {
             let source = guardian_fixture();
-            let crate::world_source::WorldSource::Vmangos(connection) = &source else {
-                unreachable!()
-            };
+            let connection = source.fixture_connection();
             connection
                 .execute_batch(&format!(
                     "UPDATE spell_template SET {update} WHERE entry=5200"
@@ -442,9 +438,7 @@ mod tests {
     fn seals_and_blessings_do_not_displace_judgements_on_another_target() {
         use lyracore_shared::spell_custom::single_target_conflicts;
         let source = fixture();
-        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
-            unreachable!();
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch("UPDATE spell_template SET spellFamilyName=10, spellFamilyFlags=1024, baseLevel=1, spellIconId=10").unwrap();
         let judgement = read(&source).unwrap().0[0].single_target_key;
         for earlier_category in [0x0a000200u64, 0x10000100] {
@@ -489,9 +483,7 @@ mod tests {
     #[test]
     fn spell_roll_fields_are_selected_from_the_source() {
         let source = fixture();
-        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch("UPDATE spell_template SET attributesEx2=536870912,attributesEx3=262144,attributesEx4=1,dmgClass=1 WHERE build=5875").unwrap();
         let (spells, _) = read(&source).unwrap();
         let spell = &spells[0];
@@ -504,9 +496,7 @@ mod tests {
     #[test]
     fn source_behavior_fields_are_checked_and_unknown_bits_are_refused() {
         let source = fixture();
-        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute("UPDATE spell_template SET customFlags=1024,minTargetLevel=8,effectBonusCoefficient1=0.5,effectBonusCoefficient2=-1,effectBonusCoefficient3=0 WHERE build=5875", []).unwrap();
         let (spells, _) = read(&source).unwrap();
         assert_eq!(spells[0].custom_flags, 1024);
@@ -532,9 +522,7 @@ mod tests {
     #[test]
     fn invalid_or_missing_source_fields_fail_with_the_column_name() {
         let source = fixture();
-        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection
             .execute(
                 "UPDATE spell_template SET manaCost='bad' WHERE build=5875",
