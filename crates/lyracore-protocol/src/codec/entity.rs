@@ -1,4 +1,23 @@
-use super::*;
+use super::item::{build_set_proficiency_msgs, ItemInstanceView};
+use super::update_mask;
+use super::values::{build_sheet_stats_values, SheetStatsValues};
+use anyhow::{anyhow, Result};
+use lyracore_shared::constants::speeds;
+use lyracore_shared::packing::unpack4;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+use wow_world_messages::vanilla::{
+    Area, Class, DateTime, FactionFlag, FactionInitializer, Gender, InitialSpell, ItemSlot, Map,
+    Month, MovementBlock, MovementBlock_MovementFlags, MovementBlock_MovementFlags_SplineEnabled,
+    MovementBlock_SplineFlag, MovementBlock_UpdateFlag, MovementBlock_UpdateFlag_All,
+    MovementBlock_UpdateFlag_Living, Object, ObjectType, PetCommandState, PetEnabled,
+    PetReactState, Power, Race, SMSG_PET_SPELLS_action_bars, Skill, SkillInfo, SkillInfoIndex,
+    UpdateMask, UpdatePlayer, UpdateUnit, Vector3d, VisibleItem, VisibleItemIndex, Weekday,
+    SMSG_ACCOUNT_DATA_TIMES, SMSG_ACTION_BUTTONS, SMSG_BINDPOINTUPDATE, SMSG_DESTROY_OBJECT,
+    SMSG_INITIALIZE_FACTIONS, SMSG_INITIAL_SPELLS, SMSG_LOGIN_SETTIMESPEED,
+    SMSG_LOGIN_VERIFY_WORLD, SMSG_PET_SPELLS, SMSG_SET_REST_START, SMSG_TUTORIAL_FLAGS,
+    SMSG_UPDATE_OBJECT,
+};
+use wow_world_messages::Guid;
 
 #[derive(Clone, Debug, Default)]
 pub struct EntityView {
@@ -599,7 +618,7 @@ pub fn set_create_sheet_stats(
 
     let mut bytes = Vec::new();
     build_sheet_stats_values(guid, stats).write_unencrypted_server(&mut bytes)?;
-    let updates = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
+    let updates = crate::codec::values_mask::parse_values_updates(&bytes[4..]);
     let fields = &updates
         .first()
         .ok_or_else(|| anyhow!("could not read sheet descriptor"))?
@@ -633,7 +652,7 @@ fn add_create_fields(
     };
     let mut bytes = Vec::new();
     envelope.write_unencrypted_server(&mut bytes)?;
-    let decoded = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
+    let decoded = crate::codec::values_mask::parse_values_updates(&bytes[4..]);
     let fields = &decoded
         .first()
         .ok_or_else(|| anyhow!("could not read CREATE descriptor"))?
@@ -856,3 +875,6 @@ pub fn build_set_faction_standing_raw(
     body.extend_from_slice(&(standing as u32).to_le_bytes());
     Some((SMSG_SET_FACTION_STANDING_OPCODE, body))
 }
+
+#[cfg(test)]
+mod tests;

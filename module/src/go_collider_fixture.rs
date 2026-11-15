@@ -12,6 +12,33 @@ const ENTRY: u32 = 509_113;
 const A: [f32; 3] = [-4.0, 0.5, 0.0];
 const B: [f32; 3] = [4.0, 0.5, 0.0];
 
+fn set_rays_enabled(ctx: &ReducerContext, enabled: bool) {
+    let mut config = crate::config::server_config(ctx);
+    config.vmap_enabled = enabled;
+    crate::config::save_server_config(ctx, config);
+}
+
+fn spawn_door(ctx: &ReducerContext, entry: u32, type_id: u8) {
+    crate::gameobject::spawn_standalone(
+        ctx,
+        crate::gameobject::GameObjectTemplate {
+            entry,
+            type_id,
+            display_id: 0,
+            name: format!("Debug GO {entry}"),
+            data0: 0,
+            data1: 0,
+            gather_skill_line: 0,
+            respawn_secs: 0,
+            gather_gray: 0,
+            lock_id: 0,
+            size: 0.0,
+        },
+        MAP,
+        [0.0, 0.0, 0.0],
+    );
+}
+
 fn require(condition: bool, reason: &str) -> Result<(), String> {
     condition.then_some(()).ok_or_else(|| reason.to_string())
 }
@@ -49,7 +76,11 @@ fn door(ctx: &ReducerContext, instance: u64) -> Result<crate::gameobject::GameOb
 }
 
 fn blink(ctx: &ReducerContext, instance: u64, expected_x: f32) -> Result<(), String> {
-    crate::debug::debug_spawn_player_entity(ctx, 1)?;
+    if ctx.db.game_world_entity().guid().find(1).is_none() {
+        let character = crate::helpers::require_character(ctx, 1)?;
+        crate::world::build_player_entity(ctx, &character, character.owner_identity).insert(ctx);
+        crate::mount::restore_mount_on_rebuild(ctx, 1);
+    }
     let mut caster = ctx
         .db
         .game_world_entity()
@@ -275,9 +306,9 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
         !crate::vmap::vmap_enabled(ctx, MAP),
         "fixture requires no active static generation on map 36",
     )?;
-    crate::debug::debug_set_vmap_enabled(ctx, true)?;
+    set_rays_enabled(ctx, true);
     crate::go_model::import_go_models(ctx, packed_model(ENTRY, 1.0))?;
-    crate::debug::debug_spawn_gameobject(ctx, ENTRY, 0, 0, 0, MAP, 0.0, 0.0, 0.0, 0, 0, 0, 0)?;
+    spawn_door(ctx, ENTRY, 0);
     rays(ctx, 0, Some(1.0))?;
     crate::go_collider::rebuild_go_colliders(ctx)?;
     crate::go_collider::rebuild_go_colliders(ctx)?;
@@ -299,11 +330,11 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
         step.0.abs() < 0.001,
         "movement did not stop one yard before the door",
     )?;
-    crate::debug::debug_set_vmap_enabled(ctx, false)?;
+    set_rays_enabled(ctx, false);
     rays(ctx, 0, None)?;
-    crate::debug::debug_set_vmap_enabled(ctx, true)?;
+    set_rays_enabled(ctx, true);
 
-    let nearer_guid = (0xF110u64 << 48) | u64::from(ENTRY + 99);
+    let nearer_guid = crate::gameobject::gameobject_guid(u64::from(ENTRY + 99));
     crate::gameobject::import_gameobjects_append(
         ctx,
         format!("{nearer_guid},{ENTRY},{MAP},-2,0,0,0,0,0,0,0,0"),
@@ -322,8 +353,8 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
 
     package_lifecycle(ctx)?;
     pool_lifecycle(ctx)?;
-    let first = crate::instance::create_instance(ctx, MAP, 0)?;
-    let sibling = crate::instance::create_instance(ctx, MAP, 0)?;
+    let first = crate::instance::create_instance(ctx, 0, MAP, 0)?;
+    let sibling = crate::instance::create_instance(ctx, 0, MAP, 0)?;
     rays(ctx, first, Some(1.0))?;
     rays(ctx, sibling, Some(1.0))?;
     require(
@@ -420,7 +451,6 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
     transformed.y = 20.0;
     transformed.z = 30.0;
     transformed.orientation = std::f32::consts::FRAC_PI_2;
-    crate::go_collider::register(ctx, &transformed);
     transformed.update(ctx);
     for hit in [
         crate::vmap::los_ray(ctx, MAP, 0, [10.0, 16.0, 30.0], [10.0, 24.0, 30.0]),
@@ -448,11 +478,9 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
     )?;
 
     for (entry, type_id, expected) in [(ENTRY + 1, 1, true), (ENTRY + 2, 3, false)] {
-        crate::debug::debug_spawn_gameobject(
-            ctx, entry, type_id, 0, 0, MAP, 0.0, 0.0, 0.0, 0, 0, 0, 0,
-        )?;
+        spawn_door(ctx, entry, type_id);
         crate::go_model::import_go_models_append(ctx, packed_model(entry, 1.0))?;
-        let guid = (0xF110u64 << 48) | u64::from(entry);
+        let guid = crate::gameobject::gameobject_guid(u64::from(entry));
         require(
             ctx.db.game_go_collider().go_guid().find(guid).is_some() == expected,
             "template type gate failed",
@@ -460,7 +488,7 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
         crate::gameobject::despawn_from_relay(ctx, guid)?;
         ctx.db.game_go_model().entry().delete(entry);
     }
-    let imported_guid = (0xF110u64 << 48) | u64::from(ENTRY);
+    let imported_guid = crate::gameobject::gameobject_guid(u64::from(ENTRY));
     crate::gameobject::import_gameobjects(
         ctx,
         format!("{imported_guid},{ENTRY},{MAP},0,0,0,0,0,0,0,0,0"),

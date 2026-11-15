@@ -1,12 +1,12 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{SCENARIO_QUEST, SCENARIO_QUESTGIVER_ENTRY};
 use support::Standalone;
 
 const HASH_A: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const HASH_B: &str = "1111111111111111111111111111111111111111111111111111111111111111";
 
 const PLAYER: u64 = 1;
-const QUEST: u32 = 50_900;
 
 fn script(
     script_id: u32,
@@ -421,7 +421,7 @@ fn a_package_script_fires_on_a_real_event_and_a_failing_one_does_not_block_the_n
 
     standalone.assert_call(
         "debug_grant_quest",
-        &[&PLAYER.to_string(), &QUEST.to_string()],
+        &[&PLAYER.to_string(), &SCENARIO_QUEST.to_string()],
     );
 
     assert_eq!(
@@ -442,11 +442,24 @@ fn a_typed_levelup_binding_receives_each_attained_level_from_the_core_hook() {
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER.to_string()]);
     standalone.assert_sql("UPDATE game_character SET online = true WHERE guid = 1");
-    standalone.assert_sql("UPDATE game_quest_template SET reward_xp = 1300 WHERE entry = 50900");
-    standalone.assert_sql("DELETE FROM game_quest_objective WHERE quest_entry = 50900");
-    standalone.assert_call("debug_spawn_at_feet", &[&PLAYER.to_string(), "51003", "3"]);
+    standalone.assert_sql(&format!(
+        "UPDATE game_quest_template SET reward_xp = 1300 WHERE entry = {SCENARIO_QUEST}"
+    ));
+    standalone.assert_sql(&format!(
+        "DELETE FROM game_quest_objective WHERE quest_entry = {SCENARIO_QUEST}"
+    ));
+    standalone.assert_call(
+        "debug_spawn_at_feet",
+        &[
+            &PLAYER.to_string(),
+            &SCENARIO_QUESTGIVER_ENTRY.to_string(),
+            "3",
+        ],
+    );
     let giver = standalone
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51003")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SCENARIO_QUESTGIVER_ENTRY}"
+        ))
         .into_iter()
         .next()
         .expect("the quest giver was spawned")["guid"]
@@ -469,11 +482,16 @@ fn a_typed_levelup_binding_receives_each_attained_level_from_the_core_hook() {
     );
     standalone.assert_call(
         "debug_grant_quest",
-        &[&PLAYER.to_string(), &QUEST.to_string()],
+        &[&PLAYER.to_string(), &SCENARIO_QUEST.to_string()],
     );
     standalone.assert_call(
         "debug_turn_in_quest",
-        &[&PLAYER.to_string(), &giver, &QUEST.to_string(), "0"],
+        &[
+            &PLAYER.to_string(),
+            &giver,
+            &SCENARIO_QUEST.to_string(),
+            "0",
+        ],
     );
 
     let entity = standalone

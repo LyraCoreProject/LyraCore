@@ -11,6 +11,15 @@ Core tests use this crate's workspace. Package test runners set `LYRACORE_TEST_C
 Core checkout used for both builds and evidence. Package-specific setup and assertions belong in
 the Package repository.
 
+`Standalone::insert_row` writes one fixture row from named fields, for example
+`shard.insert_row("game_spell", &[("spell_id", &spell), ("name", &"Fixture")])`. It reads the
+table's columns from the published Module's `describe` and caches them per database until the next
+publish. An unnamed column takes its declared `#[default(..)]`, otherwise the zero of its type.
+String values are quoted for you; other values are written as SQL literals. An unknown table or
+column panics with the table's real columns. `insert_rows` writes several rows in one statement,
+and `insert_row_database` writes to a named database. Durable tests in `module/tests` write rows
+this way; an Architecture Test in `module/src/tripwires.rs` refuses a raw `INSERT INTO` there.
+
 `Standalone::connect_reducers` opens one Operator WebSocket and installs its subscriptions before
 returning. `ReducerConnection::call` waits for that connection's reducer result and returns only
 its transaction's subscribed inserts, as positional JSON rows. `drain_inserts(table)` takes buffered

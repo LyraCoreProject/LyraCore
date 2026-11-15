@@ -39,38 +39,6 @@ pub(crate) fn apply_full(
     ]
 }
 
-#[cfg(test)]
-#[allow(dead_code)]
-fn placement_tris(p: &Placement, mesh: &Mesh, conv: crate::nav::Convention) -> Vec<VmapTri> {
-    let pos_w = crate::nav::place_pos(p.position);
-    let transform = |t: &Tri| -> [[f32; 3]; 3] {
-        [
-            apply_full(conv, p.rotation, p.scale, pos_w, t[0]),
-            apply_full(conv, p.rotation, p.scale, pos_w, t[1]),
-            apply_full(conv, p.rotation, p.scale, pos_w, t[2]),
-        ]
-    };
-    match mesh {
-        Mesh::Wmo(v) => v
-            .iter()
-            .map(|w| VmapTri {
-                verts: transform(&w.tri),
-                class: TriClass::Wmo {
-                    group_id: w.group_id,
-                    mogp_flags: w.mogp_flags,
-                },
-            })
-            .collect(),
-        Mesh::M2(v) => v
-            .iter()
-            .map(|t| VmapTri {
-                verts: transform(t),
-                class: TriClass::M2,
-            })
-            .collect(),
-    }
-}
-
 fn for_each_placement_tri(
     p: &Placement,
     mesh: &Mesh,
@@ -333,7 +301,7 @@ fn accepted_chunk_ids(
     Ok(accepted)
 }
 
-fn active_generation_status(shard: &Shard, map_id: u32) -> Result<()> {
+pub(crate) fn active_generation_status(shard: &Shard, map_id: u32) -> Result<()> {
     let output = shard.query_json(
         "vmap",
         &format!(
@@ -386,23 +354,12 @@ fn sql_owns_instance_pool(output: &str) -> Result<bool> {
     Ok(rows.len() == 1 && rows[0][0].as_u64() == Some(0) && rows[0][1].as_bool() == Some(true))
 }
 
-pub(crate) struct VmapArgs {
-    pub(crate) data_dir: Option<String>,
-    pub(crate) status: bool,
-    pub(crate) map: i64,
-    pub(crate) scope: crate::world_import_scope::WorldImportScope,
-    pub(crate) apply: bool,
-    pub(crate) shard: Shard,
-}
-
-pub(crate) fn run(args: &VmapArgs) -> Result<()> {
-    if args.status {
-        if args.data_dir.is_none() {
-            return active_generation_status(&args.shard, args.map as u32);
-        }
-        bail!("--vmap-status is a standalone status command; omit --vmap");
-    }
-    let scope = &args.scope;
+pub(crate) fn run(
+    data_dir: &str,
+    scope: &crate::world_import_scope::WorldImportScope,
+    apply: bool,
+    shard: &Shard,
+) -> Result<()> {
     if scope.bounded_slices.is_empty() && scope.instance_vmap_slices.is_empty() {
         println!(
             "vmap: scope {} has no bounded or instance vmap slices; no vmap generation to import",
@@ -419,10 +376,10 @@ pub(crate) fn run(args: &VmapArgs) -> Result<()> {
     }
     for &map_id in slices_by_map.keys() {
         let map_id = u32::try_from(map_id).context("bounded slice map id is outside u32")?;
-        preflight_map_ownership(&args.shard, map_id)
+        preflight_map_ownership(shard, map_id)
             .with_context(|| format!("vmap scope {} map {map_id}", scope.name()))?;
     }
-    let data_dir = Path::new(args.data_dir.as_ref().expect("caller checked"));
+    let data_dir = Path::new(data_dir);
     let mut chain = crate::collision::open_geometry_chain(data_dir)?;
     let source_identity = format!("client-data-path:{}", data_dir.display());
     let mut plans = Vec::with_capacity(slices_by_map.len() + scope.instance_vmap_slices.len());
@@ -536,7 +493,7 @@ pub(crate) fn run(args: &VmapArgs) -> Result<()> {
             }
         }
     }
-    if !args.apply {
+    if !apply {
         println!("-- DRY RUN: would stage, append, verify, and activate each map generation");
         return Ok(());
     }
@@ -553,9 +510,9 @@ pub(crate) fn run(args: &VmapArgs) -> Result<()> {
                     route.violations.join(" | ")
                 );
             }
-            preflight_instance_ownership(&args.shard, plan.map_id)?;
+            preflight_instance_ownership(shard, plan.map_id)?;
         }
-        apply_plan(&args.shard, plan)?;
+        apply_plan(shard, plan)?;
     }
     println!("vmap: applied.");
     Ok(())

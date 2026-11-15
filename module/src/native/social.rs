@@ -4,55 +4,66 @@ use lyracore_protocol::{
         opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
         FriendResult, CMSG_WHO,
     },
-    who::{WhoCandidate, WhoFilter},
     AwayStatus,
 };
-use lyracore_shared::{chat::chat_tag_for, faction::same_team, social::ContactRefusal};
+use lyracore_shared::{chat::chat_tag_for, faction::same_team};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{
     directory::game_character_profile,
     game_native_player, game_native_world_connection,
     realm_party::{game_party_character, PartyCharacter},
-    NativeWorldConnection, Rollback,
+    who::{WhoCandidate, WhoFilter},
+    NativeWorldConnection, Rollback, Unhandled,
 };
 use crate::{
-    chat::game_character_contact, game_area, game_world_entity, guild::game_guild, Character,
+    chat::{game_character_contact, ContactRefusal},
+    game_area, game_world_entity,
+    guild::game_guild,
+    Character,
 };
 
 pub(super) fn receive(
     ctx: &ReducerContext,
-    mut connection: NativeWorldConnection,
+    connection: &NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    let actor = super::available_entity(ctx, guid)?;
+) -> Result<(), Unhandled> {
+    let actor = || super::available_entity(ctx, guid);
     let id = connection.connection_id;
-    match message {
+    let handled: Result<(), Rollback> = match message {
         ClientOpcodeMessage::CMSG_WHO(request) => {
+            let race = actor()?.race();
             let now = crate::time::now(ctx).to_micros_since_unix_epoch();
             if now < connection.who_until_micros {
                 return Ok(());
             }
-            connection.who_until_micros = now + 1_000_000;
             ctx.db
                 .game_native_world_connection()
                 .connection_id()
-                .update(connection);
-            who(ctx, id, actor.race(), &request)?;
+                .update(NativeWorldConnection {
+                    who_until_micros: now + 1_000_000,
+                    ..connection.clone()
+                });
+            who(ctx, id, race, &request)?;
             Ok(())
         }
-        ClientOpcodeMessage::CMSG_FRIEND_LIST => lists(ctx, id, &actor),
-        ClientOpcodeMessage::CMSG_ADD_FRIEND(request) => add(ctx, id, actor, &request.name, false),
-        ClientOpcodeMessage::CMSG_ADD_IGNORE(request) => add(ctx, id, actor, &request.name, true),
+        ClientOpcodeMessage::CMSG_FRIEND_LIST => lists(ctx, id, &actor()?),
+        ClientOpcodeMessage::CMSG_ADD_FRIEND(request) => {
+            add(ctx, id, actor()?, &request.name, false)
+        }
+        ClientOpcodeMessage::CMSG_ADD_IGNORE(request) => {
+            add(ctx, id, actor()?, &request.name, true)
+        }
         ClientOpcodeMessage::CMSG_DEL_FRIEND(request) => {
-            remove(ctx, id, actor, request.guid.guid(), false)
+            remove(ctx, id, actor()?, request.guid.guid(), false)
         }
         ClientOpcodeMessage::CMSG_DEL_IGNORE(request) => {
-            remove(ctx, id, actor, request.guid.guid(), true)
+            remove(ctx, id, actor()?, request.guid.guid(), true)
         }
-        _ => Err("opcode is not a contact or /who request".into()),
-    }
+        other => return Err(Unhandled::Declined(other)),
+    };
+    Ok(handled?)
 }
 
 pub(super) fn name_query(
@@ -87,11 +98,7 @@ pub(super) fn name_query(
 }
 
 fn online(ctx: &ReducerContext, character: &Character) -> Option<codec::FriendOnline> {
-    let owner = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(character.guid)?;
+    let owner = super::world_session(ctx, character.guid)?;
     let entity = ctx
         .db
         .game_world_entity()
@@ -330,11 +337,11 @@ pub(super) fn enter(
     ctx: &ReducerContext,
     account_id: u64,
     guid: u64,
-    entry: crate::world::WorldEntry,
+    entry: crate::character::WorldEntry,
 ) {
     prune_deleted(ctx, guid);
     super::directory::changed(ctx, account_id, guid, true);
-    if entry == crate::world::WorldEntry::Login {
+    if entry == crate::character::WorldEntry::Login {
         presence(ctx, guid, true);
     }
 }
@@ -358,12 +365,7 @@ fn notify_presence(ctx: &ReducerContext, guid: u64, race: u8, fields: Option<cod
         .filter(guid)
         .filter(|contact| !contact.is_ignore && contact.owner_guid != guid)
     {
-        let Some(owner) = ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(contact.owner_guid)
-        else {
+        let Some(owner) = super::world_session(ctx, contact.owner_guid) else {
             continue;
         };
         if crate::helpers::character_by_guid(ctx, owner.character_guid)
@@ -436,12 +438,7 @@ fn prune_deleted(ctx: &ReducerContext, guid: u64) {
 pub(super) fn deleted(ctx: &ReducerContext, guid: u64) {
     let contacts = ctx.db.game_character_contact();
     for contact in contacts.by_target().filter(guid).collect::<Vec<_>>() {
-        if let Some(owner) = ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(contact.owner_guid)
-        {
+        if let Some(owner) = super::world_session(ctx, contact.owner_guid) {
             result(
                 ctx,
                 owner.connection_id,
@@ -512,7 +509,7 @@ pub(super) fn who_matches(
         } else {
             String::new()
         };
-        if lyracore_protocol::who::matches(
+        if super::who::matches(
             filter,
             &WhoCandidate {
                 name: &character.name,

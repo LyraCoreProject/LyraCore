@@ -6,20 +6,11 @@ use serde_json::{Map, Value};
 use crate::canonical;
 use crate::error::DeltaError;
 use crate::ids::{
-    is_fixture_reserved_cast_id, is_fixture_reserved_creature_ai_id,
-    is_fixture_reserved_creature_id, is_fixture_reserved_creature_spawn_id,
-    is_fixture_reserved_gameobject_id, is_fixture_reserved_globals_id,
-    is_fixture_reserved_gossip_id, is_fixture_reserved_item_id, is_fixture_reserved_loot_id,
-    is_fixture_reserved_quest_id, is_fixture_reserved_spell_id, is_fixture_reserved_spellmeta_id,
-    is_fixture_reserved_trainer_id, is_package_cast_id, is_package_creature_ai_id,
-    is_package_creature_id, is_package_gameobject_id, is_package_globals_id, is_package_gossip_id,
-    is_package_item_id, is_package_loot_id, is_package_quest_id, is_package_spell_id,
-    is_package_spellmeta_id, is_package_trainer_id, packed_class_level_id,
-    packed_creature_spawn_guid, packed_gameobject_spawn_guid, packed_quest_objective_id,
-    packed_quest_reward_choice_id, packed_quest_reward_item_id, packed_race_class_id,
-    packed_race_class_level_id, packed_spell_effect_id, MAX_CREATURE_GUID_COMPONENT,
-    MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX,
-    MAX_STATS_LEVEL,
+    is_fixture_reserved_id, packed_class_level_id, packed_creature_spawn_guid,
+    packed_gameobject_spawn_guid, packed_quest_objective_id, packed_quest_reward_choice_id,
+    packed_quest_reward_item_id, packed_race_class_id, packed_race_class_level_id,
+    packed_spell_effect_id, PackageRange, MAX_CREATURE_GUID_COMPONENT, MAX_QUEST_OBJECTIVE_INDEX,
+    MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX, MAX_STATS_LEVEL,
 };
 use crate::schema::{FieldType, FieldValue, Table};
 
@@ -255,12 +246,22 @@ pub enum PrimaryKey {
 
 impl PrimaryKey {
     pub fn spell(spell_id: u32) -> Result<Self, DeltaError> {
-        check_claimable_spell_id(Table::Spell, spell_id)?;
+        check_claimable(
+            PackageRange::Spell,
+            Table::Spell,
+            "spell_id",
+            u64::from(spell_id),
+        )?;
         Ok(Self::Spell { spell_id })
     }
 
     pub fn spell_effect(spell_id: u32, effect_index: u8) -> Result<Self, DeltaError> {
-        check_claimable_spell_id(Table::SpellEffect, spell_id)?;
+        check_claimable(
+            PackageRange::Spell,
+            Table::SpellEffect,
+            "spell_id",
+            u64::from(spell_id),
+        )?;
         if effect_index > MAX_SPELL_EFFECT_INDEX {
             return Err(DeltaError::EffectIndexOutOfRange { effect_index });
         }
@@ -271,22 +272,37 @@ impl PrimaryKey {
     }
 
     pub fn item(entry: u32) -> Result<Self, DeltaError> {
-        check_claimable_item_id(entry)?;
+        check_claimable(PackageRange::Item, Table::Item, "entry", u64::from(entry))?;
         Ok(Self::Item { entry })
     }
 
     pub fn quest(entry: u32) -> Result<Self, DeltaError> {
-        check_claimable_quest_id(Table::Quest, entry)?;
+        check_claimable(
+            PackageRange::Quest,
+            Table::Quest,
+            "quest_entry",
+            u64::from(entry),
+        )?;
         Ok(Self::Quest { entry })
     }
 
     pub fn quest_text(quest_entry: u32) -> Result<Self, DeltaError> {
-        check_claimable_quest_id(Table::QuestText, quest_entry)?;
+        check_claimable(
+            PackageRange::Quest,
+            Table::QuestText,
+            "quest_entry",
+            u64::from(quest_entry),
+        )?;
         Ok(Self::QuestText { quest_entry })
     }
 
     pub fn quest_objective(quest_entry: u32, obj_index: u8) -> Result<Self, DeltaError> {
-        check_claimable_quest_id(Table::QuestObjective, quest_entry)?;
+        check_claimable(
+            PackageRange::Quest,
+            Table::QuestObjective,
+            "quest_entry",
+            u64::from(quest_entry),
+        )?;
         if obj_index > MAX_QUEST_OBJECTIVE_INDEX {
             return Err(DeltaError::QuestObjectiveIndexOutOfRange { obj_index });
         }
@@ -297,7 +313,12 @@ impl PrimaryKey {
     }
 
     pub fn quest_cast_objective(quest_entry: u32, obj_index: u8) -> Result<Self, DeltaError> {
-        check_claimable_quest_id(Table::QuestCastObjective, quest_entry)?;
+        check_claimable(
+            PackageRange::Quest,
+            Table::QuestCastObjective,
+            "quest_entry",
+            u64::from(quest_entry),
+        )?;
         if obj_index > MAX_QUEST_OBJECTIVE_INDEX {
             return Err(DeltaError::QuestObjectiveIndexOutOfRange { obj_index });
         }
@@ -308,7 +329,12 @@ impl PrimaryKey {
     }
 
     pub fn quest_reward_item(quest_entry: u32, item_entry: u32) -> Result<Self, DeltaError> {
-        check_claimable_quest_id(Table::QuestRewardItem, quest_entry)?;
+        check_claimable(
+            PackageRange::Quest,
+            Table::QuestRewardItem,
+            "quest_entry",
+            u64::from(quest_entry),
+        )?;
         Ok(Self::QuestRewardItem {
             quest_entry,
             item_entry,
@@ -316,7 +342,12 @@ impl PrimaryKey {
     }
 
     pub fn quest_reward_choice(quest_entry: u32, choice_index: u8) -> Result<Self, DeltaError> {
-        check_claimable_quest_id(Table::QuestRewardChoice, quest_entry)?;
+        check_claimable(
+            PackageRange::Quest,
+            Table::QuestRewardChoice,
+            "quest_entry",
+            u64::from(quest_entry),
+        )?;
         if choice_index > MAX_QUEST_REWARD_CHOICE_INDEX {
             return Err(DeltaError::QuestRewardChoiceIndexOutOfRange { choice_index });
         }
@@ -327,22 +358,22 @@ impl PrimaryKey {
     }
 
     pub fn pickpocket_loot(id: u64) -> Result<Self, DeltaError> {
-        check_claimable_loot_id(Table::PickpocketLoot, id)?;
+        check_claimable(PackageRange::Loot, Table::PickpocketLoot, "id", id)?;
         Ok(Self::PickpocketLoot { id })
     }
 
     pub fn gameobject_loot(id: u64) -> Result<Self, DeltaError> {
-        check_claimable_loot_id(Table::GameobjectLoot, id)?;
+        check_claimable(PackageRange::Loot, Table::GameobjectLoot, "id", id)?;
         Ok(Self::GameobjectLoot { id })
     }
 
     pub fn skinning_loot(id: u64) -> Result<Self, DeltaError> {
-        check_claimable_loot_id(Table::SkinningLoot, id)?;
+        check_claimable(PackageRange::Loot, Table::SkinningLoot, "id", id)?;
         Ok(Self::SkinningLoot { id })
     }
 
     pub fn fishing_loot(id: u64) -> Result<Self, DeltaError> {
-        check_claimable_loot_id(Table::FishingLoot, id)?;
+        check_claimable(PackageRange::Loot, Table::FishingLoot, "id", id)?;
         Ok(Self::FishingLoot { id })
     }
 
@@ -352,12 +383,12 @@ impl PrimaryKey {
     }
 
     pub fn creature_spell(id: u64) -> Result<Self, DeltaError> {
-        check_claimable_cast_id(id)?;
+        check_claimable(PackageRange::Cast, Table::CreatureSpell, "id", id)?;
         Ok(Self::CreatureSpell { id })
     }
 
     pub fn trainer_spell(id: u64) -> Result<Self, DeltaError> {
-        check_claimable_trainer_id(id)?;
+        check_claimable(PackageRange::Trainer, Table::TrainerSpell, "id", id)?;
         Ok(Self::TrainerSpell { id })
     }
 
@@ -372,27 +403,47 @@ impl PrimaryKey {
     }
 
     pub fn gossip_menu_profile(menu_id: u32) -> Result<Self, DeltaError> {
-        check_claimable_gossip_id(Table::GossipMenuProfile, "menu_id", u64::from(menu_id))?;
+        check_claimable(
+            PackageRange::Gossip,
+            Table::GossipMenuProfile,
+            "menu_id",
+            u64::from(menu_id),
+        )?;
         Ok(Self::GossipMenuProfile { menu_id })
     }
 
     pub fn gossip_menu_profile_option(row_id: u32) -> Result<Self, DeltaError> {
-        check_claimable_gossip_id(Table::GossipMenuProfileOption, "row_id", u64::from(row_id))?;
+        check_claimable(
+            PackageRange::Gossip,
+            Table::GossipMenuProfileOption,
+            "row_id",
+            u64::from(row_id),
+        )?;
         Ok(Self::GossipMenuProfileOption { row_id })
     }
 
     pub fn gossip_option(row_id: u32) -> Result<Self, DeltaError> {
-        check_claimable_gossip_id(Table::GossipOption, "row_id", u64::from(row_id))?;
+        check_claimable(
+            PackageRange::Gossip,
+            Table::GossipOption,
+            "row_id",
+            u64::from(row_id),
+        )?;
         Ok(Self::GossipOption { row_id })
     }
 
     pub fn npc_text(text_id: u32) -> Result<Self, DeltaError> {
-        check_claimable_gossip_id(Table::NpcText, "text_id", u64::from(text_id))?;
+        check_claimable(
+            PackageRange::Gossip,
+            Table::NpcText,
+            "text_id",
+            u64::from(text_id),
+        )?;
         Ok(Self::NpcText { text_id })
     }
 
     pub fn npc_text_slot(id: u64) -> Result<Self, DeltaError> {
-        check_claimable_gossip_id(Table::NpcTextSlot, "id", id)?;
+        check_claimable(PackageRange::Gossip, Table::NpcTextSlot, "id", id)?;
         Ok(Self::NpcTextSlot { id })
     }
 
@@ -419,7 +470,12 @@ impl PrimaryKey {
     }
 
     pub fn graveyard_zone(row_id: u64) -> Result<Self, DeltaError> {
-        check_claimable_globals_id(Table::GraveyardZone, "row_id", row_id)?;
+        check_claimable(
+            PackageRange::Globals,
+            Table::GraveyardZone,
+            "row_id",
+            row_id,
+        )?;
         Ok(Self::GraveyardZone { row_id })
     }
 
@@ -434,35 +490,42 @@ impl PrimaryKey {
     }
 
     pub fn createinfo_spell(id: u64) -> Result<Self, DeltaError> {
-        check_claimable_globals_id(Table::CreateinfoSpell, "id", id)?;
+        check_claimable(PackageRange::Globals, Table::CreateinfoSpell, "id", id)?;
         Ok(Self::CreateinfoSpell { id })
     }
 
     pub fn createinfo_action(row_id: u64) -> Result<Self, DeltaError> {
-        check_claimable_globals_id(Table::CreateinfoAction, "row_id", row_id)?;
+        check_claimable(
+            PackageRange::Globals,
+            Table::CreateinfoAction,
+            "row_id",
+            row_id,
+        )?;
         Ok(Self::CreateinfoAction { row_id })
     }
 
     pub fn spell_chain(spell_id: u32) -> Result<Self, DeltaError> {
-        check_claimable_spell_id(Table::SpellChain, spell_id)?;
+        check_claimable(
+            PackageRange::Spell,
+            Table::SpellChain,
+            "spell_id",
+            u64::from(spell_id),
+        )?;
         Ok(Self::SpellChain { spell_id })
     }
 
     pub fn spell_learn(id: u64) -> Result<Self, DeltaError> {
-        if id == 0 {
-            return Err(DeltaError::MalformedKey {
-                table: Table::SpellLearn,
-                detail: "`id` 0 is not a row".to_owned(),
-            });
-        }
-        if is_fixture_reserved_spellmeta_id(id) {
-            return Err(DeltaError::SpellmetaIdFixtureReserved { id });
-        }
+        check_claimable(PackageRange::SpellMetadata, Table::SpellLearn, "id", id)?;
         Ok(Self::SpellLearn { id })
     }
 
     pub fn spell_proc_event(spell_id: u32) -> Result<Self, DeltaError> {
-        check_claimable_spell_id(Table::SpellProcEvent, spell_id)?;
+        check_claimable(
+            PackageRange::Spell,
+            Table::SpellProcEvent,
+            "spell_id",
+            u64::from(spell_id),
+        )?;
         Ok(Self::SpellProcEvent { spell_id })
     }
 
@@ -482,33 +545,115 @@ impl PrimaryKey {
     }
 
     pub fn gameobject_template(entry: u32) -> Result<Self, DeltaError> {
-        check_claimable_gameobject_id(Table::GameobjectTemplate, "entry", entry)?;
+        check_claimable(
+            PackageRange::Gameobject,
+            Table::GameobjectTemplate,
+            "entry",
+            u64::from(entry),
+        )?;
         Ok(Self::GameobjectTemplate { entry })
     }
 
     pub fn gameobject_trap(entry: u32) -> Result<Self, DeltaError> {
-        check_claimable_gameobject_id(Table::GameobjectTrap, "entry", entry)?;
+        check_claimable(
+            PackageRange::Gameobject,
+            Table::GameobjectTrap,
+            "entry",
+            u64::from(entry),
+        )?;
         Ok(Self::GameobjectTrap { entry })
     }
 
     pub fn gameobject_spawn(map_id: u32, spawn_id: u32) -> Result<Self, DeltaError> {
-        check_claimable_gameobject_id(Table::GameobjectSpawn, "spawn_id", spawn_id)?;
+        check_claimable(
+            PackageRange::Gameobject,
+            Table::GameobjectSpawn,
+            "spawn_id",
+            u64::from(spawn_id),
+        )?;
         Ok(Self::GameobjectSpawn { map_id, spawn_id })
     }
 
     pub fn creature_ai_broadcast_text(id: u32) -> Result<Self, DeltaError> {
-        check_claimable_creature_ai_id(Table::CreatureAiBroadcastText, u64::from(id))?;
+        check_claimable(
+            PackageRange::EventAi,
+            Table::CreatureAiBroadcastText,
+            "id",
+            u64::from(id),
+        )?;
         Ok(Self::CreatureAiBroadcastText { id })
     }
 
     pub fn creature_ai_summon(id: u32) -> Result<Self, DeltaError> {
-        check_claimable_creature_ai_id(Table::CreatureAiSummon, u64::from(id))?;
+        check_claimable(
+            PackageRange::EventAi,
+            Table::CreatureAiSummon,
+            "id",
+            u64::from(id),
+        )?;
         Ok(Self::CreatureAiSummon { id })
     }
 
     pub fn quest_event_requirement(id: u64) -> Result<Self, DeltaError> {
-        check_claimable_creature_ai_id(Table::QuestEventRequirement, id)?;
+        check_claimable(
+            PackageRange::EventAi,
+            Table::QuestEventRequirement,
+            "id",
+            id,
+        )?;
         Ok(Self::QuestEventRequirement { id })
+    }
+
+    fn package_range_id(self) -> Option<(PackageRange, u64)> {
+        let (range, id) = match self {
+            Self::Spell { spell_id }
+            | Self::SpellEffect { spell_id, .. }
+            | Self::SpellChain { spell_id }
+            | Self::SpellProcEvent { spell_id } => (PackageRange::Spell, u64::from(spell_id)),
+            Self::Item { entry } => (PackageRange::Item, u64::from(entry)),
+            Self::Quest { entry: quest_entry }
+            | Self::QuestText { quest_entry }
+            | Self::QuestObjective { quest_entry, .. }
+            | Self::QuestCastObjective { quest_entry, .. }
+            | Self::QuestRewardItem { quest_entry, .. }
+            | Self::QuestRewardChoice { quest_entry, .. } => {
+                (PackageRange::Quest, u64::from(quest_entry))
+            }
+            Self::PickpocketLoot { id }
+            | Self::GameobjectLoot { id }
+            | Self::SkinningLoot { id }
+            | Self::FishingLoot { id } => (PackageRange::Loot, id),
+            Self::CreatureSpell { id } => (PackageRange::Cast, id),
+            Self::TrainerSpell { id } => (PackageRange::Trainer, id),
+            Self::GossipMenuProfile { menu_id: id }
+            | Self::GossipMenuProfileOption { row_id: id }
+            | Self::GossipOption { row_id: id }
+            | Self::NpcText { text_id: id } => (PackageRange::Gossip, u64::from(id)),
+            Self::NpcTextSlot { id } => (PackageRange::Gossip, id),
+            Self::GraveyardZone { row_id: id }
+            | Self::CreateinfoSpell { id }
+            | Self::CreateinfoAction { row_id: id } => (PackageRange::Globals, id),
+            Self::SpellLearn { id } => (PackageRange::SpellMetadata, id),
+            Self::CreatureTemplate { entry: id } | Self::CreatureSpawn { spawn_id: id, .. } => {
+                (PackageRange::Creature, u64::from(id))
+            }
+            Self::GameobjectTemplate { entry: id }
+            | Self::GameobjectTrap { entry: id }
+            | Self::GameobjectSpawn { spawn_id: id, .. } => {
+                (PackageRange::Gameobject, u64::from(id))
+            }
+            Self::CreatureAiBroadcastText { id } | Self::CreatureAiSummon { id } => {
+                (PackageRange::EventAi, u64::from(id))
+            }
+            Self::QuestEventRequirement { id } => (PackageRange::EventAi, id),
+            Self::CreatureCast { .. }
+            | Self::GossipMenu { .. }
+            | Self::ClassLevelStats { .. }
+            | Self::LevelStats { .. }
+            | Self::StartPosition { .. }
+            | Self::AreatriggerTeleport { .. } => return None,
+        };
+        Some((range, id))
     }
 
     #[must_use]
@@ -776,220 +921,30 @@ impl fmt::Display for PrimaryKey {
 }
 
 fn check_inventable(key: PrimaryKey) -> Result<(), DeltaError> {
-    match key {
-        PrimaryKey::Spell { spell_id } | PrimaryKey::SpellEffect { spell_id, .. } => {
-            if is_package_spell_id(spell_id) {
-                Ok(())
-            } else {
-                Err(DeltaError::SpellIdNotClientSafe { spell_id })
-            }
-        }
-        PrimaryKey::Item { entry } => {
-            if is_package_item_id(entry) {
-                Ok(())
-            } else {
-                Err(DeltaError::ItemIdNotClientSafe { entry })
-            }
-        }
-        PrimaryKey::Quest { entry } => {
-            if is_package_quest_id(entry) {
-                Ok(())
-            } else {
-                Err(DeltaError::QuestIdNotClientSafe { entry })
-            }
-        }
-        PrimaryKey::QuestText { quest_entry }
-        | PrimaryKey::QuestObjective { quest_entry, .. }
-        | PrimaryKey::QuestCastObjective { quest_entry, .. }
-        | PrimaryKey::QuestRewardItem { quest_entry, .. }
-        | PrimaryKey::QuestRewardChoice { quest_entry, .. } => {
-            if is_package_quest_id(quest_entry) {
-                Ok(())
-            } else {
-                Err(DeltaError::QuestIdNotClientSafe { entry: quest_entry })
-            }
-        }
-        PrimaryKey::PickpocketLoot { id }
-        | PrimaryKey::GameobjectLoot { id }
-        | PrimaryKey::SkinningLoot { id }
-        | PrimaryKey::FishingLoot { id } => {
-            if is_package_loot_id(id) {
-                Ok(())
-            } else {
-                Err(DeltaError::LootIdNotClientSafe { id })
-            }
-        }
-        PrimaryKey::CreatureCast { .. } => Err(DeltaError::InsertNotSupported {
-            table: Table::CreatureCast,
-        }),
-        PrimaryKey::CreatureSpell { id } => {
-            if is_package_cast_id(id) {
-                Ok(())
-            } else {
-                Err(DeltaError::CastIdNotClientSafe { id })
-            }
-        }
-        PrimaryKey::TrainerSpell { id } => {
-            if is_package_trainer_id(id) {
-                Ok(())
-            } else {
-                Err(DeltaError::TrainerIdNotClientSafe { id })
-            }
-        }
-        PrimaryKey::GossipMenu { .. } => insert_refused(Table::GossipMenu),
-        PrimaryKey::ClassLevelStats { .. } => insert_refused(Table::ClassLevelStats),
-        PrimaryKey::LevelStats { .. } => insert_refused(Table::LevelStats),
-        PrimaryKey::StartPosition { .. } => insert_refused(Table::StartPosition),
-        PrimaryKey::AreatriggerTeleport { .. } => insert_refused(Table::AreatriggerTeleport),
-        PrimaryKey::GossipMenuProfile { menu_id: id }
-        | PrimaryKey::GossipMenuProfileOption { row_id: id }
-        | PrimaryKey::GossipOption { row_id: id }
-        | PrimaryKey::NpcText { text_id: id } => gossip_band(u64::from(id)),
-        PrimaryKey::NpcTextSlot { id } => gossip_band(id),
-        PrimaryKey::GraveyardZone { row_id: id }
-        | PrimaryKey::CreateinfoSpell { id }
-        | PrimaryKey::CreateinfoAction { row_id: id } => globals_band(id),
-        PrimaryKey::SpellChain { spell_id } | PrimaryKey::SpellProcEvent { spell_id } => {
-            check_band(
-                is_package_spell_id(spell_id),
-                DeltaError::SpellIdNotClientSafe { spell_id },
-            )
-        }
-        PrimaryKey::SpellLearn { id } => check_band(
-            is_package_spellmeta_id(id),
-            DeltaError::SpellmetaIdNotClientSafe { id },
-        ),
-        PrimaryKey::CreatureTemplate { entry: id }
-        | PrimaryKey::CreatureSpawn { spawn_id: id, .. } => check_band(
-            is_package_creature_id(id),
-            DeltaError::CreatureIdNotClientSafe { id },
-        ),
-        PrimaryKey::GameobjectTemplate { entry: id }
-        | PrimaryKey::GameobjectTrap { entry: id }
-        | PrimaryKey::GameobjectSpawn { spawn_id: id, .. } => check_band(
-            is_package_gameobject_id(id),
-            DeltaError::GameobjectIdNotClientSafe { id },
-        ),
-        PrimaryKey::CreatureAiBroadcastText { id } | PrimaryKey::CreatureAiSummon { id } => {
-            creature_ai_band(u64::from(id))
-        }
-        PrimaryKey::QuestEventRequirement { id } => creature_ai_band(id),
-    }
-}
-
-fn insert_refused(table: Table) -> Result<(), DeltaError> {
-    Err(DeltaError::InsertNotSupported { table })
-}
-
-fn check_band(inside: bool, refusal: DeltaError) -> Result<(), DeltaError> {
-    if inside {
+    let Some((range, id)) = key.package_range_id() else {
+        return Err(DeltaError::InsertNotSupported { table: key.table() });
+    };
+    if range.contains(id) {
         Ok(())
     } else {
-        Err(refusal)
+        Err(DeltaError::IdOutsidePackageRange { range, id })
     }
 }
 
-fn gossip_band(id: u64) -> Result<(), DeltaError> {
-    check_band(
-        is_package_gossip_id(id),
-        DeltaError::GossipIdNotClientSafe { id },
-    )
-}
-
-fn globals_band(id: u64) -> Result<(), DeltaError> {
-    check_band(
-        is_package_globals_id(id),
-        DeltaError::GlobalsIdNotClientSafe { id },
-    )
-}
-
-fn check_claimable_spell_id(table: Table, spell_id: u32) -> Result<(), DeltaError> {
-    if spell_id == 0 {
-        return Err(DeltaError::MalformedKey {
-            table,
-            detail: "`spell_id` 0 is not a spell".to_owned(),
-        });
-    }
-    if is_fixture_reserved_spell_id(spell_id) {
-        return Err(DeltaError::SpellIdFixtureReserved { spell_id });
-    }
-    Ok(())
-}
-
-fn check_claimable_quest_id(table: Table, quest_entry: u32) -> Result<(), DeltaError> {
-    if quest_entry == 0 {
-        return Err(DeltaError::MalformedKey {
-            table,
-            detail: "`quest_entry` 0 is not a quest".to_owned(),
-        });
-    }
-    if is_fixture_reserved_quest_id(quest_entry) {
-        return Err(DeltaError::QuestIdFixtureReserved { entry: quest_entry });
-    }
-    Ok(())
-}
-
-fn check_claimable_loot_id(table: Table, id: u64) -> Result<(), DeltaError> {
+fn check_claimable(
+    range: PackageRange,
+    table: Table,
+    member: &str,
+    id: u64,
+) -> Result<(), DeltaError> {
     if id == 0 {
         return Err(DeltaError::MalformedKey {
             table,
-            detail: "`id` 0 is not a row".to_owned(),
+            detail: format!("`{member}` 0 is not {}", range.band().zero_is_not),
         });
     }
-    if is_fixture_reserved_loot_id(id) {
-        return Err(DeltaError::LootIdFixtureReserved { id });
-    }
-    Ok(())
-}
-
-fn check_claimable_cast_id(id: u64) -> Result<(), DeltaError> {
-    if id == 0 {
-        return Err(DeltaError::MalformedKey {
-            table: Table::CreatureSpell,
-            detail: "`id` 0 is not a row".to_owned(),
-        });
-    }
-    if is_fixture_reserved_cast_id(id) {
-        return Err(DeltaError::CastIdFixtureReserved { id });
-    }
-    Ok(())
-}
-
-fn check_claimable_trainer_id(id: u64) -> Result<(), DeltaError> {
-    if id == 0 {
-        return Err(DeltaError::MalformedKey {
-            table: Table::TrainerSpell,
-            detail: "`id` 0 is not a row".to_owned(),
-        });
-    }
-    if is_fixture_reserved_trainer_id(id) {
-        return Err(DeltaError::TrainerIdFixtureReserved { id });
-    }
-    Ok(())
-}
-
-fn check_claimable_gossip_id(table: Table, member: &str, id: u64) -> Result<(), DeltaError> {
-    if id == 0 {
-        return Err(DeltaError::MalformedKey {
-            table,
-            detail: format!("`{member}` 0 is not a row"),
-        });
-    }
-    if is_fixture_reserved_gossip_id(id) {
-        return Err(DeltaError::GossipIdFixtureReserved { id });
-    }
-    Ok(())
-}
-
-fn check_claimable_globals_id(table: Table, member: &str, id: u64) -> Result<(), DeltaError> {
-    if id == 0 {
-        return Err(DeltaError::MalformedKey {
-            table,
-            detail: format!("`{member}` 0 is not a row"),
-        });
-    }
-    if is_fixture_reserved_globals_id(id) {
-        return Err(DeltaError::GlobalsIdFixtureReserved { id });
+    if range.is_fixture_reserved(id) {
+        return Err(DeltaError::IdFixtureReserved { range, id });
     }
     Ok(())
 }
@@ -1023,16 +978,22 @@ fn check_claimable_creature_entry(
     entry: u32,
 ) -> Result<(), DeltaError> {
     check_guid_component(table, member, entry)?;
-    if is_fixture_reserved_creature_id(entry) {
-        return Err(DeltaError::CreatureIdFixtureReserved { id: entry });
+    if PackageRange::Creature.is_fixture_reserved(u64::from(entry)) {
+        return Err(DeltaError::IdFixtureReserved {
+            range: PackageRange::Creature,
+            id: u64::from(entry),
+        });
     }
     Ok(())
 }
 
 fn check_claimable_creature_spawn_id(spawn_id: u32) -> Result<(), DeltaError> {
     check_guid_component(Table::CreatureSpawn, "spawn_id", spawn_id)?;
-    if is_fixture_reserved_creature_spawn_id(spawn_id) {
-        return Err(DeltaError::CreatureIdFixtureReserved { id: spawn_id });
+    if is_fixture_reserved_id(u64::from(spawn_id)) {
+        return Err(DeltaError::IdFixtureReserved {
+            range: PackageRange::Creature,
+            id: u64::from(spawn_id),
+        });
     }
     Ok(())
 }
@@ -1053,52 +1014,6 @@ fn check_guid_component(table: Table, member: &str, value: u32) -> Result<(), De
                  (1..={MAX_CREATURE_GUID_COMPONENT})"
             ),
         });
-    }
-    Ok(())
-}
-
-fn check_claimable_gameobject_id(table: Table, member: &str, id: u32) -> Result<(), DeltaError> {
-    if id == 0 {
-        return Err(DeltaError::MalformedKey {
-            table,
-            detail: format!("`{member}` 0 is not a row"),
-        });
-    }
-    if is_fixture_reserved_gameobject_id(id) {
-        return Err(DeltaError::GameobjectIdFixtureReserved { id });
-    }
-    Ok(())
-}
-
-fn creature_ai_band(id: u64) -> Result<(), DeltaError> {
-    check_band(
-        is_package_creature_ai_id(id),
-        DeltaError::CreatureAiIdNotClientSafe { id },
-    )
-}
-
-fn check_claimable_creature_ai_id(table: Table, id: u64) -> Result<(), DeltaError> {
-    if id == 0 {
-        return Err(DeltaError::MalformedKey {
-            table,
-            detail: "`id` 0 is not a row".to_owned(),
-        });
-    }
-    if is_fixture_reserved_creature_ai_id(id) {
-        return Err(DeltaError::CreatureAiIdFixtureReserved { id });
-    }
-    Ok(())
-}
-
-fn check_claimable_item_id(entry: u32) -> Result<(), DeltaError> {
-    if entry == 0 {
-        return Err(DeltaError::MalformedKey {
-            table: Table::Item,
-            detail: "`entry` 0 is not an item".to_owned(),
-        });
-    }
-    if is_fixture_reserved_item_id(entry) {
-        return Err(DeltaError::ItemIdFixtureReserved { entry });
     }
     Ok(())
 }

@@ -1,26 +1,19 @@
+use crate::race_class::{mask_admits, ZeroMask};
+
 // Placeholder XP curve for templates without an explicit reward.
-pub fn xp_reward(quest_level: u32) -> u32 {
+fn xp_reward(quest_level: u32) -> u32 {
     quest_level.saturating_mul(45).saturating_add(40)
 }
 
-pub fn race_allowed(required_races: u32, race: u8) -> bool {
-    required_races == 0 || ((1..=32).contains(&race) && required_races & (1u32 << (race - 1)) != 0)
-}
-
-pub fn class_allowed(required_classes: u32, class: u8) -> bool {
-    required_classes == 0
-        || ((1..=32).contains(&class) && required_classes & (1u32 << (class - 1)) != 0)
-}
-
 // Placeholder conversion of six copper per XP at the level cap.
-pub const MAX_LEVEL_XP_TO_COPPER: u32 = 6;
+const MAX_LEVEL_XP_TO_COPPER: u32 = 6;
 
 pub fn max_level_money_reward(xp: u32) -> u32 {
     xp.saturating_mul(MAX_LEVEL_XP_TO_COPPER)
 }
 
 // Vanilla XP is ceil(RewMoneyMaxLevel / 0.6).
-pub fn quest_xp(reward_money_max_level: u32) -> u32 {
+fn quest_xp(reward_money_max_level: u32) -> u32 {
     if reward_money_max_level == 0 {
         return 0;
     }
@@ -42,7 +35,6 @@ pub mod share_result {
     pub const FINISH_QUEST: u8 = 8;
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn share_result(
     member_online: bool,
     same_map_instance: bool,
@@ -116,73 +108,10 @@ mod tests {
     }
 
     #[test]
-    fn race_class_gates_respect_bitmask_and_zero_means_all() {
-        assert!(race_allowed(0, 1));
-        assert!(class_allowed(0, 1));
-        assert!(race_allowed(77, 1));
-        assert!(race_allowed(77, 3));
-        assert!(!race_allowed(77, 2));
-        assert!(!race_allowed(77, 5));
-        assert!(class_allowed(1, 1));
-        assert!(!class_allowed(1, 2));
-        assert!(!race_allowed(77, 0));
-        assert!(!class_allowed(1, 0));
-    }
-
-    #[test]
-    fn race_class_gates_pin_the_bit31_bit33_range_boundary() {
-        let mask_bit31: u32 = 1 << 31;
-        assert!(race_allowed(mask_bit31, 32));
-        assert!(class_allowed(mask_bit31, 32));
-        assert!(!race_allowed(mask_bit31, 33));
-        assert!(!class_allowed(mask_bit31, 33));
-        assert!(!race_allowed(u32::MAX, u8::MAX));
-        assert!(!class_allowed(u32::MAX, u8::MAX));
-    }
-
-    #[test]
     fn max_level_money_reward_uses_the_documented_v_coefficient() {
-        assert_eq!(MAX_LEVEL_XP_TO_COPPER, 6);
         assert_eq!(max_level_money_reward(0), 0);
         assert_eq!(max_level_money_reward(100), 600);
         assert_eq!(max_level_money_reward(u32::MAX), u32::MAX);
-    }
-
-    #[test]
-    fn share_event_kinds_are_distinct_and_skip_retired_kind_9() {
-        use crate::group::event_kind as g;
-        use crate::loot_roll::event_kind as roll;
-        let mut kinds = vec![
-            g::INVITE,
-            g::LIST,
-            g::DECLINE,
-            g::DESTROYED,
-            roll::ROLL_START,
-            roll::ROLL_VOTE,
-            roll::ROLL_WON,
-            roll::MASTER_LIST,
-            roll::MONEY_SHARE,
-            share_event_kind::QUEST_SHARE,
-            share_event_kind::QUEST_PUSH_RESULT,
-        ];
-        kinds.sort_unstable();
-        kinds.dedup();
-        assert_eq!(kinds, [0u8, 1, 2, 3, 4, 5, 6, 7, 8, 10, 11]);
-        assert_eq!(share_event_kind::QUEST_SHARE, 10);
-        assert_eq!(
-            share_event_kind::QUEST_PUSH_RESULT,
-            share_event_kind::QUEST_SHARE + 1
-        );
-    }
-
-    #[test]
-    fn share_result_codes_mirror_the_gtker_quest_party_message_enum() {
-        assert_eq!(share_result::SHARING_QUEST, 0);
-        assert_eq!(share_result::CANT_TAKE_QUEST, 1);
-        assert_eq!(share_result::TOO_FAR, 4);
-        assert_eq!(share_result::LOG_FULL, 6);
-        assert_eq!(share_result::HAVE_QUEST, 7);
-        assert_eq!(share_result::FINISH_QUEST, 8);
     }
 
     #[test]
@@ -220,6 +149,11 @@ mod tests {
             share_result::CANT_TAKE_QUEST
         );
     }
+}
+
+pub mod quest_role {
+    pub const START: u8 = 0;
+    pub const END: u8 = 1;
 }
 
 pub mod objective_kind {
@@ -288,10 +222,10 @@ pub fn acceptance(
     if level < requirements.min_level {
         return Err(AcceptanceRefusal::Level);
     }
-    if !race_allowed(requirements.required_races, race) {
+    if !mask_admits(requirements.required_races, race, ZeroMask::AdmitsAll) {
         return Err(AcceptanceRefusal::Race);
     }
-    if !class_allowed(requirements.required_classes, class) {
+    if !mask_admits(requirements.required_classes, class, ZeroMask::AdmitsAll) {
         return Err(AcceptanceRefusal::Class);
     }
     if !prerequisite_rewarded {

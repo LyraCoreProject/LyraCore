@@ -5,10 +5,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use lyracore_shared::packing::power_type::RAGE;
 use lyracore_shared::spell::taxonomy::{A_PERIODIC_DAMAGE, E_DAMAGE, T_TARGET_ENEMY};
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_package_delta::packed_spell_effect_id;
 use support::{event_rows, number, poll_until, wait_for_event_rows, Row, Standalone, POLL_TIMEOUT};
 
 const WARRIOR: u64 = 1;
-const WOLF_ENTRY: u32 = 51_000;
 const FIXTURE_BOLT: u32 = 509_0201;
 /// `debug_fill_aura_slots` gives the first debuff slot spell id `9_000_000 + 32`.
 const DOT: u32 = 9_000_032;
@@ -26,11 +27,11 @@ fn a_warrior_gains_rage_from_spell_and_periodic_damage_taken() {
     standalone.assert_call("debug_spawn_player_entity", &[&WARRIOR.to_string()]);
     standalone.assert_call(
         "debug_spawn_at_feet",
-        &[&WARRIOR.to_string(), &WOLF_ENTRY.to_string(), "1.0"],
+        &[&WARRIOR.to_string(), &TEST_WOLF_ENTRY.to_string(), "1.0"],
     );
     let wolf = standalone
         .query_rows(&format!(
-            "SELECT guid FROM game_world_entity WHERE entry = {WOLF_ENTRY}"
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
         ))
         .iter()
         .map(|row| number::<u64>(row, "guid"))
@@ -49,22 +50,26 @@ fn a_warrior_gains_rage_from_spell_and_periodic_damage_taken() {
         "the fixture Character must be a rage user"
     );
 
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
-         cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
-         aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
-         VALUES ({FIXTURE_BOLT}, 'Fixture Bolt', 0, 0, 0, 0, 0, 30, 0, 16, 0, 0, 0, 0, 0, 0, \
-         0, true, 0, 0, 0, 0, 0, 0, 0, 0)"
-    ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
-         per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-         VALUES ({}, {FIXTURE_BOLT}, 0, {E_DAMAGE}, 9, 0, 0.0, 0, {T_TARGET_ENEMY}, 0.0, 0, 0, 0, \
-         0, 0, 0, 0, false, 0.0)",
-        (FIXTURE_BOLT as u64) << 2
-    ));
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &FIXTURE_BOLT),
+            ("name", &"Fixture Bolt"),
+            ("range_yd", &30),
+            ("school_mask", &16),
+            ("is_negative", &true),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(FIXTURE_BOLT, 0)),
+            ("spell_id", &FIXTURE_BOLT),
+            ("kind", &E_DAMAGE),
+            ("base_points", &9),
+            ("target", &T_TARGET_ENEMY),
+        ],
+    );
 
     let mut hit = None;
     for _ in 0..10 {

@@ -1,10 +1,4 @@
-use lyracore_package_delta::ids::{
-    CURATED_RESERVED_ID_FLOOR, FIXTURE_RESERVED_ID_CEIL, FIXTURE_RESERVED_ID_FLOOR,
-};
-use lyracore_package_delta::{
-    is_package_script_id, DeltaError, ScriptArtifact, ScriptRefusal, PACKAGE_SCRIPT_ID_CEIL,
-    PACKAGE_SCRIPT_ID_FLOOR,
-};
+use lyracore_package_delta::{is_package_script_id, DeltaError, ScriptArtifact, ScriptRefusal};
 
 const HASH_A: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -99,7 +93,7 @@ fn a_script_missing_a_member_is_refused_by_that_members_name() {
 #[test]
 fn a_script_below_the_package_band_is_refused() {
     let refusal = refusal(&one(
-        PACKAGE_SCRIPT_ID_FLOOR - 1,
+        99_999u32,
         "bolt.a",
         "on_login",
         "grant_xp(event.actor, 1)",
@@ -108,13 +102,11 @@ fn a_script_below_the_package_band_is_refused() {
     assert_eq!(
         refusal,
         DeltaError::Script(ScriptRefusal::IdNotInPackageBand {
-            script_id: PACKAGE_SCRIPT_ID_FLOOR - 1
+            script_id: 99_999u32
         })
     );
     assert!(
-        refusal
-            .to_string()
-            .contains(&PACKAGE_SCRIPT_ID_FLOOR.to_string()),
+        refusal.to_string().contains(&100_000u32.to_string()),
         "{refusal}"
     );
 }
@@ -123,13 +115,13 @@ fn a_script_below_the_package_band_is_refused() {
 fn a_script_above_the_package_band_is_refused() {
     assert_eq!(
         script_refusal(&one(
-            PACKAGE_SCRIPT_ID_CEIL + 1,
+            1_000_000u32,
             "bolt.a",
             "on_login",
             "grant_xp(event.actor, 1)",
         )),
         ScriptRefusal::IdNotInPackageBand {
-            script_id: PACKAGE_SCRIPT_ID_CEIL + 1
+            script_id: 1_000_000u32
         }
     );
 }
@@ -144,7 +136,7 @@ fn script_zero_is_not_a_script() {
 
 #[test]
 fn both_ends_of_the_package_band_are_shippable() {
-    for script_id in [PACKAGE_SCRIPT_ID_FLOOR, PACKAGE_SCRIPT_ID_CEIL] {
+    for script_id in [100_000u32, 999_999u32] {
         assert!(is_package_script_id(script_id));
         ScriptArtifact::parse(&artifact_with(&one(
             script_id,
@@ -158,11 +150,7 @@ fn both_ends_of_the_package_band_are_shippable() {
 
 #[test]
 fn no_reserved_identifier_is_inside_the_package_script_band() {
-    for reserved in [
-        FIXTURE_RESERVED_ID_FLOOR,
-        FIXTURE_RESERVED_ID_CEIL,
-        CURATED_RESERVED_ID_FLOOR,
-    ] {
+    for reserved in [5_090_000u32, 5_099_999u32, 1_000_000u32] {
         assert!(
             !is_package_script_id(reserved),
             "reserved identifier {reserved} must not be shippable as a script"

@@ -3,6 +3,7 @@ use spacetimedb::{ReducerContext, Table};
 use lyracore_package_delta::{
     is_package_quest_id, packed_quest_objective_id, packed_quest_reward_choice_id,
     packed_quest_reward_item_id, FieldValue, Operation, PrimaryKey, Table as ClaimTable, TracedRow,
+    QUEST_FAMILY,
 };
 
 use crate::quest::{
@@ -12,9 +13,21 @@ use crate::quest::{
 };
 use crate::{game_creature_template, game_gameobject_template, game_item_template, game_spell};
 
-use super::{as_bool, as_i32, as_str, as_u32, as_u8, check_insert_is_whole, UpdateTarget};
+use super::{
+    as_bool, as_i32, as_str, as_u32, as_u8, check_insert_is_whole, missing_reference, ClaimOps,
+};
 
-pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+pub(super) const OPS: ClaimOps = ClaimOps {
+    name: QUEST_FAMILY,
+    in_package_range,
+    row_is_present,
+    check_references: Some(check_references),
+    clear_package_range,
+    write_row,
+    after_write: None,
+};
+
+fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
     for row in rows {
         let quest_entry = row.key().quest_entry();
         if row.table() != ClaimTable::Quest && !quest_exists_after_apply(ctx, rows, quest_entry) {
@@ -145,19 +158,8 @@ fn claimed_u8(row: &TracedRow, field: &str) -> Option<u8> {
     }
 }
 
-fn missing_reference(row: &TracedRow, field: &str, value: u32) -> String {
-    format!(
-        "`{}` row {} references missing {field} {value}",
-        row.table(),
-        row.key()
-    )
-}
-
-pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
-    if updates_an_uninvented_package_row(row) {
-        return UpdateTarget::Uninvented;
-    }
-    let present = match row.table() {
+fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
+    match row.table() {
         ClaimTable::Quest => ctx
             .db
             .game_quest_template()
@@ -198,19 +200,14 @@ pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarg
             "`check_claims_belong_to` refuses a non-quest row before the quest family's dispatch \
              runs, found {other}"
         ),
-    };
-    if present {
-        UpdateTarget::Present
-    } else {
-        UpdateTarget::Absent
     }
 }
 
-fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
-    row.operation() == Operation::Update && is_package_quest_id(row.key().quest_entry())
+fn in_package_range(row: &TracedRow) -> bool {
+    is_package_quest_id(row.key().quest_entry())
 }
 
-pub(super) fn clear_package_range(ctx: &ReducerContext) {
+fn clear_package_range(ctx: &ReducerContext) {
     let templates = ctx.db.game_quest_template();
     let stale_templates: Vec<u32> = templates
         .iter()
@@ -272,7 +269,7 @@ pub(super) fn clear_package_range(ctx: &ReducerContext) {
     }
 }
 
-pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     match (row.table(), row.operation()) {
         (ClaimTable::Quest, Operation::Insert) => {
             ctx.db
@@ -729,7 +726,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(in_package_range(&plan.rows[0]));
     }
 
     #[test]
@@ -744,7 +741,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(!updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(!in_package_range(&plan.rows[0]));
     }
 
     #[test]

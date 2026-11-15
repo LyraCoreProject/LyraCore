@@ -1217,9 +1217,7 @@ mod tests {
     #[test]
     fn scoped_templates_follow_display_summon_and_guardian_dependencies_to_closure() {
         let source = crate::vmangos_spell::guardian_fixture();
-        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch("CREATE TABLE creature_ai_events (creature_id INTEGER,action1_script INTEGER,action2_script INTEGER,action3_script INTEGER);
             CREATE TABLE creature_ai_scripts (id INTEGER,command INTEGER,datalong INTEGER,datalong2 INTEGER);
             INSERT INTO creature_ai_events VALUES (100,10,0,0),(101,11,0,0),(636,12,0,0),(999,13,0,0);

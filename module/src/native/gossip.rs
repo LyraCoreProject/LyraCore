@@ -11,7 +11,7 @@ use lyracore_protocol::{
 use lyracore_shared::constants::{gossip_option, npc_flags, player_flags};
 use spacetimedb::{ConnectionId, ReducerContext, SpacetimeType};
 
-use super::{game_native_player, Rollback};
+use super::{game_native_player, Rollback, Unhandled};
 use crate::{game_gossip_menu, game_gossip_menu_profile_option, game_gossip_option, Refusal};
 
 #[derive(SpacetimeType)]
@@ -46,15 +46,7 @@ fn hello(
     let (_, npc) = if character.player_flags & player_flags::GHOST != 0 {
         crate::ghost::spirit_healer_gate(ctx, guid, npc)?
     } else {
-        crate::items::npc_interaction_gate(
-            ctx,
-            guid,
-            npc,
-            u32::MAX,
-            "gossip creature",
-            "target has no gossip",
-            "use gossip",
-        )?
+        crate::npc_interaction::gate(ctx, guid, npc, crate::npc_interaction::NpcService::Gossip)?
     };
     let menu = crate::gossip::active_menu(ctx, &npc);
     let source = menu.as_ref().map_or(0, |menu| menu.menu_id);
@@ -211,7 +203,7 @@ fn select(
         return complete(ctx, connection);
     };
     super::actor(ctx, guid)?;
-    let target_menu = crate::world::apply_gossip_select(
+    let target_menu = crate::gossip::apply_gossip_select(
         ctx,
         guid,
         npc,
@@ -254,7 +246,13 @@ fn select(
         gossip_option::TAXI => Ok(super::taxi::open(ctx, connection, guid, npc)?),
         gossip_option::INNKEEPER => {
             complete(ctx, connection)?;
-            super::send_raw(ctx, connection, 0x02eb, npc.to_le_bytes().to_vec(), false);
+            super::send_raw(
+                ctx,
+                connection,
+                codec::SMSG_BINDER_CONFIRM_OPCODE,
+                npc.to_le_bytes().to_vec(),
+                false,
+            );
             Ok(())
         }
         gossip_option::UNLEARNTALENTS => {
@@ -265,7 +263,13 @@ fn select(
             body.extend_from_slice(
                 &crate::talent::respec_cost_copper(character.respec_count).to_le_bytes(),
             );
-            super::send_raw(ctx, connection, 0x02aa, body, false);
+            super::send_raw(
+                ctx,
+                connection,
+                codec::MSG_TALENT_WIPE_CONFIRM_OPCODE,
+                body,
+                false,
+            );
             Ok(())
         }
         gossip_option::SPIRITHEALER => {
@@ -315,8 +319,8 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    match message {
+) -> Result<(), Unhandled> {
+    let handled: Result<(), Rollback> = match message {
         ClientOpcodeMessage::CMSG_GOSSIP_HELLO(c) => {
             Ok(hello(ctx, connection, guid, c.guid.guid())?)
         }
@@ -328,9 +332,18 @@ pub(super) fn receive(
         ClientOpcodeMessage::CMSG_BINDER_ACTIVATE(c) => {
             super::actor(ctx, guid)
                 .map_err(String::from)
-                .and_then(|_| crate::items::innkeeper_access_gate(ctx, guid, c.guid.guid()))
+                .and_then(|_| {
+                    crate::npc_interaction::gate(
+                        ctx,
+                        guid,
+                        c.guid.guid(),
+                        crate::npc_interaction::NpcService::Innkeeper,
+                    )
+                    .map(drop)
+                    .map_err(String::from)
+                })
                 .map_err(interaction_refusal)?;
-            crate::world::set_home(ctx, guid);
+            crate::character::set_home(ctx, guid);
             if let Some(character) = crate::helpers::character_by_guid(ctx, guid) {
                 let (opcode, body) = codec::build_player_bound(c.guid.guid(), character.zone_id);
                 super::send_raw(ctx, connection, opcode, body, false);
@@ -344,6 +357,7 @@ pub(super) fn receive(
                 .map_err(interaction_refusal)?;
             Ok(complete(ctx, connection)?)
         }
-        _ => Err("invalid gossip opcode".into()),
-    }
+        other => return Err(Unhandled::Declined(other)),
+    };
+    Ok(handled?)
 }

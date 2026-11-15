@@ -27,3 +27,23 @@ impl Rng {
         (0..len).map(|_| (self.next_u64() >> 24) as u8).collect()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Rng;
+
+    #[test]
+    fn the_seeded_generator_is_reproducible_and_seed_dependent() {
+        let a: Vec<u8> = Rng::new(7).bytes(64);
+        let b: Vec<u8> = Rng::new(7).bytes(64);
+        assert_eq!(a, b, "the same seed must replay the same byte stream");
+
+        let c: Vec<u8> = Rng::new(8).bytes(64);
+        assert_ne!(a, c, "different seeds must explore different inputs");
+
+        assert!(
+            a.windows(2).any(|w| w[0] != w[1]),
+            "the generator emitted a constant stream: {a:02X?}"
+        );
+    }
+}

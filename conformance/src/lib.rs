@@ -1,4 +1,7 @@
+mod harness_pin;
 mod schema;
+
+pub use harness_pin::{harness_pin, HarnessPin};
 
 pub use schema::{
     Behavior, DeliberateDeviation, KnownGap, RealClient, Rung, ScopeVerification, SourceReference,

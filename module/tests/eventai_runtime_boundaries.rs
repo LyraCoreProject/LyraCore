@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 #[test]
@@ -59,8 +60,8 @@ fn delayed_scripts_continue_after_failure_and_abort_without_canceling_child_scri
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("debug_stage_script_failure_policies", &[]);
-    let first = lyracore_package_delta::packed_creature_spawn_guid(51_000, 1);
-    let second = lyracore_package_delta::packed_creature_spawn_guid(51_000, 2);
+    let first = lyracore_package_delta::packed_creature_spawn_guid(TEST_WOLF_ENTRY, 1);
+    let second = lyracore_package_delta::packed_creature_spawn_guid(TEST_WOLF_ENTRY, 2);
     let stand_state = |guid| {
         standalone
             .query_rows(&format!(
@@ -107,7 +108,10 @@ fn delayed_speech_uses_the_authored_chat_override() {
     let mut shard = Standalone::start("script-speech-override");
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
-    shard.assert_sql("INSERT INTO game_creature_ai_broadcast_text (id,male_text,female_text,chat_type,language_id,emote_delay_1_ms,emote_id_1,emote_delay_2_ms,emote_id_2,emote_delay_3_ms,emote_id_3) VALUES (5090099,'Examining the patient.','',0,0,0,0,0,0,0,0)");
+    shard.insert_row(
+        "game_creature_ai_broadcast_text",
+        &[("id", &5090099), ("male_text", &"Examining the patient.")],
+    );
     let speech = shard.subscribe(&["SELECT * FROM game_chat_event_live WHERE chat_type = 2"]);
     shard.assert_call("debug_script_speech_override", &[]);
     assert!(poll_until(POLL_TIMEOUT, || support::event_rows(

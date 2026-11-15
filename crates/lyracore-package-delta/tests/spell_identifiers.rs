@@ -1,10 +1,10 @@
 mod common;
 
 use common::{artifact, effect_claim, spell_claim, WHOLE_EFFECT_ROW, WHOLE_SPELL_ROW};
-use lyracore_package_delta::{
-    is_fixture_reserved_spell_id, is_package_spell_id, DeltaError, PackageDelta, PrimaryKey,
-    MAX_SPELL_EFFECT_INDEX, PACKAGE_SPELL_ID_CEIL, PACKAGE_SPELL_ID_FLOOR,
+use lyracore_package_delta::ids::{
+    is_fixture_reserved_spell_id, PackageRange, MAX_SPELL_EFFECT_INDEX,
 };
+use lyracore_package_delta::{is_package_spell_id, DeltaError, PackageDelta, PrimaryKey};
 
 const FIXTURE_SPELLS: [u32; 6] = [50_000, 50_072, 50_110, 50_137, 50_310, 50_311];
 
@@ -38,7 +38,7 @@ fn a_spell_header_key_is_the_spell_itself() {
 
 #[test]
 fn a_package_may_insert_a_spell_inside_the_package_range() {
-    for spell_id in [PACKAGE_SPELL_ID_FLOOR, 6_500_000, PACKAGE_SPELL_ID_CEIL] {
+    for spell_id in [6_000_000u32, 6_500_000, 6_999_999u32] {
         let json = artifact(
             "example.pkg",
             &spell_claim(spell_id, "insert", WHOLE_SPELL_ROW),
@@ -50,12 +50,7 @@ fn a_package_may_insert_a_spell_inside_the_package_range() {
 
 #[test]
 fn an_insert_outside_the_package_range_is_refused() {
-    for spell_id in [
-        133,
-        5_200_000,
-        PACKAGE_SPELL_ID_FLOOR - 1,
-        PACKAGE_SPELL_ID_CEIL + 1,
-    ] {
+    for spell_id in [133, 5_200_000, 5_999_999u32, 7_000_000u32] {
         let json = artifact(
             "example.pkg",
             &spell_claim(spell_id, "insert", WHOLE_SPELL_ROW),
@@ -63,7 +58,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::SpellIdNotClientSafe { spell_id },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Spell,
+                id: u64::from(spell_id)
+            },
             "spell {spell_id}"
         );
     }
@@ -78,7 +76,10 @@ fn an_inserted_effect_obeys_the_same_range_as_its_spell() {
 
     assert_eq!(
         PackageDelta::parse(&json).expect_err("the insert must be refused"),
-        DeltaError::SpellIdNotClientSafe { spell_id: 133 }
+        DeltaError::IdOutsidePackageRange {
+            range: PackageRange::Spell,
+            id: 133
+        }
     );
 }
 
@@ -97,7 +98,10 @@ fn no_operation_may_claim_a_fixture_spell() {
         let update = artifact("example.pkg", &spell_claim(spell_id, "update", A_COOLDOWN));
         assert_eq!(
             PackageDelta::parse(&update).expect_err("the update must be refused"),
-            DeltaError::SpellIdFixtureReserved { spell_id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Spell,
+                id: u64::from(spell_id)
+            },
             "update on fixture spell {spell_id}"
         );
 
@@ -107,7 +111,10 @@ fn no_operation_may_claim_a_fixture_spell() {
         );
         assert_eq!(
             PackageDelta::parse(&insert).expect_err("the insert must be refused"),
-            DeltaError::SpellIdFixtureReserved { spell_id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Spell,
+                id: u64::from(spell_id)
+            },
             "insert on fixture spell {spell_id}"
         );
     }
@@ -122,7 +129,10 @@ fn no_operation_may_claim_a_fixture_effect() {
 
     assert_eq!(
         PackageDelta::parse(&json).expect_err("the update must be refused"),
-        DeltaError::SpellIdFixtureReserved { spell_id: 50_072 }
+        DeltaError::IdFixtureReserved {
+            range: PackageRange::Spell,
+            id: 50_072
+        }
     );
 }
 
@@ -133,7 +143,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the update must be refused"),
-            DeltaError::SpellIdFixtureReserved { spell_id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Spell,
+                id: u64::from(spell_id)
+            },
             "spell {spell_id}"
         );
     }
@@ -199,7 +212,7 @@ fn the_package_range_is_disjoint_from_every_reserved_identifier() {
         );
     }
 
-    for spell_id in [PACKAGE_SPELL_ID_FLOOR, PACKAGE_SPELL_ID_CEIL] {
+    for spell_id in [6_000_000u32, 6_999_999u32] {
         assert!(
             !is_fixture_reserved_spell_id(spell_id),
             "Package spell {spell_id} must not be fixture-reserved"
