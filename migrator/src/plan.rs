@@ -59,6 +59,7 @@ pub(crate) struct MigratedBagSlot {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum MigratedItemLocation {
     Slot(u8),
     Bag(MigratedBagSlot),
@@ -1053,5 +1054,17 @@ mod tests {
         assert_eq!(json["account"]["username"], "MIGRANT");
         assert_eq!(json["account"]["salt"], format!("ab{}", "00".repeat(31)));
         assert_eq!(json["rested_xp"], 12);
+        assert_eq!(
+            serde_json::to_value(MigratedItemLocation::Slot(20)).unwrap(),
+            serde_json::json!({"slot": 20})
+        );
+        assert_eq!(
+            serde_json::to_value(MigratedItemLocation::Bag(MigratedBagSlot {
+                bag_slot: 20,
+                slot: 3
+            }))
+            .unwrap(),
+            serde_json::json!({"bag": {"bag_slot": 20, "slot": 3}})
+        );
     }
 }
