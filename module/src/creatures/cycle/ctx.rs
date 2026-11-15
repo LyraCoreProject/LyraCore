@@ -755,6 +755,9 @@ impl RegenSink for CtxWorld<'_> {
             .guid()
             .find(u.guid)
             .map_or(u.health, |e| {
+                if e.is_player() {
+                    return e.health;
+                }
                 let health_per_five = crate::items::equipped_stat_bonus(
                     self.ctx,
                     e.guid,
@@ -764,9 +767,12 @@ impl RegenSink for CtxWorld<'_> {
             })
     }
     fn combat_healed_to(&self, u: &Recovering) -> Option<u32> {
+        let e = self.ctx.db.game_world_entity().guid().find(u.guid)?;
+        if e.is_player() {
+            return None;
+        }
         let pct =
             u32::try_from(crate::modifiers::combat_health_regen_pct(self.ctx, u.guid)).unwrap_or(0);
-        let e = self.ctx.db.game_world_entity().guid().find(u.guid)?;
         let health_per_five = crate::items::equipped_stat_bonus(
             self.ctx,
             e.guid,
@@ -788,6 +794,9 @@ impl RegenSink for CtxWorld<'_> {
             .guid()
             .find(u.guid)
             .map_or(u.power, |e| {
+                if e.is_player() && e.power_type() == lyracore_shared::packing::power_type::MANA {
+                    return e.power;
+                }
                 let mana_per_five = crate::items::equipped_stat_bonus(
                     self.ctx,
                     e.guid,
