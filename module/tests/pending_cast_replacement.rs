@@ -2,12 +2,14 @@ mod support;
 
 use std::collections::BTreeMap;
 
+use lyracore_package_delta::fixture_ids::{PROFESSION_TRAINER_ENTRY, TEST_WOLF_ENTRY};
+use lyracore_shared::guid;
 use support::Standalone;
 
 const PLAYER_GUID: u64 = 1;
 const MANA_BURN: u32 = 8129;
-const TEST_WOLF_GUID: u64 = (0xF130_u64 << 48) | (51000_u64 << 24) | 1;
-const TRAINER_GUID: u64 = (0xF130_u64 << 48) | (51001_u64 << 24) | 1;
+const TEST_WOLF_GUID: u64 = guid::creature(TEST_WOLF_ENTRY, 1);
+const TRAINER_GUID: u64 = guid::creature(PROFESSION_TRAINER_ENTRY, 1);
 
 type SqlRow = BTreeMap<String, String>;
 

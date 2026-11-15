@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use serde_json::json;
-use support::Standalone;
+use support::{stage_group, Standalone};
 
 const DEADMINES: u32 = 1581;
 const STOCKADE: u32 = 717;
@@ -64,13 +64,6 @@ fn stage(realm: &Standalone, guid: u64, race: u8, class: u8) {
             &y.to_string(),
             &z.to_string(),
         ],
-    );
-}
-
-fn stage_group(realm: &Standalone, leader: u64, members: &[u64]) {
-    realm.assert_call(
-        "debug_stage_meeting_stone_group",
-        &[&leader.to_string(), &json!(members).to_string(), "false"],
     );
 }
 
@@ -1088,7 +1081,7 @@ fn a_stone_add_into_the_party_that_owns_the_instance_cancels_the_countdown() {
             "realm_group_op",
             &[
                 op,
-                &support::actor(&actor.to_string()),
+                &support::actor(actor),
                 &target.to_string(),
                 "0",
                 "0",
@@ -1117,11 +1110,16 @@ fn a_stone_add_into_the_party_that_owns_the_instance_cancels_the_countdown() {
     assert_eq!(countdowns(&realm), [CHARLIE], "the leaver counts down");
 
     for guid in [ALPHA, CHARLIE] {
-        realm.assert_sql(&format!(
-            "INSERT INTO game_account_claim (account_id, generation, request_nonce, \
-             character_guid, expires_micros, closed) VALUES ({guid}, 1, {guid}, {guid}, \
-             4102444800000000, false)"
-        ));
+        realm.insert_row(
+            "game_account_claim",
+            &[
+                ("account_id", &guid),
+                ("generation", &1),
+                ("request_nonce", &guid),
+                ("character_guid", &guid),
+                ("expires_micros", &4102444800000000u64),
+            ],
+        );
     }
     join_party(
         &realm,

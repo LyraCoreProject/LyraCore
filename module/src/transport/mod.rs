@@ -2,14 +2,13 @@ use lyracore_protocol::messages::vanilla::TransportInfo;
 use lyracore_shared::movement_flags::ON_TRANSPORT;
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 
-use crate::config::game_taxi_path_node;
+use crate::taxi::game_taxi_path_node;
 use crate::world::{game_world_entity, MoveClock, WorldEntity};
 
 pub(crate) mod timetable;
 
 use timetable::{PathPoint, Pose, Timetable};
 
-const HIGHGUID_MO_TRANSPORT: u64 = 0x1FC0;
 const CARRY_TICK_MICROS: i64 = 500_000;
 // CMaNGOS refuses movement with larger offsets, which can hold continent coordinates.
 const MAX_OFFSET_XY: f32 = 50.0;
@@ -77,6 +76,13 @@ pub struct TransportCrossing {
     pub map_id: u32,
 }
 
+crate::outside_table_catalog!(
+    game_transport,
+    game_transport_passenger,
+    game_transport_carry_schedule,
+    game_transport_crossing
+);
+
 pub(crate) struct Aboard {
     pub(crate) passenger: TransportPassenger,
     pub(crate) from_map_id: u32,
@@ -88,12 +94,12 @@ crate::character_owned!(delete, fn sweep_delete_game_transport_passenger(ctx, ch
 crate::character_owned!(not_transported, fn sweep_transfer_game_transport_passenger());
 
 pub(crate) fn guid(entry: u32) -> u64 {
-    (HIGHGUID_MO_TRANSPORT << 48) | u64::from(entry)
+    lyracore_shared::guid::compose(lyracore_shared::guid::MO_TRANSPORT, u64::from(entry))
 }
 
 fn entry_of(guid: u64) -> Option<u32> {
-    (guid >> 48 == HIGHGUID_MO_TRANSPORT)
-        .then(|| u32::try_from(guid & 0xFFFF_FFFF_FFFF).ok())
+    (lyracore_shared::guid::high(guid) == lyracore_shared::guid::MO_TRANSPORT)
+        .then(|| u32::try_from(lyracore_shared::guid::low(guid)).ok())
         .flatten()
 }
 
@@ -135,7 +141,6 @@ pub(crate) fn current_map(ctx: &ReducerContext, transport: &Transport) -> u32 {
         .map_or(transport.map_id, |crossing| crossing.map_id)
 }
 
-/// Arms the map change of every route that crosses maps and has none armed.
 pub(crate) fn arm_crossings(ctx: &ReducerContext) {
     let transports: Vec<_> = ctx
         .db
@@ -166,7 +171,7 @@ fn next_crossing(
     transport: &Transport,
     timetable: &Timetable,
 ) -> Option<TransportCrossing> {
-    let progress_ms = path_progress_ms(transport, now_ms(ctx));
+    let progress_ms = path_progress_ms(transport, crate::time::now_ms(ctx));
     let (wait_ms, _) = timetable.next_map_change(progress_ms)?;
     Some(TransportCrossing {
         scheduled_id: 0,
@@ -181,7 +186,6 @@ fn next_crossing(
     })
 }
 
-/// Moves a Transport that reached another map, its Passengers and its AOI Grants there.
 #[reducer]
 pub fn cross_transport_map(ctx: &ReducerContext, fired: TransportCrossing) {
     if !crate::time::scheduler_authorized(ctx) {
@@ -204,7 +208,7 @@ pub fn cross_transport_map(ctx: &ReducerContext, fired: TransportCrossing) {
     let timetable = timetable(ctx, &transport);
     let pose = timetable
         .as_ref()
-        .map(|timetable| timetable.pose(path_progress_ms(&transport, now_ms(ctx))));
+        .map(|timetable| timetable.pose(path_progress_ms(&transport, crate::time::now_ms(ctx))));
     let next = timetable
         .as_ref()
         .and_then(|timetable| next_crossing(ctx, &transport, timetable));
@@ -255,19 +259,14 @@ pub fn cross_transport_map(ctx: &ReducerContext, fired: TransportCrossing) {
 
 fn carry_across(ctx: &ReducerContext, passenger: TransportPassenger, from_map_id: u32, pose: Pose) {
     let world = pose.carry(offset(&passenger));
-    crate::world::teleport_aboard(
-        ctx,
-        pose.map_id,
-        world,
-        Aboard {
-            passenger,
-            from_map_id,
-        },
-    );
-}
-
-pub(crate) fn now_ms(ctx: &ReducerContext) -> u64 {
-    u64::try_from(crate::time::now(ctx).to_micros_since_unix_epoch() / 1000).unwrap_or(0)
+    let guid = passenger.character_guid;
+    let aboard = Aboard {
+        passenger,
+        from_map_id,
+    };
+    if let Err(refusal) = crate::world::teleport_aboard(ctx, pose.map_id, world, aboard) {
+        spacetimedb::log::warn!("Transport crossing left Passenger {guid} behind: {refusal}");
+    }
 }
 
 pub(crate) fn find(ctx: &ReducerContext, guid: u64) -> Option<Transport> {
@@ -316,7 +315,6 @@ pub(crate) enum Boarding {
     Ashore,
 }
 
-/// Boards, moves or removes a Passenger from the Transport its movement names.
 pub(crate) fn passenger_moved(
     ctx: &ReducerContext,
     mover: &WorldEntity,
@@ -416,7 +414,7 @@ fn within_reach(
     mover: &WorldEntity,
     offset: [f32; 4],
 ) -> bool {
-    pose(ctx, transport, now_ms(ctx)).is_some_and(|pose| {
+    pose(ctx, transport, crate::time::now_ms(ctx)).is_some_and(|pose| {
         let [x, y, _, _] = pose.carry(offset);
         (x - mover.x).hypot(y - mover.y) <= BOARDING_REACH_YD
     })
@@ -443,7 +441,7 @@ pub(crate) fn rejoin(ctx: &ReducerContext, character_guid: u64) {
     let target = transport.as_ref().and_then(|transport| {
         Some((
             current_map(ctx, transport),
-            pose(ctx, transport, now_ms(ctx))?,
+            pose(ctx, transport, crate::time::now_ms(ctx))?,
         ))
     });
     // During a pending crossing the client already holds a self CREATE without the Transport.
@@ -457,7 +455,6 @@ pub(crate) fn rejoin(ctx: &ReducerContext, character_guid: u64) {
     }
 }
 
-/// Restores the attachment a map crossing's teleport ended.
 pub(crate) fn reboard(ctx: &ReducerContext, passenger: TransportPassenger) {
     leave(ctx, passenger.character_guid);
     ctx.db.game_transport_passenger().insert(passenger);
@@ -490,7 +487,7 @@ pub fn carry_transport_passengers(ctx: &ReducerContext, schedule: TransportCarry
     let pose = transport.as_ref().and_then(|transport| {
         Some((
             current_map(ctx, transport),
-            pose(ctx, transport, now_ms(ctx))?,
+            pose(ctx, transport, crate::time::now_ms(ctx))?,
         ))
     });
     let Some((map_id, pose)) = pose.filter(|_| !passengers.is_empty()) else {

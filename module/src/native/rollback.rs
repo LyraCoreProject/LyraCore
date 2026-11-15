@@ -1,5 +1,9 @@
-use lyracore_protocol::{messages::vanilla::opcodes::ServerOpcodeMessage, world::Packet};
+use lyracore_protocol::messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
+use lyracore_protocol::world::Packet;
 
+use spacetimedb::{ConnectionId, ReducerContext};
+
+use super::game_native_player;
 use crate::{actor::ActionRefusal, Refusal};
 
 /// How a native request ends without committing; see docs/architecture.md#native-host-migration.
@@ -25,7 +29,7 @@ impl Rollback {
     ) -> Self {
         match messages
             .into_iter()
-            .map(lyracore_protocol::world::encode)
+            .map(|message| lyracore_protocol::world::encode(&message))
             .collect()
         {
             Ok(replies) => Self::replies(replies, cause),
@@ -75,6 +79,56 @@ impl From<ActionRefusal> for Rollback {
     }
 }
 
+/// How a Protocol Family's `receive` ends a client message it does not complete.
+pub(super) enum Unhandled {
+    /// Not one of the family's messages; the dispatcher offers it to the next family.
+    Declined(ClientOpcodeMessage),
+    Rollback(Rollback),
+}
+
+impl Unhandled {
+    /// Hands a declined message to `next`; a Rollback stays.
+    pub(super) fn offer(
+        self,
+        next: impl FnOnce(ClientOpcodeMessage) -> Result<(), Unhandled>,
+    ) -> Result<(), Unhandled> {
+        match self {
+            Self::Declined(message) => next(message),
+            rollback @ Self::Rollback(_) => Err(rollback),
+        }
+    }
+}
+
+impl From<Rollback> for Unhandled {
+    fn from(rollback: Rollback) -> Self {
+        Self::Rollback(rollback)
+    }
+}
+
+impl From<String> for Unhandled {
+    fn from(cause: String) -> Self {
+        Self::Rollback(cause.into())
+    }
+}
+
+impl From<&str> for Unhandled {
+    fn from(cause: &str) -> Self {
+        Self::Rollback(cause.into())
+    }
+}
+
+impl From<Refusal> for Unhandled {
+    fn from(refusal: Refusal) -> Self {
+        Self::Rollback(refusal.into())
+    }
+}
+
+impl From<ActionRefusal> for Unhandled {
+    fn from(refusal: ActionRefusal) -> Self {
+        Self::Rollback(refusal.into())
+    }
+}
+
 // The Host parses this as JSON `[[opcode, [byte, ...]], ...]`; keep it byte-identical.
 fn envelope(replies: &[Packet]) -> String {
     let packets = replies
@@ -91,6 +145,47 @@ fn envelope(replies: &[Packet]) -> String {
         .collect::<Vec<_>>()
         .join(",");
     format!("native_reply:[{packets}]")
+}
+
+/// Whether `connection` is still the World Session of Character `guid` on this Shard.
+pub(super) fn connection_holds(ctx: &ReducerContext, connection: ConnectionId, guid: u64) -> bool {
+    ctx.db
+        .game_native_player()
+        .connection_id()
+        .find(connection)
+        .is_some_and(|player| player.character_guid == guid)
+}
+
+/// The notice a request family answers when the Realm cannot complete a request.
+pub(super) fn unavailable(family: &str) -> ServerOpcodeMessage {
+    ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(
+        lyracore_protocol::messages::vanilla::SMSG_NOTIFICATION {
+            notification: format!("{family} request unavailable. Please try again."),
+        },
+    ))
+}
+
+/// The replies a remote Refusal carries in its reducer error, or else `unavailable`.
+pub(super) fn refusal_replies(
+    error: &str,
+    unavailable: ServerOpcodeMessage,
+) -> Vec<(u16, Vec<u8>)> {
+    replies_in(error).unwrap_or_else(|| {
+        let notice = super::bounded(unavailable);
+        vec![(notice.opcode, notice.body)]
+    })
+}
+
+/// Sends a remote Refusal's replies, or else `unavailable`, to `connection`.
+pub(super) fn replay_refusal(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    error: &str,
+    unavailable: ServerOpcodeMessage,
+) {
+    for (opcode, body) in refusal_replies(error, unavailable) {
+        super::send_raw(ctx, connection, opcode, body, false);
+    }
 }
 
 /// The refusal packets in a reducer error that `envelope` wrote.

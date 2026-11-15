@@ -1,7 +1,7 @@
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use lyracore_shared::constants::starter_item;
-
+use lyracore_shared::race_class::{mask_admits, ZeroMask};
 use lyracore_shared::spell::taxonomy::{A_MOD_SKILL, STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR};
 
 use crate::skilldata::{game_skill_ability, game_skill_availability};
@@ -91,10 +91,6 @@ pub(crate) fn weapon_subclass_to_skill_line(subclass: u8) -> u32 {
 
 pub(crate) fn skill_cap_for_level(level: u32) -> u32 {
     level * SKILL_PER_LEVEL
-}
-
-pub(crate) fn skill_diff(defense_skill: u32, weapon_skill: u32) -> u32 {
-    defense_skill.saturating_sub(weapon_skill)
 }
 
 pub(crate) fn next_skill(current: u32, cap: u32) -> u32 {
@@ -216,7 +212,7 @@ impl PlayerSkill {
 
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
         let row = ctx.db.game_player_skill().insert(row);
-        crate::native::skill_changed(ctx, None, Some(&row));
+        crate::native::book::skill_changed(ctx, None, Some(&row));
         refresh_weapon_crit(ctx, &row);
         row
     }
@@ -224,7 +220,7 @@ impl PlayerSkill {
     pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
         let previous = ctx.db.game_player_skill().id().find(self.id);
         let row = ctx.db.game_player_skill().id().update(self);
-        crate::native::skill_changed(ctx, previous.as_ref(), Some(&row));
+        crate::native::book::skill_changed(ctx, previous.as_ref(), Some(&row));
         refresh_weapon_crit(ctx, &row);
         row
     }
@@ -232,7 +228,7 @@ impl PlayerSkill {
     pub(crate) fn delete(ctx: &ReducerContext, id: u64) {
         if let Some(row) = ctx.db.game_player_skill().id().find(id) {
             ctx.db.game_player_skill().id().delete(id);
-            crate::native::skill_changed(ctx, Some(&row), None);
+            crate::native::book::skill_changed(ctx, Some(&row), None);
             refresh_weapon_crit(ctx, &row);
         }
     }
@@ -332,7 +328,7 @@ pub(crate) fn aura_changed(ctx: &ReducerContext, previous: Option<&Aura>, curren
             .filter(guid)
             .find(|skill| skill.skill_line == line)
         {
-            crate::native::skill_bonus_changed(ctx, &skill);
+            crate::native::book::skill_bonus_changed(ctx, &skill);
             refresh_weapon_crit(ctx, &skill);
         }
     }
@@ -391,21 +387,10 @@ pub(crate) fn defense_skill(ctx: &ReducerContext, target: &WorldEntity, maximum:
         return skill_cap_for_level(target.level);
     }
     let base = skill_value(ctx, target.guid, skill_line::DEFENSE, maximum);
-    let aura = crate::spell::combat_field_bonus(ctx, target.guid, crate::spell::COMBAT_DEFENSE);
+    let aura = crate::modifiers::combat_field_bonus(ctx, target.guid, crate::spell::COMBAT_DEFENSE);
     let gear =
         crate::items::equipped_stat_bonus(ctx, target.guid, crate::items::EquipStat::Defense);
     (i64::from(base) + i64::from(aura) + i64::from(gear)).clamp(0, i64::from(u32::MAX)) as u32
-}
-
-pub(crate) fn skill_diff_ctx(
-    ctx: &ReducerContext,
-    attacker: &WorldEntity,
-    target: &WorldEntity,
-) -> u32 {
-    skill_diff(
-        effective_defense_skill(ctx, target),
-        effective_weapon_skill(ctx, attacker),
-    )
 }
 
 fn raise_skill(ctx: &ReducerContext, guid: u64, line: u32) -> Option<u32> {
@@ -516,8 +501,8 @@ fn skill_always_maximized(ctx: &ReducerContext, entity: &WorldEntity, line: u32)
         .by_skill_line()
         .filter(line)
         .any(|row| {
-            profile_mask_admits(row.race_mask, entity.race())
-                && profile_mask_admits(row.class_mask, entity.class())
+            mask_admits(row.race_mask, entity.race(), ZeroMask::AdmitsAll)
+                && mask_admits(row.class_mask, entity.class(), ZeroMask::AdmitsAll)
                 && row.flags & 0x10 != 0
         })
 }
@@ -551,10 +536,6 @@ pub(crate) fn raise_combat_caps(ctx: &ReducerContext, guid: u64, new_level: u32)
             row.update(ctx);
         }
     }
-}
-
-fn profile_mask_admits(mask: u32, id: u8) -> bool {
-    mask == 0 || (id != 0 && (id as u32) <= u32::BITS && mask & (1u32 << (id - 1)) != 0)
 }
 
 #[cfg_attr(not(has_packages), allow(dead_code))]
@@ -595,8 +576,8 @@ pub(crate) fn reconcile_profile_skill(
                 overflow = true;
                 break;
             }
-            let identity_matches = profile_mask_admits(row.race_mask, actor.race())
-                && profile_mask_admits(row.class_mask, actor.class());
+            let identity_matches = mask_admits(row.race_mask, actor.race(), ZeroMask::AdmitsAll)
+                && mask_admits(row.class_mask, actor.class(), ZeroMask::AdmitsAll);
             identity_admitted |= identity_matches;
             if identity_matches && i64::from(row.min_level) <= i64::from(actor.level) {
                 admitted = true;
@@ -822,23 +803,12 @@ pub fn debug_learn_profession(
 
 // Synthetic profession markers name trainer offerings, never game_spell rows.
 #[cfg(feature = "debug_reducers")]
-const LEARN_COOKING_SPELL_ID: u32 = 50080;
-#[cfg(feature = "debug_reducers")]
-const LEARN_SKINNING_SPELL_ID: u32 = 50081;
-#[cfg(feature = "debug_reducers")]
-const LEARN_LEATHERWORKING_SPELL_ID: u32 = 50082;
-#[cfg(feature = "debug_reducers")]
-const LEARN_MINING_SPELL_ID: u32 = 50083;
-#[cfg(feature = "debug_reducers")]
-const LEARN_HERBALISM_SPELL_ID: u32 = 50084;
-#[cfg(feature = "debug_reducers")]
-const LEARN_ALCHEMY_SPELL_ID: u32 = 50085;
-#[cfg(feature = "debug_reducers")]
-const LEARN_FIRST_AID_SPELL_ID: u32 = 50086;
-#[cfg(feature = "debug_reducers")]
-const LEARN_TAILORING_SPELL_ID: u32 = 50087;
-#[cfg(feature = "debug_reducers")]
-const LEARN_BLACKSMITHING_SPELL_ID: u32 = 50088;
+use lyracore_package_delta::fixture_ids::{
+    LEARN_ALCHEMY_SPELL_ID, LEARN_AXE_1H_SPELL_ID, LEARN_BLACKSMITHING_SPELL_ID,
+    LEARN_COOKING_SPELL_ID, LEARN_FIRST_AID_SPELL_ID, LEARN_HERBALISM_SPELL_ID,
+    LEARN_LEATHERWORKING_SPELL_ID, LEARN_MINING_SPELL_ID, LEARN_POLEARM_SPELL_ID,
+    LEARN_SKINNING_SPELL_ID, LEARN_TAILORING_SPELL_ID,
+};
 
 #[cfg(feature = "debug_reducers")]
 #[spacetimedb::reducer]
@@ -876,11 +846,6 @@ pub fn debug_learn_profession_from_trainer(
 }
 
 #[cfg(feature = "debug_reducers")]
-const LEARN_AXE_1H_SPELL_ID: u32 = 50130;
-#[cfg(feature = "debug_reducers")]
-const LEARN_POLEARM_SPELL_ID: u32 = 50131;
-
-#[cfg(feature = "debug_reducers")]
 #[spacetimedb::reducer]
 pub fn debug_learn_weapon_from_trainer(
     ctx: &ReducerContext,
@@ -908,8 +873,9 @@ pub fn debug_learn_weapon_from_trainer(
         .map_err(|refusal| refusal.as_tag().into())
 }
 
-pub(crate) const LEARN_APPRENTICE_RIDING_SPELL_ID: u32 = 50132;
-pub(crate) const LEARN_JOURNEYMAN_RIDING_SPELL_ID: u32 = 50133;
+pub(crate) use lyracore_package_delta::fixture_ids::{
+    LEARN_APPRENTICE_RIDING_SPELL_ID, LEARN_JOURNEYMAN_RIDING_SPELL_ID,
+};
 
 pub(crate) fn riding_marker_rank(spell_id: u32) -> Option<u16> {
     match spell_id {
@@ -1038,8 +1004,8 @@ pub(crate) fn ensure_player_skills(
             .filter(line)
             .any(|ability| {
                 known.contains(&ability.spell_id)
-                    && profile_mask_admits(ability.race_mask, entity.race())
-                    && profile_mask_admits(ability.class_mask, class)
+                    && mask_admits(ability.race_mask, entity.race(), ZeroMask::AdmitsAll)
+                    && mask_admits(ability.class_mask, class, ZeroMask::AdmitsAll)
             })
         {
             lines.insert(line);
@@ -1318,13 +1284,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn skill_diff_is_defense_minus_weapon_clamped() {
-        assert_eq!(skill_diff(300, 300), 0);
-        assert_eq!(skill_diff(315, 300), 15);
-        assert_eq!(skill_diff(300, 315), 0);
     }
 
     #[test]

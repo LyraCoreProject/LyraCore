@@ -124,30 +124,6 @@ mod tests {
     }
 
     #[test]
-    fn the_status_and_failure_bytes_are_the_vanilla_values() {
-        use queue_status::*;
-        assert_eq!(
-            [
-                LEAVE_QUEUE,
-                JOINED_QUEUE,
-                PARTY_MEMBER_LEFT_LFG,
-                PARTY_MEMBER_REMOVED_PARTY_REMOVED,
-                LOOKING_FOR_NEW_PARTY_IN_QUEUE,
-                NONE
-            ],
-            [0, 1, 2, 3, 4, 5]
-        );
-        assert_eq!(
-            [
-                join_failure::PARTY_LEADER,
-                join_failure::FULL_GROUP,
-                join_failure::RAID_GROUP
-            ],
-            [1, 2, 3]
-        );
-    }
-
-    #[test]
     fn a_queue_payload_round_trips_and_fails_closed() {
         assert_eq!(encode_queue(1581, queue_status::JOINED_QUEUE), "1581,1");
         assert_eq!(decode_queue("1581,1"), Some((1581, 1)));

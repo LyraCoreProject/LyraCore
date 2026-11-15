@@ -9,12 +9,13 @@ import {
 } from "./ids.ts";
 import type { FieldType } from "./schema.ts";
 
+// Each kind names a `DeltaError` variant in `crates/lyracore-package-delta/src/error.rs`.
 export type RefusalKind =
   | "InvalidPackageId"
   | "InvalidSourceHash"
   | "MalformedKey"
-  | "SpellIdNotClientSafe"
-  | "SpellIdFixtureReserved"
+  | "IdOutsidePackageRange"
+  | "IdFixtureReserved"
   | "EffectIndexOutOfRange"
   | "UnknownField"
   | "ValueOutOfRange"
@@ -60,7 +61,7 @@ export function malformedKey(table: string, detail: string): DeltaRefusal {
 
 export function spellIdNotClientSafe(spellId: number): DeltaRefusal {
   return new DeltaRefusal(
-    "SpellIdNotClientSafe",
+    "IdOutsidePackageRange",
     `spell ${spellId} is outside the Package spell range ${PACKAGE_SPELL_ID_FLOOR}..=${PACKAGE_SPELL_ID_CEIL}; ` +
       `an inserted spell must use an identifier no client and no import can already own`,
   );
@@ -68,7 +69,7 @@ export function spellIdNotClientSafe(spellId: number): DeltaRefusal {
 
 export function spellIdFixtureReserved(spellId: number): DeltaRefusal {
   return new DeltaRefusal(
-    "SpellIdFixtureReserved",
+    "IdFixtureReserved",
     `spell ${spellId} is fixture-reserved (${FIXTURE_SPELL_ID_FLOOR}..=${FIXTURE_SPELL_ID_CEIL} and ` +
       `${FIXTURE_RESERVED_ID_FLOOR}..=${FIXTURE_RESERVED_ID_CEIL}); no Package may claim it`,
   );

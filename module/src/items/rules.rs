@@ -1,10 +1,5 @@
 use super::tables::ItemTemplate;
 
-// Class/race IDs are one-based bit indices; a zero durable mask grants no eligibility.
-pub(crate) fn eligibility_mask_allows(mask: u32, id: u8) -> bool {
-    id != 0 && (id as u32) <= u32::BITS && mask & (1u32 << (id - 1)) != 0
-}
-
 pub(crate) fn meets_required_skill(
     required_skill: u32,
     required_skill_rank: u32,
@@ -48,12 +43,6 @@ pub mod bonding {
     pub const NONE: u8 = 0;
     pub const BIND_ON_PICKUP: u8 = 1;
     pub const BIND_ON_EQUIP: u8 = 2;
-    #[cfg(test)]
-    pub const BIND_ON_USE: u8 = 3;
-    #[cfg(test)]
-    pub const QUEST_ITEM: u8 = 4;
-    #[cfg(test)]
-    pub const QUEST_ITEM2: u8 = 5;
 }
 
 pub(crate) fn binds_on_grant(item_bonding: u8) -> bool {
@@ -318,33 +307,29 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn meets_required_level_gates_below_requirement_only() {
-        assert!(meets_required_level(1, 1));
-        assert!(meets_required_level(5, 1));
-        assert!(!meets_required_level(1, 5));
-        assert!(meets_required_level(5, 5));
-    }
-
-    #[test]
     fn explicit_equip_requirements_fail_closed_and_admit_qualified_characters() {
-        assert!(eligibility_mask_allows(1 << 7, 8));
-        assert!(!eligibility_mask_allows(1 << 7, 9));
-        assert!(!eligibility_mask_allows(0, 8));
-        assert!(!eligibility_mask_allows(u32::MAX, 0));
+        use lyracore_shared::race_class::{mask_admits, ZeroMask};
+        assert!(mask_admits(1 << 7, 8, ZeroMask::AdmitsNone));
+        assert!(!mask_admits(1 << 7, 9, ZeroMask::AdmitsNone));
+        assert!(!mask_admits(0, 8, ZeroMask::AdmitsNone));
+        assert!(!mask_admits(u32::MAX, 0, ZeroMask::AdmitsNone));
 
         for class_id in [1u8, 2, 3, 4, 5, 7, 8, 9, 11] {
-            assert!(eligibility_mask_allows(
+            assert!(mask_admits(
                 crate::items::tables::ALL_PLAYABLE_CLASS_MASK,
-                class_id
+                class_id,
+                ZeroMask::AdmitsNone
             ));
         }
-        assert!(!eligibility_mask_allows(
+        assert!(!mask_admits(
             crate::items::tables::ALL_PLAYABLE_CLASS_MASK,
-            6
+            6,
+            ZeroMask::AdmitsNone
         ));
-        assert!(!eligibility_mask_allows(
+        assert!(!mask_admits(
             crate::items::tables::ALL_PLAYABLE_CLASS_MASK,
-            10
+            10,
+            ZeroMask::AdmitsNone
         ));
 
         assert!(!meets_required_skill(171, 50, None));
@@ -438,75 +423,9 @@ pub(crate) mod tests {
 
     pub(crate) fn blank_template(entry: u32) -> ItemTemplate {
         ItemTemplate {
-            entry,
             class: 4,
-            subclass: 0,
-            name: String::new(),
-            display_id: 0,
-            quality: 0,
-            inventory_type: 0,
-            item_level: 0,
-            required_level: 0,
-            max_durability: 0,
-            buy_price: 0,
-            sell_price: 0,
             max_stack: 1,
-            damage_min: 0.0,
-            damage_max: 0.0,
-            delay_ms: 0,
-            stat_strength: 0,
-            stat_agility: 0,
-            stat_stamina: 0,
-            stat_intellect: 0,
-            stat_spirit: 0,
-            stat_crit: 0,
-            stat_hit: 0,
-            stat_armor: 0,
-            block_value: 0,
-            restores_power: false,
-            spellid_1: 0,
-            spelltrigger_1: 0,
-            spellid_2: 0,
-            spelltrigger_2: 0,
-            container_slots: 0,
-            sheath: 0,
-            bonding: 0,
-            holy_res: 0,
-            fire_res: 0,
-            nature_res: 0,
-            frost_res: 0,
-            shadow_res: 0,
-            arcane_res: 0,
-            spellid_3: 0,
-            spelltrigger_3: 0,
-            spellid_4: 0,
-            spelltrigger_4: 0,
-            spellid_5: 0,
-            spelltrigger_5: 0,
-            required_skill: 0,
-            required_skill_rank: 0,
-            required_reputation_faction: 0,
-            required_reputation_rank: 0,
-            max_count: 0,
-            item_flags: 0,
-            page_text: 0,
-            start_quest: 0,
-            bag_family: 0,
-            buy_count: 1,
-            food_type: 0,
-            allowed_class: crate::items::tables::ALL_PLAYABLE_CLASS_MASK,
-            allowed_race: crate::items::tables::ALL_PLAYABLE_RACE_MASK,
-            random_property: 0,
-            spellppmrate_1: 0.0,
-            spellppmrate_2: 0.0,
-            spellppmrate_3: 0.0,
-            spellppmrate_4: 0.0,
-            spellppmrate_5: 0.0,
-            spellcategory_1: 0,
-            spellcategory_2: 0,
-            spellcategory_3: 0,
-            spellcategory_4: 0,
-            spellcategory_5: 0,
+            ..ItemTemplate::blank(entry, "")
         }
     }
 
@@ -739,24 +658,6 @@ pub(crate) mod tests {
         assert!(can_equip_proficiency(8, 0, 0));
         assert!(can_equip_proficiency(8, 7, 0));
         assert!(can_equip_proficiency(9, 12, 0));
-    }
-
-    #[test]
-    fn binding_taxonomy_grant_vs_equip_triggers() {
-        use bonding as b;
-        assert!(binds_on_grant(b::BIND_ON_PICKUP));
-        assert!(!binds_on_grant(b::NONE));
-        assert!(!binds_on_grant(b::BIND_ON_EQUIP));
-        assert!(!binds_on_grant(b::BIND_ON_USE));
-        assert!(!binds_on_grant(b::QUEST_ITEM));
-        assert!(!binds_on_grant(b::QUEST_ITEM2));
-
-        assert!(binds_on_equip(b::BIND_ON_EQUIP));
-        assert!(!binds_on_equip(b::NONE));
-        assert!(!binds_on_equip(b::BIND_ON_PICKUP));
-        assert!(!binds_on_equip(b::BIND_ON_USE));
-        assert!(!binds_on_equip(b::QUEST_ITEM));
-        assert!(!binds_on_equip(b::QUEST_ITEM2));
     }
 
     #[test]

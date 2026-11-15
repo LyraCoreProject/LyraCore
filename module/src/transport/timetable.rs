@@ -2,6 +2,10 @@
 
 use std::f32::consts::{PI, TAU};
 
+use lyracore_shared::movement_path::{
+    catmull_rom, catmull_rom_slopes, catmull_rom_weights, extrapolated_start,
+};
+
 const TELEPORT_FLAG: i32 = 1;
 const STOP_FLAG: i32 = 2;
 // The client measures a segment with 20 chords; CMaNGOS uses 3.
@@ -305,28 +309,16 @@ fn heading(direction: [f32; 3]) -> f32 {
 fn control(leg: &[[f32; 3]], index: isize) -> [f32; 3] {
     let last = leg.len() - 1;
     match usize::try_from(index) {
-        Err(_) => {
-            let (first, second) = (leg[0], leg[1.min(last)]);
-            [
-                2.0 * first[0] - second[0],
-                2.0 * first[1] - second[1],
-                2.0 * first[2] - second[2],
-            ]
-        }
+        Err(_) => extrapolated_start(leg[0], leg[1.min(last)]),
         Ok(index) => leg[index.min(last)],
     }
 }
 
 fn evaluate(leg: &[[f32; 3]], segment: usize, t: f32, weights: fn(f32) -> [f32; 4]) -> [f32; 3] {
-    let weights = weights(t);
-    let mut out = [0.0; 3];
-    for (offset, weight) in weights.into_iter().enumerate() {
-        let point = control(leg, segment as isize - 1 + offset as isize);
-        for axis in 0..3 {
-            out[axis] += point[axis] * weight;
-        }
-    }
-    out
+    let controls =
+        std::array::from_fn(|offset| control(leg, segment as isize - 1 + offset as isize));
+    // The timetable sums from +0.0, so an axis of four -0.0 products stays +0.0.
+    catmull_rom(&controls, weights(t)).map(|axis| axis + 0.0)
 }
 
 fn segment_length(leg: &[[f32; 3]], segment: usize) -> f32 {
@@ -344,26 +336,6 @@ fn segment_length(leg: &[[f32; 3]], segment: usize) -> f32 {
         previous = point;
     }
     length as f32
-}
-
-fn catmull_rom_weights(t: f32) -> [f32; 4] {
-    let (t2, t3) = (t * t, t * t * t);
-    [
-        -0.5 * t3 + t2 - 0.5 * t,
-        1.5 * t3 - 2.5 * t2 + 1.0,
-        -1.5 * t3 + 2.0 * t2 + 0.5 * t,
-        0.5 * t3 - 0.5 * t2,
-    ]
-}
-
-fn catmull_rom_slopes(t: f32) -> [f32; 4] {
-    let t2 = t * t;
-    [
-        -1.5 * t2 + 2.0 * t - 0.5,
-        4.5 * t2 - 5.0 * t,
-        -4.5 * t2 + 4.0 * t + 0.5,
-        1.5 * t2 - t,
-    ]
 }
 
 #[cfg(test)]

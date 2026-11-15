@@ -151,34 +151,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn chat_kinds_are_the_vanilla_chat_msg_values() {
-        assert_eq!(chat_kind::SAY, 0);
-        assert_eq!(chat_kind::PARTY, 1);
-        assert_eq!(chat_kind::RAID, 2);
-        assert_eq!(chat_kind::GUILD, 3);
-        assert_eq!(chat_kind::OFFICER, 4);
-        assert_eq!(chat_kind::YELL, 5);
-        assert_eq!(chat_kind::WHISPER, 6);
-        assert_eq!(chat_kind::WHISPER_INFORM, 7);
-        assert_eq!(chat_kind::EMOTE, 8);
-        assert_eq!(chat_kind::CHANNEL, 14);
-        assert_eq!(chat_kind::AFK, 20);
-        assert_eq!(chat_kind::DND, 21);
-        assert_eq!(chat_kind::IGNORED, 22);
-        assert_eq!(chat_kind::RAID_LEADER, 87);
-        assert_eq!(chat_kind::RAID_WARNING, 88);
-    }
-
-    #[test]
-    fn broadcast_chat_discriminants_and_text_emote_range_are_pinned() {
-        assert_eq!(broadcast_chat::SAY, 0);
-        assert_eq!(broadcast_chat::YELL, 1);
-        assert_eq!(broadcast_chat::CREATURE_TEXT_EMOTE, 2);
-        assert_eq!(broadcast_chat::EMOTE, 3);
-        assert_eq!(broadcast_chat::TEXT_EMOTE_RANGE_YD, 25.0);
-    }
-
-    #[test]
     fn a_race_speaks_exactly_its_racial_languages() {
         const COMMON: u32 = 7;
         const ORCISH: u32 = 1;

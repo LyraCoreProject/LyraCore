@@ -5,7 +5,7 @@ use crate::{
     game_creature_ai_relay_arrival, game_creature_spline, game_encounter_equip, game_world_entity,
 };
 
-const FIXTURE_OWNER_ENTRY: u32 = 51_000;
+const FIXTURE_OWNER_ENTRY: u32 = lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 const FIXTURE_OWNER_GUID: u64 = packed_creature_spawn_guid(FIXTURE_OWNER_ENTRY, 1);
 
 #[reducer]

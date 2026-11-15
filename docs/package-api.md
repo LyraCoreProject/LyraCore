@@ -329,12 +329,12 @@ instead: accepted work or a Refusal, and a Cast Handle for a pending cast.
 | `reconcile_starter_role_spell_levels` | `seed::reconcile_curated_starter_role_levels` | repairs only exact old curated level-zero headers; preserves imported or tuned rows |
 | `use_gameobject` | `gameobject::apply_use_gameobject` | GO resolved by guid + range/use gates |
 | `request_use_gameobject` | `gameobject::request_use_gameobject` | typed target, partition, range, and use Refusal |
-| `area_trigger_route` | `quest::area_trigger_route` | exact imported source volume and target map; landing remains private |
-| `enter_sessionless_areatrigger` | `quest::enter_sessionless_areatrigger` | imported source volume + expected certified party partition + session-less action Gates |
+| `area_trigger_route` | `areatrigger::area_trigger_route` | exact imported source volume and target map; landing remains private |
+| `enter_sessionless_areatrigger` | `areatrigger::enter_sessionless_areatrigger` | imported source volume + expected certified party partition + session-less action Gates |
 | `import_revision` | `game_import_meta` read | current importer source and file identities for one family |
-| `repop` | `world::do_repop` | dead actor releases to the graveyard ghost |
+| `repop` | `ghost::do_repop` | dead actor releases to the graveyard ghost |
 | `respond_resurrect` | `spell::do_resurrect_response` | consume the actor's pending rez offer; accept revives IN PLACE at the offer's % |
-| `spirit_res` | `world::do_spirit_healer_res` | ghost actor res without a healer Gate; 25% carried-item durability loss and level-scaled sickness apply |
+| `spirit_res` | `ghost::do_spirit_healer_res` | ghost actor res without a healer Gate; 25% carried-item durability loss and level-scaled sickness apply |
 | `self_resurrect` | `spell::do_self_resurrect` | dead actor with a Self-Resurrection Option revives in place; no sickness |
 | `accept_group_invite` | `group::accept_invite_for` | pending invite exists + inviter on the same team + its Group still exists (or a solo inviter is still ungrouped) + group not full; roster events fire and the Roster Revision advances |
 | `guild_invitation`, `guild_membership` | Package guild and guild reads | pending invitation and current projected membership |
@@ -539,9 +539,10 @@ colliding. The accessor is also the table name Package Teardown empties, so the 
 Package table that sets its own `name`.
 
 Core table accessors and row types are named under `crate::tables`, for example
-`use crate::tables::{game_world_entity, WorldEntity};`. The catalog in
-`module/src/tables.rs` lists them explicitly. Crate-root row aliases remain for Core and schema
-checks; a Package uses the catalog path. `crate::CHARACTER_OWNED_TABLES` is the generated manifest
+`use crate::tables::{game_world_entity, WorldEntity};`. `module/build.rs` generates the catalog
+from the table declarations. A table its declaring file names in `crate::outside_table_catalog!` is
+not in the catalog and not promised. The crate root re-exports the same catalog for Core and schema
+checks; a Package uses the `crate::tables` path. `crate::CHARACTER_OWNED_TABLES` is the generated manifest
 of character-keyed tables.
 
 ### Creature stat edits

@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{EATING_SPELL, FIXTURE_JERKY};
 use support::{actor, Standalone};
 
 #[test]
@@ -11,17 +12,19 @@ fn drink_spells_restore_mana_and_refuse_rage_even_without_the_item_flag() {
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
-    shard.assert_sql("UPDATE game_item_template SET restores_power = false WHERE entry = 5090052");
-    shard.assert_sql("UPDATE game_spell_effect SET kind = 3, base_points = 10, die_sides = 0, p0 = 0, p0_kind = 4 WHERE spell_id = 50115");
-    shard.assert_call("debug_grant_item", &["1", "5090052", "2"]);
-    let item = &shard
-        .query_rows("SELECT slot FROM game_item_instance WHERE owner_guid = 1 AND entry = 5090052")
-        [0];
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET restores_power = false WHERE entry = {FIXTURE_JERKY}"
+    ));
+    shard.assert_sql(&format!("UPDATE game_spell_effect SET kind = 3, base_points = 10, die_sides = 0, p0 = 0, p0_kind = 4 WHERE spell_id = {EATING_SPELL}"));
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_JERKY.to_string(), "2"]);
+    let item = &shard.query_rows(&format!(
+        "SELECT slot FROM game_item_instance WHERE owner_guid = 1 AND entry = {FIXTURE_JERKY}"
+    ))[0];
     let result = shard.call("gw_use_item", &[&actor("1"), &item["slot"]]);
     assert!(!result.status.success());
     assert_eq!(
         shard.query_rows(
-            "SELECT stack_count FROM game_item_instance WHERE owner_guid = 1 AND entry = 5090052"
+            &format!("SELECT stack_count FROM game_item_instance WHERE owner_guid = 1 AND entry = {FIXTURE_JERKY}")
         )[0]["stack_count"],
         "2"
     );
@@ -32,7 +35,7 @@ fn drink_spells_restore_mana_and_refuse_rage_even_without_the_item_flag() {
     shard.assert_call("gw_use_item", &[&actor("1"), &item["slot"]]);
     assert_eq!(
         shard.query_rows(
-            "SELECT stack_count FROM game_item_instance WHERE owner_guid = 1 AND entry = 5090052"
+            &format!("SELECT stack_count FROM game_item_instance WHERE owner_guid = 1 AND entry = {FIXTURE_JERKY}")
         )[0]["stack_count"],
         "1"
     );

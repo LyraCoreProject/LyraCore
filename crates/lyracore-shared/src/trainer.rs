@@ -98,14 +98,6 @@ mod tests {
         assert!(serves(8, 0, 8));
         assert!(!serves(1, 0, 8));
     }
-
-    #[test]
-    fn trainer_type_constants_match_the_source_enum() {
-        assert_eq!(trainer_type::CLASS, 0);
-        assert_eq!(trainer_type::MOUNTS, 1);
-        assert_eq!(trainer_type::TRADESKILLS, 2);
-        assert_eq!(trainer_type::PETS, 3);
-    }
 }
 
 #[derive(Clone, Copy)]

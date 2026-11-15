@@ -20,7 +20,7 @@ fn imported_instance_maps_exclude_world_gameobject_pools_without_terrain() {
         .query_rows("SELECT map_id FROM game_nav_chunk")
         .is_empty());
 
-    standalone.assert_sql("INSERT INTO game_creature_spawn_map (map_id) VALUES (36)");
+    standalone.insert_row("game_creature_spawn_map", &[("map_id", &36)]);
     standalone.assert_sql("DELETE FROM game_gameobject WHERE map_id = 0");
     standalone.assert_call("arm_all_pools", &[]);
 

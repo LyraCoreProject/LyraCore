@@ -275,7 +275,10 @@ pub(crate) fn world_plan(
         s.starts_with("DELETE FROM game_taxi_node ") || s.starts_with("INSERT INTO game_taxi_node ")
     }));
     Ok(crate::world_import::DumpPlan {
-        stamps: vec![("dbc", crate::dump::insert_row_count(&statements))],
+        stamps: vec![(
+            lyracore_package_delta::DBC_FAMILY,
+            crate::dump::insert_row_count(&statements),
+        )],
         stmts: statements,
         world_source_manifest: Some(serde_json::to_string_pretty(&findings(source)?)?),
         ..Default::default()
@@ -295,7 +298,7 @@ mod tests {
             CREATE TABLE areatrigger_template (id INTEGER,build INTEGER,map_id INTEGER,x REAL,y REAL,z REAL,radius REAL,box_x REAL,box_y REAL,box_z REAL,box_orientation REAL,cooldown INTEGER,condition_id INTEGER,script_id INTEGER,script_name TEXT,PRIMARY KEY(id,build)); INSERT INTO areatrigger_template VALUES (1,5875,0,1,2,3,4,5,6,7,8,9,10,11,'example');
             CREATE TABLE skill_line_ability (id INTEGER,build INTEGER,spell_id INTEGER,skill_id INTEGER,race_mask INTEGER,class_mask INTEGER,req_skill_value INTEGER,learn_on_get_skill INTEGER,max_value INTEGER,min_value INTEGER,PRIMARY KEY(id,build)); INSERT INTO skill_line_ability VALUES(1,5875,10,20,3,4,5,2,100,75);
             CREATE TABLE taxi_nodes (id INTEGER,build INTEGER,map_id INTEGER,x REAL,y REAL,z REAL,name TEXT,mount_creature_id1 INTEGER,mount_creature_id2 INTEGER,PRIMARY KEY(id,build)); INSERT INTO taxi_nodes VALUES (1,5875,0,1,2,3,'Source',100,200),(1,6000,0,9,9,9,'Future',1,2);").unwrap();
-        WorldSource::Vmangos(connection)
+        WorldSource::fixture(connection)
     }
 
     #[test]
@@ -329,9 +332,7 @@ mod tests {
     #[test]
     fn source_taxi_mounts_resolve_creature_entries_and_keep_source_coordinates() {
         let source = fixture();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch("CREATE TABLE creature_template (entry INTEGER,patch INTEGER,display_id1 INTEGER,display_id2 INTEGER,display_id3 INTEGER,display_id4 INTEGER,PRIMARY KEY(entry,patch)); INSERT INTO creature_template VALUES (100,10,0,295,0,0),(200,10,1147,0,0,0);").unwrap();
         let nodes = taxi_nodes(&source).unwrap();
         let mounts = taxi_mount_displays(&source, &HashSet::from([295, 1147])).unwrap();
@@ -346,9 +347,7 @@ mod tests {
     #[test]
     fn invalid_geometry_and_missing_fields_fail_before_a_plan_is_returned() {
         let source = fixture();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection
             .execute("UPDATE areatrigger_template SET radius=-1", [])
             .unwrap();

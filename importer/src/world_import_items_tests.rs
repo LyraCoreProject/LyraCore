@@ -191,17 +191,14 @@ fn item_source() -> WorldSource {
 #[test]
 fn vmangos_items_select_versions_join_vendor_templates_and_exclude_forbidden_offers() {
     let source = item_source();
-    let args = crate::parse_args_from([
+    let args = crate::cli::world_import_args([
         "--dump",
         "fixture.sqlite",
         "--family",
         "items",
         "--world-profile",
         "full-world",
-    ])
-    .unwrap()
-    .world_import_args()
-    .unwrap();
+    ]);
     let plan = build_vmangos_plan(&source, &args).unwrap();
     let sql = plan.stmts.join(";\n");
     assert_eq!(plan.stamps, [("items", 2)]);
@@ -215,9 +212,7 @@ fn vmangos_items_select_versions_join_vendor_templates_and_exclude_forbidden_off
 }
 
 fn edit_source(source: &WorldSource, sql: &str) {
-    let WorldSource::Vmangos(connection) = source else {
-        panic!("SQLite fixture")
-    };
+    let connection = source.fixture_connection();
     connection.pragma_update(None, "query_only", false).unwrap();
     connection.execute_batch(sql).unwrap();
     connection.pragma_update(None, "query_only", true).unwrap();
@@ -424,17 +419,14 @@ fn starting_stacks_keep_their_createinfo_amount() {
 fn vendor_stock_import_retains_direct_and_shared_restock_policies() {
     let source = item_source();
     edit_source(&source, "UPDATE npc_vendor SET maxcount = 4, incrtime = 600, itemflags = 3; UPDATE npc_vendor_template SET maxcount = 8, incrtime = 1200;");
-    let args = crate::parse_args_from([
+    let args = crate::cli::world_import_args([
         "--dump",
         "fixture.sqlite",
         "--family",
         "items",
         "--world-profile",
         "full-world",
-    ])
-    .unwrap()
-    .world_import_args()
-    .unwrap();
+    ]);
     let plan = build_vmangos_plan(&source, &args).unwrap();
     let sql = plan.stmts.join(";\n");
     assert!(sql.contains("id,creature_entry,item_entry,slot,max_count,restock_seconds,stock_flags"));
@@ -457,17 +449,14 @@ fn vendor_stock_import_omits_inconsistent_stock_limits() {
     ] {
         let source = item_source();
         edit_source(&source, change);
-        let args = crate::parse_args_from([
+        let args = crate::cli::world_import_args([
             "--dump",
             "fixture.sqlite",
             "--family",
             "items",
             "--world-profile",
             "full-world",
-        ])
-        .unwrap()
-        .world_import_args()
-        .unwrap();
+        ]);
         let plan = build_vmangos_plan(&source, &args).unwrap();
         let vendors = plan
             .stmts

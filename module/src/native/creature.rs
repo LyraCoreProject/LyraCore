@@ -24,9 +24,14 @@ fn packet(row: &CreatureSpline, replay_at: Option<u64>) -> Option<Packet> {
         if !row.facing_angle.is_finite() {
             return None;
         }
-        return lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_MONSTER_MOVE(Box::new(
-            codec::build_monster_move_facing(row.guid, start, row.facing_angle, row.spline_id),
-        )))
+        return lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_MONSTER_MOVE(
+            Box::new(codec::build_monster_move_facing(
+                row.guid,
+                start,
+                row.facing_angle,
+                row.spline_id,
+            )),
+        ))
         .ok();
     }
     let mut duration_ms = row.dur_ms;
@@ -94,7 +99,7 @@ fn packet(row: &CreatureSpline, replay_at: Option<u64>) -> Option<Packet> {
     {
         return None;
     }
-    lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_MONSTER_MOVE(Box::new(
+    lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_MONSTER_MOVE(Box::new(
         codec::build_monster_move(
             row.guid,
             start,
@@ -115,7 +120,7 @@ fn current(ctx: &ReducerContext, row: &CreatureSpline) -> bool {
         .is_some_and(|entity| entity.map_id == row.map_id && entity.instance_id == row.instance_id)
 }
 
-pub(crate) fn changed(ctx: &ReducerContext, row: &CreatureSpline) {
+pub(crate) fn spline_changed(ctx: &ReducerContext, row: &CreatureSpline) {
     if ctx.db.game_native_player().count() == 0
         || !current(ctx, row)
         || ctx

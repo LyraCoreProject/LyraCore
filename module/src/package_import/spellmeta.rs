@@ -4,7 +4,7 @@ use spacetimedb::{ReducerContext, Table};
 
 use lyracore_package_delta::{
     is_package_spell_id, is_package_spellmeta_id, FieldValue, Operation, Table as ClaimTable,
-    TracedRow,
+    TracedRow, SPELLMETA_FAMILY,
 };
 
 use crate::{
@@ -12,9 +12,19 @@ use crate::{
     SpellProcEvent,
 };
 
-use super::{as_f32, as_u32, as_u64, as_u8, check_insert_is_whole, UpdateTarget};
+use super::{as_f32, as_u32, as_u64, as_u8, check_insert_is_whole, no_such_column, ClaimOps};
 
-pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+pub(super) const OPS: ClaimOps = ClaimOps {
+    name: SPELLMETA_FAMILY,
+    in_package_range,
+    row_is_present,
+    check_references: Some(check_references),
+    clear_package_range,
+    write_row,
+    after_write: None,
+};
+
+fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
     for row in rows {
         match row.table() {
             ClaimTable::SpellChain => {
@@ -58,53 +68,40 @@ fn check_spell(
 }
 
 fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, String> {
-    if let Some(FieldValue::U32(value)) = row.fields().get(field).map(|claimed| &claimed.value) {
-        return Ok(*value);
-    }
-
-    let id = row.row_id();
-    let value = match row.table() {
-        ClaimTable::SpellChain => {
-            ctx.db
-                .game_spell_chain()
-                .spell_id()
-                .find(id as u32)
-                .map(|chain| match field {
-                    "prev_spell" => chain.prev_spell,
-                    "first_spell" => chain.first_spell,
-                    "req_spell" => chain.req_spell,
-                    _ => 0,
-                })
+    super::final_u32(row, field, || {
+        let id = row.row_id();
+        match row.table() {
+            ClaimTable::SpellChain => {
+                ctx.db
+                    .game_spell_chain()
+                    .spell_id()
+                    .find(id as u32)
+                    .map(|chain| match field {
+                        "prev_spell" => chain.prev_spell,
+                        "first_spell" => chain.first_spell,
+                        "req_spell" => chain.req_spell,
+                        _ => 0,
+                    })
+            }
+            ClaimTable::SpellLearn => {
+                ctx.db
+                    .game_spell_learn()
+                    .id()
+                    .find(id)
+                    .map(|learn| match field {
+                        "parent_spell" => learn.parent_spell,
+                        "learn_spell" => learn.learn_spell,
+                        _ => 0,
+                    })
+            }
+            other => unreachable!("spell metadata value lookup received {other}"),
         }
-        ClaimTable::SpellLearn => {
-            ctx.db
-                .game_spell_learn()
-                .id()
-                .find(id)
-                .map(|learn| match field {
-                    "parent_spell" => learn.parent_spell,
-                    "learn_spell" => learn.learn_spell,
-                    _ => 0,
-                })
-        }
-        other => unreachable!("spell metadata value lookup received {other}"),
-    };
-
-    value.ok_or_else(|| {
-        format!(
-            "`{}` row {} vanished during preflight",
-            row.table(),
-            row.key()
-        )
     })
 }
 
-pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
-    if updates_an_uninvented_package_row(row) {
-        return UpdateTarget::Uninvented;
-    }
+fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
     let id = row.row_id();
-    let present = match row.table() {
+    match row.table() {
         ClaimTable::SpellChain => ctx
             .db
             .game_spell_chain()
@@ -122,16 +119,11 @@ pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarg
             "`check_claims_belong_to` refuses a non-spellmeta row before the spellmeta family's \
              dispatch runs, found {other}"
         ),
-    };
-    if present {
-        UpdateTarget::Present
-    } else {
-        UpdateTarget::Absent
     }
 }
 
-fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
-    row.operation() == Operation::Update && is_package_row(row.table(), row.row_id())
+fn in_package_range(row: &TracedRow) -> bool {
+    is_package_row(row.table(), row.row_id())
 }
 
 fn is_package_row(table: ClaimTable, id: u64) -> bool {
@@ -141,7 +133,7 @@ fn is_package_row(table: ClaimTable, id: u64) -> bool {
     }
 }
 
-pub(super) fn clear_package_range(ctx: &ReducerContext) {
+fn clear_package_range(ctx: &ReducerContext) {
     let chains = ctx.db.game_spell_chain();
     let stale: Vec<u32> = chains
         .iter()
@@ -173,7 +165,7 @@ pub(super) fn clear_package_range(ctx: &ReducerContext) {
     }
 }
 
-pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     let id = row.row_id();
     match (row.table(), row.operation()) {
         (ClaimTable::SpellChain, Operation::Insert) => {
@@ -346,10 +338,6 @@ fn apply_spell_proc_event_field(
     Ok(())
 }
 
-fn no_such_column(table: &str, column: &str) -> String {
-    format!("`{table}` has no claimable column `{column}`")
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
@@ -371,7 +359,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(in_package_range(&plan.rows[0]));
     }
 
     #[test]
@@ -382,7 +370,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(!updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(!in_package_range(&plan.rows[0]));
     }
 
     #[test]
@@ -406,7 +394,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(!updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(!in_package_range(&plan.rows[0]));
     }
 
     #[test]

@@ -41,7 +41,6 @@ fn write_claim(out: &mut String, claim: &Claim) {
     out.push_str("}}");
 }
 
-#[allow(clippy::too_many_lines)]
 fn write_key(out: &mut String, key: PrimaryKey) {
     match key {
         PrimaryKey::Spell { spell_id }

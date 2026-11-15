@@ -6,7 +6,7 @@ use crate::nav::game_nav_chunk;
 use crate::vmap::game_vmap_chunk;
 use crate::{
     game_config, game_creature_spawn, game_creature_template, game_gameobject, game_instance,
-    game_world_entity, CreatureSpawn, ServerConfig,
+    game_world_entity, CreatureSpawn,
 };
 
 #[reducer]
@@ -18,16 +18,14 @@ pub fn debug_create_fixture_instance(
     let player = crate::helpers::live_entity(ctx, character_guid)?;
     let map_id = player.map_id;
     let instance_id = crate::instance::resolve_or_create_instance(ctx, character_guid, map_id)?;
-    crate::world::teleport_player(
+    crate::world::teleport(
         ctx,
         character_guid,
         map_id,
         instance_id,
-        player.x,
-        player.y,
-        player.z,
-        player.orientation,
-    );
+        [player.x, player.y, player.z, player.orientation],
+    )
+    .map_err(|refusal| refusal.to_string())?;
     log::info!("debug_create_fixture_instance: character {character_guid} → instance {instance_id} on map {map_id}");
     Ok(())
 }
@@ -54,16 +52,14 @@ pub fn debug_enter_instance(
             ));
         }
     }
-    crate::world::teleport_player(
+    crate::world::teleport(
         ctx,
         character_guid,
         player.map_id,
         instance_id,
-        player.x,
-        player.y,
-        player.z,
-        player.orientation,
-    );
+        [player.x, player.y, player.z, player.orientation],
+    )
+    .map_err(|refusal| refusal.to_string())?;
     Ok(())
 }
 
@@ -111,24 +107,9 @@ pub fn debug_nav_probe(ctx: &ReducerContext, map: u32, x: f32, y: f32) {
 
 #[reducer]
 pub fn debug_set_nav_enabled(ctx: &ReducerContext, enabled: bool) -> Result<(), String> {
-    let cfg = ctx.db.game_config();
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.nav_enabled = enabled;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: enabled,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: false,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let mut c = crate::config::server_config(ctx);
+    c.nav_enabled = enabled;
+    crate::config::save_server_config(ctx, c);
     Ok(())
 }
 
@@ -148,47 +129,17 @@ pub fn debug_nav_leg(ctx: &ReducerContext, map: u32, x0: f32, y0: f32, x1: f32, 
 
 #[reducer]
 pub fn debug_set_vmap_enabled(ctx: &ReducerContext, enabled: bool) -> Result<(), String> {
-    let cfg = ctx.db.game_config();
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.vmap_enabled = enabled;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: false,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: enabled,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let mut c = crate::config::server_config(ctx);
+    c.vmap_enabled = enabled;
+    crate::config::save_server_config(ctx, c);
     Ok(())
 }
 
 #[reducer]
 pub fn debug_set_nav_coverage_enabled(ctx: &ReducerContext, enabled: bool) -> Result<(), String> {
-    let cfg = ctx.db.game_config();
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.nav_coverage_enabled = enabled;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: false,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: false,
-                nav_coverage_enabled: enabled,
-            });
-        }
-    }
+    let mut c = crate::config::server_config(ctx);
+    c.nav_coverage_enabled = enabled;
+    crate::config::save_server_config(ctx, c);
     Ok(())
 }
 
@@ -316,47 +267,29 @@ pub fn debug_assert_floor_snap(
         }
     }
 
-    let cfg = ctx.db.game_config();
-    let prior_vmap = cfg.id().find(0).map(|c| c.vmap_enabled);
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.vmap_enabled = true;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: false,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: true,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let prior_vmap = ctx.db.game_config().id().find(0).map(|c| c.vmap_enabled);
+    let mut c = crate::config::server_config(ctx);
+    c.vmap_enabled = true;
+    crate::config::save_server_config(ctx, c);
 
     let floor = crate::vmap::floor_z(ctx, map_id, 0, ORIGIN.0, ORIGIN.1, FLOOR_Z + 5.0);
     let snapped = crate::terrain::snap_z(ctx, map_id, 0, ORIGIN.0, ORIGIN.1, TERRAIN_FALLBACK);
     let ground = crate::terrain::ground_z(ctx, map_id, ORIGIN.0, ORIGIN.1);
 
-    let spawn_max = ctx
-        .db
-        .game_creature_spawn()
-        .iter()
-        .filter(|s| s.entry == creature_entry)
-        .map(|s| s.guid & 0x00FF_FFFF)
-        .max()
-        .unwrap_or(0);
-    let entity_max = ctx
-        .db
-        .game_world_entity()
-        .iter()
-        .filter(|e| e.entry == creature_entry && !e.is_player())
-        .map(|e| e.guid & 0x00FF_FFFF)
-        .max()
-        .unwrap_or(0);
-    let next_low = spawn_max.max(entity_max) + 1;
+    let next_low = crate::creatures::population::next_spawn_low(
+        ctx.db
+            .game_creature_spawn()
+            .iter()
+            .filter(|s| s.entry == creature_entry)
+            .map(|s| s.guid & 0x00FF_FFFF)
+            .chain(
+                ctx.db
+                    .game_world_entity()
+                    .iter()
+                    .filter(|e| e.entry == creature_entry && !e.is_player())
+                    .map(|e| e.guid & 0x00FF_FFFF),
+            ),
+    );
     let new_guid = packed_creature_spawn_guid(creature_entry, next_low as u32);
     let mut spawned_entity_guid = None;
     let spawn_result: Result<(), String> = (|| {
@@ -366,22 +299,14 @@ pub fn debug_assert_floor_snap(
             .entry()
             .find(creature_entry)
             .ok_or_else(|| format!("no creature template for entry {creature_entry}"))?;
-        let spawn = CreatureSpawn {
-            guid: new_guid,
-            entry: creature_entry,
+        let spawn = CreatureSpawn::temporary(
+            ctx,
+            new_guid,
+            creature_entry,
             map_id,
-            x: ORIGIN.0,
-            y: ORIGIN.1,
-            z: TERRAIN_FALLBACK,
-            orientation: 0.0,
-            respawn_at: crate::creatures::timer_never(ctx),
-            despawn_at: crate::creatures::timer_never(ctx),
-            movement_type: crate::creatures::MOVEMENT_IDLE,
-            respawn_secs: 0,
-            life_seq: 0,
-            source_guid: 0,
-            instance_id: 0,
-        };
+            0,
+            [ORIGIN.0, ORIGIN.1, TERRAIN_FALLBACK, 0.0],
+        );
         let entity = build_creature_entity(ctx, &spawn, &tmpl, 0, 0);
         ctx.db.game_creature_spawn().insert(spawn);
         crate::creatures::insert_creature_entity(ctx, entity);
@@ -504,36 +429,19 @@ pub fn debug_assert_blink_clamp(ctx: &ReducerContext, character_guid: u64) -> Re
         }
     }
 
-    let cfg = ctx.db.game_config();
-    let prior_vmap = cfg.id().find(0).map(|c| c.vmap_enabled);
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.vmap_enabled = true;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: true,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: true,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let prior_vmap = ctx.db.game_config().id().find(0).map(|c| c.vmap_enabled);
+    let mut c = crate::config::server_config(ctx);
+    c.vmap_enabled = true;
+    crate::config::save_server_config(ctx, c);
 
-    crate::world::teleport_player(
+    crate::world::teleport(
         ctx,
         character_guid,
         map_id,
         0,
-        ORIGIN.0,
-        ORIGIN.1,
-        ORIGIN.2,
-        0.0,
-    );
+        [ORIGIN.0, ORIGIN.1, ORIGIN.2, 0.0],
+    )
+    .map_err(|refusal| refusal.to_string())?;
     crate::spell::blink_forward(ctx, character_guid, BLINK_YD);
 
     let landed = ctx.db.game_world_entity().guid().find(character_guid);
@@ -640,25 +548,10 @@ pub fn debug_assert_chase_stops_at_column(
         }
     }
 
-    let cfg = ctx.db.game_config();
-    let prior_vmap = cfg.id().find(0).map(|c| c.vmap_enabled);
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.vmap_enabled = true;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: false,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: true,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let prior_vmap = ctx.db.game_config().id().find(0).map(|c| c.vmap_enabled);
+    let mut c = crate::config::server_config(ctx);
+    c.vmap_enabled = true;
+    crate::config::save_server_config(ctx, c);
 
     let stepped = crate::nav::nav_step(
         ctx,
@@ -756,26 +649,16 @@ pub fn debug_assert_unreachable_goal_stops_at_wall(
         obs,
     });
 
-    let cfg = ctx.db.game_config();
-    let prior_flags = cfg.id().find(0).map(|c| (c.nav_enabled, c.vmap_enabled));
-    match cfg.id().find(0) {
-        Some(mut c) => {
-            c.nav_enabled = true;
-            c.vmap_enabled = false;
-            cfg.id().update(c);
-        }
-        None => {
-            cfg.insert(ServerConfig {
-                id: 0,
-                xp_rate: 1.0,
-                nav_enabled: true,
-                hosts_instances: true,
-                bots_idle: false,
-                vmap_enabled: false,
-                nav_coverage_enabled: false,
-            });
-        }
-    }
+    let prior_flags = ctx
+        .db
+        .game_config()
+        .id()
+        .find(0)
+        .map(|c| (c.nav_enabled, c.vmap_enabled));
+    let mut c = crate::config::server_config(ctx);
+    c.nav_enabled = true;
+    c.vmap_enabled = false;
+    crate::config::save_server_config(ctx, c);
 
     let stepped = crate::nav::nav_step(ctx, map_id, start.instance_id, cur, dest, 100.0, 0.0, 0.0);
 
@@ -1071,6 +954,10 @@ pub fn debug_logout_character(ctx: &ReducerContext, character_guid: u64) -> Resu
         .guid()
         .find(character_guid)
         .ok_or_else(|| format!("{character_guid} is not in the world"))?;
-    crate::world::remove_live_character(ctx, entity, crate::world::CharacterDeparture::Logout);
+    crate::character::remove_live_character(
+        ctx,
+        entity,
+        crate::character::CharacterDeparture::Logout,
+    );
     Ok(())
 }

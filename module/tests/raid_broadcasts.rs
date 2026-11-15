@@ -3,6 +3,7 @@ mod support;
 use lyracore_shared::group::{
     decode_random_roll, decode_target_icons, event_kind, RosterPayload, TargetIcon,
 };
+use lyracore_shared::guid;
 use support::{actor, Standalone};
 
 const INVITE: u8 = 0;
@@ -17,14 +18,14 @@ const TARGET_ICON: u8 = 13;
 const MINIMAP_PING: u8 = 14;
 const RANDOM_ROLL: u8 = 15;
 
-const DEFIAS: u64 = 0xF130_0000_0000_0042;
-const MURLOC: u64 = 0xF130_0000_0000_0043;
+const DEFIAS: u64 = guid::compose(guid::UNIT, 0x42);
+const MURLOC: u64 = guid::compose(guid::UNIT, 0x43);
 const OUTSIDER: u64 = 9;
 
 fn group_op_args(op: u8, actor_guid: u64, target_guid: u64, arg_a: u8, arg_c: u64) -> Vec<String> {
     vec![
         op.to_string(),
-        actor(&actor_guid.to_string()),
+        actor(actor_guid),
         target_guid.to_string(),
         arg_a.to_string(),
         "0".to_string(),
