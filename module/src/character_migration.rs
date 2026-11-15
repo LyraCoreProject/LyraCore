@@ -86,7 +86,7 @@ pub struct MigratedAttachment {
 pub struct LetterMigration {
     pub source: String,
     pub source_mail_id: u64,
-    // Zero, or the attachment's source item guid when one source Mail becomes several letters.
+    // Zero for a letter without an Item, otherwise the source item guid of its attachment.
     pub source_item_guid: u64,
     pub recipient_source_guid: u64,
     // MailMessageType: 0 Character, 2 auction house, 3 creature, 4 GameObject.
@@ -151,6 +151,7 @@ pub struct MigratedAction {
 pub struct MigratedQuestLogEntry {
     pub event_credit: bool,
     pub failed: bool,
+    // Unix seconds, as MaNGOS stores a timed quest's `timer`.
     pub deadline_secs: u64,
 }
 
@@ -266,7 +267,7 @@ pub fn migrate_character(
     Ok(())
 }
 
-// Each letter is one transaction. Its recipient must already be a migrated Character.
+// The recipient must already be a migrated Character.
 #[reducer]
 pub fn migrate_letter(ctx: &ReducerContext, letter: LetterMigration) -> Result<(), String> {
     require_operator(ctx)?;
@@ -290,7 +291,8 @@ pub fn migrate_letter(ctx: &ReducerContext, letter: LetterMigration) -> Result<(
         .guid;
     let (sender_guid, sender_entry) = match letter.sender_kind {
         lyracore_shared::mail::SENDER_KIND_CHARACTER => (
-            migrated_guid(ctx, &letter.source, letter.sender_source_guid)?.unwrap_or(0),
+            migrated_character(ctx, &letter.source, letter.sender_source_guid)
+                .map_or(0, |sender| sender.guid),
             0,
         ),
         lyracore_shared::mail::SENDER_KIND_AUCTION
@@ -309,8 +311,12 @@ pub fn migrate_letter(ctx: &ReducerContext, letter: LetterMigration) -> Result<(
     }
     let item = match &letter.attachment {
         Some(attachment) => {
-            checked_template(ctx, attachment.entry, attachment.stack_count)?;
-            Some((attachment, letter_text(ctx, attachment.text.clone())?))
+            let template = checked_template(ctx, attachment.entry, attachment.stack_count)?;
+            Some((
+                attachment,
+                letter_text(ctx, attachment.text.clone())?,
+                attachment.durability.min(template.max_durability),
+            ))
         }
         None => None,
     };
@@ -331,13 +337,13 @@ pub fn migrate_letter(ctx: &ReducerContext, letter: LetterMigration) -> Result<(
             sender_guid,
             subject: letter.subject,
             body: letter.body,
-            item_entry: item.map_or(0, |(item, _)| item.entry),
-            item_stack_count: item.map_or(0, |(item, _)| item.stack_count),
-            item_durability: item.map_or(0, |(item, _)| item.durability),
-            item_enchant_id: item.map_or(0, |(item, _)| item.enchant_id),
-            item_soulbound: item.is_some_and(|(item, _)| item.soulbound),
-            random_property_id: item.map_or(0, |(item, _)| item.random_property_id),
-            item_text_id: item.map_or(0, |(_, text_id)| text_id),
+            item_entry: item.map_or(0, |(item, _, _)| item.entry),
+            item_stack_count: item.map_or(0, |(item, _, _)| item.stack_count),
+            item_durability: item.map_or(0, |(_, _, durability)| durability),
+            item_enchant_id: item.map_or(0, |(item, _, _)| item.enchant_id),
+            item_soulbound: item.is_some_and(|(item, _, _)| item.soulbound),
+            random_property_id: item.map_or(0, |(item, _, _)| item.random_property_id),
+            item_text_id: item.map_or(0, |(_, text_id, _)| text_id),
             money: letter.money,
             cod: letter.cod,
             was_read: letter.checked & read_flag != 0,
@@ -370,7 +376,8 @@ pub struct ContactMigrationRecord {
     pub migrated_at: Timestamp,
 }
 
-// One Character's friends and ignores, once; targets that are not migrated Characters are skipped.
+// One Character's friends and ignores, once; a target that is not a migrated Character, or that
+// the live contact rules refuse, is skipped.
 #[reducer]
 pub fn migrate_contacts(
     ctx: &ReducerContext,
@@ -412,13 +419,11 @@ pub fn migrate_contacts(
             Some(target.race),
         ) {
             Ok(()) | Err(crate::chat::ContactRefusal::AlreadyOnList) => {}
-            Err(refusal) => {
-                return Err(format!(
-                    "contact {} of {source_key}: {}",
-                    contact.target_source_guid,
-                    refusal.as_tag()
-                ))
-            }
+            Err(refusal) => spacetimedb::log::info!(
+                "migrate_contacts: {source_key} skips {}: {}",
+                contact.target_source_guid,
+                refusal.as_tag()
+            ),
         }
     }
     ctx.db
@@ -638,7 +643,6 @@ fn checked_template(
     Ok(template)
 }
 
-// Each Letter Copy carries its own Item Text row.
 fn letter_text(ctx: &ReducerContext, text: Option<String>) -> Result<u32, String> {
     text.map_or(Ok(0), |text| crate::mail_text::import_text(ctx, text, 1))
 }
@@ -865,11 +869,12 @@ impl Arrival<'_> {
             }
         }
         for item in displaced {
-            let slot =
-                crate::items::first_free_storage_slot(self.ctx, self.guid).ok_or_else(|| {
+            let template = checked_template(self.ctx, item.entry, item.stack_count)?;
+            let slot = crate::items::first_free_storage_slot(self.ctx, self.guid, &template)
+                .ok_or_else(|| {
                     format!(
-                        "Item {} from a bank bag has no free bank or bag slot",
-                        item.entry
+                        "Item {} at {:?} has no free bank, backpack or bag slot to move to",
+                        item.entry, item.location
                     )
                 })?;
             let row = self.item(item, slot)?;

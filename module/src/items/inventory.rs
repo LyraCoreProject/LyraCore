@@ -751,10 +751,29 @@ pub(crate) fn first_free_bank_slot(ctx: &ReducerContext, player_guid: u64) -> Op
     (BANK_SLOT_START..=BANK_SLOT_END_INCL).find(|slot| !occupied.contains(slot))
 }
 
-pub(crate) fn first_free_storage_slot(ctx: &ReducerContext, player_guid: u64) -> Option<u8> {
-    first_free_bank_slot(ctx, player_guid)
-        .or_else(|| first_free_backpack_slot(ctx, player_guid))
-        .or_else(|| first_free_bag_slot(ctx, player_guid))
+pub(crate) fn first_free_storage_slot(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    item: &crate::ItemTemplate,
+) -> Option<u8> {
+    first_free_bank_slot(ctx, player_guid).or_else(|| {
+        let owned: Vec<ItemInstance> = ctx
+            .db
+            .game_item_instance()
+            .by_owner_guid()
+            .filter(&player_guid)
+            .collect();
+        let templates = ctx.db.game_item_template();
+        free_inventory_slots(&owned, |bag_entry| {
+            templates
+                .entry()
+                .find(bag_entry)
+                .filter(|bag| item_fits_bag(item, bag))
+                .map_or(0, |bag| bag.container_slots)
+        })
+        .first()
+        .copied()
+    })
 }
 
 pub(crate) fn apply_auto_bank_item(

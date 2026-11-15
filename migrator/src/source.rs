@@ -106,7 +106,7 @@ pub(crate) enum Filter {
     Equals(&'static str, u64),
 }
 
-// The external edge of a Migration Source: one read-only database snapshot.
+// The external edge of a Migration Source: one read-only database connection.
 pub(crate) trait SourceDatabase {
     fn column_types(&mut self, table: &str) -> Result<HashMap<String, ColumnType>>;
     fn select(&mut self, table: &str, columns: &[&str], filter: Filter) -> Result<Vec<Row>>;
