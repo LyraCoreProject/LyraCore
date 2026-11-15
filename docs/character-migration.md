@@ -33,7 +33,8 @@ you can read the report before anything changes.
    or Character is not in the plan. `dropped` names source state the Shard does not hold, such as
    spells, quests, areas or taxi nodes that are not imported. `changed` names a value the
    migration changes, such as a Character that arrives at its home bind or a temporary ban that
-   becomes permanent. `skipped` means the Character is already migrated.
+   becomes permanent. `skipped` means the Character is already migrated. Fix refusals before you
+   apply: a Character that does not migrate loses its place in what other Characters bring.
 6. Apply the plan:
 
    ```bash
@@ -82,7 +83,7 @@ rerun never brings back a Character that its player deleted.
 | Position | Kept on a continent. A Character in an Instance map, or with no position, arrives at its home bind. |
 | Home bind, rest | Kept. The last logout time and inn flag feed the normal offline rest at login. |
 | Items | Vanilla slots 0 to 62 and keyring slots 81 to 112 keep their address. Bag contents use the flat bag-content slot of their bag. |
-| Bank bags, large bags | This model has no bank bag slots and addresses 18 slots in each bag. A bank bag, its contents and Items past slot 18 of a bag move to the first free bank, backpack or bag slot, or the Character is refused. |
+| Bank bags, large bags | This model has no bank bag slots and addresses 18 slots in each bag. A bank bag, its contents and Items past slot 18 of a bag move to the first free bank, backpack or bag slot whose bag can hold them, or the Character is refused. |
 | Item state | Entry, stack, durability (capped at the template), permanent enchantment, random property and soulbound. A Letter Copy gets its own Item Text row. |
 | Spells | Kept. A spell that is a talent rank becomes a talent row at its highest rank instead; world entry relearns the rank spell. Spent points cannot exceed the level's points. |
 | Skills, action buttons | Kept. Buttons are 0 to 119. |
@@ -100,7 +101,8 @@ does not know has no effect.
 
 `migrate_letter(letter)` puts one source Mail in the inbox of a migrated Character, as one
 transaction. `apply` sends letters after every Character, so a letter from one migrated
-Character to another names the migrated sender, also when the sender migrated in an earlier run.
+Character to another names the migrated sender, also when the sender migrated in an earlier run
+and still exists.
 `apply` holds back a letter whose recipient or sender was refused in the same run; a later run
 sends it. A letter whose sender is not migrated arrives with sender guid 0, and its expiry deletes
 it instead of returning it. Auction house, creature and
