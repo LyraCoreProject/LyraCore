@@ -35,11 +35,12 @@ fn self_aura(
     period_ms: u32,
     p0: (i32, u8),
 ) {
+    // Auras of spells that share a name displace each other as ranks.
     shard.insert_row(
         "game_spell",
         &[
             ("spell_id", &spell_id),
-            ("name", &"Regeneration fixture"),
+            ("name", &format!("Regeneration fixture {spell_id}")),
             ("duration_ms", &600_000),
             ("spell_level", &1),
         ],
