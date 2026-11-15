@@ -549,3 +549,48 @@ fn a_skill_aura_does_not_grant_a_profession_but_applies_when_the_skill_is_learne
     );
     assert_eq!(shard.query_rows(&format!("SELECT current FROM game_player_skill WHERE character_guid = {guid} AND skill_line = 164"))[0]["current"], "1");
 }
+
+fn stored_skill(shard: &Standalone, guid: u64, line: u32) -> Option<(u16, u16)> {
+    shard
+        .query_rows(&format!("SELECT current,max_rank FROM game_player_skill WHERE character_guid = {guid} AND skill_line = {line}"))
+        .pop()
+        .map(|row| (row["current"].parse().unwrap(), row["max_rank"].parse().unwrap()))
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_known_proficiency_grants_its_skill_at_one_and_backfills_an_existing_character_at_cap() {
+    let (shard, guid, _) = fixture("proficiency-skill-rows");
+    racial_spells(&shard);
+    // SkillLineAbility.dbc acquire method 2 grants the line with the spell; 0 does not.
+    for (id, spell, line, acquire_method) in [(999_991, 1180, 173, 2), (999_992, 5009, 228, 0)] {
+        shard.insert_row(
+            "game_skill_ability",
+            &[
+                ("id", &id),
+                ("spell_id", &spell),
+                ("skill_line", &line),
+                ("acquire_method", &acquire_method),
+            ],
+        );
+        starting_spell(&shard, id, spell);
+    }
+    let _connection = enter(&shard, guid);
+    assert_eq!(stored_skill(&shard, guid, 173), Some((1, 5)));
+    assert_eq!(stored_skill(&shard, guid, 228), None);
+
+    shard.assert_sql(&format!(
+        "DELETE FROM game_player_skill WHERE character_guid = {guid} AND skill_line = 173"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 2 WHERE guid = {guid}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET level = 2 WHERE guid = {guid}"
+    ));
+    human_warrior_stats(&shard, 2, [24, 21, 23, 20, 20]);
+    warrior_crit_per_agility(&shard, 2, 4.0);
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert_eq!(stored_skill(&shard, guid, 173), Some((10, 10)));
+    assert_eq!(stored_skill(&shard, guid, 95), Some((1, 10)));
+}

@@ -11,7 +11,9 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
         .game_world_entity()
         .by_entry()
         .filter(0u32)
-        .filter(|entity| entity.is_player())
+        .filter(|entity| {
+            entity.is_player() && crate::helpers::acting_entity_by_guid(ctx, entity.guid).is_some()
+        })
         .collect();
     for character in characters {
         crate::skill::ensure_player_skills(

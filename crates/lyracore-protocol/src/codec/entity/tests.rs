@@ -668,6 +668,36 @@ fn skill_block_reads_learned_rows_override_and_append() {
 }
 
 #[test]
+fn skill_values_carry_the_temporary_bonus_low_and_the_permanent_bonus_high() {
+    let layout = skill_slot_layout(
+        1,
+        &[SkillView {
+            line: 43,
+            current: 1,
+            maximum: 5,
+            temporary_bonus: -100,
+            permanent_bonus: 5,
+        }],
+    );
+    let slot = layout
+        .iter()
+        .position(|info| info.skill == Skill::Swords)
+        .unwrap();
+    let message = crate::codec::values::build_skill_values(0x9, slot as u8, layout[slot]).unwrap();
+    let mut buf = Vec::new();
+    message.write_unencrypted_server(&mut buf).unwrap();
+    let updates = crate::codec::values_mask::parse_values_updates(&buf[4..]);
+    // PLAYER_SKILL_INFO_1_1 is field 718; each slot holds line, ranks and bonuses.
+    let bonuses = 718 + 3 * slot as u16 + 2;
+    let word = updates[0]
+        .fields
+        .iter()
+        .find(|&&(index, _)| index == bonuses)
+        .map(|&(_, value)| value);
+    assert_eq!(word, Some((5 << 16) | u32::from(-100i16 as u16)));
+}
+
+#[test]
 fn create_object_carries_the_sheath_state_for_player_and_creature() {
     let mut e = warrior_entity();
     e.unit_bytes_2 = 0xAB_CD_EF_01;

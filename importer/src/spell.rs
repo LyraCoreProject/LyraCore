@@ -429,10 +429,7 @@ fn is_reducing_modifier_aura(effect_id: i32, aura: AuraMod, base_points: i32) ->
         && base_points.saturating_add(1) < 0
         && (matches!(
             aura,
-            AuraMod::ModDamageDone
-                | AuraMod::ModSkill
-                | AuraMod::ModSkillTalent
-                | AuraMod::ModHealingPct
+            AuraMod::ModDamageDone | AuraMod::ModSkill | AuraMod::ModHealingPct
         ) || matches!(
             aura_mod_to_kind(aura),
             A_MOD_STAT | A_MOD_RESISTANCE | A_MOD_COMBAT | A_MOD_HEALING

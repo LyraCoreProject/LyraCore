@@ -124,26 +124,13 @@ pub fn resolve_learn_target(spell_id: u32, effects: impl IntoIterator<Item = Lea
         .map_or(spell_id, |(_, _, target)| target)
 }
 
+// Weapon, ranged, unarmed and defense skill lines; their caps follow the level.
+pub const COMBAT_SKILL_LINES: [u32; 17] = [
+    44, 172, 54, 160, 229, 43, 55, 136, 473, 173, 162, 95, 45, 46, 176, 226, 228,
+];
+
 pub fn is_combat_skill_line(line: u32) -> bool {
-    matches!(
-        line,
-        44 | 172
-            | 54
-            | 160
-            | 229
-            | 43
-            | 55
-            | 136
-            | 473
-            | 173
-            | 162
-            | 95
-            | 45
-            | 46
-            | 176
-            | 226
-            | 228
-    )
+    COMBAT_SKILL_LINES.contains(&line)
 }
 
 pub fn offering_known(

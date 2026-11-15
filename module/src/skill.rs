@@ -10,6 +10,8 @@ use crate::{
 };
 
 pub const SKILL_PER_LEVEL: u32 = 5;
+// vmangos ABILITY_LEARNED_ON_GET_RACE_OR_CLASS_SKILL: knowing the spell grants its skill line.
+const ACQUIRED_WITH_RACE_OR_CLASS_SKILL: i32 = 2;
 
 pub mod skill_line {
     pub const BOW: u32 = 45;
@@ -974,6 +976,7 @@ pub(crate) fn ensure_player_skills(
     let cap = skill_cap_for_level(level) as u16;
     let equipped_weapon = equipped_weapon_skill_line(ctx, guid);
     let skills = ctx.db.game_player_skill();
+    let first_world_entry = skills.by_character().filter(&guid).next().is_none();
 
     let mut lines = std::collections::BTreeSet::new();
     lines.insert(skill_line::DEFENSE);
@@ -990,20 +993,15 @@ pub(crate) fn ensure_player_skills(
         .filter(guid)
         .map(|spell| spell.spell_id)
         .collect();
-    for line in [
-        skill_line::BOW,
-        skill_line::GUN,
-        skill_line::CROSSBOW,
-        skill_line::THROWN,
-        skill_line::WAND,
-    ] {
+    for line in lyracore_shared::trainer::COMBAT_SKILL_LINES {
         if ctx
             .db
             .game_skill_ability()
             .by_skill_line()
             .filter(line)
             .any(|ability| {
-                known.contains(&ability.spell_id)
+                ability.acquire_method == ACQUIRED_WITH_RACE_OR_CLASS_SKILL
+                    && known.contains(&ability.spell_id)
                     && mask_admits(ability.race_mask, entity.race(), ZeroMask::AdmitsAll)
                     && mask_admits(ability.class_mask, class, ZeroMask::AdmitsAll)
             })
@@ -1018,6 +1016,12 @@ pub(crate) fn ensure_player_skills(
             .filter(&guid)
             .any(|s| s.skill_line == line);
         if !present {
+            // A missing row used to read as the level cap; an existing Character keeps that value.
+            let current = if first_world_entry {
+                starting_skill_value(ctx, &entity, line, cap)
+            } else {
+                cap
+            };
             PlayerSkill::insert(
                 ctx,
                 PlayerSkill {
@@ -1025,7 +1029,7 @@ pub(crate) fn ensure_player_skills(
                     character_guid: guid,
                     owner_identity: owner,
                     skill_line: line,
-                    current: starting_skill_value(ctx, &entity, line, cap),
+                    current,
                     max_rank: cap,
                 },
             );
