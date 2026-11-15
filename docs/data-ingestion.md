@@ -528,8 +528,8 @@ implicit target. For a `(0, 0)` pair, the importer uses compatible Spell header 
 the source effect's default target. An unsupported effect keeps the scripted fallback. The importer
 translates vanilla damage and movement interrupt bits into the Module's compact mask. Gouge's control
 and Stealth's speed penalty come from the third source effect. Their former synthetic additions are
-removed. The Human Spirit maps directly to its percentage aura. Evocation's existing periodic-mana
-correction now addresses source slot 0.
+removed. The Human Spirit maps directly to its percentage aura. Evocation keeps its source
+spirit-regeneration aura in slot 0.
 The authored seal marker and Power Word: Shield's linked Weakened Soul rule remain because their
 Module behavior is not an equivalent DBC effect.
 
