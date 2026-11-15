@@ -21,8 +21,6 @@ pub struct NamedSpell {
     pub periodic_damage_as_persistent_area: bool,
     pub ally_target_as_enemy: bool,
     pub direct_damage_target: Option<u8>,
-    /// Effect 0 becomes a periodic energize: (percent of maximum power, period in ms).
-    pub first_effect_energize: Option<(i32, u32)>,
 }
 
 const NAMED: NamedSpell = NamedSpell {
@@ -38,7 +36,6 @@ const NAMED: NamedSpell = NamedSpell {
     periodic_damage_as_persistent_area: false,
     ally_target_as_enemy: false,
     direct_damage_target: None,
-    first_effect_energize: None,
 };
 
 const fn script(name: &'static str, kind: u8) -> NamedSpell {
@@ -110,7 +107,6 @@ pub const NAMED_SPELLS: &[NamedSpell] = &[
     NamedSpell {
         name: "Evocation",
         channeled: true,
-        first_effect_energize: Some((15, 2000)),
         ..NAMED
     },
     NamedSpell {
