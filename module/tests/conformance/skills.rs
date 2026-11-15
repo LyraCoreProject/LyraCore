@@ -606,3 +606,27 @@ fn a_learned_proficiency_starts_at_one_and_a_missing_known_skill_backfills_at_ca
     shard.assert_call("debug_learn_spell", &[&guid.to_string(), "202"]);
     assert_eq!(stored_skill(&shard, guid, 55), Some((1, 10)));
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_existing_character_learns_a_new_starting_proficiency_at_its_level_cap() {
+    let (shard, guid, _) = fixture("existing-character-starting-proficiency");
+    racial_spells(&shard);
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET first_login = false WHERE guid = {guid}"
+    ));
+    shard.insert_row(
+        "game_skill_ability",
+        &[
+            ("id", &999_994),
+            ("spell_id", &264),
+            ("skill_line", &45),
+            ("acquire_method", &2),
+        ],
+    );
+    starting_spell(&shard, 999_994, 264);
+
+    let _connection = enter(&shard, guid);
+
+    assert_eq!(stored_skill(&shard, guid, 45), Some((5, 5)));
+}

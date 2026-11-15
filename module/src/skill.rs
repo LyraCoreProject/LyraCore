@@ -438,8 +438,24 @@ fn roll_and_raise_skill(
     }
 }
 
-pub(crate) fn gain_weapon_skill(ctx: &ReducerContext, attacker: &WorldEntity) {
-    let line = equipped_weapon_skill_line(ctx, attacker.guid);
+pub(crate) fn gain_weapon_skill(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    source: crate::combat::HitSource,
+) {
+    use crate::combat::HitSource;
+    use crate::items::equip_slot;
+    let line = match source {
+        HitSource::MainHand => Some(equipped_weapon_skill_line(ctx, attacker.guid)),
+        HitSource::OffHand => {
+            equipped_weapon_skill_line_at(ctx, attacker.guid, equip_slot::OFFHAND)
+        }
+        HitSource::Ranged => equipped_weapon_skill_line_at(ctx, attacker.guid, equip_slot::RANGED),
+        HitSource::MeleeSpell | HitSource::Spell | HitSource::Triggered => None,
+    };
+    let Some(line) = line else {
+        return;
+    };
     roll_and_raise_skill(
         ctx,
         attacker.guid,
@@ -509,11 +525,30 @@ fn skill_always_maximized(ctx: &ReducerContext, entity: &WorldEntity, line: u32)
         })
 }
 
-fn starting_skill_value(ctx: &ReducerContext, entity: &WorldEntity, line: u32, cap: u16) -> u16 {
-    if skill_always_maximized(ctx, entity, line) {
-        cap
-    } else {
-        1
+/// The value a combat skill row starts at when it is first stored.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SkillStart {
+    /// A first login or a learn in play: 1, or the cap on a line the race and class keep maximized.
+    Starting,
+    /// A row backfilled for an existing Character: the level cap, which a missing row read as.
+    LevelCap,
+}
+
+impl SkillStart {
+    pub(crate) fn at_login(first_login: bool) -> Self {
+        if first_login {
+            Self::Starting
+        } else {
+            Self::LevelCap
+        }
+    }
+
+    fn value(self, ctx: &ReducerContext, entity: &WorldEntity, line: u32, cap: u16) -> u16 {
+        if self == Self::LevelCap || skill_always_maximized(ctx, entity, line) {
+            cap
+        } else {
+            1
+        }
     }
 }
 
@@ -528,6 +563,7 @@ pub(crate) fn grant_combat_skill_on_learn(
     guid: u64,
     owner: Identity,
     spell_id: u32,
+    start: SkillStart,
 ) {
     let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
         return;
@@ -554,7 +590,7 @@ pub(crate) fn grant_combat_skill_on_learn(
                     character_guid: guid,
                     owner_identity: owner,
                     skill_line: line,
-                    current: starting_skill_value(ctx, &entity, line, cap),
+                    current: start.value(ctx, &entity, line, cap),
                     max_rank: cap,
                 },
             );
@@ -686,7 +722,7 @@ pub(crate) fn reconcile_profile_skill(
                 character_guid: guid,
                 owner_identity: actor.owner_identity,
                 skill_line: line,
-                current: starting_skill_value(ctx, &actor, line, cap),
+                current: SkillStart::Starting.value(ctx, &actor, line, cap),
                 max_rank: cap,
             },
         );
@@ -1014,7 +1050,7 @@ pub(crate) fn ensure_player_skills(
     owner: Identity,
     level: u32,
     class: u8,
-    first_login: bool,
+    start: SkillStart,
 ) {
     let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
         return;
@@ -1058,12 +1094,6 @@ pub(crate) fn ensure_player_skills(
             .filter(&guid)
             .any(|s| s.skill_line == line);
         if !present {
-            // A missing row used to read as the level cap; an existing Character keeps that value.
-            let current = if first_login {
-                starting_skill_value(ctx, &entity, line, cap)
-            } else {
-                cap
-            };
             PlayerSkill::insert(
                 ctx,
                 PlayerSkill {
@@ -1071,7 +1101,7 @@ pub(crate) fn ensure_player_skills(
                     character_guid: guid,
                     owner_identity: owner,
                     skill_line: line,
-                    current,
+                    current: start.value(ctx, &entity, line, cap),
                     max_rank: cap,
                 },
             );
@@ -1133,7 +1163,7 @@ pub fn debug_reseed_skills(ctx: &ReducerContext, character_guid: u64) -> Result<
         ctx.sender(),
         ch.level as u32,
         ch.class,
-        ch.first_login,
+        SkillStart::at_login(ch.first_login),
     );
     spacetimedb::log::info!(
         "debug_reseed_skills: guid={character_guid} class={} level={}",

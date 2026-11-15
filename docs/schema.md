@@ -876,8 +876,12 @@ Publish repair refreshes these projections; see
 or profession cap. A new weapon, ranged, unarmed or defense skill starts at 1 with a cap of five
 per level. Learning a spell grants its combat skill line when `game_skill_ability.acquire_method`
 is 2, as a weapon master's wrapper spell does. Login and publish repair also add a known combat
-skill that an existing Character never stored; that row starts at the level cap, the value a
-missing row used to give. Existing progress survives login and publish repair. Ranged skills also follow the level cap.
+skill that an existing Character never stored, including one from a starting spell it first learns
+at that login; that row starts at the level cap, the value a missing row used to give. Existing
+progress survives login and publish repair. Ranged skills also follow the level cap.
+A landed weapon hit trains the skill of the weapon that made it: the ranged weapon for ranged
+attacks and wand shots, the off-hand weapon for off-hand swings, otherwise the main hand or
+unarmed. Neither weapon nor defense skill rises against a player-controlled opponent.
 An empty or broken ranged weapon slot contributes zero attack skill; an empty main hand uses
 unarmed. Feral forms use the level cap for melee skill.
 

@@ -304,7 +304,14 @@ pub(crate) fn insert_new_character(
         };
     }
     let owner = account.identity.unwrap_or(Identity::ZERO);
-    crate::spell::spellbook::grant_createinfo_spells(ctx, next_guid, owner, race, class);
+    crate::spell::spellbook::grant_createinfo_spells(
+        ctx,
+        next_guid,
+        owner,
+        race,
+        class,
+        crate::skill::SkillStart::Starting,
+    );
     crate::action_bar::grant_createinfo_actions(ctx, next_guid, owner, race, class);
 
     crate::items::grant_starter_item(ctx, next_guid, owner)?;
@@ -552,12 +559,14 @@ pub(crate) fn apply_player_login(
     crate::mount::restore_mount_on_rebuild(ctx, character_guid);
 
     crate::items::grant_starter_item(ctx, character.guid, owner)?;
+    let skill_start = crate::skill::SkillStart::at_login(character.first_login);
     crate::spell::spellbook::grant_createinfo_spells(
         ctx,
         character.guid,
         owner,
         character.race,
         character.class,
+        skill_start,
     );
 
     crate::skill::ensure_player_skills(
@@ -566,7 +575,7 @@ pub(crate) fn apply_player_login(
         owner,
         character.level as u32,
         character.class,
-        character.first_login,
+        skill_start,
     );
 
     crate::talent::apply_learned_talents(ctx, character.guid, owner, character.level as u32);

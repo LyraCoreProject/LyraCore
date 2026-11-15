@@ -260,9 +260,9 @@ Auras from their current definitions. It also repairs level-dependent skill caps
 columns change, and no earned current value is reset. A stored value of 5 cannot distinguish old
 initialization from earned progress, so existing Characters keep it. A newly learned skill
 starts at 1. Login and repair also add the rows of combat skills an existing Character knows
-through a spell but never stored, such as starting Daggers, Bows or Wands. Those rows start at the
-level cap, the value a missing row used to give. Login applies the same rules and
-reconstructs both client bonus halves.
+through a spell but never stored, such as starting Daggers, Bows or Wands, or learns from a
+starting spell at login. Those rows start at the level cap, the value a missing row used to give.
+Login applies the same rules and reconstructs both client bonus halves.
 
 Before play resumes:
 

@@ -22,7 +22,7 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
             character.owner_identity,
             character.level,
             character.class(),
-            false,
+            crate::skill::SkillStart::LevelCap,
         );
     }
     let auras: Vec<_> = ctx
