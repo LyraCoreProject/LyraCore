@@ -148,10 +148,10 @@ fn write_private(path: &str, contents: &str) -> std::io::Result<()> {
     options.write(true).create_new(true);
     #[cfg(unix)]
     std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
-    let written = options.open(&staging).and_then(|mut file| {
-        file.write_all(contents.as_bytes())?;
-        file.sync_all()
-    });
+    let mut file = options.open(&staging)?;
+    let written = file
+        .write_all(contents.as_bytes())
+        .and_then(|()| file.sync_all());
     match written.and_then(|()| std::fs::rename(&staging, path)) {
         Ok(()) => Ok(()),
         Err(error) => {
