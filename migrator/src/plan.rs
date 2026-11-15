@@ -1686,7 +1686,7 @@ mod tests {
         let mut cod = letter(MAIL_NORMAL, 99, vec![letter_item(70, 2589)]);
         cod.cod = 500;
         source.letters = vec![cod];
-        let plan = build("vmangos-main", &catalogue, &[account()], &[source]);
+        let plan = build("vmangos-main", &catalogue, &[account()], &[source], &[]);
         assert_eq!(plan.letters[0].cod, 0);
     }
 
