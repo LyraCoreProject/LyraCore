@@ -283,9 +283,8 @@ fn nearest_walkable(
     None
 }
 
-/// The node to approach instead of a target with no walkable node within the stopping distance,
-/// such as one on a steep slope; `None` when the target needs no approach. Err is the finished
-/// search: blocked without a walkable node nearby, or a partial leg in a straight line.
+/// The node to approach when no walkable node lies within `stop_dist` of the target; `Err` is a
+/// search that finished without expanding.
 fn approach(
     cache: &mut Cache<impl FnMut(u16, u16) -> Option<NavCellData>>,
     from: (f32, f32),
@@ -299,13 +298,19 @@ fn approach(
     {
         return Ok(None);
     }
+    let blocked = LegSearch {
+        outcome: LegOutcome::Blocked,
+        expansions: 0,
+    };
     let Some((x, y)) = nearest_walkable(cache, target, to, APPROACH_SEARCH_YD) else {
-        return Err(LegSearch {
-            outcome: LegOutcome::Blocked,
-            expansions: 0,
-        });
+        return Err(blocked);
     };
     let point = (grid_to_world(x), grid_to_world(y));
+    // A mover as near the target as the approach node has no leg left to walk.
+    let gap = |a: (f32, f32)| (a.0 - to.0).hypot(a.1 - to.1);
+    if gap(from) <= gap(point) + NAV_RES / 2.0 {
+        return Err(blocked);
+    }
     if line_walkable(cache, from, point) {
         return Err(LegSearch {
             outcome: LegOutcome::Partial(vec![point]),
@@ -1048,31 +1053,69 @@ mod runtime_tests {
         assert_eq!(search.expansions, 1);
     }
 
-    #[test]
-    fn a_range_search_approaches_a_target_off_walkable_ground_at_its_edge() {
+    fn cell_with_unwalkable_patch() -> ((u16, u16), NavCellData) {
         let ((cx, cy), mut cell) = walled_cell();
         cell.walk.fill(0xFF);
-        for ny in 30..46 {
-            for nx in 30..46 {
+        cell.obs.fill(OBS_NONE);
+        for ny in 20..56 {
+            for nx in 20..50 {
                 walk_set(&mut cell.walk, nx, ny, false);
             }
         }
+        ((cx, cy), cell)
+    }
+
+    const CHASE_CONTACT_YD: f32 = 1.278;
+
+    fn search_toward_patch_centre(from: (f32, f32)) -> LegSearch {
+        let ((cx, cy), cell) = cell_with_unwalkable_patch();
         let mut fetch = |x, y| (x == cx && y == cy).then(|| cell.clone());
-        let to = at(35, 38);
-        let search = find_leg_in_range_ex(&mut fetch, at(10, 38), to, 2.5, 4096);
+        find_leg_in_range_ex(&mut fetch, from, at(33, 38), CHASE_CONTACT_YD, 4096)
+    }
+
+    fn ends_at_patch_edge(path: &[(f32, f32)]) -> bool {
+        let (end, edge) = (*path.last().unwrap(), at(19, 38));
+        (end.0 - edge.0).hypot(end.1 - edge.1) < 0.01
+    }
+
+    #[test]
+    fn a_range_search_approaches_a_target_off_walkable_ground_at_its_edge() {
+        let search = search_toward_patch_centre(at(5, 38));
         let LegOutcome::Partial(path) = search.outcome else {
             panic!("a target on the unwalkable patch is approached, not reached");
         };
         assert_eq!(search.expansions, 0);
-        let edge = *path.last().unwrap();
-        assert!((edge.0 - to.0).hypot(edge.1 - to.1) < 7.0 * NAV_RES);
-        let mut cache = Cache::new(&mut fetch);
-        assert!(grid_walkable(
-            &mut cache,
-            grid_coord(edge.0).unwrap(),
-            grid_coord(edge.1).unwrap()
-        ));
+        assert_eq!(path.len(), 1);
+        assert!(ends_at_patch_edge(&path));
+    }
 
+    #[test]
+    fn a_range_search_routes_around_unwalkable_ground_to_the_approach_node() {
+        let search = search_toward_patch_centre(at(60, 38));
+        let LegOutcome::Partial(path) = search.outcome else {
+            panic!("a target on the unwalkable patch is approached, not reached");
+        };
+        assert!(search.expansions > 0);
+        assert!(ends_at_patch_edge(&path));
+    }
+
+    #[test]
+    fn a_range_search_from_the_approach_node_is_blocked() {
+        let search = search_toward_patch_centre(at(19, 38));
+        assert_eq!(search.outcome, LegOutcome::Blocked);
+        assert_eq!(search.expansions, 0);
+    }
+
+    #[test]
+    fn a_range_search_from_unwalkable_ground_nearer_the_target_is_blocked() {
+        let search = search_toward_patch_centre(at(25, 38));
+        assert_eq!(search.outcome, LegOutcome::Blocked);
+        assert_eq!(search.expansions, 0);
+    }
+
+    #[test]
+    fn a_range_search_with_no_walkable_ground_near_the_target_is_blocked() {
+        let ((cx, cy), mut cell) = walled_cell();
         let mut sealed = cell.clone();
         sealed.walk.fill(0);
         cell.walk.fill(0);
