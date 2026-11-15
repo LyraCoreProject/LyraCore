@@ -4,7 +4,7 @@ pub use mirror::sync_group_mirror;
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
-use crate::native::game_native_player;
+use crate::online::{is_online, Online};
 use crate::{game_character, game_melee_attack, game_pending_cast, game_threat, game_world_entity};
 
 pub use lyracore_shared::group::GROUP_MAX_MEMBERS;
@@ -167,18 +167,6 @@ crate::character_owned!(delete, fn sweep_delete_game_group_invite(ctx, character
 });
 crate::character_owned!(not_transported, fn sweep_transfer_game_group_invite());
 
-#[table(accessor = game_bot_invite_intent, index(accessor = by_actor, btree(columns = [inviter_guid])))]
-pub struct BotInviteIntent {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    pub inviter_guid: u64,
-    pub target_guid: u64,
-    pub created_at: Timestamp,
-    #[default(0u8)]
-    pub op: u8,
-}
-
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn emit_bot_invite_intent(ctx: &ReducerContext, inviter_guid: u64, target_guid: u64) {
     apply_sessionless_group_action(ctx, inviter_guid, GroupAction::Invite(target_guid));
@@ -230,10 +218,11 @@ pub(crate) fn answer_sessionless_invite(
     ctx: &ReducerContext,
     guid: u64,
 ) -> Result<(), GroupOpError> {
-    let Some(character) = crate::helpers::character_by_guid(ctx, guid).filter(|c| !c.online) else {
+    let Some(character) = crate::helpers::character_by_guid(ctx, guid) else {
         return Ok(());
     };
-    if crate::sessionless::group_action_gate(ctx, guid).is_err()
+    if character.online
+        || crate::sessionless::group_action_gate(ctx, guid).is_err()
         || ctx
             .db
             .game_group_invite()
@@ -257,17 +246,6 @@ pub(crate) fn answer_sessionless_invite(
             apply_action(ctx, Plane::Shard, guid, GroupAction::Decline)
         }
         Err(error) => Err(error),
-    }
-}
-
-pub(crate) fn clear_unclaimed_group_intents(ctx: &ReducerContext, character_guid: u64) {
-    let intents = ctx.db.game_bot_invite_intent();
-    for intent in intents
-        .by_actor()
-        .filter(&character_guid)
-        .collect::<Vec<_>>()
-    {
-        intents.id().delete(intent.id);
     }
 }
 
@@ -530,7 +508,6 @@ pub struct CompanionTargetFacts {
     pub max_health: u32,
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn companion_target_facts(
     ctx: &ReducerContext,
     bot_guid: u64,
@@ -818,7 +795,7 @@ pub(crate) fn party_facts(
         }
     }
     let mut enemies = Vec::new();
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000).max(0) as u64;
+    let now_ms = crate::time::now_ms(ctx);
     for guid in enemy_guids {
         let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
             continue;
@@ -1044,15 +1021,6 @@ pub(crate) fn push_list_to_all(ctx: &ReducerContext, group_id: u64) {
     );
 }
 
-fn character_online(ctx: &ReducerContext, guid: u64) -> bool {
-    ctx.db
-        .game_native_player()
-        .character_guid()
-        .find(guid)
-        .is_some()
-        || ctx.db.game_world_entity().guid().find(guid).is_some()
-}
-
 fn invite_core_on(
     ctx: &ReducerContext,
     plane: Plane,
@@ -1067,7 +1035,7 @@ fn invite_core_on(
         if ctx.db.game_character().guid().find(target_guid).is_none() {
             return Err(GroupRefusal::NoSuchPlayer.into());
         }
-        if !character_online(ctx, target_guid) {
+        if !is_online(ctx, target_guid, Online::SessionOrBody) {
             return Err(GroupRefusal::TargetOffline.into());
         }
     }
@@ -1118,7 +1086,7 @@ fn invite_core_on(
 
 pub(crate) fn accept_invite_for(ctx: &ReducerContext, acceptor_guid: u64) -> Result<(), String> {
     let acceptor = crate::helpers::character_by_guid(ctx, acceptor_guid);
-    if acceptor.as_ref().is_some_and(|character| !character.online) {
+    if acceptor.as_ref().is_some_and(|acceptor| !acceptor.online) {
         crate::sessionless::group_action_gate(ctx, acceptor_guid)
             .map_err(|refusal| refused(refusal, "session-less group acceptance"))?;
         if crate::native::realm_party::package::submit(
@@ -1699,7 +1667,7 @@ pub(crate) fn leader_after_removal(
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Plane {
     Shard,
-    RealmCore,
+    RealmShard,
 }
 
 #[reducer]
@@ -1756,7 +1724,7 @@ pub fn realm_group_op(
         },
         other => return Err(format!("unknown realm group op {other}")),
     };
-    apply_action(ctx, Plane::RealmCore, actor_guid, action).map_err(|error| error.to_string())
+    apply_action(ctx, Plane::RealmShard, actor_guid, action).map_err(|error| error.to_string())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1822,7 +1790,7 @@ pub(crate) fn apply_action(
             let actor = crate::helpers::character_by_guid(ctx, actor_guid)
                 .ok_or_else(|| logged(GroupRefusal::ActorUnavailable.into(), "group invite"))?;
             if let Some(target) = crate::helpers::character_by_guid(ctx, target) {
-                if character_online(ctx, target.guid)
+                if is_online(ctx, target.guid, Online::SessionOrBody)
                     && !lyracore_shared::faction::same_team(actor.race, target.race)
                 {
                     return Err(logged(GroupRefusal::WrongFaction.into(), "group invite"));
@@ -1830,7 +1798,7 @@ pub(crate) fn apply_action(
             }
         }
         if let SetLeader(target) = action {
-            if !character_online(ctx, target) {
+            if !is_online(ctx, target, Online::SessionOrBody) {
                 return Err(logged(GroupRefusal::TargetOffline.into(), "group leader"));
             }
         }
@@ -2263,13 +2231,20 @@ fn minimap_ping_on(
     Ok(())
 }
 
+fn normalized_roll_range(min_roll: u32, max_roll: u32) -> (u32, u32) {
+    const ROLL_MAX: u32 = 10_000;
+    let lo = min_roll.min(max_roll).min(ROLL_MAX);
+    let hi = min_roll.max(max_roll).min(ROLL_MAX);
+    (lo, hi)
+}
+
 fn random_roll_on(
     ctx: &ReducerContext,
     actor_guid: u64,
     min_roll: u64,
     max_roll: u64,
 ) -> Result<(), GroupOpError> {
-    let (lo, hi) = crate::chat::normalized_roll_range(
+    let (lo, hi) = normalized_roll_range(
         wire_u32(min_roll, "roll minimum")?,
         wire_u32(max_roll, "roll maximum")?,
     );
@@ -2295,6 +2270,11 @@ fn random_roll_on(
     Ok(())
 }
 
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_group_event, crate::EVENT_TTL_MICROS);
+    crate::gc::reap_expired!(ctx, game_group_invite, crate::INVITE_TTL_MICROS);
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -2311,6 +2291,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn roll_range_swaps_an_inverted_pair_and_caps_both_ends_at_10000() {
+        assert_eq!(normalized_roll_range(1, 100), (1, 100));
+        assert_eq!(normalized_roll_range(100, 1), (1, 100));
+        assert_eq!(normalized_roll_range(5, 5), (5, 5));
+        assert_eq!(normalized_roll_range(0, 0), (0, 0));
+        assert_eq!(normalized_roll_range(1, 2_000_000), (1, 10_000));
+        assert_eq!(
+            normalized_roll_range(3_000_000, 2_000_000),
+            (10_000, 10_000)
+        );
+        assert_eq!(normalized_roll_range(1, 10_000), (1, 10_000));
+    }
+
+    #[test]
     fn broken_group_relationship_is_not_a_gameplay_refusal() {
         let failure =
             GroupOpError::Invariant("member 7 points to missing group 9".to_string()).to_string();
@@ -2320,26 +2314,6 @@ mod tests {
             GroupOpError::Refused(GroupRefusal::NotLeader).to_string(),
             GroupRefusal::NotLeader.as_tag()
         );
-    }
-
-    #[test]
-    fn kill_reward_needs_an_alive_member_on_the_same_map_within_range() {
-        assert!(eligible_for_kill_reward(false, true, true, 0.0));
-        assert!(eligible_for_kill_reward(
-            false,
-            true,
-            true,
-            GROUP_XP_RANGE_SQ
-        ));
-        assert!(!eligible_for_kill_reward(true, true, true, 0.0));
-        assert!(!eligible_for_kill_reward(false, false, true, 0.0));
-        assert!(!eligible_for_kill_reward(false, true, false, 0.0));
-        assert!(!eligible_for_kill_reward(
-            false,
-            true,
-            true,
-            GROUP_XP_RANGE_SQ + 1.0
-        ));
     }
 
     fn member_row(id: u64, character_guid: u64, assistant: bool) -> GroupMember {

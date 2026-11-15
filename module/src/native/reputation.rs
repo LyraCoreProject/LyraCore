@@ -1,7 +1,7 @@
 use lyracore_protocol::{codec, messages::vanilla::opcodes::ServerOpcodeMessage};
 use spacetimedb::ReducerContext;
 
-use super::{game_native_player, Rollback};
+use super::Rollback;
 use crate::reputation::PlayerReputation;
 
 pub(crate) fn changed(
@@ -17,28 +17,22 @@ pub(crate) fn changed(
     {
         return;
     }
-    if let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(row.character_guid)
+    if let Some((opcode, body)) =
+        codec::build_set_faction_standing_raw(row.reputation_index as u32, row.standing)
     {
-        if let Some((opcode, body)) =
-            codec::build_set_faction_standing_raw(row.reputation_index as u32, row.standing)
-        {
-            super::send_raw(ctx, owner.connection_id, opcode, body, false);
-        }
+        super::send_raw_to_character(ctx, row.character_guid, opcode, body);
     }
 }
 
-pub(crate) fn watched(ctx: &ReducerContext, guid: u64, index: i32) {
-    if let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) {
-        let packet = lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-            Box::new(codec::build_watched_faction_values(guid, index)),
-        ))
-        .expect("fixed-size watched faction packet fits a world frame");
-        super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
-    }
+pub(crate) fn watched_faction(ctx: &ReducerContext, guid: u64, index: i32) {
+    super::send_to_character(
+        ctx,
+        guid,
+        ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_watched_faction_values(
+            guid, index,
+        ))),
+        super::EncodeFailure::Panic,
+    );
 }
 
 pub(super) fn receive(
@@ -48,7 +42,7 @@ pub(super) fn receive(
     body: &[u8],
 ) -> Result<(), Rollback> {
     let result = match opcode {
-        0x0125 => {
+        codec::CMSG_SET_FACTION_ATWAR_OPCODE => {
             if body.len() != 5 || body[4] > 1 {
                 return Err("invalid faction at-war request".into());
             }
@@ -60,7 +54,7 @@ pub(super) fn receive(
                     crate::reputation::apply_set_faction_at_war(ctx, actor, index, body[4] != 0)
                 })
         }
-        0x0318 => {
+        codec::CMSG_SET_WATCHED_FACTION_OPCODE => {
             let index = i32::from_le_bytes(
                 body.try_into()
                     .map_err(|_| "invalid watched faction request")?,

@@ -15,7 +15,7 @@ use lyracore_protocol::{
 use lyracore_shared::auction::{auction_notice, bid_increment, market_of, AuctionRefusal};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::{game_native_player, Rollback};
+use super::{Rollback, Unhandled};
 use crate::{
     auction::{self as auctions, game_auction, native::BidRefusal, AuctionNotice},
     game_item_template, game_player_spell, game_world_entity,
@@ -60,14 +60,11 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    super::actor(ctx, guid)?;
+) -> Result<(), Unhandled> {
     use ClientOpcodeMessage as C;
-    if crate::peer::realm_shard(ctx).is_some() && !matches!(message, C::MSG_AUCTION_HELLO(_)) {
-        return super::realm_auction::receive(ctx, connection, guid, message);
-    }
     let packet = match message {
         C::MSG_AUCTION_HELLO(request) => {
+            super::actor(ctx, guid)?;
             let Some(house) =
                 auctions::auction_house_for_interaction(ctx, guid, request.auctioneer.guid())
             else {
@@ -80,6 +77,14 @@ pub(super) fn receive(
             }))
         }
         C::CMSG_AUCTION_LIST_OWNER_ITEMS(request) => {
+            if forwards(ctx, guid)? {
+                return realm(
+                    ctx,
+                    connection,
+                    guid,
+                    C::CMSG_AUCTION_LIST_OWNER_ITEMS(request),
+                );
+            }
             let Some(house) =
                 auctions::auction_house_for_interaction(ctx, guid, request.auctioneer.guid())
             else {
@@ -95,6 +100,14 @@ pub(super) fn receive(
             ))
         }
         C::CMSG_AUCTION_LIST_BIDDER_ITEMS(request) => {
+            if forwards(ctx, guid)? {
+                return realm(
+                    ctx,
+                    connection,
+                    guid,
+                    C::CMSG_AUCTION_LIST_BIDDER_ITEMS(request),
+                );
+            }
             let Some(house) =
                 auctions::auction_house_for_interaction(ctx, guid, request.auctioneer.guid())
             else {
@@ -110,6 +123,9 @@ pub(super) fn receive(
             ))
         }
         C::CMSG_AUCTION_SELL_ITEM(request) => {
+            if forwards(ctx, guid)? {
+                return realm(ctx, connection, guid, C::CMSG_AUCTION_SELL_ITEM(request));
+            }
             let auction_id = auctions::native::list(
                 ctx,
                 guid,
@@ -140,6 +156,9 @@ pub(super) fn receive(
             )
         }
         C::CMSG_AUCTION_PLACE_BID(request) => {
+            if forwards(ctx, guid)? {
+                return realm(ctx, connection, guid, C::CMSG_AUCTION_PLACE_BID(request));
+            }
             let price = auctions::native::bid(
                 ctx,
                 guid,
@@ -163,6 +182,9 @@ pub(super) fn receive(
             )
         }
         C::CMSG_AUCTION_REMOVE_ITEM(request) => {
+            if forwards(ctx, guid)? {
+                return realm(ctx, connection, guid, C::CMSG_AUCTION_REMOVE_ITEM(request));
+            }
             if ctx
                 .db
                 .game_world_entity()
@@ -195,9 +217,26 @@ pub(super) fn receive(
                 },
             )
         }
-        _ => return Err("opcode is not an auction request".into()),
+        other => return Err(Unhandled::Declined(other)),
     };
     Ok(super::send(ctx, connection, packet, false)?)
+}
+
+/// Runs the actor Gate; true when the Realm, not this World, answers the request.
+fn forwards(ctx: &ReducerContext, guid: u64) -> Result<bool, Rollback> {
+    super::actor(ctx, guid)?;
+    Ok(crate::peer::realm_shard(ctx).is_some())
+}
+
+fn realm(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    message: ClientOpcodeMessage,
+) -> Result<(), Unhandled> {
+    Ok(super::realm_auction::receive(
+        ctx, connection, guid, message,
+    )?)
 }
 
 pub(super) fn command(auction_id: u32, action: Action) -> ServerOpcodeMessage {
@@ -397,16 +436,7 @@ pub(crate) fn notice(ctx: &ReducerContext, row: &AuctionNotice) {
         super::realm_auction::notice(ctx, row.recipient_guid, packet);
         return;
     }
-    let Some(recipient) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(row.recipient_guid)
-    else {
-        return;
-    };
-    super::send(ctx, recipient.connection_id, packet, false)
-        .expect("bounded auction notice fits a world frame");
+    super::send_to_character(ctx, row.recipient_guid, packet, super::EncodeFailure::Panic);
 }
 
 pub(super) fn bid_refusal(id: u32, refusal: &BidRefusal) -> ServerOpcodeMessage {

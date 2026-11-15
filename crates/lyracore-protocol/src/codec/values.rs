@@ -1,6 +1,13 @@
 //! Finalize, dirty_reset, then reset changed fields to exclude OBJECT_FIELD_TYPE from VALUES.
 
-use super::*;
+use super::item::ItemInstanceView;
+use super::update_mask;
+use lyracore_shared::packing::unpack4;
+use wow_world_messages::vanilla::{
+    ItemSlot, Object, Skill, SkillInfo, SkillInfoIndex, UpdateItem, UpdateMask, UpdatePlayer,
+    UpdateUnit, SMSG_UPDATE_AURA_DURATION, SMSG_UPDATE_OBJECT,
+};
+use wow_world_messages::Guid;
 
 pub(super) fn unit_values(guid: u64, apply: impl FnOnce(&mut UpdateUnit)) -> SMSG_UPDATE_OBJECT {
     let mut unit = UpdateUnit::builder().finalize();
@@ -450,87 +457,4 @@ pub fn build_level_values(guid: u64, level: u32) -> SMSG_UPDATE_OBJECT {
 }
 
 #[cfg(test)]
-mod lint_tests {
-    use super::*;
-    use wow_world_messages::vanilla::ServerMessage;
-
-    #[test]
-    fn every_values_builder_serializes_without_the_object_type_bit() {
-        let g = 0x9u64;
-        let msgs: Vec<(&str, SMSG_UPDATE_OBJECT)> = vec![
-            ("health", build_health_values(g, 41)),
-            (
-                "player_flags",
-                build_player_flags_values(g, Some(0x10), None),
-            ),
-            ("dynamic_flags", build_dynamic_flags_values(g, 1)),
-            ("unit_flags", build_unit_flags_values(g, 0x80000)),
-            (
-                "taxi_presentation",
-                build_taxi_presentation_values(g, 1147, 0x0010_0000),
-            ),
-            ("mount_display", build_mount_display_values(g, 1147)),
-            ("display", build_display_values(g, 1825)),
-            ("power", build_power_values(g, 0, 55)),
-            ("target", build_target_values(g, 0xF130_0000_0000_0001)),
-            ("max_vitals", build_max_vitals_values(g, 100, 0, 200)),
-            ("armor", build_armor_values(g, [60, 0, 0, 0, 0, 0, 0], 20)),
-            (
-                "resistance",
-                build_resistance_values(g, [40, 0, 0, 0, 0, 0, 0]),
-            ),
-            ("coinage", build_coinage_values(g, 900)),
-            ("ammo", build_player_ammo_id_values(g, 2512)),
-            (
-                "owner_summon",
-                build_owner_summon_values(g, 0xF130_0000_0000_0009),
-            ),
-            (
-                "skill",
-                build_skill_values(g, 3, Skill::Fishing, 100, 150).unwrap(),
-            ),
-            ("talent_points", build_talent_points_values(g, 2)),
-            ("xp", build_player_xp_values(g, 400, 1000)),
-            (
-                "inv_slot",
-                build_inv_slot_values(g, 15, 0x4000_0000_0000_0001).unwrap(),
-            ),
-            (
-                "visible_item",
-                build_visible_item_values(
-                    g,
-                    15,
-                    &ItemInstanceView {
-                        entry: 25,
-                        random_property_id: 117,
-                        enchantment: 823,
-                        ..Default::default()
-                    },
-                )
-                .unwrap(),
-            ),
-            ("item", build_item_values(0x4000_0000_0000_0001, 5, 70)),
-            (
-                "item_enchantment",
-                build_item_enchantment_values(0x4000_0000_0000_0001, 823),
-            ),
-        ];
-        for (name, m) in msgs {
-            let mut buf = Vec::new();
-            m.write_unencrypted_server(&mut buf).unwrap();
-            let body = &buf[4..];
-            let updates = lyracore_shared::values_mask::parse_values_updates(body);
-            assert!(
-                !updates.is_empty(),
-                "{name}: no VALUES block decoded — framing drift?"
-            );
-            for u in &updates {
-                assert!(
-                    !u.fields.iter().any(|&(idx, _)| idx == 2),
-                    "{name}: OBJECT_FIELD_TYPE (bit 2) leaked into a VALUES partial — dirty_reset missing (5875 crash class)"
-                );
-                assert!(!u.fields.is_empty(), "{name}: empty VALUES mask");
-            }
-        }
-    }
-}
+mod tests;

@@ -4,7 +4,6 @@ use lyracore_protocol::{
 };
 use spacetimedb::ReducerContext;
 
-use super::game_native_player;
 use crate::{
     game_world_entity,
     skill::{game_player_skill, PlayerSkill},
@@ -48,7 +47,7 @@ pub(super) fn cooldowns(
 }
 
 pub(crate) fn talent_points(ctx: &ReducerContext, guid: u64, level: u32) {
-    if !super::is_player(ctx, guid) {
+    if !super::has_world_session(ctx, guid) {
         return;
     }
     let spent = ctx
@@ -57,26 +56,19 @@ pub(crate) fn talent_points(ctx: &ReducerContext, guid: u64, level: u32) {
         .by_character()
         .filter(guid)
         .fold(0u32, |total, row| total.saturating_add(u32::from(row.rank)));
-    send(
+    super::send_to_character(
         ctx,
         guid,
         ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_talent_points_values(
             guid,
             crate::talent::talent_points_available(level, spent),
         ))),
+        super::EncodeFailure::Panic,
     );
 }
 
-fn send(ctx: &ReducerContext, guid: u64, message: ServerOpcodeMessage) {
-    if let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) {
-        let packet = lyracore_protocol::world::encode(message)
-            .expect("bounded spellbook message fits a world frame");
-        super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
-    }
-}
-
-pub(crate) fn learned(ctx: &ReducerContext, guid: u64, spell: u32) {
-    if !super::is_player(ctx, guid) {
+pub(crate) fn spell_learned(ctx: &ReducerContext, guid: u64, spell: u32) {
+    if !super::has_world_session(ctx, guid) {
         return;
     }
     use crate::game_spell;
@@ -104,20 +96,18 @@ pub(crate) fn learned(ctx: &ReducerContext, guid: u64, spell: u32) {
         }),
         None => ServerOpcodeMessage::SMSG_LEARNED_SPELL(codec::build_learned_spell(spell)),
     };
-    send(ctx, guid, message);
+    super::send_to_character(ctx, guid, message, super::EncodeFailure::Panic);
     proficiency(ctx, guid);
 }
 
-pub(crate) fn forgotten(ctx: &ReducerContext, guid: u64, spell: u32) {
-    if let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) {
-        // SMSG_REMOVED_SPELL uses a u16 spell id in build 5875.
-        super::send_raw(
-            ctx,
-            owner.connection_id,
-            0x0203,
-            (spell as u16).to_le_bytes().to_vec(),
-            false,
-        );
+pub(crate) fn spell_forgotten(ctx: &ReducerContext, guid: u64, spell: u32) {
+    // SMSG_REMOVED_SPELL uses a u16 spell id in build 5875.
+    if super::send_raw_to_character(
+        ctx,
+        guid,
+        codec::SMSG_REMOVED_SPELL_OPCODE,
+        (spell as u16).to_le_bytes().to_vec(),
+    ) {
         proficiency(ctx, guid);
     }
 }
@@ -131,15 +121,17 @@ fn proficiency(ctx: &ReducerContext, guid: u64) {
             .filter(guid)
             .map(|row| row.spell_id)
             .collect();
-        send(
+        super::send_to_character(
             ctx,
             guid,
             codec::build_armor_proficiency_msg(character.class(), &learned),
+            super::EncodeFailure::Panic,
         );
-        send(
+        super::send_to_character(
             ctx,
             guid,
             codec::build_weapon_proficiency_msg(character.class(), &learned),
+            super::EncodeFailure::Panic,
         );
     }
 }
@@ -152,7 +144,7 @@ pub(crate) fn skill_changed(
     let Some(row) = current.or(previous) else {
         return;
     };
-    if !super::is_player(ctx, row.character_guid)
+    if !super::has_world_session(ctx, row.character_guid)
         || previous.map(|row| (row.skill_line, row.current, row.max_rank))
             == current.map(|row| (row.skill_line, row.current, row.max_rank))
     {
@@ -190,10 +182,11 @@ pub(crate) fn skill_changed(
             if let Some(values) =
                 codec::build_skill_values(row.character_guid, slot as u8, skill, current, cap)
             {
-                send(
+                super::send_to_character(
                     ctx,
                     row.character_guid,
                     ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)),
+                    super::EncodeFailure::Panic,
                 );
             }
         }

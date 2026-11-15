@@ -1,8 +1,6 @@
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
-use super::{
-    directory, game_native_player, realm_party::PartyCharacter, realm_shard::game_native_away,
-};
+use super::{directory, realm_party::PartyCharacter, realm_shard::game_native_away};
 use crate::{package_account::game_package_account, peer::realm_shard};
 
 #[table(accessor = game_package_party_authority)]
@@ -15,20 +13,15 @@ pub struct PackagePartyAuthority {
     pub active: bool,
 }
 
+crate::outside_table_catalog!(game_package_party_authority);
+
 pub(super) fn facts(ctx: &ReducerContext, guid: u64, active: bool) -> Option<PartyCharacter> {
     let character = crate::helpers::character_by_guid(ctx, guid)?;
     ctx.db
         .game_package_account()
         .account_id()
         .find(character.account_id)?;
-    if character.online
-        || ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(guid)
-            .is_some()
-    {
+    if character.online || super::has_world_session(ctx, guid) {
         return None;
     }
     Some(PartyCharacter {
@@ -62,9 +55,7 @@ pub(super) fn changed(
                     .account_id()
                     .find(character.account_id)
             })
-            .is_some_and(|owner| {
-                crate::package_teardown::runs(ctx, &owner.package_name.replace('-', "_"))
-            });
+            .is_some_and(|owner| crate::package_teardown::runs(ctx, &owner.package_name));
     let character = facts(ctx, guid, active)?;
     let authorities = ctx.db.game_package_party_authority();
     let authority = PackagePartyAuthority {
@@ -151,9 +142,7 @@ pub(super) fn admit(
     {
         return Err("World Shard does not hold this Package Character".into());
     }
-    if character.online
-        && !crate::package_teardown::runs(ctx, &owner.package_name.replace('-', "_"))
-    {
+    if character.online && !crate::package_teardown::runs(ctx, &owner.package_name) {
         return Err("Package is stopped on the Realm Shard".into());
     }
     let authorities = ctx.db.game_package_party_authority();

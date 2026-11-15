@@ -8,10 +8,6 @@ macro_rules! effect_kinds {
 
         impl EffectKind {
             pub const ALL: &[Self] = &[$(Self::$variant),+];
-
-            pub const fn is_aura(self) -> bool {
-                self as u8 & KIND_AURA_BIT != 0
-            }
         }
 
         impl TryFrom<u8> for EffectKind {
@@ -107,18 +103,18 @@ effect_kinds! {
 }
 
 pub const KIND_AURA_BIT: u8 = 0x80;
+// Spell.dbc `attributes` bits are SPELL_ATTR_*; LyraCore `cast_flags` bits are CAST_FLAG_*.
 pub const SPELL_ATTR_PASSIVE: u32 = 0x40;
-// A Spell.dbc Attributes bit like SPELL_ATTR_PASSIVE, not a cast_flags bit.
 pub const SPELL_ATTR_USES_RANGED_SLOT: u32 = 0x02;
-pub const SPELL_ATTR_REQ_BEHIND: u32 = 0x0001;
-pub const SPELL_ATTR_REQ_STEALTH: u32 = 0x0002;
-pub const SPELL_ATTR_STEALTH_SAFE: u32 = 0x0004;
+pub const CAST_FLAG_REQ_BEHIND: u32 = 0x0001;
+pub const CAST_FLAG_REQ_STEALTH: u32 = 0x0002;
+pub const CAST_FLAG_STEALTH_SAFE: u32 = 0x0004;
 // A finishing move needs and spends combo points.
-pub const SPELL_ATTR_COMBO_FINISHER: u32 = 0x0008;
-pub const SPELL_ATTR_INCAP_OPENER: u32 = 0x0010;
-pub const SPELL_ATTR_REQ_OVERPOWER: u32 = 0x0020;
-pub const SPELL_ATTR_REQ_REVENGE: u32 = 0x0040;
-pub const SPELL_ATTR_REQ_DAGGER: u32 = 0x0100;
+pub const CAST_FLAG_COMBO_FINISHER: u32 = 0x0008;
+pub const CAST_FLAG_INCAP_OPENER: u32 = 0x0010;
+pub const CAST_FLAG_REQ_OVERPOWER: u32 = 0x0020;
+pub const CAST_FLAG_REQ_REVENGE: u32 = 0x0040;
+pub const CAST_FLAG_REQ_DAGGER: u32 = 0x0100;
 pub const SPELL_FAMILY_DRUID: u8 = 7;
 pub const SPELL_FAMILY_ROGUE: u8 = 8;
 // Spell.dbc SpellFamilyFlags bits, as vmangos `SpellClassMask.h` names them.
@@ -195,16 +191,16 @@ pub const STAT_INT: u8 = 3;
 pub const STAT_SPI: u8 = 4;
 pub const STAT_ALL: u8 = 0xFF;
 pub const RESIST_ARMOR: u8 = 0x01;
-pub const SPELL_ATTR_CHANNELED: u32 = 0x0080;
-pub const SPELL_ATTR_RANGED_AUTO_REPEAT: u32 = 0x0200;
+pub const CAST_FLAG_CHANNELED: u32 = 0x0080;
+pub const CAST_FLAG_RANGED_AUTO_REPEAT: u32 = 0x0200;
 // vmangos SpellEntry::CanTriggerWeaponProcs: the hit rolls the main-hand weapon's Chance on Hit.
-pub const SPELL_ATTR_WEAPON_PROCS: u32 = 0x0400;
-pub const SPELL_ATTR_BINARY: u32 = 0x0800;
-pub const SPELL_ATTR_CANNOT_CRIT: u32 = 0x1000;
-pub const SPELL_ATTR_IGNORE_RESISTANCES: u32 = 0x2000;
-pub const SPELL_ATTR_ALWAYS_HIT: u32 = 0x4000;
-pub const SPELL_ATTR_MAGIC_HIT: u32 = 0x8000;
-pub const SPELL_ATTR_AREA_AURA: u32 = 0x0001_0000;
+pub const CAST_FLAG_WEAPON_PROCS: u32 = 0x0400;
+pub const CAST_FLAG_BINARY: u32 = 0x0800;
+pub const CAST_FLAG_CANNOT_CRIT: u32 = 0x1000;
+pub const CAST_FLAG_IGNORE_RESISTANCES: u32 = 0x2000;
+pub const CAST_FLAG_ALWAYS_HIT: u32 = 0x4000;
+pub const CAST_FLAG_MAGIC_HIT: u32 = 0x8000;
+pub const CAST_FLAG_AREA_AURA: u32 = 0x0001_0000;
 
 #[cfg(test)]
 mod tests {
@@ -219,6 +215,8 @@ mod tests {
         assert_eq!(EffectKind::try_from(0x1E), Err(0x1E));
         assert_eq!(EffectKind::try_from(0xFF), Err(0xFF));
     }
+
+    // Imported `game_spell_effect.kind` rows store these codes.
     #[test]
     fn kind_wire_values() {
         assert_eq!(KIND_AURA_BIT, 0x80);
@@ -258,6 +256,7 @@ mod tests {
         }
     }
 
+    // Imported `game_spell_effect` rows store these tags in `p0_kind`.
     #[test]
     fn param_tag_wire_values_exhaustive() {
         assert_eq!(P_NONE, 0);
@@ -305,6 +304,7 @@ mod tests {
         }
     }
 
+    // Imported `game_spell_effect` rows store these mechanics in `p0`.
     #[test]
     fn mechanic_wire_values() {
         assert_eq!(M_STUN, 1);

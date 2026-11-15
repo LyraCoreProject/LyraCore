@@ -1,4 +1,4 @@
-use super::*;
+use wow_world_messages::vanilla::{Level, SMSG_LEVELUP_INFO};
 
 pub const SMSG_EXPLORATION_EXPERIENCE_OPCODE: u16 = 0x01F8;
 pub fn build_exploration_experience_raw(area_id: u32, experience: u32) -> (u16, Vec<u8>) {

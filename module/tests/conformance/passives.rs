@@ -1,31 +1,72 @@
 use std::time::Duration;
 
 use lyracore_shared::spell::taxonomy::{
-    A_MOD_STAT, A_MOD_STAT_PCT, SPELL_ATTR_AREA_AURA, SPELL_ATTR_PASSIVE, STAT_SPI, STAT_STR,
+    A_MOD_STAT, A_MOD_STAT_PCT, CAST_FLAG_AREA_AURA, SPELL_ATTR_PASSIVE, STAT_SPI, STAT_STR,
     TOTEM_TYPE,
 };
 use lyracore_test_support::{poll_until, ReducerConnection, Standalone};
 use wire_client::decode::Field;
 
 use super::{decoded_taxi_entry_packets, enter, fixture};
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 
 fn starting_passives(shard: &Standalone) {
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.assert_sql("DELETE FROM game_level_stats WHERE race = 1 AND class = 1 AND level = 1");
-    shard.assert_sql("INSERT INTO game_level_stats (race_class_level,race,class,level,strength,agility,stamina,intellect,spirit) VALUES (65793,1,1,1,23,20,22,20,20)");
+    shard.insert_row(
+        "game_level_stats",
+        &[
+            ("race_class_level", &65793),
+            ("race", &1),
+            ("class", &1),
+            ("level", &1),
+            ("strength", &23),
+            ("agility", &20),
+            ("stamina", &22),
+            ("intellect", &20),
+            ("spirit", &20),
+        ],
+    );
     for (spell, kind, points, stat, visual) in [
         (20598, A_MOD_STAT_PCT, 5, STAT_SPI, 0),
         (28330, A_MOD_STAT, 3, STAT_STR, 3580),
     ] {
-        shard.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Starting passive fixture {spell}',0,0,0,0,0,0,0,1,0,0,0,0,{SPELL_ATTR_PASSIVE},1,0,false,0,0,0,0,0,0,0,0)"));
+        shard.insert_row(
+            "game_spell",
+            &[
+                ("spell_id", &spell),
+                ("name", &format!("Starting passive fixture {spell}")),
+                ("school_mask", &1),
+                ("attributes", &SPELL_ATTR_PASSIVE),
+                ("spell_level", &1),
+            ],
+        );
         shard.assert_sql(&format!(
             "UPDATE game_spell SET visual_id = {visual} WHERE spell_id = {spell}"
         ));
-        shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({},{spell},0,{kind},{points},0,0.0,0,0,0.0,0,0,0,{stat},1,0,0,false,0.0)", spell * 4));
+        shard.insert_row(
+            "game_spell_effect",
+            &[
+                ("id", &(spell * 4)),
+                ("spell_id", &spell),
+                ("kind", &kind),
+                ("base_points", &points),
+                ("p_0", &stat),
+                ("p_0_kind", &1),
+            ],
+        );
         shard.assert_sql(&format!(
             "DELETE FROM game_createinfo_spell WHERE spell_id = {spell}"
         ));
-        shard.assert_sql(&format!("INSERT INTO game_createinfo_spell (id,race,class,spell_id) VALUES ({spell},1,1,{spell})"));
+        shard.insert_row(
+            "game_createinfo_spell",
+            &[
+                ("id", &spell),
+                ("race", &1),
+                ("class", &1),
+                ("spell_id", &spell),
+            ],
+        );
     }
 }
 
@@ -160,20 +201,22 @@ fn login_delivers_sheet_stats_in_create() {
 fn passive_area_and_totem_auras_keep_their_visible_slots() {
     let (shard, character, _) = fixture("native-area-passive-visibility");
     starting_passives(&shard);
-    shard.assert_sql(&format!("UPDATE game_creature_template SET creature_type = {TOTEM_TYPE}, faction_template = 1 WHERE entry = 51000"));
+    shard.assert_sql(&format!("UPDATE game_creature_template SET creature_type = {TOTEM_TYPE}, faction_template = 1 WHERE entry = {TEST_WOLF_ENTRY}"));
     let _connection = enter(&shard, character);
     shard.assert_call(
         "debug_spawn_at_feet",
-        &[&character.to_string(), "51000", "2"],
+        &[&character.to_string(), &TEST_WOLF_ENTRY.to_string(), "2"],
     );
     let totem = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .max()
         .unwrap();
     shard.assert_sql("UPDATE game_spell_effect SET target = 3 WHERE spell_id = 20598");
-    shard.assert_sql(&format!("UPDATE game_spell SET duration_ms = 4294967295, cast_flags = {SPELL_ATTR_AREA_AURA}, visual_id = 3580 WHERE spell_id = 20598"));
+    shard.assert_sql(&format!("UPDATE game_spell SET duration_ms = 4294967295, cast_flags = {CAST_FLAG_AREA_AURA}, visual_id = 3580 WHERE spell_id = 20598"));
     let apply = |caster: u64, target: u64, visible: bool| {
         shard.assert_sql(&format!(
             "DELETE FROM game_aura WHERE target_guid = {target} AND spell_id = 20598"

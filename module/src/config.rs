@@ -47,6 +47,28 @@ pub struct ServerConfig {
     pub nav_coverage_enabled: bool,
 }
 
+/// The stored row, or the column defaults when the Shard has none yet.
+pub(crate) fn server_config(ctx: &ReducerContext) -> ServerConfig {
+    ctx.db.game_config().id().find(0).unwrap_or(ServerConfig {
+        id: 0,
+        xp_rate: 1.0,
+        nav_enabled: true,
+        hosts_instances: true,
+        bots_idle: false,
+        vmap_enabled: false,
+        nav_coverage_enabled: false,
+    })
+}
+
+pub(crate) fn save_server_config(ctx: &ReducerContext, config: ServerConfig) {
+    let table = ctx.db.game_config();
+    if table.id().find(config.id).is_some() {
+        table.id().update(config);
+    } else {
+        table.insert(config);
+    }
+}
+
 #[table(accessor = game_start_item, public, index(accessor = by_race_class, btree(columns = [race_class])))]
 pub struct StartItem {
     #[primary_key]
@@ -128,62 +150,6 @@ pub struct GameAreaTrigger {
 pub struct GameTavernAreaTrigger {
     #[primary_key]
     pub trigger_id: u32,
-}
-
-#[table(accessor = game_taxi_node, public)]
-pub struct GameTaxiNode {
-    #[primary_key]
-    pub id: u32,
-    #[unique]
-    pub client_node_id: u32,
-    pub map_id: u32,
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub name: String,
-    pub mount_display_horde: u32,
-    pub mount_display_alliance: u32,
-}
-
-#[table(
-    accessor = game_taxi_path,
-    public,
-    index(accessor = by_source, btree(columns = [source_node_id])),
-    index(accessor = by_route, btree(columns = [source_node_id, destination_node_id]))
-)]
-pub struct GameTaxiPath {
-    #[primary_key]
-    pub id: u32,
-    pub source_node_id: u32,
-    pub destination_node_id: u32,
-    pub fare: u32,
-}
-
-#[derive(Clone)]
-#[table(
-    accessor = game_taxi_path_node,
-    public,
-    index(accessor = by_path_id, btree(columns = [path_id])),
-    index(accessor = by_path, btree(columns = [path_id, node_index]))
-)]
-pub struct GameTaxiPathNode {
-    #[primary_key]
-    pub id: u32,
-    pub path_id: u32,
-    pub node_index: u32,
-    pub map_id: u32,
-    pub x: f32,
-    pub y: f32,
-    pub z: f32,
-    pub flags: i32,
-    pub delay_ms: i32,
-}
-
-#[reducer]
-pub fn restore_taxi_fixture(ctx: &ReducerContext) -> Result<(), String> {
-    require_operator(ctx)?;
-    crate::seed::seed_taxi_fixture(ctx);
-    Ok(())
 }
 
 pub(crate) fn validate_realm_address(raw: &str) -> Result<String, String> {

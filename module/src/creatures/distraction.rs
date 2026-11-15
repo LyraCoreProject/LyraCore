@@ -1,7 +1,6 @@
 use lyracore_shared::constants::unit_flags;
 use spacetimedb::{table, ReducerContext, Table};
 
-use super::tick;
 use crate::{game_creature_spawn, game_world_entity};
 
 #[table(accessor = game_creature_distraction)]
@@ -16,10 +15,6 @@ fn length_ms(seconds: i32) -> Option<u64> {
         .ok()
         .filter(|&s| s > 0)
         .map(|s| s * 1_000)
-}
-
-fn now_ms(ctx: &ReducerContext) -> u64 {
-    (crate::time::now(ctx).to_micros_since_unix_epoch() / 1_000) as u64
 }
 
 pub(crate) fn distract(
@@ -51,11 +46,11 @@ pub(crate) fn distract(
     {
         return;
     }
-    tick::stop_facing(ctx, &mut creature, (dest.0, dest.1));
+    super::leg::stop_facing(ctx, &mut creature, (dest.0, dest.1));
     creature.update(ctx);
     let row = CreatureDistraction {
         creature_guid,
-        ends_ms: now_ms(ctx) + length_ms,
+        ends_ms: crate::time::now_ms(ctx) + length_ms,
     };
     let table = ctx.db.game_creature_distraction();
     if table.creature_guid().find(creature_guid).is_some() {
@@ -74,11 +69,11 @@ fn ends_ms(ctx: &ReducerContext, guid: u64) -> Option<u64> {
 }
 
 pub(crate) fn active(ctx: &ReducerContext, guid: u64) -> bool {
-    ends_ms(ctx, guid).is_some_and(|ends| now_ms(ctx) < ends)
+    ends_ms(ctx, guid).is_some_and(|ends| crate::time::now_ms(ctx) < ends)
 }
 
 fn expired(ctx: &ReducerContext, guid: u64) -> bool {
-    ends_ms(ctx, guid).is_some_and(|ends| now_ms(ctx) >= ends)
+    ends_ms(ctx, guid).is_some_and(|ends| crate::time::now_ms(ctx) >= ends)
 }
 
 pub(crate) fn expired_facing(ctx: &ReducerContext, guid: u64) -> Option<f32> {
