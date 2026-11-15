@@ -1,7 +1,7 @@
 mod support;
 
 use serde_json::{json, Value};
-use support::Standalone;
+use support::{actor, Standalone};
 
 const AREA_BIT: u32 = 37;
 const FACTION: u32 = 5_099_400;
@@ -193,10 +193,10 @@ fn migration(catalogue: &Catalogue, source_guid: u64, name: &str) -> Value {
         "bank_bag_slots": 1,
         "watched_faction_index": 50,
         "items": [
-            item(catalogue.bag, json!({"Slot": 19}), 1),
-            item(catalogue.stack, json!({"Bag": {"bag_slot": 19, "slot": 3}}), 5),
-            item(catalogue.bag, json!({"Slot": 63}), 1),
-            item(catalogue.stack, json!({"Bag": {"bag_slot": 63, "slot": 0}}), 2),
+            item(catalogue.bag, json!({"slot": 19}), 1),
+            item(catalogue.stack, json!({"bag": {"bag_slot": 19, "slot": 3}}), 5),
+            item(catalogue.bag, json!({"slot": 63}), 1),
+            item(catalogue.stack, json!({"bag": {"bag_slot": 63, "slot": 0}}), 2),
         ],
         "spells": [catalogue.spell, catalogue.talent_spell],
         "skills": [{"skill_line": SKILL, "current": 40, "max_rank": 100}],
@@ -299,14 +299,8 @@ fn a_migrated_character_arrives_with_its_source_state() {
             .expect("the quest arrived")
     };
     assert_eq!(quest(REWARDED_QUEST)["rewarded"], "true");
-    let counts: Vec<u32> = quest(ACTIVE_QUEST)["counts"]
-        .trim_matches(['[', ']'])
-        .split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.parse().expect("quest count is a number"))
-        .collect();
-    assert_eq!(counts, [0, 0]);
+    // SQL text output prints a u32 array's elements with no separator.
+    assert_eq!(quest(ACTIVE_QUEST)["counts"], "00");
     assert_eq!(quest(ACTIVE_QUEST)["deadline_micros"], "0");
     assert_eq!(quest(ACTIVE_QUEST)["failed"], "false");
     assert_eq!(
@@ -328,6 +322,55 @@ fn a_migrated_character_arrives_with_its_source_state() {
             [0]["character_guid"],
         *guid
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_migrated_character_keeps_its_combat_skills_at_first_login() {
+    const SWORDS: u32 = 43;
+    const DEFENSE: u32 = 95;
+    const POLEARMS: u32 = 229;
+    let (shard, catalogue) = realm("character-migration-skills-login");
+    for (line, name) in [(SWORDS, "Swords"), (DEFENSE, "Defense")] {
+        shard.insert_row("game_skill_line", &[("skill_line", &line), ("name", &name)]);
+    }
+    shard.insert_row(
+        "game_skill_ability",
+        &[
+            ("id", &5_099_700),
+            ("spell_id", &catalogue.spell),
+            ("skill_line", &POLEARMS),
+            ("acquire_method", &2),
+        ],
+    );
+    let mut plan = migration(&catalogue, 7, "Migrant");
+    plan["skills"] = json!([
+        {"skill_line": SWORDS, "current": 57, "max_rank": 100},
+        {"skill_line": DEFENSE, "current": 80, "max_rank": 100},
+    ]);
+    shard.assert_output_success(&migrate(&shard, &plan), "migrate_character");
+    let guid = guid_of(&shard, "Migrant");
+    let account_id =
+        shard.query_rows("SELECT id FROM game_account WHERE username = 'MIGRANT'")[0]["id"].clone();
+
+    let key = serde_json::to_string(&vec![7u8; 40]).unwrap();
+    shard.assert_call(
+        "establish_session",
+        &[&account_id, &key, r#"{"__identity__":"0x1"}"#],
+    );
+    shard.assert_call("gw_player_login", &[&account_id, &actor(&guid)]);
+
+    let skill = |line: u32| {
+        shard
+            .query_rows(&format!(
+                "SELECT current, max_rank FROM game_player_skill WHERE character_guid = {guid} AND skill_line = {line}"
+            ))
+            .pop()
+            .map(|row| (row["current"].clone(), row["max_rank"].clone()))
+    };
+    assert_eq!(skill(SWORDS), Some(("57".into(), "100".into())));
+    assert_eq!(skill(DEFENSE), Some(("80".into(), "100".into())));
+    assert_eq!(skill(POLEARMS), Some(("100".into(), "100".into())));
 }
 
 #[test]
