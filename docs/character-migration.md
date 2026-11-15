@@ -12,9 +12,11 @@ you can read the report before anything changes.
 
 1. Import the world into the Realm first. A plan only keeps content that the Shard's catalogues
    hold.
-2. Stop the source server. A Character that is online at the source is refused.
+2. Stop the source server. A Character that is online at the source is refused. MaNGOS keeps many
+   characters tables in MyISAM, which has no snapshots, so a running source can change rows while
+   the tool reads them.
 3. Give the tool a MySQL user that can only `SELECT` from realmd and characters. It reads each
-   database in one read-only snapshot and never executes source SQL. Pass the URLs with
+   database in one transaction and never executes source SQL. Pass the URLs with
    `--realmd` and `--characters`, or in `LYRACORE_MIGRATION_REALMD_URL` and
    `LYRACORE_MIGRATION_CHARACTERS_URL` to keep the password off the command line.
 4. Write a plan:
@@ -39,16 +41,20 @@ you can read the report before anything changes.
    ```
 
    Each Character is one reducer call. A refusal is printed and the next Character continues.
-   Fix the cause, write a new plan and apply it again. Migrated Characters are skipped.
+   Fix the cause, write a new plan and apply it again. Migrated Characters are skipped. `apply`
+   creates every Account in the plan before any Character, so an Account stays on the Shard when
+   its Characters are refused.
 
-The plan file holds each Account's SRP salt and verifier. The tool creates it readable only by its
-owner; keep it as private as the realmd database. `apply` passes each reducer argument on the
+The plan file holds each Account's SRP salt and verifier. The tool writes it as a new file that only
+its owner can read; keep it as private as the realmd database. `apply` passes each reducer argument on the
 `spacetime` command line, where other local users can read it while the call runs, so run it on a
 host only Operators use. For a remote source, add `?require_ssl=true` to the MySQL URL.
 
 The tool checks every column that it reads against the Source Profile of `--source-kind` before it
 reads rows. A missing column or a column of another type stops the run with its name. The profiles
-are in `migrator/src/read.rs`.
+are in `migrator/src/read.rs`. The vmangos profile follows vmangos after its 2025-04-28 migration,
+which moved the inn flag into `characters.character_flags`; an older vmangos source must apply its
+migrations first.
 
 ## Reducers
 
@@ -88,26 +94,33 @@ rerun never brings back a Character that its player deleted.
 Every referenced item, spell, skill, faction, quest, area and taxi node must exist in the Shard's
 catalogues, or the reducer refuses the Character. The tool drops unknown spells, skills, factions,
 quests, explored areas and taxi nodes with a finding, and refuses a Character with an unknown Item.
+Enchantment, random property and action button ids are copied without a check; an id the Shard
+does not know has no effect.
 
 ## Letters
 
 `migrate_letter(letter)` puts one source Mail in the inbox of a migrated Character, as one
 transaction. `apply` sends letters after every Character, so a letter from one migrated
-Character to another names the migrated sender. A letter whose sender is not migrated arrives
-with sender guid 0, and its expiry deletes it instead of returning it. Auction house, creature and
+Character to another names the migrated sender, also when the sender migrated in an earlier run.
+`apply` holds back a letter whose recipient or sender was refused in the same run; a later run
+sends it. A letter whose sender is not migrated arrives with sender guid 0, and its expiry deletes
+it instead of returning it. Auction house, creature and
 GameObject senders keep their entry; other source message types are refused.
 
 The letter keeps its subject, body, copper, cash on delivery price, mail template and check flags.
 Its creation time is derived from the source expiry and its current cash on delivery price, so
-it expires when it would have expired at the source. A letter whose cash on delivery was already
-paid has no price left and gets the full 30 days. A cash on delivery letter needs a migrated sender
+it expires when it would have expired at the source, but never sooner than the full 3 or 30 days
+after its delivery time. A short-lived source letter, such as an auction sale notice or a letter
+with its own expiry delay, and a letter whose cash on delivery was already paid, get the full
+lifetime from delivery. A cash on delivery letter needs a migrated sender
 to receive the copper; the tool drops the price when the sender does not migrate. A pending delivery keeps its delivery time. Stationery follows the sender
 kind. An attached Letter Copy gets its own Item Text row.
 
 1.12 Mail carries one Item. A source Mail with more Items becomes one letter for each Item; the
-first keeps the copper and the cash on delivery price. `game_mail_migration` records
-`<source>/<mail id>/<item guid>`, with item guid 0 for the first letter, so a rerun changes
-nothing. A refused letter leaves nothing behind.
+letter with the lowest item guid keeps the copper and the cash on delivery price.
+`game_mail_migration` records `<source>/<mail id>/<item guid>`, with item guid 0 for a letter
+without an Item, so a rerun changes nothing. A refused letter leaves nothing behind. An attachment
+whose `item_instance` row is missing is dropped with a finding.
 
 Health starts full and power starts at its class default at the first world entry. The Character
 does not see the opening cinematic. GM levels, Auras, cooldowns, Instance bindings, temporary

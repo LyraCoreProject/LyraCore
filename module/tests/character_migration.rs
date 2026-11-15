@@ -255,7 +255,7 @@ fn a_migrated_character_arrives_with_its_source_state() {
     assert_eq!(character["account_id"], accounts[0]["id"]);
     assert_eq!(character["level"], "20");
     assert_eq!(character["money"], "12345");
-    assert_eq!(character["x"], "10");
+    assert_eq!(character["x"].parse::<f32>().unwrap(), 10.0);
     assert_eq!(character["home_x"], "50");
     assert_eq!(character["first_login"], "false");
     let guid = &character["guid"];
@@ -426,7 +426,7 @@ fn a_character_saved_in_an_instance_arrives_at_its_home_bind() {
     let character =
         &shard.query_rows("SELECT map_id, x FROM game_character WHERE name = 'Migrant'")[0];
     assert_eq!(character["map_id"], "0");
-    assert_eq!(character["x"], "50");
+    assert_eq!(character["x"].parse::<f32>().unwrap(), 50.0);
 }
 
 fn now_secs() -> u64 {

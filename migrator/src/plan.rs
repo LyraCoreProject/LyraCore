@@ -243,6 +243,16 @@ pub(crate) struct Catalogue {
     pub(crate) migrated: HashSet<String>,
 }
 
+impl Catalogue {
+    pub(crate) fn migrated_guids(&self, source: &str) -> HashSet<u64> {
+        let prefix = format!("{source}/");
+        self.migrated
+            .iter()
+            .filter_map(|key| key.strip_prefix(&prefix)?.parse().ok())
+            .collect()
+    }
+}
+
 // realmd stores big-endian hex without leading zeros; the Module wants 32 little-endian bytes.
 pub(crate) fn little_endian_hex(big_endian_hex: &str) -> Option<String> {
     let digits = big_endian_hex.trim();
@@ -270,9 +280,15 @@ impl Findings<'_> {
         self.dropped_ids_because(subject, what, "not imported", ids);
     }
 
-    fn dropped_ids_because(&mut self, subject: &str, what: &str, why: &str, ids: &[u32]) {
+    fn dropped_ids_because<T: ToString>(
+        &mut self,
+        subject: &str,
+        what: &str,
+        why: &str,
+        ids: &[T],
+    ) {
         if !ids.is_empty() {
-            let list: Vec<String> = ids.iter().map(u32::to_string).collect();
+            let list: Vec<String> = ids.iter().map(T::to_string).collect();
             self.add(
                 subject,
                 Outcome::Dropped,
@@ -340,7 +356,8 @@ pub(crate) fn build(
             Err(reason) => report.add(&subject, Outcome::Refused, reason.to_string()),
         }
     }
-    let senders: HashSet<u64> = recipients.iter().map(|character| character.guid).collect();
+    let mut senders = catalogue.migrated_guids(source);
+    senders.extend(recipients.iter().map(|character| character.guid));
     let mut letters = Vec::new();
     for character in recipients {
         for letter in &character.letters {
@@ -432,6 +449,9 @@ fn migrated_character(
     if character.online {
         bail!("is online at the source; stop the source server first");
     }
+    if character.locked_for_transfer {
+        bail!("is locked or deleted by a character transfer at the source");
+    }
     if catalogue
         .character_names
         .contains(&character.name.to_lowercase())
@@ -495,7 +515,15 @@ fn migrated_character(
             .ok()
             .filter(|index| (0..64).contains(index))
             .unwrap_or(-1),
-        items: items(catalogue, &character.items, subject, report)?,
+        items: {
+            report.dropped_ids_because(
+                subject,
+                "inventory rows",
+                "name an item guid with no item_instance row",
+                &character.orphan_items,
+            );
+            items(catalogue, &character.items, subject, report)?
+        },
         spells: kept(
             &character.spells,
             &catalogue.spells,
@@ -568,13 +596,12 @@ fn migrated_character(
         )
         .into_iter()
         .filter_map(|quest| {
-            // MaNGOS keeps a rewarded quest at COMPLETE; only a repeat in progress is in the log.
-            let in_log = match quest.status {
-                QUEST_STATUS_INCOMPLETE | QUEST_STATUS_FAILED => true,
-                QUEST_STATUS_COMPLETE => !quest.rewarded,
-                _ => false,
-            };
-            if in_log && quest.mob_counts.iter().any(|count| *count != 0) {
+            // MaNGOS keeps a rewarded quest at COMPLETE; the Module logs it only when repeatable.
+            let in_log = matches!(
+                quest.status,
+                QUEST_STATUS_INCOMPLETE | QUEST_STATUS_FAILED | QUEST_STATUS_COMPLETE
+            );
+            if in_log && !quest.rewarded && quest.mob_counts.iter().any(|count| *count != 0) {
                 report.add(
                     subject,
                     Outcome::Changed,
@@ -837,7 +864,7 @@ fn attachment(
     })
 }
 
-// One source Mail with several attachments becomes one letter per Item; the first keeps the copper.
+// One letter per attached Item, keyed by its item guid; the lowest guid keeps copper and price.
 fn migrated_letters(
     source: &str,
     catalogue: &Catalogue,
@@ -878,6 +905,12 @@ fn migrated_letters(
         ),
         other => bail!("message type {other} has no LyraCore sender"),
     };
+    report.dropped_ids_because(
+        subject,
+        "attachments",
+        "name an item guid with no item_instance row",
+        &letter.orphan_items,
+    );
     let mut attachments = Vec::new();
     for item in &letter.attachments {
         attachments.push((
@@ -885,6 +918,7 @@ fn migrated_letters(
             attachment(catalogue, item, subject, report)?,
         ));
     }
+    attachments.sort_by_key(|(item_guid, _)| *item_guid);
     if attachments.len() > 1 {
         report.add(
             subject,
@@ -897,16 +931,16 @@ fn migrated_letters(
     }
     let mut parts: Vec<(u64, Option<MigratedAttachment>)> = attachments
         .into_iter()
-        .enumerate()
-        .map(|(index, (item_guid, item))| (if index == 0 { 0 } else { item_guid }, Some(item)))
+        .map(|(item_guid, item)| (item_guid, Some(item)))
         .collect();
     if parts.is_empty() {
         parts.push((0, None));
     }
     parts
         .into_iter()
-        .map(|(source_item_guid, item)| {
-            let first = source_item_guid == 0;
+        .enumerate()
+        .map(|(index, (source_item_guid, item))| {
+            let first = index == 0;
             let migrated = LetterMigration {
                 source: source.to_string(),
                 source_mail_id: letter.id,
@@ -980,6 +1014,7 @@ mod tests {
             played_total_secs: 60,
             logout_secs: 1_700_000_000,
             logout_resting: false,
+            locked_for_transfer: false,
             rest_bonus: 12.7,
             bank_bag_slots: 1,
             watched_faction: -1,
@@ -987,6 +1022,7 @@ mod tests {
             explored_zones: vec![0b11],
             home: Some(here(0)),
             items: Vec::new(),
+            orphan_items: Vec::new(),
             spells: vec![100, 200],
             skills: Vec::new(),
             reputations: Vec::new(),
@@ -1200,8 +1236,28 @@ mod tests {
         };
         assert!(log.failed);
         assert!(log.event_credit);
-        assert_eq!(quests[1].log, SatsOption::None([]));
+        assert!(matches!(quests[1].log, SatsOption::Some(_)));
         assert!(quests[1].rewarded);
+    }
+
+    #[test]
+    fn a_character_locked_by_a_source_transfer_is_refused() {
+        let mut source = character();
+        source.locked_for_transfer = true;
+        let plan = plan_one(source);
+        assert!(plan.characters.is_empty());
+        assert_eq!(plan.findings[0].outcome, Outcome::Refused);
+    }
+
+    #[test]
+    fn an_inventory_row_without_its_item_is_dropped_and_reported() {
+        let mut source = character();
+        source.orphan_items = vec![9_000_000_001];
+        let plan = plan_one(source);
+        assert_eq!(plan.characters.len(), 1);
+        assert!(plan.findings.iter().any(|f| f.outcome == Outcome::Dropped
+            && f.detail
+                == "1 inventory rows name an item guid with no item_instance row: 9000000001"));
     }
 
     #[test]
@@ -1249,6 +1305,7 @@ mod tests {
             money: 900,
             cod: 0,
             checked: 0,
+            orphan_items: Vec::new(),
         }
     }
 
@@ -1274,7 +1331,7 @@ mod tests {
         source.letters = vec![letter(
             MAIL_CREATURE,
             1234,
-            vec![letter_item(70, 2589), letter_item(71, 4500)],
+            vec![letter_item(71, 4500), letter_item(70, 2589)],
         )];
         let plan = plan_one(source);
         let parts: Vec<_> = plan
@@ -1282,7 +1339,7 @@ mod tests {
             .iter()
             .map(|letter| (letter.source_item_guid, letter.money, letter.sender_entry))
             .collect();
-        assert_eq!(parts, [(0, 900, 1234), (71, 0, 1234)]);
+        assert_eq!(parts, [(70, 900, 1234), (71, 0, 1234)]);
         let SatsOption::Some(first) = &plan.letters[0].attachment else {
             panic!("the first letter carries the first Item");
         };
@@ -1299,6 +1356,18 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.detail.contains("cannot return")));
+    }
+
+    #[test]
+    fn a_sender_migrated_in_an_earlier_run_keeps_cash_on_delivery() {
+        let mut catalogue = catalogue();
+        catalogue.migrated.insert("vmangos-main/99".to_string());
+        let mut source = character();
+        let mut cod = letter(MAIL_NORMAL, 99, vec![letter_item(70, 2589)]);
+        cod.cod = 500;
+        source.letters = vec![cod];
+        let plan = build("vmangos-main", &catalogue, &[account()], &[source]);
+        assert_eq!(plan.letters[0].cod, 500);
     }
 
     #[test]
