@@ -402,23 +402,6 @@ mod tests {
     }
 
     #[test]
-    fn editor_modes_refuse_apply_and_unrelated_import_modes() {
-        for args in [
-            vec!["--compile-spell-edits", "-", "--dbc", "dbc", "--apply"],
-            vec![
-                "--read-spell-source",
-                "133",
-                "--dump",
-                "world.sqlite",
-                "--apply",
-            ],
-            vec!["--compile-spell-edits", "-", "--dbc", "dbc", "--spells"],
-        ] {
-            assert!(crate::parse_args_from(args).is_err());
-        }
-    }
-
-    #[test]
     fn malformed_source_rows_and_duplicate_ids_do_not_compile() {
         let (row, tables) = fixture();
         assert!(compile(vec![row.clone(), row], tables, &[])

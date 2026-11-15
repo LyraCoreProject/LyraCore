@@ -633,13 +633,7 @@ fn main() -> Result<()> {
     ensure!(output.status.success(), "git rev-parse HEAD failed");
     let head = String::from_utf8(output.stdout)?;
     let head = head.trim();
-    let pin = std::fs::read_to_string(root.join(".wire-harness-rev"))?;
-    let revision = pin
-        .lines()
-        .filter(|line| !line.starts_with('#'))
-        .flat_map(str::split_whitespace)
-        .nth(1)
-        .context("harness SHA")?;
+    let revision = lyracore_conformance::harness_pin().revision;
     let ledger = FeatureLedger::load(&root.join("conformance/features"))?;
     let catalogue = wire_client::catalogue::ENTRIES
         .iter()
@@ -1332,7 +1326,7 @@ fn json_keeps_committed_audit_evidence() -> Result<()> {
         audit: Some((&path, &report)),
         tier1_head: "head",
         audit_head: "head",
-        revision: evidence::harness_revision(),
+        revision: lyracore_conformance::harness_pin().revision,
         work: &[],
     })?;
     assert_eq!(
@@ -1430,28 +1424,31 @@ fn importer_gaps_have_their_own_work_instead_of_scenario_rank() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ledger = FeatureLedger::load(&root.join("features"))?;
     let work = open_work(&ledger, None, None, "head", "head", "pin")?;
-    let creature: Vec<_> = work
-        .iter()
-        .filter(|item| item.behavior == "creature_world_behavior")
-        .collect();
-    assert_eq!(creature.len(), 1);
-    assert_eq!(creature[0].kind, "data_import");
-    assert_eq!(creature[0].open_signatures_or_gaps, 2252);
-    assert_eq!(creature[0].reproduce_with, None);
-    assert!(creature[0]
-        .next_command
-        .contains("importer/src/world_import_creatures.rs"));
-    let quest: Vec<_> = work
-        .iter()
-        .filter(|item| item.behavior == "quest_progress")
-        .collect();
-    assert_eq!(quest.len(), 2);
-    assert!(quest
-        .iter()
-        .any(|item| item.kind == "data_import" && item.open_signatures_or_gaps == 19));
-    assert!(quest
-        .iter()
-        .any(|item| item.kind == "scenario_author" && item.open_signatures_or_gaps == 1));
+    let mut imports = 0;
+    for behavior in ledger.behaviors() {
+        let data_gaps = behavior
+            .known_gaps
+            .iter()
+            .filter(|gap| data::is_data_gap(&gap.path))
+            .map(|gap| (&gap.description, &gap.path, &gap.symbol, &gap.evidence))
+            .collect::<BTreeSet<_>>();
+        let items: Vec<_> = work
+            .iter()
+            .filter(|item| item.behavior == behavior.id && item.kind == "data_import")
+            .collect();
+        if data_gaps.is_empty() {
+            assert!(items.is_empty(), "{}", behavior.id);
+            continue;
+        }
+        imports += 1;
+        assert_eq!(items.len(), 1, "{}", behavior.id);
+        assert_eq!(items[0].open_signatures_or_gaps, data_gaps.len());
+        assert_eq!(items[0].reproduce_with, None);
+        for (_, path, _, _) in &data_gaps {
+            assert!(items[0].next_command.contains(path.as_str()));
+        }
+    }
+    assert!(imports > 0, "the ledger names no importer gap");
     assert_ne!(work[0].kind, "data_import");
     Ok(())
 }

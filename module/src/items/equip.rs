@@ -1,9 +1,9 @@
 use spacetimedb::ReducerContext;
 
-use super::{ItemInstance, ItemTemplate};
 use crate::{
     game_aura, game_item_instance, game_item_template, game_spell, game_spell_cd, game_world_entity,
 };
+use crate::{ItemInstance, ItemTemplate};
 
 const NO_EQUIP_COOLDOWN: u32 = 0x80;
 const SPELLMOD_COOLDOWN: i32 = 11;
@@ -17,10 +17,7 @@ pub(crate) fn spell_ready(ctx: &ReducerContext, caster: u64, spell: u32, categor
         .filter(caster)
         .any(|cooldown| {
             (cooldown.spell_id == spell
-                && (!crate::spell::is_ready_at(
-                    micros,
-                    cooldown.ready_at.to_micros_since_unix_epoch(),
-                ) || cooldown.category_ready_micros > micros))
+                && (now < cooldown.ready_at || cooldown.category_ready_micros > micros))
                 || (category != 0
                     && cooldown.category == category
                     && cooldown.category_ready_micros > micros)
@@ -79,7 +76,7 @@ pub(super) fn changed(
                 .filter(previous.owner_guid)
                 .filter(|aura| aura.item_guid(ctx) == previous.guid)
                 .collect();
-            crate::spell::shed_auras(ctx, previous.owner_guid, removed);
+            crate::spell::shed_auras(ctx, removed);
         }
         reconcile_item(ctx, previous.owner_guid, Some(previous.guid), false);
     }
@@ -107,7 +104,7 @@ pub(crate) fn repair(ctx: &ReducerContext, guid: u64) {
         .filter(guid)
         .filter(|aura| aura.item_guid(ctx) != 0 && !aura.item_definition_matches(ctx))
         .collect();
-    crate::spell::shed_auras(ctx, guid, stale);
+    crate::spell::shed_auras(ctx, stale);
     restore(ctx, guid);
 }
 
@@ -146,7 +143,7 @@ fn reconcile_item(ctx: &ReducerContext, guid: u64, changed_item: Option<u64>, re
             if spell != 0 && trigger == 1 {
                 if let Some(header) = ctx.db.game_spell().spell_id().find(spell) {
                     if (!entity.dead || header.equip_passive())
-                        && header.allows_equip_form(entity.unit_bytes_1 >> 16 & 0xff)
+                        && header.allows_equip_form(entity.form())
                     {
                         desired.insert((item.guid, spell), header);
                     }
@@ -164,7 +161,7 @@ fn reconcile_item(ctx: &ReducerContext, guid: u64, changed_item: Option<u64>, re
                 && !desired.contains_key(&(item, aura.spell_id))
         })
         .collect();
-    crate::spell::shed_auras(ctx, guid, removed);
+    crate::spell::shed_auras(ctx, removed);
     for ((item, _), header) in desired {
         if !entity.dead || (restoring && header.equip_passive()) {
             crate::spell::apply_item_auras(ctx, &header, guid, entity.level as u8, item);
@@ -179,11 +176,8 @@ pub(crate) fn clear(ctx: &ReducerContext, guid: u64) {
         .by_target()
         .filter(guid)
         .filter(|aura| aura.item_guid(ctx) != 0)
-        .map(|aura| aura.id)
         .collect();
-    for id in auras {
-        crate::Aura::delete(ctx, id);
-    }
+    crate::spell::shed_auras(ctx, auras);
 }
 
 fn cooldown(ctx: &ReducerContext, item: &ItemInstance) {
@@ -242,6 +236,6 @@ fn cooldown(ctx: &ReducerContext, item: &ItemInstance) {
                 }
             }
         }
-        crate::native::item_equip_cooldown(ctx, item.owner_guid, item.guid, spell_id);
+        crate::native::inventory::item_equip_cooldown(ctx, item.owner_guid, item.guid, spell_id);
     }
 }

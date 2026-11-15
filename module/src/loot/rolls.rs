@@ -1,13 +1,14 @@
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
+use super::LootRefusal;
 use crate::game_corpse_loot;
 use crate::game_group;
 use crate::game_item_template;
 use crate::game_world_entity;
-use lyracore_shared::loot::LootRefusal;
 use lyracore_shared::loot_roll::{event_kind as roll_event_kind, vote_kind};
 
-use super::{refused, CorpseLoot};
+use super::refused;
+use crate::CorpseLoot;
 
 // Corpse lifetime owns these rows; they are not Character-owned state.
 #[table(accessor = game_corpse_loot_eligible, index(accessor = by_corpse, btree(columns = [corpse_guid])))]
@@ -49,18 +50,6 @@ pub struct LootRollVote {
     pub voted: bool,
     pub vote: u8,   // Meaningful only when voted is true.
     pub rolled: u8, // 1..=100 for Need or Greed; zero otherwise.
-}
-
-// Retired Loot Roll promotion table keeps its declaration; see docs/danger-zones.md.
-#[table(accessor = game_loot_roll_promotion_receipt, index(accessor = by_source_slot, btree(columns = [promotion_source, corpse_guid, slot])))]
-pub struct LootRollPromotionReceipt {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    pub promotion_source: Identity,
-    pub corpse_guid: u64,
-    pub slot: u8,
-    pub source_roll_id: u64,
 }
 
 pub(crate) const ROLL_WINDOW_MICROS: i64 = 60_000_000;
@@ -250,7 +239,6 @@ pub(crate) fn apply_group_loot_rules(ctx: &ReducerContext, corpse_guid: u64, gro
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn insert_roll_rows(
     ctx: &ReducerContext,
     corpse_guid: u64,

@@ -21,17 +21,11 @@ fn unit_bytes_1(standalone: &Standalone) -> u32 {
 }
 
 fn set_stand_state(standalone: &Standalone, state: &str) {
-    standalone.assert_call(
-        "gw_set_stand_state",
-        &[&actor(&CHARACTER.to_string()), state],
-    );
+    standalone.assert_call("gw_set_stand_state", &[&actor(CHARACTER), state]);
 }
 
 fn refused(standalone: &Standalone, state: &str, tag: &str) {
-    let result = standalone.call(
-        "gw_set_stand_state",
-        &[&actor(&CHARACTER.to_string()), state],
-    );
+    let result = standalone.call("gw_set_stand_state", &[&actor(CHARACTER), state]);
     let output = format!(
         "{}{}",
         String::from_utf8_lossy(&result.stdout),

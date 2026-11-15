@@ -1,0 +1,112 @@
+{
+  "format_version": 1,
+  "slices": {
+    "human-elwynn-westfall-redridge": { "map": 0, "box": "-11400,-8000,-3100,2000", "center": "-8949.95,-132.493,83.5312" },
+    "dun-morogh": { "map": 0, "box": "-7000,-4500,-1600,1600", "center": "-6240.32,331.03,382.76" },
+    "loch-modan": { "map": 0, "box": "-6000,-4000,-4500,-1601", "center": "-5367.58,-2936.21,327.64" },
+    "deathknell": { "map": 0, "box": "1300,2300,900,2200", "center": "1814.55,1485.20,90.66" },
+    "teldrassil": { "map": 1, "box": "8301,12000,-2500,3500", "center": "10311.30,831.46,1326.41" },
+    "darkshore": { "map": 1, "box": "3500,8300,-2500,3500", "center": "5625.44,-485.95,378.34" },
+    "valley-of-trials": { "map": 1, "box": "-1300,200,-5000,-3700", "center": "-514.34,-4344.96,38.31" },
+    "red-cloud-mesa": { "map": 1, "box": "-3600,-2300,-1200,500", "center": "-2951.82,-350.50,55.86" },
+    "eastern-kingdoms": { "map": 0, "box": "-17066.66,17066.66,-17066.66,17066.66", "center": "-8949.95,-132.493,83.5312" },
+    "kalimdor": { "map": 1, "box": "-17066.66,17066.66,-17066.66,17066.66", "center": "-514.34,-4344.96,38.31" }
+  },
+  "instance_slices": {
+    "deadmines-entry-exit": {
+      "map": 36,
+      "entry": "-14.5732,-385.475,62.4561",
+      "exit": "-14.3628,-393.38,64.5605",
+      "exit_radius": "6.0",
+      "collar_cells": 1
+    }
+  },
+  "forced_creatures": {
+    "eastern-corridor": [344, 11406, 266, 415, 1343, 6966, 5165, 6166, 6569, 5149]
+  },
+  "profiles": [
+    {
+      "name": "full-world",
+      "primary_map": 0,
+      "all_maps": true,
+      "all_templates": true,
+      "slices": ["eastern-kingdoms", "kalimdor"],
+      "instance_maps": true,
+      "instance_slices": ["deadmines-entry-exit"],
+      "quest_catalogue": ["full-world"]
+    },
+    {
+      "name": "full-eastern",
+      "primary_map": 0,
+      "all_templates": true,
+      "slices": ["eastern-kingdoms"],
+      "whole_maps": [369, 449],
+      "quest_catalogue": ["full-world"]
+    },
+    {
+      "name": "full-kalimdor",
+      "primary_map": 1,
+      "all_templates": true,
+      "slices": ["kalimdor"],
+      "whole_maps": [450],
+      "quest_catalogue": ["full-world"]
+    },
+    {
+      "name": "full-instances",
+      "primary_map": 36,
+      "all_templates": true,
+      "instance_maps": true,
+      "instance_slices": ["deadmines-entry-exit"],
+      "quest_catalogue": ["full-world"]
+    },
+    {
+      "name": "alliance-eastern",
+      "primary_map": 0,
+      "slices": ["human-elwynn-westfall-redridge", "dun-morogh", "loch-modan"],
+      "whole_maps": [369],
+      "forced_creatures": "eastern-corridor",
+      "quest_catalogue": ["starting-eastern", "starting-kalimdor", "instances"]
+    },
+    {
+      "name": "alliance-kalimdor",
+      "primary_map": 1,
+      "slices": ["teldrassil", "darkshore"],
+      "quest_catalogue": ["starting-eastern", "starting-kalimdor", "instances"]
+    },
+    {
+      "name": "alliance-single",
+      "primary_map": 0,
+      "slices": ["human-elwynn-westfall-redridge", "dun-morogh", "loch-modan", "teldrassil", "darkshore"],
+      "whole_maps": [36, 369],
+      "instance_slices": ["deadmines-entry-exit"],
+      "forced_creatures": "eastern-corridor",
+      "quest_catalogue": ["starting-eastern", "starting-kalimdor", "instances"]
+    },
+    {
+      "name": "starting-eastern",
+      "primary_map": 0,
+      "slices": ["human-elwynn-westfall-redridge", "dun-morogh", "loch-modan", "deathknell"],
+      "whole_maps": [369],
+      "forced_creatures": "eastern-corridor",
+      "quest_catalogue": ["starting-eastern", "starting-kalimdor", "instances"]
+    },
+    {
+      "name": "starting-kalimdor",
+      "primary_map": 1,
+      "slices": ["teldrassil", "darkshore", "valley-of-trials", "red-cloud-mesa"],
+      "quest_catalogue": ["starting-eastern", "starting-kalimdor", "instances"]
+    },
+    {
+      "name": "instances",
+      "primary_map": 36,
+      "whole_maps": [36],
+      "instance_slices": ["deadmines-entry-exit"],
+      "quest_catalogue": ["starting-eastern", "starting-kalimdor", "instances"]
+    }
+  ],
+  "legacy_defaults": {
+    "slice": "human-elwynn-westfall-redridge",
+    "include_maps": [36],
+    "forced_creatures": "eastern-corridor"
+  }
+}

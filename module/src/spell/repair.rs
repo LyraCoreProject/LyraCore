@@ -1,8 +1,12 @@
 use spacetimedb::{ReducerContext, Table};
 
 use super::*;
+use crate::{game_aura, game_spell, game_spell_effect};
 use crate::{game_character_talent, game_player_spell, game_talent};
-use lyracore_shared::spell::taxonomy::P_COMBAT_PERCENT;
+use lyracore_shared::spell::taxonomy::{
+    A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN_FLAT, A_MOD_HEALING_TAKEN,
+    A_MOD_SCHOOL_CRIT, P_COMBAT_PERCENT,
+};
 
 pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
     let auras: Vec<_> = ctx
@@ -21,7 +25,7 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
         let Some((effect, header)) = definition.filter(|(effect, _)| {
             effect.spell_id == aura.spell_id && effect.kind & KIND_AURA_BIT != 0
         }) else {
-            shed_auras(ctx, aura.target_guid, vec![aura]);
+            shed_auras(ctx, vec![aura]);
             continue;
         };
         let p1 = if matches!(effect.kind, A_PERIODIC_TRIGGER | A_PROC_TRIGGER) {
@@ -29,7 +33,7 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
         } else {
             effect.p1
         };
-        let period_ms = if effect.period_ms == 0 && header.cast_flags & SPELL_ATTR_CHANNELED != 0 {
+        let period_ms = if effect.period_ms == 0 && header.cast_flags & CAST_FLAG_CHANNELED != 0 {
             100
         } else {
             effect.period_ms
@@ -76,7 +80,7 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
                 .map(|other| other.slot)
                 .or_else(|| slots.find(|slot| current.iter().all(|other| other.slot != *slot)));
             let Some(slot) = slot else {
-                shed_auras(ctx, aura.target_guid, vec![aura]);
+                shed_auras(ctx, vec![aura]);
                 continue;
             };
             aura.slot = slot;
@@ -143,7 +147,7 @@ fn repair_school_modifier_groups(ctx: &ReducerContext) {
             aura.caster_guid,
             aura.target_guid,
             super::stacking::rank_of(ctx, aura.spell_id),
-            lyracore_shared::aura::stacked_amount(aura.amount, aura.stacks).saturating_abs(),
+            crate::modifiers::stacked_amount(aura.amount, aura.stacks).saturating_abs(),
         ) {
             let siblings = ctx
                 .db
@@ -156,7 +160,7 @@ fn repair_school_modifier_groups(ctx: &ReducerContext) {
                         && row.item_guid(ctx) == 0
                 })
                 .collect();
-            shed_auras(ctx, aura.target_guid, siblings);
+            shed_auras(ctx, siblings);
         }
     }
 }
@@ -175,7 +179,7 @@ fn restore_missing_seals(ctx: &ReducerContext) {
             .spell_id()
             .find(aura.spell_id)
             .filter(|header| {
-                header.cast_flags & lyracore_shared::spell::taxonomy::SPELL_ATTR_RIGHTEOUSNESS != 0
+                header.cast_flags & lyracore_shared::spell::taxonomy::CAST_FLAG_RIGHTEOUSNESS != 0
             })
         else {
             continue;

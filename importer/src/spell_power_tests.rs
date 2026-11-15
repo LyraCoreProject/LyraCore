@@ -378,7 +378,7 @@ fn damage_values(
             .step_by(2)
             .map(|i| u8::from_str_radix(&encoded[i..i + 2], 16).unwrap())
             .collect();
-        for update in lyracore_shared::values_mask::parse_values_updates(&body) {
+        for update in lyracore_protocol::codec::values_mask::parse_values_updates(&body) {
             if update.guid == 1 && update.fields.iter().any(|(index, _)| *index == 1201) {
                 assert!(!update.fields.iter().any(|(index, _)| *index == 2));
                 fields.extend(update.fields);

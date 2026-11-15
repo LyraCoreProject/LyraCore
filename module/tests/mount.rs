@@ -1,5 +1,9 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{
+    FIXTURE_MOUNT_SPELL, FIXTURE_REINS, LEARN_APPRENTICE_RIDING_SPELL_ID, RIDING_TRAINER_ENTRY,
+    TEST_WOLF_ENTRY,
+};
 use support::{actor, number, poll_until, Row, Standalone, POLL_TIMEOUT};
 
 const RIDER: &str = "1";
@@ -28,7 +32,7 @@ fn bind_session(shard: &Standalone) {
 }
 
 fn reins(shard: &Standalone) -> Vec<Row> {
-    shard.query_rows("SELECT guid, entry, owner_guid, slot, stack_count, durability, soulbound FROM game_item_instance WHERE owner_guid = 1 AND entry = 5090054")
+    shard.query_rows(&format!("SELECT guid, entry, owner_guid, slot, stack_count, durability, soulbound FROM game_item_instance WHERE owner_guid = 1 AND entry = {FIXTURE_REINS}"))
 }
 
 fn use_reins(shard: &Standalone) {
@@ -44,7 +48,7 @@ fn use_reins(shard: &Standalone) {
 }
 
 fn mount_auras(shard: &Standalone) -> Vec<Row> {
-    shard.query_rows("SELECT id, target_guid, caster_guid, spell_id, effect_id, eff_kind, amount, eff_p0, eff_p1 FROM game_aura WHERE target_guid = 1 AND spell_id = 50310")
+    shard.query_rows(&format!("SELECT id, target_guid, caster_guid, spell_id, effect_id, eff_kind, amount, eff_p0, eff_p1 FROM game_aura WHERE target_guid = 1 AND spell_id = {FIXTURE_MOUNT_SPELL}"))
 }
 
 fn assert_projection(shard: &Standalone, display: u32, speed_bp: u32) {
@@ -98,12 +102,21 @@ fn an_untrained_mount_refusal_keeps_the_item_vitals_and_auras_unchanged() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn reusable_reins_restore_the_mount_on_rebuild_and_clear_it_on_dismount() {
     let shard = fixture("mount-lifetime");
-    shard.assert_call("debug_spawn_at_feet", &[RIDER, "51007", "5"]);
-    let trainers = shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51007");
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[RIDER, &RIDING_TRAINER_ENTRY.to_string(), "5"],
+    );
+    let trainers = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {RIDING_TRAINER_ENTRY}"
+    ));
     assert_eq!(trainers.len(), 1);
     shard.assert_call(
         "gw_trainer_buy",
-        &[&actor(RIDER), &trainers[0]["guid"], "50132"],
+        &[
+            &actor(RIDER),
+            &trainers[0]["guid"],
+            &LEARN_APPRENTICE_RIDING_SPELL_ID.to_string(),
+        ],
     );
     let riding = shard.query_rows(
         "SELECT current, max_rank FROM game_player_skill \
@@ -138,11 +151,17 @@ fn reusable_reins_restore_the_mount_on_rebuild_and_clear_it_on_dismount() {
 
     use_reins(&shard);
     assert_projection(&shard, 1147, 16_000);
-    let previous_targets =
-        shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000");
-    shard.assert_call("debug_spawn_at_feet", &[RIDER, "51000", "5"]);
+    let previous_targets = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[RIDER, &TEST_WOLF_ENTRY.to_string(), "5"],
+    );
     let targets: Vec<_> = shard
-        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
         .into_iter()
         .filter(|target| {
             !previous_targets

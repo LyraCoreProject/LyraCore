@@ -1,24 +1,11 @@
 mod support;
 
-use support::{actor, Standalone};
+use support::{actor, refused, Standalone};
 
 const HUMAN: &str = "1";
 const ORC: &str = "2";
 const CONTACT_ROWS: &str =
     "SELECT target_guid, is_ignore FROM game_character_contact WHERE owner_guid = 1";
-
-fn refused(shard: &Standalone, reducer: &str, args: &[&str], tag: &str) {
-    let output = shard.call(reducer, args);
-    let text = format!(
-        "{}{}",
-        String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        !output.status.success() && text.contains(tag),
-        "{reducer} should refuse with {tag}: {text}"
-    );
-}
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]

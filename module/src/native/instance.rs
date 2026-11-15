@@ -1,7 +1,6 @@
 use lyracore_protocol::codec;
 use spacetimedb::{ReducerContext, ScheduleAt};
 
-use super::game_native_player;
 use crate::{game_instance_removal, InstanceRemoval};
 
 fn remaining_ms(due: ScheduleAt, now: i64) -> u32 {
@@ -13,9 +12,6 @@ fn remaining_ms(due: ScheduleAt, now: i64) -> u32 {
 }
 
 pub(crate) fn removal_changed(ctx: &ReducerContext, guid: u64, row: Option<&InstanceRemoval>) {
-    let Some(connection) = ctx.db.game_native_player().character_guid().find(guid) else {
-        return;
-    };
     let timer = row.map_or(0, |row| {
         remaining_ms(
             match row.scheduled_at {
@@ -26,7 +22,7 @@ pub(crate) fn removal_changed(ctx: &ReducerContext, guid: u64, row: Option<&Inst
         )
     });
     let (opcode, body) = codec::build_raid_group_only(timer);
-    super::send_raw(ctx, connection.connection_id, opcode, body, false);
+    super::send_raw_to_character(ctx, guid, opcode, body);
 }
 
 pub(super) fn replay(ctx: &ReducerContext, guid: u64) {

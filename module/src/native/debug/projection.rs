@@ -1,6 +1,6 @@
 use crate::aoi::game_aoi_grant;
+use crate::game_item_instance;
 use crate::group::game_group_member;
-use crate::items::game_item_instance;
 use crate::native::{self, game_native_player};
 use crate::skill::game_player_skill;
 use crate::{game_corpse, game_dynamic_object, game_gameobject, game_world_entity};
@@ -30,6 +30,11 @@ pub struct NativeConformanceCache {
     pub source: String,
 }
 
+crate::outside_table_catalog!(
+    game_native_conformance_projection,
+    game_native_conformance_cache
+);
+
 pub(super) fn close(ctx: &ReducerContext, connection_id: ConnectionId) {
     ctx.db
         .game_native_conformance_cache()
@@ -38,7 +43,7 @@ pub(super) fn close(ctx: &ReducerContext, connection_id: ConnectionId) {
 }
 
 fn encode(message: SMSG_UPDATE_OBJECT) -> Result<Vec<u8>, String> {
-    lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+    lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
         .map(|packet| packet.body)
         .map_err(|error| error.to_string())
 }

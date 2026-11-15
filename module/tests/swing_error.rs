@@ -1,9 +1,9 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use support::{event_rows, number, poll_until, Row, Standalone, TableSubscription, POLL_TIMEOUT};
 
 const PLAYER: u64 = 1;
-const TEST_WOLF_ENTRY: u32 = 51000;
 const NONE: u8 = 0;
 const NOT_IN_RANGE: u8 = 1;
 const BAD_FACING: u8 = 2;

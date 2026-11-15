@@ -18,21 +18,17 @@ use super::{
     game_native_player, guild::Actor, petition as wire, realm_guild,
     realm_guild::game_guild_character, NativeWorldConnection, Rollback,
 };
-use crate::{
-    game_character,
-    guild::{
-        self,
-        fee::{
-            self, GuildCharterPurchase, GuildEmblem, GuildEmblemPurchase, GuildFeeRequest,
-            GuildPayment,
-        },
-        petition::{
-            self, game_guild_petition, game_guild_petition_signature, GuildPetition,
-            GuildPetitionOffer, GuildPetitionRename, GuildPetitionSign, GuildPetitionSignature,
-        },
-        GuildOp,
+use crate::game_item_instance;
+use crate::guild::{
+    self,
+    fee::{
+        self, GuildCharterPurchase, GuildEmblem, GuildEmblemPurchase, GuildFeeRequest, GuildPayment,
     },
-    items::game_item_instance,
+    petition::{
+        self, game_guild_petition, game_guild_petition_signature, GuildPetition,
+        GuildPetitionOffer, GuildPetitionRename, GuildPetitionSign, GuildPetitionSignature,
+    },
+    GuildOp,
 };
 
 // Opcode one is private to Realm guild commands; client opcodes start above it in this path.
@@ -85,6 +81,9 @@ pub struct GuildTransactionRetry {
     pub guid: u64,
 }
 
+crate::outside_table_catalog!(game_guild_transaction, game_guild_transaction_retry);
+crate::virtual_clock_exempt!(game_guild_transaction_retry);
+
 pub(crate) fn pending(ctx: &ReducerContext, guid: u64) -> bool {
     ctx.db.game_guild_transaction().guid().find(guid).is_some()
 }
@@ -109,7 +108,7 @@ fn start(ctx: &ReducerContext, guid: u64, operation: Operation, copper: u32) -> 
 
 pub(super) fn receive(
     ctx: &ReducerContext,
-    connection: NativeWorldConnection,
+    connection: &NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
 ) -> Result<(), Rollback> {
@@ -247,7 +246,7 @@ pub(super) fn apply(
                     _ => None,
                 })
             })?;
-            let packet = super::guild::encode(wire::command(
+            let packet = super::bounded(wire::command(
                 GuildCommand::Create,
                 &name,
                 GuildCommandResult::PlayerNoMoreInGuild,
@@ -324,20 +323,8 @@ pub(super) fn answered(
     };
     if let Err(error) = &result {
         let connection = ConnectionId::from_u128(connection);
-        if ctx
-            .db
-            .game_native_player()
-            .connection_id()
-            .find(connection)
-            .is_some_and(|player| player.character_guid == guid)
-        {
-            if let Some(packets) = super::rollback::replies_in(error) {
-                for (opcode, body) in packets {
-                    super::send_raw(ctx, connection, opcode, body, false);
-                }
-            } else {
-                super::send(ctx, connection, realm_guild::unavailable(), false)?;
-            }
+        if super::rollback::connection_holds(ctx, connection, guid) {
+            super::rollback::replay_refusal(ctx, connection, error, realm_guild::unavailable());
         }
     }
     row.outcome = Some(result);
@@ -358,7 +345,7 @@ fn settle(ctx: &ReducerContext, guid: u64) {
         return;
     }
     if !accepted && row.copper != 0 {
-        row.copper = refund(ctx, guid, row.copper);
+        row.copper = crate::helpers::credit_purse(ctx, guid, row.copper);
         if row.copper != 0 {
             table.guid().update(row);
             retry_later(ctx, guid);
@@ -422,22 +409,6 @@ fn retry_later(ctx: &ReducerContext, guid: u64) {
         });
 }
 
-fn refund(ctx: &ReducerContext, guid: u64, copper: u32) -> u32 {
-    if let Some(mut entity) = crate::helpers::acting_entity_by_guid(ctx, guid) {
-        let credited = copper.min(u32::MAX - entity.money);
-        entity.money += credited;
-        entity.update(ctx);
-        copper - credited
-    } else if let Some(mut character) = crate::helpers::character_by_guid(ctx, guid) {
-        let credited = copper.min(u32::MAX - character.money);
-        character.money += credited;
-        ctx.db.game_character().guid().update(character);
-        copper - credited
-    } else {
-        copper
-    }
-}
-
 #[reducer]
 pub fn retry_guild_transaction(ctx: &ReducerContext, retry: GuildTransactionRetry) {
     if !crate::time::scheduler_authorized(ctx) {
@@ -468,12 +439,7 @@ pub(crate) fn item_removed(ctx: &ReducerContext, item: &crate::ItemInstance) {
         || crate::peer::realm_shard(ctx).is_none()
         || pending(ctx, item.owner_guid)
         || crate::transfer::is_in_transit(ctx, item.owner_guid)
-        || ctx
-            .db
-            .game_native_player()
-            .character_guid()
-            .find(item.owner_guid)
-            .is_none()
+        || !super::has_world_session(ctx, item.owner_guid)
     {
         return;
     }
@@ -734,7 +700,7 @@ fn import(ctx: &ReducerContext, actor: &Actor, state: GuildPetitionImport) -> Re
             return Err("legacy petition signatures are inconsistent".into());
         }
     }
-    petition::observe_id(ctx, row.petition_id);
+    crate::guild::IdSequence::Petition.observe(ctx, row.petition_id);
     state.petition.insert(ctx);
     for signature in state.signatures {
         ctx.db.game_guild_petition_signature().insert(signature);

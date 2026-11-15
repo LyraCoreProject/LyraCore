@@ -3,6 +3,12 @@ use spacetimedb::{log, reducer, ReducerContext, Table, TimeDuration, Timestamp};
 use crate::{game_world_entity, WorldEntity};
 
 use super::*;
+use crate::{
+    game_aura, game_ground_area, game_ground_area_schedule, game_pending_cast,
+    game_resurrect_request, game_spell, game_spell_effect, Aura, AuraSchedule, GroundArea,
+    GroundAreaSchedule, PendingCast, PendingSpellImpact, ResurrectRequest, SpellCastEvent,
+    SpellImpactEvent,
+};
 
 #[reducer]
 pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
@@ -14,23 +20,7 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
         .game_pending_cast()
         .scheduled_id()
         .delete(sched.scheduled_id);
-    let result = check_pending_cast_los(ctx, sched.caster_guid, sched.spell_id, sched.target_guid)
-        .and_then(|()| {
-            resolve_cast_at_typed(
-                ctx,
-                sched.caster_guid,
-                sched.spell_id,
-                sched.level,
-                sched.target_guid,
-                true,
-                false,
-                sched
-                    .has_dest
-                    .then_some((sched.dest_x, sched.dest_y, sched.dest_z)),
-                (sched.item_target_guid != 0).then_some(sched.item_target_guid),
-                sched.cooldown_category,
-            )
-        });
+    let result = complete_cast(ctx, &sched.request());
     clear_dead_callback_cast_admission(ctx, sched.caster_guid, sched.spell_id);
     if let Err(e) = &result {
         log::info!(
@@ -41,7 +31,7 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
             e
         );
         // Only a failed SMSG_CAST_RESULT clears the 1.12 client's filled cast bar.
-        crate::spell::SpellCastEvent::insert(
+        crate::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
                 is_interrupted: true,
@@ -74,10 +64,10 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
     if !crate::time::scheduler_authorized(ctx) {
         return;
     }
-    let (dealt, absorbed) = apply_target_damage(
+    let (dealt, absorbed) = crate::combat::deal_damage(
         ctx,
-        sched.target_guid,
         sched.caster_guid,
+        sched.target_guid,
         sched.after_resist,
         crate::combat::Hit::spell(
             if sched.triggered {
@@ -90,7 +80,7 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
         ),
     );
     let (map_id, instance_id, grid_x, grid_y) = crate::helpers::grid_of(ctx, sched.caster_guid);
-    crate::spell::SpellImpactEvent::insert(
+    crate::SpellImpactEvent::insert(
         ctx,
         SpellImpactEvent {
             id: 0,
@@ -127,13 +117,13 @@ pub(crate) fn do_cast_spell(
     };
     begin_cast(
         ctx,
-        caster.guid,
-        spell_id,
-        caster.level as u8,
-        target,
-        true,
-        None,
+        &CastRequest {
+            client_initiated: true,
+            ..CastRequest::new(caster.guid, spell_id, caster.level as u8, target)
+        },
+        CreatureSpellCasterAdmission::Living,
     )
+    .map(|_| ())
 }
 
 pub(crate) fn apply_cast_spell_at(
@@ -158,13 +148,14 @@ pub(crate) fn apply_cast_spell_at(
     };
     begin_cast(
         ctx,
-        caster.guid,
-        spell_id,
-        caster.level as u8,
-        target,
-        true,
-        Some((x, y, z)),
+        &CastRequest {
+            client_initiated: true,
+            dest: Some((x, y, z)),
+            ..CastRequest::new(caster.guid, spell_id, caster.level as u8, target)
+        },
+        CreatureSpellCasterAdmission::Living,
     )
+    .map(|_| ())
 }
 
 pub(crate) fn do_resurrect_response(
@@ -198,11 +189,7 @@ pub(crate) fn do_cancel_cast(
 ) -> Result<(), crate::Refusal> {
     interrupt_cast(ctx, caster.guid);
     break_channel(ctx, caster.guid);
-    if caster.next_swing_spell != 0 {
-        let mut c = caster;
-        c.next_swing_spell = 0;
-        c.update(ctx);
-    }
+    crate::combat::queued_strike::interrupt_of(ctx, caster.guid);
     Ok(())
 }
 
@@ -224,48 +211,13 @@ pub(crate) fn do_cancel_aura(
             return Err(format!("spell {spell_id} is a debuff and cannot be cancelled").into());
         }
     }
-    let auras = ctx.db.game_aura();
-    let redisplay = auras
-        .by_target()
-        .filter(&player_guid)
-        .any(|a| a.spell_id == spell_id && a.eff_kind == A_TRANSFORM);
-    let to_remove: Vec<(u64, bool, bool, bool)> = auras
-        .by_target()
-        .filter(&player_guid)
+    let cancelled: Vec<Aura> = auras_on(ctx, player_guid)
         .filter(|a| a.spell_id == spell_id)
-        .map(|a| {
-            (
-                a.id,
-                aura_moves_vitals(a.eff_kind, a.eff_p0),
-                crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0),
-                crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0),
-            )
-        })
         .collect();
-    if to_remove.is_empty() {
+    if cancelled.is_empty() {
         return Err(format!("no cancelable aura {spell_id} on the caller").into());
     }
-    let mut revitalize = false;
-    let mut resheet = false;
-    let mut remount = false;
-    for (id, moves_vitals, moves_sheet, moves_mount) in to_remove {
-        crate::Aura::delete(ctx, id);
-        revitalize |= moves_vitals;
-        resheet |= moves_sheet;
-        remount |= moves_mount;
-    }
-    if revitalize {
-        recompute_vitals(ctx, player_guid);
-    }
-    if resheet {
-        recompute_sheet(ctx, player_guid);
-    }
-    if remount {
-        crate::mount::recompute_mount(ctx, player_guid);
-    }
-    if redisplay {
-        recompute_display(ctx, player_guid);
-    }
+    shed_auras(ctx, cancelled);
     Ok(())
 }
 
@@ -359,7 +311,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                             &effect,
                             a.caster_guid,
                             a.target_guid,
-                            lyracore_shared::aura::stacked_amount(a.amount, a.stacks) as f32,
+                            crate::modifiers::stacked_amount(a.amount, a.stacks) as f32,
                             a.stacks,
                         );
                         bonuses::round_damage(ctx, a.target_guid, damage)
@@ -373,7 +325,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     a.spell_id,
                     true,
                 );
-                crate::spell::SpellCastEvent::insert(
+                crate::SpellCastEvent::insert(
                     ctx,
                     SpellCastEvent {
                         damage: amount.max(0) as u32,
@@ -448,7 +400,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     .get(&a.target_guid)
                     .copied()
                     .unwrap_or(target.health);
-                let healing = lyracore_shared::aura::stacked_amount(a.amount, a.stacks);
+                let healing = crate::modifiers::stacked_amount(a.amount, a.stacks);
                 let healing = ctx
                     .db
                     .game_spell()
@@ -472,7 +424,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 let new_health = healed_value(cur, target.max_health, healing);
                 pending.insert(a.target_guid, new_health);
                 if cur < target.max_health {
-                    crate::spell::SpellCastEvent::insert(
+                    crate::SpellCastEvent::insert(
                         ctx,
                         SpellCastEvent {
                             healed: healing.max(0) as u32,
@@ -492,7 +444,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     a.target_guid,
                     energized_value(cur, target.max_power, a.amount),
                 );
-                crate::spell::SpellCastEvent::insert(
+                crate::SpellCastEvent::insert(
                     ctx,
                     SpellCastEvent {
                         energized: a.amount.max(0) as u32,
@@ -525,7 +477,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         crate::duel::complete_duel(
             ctx,
             duel_id,
-            crate::duel::duel_completion_kind::WON,
+            crate::duel::completion_kind::WON,
             winner_guid,
             loser_guid,
         );
@@ -542,9 +494,11 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         a2.update(ctx);
     }
 
-    for id in channel_end {
-        crate::Aura::delete(ctx, id);
-    }
+    let ended = channel_end
+        .into_iter()
+        .filter_map(|id| auras.id().find(id))
+        .collect();
+    shed_auras(ctx, ended);
     for (caster_guid, trigger_spell, level, channel_target) in channel_fires {
         if trigger_spell == 0 {
             continue;
@@ -567,54 +521,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         expired.len(),
         auras.count()
     );
-    let redisplay: std::collections::BTreeSet<u64> = expired
-        .iter()
-        .filter(|a| a.eff_kind == A_TRANSFORM)
-        .map(|a| a.target_guid)
-        .collect();
-    let mut revitalize: Vec<u64> = Vec::new();
-    let mut resheet: Vec<u64> = Vec::new();
-    let mut remount: Vec<u64> = Vec::new();
-    for a in &expired {
-        if aura_moves_vitals(a.eff_kind, a.eff_p0) && !revitalize.contains(&a.target_guid) {
-            revitalize.push(a.target_guid);
-        }
-        if crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0) && !resheet.contains(&a.target_guid)
-        {
-            resheet.push(a.target_guid);
-        }
-        if crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0)
-            && !remount.contains(&a.target_guid)
-        {
-            remount.push(a.target_guid);
-        }
-    }
-    for a in &expired {
-        if let Some(category) = crate::spell::stacking::dr_category_for_effect(
-            ctx,
-            a.eff_kind,
-            a.eff_p0_kind,
-            a.eff_p0,
-            a.target_guid,
-        ) {
-            crate::spell::stacking::dr_window_on_removal(ctx, a.target_guid, category, now_micros);
-        }
-    }
-    for a in &expired {
-        crate::Aura::delete(ctx, a.id);
-    }
-    for target_guid in revitalize {
-        recompute_vitals(ctx, target_guid);
-    }
-    for target_guid in resheet {
-        recompute_sheet(ctx, target_guid);
-    }
-    for target_guid in remount {
-        crate::mount::recompute_mount(ctx, target_guid);
-    }
-    for target_guid in redisplay {
-        recompute_display(ctx, target_guid);
-    }
+    shed_auras(ctx, expired);
 
     // Break auras after cadence advancement to avoid advancing or deleting them twice.
     for target_guid in dot_damaged {
@@ -660,7 +567,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
     }
     for id in expired {
         areas.id().delete(id);
-        crate::spell::DynamicObject::delete(ctx, crate::spell::cast::dynamic_object_guid(id));
+        crate::DynamicObject::delete(ctx, crate::spell::cast::dynamic_object_guid(id));
     }
 
     for a in &due {
@@ -711,24 +618,24 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 a.spell_id,
                 true,
             );
-            let (dealt, absorbed) = apply_target_damage(
+            let (dealt, absorbed) = crate::combat::deal_damage(
                 ctx,
-                t,
                 a.caster_guid,
+                t,
                 resisted,
                 crate::combat::Hit::triggered(),
             );
             if dealt > 0 || absorbed > 0 || points > resisted {
-                crate::spell::SpellCastEvent::insert(
+                crate::SpellCastEvent::insert(
                     ctx,
-                    crate::spell::SpellCastEvent {
+                    crate::SpellCastEvent {
                         target_guid: t,
                         damage: dealt,
                         school: crate::spell::school_index(a.school_mask),
                         resisted: (points.max(0) as u32).saturating_sub(resisted.max(0) as u32),
                         absorbed,
                         is_proc_log: true,
-                        ..crate::spell::SpellCastEvent::signal(
+                        ..crate::SpellCastEvent::signal(
                             ctx,
                             a.caster_guid,
                             a.spell_id,
@@ -797,6 +704,55 @@ pub(crate) fn classify_ground_tick(
 
 fn energizes_pool(eff_p0_kind: u8, eff_p0: i32, power_type: u8) -> bool {
     eff_p0_kind != P_POWER_TYPE || eff_p0 == i32::from(power_type)
+}
+
+#[cfg(feature = "conformance_test_fixture")]
+#[reducer]
+pub fn debug_stage_virtual_spell_impact(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    target_guid: u64,
+    damage: i32,
+    delay_micros: i64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    if !crate::time::is_virtual(ctx) || delay_micros <= 0 {
+        return Err("spell impact requires a running virtual clock and positive delay".into());
+    }
+    use crate::game_pending_spell_impact;
+
+    let due = crate::time::now(ctx)
+        .checked_add(TimeDuration::from_micros(delay_micros))
+        .ok_or("spell impact due time overflows")?;
+    ctx.db
+        .game_pending_spell_impact()
+        .insert(PendingSpellImpact {
+            scheduled_id: 0,
+            scheduled_at: crate::time::schedule_time(ctx, due),
+            caster_guid,
+            target_guid,
+            spell_id: 6136,
+            school_index: 0,
+            is_crit: false,
+            resisted: 0,
+            after_resist: damage,
+            triggered: false,
+        });
+    Ok(())
+}
+
+#[cfg(test)]
+mod expiry_tests {
+    use super::*;
+
+    #[test]
+    fn is_due_for_expiry_never_reaps_stealth() {
+        let expires_at = Timestamp::from_micros_since_unix_epoch(1_000_000);
+        let long_past = Timestamp::from_micros_since_unix_epoch(50_000_000);
+        assert!(!is_due_for_expiry(A_STEALTH, expires_at, expires_at));
+        assert!(!is_due_for_expiry(A_STEALTH, expires_at, long_past));
+        assert!(is_due_for_expiry(A_MOD_STAT, expires_at, long_past));
+    }
 }
 
 #[cfg(test)]

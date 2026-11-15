@@ -25,7 +25,7 @@ fn example() -> (FeatureLedger, Value) {
         ledger,
         json!({
             "schema_version": 2, "tier": "tier1", "core_commit": "1".repeat(40),
-            "harness_revision": harness_revision().to_string(), "working_tree_dirty": false, "recorded_at_unix_ms": 1,
+            "harness_revision": lyracore_conformance::harness_pin().revision.to_string(), "working_tree_dirty": false, "recorded_at_unix_ms": 1,
             "scenarios": scenarios,
         }),
     )
@@ -56,7 +56,7 @@ fn state(value: &Value, ledger: &FeatureLedger) -> State {
                 .find(|b| b.id == "taxi_single_hop")
                 .unwrap(),
             &"1".repeat(40),
-            &harness_revision().to_string(),
+            &lyracore_conformance::harness_pin().revision.to_string(),
         )
         .unwrap()
 }
@@ -633,7 +633,10 @@ fn candidate_bytes_and_provenance_must_match_the_audit_run() -> Result<()> {
     let mut bytes = std::fs::read(&candidate)?;
     bytes.push(b' ');
     std::fs::write(candidate, bytes)?;
-    for revision in [harness_revision().to_string(), "2".repeat(40)] {
+    for revision in [
+        lyracore_conformance::harness_pin().revision.to_string(),
+        "2".repeat(40),
+    ] {
         report.harness_revision = revision;
         std::fs::write(path.with_extension("md"), markdown(&report, "current")?)?;
         assert!(report

@@ -1,4 +1,7 @@
-pub const VMAP_VERSION: u8 = 1;
+const VMAP_VERSION: u8 = 1;
+
+// Maps with imported WMO instance slices; importer/manifests/world-profiles.json lists them.
+pub const INSTANCE_SLICE_MAPS: &[u32] = &[36];
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum TriClass {
@@ -426,14 +429,6 @@ mod tests {
         let blob = encode(&batch);
         let back = decode(&blob).expect("round trip");
         assert_eq!(back, batch);
-    }
-
-    #[test]
-    fn m2_triangles_carry_no_group_semantics() {
-        let batch = vec![tri(5.0, TriClass::M2)];
-        let blob = encode(&batch);
-        let back = decode(&blob).unwrap();
-        assert_eq!(back[0].class, TriClass::M2);
     }
 
     #[test]

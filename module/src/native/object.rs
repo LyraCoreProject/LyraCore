@@ -62,10 +62,9 @@ pub(crate) fn changed(ctx: &ReducerContext, old: &GameObject, object: &GameObjec
         spacetimedb::log::warn!("GameObject {} has no template", object.guid);
         return;
     };
-    let packet = lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-        Box::new(codec::build_gameobject_values(&view)),
-    ))
-    .expect("GameObject fields fit a world frame");
+    let packet = super::bounded(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+        codec::build_gameobject_values(&view),
+    )));
     let rotation = codec::build_gameobject_rotation_values(&view);
     for (opcode, body) in [(packet.opcode, packet.body), rotation] {
         super::visibility::broadcast_aoi(

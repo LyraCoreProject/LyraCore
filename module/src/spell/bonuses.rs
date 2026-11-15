@@ -1,10 +1,15 @@
 use spacetimedb::ReducerContext;
 
-use super::*;
-use crate::{game_item_template, game_world_entity};
+use lyracore_shared::spell::taxonomy::{
+    A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN, A_MOD_DAMAGE_TAKEN_FLAT,
+    A_MOD_HEALING_TAKEN, A_MOD_SCHOOL_CRIT, STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR,
+};
+
+use super::{auras_on, spell_mod, spell_power, SPELLMOD_OP_DAMAGE};
+use crate::{game_item_template, game_spell, game_world_entity, Aura, Spell, SpellEffect};
 
 fn amount(aura: &Aura) -> i32 {
-    lyracore_shared::aura::stacked_amount(aura.amount, aura.stacks)
+    crate::modifiers::stacked_amount(aura.amount, aura.stacks)
 }
 
 fn unrestricted(header: &Spell) -> bool {
@@ -37,7 +42,7 @@ fn fits_weapon(ctx: &ReducerContext, guid: u64, slot: u8, header: &Spell) -> boo
             || header.equipped_item_subclass_mask
                 & 1u32.checked_shl(u32::from(template.subclass)).unwrap_or(0)
                 != 0)
-        && (header.cast_flags & lyracore_shared::spell::taxonomy::SPELL_ATTR_ITEM_TARGET == 0
+        && (header.cast_flags & lyracore_shared::spell::taxonomy::CAST_FLAG_ITEM_TARGET == 0
             || header.equipped_item_inventory_mask == 0
             || header.equipped_item_inventory_mask
                 & 1u32
@@ -129,7 +134,7 @@ pub(crate) fn spell_damage_done_float(
     {
         return points;
     }
-    let seal = hdr.cast_flags & lyracore_shared::spell::taxonomy::SPELL_ATTR_RIGHTEOUSNESS != 0;
+    let seal = hdr.cast_flags & lyracore_shared::spell::taxonomy::CAST_FLAG_RIGHTEOUSNESS != 0;
     let power = if matches!(hdr.damage_class, 2 | 3) && !seal {
         auras_on(ctx, caster)
             .filter(|aura| {
@@ -341,7 +346,11 @@ pub(crate) fn round_damage(ctx: &ReducerContext, target: u64, damage: f32) -> i3
     let whole = damage.max(0.0) as i32;
     let fraction = damage - whole as f32;
     if fraction > 0.0
-        && f64::from(super::rolls::target_draw(ctx, target)) / 4_294_967_296.0 < f64::from(fraction)
+        && f64::from(crate::conformance_rolls::draw(
+            ctx,
+            crate::conformance_rolls::RollStream::Target(target),
+        )) / 4_294_967_296.0
+            < f64::from(fraction)
     {
         whole + 1
     } else {
@@ -358,7 +367,7 @@ pub(crate) fn spell_coefficient(
     done: bool,
 ) -> f32 {
     let coefficient =
-        if hdr.cast_flags & lyracore_shared::spell::taxonomy::SPELL_ATTR_RIGHTEOUSNESS != 0 {
+        if hdr.cast_flags & lyracore_shared::spell::taxonomy::CAST_FLAG_RIGHTEOUSNESS != 0 {
             crate::items::item_in_slot(ctx, caster, crate::items::equip_slot::MAINHAND)
                 .and_then(|item| ctx.db.game_item_template().entry().find(item.entry))
                 .map_or(0.10, |weapon| {

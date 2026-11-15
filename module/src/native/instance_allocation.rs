@@ -25,6 +25,8 @@ pub struct InstancePlacement {
     pub world: Identity,
 }
 
+crate::outside_table_catalog!(game_instance_host, game_instance_placement);
+
 #[reducer]
 pub fn operator_set_instance_host(
     ctx: &ReducerContext,
