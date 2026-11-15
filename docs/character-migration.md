@@ -86,7 +86,7 @@ rerun never brings back a Character that its player deleted.
 | Bank bags, large bags | This model has no bank bag slots and addresses 18 slots in each bag. A bank bag, its contents and Items past slot 18 of a bag move to the first free bank, backpack or bag slot whose bag can hold them, or the Character is refused. |
 | Item state | Entry, stack, durability (capped at the template), permanent enchantment, random property and soulbound. A Letter Copy gets its own Item Text row. |
 | Spells | Kept. A spell that is a talent rank becomes a talent row at its highest rank instead; world entry relearns the rank spell. Spent points cannot exceed the level's points. |
-| Skills, action buttons | Kept. Buttons are 0 to 119. |
+| Skills, action buttons | Kept. First login adds a missing combat skill at the level cap, as for any existing Character. Buttons are 0 to 119. |
 | Reputation | Earned standing is added to the faction's base standing. The faction must have a reputation index. |
 | Quests | Rewarded quests and up to 20 quest log entries. A rewarded quest that cannot be repeated stays out of the log. Only a timed quest keeps its deadline. Kill and GameObject counters restart at zero, because the catalogue does not keep each objective's source slot; item objectives count the inventory as usual. |
 | Hunter pet | The active Hunter pet keeps its creature, name, rename right, level, XP, loyalty and happiness (capped at 1,000,000). Its care clock starts at migration. Only a Hunter may bring one, and the creature must be an imported beast. LyraCore has no stable, so stabled pets are reported and stay behind. Pet spells and summoned pets such as Warlock demons do not migrate. |
