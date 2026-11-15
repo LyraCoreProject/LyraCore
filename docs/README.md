@@ -40,5 +40,6 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [agents/cross-repo-cli.md](./agents/cross-repo-cli.md) | How-to | A change spans this repository and `lyracore-cli` |
 | [adr/0005-1-12-conformance.md](./adr/0005-1-12-conformance.md) | Decision record | You change conformance scenarios, evidence or the Feature Ledger |
 | [adr/0007-statistical-roll-conformance.md](./adr/0007-statistical-roll-conformance.md) | Decision record | You derive expected roll rates or change statistical conformance |
+| [adr/0008-per-feature-cross-shard-retries.md](./adr/0008-per-feature-cross-shard-retries.md) | Decision record | You add or change a cross-Shard retry or a revision fence |
 | [adr/](./adr/) | Decision records | You want the reason behind a standing decision |
 | [verify-lyracore checks](../.claude/skills/verify-lyracore/checks.md) | Checklist | A change needs a check on a real 1.12.1 client |

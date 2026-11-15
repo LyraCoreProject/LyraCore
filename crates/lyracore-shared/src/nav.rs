@@ -197,6 +197,8 @@ pub fn step_hit(
 }
 
 pub const NAV_RES: f32 = CELL_SIZE / WALK_DIM as f32;
+// How far from a target off walkable ground a range search looks for a point to approach.
+const APPROACH_SEARCH_YD: f32 = 20.0;
 
 // Classify before f32 rounding can move the coordinate across a cell edge.
 fn grid_coord(coord: f32) -> Option<u32> {
@@ -228,6 +230,94 @@ fn grid_walkable(
             (gy % dimension) as usize,
         )
     })
+}
+
+fn walkable_within(
+    cache: &mut Cache<impl FnMut(u16, u16) -> Option<NavCellData>>,
+    (tx, ty): (u32, u32),
+    to: (f32, f32),
+    radius: f32,
+) -> bool {
+    let reach = (radius / NAV_RES).ceil() as i64;
+    (-reach..=reach).any(|dy| {
+        (-reach..=reach).any(|dx| {
+            let (x, y) = (i64::from(tx) + dx, i64::from(ty) + dy);
+            x >= 0
+                && y >= 0
+                && (grid_to_world(x as u32) - to.0).hypot(grid_to_world(y as u32) - to.1) <= radius
+                && grid_walkable(cache, x as u32, y as u32)
+        })
+    })
+}
+
+/// The walkable node nearest `to` in the first ring of nodes around it that holds one.
+fn nearest_walkable(
+    cache: &mut Cache<impl FnMut(u16, u16) -> Option<NavCellData>>,
+    (tx, ty): (u32, u32),
+    to: (f32, f32),
+    radius: f32,
+) -> Option<(u32, u32)> {
+    let reach = (radius / NAV_RES).ceil() as i64;
+    for ring in 1..=reach {
+        let mut nearest: Option<((u32, u32), f32)> = None;
+        for dy in -ring..=ring {
+            for dx in -ring..=ring {
+                if dx.abs() != ring && dy.abs() != ring {
+                    continue;
+                }
+                let (x, y) = (i64::from(tx) + dx, i64::from(ty) + dy);
+                if x < 0 || y < 0 || !grid_walkable(cache, x as u32, y as u32) {
+                    continue;
+                }
+                let (x, y) = (x as u32, y as u32);
+                let distance = (grid_to_world(x) - to.0).hypot(grid_to_world(y) - to.1);
+                if nearest.is_none_or(|(_, best)| distance < best) {
+                    nearest = Some(((x, y), distance));
+                }
+            }
+        }
+        if let Some((node, _)) = nearest {
+            return Some(node);
+        }
+    }
+    None
+}
+
+/// The node to approach when no walkable node lies within `stop_dist` of the target; `Err` is a
+/// search that finished without expanding.
+fn approach(
+    cache: &mut Cache<impl FnMut(u16, u16) -> Option<NavCellData>>,
+    from: (f32, f32),
+    target: (u32, u32),
+    to: (f32, f32),
+    stop_dist: f32,
+) -> Result<Option<(u32, u32)>, LegSearch> {
+    if stop_dist == 0.0
+        || grid_walkable(cache, target.0, target.1)
+        || walkable_within(cache, target, to, stop_dist)
+    {
+        return Ok(None);
+    }
+    let blocked = LegSearch {
+        outcome: LegOutcome::Blocked,
+        expansions: 0,
+    };
+    let Some((x, y)) = nearest_walkable(cache, target, to, APPROACH_SEARCH_YD) else {
+        return Err(blocked);
+    };
+    let point = (grid_to_world(x), grid_to_world(y));
+    // A mover as near the target as the approach node has no leg left to walk.
+    let gap = |a: (f32, f32)| (a.0 - to.0).hypot(a.1 - to.1);
+    if gap(from) <= gap(point) + NAV_RES / 2.0 {
+        return Err(blocked);
+    }
+    if line_walkable(cache, from, point) {
+        return Err(LegSearch {
+            outcome: LegOutcome::Partial(vec![point]),
+            expansions: 0,
+        });
+    }
+    Ok(Some((x, y)))
 }
 
 // Exempt the start cell so a mover can leave a conservative obstruction margin.
@@ -419,6 +509,15 @@ fn search_leg(
     if stop_dist == 0.0 && !target_walkable {
         return blocked(0);
     }
+    let approach = match approach(&mut cache, from, (tx, ty), to, stop_dist) {
+        Ok(approach) => approach,
+        Err(search) => return search,
+    };
+    let approached = approach.is_some();
+    let (tx, ty, to, stop_dist, target_walkable) = approach
+        .map_or((tx, ty, to, stop_dist, target_walkable), |(x, y)| {
+            (x, y, (grid_to_world(x), grid_to_world(y)), 0.0, true)
+        });
     // A 5/4 heuristic weight trades shortest paths for fewer expansions.
     use std::cmp::Reverse;
     use std::collections::{BinaryHeap, HashMap};
@@ -560,7 +659,7 @@ fn search_leg(
         path.push(to);
     }
     LegSearch {
-        outcome: if found {
+        outcome: if found && !approached {
             LegOutcome::Complete(path)
         } else {
             LegOutcome::Partial(path)
@@ -952,6 +1051,79 @@ mod runtime_tests {
         let search = find_leg_in_range_ex(&mut fetch, at(10, 10), at(50, 50), 0.0, 4096);
         assert_eq!(search.outcome, LegOutcome::Blocked);
         assert_eq!(search.expansions, 1);
+    }
+
+    fn cell_with_unwalkable_patch() -> ((u16, u16), NavCellData) {
+        let ((cx, cy), mut cell) = walled_cell();
+        cell.walk.fill(0xFF);
+        cell.obs.fill(OBS_NONE);
+        for ny in 20..56 {
+            for nx in 20..50 {
+                walk_set(&mut cell.walk, nx, ny, false);
+            }
+        }
+        ((cx, cy), cell)
+    }
+
+    const CHASE_CONTACT_YD: f32 = 1.278;
+
+    fn search_toward_patch_centre(from: (f32, f32)) -> LegSearch {
+        let ((cx, cy), cell) = cell_with_unwalkable_patch();
+        let mut fetch = |x, y| (x == cx && y == cy).then(|| cell.clone());
+        find_leg_in_range_ex(&mut fetch, from, at(33, 38), CHASE_CONTACT_YD, 4096)
+    }
+
+    fn ends_at_patch_edge(path: &[(f32, f32)]) -> bool {
+        let (end, edge) = (*path.last().unwrap(), at(19, 38));
+        (end.0 - edge.0).hypot(end.1 - edge.1) < 0.01
+    }
+
+    #[test]
+    fn a_range_search_approaches_a_target_off_walkable_ground_at_its_edge() {
+        let search = search_toward_patch_centre(at(5, 38));
+        let LegOutcome::Partial(path) = search.outcome else {
+            panic!("a target on the unwalkable patch is approached, not reached");
+        };
+        assert_eq!(search.expansions, 0);
+        assert_eq!(path.len(), 1);
+        assert!(ends_at_patch_edge(&path));
+    }
+
+    #[test]
+    fn a_range_search_routes_around_unwalkable_ground_to_the_approach_node() {
+        let search = search_toward_patch_centre(at(60, 38));
+        let LegOutcome::Partial(path) = search.outcome else {
+            panic!("a target on the unwalkable patch is approached, not reached");
+        };
+        assert!(search.expansions > 0);
+        assert!(ends_at_patch_edge(&path));
+    }
+
+    #[test]
+    fn a_range_search_from_the_approach_node_is_blocked() {
+        let search = search_toward_patch_centre(at(19, 38));
+        assert_eq!(search.outcome, LegOutcome::Blocked);
+        assert_eq!(search.expansions, 0);
+    }
+
+    #[test]
+    fn a_range_search_from_unwalkable_ground_nearer_the_target_is_blocked() {
+        let search = search_toward_patch_centre(at(25, 38));
+        assert_eq!(search.outcome, LegOutcome::Blocked);
+        assert_eq!(search.expansions, 0);
+    }
+
+    #[test]
+    fn a_range_search_with_no_walkable_ground_near_the_target_is_blocked() {
+        let ((cx, cy), mut cell) = walled_cell();
+        let mut sealed = cell.clone();
+        sealed.walk.fill(0);
+        cell.walk.fill(0);
+        walk_set(&mut cell.walk, 10, 38, true);
+        let mut fetch = |x, y| Some(if (x, y) == (cx, cy) { &cell } else { &sealed }.clone());
+        let search = find_leg_in_range_ex(&mut fetch, at(10, 38), at(50, 38), 2.5, 4096);
+        assert_eq!(search.outcome, LegOutcome::Blocked);
+        assert_eq!(search.expansions, 0);
     }
 
     #[test]
