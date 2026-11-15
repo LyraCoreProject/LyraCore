@@ -39,12 +39,14 @@ fn creature(shard: &Standalone, reaction: u8) -> String {
     shard.assert_sql(&format!(
         "DELETE FROM game_creature_ai_state WHERE creature_guid = {target}"
     ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_creature_ai_state \
-         (creature_guid,phase,lifecycle_id,engagement_id,ranged_distance,ranged_angle,\
-          ranged_posture_active,definition_revision,active_object,react_state,melee_enabled) \
-         VALUES ({target},0,0,1,0,0,false,0,false,{reaction},true)"
-    ));
+    shard.insert_row(
+        "game_creature_ai_state",
+        &[
+            ("creature_guid", &target),
+            ("engagement_id", &1),
+            ("react_state", &reaction),
+        ],
+    );
     target
 }
 
@@ -227,7 +229,14 @@ fn a_resisted_hostile_spell_keeps_initial_threat_without_a_loot_tag() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 60 WHERE guid = {target}"
     ));
-    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES (1,{target},1)"));
+    shard.insert_row(
+        "game_conformance_spell_random",
+        &[
+            ("character_guid", &1),
+            ("target_guid", &target),
+            ("state", &1),
+        ],
+    );
     shard.assert_call("debug_cast_at", &["1", "133", &target]);
     let threats = shard.query_rows(&format!(
         "SELECT threat FROM game_threat WHERE creature_guid = {target} AND source_guid = 1"
@@ -276,15 +285,17 @@ fn taxi_takeoff_clears_a_passive_creatures_threat_only_combat() {
             != 0
     };
     assert!(in_combat(&target));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_active_taxi_flight \
-         (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,\
-          current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded,first_destination_node_index) \
-         VALUES (1,{},{},{},1147,25,0,0,0,0,0,false,1)",
-        taxi::PATH_ID,
-        taxi::SOURCE_NODE_STORAGE_ID,
-        taxi::DESTINATION_NODE_STORAGE_ID
-    ));
+    shard.insert_row(
+        "game_active_taxi_flight",
+        &[
+            ("character_guid", &1),
+            ("path_id", &taxi::PATH_ID),
+            ("source_node_id", &taxi::SOURCE_NODE_STORAGE_ID),
+            ("destination_node_id", &taxi::DESTINATION_NODE_STORAGE_ID),
+            ("mount_display_id", &1147),
+            ("fare", &25),
+        ],
+    );
     shard.assert_call("gw_arm_taxi_flight", &[r#"{"guid":1,"ownership":null}"#]);
     assert!(shard
         .query_rows(&format!(
@@ -414,7 +425,14 @@ fn retained_passive_threat_retries_attack_start_after_becoming_defensive() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 60 WHERE guid = {target}"
     ));
-    shard.assert_sql(&format!("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES (1,{target},1)"));
+    shard.insert_row(
+        "game_conformance_spell_random",
+        &[
+            ("character_guid", &1),
+            ("target_guid", &target),
+            ("state", &1),
+        ],
+    );
     shard.assert_call("debug_cast_at", &["1", "133", &target]);
     assert_eq!(
         shard.query_rows(&format!(

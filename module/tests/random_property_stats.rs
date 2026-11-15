@@ -3,7 +3,7 @@ mod support;
 use std::collections::BTreeMap;
 
 use lyracore_package_delta::fixture_ids::{BATTERED_BUCKLER, TEST_WOLF_ENTRY};
-use support::{poll_until, Standalone, POLL_TIMEOUT};
+use support::{poll_until, Field, Standalone, POLL_TIMEOUT};
 
 const ITEM: &str = "5090050";
 const POOL: u32 = 5090200;
@@ -21,30 +21,43 @@ fn fixture(name: &str, class: u8) -> Standalone {
         "UPDATE game_character SET class = {class} WHERE guid = 1"
     ));
     shard.assert_call("debug_spawn_player_entity", &["1"]);
-    shard.assert_sql(&format!(
-        "INSERT INTO game_item_random_property (property_id,enchant_id_1,enchant_id_2,enchant_id_3,suffix) VALUES ({PROPERTY},{ENCHANT},0,0,'of the Stat Fixture')"
-    ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_item_property_weight (id,pool_id,property_id,weight) VALUES ({POOL},{POOL},{PROPERTY},10000)"
-    ));
+    shard.insert_row(
+        "game_item_random_property",
+        &[
+            ("property_id", &PROPERTY),
+            ("enchant_id_1", &ENCHANT),
+            ("suffix", &"of the Stat Fixture"),
+        ],
+    );
+    shard.insert_row(
+        "game_item_property_weight",
+        &[
+            ("id", &POOL),
+            ("pool_id", &POOL),
+            ("property_id", &PROPERTY),
+            ("weight", &10000),
+        ],
+    );
     shard
 }
 
 fn enchantments(shard: &Standalone, effects: &[(u8, i32, u32)]) {
-    let values = effects
-        .iter()
-        .enumerate()
-        .map(|(index, (kind, amount, school_mask))| {
-            format!(
-                "({},{ENCHANT},{index},{kind},{amount},0,{school_mask})",
-                u64::from(ENCHANT) * 256 + index as u64
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    shard.assert_sql(&format!(
-        "INSERT INTO game_item_enchantment (id,enchant_id,effect_index,kind,amount,spell_id,school_mask) VALUES {values}"
-    ));
+    let ids: Vec<_> = (0..effects.len())
+        .map(|index| (u64::from(ENCHANT) * 256 + index as u64, index))
+        .collect();
+    let mut rows: Vec<[Field; 6]> = Vec::new();
+    for ((id, index), (kind, amount, school_mask)) in ids.iter().zip(effects) {
+        rows.push([
+            ("id", id),
+            ("enchant_id", &ENCHANT),
+            ("effect_index", index),
+            ("kind", kind),
+            ("amount", amount),
+            ("school_mask", school_mask),
+        ]);
+    }
+    let rows: Vec<&[Field]> = rows.iter().map(|row| &row[..]).collect();
+    shard.insert_rows("game_item_enchantment", &rows);
 }
 
 fn grant_and_equip(shard: &Standalone) {
@@ -69,13 +82,27 @@ fn readout(shard: &Standalone, key: &str) -> BTreeMap<String, String> {
 }
 
 fn create_damage_spell(shard: &Standalone, spell_id: u32, school_mask: u8) {
-    shard.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell_id},'Stat fixture damage',0,0,0,0,0,40,0,{school_mask},0,0,0,0,0,1,0,true,0,0,0,0,0,0,0,0)"
-    ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({},{spell_id},0,1,100,0,0.0,0,1,0.0,0,0,0,0,0,0,0,false,0.0)",
-        u64::from(spell_id) * 4
-    ));
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell_id),
+            ("name", &"Stat fixture damage"),
+            ("range_yd", &40),
+            ("school_mask", &school_mask),
+            ("spell_level", &1),
+            ("is_negative", &true),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &(u64::from(spell_id) * 4)),
+            ("spell_id", &spell_id),
+            ("kind", &1),
+            ("base_points", &100),
+            ("target", &1),
+        ],
+    );
 }
 
 #[test]
@@ -227,7 +254,10 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 10 WHERE guid = {wolf}"
     ));
-    shard.assert_sql("INSERT INTO game_conformance_spell_random (character_guid,target_guid,state) VALUES (1,1,0)");
+    shard.insert_row(
+        "game_conformance_spell_random",
+        &[("character_guid", &1), ("target_guid", &1)],
+    );
     for (index, (school, seeds)) in [
         (2u8, [32u64, 125]),
         (4, [32, 125]),
@@ -327,8 +357,25 @@ fn spell_power_selects_school_and_healing_power_only_affects_heals() {
         );
     }
 
-    shard.assert_sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (5090233,'Stat fixture heal',0,0,0,0,0,40,0,2,0,0,0,0,0,1,0,false,0,0,0,0,0,0,0,0)");
-    shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360932,5090233,0,2,100,0,0.0,0,0,0.0,0,0,0,0,0,0,0,false,0.0)");
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &5090233),
+            ("name", &"Stat fixture heal"),
+            ("range_yd", &40),
+            ("school_mask", &2),
+            ("spell_level", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &20360932),
+            ("spell_id", &5090233),
+            ("kind", &2),
+            ("base_points", &100),
+        ],
+    );
     shard
         .assert_sql("UPDATE game_world_entity SET simulation_indexed = false, health = 100, max_health = 10000 WHERE guid = 1");
     shard.assert_call("debug_cast_at", &["1", "5090233", "1"]);

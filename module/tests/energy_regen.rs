@@ -104,22 +104,32 @@ fn a_rogue_regains_twenty_energy_every_two_seconds() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn adrenaline_rush_doubles_each_energy_tick() {
     let shard = rogue_at_zero_energy("energy-regen-adrenaline-rush");
-    shard.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
-         cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
-         aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
-         VALUES ({ADRENALINE_RUSH}, 'Adrenaline Rush', {ENERGY}, 0, 0, 0, 300000, 0, 60000, 1, \
-         0, 0, 0, 0, 0, 20, 0, false, 0, 0, 8, 0, 0, 0, 0, 0)"
-    ));
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &ADRENALINE_RUSH),
+            ("name", &"Adrenaline Rush"),
+            ("power_type", &ENERGY),
+            ("cooldown_ms", &300000),
+            ("duration_ms", &60000),
+            ("school_mask", &1),
+            ("spell_level", &20),
+            ("family_name", &8),
+        ],
+    );
     let effect_id = packed_spell_effect_id(ADRENALINE_RUSH, 0);
-    shard.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
-         per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-         VALUES ({effect_id}, {ADRENALINE_RUSH}, 0, {A_MOD_POWER_REGEN_PCT}, 100, 0, 0.0, 0, \
-         {T_SELF}, 0.0, 0, 0, 0, {ENERGY}, {P_POWER_TYPE}, 0, 0, false, 0.0)"
-    ));
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &effect_id),
+            ("spell_id", &ADRENALINE_RUSH),
+            ("kind", &A_MOD_POWER_REGEN_PCT),
+            ("base_points", &100),
+            ("target", &T_SELF),
+            ("p_0", &ENERGY),
+            ("p_0_kind", &P_POWER_TYPE),
+        ],
+    );
     shard.assert_call(
         "debug_force_cast",
         &[&PLAYER.to_string(), &ADRENALINE_RUSH.to_string()],

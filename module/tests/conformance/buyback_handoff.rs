@@ -634,8 +634,13 @@ fn transported_buyback_text_is_remapped_and_each_reference_is_released_once() {
         .unwrap();
     source.assert_call("debug_spawn_player_entity", &[&other.to_string()]);
     let kept = grant(&source, other, FIXTURE_BLADE, 1);
-    source.assert_sql(
-        "INSERT INTO game_item_text (id,text,letters) VALUES (5090001,'A note in buyback',2)",
+    source.insert_row(
+        "game_item_text",
+        &[
+            ("id", &5090001),
+            ("text", &"A note in buyback"),
+            ("letters", &2),
+        ],
     );
     for guid in [item, kept] {
         source.assert_sql(&format!(

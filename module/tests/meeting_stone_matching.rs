@@ -1110,11 +1110,16 @@ fn a_stone_add_into_the_party_that_owns_the_instance_cancels_the_countdown() {
     assert_eq!(countdowns(&realm), [CHARLIE], "the leaver counts down");
 
     for guid in [ALPHA, CHARLIE] {
-        realm.assert_sql(&format!(
-            "INSERT INTO game_account_claim (account_id, generation, request_nonce, \
-             character_guid, expires_micros, closed) VALUES ({guid}, 1, {guid}, {guid}, \
-             4102444800000000, false)"
-        ));
+        realm.insert_row(
+            "game_account_claim",
+            &[
+                ("account_id", &guid),
+                ("generation", &1),
+                ("request_nonce", &guid),
+                ("character_guid", &guid),
+                ("expires_micros", &4102444800000000u64),
+            ],
+        );
     }
     join_party(
         &realm,

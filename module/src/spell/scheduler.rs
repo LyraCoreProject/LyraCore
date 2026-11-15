@@ -19,23 +19,7 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
         .game_pending_cast()
         .scheduled_id()
         .delete(sched.scheduled_id);
-    let result = check_pending_cast_los(ctx, sched.caster_guid, sched.spell_id, sched.target_guid)
-        .and_then(|()| {
-            resolve_cast_at(
-                ctx,
-                sched.caster_guid,
-                sched.spell_id,
-                sched.level,
-                sched.target_guid,
-                true,
-                false,
-                sched
-                    .has_dest
-                    .then_some((sched.dest_x, sched.dest_y, sched.dest_z)),
-                (sched.item_target_guid != 0).then_some(sched.item_target_guid),
-                sched.cooldown_category,
-            )
-        });
+    let result = complete_cast(ctx, &sched.request());
     clear_dead_callback_cast_admission(ctx, sched.caster_guid, sched.spell_id);
     if let Err(e) = &result {
         log::info!(
@@ -132,13 +116,13 @@ pub(crate) fn do_cast_spell(
     };
     begin_cast(
         ctx,
-        caster.guid,
-        spell_id,
-        caster.level as u8,
-        target,
-        true,
-        None,
+        &CastRequest {
+            client_initiated: true,
+            ..CastRequest::new(caster.guid, spell_id, caster.level as u8, target)
+        },
+        CreatureSpellCasterAdmission::Living,
     )
+    .map(|_| ())
 }
 
 pub(crate) fn apply_cast_spell_at(
@@ -163,13 +147,14 @@ pub(crate) fn apply_cast_spell_at(
     };
     begin_cast(
         ctx,
-        caster.guid,
-        spell_id,
-        caster.level as u8,
-        target,
-        true,
-        Some((x, y, z)),
+        &CastRequest {
+            client_initiated: true,
+            dest: Some((x, y, z)),
+            ..CastRequest::new(caster.guid, spell_id, caster.level as u8, target)
+        },
+        CreatureSpellCasterAdmission::Living,
     )
+    .map(|_| ())
 }
 
 pub(crate) fn do_resurrect_response(

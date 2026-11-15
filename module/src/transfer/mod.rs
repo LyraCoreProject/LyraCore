@@ -699,8 +699,7 @@ impl ShardLedger for CtxShard<'_> {
 
 impl BeginSink for CtxShard<'_> {
     fn has_pending_transaction(&self, guid: u64) -> bool {
-        crate::native::realm_petition::pending(self.ctx, guid)
-            || crate::native::realm_auction::pending(self.ctx, guid)
+        crate::native::payment_pending(self.ctx, guid)
     }
     fn has_active_taxi_flight(&self, guid: u64) -> bool {
         crate::taxi::is_in_flight(self.ctx, guid)

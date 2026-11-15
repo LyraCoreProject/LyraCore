@@ -334,17 +334,13 @@ pub(super) fn submit(
     if character.connection != connection.to_u128() {
         return Err("World Session changed".into());
     }
-    let mut frame = Vec::new();
-    message
-        .write_unencrypted_client(&mut frame)
-        .map_err(|error| error.to_string())?;
-    let opcode = u32::from_le_bytes(frame[2..6].try_into().expect("encoded client header"));
+    let (opcode, body) = realm_party::client_frame(message)?;
     ctx.db.game_realm_guild_command().insert(RealmGuildCommand {
         id: 0,
         database: remote::Identity(realm),
         facts: encode(&facts(ctx, character).ok_or("Character is not owned here")?),
         opcode,
-        body: frame[6..].to_vec(),
+        body,
     });
     Ok(true)
 }
@@ -495,31 +491,14 @@ pub fn realm_guild_command_answered(
     }
     let Err(error) = result else { return Ok(()) };
     let connection = ConnectionId::from_u128(facts.character.connection);
-    if ctx
-        .db
-        .game_native_player()
-        .connection_id()
-        .find(connection)
-        .is_none_or(|player| player.character_guid != facts.character.guid)
-    {
-        return Ok(());
-    }
-    if let Some(packets) = super::rollback::replies_in(&error) {
-        for (opcode, body) in packets {
-            super::send_raw(ctx, connection, opcode, body, false);
-        }
-    } else {
-        super::send(ctx, connection, unavailable(), false)?;
+    if super::rollback::connection_holds(ctx, connection, facts.character.guid) {
+        super::rollback::replay_refusal(ctx, connection, &error, unavailable());
     }
     Ok(())
 }
 
 pub(super) fn unavailable() -> ServerOpcodeMessage {
-    ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(
-        lyracore_protocol::messages::vanilla::SMSG_NOTIFICATION {
-            notification: "Guild request unavailable. Please try again.".into(),
-        },
-    ))
+    super::rollback::unavailable("Guild")
 }
 
 fn snapshot(ctx: &ReducerContext, guild_id: u32) -> Snapshot {

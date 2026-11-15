@@ -446,9 +446,14 @@ fn mute_kick_and_ban_remove_or_silence_members() {
     join(&realm, &actor("4"), "Raiders", HUMAN);
 
     let raiders = channel_id(&realm, "Raiders");
-    realm.assert_sql(&format!(
-        "INSERT INTO game_chat_channel_ban (id, channel_id, character_guid) VALUES (9101, {raiders}, 4)"
-    ));
+    realm.insert_row(
+        "game_chat_channel_ban",
+        &[
+            ("id", &9101),
+            ("channel_id", &raiders),
+            ("character_guid", &4),
+        ],
+    );
     let second_ban = notices_of(&realm, || {
         op(
             &realm,

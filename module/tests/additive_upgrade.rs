@@ -19,7 +19,19 @@ const LEGACY_NOTIFICATIONS: &[&str] = &[
 fn assert_saved_taxi_flight_upgrade(baseline: &[u8]) {
     let mut shard = Standalone::start("taxi-resume-schema-upgrade");
     shard.publish_module_bytes(baseline);
-    shard.assert_sql_exact("INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros) VALUES (42,6,2,4,6852,110,17,1800000000000000)");
+    shard.insert_row(
+        "game_active_taxi_flight",
+        &[
+            ("character_guid", &42),
+            ("path_id", &6),
+            ("source_node_id", &2),
+            ("destination_node_id", &4),
+            ("mount_display_id", &6852),
+            ("fare", &110),
+            ("current_node_index", &17),
+            ("started_micros", &1800000000000000i64),
+        ],
+    );
     let before = shard
         .query_rows("SELECT * FROM game_active_taxi_flight WHERE character_guid = 42")
         .pop()
@@ -191,20 +203,28 @@ fn populated_old_module(baseline: &[u8]) -> Standalone {
          unit_flags = {in_combat}, combat_until_ms = {} WHERE guid = 1",
         u64::MAX
     ));
-    shard.assert_sql_exact(
-        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
-         cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
-         aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
-         VALUES (5090100, 'Upgrade fixture', 0, 5, 0, 0, 0, 30, 3000, 1, 0, 0, 0, 0, \
-         0, 1, 0, false, 0, 0, 0, 0, 0, 0, 0, 18000)",
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &5090100),
+            ("name", &"Upgrade fixture"),
+            ("cost", &5),
+            ("range_yd", &30),
+            ("duration_ms", &3000),
+            ("school_mask", &1),
+            ("spell_level", &1),
+            ("max_duration_ms", &18000),
+        ],
     );
-    shard.assert_sql_exact(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
-         per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-         VALUES (20360400, 5090100, 0, 1, 10, 0, 0.0, 0, 0, 0.0, 0, 0, 0, \
-         0, 0, 0, 0, false, 2.5)",
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &20360400),
+            ("spell_id", &5090100),
+            ("kind", &1),
+            ("base_points", &10),
+            ("points_per_combo", &2.5),
+        ],
     );
     send_emote(&shard, 34);
     shard

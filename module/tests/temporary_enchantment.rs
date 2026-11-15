@@ -150,20 +150,26 @@ fn stage(standalone: &mut Standalone, seconds: i32) -> u64 {
         5,
         (0, P_NONE),
     );
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell_enchant_charges (spell_id, charges) \
-         VALUES ({POISON}, {INSTANT_POISON_CHARGES})"
-    ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_item_enchantment (id, enchant_id, effect_index, kind, amount, spell_id, \
-         school_mask) VALUES ({}, {INSTANT_POISON_ENCHANTMENT}, 0, {COMBAT_SPELL}, 0, \
-         {INSTANT_POISON_PROC}, 0)",
-        u64::from(INSTANT_POISON_ENCHANTMENT) << 8
-    ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_enchant_proc_rate (spell_id, ppm_rate) \
-         VALUES ({INSTANT_POISON_PROC}, {CERTAIN_PPM:.1})"
-    ));
+    standalone.insert_row(
+        "game_spell_enchant_charges",
+        &[("spell_id", &POISON), ("charges", &INSTANT_POISON_CHARGES)],
+    );
+    standalone.insert_row(
+        "game_item_enchantment",
+        &[
+            ("id", &(u64::from(INSTANT_POISON_ENCHANTMENT) << 8)),
+            ("enchant_id", &INSTANT_POISON_ENCHANTMENT),
+            ("kind", &COMBAT_SPELL),
+            ("spell_id", &INSTANT_POISON_PROC),
+        ],
+    );
+    standalone.insert_row(
+        "game_enchant_proc_rate",
+        &[
+            ("spell_id", &INSTANT_POISON_PROC),
+            ("ppm_rate", &CERTAIN_PPM),
+        ],
+    );
 
     standalone.assert_sql(&format!(
         "UPDATE game_item_template SET delay_ms = {WEAPON_DELAY_MS}, spellid_1 = 0 \
@@ -190,22 +196,28 @@ fn stage_spell(
     (p0, p0_kind): (i32, u8),
 ) {
     let is_negative = target != T_SELF;
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
-         cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
-         aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
-         VALUES ({spell_id}, '{name}', 0, 0, 0, 0, 0, 5, 0, 1, 0, 0, 0, 0, 0, \
-         0, 0, {is_negative}, 0, 0, 0, 0, 0, 0, 0, 0)"
-    ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
-         per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-         VALUES ({}, {spell_id}, 0, {kind}, {base_points}, 0, 0.0, 0, {target}, \
-         0.0, 0, 0, 0, {p0}, {p0_kind}, 0, 0, false, 0.0)",
-        packed_spell_effect_id(spell_id, 0)
-    ));
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell_id),
+            ("name", &name),
+            ("range_yd", &5),
+            ("school_mask", &1),
+            ("is_negative", &is_negative),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell_id, 0)),
+            ("spell_id", &spell_id),
+            ("kind", &kind),
+            ("base_points", &base_points),
+            ("target", &target),
+            ("p_0", &p0),
+            ("p_0_kind", &p0_kind),
+        ],
+    );
 }
 
 fn item_guid(standalone: &Standalone, entry: u32) -> u64 {

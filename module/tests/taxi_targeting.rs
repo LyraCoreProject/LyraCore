@@ -34,15 +34,17 @@ fn a_taxi_passenger_leaves_combat_and_cannot_be_targeted_until_landing() {
         &[&wolf, &TEST_ROOT_SPELL.to_string(), "1"],
     );
     shard.assert_call("debug_engage", &[&wolf, "1"]);
-    shard.assert_sql(&format!(
-        "INSERT INTO game_active_taxi_flight \
-         (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,\
-          current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded,first_destination_node_index) \
-         VALUES (1,{},{},{},1147,25,0,0,0,0,0,false,1)",
-        taxi::PATH_ID,
-        taxi::SOURCE_NODE_STORAGE_ID,
-        taxi::DESTINATION_NODE_STORAGE_ID
-    ));
+    shard.insert_row(
+        "game_active_taxi_flight",
+        &[
+            ("character_guid", &1),
+            ("path_id", &taxi::PATH_ID),
+            ("source_node_id", &taxi::SOURCE_NODE_STORAGE_ID),
+            ("destination_node_id", &taxi::DESTINATION_NODE_STORAGE_ID),
+            ("mount_display_id", &1147),
+            ("fare", &25),
+        ],
+    );
     shard.assert_call("gw_arm_taxi_flight", &[r#"{"guid":1,"ownership":null}"#]);
     assert!(
         shard

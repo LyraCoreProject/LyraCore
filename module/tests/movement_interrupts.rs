@@ -35,22 +35,26 @@ fn fixture(name: &str) -> (Standalone, [f32; 3]) {
         (SHADOWMELD, a_stealth, 0, 2),
         (STEALTH, a_stealth, 0, 0),
     ] {
-        shard.assert_sql(&format!(
-            "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
-             cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
-             aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-             family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
-             VALUES ({spell_id}, 'Fixture {spell_id}', 0, 0, 0, 0, 0, 0, 600000, 1, 0, 0, 0, \
-             {aura_interrupt}, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, 0, 0)"
-        ));
-        shard.assert_sql(&format!(
-            "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, \
-             die_sides, per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, \
-             effect_mechanic, p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-             VALUES ({}, {spell_id}, 0, {kind}, 0, 0, 0.0, 0, 0, 0.0, 0, 0, 0, {p0}, 3, 0, 0, \
-             false, 0.0)",
-            packed_spell_effect_id(spell_id, 0)
-        ));
+        shard.insert_row(
+            "game_spell",
+            &[
+                ("spell_id", &spell_id),
+                ("name", &format!("Fixture {spell_id}")),
+                ("duration_ms", &600000),
+                ("school_mask", &1),
+                ("aura_interrupt", &aura_interrupt),
+            ],
+        );
+        shard.insert_row(
+            "game_spell_effect",
+            &[
+                ("id", &packed_spell_effect_id(spell_id, 0)),
+                ("spell_id", &spell_id),
+                ("kind", &kind),
+                ("p_0", &p0),
+                ("p_0_kind", &3),
+            ],
+        );
     }
     let rows = shard.query_rows("SELECT x, y, z FROM game_world_entity WHERE guid = 1");
     let [x, y, z] = ["x", "y", "z"].map(|axis| number(&rows[0], axis));

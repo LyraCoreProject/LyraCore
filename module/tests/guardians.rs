@@ -17,11 +17,16 @@ fn stage(duration_ms: u32) -> (Standalone, String) {
         shard.assert_sql(&format!(
             "DELETE FROM game_faction_template WHERE id = {id}"
         ));
-        shard.assert_sql(&format!(
-            "INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,\
-             enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) \
-             VALUES ({id},{faction},{group},{friends},{enemies},0,0,0,0,0,0,0,0)"
-        ));
+        shard.insert_row(
+            "game_faction_template",
+            &[
+                ("id", &id),
+                ("faction", &faction),
+                ("faction_group", &group),
+                ("friend_group", &friends),
+                ("enemy_group", &enemies),
+            ],
+        );
     }
     shard.assert_call(
         "debug_spawn_at_feet",
@@ -51,18 +56,28 @@ fn stage(duration_ms: u32) -> (Standalone, String) {
             .unwrap(),
         ],
     );
-    shard.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,\
-         range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,\
-         attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,\
-         proc_flags,proc_chance,proc_charges,max_duration_ms) \
-         VALUES ({SPELL},'Guardian fixture',0,0,0,0,0,0,{duration_ms},1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,{duration_ms})"
-    ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,\
-         period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) \
-         VALUES ({},{SPELL},0,39,2,1,0.0,0,0,0.0,0,0,0,{TEST_WOLF_ENTRY},9,0,0,false,0.0)", packed_spell_effect_id(SPELL, 0)
-    ));
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &SPELL),
+            ("name", &"Guardian fixture"),
+            ("duration_ms", &duration_ms),
+            ("school_mask", &1),
+            ("max_duration_ms", &duration_ms),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(SPELL, 0)),
+            ("spell_id", &SPELL),
+            ("kind", &39),
+            ("base_points", &2),
+            ("die_sides", &1),
+            ("p_0", &TEST_WOLF_ENTRY),
+            ("p_0_kind", &9),
+        ],
+    );
     shard.assert_call(
         "debug_cast_spell_at",
         &[&owner, &SPELL.to_string(), &owner, "0", "0", "0"],

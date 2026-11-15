@@ -98,22 +98,28 @@ fn create_character(shard: &Standalone, account: &str, name: &str, class: &str) 
 }
 
 fn soulstone_item(shard: &Standalone, owner: u64) {
-    shard.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
-         cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
-         aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
-         VALUES ({SOULSTONE_AURA}, 'Soulstone Resurrection', 0, 0, 0, 0, 0, 30, 1800000, 32, \
-         0, 0, 0, 0, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, 0, 0)"
-    ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
-         per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-         VALUES ({}, {SOULSTONE_AURA}, 0, {A_SELF_RESURRECT}, 0, 1, 0.0, 0, {T_TARGET_ALLY}, \
-         0.0, 0, 0, 0, {SOULSTONE_SELF_RES}, {P_SPELL_ID}, 0, 0, false, 0.0)",
-        packed_spell_effect_id(SOULSTONE_AURA, 0)
-    ));
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &SOULSTONE_AURA),
+            ("name", &"Soulstone Resurrection"),
+            ("range_yd", &30),
+            ("duration_ms", &1800000),
+            ("school_mask", &32),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(SOULSTONE_AURA, 0)),
+            ("spell_id", &SOULSTONE_AURA),
+            ("kind", &A_SELF_RESURRECT),
+            ("die_sides", &1),
+            ("target", &T_TARGET_ALLY),
+            ("p_0", &SOULSTONE_SELF_RES),
+            ("p_0_kind", &P_SPELL_ID),
+        ],
+    );
     shard.assert_sql(&format!(
         "UPDATE game_item_template SET spellid_1 = {SOULSTONE_AURA}, spelltrigger_1 = 0 \
          WHERE entry = {HEARTHSTONE}"

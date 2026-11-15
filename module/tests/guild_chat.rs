@@ -29,9 +29,16 @@ fn edit_rank(rank_id: u32, rights: u32, name: &str) -> String {
 }
 
 fn insert_member(realm: &Standalone, guild_id: &str, guid: u64, rank_id: u32, name: &str) {
-    realm.assert_sql(&format!(
-        "INSERT INTO game_guild_member (character_guid,guild_id,rank_id,name,public_note,officer_note,realm_account_id,joined_micros) VALUES ({guid},{guild_id},{rank_id},'{name}','','',{guid},0)"
-    ));
+    realm.insert_row(
+        "game_guild_member",
+        &[
+            ("character_guid", &guid),
+            ("guild_id", &guild_id),
+            ("rank_id", &rank_id),
+            ("name", &name),
+            ("realm_account_id", &guid),
+        ],
+    );
 }
 
 fn seeded_guild(realm: &Standalone) -> String {

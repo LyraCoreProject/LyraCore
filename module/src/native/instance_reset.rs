@@ -2,13 +2,13 @@ use std::collections::BTreeSet;
 
 use lyracore_protocol::messages::vanilla::{
     opcodes::ServerOpcodeMessage, InstanceResetFailedReason, Map, SMSG_INSTANCE_RESET,
-    SMSG_INSTANCE_RESET_FAILED, SMSG_NOTIFICATION,
+    SMSG_INSTANCE_RESET_FAILED,
 };
 use spacetimedb::{
     reducer, sats::bsatn, table, ConnectionId, ReducerContext, SpacetimeType, Table,
 };
 
-use super::{directory, game_native_player, realm_party, realm_party::PartyCharacter, Rollback};
+use super::{directory, realm_party, realm_party::PartyCharacter, Rollback};
 use crate::{
     group::{self, game_group},
     instance::{self, ResetBinding, ResetFailure, ResetOutcome},
@@ -260,26 +260,18 @@ fn finish(
 ) -> Result<(), String> {
     let connection = ConnectionId::from_u128(reset.actor.connection);
     if ctx.timestamp.to_micros_since_unix_epoch() >= reset.expires
-        || !ctx
-            .db
-            .game_native_player()
-            .connection_id()
-            .find(connection)
-            .is_some_and(|player| player.character_guid == reset.actor.guid)
+        || !super::rollback::connection_holds(ctx, connection, reset.actor.guid)
     {
         return Ok(());
     }
     match result {
         Some(results) => reply(ctx, connection, results),
-        None => super::send(
-            ctx,
-            connection,
-            ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(SMSG_NOTIFICATION {
-                notification: "Instance reset request unavailable. Please try again.".into(),
-            })),
-            false,
-        ),
+        None => super::send(ctx, connection, unavailable(), false),
     }
+}
+
+pub(super) fn unavailable() -> ServerOpcodeMessage {
+    super::rollback::unavailable("Instance reset")
 }
 
 fn reply(

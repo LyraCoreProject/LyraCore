@@ -1,6 +1,6 @@
 mod support;
 
-use support::{actor, refused, Standalone};
+use support::{actor, refused, Field, Standalone};
 
 const TEAM_ALLIANCE: u32 = 469;
 const TEAM_HORDE: u32 = 67;
@@ -106,20 +106,11 @@ fn stage_charter_template(shard: &Standalone) {
     row.insert("max_count".into(), "1".into());
     row.insert("bonding".into(), "1".into());
     let columns = "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property";
-    let values = columns
+    let fields: Vec<Field> = columns
         .split(',')
-        .map(|key| {
-            if key == "name" {
-                format!("'{}'", row[key])
-            } else {
-                row[key].clone()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    shard.assert_sql(&format!(
-        "INSERT INTO game_item_template ({columns}) VALUES ({values})"
-    ));
+        .map(|key| (key, &row[key] as _))
+        .collect();
+    shard.insert_row("game_item_template", &fields);
 }
 
 fn fixture(name: &str, copper: u32) -> (Standalone, String) {

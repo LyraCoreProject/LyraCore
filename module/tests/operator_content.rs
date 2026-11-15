@@ -413,7 +413,7 @@ fn an_instance_copy_skips_the_guid_of_a_dormant_operator_spawn() {
         FIRST_OPERATOR_CHICKEN
     )
     .is_some()));
-    shard.assert_sql("INSERT INTO game_creature_spawn_map (map_id) VALUES (36)");
+    shard.insert_row("game_creature_spawn_map", &[("map_id", &36)]);
     shard.assert_call(
         "operator_create_creature_spawn",
         &[
@@ -442,10 +442,10 @@ fn an_instance_copy_skips_the_guid_of_a_dormant_operator_spawn() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_population_member_can_move_but_not_be_deleted() {
     let shard = realm("operator-content-population-member");
-    shard.assert_sql(&format!(
-        "INSERT INTO game_creature_population_member (source_guid, population_id, entry, \
-         choices, chance_bp, event_ids) VALUES ({CHICKEN}, 7, 0, '', 0, '')"
-    ));
+    shard.insert_row(
+        "game_creature_population_member",
+        &[("source_guid", &CHICKEN), ("population_id", &7)],
+    );
     let text = refusal(
         &shard,
         "operator_delete_creature_spawn",

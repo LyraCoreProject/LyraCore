@@ -21,13 +21,30 @@ pub(super) fn configure(shard: &Standalone) {
     for (spell, kind, points, attributes) in
         [(EQUIP, 0xa0, 7, 64), (USE, 0xa2, 50, 0), (FORM, 0x14, 0, 0)]
     {
-        shard.assert_sql(&format!(
-            "INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Equip fixture {spell}',0,0,0,0,0,0,1000,1,1,0,5,0,{attributes},1,0,false,0,0,0,0,0,0,0,0)"
-        ));
-        shard.assert_sql(&format!(
-            "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({},{spell},0,{kind},{points},0,0.0,0,0,0.0,0,0,0,2,1,0,0,false,0.0)",
-            u64::from(spell) * 4
-        ));
+        shard.insert_row(
+            "game_spell",
+            &[
+                ("spell_id", &spell),
+                ("name", &format!("Equip fixture {spell}")),
+                ("duration_ms", &1000),
+                ("school_mask", &1),
+                ("dispel_type", &1),
+                ("max_stacks", &5),
+                ("attributes", &attributes),
+                ("spell_level", &1),
+            ],
+        );
+        shard.insert_row(
+            "game_spell_effect",
+            &[
+                ("id", &(u64::from(spell) * 4)),
+                ("spell_id", &spell),
+                ("kind", &kind),
+                ("base_points", &points),
+                ("p_0", &2),
+                ("p_0_kind", &1),
+            ],
+        );
     }
     shard.assert_sql(&format!(
         "UPDATE game_spell_effect SET equip_supported = true WHERE spell_id = {EQUIP}"
@@ -712,13 +729,35 @@ fn equip_review_repair_discards_guardian_after_reimport_marks_it_inert() {
 }
 
 fn review_spell(shard: &Standalone, spell: u32, effects: &[(u8, i32, i32, u8)], supported: bool) {
-    shard.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Source shape {spell}',0,0,0,0,0,0,1000,1,0,0,0,0,192,0,0,false,0,0,0,0,0,0,0,0)"));
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell),
+            ("name", &format!("Source shape {spell}")),
+            ("duration_ms", &1000),
+            ("school_mask", &1),
+            ("attributes", &192),
+        ],
+    );
     shard.assert_sql(&format!(
         "UPDATE game_spell SET duration_index = 21 WHERE spell_id = {spell}"
     ));
     for (index, &(kind, points, parameter, tag)) in effects.iter().enumerate() {
         let id = u64::from(spell) * 4 + index as u64;
-        shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient,equip_supported) VALUES ({id},{spell},{index},{kind},{points},1,0.0,0,0,0.0,0,0,0,{parameter},{tag},0,0,false,0.0,-1.0,{supported})"));
+        shard.insert_row(
+            "game_spell_effect",
+            &[
+                ("id", &id),
+                ("spell_id", &spell),
+                ("effect_index", &index),
+                ("kind", &kind),
+                ("base_points", &points),
+                ("die_sides", &1),
+                ("p_0", &parameter),
+                ("p_0_kind", &tag),
+                ("equip_supported", &supported),
+            ],
+        );
     }
 }
 

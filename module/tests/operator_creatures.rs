@@ -11,7 +11,7 @@ fn realm(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
-    shard.assert_sql("INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (50909,0,0,0,0,0,0,0,0,0,0,0,0)");
+    shard.insert_row("game_faction_template", &[("id", &50909)]);
     shard
 }
 
@@ -235,9 +235,17 @@ fn loot_lists_replace_imported_ids_skip_bands_and_preserve_owned_rows() {
         ),
         ("game_skinning_loot", "skin_loot_id", "setSkinningLoot", ""),
     ] {
-        let flag = if extra.is_empty() { "" } else { ",false" };
         shard.assert_sql(&format!("DELETE FROM {table} WHERE {key} = 620"));
-        shard.assert_sql(&format!("INSERT INTO {table} (id,{key},item_entry,chance_bp,count,group_id{extra}) VALUES (5089999,620,25,10000,1,0{flag})"));
+        shard.insert_row(
+            table,
+            &[
+                ("id", &5089999),
+                (key, &620),
+                ("item_entry", &25),
+                ("chance_bp", &10000),
+                ("count", &1),
+            ],
+        );
         let mut item = loot();
         if extra.is_empty() {
             item.as_object_mut().unwrap().remove("quest_only");
@@ -249,14 +257,41 @@ fn loot_lists_replace_imported_ids_skip_bands_and_preserve_owned_rows() {
         assert_eq!(rows.len(), 1);
         assert_eq!(number::<u64>(&rows[0], "id"), 5_100_000);
         assert_eq!(number::<u32>(&rows[0], "count"), 2);
-        shard.assert_sql(&format!("INSERT INTO {table} (id,{key},item_entry,chance_bp,count,group_id{extra}) VALUES (8999999,621,25,10000,1,0{flag}),(9999999,621,25,10000,1,0{flag})"));
+        shard.insert_rows(
+            table,
+            &[
+                &[
+                    ("id", &8999999),
+                    (key, &621),
+                    ("item_entry", &25),
+                    ("chance_bp", &10000),
+                    ("count", &1),
+                ],
+                &[
+                    ("id", &9999999),
+                    (key, &621),
+                    ("item_entry", &25),
+                    ("chance_bp", &10000),
+                    ("count", &1),
+                ],
+            ],
+        );
         apply(&shard, json!([edit]));
         assert_eq!(
             number::<u64>(&shard.query_rows(&query)[0], "id"),
             10_000_000
         );
         if variant != "setCreatureLoot" {
-            shard.assert_sql(&format!("INSERT INTO {table} (id,{key},item_entry,chance_bp,count,group_id{extra}) VALUES (9000001,620,25,10000,1,0{flag})"));
+            shard.insert_row(
+                table,
+                &[
+                    ("id", &9000001),
+                    (key, &620),
+                    ("item_entry", &25),
+                    ("chance_bp", &10000),
+                    ("count", &1),
+                ],
+            );
             let before = shard.query_rows(&query);
             refusal(&shard, json!([edit]), "Package or Fixture-Reserved");
             assert_eq!(shard.query_rows(&query), before);
@@ -271,7 +306,21 @@ fn loot_lists_replace_imported_ids_skip_bands_and_preserve_owned_rows() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn spell_lists_and_fallback_cast_replace_and_remove() {
     let shard = realm("operator-creatures-spells");
-    shard.assert_sql("INSERT INTO game_creature_spell (id,creature_entry,spell_id,priority,condition,condition_value) VALUES (9999999,620,133,0,0,0),(10999999,621,133,0,0,0)");
+    shard.insert_rows(
+        "game_creature_spell",
+        &[
+            &[
+                ("id", &9999999),
+                ("creature_entry", &620),
+                ("spell_id", &133),
+            ],
+            &[
+                ("id", &10999999),
+                ("creature_entry", &621),
+                ("spell_id", &133),
+            ],
+        ],
+    );
     let spells = json!([
         {"spell_id": 133, "priority": 7, "condition": 1, "condition_value": 25},
         {"spell_id": 133, "priority": 0, "condition": 2, "condition_value": 0}

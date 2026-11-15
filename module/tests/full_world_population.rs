@@ -21,10 +21,25 @@ fn legacy_pools_choose_one_position_and_keep_instance_lives_independent() {
     let mut packed = Vec::new();
     for (pool, map, count, event) in [(1069, 0, 8, ""), (46330, 230, 4, ""), (1163, 0, 3, "27")] {
         let population = (2_u64 << 32) + pool;
-        shard.assert_sql(&format!("INSERT INTO game_creature_population (population_id,max_count,world_state_condition,world_state_expression,flags,entries,is_pool) VALUES ({population},1,0,0,0,'',true)"));
+        shard.insert_row(
+            "game_creature_population",
+            &[
+                ("population_id", &population),
+                ("max_count", &1),
+                ("is_pool", &true),
+            ],
+        );
         for index in 0..count {
             let guid = (0xF130u64 << 48) | (51000u64 << 24) | (pool * 100 + index);
-            shard.assert_sql(&format!("INSERT INTO game_creature_population_member (source_guid,population_id,entry,choices,chance_bp,event_ids) VALUES ({guid},{population},{TEST_WOLF_ENTRY},'',0,'{event}')"));
+            shard.insert_row(
+                "game_creature_population_member",
+                &[
+                    ("source_guid", &guid),
+                    ("population_id", &population),
+                    ("entry", &TEST_WOLF_ENTRY),
+                    ("event_ids", &event),
+                ],
+            );
             packed.push(format!("{guid},{TEST_WOLF_ENTRY},{map},10,20,30,0,0,1"));
         }
     }
@@ -143,10 +158,16 @@ fn all_dungeon_populations_have_independent_spawn_and_patrol_lifecycles() {
     }
     for (index, &map_id) in DUNGEON_MAPS.iter().enumerate() {
         let waypoint_id = 5_090_000 + index * 1000;
-        shard.assert_sql(&format!(
-            "INSERT INTO game_creature_waypoint (id, creature_guid, x, y, z) VALUES ({waypoint_id}, {}, 11, 20, 30)",
-            source_guid(map_id)
-        ));
+        shard.insert_row(
+            "game_creature_waypoint",
+            &[
+                ("id", &waypoint_id),
+                ("creature_guid", &source_guid(map_id)),
+                ("x", &11),
+                ("y", &20),
+                ("z", &30),
+            ],
+        );
         let instance_id = 1000 + index;
         shard.assert_call(
             "ensure_instance",
@@ -212,11 +233,7 @@ fn all_dungeon_populations_have_independent_spawn_and_patrol_lifecycles() {
             .len(),
         1
     );
-    shard.assert_sql("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES (5099000,33,0,0,0,0,0,'Fixture dungeon')");
-    shard.assert_sql("INSERT INTO game_area_trigger (id,map_id,x,y,z,radius,box_length,box_width,box_height,box_yaw) VALUES (5099000,33,10,20,30,1,0,0,0,0)");
-    shard.assert_sql("INSERT INTO game_areatrigger_teleport (trigger_id,target_map,x,y,z,o,name) VALUES (5099000,0,100,200,30,0,'Fixture exit')");
-    shard.assert_sql("INSERT INTO game_graveyard (id,map_id,x,y,z,o,name) VALUES (5099001,0,10,20,30,0,'Near dungeon coordinates'),(5099002,0,110,200,30,0,'Near outside entrance')");
-    shard.assert_sql("INSERT INTO game_graveyard_zone (row_id,safe_loc_id,zone_id,faction) VALUES (5099001,5099001,5099000,0),(5099002,5099002,5099000,0)");
+    seed_dungeon_exit(&shard);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_call("debug_teleport", &["1", "33", "10", "20", "30", "0"]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
@@ -230,6 +247,72 @@ fn all_dungeon_populations_have_independent_spawn_and_patrol_lifecycles() {
     assert_eq!(ghost["y"].parse::<f32>().unwrap(), 200.0);
 }
 
+fn seed_dungeon_exit(shard: &Standalone) {
+    shard.insert_row(
+        "game_area",
+        &[
+            ("id", &5099000),
+            ("map_id", &33),
+            ("name", &"Fixture dungeon"),
+        ],
+    );
+    shard.insert_row(
+        "game_area_trigger",
+        &[
+            ("id", &5099000),
+            ("map_id", &33),
+            ("x", &10),
+            ("y", &20),
+            ("z", &30),
+            ("radius", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_areatrigger_teleport",
+        &[
+            ("trigger_id", &5099000),
+            ("x", &100),
+            ("y", &200),
+            ("z", &30),
+            ("name", &"Fixture exit"),
+        ],
+    );
+    shard.insert_rows(
+        "game_graveyard",
+        &[
+            &[
+                ("id", &5099001),
+                ("x", &10),
+                ("y", &20),
+                ("z", &30),
+                ("name", &"Near dungeon coordinates"),
+            ],
+            &[
+                ("id", &5099002),
+                ("x", &110),
+                ("y", &200),
+                ("z", &30),
+                ("name", &"Near outside entrance"),
+            ],
+        ],
+    );
+    shard.insert_rows(
+        "game_graveyard_zone",
+        &[
+            &[
+                ("row_id", &5099001),
+                ("safe_loc_id", &5099001),
+                ("zone_id", &5099000),
+            ],
+            &[
+                ("row_id", &5099002),
+                ("safe_loc_id", &5099002),
+                ("zone_id", &5099000),
+            ],
+        ],
+    );
+}
+
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_selected_world_entry_keeps_its_source_and_uses_its_own_guid_and_patrol() {
@@ -240,9 +323,28 @@ fn a_selected_world_entry_keeps_its_source_and_uses_its_own_guid_and_patrol() {
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     let source = source_guid(0);
     let selected = guid::creature(PROFESSION_TRAINER_ENTRY, guid::creature_spawn_id(source));
-    shard.assert_sql("INSERT INTO game_creature_population (population_id,max_count,world_state_condition,world_state_expression,flags,entries,is_pool) VALUES (5099000,1,0,0,0,'',false)");
-    shard.assert_sql(&format!("INSERT INTO game_creature_population_member (source_guid,population_id,entry,choices,chance_bp,event_ids) VALUES ({source},5099000,0,'{PROFESSION_TRAINER_ENTRY}',0,'')"));
-    shard.assert_sql(&format!("INSERT INTO game_creature_waypoint (id,creature_guid,x,y,z) VALUES (5099000,{source},11,20,30)"));
+    shard.insert_row(
+        "game_creature_population",
+        &[("population_id", &5099000), ("max_count", &1)],
+    );
+    shard.insert_row(
+        "game_creature_population_member",
+        &[
+            ("source_guid", &source),
+            ("population_id", &5099000),
+            ("choices", &PROFESSION_TRAINER_ENTRY),
+        ],
+    );
+    shard.insert_row(
+        "game_creature_waypoint",
+        &[
+            ("id", &5099000),
+            ("creature_guid", &source),
+            ("x", &11),
+            ("y", &20),
+            ("z", &30),
+        ],
+    );
     let packed =
         serde_json::to_string(&format!("{source},{TEST_WOLF_ENTRY},0,10,20,30,0,2,1")).unwrap();
     for _ in 0..2 {

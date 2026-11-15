@@ -18,10 +18,15 @@ pub fn subscribe_with_fence(shard: &Standalone, queries: &[&str]) -> TableSubscr
     shard.assert_sql(&format!(
         "DELETE FROM game_package_config WHERE id = {SUBSCRIPTION_MARKER}"
     ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_package_config (id, package_name, key, value) \
-         VALUES ({SUBSCRIPTION_MARKER}, 'fixture.subscription', 'transaction', 'initial')"
-    ));
+    shard.insert_row(
+        "game_package_config",
+        &[
+            ("id", &SUBSCRIPTION_MARKER),
+            ("package_name", &"fixture.subscription"),
+            ("key", &"transaction"),
+            ("value", &"initial"),
+        ],
+    );
     let marker_query =
         format!("SELECT * FROM game_package_config WHERE id = {SUBSCRIPTION_MARKER}");
     let mut queries = queries.to_vec();

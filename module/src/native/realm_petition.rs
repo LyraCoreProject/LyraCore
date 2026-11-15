@@ -19,20 +19,16 @@ use super::{
     realm_guild::game_guild_character, NativeWorldConnection, Rollback,
 };
 use crate::game_item_instance;
-use crate::{
-    game_character,
-    guild::{
-        self,
-        fee::{
-            self, GuildCharterPurchase, GuildEmblem, GuildEmblemPurchase, GuildFeeRequest,
-            GuildPayment,
-        },
-        petition::{
-            self, game_guild_petition, game_guild_petition_signature, GuildPetition,
-            GuildPetitionOffer, GuildPetitionRename, GuildPetitionSign, GuildPetitionSignature,
-        },
-        GuildOp,
+use crate::guild::{
+    self,
+    fee::{
+        self, GuildCharterPurchase, GuildEmblem, GuildEmblemPurchase, GuildFeeRequest, GuildPayment,
     },
+    petition::{
+        self, game_guild_petition, game_guild_petition_signature, GuildPetition,
+        GuildPetitionOffer, GuildPetitionRename, GuildPetitionSign, GuildPetitionSignature,
+    },
+    GuildOp,
 };
 
 // Opcode one is private to Realm guild commands; client opcodes start above it in this path.
@@ -327,20 +323,8 @@ pub(super) fn answered(
     };
     if let Err(error) = &result {
         let connection = ConnectionId::from_u128(connection);
-        if ctx
-            .db
-            .game_native_player()
-            .connection_id()
-            .find(connection)
-            .is_some_and(|player| player.character_guid == guid)
-        {
-            if let Some(packets) = super::rollback::replies_in(error) {
-                for (opcode, body) in packets {
-                    super::send_raw(ctx, connection, opcode, body, false);
-                }
-            } else {
-                super::send(ctx, connection, realm_guild::unavailable(), false)?;
-            }
+        if super::rollback::connection_holds(ctx, connection, guid) {
+            super::rollback::replay_refusal(ctx, connection, error, realm_guild::unavailable());
         }
     }
     row.outcome = Some(result);
@@ -361,7 +345,7 @@ fn settle(ctx: &ReducerContext, guid: u64) {
         return;
     }
     if !accepted && row.copper != 0 {
-        row.copper = refund(ctx, guid, row.copper);
+        row.copper = crate::helpers::credit_purse(ctx, guid, row.copper);
         if row.copper != 0 {
             table.guid().update(row);
             retry_later(ctx, guid);
@@ -423,22 +407,6 @@ fn retry_later(ctx: &ReducerContext, guid: u64) {
             scheduled_at: ScheduleAt::Time(ctx.timestamp + TimeDuration::from_micros(1_000_000)),
             guid,
         });
-}
-
-fn refund(ctx: &ReducerContext, guid: u64, copper: u32) -> u32 {
-    if let Some(mut entity) = crate::helpers::acting_entity_by_guid(ctx, guid) {
-        let credited = copper.min(u32::MAX - entity.money);
-        entity.money += credited;
-        entity.update(ctx);
-        copper - credited
-    } else if let Some(mut character) = crate::helpers::character_by_guid(ctx, guid) {
-        let credited = copper.min(u32::MAX - character.money);
-        character.money += credited;
-        ctx.db.game_character().guid().update(character);
-        copper - credited
-    } else {
-        copper
-    }
 }
 
 #[reducer]

@@ -566,22 +566,24 @@ fn running_out_of_ammo_keeps_a_queued_raptor_strike() {
 }
 
 fn stage_form(standalone: &Standalone, spell_id: u32, name: &str, stance: u8) {
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
-         cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
-         aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
-         VALUES ({spell_id}, '{name}', 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, false, 0, \
-         0, 0, 0, 0, 0, 0, 0)"
-    ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
-         per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-         VALUES ({}, {spell_id}, 0, {E_SET_STANCE}, 0, 0, 0.0, 0, {T_SELF}, 0.0, 0, 0, 0, \
-         {stance}, 0, 0, 0, false, 0.0)",
-        packed_spell_effect_id(spell_id, 0)
-    ));
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell_id),
+            ("name", &name),
+            ("school_mask", &1),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell_id, 0)),
+            ("spell_id", &spell_id),
+            ("kind", &E_SET_STANCE),
+            ("target", &T_SELF),
+            ("p_0", &stance),
+        ],
+    );
 }
 
 #[test]
@@ -685,23 +687,29 @@ fn stage_on_next_swing_spell(standalone: &Standalone, strike: QueuedStrike) {
         cooldown_ms,
         stances,
     } = strike;
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
-         cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
-         aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
-         VALUES ({spell_id}, '{name}', {power_type}, {cost}, 0, 0, {cooldown_ms}, 5, 0, 1, 0, 0, \
-         0, 0, 0, 0, 0, \
-         false, 0, {stances}, 0, 0, 0, 0, 0, 0)"
-    ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
-         per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-         VALUES ({}, {spell_id}, 0, {E_NEXT_SWING}, 11, 0, 0.0, 0, {T_TARGET_ENEMY}, 0.0, 0, 0, 0, \
-         0, 0, 0, 0, false, 0.0)",
-        packed_spell_effect_id(spell_id, 0)
-    ));
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell_id),
+            ("name", &name),
+            ("power_type", &power_type),
+            ("cost", &cost),
+            ("cooldown_ms", &cooldown_ms),
+            ("range_yd", &5),
+            ("school_mask", &1),
+            ("stances", &stances),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell_id, 0)),
+            ("spell_id", &spell_id),
+            ("kind", &E_NEXT_SWING),
+            ("base_points", &11),
+            ("target", &T_TARGET_ENEMY),
+        ],
+    );
 }
 
 fn spawn_target(standalone: &Standalone) -> u64 {

@@ -297,9 +297,15 @@ fn creature_spell_updates_cannot_hide_their_fixture_creature_target() {
         1,
         "the imported target must exist"
     );
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_creature_spell (id, creature_entry, spell_id, priority, condition, condition_value) VALUES ({FIXTURE_TARGETED_CREATURE_SPELL}, {TEST_WOLF_ENTRY}, {REAL_SPELL}, 10, 0, 0)"
-    ));
+    standalone.insert_row(
+        "game_creature_spell",
+        &[
+            ("id", &FIXTURE_TARGETED_CREATURE_SPELL),
+            ("creature_entry", &TEST_WOLF_ENTRY),
+            ("spell_id", &REAL_SPELL),
+            ("priority", &10),
+        ],
+    );
 
     let partial = apply(
         &standalone,
@@ -720,12 +726,15 @@ fn seed_broadcast_texts(standalone: &Standalone) {
         (KELRIS_TEXT, "Ah, sweet innocence."),
         (ORDINARY_TEXT, "Halt."),
     ] {
-        standalone.assert_sql(&format!(
-            "INSERT INTO game_creature_ai_broadcast_text \
-             (id, male_text, female_text, chat_type, language_id, emote_delay_1_ms, emote_id_1, \
-             emote_delay_2_ms, emote_id_2, emote_delay_3_ms, emote_id_3) \
-             VALUES ({id}, '{line}', '{line}', 1, 0, 0, 0, 0, 0, 0, 0)"
-        ));
+        standalone.insert_row(
+            "game_creature_ai_broadcast_text",
+            &[
+                ("id", &id),
+                ("male_text", &line),
+                ("female_text", &line),
+                ("chat_type", &1),
+            ],
+        );
     }
 }
 

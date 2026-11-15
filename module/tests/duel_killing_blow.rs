@@ -50,15 +50,21 @@ fn a_duel_ending_swing_is_no_killing_blow() {
     standalone.assert_sql(&format!(
         "UPDATE game_world_entity SET orientation = 0.0, godmode = true WHERE guid = {PLAYER}"
     ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_duel (id, flag_guid, flag_entry, initiator_guid, challenged_guid, \
-         map_id, instance_id, flag_x, flag_y, flag_z, flag_orientation, state, \
-         countdown_deadline_micros, initiator_out_of_bounds_deadline_micros, \
-         challenged_out_of_bounds_deadline_micros, created_at_micros) \
-         VALUES ({DUEL}, 0, 21680, {PLAYER}, {rival}, {}, {}, {x}, {y}, {z}, 0.0, {ACTIVE}, \
-         0, 0, 0, 0)",
-        player["map_id"], player["instance_id"]
-    ));
+    standalone.insert_row(
+        "game_duel",
+        &[
+            ("id", &DUEL),
+            ("flag_entry", &21680),
+            ("initiator_guid", &PLAYER),
+            ("challenged_guid", &rival),
+            ("map_id", &player["map_id"]),
+            ("instance_id", &player["instance_id"]),
+            ("flag_x", &x),
+            ("flag_y", &y),
+            ("flag_z", &z),
+            ("state", &ACTIVE),
+        ],
+    );
 
     let events = subscribe_with_fence(
         &standalone,

@@ -2,7 +2,7 @@ use std::io::Cursor;
 use std::time::Duration;
 
 use lyracore_package_delta::fixture_ids::{FIXTURE_JERKY, SCENARIO_VENDOR_ENTRY, TEST_WOLF_ENTRY};
-use lyracore_test_support::{ReducerConnection, Standalone};
+use lyracore_test_support::{Field, ReducerConnection, Standalone};
 use serde::Deserialize;
 use serde_json::json;
 use serde_json::value::RawValue;
@@ -96,7 +96,24 @@ fn native_login_calls_nearby_pack_assistance() {
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_sql("DELETE FROM game_faction_template WHERE id = 1 OR id = 14");
-    shard.assert_sql("INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (1,1,3,2,12,0,0,0,0,0,0,0,0),(14,14,8,0,1,0,0,0,0,0,0,0,0)");
+    shard.insert_rows(
+        "game_faction_template",
+        &[
+            &[
+                ("id", &1),
+                ("faction", &1),
+                ("faction_group", &3),
+                ("friend_group", &2),
+                ("enemy_group", &12),
+            ],
+            &[
+                ("id", &14),
+                ("faction", &14),
+                ("faction_group", &8),
+                ("enemy_group", &1),
+            ],
+        ],
+    );
     shard.assert_sql(&format!(
         "UPDATE game_character SET x = 0, y = 0, z = 0, orientation = 0, level = 1 WHERE guid = {character}"
     ));
@@ -1001,7 +1018,30 @@ fn taxi_crosses_capital_and_zone_boundaries_with_area_data() {
     use wire_client::decode::Field;
 
     let (shard, passenger, _) = fixture("taxi-zone-boundaries");
-    shard.assert_sql("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES (1519,0,0,1,256,0,2,'Stormwind'),(12,0,0,2,0,0,2,'Elwynn Forest'),(40,0,0,3,0,0,2,'Westfall')");
+    shard.insert_rows(
+        "game_area",
+        &[
+            &[
+                ("id", &1519),
+                ("area_bit", &1),
+                ("flags", &256),
+                ("faction_group", &2),
+                ("name", &"Stormwind"),
+            ],
+            &[
+                ("id", &12),
+                ("area_bit", &2),
+                ("faction_group", &2),
+                ("name", &"Elwynn Forest"),
+            ],
+            &[
+                ("id", &40),
+                ("area_bit", &3),
+                ("faction_group", &2),
+                ("name", &"Westfall"),
+            ],
+        ],
+    );
     let y_cell = lyracore_shared::terrain::cell_index(0.0).unwrap();
     let mut areas = BTreeMap::new();
     for x in (0..=200).step_by(5) {
@@ -1113,7 +1153,16 @@ fn rest_area_rejects_hostile_characters_in_an_enemy_capital() {
         ["guid"]
         .parse()
         .unwrap();
-    shard.assert_sql("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES (1519,0,0,1,256,0,2,'Stormwind')");
+    shard.insert_row(
+        "game_area",
+        &[
+            ("id", &1519),
+            ("area_bit", &1),
+            ("flags", &256),
+            ("faction_group", &2),
+            ("name", &"Stormwind"),
+        ],
+    );
     let cell = lyracore_shared::terrain::cell_index(0.0).unwrap();
     let heights = vec!["0"; 145].join(":");
     shard.assert_call(
@@ -1143,9 +1192,26 @@ fn rest_area_rejects_a_flyer_above_the_goldshire_inn() {
     use std::collections::BTreeSet;
 
     let (shard, passenger, _) = fixture("inn-overflight");
-    shard.assert_sql("INSERT INTO game_area_trigger (id,map_id,x,y,z,radius,box_length,box_width,box_height,box_yaw) VALUES (5090902,0,-9464,42,56,20,0,0,0,0)");
-    shard.assert_sql("INSERT INTO game_tavern_area_trigger (trigger_id) VALUES (5090902)");
-    shard.assert_sql("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES (12,0,0,1,0,0,2,'Elwynn Forest')");
+    shard.insert_row(
+        "game_area_trigger",
+        &[
+            ("id", &5090902),
+            ("x", &-9464),
+            ("y", &42),
+            ("z", &56),
+            ("radius", &20),
+        ],
+    );
+    shard.insert_row("game_tavern_area_trigger", &[("trigger_id", &5090902)]);
+    shard.insert_row(
+        "game_area",
+        &[
+            ("id", &12),
+            ("area_bit", &1),
+            ("faction_group", &2),
+            ("name", &"Elwynn Forest"),
+        ],
+    );
     let y_cell = lyracore_shared::terrain::cell_index(42.0).unwrap();
     let heights = vec!["0"; 145].join(":");
     let chunks = (-9500..=-9440)
@@ -1192,8 +1258,19 @@ fn rest_area_rejects_a_flyer_above_the_goldshire_inn() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn tavern_rest_uses_imported_trigger_geometry() {
     let (shard, character, _) = fixture("tavern-rest");
-    shard.assert_sql("INSERT INTO game_area_trigger (id,map_id,x,y,z,radius,box_length,box_width,box_height,box_yaw) VALUES (5090902,0,-9464,42,56,0,8,6,4,0)");
-    shard.assert_sql("INSERT INTO game_tavern_area_trigger (trigger_id) VALUES (5090902)");
+    shard.insert_row(
+        "game_area_trigger",
+        &[
+            ("id", &5090902),
+            ("x", &-9464),
+            ("y", &42),
+            ("z", &56),
+            ("box_length", &8),
+            ("box_width", &6),
+            ("box_height", &4),
+        ],
+    );
+    shard.insert_row("game_tavern_area_trigger", &[("trigger_id", &5090902)]);
     shard.assert_sql(&format!(
         "UPDATE game_character SET map_id = 0, x = -9459, y = 42, z = 56 WHERE guid = {character}"
     ));
@@ -1243,7 +1320,15 @@ fn world_entry_resets_rest_state_before_bonus_threshold() {
 fn neutral_capital_does_not_rest_on_ffa_pvp_realm() {
     let (shard, character, _) = fixture("ffa-capital-rest");
     shard.assert_sql("UPDATE game_realm SET realm_type = 16 WHERE id = 1");
-    shard.assert_sql("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES (5090901,0,0,1,256,0,0,'Neutral capital')");
+    shard.insert_row(
+        "game_area",
+        &[
+            ("id", &5090901),
+            ("area_bit", &1),
+            ("flags", &256),
+            ("name", &"Neutral capital"),
+        ],
+    );
     let cell = lyracore_shared::terrain::cell_index(0.0).unwrap();
     let heights = vec!["0"; 145].join(":");
     shard.assert_call(
@@ -1273,20 +1358,63 @@ fn start_taxi_flight(shard: &Standalone, passenger: u64, destination_x: u32) {
 fn start_taxi_flight_on_route(shard: &Standalone, passenger: u64, route: &[(f32, f32, f32)]) {
     let &(start_x, start_y, start_z) = route.first().expect("taxi route has a start");
     let &(end_x, end_y, end_z) = route.last().expect("taxi route has an end");
-    shard.assert_sql(&format!("INSERT INTO game_taxi_node (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) VALUES (5090990,100,0,{start_x},{start_y},{start_z},'Start',0,1147),(5090991,101,0,{end_x},{end_y},{end_z},'End',0,1147)"));
-    shard.assert_sql("INSERT INTO game_taxi_path (id,source_node_id,destination_node_id,fare) VALUES (5090992,5090990,5090991,0)");
-    let values = route
-        .iter()
-        .enumerate()
-        .map(|(index, &(x, y, z))| {
-            format!("({},5090992,{index},0,{x},{y},{z},0,0)", 5090993 + index)
-        })
-        .collect::<Vec<_>>()
-        .join(",");
-    shard.assert_sql(&format!("INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) VALUES {values}"));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded,first_destination_node_index) VALUES ({passenger},5090992,5090990,5090991,1147,0,0,0,0,0,0,false,1)"
-    ));
+    shard.insert_rows(
+        "game_taxi_node",
+        &[
+            &[
+                ("id", &5090990),
+                ("client_node_id", &100),
+                ("x", &start_x),
+                ("y", &start_y),
+                ("z", &start_z),
+                ("name", &"Start"),
+                ("mount_display_alliance", &1147),
+            ],
+            &[
+                ("id", &5090991),
+                ("client_node_id", &101),
+                ("x", &end_x),
+                ("y", &end_y),
+                ("z", &end_z),
+                ("name", &"End"),
+                ("mount_display_alliance", &1147),
+            ],
+        ],
+    );
+    shard.insert_row(
+        "game_taxi_path",
+        &[
+            ("id", &5090992),
+            ("source_node_id", &5090990),
+            ("destination_node_id", &5090991),
+        ],
+    );
+    let ids: Vec<_> = (0..route.len())
+        .map(|index| (5090993 + index, index))
+        .collect();
+    let mut nodes: Vec<[Field; 6]> = Vec::new();
+    for ((id, index), (x, y, z)) in ids.iter().zip(route) {
+        nodes.push([
+            ("id", id),
+            ("path_id", &5090992),
+            ("node_index", index),
+            ("x", x),
+            ("y", y),
+            ("z", z),
+        ]);
+    }
+    let nodes: Vec<&[Field]> = nodes.iter().map(|node| &node[..]).collect();
+    shard.insert_rows("game_taxi_path_node", &nodes);
+    shard.insert_row(
+        "game_active_taxi_flight",
+        &[
+            ("character_guid", &passenger),
+            ("path_id", &5090992),
+            ("source_node_id", &5090990),
+            ("destination_node_id", &5090991),
+            ("mount_display_id", &1147),
+        ],
+    );
     shard.assert_call(
         "gw_arm_taxi_flight",
         &[&format!("{{\"guid\":{passenger},\"ownership\":null}}")],
@@ -1303,13 +1431,51 @@ fn a_reconnecting_passenger_applies_class_specific_starting_passives() {
         "UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {passenger}"
     ));
     shard.assert_sql("DELETE FROM game_level_stats WHERE race = 1 AND class = 1 AND level = 1");
-    shard.assert_sql("INSERT INTO game_level_stats (race_class_level,race,class,level,strength,agility,stamina,intellect,spirit) VALUES (65793,1,1,1,23,20,22,20,20)");
-    shard.assert_sql("DELETE FROM game_createinfo_spell WHERE spell_id = 20598");
-    shard.assert_sql(
-        "INSERT INTO game_createinfo_spell (id,race,class,spell_id) VALUES (5090908,1,1,20598)",
+    shard.insert_row(
+        "game_level_stats",
+        &[
+            ("race_class_level", &65793),
+            ("race", &1),
+            ("class", &1),
+            ("level", &1),
+            ("strength", &23),
+            ("agility", &20),
+            ("stamina", &22),
+            ("intellect", &20),
+            ("spirit", &20),
+        ],
     );
-    shard.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (20598,'Spirit passive fixture',0,0,0,0,0,0,0,1,0,0,1,0,{SPELL_ATTR_PASSIVE},1,0,false,0,0,0,0,0,0,0,0)"));
-    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (82392,20598,0,{A_MOD_STAT_PCT},5,0,0.0,0,0,0.0,0,0,0,{STAT_SPI},0,0,0,false,0.0)"));
+    shard.assert_sql("DELETE FROM game_createinfo_spell WHERE spell_id = 20598");
+    shard.insert_row(
+        "game_createinfo_spell",
+        &[
+            ("id", &5090908),
+            ("race", &1),
+            ("class", &1),
+            ("spell_id", &20598),
+        ],
+    );
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &20598),
+            ("name", &"Spirit passive fixture"),
+            ("school_mask", &1),
+            ("max_stacks", &1),
+            ("attributes", &SPELL_ATTR_PASSIVE),
+            ("spell_level", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &82392),
+            ("spell_id", &20598),
+            ("kind", &A_MOD_STAT_PCT),
+            ("base_points", &5),
+            ("p_0", &STAT_SPI),
+        ],
+    );
     let spirit = || {
         shard.query_rows(&format!(
             "SELECT spirit FROM game_world_entity WHERE guid = {passenger}"
@@ -1473,7 +1639,24 @@ fn a_reconnecting_passenger_enters_the_world_before_resuming_taxi() {
     let (shard, passenger, _) = fixture("taxi-entry-order");
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_sql("DELETE FROM game_faction_template WHERE id = 1 OR id = 14");
-    shard.assert_sql("INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (1,1,3,2,12,0,0,0,0,0,0,0,0),(14,14,8,0,1,0,0,0,0,0,0,0,0)");
+    shard.insert_rows(
+        "game_faction_template",
+        &[
+            &[
+                ("id", &1),
+                ("faction", &1),
+                ("faction_group", &3),
+                ("friend_group", &2),
+                ("enemy_group", &12),
+            ],
+            &[
+                ("id", &14),
+                ("faction", &14),
+                ("faction_group", &8),
+                ("enemy_group", &1),
+            ],
+        ],
+    );
     shard.assert_sql(&format!(
         "UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {passenger}"
     ));

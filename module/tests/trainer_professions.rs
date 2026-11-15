@@ -25,13 +25,32 @@ fn fixture(name: &str) -> (Standalone, String) {
 }
 
 fn offer(shard: &Standalone, id: u32, spell: u32, line: u32, cap: u32) {
-    shard.assert_sql(&format!("INSERT INTO game_trainer_spell (id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap) VALUES ({id},{PROFESSION_TRAINER_ENTRY},{spell},10,1,{line},{cap})"));
+    shard.insert_row(
+        "game_trainer_spell",
+        &[
+            ("id", &id),
+            ("trainer_entry", &PROFESSION_TRAINER_ENTRY),
+            ("spell_id", &spell),
+            ("cost", &10),
+            ("required_level", &1),
+            ("learn_skill_line", &line),
+            ("learn_skill_cap", &cap),
+        ],
+    );
 }
 
 fn wrapper(shard: &Standalone, wrapper: u32, target: u32) {
     let id = packed_spell_effect_id(wrapper, 0);
     let kind = lyracore_shared::spell::taxonomy::E_SCRIPTED;
-    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({id},{wrapper},0,{kind},0,0,0.0,0,0,0.0,0,{target},0,0,0,0,0,false,0.0)"));
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &id),
+            ("spell_id", &wrapper),
+            ("kind", &kind),
+            ("trigger_spell", &target),
+        ],
+    );
 }
 
 fn assert_learned(shard: &Standalone, spell: u32, line: u32, cap: u32) {
@@ -59,7 +78,10 @@ fn profession_wrappers_teach_the_spell_at_every_skill_tier() {
             let cap = (tier as u32 + 1) * 75;
             wrapper(&shard, id, spell);
             offer(&shard, id, id, line, cap);
-            shard.assert_sql(&format!("INSERT INTO game_skill_ability (id,spell_id,skill_line,race_mask,class_mask,min_skill,acquire_method,gray,green) VALUES ({id},{spell},{line},0,0,0,0,0,0)"));
+            shard.insert_row(
+                "game_skill_ability",
+                &[("id", &id), ("spell_id", &spell), ("skill_line", &line)],
+            );
             shard.assert_call("gw_trainer_buy", &[&actor("1"), &npc, &id.to_string()]);
             assert_learned(&shard, spell, line, cap);
             assert!(shard.query_rows(&format!("SELECT spell_id FROM game_player_spell WHERE character_guid = 1 AND spell_id = {id}")).is_empty());

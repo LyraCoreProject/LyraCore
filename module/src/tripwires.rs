@@ -2334,3 +2334,48 @@ mod creature_teardown_architecture_test {
         assert!(teardown.contains("game_kept()"));
     }
 }
+
+#[cfg(test)]
+mod fixture_row_discipline {
+    use std::fs;
+    use std::path::Path;
+
+    use lyracore_test_support::source_scan::{files_under, in_comment};
+
+    fn raw_inserts(source: &str) -> Vec<usize> {
+        source
+            .to_ascii_lowercase()
+            .match_indices("insert into")
+            .filter(|(at, _)| !in_comment(source, *at))
+            .map(|(at, _)| source[..at].matches('\n').count() + 1)
+            .collect()
+    }
+
+    #[test]
+    fn the_scan_detects_a_planted_insert_and_ignores_comments() {
+        let source = "fn seed(shard: &Standalone) {\n    // INSERT INTO game_spell was here\n    \
+                      shard.assert_sql(&format!(\"insert into {table} (id) VALUES (1)\"));\n}\n";
+        assert_eq!(raw_inserts(source), [3]);
+    }
+
+    #[test]
+    fn durable_tests_write_fixture_rows_through_the_writer() {
+        let tests = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests");
+        let violations: Vec<String> = files_under(&tests, &[], &|path| {
+            path.extension().is_some_and(|extension| extension == "rs")
+        })
+        .into_iter()
+        .flat_map(|path| {
+            let source = fs::read_to_string(&path).expect("readable test source");
+            raw_inserts(&source)
+                .into_iter()
+                .map(move |line| format!("{}:{line}", path.display()))
+        })
+        .collect();
+        assert!(
+            violations.is_empty(),
+            "write fixture rows with Standalone::insert_row, not raw SQL:\n{}",
+            violations.join("\n")
+        );
+    }
+}

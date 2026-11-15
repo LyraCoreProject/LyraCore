@@ -48,18 +48,13 @@ fn seed_mail(shard: &Standalone, recipient_guid: u64, sender_guid: u64, body: &s
 }
 
 fn seed_letter_item_template(shard: &Standalone) {
-    shard.assert_sql(
-        "INSERT INTO game_item_template (entry,class,subclass,name,display_id,quality,\
-         inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,\
-         damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,\
-         stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,\
-         spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,\
-         nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,\
-         spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,\
-         required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,\
-         start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property) \
-         VALUES (8383,0,0,'Plain Letter',0,0,0,0,0,0,0,0,1,0.0,0.0,0,0,0,0,0,0,0,0,0,0,false,0,0,\
-         0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1503,255,0)",
+    shard.insert_row(
+        "game_item_template",
+        &[
+            ("entry", &8383),
+            ("name", &"Plain Letter"),
+            ("max_stack", &1),
+        ],
     );
 }
 
@@ -376,9 +371,14 @@ fn a_transfer_keeps_the_text_of_the_letters_it_carries() {
     destination.publish_module();
     destination.assert_call("claim_operator", &[]);
     destination.assert_call("install_guid_range", &["1000000000"]);
-    destination.assert_sql(&format!(
-        "INSERT INTO game_item_text (id,text,letters) VALUES ({mail_id},'another letter',1)"
-    ));
+    destination.insert_row(
+        "game_item_text",
+        &[
+            ("id", &mail_id),
+            ("text", &"another letter"),
+            ("letters", &1),
+        ],
+    );
     let system = actor(0);
     destination.assert_call("import_character_blob", &["5090096", &blob, &system]);
     source.assert_call("confirm_import", &["5090096", &system]);
