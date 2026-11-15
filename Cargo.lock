@@ -1227,6 +1227,7 @@ dependencies = [
  "anyhow",
  "blake3",
  "getrandom 0.3.4",
+ "lyracore-conformance",
  "lyracore-package-delta",
  "lyracore-protocol",
  "lyracore-shared",

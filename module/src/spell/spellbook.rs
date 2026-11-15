@@ -1,6 +1,7 @@
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::game_spell;
+use crate::skill::SkillStart;
 
 #[table(
     accessor = game_player_spell,
@@ -55,10 +56,11 @@ pub(crate) fn grant_createinfo_spells(
     owner: Identity,
     race: u8,
     class: u8,
+    start: SkillStart,
 ) {
     for row in ctx.db.game_createinfo_spell().iter() {
         if createinfo_row_matches(row.race, row.class, race, class) {
-            learn_spell(ctx, guid, owner, row.spell_id);
+            learn(ctx, guid, owner, row.spell_id, start);
         }
     }
 }
@@ -101,6 +103,10 @@ pub(crate) fn apply_starting_passives(
 }
 
 pub(crate) fn learn_spell(ctx: &ReducerContext, guid: u64, owner: Identity, spell_id: u32) {
+    learn(ctx, guid, owner, spell_id, SkillStart::Starting);
+}
+
+fn learn(ctx: &ReducerContext, guid: u64, owner: Identity, spell_id: u32, start: SkillStart) {
     if knows_spell(ctx, guid, spell_id) {
         return;
     }
@@ -112,6 +118,7 @@ pub(crate) fn learn_spell(ctx: &ReducerContext, guid: u64, owner: Identity, spel
     });
     crate::native::book::spell_learned(ctx, guid, spell_id);
     crate::skill::grant_lockpicking_on_learn(ctx, guid, owner, spell_id);
+    crate::skill::grant_combat_skill_on_learn(ctx, guid, owner, spell_id, start);
 }
 
 pub(crate) fn forget_spell(ctx: &ReducerContext, guid: u64, spell_id: u32) {
