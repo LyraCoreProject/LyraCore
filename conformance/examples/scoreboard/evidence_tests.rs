@@ -7,14 +7,26 @@ mod scratch;
 fn example() -> (FeatureLedger, Value) {
     let ledger =
         FeatureLedger::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("features")).unwrap();
-    let golden = wire_client::catalogue::get("taxi_single_hop").unwrap();
+    let scenarios: Vec<_> = ledger
+        .behaviors()
+        .iter()
+        .find(|behavior| behavior.id == "taxi_single_hop")
+        .unwrap()
+        .scenarios
+        .iter()
+        .map(|id| {
+            let golden = wire_client::catalogue::get(id).unwrap();
+            json!({"id": id, "behavior": "taxi_single_hop",
+                "scenario_sha256": golden.trace().header.scenario_sha256,
+                "comparison": {"differences": []}, "properties": []})
+        })
+        .collect();
     (
         ledger,
         json!({
             "schema_version": 2, "tier": "tier1", "core_commit": "1".repeat(40),
-            "harness_revision": harness_revision().to_string(), "working_tree_dirty": false, "recorded_at_unix_ms": 1,
-            "scenarios": [{"id": "taxi_single_hop", "behavior": "taxi_single_hop",
-                "scenario_sha256": golden.trace().header.scenario_sha256, "comparison": {"differences": []}, "properties": []}],
+            "harness_revision": lyracore_conformance::harness_pin().revision.to_string(), "working_tree_dirty": false, "recorded_at_unix_ms": 1,
+            "scenarios": scenarios,
         }),
     )
 }
@@ -44,7 +56,7 @@ fn state(value: &Value, ledger: &FeatureLedger) -> State {
                 .find(|b| b.id == "taxi_single_hop")
                 .unwrap(),
             &"1".repeat(40),
-            &harness_revision().to_string(),
+            &lyracore_conformance::harness_pin().revision.to_string(),
         )
         .unwrap()
 }
@@ -52,14 +64,14 @@ fn state(value: &Value, ledger: &FeatureLedger) -> State {
 fn audit_example() -> (FeatureLedger, Value) {
     let (ledger, mut value) = example();
     value["tier"] = json!("conformance_audit");
-    value["scenarios"][0]
-        .as_object_mut()
-        .unwrap()
-        .remove("properties");
-    value["scenarios"][0]["reference_comparison"] = json!({"differences": []});
-    value["scenarios"][0]["reference_sha256"] = json!("c".repeat(64));
-    value["scenarios"][0]["capture"] = json!({"sha256": "d".repeat(64), "core_commit": value["core_commit"],
-        "native_host_sha256": "a".repeat(64), "module_sha256": "b".repeat(64)});
+    let core_commit = value["core_commit"].clone();
+    for scenario in value["scenarios"].as_array_mut().unwrap() {
+        scenario.as_object_mut().unwrap().remove("properties");
+        scenario["reference_comparison"] = json!({"differences": []});
+        scenario["reference_sha256"] = json!("c".repeat(64));
+        scenario["capture"] = json!({"sha256": "d".repeat(64), "core_commit": core_commit,
+            "native_host_sha256": "a".repeat(64), "module_sha256": "b".repeat(64)});
+    }
     let golden = wire_client::catalogue::get("taxi_single_hop").unwrap();
     let wire_client::trace::Origin::Golden { provenance } = &golden.trace().header.origin else {
         panic!()
@@ -403,7 +415,9 @@ fn latest_audit_uses_capture_time_and_rejects_malformed_evidence() {
     let directory = scratch::Scratch::new("scoreboard-test").unwrap();
     let (ledger, mut value) = audit_example();
     let mut historical = value.clone();
-    historical["scenarios"][0]["behavior"] = json!("retired_behavior");
+    for scenario in historical["scenarios"].as_array_mut().unwrap() {
+        scenario["behavior"] = json!("retired_behavior");
+    }
     historical["audit"]["behaviors"] =
         json!({"retired_behavior": historical["audit"]["behaviors"]["taxi_single_hop"].clone()});
     std::fs::write(
@@ -619,7 +633,10 @@ fn candidate_bytes_and_provenance_must_match_the_audit_run() -> Result<()> {
     let mut bytes = std::fs::read(&candidate)?;
     bytes.push(b' ');
     std::fs::write(candidate, bytes)?;
-    for revision in [harness_revision().to_string(), "2".repeat(40)] {
+    for revision in [
+        lyracore_conformance::harness_pin().revision.to_string(),
+        "2".repeat(40),
+    ] {
         report.harness_revision = revision;
         std::fs::write(path.with_extension("md"), markdown(&report, "current")?)?;
         assert!(report
@@ -707,4 +724,137 @@ fn missing_or_malformed_properties_cannot_be_passing_evidence() {
         .unwrap()
         .remove("properties");
     assert!(parse(&missing, &ledger).is_err());
+}
+
+#[test]
+fn roll_evidence_requires_pinned_levels_categories_and_sample_shape() -> Result<()> {
+    let golden = wire_client::catalogue::get("white_melee_outcomes")?;
+    let spec = golden
+        .scenario()
+        .rolls
+        .as_ref()
+        .context("roll specification")?;
+    let mut counts =
+        wire_client::rolls::Counts(spec.expected_basis_points[0].map(|value| value * 5));
+    counts.0[5] += 1000;
+    counts.0[6] -= 1000;
+    let comparison = wire_client::rolls::compare(spec, &counts, 0, "public_1", 50_000)?;
+    let original = comparison
+        .differences
+        .first()
+        .context("shifted roll difference")?;
+    assert!(roll_difference(golden.scenario(), original));
+    let mut wrong = original.clone();
+    wrong.checkpoint = "level_61_public_1".into();
+    assert!(!roll_difference(golden.scenario(), &wrong));
+    wrong = original.clone();
+    wrong.field_path[1] = "invented".into();
+    assert!(!roll_difference(golden.scenario(), &wrong));
+    wrong = original.clone();
+    wrong.actual = Some(wire_client::trace::RecordedField::Unsigned(50_001));
+    assert!(!roll_difference(golden.scenario(), &wrong));
+    let mut candidate = golden.trace().clone();
+    candidate.header.origin = Origin::Candidate {
+        adapter: "test".into(),
+    };
+    candidate.roll_check = None;
+    let comparison = wire_client::compare::compare(&golden, &candidate, &[])?;
+    let sample = comparison
+        .differences
+        .iter()
+        .find(|difference| difference.rule == "white_melee_sample")
+        .context("missing full sample")?;
+    assert!(roll_difference(golden.scenario(), sample));
+    Ok(())
+}
+
+#[test]
+fn spell_evidence_requires_pinned_context_and_sample_shape() -> Result<()> {
+    use wire_client::trace::RecordedField;
+
+    let golden = wire_client::catalogue::get("spell_direct_damage_outcomes")?;
+    let mut candidate = golden.trace().clone();
+    candidate.header.origin = Origin::Candidate {
+        adapter: "test".into(),
+    };
+    candidate.spell_roll_check = None;
+    let comparison = wire_client::compare::compare(&golden, &candidate, &[])?;
+    let tcp = comparison
+        .differences
+        .iter()
+        .find(|difference| difference.rule == "spell_sample")
+        .context("missing full spell sample")?;
+    assert!(roll_difference(golden.scenario(), tcp));
+    let mut blocked = tcp.clone();
+    blocked.checkpoint = "level_60_public_1".into();
+    blocked.actual = Some(RecordedField::Unsigned(16));
+    assert!(roll_difference(golden.scenario(), &blocked));
+    for mutation in 0..9 {
+        let mut wrong = blocked.clone();
+        match mutation {
+            0 => wrong.checkpoint = "level_61_public_1".into(),
+            1 => wrong.checkpoint = "level_60_retry".into(),
+            2 => wrong.opcode = Some(0x14a),
+            3 => wrong.stream = Some(Stream::Broadcast("swings".into())),
+            4 => wrong.classification = DifferenceClass::Data,
+            5 => wrong.field_path = vec!["invented".into()],
+            6 => wrong.expected = Some(RecordedField::Unsigned(49_999)),
+            7 => wrong.actual = Some(RecordedField::Unsigned(50_000)),
+            8 => wrong.actual = None,
+            _ => unreachable!(),
+        }
+        assert!(
+            !roll_difference(golden.scenario(), &wrong),
+            "mutation {mutation}"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn spell_rate_evidence_requires_exact_rational_means_and_known_categories() -> Result<()> {
+    let golden = wire_client::catalogue::get("spell_direct_damage_outcomes")?;
+    let spec = golden
+        .scenario()
+        .spell_rolls
+        .as_ref()
+        .context("spell specification")?;
+    for level in 0..2 {
+        let mut counts = [0; 5];
+        for (count, expected) in counts.iter_mut().zip(spec.expected[level]) {
+            *count =
+                (u128::from(expected.numerator) * 50_000 / u128::from(expected.denominator)) as u32;
+        }
+        counts[3] = 50_000 - counts[..3].iter().sum::<u32>();
+        counts[2] += 1000;
+        counts[3] -= 1000;
+        let comparison = wire_client::spell_rolls::compare(
+            spec,
+            &wire_client::spell_rolls::Counts(counts),
+            level,
+            "public_2",
+            50_000,
+        )?;
+        let original = comparison
+            .differences
+            .iter()
+            .find(|difference| difference.field_path == ["outcomes", "crit"])
+            .context("shifted spell crit difference")?;
+        assert!(roll_difference(golden.scenario(), original));
+        for mutation in 0..4 {
+            let mut wrong = original.clone();
+            match mutation {
+                0 => wrong.field_path[1] = "invented".into(),
+                1 => wrong.expected = Some(wire_client::trace::RecordedField::Unsigned(0)),
+                2 => wrong.actual = Some(wire_client::trace::RecordedField::Unsigned(50_001)),
+                3 => wrong.checkpoint = "level_63_retry".into(),
+                _ => unreachable!(),
+            }
+            assert!(
+                !roll_difference(golden.scenario(), &wrong),
+                "mutation {mutation}"
+            );
+        }
+    }
+    Ok(())
 }

@@ -168,6 +168,11 @@ async fn attach(
         connected,
     )
     .await;
+    static RUNTIME_ID: std::sync::OnceLock<u128> = std::sync::OnceLock::new();
+    let runtime_id = *RUNTIME_ID.get_or_init(|| u128::from_le_bytes(entropy()));
+    call(&client, "native_vendor_stock_runtime", &(runtime_id,))
+        .await?
+        .into_result()?;
     Ok(Shard {
         client,
         deliveries,
@@ -304,7 +309,7 @@ async fn serve(
             let (generation, client, feed) = current_rx.borrow().clone();
             let pose = motion::pose(opcode, &body).filter(|pose| mover.follows(pose));
             let result = match pose {
-                Some(pose) if feed.relay(pose.opcode(), &body) => {
+                Some(pose) if feed.relay(pose.opcode(), pose.position(), &body) => {
                     if mover.accept(pose, now) {
                         request(&client, "native_world_motion", &(opcode, body)).await
                     } else {

@@ -28,19 +28,19 @@ impl PlayerReputation {
                 .find(row.faction_id)
                 .map_or(0, |faction| faction.base_standing.clamp(REP_MIN, REP_MAX));
             row.at_war = false;
-            crate::native::reputation_changed(ctx, None, &row);
+            crate::native::reputation::changed(ctx, None, &row);
             ctx.db.game_player_reputation().id().delete(id);
         }
     }
 
     fn insert(ctx: &ReducerContext, row: Self) {
-        crate::native::reputation_changed(ctx, None, &row);
+        crate::native::reputation::changed(ctx, None, &row);
         ctx.db.game_player_reputation().insert(row);
     }
 
     fn update(self, ctx: &ReducerContext) {
         let previous = ctx.db.game_player_reputation().id().find(self.id);
-        crate::native::reputation_changed(ctx, previous.as_ref(), &self);
+        crate::native::reputation::changed(ctx, previous.as_ref(), &self);
         ctx.db.game_player_reputation().id().update(self);
     }
 }
@@ -75,10 +75,8 @@ pub(crate) fn reputation_rank(standing: i32) -> u8 {
 }
 
 pub(crate) fn reputation_discount_pct(standing: i32) -> u32 {
-    const NEUTRAL: u8 = 3;
-    let rank = reputation_rank(standing);
-    if rank > NEUTRAL {
-        5 * (rank - NEUTRAL) as u32
+    if reputation_rank(standing) >= 5 {
+        10
     } else {
         0
     }
@@ -250,7 +248,7 @@ pub(crate) fn apply_set_watched_faction(
         .ok_or_else(|| "Character not found".to_string())?;
     character.watched_faction_index = reputation_index;
     characters.guid().update(character);
-    crate::native::watched_faction(ctx, character_guid, reputation_index);
+    crate::native::reputation::watched_faction(ctx, character_guid, reputation_index);
     Ok(())
 }
 
@@ -270,12 +268,13 @@ mod rep_tests {
     }
 
     #[test]
-    fn discount_is_5pct_per_rank_above_neutral() {
+    fn discount_is_ten_percent_from_honored() {
         assert_eq!(reputation_discount_pct(0), 0);
         assert_eq!(reputation_discount_pct(-10000), 0);
-        assert_eq!(reputation_discount_pct(3000), 5);
+        assert_eq!(reputation_discount_pct(3000), 0);
+        assert_eq!(reputation_discount_pct(8999), 0);
         assert_eq!(reputation_discount_pct(9000), 10);
-        assert_eq!(reputation_discount_pct(21000), 15);
-        assert_eq!(reputation_discount_pct(42000), 20);
+        assert_eq!(reputation_discount_pct(21000), 10);
+        assert_eq!(reputation_discount_pct(42000), 10);
     }
 }

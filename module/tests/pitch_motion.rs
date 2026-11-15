@@ -51,7 +51,7 @@ fn published_seq(standalone: &Standalone) -> Option<String> {
 
 fn move_with(standalone: &Standalone, opcode: u32, move_time_ms: u32) {
     let args = [
-        support::actor(&CHARACTER_GUID.to_string()),
+        support::actor(CHARACTER_GUID),
         opcode.to_string(),
         "[]".to_string(),
         "100.0".to_string(),

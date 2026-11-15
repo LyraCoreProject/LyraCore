@@ -3,9 +3,9 @@ use std::collections::BTreeSet;
 use spacetimedb::{Identity, SpacetimeType, Timestamp};
 
 use super::TableRows;
-use crate::items::{BuybackEntry, ItemInstance};
 use crate::mail::Mail;
 use crate::mail_escrow::MailEscrow;
+use crate::{BuybackEntry, ItemInstance};
 
 const FORMATS: &[(&str, &str)] = &[
     ("game_item_instance", "game_item_instance@item-text-1"),

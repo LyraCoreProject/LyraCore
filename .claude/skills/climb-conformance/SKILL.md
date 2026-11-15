@@ -1,6 +1,6 @@
 ---
 name: climb-conformance
-description: Climb a 1.12 Behavior from ranked conformance work as either an implementer or a scenario author.
+description: Climb a 1.12 Behavior from ranked conformance work as an implementer, scenario author or data importer.
 metadata:
     harness: [claude, codex]
 ---
@@ -15,10 +15,10 @@ starting points for scenario authors.
 
 ## Implementer
 
-1. Run `./conformance/scoreboard --json`. Take its first open item with `kind = "implementer"`. If it names `reproduce_with = "audit"`, check every `prerequisites` entry before running its `next_command`; hand the item to a maintainer when a prerequisite is unmet. Use its first listed scenario for tier 1 work.
+1. Run `./conformance/scoreboard --json`. Read `summary.tier1.evidence` and `summary.tier1.states` before interpreting pass counts; absent evidence is unmeasured. Main-push CI stores measured scoreboards in `conformance-scoreboard-<commit>` artifacts for 90 days. Take the local scoreboard's first open item with `kind = "implementer"`. If it names `reproduce_with = "audit"`, check every `prerequisites` entry before running its `next_command`; hand the item to a maintainer when a prerequisite is unmet. Use its first listed scenario for tier 1 work.
 2. Run `./conformance/run <scenario>` and `./conformance/run <scenario> --json`. Exit 0 means the comparison completed, its signatures match the Tier 1 baseline and all properties passed, even if rule differences remain. Exit 1 means the baseline changed or a property failed. Exit 2 means setup failed before comparison; fix setup before judging the Behavior.
 3. Read the Behavior's vmangos commit, path and symbol in its ledger TOML. Read that source through a GitHub raw URL. Match the Reference Server's observable result in the Module. A different implementation is fine when the result matches. Ask a maintainer to decide any proposed Deliberate Deviation.
-4. Re-run `./conformance/run <scenario> --json`. When signatures change, run `./conformance/baseline <scenario>`. Commit the generated baseline with the gameplay change. Update that Behavior's `known_gaps` to match the remaining evidence. Review the signature diff. If a missing packet reveals a fixture or data difference, record the expected and actual values, source provenance and signature in the PR and `known_gaps`. Keep the measured difference without a tolerance or rule edit. Hand the fixture correction to a scenario or fixture author as a separate change; a maintainer decides disputed data authority.
+4. Re-run `./conformance/run <scenario> --json`. When signatures change, run `./conformance/baseline <scenario>`. Commit the generated baseline with the gameplay change. Update that Behavior's `known_gaps` to match the remaining evidence. Review the signature diff. The [PR signature ratchet](../../../conformance/README.md#pull-request-signature-ratchet) fails added rule signatures for an unchanged scenario hash and harness revision, even after regeneration. Explain any deliberate addition in the PR and leave acceptance to a maintainer through the GitHub label `conformance-accept-signature`; removed signatures pass. New scenarios or changed provenance are listed as new measurements in the job summary. If a missing packet reveals a fixture or data difference, record the expected and actual values, source provenance and signature in the PR and `known_gaps`. Keep the measured difference without a tolerance or rule edit. Hand the fixture correction to a scenario or fixture author as a separate change; a maintainer decides disputed data authority.
    If the fixture cannot show a fix, keep the PR ready only when a durable test backed by the vmangos source proves the behaviour and the PR names the fixture gap and its author. Otherwise open it as a draft.
    If the item has `reproduce_with = "audit"`, tier 1 cannot show the fix. Commit the fix, run its scenario audit command again and compare its grouped differences with the committed full audit. The local command writes no report. A maintainer refreshes the append-only full audit separately. Without the prerequisites, open the PR as a draft and hand the audit to a maintainer.
 5. Run `./conformance/run <scenario>` once more; it must exit 0 with a matching Tier 1 baseline. Run `cargo fmt --all`. Run no other checks; CI runs them. Open a core PR with [file-pr](../file-pr/SKILL.md). Show added and removed signatures in the PR.
@@ -27,6 +27,18 @@ If you change a table schema, read [migration trap §1.2](../../../docs/danger-z
 
 When setup cannot be repaired or no fix matches the Reference Server, stop and hand the item to a maintainer with the commands you ran and their output. Keep scenario defects with the scenario author. Every review finding must become an automated check that fails on the old code before its fix merges: a scenario variant (for example a second Character or a reconnect), a property check, a strictness mutation or a fixture check. List review findings that CI missed in the PR, each tagged as uncovered situation, loose rule, fixture artefact, broken invariant or client rejection. Keep scenarios, Golden Traces, Equivalence Rules and the harness pin out of an implementation PR. Preserve the tests and required rungs; add no skips or weaker rules. Generate baselines only with `./conformance/baseline`.
 For a broken invariant, add a named property under `conformance/support/properties/` with a violating-stream test and prove it fails on the old code in scratch.
+
+## Data importer
+
+1. Run `./conformance/scoreboard --json`. Take the first `kind = "data_import"` item. Read the
+   Behavior's importer gaps and `summary.data_coverage.systems` for their source paths and archived
+   port census counts. Run its `next_command` to locate Compatibility Manifest findings.
+2. Fix World Source translation or imported representation in core. Use the gap's evidence to
+   reproduce the finding with a local import plan; follow [data ingestion](../../../docs/data-ingestion.md).
+   Keep source rows local. A maintainer handles any apply to a live Realm.
+3. Update only gaps the evidence closes. Report the plan counts and remaining findings in a core
+   PR with [file-pr](../file-pr/SKILL.md). A scenario author owns missing scenarios; an implementer
+   owns Module behavior. Mixed Behaviors can have separate work items for both roles.
 
 ## Scenario author
 

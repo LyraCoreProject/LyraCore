@@ -131,7 +131,7 @@ fn arrive(ctx: &ReducerContext, recipient_guid: u64) {
         recipient_guid,
         created_at: crate::time::now(ctx),
     });
-    crate::native::mail_arrived(ctx, recipient_guid);
+    crate::native::mail::arrived(ctx, recipient_guid);
 }
 
 // Stagger overdue timers so a repair cannot unleash the whole backlog in consecutive transactions.
@@ -208,6 +208,10 @@ pub(crate) fn fire(ctx: &ReducerContext, timer: &MailTimer) {
         Firing::Expire(Expiry::Return) => crate::mail::send_back(ctx, mail, 0),
         Firing::Expire(Expiry::Delete) => crate::mail::delete_mail(ctx, mail.id),
     }
+}
+
+pub(crate) fn sweep_expired(ctx: &ReducerContext) {
+    crate::gc::reap_expired!(ctx, game_mail_arrival, crate::EVENT_TTL_MICROS);
 }
 
 #[cfg(test)]
@@ -353,7 +357,7 @@ mod tests {
         assert_eq!(
             expires_at(&mid_second),
             at(SENT + MICROS_PER_SEC + 30 * DAY),
-            "the Gateway rounds a delivery up to the next second"
+            "the mail list rounds a delivery up to the next second"
         );
     }
 

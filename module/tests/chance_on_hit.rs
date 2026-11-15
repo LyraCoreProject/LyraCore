@@ -2,20 +2,23 @@ mod support;
 
 use lyracore_shared::item_property::COMBAT_SPELL;
 use lyracore_shared::spell::taxonomy::{
-    E_ADD_EXTRA_ATTACKS, E_DAMAGE, E_HEAL, E_WEAPON_STRIKE, P_NONE, P_RAW, SPELL_ATTR_WEAPON_PROCS,
+    CAST_FLAG_WEAPON_PROCS, E_ADD_EXTRA_ATTACKS, E_DAMAGE, E_HEAL, E_WEAPON_STRIKE, P_NONE, P_RAW,
     T_SELF, T_TARGET_ENEMY,
 };
 
 use std::collections::BTreeMap;
 
-use support::{event_rows, poll_until, Standalone, TableSubscription, POLL_TIMEOUT};
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
+use lyracore_package_delta::packed_spell_effect_id;
+use support::{
+    event_rows, fence_subscription, poll_until, subscribe_with_fence, Standalone,
+    TableSubscription, POLL_TIMEOUT,
+};
 
 type SqlRow = BTreeMap<String, String>;
 
 const PLAYER: u64 = 1;
-const TEST_WOLF_ENTRY: u32 = 51000;
 const WOLF_HEALTH: u32 = 100_000;
-const FIXTURE_BLADE: u32 = 5_090_050;
 const SINISTER_STRIKE: u32 = 1752;
 const THUNDERFURY_PROC: u32 = 21992;
 const CHANCE_ON_HIT: u8 = 2;
@@ -27,7 +30,6 @@ const SLOW_SWING_MS: u32 = 60_000;
 // 30 procs per minute on a 2 second weapon is a certain proc.
 const CERTAIN_PPM: f32 = 30.0;
 const WEAPON_DELAY_MS: u32 = 2000;
-// At this level the capped miss, dodge and parry chances sum past certainty for a level 1 player.
 const OUT_OF_REACH_LEVEL: u32 = 60;
 const AVOIDED_SWINGS: usize = 3;
 const ATTEMPTS: usize = 15;
@@ -44,11 +46,12 @@ fn an_avoided_weapon_ability_still_casts_the_main_hand_chance_on_hit_spell() {
         &standalone,
         SINISTER_STRIKE,
         "Sinister Strike",
-        SPELL_ATTR_WEAPON_PROCS,
+        CAST_FLAG_WEAPON_PROCS,
         (E_WEAPON_STRIKE, T_TARGET_ENEMY),
         (100, P_RAW),
     );
     set_level(&standalone, wolf, OUT_OF_REACH_LEVEL);
+    face_player(&standalone, wolf);
     let events = standalone.subscribe(&[CAST_EVENTS]);
 
     standalone.assert_call(
@@ -77,14 +80,24 @@ fn an_avoided_weapon_ability_still_casts_the_main_hand_chance_on_hit_spell() {
 fn only_a_white_swing_that_connects_casts_the_chance_on_hit_spell() {
     let mut standalone = Standalone::start("chance-on-hit-swing");
     let wolf = stage(&mut standalone);
+    standalone.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     set_level(&standalone, wolf, OUT_OF_REACH_LEVEL);
-    let events = standalone.subscribe(&[CAST_EVENTS, SWING_EVENTS]);
+    standalone.insert_row(
+        "game_conformance_swing_random",
+        &[("character_guid", &1), ("state", &1)],
+    );
+    let events = subscribe_with_fence(&standalone, &[CAST_EVENTS, SWING_EVENTS]);
     standalone.assert_call("debug_engage", &["1", &wolf.to_string()]);
 
-    assert!(
-        poll_until(POLL_TIMEOUT, || swings(&events) >= AVOIDED_SWINGS),
-        "the engagement never swung {AVOIDED_SWINGS} times"
-    );
+    for count in 1..=AVOIDED_SWINGS {
+        standalone
+            .assert_sql("UPDATE game_melee_attack SET last_swing_ms = 1 WHERE attacker_guid = 1");
+        standalone.assert_call("debug_advance_roll_batch", &["4"]);
+        fence_subscription(&standalone, &events);
+        let outcomes = event_rows(&events, "game_combat_event_live");
+        assert_eq!(outcomes.len(), count);
+        assert_eq!(outcomes[count - 1]["hit_info"], "2");
+    }
     assert_eq!(
         go_of(&events, THUNDERFURY_PROC),
         None,
@@ -92,9 +105,18 @@ fn only_a_white_swing_that_connects_casts_the_chance_on_hit_spell() {
     );
 
     set_level(&standalone, wolf, 1);
-    assert!(
-        poll_until(POLL_TIMEOUT, || go_of(&events, THUNDERFURY_PROC).is_some()),
-        "a certain Chance on Hit must cast its spell when a white swing connects"
+    standalone
+        .assert_sql("UPDATE game_conformance_swing_random SET state = 1 WHERE character_guid = 1");
+    standalone.assert_sql("UPDATE game_melee_attack SET last_swing_ms = 1 WHERE attacker_guid = 1");
+    standalone.assert_call("debug_advance_roll_batch", &["4"]);
+    fence_subscription(&standalone, &events);
+    let outcomes = event_rows(&events, "game_combat_event_live");
+    assert_eq!(outcomes.len(), AVOIDED_SWINGS + 1);
+    assert!(outcomes[AVOIDED_SWINGS]["damage"].parse::<u32>().unwrap() > 0);
+    assert_eq!(gos_of(&events, THUNDERFURY_PROC), 1);
+    assert_eq!(
+        go_of(&events, THUNDERFURY_PROC).unwrap()["target_guid"],
+        wolf.to_string()
     );
 }
 
@@ -114,13 +136,19 @@ fn a_helpful_enchantment_spell_casts_on_the_wielder() {
     standalone.assert_sql(&format!(
         "UPDATE game_item_template SET spelltrigger_1 = 0 WHERE entry = {FIXTURE_BLADE}"
     ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_item_enchantment (id, enchant_id, effect_index, kind, amount, spell_id, \
-         school_mask) VALUES ({CRUSADER}, {CRUSADER}, 0, {COMBAT_SPELL}, 0, {HOLY_STRENGTH}, 0)"
-    ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_enchant_proc_rate (spell_id, ppm_rate) VALUES ({HOLY_STRENGTH}, {CERTAIN_PPM:.1})"
-    ));
+    standalone.insert_row(
+        "game_item_enchantment",
+        &[
+            ("id", &CRUSADER),
+            ("enchant_id", &CRUSADER),
+            ("kind", &COMBAT_SPELL),
+            ("spell_id", &HOLY_STRENGTH),
+        ],
+    );
+    standalone.insert_row(
+        "game_enchant_proc_rate",
+        &[("spell_id", &HOLY_STRENGTH), ("ppm_rate", &CERTAIN_PPM)],
+    );
     standalone.assert_sql(&format!(
         "UPDATE game_item_instance SET enchant_id = {CRUSADER} \
          WHERE owner_guid = {PLAYER} AND entry = {FIXTURE_BLADE}"
@@ -250,6 +278,16 @@ fn stage(standalone: &mut Standalone) -> u64 {
     wolf
 }
 
+// Only a target that faces the attacker parries, and parry makes this avoidance certain.
+fn face_player(standalone: &Standalone, wolf: u64) {
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = 0, y = 0, orientation = 0 WHERE guid = {PLAYER}"
+    ));
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = 1, y = 0, orientation = 3.1415927 WHERE guid = {wolf}"
+    ));
+}
+
 fn set_level(standalone: &Standalone, guid: u64, level: u32) {
     standalone.assert_sql(&format!(
         "UPDATE game_world_entity SET level = {level} WHERE guid = {guid}"
@@ -265,22 +303,29 @@ fn stage_spell(
     (p0, p0_kind): (i32, u8),
 ) {
     let is_negative = target != T_SELF;
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
-         cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
-         aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
-         VALUES ({spell_id}, '{name}', 0, 0, 0, 0, 0, 5, 0, 1, 0, 0, 0, 0, 0, \
-         0, 0, {is_negative}, {cast_flags}, 0, 0, 0, 0, 0, 0, 0)"
-    ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
-         per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-         VALUES ({}, {spell_id}, 0, {kind}, 5, 0, 0.0, 0, {target}, \
-         0.0, 0, 0, 0, {p0}, {p0_kind}, 0, 0, false, 0.0)",
-        (spell_id as u64) << 2
-    ));
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell_id),
+            ("name", &name),
+            ("range_yd", &5),
+            ("school_mask", &1),
+            ("is_negative", &is_negative),
+            ("cast_flags", &cast_flags),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell_id, 0)),
+            ("spell_id", &spell_id),
+            ("kind", &kind),
+            ("base_points", &5),
+            ("target", &target),
+            ("p_0", &p0),
+            ("p_0_kind", &p0_kind),
+        ],
+    );
 }
 
 fn gos_of(events: &TableSubscription, spell_id: u32) -> usize {

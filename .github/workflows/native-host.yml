@@ -2,6 +2,15 @@ name: Native Host
 
 on:
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - "conformance/*.py"
+      - "conformance/tests/*.py"
+      - "conformance/run"
+      - "conformance/baseline"
+      - "conformance/scoreboard"
+      - "conformance/audit"
+      - "conformance/reports/**"
   push:
     branches: [main]
 
@@ -13,13 +22,15 @@ permissions:
   contents: read
 
 env:
-  CARGO_BUILD_JOBS: 2
   HOST_CHECKOUT: .lyracore/native-host/SpacetimeDB
 
 jobs:
   host:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,6 +61,7 @@ jobs:
           if-no-files-found: error
 
   host-tests:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -59,24 +71,35 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: ./.github/actions/setup-host-toolchain
-      - run: rustfmt +"$HOST_TOOLCHAIN" --edition 2021 --config skip_children=true --check native-host/src/*.rs
-      - run: python3 native-host/prepare-host.py --checkout "$HOST_CHECKOUT"
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # These tests compile only the Host inputs, so one pass holds until those inputs change.
+      - id: passed
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .native-host-tests-passed
+          key: native-host-tests-${{ hashFiles('.github/workflows/native-host.yml', 'native-host/prepare-host.py', 'native-host/rust-toolchain.toml', 'native-host/*.patch', 'native-host/src/**') }}
+      - if: steps.passed.outputs.cache-hit != 'true'
+        uses: ./.github/actions/setup-host-toolchain
+      - if: steps.passed.outputs.cache-hit != 'true'
+        run: rustfmt +"$HOST_TOOLCHAIN" --edition 2021 --config skip_children=true --check native-host/src/*.rs
+      - if: steps.passed.outputs.cache-hit != 'true'
+        run: python3 native-host/prepare-host.py --checkout "$HOST_CHECKOUT"
+      - if: steps.passed.outputs.cache-hit != 'true'
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: .lyracore/native-host/SpacetimeDB -> target
-      - name: Check cached compilation limits and execution
-        working-directory: ${{ env.HOST_CHECKOUT }}
-        run: cargo +"$HOST_TOOLCHAIN" test --release --locked -p spacetimedb-core --lib host::wasmtime::compile_cache::tests
-      - name: Check recovery history retention
-        working-directory: ${{ env.HOST_CHECKOUT }}
-        run: cargo +"$HOST_TOOLCHAIN" test --release --locked -p spacetimedb-engine --lib retention::tests
-      - name: Check delivery routing, motion relay and the Module row layouts
+      # One command, because each package selection resolves different features and rebuilds.
+      - name: Check cached compilation, recovery history retention, delivery routing, motion relay and the Module row layouts
+        if: steps.passed.outputs.cache-hit != 'true'
         working-directory: ${{ env.HOST_CHECKOUT }}
         run: |
-          cargo +"$HOST_TOOLCHAIN" test --release --locked -p spacetimedb-standalone --lib native_world::
+          cargo +"$HOST_TOOLCHAIN" test --release --locked \
+            -p spacetimedb-core -p spacetimedb-engine -p spacetimedb-standalone --lib \
+            -- host::wasmtime::compile_cache::tests retention::tests native_world::
+      - if: steps.passed.outputs.cache-hit != 'true'
+        run: touch .native-host-tests-passed
 
   module:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -85,7 +108,7 @@ jobs:
           persist-credentials: false
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build the Module
-        run: cargo build --locked --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
+        run: cargo build --locked --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers,package_test_fixture
       - name: Check the Module links no native code
         run: python3 scripts/module-env-imports.py target/wasm32-unknown-unknown/release/lyracore_module.wasm
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -95,6 +118,7 @@ jobs:
           if-no-files-found: error
 
   checks:
+    if: github.event_name == 'push' || github.event.pull_request.draft == false
     needs: [host, module]
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -111,7 +135,7 @@ jobs:
           - group: Handoff
             checks: handoff realm-shard
           - group: continent Shards
-            checks: continent-shards realm-communication instance-shard instance-allocation character-names
+            checks: continent-shards realm-communication instance-shard instance-allocation character-names package-creation package-deletion package-groups package-guilds package-relocation package-transfer
     name: checks (${{ matrix.group }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

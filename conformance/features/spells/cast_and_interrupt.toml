@@ -3,10 +3,10 @@ id = "cast_and_interrupt"
 system = "spells"
 scope = "A Character can cast and interrupt spells and cancel active auras."
 requests = ["0x012E", "0x012F", "0x0136", "0x013B", "0x026D", "0x029B"]
-replies = []
+replies = ["0x0131", "0x02A6", "0x0130", "0x0132", "0x0166", "0x024C", "0x0250"]
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
-scenarios = []
+scenarios = ["cast_and_interrupt", "spell_direct_damage_outcomes"]
 deliberate_deviations = []
 prerequisites = []
 tests = []
@@ -18,3 +18,9 @@ symbol = "WorldSession::HandleCastSpellOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "The completed cast omits its create-item execute log and orders the item notification differently. A negative self-target starts a cast instead of returning the recorded Refusal."
+path = "module/src/native/cast.rs"
+symbol = "receive"
+evidence = "cast_and_interrupt tier 1 with conformance.17: missing opcode 588 and extra/missing opcode 358 at finish; unexpected opcode 305 and missing opcode 304 at bad_target."

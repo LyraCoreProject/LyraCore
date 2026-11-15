@@ -2,11 +2,12 @@ mod support;
 
 use std::time::{Duration, Instant};
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_shared::guid;
 use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 const PLAYER_GUID: u64 = 1;
-const WOLF_ENTRY: u32 = 51_000;
-const WOLF_GUID: u64 = (0xF130_u64 << 48) | ((WOLF_ENTRY as u64) << 24) | 1;
+const WOLF_GUID: u64 = guid::creature(TEST_WOLF_ENTRY, 1);
 const SOURCE_RULE_ID: u64 = 900_001;
 const WORLD_TICK: Duration = Duration::from_millis(500);
 
@@ -90,15 +91,5 @@ fn verifier(standalone: &Standalone, expect_rule_state: bool) -> std::process::O
 }
 
 fn packed_definition(rules: &str) -> String {
-    let subject = format!("entry:{WOLF_ENTRY}");
-    let material = format!("{subject}@{rules}");
-    let mut hasher = blake3::Hasher::new();
-    hasher.update(b"lyracore-eventai-definition-v1");
-    hasher.update(material.as_bytes());
-    let revision = u64::from_le_bytes(
-        hasher.finalize().as_bytes()[..8]
-            .try_into()
-            .expect("a BLAKE3 digest has at least eight bytes"),
-    );
-    format!("{subject}@{revision}@{rules}")
+    lyracore_shared::eventai::encode_definition(&format!("entry:{TEST_WOLF_ENTRY}"), rules)
 }

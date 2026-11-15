@@ -1,8 +1,10 @@
 # Testing
 
-CI runs four workflows on every pull request, forks included. This page lists their commands so you
-can reproduce a CI failure. Do not run them all before a PR; CI does. A green unit tier does not prove the durable tier, and neither proves
-what a real client shows.
+Rust and Runtime Scripts run on draft pull requests, forks included. Module durable and Native Host
+start when a PR is marked ready, then run on further pushes while it stays ready, subject to path
+filters. Pushes to `main` keep their existing workflow coverage. This page lists the commands so you
+can reproduce a CI failure. Do not run them all before a PR; CI does. A green unit tier does not
+prove the durable tier, and neither proves what a real client shows.
 
 ## Prerequisites
 
@@ -29,6 +31,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p lyracore-conformance -- --nocapture
 cargo test -p lyracore-conformance --example scoreboard --example audit --example run --example baseline
 python3 -B -m unittest discover -s conformance/tests -p 'test_*.py'
+python3 -B -m unittest discover -s native-host -p 'test_*.py'
 cargo test -p lyracore-protocol --example benilla_inventory
 python3 -m unittest discover -s importer/scripts/tests -v
 cargo test -p lyracore-importer
@@ -71,8 +74,15 @@ cargo build --release --target wasm32-unknown-unknown -p lyracore-module --featu
 cargo test -p lyracore-module --test weather -- --ignored
 ```
 
-CI runs every target in three parallel jobs with `--test-threads=4 --skip deadmines`. It skips the
+CI runs every target in six parallel jobs with `--test-threads=4 --skip deadmines`. It skips the
 workflow when a change touches only Markdown, `docs/` or `.claude/`.
+Both durable and Native Host also skip PRs that change only `conformance/*.py`,
+`conformance/tests/*.py`, the `conformance/run`, `baseline`, `scoreboard` and `audit` launchers, or
+`conformance/reports/**`. These files operate tooling and recorded reports; tier 1 reads its
+committed baseline and compiles its Rust support directly. Rust still tests the Python tooling,
+conformance crate and examples, including replay of the committed audit report. Changes to
+`conformance/support/`, `features/`, `tier1-baseline.json`, `examples/` or `src/`, and any changes to
+`module/`, `scripts/` or `.github/` code, still select the full workflows on ready PRs.
 The Deadmines targets need the separately installed dungeons Package. CI runs the
 [taxi Behavior](../conformance/features/taxi/taxi_single_hop.toml) against its committed tier 1
 signature baseline. The bundled route fixture removes its imported-data requirement.
@@ -94,9 +104,13 @@ estimates, use a successful main run: record each Module target's duration, roun
 seconds, in the JSON file. Measure a target from its `Running tests/…` line to the next one, because
 the log interleaves stdout and stderr and a `test result` line can land after the next target
 starts. Set each job's `JOB_SECONDS` entry to its total duration minus its target durations, less
-the smallest such value among the jobs. Leave out a baseline compile after a cache miss. Keep the
-run reference in the script current. Run `python3 -m unittest discover -s scripts/tests` to check
-the assignment.
+the smallest such value among the jobs. Leave out a baseline compile after a cache miss and the
+scoreboard steps that run only on `main`. Keep the run reference in the script current. Run
+`python3 -m unittest discover -s scripts/tests` to check the assignment.
+
+`native_debug_gate` builds the Module with other features, and this replaces the fixture build. The
+next target on its job then rebuilds the fixture for about 100 seconds. Record that rebuild on
+`native_debug_gate`, not on the next target, so that the target keeps a job to itself.
 
 The Session expiry test checks the five-minute production interval before it shortens the schedule
 on its private fixture. It then checks two real scheduled cleanups without a five-minute wait.
@@ -120,7 +134,9 @@ python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/rel
 CI builds the Host once and reuses the binary until `prepare-host.py`, the Host toolchain, a
 patch or a file in `native-host/src` changes. A parallel job runs the patched Host's
 `compile_cache`, `retention` and delivery `feed` unit tests in the SpacetimeDB checkout with the
-Host toolchain.
+Host toolchain. Those tests read only the same inputs, so after a pass the job skips them until an
+input or the workflow changes. The Module includes `delivery_rows.rs` in its own tests, which run
+on every Module change.
 
 `check.py` runs named checks. Without names it runs every shared check on one seeded Disposable
 Host. Give names to run only those checks, and use `--list` to print them. Checks run in the order
@@ -132,7 +148,7 @@ registry order, in the reverse order and one at a time. Creatures that a check s
 world. The runner prints `PASS` or `FAIL` with the check name, and for a failure the Host log lines
 written during that check.
 
-These checks get their own Host. CI runs the shared checks and these checks in three parallel jobs:
+These checks get their own Host. CI runs the shared checks and these checks in five parallel jobs:
 
 | Check | Covers |
 |---|---|
@@ -217,15 +233,20 @@ revision, scenario hash, and rule and data signature sets to equal
 After changing one scenario's signatures, run `./conformance/baseline <scenario>`. It runs that
 scenario's durable test and replaces only its entry from the new comparison. To regenerate every
 entry, run all tier 1 scenarios, then `./conformance/baseline`. Review the baseline diff in the
-same PR
-as the Behavior change. The baseline does not affect comparator classification or scoreboard results.
+same PR as the Behavior change. The baseline does not affect comparator classification or scoreboard results.
+The [PR signature ratchet](../conformance/README.md#pull-request-signature-ratchet) separately
+compares the committed baseline with the merge base. Added rule signatures fail when the scenario
+hash and harness revision are unchanged. Removed signatures pass. New scenarios and changed
+provenance pass as new measurements and appear in the job summary. A maintainer accepts a deliberate
+addition with the GitHub PR label `conformance-accept-signature`; label changes rerun the check.
+The workflow reads current labels from GitHub and runs trusted base code, with a read-only token
+and no PR checkout or repository secrets. A maintainer creates the label before first use.
 Use `./conformance/run <scenario>` for one tier 1 scenario, or add `--json` for grouped,
 machine-readable differences and baseline changes. It runs only the named durable test. See the
 [run output contract](../conformance/README.md#run-one-scenario).
-For a local implementer check, run the changed scenario and `cargo fmt --all -- --check`. Run
-`cargo clippy -p <crate> --all-targets --all-features -- -D warnings` for each changed crate. If the
-Module changed, run `cargo test -p lyracore-module --lib --features=debug_reducers`. CI runs all
-tier 1 scenarios and the full suite.
+For a local implementer check, run the changed scenario and `cargo fmt --all`. CI runs clippy,
+all tier 1 scenarios and the full suite. Run one test locally only to reproduce a CI failure or
+to see a new test fail before its fix.
 Run the manual [Conformance Audit](../conformance/README.md#conformance-audit) for comparisons over
 TCP on both servers. Run `./conformance/scoreboard` to join it with the Feature Ledger and the
 latest Conformance Audit report. The scoreboard's example tests check counts, evidence freshness
@@ -239,8 +260,16 @@ if one exists. An implementer reports suspected scenario defects to the author. 
 never edits the scenario, Golden Trace or Equivalence Rules to obtain a pass. See
 [ADR 0005](adr/0005-1-12-conformance.md).
 
-The durable CI target discovery includes `native_conformance` automatically and runs both tier 1
-scenarios. Use the [taxi setup](../conformance/README.md#taxi-data) to run that test.
+On pushes to `main`, the durable job that runs `native_conformance` produces
+`./conformance/scoreboard --json` from its complete `.lyracore/conformance/tier1.json`, uploads both
+files as `conformance-scoreboard-<commit>` for 90 days, and prints `--summary` in the job summary.
+Whole targets stay on one shard, so this adds no scenario rerun. Low numbers never fail this step;
+missing or malformed explicit evidence still fails. The summary shows evidence presence and state
+counts beside pass totals: zero passes with absent evidence means unmeasured. Signature totals
+include recorded stale evidence and are null when absent. CI commits no generated evidence.
+
+The durable CI target discovery includes `native_conformance` automatically and runs every tier 1
+scenario. Use the [taxi setup](../conformance/README.md#taxi-data) to run that test.
 `native_debug_gate` checks that native fixture entry stays behind `conformance_test_fixture` and
 that the check detects a missing or ineffective feature gate. Its durable test builds with only
 `debug_reducers`, the feature set used by `lyracore publish`, and checks that the Module does not

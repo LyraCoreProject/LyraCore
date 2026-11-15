@@ -6,22 +6,26 @@ import subprocess
 import sys
 import tempfile
 
+from workspace import check_spacetime_version, tier1_scratch
+
 
 def main():
     parser = argparse.ArgumentParser(prog="./conformance/baseline")
     parser.add_argument("scenario", nargs="?")
     args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
+    try:
+        check_spacetime_version(root)
+    except (OSError, ValueError, KeyError, RuntimeError) as error:
+        sys.stderr.write(f"setup_failed: {error}\n")
+        return 2
     command = ["cargo", "run", "--quiet", "--locked", "-p", "lyracore-conformance",
                "--example", "baseline", "--", "regenerate"]
     if args.scenario is None:
         os.chdir(root)
         os.execvp("cargo", command)
 
-    scratch = Path(os.environ.get(
-        "LYRACORE_CONFORMANCE_SCRATCH",
-        Path.home() / ".cache/lyracore-scratch/conformance-run",
-    ))
+    scratch = tier1_scratch()
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="baseline-", dir=scratch) as directory:
         result = Path(directory) / "result.json"

@@ -127,8 +127,8 @@ An acknowledgement that arrives after a same-map teleport and before the
 client's `MSG_MOVE_TELEPORT_ACK` is not relayed. Its pose may be the old
 position: a release acknowledges the unroot at the corpse.
 
-Root, stun and polymorph follow `lyracore_shared::aura::holds_in_place`, the
-rule the Module's movement gate also uses. The importer gives confuse, pacify
+Root, stun and polymorph follow the Module's `modifiers::holds_in_place`, the
+rule its movement gate also uses. The importer gives confuse, pacify
 and charm the polymorph mechanic, so they root the client too. Telling them
 apart needs a distinct mechanic in the imported spell data.
 
@@ -193,7 +193,7 @@ A Refusal or an empty reply does not establish a working gameplay feature.
 | GM tickets | Disabled service, absent ticket, refused creation and updates |
 | Pet stables | Failure code 6 |
 | Pet bar editing, autocast and pet spell requests | Specific System Messages, with a cast-failed packet for a pet spell |
-| Item containers, wrapping and explicit vendor destinations | Inventory Refusal |
+| Item containers and wrapping | Inventory Refusal |
 | Readable pages | A terminal page naming the unavailable text service |
 | Tutorial resets and action-bar display preferences | One unavailable notice per feature per World Session |
 | Tutorial mark-seen requests | No reply; login already reports every tutorial seen |

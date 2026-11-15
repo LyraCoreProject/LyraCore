@@ -1,8 +1,10 @@
-use super::*;
 use lyracore_shared::loot_roll::vote_kind;
 use wow_world_messages::vanilla::{
-    LootMethodError, SMSG_LOOT_RESPONSE_LootMethod, SMSG_LOOT_ALL_PASSED, SMSG_LOOT_RESPONSE,
+    Gold, LootMethodError, RollVote, SMSG_LOOT_RESPONSE_LootMethod, SMSG_LOOT_ALL_PASSED,
+    SMSG_LOOT_MASTER_LIST, SMSG_LOOT_MONEY_NOTIFY, SMSG_LOOT_RELEASE_RESPONSE, SMSG_LOOT_REMOVED,
+    SMSG_LOOT_RESPONSE, SMSG_LOOT_ROLL, SMSG_LOOT_ROLL_WON, SMSG_LOOT_START_ROLL,
 };
+use wow_world_messages::Guid;
 
 const SMSG_LOOT_RESPONSE_OPCODE: u16 = 0x0160;
 
@@ -147,6 +149,12 @@ pub fn build_loot_all_passed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lyracore_shared::loot_roll::vote_kind;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+    use wow_world_messages::vanilla::{
+        Gold, RollVote, SMSG_LOOT_RESPONSE_LootMethod, SMSG_LOOT_RESPONSE,
+    };
+    use wow_world_messages::Guid;
 
     #[test]
     fn all_passed_is_the_corpse_slot_item_property_and_suffix_under_its_header() {
@@ -166,5 +174,140 @@ mod tests {
                 0x00, 0x00, 0x00, 0x00, // random suffix id
             ]
         );
+    }
+
+    #[test]
+    fn loot_response_envelope_matches_gtker() {
+        let guid = lyracore_shared::guid::creature(620, 1);
+        let (opcode, body) = build_loot_response_raw(guid, 13, &[]);
+        let gtker = ServerOpcodeMessage::SMSG_LOOT_RESPONSE(Box::new(SMSG_LOOT_RESPONSE {
+            guid: Guid::new(guid),
+            loot_method: SMSG_LOOT_RESPONSE_LootMethod::Corpse,
+            gold: Gold::new(13),
+            items: Vec::new(),
+        }));
+        let mut framed = Vec::new();
+        gtker.write_unencrypted_server(&mut framed).unwrap();
+        let gtker_opcode = u16::from_le_bytes([framed[2], framed[3]]);
+        assert_eq!(
+            opcode, gtker_opcode,
+            "raw opcode must match gtker's SMSG_LOOT_RESPONSE"
+        );
+        assert_eq!(
+            body,
+            framed[4..],
+            "raw envelope must byte-match gtker's money-only loot"
+        );
+    }
+
+    #[test]
+    fn loot_response_item_layout_is_full_vanilla() {
+        let guid = 0xF130_0000_0000_0001;
+        let (_op, body) = build_loot_response_raw(guid, 5, &[(0, 25, 2, 1542, 117)]);
+        assert_eq!(
+            body.len(),
+            14 + 22,
+            "one item must add 22 bytes (full vanilla layout)"
+        );
+        assert_eq!(body[13], 1, "amount_of_items == 1");
+        let it = &body[14..];
+        assert_eq!(it[0], 0, "loot slot index");
+        assert_eq!(
+            u32::from_le_bytes([it[1], it[2], it[3], it[4]]),
+            25,
+            "item id (entry)"
+        );
+        assert_eq!(
+            u32::from_le_bytes([it[5], it[6], it[7], it[8]]),
+            2,
+            "stack count"
+        );
+        assert_eq!(
+            u32::from_le_bytes([it[9], it[10], it[11], it[12]]),
+            1542,
+            "display id"
+        );
+        assert_eq!(u32::from_le_bytes(it[17..21].try_into().unwrap()), 117);
+        assert_eq!(it[21], 0, "slot_type = TypeAllowLoot");
+    }
+
+    #[test]
+    fn loot_start_roll_carries_the_countdown_and_item() {
+        let m = build_loot_start_roll(0xF130_0000_0000_0007, 3, 1234, 60_000, 117);
+        assert_eq!(m.creature.guid(), 0xF130_0000_0000_0007);
+        assert_eq!(m.loot_slot, 3);
+        assert_eq!(m.item, 1234);
+        assert_eq!(m.item_random_property_id, 117);
+        assert_eq!(m.countdown_time, std::time::Duration::from_millis(60_000));
+        let msg = ServerOpcodeMessage::SMSG_LOOT_START_ROLL(Box::new(m));
+        let mut buf = Vec::new();
+        msg.write_unencrypted_server(&mut buf).unwrap();
+        assert!(!buf.is_empty());
+    }
+
+    #[test]
+    fn wire_roll_number_signals_pass_as_128_and_passes_a_real_roll_through() {
+        assert_eq!(wire_roll_number(vote_kind::PASS, 0), 128);
+        assert_eq!(
+            wire_roll_number(vote_kind::NEED, 87),
+            87,
+            "a real roll passes through unchanged"
+        );
+        assert_eq!(wire_roll_number(vote_kind::GREED, 42), 42);
+    }
+
+    #[test]
+    fn loot_roll_carries_the_voter_item_and_vote() {
+        let m = build_loot_roll(0xF130_0000_0000_0007, 3, 55, 1234, 87, vote_kind::NEED, 117);
+        assert_eq!(m.creature.guid(), 0xF130_0000_0000_0007);
+        assert_eq!(m.loot_slot, 3);
+        assert_eq!(m.player.guid(), 55);
+        assert_eq!(m.item, 1234);
+        assert_eq!(m.roll_number, 87);
+        assert_eq!(m.item_random_property_id, 117);
+        assert_eq!(m.vote, RollVote::Need);
+        let pass = build_loot_roll(0xF130_0000_0000_0007, 3, 55, 1234, 0, vote_kind::PASS, 117);
+        assert_eq!(pass.roll_number, 128);
+        assert_eq!(pass.vote, RollVote::Pass);
+    }
+
+    #[test]
+    fn loot_roll_won_carries_the_winner_roll_and_winning_tier() {
+        let m = build_loot_roll_won(0xF130_0000_0000_0007, 3, 1234, 55, 96, vote_kind::NEED, 0);
+        assert_eq!(m.looted_target.guid(), 0xF130_0000_0000_0007);
+        assert_eq!(m.loot_slot, 3);
+        assert_eq!(m.item, 1234);
+        assert_eq!(m.winning_player.guid(), 55);
+        assert_eq!(m.winning_roll, 96);
+        assert_eq!(m.vote, RollVote::Need);
+        let g = build_loot_roll_won(0xF130_0000_0000_0007, 3, 1234, 55, 42, vote_kind::GREED, 0);
+        assert_eq!(g.vote, RollVote::Greed);
+    }
+
+    #[test]
+    fn loot_master_list_carries_every_eligible_guid() {
+        let m = build_loot_master_list(&[10, 20, 30]);
+        assert_eq!(m.guids.len(), 3);
+        assert_eq!(m.guids[0].guid(), 10);
+        assert_eq!(m.guids[1].guid(), 20);
+        assert_eq!(m.guids[2].guid(), 30);
+        let msg = ServerOpcodeMessage::SMSG_LOOT_MASTER_LIST(Box::new(m));
+        let mut buf = Vec::new();
+        msg.write_unencrypted_server(&mut buf).unwrap();
+        assert!(!buf.is_empty());
+    }
+
+    #[test]
+    fn loot_money_notify_carries_the_share_not_a_hardcoded_total() {
+        let share = lyracore_shared::loot_roll::decode_money_share(
+            &lyracore_shared::loot_roll::encode_money_share(17),
+        )
+        .unwrap();
+        let m = build_loot_money_notify(share);
+        assert_eq!(m.amount, 17);
+        let msg = ServerOpcodeMessage::SMSG_LOOT_MONEY_NOTIFY(m);
+        let mut buf = Vec::new();
+        msg.write_unencrypted_server(&mut buf).unwrap();
+        assert!(!buf.is_empty());
     }
 }

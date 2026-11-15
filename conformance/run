@@ -8,6 +8,8 @@ import subprocess
 import sys
 import tempfile
 
+from workspace import check_spacetime_version, tier1_scratch, tier1_test
+
 
 SETUP_FAILURE_EXIT = 2
 
@@ -47,10 +49,11 @@ def main():
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parent.parent
-    scratch = Path(os.environ.get(
-        "LYRACORE_CONFORMANCE_SCRATCH",
-        Path.home() / ".cache/lyracore-scratch/conformance-run",
-    ))
+    try:
+        check_spacetime_version(root)
+    except (OSError, ValueError, KeyError, RuntimeError) as error:
+        return setup_failure(args.scenario, args.json, str(error))
+    scratch = tier1_scratch()
     scratch.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="tier1-", dir=scratch) as directory:
         result = Path(directory) / "result.json"
@@ -61,7 +64,7 @@ def main():
             test = subprocess.run(
                 ["cargo", "test", "--quiet", "--locked", "-p", "lyracore-module",
                  "--test", "native_conformance",
-                 f"tier1::{args.scenario}_matches_its_golden_trace", "--",
+                 tier1_test(args.scenario), "--",
                  "--ignored", "--exact", "--test-threads=1"],
                 cwd=root, env=environment, capture_output=True, text=True, check=False,
             )

@@ -1,8 +1,12 @@
-use super::*;
+use lyracore_shared::quest::quest_role;
 use wow_world_base::shared::quest_party_message_vanilla_tbc::QuestPartyMessage;
-
-pub const ROLE_START: u8 = 0;
-pub const ROLE_END: u8 = 1;
+use wow_world_messages::vanilla::{
+    Gold, Level, NpcTextUpdateEmote, QuestCompletable, QuestGiverStatus, QuestItem,
+    QuestItemRequirement, QuestItemReward, MSG_QUEST_PUSH_RESULT, SMSG_QUESTGIVER_OFFER_REWARD,
+    SMSG_QUESTGIVER_QUEST_COMPLETE, SMSG_QUESTGIVER_QUEST_LIST, SMSG_QUESTGIVER_REQUEST_ITEMS,
+    SMSG_QUESTGIVER_STATUS, SMSG_QUESTUPDATE_ADD_KILL, SMSG_QUESTUPDATE_FAILEDTIMER,
+};
+use wow_world_messages::Guid;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuestRewardView {
@@ -25,6 +29,7 @@ pub struct QuestDetailView {
     pub reward_xp: u32,
     pub next_quest_id: u32,
     pub max_level_money_reward: u32,
+    pub flags: u32,
     pub rewards: Vec<QuestRewardView>,
     pub choice_rewards: Vec<QuestRewardView>,
     /// Gameobject objectives encode the negated entry id as a u32.
@@ -43,7 +48,7 @@ pub struct GiverQuestEval {
 }
 
 pub fn eval_status(e: &GiverQuestEval) -> QuestGiverStatus {
-    if e.role == ROLE_END && e.active {
+    if e.role == quest_role::END && e.active {
         if e.complete {
             QuestGiverStatus::Reward2
         } else {
@@ -188,7 +193,7 @@ pub fn quest_menu_items(evals: &[GiverQuestEval]) -> Vec<QuestItem> {
 
 /// Completed quests use RewardRep, 4, in menus and Reward, 6, above the giver.
 fn menu_icon(e: &GiverQuestEval) -> QuestGiverStatus {
-    if e.role == ROLE_END && e.active {
+    if e.role == quest_role::END && e.active {
         if e.complete {
             QuestGiverStatus::RewardRep
         } else {
@@ -259,8 +264,7 @@ pub fn build_quest_details_raw(giver_guid: u64, d: &QuestDetailView) -> (u16, Ve
     body.extend_from_slice(&giver_guid.to_le_bytes());
     body.extend_from_slice(&d.quest_id.to_le_bytes());
     for text in [&d.title, &d.details, &d.objectives_text] {
-        body.extend_from_slice(text.as_bytes());
-        body.push(0);
+        super::push_cstr(&mut body, text);
     }
     body.extend_from_slice(&1u32.to_le_bytes());
     for rewards in [&d.choice_rewards, &d.rewards] {
@@ -323,11 +327,6 @@ pub fn build_request_items(
 // gtker writes u16 reputation-faction fields; build 5875 reads u32.
 const SMSG_QUEST_QUERY_RESPONSE_OPCODE: u16 = 0x005D;
 
-fn push_cstr(body: &mut Vec<u8>, s: &str) {
-    body.extend_from_slice(s.as_bytes());
-    body.push(0);
-}
-
 pub fn build_quest_query_response_raw(d: &QuestDetailView) -> (u16, Vec<u8>) {
     let mut body = Vec::with_capacity(256);
     let u32le = |body: &mut Vec<u8>, v: u32| body.extend_from_slice(&v.to_le_bytes());
@@ -345,7 +344,7 @@ pub fn build_quest_query_response_raw(d: &QuestDetailView) -> (u16, Vec<u8>) {
     u32le(&mut body, d.max_level_money_reward);
     u32le(&mut body, 0);
     u32le(&mut body, 0);
-    u32le(&mut body, 0);
+    u32le(&mut body, d.flags);
     for i in 0..4 {
         let (item, count) = d
             .rewards
@@ -368,10 +367,10 @@ pub fn build_quest_query_response_raw(d: &QuestDetailView) -> (u16, Vec<u8>) {
     body.extend_from_slice(&0f32.to_le_bytes());
     body.extend_from_slice(&0f32.to_le_bytes());
     u32le(&mut body, 0);
-    push_cstr(&mut body, &d.title);
-    push_cstr(&mut body, &d.objectives_text);
-    push_cstr(&mut body, &d.details);
-    push_cstr(&mut body, "");
+    super::push_cstr(&mut body, &d.title);
+    super::push_cstr(&mut body, &d.objectives_text);
+    super::push_cstr(&mut body, &d.details);
+    super::push_cstr(&mut body, "");
     for i in 0..4 {
         let (creature_or_go, count, req_item, req_item_count) =
             d.objectives.get(i).copied().unwrap_or((0, 0, 0, 0));
@@ -381,7 +380,7 @@ pub fn build_quest_query_response_raw(d: &QuestDetailView) -> (u16, Vec<u8>) {
         u32le(&mut body, req_item_count);
     }
     for _ in 0..4 {
-        push_cstr(&mut body, "");
+        super::push_cstr(&mut body, "");
     }
     (SMSG_QUEST_QUERY_RESPONSE_OPCODE, body)
 }
@@ -399,6 +398,7 @@ pub fn build_quest_complete(d: &QuestDetailView) -> SMSG_QUESTGIVER_QUEST_COMPLE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 
     fn ev(role: u8, startable: bool, active: bool, complete: bool) -> GiverQuestEval {
         GiverQuestEval {
@@ -415,29 +415,29 @@ mod tests {
     #[test]
     fn status_picks_most_actionable() {
         assert_eq!(
-            quest_giver_status(&[ev(ROLE_START, true, false, false)]),
+            quest_giver_status(&[ev(quest_role::START, true, false, false)]),
             QuestGiverStatus::Available
         );
         assert_eq!(
             quest_giver_status(&[
-                ev(ROLE_START, true, false, false),
-                ev(ROLE_END, false, true, true)
+                ev(quest_role::START, true, false, false),
+                ev(quest_role::END, false, true, true)
             ]),
             QuestGiverStatus::Reward2
         );
         assert_eq!(
             quest_giver_status(&[
-                ev(ROLE_END, false, true, false),
-                ev(ROLE_START, true, false, false)
+                ev(quest_role::END, false, true, false),
+                ev(quest_role::START, true, false, false)
             ]),
             QuestGiverStatus::Available
         );
         assert_eq!(
-            quest_giver_status(&[ev(ROLE_END, false, true, false)]),
+            quest_giver_status(&[ev(quest_role::END, false, true, false)]),
             QuestGiverStatus::Incomplete
         );
         assert_eq!(
-            quest_giver_status(&[ev(ROLE_START, false, false, false)]),
+            quest_giver_status(&[ev(quest_role::START, false, false, false)]),
             QuestGiverStatus::None
         );
         assert_eq!(quest_giver_status(&[]), QuestGiverStatus::None);
@@ -453,9 +453,9 @@ mod tests {
     #[test]
     fn quest_list_filters_to_actionable_and_tags_icons() {
         let evals = [
-            ev(ROLE_START, true, false, false),
-            ev(ROLE_END, false, true, true),
-            ev(ROLE_START, false, false, false),
+            ev(quest_role::START, true, false, false),
+            ev(quest_role::END, false, true, true),
+            ev(quest_role::START, false, false, false),
         ];
         let list = build_quest_list(100, "Greetings", &evals);
         assert_eq!(list.quest_items.len(), 2);
@@ -484,6 +484,7 @@ mod tests {
             reward_xp: 0,
             next_quest_id: 0,
             max_level_money_reward: 0,
+            flags: 0,
             rewards: vec![],
             choice_rewards: vec![],
             objectives: vec![],
@@ -507,6 +508,7 @@ mod tests {
             next_quest_id: 15,
             money_reward: 500,
             max_level_money_reward: 4200,
+            flags: 0,
             ..detail_view()
         };
         let (_, body) = build_quest_query_response_raw(&d);
@@ -603,6 +605,7 @@ mod tests {
             reward_xp: 0,
             next_quest_id: 0,
             max_level_money_reward: 0,
+            flags: 0,
             rewards: Vec::new(),
             choice_rewards: Vec::new(),
             objectives: Vec::new(),
@@ -659,6 +662,7 @@ mod tests {
             reward_xp: 130,
             next_quest_id: 0,
             max_level_money_reward: 0,
+            flags: 0,
             rewards: vec![QuestRewardView {
                 item_entry: 6078,
                 count: 1,

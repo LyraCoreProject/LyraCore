@@ -1,10 +1,12 @@
+pub(crate) mod package;
+
 use std::collections::BTreeSet;
 
 use lyracore_protocol::{
     codec,
     messages::vanilla::{
         opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
-        PartyResult, SMSG_NOTIFICATION,
+        PartyResult,
     },
 };
 use lyracore_shared::chat::chat_kind;
@@ -15,7 +17,7 @@ use spacetimedb::{
 };
 
 use super::directory::game_character_directory;
-use super::{directory, game_native_player, realm_shard::game_native_away, Rollback};
+use super::{directory, realm_shard::game_native_away, Rollback};
 use crate::{
     group::{
         self, game_group, game_group_event, game_group_invite, game_group_member,
@@ -24,6 +26,9 @@ use crate::{
     peer::{realm_shard, require_sender, world_shard},
     remote_bindings::peer as remote,
 };
+
+// Opcode zero carries a Package Group command instead of client packet bytes.
+const PACKAGE_COMMAND: u32 = 0;
 
 #[table(accessor = game_party_character)]
 #[derive(Clone)]
@@ -125,16 +130,18 @@ pub(super) fn current(ctx: &ReducerContext, character: &PartyCharacter) -> Optio
         .game_character_directory()
         .guid()
         .find(character.guid)?;
-    let away = ctx
-        .db
-        .game_native_away()
-        .account_id()
-        .find(character.account_id)?;
-    (entry.account_id == character.account_id
-        && away.character_guid == character.guid
-        && away.connection_id.to_u128() == character.connection
-        && away.world == Some(entry.world))
-    .then_some(entry.world)
+    if character.connection == 0 {
+        return (entry.account_id == character.account_id
+            && entry.world == character.world
+            && super::package_actor::current(ctx, character))
+        .then_some(entry.world);
+    }
+    directory::current_world(
+        ctx,
+        character.account_id,
+        character.guid,
+        character.connection,
+    )
 }
 
 pub(crate) fn online(ctx: &ReducerContext, guid: u64) -> bool {
@@ -157,7 +164,7 @@ pub(super) fn named(ctx: &ReducerContext, name: &str) -> Option<u64> {
 }
 
 pub(super) fn facts(ctx: &ReducerContext, guid: u64, online: bool) -> Option<PartyCharacter> {
-    let player = ctx.db.game_native_player().character_guid().find(guid)?;
+    let player = super::world_session(ctx, guid)?;
     let character = crate::helpers::character_by_guid(ctx, guid)?;
     Some(PartyCharacter {
         guid,
@@ -311,12 +318,18 @@ pub(super) fn submit(
     if realm_shard(ctx).is_none() {
         return Ok(false);
     }
+    let (opcode, body) = client_frame(message)?;
+    submit_admitted(ctx, connection, guid, opcode, body)
+}
+
+/// The opcode and body a client message has in its unencrypted world frame.
+pub(super) fn client_frame(message: &ClientOpcodeMessage) -> Result<(u32, Vec<u8>), String> {
     let mut frame = Vec::new();
     message
         .write_unencrypted_client(&mut frame)
         .map_err(|error| error.to_string())?;
     let opcode = u32::from_le_bytes(frame[2..6].try_into().expect("encoded client header"));
-    submit_admitted(ctx, connection, guid, opcode, frame[6..].to_vec())
+    Ok((opcode, frame[6..].to_vec()))
 }
 
 pub(super) fn submit_admitted(
@@ -352,13 +365,16 @@ pub fn idc_realm_party_command(
 ) -> Result<(), String> {
     directory::require_world(ctx)?;
     let actor: PartyCharacter = bsatn::from_slice(&character).map_err(|error| error.to_string())?;
-    if current(ctx, &actor) != Some(ctx.sender()) {
+    if opcode == PACKAGE_COMMAND {
+        return package::apply(ctx, actor, &body);
+    }
+    if actor.connection == 0 || current(ctx, &actor) != Some(ctx.sender()) {
         return Err("World Session changed".into());
     }
     let guid = actor.guid;
     let class = actor.class;
     store_character(ctx, actor.clone());
-    if opcode == 0x31d {
+    if opcode == codec::CMSG_RESET_INSTANCES_OPCODE {
         return super::instance_reset::dispatch(ctx, actor, &body);
     }
     if super::meeting_stone::is_realm_request(opcode) {
@@ -399,8 +415,10 @@ pub fn idc_realm_party_command(
             .into_reducer_error()
         });
     }
+    let request =
+        super::party::PartyRequest::of(&message).ok_or("opcode is not a party or raid request")?;
     let Some((action, reply)) =
-        super::party::command(ctx, guid, class, message).map_err(Rollback::into_reducer_error)?
+        super::party::command(ctx, guid, class, request).map_err(Rollback::into_reducer_error)?
     else {
         return Ok(());
     };
@@ -435,7 +453,7 @@ pub fn idc_realm_party_command(
     }
     let mut groups = group::action_groups(ctx, guid, action);
     let mark = event_mark(ctx);
-    group::apply_action(ctx, Plane::RealmCore, guid, action)
+    group::apply_action(ctx, Plane::RealmShard, guid, action)
         .map_err(|error| reply.refused(error).into_reducer_error())?;
     groups.extend(group::action_groups(ctx, guid, action));
     let mut characters = vec![guid];
@@ -452,19 +470,21 @@ pub fn realm_party_command_answered(
 ) -> Result<(), String> {
     let actor: PartyCharacter =
         bsatn::from_slice(&call.character).map_err(|error| error.to_string())?;
+    if call.opcode == PACKAGE_COMMAND {
+        if let Err(error) = result {
+            spacetimedb::log::warn!("Package Group request for {} refused: {error}", actor.guid);
+        }
+        return Ok(());
+    }
     let connection = ConnectionId::from_u128(actor.connection);
-    if !ctx
-        .db
-        .game_native_player()
-        .connection_id()
-        .find(connection)
-        .is_some_and(|player| player.character_guid == actor.guid)
-    {
+    if !super::rollback::connection_holds(ctx, connection, actor.guid) {
         return Ok(());
     }
     match result {
         Ok(()) => {
-            if call.opcode == 0x31d || super::meeting_stone::is_realm_request(call.opcode) {
+            if call.opcode == codec::CMSG_RESET_INSTANCES_OPCODE
+                || super::meeting_stone::is_realm_request(call.opcode)
+            {
                 return Ok(());
             }
             let message = lyracore_protocol::world::decode(call.opcode, &call.body)
@@ -482,27 +502,14 @@ pub fn realm_party_command_answered(
             }
         }
         Err(error) => {
-            if let Some(packets) = super::rollback::replies_in(&error) {
-                for (opcode, body) in packets {
-                    super::send_raw(ctx, connection, opcode, body, false);
-                }
+            let unavailable = if call.opcode == codec::CMSG_RESET_INSTANCES_OPCODE {
+                super::instance_reset::unavailable()
+            } else if super::meeting_stone::is_realm_request(call.opcode) {
+                super::rollback::unavailable("Meeting Stone")
             } else {
-                super::send(
-                    ctx,
-                    connection,
-                    ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(SMSG_NOTIFICATION {
-                        notification: if call.opcode == 0x31d {
-                            "Instance reset request unavailable. Please try again."
-                        } else if super::meeting_stone::is_realm_request(call.opcode) {
-                            "Meeting Stone request unavailable. Please try again."
-                        } else {
-                            "Party request unavailable. Please try again."
-                        }
-                        .into(),
-                    })),
-                    false,
-                )?;
-            }
+                super::rollback::unavailable("Party")
+            };
+            super::rollback::replay_refusal(ctx, connection, &error, unavailable);
         }
     }
     Ok(())
@@ -577,7 +584,16 @@ pub(crate) fn publish(
                 connection: recipient.connection,
                 kind: event.kind,
                 other: event.other_guid,
-                payload: event.payload,
+                payload: if event.kind == event_kind::INVITE && recipient.connection == 0 {
+                    ctx.db
+                        .game_group_invite()
+                        .by_target()
+                        .filter(event.recipient_guid)
+                        .next()
+                        .map_or_else(String::new, |invite| invite.id.to_string())
+                } else {
+                    event.payload
+                },
             })
         })
         .collect();
@@ -645,13 +661,7 @@ pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), 
     }
     let before: Vec<_> = affected
         .into_iter()
-        .filter(|guid| {
-            ctx.db
-                .game_native_player()
-                .character_guid()
-                .find(*guid)
-                .is_some()
-        })
+        .filter(|guid| super::world_session(ctx, *guid).is_some())
         .map(|guid| (guid, super::party::roster_state(ctx, guid)))
         .collect();
     directory::observe_revision(ctx, update.revision);
@@ -680,6 +690,24 @@ pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), 
         project(ctx, roster, update.revision);
     }
     for event in update.events {
+        if event.connection == 0 && event.kind == event_kind::INVITE {
+            if let Ok(id) = event.payload.parse() {
+                if let Err(error) = package::submit(
+                    ctx,
+                    event.recipient,
+                    package::Action::Answer(package::Invitation {
+                        id,
+                        inviter: event.other,
+                    }),
+                ) {
+                    spacetimedb::log::warn!(
+                        "Package party answer to invite {id} for {} failed: {error}",
+                        event.recipient
+                    );
+                }
+            }
+            continue;
+        }
         if matches!(event.kind, event_kind::LIST | event_kind::DESTROYED)
             || ctx.timestamp.to_micros_since_unix_epoch() >= update.events_expire_micros
         {
@@ -695,13 +723,11 @@ pub(super) fn apply_snapshot(ctx: &ReducerContext, update: &[u8]) -> Result<(), 
         {
             continue;
         }
-        if ctx
-            .db
-            .game_native_player()
-            .connection_id()
-            .find(ConnectionId::from_u128(event.connection))
-            .is_some_and(|player| player.character_guid == event.recipient)
-        {
+        if super::rollback::connection_holds(
+            ctx,
+            ConnectionId::from_u128(event.connection),
+            event.recipient,
+        ) {
             super::party::group_event(
                 ctx,
                 event.recipient,
@@ -798,6 +824,7 @@ fn project(ctx: &ReducerContext, roster: Roster, revision: u64) {
             revision,
         });
         restore(ctx, guid);
+        package::membership_changed(ctx, guid);
         crate::instance::reconcile_instance_removal(ctx, guid);
     }
     projections.group_id().delete(roster.group_id);
@@ -861,7 +888,7 @@ pub(super) fn deleted(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     };
     let groups = group::action_groups(ctx, guid, action);
     if group::group_of(ctx, guid).is_some() {
-        group::apply_action(ctx, Plane::RealmCore, guid, action)
+        group::apply_action(ctx, Plane::RealmShard, guid, action)
             .map_err(|error| error.to_string())?;
     }
     if let Some(mut character) = ctx.db.game_party_character().guid().find(guid) {
@@ -902,7 +929,7 @@ pub(crate) fn relay_chat(ctx: &ReducerContext, line: &crate::realm_chat::RealmCh
         return;
     };
     let Ok(packet) =
-        lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(message)))
+        lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(message)))
     else {
         return;
     };
@@ -988,6 +1015,18 @@ pub struct PartyProjectionRetry {
     pub call: WorldPartyUpdate,
 }
 
+crate::outside_table_catalog!(
+    game_party_character,
+    game_party_membership,
+    game_party_projection,
+    game_party_presence,
+    game_realm_party_command,
+    game_world_party_update,
+    game_party_disband,
+    game_party_projection_retry
+);
+crate::virtual_clock_exempt!(game_party_projection_retry);
+
 #[reducer(on_result(game_world_party_update))]
 pub fn world_party_update_answered(
     ctx: &ReducerContext,
@@ -1016,7 +1055,7 @@ pub fn retry_party_projection(ctx: &ReducerContext, retry: PartyProjectionRetry)
     }
 }
 
-pub(crate) fn has_world_session(ctx: &ReducerContext, guid: u64) -> bool {
+pub(crate) fn has_world_session_in_realm(ctx: &ReducerContext, guid: u64) -> bool {
     ctx.db
         .game_character_directory()
         .guid()

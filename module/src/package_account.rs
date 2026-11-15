@@ -1,6 +1,7 @@
 use spacetimedb::{table, ReducerContext, Table};
 
-use crate::auth::{game_account, Account, Appearance};
+use crate::auth::{game_account, Account};
+use crate::character::Appearance;
 
 #[table(accessor = game_package_account)]
 pub struct PackageAccount {
@@ -18,9 +19,9 @@ pub(crate) fn create_package_character(
     race: u8,
     class: u8,
 ) -> Result<u64, String> {
-    crate::auth::check_new_character(ctx, name, race, class)?;
+    crate::character::check_new_character(ctx, name, race, class)?;
     let account_id = owned_account_with_room(ctx, package_name)?;
-    Ok(crate::auth::insert_new_character(
+    Ok(crate::character::insert_new_character(
         ctx,
         account_id,
         name.to_string(),
@@ -30,7 +31,10 @@ pub(crate) fn create_package_character(
     )?)
 }
 
-fn owned_account_with_room(ctx: &ReducerContext, package_name: &str) -> Result<u64, String> {
+pub(crate) fn owned_account_with_room(
+    ctx: &ReducerContext,
+    package_name: &str,
+) -> Result<u64, String> {
     let owned: Vec<u64> = ctx
         .db
         .game_package_account()
@@ -38,13 +42,16 @@ fn owned_account_with_room(ctx: &ReducerContext, package_name: &str) -> Result<u
         .filter(package_name)
         .map(|row| row.account_id)
         .collect();
-    if let Some(&id) = owned
-        .iter()
-        .find(|&&id| crate::auth::account_has_room(ctx, id))
-    {
+    if let Some(&id) = owned.iter().find(|&&id| {
+        if crate::peer::world_shard(ctx).is_some() {
+            crate::native::character_names::account_has_room(ctx, id)
+        } else {
+            crate::character::account_has_room(ctx, id)
+        }
+    }) {
         return Ok(id);
     }
-    // The # prefix cannot collide with uppercased alphanumeric login names.
+    // The # separator cannot collide with uppercased alphanumeric login names.
     let accounts = ctx.db.game_account();
     let username = (owned.len()..)
         .map(|n| format!("{package_name}#{n}"))
@@ -67,4 +74,59 @@ fn owned_account_with_room(ctx: &ReducerContext, package_name: &str) -> Result<u
         package_name: package_name.to_string(),
     });
     Ok(account.id)
+}
+
+// Propagate an error to abort the caller; logout hooks and deletion commit together.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn delete_package_character(
+    ctx: &ReducerContext,
+    package: &str,
+    guid: u64,
+) -> Result<(), String> {
+    use crate::game_world_entity;
+    use crate::native::package_relocation::{game_package_relocation, Relocation};
+
+    if crate::peer::world_shard(ctx).is_some() {
+        return Err("delete the Package Character on its World Shard".into());
+    }
+    crate::sessionless::action_gate(ctx, guid).map_err(|error| error.to_string())?;
+    let character = crate::helpers::character_by_guid(ctx, guid).ok_or("Character unavailable")?;
+    if ctx
+        .db
+        .game_package_account()
+        .account_id()
+        .find(character.account_id)
+        .is_none_or(|owner| owner.package_name != package)
+    {
+        return Err("Character belongs to another Package".into());
+    }
+    if ctx
+        .db
+        .game_package_relocation()
+        .guid()
+        .filter(guid)
+        .any(|request| request.result == Relocation::Pending)
+    {
+        return Err("Package relocation is pending".into());
+    }
+    crate::character::character_deletion_gate(ctx, character.account_id, guid)?;
+    if let Some(entity) = ctx.db.game_world_entity().guid().find(guid) {
+        crate::character::remove_live_character(
+            ctx,
+            entity,
+            crate::character::CharacterDeparture::Logout,
+        );
+    }
+    crate::character::apply_delete_character(ctx, character.account_id, guid)
+}
+
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_delete_package_character(
+    ctx: &ReducerContext,
+    package: String,
+    guid: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    crate::package::delete_character(ctx, &package, guid)
 }

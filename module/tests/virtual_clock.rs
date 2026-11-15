@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_test_support::{ReducerConnection, Standalone};
 use serde_json::json;
 
@@ -74,9 +75,13 @@ fn a_pending_cast_resolves_at_its_virtual_due_time() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_spell_projectile_impacts_at_its_virtual_due_time() {
     let shard = fixture("virtual-spell-impact");
-    shard.assert_call("debug_spawn_at_feet", &["1", "51000", "2"]);
-    let target = shard.query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")[0]
-        ["guid"]
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "2"],
+    );
+    let target = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ))[0]["guid"]
         .clone();
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET health = 100, max_health = 100 WHERE guid = {target}"
@@ -150,10 +155,54 @@ fn a_taxi_started_off_phase_waits_for_its_own_first_tick() {
     start_clock(&shard);
     let mut connection = shard.connect_reducers(&[]);
     advance(&mut connection, 1);
-    shard.assert_sql("INSERT INTO game_taxi_node (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) VALUES (5090990,100,0,0,0,0,'Start',0,1147),(5090991,101,0,200,0,0,'End',0,1147)");
-    shard.assert_sql("INSERT INTO game_taxi_path (id,source_node_id,destination_node_id,fare) VALUES (5090992,5090990,5090991,0)");
-    shard.assert_sql("INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) VALUES (5090993,5090992,0,0,0,0,0,0,0),(5090994,5090992,1,0,200,0,0,0,0)");
-    shard.assert_sql("INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded) VALUES (1,5090992,5090990,5090991,1147,0,0,0,0,0,0,false)");
+    shard.insert_rows(
+        "game_taxi_node",
+        &[
+            &[
+                ("id", &5090990),
+                ("client_node_id", &100),
+                ("name", &"Start"),
+                ("mount_display_alliance", &1147),
+            ],
+            &[
+                ("id", &5090991),
+                ("client_node_id", &101),
+                ("x", &200),
+                ("name", &"End"),
+                ("mount_display_alliance", &1147),
+            ],
+        ],
+    );
+    shard.insert_row(
+        "game_taxi_path",
+        &[
+            ("id", &5090992),
+            ("source_node_id", &5090990),
+            ("destination_node_id", &5090991),
+        ],
+    );
+    shard.insert_rows(
+        "game_taxi_path_node",
+        &[
+            &[("id", &5090993), ("path_id", &5090992)],
+            &[
+                ("id", &5090994),
+                ("path_id", &5090992),
+                ("node_index", &1),
+                ("x", &200),
+            ],
+        ],
+    );
+    shard.insert_row(
+        "game_active_taxi_flight",
+        &[
+            ("character_guid", &1),
+            ("path_id", &5090992),
+            ("source_node_id", &5090990),
+            ("destination_node_id", &5090991),
+            ("mount_display_id", &1147),
+        ],
+    );
     shard.assert_call("gw_arm_taxi_flight", &[r#"{"guid":1,"ownership":null}"#]);
     let position = || {
         shard.query_rows("SELECT x FROM game_world_entity WHERE guid = 1")[0]["x"]

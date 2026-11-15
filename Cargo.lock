@@ -1188,7 +1188,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "lyracore-importer",
- "lyracore-shared",
  "serde",
  "serde_json",
  "sha2",
@@ -1245,6 +1244,7 @@ dependencies = [
 name = "lyracore-package-delta"
 version = "0.1.0"
 dependencies = [
+ "lyracore-shared",
  "serde_json",
 ]
 
@@ -1272,12 +1272,14 @@ dependencies = [
 [[package]]
 name = "lyracore-shared"
 version = "0.1.0"
+dependencies = [
+ "blake3",
+]
 
 [[package]]
 name = "lyracore-test-support"
 version = "0.1.0"
 dependencies = [
- "lyracore-shared",
  "rustc_lexer",
  "serde",
  "serde_json",
@@ -2795,7 +2797,7 @@ dependencies = [
 [[package]]
 name = "wire-client"
 version = "0.2.0-conformance.5"
-source = "git+https://github.com/LyraCoreProject/wire-harness?rev=166ecd701003b1d8538737d3f95ee0fa345d1779#166ecd701003b1d8538737d3f95ee0fa345d1779"
+source = "git+https://github.com/LyraCoreProject/wire-harness?rev=004d8d740dbbc5d06548b6710d6ede0f682c3807#004d8d740dbbc5d06548b6710d6ede0f682c3807"
 dependencies = [
  "anyhow",
  "flate2",

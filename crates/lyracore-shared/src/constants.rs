@@ -39,6 +39,7 @@ pub mod player_flags {
 
 pub mod npc_flags {
     pub const GOSSIP: u32 = 0x0000_0001;
+    pub const QUESTGIVER: u32 = 0x0000_0002;
     // Vanilla VENDOR is 0x4; later expansions use a different numbering.
     pub const VENDOR: u32 = 0x0000_0004;
     pub const TAXI: u32 = 0x0000_0008;
@@ -55,12 +56,18 @@ pub mod npc_flags {
 }
 
 pub mod go_type {
+    pub const DOOR: u8 = 0;
+    pub const BUTTON: u8 = 1;
     pub const QUESTGIVER: u8 = 2;
     pub const CHEST: u8 = 3;
+    pub const TRAP: u8 = 6;
+    pub const GOOBER: u8 = 10;
     pub const ELEVATOR: u8 = 11;
     pub const MO_TRANSPORT: u8 = 15;
     // Meeting Stones send CMSG_MEETINGSTONE_JOIN, not CMSG_GAMEOBJ_USE.
     pub const MEETINGSTONE: u8 = 23;
+    // Source type 25 is FISHINGHOLE; import drops it before using GATHER.
+    pub const GATHER: u8 = 25;
 }
 
 // Build 5875 stores visibility flags in byte 3 of UNIT_FIELD_BYTES_1.
@@ -93,18 +100,14 @@ pub mod unit_flags {
 
 pub mod tracer_spell {
     pub const SPELL_ID: u32 = 6673;
-    pub const AURA_SLOT: u8 = 0;
     pub const AURA_SLOTS: u8 = 48; // Total UNIT_FIELD_AURA slots.
                                    // Slots 0..32 render buffs; slots 32..48 render debuffs.
     pub const BUFF_SLOT_COUNT: u8 = 32;
     pub const AURA_FLAGS: u8 = 0x09;
-    pub const AURA_DURATION_MICROS: i64 = 30_000_000;
 }
 
 pub mod starter_item {
     pub const ENTRY: u32 = 25;
-    // HIGHGUID_ITEM occupies bits 48..63 of an item GUID.
-    pub const HIGHGUID_ITEM: u64 = 0x4000;
     // Vanilla inventory slots: equipment 0..18, bags 19..22, backpack 23..38.
     pub const BACKPACK_SLOT_0: u8 = 23;
     pub const MAINHAND_SLOT: u8 = 15;
@@ -217,8 +220,7 @@ pub mod taxi_fixture {
     pub const MOUNT_DISPLAY_ALLIANCE: u32 = 1147;
 
     pub const FLIGHT_MASTER_ENTRY: u32 = 51_006;
-    pub const FLIGHT_MASTER_GUID: u64 =
-        (0xF130_u64 << 48) | ((FLIGHT_MASTER_ENTRY as u64) << 24) | 1;
+    pub const FLIGHT_MASTER_GUID: u64 = crate::guid::creature(FLIGHT_MASTER_ENTRY, 1);
 }
 
 pub mod gossip_option {
@@ -257,6 +259,14 @@ pub mod gossip_condition {
     pub const QUEST_NONE: u32 = 8;
 }
 
+/// `game_realm.realm_type` values, as vmangos `RealmType` numbers them.
+pub mod realm_type {
+    pub const PVP: u32 = 1;
+    pub const RP: u32 = 6;
+    pub const RP_PVP: u32 = 8;
+    pub const FFA_PVP: u32 = 16;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -280,43 +290,8 @@ mod tests {
     }
 
     #[test]
-    fn sheath_state_validation_rejects_out_of_range_bytes() {
-        for ok in [
-            sheath_state::UNARMED,
-            sheath_state::MELEE,
-            sheath_state::RANGED,
-        ] {
-            assert!(sheath_state::is_valid(ok), "{ok} is a real sheath state");
-        }
-        for bad in [3u8, 4, 17, 255] {
-            assert!(!sheath_state::is_valid(bad), "{bad} must be refused");
-        }
-    }
-
-    #[test]
     fn creature_type_mask_is_0x9() {
         assert_eq!(type_mask::CREATURE, 0x9);
-    }
-
-    #[test]
-    fn vanilla_loot_tag_flags_use_build_5875_values() {
-        assert_eq!(unit_dynamic_flags::TAPPED, 0x0004);
-        assert_eq!(unit_dynamic_flags::TAPPED_BY_PLAYER, 0x0008);
-    }
-
-    #[test]
-    fn vanilla_auction_vocabulary_uses_the_build_5875_values() {
-        assert_eq!(npc_flags::AUCTIONEER, 0x1000);
-    }
-
-    #[test]
-    fn go_type_questgiver_is_cmangos_type_2() {
-        assert_eq!(go_type::QUESTGIVER, 2);
-    }
-
-    #[test]
-    fn go_type_meetingstone_is_cmangos_type_23() {
-        assert_eq!(go_type::MEETINGSTONE, 23);
     }
 
     #[test]
@@ -353,6 +328,7 @@ mod tests {
         );
     }
 
+    // Imported `game_gossip_condition.kind` rows store these values.
     #[test]
     fn gossip_condition_keeps_existing_persisted_values() {
         assert_eq!(

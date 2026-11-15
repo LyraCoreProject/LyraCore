@@ -1,7 +1,7 @@
 use spacetimedb::{ReducerContext, Table};
 
 use lyracore_package_delta::{
-    is_package_gossip_id, FieldValue, Operation, Table as ClaimTable, TracedRow,
+    is_package_gossip_id, FieldValue, Operation, Table as ClaimTable, TracedRow, GOSSIP_FAMILY,
 };
 
 use crate::game_creature_template;
@@ -11,9 +11,22 @@ use crate::{
     GossipMenuProfileOption, GossipOption, NpcText, NpcTextSlot,
 };
 
-use super::{as_f32, as_str, as_u32, as_u8, check_insert_is_whole, UpdateTarget};
+use super::{
+    as_f32, as_str, as_u32, as_u8, check_insert_is_whole, missing_reference, no_such_column,
+    ClaimOps,
+};
 
-pub(super) fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+pub(super) const OPS: ClaimOps = ClaimOps {
+    name: GOSSIP_FAMILY,
+    in_package_range,
+    row_is_present,
+    check_references: Some(check_references),
+    clear_package_range,
+    write_row,
+    after_write: None,
+};
+
+fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
     for row in rows {
         match row.table() {
             ClaimTable::GossipMenu | ClaimTable::GossipMenuProfile | ClaimTable::NpcTextSlot => {
@@ -81,71 +94,42 @@ fn menu_profile_exists_after_apply(ctx: &ReducerContext, rows: &[TracedRow], men
 }
 
 fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, String> {
-    if let Some(FieldValue::U32(value)) = row.fields().get(field).map(|claimed| &claimed.value) {
-        return Ok(*value);
-    }
-
-    let id = row.row_id();
-    let value = match row.table() {
-        ClaimTable::GossipMenu => ctx
-            .db
-            .game_gossip_menu()
-            .entry()
-            .find(id as u32)
-            .map(|menu| menu.text_id),
-        ClaimTable::GossipMenuProfile => ctx
-            .db
-            .game_gossip_menu_profile()
-            .menu_id()
-            .find(id as u32)
-            .map(|profile| profile.text_id),
-        ClaimTable::GossipMenuProfileOption => ctx
-            .db
-            .game_gossip_menu_profile_option()
-            .row_id()
-            .find(id as u32)
-            .map(|option| option.menu_id),
-        ClaimTable::GossipOption => ctx
-            .db
-            .game_gossip_option()
-            .row_id()
-            .find(id as u32)
-            .map(|option| option.entry),
-        ClaimTable::NpcTextSlot => ctx
-            .db
-            .game_npc_text_slot()
-            .id()
-            .find(id)
-            .map(|slot| slot.text_id),
-        other => unreachable!("gossip value lookup received {other}"),
-    };
-
-    value.ok_or_else(|| {
-        format!(
-            "`{}` row {} vanished during preflight",
-            row.table(),
-            row.key()
-        )
+    super::final_u32(row, field, || {
+        let id = row.row_id();
+        match row.table() {
+            ClaimTable::GossipMenu => ctx
+                .db
+                .game_gossip_menu()
+                .entry()
+                .find(id as u32)
+                .map(|menu| menu.text_id),
+            ClaimTable::GossipMenuProfile => ctx
+                .db
+                .game_gossip_menu_profile()
+                .menu_id()
+                .find(id as u32)
+                .map(|profile| profile.text_id),
+            ClaimTable::GossipMenuProfileOption => ctx
+                .db
+                .game_gossip_menu_profile_option()
+                .row_id()
+                .find(id as u32)
+                .map(|option| option.menu_id),
+            ClaimTable::GossipOption => ctx
+                .db
+                .game_gossip_option()
+                .row_id()
+                .find(id as u32)
+                .map(|option| option.entry),
+            ClaimTable::NpcTextSlot => ctx
+                .db
+                .game_npc_text_slot()
+                .id()
+                .find(id)
+                .map(|slot| slot.text_id),
+            other => unreachable!("gossip value lookup received {other}"),
+        }
     })
-}
-
-fn missing_reference(row: &TracedRow, field: &str, value: u32) -> String {
-    format!(
-        "`{}` row {} references missing {field} {value}",
-        row.table(),
-        row.key()
-    )
-}
-
-pub(super) fn update_target(ctx: &ReducerContext, row: &TracedRow) -> UpdateTarget {
-    if row.table() != ClaimTable::GossipMenu && updates_an_uninvented_package_row(row) {
-        return UpdateTarget::Uninvented;
-    }
-    if row_is_present(ctx, row) {
-        UpdateTarget::Present
-    } else {
-        UpdateTarget::Absent
-    }
 }
 
 fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
@@ -179,11 +163,11 @@ fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
     }
 }
 
-fn updates_an_uninvented_package_row(row: &TracedRow) -> bool {
-    row.operation() == Operation::Update && is_package_gossip_id(row.row_id())
+fn in_package_range(row: &TracedRow) -> bool {
+    row.table() != ClaimTable::GossipMenu && is_package_gossip_id(row.row_id())
 }
 
-pub(super) fn clear_package_range(ctx: &ReducerContext) {
+fn clear_package_range(ctx: &ReducerContext) {
     let profiles = ctx.db.game_gossip_menu_profile();
     for menu_id in package_keys(profiles.iter().map(|row| u64::from(row.menu_id))) {
         profiles.menu_id().delete(menu_id as u32);
@@ -215,7 +199,7 @@ fn package_keys(keys: impl Iterator<Item = u64>) -> Vec<u64> {
     keys.filter(|key| is_package_gossip_id(*key)).collect()
 }
 
-pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     match row.operation() {
         Operation::Insert => insert_row(ctx, row),
         Operation::Update => update_row(ctx, row),
@@ -504,10 +488,6 @@ fn apply_npc_text_slot_field(
     Ok(())
 }
 
-fn no_such_column(table: &str, column: &str) -> String {
-    format!("`{table}` has no claimable column `{column}`")
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
@@ -529,7 +509,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(in_package_range(&plan.rows[0]));
     }
 
     #[test]
@@ -544,7 +524,7 @@ mod tests {
         )])
         .expect("plan builds");
 
-        assert!(!updates_an_uninvented_package_row(&plan.rows[0]));
+        assert!(!in_package_range(&plan.rows[0]));
     }
 
     #[test]

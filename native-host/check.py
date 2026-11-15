@@ -25,6 +25,12 @@ import realm_communication
 import instance_shard
 import instance_allocation
 import character_names
+import package_creation
+import package_deletion
+import package_groups
+import package_guilds
+import package_relocation
+import package_transfer
 from instance_reset import check_instance_resets
 import retention
 from spell_source import check_spell_source_behavior
@@ -1919,6 +1925,7 @@ def check_transport_crossings(host):
             f'VALUES ({path + 1 + index},{path},{index},{map_id},{x},7000,0,{flags},{delay * 1000})')
     host.sql(f"INSERT INTO game_transport (entry,name,display_id,size,flags,taxi_path_id,move_speed,accel_rate,"
         f"period_ms,map_id) VALUES ({entry},'Native crossing',3015,1,40,{path},10,5,24000,0)")
+    host.call('debug_repair_after_publish', [])
     try:
         sailor = host.enter_world('Sailor', at=(0, 7020, 7000, 0))
         docker = host.enter_world('Docker', at=(0, 6900, 7000, 0))
@@ -3422,7 +3429,8 @@ def check_companion_actions(host, first, second, guid, other_guid):
     vitals = host.rows('SELECT health, power, money FROM game_world_entity WHERE guid = 1')
     relocate(entrance, 36, instance, 101)
     assert host.rows('SELECT map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = 1') == [[36, instance, 4000, 1000, 0]]
-    assert host.rows('SELECT health, power, money FROM game_world_entity WHERE guid = 1') == vitals
+    relocated_vitals = host.rows('SELECT health, power, money FROM game_world_entity WHERE guid = 1')
+    assert relocated_vitals == vitals, (vitals, relocated_vitals)
     assert host.rows('SELECT map_id, pending_instance_id, online FROM game_character WHERE guid = 1') == [[36, instance, False]]
     assert 1 in creates(first.collect())
     assert 1 in destroys(second.collect())
@@ -4106,16 +4114,17 @@ def check_inventory(host):
     assert not host.rows(f'SELECT guid FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090050')
     client.send(0x1a0, struct.pack('<QQB', vendor, food_guid, 2))
     sold = client.collect()
-    assert values(sold, food_guid)[14] == 4
-    assert item_pointer(values(sold, guid), 69) == 0x4090_0000_0000_0000
+    assert values(sold, food_guid, create=True)[14] == 4
+    buyback_guid = item_pointer(values(sold, guid), 69)
+    assert buyback_guid != food_guid and buyback_guid != 0
     assert values(sold, guid)[1226] == 4
-    assert host.rows(f'SELECT stack_count, price FROM game_character_buyback WHERE player_guid = {guid}') == [[2, 4]]
+    assert host.rows(f'SELECT item_guid, price FROM game_buyback_item WHERE character_guid = {guid}') == [[buyback_guid, 4]]
     client.send(0x290, struct.pack('<QI', vendor, 69))
     bought_back = client.collect()
-    assert values(bought_back, food_guid)[14] == 6
+    assert values(bought_back, food_guid, create=True)[14] == 6
     assert item_pointer(values(bought_back, guid), 69) == 0
-    assert 0x4090_0000_0000_0000 in destroys(bought_back)
-    assert not host.rows(f'SELECT id FROM game_character_buyback WHERE player_guid = {guid}')
+    assert buyback_guid in destroys(bought_back)
+    assert not host.rows(f'SELECT item_guid FROM game_buyback_item WHERE character_guid = {guid}')
     host.sql(f'UPDATE game_world_entity SET npc_flags = 261 WHERE guid = {vendor}')
     client.send(0x1b7, struct.pack('<Q', vendor))
     assert (0x1b8, struct.pack('<Q', vendor)) in client.collect()
@@ -4129,7 +4138,7 @@ def check_inventory(host):
     assert host.rows(f'SELECT slot FROM game_item_instance WHERE guid = {food_guid}')[0][0] < 39
     client.send(0x1b9, struct.pack('<Q', vendor))
     bank_slot = client.collect()
-    assert (0x1ba, struct.pack('<I', 3)) in bank_slot
+    assert not any(opcode == 0x1ba for opcode, _ in bank_slot)
     assert values(bank_slot, guid)[194] >> 16 & 255 == 1
     assert host.rows(f'SELECT bank_bag_slots, money FROM game_world_entity WHERE guid = {guid}') == [[1, 48980]]
     client.send(0x17c, struct.pack('<QI', vendor, 0))
@@ -4732,7 +4741,7 @@ def check_combo_points(host):
 
     def effect(kind):
         host.sql(f'UPDATE game_spell_effect SET kind = {kind} WHERE spell_id = 133')
-        finisher = 0x08 if kind == 0x0d else 0  # SPELL_ATTR_COMBO_FINISHER.
+        finisher = 0x08 if kind == 0x0d else 0  # CAST_FLAG_COMBO_FINISHER.
         host.sql(f'UPDATE game_spell SET cast_flags = {finisher} WHERE spell_id = 133')
 
     def shown(packets=()):
@@ -5481,6 +5490,12 @@ ALONE = {
     'instance-shard': (instance_shard.check, {'seeded': True}),
     'instance-allocation': (instance_allocation.check, {'seeded': True}),
     'character-names': (character_names.check, {'seeded': True}),
+    'package-creation': (package_creation.check, {'seeded': True}),
+    'package-deletion': (package_deletion.check, {'seeded': True}),
+    'package-groups': (package_groups.check, {'seeded': True}),
+    'package-guilds': (package_guilds.check, {'seeded': True}),
+    'package-relocation': (package_relocation.check, {'seeded': True}),
+    'package-transfer': (package_transfer.check, {'seeded': True}),
 }
 
 

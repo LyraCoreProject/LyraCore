@@ -36,7 +36,7 @@ All nested tables refuse unknown fields too. Paths are relative, without parent-
 | `required_rungs` | Evidence needed to count the Behavior as done |
 | `scenarios` | Plain string ids in the pinned harness catalogue; empty until authored |
 | `deliberate_deviations` | Intentional result differences, each with an `id`, `result`, `reason` and HTTPS `source` |
-| `known_gaps` | Optional list of defects or open stock-client questions with `description`, relative core `path`, `symbol` and `evidence`; no status or classification effect |
+| `known_gaps` | Optional list of defects or open stock-client questions with `description`, relative core `path`, `symbol` and `evidence`; work kind derived from path |
 | `real_client` | A human-maintained check, described below |
 | `prerequisites` | Fixture or world-data requirements in plain words |
 | `tests` | Retained Rust evidence, each with a source `path`, test `function` and `rung` |
@@ -68,8 +68,9 @@ Known gaps record observed defects or open stock-client questions and their evid
 excuse differences nor change rule/data classification, pass counts or freshness.
 `scope_verification` marks Behaviors whose every request has unverified stock-client use. It
 requires at least one request and does not change the denominator. The scoreboard shows known-gap
-counts separately. Each entry requires nonempty description, symbol and evidence fields and a
-relative source path. Unknown fields, including status, fail.
+counts separately. Paths under `importer/` identify Data Gaps; other paths identify behavior gaps.
+This work assignment does not change comparator tags or conformance results. Each entry requires
+nonempty description, symbol and evidence fields and a relative source path. Unknown fields, including status, fail.
 
 ### Data-dependent fields
 
@@ -102,12 +103,7 @@ dispatch result and open question in `known_gaps`.
 The scoreboard fails when a request is unclaimed or both claimed and out of scope. It also checks
 that every variant in the core `ClientOpcodeMessage` enum has the same number in the inventory.
 
-`tools/create_ledger_denominator.py` created the initial request Behaviors, inventory and scope
-files from the pinned vmangos raw sources and the core opcode dependency. It groups uncertain
-requests by system and records vmangos dispatch results in their known gaps. Its
-`tools/ledger-denominator-base.txt` input names the 23 Behaviors that already existed. Run it with
-`--output-dir` pointing to scratch to reproduce the initial set; it refuses to overwrite files.
-After creation, maintain the Behavior TOML files, inventory and scope decisions by hand. The coverage
+Maintain the Behavior TOML files, inventory and scope decisions by hand. The coverage
 check catches an inventory request with no Behavior or out-of-scope reason. New entries can leave
 `replies` empty until a scenario author
 checks the packets returned by the Reference Server. A vmangos dispatch entry marked unhandled
@@ -145,12 +141,33 @@ and data signature sets for every catalogue scenario. A signature is the rule, r
 when named, checkpoint, stream, opcode and field path. It holds no reason or packet values. The
 durable test checks provenance and
 requires exact set equality, including when a difference disappears. After one scenario changes,
-use `./conformance/baseline <scenario>`. It runs only that scenario's tier 1 test and replaces its
-entry from the comparison made in that invocation. Other entries stay byte-identical. To regenerate
-every entry, run all tier 1 scenarios, then `./conformance/baseline`. Both forms check the core commit,
+use `./conformance/baseline <scenario>`. It runs only that scenario's tier 1 test and adds or
+replaces its entry from the comparison made in that invocation. Other entries stay byte-identical.
+To regenerate every entry, run all tier 1 scenarios, then `./conformance/baseline`. Both forms check the core commit,
 harness revision and scenario hashes before writing the canonical file.
 Review the changed signatures with the behavior change. This baseline does not change comparator
 tags, scoreboard pass/fail or the Conformance Audit.
+
+### Pull request signature ratchet
+
+The `Conformance ratchet` job compares the PR's Tier 1 baseline with its merge base. For a
+scenario with unchanged `scenario_sha256` and `harness_revision`, any added rule signature fails,
+even if another signature was removed. Removed signatures and data changes pass this check.
+New scenarios and changed scenario hashes or harness revisions are new measurements: they pass
+and are listed in the job summary. The durable tests still require exact equality with the
+committed baseline for both signature classes.
+
+A maintainer can apply the PR label `conformance-accept-signature` to accept a deliberate addition.
+Keep its reason and added signatures in the PR. Adding or removing the label reruns the check;
+the summary retains accepted additions. A maintainer creates the label once in GitHub.
+
+The workflow uses `pull_request_target` and runs only code from the trusted base branch. It reads
+the two baselines as Git blobs and reads current labels from the GitHub API. PR files cannot
+change the label decision. The token has only `contents: read` and `pull-requests: read`; checkout
+credentials are not persisted, PR code is never executed, and no repository secrets or caches
+are used. The baseline comes from the merge base, as in the harness strictness allowlist check.
+The workflow takes effect after it lands on the base branch; an older base branch must first
+receive this tooling. Maintainers can then require the `ratchet` job in branch protection.
 
 ### Global tier 1 properties
 
@@ -161,6 +178,10 @@ when the Golden Trace signatures still match the baseline.
 
 The checks live in `conformance/support/properties/`, one module per stable property name:
 
+- `buyback_item_integrity` checks that a full sale keeps the Item GUID and that buyback links never
+  refer to Items also reachable through equipment, carried slots, bank slots or bag contents. It
+  compares consecutive full projections at reducer boundaries; partial-stack sales may clone.
+  It does not prove copper conservation or complete wire fidelity.
 - `private_fields_stay_private` checks CREATE and VALUES masks against vmangos's 1.12.1
   [update-field flags](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/UpdateFields_1_12_1.h)
   and [recipient rules](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Object.cpp).
@@ -225,15 +246,17 @@ baseline still names the old harness revision. The generator requires a complete
 catalogue scenario; a setup failure stops the proposal.
 
 The workflow runs comparisons without a credential. It passes the harness revision and a
-base64-encoded Tier 1 baseline, capped at 64 KiB before encoding, as job outputs. A separate
+base64-encoded Tier 1 baseline, capped at 128 KiB before encoding, as job outputs. A separate
 runner fetches the tag, validates the baseline and derives its signature summary before using
 `HARNESS_PIN_TOKEN` to open or update the single
 `ci/auto-harness-pin` PR. Its body shows added and removed rule and data signatures per scenario,
 or says when only provenance changed. Signature changes add the `ready-for-human` label. The
 workflow never merges the PR. Normal PR checks run on the bot PR.
 
-If the harness catalogue adds a scenario without a core tier 1 test, the workflow names the missing
-scenarios in its run summary and opens no PR. The scenario author makes one core PR that advances
+A scenario has a core tier 1 test when `module/tests/conformance/tier1.rs` defines
+`fn <scenario>_matches_its_golden_trace`, the test `./conformance/run` selects, and its Behavior
+lists the scenario. If the harness catalogue adds a scenario without one, the workflow names the
+missing scenarios in its run summary and opens no PR. The scenario author makes one core PR that advances
 the harness pin and `wire-client` revision, updates `Cargo.lock`, adds the test and Feature Ledger
 entry, and regenerates the Tier 1 baseline. The separate pin proposal workflow resumes for later
 harness revisions that core can already test.
@@ -309,6 +332,31 @@ The comparator marks a Behavior as nonconforming when it finds rule records. The
 check fails when either signature set changes or provenance differs, regardless of that result.
 No packet text enters this result. The scoreboard consumes it.
 
+## White melee roll rates
+
+`white_melee_outcomes` follows [ADR 0007](../docs/adr/0007-statistical-roll-conformance.md).
+Its expected probabilities are independently derived from pinned vmangos attack-table source;
+its small Golden Trace checks that derivation in practice. It is a scoped exception to the
+recordings-only rate authority, and cannot establish attack cadence or all melee parity.
+
+The Tier 1 collector sends native attack and stop requests, advances ordinary scheduled callbacks
+in batches and classifies delivered combat bytes with the harness decoder. It counts only each
+Character's own attacker stream. It checks attack start, damage, stop and live context; it does
+not run the full update-projection properties over the 200,000-swing stream. Other scenarios keep
+those properties. Ordinary `white_melee_distribution` signatures and `known_gaps` retain the
+findings. The [measurement report](reports/2026-11-05-white-melee.md) records exact counts, warm
+cost, repeatability and strictness. A held category signature cannot detect further worsening
+within that category. TCP audits explicitly report a missing full roll sample.
+
+## Direct-damage spell roll rates
+
+`spell_direct_damage_outcomes` extends [ADR 0007](../docs/adr/0007-statistical-roll-conformance.md)
+with a level-60 mage casting Scorch at level-60 and level-63 creatures. Complete samples use
+50,000 casts per level for each public seed. The first core measurement is blocked: passive
+targets still damage the mage and cause cast pushback. Ordinary `spell_sample` findings retain
+that gap; every rate remains unmeasured. The [spell report](reports/2026-11-05-spell-rolls.md)
+records the context, expected rates and diagnostic evidence. Partial counts cannot claim parity.
+
 ## Taxi data
 
 `taxi_single_hop` uses the harness's money, known-flight-node and creature Fixture Verbs. The
@@ -323,7 +371,14 @@ scenario's flight master. The template
 entry comes from the pinned scenario's Creature Fixture Verb, currently 523.
 The node and route numbers were checked against build-5875 `TaxiNodes.dbc`, `TaxiPath.dbc` and
 `TaxiPathNode.dbc`. Node text is fixture-authored. Mount display 6852 agrees with the Golden Trace;
-no mount template or other world data is needed.
+no mount template is needed.
+
+The base scenario also places fixture creature 990002 at route vertex id 44 (index 9) with aggro range 80
+and hostile faction template 14. The fixture installs the numeric relations for faction templates
+1 and 14 from the pinned World Source. The creature is outside takeoff and landing range;
+its only nearby Character is in flight. The range spans the four-second sensing period at
+32 yards per second. The existing Golden Trace therefore still requires
+no passenger combat. Observer and reconnect scenarios retain their original sparse worlds.
 
 `route_fixture_matches_every_recorded_route_point_and_mount` checks all 27 serialized spline
 destinations exactly against vertices 1 through 27, including their wire precision. The trace
@@ -360,7 +415,10 @@ uses item entries 25, 38, 39, 40 and 2362. The pinned Golden Trace records the f
 armor entries in each peer CREATE update; the fixture supplies only the item template fields
 needed to equip them. Entry 25 already has a template in the disposable Shard. The fixture adds
 these rows before creating either Character, so area rest state and visible equipment are present
-on both arrival streams.
+on both arrival streams. The opposite-faction variant adds the orc warrior outfit: entries 6125,
+139, 140 and 12282. Its pinned Golden Trace records those visible item entries and the axe's
+2900 ms attack interval. Both outfits use synthetic item templates, so remaining field differences
+stay in the measured baseline.
 
 The [T2g comparison](reports/2026-10-27-t2g.md) records the conformance.4 aligned differences
 and maps them to the taxi entry's known gaps. The [T2d comparison](reports/2026-10-27-t2d.md)
@@ -374,6 +432,7 @@ From the repo root:
 ```bash
 ./conformance/scoreboard
 ./conformance/scoreboard --json
+./conformance/scoreboard --summary
 cargo test -p lyracore-conformance --example scoreboard
 ```
 
@@ -382,20 +441,39 @@ and a row for each Behavior. Tier 1, Conformance Audit and real-client checks ha
 It does not infer a pass from a test declaration or claim overall completion from these columns.
 The ledger's other required rungs remain obligations.
 
+On each push to `main` outside documentation, `Module durable tests` publishes the `conformance-scoreboard-<commit>`
+artifact for 90 days and a short job summary. The artifact contains `scoreboard.json` from
+`./conformance/scoreboard --json` and the run's `tier1.json`. CI shards whole test targets, so the
+job that runs `native_conformance` already records all tier 1 scenarios in one process. No scenario
+rerun or shard merge is needed. Added work is scoreboard compilation, two scoreboard invocations
+and artifact upload, with no extra durable test time. CI never commits this evidence. Compare artifacts by
+commit to track progress within retention; download them for longer retention.
+
+`--summary` prints the same short summary used by CI. It includes Behaviors with scenarios, passes,
+recorded rule and data signature totals for each tier, evidence states, open work by kind and
+data coverage.
+Low counts do not fail the scoreboard. Invalid inputs still fail. A recorded signature total sums
+per-Behavior distinct signatures from the supplied report, including stale evidence; the state
+counts show whether those measurements are current. Absent evidence has null signature totals.
+A pass total of zero alone does not mean measured failure: check `evidence` and `states` in the
+summary. `absent` means no report; `not_run` means a Behavior lacks complete evidence.
+
 The system table counts Behaviors with and without scenarios. The open-work list includes every
-Behavior without a scenario and every scenario-backed Behavior without a clean tier 1 and audit
-pass, or with known gaps. A scenario author takes an entry without a scenario. An implementer takes
-an entry with one when its evidence still points to implementation work. If tier 1 passes, or the
-best available rule-signature count is zero and the ledger has no known gaps, an entry with a missing,
+Behavior without a scenario except entries with only Data Gaps, and every scenario-backed Behavior
+without a clean tier 1 and audit pass, or with behavior gaps. A scenario author takes an entry
+without a scenario. Data Gaps get separate `data_import` items, including on mixed Behaviors.
+An implementer takes an entry with one when its evidence still points to implementation work. If tier 1 passes, or the
+best available rule-signature count is zero and the ledger has no behavior gaps, an entry with a missing,
 stale, unverified or reference-unstable audit calls for evidence refresh by a maintainer through
 `./conformance/audit`.
-Scope verification follows established implementation and scenario work; evidence refresh comes
-last. Each entry gives a next command. The scenario-author command opens the ledger entry. An
-implementer normally runs the first
-listed scenario; further scenarios are in the Behavior's `scenarios` field.
+Scope verification follows established implementation and scenario work, then data import; evidence
+refresh comes last. A data importer takes `data_import` items and fixes World Source translation
+or imported representation. Its command locates findings in the importer source paths. Each entry
+gives a next command. The scenario-author command opens the ledger entry. An implementer normally
+runs the first listed scenario; further scenarios are in the Behavior's `scenarios` field.
 Each open-work item also has `reproduce_with`: `tier1` or `audit` for work with a scenario, and null
-when no scenario exists. An implementer whose tier 1 result passes but whose audit reports
-differences reproduces them with `./conformance/audit --scenario <id> --check`. An audit-only difference usually also means
+for scenario author, scope verification and data import work. An implementer whose tier 1 result
+passes but whose audit reports differences reproduces them with `./conformance/audit --scenario <id> --check`. An audit-only difference usually also means
 the tier 1 fixture misses something; a scenario author can fix that fixture.
 Run a tier 1 item's `next_command` from the repo root. Exit code 0 means its signature set still
 matches the Tier 1 baseline and all properties passed. Code 1 means a baseline change or property
@@ -411,14 +489,21 @@ list sorts by descending number of other Behaviors that directly depend on the e
 descending measured rule-signature count, then descending number of distinct
 claimed request opcodes, then ascending Behavior id. It uses the committed tier 1 baseline's
 distinct rule signatures when the Behavior has one, then the audit count, then a local tier 1
-count. If none exists, it uses the number of distinct known gaps. Repeating a known gap does not
+count. If none exists, it uses the number of distinct behavior gaps. Data Gaps never increase
+scenario or implementer priority.
+Data-import items sort by distinct Data Gap count, then Behavior id; dependency and opcode counts
+are zero for those items. Repeating a known gap does not
 increase priority. Dependency edits change the ranking and receive review as such in their PRs.
 The formula uses no assigned priority.
 
 `--json` emits one JSON object and no text. Schema version 1 has `systems` and `behaviors` objects
-keyed by their ledger ids, `open_work` in rank order, `opcode_coverage`, `trainable_spells`,
+keyed by their ledger ids, a `summary`, `open_work` in rank order, `opcode_coverage`, `trainable_spells`,
 `tier1_evidence` and `audit_evidence`. Evidence is null when absent; otherwise it has `path` and
 the complete validated schema-2 `report`, including scenario comparisons and audit summaries.
+`summary` gives `behaviors`, `with_scenario`, `without_scenario`, `open_work_by_kind`, and
+`data_coverage`, `tier1` and `audit` objects. Each tier gives `evidence` (`absent` or `present`),
+`pass`, Behavior
+`states` counts, `scenarios_recorded`, `scenarios_expected`, `rule_signatures` and `data_signatures`.
 Each system gives `behaviors`, `with_scenario`, `without_scenario`, `tier1_pass`, `audit_pass`,
 `real_client_waiting`, `claimed_opcodes` and `unavailable`. Each Behavior gives its `system`,
 `scenarios`, `dependencies`, `required_rungs`, `scope_verification`, `tier1`, `audit`, `real_client`, `claimed_opcodes`,
@@ -428,8 +513,10 @@ measured. State values are `no_scenario`, `not_run`, `stale`, `different`, `unve
 signatures and raw record counts. Spell counts give build, source path or missing expected path, and per-class
 trainable, supported-kind and unsupported-kind counts. Open-work items give `behavior`, `system`,
 `kind`, `reproduce_with`, `next_command`, `prerequisites` and the three numeric ranking inputs. `kind` is
-`scenario_author`, `implementer`, `scope_verification` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input
-is the measured signature count or the distinct-gap fallback. Counts and state names have the same
+`scenario_author`, `implementer`, `scope_verification`, `data_import` or `evidence_refresh`.
+The `open_signatures_or_gaps` ranking input
+is the measured signature count or the distinct behavior-gap fallback; data-import items use
+distinct Data Gaps. Counts and state names have the same
 meaning as the text scoreboard.
 `opcode_coverage` reports `claimed`, `out_of_scope`, `unclaimed` and `total` for the build-5875
 request inventory. `unclaimed_opcodes` lists the missing numbers; it is empty on a successful run.
@@ -528,7 +615,41 @@ replays that earlier report's LyraCore candidates when its harness revision matc
 Older reports receive structure checks; the newest report receives current ledger checks, so a
 Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes are not audit baselines.
 
+### Data coverage
+
+`summary.data_coverage` contains ledger gap totals (`behavior` and `data_import`) and `systems`.
+Each system contains those same `gaps`, `by_source` counts keyed by relative source path, and
+`port_census` reports linked from importer gap evidence. Gap totals count ledger entries; the
+ranking deduplicates identical entries. Classification is derived from the path, with no new
+handwritten status or changes to ledger files.
+
+Each census reports `planned_import_rows_by_table` from its vmangos production plan and the
+archived Compatibility Manifest (`manifest`), including finding codes, classifications and occurrence
+counts. `--summary` prints planned rows and totals of finding occurrences by classification; codes remain
+in JSON and the census. Reports retain their source identity and profile in the linked
+census document. These are archived planned rows, not a measurement of a running Realm or the
+current importer. Findings can overlap and count different units from imported rows. Reports can
+also appear under several systems; do not sum them across systems. No source-data percentage or
+unsupported-row denominator is inferred. Scenario coverage and comparator data signatures remain
+separate measurements. Missing census evidence gives an empty report map, not zero unsupported rows.
+
 ## Conformance Audit
+
+Before a full audit, rehearse every catalogue scenario on both servers:
+
+```bash
+./conformance/audit --rehearse --client-data /path/to/client/Data
+```
+
+Rehearsal uses the full audit's catalogue order and capture path, restoring both servers before
+each scenario. It requires an imported-world snapshot that matches both source tiers and never starts or falls
+back to a fresh world import. If none exists, run one scenario with `--check --strict-world` to
+seal a matching snapshot first. Rehearsal
+prints one JSON line per completed scenario with setup success, wall time, and rule/data difference
+record counts for both servers. Differences are data and do not stop the remaining captures.
+Setup, capture or comparison execution failures exit 2; reaching the end exits 0. It writes no audit
+report, accepts neither `--date` nor `--output`, and stops both servers on exit. Scrubbed captures
+and comparisons remain in the printed diagnostics directory, outside the repository.
 
 Run one scenario while climbing a Behavior:
 
@@ -537,6 +658,16 @@ Run one scenario while climbing a Behavior:
 ./conformance/audit --scenario taxi_single_hop --check --json --client-data /path/to/client/Data
 ./conformance/audit --scenario taxi_single_hop --check --agreement --json --client-data /path/to/client/Data
 ```
+
+Catalogue fixture creatures can lie outside the `alliance-single` slice. A local `--check`
+prepares a catalogue snapshot from the cached base world with the existing importer's
+`--include-creatures` option. It loads World Source rows and client catalogues for the required
+creature and vendor content; terrain, navigation and collision data are retained. This is a warm
+preparation, without a new full world import. The catalogue key covers the base key, required
+creature entries and the preparation code. The store keeps this snapshot together with its base.
+Rehearsal can prepare this fixture content from a matching cached base; it never starts a fresh
+world import or regenerates terrain, navigation or collision data. Full audits build the catalogue
+snapshot from their newly imported base world, even when an older catalogue snapshot exists.
 
 The local check captures the scenario on both servers and compares each candidate with its Golden
 Trace. It prints the same grouped text or JSON fields as `./conformance/run`. Its `baseline` field
@@ -554,24 +685,47 @@ fixture blind spot. The command exits 1 when either array is nonempty or either 
 differs. A tier 1 setup failure exits 2 with its diagnostic.
 
 The first check creates a disposable Realm worktree and imports the pinned vmangos world. It seals
-the imported Realm at `$HOME/.cache/lyracore/conformance-worlds/<key>/`. The key covers the explicit
-import contract below, the full Module schema extracted from the deployment WASM, the vmangos
-database pin, the client Data bytes, and the CLI pin. Gameplay edits outside the import contract
-reuse the snapshot. Schema hashing includes table defaults, access and event flags. It normalizes
-type references and unordered definitions while preserving column and enum variant order. Later
-checks copy the snapshot into a new worktree at the current core commit; `dev up` publishes the
-current Module through SpacetimeDB's migration check. A schema change changes the key and requires a
-new import. The store retains the newest two snapshots and removes older ones after a successful
-seal. Abandoned `.pending` directories are removed under the shared snapshot-store lock. Copying
-requires the world size plus 10% or 256 MiB of free space, whichever reserve is larger. A failed
-seal retains the stopped imported world and its password. The next check retries sealing without
-importing again. An interrupted import requires inspection before cleanup. Do not edit a sealed
-snapshot. Add `--require-snapshot` to forbid a cold import. A missing or changed import key then
-exits 2.
+the imported Realm at `$HOME/.cache/lyracore/conformance-worlds/<key>/`. The key covers Tier A of the
+import contract below, the vmangos database pin, the client Data bytes, the CLI pin and the snapshot
+format version. `--strict-world` also requires matching Tier B sources. The seal records the full Module schema extracted from the deployment WASM.
+Tier B gameplay edits reuse the snapshot with drift reported in an ordinary local check.
 
-Each check restores the imported data before capture. The active Realm, target directory and
-temporary files live under `$HOME/.cache/lyracore-scratch/m5c/`, or `LYRACORE_AUDIT_SCRATCH` when
-set. The runner waits for its Native Host to exit before replacing or deleting data. It records
+A check can also reuse a snapshot after adding ordinary private tables. Every existing table,
+default, access flag, event flag and named type must remain unchanged. Existing reducer definitions
+and explicit names must remain present. Schedules, outboxes, lifecycle declarations and other schema
+sections must remain unchanged. New public or event tables and changes to existing table columns,
+including defaulted end-appended columns, take the cold path. A successful SpacetimeDB migration
+alone does not establish that a column default needs no backfill; see
+[danger zones](../docs/danger-zones.md#1-do-not-touch-traps).
+
+Checks restore the stopped snapshot with its original Module, then `dev up` publishes the current
+Module through SpacetimeDB's normal migration check. The pinned CLI calls
+`debug_repair_after_publish`; `init` does not run again. Before capture, the runner verifies the
+published schema against the deployment WASM and checks the imported revision. A failed publish,
+initialization or schema verification stops the restored Realm and prints the diagnostic before
+falling back to a fresh import. A failed fresh start fails the check. `--require-snapshot` forbids
+both a missing or incompatible snapshot and the cold fallback after an upgrade failure.
+
+The check output includes `world_origin`: `fresh_import`, `snapshot`, `upgraded_snapshot`,
+`snapshot_gameplay_drift` or `upgraded_snapshot_gameplay_drift`. Text
+output prints the same value as `World origin`. Agreement JSON carries it inside `audit`. This is
+local check evidence only. Full audits always import a fresh world in that invocation, seal it,
+and restore that new snapshot before every scenario. They never reuse an earlier invocation's
+import. Equivalence between upgraded and freshly imported worlds is not claimed.
+
+Snapshots from the older schema-keyed format take the cold path once. The store retains the newest
+two snapshots and removes older ones after a successful seal. A catalogue snapshot retains its base
+world as the second snapshot, so fixture changes cannot evict the expensive base import. A cold import that replaces an
+incompatible snapshot keeps the old seal until the new import is sealed. Abandoned `.pending`
+directories are removed under the shared snapshot-store lock. Copying requires the world size plus
+10% or 256 MiB of free space, whichever reserve is larger. A failed seal retains the stopped imported
+world and its password. The next check at the same core commit retries sealing without importing
+again. An interrupted import requires inspection before cleanup. Do not edit a sealed snapshot.
+
+Each check owns its scratch directory before building deployment artifacts; a concurrent check
+using that directory fails before it can replace them. Each check restores the imported data before
+capture. The active Realm, target directory and temporary files live under `$HOME/.cache/lyracore-scratch/m5c/`,
+or `LYRACORE_AUDIT_SCRATCH` when set. The runner waits for its Native Host to exit before replacing or deleting data. It records
 process ownership before startup and checks the CLI's PID identities before stopping it. It retains
 those records across a shutdown timeout, even when the CLI clears its own records. Native Host build
 output survives gameplay checkout changes; `dev up` still checks the current Host source and
@@ -589,14 +743,17 @@ the owned containers. Recovery keeps the same container IDs and can retry an int
 Changed IDs stop the command before it touches the containers. `./conformance/audit --stop` restores
 the Reference Server, stops owned services and removes the active worktree; it retains the sealed
 snapshots and build output. The full audit uses the same Reference Server recovery and stops it on
-exit. Required LyraCore Accounts are provisioned after every restore with the sealed password, so a
-larger scenario catalogue needs no new import.
+exit. Full audits, rehearsals and local checks use the same per-scenario restore path. This resets
+Character names across Accounts, Account state, money, quests, items, reputation, fixture creatures,
+spawned objects, vendor stock and restock timers. Required LyraCore Accounts are provisioned after
+every restore with the sealed password, so a larger scenario catalogue needs no new import.
 
 Phase timings go to stderr, leaving JSON on stdout. They include builds, schema extraction, client
 hashing, Realm startup, import, snapshot sealing, both captures and comparison. Agreement also
 reports its tier 1 time. The runner builds one deployment WASM and uses that file for schema
-extraction, preflight bindings and publication. With at least four available CPUs, the two wire
-captures run concurrently. A warm check prints `import: 0.00s (cached snapshot)`.
+extraction, preflight bindings and publication. With at least four available CPUs, both server
+restores overlap, then both wire captures run concurrently. A warm check prints
+`import: 0.00s (cached snapshot)` and identifies its world origin.
 
 A failed reference comparison prints its scrubbed differences, including signatures and expected and
 actual values, before exit 2. Both comparisons and captures survive work-directory cleanup under
@@ -607,21 +764,79 @@ Realm and snapshot directories.
 ### Import contract
 
 This is a base-world audit. It imports the vmangos world and client data; it applies no Package
-Deltas. `IMPORT_CONTRACT` in `audit.py` names the source paths that produce the stored rows. It
-includes the importer sources, scripts and manifests; shared, Package Delta and protocol crates; the
-workspace manifest, lockfile and toolchain; and Module initialization, import reducers and their
-row-building dependencies. Initialization data includes the `game_config` values in `seed.rs`.
-Publishing onto a restored snapshot does not rerun `init`. The contract includes `operations.rs`
-and automatically includes each listed Rust file's child-module directory, including
-`seed/fixtures.rs`. It follows external `#[path]` module declarations recursively. Crate roots
-such as `module/src/lib.rs` are hashed as files; their ordinary declarations do not pull unrelated
-gameplay modules into the contract. The module-coverage test walks the import entry modules and
-checks that every reachable child module is hashed.
+Deltas. The snapshot has two source tiers:
 
-Files shared by import and gameplay are conservatively included in full. Taxi request handling and
-other gameplay outside these paths do not invalidate the snapshot. Extend the contract when an
-import or initialization call gains another dependency or data file. A schema change always
-invalidates it, even when the changed table is outside these paths.
+- **Tier A**, `IMPORT_CONTRACT` in `audit.py`, changes the snapshot key and requires a cold import.
+  It covers importer sources, scripts and manifests; shared, Package Delta and protocol crates;
+  workspace dependencies and toolchain; Module build inputs; initialization, import reducers,
+  row-building helpers and the table definitions they write. The shared
+  `native-host/src/motion_opcodes.rs` include also stays in Tier A. Data inputs include the Runtime
+  Script event catalogue used by `module/build.rs` and the generated event names included by shared
+  code. Module paths are explicit files, except for the
+  Package Import helpers, whose complete directory stays in Tier A.
+- **Tier B** is every remaining Rust source under `module/src`. It includes gameplay reached by
+  initialization and is deliberately a superset of that call graph. A local `--check` reuses the
+  snapshot after Tier B changes, reports `snapshot_gameplay_drift` and lists every changed, added or
+  removed file in `changed_gameplay_files`. Text output prints the same list. An additive schema
+  upgrade with gameplay drift reports `upgraded_snapshot_gameplay_drift`.
+
+This distinction preserves the world-building callbacks. `seed::init` calls the production, map-0
+demo, spell-registry and scheduler seed functions. The demo uses
+`creatures::spawn::build_creature_entity` and `insert_creature_entity`, then `WorldEntity::insert`
+in `world/simulation.rs`, AOI and the creature-spawn hook in `creatures/eventai/edges.rs`. That hook
+can reach the EventAI engine, movement and combat. `seed::seed_production_core` calls
+`spellbook::grant_createinfo_spells`, which also leads to Native Host spell notices. The importer
+calls terrain, navigation, vmap, GameObject, creature-spawn and EventAI import reducers; spawn
+replacement reaches `creatures/tick/lifecycle.rs` and gameplay cleanup.
+`importer/scripts/import-world.sh` then calls `debug_repair_after_publish`, `restore_taxi_fixture`
+and `arm_all_pools`. Repair seeds catalogues and schedules and repairs legacy rows. These calls
+remain intact. Tier B changes mean the restored world can differ from a fresh import.
+
+Use `--strict-world` with `--scenario ID --check` to require matching Tier B fingerprints too. A
+Tier B change then requires a cold import; `--require-snapshot` refuses it. Strict mode can reuse an
+ordinary snapshot when both tiers match. A fresh strict import updates that same snapshot. Full
+audits always import fresh, regardless of either tier, and remain required evidence for the freshly
+built world. Rehearsal requires both tiers to match and never imports; use a strict check to refresh
+a drifted base world before rehearsal.
+
+The seal records a per-file Tier B manifest from the import. A catalogue snapshot inherits its base
+world's manifest, so preparing fixtures cannot erase earlier gameplay drift. Snapshots without this
+provenance take the cold path once. `world_origin: snapshot` means both source tiers match; it does
+not turn a local check into a full audit.
+
+Mixed files stay in Tier A in full: `seed.rs`, `seed/fixtures.rs`, `operations.rs`, `config.rs`, `taxi/catalogue.rs`,
+`auth.rs`, `operator_content/spells.rs`, `auction.rs`, `mail_reward.rs`, `stats.rs`, `gossip.rs`,
+`transport/mod.rs`, `helpers.rs`, `time.rs`, `world.rs`, `world/{simulation,placement}.rs`,
+`character.rs`, `instance.rs`, `gameobject.rs`, `go_collider.rs`, `go_model.rs`,
+`terrain.rs`, `nav.rs`, `vmap.rs`, `faction.rs`, `graveyard.rs`, `breath.rs`, `gc.rs`,
+`combat/engage.rs`, `skill.rs`, `skilldata.rs`, `action_bar.rs`, `xp.rs`, `talent.rs`, `weather.rs`,
+`duel.rs`, `motion.rs`, `gw.rs`, `quest.rs`, `areatrigger.rs`, `trainer.rs`, `meeting_stone/mod.rs`, `loot/mod.rs`,
+`items/{tables,properties,temporary_enchantment}.rs`,
+`creatures/{catalogue,spawn,pet_care,population}.rs`, `creatures/tick/mod.rs`,
+`creatures/eventai/{fixtures,loader,model,stored,tables,relay,presentation}.rs`, and
+`spell/{tables,spellbook,stacking,proc,chance_on_hit}.rs`. Their gameplay edits still require a cold
+import.
+
+Compared with the earlier directory contract, `module/src/debug` moves to Tier B. The complete
+`creatures`, `spell`, `items`, `loot` and `meeting_stone` directories become the explicit Tier A
+files above and Tier B for their remaining files. `quest/fixtures.rs` also moves to Tier B. In particular, `creatures/ai.rs`, `combat/*`
+except `engage.rs`, all `native/*`, and spell casting, effects, control, scheduling, targeting and
+outcome code now stay warm in ordinary checks, with drift reported. There is no production source
+split.
+
+The Architecture Test in `tests/import_contract.rs` extends the old child-module coverage check. It
+parses the entire Module, including external `#[path]` children, rather than trying to infer which
+dynamic hook can run. Every compiled source must belong to at least one tier; table definitions
+named by importer SQL and Package Delta code must be in Tier A. Literal `include!`, `include_str!`
+and `include_bytes!` inputs must belong to Tier A; literal source includes are followed recursively.
+`CARGO_MANIFEST_DIR` inputs resolve at the crate root; generated `OUT_DIR` source is covered by
+the strict build script and its inputs. Unknown computed inputs require review. It also checks the
+build script and proves
+coverage fails when a required seed, import or gameplay file is removed from both tiers. Comments
+and test-only modules do not create dependencies. Review the Tier A classification when an import or
+initialization helper gains a dependency; put new data files in Tier A. Adding importer code or
+changing table data still changes Tier A even if the compiled schema is compatible. Empty new tables
+do not supply imported rows.
 
 Prepare the pinned Reference Server once with the harness's
 [setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/adapters/vmangos/README.md).
@@ -657,8 +872,8 @@ fixture spawn during setup. Tier 1 still uses the bundled route
 fixture.
 
 All Docker commands run inside a `newgrp docker` heredoc. The command checks the prepared runtime's
-pins and provenance, starts its compose services, prepares peer Accounts, and resets each catalogue
-Character on its own Account in the disposable Reference Server. Every scenario produces both a
+pins and provenance, restores the pristine Reference Server database, starts its compose services,
+and prepares peer Accounts before each scenario. Every scenario produces both a
 LyraCore and vmangos candidate in scratch. Both
 compare with their embedded Golden Trace; the Reference Server must also retain its recorded
 provenance. Reference rule and data counts remain visible even when LyraCore fails.
@@ -666,16 +881,16 @@ provenance. Reference rule and data counts remain visible even when LyraCore fai
 The command writes `conformance/reports/<date>.md`, `<date>.json` and `<date>.traces/`. Audit
 history is append-only: each run needs a new date or suffix, such as `2026-10-28-c6`, and the
 command refuses existing outputs. The trace directory contains only LyraCore candidates. Reference
-Server candidates stay in the audit's scratch directory and are deleted with it at exit; the report
-keeps their SHA-256 and reference-stability results. `--output DIRECTORY` selects another report
-destination. Rule differences are audit findings and do not make the command fail; missing
+Server candidates remain in local diagnostics; the report keeps their SHA-256 and reference-stability
+results. `--output DIRECTORY` selects another report destination. Rule differences are audit findings and do not make the command fail; missing
 captures, infrastructure errors and invalid evidence do. A failed run cannot write a partial
 success report. No scenario is skipped, including taxi.
 Real-client fields, Equivalence Rules and Deliberate Deviations are untouched.
 
-The full audit runner stops both servers on exit, including capture failures and normal interrupts. Credentials
-and crash diagnostics stay under `$HOME/.cache/lyracore-scratch/m5c/` and are deleted when
-the run ends. Build output uses its `target/` directory. The prepared Reference Server's runtime
+The full audit runner stops both servers on exit, including capture failures and normal interrupts.
+Credentials are removed with the active Realm. Scrubbed captures and crash diagnostics remain under
+`$HOME/.cache/lyracore/conformance-worlds/diagnostics/`. Build output uses
+`scenario-audit/target/` under the audit scratch directory. The prepared Reference Server's runtime
 stays under `$HOME/.cache/lyracore-scratch/reference-server/`. Reports contain only provenance,
 counts, signatures and scrubbed difference values. Committed LyraCore candidate traces contain
 numbers and text digests, with the same scrubbed field types as Golden Traces. Never commit a
@@ -685,29 +900,15 @@ captures remain unverified.
 
 ## Opcode coverage
 
-`tests/opcode_coverage.rs` checks every row of `client-requests-5875.tsv` against ledger request
-claims, `opcodes-out-of-scope.toml`, and `opcodes-unclaimed.txt`. It also checks every variant in
-the pinned `ClientOpcodeMessage` enum against the inventory. Out-of-scope entries map an opcode
-name to a reason and a pinned source. The initial allowance had 285 variants; it is now empty.
-Adding a Behavior or a scope decision requires removing its opcodes from the allowance in the same
-change. Unknown names, duplicate allowances and overlapping categories fail.
-
-The Architecture Test embeds the initial 285 unclaimed names and the initially empty out-of-scope
-set as constants. Current unclaimed membership must be a subset of that initial set. An
-out-of-scope addition requires `source` to name an existing `docs/adr/*.md` that mentions the opcode
-by name, or `https://github.com/vmangos/core/blob/<SHA>/src/<path>` with the same `source_commit`
-as the pinned Golden Traces.
-
-The test also compares both scope files with earlier versions reachable from `HEAD`. This extra
-history check needs no particular commit SHA. It catches restored allowances, exchanges of one
-opcode for another, and deletion followed by recreation. Scope files keep their canonical paths;
-renames cannot reset the embedded initial sets. A shallow checkout fails with an instruction to
-fetch full history; Rust CI uses `fetch-depth: 0`. The scanner uses `cargo metadata --locked`,
-which can download missing workspace dependency sources on a fresh checkout. It never changes
-the dependency lockfile.
-
-`feat/conformance` merges into `main` with a merge commit to retain the intermediate scope history.
-The embedded initial sets still enforce the starting limit after a squash or rebase merge.
+`tests/opcode_coverage.rs` checks that every row of `client-requests-5875.tsv` is claimed by a
+ledger Behavior or listed in `opcodes-out-of-scope.toml`, never both. It also checks every variant in
+the pinned `ClientOpcodeMessage` enum against the inventory. Unknown names and overlapping
+categories fail. Each out-of-scope entry maps an opcode name to a reason and a `source` that names
+an existing `docs/adr/*.md` mentioning the opcode by name, or
+`https://github.com/vmangos/core/blob/<SHA>/src/<path>` with the same `source_commit` as the pinned
+Golden Traces.
+The scanner uses `cargo metadata --locked`, which can download missing workspace dependency
+sources on a fresh checkout. It never changes the dependency lockfile.
 
 ## Trainable spells
 
@@ -746,6 +947,47 @@ Class skill lines follow vmangos at
 `src/game/SharedDefines.h`.
 
 The Module dispatch is `module/src/spell/cast/targeting.rs::apply_effect`; aura consumers live in
-`module/src/spell/` and `crates/lyracore-shared/src/aura.rs`. This is a kind-coverage count. It does
+`module/src/spell/` and `module/src/modifiers/`. This is a kind-coverage count. It does
 not verify parameters, targeting, triggered spell dependencies, quests, talents or complete spell
 behavior. Only counts are printed; spell names and SQLite records stay local.
+
+## Quest data
+
+Tier 1 uses `support/quest_world.rs` for quests 7, 15 and 433. The numeric quest templates,
+kill objectives and creature 1977's start and end relations were checked in
+the local vmangos world snapshot at database commit
+`464179081673cfd240f7ffe7f0daf96bca0b5a70`, the source used by the harness quest recordings.
+Quests 7 and 15 require ten kills of creatures 6 and 257. Quest 433 requires ten kills of
+creature 1117 and rewards 300 copper, 660 base XP and 75 reputation with factions 47 and 54.
+It has no item or spell rewards. See the pinned harness `docs/quests.md` for the recorded scope.
+
+Quest and creature text is fixture-authored, because Reference Server text stays out of the
+repository, so tier 1 records text digest differences that the imported audit does not have.
+The fixture preserves creature 1977's display, faction, level and quest-giver flag.
+Its health and combat values are inert placeholders: the scenarios scope out creatures and
+perform no combat. Quest grants bypass prerequisite eligibility and preserve fixture order.
+These are approved tier 1 fixtures, not imported world data or gameplay changes.
+
+## Transaction and spell data
+
+Tier 1 uses `support/transaction_world.rs`, `support/character_world.rs` and
+`support/spell_world.rs` for the five scenarios added by harness PRs #46–#50. Numeric values
+come from the read-only SQLite snapshot at database commit
+`464179081673cfd240f7ffe7f0daf96bca0b5a70`. All text is fixture-authored.
+The fixtures preserve the ordered vendor stock, item prices, displays, buy counts and durability,
+starting outfits, level stats and quest 2158's choice rewards, 110 XP and faction 72 reward 25.
+Spell 5504 costs 60 mana and takes 3000 ms to create two items 5350.
+
+The current vendor table cannot store restock seconds, offer flags or condition links.
+Vendor 66 item 6270 restocks after 7200 seconds. Vendor 9499 item 11325 has stock 10 and
+restocks after 60 seconds; item 15759 has stock 1, restocks after 3600 seconds and has offer
+flags 3. Vendor 11188 items 13480, 6149 and 3928 have stock 1 and restock after 7200 seconds;
+item 13480 has offer flags 3. Item 14526 uses condition 4000.
+Condition 4000 is content-patch equality with zero; patch 10
+must hide its offer. `Player::IsVendorItemVisible` at pinned source `d9173eca` checks that
+condition through `CONDITION_WOW_PATCH` in `src/game/Conditions.cpp`. The fixture omits that
+patch-hidden offer to project patch 10 membership, since `game_npc_vendor` cannot retain a
+condition link. This does not implement vendor conditions in gameplay; that gap remains in the ledger.
+Quest 2158's flags 8 are seeded through `game_quest_flags`.
+Creature health and combat values are inert placeholders; these scenarios do no creature combat.
+The baselines record differences from unsupported data and gameplay without weakening comparison.

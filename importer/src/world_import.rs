@@ -13,7 +13,8 @@ mod vmangos_spellmeta;
 
 use std::collections::HashMap;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
+use lyracore_package_delta::ids::OPERATOR_TEMPLATE_ID_FLOOR;
 use lyracore_package_delta::{
     packed_class_level_id, packed_creature_spawn_guid, packed_gameobject_spawn_guid,
     packed_race_class_id, packed_race_class_level_id,
@@ -146,6 +147,55 @@ fn normalize_item_mask(source: i64, unrestricted: u32) -> Result<u32> {
     } else {
         u32::try_from(source).context("item_template: invalid class or race mask")
     }
+}
+
+fn build_crit_per_agility_sql(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> Result<Vec<String>> {
+    let mut classes = std::collections::BTreeMap::<u8, std::collections::BTreeMap<u32, f32>>::new();
+    for row in parse_table(dump, "player_crit_per_agility")?.iter() {
+        let class = row.number::<u8>("class")?;
+        let level = row.number::<u32>("level")?;
+        let rate = row.number::<f32>("rate")?;
+        anyhow::ensure!(
+            level > 0 && level <= 60 && rate.is_finite() && rate > 0.0,
+            "invalid player_crit_per_agility row for class {class}, level {level}"
+        );
+        anyhow::ensure!(
+            classes
+                .entry(class)
+                .or_default()
+                .insert(level, rate)
+                .is_none(),
+            "duplicate player_crit_per_agility row for class {class}, level {level}"
+        );
+    }
+    let mut rows = Vec::new();
+    for (class, mut rates) in classes {
+        anyhow::ensure!(
+            rates.contains_key(&1) && rates.contains_key(&60),
+            "player_crit_per_agility class {class}: levels 1 and 60 are required"
+        );
+        for level in 1..=60 {
+            if !rates.contains_key(&level) {
+                let previous = rates[&(level - 1)];
+                let (&next_level, &next_rate) = rates.range(level..).next().unwrap();
+                let rate = previous + (next_rate - previous) / (next_level - level + 1) as f32;
+                rates.insert(level, rate);
+            }
+            let rate = rates[&level];
+            let key = packed_class_level_id(class, level as u8);
+            rows.push(format!("({key},{class},{level},{rate})"));
+        }
+    }
+    let mut statements = vec!["DELETE FROM game_crit_per_agility WHERE class_level >= 0".into()];
+    push_insert(
+        &mut statements,
+        "game_crit_per_agility",
+        "class_level,class,level,rate",
+        &rows,
+    );
+    Ok(statements)
 }
 
 fn build_stats_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<Vec<String>> {
@@ -536,6 +586,7 @@ struct GossipEtl {
 struct QuestEtl {
     entries: std::collections::HashSet<u64>,
     templates: Vec<String>,
+    flags: Vec<String>,
     texts: Vec<String>,
     objectives: Vec<String>,
     cast_objectives: Vec<String>,
@@ -675,6 +726,7 @@ fn build_quests(
         .collect();
 
     let mut quest_rows: Vec<String> = Vec::new();
+    let mut quest_flag_rows = Vec::new();
     let mut quest_text_rows: Vec<String> = Vec::new();
     let mut objective_rows: Vec<String> = Vec::new();
     let mut cast_objective_rows: Vec<String> = Vec::new();
@@ -729,6 +781,8 @@ fn build_quests(
         let money: i64 = row.number(qt::REW_OR_REQ_MONEY)?;
         let reward_money_max_level: i64 = row.number(qt::REW_MONEY_MAX_LEVEL)?;
         let prev_quest: i64 = row.number(qt::PREV_QUEST_ID)?;
+        let flags: u32 = row.number(qt::QUEST_FLAGS)?;
+        quest_flag_rows.push(format!("({entry},{flags})"));
         let special_flags: u32 = row.number(qt::SPECIAL_FLAGS)?;
         let repeatable = (special_flags & 1) != 0;
         let req_races: u32 = row.number(qt::REQUIRED_RACES)?;
@@ -888,6 +942,7 @@ fn build_quests(
     Ok(QuestEtl {
         entries: valid_quests,
         templates: quest_rows,
+        flags: quest_flag_rows,
         texts: quest_text_rows,
         objectives: objective_rows,
         cast_objectives: cast_objective_rows,
@@ -915,7 +970,7 @@ fn build_items_and_loot(
     vendor_entries: &std::collections::HashSet<u64>,
     extra_item_entries: &std::collections::HashSet<u64>,
     mail_loot_item_entries: &std::collections::HashSet<u64>,
-) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
+) -> Result<ItemRows> {
     use std::collections::HashSet;
 
     let drops_by_lootid = parse_creature_drops(dump)?;
@@ -953,27 +1008,42 @@ fn build_items_and_loot(
             continue;
         }
         let item: u64 = row.number(nv::ITEM)?;
-        if item == 0 || forbidden.contains(&item) || !nv_seen.insert((entry, item)) {
+        if item == 0 || forbidden.contains(&item) {
             continue;
         }
         let slot: u32 = row.number(nv::SLOT)?;
         let max_count: u32 = row.number(nv::MAXCOUNT)?;
+        let restock_seconds: u32 = row.number("incrtime")?;
+        let stock_flags: u32 = row.number("itemflags")?;
+        if (max_count == 0) != (restock_seconds == 0) || !nv_seen.insert((entry, item)) {
+            continue;
+        }
         item_ids.insert(item);
-        vendor_rows.push(format!("({vendor_id},{entry},{item},{slot},{max_count})"));
+        vendor_rows.push(format!(
+            "({vendor_id},{entry},{item},{slot},{max_count},{restock_seconds},{stock_flags})"
+        ));
         vendor_id += 1;
     }
 
-    let mut tmpl_stock: HashMap<u64, Vec<(u64, u32, u32)>> = HashMap::new();
+    let mut tmpl_stock: HashMap<u64, Vec<_>> = HashMap::new();
     for row in parse_table(dump, "npc_vendor_template")?.iter() {
         let t: u64 = row.number("entry")?;
         let item: u64 = row.number("item")?;
         let max_count: u32 = row.number("maxcount")?;
         let slot: u32 = row.number("slot")?;
+        let restock_seconds: u32 = row.number("incrtime")?;
+        let stock_flags: u32 = row.number("itemflags")?;
+        if (max_count == 0) != (restock_seconds == 0) {
+            continue;
+        }
         if t != 0 && item != 0 && !forbidden.contains(&item) {
-            tmpl_stock
-                .entry(t)
-                .or_default()
-                .push((item, slot, max_count));
+            tmpl_stock.entry(t).or_default().push((
+                item,
+                slot,
+                max_count,
+                restock_seconds,
+                stock_flags,
+            ));
         }
     }
     let (creature_entry, vendor_id_column) = ("entry", "vendor_id");
@@ -989,12 +1059,14 @@ fn build_items_and_loot(
         let Some(stock) = tmpl_stock.get(&vt).filter(|_| vt != 0) else {
             continue;
         };
-        for &(item, slot, max_count) in stock {
+        for &(item, slot, max_count, restock_seconds, stock_flags) in stock {
             if !nv_seen.insert((entry, item)) {
                 continue;
             }
             item_ids.insert(item);
-            vendor_rows.push(format!("({vendor_id},{entry},{item},{slot},{max_count})"));
+            vendor_rows.push(format!(
+                "({vendor_id},{entry},{item},{slot},{max_count},{restock_seconds},{stock_flags})"
+            ));
             vendor_id += 1;
         }
     }
@@ -1008,6 +1080,9 @@ fn build_items_and_loot(
         let entry: u64 = row.number(it::ENTRY)?;
         if u32::try_from(entry).is_ok_and(lyracore_package_delta::ids::is_operator_template_id) {
             bail!("item_template entry {entry} belongs to the Operator Template Range");
+        }
+        if entry >= u64::from(OPERATOR_TEMPLATE_ID_FLOOR) {
+            bail!("item_template entry {entry} is outside the source item range");
         }
         if entry == 0 {
             continue;
@@ -1062,7 +1137,7 @@ fn build_items_and_loot(
         let buy_count: u32 = row.number::<u32>(it::BUY_COUNT)?.max(1);
         let food_type: u8 = row.number(it::FOOD_TYPE)?;
         item_rows.push(format!(
-            "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type},{allowed_class},{allowed_race},{random_property},{ppm1},{ppm2},{ppm3},{ppm4},{ppm5})",
+            "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type},{allowed_class},{allowed_race},{random_property},{ppm1},{ppm2},{ppm3},{ppm4},{ppm5},{cat1},{cat2},{cat3},{cat4},{cat5})",
             sheath = row.number::<u8>(it::SHEATH)?,
             sp1 = row.number::<u32>(it::SPELLID_1)?,
             spt1 = row.number::<u8>(it::SPELLTRIGGER_1)?,
@@ -1093,6 +1168,12 @@ fn build_items_and_loot(
             ppm3 = row.number::<f32>(it::SPELLPPMRATE_3)?,
             ppm4 = row.number::<f32>(it::SPELLPPMRATE_4)?,
             ppm5 = row.number::<f32>(it::SPELLPPMRATE_5)?,
+            cat1 = row.number::<u32>("spellcategory_1")?,
+            cat2 = row.number::<u32>("spellcategory_2")?,
+            cat3 = row.number::<u32>("spellcategory_3")?,
+            cat4 = row.number::<u32>("spellcategory_4")?,
+            cat5 = row.number::<u32>("spellcategory_5")?,
+
             allowed_class = allowed_class,
             allowed_race = allowed_race,
         ));
@@ -1128,7 +1209,31 @@ fn build_items_and_loot(
         );
     }
 
-    Ok((item_rows, loot_rows, vendor_rows))
+    Ok(ItemRows {
+        replacement: ItemReplacement {
+            entries: emitted,
+            loot_row_count: loot_rows.len() as u64,
+            vendor_row_count: vendor_rows.len() as u64,
+        },
+        templates: item_rows,
+        loot: loot_rows,
+        vendors: vendor_rows,
+    })
+}
+
+#[derive(Debug)]
+struct ItemRows {
+    templates: Vec<String>,
+    loot: Vec<String>,
+    vendors: Vec<String>,
+    replacement: ItemReplacement,
+}
+
+#[derive(Debug)]
+pub(crate) struct ItemReplacement {
+    entries: std::collections::HashSet<u64>,
+    loot_row_count: u64,
+    vendor_row_count: u64,
 }
 
 fn build_mail_loot(
@@ -1249,6 +1354,7 @@ pub(crate) struct DumpPlan {
     pub(crate) eventai_instruction_count: u64,
     pub(crate) world_source_manifest: Option<String>,
     pub(crate) stamps: Vec<(&'static str, u64)>,
+    pub(crate) item_replacement: Option<ItemReplacement>,
 }
 
 impl DumpPlan {
@@ -1678,10 +1784,14 @@ fn push_item_statements(
     loot_rows: &[String],
     vendor_rows: &[String],
 ) {
-    stmts.push("DELETE FROM game_item_template WHERE entry > 0".into());
-    stmts.push("DELETE FROM game_creature_loot WHERE id > 0".into());
-    stmts.push("DELETE FROM game_npc_vendor WHERE id > 0".into());
-    push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property,spellppmrate_1,spellppmrate_2,spellppmrate_3,spellppmrate_4,spellppmrate_5", item_rows);
+    stmts.push(format!(
+        "DELETE FROM game_item_template WHERE entry > 0 AND entry < {OPERATOR_TEMPLATE_ID_FLOOR}"
+    ));
+    for table in ["game_creature_loot", "game_npc_vendor"] {
+        stmts.push(format!("DELETE FROM {table} WHERE item_entry < {OPERATOR_TEMPLATE_ID_FLOOR} AND creature_entry < {OPERATOR_TEMPLATE_ID_FLOOR}"));
+    }
+    stmts.push("DELETE FROM game_vendor_stock WHERE key > 0".into());
+    push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property,spellppmrate_1,spellppmrate_2,spellppmrate_3,spellppmrate_4,spellppmrate_5,spellcategory_1,spellcategory_2,spellcategory_3,spellcategory_4,spellcategory_5", item_rows);
     push_insert(
         stmts,
         "game_creature_loot",
@@ -1691,7 +1801,7 @@ fn push_item_statements(
     push_insert(
         stmts,
         "game_npc_vendor",
-        "id,creature_entry,item_entry,slot,max_count",
+        "id,creature_entry,item_entry,slot,max_count,restock_seconds,stock_flags",
         vendor_rows,
     );
 }
@@ -1808,6 +1918,13 @@ fn push_gameobject_statements(
 fn push_quest_statements(stmts: &mut Vec<String>, quests: &QuestEtl, mail_loot_rows: &[String]) {
     stmts.push("DELETE FROM game_quest_template WHERE entry > 0".into());
     stmts.push("DELETE FROM game_quest_text WHERE quest_entry > 0".into());
+    stmts.push("DELETE FROM game_quest_flags WHERE quest_entry > 0".into());
+    push_insert(
+        stmts,
+        "game_quest_flags",
+        "quest_entry,flags",
+        &quests.flags,
+    );
     stmts.push("DELETE FROM game_quest_objective WHERE id > 0".into());
     stmts.push("DELETE FROM game_quest_cast_objective WHERE id > 0".into());
     stmts.push("DELETE FROM game_quest_reward_item WHERE id > 0".into());
@@ -1885,6 +2002,7 @@ pub(crate) fn globals_statements(
     client: Option<&str>,
 ) -> Result<Vec<String>> {
     let mut statements = build_stats_sql(dump)?;
+    statements.extend(build_crit_per_agility_sql(dump)?);
     statements.extend(build_start_position_sql(dump)?);
     statements.extend(build_graveyard_zone_sql(dump)?);
     statements.extend(build_createinfo_spell_sql(dump)?);
@@ -1972,17 +2090,11 @@ fn items_findings(
             } else {
                 template_users.get(&entry).cloned().unwrap_or_default()
             };
-            for (column, code) in [
-                ("condition_id", "items.vendor-condition"),
-                ("incrtime", "items.vendor-restock"),
-                ("itemflags", "items.vendor-item-flags"),
-            ] {
-                if row.number::<u64>(column)? != 0 {
-                    findings
-                        .entry(code)
-                        .or_default()
-                        .extend(users.iter().map(|&user| (user, item)));
-                }
+            if row.number::<u64>("condition_id")? != 0 {
+                findings
+                    .entry("items.vendor-condition")
+                    .or_default()
+                    .extend(users.iter().map(|&user| (user, item)));
             }
         }
     }
@@ -2009,7 +2121,7 @@ fn vmangos_items_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
             loot_ids.insert(entry, loot);
         }
     }
-    let (items, loot, vendors) = build_items_and_loot(
+    let items = build_items_and_loot(
         dump,
         &loot_ids,
         &entries,
@@ -2017,10 +2129,14 @@ fn vmangos_items_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
         &Default::default(),
     )?;
     let (mut stmts, properties) = item_property::dump_sql(dump, args.dbc.as_deref())?;
-    push_item_statements(&mut stmts, &items, &loot, &vendors);
+    push_item_statements(&mut stmts, &items.templates, &items.loot, &items.vendors);
     Ok(DumpPlan {
         stmts,
-        stamps: vec![("items", items.len() as u64 + properties)],
+        stamps: vec![(
+            lyracore_package_delta::ITEM_FAMILY,
+            items.templates.len() as u64 + properties,
+        )],
+        item_replacement: Some(items.replacement),
         world_source_manifest: Some(serde_json::to_string_pretty(&items_findings(
             dump, &entries,
         )?)?),
@@ -2076,7 +2192,7 @@ fn vmangos_loot_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Du
     let count = insert_row_count(&stmts);
     Ok(DumpPlan {
         stmts,
-        stamps: vec![("loot", count)],
+        stamps: vec![(lyracore_package_delta::LOOT_FAMILY, count)],
         world_source_manifest: Some(serde_json::to_string_pretty(
             &serde_json::json!({"format_version":1,"source":"vmangos","family":"loot","patch":crate::source_selection::PATCH,"client_build":crate::source_selection::CLIENT_BUILD,"findings":loot_findings(dump, &["creature_loot_template", "reference_loot_template", "pickpocketing_loot_template", "skinning_loot_template", "gameobject_loot_template", "fishing_loot_template", "item_loot_template", "disenchant_loot_template", "mail_loot_template"])?}),
         )?),
@@ -2154,7 +2270,7 @@ fn vmangos_gameobjects_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Re
             .chunks(SPAWN_BATCH)
             .map(|rows| rows.join(";"))
             .collect(),
-        stamps: vec![("gameobjects", count)],
+        stamps: vec![(lyracore_package_delta::GAMEOBJECT_FAMILY, count)],
         world_source_manifest: Some(serde_json::to_string_pretty(&gameobject_findings(
             dump, args,
         )?)?),
@@ -2273,7 +2389,7 @@ fn vmangos_eventai_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result
     Ok(DumpPlan {
         stmts,
         stamps: vec![(
-            "creature-ai",
+            lyracore_package_delta::CREATURE_AI_FAMILY,
             eventai.row_count() + requirements.len() as u64,
         )],
         eventai_definition_count: eventai.definition_count(),
@@ -2312,7 +2428,7 @@ fn vmangos_family_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
             let count = insert_row_count(&stmts);
             Ok(DumpPlan {
                 stmts,
-                stamps: vec![("globals", count)],
+                stamps: vec![(lyracore_package_delta::GLOBALS_FAMILY, count)],
                 world_source_manifest: Some(serde_json::to_string_pretty(&globals_findings(
                     dump,
                 )?)?),
@@ -2334,7 +2450,10 @@ fn combined_vmangos_plan(source: &impl TableRows, args: &WorldImportArgs) -> Res
     let source = &cached;
     let mut combined = spell::world_plan(source, client)?;
     let catalogues = dbc::catalogue_statements(client, source)?;
-    combined.stamps.push(("dbc", insert_row_count(&catalogues)));
+    combined.stamps.push((
+        lyracore_package_delta::DBC_FAMILY,
+        insert_row_count(&catalogues),
+    ));
     combined.stmts.extend(catalogues);
     let mut manifests = vec![dbc::findings(source)?];
     if let Some(manifest) = combined.world_source_manifest.take() {
@@ -2344,6 +2463,9 @@ fn combined_vmangos_plan(source: &impl TableRows, args: &WorldImportArgs) -> Res
         let mut selected = args.clone();
         selected.family = Some((*family).into());
         let plan = vmangos_family_plan(source, &selected)?;
+        if plan.item_replacement.is_some() {
+            combined.item_replacement = plan.item_replacement;
+        }
         combined.stmts.extend(plan.stmts);
         combined.stamps.extend(plan.stamps);
         combined.spawn_batches.extend(plan.spawn_batches);
@@ -2394,6 +2516,70 @@ pub(crate) fn run(dump_path: &str, args: &WorldImportArgs) -> Result<()> {
     let dump = WorldSource::open(std::path::Path::new(dump_path))?;
     let plan = build_vmangos_plan(&dump, args)?;
     emit_plan(&dump, args, &plan)
+}
+
+fn item_replacement_rows<T: serde::de::DeserializeOwned>(
+    shard: &Shard,
+    query: &str,
+) -> Result<Vec<T>> {
+    #[derive(serde::Deserialize)]
+    struct Rows<T> {
+        rows: Vec<T>,
+    }
+    let output = shard.query_json("items reimport preflight", query)?;
+    let mut results: Vec<Rows<T>> =
+        serde_json::from_str(&output).context("decode items reimport preflight rows")?;
+    ensure!(results.len() == 1, "items reimport expected one SQL result");
+    Ok(results.remove(0).rows)
+}
+
+/// Requires a cold import; see docs/danger-zones.md#vendor-stock-migration.
+fn preflight_item_replacement(args: &WorldImportArgs, items: &ItemReplacement) -> Result<()> {
+    let shard = &args.shard;
+    let replayed = args
+        .packages
+        .as_deref()
+        .map(|root| package_delta::item_entries_after_replay(&args.scope, root))
+        .transpose()?;
+    let mut available = items.entries.clone();
+    for [entry] in item_replacement_rows::<[u64; 1]>(
+        shard,
+        &format!(
+            "SELECT entry FROM game_item_template WHERE entry >= {OPERATOR_TEMPLATE_ID_FLOOR}"
+        ),
+    )? {
+        if let Some(replayed) = &replayed {
+            if u32::try_from(entry).is_ok_and(lyracore_package_delta::ids::is_package_item_id)
+                && !replayed.contains(&entry)
+            {
+                continue;
+            }
+        }
+        available.insert(entry);
+    }
+    let missing: std::collections::BTreeSet<_> =
+        item_replacement_rows::<[u64; 1]>(shard, "SELECT entry FROM game_item_instance")?
+            .into_iter()
+            .map(|[entry]| entry)
+            .filter(|entry| !available.contains(entry))
+            .collect();
+    ensure!(
+        missing.is_empty(),
+        "items reimport refuses missing templates for owned Items: {missing:?}"
+    );
+    for (table, row_count) in [
+        ("game_creature_loot", items.loot_row_count),
+        ("game_npc_vendor", items.vendor_row_count),
+    ] {
+        for [id, _, item] in item_replacement_rows::<[u64; 3]>(shard, &format!(
+            "SELECT id,creature_entry,item_entry FROM {table} WHERE item_entry >= {OPERATOR_TEMPLATE_ID_FLOOR} OR creature_entry >= {OPERATOR_TEMPLATE_ID_FLOOR}"
+        ))? {
+            ensure!(available.contains(&item), "items reimport: retained {table} row {id} references missing item template {item}");
+            // Source loot and offer IDs are consecutive from one.
+            ensure!(id == 0 || id > row_count, "items reimport: retained {table} row {id} collides with an imported row");
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn emit_plan(
@@ -2460,6 +2646,9 @@ pub(crate) fn emit_plan(
         bail!("no spawns matched the filter — check --box / --radius / --center");
     }
 
+    if let Some(items) = &plan.item_replacement {
+        preflight_item_replacement(args, items)?;
+    }
     args.shard.run_sql_statements(&plan.stmts, "creatures")?;
     for (reducer, batch) in plan.reducer_batches(args)? {
         args.shard

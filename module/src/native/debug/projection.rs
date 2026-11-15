@@ -1,6 +1,6 @@
 use crate::aoi::game_aoi_grant;
+use crate::game_item_instance;
 use crate::group::game_group_member;
-use crate::items::game_item_instance;
 use crate::native::{self, game_native_player};
 use crate::skill::game_player_skill;
 use crate::{game_corpse, game_dynamic_object, game_gameobject, game_world_entity};
@@ -30,6 +30,11 @@ pub struct NativeConformanceCache {
     pub source: String,
 }
 
+crate::outside_table_catalog!(
+    game_native_conformance_projection,
+    game_native_conformance_cache
+);
+
 pub(super) fn close(ctx: &ReducerContext, connection_id: ConnectionId) {
     ctx.db
         .game_native_conformance_cache()
@@ -38,7 +43,7 @@ pub(super) fn close(ctx: &ReducerContext, connection_id: ConnectionId) {
 }
 
 fn encode(message: SMSG_UPDATE_OBJECT) -> Result<Vec<u8>, String> {
-    lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+    lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
         .map(|packet| packet.body)
         .map_err(|error| error.to_string())
 }
@@ -80,6 +85,60 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn item_projection(
+    ctx: &ReducerContext,
+    connection_id: ConnectionId,
+    view: &codec::ItemInstanceView,
+    full: bool,
+) -> Result<(String, String, u8, u64), String> {
+    let mut contents: Vec<_> = if view.container_slots == 0 {
+        Vec::new()
+    } else {
+        ctx.db
+            .game_item_instance()
+            .by_owner_guid()
+            .filter(view.owner_guid)
+            .filter_map(|item| {
+                codec::bag_content_parts(item.slot)
+                    .filter(|(slot, _)| *slot == view.slot)
+                    .map(|(_, position)| (position, item.guid))
+            })
+            .collect()
+    };
+    contents.sort_unstable();
+    let (body, extra) = encoded(
+        ctx,
+        connection_id,
+        view.guid,
+        full,
+        &(view, &contents),
+        || {
+            let extra = if view.container_slots != 0 {
+                let mut mask = codec::update_mask::UpdateMaskValues::new();
+                for position in 0..view.container_slots.min(18) {
+                    let item_guid = contents
+                        .iter()
+                        .find(|(index, _)| *index == position)
+                        .map_or(0, |(_, guid)| *guid);
+                    // Build 5875 Container links begin at field 50.
+                    mask.set_u64(50 + u16::from(position) * 2, item_guid);
+                }
+                let (_, slots) = codec::build_values_update_raw(view.guid, &mask);
+                Some(slots)
+            } else {
+                None
+            };
+            Ok((codec::build_item_create_object(view), extra))
+        },
+    )?;
+    Ok((
+        body,
+        extra,
+        if view.container_slots == 0 { 1 } else { 2 },
+        view.owner_guid,
+    ))
+}
+
 fn entity_projection(
     ctx: &ReducerContext,
     connection_id: ConnectionId,
@@ -96,6 +155,21 @@ fn entity_projection(
     let mut view = native::view::entity(ctx, &entity);
     let items = if entity.is_player() {
         native::view::items(ctx, guid)
+    } else {
+        Vec::new()
+    };
+    let buyback = if viewer == guid {
+        native::economy::buyback(ctx, guid)
+            .iter()
+            .map(|row| {
+                (
+                    native::economy::buyback_item(ctx, row),
+                    row.slot,
+                    row.price,
+                    row.timestamp,
+                )
+            })
+            .collect::<Vec<_>>()
     } else {
         Vec::new()
     };
@@ -135,6 +209,7 @@ fn entity_projection(
             &view,
             view.scale_x.to_bits(),
             &items,
+            &buyback,
             &skills,
             &quests,
             &stats,
@@ -149,7 +224,27 @@ fn entity_projection(
             .map_err(|error| error.to_string())?;
             let extra = stats
                 .as_ref()
-                .map(|stats| encode(codec::build_sheet_stats_values(guid, stats)))
+                .map(|stats| {
+                    let mut extra = encode(codec::build_sheet_stats_values(guid, stats))?;
+                    let mut mask = codec::update_mask::UpdateMaskValues::new();
+                    for index in 0..12u16 {
+                        let (item, price, timestamp) = buyback
+                            .iter()
+                            .find(|(_, slot, _, _)| u16::from(*slot) == 69 + index)
+                            .map_or((0, 0, 0), |(item, _, price, timestamp)| {
+                                (item.guid, *price, *timestamp)
+                            });
+                        // Build 5875 buyback links begin at 624, prices at 1226 and timestamps at 1238.
+                        mask.set_u64(624 + index * 2, item);
+                        mask.set_u32(1226 + index, price);
+                        mask.set_u32(1238 + index, timestamp);
+                    }
+                    let (_, buyback_fields) = codec::build_values_update_raw(guid, &mask);
+                    // UPDATE_OBJECT has a four-byte block count and one-byte transport flag.
+                    extra[..4].copy_from_slice(&2u32.to_le_bytes());
+                    extra.extend_from_slice(&buyback_fields[5..]);
+                    Ok::<_, String>(extra)
+                })
                 .transpose()?;
             Ok((message, extra))
         },
@@ -188,6 +283,10 @@ pub fn debug_native_project(
         .find(connection_id)
         .ok_or("conformance Character is not in world")?
         .character_guid;
+    let buyback = native::economy::buyback(ctx, viewer)
+        .iter()
+        .map(|row| native::economy::buyback_item(ctx, row))
+        .collect::<Vec<_>>();
     let guids = ctx
         .db
         .game_aoi_grant()
@@ -201,6 +300,7 @@ pub fn debug_native_project(
                 .filter(viewer)
                 .map(|item| item.guid),
         )
+        .chain(buyback.iter().map(|item| item.guid))
         .collect::<std::collections::BTreeSet<_>>();
     let cache = ctx.db.game_native_conformance_cache();
     for old in cache.by_connection().filter(connection_id) {
@@ -313,10 +413,9 @@ pub fn debug_native_project(
                 return Err("item is not visible to conformance Character".into());
             }
             let view = native::view::item(ctx, &item);
-            let (body, extra) = encoded(ctx, connection_id, guid, full, &view, || {
-                Ok((codec::build_item_create_object(&view), None))
-            })?;
-            (body, extra, 1, item.owner_guid)
+            item_projection(ctx, connection_id, &view, full)?
+        } else if let Some(view) = buyback.iter().find(|item| item.guid == guid) {
+            item_projection(ctx, connection_id, view, full)?
         } else {
             return Err(format!(
                 "object {guid} is not visible to conformance Character"

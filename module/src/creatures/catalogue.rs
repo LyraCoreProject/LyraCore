@@ -1,6 +1,15 @@
 use spacetimedb::{table, ReducerContext};
 
-use super::CreatureTemplate;
+use crate::CreatureTemplate;
+
+#[table(accessor = game_creature_defense, public)]
+pub struct CreatureDefense {
+    #[primary_key]
+    pub entry: u32,
+    pub no_parry: bool,
+    pub no_block: bool,
+    pub no_defense: bool,
+}
 
 #[table(accessor = game_creature_level_stats, public, index(accessor = by_entry, btree(columns = [entry])))]
 pub struct CreatureLevelStats {
@@ -27,6 +36,12 @@ pub struct CreatureDisplay {
     #[default(0.389f32)]
     pub bounding_radius: f32,
 }
+
+crate::outside_table_catalog!(
+    game_creature_defense,
+    game_creature_level_stats,
+    game_creature_display
+);
 
 pub(crate) fn display_gender(ctx: &ReducerContext, display_id: u32) -> u8 {
     ctx.db

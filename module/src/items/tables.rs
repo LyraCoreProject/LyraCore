@@ -1,3 +1,4 @@
+use lyracore_protocol::messages::vanilla::NewItemSource;
 use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
 // Playable class IDs skip 6 and 10; Druid is bit 10.
@@ -127,9 +128,96 @@ pub struct ItemTemplate {
     pub spellppmrate_4: f32,
     #[default(0.0f32)]
     pub spellppmrate_5: f32,
+    #[default(0u32)]
+    pub spellcategory_1: u32,
+    #[default(0u32)]
+    pub spellcategory_2: u32,
+    #[default(0u32)]
+    pub spellcategory_3: u32,
+    #[default(0u32)]
+    pub spellcategory_4: u32,
+    #[default(0u32)]
+    pub spellcategory_5: u32,
+}
+
+impl ItemTemplate {
+    pub(crate) fn blank(entry: u32, name: &str) -> Self {
+        Self {
+            entry,
+            class: 0,
+            subclass: 0,
+            name: name.to_string(),
+            display_id: 0,
+            quality: 0,
+            inventory_type: 0,
+            item_level: 0,
+            required_level: 0,
+            max_durability: 0,
+            buy_price: 0,
+            sell_price: 0,
+            max_stack: 0,
+            damage_min: 0.0,
+            damage_max: 0.0,
+            delay_ms: 0,
+            stat_strength: 0,
+            stat_agility: 0,
+            stat_stamina: 0,
+            stat_intellect: 0,
+            stat_spirit: 0,
+            stat_crit: 0,
+            stat_hit: 0,
+            stat_armor: 0,
+            block_value: 0,
+            restores_power: false,
+            spellid_1: 0,
+            spelltrigger_1: 0,
+            spellid_2: 0,
+            spelltrigger_2: 0,
+            container_slots: 0,
+            sheath: 0,
+            bonding: 0,
+            holy_res: 0,
+            fire_res: 0,
+            nature_res: 0,
+            frost_res: 0,
+            shadow_res: 0,
+            arcane_res: 0,
+            spellid_3: 0,
+            spelltrigger_3: 0,
+            spellid_4: 0,
+            spelltrigger_4: 0,
+            spellid_5: 0,
+            spelltrigger_5: 0,
+            required_skill: 0,
+            required_skill_rank: 0,
+            required_reputation_faction: 0,
+            required_reputation_rank: 0,
+            max_count: 0,
+            item_flags: 0,
+            page_text: 0,
+            start_quest: 0,
+            bag_family: 0,
+            buy_count: 1,
+            food_type: 0,
+            allowed_class: ALL_PLAYABLE_CLASS_MASK,
+            allowed_race: ALL_PLAYABLE_RACE_MASK,
+            random_property: 0,
+            spellppmrate_1: 0.0,
+            spellppmrate_2: 0.0,
+            spellppmrate_3: 0.0,
+            spellppmrate_4: 0.0,
+            spellppmrate_5: 0.0,
+            spellcategory_1: 0,
+            spellcategory_2: 0,
+            spellcategory_3: 0,
+            spellcategory_4: 0,
+            spellcategory_5: 0,
+        }
+    }
 }
 
 #[table(accessor = game_item_instance, public, index(accessor = by_owner_guid, btree(columns = [owner_guid])))]
+#[derive(Clone)]
 pub struct ItemInstance {
     #[primary_key]
     pub guid: u64,
@@ -153,35 +241,71 @@ pub struct ItemInstance {
 
 impl ItemInstance {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
-        Self::insert_as(ctx, row, true)
+        Self::insert_as(ctx, row, Some(NewItemSource::Looted))
     }
 
     /// Inserts a stack split off the character's own, without the item push or quest toast.
     pub(crate) fn insert_split(ctx: &ReducerContext, row: Self) -> Self {
-        Self::insert_as(ctx, row, false)
+        Self::insert_as(ctx, row, None)
     }
 
-    fn insert_as(ctx: &ReducerContext, row: Self, received: bool) -> Self {
+    pub(super) fn insert_as(
+        ctx: &ReducerContext,
+        row: Self,
+        source: Option<NewItemSource>,
+    ) -> Self {
         let row = ctx.db.game_item_instance().insert(row);
-        crate::native::item_changed(ctx, None, Some(&row), received);
+        crate::native::inventory::item_changed(ctx, None, Some(&row), source);
+        super::equip::changed(ctx, None, Some(&row));
         row
     }
 
     pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
-        self.update_as(ctx, true)
+        self.update_as(ctx, Some(NewItemSource::Looted))
     }
 
     /// Updates a stack merged from the character's own, without the item push or quest toast.
     pub(crate) fn update_merged(self, ctx: &ReducerContext) -> Self {
-        self.update_as(ctx, false)
+        self.update_as(ctx, None)
     }
 
-    fn update_as(self, ctx: &ReducerContext, received: bool) -> Self {
+    pub(super) fn update_as(self, ctx: &ReducerContext, source: Option<NewItemSource>) -> Self {
         let items = ctx.db.game_item_instance();
         let previous = items.guid().find(self.guid);
         let row = items.guid().update(self);
-        crate::native::item_changed(ctx, previous.as_ref(), Some(&row), received);
+        crate::native::inventory::item_changed(ctx, previous.as_ref(), Some(&row), source);
+        super::equip::changed(ctx, previous.as_ref(), Some(&row));
         row
+    }
+
+    pub(super) fn sell(
+        self,
+        ctx: &ReducerContext,
+        remaining: Option<Self>,
+        sold: &super::buyback::BuybackItem,
+        evicted: Option<&super::buyback::BuybackItem>,
+    ) {
+        if let Some(remaining) = &remaining {
+            ctx.db.game_item_instance().guid().update(remaining.clone());
+        } else {
+            ctx.db.game_item_instance().guid().delete(self.guid);
+        }
+        // Sale preserves Petitions and pauses enchantments; see docs/schema.md when changing buyback.
+        crate::native::inventory::item_sold(ctx, &self, remaining.as_ref(), sold, evicted);
+        super::equip::changed(ctx, Some(&self), remaining.as_ref());
+    }
+
+    pub(super) fn insert_restored(self, ctx: &ReducerContext) {
+        let row = ctx.db.game_item_instance().insert(self);
+        crate::native::inventory::item_restored(ctx, &row, true);
+        super::equip::changed(ctx, None, Some(&row));
+    }
+
+    pub(super) fn update_restored(self, ctx: &ReducerContext) {
+        let previous = ctx.db.game_item_instance().guid().find(self.guid);
+        let row = ctx.db.game_item_instance().guid().update(self);
+        crate::native::inventory::item_restored(ctx, &row, false);
+        super::equip::changed(ctx, previous.as_ref(), Some(&row));
     }
 
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) -> bool {
@@ -191,7 +315,8 @@ impl ItemInstance {
         super::forget_temporary_enchantment(ctx, guid);
         if let Some(row) = previous {
             crate::native::realm_petition::item_removed(ctx, &row);
-            crate::native::item_changed(ctx, Some(&row), None, false);
+            crate::native::inventory::item_changed(ctx, Some(&row), None, None);
+            super::equip::changed(ctx, Some(&row), None);
         }
         removed
     }
@@ -252,7 +377,30 @@ pub struct NpcVendor {
     pub item_entry: u32,
     pub slot: u32,
     pub max_count: u32, // Zero means unlimited stock.
+    #[default(0u32)]
+    pub restock_seconds: u32,
+    #[default(0u32)]
+    pub stock_flags: u32,
 }
+
+#[table(accessor = game_vendor_stock, index(accessor = by_vendor, btree(columns = [vendor_guid])))]
+pub struct VendorStock {
+    #[primary_key]
+    pub key: u128,
+    pub vendor_guid: u64,
+    pub count: u32,
+    pub last_increment_seconds: i64,
+    pub restock_seconds: u32,
+}
+
+#[table(accessor = game_vendor_stock_runtime)]
+pub struct VendorStockRuntime {
+    #[primary_key]
+    pub id: u8,
+    pub runtime_id: u128,
+}
+
+crate::outside_table_catalog!(game_vendor_stock, game_vendor_stock_runtime);
 
 #[table(accessor = game_character_buyback, index(accessor = by_player_guid, btree(columns = [player_guid])))]
 pub struct BuybackEntry {
@@ -276,9 +424,5 @@ crate::character_owned!(delete, fn sweep_delete_game_character_buyback(ctx, char
         buybacks.id().delete(r.id);
     }
 });
-// Re-minted buyback IDs must preserve export order because IDs order the ring.
-crate::character_owned!(transfer, fn sweep_transfer_game_character_buyback(ctx, character_guid, io) {
-    table = game_character_buyback,
-    by = by_player_guid,
-    remint = id,
-});
+// Legacy snapshots cannot restore an Item identity; see docs/schema.md when upgrading buyback.
+crate::character_owned!(not_transported, fn sweep_transfer_game_character_buyback());

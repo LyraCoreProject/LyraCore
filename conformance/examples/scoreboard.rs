@@ -9,6 +9,8 @@ use serde_json::{json, Value};
 
 #[path = "scoreboard/counts.rs"]
 mod counts;
+#[path = "scoreboard/data.rs"]
+mod data;
 #[path = "scoreboard/evidence.rs"]
 mod evidence;
 #[path = "scoreboard/spells.rs"]
@@ -76,7 +78,21 @@ fn open_work(
     audit_head: &str,
     revision: &str,
 ) -> Result<Vec<OpenWork>> {
-    let baseline: Value = serde_json::from_str(include_str!("../tier1-baseline.json"))?;
+    let baseline = serde_json::from_str(include_str!("../tier1-baseline.json"))?;
+    open_work_from(
+        &baseline, ledger, audit, tier1, tier1_head, audit_head, revision,
+    )
+}
+
+fn open_work_from(
+    baseline: &Value,
+    ledger: &FeatureLedger,
+    audit: Option<&Report>,
+    tier1: Option<&Report>,
+    tier1_head: &str,
+    audit_head: &str,
+    revision: &str,
+) -> Result<Vec<OpenWork>> {
     let baseline_scenarios = baseline["scenarios"]
         .as_array()
         .context("tier 1 baseline scenarios")?;
@@ -84,11 +100,45 @@ fn open_work(
     for behavior in ledger.behaviors() {
         let tier1_state = state(tier1, behavior, tier1_head, revision)?;
         let audit_state = state(audit, behavior, audit_head, revision)?;
-        if !behavior.scenarios.is_empty()
-            && tier1_state.is_match()
-            && audit_state.is_match()
-            && behavior.known_gaps.is_empty()
-            && behavior.scope_verification == ScopeVerification::Established
+        let data_gaps = behavior
+            .known_gaps
+            .iter()
+            .filter(|gap| data::is_data_gap(&gap.path))
+            .map(|gap| (&gap.description, &gap.path, &gap.symbol, &gap.evidence))
+            .collect::<BTreeSet<_>>();
+        if !data_gaps.is_empty() {
+            let paths = data_gaps
+                .iter()
+                .map(|(_, path, _, _)| (*path).clone())
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>()
+                .join(" ");
+            work.push(OpenWork {
+                behavior: behavior.id.clone(),
+                system: behavior.system.clone(),
+                kind: "data_import",
+                reproduce_with: None,
+                next_command: format!("rg -n 'unsupported|finding' {paths}"),
+                prerequisites: Vec::new(),
+                dependents: 0,
+                open_signatures_or_gaps: data_gaps.len(),
+                claimed_opcodes: 0,
+            });
+        }
+        let distinct_gaps = behavior
+            .known_gaps
+            .iter()
+            .filter(|gap| !data::is_data_gap(&gap.path))
+            .map(|gap| (&gap.description, &gap.path, &gap.symbol, &gap.evidence))
+            .collect::<BTreeSet<_>>()
+            .len();
+        if behavior.scope_verification == ScopeVerification::Established
+            && ((behavior.scenarios.is_empty() && distinct_gaps == 0 && !data_gaps.is_empty())
+                || (!behavior.scenarios.is_empty()
+                    && tier1_state.is_match()
+                    && audit_state.is_match()
+                    && distinct_gaps == 0))
         {
             continue;
         }
@@ -118,12 +168,6 @@ fn open_work(
                         .map(|report| report.summary(&behavior.id, false).rule.signatures.len())
                 })
         });
-        let distinct_gaps = behavior
-            .known_gaps
-            .iter()
-            .map(|gap| (&gap.description, &gap.path, &gap.symbol, &gap.evidence))
-            .collect::<BTreeSet<_>>()
-            .len();
         let kind = if behavior.scope_verification == ScopeVerification::StockClientUseUnverified {
             "scope_verification"
         } else if behavior.scenarios.is_empty() {
@@ -192,7 +236,8 @@ fn open_work(
     }
     let group = |kind| match kind {
         "scope_verification" => 1,
-        "evidence_refresh" => 2,
+        "data_import" => 2,
+        "evidence_refresh" => 3,
         _ => 0,
     };
     work.sort_by(|a, b| {
@@ -219,6 +264,197 @@ fn state_json(state: &State) -> Value {
         State::Match(summary) => ("match", Some(summary)),
     };
     json!({"state": kind, "display": state.to_string(), "summary": summary})
+}
+
+#[derive(Serialize)]
+struct TierSummary {
+    evidence: &'static str,
+    pass: usize,
+    states: BTreeMap<String, usize>,
+    scenarios_recorded: usize,
+    scenarios_expected: usize,
+    rule_signatures: Option<usize>,
+    data_signatures: Option<usize>,
+}
+
+#[derive(Serialize)]
+struct ScoreboardSummary {
+    behaviors: usize,
+    with_scenario: usize,
+    without_scenario: usize,
+    tier1: TierSummary,
+    audit: TierSummary,
+    data_coverage: data::Coverage,
+    open_work_by_kind: BTreeMap<&'static str, usize>,
+}
+
+fn tier_summary(
+    ledger: &FeatureLedger,
+    report: Option<&Report>,
+    head: &str,
+    revision: &str,
+) -> Result<TierSummary> {
+    let mut states = BTreeMap::new();
+    let mut pass = 0;
+    let mut rule_signatures = 0;
+    let mut data_signatures = 0;
+    for behavior in ledger.behaviors() {
+        let state = state(report, behavior, head, revision)?;
+        pass += usize::from(state.is_match());
+        let kind = state_json(&state)["state"]
+            .as_str()
+            .context("evidence state name")?
+            .to_owned();
+        *states.entry(kind).or_default() += 1;
+        if let Some(report) = report {
+            let summary = report.summary(&behavior.id, false);
+            rule_signatures += summary.rule.signatures.len();
+            data_signatures += summary.data.signatures.len();
+        }
+    }
+    Ok(TierSummary {
+        evidence: if report.is_some() {
+            "present"
+        } else {
+            "absent"
+        },
+        pass,
+        states,
+        scenarios_recorded: report.map_or(0, |report| report.scenarios.len()),
+        scenarios_expected: ledger
+            .behaviors()
+            .iter()
+            .map(|behavior| behavior.scenarios.len())
+            .sum(),
+        rule_signatures: report.map(|_| rule_signatures),
+        data_signatures: report.map(|_| data_signatures),
+    })
+}
+
+fn scoreboard_summary(data: &ScoreboardData<'_>) -> Result<ScoreboardSummary> {
+    let behaviors = data.ledger.behaviors().len();
+    let with_scenario = data
+        .ledger
+        .behaviors()
+        .iter()
+        .filter(|behavior| !behavior.scenarios.is_empty())
+        .count();
+    let mut open_work_by_kind = BTreeMap::from([
+        ("data_import", 0),
+        ("implementer", 0),
+        ("scenario_author", 0),
+        ("scope_verification", 0),
+        ("evidence_refresh", 0),
+    ]);
+    for item in data.work {
+        *open_work_by_kind.entry(item.kind).or_default() += 1;
+    }
+    Ok(ScoreboardSummary {
+        behaviors,
+        with_scenario,
+        without_scenario: behaviors - with_scenario,
+        tier1: tier_summary(
+            data.ledger,
+            data.tier1.map(|(_, report)| report),
+            data.tier1_head,
+            data.revision,
+        )?,
+        audit: tier_summary(
+            data.ledger,
+            data.audit.map(|(_, report)| report),
+            data.audit_head,
+            data.revision,
+        )?,
+        data_coverage: data::coverage(data.ledger)?,
+        open_work_by_kind,
+    })
+}
+
+fn print_summary(data: &ScoreboardData<'_>) -> Result<()> {
+    let summary = scoreboard_summary(data)?;
+    println!("## Conformance scoreboard\n");
+    println!(
+        "Behaviors with scenarios: {} / {} ({} without).\n",
+        summary.with_scenario, summary.behaviors, summary.without_scenario
+    );
+    println!("| Tier | Passes | Evidence | Scenarios recorded / expected | Recorded rule signatures | Recorded data signatures |\n| --- | ---: | --- | ---: | ---: | ---: |");
+    for (name, tier) in [("Tier 1", &summary.tier1), ("Audit", &summary.audit)] {
+        let count = |value: Option<usize>| {
+            value.map_or_else(|| "unmeasured".into(), |value| value.to_string())
+        };
+        println!(
+            "| {name} | {} | {} | {} / {} | {} | {} |",
+            tier.pass,
+            tier.evidence,
+            tier.scenarios_recorded,
+            tier.scenarios_expected,
+            count(tier.rule_signatures),
+            count(tier.data_signatures)
+        );
+    }
+    for (name, tier) in [("Tier 1", &summary.tier1), ("Audit", &summary.audit)] {
+        println!(
+            "\n{name} Behavior states: {}.",
+            tier.states
+                .iter()
+                .map(|(state, count)| format!("{state}: {count}"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+    }
+    println!(
+        "\nOpen work: {}.",
+        summary
+            .open_work_by_kind
+            .iter()
+            .map(|(kind, count)| format!("{kind}: {count}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    println!(
+        "\nData coverage: {} data-import gaps, {} behavior gaps.",
+        summary.data_coverage.gaps.data_import, summary.data_coverage.gaps.behavior
+    );
+    println!(
+        "\n| System | Source | Behavior gaps | Data-import gaps |\n| --- | --- | ---: | ---: |"
+    );
+    for (system, coverage) in &summary.data_coverage.systems {
+        println!(
+            "| {system} | Total | {} | {} |",
+            coverage.gaps.behavior, coverage.gaps.data_import
+        );
+        for (source, gaps) in &coverage.by_source {
+            println!(
+                "| {system} | {source} | {} | {} |",
+                gaps.behavior, gaps.data_import
+            );
+        }
+    }
+    for (system, coverage) in &summary.data_coverage.systems {
+        for (path, census) in &coverage.port_census {
+            println!("\n{system}: {path} (archived production plan; see report for source identity and scope).");
+            for (table, rows) in &census.planned_import_rows_by_table {
+                println!("- {table}: {rows} planned import rows");
+            }
+            if let Some(findings) = census.manifest["findings"].as_array() {
+                let mut occurrences = BTreeMap::<&str, u64>::new();
+                for finding in findings {
+                    let classification = finding["classification"]
+                        .as_str()
+                        .context("finding classification")?;
+                    *occurrences.entry(classification).or_default() += finding["occurrences"]
+                        .as_u64()
+                        .context("finding occurrences")?;
+                }
+                for (classification, count) in occurrences {
+                    println!("- {classification}: {count} finding occurrences (codes in --json and census)");
+                }
+            }
+        }
+    }
+    println!("\nPlanned rows and finding occurrences have different units and may overlap; no coverage percentage is inferred.");
+    println!("\nSignature totals include stale recorded evidence; absent evidence is unmeasured.");
+    Ok(())
 }
 
 fn scoreboard_json(data: &ScoreboardData<'_>) -> Result<Value> {
@@ -272,6 +508,7 @@ fn scoreboard_json(data: &ScoreboardData<'_>) -> Result<Value> {
     let unclaimed = unclaimed_requests(ledger, counts)?;
     Ok(json!({
         "schema_version": 1,
+        "summary": scoreboard_summary(data)?,
         "tier1_evidence": tier1.map(|(path, report)| json!({"path": path, "report": report})),
         "audit_evidence": audit.map(|(path, report)| json!({"path": path, "report": report})),
         "opcode_coverage": {
@@ -358,10 +595,12 @@ fn main() -> Result<()> {
     let mut audit_path = None;
     let mut vmangos_path = None;
     let mut json_output = false;
+    let mut summary_output = false;
     let mut arguments = std::env::args().skip(1);
     while let Some(option) = arguments.next() {
         match option.as_str() {
             "--json" => json_output = true,
+            "--summary" => summary_output = true,
             "--tier1" => {
                 tier1_path = arguments.next().context("--tier1 needs a path")?.into();
                 explicit_tier1 = true;
@@ -377,12 +616,16 @@ fn main() -> Result<()> {
                 ));
             }
             "--help" => {
-                println!("scoreboard [--json] [--tier1 RESULT.json] [--audit REPORT.json] [--vmangos mangos.sqlite]");
+                println!("scoreboard [--json | --summary] [--tier1 RESULT.json] [--audit REPORT.json] [--vmangos mangos.sqlite]");
                 return Ok(());
             }
             _ => bail!("unknown option {option}"),
         }
     }
+    ensure!(
+        !(json_output && summary_output),
+        "choose --json or --summary"
+    );
     let output = Command::new("git")
         .current_dir(root)
         .args(["rev-parse", "HEAD"])
@@ -390,13 +633,7 @@ fn main() -> Result<()> {
     ensure!(output.status.success(), "git rev-parse HEAD failed");
     let head = String::from_utf8(output.stdout)?;
     let head = head.trim();
-    let pin = std::fs::read_to_string(root.join(".wire-harness-rev"))?;
-    let revision = pin
-        .lines()
-        .filter(|line| !line.starts_with('#'))
-        .flat_map(str::split_whitespace)
-        .nth(1)
-        .context("harness SHA")?;
+    let revision = lyracore_conformance::harness_pin().revision;
     let ledger = FeatureLedger::load(&root.join("conformance/features"))?;
     let catalogue = wire_client::catalogue::ENTRIES
         .iter()
@@ -478,10 +715,14 @@ fn main() -> Result<()> {
         );
         return Ok(());
     }
+    if summary_output {
+        return print_summary(&data);
+    }
     print_text(&data)
 }
 
 fn print_text(data: &ScoreboardData<'_>) -> Result<()> {
+    print_summary(data)?;
     let ScoreboardData {
         ledger,
         counts,
@@ -587,7 +828,7 @@ fn print_text(data: &ScoreboardData<'_>) -> Result<()> {
         }
     }
     spells::print(spells);
-    println!("\nOpen work: established Behaviors, scope verification, evidence refresh; within each group ranked by dependents, measured rule signatures or distinct known gaps, claimed request opcodes, then Behavior id:");
+    println!("\nOpen work: established Behaviors, scope verification, data import, evidence refresh; within each group ranked by dependents, measured rule signatures or distinct behavior gaps (data gaps in their own group), claimed request opcodes, then Behavior id:");
     for (index, item) in work.iter().enumerate() {
         println!(
             "{}. {} / {}: {} (dependents {}, signatures or gaps {}, opcodes {}); reproduce with {}; {}",
@@ -753,16 +994,23 @@ fn audit_name_skips_existing_report_parts() -> Result<()> {
     Ok(())
 }
 
+#[cfg(test)]
+fn clean_baseline() -> Result<Value> {
+    let mut baseline: Value = serde_json::from_str(include_str!("../tier1-baseline.json"))?;
+    for scenario in baseline["scenarios"].as_array_mut().unwrap() {
+        scenario["rule"] = json!([]);
+    }
+    Ok(baseline)
+}
+
 #[test]
 fn clean_baseline_without_report_requests_audit() -> Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let ledger = FeatureLedger::load(&root.join("features"))?;
-    let work = open_work(&ledger, None, None, "head", "head", "pin")?;
-    for behavior in ["connection_identity", "taxi_single_hop"] {
-        let item = work.iter().find(|item| item.behavior == behavior).unwrap();
-        assert_eq!(item.kind, "evidence_refresh");
-        assert!(item.next_command.starts_with("./conformance/audit --date "));
-    }
+    let ledger = synthetic_ledger();
+    let baseline = json!({"scenarios": [{"behavior": "branch", "rule": []}]});
+    let work = open_work_from(&baseline, &ledger, None, None, "head", "head", "pin")?;
+    let item = work.iter().find(|item| item.behavior == "branch").unwrap();
+    assert_eq!(item.kind, "evidence_refresh");
+    assert!(item.next_command.starts_with("./conformance/audit --date "));
     Ok(())
 }
 
@@ -779,7 +1027,8 @@ fn clean_tier1_with_stale_audit_requests_evidence_refresh() -> Result<()> {
         scenario["properties"] = json!([]);
     }
     let tier1: Report = serde_json::from_value(tier1_value)?;
-    let work = open_work(
+    let work = open_work_from(
+        &clean_baseline()?,
         &ledger,
         Some(&audit),
         Some(&tier1),
@@ -821,7 +1070,8 @@ fn clean_tier1_with_stale_audit_requests_evidence_refresh() -> Result<()> {
                 .iter()
                 .position(|item| item.behavior == "connection_identity")
     );
-    let without_tier1 = open_work(
+    let without_tier1 = open_work_from(
+        &clean_baseline()?,
         &ledger,
         Some(&audit),
         None,
@@ -837,7 +1087,8 @@ fn clean_tier1_with_stale_audit_requests_evidence_refresh() -> Result<()> {
     assert!(connection
         .next_command
         .starts_with("./conformance/audit --date "));
-    let without_audit = open_work(
+    let without_audit = open_work_from(
+        &clean_baseline()?,
         &ledger,
         None,
         Some(&tier1),
@@ -857,7 +1108,14 @@ fn clean_tier1_with_stale_audit_requests_evidence_refresh() -> Result<()> {
 fn clean_tier1_with_audit_difference_reproduces_with_audit() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ledger = FeatureLedger::load(&root.join("features"))?;
-    let (_, audit) = evidence::latest_audit(&root.join("reports"), None)?.context("audit")?;
+    let (_, mut audit) = evidence::latest_audit(&root.join("reports"), None)?.context("audit")?;
+    for scenario in &mut audit.scenarios {
+        scenario.scenario_sha256 = wire_client::catalogue::get(&scenario.id)?
+            .trace()
+            .header
+            .scenario_sha256
+            .clone();
+    }
     let mut tier1_value = serde_json::to_value(&audit)?;
     tier1_value["tier"] = json!("tier1");
     tier1_value["audit"] = Value::Null;
@@ -865,8 +1123,29 @@ fn clean_tier1_with_audit_difference_reproduces_with_audit() -> Result<()> {
         scenario["comparison"]["differences"] = json!([]);
         scenario["properties"] = json!([]);
     }
+    let scenarios = tier1_value["scenarios"].as_array_mut().unwrap();
+    let taxi = scenarios
+        .iter()
+        .find(|scenario| scenario["id"] == "taxi_single_hop")
+        .unwrap()
+        .clone();
+    for id in [
+        "taxi_single_hop__late_observer",
+        "taxi_single_hop__reconnect",
+    ] {
+        let mut variant = taxi.clone();
+        variant["id"] = json!(id);
+        variant["scenario_sha256"] = json!(
+            wire_client::catalogue::get(id)?
+                .trace()
+                .header
+                .scenario_sha256
+        );
+        scenarios.push(variant);
+    }
     let tier1: Report = serde_json::from_value(tier1_value)?;
-    let work = open_work(
+    let work = open_work_from(
+        &clean_baseline()?,
         &ledger,
         Some(&audit),
         Some(&tier1),
@@ -924,7 +1203,20 @@ fn json_reports_behavior_evidence_and_scenario_coverage() -> Result<()> {
         revision: "pin",
         work: &work,
     })?;
+    assert_eq!(output["summary"]["tier1"]["evidence"], "absent");
+    assert_eq!(output["summary"]["tier1"]["pass"], 0);
+    assert_eq!(output["summary"]["tier1"]["states"]["not_run"], 1);
+    assert_eq!(output["summary"]["tier1"]["rule_signatures"], Value::Null);
     assert_eq!(output["schema_version"], 1);
+    assert_eq!(
+        output["summary"]["data_coverage"]["gaps"],
+        json!({"behavior": 2, "data_import": 0})
+    );
+    assert_eq!(
+        output["summary"]["data_coverage"]["systems"]["sample"]["by_source"]["module/src/taxi.rs"]
+            ["behavior"],
+        2
+    );
     assert_eq!(output["systems"]["sample"]["with_scenario"], 1);
     assert_eq!(output["systems"]["sample"]["without_scenario"], 5);
     assert_eq!(output["behaviors"]["branch"]["tier1"]["state"], "not_run");
@@ -940,6 +1232,71 @@ fn json_reports_behavior_evidence_and_scenario_coverage() -> Result<()> {
     assert_eq!(output["open_work"][0]["reproduce_with"], Value::Null);
     assert_eq!(output["open_work"][1]["reproduce_with"], "tier1");
     assert!(output["audit_evidence"].is_null());
+    Ok(())
+}
+
+#[cfg(test)]
+fn measured_connection() -> Result<(FeatureLedger, Report)> {
+    let ledger = FeatureLedger::from_sources([
+        (
+            "connection/connection_identity.toml",
+            include_str!("../features/connection/connection_identity.toml"),
+        ),
+        (
+            "taxi/taxi_single_hop.toml",
+            include_str!("../features/taxi/taxi_single_hop.toml"),
+        ),
+    ])?;
+    let golden = wire_client::catalogue::get("connection_identity")?;
+    let report = serde_json::from_value(json!({
+        "schema_version": 2, "tier": "tier1", "core_commit": "head",
+        "working_tree_dirty": false, "harness_revision": "pin", "recorded_at_unix_ms": 1,
+        "scenarios": [{
+            "id": "connection_identity", "behavior": "connection_identity",
+            "scenario_sha256": golden.trace().header.scenario_sha256,
+            "comparison": {"differences": []}, "properties": [],
+        }],
+    }))?;
+    Ok((ledger, report))
+}
+
+#[test]
+fn summary_separates_partial_evidence_from_measured_passes() -> Result<()> {
+    let (ledger, report) = measured_connection()?;
+    let summary = tier_summary(&ledger, Some(&report), "head", "pin")?;
+    assert_eq!(summary.evidence, "present");
+    assert_eq!(summary.pass, 1);
+    assert_eq!(summary.scenarios_recorded, 1);
+    assert_eq!(summary.scenarios_expected, 4);
+    assert_eq!(summary.states["match"], 1);
+    assert_eq!(summary.states["not_run"], 1);
+    assert_eq!(summary.rule_signatures, Some(0));
+    assert_eq!(summary.data_signatures, Some(0));
+    Ok(())
+}
+
+#[test]
+fn summary_keeps_recorded_signatures_when_evidence_is_stale() -> Result<()> {
+    let (ledger, mut report) = measured_connection()?;
+    let difference = json!({
+        "classification": "rule", "character": null, "checkpoint": "reply", "stream": null,
+        "packet_index": null, "field_path": ["value"], "opcode": 1, "deviations": [],
+        "rule": "field_value", "reason": "different value", "expected": null, "actual": null,
+    });
+    let mut data_difference = difference.clone();
+    data_difference["classification"] = json!("data");
+    report.scenarios[0].comparison.differences =
+        serde_json::from_value(json!([difference, difference, data_difference,]))?;
+    let summary = tier_summary(&ledger, Some(&report), "head", "pin")?;
+    assert_eq!(summary.pass, 0);
+    assert_eq!(summary.states["different"], 1);
+    assert_eq!(summary.rule_signatures, Some(1));
+    assert_eq!(summary.data_signatures, Some(1));
+    let stale = tier_summary(&ledger, Some(&report), "new-head", "pin")?;
+    assert_eq!(stale.pass, 0);
+    assert_eq!(stale.states["stale"], 2);
+    assert_eq!(stale.rule_signatures, Some(1));
+    assert_eq!(stale.data_signatures, Some(1));
     Ok(())
 }
 
@@ -969,7 +1326,7 @@ fn json_keeps_committed_audit_evidence() -> Result<()> {
         audit: Some((&path, &report)),
         tier1_head: "head",
         audit_head: "head",
-        revision: evidence::harness_revision(),
+        revision: lyracore_conformance::harness_pin().revision,
         work: &[],
     })?;
     assert_eq!(
@@ -1059,5 +1416,39 @@ fn external_report_with_canonical_predecessor_link_passes() -> Result<()> {
         report.validate_changes()?;
         report.verify_capture(&alias_path)?;
     }
+    Ok(())
+}
+
+#[test]
+fn importer_gaps_have_their_own_work_instead_of_scenario_rank() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ledger = FeatureLedger::load(&root.join("features"))?;
+    let work = open_work(&ledger, None, None, "head", "head", "pin")?;
+    let mut imports = 0;
+    for behavior in ledger.behaviors() {
+        let data_gaps = behavior
+            .known_gaps
+            .iter()
+            .filter(|gap| data::is_data_gap(&gap.path))
+            .map(|gap| (&gap.description, &gap.path, &gap.symbol, &gap.evidence))
+            .collect::<BTreeSet<_>>();
+        let items: Vec<_> = work
+            .iter()
+            .filter(|item| item.behavior == behavior.id && item.kind == "data_import")
+            .collect();
+        if data_gaps.is_empty() {
+            assert!(items.is_empty(), "{}", behavior.id);
+            continue;
+        }
+        imports += 1;
+        assert_eq!(items.len(), 1, "{}", behavior.id);
+        assert_eq!(items[0].open_signatures_or_gaps, data_gaps.len());
+        assert_eq!(items[0].reproduce_with, None);
+        for (_, path, _, _) in &data_gaps {
+            assert!(items[0].next_command.contains(path.as_str()));
+        }
+    }
+    assert!(imports > 0, "the ledger names no importer gap");
+    assert_ne!(work[0].kind, "data_import");
     Ok(())
 }

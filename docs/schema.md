@@ -8,12 +8,33 @@ say: invariants, why a column exists and ordering rules.
 [`architecture.md`](./architecture.md) explains how the tables fit into the runtime.
 [`danger-zones.md`](./danger-zones.md) §1.2 is the authority for migrations.
 
+`game_crit_per_agility` stores imported class/level rates; `game_creature_defense` stores imported
+creature defense flags. Both are new catalogues. See the [white melee migration](danger-zones.md#white-melee-catalogue-migration)
+before publishing to an existing Realm. The private `game_missing_crit_catalogue` singleton records
+the first missing crit rate and suppresses repeat warnings while the previous formula is in use.
+
+`game_npc_vendor.restock_seconds` and `stock_flags` default to zero, preserving legacy purchases
+until the items reimport. The private `game_vendor_stock` key combines spawn GUID and item entry;
+an open-world entry choice uses its source spawn GUID, while Instance copies keep their own GUID.
+Counts and whole-second timestamps are shared by all Characters buying from that spawn.
+`game_vendor_stock_runtime` records the Host process identity that owns those counters.
+See [vendor stock migration](danger-zones.md#vendor-stock-migration) for lifetime and import rules.
+
+`game_active_taxi_flight.first_destination_node_index` is end-appended with default 1. It names
+the first DBC vertex after the stored launch origin, so existing flights retain their route.
+A reconnect sends the unmounted login CREATE, then restarts the remaining spline from the saved
+position. `game_combat_check_schedule` is a new private one-shot schedule: suspending hostility for
+taxi resumption keeps the combat flag until the 1,200 ms check, including when the flight lands first.
+
 ## 1. Conventions
 
 - **Naming.** Core tables take the `game_` prefix; Package tables take `pkg_<name>_`. External
   gtker crates keep their `wow_` names.
 - **`accessor`** is the Rust identifier the macro exposes as `ctx.db.<accessor>()`. SpacetimeDB 2.x
   syntax is `#[table(accessor = …)]`, with every index declared inside that one attribute.
+- **Catalog.** `module/build.rs` re-exports each Core table under `crate::tables` and the crate
+  root. A table Packages must not rely on goes in `crate::outside_table_catalog!(..)` in its
+  declaring file; [`module-build.md`](./module-build.md) has the rules.
 - **Visibility.** `public` means any connection can subscribe to the table. Without it the table
   is private, and only the Shard's owner can read it. The Native Host connects in process as that
   owner.
@@ -62,6 +83,18 @@ keyed by definition revision and source rule id. Imports replace rules and polic
 default, so old relay runs keep their failure behavior. See [command lists](data-ingestion.md#command-lists-in-eventai)
 for execution and failure rules.
 
+`game_character_quest_log` is a new private companion table with 20 quest entries per Character;
+zero denotes an empty slot. An absent row projects legacy quests in quest-id order. The next quest
+mutation saves these positions before changing the log. New quests use the first free slot;
+swaps move positions and abandon leaves a hole. Reconnect and Character Transfer retain the row.
+The public `game_character_quest` layout stays unchanged for Package compatibility.
+
+`game_quest_flags` is a new private companion table for the source `QuestFlags` bits returned in
+quest queries. Absence means zero; reimport quests to populate an existing Realm. The public quest
+template layout stays unchanged for Packages. Existing authored templates default to zero flags.
+These stored bits do not implement the gameplay
+rules for every flag; the import Compatibility Manifest continues to report that gap.
+
 ### The three migration rules that have bitten
 
 1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64`
@@ -92,6 +125,23 @@ before enabling multiple hosts for existing leases.
 
 ## 2. Inventory
 
+`game_item_aura` associates a runtime Aura with the Item that applied it. Aura deletion deletes
+the association. Equipment changes reconcile these rows through `ItemInstance`; world entry,
+resurrection and form changes use the same reconciliation. World entry also restores passive
+effects for a ghost. Hidden passive effects use slot 255
+and do not consume a client Aura slot. The association and its derived Auras do not travel in
+Character Transfer. Finite equip Auras use `game_item_aura_expiry` to expire at their deadline,
+independent of the general Aura sweep. World entry rebuilds them from equipment. Spell cooldowns
+travel separately in `game_spell_cd` and keep their absolute deadlines.
+
+`game_spell.form_mask`, `form_exclude`, `attributes_ex_2`, `visual_id`, `duration_index`, `category`
+and `category_cooldown_ms` retain source fields needed by equip effects. The five
+`game_item_template.spellcategory_*` fields override category admission for an Item cast.
+`game_spell_cd.category` identifies the shared category owner; `category_ready_micros` keeps its
+absolute deadline. `game_pending_cast.cooldown_category` preserves an Item's override, including
+zero, through cast completion. Their typed defaults preserve old rows during an additive publish.
+See [equip spell migration](danger-zones.md#equip-spell-migration) before play resumes.
+
 Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully
 qualified `#[spacetimedb::table(...)]`; missing the second form undercounts.
 
@@ -108,10 +158,10 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | World entity and movement | `world.rs`, `motion.rs` |
 | Terrain, nav and exact vmap | `terrain.rs`, `nav.rs`, `vmap.rs` |
 | Chat, social and addon bridge | `chat.rs`, `channel.rs`, `realm_chat.rs`, `away.rs`, `bridge.rs` |
-| Combat, threat and duel | `combat/engage.rs`, `combat/death.rs`, `combat/energy.rs`, `threat.rs`, `duel.rs` |
+| Combat, threat and duel | `combat/engage.rs`, `combat/damage.rs`, `combat/energy.rs`, `threat.rs`, `duel.rs` |
 | Spell and aura | `spell/tables.rs`, `spell/stacking.rs`, `spell/cast/resolve.rs` |
 | Quest | `quest.rs` |
-| Item, trade and mail | `items/tables.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
+| Item, trade and mail | `items/tables.rs`, `items/buyback.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_reward.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
 | Auction house | `auction.rs` |
 | Creature (template, spawn, AI, pet, trainer) | `creatures/*`, `trainer.rs`, `gossip.rs` |
 | GameObject | `gameobject.rs`, `go_model.rs`, `go_collider.rs` |
@@ -122,12 +172,14 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | Packages | `package_account.rs`, `package_config.rs`, `package_import.rs`, `package_teardown.rs`, `script_binding.rs` |
 | Event GC | `gc.rs` |
 | Config, static data and diagnostics | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `import_meta.rs`, `debug/*` |
-| Guid ranges and retired coordination | `realm_core.rs`, `gw.rs`, `region.rs`, `load.rs`, `transfer/mod.rs` |
+| Gateway residue and Character Transfer | `realm_core.rs`, `gw.rs`, `transfer/mod.rs` |
+| Retired tables | `retired.rs` |
 
-`claim_guid_range` in `realm_core.rs` installs the Realm's guid range. The other tables in that
-last row held multi-Shard routing, Gateway leases, load samples and cross-Shard Transfers. They
-stay because dropping a table is a destructive migration. Native requests do not route through
-them.
+`install_guid_range` in `auth.rs` installs the Shard's guid range. `realm_core.rs` keeps the
+Gateway-era Realm locator, and `gw.rs` the Gateway Verbs that durable tests still call.
+`transfer/mod.rs` keeps the Transfer ledger: native Transfer between World Shards runs through its
+`apply_*` functions. Nothing writes the tables in `retired.rs`; they stay because dropping a table
+is a destructive migration.
 
 Two shapes recur:
 
@@ -136,8 +188,8 @@ Two shapes recur:
   other DBC-derived reference data. Only the importer writes them.
 - **Event tables**: transient outbound signals that a row diff cannot carry, such as a movement
   Relay's animation opcode. The Module inserts them inside the transaction that caused them. The
-  `*_live` tables are SpacetimeDB event tables and keep no rows; older event tables are reaped by
-  `gc.rs` about one second later. See [Native Relay events](./danger-zones.md#native-relay-events).
+  `*_live` tables are SpacetimeDB event tables and keep no rows; other event tables are reaped
+  about one second later by their owning module's `sweep_expired`, which `gc.rs` runs. See [Native Relay events](./danger-zones.md#native-relay-events).
 
 ## 3. Tables with rules the struct cannot show
 
@@ -159,13 +211,62 @@ additive migration. `game_selection_request.selection_id` and `game_native_away.
 END-appended defaults; a legacy away row uses the default World Shard.
 
 `game_character_name` is a new private Realm table keyed by the lowercased name. A pending row
-has a nonzero selection id and guid zero; a completed row has its Character guid and selection id
-zero. The Account and World identify the creator. Confirmed deletion releases the row. It stays
+has guid zero. Its selection id is nonzero for native creation and zero for Package creation;
+a completed row has its Character guid and selection id zero. The Account and World identify the creator. Confirmed deletion releases the row. It stays
 on the Realm through Transfer and selection expiry. `game_character_names_ready` records World
 Shards whose complete name report committed. `game_character_name_report` retains the current
 report revision, expected batch count and accepted batch indexes until that World becomes ready.
 All three tables start empty. See the
 [upgrade procedure](architecture.md#upgrade-character-name-reservations).
+
+### Package Character creation (`module/src/native/package_creation.rs`)
+
+`game_package_character_request` retains each World's Package request and its Pending, Created or
+Refused result until the Package consumes it. It has at most 64 rows per Package per Shard.
+`game_package_creation_delivery` carries request, grant, created-profile and completion messages.
+`game_package_creation_retry` retains refused result deliveries for retry; transport failures stay
+in the outbox. All three tables are private and new. Request ids are local to the requesting World.
+A grant failure rolls back World creation before its Realm callback releases the pending name.
+Package Account allocation on the Realm includes both directory entries and pending reservations.
+See [the Package contract](package-api.md#asynchronous-package-character-creation) for result
+consumption and upgrade obligations.
+
+### Package relocation (`module/src/native/package_relocation.rs`)
+
+`game_package_relocation` retains the source request, entrance and authority snapshot, and result.
+It is Shard-owned: source Character cleanup must not discard the completion that the Package polls.
+`game_package_arrival` holds the exact Transfer and source that may release an imported body. It is
+deleted with successful release. `game_package_relocation_delivery` and its retry table retain work
+after source removal. These four private tables are new; existing table layouts and Host delivery
+layouts do not change. See [Package relocation ordering](character-transfer.md#package-relocation).
+
+### Package Groups (`module/src/native/realm_party/package.rs`)
+
+`game_package_party_authority`, declared in `native/package_actor.rs`, is a private table on the
+World and Realm. It retains the Character guid, World, authority revision and active state. Body and consent changes advance the
+revision on the owning World; the Realm keeps it after presence becomes inactive to fence delayed
+commands. Existing Group table layouts and IDC arguments are unchanged. Opcode zero in
+`game_realm_party_command` carries a Package command and its authority. A zero connection alone
+does not grant Group or guild authority. The Realm also requires Package Account ownership and
+the current Character directory owner. See [the Package contract](package-api.md#session-less-action-consent)
+for upgrade and completion obligations.
+
+`game_package_party_refresh` is a new private scheduled table with at most one row per World. It
+refreshes statistics for active Package Group members every five seconds, keeping their authority
+revisions unchanged. Outstanding Package commands delay a refresh batch. The timer removes itself
+when no active Package Group members remain. After upgrading an existing World, the Package Group
+presence report starts the timer for existing membership.
+
+### Package guilds (`module/src/native/package_guild.rs`)
+
+`game_package_guild_delivery` carries World requests and Realm invitation projections through
+`idc_package_guild`. `game_package_guild_retry` retains refused projection deliveries for retry;
+transport failures remain in the outbox. `game_package_guild_invitation` retains one current
+invitation or cleared revision per Character on its World. Cleared rows survive Character removal
+to prevent a delayed delivery from restoring an old invitation. All three tables are new and
+private. The existing `game_package_party_authority` layout is unchanged and fences both Group and
+guild actions. See [the Package contract](package-api.md#sessionless-guild-membership) for explicit
+acceptance, asynchronous completion and the presence report required after an upgrade.
 
 ### Realm communication (`module/src/native/realm_communication.rs`)
 
@@ -200,7 +301,7 @@ through `game_area_trigger` for its map and three-dimensional volume. The table 
 existing Realm gains an empty catalogue until the world import runs again. Inn rest applies only
 inside a selected trigger; a missing geometry row cannot grant rest.
 
-### Taxi catalogue (`module/src/config.rs`)
+### Taxi catalogue (`module/src/taxi/catalogue.rs`)
 
 `game_taxi_node` comes from vmangos `taxi_nodes`. `game_taxi_path` and `game_taxi_path_node`
 come from the Operator's `TaxiPath.dbc` and `TaxiPathNode.dbc`. These rows are public.
@@ -262,7 +363,7 @@ decides which one owns it:
 - **Taxi flight** owns the field for the whole flight. Activation writes the faction mount display
   and sets `UNIT_FLAG_TAXI_FLIGHT` in `unit_flags`; landing clears both. The pair goes out in one
   partial VALUES mask without `OBJECT_FIELD_TYPE`. Route progress belongs to the active-flight row,
-  never to `game_creature_spline`.
+  never to `game_creature_spline`. That row, not the flag, decides whether a Character is in flight.
 - **Land mount** owns it the rest of the time, as a projection. The `A_MOUNTED` aura row is the
   mounted state, and `mount::recompute_mount` derives `mount_display_id` and `run_speed_mult_bp`
   from the current aura set. Every aura removal path ends in that one recompute. A land mount never
@@ -295,11 +396,8 @@ refuses an expired row like an absent one, and `reap_sessions` deletes expired r
 minutes. `game_operator` is a singleton holding the one Operator identity, captured by
 `claim_operator`.
 
-`game_account_character_owner` is keyed by Character guid and stores the exact Account id and name.
-Its rows remain across logout and Character deletion. Character guids are never reused, so retained
-rows are ownership tombstones. Each cleanup reads at most 4,097 rows and refuses when an Account
-already has more than 4,096; it never truncates. `game_account_fence` is a retired
-Gateway table, and nothing writes it. Module tests and the native check still open Account Claims in
+`game_account_fence` and `game_account_character_owner` are retired Gateway tables in
+`module/src/retired.rs`, and nothing writes them. Module tests and the native check still open Account Claims in
 `game_account_claim`. Operator reducers that act for a Character take a `SessionActor`; a null
 ownership refuses a Character with an active Account Claim.
 
@@ -327,8 +425,50 @@ last member to leave deletes the channel with its password and bans.
 
 `game_character_contact` (public) holds friend and ignore rows.
 
-`game_channel_member`, `game_channel_event` and `game_whisper_event` in `module/src/chat.rs` are
-retired. They stay because dropping a table is a destructive migration. Nothing writes them.
+`game_channel_member`, `game_channel_event` and `game_whisper_event` in `module/src/retired.rs`
+are retired. They stay because dropping a table is a destructive migration. Nothing writes them.
+
+### Buyback (`module/src/items/buyback.rs`)
+
+`game_buyback_item` holds a sold Item's complete instance and any paused Temporary Enchantment.
+It is private. The Item has no `game_item_instance` row while it is in buyback, so slot lookup,
+equipment, storage, uniqueness, quests, item use, trade, Mail, Auctions, bank access, durability
+and repair cannot treat it as inventory. GUID allocation and Transfer import check both tables
+for collisions. Letter Copy grant retries also check buyback to avoid a duplicate copy. A full
+sale keeps the GUID; a partial sale creates a new stack with the reference
+clone rules. Restoration keeps that GUID unless the stack merges completely into existing stacks.
+Merging keeps the destination stack's property and binding. Buyback sends no item receipt.
+Sale and restoration write ordinary Item rows through named `ItemInstance` methods with their own
+delivery. A sale removes equipped armor and resistance bonuses from the client's fields. It pauses
+Temporary Enchantments instead of forgetting them. It does not close a Guild Charter's Petition:
+the Reference Server removes the Item from inventory without destroying it.
+
+`game_buyback_state` stores the login time and current slot. Slots 69 through 80 retain their
+positions when another slot is bought back. A full ring selects the oldest timestamp, with ties
+going to the lowest slot. The timestamp field is 108000 plus whole seconds since login. It is a
+client field and does not drive an expiry timer, as in the pinned Reference Server. Eviction
+destroys the Item and releases its Item Text. Temporary Enchantments retain their remaining duration and
+charges until restoration.
+
+Logout and Transport Loss discard buyback. Every fresh login also clears it before building the
+client view, including after a crash with no previous live body or World Session. Character deletion
+and Package Teardown clear it, including teardown of a Character whose body is already absent.
+Both buyback tables travel in the Character Transfer manifest. A Handoff or World Port preserves
+the same World Session: ring positions, prices, timestamps, `login_at`, `current_slot`, complete
+Items and paused Temporary Enchantments stay intact and replay on arrival. Buyback Items still
+have no ordinary inventory row. Import checks GUID collisions across both tables and the whole
+arriving payload. Nested Item ownership is restamped at entry. Item Text travels with its
+references and receives local ids; the source deletion sweep releases each buyback reference once
+and sends no destroy delivery for transported Items. Fresh login discards transported buyback,
+including after a sessionless Transfer; Package relocation clears it while making its source dormant.
+
+Both buyback tables are additive. The old `game_character_buyback` declaration and row layout stay
+for migration compatibility; no gameplay reads its snapshots. `debug_repair_after_publish` discards
+those rows and ends connected World Sessions without buyback state, so the client discards legacy
+objects and fields and a fresh login establishes the timestamp origin. Sessions with buyback state
+remain connected, including Sessions adopted by Handoff. Native World Port import refuses a
+missing buyback session row before adoption. Login also clears the Character's legacy rows. See
+[the buyback migration](danger-zones.md#buyback-migration) before updating an existing Realm.
 
 ### Mail (`module/src/mail.rs`, `mail_timer.rs`, `mail_text.rs`)
 
@@ -358,8 +498,9 @@ its item text always agree. The row outlives the Mail. Its END-appended `letters
 Letters that can carry it: each copy adds one, and `mail_text::drop_letter_text` takes one away
 when a Mail is deleted with the letter attached or when a Character is deleted. The row goes at 0.
 The default `u32::MAX` marks a row filed before the count existed, and such a row is never
-deleted. The count can be too high, never too low. A letter destroyed or sold from the bags drops
-nothing. `game_item_instance.item_text_id` is 0 for every item that is not a copied letter, and
+deleted. The count can be too high, never too low. Destroying a Letter Copy or discarding it from
+buyback releases its reference. A sale retains the reference until the Item is restored or discarded.
+`game_item_instance.item_text_id` is 0 for every item that is not a copied letter, and
 every item snapshot (mail, trade, auction) keeps it.
 
 `game_mail_forward` carries a letter and its attachment text through IDC; `game_mail_forward_retry`
@@ -460,6 +601,11 @@ data the importer writes, the third is a per-aura snapshot.
 `game_spell` carries the selected vmangos `spell_template` fields: `proc_flags`, the vanilla
 `procFlags` bitmask with no translation table, `proc_chance` (a whole percent) and `proc_charges` (0 means unlimited).
 
+`game_spell.cast_flags` retains party and pet area-aura origins as `CAST_FLAG_AREA_AURA`.
+Their translated target can be self, so slot visibility must use this flag instead of inferring
+the source effect from the target. Ordinary passives use slot 255; visual passives, recipient
+area auras and totem auras can use visible slots. Repair applies the same rule to stored cast auras.
+
 `game_spell_proc_event` carries the source proc-event overlay: `ppm_rate`,
 `icd_ms`, `proc_ex` (the normal-hit and critical-hit rule), the `school_mask`, `family_name` and
 `family_flags` filter on triggering spells, a `proc_flags` override and a `custom_chance`. It is
@@ -494,7 +640,7 @@ refreshes on its own.
 ### Combo finishers (`module/src/combo.rs`)
 
 A finisher is a Rogue or Druid spell whose `Spell.dbc` AttributesEx carries 0x0010_0000 or
-0x0040_0000. The importer marks its `game_spell.cast_flags` with `SPELL_ATTR_COMBO_FINISHER`.
+0x0040_0000. The importer marks its `game_spell.cast_flags` with `CAST_FLAG_COMBO_FINISHER`.
 A Character cannot cast one without combo points, on the target for an enemy-targeted finisher and
 anywhere for Slice and Dice. A cast spends the points unless it misses its target.
 
@@ -603,7 +749,7 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_duel_schedule` | `tick_duels` | 250 ms | `duel.rs` |
 | `game_taxi_flight_schedule` | `advance_taxi_flight` | 100 ms while a passenger is active | `taxi.rs` |
 | `game_transport_carry_schedule` | `carry_transport_passengers` | 500 ms per Transport while it has Passengers, armed by boarding | `transport/mod.rs` |
-| `game_transport_crossing` | `cross_transport_map` | one-shot at a route's next map change, armed by world entry | `transport/mod.rs` |
+| `game_transport_crossing` | `cross_transport_map` | one-shot at a route's next map change, armed by `init`, `debug_repair_after_publish` and each firing | `transport/mod.rs` |
 | `game_creature_move_schedule` | `tick_creatures` | 500 ms (sensing every 8th pass, about 4 s) | `creatures/tick/mod.rs` |
 | `game_ground_area_schedule` | `tick_ground_areas` | 500 ms | `spell/tables.rs` |
 | `game_native_admission_tick` | `native_admission_tick` | 1 s while the Login Queue holds waiters | `native/admission.rs` |
@@ -631,14 +777,18 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_creature_ai_relay_continuation` | `resume_relay_run` | one-shot at the authored relay delay | `creatures/eventai/relay.rs` |
 | `game_creature_ai_relay_arrival` | `resume_relay_arrival` | one-shot on movement completion | `creatures/eventai/relay.rs` |
 
-`init` inserts the interval rows (`seed_scheduler_arming` in `module/src/seed.rs`). The transfer,
+`init` inserts the interval rows (`arm_interval_schedules` in `module/src/seed.rs`). The transfer,
 mail-escrow, session and native logon reapers, the native admission and member-stat ticks and the
 Transport carry schedules are armed by their own entry points, lazily and idempotently. Scheduled
 reducers check `ctx.sender() == ctx.database_identity()`, so nothing outside can drive them.
 
+In a conformance build the virtual clock drives every scheduled table that is not marked
+`virtual_clock_exempt!`. The build generates that registry; see
+[Module build](./module-build.md).
+
 `init` does not run again on an auto-migrating publish, so a schedule row can go stale.
-`debug_repair_after_publish` re-arms the interval schedules except the event reaper and melee
-schedules. Call it after every publish; see
+`debug_repair_after_publish` arms the same interval schedules as `init`, from one list in
+`module/src/seed.rs`. Call it after every publish; see
 [After every publish](./danger-zones.md#after-every-publish).
 
 Packages get a periodic hook without a table of their own: `game_tick_pass!` runs at the end of
@@ -681,3 +831,108 @@ transaction, so a partial seed never persists.
 
 Real world content is not seeded. It comes from the importer; see
 [`data-ingestion.md`](./data-ingestion.md).
+
+### Equip aura support
+
+`game_world_entity.sheet_ap_modifiers` and `sheet_ranged_ap_modifiers` cache the wire AP
+breakdown. The low signed-16 half is the positive modifier and the high signed-16 half is the
+negative modifier. They are END-appended with zero defaults and refreshed by publish repair.
+The ranged base AP stays separate. Damage uses the signed total; both CREATE and VALUES
+retain the individual modifier halves.
+
+`game_item_aura` retains the exact BSATN source definition for each active derived aura. Repair
+compares it with the current header and effect, so unchanged auras keep their identity and timing.
+The source bytes stay local to the Shard and are excluded from Character records and Transfer.
+
+`game_spell_effect.equip_supported` defaults to false. The spell importer enables only source
+shapes whose units, selection and consumer have been audited. Existing and authored rows stay
+inert on equip until reimport or an explicit supported claim. This does not enable instant effects.
+At patch 10 / build 5875, 2,645 Item entries name 640 equip spells. Of these, 2,643 entries
+name 638 spells with the 52 aura types below; two entries name spells without an aura type. Counts
+are distinct Item entries per type and overlap. One weapon-dependent crit Item stays inert; the
+other 383 use the shared melee/ranged crit bonus. One area stat Item and one area spell-crit Item
+also stay inert. Only ordinary self-targeted effect-6 shapes are enabled. Healing retains its
+school mask in `A_MOD_HEALING`. This is a source-to-consumer audit, not a claim that every
+spell or baseline combat calculation is complete.
+
+Unsupported cast effects import as `A_INERT` (0xB9). They keep their Aura holder, icon, duration,
+refresh, stack limit and dispel behavior; no numeric consumer reads this kind. This does not enable
+those effects on equipment. In particular, Thorns and Retribution Aura retain holders without
+reflection; Arcane Elixir and Curse of Weakness retain holders without flat damage modification;
+Dampen and Amplify Magic retain buff holders without flat incoming damage or healing modification.
+Aspect of the Hawk contributes only its ranged AP to the separate ranged field. Unrestricted crit
+checks only the source equipment class of -1; masks are ignored in that case, including Recklessness
+and Elixir of the Mongoose. Ranged AP uses the class formula, and ranged damage retains its fraction
+on the wire. The sheet sends both melee and ranged crit percentages, using each attack slot's weapon skill.
+
+`game_world_entity.sheet_ranged_dmg_min_fraction` and `sheet_ranged_dmg_max_fraction` are
+zero-default END-appended caches for the fractional parts. The existing integer damage columns and
+Character Transfer layout stay unchanged. The zero-default END cache `sheet_ranged_crit_bp`
+keeps ranged crit separate from melee crit and refreshes when the ranged weapon skill changes.
+Publish repair refreshes these projections; see
+[the migration order](danger-zones.md#equip-spell-migration).
+
+| Source aura type | Items | Consumer or missing behavior | Equip result | Example spell |
+| --- | ---: | --- | --- | ---: |
+| 3 PeriodicDamage | 1 | periodic damage / leech shape not certified | Inert | 19307 |
+| 4 Dummy | 12 | A_FLAG placeholder | Inert | 16372 |
+| 8 PeriodicHeal | 8 | periodic healing bonus/cadence not certified | Inert | 5707 |
+| 13 ModDamageDone | 928 | flat school damage and weapon restrictions need mechanics | Inert | 7685 |
+| 14 ModDamageTaken | 2 | flat incoming damage needs school-aware folding | Inert | 5102 |
+| 15 DamageShield | 10 | reflection needs mechanics; no absorb mapping | Inert | 15438 |
+| 17 ModStealthDetect | 8 | detection placeholder | Inert | 12418 |
+| 19 ModInvisibilityDetection | 2 | detection placeholder | Inert | 17623 |
+| 22 ModResistance | 74 | resistance_bonus; flat school mask | Correct | 12956 |
+| 23 PeriodicTriggerSpell | 9 | periodic trigger needs mechanics | Inert | 758 |
+| 29 ModStat | 1 | effective_stat supports self auras; selected effect 35 needs area mechanics | Inert for the selected Item | 7363 |
+| 30 ModSkill | 206 | skill modifier needs mechanics | Inert | 7515 |
+| 31 ModIncreaseSpeed | 62 | run_speed lacks faithful mounted and slow composition | Inert | 17625 |
+| 42 ProcTriggerSpell | 52 | item proc restrictions not certified | Inert | 4070 |
+| 43 ProcTriggerDamage | 1 | item proc restrictions not certified | Inert | 16550 |
+| 45 TrackResources | 2 | tracking placeholder | Inert | 4152 |
+| 47 ModParryPercent | 28 | parry modifier not implemented | Inert | 13665 |
+| 49 ModDodgePercent | 89 | roll uses basis points; full dodge sheet projection is absent | Inert | 13669 |
+| 51 ModBlockPercent | 24 | block modifier not implemented | Inert | 13674 |
+| 52 ModCritPercent | 384 | effective_crit_bp / effective_ranged_crit_bp and both wire fields; percent to basis points | Correct when unrestricted; weapon-restricted 9132 inert | 7597 |
+| 54 ModHitChance | 192 | effective_miss_bp; percent to basis points | Correct | 15464 |
+| 55 ModSpellHitChance | 76 | spell hit needs its own consumer | Inert | 23727 |
+| 56 Transform | 7 | transform requirements not certified | Inert | 8299 |
+| 57 ModSpellCritChance | 2 | spell_crit_bp; separate spell basis points | Correct for 1 Item; 1 area Item inert | 23434 |
+| 58 ModIncreaseSwimSpeed | 1 | swim stacking not certified | Inert | 8747 |
+| 64 PeriodicManaLeech | 1 | mana leech needs drain and gain | Inert | 19307 |
+| 71 ModSpellCritChanceSchool | 215 | school crit needs a school-aware consumer | Inert | 18382 |
+| 77 MechanicImmunity | 4 | mechanic immunity representation not certified | Inert | 7219 |
+| 82 WaterBreathing | 3 | water breathing placeholder | Inert | 11789 |
+| 85 ModPowerRegen | 345 | MP5 needs two-second regeneration, not periodic energize | Inert | 18378 |
+| 89 PeriodicDamagePercent | 1 | percent damage must scale with health | Inert | 28347 |
+| 99 ModAttackPower | 291 | melee_attack_power; signed flat AP | Correct | 9138 |
+| 102 ModMeleeAttackPowerVersus | 40 | melee AP needs creature-type selection | Inert | 14097 |
+| 107 AddFlatModifier | 50 | SpellMod operation/mask semantics not certified | Inert | 18388 |
+| 108 AddPctModifier | 16 | SpellMod operation/mask semantics not certified | Inert | 23043 |
+| 109 AddTargetTrigger | 2 | target trigger needs mechanics | Inert | 17768 |
+| 112 OverrideClassScripts | 6 | class scripts need mechanics | Inert | 27853 |
+| 117 ModMechanicResistance | 5 | mechanic resistance needs mechanics | Inert | 18985 |
+| 123 ModTargetResistance | 30 | target resistance needs mechanics | Inert | 25717 |
+| 124 ModRangedAttackPower | 305 | class-specific ranged_sheet_values and ranged attacks; flat AP | Correct | 9138 |
+| 130 ModMountedSpeedAlways | 1 | mounted-speed stacking not certified | Inert | 13587 |
+| 131 ModRangedAttackPowerVersus | 39 | ranged AP needs creature-type selection | Inert | 14097 |
+| 135 ModHealingDone | 1017 | healing_power; flat healing by school mask | Correct | 7678 |
+| 138 ModMeleeHaste | 3 | melee haste must stay separate from ranged haste | Inert | 18065 |
+| 139 ForceReaction | 1 | faction reaction needs mechanics | Inert | 28282 |
+| 140 ModRangedHaste | 1 | ranged haste must stay separate from melee haste | Inert | 23674 |
+| 141 ModRangedAmmoHaste | 21 | ammo haste needs its own consumer | Inert | 14824 |
+| 144 SafeFall | 2 | safe fall placeholder | Inert | 23409 |
+| 154 ModStealthLevel | 5 | stealth level needs mechanics | Inert | 17746 |
+| 158 ModShieldBlockvalue | 21 | block value needs mechanics | Inert | 22852 |
+| 161 ModHealthRegenInCombat | 38 | flat combat regeneration must not be percent | Inert | 12956 |
+| 180 ModFlatSpellDamageVersus | 6 | flat damage needs creature-type selection | Inert | 22849 |
+
+The source handlers are in [SpellAuras.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellAuras.cpp).
+School damage, melee and ranged AP, healing and crit distinctions also follow
+[Unit.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp).
+Cast Aura polarity also follows
+[SpellEntry::IsPositiveEffect](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellEntry.cpp).
+The class AP formulas and fractional damage follow
+[StatSystem.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/StatSystem.cpp).
+Mana regeneration follows the two-second `Player::Regenerate` cadence in
+[Player.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp).

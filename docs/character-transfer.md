@@ -66,13 +66,23 @@ removes the unused target Handoff.
 ## State carried and state dropped
 
 The Transfer uses the existing Character-owned BSATN manifest. Items, skills, spells, quests, Auras
-and other transported Character-owned rows travel in one batch. Auras keep their absolute expiry.
+and other transported Character-owned rows travel in one batch. Ordinary Auras keep their absolute
+expiry. Equip Auras from Items are excluded and rebuilt once at world entry. Spell and category
+cooldowns travel with their absolute deadlines. See
+[equip spell migration](danger-zones.md#equip-spell-migration) before updating existing Shards.
 AOI Grants, the NativePlayer row, Transport attachment and other explicitly omitted transient rows
 are rebuilt or dropped. A pending cast is cancelled before export. Melee, threat and other combat
 state do not survive. Pending godmode and the run speed multiplier survive export and adoption,
 as they do for a cross-map teleport within one Shard. A real logout or connection loss clears them;
 a refused Transfer or connection loss before adoption also clears them on the resident copy.
-Leaving the world keeps pet despawn, buyback cleanup and the rest of the existing logout cleanup.
+A Transfer departure keeps buyback while running the remaining departure cleanup, including pet
+despawn. Both buyback tables travel with their keys intact. A Handoff or World Port in the same
+World Session retains the ring, prices, timestamps, login origin, current slot, Item GUIDs and
+paused Temporary Enchantments. Adoption replays the sold Items and ring fields. The source keeps
+its rows until import is attested, then removes them without client destroy delivery. Refused
+imports leave its copy intact. See [buyback storage](schema.md#buyback-modulesrcitemsbuybackrs).
+A fresh login clears transported buyback before the client view is built, including after a
+sessionless Transfer. Package relocation also discards buyback when it makes its source dormant.
 Connection request limits start with the adopted connection state.
 
 Realm-owned guild membership remains projected on the World Shards across Transfer. Actual
@@ -93,10 +103,35 @@ The manifest does not make Shard-owned social or economic state shared. Transpor
 not survive a Transfer between World Shards. Sessionless Character Relocation does not use this
 native World Session path.
 
+## Package relocation
+
+`native::package_relocation` uses the same Character manifest and Escrow ledger for a Package-owned
+Character without a World Session. The Package requests an imported AreaTrigger crossing and polls
+a retained result on the source. Dungeon entry first uses Realm Instance allocation; admission names
+its request id so a different sessionless request cannot consume the reservation.
+
+The source freezes and exports the Character in one transaction. The destination checks the Peer,
+Package Account, map and admission reservation, then imports under an arrival fence. It stores the
+exact Transfer and source in `game_package_arrival`. A refused import rolls back target writes and
+restores the source body. Successful import confirms and deletes the source Character together with
+queuing the Realm directory change. Directory settlement must name the target before the source
+queues release. Release checks the stored arrival, clears Escrow and restores the body atomically.
+Only its successful reply records `Arrived` on the source.
+
+Committed import cannot be cancelled. Directory and release refusals retain retries; timeout and
+Host restart do not release the target fence or recreate the source. No Session copy, WorldPort
+Handoff or client acknowledgement participates. Package Teardown waits for pending relocation even
+when the Character has already left its source. Terminal results survive restart until consumed.
+
 ## Manifest discipline
 
 - `transfer::is_in_transit` hides a Character with an Escrow row from by-guid lookups and refuses
   world entry. The rest and quest passes also skip it.
+- Current manifests carry both buyback tables. Older manifests may omit them through the existing
+  empty-table compatibility path; a fresh login then starts an empty ring. A World Port import
+  requires buyback session state and refuses atomically when the source cannot provide it. An
+  older destination refuses the new manifest tables. Update both Shards before moving active
+  World Sessions. The Item row codecs in `transfer/legacy_item_rows.rs` remain unchanged.
 - Every Character-keyed table needs a `character_owned!` delete sweep and Transfer arm. The build
   derives `CHARACTER_OWNED_TABLES` from them, and the manifest tests refuse a missing arm. See
   [Module build](module-build.md).

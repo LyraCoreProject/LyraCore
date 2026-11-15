@@ -2,18 +2,15 @@ use std::collections::BTreeSet;
 
 use lyracore_package_delta::ids::{
     is_fixture_reserved_item_id, is_operator_template_id, is_package_item_id,
-    OPERATOR_TEMPLATE_ID_CEIL, OPERATOR_TEMPLATE_ID_FLOOR,
+    OPERATOR_TEMPLATE_ID_FLOOR,
 };
 use lyracore_protocol::messages::vanilla::{
     Bonding, InventoryType, ItemClassAndSubClass, ItemQuality, SheatheType, SpellTriggerType,
 };
 use spacetimedb::{reducer, ReducerContext, SpacetimeType, Table};
 
-use crate::items::{
-    game_item_instance, game_item_template, game_npc_vendor, ItemTemplate, NpcVendor,
-};
-use crate::native::game_native_player;
 use crate::{game_creature_template, game_spell};
+use crate::{game_item_instance, game_item_template, game_npc_vendor, ItemTemplate, NpcVendor};
 
 const MAX_ITEM_EDITS: usize = 64;
 const MAX_VENDOR_OFFERS: usize = 128;
@@ -113,7 +110,7 @@ item_fields! {
     allowed_class: u32,
     allowed_race: u32,
     random_property: u32;
-    kept: spellppmrate_1, spellppmrate_2, spellppmrate_3, spellppmrate_4, spellppmrate_5,
+    kept: spellppmrate_1, spellppmrate_2, spellppmrate_3, spellppmrate_4, spellppmrate_5, spellcategory_1, spellcategory_2, spellcategory_3, spellcategory_4, spellcategory_5,
 }
 
 #[derive(SpacetimeType, Clone)]
@@ -161,8 +158,7 @@ pub fn operator_apply_item_edits(ctx: &ReducerContext, edits: Vec<ItemEdit>) -> 
         changes.push(change);
     }
     if !updated.is_empty() {
-        for connected in ctx.db.game_native_player().iter() {
-            let guid = connected.character_guid;
+        for guid in crate::native::world_session_characters(ctx) {
             if ctx
                 .db
                 .game_item_instance()
@@ -178,7 +174,7 @@ pub fn operator_apply_item_edits(ctx: &ReducerContext, edits: Vec<ItemEdit>) -> 
         }
     }
     for entry in changed {
-        crate::native::broadcast_item_query(ctx, entry)?;
+        crate::native::query::broadcast_item_query(ctx, entry)?;
     }
     for change in changes {
         super::log_change(ctx, &change);
@@ -225,7 +221,7 @@ impl ItemIds {
                 .max()
                 .unwrap_or(OPERATOR_TEMPLATE_ID_FLOOR - 1)
         });
-        let next = next_template_id(last)?;
+        let next = super::next_template_id(last)?;
         self.item = Some(next);
         Ok(next)
     }
@@ -243,14 +239,6 @@ impl ItemIds {
         self.vendor = Some(next);
         Ok(next)
     }
-}
-
-fn next_template_id(last: u32) -> Result<u32, String> {
-    let next = last.saturating_add(1);
-    if next > OPERATOR_TEMPLATE_ID_CEIL {
-        return Err(format!("the Operator Template Range ({OPERATOR_TEMPLATE_ID_FLOOR} to {OPERATOR_TEMPLATE_ID_CEIL}) is exhausted"));
-    }
-    Ok(next)
 }
 
 fn apply(
@@ -348,6 +336,8 @@ fn replace_vendor(
                 item_entry: offer.item_entry,
                 slot: slot as u32,
                 max_count: offer.max_count,
+                restock_seconds: 0,
+                stock_flags: 0,
             })
         })
         .collect::<Result<_, String>>()?;
@@ -491,16 +481,6 @@ mod tests {
     }
 
     #[test]
-    fn allocation_starts_in_range_and_refuses_exhaustion() {
-        assert_eq!(
-            next_template_id(OPERATOR_TEMPLATE_ID_FLOOR - 1),
-            Ok(5_200_500)
-        );
-        assert_eq!(next_template_id(5_200_541), Ok(5_200_542));
-        assert!(next_template_id(OPERATOR_TEMPLATE_ID_CEIL).is_err());
-    }
-
-    #[test]
     fn item_fields_refuse_invalid_wire_values_and_damage() {
         assert!(check_values(&fields()).is_ok());
         let cases = [
@@ -599,16 +579,24 @@ mod tests {
     }
 
     #[test]
-    fn an_update_keeps_the_chance_on_hit_rates_and_a_create_has_none() {
+    fn an_update_keeps_imported_spell_metadata_and_a_create_defaults_it() {
         let old = ItemTemplate {
             spellppmrate_1: 9.5,
+            spellcategory_1: 30,
+            spellcategory_5: 1160,
             ..fields().into_template(25, None)
         };
         let renamed = ItemFields {
             name: "Renamed".into(),
             ..fields()
         };
-        assert_eq!(renamed.into_template(25, Some(&old)).spellppmrate_1, 9.5);
+        let renamed = renamed.into_template(25, Some(&old));
+        assert_eq!(renamed.spellppmrate_1, 9.5);
+        assert_eq!(
+            (renamed.spellcategory_1, renamed.spellcategory_5),
+            (30, 1160)
+        );
+        assert_eq!(fields().into_template(26, None).spellcategory_1, 0);
         assert_eq!(fields().into_template(26, None).spellppmrate_1, 0.0);
     }
 

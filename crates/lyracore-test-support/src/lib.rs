@@ -1,11 +1,13 @@
 mod rng;
 pub use rng::Rng;
 
+mod fixture_rows;
 mod module_wasm;
 mod reducer_connection;
 pub mod source_scan;
 mod subscription;
 
+pub use fixture_rows::Field;
 pub use module_wasm::{module_bytes, module_bytes_with_features};
 pub use reducer_connection::{ReducerConnection, ReducerRows};
 pub use subscription::TableSubscription;
@@ -185,6 +187,7 @@ pub struct Standalone {
     server: String,
     database: String,
     storage: Storage,
+    fixture_schemas: Mutex<BTreeMap<String, Arc<fixture_rows::FixtureSchema>>>,
 }
 
 impl Standalone {
@@ -197,10 +200,6 @@ impl Standalone {
     }
 
     fn start_with_storage(test_name: &str, storage: Storage) -> Self {
-        let listener = TcpListener::bind("127.0.0.1:0").expect("failed to reserve a local port");
-        let port = listener.local_addr().unwrap().port();
-        drop(listener);
-
         // Tests of one file share a name and a process, and two can start in the same nanosecond.
         static STARTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nonce = SystemTime::now()
@@ -219,14 +218,18 @@ impl Standalone {
         let log_path = log_dir.join(format!("{name}.log"));
 
         let spacetime = std::env::var_os("SPACETIME_BIN").unwrap_or_else(|| "spacetime".into());
-        let address = format!("127.0.0.1:{port}");
-        let server = format!("http://{address}");
         // The first node must finish creating shared signing keys before the next reads.
         let signing_keys = signing_keys();
         let startup = signing_keys
             .startup
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // A released port stays free only until the node binds it, so reserve inside this lock.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("failed to reserve a local port");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let address = format!("127.0.0.1:{port}");
+        let server = format!("http://{address}");
         let child = spawn_node(
             &spacetime,
             &cli_config,
@@ -249,6 +252,7 @@ impl Standalone {
             server,
             database: name,
             storage,
+            fixture_schemas: Mutex::new(BTreeMap::new()),
         };
         standalone.wait_for_server();
         drop(startup);
@@ -261,6 +265,10 @@ impl Standalone {
 
     pub fn shard_name(&self) -> &str {
         &self.database
+    }
+
+    pub fn cli_config_path(&self) -> &Path {
+        &self.cli_config
     }
 
     pub fn module_logs(&self, lines: usize) -> Output {
@@ -321,13 +329,45 @@ impl Standalone {
     }
 
     pub fn describe(&self) -> serde_json::Value {
+        self.describe_database(&self.database)
+    }
+
+    fn describe_database(&self, database: &str) -> serde_json::Value {
         let output = self
             .command()
-            .args(["describe", "-s", &self.server, "--json", &self.database])
+            .args(["describe", "-s", &self.server, "--json", database])
             .output()
             .expect("failed to describe the database");
         self.assert_ok(&output);
         serde_json::from_slice(&output.stdout).expect("the schema is not JSON")
+    }
+
+    /// Unnamed columns take their declared default or their type's zero; String values are quoted.
+    pub fn insert_row(&self, table: &str, fields: &[Field]) {
+        self.insert_rows(table, &[fields]);
+    }
+
+    pub fn insert_rows(&self, table: &str, rows: &[&[Field]]) {
+        self.insert_rows_database(&self.database, table, rows);
+    }
+
+    pub fn insert_row_database(&self, database: &str, table: &str, fields: &[Field]) {
+        self.insert_rows_database(database, table, &[fields]);
+    }
+
+    fn insert_rows_database(&self, database: &str, table: &str, rows: &[&[Field]]) {
+        let schema = Arc::clone(
+            self.fixture_schemas
+                .lock()
+                .unwrap()
+                .entry(database.to_owned())
+                .or_insert_with(|| {
+                    Arc::new(fixture_rows::FixtureSchema::from_describe(
+                        &self.describe_database(database),
+                    ))
+                }),
+        );
+        self.assert_sql_database(database, &schema.insert(table, rows));
     }
 
     pub fn call(&self, reducer: &str, args: &[&str]) -> Output {
@@ -342,9 +382,13 @@ impl Standalone {
     }
 
     pub fn connect_reducers(&self, queries: &[&str]) -> ReducerConnection {
+        self.connect_shard_reducers(&self.database, queries)
+    }
+
+    pub fn connect_shard_reducers(&self, shard_name: &str, queries: &[&str]) -> ReducerConnection {
         ReducerConnection::connect(
             &self.address,
-            &self.database,
+            shard_name,
             Some(&self.owner_token()),
             queries,
         )
@@ -442,11 +486,6 @@ impl Standalone {
         self.assert_ok(&self.sql_database(database, query));
     }
 
-    // Baseline fixtures need their published columns, without current migration defaults.
-    pub fn assert_sql_exact(&self, query: &str) {
-        self.assert_ok(&self.sql_database_exact(&self.database, query));
-    }
-
     pub fn query_rows(&self, query: &str) -> Vec<BTreeMap<String, String>> {
         self.query_database_rows(&self.database, query)
     }
@@ -500,6 +539,7 @@ impl Standalone {
             command.args(["-y", database]);
             let output = command.output().expect("failed to start spacetime publish");
             if output.status.success() {
+                self.fixture_schemas.get_mut().unwrap().remove(database);
                 self.published = true;
                 self.published_databases.insert(database.to_owned());
                 return;
@@ -576,11 +616,6 @@ impl Standalone {
     }
 
     fn sql_database(&self, database: &str, query: &str) -> Output {
-        let query = lyracore_shared::import_sql::insert_defaults(query);
-        self.sql_database_exact(database, &query)
-    }
-
-    fn sql_database_exact(&self, database: &str, query: &str) -> Output {
         self.command()
             .args([
                 "sql",
@@ -759,8 +794,8 @@ fn unquote(value: &str) -> String {
         .to_string()
 }
 
-pub fn actor(guid: &str) -> String {
-    let guid: u64 = guid.parse().expect("fixture Character guid");
+pub fn actor(guid: impl std::fmt::Display) -> String {
+    let guid: u64 = guid.to_string().parse().expect("fixture Character guid");
     format!(r#"{{"guid":{guid},"ownership":null}}"#)
 }
 

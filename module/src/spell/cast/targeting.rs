@@ -4,14 +4,20 @@ use lyracore_shared::spell_custom as custom;
 
 use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
 
-use crate::items::game_item_instance;
+use crate::game_item_instance;
 use crate::{game_character, game_creature_template, game_world_entity};
 
+use crate::geometry::{distance_3d, projectile_travel_ms};
 use crate::spell::*;
 
 use crate::skilldata::game_skill_ability;
 
 use crate::script_binding::game_script;
+use crate::{
+    game_aura, game_ground_area, game_pending_spell_impact, game_spell, game_spell_effect,
+    game_spell_reagent, Aura, GroundArea, PendingSpellImpact, ResurrectRequest, Spell,
+    SpellCastEvent, SpellEffect,
+};
 
 #[derive(Clone, Copy, Default)]
 pub(crate) enum ItemGrantOutcome {
@@ -52,15 +58,42 @@ impl EffectHit {
 }
 
 /// An absent target counts as equal level.
-pub(crate) fn spell_misses(ctx: &ReducerContext, caster_level: u8, target_guid: u64) -> bool {
-    let target_level = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(target_guid)
-        .map(|t| t.level)
-        .unwrap_or(caster_level as u32);
-    (ctx.random::<u32>() % 10_000) < spell_miss_chance_bp(caster_level as u32, target_level)
+pub(crate) fn spell_misses(
+    ctx: &ReducerContext,
+    caster_level: u8,
+    target_guid: u64,
+    spell: &Spell,
+) -> bool {
+    if spell.cast_flags & CAST_FLAG_IGNORE_RESISTANCES != 0 {
+        return false;
+    }
+    let target = ctx.db.game_world_entity().guid().find(target_guid);
+    let target_level = target
+        .as_ref()
+        .map_or(u32::from(caster_level), |target| target.level);
+    let target_is_character = target.as_ref().is_some_and(|target| target.is_player());
+    let binary_resistance = if spell.cast_flags & CAST_FLAG_BINARY != 0 {
+        crate::spell::rolls::resistance_chance(
+            crate::modifiers::resistance_bonus(ctx, target_guid, spell.school_mask),
+            u32::from(caster_level),
+            target_level,
+            target_is_character,
+            false,
+        )
+    } else {
+        0.0
+    };
+    let miss = if spell.cast_flags & CAST_FLAG_ALWAYS_HIT != 0 {
+        0
+    } else {
+        crate::spell::rolls::magic_miss_bp(
+            u32::from(caster_level),
+            target_level,
+            target_is_character,
+            binary_resistance,
+        )
+    };
+    crate::spell::rolls::integer_roll(ctx, target_guid, 10_000) < miss
 }
 
 pub(crate) fn recipe_reagents(ctx: &ReducerContext, spell_id: u32) -> Vec<(u32, u32)> {
@@ -133,7 +166,20 @@ pub(crate) fn select_targets(
     let one = if explicit == 0 { caster_guid } else { explicit };
     match e.target {
         T_SELF => vec![caster_guid],
-        T_TARGET_ENEMY | T_TARGET_ALLY | T_TARGET_ANY => vec![one],
+        T_TARGET_ENEMY | T_TARGET_ALLY | T_TARGET_ANY => {
+            if one != caster_guid
+                && ctx
+                    .db
+                    .game_world_entity()
+                    .guid()
+                    .find(one)
+                    .is_some_and(|target| target.is_flying())
+            {
+                Vec::new()
+            } else {
+                vec![one]
+            }
+        }
         T_AREA_ENEMY | T_AREA_ALLY | T_CHAIN_ENEMY => {
             let entities = ctx.db.game_world_entity();
             let Some(caster) = entities.guid().find(caster_guid) else {
@@ -198,10 +244,7 @@ pub(crate) fn select_targets(
             // Falling back to the explicit target on an empty enemy AoE would damage the caster.
             hits
         }
-        _ => {
-            let _ = ctx;
-            vec![one]
-        }
+        _ => vec![one],
     }
 }
 
@@ -238,6 +281,33 @@ fn next_stacks(current: u8, max_stacks: u8) -> u8 {
     (current.max(1) + 1).min(max_stacks.max(1))
 }
 
+pub(crate) fn aura_has_visible_slot(
+    ctx: &ReducerContext,
+    header: &Spell,
+    caster_guid: u64,
+    target_guid: u64,
+) -> bool {
+    use lyracore_shared::spell::taxonomy::{CAST_FLAG_AREA_AURA, TOTEM_TYPE};
+
+    if !header.equip_passive() {
+        return true;
+    }
+    if header.cast_flags & CAST_FLAG_AREA_AURA != 0 {
+        if caster_guid != target_guid {
+            return true;
+        }
+    } else if header.visual_id != 0 {
+        return true;
+    }
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(caster_guid)
+        .filter(|caster| !caster.is_player() && caster.owner_guid != 0)
+        .and_then(|caster| ctx.db.game_creature_template().entry().find(caster.entry))
+        .is_some_and(|template| template.creature_type == TOTEM_TYPE)
+}
+
 // The 1.12 client chooses buff or debuff frames by slot index rather than aura flags.
 fn pick_aura_slot(
     existing: &[(u8, u32)],
@@ -246,14 +316,17 @@ fn pick_aura_slot(
     buff_slot_count: u8,
     slot_count: u8,
 ) -> Option<u8> {
-    if let Some(&(slot, _)) = existing.iter().find(|(_, sp)| *sp == spell_id) {
-        return Some(slot); // All effects of one spell share one client icon.
-    }
     let mut range = if is_negative {
         buff_slot_count..slot_count
     } else {
         0..buff_slot_count
     };
+    if let Some(&(slot, _)) = existing
+        .iter()
+        .find(|(slot, sp)| *sp == spell_id && range.contains(slot))
+    {
+        return Some(slot);
+    }
     range.find(|s| !existing.iter().any(|(es, _)| es == s))
 }
 
@@ -271,7 +344,7 @@ fn displace_auras(
         .filter(&target_guid)
         .filter(|a| spell_ids.contains(&a.spell_id))
         .collect();
-    shed_auras(ctx, target_guid, displaced);
+    shed_auras(ctx, displaced);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -285,8 +358,14 @@ pub(crate) fn aura_apply(
     cast_target_guid: u64,
     level: u8,
     points: i32,
+    source_item: u64,
 ) {
     let now = crate::time::now(ctx);
+    let points = if e.p0_kind == lyracore_shared::spell::taxonomy::P_COMBAT_PERCENT {
+        points.saturating_mul(100)
+    } else {
+        points
+    };
     let points = if e.p0_kind == P_PCT_MAX_POWER {
         let max_power = ctx
             .db
@@ -309,7 +388,7 @@ pub(crate) fn aura_apply(
     } else {
         points
     };
-    let duration_ms = if hdr.cast_flags & SPELL_ATTR_COMBO_FINISHER != 0 {
+    let duration_ms = if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0 {
         let combo = crate::combo::held_points(ctx, caster_guid);
         crate::combo::finisher_duration_ms(hdr.duration_ms, hdr.max_duration_ms, combo)
     } else {
@@ -344,7 +423,7 @@ pub(crate) fn aura_apply(
             .unwrap_or(now)
     };
     // Channels without periodic effects still need the indexed cadence for range checks.
-    let period_ms = if e.period_ms == 0 && hdr.cast_flags & SPELL_ATTR_CHANNELED != 0 {
+    let period_ms = if e.period_ms == 0 && hdr.cast_flags & CAST_FLAG_CHANNELED != 0 {
         100
     } else {
         e.period_ms
@@ -373,7 +452,10 @@ pub(crate) fn aura_apply(
         displace_auras(ctx, target_guid, &other_seal_spell_ids);
     }
     // Ghost and Wisp Spirit share a DBC name but must coexist.
-    if !hdr.name.is_empty() && !crate::ghost::is_ghost_spell(hdr.spell_id) {
+    if !hdr.name.is_empty()
+        && !crate::ghost::is_ghost_spell(hdr.spell_id)
+        && !(source_item != 0 && hdr.equip_passive())
+    {
         let spells = ctx.db.game_spell();
         let other_rank_ids: std::collections::HashSet<u32> = auras
             .by_target()
@@ -393,21 +475,32 @@ pub(crate) fn aura_apply(
     let coexist = source_behavior::aura_casters_coexist(hdr, e.kind);
     let cross_caster_stack =
         hdr.custom_flags & custom::ALLOW_STACK_BETWEEN_CASTER != 0 && hdr.max_stacks > 0;
-    if !coexist && !cross_caster_stack {
+    if !coexist && !cross_caster_stack && !(source_item != 0 && hdr.equip_passive()) {
         let replaced = auras
             .by_target()
             .filter(&target_guid)
-            .filter(|a| a.effect_id == e.id && a.caster_guid != caster_guid)
+            .filter(|a| {
+                a.effect_id == e.id
+                    && (a.caster_guid != caster_guid
+                        || ((source_item != 0 || !hdr.equip_passive())
+                            && a.item_guid(ctx) != source_item))
+            })
             .collect();
-        shed_auras(ctx, target_guid, replaced);
+        shed_auras(ctx, replaced);
     }
-    let existing = auras
-        .by_target()
-        .filter(&target_guid)
-        .find(|a| a.effect_id == e.id && (cross_caster_stack || a.caster_guid == caster_guid));
+    let mut existing = auras.by_target().filter(&target_guid).find(|a| {
+        a.effect_id == e.id
+            && a.item_guid(ctx) == source_item
+            && (cross_caster_stack || a.caster_guid == caster_guid)
+    });
+    if existing.as_ref().is_some_and(|aura| {
+        (aura.eff_kind, aura.eff_p0, aura.eff_p0_kind) != (e.kind, e.p0, e.p0_kind)
+    }) {
+        shed_auras(ctx, existing.take().into_iter().collect());
+    }
     let amount_remaining = if e.kind == A_ABSORB { points.max(0) } else { 0 };
     let channel_target =
-        if e.kind == A_PERIODIC_TRIGGER || hdr.cast_flags & SPELL_ATTR_CHANNELED != 0 {
+        if e.kind == A_PERIODIC_TRIGGER || hdr.cast_flags & CAST_FLAG_CHANNELED != 0 {
             cast_target_guid
         } else {
             0
@@ -445,14 +538,16 @@ pub(crate) fn aura_apply(
         a.update(ctx);
     } else {
         // Evictions must free aura slots before this insert chooses one.
-        if !crate::spell::stacking::apply_group_conflict(
-            ctx,
-            hdr.spell_id,
-            caster_guid,
-            target_guid,
-            crate::spell::stacking::rank_of(ctx, hdr.spell_id),
-            points.saturating_abs(),
-        ) {
+        if !(source_item != 0 && hdr.equip_passive())
+            && !crate::spell::stacking::apply_group_conflict(
+                ctx,
+                hdr.spell_id,
+                caster_guid,
+                target_guid,
+                crate::spell::stacking::rank_of(ctx, hdr.spell_id),
+                points.saturating_abs(),
+            )
+        {
             return;
         }
         let existing: Vec<(u8, u32)> = auras
@@ -469,19 +564,24 @@ pub(crate) fn aura_apply(
                 )
             })
             .collect();
-        let Some(slot) = pick_aura_slot(
-            &existing,
-            hdr.spell_id,
-            hdr.negative(),
-            tracer_spell::BUFF_SLOT_COUNT,
-            tracer_spell::AURA_SLOTS,
-        ) else {
+        let visible = aura_has_visible_slot(ctx, hdr, caster_guid, target_guid);
+        let Some(slot) = (if !visible {
+            Some(u8::MAX)
+        } else {
+            pick_aura_slot(
+                &existing,
+                hdr.spell_id,
+                hdr.negative(),
+                tracer_spell::BUFF_SLOT_COUNT,
+                tracer_spell::AURA_SLOTS,
+            )
+        }) else {
             log::info!(
                 "aura slot overflow: all {} slots on {target_guid} full — dropping spell {} (loud: relayed to caster {caster_guid})",
                 tracer_spell::AURA_SLOTS,
                 hdr.spell_id
             );
-            crate::spell::SpellCastEvent::insert(
+            crate::SpellCastEvent::insert(
                 ctx,
                 SpellCastEvent {
                     is_interrupted: true,
@@ -528,7 +628,7 @@ pub(crate) fn aura_apply(
             proc_icd_ms: proc.icd_ms,
             proc_ready_micros: 0,
         }
-        .insert(ctx);
+        .insert_from_item(ctx, source_item);
     }
 
     source_behavior::finish_aura_apply(ctx, hdr, e, caster_guid, target_guid);
@@ -544,15 +644,7 @@ pub(crate) fn aura_apply(
         );
     }
 
-    if aura_moves_vitals(e.kind, e.p0) {
-        recompute_vitals(ctx, target_guid);
-    }
-    if crate::spell::aura_moves_sheet(e.kind, e.p0) {
-        recompute_sheet(ctx, target_guid);
-    }
-    if crate::mount::mount_aura_moves_mount(e.kind, e.p0) {
-        crate::mount::recompute_mount(ctx, target_guid);
-    }
+    crate::spell::AuraProjections::of(e.kind, e.p0).refresh(ctx, target_guid);
 
     if hdr.negative() {
         let entities = ctx.db.game_world_entity();
@@ -569,9 +661,6 @@ pub(crate) fn aura_apply(
         if caster_is_player && target_is_creature {
             crate::threat::add_threat(ctx, target_guid, caster_guid, (level as i64) * 5);
         }
-    }
-    if e.kind == A_TRANSFORM {
-        recompute_display(ctx, target_guid);
     }
 }
 
@@ -611,6 +700,7 @@ pub(crate) fn apply_linked_debuff(
             target_guid,
             level,
             points,
+            0,
         );
     }
 }
@@ -742,8 +832,8 @@ pub(crate) fn apply_effect(
             } else {
                 hdr.dispel_type
             };
-            let removed = dispel_target(ctx, target_guid, category);
-            log::info!("dispel (cat {category}) on {target_guid} removed {removed} debuff(s)");
+            let removed = dispel_target(ctx, caster_guid, target_guid, category);
+            log::info!("dispel (cat {category}) on {target_guid} removed {removed} aura(s)");
             EffectHit::none()
         }
         EffectKind::EnchantItemTemporary => {
@@ -769,6 +859,8 @@ pub(crate) fn apply_effect(
         | EffectKind::AuraModStat
         | EffectKind::AuraModResistance
         | EffectKind::AuraAbsorb
+        | EffectKind::AuraInert
+        | EffectKind::AuraModHealing
         | EffectKind::AuraModCombat
         | EffectKind::AuraModSpeed
         | EffectKind::AuraModHealthPower
@@ -834,6 +926,7 @@ fn apply_aura_effect(
         cast_target_guid,
         level,
         points,
+        0,
     );
     if e.p1 != 0 {
         apply_linked_debuff(ctx, e.p1 as u32, caster_guid, target_guid, level);
@@ -884,13 +977,19 @@ fn apply_damage_effect(
                 false,
             );
             let (dmg_flat, dmg_pct) =
-                crate::spell::math::spell_mod(ctx, caster_guid, SPELLMOD_OP_DAMAGE, hdr);
+                crate::spell::spell_mod(ctx, caster_guid, SPELLMOD_OP_DAMAGE, hdr);
             let scaled = if hdr.custom_flags & custom::FIXED_DAMAGE != 0 {
                 scaled
             } else {
-                crate::spell::math::apply_spell_mod(scaled.max(0) as u32, dmg_flat, dmg_pct) as i32
+                crate::spell::apply_spell_mod(scaled.max(0) as u32, dmg_flat, dmg_pct) as i32
             };
-            let is_crit = (ctx.random::<u32>() % 10_000) < spell_crit_bp(ctx, caster_guid);
+            let draw = crate::conformance_rolls::draw(
+                ctx,
+                crate::conformance_rolls::RollStream::Caster(caster_guid),
+            );
+            let is_crit = hdr.cast_flags & CAST_FLAG_CANNOT_CRIT == 0
+                && hdr.school_mask & RESIST_ARMOR == 0
+                && crate::spell::rolls::chance_succeeds(spell_crit_chance(ctx, caster_guid), draw);
             let crit_scaled = apply_spell_crit(scaled, is_crit);
             let after_resist =
                 source_behavior::mitigate_spell(ctx, hdr, caster_guid, target_guid, crit_scaled);
@@ -929,10 +1028,10 @@ fn apply_damage_effect(
                     }
                 }
             }
-            let (dealt, absorbed) = apply_target_damage(
+            let (dealt, absorbed) = crate::combat::deal_damage(
                 ctx,
-                target_guid,
                 caster_guid,
+                target_guid,
                 after_resist,
                 hit_of(hdr, triggered, crate::combat::HitSource::Spell, is_crit),
             );
@@ -979,10 +1078,10 @@ fn apply_damage_effect(
                 );
                 return EffectHit::none();
             }
-            let (dealt, absorbed) = apply_target_damage(
+            let (dealt, absorbed) = crate::combat::deal_damage(
                 ctx,
-                target_guid,
                 caster_guid,
+                target_guid,
                 dmg as i32,
                 hit_of(
                     hdr,
@@ -999,10 +1098,10 @@ fn apply_damage_effect(
         E_JUDGEMENT => {
             let seal = seal_amount(ctx, caster_guid);
             if seal > 0 {
-                let (dealt, absorbed) = apply_target_damage(
+                let (dealt, absorbed) = crate::combat::deal_damage(
                     ctx,
-                    target_guid,
                     caster_guid,
+                    target_guid,
                     seal,
                     hit_of(hdr, triggered, crate::combat::HitSource::Spell, false),
                 );
@@ -1028,10 +1127,10 @@ fn apply_damage_effect(
                 points,
                 strike_crit,
             );
-            let (dealt, absorbed) = apply_target_damage(
+            let (dealt, absorbed) = crate::combat::deal_damage(
                 ctx,
-                target_guid,
                 caster_guid,
+                target_guid,
                 dmg as i32,
                 hit_of(
                     hdr,
@@ -1102,10 +1201,10 @@ fn apply_restore_effect(
             t.power -= drained;
             t.update(ctx);
             let damage = mana_burn_damage(drained, e.p1);
-            let (dealt, absorbed) = apply_target_damage(
+            let (dealt, absorbed) = crate::combat::deal_damage(
                 ctx,
-                target_guid,
                 caster_guid,
+                target_guid,
                 damage as i32,
                 hit_of(hdr, triggered, crate::combat::HitSource::Spell, false),
             );
@@ -1157,10 +1256,7 @@ fn apply_threat_effect(
         }
         E_NEXT_SWING => {
             // Vanilla charges a queued strike when its swing fires, including a miss.
-            if let Some(mut c) = ctx.db.game_world_entity().guid().find(caster_guid) {
-                c.next_swing_spell = e.spell_id;
-                c.update(ctx);
-            }
+            crate::combat::queued_strike::queue(ctx, caster_guid, e.spell_id);
             EffectHit::none()
         }
         _ => EffectHit::none(),
@@ -1186,7 +1282,9 @@ fn apply_reposition_effect(
             EffectHit::none()
         }
         E_RECALL_HOME => {
-            crate::world::recall_to_home(ctx, caster_guid);
+            if let Err(refusal) = crate::character::recall_to_home(ctx, caster_guid) {
+                spacetimedb::log::info!("recall: {caster_guid} stays put: {refusal}");
+            }
             EffectHit::none()
         }
         E_DISMOUNT => {
@@ -1276,15 +1374,9 @@ fn apply_delegating_effect(
     match e.kind {
         E_TRIGGER => {
             if e.trigger_spell != 0 && e.trigger_spell != e.spell_id {
-                if let Err(err) = resolve_cast_at(
+                if let Err(err) = resolve_cast(
                     ctx,
-                    caster_guid,
-                    e.trigger_spell,
-                    level,
-                    target_guid,
-                    false,
-                    false,
-                    None,
+                    &CastRequest::new(caster_guid, e.trigger_spell, level, target_guid),
                 ) {
                     log::info!(
                         "spell {} triggered {} which did not resolve: {}",
@@ -1380,13 +1472,13 @@ fn apply_character_effect(
                     let form_id = client_form_for_stance(new_stance) << 16;
                     c.unit_bytes_1 = (c.unit_bytes_1 & 0xFF00_0000) | form_id;
                     let c = c.update(ctx);
-                    crate::combat::interrupt_form_bound_queued_strike(ctx, &c);
+                    crate::combat::queued_strike::interrupt_form_bound(ctx, &c);
                 } else if form_recast_toggles_off(c.stance, new_stance) {
                     // Druid caster form uses zero; client_form_for_stance(0) is Battle Stance.
                     c.stance = 0;
                     c.unit_bytes_1 &= 0xFF00_0000;
                     let c = c.update(ctx);
-                    crate::combat::interrupt_form_bound_queued_strike(ctx, &c);
+                    crate::combat::queued_strike::interrupt_form_bound(ctx, &c);
                 }
             }
             EffectHit::none()
@@ -1490,16 +1582,13 @@ pub(crate) fn blink_forward(ctx: &ReducerContext, caster_guid: u64, dist_yd: f32
                 (nx, ny, caster.z),
             )
         {
-            crate::world::teleport_player(
-                ctx,
-                caster_guid,
-                caster.map_id,
-                caster.instance_id,
-                nx,
-                ny,
-                caster.z,
-                caster.orientation,
-            );
+            let pose = [nx, ny, caster.z, caster.orientation];
+            let (map_id, instance_id) = (caster.map_id, caster.instance_id);
+            if let Err(refusal) =
+                crate::world::teleport(ctx, caster_guid, map_id, instance_id, pose)
+            {
+                spacetimedb::log::info!("blink: {caster_guid} stays put: {refusal}");
+            }
             return;
         }
         yd -= 2.0;
@@ -1563,7 +1652,7 @@ fn create_ground_area(
         next_tick_micros: now.to_micros_since_unix_epoch() + (period_ms as i64) * 1000,
         expires_at,
     });
-    crate::spell::DynamicObject {
+    crate::DynamicObject {
         guid: dynamic_object_guid(area.id),
         caster_guid,
         spell_id: e.spell_id,
@@ -1578,9 +1667,8 @@ fn create_ground_area(
     .insert(ctx);
 }
 
-// Vanilla HIGHGUID_DYNAMICOBJECT occupies the top 16 bits as 0xF100.
 pub(crate) fn dynamic_object_guid(area_id: u64) -> u64 {
-    (0xF100u64 << 48) | area_id
+    lyracore_shared::guid::compose(lyracore_shared::guid::DYNAMIC_OBJECT, area_id)
 }
 
 fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
@@ -1605,27 +1693,17 @@ fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
     }
     let nz = crate::terrain::snap_z(ctx, caster.map_id, caster.instance_id, nx, ny, target.z);
     let duration_ms = ((dist / lyracore_shared::constants::speeds::CHARGE) * 1000.0) as u32;
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
-    crate::creatures::tick::emit_move_spline(
-        ctx,
-        caster_guid,
-        (caster.x, caster.y, caster.z),
-        (nx, ny, nz),
-        duration_ms,
-        true,
-        now_ms,
-        caster.map_id,
-        caster.instance_id,
-        (caster.grid_x, caster.grid_y),
-        None,
-    );
-    // The spline animates the client; combat needs the authoritative landing position immediately.
-    if let Some(mut c) = entities.guid().find(caster_guid) {
-        let clock = crate::world::MoveClock::realm(ctx, caster_guid, now_ms);
-        c.place(nx, ny, nz, clock).unexplored();
-        c.orientation = facing;
-        c.update(ctx);
+    let course = crate::creatures::leg::Course::straight((nx, ny, nz), duration_ms, true);
+    let mut c = caster;
+    if !crate::creatures::leg::begin(ctx, &mut c, course) {
+        return;
     }
+    // The spline animates the client; combat needs the authoritative landing position immediately.
+    let now_ms = crate::time::now_ms_u32(ctx);
+    let clock = crate::world::MoveClock::realm(ctx, &c, now_ms);
+    c.place(nx, ny, nz, clock).unexplored();
+    c.orientation = facing;
+    c.update(ctx);
 }
 
 // Vanilla Charge stops at obstructions instead of routing around them.
@@ -1763,6 +1841,14 @@ mod effect_handler_tests {
         let full: Vec<(u8, u32)> = (0u8..3).map(|s| (s, s as u32 + 100)).collect();
         assert_eq!(super::pick_aura_slot(&full, 999, false, 3, 4), None);
         assert_eq!(super::pick_aura_slot(&full, 101, false, 3, 4), Some(1));
+    }
+
+    #[test]
+    fn a_hidden_holder_does_not_hide_a_visible_holder_of_the_same_spell() {
+        assert_eq!(
+            super::pick_aura_slot(&[(255, 20598)], 20598, false, 32, 48),
+            Some(0)
+        );
     }
 
     #[test]

@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 BASELINE = runpy.run_path(
     str(Path(__file__).resolve().parents[1] / "baseline"), run_name="conformance_baseline"
 )
@@ -15,6 +16,12 @@ COMMITTED = Path(__file__).resolve().parents[1] / "tier1-baseline.json"
 
 
 class BaselineFailureTests(unittest.TestCase):
+    def setUp(self):
+        preflight = mock.patch.dict(BASELINE["main"].__globals__,
+                                    {"check_spacetime_version": mock.Mock()})
+        preflight.start()
+        self.addCleanup(preflight.stop)
+
     def test_no_argument_form_uses_full_regeneration(self):
         with mock.patch.object(sys, "argv", ["baseline"]):
             with mock.patch.object(os, "chdir"):

@@ -8,16 +8,61 @@ use crate::creatures::tick::game_creature_spline;
 use crate::spell::{CastGateRefusal, CastRefusalReason};
 
 pub(crate) const COMBAT_DROP_MS: u64 = 6000;
+// vmangos Unit::Update polls PvE combat state every 1,200 ms.
+const COMBAT_CHECK_MICROS: i64 = 1_200_000;
+
+#[table(accessor = game_combat_check_schedule, scheduled(check_combat))]
+pub struct CombatCheckSchedule {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    #[unique]
+    pub character_guid: u64,
+    pub scheduled_at: ScheduleAt,
+}
+
+crate::outside_table_catalog!(game_combat_check_schedule);
+
+crate::character_owned!(delete, fn sweep_delete_game_combat_check_schedule(ctx, character_guid) {
+    ctx.db.game_combat_check_schedule().character_guid().delete(character_guid);
+});
+// Combat checks belong to the live entity and do not survive Transfer.
+crate::character_owned!(not_transported, fn sweep_transfer_game_combat_check_schedule());
+
+#[spacetimedb::reducer]
+pub fn check_combat(ctx: &ReducerContext, schedule: CombatCheckSchedule) {
+    if !crate::time::scheduler_authorized(ctx) {
+        return;
+    }
+    ctx.db
+        .game_combat_check_schedule()
+        .scheduled_id()
+        .delete(schedule.scheduled_id);
+    let Some(mut character) = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(schedule.character_guid)
+    else {
+        return;
+    };
+    let now_ms = crate::time::now_ms(ctx);
+    if now_ms >= character.combat_until_ms && !is_engaged(ctx, character.guid) {
+        character.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
+        character.combat_until_ms = 0;
+        character.update(ctx);
+    }
+}
 
 pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     let entities = ctx.db.game_world_entity();
     let Some(mut e) = entities.guid().find(guid) else {
         return;
     };
-    if e.dead {
+    if e.dead || e.is_flying() {
         return;
     }
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+    let now_ms = crate::time::now_ms(ctx);
     let already = e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0;
     if already && e.combat_until_ms > now_ms + COMBAT_DROP_MS / 2 {
         return;
@@ -34,11 +79,44 @@ pub(crate) fn arm_creature_engagement(
     target_guid: u64,
     assist: bool,
 ) -> bool {
+    if !resume_creature_engagement(ctx, creature_guid, target_guid) {
+        return false;
+    }
+    crate::hooks::fire_on_aggro(
+        ctx,
+        &crate::hooks::AggroPayload {
+            creature_guid,
+            target_guid,
+            assist,
+        },
+    );
+    true
+}
+
+pub(crate) fn resume_creature_engagement(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    target_guid: u64,
+) -> bool {
+    if crate::creatures::react_state(ctx, creature_guid)
+        == crate::creatures::CreatureReactState::Passive
+    {
+        return false;
+    }
+    if ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(target_guid)
+        .is_some_and(|target| target.is_flying())
+    {
+        return false;
+    }
     let melee = ctx.db.game_melee_attack();
     if melee.attacker_guid().find(creature_guid).is_some() {
         return false;
     }
-    crate::combat::MeleeAttack::insert(
+    crate::MeleeAttack::insert(
         ctx,
         MeleeAttack {
             attacker_guid: creature_guid,
@@ -60,21 +138,51 @@ pub(crate) fn arm_creature_engagement(
             creature.update(ctx);
         }
     }
-    crate::hooks::fire_on_aggro(
-        ctx,
-        &crate::hooks::AggroPayload {
-            creature_guid,
-            target_guid,
-            assist,
-        },
-    );
     true
+}
+
+pub(crate) fn engage_passive_creature(ctx: &ReducerContext, creature_guid: u64, source_guid: u64) {
+    if crate::creatures::react_state(ctx, creature_guid)
+        != crate::creatures::CreatureReactState::Passive
+    {
+        return;
+    }
+    let entities = ctx.db.game_world_entity();
+    let (Some(creature), Some(source)) = (
+        entities.guid().find(creature_guid),
+        entities.guid().find(source_guid),
+    ) else {
+        return;
+    };
+    if creature.is_player()
+        || creature.dead
+        || source.dead
+        || creature.map_id != source.map_id
+        || creature.instance_id != source.instance_id
+        || !may_harm(ctx, &source, &creature)
+    {
+        return;
+    }
+    let entering = creature.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT == 0;
+    crate::threat::add_threat(ctx, creature_guid, source_guid, 0);
+    enter_combat(ctx, creature_guid);
+    enter_combat(ctx, source_guid);
+    if entering {
+        crate::hooks::fire_on_aggro(
+            ctx,
+            &crate::hooks::AggroPayload {
+                creature_guid,
+                target_guid: source_guid,
+                assist: false,
+            },
+        );
+    }
 }
 
 pub(crate) fn refresh_leash(ctx: &ReducerContext, guid_a: u64, guid_b: u64) {
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = crate::time::now_ms_u32(ctx);
     for guid in [guid_a, guid_b] {
         let (Some(mut row), Some(e)) =
             (melee.attacker_guid().find(guid), entities.guid().find(guid))
@@ -84,14 +192,22 @@ pub(crate) fn refresh_leash(ctx: &ReducerContext, guid_a: u64, guid_b: u64) {
         if e.is_player() {
             continue;
         }
-        row.pursuit_ends_ms = crate::creatures::pursuit_deadline_ms(now_ms);
+        row.pursuit_ends_ms = crate::combat::pursuit_deadline_ms(now_ms);
         row.leash_x = e.x;
         row.leash_y = e.y;
-        crate::combat::MeleeAttack::update(ctx, row);
+        crate::MeleeAttack::update(ctx, row);
     }
 }
 
 pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
+    disengage_with_combat_check(ctx, guid, false);
+}
+
+pub(crate) fn suspend_hostile_references(ctx: &ReducerContext, guid: u64) {
+    disengage_with_combat_check(ctx, guid, true);
+}
+
+fn disengage_with_combat_check(ctx: &ReducerContext, guid: u64, defer_character_exit: bool) {
     let melee = ctx.db.game_melee_attack();
     let attackers_of_guid: Vec<u64> = melee
         .by_target()
@@ -105,15 +221,20 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
         .into_iter()
         .chain(attackers_of_guid.iter().copied())
     {
-        crate::combat::MeleeAttack::delete(ctx, a);
+        crate::MeleeAttack::delete(ctx, a);
     }
     use crate::game_threat;
-    let threat_members = ctx
-        .db
-        .game_threat()
+    let threats = ctx.db.game_threat();
+    let threat_members = threats
         .by_creature()
         .filter(&guid)
         .map(|entry| entry.source_guid)
+        .chain(
+            threats
+                .by_source()
+                .filter(&guid)
+                .map(|entry| entry.creature_guid),
+        )
         .collect::<Vec<_>>();
     crate::threat::clear_for_unit(ctx, guid);
     clear_target(ctx, guid);
@@ -123,6 +244,8 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
     let mut freed = attackers_of_guid;
     freed.extend(threat_members);
     freed.push(guid);
+    freed.sort_unstable();
+    freed.dedup();
     let entities = ctx.db.game_world_entity();
     for g in freed {
         if is_engaged(ctx, g) {
@@ -135,8 +258,28 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
         crate::creatures::reset_engagement(ctx, g);
         if let Some(mut e) = entities.guid().find(g) {
             if e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0 {
-                e.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
-                e.combat_until_ms = 0;
+                if defer_character_exit && g == guid && e.is_player() {
+                    let due = Timestamp::from_micros_since_unix_epoch(
+                        crate::time::now(ctx)
+                            .to_micros_since_unix_epoch()
+                            .saturating_add(COMBAT_CHECK_MICROS),
+                    );
+                    e.combat_until_ms = due.to_micros_since_unix_epoch().max(0) as u64 / 1000;
+                    ctx.db
+                        .game_combat_check_schedule()
+                        .character_guid()
+                        .delete(guid);
+                    ctx.db
+                        .game_combat_check_schedule()
+                        .insert(CombatCheckSchedule {
+                            scheduled_id: 0,
+                            character_guid: guid,
+                            scheduled_at: crate::time::schedule_time(ctx, due),
+                        });
+                } else {
+                    e.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;
+                    e.combat_until_ms = 0;
+                }
                 e.update(ctx);
             }
         }
@@ -154,7 +297,7 @@ pub(crate) fn stop_duel_combat(ctx: &ReducerContext, first_guid: u64, second_gui
                     || (attacker_guid == second_guid && attack.target_guid == first_guid)
             })
         {
-            crate::combat::MeleeAttack::delete(ctx, attacker_guid);
+            crate::MeleeAttack::delete(ctx, attacker_guid);
         }
     }
     let entities = ctx.db.game_world_entity();
@@ -181,7 +324,7 @@ pub(crate) fn clear_target(ctx: &ReducerContext, guid: u64) {
 }
 
 pub(crate) fn break_own_attacks(ctx: &ReducerContext, guid: u64) {
-    crate::combat::MeleeAttack::delete(ctx, guid);
+    crate::MeleeAttack::delete(ctx, guid);
     crate::threat::clear_for_unit(ctx, guid);
     clear_target(ctx, guid);
 }
@@ -189,38 +332,50 @@ pub(crate) fn break_own_attacks(ctx: &ReducerContext, guid: u64) {
 pub(crate) fn is_engaged(ctx: &ReducerContext, guid: u64) -> bool {
     let melee = ctx.db.game_melee_attack();
     use crate::game_threat;
+    let threats = ctx.db.game_threat();
     melee.attacker_guid().find(guid).is_some()
         || melee.by_target().filter(&guid).next().is_some()
-        || ctx
-            .db
-            .game_threat()
-            .by_source()
-            .filter(&guid)
-            .any(|entry| melee.attacker_guid().find(entry.creature_guid).is_some())
+        || threats.by_creature().filter(&guid).next().is_some()
+        || threats.by_source().filter(&guid).next().is_some()
 }
 
-fn may_harm_decision(same_unit: bool, active_duel: bool, friendly: bool) -> bool {
-    same_unit || active_duel || !friendly
+/// How `unit` stands toward `other`: an active Duel makes opponents hostile, and hostility wins
+/// over friendliness as in vmangos `Unit::GetReactionTo`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Relation {
+    SelfUnit,
+    Friendly,
+    Neutral,
+    Hostile,
 }
 
-fn may_help_decision(same_unit: bool, active_duel: bool, hostile: bool) -> bool {
-    same_unit || (!active_duel && !hostile)
+pub(crate) fn relation(ctx: &ReducerContext, unit: &WorldEntity, other: &WorldEntity) -> Relation {
+    if unit.guid == other.guid {
+        return Relation::SelfUnit;
+    }
+    relation_from(
+        crate::duel::active_opponents(ctx, unit.guid, other.guid),
+        crate::faction::is_hostile(ctx, unit.faction_template, other.faction_template),
+        || crate::faction::is_friendly(ctx, unit.faction_template, other.faction_template),
+    )
+}
+
+fn relation_from(duel: bool, hostile: bool, friendly: impl FnOnce() -> bool) -> Relation {
+    if duel || hostile {
+        Relation::Hostile
+    } else if friendly() {
+        Relation::Friendly
+    } else {
+        Relation::Neutral
+    }
 }
 
 pub(crate) fn may_harm(ctx: &ReducerContext, attacker: &WorldEntity, target: &WorldEntity) -> bool {
-    may_harm_decision(
-        attacker.guid == target.guid,
-        crate::duel::active_opponents(ctx, attacker.guid, target.guid),
-        crate::faction::is_friendly(ctx, attacker.faction_template, target.faction_template),
-    )
+    !target.is_flying() && relation(ctx, attacker, target) != Relation::Friendly
 }
 
 pub(crate) fn may_help(ctx: &ReducerContext, helper: &WorldEntity, target: &WorldEntity) -> bool {
-    may_help_decision(
-        helper.guid == target.guid,
-        crate::duel::active_opponents(ctx, helper.guid, target.guid),
-        crate::faction::is_hostile(ctx, helper.faction_template, target.faction_template),
-    )
+    relation(ctx, helper, target) != Relation::Hostile
 }
 
 pub(crate) fn is_hostile_target(
@@ -228,9 +383,7 @@ pub(crate) fn is_hostile_target(
     attacker: &WorldEntity,
     target: &WorldEntity,
 ) -> bool {
-    attacker.guid != target.guid
-        && (crate::duel::active_opponents(ctx, attacker.guid, target.guid)
-            || crate::faction::is_hostile(ctx, attacker.faction_template, target.faction_template))
+    !target.is_flying() && relation(ctx, attacker, target) == Relation::Hostile
 }
 
 #[table(
@@ -264,7 +417,7 @@ pub struct MeleeAttack {
 impl MeleeAttack {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
         let row = ctx.db.game_melee_attack().insert(row);
-        crate::native::engagement_changed(ctx, None, Some(&row));
+        crate::native::combat::engagement_changed(ctx, None, Some(&row));
         row
     }
 
@@ -272,7 +425,7 @@ impl MeleeAttack {
         let table = ctx.db.game_melee_attack();
         let old = table.attacker_guid().find(row.attacker_guid);
         let row = table.attacker_guid().update(row);
-        crate::native::engagement_changed(ctx, old.as_ref(), Some(&row));
+        crate::native::combat::engagement_changed(ctx, old.as_ref(), Some(&row));
         row
     }
 
@@ -280,7 +433,7 @@ impl MeleeAttack {
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) -> bool {
         let deleted = Self::end_auto_repeat(ctx, guid);
         if deleted {
-            crate::combat::interrupt_queued_strike_of(ctx, guid);
+            crate::combat::queued_strike::interrupt_of(ctx, guid);
         }
         deleted
     }
@@ -293,7 +446,7 @@ impl MeleeAttack {
         };
         table.attacker_guid().delete(guid);
         crate::combat::drop_extra_attacks(ctx, guid);
-        crate::native::engagement_changed(ctx, Some(&old), None);
+        crate::native::combat::engagement_changed(ctx, Some(&old), None);
         true
     }
 }
@@ -340,7 +493,7 @@ pub struct CombatEvent {
 
 impl CombatEvent {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
-        crate::native::combat_event(ctx, &row);
+        crate::native::combat::combat_event(ctx, &row);
         ctx.db.game_combat_event_live().insert(row)
     }
 
@@ -520,7 +673,7 @@ fn face_requested_melee_target(ctx: &ReducerContext, attacker_guid: u64, target_
     }
 
     let orientation = dy.atan2(dx);
-    if crate::spell::is_facing(
+    if crate::geometry::is_facing(
         attacker.x,
         attacker.y,
         attacker.orientation,
@@ -529,25 +682,9 @@ fn face_requested_melee_target(ctx: &ReducerContext, attacker_guid: u64, target_
     ) {
         return;
     }
-    let now_ms = (now_micros / 1_000) as u32;
-    let spline_id = retained.as_ref().map_or(now_ms, |last| {
-        crate::creatures::tick::next_spline_id(now_ms, last.spline_id)
-    });
-    let position = (attacker.x, attacker.y, attacker.z);
-    let partition = (attacker.map_id, attacker.instance_id);
-    let grid = (attacker.grid_x, attacker.grid_y);
     attacker.orientation = orientation;
-    attacker.update(ctx);
-    crate::creatures::tick::emit_facing_spline(
-        ctx,
-        attacker_guid,
-        position,
-        orientation,
-        spline_id,
-        partition.0,
-        partition.1,
-        grid,
-    );
+    let mut attacker = attacker.update(ctx);
+    crate::creatures::leg::face(ctx, &mut attacker, orientation);
 }
 
 fn start_attack(
@@ -617,9 +754,9 @@ fn start_attack(
         swing_error: 0,
     };
     if melee.attacker_guid().find(attacker.guid).is_some() {
-        crate::combat::MeleeAttack::update(ctx, row);
+        crate::MeleeAttack::update(ctx, row);
     } else {
-        crate::combat::MeleeAttack::insert(ctx, row);
+        crate::MeleeAttack::insert(ctx, row);
     }
     Ok(AttackStart::Armed)
 }
@@ -679,7 +816,7 @@ pub(crate) fn apply_start_ranged_attack(
                 "ranged target too close",
             ));
         }
-        if !crate::spell::is_facing(
+        if !crate::geometry::is_facing(
             attacker.x,
             attacker.y,
             attacker.orientation,
@@ -716,7 +853,7 @@ pub(crate) fn apply_start_ranged_attack(
     }
     crate::mount::dismount(ctx, attacker.guid);
     // Delay the first Auto Shot by its initial wind-up; zero is the immediate-swing sentinel.
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = crate::time::now_ms_u32(ctx);
     let ranged_delay = ranged_weapon.2;
     let first_swing_seed = now_ms
         .saturating_sub(ranged_delay.saturating_sub(RANGED_INITIAL_SHOT_MS))
@@ -735,34 +872,25 @@ pub(crate) fn apply_start_ranged_attack(
         swing_error: 0,
     };
     if melee.attacker_guid().find(attacker.guid).is_some() {
-        crate::combat::MeleeAttack::update(ctx, row);
+        crate::MeleeAttack::update(ctx, row);
     } else {
-        crate::combat::MeleeAttack::insert(ctx, row);
+        crate::MeleeAttack::insert(ctx, row);
     }
     Ok(())
 }
 
 pub(crate) fn stop_attack_for(ctx: &ReducerContext, attacker_guid: u64) {
-    crate::combat::MeleeAttack::delete(ctx, attacker_guid);
+    crate::MeleeAttack::delete(ctx, attacker_guid);
 }
 
 #[cfg(test)]
 mod duel_relation_tests {
-    use super::{may_harm_decision, may_help_decision};
+    use super::{relation_from, Relation};
 
     #[test]
-    fn active_duel_is_the_only_friendly_fire_exception() {
-        assert!(!may_harm_decision(false, false, true));
-        assert!(may_harm_decision(false, true, true));
-        assert!(may_harm_decision(false, false, false));
-        assert!(may_harm_decision(true, false, true));
-    }
-
-    #[test]
-    fn active_opponents_stop_being_helpful_targets() {
-        assert!(may_help_decision(false, false, false));
-        assert!(!may_help_decision(false, true, false));
-        assert!(!may_help_decision(false, false, true));
-        assert!(may_help_decision(true, false, true));
+    fn an_active_duel_makes_a_friendly_opponent_hostile() {
+        assert_eq!(relation_from(true, false, || true), Relation::Hostile);
+        assert_eq!(relation_from(false, false, || true), Relation::Friendly);
+        assert_eq!(relation_from(false, false, || false), Relation::Neutral);
     }
 }

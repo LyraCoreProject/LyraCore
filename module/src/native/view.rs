@@ -1,5 +1,5 @@
 use crate::guild::game_guild_member;
-use crate::items::{game_item_instance, game_item_random_property, game_item_template};
+use crate::{game_item_instance, game_item_random_property, game_item_template};
 use crate::{Character, WorldEntity};
 use lyracore_protocol::codec;
 use lyracore_protocol::messages::vanilla::{CharacterGear, InventoryType};
@@ -95,7 +95,7 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
                 .map(|(_, _, delay)| delay)
                 .filter(|delay| *delay != 0)
                 .unwrap_or(crate::combat::DEFAULT_ATTACK_TIME_MS);
-            let haste = crate::spell::speed_bonus(ctx, e.guid, crate::spell::SPEED_SWING);
+            let haste = crate::modifiers::speed_bonus(ctx, e.guid, crate::spell::SPEED_SWING);
             Some(crate::combat::swing_time_with_haste(delay, haste))
         } else {
             None
@@ -116,18 +116,19 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
         intellect: e.intellect,
         spirit: e.spirit,
         sheet_ap_base: e.sheet_ap_base,
-        sheet_ap_mods: e.sheet_ap_mods,
+        sheet_ap_modifiers: e.sheet_ap_modifiers,
+        sheet_ranged_ap_modifiers: e.sheet_ranged_ap_modifiers,
         sheet_dmg_min: e.sheet_dmg_min,
         sheet_dmg_max: e.sheet_dmg_max,
         sheet_ranged_ap: e.sheet_ranged_ap,
-        sheet_ranged_dmg_min: e.sheet_ranged_dmg_min,
-        sheet_ranged_dmg_max: e.sheet_ranged_dmg_max,
+        sheet_ranged_dmg_min: e.sheet_ranged_dmg_min as f32 + e.sheet_ranged_dmg_min_fraction,
+        sheet_ranged_dmg_max: e.sheet_ranged_dmg_max as f32 + e.sheet_ranged_dmg_max_fraction,
         npc_flags: e.npc_flags,
-        effective_armor: crate::combat::effective_armor(ctx, e),
+        effective_armor: crate::modifiers::effective_armor(ctx, e),
         magic_resistances: std::array::from_fn(|index| {
-            lyracore_shared::resistance::effective_resistance(
+            crate::modifiers::effective_resistance(
                 0,
-                crate::spell::resistance_bonus(ctx, e.guid, 1 << (index + 1)),
+                crate::modifiers::resistance_bonus(ctx, e.guid, 1 << (index + 1)),
             )
         }),
         owner_guid: e.owner_guid,
@@ -154,6 +155,10 @@ pub(super) fn item(ctx: &ReducerContext, item: &crate::ItemInstance) -> codec::I
         guid: item.guid,
         entry: item.entry,
         owner_guid: item.owner_guid,
+        contained_guid: codec::bag_content_parts(item.slot).and_then(|(slot, _)| {
+            crate::items::item_in_slot(ctx, item.owner_guid, slot).map(|bag| bag.guid)
+        }),
+        soulbound: item.soulbound,
         slot: item.slot,
         stack_count: item.stack_count,
         durability: item.durability,
@@ -205,48 +210,47 @@ pub(super) fn equipment(ctx: &ReducerContext, guid: u64) -> Vec<codec::ItemInsta
 }
 
 pub(super) fn quests(ctx: &ReducerContext, guid: u64) -> Vec<codec::update_mask::QuestLogSlot> {
-    use crate::quest::{game_character_quest, game_quest_objective, objective_kind};
-    let mut quests: Vec<_> = ctx
-        .db
-        .game_character_quest()
-        .by_character()
-        .filter(guid)
-        .filter(|quest| !quest.rewarded)
-        .collect();
-    quests.sort_by_key(|quest| quest.quest_entry);
-    quests
+    crate::quest::quest_log_entries(ctx, guid)
         .into_iter()
-        .take(codec::update_mask::idx::QUEST_LOG_SLOTS as usize)
         .enumerate()
-        .map(|(slot, quest)| {
-            let state = u8::from(crate::quest::quest_is_complete(ctx, &quest));
-            let mut counts = quest.counts;
-            // The client redraws its quest tracker only when a counter changes, so carried
-            // items fill their objective's counter as vmangos does.
-            for objective in ctx
-                .db
-                .game_quest_objective()
-                .by_quest()
-                .filter(quest.quest_entry)
-                .filter(|objective| objective.kind == objective_kind::COLLECT_ITEM)
-            {
-                if let Some(count) = counts.get_mut(usize::from(objective.obj_index)) {
-                    *count = crate::items::item_count(ctx, guid, objective.target_entry)
-                        .min(objective.required_count);
-                }
-            }
-            codec::update_mask::QuestLogSlot {
-                slot: slot as u8,
-                quest_id: quest.quest_entry,
-                state,
-                counts,
-                timer: 0,
-            }
+        .filter_map(|(slot, entry)| {
+            crate::quest::character_quest_row(ctx, guid, entry)
+                .map(|quest| quest_slot(ctx, &quest, slot as u8))
         })
         .collect()
 }
 
-pub(super) fn item_template(t: crate::items::ItemTemplate) -> codec::ItemTemplateView {
+pub(super) fn quest_slot(
+    ctx: &ReducerContext,
+    quest: &crate::quest::CharacterQuest,
+    slot: u8,
+) -> codec::update_mask::QuestLogSlot {
+    use crate::quest::{game_quest_objective, objective_kind};
+    let state = u8::from(crate::quest::quest_is_complete(ctx, quest));
+    let mut counts = quest.counts.clone();
+    // Carried items fill their objective counter so the client redraws its quest tracker.
+    for objective in ctx
+        .db
+        .game_quest_objective()
+        .by_quest()
+        .filter(quest.quest_entry)
+        .filter(|objective| objective.kind == objective_kind::COLLECT_ITEM)
+    {
+        if let Some(count) = counts.get_mut(usize::from(objective.obj_index)) {
+            *count = crate::items::item_count(ctx, quest.character_guid, objective.target_entry)
+                .min(objective.required_count);
+        }
+    }
+    codec::update_mask::QuestLogSlot {
+        slot,
+        quest_id: quest.quest_entry,
+        state,
+        counts,
+        timer: 0,
+    }
+}
+
+pub(super) fn item_template(t: crate::ItemTemplate) -> codec::ItemTemplateView {
     codec::ItemTemplateView {
         entry: t.entry,
         class: t.class,
@@ -289,6 +293,13 @@ pub(super) fn item_template(t: crate::items::ItemTemplate) -> codec::ItemTemplat
         spelltrigger_4: t.spelltrigger_4,
         spellid_5: t.spellid_5,
         spelltrigger_5: t.spelltrigger_5,
+        spell_categories: [
+            t.spellcategory_1,
+            t.spellcategory_2,
+            t.spellcategory_3,
+            t.spellcategory_4,
+            t.spellcategory_5,
+        ],
         required_skill: t.required_skill,
         required_skill_rank: t.required_skill_rank,
         required_reputation_faction: t.required_reputation_faction,
@@ -322,13 +333,15 @@ pub(super) fn sheet_stats(e: &WorldEntity) -> codec::SheetStatsValues {
         int_bonus: e.sheet_int_bonus,
         spi_bonus: e.sheet_spi_bonus,
         attack_power: e.sheet_ap_base,
-        ap_mods: e.sheet_ap_mods,
+        ap_modifiers: e.sheet_ap_modifiers,
+        ranged_ap_modifiers: e.sheet_ranged_ap_modifiers,
         dmg_min: e.sheet_dmg_min,
         dmg_max: e.sheet_dmg_max,
         ranged_attack_power: e.sheet_ranged_ap,
-        ranged_dmg_min: e.sheet_ranged_dmg_min,
-        ranged_dmg_max: e.sheet_ranged_dmg_max,
+        ranged_dmg_min: e.sheet_ranged_dmg_min as f32 + e.sheet_ranged_dmg_min_fraction,
+        ranged_dmg_max: e.sheet_ranged_dmg_max as f32 + e.sheet_ranged_dmg_max_fraction,
         // PLAYER_CRIT_PERCENTAGE uses percent; sheet_crit_bp uses basis points.
         crit_pct: e.sheet_crit_bp as f32 / 100.0,
+        ranged_crit_pct: e.sheet_ranged_crit_bp as f32 / 100.0,
     }
 }

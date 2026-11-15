@@ -1,4 +1,23 @@
-use super::*;
+use super::item::{build_set_proficiency_msgs, ItemInstanceView};
+use super::update_mask;
+use super::values::{build_sheet_stats_values, SheetStatsValues};
+use anyhow::{anyhow, Result};
+use lyracore_shared::constants::speeds;
+use lyracore_shared::packing::unpack4;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+use wow_world_messages::vanilla::{
+    Area, Class, DateTime, FactionFlag, FactionInitializer, Gender, InitialSpell, ItemSlot, Map,
+    Month, MovementBlock, MovementBlock_MovementFlags, MovementBlock_MovementFlags_SplineEnabled,
+    MovementBlock_SplineFlag, MovementBlock_UpdateFlag, MovementBlock_UpdateFlag_All,
+    MovementBlock_UpdateFlag_Living, Object, ObjectType, PetCommandState, PetEnabled,
+    PetReactState, Power, Race, SMSG_PET_SPELLS_action_bars, Skill, SkillInfo, SkillInfoIndex,
+    UpdateMask, UpdatePlayer, UpdateUnit, Vector3d, VisibleItem, VisibleItemIndex, Weekday,
+    SMSG_ACCOUNT_DATA_TIMES, SMSG_ACTION_BUTTONS, SMSG_BINDPOINTUPDATE, SMSG_DESTROY_OBJECT,
+    SMSG_INITIALIZE_FACTIONS, SMSG_INITIAL_SPELLS, SMSG_LOGIN_SETTIMESPEED,
+    SMSG_LOGIN_VERIFY_WORLD, SMSG_PET_SPELLS, SMSG_SET_REST_START, SMSG_TUTORIAL_FLAGS,
+    SMSG_UPDATE_OBJECT,
+};
+use wow_world_messages::Guid;
 
 #[derive(Clone, Debug, Default)]
 pub struct EntityView {
@@ -48,12 +67,14 @@ pub struct EntityView {
     pub intellect: u32,
     pub spirit: u32,
     pub sheet_ap_base: u32,
-    pub sheet_ap_mods: i32,
+    // Positive i16 in the low half, negative i16 in the high half.
+    pub sheet_ap_modifiers: u32,
+    pub sheet_ranged_ap_modifiers: u32,
     pub sheet_dmg_min: u32,
     pub sheet_dmg_max: u32,
     pub sheet_ranged_ap: u32,
-    pub sheet_ranged_dmg_min: u32,
-    pub sheet_ranged_dmg_max: u32,
+    pub sheet_ranged_dmg_min: f32,
+    pub sheet_ranged_dmg_max: f32,
     pub npc_flags: u32,
     pub owner_guid: u64,
     pub effective_armor: u32,
@@ -387,6 +408,8 @@ pub fn build_create_object(
             .set_player_flags(entity.player_flags as i32);
         builder = builder.set_unit_power4(100).set_unit_maxpower4(100);
         if matches!(kind, CreateKind::SelfPlayer) {
+            let ap_mods = entity.sheet_ap_modifiers;
+            let ranged_mods = entity.sheet_ranged_ap_modifiers;
             builder = builder
                 .set_player_xp(entity.xp as i32)
                 .set_player_next_level_xp(entity.next_level_xp as i32)
@@ -409,17 +432,15 @@ pub fn build_create_object(
                 .set_unit_arcane_resistance(entity.magic_resistances[5] as i32)
                 // Unset damage fields become uninitialized floats in the build 5875 paperdoll.
                 .set_unit_attack_power(entity.sheet_ap_base as i32)
-                .set_unit_attack_power_mods(
-                    entity.sheet_ap_mods.max(0) as u16,
-                    (-entity.sheet_ap_mods).max(0) as u16,
-                )
+                // gtker writes its first short argument into the high half.
+                .set_unit_attack_power_mods((ap_mods >> 16) as u16, ap_mods as u16)
                 // Attack power uses 1 + multiplier; setting 1.0 doubles displayed AP.
                 .set_unit_mindamage(entity.sheet_dmg_min as f32)
                 .set_unit_maxdamage(entity.sheet_dmg_max as f32)
                 .set_unit_ranged_attack_power(entity.sheet_ranged_ap as i32)
-                .set_unit_ranged_attack_power_mods(0, 0)
-                .set_unit_minrangeddamage(entity.sheet_ranged_dmg_min as f32)
-                .set_unit_maxrangeddamage(entity.sheet_ranged_dmg_max as f32)
+                .set_unit_ranged_attack_power_mods((ranged_mods >> 16) as u16, ranged_mods as u16)
+                .set_unit_minrangeddamage(entity.sheet_ranged_dmg_min)
+                .set_unit_maxrangeddamage(entity.sheet_ranged_dmg_max)
                 // The paperdoll divides damage by this multiplier; zero produces infinities.
                 .set_player_field_mod_damage_done_pct(1.0_f32.to_bits() as i32);
         }
@@ -588,6 +609,29 @@ pub fn build_self_create_object(
     Ok(create)
 }
 
+pub fn set_create_sheet_stats(
+    create: &mut SMSG_UPDATE_OBJECT,
+    guid: u64,
+    stats: &SheetStatsValues,
+) -> Result<()> {
+    use wow_world_messages::vanilla::ServerMessage;
+
+    let mut bytes = Vec::new();
+    build_sheet_stats_values(guid, stats).write_unencrypted_server(&mut bytes)?;
+    let updates = crate::codec::values_mask::parse_values_updates(&bytes[4..]);
+    let fields = &updates
+        .first()
+        .ok_or_else(|| anyhow!("could not read sheet descriptor"))?
+        .fields;
+    add_create_fields(create, |mask| {
+        for &(field, value) in fields {
+            if value != 0 || mask.get(field).is_some() {
+                mask.set_u32(field, value);
+            }
+        }
+    })
+}
+
 fn add_create_fields(
     create: &mut SMSG_UPDATE_OBJECT,
     add: impl FnOnce(&mut update_mask::UpdateMaskValues),
@@ -608,7 +652,7 @@ fn add_create_fields(
     };
     let mut bytes = Vec::new();
     envelope.write_unencrypted_server(&mut bytes)?;
-    let decoded = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
+    let decoded = crate::codec::values_mask::parse_values_updates(&bytes[4..]);
     let fields = &decoded
         .first()
         .ok_or_else(|| anyhow!("could not read CREATE descriptor"))?
@@ -831,3 +875,6 @@ pub fn build_set_faction_standing_raw(
     body.extend_from_slice(&(standing as u32).to_le_bytes());
     Some((SMSG_SET_FACTION_STANDING_OPCODE, body))
 }
+
+#[cfg(test)]
+mod tests;

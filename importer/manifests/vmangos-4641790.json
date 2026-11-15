@@ -1831,6 +1831,11 @@
           "sell_price",
           "shadow_res",
           "sheath",
+          "spellcategory_1",
+          "spellcategory_2",
+          "spellcategory_3",
+          "spellcategory_4",
+          "spellcategory_5",
           "spellid_1",
           "spellid_2",
           "spellid_3",
@@ -2051,6 +2056,13 @@
         ]
       },
       "locked_rows": 540
+    },
+    "player_crit_per_agility": {
+      "columns": {
+        "integer": ["class", "level"],
+        "real": ["rate"]
+      },
+      "locked_rows": 440
     },
     "player_levelstats": {
       "columns": {

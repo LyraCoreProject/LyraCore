@@ -14,6 +14,21 @@ tables. The Operator's own 1.12.1 client supplies the remaining tables, terrain,
 model geometry. `importer/scripts/pull-vmangos.py` fetches the SQLite snapshot into the ignored
 `.import/` directory. LyraCore distributes neither source's data.
 
+The globals pass imports `player_crit_per_agility` into `game_crit_per_agility`. It fills missing
+levels by linear interpolation and requires positive rates at levels 1 and 60 for each class.
+Melee crit uses the attacker's class and level, with level 60 rates above level 60. The demo
+world seeds only warrior levels 1 and 60. **Existing Realms must reimport the globals family to
+use the correct crit rates for every class and level.** Until a class/level rate exists, combat
+and the Character sheet use the previous crit calculation: a 10% base plus
+`agility / (level + 4)` percentage points, then aura and equipment bonuses. The Module logs a
+warning once per Shard and records the first missing class and level in the private
+`game_missing_crit_catalogue` table. This fallback preserves crit while the reimport is pending;
+it does not provide the source-backed class rates.
+
+The creatures pass stores the no-parry, no-block and no-defense flags in `game_creature_defense`.
+White melee reads these flags alongside facing, totem type, casting and stun state. Reimport the
+creatures family to populate them on an existing Realm.
+
 The globals pass imports selected `areatrigger_tavern` ids with `patch_min <= 10`. The Module
 matches them to the imported `areatrigger_template` geometry for inn rest. Reimport replaces the
 selected id set.
@@ -62,7 +77,7 @@ lyracore-importer --dump "$DUMP" --dbc "$CLIENT_DATA" \
 Package spell Deltas still apply after the base family import. Datascripts can load the complete
 Snapshot even when a core synthetic effect uses slot 3. The Package API continues to accept slots
 0 through 2; a Datascript that opens a spell with a core-only fourth slot is refused. At the pin,
-this affects the curated Seal of the Crusader marker on spell 21082.
+this affects the Seal marker in `importer/src/spell_overrides.rs`.
 
 Spells with `script_name` remain unsupported. Source `effectItemType` can hold a 64-bit spell-family mask,
 as declared in [SpellEntry.h at the pinned vmangos commit](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Spells/SpellEntry.h#L656).
@@ -122,8 +137,12 @@ selected `forbidden_items` from vendor offers and creature loot. The unused `res
 on-use spells. Property Pool weights preserve four
 decimal places with a common integer scale of 10,000. The Module uses relative weights.
 
-Static WOW_PATCH conditions remove false offers and clear true conditions. Vendor stock timing, runtime offer conditions and
-item flags are unsupported and appear in the Compatibility Manifest. The reader projects the
+Static WOW_PATCH conditions remove false offers and clear true conditions. Vendor offers retain
+`incrtime` as `restock_seconds` and `itemflags` as `stock_flags`, including shared offers.
+Offers with inconsistent zero values for `maxcount` and `incrtime` are omitted, as in
+`ObjectMgr::IsVendorItemValid`. Runtime offer conditions remain unsupported and appear in the
+Compatibility Manifest.
+Existing Realms need one items reimport; see [vendor stock migration](danger-zones.md#vendor-stock-migration). The reader projects the
 columns needed for narrow joins and spell checks, retaining the keys and fields needed for the
 same patch/build selection. It never substitutes client spell fields into vmangos rows.
 
@@ -142,8 +161,8 @@ import path; the manifest counts them as unsupported.
 The gameobjects import selects template patches and spawn ranges, skips disabled spawns, and
 translates source READY/ACTIVE states to the Module's closed/open states. A source ACTIVE chest
 starts lootable because vmangos tracks its loot state separately from its animation state. Native packets convert
-these back to the client's numbering. The eight authored gather entries retain their skill and
-item rules; real type-25 fishing holes remain unsupported. Game-event schedules, pool selection,
+these back to the client's numbering. The authored gather entries (`GATHER_NODES` in
+`importer/src/world_import.rs`) retain their skill and item rules; real type-25 fishing holes remain unsupported. Game-event schedules, pool selection,
 remaining spawn flags, animation, visibility, respawn ranges and script names appear in the
 Compatibility Manifest. The import retains those placements at current parity.
 
@@ -263,7 +282,10 @@ export DUMP SOURCE_SHA
 
 ## Full source import
 
-`--world-profile` selects the World Import Scope. `lyracore import` uses `alliance-single` on
+`--world-profile` selects the World Import Scope. `importer/manifests/world-profiles.json` defines
+every profile: its bounded slices, whole maps, Deadmines route slice, forced creatures, primary map
+and quest catalogue. Full-continent slices stop at ±17066.66 yards so inclusive cell indices stay
+below 1024. `lyracore import` uses `alliance-single` on
 `lyracore`; `full-world` imports every source map into one database. `full-eastern`,
 `full-kalimdor` and `full-instances` still parse; they are the legacy multi-Shard scopes. Each full profile imports
 every creature definition and builds a shared quest catalogue from the full source. Runnable AI
@@ -279,6 +301,9 @@ cargo run -p lyracore-importer -- \
   --world-profile full-world
 ```
 
+Each invocation runs one mode, such as `--terrain`, `--spells` or the default `--dump` import. Two
+mode flags, or a flag the mode does not use, are refused.
+
 This prints the plan. Add `--apply --server <local-node> --db <database>` to load it. Full profiles
 load the client reference catalogues from the same dump and client inputs, including taxi mount
 models. They do not require a separate `--taxi-mounts` argument. A complete import with `--dbc`
@@ -292,6 +317,8 @@ WORLD_PROFILE=full-world DBC=/path/to/client/Data \
   bash importer/scripts/import-world.sh
 ```
 
+The script reads the profile's primary map with `--print-primary-map`. Without a profile on map 0,
+it reads the default slice, forced creatures and Deadmines map from `--print-legacy-defaults`.
 Before and after the import, the script compares the database's spatial maps with the maps that
 `--print-scope-maps` reports for the same scope and source. Before the import it stops on any other
 map unless `ALLOW_MAP_SWITCH=1` is set or the database is a fresh Shard. After the import any other
@@ -372,6 +399,12 @@ After import, `import-world.sh` verifies that native definition subjects are wel
 The Compatibility Manifest remains the authority for source values and dependency paths. Real-client
 Verification should cover one source-backed rule and one creature with no native definition.
 
+The SQL apply path checks every generated INSERT's column and value counts after adding shared
+migration defaults, before its first write. A malformed plan therefore cannot clear spell effects
+and then fail on an INSERT arity error. SQL statements still commit separately. Runtime constraints
+or a transport failure can leave a partial import; stop play and rerun the same import before
+calling publish repair and resuming play.
+
 ## Client catalogues and Transports
 
 The standalone DBC pass combines vmangos taxi nodes with client TaxiPath and TaxiPathNode through
@@ -432,7 +465,7 @@ brings in. So the fixture reuses real vanilla ids and, for a few rows, real name
   and 133 Fireball.
 - Gameobjects: the Goldshire gather-node demo, entries 1731 and 1732 (Copper and Tin Vein).
 - Graveyards: five real Elwynn and Westfall world-safe-locations with their names and coordinates,
-  in `module/src/seed.rs` and as fallback constants in `module/src/world.rs`.
+  in `module/src/seed.rs` and as fallback constants in `module/src/graveyard.rs`.
 - The start position: the Northshire Valley coordinates where a new Human Warrior spawns.
 - The taxi fixture: two reserved nodes, one one-way route with three points and a fare, and a
   nearby flight master. [Schema](./schema.md#7-the-seeded-fixture) gives its id rules.
@@ -461,7 +494,7 @@ An extra field restores alignment at the localized name, column 120.
 | Consumed fields | Build 5875 columns |
 |---|---|
 | ID, school, dispel, mechanic | 0, 1, 4, 5 |
-| Attributes, AttributesEx1, AttributesEx2, stance mask | 6, 7, 8, 11 |
+| Attributes, AttributesEx1–4, stance mask | 6, 7..10, 11 |
 | Explicit target flags | 13 |
 | Required spell focus, cast time, recovery times | 15, 18, 19, 20 |
 | Aura interrupt, Proc mask, chance, charges | 22, 24, 25, 26 |
@@ -471,6 +504,14 @@ An extra field restores alignment at the localized name, column 120.
 | Mechanics, target A, target B, radii, auras, amplitudes | 79..81, 82..84, 85..87, 88..90, 91..93, 94..96 |
 | Multipliers, chain targets, item references, miscellaneous values, triggered spells, combo scaling | 97..99, 100..102, 103..105, 106..108, 109..111, 112..114 |
 | English name, family, complete 64-bit family mask | 120, 160, 161..162 |
+| Damage class | 164 |
+
+Spell import keeps magic hit testing, binary resistance, cannot-crit, always-hit and ignore-resistance
+behavior in `cast_flags`. The magic hit flag comes from damage class 1, independently of effect kind.
+Binary classification uses the original damage class, effects and aura types, before the effect
+translation combines related aura types. It follows `Spells::IsBinary` in the
+[pinned vmangos source](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellMgr.cpp).
+Reimport the `spell` family to give existing Realms these flags.
 
 Spell output retains its existing magnitude convention, base points plus one, and auxiliary-table
 range, radius, duration and cast-time resolution. Item enchantments retain base points plus base dice.
@@ -492,10 +533,10 @@ correction now addresses source slot 0.
 The authored seal marker and Power Word: Shield's linked Weakened Soul rule remain because their
 Module behavior is not an equivalent DBC effect.
 
-The two authored binding corrections map spell 7728, event 1131 and focus 83 to creature 5676,
-and spell 8674, event 1134 and focus 83 to creature 5677. They emit `E_SUMMON_HOSTILE`, retain the
-focus requirement and use a 360000 ms despawn delay. A changed spell shape does not receive this
-correction.
+`importer/src/spell_overrides.rs` holds every per-spell correction: name-keyed rules apply to all
+ranks of a spell, id-keyed rules to one spell. The binding corrections there map a summon event and
+focus to the binding creature. They emit `E_SUMMON_HOSTILE`, retain the focus requirement and use a
+360000 ms despawn delay. A changed spell shape does not receive this correction.
 
 Every World Import Profile loads the same full Spell catalogue. Publishing the Module alone does not
 correct stored Spell rows; that needs the Spell reimport and the curated class-spell pass.

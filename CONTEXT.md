@@ -13,13 +13,13 @@ entry in both files.
 
 ## Index
 
-**A** [Account](CORE_TERMS.md#account) · [Account Character Owner](#retired-terms) · [Account Claim](#retired-terms) · [Account Fence](#retired-terms) · [Action Outcome](#procs) · [Actor](CORE_TERMS.md#actor) · [Alpha Test Tools](#accounts-characters-and-sessions) · [AOI](CORE_TERMS.md#aoi) · [AOI Grant](CORE_TERMS.md#aoi-grant) · [Architecture Test](CORE_TERMS.md#architecture-test) · [Assistant](#groups) · [Auction Cut](#auctions) · [Auction House](#auctions) · [Auction Mail](#auctions) · [Auction Market](#auctions) · [Auction Notice](#auctions) · [Authored Casting](#creature-ai) · [Authored Combat](#creature-ai) · [Authored Flee](#creature-ai) · [Authored Spawn](#requests-and-delivery) · [Authoring Library](#packages) · [Auto-Reply](#chat) · [Away Status](#chat)
+**A** [Account](CORE_TERMS.md#account) · [Account Character Owner](#retired-terms) · [Account Claim](#retired-terms) · [Account Fence](#retired-terms) · [Action Outcome](#procs) · [Actor](CORE_TERMS.md#actor) · [Alpha Test Tools](#accounts-characters-and-sessions) · [AOI](CORE_TERMS.md#aoi) · [AOI Grant](CORE_TERMS.md#aoi-grant) · [Architecture Test](CORE_TERMS.md#architecture-test) · [Assistant](#groups) · [Attack Table](#procs) · [Auction Cut](#auctions) · [Auction House](#auctions) · [Auction Mail](#auctions) · [Auction Market](#auctions) · [Auction Notice](#auctions) · [Authored Casting](#creature-ai) · [Authored Combat](#creature-ai) · [Authored Flee](#creature-ai) · [Authored Spawn](#requests-and-delivery) · [Authoring Library](#packages) · [Auto-Reply](#chat) · [Away Status](#chat)
 
 **B** [Base Snapshot](#packages) · [Baseline](#client-content) · [Behavior](#conformance) · [Bot Capacity Lease](#bots) · [Bot Controller](#bots) · [Bounded Map Slice](#realm-topology) · [Build Identity](#packages)
 
-**C** [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character directory](#realm-topology) · [Character Name Reservation](#realm-topology) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Coalescible Motion](#requests-and-delivery) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
+**C** [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Cast Request](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character directory](#realm-topology) · [Character Name Reservation](#realm-topology) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Coalescible Motion](#requests-and-delivery) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
 
-**D** [Data-dependent field](#conformance) · [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
+**D** [Data Gap](#conformance) · [Data-dependent field](#conformance) · [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
 **E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Equivalence Rule](#conformance) · [Escrow](#retired-terms) · [Event Binding](#packages) · [Extra Attack](#procs)
 
@@ -41,7 +41,7 @@ entry in both files.
 
 **P** [Package](CORE_TERMS.md#package) · [Package API](CORE_TERMS.md#package-api) · [Package Cast Range](#packages) · [Package Config](#packages) · [Package Creature Range](#packages) · [Package Delta](#packages) · [Package Event](#runtime-scripts) · [Package EventAI Range](#packages) · [Package Fixture](#packages) · [Package Gameobject Range](#packages) · [Package Globals Range](#packages) · [Package Gossip Range](#packages) · [Package Identifier Range](#packages) · [Package Import](#packages) · [Package Inventory](#packages) · [Package Item Range](#packages) · [Package Loot Range](#packages) · [Package Quest Range](#packages) · [Package Script Range](#packages) · [Package Source](#packages) · [Package Spell](#packages) · [Package Spell Metadata Range](#packages) · [Package Spell Range](#packages) · [Package Teardown](#packages) · [Package Trainer Range](#packages) · [Package-owned Account](#accounts-characters-and-sessions) · [Party](#groups) · [Party Partition](#groups) · [Passenger](#transports) · [Path Progress](#transports) · [Patrol Pause](#creature-ai) · [Peer Shard](#realm-topology) · [Petition](#guilds) · [Petitioner](#guilds) · [Pre-auth I/O Deadline](#accounts-characters-and-sessions) · [Proc](#procs) · [Proficiency](#requests-and-delivery) · [Property Pool](#random-properties) · [Protocol Family](CORE_TERMS.md#protocol-family) · [Prototype](#working-method) · [Provenance Stamp](#packages) · [Public Note](#guilds)
 
-**R** [Raid](#groups) · [Raid Quest](#groups) · [Raid Slot](#groups) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#groups) · [Realm](CORE_TERMS.md#realm) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Shard](#realm-topology) · [Realm-core](#retired-terms) · [Recorded Revision](#packages) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Reference Server](#conformance) · [Refusal](CORE_TERMS.md#refusal) · [Relay](CORE_TERMS.md#relay) · [Relay Arrival](#realm-topology) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Rollback](#requests-and-delivery) · [Roster Revision](#groups) · [Roster Revision Relay](#retired-terms) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](CORE_TERMS.md#runtime-script) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
+**R** [Raid](#groups) · [Raid Quest](#groups) · [Raid Slot](#groups) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#groups) · [Realm](CORE_TERMS.md#realm) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Shard](#realm-topology) · [Realm-core](#retired-terms) · [Recorded Revision](#packages) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Reference Server](#conformance) · [Refusal](CORE_TERMS.md#refusal) · [Relay](CORE_TERMS.md#relay) · [Relay Arrival](#realm-topology) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Roll Conformance](#conformance) · [Rollback](#requests-and-delivery) · [Roster Revision](#groups) · [Roster Revision Relay](#retired-terms) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](CORE_TERMS.md#runtime-script) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
 
 **S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Source Profile](#realm-topology) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Swing Error](#procs)
 
@@ -116,7 +116,7 @@ data and archive names for Map lookup.
 **World Import Profile**:
 A named import plan that selects the maps and content one world import loads into a Shard.
 `full-world` imports every source map. The other profiles import part of the world. See
-`importer/src/world_import_scope.rs`.
+`importer/manifests/world-profiles.json`.
 
 **World Import Completion**:
 The record that a World Import loaded one map and passed its content checks. An import clears these
@@ -425,8 +425,9 @@ the route observation can state whether its consulted cells had verified coverag
 **Sessionless Action Consent**:
 A Character-owned core projection of a Package's controller selection. An absent row permits
 sessionless actions. Each selection updates consent and clears the latest Character Relocation.
-Invite, leave and automatic group acceptance check current consent in the same transaction as the
-action. Consent is deleted with its Character.
+Group and guild actions check current consent on the owning Shard. Cross-Shard requests carry
+that authority revision; the Realm refuses it after observing a newer revision. Consent is deleted
+with its Character.
 
 **Idle Bot**:
 A Package-controlled Character, one with a Sessionless Action Consent row, that is out of combat and
@@ -591,7 +592,7 @@ _Avoid_: proc cast, internal cast, free cast
 **Chance on Hit**:
 A weapon spell slot or a combat-spell enchantment that may cast when the weapon strikes a victim
 that is still alive. A white swing that lands and deals damage, or is blocked, rolls the weapon that
-swung. A spell that carries `SPELL_ATTR_WEAPON_PROCS` rolls the main hand once per target, even when
+swung. A spell that carries `CAST_FLAG_WEAPON_PROCS` rolls the main hand once per target, even when
 avoided and even as a Triggered Cast. A spell slot rolls its procs-per-minute rate at the weapon's
 speed, else the spell's proc chance. An enchantment rolls its `game_enchant_proc_rate`, else its
 own percent, else one proc per minute. The roll fires a Triggered Cast that rolls no further Chance
@@ -620,6 +621,13 @@ roll runs once per target, and a missed target takes none of the spell's effects
 misses; a magic spell is resisted outright. A Weapon Strike rolls the physical attack table, so its
 target can also dodge or parry it.
 _Avoid_: spell miss flag, resist flag
+
+**Attack Table**:
+The one roll that decides a weapon attack's outcome: miss, dodge, parry, glancing, block, crit,
+crushing or hit. White swings, queued strikes, Weapon Strikes and ranged attacks share it; the
+attack type and the delivered Spell's facts select which bands apply. A ranged attack rolls only
+miss and crit. Damage stays with the caller. See `module/src/combat/attack_table.rs`.
+_Avoid_: combat table, swing table
 
 **Weapon Strike**:
 A spell effect that deals the caster's weapon damage plus the spell's flat bonus, scaled by its
@@ -651,6 +659,11 @@ A bounded sequence of waypoints retained for one movement. The Module advances a
 geometry and duration it sends to the client, so crossing a waypoint needs no new decision. A
 changed destination or a failed movement Gate can replace or stop the path from the point the
 client renders at that moment.
+
+**Cast Request**:
+One cast as its caller asked for it: caster, Spell, level, target, client initiation, ground point,
+item target and cooldown category. A timed cast keeps it in its `game_pending_cast` row until it
+completes. See `module/src/spell/cast/resolve.rs`.
 
 **Cast Handle**:
 The scheduled identity, spell, target, and current due time of one timed cast. Repeated bot requests
@@ -901,7 +914,7 @@ The five tabard design values of a Guild. Only the Guild Leader saves one, for a
 
 **Guild Invite**:
 A pending offer for one Character to join one Guild. It expires after a fixed time. See
-`module/src/gc.rs`.
+`module/src/guild/membership.rs`.
 
 **Public Note**:
 A short note a Guild Rank with EPNOTE sets on a member. Every member sees it on the roster.
@@ -1162,7 +1175,7 @@ _Avoid_: map claim, zoned claim, sharded claim
 **Fixture-Reserved Identifier**:
 An identifier the seeded fixtures own, which no Package may claim under any operation in any Import
 Family. It lies in the project-wide fixture band or in one family's own fixture cluster. See
-`crates/lyracore-package-delta/src/ids.rs`.
+`crates/lyracore-package-delta/src/ids.rs`; `fixture_ids.rs` beside it names each one Core uses.
 _Avoid_: test id, reserved id (unqualified)
 
 ### Client content
@@ -1199,6 +1212,11 @@ A dated comparison of LyraCore and the Reference Server through the same wire sc
 separates rule differences from data differences using the comparator's classification tags.
 _Avoid_: compatibility audit
 
+**Data Gap**:
+A known gap in World Source translation or imported representation, identified by an `importer/`
+source path in the Feature Ledger. The scoreboard assigns it to `data_import` work and counts it
+separately from behavior gaps. This assignment does not classify wire differences or prove conformance.
+
 **Data-dependent field**:
 A packet field declared in a harness scenario with its opcode, field path and reason. The comparator
 classifies changed data values separately while preserving presence, shape and protocol checks.
@@ -1211,6 +1229,10 @@ _Avoid_: reference core
 A recording of a scenario on the Reference Server, with text replaced by SHA-256 digests, used as
 expected results for conformance checks.
 _Avoid_: golden file, snapshot (for recorded packets)
+
+**Roll Conformance**:
+A comparison of repeated gameplay outcomes with fixed probabilities derived from the Reference Server, used to
+check random-roll rates for a declared combat context.
 
 **Equivalence Rule**:
 A named rule with a reason that permits a specified difference between decoded results, such as
@@ -1280,6 +1302,7 @@ item for a set time, in the client's second enchantment slot. A new one replaces
 and Chance on Hit count beside the permanent enchantment. Poisons carry charges, and the last one
 spent removes it early. `game_temporary_enchantment` holds it, keyed by item, and its schedule
 removes it at expiry. The time runs while the item is unequipped or its owner is offline.
+A sale pauses the remaining duration and charges in buyback until restoration.
 _Avoid_: temp enchant, coating, imbue
 
 **Stat Kind**:
@@ -1325,11 +1348,11 @@ the names. [Migrating to the Native Host](docs/migrating-to-native-host.md) cove
 
 **Loot Roll Promotion Receipt**: retired. Realm-core's record that kept an old Loot Roll Promotion from recreating a roll. _Avoid_ in new text.
 
-**Realm-core**: retired. The Shard for Realm-wide state. A native Realm keeps that state in its one Shard. `module/src/realm_core.rs` keeps its tables and reducers. _Avoid_ in new text.
+**Realm-core**: retired. The Gateway-era Shard for Realm-wide state. A native Realm keeps that state in its one Shard or its Realm Shard. `module/src/realm_core.rs` keeps the Gateway Realm locator. _Avoid_ in new text.
 
 **Roster Revision Relay**: retired. The Gateway's push of a Realm-core roster to World Shard mirrors. `sync_group_mirror` remains. _Avoid_ in new text.
 
-**Transfer Intent**: retired. A row a Package wrote to ask the Gateway to Transfer a sessionless Character. Character Relocation replaced it. _Avoid_ in new text.
+**Transfer Intent**: retired. A row a Package wrote to ask the Gateway to Transfer a sessionless Character. Character Relocation replaced it. Only the `debug_bot_transfer` reducer still writes one, and the session-less Gates still refuse a Character that has one. _Avoid_ in new text.
 
 **World Session Token**: retired. The Realm-core ownership token a request carried across Shards. _Avoid_ in new text.
 

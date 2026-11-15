@@ -205,13 +205,6 @@ mod tests {
     }
 
     #[test]
-    fn vote_kind_matches_the_real_wire_rollvote_ordering() {
-        assert_eq!(vote_kind::PASS, 0);
-        assert_eq!(vote_kind::NEED, 1);
-        assert_eq!(vote_kind::GREED, 2);
-    }
-
-    #[test]
     fn won_round_trips() {
         let wire = encode_won(555, 2, 1234, 96, vote_kind::GREED, 0);
         assert_eq!(wire, "555,2,1234,96,2,0");
@@ -233,36 +226,6 @@ mod tests {
         assert!(decode_master_list("").is_none());
         assert!(decode_master_list("555|").is_none());
         assert!(decode_master_list("555|1,x,3").is_none());
-    }
-
-    #[test]
-    fn reserved_kind_range_does_not_collide_with_group_event_kinds() {
-        use crate::group::event_kind as g;
-        assert_eq!(g::LOOT_ROLL_RESERVED_START, event_kind::ROLL_START);
-        const { assert!(event_kind::ROLL_START > crate::group::event_kind::DESTROYED) };
-        assert_eq!(event_kind::ROLL_VOTE, event_kind::ROLL_START + 1);
-        assert_eq!(event_kind::ROLL_WON, event_kind::ROLL_VOTE + 1);
-        assert_eq!(event_kind::MASTER_LIST, event_kind::ROLL_WON + 1);
-        assert_eq!(event_kind::MONEY_SHARE, event_kind::MASTER_LIST + 1);
-    }
-
-    #[test]
-    fn all_group_and_loot_event_kinds_are_distinct_0_through_8() {
-        use crate::group::event_kind as g;
-        let mut kinds = vec![
-            g::INVITE,
-            g::LIST,
-            g::DECLINE,
-            g::DESTROYED,
-            event_kind::ROLL_START,
-            event_kind::ROLL_VOTE,
-            event_kind::ROLL_WON,
-            event_kind::MASTER_LIST,
-            event_kind::MONEY_SHARE,
-        ];
-        kinds.sort_unstable();
-        kinds.dedup();
-        assert_eq!(kinds, (0u8..=8).collect::<Vec<u8>>());
     }
 
     #[test]

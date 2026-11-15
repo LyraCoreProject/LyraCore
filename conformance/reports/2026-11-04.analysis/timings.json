@@ -1,0 +1,384 @@
+{
+  "started_at": "2026-11-04T18:10:35Z",
+  "finished_at": "2026-11-04T19:41:47Z",
+  "exit_status": 0,
+  "measurements": [
+    {
+      "phase": "build",
+      "seconds": 90.37
+    },
+    {
+      "phase": "Native Host build",
+      "seconds": 709.08
+    },
+    {
+      "phase": "deployment Module build",
+      "seconds": 126.51
+    },
+    {
+      "phase": "Module schema extraction",
+      "seconds": 8.82
+    },
+    {
+      "phase": "Module schema fingerprint",
+      "seconds": 844.59
+    },
+    {
+      "phase": "client data fingerprint",
+      "seconds": 13.82
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 118.91
+    },
+    {
+      "phase": "import",
+      "seconds": 2515.54
+    },
+    {
+      "phase": "imported world snapshot",
+      "seconds": 35.01
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 28.55
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "catalogue fixture content",
+      "seconds": 124.97
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 63.33
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 64.17
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "bank_slot_purchase Realm run",
+      "seconds": 2.55
+    },
+    {
+      "phase": "bank_slot_purchase Reference Server run",
+      "seconds": 19.47
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 30.02
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 59.51
+    },
+    {
+      "phase": "bank_slot_purchase__observer Realm run",
+      "seconds": 2.64
+    },
+    {
+      "phase": "bank_slot_purchase__observer Reference Server run",
+      "seconds": 26.12
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 31.4
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 62.07
+    },
+    {
+      "phase": "bank_slot_purchase__spawn_beside_viewer Realm run",
+      "seconds": 2.65
+    },
+    {
+      "phase": "bank_slot_purchase__spawn_beside_viewer Reference Server run",
+      "seconds": 26.02
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 29.54
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 57.13
+    },
+    {
+      "phase": "connection_identity Realm run",
+      "seconds": 1.79
+    },
+    {
+      "phase": "connection_identity Reference Server run",
+      "seconds": 9.46
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 29.62
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 57.74
+    },
+    {
+      "phase": "quest_log Realm run",
+      "seconds": 3.85
+    },
+    {
+      "phase": "quest_log Reference Server run",
+      "seconds": 15.59
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 31.66
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 61.12
+    },
+    {
+      "phase": "quest_offers Realm run",
+      "seconds": 3.93
+    },
+    {
+      "phase": "quest_offers Reference Server run",
+      "seconds": 16.3
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 30.61
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 55.2
+    },
+    {
+      "phase": "taxi_single_hop Realm run",
+      "seconds": 82.28
+    },
+    {
+      "phase": "taxi_single_hop Reference Server run",
+      "seconds": 111.17
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 31.23
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 58.43
+    },
+    {
+      "phase": "taxi_single_hop__late_observer Realm run",
+      "seconds": 82.5
+    },
+    {
+      "phase": "taxi_single_hop__late_observer Reference Server run",
+      "seconds": 119.15
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 30.44
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 53.67
+    },
+    {
+      "phase": "taxi_single_hop__reconnect Realm run",
+      "seconds": 82.2
+    },
+    {
+      "phase": "taxi_single_hop__reconnect Reference Server run",
+      "seconds": 111.22
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 28.0
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 61.0
+    },
+    {
+      "phase": "two_character_visibility Realm run",
+      "seconds": 4.68
+    },
+    {
+      "phase": "two_character_visibility Reference Server run",
+      "seconds": 19.1
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 31.92
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 54.59
+    },
+    {
+      "phase": "two_character_visibility__opposite_faction Realm run",
+      "seconds": 4.66
+    },
+    {
+      "phase": "two_character_visibility__opposite_faction Reference Server run",
+      "seconds": 19.95
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 30.94
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 54.33
+    },
+    {
+      "phase": "vendor_transactions Realm run",
+      "seconds": 5.89
+    },
+    {
+      "phase": "vendor_transactions Reference Server run",
+      "seconds": 26.51
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 29.42
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 55.12
+    },
+    {
+      "phase": "vendor_offers Realm run",
+      "seconds": 66.06
+    },
+    {
+      "phase": "vendor_offers Reference Server run",
+      "seconds": 84.79
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 29.56
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 56.45
+    },
+    {
+      "phase": "quest_completion Realm run",
+      "seconds": 3.5
+    },
+    {
+      "phase": "quest_completion Reference Server run",
+      "seconds": 20.09
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 28.44
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 59.39
+    },
+    {
+      "phase": "quest_reward Realm run",
+      "seconds": 4.4
+    },
+    {
+      "phase": "quest_reward Reference Server run",
+      "seconds": 23.23
+    },
+    {
+      "phase": "Realm start",
+      "seconds": 29.04
+    },
+    {
+      "phase": "import",
+      "seconds": 0.0
+    },
+    {
+      "phase": "Reference Server start",
+      "seconds": 56.49
+    },
+    {
+      "phase": "cast_and_interrupt Realm run",
+      "seconds": 6.34
+    },
+    {
+      "phase": "cast_and_interrupt Reference Server run",
+      "seconds": 20.12
+    },
+    {
+      "phase": "report",
+      "seconds": 11.17
+    },
+    {
+      "phase": "total audit",
+      "seconds": 5471.73
+    }
+  ],
+  "note": "Nested build timers, concurrent startup and concurrent captures overlap; these measurements must not be added."
+}

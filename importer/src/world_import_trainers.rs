@@ -175,7 +175,7 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
     let findings = findings.into_iter().map(|(code, keys)| serde_json::json!({"code":code,"classification":"unsupported","occurrences":keys.len()})).collect::<Vec<_>>();
     Ok(DumpPlan {
         stmts,
-        stamps: vec![("trainers", rows.len() as u64)],
+        stamps: vec![(lyracore_package_delta::TRAINER_FAMILY, rows.len() as u64)],
         world_source_manifest: Some(serde_json::to_string_pretty(
             &serde_json::json!({"format_version":1,"source":"vmangos","family":"trainers","patch":crate::source_selection::PATCH,"client_build":crate::source_selection::CLIENT_BUILD,"findings":findings}),
         )?),
@@ -317,17 +317,14 @@ mod tests {
             },
         ])
         .unwrap();
-        let args = crate::parse_args_from([
+        let args = crate::cli::world_import_args([
             "--dump",
             "fixture.sqlite",
             "--family",
             "trainers",
             "--world-profile",
             "full-world",
-        ])
-        .unwrap()
-        .world_import_args()
-        .unwrap();
+        ]);
         let plan = plan(&source, &args).unwrap();
         assert_eq!(plan.stamps, [("trainers", 3)]);
         assert_eq!(plan.stmts[1], "INSERT INTO game_trainer_spell (id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap) VALUES (1,100,700,30,10,0,75),(2,100,701,40,15,186,150),(3,101,702,5,20,0,75)");

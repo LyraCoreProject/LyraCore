@@ -8,7 +8,7 @@ use lyracore_protocol::{
 use lyracore_shared::{faction::same_team, mail as rules};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::{game_native_player, Rollback};
+use super::{Rollback, Unhandled};
 use crate::{
     game_gameobject, game_gameobject_template, game_item_instance, game_item_template,
     mail::{self as core, game_mail, MailRefusal},
@@ -21,9 +21,8 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
-    let actor = super::actor(ctx, guid)?;
-    let mailbox = |target| at_mailbox(ctx, &actor, target);
+) -> Result<(), Unhandled> {
+    let actor = || super::actor(ctx, guid);
     let run = |result: Result<(), Refusal>, reply: &dyn Fn(bool) -> SMSG_SEND_MAIL_RESULT| {
         result.map_err(|cause| Rollback::reply(response(reply(false)), cause))?;
         Ok::<_, Rollback>(response(reply(true)))
@@ -31,7 +30,7 @@ pub(super) fn receive(
     use ClientOpcodeMessage as C;
     let packet = match message {
         C::CMSG_GET_MAIL_LIST(request) => {
-            mailbox(request.mailbox.guid())?;
+            at_mailbox(ctx, &actor()?, request.mailbox.guid())?;
             let mails = ctx
                 .db
                 .game_mail()
@@ -42,47 +41,46 @@ pub(super) fn receive(
                 .collect::<Vec<_>>();
             ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(Box::new(codec::build_mail_list(
                 &mails,
-                crate::time::now(ctx)
-                    .to_micros_since_unix_epoch()
-                    .div_euclid(1_000_000),
+                crate::time::now_secs(ctx) as i64,
             )))
         }
-        C::MSG_QUERY_NEXT_MAIL_TIME => ServerOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME(
-            codec::build_next_mail_time(core::has_unread(ctx, guid)),
-        ),
-        C::CMSG_ITEM_TEXT_QUERY(request) => ServerOpcodeMessage::SMSG_ITEM_TEXT_QUERY_RESPONSE(
-            Box::new(codec::build_item_text_response(
-                request.item_text_id,
-                item_text(ctx, guid, request.item_text_id, request.mail_id),
-            )),
-        ),
+        C::MSG_QUERY_NEXT_MAIL_TIME => {
+            actor()?;
+            ServerOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME(codec::build_next_mail_time(
+                core::has_unread(ctx, guid),
+            ))
+        }
+        C::CMSG_ITEM_TEXT_QUERY(request) => {
+            actor()?;
+            ServerOpcodeMessage::SMSG_ITEM_TEXT_QUERY_RESPONSE(Box::new(
+                codec::build_item_text_response(
+                    request.item_text_id,
+                    item_text(ctx, guid, request.item_text_id, request.mail_id),
+                ),
+            ))
+        }
         C::CMSG_MAIL_MARK_AS_READ(request) => {
-            mailbox(request.mailbox.guid())?;
+            at_mailbox(ctx, &actor()?, request.mailbox.guid())?;
             core::apply_mark_read(ctx, guid, request.mail_id.into())?;
             return Ok(());
         }
         C::CMSG_MAIL_DELETE(request) => run(
-            mailbox(request.mailbox_id.guid())
+            at_mailbox(ctx, &actor()?, request.mailbox_id.guid())
                 .and_then(|()| core::apply_delete(ctx, guid, request.mail_id.into())),
             &|ok| codec::build_mail_delete_result(request.mail_id, ok),
         )?,
-        C::CMSG_MAIL_RETURN_TO_SENDER(request) => {
-            let same_account = core::delivered_mail(ctx, request.mail_id.into())
-                .is_some_and(|mail| same_account(ctx, guid, mail.sender_guid));
-            run(
-                mailbox(request.mailbox_id.guid()).and_then(|()| {
-                    core::apply_return(ctx, guid, request.mail_id.into(), same_account)
-                }),
-                &|ok| codec::build_mail_return_result(request.mail_id, ok),
-            )?
-        }
+        C::CMSG_MAIL_RETURN_TO_SENDER(request) => run(
+            at_mailbox(ctx, &actor()?, request.mailbox_id.guid())
+                .and_then(|()| core::apply_return(ctx, guid, request.mail_id.into())),
+            &|ok| codec::build_mail_return_result(request.mail_id, ok),
+        )?,
         C::CMSG_MAIL_TAKE_MONEY(request) => run(
-            mailbox(request.mailbox.guid())
+            at_mailbox(ctx, &actor()?, request.mailbox.guid())
                 .and_then(|()| core::apply_take_money(ctx, guid, request.mail_id.into())),
             &|ok| codec::build_mail_take_money_result(request.mail_id, ok),
         )?,
         C::CMSG_MAIL_TAKE_ITEM(request) => {
-            let taken = mailbox(request.mailbox.guid())
+            let taken = at_mailbox(ctx, &actor()?, request.mailbox.guid())
                 .map_err(MailRefusal::from)
                 .and_then(|()| {
                     let mail = core::delivered_mail(ctx, request.mail_id.into())
@@ -114,7 +112,7 @@ pub(super) fn receive(
             ))
         }
         C::CMSG_SEND_MAIL(request) => {
-            mailbox(request.mailbox.guid())?;
+            at_mailbox(ctx, &actor()?, request.mailbox.guid())?;
             send_letter(ctx, guid, *request).map_err(|refusal| {
                 Rollback::reply(
                     response(codec::build_mail_send_result(refusal)),
@@ -124,7 +122,7 @@ pub(super) fn receive(
             response(codec::build_mail_send_result(MailResult::Ok))
         }
         C::CMSG_MAIL_CREATE_TEXT_ITEM(request) => {
-            mailbox(request.mailbox.guid())?;
+            at_mailbox(ctx, &actor()?, request.mailbox.guid())?;
             crate::mail_text::apply_copy_letter(ctx, guid, request.mail_id.into()).map_err(
                 |refusal| {
                     let error = match refusal {
@@ -149,7 +147,7 @@ pub(super) fn receive(
                 Ok(()),
             ))
         }
-        _ => return Err("opcode is not a mail request".into()),
+        other => return Err(Unhandled::Declined(other)),
     };
     Ok(super::send(ctx, connection, packet, false)?)
 }
@@ -180,29 +178,13 @@ fn at_mailbox(
                 && (mailbox.x - actor.x).powi(2)
                     + (mailbox.y - actor.y).powi(2)
                     + (mailbox.z - actor.z).powi(2)
-                    <= rules::MAILBOX_RANGE_SQ
+                    <= crate::npc_interaction::INTERACTION_RANGE_SQ
         });
     if in_range {
         Ok(())
     } else {
         Err(rules::not_at_mailbox(mailbox_guid).into())
     }
-}
-
-fn same_account(ctx: &ReducerContext, first: u64, second: u64) -> bool {
-    fn account(ctx: &ReducerContext, guid: u64) -> Option<u64> {
-        use super::directory::game_character_profile;
-        crate::helpers::character_by_guid(ctx, guid)
-            .map(|character| character.account_id)
-            .or_else(|| {
-                ctx.db
-                    .game_character_profile()
-                    .guid()
-                    .find(guid)
-                    .map(|profile| profile.account_id)
-            })
-    }
-    matches!((account(ctx, first), account(ctx, second)), (Some(a), Some(b)) if a != 0 && a == b)
 }
 
 fn send_letter(
@@ -213,18 +195,18 @@ fn send_letter(
     let sender =
         crate::helpers::character_by_guid(ctx, sender_guid).ok_or(MailResult::ErrInternalError)?;
     use super::directory::game_character_profile;
-    let candidates: Vec<(u64, u64, u8)> = if crate::peer::realm_shard(ctx).is_some() {
+    let candidates: Vec<(u64, u8)> = if crate::peer::realm_shard(ctx).is_some() {
         ctx.db
             .game_character_profile()
             .iter()
             .filter(|profile| {
                 !profile.deleted && profile.name.eq_ignore_ascii_case(&request.receiver)
             })
-            .map(|profile| (profile.guid, profile.account_id, profile.race))
+            .map(|profile| (profile.guid, profile.race))
             .collect()
     } else {
         crate::helpers::characters_by_name(ctx, &request.receiver)
-            .map(|character| (character.guid, character.account_id, character.race))
+            .map(|character| (character.guid, character.race))
             .collect()
     };
     if candidates.is_empty() {
@@ -238,7 +220,7 @@ fn send_letter(
     }
     let mut reachable = candidates
         .iter()
-        .filter(|character| same_team(sender.race, character.2));
+        .filter(|character| same_team(sender.race, character.1));
     let recipient = reachable.next().ok_or(MailResult::ErrNotYourTeam)?;
     if reachable.next().is_some() {
         return Err(MailResult::ErrRecipientNotFound);
@@ -246,13 +228,14 @@ fn send_letter(
     core::apply_send(
         ctx,
         sender_guid,
-        recipient.0,
-        request.subject,
-        request.body,
-        request.money.as_int(),
-        rules::cod_at_send(request.cash_on_delivery_amount, request.item.guid() != 0),
-        request.item.guid(),
-        sender.account_id != 0 && sender.account_id == recipient.1,
+        core::OutgoingMail {
+            recipient_guid: recipient.0,
+            subject: request.subject,
+            body: request.body,
+            money: request.money.as_int(),
+            cod: rules::cod_at_send(request.cash_on_delivery_amount, request.item.guid() != 0),
+            item_guid: request.item.guid(),
+        },
     )
     .map_err(|refusal| match refusal {
         MailRefusal::NotEnoughMoney => MailResult::ErrNotEnoughMoney,
@@ -327,18 +310,10 @@ fn view(ctx: &ReducerContext, mail: core::Mail) -> codec::MailView {
 }
 
 pub(crate) fn arrived(ctx: &ReducerContext, recipient_guid: u64) {
-    if let Some(recipient) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(recipient_guid)
-    {
-        super::send(
-            ctx,
-            recipient.connection_id,
-            ServerOpcodeMessage::SMSG_RECEIVED_MAIL(codec::build_received_mail()),
-            false,
-        )
-        .expect("mail arrival fits a world frame");
-    }
+    super::send_to_character(
+        ctx,
+        recipient_guid,
+        ServerOpcodeMessage::SMSG_RECEIVED_MAIL(codec::build_received_mail()),
+        super::EncodeFailure::Panic,
+    );
 }

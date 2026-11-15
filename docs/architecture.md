@@ -6,9 +6,10 @@ rules are in [danger zones](./danger-zones.md).
 
 ## Native host migration
 
-A Realm runs in one Shard, the SpacetimeDB database `lyracore`. Accounts, Characters, maps,
-Instances and Realm-wide state share one Module. Map and Instance identifiers are gameplay
-partitions inside that Shard. Request handlers and Relays run in the Module.
+A Realm runs in one Shard, the SpacetimeDB database `lyracore`, unless the Operator splits it into
+a Realm Shard and World Shards as [described below](#durable-state-and-extension-points).
+Every Shard runs the same Module. Map and Instance identifiers are gameplay partitions inside a
+Shard. Request handlers and Relays run in the Module.
 
 The [native Module](../module/src/native/mod.rs) owns SRP proof verification, logon limits,
 Sessions, world authentication, connection state, request dispatch and response packets. The Host
@@ -33,7 +34,8 @@ A World Session with a Motion Permit has its movement relayed by the Host
 Character moves freely on foot and withdraws it in the transaction that roots, kills, seats on a
 taxi or teleports the Character, or that sees a Transport flag. The Host checks that a movement
 message is well formed, on foot and newer than the last one, then sends it straight to the mover's
-AOI Grant holders. It forwards all movement except heartbeats, and one heartbeat sample a second or
+AOI Grant holders, sending heartbeats to observers beyond 40 and 80 yards only every second and
+fourth time. It forwards all movement except heartbeats, and one heartbeat sample a second or
 after 4 yards, to `native_world_motion`, which applies it without a Module relay. Without a permit,
 or when a check fails, movement goes to `native_world_receive` as before. The shared opcode lists
 are in `native-host/src/motion_opcodes.rs`.
@@ -427,7 +429,9 @@ Shard. Pending reservations also count toward the Account limit. A successful cr
 Character profile binds the reservation to its guid. A confirmed World refusal releases it;
 a timeout, connection close or Host restart does not. Confirmed deletion releases the name, and
 Transfer keeps it reserved. World Shards accept creation only from their Realm Shard, so direct
-Operator and Package creation on a World Shard cannot bypass reservation. A single-Shard Realm
+Operator and synchronous Package creation on a World Shard cannot bypass reservation. Asynchronous
+[Package creation](package-api.md#asynchronous-package-character-creation) requests a Realm reservation
+and Package-owned Account before the World creates its sessionless Character. A single-Shard Realm
 keeps synchronous creation and checks names without case distinctions.
 
 Each World Shard reports a complete Character profile snapshot before new creation opens. This

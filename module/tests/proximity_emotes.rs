@@ -38,12 +38,7 @@ fn an_e_line_is_one_universal_row_and_a_dead_or_creature_only_type_is_refused() 
     let updates = standalone.capture_updates(CHAT_ROWS, 1, || {
         standalone.assert_call(
             "gw_send_chat",
-            &[
-                &actor(&CHARACTER.to_string()),
-                "3",
-                "7",
-                "\"waves wildly.\"",
-            ],
+            &[&actor(CHARACTER), "3", "7", "\"waves wildly.\""],
         );
     });
     let rows = inserted_rows(&updates[0]);
@@ -58,7 +53,7 @@ fn an_e_line_is_one_universal_row_and_a_dead_or_creature_only_type_is_refused() 
 
     refused(
         &standalone,
-        &[&actor(&CHARACTER.to_string()), "2", "0", "\"dances.\""],
+        &[&actor(CHARACTER), "2", "0", "\"dances.\""],
         "unsupported chat type",
     );
 
@@ -67,7 +62,7 @@ fn an_e_line_is_one_universal_row_and_a_dead_or_creature_only_type_is_refused() 
     ));
     refused(
         &standalone,
-        &[&actor(&CHARACTER.to_string()), "3", "0", "\"waves again.\""],
+        &[&actor(CHARACTER), "3", "0", "\"waves again.\""],
         "dead players cannot speak",
     );
 }
@@ -84,17 +79,17 @@ fn a_say_or_yell_line_needs_a_language_the_speakers_race_knows() {
     let updates = standalone.capture_updates(CHAT_ROWS, 1, || {
         refused(
             &standalone,
-            &[&actor(&CHARACTER.to_string()), "0", "1", "\"zug zug\""],
+            &[&actor(CHARACTER), "0", "1", "\"zug zug\""],
             "chat:unknown_language",
         );
         refused(
             &standalone,
-            &[&actor(&CHARACTER.to_string()), "1", "1", "\"ZUG ZUG\""],
+            &[&actor(CHARACTER), "1", "1", "\"ZUG ZUG\""],
             "chat:unknown_language",
         );
         standalone.assert_call(
             "gw_send_chat",
-            &[&actor(&CHARACTER.to_string()), "0", "7", "\"well met\""],
+            &[&actor(CHARACTER), "0", "7", "\"well met\""],
         );
     });
     let rows = inserted_rows(&updates[0]);

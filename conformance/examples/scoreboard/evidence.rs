@@ -17,11 +17,95 @@ pub use rendering::markdown;
 mod property_violation;
 use property_violation::Violation;
 
-pub fn harness_revision() -> &'static str {
-    include_str!("../../../.wire-harness-rev")
-        .split_whitespace()
-        .last()
-        .expect("harness pin")
+fn roll_difference(scenario: &wire_client::scenario::Scenario, difference: &Difference) -> bool {
+    use wire_client::trace::RecordedField;
+    if scenario.spell_rolls.is_some() {
+        return spell_difference(scenario, difference);
+    }
+    let Some(spec) = &scenario.rolls else {
+        return false;
+    };
+    if difference.classification != DifferenceClass::Rule
+        || difference.character.is_some()
+        || difference.stream != Some(Stream::Broadcast("swings".into()))
+        || difference.opcode != Some(0x14a)
+        || difference.packet_index.is_some()
+    {
+        return false;
+    }
+    if difference.rule == "white_melee_sample" {
+        return difference.checkpoint == "roll_sample"
+            && difference.field_path == ["outcomes"]
+            && difference.expected
+                == Some(RecordedField::Unsigned(u64::from(spec.samples_per_level)))
+            && difference.actual.is_none();
+    }
+    if difference.rule != "white_melee_distribution"
+        || difference.field_path.len() != 2
+        || difference.field_path[0] != "outcomes"
+    {
+        return false;
+    }
+    let Some(category) = wire_client::rolls::CATEGORIES
+        .iter()
+        .position(|category| *category == difference.field_path[1])
+    else {
+        return false;
+    };
+    spec.target_levels.iter().enumerate().any(|(index, level)| {
+        ["public_1", "public_2", "merge"].iter().any(|slot| difference.checkpoint == format!("level_{level}_{slot}"))
+            && difference.expected == Some(RecordedField::Unsigned(u64::from(spec.expected_basis_points[index][category]) * u64::from(spec.samples_per_level) / 10_000))
+            && matches!(difference.actual, Some(RecordedField::Unsigned(count)) if count <= u64::from(spec.samples_per_level))
+    })
+}
+
+fn spell_difference(scenario: &wire_client::scenario::Scenario, difference: &Difference) -> bool {
+    use wire_client::trace::RecordedField;
+
+    let Some(spec) = &scenario.spell_rolls else {
+        return false;
+    };
+    if difference.classification != DifferenceClass::Rule
+        || difference.character.is_some()
+        || difference.stream != Some(Stream::Broadcast("casts".into()))
+        || difference.opcode != Some(0x250)
+        || difference.packet_index.is_some()
+    {
+        return false;
+    }
+    let level_index = spec.target_levels.iter().position(|level| {
+        ["public_1", "public_2", "merge"]
+            .iter()
+            .any(|slot| difference.checkpoint == format!("level_{level}_{slot}"))
+    });
+    if difference.rule == "spell_sample" {
+        return difference.field_path == ["outcomes"]
+            && difference.expected
+                == Some(RecordedField::Unsigned(u64::from(spec.samples_per_level)))
+            && ((difference.checkpoint == "roll_sample" && difference.actual.is_none())
+                || (level_index.is_some()
+                    && matches!(difference.actual, Some(RecordedField::Unsigned(count)) if count < u64::from(spec.samples_per_level))));
+    }
+    if difference.rule != "spell_distribution"
+        || difference.field_path.len() != 2
+        || difference.field_path[0] != "outcomes"
+    {
+        return false;
+    }
+    let Some(level) = level_index else {
+        return false;
+    };
+    let Some(category) = wire_client::spell_rolls::CATEGORIES
+        .iter()
+        .position(|category| *category == difference.field_path[1])
+    else {
+        return false;
+    };
+    let probability = spec.expected[level][category];
+    let expected = u128::from(probability.numerator) * u128::from(spec.samples_per_level)
+        / u128::from(probability.denominator);
+    difference.expected == Some(RecordedField::Unsigned(expected as u64))
+        && matches!(difference.actual, Some(RecordedField::Unsigned(count)) if count <= u64::from(spec.samples_per_level))
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -302,7 +386,7 @@ impl Report {
                 behavior.scenarios.contains(&result.id),
                 "result scenario is not listed by its Behavior"
             );
-            if self.harness_revision == harness_revision() {
+            if self.harness_revision == lyracore_conformance::harness_pin().revision {
                 let golden = wire_client::catalogue::get(&result.id)?;
                 if result.scenario_sha256 == golden.trace().header.scenario_sha256 {
                     for comparison in
@@ -316,6 +400,7 @@ impl Report {
                                     .steps
                                     .iter()
                                     .any(|s| s.id == difference.checkpoint)
+                                    || roll_difference(golden.scenario(), difference)
                                     || (difference.checkpoint.is_empty()
                                         && difference.classification == DifferenceClass::Rule
                                         && difference.stream.is_none()
@@ -369,7 +454,7 @@ impl Report {
             std::fs::read_to_string(path.with_extension("md"))? == markdown(self, date)?,
             "Markdown report differs from JSON rendering"
         );
-        if self.harness_revision == harness_revision() {
+        if self.harness_revision == lyracore_conformance::harness_pin().revision {
             let ids: BTreeSet<_> = self.scenarios.iter().map(|s| s.id.as_str()).collect();
             ensure!(
                 ids == wire_client::catalogue::ENTRIES
@@ -390,7 +475,7 @@ impl Report {
                 Sha256Digest::of(&bytes) == capture.sha256,
                 "candidate SHA-256 differs from the audit run"
             );
-            if self.harness_revision != harness_revision() {
+            if self.harness_revision != lyracore_conformance::harness_pin().revision {
                 continue;
             }
             let golden = wire_client::catalogue::get(&result.id)?;
@@ -480,7 +565,7 @@ impl Report {
         };
         let previous_path = history.join(previous_name);
         let previous = Report::load_structure(&previous_path, "conformance_audit")?;
-        if previous.harness_revision == harness_revision() {
+        if previous.harness_revision == lyracore_conformance::harness_pin().revision {
             previous.verify_capture(&previous_path)?;
         }
         for (behavior, result) in &audit.behaviors {

@@ -139,6 +139,43 @@ fn model_attributes(dump: &impl TableRows) -> Result<BTreeMap<u32, (u8, u32, f32
         .collect()
 }
 
+fn template_findings(row: &Row, entry: u64, restored: u32, findings: &mut Findings) -> Result<()> {
+    let extra = row.number::<u32>("flags_extra")?;
+    if !row
+        .optional_text("script_name")?
+        .unwrap_or_default()
+        .is_empty()
+    {
+        finding(findings, "creatures.script", entry);
+    }
+    if !row.optional_text("auras")?.unwrap_or_default().is_empty() {
+        finding(findings, "creatures.auras", entry);
+    }
+    if row.number::<u32>("static_flags1")? & 0x60 & !restored != 0 {
+        finding(findings, "creatures.scripted-immunity", entry);
+    }
+    if row.number::<u32>("static_flags1")? & !0x51e1_4270 != 0
+        || row.number::<u32>("static_flags2")? & !8 != 0
+    {
+        finding(findings, "creatures.static-behavior", entry);
+    }
+    if extra & !0x14 != 0 {
+        finding(findings, "creatures.template-behavior", entry);
+    }
+    for name in [
+        "spawn_spell_id",
+        "totem_spell_id",
+        "immunity_flags",
+        "mechanic_immune_mask",
+        "school_immune_mask",
+    ] {
+        if row.number::<u32>(name)? != 0 {
+            finding(findings, "creatures.template-behavior", entry);
+        }
+    }
+    Ok(())
+}
+
 fn templates(
     dump: &impl TableRows,
     entries: &HashSet<u64>,
@@ -161,6 +198,7 @@ fn templates(
     let mut templates = Vec::new();
     let mut levels = Vec::new();
     let mut displays = Vec::new();
+    let mut defenses = Vec::new();
     for row in dump.rows("creature_template")?.iter() {
         let entry: u64 = row.number("entry")?;
         if u32::try_from(entry).is_ok_and(lyracore_package_delta::ids::is_operator_template_id) {
@@ -231,6 +269,11 @@ fn templates(
         let max_health = stats.last().unwrap().0;
         let restored = immunities.get(&entry).copied().unwrap_or(0);
         let (unit, kind) = flags(row, restored)?;
+        let extra = row.number::<u32>("flags_extra")?;
+        let no_parry = extra & 4 != 0;
+        let no_block = extra & 16 != 0;
+        let no_defense = row.number::<u32>("static_flags1")? & 0x4000 != 0;
+        defenses.push(format!("({entry},{no_parry},{no_block},{no_defense})"));
         let mut display = 0;
         let mut scale = 1.0;
         let mut display_rows = Vec::new();
@@ -304,39 +347,11 @@ fn templates(
         .collect::<Result<Vec<_>>>()?;
         templates.push(format!("({entry},{},{},{display},{min},{health},{},{},{unit},{},{},{kind},{},{scale},{},{},{},{max},{max_health},0,{low},{high},{armor},{},{},{},{})",
             sql_text(row.text("name")?), sql_text(row.optional_text("subname")?.unwrap_or_default()), fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6], fields[7], fields[8], fields[9], fields[10], fields[11]));
-        if !row
-            .optional_text("script_name")?
-            .unwrap_or_default()
-            .is_empty()
-        {
-            finding(findings, "creatures.script", entry);
-        }
-        if !row.optional_text("auras")?.unwrap_or_default().is_empty() {
-            finding(findings, "creatures.auras", entry);
-        }
-        if row.number::<u32>("static_flags1")? & 0x60 & !restored != 0 {
-            finding(findings, "creatures.scripted-immunity", entry);
-        }
-        if row.number::<u32>("static_flags1")? & !0x51e1_0270 != 0
-            || row.number::<u32>("static_flags2")? & !8 != 0
-        {
-            finding(findings, "creatures.static-behavior", entry);
-        }
-        for name in [
-            "spawn_spell_id",
-            "totem_spell_id",
-            "immunity_flags",
-            "mechanic_immune_mask",
-            "school_immune_mask",
-            "flags_extra",
-        ] {
-            if row.number::<u32>(name)? != 0 {
-                finding(findings, "creatures.template-behavior", entry);
-            }
-        }
+        template_findings(row, entry, restored, findings)?;
     }
     for (table, key, columns, rows) in [
         ("game_creature_template", "entry", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class", templates),
+        ("game_creature_defense", "entry", "entry,no_parry,no_block,no_defense", defenses),
         ("game_creature_level_stats", "id", "id,entry,level,health,damage_min,damage_max,armor", levels),
         ("game_creature_display", "id", "id,entry,display_id,scale,weight,gender,bounding_radius", displays),
     ] {
@@ -667,28 +682,23 @@ mod tests {
             CREATE TABLE creature_display_info_addon (display_id INTEGER, build INTEGER, gender INTEGER, display_id_other_gender INTEGER, bounding_radius REAL DEFAULT 0.389, PRIMARY KEY(display_id,build));
             CREATE TABLE creature_classlevelstats (class INTEGER, level INTEGER, health REAL, melee_damage REAL, armor REAL);
             INSERT INTO creature_classlevelstats VALUES (1,10,100,20,50);")).unwrap();
-        WorldSource::Vmangos(connection)
+        WorldSource::fixture(connection)
     }
 
     #[test]
     fn vmangos_spawn_choices_and_dependencies_stop_at_the_first_zero() {
         let source = template_source();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch("CREATE TABLE creature (guid INTEGER, id INTEGER, id2 INTEGER, id3 INTEGER, id4 INTEGER, id5 INTEGER, spawn_flags INTEGER, map INTEGER, position_x REAL, position_y REAL, position_z REAL, patch_min INTEGER, patch_max INTEGER);
             INSERT INTO creature VALUES (1,5090042,0,5090043,0,0,0,0,1,2,3,0,10),(2,0,5090044,0,0,0,0,0,1,2,3,0,10);").unwrap();
-        let args = crate::parse_args_from([
+        let args = crate::cli::world_import_args([
             "--dump",
             "fixture.sqlite",
             "--map",
             "1",
             "--include-map",
             "0",
-        ])
-        .unwrap()
-        .world_import_args()
-        .unwrap();
+        ]);
         let entries = vmangos_creature_entries(&source, &args).unwrap();
         assert!(entries.contains(&5090042));
         assert!(!entries.contains(&5090043));
@@ -698,9 +708,7 @@ mod tests {
     #[test]
     fn zero_primary_entry_skips_the_spawn_and_reports_its_guid() {
         let source = template_source();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch("CREATE TABLE creature (guid INTEGER, id INTEGER, id2 INTEGER, id3 INTEGER, id4 INTEGER, id5 INTEGER, spawn_flags INTEGER, map INTEGER, patch_min INTEGER, patch_max INTEGER);
             INSERT INTO creature VALUES (42,0,5090042,0,0,0,0,0,0,10);").unwrap();
         for table in [
@@ -721,17 +729,14 @@ mod tests {
                 ))
                 .unwrap();
         }
-        let args = crate::parse_args_from([
+        let args = crate::cli::world_import_args([
             "--dump",
             "fixture.sqlite",
             "--family",
             "creatures",
             "--world-profile",
             "full-world",
-        ])
-        .unwrap()
-        .world_import_args()
-        .unwrap();
+        ]);
         let imported = plan(&source, &args).unwrap();
         assert_eq!(imported.spawn_row_count, 0);
         assert!(imported.spawn_batches.is_empty());
@@ -743,6 +748,31 @@ mod tests {
             .iter()
             .any(|finding| finding["code"] == "creatures.spawn-entry-zero"
                 && finding["source_ids"] == serde_json::json!(["42"])));
+    }
+
+    #[test]
+    fn creature_defense_flags_survive_import() {
+        let source = template_source();
+        let connection = source.fixture_connection();
+        connection
+            .execute(
+                "UPDATE creature_template SET flags_extra = 20, static_flags1 = 16384",
+                [],
+            )
+            .unwrap();
+        let mut statements = Vec::new();
+        templates(
+            &source,
+            &HashSet::from([5090042]),
+            &HashSet::new(),
+            None,
+            &mut statements,
+            &mut Findings::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        assert!(statements.iter().any(|sql| sql ==
+            "INSERT INTO game_creature_defense (entry,no_parry,no_block,no_defense) VALUES (5090042,true,true,true)"));
     }
 
     #[test]
@@ -787,7 +817,7 @@ mod tests {
             INSERT INTO creature_movement VALUES (1,1,0,10,20,30,0,0,0,0);
             CREATE TABLE creature_movement_template (entry INTEGER, point INTEGER, path_id INTEGER, position_x REAL, position_y REAL, position_z REAL, script_id INTEGER, waittime INTEGER, wander_distance REAL, orientation REAL);
             INSERT INTO creature_movement_template VALUES (10,1,0,40,50,60,0,0,0,0);").unwrap();
-        let source = crate::world_source::WorldSource::Vmangos(connection);
+        let source = crate::world_source::WorldSource::fixture(connection);
         for movement in [0, 1, 2, 3] {
             let spawns = [
                 (1, 10, 0.0, 0.0, 0.0, 0.0, movement, 60, 0),
@@ -886,9 +916,7 @@ mod tests {
     #[test]
     fn imported_creatures_cannot_use_the_operator_template_range() {
         let source = template_source();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection
             .execute_batch("UPDATE creature_template SET entry = 5200500")
             .unwrap();
@@ -911,9 +939,7 @@ mod tests {
     #[test]
     fn selected_model_gender_follows_the_display_and_build() {
         let source = template_source();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch("INSERT INTO creature_display_info_addon VALUES (100,4222,0,0,0.5),(100,5875,1,0,0.75),(100,6000,2,0,1.0);").unwrap();
         let mut statements = Vec::new();
         templates(

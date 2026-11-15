@@ -53,6 +53,13 @@ export const SPELL_COLUMNS: { readonly [K in SpellField]: Column } = {
   customFlags: { column: "custom_flags", type: "u32", defaultValue: 0 },
   minTargetLevel: { column: "min_target_level", type: "u32", defaultValue: 0 },
   singleTargetKey: { column: "single_target_key", type: "u64", defaultValue: "0" },
+  formMask: { column: "form_mask", type: "u32", defaultValue: 0 },
+  formExclude: { column: "form_exclude", type: "u32", defaultValue: 0 },
+  attributesEx2: { column: "attributes_ex_2", type: "u32", defaultValue: 0 },
+  visualId: { column: "visual_id", type: "u32", defaultValue: 0 },
+  durationIndex: { column: "duration_index", type: "u32", defaultValue: 0 },
+  category: { column: "category", type: "u32", defaultValue: 0 },
+  categoryCooldownMs: { column: "category_cooldown_ms", type: "u32", defaultValue: 0 },
 };
 
 export const SPELL_EFFECT_COLUMNS: {
@@ -74,6 +81,7 @@ export const SPELL_EFFECT_COLUMNS: {
   scriptId: { column: "script_id", type: "u32" },
   entersCombat: { column: "enters_combat", type: "bool" },
   bonusCoefficient: { column: "bonus_coefficient", type: "f32", defaultValue: -1 },
+  equipSupported: { column: "equip_supported", type: "bool", defaultValue: false },
 };
 
 export const SPELL_TABLE = "game_spell";

@@ -1,6 +1,13 @@
 //! Finalize, dirty_reset, then reset changed fields to exclude OBJECT_FIELD_TYPE from VALUES.
 
-use super::*;
+use super::item::ItemInstanceView;
+use super::update_mask;
+use lyracore_shared::packing::unpack4;
+use wow_world_messages::vanilla::{
+    ItemSlot, Object, Skill, SkillInfo, SkillInfoIndex, UpdateItem, UpdateMask, UpdatePlayer,
+    UpdateUnit, SMSG_UPDATE_AURA_DURATION, SMSG_UPDATE_OBJECT,
+};
+use wow_world_messages::Guid;
 
 pub(super) fn unit_values(guid: u64, apply: impl FnOnce(&mut UpdateUnit)) -> SMSG_UPDATE_OBJECT {
     let mut unit = UpdateUnit::builder().finalize();
@@ -92,16 +99,6 @@ pub fn build_explored_zones_values(guid: u64, word_idx: u16, word_value: u32) ->
     mask.set_u32(
         update_mask::idx::PLAYER_EXPLORED_ZONES_1 + word_idx,
         word_value,
-    );
-    build_values_update_raw(guid, &mask)
-}
-
-/// VALUES replaces the whole u32; preserve the CREATE byte while changing rest state.
-pub fn build_rest_state_values(guid: u64, player_bytes_2: u32) -> (u16, Vec<u8>) {
-    let mut mask = update_mask::UpdateMaskValues::new();
-    mask.set_u32(
-        update_mask::idx::PLAYER_BYTES_2,
-        super::entity::client_player_bytes_2(player_bytes_2),
     );
     build_values_update_raw(guid, &mask)
 }
@@ -266,13 +263,16 @@ pub struct SheetStatsValues {
     pub int_bonus: i32,
     pub spi_bonus: i32,
     pub attack_power: u32,
-    pub ap_mods: i32,
+    // Positive i16 in the low half, negative i16 in the high half.
+    pub ap_modifiers: u32,
+    pub ranged_ap_modifiers: u32,
     pub dmg_min: u32,
     pub dmg_max: u32,
     pub ranged_attack_power: u32,
-    pub ranged_dmg_min: u32,
-    pub ranged_dmg_max: u32,
+    pub ranged_dmg_min: f32,
+    pub ranged_dmg_max: f32,
     pub crit_pct: f32,
+    pub ranged_crit_pct: f32,
 }
 
 pub fn build_sheet_stats_values(guid: u64, s: &SheetStatsValues) -> SMSG_UPDATE_OBJECT {
@@ -293,15 +293,19 @@ pub fn build_sheet_stats_values(guid: u64, s: &SheetStatsValues) -> SMSG_UPDATE_
         p.set_player_field_negstat3(s.int_bonus.min(0));
         p.set_player_field_negstat4(s.spi_bonus.min(0));
         p.set_unit_attack_power(s.attack_power as i32);
-        // ATTACK_POWER_MODS packs unsigned positive and negative magnitudes into two u16 fields.
-        p.set_unit_attack_power_mods(s.ap_mods.max(0) as u16, (-s.ap_mods).max(0) as u16);
+        // gtker writes its first short argument into the high half.
+        p.set_unit_attack_power_mods((s.ap_modifiers >> 16) as u16, s.ap_modifiers as u16);
         p.set_unit_mindamage(s.dmg_min as f32);
         p.set_unit_maxdamage(s.dmg_max as f32);
         p.set_unit_ranged_attack_power(s.ranged_attack_power as i32);
-        p.set_unit_ranged_attack_power_mods(0, 0);
-        p.set_unit_minrangeddamage(s.ranged_dmg_min as f32);
-        p.set_unit_maxrangeddamage(s.ranged_dmg_max as f32);
+        p.set_unit_ranged_attack_power_mods(
+            (s.ranged_ap_modifiers >> 16) as u16,
+            s.ranged_ap_modifiers as u16,
+        );
+        p.set_unit_minrangeddamage(s.ranged_dmg_min);
+        p.set_unit_maxrangeddamage(s.ranged_dmg_max);
         p.set_player_crit_percentage(s.crit_pct);
+        p.set_player_ranged_crit_percentage(s.ranged_crit_pct);
     })
 }
 
@@ -320,6 +324,18 @@ pub fn build_resistance_values(guid: u64, total: [u32; 7]) -> SMSG_UPDATE_OBJECT
 pub fn build_coinage_values(guid: u64, money: u32) -> SMSG_UPDATE_OBJECT {
     player_values(guid, |player| {
         player.set_player_field_coinage(money as i32);
+    })
+}
+
+pub fn build_bank_purchase_values(
+    guid: u64,
+    money: u32,
+    player_bytes_2: u32,
+) -> SMSG_UPDATE_OBJECT {
+    let (a, b, c, d) = unpack4(super::entity::client_player_bytes_2(player_bytes_2));
+    player_values(guid, |fields| {
+        fields.set_player_field_coinage(money as i32);
+        fields.set_player_bytes_2(a, b, c, d);
     })
 }
 
@@ -441,87 +457,4 @@ pub fn build_level_values(guid: u64, level: u32) -> SMSG_UPDATE_OBJECT {
 }
 
 #[cfg(test)]
-mod lint_tests {
-    use super::*;
-    use wow_world_messages::vanilla::ServerMessage;
-
-    #[test]
-    fn every_values_builder_serializes_without_the_object_type_bit() {
-        let g = 0x9u64;
-        let msgs: Vec<(&str, SMSG_UPDATE_OBJECT)> = vec![
-            ("health", build_health_values(g, 41)),
-            (
-                "player_flags",
-                build_player_flags_values(g, Some(0x10), None),
-            ),
-            ("dynamic_flags", build_dynamic_flags_values(g, 1)),
-            ("unit_flags", build_unit_flags_values(g, 0x80000)),
-            (
-                "taxi_presentation",
-                build_taxi_presentation_values(g, 1147, 0x0010_0000),
-            ),
-            ("mount_display", build_mount_display_values(g, 1147)),
-            ("display", build_display_values(g, 1825)),
-            ("power", build_power_values(g, 0, 55)),
-            ("target", build_target_values(g, 0xF130_0000_0000_0001)),
-            ("max_vitals", build_max_vitals_values(g, 100, 0, 200)),
-            ("armor", build_armor_values(g, [60, 0, 0, 0, 0, 0, 0], 20)),
-            (
-                "resistance",
-                build_resistance_values(g, [40, 0, 0, 0, 0, 0, 0]),
-            ),
-            ("coinage", build_coinage_values(g, 900)),
-            ("ammo", build_player_ammo_id_values(g, 2512)),
-            (
-                "owner_summon",
-                build_owner_summon_values(g, 0xF130_0000_0000_0009),
-            ),
-            (
-                "skill",
-                build_skill_values(g, 3, Skill::Fishing, 100, 150).unwrap(),
-            ),
-            ("talent_points", build_talent_points_values(g, 2)),
-            ("xp", build_player_xp_values(g, 400, 1000)),
-            (
-                "inv_slot",
-                build_inv_slot_values(g, 15, 0x4000_0000_0000_0001).unwrap(),
-            ),
-            (
-                "visible_item",
-                build_visible_item_values(
-                    g,
-                    15,
-                    &ItemInstanceView {
-                        entry: 25,
-                        random_property_id: 117,
-                        enchantment: 823,
-                        ..Default::default()
-                    },
-                )
-                .unwrap(),
-            ),
-            ("item", build_item_values(0x4000_0000_0000_0001, 5, 70)),
-            (
-                "item_enchantment",
-                build_item_enchantment_values(0x4000_0000_0000_0001, 823),
-            ),
-        ];
-        for (name, m) in msgs {
-            let mut buf = Vec::new();
-            m.write_unencrypted_server(&mut buf).unwrap();
-            let body = &buf[4..];
-            let updates = lyracore_shared::values_mask::parse_values_updates(body);
-            assert!(
-                !updates.is_empty(),
-                "{name}: no VALUES block decoded — framing drift?"
-            );
-            for u in &updates {
-                assert!(
-                    !u.fields.iter().any(|&(idx, _)| idx == 2),
-                    "{name}: OBJECT_FIELD_TYPE (bit 2) leaked into a VALUES partial — dirty_reset missing (5875 crash class)"
-                );
-                assert!(!u.fields.is_empty(), "{name}: empty VALUES mask");
-            }
-        }
-    }
-}
+mod tests;

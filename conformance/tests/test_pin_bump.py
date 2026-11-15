@@ -1,21 +1,28 @@
 import importlib.util
 import base64
 import copy
+import contextlib
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 
+from conformance.workspace import scratch, tier1_scenarios
 
+
+ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = Path(__file__).resolve().parents[1] / "pin_bump.py"
+sys.path.insert(0, str(SCRIPT.parent))
 SPEC = importlib.util.spec_from_file_location("pin_bump", SCRIPT)
 PIN_BUMP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PIN_BUMP)
-SCRATCH = Path(os.environ.get("LYRACORE_PIN_TEST_SCRATCH",
-                              Path.home() / ".cache/lyracore-scratch/conformance-pin-tests"))
+SCRATCH = scratch("conformance")
 
 
 class PinBumpTests(unittest.TestCase):
@@ -27,14 +34,19 @@ class PinBumpTests(unittest.TestCase):
             harness = root / "harness"
             (harness / "src").mkdir(parents=True)
             (harness / "src/catalogue.rs").write_text(
-                '    Entry { id: "existing", },\n    Entry { id: "new_scenario", },\n'
+                '    Entry { id: "existing", },\n    Entry { id: "existing_multi", },\n'
+                '    Entry { id: "new_scenario", },\n'
             )
             tests = root / "module/tests/conformance/tier1.rs"
             tests.parent.mkdir(parents=True)
-            tests.write_text('run_scenario("existing", |_, _| Ok(()))\n')
+            tests.write_text('fn existing_matches_its_golden_trace() -> Result<()> {\n'
+                             '    super::rolls::public_seeds()\n}\n'
+                             'fn existing_multi_matches_its_golden_trace() -> Result<()> {\n'
+                             '    run_multi_scenario("existing_multi", seed_world)\n}\n'
+                             'fn existing_merge_seed() -> Result<()> {\n    Ok(())\n}\n')
             ledger = root / "conformance/features/system/existing.toml"
             ledger.parent.mkdir(parents=True)
-            ledger.write_text('scenarios = ["existing"]\n')
+            ledger.write_text('scenarios = ["existing", "existing_multi"]\n')
             metadata = {"packages": [{
                 "name": "wire-client", "manifest_path": str(harness / "Cargo.toml"),
                 "source": "git+https://github.com/LyraCoreProject/wire-harness?rev=abc",
@@ -43,6 +55,28 @@ class PinBumpTests(unittest.TestCase):
                 with mock.patch.object(PIN_BUMP.subprocess, "check_output",
                                        return_value=json.dumps(metadata)):
                     self.assertEqual(PIN_BUMP.missing_scenarios(), ["new_scenario"])
+
+    def test_every_feature_ledger_scenario_has_a_tier1_test(self):
+        ledger = set()
+        for path in (ROOT / "conformance/features").glob("*/*.toml"):
+            ledger.update(tomllib.loads(path.read_text())["scenarios"])
+        self.assertLessEqual(ledger, tier1_scenarios(ROOT))
+
+    def test_missing_scenarios_emit_a_workflow_warning(self):
+        SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=SCRATCH) as directory:
+            root = Path(directory)
+            summary = root / "summary"
+            output = root / "output"
+            stdout = io.StringIO()
+            with mock.patch.object(PIN_BUMP, "missing_scenarios", return_value=["new_scenario"]), \
+                    mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(summary)}), \
+                    contextlib.redirect_stdout(stdout):
+                PIN_BUMP.check_catalogue(output)
+            self.assertIn("::warning title=Harness pin proposal blocked::", stdout.getvalue())
+            self.assertIn("new_scenario", stdout.getvalue())
+            self.assertIn("new_scenario", summary.read_text())
+            self.assertEqual(output.read_text(), "missing=true\n")
 
     def test_publish_accepts_only_baseline_provenance_and_signatures(self):
         before = json.loads((SCRIPT.parent / "tier1-baseline.json").read_text())
@@ -88,7 +122,8 @@ class PinBumpTests(unittest.TestCase):
         for entry in after["scenarios"]:
             entry["harness_revision"] = revision
         PIN_BUMP.validate_baseline(before, after, revision)
-        signature = after["scenarios"][-1]["rule"][1]
+        signature = next(signature for scenario in after["scenarios"]
+                         for signature in scenario["rule"] if signature.get("character"))
         signature["character"] = ""
         with self.assertRaisesRegex(ValueError, "signature Character"):
             PIN_BUMP.validate_baseline(before, after, revision)

@@ -3,16 +3,18 @@ id = "vendor_offers"
 system = "vendors"
 scope = "A vendor shows available items, conditions and restock state."
 requests = []
-replies = []
+replies = ["0x019F", "0x01A4", "0x01A5", "0x0166"]
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
-scenarios = []
+scenarios = ["vendor_offers"]
 deliberate_deviations = []
 prerequisites = []
-tests = []
+tests = [
+    { path = "importer/src/world_import_items_tests.rs", function = "vendor_stock_import_retains_direct_and_shared_restock_policies", rung = "unit" },
+]
 
 [vmangos]
-commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/ObjectMgr.cpp"
 symbol = "ObjectMgr::LoadVendors"
 
@@ -20,19 +22,7 @@ symbol = "ObjectMgr::LoadVendors"
 status = "unverified"
 
 [[known_gaps]]
-description = "items.vendor-condition: The source behavior is not represented by the current import."
+description = "Vendor offer condition links are not imported; the tier 1 fixture projects patch 10 membership without implementing conditional visibility in gameplay."
 path = "importer/src/world_import.rs"
 symbol = "vmangos_items_plan"
-evidence = "Compatibility Manifest items.vendor-condition; conformance/vmangos-port-census/items.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
-description = "items.vendor-item-flags: The source behavior is not represented by the current import."
-path = "importer/src/world_import.rs"
-symbol = "vmangos_items_plan"
-evidence = "Compatibility Manifest items.vendor-item-flags; conformance/vmangos-port-census/items.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
-description = "items.vendor-restock: The source behavior is not represented by the current import."
-path = "importer/src/world_import.rs"
-symbol = "vmangos_items_plan"
-evidence = "Compatibility Manifest items.vendor-restock; conformance/vmangos-port-census/items.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+evidence = "Vendor 11188 item 14526 uses condition 4000, type 24, patch equality with zero at vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70. Player::IsVendorItemVisible at d9173eca3ea08dd985c52dabbcc826898d1d0b77 evaluates that condition; patch 10 hides the offer. Compatibility Manifest items.vendor-condition; conformance/vmangos-port-census/items.md."

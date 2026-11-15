@@ -167,6 +167,7 @@ pub(crate) mod qt {
     pub const REQUIRED_RACES: &str = "RequiredRaces";
     // LimitTime is seconds after acceptance; zero means untimed.
     pub const LIMIT_TIME: &str = "LimitTime";
+    pub const QUEST_FLAGS: &str = "QuestFlags";
     pub const SPECIAL_FLAGS: &str = "SpecialFlags";
     pub const PREV_QUEST_ID: &str = "PrevQuestId";
     pub const NEXT_QUEST_IN_CHAIN: &str = "NextQuestInChain";

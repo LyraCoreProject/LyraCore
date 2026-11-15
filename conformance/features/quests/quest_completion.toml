@@ -3,10 +3,10 @@ id = "quest_completion"
 system = "quests"
 scope = "A Character can ask for quest completion and inspect the offered reward."
 requests = ["0x018A", "0x018C"]
-replies = []
+replies = ["0x018B", "0x018D"]
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
-scenarios = []
+scenarios = ["quest_completion"]
 deliberate_deviations = []
 prerequisites = []
 tests = []
@@ -18,3 +18,9 @@ symbol = "WorldSession::HandleQuestgiverCompleteQuest"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "Quest completion replies still differ in Refusal delivery, offer flags and emotes. The offer-reward codec does not serialize the stored flags, and emote metadata is not represented."
+path = "module/src/native/quest.rs"
+symbol = "reward_screen"
+evidence = "quest_completion tier 1: unexpected request-items at refuse_reward; emote 0 instead of 6; offer flags 0 instead of stored 8; missing reward emotes."

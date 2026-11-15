@@ -6,7 +6,7 @@ use crate::transfer::{decode_rows, encode_rows, import_rows_via, RowIo, Transpor
 fn entry<R: SpacetimeType + spacetimedb::sats::Serialize>(table: &str, rows: Vec<R>) -> TableRows {
     TableRows {
         table: table.to_owned(),
-        rows: encode_rows(rows),
+        rows: encode_rows(rows).expect("fixture rows serialize"),
     }
 }
 
@@ -372,8 +372,7 @@ fn game_mail_has_the_shape_its_transfer_tag_names() {
             .map(String::from)
             .to_vec()
         ),
-        "game_mail changed shape. Escrowed rows in the old shape would no longer decode: add a new \
-         tag to FORMATS, decode the old tag with a struct of the old shape, then update this pin"
+        "game_mail changed shape; add a FORMATS tag that decodes the old shape, then update this pin"
     );
     let previous = field_names::<MailHeaderMail>();
     assert_eq!(
@@ -421,9 +420,7 @@ fn game_mail_escrow_has_the_shape_its_transfer_tag_names() {
             .map(String::from)
             .to_vec()
         ),
-        "game_mail_escrow changed shape. Escrowed rows in the old shape would no longer decode: \
-         add a new tag to FORMATS, decode the old tag with a struct of the old shape, then update \
-         this pin"
+        "game_mail_escrow changed shape; add a FORMATS tag that decodes the old shape, then update this pin"
     );
     let previous = field_names::<RewardHeaderMailEscrow>();
     assert_eq!(
@@ -467,9 +464,7 @@ fn game_auction_hold_has_the_shape_its_transfer_tag_names() {
             .map(String::from)
             .to_vec()
         ),
-        "game_auction_hold changed shape. Escrowed rows in the old shape would no longer decode: \
-         add a new tag to FORMATS, decode the old tag with a struct of the old shape, then update \
-         this pin"
+        "game_auction_hold changed shape; add a FORMATS tag that decodes the old shape, then update this pin"
     );
 }
 
@@ -500,9 +495,7 @@ fn game_item_instance_has_the_shape_its_transfer_tag_names() {
             .map(String::from)
             .to_vec()
         ),
-        "game_item_instance changed shape. Escrowed rows in the old shape would no longer decode: \
-         add a new tag to FORMATS, decode the old tag with a struct of the old shape, then update \
-         this pin"
+        "game_item_instance changed shape; add a FORMATS tag that decodes the old shape, then update this pin"
     );
     let previous = field_names::<RandomPropertyItemInstance>();
     assert_eq!(
@@ -588,7 +581,7 @@ fn malformed_legacy_rows_and_duplicate_format_aliases_are_refused() {
 
 #[test]
 fn neither_row_format_accepts_an_unconsumed_suffix() {
-    let mut bytes = encode_rows(Vec::<LegacyMail>::new());
+    let mut bytes = encode_rows(Vec::<LegacyMail>::new()).expect("an empty table serializes");
     bytes.extend_from_slice(&[1, 2, 3, 4]);
     let entry = TableRows {
         table: "game_mail".to_owned(),

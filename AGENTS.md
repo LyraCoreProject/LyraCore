@@ -11,7 +11,8 @@ We build complex things as simply as possible, and we look for ways to remove co
 - Apply [the comment policy](CODING_STANDARDS.md#comments-and-documentation) when writing or reviewing
   source, tests, scripts and configuration. Complete its
   [comment review](CODING_STANDARDS.md#comment-review) before handoff.
-- CI runs formatting checks, clippy and every test suite on each pull request. Do not run them
+- CI runs formatting checks, clippy and fast tests on draft PRs; ready PRs also run durable and
+  Native Host checks, subject to path filters. Do not run them
   before you open or update a PR; push, then fix what CI reports. Run `cargo fmt --all` to format.
   Run one test locally only to reproduce a CI failure, or to see a new test fail before your fix.
 - [`docs/README.md`](docs/README.md) lists every document and when to read it. Open a document when
@@ -49,6 +50,7 @@ We build complex things as simply as possible, and we look for ways to remove co
 
 - File and rewrite issues in the shape `CONTRIBUTING.md` gives under "The issue shape". Check every
   claim against the code at the commit you name.
+- Open PRs as drafts while iterating; mark them ready when done to trigger the full CI run.
 - Open a PR with the `file-pr` skill (`.claude/skills/file-pr/SKILL.md`). It holds the title and
   description rules.
 

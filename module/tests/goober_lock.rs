@@ -1,14 +1,14 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::{FIXTURE_JERKY, SCENARIO_QUEST};
 use support::Standalone;
 
 const CHARACTER_GUID: u64 = 1;
-const QUEST_ENTRY: u32 = 50_900;
 const QUEST_OBJECTIVE_ID: u64 = 5_090_000;
 const LOCKED_GOOBER_ENTRY: u32 = 5_093_670;
 const LOCKLESS_GOOBER_ENTRY: u32 = 5_093_672;
 const LOCK_ID: u32 = 5_093_671;
-const KEY_ITEM_ENTRY: u32 = 5_090_052;
+const KEY_ITEM_ENTRY: u32 = FIXTURE_JERKY;
 const SCRIPT_HASH: &str = "3673673673673673673673673673673673673673673673673673673673673673";
 
 fn json_arg(value: &str) -> String {
@@ -60,7 +60,7 @@ fn spawn_goober(standalone: &Standalone, entry: u32) {
 
 fn quest_count(standalone: &Standalone) -> u32 {
     let rows = standalone.query_rows(&format!(
-        "SELECT counts FROM game_character_quest WHERE character_guid = {CHARACTER_GUID} AND quest_entry = {QUEST_ENTRY}"
+        "SELECT counts FROM game_character_quest WHERE character_guid = {CHARACTER_GUID} AND quest_entry = {SCENARIO_QUEST}"
     ));
     let counts = rows.first().expect("the quest is in the log")["counts"]
         .trim_matches(['[', ']'])
@@ -131,15 +131,21 @@ fn locked_goober_use_is_atomic_until_an_opener_unlocks_it() {
     standalone.assert_sql(&format!(
         "UPDATE game_gameobject_template SET lock_id = {LOCK_ID} WHERE entry = {LOCKED_GOOBER_ENTRY}"
     ));
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_lock (id, lock_id, index, kind, property, required_skill) VALUES (5093671, {LOCK_ID}, 0, 1, {KEY_ITEM_ENTRY}, 0)"
-    ));
+    standalone.insert_row(
+        "game_lock",
+        &[
+            ("id", &5093671),
+            ("lock_id", &LOCK_ID),
+            ("kind", &1),
+            ("property", &KEY_ITEM_ENTRY),
+        ],
+    );
     standalone.assert_sql(&format!(
         "UPDATE game_quest_objective SET kind = 2, target_entry = {LOCKED_GOOBER_ENTRY}, required_count = 2 WHERE id = {QUEST_OBJECTIVE_ID}"
     ));
     standalone.assert_call(
         "debug_grant_quest",
-        &[&CHARACTER_GUID.to_string(), &QUEST_ENTRY.to_string()],
+        &[&CHARACTER_GUID.to_string(), &SCENARIO_QUEST.to_string()],
     );
     install_go_used_hook(&standalone);
 

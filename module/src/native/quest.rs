@@ -1,8 +1,16 @@
 use crate::actor::ActionRefusal;
+use crate::npc_interaction::NpcService;
 use crate::quest::*;
 use crate::{game_creature_template, game_item_template};
 use lyracore_shared::quest::AcceptanceRefusal;
-use spacetimedb::ReducerContext;
+use spacetimedb::{ConnectionId, ReducerContext};
+
+use super::{Rollback, Unhandled};
+use lyracore_protocol::{
+    codec,
+    messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
+    world::Packet,
+};
 
 pub(super) fn quest_detail_view(
     ctx: &ReducerContext,
@@ -33,9 +41,11 @@ pub(super) fn quest_detail_view(
         .filter(quest_id)
         .filter_map(|o| {
             let slot = match o.kind {
-                0 => (o.target_entry, o.required_count, 0u32, 0u32),
-                1 => (0, 0, o.target_entry, o.required_count),
-                2 => (0u32.wrapping_sub(o.target_entry), o.required_count, 0, 0),
+                objective_kind::KILL_CREATURE => (o.target_entry, o.required_count, 0u32, 0u32),
+                objective_kind::COLLECT_ITEM => (0, 0, o.target_entry, o.required_count),
+                objective_kind::USE_GAMEOBJECT => {
+                    (0u32.wrapping_sub(o.target_entry), o.required_count, 0, 0)
+                }
                 _ => return None,
             };
             Some((o.obj_index, slot.0, slot.1, slot.2, slot.3))
@@ -54,7 +64,14 @@ pub(super) fn quest_detail_view(
         money_reward: tmpl.reward_money,
         reward_xp,
         next_quest_id: tmpl.next_quest_id,
-        max_level_money_reward: lyracore_shared::quest::max_level_money_reward(reward_xp),
+        max_level_money_reward: tmpl.reward_money_max_level,
+        flags: ctx
+            .db
+            .game_quest_flags()
+            .quest_entry()
+            .find(quest_id)
+            .map(|quest| quest.flags)
+            .unwrap_or(0),
         rewards: quest_rewards(ctx, quest_id),
         choice_rewards: quest_choice_rewards(ctx, quest_id),
         objectives: raw_objs
@@ -129,7 +146,7 @@ fn synthesized_objectives(ctx: &ReducerContext, quest_id: u32, imported: String)
         .filter(quest_id)
         .map(|o| {
             let text = match o.kind {
-                0 => {
+                objective_kind::KILL_CREATURE => {
                     let name = ctx
                         .db
                         .game_creature_template()
@@ -139,7 +156,7 @@ fn synthesized_objectives(ctx: &ReducerContext, quest_id: u32, imported: String)
                         .unwrap_or_default();
                     format!("{name} slain: 0/{}", o.required_count)
                 }
-                1 => {
+                objective_kind::COLLECT_ITEM => {
                     let name = ctx
                         .db
                         .game_item_template()
@@ -161,16 +178,9 @@ fn synthesized_objectives(ctx: &ReducerContext, quest_id: u32, imported: String)
         .collect::<Vec<_>>()
         .join("\n")
 }
-use super::{game_native_player, Rollback};
-use lyracore_protocol::{
-    codec,
-    messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
-    world::Packet,
-};
-use spacetimedb::ConnectionId;
 
 fn packet(message: ServerOpcodeMessage) -> Result<Packet, String> {
-    lyracore_protocol::world::encode(message).map_err(|error| error.to_string())
+    lyracore_protocol::world::encode(&message).map_err(|error| error.to_string())
 }
 
 fn details(ctx: &ReducerContext, giver: u64, quest: u32) -> Vec<Packet> {
@@ -183,27 +193,6 @@ fn details(ctx: &ReducerContext, giver: u64, quest: u32) -> Vec<Packet> {
         .collect()
 }
 
-fn giver_relations(ctx: &ReducerContext, giver: u64) -> Vec<(u32, u8)> {
-    use crate::{game_gameobject, game_world_entity};
-    if let Some(entity) = ctx.db.game_world_entity().guid().find(giver) {
-        ctx.db
-            .game_creature_quest()
-            .by_creature()
-            .filter(entity.entry)
-            .map(|r| (r.quest_entry, r.role))
-            .collect()
-    } else if let Some(object) = ctx.db.game_gameobject().guid().find(giver) {
-        ctx.db
-            .game_gameobject_quest()
-            .by_gameobject()
-            .filter(object.template_entry)
-            .map(|r| (r.quest_entry, r.role))
-            .collect()
-    } else {
-        Vec::new()
-    }
-}
-
 fn next_in_chain(ctx: &ReducerContext, giver: u64, quest: u32) -> Option<u32> {
     let next = ctx
         .db
@@ -212,7 +201,10 @@ fn next_in_chain(ctx: &ReducerContext, giver: u64, quest: u32) -> Option<u32> {
         .find(quest)?
         .next_quest_id;
     giver_relations(ctx, giver)
-        .contains(&(next, codec::ROLE_START))
+        .contains(&QuestRelation {
+            quest_entry: next,
+            role: quest_role::START,
+        })
         .then_some(next)
 }
 
@@ -233,21 +225,26 @@ pub(super) fn evaluations(
     };
     giver_relations(ctx, giver)
         .into_iter()
-        .filter_map(|(entry, role)| {
-            let template = ctx.db.game_quest_template().entry().find(entry)?;
-            let row = character_quest_row(ctx, guid, entry);
-            let active = row.as_ref().is_some_and(|row| !row.rewarded && !row.failed);
-            Some(codec::GiverQuestEval {
-                quest_id: entry,
-                title: template.title.clone(),
-                level: template.quest_level,
-                role,
-                startable: role == codec::ROLE_START
-                    && accept_gates(ctx, &actor, &template).is_ok(),
-                active,
-                complete: active && row.as_ref().is_some_and(|row| quest_is_complete(ctx, row)),
-            })
-        })
+        .filter_map(
+            |QuestRelation {
+                 quest_entry: entry,
+                 role,
+             }| {
+                let template = ctx.db.game_quest_template().entry().find(entry)?;
+                let row = character_quest_row(ctx, guid, entry);
+                let active = row.as_ref().is_some_and(|row| row.is_active());
+                Some(codec::GiverQuestEval {
+                    quest_id: entry,
+                    title: template.title.clone(),
+                    level: template.quest_level,
+                    role,
+                    startable: role == quest_role::START
+                        && accept_gates(ctx, &actor, &template).is_ok(),
+                    active,
+                    complete: active && row.as_ref().is_some_and(|row| quest_is_complete(ctx, row)),
+                })
+            },
+        )
         .collect()
 }
 
@@ -267,7 +264,7 @@ pub(super) fn menu(ctx: &ReducerContext, giver: u64, guid: u64) -> Result<Vec<Pa
         )?]);
     };
     let turn_in = evals.iter().find(|eval| {
-        eval.quest_id == detail.quest_id && eval.role == codec::ROLE_END && eval.active
+        eval.quest_id == detail.quest_id && eval.role == quest_role::END && eval.active
     });
     match turn_in {
         None => Ok(details(ctx, giver, detail.quest_id)),
@@ -295,7 +292,7 @@ fn reward_screen(
     };
     let complete = evaluations(ctx, giver, guid)
         .iter()
-        .any(|eval| eval.quest_id == quest && eval.role == codec::ROLE_END && eval.complete);
+        .any(|eval| eval.quest_id == quest && eval.role == quest_role::END && eval.complete);
     Ok(vec![packet(if complete {
         ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(codec::build_offer_reward(
             giver, &detail,
@@ -327,7 +324,7 @@ fn accept_refusal(refusal: &AcceptQuestRefusal) -> Vec<Packet> {
     message
         .into_iter()
         .chain([ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE])
-        .map(|message| packet(message).expect("fixed-size quest refusal fits a world frame"))
+        .map(super::bounded)
         .collect()
 }
 
@@ -336,7 +333,7 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     request: ClientOpcodeMessage,
-) -> Result<(), Rollback> {
+) -> Result<(), Unhandled> {
     let packets = match request {
         ClientOpcodeMessage::CMSG_QUESTGIVER_STATUS_QUERY(q) => vec![packet(
             ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(Box::new(codec::build_questgiver_status(
@@ -345,21 +342,45 @@ pub(super) fn receive(
             ))),
         )?],
         ClientOpcodeMessage::CMSG_QUESTGIVER_HELLO(q) => {
-            use crate::game_world_entity;
             let actor = super::actor(ctx, guid)?;
-            if ctx
-                .db
-                .game_world_entity()
-                .guid()
-                .find(q.guid.guid())
-                .is_some_and(|npc| crate::reputation::npc_refuses_interaction(ctx, &npc, &actor))
-            {
+            let giver = q.guid.guid();
+            let refused = if lyracore_shared::guid::is_creature(giver) {
+                crate::npc_interaction::serving_npc(ctx, &actor, giver, NpcService::QuestGiver)
+                    .is_err()
+            } else {
+                use crate::game_world_entity;
+                ctx.db
+                    .game_world_entity()
+                    .guid()
+                    .find(giver)
+                    .is_some_and(|npc| {
+                        crate::reputation::npc_refuses_interaction(ctx, &npc, &actor)
+                    })
+            };
+            if refused {
                 return Ok(());
             }
-            menu(ctx, q.guid.guid(), guid)?
+            menu(ctx, giver, guid)?
         }
         ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(q) => {
-            details(ctx, q.guid.guid(), q.quest_id)
+            use crate::game_item_instance;
+            let giver = q.guid.guid();
+            let related = giver_relations(ctx, giver)
+                .iter()
+                .any(|relation| relation.quest_entry == q.quest_id)
+                || ctx
+                    .db
+                    .game_item_instance()
+                    .guid()
+                    .find(giver)
+                    .filter(|item| item.owner_guid == guid)
+                    .and_then(|item| ctx.db.game_item_template().entry().find(item.entry))
+                    .is_some_and(|item| item.start_quest == q.quest_id);
+            if related {
+                details(ctx, giver, q.quest_id)
+            } else {
+                vec![packet(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE)?]
+            }
         }
         ClientOpcodeMessage::CMSG_QUEST_QUERY(q) => quest_detail_view(ctx, q.quest_id)
             .map(|detail| {
@@ -392,7 +413,7 @@ pub(super) fn receive(
                 crate::mail_reward::file_reward_letter(ctx, guid, q.guid.guid(), q.quest_id)
             }) {
                 let packets = reward_screen(ctx, q.guid.guid(), guid, q.quest_id)?;
-                return Err(Rollback::replies(packets, reason));
+                return Err(Rollback::replies(packets, reason).into());
             }
             let mut packets: Vec<Packet> = quest_detail_view(ctx, q.quest_id)
                 .map(|detail| {
@@ -407,6 +428,21 @@ pub(super) fn receive(
                 packets.extend(details(ctx, q.guid.guid(), next));
             }
             packets
+        }
+        ClientOpcodeMessage::CMSG_QUESTLOG_SWAP_QUEST(q) => {
+            super::actor(ctx, guid)?;
+            if q.slot1 == q.slot2
+                || usize::from(q.slot1) >= MAX_QUEST_LOG_SIZE
+                || usize::from(q.slot2) >= MAX_QUEST_LOG_SIZE
+            {
+                return Ok(());
+            }
+            let before = super::view::quests(ctx, guid);
+            let mut entries = quest_log_entries(ctx, guid);
+            entries.swap(usize::from(q.slot1), usize::from(q.slot2));
+            save_quest_log(ctx, guid, entries);
+            send_log_changes(ctx, guid, &before, &super::view::quests(ctx, guid));
+            Vec::new()
         }
         ClientOpcodeMessage::CMSG_QUESTLOG_REMOVE_QUEST(q) => {
             super::actor(ctx, guid)?;
@@ -423,7 +459,7 @@ pub(super) fn receive(
             apply_push_quest_to_party(ctx, guid, q.quest_id)?;
             Vec::new()
         }
-        _ => return Err("invalid quest opcode".into()),
+        other => return Err(Unhandled::Declined(other)),
     };
     for packet in packets {
         super::send_raw(ctx, connection, packet.opcode, packet.body, false);
@@ -432,31 +468,27 @@ pub(super) fn receive(
 }
 
 pub(super) fn refresh(ctx: &ReducerContext, guid: u64) {
-    let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) else {
+    if !super::has_world_session(ctx, guid) {
         return;
-    };
+    }
     let slots = super::view::quests(ctx, guid);
     let (opcode, body) =
         codec::build_values_update_raw(guid, &codec::update_mask::full_quest_log_mask(&slots));
-    super::send_raw(ctx, owner.connection_id, opcode, body, false);
+    super::send_raw_to_character(ctx, guid, opcode, body);
 }
 
 pub(crate) fn changed(
     ctx: &ReducerContext,
     old: Option<&CharacterQuest>,
     new: Option<&CharacterQuest>,
+    slot: u8,
 ) {
     let Some(row) = new.or(old) else {
         return;
     };
-    let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(row.character_guid)
-    else {
+    if !super::has_world_session(ctx, row.character_guid) {
         return;
-    };
+    }
     if let Some((old, row)) = old.zip(new) {
         if old.counts == row.counts
             && old.rewarded == row.rewarded
@@ -500,28 +532,60 @@ pub(crate) fn changed(
             });
         }
         for message in messages {
-            let packet = packet(message).expect("bounded quest progress fits a world frame");
-            super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
+            super::send_to_character(
+                ctx,
+                row.character_guid,
+                message,
+                super::EncodeFailure::Panic,
+            );
         }
     }
-    refresh(ctx, row.character_guid);
+    let after = super::view::quests(ctx, row.character_guid);
+    let mut before = after.clone();
+    before.retain(|slot| slot.quest_id != row.quest_entry);
+    if let Some(old) = old.filter(|old| !old.rewarded && usize::from(slot) < MAX_QUEST_LOG_SIZE) {
+        before.push(super::view::quest_slot(ctx, old, slot));
+    }
+    send_log_changes(ctx, row.character_guid, &before, &after);
+}
+
+fn send_log_changes(
+    ctx: &ReducerContext,
+    guid: u64,
+    before: &[codec::update_mask::QuestLogSlot],
+    after: &[codec::update_mask::QuestLogSlot],
+) {
+    use codec::update_mask::{full_quest_log_mask, idx, UpdateMaskValues};
+    if !super::has_world_session(ctx, guid) {
+        return;
+    }
+    let before = full_quest_log_mask(before);
+    let after = full_quest_log_mask(after);
+    let mut changes = UpdateMaskValues::new();
+    for field in idx::PLAYER_QUEST_LOG_1_1..idx::PLAYER_QUEST_LOG_1_1 + 3 * idx::QUEST_LOG_SLOTS {
+        if before.get(field) != after.get(field) {
+            changes.set_u32(field, after.get(field).unwrap_or(0));
+        }
+    }
+    if changes.block_count() != 0 {
+        let (opcode, body) = codec::build_values_update_raw(guid, &changes);
+        super::send_raw_to_character(ctx, guid, opcode, body);
+    }
 }
 
 pub(crate) fn event_credit(ctx: &ReducerContext, row: &CharacterQuestEventCredit, inserted: bool) {
-    let Some(owner) = ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(row.character_guid)
-    else {
+    if !super::has_world_session(ctx, row.character_guid) {
         return;
-    };
+    }
     if inserted {
-        let packet = packet(ServerOpcodeMessage::SMSG_QUESTUPDATE_COMPLETE(
-            codec::build_questupdate_complete(row.quest_entry),
-        ))
-        .expect("fixed-size quest completion fits a world frame");
-        super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
+        super::send_to_character(
+            ctx,
+            row.character_guid,
+            ServerOpcodeMessage::SMSG_QUESTUPDATE_COMPLETE(codec::build_questupdate_complete(
+                row.quest_entry,
+            )),
+            super::EncodeFailure::Panic,
+        );
     }
     refresh(ctx, row.character_guid);
 }
@@ -534,9 +598,9 @@ pub(crate) fn group_event(
     payload: &str,
 ) {
     use lyracore_shared::quest::share_event_kind;
-    let Some(owner) = ctx.db.game_native_player().character_guid().find(recipient) else {
+    if !super::has_world_session(ctx, recipient) {
         return;
-    };
+    }
     let packets = match kind {
         share_event_kind::QUEST_SHARE => payload
             .parse()
@@ -546,18 +610,15 @@ pub(crate) fn group_event(
             .parse()
             .ok()
             .map(|code| {
-                packet(ServerOpcodeMessage::MSG_QUEST_PUSH_RESULT(Box::new(
+                super::bounded(ServerOpcodeMessage::MSG_QUEST_PUSH_RESULT(Box::new(
                     codec::build_quest_push_result(other, code),
                 )))
-                .expect("fixed-size quest share result fits a world frame")
             })
             .into_iter()
             .collect(),
         _ => Vec::new(),
     };
-    for packet in packets {
-        super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
-    }
+    super::send_packets_to_character(ctx, recipient, packets);
 }
 
 pub(super) fn item_changed(ctx: &ReducerContext, guid: u64, entry: u32) {

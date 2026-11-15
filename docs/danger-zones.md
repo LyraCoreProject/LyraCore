@@ -18,9 +18,12 @@ Shard. An existing multi-Shard Realm needs a reviewed data migration first; see
 2. **Migrations:**
    - A new column goes at the END of the struct with a `#[default(...)]`. That is an additive
      auto-migrate. A column anywhere else makes the publish abort.
-   - SpacetimeDB SQL INSERT needs every column. When an existing INSERT can omit the new column,
-     add its default to `crates/lyracore-shared/src/import_sql_defaults.txt`; the importer, the
-     durable tests and the native check fill it from there.
+   - SpacetimeDB SQL INSERT needs every column, and it matches values to columns by position, not
+     by the names it lists. Durable tests write fixture rows with `Standalone::insert_row`, which
+     reads the published columns and their declared defaults, so a new column needs nothing there.
+     When an existing importer or native check INSERT can omit the new column, add its default to
+     `crates/lyracore-shared/src/import_sql_defaults.txt`. The importer, the native check and the
+     `conformance/support` worlds fill it from there.
    - Change native reducer arguments and their Host calls together. The Host and Module also share
      the BSATN layouts of `game_native_cipher` and `game_native_packet`. Update
      `native-host/src/feed.rs` with `module/src/native/mod.rs`, then run the native protocol check.
@@ -54,7 +57,7 @@ Shard. An existing multi-Shard Realm needs a reviewed data migration first; see
    `error[E0493]` on stable. This blocks `#[default(String::new())]` and `#[default("")]` alike.
    Numeric and bool defaults are fine. Put new `String` data in a new table instead: it has no
    existing rows, so no column needs a default. `game_creature_waypoint` and `game_creature_spell`
-   use the same one-row-plus-child-rows shape. See `NpcTextSlot` in `module/src/creatures/spawn.rs`.
+   use the same one-row-plus-child-rows shape. See `NpcTextSlot` in `module/src/gossip.rs`.
 7. **Never `.iter()` or `.count()` a spatial table** (`game_world_entity`, `game_corpse`,
    `game_creature_spawn`, `game_gameobject`, `game_dynamic_object`). That includes the usual
    `let entities = ctx.db.game_world_entity();` handle, which is the same whole-world read one line
@@ -78,17 +81,105 @@ including a restored-copy rehearsal and the order of world import before Package
 ### After every publish
 
 Call `debug_repair_after_publish` as the Operator on the Shard. `init` does not run again on an
-auto-migrating publish, so this reducer re-arms the interval schedules, re-freezes Proc profiles,
-restores missing Auction expiries, re-tags legacy auction mail as Auction Mail before the Mail Timer
-pass (so a legacy "Auction won" is deleted, not returned), arms a Mail Timer for each Mail that has
-none, moves each legacy Character GM level onto its Account and re-seeds the fixtures `init`
-seeds. `packages apply` calls it for each Shard it publishes.
+auto-migrating publish, so this reducer arms the interval schedules `init` arms
+(`arm_interval_schedules` in `module/src/seed.rs`). It deletes and re-creates the instance reaper,
+the Gateway lease reaper, the weather schedule, the Meeting Stone reminder and the catch-all creature
+tick, which discards a cadence set with `debug_rearm_creature_tick`. It creates the event reaper,
+melee, pet care, aura, breath, duel, ground area and motion publish schedules only when missing, and
+a Transport crossing for each Transport without one. It also re-freezes Proc profiles, restores
+missing Auction expiries, re-tags legacy auction mail as Auction Mail before the Mail Timer pass
+(so a legacy "Auction won" is deleted, not returned), arms a Mail Timer for each Mail that has
+none, moves each legacy Character GM level onto its Account and re-seeds the curated content and
+fixtures `init` seeds. `packages apply` calls it for each Shard it publishes.
 A skipped call looks like a mid-session hang, not an error.
+
+Imported content wins over that re-seed. A seed that writes real ids skips once the importer has
+stamped its family in `game_import_meta`: `spell` (Weakened Soul, Frost Armor, Chilled, Drain
+Soul, Mana Burn, Stealth, Demon Skin, the stacking probe spells, the synthetic Warrior talents),
+`items` (Soul Shard), `globals` (the starting spell kits, the Hunter Tame Beast kit row, the
+Warrior crit rates) and `dbc` (the Boar creature family, the Riding skill line). Fixtures on
+Fixture-Reserved Identifiers and the `SPELL_GROUPS` rules are written on every Shard; the
+importer does not import spell groups. `seed_curated_content` in `module/src/seed.rs` holds the list.
 
 The first run on a Shard with Mail from before the Mail Timer applies the vanilla 30-day rule
 (3 days with a cash on delivery price) to that Mail. Every Mail already past its life returns to
 its sender or is deleted with its copper, at 100 Mail a second. That is a maintainer decision, not
 a fault.
+
+### Vendor stock migration
+
+`game_npc_vendor` end-appends `restock_seconds` and `stock_flags` with typed zero defaults.
+The private `game_vendor_stock` and `game_vendor_stock_runtime` tables start empty. Publish the
+Module before starting the updated Native Host: its first connection announces a process identity
+through `native_vendor_stock_runtime`. A new process identity clears stock; reconnects and Module
+publication within one Host process retain it. An older Module lacks that reducer and the updated
+Host refuses the connection. No native delivery row or existing reducer argument changes. Upgrade both Module and Host for
+restart resets; an older Host does not announce a new process.
+
+Reimport the `items` Import Family once, with the updated importer, to gain stock and restock on
+an existing Realm. This is one cold import of the source item catalogue, creature loot and vendor
+offers; it clears current stock counters. Item templates at or above the Operator Template Range
+floor survive, including Operator-created items. Loot and offers that refer to those item entries
+or creature entries survive too. Imported rows must not collide with their retained row IDs.
+Before its first write, the importer refuses a plan that would leave any owned Item or retained
+loot/offer without an item template. A source entry removed from the new catalogue can therefore
+block the import; resolve it through a reviewed content migration before retrying. These checks
+assume a cold import with no concurrent content edits or Item grants.
+Package claims replay only when `--packages` is supplied; replay does not restore Operator edits.
+With that flag, the same preflight also refuses removal of an owned or referenced Package Item
+template that the enabled Package claims would not restore.
+The import does not replace Characters or their owned Items. Supply the same client Data directory
+(`--dbc`) required by the items import's Random Property validation; no separate DBC catalogue
+reimport is needed for vendor stock.
+Without that reimport, the zero restock interval preserves today's purchases: the list shows the
+configured maximum and purchases do not consume stock. Seeded and authored offers with a zero
+interval keep that behavior. Direct SQL INSERTs must supply both appended columns; shared import
+SQL defaults fill older inserts. Rust Packages that construct `NpcVendor` must supply both fields.
+
+Stock belongs to a vendor spawn and item, independently of other spawns with the same entry or
+shared offers. Ordinary death, corpse removal and respawn retain stock and elapsed time. Removing
+the spawn or its Instance discards stock. These lifetimes follow the in-memory creature object in
+vmangos; LyraCore does not implement vmangos grid unloading. Server restart restores full stock.
+The counter is lazy: each elapsed interval restores `buy_count` items, capped at the maximum.
+A partial refill observed by a list read or buy check resets its timestamp to that request,
+discarding the remainder. A refused buy can still observe restock, including this timestamp reset.
+It never pays for, stores or consumes the refused purchase. A failure during storage commit rolls
+back the payment, stock debit and queued acknowledgement together.
+A successful purchase resets the timestamp and selects the next interval. Offer flag 1 selects
+80 through 120 percent of the interval; flag 2 scales it above 2500 active, unqueued World Sessions.
+Integer truncation occurs after each scaling operation. A computed zero interval is floored to one
+second to avoid the Reference Server's division by zero for such source inputs, as agreed by the
+maintainer.
+
+These rules come from `Creature::GetVendorItemCurrentCount`, `UpdateVendorItemCurrentCount`,
+`VendorItemCount` and the creature destructor at
+[vmangos d9173eca](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Creature.cpp).
+List zero counts remain visible, as in
+[`SendListInventory`](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/ItemHandler.cpp).
+
+### Buyback migration
+
+`game_buyback_item` and `game_buyback_state` are new private tables. Existing table layouts and the
+Native Host delivery layouts do not change. Use the normal planned publish and
+`debug_repair_after_publish`; no Shard clear or content reimport is needed for buyback.
+
+The legacy `game_character_buyback` table keeps its schema for additive migration. Its snapshots
+cannot restore Item identity and are discarded by the repair reducer or the Character's next login.
+The repair reducer ends connected World Sessions that have no `game_buyback_state` row. Their
+clients discard legacy buyback links, prices and synthetic objects; the next login starts a fresh
+ring and timestamp origin. World Sessions that already have buyback state stay connected. Run the
+repair reducer before play resumes after the upgrade, even when the legacy table is empty.
+A Handoff or World Port within one World Session preserves buyback, including its login origin
+and paused Temporary Enchantments. Logout and fresh login discard it, including login after a
+crash or a sessionless Transfer. Carried and banked Items retain their existing rows and GUIDs.
+
+The Character Transfer table list now carries buyback without changing table layouts or the blob
+format. The existing compatibility path fills both tables empty for older manifests that omit
+them, so sessionless import and fresh login still work. A native World Port requires the original
+buyback session row and refuses import atomically if it is absent; an older destination refuses
+the new manifest tables. Update both Shards before moving active World Sessions. Retain the source
+copy after a refusal and do not attest an import that failed. The older Item row codecs remain
+explicit in `module/src/transfer/legacy_item_rows.rs`.
 
 ### Corpse AOI migration
 
@@ -109,7 +200,7 @@ expiry removes the DynamicObject and its Grants in the same transaction.
 ### Combo finisher migration
 
 `game_spell.max_duration_ms` and `game_spell_effect.points_per_combo` default to zero, and older
-spell rows mark only Slice and Dice with `SPELL_ATTR_COMBO_FINISHER`. Until spells are reimported,
+spell rows mark only Slice and Dice with `CAST_FLAG_COMBO_FINISHER`. Until spells are reimported,
 the other finishers skip the combo-point Gate and keep their points, no finisher scales with combo
 points, and Slice and Dice lasts its 6-second base. After you publish this schema to an existing
 Shard, reimport spells with `--dbc` before play resumes.
@@ -117,7 +208,7 @@ Shard, reimport spells with `--dbc` before play resumes.
 ### Chance on Hit migration
 
 `game_item_template.spellppmrate_1` through `spellppmrate_5` default to zero, and older spell rows
-lack `SPELL_ATTR_WEAPON_PROCS`. Until both are reimported, every Chance on Hit rolls its spell's
+lack `CAST_FLAG_WEAPON_PROCS`. Until both are reimported, every Chance on Hit rolls its spell's
 proc chance, which is one proc per minute for most weapons, and only white swings roll it. After you
 publish this schema to an existing Shard, reimport the `items` and `spell` families before play
 resumes.
@@ -131,6 +222,94 @@ Extra attacks need effect 19 imported as `E_ADD_EXTRA_ATTACKS`. Older spell rows
 `E_SCRIPTED`, so Hand of Justice, Ironfoe and Sword Specialization grant nothing until you reimport
 the `spell` family. The new `game_extra_attack` table starts empty and needs no repair.
 
+### Passive creature combat migration
+
+A plain Module publish adds the private `game_creature_combat_grid` table. It starts empty; the
+next melee tick arms a grid check for existing threat with no creature victim. No SQL repair is
+needed. Publish through a planned update; development reload requires an unchanged schema.
+
+Passive creatures retain threat and combat without a victim. Their ordinary melee leash does not
+expire this threat. The grid check uses the pinned Reference's default geometry, visibility distances
+(100 yards outdoors, 170 in dungeons, 533 in battlegrounds) and 30-second activity interval. A grid
+with no nearby Character or active creature enters evade and clears that combat. LyraCore keeps the
+creature object loaded; this does not implement grid unloading or change vendor stock lifetime.
+
+### Equip spell migration
+
+The seven END-appended source fields on `game_spell` and five category overrides on
+`game_item_template` default to zero. Reimport `spell` and `items` before play resumes so equip
+effects retain their forms, visibility, duration and category cooldown rules. No new spell effects
+are implemented.
+
+Reimport `spell` after the passive visibility update to retain party and pet area-aura origins in
+`game_spell.cast_flags`. The translated target alone cannot recover that distinction. After the
+import, `debug_repair_after_publish` applies the current visibility rule to stored cast auras;
+ordinary passive rows move to hidden slot 255 without losing their effects.
+
+`game_spell_effect` END-appends `equip_supported` with a false default. Until the `spell`
+reimport, equipment effects remain inert. That reimport also separates melee and ranged AP,
+healing and spell crit, and marks source percentages for conversion to basis points after their
+amount is rolled. Healing retains its school mask in `A_MOD_HEALING` for the existing flat
+healing calculation. Flat school damage and damage shields no longer import as damage percentages
+or absorbs. The complete admitted/inert type list and Item counts are in
+[the equip aura support audit](schema.md#equip-aura-support).
+
+Before play resumes:
+
+1. Publish the Module through a planned additive update.
+2. Reimport `spell` and `items` with the updated importer.
+3. Call `debug_repair_after_publish` after the imports.
+
+A repair before reimport is safe; call it again after the imports. Each derived equip aura retains
+its source definition locally. Repair keeps unchanged effects and rebuilds stale definitions,
+including changed units, visibility and eligibility. It does not restart equip cooldowns or retain
+duplicate effects. Changed finite equip effects restart their source duration during this explicit
+repair. Unchanged aura identity and deadlines are preserved. Connected Characters and ghosts
+receive the rebuilt state.
+
+Repair also compares every ordinary cast Aura's frozen effect kind, parameters, units and cadence
+with its imported definition, including offline and permanent rows. It removes missing definitions,
+refreshes obsolete metadata, converts percentage units once and clears obsolete absorb capacity.
+Aura writes notify connected clients and refresh their sheets. Existing cast magnitudes, stacks,
+application times and remaining durations stay frozen, apart from the unit conversion. Buff and
+debuff slots follow the current definition. Missing learned passives are restored without stacking
+existing effects. No manual Aura cleanup or recast is required. Repeating repair is idempotent.
+Unsupported cast modifiers retain ordinary Aura holders with inert numeric effects; this includes
+flat school damage, damage shields, flat incoming damage and incoming healing. Reflection and flat
+spell damage remain unimplemented. Older Package Deltas default to inert equip effects; an author
+must supply a supported claim.
+
+`game_world_entity` END-appends `sheet_ap_modifiers` and `sheet_ranged_ap_modifiers` with
+zero defaults. These derived projections pack the positive signed-16 modifier in the low half
+and the negative signed-16 modifier in the high half. Ranged base AP no longer includes these
+modifiers. The final publish repair recomputes both projections for connected Characters; world
+entry recomputes them for returning Characters. Neither column is Character-owned Transfer state.
+Two further zero-default END columns, `sheet_ranged_dmg_min_fraction` and
+`sheet_ranged_dmg_max_fraction`, retain fractional ranged damage for the wire. They leave the
+existing integer columns intact. Publish repair recomputes them for connected Characters; world
+entry recomputes them on login. Both fields are derived and do not cross Character Transfer.
+The zero-default END field `sheet_ranged_crit_bp` keeps the ranged weapon's skill contribution
+separate from melee crit. Publish repair and world entry refresh it; weapon skill writes refresh
+the affected melee or ranged projection. It is also derived and does not cross Character Transfer.
+
+`game_item_aura` and its finite-expiry schedule `game_item_aura_expiry` start empty.
+`debug_repair_after_publish` reconciles equipment and refreshes the sheet of every online Character
+without starting an equip cooldown, including passive effects on ghosts. Fresh login, reconnect,
+resurrection and form changes also reconcile equipment. World entry restores passive effects
+for a ghost. World exit removes derived equip Auras;
+Transfer excludes them and world entry rebuilds them once. Ordinary Auras keep their published
+row layout and Transfer codec.
+
+Transfer now carries `game_spell_cd`, including an active equip cooldown. Old blobs that lack
+this table import with no spell cooldown rows. An older destination refuses the new manifest.
+Update both Shards before an active World Session crosses them. Keep a refused source Transfer
+until both ends can import it. The Native Host delivery layouts are unchanged.
+
+The category and category deadline on existing spell cooldown rows default to zero; their spell
+deadlines stay unchanged. A pending cast's new category override defaults to `None`, which uses
+the spell's category. New Item casts retain their Item category through completion. World entry
+sends remaining spell and category cooldowns in `SMSG_INITIAL_SPELLS`.
+
 ### Temporary enchantment migration
 
 Poisons, sharpening stones, weapon oils and shaman weapon spells need effect 54 imported as
@@ -139,6 +318,16 @@ put nothing on the weapon until you reimport the `spell` family. Poisons have no
 also reimport the `spellmeta` family, and a poison proc needs the combat-spell enchantment rows from
 an `items` reimport with `--dbc`. The new `game_temporary_enchantment` table starts empty and needs
 no repair.
+
+### White melee catalogue migration
+
+`game_crit_per_agility` and `game_creature_defense` start empty after a publish. Reimport the
+`globals` and `creatures` families before play resumes; `debug_repair_after_publish` seeds warrior
+levels 1 and 60 only on a Shard that never imported `globals`. Other class/level combinations need imported crit rates;
+creatures need their no-parry, no-block and no-defense flags. Missing crit rates use the previous
+crit calculation in combat and on the sheet, with one warning per Shard. This fallback does not
+replace the globals reimport. Existing Character sheet values are refreshed on world entry,
+equipment changes and weapon skill changes.
 
 ### Starting stack migration
 
@@ -152,8 +341,8 @@ Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB
 adds `_live` to its original table name, such as `game_combat_event_live`. The original
 `game_combat_event`, `game_spell_cast_event`, `game_spell_impact_event`, `game_chat_event` and
 `game_emote_event` stay ordinary tables with their published schemas, and share each row type with
-the event table. The Module writes new notifications only to the event table. The event reaper
-expires rows left in the original tables after an upgrade.
+the event table. The Module writes new notifications only to the event table, and nothing reads
+or reaps the original tables.
 
 SpacetimeDB refuses a change to an existing table's event flag. Keep the old declarations and
 their indexes for additive schema compatibility. Do not clear a Shard to make this migration apply.

@@ -4,7 +4,6 @@ use lyracore_protocol::{
 };
 use spacetimedb::ReducerContext;
 
-use super::game_native_player;
 use crate::{
     game_world_entity,
     skill::{game_player_skill, PlayerSkill},
@@ -12,8 +11,43 @@ use crate::{
     talent::game_character_talent,
 };
 
+pub(super) fn cooldowns(
+    ctx: &ReducerContext,
+    guid: u64,
+) -> Vec<lyracore_protocol::messages::vanilla::CooldownSpell> {
+    use crate::game_spell_cd;
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
+    ctx.db
+        .game_spell_cd()
+        .by_caster()
+        .filter(guid)
+        .filter_map(|row| {
+            let remaining = |deadline: i64| {
+                std::time::Duration::from_millis(
+                    (deadline.saturating_sub(now) / 1000).clamp(0, u32::MAX as i64) as u64,
+                )
+            };
+            let cooldown = remaining(row.ready_at.to_micros_since_unix_epoch());
+            let category_cooldown = remaining(row.category_ready_micros);
+            (!cooldown.is_zero() || !category_cooldown.is_zero()).then_some(
+                lyracore_protocol::messages::vanilla::CooldownSpell {
+                    spell_id: row.spell_id as u16,
+                    item_id: 0,
+                    spell_category: if category_cooldown.is_zero() {
+                        0
+                    } else {
+                        row.category as u16
+                    },
+                    cooldown,
+                    category_cooldown,
+                },
+            )
+        })
+        .collect()
+}
+
 pub(crate) fn talent_points(ctx: &ReducerContext, guid: u64, level: u32) {
-    if !super::is_player(ctx, guid) {
+    if !super::has_world_session(ctx, guid) {
         return;
     }
     let spent = ctx
@@ -22,26 +56,19 @@ pub(crate) fn talent_points(ctx: &ReducerContext, guid: u64, level: u32) {
         .by_character()
         .filter(guid)
         .fold(0u32, |total, row| total.saturating_add(u32::from(row.rank)));
-    send(
+    super::send_to_character(
         ctx,
         guid,
         ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(codec::build_talent_points_values(
             guid,
             crate::talent::talent_points_available(level, spent),
         ))),
+        super::EncodeFailure::Panic,
     );
 }
 
-fn send(ctx: &ReducerContext, guid: u64, message: ServerOpcodeMessage) {
-    if let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) {
-        let packet = lyracore_protocol::world::encode(message)
-            .expect("bounded spellbook message fits a world frame");
-        super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
-    }
-}
-
-pub(crate) fn learned(ctx: &ReducerContext, guid: u64, spell: u32) {
-    if !super::is_player(ctx, guid) {
+pub(crate) fn spell_learned(ctx: &ReducerContext, guid: u64, spell: u32) {
+    if !super::has_world_session(ctx, guid) {
         return;
     }
     use crate::game_spell;
@@ -69,20 +96,18 @@ pub(crate) fn learned(ctx: &ReducerContext, guid: u64, spell: u32) {
         }),
         None => ServerOpcodeMessage::SMSG_LEARNED_SPELL(codec::build_learned_spell(spell)),
     };
-    send(ctx, guid, message);
+    super::send_to_character(ctx, guid, message, super::EncodeFailure::Panic);
     proficiency(ctx, guid);
 }
 
-pub(crate) fn forgotten(ctx: &ReducerContext, guid: u64, spell: u32) {
-    if let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) {
-        // SMSG_REMOVED_SPELL uses a u16 spell id in build 5875.
-        super::send_raw(
-            ctx,
-            owner.connection_id,
-            0x0203,
-            (spell as u16).to_le_bytes().to_vec(),
-            false,
-        );
+pub(crate) fn spell_forgotten(ctx: &ReducerContext, guid: u64, spell: u32) {
+    // SMSG_REMOVED_SPELL uses a u16 spell id in build 5875.
+    if super::send_raw_to_character(
+        ctx,
+        guid,
+        codec::SMSG_REMOVED_SPELL_OPCODE,
+        (spell as u16).to_le_bytes().to_vec(),
+    ) {
         proficiency(ctx, guid);
     }
 }
@@ -96,15 +121,17 @@ fn proficiency(ctx: &ReducerContext, guid: u64) {
             .filter(guid)
             .map(|row| row.spell_id)
             .collect();
-        send(
+        super::send_to_character(
             ctx,
             guid,
             codec::build_armor_proficiency_msg(character.class(), &learned),
+            super::EncodeFailure::Panic,
         );
-        send(
+        super::send_to_character(
             ctx,
             guid,
             codec::build_weapon_proficiency_msg(character.class(), &learned),
+            super::EncodeFailure::Panic,
         );
     }
 }
@@ -117,7 +144,7 @@ pub(crate) fn skill_changed(
     let Some(row) = current.or(previous) else {
         return;
     };
-    if !super::is_player(ctx, row.character_guid)
+    if !super::has_world_session(ctx, row.character_guid)
         || previous.map(|row| (row.skill_line, row.current, row.max_rank))
             == current.map(|row| (row.skill_line, row.current, row.max_rank))
     {
@@ -155,10 +182,11 @@ pub(crate) fn skill_changed(
             if let Some(values) =
                 codec::build_skill_values(row.character_guid, slot as u8, skill, current, cap)
             {
-                send(
+                super::send_to_character(
                     ctx,
                     row.character_guid,
                     ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)),
+                    super::EncodeFailure::Panic,
                 );
             }
         }

@@ -62,6 +62,14 @@ fn export(directory: &Path) -> Result<()> {
         } else {
             vec![&golden.scenario().fixtures]
         };
+        let creatures = fixtures
+            .iter()
+            .flat_map(|fixtures| fixtures.iter())
+            .filter_map(|fixture| match fixture {
+                FixtureVerb::Creature { entry, .. } => Some(*entry),
+                _ => None,
+            })
+            .collect::<std::collections::BTreeSet<_>>();
         let characters = fixtures
             .into_iter()
             .map(|fixtures| match &fixtures[0] {
@@ -70,7 +78,13 @@ fn export(directory: &Path) -> Result<()> {
             })
             .collect::<Result<Vec<_>>>()?;
         std::fs::write(directory.join(format!("{}.toml", entry.id)), entry.scenario)?;
-        scenarios.push(serde_json::json!({"id": entry.id, "characters": characters}));
+        std::fs::write(
+            directory.join(format!("{}-golden.json", entry.id)),
+            entry.trace,
+        )?;
+        scenarios.push(
+            serde_json::json!({"id": entry.id, "characters": characters, "creatures": creatures}),
+        );
     }
     std::fs::write(
         directory.join("catalogue.json"),
@@ -116,7 +130,7 @@ fn check(directory: &Path, scenario: &str) -> Result<()> {
         "schema_version": 2,
         "tier": "tier1",
         "core_commit": core_commit,
-        "harness_revision": evidence::harness_revision(),
+        "harness_revision": lyracore_conformance::harness_pin().revision,
         "scenarios": [{
             "id": scenario,
             "behavior": golden.scenario().behavior.clone(),
@@ -178,15 +192,8 @@ fn compare_run(
     run: Run,
     previous: Option<(&str, &Report)>,
 ) -> Result<Report> {
-    let pin = include_str!("../../.wire-harness-rev")
-        .lines()
-        .find(|line| !line.starts_with('#'))
-        .context("harness pin")?
-        .split_whitespace()
-        .nth(1)
-        .context("harness SHA")?;
     ensure!(
-        run.harness_revision == pin,
+        run.harness_revision == lyracore_conformance::harness_pin().revision,
         "run used another harness revision"
     );
     let mut report = Report {
@@ -382,10 +389,24 @@ mod tests {
             baseline["scenarios"][0]["harness_revision"],
             report.harness_revision
         );
-        assert_eq!(
-            baseline["scenarios"][0]["scenario_sha256"],
-            String::from(golden.trace().header.scenario_sha256.clone())
-        );
+        let recorded = report
+            .scenarios
+            .iter()
+            .find(|entry| entry.id == scenario)
+            .context("committed scenario")?;
+        if recorded.scenario_sha256 == golden.trace().header.scenario_sha256 {
+            assert_eq!(
+                baseline["scenarios"][0]["scenario_sha256"],
+                String::from(recorded.scenario_sha256.clone())
+            );
+        } else {
+            assert_eq!(
+                baseline["scenarios"][0]["scenario_sha256"],
+                String::from(Sha256Digest::of(b"not in the latest full audit"))
+            );
+            assert_eq!(baseline["scenarios"][0]["rule"], serde_json::json!([]));
+            assert_eq!(baseline["scenarios"][0]["data"], serde_json::json!([]));
+        }
         Ok(())
     }
 
@@ -443,10 +464,7 @@ mod tests {
         let Origin::Golden { provenance } = &golden.trace().header.origin else {
             bail!("Golden Trace");
         };
-        let revision = include_str!("../../.wire-harness-rev")
-            .split_whitespace()
-            .last()
-            .context("revision")?;
+        let revision = lyracore_conformance::harness_pin().revision;
         std::fs::write(
             directory.join("run.json"),
             serde_json::to_vec(&serde_json::json!({
@@ -474,9 +492,21 @@ mod tests {
         };
         let report = compare_run(&directory, &ledger, load_run()?, None)?;
         assert_eq!(report.scenarios.len(), catalogue::ENTRIES.len());
-        for result in report.audit.as_ref().unwrap().behaviors.values() {
-            assert_eq!(result.candidate, Summary::default());
-            assert_eq!(result.reference, Summary::default());
+        for (behavior, result) in &report.audit.as_ref().unwrap().behaviors {
+            assert_eq!(result.candidate, result.reference);
+            let missing_sample = match behavior.as_str() {
+                "auto_attack" => Some("white_melee_sample"),
+                "cast_and_interrupt" => Some("spell_sample"),
+                _ => None,
+            };
+            if let Some(rule) = missing_sample {
+                assert_eq!(result.candidate.rule.raw_records, 1);
+                assert_eq!(result.candidate.rule.signatures.len(), 1);
+                assert_eq!(result.candidate.rule.signatures[0].signature.rule, rule);
+                assert_eq!(result.candidate.data, Default::default());
+            } else {
+                assert_eq!(result.candidate, Summary::default());
+            }
             assert!(result.changes.is_none());
         }
         let repeated = compare_run(
@@ -518,7 +548,7 @@ mod tests {
             serde_json::to_vec(&serde_json::json!({
                 "core_commit": core_commit,
                 "working_tree_dirty": false,
-                "harness_revision": evidence::harness_revision(),
+                "harness_revision": lyracore_conformance::harness_pin().revision,
                 "recorded_at_unix_ms": committed.recorded_at_unix_ms + 1,
                 "native_host_sha256": audit.native_host_sha256,
                 "module_sha256": audit.module_sha256,

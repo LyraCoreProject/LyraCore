@@ -206,7 +206,7 @@ fn the_group_mirror_arms_and_cancels_the_countdown_in_roster_revision_order() {
 fn group_op(node: &Standalone, op: &str, actor_guid: u64, target_guid: u64, arg_a: u8) {
     let args = [
         op.to_string(),
-        actor(&actor_guid.to_string()),
+        actor(actor_guid),
         target_guid.to_string(),
         arg_a.to_string(),
         "0".to_string(),

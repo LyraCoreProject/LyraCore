@@ -64,7 +64,11 @@ crate::game_hook!(on_aggro, fn creature_ai_on_aggro(ctx, payload) {
         payload.creature_guid,
         Some(payload.target_guid),
         None,
-        Some(payload.target_guid),
+        ctx.db
+            .game_melee_attack()
+            .attacker_guid()
+            .find(payload.creature_guid)
+            .map(|attack| attack.target_guid),
         payload.assist,
     );
 });
@@ -478,7 +482,7 @@ fn edge_context(
     current_target_guid: Option<u64>,
     assisted: bool,
 ) -> EventContext {
-    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
+    let now_ms = crate::time::now_ms(ctx);
     EventContext {
         invoker_guid,
         invoker_is_player: invoker_guid.and_then(|guid| {

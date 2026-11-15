@@ -33,8 +33,8 @@ Dungeon exits and graveyard release use imported Area Trigger, area, and graveya
 Missing exit metadata sends a reaped-instance login to the Character's home. The small fixture keeps
 its Deadmines bootstrap fallback. Raid admission uses map capacity.
 
-Creature copies use `encounter::wave_guid` with bit 23 set in the low field. This separates their
-identities from imported spawns and encounter wave allocation. A copy skips any guid that a spawn
+Creature copies set bit 23 (`INSTANCE_POP_LOW_BAND` in `module/src/creatures/population.rs`) in
+the low field. This separates their identities from imported spawns and encounter wave allocation. A copy skips any guid that a spawn
 row or entity already holds, because dormant instance-zero spawns in the Operator Spawn Range and
 the Package Creature Range carry bit 23 too. GameObject copies use `0xF110 | bit46 | seq`, below the
 pool band and above static and debug identifiers.
@@ -60,6 +60,12 @@ that snapshot, checks party capacity, resolves the party lease or personal bindi
 population there when needed. A sixty-second admission reservation keeps the lease occupied until
 Transfer import. Admission refusal leaves the Character on its source Shard. A reply must match the
 pending request and connection, and the Character must still be inside the entrance Area Trigger.
+
+Package relocation uses the same allocator and admission reservations without a World Session. The
+Realm checks Package authority and directory ownership; the source checks its saved consent revision
+and entrance before departure. Import names the exact admission request as well as the Character and
+Instance. A Package body is restored only after Transfer release. The `package-transfer` Native Host
+check covers Package Group entry, binding reuse, exits and restart settlement.
 
 The source starts its existing teleport and Transfer after admission. The destination requires a
 live reservation for that source, Character, connection, map and Instance before accepting import.

@@ -1,7 +1,7 @@
 use spacetimedb::{table, Identity, ReducerContext, SpacetimeType, Table};
 
 use super::directory::{self, game_character_directory, CharacterProfile};
-use crate::auth::CreateCharacterRefusal;
+use crate::character::CreateCharacterRefusal;
 
 #[table(accessor = game_character_name,
     index(accessor = by_guid, btree(columns = [guid])),
@@ -37,6 +37,12 @@ pub struct CharacterNameReport {
     pub total: u32,
     pub received: Vec<u32>,
 }
+
+crate::outside_table_catalog!(
+    game_character_name,
+    game_character_names_ready,
+    game_character_name_report
+);
 
 pub(super) fn reported(ctx: &ReducerContext, report: NameReport) -> Result<(), String> {
     if report.total == 0 || report.index >= report.total {
@@ -102,6 +108,21 @@ pub(super) fn reserve(
     if names.name().find(&name).is_some() {
         return Err(CreateCharacterRefusal::NameInUse);
     }
+    if !account_has_room(ctx, account_id) {
+        return Err(CreateCharacterRefusal::AccountFull);
+    }
+    names.insert(CharacterName {
+        name,
+        account_id,
+        world,
+        selection_id,
+        guid: 0,
+    });
+    Ok(())
+}
+
+pub(crate) fn account_has_room(ctx: &ReducerContext, account_id: u64) -> bool {
+    let names = ctx.db.game_character_name();
     let pending = names
         .by_account()
         .filter(account_id)
@@ -113,17 +134,17 @@ pub(super) fn reserve(
         .by_account()
         .filter(account_id)
         .count();
-    if existing + pending >= crate::auth::CHARACTERS_PER_ACCOUNT {
-        return Err(CreateCharacterRefusal::AccountFull);
+    existing + pending < crate::character::CHARACTERS_PER_ACCOUNT
+}
+
+pub(super) fn release_package(ctx: &ReducerContext, name: &str, account_id: u64, world: Identity) {
+    let names = ctx.db.game_character_name();
+    let name = name.to_lowercase();
+    if names.name().find(&name).is_some_and(|row| {
+        row.guid == 0 && row.selection_id == 0 && row.account_id == account_id && row.world == world
+    }) {
+        names.name().delete(name);
     }
-    names.insert(CharacterName {
-        name,
-        account_id,
-        world,
-        selection_id,
-        guid: 0,
-    });
-    Ok(())
 }
 
 pub(super) fn observe(ctx: &ReducerContext, profile: &CharacterProfile) -> Result<(), String> {

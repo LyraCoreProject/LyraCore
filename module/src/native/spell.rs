@@ -1,5 +1,6 @@
-use super::game_native_player;
-use crate::spell::{SpellCastEvent, SpellCastEventKind, SpellImpactEvent};
+use super::{bounded as message, game_native_player};
+use crate::spell::SpellCastEventKind;
+use crate::{SpellCastEvent, SpellImpactEvent};
 use lyracore_protocol::{codec, messages as wow_world_messages, world::Packet};
 use spacetimedb::{ReducerContext, Table};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
@@ -11,16 +12,10 @@ enum EventAudience {
     Peers,
 }
 
-fn message(value: ServerOpcodeMessage) -> Packet {
-    lyracore_protocol::world::encode(value).expect("bounded spell event fits a world frame")
-}
-
 fn deliver(ctx: &ReducerContext, caster: u64, audience: EventAudience, packet: Packet) {
     match audience {
         EventAudience::Source => {
-            if let Some(player) = ctx.db.game_native_player().character_guid().find(caster) {
-                super::send_raw(ctx, player.connection_id, packet.opcode, packet.body, false);
-            }
+            super::send_raw_to_character(ctx, caster, packet.opcode, packet.body);
         }
         EventAudience::Everyone | EventAudience::Peers => {
             super::visibility::broadcast(
@@ -65,7 +60,7 @@ fn cooldown_message(caster_guid: u64, spell_id: u32, cooldown_ms: u32) -> Option
 
 // vmangos sets CAST_FLAG_AMMO on START and GO for every ranged-slot spell.
 fn projectile(ctx: &ReducerContext, event: &SpellCastEvent) -> Option<(u32, u32)> {
-    use crate::spell::game_spell;
+    use crate::game_spell;
     if event.kind != SpellCastEventKind::Start as u8 && event.kind != SpellCastEventKind::Go as u8 {
         return None;
     }
@@ -97,7 +92,7 @@ pub(crate) fn spell_impact(ctx: &ReducerContext, event: &SpellImpactEvent) {
 }
 
 fn damage_log(row: &SpellCastEvent) -> Option<Packet> {
-    (row.damage > 0).then(|| {
+    (row.damage > 0 || row.absorbed > 0 || row.resisted > 0).then(|| {
         let log = codec::build_spell_non_melee_damage_log(
             row.target_guid,
             row.caster_guid,
@@ -141,7 +136,7 @@ fn cast_event_messages(
             out.push((
                 EventAudience::Source,
                 Packet {
-                    opcode: 0x0130,
+                    opcode: codec::SMSG_CAST_RESULT_OPCODE,
                     body: codec::build_cast_result_failed(row.spell_id, reason),
                 },
             ));
@@ -190,7 +185,7 @@ fn cast_event_messages(
         out.push((
             EventAudience::Source,
             Packet {
-                opcode: 0x0130,
+                opcode: codec::SMSG_CAST_RESULT_OPCODE,
                 body: codec::build_cast_result_ok(row.spell_id),
             },
         ));
@@ -277,18 +272,14 @@ fn cast_event_messages(
     }
 
     if let Some(packet) = cooldown_message(row.caster_guid, row.spell_id, row.cooldown_ms) {
-        out.push((EventAudience::Everyone, packet));
+        out.push((EventAudience::Source, packet));
     }
     out
 }
 
-/// Codes are lockstep with `CAST_MISS_*` in `module/src/spell/tables.rs`.
 fn cast_miss_info(code: u8) -> Option<wow_world_messages::vanilla::SpellMissInfo> {
+    use crate::spell::{CAST_MISS_DODGE, CAST_MISS_MISS, CAST_MISS_PARRY, CAST_MISS_RESIST};
     use wow_world_messages::vanilla::SpellMissInfo;
-    const CAST_MISS_MISS: u8 = 1;
-    const CAST_MISS_RESIST: u8 = 2;
-    const CAST_MISS_DODGE: u8 = 3;
-    const CAST_MISS_PARRY: u8 = 4;
     match code {
         CAST_MISS_MISS => Some(SpellMissInfo::Miss),
         CAST_MISS_RESIST => Some(SpellMissInfo::Resist),
@@ -320,4 +311,83 @@ fn periodic_log_outbound(row: &SpellCastEvent) -> Option<Packet> {
         opcode: codec::SMSG_PERIODICAURALOG_OPCODE,
         body: codec::build_periodic_aura_log(row.target_guid, row.caster_guid, row.spell_id, tick),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn event() -> SpellCastEvent {
+        SpellCastEvent {
+            id: 0,
+            caster_guid: 1,
+            spell_id: 12544,
+            created_at: spacetimedb::Timestamp::UNIX_EPOCH,
+            target_guid: 1,
+            cast_time_ms: 0,
+            is_completion: false,
+            damage: 0,
+            school: 0,
+            is_crit: false,
+            resisted: 0,
+            absorbed: 0,
+            is_interrupted: false,
+            cooldown_ms: 10000,
+            delay_ms: 0,
+            healed: 0,
+            is_proc_log: false,
+            swing_hit_info: 0,
+            client_initiated: false,
+            map_id: 0,
+            instance_id: 0,
+            grid_x: 0,
+            grid_y: 0,
+            failure_reason: 0,
+            kind: SpellCastEventKind::Go as u8,
+            miss_info: 0,
+            energized: 0,
+            power_type: 0,
+        }
+    }
+
+    #[test]
+    fn zero_damage_still_logs_absorption_and_resistance() {
+        let mut row = event();
+        row.kind = SpellCastEventKind::ProcLog as u8;
+        assert!(cast_event_messages(&row, None).is_empty());
+        for (damage, absorbed, resisted) in [(1, 0, 0), (0, 1, 0), (0, 0, 1)] {
+            row.damage = damage;
+            row.absorbed = absorbed;
+            row.resisted = resisted;
+            let packets = cast_event_messages(&row, None);
+            assert_eq!(packets.len(), 1);
+            assert_eq!(packets[0].1.opcode, 0x0250);
+            assert!(matches!(packets[0].0, EventAudience::Everyone));
+        }
+    }
+
+    #[test]
+    fn cast_cooldowns_go_to_the_caster_while_spell_go_reaches_observers() {
+        for (caster, client_initiated) in [(1, false), (1, true), (0xF130000001000001, false)] {
+            let mut row = event();
+            row.caster_guid = caster;
+            row.target_guid = caster;
+            row.client_initiated = client_initiated;
+            let packets = cast_event_messages(&row, None);
+            let cooldowns: Vec<_> = packets
+                .iter()
+                .filter(|(_, packet)| packet.opcode == 0x0134)
+                .collect();
+            assert_eq!(cooldowns.len(), 1);
+            assert!(matches!(cooldowns[0].0, EventAudience::Source));
+            let go = packets
+                .iter()
+                .find(|(_, packet)| packet.opcode == 0x0132)
+                .unwrap();
+            assert!(matches!(
+                go.0,
+                EventAudience::Peers | EventAudience::Everyone
+            ));
+        }
+    }
 }

@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{bail, Context, Result};
 
 use lyracore_package_delta::{
-    artifact_kind, trace, ArtifactKind, ClaimTrace, Operation, PackageDelta,
+    artifact_kind, trace, ArtifactKind, ClaimTrace, Operation, PackageDelta, PrimaryKey,
 };
 
 use crate::shard::Shard;
@@ -13,6 +13,27 @@ use crate::world_import_scope::WorldImportScope;
 const GENERATED_DIR: &str = "data/.generated";
 
 const APPLY_REDUCER: &str = "apply_package_deltas";
+
+pub(crate) fn item_entries_after_replay(
+    scope: &WorldImportScope,
+    root: &str,
+) -> Result<std::collections::HashSet<u64>> {
+    let (artifacts, _) = routed_to_this_shard(
+        scope,
+        artifacts_for_family(read_enabled(Path::new(root))?, "items")?,
+    )?;
+    let mut entries = std::collections::HashSet::new();
+    for artifact in artifacts {
+        for claim in artifact.delta.claims() {
+            if let (PrimaryKey::Item { entry }, Operation::Insert) =
+                (claim.key(), claim.operation())
+            {
+                entries.insert(u64::from(entry));
+            }
+        }
+    }
+    Ok(entries)
+}
 
 #[derive(Debug)]
 struct Artifact {
@@ -472,8 +493,9 @@ mod tests {
         let found = read_enabled(&t.0).expect("discovery succeeds");
         let creatures = artifacts_for_family(found, "creatures").expect("the creatures plan");
 
-        let eastern = WorldImportScope::canonical(WorldImportProfile::AllianceEastern)
-            .expect("eastern profile");
+        let eastern =
+            WorldImportScope::canonical(WorldImportProfile::parse("alliance-eastern").unwrap())
+                .expect("eastern profile");
         let (kept, routed_away) =
             routed_to_this_shard(&eastern, creatures).expect("routing succeeds");
 
@@ -495,7 +517,8 @@ mod tests {
         let creatures = artifacts_for_family(found, "creatures").expect("the creatures plan");
 
         let instances =
-            WorldImportScope::canonical(WorldImportProfile::Instances).expect("instances profile");
+            WorldImportScope::canonical(WorldImportProfile::parse("instances").unwrap())
+                .expect("instances profile");
         let (kept, routed_away) =
             routed_to_this_shard(&instances, creatures).expect("routing succeeds");
 
@@ -515,8 +538,8 @@ mod tests {
         assert_eq!(creature_ai[0].delta.claims().len(), 2);
 
         for profile in [
-            WorldImportProfile::Instances,
-            WorldImportProfile::AllianceEastern,
+            WorldImportProfile::parse("instances").unwrap(),
+            WorldImportProfile::parse("alliance-eastern").unwrap(),
         ] {
             let scope = WorldImportScope::canonical(profile).expect("a canonical profile");
             let (kept, routed_away) = routed_to_this_shard(
@@ -542,7 +565,8 @@ mod tests {
         let creatures = artifacts_for_family(found, "creatures").expect("the creatures plan");
 
         let instances =
-            WorldImportScope::canonical(WorldImportProfile::Instances).expect("instances profile");
+            WorldImportScope::canonical(WorldImportProfile::parse("instances").unwrap())
+                .expect("instances profile");
         let (kept, routed_away) =
             routed_to_this_shard(&instances, creatures).expect("routing succeeds");
 
@@ -561,7 +585,8 @@ mod tests {
         let creatures = artifacts_for_family(found, "creatures").expect("the creatures plan");
 
         let instances =
-            WorldImportScope::canonical(WorldImportProfile::Instances).expect("instances profile");
+            WorldImportScope::canonical(WorldImportProfile::parse("instances").unwrap())
+                .expect("instances profile");
         let (kept, routed_away) =
             routed_to_this_shard(&instances, creatures).expect("routing succeeds");
 

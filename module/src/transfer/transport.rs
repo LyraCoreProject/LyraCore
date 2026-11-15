@@ -4,12 +4,13 @@ use super::TransferOut;
 use crate::bridge::{
     game_party_command_issuer, game_party_command_receipt, PartyCommandIssuer, PartyCommandReceipt,
 };
-use crate::items::{game_item_instance, ItemInstance};
+use crate::items::{item_guid_exists, BuybackItem, BuybackState};
+use crate::ItemInstance;
 
 #[path = "legacy_item_rows.rs"]
 mod legacy_item_rows;
 
-// Hot marks describe first-frame state; every table still travels in one blob.
+// Hot marks describe first-frame state; transported tables travel in one blob.
 pub(crate) const HOT_TABLES: &[&str] = &[
     "game_item_instance",
     "game_player_action",
@@ -29,40 +30,8 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &[
     "game_native_member_stats",
     "game_native_motion_permit",
     "game_character_relocation",
+    "game_combat_check_schedule",
     "game_transport_passenger",
-];
-
-#[cfg_attr(not(test), allow(dead_code))]
-pub(crate) const NOT_TRANSPORTED: &[&str] = &[
-    "game_aoi_grant",
-    "game_aoi_viewer",
-    "game_native_player",
-    "game_native_member_stats",
-    "game_native_motion_permit",
-    "game_character_relocation",
-    "game_rest_state_event",
-    "game_breath_relay_event",
-    "game_breath_state",
-    "game_fatigue_state",
-    "game_group_invite",
-    "game_group_member",
-    "game_group_member_partition",
-    "game_group_target_icon",
-    // Admission requests settle on the source connection before Transfer.
-    "game_instance_entry",
-    "game_instance_removal",
-    "game_pet_command",
-    "game_mail_delivery",
-    "game_character_shard",
-    "game_active_taxi_flight",
-    "game_taxi_flight_schedule",
-    "game_taxi_passenger_spline",
-    "game_taxi_service_reply",
-    "game_trade_session",
-    "game_trade_slot",
-    "game_transport_passenger",
-    "game_duel",
-    "game_duel_event",
 ];
 
 #[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
@@ -129,7 +98,7 @@ pub(crate) fn admit_command_issuer_import(
 }
 
 pub enum RowIo<'a> {
-    Export(&'a mut Vec<u8>),
+    Export(&'a mut Vec<u8>, &'a mut Result<(), String>),
     Import(&'a [u8], &'a mut Result<(), String>),
 }
 
@@ -145,7 +114,14 @@ pub(crate) fn move_rows<C, R>(
         + for<'de> spacetimedb::sats::Deserialize<'de>,
 {
     match io {
-        RowIo::Export(out) => **out = encode_rows(export()),
+        RowIo::Export(out, outcome) => match encode_rows(export()) {
+            Ok(bytes) => **out = bytes,
+            Err(error) => {
+                if outcome.is_ok() {
+                    **outcome = Err(error);
+                }
+            }
+        },
         RowIo::Import(bytes, outcome) => {
             for r in decode_rows::<R>(bytes, outcome) {
                 insert(ctx, r);
@@ -154,17 +130,11 @@ pub(crate) fn move_rows<C, R>(
     }
 }
 
-pub(crate) fn encode_rows<R>(rows: Vec<R>) -> Vec<u8>
+pub(crate) fn encode_rows<R>(rows: Vec<R>) -> Result<Vec<u8>, String>
 where
     R: spacetimedb::SpacetimeType + spacetimedb::sats::Serialize,
 {
-    match spacetimedb::sats::bsatn::to_vec(&rows) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            log::error!("transfer export: cannot serialize rows: {e}");
-            Vec::new()
-        }
-    }
+    spacetimedb::sats::bsatn::to_vec(&rows).map_err(|e| format!("cannot serialize rows: {e}"))
 }
 
 pub(crate) fn decode_rows<R>(bytes: &[u8], outcome: &mut Result<(), String>) -> Vec<R>
@@ -194,7 +164,7 @@ where
 
 pub(crate) fn not_transported(io: &mut RowIo<'_>) {
     match io {
-        RowIo::Export(out) => out.clear(),
+        RowIo::Export(out, _) => out.clear(),
         RowIo::Import(..) => {}
     }
 }
@@ -205,27 +175,36 @@ pub(crate) fn export_rows_via<C>(
     ctx: &C,
     character_guid: u64,
     arms: &[TransportArm<'_, C>],
-) -> Vec<TableRows> {
+) -> Result<Vec<TableRows>, String> {
     let mut out = Vec::new();
     for (table, mover) in arms {
         if MANIFEST_EXCLUDE.contains(table) {
             continue;
         }
         let mut rows = Vec::new();
-        mover(ctx, character_guid, &mut RowIo::Export(&mut rows));
+        let mut outcome = Ok(());
+        mover(
+            ctx,
+            character_guid,
+            &mut RowIo::Export(&mut rows, &mut outcome),
+        );
+        outcome.map_err(|e| format!("{table}: {e}"))?;
         out.push(TableRows {
             table: (*table).to_string(),
             rows,
         });
     }
-    out
+    Ok(out)
 }
 
-pub(crate) fn export_rows(ctx: &ReducerContext, character_guid: u64) -> Vec<TableRows> {
-    let mut payload = export_rows_via(ctx, character_guid, crate::CHARACTER_OWNED_TRANSFERS);
-    super::mail_text::export(ctx, &mut payload);
+pub(crate) fn export_rows(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<Vec<TableRows>, String> {
+    let mut payload = export_rows_via(ctx, character_guid, crate::CHARACTER_OWNED_TRANSFERS)?;
+    super::mail_text::export(ctx, &mut payload)?;
     legacy_item_rows::mark_current(&mut payload);
-    payload
+    Ok(payload)
 }
 
 pub(crate) fn import_rows_via<C>(
@@ -280,6 +259,7 @@ pub(crate) fn import_rows(
 ) -> Result<(), String> {
     let mut payload = legacy_item_rows::prepare(payload)?;
     super::mail_text::import(ctx, &mut payload)?;
+    let mut guids = std::collections::BTreeSet::new();
     if let Some(entry) = payload
         .iter()
         .find(|entry| entry.table == "game_party_command_issuer")
@@ -305,7 +285,6 @@ pub(crate) fn import_rows(
         let mut outcome = Ok(());
         let rows = decode_rows::<ItemInstance>(&entry.rows, &mut outcome);
         outcome?;
-        let mut guids = std::collections::BTreeSet::new();
         for row in rows {
             if row.owner_guid != character_guid {
                 return Err(format!(
@@ -313,9 +292,7 @@ pub(crate) fn import_rows(
                     row.guid, row.owner_guid
                 ));
             }
-            if !guids.insert(row.guid)
-                || ctx.db.game_item_instance().guid().find(row.guid).is_some()
-            {
+            if !guids.insert(row.guid) || item_guid_exists(ctx, row.guid) {
                 return Err(format!(
                     "ITEM_GUID_CONFLICT: item {} for Character {character_guid}",
                     row.guid
@@ -323,6 +300,7 @@ pub(crate) fn import_rows(
             }
         }
     }
+    admit_buyback_import(ctx, character_guid, &payload, &mut guids)?;
     if let Some(entry) = payload
         .iter()
         .find(|entry| entry.table == "game_party_command_receipt")
@@ -376,6 +354,62 @@ pub(crate) fn import_rows(
     )
 }
 
+fn admit_buyback_import(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    payload: &[TableRows],
+    guids: &mut std::collections::BTreeSet<u64>,
+) -> Result<(), String> {
+    let mut has_buyback = false;
+    if let Some(entry) = payload
+        .iter()
+        .find(|entry| entry.table == "game_buyback_item")
+    {
+        let mut outcome = Ok(());
+        let rows = decode_rows::<BuybackItem>(&entry.rows, &mut outcome);
+        outcome?;
+        let mut slots = std::collections::BTreeSet::new();
+        for row in rows {
+            has_buyback = true;
+            if row.character_guid != character_guid
+                || row.item.owner_guid != character_guid
+                || row.item_guid != row.item.guid
+                || row.item.slot != u8::MAX
+                || !(69..81).contains(&row.slot)
+                || !slots.insert(row.slot)
+            {
+                return Err(format!(
+                    "BUYBACK_ITEM_INVALID: item {} for Character {character_guid}",
+                    row.item_guid
+                ));
+            }
+            if !guids.insert(row.item_guid) || item_guid_exists(ctx, row.item_guid) {
+                return Err(format!(
+                    "ITEM_GUID_CONFLICT: item {} for Character {character_guid}",
+                    row.item_guid
+                ));
+            }
+        }
+    }
+    if let Some(entry) = payload
+        .iter()
+        .find(|entry| entry.table == "game_buyback_state")
+    {
+        let mut outcome = Ok(());
+        let states = decode_rows::<BuybackState>(&entry.rows, &mut outcome);
+        outcome?;
+        if states.len() > 1
+            || (has_buyback && states.is_empty())
+            || states.iter().any(|row| {
+                row.character_guid != character_guid || !(69..81).contains(&row.current_slot)
+            })
+        {
+            return Err(format!("BUYBACK_STATE_INVALID: Character {character_guid}"));
+        }
+    }
+    Ok(())
+}
+
 #[derive(SpacetimeType, Clone, Debug, PartialEq)]
 pub struct ExportBlob {
     pub transfer_id: u64,
@@ -393,7 +427,7 @@ pub struct ExportBlob {
     pub payload: Vec<TableRows>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Destination {
     pub map_id: u32,
     pub instance_id: u64,
@@ -486,12 +520,16 @@ pub(crate) fn decode_character_row(
 pub(crate) const TRANSFER_TABLES_OLD_BLOBS_MAY_LACK: &[&str] = &[
     "game_auction_bid_hold",
     "game_auction_hold",
+    "game_buyback_item",
+    "game_buyback_state",
     "game_character_away",
+    "game_character_quest_log",
     "game_fatigue_state",
     "game_group_target_icon",
     "game_guild_fee_hold",
     "game_instance_entry",
     "game_instance_removal",
+    "game_spell_cd",
 ];
 
 pub(crate) fn check_manifest(transfer_id: u64, arriving: &[ManifestEntry]) -> Result<(), String> {

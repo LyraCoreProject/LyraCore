@@ -4,7 +4,7 @@ use rusqlite::types::Value::{Integer as N, Real as F, Text};
 use std::collections::HashSet;
 
 fn item_source() -> WorldSource {
-    let numeric = "entry patch class subclass display_id quality flags buy_count buy_price sell_price inventory_type allowable_class allowable_race item_level required_level required_skill required_skill_rank required_reputation_faction required_reputation_rank max_count stackable container_slots dmg_min1 dmg_max1 armor holy_res fire_res nature_res frost_res shadow_res arcane_res delay spellid_1 spelltrigger_1 spellid_2 spelltrigger_2 spellid_3 spelltrigger_3 spellid_4 spelltrigger_4 spellid_5 spelltrigger_5 bonding page_text start_quest sheath random_property block max_durability bag_family food_type spellppmrate_1 spellppmrate_2 spellppmrate_3 spellppmrate_4 spellppmrate_5";
+    let numeric = "entry patch class subclass display_id quality flags buy_count buy_price sell_price inventory_type allowable_class allowable_race item_level required_level required_skill required_skill_rank required_reputation_faction required_reputation_rank max_count stackable container_slots dmg_min1 dmg_max1 armor holy_res fire_res nature_res frost_res shadow_res arcane_res delay spellid_1 spelltrigger_1 spellid_2 spelltrigger_2 spellid_3 spelltrigger_3 spellid_4 spelltrigger_4 spellid_5 spelltrigger_5 bonding page_text start_quest sheath random_property block max_durability bag_family food_type spellppmrate_1 spellppmrate_2 spellppmrate_3 spellppmrate_4 spellppmrate_5 spellcategory_1 spellcategory_2 spellcategory_3 spellcategory_4 spellcategory_5";
     let mut names = numeric
         .split_whitespace()
         .map(str::to_string)
@@ -191,33 +191,28 @@ fn item_source() -> WorldSource {
 #[test]
 fn vmangos_items_select_versions_join_vendor_templates_and_exclude_forbidden_offers() {
     let source = item_source();
-    let args = crate::parse_args_from([
+    let args = crate::cli::world_import_args([
         "--dump",
         "fixture.sqlite",
         "--family",
         "items",
         "--world-profile",
         "full-world",
-    ])
-    .unwrap()
-    .world_import_args()
-    .unwrap();
+    ]);
     let plan = build_vmangos_plan(&source, &args).unwrap();
     let sql = plan.stmts.join(";\n");
     assert_eq!(plan.stamps, [("items", 2)]);
     assert!(sql.contains("'Fixture broth'"));
     assert!(!sql.contains("Old drink"));
     assert!(sql.contains(",false,500,0,"));
-    assert!(sql.contains("(1,100,1001,1,0),(2,100,1000,2,0)"));
+    assert!(sql.contains("(1,100,1001,1,0,0,0),(2,100,1000,2,0,0,0)"));
     assert!(!sql.contains("INSERT INTO game_creature_loot"));
     assert!(!sql.contains("1002"));
     assert!(plan.reducer_batches(&args).unwrap().is_empty());
 }
 
 fn edit_source(source: &WorldSource, sql: &str) {
-    let WorldSource::Vmangos(connection) = source else {
-        panic!("SQLite fixture")
-    };
+    let connection = source.fixture_connection();
     connection.pragma_update(None, "query_only", false).unwrap();
     connection.execute_batch(sql).unwrap();
     connection.pragma_update(None, "query_only", true).unwrap();
@@ -253,7 +248,7 @@ fn patch_conditions_remove_unavailable_vendor_offers_and_creature_drops() {
                 VALUES (3,{},100,0,1,1,{condition},0,10);
         ", 1000 + condition, 1000 + condition));
     }
-    let (_, loot, vendors) = build_items_and_loot(
+    let ItemRows { loot, vendors, .. } = build_items_and_loot(
         &source,
         &HashMap::from([(100, 3)]),
         &HashSet::from([100]),
@@ -326,9 +321,11 @@ fn an_imported_item_keeps_the_procs_per_minute_of_each_spell_slot() {
     let source = item_source();
     edit_source(
         &source,
-        "UPDATE item_template SET spellppmrate_1 = 9.5, spellppmrate_5 = 0.8 WHERE entry = 1001",
+        "UPDATE item_template SET spellppmrate_1 = 9.5, spellppmrate_5 = 0.8, spellcategory_1 = 30, spellcategory_5 = 1160 WHERE entry = 1001",
     );
-    let (items, _, _) = build_items_and_loot(
+    let ItemRows {
+        templates: items, ..
+    } = build_items_and_loot(
         &source,
         &HashMap::from([(100, 3)]),
         &HashSet::from([100]),
@@ -340,7 +337,7 @@ fn an_imported_item_keeps_the_procs_per_minute_of_each_spell_slot() {
         .iter()
         .find(|row| row.contains("'Ordinary Water'"))
         .unwrap();
-    assert!(water.ends_with(",9.5,0,0,0,0.8)"), "{water}");
+    assert!(water.ends_with(",9.5,0,0,0,0.8,30,0,0,0,1160)"), "{water}");
 }
 
 #[test]
@@ -360,6 +357,29 @@ fn imported_items_cannot_use_the_operator_template_range() {
     .unwrap_err();
     assert!(
         refusal.to_string().contains("Operator Template Range"),
+        "{refusal}"
+    );
+}
+
+#[test]
+fn imported_items_cannot_use_entries_above_the_source_range() {
+    let source = item_source();
+    edit_source(
+        &source,
+        "UPDATE item_template SET entry = 7000000 WHERE entry = 1001",
+    );
+    let refusal = build_items_and_loot(
+        &source,
+        &HashMap::from([(100, 3)]),
+        &HashSet::from([100]),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .unwrap_err();
+    assert!(
+        refusal
+            .to_string()
+            .contains("outside the source item range"),
         "{refusal}"
     );
 }
@@ -393,4 +413,61 @@ fn starting_stacks_keep_their_createinfo_amount() {
     assert!(sql.contains(&format!(",{race_class},2947,100)")), "{sql}");
     assert!(sql.contains(&format!(",{race_class},2070,4)")), "{sql}");
     assert!(!sql.contains(",2092,"), "{sql}");
+}
+
+#[test]
+fn vendor_stock_import_retains_direct_and_shared_restock_policies() {
+    let source = item_source();
+    edit_source(&source, "UPDATE npc_vendor SET maxcount = 4, incrtime = 600, itemflags = 3; UPDATE npc_vendor_template SET maxcount = 8, incrtime = 1200;");
+    let args = crate::cli::world_import_args([
+        "--dump",
+        "fixture.sqlite",
+        "--family",
+        "items",
+        "--world-profile",
+        "full-world",
+    ]);
+    let plan = build_vmangos_plan(&source, &args).unwrap();
+    let sql = plan.stmts.join(";\n");
+    assert!(sql.contains("id,creature_entry,item_entry,slot,max_count,restock_seconds,stock_flags"));
+    assert!(sql.contains("(1,100,1001,1,4,600,3),(2,100,1000,2,8,1200,0)"));
+    assert!(sql.contains("DELETE FROM game_vendor_stock"));
+    let findings = items_findings(&source, &HashSet::from([100]))
+        .unwrap()
+        .to_string();
+    assert!(!findings.contains("items.vendor-restock"));
+    assert!(!findings.contains("items.vendor-item-flags"));
+}
+
+#[test]
+fn vendor_stock_import_omits_inconsistent_stock_limits() {
+    for change in [
+        "UPDATE npc_vendor SET maxcount = 4, incrtime = 0",
+        "UPDATE npc_vendor SET maxcount = 0, incrtime = 600",
+        "UPDATE npc_vendor_template SET maxcount = 4, incrtime = 0",
+        "UPDATE npc_vendor_template SET maxcount = 0, incrtime = 600",
+    ] {
+        let source = item_source();
+        edit_source(&source, change);
+        let args = crate::cli::world_import_args([
+            "--dump",
+            "fixture.sqlite",
+            "--family",
+            "items",
+            "--world-profile",
+            "full-world",
+        ]);
+        let plan = build_vmangos_plan(&source, &args).unwrap();
+        let vendors = plan
+            .stmts
+            .iter()
+            .find(|sql| sql.starts_with("INSERT INTO game_npc_vendor"))
+            .unwrap();
+        let expected = if change.contains("npc_vendor_template") {
+            "(1,100,1001,1,0,0,0)"
+        } else {
+            "(1,100,1000,2,0,0,0)"
+        };
+        assert!(vendors.ends_with(expected), "{change}: {vendors}");
+    }
 }

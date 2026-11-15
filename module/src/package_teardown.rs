@@ -18,10 +18,14 @@ pub struct InstalledPackage {
     pub characters: Option<fn(&ReducerContext) -> Vec<u64>>,
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
+/// The Package's Rust identifier: `-` and `_` name the same Package.
+pub(crate) fn ident(package: &str) -> String {
+    package.replace('-', "_")
+}
+
 pub(crate) fn runs(ctx: &ReducerContext, package: &str) -> bool {
     let torn_down = ctx.db.game_package_teardown();
-    torn_down.count() == 0 || torn_down.package_name().find(package.to_string()).is_none()
+    torn_down.count() == 0 || torn_down.package_name().find(ident(package)).is_none()
 }
 
 pub(crate) fn forget_removed_packages(ctx: &ReducerContext) {
@@ -42,11 +46,13 @@ pub(crate) fn forget_removed_packages(ctx: &ReducerContext) {
 #[reducer]
 pub fn teardown_package(ctx: &ReducerContext, package_name: String) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let ident = package_name.replace('-', "_");
+    let ident = ident(&package_name);
     let package = crate::GAME_PACKAGES
         .iter()
         .find(|package| package.name == ident)
         .ok_or_else(|| format!("{package_name} is not a Package this build compiles"))?;
+    crate::native::package_creation::require_settled(ctx, &package_name)?;
+    crate::native::package_relocation::require_settled(ctx, &package_name)?;
     let characters = package_characters(ctx, package, &package_name);
     if let Some(guid) = characters.iter().find(|&&guid| crossing(ctx, guid)) {
         return Err(format!(
@@ -66,6 +72,8 @@ pub fn teardown_package(ctx: &ReducerContext, package_name: String) -> Result<()
             package_name: ident.clone(),
         });
     }
+    crate::native::package_creation::clear_results(ctx, &package_name);
+    crate::native::package_relocation::clear_results(ctx, &package_name);
     for guid in characters {
         make_dormant(ctx, guid);
     }
@@ -140,13 +148,18 @@ fn make_dormant(ctx: &ReducerContext, guid: u64) {
     for intent in intents.by_bot().filter(guid).collect::<Vec<_>>() {
         intents.id().delete(intent.id);
     }
-    crate::group::clear_unclaimed_group_intents(ctx, guid);
     ctx.db
         .game_sessionless_action_consent()
         .character_guid()
         .delete(guid);
     if let Some(entity) = ctx.db.game_world_entity().guid().find(guid) {
-        crate::world::remove_live_character(ctx, entity);
+        crate::character::remove_live_character(
+            ctx,
+            entity,
+            crate::character::CharacterDeparture::Logout,
+        );
+    } else {
+        crate::items::clear_buyback(ctx, guid);
     }
 }
 
