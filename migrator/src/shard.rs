@@ -135,14 +135,25 @@ impl Shard {
                 accounts.insert(username.to_string(), (hex(&row[1])?, hex(&row[2])?));
             }
         }
-        let migrated = self
-            .rows(
-                "SELECT source_key FROM game_character_migration",
-                &["source_key"],
-            )?
+        let characters: HashSet<u64> = self
+            .rows("SELECT guid FROM game_character", &["guid"])?
             .iter()
-            .filter_map(|row| row[0].as_str().map(str::to_string))
+            .filter_map(|row| guid(&row[0]))
             .collect();
+        let mut migrated = HashSet::new();
+        let mut live_migrated = HashSet::new();
+        for row in self.rows(
+            "SELECT source_key, character_guid FROM game_character_migration",
+            &["source_key", "character_guid"],
+        )? {
+            let Some(key) = row[0].as_str() else {
+                continue;
+            };
+            if guid(&row[1]).is_some_and(|guid| characters.contains(&guid)) {
+                live_migrated.insert(key.to_string());
+            }
+            migrated.insert(key.to_string());
+        }
         Ok(Catalogue {
             items: self.ids("game_item_template", "entry")?,
             spells,
@@ -157,8 +168,15 @@ impl Shard {
             character_names,
             accounts,
             migrated,
+            live_migrated,
         })
     }
+}
+
+fn guid(value: &Value) -> Option<u64> {
+    value
+        .as_u64()
+        .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
 }
 
 fn spacetime() -> Command {
@@ -176,7 +194,7 @@ fn number(value: &Value) -> Result<u32> {
         .with_context(|| format!("{value} is not a 32-bit id"))
 }
 
-// Reads a byte array as either a hex string or an array of numbers.
+// SATS JSON writes a byte array as a hex string; an array of numbers is accepted too.
 fn hex(value: &Value) -> Result<String> {
     match value {
         Value::String(text) => Ok(text.to_ascii_lowercase()),
