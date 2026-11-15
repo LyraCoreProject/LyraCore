@@ -334,17 +334,13 @@ pub(super) fn submit(
     if character.connection != connection.to_u128() {
         return Err("World Session changed".into());
     }
-    let mut frame = Vec::new();
-    message
-        .write_unencrypted_client(&mut frame)
-        .map_err(|error| error.to_string())?;
-    let opcode = u32::from_le_bytes(frame[2..6].try_into().expect("encoded client header"));
+    let (opcode, body) = realm_party::client_frame(message)?;
     ctx.db.game_realm_guild_command().insert(RealmGuildCommand {
         id: 0,
         database: remote::Identity(realm),
         facts: encode(&facts(ctx, character).ok_or("Character is not owned here")?),
         opcode,
-        body: frame[6..].to_vec(),
+        body,
     });
     Ok(true)
 }
@@ -449,11 +445,13 @@ pub fn idc_realm_guild_command(
             super::realm_petition::request(ctx, &actor, message)
                 .map_err(Rollback::into_reducer_error)?
         } else {
+            let request =
+                super::guild::GuildRequest::of(&message).ok_or("opcode is not a guild request")?;
             super::guild::request(
                 ctx,
                 &actor,
                 crate::auth::gm_level(ctx, actor.account_id),
-                message,
+                request,
                 |name| invitee(ctx, actor.guid, name),
             )
             .map_err(Rollback::into_reducer_error)?
@@ -469,7 +467,7 @@ pub fn idc_realm_guild_command(
     );
     publish(ctx, guilds);
     if let Some(reply) = reply {
-        let packet = lyracore_protocol::world::encode(reply).map_err(|error| error.to_string())?;
+        let packet = lyracore_protocol::world::encode(&reply).map_err(|error| error.to_string())?;
         deliver(ctx, actor.guid, vec![(packet.opcode, packet.body)], None);
     }
     Ok(())
@@ -493,31 +491,14 @@ pub fn realm_guild_command_answered(
     }
     let Err(error) = result else { return Ok(()) };
     let connection = ConnectionId::from_u128(facts.character.connection);
-    if ctx
-        .db
-        .game_native_player()
-        .connection_id()
-        .find(connection)
-        .is_none_or(|player| player.character_guid != facts.character.guid)
-    {
-        return Ok(());
-    }
-    if let Some(packets) = super::rollback::replies_in(&error) {
-        for (opcode, body) in packets {
-            super::send_raw(ctx, connection, opcode, body, false);
-        }
-    } else {
-        super::send(ctx, connection, unavailable(), false)?;
+    if super::rollback::connection_holds(ctx, connection, facts.character.guid) {
+        super::rollback::replay_refusal(ctx, connection, &error, unavailable());
     }
     Ok(())
 }
 
 pub(super) fn unavailable() -> ServerOpcodeMessage {
-    ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(
-        lyracore_protocol::messages::vanilla::SMSG_NOTIFICATION {
-            notification: "Guild request unavailable. Please try again.".into(),
-        },
-    ))
+    super::rollback::unavailable("Guild")
 }
 
 fn snapshot(ctx: &ReducerContext, guild_id: u32) -> Snapshot {
@@ -673,7 +654,7 @@ pub(super) fn event(ctx: &ReducerContext, event: &guild::GuildEvent) -> bool {
     }
     if event_kind::is_petition(event.kind) {
         if let Some(packet) = super::petition::event_packet(ctx, event) {
-            let packet = super::guild::encode(packet);
+            let packet = super::bounded(packet);
             deliver(
                 ctx,
                 event.recipient_guid,
@@ -704,10 +685,9 @@ pub(super) fn event(ctx: &ReducerContext, event: &guild::GuildEvent) -> bool {
         ) {
             if event.kind == event_kind::ROSTER_REFRESH {
                 if let Some(guild) = super::guild::view(ctx, event.guild_id) {
-                    let packet =
-                        super::guild::encode(ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(
-                            Box::new(codec::build_guild_query_response(&guild)),
-                        ));
+                    let packet = super::bounded(ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(
+                        Box::new(codec::build_guild_query_response(&guild)),
+                    ));
                     packets.push((packet.opcode, packet.body));
                 }
             }
@@ -715,12 +695,12 @@ pub(super) fn event(ctx: &ReducerContext, event: &guild::GuildEvent) -> bool {
                 guild::member(ctx, guid).filter(|member| member.guild_id == event.guild_id)
             {
                 if let Some(packet) = super::guild::roster(ctx, event.guild_id, member.rank_id) {
-                    let packet = super::guild::encode(packet);
+                    let packet = super::bounded(packet);
                     packets.push((packet.opcode, packet.body));
                 }
             }
         } else if event.kind == event_kind::INVITE {
-            let packet = super::guild::encode(ServerOpcodeMessage::SMSG_GUILD_INVITE(Box::new(
+            let packet = super::bounded(ServerOpcodeMessage::SMSG_GUILD_INVITE(Box::new(
                 codec::build_guild_invite(
                     event.strings.first().cloned().unwrap_or_default(),
                     event.strings.get(1).cloned().unwrap_or_default(),
@@ -796,6 +776,17 @@ pub struct GuildProjectionRetry {
     pub scheduled_at: ScheduleAt,
     pub call: WorldGuildUpdate,
 }
+
+crate::outside_table_catalog!(
+    game_guild_character,
+    game_guild_projection,
+    game_guild_membership_projection,
+    game_realm_guild_presence,
+    game_realm_guild_command,
+    game_world_guild_update,
+    game_guild_projection_retry
+);
+crate::virtual_clock_exempt!(game_guild_projection_retry);
 
 #[reducer(on_result(game_world_guild_update))]
 pub fn world_guild_update_answered(
@@ -939,7 +930,7 @@ pub fn operator_import_guild(ctx: &ReducerContext, state: Import) -> Result<(), 
     {
         return Err("guild invitations conflict with Realm state".into());
     }
-    guild::observe_guild_id(ctx, id);
+    guild::IdSequence::Guild.observe(ctx, id);
     ctx.db.game_guild().insert(state.guild);
     for rank in state.ranks {
         ctx.db.game_guild_rank().insert(GuildRank { id: 0, ..rank });

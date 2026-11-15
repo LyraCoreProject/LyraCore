@@ -35,7 +35,7 @@ pub(crate) fn open_geometry_chain(data_dir: &Path) -> Result<PatchChain> {
 }
 
 // Names are NUL-separated; MMID and MWID store byte offsets, while placements index that list.
-fn offset_to_index(names: &[String]) -> BTreeMap<u32, usize> {
+pub(crate) fn offset_to_index(names: &[String]) -> BTreeMap<u32, usize> {
     let mut map = BTreeMap::new();
     let mut off = 0u32;
     for (i, n) in names.iter().enumerate() {
@@ -45,7 +45,7 @@ fn offset_to_index(names: &[String]) -> BTreeMap<u32, usize> {
     map
 }
 
-fn resolve_name<'a>(
+pub(crate) fn resolve_name<'a>(
     names: &'a [String],
     offsets: &BTreeMap<u32, usize>,
     indices: &[u32],

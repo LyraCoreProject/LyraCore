@@ -43,12 +43,15 @@ pub(crate) fn ask_artifact_offline(
 ) -> Result<Option<f64>, String> {
     let artifact = lyracore_package_delta::ScriptArtifact::parse(artifact_json)
         .map_err(|failure| failure.to_string())?;
-    let mut bound: Vec<_> = artifact
-        .scripts()
-        .iter()
-        .filter(|script| script.enabled() && script.event().as_str() == event)
-        .collect();
-    bound.sort_by_key(|script| (script.priority(), script.script_id()));
+    let bound = crate::script_binding::dispatch_order(
+        artifact
+            .scripts()
+            .iter()
+            .filter(|script| script.event().as_str() == event)
+            .collect(),
+        |script| script.enabled(),
+        |script| (script.priority(), script.script_id()),
+    );
     let scripts: Vec<_> = bound
         .iter()
         .map(|script| RuntimeScript {

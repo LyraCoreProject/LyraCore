@@ -4,22 +4,29 @@ use spacetimedb::{ReducerContext, TimeDuration};
 use crate::{game_corpse_loot, game_gameobject, game_gameobject_pool_member, game_loot_roll};
 
 use super::*;
+use crate::{game_creature_spawn, game_creature_template, CreatureSpawn};
 
+/// How long a dead creature's corpse stays before decay; respawn timing counts from its death.
+pub(crate) const CREATURE_CORPSE_DECAY_MICROS: i64 = 60_000_000;
+
+/// Removes a creature, pet or other owned unit from the world with every row kept for its life.
+/// Every removal path calls this; `creature_teardown_architecture_test` names the rows it clears.
 pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
     if ctx.db.game_creature_spawn().guid().find(guid).is_none() {
         crate::items::vendor_stock::forget(ctx, guid);
     }
+    // Combat and threat end before motion and entity state.
     crate::combat::disengage(ctx, guid);
     crate::threat::clear_taunt_lock(ctx, guid);
     crate::combat::clear_lethal_damage_floor(ctx, guid);
     crate::creatures::cancel_relay_runs_for_source(ctx, guid);
     crate::creatures::reset_creature_lifecycle(ctx, guid);
     crate::creatures::drop_summon_expiry(ctx, guid);
-    let _ = crate::creatures::set_creature_gossip_menu(ctx, guid, None);
+    crate::creatures::clear_gossip_menu_override(ctx, guid);
+    crate::creatures::clear_live_pet_kind(ctx, guid);
     crate::loot::tag::clear(ctx, guid);
     ctx.db.game_creature_spline().guid().delete(guid);
-    crate::motion::drop_pending(ctx, guid);
-    ctx.db.game_entity_motion().guid().delete(guid);
+    crate::encounter::forget_equipment(ctx, guid);
     crate::loot::reap_corpse_loot_family(ctx, guid);
     // Delete last; its Relay destroys the client object.
     crate::WorldEntity::delete(ctx, guid);
@@ -74,9 +81,7 @@ pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
             } else {
                 let death_ts = spawn
                     .despawn_at
-                    .checked_sub(TimeDuration::from_micros(
-                        crate::combat::CORPSE_DECAY_MICROS,
-                    ))
+                    .checked_sub(TimeDuration::from_micros(CREATURE_CORPSE_DECAY_MICROS))
                     .unwrap_or(spawn.despawn_at);
                 let armed = death_ts
                     .checked_add(TimeDuration::from_micros(
@@ -90,7 +95,7 @@ pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
                     now_ts
                 }
             };
-            spawn.despawn_at = crate::creatures::timer_never(ctx);
+            spawn.despawn_at = crate::time::timer_never(ctx);
             spawns.guid().update(spawn);
         }
     }
@@ -118,17 +123,17 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
             && lyracore_shared::instance::has_instance_population(spawn.map_id))
             || entities.guid().find(guid).is_some()
         {
-            spawn.respawn_at = crate::creatures::timer_never(ctx);
+            spawn.respawn_at = crate::time::timer_never(ctx);
             spawns.guid().update(spawn);
             continue;
         }
         let Some(entry) = crate::creatures::population::entry_for_spawn(ctx, &spawn) else {
-            spawn.respawn_at = crate::creatures::timer_never(ctx);
+            spawn.respawn_at = crate::time::timer_never(ctx);
             spawns.guid().update(spawn);
             continue;
         };
         if spawn.source_guid == 0 && entry != spawn.entry {
-            spawn.respawn_at = crate::creatures::timer_never(ctx);
+            spawn.respawn_at = crate::time::timer_never(ctx);
             spawns.guid().update(spawn.clone());
             spawn.source_guid = guid;
             spawn.guid = packed_creature_spawn_guid(entry, guid as u32);
@@ -149,7 +154,7 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
         crate::creatures::cancel_relay_runs_for_new_life(ctx, guid);
         // Advance and disarm the spawn before the new entity exposes this life.
         if let Some(mut s) = spawns.guid().find(guid) {
-            s.respawn_at = crate::creatures::timer_never(ctx);
+            s.respawn_at = crate::time::timer_never(ctx);
             s.life_seq = s.life_seq.saturating_add(1);
             spawns.guid().update(s);
         }

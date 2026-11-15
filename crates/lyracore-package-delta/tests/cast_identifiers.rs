@@ -1,20 +1,11 @@
 mod common;
 
 use common::{
-    creature_cast_claim, creature_spell_claim, PACKAGE_CREATURE_SPELL, REAL_CREATURE_CAST,
-    REAL_CREATURE_SPELL, WHOLE_CREATURE_SPELL_ROW,
+    artifact, creature_cast_claim, creature_spell_claim, PACKAGE_CREATURE_SPELL,
+    REAL_CREATURE_CAST, REAL_CREATURE_SPELL, WHOLE_CREATURE_SPELL_ROW,
 };
-use lyracore_package_delta::{
-    is_fixture_reserved_cast_id, is_package_cast_id, DeltaError, PackageDelta, PrimaryKey, Table,
-    FIXTURE_CREATURE_ID_CEIL, FIXTURE_CREATURE_ID_FLOOR, PACKAGE_CAST_ID_CEIL,
-    PACKAGE_CAST_ID_FLOOR,
-};
-
-fn artifact(package: &str, claims: &str) -> String {
-    format!(
-        r#"{{"version":1,"package":"{package}","source_hash":"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef","claims":[{claims}]}}"#
-    )
-}
+use lyracore_package_delta::ids::PackageRange;
+use lyracore_package_delta::{is_package_cast_id, DeltaError, PackageDelta, PrimaryKey, Table};
 
 const A_PRIORITY: &str = r#"{"priority":{"type":"u8","value":20}}"#;
 const A_SPELL_ID: &str = r#"{"spell_id":{"type":"u32","value":200}}"#;
@@ -28,7 +19,7 @@ fn a_creature_spell_key_is_the_id_itself() {
 
 #[test]
 fn a_package_may_insert_a_creature_spell_row_inside_the_package_range() {
-    for id in [PACKAGE_CAST_ID_FLOOR, 10_500_000, PACKAGE_CAST_ID_CEIL] {
+    for id in [10_000_000u64, 10_500_000, 10_999_999u64] {
         let json = artifact(
             "example.pkg",
             &creature_spell_claim(id, "insert", WHOLE_CREATURE_SPELL_ROW),
@@ -41,7 +32,7 @@ fn a_package_may_insert_a_creature_spell_row_inside_the_package_range() {
 
 #[test]
 fn an_insert_outside_the_package_range_is_refused() {
-    for id in [1, PACKAGE_CAST_ID_FLOOR - 1, PACKAGE_CAST_ID_CEIL + 1] {
+    for id in [1, 9_999_999u64, 11_000_000u64] {
         let json = artifact(
             "example.pkg",
             &creature_spell_claim(id, "insert", WHOLE_CREATURE_SPELL_ROW),
@@ -49,7 +40,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::CastIdNotClientSafe { id },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Cast,
+                id
+            },
             "creature spell row {id}"
         );
     }
@@ -72,7 +66,7 @@ fn an_update_may_name_a_real_imported_creature_spell_row() {
 
 #[test]
 fn a_creature_spell_cannot_target_a_fixture_cluster_creature() {
-    for id in [FIXTURE_CREATURE_ID_FLOOR, 51_001, FIXTURE_CREATURE_ID_CEIL] {
+    for id in [51_000u32, 51_001, 51_999u32] {
         let fields = format!(r#"{{"creature_entry":{{"type":"u32","value":{id}}}}}"#);
         let json = artifact(
             "example.pkg",
@@ -81,7 +75,10 @@ fn a_creature_spell_cannot_target_a_fixture_cluster_creature() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the claim must be refused"),
-            DeltaError::CreatureIdFixtureReserved { id }
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Creature,
+                id: u64::from(id)
+            }
         );
     }
 }
@@ -95,7 +92,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band_for_creature_sp
         );
         assert_eq!(
             PackageDelta::parse(&update).expect_err("the update must be refused"),
-            DeltaError::CastIdFixtureReserved { id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Cast,
+                id
+            },
             "update on fixture creature spell row {id}"
         );
 
@@ -105,7 +105,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band_for_creature_sp
         );
         assert_eq!(
             PackageDelta::parse(&insert).expect_err("the insert must be refused"),
-            DeltaError::CastIdFixtureReserved { id },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Cast,
+                id
+            },
             "insert on fixture creature spell row {id}"
         );
     }
@@ -133,9 +136,9 @@ fn the_cast_package_range_is_disjoint_from_every_reserved_identifier() {
         );
     }
 
-    for id in [PACKAGE_CAST_ID_FLOOR, PACKAGE_CAST_ID_CEIL] {
+    for id in [10_000_000u64, 10_999_999u64] {
         assert!(
-            !is_fixture_reserved_cast_id(id),
+            !PackageRange::Cast.is_fixture_reserved(id),
             "Package creature spell row {id} must not be fixture-reserved"
         );
     }
@@ -168,7 +171,7 @@ fn a_creature_cast_key_is_the_creature_entry_itself() {
 
 #[test]
 fn every_insert_on_game_creature_cast_is_refused_by_name_whatever_the_identifier() {
-    for creature_entry in [1u32, REAL_CREATURE_CAST, PACKAGE_CAST_ID_FLOOR as u32] {
+    for creature_entry in [1u32, REAL_CREATURE_CAST, 10_000_000u32] {
         let json = artifact(
             "example.pkg",
             &creature_cast_claim(creature_entry, "insert", A_SPELL_ID),
@@ -201,7 +204,7 @@ fn an_update_on_a_real_creature_entry_is_accepted() {
 
 #[test]
 fn a_creature_cast_cannot_target_a_fixture_cluster_creature() {
-    for id in [FIXTURE_CREATURE_ID_FLOOR, 51_001, FIXTURE_CREATURE_ID_CEIL] {
+    for id in [51_000u32, 51_001, 51_999u32] {
         let json = artifact(
             "example.pkg",
             &creature_cast_claim(id, "update", A_SPELL_ID),
@@ -209,7 +212,10 @@ fn a_creature_cast_cannot_target_a_fixture_cluster_creature() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the claim must be refused"),
-            DeltaError::CreatureIdFixtureReserved { id }
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Creature,
+                id: u64::from(id)
+            }
         );
     }
 }

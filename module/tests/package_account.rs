@@ -100,8 +100,10 @@ fn a_package_character_meets_the_client_name_race_and_class_refusals() {
         "create_character",
         &["1", &arg("Taken"), "1", "1", "0", "0", "0", "0", "0", "0"],
     );
-    shard
-        .assert_sql("INSERT INTO game_char_base_info (race_class, race, class) VALUES (257, 1, 1)");
+    shard.insert_row(
+        "game_char_base_info",
+        &[("race_class", &257), ("race", &1), ("class", &1)],
+    );
 
     assert_refusal(&shard, "Taken", "1", "1", "NAME_IN_USE");
     assert_refusal(&shard, "Shaman", "1", "7", "INVALID_RACE_CLASS");

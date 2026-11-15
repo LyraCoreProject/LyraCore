@@ -1,7 +1,6 @@
 use lyracore_shared::constants::player_flags;
 use spacetimedb::{log, reducer, ReducerContext};
 
-use crate::native::game_native_player;
 use crate::transport::game_transport_passenger;
 use crate::{game_character, game_map, game_world_entity};
 
@@ -39,13 +38,7 @@ pub fn operator_teleport_character(
         ));
     }
     let guid = character.guid;
-    if ctx
-        .db
-        .game_native_player()
-        .character_guid()
-        .find(guid)
-        .is_some_and(|native| native.teleport.is_some())
-    {
+    if crate::native::is_teleporting(ctx, guid) {
         return Err("character is already teleporting".into());
     }
     if crate::taxi::is_in_flight(ctx, guid) {
@@ -69,11 +62,12 @@ pub fn operator_teleport_character(
         if entity.dead {
             return Err("character is dead".into());
         }
-        let now_ms = crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1_000;
+        let now_ms = crate::time::now_ms(ctx);
         if entity.combat_active || entity.combat_until_ms > now_ms {
             return Err("character is in combat".into());
         }
-        crate::world::teleport_player(ctx, guid, map_id, 0, x, y, z, o);
+        crate::world::teleport(ctx, guid, map_id, 0, [x, y, z, o])
+            .map_err(|refusal| refusal.to_string())?;
     } else {
         if character.online {
             return Err("character is online without a world entity; retry after logout".into());

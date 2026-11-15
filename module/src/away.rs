@@ -82,11 +82,11 @@ pub(crate) fn apply_set_away(
 pub(crate) fn flags_at_entry(
     player_flags: u32,
     stored_kind: Option<u8>,
-    entry: crate::world::WorldEntry,
+    entry: crate::character::WorldEntry,
 ) -> u32 {
     let flags = player_flags & !AWAY_BITS;
     match (entry, stored_kind) {
-        (crate::world::WorldEntry::WorldPort, Some(kind)) => flags | flag_of(kind),
+        (crate::character::WorldEntry::WorldPort, Some(kind)) => flags | flag_of(kind),
         _ => flags,
     }
 }
@@ -94,12 +94,12 @@ pub(crate) fn flags_at_entry(
 pub(crate) fn at_world_entry(
     ctx: &ReducerContext,
     entity: &mut crate::WorldEntity,
-    entry: crate::world::WorldEntry,
+    entry: crate::character::WorldEntry,
 ) {
     let rows = ctx.db.game_character_away();
     let stored_kind = rows.character_guid().find(entity.guid).map(|row| row.kind);
     entity.player_flags = flags_at_entry(entity.player_flags, stored_kind, entry);
-    if entry == crate::world::WorldEntry::Login {
+    if entry == crate::character::WorldEntry::Login {
         rows.character_guid().delete(entity.guid);
     }
 }
@@ -205,7 +205,7 @@ mod tests {
 
     #[test]
     fn a_login_ends_the_away_status_and_a_world_port_keeps_it() {
-        use crate::world::WorldEntry::{Login, WorldPort};
+        use crate::character::WorldEntry::{Login, WorldPort};
         assert_eq!(flags_at_entry(0x00, Some(DND), Login), 0x00);
         assert_eq!(flags_at_entry(0x02, Some(AFK), Login), 0x00);
         assert_eq!(flags_at_entry(0x00, Some(DND), WorldPort), 0x04);

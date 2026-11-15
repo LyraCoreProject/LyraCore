@@ -12,15 +12,23 @@ fn a_kill_purges_loot_and_eligibility_left_on_the_living_creature() {
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     let wolf = wolves_beside(&shard, "1", &[5.0]).remove(0);
-    shard.assert_sql(&format!(
-        "INSERT INTO game_corpse_loot (id, corpse_guid, slot, item_entry, count, quest_only, \
-         reserved_for, designated_looter_guid, master_only, withheld, random_property_id) \
-         VALUES (900001, {wolf}, 0, 2589, 1, false, 0, 0, false, false, 0)"
-    ));
-    shard.assert_sql(&format!(
-        "INSERT INTO game_corpse_loot_eligible (id, corpse_guid, eligible_guid) \
-         VALUES (900002, {wolf}, 99)"
-    ));
+    shard.insert_row(
+        "game_corpse_loot",
+        &[
+            ("id", &900001),
+            ("corpse_guid", &wolf),
+            ("item_entry", &2589),
+            ("count", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_corpse_loot_eligible",
+        &[
+            ("id", &900002),
+            ("corpse_guid", &wolf),
+            ("eligible_guid", &99),
+        ],
+    );
 
     shard.assert_call("debug_kill_creature", &["1", &wolf]);
 

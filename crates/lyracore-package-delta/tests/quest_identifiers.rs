@@ -4,10 +4,8 @@ use common::{
     artifact, quest_cast_objective_claim, quest_claim, quest_objective_claim,
     quest_reward_choice_claim, quest_text_claim, WHOLE_QUEST_ROW,
 };
-use lyracore_package_delta::{
-    is_fixture_reserved_quest_id, is_package_quest_id, DeltaError, PackageDelta, PrimaryKey, Table,
-    PACKAGE_QUEST_ID_CEIL, PACKAGE_QUEST_ID_FLOOR,
-};
+use lyracore_package_delta::ids::PackageRange;
+use lyracore_package_delta::{is_package_quest_id, DeltaError, PackageDelta, PrimaryKey, Table};
 
 const A_TITLE: &str = r#"{"title":{"type":"string","value":"A Kindled Errand, Retitled"}}"#;
 
@@ -20,7 +18,7 @@ fn a_quest_header_key_is_the_entry_itself() {
 
 #[test]
 fn a_package_may_insert_a_quest_inside_the_package_range() {
-    for entry in [PACKAGE_QUEST_ID_FLOOR, 8_500_000, PACKAGE_QUEST_ID_CEIL] {
+    for entry in [8_000_000u32, 8_500_000, 8_999_999u32] {
         let json = artifact(
             "example.pkg",
             &quest_claim(entry, "insert", WHOLE_QUEST_ROW),
@@ -32,7 +30,7 @@ fn a_package_may_insert_a_quest_inside_the_package_range() {
 
 #[test]
 fn an_insert_outside_the_package_range_is_refused() {
-    for entry in [1, PACKAGE_QUEST_ID_FLOOR - 1, PACKAGE_QUEST_ID_CEIL + 1] {
+    for entry in [1, 7_999_999u32, 9_000_000u32] {
         let json = artifact(
             "example.pkg",
             &quest_claim(entry, "insert", WHOLE_QUEST_ROW),
@@ -40,7 +38,10 @@ fn an_insert_outside_the_package_range_is_refused() {
 
         assert_eq!(
             PackageDelta::parse(&json).expect_err("the insert must be refused"),
-            DeltaError::QuestIdNotClientSafe { entry },
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Quest,
+                id: u64::from(entry)
+            },
             "quest {entry}"
         );
     }
@@ -61,7 +62,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         let update = artifact("example.pkg", &quest_claim(entry, "update", A_TITLE));
         assert_eq!(
             PackageDelta::parse(&update).expect_err("the update must be refused"),
-            DeltaError::QuestIdFixtureReserved { entry },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Quest,
+                id: u64::from(entry)
+            },
             "update on fixture quest {entry}"
         );
 
@@ -71,7 +75,10 @@ fn no_operation_may_claim_the_project_wide_fixture_reserved_band() {
         );
         assert_eq!(
             PackageDelta::parse(&insert).expect_err("the insert must be refused"),
-            DeltaError::QuestIdFixtureReserved { entry },
+            DeltaError::IdFixtureReserved {
+                range: PackageRange::Quest,
+                id: u64::from(entry)
+            },
             "insert on fixture quest {entry}"
         );
     }
@@ -96,9 +103,9 @@ fn the_package_range_is_disjoint_from_every_reserved_identifier() {
         );
     }
 
-    for entry in [PACKAGE_QUEST_ID_FLOOR, PACKAGE_QUEST_ID_CEIL] {
+    for entry in [8_000_000u32, 8_999_999u32] {
         assert!(
-            !is_fixture_reserved_quest_id(entry),
+            !PackageRange::Quest.is_fixture_reserved(u64::from(entry)),
             "Package quest {entry} must not be fixture-reserved"
         );
     }
@@ -113,7 +120,7 @@ fn an_incomplete_quest_insert_is_refused() {
     let json = artifact(
         "example.pkg",
         &quest_claim(
-            PACKAGE_QUEST_ID_FLOOR,
+            8_000_000u32,
             "insert",
             &serde_json::to_string(&fields).unwrap(),
         ),
@@ -134,7 +141,7 @@ fn quest_text_shares_the_quest_header_band() {
     let json = artifact(
         "example.pkg",
         &quest_text_claim(
-            PACKAGE_QUEST_ID_FLOOR,
+            8_000_000u32,
             "insert",
             r#"{"details":{"type":"string","value":"d"},"objectives":{"type":"string","value":"o"},"offer_reward_text":{"type":"string","value":"r"},"request_items_text":{"type":"string","value":"i"}}"#,
         ),
@@ -156,21 +163,24 @@ fn quest_text_outside_the_package_range_may_not_be_inserted() {
 
     assert_eq!(
         PackageDelta::parse(&json).expect_err("the insert must be refused"),
-        DeltaError::QuestIdNotClientSafe { entry: 1 }
+        DeltaError::IdOutsidePackageRange {
+            range: PackageRange::Quest,
+            id: 1
+        }
     );
 }
 
 #[test]
 fn an_objectives_packed_key_derives_from_the_quest_and_the_slot() {
-    let key = PrimaryKey::quest_objective(PACKAGE_QUEST_ID_FLOOR, 2).expect("slot 2 is claimable");
+    let key = PrimaryKey::quest_objective(8_000_000u32, 2).expect("slot 2 is claimable");
 
-    assert_eq!(key.row_id(), (u64::from(PACKAGE_QUEST_ID_FLOOR) << 8) | 2);
+    assert_eq!(key.row_id(), (u64::from(8_000_000u32) << 8) | 2);
 }
 
 #[test]
 fn a_cast_objective_and_an_objective_pack_the_same_number_on_different_tables() {
-    let objective = PrimaryKey::quest_objective(PACKAGE_QUEST_ID_FLOOR, 1).unwrap();
-    let cast = PrimaryKey::quest_cast_objective(PACKAGE_QUEST_ID_FLOOR, 1).unwrap();
+    let objective = PrimaryKey::quest_objective(8_000_000u32, 1).unwrap();
+    let cast = PrimaryKey::quest_cast_objective(8_000_000u32, 1).unwrap();
 
     assert_eq!(objective.row_id(), cast.row_id());
     assert_ne!(objective.table(), cast.table());
@@ -181,7 +191,7 @@ fn an_objective_index_past_the_quest_max_is_refused() {
     let json = artifact(
         "example.pkg",
         &quest_objective_claim(
-            PACKAGE_QUEST_ID_FLOOR,
+            8_000_000u32,
             4,
             "insert",
             r#"{"kind":{"type":"u8","value":0},"target_entry":{"type":"u32","value":6},"required_count":{"type":"u32","value":5}}"#,
@@ -199,7 +209,7 @@ fn a_cast_objective_shares_the_objective_index_bound() {
     let json = artifact(
         "example.pkg",
         &quest_cast_objective_claim(
-            PACKAGE_QUEST_ID_FLOOR,
+            8_000_000u32,
             4,
             "insert",
             r#"{"spell_id":{"type":"u32","value":133}}"#,
@@ -214,9 +224,9 @@ fn a_cast_objective_shares_the_objective_index_bound() {
 
 #[test]
 fn a_reward_item_packed_key_derives_from_the_quest_and_the_item() {
-    let key = PrimaryKey::quest_reward_item(PACKAGE_QUEST_ID_FLOOR, 25).expect("row is claimable");
+    let key = PrimaryKey::quest_reward_item(8_000_000u32, 25).expect("row is claimable");
 
-    assert_eq!(key.row_id(), (u64::from(PACKAGE_QUEST_ID_FLOOR) << 32) | 25);
+    assert_eq!(key.row_id(), (u64::from(8_000_000u32) << 32) | 25);
 }
 
 #[test]
@@ -224,7 +234,7 @@ fn a_reward_choice_index_past_six_is_refused() {
     let json = artifact(
         "example.pkg",
         &quest_reward_choice_claim(
-            PACKAGE_QUEST_ID_FLOOR,
+            8_000_000u32,
             6,
             "insert",
             r#"{"item_entry":{"type":"u32","value":25},"count":{"type":"u32","value":1}}"#,

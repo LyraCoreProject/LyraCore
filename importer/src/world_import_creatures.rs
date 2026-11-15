@@ -682,28 +682,23 @@ mod tests {
             CREATE TABLE creature_display_info_addon (display_id INTEGER, build INTEGER, gender INTEGER, display_id_other_gender INTEGER, bounding_radius REAL DEFAULT 0.389, PRIMARY KEY(display_id,build));
             CREATE TABLE creature_classlevelstats (class INTEGER, level INTEGER, health REAL, melee_damage REAL, armor REAL);
             INSERT INTO creature_classlevelstats VALUES (1,10,100,20,50);")).unwrap();
-        WorldSource::Vmangos(connection)
+        WorldSource::fixture(connection)
     }
 
     #[test]
     fn vmangos_spawn_choices_and_dependencies_stop_at_the_first_zero() {
         let source = template_source();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch("CREATE TABLE creature (guid INTEGER, id INTEGER, id2 INTEGER, id3 INTEGER, id4 INTEGER, id5 INTEGER, spawn_flags INTEGER, map INTEGER, position_x REAL, position_y REAL, position_z REAL, patch_min INTEGER, patch_max INTEGER);
             INSERT INTO creature VALUES (1,5090042,0,5090043,0,0,0,0,1,2,3,0,10),(2,0,5090044,0,0,0,0,0,1,2,3,0,10);").unwrap();
-        let args = crate::parse_args_from([
+        let args = crate::cli::world_import_args([
             "--dump",
             "fixture.sqlite",
             "--map",
             "1",
             "--include-map",
             "0",
-        ])
-        .unwrap()
-        .world_import_args()
-        .unwrap();
+        ]);
         let entries = vmangos_creature_entries(&source, &args).unwrap();
         assert!(entries.contains(&5090042));
         assert!(!entries.contains(&5090043));
@@ -713,9 +708,7 @@ mod tests {
     #[test]
     fn zero_primary_entry_skips_the_spawn_and_reports_its_guid() {
         let source = template_source();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch("CREATE TABLE creature (guid INTEGER, id INTEGER, id2 INTEGER, id3 INTEGER, id4 INTEGER, id5 INTEGER, spawn_flags INTEGER, map INTEGER, patch_min INTEGER, patch_max INTEGER);
             INSERT INTO creature VALUES (42,0,5090042,0,0,0,0,0,0,10);").unwrap();
         for table in [
@@ -736,17 +729,14 @@ mod tests {
                 ))
                 .unwrap();
         }
-        let args = crate::parse_args_from([
+        let args = crate::cli::world_import_args([
             "--dump",
             "fixture.sqlite",
             "--family",
             "creatures",
             "--world-profile",
             "full-world",
-        ])
-        .unwrap()
-        .world_import_args()
-        .unwrap();
+        ]);
         let imported = plan(&source, &args).unwrap();
         assert_eq!(imported.spawn_row_count, 0);
         assert!(imported.spawn_batches.is_empty());
@@ -763,9 +753,7 @@ mod tests {
     #[test]
     fn creature_defense_flags_survive_import() {
         let source = template_source();
-        let WorldSource::Vmangos(connection) = &source else {
-            panic!("expected the unprofiled fixture source");
-        };
+        let connection = source.fixture_connection();
         connection
             .execute(
                 "UPDATE creature_template SET flags_extra = 20, static_flags1 = 16384",
@@ -829,7 +817,7 @@ mod tests {
             INSERT INTO creature_movement VALUES (1,1,0,10,20,30,0,0,0,0);
             CREATE TABLE creature_movement_template (entry INTEGER, point INTEGER, path_id INTEGER, position_x REAL, position_y REAL, position_z REAL, script_id INTEGER, waittime INTEGER, wander_distance REAL, orientation REAL);
             INSERT INTO creature_movement_template VALUES (10,1,0,40,50,60,0,0,0,0);").unwrap();
-        let source = crate::world_source::WorldSource::Vmangos(connection);
+        let source = crate::world_source::WorldSource::fixture(connection);
         for movement in [0, 1, 2, 3] {
             let spawns = [
                 (1, 10, 0.0, 0.0, 0.0, 0.0, movement, 60, 0),
@@ -928,9 +916,7 @@ mod tests {
     #[test]
     fn imported_creatures_cannot_use_the_operator_template_range() {
         let source = template_source();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection
             .execute_batch("UPDATE creature_template SET entry = 5200500")
             .unwrap();
@@ -953,9 +939,7 @@ mod tests {
     #[test]
     fn selected_model_gender_follows_the_display_and_build() {
         let source = template_source();
-        let WorldSource::Vmangos(connection) = &source else {
-            unreachable!()
-        };
+        let connection = source.fixture_connection();
         connection.execute_batch("INSERT INTO creature_display_info_addon VALUES (100,4222,0,0,0.5),(100,5875,1,0,0.75),(100,6000,2,0,1.0);").unwrap();
         let mut statements = Vec::new();
         templates(

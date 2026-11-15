@@ -1,8 +1,14 @@
 use lyracore_shared::spell_custom as custom;
 use spacetimedb::ReducerContext;
 
-use super::*;
+use super::{
+    apply_resistance, compose_magnitude, shed_auras, CastGateRefusal, CastRefusalKind,
+    CastRefusalReason, A_FLAG, A_PERIODIC_DAMAGE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_STEALTH,
+    CAST_FLAG_CHANNELED, RESIST_ARMOR, SPELL_POWER_COEFF_PCT,
+};
 use crate::game_world_entity;
+use crate::geometry::distance_3d;
+use crate::{game_aura, game_spell, Aura, Spell, SpellEffect};
 
 pub(crate) fn bonus_magnitude(
     points: i32,
@@ -38,10 +44,10 @@ pub(crate) fn mitigate_spell(
             ctx.db.game_world_entity().guid().find(target),
         ) {
             let percent = crate::combat::armor_mitigation_pct(
-                crate::combat::effective_armor(ctx, &target),
+                crate::modifiers::effective_armor(ctx, &target),
                 caster.level,
             );
-            return (i64::from(damage) * i64::from(100 - percent) / 100).max(1) as i32;
+            return crate::combat::armor_mitigated(damage as u32, percent) as i32;
         }
     }
     apply_resistance(ctx, target, caster, hdr.school_mask, damage, hdr.spell_id)
@@ -50,7 +56,7 @@ pub(crate) fn mitigate_spell(
 pub(crate) fn aura_casters_coexist(hdr: &Spell, kind: u8) -> bool {
     hdr.custom_flags & custom::ALLOW_STACK_BETWEEN_CASTER == 0
         && (hdr.custom_flags & custom::SEPARATE_AURA_PER_CASTER != 0
-            || hdr.cast_flags & SPELL_ATTR_CHANNELED != 0
+            || hdr.cast_flags & CAST_FLAG_CHANNELED != 0
             || matches!(kind, A_PERIODIC_DAMAGE | A_PERIODIC_HEAL | A_FLAG))
 }
 
@@ -63,23 +69,23 @@ pub(crate) fn finish_aura_apply(
 ) {
     if hdr.custom_flags & custom::SINGLE_TARGET_AURA != 0 {
         let spells = ctx.db.game_spell();
-        let mut displaced = std::collections::BTreeMap::<u64, Vec<Aura>>::new();
-        for aura in ctx.db.game_aura().by_caster().filter(&caster) {
-            if aura.target_guid != target
-                && spells.spell_id().find(aura.spell_id).is_some_and(|old| {
-                    old.custom_flags & custom::SINGLE_TARGET_AURA != 0
-                        && custom::single_target_conflicts(
-                            hdr.single_target_key,
-                            old.single_target_key,
-                        )
-                })
-            {
-                displaced.entry(aura.target_guid).or_default().push(aura);
-            }
-        }
-        for (unit, auras) in displaced {
-            shed_auras(ctx, unit, auras);
-        }
+        let displaced = ctx
+            .db
+            .game_aura()
+            .by_caster()
+            .filter(&caster)
+            .filter(|aura| {
+                aura.target_guid != target
+                    && spells.spell_id().find(aura.spell_id).is_some_and(|old| {
+                        old.custom_flags & custom::SINGLE_TARGET_AURA != 0
+                            && custom::single_target_conflicts(
+                                hdr.single_target_key,
+                                old.single_target_key,
+                            )
+                    })
+            })
+            .collect();
+        shed_auras(ctx, displaced);
     }
     if hdr.custom_flags & custom::AURA_APPLY_BREAKS_STEALTH != 0 {
         let shed = ctx
@@ -89,7 +95,7 @@ pub(crate) fn finish_aura_apply(
             .filter(&target)
             .filter(|a| a.eff_kind == A_STEALTH && a.effect_id != effect.id)
             .collect();
-        shed_auras(ctx, target, shed);
+        shed_auras(ctx, shed);
     }
 }
 
@@ -111,7 +117,7 @@ pub(crate) fn remove_auras_on_evade(ctx: &ReducerContext, unit: u64) {
                     .is_none_or(|s| s.custom_flags & custom::NOT_REMOVED_ON_EVADE == 0)
         })
         .collect();
-    shed_auras(ctx, unit, shed);
+    shed_auras(ctx, shed);
 }
 
 pub(crate) fn channel_target_in_range(ctx: &ReducerContext, aura: &Aura) -> bool {
@@ -119,7 +125,7 @@ pub(crate) fn channel_target_in_range(ctx: &ReducerContext, aura: &Aura) -> bool
         // Frozen effects remain valid after their catalogue row is removed.
         return true;
     };
-    if hdr.cast_flags & SPELL_ATTR_CHANNELED == 0 {
+    if hdr.cast_flags & CAST_FLAG_CHANNELED == 0 {
         return true;
     }
     // Periodic trigger holders live on the caster and carry the channel target separately.
@@ -176,6 +182,7 @@ pub(crate) fn check_target_level(minimum: u32, actual: u32) -> Result<(), CastGa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::spell::A_MOD_STAT;
 
     #[test]
     fn explicit_coefficients_scale_direct_and_periodic_effects_and_zero_is_not_a_fallback() {
@@ -215,7 +222,7 @@ mod tests {
 
     #[test]
     fn cross_caster_stacks_override_separate_slots_but_ordinary_dots_coexist() {
-        let mut hdr = crate::seed::base_spell(1, "test");
+        let mut hdr = crate::Spell::blank(1, "test");
         assert!(aura_casters_coexist(&hdr, A_PERIODIC_DAMAGE));
         assert!(!aura_casters_coexist(&hdr, A_MOD_STAT));
         hdr.custom_flags = custom::SEPARATE_AURA_PER_CASTER;

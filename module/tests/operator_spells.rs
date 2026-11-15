@@ -93,7 +93,16 @@ fn spell_edits_replace_all_owned_rows_and_keep_known_spells_and_cooldowns() {
     );
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_call("debug_learn_spell", &["1", &NEW_SPELL.to_string()]);
-    shard.assert_sql(&format!("INSERT INTO game_trainer_spell (id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap) VALUES (90000000,620,{NEW_SPELL},100,1,0,75)"));
+    shard.insert_row(
+        "game_trainer_spell",
+        &[
+            ("id", &90000000),
+            ("trainer_entry", &620),
+            ("spell_id", &NEW_SPELL),
+            ("cost", &100),
+            ("required_level", &1),
+        ],
+    );
     let known = shard.query_rows("SELECT * FROM game_player_spell");
     assert!(!known.is_empty());
     let cooldowns = shard.query_rows("SELECT * FROM game_spell_cd");
