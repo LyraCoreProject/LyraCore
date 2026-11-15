@@ -579,14 +579,17 @@ Spell catalogue imports carry source custom flags, minimum target levels and eff
 The additive Module schema defaults old rows to flags 0, minimum level 0, single-target key 0
 and coefficient -1.
 Package Deltas created before these columns remain valid. New Base Snapshots and Datascript
-clones include them. A negative coefficient uses the Module's existing automatic fallback.
+clones include them. A negative coefficient adds no spell power. The importer writes the vmangos
+computed coefficient for damage and healing effects, so an authored spell must set an explicit
+coefficient to scale with spell power.
 
 Direct SQL INSERTs must supply `custom_flags`, `min_target_level`, `single_target_key` and
 `bonus_coefficient` on their respective tables; SQL INSERT does not use migration defaults.
 
 Rust Packages that construct these row types directly must supply all four appended fields.
 The legacy fixture values are `custom_flags: 0`, `min_target_level: 0`, `single_target_key: 0`
-and `bonus_coefficient: -1.0`.
+and `bonus_coefficient: -1.0`. A Rust Package that constructs a `SpellGroup` must also supply
+`power_rank: 0`, which keeps the group's amount-based ranking.
 
 ### Command lists in EventAI
 

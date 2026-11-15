@@ -397,7 +397,14 @@ pub(crate) fn weapon_strike_spell_damage(
     } else {
         0
     };
-    let base = strike_amount(weapon, strike.bonus, strike.percent, mods, false, 0);
+    let slot = if strike.ranged {
+        crate::items::equip_slot::RANGED
+    } else {
+        crate::items::equip_slot::MAINHAND
+    };
+    let bonus =
+        crate::spell::bonuses::weapon_strike_bonus(ctx, attacker, slot, strike.bonus as f32);
+    let base = strike_amount(weapon, bonus as i32, strike.percent, mods, false, 0);
     let base = crate::spell::bonuses::weapon_spell_damage_taken(ctx, spell, target.guid, base);
     armor_mitigated(if crit { base * CRIT_MULT } else { base }, mit_pct)
 }
@@ -606,19 +613,21 @@ pub(crate) fn roll_swing_with_range(
         weapon: crate::conformance_rolls::draw(ctx, stream),
         block: crate::conformance_rolls::draw(ctx, stream) % 10_000,
     };
-    let mit_pct = armor_mitigation_pct(
-        crate::modifiers::effective_armor(ctx, target),
-        attacker.level,
-    );
+    let defender = Defender {
+        taken: crate::spell::bonuses::WeaponDamageTaken::of(ctx, target.guid),
+        armor_pct: armor_mitigation_pct(
+            crate::modifiers::effective_armor(ctx, target),
+            attacker.level,
+        ),
+        block_value: defender_block_value(ctx, target),
+    };
     resolve_swing(
         outcome,
         table.partial_block,
         rolls,
         range,
         strike.map(|strike| strike.damage),
-        mit_pct,
-        defender_block_value(ctx, target),
-        |damage| crate::spell::bonuses::weapon_damage_taken(ctx, target.guid, damage),
+        defender,
     )
 }
 
@@ -636,6 +645,12 @@ struct SwingRolls {
     block: u32,
 }
 
+struct Defender {
+    taken: crate::spell::bonuses::WeaponDamageTaken,
+    armor_pct: u32,
+    block_value: u32,
+}
+
 // Returns (damage, outcome, blocked); a blocked crit stays a crit.
 fn resolve_swing(
     outcome: AttackOutcome,
@@ -643,9 +658,7 @@ fn resolve_swing(
     rolls: SwingRolls,
     (min, max): (u32, u32),
     strike: Option<QueuedStrikeDamage>,
-    mit_pct: u32,
-    block_value: u32,
-    damage_taken: impl FnOnce(u32) -> u32,
+    defender: Defender,
 ) -> (u32, AttackOutcome, u32) {
     let weapon = min + rolls.weapon % (max - min + 1);
     let base = strike.map_or(weapon, |strike| {
@@ -655,7 +668,7 @@ fn resolve_swing(
             strike.mod_pct,
         )
     });
-    let base = damage_taken(base);
+    let base = defender.taken.apply(base);
     let pre_mit = match outcome {
         AttackOutcome::Miss | AttackOutcome::Dodge | AttackOutcome::Parry => {
             return (0, outcome, 0)
@@ -666,7 +679,7 @@ fn resolve_swing(
         AttackOutcome::Crushing => base * CRUSH_DAMAGE_PCT / 100,
         AttackOutcome::Normal | AttackOutcome::Block => base,
     };
-    let dmg = armor_mitigated(pre_mit, mit_pct);
+    let dmg = armor_mitigated(pre_mit, defender.armor_pct);
     // vmangos rolls a queued strike's partial block after the table, so it can crit and block.
     let blocks = match strike {
         Some(_) => rolls.block < partial_block_bp,
@@ -675,7 +688,7 @@ fn resolve_swing(
     if !blocks {
         return (dmg, outcome, 0);
     }
-    let blocked = block_value.min(dmg);
+    let blocked = defender.block_value.min(dmg);
     let outcome = if outcome == AttackOutcome::Crit {
         AttackOutcome::Crit
     } else {
@@ -721,7 +734,15 @@ pub(crate) fn roll_ranged_swing(
         | AttackOutcome::Block => base,
     };
     if school != 0 {
-        return (pre_mit, outcome);
+        let resisted = crate::spell::apply_resistance(
+            ctx,
+            target.guid,
+            attacker.guid,
+            1 << school,
+            pre_mit as i32,
+            0,
+        );
+        return (resisted.max(0) as u32, outcome);
     }
     let mit_pct = armor_mitigation_pct(
         crate::modifiers::effective_armor(ctx, target),
@@ -807,7 +828,7 @@ mod queued_strike_tests {
         rolls: SwingRolls,
         range: (u32, u32),
         strike: Option<QueuedStrikeDamage>,
-        mit_pct: u32,
+        armor_pct: u32,
         block_value: u32,
     ) -> (u32, AttackOutcome, u32) {
         super::resolve_swing(
@@ -816,9 +837,11 @@ mod queued_strike_tests {
             rolls,
             range,
             strike,
-            mit_pct,
-            block_value,
-            |damage| damage,
+            super::Defender {
+                taken: crate::spell::bonuses::WeaponDamageTaken::NONE,
+                armor_pct,
+                block_value,
+            },
         )
     }
 

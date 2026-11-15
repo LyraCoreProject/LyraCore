@@ -1243,7 +1243,7 @@ fn spell_bonus_coefficient(s: &Spell, dbc: &SpellTables, index: usize, kind: u8)
         if s.effect[i] == 6 {
             let penalties = match s.effect_aura[i] {
                 4 | 33 => 1,
-                5 | 7 | 26 => 2,
+                5 | 12 | 26 => 2,
                 _ => 0,
             };
             for _ in 0..penalties {
@@ -1397,10 +1397,9 @@ fn resolve_effect_kind(
         kind
     };
     let kind = if kind == A_PERIODIC_DAMAGE
-        && (effect_id == 27
-            || header
-                .overrides
-                .is_some_and(|spell| spell.periodic_damage_as_persistent_area))
+        && header
+            .overrides
+            .is_some_and(|spell| spell.periodic_damage_as_persistent_area)
     {
         E_PERSISTENT_AREA
     } else {
@@ -2012,6 +2011,29 @@ mod tests {
             );
             assert!(!effect.equip_supported);
         }
+    }
+
+    #[test]
+    fn default_coefficient_penalises_stun_and_not_fear_effects() {
+        let dbc = fixture_tables();
+        let spell = |aura| Spell {
+            id: 1,
+            effect: [2, 6, 0],
+            effect_aura: [0, aura, 0],
+            implicit_target_a: [6, 6, 0],
+            casting_time_index: 1,
+            spell_level: 60,
+            ..Default::default()
+        };
+        // vmangos GetCastTimeForBonus: 1500 ms, truncated after each -5%: 1425, then 1353.
+        assert_eq!(
+            spell_bonus_coefficient(&spell(12), &dbc, 0, E_DAMAGE),
+            1353.0 / 3500.0
+        );
+        assert_eq!(
+            spell_bonus_coefficient(&spell(7), &dbc, 0, E_DAMAGE),
+            1500.0 / 3500.0
+        );
     }
 
     #[test]
@@ -3050,6 +3072,15 @@ mod tests {
         }];
         let (mut rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
         rows.effects.remove(0)
+    }
+
+    #[test]
+    fn a_persistent_area_periodic_damage_stays_a_channel_aura_without_an_override() {
+        // Blizzard 10 and its siblings: vmangos removes the dynamic object when the channel ends.
+        assert_eq!(
+            equip_review_effect(10, 3, 24, 0, (27, 18, 0)).kind,
+            A_PERIODIC_DAMAGE
+        );
     }
 
     #[test]
