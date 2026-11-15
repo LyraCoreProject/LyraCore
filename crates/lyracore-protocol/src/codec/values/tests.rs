@@ -2,7 +2,8 @@ use super::*;
 use crate::codec::item::ItemInstanceView;
 use crate::codec::test_fixtures::{ranged_sheet_stats, worn_item};
 use wow_world_messages::vanilla::{
-    ItemSlot, Object, ServerMessage, UpdateMask, UpdatePlayer, VisibleItemIndex, SMSG_UPDATE_OBJECT,
+    ItemSlot, Object, ServerMessage, Skill, UpdateMask, UpdatePlayer, VisibleItemIndex,
+    SMSG_UPDATE_OBJECT,
 };
 use wow_world_messages::Guid;
 
@@ -39,7 +40,7 @@ fn every_values_builder_serializes_without_the_object_type_bit() {
         ),
         (
             "skill",
-            build_skill_values(g, 3, Skill::Fishing, 100, 150).unwrap(),
+            build_skill_values(g, 3, SkillInfo::new(Skill::Fishing, 0, 100, 150, 0, 0)).unwrap(),
         ),
         ("talent_points", build_talent_points_values(g, 2)),
         ("xp", build_player_xp_values(g, 400, 1000)),

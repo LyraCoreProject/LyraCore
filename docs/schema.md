@@ -897,6 +897,34 @@ keeps ranged crit separate from melee crit and refreshes when the ranged weapon 
 Publish repair refreshes these projections; see
 [the migration order](danger-zones.md#equip-spell-migration).
 
+`game_player_skill.current` stores earned progress without bonuses; `max_rank` stores the level
+or profession cap. A new weapon, ranged, unarmed or defense skill starts at 1 with a cap of five
+per level. Learning a spell grants its combat skill line when `game_skill_ability.acquire_method`
+is 2, as a weapon master's wrapper spell does. Login and publish repair also add a known combat
+skill that an existing Character never stored, including one from a starting spell it first learns
+at that login; that row starts at the level cap, the value a missing row used to give. Existing
+progress survives login and publish repair. Ranged skills also follow the level cap.
+A landed weapon hit trains the skill of the weapon that made it: the ranged weapon for ranged
+attacks and wand shots, the off-hand weapon for off-hand swings, otherwise the main hand or
+unarmed. Neither weapon nor defense skill rises against a player-controlled opponent.
+An empty or broken ranged weapon slot contributes zero attack skill; an empty main hand uses
+unarmed. Feral forms use the level cap for melee skill.
+
+`A_MOD_SKILL` retains signed skill points, the skill line in `p0`, and temporary (0) or permanent
+(1) selection in `p1`. Source aura 30 supplies temporary bonuses; aura 98 supplies talent and
+racial bonuses, including Human Sword and Mace Specialization. Active Auras supply both bonuses
+without changing earned progress or granting unknown skills. Combat and skill delivery use the
+same values. `PLAYER_SKILL_INFO` packs the signed temporary bonus in the low half and permanent
+bonus in the high half, in both CREATE and VALUES. Equip removal, Aura expiry and repair update
+these fields and weapon crit. Defense bonuses also reach white melee hit, avoidance, crit and
+glancing calculations, including maximum defense against another Character. Skill requirements
+for equipment, skinning, gathering and locks also include bonuses. Fishing retains its existing
+loot selection without a skill-dependent success roll; its 11 ModSkill equipment items deliver
+the correct bonus fields but do not change that missing roll.
+Flattened defense enchantments still use the separate item-stat fold. Their bonus fields are
+absent, and their positive bonus is added after a negative skill Aura has clamped at zero. The
+feature ledger records this remaining item-enchantment representation and delivery gap.
+
 | Source aura type | Items | Consumer or missing behavior | Equip result | Example spell |
 | --- | ---: | --- | --- | ---: |
 | 3 PeriodicDamage | 1 | periodic damage / leech shape not certified | Inert | 19307 |
@@ -910,7 +938,7 @@ Publish repair refreshes these projections; see
 | 22 ModResistance | 74 | resistance_bonus; flat school mask | Correct | 12956 |
 | 23 PeriodicTriggerSpell | 9 | periodic trigger needs mechanics | Inert | 758 |
 | 29 ModStat | 1 | effective_stat supports self auras; selected effect 35 needs area mechanics | Inert for the selected Item | 7363 |
-| 30 ModSkill | 206 | skill modifier needs mechanics | Inert | 7515 |
+| 30 ModSkill | 206 | signed skill points; combat, skill requirements and client bonuses | Correct bonuses; fishing success roll remains absent | 7515 |
 | 31 ModIncreaseSpeed | 62 | run_speed lacks faithful mounted and slow composition | Inert | 17625 |
 | 42 ProcTriggerSpell | 52 | item proc restrictions not certified | Inert | 4070 |
 | 43 ProcTriggerDamage | 1 | item proc restrictions not certified | Inert | 16550 |

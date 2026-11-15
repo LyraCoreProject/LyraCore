@@ -253,6 +253,16 @@ healing calculation. Flat school damage and damage shields no longer import as d
 or absorbs. The complete admitted/inert type list and Item counts are in
 [the equip aura support audit](schema.md#equip-aura-support).
 
+The skill update needs a `spell` reimport to translate source auras 30 and 98 to `A_MOD_SKILL`.
+After import, publish repair rebuilds stale equipment Auras and repairs existing cast and passive
+Auras from their current definitions. It also repairs level-dependent skill caps. No skill table
+columns change, and no earned current value is reset. A stored value of 5 cannot distinguish old
+initialization from earned progress, so existing Characters keep it. A newly learned skill
+starts at 1. Login and repair also add the rows of combat skills an existing Character knows
+through a spell but never stored, such as starting Daggers, Bows or Wands, or learns from a
+starting spell at login. Those rows start at the level cap, the value a missing row used to give.
+Login applies the same rules and reconstructs both client bonus halves.
+
 Before play resumes:
 
 1. Publish the Module through a planned additive update.

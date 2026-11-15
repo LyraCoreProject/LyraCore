@@ -4,8 +4,8 @@ use super::item::ItemInstanceView;
 use super::update_mask;
 use lyracore_shared::packing::unpack4;
 use wow_world_messages::vanilla::{
-    ItemSlot, Object, Skill, SkillInfo, SkillInfoIndex, UpdateItem, UpdateMask, UpdatePlayer,
-    UpdateUnit, SMSG_UPDATE_AURA_DURATION, SMSG_UPDATE_OBJECT,
+    ItemSlot, Object, SkillInfo, SkillInfoIndex, UpdateItem, UpdateMask, UpdatePlayer, UpdateUnit,
+    SMSG_UPDATE_AURA_DURATION, SMSG_UPDATE_OBJECT,
 };
 use wow_world_messages::Guid;
 
@@ -357,16 +357,10 @@ pub fn build_owner_summon_values(owner_guid: u64, pet_guid: u64) -> SMSG_UPDATE_
     })
 }
 
-pub fn build_skill_values(
-    guid: u64,
-    slot: u8,
-    skill: Skill,
-    cur: u16,
-    max: u16,
-) -> Option<SMSG_UPDATE_OBJECT> {
+pub fn build_skill_values(guid: u64, slot: u8, skill: SkillInfo) -> Option<SMSG_UPDATE_OBJECT> {
     let idx = SkillInfoIndex::try_from(slot).ok()?;
     Some(player_values(guid, |player| {
-        player.set_player_skill_info(SkillInfo::new(skill, 0, cur, max, 0, 0), idx);
+        player.set_player_skill_info(skill, idx);
     }))
 }
 
