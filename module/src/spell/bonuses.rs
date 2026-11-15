@@ -91,6 +91,21 @@ pub(crate) fn weapon_damage(
     slot: u8,
     base: f32,
 ) -> f32 {
+    let (flat, multiplier) = weapon_damage_mods(ctx, unit, slot);
+    ((base + flat as f32) * multiplier).max(0.0)
+}
+
+/// vmangos `EffectWeaponDmg` scales a weapon Spell's flat bonus by the weapon's percent done only.
+pub(crate) fn weapon_strike_bonus(
+    ctx: &ReducerContext,
+    unit: &crate::WorldEntity,
+    slot: u8,
+    bonus: f32,
+) -> f32 {
+    bonus * weapon_damage_mods(ctx, unit, slot).1
+}
+
+fn weapon_damage_mods(ctx: &ReducerContext, unit: &crate::WorldEntity, slot: u8) -> (i32, f32) {
     let mut flat = 0;
     let mut multiplier = 1.0;
     for aura in auras_on(ctx, unit.guid).filter(|aura| {
@@ -116,10 +131,10 @@ pub(crate) fn weapon_damage(
             }
         }
     }
-    ((base + flat as f32) * multiplier).max(0.0)
+    (flat, multiplier)
 }
 
-// Preserve fractions; the caller applies taken modifiers and dithers after mitigation.
+// Returns fractional damage; direct damage keeps the fraction until mitigation and dithering.
 pub(crate) fn spell_damage_done_float(
     ctx: &ReducerContext,
     hdr: &Spell,
@@ -254,15 +269,39 @@ pub(crate) fn damage_taken_multiplier(ctx: &ReducerContext, target: u64, school:
         })
 }
 
-pub(crate) fn weapon_damage_taken(ctx: &ReducerContext, target: u64, damage: u32) -> u32 {
-    if damage == 0 {
-        return 0;
+#[derive(Clone, Copy)]
+pub(crate) struct WeaponDamageTaken {
+    flat: i32,
+    multiplier: f32,
+}
+
+impl WeaponDamageTaken {
+    #[cfg(test)]
+    pub(crate) const NONE: Self = Self {
+        flat: 0,
+        multiplier: 1.0,
+    };
+
+    pub(crate) fn of(ctx: &ReducerContext, target: u64) -> Self {
+        Self {
+            flat: auras_on(ctx, target)
+                .filter(|aura| aura.eff_kind == A_MOD_DAMAGE_TAKEN_FLAT && aura.eff_p0 & 1 != 0)
+                .map(|aura| amount(&aura))
+                .sum(),
+            multiplier: damage_taken_multiplier(ctx, target, 1),
+        }
     }
-    let flat: i32 = auras_on(ctx, target)
-        .filter(|aura| aura.eff_kind == A_MOD_DAMAGE_TAKEN_FLAT && aura.eff_p0 & 1 != 0)
-        .map(|aura| amount(&aura))
-        .sum();
-    ((damage as f32 + flat as f32) * damage_taken_multiplier(ctx, target, 1)).max(0.0) as u32
+
+    pub(crate) fn apply(self, damage: u32) -> u32 {
+        if damage == 0 {
+            return 0;
+        }
+        ((damage as f32 + self.flat as f32) * self.multiplier).max(0.0) as u32
+    }
+}
+
+pub(crate) fn weapon_damage_taken(ctx: &ReducerContext, target: u64, damage: u32) -> u32 {
+    WeaponDamageTaken::of(ctx, target).apply(damage)
 }
 
 pub(crate) fn healing_taken(

@@ -10,9 +10,9 @@ pub(crate) mod queued_strike;
 pub(crate) mod swing;
 mod tables;
 
-#[cfg(feature = "debug_reducers")]
-pub(crate) use attack_table::attack_table_for;
-pub(crate) use attack_table::{roll_attack, AttackOutcome, AttackType, DeliveredSpell};
+pub(crate) use attack_table::{
+    attack_table_for, roll_attack, AttackOutcome, AttackType, DeliveredSpell,
+};
 #[cfg_attr(
     not(any(has_packages, feature = "debug_reducers")),
     allow(unused_imports)

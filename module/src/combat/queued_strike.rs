@@ -83,7 +83,12 @@ pub(crate) fn damage(
     let (mod_flat, mod_pct) =
         crate::spell::spell_mod(ctx, attacker.guid, crate::spell::SPELLMOD_OP_DAMAGE, strike);
     QueuedStrikeDamage {
-        bonus: bonus(ctx, attacker, strike),
+        bonus: crate::spell::bonuses::weapon_strike_bonus(
+            ctx,
+            attacker,
+            crate::items::equip_slot::MAINHAND,
+            bonus(ctx, attacker, strike) as f32,
+        ) as u32,
         mod_flat,
         mod_pct,
     }
