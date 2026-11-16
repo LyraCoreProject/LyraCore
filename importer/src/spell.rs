@@ -2775,7 +2775,10 @@ mod tests {
             (header.attributes, header.gcd_ms, header.stances),
             (64, 0, 1)
         );
-        assert_eq!(header.cast_flags, CAST_FLAG_RANGED_AUTO_REPEAT);
+        assert_eq!(
+            header.cast_flags,
+            CAST_FLAG_RANGED_AUTO_REPEAT | CAST_FLAG_REFUSES_SELF_CAST
+        );
         assert_eq!(
             rows.eventai_metadata
                 .iter()
