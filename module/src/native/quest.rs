@@ -385,8 +385,7 @@ fn request_reward_screen(
     Ok(vec![offer_reward(giver, &detail)?])
 }
 
-// A refused turn-in tells why storage failed, then re-offers the reward of a quest this giver
-// ends; any other request gets no reply.
+// Storage refusals send the quest-failed notice; only a quest this giver ends is re-offered.
 fn refused_turn_in_screen(
     ctx: &ReducerContext,
     giver: u64,

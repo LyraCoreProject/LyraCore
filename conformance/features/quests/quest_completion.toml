@@ -50,7 +50,7 @@ symbol = "complete_quest_screen"
 evidence = "quest_completion tier 1 with conformance.19 conforms on every rule; data signatures world_text_395_text, world_text_395_title, world_text_397_text and world_text_397_title remain. Expected hashes come from the vmangos reference trace; the fixture texts 'Fixture request 7.' and 'Fixture reward 2158.' hash differently."
 
 [[known_gaps]]
-description = "A dead Character gets no quest-completion reply. The Reference Server lets a ghost talk to a quest giver that is visible to the dead, as for quest 3912."
+description = "A dead Character asking to complete a quest gets the request window as if the quest were unfinished, where the Reference Server marks it completable. Request-reward gets no reply where the Reference Server answers at a giver invisible to the living, as for quest 3912."
 path = "module/src/native/quest.rs"
 symbol = "evaluations"
-evidence = "evaluations returns nothing for a dead Character, so complete_quest_screen and request_reward_screen treat the quest as unfinished. This predates the Behavior work."
+evidence = "evaluations returns nothing for a dead Character, so complete_quest_screen treats the quest as unfinished and request_reward_screen sends nothing. vmangos HandleQuestgiverCompleteQuest has no alive check, and HandleQuestgiverRequestRewardOpcode checks IsInvisibleForAlive on the giver (QuestHandler.cpp:292-301, :383-397). This predates the Behavior work."

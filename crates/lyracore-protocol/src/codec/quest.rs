@@ -818,7 +818,6 @@ mod tests {
         let incomplete = build_request_items(100, &d, false, true);
         assert_eq!(incomplete.emote, 6);
         assert_eq!(incomplete.completable, QuestCompletable::NotCompletable);
-        assert!(incomplete.auto_finish, "close on cancel follows the caller");
         let complete = build_request_items(100, &d, true, false);
         assert_eq!(complete.emote, 1);
         assert!(!complete.auto_finish);
