@@ -11,7 +11,7 @@ use wow_world_messages::Guid;
 fn every_values_builder_serializes_without_the_object_type_bit() {
     let g = 0x9u64;
     let msgs: Vec<(&str, SMSG_UPDATE_OBJECT)> = vec![
-        ("health", build_health_values(g, 41)),
+        ("health", build_health_values(g, 41, 60)),
         (
             "player_flags",
             build_player_flags_values(g, Some(0x10), None),
@@ -26,7 +26,7 @@ fn every_values_builder_serializes_without_the_object_type_bit() {
         ("display", build_display_values(g, 1825)),
         ("power", build_power_values(g, 0, 55)),
         ("target", build_target_values(g, 0xF130_0000_0000_0001)),
-        ("max_vitals", build_max_vitals_values(g, 100, 0, 200)),
+        ("max_power", build_max_power_values(g, 0, 200)),
         ("armor", build_armor_values(g, [60, 0, 0, 0, 0, 0, 0], 20)),
         (
             "resistance",
@@ -188,15 +188,18 @@ fn creature_virtual_items_use_all_three_display_fields_without_object_type() {
 }
 
 #[test]
-fn health_values_update_is_health_only_no_object_type() {
+fn health_values_update_pairs_health_and_maximum_without_object_type() {
     let guid = lyracore_shared::guid::creature(620, 1);
-    let msg = build_health_values(guid, 20);
+    let msg = build_health_values(guid, 20, 50);
     match &msg.objects[0] {
-        Object::Values { guid1, mask1 } => {
+        Object::Values {
+            guid1,
+            mask1: UpdateMask::Unit(unit),
+        } => {
             assert_eq!(guid1.guid(), guid);
-            assert!(
-                matches!(mask1, UpdateMask::Unit(_)),
-                "expected a Unit values mask"
+            assert_eq!(
+                (unit.unit_health(), unit.unit_maxhealth()),
+                (Some(20), Some(50))
             );
         }
         other => panic!("expected Object::Values, got {other:?}"),
@@ -204,8 +207,8 @@ fn health_values_update_is_health_only_no_object_type() {
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
     assert!(
-        buf.ends_with(&[0x01, 0x00, 0x00, 0x40, 0x00, 20, 0, 0, 0]),
-        "VALUES mask must be health-only (bit 22) with no OBJECT_FIELD_TYPE; tail was {:02x?}",
+        buf.ends_with(&[0x01, 0x00, 0x00, 0x40, 0x10, 20, 0, 0, 0, 50, 0, 0, 0]),
+        "VALUES mask must be health and maximum health (bits 22, 28) with no OBJECT_FIELD_TYPE; tail was {:02x?}",
         &buf[buf.len().saturating_sub(16)..]
     );
 }
@@ -500,16 +503,16 @@ fn target_values_is_unit_only_no_object_type() {
 }
 
 #[test]
-fn max_vitals_values_sets_maxhealth_and_selects_max_power_descriptor() {
+fn max_power_values_select_the_max_power_descriptor_without_max_health() {
     let cases: [(u8, i32); 5] = [(0, 1001), (1, 1002), (2, 1003), (3, 1004), (4, 1005)];
     for (power_b, max_power) in cases {
-        let msg = build_max_vitals_values(1, 777, power_b, max_power as u32);
+        let msg = build_max_power_values(1, power_b, max_power as u32);
         match &msg.objects[0] {
             Object::Values {
                 mask1: UpdateMask::Unit(u),
                 ..
             } => {
-                assert_eq!(u.unit_maxhealth(), Some(777));
+                assert_eq!(u.unit_maxhealth(), None);
                 let got = match power_b {
                     1 => u.unit_maxpower2(),
                     2 => u.unit_maxpower3(),
@@ -526,7 +529,7 @@ fn max_vitals_values_sets_maxhealth_and_selects_max_power_descriptor() {
             other => panic!("expected a Unit Values update, got {other:?}"),
         }
     }
-    let msg = build_max_vitals_values(1, 777, 0, 1001);
+    let msg = build_max_power_values(1, 0, 1001);
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
     assert_no_object_type(&buf[4..]);

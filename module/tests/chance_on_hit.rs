@@ -2,8 +2,8 @@ mod support;
 
 use lyracore_shared::item_property::COMBAT_SPELL;
 use lyracore_shared::spell::taxonomy::{
-    CAST_FLAG_WEAPON_PROCS, E_ADD_EXTRA_ATTACKS, E_DAMAGE, E_HEAL, E_WEAPON_STRIKE, P_NONE, P_RAW,
-    T_SELF, T_TARGET_ENEMY,
+    A_PROC_TRIGGER, CAST_FLAG_WEAPON_PROCS, E_ADD_EXTRA_ATTACKS, E_DAMAGE, E_HEAL, E_WEAPON_STRIKE,
+    P_NONE, P_RAW, T_SELF, T_TARGET_ENEMY,
 };
 
 use std::collections::BTreeMap;
@@ -191,10 +191,8 @@ fn an_extra_attack_chance_on_hit_swings_twice_and_grants_no_more() {
          WHERE spell_id = {FURY_OF_FORGEWRIGHT}"
     ));
     standalone.assert_sql(&format!(
-        "UPDATE game_item_template SET spellid_1 = {FURY_OF_FORGEWRIGHT} WHERE entry = {FIXTURE_BLADE}"
-    ));
-    standalone.assert_sql(&format!(
-        "UPDATE game_world_entity SET base_attack_time_ms = {SLOW_SWING_MS} WHERE guid = {PLAYER}"
+        "UPDATE game_item_template SET spellid_1 = {FURY_OF_FORGEWRIGHT}, \
+         delay_ms = {SLOW_SWING_MS} WHERE entry = {FIXTURE_BLADE}"
     ));
     let events = standalone.subscribe(&[CAST_EVENTS, SWING_EVENTS]);
     standalone.assert_call("debug_engage", &["1", &wolf.to_string()]);
@@ -234,6 +232,75 @@ fn an_extra_attack_chance_on_hit_swings_twice_and_grants_no_more() {
         gos_of(&events, FURY_OF_FORGEWRIGHT),
         1,
         "an Extra Attack must not roll the extra-attack Chance on Hit again"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_aura_ppm_proc_scales_with_the_main_hand_weapons_delay() {
+    const PROC_AURA: u32 = 5_090_412;
+    const PROC_FLAG_SUCCESSFUL_MELEE_HIT: u32 = 0x4;
+    // vmangos Unit::GetPPMProcChance: 10 per minute on a 6 s weapon is certain, on 2 s only 33%.
+    const PPM: f32 = 10.0;
+    const SLOW_WEAPON_MS: u32 = 6000;
+    const CONNECTED_SWINGS: usize = 6;
+
+    let mut standalone = Standalone::start("chance-on-hit-aura-ppm");
+    let wolf = stage(&mut standalone);
+    set_level(&standalone, wolf, 1);
+    standalone.assert_sql(&format!(
+        "UPDATE game_item_template SET delay_ms = {SLOW_WEAPON_MS}, spellid_1 = 0 \
+         WHERE entry = {FIXTURE_BLADE}"
+    ));
+    stage_spell(
+        &standalone,
+        PROC_AURA,
+        "Proc fixture",
+        0,
+        (A_PROC_TRIGGER, T_SELF),
+        (0, P_NONE),
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell SET duration_ms = 600000 WHERE spell_id = {PROC_AURA}"
+    ));
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET trigger_spell = {THUNDERFURY_PROC} WHERE spell_id = {PROC_AURA}"
+    ));
+    standalone.insert_row(
+        "game_spell_proc_event",
+        &[
+            ("spell_id", &PROC_AURA),
+            ("proc_flags", &PROC_FLAG_SUCCESSFUL_MELEE_HIT),
+            ("ppm_rate", &PPM),
+        ],
+    );
+    standalone.assert_call("debug_force_cast", &["1", &PROC_AURA.to_string()]);
+    let events = standalone.subscribe(&[CAST_EVENTS, SWING_EVENTS]);
+    standalone.assert_call("debug_engage", &["1", &wolf.to_string()]);
+
+    let connected = |events: &TableSubscription| {
+        event_rows(events, "game_combat_event_live")
+            .iter()
+            .filter(|row| row["damage"].parse::<u32>().unwrap() > 0)
+            .count()
+    };
+    let mut attempts = 0;
+    while connected(&events) < CONNECTED_SWINGS {
+        assert!(attempts < ATTEMPTS * 2, "too few swings connected");
+        attempts += 1;
+        let before = swings(&events);
+        standalone
+            .assert_sql("UPDATE game_melee_attack SET last_swing_ms = 1 WHERE attacker_guid = 1");
+        assert!(
+            poll_until(POLL_TIMEOUT, || swings(&events) > before),
+            "the forced swing never fired"
+        );
+    }
+    std::thread::sleep(SETTLE);
+    assert_eq!(
+        gos_of(&events, THUNDERFURY_PROC),
+        connected(&events),
+        "every connected swing of the slow weapon procs"
     );
 }
 

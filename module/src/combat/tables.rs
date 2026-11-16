@@ -87,11 +87,34 @@ pub(crate) const CLASS_PRIEST: u8 = 5;
 pub(crate) const CLASS_MAGE: u8 = 8;
 pub(crate) const CLASS_WARLOCK: u8 = 9;
 
-pub(crate) fn melee_attack_power_for(class: u8, strength: u32, agility: u32, level: u32) -> u32 {
+const CLASS_DRUID: u8 = 11;
+
+/// vmangos melee AP for warriors, paladins, rogues, hunters and druids; `stance` is a druid's form.
+pub(crate) fn melee_attack_power_for(
+    class: u8,
+    stance: u8,
+    strength: u32,
+    agility: u32,
+    level: u32,
+) -> u32 {
+    use lyracore_shared::spell::taxonomy::STANCE_CAT;
     match class {
         CLASS_ROGUE | CLASS_HUNTER => (level * 2 + strength + agility).saturating_sub(20),
+        CLASS_DRUID if stance == STANCE_CAT => (strength * 2 + agility).saturating_sub(20),
+        CLASS_DRUID => (strength * 2).saturating_sub(20),
         _ => melee_attack_power(strength, level),
     }
+}
+
+/// vmangos Player::CalculateMinMaxDamage: a feral form deals level-based damage at its own speed.
+pub(crate) fn feral_swing_range_ap(ap: u32, level: u32, attack_time_ms: u32) -> (u32, u32) {
+    let speed = attack_time_ms as f32 / 1000.0;
+    let level = level.min(60) as f32;
+    let bonus = ap as f32 / AP_PER_DPS as f32 * speed;
+    (
+        (level * 0.85 * speed + bonus) as u32,
+        (level * 1.25 * speed + bonus) as u32,
+    )
 }
 
 pub(crate) fn ranged_attack_power_for(class: u8, agility: u32, level: u32) -> u32 {
@@ -462,25 +485,47 @@ mod tests {
         assert_eq!(melee_attack_power(40, 10), 30 + 80 - 20);
         assert!(melee_attack_power(40, 10) > melee_attack_power(23, 1));
         assert_eq!(melee_attack_power(0, 1), 0);
+    }
+
+    #[test]
+    fn feral_forms_swing_level_damage_at_their_own_speed() {
+        // Level 60: Cat 51-75 per 1.0 s and Bear 127.5-187.5 per 2.5 s, plus AP / 14 per second.
+        assert_eq!(feral_swing_range_ap(0, 60, 1000), (51, 75));
+        assert_eq!(feral_swing_range_ap(280, 60, 1000), (71, 95));
+        assert_eq!(feral_swing_range_ap(140, 60, 2500), (152, 212));
+        assert_eq!(
+            feral_swing_range_ap(0, 63, 1000),
+            (51, 75),
+            "the level caps at 60"
+        );
+    }
+
+    #[test]
+    fn druid_attack_power_adds_agility_only_in_cat_form() {
+        use lyracore_shared::spell::taxonomy::{STANCE_BATTLE, STANCE_BEAR, STANCE_CAT};
+        // vmangos: Cat Form 2 * strength + agility - 20; other forms 2 * strength - 20.
+        assert_eq!(melee_attack_power_for(11, STANCE_CAT, 50, 40, 60), 120);
+        assert_eq!(melee_attack_power_for(11, STANCE_BEAR, 50, 40, 60), 80);
+        assert_eq!(melee_attack_power_for(11, STANCE_BATTLE, 50, 40, 60), 80);
         assert_eq!(melee_attack_power(5, 1), 0);
     }
 
     #[test]
     fn rogue_melee_ap_folds_in_agility_others_keep_the_str_curve() {
-        let lo_agi = melee_attack_power_for(CLASS_ROGUE, 20, 20, 5);
-        let hi_agi = melee_attack_power_for(CLASS_ROGUE, 20, 40, 5);
+        let lo_agi = melee_attack_power_for(CLASS_ROGUE, 0, 20, 20, 5);
+        let hi_agi = melee_attack_power_for(CLASS_ROGUE, 0, 20, 40, 5);
         assert_eq!(lo_agi, 30);
         assert!(
             hi_agi > lo_agi,
             "more Agility → strictly higher Rogue AP (Str/level held constant)"
         );
-        assert_eq!(melee_attack_power_for(CLASS_HUNTER, 20, 40, 5), 50);
+        assert_eq!(melee_attack_power_for(CLASS_HUNTER, 0, 20, 40, 5), 50);
         assert_eq!(
-            melee_attack_power_for(1, 23, 99, 1),
+            melee_attack_power_for(1, 0, 23, 99, 1),
             melee_attack_power(23, 1)
         );
         assert_eq!(
-            melee_attack_power_for(8, 23, 99, 1),
+            melee_attack_power_for(8, 0, 23, 99, 1),
             melee_attack_power(23, 1)
         );
     }

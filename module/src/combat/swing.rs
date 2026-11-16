@@ -204,6 +204,7 @@ pub(crate) fn offhand_swing_range(
 ) -> (u32, u32) {
     let ap = melee_attack_power_for(
         attacker.class(),
+        attacker.stance,
         crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_STR),
         crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_AGI),
         attacker.level,

@@ -157,17 +157,10 @@ pub fn sync_group_mirror(
     if effective_members.is_empty() {
         groups.group_id().delete(group_id);
         store_group_revision(ctx, group_id, roster_revision, false);
-        for guid in membership_changed {
-            crate::instance::reconcile_instance_removal(ctx, guid);
-        }
+        roster_changed(ctx, membership_changed, &effective_members);
         return Ok(());
     }
-    for guid in &arriving {
-        for m in member_tbl.by_character().filter(guid).collect::<Vec<_>>() {
-            crate::loot::tag::revoke_group_member(ctx, m.group_id, *guid);
-            member_tbl.id().delete(m.id);
-        }
-    }
+    let left_behind = detach_arrivals(ctx, &arriving);
     let effective_leader = if effective_members.contains(&leader_guid) {
         leader_guid
     } else {
@@ -211,10 +204,40 @@ pub fn sync_group_mirror(
         });
     }
     store_group_revision(ctx, group_id, roster_revision, true);
-    for guid in membership_changed {
+    let members: Vec<u64> = effective_members.into_iter().chain(left_behind).collect();
+    roster_changed(ctx, membership_changed, &members);
+    Ok(())
+}
+
+/// Removes arriving members from their other local group and returns who stays behind there.
+fn detach_arrivals(ctx: &ReducerContext, arriving: &[u64]) -> Vec<u64> {
+    let member_tbl = ctx.db.game_group_member();
+    let mut left_behind = Vec::new();
+    for guid in arriving {
+        for m in member_tbl.by_character().filter(guid).collect::<Vec<_>>() {
+            crate::loot::tag::revoke_group_member(ctx, m.group_id, *guid);
+            member_tbl.id().delete(m.id);
+            left_behind.extend(
+                member_tbl
+                    .by_group()
+                    .filter(&m.group_id)
+                    .map(|r| r.character_guid),
+            );
+        }
+    }
+    left_behind
+}
+
+fn roster_changed(ctx: &ReducerContext, changed: Vec<u64>, members: &[u64]) {
+    if changed.is_empty() {
+        return;
+    }
+    let affected: std::collections::BTreeSet<u64> =
+        changed.iter().chain(members).copied().collect();
+    crate::native::health::group_changed(ctx, affected);
+    for guid in changed {
         crate::instance::reconcile_instance_removal(ctx, guid);
     }
-    Ok(())
 }
 
 fn store_group_revision(ctx: &ReducerContext, group_id: u64, revision: u64, active: bool) {

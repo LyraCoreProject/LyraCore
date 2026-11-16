@@ -1518,12 +1518,15 @@ fn apply_character_effect(
                     c.unit_bytes_1 = (c.unit_bytes_1 & 0xFF00_0000) | form_id;
                     let c = c.update(ctx);
                     crate::combat::queued_strike::interrupt_form_bound(ctx, &c);
+                    // vmangos Player::InitDataForForm updates attack power and damage.
+                    crate::spell::recompute_sheet(ctx, caster_guid);
                 } else if form_recast_toggles_off(c.stance, new_stance) {
                     // Druid caster form uses zero; client_form_for_stance(0) is Battle Stance.
                     c.stance = 0;
                     c.unit_bytes_1 &= 0xFF00_0000;
                     let c = c.update(ctx);
                     crate::combat::queued_strike::interrupt_form_bound(ctx, &c);
+                    crate::spell::recompute_sheet(ctx, caster_guid);
                 }
             }
             EffectHit::none()

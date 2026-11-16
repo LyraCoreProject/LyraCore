@@ -1262,6 +1262,12 @@ impl JoinPlan {
             raid_slot: slot.wire(),
         });
         push_list_to_all(ctx, joined.group_id);
+        crate::native::health::group_changed(
+            ctx,
+            members_of(ctx, joined.group_id)
+                .into_iter()
+                .map(|member| member.character_guid),
+        );
         crate::instance::reconcile_instance_removal(ctx, joiner_guid);
         if let JoinTarget::NewParty { leader_guid } = target {
             crate::instance::reconcile_instance_removal(ctx, leader_guid);
@@ -1596,6 +1602,7 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64, departure
             crate::meeting_stone::party_disbanded(ctx, group_id, &all_guids);
             clear_target_icons(ctx, group_id);
             ctx.db.game_group().group_id().delete(group_id);
+            crate::native::health::group_changed(ctx, all_guids.iter().copied());
             for guid in all_guids {
                 crate::instance::reconcile_instance_removal(ctx, guid);
             }
@@ -1623,6 +1630,10 @@ pub(crate) fn remove_member(ctx: &ReducerContext, character_guid: u64, departure
         }
     };
     push_list_to_all(ctx, group_id);
+    crate::native::health::group_changed(
+        ctx,
+        std::iter::once(character_guid).chain(remaining.iter().map(|r| r.character_guid)),
+    );
     crate::instance::reconcile_instance_removal(ctx, character_guid);
     if let Some(bucket) = rematch {
         if let Err(reason) = crate::meeting_stone::match_bucket(ctx, bucket) {

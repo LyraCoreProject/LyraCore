@@ -167,7 +167,7 @@ fn helps_wielder(is_negative: bool, effect_targets: impl IntoIterator<Item = u8>
 }
 
 // vmangos CanUseEquippedWeapon: a feral form sets weapons aside and Disarm takes the main hand.
-fn holds_weapon(stance: u8, slot: u8, disarmed: impl FnOnce() -> bool) -> bool {
+pub(crate) fn holds_weapon(stance: u8, slot: u8, disarmed: impl FnOnce() -> bool) -> bool {
     if (STANCE_BEAR..=STANCE_DIRE_BEAR).contains(&stance) {
         return false;
     }

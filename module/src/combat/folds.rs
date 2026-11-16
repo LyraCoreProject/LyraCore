@@ -91,7 +91,10 @@ pub(crate) fn seal_holy_on_swing(
         };
         return (damage, triggered);
     }
-    (seal_swing_holy(amount, attacker.base_attack_time_ms), spell)
+    (
+        seal_swing_holy(amount, main_hand_attack_time(ctx, attacker)),
+        spell,
+    )
 }
 
 fn seal_swing_holy(seal: i32, attack_time_ms: u32) -> u32 {
@@ -185,7 +188,69 @@ fn crit_bp_for_weapon_skill(
 
 pub(crate) fn effective_swing_time(ctx: &ReducerContext, attacker: &WorldEntity) -> u32 {
     let speed = crate::modifiers::speed_bonus(ctx, attacker.guid, crate::spell::SPEED_SWING);
-    swing_time_with_haste(attacker.base_attack_time_ms, speed)
+    swing_time_with_haste(main_hand_attack_time(ctx, attacker), speed)
+}
+
+/// The unhasted attack time of the hand or weapon that made `source`; vmangos Unit::GetAttackTime.
+pub(crate) fn attack_time(ctx: &ReducerContext, unit: &WorldEntity, source: HitSource) -> u32 {
+    match source {
+        HitSource::OffHand => off_hand_attack_time(ctx, unit),
+        HitSource::Ranged => ranged_attack_time(ctx, unit),
+        _ => main_hand_attack_time(ctx, unit),
+    }
+}
+
+/// A Character's main hand swings at its usable weapon's delay; `base_attack_time_ms` is unarmed.
+pub(crate) fn main_hand_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+    if let Some(form) = feral_attack_time(unit) {
+        return form;
+    }
+    let holds_weapon = unit.is_player()
+        && crate::spell::chance_on_hit::holds_weapon(
+            unit.stance,
+            lyracore_shared::constants::starter_item::MAINHAND_SLOT,
+            || crate::spell::is_disarmed(ctx, unit.guid),
+        );
+    holds_weapon
+        .then(|| equipped_weapon_damage(ctx, unit.guid))
+        .flatten()
+        .map(|(_, _, delay)| delay)
+        .filter(|delay| *delay != 0)
+        .unwrap_or(unit.base_attack_time_ms)
+}
+
+pub(crate) fn off_hand_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+    if let Some(form) = feral_attack_time(unit) {
+        return form;
+    }
+    if !unit.is_player() {
+        return unit.base_attack_time_ms;
+    }
+    equipped_offhand_weapon_damage(ctx, unit.guid)
+        .map(|(_, _, delay)| delay)
+        .filter(|delay| *delay != 0)
+        .unwrap_or(DEFAULT_ATTACK_TIME_MS)
+}
+
+fn ranged_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+    if !unit.is_player() {
+        return unit.base_attack_time_ms;
+    }
+    equipped_ranged_weapon(ctx, unit.guid)
+        .map(|(_, _, delay, _)| delay)
+        .filter(|delay| *delay != 0)
+        .unwrap_or(DEFAULT_ATTACK_TIME_MS)
+}
+
+/// vmangos Player::InitDataForForm swings both hands of Cat Form at 1.0 s and Bear Form at 2.5 s.
+fn feral_attack_time(unit: &WorldEntity) -> Option<u32> {
+    use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR};
+    match unit.stance {
+        _ if !unit.is_player() => None,
+        STANCE_CAT => Some(1000),
+        STANCE_BEAR | STANCE_DIRE_BEAR => Some(2500),
+        _ => None,
+    }
 }
 
 fn weapon_profile_in_slot(
@@ -327,6 +392,15 @@ fn base_melee_range(ctx: &ReducerContext, attacker: &WorldEntity, normalized: bo
         return (min, max);
     }
     let ap = melee_attack_power(ctx, attacker);
+    if let Some(form_ms) = feral_attack_time(attacker) {
+        // vmangos normalizes by the equipped weapon; no 1.12 druid form ability normalizes.
+        let speed_ms = if normalized {
+            NORMALIZED_ONE_HAND_MS
+        } else {
+            form_ms
+        };
+        return feral_swing_range_ap(ap, attacker.level, speed_ms);
+    }
     let mainhand = lyracore_shared::constants::starter_item::MAINHAND_SLOT;
     let speed = |delay| {
         if normalized {
@@ -412,6 +486,7 @@ pub(crate) fn weapon_strike_spell_damage(
 pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
     melee_attack_power_for(
         unit.class(),
+        unit.stance,
         crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_STR),
         crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_AGI),
         unit.level,

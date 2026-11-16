@@ -569,6 +569,395 @@ fn a_later_transaction_delivers_packets_without_another_client_request() {
     panic!("expected coinage values from the later transaction: {rows:?}");
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn character_health_reaches_strangers_as_a_percent_and_the_party_in_full() {
+    use lyracore_shared::spell::taxonomy::{A_MOD_STAT, STAT_STA, T_SELF};
+    const STAMINA_BUFF: u32 = 5_090_410;
+
+    let (shard, subject, _) = fixture("native-health-visibility");
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {subject}"
+    ));
+    let viewer = add_observer(&shard, 5, 0);
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &STAMINA_BUFF),
+            ("name", &"Stamina fixture"),
+            ("school_mask", &1),
+            ("duration_ms", &600_000),
+            ("spell_level", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &(STAMINA_BUFF * 4)),
+            ("spell_id", &STAMINA_BUFF),
+            ("kind", &A_MOD_STAT),
+            ("base_points", &10),
+            ("target", &T_SELF),
+            ("p_0", &STAT_STA),
+            ("p_0_kind", &1),
+        ],
+    );
+    let mut own = enter(&shard, subject);
+    let other = enter(&shard, viewer);
+    let (own_id, other_id) = (own.connection_id(), other.connection_id());
+    let units = [subject, viewer];
+    let solo = |unit: u64, connection: u128| {
+        let (health, max_health) = vitals(&shard, unit);
+        vec![
+            (
+                unit,
+                HealthDelivery::aoi_except(connection),
+                hidden(health, max_health),
+            ),
+            (
+                unit,
+                HealthDelivery::Connection(connection),
+                (Some(health), Some(max_health)),
+            ),
+        ]
+    };
+    let party = |unit: u64| {
+        let (health, max_health) = vitals(&shard, unit);
+        vec![
+            (
+                unit,
+                HealthDelivery::aoi_except(if unit == subject { own_id } else { other_id }),
+                hidden(health, max_health),
+            ),
+            (
+                unit,
+                HealthDelivery::Connection(own_id),
+                (Some(health), Some(max_health)),
+            ),
+            (
+                unit,
+                HealthDelivery::Connection(other_id),
+                (Some(health), Some(max_health)),
+            ),
+        ]
+    };
+
+    let max_health = vitals(&shard, subject).1;
+    let sent = health_after(&mut own, &units, || {
+        set_health(&shard, subject, max_health / 2)
+    });
+    assert_eq!(
+        sent,
+        sorted(solo(subject, own_id)),
+        "a stranger sees a percent"
+    );
+
+    let sent = health_after(&mut own, &units, || {
+        shard.assert_call(
+            "debug_force_cast",
+            &[&subject.to_string(), &STAMINA_BUFF.to_string()],
+        );
+    });
+    assert_ne!(
+        vitals(&shard, subject).1,
+        max_health,
+        "Stamina must raise maximum health"
+    );
+    assert_eq!(
+        sent,
+        sorted(solo(subject, own_id)),
+        "vmangos Unit::SetMaxHealth sends health with the new maximum"
+    );
+
+    group_op(&shard, 0, subject, viewer);
+    let sent = health_after(&mut own, &units, || {
+        group_op(&shard, 1, viewer, 0);
+    });
+    assert_eq!(
+        sent,
+        sorted(party(subject).into_iter().chain(party(viewer))),
+        "vmangos Group::BroadcastGroupUpdate shows each member's health to the other"
+    );
+
+    let health = vitals(&shard, subject).1 / 3;
+    let sent = health_after(&mut own, &units, || set_health(&shard, subject, health));
+    assert_eq!(
+        sent,
+        sorted(party(subject)),
+        "a party member sees the health itself"
+    );
+
+    let sent = health_after(&mut own, &units, || {
+        group_op(&shard, 3, viewer, 0);
+    });
+    assert_eq!(
+        sent,
+        sorted(
+            solo(subject, own_id)
+                .into_iter()
+                .chain(solo(viewer, other_id))
+        ),
+        "a former member sees a percent again"
+    );
+
+    let sent = health_after(&mut own, &units, || {
+        mirror_group(&shard, 900, &[(subject, 100), (viewer, 100)]);
+    });
+    assert_eq!(
+        sent,
+        sorted(party(subject).into_iter().chain(party(viewer))),
+        "a mirrored roster shows each member's health to the other"
+    );
+    let sent = health_after(&mut own, &units, || {
+        mirror_group(&shard, 901, &[(viewer, 101)])
+    });
+    assert_eq!(
+        sent,
+        sorted(
+            solo(subject, own_id)
+                .into_iter()
+                .chain(solo(viewer, other_id))
+        ),
+        "the member left behind in the old group sees a percent again"
+    );
+}
+
+/// Pushes a Realm roster for `group_id` whose members carry their membership revisions.
+fn mirror_group(shard: &Standalone, group_id: u64, members: &[(u64, u64)]) {
+    let guids: Vec<u64> = members.iter().map(|(guid, _)| *guid).collect();
+    let partitions: Vec<_> = members
+        .iter()
+        .map(|&(guid, revision)| {
+            json!({
+                "character_guid": guid, "group_id": group_id,
+                "membership_revision": revision, "member_active": true,
+                "map_id": 0, "instance_id": 0, "locator_revision": 0,
+                "state": {"unknown": []},
+            })
+        })
+        .collect();
+    let args = [
+        group_id.to_string(),
+        guids[0].to_string(),
+        "3".into(),
+        "2".into(),
+        "0".into(),
+        json!(guids).to_string(),
+        lyracore_test_support::actor(0),
+        json!(partitions).to_string(),
+        "1".into(),
+        "0".into(),
+        json!(vec![0u8; guids.len()]).to_string(),
+    ];
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    shard.assert_call("sync_group_mirror", &args);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn creature_health_is_a_percent_and_a_pets_owner_sees_it_in_full() {
+    let (shard, owner, _) = fixture("native-creature-health");
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {owner}"
+    ));
+    let mut own = enter(&shard, owner);
+    let own_id = own.connection_id();
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[&owner.to_string(), &TEST_WOLF_ENTRY.to_string(), "3"],
+    );
+    let wolf: u64 = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY} AND x = 3"
+    ))[0]["guid"]
+        .parse()
+        .unwrap();
+    let max_health = vitals(&shard, wolf).1;
+
+    let sent = health_after(&mut own, &[wolf], || {
+        set_health(&shard, wolf, max_health / 3)
+    });
+    assert_eq!(
+        sent,
+        [(
+            wolf,
+            HealthDelivery::Aoi { except: None },
+            hidden(max_health / 3, max_health)
+        )],
+        "every viewer sees a creature's health as a percent"
+    );
+
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET owner_guid = {owner} WHERE guid = {wolf}"
+    ));
+    let health = max_health / 2;
+    let sent = health_after(&mut own, &[wolf], || set_health(&shard, wolf, health));
+    assert_eq!(
+        sent,
+        sorted(vec![
+            (
+                wolf,
+                HealthDelivery::aoi_except(own_id),
+                hidden(health, max_health)
+            ),
+            (
+                wolf,
+                HealthDelivery::Connection(own_id),
+                (Some(health), Some(max_health))
+            ),
+        ]),
+        "a pet's owner sees its health; a stranger sees a percent"
+    );
+}
+
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum HealthDelivery {
+    Connection(u128),
+    Aoi { except: Option<u128> },
+}
+
+impl HealthDelivery {
+    fn aoi_except(connection: u128) -> Self {
+        Self::Aoi {
+            except: Some(connection),
+        }
+    }
+}
+
+type SentVitals = (Option<u32>, Option<u32>);
+
+// vmangos Object::BuildValuesUpdate sends health * 100 / maximum, truncated, and 100 maximum.
+fn hidden(health: u32, max_health: u32) -> SentVitals {
+    (Some(health * 100 / max_health), Some(100))
+}
+
+fn sorted<T: Ord>(items: impl IntoIterator<Item = T>) -> Vec<T> {
+    let mut items: Vec<T> = items.into_iter().collect();
+    items.sort_unstable();
+    items
+}
+
+fn vitals(shard: &Standalone, unit: u64) -> (u32, u32) {
+    let row = &shard.query_rows(&format!(
+        "SELECT health, max_health FROM game_world_entity WHERE guid = {unit}"
+    ))[0];
+    (
+        row["health"].parse().unwrap(),
+        row["max_health"].parse().unwrap(),
+    )
+}
+
+fn set_health(shard: &Standalone, unit: u64, health: u32) {
+    shard.assert_call(
+        "debug_set_health",
+        &[&unit.to_string(), &health.to_string()],
+    );
+}
+
+fn group_op(shard: &Standalone, op: u8, actor: u64, target: u64) {
+    let actor = lyracore_test_support::actor(actor);
+    let (op, target) = (op.to_string(), target.to_string());
+    shard.assert_call("realm_group_op", &[&op, &actor, &target, "0", "0", "0"]);
+}
+
+/// The health and maximum health VALUES that `action` sends for `units`, sorted.
+fn health_after(
+    connection: &mut ReducerConnection,
+    units: &[u64],
+    action: impl FnOnce(),
+) -> Vec<(u64, HealthDelivery, SentVitals)> {
+    connection.drain_packets();
+    action();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        let rows = connection.wait_for_packets(Duration::from_secs(1)).unwrap();
+        let sent = decoded_health(&rows, units);
+        if !sent.is_empty() {
+            for (aoi_id, unit, _, _) in sent
+                .iter()
+                .filter(|(_, _, delivery, _)| matches!(delivery, HealthDelivery::Aoi { .. }))
+            {
+                assert!(
+                    sent.iter().all(|(id, other, delivery, _)| other != unit
+                        || !matches!(delivery, HealthDelivery::Connection(_))
+                        || id > aoi_id),
+                    "the raw health of {unit} must follow its AOI percent: {sent:?}"
+                );
+            }
+            return sorted(
+                sent.into_iter()
+                    .map(|(_, unit, delivery, vitals)| (unit, delivery, vitals)),
+            );
+        }
+    }
+    Vec::new()
+}
+
+fn decoded_health(
+    rows: &[Box<RawValue>],
+    units: &[u64],
+) -> Vec<(u64, u64, HealthDelivery, SentVitals)> {
+    use wire_client::decode::Field;
+
+    let field =
+        |values: &std::collections::BTreeMap<String, Field>, name: &str| match values.get(name) {
+            Some(Field::Unsigned(value)) => Some(u32::try_from(*value).unwrap()),
+            _ => None,
+        };
+    let mut sent = Vec::new();
+    for row in rows {
+        let Packet(id, (audience, recipient), (option, opcode), body, _, _, _) =
+            serde_json::from_str(row.get()).unwrap();
+        if option != 0 || opcode.get() != "169" || !matches!(audience, 0 | 1) {
+            continue;
+        }
+        let bytes: Vec<u8> = body
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect();
+        let decoded = wire_client::decode::decode(0x00a9, &bytes).unwrap();
+        let Some(Field::List(objects)) = decoded.fields.get("objects") else {
+            continue;
+        };
+        for object in objects {
+            let Field::Object(object) = object else {
+                continue;
+            };
+            let Some(&Field::Guid(unit)) = object.get("guid") else {
+                continue;
+            };
+            let Some(Field::Object(values)) = object.get("values") else {
+                continue;
+            };
+            let vitals = (field(values, "field_22"), field(values, "field_28"));
+            if object.get("kind") != Some(&Field::Unsigned(0))
+                || !units.contains(&unit)
+                || vitals == (None, None)
+            {
+                continue;
+            }
+            let delivery = if audience == 0 {
+                HealthDelivery::Connection(
+                    serde_json::from_str::<(u128,)>(recipient.get()).unwrap().0,
+                )
+            } else {
+                let (_, guid, (none, excluded)): (u8, u64, (u8, Box<RawValue>)) =
+                    serde_json::from_str(recipient.get()).unwrap();
+                assert_eq!(guid, unit, "{recipient}");
+                HealthDelivery::Aoi {
+                    except: (none == 0)
+                        .then(|| serde_json::from_str::<(u128,)>(excluded.get()).unwrap().0),
+                }
+            };
+            sent.push((id, unit, delivery, vitals));
+        }
+    }
+    sent
+}
+
 fn taxi_flight(name: &str, observer_x: i32) -> (Standalone, u64, u64) {
     taxi_flight_on_route(name, observer_x, 0, &[(0.0, 0.0, 0.0), (200.0, 0.0, 0.0)])
 }
@@ -584,6 +973,13 @@ fn taxi_flight_on_route(
     shard.assert_sql(&format!(
         "UPDATE game_character SET x = {x}, y = {y}, z = {z} WHERE guid = {passenger}"
     ));
+    let observer = add_observer(&shard, observer_x, observer_y);
+    shard.assert_call("debug_spawn_player_entity", &[&passenger.to_string()]);
+    start_taxi_flight_on_route(&shard, passenger, route);
+    (shard, passenger, observer)
+}
+
+fn add_observer(shard: &Standalone, x: i32, y: i32) -> u64 {
     let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
     shard.assert_call(
         "provision_account",
@@ -612,11 +1008,9 @@ fn taxi_flight_on_route(
         .parse()
         .unwrap();
     shard.assert_sql(&format!(
-        "UPDATE game_character SET x = {observer_x}, y = {observer_y} WHERE guid = {observer}"
+        "UPDATE game_character SET x = {x}, y = {y} WHERE guid = {observer}"
     ));
-    shard.assert_call("debug_spawn_player_entity", &[&passenger.to_string()]);
-    start_taxi_flight_on_route(&shard, passenger, route);
-    (shard, passenger, observer)
+    observer
 }
 
 fn taxi_create(
