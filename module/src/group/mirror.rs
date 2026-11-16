@@ -157,10 +157,7 @@ pub fn sync_group_mirror(
     if effective_members.is_empty() {
         groups.group_id().delete(group_id);
         store_group_revision(ctx, group_id, roster_revision, false);
-        crate::native::health::group_changed(ctx, membership_changed.iter().copied());
-        for guid in membership_changed {
-            crate::instance::reconcile_instance_removal(ctx, guid);
-        }
+        roster_changed(ctx, membership_changed, &effective_members);
         return Ok(());
     }
     for guid in &arriving {
@@ -212,18 +209,20 @@ pub fn sync_group_mirror(
         });
     }
     store_group_revision(ctx, group_id, roster_revision, true);
-    if !membership_changed.is_empty() {
-        let affected: std::collections::BTreeSet<u64> = membership_changed
-            .iter()
-            .chain(&effective_members)
-            .copied()
-            .collect();
-        crate::native::health::group_changed(ctx, affected);
+    roster_changed(ctx, membership_changed, &effective_members);
+    Ok(())
+}
+
+fn roster_changed(ctx: &ReducerContext, changed: Vec<u64>, members: &[u64]) {
+    if changed.is_empty() {
+        return;
     }
-    for guid in membership_changed {
+    let affected: std::collections::BTreeSet<u64> =
+        changed.iter().chain(members).copied().collect();
+    crate::native::health::group_changed(ctx, affected);
+    for guid in changed {
         crate::instance::reconcile_instance_removal(ctx, guid);
     }
-    Ok(())
 }
 
 fn store_group_revision(ctx: &ReducerContext, group_id: u64, revision: u64, active: bool) {
