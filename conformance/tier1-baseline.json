@@ -30,57 +30,7 @@
       "behavior": "cast_and_interrupt",
       "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "5be9d598a7da6c8f5a28cca50ad4952ff12e4ecc5db4f9c3780b32ed42ebde33",
-      "rule": [
-        {
-          "rule": "extra_packet",
-          "checkpoint": "finish",
-          "stream": {
-            "kind": "reply",
-            "id": "finish"
-          },
-          "opcode": 358,
-          "field_path": []
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "bad_target",
-          "stream": {
-            "kind": "reply",
-            "id": "bad_target"
-          },
-          "opcode": 304,
-          "field_path": []
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "finish",
-          "stream": {
-            "kind": "reply",
-            "id": "finish"
-          },
-          "opcode": 358,
-          "field_path": []
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "finish",
-          "stream": {
-            "kind": "reply",
-            "id": "finish"
-          },
-          "opcode": 588,
-          "field_path": []
-        },
-        {
-          "rule": "unexpected_packet",
-          "checkpoint": "bad_target",
-          "stream": {
-            "kind": "unexpected"
-          },
-          "opcode": 305,
-          "field_path": []
-        }
-      ],
+      "rule": [],
       "data": []
     },
     {

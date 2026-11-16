@@ -55,6 +55,7 @@ pub(crate) use properties::{
     property_stat_for_school, seed_compatibility_enchantments, select_loot_property,
     select_property,
 };
+pub(crate) use tables::ItemPush;
 
 #[cfg(feature = "debug_reducers")]
 pub(crate) use rules::binds_on_equip;

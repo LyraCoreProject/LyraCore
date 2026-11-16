@@ -8,7 +8,7 @@ use lyracore_protocol::{
 };
 use lyracore_shared::spell::taxonomy::{
     CAST_FLAG_RANGED_AUTO_REPEAT, E_DISENCHANT, E_ENCHANT_ITEM, E_ENCHANT_ITEM_TEMPORARY, E_FISH,
-    E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
+    E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
@@ -17,6 +17,7 @@ use crate::game_melee_attack;
 use crate::spell::{CastGateRefusal, CastRefusalReason};
 use crate::Refusal;
 use crate::{game_item_instance, game_item_template, game_spell, game_spell_effect};
+use crate::{Spell, SpellEffect};
 
 enum Route {
     Ordinary,
@@ -97,6 +98,21 @@ fn item_slot(ctx: &ReducerContext, guid: u64, request: &CMSG_CAST_SPELL) -> Resu
     item_target(ctx, guid, request).map(|item| item.slot)
 }
 
+// vmangos HandleCastSpellOpcode: a negative spell with an explicitly selected unit cannot target its caster.
+fn negative_spell_on_self(
+    header: Option<&Spell>,
+    effects: &[SpellEffect],
+    caster: u64,
+    target: u64,
+) -> bool {
+    target == caster
+        && header.is_some_and(Spell::negative)
+        && effects.iter().any(|effect| {
+            effect.effect_index == 0
+                && matches!(effect.target, T_TARGET_ENEMY | T_TARGET_ALLY | T_TARGET_ANY)
+        })
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
@@ -117,6 +133,19 @@ pub(super) fn receive(
         .by_spell()
         .filter(spell)
         .collect();
+    let target = request
+        .targets
+        .target_flags
+        .get_unit()
+        .map_or(0, |target| target.unit_target.guid());
+    if crate::spell::knows_spell(ctx, guid, spell)
+        && negative_spell_on_self(header.as_ref(), &effects, guid, target)
+    {
+        return Err(Rollback::replies(
+            vec![failure(spell, CastRefusalReason::BadTargets)],
+            "a negative spell cannot target its caster",
+        ));
+    }
     let route = if header
         .as_ref()
         .is_some_and(|row| row.cast_flags & CAST_FLAG_RANGED_AUTO_REPEAT != 0)
@@ -138,11 +167,6 @@ pub(super) fn receive(
     } else {
         Route::Ordinary
     };
-    let target = request
-        .targets
-        .target_flags
-        .get_unit()
-        .map_or(0, |target| target.unit_target.guid());
     let dest = request
         .targets
         .target_flags
@@ -311,6 +335,7 @@ pub(super) fn cancel_repeat(ctx: &ReducerContext, guid: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lyracore_shared::spell::taxonomy::T_SELF;
 
     #[test]
     fn every_cast_refusal_reason_reports_its_1_12_1_cast_result() {
@@ -344,6 +369,40 @@ mod tests {
         ] {
             assert_eq!(cast_result(reason), code, "{reason:?}");
         }
+    }
+
+    fn spell_on_target(negative: bool, target: u8) -> (Spell, Vec<SpellEffect>) {
+        let header = Spell {
+            is_negative: negative,
+            ..Spell::blank(133, "Fixture")
+        };
+        let effect = SpellEffect {
+            target,
+            ..SpellEffect::blank(133, 0)
+        };
+        (header, vec![effect])
+    }
+
+    #[test]
+    fn a_negative_spell_with_a_selected_unit_cannot_target_its_caster() {
+        for selected in [T_TARGET_ENEMY, T_TARGET_ALLY, T_TARGET_ANY] {
+            let (header, effects) = spell_on_target(true, selected);
+            assert!(negative_spell_on_self(Some(&header), &effects, 7, 7));
+            assert!(!negative_spell_on_self(Some(&header), &effects, 7, 8));
+        }
+    }
+
+    #[test]
+    fn a_positive_or_self_targeted_spell_can_target_its_caster() {
+        let (positive, effects) = spell_on_target(false, T_TARGET_ALLY);
+        assert!(!negative_spell_on_self(Some(&positive), &effects, 7, 7));
+        let (negative_self, effects) = spell_on_target(true, T_SELF);
+        assert!(!negative_spell_on_self(
+            Some(&negative_self),
+            &effects,
+            7,
+            7
+        ));
     }
 
     #[test]

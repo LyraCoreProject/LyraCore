@@ -1,4 +1,4 @@
-use lyracore_protocol::messages::vanilla::NewItemSource;
+use lyracore_protocol::messages::vanilla::{NewItemCreationType, NewItemSource};
 use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
 // Playable class IDs skip 6 and 10; Druid is bit 10.
@@ -242,9 +242,31 @@ pub struct ItemInstance {
     pub item_text_id: u32,
 }
 
+/// How the client's item push describes a new item: where it came from and whether it was created.
+#[derive(Clone, Copy)]
+pub(crate) struct ItemPush {
+    pub(crate) source: NewItemSource,
+    pub(crate) creation_type: NewItemCreationType,
+}
+
+impl ItemPush {
+    pub(crate) const LOOTED: Self = Self {
+        source: NewItemSource::Looted,
+        creation_type: NewItemCreationType::Received,
+    };
+    pub(crate) const FROM_NPC: Self = Self {
+        source: NewItemSource::FromNpc,
+        creation_type: NewItemCreationType::Received,
+    };
+    pub(crate) const SPELL_CREATED: Self = Self {
+        source: NewItemSource::FromNpc,
+        creation_type: NewItemCreationType::Created,
+    };
+}
+
 impl ItemInstance {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
-        Self::insert_as(ctx, row, Some(NewItemSource::Looted))
+        Self::insert_as(ctx, row, Some(ItemPush::LOOTED))
     }
 
     /// Inserts a stack split off the character's own, without the item push or quest toast.
@@ -252,11 +274,7 @@ impl ItemInstance {
         Self::insert_as(ctx, row, None)
     }
 
-    pub(super) fn insert_as(
-        ctx: &ReducerContext,
-        row: Self,
-        source: Option<NewItemSource>,
-    ) -> Self {
+    pub(super) fn insert_as(ctx: &ReducerContext, row: Self, source: Option<ItemPush>) -> Self {
         let row = ctx.db.game_item_instance().insert(row);
         crate::native::inventory::item_changed(ctx, None, Some(&row), source);
         super::equip::changed(ctx, None, Some(&row));
@@ -264,7 +282,7 @@ impl ItemInstance {
     }
 
     pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
-        self.update_as(ctx, Some(NewItemSource::Looted))
+        self.update_as(ctx, Some(ItemPush::LOOTED))
     }
 
     /// Updates a stack merged from the character's own, without the item push or quest toast.
@@ -272,7 +290,7 @@ impl ItemInstance {
         self.update_as(ctx, None)
     }
 
-    pub(super) fn update_as(self, ctx: &ReducerContext, source: Option<NewItemSource>) -> Self {
+    pub(super) fn update_as(self, ctx: &ReducerContext, source: Option<ItemPush>) -> Self {
         let items = ctx.db.game_item_instance();
         let previous = items.guid().find(self.guid);
         let row = items.guid().update(self);

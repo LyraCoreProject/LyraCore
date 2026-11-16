@@ -307,6 +307,7 @@ fn run_spell_effects(
     let mut energized_power_type: u8 = 0;
     let mut primary_avoided = AttackOutcome::Normal;
     let mut any_crit = false;
+    let mut created_items = Vec::new();
     let mut item_grants = 0;
     let mut item_refused = false;
     // One hit roll per target for the whole spell (CONTEXT.md "Cast Miss"); never the caster.
@@ -365,6 +366,9 @@ fn run_spell_effects(
                     primary_avoided = roll;
                 }
                 continue;
+            }
+            if e.kind == E_CREATE_ITEM {
+                created_items.push(e.p0.max(0) as u32);
             }
             let hit = if e.kind == E_CREATE_ITEM && craft.is_some() {
                 let result = ctx
@@ -440,20 +444,19 @@ fn run_spell_effects(
     if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0 && !primary_avoided.is_avoided() {
         crate::combo::spend_combo(ctx, caster_guid);
     }
-    if !item_refused {
-        if let Some(plan) = craft {
-            if let Err(reason) = plan.commit(ctx) {
-                log::info!("craft {} refused: {reason:?}", hdr.spell_id);
-                item_refused = true;
-            }
-        }
-    }
-    if !item_refused {
-        for _ in 0..item_grants {
-            super::targeting::gain_recipe_skill(ctx, caster_guid, hdr.spell_id);
-        }
-    }
+    let finish_items = |craft: Option<crate::items::ItemStoragePlan>| {
+        finish_item_creation(
+            ctx,
+            caster_guid,
+            hdr.spell_id,
+            craft,
+            item_grants,
+            item_refused,
+            &created_items,
+        );
+    };
     if queues_next_swing(effects) {
+        finish_items(craft);
         return;
     }
     for target in hit_targets {
@@ -489,7 +492,35 @@ fn run_spell_effects(
             ..SpellCastEvent::signal(ctx, caster_guid, hdr.spell_id, SpellCastEventKind::Go)
         },
     );
+    finish_items(craft);
     finish_weapon_hits(ctx, caster_guid, weapon_targets, shield_targets);
+}
+
+// vmangos sends SMSG_SPELL_GO before effects, so the product's item packets and execute log follow it.
+fn finish_item_creation(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    craft: Option<crate::items::ItemStoragePlan>,
+    item_grants: u32,
+    mut item_refused: bool,
+    created_items: &[u32],
+) {
+    if !item_refused {
+        if let Some(plan) = craft {
+            if let Err(reason) = plan.commit_with_source(ctx, crate::items::ItemPush::SPELL_CREATED)
+            {
+                log::info!("craft {spell_id} refused: {reason:?}");
+                item_refused = true;
+            }
+        }
+    }
+    if !item_refused {
+        for _ in 0..item_grants {
+            super::targeting::gain_recipe_skill(ctx, caster_guid, spell_id);
+        }
+    }
+    crate::native::spell::item_creation_log(ctx, caster_guid, spell_id, created_items);
 }
 
 fn finish_weapon_hits(

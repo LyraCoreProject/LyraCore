@@ -2,7 +2,7 @@ use lyracore_protocol::{
     codec,
     messages::vanilla::{
         opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
-        NewItemSource, SpellCastTargets_SpellCastTargetFlags_Item as ItemTarget,
+        SpellCastTargets_SpellCastTargetFlags_Item as ItemTarget,
     },
     world::Packet,
 };
@@ -10,7 +10,7 @@ use lyracore_shared::item::ItemRefusal;
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{bounded as packet, game_native_player, Rollback, Unhandled};
-use crate::items::{item_in_slot, ItemUseTarget};
+use crate::items::{item_in_slot, ItemPush, ItemUseTarget};
 use crate::{game_item_template, game_spell, ItemInstance};
 
 const SPELL_ATTR_COOLDOWN_ON_EVENT: u32 = 0x02000000;
@@ -60,7 +60,7 @@ fn clear_slot(ctx: &ReducerContext, item: &ItemInstance, packets: &mut Vec<Packe
     }
 }
 
-fn receipt(row: &ItemInstance, count: u32, stack_add: bool, source: NewItemSource) -> Packet {
+fn receipt(row: &ItemInstance, count: u32, stack_add: bool, push: ItemPush) -> Packet {
     let (bag, position) = codec::bag_content_parts(row.slot).unwrap_or((255, row.slot));
     let mut receipt = codec::build_item_push_result(
         row.owner_guid,
@@ -71,7 +71,8 @@ fn receipt(row: &ItemInstance, count: u32, stack_add: bool, source: NewItemSourc
         stack_add,
         row.random_property_id,
     );
-    receipt.source = source;
+    receipt.source = push.source;
+    receipt.creation_type = push.creation_type;
     packet(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(Box::new(
         receipt,
     )))
@@ -93,13 +94,13 @@ fn gain(
     row: &ItemInstance,
     count: u32,
     stack_add: bool,
-    source: NewItemSource,
+    push: ItemPush,
     packets: &mut Vec<Packet>,
 ) {
     if count == 0 {
         return;
     }
-    packets.push(receipt(row, count, stack_add, source));
+    packets.push(receipt(row, count, stack_add, push));
     if let Some(toast) = quest_gain(ctx, row.owner_guid, row.entry, count) {
         // The client's toast adds this count to its bags, so it must lead the item's update.
         packets.insert(0, toast);
@@ -124,7 +125,7 @@ pub(crate) fn item_purchased(ctx: &ReducerContext, item: &ItemInstance, count: u
                 item,
                 count,
                 item.stack_count != count,
-                NewItemSource::FromNpc,
+                ItemPush::FROM_NPC,
             )],
         );
     }
@@ -200,7 +201,7 @@ pub(crate) fn item_changed(
     ctx: &ReducerContext,
     previous: Option<&ItemInstance>,
     current: Option<&ItemInstance>,
-    source: Option<NewItemSource>,
+    source: Option<ItemPush>,
 ) {
     if ctx.db.game_native_player().count() == 0 {
         return;
