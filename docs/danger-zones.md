@@ -205,6 +205,13 @@ the other finishers skip the combo-point Gate and keep their points, no finisher
 points, and Slice and Dice lasts its 6-second base. After you publish this schema to an existing
 Shard, reimport spells with `--dbc` before play resumes.
 
+### Self-cast refusal migration
+
+Older spell rows lack `CAST_FLAG_REFUSES_SELF_CAST`. Until spells are reimported, a Character can
+start a negative spell on itself, such as Fireball with itself selected, where vmangos refuses it with
+`BAD_TARGETS`. After you publish this revision to an existing Shard, reimport the `spell` family before
+play resumes.
+
 ### Chance on Hit migration
 
 `game_item_template.spellppmrate_1` through `spellppmrate_5` default to zero, and older spell rows
