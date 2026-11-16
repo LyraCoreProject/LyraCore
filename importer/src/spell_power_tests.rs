@@ -55,7 +55,7 @@ fn actual_spell_power_world_plan_casts_keep_school_sign_and_repair() {
     assert_eq!(rows[0]["base_points"], "20");
     assert_eq!(rows[0]["equip_supported"], "true");
     let area = shard.query_rows("SELECT kind,equip_supported FROM game_spell_effect WHERE spell_id = 28143 AND effect_index = 0");
-    assert_eq!(area[0]["kind"], "185");
+    assert_eq!(area[0]["kind"], "208");
     assert_eq!(area[0]["equip_supported"], "false");
     shard.assert_call("debug_begin_cast", &["1", "11390", "1"]);
     let auras = shard.query_rows(

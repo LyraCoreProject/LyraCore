@@ -7,6 +7,9 @@ use std::collections::BTreeMap;
 #[path = "spell_aura_test_support.rs"]
 mod aura_test_support;
 #[cfg(test)]
+#[path = "spell_aura_tests.rs"]
+mod aura_tests;
+#[cfg(test)]
 #[path = "spell_shield_tests.rs"]
 mod shield_tests;
 
@@ -34,25 +37,27 @@ use lyracore_importer::spell_kind::{
 use lyracore_importer::spell_overrides::{self, NamedSpell};
 use std::path::Path;
 
+use lyracore_shared::packing::power_type;
 use lyracore_shared::spell::taxonomy::{
-    A_ABSORB, A_CONTROL, A_DAMAGE_SHIELD, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT,
-    A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN, A_MOD_DAMAGE_TAKEN_FLAT,
-    A_MOD_HEALING, A_MOD_HEALING_TAKEN, A_MOD_HEALTH_POWER, A_MOD_POWER_REGEN_PCT,
-    A_MOD_RESISTANCE, A_MOD_SCHOOL_CRIT, A_MOD_SKILL, A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT,
-    A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER,
-    A_PROC_DAMAGE, A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT,
-    A_TRANSFORM, CAST_FLAG_AREA_AURA, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER,
-    CAST_FLAG_ITEM_TARGET, CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_RIGHTEOUSNESS,
-    CAST_FLAG_WEAPON_PROCS, COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DODGE, COMBAT_HIT,
-    COMBAT_RANGED_ATTACK_POWER, COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS,
-    E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL,
-    E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL,
-    E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
-    E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED,
-    E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_PET,
-    E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN,
-    P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
-    P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW,
+    A_ABSORB, A_CONTROL, A_DAMAGE_SHIELD, A_FLAG, A_IMMUNITY, A_INERT, A_MANA_REGEN_INTERRUPT,
+    A_MOD_COMBAT, A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN,
+    A_MOD_DAMAGE_TAKEN_FLAT, A_MOD_HEALING, A_MOD_HEALING_TAKEN, A_MOD_HEALTH_POWER,
+    A_MOD_HEALTH_REGEN, A_MOD_HEALTH_REGEN_PCT, A_MOD_POWER_REGEN, A_MOD_POWER_REGEN_PCT,
+    A_MOD_REGEN, A_MOD_RESISTANCE, A_MOD_SCHOOL_CRIT, A_MOD_SKILL, A_MOD_SPEED, A_MOD_STAT,
+    A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL,
+    A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT,
+    A_SPELLMOD_PCT, A_TRANSFORM, CAST_FLAG_AREA_AURA, CAST_FLAG_CHANNELED,
+    CAST_FLAG_COMBO_FINISHER, CAST_FLAG_ITEM_TARGET, CAST_FLAG_RANGED_AUTO_REPEAT,
+    CAST_FLAG_RIGHTEOUSNESS, CAST_FLAG_WEAPON_PROCS, COMBAT_ATTACK_POWER, COMBAT_CRIT,
+    COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_SPELL_CRIT, COMBAT_THREAT,
+    E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM,
+    E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET,
+    E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING,
+    E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT,
+    E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE,
+    E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT,
+    M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG,
+    P_FLAT_MANA, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW,
     P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED,
     SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STANCE_BATTLE,
@@ -416,7 +421,9 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
         }
         A_MOUNTED => (misc as i32, P_DISPLAY_ID),
         A_TRANSFORM => (misc as i32, P_ENTRY),
-        A_PERIODIC_ENERGIZE | A_MOD_POWER_REGEN_PCT => ((misc & 0xFF) as i32, P_POWER_TYPE),
+        A_PERIODIC_ENERGIZE | A_MOD_POWER_REGEN | A_MOD_POWER_REGEN_PCT => {
+            ((misc & 0xFF) as i32, P_POWER_TYPE)
+        }
         A_CONTROL => {
             let mech = match aura {
                 ModStun => M_STUN,
@@ -1073,21 +1080,6 @@ fn push_spell_effect_rows(
         if kind == A_PERIODIC_HEAL {
             healed_target = target;
         }
-        let energize = header
-            .overrides
-            .and_then(|spell| spell.first_effect_energize)
-            .filter(|_| effect_index == 0);
-        let (kind, period_ms, base_points, target, p0, p0_kind) = match energize {
-            Some((percent, period)) => (
-                A_PERIODIC_ENERGIZE,
-                period,
-                percent,
-                T_SELF,
-                0i32,
-                P_PCT_MAX_POWER,
-            ),
-            None => (kind, period_ms, base_points, target, p0, p0_kind),
-        };
         let radius_yd = if s.effect_radius[i] > 0 {
             dbc.radii
                 .get(SpellRadiusKey::new(s.effect_radius[i]))
@@ -1110,6 +1102,12 @@ fn push_spell_effect_rows(
                 } else {
                     0
                 }
+        } else if kind == A_MOD_REGEN {
+            if s.effect_amplitude[i] == 0 {
+                5000
+            } else {
+                s.effect_amplitude[i] as i32
+            }
         } else if kind == A_MOD_SKILL {
             i32::from(s.effect_aura[i] == 98)
         } else if kind == E_SUMMON_HOSTILE {
@@ -1301,13 +1299,21 @@ fn resolve_effect_kind(
     let name = header.name.as_str();
     let school_mask = header.school_mask;
     let channeled = header.channeled;
+    // vmangos ticks aura 85 rage every 3 s for 3/5 of its five-second amount.
+    let rage_regen =
+        aura == AuraMod::ModPowerRegen && s.effect_misc_value[i] == u32::from(power_type::RAGE);
     let (kind, (p0, p0_kind)) = if is_aura_effect(effect_id) || s.effect_aura[i] != 0 {
-        let k = if aura == AuraMod::ModCritPercent && s.equipment[0] != u32::MAX {
+        let k = if rage_regen {
+            A_PERIODIC_ENERGIZE
+        } else if (aura == AuraMod::ModCritPercent && s.equipment[0] != u32::MAX)
+            || (aura == AuraMod::ModPowerRegen
+                && s.effect_misc_value[i] != u32::from(power_type::MANA))
+        {
             A_INERT
         } else {
             aura_mod_to_kind(aura)
         };
-        let k = if effect_id != 6
+        let k = if !is_aura_effect(effect_id)
             && matches!(
                 k,
                 A_MOD_DAMAGE_DONE_FLAT
@@ -1381,18 +1387,18 @@ fn resolve_effect_kind(
 
     let base_points = if kind == E_ENCHANT_ITEM_TEMPORARY && s.effect_base_points[i] == 0 {
         unset_temporary_enchantment_seconds(s.family_name as u8)
+    } else if rage_regen {
+        dbc_flat_amount(s.effect_base_points[i]) * 3 / 5
     } else {
         dbc_flat_amount(s.effect_base_points[i])
     };
     let die_sides = s.effect_die_sides[i];
     let per_level = s.effect_real_points_per_level[i];
     let period_ms = s.effect_amplitude[i];
-    // Vanilla ModRegen and ModPowerRegen tick every five seconds even when amplitude is zero.
-    let period_ms = if matches!(
-        (kind, aura),
-        (A_PERIODIC_HEAL, AuraMod::ModRegen) | (A_PERIODIC_ENERGIZE, AuraMod::ModPowerRegen)
-    ) {
-        5000
+    let period_ms = if matches!(kind, A_MOD_REGEN | A_MOD_POWER_REGEN | A_MOD_HEALTH_REGEN) {
+        0
+    } else if rage_regen && period_ms == 0 {
+        3000
     } else {
         period_ms
     };
@@ -1702,6 +1708,11 @@ fn kind_name(kind: u8) -> &'static str {
         A_SELF_RESURRECT => "A_SELF_RESURRECT",
         A_MOD_POWER_REGEN_PCT => "A_MOD_POWER_REGEN_PCT",
         A_DAMAGE_SHIELD => "A_DAMAGE_SHIELD",
+        A_MOD_POWER_REGEN => "A_MOD_POWER_REGEN",
+        A_MOD_HEALTH_REGEN => "A_MOD_HEALTH_REGEN",
+        A_MOD_REGEN => "A_MOD_REGEN",
+        A_MOD_HEALTH_REGEN_PCT => "A_MOD_HEALTH_REGEN_PCT",
+        A_MANA_REGEN_INTERRUPT => "A_MANA_REGEN_INTERRUPT",
         _ => "?",
     }
 }
@@ -2045,10 +2056,15 @@ mod tests {
         archive.build(path.join("dbc.MPQ")).unwrap();
         let source = crate::vmangos_spell::fixture();
         let connection = source.fixture_connection();
-        connection.execute_batch("DELETE FROM spell_template; INSERT INTO spell_template (entry,build,name,effect1,effectApplyAuraName1,effectBasePoints1,effectDieSides1,effectImplicitTargetA1,equippedItemClass) VALUES (7598,5875,'Increased Critical 2',6,52,1,1,1,-1),(15438,5875,'Thorns',6,15,2,1,1,-1)").unwrap();
+        connection.execute_batch("DELETE FROM spell_template; INSERT INTO spell_template (entry,build,name,effect1,effectApplyAuraName1,effectBasePoints1,effectDieSides1,effectImplicitTargetA1,equippedItemClass) VALUES (7598,5875,'Critical fixture',6,52,1,1,1,-1),(15438,5875,'Thorns',6,15,2,1,1,-1),(18378,5875,'Mana regeneration fixture',6,85,7,1,1,-1); INSERT INTO spell_template (entry,build,name,effect3,effectApplyAuraName3,effectBasePoints3,effectDieSides3,effectImplicitTargetA3,equippedItemClass) VALUES (12956,5875,'Health regeneration fixture',6,161,2,1,1,-1)").unwrap();
         let plans = [
             world_plan(&source, path.to_str().unwrap()),
-            selected_world_plan(&source, path.to_str().unwrap(), &[7598, 15438], &[]),
+            selected_world_plan(
+                &source,
+                path.to_str().unwrap(),
+                &[7598, 15438, 18378, 12956],
+                &[],
+            ),
         ];
         std::fs::remove_dir_all(path).unwrap();
         for plan in plans {
@@ -2071,8 +2087,14 @@ mod tests {
                 )
                 .unwrap();
             assert!(supported);
-            let actual = db.query_row("SELECT kind,base_points,period_ms,equip_supported FROM game_spell_effect WHERE spell_id=15438 AND effect_index=0",[],|row| Ok((row.get::<_,u8>(0)?,row.get::<_,i32>(1)?,row.get::<_,u32>(2)?,row.get::<_,bool>(3)?))).unwrap();
-            assert_eq!(actual, (A_DAMAGE_SHIELD, 3, 0, true));
+            for (spell, index, kind, amount) in [
+                (18378, 0, A_MOD_POWER_REGEN, 8),
+                (12956, 2, A_MOD_HEALTH_REGEN, 3),
+                (15438, 0, A_DAMAGE_SHIELD, 3),
+            ] {
+                let actual = db.query_row("SELECT kind,base_points,period_ms,equip_supported FROM game_spell_effect WHERE spell_id=?1 AND effect_index=?2",[spell,index],|row| Ok((row.get::<_,u8>(0)?,row.get::<_,i32>(1)?,row.get::<_,u32>(2)?,row.get::<_,bool>(3)?))).unwrap();
+                assert_eq!(actual, (kind, amount, 0, true));
+            }
         }
     }
 
@@ -2432,7 +2454,7 @@ mod tests {
                 effects(12051)[0].base_points,
                 effects(12051)[0].period_ms
             ),
-            (A_PERIODIC_ENERGIZE, 15, 2000)
+            (A_MOD_POWER_REGEN_PCT, 1500, 0)
         );
         assert_eq!(
             (
@@ -2550,6 +2572,31 @@ mod tests {
         assert_eq!(effects, [(A_MOD_POWER_REGEN_PCT, 100, 3, P_POWER_TYPE)]);
         let header = rows.headers.iter().find(|s| s.spell_id == 13750).unwrap();
         assert_eq!((header.duration_ms, header.cooldown_ms), (15_000, 300_000));
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE and LYRACORE_TEST_DBC"]
+    fn actual_regeneration_spell_plan_preserves_source_units() {
+        let path = std::env::var("LYRACORE_VMANGOS_SQLITE").unwrap();
+        let client = std::env::var("LYRACORE_TEST_DBC").unwrap();
+        let source = crate::world_source::WorldSource::open(Path::new(&path)).unwrap();
+        let plan = selected_world_plan(&source, &client, &[18378, 12956, 430], &[]).unwrap();
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient,equip_supported)").unwrap();
+        for sql in plan
+            .stmts
+            .iter()
+            .filter(|sql| sql.contains("game_spell_effect"))
+        {
+            db.execute_batch(&lyracore_shared::import_sql::insert_defaults(sql))
+                .unwrap();
+        }
+        let effect = |spell, index| {
+            db.query_row("SELECT kind,base_points,period_ms,equip_supported FROM game_spell_effect WHERE spell_id=?1 AND effect_index=?2", [spell,index], |row| Ok((row.get::<_,u8>(0)?,row.get::<_,i32>(1)?,row.get::<_,u32>(2)?,row.get::<_,bool>(3)?))).unwrap()
+        };
+        assert_eq!(effect(18378, 0), (0xc1, 8, 0, true));
+        assert_eq!(effect(12956, 2), (0xc2, 3, 0, true));
+        assert_eq!(effect(430, 0), (0xc1, 42, 0, true));
     }
 
     fn imported_spell_fixture(
@@ -3220,7 +3267,7 @@ mod tests {
             (71, 18382, 1, 126, (6, 1, 0), true),
             (77, 7219, -1, 3, (6, 1, 0), false),
             (82, 11789, -1, 0, (6, 1, 0), false),
-            (85, 18378, 7, 0, (6, 1, 0), false),
+            (85, 18378, 7, 0, (6, 1, 0), true),
             (89, 28347, 9, 0, (6, 1, 0), false),
             (99, 9138, 5, 0, (6, 1, 0), true),
             (102, 14097, 44, 4, (6, 1, 0), false),
@@ -3241,7 +3288,7 @@ mod tests {
             (144, 23409, 1, 0, (6, 1, 0), false),
             (154, 17746, 4, 0, (6, 1, 0), false),
             (158, 22852, 22, 0, (6, 1, 0), false),
-            (161, 12956, 2, 0, (6, 1, 0), false),
+            (161, 12956, 2, 0, (6, 1, 0), true),
             (180, 22849, 34, 32, (6, 1, 0), false),
         ];
         for (aura, spell, points, misc, shape, supported) in cases {
@@ -3253,6 +3300,23 @@ mod tests {
         }
         assert!(!equip_aura_supported(52, 0, [2, 0, 0]));
         assert!(!equip_aura_supported(85, 3, [u32::MAX, 0, 0]));
+    }
+
+    #[test]
+    fn area_aura_effects_keep_their_school_damage_kinds() {
+        // Sanctity Aura 20218 (35), Master Demonologist 23761 (119) and Soul Link 25228 (119).
+        for effect in [27, 35, 119] {
+            for (aura, kind) in [
+                (13, A_MOD_DAMAGE_DONE_FLAT),
+                (14, A_MOD_DAMAGE_TAKEN_FLAT),
+                (71, A_MOD_SCHOOL_CRIT),
+                (79, A_MOD_DAMAGE_DONE_PCT),
+                (115, A_MOD_HEALING_TAKEN),
+            ] {
+                let row = equip_review_effect(20218, aura, 9, 2, (effect, 1, 0));
+                assert_eq!((effect, aura, row.kind), (effect, aura, kind));
+            }
+        }
     }
 
     #[test]
@@ -3355,7 +3419,7 @@ mod tests {
     }
 
     #[test]
-    fn drink_restores_mana_every_five_seconds() {
+    fn drink_contributes_mana_per_five_to_the_two_second_consumer() {
         let mut dbc = fixture_tables();
         dbc.spells = vec![Spell {
             id: 430,
@@ -3370,7 +3434,36 @@ mod tests {
         let drink = first_effect(&rows, 430);
         assert_eq!(
             (drink.kind, drink.period_ms, drink.p0, drink.p0_kind),
-            (A_PERIODIC_ENERGIZE, 5000, 0, P_POWER_TYPE)
+            (A_MOD_POWER_REGEN, 0, 0, P_POWER_TYPE)
+        );
+    }
+
+    #[test]
+    fn anger_management_restores_three_fifths_of_its_rage_every_three_seconds() {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![Spell {
+            id: 12296,
+            name: "Anger Management".into(),
+            effect: [EFFECT_APPLY_AURA, 0, 0],
+            effect_aura: [AuraMod::ModPowerRegen as u32, 0, 0],
+            effect_base_points: [14, 0, 0],
+            effect_die_sides: [1, 0, 0],
+            effect_misc_value: [1, 0, 0],
+            implicit_target_a: [1, 0, 0],
+            ..Default::default()
+        }];
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let rage = first_effect(&rows, 12296);
+        assert_eq!(
+            (
+                rage.kind,
+                rage.base_points,
+                rage.period_ms,
+                rage.p0,
+                rage.p0_kind
+            ),
+            (A_PERIODIC_ENERGIZE, 9, 3000, 1, P_POWER_TYPE)
         );
     }
 
@@ -3842,8 +3935,8 @@ mod tests {
         use AuraMod::*;
         assert_eq!(aura_mod_to_kind(PeriodicDamage), A_PERIODIC_DAMAGE);
         assert_eq!(aura_mod_to_kind(PeriodicHeal), A_PERIODIC_HEAL);
-        assert_eq!(aura_mod_to_kind(ModRegen), A_PERIODIC_HEAL);
-        assert_eq!(aura_mod_to_kind(ModPowerRegen), A_PERIODIC_ENERGIZE);
+        assert_eq!(aura_mod_to_kind(ModRegen), A_MOD_REGEN);
+        assert_eq!(aura_mod_to_kind(ModPowerRegen), A_MOD_POWER_REGEN);
         assert_eq!(aura_mod_to_kind(PeriodicEnergize), A_PERIODIC_ENERGIZE);
         assert_eq!(
             aura_mod_to_kind(ModPowerRegenPercent),

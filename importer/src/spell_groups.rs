@@ -30,11 +30,6 @@ pub(super) fn append(
     if selected.is_empty() {
         return Ok(());
     }
-    for spell in &selected {
-        statements.push(format!(
-            "DELETE FROM game_spell_group WHERE spell_id = {spell}"
-        ));
-    }
     let memberships = source.rows("spell_group")?;
     let mut groups = BTreeSet::new();
     for row in memberships.iter() {
@@ -95,4 +90,41 @@ fn write_group(statements: &mut Vec<String>, group: u32, rule: u8, members: &[(u
         ));
     }
     statements.push(format!("INSERT INTO game_spell_group_rule (group_id,rule,rank_is_comparable) VALUES ({group},{rule},false)"));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_import_rewrites_only_the_source_groups_it_names() {
+        let source = crate::world_source::fixture_sql(
+            "CREATE TABLE spell_group (group_id INTEGER, group_spell_id INTEGER, spell_id INTEGER,
+                 build_min INTEGER, build_max INTEGER,
+                 PRIMARY KEY (group_id, group_spell_id, spell_id));
+             INSERT INTO spell_group VALUES (1007, 0, 20911, 0, 5875), (1007, 1, 25899, 0, 5875);
+             CREATE TABLE spell_group_stack_rules (group_id INTEGER, build INTEGER, stack_rule INTEGER,
+                 PRIMARY KEY (group_id, build));
+             INSERT INTO spell_group_stack_rules VALUES (1007, 0, 1);",
+        );
+        let rows = SpellRows {
+            effects: [20911, 25899]
+                .map(|spell| SpellEffectRow {
+                    kind: A_MOD_DAMAGE_TAKEN_FLAT,
+                    ..blank_effect(spell, 0)
+                })
+                .into(),
+            ..Default::default()
+        };
+        let mut statements = Vec::new();
+        append(&source, &[], &rows, &mut statements).unwrap();
+        let membership_deletes: Vec<_> = statements
+            .iter()
+            .filter(|sql| sql.starts_with("DELETE FROM game_spell_group "))
+            .collect();
+        assert_eq!(
+            membership_deletes,
+            ["DELETE FROM game_spell_group WHERE group_id = 1007"]
+        );
+    }
 }

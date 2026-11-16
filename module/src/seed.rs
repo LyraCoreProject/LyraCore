@@ -83,7 +83,7 @@ const CURATED_SEEDS: &[CuratedSeed] = &[
     real(GLOBALS_FAMILY, seed_createinfo_spells),
     // The talent import carries no family stamp; a spell import brings the real talent spells.
     real(SPELL_FAMILY, crate::talent::seed_talents),
-    // The importer does not import spell groups yet, so imported Realms need these rows too.
+    // The spell import writes only school modifier groups, so imported Realms need these rows too.
     always(seed_spell_groups),
     real(GLOBALS_FAMILY, seed_crit_rates),
 ];

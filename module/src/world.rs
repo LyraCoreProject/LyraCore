@@ -100,6 +100,7 @@ pub(crate) fn clear_relay_world_states_for_instance(ctx: &ReducerContext, instan
     index(accessor = by_entry, btree(columns = [entry])),
     index(accessor = by_owner_guid, btree(columns = [owner_guid])),
     index(accessor = by_regeneration_pending, btree(columns = [regeneration_pending])),
+    index(accessor = by_regeneration_type, btree(columns = [type_mask, regeneration_pending])),
     index(accessor = by_combat_active, btree(columns = [combat_active])),
     index(accessor = by_simulation_indexed, btree(columns = [simulation_indexed]))
 )]
