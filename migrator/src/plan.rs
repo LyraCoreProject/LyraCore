@@ -864,8 +864,7 @@ fn contact_list(
     })
 }
 
-// A member is planned in this run or migrated in an earlier one; the Module checks the team of a
-// member whose race this run did not read.
+// The Module checks the team of a member from an earlier run, whose race this run did not read.
 fn migrated_guild(
     source: &str,
     migrated: &HashSet<u64>,
@@ -928,8 +927,7 @@ fn migrated_guild(
             );
             continue;
         }
-        // MaNGOS deletes a rank without moving its members and demotes a second rank 0 only when
-        // it loads the Guild.
+        // MaNGOS leaves members on a deleted rank and demotes a second rank 0 only at Guild load.
         let rank_id = if member.guid == guild.leader {
             0
         } else {

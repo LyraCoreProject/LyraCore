@@ -475,8 +475,7 @@ pub struct GuildMigrationRecord {
     pub migrated_at: Timestamp,
 }
 
-// Founds one Guild through the normal founding and membership rules. A member that is not a
-// migrated Character, is on the other team or is in another Guild is skipped.
+// A member that is not a migrated Character, is on the other team or is in a Guild is skipped.
 #[reducer]
 pub fn migrate_guild(ctx: &ReducerContext, guild: GuildMigration) -> Result<(), String> {
     use crate::{game_guild, game_guild_rank};
