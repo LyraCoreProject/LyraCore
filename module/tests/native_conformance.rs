@@ -606,11 +606,20 @@ fn health_reaches_a_stranger_as_a_percent_and_the_party_in_full() {
     );
 
     shard.insert_row("game_group", &[("group_id", &1), ("leader_guid", &subject)]);
+    let owner = format!("0x{:064x}", 0);
     shard.insert_rows(
         "game_group_member",
         &[
-            &[("group_id", &1), ("character_guid", &subject)],
-            &[("group_id", &1), ("character_guid", &viewer)],
+            &[
+                ("group_id", &1),
+                ("character_guid", &subject),
+                ("owner_identity", &owner),
+            ],
+            &[
+                ("group_id", &1),
+                ("character_guid", &viewer),
+                ("owner_identity", &owner),
+            ],
         ],
     );
     let health = max_health / 3;
