@@ -376,8 +376,7 @@ pub struct ContactMigrationRecord {
     pub migrated_at: Timestamp,
 }
 
-// One Character's friends and ignores, once; a target that is not a migrated Character, or that
-// the live contact rules refuse, is skipped.
+// A target that is not a migrated Character, or that the live contact rules refuse, is skipped.
 #[reducer]
 pub fn migrate_contacts(
     ctx: &ReducerContext,
