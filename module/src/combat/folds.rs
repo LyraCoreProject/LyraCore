@@ -393,7 +393,7 @@ fn base_melee_range(ctx: &ReducerContext, attacker: &WorldEntity, normalized: bo
     }
     let ap = melee_attack_power(ctx, attacker);
     if let Some(form_ms) = feral_attack_time(attacker) {
-        // vmangos GetAPMultiplier normalizes an unusable weapon as a fist weapon.
+        // vmangos normalizes by the equipped weapon; no 1.12 druid form ability normalizes.
         let speed_ms = if normalized {
             NORMALIZED_ONE_HAND_MS
         } else {

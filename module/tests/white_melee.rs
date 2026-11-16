@@ -301,3 +301,63 @@ fn a_usable_weapon_change_in_combat_restarts_the_main_hand_swing() {
         "the swing timer restarts at the change"
     );
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_shapeshift_refreshes_the_sheet_attack_power_and_damage() {
+    use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
+    use lyracore_package_delta::packed_spell_effect_id;
+    use lyracore_shared::spell::taxonomy::{E_SET_STANCE, STANCE_CAT, T_SELF};
+    const CAT_FORM: u32 = 5_090_413;
+
+    let mut shard = Standalone::start("white-melee-shapeshift-sheet");
+    beside_a_wolf(
+        &mut shard,
+        "UPDATE game_character SET class = 11, level = 60 WHERE guid = 1",
+    );
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &CAT_FORM),
+            ("name", &"Cat Form fixture"),
+            ("school_mask", &1),
+            ("spell_level", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(CAT_FORM, 0)),
+            ("spell_id", &CAT_FORM),
+            ("kind", &E_SET_STANCE),
+            ("target", &T_SELF),
+            ("p_0", &STANCE_CAT),
+        ],
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET delay_ms = 2000, damage_min = 10.0, damage_max = 15.0, \
+         stat_strength = 0, stat_agility = 0 WHERE entry = {FIXTURE_BLADE}"
+    ));
+    shard.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
+    shard.assert_sql("UPDATE game_world_entity SET strength = 80, agility = 40 WHERE guid = 1");
+    let sheet = |shard: &Standalone| {
+        let row = shard
+            .query_rows(
+                "SELECT sheet_ap_base, sheet_dmg_min, sheet_dmg_max FROM game_world_entity \
+                 WHERE guid = 1",
+            )
+            .remove(0);
+        [
+            row["sheet_ap_base"].clone(),
+            row["sheet_dmg_min"].clone(),
+            row["sheet_dmg_max"].clone(),
+        ]
+    };
+
+    // vmangos Player::InitDataForForm: Cat AP 2 * 80 + 40 - 20 swings 51-75 + 180 / 14.
+    shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
+    assert_eq!(sheet(&shard), ["180", "63", "87"], "Cat Form");
+    // Caster AP 2 * 80 - 20 swings the 10-15 weapon + 140 / 14 * 2.0.
+    shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
+    assert_eq!(sheet(&shard), ["140", "30", "35"], "back in caster form");
+}
