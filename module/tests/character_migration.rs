@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use serde_json::{json, Value};
 use support::{actor, Standalone};
 
@@ -217,6 +218,7 @@ fn migration(catalogue: &Catalogue, source_guid: u64, name: &str) -> Value {
         ],
         "explored_zones": [0, 1u32 << (AREA_BIT - 32)],
         "taxi_nodes": [TAXI_CLIENT_NODE],
+        "hunter_pet": {"none": []},
     })
 }
 
@@ -564,4 +566,57 @@ fn a_letter_copy_in_the_inventory_keeps_its_text() {
     ));
     assert_eq!(text[0]["text"], "Dear Migrant");
     assert_eq!(text[0]["letters"], "1");
+}
+
+// An empty game_char_base_info admits every race and class pair, Dwarf Hunter included.
+fn hunter(catalogue: &Catalogue) -> Value {
+    let mut plan = migration(catalogue, 7, "Migrant");
+    plan["race"] = json!(3);
+    plan["class"] = json!(3);
+    plan["hunter_pet"] = json!({"some": {
+        "creature_entry": TEST_WOLF_ENTRY,
+        "name": "Wolfie",
+        "rename_allowed": false,
+        "level": 18,
+        "xp": 250,
+        "loyalty_level": 4,
+        "loyalty_progress": 300,
+        "happiness": 2_000_000,
+    }});
+    plan
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_hunter_arrives_with_its_pet() {
+    let (shard, catalogue) = realm("character-migration-hunter-pet");
+    let plan = hunter(&catalogue);
+    shard.assert_output_success(&migrate(&shard, &plan), "migrate_character");
+
+    let guid = guid_of(&shard, "Migrant");
+    let pet = &shard.query_rows(&format!(
+        "SELECT pet_id, creature_entry, creature_family, name, rename_allowed, level, loyalty_level, happiness FROM game_hunter_pet WHERE owner_guid = {guid}"
+    ))[0];
+    assert_eq!(pet["pet_id"], guid);
+    assert_eq!(pet["creature_family"], "1");
+    assert_eq!(pet["name"], "Wolfie");
+    assert_eq!(pet["rename_allowed"], "false");
+    assert_eq!(pet["level"], "18");
+    assert_eq!(pet["loyalty_level"], "4");
+    assert_eq!(pet["happiness"], "1000000");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_pet_for_a_character_that_is_not_a_hunter_is_refused() {
+    let (shard, catalogue) = realm("character-migration-warrior-pet");
+    let mut plan = hunter(&catalogue);
+    plan["race"] = json!(1);
+    plan["class"] = json!(1);
+
+    let text = refusal(&migrate(&shard, &plan));
+    assert!(text.contains("only a Hunter"), "{text}");
+    assert!(shard
+        .query_rows("SELECT pet_id FROM game_hunter_pet")
+        .is_empty());
 }
