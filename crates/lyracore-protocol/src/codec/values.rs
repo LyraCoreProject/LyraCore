@@ -364,10 +364,18 @@ pub fn build_talent_points_values(guid: u64, points: u32) -> SMSG_UPDATE_OBJECT 
     })
 }
 
-pub fn build_player_xp_values(guid: u64, xp: u32, next_level_xp: u32) -> SMSG_UPDATE_OBJECT {
+pub fn build_player_xp_values(
+    guid: u64,
+    xp: Option<u32>,
+    next_level_xp: Option<u32>,
+) -> SMSG_UPDATE_OBJECT {
     player_values(guid, |player| {
-        player.set_player_xp(xp as i32);
-        player.set_player_next_level_xp(next_level_xp as i32);
+        if let Some(xp) = xp {
+            player.set_player_xp(xp as i32);
+        }
+        if let Some(next_level_xp) = next_level_xp {
+            player.set_player_next_level_xp(next_level_xp as i32);
+        }
     })
 }
 

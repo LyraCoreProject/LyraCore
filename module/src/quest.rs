@@ -83,6 +83,7 @@ pub(crate) enum QuestCreditOutcome {
 const PARTY_SHARE_RANGE_SQ: f32 = crate::group::GROUP_XP_RANGE_SQ;
 
 pub(crate) const MAX_QUEST_LOG_SIZE: usize = 20;
+pub(crate) const QUEST_REWARD_CHOICES_COUNT: u32 = 6;
 
 const QUEST_MAX_LEVEL_PAYOUT: u32 = 60;
 
@@ -152,6 +153,22 @@ pub struct QuestFlags {
     #[primary_key]
     pub quest_entry: u32,
     pub flags: u32,
+}
+
+#[table(accessor = game_quest_emote)]
+pub struct QuestEmote {
+    #[primary_key]
+    pub quest_entry: u32,
+    pub incomplete_emote: u32,
+    pub complete_emote: u32,
+    pub offer_reward_emote_1: u32,
+    pub offer_reward_emote_2: u32,
+    pub offer_reward_emote_3: u32,
+    pub offer_reward_emote_4: u32,
+    pub offer_reward_delay_1: u32,
+    pub offer_reward_delay_2: u32,
+    pub offer_reward_delay_3: u32,
+    pub offer_reward_delay_4: u32,
 }
 
 #[table(accessor = game_quest_text, public)]
@@ -293,7 +310,7 @@ pub struct CharacterQuestLog {
     pub entries: Vec<u32>,
 }
 
-crate::outside_table_catalog!(game_quest_flags, game_character_quest_log);
+crate::outside_table_catalog!(game_quest_flags, game_quest_emote, game_character_quest_log);
 
 impl CharacterQuest {
     pub(crate) fn is_active(&self) -> bool {
@@ -1029,7 +1046,7 @@ pub(crate) fn request_turn_in_quest(
         .map(|c| (c.choice_index, c.item_entry, c.count))
         .collect();
     if let Some(reward) = pick_choice_reward(&choices, reward_index, quest_entry)? {
-        rewards.push(reward);
+        rewards.insert(0, reward);
     }
     player.money = player.money.saturating_add(tmpl.reward_money);
     let base_xp = lyracore_shared::quest::base_reward_xp(
@@ -1040,7 +1057,25 @@ pub(crate) fn request_turn_in_quest(
     let payout = quest_payout(player.level, crate::xp::rated_xp(ctx, base_xp));
     player.money = player.money.saturating_add(payout.money);
     // Packages can catch a Refusal; resolve every item Gate before the infallible quest effects.
-    crate::items::exchange_items(ctx, player_guid, &collect, &rewards)?;
+    crate::items::exchange_items(
+        ctx,
+        player_guid,
+        &collect,
+        &rewards,
+        crate::items::ItemPush::QUEST_REWARD,
+    )?;
+    crate::reputation::grant_reputation(
+        ctx,
+        player_guid,
+        tmpl.rew_rep_faction_1,
+        tmpl.rew_rep_value_1,
+    );
+    crate::reputation::grant_reputation(
+        ctx,
+        player_guid,
+        tmpl.rew_rep_faction_2,
+        tmpl.rew_rep_value_2,
+    );
     if let Some(xp) = payout.xp {
         crate::xp::XpEvent::send(
             ctx,
@@ -1058,19 +1093,6 @@ pub(crate) fn request_turn_in_quest(
         crate::xp::grant_xp(ctx, &mut player, xp);
     }
     player.update(ctx);
-
-    crate::reputation::grant_reputation(
-        ctx,
-        player_guid,
-        tmpl.rew_rep_faction_1,
-        tmpl.rew_rep_value_1,
-    );
-    crate::reputation::grant_reputation(
-        ctx,
-        player_guid,
-        tmpl.rew_rep_faction_2,
-        tmpl.rew_rep_value_2,
-    );
 
     if let Some(reward) = reward_spell {
         crate::spell::learn_spell(ctx, player_guid, owner_identity, reward.spell_id);

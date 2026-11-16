@@ -31,6 +31,11 @@ fn quest<'a>(
         ("QuestLevel", N(8)),
         ("RewXP", N(123)),
         ("QuestFlags", N(8)),
+        ("IncompleteEmote", N(6)),
+        ("CompleteEmote", N(1)),
+        ("OfferRewardEmote1", N(2)),
+        ("OfferRewardEmoteDelay1", N(500)),
+        ("OfferRewardEmote2", N(5)),
         ("RewMailTemplateId", N(5)),
         ("RewMailDelaySecs", N(12)),
         ("RewMailMoney", N(34)),
@@ -53,7 +58,7 @@ fn quest<'a>(
 }
 
 fn source() -> WorldSource {
-    let mut names = "entry patch ZoneOrSort MinLevel QuestLevel Type RequiredClasses RequiredRaces LimitTime QuestFlags SpecialFlags PrevQuestId NextQuestInChain SrcItemId SrcItemCount RewRepFaction1 RewRepValue1 RewRepFaction2 RewRepValue2 RewOrReqMoney RewSpell RewSpellCast RewMoneyMaxLevel RewMailTemplateId RewMailDelaySecs RewMailMoney RewXP".split_whitespace().map(str::to_string).collect::<Vec<_>>();
+    let mut names = "entry patch ZoneOrSort MinLevel QuestLevel Type RequiredClasses RequiredRaces LimitTime QuestFlags SpecialFlags PrevQuestId NextQuestInChain SrcItemId SrcItemCount RewRepFaction1 RewRepValue1 RewRepFaction2 RewRepValue2 RewOrReqMoney RewSpell RewSpellCast RewMoneyMaxLevel RewMailTemplateId RewMailDelaySecs RewMailMoney RewXP IncompleteEmote CompleteEmote".split_whitespace().map(str::to_string).collect::<Vec<_>>();
     for slot in 1..=4 {
         for prefix in [
             "ReqCreatureOrGOId",
@@ -66,6 +71,12 @@ fn source() -> WorldSource {
         ] {
             names.push(format!("{prefix}{slot}"));
         }
+    }
+    for slot in 1..=4 {
+        names.extend([
+            format!("OfferRewardEmote{slot}"),
+            format!("OfferRewardEmoteDelay{slot}"),
+        ]);
     }
     for slot in 1..=6 {
         names.extend([
@@ -242,6 +253,10 @@ fn named_quests_select_revisions_relations_mail_money_xp_flags_and_learn_spells(
     push_quest_statements(&mut statements, &quests, &[]);
     assert!(statements.iter().any(|statement| {
         statement.contains("game_quest_flags") && statement.contains("(100,8)")
+    }));
+    assert_eq!(quests.emotes, ["(100,6,1,2,5,0,0,500,0,0,0)"]);
+    assert!(statements.iter().any(|statement| {
+        statement.contains("game_quest_emote") && statement.contains("(100,6,1,2,5,0,0,500,0,0,0)")
     }));
     assert_eq!(quests.reward_mail, ["(100,5,12,0,34)"]);
     assert_eq!(quests.reward_spells, ["(100,600)"]);

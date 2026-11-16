@@ -43,7 +43,7 @@ fn every_values_builder_serializes_without_the_object_type_bit() {
             build_skill_values(g, 3, SkillInfo::new(Skill::Fishing, 0, 100, 150, 0, 0)).unwrap(),
         ),
         ("talent_points", build_talent_points_values(g, 2)),
-        ("xp", build_player_xp_values(g, 400, 1000)),
+        ("xp", build_player_xp_values(g, Some(400), Some(1000))),
         (
             "inv_slot",
             build_inv_slot_values(g, 15, 0x4000_0000_0000_0001).unwrap(),
@@ -577,7 +577,7 @@ fn self_res_spell_values_sets_only_field_1224() {
 
 #[test]
 fn player_xp_values_carries_xp_and_next_level_no_object_type() {
-    let msg = build_player_xp_values(1, 450, 1000);
+    let msg = build_player_xp_values(1, Some(450), Some(1000));
     match &msg.objects[0] {
         Object::Values {
             mask1: UpdateMask::Player(p),
@@ -591,6 +591,21 @@ fn player_xp_values_carries_xp_and_next_level_no_object_type() {
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
     assert_no_object_type(&buf[4..]);
+}
+
+#[test]
+fn player_xp_values_leaves_an_unchanged_next_level_unset() {
+    let msg = build_player_xp_values(1, Some(110), None);
+    match &msg.objects[0] {
+        Object::Values {
+            mask1: UpdateMask::Player(p),
+            ..
+        } => {
+            assert_eq!(p.player_xp(), Some(110));
+            assert_eq!(p.player_next_level_xp(), None);
+        }
+        other => panic!("expected a Player Values update, got {other:?}"),
+    }
 }
 
 #[test]

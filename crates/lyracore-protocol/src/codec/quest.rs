@@ -15,6 +15,14 @@ pub struct QuestRewardView {
     pub display_id: u32,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct QuestEmotes {
+    pub incomplete: u32,
+    pub complete: u32,
+    /// (delay, emote) pairs in display order.
+    pub offer_reward: Vec<(u32, u32)>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct QuestDetailView {
     pub quest_id: u32,
@@ -32,6 +40,8 @@ pub struct QuestDetailView {
     pub flags: u32,
     pub rewards: Vec<QuestRewardView>,
     pub choice_rewards: Vec<QuestRewardView>,
+    pub required_items: Vec<QuestRewardView>,
+    pub emotes: QuestEmotes,
     /// Gameobject objectives encode the negated entry id as a u32.
     pub objectives: Vec<(u32, u32, u32, u32)>,
 }
@@ -289,11 +299,17 @@ pub fn build_offer_reward(giver_guid: u64, d: &QuestDetailView) -> SMSG_QUESTGIV
         title: d.title.clone(),
         offer_reward_text: d.offer_reward_text.clone(),
         auto_finish: true,
-        emotes: Vec::<NpcTextUpdateEmote>::new(),
+        emotes: d
+            .emotes
+            .offer_reward
+            .iter()
+            .map(|&(delay, emote)| NpcTextUpdateEmote { delay, emote })
+            .collect(),
         choice_item_rewards: reward_items_with_icon(&d.choice_rewards),
         item_rewards: reward_items_with_icon(&d.rewards),
         money_reward: Gold::new(d.money_reward),
-        reward_spell: 0,
+        // The wire carries the quest flags where gtker names the first reward spell.
+        reward_spell: d.flags,
         reward_spell_cast: 0,
     }
 }
@@ -302,6 +318,7 @@ pub fn build_request_items(
     giver_guid: u64,
     d: &QuestDetailView,
     completable: bool,
+    close_on_cancel: bool,
 ) -> SMSG_QUESTGIVER_REQUEST_ITEMS {
     SMSG_QUESTGIVER_REQUEST_ITEMS {
         npc: Guid::new(giver_guid),
@@ -309,10 +326,14 @@ pub fn build_request_items(
         title: d.title.clone(),
         request_items_text: d.request_items_text.clone(),
         emote_delay: 0,
-        emote: 0,
-        auto_finish: false,
+        emote: if completable {
+            d.emotes.complete
+        } else {
+            d.emotes.incomplete
+        },
+        auto_finish: close_on_cancel,
         required_money: Gold::new(0),
-        required_items: Vec::new(),
+        required_items: reward_items_with_icon(&d.required_items),
         unknown1: 0x02,
         completable: if completable {
             QuestCompletable::Completeable
@@ -487,6 +508,8 @@ mod tests {
             flags: 0,
             rewards: vec![],
             choice_rewards: vec![],
+            required_items: vec![],
+            emotes: QuestEmotes::default(),
             objectives: vec![],
         };
         let (opcode, body) = build_quest_query_response_raw(&d);
@@ -608,6 +631,8 @@ mod tests {
             flags: 0,
             rewards: Vec::new(),
             choice_rewards: Vec::new(),
+            required_items: Vec::new(),
+            emotes: QuestEmotes::default(),
             objectives: Vec::new(),
         }
     }
@@ -680,6 +705,8 @@ mod tests {
                     display_id: 22,
                 },
             ],
+            required_items: vec![],
+            emotes: QuestEmotes::default(),
             objectives: vec![(6, 10, 0, 0)],
         };
         let c = build_quest_complete(&d);
@@ -739,6 +766,64 @@ mod tests {
 
         let comp = build_quest_complete(&d);
         assert_eq!(comp.item_rewards.len(), 1);
+    }
+
+    #[test]
+    fn offer_reward_writes_flags_before_the_spell_and_lists_emotes() {
+        let d = QuestDetailView {
+            money_reward: 25,
+            flags: 8,
+            emotes: QuestEmotes {
+                offer_reward: vec![(0, 2), (300, 5)],
+                ..QuestEmotes::default()
+            },
+            ..detail_view()
+        };
+        let offer = build_offer_reward(100, &d);
+        assert_eq!(
+            offer.emotes,
+            [
+                NpcTextUpdateEmote { delay: 0, emote: 2 },
+                NpcTextUpdateEmote {
+                    delay: 300,
+                    emote: 5
+                }
+            ]
+        );
+        let mut framed = Vec::new();
+        ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(offer))
+            .write_unencrypted_server(&mut framed)
+            .unwrap();
+        let tail = &framed[framed.len() - 12..];
+        assert_eq!(&tail[0..4], &25u32.to_le_bytes(), "money");
+        assert_eq!(&tail[4..8], &8u32.to_le_bytes(), "quest flags");
+        assert_eq!(&tail[8..12], &0u32.to_le_bytes(), "reward spell");
+    }
+
+    #[test]
+    fn request_items_plays_the_complete_or_incomplete_emote_and_lists_required_items() {
+        let d = QuestDetailView {
+            emotes: QuestEmotes {
+                incomplete: 6,
+                complete: 1,
+                ..QuestEmotes::default()
+            },
+            required_items: vec![QuestRewardView {
+                item_entry: 900,
+                count: 3,
+                display_id: 77,
+            }],
+            ..detail_view()
+        };
+        let incomplete = build_request_items(100, &d, false, true);
+        assert_eq!(incomplete.emote, 6);
+        assert_eq!(incomplete.completable, QuestCompletable::NotCompletable);
+        let complete = build_request_items(100, &d, true, false);
+        assert_eq!(complete.emote, 1);
+        assert!(!complete.auto_finish);
+        assert_eq!(complete.required_items.len(), 1);
+        assert_eq!(complete.required_items[0].item, 900);
+        assert_eq!(complete.required_items[0].item_display_id, 77);
     }
 }
 

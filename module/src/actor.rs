@@ -240,6 +240,7 @@ pub enum ActionRefusalKind {
     Prerequisite,
     ProfileLimit,
     TransferPending,
+    DuplicateItem,
 }
 
 impl ActionRefusal {

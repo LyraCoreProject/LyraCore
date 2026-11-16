@@ -358,8 +358,8 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
             if old.xp != new.xp || old.next_level_xp != new.next_level_xp {
                 private.push(codec::build_player_xp_values(
                     new.guid,
-                    new.xp,
-                    new.next_level_xp,
+                    (old.xp != new.xp).then_some(new.xp),
+                    (old.next_level_xp != new.next_level_xp).then_some(new.next_level_xp),
                 ));
             }
             if old.money != new.money {

@@ -9,7 +9,6 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["quest_completion"]
 deliberate_deviations = []
 prerequisites = []
-tests = []
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -19,8 +18,39 @@ symbol = "WorldSession::HandleQuestgiverCompleteQuest"
 [real_client]
 status = "unverified"
 
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "a_quest_with_items_shows_the_request_window_until_the_items_are_handed_in"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "hello_at_a_giver_of_one_item_quest_shows_the_request_window_that_closes_on_cancel"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "hello_offers_the_reward_of_an_unfinished_quest_that_has_no_request_text"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "complete_quest_offers_the_reward_of_an_unfinished_quest_that_has_no_request_text"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "complete_quest_offers_the_reward_of_a_finished_quest_that_needs_no_items"
+rung = "durable_module"
+
 [[known_gaps]]
-description = "Quest completion replies still differ in Refusal delivery, offer flags and emotes. The offer-reward codec does not serialize the stored flags, and emote metadata is not represented."
+description = "Quest completion text and title differ in tier 1 because the fixture authors its own quest text; the Reference Server text stays out of the repository."
 path = "module/src/native/quest.rs"
-symbol = "reward_screen"
-evidence = "quest_completion tier 1: unexpected request-items at refuse_reward; emote 0 instead of 6; offer flags 0 instead of stored 8; missing reward emotes."
+symbol = "complete_quest_screen"
+evidence = "quest_completion tier 1 with conformance.19 conforms on every rule; data signatures world_text_395_text, world_text_395_title, world_text_397_text and world_text_397_title remain. Expected hashes come from the vmangos reference trace; the fixture texts 'Fixture request 7.' and 'Fixture reward 2158.' hash differently."
+
+[[known_gaps]]
+description = "A dead Character asking to complete a quest gets the request window as if the quest were unfinished, where the Reference Server marks it completable. Request-reward gets no reply where the Reference Server answers at a giver invisible to the living, as for quest 3912."
+path = "module/src/native/quest.rs"
+symbol = "evaluations"
+evidence = "evaluations returns nothing for a dead Character, so complete_quest_screen treats the quest as unfinished and request_reward_screen sends nothing. vmangos HandleQuestgiverCompleteQuest has no alive check, and HandleQuestgiverRequestRewardOpcode checks IsInvisibleForAlive on the giver (QuestHandler.cpp:292-301, :383-397). This predates the Behavior work."

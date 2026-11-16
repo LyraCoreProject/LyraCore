@@ -184,6 +184,8 @@ pub(crate) mod qt {
     pub const REW_SPELL: &str = "RewSpell";
     pub const REW_SPELL_CAST: &str = "RewSpellCast";
     pub const REW_MONEY_MAX_LEVEL: &str = "RewMoneyMaxLevel";
+    pub const INCOMPLETE_EMOTE: &str = "IncompleteEmote";
+    pub const COMPLETE_EMOTE: &str = "CompleteEmote";
 
     pub const REW_MAIL_TEMPLATE_ID: &str = "RewMailTemplateId";
     pub const REW_MAIL_DELAY_SECS: &str = "RewMailDelaySecs";

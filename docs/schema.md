@@ -95,6 +95,11 @@ template layout stays unchanged for Packages. Existing authored templates defaul
 These stored bits do not implement the gameplay
 rules for every flag; the import Compatibility Manifest continues to report that gap.
 
+`game_quest_emote` is a new private companion table for the source quest emotes: the emote the
+giver plays while the quest is incomplete or complete, and up to four offer-reward emotes with
+their delays. Absence means no emotes; reimport quests to populate an existing Realm. The public
+quest template layout stays unchanged for Packages.
+
 ### The three migration rules that have bitten
 
 1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64`
