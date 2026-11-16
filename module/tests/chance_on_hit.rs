@@ -191,10 +191,8 @@ fn an_extra_attack_chance_on_hit_swings_twice_and_grants_no_more() {
          WHERE spell_id = {FURY_OF_FORGEWRIGHT}"
     ));
     standalone.assert_sql(&format!(
-        "UPDATE game_item_template SET spellid_1 = {FURY_OF_FORGEWRIGHT} WHERE entry = {FIXTURE_BLADE}"
-    ));
-    standalone.assert_sql(&format!(
-        "UPDATE game_world_entity SET base_attack_time_ms = {SLOW_SWING_MS} WHERE guid = {PLAYER}"
+        "UPDATE game_item_template SET spellid_1 = {FURY_OF_FORGEWRIGHT}, \
+         delay_ms = {SLOW_SWING_MS} WHERE entry = {FIXTURE_BLADE}"
     ));
     let events = standalone.subscribe(&[CAST_EVENTS, SWING_EVENTS]);
     standalone.assert_call("debug_engage", &["1", &wolf.to_string()]);

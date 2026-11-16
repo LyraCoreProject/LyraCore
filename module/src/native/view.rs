@@ -89,7 +89,7 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
         native_display_id: e.native_display_id,
         unit_flags: e.unit_flags,
         mount_display_id: e.mount_display_id,
-        base_attack_time_ms: e.base_attack_time_ms,
+        base_attack_time_ms: crate::combat::effective_swing_time(ctx, e),
         offhand_attack_time_ms: if e.is_player() {
             let delay = crate::combat::equipped_offhand_weapon_damage(ctx, e.guid)
                 .map(|(_, _, delay)| delay)

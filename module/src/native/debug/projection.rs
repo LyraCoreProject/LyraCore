@@ -190,6 +190,7 @@ fn entity_projection(
     };
     if viewer != guid {
         view.dynamic_flags = native::loot::dynamic_flags(ctx, &entity, viewer);
+        (view.health, view.max_health) = native::health::visible_health(ctx, &entity, viewer);
     }
     // These properties compare update fields, not CREATE movement blocks.
     view.x = 0.0;

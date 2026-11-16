@@ -9,7 +9,21 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["two_character_visibility", "two_character_visibility__opposite_faction"]
 deliberate_deviations = []
 prerequisites = ["Two human warrior Characters on separate Accounts at the scenario positions", "Bundled Stormwind area row and terrain cell under both Characters", "Bundled human warrior starting outfit and item templates for entries 38, 39, 40 and 2362"]
-tests = []
+
+[[tests]]
+path = "module/tests/native_conformance.rs"
+function = "health_reaches_a_stranger_as_a_percent_and_the_party_in_full"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/white_melee.rs"
+function = "a_character_swings_at_its_main_hand_weapons_delay"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/native/health.rs"
+function = "hidden_health_truncates_to_a_percent_of_one_hundred"
+rung = "unit"
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -20,25 +34,31 @@ symbol = "WorldSession::HandlePlayerLoginOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "Peer CREATE still carries a 2000 ms main-hand attack time where the reference carries 1900 ms, and omits the Warrior stance aura fields."
-path = "module/src/native/view.rs"
-symbol = "entity"
-evidence = "Tier 1 two_character_visibility at harness 166ecd70: field_126 is 1900 in the reference and 2000 in core; fields_47, _95 and _101 carry 2457, 9 and 1 in the reference and are absent in core, for both recipients."
+description = "A warrior enters the world without the Battle Stance Aura in its peer CREATE. The Module keeps stances in WorldEntity.stance and applies no stance Aura, and it sends Auras in a VALUES update after CREATE instead of in the CREATE descriptor."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "E_SET_STANCE"
+evidence = "Tier 1 two_character_visibility and __opposite_faction at harness 004d8d74: fields_47, _95 and _101 carry 2457, 9 and 1 in the reference and are absent in core, for both recipients. At d9173eca, Player.cpp Player::_LoadAuras casts SPELL_ID_PASSIVE_BATTLE_STANCE 2457 on a warrior without a shapeshift Aura, and Object::BuildValuesUpdate writes the Aura slots into CREATE."
 
 [[known_gaps]]
-description = "The Module sends raw Character health to unrelated viewers instead of projecting health and maximum health as percentages."
-path = "module/src/native/visibility.rs"
-symbol = "create"
-evidence = "Tier 1 two_character_visibility at harness 166ecd70: fields_22 and _28 are 100 in the reference and 60 in core. At d9173eca, Object.cpp Object::BuildValuesUpdate sends percent health and maximum health 100 when ShowHealthValues is false and the recipient cannot see the unit's health. The Module must apply that recipient rule before encoding."
+description = "Character CREATE omits the model bounding radius and combat reach. vmangos takes both from creature_display_info_addon by display id; the importer keeps bounding radius only per creature template and drops combat reach."
+path = "importer/src/world_import_creatures.rs"
+symbol = "creature_display_info_addon"
+evidence = "Tier 1 two_character_visibility and __opposite_faction at harness 004d8d74: field_129 is 0.306 for human male display 49 and 0.372 for orc male display 51 in the reference, field_130 is 1.5 for both; both fields are absent in core for both recipients. At d9173eca, Unit.cpp Unit::UpdateModelData sets UNIT_FIELD_BOUNDINGRADIUS and UNIT_FIELD_COMBATREACH from the display's addon row."
 
 [[known_gaps]]
-description = "Character CREATE omits the model bounding radius and combat reach."
+description = "Fixture gap: the visibility fixture installs no race rows, so the orc Character falls back to the human display 49 and faction template 1. Add ChrRaces rows for races 1 and 2 to the visibility fixture in a separate change."
+path = "module/tests/conformance/tier1.rs"
+symbol = "seed_visibility_world"
+evidence = "Tier 1 two_character_visibility__opposite_faction at harness 004d8d74: the watcher sees the orc with fields_131 and _132 51 and field_35 2 in the reference, and 49 and 1 in core. world/character_entity.rs build_player_entity reads game_race_info, which only the DBC importer fills."
+
+[[known_gaps]]
+description = "An enemy Character entering a hostile capital is not flagged for PvP and receives no Honorless Target Aura. The Module has no PvP flag; CMSG_TOGGLE_PVP is refused as unavailable."
+path = "module/src/native/unavailable.rs"
+symbol = "CMSG_TOGGLE_PVP"
+evidence = "Tier 1 two_character_visibility__opposite_faction at harness 004d8d74: the watcher sees the orc with field_46 4104 (PLAYER_CONTROLLED | PVP) in the reference and 8 in core, and with Honorless Target 2479 in field_48, flags 0x99 in field_95 and levels 0x0101 in field_101. At d9173eca, Player.cpp Player::UpdateZone calls UpdatePvP(true) for an enemy capital; the Honorless Target Aura comes from DELAYED_CAST_HONORLESS_TARGET, scheduled by a teleport."
+
+[[known_gaps]]
+description = "UNIT_FIELD_POWER4 differs because vmangos regenerates energy for every Character, so the reference value depends on time since the Character was saved. The data rule records it; no fixed value exists to match."
 path = "crates/lyracore-protocol/src/codec/entity.rs"
 symbol = "build_create_object"
-evidence = "Tier 1 two_character_visibility at harness 166ecd70: model radius field_129 is about 0.306 and reach field_130 is 1.5 in the reference; both are absent in core for both recipients. These are CREATE descriptor fields supplied by the codec."
-
-[[known_gaps]]
-description = "Scenario-author gap: arrival_max_health targets UNIT_FIELD_POWER4 instead of UNIT_FIELD_MAXHEALTH. Correct the rule in a separate harness PR."
-path = "conformance/features/connection/character_visibility.toml"
-symbol = "arrival_max_health"
-evidence = "Tier 1 two_character_visibility at harness 166ecd70: the rule declares objects.0.values.field_26, and classifies its 80 expected versus 100 actual difference as data. UpdateFields_1_12_1.h identifies field_26 as UNIT_FIELD_POWER4; UNIT_FIELD_MAXHEALTH is field_28, whose 100 expected versus 60 actual difference remains exact_field."
+evidence = "Tier 1 two_character_visibility at harness 004d8d74: field_26 is 60 in the reference and 100 in core; the opposite-faction variant records 80. At d9173eca, Player.cpp Player::RegenerateAll regenerates POWER_ENERGY for all classes."

@@ -91,7 +91,10 @@ pub(crate) fn seal_holy_on_swing(
         };
         return (damage, triggered);
     }
-    (seal_swing_holy(amount, attacker.base_attack_time_ms), spell)
+    (
+        seal_swing_holy(amount, main_hand_attack_time(ctx, attacker)),
+        spell,
+    )
 }
 
 fn seal_swing_holy(seal: i32, attack_time_ms: u32) -> u32 {
@@ -185,7 +188,19 @@ fn crit_bp_for_weapon_skill(
 
 pub(crate) fn effective_swing_time(ctx: &ReducerContext, attacker: &WorldEntity) -> u32 {
     let speed = crate::modifiers::speed_bonus(ctx, attacker.guid, crate::spell::SPEED_SWING);
-    swing_time_with_haste(attacker.base_attack_time_ms, speed)
+    swing_time_with_haste(main_hand_attack_time(ctx, attacker), speed)
+}
+
+/// A Character's main hand swings at its equipped weapon's delay; `base_attack_time_ms` is unarmed.
+pub(crate) fn main_hand_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+    if unit.is_player() {
+        if let Some((_, _, delay)) = equipped_weapon_damage(ctx, unit.guid) {
+            if delay != 0 {
+                return delay;
+            }
+        }
+    }
+    unit.base_attack_time_ms
 }
 
 fn weapon_profile_in_slot(

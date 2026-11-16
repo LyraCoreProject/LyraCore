@@ -107,3 +107,39 @@ fn white_melee_chances_follow_catalogue_skills_and_defender_eligibility() {
     let pvp = chances(&shard, "1", "1");
     assert_eq!([pvp[0], pvp[4]], [500, 500]);
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_character_swings_at_its_main_hand_weapons_delay() {
+    use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
+
+    let mut shard = Standalone::start("white-melee-weapon-delay");
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "2"],
+    );
+    let target = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ))[0]["guid"]
+        .clone();
+    let attack_time = |shard: &Standalone| -> String {
+        shard.assert_call("debug_compute_swing", &["1", &target]);
+        shard.query_rows("SELECT attack_time_ms FROM game_debug_readout WHERE key = 'swing'")[0]
+            ["attack_time_ms"]
+            .clone()
+    };
+
+    // vmangos Player::_ApplyItemBonuses: the main hand takes the weapon's delay, else 2000 ms.
+    assert_eq!(attack_time(&shard), "2000", "unarmed");
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET delay_ms = 1900 WHERE entry = {FIXTURE_BLADE}"
+    ));
+    shard.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
+    assert_eq!(attack_time(&shard), "1900", "a 1.9 second blade");
+}
