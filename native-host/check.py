@@ -4446,8 +4446,8 @@ def check_quest_chain(host):
     client.collect()
     client.send(0x18e, struct.pack('<QII', giver, first, 0))
     pending = client.collect()
-    assert any(opcode == 0x18b for opcode, _ in pending), pending
-    assert not any(opcode in (0x18d, 0x191) for opcode, _ in pending), pending
+    assert any(opcode == 0x18d for opcode, _ in pending), pending
+    assert not any(opcode in (0x18b, 0x191) for opcode, _ in pending), pending
     assert host.rows(f'SELECT rewarded FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = {first}') == [[False]]
     host.sql(f'INSERT INTO game_character_quest_event_credit (id,character_guid,quest_entry) VALUES ({first},{guid},{first})')
     client.collect()

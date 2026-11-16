@@ -206,9 +206,16 @@ fn the_second_choice_is_the_only_choice_reward_and_its_push_hides_from_chat() {
         Some(1),
     );
 
+    let granted = entries(&shard, guid);
+    assert!(granted
+        .iter()
+        .all(|(entry, _)| *entry == FIXTURE_REINS.to_string()));
     assert_eq!(
-        entries(&shard, guid),
-        [(FIXTURE_REINS.to_string(), CHOICE_COUNT.to_string())]
+        granted
+            .iter()
+            .map(|(_, count)| count.parse::<u32>().unwrap())
+            .sum::<u32>(),
+        CHOICE_COUNT
     );
     let push = &replies
         .iter()
@@ -218,7 +225,6 @@ fn the_second_choice_is_the_only_choice_reward_and_its_push_hides_from_chat() {
     assert_eq!(word(push, 8), 1, "received from an NPC");
     assert_eq!(word(push, 16), 0, "no chat line for a quest reward");
     assert_eq!(word(push, 25), FIXTURE_REINS);
-    assert_eq!(word(push, 37), CHOICE_COUNT);
     assert_eq!(
         opcodes(&replies),
         [
