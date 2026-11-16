@@ -2767,48 +2767,7 @@
       "behavior": "vendor_offers",
       "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "435f39c8caca44b261e12f74680b6c21ebc4553e7b10fce2eaf2e4cd7416af29",
-      "rule": [
-        {
-          "rule": "exact_field",
-          "checkpoint": "empty_list",
-          "stream": {
-            "kind": "reply",
-            "id": "empty_list"
-          },
-          "opcode": 415,
-          "field_path": [
-            "items",
-            "1",
-            "stock"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "empty_refusal",
-          "stream": {
-            "kind": "reply",
-            "id": "empty_refusal"
-          },
-          "opcode": 421,
-          "field_path": [
-            "reason"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "restocked_list",
-          "stream": {
-            "kind": "reply",
-            "id": "restocked_list"
-          },
-          "opcode": 415,
-          "field_path": [
-            "items",
-            "1",
-            "stock"
-          ]
-        }
-      ],
+      "rule": [],
       "data": []
     },
     {

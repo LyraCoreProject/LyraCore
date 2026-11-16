@@ -978,7 +978,9 @@ The fixtures preserve the ordered vendor stock, item prices, displays, buy count
 starting outfits, level stats and quest 2158's choice rewards, 110 XP and faction 72 reward 25.
 Spell 5504 costs 60 mana and takes 3000 ms to create two items 5350.
 
-The current vendor table cannot store restock seconds, offer flags or condition links.
+The vendor table stores restock seconds and offer flags but not condition links.
+The fixture rows carry the values below; `ObjectMgr::IsVendorItemValid` ignores a limited offer with no
+restock time, so a zero restock would drop it from the Reference Server's list.
 Vendor 66 item 6270 restocks after 7200 seconds. Vendor 9499 item 11325 has stock 10 and
 restocks after 60 seconds; item 15759 has stock 1, restocks after 3600 seconds and has offer
 flags 3. Vendor 11188 items 13480, 6149 and 3928 have stock 1 and restock after 7200 seconds;
