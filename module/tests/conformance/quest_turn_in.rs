@@ -48,13 +48,13 @@ fn stage(name: &str) -> (Standalone, ReducerConnection, u64, u64) {
         "UPDATE game_world_entity SET npc_flags = {}, faction_template = 35 WHERE guid = {giver}",
         npc_flags::QUESTGIVER
     ));
-    shard.assert_sql(&format!(
-        "DELETE FROM game_item_instance WHERE owner_guid = {guid}"
-    ));
     seed_quest(&shard, QUEST, 0, true);
     seed_quest(&shard, OBJECTIVE_QUEST, FIXTURE_REINS, true);
     seed_quest(&shard, UNRELATED_QUEST, 0, false);
     let mut connection = enter(&shard, guid);
+    shard.assert_sql(&format!(
+        "DELETE FROM game_item_instance WHERE owner_guid = {guid}"
+    ));
     connection.drain_packets();
     (shard, connection, guid, giver)
 }
