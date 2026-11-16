@@ -1,0 +1,471 @@
+mod support;
+
+use serde_json::{json, Value};
+use support::{actor, Standalone};
+
+const AREA_BIT: u32 = 37;
+const FACTION: u32 = 5_099_400;
+const FACTION_BASE: i32 = 100;
+const SKILL: u32 = 5_099_500;
+const TAXI_CLIENT_NODE: u32 = 300;
+const TALENT: u32 = 5_099_100;
+const ACTIVE_QUEST: u32 = 5_099_200;
+const REWARDED_QUEST: u32 = 5_099_201;
+
+struct Catalogue {
+    bag: u32,
+    stack: u32,
+    spell: u32,
+    talent_spell: u32,
+}
+
+fn realm(name: &str) -> (Standalone, Catalogue) {
+    let mut shard = Standalone::start(name);
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    if shard
+        .query_rows("SELECT id FROM game_map WHERE id = 0")
+        .is_empty()
+    {
+        shard.insert_row(
+            "game_map",
+            &[("id", &0), ("internal_name", &"Test"), ("name", &"Test")],
+        );
+    }
+    shard.insert_row(
+        "game_map",
+        &[
+            ("id", &5_099_036),
+            ("internal_name", &"Dungeon"),
+            ("name", &"Dungeon"),
+            ("map_type", &1),
+            ("player_limit", &5),
+        ],
+    );
+    shard.insert_row(
+        "game_area",
+        &[
+            ("id", &5_099_300),
+            ("area_bit", &AREA_BIT),
+            ("name", &"Migrated area"),
+        ],
+    );
+    shard.insert_row(
+        "game_faction",
+        &[
+            ("faction_id", &FACTION),
+            ("reputation_index", &50),
+            ("base_standing", &FACTION_BASE),
+        ],
+    );
+    shard.insert_row(
+        "game_skill_line",
+        &[("skill_line", &SKILL), ("name", &"Migrated skill")],
+    );
+    shard.insert_row(
+        "game_taxi_node",
+        &[
+            ("id", &5_099_600),
+            ("client_node_id", &TAXI_CLIENT_NODE),
+            ("name", &"Migrated node"),
+            ("mount_display_alliance", &1147),
+        ],
+    );
+    for (quest, title) in [(ACTIVE_QUEST, "Active"), (REWARDED_QUEST, "Rewarded")] {
+        shard.insert_row(
+            "game_quest_template",
+            &[
+                ("entry", &quest),
+                ("min_level", &1),
+                ("quest_level", &10),
+                ("title", &title),
+            ],
+        );
+    }
+    shard.insert_rows(
+        "game_quest_objective",
+        &[
+            &[
+                ("id", &5_099_201),
+                ("quest_entry", &ACTIVE_QUEST),
+                ("target_entry", &1),
+                ("required_count", &3),
+            ],
+            &[
+                ("id", &5_099_202),
+                ("quest_entry", &ACTIVE_QUEST),
+                ("obj_index", &1),
+                ("kind", &1),
+                ("target_entry", &1),
+                ("required_count", &1),
+            ],
+        ],
+    );
+
+    let items = shard.query_rows("SELECT entry, max_stack FROM game_item_template");
+    let entry = |pick: fn(u32) -> bool| -> u32 {
+        items
+            .iter()
+            .find(|row| pick(row["max_stack"].parse().unwrap()))
+            .map(|row| row["entry"].parse().unwrap())
+            .expect("the seeded world has a matching Item")
+    };
+    let bag = entry(|stack| stack == 1);
+    let stack = entry(|stack| stack >= 5);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET container_slots = 6 WHERE entry = {bag}"
+    ));
+    let talent_spells: Vec<String> = shard
+        .query_rows("SELECT spell_id FROM game_talent")
+        .into_iter()
+        .map(|row| row["spell_id"].clone())
+        .collect();
+    let spells: Vec<u32> = shard
+        .query_rows("SELECT spell_id FROM game_spell")
+        .iter()
+        .filter(|row| !talent_spells.contains(&row["spell_id"]))
+        .map(|row| row["spell_id"].parse().unwrap())
+        .collect();
+    let (spell, talent_spell) = (spells[0], spells[1]);
+    shard.insert_row(
+        "game_talent",
+        &[
+            ("talent_id", &TALENT),
+            ("name", &"Migrated talent"),
+            ("max_rank", &1),
+            ("spell_id", &talent_spell),
+        ],
+    );
+    (
+        shard,
+        Catalogue {
+            bag,
+            stack,
+            spell,
+            talent_spell,
+        },
+    )
+}
+
+fn account(salt_byte: u8) -> Value {
+    json!({
+        "username": "migrant",
+        "salt": format!("{salt_byte:02x}").repeat(32),
+        "verifier": "22".repeat(32),
+        "banned": false,
+    })
+}
+
+fn position(map_id: u32, x: f32) -> Value {
+    json!({"map_id": map_id, "zone_id": 12, "x": x, "y": 20.0, "z": 30.0, "orientation": 1.5})
+}
+
+fn item(entry: u32, location: Value, stack_count: u32) -> Value {
+    json!({
+        "entry": entry,
+        "location": location,
+        "stack_count": stack_count,
+        "durability": 0,
+        "enchant_id": 0,
+        "random_property_id": 0,
+        "soulbound": true,
+    })
+}
+
+fn migration(catalogue: &Catalogue, source_guid: u64, name: &str) -> Value {
+    json!({
+        "source": "vmangos-main",
+        "source_guid": source_guid,
+        "account": account(0x11),
+        "name": name,
+        "race": 1, "class": 1, "gender": 0,
+        "skin": 1, "face": 2, "hair_style": 3, "hair_color": 4, "facial_hair": 5,
+        "level": 20,
+        "xp": 1000,
+        "money": 12345,
+        "position": {"some": position(0, 10.0)},
+        "home": position(0, 50.0),
+        "played_total_secs": 3600,
+        "rested_xp": 500,
+        "logout_resting": true,
+        "last_logout_secs": 1_700_000_000u64,
+        "bank_bag_slots": 1,
+        "watched_faction_index": 50,
+        "items": [
+            item(catalogue.bag, json!({"slot": 19}), 1),
+            item(catalogue.stack, json!({"bag": {"bag_slot": 19, "slot": 3}}), 5),
+            item(catalogue.bag, json!({"slot": 63}), 1),
+            item(catalogue.stack, json!({"bag": {"bag_slot": 63, "slot": 0}}), 2),
+        ],
+        "spells": [catalogue.spell, catalogue.talent_spell],
+        "skills": [{"skill_line": SKILL, "current": 40, "max_rank": 100}],
+        "reputations": [{"faction_id": FACTION, "earned_standing": 250, "at_war": false}],
+        "actions": [{"button": 0, "action": catalogue.spell, "action_type": 0}],
+        "quests": [
+            {"quest_entry": REWARDED_QUEST, "rewarded": true, "log": {"some": {
+                "event_credit": false,
+                "failed": false,
+                "deadline_secs": 1_700_000_000u64,
+            }}},
+            {"quest_entry": ACTIVE_QUEST, "rewarded": false, "log": {"some": {
+                "event_credit": false,
+                "failed": false,
+                "deadline_secs": 1_700_000_000u64,
+            }}},
+        ],
+        "explored_zones": [0, 1u32 << (AREA_BIT - 32)],
+        "taxi_nodes": [TAXI_CLIENT_NODE],
+    })
+}
+
+fn migrate(shard: &Standalone, migration: &Value) -> std::process::Output {
+    shard.call("migrate_character", &[&migration.to_string()])
+}
+
+fn guid_of(shard: &Standalone, name: &str) -> String {
+    shard.query_rows(&format!(
+        "SELECT guid FROM game_character WHERE name = '{name}'"
+    ))[0]["guid"]
+        .clone()
+}
+
+fn refusal(output: &std::process::Output) -> String {
+    assert!(!output.status.success(), "the migration should be refused");
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_migrated_character_arrives_with_its_source_state() {
+    let (shard, catalogue) = realm("character-migration-arrival");
+    let output = migrate(&shard, &migration(&catalogue, 7, "Migrant"));
+    shard.assert_output_success(&output, "migrate_character");
+
+    let accounts =
+        shard.query_rows("SELECT id, banned FROM game_account WHERE username = 'MIGRANT'");
+    assert_eq!(accounts.len(), 1);
+    let character = &shard.query_rows("SELECT * FROM game_character WHERE name = 'Migrant'")[0];
+    assert_eq!(character["account_id"], accounts[0]["id"]);
+    assert_eq!(character["level"], "20");
+    assert_eq!(character["money"], "12345");
+    assert_eq!(character["x"].parse::<f32>().unwrap(), 10.0);
+    assert_eq!(character["home_x"], "50");
+    assert_eq!(character["first_login"], "false");
+    let guid = &character["guid"];
+
+    let items = shard.query_rows(&format!(
+        "SELECT entry, slot, stack_count FROM game_item_instance WHERE owner_guid = {guid}"
+    ));
+    let at = |slot: &str| {
+        items
+            .iter()
+            .find(|row| row["slot"] == slot)
+            .unwrap_or_else(|| panic!("no Item in slot {slot}: {items:?}"))
+    };
+    assert_eq!(at("19")["entry"], catalogue.bag.to_string());
+    assert_eq!(at("123")["stack_count"], "5");
+    assert_eq!(at("39")["entry"], catalogue.bag.to_string());
+    assert_eq!(at("40")["stack_count"], "2");
+    assert_eq!(items.len(), 4);
+
+    let spells = shard.query_rows(&format!(
+        "SELECT spell_id FROM game_player_spell WHERE character_guid = {guid}"
+    ));
+    assert_eq!(spells.len(), 1);
+    assert_eq!(spells[0]["spell_id"], catalogue.spell.to_string());
+    let talents = shard.query_rows(&format!(
+        "SELECT talent_id, rank FROM game_character_talent WHERE character_guid = {guid}"
+    ));
+    assert_eq!(talents.len(), 1);
+    assert_eq!(talents[0]["talent_id"], TALENT.to_string());
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT standing FROM game_player_reputation WHERE character_guid = {guid}"
+        ))[0]["standing"],
+        (FACTION_BASE + 250).to_string()
+    );
+    let quests = shard.query_rows(&format!(
+        "SELECT quest_entry, rewarded, failed, deadline_micros, counts FROM game_character_quest WHERE character_guid = {guid}"
+    ));
+    let quest = |entry: u32| {
+        quests
+            .iter()
+            .find(|row| row["quest_entry"] == entry.to_string())
+            .expect("the quest arrived")
+    };
+    assert_eq!(quest(REWARDED_QUEST)["rewarded"], "true");
+    // SQL text output prints a u32 array's elements with no separator.
+    assert_eq!(quest(ACTIVE_QUEST)["counts"], "00");
+    assert_eq!(quest(ACTIVE_QUEST)["deadline_micros"], "0");
+    assert_eq!(quest(ACTIVE_QUEST)["failed"], "false");
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT area_bit FROM game_character_explored WHERE character_guid = {guid}"
+        ))[0]["area_bit"],
+        AREA_BIT.to_string()
+    );
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT node_id FROM game_character_taxi_node WHERE character_guid = {guid}"
+            ))
+            .len(),
+        1
+    );
+    assert_eq!(
+        shard.query_rows("SELECT character_guid FROM game_character_migration WHERE source_key = 'vmangos-main/7'")
+            [0]["character_guid"],
+        *guid
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_migrated_character_keeps_its_combat_skills_at_first_login() {
+    const SWORDS: u32 = 43;
+    const DEFENSE: u32 = 95;
+    const POLEARMS: u32 = 229;
+    let (shard, catalogue) = realm("character-migration-skills-login");
+    for (line, name) in [(SWORDS, "Swords"), (DEFENSE, "Defense")] {
+        shard.insert_row("game_skill_line", &[("skill_line", &line), ("name", &name)]);
+    }
+    shard.insert_row(
+        "game_skill_ability",
+        &[
+            ("id", &5_099_700),
+            ("spell_id", &catalogue.spell),
+            ("skill_line", &POLEARMS),
+            ("acquire_method", &2),
+        ],
+    );
+    let mut plan = migration(&catalogue, 7, "Migrant");
+    plan["skills"] = json!([
+        {"skill_line": SWORDS, "current": 57, "max_rank": 100},
+        {"skill_line": DEFENSE, "current": 80, "max_rank": 100},
+    ]);
+    shard.assert_output_success(&migrate(&shard, &plan), "migrate_character");
+    let guid = guid_of(&shard, "Migrant");
+    let account_id =
+        shard.query_rows("SELECT id FROM game_account WHERE username = 'MIGRANT'")[0]["id"].clone();
+
+    let key = serde_json::to_string(&vec![7u8; 40]).unwrap();
+    shard.assert_call(
+        "establish_session",
+        &[&account_id, &key, r#"{"__identity__":"0x1"}"#],
+    );
+    shard.assert_call("gw_player_login", &[&account_id, &actor(&guid)]);
+
+    let skill = |line: u32| {
+        shard
+            .query_rows(&format!(
+                "SELECT current, max_rank FROM game_player_skill WHERE character_guid = {guid} AND skill_line = {line}"
+            ))
+            .pop()
+            .map(|row| (row["current"].clone(), row["max_rank"].clone()))
+    };
+    assert_eq!(skill(SWORDS), Some(("57".into(), "100".into())));
+    assert_eq!(skill(DEFENSE), Some(("80".into(), "100".into())));
+    assert_eq!(skill(POLEARMS), Some(("100".into(), "100".into())));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_rerun_of_the_same_source_character_changes_nothing() {
+    let (shard, catalogue) = realm("character-migration-rerun");
+    let plan = migration(&catalogue, 7, "Migrant");
+    shard.assert_output_success(&migrate(&shard, &plan), "first migrate_character");
+    let guid = guid_of(&shard, "Migrant");
+    shard.assert_output_success(&migrate(&shard, &plan), "second migrate_character");
+
+    assert_eq!(
+        shard
+            .query_rows("SELECT guid FROM game_character WHERE name = 'Migrant'")
+            .len(),
+        1
+    );
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT guid FROM game_item_instance WHERE owner_guid = {guid}"
+            ))
+            .len(),
+        4
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_refused_migration_leaves_no_account_or_character() {
+    let (shard, catalogue) = realm("character-migration-refusal");
+    let mut plan = migration(&catalogue, 7, "Migrant");
+    plan["items"][0]["entry"] = json!(4_000_000_000u32);
+
+    assert!(refusal(&migrate(&shard, &plan)).contains("is not imported"));
+    assert!(shard
+        .query_rows("SELECT id FROM game_account WHERE username = 'MIGRANT'")
+        .is_empty());
+    assert!(shard
+        .query_rows("SELECT guid FROM game_character WHERE name = 'Migrant'")
+        .is_empty());
+    assert!(shard
+        .query_rows("SELECT source_key FROM game_character_migration")
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_account_name_with_other_credentials_is_refused() {
+    let (shard, catalogue) = realm("character-migration-account");
+    shard.assert_call("migrate_account", &[&account(0x33).to_string()]);
+
+    let text = refusal(&migrate(&shard, &migration(&catalogue, 7, "Migrant")));
+    assert!(
+        text.contains("already exists with other credentials"),
+        "{text}"
+    );
+    assert!(shard
+        .query_rows("SELECT guid FROM game_character WHERE name = 'Migrant'")
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn characters_of_one_source_account_share_the_migrated_account() {
+    let (shard, catalogue) = realm("character-migration-shared-account");
+    shard.assert_output_success(
+        &migrate(&shard, &migration(&catalogue, 7, "Migrant")),
+        "first",
+    );
+    shard.assert_output_success(&migrate(&shard, &migration(&catalogue, 8, "Alt")), "second");
+
+    let accounts = shard.query_rows("SELECT id FROM game_account WHERE username = 'MIGRANT'");
+    assert_eq!(accounts.len(), 1);
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT guid FROM game_character WHERE account_id = {}",
+                accounts[0]["id"]
+            ))
+            .len(),
+        2
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_character_saved_in_an_instance_arrives_at_its_home_bind() {
+    let (shard, catalogue) = realm("character-migration-instance");
+    let mut plan = migration(&catalogue, 7, "Migrant");
+    plan["position"] = json!({"some": position(5099036, 10.0)});
+    shard.assert_output_success(&migrate(&shard, &plan), "migrate_character");
+
+    let character =
+        &shard.query_rows("SELECT map_id, x FROM game_character WHERE name = 'Migrant'")[0];
+    assert_eq!(character["map_id"], "0");
+    assert_eq!(character["x"].parse::<f32>().unwrap(), 50.0);
+}
