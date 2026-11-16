@@ -749,8 +749,7 @@ fn hunter_pet(
         })
 }
 
-// Vanilla friends are of the same faction, and each list has a cap. The Module checks the faction
-// of a target that migrated in an earlier run, whose race this run did not read.
+// The Module checks the faction of a target from an earlier run, whose race this run did not read.
 fn contact_list(
     source: &str,
     migrated: &HashSet<u64>,
