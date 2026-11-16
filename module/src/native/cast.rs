@@ -1,14 +1,15 @@
 use lyracore_protocol::{
     codec,
     messages::vanilla::{
-        opcodes::ServerOpcodeMessage, SpellCastTargets_SpellCastTargetFlags_Gameobject as GoTarget,
+        opcodes::ServerOpcodeMessage, SpellCastTargets,
+        SpellCastTargets_SpellCastTargetFlags_Gameobject as GoTarget,
         SpellCastTargets_SpellCastTargetFlags_Item as ItemTarget, CMSG_CAST_SPELL,
     },
     world::Packet,
 };
 use lyracore_shared::spell::taxonomy::{
-    CAST_FLAG_RANGED_AUTO_REPEAT, E_DISENCHANT, E_ENCHANT_ITEM, E_ENCHANT_ITEM_TEMPORARY, E_FISH,
-    E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_REFUSES_SELF_CAST, E_DISENCHANT, E_ENCHANT_ITEM,
+    E_ENCHANT_ITEM_TEMPORARY, E_FISH, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
@@ -16,8 +17,8 @@ use super::Rollback;
 use crate::game_melee_attack;
 use crate::spell::{CastGateRefusal, CastRefusalReason};
 use crate::Refusal;
+use crate::Spell;
 use crate::{game_item_instance, game_item_template, game_spell, game_spell_effect};
-use crate::{Spell, SpellEffect};
 
 enum Route {
     Ordinary,
@@ -98,19 +99,21 @@ fn item_slot(ctx: &ReducerContext, guid: u64, request: &CMSG_CAST_SPELL) -> Resu
     item_target(ctx, guid, request).map(|item| item.slot)
 }
 
-// vmangos HandleCastSpellOpcode: a negative spell with an explicitly selected unit cannot target its caster.
-fn negative_spell_on_self(
-    header: Option<&Spell>,
-    effects: &[SpellEffect],
-    caster: u64,
-    target: u64,
-) -> bool {
-    target == caster
-        && header.is_some_and(Spell::negative)
-        && effects.iter().any(|effect| {
-            effect.effect_index == 0
-                && matches!(effect.target, T_TARGET_ENEMY | T_TARGET_ALLY | T_TARGET_ANY)
-        })
+// vmangos PrepareForSpellSystem: an empty target mask selects the caster.
+fn selected_unit(targets: &SpellCastTargets, caster: u64) -> u64 {
+    if targets.target_flags.is_empty() {
+        return caster;
+    }
+    targets
+        .target_flags
+        .get_unit()
+        .map_or(0, |target| target.unit_target.guid())
+}
+
+// vmangos HandleCastSpellOpcode: a negative spell with a selected unit target refuses the caster.
+fn refuses_self_cast(header: Option<&Spell>, caster: u64, selected_unit: u64) -> bool {
+    selected_unit == caster
+        && header.is_some_and(|row| row.cast_flags & CAST_FLAG_REFUSES_SELF_CAST != 0)
 }
 
 pub(super) fn receive(
@@ -139,7 +142,7 @@ pub(super) fn receive(
         .get_unit()
         .map_or(0, |target| target.unit_target.guid());
     if crate::spell::knows_spell(ctx, guid, spell)
-        && negative_spell_on_self(header.as_ref(), &effects, guid, target)
+        && refuses_self_cast(header.as_ref(), guid, selected_unit(&request.targets, guid))
     {
         return Err(Rollback::replies(
             vec![failure(spell, CastRefusalReason::BadTargets)],
@@ -335,7 +338,10 @@ pub(super) fn cancel_repeat(ctx: &ReducerContext, guid: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lyracore_shared::spell::taxonomy::T_SELF;
+    use lyracore_protocol::messages::vanilla::{
+        SpellCastTargets_SpellCastTargetFlags, SpellCastTargets_SpellCastTargetFlags_Unit,
+    };
+    use lyracore_protocol::messages::Guid;
 
     #[test]
     fn every_cast_refusal_reason_reports_its_1_12_1_cast_result() {
@@ -371,38 +377,40 @@ mod tests {
         }
     }
 
-    fn spell_on_target(negative: bool, target: u8) -> (Spell, Vec<SpellEffect>) {
-        let header = Spell {
-            is_negative: negative,
+    fn spell_with(cast_flags: u32, is_negative: bool) -> Spell {
+        Spell {
+            cast_flags,
+            is_negative,
             ..Spell::blank(133, "Fixture")
-        };
-        let effect = SpellEffect {
-            target,
-            ..SpellEffect::blank(133, 0)
-        };
-        (header, vec![effect])
-    }
-
-    #[test]
-    fn a_negative_spell_with_a_selected_unit_cannot_target_its_caster() {
-        for selected in [T_TARGET_ENEMY, T_TARGET_ALLY, T_TARGET_ANY] {
-            let (header, effects) = spell_on_target(true, selected);
-            assert!(negative_spell_on_self(Some(&header), &effects, 7, 7));
-            assert!(!negative_spell_on_self(Some(&header), &effects, 7, 8));
         }
     }
 
     #[test]
-    fn a_positive_or_self_targeted_spell_can_target_its_caster() {
-        let (positive, effects) = spell_on_target(false, T_TARGET_ALLY);
-        assert!(!negative_spell_on_self(Some(&positive), &effects, 7, 7));
-        let (negative_self, effects) = spell_on_target(true, T_SELF);
-        assert!(!negative_spell_on_self(
-            Some(&negative_self),
-            &effects,
-            7,
-            7
-        ));
+    fn a_spell_flagged_by_the_importer_refuses_its_caster_as_target() {
+        let header = spell_with(CAST_FLAG_REFUSES_SELF_CAST, true);
+        assert!(refuses_self_cast(Some(&header), 7, 7));
+        assert!(!refuses_self_cast(Some(&header), 7, 8));
+        assert!(!refuses_self_cast(Some(&header), 7, 0));
+    }
+
+    #[test]
+    fn a_negative_polarity_alone_does_not_refuse_the_caster() {
+        let header = spell_with(0, true);
+        assert!(!refuses_self_cast(Some(&header), 7, 7));
+        assert!(!refuses_self_cast(None, 7, 7));
+    }
+
+    #[test]
+    fn an_empty_target_mask_selects_the_caster() {
+        assert_eq!(selected_unit(&SpellCastTargets::default(), 7), 7);
+        let unit = SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::new_unit(
+                SpellCastTargets_SpellCastTargetFlags_Unit {
+                    unit_target: Guid::new(8),
+                },
+            ),
+        };
+        assert_eq!(selected_unit(&unit, 7), 8);
     }
 
     #[test]

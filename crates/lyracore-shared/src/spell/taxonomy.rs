@@ -217,6 +217,8 @@ pub const CAST_FLAG_MAGIC_HIT: u32 = 0x8000;
 pub const CAST_FLAG_AREA_AURA: u32 = 0x0001_0000;
 pub const CAST_FLAG_ITEM_TARGET: u32 = 0x0002_0000;
 pub const CAST_FLAG_RIGHTEOUSNESS: u32 = 0x0004_0000;
+// vmangos refuses this spell when its caster selects itself as the unit target.
+pub const CAST_FLAG_REFUSES_SELF_CAST: u32 = 0x0008_0000;
 
 #[cfg(test)]
 mod tests {

@@ -496,7 +496,7 @@ fn run_spell_effects(
     finish_weapon_hits(ctx, caster_guid, weapon_targets, shield_targets);
 }
 
-// vmangos sends SMSG_SPELL_GO before effects, so the product's item packets and execute log follow it.
+// vmangos sends SMSG_SPELL_GO before effects, so a client cast's item packets and execute log follow it.
 fn finish_item_creation(
     ctx: &ReducerContext,
     caster_guid: u64,
