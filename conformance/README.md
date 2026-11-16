@@ -990,6 +990,8 @@ must hide its offer. `Player::IsVendorItemVisible` at pinned source `d9173eca` c
 condition through `CONDITION_WOW_PATCH` in `src/game/Conditions.cpp`. The fixture omits that
 patch-hidden offer to project patch 10 membership, since `game_npc_vendor` cannot retain a
 condition link. This does not implement vendor conditions in gameplay; that gap remains in the ledger.
-Quest 2158's flags 8 are seeded through `game_quest_flags`.
+Quest 2158's flags 8 are seeded through `game_quest_flags`. Quest emotes are seeded through
+`game_quest_emote` from the same snapshot: quest 2158 has complete emote 1 and offer-reward emote 2
+with delay 0; quest 7 has incomplete and complete emote 6 and offer-reward emote 1.
 Creature health and combat values are inert placeholders; these scenarios do no creature combat.
 The baselines record differences from unsupported data and gameplay without weakening comparison.

@@ -587,6 +587,7 @@ struct QuestEtl {
     entries: std::collections::HashSet<u64>,
     templates: Vec<String>,
     flags: Vec<String>,
+    emotes: Vec<String>,
     texts: Vec<String>,
     objectives: Vec<String>,
     cast_objectives: Vec<String>,
@@ -727,6 +728,7 @@ fn build_quests(
 
     let mut quest_rows: Vec<String> = Vec::new();
     let mut quest_flag_rows = Vec::new();
+    let mut quest_emote_rows = Vec::new();
     let mut quest_text_rows: Vec<String> = Vec::new();
     let mut objective_rows: Vec<String> = Vec::new();
     let mut cast_objective_rows: Vec<String> = Vec::new();
@@ -783,6 +785,21 @@ fn build_quests(
         let prev_quest: i64 = row.number(qt::PREV_QUEST_ID)?;
         let flags: u32 = row.number(qt::QUEST_FLAGS)?;
         quest_flag_rows.push(format!("({entry},{flags})"));
+        let incomplete_emote: u32 = row.number(qt::INCOMPLETE_EMOTE)?;
+        let complete_emote: u32 = row.number(qt::COMPLETE_EMOTE)?;
+        let mut offer_reward = [(0u32, 0u32); 4];
+        for (slot, pair) in offer_reward.iter_mut().enumerate() {
+            *pair = (
+                row.number(&format!("OfferRewardEmote{}", slot + 1))?,
+                row.number(&format!("OfferRewardEmoteDelay{}", slot + 1))?,
+            );
+        }
+        if incomplete_emote != 0 || complete_emote != 0 || offer_reward[0].0 != 0 {
+            let [(e1, d1), (e2, d2), (e3, d3), (e4, d4)] = offer_reward;
+            quest_emote_rows.push(format!(
+                "({entry},{incomplete_emote},{complete_emote},{e1},{e2},{e3},{e4},{d1},{d2},{d3},{d4})"
+            ));
+        }
         let special_flags: u32 = row.number(qt::SPECIAL_FLAGS)?;
         let repeatable = (special_flags & 1) != 0;
         let req_races: u32 = row.number(qt::REQUIRED_RACES)?;
@@ -943,6 +960,7 @@ fn build_quests(
         entries: valid_quests,
         templates: quest_rows,
         flags: quest_flag_rows,
+        emotes: quest_emote_rows,
         texts: quest_text_rows,
         objectives: objective_rows,
         cast_objectives: cast_objective_rows,
@@ -1925,6 +1943,13 @@ fn push_quest_statements(stmts: &mut Vec<String>, quests: &QuestEtl, mail_loot_r
         "game_quest_flags",
         "quest_entry,flags",
         &quests.flags,
+    );
+    stmts.push("DELETE FROM game_quest_emote WHERE quest_entry > 0".into());
+    push_insert(
+        stmts,
+        "game_quest_emote",
+        "quest_entry,incomplete_emote,complete_emote,offer_reward_emote_1,offer_reward_emote_2,offer_reward_emote_3,offer_reward_emote_4,offer_reward_delay_1,offer_reward_delay_2,offer_reward_delay_3,offer_reward_delay_4",
+        &quests.emotes,
     );
     stmts.push("DELETE FROM game_quest_objective WHERE id > 0".into());
     stmts.push("DELETE FROM game_quest_cast_objective WHERE id > 0".into());

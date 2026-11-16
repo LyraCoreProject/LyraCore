@@ -12,6 +12,7 @@ pub(crate) fn exchange_items(
     character_guid: u64,
     consumed: &[(u32, u32)],
     granted: &[(u32, u32)],
+    push: ItemPush,
 ) -> Result<(), ActionRefusal> {
     let character = crate::helpers::live_entity(ctx, character_guid)
         .map_err(|_| "player not in world".to_string())?;
@@ -28,7 +29,7 @@ pub(crate) fn exchange_items(
             .ok_or_else(|| format!("no such item {entry}"))?;
         plan.grant(ctx, &template, count.max(1), false, None)?;
     }
-    plan.commit(ctx)
+    plan.commit_with_source(ctx, push)
 }
 
 pub(super) fn consume_item_stacks(

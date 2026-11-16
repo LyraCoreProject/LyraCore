@@ -46,79 +46,7 @@
       "behavior": "quest_completion",
       "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "a16eb52d824819c94f81314fd949c3f3f3c652529ecb3362e6a763564ed4e69c",
-      "rule": [
-        {
-          "rule": "exact_field",
-          "checkpoint": "complete",
-          "stream": {
-            "kind": "reply",
-            "id": "complete"
-          },
-          "opcode": 397,
-          "field_path": [
-            "flags"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "incomplete",
-          "stream": {
-            "kind": "reply",
-            "id": "incomplete"
-          },
-          "opcode": 395,
-          "field_path": [
-            "emote"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "request_reward",
-          "stream": {
-            "kind": "reply",
-            "id": "request_reward"
-          },
-          "opcode": 397,
-          "field_path": [
-            "flags"
-          ]
-        },
-        {
-          "rule": "list_shape",
-          "checkpoint": "complete",
-          "stream": {
-            "kind": "reply",
-            "id": "complete"
-          },
-          "opcode": 397,
-          "field_path": [
-            "emotes",
-            "0"
-          ]
-        },
-        {
-          "rule": "list_shape",
-          "checkpoint": "request_reward",
-          "stream": {
-            "kind": "reply",
-            "id": "request_reward"
-          },
-          "opcode": 397,
-          "field_path": [
-            "emotes",
-            "0"
-          ]
-        },
-        {
-          "rule": "unexpected_packet",
-          "checkpoint": "refuse_reward",
-          "stream": {
-            "kind": "unexpected"
-          },
-          "opcode": 395,
-          "field_path": []
-        }
-      ],
+      "rule": [],
       "data": [
         {
           "rule": "world_text_395_text",
@@ -324,130 +252,7 @@
       "behavior": "quest_reward",
       "harness_revision": "004d8d740dbbc5d06548b6710d6ede0f682c3807",
       "scenario_sha256": "8db6390434c393b76389a00152e7dcc041264fad7ab879f98bd180bcf789c9e2",
-      "rule": [
-        {
-          "rule": "exact_field",
-          "checkpoint": "offer",
-          "stream": {
-            "kind": "reply",
-            "id": "offer"
-          },
-          "opcode": 397,
-          "field_path": [
-            "flags"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "turn_in",
-          "stream": {
-            "kind": "reply",
-            "id": "turn_in"
-          },
-          "opcode": 358,
-          "field_path": [
-            "received"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "turn_in",
-          "stream": {
-            "kind": "reply",
-            "id": "turn_in"
-          },
-          "opcode": 358,
-          "field_path": [
-            "show"
-          ]
-        },
-        {
-          "rule": "extra_packet",
-          "checkpoint": "turn_in",
-          "stream": {
-            "kind": "reply",
-            "id": "turn_in"
-          },
-          "opcode": 464,
-          "field_path": []
-        },
-        {
-          "rule": "extra_packet",
-          "checkpoint": "turn_in",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_717"
-          ]
-        },
-        {
-          "rule": "list_shape",
-          "checkpoint": "offer",
-          "stream": {
-            "kind": "reply",
-            "id": "offer"
-          },
-          "opcode": 397,
-          "field_path": [
-            "emotes",
-            "0"
-          ]
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "accept",
-          "stream": {
-            "kind": "reply",
-            "id": "accept"
-          },
-          "opcode": 382,
-          "field_path": []
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "repeat",
-          "stream": {
-            "kind": "reply",
-            "id": "repeat"
-          },
-          "opcode": 397,
-          "field_path": []
-        },
-        {
-          "rule": "missing_packet",
-          "checkpoint": "turn_in",
-          "stream": {
-            "kind": "reply",
-            "id": "turn_in"
-          },
-          "opcode": 464,
-          "field_path": []
-        },
-        {
-          "rule": "unexpected_packet",
-          "checkpoint": "invalid_choice",
-          "stream": {
-            "kind": "unexpected"
-          },
-          "opcode": 397,
-          "field_path": []
-        },
-        {
-          "rule": "unexpected_packet",
-          "checkpoint": "repeat",
-          "stream": {
-            "kind": "unexpected"
-          },
-          "opcode": 395,
-          "field_path": []
-        }
-      ],
+      "rule": [],
       "data": [
         {
           "rule": "world_text_397_text",
@@ -462,11 +267,35 @@
           ]
         },
         {
+          "rule": "world_text_397_text",
+          "checkpoint": "repeat",
+          "stream": {
+            "kind": "reply",
+            "id": "repeat"
+          },
+          "opcode": 397,
+          "field_path": [
+            "text"
+          ]
+        },
+        {
           "rule": "world_text_397_title",
           "checkpoint": "offer",
           "stream": {
             "kind": "reply",
             "id": "offer"
+          },
+          "opcode": 397,
+          "field_path": [
+            "title"
+          ]
+        },
+        {
+          "rule": "world_text_397_title",
+          "checkpoint": "repeat",
+          "stream": {
+            "kind": "reply",
+            "id": "repeat"
           },
           "opcode": 397,
           "field_path": [

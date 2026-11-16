@@ -20,6 +20,8 @@ mod item_equip;
 mod passives;
 #[path = "../../conformance/support/properties/mod.rs"]
 mod properties;
+#[path = "conformance/quest_turn_in.rs"]
+mod quest_turn_in;
 #[path = "../../conformance/support/quest_world.rs"]
 mod quest_world;
 #[path = "conformance/rolls.rs"]

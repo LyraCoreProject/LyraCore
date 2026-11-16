@@ -1,4 +1,4 @@
-use lyracore_protocol::messages::vanilla::{NewItemCreationType, NewItemSource};
+use lyracore_protocol::messages::vanilla::{NewItemChatAlert, NewItemCreationType, NewItemSource};
 use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
 // Playable class IDs skip 6 and 10; Druid is bit 10.
@@ -242,25 +242,35 @@ pub struct ItemInstance {
     pub item_text_id: u32,
 }
 
-/// How the client's item push describes a new item: where it came from and whether it was created.
+/// How the client's item push describes a new item: where it came from, whether it was created
+/// and whether it prints a chat line.
 #[derive(Clone, Copy)]
 pub(crate) struct ItemPush {
     pub(crate) source: NewItemSource,
     pub(crate) creation_type: NewItemCreationType,
+    pub(crate) alert_chat: NewItemChatAlert,
 }
 
 impl ItemPush {
     pub(crate) const LOOTED: Self = Self {
         source: NewItemSource::Looted,
         creation_type: NewItemCreationType::Received,
+        alert_chat: NewItemChatAlert::Show,
     };
     pub(crate) const FROM_NPC: Self = Self {
         source: NewItemSource::FromNpc,
         creation_type: NewItemCreationType::Received,
+        alert_chat: NewItemChatAlert::Show,
     };
     pub(crate) const SPELL_CREATED: Self = Self {
         source: NewItemSource::FromNpc,
         creation_type: NewItemCreationType::Created,
+        alert_chat: NewItemChatAlert::Show,
+    };
+    pub(crate) const QUEST_REWARD: Self = Self {
+        source: NewItemSource::FromNpc,
+        creation_type: NewItemCreationType::Received,
+        alert_chat: NewItemChatAlert::DoNotShow,
     };
 }
 

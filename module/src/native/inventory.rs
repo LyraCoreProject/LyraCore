@@ -73,6 +73,7 @@ fn receipt(row: &ItemInstance, count: u32, stack_add: bool, push: ItemPush) -> P
     );
     receipt.source = push.source;
     receipt.creation_type = push.creation_type;
+    receipt.alert_chat = push.alert_chat;
     packet(ServerOpcodeMessage::SMSG_ITEM_PUSH_RESULT(Box::new(
         receipt,
     )))
@@ -201,7 +202,7 @@ pub(crate) fn item_changed(
     ctx: &ReducerContext,
     previous: Option<&ItemInstance>,
     current: Option<&ItemInstance>,
-    source: Option<ItemPush>,
+    push: Option<ItemPush>,
 ) {
     if ctx.db.game_native_player().count() == 0 {
         return;
@@ -223,8 +224,8 @@ pub(crate) fn item_changed(
         .zip(current)
         .is_some_and(|(old, row)| old.owner_guid != row.owner_guid)
     {
-        item_changed(ctx, previous, None, source);
-        item_changed(ctx, None, current, source);
+        item_changed(ctx, previous, None, push);
+        item_changed(ctx, None, current, push);
         return;
     }
     let Some(row) = current.or(previous) else {
@@ -242,8 +243,8 @@ pub(crate) fn item_changed(
                 packets.push(Packet { opcode, body });
             }
             slot(ctx, row.owner_guid, row.slot, &view, &mut packets);
-            if let Some(source) = source {
-                gain(ctx, row, row.stack_count, false, source, &mut packets);
+            if let Some(push) = push {
+                gain(ctx, row, row.stack_count, false, push, &mut packets);
             }
         }
         (Some(old), None) => {
@@ -302,13 +303,13 @@ pub(crate) fn item_changed(
                     row.durability,
                 )));
             }
-            if let Some(source) = source.filter(|_| old.slot == row.slot) {
+            if let Some(push) = push.filter(|_| old.slot == row.slot) {
                 gain(
                     ctx,
                     row,
                     row.stack_count.saturating_sub(old.stack_count),
                     true,
-                    source,
+                    push,
                     &mut packets,
                 );
             }
