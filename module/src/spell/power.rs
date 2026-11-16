@@ -4,7 +4,6 @@ use lyracore_shared::spell::taxonomy::{
 use spacetimedb::ReducerContext;
 
 use super::auras_on;
-use super::formulas::int_spell_power;
 use crate::{game_spell, game_world_entity};
 use crate::{Aura, Spell};
 
@@ -38,15 +37,7 @@ pub(crate) fn spell_crit_chance(ctx: &ReducerContext, caster_guid: u64) -> f32 {
 }
 
 pub(crate) fn spell_power(ctx: &ReducerContext, caster_guid: u64, school_mask: u8) -> i32 {
-    let intellect = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(caster_guid)
-        .map_or(0, |caster| {
-            crate::modifiers::effective_stat(ctx, &caster, STAT_INT)
-        });
-    int_spell_power(i32::try_from(intellect).unwrap_or(i32::MAX))
+    super::bonuses::damage_power(ctx, caster_guid, school_mask)
         .saturating_add(crate::modifiers::combat_field_bonus(
             ctx,
             caster_guid,
@@ -61,7 +52,7 @@ pub(crate) fn spell_power(ctx: &ReducerContext, caster_guid: u64, school_mask: u
 }
 
 pub(crate) fn healing_power(ctx: &ReducerContext, caster_guid: u64, school_mask: u8) -> i32 {
-    spell_power(ctx, caster_guid, school_mask)
+    crate::modifiers::combat_field_bonus(ctx, caster_guid, COMBAT_SPELL_POWER)
         .saturating_add(crate::modifiers::aura_total(ctx, caster_guid, |aura| {
             aura.eff_kind == A_MOD_HEALING && aura.eff_p0 & i32::from(school_mask) != 0
         }))

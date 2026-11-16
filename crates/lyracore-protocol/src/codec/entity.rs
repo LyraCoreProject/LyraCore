@@ -896,5 +896,16 @@ pub fn build_set_faction_standing_raw(
     Some((SMSG_SET_FACTION_STANDING_OPCODE, body))
 }
 
+pub fn set_create_damage_bonuses(
+    create: &mut SMSG_UPDATE_OBJECT,
+    values: &super::values::DamageBonusValues,
+) -> Result<()> {
+    let fields = super::values::damage_bonus_mask(values);
+    add_create_fields(create, |mask| {
+        for index in 1201..1222 {
+            mask.set_u32(index, fields.get(index).unwrap_or(0));
+        }
+    })
+}
 #[cfg(test)]
 mod tests;

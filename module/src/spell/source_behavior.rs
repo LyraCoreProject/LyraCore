@@ -2,29 +2,21 @@ use lyracore_shared::spell_custom as custom;
 use spacetimedb::ReducerContext;
 
 use super::{
-    apply_resistance, compose_magnitude, shed_auras, CastGateRefusal, CastRefusalKind,
-    CastRefusalReason, A_FLAG, A_PERIODIC_DAMAGE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_STEALTH,
-    CAST_FLAG_CHANNELED, RESIST_ARMOR, SPELL_POWER_COEFF_PCT,
+    apply_resistance, bonuses, shed_auras, CastGateRefusal, CastRefusalKind, CastRefusalReason,
+    A_FLAG, A_PERIODIC_DAMAGE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_STEALTH, CAST_FLAG_CHANNELED,
+    RESIST_ARMOR,
 };
 use crate::game_world_entity;
 use crate::geometry::distance_3d;
 use crate::{game_aura, game_spell, Aura, Spell, SpellEffect};
 
-pub(crate) fn bonus_magnitude(
-    points: i32,
-    power: i32,
-    coefficient: f32,
-    flags: u32,
-    periodic: bool,
-) -> i32 {
+pub(crate) fn bonus_magnitude(points: i32, power: i32, coefficient: f32, flags: u32) -> i32 {
     if flags & custom::FIXED_DAMAGE != 0 {
         points
     } else if coefficient >= 0.0 {
         points.saturating_add((power as f32 * coefficient) as i32)
-    } else if periodic {
-        points
     } else {
-        compose_magnitude(points, power, SPELL_POWER_COEFF_PCT)
+        points
     }
 }
 
@@ -33,11 +25,11 @@ pub(crate) fn mitigate_spell(
     hdr: &Spell,
     caster: u64,
     target: u64,
-    damage: i32,
-) -> i32 {
+    mut damage: f32,
+) -> (i32, u32) {
     if hdr.school_mask & RESIST_ARMOR != 0
         && hdr.custom_flags & custom::IGNORE_ARMOR == 0
-        && damage > 0
+        && damage > 0.0
     {
         if let (Some(caster), Some(target)) = (
             ctx.db.game_world_entity().guid().find(caster),
@@ -47,10 +39,23 @@ pub(crate) fn mitigate_spell(
                 crate::modifiers::effective_armor(ctx, &target),
                 caster.level,
             );
-            return crate::combat::armor_mitigated(damage as u32, percent) as i32;
+            // vmangos CalcArmorReducedDamage truncates before and after armor and floors at 1.
+            damage = crate::combat::armor_mitigated((damage as u32).max(1), percent) as f32;
         }
     }
-    apply_resistance(ctx, target, caster, hdr.school_mask, damage, hdr.spell_id)
+    let before_resist = bonuses::round_damage(ctx, target, damage);
+    let after_resist = apply_resistance(
+        ctx,
+        target,
+        caster,
+        hdr.school_mask,
+        before_resist,
+        hdr.spell_id,
+    );
+    (
+        after_resist,
+        before_resist.saturating_sub(after_resist).max(0) as u32,
+    )
 }
 
 pub(crate) fn aura_casters_coexist(hdr: &Spell, kind: u8) -> bool {
@@ -185,26 +190,17 @@ mod tests {
     use crate::spell::A_MOD_STAT;
 
     #[test]
-    fn explicit_coefficients_scale_direct_and_periodic_effects_and_zero_is_not_a_fallback() {
-        assert_eq!(bonus_magnitude(10, 100, 0.5, 0, false), 60);
-        assert_eq!(bonus_magnitude(10, 100, 0.5, 0, true), 60);
-        assert_eq!(bonus_magnitude(10, 100, 0.0, 0, false), 10);
-        assert_eq!(
-            bonus_magnitude(10, 100, -1.0, 0, false),
-            compose_magnitude(10, 100, SPELL_POWER_COEFF_PCT)
-        );
-        assert_eq!(bonus_magnitude(10, 100, -1.0, 0, true), 10);
+    fn explicit_coefficients_scale_the_bonus_and_zero_or_negative_add_none() {
+        assert_eq!(bonus_magnitude(10, 100, 0.5, 0), 60);
+        assert_eq!(bonus_magnitude(10, 100, 0.0, 0), 10);
+        assert_eq!(bonus_magnitude(10, 100, -1.0, 0), 10);
     }
 
     #[test]
     fn fixed_damage_and_healing_ignore_explicit_and_fallback_bonuses() {
         for coefficient in [-1.0, 0.75] {
             assert_eq!(
-                bonus_magnitude(25, 1000, coefficient, custom::FIXED_DAMAGE, false),
-                25
-            );
-            assert_eq!(
-                bonus_magnitude(25, 1000, coefficient, custom::FIXED_DAMAGE, true),
+                bonus_magnitude(25, 1000, coefficient, custom::FIXED_DAMAGE),
                 25
             );
         }

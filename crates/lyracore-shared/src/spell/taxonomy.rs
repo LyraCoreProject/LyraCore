@@ -103,6 +103,11 @@ effect_kinds! {
     A_MOD_REGEN => AuraModRegen = 0xC3,
     A_MOD_HEALTH_REGEN_PCT => AuraModHealthRegenPct = 0xC4,
     A_MANA_REGEN_INTERRUPT => AuraManaRegenInterrupt = 0xC5,
+    A_MOD_DAMAGE_DONE_FLAT => AuraModDamageDoneFlat = 0xD0,
+    A_MOD_DAMAGE_TAKEN_FLAT => AuraModDamageTakenFlat = 0xD1,
+    A_MOD_SCHOOL_CRIT => AuraModSchoolCrit = 0xD2,
+    A_MOD_DAMAGE_DONE_PCT => AuraModDamageDonePct = 0xD3,
+    A_MOD_HEALING_TAKEN => AuraModHealingTaken = 0xD4,
     E_SUMMON_GUARDIANS => SummonGuardians = 0x27,
     E_ADD_EXTRA_ATTACKS => AddExtraAttacks = 0x28,
     // Effect points are the duration in seconds; p0 is the enchantment id.
@@ -209,6 +214,8 @@ pub const CAST_FLAG_IGNORE_RESISTANCES: u32 = 0x2000;
 pub const CAST_FLAG_ALWAYS_HIT: u32 = 0x4000;
 pub const CAST_FLAG_MAGIC_HIT: u32 = 0x8000;
 pub const CAST_FLAG_AREA_AURA: u32 = 0x0001_0000;
+pub const CAST_FLAG_ITEM_TARGET: u32 = 0x0002_0000;
+pub const CAST_FLAG_RIGHTEOUSNESS: u32 = 0x0004_0000;
 
 #[cfg(test)]
 mod tests {
@@ -245,6 +252,11 @@ mod tests {
         assert_eq!(A_MOD_HEALTH_REGEN_PCT, 0xC4);
         assert_eq!(A_MANA_REGEN_INTERRUPT, 0xC5);
         assert_eq!(A_FLAG, 0xBE);
+        assert_eq!(A_MOD_DAMAGE_DONE_FLAT, 0xD0);
+        assert_eq!(A_MOD_DAMAGE_TAKEN_FLAT, 0xD1);
+        assert_eq!(A_MOD_SCHOOL_CRIT, 0xD2);
+        assert_eq!(A_MOD_DAMAGE_DONE_PCT, 0xD3);
+        assert_eq!(A_MOD_HEALING_TAKEN, 0xD4);
         for k in [
             E_DAMAGE, E_HEAL, E_ENERGIZE, E_DISPEL, E_TRIGGER, E_SCRIPTED,
         ] {

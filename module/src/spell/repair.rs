@@ -4,7 +4,10 @@ use super::*;
 use crate::{game_aura, game_spell, game_spell_effect};
 use crate::{game_character_talent, game_player_spell, game_talent, game_world_entity};
 use lyracore_shared::packing::power_type;
-use lyracore_shared::spell::taxonomy::P_COMBAT_PERCENT;
+use lyracore_shared::spell::taxonomy::{
+    A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN_FLAT, A_MOD_HEALING_TAKEN,
+    A_MOD_SCHOOL_CRIT, P_COMBAT_PERCENT,
+};
 
 pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
     let characters: Vec<_> = ctx
@@ -138,7 +141,115 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
         recompute_vitals(ctx, target);
         recompute_sheet(ctx, target);
     }
+    restore_missing_seals(ctx);
     restore_missing_passives(ctx);
+    repair_school_modifier_groups(ctx);
+}
+
+fn repair_school_modifier_groups(ctx: &ReducerContext) {
+    let mut auras: Vec<_> = ctx
+        .db
+        .game_aura()
+        .iter()
+        .filter(|aura| {
+            matches!(
+                aura.eff_kind,
+                A_MOD_DAMAGE_DONE_FLAT
+                    | A_MOD_DAMAGE_TAKEN_FLAT
+                    | A_MOD_SCHOOL_CRIT
+                    | A_MOD_DAMAGE_DONE_PCT
+                    | A_MOD_HEALING_TAKEN
+            ) && aura.item_guid(ctx) == 0
+        })
+        .collect();
+    auras.sort_by_key(|aura| {
+        std::cmp::Reverse((aura.applied_at.to_micros_since_unix_epoch(), aura.id))
+    });
+    for aura in auras {
+        if ctx.db.game_aura().id().find(aura.id).is_none() {
+            continue;
+        }
+        if !super::stacking::apply_group_conflict(
+            ctx,
+            aura.spell_id,
+            aura.caster_guid,
+            aura.target_guid,
+            super::stacking::rank_of(ctx, aura.spell_id),
+            crate::modifiers::stacked_amount(aura.amount, aura.stacks).saturating_abs(),
+        ) {
+            let siblings = ctx
+                .db
+                .game_aura()
+                .by_target()
+                .filter(aura.target_guid)
+                .filter(|row| {
+                    row.spell_id == aura.spell_id
+                        && row.caster_guid == aura.caster_guid
+                        && row.item_guid(ctx) == 0
+                })
+                .collect();
+            shed_auras(ctx, siblings);
+        }
+    }
+}
+
+fn restore_missing_seals(ctx: &ReducerContext) {
+    let markers: Vec<_> = ctx
+        .db
+        .game_aura()
+        .iter()
+        .filter(|aura| aura.eff_kind == A_FLAG && aura.item_guid(ctx) == 0)
+        .collect();
+    for mut aura in markers {
+        let Some(header) = ctx
+            .db
+            .game_spell()
+            .spell_id()
+            .find(aura.spell_id)
+            .filter(|header| {
+                header.cast_flags & lyracore_shared::spell::taxonomy::CAST_FLAG_RIGHTEOUSNESS != 0
+            })
+        else {
+            continue;
+        };
+        let Some(effect) = ctx
+            .db
+            .game_spell_effect()
+            .by_spell()
+            .filter(aura.spell_id)
+            .find(|effect| effect.effect_index == 0 && effect.kind == A_SEAL)
+        else {
+            continue;
+        };
+        if ctx
+            .db
+            .game_aura()
+            .by_target()
+            .filter(aura.target_guid)
+            .any(|existing| {
+                existing.effect_id == effect.id && existing.caster_guid == aura.caster_guid
+            })
+        {
+            continue;
+        }
+        aura.id = 0;
+        aura.effect_id = effect.id;
+        aura.eff_kind = effect.kind;
+        aura.eff_p0 = effect.p0;
+        aura.eff_p0_kind = effect.p0_kind;
+        aura.eff_p1 = effect.p1;
+        aura.amount = effect_amount(
+            effect.base_points,
+            effect.die_sides,
+            effect.per_level,
+            u32::from(aura.level),
+            header.spell_level,
+            header.max_level,
+            0,
+        );
+        aura.amount_remaining = 0;
+        aura.insert(ctx);
+    }
 }
 
 fn restore_missing_passives(ctx: &ReducerContext) {

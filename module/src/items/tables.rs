@@ -138,6 +138,8 @@ pub struct ItemTemplate {
     pub spellcategory_4: u32,
     #[default(0u32)]
     pub spellcategory_5: u32,
+    #[default(0)]
+    pub damage_school: u8,
 }
 
 impl ItemTemplate {
@@ -212,6 +214,7 @@ impl ItemTemplate {
             spellcategory_3: 0,
             spellcategory_4: 0,
             spellcategory_5: 0,
+            damage_school: 0,
         }
     }
 }

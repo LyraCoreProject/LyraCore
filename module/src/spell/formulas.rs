@@ -1,4 +1,3 @@
-use super::taxonomy::{INT_PER_SPELL_POWER, INT_SPELL_POWER_BASE};
 use crate::Aura;
 
 pub(crate) fn cost_gate_blocks(is_player: bool, power: u32, cost: u32) -> bool {
@@ -46,20 +45,6 @@ pub(crate) fn effect_amount(
         0
     };
     scaled + die
-}
-
-pub(crate) fn int_spell_power(effective_int: i32) -> i32 {
-    let above = (effective_int - INT_SPELL_POWER_BASE).max(0);
-    if INT_PER_SPELL_POWER <= 0 {
-        0
-    } else {
-        above / INT_PER_SPELL_POWER
-    }
-}
-
-pub(crate) fn compose_magnitude(base_points: i32, spell_power: i32, coeff_pct: i32) -> i32 {
-    let sp = spell_power.max(0);
-    base_points + sp * coeff_pct / 100
 }
 
 pub(crate) fn apply_spell_crit(dmg: i32, is_crit: bool) -> i32 {

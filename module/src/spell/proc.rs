@@ -6,7 +6,8 @@ use crate::combat::{Hit, HitSource};
 
 use super::*;
 use crate::{
-    game_aura, game_spell, game_spell_proc_event, Aura, Spell, SpellCastEvent, SpellProcEvent,
+    game_aura, game_spell, game_spell_effect, game_spell_proc_event, Aura, Spell, SpellCastEvent,
+    SpellProcEvent,
 };
 
 // Bit values match procFlags and procEx in cmangos SpellMgr.h.
@@ -414,12 +415,38 @@ fn fire_proc_damage(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) ->
         return false;
     }
     let school_mask = row.eff_p0.clamp(0, u8::MAX as i32) as u8;
+    let points = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(row.spell_id)
+        .zip(ctx.db.game_spell_effect().id().find(row.effect_id))
+        .map_or(row.amount, |(hdr, effect)| {
+            let damage = super::bonuses::spell_damage_done_float(
+                ctx,
+                &hdr,
+                &effect,
+                row.target_guid,
+                row.amount as f32,
+                false,
+            );
+            let damage = super::bonuses::spell_damage_taken(
+                ctx,
+                &hdr,
+                &effect,
+                row.target_guid,
+                counterparty_guid,
+                damage,
+                1,
+            );
+            super::bonuses::round_damage(ctx, counterparty_guid, damage)
+        });
     let after_resist = apply_resistance(
         ctx,
         counterparty_guid,
         row.target_guid,
         school_mask,
-        row.amount,
+        points,
         row.spell_id,
     );
     let (dealt, absorbed) = crate::combat::deal_damage(
@@ -429,14 +456,14 @@ fn fire_proc_damage(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) ->
         after_resist,
         Hit::spell(HitSource::Triggered, row.spell_id, false),
     );
-    if dealt > 0 || absorbed > 0 || row.amount > after_resist {
+    if dealt > 0 || absorbed > 0 || points > after_resist {
         crate::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
                 target_guid: counterparty_guid,
                 damage: dealt,
                 school: school_index(school_mask),
-                resisted: (row.amount as u32).saturating_sub(after_resist.max(0) as u32),
+                resisted: (points.max(0) as u32).saturating_sub(after_resist.max(0) as u32),
                 absorbed,
                 is_proc_log: true,
                 ..SpellCastEvent::signal(

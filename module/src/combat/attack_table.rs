@@ -56,6 +56,7 @@ pub(crate) struct DeliveredSpell {
     pub(crate) next_melee_swing: bool,
     pub(crate) always_hit: bool,
     pub(crate) cannot_crit: bool,
+    pub(crate) school_mask: u8,
 }
 
 impl DeliveredSpell {
@@ -73,6 +74,7 @@ impl DeliveredSpell {
             next_melee_swing,
             always_hit: flags & crate::spell::CAST_FLAG_ALWAYS_HIT != 0,
             cannot_crit: flags & crate::spell::CAST_FLAG_CANNOT_CRIT != 0,
+            school_mask: spell.map_or(0, |spell| spell.school_mask),
         }
     }
 }
@@ -261,6 +263,14 @@ pub(crate) fn attack_table_for(
             effective_ranged_crit_bp(ctx, attacker),
         ),
     };
+    let school_mask = match (spell, attack_type) {
+        (Some(spell), _) => spell.school_mask,
+        (None, AttackType::Ranged) => 1 << super::folds::ranged_school(ctx, attacker.guid),
+        (None, AttackType::Melee) => 0,
+    };
+    let crit = crit.saturating_add_signed(
+        (crate::spell::bonuses::school_crit(ctx, attacker.guid, school_mask) * 100.0) as i32,
+    );
     let flags = (!target_is_character)
         .then(|| ctx.db.game_creature_defense().entry().find(target.entry))
         .flatten();
@@ -424,11 +434,13 @@ mod tests {
         next_melee_swing: true,
         always_hit: false,
         cannot_crit: false,
+        school_mask: 1,
     };
     const CAST: DeliveredSpell = DeliveredSpell {
         next_melee_swing: false,
         always_hit: false,
         cannot_crit: false,
+        school_mask: 1,
     };
 
     fn facts(weapon: i32, maximum: i32, defense: i32, level: u32, hit: i32) -> AttackFacts {

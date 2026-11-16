@@ -46,6 +46,7 @@ fn source_spell(row: &Row) -> Result<Spell> {
 
     let spell = Spell {
         npc_guardian_entry: npc_guardian_entry(row)?,
+        icon_id: icon,
         single_target_key: lyracore_shared::spell_custom::single_target_key(family, icon, category),
         custom_flags: row.number("customFlags")?,
         min_target_level: row.number("minTargetLevel")?,

@@ -102,6 +102,7 @@ fn apply_item_field(
         "max_stack" => item.max_stack = as_u32(field, value)?,
         "damage_min" => item.damage_min = as_f32(field, value)?,
         "damage_max" => item.damage_max = as_f32(field, value)?,
+        "damage_school" => item.damage_school = as_u8(field, value)?,
         "delay_ms" => item.delay_ms = as_u32(field, value)?,
         "stat_strength" => item.stat_strength = as_i32(field, value)?,
         "stat_agility" => item.stat_agility = as_i32(field, value)?,

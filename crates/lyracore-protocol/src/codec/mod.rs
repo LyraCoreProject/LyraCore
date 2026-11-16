@@ -3,7 +3,7 @@ pub mod auth_session;
 pub mod channel;
 pub mod social;
 pub mod update_mask;
-mod values_mask;
+pub mod values_mask;
 
 pub mod auction;
 pub mod breath;

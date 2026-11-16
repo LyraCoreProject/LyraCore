@@ -15,9 +15,9 @@ pub(crate) mod queued_strike;
 pub(crate) mod swing;
 mod tables;
 
-#[cfg(feature = "debug_reducers")]
-pub(crate) use attack_table::attack_table_for;
-pub(crate) use attack_table::{roll_attack, AttackOutcome, AttackType, DeliveredSpell};
+pub(crate) use attack_table::{
+    attack_table_for, roll_attack, AttackOutcome, AttackType, DeliveredSpell,
+};
 #[cfg_attr(
     not(any(has_packages, feature = "debug_reducers")),
     allow(unused_imports)
@@ -53,10 +53,9 @@ pub(crate) use folds::defender_block_value;
 pub(crate) use folds::{
     arm_react, attack_power_modifiers, effective_crit_bp, effective_ranged_crit_bp,
     effective_swing_time, equipped_offhand_weapon_damage, equipped_ranged_weapon, find_ammo,
-    finisher_strike_damage, melee_attack_power, ranged_projectile, react_window_active,
-    retaliate_on_hit, roll_money, roll_ranged_swing, roll_swing, roll_swing_with_range,
-    seal_holy_on_swing, spend_ranged_ammo, swing_range_ctx, weapon_strike_spell_damage,
-    wear_weapon, ReactKind, WeaponStrike,
+    melee_attack_power, ranged_projectile, react_window_active, retaliate_on_hit, roll_money,
+    roll_ranged_swing, roll_swing, roll_swing_with_range, seal_holy_on_swing, spend_ranged_ammo,
+    swing_range_ctx, weapon_strike_spell_damage, wear_weapon, ReactKind, WeaponStrike,
 };
 
 pub(crate) use energy::regenerate_energy;

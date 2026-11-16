@@ -49,12 +49,6 @@ impl EffectHit {
             ..Self::default()
         }
     }
-    fn heal(healed: u32) -> Self {
-        Self {
-            healed,
-            ..Self::default()
-        }
-    }
 }
 
 /// An absent target counts as equal level.
@@ -384,7 +378,11 @@ pub(crate) fn aura_apply(
         } else {
             spell_power(ctx, caster_guid, hdr.school_mask)
         };
-        source_behavior::bonus_magnitude(points, power, e.bonus_coefficient, hdr.custom_flags, true)
+        if e.kind == A_PERIODIC_DAMAGE {
+            bonuses::spell_damage_done_float(ctx, hdr, e, caster_guid, points as f32, true) as i32
+        } else {
+            source_behavior::bonus_magnitude(points, power, e.bonus_coefficient, hdr.custom_flags)
+        }
     } else {
         points
     };
@@ -859,6 +857,11 @@ pub(crate) fn apply_effect(
         | EffectKind::AuraModStat
         | EffectKind::AuraModResistance
         | EffectKind::AuraAbsorb
+        | EffectKind::AuraModDamageDoneFlat
+        | EffectKind::AuraModDamageTakenFlat
+        | EffectKind::AuraModSchoolCrit
+        | EffectKind::AuraModDamageDonePct
+        | EffectKind::AuraModHealingTaken
         | EffectKind::AuraInert
         | EffectKind::AuraModSkill
         | EffectKind::AuraModHealing
@@ -961,6 +964,51 @@ fn hit_of(
     )
 }
 
+fn direct_spell_crit_chance(
+    ctx: &ReducerContext,
+    hdr: &Spell,
+    caster_guid: u64,
+    target_guid: u64,
+) -> f32 {
+    match hdr.damage_class {
+        2 | 3 => {
+            let entities = ctx.db.game_world_entity();
+            let (Some(caster), Some(target)) = (
+                entities.guid().find(caster_guid),
+                entities.guid().find(target_guid),
+            ) else {
+                return 0.0;
+            };
+            if !caster.is_player() && (caster.owner_guid == 0 || caster.owner_guid >> 48 != 0) {
+                return 0.0;
+            }
+            let attack_type = if hdr.damage_class == 3 {
+                crate::combat::AttackType::Ranged
+            } else {
+                crate::combat::AttackType::Melee
+            };
+            crate::combat::attack_table_for(
+                ctx,
+                &caster,
+                &target,
+                attack_type,
+                Some(crate::combat::DeliveredSpell::cast(hdr)),
+            )
+            .crit as f32
+                / 100.0
+        }
+        _ if hdr.school_mask & RESIST_ARMOR != 0 => 0.0,
+        _ => {
+            spell_crit_chance(ctx, caster_guid)
+                + if hdr.damage_class == 1 {
+                    bonuses::school_crit(ctx, caster_guid, 1 << school_index(hdr.school_mask))
+                } else {
+                    0.0
+                }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn apply_damage_effect(
     ctx: &ReducerContext,
@@ -973,35 +1021,36 @@ fn apply_damage_effect(
     strike_crit: bool,
 ) -> EffectHit {
     match e.kind {
-        E_DAMAGE => {
-            let sp = spell_power(ctx, caster_guid, hdr.school_mask);
-            let scaled = source_behavior::bonus_magnitude(
-                points,
-                sp,
-                e.bonus_coefficient,
-                hdr.custom_flags,
-                false,
-            );
-            let (dmg_flat, dmg_pct) =
-                crate::spell::spell_mod(ctx, caster_guid, SPELLMOD_OP_DAMAGE, hdr);
-            let scaled = if hdr.custom_flags & custom::FIXED_DAMAGE != 0 {
-                scaled
+        E_DAMAGE | E_FINISHER_DAMAGE => {
+            let scaled =
+                bonuses::spell_damage_done_float(ctx, hdr, e, caster_guid, points as f32, false);
+            let is_crit = if e.kind == E_FINISHER_DAMAGE {
+                strike_crit
             } else {
-                crate::spell::apply_spell_mod(scaled.max(0) as u32, dmg_flat, dmg_pct) as i32
+                let draw = crate::conformance_rolls::draw(
+                    ctx,
+                    crate::conformance_rolls::RollStream::Caster(caster_guid),
+                );
+                let chance = direct_spell_crit_chance(ctx, hdr, caster_guid, target_guid);
+                hdr.cast_flags & CAST_FLAG_CANNOT_CRIT == 0
+                    && hdr.attributes_ex_3 & 0x2000_0000 == 0
+                    && crate::spell::rolls::chance_succeeds(chance, draw)
             };
-            let draw = crate::conformance_rolls::draw(
-                ctx,
-                crate::conformance_rolls::RollStream::Caster(caster_guid),
-            );
-            let is_crit = hdr.cast_flags & CAST_FLAG_CANNOT_CRIT == 0
-                && hdr.school_mask & RESIST_ARMOR == 0
-                && crate::spell::rolls::chance_succeeds(spell_crit_chance(ctx, caster_guid), draw);
-            let crit_scaled = apply_spell_crit(scaled, is_crit);
-            let after_resist =
+            let scaled =
+                bonuses::spell_damage_taken(ctx, hdr, e, caster_guid, target_guid, scaled, 1);
+            let crit_scaled = if is_crit {
+                if matches!(hdr.damage_class, 2 | 3) {
+                    ((scaled as i32) * 2) as f32
+                } else {
+                    apply_spell_crit(scaled as i32, true) as f32
+                }
+            } else {
+                scaled
+            };
+            let (after_resist, resisted) =
                 source_behavior::mitigate_spell(ctx, hdr, caster_guid, target_guid, crit_scaled);
-            let resisted = crit_scaled.saturating_sub(after_resist).max(0) as u32;
 
-            if hdr.range_yd > 0 && target_guid != caster_guid {
+            if e.kind == E_DAMAGE && hdr.range_yd > 0 && target_guid != caster_guid {
                 if let (Some(caster), Some(target)) = (
                     ctx.db.game_world_entity().guid().find(caster_guid),
                     ctx.db.game_world_entity().guid().find(target_guid),
@@ -1039,7 +1088,16 @@ fn apply_damage_effect(
                 caster_guid,
                 target_guid,
                 after_resist,
-                hit_of(hdr, triggered, crate::combat::HitSource::Spell, is_crit),
+                hit_of(
+                    hdr,
+                    triggered,
+                    if e.kind == E_FINISHER_DAMAGE {
+                        crate::combat::HitSource::MeleeSpell
+                    } else {
+                        crate::combat::HitSource::Spell
+                    },
+                    is_crit,
+                ),
             );
             EffectHit {
                 dealt,
@@ -1104,50 +1162,21 @@ fn apply_damage_effect(
         E_JUDGEMENT => {
             let seal = seal_amount(ctx, caster_guid);
             if seal > 0 {
+                let seal =
+                    bonuses::spell_damage_done_float(ctx, hdr, e, caster_guid, seal as f32, false);
+                let seal =
+                    bonuses::spell_damage_taken(ctx, hdr, e, caster_guid, target_guid, seal, 1);
                 let (dealt, absorbed) = crate::combat::deal_damage(
                     ctx,
                     caster_guid,
                     target_guid,
-                    seal,
+                    bonuses::round_damage(ctx, target_guid, seal),
                     hit_of(hdr, triggered, crate::combat::HitSource::Spell, false),
                 );
                 remove_seal_auras(ctx, caster_guid);
                 EffectHit::dmg(dealt, absorbed)
             } else {
                 EffectHit::none()
-            }
-        }
-        E_FINISHER_DAMAGE => {
-            let entities = ctx.db.game_world_entity();
-            let (Some(caster), Some(target)) = (
-                entities.guid().find(caster_guid),
-                entities.guid().find(target_guid),
-            ) else {
-                return EffectHit::none();
-            };
-            let dmg = crate::combat::finisher_strike_damage(
-                ctx,
-                &caster,
-                &target,
-                hdr,
-                points,
-                strike_crit,
-            );
-            let (dealt, absorbed) = crate::combat::deal_damage(
-                ctx,
-                caster_guid,
-                target_guid,
-                dmg as i32,
-                hit_of(
-                    hdr,
-                    triggered,
-                    crate::combat::HitSource::MeleeSpell,
-                    strike_crit,
-                ),
-            );
-            EffectHit {
-                crit: strike_crit,
-                ..EffectHit::dmg(dealt, absorbed)
             }
         }
         _ => EffectHit::none(),
@@ -1164,7 +1193,7 @@ fn apply_restore_effect(
     triggered: bool,
 ) -> EffectHit {
     match e.kind {
-        E_HEAL => EffectHit::heal(apply_heal(ctx, hdr, e, caster_guid, target_guid, points)),
+        E_HEAL => apply_heal(ctx, hdr, e, caster_guid, target_guid, points),
         E_HEAL_MAX_HEALTH => {
             if let Some(mut t) = ctx.db.game_world_entity().guid().find(target_guid) {
                 let before = t.health;
@@ -1206,12 +1235,21 @@ fn apply_restore_effect(
             }
             t.power -= drained;
             t.update(ctx);
-            let damage = mana_burn_damage(drained, e.p1);
+            let damage = bonuses::spell_damage_done_float(
+                ctx,
+                hdr,
+                e,
+                caster_guid,
+                mana_burn_damage(drained, e.p1) as f32,
+                false,
+            );
+            let damage =
+                bonuses::spell_damage_taken(ctx, hdr, e, caster_guid, target_guid, damage, 1);
             let (dealt, absorbed) = crate::combat::deal_damage(
                 ctx,
                 caster_guid,
                 target_guid,
-                damage as i32,
+                bonuses::round_damage(ctx, target_guid, damage),
                 hit_of(hdr, triggered, crate::combat::HitSource::Spell, false),
             );
             EffectHit::dmg(dealt, absorbed)
@@ -1500,11 +1538,42 @@ fn apply_heal(
     caster_guid: u64,
     target_guid: u64,
     points: i32,
-) -> u32 {
-    let sp = healing_power(ctx, caster_guid, hdr.school_mask);
-    let scaled =
-        source_behavior::bonus_magnitude(points, sp, e.bonus_coefficient, hdr.custom_flags, false);
-    apply_direct_heal(ctx, caster_guid, target_guid, scaled)
+) -> EffectHit {
+    let fixed =
+        hdr.custom_flags & custom::FIXED_DAMAGE != 0 || hdr.attributes_ex_3 & 0x2000_0000 != 0;
+    let power = if fixed {
+        0
+    } else {
+        healing_power(ctx, caster_guid, hdr.school_mask)
+    };
+    let scaled = points as f32
+        + power as f32 * bonuses::spell_coefficient(ctx, hdr, e, caster_guid, caster_guid, true);
+    let scaled = bonuses::healing_taken(ctx, hdr, e, target_guid, scaled, 1);
+    let chance = if hdr.family_name == 13 {
+        10.0
+    } else if hdr.damage_class == 1 {
+        spell_crit_chance(ctx, caster_guid)
+            + bonuses::school_crit(ctx, caster_guid, 1 << school_index(hdr.school_mask))
+    } else {
+        0.0
+    };
+    let draw = crate::conformance_rolls::draw(
+        ctx,
+        crate::conformance_rolls::RollStream::Caster(caster_guid),
+    );
+    let crit = !fixed
+        && hdr.cast_flags & CAST_FLAG_CANNOT_CRIT == 0
+        && crate::spell::rolls::chance_succeeds(chance, draw);
+    let scaled = if crit {
+        apply_spell_crit(scaled as i32, true)
+    } else {
+        bonuses::round_damage(ctx, target_guid, scaled)
+    };
+    EffectHit {
+        healed: apply_direct_heal(ctx, caster_guid, target_guid, scaled),
+        crit,
+        ..EffectHit::default()
+    }
 }
 
 pub(crate) fn apply_direct_heal(
@@ -1652,11 +1721,13 @@ fn create_ground_area(
         y,
         z,
         radius_yd: e.radius_yd,
-        amount: amount.max(0),
+        amount: bonuses::spell_damage_done_float(ctx, hdr, e, caster_guid, amount as f32, true)
+            as i32,
         school_mask: hdr.school_mask,
         period_ms,
         next_tick_micros: now.to_micros_since_unix_epoch() + (period_ms as i64) * 1000,
         expires_at,
+        effect_id: e.id,
     });
     crate::DynamicObject {
         guid: dynamic_object_guid(area.id),

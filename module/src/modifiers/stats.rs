@@ -1,6 +1,7 @@
 use lyracore_shared::spell::taxonomy::{
-    A_DISARM, A_MOD_COMBAT, A_MOD_STAT, A_MOD_STAT_PCT, COMBAT_ATTACK_POWER, COMBAT_CRIT,
-    COMBAT_RANGED_ATTACK_POWER, STAT_AGI, STAT_ALL, STAT_INT, STAT_SPI, STAT_STA, STAT_STR,
+    A_DISARM, A_MOD_COMBAT, A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_STAT,
+    A_MOD_STAT_PCT, COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_RANGED_ATTACK_POWER, STAT_AGI,
+    STAT_ALL, STAT_INT, STAT_SPI, STAT_STA, STAT_STR,
 };
 use spacetimedb::ReducerContext;
 
@@ -110,7 +111,10 @@ pub(crate) fn moves_sheet(kind: u8, parameter: i32) -> bool {
             && SHEET_COMBAT_FIELDS
                 .into_iter()
                 .any(|field| parameter == i32::from(field)))
-        || kind == A_DISARM
+        || matches!(
+            kind,
+            A_DISARM | A_MOD_DAMAGE_DONE_FLAT | A_MOD_DAMAGE_DONE_PCT
+        )
 }
 
 #[cfg(test)]

@@ -71,6 +71,18 @@ pub struct Spell {
     pub category: u32,
     #[default(0u32)]
     pub category_cooldown_ms: u32,
+    #[default(-1i32)]
+    pub equipped_item_class: i32,
+    #[default(0u32)]
+    pub equipped_item_subclass_mask: u32,
+    #[default(0u32)]
+    pub equipped_item_inventory_mask: u32,
+    #[default(0u32)]
+    pub attributes_ex_3: u32,
+    #[default(0u32)]
+    pub attributes_ex_4: u32,
+    #[default(0u8)]
+    pub damage_class: u8,
 }
 
 impl Spell {
@@ -112,6 +124,12 @@ impl Spell {
             duration_index: 0,
             category: 0,
             category_cooldown_ms: 0,
+            equipped_item_class: -1,
+            equipped_item_subclass_mask: 0,
+            equipped_item_inventory_mask: 0,
+            attributes_ex_3: 0,
+            attributes_ex_4: 0,
+            damage_class: 0,
         }
     }
 
@@ -827,6 +845,8 @@ pub struct GroundArea {
     pub period_ms: u32,
     pub next_tick_micros: i64,
     pub expires_at: Timestamp,
+    #[default(0)]
+    pub effect_id: u64,
 }
 
 // Client build 5875 draws the ground effect from a DynamicObject CREATE.

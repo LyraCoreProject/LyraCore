@@ -1,5 +1,5 @@
 use lyracore_shared::spell::taxonomy::{
-    A_MOD_DAMAGE_TAKEN, STANCE_BEAR, STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR,
+    STANCE_BEAR, STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR,
 };
 use spacetimedb::ReducerContext;
 
@@ -55,14 +55,10 @@ pub(crate) fn stance_threat_pct(stance: u8) -> i32 {
 }
 
 pub(crate) fn damage_taken_bonus(ctx: &ReducerContext, target_guid: u64) -> i32 {
-    let aura_pct =
-        crate::modifiers::aura_total(ctx, target_guid, |a| a.eff_kind == A_MOD_DAMAGE_TAKEN);
-    let stance_pct = ctx
-        .db
+    ctx.db
         .game_world_entity()
         .guid()
         .find(target_guid)
         .map(|t| stance_damage_taken_pct(t.stance))
-        .unwrap_or(0);
-    aura_pct + stance_pct
+        .unwrap_or(0)
 }

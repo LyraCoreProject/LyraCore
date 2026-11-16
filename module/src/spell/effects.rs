@@ -5,8 +5,9 @@ use crate::game_world_entity;
 use crate::game_melee_attack;
 
 use super::{
-    add_flat_pool_bonus, dispel_category_matches, drain_shields, rederive_pool, shed_auras,
-    should_arm_spell_retaliation, A_ABSORB, COMBAT_ATTACK_POWER, DISPEL_MAGIC, DISPEL_POISON,
+    add_flat_pool_bonus, bonuses, dispel_category_matches, drain_shields, rederive_pool,
+    shed_auras, should_arm_spell_retaliation, A_ABSORB, COMBAT_ATTACK_POWER, DISPEL_MAGIC,
+    DISPEL_POISON,
 };
 use crate::{game_aura, game_spell, Aura};
 
@@ -162,6 +163,10 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
             lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
         ),
     );
+    let ranged_dmg_min =
+        bonuses::weapon_damage(ctx, &e, crate::items::equip_slot::RANGED, ranged_dmg_min);
+    let ranged_dmg_max =
+        bonuses::weapon_damage(ctx, &e, crate::items::equip_slot::RANGED, ranged_dmg_max);
     let ranged_min_fraction = ranged_dmg_min.fract();
     let ranged_max_fraction = ranged_dmg_max.fract();
     let (ranged_dmg_min, ranged_dmg_max) = (ranged_dmg_min as u32, ranged_dmg_max as u32);

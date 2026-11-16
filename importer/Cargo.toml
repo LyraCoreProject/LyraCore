@@ -31,6 +31,7 @@ wow_dbc = { version = "0.3", features = ["vanilla"] }
 wow_world_base = { version = "=0.2.0", features = ["vanilla"] }
 
 [dev-dependencies]
+lyracore-protocol.workspace = true
 lyracore-test-support.workspace = true
 
 [lints]

@@ -148,6 +148,14 @@ fn apply_spell_field(spell: &mut Spell, field: &str, value: &FieldValue) -> Resu
         "duration_index" => spell.duration_index = as_u32(field, value)?,
         "category" => spell.category = as_u32(field, value)?,
         "category_cooldown_ms" => spell.category_cooldown_ms = as_u32(field, value)?,
+        "equipped_item_class" => spell.equipped_item_class = as_i32(field, value)?,
+        "equipped_item_subclass_mask" => spell.equipped_item_subclass_mask = as_u32(field, value)?,
+        "equipped_item_inventory_mask" => {
+            spell.equipped_item_inventory_mask = as_u32(field, value)?
+        }
+        "attributes_ex_3" => spell.attributes_ex_3 = as_u32(field, value)?,
+        "attributes_ex_4" => spell.attributes_ex_4 = as_u32(field, value)?,
+        "damage_class" => spell.damage_class = as_u8(field, value)?,
 
         "custom_flags" => spell.custom_flags = as_u32(field, value)?,
         "min_target_level" => spell.min_target_level = as_u32(field, value)?,
