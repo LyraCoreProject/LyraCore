@@ -14,7 +14,7 @@ export type FieldType =
 export interface Column {
   readonly column: string;
   readonly type: FieldType;
-  readonly defaultValue?: number | string;
+  readonly defaultValue?: number | string | boolean;
 }
 
 // The Package API does not claim the combo-point columns.
