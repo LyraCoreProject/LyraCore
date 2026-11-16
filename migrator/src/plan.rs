@@ -18,8 +18,7 @@ const QUEST_STATUS_FAILED: u32 = 5;
 const ENCHANTMENT_WORDS_PER_SLOT: usize = 3;
 const TEMPORARY_ENCHANTMENT_SLOT: usize = 1;
 const HUNTER_CLASS: u8 = 3;
-// Vanilla MaNGOS keeps the active pet in slot 0, stabled pets in slots 1 and 2, and a dismissed
-// pet in slot 100.
+// Vanilla MaNGOS pet slots: 0 active, 1 and 2 stabled, 100 dismissed.
 const ACTIVE_PET_SLOT: u32 = 0;
 const STABLE_SLOTS: std::ops::RangeInclusive<u32> = 1..=2;
 const SOCIAL_FLAG_FRIEND: u32 = 0x1;
