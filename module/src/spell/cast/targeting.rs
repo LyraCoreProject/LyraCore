@@ -886,6 +886,7 @@ pub(crate) fn apply_effect(
         | EffectKind::AuraSelfResurrect
         | EffectKind::AuraTransform
         | EffectKind::AuraModPowerRegenPct
+        | EffectKind::AuraDamageShield
         | EffectKind::AuraModPowerRegen
         | EffectKind::AuraModHealthRegen
         | EffectKind::AuraModRegen

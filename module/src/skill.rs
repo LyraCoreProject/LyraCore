@@ -451,7 +451,10 @@ pub(crate) fn gain_weapon_skill(
             equipped_weapon_skill_line_at(ctx, attacker.guid, equip_slot::OFFHAND)
         }
         HitSource::Ranged => equipped_weapon_skill_line_at(ctx, attacker.guid, equip_slot::RANGED),
-        HitSource::MeleeSpell | HitSource::Spell | HitSource::Triggered => None,
+        HitSource::MeleeSpell
+        | HitSource::Spell
+        | HitSource::Triggered
+        | HitSource::DamageShield => None,
     };
     let Some(line) = line else {
         return;

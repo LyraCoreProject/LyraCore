@@ -326,6 +326,7 @@ fn run_spell_effects(
         || (hdr.negative() && hdr.cast_flags & (CAST_FLAG_BINARY | CAST_FLAG_MAGIC_HIT) != 0);
     let mut target_rolls: std::collections::HashMap<u64, AttackOutcome> =
         std::collections::HashMap::new();
+    let mut shield_targets = std::collections::BTreeSet::new();
     // vmangos rolls the main hand per target, landed or avoided. LyraCore skips a Chance on Hit cast.
     let rolls_weapon =
         hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0 && !matches!(origin, CastOrigin::ChanceOnHit);
@@ -418,6 +419,9 @@ fn run_spell_effects(
                 ItemGrantOutcome::Granted => item_grants += 1,
                 ItemGrantOutcome::Refused => item_refused = true,
             }
+            if t != caster_guid && hit.dealt > 0 && hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0 {
+                shield_targets.insert(t);
+            }
             remember_hit_target(&mut hit_targets, &mut seen_hit_targets, t);
             if t == target_guid {
                 total_damage = total_damage.saturating_add(hit.dealt);
@@ -485,6 +489,15 @@ fn run_spell_effects(
             ..SpellCastEvent::signal(ctx, caster_guid, hdr.spell_id, SpellCastEventKind::Go)
         },
     );
+    finish_weapon_hits(ctx, caster_guid, weapon_targets, shield_targets);
+}
+
+fn finish_weapon_hits(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    weapon_targets: Vec<u64>,
+    shield_targets: std::collections::BTreeSet<u64>,
+) {
     for target in weapon_targets {
         crate::spell::chance_on_hit::roll_chance_on_hit(
             ctx,
@@ -492,6 +505,9 @@ fn run_spell_effects(
             target,
             crate::items::equip_slot::MAINHAND,
         );
+    }
+    for target in shield_targets {
+        crate::combat::damage_shield::reflect(ctx, caster_guid, target);
     }
 }
 

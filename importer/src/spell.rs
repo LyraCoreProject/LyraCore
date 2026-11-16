@@ -9,6 +9,9 @@ mod aura_test_support;
 #[cfg(test)]
 #[path = "spell_aura_tests.rs"]
 mod aura_tests;
+#[cfg(test)]
+#[path = "spell_shield_tests.rs"]
+mod shield_tests;
 
 #[cfg(test)]
 use crate::spell_dbc::read_spells;
@@ -36,27 +39,27 @@ use std::path::Path;
 
 use lyracore_shared::packing::power_type;
 use lyracore_shared::spell::taxonomy::{
-    A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MANA_REGEN_INTERRUPT, A_MOD_COMBAT,
-    A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN, A_MOD_DAMAGE_TAKEN_FLAT,
-    A_MOD_HEALING, A_MOD_HEALING_TAKEN, A_MOD_HEALTH_POWER, A_MOD_HEALTH_REGEN,
-    A_MOD_HEALTH_REGEN_PCT, A_MOD_POWER_REGEN, A_MOD_POWER_REGEN_PCT, A_MOD_REGEN,
-    A_MOD_RESISTANCE, A_MOD_SCHOOL_CRIT, A_MOD_SKILL, A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT,
-    A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER,
-    A_PROC_DAMAGE, A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT,
-    A_TRANSFORM, CAST_FLAG_AREA_AURA, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER,
-    CAST_FLAG_ITEM_TARGET, CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_RIGHTEOUSNESS,
-    CAST_FLAG_WEAPON_PROCS, COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DODGE, COMBAT_HIT,
-    COMBAT_RANGED_ATTACK_POWER, COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS,
-    E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL,
-    E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL,
-    E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
-    E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED,
-    E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_PET,
-    E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN,
-    P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
-    P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK,
-    P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
-    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
+    A_ABSORB, A_CONTROL, A_DAMAGE_SHIELD, A_FLAG, A_IMMUNITY, A_INERT, A_MANA_REGEN_INTERRUPT,
+    A_MOD_COMBAT, A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN,
+    A_MOD_DAMAGE_TAKEN_FLAT, A_MOD_HEALING, A_MOD_HEALING_TAKEN, A_MOD_HEALTH_POWER,
+    A_MOD_HEALTH_REGEN, A_MOD_HEALTH_REGEN_PCT, A_MOD_POWER_REGEN, A_MOD_POWER_REGEN_PCT,
+    A_MOD_REGEN, A_MOD_RESISTANCE, A_MOD_SCHOOL_CRIT, A_MOD_SKILL, A_MOD_SPEED, A_MOD_STAT,
+    A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL,
+    A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT,
+    A_SPELLMOD_PCT, A_TRANSFORM, CAST_FLAG_AREA_AURA, CAST_FLAG_CHANNELED,
+    CAST_FLAG_COMBO_FINISHER, CAST_FLAG_ITEM_TARGET, CAST_FLAG_RANGED_AUTO_REPEAT,
+    CAST_FLAG_RIGHTEOUSNESS, CAST_FLAG_WEAPON_PROCS, COMBAT_ATTACK_POWER, COMBAT_CRIT,
+    COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_SPELL_CRIT, COMBAT_THREAT,
+    E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM,
+    E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET,
+    E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING,
+    E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT,
+    E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE,
+    E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT,
+    M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG,
+    P_FLAT_MANA, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW,
+    P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED,
+    SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STANCE_BATTLE,
     STANCE_BEAR, STANCE_BERSERKER, STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL,
     T_AREA_ALLY, T_AREA_ENEMY, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
@@ -85,6 +88,7 @@ fn form_to_stance(form_id: i32) -> Option<i32> {
 // AttributesEx1 bits 0x04 and 0x40 both mark a channeled spell.
 const ATTR_EX1_CHANNELED_MASK: u32 = 0x0000_0044;
 const ATTR_EX1_EXCLUDE_CASTER: u32 = 0x0008_0000;
+const ATTR_EX1_IMMUNITY_TO_HOSTILE_AND_FRIENDLY: u32 = 0x0001_0000;
 // AttributesEx1 0x0010_0000 and 0x0040_0000 mark a finishing move.
 const ATTR_EX1_FINISHER_MASK: u32 = 0x0050_0000;
 const ATTR_EX2_AUTOREPEAT: u32 = 0x0000_0020;
@@ -1090,7 +1094,15 @@ fn push_spell_effect_rows(
             wrapper_to_rank.entry(spell_id).or_insert(trigger_spell);
         }
         let effect_mechanic = s.effect_mechanic[i] as u8;
-        let p1 = if kind == A_MOD_REGEN {
+        // docs/schema.md#damage-shields gives this A_IMMUNITY p1 encoding.
+        let p1 = if kind == A_IMMUNITY {
+            s.effect_aura[i] as i32
+                | if s.attributes_ex1 & ATTR_EX1_IMMUNITY_TO_HOSTILE_AND_FRIENDLY != 0 {
+                    0x100
+                } else {
+                    0
+                }
+        } else if kind == A_MOD_REGEN {
             if s.effect_amplitude[i] == 0 {
                 5000
             } else {
@@ -1695,6 +1707,7 @@ fn kind_name(kind: u8) -> &'static str {
         A_PROC_DAMAGE => "A_PROC_DAMAGE",
         A_SELF_RESURRECT => "A_SELF_RESURRECT",
         A_MOD_POWER_REGEN_PCT => "A_MOD_POWER_REGEN_PCT",
+        A_DAMAGE_SHIELD => "A_DAMAGE_SHIELD",
         A_MOD_POWER_REGEN => "A_MOD_POWER_REGEN",
         A_MOD_HEALTH_REGEN => "A_MOD_HEALTH_REGEN",
         A_MOD_REGEN => "A_MOD_REGEN",
@@ -2043,10 +2056,15 @@ mod tests {
         archive.build(path.join("dbc.MPQ")).unwrap();
         let source = crate::vmangos_spell::fixture();
         let connection = source.fixture_connection();
-        connection.execute_batch("DELETE FROM spell_template; INSERT INTO spell_template (entry,build,name,effect1,effectApplyAuraName1,effectBasePoints1,effectDieSides1,effectImplicitTargetA1,equippedItemClass) VALUES (7598,5875,'Critical fixture',6,52,1,1,1,-1),(18378,5875,'Mana regeneration fixture',6,85,7,1,1,-1); INSERT INTO spell_template (entry,build,name,effect3,effectApplyAuraName3,effectBasePoints3,effectDieSides3,effectImplicitTargetA3,equippedItemClass) VALUES (12956,5875,'Health regeneration fixture',6,161,2,1,1,-1)").unwrap();
+        connection.execute_batch("DELETE FROM spell_template; INSERT INTO spell_template (entry,build,name,effect1,effectApplyAuraName1,effectBasePoints1,effectDieSides1,effectImplicitTargetA1,equippedItemClass) VALUES (7598,5875,'Critical fixture',6,52,1,1,1,-1),(15438,5875,'Thorns',6,15,2,1,1,-1),(18378,5875,'Mana regeneration fixture',6,85,7,1,1,-1); INSERT INTO spell_template (entry,build,name,effect3,effectApplyAuraName3,effectBasePoints3,effectDieSides3,effectImplicitTargetA3,equippedItemClass) VALUES (12956,5875,'Health regeneration fixture',6,161,2,1,1,-1)").unwrap();
         let plans = [
             world_plan(&source, path.to_str().unwrap()),
-            selected_world_plan(&source, path.to_str().unwrap(), &[7598, 18378, 12956], &[]),
+            selected_world_plan(
+                &source,
+                path.to_str().unwrap(),
+                &[7598, 15438, 18378, 12956],
+                &[],
+            ),
         ];
         std::fs::remove_dir_all(path).unwrap();
         for plan in plans {
@@ -2072,6 +2090,7 @@ mod tests {
             for (spell, index, kind, amount) in [
                 (18378, 0, A_MOD_POWER_REGEN, 8),
                 (12956, 2, A_MOD_HEALTH_REGEN, 3),
+                (15438, 0, A_DAMAGE_SHIELD, 3),
             ] {
                 let actual = db.query_row("SELECT kind,base_points,period_ms,equip_supported FROM game_spell_effect WHERE spell_id=?1 AND effect_index=?2",[spell,index],|row| Ok((row.get::<_,u8>(0)?,row.get::<_,i32>(1)?,row.get::<_,u32>(2)?,row.get::<_,bool>(3)?))).unwrap();
                 assert_eq!(actual, (kind, amount, 0, true));
@@ -2109,13 +2128,9 @@ mod tests {
 
     #[test]
     fn equip_review_unsupported_cast_modifiers_retain_an_aura_kind() {
-        for (spell, aura, points, mask) in [
-            (467, 15, 2, 0),
-            (7294, 15, 4, 0),
-            (23727, 55, 0, 0),
-            (14097, 102, 44, 4),
-            (14097, 131, 44, 4),
-        ] {
+        for (spell, aura, points, mask) in
+            [(23727, 55, 0, 0), (14097, 102, 44, 4), (14097, 131, 44, 4)]
+        {
             let effect = equip_review_effect(spell, aura, points, mask, (6, 1, 0));
             assert!(
                 effect.kind & 0x80 != 0,
@@ -3228,7 +3243,7 @@ mod tests {
             (8, 5707, 9, 0, (6, 1, 0), false),
             (13, 7685, 3, 4, (6, 1, 0), true),
             (14, 5102, -2, 1, (6, 1, 0), true),
-            (15, 15438, 2, 0, (6, 1, 0), false),
+            (15, 15438, 2, 0, (6, 1, 0), true),
             (17, 12418, 17, 0, (6, 1, 0), false),
             (19, 17623, 999, 4, (6, 1, 0), false),
             (22, 12956, 9, 32, (6, 1, 0), true),
@@ -3387,10 +3402,10 @@ mod tests {
     }
 
     #[test]
-    fn equip_review_21142_damage_shields_are_inert_instead_of_absorbing() {
+    fn equip_review_21142_damage_shields_reflect_instead_of_absorbing() {
         assert_eq!(
             equip_review_effect(21142, 15, 4, 0, (6, 1, 0)).kind,
-            A_INERT
+            A_DAMAGE_SHIELD
         );
     }
 

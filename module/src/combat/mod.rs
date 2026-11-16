@@ -1,5 +1,6 @@
 mod attack_table;
 pub(crate) mod damage;
+pub(crate) mod damage_shield;
 pub(crate) mod death;
 pub(crate) mod energy;
 pub(crate) mod engage;

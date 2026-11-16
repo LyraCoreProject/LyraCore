@@ -76,6 +76,7 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         | ModResistanceOfStatPercent => A_MOD_RESISTANCE,
 
         SchoolAbsorb | ManaShield => A_ABSORB,
+        DamageShield => A_DAMAGE_SHIELD,
 
         ModAttackPower | ModRangedAttackPower => A_MOD_COMBAT,
         ModCritPercent | ModSpellCritChance => A_MOD_COMBAT,
@@ -187,7 +188,8 @@ pub fn equip_aura_supported(aura: u32, misc: u32, equipment: [u32; 3]) -> bool {
             | ModRegen
             | ModHealthRegenPercent
             | ModRegenDuringCombat
-            | ModManaRegenInterrupt,
+            | ModManaRegenInterrupt
+            | DamageShield,
         ) => true,
         _ => false,
     }
