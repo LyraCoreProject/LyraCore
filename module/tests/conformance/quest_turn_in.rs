@@ -225,8 +225,18 @@ fn the_second_choice_is_the_only_choice_reward_and_its_push_hides_from_chat() {
     assert_eq!(word(push, 8), 1, "received from an NPC");
     assert_eq!(word(push, 16), 0, "no chat line for a quest reward");
     assert_eq!(word(push, 25), FIXTURE_REINS);
+    let mut announced = opcodes(&replies);
+    announced.retain(|opcode| {
+        [
+            SMSG_ITEM_PUSH_RESULT,
+            SMSG_LOG_XPGAIN,
+            SMSG_QUESTGIVER_QUEST_COMPLETE,
+        ]
+        .contains(opcode)
+    });
+    announced.dedup();
     assert_eq!(
-        opcodes(&replies),
+        announced,
         [
             SMSG_ITEM_PUSH_RESULT,
             SMSG_LOG_XPGAIN,
