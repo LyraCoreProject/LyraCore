@@ -3,9 +3,9 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::read::{Ban, LegacyAccount, LegacyCharacter, LegacyItem, LegacyPosition};
+use crate::read::{Ban, LegacyAccount, LegacyCharacter, LegacyItem, LegacyLetter, LegacyPosition};
 
-pub(crate) const PLAN_FORMAT_VERSION: u32 = 1;
+pub(crate) const PLAN_FORMAT_VERSION: u32 = 2;
 // Linux limits one argv string to 128 KiB; `spacetime call` passes each argument as one.
 const MAX_REDUCER_ARGUMENT_BYTES: usize = 120_000;
 const SOULBOUND_FLAG: u32 = 0x1;
@@ -17,9 +17,13 @@ const QUEST_STATUS_INCOMPLETE: u32 = 3;
 const QUEST_STATUS_FAILED: u32 = 5;
 const ENCHANTMENT_WORDS_PER_SLOT: usize = 3;
 const TEMPORARY_ENCHANTMENT_SLOT: usize = 1;
+const MAIL_NORMAL: u8 = 0;
+const MAIL_AUCTION: u8 = 2;
+const MAIL_CREATURE: u8 = 3;
+const MAIL_GAMEOBJECT: u8 = 4;
 
 // SATS JSON for Option: {"some": value} or {"none": []}.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) enum SatsOption<T> {
     #[serde(rename = "some")]
     Some(T),
@@ -74,6 +78,38 @@ pub(crate) struct MigratedItem {
     pub(crate) enchant_id: u32,
     pub(crate) random_property_id: u32,
     pub(crate) soulbound: bool,
+    pub(crate) text: SatsOption<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct MigratedAttachment {
+    pub(crate) entry: u32,
+    pub(crate) stack_count: u32,
+    pub(crate) durability: u32,
+    pub(crate) enchant_id: u32,
+    pub(crate) random_property_id: u32,
+    pub(crate) soulbound: bool,
+    pub(crate) text: SatsOption<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub(crate) struct LetterMigration {
+    pub(crate) source: String,
+    pub(crate) source_mail_id: u64,
+    pub(crate) source_item_guid: u64,
+    pub(crate) recipient_source_guid: u64,
+    pub(crate) sender_kind: u8,
+    pub(crate) sender_source_guid: u64,
+    pub(crate) sender_entry: u32,
+    pub(crate) subject: String,
+    pub(crate) body: String,
+    pub(crate) attachment: SatsOption<MigratedAttachment>,
+    pub(crate) money: u32,
+    pub(crate) cod: u32,
+    pub(crate) checked: u32,
+    pub(crate) mail_template_id: u32,
+    pub(crate) expire_secs: u64,
+    pub(crate) deliver_secs: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -168,6 +204,7 @@ pub(crate) struct Plan {
     pub(crate) source: String,
     pub(crate) accounts: Vec<MigratedAccount>,
     pub(crate) characters: Vec<CharacterMigration>,
+    pub(crate) letters: Vec<LetterMigration>,
     pub(crate) findings: Vec<Finding>,
 }
 
@@ -187,6 +224,18 @@ pub(crate) struct Catalogue {
     // Upper-case username to little-endian salt and verifier hex.
     pub(crate) accounts: HashMap<String, (String, String)>,
     pub(crate) migrated: HashSet<String>,
+    // The migrated keys whose Character still exists.
+    pub(crate) live_migrated: HashSet<String>,
+}
+
+impl Catalogue {
+    pub(crate) fn migrated_guids(&self, source: &str) -> HashSet<u64> {
+        let prefix = format!("{source}/");
+        self.live_migrated
+            .iter()
+            .filter_map(|key| key.strip_prefix(&prefix)?.parse().ok())
+            .collect()
+    }
 }
 
 // realmd stores big-endian hex without leading zeros; the Module wants 32 little-endian bytes.
@@ -250,14 +299,22 @@ pub(crate) fn build(
         }
     }
     let mut planned = Vec::new();
+    let mut recipients = Vec::new();
     let mut names = HashSet::new();
     for character in characters {
         let subject = format!("Character {} ({})", character.name, character.guid);
-        if catalogue
-            .migrated
-            .contains(&format!("{source}/{}", character.guid))
-        {
-            report.add(&subject, Outcome::Skipped, "already migrated");
+        let key = format!("{source}/{}", character.guid);
+        if catalogue.migrated.contains(&key) {
+            if catalogue.live_migrated.contains(&key) {
+                report.add(&subject, Outcome::Skipped, "already migrated");
+                recipients.push(character);
+            } else {
+                report.add(
+                    &subject,
+                    Outcome::Skipped,
+                    "already migrated, and its player deleted it",
+                );
+            }
             continue;
         }
         let Some(account) = migrated_accounts.get(&character.account) else {
@@ -285,8 +342,29 @@ pub(crate) fn build(
             Ok(migration) => {
                 planned.push(migration);
                 report.0.append(&mut character_findings);
+                recipients.push(character);
             }
             Err(reason) => report.add(&subject, Outcome::Refused, reason.to_string()),
+        }
+    }
+    let mut senders = catalogue.migrated_guids(source);
+    senders.extend(recipients.iter().map(|character| character.guid));
+    let mut letters = Vec::new();
+    for character in recipients {
+        for letter in &character.letters {
+            let subject = format!("Letter {} to {}", letter.id, character.name);
+            match migrated_letters(
+                source,
+                catalogue,
+                &senders,
+                character.guid,
+                letter,
+                &subject,
+                &mut report,
+            ) {
+                Ok(mut migrated) => letters.append(&mut migrated),
+                Err(reason) => report.add(&subject, Outcome::Refused, reason.to_string()),
+            }
         }
     }
     let mut accounts: Vec<_> = migrated_accounts.into_values().collect();
@@ -296,6 +374,7 @@ pub(crate) fn build(
         source: source.to_string(),
         accounts,
         characters: planned,
+        letters,
         findings,
     }
 }
@@ -640,9 +719,6 @@ fn items(
         .collect();
     let mut migrated = Vec::new();
     for item in items {
-        if !catalogue.items.contains(&item.entry) {
-            bail!("Item entry {} is not imported", item.entry);
-        }
         let location = if item.bag_guid == 0 {
             MigratedItemLocation::Slot(item.slot)
         } else {
@@ -658,44 +734,170 @@ fn items(
                 slot: item.slot,
             })
         };
-        let random_property_id = u32::try_from(item.random_property_id).map_err(|_| {
-            anyhow!(
-                "Item {} has random suffix {}, which 1.12 does not have",
-                item.item_guid,
-                item.random_property_id
-            )
-        })?;
-        let enchantment = |slot: usize| {
-            item.enchantments
-                .get(slot * ENCHANTMENT_WORDS_PER_SLOT)
-                .copied()
-                .unwrap_or(0)
-        };
-        if enchantment(TEMPORARY_ENCHANTMENT_SLOT) != 0 {
-            report.add(
-                subject,
-                Outcome::Dropped,
-                format!("temporary enchantment on Item {}", item.item_guid),
-            );
-        }
-        if item.text_id != 0 {
-            report.add(
-                subject,
-                Outcome::Dropped,
-                format!("text {} of Item {}", item.text_id, item.item_guid),
-            );
-        }
+        let state = attachment(catalogue, item, subject, report)?;
         migrated.push(MigratedItem {
-            entry: item.entry,
+            entry: state.entry,
             location,
-            stack_count: item.count.max(1),
-            durability: item.durability,
-            enchant_id: enchantment(0),
-            random_property_id,
-            soulbound: item.flags & SOULBOUND_FLAG != 0,
+            stack_count: state.stack_count,
+            durability: state.durability,
+            enchant_id: state.enchant_id,
+            random_property_id: state.random_property_id,
+            soulbound: state.soulbound,
+            text: state.text,
         });
     }
     Ok(migrated)
+}
+
+fn attachment(
+    catalogue: &Catalogue,
+    item: &LegacyItem,
+    subject: &str,
+    report: &mut Findings,
+) -> Result<MigratedAttachment> {
+    if !catalogue.items.contains(&item.entry) {
+        bail!("Item entry {} is not imported", item.entry);
+    }
+    let random_property_id = u32::try_from(item.random_property_id).map_err(|_| {
+        anyhow!(
+            "Item {} has random suffix {}, which 1.12 does not have",
+            item.item_guid,
+            item.random_property_id
+        )
+    })?;
+    let enchantment = |slot: usize| {
+        item.enchantments
+            .get(slot * ENCHANTMENT_WORDS_PER_SLOT)
+            .copied()
+            .unwrap_or(0)
+    };
+    if enchantment(TEMPORARY_ENCHANTMENT_SLOT) != 0 {
+        report.add(
+            subject,
+            Outcome::Dropped,
+            format!("temporary enchantment on Item {}", item.item_guid),
+        );
+    }
+    if item.text_id != 0 && item.text.is_none() {
+        report.add(
+            subject,
+            Outcome::Dropped,
+            format!(
+                "text {} of Item {}, which the source does not hold",
+                item.text_id, item.item_guid
+            ),
+        );
+    }
+    Ok(MigratedAttachment {
+        entry: item.entry,
+        stack_count: item.count.max(1),
+        durability: item.durability,
+        enchant_id: enchantment(0),
+        random_property_id,
+        soulbound: item.flags & SOULBOUND_FLAG != 0,
+        text: item.text.clone().into(),
+    })
+}
+
+// One letter per attached Item, keyed by its item guid; the lowest guid keeps copper and price.
+fn migrated_letters(
+    source: &str,
+    catalogue: &Catalogue,
+    senders: &HashSet<u64>,
+    recipient: u64,
+    letter: &LegacyLetter,
+    subject: &str,
+    report: &mut Findings,
+) -> Result<Vec<LetterMigration>> {
+    let mut cod = letter.cod;
+    let (sender_kind, sender_source_guid, sender_entry) = match letter.message_type {
+        MAIL_NORMAL => {
+            if !senders.contains(&letter.sender) {
+                report.add(
+                    subject,
+                    Outcome::Changed,
+                    format!(
+                        "its sender {} is not migrated, so it cannot return",
+                        letter.sender
+                    ),
+                );
+                if cod > 0 {
+                    report.add(
+                        subject,
+                        Outcome::Dropped,
+                        format!("its cash on delivery price of {cod}, which nobody would receive"),
+                    );
+                    cod = 0;
+                }
+            }
+            (MAIL_NORMAL, letter.sender, 0)
+        }
+        kind @ (MAIL_AUCTION | MAIL_CREATURE | MAIL_GAMEOBJECT) => (
+            kind,
+            0,
+            u32::try_from(letter.sender)
+                .map_err(|_| anyhow!("sender entry {} is out of range", letter.sender))?,
+        ),
+        other => bail!("message type {other} has no LyraCore sender"),
+    };
+    report.dropped_ids_because(
+        subject,
+        "attachments",
+        "name an item guid with no item_instance row",
+        &letter.orphan_items,
+    );
+    let mut attachments = Vec::new();
+    for item in &letter.attachments {
+        attachments.push((
+            item.item_guid,
+            attachment(catalogue, item, subject, report)?,
+        ));
+    }
+    attachments.sort_by_key(|(item_guid, _)| *item_guid);
+    if attachments.len() > 1 {
+        report.add(
+            subject,
+            Outcome::Changed,
+            format!(
+                "arrives as {} letters, one for each Item",
+                attachments.len()
+            ),
+        );
+    }
+    let mut parts: Vec<(u64, Option<MigratedAttachment>)> = attachments
+        .into_iter()
+        .map(|(item_guid, item)| (item_guid, Some(item)))
+        .collect();
+    if parts.is_empty() {
+        parts.push((0, None));
+    }
+    parts
+        .into_iter()
+        .enumerate()
+        .map(|(index, (source_item_guid, item))| {
+            let first = index == 0;
+            let migrated = LetterMigration {
+                source: source.to_string(),
+                source_mail_id: letter.id,
+                source_item_guid,
+                recipient_source_guid: recipient,
+                sender_kind,
+                sender_source_guid,
+                sender_entry,
+                subject: letter.subject.clone(),
+                body: letter.body.clone(),
+                attachment: item.into(),
+                money: if first { letter.money } else { 0 },
+                cod: if first { cod } else { 0 },
+                checked: letter.checked,
+                mail_template_id: letter.mail_template_id,
+                expire_secs: letter.expire_secs,
+                deliver_secs: letter.deliver_secs,
+            };
+            fits_one_call(&migrated)?;
+            Ok(migrated)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -761,6 +963,7 @@ mod tests {
             reputations: Vec::new(),
             actions: Vec::new(),
             quests: Vec::new(),
+            letters: Vec::new(),
         }
     }
 
@@ -877,6 +1080,7 @@ mod tests {
             random_property_id: 0,
             durability: 20,
             text_id: 0,
+            text: None,
         };
         source.items = vec![item(500, 0, 20, 4500), item(501, 500, 3, 2589)];
         let items = &plan_one(source).characters[0].items;
@@ -906,6 +1110,7 @@ mod tests {
             random_property_id: 0,
             durability: 0,
             text_id: 0,
+            text: None,
         }];
         let plan = plan_one(source);
         assert!(plan.characters.is_empty());
@@ -1017,6 +1222,127 @@ mod tests {
                 earned_standing: 3000,
                 at_war: true
             }]
+        );
+    }
+
+    fn letter(message_type: u8, sender: u64, attachments: Vec<LegacyItem>) -> LegacyLetter {
+        LegacyLetter {
+            id: 40,
+            message_type,
+            mail_template_id: 0,
+            sender,
+            subject: "Loot".to_string(),
+            body: "Here.".to_string(),
+            attachments,
+            expire_secs: 2_000_000_000,
+            deliver_secs: 0,
+            money: 900,
+            cod: 0,
+            checked: 0,
+            orphan_items: Vec::new(),
+        }
+    }
+
+    fn letter_item(item_guid: u64, entry: u32) -> LegacyItem {
+        LegacyItem {
+            item_guid,
+            bag_guid: 0,
+            slot: 0,
+            entry,
+            count: 1,
+            flags: 0,
+            enchantments: Vec::new(),
+            random_property_id: 0,
+            durability: 0,
+            text_id: 9,
+            text: Some("Dear Migrant".to_string()),
+        }
+    }
+
+    #[test]
+    fn a_mail_with_two_items_becomes_two_letters_and_the_first_keeps_the_copper() {
+        let mut source = character();
+        source.letters = vec![letter(
+            MAIL_CREATURE,
+            1234,
+            vec![letter_item(71, 4500), letter_item(70, 2589)],
+        )];
+        let plan = plan_one(source);
+        let parts: Vec<_> = plan
+            .letters
+            .iter()
+            .map(|letter| (letter.source_item_guid, letter.money, letter.sender_entry))
+            .collect();
+        assert_eq!(parts, [(70, 900, 1234), (71, 0, 1234)]);
+        let SatsOption::Some(first) = &plan.letters[0].attachment else {
+            panic!("the first letter carries the first Item");
+        };
+        assert_eq!(first.text, SatsOption::Some("Dear Migrant".to_string()));
+    }
+
+    #[test]
+    fn a_letter_from_a_character_outside_the_migration_cannot_return() {
+        let mut source = character();
+        source.letters = vec![letter(MAIL_NORMAL, 99, Vec::new())];
+        let plan = plan_one(source);
+        assert_eq!(plan.letters[0].sender_source_guid, 99);
+        assert!(plan
+            .findings
+            .iter()
+            .any(|finding| finding.detail.contains("cannot return")));
+    }
+
+    #[test]
+    fn a_sender_migrated_in_an_earlier_run_keeps_cash_on_delivery() {
+        let mut catalogue = catalogue();
+        catalogue.migrated.insert("vmangos-main/99".to_string());
+        catalogue
+            .live_migrated
+            .insert("vmangos-main/99".to_string());
+        let mut source = character();
+        let mut cod = letter(MAIL_NORMAL, 99, vec![letter_item(70, 2589)]);
+        cod.cod = 500;
+        source.letters = vec![cod];
+        let plan = build("vmangos-main", &catalogue, &[account()], &[source]);
+        assert_eq!(plan.letters[0].cod, 500);
+    }
+
+    #[test]
+    fn a_sender_migrated_earlier_and_since_deleted_counts_as_not_migrated() {
+        let mut catalogue = catalogue();
+        catalogue.migrated.insert("vmangos-main/99".to_string());
+        let mut source = character();
+        let mut cod = letter(MAIL_NORMAL, 99, vec![letter_item(70, 2589)]);
+        cod.cod = 500;
+        source.letters = vec![cod];
+        let plan = build("vmangos-main", &catalogue, &[account()], &[source]);
+        assert_eq!(plan.letters[0].cod, 0);
+    }
+
+    #[test]
+    fn cash_on_delivery_from_a_sender_outside_the_migration_is_dropped() {
+        let mut source = character();
+        let mut cod = letter(MAIL_NORMAL, 99, vec![letter_item(70, 2589)]);
+        cod.cod = 500;
+        source.letters = vec![cod];
+        let plan = plan_one(source);
+        assert_eq!(plan.letters[0].cod, 0);
+        assert!(plan
+            .findings
+            .iter()
+            .any(|f| f.outcome == Outcome::Dropped
+                && f.detail.contains("cash on delivery price of 500")));
+    }
+
+    #[test]
+    fn a_letter_without_a_lyracore_sender_kind_is_refused() {
+        let mut source = character();
+        source.letters = vec![letter(5, 1, Vec::new())];
+        let plan = plan_one(source);
+        assert!(plan.letters.is_empty());
+        assert_eq!(
+            plan.findings.last().map(|finding| finding.outcome),
+            Some(Outcome::Refused)
         );
     }
 

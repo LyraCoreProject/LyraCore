@@ -66,6 +66,50 @@ pub struct MigratedItem {
     pub enchant_id: u32,
     pub random_property_id: u32,
     pub soulbound: bool,
+    // The Item Text of a Letter Copy.
+    pub text: Option<String>,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub struct MigratedAttachment {
+    pub entry: u32,
+    pub stack_count: u32,
+    pub durability: u32,
+    pub enchant_id: u32,
+    pub random_property_id: u32,
+    pub soulbound: bool,
+    pub text: Option<String>,
+}
+
+#[derive(SpacetimeType, Clone, Debug, PartialEq, Eq)]
+pub struct LetterMigration {
+    pub source: String,
+    pub source_mail_id: u64,
+    // Zero for a letter without an Item, otherwise the source item guid of its attachment.
+    pub source_item_guid: u64,
+    pub recipient_source_guid: u64,
+    // MailMessageType: 0 Character, 2 auction house, 3 creature, 4 GameObject.
+    pub sender_kind: u8,
+    pub sender_source_guid: u64,
+    pub sender_entry: u32,
+    pub subject: String,
+    pub body: String,
+    pub attachment: Option<MigratedAttachment>,
+    pub money: u32,
+    pub cod: u32,
+    // The source MailCheckMask.
+    pub checked: u32,
+    pub mail_template_id: u32,
+    pub expire_secs: u64,
+    pub deliver_secs: u64,
+}
+
+#[table(accessor = game_mail_migration)]
+pub struct MailMigrationRecord {
+    #[primary_key]
+    pub source_key: String,
+    pub mail_id: u64,
+    pub migrated_at: Timestamp,
 }
 
 #[derive(SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
@@ -204,6 +248,129 @@ pub fn migrate_character(
     Ok(())
 }
 
+// The recipient must already be a migrated Character.
+#[reducer]
+pub fn migrate_letter(ctx: &ReducerContext, letter: LetterMigration) -> Result<(), String> {
+    require_operator(ctx)?;
+    require_single_shard(ctx)?;
+    let source_key = format!(
+        "{}/{}",
+        source_key(&letter.source, letter.source_mail_id)?,
+        letter.source_item_guid
+    );
+    if ctx
+        .db
+        .game_mail_migration()
+        .source_key()
+        .find(&source_key)
+        .is_some()
+    {
+        return Ok(());
+    }
+    let recipient_guid = migrated_character(ctx, &letter.source, letter.recipient_source_guid)
+        .map_err(|refusal| format!("letter {source_key}: {refusal}"))?
+        .guid;
+    let (sender_guid, sender_entry) = match letter.sender_kind {
+        lyracore_shared::mail::SENDER_KIND_CHARACTER => (
+            migrated_character(ctx, &letter.source, letter.sender_source_guid)
+                .map_or(0, |sender| sender.guid),
+            0,
+        ),
+        lyracore_shared::mail::SENDER_KIND_AUCTION
+        | lyracore_shared::mail::SENDER_KIND_CREATURE
+        | lyracore_shared::mail::SENDER_KIND_GAMEOBJECT => (0, letter.sender_entry),
+        other => {
+            return Err(format!(
+                "letter {source_key}: sender kind {other} is not supported"
+            ))
+        }
+    };
+    if sender_kind_is_character(letter.sender_kind) && sender_guid == 0 && letter.cod > 0 {
+        return Err(format!(
+            "letter {source_key}: cash on delivery needs a migrated sender to receive the copper"
+        ));
+    }
+    let item = match &letter.attachment {
+        Some(attachment) => {
+            let template = checked_template(ctx, attachment.entry, attachment.stack_count)?;
+            Some((
+                attachment,
+                letter_text(ctx, attachment.text.clone())?,
+                attachment.durability.min(template.max_durability),
+            ))
+        }
+        None => None,
+    };
+    let expire_secs = i64::try_from(letter.expire_secs)
+        .map_err(|_| format!("letter {source_key}: expiry is out of range"))?;
+    let lifetime_secs = lyracore_shared::mail::expires_at_secs(0, 0, letter.cod);
+    let created_micros = expire_secs
+        .saturating_sub(lifetime_secs)
+        .saturating_mul(1_000_000);
+    let deliver_micros = i64::try_from(letter.deliver_secs.saturating_mul(1_000_000))
+        .map_err(|_| format!("letter {source_key}: delivery time is out of range"))?;
+    let read_flag = lyracore_shared::mail::CHECK_MASK_READ;
+    let mail = crate::mail::receive_letter(
+        ctx,
+        crate::Mail {
+            id: 0,
+            recipient_guid,
+            sender_guid,
+            subject: letter.subject,
+            body: letter.body,
+            item_entry: item.map_or(0, |(item, _, _)| item.entry),
+            item_stack_count: item.map_or(0, |(item, _, _)| item.stack_count),
+            item_durability: item.map_or(0, |(_, _, durability)| durability),
+            item_enchant_id: item.map_or(0, |(item, _, _)| item.enchant_id),
+            item_soulbound: item.is_some_and(|(item, _, _)| item.soulbound),
+            random_property_id: item.map_or(0, |(item, _, _)| item.random_property_id),
+            item_text_id: item.map_or(0, |(_, text_id, _)| text_id),
+            money: letter.money,
+            cod: letter.cod,
+            was_read: letter.checked & read_flag != 0,
+            created_at: Timestamp::from_micros_since_unix_epoch(created_micros),
+            sender_kind: letter.sender_kind,
+            sender_entry,
+            check_flags: letter.checked & lyracore_shared::mail::CLIENT_CHECK_MASK & !read_flag,
+            mail_template_id: letter.mail_template_id,
+            deliver_micros,
+        },
+    );
+    ctx.db.game_mail_migration().insert(MailMigrationRecord {
+        source_key,
+        mail_id: mail.id,
+        migrated_at: ctx.timestamp,
+    });
+    Ok(())
+}
+
+fn migrated_character(
+    ctx: &ReducerContext,
+    source: &str,
+    source_guid: u64,
+) -> Result<Character, String> {
+    migrated_guid(ctx, source, source_guid)?
+        .and_then(|guid| crate::helpers::character_by_guid(ctx, guid))
+        .ok_or_else(|| format!("source Character {source_guid} is not a migrated Character"))
+}
+
+fn migrated_guid(
+    ctx: &ReducerContext,
+    source: &str,
+    source_guid: u64,
+) -> Result<Option<u64>, String> {
+    Ok(ctx
+        .db
+        .game_character_migration()
+        .source_key()
+        .find(source_key(source, source_guid)?)
+        .map(|record| record.character_guid))
+}
+
+fn sender_kind_is_character(kind: u8) -> bool {
+    kind == lyracore_shared::mail::SENDER_KIND_CHARACTER
+}
+
 fn checked_template(
     ctx: &ReducerContext,
     entry: u32,
@@ -222,6 +389,10 @@ fn checked_template(
         ));
     }
     Ok(template)
+}
+
+fn letter_text(ctx: &ReducerContext, text: Option<String>) -> Result<u32, String> {
+    text.map_or(Ok(0), |text| crate::mail_text::import_text(ctx, text, 1))
 }
 
 fn require_single_shard(ctx: &ReducerContext) -> Result<(), String> {
@@ -474,7 +645,7 @@ impl Arrival<'_> {
             enchant_id: item.enchant_id,
             soulbound: item.soulbound,
             random_property_id: item.random_property_id,
-            item_text_id: 0,
+            item_text_id: letter_text(self.ctx, item.text.clone())?,
         })
     }
 

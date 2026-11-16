@@ -46,6 +46,25 @@ pub(crate) struct LegacyItem {
     pub(crate) random_property_id: i64,
     pub(crate) durability: u32,
     pub(crate) text_id: u32,
+    pub(crate) text: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LegacyLetter {
+    pub(crate) id: u64,
+    pub(crate) message_type: u8,
+    pub(crate) mail_template_id: u32,
+    pub(crate) sender: u64,
+    pub(crate) subject: String,
+    pub(crate) body: String,
+    pub(crate) attachments: Vec<LegacyItem>,
+    // mail_items rows whose item guid has no item_instance row.
+    pub(crate) orphan_items: Vec<u64>,
+    pub(crate) expire_secs: u64,
+    pub(crate) deliver_secs: u64,
+    pub(crate) money: u32,
+    pub(crate) cod: u32,
+    pub(crate) checked: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -116,6 +135,7 @@ pub(crate) struct LegacyCharacter {
     pub(crate) reputations: Vec<LegacyReputation>,
     pub(crate) actions: Vec<LegacyAction>,
     pub(crate) quests: Vec<LegacyQuest>,
+    pub(crate) letters: Vec<LegacyLetter>,
 }
 
 enum Appearance {
@@ -152,6 +172,11 @@ pub(crate) struct Dialect {
     ban_account: &'static str,
     ban_date: &'static str,
     ban_expiry: &'static str,
+    mail_type: &'static str,
+    mail_template: &'static str,
+    mail_sender: &'static str,
+    mail_receiver: &'static str,
+    mail_text: &'static str,
 }
 
 const VMANGOS: Dialect = Dialect {
@@ -170,6 +195,11 @@ const VMANGOS: Dialect = Dialect {
     ban_account: "id",
     ban_date: "bandate",
     ban_expiry: "unbandate",
+    mail_type: "message_type",
+    mail_template: "mail_template_id",
+    mail_sender: "sender_guid",
+    mail_receiver: "receiver_guid",
+    mail_text: "item_text_id",
 };
 
 const CMANGOS: Dialect = Dialect {
@@ -188,6 +218,11 @@ const CMANGOS: Dialect = Dialect {
     ban_account: "account_id",
     ban_date: "banned_at",
     ban_expiry: "expires_at",
+    mail_type: "messageType",
+    mail_template: "mailTemplateId",
+    mail_sender: "sender",
+    mail_receiver: "receiver",
+    mail_text: "itemTextId",
 };
 
 impl CharacterFlags {
@@ -365,6 +400,28 @@ impl Dialect {
                 ],
             ),
             ("character_queststatus", quest),
+            (
+                "mail",
+                vec![
+                    ("id", Integer),
+                    (self.mail_type, Integer),
+                    (self.mail_template, Integer),
+                    (self.mail_sender, Integer),
+                    (self.mail_receiver, Integer),
+                    ("subject", Text),
+                    (self.mail_text, Integer),
+                    ("expire_time", Integer),
+                    ("deliver_time", Integer),
+                    ("money", Integer),
+                    ("cod", Integer),
+                    ("checked", Integer),
+                ],
+            ),
+            (
+                "mail_items",
+                vec![("mail_id", Integer), ("item_guid", Integer)],
+            ),
+            ("item_text", vec![("id", Integer), ("text", Text)]),
         ]
     }
 }
@@ -618,16 +675,12 @@ fn read_character(
             })
             .collect::<Result<_>>()?,
         quests: read_quests(database, dialect, guid)?,
+        letters: read_letters(database, dialect, guid)?,
     })
 }
 
-// MaNGOS joins inventory to item_instance by item guid alone and skips a row without a match.
-fn read_items(
-    database: &mut dyn SourceDatabase,
-    dialect: &Dialect,
-    guid: u64,
-) -> Result<(Vec<LegacyItem>, Vec<u64>)> {
-    let columns = [
+fn item_columns(dialect: &Dialect) -> [&'static str; 8] {
+    [
         "guid",
         dialect.item_entry,
         "count",
@@ -636,7 +689,119 @@ fn read_items(
         dialect.item_random_property,
         "durability",
         dialect.item_text,
-    ];
+    ]
+}
+
+fn legacy_item(
+    database: &mut dyn SourceDatabase,
+    dialect: &Dialect,
+    instance: &Row,
+    bag_guid: u64,
+    slot: u8,
+) -> Result<LegacyItem> {
+    let text_id = instance.number(dialect.item_text)?;
+    Ok(LegacyItem {
+        item_guid: instance.number("guid")?,
+        bag_guid,
+        slot,
+        entry: instance.number(dialect.item_entry)?,
+        count: instance.number("count")?,
+        flags: instance.number("flags")?,
+        enchantments: instance.words("enchantments")?,
+        random_property_id: instance.int(dialect.item_random_property)?,
+        durability: instance.number("durability")?,
+        text_id,
+        text: item_text(database, text_id)?,
+    })
+}
+
+fn item_text(database: &mut dyn SourceDatabase, text_id: u32) -> Result<Option<String>> {
+    if text_id == 0 {
+        return Ok(None);
+    }
+    database
+        .select(
+            "item_text",
+            &["text"],
+            Filter::Equals("id", u64::from(text_id)),
+        )?
+        .first()
+        .map(|row| row.text("text"))
+        .transpose()
+}
+
+fn read_letters(
+    database: &mut dyn SourceDatabase,
+    dialect: &Dialect,
+    guid: u64,
+) -> Result<Vec<LegacyLetter>> {
+    let mail = database.select(
+        "mail",
+        &[
+            "id",
+            dialect.mail_type,
+            dialect.mail_template,
+            dialect.mail_sender,
+            "subject",
+            dialect.mail_text,
+            "expire_time",
+            "deliver_time",
+            "money",
+            "cod",
+            "checked",
+        ],
+        Filter::Equals(dialect.mail_receiver, guid),
+    )?;
+    let mut letters = Vec::new();
+    for row in mail {
+        let id: u64 = row.number("id")?;
+        let mut attachments = Vec::new();
+        let mut orphan_items = Vec::new();
+        for attachment in
+            database.select("mail_items", &["item_guid"], Filter::Equals("mail_id", id))?
+        {
+            let item_guid: u64 = attachment.number("item_guid")?;
+            let instance = database
+                .select(
+                    "item_instance",
+                    &item_columns(dialect),
+                    Filter::Equals("guid", item_guid),
+                )?
+                .into_iter()
+                .next();
+            match instance {
+                Some(instance) => {
+                    attachments.push(legacy_item(database, dialect, &instance, 0, 0)?)
+                }
+                None => orphan_items.push(item_guid),
+            }
+        }
+        letters.push(LegacyLetter {
+            id,
+            message_type: row.number(dialect.mail_type)?,
+            mail_template_id: row.number(dialect.mail_template)?,
+            sender: row.number(dialect.mail_sender)?,
+            subject: row.text("subject")?,
+            body: item_text(database, row.number(dialect.mail_text)?)?.unwrap_or_default(),
+            attachments,
+            orphan_items,
+            expire_secs: row.number("expire_time")?,
+            deliver_secs: row.number("deliver_time")?,
+            money: row.number("money")?,
+            cod: row.number("cod")?,
+            checked: row.number("checked")?,
+        });
+    }
+    Ok(letters)
+}
+
+// MaNGOS joins inventory to item_instance by item guid alone and skips a row without a match.
+fn read_items(
+    database: &mut dyn SourceDatabase,
+    dialect: &Dialect,
+    guid: u64,
+) -> Result<(Vec<LegacyItem>, Vec<u64>)> {
+    let columns = item_columns(dialect);
     let instances: BTreeMap<u64, Row> = database
         .select(
             "item_instance",
@@ -669,18 +834,13 @@ fn read_items(
                 instance
             }
         };
-        items.push(LegacyItem {
-            item_guid,
-            bag_guid: slot.number("bag")?,
-            slot: slot.number("slot")?,
-            entry: instance.number(dialect.item_entry)?,
-            count: instance.number("count")?,
-            flags: instance.number("flags")?,
-            enchantments: instance.words("enchantments")?,
-            random_property_id: instance.int(dialect.item_random_property)?,
-            durability: instance.number("durability")?,
-            text_id: instance.number(dialect.item_text)?,
-        });
+        items.push(legacy_item(
+            database,
+            dialect,
+            instance,
+            slot.number("bag")?,
+            slot.number("slot")?,
+        )?);
     }
     Ok((items, orphans))
 }
@@ -921,6 +1081,7 @@ pub(crate) mod tests {
                 random_property_id: 0,
                 durability: 0,
                 text_id: 0,
+                text: None,
             }]
         );
     }
