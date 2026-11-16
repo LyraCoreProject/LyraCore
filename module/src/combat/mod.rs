@@ -69,14 +69,14 @@ pub(crate) use swing::{
 };
 pub use swing::{ranged_impact, tick_melee};
 pub(crate) use tables::{
-    apply_offhand_penalty, armor_mitigated, armor_mitigation_pct, is_rage_user, is_translating,
-    melee_attack_power_for, player_swing_range_ap, rage_from_damage, ranged_sheet_values,
-    regen_entity_health, regen_entity_health_in_combat, regen_entity_power, scale_swing_for_rank,
-    swing_time_with_haste, weapon_swing_range_ap, RegenWindow, AUTO_SHOT_PROJECTILE_SPEED,
-    CLASS_MAGE, CLASS_PRIEST, CLASS_WARLOCK, CREATURE_MELEE_MAX, CREATURE_MELEE_MIN, CRIT_MULT,
-    CRUSH_DAMAGE_PCT, GLANCING_DAMAGE_PCT, MELEE_LEEWAY_WINDOW_MS, MELEE_RANGE_LEEWAY_CREATURE_SQ,
-    MELEE_RANGE_LEEWAY_SQ, MELEE_RANGE_SQ, RANGED_INITIAL_SHOT_MS, RANGED_RANGE_SQ,
-    WAND_PROJECTILE_SPEED,
+    apply_offhand_penalty, armor_mitigated, armor_mitigation_pct, feral_swing_range_ap,
+    is_rage_user, is_translating, melee_attack_power_for, player_swing_range_ap, rage_from_damage,
+    ranged_sheet_values, regen_entity_health, regen_entity_health_in_combat, regen_entity_power,
+    scale_swing_for_rank, swing_time_with_haste, weapon_swing_range_ap, RegenWindow,
+    AUTO_SHOT_PROJECTILE_SPEED, CLASS_MAGE, CLASS_PRIEST, CLASS_WARLOCK, CREATURE_MELEE_MAX,
+    CREATURE_MELEE_MIN, CRIT_MULT, CRUSH_DAMAGE_PCT, GLANCING_DAMAGE_PCT, MELEE_LEEWAY_WINDOW_MS,
+    MELEE_RANGE_LEEWAY_CREATURE_SQ, MELEE_RANGE_LEEWAY_SQ, MELEE_RANGE_SQ, RANGED_INITIAL_SHOT_MS,
+    RANGED_RANGE_SQ, WAND_PROJECTILE_SPEED,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use tables::{regen_health_in_combat, swing_profile};

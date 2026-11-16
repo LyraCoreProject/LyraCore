@@ -414,17 +414,20 @@ pub struct MeleeAttack {
     pub swing_error: u8,
 }
 
-/// A weapon change in combat restarts its hand's swing; vmangos Player::_ApplyItemBonuses.
+/// A usable weapon's change in combat restarts its hand's swing; vmangos Player::_ApplyItemBonuses.
 pub(crate) fn weapon_changed(ctx: &ReducerContext, character_guid: u64, slot: u8) {
     use crate::items::equip_slot::{MAINHAND, OFFHAND, RANGED};
 
-    let in_combat = ctx
+    let applies = ctx
         .db
         .game_world_entity()
         .guid()
         .find(character_guid)
         .is_some_and(|character| {
             character.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
+                && crate::spell::chance_on_hit::holds_weapon(character.stance, slot, || {
+                    crate::spell::is_disarmed(ctx, character_guid)
+                })
         });
     let Some(mut attack) = ctx
         .db
@@ -434,7 +437,7 @@ pub(crate) fn weapon_changed(ctx: &ReducerContext, character_guid: u64, slot: u8
     else {
         return;
     };
-    if !in_combat {
+    if !applies {
         return;
     }
     let now_ms = crate::time::now_ms_u32(ctx).max(1);

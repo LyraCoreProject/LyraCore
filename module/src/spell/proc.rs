@@ -267,6 +267,17 @@ pub(crate) fn run_proc_pass(
     );
 }
 
+const DAMAGE_CLASS_RANGED: u8 = 3;
+
+/// vmangos rolls a PPM proc with the attack type of the hit, and a ranged spell's is RANGED.
+fn proc_attack(source: HitSource, damage_class: Option<u8>) -> HitSource {
+    if damage_class == Some(DAMAGE_CLASS_RANGED) {
+        HitSource::Ranged
+    } else {
+        source
+    }
+}
+
 fn fire_aura_procs(
     ctx: &ReducerContext,
     attacker_guid: u64,
@@ -301,7 +312,15 @@ fn fire_aura_procs(
             .game_world_entity()
             .guid()
             .find(attacker_guid)
-            .map_or(0, |a| crate::combat::attack_time(ctx, &a, hit.source)),
+            .map_or(0, |a| {
+                let damage_class = ctx
+                    .db
+                    .game_spell()
+                    .spell_id()
+                    .find(hit.spell_id)
+                    .map(|spell| spell.damage_class);
+                crate::combat::attack_time(ctx, &a, proc_attack(hit.source, damage_class))
+            }),
     };
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     for (row, side, counterparty_guid) in candidates {
@@ -490,6 +509,22 @@ mod tests {
 
     fn swing(source: HitSource) -> Hit {
         Hit::weapon(source, false)
+    }
+
+    #[test]
+    fn a_ranged_spells_proc_rolls_with_the_ranged_weapon() {
+        assert!(matches!(
+            proc_attack(HitSource::MeleeSpell, Some(DAMAGE_CLASS_RANGED)),
+            HitSource::Ranged
+        ));
+        assert!(matches!(
+            proc_attack(HitSource::MeleeSpell, Some(2)),
+            HitSource::MeleeSpell
+        ));
+        assert!(matches!(
+            proc_attack(HitSource::OffHand, None),
+            HitSource::OffHand
+        ));
     }
 
     fn always() -> ProcProfile {

@@ -700,6 +700,58 @@ fn character_health_reaches_strangers_as_a_percent_and_the_party_in_full() {
         ),
         "a former member sees a percent again"
     );
+
+    let sent = health_after(&mut own, &units, || {
+        mirror_group(&shard, 900, &[(subject, 100), (viewer, 100)]);
+    });
+    assert_eq!(
+        sent,
+        sorted(party(subject).into_iter().chain(party(viewer))),
+        "a mirrored roster shows each member's health to the other"
+    );
+    let sent = health_after(&mut own, &units, || {
+        mirror_group(&shard, 901, &[(viewer, 101)])
+    });
+    assert_eq!(
+        sent,
+        sorted(
+            solo(subject, own_id)
+                .into_iter()
+                .chain(solo(viewer, other_id))
+        ),
+        "the member left behind in the old group sees a percent again"
+    );
+}
+
+/// Pushes a Realm roster for `group_id` whose members carry their membership revisions.
+fn mirror_group(shard: &Standalone, group_id: u64, members: &[(u64, u64)]) {
+    let guids: Vec<u64> = members.iter().map(|(guid, _)| *guid).collect();
+    let partitions: Vec<_> = members
+        .iter()
+        .map(|&(guid, revision)| {
+            json!({
+                "character_guid": guid, "group_id": group_id,
+                "membership_revision": revision, "member_active": true,
+                "map_id": 0, "instance_id": 0, "locator_revision": 0,
+                "state": {"unknown": []},
+            })
+        })
+        .collect();
+    let args = [
+        group_id.to_string(),
+        guids[0].to_string(),
+        "3".into(),
+        "2".into(),
+        "0".into(),
+        json!(guids).to_string(),
+        lyracore_test_support::actor(0),
+        json!(partitions).to_string(),
+        "1".into(),
+        "0".into(),
+        json!(vec![0u8; guids.len()]).to_string(),
+    ];
+    let args: Vec<_> = args.iter().map(String::as_str).collect();
+    shard.assert_call("sync_group_mirror", &args);
 }
 
 #[test]
@@ -823,13 +875,30 @@ fn health_after(
         let rows = connection.wait_for_packets(Duration::from_secs(1)).unwrap();
         let sent = decoded_health(&rows, units);
         if !sent.is_empty() {
-            return sorted(sent);
+            for (aoi_id, unit, _, _) in sent
+                .iter()
+                .filter(|(_, _, delivery, _)| matches!(delivery, HealthDelivery::Aoi { .. }))
+            {
+                assert!(
+                    sent.iter().all(|(id, other, delivery, _)| other != unit
+                        || !matches!(delivery, HealthDelivery::Connection(_))
+                        || id > aoi_id),
+                    "the raw health of {unit} must follow its AOI percent: {sent:?}"
+                );
+            }
+            return sorted(
+                sent.into_iter()
+                    .map(|(_, unit, delivery, vitals)| (unit, delivery, vitals)),
+            );
         }
     }
     Vec::new()
 }
 
-fn decoded_health(rows: &[Box<RawValue>], units: &[u64]) -> Vec<(u64, HealthDelivery, SentVitals)> {
+fn decoded_health(
+    rows: &[Box<RawValue>],
+    units: &[u64],
+) -> Vec<(u64, u64, HealthDelivery, SentVitals)> {
     use wire_client::decode::Field;
 
     let field =
@@ -839,7 +908,7 @@ fn decoded_health(rows: &[Box<RawValue>], units: &[u64]) -> Vec<(u64, HealthDeli
         };
     let mut sent = Vec::new();
     for row in rows {
-        let Packet(_, (audience, recipient), (option, opcode), body, _, _, _) =
+        let Packet(id, (audience, recipient), (option, opcode), body, _, _, _) =
             serde_json::from_str(row.get()).unwrap();
         if option != 0 || opcode.get() != "169" || !matches!(audience, 0 | 1) {
             continue;
@@ -883,7 +952,7 @@ fn decoded_health(rows: &[Box<RawValue>], units: &[u64]) -> Vec<(u64, HealthDeli
                         .then(|| serde_json::from_str::<(u128,)>(excluded.get()).unwrap().0),
                 }
             };
-            sent.push((unit, delivery, vitals));
+            sent.push((id, unit, delivery, vitals));
         }
     }
     sent

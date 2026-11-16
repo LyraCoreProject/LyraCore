@@ -392,6 +392,15 @@ fn base_melee_range(ctx: &ReducerContext, attacker: &WorldEntity, normalized: bo
         return (min, max);
     }
     let ap = melee_attack_power(ctx, attacker);
+    if let Some(form_ms) = feral_attack_time(attacker) {
+        // vmangos GetAPMultiplier normalizes an unusable weapon as a fist weapon.
+        let speed_ms = if normalized {
+            NORMALIZED_ONE_HAND_MS
+        } else {
+            form_ms
+        };
+        return feral_swing_range_ap(ap, attacker.level, speed_ms);
+    }
     let mainhand = lyracore_shared::constants::starter_item::MAINHAND_SLOT;
     let speed = |delay| {
         if normalized {
@@ -477,6 +486,7 @@ pub(crate) fn weapon_strike_spell_damage(
 pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
     melee_attack_power_for(
         unit.class(),
+        unit.stance,
         crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_STR),
         crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_AGI),
         unit.level,

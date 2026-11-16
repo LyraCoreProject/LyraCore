@@ -1,6 +1,8 @@
 mod support;
 
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use std::collections::BTreeMap;
+
 use support::Standalone;
 
 fn chances(shard: &Standalone, attacker: &str, target: &str) -> [u32; 5] {
@@ -108,37 +110,72 @@ fn white_melee_chances_follow_catalogue_skills_and_defender_eligibility() {
     assert_eq!([pvp[0], pvp[4]], [500, 500]);
 }
 
-#[test]
-#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn main_hand_attack_time_follows_the_usable_weapon_and_feral_form() {
-    use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
-    use lyracore_package_delta::packed_spell_effect_id;
-    use lyracore_shared::spell::taxonomy::{
-        A_DISARM, STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR, T_SELF,
-    };
-    const DISARM: u32 = 5_090_411;
+const DISARM: u32 = 5_090_411;
+const MAINHAND: &str = "15";
 
-    let mut shard = Standalone::start("white-melee-weapon-delay");
+/// A Character beside a wolf with the virtual clock stopped; returns the wolf's guid.
+fn beside_a_wolf(shard: &mut Standalone, character_sql: &str) -> String {
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
+    if !character_sql.is_empty() {
+        shard.assert_sql(character_sql);
+    }
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_call(
         "debug_spawn_at_feet",
         &["1", &TEST_WOLF_ENTRY.to_string(), "2"],
     );
-    let target = shard.query_rows(&format!(
+    shard.query_rows(&format!(
         "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
     ))[0]["guid"]
-        .clone();
-    let attack_time = |shard: &Standalone| -> String {
-        shard.assert_call("debug_compute_swing", &["1", &target]);
-        shard.query_rows("SELECT attack_time_ms FROM game_debug_readout WHERE key = 'swing'")[0]
-            ["attack_time_ms"]
-            .clone()
-    };
+        .clone()
+}
+
+fn stage_disarm(shard: &Standalone) {
+    use lyracore_package_delta::packed_spell_effect_id;
+    use lyracore_shared::spell::taxonomy::{A_DISARM, T_SELF};
+
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &DISARM),
+            ("name", &"Disarm fixture"),
+            ("school_mask", &1),
+            ("duration_ms", &600_000),
+            ("spell_level", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(DISARM, 0)),
+            ("spell_id", &DISARM),
+            ("kind", &A_DISARM),
+            ("target", &T_SELF),
+        ],
+    );
+}
+
+fn swing_readout(shard: &Standalone, target: &str) -> BTreeMap<String, String> {
+    shard.assert_call("debug_compute_swing", &["1", target]);
+    shard
+        .query_rows("SELECT * FROM game_debug_readout WHERE key = 'swing'")
+        .remove(0)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn main_hand_attack_time_follows_the_usable_weapon_and_feral_form() {
+    use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
+    use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR};
+
+    let mut shard = Standalone::start("white-melee-weapon-delay");
+    let target = beside_a_wolf(&mut shard, "");
+    stage_disarm(&shard);
+    let attack_time = |shard: &Standalone| swing_readout(shard, &target)["attack_time_ms"].clone();
 
     // vmangos Player::_ApplyItemBonuses: the main hand takes the weapon's delay, else 2000 ms.
     assert_eq!(attack_time(&shard), "2000", "unarmed");
@@ -162,52 +199,65 @@ fn main_hand_attack_time_follows_the_usable_weapon_and_feral_form() {
     shard.assert_sql("UPDATE game_world_entity SET stance = 0 WHERE guid = 1");
 
     // vmangos Aura::HandleAuraModDisarm sets the main hand back to BASE_ATTACK_TIME.
-    shard.insert_row(
-        "game_spell",
-        &[
-            ("spell_id", &DISARM),
-            ("name", &"Disarm fixture"),
-            ("school_mask", &1),
-            ("duration_ms", &600_000),
-            ("spell_level", &1),
-        ],
-    );
-    shard.insert_row(
-        "game_spell_effect",
-        &[
-            ("id", &packed_spell_effect_id(DISARM, 0)),
-            ("spell_id", &DISARM),
-            ("kind", &A_DISARM),
-            ("target", &T_SELF),
-        ],
-    );
     shard.assert_call("debug_force_cast", &["1", &DISARM.to_string()]);
     assert_eq!(attack_time(&shard), "2000", "disarmed");
 }
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_weapon_change_in_combat_restarts_the_main_hand_swing() {
+fn a_feral_druid_swings_level_damage_instead_of_its_weapon() {
+    use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
+    use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_CAT};
+
+    let mut shard = Standalone::start("white-melee-feral-damage");
+    let target = beside_a_wolf(
+        &mut shard,
+        "UPDATE game_character SET class = 11, level = 60 WHERE guid = 1",
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET delay_ms = 3800, damage_min = 100.0, damage_max = 150.0, \
+         stat_strength = 0, stat_agility = 0 WHERE entry = {FIXTURE_BLADE}"
+    ));
+    shard.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
+    shard.assert_sql("UPDATE game_world_entity SET strength = 50, agility = 40 WHERE guid = 1");
+
+    // vmangos at level 60: Cat 51-75 + 120 AP / 14; Bear 127.5-187.5 + 80 AP / 14 * 2.5.
+    for (stance, expected) in [(STANCE_CAT, ("59", "83")), (STANCE_BEAR, ("141", "201"))] {
+        shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET stance = {stance} WHERE guid = 1"
+        ));
+        let readout = swing_readout(&shard, &target);
+        assert_eq!(
+            (readout["base_min"].as_str(), readout["base_max"].as_str()),
+            expected,
+            "feral form {stance}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_usable_weapon_change_in_combat_restarts_the_main_hand_swing() {
     use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
     use lyracore_shared::constants::unit_flags;
-    const MAINHAND: &str = "15";
+    use lyracore_shared::spell::taxonomy::STANCE_CAT;
 
     let mut shard = Standalone::start("white-melee-weapon-swap");
-    shard.publish_module();
-    shard.assert_call("claim_operator", &[]);
-    shard.assert_call("install_guid_range", &["0"]);
-    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
-    shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
-    shard.assert_call("debug_spawn_player_entity", &["1"]);
-    shard.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
-    shard.assert_call(
-        "debug_spawn_at_feet",
-        &["1", &TEST_WOLF_ENTRY.to_string(), "2"],
-    );
-    let target = shard.query_rows(&format!(
-        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
-    ))[0]["guid"]
-        .clone();
+    let target = beside_a_wolf(&mut shard, "");
+    stage_disarm(&shard);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET max_durability = 50 WHERE entry = {FIXTURE_BLADE}"
+    ));
+    let equip = |shard: &Standalone| {
+        shard.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
+        shard.assert_sql("UPDATE game_melee_attack SET last_swing_ms = 1 WHERE attacker_guid = 1");
+    };
+    let unequip_restarts = |shard: &Standalone| {
+        shard.assert_call("debug_unequip_item", &["1", MAINHAND]);
+        shard.query_rows("SELECT last_swing_ms FROM game_melee_attack WHERE attacker_guid = 1")[0]
+            ["last_swing_ms"]
+            != "1"
+    };
     shard.assert_call("debug_engage", &["1", &target]);
     let flags: u32 = shard.query_rows("SELECT unit_flags FROM game_world_entity WHERE guid = 1")[0]
         ["unit_flags"]
@@ -217,14 +267,37 @@ fn a_weapon_change_in_combat_restarts_the_main_hand_swing() {
         "UPDATE game_world_entity SET unit_flags = {} WHERE guid = 1",
         flags | unit_flags::IN_COMBAT
     ));
-    shard.assert_sql("UPDATE game_melee_attack SET last_swing_ms = 1 WHERE attacker_guid = 1");
 
-    // vmangos Player::_ApplyItemBonuses resets the hand's attack timer in combat.
-    shard.assert_call("debug_unequip_item", &["1", MAINHAND]);
-    let last_swing_ms: u32 = shard
-        .query_rows("SELECT last_swing_ms FROM game_melee_attack WHERE attacker_guid = 1")[0]
-        ["last_swing_ms"]
-        .parse()
-        .unwrap();
-    assert!(last_swing_ms > 1, "the swing timer restarts at the change");
+    // vmangos Player::_ApplyItemBonuses returns before the reset unless the hand can use it.
+    equip(&shard);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET stance = {STANCE_CAT} WHERE guid = 1"
+    ));
+    assert!(!unequip_restarts(&shard), "a feral form holds no weapon");
+    shard.assert_sql("UPDATE game_world_entity SET stance = 0 WHERE guid = 1");
+
+    equip(&shard);
+    shard.assert_call("debug_force_cast", &["1", &DISARM.to_string()]);
+    assert!(
+        !unequip_restarts(&shard),
+        "a disarmed main hand holds no weapon"
+    );
+    shard.assert_sql(&format!(
+        "DELETE FROM game_aura WHERE target_guid = 1 AND spell_id = {DISARM}"
+    ));
+
+    equip(&shard);
+    shard.assert_sql(
+        "UPDATE game_item_instance SET durability = 0 WHERE owner_guid = 1 AND slot = 15",
+    );
+    assert!(
+        !unequip_restarts(&shard),
+        "vmangos Player::_ApplyItemMods skips a broken weapon"
+    );
+
+    equip(&shard);
+    assert!(
+        unequip_restarts(&shard),
+        "the swing timer restarts at the change"
+    );
 }

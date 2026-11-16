@@ -160,12 +160,7 @@ pub fn sync_group_mirror(
         roster_changed(ctx, membership_changed, &effective_members);
         return Ok(());
     }
-    for guid in &arriving {
-        for m in member_tbl.by_character().filter(guid).collect::<Vec<_>>() {
-            crate::loot::tag::revoke_group_member(ctx, m.group_id, *guid);
-            member_tbl.id().delete(m.id);
-        }
-    }
+    let left_behind = detach_arrivals(ctx, &arriving);
     let effective_leader = if effective_members.contains(&leader_guid) {
         leader_guid
     } else {
@@ -209,8 +204,28 @@ pub fn sync_group_mirror(
         });
     }
     store_group_revision(ctx, group_id, roster_revision, true);
-    roster_changed(ctx, membership_changed, &effective_members);
+    let members: Vec<u64> = effective_members.into_iter().chain(left_behind).collect();
+    roster_changed(ctx, membership_changed, &members);
     Ok(())
+}
+
+/// Removes arriving members from their other local group and returns who stays behind there.
+fn detach_arrivals(ctx: &ReducerContext, arriving: &[u64]) -> Vec<u64> {
+    let member_tbl = ctx.db.game_group_member();
+    let mut left_behind = Vec::new();
+    for guid in arriving {
+        for m in member_tbl.by_character().filter(guid).collect::<Vec<_>>() {
+            crate::loot::tag::revoke_group_member(ctx, m.group_id, *guid);
+            member_tbl.id().delete(m.id);
+            left_behind.extend(
+                member_tbl
+                    .by_group()
+                    .filter(&m.group_id)
+                    .map(|r| r.character_guid),
+            );
+        }
+    }
+    left_behind
 }
 
 fn roster_changed(ctx: &ReducerContext, changed: Vec<u64>, members: &[u64]) {

@@ -27,8 +27,28 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/white_melee.rs"
-function = "a_weapon_change_in_combat_restarts_the_main_hand_swing"
+function = "a_usable_weapon_change_in_combat_restarts_the_main_hand_swing"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/white_melee.rs"
+function = "a_feral_druid_swings_level_damage_instead_of_its_weapon"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/combat/tables.rs"
+function = "feral_forms_swing_level_damage_at_their_own_speed"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/tables.rs"
+function = "druid_attack_power_adds_agility_only_in_cat_form"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/proc.rs"
+function = "a_ranged_spells_proc_rolls_with_the_ranged_weapon"
+rung = "unit"
 
 [[tests]]
 path = "module/tests/chance_on_hit.rs"
@@ -83,3 +103,9 @@ description = "No VALUES update follows a weapon swap or a haste change, so a vi
 path = "module/src/native/view.rs"
 symbol = "entity"
 evidence = "Review of PR 1040: view.rs sends UNIT_FIELD_BASEATTACKTIME and the off-hand attack time only in CREATE. At d9173eca, Unit.h Unit::SetAttackTime and Unit.cpp Unit::ApplyAttackTimePercentMod write the fields, so each change reaches viewers."
+
+[[known_gaps]]
+description = "Only a unit's raid sees its real health. An Empathy (Beast Lore) caster and a charmer still see a percent, because the Module models neither the Empathy Aura nor a charmer."
+path = "module/src/native/health.rs"
+symbol = "visible_health"
+evidence = "Review of PR 1040. At d9173eca, Player.cpp Player::CanSeeHealthOf takes the owner from GetCharmerOrOwnerPlayerOrPlayerItself, and Player::CanSeeSpecialInfoOf shows raw health to the caster of a SPELL_AURA_EMPATHY Aura on the target."
