@@ -114,9 +114,10 @@ fn write_plan(args: Args, shard: &Shard) -> Result<()> {
     read::check_characters_profile(&mut characters_db, dialect)?;
     let account_ids: Vec<u64> = accounts.iter().map(|account| account.id).collect();
     let characters = read::read_characters(&mut characters_db, dialect, &account_ids)?;
+    let guilds = read::read_guilds(&mut characters_db, dialect)?;
 
     let catalogue = shard.catalogue()?;
-    let plan = plan::build(&source, &catalogue, &accounts, &characters);
+    let plan = plan::build(&source, &catalogue, &accounts, &characters, &guilds);
     write_private(&out, &serde_json::to_string_pretty(&plan)?)
         .with_context(|| format!("write {out}"))?;
     for finding in &plan.findings {
@@ -229,6 +230,18 @@ fn apply(path: &str, shard: &Shard) -> Result<()> {
         if let Err(refusal) = shard.call_with("migrate_contacts", &arguments)? {
             refusals += 1;
             eprintln!("refused: contacts of {}: {refusal}", list.source_guid);
+        }
+    }
+    for guild in &plan.guilds {
+        let mut linked: Vec<u64> = guild.members.iter().map(|m| m.source_guid).collect();
+        linked.push(guild.leader_source_guid);
+        if deferred(&format!("Guild {}", guild.name), &linked, &failed) {
+            refusals += 1;
+            continue;
+        }
+        if let Err(refusal) = shard.call("migrate_guild", &serde_json::to_string(guild)?)? {
+            refusals += 1;
+            eprintln!("refused: Guild {}: {refusal}", guild.name);
         }
     }
     if refusals > 0 {

@@ -3,9 +3,11 @@ use std::collections::{HashMap, HashSet};
 use anyhow::{anyhow, bail, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::read::{Ban, LegacyAccount, LegacyCharacter, LegacyItem, LegacyLetter, LegacyPosition};
+use crate::read::{
+    Ban, LegacyAccount, LegacyCharacter, LegacyGuild, LegacyItem, LegacyLetter, LegacyPosition,
+};
 
-pub(crate) const PLAN_FORMAT_VERSION: u32 = 4;
+pub(crate) const PLAN_FORMAT_VERSION: u32 = 5;
 // Linux limits one argv string to 128 KiB; `spacetime call` passes each argument as one.
 const MAX_REDUCER_ARGUMENT_BYTES: usize = 120_000;
 const SOULBOUND_FLAG: u32 = 0x1;
@@ -217,6 +219,38 @@ pub(crate) struct ContactsMigration {
     pub(crate) contacts: Vec<MigratedContact>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct MigratedGuildRank {
+    pub(crate) rank_id: u32,
+    pub(crate) name: String,
+    pub(crate) rights: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct MigratedGuildMember {
+    pub(crate) source_guid: u64,
+    pub(crate) rank_id: u32,
+    pub(crate) public_note: String,
+    pub(crate) officer_note: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct GuildMigration {
+    pub(crate) source: String,
+    pub(crate) source_guild_id: u64,
+    pub(crate) name: String,
+    pub(crate) leader_source_guid: u64,
+    pub(crate) motd: String,
+    pub(crate) info: String,
+    pub(crate) emblem_style: u32,
+    pub(crate) emblem_color: u32,
+    pub(crate) border_style: u32,
+    pub(crate) border_color: u32,
+    pub(crate) background_color: u32,
+    pub(crate) ranks: Vec<MigratedGuildRank>,
+    pub(crate) members: Vec<MigratedGuildMember>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum Outcome {
@@ -241,6 +275,7 @@ pub(crate) struct Plan {
     pub(crate) characters: Vec<CharacterMigration>,
     pub(crate) letters: Vec<LetterMigration>,
     pub(crate) contacts: Vec<ContactsMigration>,
+    pub(crate) guilds: Vec<GuildMigration>,
     pub(crate) findings: Vec<Finding>,
 }
 
@@ -325,6 +360,7 @@ pub(crate) fn build(
     catalogue: &Catalogue,
     accounts: &[LegacyAccount],
     characters: &[LegacyCharacter],
+    guilds: &[LegacyGuild],
 ) -> Plan {
     let mut findings = Vec::new();
     let mut report = Findings(&mut findings);
@@ -424,6 +460,10 @@ pub(crate) fn build(
         characters: planned,
         letters,
         contacts,
+        guilds: guilds
+            .iter()
+            .filter_map(|guild| migrated_guild(source, &senders, &races, guild, &mut report))
+            .collect(),
         findings,
     }
 }
@@ -768,7 +808,7 @@ fn contact_list(
         }
         let race = races.get(&contact.target).copied();
         if contact.flags & SOCIAL_FLAG_FRIEND != 0 {
-            if race.is_some_and(|race| !same_team(character.race, race)) {
+            if race.is_some_and(|race| !lyracore_shared::faction::same_team(character.race, race)) {
                 report.add(
                     subject,
                     Outcome::Dropped,
@@ -824,10 +864,137 @@ fn contact_list(
     })
 }
 
-// Races 1, 3, 4 and 7 are the Alliance; 2, 5, 6 and 8 are the Horde.
-fn same_team(a: u8, b: u8) -> bool {
-    let alliance = |race| matches!(race, 1 | 3 | 4 | 7);
-    alliance(a) == alliance(b)
+// The Module checks the team of a member from an earlier run, whose race this run did not read.
+fn migrated_guild(
+    source: &str,
+    migrated: &HashSet<u64>,
+    races: &HashMap<u64, u8>,
+    guild: &LegacyGuild,
+    report: &mut Findings,
+) -> Option<GuildMigration> {
+    use lyracore_shared::guild::{
+        MAX_INFO, MAX_MOTD, MAX_NOTE, MAX_RANKS, MAX_RANK_NAME, MIN_RANKS,
+    };
+    let subject = format!("Guild {} ({})", guild.name, guild.id);
+    if !migrated.contains(&guild.leader) {
+        report.add(&subject, Outcome::Refused, "its leader does not migrate");
+        return None;
+    }
+    let leader_race = races.get(&guild.leader).copied();
+    let ids = guild.ranks.iter().map(|rank| rank.id);
+    if !(MIN_RANKS..=MAX_RANKS).contains(&guild.ranks.len()) || ids.ne(0..guild.ranks.len() as u32)
+    {
+        report.add(
+            &subject,
+            Outcome::Refused,
+            "its ranks are not 5 to 10 ids from 0 without gaps",
+        );
+        return None;
+    }
+    let mut shortened = Vec::new();
+    let mut fit = |text: &str, max: usize, what: String| -> String {
+        if text.chars().count() <= max {
+            return text.to_string();
+        }
+        shortened.push(what);
+        text.chars().take(max).collect()
+    };
+    let ranks = guild
+        .ranks
+        .iter()
+        .map(|rank| MigratedGuildRank {
+            rank_id: rank.id,
+            name: fit(&rank.name, MAX_RANK_NAME, format!("rank {} name", rank.id)),
+            rights: rank.rights,
+        })
+        .collect();
+    let mut missing = Vec::new();
+    let mut members = Vec::new();
+    let lowest_rank = guild.ranks.len() as u32 - 1;
+    for member in &guild.members {
+        if !migrated.contains(&member.guid) {
+            missing.push(member.guid.to_string());
+            continue;
+        }
+        let other_team = leader_race
+            .zip(races.get(&member.guid))
+            .is_some_and(|(leader, &race)| !lyracore_shared::faction::same_team(leader, race));
+        if other_team {
+            report.add(
+                &subject,
+                Outcome::Dropped,
+                format!("member {} is of the other faction", member.guid),
+            );
+            continue;
+        }
+        // MaNGOS leaves members on a deleted rank and demotes a second rank 0 only at Guild load.
+        let rank_id = if member.guid == guild.leader {
+            0
+        } else {
+            member.rank.clamp(1, lowest_rank)
+        };
+        if member.guid != guild.leader && rank_id != member.rank {
+            report.add(
+                &subject,
+                Outcome::Changed,
+                format!(
+                    "member {} holds rank {}, which it cannot hold; arrives at rank {rank_id}",
+                    member.guid, member.rank
+                ),
+            );
+        }
+        members.push(MigratedGuildMember {
+            source_guid: member.guid,
+            rank_id,
+            public_note: fit(
+                &member.public_note,
+                MAX_NOTE,
+                format!("note of {}", member.guid),
+            ),
+            officer_note: fit(
+                &member.officer_note,
+                MAX_NOTE,
+                format!("officer note of {}", member.guid),
+            ),
+        });
+    }
+    let motd = fit(&guild.motd, MAX_MOTD, "message of the day".to_string());
+    let info = fit(&guild.info, MAX_INFO, "information".to_string());
+    if !missing.is_empty() {
+        report.add(
+            &subject,
+            Outcome::Dropped,
+            format!("members that do not migrate: {}", missing.join(", ")),
+        );
+    }
+    if !shortened.is_empty() {
+        report.add(
+            &subject,
+            Outcome::Changed,
+            format!("shortened to the 1.12 limits: {}", shortened.join(", ")),
+        );
+    }
+    let [emblem_style, emblem_color, border_style, border_color, background_color] = guild.emblem;
+    let migration = GuildMigration {
+        source: source.to_string(),
+        source_guild_id: guild.id,
+        name: guild.name.clone(),
+        leader_source_guid: guild.leader,
+        motd,
+        info,
+        emblem_style,
+        emblem_color,
+        border_style,
+        border_color,
+        background_color,
+        ranks,
+        members,
+    };
+    if let Err(reason) = fits_one_call(&migration) {
+        report.add(&subject, Outcome::Refused, reason.to_string());
+        return None;
+    }
+    Some(migration)
 }
 
 fn position_of(position: &LegacyPosition) -> MigratedPosition {
@@ -1171,7 +1338,13 @@ mod tests {
     }
 
     fn plan_one(character: LegacyCharacter) -> Plan {
-        build("vmangos-main", &catalogue(), &[account()], &[character])
+        build(
+            "vmangos-main",
+            &catalogue(),
+            &[account()],
+            &[character],
+            &[],
+        )
     }
 
     #[test]
@@ -1389,7 +1562,13 @@ mod tests {
         catalogue
             .accounts
             .insert("MIGRANT".to_string(), ("00".repeat(32), "00".repeat(32)));
-        let plan = build("vmangos-main", &catalogue, &[account()], &[character()]);
+        let plan = build(
+            "vmangos-main",
+            &catalogue,
+            &[account()],
+            &[character()],
+            &[],
+        );
         assert!(plan.accounts.is_empty());
         assert!(plan.characters.is_empty());
         assert_eq!(plan.findings.len(), 2);
@@ -1492,7 +1671,7 @@ mod tests {
         let mut cod = letter(MAIL_NORMAL, 99, vec![letter_item(70, 2589)]);
         cod.cod = 500;
         source.letters = vec![cod];
-        let plan = build("vmangos-main", &catalogue, &[account()], &[source]);
+        let plan = build("vmangos-main", &catalogue, &[account()], &[source], &[]);
         assert_eq!(plan.letters[0].cod, 500);
     }
 
@@ -1504,7 +1683,7 @@ mod tests {
         let mut cod = letter(MAIL_NORMAL, 99, vec![letter_item(70, 2589)]);
         cod.cod = 500;
         source.letters = vec![cod];
-        let plan = build("vmangos-main", &catalogue, &[account()], &[source]);
+        let plan = build("vmangos-main", &catalogue, &[account()], &[source], &[]);
         assert_eq!(plan.letters[0].cod, 0);
     }
 
@@ -1627,6 +1806,7 @@ mod tests {
             &catalogue(),
             &[account()],
             &[owner, ally, horde],
+            &[],
         );
         assert_eq!(
             plan.contacts[0].contacts,
@@ -1649,6 +1829,105 @@ mod tests {
         assert!(details.contains(&"contacts with Characters that do not migrate: 13"));
     }
 
+    fn guild(leader: u64, members: &[(u64, u32)]) -> LegacyGuild {
+        LegacyGuild {
+            id: 3,
+            name: "Old Friends".to_string(),
+            leader,
+            emblem: [1, 2, 3, 4, 5],
+            info: String::new(),
+            motd: "x".repeat(200),
+            ranks: (0..5)
+                .map(|id| crate::read::LegacyGuildRank {
+                    id,
+                    name: format!("Rank {id}"),
+                    rights: 0,
+                })
+                .collect(),
+            members: members
+                .iter()
+                .map(|&(guid, rank)| crate::read::LegacyGuildMember {
+                    guid,
+                    rank,
+                    public_note: String::new(),
+                    officer_note: String::new(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn a_guild_keeps_migrated_members_and_shortens_text_to_the_limits() {
+        let source = guild(10, &[(10, 0), (77, 4)]);
+        let plan = build(
+            "vmangos-main",
+            &catalogue(),
+            &[account()],
+            &[character()],
+            &[source],
+        );
+        let migrated = &plan.guilds[0];
+        assert_eq!(migrated.members.len(), 1);
+        assert_eq!(migrated.motd.chars().count(), 128);
+        assert_eq!(migrated.emblem_style, 1);
+        let details: Vec<_> = plan.findings.iter().map(|f| f.detail.as_str()).collect();
+        assert!(
+            details.contains(&"members that do not migrate: 77"),
+            "{details:?}"
+        );
+        assert!(details.contains(&"shortened to the 1.12 limits: message of the day"));
+    }
+
+    #[test]
+    fn a_member_of_the_other_faction_is_dropped_and_stale_ranks_are_moved() {
+        let mut leader = character();
+        leader.guid = 10;
+        let mut horde = character();
+        horde.guid = 11;
+        horde.name = "Horde".to_string();
+        horde.race = 2;
+        let mut officer = character();
+        officer.guid = 12;
+        officer.name = "Officer".to_string();
+        let mut recruit = character();
+        recruit.guid = 13;
+        recruit.name = "Recruit".to_string();
+        let plan = build(
+            "vmangos-main",
+            &catalogue(),
+            &[account()],
+            &[leader, horde, officer, recruit],
+            &[guild(10, &[(10, 0), (11, 2), (12, 0), (13, 7)])],
+        );
+        let ranks: Vec<_> = plan.guilds[0]
+            .members
+            .iter()
+            .map(|member| (member.source_guid, member.rank_id))
+            .collect();
+        assert_eq!(ranks, [(10, 0), (12, 1), (13, 4)]);
+        let details: Vec<_> = plan.findings.iter().map(|f| f.detail.as_str()).collect();
+        assert!(
+            details.contains(&"member 11 is of the other faction"),
+            "{details:?}"
+        );
+    }
+
+    #[test]
+    fn a_guild_whose_leader_does_not_migrate_is_refused() {
+        let plan = build(
+            "vmangos-main",
+            &catalogue(),
+            &[account()],
+            &[character()],
+            &[guild(77, &[(77, 0), (10, 4)])],
+        );
+        assert!(plan.guilds.is_empty());
+        assert!(plan
+            .findings
+            .iter()
+            .any(|f| f.detail == "its leader does not migrate"));
+    }
+
     #[test]
     fn a_contact_migrated_in_an_earlier_run_is_kept() {
         let mut catalogue = catalogue();
@@ -1661,7 +1940,7 @@ mod tests {
             target: 13,
             flags: SOCIAL_FLAG_FRIEND,
         }];
-        let plan = build("vmangos-main", &catalogue, &[account()], &[owner]);
+        let plan = build("vmangos-main", &catalogue, &[account()], &[owner], &[]);
         assert_eq!(
             plan.contacts[0].contacts,
             [MigratedContact {
