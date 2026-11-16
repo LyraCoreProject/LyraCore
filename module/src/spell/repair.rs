@@ -3,6 +3,7 @@ use spacetimedb::{ReducerContext, Table};
 use super::*;
 use crate::{game_aura, game_spell, game_spell_effect};
 use crate::{game_character_talent, game_player_spell, game_talent, game_world_entity};
+use lyracore_shared::packing::power_type;
 use lyracore_shared::spell::taxonomy::{
     A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN_FLAT, A_MOD_HEALING_TAKEN,
     A_MOD_SCHOOL_CRIT, P_COMBAT_PERCENT,
@@ -108,6 +109,14 @@ pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
             aura.amount = aura.amount.saturating_mul(100);
         } else if aura.eff_p0_kind == P_COMBAT_PERCENT && effect.p0_kind != P_COMBAT_PERCENT {
             aura.amount /= 100;
+        }
+        if aura.eff_p0_kind == P_PCT_MAX_POWER && effect.p0_kind != P_PCT_MAX_POWER {
+            aura.amount = effect.base_points;
+        } else if effect.kind == A_PERIODIC_ENERGIZE
+            && (effect.p0, effect.p0_kind) == (i32::from(power_type::RAGE), P_POWER_TYPE)
+            && (aura.period_ms, period_ms) == (5000, 3000)
+        {
+            aura.amount = aura.amount * 3 / 5;
         }
         if effect.kind != A_ABSORB {
             aura.amount_remaining = 0;

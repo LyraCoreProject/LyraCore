@@ -98,6 +98,11 @@ effect_kinds! {
     // p0 is the skill line; p1 selects temporary (0) or permanent (1) bonus points.
     A_MOD_SKILL => AuraModSkill = 0xBD,
     A_FLAG => AuraFlag = 0xBE,
+    A_MOD_POWER_REGEN => AuraModPowerRegen = 0xC1,
+    A_MOD_HEALTH_REGEN => AuraModHealthRegen = 0xC2,
+    A_MOD_REGEN => AuraModRegen = 0xC3,
+    A_MOD_HEALTH_REGEN_PCT => AuraModHealthRegenPct = 0xC4,
+    A_MANA_REGEN_INTERRUPT => AuraManaRegenInterrupt = 0xC5,
     A_MOD_DAMAGE_DONE_FLAT => AuraModDamageDoneFlat = 0xD0,
     A_MOD_DAMAGE_TAKEN_FLAT => AuraModDamageTakenFlat = 0xD1,
     A_MOD_SCHOOL_CRIT => AuraModSchoolCrit = 0xD2,
@@ -241,6 +246,11 @@ mod tests {
         assert_eq!(A_ABSORB, 0xA2);
         assert_eq!(A_MOD_COMBAT, 0xA3);
         assert_eq!(A_MOD_POWER_REGEN_PCT, 0xB7);
+        assert_eq!(A_MOD_POWER_REGEN, 0xC1);
+        assert_eq!(A_MOD_HEALTH_REGEN, 0xC2);
+        assert_eq!(A_MOD_REGEN, 0xC3);
+        assert_eq!(A_MOD_HEALTH_REGEN_PCT, 0xC4);
+        assert_eq!(A_MANA_REGEN_INTERRUPT, 0xC5);
         assert_eq!(A_FLAG, 0xBE);
         assert_eq!(A_MOD_DAMAGE_DONE_FLAT, 0xD0);
         assert_eq!(A_MOD_DAMAGE_TAKEN_FLAT, 0xD1);
