@@ -1,14 +1,15 @@
 use lyracore_protocol::{
     codec,
     messages::vanilla::{
-        opcodes::ServerOpcodeMessage, SpellCastTargets_SpellCastTargetFlags_Gameobject as GoTarget,
+        opcodes::ServerOpcodeMessage, SpellCastTargets,
+        SpellCastTargets_SpellCastTargetFlags_Gameobject as GoTarget,
         SpellCastTargets_SpellCastTargetFlags_Item as ItemTarget, CMSG_CAST_SPELL,
     },
     world::Packet,
 };
 use lyracore_shared::spell::taxonomy::{
-    CAST_FLAG_RANGED_AUTO_REPEAT, E_DISENCHANT, E_ENCHANT_ITEM, E_ENCHANT_ITEM_TEMPORARY, E_FISH,
-    E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
+    CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_REFUSES_SELF_CAST, E_DISENCHANT, E_ENCHANT_ITEM,
+    E_ENCHANT_ITEM_TEMPORARY, E_FISH, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
@@ -16,6 +17,7 @@ use super::Rollback;
 use crate::game_melee_attack;
 use crate::spell::{CastGateRefusal, CastRefusalReason};
 use crate::Refusal;
+use crate::Spell;
 use crate::{game_item_instance, game_item_template, game_spell, game_spell_effect};
 
 enum Route {
@@ -97,6 +99,23 @@ fn item_slot(ctx: &ReducerContext, guid: u64, request: &CMSG_CAST_SPELL) -> Resu
     item_target(ctx, guid, request).map(|item| item.slot)
 }
 
+// vmangos PrepareForSpellSystem: an empty target mask selects the caster.
+fn selected_unit(targets: &SpellCastTargets, caster: u64) -> u64 {
+    if targets.target_flags.is_empty() {
+        return caster;
+    }
+    targets
+        .target_flags
+        .get_unit()
+        .map_or(0, |target| target.unit_target.guid())
+}
+
+// vmangos HandleCastSpellOpcode: a negative spell with a selected unit target refuses the caster.
+fn refuses_self_cast(header: Option<&Spell>, caster: u64, selected_unit: u64) -> bool {
+    selected_unit == caster
+        && header.is_some_and(|row| row.cast_flags & CAST_FLAG_REFUSES_SELF_CAST != 0)
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
@@ -117,6 +136,19 @@ pub(super) fn receive(
         .by_spell()
         .filter(spell)
         .collect();
+    let target = request
+        .targets
+        .target_flags
+        .get_unit()
+        .map_or(0, |target| target.unit_target.guid());
+    if crate::spell::knows_spell(ctx, guid, spell)
+        && refuses_self_cast(header.as_ref(), guid, selected_unit(&request.targets, guid))
+    {
+        return Err(Rollback::replies(
+            vec![failure(spell, CastRefusalReason::BadTargets)],
+            "a negative spell cannot target its caster",
+        ));
+    }
     let route = if header
         .as_ref()
         .is_some_and(|row| row.cast_flags & CAST_FLAG_RANGED_AUTO_REPEAT != 0)
@@ -138,11 +170,6 @@ pub(super) fn receive(
     } else {
         Route::Ordinary
     };
-    let target = request
-        .targets
-        .target_flags
-        .get_unit()
-        .map_or(0, |target| target.unit_target.guid());
     let dest = request
         .targets
         .target_flags
@@ -311,6 +338,10 @@ pub(super) fn cancel_repeat(ctx: &ReducerContext, guid: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lyracore_protocol::messages::vanilla::{
+        SpellCastTargets_SpellCastTargetFlags, SpellCastTargets_SpellCastTargetFlags_Unit,
+    };
+    use lyracore_protocol::messages::Guid;
 
     #[test]
     fn every_cast_refusal_reason_reports_its_1_12_1_cast_result() {
@@ -344,6 +375,42 @@ mod tests {
         ] {
             assert_eq!(cast_result(reason), code, "{reason:?}");
         }
+    }
+
+    fn spell_with(cast_flags: u32, is_negative: bool) -> Spell {
+        Spell {
+            cast_flags,
+            is_negative,
+            ..Spell::blank(133, "Fixture")
+        }
+    }
+
+    #[test]
+    fn a_spell_flagged_by_the_importer_refuses_its_caster_as_target() {
+        let header = spell_with(CAST_FLAG_REFUSES_SELF_CAST, true);
+        assert!(refuses_self_cast(Some(&header), 7, 7));
+        assert!(!refuses_self_cast(Some(&header), 7, 8));
+        assert!(!refuses_self_cast(Some(&header), 7, 0));
+    }
+
+    #[test]
+    fn a_negative_polarity_alone_does_not_refuse_the_caster() {
+        let header = spell_with(0, true);
+        assert!(!refuses_self_cast(Some(&header), 7, 7));
+        assert!(!refuses_self_cast(None, 7, 7));
+    }
+
+    #[test]
+    fn an_empty_target_mask_selects_the_caster() {
+        assert_eq!(selected_unit(&SpellCastTargets::default(), 7), 7);
+        let unit = SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::new_unit(
+                SpellCastTargets_SpellCastTargetFlags_Unit {
+                    unit_target: Guid::new(8),
+                },
+            ),
+        };
+        assert_eq!(selected_unit(&unit, 7), 8);
     }
 
     #[test]

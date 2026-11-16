@@ -4,6 +4,8 @@ use crate::{SpellCastEvent, SpellImpactEvent};
 use lyracore_protocol::{codec, messages as wow_world_messages, world::Packet};
 use spacetimedb::{ReducerContext, Table};
 use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
+use wow_world_messages::vanilla::{SpellLog, SMSG_SPELLLOGEXECUTE};
+use wow_world_messages::Guid;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum EventAudience {
@@ -36,6 +38,30 @@ pub(crate) fn cast_event(ctx: &ReducerContext, event: &SpellCastEvent) {
     for (audience, packet) in cast_event_messages(event, projectile(ctx, event)) {
         deliver(ctx, event.caster_guid, audience, packet);
     }
+}
+
+fn item_creation_log_message(caster: u64, spell: u32, items: &[u32]) -> Packet {
+    let log = SMSG_SPELLLOGEXECUTE {
+        caster: Guid::new(caster),
+        spell,
+        logs: items
+            .iter()
+            .map(|&item| SpellLog::CreateItem { item })
+            .collect(),
+    };
+    message(ServerOpcodeMessage::SMSG_SPELLLOGEXECUTE(Box::new(log)))
+}
+
+pub(crate) fn item_creation_log(ctx: &ReducerContext, caster: u64, spell: u32, items: &[u32]) {
+    if items.is_empty() || ctx.db.game_native_player().count() == 0 {
+        return;
+    }
+    deliver(
+        ctx,
+        caster,
+        EventAudience::Everyone,
+        item_creation_log_message(caster, spell, items),
+    );
 }
 
 pub(crate) fn spell_cooldown(
@@ -389,5 +415,23 @@ mod tests {
                 EventAudience::Peers | EventAudience::Everyone
             ));
         }
+    }
+
+    #[test]
+    fn a_created_item_is_logged_as_an_execute_log() {
+        let packet = item_creation_log_message(51, 5504, &[5350]);
+        assert_eq!(packet.opcode, 0x024C);
+        assert_eq!(
+            packet.body,
+            [
+                &[0x01, 0x33][..],
+                &5504u32.to_le_bytes(),
+                &1u32.to_le_bytes(),
+                &24u32.to_le_bytes(),
+                &1u32.to_le_bytes(),
+                &5350u32.to_le_bytes(),
+            ]
+            .concat()
+        );
     }
 }

@@ -1,8 +1,8 @@
 use crate::actor::{ActionRefusal, ActionRefusalKind};
-use lyracore_protocol::messages::vanilla::NewItemSource;
 use spacetimedb::{Identity, ReducerContext, Timestamp};
 
 use super::inventory::{free_inventory_slots, is_carried_slot, item_fits_bag};
+use super::ItemPush;
 use super::{allocate_item_guids, binds_on_grant, merge_amount, select_property};
 use crate::{game_item_instance, game_item_template, ItemInstance, ItemTemplate};
 
@@ -640,13 +640,13 @@ impl ItemStoragePlan {
     }
 
     pub(crate) fn commit(self, ctx: &ReducerContext) -> Result<(), ActionRefusal> {
-        self.commit_with_source(ctx, NewItemSource::Looted)
+        self.commit_with_source(ctx, ItemPush::LOOTED)
     }
 
     pub(crate) fn commit_with_source(
         self,
         ctx: &ReducerContext,
-        source: NewItemSource,
+        source: ItemPush,
     ) -> Result<(), ActionRefusal> {
         self.commit_planned(ctx, Some(source), false)
     }
@@ -682,7 +682,7 @@ impl ItemStoragePlan {
     fn commit_planned(
         self,
         ctx: &ReducerContext,
-        source: Option<NewItemSource>,
+        source: Option<ItemPush>,
         restored: bool,
     ) -> Result<(), ActionRefusal> {
         let changed_offer = self.check_trade_offers(ctx)?;

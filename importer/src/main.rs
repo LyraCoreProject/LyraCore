@@ -20,6 +20,7 @@ mod source_selection;
 mod spell;
 mod spell_dbc;
 mod spell_editor;
+mod spell_polarity;
 mod spell_snapshot;
 mod talent;
 mod terrain;

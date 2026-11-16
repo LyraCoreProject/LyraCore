@@ -48,18 +48,19 @@ use lyracore_shared::spell::taxonomy::{
     A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT,
     A_SPELLMOD_PCT, A_TRANSFORM, CAST_FLAG_AREA_AURA, CAST_FLAG_CHANNELED,
     CAST_FLAG_COMBO_FINISHER, CAST_FLAG_ITEM_TARGET, CAST_FLAG_RANGED_AUTO_REPEAT,
-    CAST_FLAG_RIGHTEOUSNESS, CAST_FLAG_WEAPON_PROCS, COMBAT_ATTACK_POWER, COMBAT_CRIT,
-    COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_SPELL_CRIT, COMBAT_THREAT,
-    E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM,
-    E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET,
-    E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING,
-    E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT,
-    E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE,
-    E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT,
-    M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG,
-    P_FLAT_MANA, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW,
-    P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED,
-    SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
+    CAST_FLAG_REFUSES_SELF_CAST, CAST_FLAG_RIGHTEOUSNESS, CAST_FLAG_WEAPON_PROCS,
+    COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER,
+    COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE,
+    E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL,
+    E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL,
+    E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
+    E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED,
+    E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_PET,
+    E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN,
+    P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
+    P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK,
+    P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
+    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STANCE_BATTLE,
     STANCE_BEAR, STANCE_BERSERKER, STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL,
     T_AREA_ALLY, T_AREA_ENEMY, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
@@ -856,6 +857,9 @@ fn push_spell_header_row(
     }
     if s.targets & 0x10 != 0 {
         cast_flags |= CAST_FLAG_ITEM_TARGET;
+    }
+    if crate::spell_polarity::refuses_self_cast(s, &dbc.spells) {
+        cast_flags |= CAST_FLAG_REFUSES_SELF_CAST;
     }
     if s.effect
         .iter()
@@ -2771,7 +2775,10 @@ mod tests {
             (header.attributes, header.gcd_ms, header.stances),
             (64, 0, 1)
         );
-        assert_eq!(header.cast_flags, CAST_FLAG_RANGED_AUTO_REPEAT);
+        assert_eq!(
+            header.cast_flags,
+            CAST_FLAG_RANGED_AUTO_REPEAT | CAST_FLAG_REFUSES_SELF_CAST
+        );
         assert_eq!(
             rows.eventai_metadata
                 .iter()
@@ -3029,6 +3036,36 @@ mod tests {
                 AuraMod::default()
             ),
             E_CREATE_ITEM
+        );
+    }
+
+    #[test]
+    fn the_importer_stores_the_self_cast_decision_as_a_cast_flag() {
+        let spell = |id, effect, aura, base, target_a| Spell {
+            id,
+            effect: [effect, 0, 0],
+            effect_aura: [aura, 0, 0],
+            effect_base_points: [base, 0, 0],
+            implicit_target_a: [target_a, 0, 0],
+            duration: 1,
+            ..Default::default()
+        };
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![spell(133, 2, 0, 0, 6), spell(1038, 6, 10, -31, 57)];
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let flagged = |id| {
+            rows.headers
+                .iter()
+                .find(|h| h.spell_id == id)
+                .unwrap()
+                .cast_flags
+                & CAST_FLAG_REFUSES_SELF_CAST
+                != 0
+        };
+        assert!(flagged(133));
+        assert!(
+            !flagged(1038),
+            "Salvation is imported negative but positive for vmangos"
         );
     }
 

@@ -20,7 +20,19 @@ symbol = "WorldSession::HandleCastSpellOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "The completed cast omits its create-item execute log and orders the item notification differently. A negative self-target starts a cast instead of returning the recorded Refusal."
-path = "module/src/native/cast.rs"
-symbol = "receive"
-evidence = "cast_and_interrupt tier 1 with conformance.17: missing opcode 588 and extra/missing opcode 358 at finish; unexpected opcode 305 and missing opcode 304 at bad_target."
+description = "Only a create-item effect sends the SMSG_SPELLLOGEXECUTE execute log; vmangos also logs power drain, heal, energize, extra attacks, interrupt, dispel, resurrect, summon and other effects."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "finish_item_creation"
+evidence = "vmangos SpellEffects.cpp calls AddExecuteLogInfo from many effect handlers; EffectCreateItem is the only one covered. cast_and_interrupt tier 1 with conformance.19 has no remaining signatures, so the scenario cannot show the difference."
+
+[[known_gaps]]
+description = "A triggered create-item cast differs from vmangos in three ways. Its item push goes out before SMSG_SPELL_GO and keeps the looted flags, where DoCreateItem sends SendNewItem(item, count, true, true) after GO. Its execute log is sent unconditionally, where vmangos sends it only when IsNeedSendToClient() holds (a visual, a channel, a speed or a non-triggered cast) and never with a SCHOOL_DAMAGE effect."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "run_spell_effects"
+evidence = "vmangos Spell.cpp _handle_immediate_phase (m_needSpellLog) and IsNeedSendToClient, SpellEffects.cpp DoCreateItem at d9173eca. The recorded scenario casts from the client, so tier 1 has no triggered create-item packets."
+
+[[known_gaps]]
+description = "The execute log writes one block per created item, and a scripted create-item spell is logged under a spell id whose Spell.dbc effect is not 24. vmangos groups the entries of one effect index under a single block with a count."
+path = "module/src/native/spell.rs"
+symbol = "item_creation_log_message"
+evidence = "vmangos Server/Packets/Spell.cpp SpellLogExecute::AppendBodyTo groups ExecuteLogInfo per effect index; Conjure Water creates one item per effect, so the scenario's bytes match."

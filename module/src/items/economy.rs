@@ -474,10 +474,7 @@ pub(crate) fn apply_buy_item_to(
     let committed = if let Some(slot) = last_slot {
         plan.commit_purchase(ctx, slot, total_count)
     } else {
-        plan.commit_with_source(
-            ctx,
-            lyracore_protocol::messages::vanilla::NewItemSource::FromNpc,
-        )
+        plan.commit_with_source(ctx, super::ItemPush::FROM_NPC)
     };
     committed.map_err(|cause| BuyRefusal::CommitFailed(Box::new(cause.into())))
 }
