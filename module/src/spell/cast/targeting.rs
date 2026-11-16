@@ -1157,15 +1157,10 @@ fn apply_damage_effect(
         E_JUDGEMENT => {
             let seal = seal_amount(ctx, caster_guid);
             if seal > 0 {
-                let seal = bonuses::spell_damage_taken(
-                    ctx,
-                    hdr,
-                    e,
-                    caster_guid,
-                    target_guid,
-                    seal as f32,
-                    1,
-                );
+                let seal =
+                    bonuses::spell_damage_done_float(ctx, hdr, e, caster_guid, seal as f32, false);
+                let seal =
+                    bonuses::spell_damage_taken(ctx, hdr, e, caster_guid, target_guid, seal, 1);
                 let (dealt, absorbed) = crate::combat::deal_damage(
                     ctx,
                     caster_guid,
@@ -1235,15 +1230,16 @@ fn apply_restore_effect(
             }
             t.power -= drained;
             t.update(ctx);
-            let damage = bonuses::spell_damage_taken(
+            let damage = bonuses::spell_damage_done_float(
                 ctx,
                 hdr,
                 e,
                 caster_guid,
-                target_guid,
                 mana_burn_damage(drained, e.p1) as f32,
-                1,
+                false,
             );
+            let damage =
+                bonuses::spell_damage_taken(ctx, hdr, e, caster_guid, target_guid, damage, 1);
             let (dealt, absorbed) = crate::combat::deal_damage(
                 ctx,
                 caster_guid,

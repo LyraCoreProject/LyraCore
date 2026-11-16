@@ -150,7 +150,18 @@ pub(crate) fn spell_damage_done_float(
     }
     let seal = hdr.cast_flags & lyracore_shared::spell::taxonomy::CAST_FLAG_RIGHTEOUSNESS != 0;
     let power = if matches!(hdr.damage_class, 2 | 3) && !seal {
-        auras_on(ctx, caster)
+        // vmangos MeleeDamageBonusDone: melee Spells need physical bonuses, ranged any school.
+        let gear = crate::items::equipped_school_stat_bonus(
+            ctx,
+            caster,
+            crate::items::EquipStat::SpellPower,
+            if hdr.damage_class == 3 {
+                hdr.school_mask
+            } else {
+                hdr.school_mask & 1
+            },
+        );
+        let auras: i32 = auras_on(ctx, caster)
             .filter(|aura| {
                 aura.eff_kind == A_MOD_DAMAGE_DONE_FLAT
                     && aura.eff_p0 & i32::from(hdr.school_mask) != 0
@@ -175,7 +186,8 @@ pub(crate) fn spell_damage_done_float(
                     })
             })
             .map(|aura| amount(&aura))
-            .sum()
+            .sum();
+        auras.saturating_add(gear)
     } else {
         spell_power(ctx, caster, hdr.school_mask)
     };

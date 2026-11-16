@@ -422,13 +422,21 @@ fn fire_proc_damage(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) ->
         .find(row.spell_id)
         .zip(ctx.db.game_spell_effect().id().find(row.effect_id))
         .map_or(row.amount, |(hdr, effect)| {
+            let damage = super::bonuses::spell_damage_done_float(
+                ctx,
+                &hdr,
+                &effect,
+                row.target_guid,
+                row.amount as f32,
+                false,
+            );
             let damage = super::bonuses::spell_damage_taken(
                 ctx,
                 &hdr,
                 &effect,
                 row.target_guid,
                 counterparty_guid,
-                row.amount as f32,
+                damage,
                 1,
             );
             super::bonuses::round_damage(ctx, counterparty_guid, damage)

@@ -1291,7 +1291,7 @@ fn resolve_effect_kind(
         } else {
             aura_mod_to_kind(aura)
         };
-        let k = if effect_id != 6
+        let k = if !is_aura_effect(effect_id)
             && matches!(
                 k,
                 A_MOD_DAMAGE_DONE_FLAT
@@ -3238,6 +3238,23 @@ mod tests {
         }
         assert!(!equip_aura_supported(52, 0, [2, 0, 0]));
         assert!(!equip_aura_supported(85, 3, [u32::MAX, 0, 0]));
+    }
+
+    #[test]
+    fn area_aura_effects_keep_their_school_damage_kinds() {
+        // Sanctity Aura 20218 (35), Master Demonologist 23761 (119) and Soul Link 25228 (119).
+        for effect in [27, 35, 119] {
+            for (aura, kind) in [
+                (13, A_MOD_DAMAGE_DONE_FLAT),
+                (14, A_MOD_DAMAGE_TAKEN_FLAT),
+                (71, A_MOD_SCHOOL_CRIT),
+                (79, A_MOD_DAMAGE_DONE_PCT),
+                (115, A_MOD_HEALING_TAKEN),
+            ] {
+                let row = equip_review_effect(20218, aura, 9, 2, (effect, 1, 0));
+                assert_eq!((effect, aura, row.kind), (effect, aura, kind));
+            }
+        }
     }
 
     #[test]

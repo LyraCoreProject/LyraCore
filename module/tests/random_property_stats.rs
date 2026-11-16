@@ -336,11 +336,12 @@ fn spell_power_selects_school_and_healing_power_only_affects_heals() {
         .pop()
         .unwrap()["guid"]
         .clone();
-    for (spell, school) in [(5090230, 4u8), (5090231, 16), (5090232, 64)] {
+    for (spell, school) in [(5090230, 4u8), (5090231, 16), (5090232, 64), (5090234, 16)] {
         create_damage_spell(&shard, spell, school);
     }
-    shard.assert_sql("UPDATE game_spell_effect SET bonus_coefficient = 1.0 WHERE spell_id >= 5090230 AND spell_id <= 5090232");
-    let baseline = [5090230u32, 5090231, 5090232].map(|spell| {
+    shard.assert_sql("UPDATE game_spell_effect SET bonus_coefficient = 1.0 WHERE spell_id >= 5090230 AND spell_id <= 5090234");
+    shard.assert_sql("UPDATE game_spell SET damage_class = 3 WHERE spell_id = 5090234");
+    let baseline = [5090230u32, 5090231, 5090232, 5090234].map(|spell| {
         shard.assert_call("debug_compute_spell", &["1", &wolf, &spell.to_string()]);
         readout(&shard, "spell")["spell_hit_normal"]
             .parse::<u32>()
@@ -348,8 +349,15 @@ fn spell_power_selects_school_and_healing_power_only_affects_heals() {
     });
 
     grant_and_equip(&shard);
-    for (index, expected_bonus) in [20u32, 30, 0].into_iter().enumerate() {
-        let spell = 5090230 + index as u32;
+    for (index, (spell, expected_bonus)) in [
+        (5090230u32, 20u32),
+        (5090231, 30),
+        (5090232, 0),
+        (5090234, 30),
+    ]
+    .into_iter()
+    .enumerate()
+    {
         shard.assert_call("debug_compute_spell", &["1", &wolf, &spell.to_string()]);
         assert_eq!(
             readout(&shard, "spell")["spell_hit_normal"]
