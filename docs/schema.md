@@ -401,6 +401,20 @@ minutes. `game_operator` is a singleton holding the one Operator identity, captu
 `game_account_claim`. Operator reducers that act for a Character take a `SessionActor`; a null
 ownership refuses a Character with an active Account Claim.
 
+### Character Migration (`module/src/character_migration.rs`)
+
+Private. `game_character_migration` is keyed by `<Migration Source label>/<source guid>` and names
+the Character guid that the migration created. It is classified as not Character-owned: deleting the
+Character keeps the row, so a rerun of the migration does not recreate the Character. See
+[Character Migration](./character-migration.md).
+
+`game_mail_migration` is private, keyed by `<label>/<source mail id>/<source item guid>`, and names
+the Mail it created. Deleting the Mail keeps the row.
+`game_contact_migration` is private and keyed by the owner's `<label>/<source guid>`. It marks a
+contact list as applied, so removed contacts stay removed after a rerun.
+`game_guild_migration` is private, keyed by `<label>/<source guild id>`, and names the Guild it
+founded.
+
 ### Chat (`module/src/chat.rs`, `module/src/realm_chat.rs`, `module/src/channel.rs`)
 
 `game_chat_event_live` is the event row for one say, yell, `/e` or creature line. The chat handler

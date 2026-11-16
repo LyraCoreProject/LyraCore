@@ -520,6 +520,14 @@ pub(crate) fn valid_split_dest_slot(to_slot: u8) -> bool {
     valid_dest_slot(to_slot) && to_slot > BAG_SLOT_END_INCL
 }
 
+// Returns None for a position this flat model cannot address, such as inside a bank bag.
+pub(crate) fn bag_content_slot(bag_equip_slot: u8, slot_in_bag: u8) -> Option<u8> {
+    ((BAG_SLOT_START..=BAG_SLOT_END_INCL).contains(&bag_equip_slot) && slot_in_bag < MAX_BAG_SIZE)
+        .then(|| {
+            BAG_CONTENT_OFFSET + (bag_equip_slot - BAG_SLOT_START) * MAX_BAG_SIZE + slot_in_bag
+        })
+}
+
 pub(crate) fn bag_content_decompose(to_slot: u8) -> (u8, u8) {
     let offset = to_slot - BAG_CONTENT_OFFSET;
     (offset / MAX_BAG_SIZE, offset % MAX_BAG_SIZE)
@@ -736,6 +744,31 @@ pub(crate) fn first_free_bank_slot(ctx: &ReducerContext, player_guid: u64) -> Op
         .map(|i| i.slot)
         .collect();
     (BANK_SLOT_START..=BANK_SLOT_END_INCL).find(|slot| !occupied.contains(slot))
+}
+
+pub(crate) fn first_free_storage_slot(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    item: &crate::ItemTemplate,
+) -> Option<u8> {
+    first_free_bank_slot(ctx, player_guid).or_else(|| {
+        let owned: Vec<ItemInstance> = ctx
+            .db
+            .game_item_instance()
+            .by_owner_guid()
+            .filter(&player_guid)
+            .collect();
+        let templates = ctx.db.game_item_template();
+        free_inventory_slots(&owned, |bag_entry| {
+            templates
+                .entry()
+                .find(bag_entry)
+                .filter(|bag| item_fits_bag(item, bag))
+                .map_or(0, |bag| bag.container_slots)
+        })
+        .first()
+        .copied()
+    })
 }
 
 pub(crate) fn apply_auto_bank_item(

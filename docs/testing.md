@@ -35,6 +35,7 @@ python3 -B -m unittest discover -s native-host -p 'test_*.py'
 cargo test -p lyracore-protocol --example benilla_inventory
 python3 -m unittest discover -s importer/scripts/tests -v
 cargo test -p lyracore-importer
+cargo test -p lyracore-migrator
 cargo test -p lyracore-module --lib --features=debug_reducers
 cargo test -p lyracore-module --test build_script
 cargo test -p lyracore-module --test native_debug_gate
