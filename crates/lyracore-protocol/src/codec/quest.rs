@@ -318,6 +318,7 @@ pub fn build_request_items(
     giver_guid: u64,
     d: &QuestDetailView,
     completable: bool,
+    close_on_cancel: bool,
 ) -> SMSG_QUESTGIVER_REQUEST_ITEMS {
     SMSG_QUESTGIVER_REQUEST_ITEMS {
         npc: Guid::new(giver_guid),
@@ -330,7 +331,7 @@ pub fn build_request_items(
         } else {
             d.emotes.incomplete
         },
-        auto_finish: false,
+        auto_finish: close_on_cancel,
         required_money: Gold::new(0),
         required_items: reward_items_with_icon(&d.required_items),
         unknown1: 0x02,
@@ -814,11 +815,13 @@ mod tests {
             }],
             ..detail_view()
         };
-        let incomplete = build_request_items(100, &d, false);
+        let incomplete = build_request_items(100, &d, false, true);
         assert_eq!(incomplete.emote, 6);
         assert_eq!(incomplete.completable, QuestCompletable::NotCompletable);
-        let complete = build_request_items(100, &d, true);
+        assert!(incomplete.auto_finish, "close on cancel follows the caller");
+        let complete = build_request_items(100, &d, true, false);
         assert_eq!(complete.emote, 1);
+        assert!(!complete.auto_finish);
         assert_eq!(complete.required_items.len(), 1);
         assert_eq!(complete.required_items[0].item, 900);
         assert_eq!(complete.required_items[0].item_display_id, 77);

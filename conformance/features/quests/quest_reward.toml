@@ -7,7 +7,6 @@ replies = ["0x017E", "0x018D", "0x0166", "0x0124", "0x01D0", "0x0191"]
 dependencies = []
 required_rungs = ["durable_module", "tier1", "conformance_audit", "real_client"]
 scenarios = ["quest_reward"]
-deliberate_deviations = []
 prerequisites = ["Quest templates, objectives, giver relations and reward item templates are imported."]
 
 [vmangos]
@@ -33,8 +32,51 @@ path = "module/tests/conformance/quest_turn_in.rs"
 function = "a_refused_turn_in_re_offers_the_reward_only_to_a_giver_that_ends_the_quest"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "a_full_backpack_refuses_the_turn_in_with_an_inventory_full_notice"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "a_unique_reward_the_character_cannot_hold_refuses_the_turn_in_as_a_duplicate_item"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "reputation_is_announced_before_the_xp_gain"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "the_chosen_item_is_announced_before_the_fixed_reward_items"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "a_level_up_turn_in_sends_the_next_level_threshold_with_the_xp"
+rung = "durable_module"
+
+[[deliberate_deviations]]
+id = "absent_choice_slot"
+result = "A turn-in that picks a choice slot below 6 with no item is refused and re-offers the reward. The Reference Server completes the quest and grants no choice item."
+reason = "A real 1.12 client cannot send an empty slot, because vmangos and the LyraCore importer close gaps in the choice list, so only a crafted packet reaches this case, and refusing it is safer. The maintainer agreed to keep the refusal."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp"
+
 [[known_gaps]]
 description = "Quest reward text and title differ in tier 1 because the fixture authors its own quest text; the Reference Server text stays out of the repository. The offer-reward packet also omits the reward spell the Reference Server shows."
 path = "module/src/native/quest.rs"
 symbol = "offer_reward"
 evidence = "quest_reward tier 1 with conformance.19 conforms on every rule; data signatures world_text_397_text and world_text_397_title remain at offer and repeat. Expected text hashes f3532f35... and 84bf6d36... come from the vmangos reference trace; the fixture text 'Fixture reward 2158.' hashes differently. game_quest_reward_spell keeps only the learned spell of RewSpellCast or RewSpell, so RewSpell is not available to the packet."
+
+[[known_gaps]]
+description = "A dead Character cannot turn in a quest. The Reference Server lets a ghost talk to a quest giver that is visible to the dead, as for quest 3912."
+path = "module/src/native/quest.rs"
+symbol = "evaluations"
+evidence = "evaluations returns nothing for a dead Character, and request_turn_in_quest refuses a dead player. This predates the Behavior work; vmangos HandleQuestgiverChooseRewardOpcode checks IsVisibleForDead on the giver instead."
+
+[[known_gaps]]
+description = "When each reward fits the bags alone but not together, the turn-in refusal shows the quest-failed inventory notice. The Reference Server shows the inventory-full equip error there."
+path = "module/src/native/quest.rs"
+symbol = "refused_turn_in_screen"
+evidence = "Player::CanRewardQuest sends SMSG_QUESTGIVER_QUEST_FAILED when one reward does not fit alone and SMSG_INVENTORY_CHANGE_FAILURE when the free slot count is below the reward count. exchange_items reports both as one inventory-full refusal."

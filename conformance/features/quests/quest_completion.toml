@@ -23,8 +23,34 @@ path = "module/tests/conformance/quest_turn_in.rs"
 function = "a_quest_with_items_shows_the_request_window_until_the_items_are_handed_in"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "hello_at_a_giver_of_one_item_quest_shows_the_request_window_that_closes_on_cancel"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "hello_offers_the_reward_of_an_unfinished_quest_that_has_no_request_text"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "complete_quest_offers_the_reward_of_an_unfinished_quest_that_has_no_request_text"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_turn_in.rs"
+function = "complete_quest_offers_the_reward_of_a_finished_quest_that_needs_no_items"
+rung = "durable_module"
+
 [[known_gaps]]
 description = "Quest completion text and title differ in tier 1 because the fixture authors its own quest text; the Reference Server text stays out of the repository."
 path = "module/src/native/quest.rs"
 symbol = "complete_quest_screen"
 evidence = "quest_completion tier 1 with conformance.19 conforms on every rule; data signatures world_text_395_text, world_text_395_title, world_text_397_text and world_text_397_title remain. Expected hashes come from the vmangos reference trace; the fixture texts 'Fixture request 7.' and 'Fixture reward 2158.' hash differently."
+
+[[known_gaps]]
+description = "A dead Character gets no quest-completion reply. The Reference Server lets a ghost talk to a quest giver that is visible to the dead, as for quest 3912."
+path = "module/src/native/quest.rs"
+symbol = "evaluations"
+evidence = "evaluations returns nothing for a dead Character, so complete_quest_screen and request_reward_screen treat the quest as unfinished. This predates the Behavior work."

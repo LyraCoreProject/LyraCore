@@ -1,4 +1,4 @@
-use crate::actor::ActionRefusal;
+use crate::actor::{ActionRefusal, ActionRefusalKind};
 use crate::npc_interaction::NpcService;
 use crate::quest::*;
 use crate::{game_creature_template, game_item_template};
@@ -314,15 +314,11 @@ pub(super) fn menu(ctx: &ReducerContext, giver: u64, guid: u64) -> Result<Vec<Pa
     });
     match turn_in {
         None => Ok(details(ctx, giver, detail.quest_id)),
-        Some(eval) if eval.complete => Ok(vec![packet(
-            ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(codec::build_offer_reward(
-                giver, &detail,
-            ))),
-        )?]),
-        Some(_) => Ok(vec![packet(
-            ServerOpcodeMessage::SMSG_QUESTGIVER_REQUEST_ITEMS(Box::new(
-                codec::build_request_items(giver, &detail, false),
-            )),
+        Some(eval) => Ok(vec![request_items_or_offer_reward(
+            giver,
+            &detail,
+            eval.complete,
+            true,
         )?]),
     }
 }
@@ -339,17 +335,23 @@ fn quest_is_ready_to_reward(ctx: &ReducerContext, giver: u64, guid: u64, quest: 
         .any(|eval| eval.quest_id == quest && eval.role == quest_role::END && eval.complete)
 }
 
-// The request-items window shows only when the quest has text and items to hand in, or is not done.
+// Request-items shows only when the quest has request text and either needs items or is not done.
 fn request_items_or_offer_reward(
     giver: u64,
     detail: &codec::QuestDetailView,
     complete: bool,
+    close_on_cancel: bool,
 ) -> Result<Packet, String> {
     if detail.request_items_text.is_empty() || (detail.required_items.is_empty() && complete) {
         return offer_reward(giver, detail);
     }
     packet(ServerOpcodeMessage::SMSG_QUESTGIVER_REQUEST_ITEMS(
-        Box::new(codec::build_request_items(giver, detail, complete)),
+        Box::new(codec::build_request_items(
+            giver,
+            detail,
+            complete,
+            close_on_cancel,
+        )),
     ))
 }
 
@@ -364,7 +366,7 @@ fn complete_quest_screen(
     };
     let complete = quest_is_ready_to_reward(ctx, giver, guid, quest);
     Ok(vec![request_items_or_offer_reward(
-        giver, &detail, complete,
+        giver, &detail, complete, false,
     )?])
 }
 
@@ -383,14 +385,17 @@ fn request_reward_screen(
     Ok(vec![offer_reward(giver, &detail)?])
 }
 
-// A refused turn-in re-offers the reward of a quest this giver ends; any other request gets no reply.
+// A refused turn-in tells why storage failed, then re-offers the reward of a quest this giver
+// ends; any other request gets no reply.
 fn refused_turn_in_screen(
     ctx: &ReducerContext,
     giver: u64,
     guid: u64,
     quest: u32,
+    refusal: &ActionRefusal,
 ) -> Result<Vec<Packet>, String> {
     use crate::game_world_entity;
+    use lyracore_protocol::messages::vanilla::QuestFailedReason as Reason;
     let alive = ctx
         .db
         .game_world_entity()
@@ -404,7 +409,22 @@ fn refused_turn_in_screen(
     let Some(detail) = quest_detail_view(ctx, quest).filter(|_| alive && ends_quest) else {
         return Ok(Vec::new());
     };
-    Ok(vec![offer_reward(giver, &detail)?])
+    let reason = match refusal.kind {
+        ActionRefusalKind::InventoryFull => Some(Reason::QuestFailedInventoryFull),
+        ActionRefusalKind::DuplicateItem => Some(Reason::QuestFailedDuplicateItem),
+        _ => None,
+    };
+    let notice = reason
+        .map(|reason| {
+            packet(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_FAILED(
+                codec::build_questgiver_quest_failed(quest, reason),
+            ))
+        })
+        .transpose()?;
+    Ok(notice
+        .into_iter()
+        .chain([offer_reward(giver, &detail)?])
+        .collect())
 }
 
 fn accept_refusal(refusal: &AcceptQuestRefusal) -> Vec<Packet> {
@@ -514,11 +534,16 @@ pub(super) fn receive(
             if q.reward >= QUEST_REWARD_CHOICES_COUNT {
                 return Ok(());
             }
-            if let Err(reason) = super::actor(ctx, guid).and_then(|_| {
-                request_turn_in_quest(ctx, guid, q.guid.guid(), q.quest_id, q.reward)?;
-                crate::mail_reward::file_reward_letter(ctx, guid, q.guid.guid(), q.quest_id)
-            }) {
-                let packets = refused_turn_in_screen(ctx, q.guid.guid(), guid, q.quest_id)?;
+            let turned_in = super::actor(ctx, guid)
+                .map_err(|refusal| ActionRefusal::from(String::from(refusal)))
+                .and_then(|_| request_turn_in_quest(ctx, guid, q.guid.guid(), q.quest_id, q.reward))
+                .and_then(|()| {
+                    crate::mail_reward::file_reward_letter(ctx, guid, q.guid.guid(), q.quest_id)
+                        .map_err(|refusal| ActionRefusal::from(String::from(refusal)))
+                });
+            if let Err(reason) = turned_in {
+                let packets =
+                    refused_turn_in_screen(ctx, q.guid.guid(), guid, q.quest_id, &reason)?;
                 return Err(Rollback::replies(packets, reason).into());
             }
             let mut packets: Vec<Packet> = quest_detail_view(ctx, q.quest_id)

@@ -560,11 +560,13 @@ impl ItemStoragePlan {
             .sum();
         if template.max_count != 0 && owned_count + u64::from(count) > u64::from(template.max_count)
         {
-            return Err(format!(
-                "unique item limit {} for item {}",
-                template.max_count, template.entry
-            )
-            .into());
+            return Err(ActionRefusal::new(
+                ActionRefusalKind::DuplicateItem,
+                format!(
+                    "unique item limit {} for item {}",
+                    template.max_count, template.entry
+                ),
+            ));
         }
         let max_stack = template.max_stack.max(1);
         let random_property_id = match preselected_property {
@@ -865,6 +867,7 @@ mod tests {
         let mut template = crate::ItemTemplate::blank(1, "unique reward");
         template.max_count = 1;
         let refusal = grant(&mut plan, &template, 1).unwrap_err();
+        assert_eq!(refusal.kind, ActionRefusalKind::DuplicateItem);
         assert_eq!(refusal.detail, "unique item limit 1 for item 1");
     }
 

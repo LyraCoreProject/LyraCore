@@ -1,7 +1,7 @@
 // Behavior checks for quest_reward and quest_completion against vmangos d9173eca,
 // src/game/Handlers/QuestHandler.cpp and Player::RewardQuest.
 use lyracore_package_delta::fixture_ids::{
-    FIXTURE_BLADE, FIXTURE_REINS, SCENARIO_QUESTGIVER_ENTRY,
+    FIXTURE_BLADE, FIXTURE_JERKY, FIXTURE_REINS, SCENARIO_QUESTGIVER_ENTRY,
 };
 use lyracore_shared::constants::npc_flags;
 use lyracore_test_support::{ReducerConnection, Standalone};
@@ -15,6 +15,7 @@ const UNRELATED_QUEST: u32 = 5_091_202;
 const REQUIRED_COUNT: u32 = 5;
 const CHOICE_COUNT: u32 = 2;
 
+const CMSG_QUESTGIVER_HELLO: u32 = 0x184;
 const CMSG_QUESTGIVER_COMPLETE_QUEST: u32 = 0x18A;
 const CMSG_QUESTGIVER_REQUEST_REWARD: u32 = 0x18C;
 const CMSG_QUESTGIVER_CHOOSE_REWARD: u32 = 0x18E;
@@ -23,6 +24,15 @@ const SMSG_QUESTGIVER_OFFER_REWARD: u16 = 0x18D;
 const SMSG_ITEM_PUSH_RESULT: u16 = 0x166;
 const SMSG_LOG_XPGAIN: u16 = 0x1D0;
 const SMSG_QUESTGIVER_QUEST_COMPLETE: u16 = 0x191;
+const SMSG_QUESTGIVER_QUEST_FAILED: u16 = 0x192;
+const SMSG_SET_FACTION_STANDING: u16 = 0x124;
+const SMSG_UPDATE_OBJECT: u16 = 0xA9;
+const PLAYER_XP: u16 = 716;
+const PLAYER_NEXT_LEVEL_XP: u16 = 717;
+const FACTION: u32 = 72;
+const INVENTORY_FULL_REASON: u32 = 4;
+const DUPLICATE_ITEM_REASON: u32 = 17;
+const BACKPACK_SLOTS: u32 = 16;
 
 fn stage(name: &str) -> (Standalone, ReducerConnection, u64, u64) {
     let (shard, guid, _) = fixture(name);
@@ -165,6 +175,35 @@ fn quest_request(
     body.extend(quest.to_le_bytes());
     body.extend(reward.map(u32::to_le_bytes).into_iter().flatten());
     request(connection, opcode, body)
+}
+
+fn hello(connection: &mut ReducerConnection, giver: u64) -> Vec<(u16, Vec<u8>)> {
+    request(
+        connection,
+        CMSG_QUESTGIVER_HELLO,
+        giver.to_le_bytes().to_vec(),
+    )
+}
+
+fn only_ends(shard: &Standalone, quest: u32) {
+    shard.assert_sql(&format!(
+        "DELETE FROM game_creature_quest WHERE quest_entry != {quest}"
+    ));
+}
+
+fn completable(request_tail: &[u8]) -> u32 {
+    let items = word(request_tail, 16) as usize;
+    word(request_tail, 24 + 12 * items)
+}
+
+fn pushed_items(replies: &[(u16, Vec<u8>)]) -> Vec<u32> {
+    let mut items: Vec<u32> = replies
+        .iter()
+        .filter(|(opcode, _)| *opcode == SMSG_ITEM_PUSH_RESULT)
+        .map(|(_, body)| word(body, 25))
+        .collect();
+    items.dedup();
+    items
 }
 
 fn opcodes(packets: &[(u16, Vec<u8>)]) -> Vec<u16> {
@@ -349,4 +388,221 @@ fn a_quest_with_items_shows_the_request_window_until_the_items_are_handed_in() {
         None,
     );
     assert_eq!(opcodes(&offer), [SMSG_QUESTGIVER_OFFER_REWARD]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn hello_at_a_giver_of_one_item_quest_shows_the_request_window_that_closes_on_cancel() {
+    let (shard, mut connection, guid, giver) = stage("quest-hello-request-items");
+    only_ends(&shard, OBJECTIVE_QUEST);
+    grant_quest(&shard, guid, OBJECTIVE_QUEST);
+
+    let incomplete = hello(&mut connection, giver);
+    assert_eq!(opcodes(&incomplete), [SMSG_QUESTGIVER_REQUEST_ITEMS]);
+    let tail = after_request_strings(&incomplete[0].1);
+    assert_eq!(word(tail, 8), 1, "close on cancel");
+    assert_eq!(completable(tail), 0);
+
+    shard.assert_call(
+        "debug_grant_item",
+        &[
+            &guid.to_string(),
+            &FIXTURE_REINS.to_string(),
+            &REQUIRED_COUNT.to_string(),
+        ],
+    );
+    let complete = hello(&mut connection, giver);
+    assert_eq!(opcodes(&complete), [SMSG_QUESTGIVER_REQUEST_ITEMS]);
+    let tail = after_request_strings(&complete[0].1);
+    assert_eq!(word(tail, 8), 1, "close on cancel");
+    assert_eq!(completable(tail), 3);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn hello_offers_the_reward_of_an_unfinished_quest_that_has_no_request_text() {
+    let (shard, mut connection, guid, giver) = stage("quest-hello-no-request-text");
+    only_ends(&shard, OBJECTIVE_QUEST);
+    shard.assert_sql(&format!(
+        "UPDATE game_quest_text SET request_items_text = '' WHERE quest_entry = {OBJECTIVE_QUEST}"
+    ));
+    grant_quest(&shard, guid, OBJECTIVE_QUEST);
+
+    assert_eq!(
+        opcodes(&hello(&mut connection, giver)),
+        [SMSG_QUESTGIVER_OFFER_REWARD]
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn complete_quest_offers_the_reward_of_an_unfinished_quest_that_has_no_request_text() {
+    let (shard, mut connection, guid, giver) = stage("quest-complete-no-request-text");
+    shard.assert_sql(&format!(
+        "UPDATE game_quest_text SET request_items_text = '' WHERE quest_entry = {OBJECTIVE_QUEST}"
+    ));
+    grant_quest(&shard, guid, OBJECTIVE_QUEST);
+
+    let replies = quest_request(
+        &mut connection,
+        CMSG_QUESTGIVER_COMPLETE_QUEST,
+        giver,
+        OBJECTIVE_QUEST,
+        None,
+    );
+    assert_eq!(opcodes(&replies), [SMSG_QUESTGIVER_OFFER_REWARD]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn complete_quest_offers_the_reward_of_a_finished_quest_that_needs_no_items() {
+    let (shard, mut connection, guid, giver) = stage("quest-complete-no-items");
+    grant_quest(&shard, guid, QUEST);
+
+    let replies = quest_request(
+        &mut connection,
+        CMSG_QUESTGIVER_COMPLETE_QUEST,
+        giver,
+        QUEST,
+        None,
+    );
+    assert_eq!(opcodes(&replies), [SMSG_QUESTGIVER_OFFER_REWARD]);
+}
+
+fn assert_refused_with_notice(replies: &[(u16, Vec<u8>)], reason: u32) {
+    assert_eq!(
+        opcodes(replies),
+        [SMSG_QUESTGIVER_QUEST_FAILED, SMSG_QUESTGIVER_OFFER_REWARD],
+        "the notice comes before the re-offer"
+    );
+    assert_eq!(word(&replies[0].1, 0), QUEST);
+    assert_eq!(word(&replies[0].1, 4), reason);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_full_backpack_refuses_the_turn_in_with_an_inventory_full_notice() {
+    let (shard, mut connection, guid, giver) = stage("quest-turn-in-full-bags");
+    grant_quest(&shard, guid, QUEST);
+    for _ in 0..BACKPACK_SLOTS {
+        shard.assert_call(
+            "debug_grant_item",
+            &[&guid.to_string(), &FIXTURE_BLADE.to_string(), "1"],
+        );
+    }
+    let before = entries(&shard, guid);
+
+    let replies = quest_request(
+        &mut connection,
+        CMSG_QUESTGIVER_CHOOSE_REWARD,
+        giver,
+        QUEST,
+        Some(0),
+    );
+
+    assert_refused_with_notice(&replies, INVENTORY_FULL_REASON);
+    assert_eq!(entries(&shard, guid), before);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_unique_reward_the_character_cannot_hold_refuses_the_turn_in_as_a_duplicate_item() {
+    let (shard, mut connection, guid, giver) = stage("quest-turn-in-duplicate");
+    grant_quest(&shard, guid, QUEST);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET max_count = 1 WHERE entry = {FIXTURE_REINS}"
+    ));
+
+    let replies = quest_request(
+        &mut connection,
+        CMSG_QUESTGIVER_CHOOSE_REWARD,
+        giver,
+        QUEST,
+        Some(1),
+    );
+
+    assert_refused_with_notice(&replies, DUPLICATE_ITEM_REASON);
+    assert!(entries(&shard, guid).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn reputation_is_announced_before_the_xp_gain() {
+    let (shard, mut connection, guid, giver) = stage("quest-turn-in-reputation");
+    shard.assert_sql(&format!(
+        "DELETE FROM game_faction WHERE faction_id = {FACTION}"
+    ));
+    shard.insert_row(
+        "game_faction",
+        &[("faction_id", &FACTION), ("reputation_index", &19)],
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_quest_template SET rew_rep_faction_1 = {FACTION}, rew_rep_value_1 = 25 WHERE entry = {QUEST}"
+    ));
+    grant_quest(&shard, guid, QUEST);
+
+    let replies = quest_request(
+        &mut connection,
+        CMSG_QUESTGIVER_CHOOSE_REWARD,
+        giver,
+        QUEST,
+        Some(0),
+    );
+
+    let mut announced = opcodes(&replies);
+    announced.retain(|opcode| [SMSG_SET_FACTION_STANDING, SMSG_LOG_XPGAIN].contains(opcode));
+    assert_eq!(announced, [SMSG_SET_FACTION_STANDING, SMSG_LOG_XPGAIN]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_chosen_item_is_announced_before_the_fixed_reward_items() {
+    let (shard, mut connection, guid, giver) = stage("quest-turn-in-reward-order");
+    shard.insert_row(
+        "game_quest_reward_item",
+        &[
+            ("quest_entry", &QUEST),
+            ("item_entry", &FIXTURE_JERKY),
+            ("count", &1),
+        ],
+    );
+    grant_quest(&shard, guid, QUEST);
+
+    let replies = quest_request(
+        &mut connection,
+        CMSG_QUESTGIVER_CHOOSE_REWARD,
+        giver,
+        QUEST,
+        Some(1),
+    );
+
+    assert_eq!(pushed_items(&replies), [FIXTURE_REINS, FIXTURE_JERKY]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_level_up_turn_in_sends_the_next_level_threshold_with_the_xp() {
+    let (shard, mut connection, guid, giver) = stage("quest-turn-in-level-up");
+    shard.assert_sql(&format!(
+        "UPDATE game_quest_template SET reward_xp = 1000 WHERE entry = {QUEST}"
+    ));
+    grant_quest(&shard, guid, QUEST);
+
+    let replies = quest_request(
+        &mut connection,
+        CMSG_QUESTGIVER_CHOOSE_REWARD,
+        giver,
+        QUEST,
+        Some(0),
+    );
+
+    let fields: std::collections::BTreeMap<u16, u32> = replies
+        .iter()
+        .filter(|(opcode, _)| *opcode == SMSG_UPDATE_OBJECT)
+        .flat_map(|(opcode, body)| super::properties::updates(*opcode, body).unwrap())
+        .filter(|update| update.guid == guid)
+        .flat_map(|update| update.fields)
+        .collect();
+    assert!(fields.contains_key(&PLAYER_XP), "{fields:?}");
+    assert!(fields.contains_key(&PLAYER_NEXT_LEVEL_XP), "{fields:?}");
 }
