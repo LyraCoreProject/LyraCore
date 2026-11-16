@@ -296,14 +296,12 @@ fn fire_aura_procs(
         victim_bits,
         spell: triggering_spell(ctx, hit.spell_id),
         crit: hit.crit,
-        // One base attack time per unit approximates spell hits and off-hand swing rates.
         attack_time_ms: ctx
             .db
             .game_world_entity()
             .guid()
             .find(attacker_guid)
-            .map(|a| a.base_attack_time_ms)
-            .unwrap_or(0),
+            .map_or(0, |a| crate::combat::attack_time(ctx, &a, hit.source)),
     };
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     for (row, side, counterparty_guid) in candidates {

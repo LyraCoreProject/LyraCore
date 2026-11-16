@@ -48,6 +48,17 @@ pub(super) fn spells(item: &ItemTemplate) -> [(u32, u8); 5] {
     ]
 }
 
+fn has_weapon_delay(ctx: &ReducerContext, entry: u32) -> bool {
+    ctx.db
+        .game_item_template()
+        .entry()
+        .find(entry)
+        .is_some_and(|template| {
+            template.class == lyracore_shared::constants::starter_item::CLASS_WEAPON
+                && template.delay_ms != 0
+        })
+}
+
 fn equipped(item: &ItemInstance) -> bool {
     item.owner_guid != 0 && item.slot < 23
 }
@@ -79,6 +90,11 @@ pub(super) fn changed(
             crate::spell::shed_auras(ctx, removed);
         }
         reconcile_item(ctx, previous.owner_guid, Some(previous.guid), false);
+    }
+    for item in [previous, current].into_iter().flatten() {
+        if equipped(item) && has_weapon_delay(ctx, item.entry) {
+            crate::combat::weapon_changed(ctx, item.owner_guid, item.slot);
+        }
     }
     if let Some(current) = current.filter(|item| equipped(item)) {
         if previous.is_none_or(|old| !equipped(old) || old.owner_guid != current.owner_guid) {

@@ -157,6 +157,7 @@ pub fn sync_group_mirror(
     if effective_members.is_empty() {
         groups.group_id().delete(group_id);
         store_group_revision(ctx, group_id, roster_revision, false);
+        crate::native::health::group_changed(ctx, membership_changed.iter().copied());
         for guid in membership_changed {
             crate::instance::reconcile_instance_removal(ctx, guid);
         }
@@ -211,6 +212,14 @@ pub fn sync_group_mirror(
         });
     }
     store_group_revision(ctx, group_id, roster_revision, true);
+    if !membership_changed.is_empty() {
+        let affected: std::collections::BTreeSet<u64> = membership_changed
+            .iter()
+            .chain(&effective_members)
+            .copied()
+            .collect();
+        crate::native::health::group_changed(ctx, affected);
+    }
     for guid in membership_changed {
         crate::instance::reconcile_instance_removal(ctx, guid);
     }

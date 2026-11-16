@@ -191,16 +191,66 @@ pub(crate) fn effective_swing_time(ctx: &ReducerContext, attacker: &WorldEntity)
     swing_time_with_haste(main_hand_attack_time(ctx, attacker), speed)
 }
 
-/// A Character's main hand swings at its equipped weapon's delay; `base_attack_time_ms` is unarmed.
-pub(crate) fn main_hand_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
-    if unit.is_player() {
-        if let Some((_, _, delay)) = equipped_weapon_damage(ctx, unit.guid) {
-            if delay != 0 {
-                return delay;
-            }
-        }
+/// The unhasted attack time of the hand or weapon that made `source`; vmangos Unit::GetAttackTime.
+pub(crate) fn attack_time(ctx: &ReducerContext, unit: &WorldEntity, source: HitSource) -> u32 {
+    match source {
+        HitSource::OffHand => off_hand_attack_time(ctx, unit),
+        HitSource::Ranged => ranged_attack_time(ctx, unit),
+        _ => main_hand_attack_time(ctx, unit),
     }
-    unit.base_attack_time_ms
+}
+
+/// A Character's main hand swings at its usable weapon's delay; `base_attack_time_ms` is unarmed.
+pub(crate) fn main_hand_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+    if let Some(form) = feral_attack_time(unit) {
+        return form;
+    }
+    let holds_weapon = unit.is_player()
+        && crate::spell::chance_on_hit::holds_weapon(
+            unit.stance,
+            lyracore_shared::constants::starter_item::MAINHAND_SLOT,
+            || crate::spell::is_disarmed(ctx, unit.guid),
+        );
+    holds_weapon
+        .then(|| equipped_weapon_damage(ctx, unit.guid))
+        .flatten()
+        .map(|(_, _, delay)| delay)
+        .filter(|delay| *delay != 0)
+        .unwrap_or(unit.base_attack_time_ms)
+}
+
+pub(crate) fn off_hand_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+    if let Some(form) = feral_attack_time(unit) {
+        return form;
+    }
+    if !unit.is_player() {
+        return unit.base_attack_time_ms;
+    }
+    equipped_offhand_weapon_damage(ctx, unit.guid)
+        .map(|(_, _, delay)| delay)
+        .filter(|delay| *delay != 0)
+        .unwrap_or(DEFAULT_ATTACK_TIME_MS)
+}
+
+fn ranged_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+    if !unit.is_player() {
+        return unit.base_attack_time_ms;
+    }
+    equipped_ranged_weapon(ctx, unit.guid)
+        .map(|(_, _, delay, _)| delay)
+        .filter(|delay| *delay != 0)
+        .unwrap_or(DEFAULT_ATTACK_TIME_MS)
+}
+
+/// vmangos Player::InitDataForForm swings both hands of Cat Form at 1.0 s and Bear Form at 2.5 s.
+fn feral_attack_time(unit: &WorldEntity) -> Option<u32> {
+    use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR};
+    match unit.stance {
+        _ if !unit.is_player() => None,
+        STANCE_CAT => Some(1000),
+        STANCE_BEAR | STANCE_DIRE_BEAR => Some(2500),
+        _ => None,
+    }
 }
 
 fn weapon_profile_in_slot(

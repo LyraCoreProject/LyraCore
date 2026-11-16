@@ -46,17 +46,18 @@ pub(crate) use engage::{
     may_help, refresh_leash, relation, request_attack, resume_creature_engagement,
     start_melee_attack, stop_attack_for, stop_duel_combat, suspend_hostile_references,
     sweep_delete_game_combat_check_schedule, sweep_transfer_game_combat_check_schedule,
-    validate_attack_target, AttackRefusal, Relation, SWING_ERROR_BAD_FACING, SWING_ERROR_NONE,
-    SWING_ERROR_NOT_IN_RANGE,
+    validate_attack_target, weapon_changed, AttackRefusal, Relation, SWING_ERROR_BAD_FACING,
+    SWING_ERROR_NONE, SWING_ERROR_NOT_IN_RANGE,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use folds::defender_block_value;
 pub(crate) use folds::{
-    arm_react, attack_power_modifiers, effective_crit_bp, effective_ranged_crit_bp,
+    arm_react, attack_power_modifiers, attack_time, effective_crit_bp, effective_ranged_crit_bp,
     effective_swing_time, equipped_offhand_weapon_damage, equipped_ranged_weapon, find_ammo,
-    melee_attack_power, ranged_projectile, react_window_active, retaliate_on_hit, roll_money,
-    roll_ranged_swing, roll_swing, roll_swing_with_range, seal_holy_on_swing, spend_ranged_ammo,
-    swing_range_ctx, weapon_strike_spell_damage, wear_weapon, ReactKind, WeaponStrike,
+    melee_attack_power, off_hand_attack_time, ranged_projectile, react_window_active,
+    retaliate_on_hit, roll_money, roll_ranged_swing, roll_swing, roll_swing_with_range,
+    seal_holy_on_swing, spend_ranged_ammo, swing_range_ctx, weapon_strike_spell_damage,
+    wear_weapon, ReactKind, WeaponStrike,
 };
 
 pub(crate) use energy::regenerate_energy;

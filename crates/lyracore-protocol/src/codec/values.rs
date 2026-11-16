@@ -41,9 +41,11 @@ pub fn build_watched_faction_values(guid: u64, reputation_index: i32) -> SMSG_UP
     })
 }
 
-pub fn build_health_values(guid: u64, health: u32) -> SMSG_UPDATE_OBJECT {
+/// vmangos Unit::SetHealth and SetMaxHealth always send both fields together.
+pub fn build_health_values(guid: u64, health: u32, max_health: u32) -> SMSG_UPDATE_OBJECT {
     unit_values(guid, |unit| {
         unit.set_unit_health(health as i32);
+        unit.set_unit_maxhealth(max_health as i32);
     })
 }
 
@@ -208,31 +210,23 @@ pub fn build_virtual_item_values(
     build_values_update_raw(guid, &mask)
 }
 
-pub fn build_max_vitals_values(
-    guid: u64,
-    max_health: u32,
-    power_b: u8,
-    max_power: u32,
-) -> SMSG_UPDATE_OBJECT {
+pub fn build_max_power_values(guid: u64, power_b: u8, max_power: u32) -> SMSG_UPDATE_OBJECT {
     let max_p = max_power as i32;
-    unit_values(guid, |unit| {
-        unit.set_unit_maxhealth(max_health as i32);
-        match power_b {
-            1 => {
-                unit.set_unit_maxpower2(max_p);
-            }
-            2 => {
-                unit.set_unit_maxpower3(max_p);
-            }
-            3 => {
-                unit.set_unit_maxpower4(max_p);
-            }
-            4 => {
-                unit.set_unit_maxpower5(max_p);
-            }
-            _ => {
-                unit.set_unit_maxpower1(max_p);
-            }
+    unit_values(guid, |unit| match power_b {
+        1 => {
+            unit.set_unit_maxpower2(max_p);
+        }
+        2 => {
+            unit.set_unit_maxpower3(max_p);
+        }
+        3 => {
+            unit.set_unit_maxpower4(max_p);
+        }
+        4 => {
+            unit.set_unit_maxpower5(max_p);
+        }
+        _ => {
+            unit.set_unit_maxpower1(max_p);
         }
     })
 }

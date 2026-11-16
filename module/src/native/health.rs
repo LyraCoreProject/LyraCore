@@ -1,88 +1,85 @@
 use lyracore_protocol::codec;
-use lyracore_protocol::messages::vanilla::{opcodes::ServerOpcodeMessage, SMSG_UPDATE_OBJECT};
-use spacetimedb::ReducerContext;
+use lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage;
+use spacetimedb::{ReducerContext, Table};
 
+use super::game_native_player;
 use crate::aoi::{game_aoi_grant, WORLD_ENTITY};
 use crate::{game_world_entity, WorldEntity};
 
 /// A viewer outside the unit's raid sees health as a percent of a maximum of 100.
 /// This follows vmangos Object::BuildValuesUpdate and Player::CanSeeHealthOf.
 pub(super) fn visible_health(ctx: &ReducerContext, unit: &WorldEntity, viewer: u64) -> (u32, u32) {
-    match health_owner(ctx, unit) {
-        Some(owner) if sees_owner_health(ctx, owner, viewer) => (unit.health, unit.max_health),
-        _ => hidden_health(unit.health, unit.max_health),
+    if health_owner(ctx, unit).is_some_and(|owner| raw_viewers(ctx, owner).contains(&viewer)) {
+        (unit.health, unit.max_health)
+    } else {
+        hidden_health(unit.health, unit.max_health)
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(super) enum Vitals {
-    Health,
-    Maximum,
-}
-
-/// Sends a health or maximum health change to each viewer of `unit` as `visible_health` shows it.
-pub(super) fn send(ctx: &ReducerContext, unit: &WorldEntity, vitals: Vitals) {
-    let hidden = hidden_health(unit.health, unit.max_health);
-    let Some(owner) = health_owner(ctx, unit) else {
-        broadcast(ctx, unit, vitals, hidden, false);
+/// Sends `unit`'s health and maximum health to each viewer as `visible_health` shows them.
+pub(crate) fn send(ctx: &ReducerContext, unit: &WorldEntity) {
+    if ctx.db.game_native_player().count() == 0 {
+        return;
+    }
+    let owner = health_owner(ctx, unit);
+    let exclude_connection = owner
+        .and_then(|owner| super::world_session(ctx, owner))
+        .map(|session| session.connection_id);
+    if let Some(packet) = encode(unit, hidden_health(unit.health, unit.max_health)) {
+        super::visibility::broadcast_aoi(
+            ctx,
+            super::NativeAoi {
+                layer: WORLD_ENTITY,
+                entity_guid: unit.guid,
+                exclude_connection,
+            },
+            packet.opcode,
+            packet.body,
+        );
+    }
+    let Some(owner) = owner else {
         return;
     };
-    if owner == unit.guid && crate::group::group_of(ctx, owner).is_none() {
-        // Only the ungrouped Character sees its own health, so one AOI packet serves the rest.
-        broadcast(ctx, unit, vitals, hidden, true);
-        if !super::is_world_porting(ctx, owner) {
-            if let Some(packet) = encode(unit, vitals, (unit.health, unit.max_health)) {
-                super::send_raw_to_character(ctx, owner, packet.opcode, packet.body);
-            }
-        }
+    let Some(raw) = encode(unit, (unit.health, unit.max_health)) else {
         return;
-    }
-    for grant in ctx
-        .db
-        .game_aoi_grant()
-        .by_subject()
-        .filter((WORLD_ENTITY, unit.guid))
-    {
-        if super::is_world_porting(ctx, grant.viewer_guid) {
-            continue;
-        }
-        let health = if sees_owner_health(ctx, owner, grant.viewer_guid) {
-            (unit.health, unit.max_health)
-        } else {
-            hidden
-        };
-        if let Some(packet) = encode(unit, vitals, health) {
-            super::send_raw_to_character(ctx, grant.viewer_guid, packet.opcode, packet.body);
+    };
+    // The raw packet follows the AOI percent, so a group member keeps the raw value.
+    for viewer in raw_viewers(ctx, owner) {
+        let sees_unit = ctx
+            .db
+            .game_aoi_grant()
+            .by_viewer()
+            .filter((viewer, WORLD_ENTITY, unit.guid))
+            .next()
+            .is_some();
+        if sees_unit && !super::is_world_porting(ctx, viewer) {
+            super::send_raw_to_character(ctx, viewer, raw.opcode, raw.body.clone());
         }
     }
 }
 
-fn broadcast(
-    ctx: &ReducerContext,
-    unit: &WorldEntity,
-    vitals: Vitals,
-    health: (u32, u32),
-    exclude_self: bool,
-) {
-    if let Some(packet) = encode(unit, vitals, health) {
-        super::visibility::broadcast(ctx, unit.guid, packet.opcode, packet.body, exclude_self);
+/// Resends the health of `characters` and their pets after their group changed.
+/// vmangos Group::BroadcastGroupUpdate does this for every member and controlled unit.
+pub(crate) fn group_changed(ctx: &ReducerContext, characters: impl IntoIterator<Item = u64>) {
+    if ctx.db.game_native_player().count() == 0 {
+        return;
+    }
+    let entities = ctx.db.game_world_entity();
+    for guid in characters {
+        if let Some(character) = entities.guid().find(guid) {
+            send(ctx, &character);
+        }
+        for pet in entities.by_owner_guid().filter(guid) {
+            send(ctx, &pet);
+        }
     }
 }
 
 fn encode(
     unit: &WorldEntity,
-    vitals: Vitals,
     (health, max_health): (u32, u32),
 ) -> Option<lyracore_protocol::world::Packet> {
-    let values: SMSG_UPDATE_OBJECT = match vitals {
-        Vitals::Health => codec::build_health_values(unit.guid, health),
-        Vitals::Maximum => codec::build_max_vitals_values(
-            unit.guid,
-            max_health,
-            (unit.unit_bytes_0 >> 24) as u8,
-            unit.max_power,
-        ),
-    };
+    let values = codec::build_health_values(unit.guid, health, max_health);
     lyracore_protocol::world::encode(&ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)))
         .inspect_err(|error| {
             spacetimedb::log::error!("native health VALUES failed for {}: {error}", unit.guid);
@@ -103,12 +100,14 @@ fn health_owner(ctx: &ReducerContext, unit: &WorldEntity) -> Option<u64> {
         .map(|owner| owner.guid)
 }
 
-fn sees_owner_health(ctx: &ReducerContext, owner: u64, viewer: u64) -> bool {
-    owner == viewer
-        || crate::group::group_of(ctx, owner).is_some_and(|member| {
-            crate::group::group_of(ctx, viewer)
-                .is_some_and(|other| other.group_id == member.group_id)
-        })
+fn raw_viewers(ctx: &ReducerContext, owner: u64) -> Vec<u64> {
+    match crate::group::group_of(ctx, owner) {
+        Some(member) => crate::group::members_of(ctx, member.group_id)
+            .into_iter()
+            .map(|member| member.character_guid)
+            .collect(),
+        None => vec![owner],
+    }
 }
 
 fn hidden_health(health: u32, max_health: u32) -> (u32, u32) {

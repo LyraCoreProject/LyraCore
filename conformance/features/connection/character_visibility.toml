@@ -12,12 +12,27 @@ prerequisites = ["Two human warrior Characters on separate Accounts at the scena
 
 [[tests]]
 path = "module/tests/native_conformance.rs"
-function = "health_reaches_a_stranger_as_a_percent_and_the_party_in_full"
+function = "character_health_reaches_strangers_as_a_percent_and_the_party_in_full"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/native_conformance.rs"
+function = "creature_health_is_a_percent_and_a_pets_owner_sees_it_in_full"
 rung = "durable_module"
 
 [[tests]]
 path = "module/tests/white_melee.rs"
-function = "a_character_swings_at_its_main_hand_weapons_delay"
+function = "main_hand_attack_time_follows_the_usable_weapon_and_feral_form"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/white_melee.rs"
+function = "a_weapon_change_in_combat_restarts_the_main_hand_swing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/chance_on_hit.rs"
+function = "an_aura_ppm_proc_scales_with_the_main_hand_weapons_delay"
 rung = "durable_module"
 
 [[tests]]
@@ -62,3 +77,9 @@ description = "UNIT_FIELD_POWER4 differs because vmangos regenerates energy for 
 path = "crates/lyracore-protocol/src/codec/entity.rs"
 symbol = "build_create_object"
 evidence = "Tier 1 two_character_visibility at harness 004d8d74: field_26 is 60 in the reference and 100 in core; the opposite-faction variant records 80. At d9173eca, Player.cpp Player::RegenerateAll regenerates POWER_ENERGY for all classes."
+
+[[known_gaps]]
+description = "No VALUES update follows a weapon swap or a haste change, so a viewer keeps the attack time fields from CREATE. The off-hand field had this gap before."
+path = "module/src/native/view.rs"
+symbol = "entity"
+evidence = "Review of PR 1040: view.rs sends UNIT_FIELD_BASEATTACKTIME and the off-hand attack time only in CREATE. At d9173eca, Unit.h Unit::SetAttackTime and Unit.cpp Unit::ApplyAttackTimePercentMod write the fields, so each change reaches viewers."

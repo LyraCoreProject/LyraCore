@@ -402,8 +402,8 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
     for update in updates(old, new) {
         let message = match update {
             Update::Shared(message) => message,
-            Update::Vitals(vitals) => {
-                super::health::send(ctx, new, vitals);
+            Update::Health => {
+                super::health::send(ctx, new);
                 continue;
             }
         };
@@ -477,7 +477,7 @@ pub(crate) fn loot_flags(ctx: &ReducerContext, entity: &WorldEntity) {
 #[derive(Debug)]
 enum Update {
     Shared(ServerOpcodeMessage),
-    Vitals(super::health::Vitals),
+    Health,
 }
 
 fn values(update: SMSG_UPDATE_OBJECT) -> Update {
@@ -495,15 +495,20 @@ fn updates(old: &WorldEntity, new: &WorldEntity) -> Vec<Update> {
         let m = codec::build_level_values(new.guid, new.level);
         out.push(values(m));
     }
-    if old.health != new.health {
-        out.push(Update::Vitals(super::health::Vitals::Health));
+    if old.health != new.health || old.max_health != new.max_health {
+        out.push(Update::Health);
     }
     if old.target_guid != new.target_guid {
         let m = codec::build_target_values(new.guid, new.target_guid);
         out.push(values(m));
     }
-    if old.max_health != new.max_health || old.max_power != new.max_power {
-        out.push(Update::Vitals(super::health::Vitals::Maximum));
+    if old.max_power != new.max_power {
+        let power_b = (new.unit_bytes_0 >> 24) as u8;
+        out.push(values(codec::build_max_power_values(
+            new.guid,
+            power_b,
+            new.max_power,
+        )));
     }
     // Mount display and TAXI_FLIGHT must reach the client in one mask.
     let taxi_flight_toggled = (old.unit_flags ^ new.unit_flags)

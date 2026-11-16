@@ -414,6 +414,40 @@ pub struct MeleeAttack {
     pub swing_error: u8,
 }
 
+/// A weapon change in combat restarts its hand's swing; vmangos Player::_ApplyItemBonuses.
+pub(crate) fn weapon_changed(ctx: &ReducerContext, character_guid: u64, slot: u8) {
+    use crate::items::equip_slot::{MAINHAND, OFFHAND, RANGED};
+
+    let in_combat = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(character_guid)
+        .is_some_and(|character| {
+            character.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
+        });
+    let Some(mut attack) = ctx
+        .db
+        .game_melee_attack()
+        .attacker_guid()
+        .find(character_guid)
+    else {
+        return;
+    };
+    if !in_combat {
+        return;
+    }
+    let now_ms = crate::time::now_ms_u32(ctx).max(1);
+    let ranged = attack.ranged_spell_id != 0;
+    match slot {
+        MAINHAND if !ranged => attack.last_swing_ms = now_ms,
+        RANGED if ranged => attack.last_swing_ms = now_ms,
+        OFFHAND if !ranged => attack.last_offhand_swing_ms = now_ms,
+        _ => return,
+    }
+    MeleeAttack::update(ctx, attack);
+}
+
 impl MeleeAttack {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
         let row = ctx.db.game_melee_attack().insert(row);

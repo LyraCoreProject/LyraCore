@@ -23,7 +23,7 @@ pub(crate) mod environment;
 mod gossip;
 pub(crate) mod guild;
 mod handoff;
-mod health;
+pub(crate) mod health;
 pub(crate) mod instance;
 pub(crate) mod instance_allocation;
 mod instance_reset;

@@ -110,8 +110,13 @@ fn white_melee_chances_follow_catalogue_skills_and_defender_eligibility() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_character_swings_at_its_main_hand_weapons_delay() {
+fn main_hand_attack_time_follows_the_usable_weapon_and_feral_form() {
     use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
+    use lyracore_package_delta::packed_spell_effect_id;
+    use lyracore_shared::spell::taxonomy::{
+        A_DISARM, STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR, T_SELF,
+    };
+    const DISARM: u32 = 5_090_411;
 
     let mut shard = Standalone::start("white-melee-weapon-delay");
     shard.publish_module();
@@ -142,4 +147,84 @@ fn a_character_swings_at_its_main_hand_weapons_delay() {
     ));
     shard.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
     assert_eq!(attack_time(&shard), "1900", "a 1.9 second blade");
+
+    // vmangos Player::InitDataForForm swings Cat Form at 1.0 s and Bear Form at 2.5 s.
+    for (stance, expected) in [
+        (STANCE_CAT, "1000"),
+        (STANCE_BEAR, "2500"),
+        (STANCE_DIRE_BEAR, "2500"),
+    ] {
+        shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET stance = {stance} WHERE guid = 1"
+        ));
+        assert_eq!(attack_time(&shard), expected, "feral form {stance}");
+    }
+    shard.assert_sql("UPDATE game_world_entity SET stance = 0 WHERE guid = 1");
+
+    // vmangos Aura::HandleAuraModDisarm sets the main hand back to BASE_ATTACK_TIME.
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &DISARM),
+            ("name", &"Disarm fixture"),
+            ("school_mask", &1),
+            ("duration_ms", &600_000),
+            ("spell_level", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(DISARM, 0)),
+            ("spell_id", &DISARM),
+            ("kind", &A_DISARM),
+            ("target", &T_SELF),
+        ],
+    );
+    shard.assert_call("debug_force_cast", &["1", &DISARM.to_string()]);
+    assert_eq!(attack_time(&shard), "2000", "disarmed");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_weapon_change_in_combat_restarts_the_main_hand_swing() {
+    use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
+    use lyracore_shared::constants::unit_flags;
+    const MAINHAND: &str = "15";
+
+    let mut shard = Standalone::start("white-melee-weapon-swap");
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    shard.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &TEST_WOLF_ENTRY.to_string(), "2"],
+    );
+    let target = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ))[0]["guid"]
+        .clone();
+    shard.assert_call("debug_engage", &["1", &target]);
+    let flags: u32 = shard.query_rows("SELECT unit_flags FROM game_world_entity WHERE guid = 1")[0]
+        ["unit_flags"]
+        .parse()
+        .unwrap();
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_flags = {} WHERE guid = 1",
+        flags | unit_flags::IN_COMBAT
+    ));
+    shard.assert_sql("UPDATE game_melee_attack SET last_swing_ms = 1 WHERE attacker_guid = 1");
+
+    // vmangos Player::_ApplyItemBonuses resets the hand's attack timer in combat.
+    shard.assert_call("debug_unequip_item", &["1", MAINHAND]);
+    let last_swing_ms: u32 = shard
+        .query_rows("SELECT last_swing_ms FROM game_melee_attack WHERE attacker_guid = 1")[0]
+        ["last_swing_ms"]
+        .parse()
+        .unwrap();
+    assert!(last_swing_ms > 1, "the swing timer restarts at the change");
 }
