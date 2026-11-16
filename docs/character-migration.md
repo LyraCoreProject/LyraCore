@@ -124,6 +124,23 @@ letter with the lowest item guid keeps the copper and the cash on delivery price
 without an Item, so a rerun changes nothing. A refused letter leaves nothing behind. An attachment
 whose `item_instance` row is missing is dropped with a finding.
 
+## Friends and ignores
+
+`migrate_contacts(source, source_guid, contacts)` gives one migrated Character its friends and
+ignores, once. `apply` sends contact lists after every letter. A target that is not a migrated
+Character, for example one the reducer refused or one its player deleted, is skipped. The normal
+contact rules apply: no self, no friend of the other faction, at most 50 friends and 25 ignores.
+A contact that they refuse is skipped and the rest of the list arrives. `game_contact_migration`
+records the owner's `<source>/<source guid>`, so a rerun does not add back a contact that its
+player removed.
+
+The tool keeps a contact only when its target is planned in this run or migrated in an earlier
+one. It reports the other contacts, friends of the other faction and contacts over a cap. `apply`
+holds back a list whose owner or target was refused in the same run; a later run sends it.
+
+A list is applied once, so a contact whose target migrates in a later run with other `--account`
+names is lost. Migrate Accounts whose Characters know each other in the same run.
+
 Health starts full and power starts at its class default at the first world entry. The Character
 does not see the opening cinematic. GM levels, Auras, cooldowns, Instance bindings, temporary
 enchantments and item charges do not migrate.

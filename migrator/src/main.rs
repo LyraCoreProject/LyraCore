@@ -210,6 +210,27 @@ fn apply(path: &str, shard: &Shard) -> Result<()> {
             );
         }
     }
+    for list in &plan.contacts {
+        let mut linked: Vec<u64> = list.contacts.iter().map(|c| c.target_source_guid).collect();
+        linked.push(list.source_guid);
+        if deferred(
+            &format!("contacts of {}", list.source_guid),
+            &linked,
+            &failed,
+        ) {
+            refusals += 1;
+            continue;
+        }
+        let arguments = [
+            serde_json::to_string(&list.source)?,
+            list.source_guid.to_string(),
+            serde_json::to_string(&list.contacts)?,
+        ];
+        if let Err(refusal) = shard.call_with("migrate_contacts", &arguments)? {
+            refusals += 1;
+            eprintln!("refused: contacts of {}: {refusal}", list.source_guid);
+        }
+    }
     if refusals > 0 {
         bail!("{refusals} migrations were refused; fix them and apply the plan again");
     }

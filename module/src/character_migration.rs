@@ -363,6 +363,77 @@ pub fn migrate_letter(ctx: &ReducerContext, letter: LetterMigration) -> Result<(
     Ok(())
 }
 
+#[derive(SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MigratedContact {
+    pub target_source_guid: u64,
+    pub ignore: bool,
+}
+
+#[table(accessor = game_contact_migration)]
+pub struct ContactMigrationRecord {
+    #[primary_key]
+    pub source_key: String,
+    pub migrated_at: Timestamp,
+}
+
+// A target that is not a migrated Character, or that the live contact rules refuse, is skipped.
+#[reducer]
+pub fn migrate_contacts(
+    ctx: &ReducerContext,
+    source: String,
+    source_guid: u64,
+    contacts: Vec<MigratedContact>,
+) -> Result<(), String> {
+    require_operator(ctx)?;
+    require_single_shard(ctx)?;
+    let source_key = source_key(&source, source_guid)?;
+    if ctx
+        .db
+        .game_contact_migration()
+        .source_key()
+        .find(&source_key)
+        .is_some()
+    {
+        return Ok(());
+    }
+    let owner = migrated_character(ctx, &source, source_guid)?;
+    let owner = crate::chat::ContactOwner {
+        guid: owner.guid,
+        identity: owner.owner_identity,
+        race: owner.race,
+    };
+    for contact in contacts {
+        let Ok(target) = migrated_character(ctx, &source, contact.target_source_guid) else {
+            spacetimedb::log::info!(
+                "migrate_contacts: {source_key} skips {}, which is not a migrated Character",
+                contact.target_source_guid
+            );
+            continue;
+        };
+        match crate::chat::insert_contact(
+            ctx,
+            owner,
+            target.guid,
+            contact.ignore,
+            Some(target.race),
+        ) {
+            Ok(()) | Err(crate::chat::ContactRefusal::AlreadyOnList) => {}
+            Err(refusal) => spacetimedb::log::info!(
+                "migrate_contacts: {source_key} skips {}: {}",
+                contact.target_source_guid,
+                refusal.as_tag()
+            ),
+        }
+    }
+    ctx.db
+        .game_contact_migration()
+        .insert(ContactMigrationRecord {
+            source_key,
+            migrated_at: ctx.timestamp,
+        });
+    Ok(())
+}
+
 fn migrated_character(
     ctx: &ReducerContext,
     source: &str,
