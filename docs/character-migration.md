@@ -2,7 +2,60 @@
 
 A Character Migration copies Accounts and Characters from a vmangos or cmangos server, the
 Migration Source, into a single-Shard Realm. [ADR 0009](./adr/0009-migrate-characters-from-mangos-servers.md)
-records why the Module owns the translation. `module/src/character_migration.rs` holds the reducers.
+records why the Module owns the translation. `module/src/character_migration.rs` holds the reducers,
+and `migrator/` holds the tool that reads the source.
+
+## Running a migration
+
+`lyracore-migrator` reads the Migration Source and calls the reducers. It runs in two steps, so
+you can read the report before anything changes.
+
+1. Import the world into the Realm first. A plan only keeps content that the Shard's catalogues
+   hold.
+2. Stop the source server. A Character that is online at the source is refused. MaNGOS keeps many
+   characters tables in MyISAM, which has no snapshots, so a running source can change rows while
+   the tool reads them.
+3. Give the tool a MySQL user that can only `SELECT` from realmd and characters. It reads each
+   database in one transaction and never executes source SQL. Pass the URLs with
+   `--realmd` and `--characters`, or in `LYRACORE_MIGRATION_REALMD_URL` and
+   `LYRACORE_MIGRATION_CHARACTERS_URL` to keep the password off the command line.
+4. Write a plan:
+
+   ```bash
+   cargo run --release -p lyracore-migrator -- plan \
+     --source-kind vmangos --source vmangos-main \
+     --server local --database lyracore --out plan.json
+   ```
+
+   `--source` is the Migration Source label. Use the same label on every run against this source.
+   `--account NAME` limits the plan to named Accounts and can repeat.
+5. Read the findings. The tool prints them and stores them in the plan. `refused` means the Account
+   or Character is not in the plan. `dropped` names source state the Shard does not hold, such as
+   spells, quests, areas or taxi nodes that are not imported. `changed` names a value the
+   migration changes, such as a Character that arrives at its home bind or a temporary ban that
+   becomes permanent. `skipped` means the Character is already migrated. Fix refusals before you
+   apply: a Character that does not migrate loses its place in what other Characters bring.
+6. Apply the plan:
+
+   ```bash
+   cargo run --release -p lyracore-migrator -- apply --server local --database lyracore plan.json
+   ```
+
+   Each Character is one reducer call. A refusal is printed and the next Character continues.
+   Fix the cause, write a new plan and apply it again. Migrated Characters are skipped. `apply`
+   creates every Account in the plan before any Character, so an Account stays on the Shard when
+   its Characters are refused.
+
+The plan file holds each Account's SRP salt and verifier. The tool writes it as a new file that only
+its owner can read; keep it as private as the realmd database. `apply` passes each reducer argument on the
+`spacetime` command line, where other local users can read it while the call runs, so run it on a
+host only Operators use. For a remote source, add `?require_ssl=true` to the MySQL URL.
+
+The tool checks every column that it reads against the Source Profile of `--source-kind` before it
+reads rows. A missing column or a column of another type stops the run with its name. The profiles
+are in `migrator/src/read.rs`. The vmangos profile follows vmangos after its 2025-04-28 migration,
+which moved the inn flag into `characters.character_flags`; an older vmangos source must apply its
+migrations first.
 
 ## Reducers
 
@@ -39,8 +92,10 @@ rerun never brings back a Character that its player deleted.
 | Explored zones, taxi nodes | Explored bits map to areas by area bit. Taxi nodes map by `TaxiNodes.dbc` id. |
 
 Every referenced item, spell, skill, faction, quest, area and taxi node must exist in the Shard's
-catalogues, or the Character is refused. Enchantment, random property and action button ids are
-copied without a check; an id the Shard does not know has no effect.
+catalogues, or the reducer refuses the Character. The tool drops unknown spells, skills, factions,
+quests, explored areas and taxi nodes with a finding, and refuses a Character with an unknown Item.
+Enchantment, random property and action button ids are copied without a check; an id the Shard
+does not know has no effect.
 
 Health starts full and power starts at its class default at the first world entry. The Character
 does not see the opening cinematic. GM levels, Auras, cooldowns, Instance bindings, temporary

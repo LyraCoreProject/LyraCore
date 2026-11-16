@@ -8,6 +8,7 @@ members = [
     "crates/lyracore-test-support",
     "module",
     "importer",
+    "migrator",
 ]
 
 
