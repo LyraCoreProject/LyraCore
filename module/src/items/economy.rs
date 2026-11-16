@@ -13,6 +13,8 @@ use crate::npc_interaction::{NpcRefusal, NpcService};
 // Prices are in copper.
 const BANK_SLOT_PRICES: [u32; 6] = [1_000, 10_000, 100_000, 250_000, 250_000, 250_000];
 
+pub(crate) const MAX_BANK_BAG_SLOTS: u8 = BANK_SLOT_PRICES.len() as u8;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BankSlotRefusal {
     AlreadyMaxed,
