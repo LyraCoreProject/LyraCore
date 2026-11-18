@@ -17,7 +17,6 @@ pub fn debug_stage_lethal_damage_floor_fixture(
         return Err("fixture target must be a live creature".to_string());
     }
     creature.health = 10;
-    creature.stance = 1;
     creature.update(ctx);
     let definition_revision = crate::creatures::current_definition_revision(ctx, creature_guid);
     if definition_revision.value == 0

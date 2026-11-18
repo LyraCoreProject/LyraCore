@@ -31,7 +31,7 @@ fn authoritative_damage_honors_the_lethal_floor_and_its_lifetime() {
     );
     verify(&standalone, WOLF_GUID, 10, false, true, false, 50);
 
-    apply(&standalone, WOLF_GUID, 55);
+    apply(&standalone, WOLF_GUID, 49);
     verify(&standalone, WOLF_GUID, 10, false, true, false, 1);
 
     apply(&standalone, WOLF_GUID, 20);

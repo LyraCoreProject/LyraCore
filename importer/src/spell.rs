@@ -2078,6 +2078,10 @@ mod tests {
         add!(tables.ranges, "SpellRange.dbc");
         add!(tables.durations, "SpellDuration.dbc");
         add!(tables.radii, "SpellRadius.dbc");
+        add!(
+            SpellShapeshiftForm { rows: Vec::new() },
+            "SpellShapeshiftForm.dbc"
+        );
         archive.build(path.join("dbc.MPQ")).unwrap();
         let source = crate::vmangos_spell::fixture();
         let connection = source.fixture_connection();
