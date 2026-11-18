@@ -474,10 +474,10 @@ pub(crate) struct AuraProjections {
 }
 
 impl AuraProjections {
-    pub(crate) fn of(kind: u8, parameter: i32) -> Self {
+    pub(crate) fn of(spell_id: u32, kind: u8, parameter: i32) -> Self {
         Self {
             vitals: crate::modifiers::moves_vitals(kind, parameter),
-            sheet: crate::modifiers::moves_sheet(kind, parameter),
+            sheet: crate::modifiers::moves_sheet(spell_id, kind, parameter),
             mount: crate::mount::mount_aura_moves_mount(kind, parameter),
             display: kind == lyracore_shared::spell::taxonomy::A_TRANSFORM,
         }
@@ -527,7 +527,11 @@ pub(crate) fn shed_auras(ctx: &ReducerContext, auras: Vec<Aura>) {
             super::stacking::dr_window_on_removal(ctx, aura.target_guid, category, now_micros);
         }
         let projections = touched.entry(aura.target_guid).or_default();
-        *projections = projections.union(AuraProjections::of(aura.eff_kind, aura.eff_p0));
+        *projections = projections.union(AuraProjections::of(
+            aura.spell_id,
+            aura.eff_kind,
+            aura.eff_p0,
+        ));
     }
     for (unit_guid, projections) in touched {
         projections.refresh(ctx, unit_guid);

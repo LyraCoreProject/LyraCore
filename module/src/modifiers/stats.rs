@@ -1,5 +1,5 @@
 use lyracore_shared::spell::taxonomy::{
-    A_DISARM, A_MOD_COMBAT, A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_STAT,
+    A_DISARM, A_FLAG, A_MOD_COMBAT, A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_STAT,
     A_MOD_STAT_PCT, COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_RANGED_ATTACK_POWER, STAT_AGI,
     STAT_ALL, STAT_INT, STAT_SPI, STAT_STA, STAT_STR,
 };
@@ -13,6 +13,13 @@ use crate::WorldEntity;
 pub(crate) const VITALS_STATS: [u8; 3] = [STAT_STA, STAT_INT, STAT_SPI];
 pub(crate) const SHEET_STATS: [u8; 5] = [STAT_STR, STAT_AGI, STAT_STA, STAT_INT, STAT_SPI];
 const SHEET_COMBAT_FIELDS: [u8; 3] = [COMBAT_ATTACK_POWER, COMBAT_RANGED_ATTACK_POWER, COMBAT_CRIT];
+
+// Spell rows carry no icon id; vmangos matches the Predatory Strikes dummy Aura by icon 1563.
+const PREDATORY_STRIKES_SPELLS: [u32; 5] = [16972, 16974, 16975, 16976, 16977];
+
+pub(crate) fn is_predatory_strikes(spell_id: u32, kind: u8) -> bool {
+    kind == A_FLAG && PREDATORY_STRIKES_SPELLS.contains(&spell_id)
+}
 
 /// Base value plus flat aura and gear bonuses, scaled by the stat's percent auras.
 pub(crate) fn effective_stat(ctx: &ReducerContext, unit: &WorldEntity, stat: u8) -> u32 {
@@ -103,10 +110,11 @@ pub(crate) fn moves_vitals(kind: u8, parameter: i32) -> bool {
         .any(|stat| moves_stat(kind, parameter, stat))
 }
 
-pub(crate) fn moves_sheet(kind: u8, parameter: i32) -> bool {
-    SHEET_STATS
-        .into_iter()
-        .any(|stat| moves_stat(kind, parameter, stat))
+pub(crate) fn moves_sheet(spell_id: u32, kind: u8, parameter: i32) -> bool {
+    is_predatory_strikes(spell_id, kind)
+        || SHEET_STATS
+            .into_iter()
+            .any(|stat| moves_stat(kind, parameter, stat))
         || (kind == A_MOD_COMBAT
             && SHEET_COMBAT_FIELDS
                 .into_iter()
@@ -159,6 +167,19 @@ mod tests {
     fn spirit_and_stat_percent_auras_move_the_stored_vitals() {
         assert!(moves_vitals(A_MOD_STAT, i32::from(STAT_SPI)));
         assert!(moves_vitals(A_MOD_STAT_PCT, i32::from(STAT_ALL)));
-        assert!(moves_sheet(A_MOD_STAT_PCT, i32::from(STAT_STR)));
+        assert!(moves_sheet(0, A_MOD_STAT_PCT, i32::from(STAT_STR)));
+    }
+
+    #[test]
+    fn predatory_strikes_moves_the_sheet_in_every_rank_and_obsolete_copy() {
+        for spell_id in [16972, 16974, 16975, 16976, 16977] {
+            assert!(moves_sheet(spell_id, A_FLAG, 0), "spell {spell_id}");
+        }
+        assert!(!moves_sheet(16973, A_FLAG, 0));
+        assert!(!moves_sheet(
+            16975,
+            lyracore_shared::spell::taxonomy::A_ABSORB,
+            0
+        ));
     }
 }

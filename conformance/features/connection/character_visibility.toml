@@ -66,6 +66,31 @@ function = "a_druid_in_a_feral_form_has_no_ranged_attack_power"
 rung = "unit"
 
 [[tests]]
+path = "module/src/combat/tables.rs"
+function = "modifiers_apply_before_the_total_clamps_at_zero"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/tables.rs"
+function = "ranged_modifiers_apply_before_the_total_clamps_at_zero"
+rung = "unit"
+
+[[tests]]
+path = "module/src/modifiers/stats.rs"
+function = "predatory_strikes_moves_the_sheet_in_every_rank_and_obsolete_copy"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/white_melee.rs"
+function = "the_sheet_follows_the_predatory_strikes_aura_as_it_comes_and_goes"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/white_melee.rs"
+function = "learning_predatory_strikes_in_cat_form_raises_the_sheet_attack_power"
+rung = "durable_module"
+
+[[tests]]
 path = "module/src/spell/proc.rs"
 function = "a_ranged_spells_proc_rolls_with_the_ranged_weapon"
 rung = "unit"
@@ -135,3 +160,9 @@ description = "The sheet shows ranged attack power 0 for a Character without a l
 path = "module/src/combat/tables.rs"
 symbol = "ranged_sheet_values"
 evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Player::UpdateAttackPowerAndDamage(true) writes UNIT_FIELD_RANGED_ATTACK_POWER from Unit::GetAttackPowerFromStrengthAndAgility with no weapon check; ranged_sheet_values returns 0 without a bow, gun, crossbow or thrown weapon."
+
+[[known_gaps]]
+description = "The sheet shows base attack power 0 where vmangos shows a negative base, for example a Mage with Strength below 10. Damage already sums base and modifiers before it clamps."
+path = "module/src/world.rs"
+symbol = "sheet_ap_base"
+evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Player::UpdateAttackPowerAndDamage writes (int32)baseAttackPower to UNIT_FIELD_ATTACK_POWER, and Unit.cpp Unit::GetTotalAttackPowerValue clamps only the sum. WorldEntity.sheet_ap_base and sheet_ranged_ap are u32; a signed column is a schema change (docs/danger-zones.md section 1.2)."

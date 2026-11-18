@@ -483,34 +483,42 @@ pub(crate) fn weapon_strike_spell_damage(
     armor_mitigated(if crit { base * CRIT_MULT } else { base }, mit_pct)
 }
 
-const PREDATORY_STRIKES_SPELLS: [u32; 3] = [16972, 16974, 16975];
-
-pub(crate) fn predatory_strikes_pct(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+fn predatory_strikes_pct(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
     if unit.class() != CLASS_DRUID || !is_feral_form(unit.stance) {
         return 0;
     }
     crate::spell::auras_on(ctx, unit.guid)
-        .find(|aura| {
-            aura.eff_kind == crate::spell::A_FLAG
-                && PREDATORY_STRIKES_SPELLS.contains(&aura.spell_id)
-        })
+        .find(|aura| crate::modifiers::is_predatory_strikes(aura.spell_id, aura.eff_kind))
         .map_or(0, |aura| aura.amount.max(0) as u32)
 }
 
-pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
-    melee_attack_power_for(
+/// The Character sheet's base AP from the given effective Strength and Agility; may be negative.
+pub(crate) fn base_melee_attack_power(
+    ctx: &ReducerContext,
+    unit: &WorldEntity,
+    strength: u32,
+    agility: u32,
+) -> i32 {
+    base_melee_attack_power_for(
         unit.class(),
         unit.stance,
-        crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_STR),
-        crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_AGI),
+        strength,
+        agility,
         unit.level,
         predatory_strikes_pct(ctx, unit),
     )
-    .saturating_add_signed(crate::modifiers::combat_field_bonus(
-        ctx,
-        unit.guid,
-        crate::spell::COMBAT_ATTACK_POWER,
-    ))
+}
+
+pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+    total_attack_power(
+        base_melee_attack_power(
+            ctx,
+            unit,
+            crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_STR),
+            crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_AGI),
+        ),
+        crate::modifiers::combat_field_bonus(ctx, unit.guid, crate::spell::COMBAT_ATTACK_POWER),
+    )
 }
 
 const SCHOOL_MASK_PHYSICAL: u8 = 1;

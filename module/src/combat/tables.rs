@@ -76,8 +76,8 @@ pub(super) fn sheet_crit_bp(
     (agility + (offset + bonus + (weapon - maximum) * 4) as f32).clamp(0.0, 10_000.0) as u32
 }
 
-pub(crate) fn melee_attack_power(strength: u32, level: u32) -> u32 {
-    (level * 3 + strength * 2).saturating_sub(20)
+fn warrior_attack_power(strength: u32, level: u32) -> i32 {
+    (level * 3 + strength * 2) as i32 - 20
 }
 
 const CLASS_WARRIOR: u8 = 1;
@@ -96,30 +96,34 @@ pub(crate) fn is_feral_form(stance: u8) -> bool {
     matches!(stance, STANCE_BEAR | STANCE_CAT | STANCE_DIRE_BEAR)
 }
 
-/// vmangos melee AP; `stance` is a druid's form, `predatory_strikes_pct` its talent amount.
-pub(crate) fn melee_attack_power_for(
+/// vmangos base melee AP before modifiers, which can be negative; `stance` is a druid's form.
+pub(crate) fn base_melee_attack_power_for(
     class: u8,
     stance: u8,
     strength: u32,
     agility: u32,
     level: u32,
     predatory_strikes_pct: u32,
-) -> u32 {
+) -> i32 {
     use lyracore_shared::spell::taxonomy::STANCE_CAT;
+    let predatory_strikes = (level * predatory_strikes_pct / 100) as i32;
     match class {
-        CLASS_WARRIOR | CLASS_PALADIN => melee_attack_power(strength, level),
-        CLASS_ROGUE | CLASS_HUNTER => (level * 2 + strength + agility).saturating_sub(20),
-        CLASS_SHAMAN => (level * 2 + strength * 2).saturating_sub(20),
-        CLASS_MAGE | CLASS_PRIEST | CLASS_WARLOCK => strength.saturating_sub(10),
+        CLASS_WARRIOR | CLASS_PALADIN => warrior_attack_power(strength, level),
+        CLASS_ROGUE | CLASS_HUNTER => (level * 2 + strength + agility) as i32 - 20,
+        CLASS_SHAMAN => (level * 2 + strength * 2) as i32 - 20,
+        CLASS_MAGE | CLASS_PRIEST | CLASS_WARLOCK => strength as i32 - 10,
         CLASS_DRUID if stance == STANCE_CAT => {
-            (level * predatory_strikes_pct / 100 + strength * 2 + agility).saturating_sub(20)
+            predatory_strikes + (strength * 2 + agility) as i32 - 20
         }
-        CLASS_DRUID if is_feral_form(stance) => {
-            (level * predatory_strikes_pct / 100 + strength * 2).saturating_sub(20)
-        }
-        CLASS_DRUID => (strength * 2).saturating_sub(20),
+        CLASS_DRUID if is_feral_form(stance) => predatory_strikes + (strength * 2) as i32 - 20,
+        CLASS_DRUID => (strength * 2) as i32 - 20,
         _ => 0,
     }
+}
+
+/// vmangos `GetTotalAttackPowerValue`: base and modifiers sum first, then the total clamps at 0.
+pub(crate) fn total_attack_power(base: i32, bonus: i32) -> u32 {
+    base.saturating_add(bonus).max(0) as u32
 }
 
 /// vmangos Player::CalculateMinMaxDamage: a feral form deals level-based damage at its own speed.
@@ -133,7 +137,7 @@ pub(crate) fn feral_swing_range_ap(ap: u32, level: u32, attack_time_ms: u32) -> 
     )
 }
 
-pub(crate) fn ranged_attack_power_for(class: u8, stance: u8, agility: u32, level: u32) -> u32 {
+fn ranged_attack_power_for(class: u8, stance: u8, agility: u32, level: u32) -> i32 {
     if class == CLASS_DRUID && is_feral_form(stance) {
         return 0;
     }
@@ -142,7 +146,7 @@ pub(crate) fn ranged_attack_power_for(class: u8, stance: u8, agility: u32, level
         CLASS_HUNTER => level * 2 + agility * 2,
         _ => agility,
     };
-    raw.saturating_sub(10)
+    raw as i32 - 10
 }
 
 pub(crate) fn ranged_sheet_values(
@@ -160,9 +164,13 @@ pub(crate) fn ranged_sheet_values(
     };
     if matches!(subclass, ws::BOW | ws::GUN | ws::CROSSBOW | ws::THROWN) {
         let base = ranged_attack_power_for(class, stance, agility, level);
-        let attack_power = base.saturating_add_signed(bonus);
+        let attack_power = total_attack_power(base, bonus);
         let bonus = attack_power as f32 / AP_PER_DPS as f32 * (delay_ms as f32 / 1000.0);
-        (base, dmg_min as f32 + bonus, dmg_max as f32 + bonus)
+        (
+            base.max(0) as u32,
+            dmg_min as f32 + bonus,
+            dmg_max as f32 + bonus,
+        )
     } else {
         (0, dmg_min as f32, dmg_max as f32)
     }
@@ -499,12 +507,45 @@ mod tests {
         );
     }
 
+    fn warrior_ap(strength: u32, level: u32) -> u32 {
+        total_attack_power(
+            base_melee_attack_power_for(CLASS_WARRIOR, 0, strength, 0, level, 0),
+            0,
+        )
+    }
+
     #[test]
-    fn attack_power_uses_the_strength_class_formula() {
-        assert_eq!(melee_attack_power(23, 1), 29);
-        assert_eq!(melee_attack_power(40, 10), 30 + 80 - 20);
-        assert!(melee_attack_power(40, 10) > melee_attack_power(23, 1));
-        assert_eq!(melee_attack_power(0, 1), 0);
+    fn a_warriors_attack_power_follows_strength_and_level() {
+        assert_eq!(warrior_ap(23, 1), 29);
+        assert_eq!(warrior_ap(40, 10), 30 + 80 - 20);
+        assert!(warrior_ap(40, 10) > warrior_ap(23, 1));
+        assert_eq!(warrior_ap(0, 1), 0);
+    }
+
+    #[test]
+    fn modifiers_apply_before_the_total_clamps_at_zero() {
+        // vmangos: a Mage with Strength 5 has base -5; +232 flat AP totals 227, not 232.
+        let mage = base_melee_attack_power_for(CLASS_MAGE, 0, 5, 0, 1, 0);
+        assert_eq!(mage, -5);
+        assert_eq!(total_attack_power(mage, 232), 227);
+        assert_eq!(total_attack_power(mage, 0), 0);
+        assert_eq!(total_attack_power(mage, -30), 0);
+    }
+
+    #[test]
+    fn ranged_modifiers_apply_before_the_total_clamps_at_zero() {
+        // A level 1 Rogue with Agility 0 has base -9 and throws with 100 AP: 91 / 14 * 14 s.
+        assert_eq!(
+            ranged_sheet_values(
+                CLASS_ROGUE,
+                0,
+                0,
+                1,
+                Some((10, 10, 14000, crate::items::weapon_subclass::THROWN)),
+                100
+            ),
+            (0, 101.0, 101.0)
+        );
     }
 
     #[test]
@@ -524,10 +565,18 @@ mod tests {
     fn druid_attack_power_adds_agility_only_in_cat_form() {
         use lyracore_shared::spell::taxonomy::{STANCE_BATTLE, STANCE_BEAR, STANCE_CAT};
         // vmangos: Cat Form 2 * strength + agility - 20; other forms 2 * strength - 20.
-        assert_eq!(melee_attack_power_for(11, STANCE_CAT, 50, 40, 60, 0), 120);
-        assert_eq!(melee_attack_power_for(11, STANCE_BEAR, 50, 40, 60, 0), 80);
-        assert_eq!(melee_attack_power_for(11, STANCE_BATTLE, 50, 40, 60, 0), 80);
-        assert_eq!(melee_attack_power(5, 1), 0);
+        assert_eq!(
+            base_melee_attack_power_for(11, STANCE_CAT, 50, 40, 60, 0),
+            120
+        );
+        assert_eq!(
+            base_melee_attack_power_for(11, STANCE_BEAR, 50, 40, 60, 0),
+            80
+        );
+        assert_eq!(
+            base_melee_attack_power_for(11, STANCE_BATTLE, 50, 40, 60, 0),
+            80
+        );
     }
 
     #[test]
@@ -542,12 +591,12 @@ mod tests {
             (STANCE_BATTLE, 80),
         ] {
             assert_eq!(
-                melee_attack_power_for(CLASS_DRUID, stance, 50, 40, 60, 150),
+                base_melee_attack_power_for(CLASS_DRUID, stance, 50, 40, 60, 150),
                 expected
             );
         }
         assert_eq!(
-            melee_attack_power_for(CLASS_DRUID, STANCE_CAT, 50, 40, 61, 50),
+            base_melee_attack_power_for(CLASS_DRUID, STANCE_CAT, 50, 40, 61, 50),
             120 + 30,
             "the share rounds down"
         );
@@ -568,24 +617,26 @@ mod tests {
             (CLASS_DRUID, 180),
         ] {
             assert_eq!(
-                melee_attack_power_for(class, 0, 100, 80, 60, 0),
+                base_melee_attack_power_for(class, 0, 100, 80, 60, 0),
                 expected,
                 "class {class}"
             );
-            assert_eq!(melee_attack_power_for(class, 0, 0, 0, 1, 0), 0);
         }
     }
 
     #[test]
     fn rogue_melee_ap_folds_in_agility() {
-        let lo_agi = melee_attack_power_for(CLASS_ROGUE, 0, 20, 20, 5, 0);
-        let hi_agi = melee_attack_power_for(CLASS_ROGUE, 0, 20, 40, 5, 0);
+        let lo_agi = base_melee_attack_power_for(CLASS_ROGUE, 0, 20, 20, 5, 0);
+        let hi_agi = base_melee_attack_power_for(CLASS_ROGUE, 0, 20, 40, 5, 0);
         assert_eq!(lo_agi, 30);
         assert!(
             hi_agi > lo_agi,
             "more Agility → strictly higher Rogue AP (Str/level held constant)"
         );
-        assert_eq!(melee_attack_power_for(CLASS_HUNTER, 0, 20, 40, 5, 0), 50);
+        assert_eq!(
+            base_melee_attack_power_for(CLASS_HUNTER, 0, 20, 40, 5, 0),
+            50
+        );
     }
 
     #[test]
@@ -594,12 +645,13 @@ mod tests {
             (CLASS_WARRIOR, 180),
             (CLASS_ROGUE, 180),
             (CLASS_HUNTER, 370),
+            (CLASS_PALADIN, 120),
             (CLASS_SHAMAN, 120),
             (CLASS_DRUID, 120),
         ] {
             assert_eq!(ranged_attack_power_for(class, 0, 130, 60), expected);
-            assert_eq!(ranged_attack_power_for(class, 0, 0, 1), 0);
         }
+        assert_eq!(ranged_attack_power_for(CLASS_WARRIOR, 0, 0, 1), -9);
     }
 
     #[test]
@@ -643,7 +695,8 @@ mod tests {
                 Some((10, 10, 14000, crate::items::weapon_subclass::THROWN)),
                 16
             ),
-            (0, 26.0, 26.0)
+            (0, 17.0, 17.0),
+            "base -9 plus 16 AP is 7 AP over the 14 s throw"
         );
     }
 
@@ -687,7 +740,7 @@ mod tests {
     #[test]
     fn player_swing_range_scales_with_stats_and_stays_sane() {
         let unarmed =
-            |str: u32, level: u32, t: u32| player_swing_range_ap(melee_attack_power(str, level), t);
+            |str: u32, level: u32, t: u32| player_swing_range_ap(warrior_ap(str, level), t);
         assert_eq!(unarmed(23, 1, 2000), (5, 7));
         let (lo, hi) = unarmed(23, 1, 2000);
         assert_eq!(hi - lo, UNARMED_BASE_MAX - UNARMED_BASE_MIN);
@@ -700,15 +753,9 @@ mod tests {
 
     #[test]
     fn ap_explicit_cores_take_stat_derived_ap_and_scale_with_ap() {
-        assert_eq!(
-            player_swing_range_ap(melee_attack_power(23, 1), 2000),
-            (5, 7)
-        );
-        assert_eq!(
-            weapon_swing_range_ap(melee_attack_power(23, 1), 1, 3, 1900),
-            (4, 6)
-        );
-        let base_ap = melee_attack_power(23, 1);
+        assert_eq!(player_swing_range_ap(warrior_ap(23, 1), 2000), (5, 7));
+        assert_eq!(weapon_swing_range_ap(warrior_ap(23, 1), 1, 3, 1900), (4, 6));
+        let base_ap = warrior_ap(23, 1);
         let (lo, hi) = player_swing_range_ap(base_ap, 2000);
         let (blo, bhi) = player_swing_range_ap(base_ap + 30, 2000);
         assert!(blo > lo && bhi > hi);
@@ -720,7 +767,7 @@ mod tests {
     #[test]
     fn weapon_swing_range_uses_weapon_base_plus_ap_bonus() {
         let weapon = |str: u32, level: u32, dmin: u32, dmax: u32, delay: u32| {
-            weapon_swing_range_ap(melee_attack_power(str, level), dmin, dmax, delay)
+            weapon_swing_range_ap(warrior_ap(str, level), dmin, dmax, delay)
         };
         assert_eq!(weapon(23, 1, 1, 3, 1900), (4, 6));
         let (wlo, whi) = weapon(23, 1, 8, 12, 1900);
