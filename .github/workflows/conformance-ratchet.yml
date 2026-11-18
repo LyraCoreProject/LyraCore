@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   ratchet:
-    runs-on: ubuntu-latest
+    runs-on: boat
     timeout-minutes: 5
     steps:
       # Only trusted base code runs; the PR supplies one JSON blob, never a checkout.
