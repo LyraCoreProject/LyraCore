@@ -141,7 +141,7 @@ jobs:
           groups=(
             "shared checks|"
             "Login Queue and development reload|admission-wait reload"
-            "recovery|retention recovery slow-readers accept-recovery"
+            "recovery|retention recovery slow-readers"
             "Handoff|handoff realm-shard"
             "continent Shards|continent-shards realm-communication instance-shard instance-allocation character-names package-creation package-deletion package-groups package-guilds package-relocation package-transfer"
           )
@@ -163,4 +163,7 @@ jobs:
             echo "::endgroup::"
             [ "$result" -eq 0 ] || { echo "::error::native checks failed: ${groups[$index]%%|*}"; status=1; }
           done
+          # accept-recovery allows 3 s to exhaust descriptors, so it runs after the parallel load ends.
+          python3 native-host/check.py --host "$RUNNER_TEMP/host/spacetimedb-standalone" \
+            --module "$RUNNER_TEMP/module/lyracore_module.wasm" accept-recovery || status=1
           exit "$status"
