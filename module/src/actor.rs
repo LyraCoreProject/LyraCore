@@ -287,11 +287,9 @@ pub(crate) fn restore_sessionless_body(
         entity.player_flags = player_flags;
         entity.unit_bytes_1 = unit_bytes_1;
     }
-    crate::form::stamp_held_form(ctx, &mut entity);
-    entity.insert(ctx);
-    crate::form::project_form(ctx, character_guid);
+    let entity = entity.insert(ctx);
     ctx.db.game_creature_spline().guid().delete(character_guid);
-    crate::helpers::live_entity(ctx, character_guid).ok()
+    Some(entity)
 }
 
 pub(crate) fn stop_movement(ctx: &ReducerContext, actor_guid: u64) {

@@ -49,7 +49,14 @@ impl WorldEntity {
         if entity.is_player() {
             crate::combat::enter_character_regeneration(ctx, &entity);
             crate::native::realm_party::package::presence(ctx, entity.guid);
+            crate::form::enter_world(ctx, entity.guid);
             crate::items::equip::restore(ctx, entity.guid);
+            return ctx
+                .db
+                .game_world_entity()
+                .guid()
+                .find(entity.guid)
+                .unwrap_or(entity);
         }
         entity
     }

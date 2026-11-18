@@ -2,6 +2,7 @@ use lyracore_shared::form::PowerOnEntry;
 use lyracore_shared::spell::taxonomy::{A_FORM_POWER_RETAINED, A_SHAPESHIFT};
 use spacetimedb::{log, ReducerContext, Table};
 
+use crate::spell::tables::game_spell_form;
 use crate::spell::{auras_on, shed_auras, FormRequirement, ShapeshiftState};
 use crate::{
     game_player_spell, game_spell, game_spell_effect, game_world_entity, Aura, WorldEntity,
@@ -55,15 +56,16 @@ pub(crate) fn shapeshift_state(
         },
         None => ShapeshiftState {
             form_id: client_form,
-            // Build-5875 SpellShapeshiftForm.dbc marks these forms as stances. Only druid forms,
-            // which have no Form rows yet, reach this; #1046 PR 4 removes the table.
+            // Build-5875 SpellShapeshiftForm.dbc marks these forms as stances. Druid forms, which
+            // have no Form rows yet, reach this, and so do warrior bytes 17-19 before the spell
+            // reimport writes Forms; #1046 PR 4 removes the table.
             acts_as_shapeshifted: !matches!(client_form, 17..=19 | 28 | 30 | 31),
         },
     })
 }
 
-/// A shapeshift Aura of `spell_id` naming `form_id` was applied or refreshed: the unit leaves
-/// every other Form, its power rule runs, and the projection follows.
+/// A shapeshift Aura of `spell_id` naming `form_id` was applied: the unit leaves every other
+/// Form and the power rule runs. The caller's Aura refresh projects the Form once.
 pub(crate) fn entered(ctx: &ReducerContext, guid: u64, spell_id: u32, form_id: u32) {
     let replaced: std::collections::BTreeSet<u32> = shapeshift_auras(ctx, guid)
         .map(|aura| aura.spell_id)
@@ -72,7 +74,7 @@ pub(crate) fn entered(ctx: &ReducerContext, guid: u64, spell_id: u32, form_id: u
     let removed = auras_on(ctx, guid)
         .filter(|aura| replaced.contains(&aura.spell_id))
         .collect();
-    shed_auras(ctx, removed);
+    crate::spell::shed_auras_before_projection(ctx, removed);
     if let (Some(mut unit), Some(form)) = (
         ctx.db.game_world_entity().guid().find(guid),
         ctx.db.game_form().form_id().find(form_id),
@@ -83,16 +85,39 @@ pub(crate) fn entered(ctx: &ReducerContext, guid: u64, spell_id: u32, form_id: u
             unit.update(ctx);
         }
     }
-    project_form(ctx, guid);
 }
 
-/// A shapeshift Aura ended: as vmangos `HandleShapeshiftBoosts(false)`, the unit's own Auras that
-/// need a Form end with it. A unit left in no Form gets the shapeshift effect's trigger spell.
+/// A shapeshift Aura was refreshed: as vmangos removes and reapplies the modifier, the unit's
+/// Form-bound Auras end before the Form is entered again.
+pub(crate) fn refreshed(ctx: &ReducerContext, guid: u64, spell_id: u32, form_id: u32) {
+    end_form_bound(ctx, guid);
+    entered(ctx, guid, spell_id, form_id);
+}
+
+/// A shapeshift Aura ended. A unit left in no Form gets the shapeshift effect's trigger spell.
 pub(crate) fn exited(ctx: &ReducerContext, aura: &Aura) {
     let guid = aura.target_guid;
+    end_form_bound(ctx, guid);
+    let next = ctx
+        .db
+        .game_spell_effect()
+        .id()
+        .find(aura.effect_id)
+        .map_or(0, |effect| effect.trigger_spell);
+    if next != 0 && shapeshift_auras(ctx, guid).next().is_none() {
+        if let Some(unit) = ctx.db.game_world_entity().guid().find(guid) {
+            crate::spell::apply_spell_auras(ctx, next, guid, unit.level as u8, 1);
+        }
+    }
+}
+
+/// As vmangos `HandleShapeshiftBoosts(false)`, the unit's own Auras that need a Form end, and so
+/// does a Form-bound queued strike. Equipment Auras stay with the equipment reconcile.
+fn end_form_bound(ctx: &ReducerContext, guid: u64) {
     let spells = ctx.db.game_spell();
     let bound = auras_on(ctx, guid)
         .filter(|held| held.caster_guid == guid && held.eff_kind != A_SHAPESHIFT)
+        .filter(|held| held.item_guid(ctx) == 0)
         .filter(|held| {
             spells.spell_id().find(held.spell_id).is_some_and(|spell| {
                 spell.removed_on_shape_lost(FormRequirement::of(ctx, spell.spell_id, None))
@@ -102,16 +127,17 @@ pub(crate) fn exited(ctx: &ReducerContext, aura: &Aura) {
     shed_auras(ctx, bound);
     if let Some(unit) = ctx.db.game_world_entity().guid().find(guid) {
         crate::combat::queued_strike::interrupt_form_bound(ctx, &unit);
-        let next = ctx
-            .db
-            .game_spell_effect()
-            .id()
-            .find(aura.effect_id)
-            .map_or(0, |effect| effect.trigger_spell);
-        if next != 0 && shapeshift_auras(ctx, guid).next().is_none() {
-            crate::spell::apply_spell_auras(ctx, next, guid, unit.level as u8, 1);
-        }
     }
+}
+
+/// Whether the unit holds an Aura whose spell locks it in its Form, as Nefarian's Berserk does.
+pub(crate) fn locked(ctx: &ReducerContext, guid: u64) -> bool {
+    let spells = ctx.db.game_spell();
+    auras_on(ctx, guid).any(|aura| {
+        spells.spell_id().find(aura.spell_id).is_some_and(|spell| {
+            spell.cast_flags & lyracore_shared::spell::taxonomy::CAST_FLAG_LOCKS_FORM != 0
+        })
+    })
 }
 
 /// Re-derives from the unit's shapeshift Aura the client form byte, the passives the Form brings
@@ -168,9 +194,16 @@ fn retained_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
         .unwrap_or(0)
 }
 
-/// Whether a known passive spell is applied only in the Forms its Form Set requires.
+/// Whether the Form projection owns a known passive: its Form Set requires a Form with a
+/// `game_form` row. Any other passive keeps the Aura its learning applied.
 pub(crate) fn binds_to_forms(ctx: &ReducerContext, spell: &crate::Spell) -> bool {
     spell.binds_to_forms(FormRequirement::of(ctx, spell.spell_id, None))
+        && ctx
+            .db
+            .game_spell_form()
+            .by_spell()
+            .filter(spell.spell_id)
+            .any(|row| !row.excluded && ctx.db.game_form().form_id().find(row.form_id).is_some())
 }
 
 /// The passives the unit's Form brings: the Form's own, and every known passive whose Form Set
@@ -207,6 +240,7 @@ fn reconcile_passives(ctx: &ReducerContext, unit: &WorldEntity, form: Option<&Fo
                 .next()
                 .is_some()
                 || (aura.caster_guid == unit.guid
+                    && aura.item_guid(ctx) == 0
                     && spells
                         .spell_id()
                         .find(aura.spell_id)
@@ -223,42 +257,39 @@ fn reconcile_passives(ctx: &ReducerContext, unit: &WorldEntity, form: Option<&Fo
 /// Writes onto a Character's entity, before insertion, the client form byte of the Form it enters
 /// the world in, so the first CREATE peers receive already shows it.
 pub(crate) fn stamp_entering_form(ctx: &ReducerContext, entity: &mut WorldEntity) {
-    let form = active_form(ctx, entity.guid).or_else(|| default_form(ctx, entity.class()));
-    stamp_client_form(ctx, entity, form);
-}
-
-/// As `stamp_entering_form`, for a body rebuilt without world entry, which keeps only a held Form.
-pub(crate) fn stamp_held_form(ctx: &ReducerContext, entity: &mut WorldEntity) {
-    stamp_client_form(ctx, entity, active_form(ctx, entity.guid));
-}
-
-fn stamp_client_form(ctx: &ReducerContext, entity: &mut WorldEntity, form: Option<Form>) {
-    let client_form = match form {
-        Some(form) => u32::from(form.client_form),
-        // A Shard without Forms (docs/danger-zones.md "Warrior stance migration") keeps the
-        // Battle Stance byte every rage class entered with before Forms.
-        None if ctx.db.game_form().iter().next().is_none()
-            && entity.power_type() == lyracore_shared::packing::power_type::RAGE =>
-        {
-            17
-        }
-        None => return,
-    };
+    let client_form =
+        match active_form(ctx, entity.guid).or_else(|| default_form(ctx, entity.class())) {
+            Some(form) => u32::from(form.client_form),
+            // A Shard without Forms (docs/danger-zones.md "Warrior stance migration") keeps the
+            // Battle Stance byte every rage class entered with before Forms.
+            None if ctx.db.game_form().iter().next().is_none()
+                && entity.power_type() == lyracore_shared::packing::power_type::RAGE =>
+            {
+                17
+            }
+            None => return,
+        };
     entity.unit_bytes_1 =
         (entity.unit_bytes_1 & !CLIENT_FORM_MASK) | (client_form << CLIENT_FORM_SHIFT);
 }
 
-/// A unit with no shapeshift Aura enters its class's default Form, as vmangos `Player::_LoadAuras`
-/// casts Battle Stance on a warrior; then the projection catches up with the Aura set.
+/// A Character body entering the world, by login or otherwise, with no shapeshift Aura enters its
+/// class's default Form, as vmangos `Player::_LoadAuras` casts Battle Stance on every loaded
+/// warrior; then the projection catches up with the Aura set.
 pub(crate) fn enter_world(ctx: &ReducerContext, guid: u64) {
-    if let Some(unit) = ctx.db.game_world_entity().guid().find(guid) {
-        if shapeshift_auras(ctx, guid).next().is_none() {
-            if let Some(form) = default_form(ctx, unit.class()) {
-                apply_form_spell(ctx, &unit, &form);
-            }
-        }
+    let Some(unit) = ctx.db.game_world_entity().guid().find(guid) else {
+        return;
+    };
+    let holds_form = shapeshift_auras(ctx, guid).next().is_some();
+    let entered_default = !holds_form
+        && default_form(ctx, unit.class()).is_some_and(|form| {
+            apply_form_spell(ctx, &unit, &form);
+            shapeshift_auras(ctx, guid).next().is_some()
+        });
+    // Entering the default Form projects through its Aura.
+    if !entered_default {
+        project_form(ctx, guid);
     }
-    project_form(ctx, guid);
 }
 
 /// Publish repair: keeps one shapeshift Aura, and gives a unit with none the Form its client form

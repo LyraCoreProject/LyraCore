@@ -511,6 +511,7 @@ pub(crate) fn aura_apply(
     };
     // Refreshing refills proc charges but preserves any running internal cooldown.
     let proc = crate::spell::proc::freeze_profile(ctx, e.kind, hdr);
+    let refreshing = existing.is_some();
     if let Some(mut a) = existing {
         a.stacks = next_stacks(a.stacks, hdr.max_stacks);
         a.expires_at = expires;
@@ -629,7 +630,12 @@ pub(crate) fn aura_apply(
         .insert_from_item(ctx, source_item);
     }
     if e.kind == lyracore_shared::spell::taxonomy::A_SHAPESHIFT {
-        crate::form::entered(ctx, target_guid, hdr.spell_id, e.p0.max(0) as u32);
+        let form_id = e.p0.max(0) as u32;
+        if refreshing {
+            crate::form::refreshed(ctx, target_guid, hdr.spell_id, form_id);
+        } else {
+            crate::form::entered(ctx, target_guid, hdr.spell_id, form_id);
+        }
     }
 
     source_behavior::finish_aura_apply(ctx, hdr, e, caster_guid, target_guid);

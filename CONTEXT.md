@@ -560,7 +560,7 @@ _Avoid_: stance (as a stored number), form byte (for the Form's id)
 **Form Projection**:
 The client form byte, the passive Auras a Form brings and Form-dependent equipment, re-derived from
 a unit's shapeshift Aura. The passives are the Form's own and every known passive whose Form Set
-requires the Form. Never a second state machine.
+requires a Form with a `game_form` row. Never a second state machine.
 
 **Form Set**:
 The Forms a spell requires or excludes, held as `game_spell_form` rows by Form id. The 1.12

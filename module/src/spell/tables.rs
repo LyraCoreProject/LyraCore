@@ -249,8 +249,9 @@ impl FormRequirement {
 // Spell.dbc `Stances` and `StancesNot` set bit `form_id - 1`; the mask only reaches Form 32.
 const DBC_MASK_FORMS: std::ops::RangeInclusive<u32> = 1..=32;
 
-/// Replaces the Forms 1-32 of a spell's Form Set with those its DBC masks name; an excluded Form
-/// wins over a required one. Rows for higher Form ids stay.
+/// Replaces the Forms 1-32 of a spell's Form Set with those its DBC masks name. A Form in both
+/// masks is excluded, our rule: vmangos reads the masks differently, and no 1.12 row sets both.
+/// Rows for higher Form ids stay.
 pub(crate) fn write_dbc_form_set(
     ctx: &ReducerContext,
     spell_id: u32,
@@ -277,6 +278,15 @@ pub(crate) fn write_dbc_form_set(
                 excluded: excluded & bit != 0,
             });
         }
+    }
+}
+
+/// Removes every row of a deleted spell's Form Set.
+pub(crate) fn delete_form_set(ctx: &ReducerContext, spell_id: u32) {
+    let rows = ctx.db.game_spell_form();
+    let ids: Vec<u64> = rows.by_spell().filter(spell_id).map(|row| row.id).collect();
+    for id in ids {
+        rows.id().delete(id);
     }
 }
 
@@ -653,6 +663,15 @@ impl AuraProjections {
 /// Removes every Aura in `auras`, opens the diminishing-returns window of each control category
 /// that no longer holds the unit, and refreshes each touched unit's derived columns once.
 pub(crate) fn shed_auras(ctx: &ReducerContext, auras: Vec<Aura>) {
+    shed(ctx, auras, true);
+}
+
+/// As `shed_auras`, for a caller that projects the Form itself afterwards.
+pub(crate) fn shed_auras_before_projection(ctx: &ReducerContext, auras: Vec<Aura>) {
+    shed(ctx, auras, false);
+}
+
+fn shed(ctx: &ReducerContext, auras: Vec<Aura>, project_form: bool) {
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let mut touched = std::collections::BTreeMap::<u64, AuraProjections>::new();
     let mut exited = Vec::new();
@@ -682,7 +701,8 @@ pub(crate) fn shed_auras(ctx: &ReducerContext, auras: Vec<Aura>) {
     for aura in exited {
         crate::form::exited(ctx, &aura);
     }
-    for (unit_guid, projections) in touched {
+    for (unit_guid, mut projections) in touched {
+        projections.form &= project_form;
         projections.refresh(ctx, unit_guid);
     }
 }

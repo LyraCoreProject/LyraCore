@@ -16,6 +16,14 @@ const RETAINED_RAGE_SCRIPTS: [(u32, i32); 5] =
 // vmangos HandleAuraModShapeshift casts Berserker Stance when Nefarian's warrior call ends.
 const SHAPESHIFT_RETURN_SPELLS: [(u32, u32); 1] = [(23397, 2458)];
 
+// vmangos Spell::CheckCast refuses every shapeshift while Nefarian's warrior call is held.
+const FORM_LOCKING_SPELLS: [u32; 1] = [23397];
+
+/// Whether this spell's Aura locks its holder in its Form.
+pub(crate) fn locks_form(spell_id: u32) -> bool {
+    FORM_LOCKING_SPELLS.contains(&spell_id)
+}
+
 /// The spell a unit gets when this spell's shapeshift Aura ends and leaves it in no Form; the
 /// importer stores it as the `A_SHAPESHIFT` effect's trigger spell.
 pub(crate) fn shapeshift_return_spell(spell_id: u32) -> Option<u32> {
@@ -39,7 +47,8 @@ pub(crate) fn retained_rage(script_id: u32) -> Option<i32> {
 }
 
 /// The Forms Spell.dbc `Stances` and `StancesNot` name, as `(form_id, excluded)`. Bit
-/// `form_id - 1` names a Form; an excluded Form wins over a required one, as in vmangos.
+/// `form_id - 1` names a Form. A Form in both masks is excluded, our rule: vmangos reads the masks
+/// differently, and no 1.12 row sets both.
 pub(crate) fn dbc_form_set(required: u32, excluded: u32) -> impl Iterator<Item = (u32, bool)> {
     (1..=32u32)
         .filter(move |form| (required | excluded) & (1 << (form - 1)) != 0)

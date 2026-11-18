@@ -409,17 +409,25 @@ masks, which `game_spell.form_mask` and `form_exclude` keep verbatim; rows for h
 A unit's only Form state is its one `A_SHAPESHIFT` Aura, whose `eff_p0` is the `form_id`. The
 Aura's events drive the Form:
 
-- **Apply or refresh** (`form::entered`): the unit leaves any other Form and the power rule runs,
-  also on a recast of the same Form.
+- **Apply** (`form::entered`): the unit leaves any other Form and the power rule runs.
+- **Refresh** (`form::refreshed`): as vmangos removes and reapplies the modifier, the unit's
+  Form-bound Auras end, then the Form is entered again, power rule included.
 - **Removal** (`form::exited`): the unit's own Auras that need a Form end, as in vmangos
   `HandleShapeshiftBoosts`. A unit left in no Form gets the shapeshift effect's `trigger_spell`;
   Nefarian's Berserk 23397 ends into Berserker Stance this way.
 
-After each event, `form::project_form` re-derives the client form byte, the passives the Form
-brings and the equipment that depends on the Form. The passives are the Form's `game_form_spell`
-rows and every known passive spell whose Form Set requires the Form, such as Defiance. World entry
-and publish repair run the same projection. `WorldEntity.stance` stays a column for druid forms
-until they become Forms.
+The Aura change then projects once: `form::project_form` re-derives the client form byte, the
+passives the Form brings and the equipment that depends on the Form. The passives are the Form's
+`game_form_spell` rows and every known passive whose Form Set requires a Form with a `game_form`
+row, such as Defiance. A passive whose Form Set names only Forms without a row, such as a druid
+talent before druid forms are Forms, keeps the Aura its learning applied. Equipment Auras stay with
+the equipment reconcile. A spell with `CAST_FLAG_LOCKS_FORM`, Berserk among them, refuses every
+shapeshift cast while its Aura is held.
+
+Every Character body that enters the world runs the same projection, and one with no shapeshift Aura
+enters its class's default Form, whether it came from login, a Package or a sessionless action.
+Publish repair projects too. `WorldEntity.stance` stays a column for druid forms until they become
+Forms.
 
 ### `game_character` (`module/src/character.rs`)
 

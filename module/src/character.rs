@@ -551,7 +551,6 @@ pub(crate) fn apply_player_login(
         entity.unit_bytes_1 = unit_bytes_1;
     }
     crate::away::at_world_entry(ctx, &mut entity, entry);
-    crate::form::stamp_entering_form(ctx, &mut entity);
     entity.insert(ctx);
     crate::ghost::restore(ctx, character_guid);
     crate::spell::recompute_display(ctx, character_guid);
@@ -589,7 +588,7 @@ pub(crate) fn apply_player_login(
         character.class,
         character.level,
     );
-    crate::form::enter_world(ctx, character.guid);
+    crate::form::project_form(ctx, character.guid);
 
     crate::spell::recompute_vitals(ctx, character.guid);
     crate::spell::recompute_sheet(ctx, character.guid);

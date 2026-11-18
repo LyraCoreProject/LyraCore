@@ -402,8 +402,8 @@ Before play resumes:
    `form_exclude` where the spell has no rows.
 3. Reimport `spell` with `--dbc`. It writes Forms 17 to 19 from SpellShapeshiftForm.dbc, the
    spells' Form Sets, the three stances as `A_SHAPESHIFT`, Tactical Mastery as
-   `A_FORM_POWER_RETAINED`, and `CAST_FLAG_NO_AURA_CANCEL` on spells the client shows no aura icon
-   for.
+   `A_FORM_POWER_RETAINED`, `CAST_FLAG_NO_AURA_CANCEL` on spells the client shows no aura icon
+   for, and `CAST_FLAG_LOCKS_FORM` on Nefarian's Berserk.
 4. Call `debug_repair_after_publish` again. Each online warrior with no stance Aura gets the stance
    its client form byte shows, or Battle Stance, with that stance's passives. A druid form byte is
    left alone.

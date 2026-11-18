@@ -60,7 +60,7 @@ fn clear_package_range(ctx: &ReducerContext) {
         .collect();
     for spell_id in stale_spells {
         spells.spell_id().delete(spell_id);
-        crate::spell::write_dbc_form_set(ctx, spell_id, 0, 0);
+        crate::spell::delete_form_set(ctx, spell_id);
     }
 }
 

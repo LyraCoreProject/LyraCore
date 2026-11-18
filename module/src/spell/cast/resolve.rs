@@ -1199,6 +1199,16 @@ fn check_cast_gate_suffix(
         ));
     }
 
+    if crate::form::locked(ctx, caster.guid)
+        && effects
+            .iter()
+            .any(|effect| effect.kind == lyracore_shared::spell::taxonomy::A_SHAPESHIFT)
+    {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::NotShapeshift,
+            format!("spell {spell_id} cannot change a Form an Aura locks"),
+        ));
+    }
     // The client cancels its form before casting another; an E_SET_STANCE form has no Aura.
     let form = if effects.iter().any(|effect| effect.kind == E_SET_STANCE) {
         None

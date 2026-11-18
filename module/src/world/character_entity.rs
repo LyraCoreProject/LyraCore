@@ -96,6 +96,7 @@ pub(crate) fn build_player_entity(
     } else {
         crate::stats::starting_power(power_type, entity.max_power)
     };
+    crate::form::stamp_entering_form(ctx, &mut entity);
     entity
 }
 
