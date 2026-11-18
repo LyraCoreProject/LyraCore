@@ -75,7 +75,8 @@ cargo build --release --target wasm32-unknown-unknown -p lyracore-module --featu
 cargo test -p lyracore-module --test weather -- --ignored
 ```
 
-CI runs every target in six parallel jobs with `--test-threads=4 --skip deadmines`. It skips the
+CI runs every target in two parallel jobs on large Boat VMs, with one test thread per core and
+`--skip deadmines`. It skips the
 workflow when a change touches only Markdown, `docs/` or `.claude/`.
 Both durable and Native Host also skip PRs that change only `conformance/*.py`,
 `conformance/tests/*.py`, the `conformance/run`, `baseline`, `scoreboard` and `audit` launchers, or

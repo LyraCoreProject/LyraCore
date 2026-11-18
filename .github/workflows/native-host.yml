@@ -27,7 +27,7 @@ env:
 jobs:
   host:
     if: github.event_name == 'push' || github.event.pull_request.draft == false
-    runs-on: boat
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       CARGO_BUILD_JOBS: 2
@@ -62,7 +62,7 @@ jobs:
 
   host-tests:
     if: github.event_name == 'push' || github.event.pull_request.draft == false
-    runs-on: boat
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
       CARGO_PROFILE_RELEASE_DEBUG: 0
@@ -120,23 +120,8 @@ jobs:
   checks:
     if: github.event_name == 'push' || github.event.pull_request.draft == false
     needs: [host, module]
-    runs-on: boat
+    runs-on: boat-large
     timeout-minutes: 30
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - group: shared checks
-            checks: ""
-          - group: Login Queue and development reload
-            checks: admission-wait reload
-          - group: recovery
-            checks: retention recovery slow-readers accept-recovery
-          - group: Handoff
-            checks: handoff realm-shard
-          - group: continent Shards
-            checks: continent-shards realm-communication instance-shard instance-allocation character-names package-creation package-deletion package-groups package-guilds package-relocation package-transfer
-    name: checks (${{ matrix.group }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -149,11 +134,36 @@ jobs:
         with:
           name: native-module
           path: ${{ runner.temp }}/module
+      # Each group runs its own Disposable Hosts on free ports, so the groups run side by side.
       - name: Run the native checks
-        env:
-          CHECKS: ${{ matrix.checks }}
         run: |
           chmod +x "$RUNNER_TEMP/host/spacetimedb-standalone"
-          # shellcheck disable=SC2086
+          groups=(
+            "shared checks|"
+            "Login Queue and development reload|admission-wait reload"
+            "recovery|retention recovery slow-readers"
+            "Handoff|handoff realm-shard"
+            "continent Shards|continent-shards realm-communication instance-shard instance-allocation character-names package-creation package-deletion package-groups package-guilds package-relocation package-transfer"
+          )
+          pids=()
+          for index in "${!groups[@]}"; do
+            # An empty list runs every shared check.
+            read -r -a checks <<< "${groups[$index]#*|}"
+            python3 native-host/check.py --host "$RUNNER_TEMP/host/spacetimedb-standalone" \
+              --module "$RUNNER_TEMP/module/lyracore_module.wasm" "${checks[@]}" \
+              > "$RUNNER_TEMP/checks-$index.log" 2>&1 &
+            pids+=("$!")
+          done
+          status=0
+          for index in "${!groups[@]}"; do
+            result=0
+            wait "${pids[$index]}" || result=$?
+            echo "::group::${groups[$index]%%|*} (exit $result)"
+            cat "$RUNNER_TEMP/checks-$index.log"
+            echo "::endgroup::"
+            [ "$result" -eq 0 ] || { echo "::error::native checks failed: ${groups[$index]%%|*}"; status=1; }
+          done
+          # accept-recovery allows 3 s to exhaust descriptors, so it runs after the parallel load ends.
           python3 native-host/check.py --host "$RUNNER_TEMP/host/spacetimedb-standalone" \
-            --module "$RUNNER_TEMP/module/lyracore_module.wasm" $CHECKS
+            --module "$RUNNER_TEMP/module/lyracore_module.wasm" accept-recovery || status=1
+          exit "$status"
