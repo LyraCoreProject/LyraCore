@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   prepare:
-    runs-on: boat
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
       propose: ${{ steps.pin.outputs.new == 'true' && steps.catalogue.outputs.missing == 'false' }}
@@ -67,7 +67,7 @@ jobs:
   publish:
     needs: prepare
     if: needs.prepare.outputs.propose == 'true'
-    runs-on: boat
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
       contents: read

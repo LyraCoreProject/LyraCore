@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   fmt:
-    runs-on: boat
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,6 +40,8 @@ jobs:
       - uses: ./.github/actions/setup-spacetime
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Check the Module builds for Wasm
+        run: cargo check --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
 
   test:
     runs-on: boat
@@ -69,14 +71,6 @@ jobs:
       - run: cargo test -p lyracore-protocol
       - run: cargo test -p lyracore-shared
       - run: cargo test -p lyracore-test-support
-
-  wasm:
-    runs-on: boat
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - run: cargo check --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
 
   official-packages:
     runs-on: boat
