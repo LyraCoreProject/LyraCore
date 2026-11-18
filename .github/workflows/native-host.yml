@@ -27,7 +27,7 @@ env:
 jobs:
   host:
     if: github.event_name == 'push' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: boat
     timeout-minutes: 30
     env:
       CARGO_BUILD_JOBS: 2
@@ -62,7 +62,7 @@ jobs:
 
   host-tests:
     if: github.event_name == 'push' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: boat
     timeout-minutes: 30
     env:
       CARGO_PROFILE_RELEASE_DEBUG: 0
@@ -100,7 +100,7 @@ jobs:
 
   module:
     if: github.event_name == 'push' || github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
+    runs-on: boat
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -120,7 +120,7 @@ jobs:
   checks:
     if: github.event_name == 'push' || github.event.pull_request.draft == false
     needs: [host, module]
-    runs-on: ubuntu-latest
+    runs-on: boat
     timeout-minutes: 30
     strategy:
       fail-fast: false

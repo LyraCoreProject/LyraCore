@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: boat
     timeout-minutes: 5
     defaults:
       run:
