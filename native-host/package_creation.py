@@ -95,11 +95,14 @@ def check(host):
     take(conflict_world, repaired)
     assert len(host.rows("SELECT guid FROM game_character WHERE name = 'Conflictedbot'", conflict_world)) == 1
 
-    host.sql("INSERT INTO game_package_teardown (package_name) VALUES ('stopped')", east)
-    refused_call('debug_request_package_character', ['stopped', 'Stoppedbot', 1, 1], east, 'Package is stopped')
-    host.sql("INSERT INTO game_package_teardown (package_name) VALUES ('realm_stopped')")
-    stopped = request(east, 'Realmstopped', package='realm-stopped')
-    take(east, stopped, package='realm-stopped')
+    # Each Package tick deletes the teardown row of a Package that the build does not install.
+    host.sql("INSERT INTO game_package_teardown (package_name) VALUES ('test_fixture')", east)
+    refused_call('debug_request_package_character', ['test_fixture', 'Stoppedbot', 1, 1], east, 'Package is stopped')
+    host.sql("DELETE FROM game_package_teardown WHERE package_name = 'test_fixture'", east)
+    host.restore('game_package_teardown', "package_name = 'test_fixture'")
+    host.sql("INSERT INTO game_package_teardown (package_name) VALUES ('test_fixture')")
+    stopped = request(east, 'Realmstopped', package='test-fixture')
+    take(east, stopped, package='test-fixture')
     assert not host.rows("SELECT guid FROM game_character WHERE name = 'Realmstopped'", east)
     assert not host.rows("SELECT name FROM game_character_name WHERE name = 'realmstopped'")
     for payload in ([], [3] + [0] * 8 + [2] + [0] * 4):
