@@ -24,13 +24,36 @@ fn damage_taken_modifier_scales_and_clamps() {
     assert_eq!(apply_damage_pct(7, -75), 1);
 }
 
-fn form_gated(form_mask: u32, form_exclude: u32, attributes: u32, attributes_ex_2: u32) -> Spell {
+fn spell_with(attributes: u32, attributes_ex_2: u32) -> Spell {
     Spell {
-        form_mask,
-        form_exclude,
         attributes,
         attributes_ex_2,
         ..Spell::blank(1, "Fixture")
+    }
+}
+
+// The Form Set a DBC `Stances` and `StancesNot` pair imports as, seen from `form`.
+fn requirement(required: u32, excluded: u32, form: Option<u32>) -> FormRequirement {
+    let bit = |mask: u32| form.is_some_and(|form| mask & (1 << (form - 1)) != 0);
+    FormRequirement {
+        requires_any: required & !excluded != 0,
+        requires_this: bit(required) && !bit(excluded),
+        excludes_this: bit(excluded),
+    }
+}
+
+fn form_gated(
+    required: u32,
+    excluded: u32,
+    attributes: u32,
+    attributes_ex_2: u32,
+) -> impl Fn(Option<ShapeshiftState>) -> Option<FormRefusal> {
+    let spell = spell_with(attributes, attributes_ex_2);
+    move |form| {
+        spell.form_refusal(
+            requirement(required, excluded, form.map(|form| form.form_id)),
+            form,
+        )
     }
 }
 
@@ -44,50 +67,85 @@ fn in_form(form_id: u32, acts_as_shapeshifted: bool) -> Option<ShapeshiftState> 
 #[test]
 fn a_stance_ability_needs_one_of_its_forms() {
     let charge = form_gated(0x0001_0000, 0, 0x0005_0010, 0);
-    assert_eq!(charge.form_refusal(in_form(17, false)), None);
+    assert_eq!(charge(in_form(17, false)), None);
     assert_eq!(
-        charge.form_refusal(in_form(18, false)),
+        charge(in_form(18, false)),
         Some(FormRefusal::OnlyShapeshift)
     );
-    assert_eq!(charge.form_refusal(None), Some(FormRefusal::OnlyShapeshift));
+    assert_eq!(charge(None), Some(FormRefusal::OnlyShapeshift));
     let excluded = form_gated(0, 0x0001_0000, 0, 0);
     assert_eq!(
-        excluded.form_refusal(in_form(17, false)),
+        excluded(in_form(17, false)),
         Some(FormRefusal::NotShapeshift)
     );
-    assert_eq!(excluded.form_refusal(in_form(18, false)), None);
+    assert_eq!(excluded(in_form(18, false)), None);
+}
+
+#[test]
+fn a_form_above_the_dbc_mask_can_gate_a_spell() {
+    let spell = spell_with(0, 0);
+    let in_form_40 = in_form(40, false);
+    let only_40 = FormRequirement {
+        requires_any: true,
+        requires_this: true,
+        excludes_this: false,
+    };
+    assert_eq!(spell.form_refusal(only_40, in_form_40), None);
+    assert_eq!(
+        spell.form_refusal(
+            FormRequirement {
+                requires_this: false,
+                ..only_40
+            },
+            in_form(17, false)
+        ),
+        Some(FormRefusal::OnlyShapeshift)
+    );
 }
 
 #[test]
 fn a_shapeshift_refuses_caster_spells_and_other_forms_abilities() {
     let caster_only = form_gated(0, 0, 0x0001_0000, 0);
     assert_eq!(
-        caster_only.form_refusal(in_form(5, true)),
+        caster_only(in_form(5, true)),
         Some(FormRefusal::NotShapeshift)
     );
-    assert_eq!(caster_only.form_refusal(in_form(17, false)), None);
-    assert_eq!(caster_only.form_refusal(None), None);
+    assert_eq!(caster_only(in_form(17, false)), None);
+    assert_eq!(caster_only(None), None);
     let maul = form_gated(0x90, 0, 0, 0);
-    assert_eq!(maul.form_refusal(in_form(8, true)), None);
-    assert_eq!(
-        maul.form_refusal(in_form(1, true)),
-        Some(FormRefusal::OnlyShapeshift)
-    );
+    assert_eq!(maul(in_form(8, true)), None);
+    assert_eq!(maul(in_form(1, true)), Some(FormRefusal::OnlyShapeshift));
     let unshifted_too = form_gated(0x1, 0, 0, 0x0008_0000);
-    assert_eq!(unshifted_too.form_refusal(None), None);
-    assert_eq!(unshifted_too.form_refusal(in_form(17, false)), None);
+    assert_eq!(unshifted_too(None), None);
+    assert_eq!(unshifted_too(in_form(17, false)), None);
     assert_eq!(
-        unshifted_too.form_refusal(in_form(5, true)),
+        unshifted_too(in_form(5, true)),
         Some(FormRefusal::OnlyShapeshift)
     );
 }
 
 #[test]
 fn only_a_form_bound_spell_ends_with_its_form() {
-    assert!(form_gated(0x0001_0000, 0, 0x0004_0010, 0).removed_on_shape_lost());
-    assert!(!form_gated(0x0001_0000, 0, 0x0005_0010, 0).removed_on_shape_lost());
-    assert!(!form_gated(0x1, 0, 0, 0x0008_0000).removed_on_shape_lost());
-    assert!(!form_gated(0, 0, 0, 0).removed_on_shape_lost());
+    let ends = |required, attributes, attributes_ex_2| {
+        spell_with(attributes, attributes_ex_2)
+            .removed_on_shape_lost(requirement(required, 0, None))
+    };
+    assert!(ends(0x0001_0000, 0x0004_0010, 0));
+    assert!(!ends(0x0001_0000, 0x0005_0010, 0));
+    assert!(!ends(0x1, 0, 0x0008_0000));
+    assert!(!ends(0, 0, 0));
+}
+
+#[test]
+fn a_known_passive_comes_with_the_forms_its_form_set_names() {
+    let defiance = spell_with(0x1D0, 0);
+    let in_defensive = requirement(0x0002_0000, 0, Some(18));
+    assert!(defiance.binds_to_forms(in_defensive));
+    assert!(defiance.applies_on_form_entry(in_defensive));
+    assert!(!defiance.applies_on_form_entry(requirement(0x0002_0000, 0, Some(17))));
+    assert!(!spell_with(0x10, 0).applies_on_form_entry(in_defensive));
+    assert!(!spell_with(0x1D0, 0x0008_0000).binds_to_forms(in_defensive));
+    assert!(!defiance.binds_to_forms(requirement(0, 0, Some(18))));
 }
 
 #[test]

@@ -60,16 +60,19 @@ fn clear_package_range(ctx: &ReducerContext) {
         .collect();
     for spell_id in stale_spells {
         spells.spell_id().delete(spell_id);
+        crate::spell::write_dbc_form_set(ctx, spell_id, 0, 0);
     }
 }
 
 fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     match (row.table(), row.operation()) {
         (ClaimTable::Spell, Operation::Insert) => {
-            ctx.db
+            let spell = ctx
+                .db
                 .game_spell()
                 .try_insert(built_spell(row)?)
                 .map_err(|e| format!("`game_spell` row {} did not insert: {e}", row.key()))?;
+            write_form_set(ctx, &spell);
         }
         (ClaimTable::Spell, Operation::Update) => {
             let spells = ctx.db.game_spell();
@@ -80,7 +83,8 @@ fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
             for (field, claimed) in row.fields() {
                 apply_spell_field(&mut spell, field, &claimed.value)?;
             }
-            spells.spell_id().update(spell);
+            let spell = spells.spell_id().update(spell);
+            write_form_set(ctx, &spell);
         }
         (ClaimTable::SpellEffect, Operation::Insert) => {
             ctx.db
@@ -106,6 +110,10 @@ fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
         ),
     }
     Ok(())
+}
+
+fn write_form_set(ctx: &ReducerContext, spell: &Spell) {
+    crate::spell::write_dbc_form_set(ctx, spell.spell_id, spell.form_mask, spell.form_exclude);
 }
 
 fn blank_spell(spell_id: u32) -> Spell {

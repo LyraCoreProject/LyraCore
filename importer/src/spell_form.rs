@@ -13,6 +13,18 @@ const SHAPESHIFT_FLAG_STANCE: i32 = 0x1;
 const RETAINED_RAGE_SCRIPTS: [(u32, i32); 5] =
     [(831, 50), (832, 100), (833, 150), (834, 200), (835, 250)];
 
+// vmangos HandleAuraModShapeshift casts Berserker Stance when Nefarian's warrior call ends.
+const SHAPESHIFT_RETURN_SPELLS: [(u32, u32); 1] = [(23397, 2458)];
+
+/// The spell a unit gets when this spell's shapeshift Aura ends and leaves it in no Form; the
+/// importer stores it as the `A_SHAPESHIFT` effect's trigger spell.
+pub(crate) fn shapeshift_return_spell(spell_id: u32) -> Option<u32> {
+    SHAPESHIFT_RETURN_SPELLS
+        .iter()
+        .find(|(spell, _)| *spell == spell_id)
+        .map(|(_, next)| *next)
+}
+
 /// Whether a source shapeshift Aura for this form imports as `A_SHAPESHIFT`.
 pub(crate) fn imports_shapeshift(form_id: u32) -> bool {
     FORM_FACTS.iter().any(|fact| fact.form_id == form_id)
@@ -24,6 +36,14 @@ pub(crate) fn retained_rage(script_id: u32) -> Option<i32> {
         .iter()
         .find(|(script, _)| *script == script_id)
         .map(|(_, rage)| *rage)
+}
+
+/// The Forms Spell.dbc `Stances` and `StancesNot` name, as `(form_id, excluded)`. Bit
+/// `form_id - 1` names a Form; an excluded Form wins over a required one, as in vmangos.
+pub(crate) fn dbc_form_set(required: u32, excluded: u32) -> impl Iterator<Item = (u32, bool)> {
+    (1..=32u32)
+        .filter(move |form| (required | excluded) & (1 << (form - 1)) != 0)
+        .map(move |form| (form, excluded & (1 << (form - 1)) != 0))
 }
 
 pub(crate) struct ShapeshiftFormEntry {
@@ -197,6 +217,19 @@ mod tests {
         for form in [1, 5, 8, 14, 15, 16, 28, 30] {
             assert!(!imports_shapeshift(form));
         }
+    }
+
+    #[test]
+    fn a_dbc_mask_names_each_form_by_its_id_and_an_exclusion_wins() {
+        assert_eq!(
+            dbc_form_set(0x0003_0000, 0x0002_0000).collect::<Vec<_>>(),
+            vec![(17, false), (18, true)]
+        );
+        assert_eq!(
+            dbc_form_set(0x8000_0090, 0).collect::<Vec<_>>(),
+            vec![(5, false), (8, false), (32, false)]
+        );
+        assert_eq!(dbc_form_set(0, 0).count(), 0);
     }
 
     #[test]

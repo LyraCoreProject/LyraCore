@@ -25,8 +25,8 @@ pub use ids::{
     is_package_trainer_id, packed_class_level_id, packed_creature_spawn_guid, packed_form_spell_id,
     packed_gameobject_spawn_guid, packed_quest_objective_id, packed_quest_reward_choice_id,
     packed_quest_reward_item_id, packed_race_class_id, packed_race_class_level_id,
-    packed_spell_effect_id, MAX_CREATURE_GUID_COMPONENT, OPERATOR_SPAWN_ID_CEIL,
-    OPERATOR_SPAWN_ID_FLOOR,
+    packed_spell_effect_id, packed_spell_form_id, MAX_CREATURE_GUID_COMPONENT,
+    OPERATOR_SPAWN_ID_CEIL, OPERATOR_SPAWN_ID_FLOOR,
 };
 pub use schema::{
     Column, FieldType, FieldValue, Table, CAST_FAMILY, CREATURE_AI_FAMILY, CREATURE_FAMILY,

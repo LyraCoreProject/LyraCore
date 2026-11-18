@@ -1205,7 +1205,9 @@ fn check_cast_gate_suffix(
     } else {
         crate::form::shapeshift_state(ctx, caster)
     };
-    if let Some(refusal) = hdr.form_refusal(form) {
+    let requirement =
+        crate::spell::FormRequirement::of(ctx, spell_id, form.map(|form| form.form_id));
+    if let Some(refusal) = hdr.form_refusal(requirement, form) {
         let reason = match refusal {
             FormRefusal::NotShapeshift => CastRefusalReason::NotShapeshift,
             FormRefusal::OnlyShapeshift => CastRefusalReason::WrongStance,

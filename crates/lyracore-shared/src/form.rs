@@ -65,46 +65,9 @@ pub const FORM_FACTS: &[FormFact] = &[
     },
 ];
 
-/// The Forms a spell requires or excludes. It holds Form ids, so a Form outside the 1.12 client's
-/// 32-bit `Stances` mask still fits.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct FormSet(Vec<u32>);
-
-impl FormSet {
-    /// Spell.dbc `Stances` and `StancesNot` set bit `form_id - 1` for each Form.
-    pub fn from_dbc_mask(mask: u32) -> Self {
-        Self(
-            (0..32)
-                .filter(|bit| mask & (1 << bit) != 0)
-                .map(|bit| bit + 1)
-                .collect(),
-        )
-    }
-
-    pub fn contains(&self, form_id: u32) -> bool {
-        self.0.contains(&form_id)
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_dbc_mask_names_each_form_by_its_id() {
-        let stances = FormSet::from_dbc_mask(0x0007_0000);
-        assert!(stances.contains(17) && stances.contains(18) && stances.contains(19));
-        assert!(!stances.contains(16) && !stances.contains(20));
-        let bear = FormSet::from_dbc_mask(0x90);
-        assert!(bear.contains(5) && bear.contains(8) && !bear.contains(1));
-        assert!(FormSet::from_dbc_mask(0).is_empty());
-        assert!(FormSet::from_dbc_mask(0x8000_0000).contains(32));
-        assert!(!FormSet::from_dbc_mask(u32::MAX).contains(33));
-    }
 
     #[test]
     fn power_rule_codes_round_trip_and_unknown_codes_are_returned() {

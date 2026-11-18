@@ -400,12 +400,26 @@ A new Form needs rows, not Rust.
   `UNIT_FIELD_BYTES_1`. It is a projection, never the Form's identity, so a Form a client does not
   know can name a byte it does.
 
-A unit's only Form state is its one `A_SHAPESHIFT` Aura, whose `eff_p0` is the `form_id`.
-`form::project_form` derives the client form byte, applies the power rule on entry, and reconciles
-the Form's passives and the equipment that depends on the Form. Every shapeshift Aura change, world
-entry and publish repair run it. `WorldEntity.stance` stays a column for druid forms until they
-become Forms. The Forms a spell requires or excludes are a `FormSet` of Form ids, imported from the
-client's 32-bit `form_mask` and `form_exclude`; `game_spell.stances` is no longer read.
+`game_spell_form` holds the Forms a spell requires, or excludes when `excluded`. Its rows are the
+spell's Form Set, so a Form id above the 1.12 client's 32-bit `Stances` mask can gate a spell. The
+importer, Package spell rows and Operator spell edits write rows for Forms 1 to 32 from the DBC
+masks, which `game_spell.form_mask` and `form_exclude` keep verbatim; rows for higher Form ids stay.
+`game_spell.stances` is no longer read.
+
+A unit's only Form state is its one `A_SHAPESHIFT` Aura, whose `eff_p0` is the `form_id`. The
+Aura's events drive the Form:
+
+- **Apply or refresh** (`form::entered`): the unit leaves any other Form and the power rule runs,
+  also on a recast of the same Form.
+- **Removal** (`form::exited`): the unit's own Auras that need a Form end, as in vmangos
+  `HandleShapeshiftBoosts`. A unit left in no Form gets the shapeshift effect's `trigger_spell`;
+  Nefarian's Berserk 23397 ends into Berserker Stance this way.
+
+After each event, `form::project_form` re-derives the client form byte, the passives the Form
+brings and the equipment that depends on the Form. The passives are the Form's `game_form_spell`
+rows and every known passive spell whose Form Set requires the Form, such as Defiance. World entry
+and publish repair run the same projection. `WorldEntity.stance` stays a column for druid forms
+until they become Forms.
 
 ### `game_character` (`module/src/character.rs`)
 

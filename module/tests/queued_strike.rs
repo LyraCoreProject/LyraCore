@@ -698,8 +698,11 @@ fn stage_on_next_swing_spell(standalone: &Standalone, strike: QueuedStrike) {
             ("cooldown_ms", &cooldown_ms),
             ("range_yd", &5),
             ("school_mask", &1),
-            ("form_mask", &form_mask),
         ],
+    );
+    standalone.assert_call(
+        "debug_set_spell_form_masks",
+        &[&spell_id.to_string(), &form_mask.to_string(), "0"],
     );
     standalone.insert_row(
         "game_spell_effect",

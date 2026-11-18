@@ -2,8 +2,10 @@ mod support;
 
 use std::collections::BTreeSet;
 
+use lyracore_package_delta::packed_spell_form_id;
 use lyracore_shared::spell::taxonomy::*;
-use support::{actor, number, Row, Standalone};
+use serde_json::json;
+use support::{number, ReducerConnection, Row, Standalone};
 
 const WARRIOR: &str = "1";
 const BATTLE_STANCE: u32 = 2457;
@@ -53,12 +55,40 @@ fn insert_spell(
     }
 }
 
-fn fixture(name: &str) -> Standalone {
+/// Writes a spell's Form Set, keeping its verbatim DBC masks in step.
+fn require_forms(shard: &Standalone, spell: u32, required: &[u32], excluded: &[u32]) {
+    let mask = |forms: &[u32]| forms.iter().fold(0u32, |mask, form| mask | 1 << (form - 1));
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET form_mask = {}, form_exclude = {} WHERE spell_id = {spell}",
+        mask(required),
+        mask(excluded)
+    ));
+    for (forms, excluded) in [(required, false), (excluded, true)] {
+        for &form in forms {
+            shard.insert_row(
+                "game_spell_form",
+                &[
+                    ("id", &packed_spell_form_id(spell, form)),
+                    ("spell_id", &spell),
+                    ("form_id", &form),
+                    ("excluded", &excluded),
+                ],
+            );
+        }
+    }
+}
+
+fn shard_without_forms(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    shard
+}
+
+fn fixture(name: &str) -> Standalone {
+    let shard = shard_without_forms(name);
     shard.assert_call("debug_seed_warrior_forms", &[]);
     shard
 }
@@ -70,17 +100,13 @@ fn spawned(name: &str) -> Standalone {
     shard
 }
 
-fn bind_session(shard: &Standalone) {
-    let key = serde_json::to_string(&vec![7u8; 40]).unwrap();
-    shard.assert_call(
-        "establish_session",
-        &[WARRIOR, &key, r#"{"__identity__":"0x1"}"#],
-    );
-}
-
-fn log_in(shard: &Standalone) {
-    bind_session(shard);
-    shard.assert_call("gw_player_login", &["1", &actor(WARRIOR)]);
+/// Enters the world through a native World Session, as a client login does.
+fn log_in(shard: &Standalone, server_seed: u32) -> ReducerConnection {
+    let mut wire = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
+    wire.call("native_world_open", json!([server_seed]))
+        .unwrap();
+    wire.call("debug_native_enter_world", json!([1])).unwrap();
+    wire
 }
 
 fn ready(shard: &Standalone) {
@@ -190,15 +216,24 @@ fn every_form_projects_its_rules_and_leaving_it_restores_the_unit() {
             }
         };
         assert_eq!(rage(&shard), expected_rage, "{form:?}");
+        set_rage(&shard, 600);
+        enter(&shard, spell);
+        assert_eq!(rage(&shard), expected_rage, "recasting {form:?}");
 
         for other in forms
             .iter()
             .filter(|other| other["form_id"] != form["form_id"])
         {
             enter(&shard, number(other, "spell_id"));
-            assert!(aura_spells(&shard).is_disjoint(&passives), "{other:?}");
+            let held = aura_spells(&shard);
+            assert!(held.is_disjoint(&passives), "{other:?} holds {held:?}");
+            assert!(
+                passives_of(&other["form_id"]).is_subset(&held),
+                "{other:?} after {form:?} holds {held:?}"
+            );
         }
         enter(&shard, spell);
+        assert!(passives.is_subset(&aura_spells(&shard)), "back to {form:?}");
 
         shard.assert_call("debug_shed_spell_auras", &[WARRIOR, &spell.to_string()]);
         assert!(shapeshift_spells(&shard).is_empty());
@@ -212,7 +247,7 @@ fn every_form_projects_its_rules_and_leaving_it_restores_the_unit() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_warrior_without_a_stance_enters_the_world_in_battle_stance() {
     let shard = fixture("forms-default-stance");
-    log_in(&shard);
+    let _wire = log_in(&shard, 42);
     assert_eq!(shapeshift_spells(&shard), vec![BATTLE_STANCE]);
     assert!(aura_spells(&shard).contains(&BATTLE_PASSIVE));
     assert_eq!(client_form(&shard), 17);
@@ -232,10 +267,10 @@ fn a_warrior_without_a_stance_enters_the_world_in_battle_stance() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_stance_survives_logout() {
     let shard = fixture("forms-logout");
-    log_in(&shard);
+    let _first = log_in(&shard, 42);
     enter(&shard, DEFENSIVE_STANCE);
     shard.assert_call("debug_logout_character", &[WARRIOR]);
-    log_in(&shard);
+    let _second = log_in(&shard, 43);
     assert_eq!(shapeshift_spells(&shard), vec![DEFENSIVE_STANCE]);
     let held = aura_spells(&shard);
     assert!(held.contains(&DEFENSIVE_PASSIVE) && !held.contains(&BATTLE_PASSIVE));
@@ -254,28 +289,17 @@ fn a_stance_and_its_passive_survive_death() {
     assert_eq!(client_form(&shard), 19);
 }
 
+// Dispel is not tested: `dispel_target` skips every spell with dispel type 0, as the stances are.
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_stance_cannot_be_cancelled_or_dispelled() {
-    let shard = spawned("forms-no-cancel");
-    bind_session(&shard);
-    enter(&shard, BATTLE_STANCE);
-    assert!(!shard
-        .call(
-            "gw_cancel_aura",
-            &[&actor(WARRIOR), &BATTLE_STANCE.to_string()]
-        )
-        .status
-        .success());
-    const DISPEL_ALL: u32 = 5090990;
-    insert_spell(
-        &shard,
-        DISPEL_ALL,
-        "Dispel all",
-        (0, 0, 0),
-        &[(E_DISPEL, 1, 0, P_NONE)],
+fn a_stance_cannot_be_cancelled() {
+    let shard = fixture("forms-no-cancel");
+    let mut wire = log_in(&shard, 42);
+    assert_eq!(shapeshift_spells(&shard), vec![BATTLE_STANCE]);
+    let _ = wire.call(
+        "native_world_receive",
+        json!([0x136u32, BATTLE_STANCE.to_le_bytes().to_vec()]),
     );
-    cast(&shard, DISPEL_ALL);
     assert_eq!(shapeshift_spells(&shard), vec![BATTLE_STANCE]);
     assert!(aura_spells(&shard).contains(&BATTLE_PASSIVE));
 }
@@ -414,15 +438,12 @@ fn the_cast_gate_reads_the_spell_form_set() {
     const BATTLE_ONLY: u32 = 5090992;
     const NOT_IN_DEFENSIVE: u32 = 5090993;
     let shard = spawned("forms-cast-gate");
-    for (spell, form_mask, form_exclude) in [
-        (BATTLE_ONLY, 1u32 << 16, 0u32),
-        (NOT_IN_DEFENSIVE, 0, 1 << 17),
+    for (spell, required, excluded) in [
+        (BATTLE_ONLY, &[17][..], &[][..]),
+        (NOT_IN_DEFENSIVE, &[][..], &[18][..]),
     ] {
         insert_spell(&shard, spell, "Gated", (0, 0, 0), &[(A_FLAG, 0, 0, P_FLAG)]);
-        shard.assert_sql(&format!(
-            "UPDATE game_spell SET form_mask = {form_mask}, form_exclude = {form_exclude} \
-             WHERE spell_id = {spell}"
-        ));
+        require_forms(&shard, spell, required, excluded);
     }
     let casts = |spell: u32| {
         ready(&shard);
@@ -457,10 +478,7 @@ fn leaving_a_stance_ends_the_auras_that_need_it() {
             (attributes, 0, 0),
             &[(A_FLAG, 0, 0, P_FLAG)],
         );
-        shard.assert_sql(&format!(
-            "UPDATE game_spell SET form_mask = {} WHERE spell_id = {spell}",
-            1u32 << 16
-        ));
+        require_forms(&shard, spell, &[17], &[]);
     }
     enter(&shard, BATTLE_STANCE);
     cast(&shard, SWEEPING_STRIKES);
@@ -483,4 +501,137 @@ fn publish_repair_turns_a_shown_stance_into_its_aura() {
     assert_eq!(shapeshift_spells(&shard), vec![DEFENSIVE_STANCE]);
     assert!(aura_spells(&shard).contains(&DEFENSIVE_PASSIVE));
     assert_eq!(client_form(&shard), 18);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn defiance_comes_and_goes_with_defensive_stance() {
+    const DEFIANCE: u32 = 12303;
+    let shard = spawned("forms-defiance");
+    insert_spell(
+        &shard,
+        DEFIANCE,
+        "Defiance",
+        (0x1D0, 0, 0),
+        &[(A_MOD_COMBAT, 3, i32::from(COMBAT_THREAT), P_COMBAT_FIELD)],
+    );
+    require_forms(&shard, DEFIANCE, &[18], &[]);
+    shard.assert_call("debug_learn_spell", &[WARRIOR, &DEFIANCE.to_string()]);
+    for (stance, held) in [
+        (BATTLE_STANCE, false),
+        (DEFENSIVE_STANCE, true),
+        (BATTLE_STANCE, false),
+        (DEFENSIVE_STANCE, true),
+    ] {
+        enter(&shard, stance);
+        assert_eq!(
+            aura_spells(&shard).contains(&DEFIANCE),
+            held,
+            "stance {stance}"
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_form_passive_that_needs_its_form_survives_the_switch_into_it() {
+    let shard = spawned("forms-switch-order");
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET attributes = {} WHERE spell_id = {BATTLE_PASSIVE}",
+        0x0004_00D0
+    ));
+    require_forms(&shard, BATTLE_PASSIVE, &[17], &[]);
+    enter(&shard, DEFENSIVE_STANCE);
+    enter(&shard, BATTLE_STANCE);
+    let id = |spell: u32| -> u64 {
+        number(
+            &shard.query_rows(&format!(
+                "SELECT id FROM game_aura WHERE target_guid = 1 AND spell_id = {spell}"
+            ))[0],
+            "id",
+        )
+    };
+    let newest: u64 = shard
+        .query_rows("SELECT id FROM game_aura")
+        .iter()
+        .map(|row| number(row, "id"))
+        .max()
+        .unwrap();
+    assert_eq!(
+        (id(BATTLE_PASSIVE), newest),
+        (id(BATTLE_STANCE) + 1, id(BATTLE_STANCE) + 1),
+        "the passive is applied once, after the old Form's Auras are gone"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn nefarians_berserk_caps_rage_and_ends_in_berserker_stance() {
+    const BERSERK: u32 = 23397;
+    let shard = spawned("forms-berserk");
+    insert_spell(
+        &shard,
+        BERSERK,
+        "Berserk",
+        (0, 0, 0),
+        &[(A_SHAPESHIFT, 0, 19, P_FORM)],
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_spell_effect SET trigger_spell = {BERSERKER_STANCE} WHERE spell_id = {BERSERK}"
+    ));
+    enter(&shard, BERSERKER_STANCE);
+    set_rage(&shard, 600);
+    enter(&shard, BERSERK);
+    assert_eq!(
+        rage(&shard),
+        0,
+        "Berserk applies the Form's power rule again"
+    );
+    assert_eq!(client_form(&shard), 19);
+    shard.assert_call("debug_shed_spell_auras", &[WARRIOR, &BERSERK.to_string()]);
+    assert_eq!(shapeshift_spells(&shard), vec![BERSERKER_STANCE]);
+    assert!(aura_spells(&shard).contains(&BERSERKER_PASSIVE));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_without_a_stance_cannot_use_a_stance_ability() {
+    const SHIELD_BASH: u32 = 5090994;
+    let shard = spawned("forms-creature-gate");
+    let wolf = wolf(&shard);
+    insert_spell(
+        &shard,
+        SHIELD_BASH,
+        "Shield Bash",
+        (0, 0, 0),
+        &[(A_FLAG, 0, 0, P_FLAG)],
+    );
+    require_forms(&shard, SHIELD_BASH, &[17, 18], &[]);
+    let casts = |spell: u32| {
+        shard.assert_sql(&format!(
+            "DELETE FROM game_spell_cooldown WHERE caster_guid = {wolf}"
+        ));
+        shard.assert_sql(&format!(
+            "DELETE FROM game_spell_cd WHERE caster_guid = {wolf}"
+        ));
+        shard
+            .call("debug_force_cast", &[&wolf, &spell.to_string()])
+            .status
+            .success()
+    };
+    assert!(
+        !casts(SHIELD_BASH),
+        "vmangos GetErrorAtShapeshiftedCast has no player exception"
+    );
+    assert!(casts(BATTLE_STANCE));
+    assert!(casts(SHIELD_BASH));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_shard_without_forms_keeps_the_battle_stance_byte() {
+    let shard = shard_without_forms("forms-before-reimport");
+    let _wire = log_in(&shard, 42);
+    assert!(shapeshift_spells(&shard).is_empty());
+    assert_eq!(client_form(&shard), 17);
 }

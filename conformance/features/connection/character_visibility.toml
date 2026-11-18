@@ -124,8 +124,8 @@ symbol = "WorldSession::HandlePlayerLoginOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "A warrior's Battle Stance Aura is absent from its peer CREATE. World entry now gives a warrior without a stance the Battle Stance Aura from Form data, but the Module sends Auras in a VALUES update after CREATE instead of in the CREATE descriptor. The visibility fixture installs the warrior Forms, so the CREATE carries form byte 17 in field_138 and the Aura arrives in a later VALUES update."
-path = "module/src/native/visibility.rs"
+description = "A warrior's Battle Stance Aura is absent from its peer CREATE. World entry now gives a warrior without a stance the Battle Stance Aura from Form data, but the Module sends Auras in a VALUES update after CREATE instead of in the CREATE descriptor. The visibility and taxi fixtures install the warrior Forms, so the CREATE carries form byte 17 in field_138 and the Aura arrives in a later VALUES update; taxi_single_hop records the extra update it adds."
+path = "crates/lyracore-protocol/src/codec/entity.rs"
 symbol = "build_create_object"
 evidence = "Tier 1 two_character_visibility and __opposite_faction at harness 004d8d74: fields_47, _95 and _101 carry 2457, 9 and 1 in the reference and are absent in core, for both recipients. At d9173eca, Object::BuildValuesUpdate writes the Aura slots into CREATE. module/tests/forms.rs a_warrior_without_a_stance_enters_the_world_in_battle_stance shows the Aura in a visible slot after world entry."
 

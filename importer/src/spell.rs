@@ -1092,7 +1092,10 @@ fn push_spell_effect_rows(
             0.0
         };
         let chain_targets = s.effect_chain_target[i].clamp(0, 255) as u8;
-        let trigger_spell = s.effect_trigger_spell[i];
+        let trigger_spell = match crate::spell_form::shapeshift_return_spell(spell_id) {
+            Some(next) if kind == A_SHAPESHIFT => next,
+            _ => s.effect_trigger_spell[i],
+        };
         if lyracore_shared::trainer::learn_target_trigger(kind, trigger_spell).is_some() {
             wrapper_to_rank.entry(spell_id).or_insert(trigger_spell);
         }
@@ -1593,6 +1596,26 @@ fn assemble_spell_sql(
     );
 
     crate::spell_form::push_form_sql(&mut stmts, &rows.forms);
+    push_insert(
+        &mut stmts,
+        "game_spell_form",
+        "id,spell_id,form_id,excluded",
+        &rows
+            .headers
+            .iter()
+            .flat_map(|header| {
+                crate::spell_form::dbc_form_set(header.form_mask, header.form_exclude).map(
+                    move |(form_id, excluded)| {
+                        format!(
+                            "({},{},{form_id},{excluded})",
+                            lyracore_package_delta::packed_spell_form_id(header.spell_id, form_id),
+                            header.spell_id
+                        )
+                    },
+                )
+            })
+            .collect::<Vec<_>>(),
+    );
 
     for row in &rows.fishing {
         stmts.push(format!(
@@ -1639,12 +1662,13 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
             format!("DELETE FROM game_spell_effect WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_spell_reagent WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_creature_ai_spell_metadata WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
+            format!("DELETE FROM game_spell_form WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
         ];
     }
     let mut ids: Vec<u32> = only.to_vec();
     ids.sort_unstable();
     ids.dedup();
-    let mut dels = Vec::with_capacity(ids.len() * 4);
+    let mut dels = Vec::with_capacity(ids.len() * 5);
     for id in ids {
         dels.push(format!("DELETE FROM game_spell WHERE spell_id = {id}"));
         dels.push(format!(
@@ -1656,6 +1680,7 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
         dels.push(format!(
             "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id = {id}"
         ));
+        dels.push(format!("DELETE FROM game_spell_form WHERE spell_id = {id}"));
     }
     dels
 }
@@ -3281,6 +3306,7 @@ mod tests {
             aura_spell(5487, "Bear Form", 36, 5),
             aura_spell(1784, "Stealth", 36, 30),
             aura_spell(2645, "Ghost Wolf", 36, 16),
+            aura_spell(23397, "Berserk", 36, 19),
         ];
         let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
         for (spell, form) in [(2457, 17), (71, 18), (2458, 19)] {
@@ -3291,6 +3317,13 @@ mod tests {
             );
         }
         assert_eq!(first_effect(&rows, 5487).kind, E_SET_STANCE);
+        let berserk = first_effect(&rows, 23397);
+        assert_eq!(
+            (berserk.kind, berserk.p0, berserk.trigger_spell),
+            (A_SHAPESHIFT, 19, 2458),
+            "Nefarian's Berserk ends into Berserker Stance"
+        );
+        assert_eq!(first_effect(&rows, 2458).trigger_spell, 0);
         assert_eq!(first_effect(&rows, 1784).kind, A_FLAG);
         assert_eq!(first_effect(&rows, 2645).kind, A_FLAG);
         let cancel = |spell: u32| {
@@ -3303,6 +3336,31 @@ mod tests {
         };
         assert_ne!(cancel(2457), 0, "a stance has no aura icon to cancel");
         assert_eq!(cancel(5487), 0);
+    }
+
+    #[test]
+    fn the_spell_plan_writes_each_spells_form_set_as_rows() {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![Spell {
+            shapeshift_mask: 0x0003_0000,
+            shapeshift_exclude: 0x0004_0000,
+            ..aura_spell(72, "Shield Bash", 0, 0)
+        }];
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let statements = assemble_spell_sql(&rows, &[], false);
+        let insert = statements
+            .iter()
+            .find(|sql| sql.starts_with("INSERT INTO game_spell_form"))
+            .expect("a Form Set insert");
+        assert_eq!(
+            insert,
+            &format!(
+                "INSERT INTO game_spell_form (id,spell_id,form_id,excluded) VALUES ({},72,17,false),({},72,18,false),({},72,19,true)",
+                (72u64 << 32) | 17,
+                (72u64 << 32) | 18,
+                (72u64 << 32) | 19
+            )
+        );
     }
 
     #[test]
@@ -4354,6 +4412,7 @@ mod tests {
             "game_spell_effect",
             "game_spell_reagent",
             "game_creature_ai_spell_metadata",
+            "game_spell_form",
         ];
         assert_eq!(
             sorted(spell_delete_statements(&[])),
@@ -4376,7 +4435,7 @@ mod tests {
                     })
                     .collect()
             ),
-            "two ids across four tables, with the duplicate removed"
+            "two ids across five tables, with the duplicate removed"
         );
     }
 

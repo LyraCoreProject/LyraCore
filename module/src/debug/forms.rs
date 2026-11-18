@@ -126,3 +126,24 @@ pub fn debug_seed_warrior_forms(ctx: &ReducerContext) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Sets a spell's DBC Form masks and the Form Set rows they import as.
+#[reducer]
+pub fn debug_set_spell_form_masks(
+    ctx: &ReducerContext,
+    spell_id: u32,
+    required: u32,
+    excluded: u32,
+) -> Result<(), String> {
+    let mut spell = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(spell_id)
+        .ok_or_else(|| format!("no spell {spell_id}"))?;
+    spell.form_mask = required;
+    spell.form_exclude = excluded;
+    ctx.db.game_spell().spell_id().update(spell);
+    crate::spell::write_dbc_form_set(ctx, spell_id, required, excluded);
+    Ok(())
+}

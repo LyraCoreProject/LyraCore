@@ -627,9 +627,9 @@ pub(crate) fn aura_apply(
             proc_ready_micros: 0,
         }
         .insert_from_item(ctx, source_item);
-        if e.kind == lyracore_shared::spell::taxonomy::A_SHAPESHIFT {
-            crate::form::keep_only(ctx, target_guid, hdr.spell_id);
-        }
+    }
+    if e.kind == lyracore_shared::spell::taxonomy::A_SHAPESHIFT {
+        crate::form::entered(ctx, target_guid, hdr.spell_id, e.p0.max(0) as u32);
     }
 
     source_behavior::finish_aura_apply(ctx, hdr, e, caster_guid, target_guid);

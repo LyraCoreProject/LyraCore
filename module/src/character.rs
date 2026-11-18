@@ -559,7 +559,6 @@ pub(crate) fn apply_player_login(
         crate::taxi::arm_taxi_flight(ctx, character_guid);
     }
     crate::mount::restore_mount_on_rebuild(ctx, character_guid);
-    crate::form::enter_world(ctx, character_guid);
 
     crate::items::grant_starter_item(ctx, character.guid, owner)?;
     let skill_start = crate::skill::SkillStart::at_login(character.first_login);
@@ -590,6 +589,7 @@ pub(crate) fn apply_player_login(
         character.class,
         character.level,
     );
+    crate::form::enter_world(ctx, character.guid);
 
     crate::spell::recompute_vitals(ctx, character.guid);
     crate::spell::recompute_sheet(ctx, character.guid);

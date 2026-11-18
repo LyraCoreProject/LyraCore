@@ -414,6 +414,11 @@ pub const fn packed_spell_effect_id(spell_id: u32, effect_index: u8) -> u64 {
 pub const MAX_SPELL_EFFECT_INDEX: u8 = 2;
 
 #[must_use]
+pub const fn packed_spell_form_id(spell_id: u32, form_id: u32) -> u64 {
+    (spell_id as u64) << 32 | form_id as u64
+}
+
+#[must_use]
 pub const fn packed_form_spell_id(form_id: u32, spell_id: u32) -> u64 {
     (form_id as u64) << 32 | spell_id as u64
 }

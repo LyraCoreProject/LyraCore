@@ -287,6 +287,7 @@ pub(crate) fn restore_sessionless_body(
         entity.player_flags = player_flags;
         entity.unit_bytes_1 = unit_bytes_1;
     }
+    crate::form::stamp_held_form(ctx, &mut entity);
     entity.insert(ctx);
     crate::form::project_form(ctx, character_guid);
     ctx.db.game_creature_spline().guid().delete(character_guid);

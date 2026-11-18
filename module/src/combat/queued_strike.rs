@@ -99,7 +99,11 @@ pub(crate) fn interrupt_form_bound(ctx: &ReducerContext, unit: &WorldEntity) {
     let Some(strike) = ctx.db.game_spell().spell_id().find(unit.next_swing_spell) else {
         return;
     };
-    if strike.removed_on_shape_lost() {
+    if strike.removed_on_shape_lost(crate::spell::FormRequirement::of(
+        ctx,
+        strike.spell_id,
+        None,
+    )) {
         interrupt(ctx, unit);
     }
 }

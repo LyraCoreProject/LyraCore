@@ -90,7 +90,7 @@ pub(crate) use spellbook::{
 
 pub(crate) use tables::{
     auras_on, break_stealth, is_stealthed, remove_seal_auras, shed_auras, AuraProjections,
-    FormRefusal, ShapeshiftState,
+    FormRefusal, FormRequirement, ShapeshiftState,
 };
 pub use tables::{
     CAST_FAIL_INTERRUPTED, CAST_FAIL_NO_POWER, CAST_MISS_DODGE, CAST_MISS_MISS, CAST_MISS_NONE,
@@ -124,6 +124,7 @@ pub(crate) use lyracore_shared::spell::taxonomy::{
     A_MOD_STAT, STANCE_CAT, STANCE_DIRE_BEAR, T_SCRIPTED,
 };
 pub(crate) use tables::SpellCastEventKind;
+pub(crate) use tables::{backfill_dbc_form_sets, write_dbc_form_set};
 pub(crate) use taxonomy::{DISARM_SWING_RETAINED_PCT, PROJECTILE_SPEED_YPS};
 
 pub(crate) use tables::{

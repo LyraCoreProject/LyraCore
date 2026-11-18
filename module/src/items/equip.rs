@@ -162,7 +162,16 @@ fn reconcile_item(ctx: &ReducerContext, guid: u64, changed_item: Option<u64>, re
             if spell != 0 && trigger == 1 {
                 if let Some(header) = ctx.db.game_spell().spell_id().find(spell) {
                     if (!entity.dead || header.equip_passive())
-                        && header.form_refusal(form).is_none()
+                        && header
+                            .form_refusal(
+                                crate::spell::FormRequirement::of(
+                                    ctx,
+                                    spell,
+                                    form.map(|form| form.form_id),
+                                ),
+                                form,
+                            )
+                            .is_none()
                     {
                         desired.insert((item.guid, spell), header);
                     }

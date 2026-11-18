@@ -2,8 +2,10 @@ use lyracore_shared::form::PowerOnEntry;
 use lyracore_shared::spell::taxonomy::{A_FORM_POWER_RETAINED, A_SHAPESHIFT};
 use spacetimedb::{log, ReducerContext, Table};
 
-use crate::spell::{auras_on, shed_auras, ShapeshiftState};
-use crate::{game_spell, game_world_entity, Aura, WorldEntity};
+use crate::spell::{auras_on, shed_auras, FormRequirement, ShapeshiftState};
+use crate::{
+    game_player_spell, game_spell, game_spell_effect, game_world_entity, Aura, WorldEntity,
+};
 
 pub(crate) mod tables;
 
@@ -53,27 +55,68 @@ pub(crate) fn shapeshift_state(
         },
         None => ShapeshiftState {
             form_id: client_form,
-            // Build-5875 SpellShapeshiftForm.dbc marks these forms as stances.
+            // Build-5875 SpellShapeshiftForm.dbc marks these forms as stances. Only druid forms,
+            // which have no Form rows yet, reach this; #1046 PR 4 removes the table.
             acts_as_shapeshifted: !matches!(client_form, 17..=19 | 28 | 30 | 31),
         },
     })
 }
 
-/// Removes every shapeshift Aura but `kept`, with all effects of each removed spell.
-pub(crate) fn keep_only(ctx: &ReducerContext, guid: u64, kept: u32) {
+/// A shapeshift Aura of `spell_id` naming `form_id` was applied or refreshed: the unit leaves
+/// every other Form, its power rule runs, and the projection follows.
+pub(crate) fn entered(ctx: &ReducerContext, guid: u64, spell_id: u32, form_id: u32) {
     let replaced: std::collections::BTreeSet<u32> = shapeshift_auras(ctx, guid)
         .map(|aura| aura.spell_id)
-        .filter(|&spell| spell != kept)
+        .filter(|&spell| spell != spell_id)
         .collect();
     let removed = auras_on(ctx, guid)
         .filter(|aura| replaced.contains(&aura.spell_id))
         .collect();
     shed_auras(ctx, removed);
+    if let (Some(mut unit), Some(form)) = (
+        ctx.db.game_world_entity().guid().find(guid),
+        ctx.db.game_form().form_id().find(form_id),
+    ) {
+        let power = power_on_entry(ctx, &unit, &form);
+        if power != unit.power {
+            unit.power = power;
+            unit.update(ctx);
+        }
+    }
+    project_form(ctx, guid);
 }
 
-/// Re-derives the client form byte, the Form's passives and the equipment that depends on the
-/// Form from the unit's shapeshift Aura. Entering a Form also applies its power rule. A client
-/// byte no Form projects, such as a druid form `E_SET_STANCE` wrote, stays as it is.
+/// A shapeshift Aura ended: as vmangos `HandleShapeshiftBoosts(false)`, the unit's own Auras that
+/// need a Form end with it. A unit left in no Form gets the shapeshift effect's trigger spell.
+pub(crate) fn exited(ctx: &ReducerContext, aura: &Aura) {
+    let guid = aura.target_guid;
+    let spells = ctx.db.game_spell();
+    let bound = auras_on(ctx, guid)
+        .filter(|held| held.caster_guid == guid && held.eff_kind != A_SHAPESHIFT)
+        .filter(|held| {
+            spells.spell_id().find(held.spell_id).is_some_and(|spell| {
+                spell.removed_on_shape_lost(FormRequirement::of(ctx, spell.spell_id, None))
+            })
+        })
+        .collect();
+    shed_auras(ctx, bound);
+    if let Some(unit) = ctx.db.game_world_entity().guid().find(guid) {
+        crate::combat::queued_strike::interrupt_form_bound(ctx, &unit);
+        let next = ctx
+            .db
+            .game_spell_effect()
+            .id()
+            .find(aura.effect_id)
+            .map_or(0, |effect| effect.trigger_spell);
+        if next != 0 && shapeshift_auras(ctx, guid).next().is_none() {
+            crate::spell::apply_spell_auras(ctx, next, guid, unit.level as u8, 1);
+        }
+    }
+}
+
+/// Re-derives from the unit's shapeshift Aura the client form byte, the passives the Form brings
+/// and the equipment that depends on the Form. A client byte no Form projects, such as a druid
+/// form `E_SET_STANCE` wrote, stays as it is.
 pub(crate) fn project_form(ctx: &ReducerContext, guid: u64) {
     let Some(unit) = ctx.db.game_world_entity().guid().find(guid) else {
         return;
@@ -89,20 +132,11 @@ pub(crate) fn project_form(ctx: &ReducerContext, guid: u64) {
         None if form_by_client_byte(ctx, current).is_some() => 0,
         None => current,
     };
-    if current == client_form {
-        return;
+    if current != client_form {
+        unit.unit_bytes_1 =
+            (unit.unit_bytes_1 & !CLIENT_FORM_MASK) | (client_form << CLIENT_FORM_SHIFT);
+        unit = unit.update(ctx);
     }
-    let left = current != 0;
-    unit.unit_bytes_1 =
-        (unit.unit_bytes_1 & !CLIENT_FORM_MASK) | (client_form << CLIENT_FORM_SHIFT);
-    if let Some(form) = &form {
-        unit.power = power_on_entry(ctx, &unit, form);
-    }
-    let unit = unit.update(ctx);
-    if left {
-        shed_shape_bound_auras(ctx, guid);
-    }
-    crate::combat::queued_strike::interrupt_form_bound(ctx, &unit);
     if unit.is_player() {
         crate::items::equip::reconcile(ctx, guid);
     }
@@ -134,37 +168,49 @@ fn retained_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
         .unwrap_or(0)
 }
 
-/// vmangos `HandleShapeshiftBoosts` removes the unit's own Auras that need the Form it left.
-fn shed_shape_bound_auras(ctx: &ReducerContext, guid: u64) {
-    let spells = ctx.db.game_spell();
-    let bound = auras_on(ctx, guid)
-        .filter(|aura| aura.caster_guid == guid && aura.eff_kind != A_SHAPESHIFT)
-        .filter(|aura| {
-            spells
-                .spell_id()
-                .find(aura.spell_id)
-                .is_some_and(|spell| spell.removed_on_shape_lost())
-        })
-        .collect();
-    shed_auras(ctx, bound);
+/// Whether a known passive spell is applied only in the Forms its Form Set requires.
+pub(crate) fn binds_to_forms(ctx: &ReducerContext, spell: &crate::Spell) -> bool {
+    spell.binds_to_forms(FormRequirement::of(ctx, spell.spell_id, None))
 }
 
-/// Applies the passives the unit's Form grants and removes every other Form's passives.
+/// The passives the unit's Form brings: the Form's own, and every known passive whose Form Set
+/// requires the Form (vmangos `HandleShapeshiftBoosts(true)`). Every other such passive goes.
 fn reconcile_passives(ctx: &ReducerContext, unit: &WorldEntity, form: Option<&Form>) {
-    let desired: std::collections::BTreeSet<u32> = form
+    let form_id = form.map(|form| form.form_id);
+    let spells = ctx.db.game_spell();
+    let mut desired: std::collections::BTreeSet<u32> = form
         .into_iter()
         .flat_map(|form| ctx.db.game_form_spell().by_form().filter(form.form_id))
         .map(|row| row.spell_id)
         .collect();
+    if form_id.is_some() {
+        desired.extend(
+            ctx.db
+                .game_player_spell()
+                .by_character()
+                .filter(unit.guid)
+                .map(|known| known.spell_id)
+                .filter(|&spell_id| {
+                    spells.spell_id().find(spell_id).is_some_and(|spell| {
+                        spell.applies_on_form_entry(FormRequirement::of(ctx, spell_id, form_id))
+                    })
+                }),
+        );
+    }
     let (stale, held): (Vec<Aura>, Vec<Aura>) = auras_on(ctx, unit.guid).partition(|aura| {
         !desired.contains(&aura.spell_id)
-            && ctx
+            && (ctx
                 .db
                 .game_form_spell()
                 .by_spell()
                 .filter(aura.spell_id)
                 .next()
                 .is_some()
+                || (aura.caster_guid == unit.guid
+                    && spells
+                        .spell_id()
+                        .find(aura.spell_id)
+                        .is_some_and(|spell| binds_to_forms(ctx, &spell))))
     });
     shed_auras(ctx, stale);
     for spell in desired {
@@ -174,14 +220,32 @@ fn reconcile_passives(ctx: &ReducerContext, unit: &WorldEntity, form: Option<&Fo
     }
 }
 
-/// Writes the client form byte of the Form a Character enters the world in onto its entity before
-/// insertion, so the first CREATE peers receive already shows it.
+/// Writes onto a Character's entity, before insertion, the client form byte of the Form it enters
+/// the world in, so the first CREATE peers receive already shows it.
 pub(crate) fn stamp_entering_form(ctx: &ReducerContext, entity: &mut WorldEntity) {
     let form = active_form(ctx, entity.guid).or_else(|| default_form(ctx, entity.class()));
-    if let Some(form) = form {
-        entity.unit_bytes_1 = (entity.unit_bytes_1 & !CLIENT_FORM_MASK)
-            | (u32::from(form.client_form) << CLIENT_FORM_SHIFT);
-    }
+    stamp_client_form(ctx, entity, form);
+}
+
+/// As `stamp_entering_form`, for a body rebuilt without world entry, which keeps only a held Form.
+pub(crate) fn stamp_held_form(ctx: &ReducerContext, entity: &mut WorldEntity) {
+    stamp_client_form(ctx, entity, active_form(ctx, entity.guid));
+}
+
+fn stamp_client_form(ctx: &ReducerContext, entity: &mut WorldEntity, form: Option<Form>) {
+    let client_form = match form {
+        Some(form) => u32::from(form.client_form),
+        // A Shard without Forms (docs/danger-zones.md "Warrior stance migration") keeps the
+        // Battle Stance byte every rage class entered with before Forms.
+        None if ctx.db.game_form().iter().next().is_none()
+            && entity.power_type() == lyracore_shared::packing::power_type::RAGE =>
+        {
+            17
+        }
+        None => return,
+    };
+    entity.unit_bytes_1 =
+        (entity.unit_bytes_1 & !CLIENT_FORM_MASK) | (client_form << CLIENT_FORM_SHIFT);
 }
 
 /// A unit with no shapeshift Aura enters its class's default Form, as vmangos `Player::_LoadAuras`
@@ -204,7 +268,14 @@ pub(crate) fn repair(ctx: &ReducerContext, guid: u64) {
         return;
     };
     if let Some(newest) = shapeshift_auras(ctx, guid).max_by_key(|aura| aura.id) {
-        keep_only(ctx, guid, newest.spell_id);
+        let others = auras_on(ctx, guid)
+            .filter(|aura| aura.eff_kind == A_SHAPESHIFT && aura.spell_id != newest.spell_id)
+            .map(|aura| aura.spell_id)
+            .collect::<std::collections::BTreeSet<_>>();
+        let removed = auras_on(ctx, guid)
+            .filter(|aura| others.contains(&aura.spell_id))
+            .collect();
+        shed_auras(ctx, removed);
     } else if let Some(form) =
         form_by_client_byte(ctx, unit.form()).or_else(|| default_form(ctx, unit.class()))
     {

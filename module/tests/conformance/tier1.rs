@@ -380,6 +380,8 @@ fn seed_visibility_world(
 }
 
 fn seed_taxi_world(shard: &Standalone, scenario: &wire_client::scenario::Scenario) -> Result<()> {
+    // The reference warriors enter the world in Battle Stance, which needs the stance Forms.
+    shard.assert_call("debug_seed_warrior_forms", &[]);
     let mut route = scenario.clone();
     route.fixtures.extend(
         scenario

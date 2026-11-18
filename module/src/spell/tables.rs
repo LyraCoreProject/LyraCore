@@ -3,7 +3,6 @@ use spacetimedb::{table, Identity, ReducerContext, ScheduleAt, Table, Timestamp}
 use super::CastRequest;
 use super::{fire_pending_cast, fire_spell_impact, tick_auras, tick_ground_areas};
 use crate::WorldEntity;
-use lyracore_shared::form::FormSet;
 
 const SPELL_ATTR_DO_NOT_DISPLAY: u32 = 0x80;
 const SPELL_ATTR_NOT_SHAPESHIFT: u32 = 0x10000;
@@ -34,7 +33,7 @@ pub struct Spell {
     // Internal cast flags use a separate mask because Spell.dbc Attributes bits are occupied.
     #[default(0)]
     pub cast_flags: u32,
-    // Unread; form_mask and form_exclude carry the Forms a spell requires or excludes.
+    // Unread; game_spell_form holds the Forms a spell requires or excludes.
     #[default(0)]
     pub stances: u8,
     #[default(0)]
@@ -58,6 +57,7 @@ pub struct Spell {
     pub min_target_level: u32,
     #[default(0u64)]
     pub single_target_key: u64,
+    // The verbatim Spell.dbc Stances mask; write_dbc_form_set turns it into game_spell_form rows.
     #[default(0u32)]
     pub form_mask: u32,
     #[default(0u32)]
@@ -143,32 +143,27 @@ impl Spell {
             || (self.attributes == SPELL_ATTR_DO_NOT_DISPLAY && self.duration_index == 21)
     }
 
-    pub(crate) fn required_forms(&self) -> FormSet {
-        FormSet::from_dbc_mask(self.form_mask)
-    }
-
     /// vmangos `SpellEntry::GetErrorAtShapeshiftedCast`, without its talent-learning exception.
-    pub(crate) fn form_refusal(&self, form: Option<ShapeshiftState>) -> Option<FormRefusal> {
-        let required = self.required_forms();
-        if let Some(form) = form {
-            if FormSet::from_dbc_mask(self.form_exclude).contains(form.form_id) {
-                return Some(FormRefusal::NotShapeshift);
-            }
-            if required.contains(form.form_id) {
-                return None;
-            }
+    pub(crate) fn form_refusal(
+        &self,
+        requirement: FormRequirement,
+        form: Option<ShapeshiftState>,
+    ) -> Option<FormRefusal> {
+        if requirement.excludes_this {
+            return Some(FormRefusal::NotShapeshift);
+        }
+        if requirement.requires_this {
+            return None;
         }
         if form.is_some_and(|form| form.acts_as_shapeshifted) {
             if self.attributes & SPELL_ATTR_NOT_SHAPESHIFT != 0 {
                 Some(FormRefusal::NotShapeshift)
-            } else if !required.is_empty() {
+            } else if requirement.requires_any {
                 Some(FormRefusal::OnlyShapeshift)
             } else {
                 None
             }
-        } else if !required.is_empty()
-            && self.attributes_ex_2 & SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED == 0
-        {
+        } else if requirement.requires_any && !self.allowed_unshifted() {
             Some(FormRefusal::OnlyShapeshift)
         } else {
             None
@@ -176,10 +171,26 @@ impl Spell {
     }
 
     /// vmangos `SpellEntry::IsRemovedOnShapeLostSpell`.
-    pub(crate) fn removed_on_shape_lost(&self) -> bool {
-        !self.required_forms().is_empty()
-            && self.attributes_ex_2 & SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED == 0
+    pub(crate) fn removed_on_shape_lost(&self, requirement: FormRequirement) -> bool {
+        requirement.requires_any
+            && !self.allowed_unshifted()
             && self.attributes & SPELL_ATTR_NOT_SHAPESHIFT == 0
+    }
+
+    /// A passive that only the Forms of its Form Set bring.
+    pub(crate) fn binds_to_forms(&self, requirement: FormRequirement) -> bool {
+        self.attributes & (super::SPELL_ATTR_PASSIVE | SPELL_ATTR_DO_NOT_DISPLAY) != 0
+            && requirement.requires_any
+            && !self.allowed_unshifted()
+    }
+
+    /// vmangos `SpellEntry::IsNeedCastSpellAtFormApply`: a known passive the Form brings with it.
+    pub(crate) fn applies_on_form_entry(&self, requirement: FormRequirement) -> bool {
+        self.binds_to_forms(requirement) && requirement.requires_this
+    }
+
+    fn allowed_unshifted(&self) -> bool {
+        self.attributes_ex_2 & SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED != 0
     }
 }
 
@@ -194,6 +205,102 @@ pub(crate) struct ShapeshiftState {
 pub(crate) enum FormRefusal {
     NotShapeshift,
     OnlyShapeshift,
+}
+
+/// A Form a spell requires, or excludes when `excluded`. See docs/schema.md "Forms".
+#[table(
+    accessor = game_spell_form,
+    public,
+    index(accessor = by_spell, btree(columns = [spell_id]))
+)]
+pub struct SpellForm {
+    /// `lyracore_package_delta::packed_spell_form_id(spell_id, form_id)`.
+    #[primary_key]
+    pub id: u64,
+    pub spell_id: u32,
+    pub form_id: u32,
+    pub excluded: bool,
+}
+
+/// What a spell's Form Set says about one Form.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FormRequirement {
+    pub(crate) requires_any: bool,
+    pub(crate) requires_this: bool,
+    pub(crate) excludes_this: bool,
+}
+
+impl FormRequirement {
+    pub(crate) fn of(ctx: &ReducerContext, spell_id: u32, form_id: Option<u32>) -> Self {
+        let mut requirement = Self::default();
+        for row in ctx.db.game_spell_form().by_spell().filter(spell_id) {
+            let this = Some(row.form_id) == form_id;
+            if row.excluded {
+                requirement.excludes_this |= this;
+            } else {
+                requirement.requires_any = true;
+                requirement.requires_this |= this;
+            }
+        }
+        requirement
+    }
+}
+
+// Spell.dbc `Stances` and `StancesNot` set bit `form_id - 1`; the mask only reaches Form 32.
+const DBC_MASK_FORMS: std::ops::RangeInclusive<u32> = 1..=32;
+
+/// Replaces the Forms 1-32 of a spell's Form Set with those its DBC masks name; an excluded Form
+/// wins over a required one. Rows for higher Form ids stay.
+pub(crate) fn write_dbc_form_set(
+    ctx: &ReducerContext,
+    spell_id: u32,
+    required: u32,
+    excluded: u32,
+) {
+    let rows = ctx.db.game_spell_form();
+    let stale: Vec<u64> = rows
+        .by_spell()
+        .filter(spell_id)
+        .filter(|row| DBC_MASK_FORMS.contains(&row.form_id))
+        .map(|row| row.id)
+        .collect();
+    for id in stale {
+        rows.id().delete(id);
+    }
+    for form_id in DBC_MASK_FORMS {
+        let bit = 1u32 << (form_id - 1);
+        if (required | excluded) & bit != 0 {
+            rows.insert(SpellForm {
+                id: lyracore_package_delta::packed_spell_form_id(spell_id, form_id),
+                spell_id,
+                form_id,
+                excluded: excluded & bit != 0,
+            });
+        }
+    }
+}
+
+/// Publish repair: a spell whose DBC masks name Forms but which has no Form Set rows gets them.
+pub(crate) fn backfill_dbc_form_sets(ctx: &ReducerContext) -> u64 {
+    let pending: Vec<(u32, u32, u32)> = ctx
+        .db
+        .game_spell()
+        .iter()
+        .filter(|spell| spell.form_mask | spell.form_exclude != 0)
+        .filter(|spell| {
+            ctx.db
+                .game_spell_form()
+                .by_spell()
+                .filter(spell.spell_id)
+                .next()
+                .is_none()
+        })
+        .map(|spell| (spell.spell_id, spell.form_mask, spell.form_exclude))
+        .collect();
+    for &(spell_id, required, excluded) in &pending {
+        write_dbc_form_set(ctx, spell_id, required, excluded);
+    }
+    pending.len() as u64
 }
 
 #[table(
@@ -368,7 +475,7 @@ pub struct ItemAuraExpiry {
     pub scheduled_at: ScheduleAt,
 }
 
-crate::outside_table_catalog!(game_item_aura, game_item_aura_expiry);
+crate::outside_table_catalog!(game_item_aura, game_item_aura_expiry, game_spell_form);
 
 #[spacetimedb::reducer]
 pub(crate) fn expire_item_aura(ctx: &ReducerContext, expiry: ItemAuraExpiry) {
@@ -548,6 +655,7 @@ impl AuraProjections {
 pub(crate) fn shed_auras(ctx: &ReducerContext, auras: Vec<Aura>) {
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let mut touched = std::collections::BTreeMap::<u64, AuraProjections>::new();
+    let mut exited = Vec::new();
     for aura in auras {
         let Some(aura) = Aura::delete_row(ctx, aura.id) else {
             continue;
@@ -567,6 +675,12 @@ pub(crate) fn shed_auras(ctx: &ReducerContext, auras: Vec<Aura>) {
             aura.eff_kind,
             aura.eff_p0,
         ));
+        if aura.eff_kind == lyracore_shared::spell::taxonomy::A_SHAPESHIFT {
+            exited.push(aura);
+        }
+    }
+    for aura in exited {
+        crate::form::exited(ctx, &aura);
     }
     for (unit_guid, projections) in touched {
         projections.refresh(ctx, unit_guid);
