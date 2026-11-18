@@ -75,8 +75,8 @@ cargo build --release --target wasm32-unknown-unknown -p lyracore-module --featu
 cargo test -p lyracore-module --test weather -- --ignored
 ```
 
-CI runs every target in two parallel jobs on large Boat VMs, with one test thread per core and
-`--skip deadmines`. A push to `main` skips the durable workflow when it touches only Markdown,
+CI runs every target in two parallel jobs with one test thread per core and `--skip deadmines`.
+PR runs use large Boat VMs; pushes to `main` use GitHub's runners. A push to `main` skips the durable workflow when it touches only Markdown,
 `docs/` or `.claude/`. A PR skips both durable and Native Host when it touches only those paths,
 `conformance/features/**`, `conformance/*.py`, `conformance/tests/*.py`, the `conformance/run`,
 `baseline`, `scoreboard` and `audit` launchers, or `conformance/reports/**`. Each skipped workflow
@@ -105,7 +105,7 @@ emote delivery. Other durable runs must skip that test unless the baseline Wasm 
 target once and estimates 20 seconds for a new target. `job_seconds` reserves extra time for the
 steps one job runs alone. The durations come from the runs in `source_runs`, two runs of the two
 `boat-large` jobs, and they move by a minute or more between runs, so refresh them from several
-runs. The `native_conformance` binary takes 250 to 380 seconds there, and one job owns it.
+PR runs; `main` runs on other machines. The `native_conformance` binary takes 250 to 380 seconds there, and one job owns it.
 
 The job warms the Module compile caches with `gm_level` before the suite. The first publish compiles
 the Module into shared schema and Wasm caches, about 15 to 45 seconds on a default VM, and without

@@ -31,9 +31,11 @@ jobs:
           grep -rnE --include='*.rs' 'e?print(ln)?!' "${roots[@]}" || status=$?
           [ "$status" -eq 1 ]
 
-  clippy:
-    runs-on: boat
-    timeout-minutes: 20
+  # One job, because each Boat VM counts against the plan's start limits. Pushes to main run on
+  # GitHub's runners, where nobody waits for the result.
+  rust:
+    runs-on: ${{ github.event_name == 'push' && 'ubuntu-latest' || 'boat' }}
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -42,14 +44,6 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Check the Module builds for Wasm
         run: cargo check --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
-
-  test:
-    runs-on: boat
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-      - uses: ./.github/actions/setup-spacetime
       - run: cargo test -p lyracore-conformance -- --nocapture
       - name: Check audit tools and replay the committed audit report
         run: cargo test -p lyracore-conformance --example scoreboard --example audit --example run --example baseline
@@ -71,12 +65,6 @@ jobs:
       - run: cargo test -p lyracore-protocol
       - run: cargo test -p lyracore-shared
       - run: cargo test -p lyracore-test-support
-
-  official-packages:
-    runs-on: boat
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: packages-ref
         timeout-minutes: 2
         env:
@@ -101,7 +89,7 @@ jobs:
           ref: ${{ steps.packages-ref.outputs.ref }}
           path: official-packages
           persist-credentials: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      # Last, because the linked Packages join the Module build.
       - name: Install the official Packages
         run: for package in official-packages/*/; do ln -s "$PWD/$package" packages/; done
       - run: cargo test -p lyracore-module --test package_api_lint
