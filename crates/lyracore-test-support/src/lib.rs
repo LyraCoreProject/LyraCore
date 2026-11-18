@@ -15,11 +15,11 @@ pub use subscription::TableSubscription;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -43,8 +43,6 @@ pub fn core_root() -> &'static Path {
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub const POLL_TIMEOUT: Duration = Duration::from_secs(30);
-
-const PUBLISH_ATTEMPTS: usize = 3;
 
 pub fn log_dir() -> PathBuf {
     std::env::temp_dir().join("lyracore-standalone-logs")
@@ -80,6 +78,30 @@ fn schema_extractor(spacetime: &OsString) -> Option<&'static Path> {
             caching_extractor(&real, &cache)
         })
         .as_deref()
+}
+
+// Concurrent cold extractions overrun the CLI's 60 s limit, so the first per content runs alone.
+struct ColdExtraction {
+    extracted: MutexGuard<'static, BTreeSet<u64>>,
+    content: u64,
+}
+
+impl ColdExtraction {
+    /// Waits for a running cold extraction; returns `None` once this content's schema is cached.
+    fn begin(wasm: &[u8]) -> Option<Self> {
+        use std::hash::{Hash, Hasher};
+
+        static EXTRACTED: Mutex<BTreeSet<u64>> = Mutex::new(BTreeSet::new());
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        wasm.hash(&mut hasher);
+        let content = hasher.finish();
+        let extracted = EXTRACTED.lock().unwrap_or_else(PoisonError::into_inner);
+        (!extracted.contains(&content)).then_some(Self { extracted, content })
+    }
+
+    fn cached(mut self) {
+        self.extracted.insert(self.content);
+    }
 }
 
 fn caching_extractor(real: &Path, cache: &Path) -> Option<PathBuf> {
@@ -182,7 +204,6 @@ pub struct Standalone {
     data_dir: PathBuf,
     log_path: PathBuf,
     published: bool,
-    published_databases: BTreeSet<String>,
     spacetime: OsString,
     server: String,
     database: String,
@@ -223,7 +244,7 @@ impl Standalone {
         let startup = signing_keys
             .startup
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+            .unwrap_or_else(PoisonError::into_inner);
         // A released port stays free only until the node binds it, so reserve inside this lock.
         let listener = TcpListener::bind("127.0.0.1:0").expect("failed to reserve a local port");
         let port = listener.local_addr().unwrap().port();
@@ -247,7 +268,6 @@ impl Standalone {
             data_dir,
             log_path,
             published: false,
-            published_databases: BTreeSet::new(),
             spacetime,
             server,
             database: name,
@@ -312,10 +332,8 @@ impl Standalone {
     }
 
     fn publish_bytes(&mut self, wasm: &[u8], extra: &[&str]) {
-        let path = self.data_dir.join("published-module.wasm");
-        fs::write(&path, wasm).expect("failed to copy private Wasm artifact");
         let database = self.database.clone();
-        self.publish(&database, &["--bin-path", path.to_str().unwrap()], extra);
+        self.publish(&database, "published-module.wasm", wasm, extra);
     }
 
     pub fn publish_named_module_bytes(&mut self, database: &str, wasm: &[u8]) {
@@ -323,9 +341,7 @@ impl Standalone {
             self.storage == Storage::Disk,
             "named databases need durable storage"
         );
-        let path = self.data_dir.join("published-named-module.wasm");
-        fs::write(&path, wasm).expect("failed to copy private named Wasm artifact");
-        self.publish(database, &["--bin-path", path.to_str().unwrap()], &[]);
+        self.publish(database, "published-named-module.wasm", wasm, &[]);
     }
 
     pub fn describe(&self) -> serde_json::Value {
@@ -516,57 +532,28 @@ impl Standalone {
         );
     }
 
-    // SpacetimeDB 2.7.1 segfaulted in about one launch in twelve. Retry only for a new database, and
-    // log each retry so CI shows whether 2.14.0 still does.
-    fn publish(&mut self, database: &str, source: &[&str], extra: &[&str]) {
-        let workspace = core_root();
-        let mut attempts = Vec::new();
-        let allowed_attempts = if self.published_databases.contains(database) {
-            1
-        } else {
-            PUBLISH_ATTEMPTS
-        };
-        for attempt in 0..allowed_attempts {
-            let mut command = self.command();
-            if let Some(extractor) = schema_extractor(&self.spacetime) {
-                command.env("SPACETIMEDB_SCHEMA_EXTRACTOR", extractor);
-            }
-            command
-                .current_dir(workspace)
-                .args(["publish", "-s", &self.server]);
-            command.args(source);
-            command.args(extra);
-            command.args(["-y", database]);
-            let output = command.output().expect("failed to start spacetime publish");
-            if output.status.success() {
-                self.fixture_schemas.get_mut().unwrap().remove(database);
-                self.published = true;
-                self.published_databases.insert(database.to_owned());
-                return;
-            }
-            attempts.push(describe(&output));
-            let node_is_running = self
-                .child
-                .try_wait()
-                .expect("failed to poll standalone")
-                .is_none();
-            if node_is_running || attempt + 1 == allowed_attempts {
-                break;
-            }
-            // libtest captures `eprintln!` from passing tests; the raw handle reaches the CI log.
-            let _ = writeln!(
-                io::stderr(),
-                "standalone exited during publish of {database}; retrying\n{}",
-                self.log_tail()
-            );
-            self.restart();
+    fn publish(&mut self, database: &str, file_name: &str, wasm: &[u8], extra: &[&str]) {
+        let path = self.data_dir.join(file_name);
+        fs::write(&path, wasm).expect("failed to copy private Wasm artifact");
+        let mut command = self.command();
+        let mut cold_extraction = None;
+        if let Some(extractor) = schema_extractor(&self.spacetime) {
+            command.env("SPACETIMEDB_SCHEMA_EXTRACTOR", extractor);
+            cold_extraction = ColdExtraction::begin(wasm);
         }
-        panic!(
-            "spacetime publish failed after {} attempt(s)\n{}{}",
-            attempts.len(),
-            attempts.join("\n"),
-            self.log_tail(),
-        );
+        command
+            .current_dir(core_root())
+            .args(["publish", "-s", &self.server, "--bin-path"])
+            .arg(&path)
+            .args(extra)
+            .args(["-y", database]);
+        let output = command.output().expect("failed to start spacetime publish");
+        if let Some(extraction) = cold_extraction.filter(|_| output.status.success()) {
+            extraction.cached();
+        }
+        self.assert_output_success(&output, "spacetime publish failed");
+        self.fixture_schemas.get_mut().unwrap().remove(database);
+        self.published = true;
     }
 
     pub fn process_id(&self) -> u32 {
@@ -597,7 +584,7 @@ impl Standalone {
     fn wait_for_server(&mut self) {
         let deadline = Instant::now() + POLL_TIMEOUT;
         loop {
-            if TcpStream::connect(&self.address).is_ok() {
+            if self.answers_ping() {
                 return;
             }
             if let Some(status) = self.child.try_wait().expect("failed to poll standalone") {
@@ -613,6 +600,24 @@ impl Standalone {
             );
             thread::sleep(POLL_INTERVAL);
         }
+    }
+
+    // Another socket can accept on the reserved port before the node binds; only the node answers.
+    fn answers_ping(&self) -> bool {
+        let Ok(mut stream) = TcpStream::connect(&self.address) else {
+            return false;
+        };
+        let request = format!(
+            "GET /v1/ping HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
+            self.address
+        );
+        let mut status = [0; 12];
+        stream
+            .set_read_timeout(Some(Duration::from_secs(1)))
+            .is_ok()
+            && stream.write_all(request.as_bytes()).is_ok()
+            && stream.read_exact(&mut status).is_ok()
+            && &status == b"HTTP/1.1 200"
     }
 
     fn sql_database(&self, database: &str, query: &str) -> Output {

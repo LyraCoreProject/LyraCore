@@ -318,6 +318,7 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
 fn spell_power_selects_school_and_healing_power_only_affects_heals() {
     let shard = fixture("property-stat-spells", 8);
     shard.clear_schedule("game_creature_move_schedule");
+    shard.clear_schedule("game_melee_schedule");
     enchantments(
         &shard,
         &[(16, 20, 4), (16, 30, 16), (17, 40, 2), (17, 60, 4)],

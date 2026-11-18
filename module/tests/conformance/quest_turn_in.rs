@@ -37,6 +37,8 @@ const BACKPACK_SLOTS: u32 = 16;
 fn stage(name: &str) -> (Standalone, ReducerConnection, u64, u64) {
     let (shard, guid, _) = fixture(name);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    // The seeded chicken and wolf wander into the replies unless the creature cycle stops.
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
     shard.assert_call(
         "debug_spawn_at_feet",

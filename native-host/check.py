@@ -1942,7 +1942,7 @@ def check_transport_crossings(host):
         departing = []
         until(lambda: departing.extend(sailor.collect(auto_ack=False)) or any(opcode == 0x3e for opcode, _ in departing), 30)
         pending = next(body for opcode, body in departing if opcode == 0x3f)
-        assert struct.unpack('<III', pending) == (1, entry, 0)
+        assert struct.unpack('<III', pending) == (1, entry, 0), departing
         new_world = next(body for opcode, body in departing if opcode == 0x3e)
         assert struct.unpack('<Iffff', new_world) == (1, 2, 1, 0, 0)
         assert crossing_map() == 1
@@ -3607,20 +3607,28 @@ def check_chat(host):
 
 
 def check_accept_recovery(host):
+    def failed_accepts(listener):
+        return host.log_text().count(f'native {listener} accept:')
+
+    def exhausted(listener, before):
+        host.wait_until(lambda: failed_accepts(listener) > before,
+            f'{listener} listener did not reach descriptor exhaustion', timeout=3)
+
     resource.prlimit(host.pid, resource.RLIMIT_NOFILE, (256, 256))
     for kind in ['World', 'Logon']:
         clients = []
-        before = host.log_text().count(f'native {kind} accept:')
+        world_before, logon_before = failed_accepts('World'), failed_accepts('Logon')
         try:
             for _ in range(300):
                 try:
                     clients.append(socket.create_connection(('127.0.0.1', host.world_port), timeout=1))
                 except OSError:
                     break
+            # The Logon connection must arrive after the Host has run out of descriptors.
+            exhausted('World', world_before)
             if kind == 'Logon':
                 clients.append(socket.create_connection(('127.0.0.1', host.logon_port), timeout=1))
-            host.wait_until(lambda: host.log_text().count(f'native {kind} accept:') > before,
-                f'{kind} listener did not reach descriptor exhaustion', timeout=3)
+                exhausted('Logon', logon_before)
         finally:
             for client in clients:
                 client.close()
@@ -5060,7 +5068,7 @@ def check_taxi(host):
     assert not any(opcode == 0x96 for opcode, _ in peer.collect())
     client.send(0x1ad, struct.pack('<QII', flight_master, 253, 254))
     busy = client.collect()
-    assert (0x1ae, struct.pack('<I', 7)) in busy
+    assert (0x1ae, struct.pack('<I', 7)) in busy, busy
     client.send(0xee, struct.pack('<IIffffI', 0, 9999, 10000, 0, 0, 0, 0))
     suppressed = client.collect()
     assert host.rows(f'SELECT x FROM game_world_entity WHERE guid = {guid}')[0][0] < 100
