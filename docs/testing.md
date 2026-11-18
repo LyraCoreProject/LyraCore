@@ -103,9 +103,9 @@ emote delivery. Other durable runs must skip that test unless the baseline Wasm 
 `scripts/durable-test-targets.py` assigns targets by the durations in
 `.github/durable-test-seconds.json`, longest first to the least loaded job. It includes every current
 target once and estimates 20 seconds for a new target. `job_seconds` reserves extra time for the
-steps one job runs alone; job 1 runs the populated-upgrade check. The durations in the file come
-from a run on six default VMs with four test threads, so they do not describe two `boat-large` jobs
-that run one thread per core. Refresh them from durable runs on `main` once a few exist.
+steps one job runs alone. The durations come from the runs in `source_runs`, two runs of the two
+`boat-large` jobs, and they move by a minute or more between runs, so refresh them from several
+runs. The `native_conformance` binary takes 250 to 380 seconds there, and one job owns it.
 
 The job warms the Module compile caches with `gm_level` before the suite. The first publish compiles
 the Module into shared schema and Wasm caches, about 15 to 45 seconds on a default VM, and without
