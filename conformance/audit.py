@@ -256,6 +256,7 @@ IMPORT_CONTRACT = (
     'module/src/items/tables.rs',
     'module/src/items/properties.rs',
     'module/src/spell/tables.rs',
+    'module/src/form/tables.rs',
     'module/src/spell/spellbook.rs',
     'module/src/spell/stacking.rs',
     'module/src/spell/proc.rs',

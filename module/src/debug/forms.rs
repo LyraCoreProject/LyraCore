@@ -1,6 +1,7 @@
 use spacetimedb::{reducer, ReducerContext, Table};
 
-use crate::form::{game_form, game_form_spell, Form, FormSpell};
+use crate::form::tables::FormSpell;
+use crate::form::{game_form, game_form_spell, Form};
 use crate::{game_spell, game_spell_effect};
 use lyracore_shared::spell::taxonomy::A_SHAPESHIFT;
 

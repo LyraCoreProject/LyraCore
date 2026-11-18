@@ -382,7 +382,7 @@ Hunter pets keep a durable identity in `game_hunter_pet`. A materialized pet is 
 care state. Taming retires the wild entity and arms its authored `game_creature_spawn` for a later
 respawn, so the spawn point never moves into the pet identity.
 
-### Forms (`module/src/form.rs`)
+### Forms (`module/src/form/`)
 
 A Form is data composed from building blocks the Module defines in Rust. `game_form` holds one row
 per Form, keyed by its own `form_id`, and `game_form_spell` holds the passive spells the Form grants.
