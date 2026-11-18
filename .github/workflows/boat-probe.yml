@@ -1,0 +1,13 @@
+name: Boat probe
+on: pull_request
+jobs:
+  dash:
+    runs-on: boat-large
+    timeout-minutes: 3
+    steps:
+      - run: nproc; free -g
+  pair:
+    runs-on: [boat, large]
+    timeout-minutes: 3
+    steps:
+      - run: nproc; free -g
