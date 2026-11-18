@@ -11,6 +11,7 @@ on:
       - "conformance/scoreboard"
       - "conformance/audit"
       - "conformance/reports/**"
+      - "conformance/features/**"
       - "**/*.md"
       - "docs/**"
       - ".claude/**"
@@ -65,6 +66,10 @@ jobs:
         if: matrix.shard == 0
         run: cargo test -p lyracore-importer --test items_reimport -- --ignored --test-threads=1
 
+      # The first publish compiles the Module into shared schema and Wasm caches; do it once here.
+      - name: Warm the Module compile caches
+        run: cargo test -p lyracore-module --test gm_level -- --ignored
+
       # Each test owns a standalone process; one thread per core keeps memory use in bounds.
       - name: Run the durable suite, shard ${{ matrix.shard }} of 2
         id: durable-suite
@@ -72,14 +77,26 @@ jobs:
           mapfile -t targets < <(python3 scripts/durable-test-targets.py "${{ matrix.shard }}")
           [ "${#targets[@]}" -gt 0 ]
           args=()
+          gate=()
           for target in "${targets[@]}"; do
-            args+=(--test "$target")
+            case "$target" in
+              native_debug_gate) gate=(--test "$target") ;;
+              *) args+=(--test "$target") ;;
+            esac
             if [ "$target" = native_conformance ]; then
               echo "conformance=true" >> "$GITHUB_OUTPUT"
             fi
           done
           echo "targets: ${targets[*]}"
-          cargo test -p lyracore-module "${args[@]}" -- --ignored --test-threads="$(nproc)" --skip deadmines --skip populated_old_module_upgrades_without_clearing
+          libtest=(--ignored --test-threads="$(nproc)" --skip deadmines --skip populated_old_module_upgrades_without_clearing)
+          cargo test -p lyracore-module "${args[@]}" "${gate[@]}" --no-run
+          if [ "${#args[@]}" -gt 0 ]; then
+            cargo test -p lyracore-module "${args[@]}" -- "${libtest[@]}"
+          fi
+          # native_debug_gate replaces the fixture Wasm, so it runs last and no target pays the rebuild.
+          if [ "${#gate[@]}" -gt 0 ]; then
+            cargo test -p lyracore-module "${gate[@]}" -- "${libtest[@]}"
+          fi
 
       - name: Check white melee with the merge commit seed
         if: ${{ !cancelled() && github.event_name == 'push' && steps.durable-suite.outputs.conformance == 'true' }}
