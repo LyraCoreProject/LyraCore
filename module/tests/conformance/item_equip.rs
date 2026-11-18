@@ -817,10 +817,19 @@ fn equip_review_9329_and_its_cast_keep_melee_and_ranged_attack_power_separate() 
     assert_eq!(equipped["sheet_ap_mods"], "16");
     assert_eq!(equipped["sheet_ranged_ap"], base["sheet_ranged_ap"]);
     assert_eq!(equipped["sheet_ranged_ap_modifiers"], "16");
+    // The fixture's ranged base is level 1 + Agility 0 - 10 = -9, which vmangos adds the 16 AP
+    // to before it clamps: 7 AP over the 14 s delay raises the damage by 7 / 14 * 14 = 7.
+    let inputs = shard.query_rows(&format!(
+        "SELECT level, agility FROM game_world_entity WHERE guid = {guid}"
+    ));
+    assert_eq!(
+        (inputs[0]["level"].as_str(), inputs[0]["agility"].as_str()),
+        ("1", "0")
+    );
     assert_eq!(
         equipped["sheet_ranged_dmg_min"].parse::<u32>().unwrap()
             - base["sheet_ranged_dmg_min"].parse::<u32>().unwrap(),
-        16
+        7
     );
     move_item(&mut connection, 10, 23);
     assert_eq!(sheet(), base);

@@ -492,7 +492,7 @@ fn predatory_strikes_pct(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
         .map_or(0, |aura| aura.amount.max(0) as u32)
 }
 
-/// The Character sheet's base AP from the given effective Strength and Agility; may be negative.
+/// Base AP before modifiers from the given effective Strength and Agility; may be negative.
 pub(crate) fn base_melee_attack_power(
     ctx: &ReducerContext,
     unit: &WorldEntity,

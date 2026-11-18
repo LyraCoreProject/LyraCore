@@ -121,7 +121,7 @@ pub(crate) fn base_melee_attack_power_for(
     }
 }
 
-/// vmangos `GetTotalAttackPowerValue`: base and modifiers sum first, then the total clamps at 0.
+/// Sums base and flat modifiers, then clamps at 0, as vmangos `GetTotalAttackPowerValue` does.
 pub(crate) fn total_attack_power(base: i32, bonus: i32) -> u32 {
     base.saturating_add(bonus).max(0) as u32
 }
@@ -530,22 +530,6 @@ mod tests {
         assert_eq!(total_attack_power(mage, 232), 227);
         assert_eq!(total_attack_power(mage, 0), 0);
         assert_eq!(total_attack_power(mage, -30), 0);
-    }
-
-    #[test]
-    fn ranged_modifiers_apply_before_the_total_clamps_at_zero() {
-        // A level 1 Rogue with Agility 0 has base -9 and throws with 100 AP: 91 / 14 * 14 s.
-        assert_eq!(
-            ranged_sheet_values(
-                CLASS_ROGUE,
-                0,
-                0,
-                1,
-                Some((10, 10, 14000, crate::items::weapon_subclass::THROWN)),
-                100
-            ),
-            (0, 101.0, 101.0)
-        );
     }
 
     #[test]

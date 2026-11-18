@@ -72,8 +72,13 @@ rung = "unit"
 
 [[tests]]
 path = "module/src/combat/tables.rs"
-function = "ranged_modifiers_apply_before_the_total_clamps_at_zero"
+function = "spell_9329_adds_ranged_attack_power_to_thrown_damage_without_changing_its_base"
 rung = "unit"
+
+[[tests]]
+path = "module/tests/white_melee.rs"
+function = "a_casters_flat_attack_power_offsets_a_negative_base"
+rung = "durable_module"
 
 [[tests]]
 path = "module/src/modifiers/stats.rs"
@@ -162,7 +167,13 @@ symbol = "ranged_sheet_values"
 evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Player::UpdateAttackPowerAndDamage(true) writes UNIT_FIELD_RANGED_ATTACK_POWER from Unit::GetAttackPowerFromStrengthAndAgility with no weapon check; ranged_sheet_values returns 0 without a bow, gun, crossbow or thrown weapon."
 
 [[known_gaps]]
-description = "The sheet shows base attack power 0 where vmangos shows a negative base, for example a Mage with Strength below 10. Damage already sums base and modifiers before it clamps."
+description = "The sheet shows base attack power and ranged attack power 0 where vmangos shows a negative base, for example a Mage with Strength 5. The client adds base and modifiers, so its displayed total is too high by the size of the negative base: a Mage with Strength 5 and +232 AP shows 232 where vmangos shows 227. Damage already sums base and modifiers before it clamps."
 path = "module/src/world.rs"
 symbol = "sheet_ap_base"
 evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Player::UpdateAttackPowerAndDamage writes (int32)baseAttackPower to UNIT_FIELD_ATTACK_POWER, and Unit.cpp Unit::GetTotalAttackPowerValue clamps only the sum. WorldEntity.sheet_ap_base and sheet_ranged_ap are u32; a signed column is a schema change (docs/danger-zones.md section 1.2)."
+
+[[known_gaps]]
+description = "Attack power ignores the percent multiplier. vmangos scales the clamped total by one plus the multiplier, and the sheet writes the multiplier to the client; the Module has no attack power percent modifier."
+path = "module/src/combat/tables.rs"
+symbol = "total_attack_power"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::GetTotalAttackPowerValue returns ap * (1.0f + UNIT_FIELD_ATTACK_POWER_MULTIPLIER) for client builds above 1.8.4, and ranged does the same with UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER; StatSystem.cpp Player::UpdateAttackPowerAndDamage writes both fields from AP_MOD_PCT."
