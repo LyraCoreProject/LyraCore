@@ -18,7 +18,8 @@ pub(crate) use speed::{
     speed_bonus, swim_speed,
 };
 pub(crate) use stats::{
-    effective_stat, moves_sheet, moves_vitals, sheet_stat_bonus, SHEET_STATS, VITALS_STATS,
+    effective_stat, is_predatory_strikes, moves_sheet, moves_vitals, sheet_stat_bonus, SHEET_STATS,
+    VITALS_STATS,
 };
 
 #[derive(Clone, Copy, Debug)]

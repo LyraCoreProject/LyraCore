@@ -202,18 +202,7 @@ pub(crate) fn offhand_swing_range(
     attacker: &WorldEntity,
     (dmin, dmax, delay): (u32, u32, u32),
 ) -> (u32, u32) {
-    let ap = melee_attack_power_for(
-        attacker.class(),
-        attacker.stance,
-        crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_STR),
-        crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_AGI),
-        attacker.level,
-    )
-    .saturating_add_signed(crate::modifiers::combat_field_bonus(
-        ctx,
-        attacker.guid,
-        crate::spell::COMBAT_ATTACK_POWER,
-    ));
+    let ap = melee_attack_power(ctx, attacker);
     let (raw_min, raw_max) = weapon_swing_range_ap(ap, dmin, dmax, delay);
     let apply = |base| {
         crate::spell::bonuses::weapon_damage(
@@ -785,6 +774,7 @@ fn fire_ranged_shot(
     let (rdmin, rdmax) = if attacker.is_player() {
         let (_, rdmin, rdmax) = ranged_sheet_values(
             attacker.class(),
+            attacker.stance,
             crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_AGI),
             attacker.level,
             Some(weapon),

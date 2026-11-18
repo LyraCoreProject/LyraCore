@@ -302,15 +302,14 @@ fn a_usable_weapon_change_in_combat_restarts_the_main_hand_swing() {
     );
 }
 
-#[test]
-#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_shapeshift_refreshes_the_sheet_attack_power_and_damage() {
+const CAT_FORM: u32 = 5_090_413;
+
+fn feral_druid(name: &str) -> Standalone {
     use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
     use lyracore_package_delta::packed_spell_effect_id;
     use lyracore_shared::spell::taxonomy::{E_SET_STANCE, STANCE_CAT, T_SELF};
-    const CAT_FORM: u32 = 5_090_413;
 
-    let mut shard = Standalone::start("white-melee-shapeshift-sheet");
+    let mut shard = Standalone::start(name);
     beside_a_wolf(
         &mut shard,
         "UPDATE game_character SET class = 11, level = 60 WHERE guid = 1",
@@ -340,24 +339,198 @@ fn a_shapeshift_refreshes_the_sheet_attack_power_and_damage() {
     ));
     shard.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
     shard.assert_sql("UPDATE game_world_entity SET strength = 80, agility = 40 WHERE guid = 1");
-    let sheet = |shard: &Standalone| {
-        let row = shard
-            .query_rows(
-                "SELECT sheet_ap_base, sheet_dmg_min, sheet_dmg_max FROM game_world_entity \
-                 WHERE guid = 1",
-            )
-            .remove(0);
-        [
-            row["sheet_ap_base"].clone(),
-            row["sheet_dmg_min"].clone(),
-            row["sheet_dmg_max"].clone(),
-        ]
-    };
+    shard
+}
+
+fn predatory_strikes_fixture(shard: &Standalone, spell_id: u32, amount: i32, duration_ms: u32) {
+    use lyracore_package_delta::packed_spell_effect_id;
+    use lyracore_shared::spell::taxonomy::{A_FLAG, T_SELF};
+
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell_id),
+            ("name", &"Predatory Strikes fixture"),
+            ("school_mask", &1),
+            ("duration_ms", &duration_ms),
+            ("gcd_ms", &0),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell_id, 0)),
+            ("spell_id", &spell_id),
+            ("kind", &A_FLAG),
+            ("base_points", &amount),
+            ("target", &T_SELF),
+        ],
+    );
+}
+
+fn druid_sheet(shard: &Standalone) -> [String; 3] {
+    let row = shard
+        .query_rows(
+            "SELECT sheet_ap_base, sheet_dmg_min, sheet_dmg_max FROM game_world_entity \
+             WHERE guid = 1",
+        )
+        .remove(0);
+    [
+        row["sheet_ap_base"].clone(),
+        row["sheet_dmg_min"].clone(),
+        row["sheet_dmg_max"].clone(),
+    ]
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_shapeshift_refreshes_the_sheet_attack_power_and_damage() {
+    let shard = feral_druid("white-melee-shapeshift-sheet");
 
     // vmangos Player::InitDataForForm: Cat AP 2 * 80 + 40 - 20 swings 51-75 + 180 / 14.
     shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
-    assert_eq!(sheet(&shard), ["180", "63", "87"], "Cat Form");
+    assert_eq!(druid_sheet(&shard), ["180", "63", "87"], "Cat Form");
     // Caster AP 2 * 80 - 20 swings the 10-15 weapon + 140 / 14 * 2.0.
     shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
-    assert_eq!(sheet(&shard), ["140", "30", "35"], "back in caster form");
+    assert_eq!(
+        druid_sheet(&shard),
+        ["140", "30", "35"],
+        "back in caster form"
+    );
+}
+
+fn advance_virtual_clock(shard: &Standalone, ticks: usize) {
+    let mut connection = shard.connect_reducers(&[]);
+    for _ in 0..ticks {
+        connection
+            .call("debug_advance_virtual_clock", serde_json::json!([50_000]))
+            .unwrap();
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_sheet_follows_the_predatory_strikes_aura_as_it_comes_and_goes() {
+    const PREDATORY_STRIKES: u32 = 16_975;
+    const AURA_TICKS: usize = 20;
+
+    let shard = feral_druid("white-melee-predatory-strikes-aura");
+    predatory_strikes_fixture(&shard, PREDATORY_STRIKES, 150, 1_000);
+    shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
+    assert_eq!(druid_sheet(&shard), ["180", "63", "87"], "Cat Form");
+
+    // vmangos: Predatory Strikes 150 adds level 60 * 150 / 100 = 90 to Cat Form AP, 270 in all.
+    shard.assert_call("debug_force_cast", &["1", &PREDATORY_STRIKES.to_string()]);
+    assert_eq!(
+        druid_sheet(&shard),
+        ["270", "70", "94"],
+        "the Aura arrives in Cat Form"
+    );
+
+    advance_virtual_clock(&shard, AURA_TICKS);
+    assert_eq!(
+        druid_sheet(&shard),
+        ["180", "63", "87"],
+        "the Aura expires in Cat Form"
+    );
+
+    shard.assert_call("debug_force_cast", &["1", &PREDATORY_STRIKES.to_string()]);
+    assert_eq!(
+        druid_sheet(&shard),
+        ["270", "70", "94"],
+        "the Aura arrives again"
+    );
+    shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
+    assert_eq!(
+        druid_sheet(&shard),
+        ["140", "30", "35"],
+        "the talent adds nothing in caster form"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_casters_flat_attack_power_offsets_a_negative_base() {
+    use lyracore_package_delta::packed_spell_effect_id;
+    use lyracore_shared::spell::taxonomy::{A_MOD_COMBAT, COMBAT_ATTACK_POWER, T_SELF};
+    const FLAT_ATTACK_POWER: u32 = 5_090_414;
+
+    let mut shard = Standalone::start("white-melee-negative-base");
+    let target = beside_a_wolf(
+        &mut shard,
+        "UPDATE game_character SET class = 8, level = 1 WHERE guid = 1",
+    );
+    shard.assert_sql("UPDATE game_world_entity SET strength = 5 WHERE guid = 1");
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &FLAT_ATTACK_POWER),
+            ("name", &"Flat attack power fixture"),
+            ("school_mask", &1),
+            ("duration_ms", &600_000),
+            ("gcd_ms", &0),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(FLAT_ATTACK_POWER, 0)),
+            ("spell_id", &FLAT_ATTACK_POWER),
+            ("kind", &A_MOD_COMBAT),
+            ("base_points", &232),
+            ("target", &T_SELF),
+            ("p_0", &COMBAT_ATTACK_POWER),
+        ],
+    );
+    let range = |shard: &Standalone| {
+        let readout = swing_readout(shard, &target);
+        (readout["base_min"].clone(), readout["base_max"].clone())
+    };
+
+    // vmangos: a Mage's base AP is Strength 5 - 10 = -5, so the total clamps at 0 and the
+    // unarmed swing is 1-3.
+    assert_eq!(range(&shard), ("1".into(), "3".into()), "before the bonus");
+    // -5 + 232 = 227 AP adds 227 / 14 * 2.0 = 32; clamping the base first would add 33.
+    shard.assert_call("debug_force_cast", &["1", &FLAT_ATTACK_POWER.to_string()]);
+    assert_eq!(range(&shard), ("33".into(), "35".into()), "with +232 AP");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn learning_predatory_strikes_in_cat_form_raises_the_sheet_attack_power() {
+    const TALENT: u32 = 9_001;
+    const RANK_1: u32 = 16_972;
+
+    let shard = feral_druid("white-melee-predatory-strikes-talent");
+    predatory_strikes_fixture(&shard, RANK_1, 50, 600_000);
+    shard.insert_row(
+        "game_talent_tab",
+        &[
+            ("tab_id", &1),
+            ("name", &"Feral Combat fixture"),
+            ("class_mask", &(1u32 << 10)),
+            ("race_mask", &0),
+            ("order_index", &0),
+        ],
+    );
+    shard.insert_row(
+        "game_talent",
+        &[
+            ("talent_id", &TALENT),
+            ("name", &"Predatory Strikes fixture"),
+            ("tab_id", &1),
+            ("max_rank", &3),
+            ("spell_id", &RANK_1),
+        ],
+    );
+    shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
+    assert_eq!(druid_sheet(&shard), ["180", "63", "87"], "Cat Form");
+
+    shard.assert_call("debug_learn_talent", &["1", &TALENT.to_string()]);
+    // Rank 1 adds level 60 * 50 / 100 = 30: 210 AP swings 51-75 + 210 / 14.
+    assert_eq!(
+        druid_sheet(&shard),
+        ["210", "66", "90"],
+        "Predatory Strikes 1"
+    );
 }

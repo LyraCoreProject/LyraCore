@@ -642,7 +642,7 @@ pub(crate) fn aura_apply(
         );
     }
 
-    crate::spell::AuraProjections::of(e.kind, e.p0).refresh(ctx, target_guid);
+    crate::spell::AuraProjections::of(hdr.spell_id, e.kind, e.p0).refresh(ctx, target_guid);
 
     if hdr.negative() {
         let entities = ctx.db.game_world_entity();

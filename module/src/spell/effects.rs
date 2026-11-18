@@ -135,7 +135,7 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     let [str_bonus, agi_bonus, sta_bonus, int_bonus, spi_bonus] =
         crate::modifiers::SHEET_STATS.map(|stat| crate::modifiers::sheet_stat_bonus(ctx, &e, stat));
 
-    let ap_base = crate::combat::melee_attack_power_for(class, e.stance, eff_str, eff_agi, e.level);
+    let ap_base = crate::combat::base_melee_attack_power(ctx, &e, eff_str, eff_agi).max(0) as u32;
     let ap_mods = crate::modifiers::combat_field_bonus(ctx, unit_guid, COMBAT_ATTACK_POWER);
     let (dmg_min, dmg_max) = crate::combat::swing_range_ctx(ctx, &e);
     let ap_modifiers = crate::combat::attack_power_modifiers(ctx, unit_guid, COMBAT_ATTACK_POWER);
@@ -154,6 +154,7 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     };
     let (ranged_ap, ranged_dmg_min, ranged_dmg_max) = crate::combat::ranged_sheet_values(
         class,
+        e.stance,
         eff_agi,
         e.level,
         crate::combat::equipped_ranged_weapon(ctx, unit_guid),
