@@ -81,28 +81,44 @@ pub(crate) fn melee_attack_power(strength: u32, level: u32) -> u32 {
 }
 
 const CLASS_WARRIOR: u8 = 1;
+const CLASS_PALADIN: u8 = 2;
 const CLASS_HUNTER: u8 = 3;
 const CLASS_ROGUE: u8 = 4;
 pub(crate) const CLASS_PRIEST: u8 = 5;
+const CLASS_SHAMAN: u8 = 7;
 pub(crate) const CLASS_MAGE: u8 = 8;
 pub(crate) const CLASS_WARLOCK: u8 = 9;
 
-const CLASS_DRUID: u8 = 11;
+pub(crate) const CLASS_DRUID: u8 = 11;
 
-/// vmangos melee AP for warriors, paladins, rogues, hunters and druids; `stance` is a druid's form.
+pub(crate) fn is_feral_form(stance: u8) -> bool {
+    use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR};
+    matches!(stance, STANCE_BEAR | STANCE_CAT | STANCE_DIRE_BEAR)
+}
+
+/// vmangos melee AP; `stance` is a druid's form, `predatory_strikes_pct` its talent amount.
 pub(crate) fn melee_attack_power_for(
     class: u8,
     stance: u8,
     strength: u32,
     agility: u32,
     level: u32,
+    predatory_strikes_pct: u32,
 ) -> u32 {
     use lyracore_shared::spell::taxonomy::STANCE_CAT;
     match class {
+        CLASS_WARRIOR | CLASS_PALADIN => melee_attack_power(strength, level),
         CLASS_ROGUE | CLASS_HUNTER => (level * 2 + strength + agility).saturating_sub(20),
-        CLASS_DRUID if stance == STANCE_CAT => (strength * 2 + agility).saturating_sub(20),
+        CLASS_SHAMAN => (level * 2 + strength * 2).saturating_sub(20),
+        CLASS_MAGE | CLASS_PRIEST | CLASS_WARLOCK => strength.saturating_sub(10),
+        CLASS_DRUID if stance == STANCE_CAT => {
+            (level * predatory_strikes_pct / 100 + strength * 2 + agility).saturating_sub(20)
+        }
+        CLASS_DRUID if is_feral_form(stance) => {
+            (level * predatory_strikes_pct / 100 + strength * 2).saturating_sub(20)
+        }
         CLASS_DRUID => (strength * 2).saturating_sub(20),
-        _ => melee_attack_power(strength, level),
+        _ => 0,
     }
 }
 
@@ -117,7 +133,10 @@ pub(crate) fn feral_swing_range_ap(ap: u32, level: u32, attack_time_ms: u32) -> 
     )
 }
 
-pub(crate) fn ranged_attack_power_for(class: u8, agility: u32, level: u32) -> u32 {
+pub(crate) fn ranged_attack_power_for(class: u8, stance: u8, agility: u32, level: u32) -> u32 {
+    if class == CLASS_DRUID && is_feral_form(stance) {
+        return 0;
+    }
     let raw = match class {
         CLASS_WARRIOR | CLASS_ROGUE => level + agility,
         CLASS_HUNTER => level * 2 + agility * 2,
@@ -128,6 +147,7 @@ pub(crate) fn ranged_attack_power_for(class: u8, agility: u32, level: u32) -> u3
 
 pub(crate) fn ranged_sheet_values(
     class: u8,
+    stance: u8,
     agility: u32,
     level: u32,
     weapon: Option<(u32, u32, u32, u8)>,
@@ -139,7 +159,7 @@ pub(crate) fn ranged_sheet_values(
         return (0, 0.0, 0.0);
     };
     if matches!(subclass, ws::BOW | ws::GUN | ws::CROSSBOW | ws::THROWN) {
-        let base = ranged_attack_power_for(class, agility, level);
+        let base = ranged_attack_power_for(class, stance, agility, level);
         let attack_power = base.saturating_add_signed(bonus);
         let bonus = attack_power as f32 / AP_PER_DPS as f32 * (delay_ms as f32 / 1000.0);
         (base, dmg_min as f32 + bonus, dmg_max as f32 + bonus)
@@ -504,38 +524,97 @@ mod tests {
     fn druid_attack_power_adds_agility_only_in_cat_form() {
         use lyracore_shared::spell::taxonomy::{STANCE_BATTLE, STANCE_BEAR, STANCE_CAT};
         // vmangos: Cat Form 2 * strength + agility - 20; other forms 2 * strength - 20.
-        assert_eq!(melee_attack_power_for(11, STANCE_CAT, 50, 40, 60), 120);
-        assert_eq!(melee_attack_power_for(11, STANCE_BEAR, 50, 40, 60), 80);
-        assert_eq!(melee_attack_power_for(11, STANCE_BATTLE, 50, 40, 60), 80);
+        assert_eq!(melee_attack_power_for(11, STANCE_CAT, 50, 40, 60, 0), 120);
+        assert_eq!(melee_attack_power_for(11, STANCE_BEAR, 50, 40, 60, 0), 80);
+        assert_eq!(melee_attack_power_for(11, STANCE_BATTLE, 50, 40, 60, 0), 80);
         assert_eq!(melee_attack_power(5, 1), 0);
     }
 
     #[test]
-    fn rogue_melee_ap_folds_in_agility_others_keep_the_str_curve() {
-        let lo_agi = melee_attack_power_for(CLASS_ROGUE, 0, 20, 20, 5);
-        let hi_agi = melee_attack_power_for(CLASS_ROGUE, 0, 20, 40, 5);
+    fn predatory_strikes_adds_a_share_of_level_only_in_feral_forms() {
+        use lyracore_shared::spell::taxonomy::{
+            STANCE_BATTLE, STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR,
+        };
+        for (stance, expected) in [
+            (STANCE_CAT, 120 + 90),
+            (STANCE_BEAR, 80 + 90),
+            (STANCE_DIRE_BEAR, 80 + 90),
+            (STANCE_BATTLE, 80),
+        ] {
+            assert_eq!(
+                melee_attack_power_for(CLASS_DRUID, stance, 50, 40, 60, 150),
+                expected
+            );
+        }
+        assert_eq!(
+            melee_attack_power_for(CLASS_DRUID, STANCE_CAT, 50, 40, 61, 50),
+            120 + 30,
+            "the share rounds down"
+        );
+    }
+
+    #[test]
+    fn melee_attack_power_uses_each_class_formula() {
+        // Level 60, strength 100, agility 80.
+        for (class, expected) in [
+            (CLASS_WARRIOR, 360),
+            (CLASS_PALADIN, 360),
+            (CLASS_HUNTER, 280),
+            (CLASS_ROGUE, 280),
+            (CLASS_PRIEST, 90),
+            (CLASS_SHAMAN, 300),
+            (CLASS_MAGE, 90),
+            (CLASS_WARLOCK, 90),
+            (CLASS_DRUID, 180),
+        ] {
+            assert_eq!(
+                melee_attack_power_for(class, 0, 100, 80, 60, 0),
+                expected,
+                "class {class}"
+            );
+            assert_eq!(melee_attack_power_for(class, 0, 0, 0, 1, 0), 0);
+        }
+    }
+
+    #[test]
+    fn rogue_melee_ap_folds_in_agility() {
+        let lo_agi = melee_attack_power_for(CLASS_ROGUE, 0, 20, 20, 5, 0);
+        let hi_agi = melee_attack_power_for(CLASS_ROGUE, 0, 20, 40, 5, 0);
         assert_eq!(lo_agi, 30);
         assert!(
             hi_agi > lo_agi,
             "more Agility → strictly higher Rogue AP (Str/level held constant)"
         );
-        assert_eq!(melee_attack_power_for(CLASS_HUNTER, 0, 20, 40, 5), 50);
-        assert_eq!(
-            melee_attack_power_for(1, 0, 23, 99, 1),
-            melee_attack_power(23, 1)
-        );
-        assert_eq!(
-            melee_attack_power_for(8, 0, 23, 99, 1),
-            melee_attack_power(23, 1)
-        );
+        assert_eq!(melee_attack_power_for(CLASS_HUNTER, 0, 20, 40, 5, 0), 50);
     }
 
     #[test]
     fn ranged_attack_power_uses_each_class_formula() {
-        for (class, expected) in [(1, 180), (4, 180), (3, 370), (7, 120)] {
-            assert_eq!(ranged_attack_power_for(class, 130, 60), expected);
-            assert_eq!(ranged_attack_power_for(class, 0, 1), 0);
+        for (class, expected) in [
+            (CLASS_WARRIOR, 180),
+            (CLASS_ROGUE, 180),
+            (CLASS_HUNTER, 370),
+            (CLASS_SHAMAN, 120),
+            (CLASS_DRUID, 120),
+        ] {
+            assert_eq!(ranged_attack_power_for(class, 0, 130, 60), expected);
+            assert_eq!(ranged_attack_power_for(class, 0, 0, 1), 0);
         }
+    }
+
+    #[test]
+    fn a_druid_in_a_feral_form_has_no_ranged_attack_power() {
+        use lyracore_shared::spell::taxonomy::{
+            STANCE_BEAR, STANCE_BERSERKER, STANCE_CAT, STANCE_DIRE_BEAR,
+        };
+        for stance in [STANCE_CAT, STANCE_BEAR, STANCE_DIRE_BEAR] {
+            assert_eq!(ranged_attack_power_for(CLASS_DRUID, stance, 130, 60), 0);
+        }
+        assert_eq!(ranged_attack_power_for(CLASS_DRUID, 0, 130, 60), 120);
+        assert_eq!(
+            ranged_attack_power_for(CLASS_WARRIOR, STANCE_BERSERKER, 130, 60),
+            180
+        );
     }
 
     #[test]
@@ -543,6 +622,7 @@ mod tests {
         assert_eq!(
             ranged_sheet_values(
                 3,
+                0,
                 20,
                 10,
                 Some((8, 12, 2800, crate::items::weapon_subclass::BOW)),
@@ -558,6 +638,7 @@ mod tests {
             ranged_sheet_values(
                 4,
                 0,
+                0,
                 1,
                 Some((10, 10, 14000, crate::items::weapon_subclass::THROWN)),
                 16
@@ -571,6 +652,7 @@ mod tests {
         for class in [1, 4, 3] {
             let (ap, min, max) = ranged_sheet_values(
                 class,
+                0,
                 130,
                 60,
                 Some((23, 43, 1800, crate::items::weapon_subclass::THROWN)),
@@ -592,6 +674,7 @@ mod tests {
         assert_eq!(
             ranged_sheet_values(
                 5,
+                0,
                 130,
                 60,
                 Some((8, 12, 2800, crate::items::weapon_subclass::WAND)),

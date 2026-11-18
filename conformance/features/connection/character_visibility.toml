@@ -51,6 +51,21 @@ function = "druid_attack_power_adds_agility_only_in_cat_form"
 rung = "unit"
 
 [[tests]]
+path = "module/src/combat/tables.rs"
+function = "melee_attack_power_uses_each_class_formula"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/tables.rs"
+function = "predatory_strikes_adds_a_share_of_level_only_in_feral_forms"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/tables.rs"
+function = "a_druid_in_a_feral_form_has_no_ranged_attack_power"
+rung = "unit"
+
+[[tests]]
 path = "module/src/spell/proc.rs"
 function = "a_ranged_spells_proc_rolls_with_the_ranged_weapon"
 rung = "unit"
@@ -116,13 +131,7 @@ symbol = "visible_health"
 evidence = "Review of PR 1040. At d9173eca, Player.cpp Player::CanSeeHealthOf takes the owner from GetCharmerOrOwnerPlayerOrPlayerItself, and Player::CanSeeSpecialInfoOf shows raw health to the caster of a SPELL_AURA_EMPATHY Aura on the target."
 
 [[known_gaps]]
-description = "Feral attack power omits Predatory Strikes, which adds level times the talent amount over 100 in Cat, Bear and Dire Bear Form."
+description = "The sheet shows ranged attack power 0 for a Character without a launcher or thrown weapon. vmangos computes it from Agility for every Character."
 path = "module/src/combat/tables.rs"
-symbol = "melee_attack_power_for"
-evidence = "Review of PR 1040. At d9173eca, StatSystem.cpp Player::GetAttackPowerFromStrengthAndAgility finds the dummy Aura with SpellIconID 1563 and adds GetLevel() * amount / 100 for FORM_CAT, FORM_BEAR and FORM_DIREBEAR."
-
-[[known_gaps]]
-description = "A druid in Cat, Bear or Dire Bear Form keeps its caster ranged attack power instead of 0."
-path = "module/src/combat/tables.rs"
-symbol = "ranged_attack_power_for"
-evidence = "Review of PR 1040. At d9173eca, StatSystem.cpp Player::GetAttackPowerFromStrengthAndAgility sets ranged attack power to 0 for a druid in FORM_CAT, FORM_BEAR or FORM_DIREBEAR; ranged_attack_power_for takes no form."
+symbol = "ranged_sheet_values"
+evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Player::UpdateAttackPowerAndDamage(true) writes UNIT_FIELD_RANGED_ATTACK_POWER from Unit::GetAttackPowerFromStrengthAndAgility with no weapon check; ranged_sheet_values returns 0 without a bow, gun, crossbow or thrown weapon."

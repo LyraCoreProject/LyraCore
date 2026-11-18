@@ -307,8 +307,9 @@ fn a_usable_weapon_change_in_combat_restarts_the_main_hand_swing() {
 fn a_shapeshift_refreshes_the_sheet_attack_power_and_damage() {
     use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
     use lyracore_package_delta::packed_spell_effect_id;
-    use lyracore_shared::spell::taxonomy::{E_SET_STANCE, STANCE_CAT, T_SELF};
+    use lyracore_shared::spell::taxonomy::{A_FLAG, E_SET_STANCE, STANCE_CAT, T_SELF};
     const CAT_FORM: u32 = 5_090_413;
+    const PREDATORY_STRIKES: u32 = 16_975;
 
     let mut shard = Standalone::start("white-melee-shapeshift-sheet");
     beside_a_wolf(
@@ -360,4 +361,38 @@ fn a_shapeshift_refreshes_the_sheet_attack_power_and_damage() {
     // Caster AP 2 * 80 - 20 swings the 10-15 weapon + 140 / 14 * 2.0.
     shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
     assert_eq!(sheet(&shard), ["140", "30", "35"], "back in caster form");
+
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &PREDATORY_STRIKES),
+            ("name", &"Predatory Strikes fixture"),
+            ("school_mask", &1),
+            ("duration_ms", &600_000),
+            ("gcd_ms", &0),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(PREDATORY_STRIKES, 0)),
+            ("spell_id", &PREDATORY_STRIKES),
+            ("kind", &A_FLAG),
+            ("base_points", &150),
+            ("target", &T_SELF),
+        ],
+    );
+    shard.assert_call("debug_force_cast", &["1", &PREDATORY_STRIKES.to_string()]);
+    assert_eq!(
+        sheet(&shard),
+        ["140", "30", "35"],
+        "the talent adds nothing in caster form"
+    );
+    // vmangos: Predatory Strikes 150 adds level 60 * 150 / 100 = 90 to Cat Form AP, 270 in all.
+    shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
+    assert_eq!(
+        sheet(&shard),
+        ["270", "70", "94"],
+        "Cat Form with the talent"
+    );
 }

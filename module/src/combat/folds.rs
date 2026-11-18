@@ -483,6 +483,20 @@ pub(crate) fn weapon_strike_spell_damage(
     armor_mitigated(if crit { base * CRIT_MULT } else { base }, mit_pct)
 }
 
+const PREDATORY_STRIKES_SPELLS: [u32; 3] = [16972, 16974, 16975];
+
+pub(crate) fn predatory_strikes_pct(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+    if unit.class() != CLASS_DRUID || !is_feral_form(unit.stance) {
+        return 0;
+    }
+    crate::spell::auras_on(ctx, unit.guid)
+        .find(|aura| {
+            aura.eff_kind == crate::spell::A_FLAG
+                && PREDATORY_STRIKES_SPELLS.contains(&aura.spell_id)
+        })
+        .map_or(0, |aura| aura.amount.max(0) as u32)
+}
+
 pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
     melee_attack_power_for(
         unit.class(),
@@ -490,6 +504,7 @@ pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u3
         crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_STR),
         crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_AGI),
         unit.level,
+        predatory_strikes_pct(ctx, unit),
     )
     .saturating_add_signed(crate::modifiers::combat_field_bonus(
         ctx,
@@ -525,6 +540,7 @@ fn strike_weapon_range(
     };
     let (_, min, max) = ranged_sheet_values(
         attacker.class(),
+        attacker.stance,
         crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_AGI),
         attacker.level,
         Some((dmin, dmax, delay, subclass)),
