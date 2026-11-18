@@ -76,15 +76,16 @@ cargo test -p lyracore-module --test weather -- --ignored
 ```
 
 CI runs every target in two parallel jobs on large Boat VMs, with one test thread per core and
-`--skip deadmines`. It skips the
-workflow when a change touches only Markdown, `docs/` or `.claude/`.
-Both durable and Native Host also skip PRs that change only `conformance/*.py`,
-`conformance/tests/*.py`, the `conformance/run`, `baseline`, `scoreboard` and `audit` launchers, or
-`conformance/reports/**`. These files operate tooling and recorded reports; tier 1 reads its
-committed baseline and compiles its Rust support directly. Rust still tests the Python tooling,
-conformance crate and examples, including replay of the committed audit report. Changes to
-`conformance/support/`, `features/`, `tier1-baseline.json`, `examples/` or `src/`, and any changes to
-`module/`, `scripts/` or `.github/` code, still select the full workflows on ready PRs.
+`--skip deadmines`. A push to `main` skips the durable workflow when it touches only Markdown,
+`docs/` or `.claude/`. A PR skips both durable and Native Host when it touches only those paths,
+`conformance/features/**`, `conformance/*.py`, `conformance/tests/*.py`, the `conformance/run`,
+`baseline`, `scoreboard` and `audit` launchers, or `conformance/reports/**`. Each skipped workflow
+saves its Boat starts. These files operate tooling, recorded reports and the Feature Ledger; tier 1
+reads its committed baseline and compiles its Rust support directly. Rust still tests the Python
+tooling, conformance crate, Feature Ledger and examples on every PR, including replay of the
+committed audit report. A push to `main` still reads the ledger for the scoreboard. Changes to
+`conformance/support/`, `tier1-baseline.json`, `examples/` or `src/`, and any changes to `module/`,
+`scripts/` or `.github/` code, still select the full workflows on ready PRs.
 The Deadmines targets need the separately installed dungeons Package. CI runs the
 [taxi Behavior](../conformance/features/taxi/taxi_single_hop.toml) against its committed tier 1
 signature baseline. The bundled route fixture removes its imported-data requirement.
@@ -100,19 +101,29 @@ must receive their migration defaults. The fixture includes nonzero combo scalin
 emote delivery. Other durable runs must skip that test unless the baseline Wasm is available.
 
 `scripts/durable-test-targets.py` assigns targets by the durations in
-`.github/durable-test-seconds.json`. It includes every current target once and estimates 20 seconds
-for a new target. `JOB_SECONDS` reserves extra time for the populated-upgrade check. To refresh the
-estimates, use a successful main run: record each Module target's duration, rounded up to whole
-seconds, in the JSON file. Measure a target from its `Running tests/…` line to the next one, because
-the log interleaves stdout and stderr and a `test result` line can land after the next target
-starts. Set each job's `JOB_SECONDS` entry to its total duration minus its target durations, less
-the smallest such value among the jobs. Leave out a baseline compile after a cache miss and the
-scoreboard steps that run only on `main`. Keep the run reference in the script current. Run
-`python3 -m unittest discover -s scripts/tests` to check the assignment.
+`.github/durable-test-seconds.json`, longest first to the least loaded job. It includes every current
+target once and estimates 20 seconds for a new target. `job_seconds` reserves extra time for the
+steps one job runs alone; job 1 runs the populated-upgrade check. The durations in the file come
+from a run on six default VMs with four test threads, so they do not describe two `boat-large` jobs
+that run one thread per core. Refresh them from durable runs on `main` once a few exist.
 
-`native_debug_gate` builds the Module with other features, and this replaces the fixture build. The
-next target on its job then rebuilds the fixture for about 100 seconds. Record that rebuild on
-`native_debug_gate`, not on the next target, so that the target keeps a job to itself.
+The job warms the Module compile caches with `gm_level` before the suite. The first publish compiles
+the Module into shared schema and Wasm caches, about 15 to 45 seconds on a default VM, and without
+the warm-up the first target in each job pays it. `native_debug_gate` builds the Module with other
+features, and this replaces the fixture build, so the suite runs it last in its job and no other
+target rebuilds the fixture. Keep a step that needs the fixture build out of that job, or expect
+about 100 seconds more.
+
+To refresh the estimates, run `python3 scripts/durable-test-seconds.py RUN_ID...` with the ids of
+several successful runs of the current workflow, for example from `gh run list --workflow "Module
+durable tests" --branch main --status success`. It needs an authenticated `gh`. It records each
+target's median duration, from its `Running tests/…` line to the next one, because the log
+interleaves stdout and stderr and a `test result` line can land after the next target starts. For
+each job it records the median time of the steps only that job runs: the CI script tests, the IDC
+check, the items reimport and the populated-upgrade check. Runner noise in the common steps stays
+out of the table. It lists the runs in `source_runs`. Run `python3 -m unittest discover -s
+scripts/tests` to check that the assignment covers every target once and that every shard in the
+workflow exists.
 
 The Session expiry test checks the five-minute production interval before it shortens the schedule
 on its private fixture. It then checks two real scheduled cleanups without a five-minute wait.

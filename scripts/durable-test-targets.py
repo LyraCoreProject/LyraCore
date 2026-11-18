@@ -8,13 +8,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-# Durations from https://github.com/LyraCoreProject/LyraCore/actions/runs/41883972737.
-# Job 1 also runs the populated-upgrade check from a cached baseline Wasm.
-JOB_SECONDS = (0, 18)
+WEIGHTS = ROOT / ".github/durable-test-seconds.json"
 DEFAULT_TARGET_SECONDS = 20
 
 
-def partition(targets, seconds, job_seconds=JOB_SECONDS):
+def partition(targets, seconds, job_seconds):
     jobs = [[] for _ in job_seconds]
     totals = list(job_seconds)
     for target in sorted(
@@ -28,11 +26,14 @@ def partition(targets, seconds, job_seconds=JOB_SECONDS):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("job", type=int, choices=range(len(JOB_SECONDS)))
+    parser.add_argument("job", type=int)
     args = parser.parse_args()
-    seconds = json.loads((ROOT / ".github/durable-test-seconds.json").read_text())
+    weights = json.loads(WEIGHTS.read_text())
+    job_seconds = weights["job_seconds"]
+    if args.job not in range(len(job_seconds)):
+        parser.error(f"job must be below {len(job_seconds)}")
     targets = [path.stem for path in (ROOT / "module/tests").glob("*.rs")]
-    jobs, totals = partition(targets, seconds)
+    jobs, totals = partition(targets, weights["target_seconds"], job_seconds)
     if not all(jobs):
         parser.error("every durable job must select at least one Module target")
     print(f"Estimated job durations in seconds: {totals}", file=sys.stderr)

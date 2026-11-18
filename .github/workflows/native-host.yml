@@ -11,6 +11,10 @@ on:
       - "conformance/scoreboard"
       - "conformance/audit"
       - "conformance/reports/**"
+      - "conformance/features/**"
+      - "**/*.md"
+      - "docs/**"
+      - ".claude/**"
   push:
     branches: [main]
 
