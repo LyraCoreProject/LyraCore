@@ -80,15 +80,28 @@ fn schema_extractor(spacetime: &OsString) -> Option<&'static Path> {
         .as_deref()
 }
 
-// A cold extraction compiles the whole Module; four at once overran the CLI's 60-second limit.
-fn first_schema_extraction(wasm: &[u8]) -> Option<MutexGuard<'static, BTreeSet<u64>>> {
-    use std::hash::{Hash, Hasher};
+// Concurrent cold extractions overrun the CLI's 60 s limit, so the first per content runs alone.
+struct ColdExtraction {
+    extracted: MutexGuard<'static, BTreeSet<u64>>,
+    content: u64,
+}
 
-    static EXTRACTED: Mutex<BTreeSet<u64>> = Mutex::new(BTreeSet::new());
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    wasm.hash(&mut hasher);
-    let mut extracted = EXTRACTED.lock().unwrap_or_else(PoisonError::into_inner);
-    extracted.insert(hasher.finish()).then_some(extracted)
+impl ColdExtraction {
+    /// Waits for a running cold extraction; returns `None` once this content's schema is cached.
+    fn begin(wasm: &[u8]) -> Option<Self> {
+        use std::hash::{Hash, Hasher};
+
+        static EXTRACTED: Mutex<BTreeSet<u64>> = Mutex::new(BTreeSet::new());
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        wasm.hash(&mut hasher);
+        let content = hasher.finish();
+        let extracted = EXTRACTED.lock().unwrap_or_else(PoisonError::into_inner);
+        (!extracted.contains(&content)).then_some(Self { extracted, content })
+    }
+
+    fn cached(mut self) {
+        self.extracted.insert(self.content);
+    }
 }
 
 fn caching_extractor(real: &Path, cache: &Path) -> Option<PathBuf> {
@@ -523,10 +536,11 @@ impl Standalone {
         let path = self.data_dir.join(file_name);
         fs::write(&path, wasm).expect("failed to copy private Wasm artifact");
         let mut command = self.command();
-        let _first_extraction = schema_extractor(&self.spacetime).and_then(|extractor| {
+        let mut cold_extraction = None;
+        if let Some(extractor) = schema_extractor(&self.spacetime) {
             command.env("SPACETIMEDB_SCHEMA_EXTRACTOR", extractor);
-            first_schema_extraction(wasm)
-        });
+            cold_extraction = ColdExtraction::begin(wasm);
+        }
         command
             .current_dir(core_root())
             .args(["publish", "-s", &self.server, "--bin-path"])
@@ -534,6 +548,9 @@ impl Standalone {
             .args(extra)
             .args(["-y", database]);
         let output = command.output().expect("failed to start spacetime publish");
+        if let Some(extraction) = cold_extraction.filter(|_| output.status.success()) {
+            extraction.cached();
+        }
         self.assert_output_success(&output, "spacetime publish failed");
         self.fixture_schemas.get_mut().unwrap().remove(database);
         self.published = true;
@@ -585,7 +602,7 @@ impl Standalone {
         }
     }
 
-    // A child forked while the port is reserved holds its socket until exec; only the node answers.
+    // Another socket can accept on the reserved port before the node binds; only the node answers.
     fn answers_ping(&self) -> bool {
         let Ok(mut stream) = TcpStream::connect(&self.address) else {
             return false;
