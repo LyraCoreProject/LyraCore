@@ -169,8 +169,8 @@ pub fn offering_state(known: bool, level: u32, required_level: u32) -> OfferingS
 mod rule_tests {
     use super::*;
     use crate::spell::taxonomy::{
-        A_FLAG, A_MOD_STAT, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_STEALTH, E_DAMAGE,
-        E_SCRIPTED, E_SET_STANCE, E_TRIGGER,
+        A_FLAG, A_MOD_STAT, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SHAPESHIFT,
+        A_STEALTH, E_DAMAGE, E_SCRIPTED, E_SET_STANCE, E_TRIGGER,
     };
 
     #[test]
@@ -204,7 +204,8 @@ mod rule_tests {
         const BATTLE_STANCE: u32 = 2457;
         const BATTLE_STANCE_PASSIVE: u32 = 21156;
         let triggering_kinds = [
-            ("stance or form", E_SET_STANCE),
+            ("stance", A_SHAPESHIFT),
+            ("legacy form", E_SET_STANCE),
             ("stealth", A_STEALTH),
             ("periodic trigger", E_TRIGGER),
             ("periodic trigger aura", A_PERIODIC_TRIGGER),
@@ -235,7 +236,7 @@ mod rule_tests {
             LearnEffect {
                 index: 0,
                 id: 1,
-                kind: E_SET_STANCE,
+                kind: A_SHAPESHIFT,
                 trigger_spell: 21156,
             },
             LearnEffect {

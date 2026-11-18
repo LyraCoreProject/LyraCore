@@ -381,6 +381,30 @@ equipment changes and weapon skill changes.
 starts with one of each item: one throwing knife, one arrow or bullet, one piece of food. After you
 publish this schema to an existing Shard, reimport `globals` before new Characters are created.
 
+### Warrior stance migration
+
+Warrior stances are now Forms: `A_SHAPESHIFT` Auras built from the new public `game_form` and
+`game_form_spell` tables, which start empty. No `game_aura` column, Transfer codec or Native Host
+layout changes. Stance and passive Auras travel with the other Auras; an older destination Module
+keeps an `A_SHAPESHIFT` Aura as an inert Aura.
+
+Until you reimport the `spell` family with `--dbc`, the stance spells keep their old `E_SET_STANCE`
+rows. Warriors still switch stances and pass the stance Gates, but no stance passive applies, so
+Defensive Stance loses its damage and threat changes. A stance is still lost on logout and death,
+and a stance Aura can still be cancelled. Tactical Mastery keeps no rage.
+
+Before play resumes:
+
+1. Publish the Module through a planned additive update.
+2. Reimport `spell` with `--dbc`. It writes Forms 17 to 19 from SpellShapeshiftForm.dbc, imports
+   the three stances as `A_SHAPESHIFT`, Tactical Mastery as `A_FORM_POWER_RETAINED`, and marks
+   spells the client shows no aura icon for with `CAST_FLAG_NO_AURA_CANCEL`.
+3. Call `debug_repair_after_publish`. Each online warrior with no stance Aura gets the stance its
+   client form byte shows, or Battle Stance, with that stance's passive. A druid form byte is left
+   alone.
+
+Offline warriors enter the world in Battle Stance unless they hold a stance Aura.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

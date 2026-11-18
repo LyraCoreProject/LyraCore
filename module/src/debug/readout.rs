@@ -68,11 +68,13 @@ pub fn debug_compute_swing(ctx: &ReducerContext, attacker_guid: u64, target_guid
     let parry_bp = table.parry;
     let block_bp = table.block;
     let attack_time_ms = crate::combat::effective_swing_time(ctx, &attacker);
-    let damage_done_pct = crate::spell::stance_damage_done_pct(attacker.stance)
-        + crate::modifiers::combat_field_bonus(ctx, attacker_guid, crate::spell::COMBAT_DMG_DONE);
+    let damage_done_pct =
+        crate::modifiers::combat_field_bonus(ctx, attacker_guid, crate::spell::COMBAT_DMG_DONE);
     let outgoing_min = crate::spell::apply_damage_pct(p.final_min, damage_done_pct);
     let outgoing_max = crate::spell::apply_damage_pct(p.final_max, damage_done_pct);
-    let damage_taken_pct = crate::spell::damage_taken_bonus(ctx, target_guid);
+    let damage_taken_pct =
+        ((crate::spell::bonuses::damage_taken_multiplier(ctx, target_guid, 1) - 1.0) * 100.0)
+            .round() as i32;
     let final_min = crate::spell::apply_damage_pct(outgoing_min, damage_taken_pct);
     let final_max = crate::spell::apply_damage_pct(outgoing_max, damage_taken_pct);
     let readouts = ctx.db.game_debug_readout();

@@ -204,7 +204,9 @@ pub(crate) fn do_cancel_aura(
     if let Some(spell) = ctx.db.game_spell().spell_id().find(spell_id) {
         const NO_AURA_CANCEL: u32 = 0x80000000;
         const DO_NOT_DISPLAY: u32 = 0x80;
-        if spell.attributes & (SPELL_ATTR_PASSIVE | NO_AURA_CANCEL | DO_NOT_DISPLAY) != 0 {
+        if spell.attributes & (SPELL_ATTR_PASSIVE | NO_AURA_CANCEL | DO_NOT_DISPLAY) != 0
+            || spell.cast_flags & lyracore_shared::spell::taxonomy::CAST_FLAG_NO_AURA_CANCEL != 0
+        {
             return Err(format!("spell {spell_id} cannot be cancelled").into());
         }
         if spell.negative() {

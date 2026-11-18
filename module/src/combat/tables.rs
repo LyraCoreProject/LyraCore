@@ -547,7 +547,7 @@ mod tests {
 
     #[test]
     fn druid_attack_power_adds_agility_only_in_cat_form() {
-        use lyracore_shared::spell::taxonomy::{STANCE_BATTLE, STANCE_BEAR, STANCE_CAT};
+        use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_CAT};
         // vmangos: Cat Form 2 * strength + agility - 20; other forms 2 * strength - 20.
         assert_eq!(
             base_melee_attack_power_for(11, STANCE_CAT, 50, 40, 60, 0),
@@ -557,22 +557,17 @@ mod tests {
             base_melee_attack_power_for(11, STANCE_BEAR, 50, 40, 60, 0),
             80
         );
-        assert_eq!(
-            base_melee_attack_power_for(11, STANCE_BATTLE, 50, 40, 60, 0),
-            80
-        );
+        assert_eq!(base_melee_attack_power_for(11, 0, 50, 40, 60, 0), 80);
     }
 
     #[test]
     fn predatory_strikes_adds_a_share_of_level_only_in_feral_forms() {
-        use lyracore_shared::spell::taxonomy::{
-            STANCE_BATTLE, STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR,
-        };
+        use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR};
         for (stance, expected) in [
             (STANCE_CAT, 120 + 90),
             (STANCE_BEAR, 80 + 90),
             (STANCE_DIRE_BEAR, 80 + 90),
-            (STANCE_BATTLE, 80),
+            (0, 80),
         ] {
             assert_eq!(
                 base_melee_attack_power_for(CLASS_DRUID, stance, 50, 40, 60, 150),
@@ -640,17 +635,12 @@ mod tests {
 
     #[test]
     fn a_druid_in_a_feral_form_has_no_ranged_attack_power() {
-        use lyracore_shared::spell::taxonomy::{
-            STANCE_BEAR, STANCE_BERSERKER, STANCE_CAT, STANCE_DIRE_BEAR,
-        };
+        use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR};
         for stance in [STANCE_CAT, STANCE_BEAR, STANCE_DIRE_BEAR] {
             assert_eq!(ranged_attack_power_for(CLASS_DRUID, stance, 130, 60), 0);
         }
         assert_eq!(ranged_attack_power_for(CLASS_DRUID, 0, 130, 60), 120);
-        assert_eq!(
-            ranged_attack_power_for(CLASS_WARRIOR, STANCE_BERSERKER, 130, 60),
-            180
-        );
+        assert_eq!(ranged_attack_power_for(CLASS_WARRIOR, 0, 130, 60), 180);
     }
 
     #[test]

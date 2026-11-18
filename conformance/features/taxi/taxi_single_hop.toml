@@ -129,3 +129,9 @@ description = "The b38526fa imported-world audit exposes passenger_update_delive
 path = "module/src/native/world.rs"
 symbol = "enter_character"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/CharacterHandler.cpp"
+
+[[known_gaps]]
+description = "Fixture gap: the taxi fixture installs no warrior Form rows, so the warrior enters the world with no stance and its UNIT_FIELD_BYTES_1 form byte is 0 instead of Battle Stance's 17. Before #1046 the Module wrote byte 17 for every rage class; world entry now takes the stance from Form data, as an imported Realm has it. Installing the Forms with debug_seed_warrior_forms would instead add the Battle Stance Aura VALUES packet that the separate CREATE gap in character_visibility records. A fixture author should add the Forms once Auras travel in CREATE."
+path = "module/tests/conformance/tier1.rs"
+symbol = "seed_taxi_world"
+evidence = "Tier 1 taxi_single_hop__late_observer and __reconnect at harness 004d8d74 on this change: actor/flight field_138 expects 1175040 (form byte 17) and receives 60928 (form byte 0); the late observer's viewer receives the same. At d9173eca, Player.cpp Player::_LoadAuras casts Battle Stance 2457 on a warrior without a shapeshift Aura, and SpellAuras.cpp Aura::HandleAuraModShapeshift sets the form byte."

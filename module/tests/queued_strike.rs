@@ -25,7 +25,8 @@ const RAPTOR_STRIKE_COOLDOWN_MS: u32 = 6000;
 const BATTLE_SHOUT_COST: u32 = 100;
 const MAUL: u32 = 6807;
 const MAUL_COST: u32 = 150;
-const BEAR_FORMS: u8 = (1 << STANCE_BEAR) | (1 << STANCE_DIRE_BEAR);
+// Spell.dbc Stances bits for Bear Form (5) and Dire Bear Form (8).
+const BEAR_FORMS: u32 = (1 << 4) | (1 << 7);
 const BEAR_FORM: u32 = 5487;
 const DIRE_BEAR_FORM: u32 = 9634;
 const NO_POWER: &str = "1";
@@ -236,7 +237,7 @@ fn leaving_bear_form_interrupts_a_queued_maul() {
     stage_on_next_swing_spell(
         &standalone,
         QueuedStrike {
-            stances: BEAR_FORMS,
+            form_mask: BEAR_FORMS,
             ..QueuedStrike::rage(MAUL, "Maul", MAUL_COST)
         },
     );
@@ -662,7 +663,7 @@ struct QueuedStrike {
     power_type: u32,
     cost: u32,
     cooldown_ms: u32,
-    stances: u8,
+    form_mask: u32,
 }
 
 impl QueuedStrike {
@@ -673,7 +674,7 @@ impl QueuedStrike {
             power_type: RAGE,
             cost,
             cooldown_ms: 0,
-            stances: 0,
+            form_mask: 0,
         }
     }
 }
@@ -685,7 +686,7 @@ fn stage_on_next_swing_spell(standalone: &Standalone, strike: QueuedStrike) {
         power_type,
         cost,
         cooldown_ms,
-        stances,
+        form_mask,
     } = strike;
     standalone.insert_row(
         "game_spell",
@@ -697,7 +698,7 @@ fn stage_on_next_swing_spell(standalone: &Standalone, strike: QueuedStrike) {
             ("cooldown_ms", &cooldown_ms),
             ("range_yd", &5),
             ("school_mask", &1),
-            ("stances", &stances),
+            ("form_mask", &form_mask),
         ],
     );
     standalone.insert_row(

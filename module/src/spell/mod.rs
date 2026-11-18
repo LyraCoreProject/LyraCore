@@ -79,11 +79,8 @@ pub use scheduler::{fire_spell_impact, tick_auras, tick_ground_areas};
 pub(crate) use self_resurrect::{
     clear_resurrect_request_and_option, do_self_resurrect, record_self_resurrect_option,
 };
-#[cfg(test)]
-pub(crate) use stance::stance_damage_taken_pct;
 pub(crate) use stance::{
-    client_form_for_stance, damage_taken_bonus, form_recast_toggles_off, stance_allows,
-    stance_damage_done_pct, stance_switch_clears_power, stance_threat_pct,
+    client_form_for_stance, form_recast_toggles_off, stance_switch_clears_power,
 };
 
 pub(crate) use spellbook::{
@@ -93,6 +90,7 @@ pub(crate) use spellbook::{
 
 pub(crate) use tables::{
     auras_on, break_stealth, is_stealthed, remove_seal_auras, shed_auras, AuraProjections,
+    FormRefusal, ShapeshiftState,
 };
 pub use tables::{
     CAST_FAIL_INTERRUPTED, CAST_FAIL_NO_POWER, CAST_MISS_DODGE, CAST_MISS_MISS, CAST_MISS_NONE,
@@ -123,8 +121,7 @@ pub(crate) use lyracore_shared::spell::taxonomy::{
 };
 #[cfg(test)]
 pub(crate) use lyracore_shared::spell::taxonomy::{
-    A_MOD_STAT, STANCE_BATTLE, STANCE_BERSERKER, STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR,
-    T_SCRIPTED,
+    A_MOD_STAT, STANCE_CAT, STANCE_DIRE_BEAR, T_SCRIPTED,
 };
 pub(crate) use tables::SpellCastEventKind;
 pub(crate) use taxonomy::{DISARM_SWING_RETAINED_PCT, PROJECTILE_SPEED_YPS};

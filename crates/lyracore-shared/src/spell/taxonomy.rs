@@ -109,6 +109,10 @@ effect_kinds! {
     A_MOD_SCHOOL_CRIT => AuraModSchoolCrit = 0xD2,
     A_MOD_DAMAGE_DONE_PCT => AuraModDamageDonePct = 0xD3,
     A_MOD_HEALING_TAKEN => AuraModHealingTaken = 0xD4,
+    // p0 is the Form id; the Aura row is the unit's only Form state.
+    A_SHAPESHIFT => AuraShapeshift = 0xD5,
+    // p0 is the power type; the amount is what a power rule that caps on Form entry keeps.
+    A_FORM_POWER_RETAINED => AuraFormPowerRetained = 0xD6,
     E_SUMMON_GUARDIANS => SummonGuardians = 0x27,
     E_ADD_EXTRA_ATTACKS => AddExtraAttacks = 0x28,
     // Effect points are the duration in seconds; p0 is the enchantment id.
@@ -164,6 +168,7 @@ pub const P_FLAT_MANA: u8 = 16;
 // Source combat percentages convert to basis points after rolling the effect amount.
 pub const P_COMBAT_PERCENT: u8 = 17;
 pub const P_SKILL_LINE: u8 = 18;
+pub const P_FORM: u8 = 19;
 pub const P_RAW: u8 = 255;
 pub const T_SELF: u8 = 0;
 pub const T_TARGET_ENEMY: u8 = 1;
@@ -192,9 +197,6 @@ pub const SPEED_MOUNTED: u8 = 3;
 pub const SPEED_SWIM: u8 = 4;
 pub const SPEED_MOVE_ALWAYS: u8 = 5;
 pub const SPEED_MOVE_NOT_STACK: u8 = 6;
-pub const STANCE_BATTLE: u8 = 0;
-pub const STANCE_DEFENSIVE: u8 = 1;
-pub const STANCE_BERSERKER: u8 = 2;
 pub const STANCE_BEAR: u8 = 3;
 pub const STANCE_CAT: u8 = 4;
 pub const STANCE_DIRE_BEAR: u8 = 5;
@@ -219,6 +221,8 @@ pub const CAST_FLAG_ITEM_TARGET: u32 = 0x0002_0000;
 pub const CAST_FLAG_RIGHTEOUSNESS: u32 = 0x0004_0000;
 // vmangos refuses this spell when its caster selects itself as the unit target.
 pub const CAST_FLAG_REFUSES_SELF_CAST: u32 = 0x0008_0000;
+// vmangos HandleCancelAuraOpcode refuses an Aura its client shows no icon for.
+pub const CAST_FLAG_NO_AURA_CANCEL: u32 = 0x0010_0000;
 
 #[cfg(test)]
 mod tests {
@@ -261,6 +265,8 @@ mod tests {
         assert_eq!(A_MOD_SCHOOL_CRIT, 0xD2);
         assert_eq!(A_MOD_DAMAGE_DONE_PCT, 0xD3);
         assert_eq!(A_MOD_HEALING_TAKEN, 0xD4);
+        assert_eq!(A_SHAPESHIFT, 0xD5);
+        assert_eq!(A_FORM_POWER_RETAINED, 0xD6);
         for k in [
             E_DAMAGE, E_HEAL, E_ENERGIZE, E_DISPEL, E_TRIGGER, E_SCRIPTED,
         ] {

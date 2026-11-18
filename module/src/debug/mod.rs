@@ -3,6 +3,7 @@ mod auth;
 mod encounter;
 mod eventai;
 pub(crate) mod fingerprint;
+mod forms;
 mod instance;
 mod mail;
 mod meeting_stone;
@@ -257,6 +258,7 @@ pub fn debug_spawn_player_entity(ctx: &ReducerContext, character_guid: u64) -> R
     let (level, max_health) = (entity.level, entity.max_health);
     entity.insert(ctx);
     crate::mount::restore_mount_on_rebuild(ctx, character_guid);
+    crate::form::project_form(ctx, character_guid);
     log::info!(
         "debug_spawn_player_entity: materialized player guid {character_guid} (lvl {level}, hp {max_health})"
     );
@@ -1655,6 +1657,21 @@ pub fn debug_set_money(
         e.money = copper;
         e.update(ctx);
     }
+    Ok(())
+}
+
+/// Removes a spell's Auras from a unit the way any removal path does, refreshing what they derive.
+#[reducer]
+pub fn debug_shed_spell_auras(
+    ctx: &ReducerContext,
+    guid: u64,
+    spell_id: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let auras = crate::spell::auras_on(ctx, guid)
+        .filter(|aura| aura.spell_id == spell_id)
+        .collect();
+    crate::spell::shed_auras(ctx, auras);
     Ok(())
 }
 

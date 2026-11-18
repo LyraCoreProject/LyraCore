@@ -134,6 +134,7 @@ fn reconcile_item(ctx: &ReducerContext, guid: u64, changed_item: Option<u64>, re
     let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
         return;
     };
+    let form = crate::form::shapeshift_state(ctx, &entity);
     let mut desired = std::collections::BTreeMap::new();
     let items: Vec<_> = if let Some(item) = changed_item {
         ctx.db
@@ -161,7 +162,7 @@ fn reconcile_item(ctx: &ReducerContext, guid: u64, changed_item: Option<u64>, re
             if spell != 0 && trigger == 1 {
                 if let Some(header) = ctx.db.game_spell().spell_id().find(spell) {
                     if (!entity.dead || header.equip_passive())
-                        && header.allows_equip_form(entity.form())
+                        && header.form_refusal(form).is_none()
                     {
                         desired.insert((item.guid, spell), header);
                     }

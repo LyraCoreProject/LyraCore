@@ -551,6 +551,7 @@ pub(crate) fn apply_player_login(
         entity.unit_bytes_1 = unit_bytes_1;
     }
     crate::away::at_world_entry(ctx, &mut entity, entry);
+    crate::form::stamp_entering_form(ctx, &mut entity);
     entity.insert(ctx);
     crate::ghost::restore(ctx, character_guid);
     crate::spell::recompute_display(ctx, character_guid);
@@ -558,6 +559,7 @@ pub(crate) fn apply_player_login(
         crate::taxi::arm_taxi_flight(ctx, character_guid);
     }
     crate::mount::restore_mount_on_rebuild(ctx, character_guid);
+    crate::form::enter_world(ctx, character_guid);
 
     crate::items::grant_starter_item(ctx, character.guid, owner)?;
     let skill_start = crate::skill::SkillStart::at_login(character.first_login);

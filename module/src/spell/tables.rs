@@ -3,6 +3,7 @@ use spacetimedb::{table, Identity, ReducerContext, ScheduleAt, Table, Timestamp}
 use super::CastRequest;
 use super::{fire_pending_cast, fire_spell_impact, tick_auras, tick_ground_areas};
 use crate::WorldEntity;
+use lyracore_shared::form::FormSet;
 
 const SPELL_ATTR_DO_NOT_DISPLAY: u32 = 0x80;
 const SPELL_ATTR_NOT_SHAPESHIFT: u32 = 0x10000;
@@ -33,7 +34,7 @@ pub struct Spell {
     // Internal cast flags use a separate mask because Spell.dbc Attributes bits are occupied.
     #[default(0)]
     pub cast_flags: u32,
-    // Internal stance bits are Battle=1, Defensive=2, Berserker=4; zero permits every stance.
+    // Unread; form_mask and form_exclude carry the Forms a spell requires or excludes.
     #[default(0)]
     pub stances: u8,
     #[default(0)]
@@ -142,29 +143,57 @@ impl Spell {
             || (self.attributes == SPELL_ATTR_DO_NOT_DISPLAY && self.duration_index == 21)
     }
 
-    pub(crate) fn allows_equip_form(&self, form: u32) -> bool {
-        let mask = form
-            .checked_sub(1)
-            .and_then(|shift| 1u32.checked_shl(shift))
-            .unwrap_or(0);
-        if self.form_exclude & mask != 0 {
-            return false;
+    pub(crate) fn required_forms(&self) -> FormSet {
+        FormSet::from_dbc_mask(self.form_mask)
+    }
+
+    /// vmangos `SpellEntry::GetErrorAtShapeshiftedCast`, without its talent-learning exception.
+    pub(crate) fn form_refusal(&self, form: Option<ShapeshiftState>) -> Option<FormRefusal> {
+        let required = self.required_forms();
+        if let Some(form) = form {
+            if FormSet::from_dbc_mask(self.form_exclude).contains(form.form_id) {
+                return Some(FormRefusal::NotShapeshift);
+            }
+            if required.contains(form.form_id) {
+                return None;
+            }
         }
-        if self.form_mask & mask != 0 {
-            return true;
-        }
-        if form > 32 {
-            return true;
-        }
-        // Build-5875 SpellShapeshiftForm marks these forms as stances.
-        let shifted = form != 0 && !matches!(form, 17..=19 | 28 | 30 | 31);
-        if shifted {
-            self.attributes & SPELL_ATTR_NOT_SHAPESHIFT == 0 && self.form_mask == 0
+        if form.is_some_and(|form| form.acts_as_shapeshifted) {
+            if self.attributes & SPELL_ATTR_NOT_SHAPESHIFT != 0 {
+                Some(FormRefusal::NotShapeshift)
+            } else if !required.is_empty() {
+                Some(FormRefusal::OnlyShapeshift)
+            } else {
+                None
+            }
+        } else if !required.is_empty()
+            && self.attributes_ex_2 & SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED == 0
+        {
+            Some(FormRefusal::OnlyShapeshift)
         } else {
-            self.form_mask == 0
-                || self.attributes_ex_2 & SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED != 0
+            None
         }
     }
+
+    /// vmangos `SpellEntry::IsRemovedOnShapeLostSpell`.
+    pub(crate) fn removed_on_shape_lost(&self) -> bool {
+        !self.required_forms().is_empty()
+            && self.attributes_ex_2 & SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED == 0
+            && self.attributes & SPELL_ATTR_NOT_SHAPESHIFT == 0
+    }
+}
+
+/// The Form a unit is in, as the cast and equip Gates read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ShapeshiftState {
+    pub(crate) form_id: u32,
+    pub(crate) acts_as_shapeshifted: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FormRefusal {
+    NotShapeshift,
+    OnlyShapeshift,
 }
 
 #[table(
@@ -471,6 +500,7 @@ pub(crate) struct AuraProjections {
     sheet: bool,
     mount: bool,
     display: bool,
+    form: bool,
 }
 
 impl AuraProjections {
@@ -480,6 +510,7 @@ impl AuraProjections {
             sheet: crate::modifiers::moves_sheet(spell_id, kind, parameter),
             mount: crate::mount::mount_aura_moves_mount(kind, parameter),
             display: kind == lyracore_shared::spell::taxonomy::A_TRANSFORM,
+            form: kind == lyracore_shared::spell::taxonomy::A_SHAPESHIFT,
         }
     }
 
@@ -489,6 +520,7 @@ impl AuraProjections {
             sheet: self.sheet || other.sheet,
             mount: self.mount || other.mount,
             display: self.display || other.display,
+            form: self.form || other.form,
         }
     }
 
@@ -504,6 +536,9 @@ impl AuraProjections {
         }
         if self.display {
             super::recompute_display(ctx, unit_guid);
+        }
+        if self.form {
+            crate::form::project_form(ctx, unit_guid);
         }
     }
 }

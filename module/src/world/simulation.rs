@@ -63,7 +63,7 @@ impl WorldEntity {
             if entity.is_player() {
                 crate::combat::activate_character_regeneration(ctx, &old, &entity);
             }
-            if entity.is_player() && (old.dead != entity.dead || old.form() != entity.form()) {
+            if entity.is_player() && old.dead != entity.dead {
                 crate::items::equip::reconcile(ctx, entity.guid);
             }
             if entity.is_player() && (old.level != entity.level || old.zone_id != entity.zone_id) {

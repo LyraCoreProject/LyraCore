@@ -60,6 +60,7 @@ pub(crate) enum CastRefusalReason {
     NoLineOfSight,
     NoAmmo,
     WrongStance,
+    NotShapeshift,
     NotBehind,
     NotStealthed,
     NoComboPoints,

@@ -1637,7 +1637,7 @@ mod tests {
             money: 100,
             mount_display_id: 0,
             movement_flags: 0,
-            stance: crate::spell::STANCE_BATTLE,
+            stance: 0,
             stand_state: 0,
             unit_flags: 0,
         };
@@ -1666,7 +1666,7 @@ mod tests {
             money: 24,
             mount_display_id: 0,
             movement_flags: 0,
-            stance: crate::spell::STANCE_DEFENSIVE,
+            stance: 0,
             stand_state: 0,
             unit_flags: 0,
         };

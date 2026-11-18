@@ -60,11 +60,6 @@ pub(crate) fn build_player_entity(
         next_level_xp: character.next_level_xp,
         money: character.money,
         bank_bag_slots: character.bank_bag_slots,
-        unit_bytes_1: if power_type == packing::power_type::RAGE {
-            17u32 << 16
-        } else {
-            0
-        },
         // Retain reclaim escalation across relog so repeated deaths cannot reset the delay.
         death_expire_micros: character.death_expire_micros,
         run_speed_mult_bp: character.pending_run_speed_mult_bp,

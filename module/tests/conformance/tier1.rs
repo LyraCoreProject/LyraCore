@@ -310,6 +310,8 @@ fn seed_visibility_world(
         );
     }
 
+    // The reference warriors enter the world in Battle Stance, which needs the stance Forms.
+    shard.assert_call("debug_seed_warrior_forms", &[]);
     shard.assert_sql(super::taxi_route::stormwind_area_statement());
     shard.assert_call(
         "import_terrain_chunks",

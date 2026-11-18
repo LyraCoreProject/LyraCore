@@ -22,7 +22,7 @@ pub use ids::{
     is_package_creature_ai_id, is_package_creature_id, is_package_gameobject_id,
     is_package_globals_id, is_package_gossip_id, is_package_item_id, is_package_loot_id,
     is_package_quest_id, is_package_script_id, is_package_spell_id, is_package_spellmeta_id,
-    is_package_trainer_id, packed_class_level_id, packed_creature_spawn_guid,
+    is_package_trainer_id, packed_class_level_id, packed_creature_spawn_guid, packed_form_spell_id,
     packed_gameobject_spawn_guid, packed_quest_objective_id, packed_quest_reward_choice_id,
     packed_quest_reward_item_id, packed_race_class_id, packed_race_class_level_id,
     packed_spell_effect_id, MAX_CREATURE_GUID_COMPONENT, OPERATOR_SPAWN_ID_CEIL,

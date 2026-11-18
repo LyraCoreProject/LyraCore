@@ -382,6 +382,31 @@ Hunter pets keep a durable identity in `game_hunter_pet`. A materialized pet is 
 care state. Taming retires the wild entity and arms its authored `game_creature_spawn` for a later
 respawn, so the spawn point never moves into the pet identity.
 
+### Forms (`module/src/form.rs`)
+
+A Form is data composed from building blocks the Module defines in Rust. `game_form` holds one row
+per Form, keyed by its own `form_id`, and `game_form_spell` holds the passive spells the Form grants.
+The `spell` import writes them; `debug_seed_warrior_forms` writes the same warrior stances for tests.
+A new Form needs rows, not Rust.
+
+- **Power rule.** `power_type` names the pool the rule applies to and `power_on_entry` is a
+  `lyracore_shared::form::PowerOnEntry` code: keep, zero, or keep up to the unit's
+  `A_FORM_POWER_RETAINED` amount (Tactical Mastery for the warrior stances).
+- **Lifecycle.** `default_for_class` puts a unit of that class with no Form into the Form at world
+  entry, through the Aura of `spell_id`. An Aura survives death by its spell's attributes, the
+  same rule as every other Aura.
+- **Spell rules.** `acts_as_shapeshifted` decides whether spells treat the unit as shifted.
+- **1.12 client presentation.** `client_form` is the form byte the 1.12 client reads from
+  `UNIT_FIELD_BYTES_1`. It is a projection, never the Form's identity, so a Form a client does not
+  know can name a byte it does.
+
+A unit's only Form state is its one `A_SHAPESHIFT` Aura, whose `eff_p0` is the `form_id`.
+`form::project_form` derives the client form byte, applies the power rule on entry, and reconciles
+the Form's passives and the equipment that depends on the Form. Every shapeshift Aura change, world
+entry and publish repair run it. `WorldEntity.stance` stays a column for druid forms until they
+become Forms. The Forms a spell requires or excludes are a `FormSet` of Form ids, imported from the
+client's 32-bit `form_mask` and `form_exclude`; `game_spell.stances` is no longer read.
+
 ### `game_character` (`module/src/character.rs`)
 
 Public. It exists whether or not the Character is online, so an offline Character costs no live

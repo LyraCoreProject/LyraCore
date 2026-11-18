@@ -247,6 +247,7 @@ pub(crate) fn run(input: &str, dbc: &str) -> Result<()> {
     let dir = Path::new(dbc);
     let tables = SpellTables {
         spells: vec![],
+        shapeshift_forms: Vec::new(),
         cast_times: table(dir)?,
         ranges: table(dir)?,
         durations: table(dir)?,
@@ -314,6 +315,7 @@ mod tests {
         row.insert("effectItemType2".into(), "0".into());
         let tables = SpellTables {
             spells: vec![],
+            shapeshift_forms: Vec::new(),
             cast_times: SpellCastTimes {
                 rows: vec![SpellCastTimesRow {
                     id: SpellCastTimesKey::new(1),

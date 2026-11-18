@@ -163,6 +163,7 @@ mod debug;
 mod duel;
 mod encounter;
 mod faction;
+mod form;
 mod gameobject;
 mod gc;
 mod geometry;
