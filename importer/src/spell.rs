@@ -822,11 +822,7 @@ fn push_spell_header_row(
     };
     let aura_interrupt = aura_interrupt_bits(s.aura_interrupt_flags);
     let attributes = s.attributes;
-    let gcd_ms: u32 = if (attributes & 0x40) != 0 || (attributes & 0x4) != 0 {
-        0
-    } else {
-        1500
-    };
+    let gcd_ms = s.start_recovery_time;
     let channeled = is_channeled(s.attributes_ex1, overrides);
     if excludes_eventai_caster(s.attributes_ex1) {
         eventai_metadata_rows.push(AiMetadataRow {
@@ -1956,6 +1952,7 @@ mod tests {
             (114, 6.5f32.to_bits()),
             (119, 999),
             (120, 1),
+            (158, 1000),
             (160, 3),
             (161, 0x8000_0001),
             (162, 0x1234_5678),
@@ -2261,13 +2258,14 @@ mod tests {
     fn vmangos_finishers_keep_combo_scaling_and_source_flags_in_sql() {
         let source = crate::vmangos_spell::fixture();
         let connection = source.fixture_connection();
-        connection.execute_batch("UPDATE spell_template SET school=0, attributesEx=1049088, spellFamilyName=8, effect2=0, effectPointsPerComboPoint1=5, customFlags=1024, minTargetLevel=7, effectBonusCoefficient1=0.5 WHERE build=5875").unwrap();
+        connection.execute_batch("UPDATE spell_template SET school=0, attributesEx=1049088, spellFamilyName=8, effect2=0, effectPointsPerComboPoint1=5, customFlags=1024, minTargetLevel=7, effectBonusCoefficient1=0.5, startRecoveryTime=1000 WHERE build=5875").unwrap();
         let mut tables = fixture_tables();
         tables.spells = crate::vmangos_spell::read(&source).unwrap().0;
         tables.durations = authored_table(4, &[&[1, 6000, 0, 21000]]);
         let (rows, _, _) = derive_spell_rows(&tables, &[], &[]).unwrap();
         let header = &rows.headers[0];
         assert_ne!(header.cast_flags & CAST_FLAG_COMBO_FINISHER, 0);
+        assert_eq!(header.gcd_ms, 1000);
         assert_eq!((header.duration_ms, header.max_duration_ms), (6000, 21000));
         let header_sql = header.sql_values();
         let values: Vec<_> = header_sql.trim_matches(['(', ')']).split(',').collect();
@@ -2826,7 +2824,7 @@ mod tests {
         );
         assert_eq!(
             (header.attributes, header.gcd_ms, header.form_mask),
-            (64, 0, 1 << 16)
+            (64, 1000, 1 << 16)
         );
         assert_eq!(
             header.cast_flags,
@@ -4007,6 +4005,36 @@ mod tests {
         dbc.spells[0].implicit_target_a[0] = 17;
         let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
         assert_eq!(rows.effects[0].kind, E_SCRIPTED);
+    }
+
+    #[test]
+    fn global_cooldown_is_the_spells_start_recovery_time() {
+        let mut dbc = fixture_tables();
+        let spell = |id, attributes, start_recovery_time| Spell {
+            id,
+            attributes,
+            start_recovery_time,
+            effect: [6, 0, 0],
+            ..Default::default()
+        };
+        dbc.spells = vec![
+            spell(2457, 0x0902_0010, 0),
+            spell(1752, 0x0004_ff10, 1000),
+            spell(1459, 0x0001_0000, 1500),
+            spell(27986, 0x40, 1500),
+        ];
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let gcd_ms = |id| {
+            rows.headers
+                .iter()
+                .find(|header| header.spell_id == id)
+                .unwrap()
+                .gcd_ms
+        };
+        assert_eq!(
+            [gcd_ms(2457), gcd_ms(1752), gcd_ms(1459), gcd_ms(27986)],
+            [0, 1000, 1500, 1500]
+        );
     }
 
     #[test]

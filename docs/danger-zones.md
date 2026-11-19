@@ -410,6 +410,15 @@ Before play resumes:
 
 Offline warriors enter the world in Battle Stance unless they hold a stance Aura.
 
+### Global cooldown migration
+
+`game_spell.gcd_ms` now comes from the source `startRecoveryTime`, where an older import set 1500
+for every spell without the passive or ranged attribute bit. Until you reimport `spell` with
+`--dbc`, Battle, Defensive and Berserker Stance, and every other spell vmangos gives no global
+cooldown, start one for 1.5 seconds. Spells vmangos gives 1 second, such as the rogue Combo Point
+builders, keep 1.5 seconds. No schema change and no repair is needed; a reimport rewrites the rows.
+Reimport before play resumes after you publish this revision to an existing Shard.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each
