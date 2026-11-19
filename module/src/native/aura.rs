@@ -318,17 +318,7 @@ pub(crate) fn changed(ctx: &ReducerContext, previous: Option<&Aura>, current: Op
 
 pub(super) fn replay(ctx: &ReducerContext, connection: ConnectionId, guid: u64, own: bool) {
     let auras: Vec<_> = ctx.db.game_aura().by_target().filter(guid).collect();
-    let mut packets = Vec::new();
-    if auras.iter().any(|aura| aura.slot < 48) {
-        packets.push(sync(guid, &auras));
-    }
-    packets.extend(movement(
-        ctx,
-        guid,
-        &auras,
-        &auras.iter().collect::<Vec<_>>(),
-        own,
-    ));
+    let mut packets = movement(ctx, guid, &auras, &auras.iter().collect::<Vec<_>>(), own);
     if own {
         packets.extend(modifiers(&auras, &[]));
         packets.extend(auras.iter().filter_map(|aura| duration(ctx, aura)));

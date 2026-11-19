@@ -33,7 +33,7 @@ pub struct Spell {
     // Internal cast flags use a separate mask because Spell.dbc Attributes bits are occupied.
     #[default(0)]
     pub cast_flags: u32,
-    // Internal stance bits are Battle=1, Defensive=2, Berserker=4; zero permits every stance.
+    // Unread; game_spell_form holds the Forms a spell requires or excludes.
     #[default(0)]
     pub stances: u8,
     #[default(0)]
@@ -57,6 +57,7 @@ pub struct Spell {
     pub min_target_level: u32,
     #[default(0u64)]
     pub single_target_key: u64,
+    // The verbatim Spell.dbc Stances mask; write_dbc_form_set turns it into game_spell_form rows.
     #[default(0u32)]
     pub form_mask: u32,
     #[default(0u32)]
@@ -142,29 +143,174 @@ impl Spell {
             || (self.attributes == SPELL_ATTR_DO_NOT_DISPLAY && self.duration_index == 21)
     }
 
-    pub(crate) fn allows_equip_form(&self, form: u32) -> bool {
-        let mask = form
-            .checked_sub(1)
-            .and_then(|shift| 1u32.checked_shl(shift))
-            .unwrap_or(0);
-        if self.form_exclude & mask != 0 {
-            return false;
+    /// vmangos `SpellEntry::GetErrorAtShapeshiftedCast`, without its talent-learning exception.
+    pub(crate) fn form_refusal(
+        &self,
+        requirement: FormRequirement,
+        form: Option<ShapeshiftState>,
+    ) -> Option<FormRefusal> {
+        if requirement.excludes_this {
+            return Some(FormRefusal::NotShapeshift);
         }
-        if self.form_mask & mask != 0 {
-            return true;
+        if requirement.requires_this {
+            return None;
         }
-        if form > 32 {
-            return true;
-        }
-        // Build-5875 SpellShapeshiftForm marks these forms as stances.
-        let shifted = form != 0 && !matches!(form, 17..=19 | 28 | 30 | 31);
-        if shifted {
-            self.attributes & SPELL_ATTR_NOT_SHAPESHIFT == 0 && self.form_mask == 0
+        if form.is_some_and(|form| form.acts_as_shapeshifted) {
+            if self.attributes & SPELL_ATTR_NOT_SHAPESHIFT != 0 {
+                Some(FormRefusal::NotShapeshift)
+            } else if requirement.requires_any {
+                Some(FormRefusal::OnlyShapeshift)
+            } else {
+                None
+            }
+        } else if requirement.requires_any && !self.allowed_unshifted() {
+            Some(FormRefusal::OnlyShapeshift)
         } else {
-            self.form_mask == 0
-                || self.attributes_ex_2 & SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED != 0
+            None
         }
     }
+
+    /// vmangos `SpellEntry::IsRemovedOnShapeLostSpell`.
+    pub(crate) fn removed_on_shape_lost(&self, requirement: FormRequirement) -> bool {
+        requirement.requires_any
+            && !self.allowed_unshifted()
+            && self.attributes & SPELL_ATTR_NOT_SHAPESHIFT == 0
+    }
+
+    /// A passive that only the Forms of its Form Set bring.
+    pub(crate) fn binds_to_forms(&self, requirement: FormRequirement) -> bool {
+        self.attributes & (super::SPELL_ATTR_PASSIVE | SPELL_ATTR_DO_NOT_DISPLAY) != 0
+            && requirement.requires_any
+            && !self.allowed_unshifted()
+    }
+
+    /// vmangos `SpellEntry::IsNeedCastSpellAtFormApply`: a known passive the Form brings with it.
+    pub(crate) fn applies_on_form_entry(&self, requirement: FormRequirement) -> bool {
+        self.binds_to_forms(requirement) && requirement.requires_this
+    }
+
+    fn allowed_unshifted(&self) -> bool {
+        self.attributes_ex_2 & SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED != 0
+    }
+}
+
+/// The Form a unit is in, as the cast and equip Gates read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ShapeshiftState {
+    pub(crate) form_id: u32,
+    pub(crate) acts_as_shapeshifted: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum FormRefusal {
+    NotShapeshift,
+    OnlyShapeshift,
+}
+
+/// A Form a spell requires, or excludes when `excluded`. See docs/schema.md "Forms".
+#[table(
+    accessor = game_spell_form,
+    public,
+    index(accessor = by_spell, btree(columns = [spell_id]))
+)]
+pub struct SpellForm {
+    /// `lyracore_package_delta::packed_spell_form_id(spell_id, form_id)`.
+    #[primary_key]
+    pub id: u64,
+    pub spell_id: u32,
+    pub form_id: u32,
+    pub excluded: bool,
+}
+
+/// What a spell's Form Set says about one Form.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct FormRequirement {
+    pub(crate) requires_any: bool,
+    pub(crate) requires_this: bool,
+    pub(crate) excludes_this: bool,
+}
+
+impl FormRequirement {
+    pub(crate) fn of(ctx: &ReducerContext, spell_id: u32, form_id: Option<u32>) -> Self {
+        let mut requirement = Self::default();
+        for row in ctx.db.game_spell_form().by_spell().filter(spell_id) {
+            let this = Some(row.form_id) == form_id;
+            if row.excluded {
+                requirement.excludes_this |= this;
+            } else {
+                requirement.requires_any = true;
+                requirement.requires_this |= this;
+            }
+        }
+        requirement
+    }
+}
+
+// Spell.dbc `Stances` and `StancesNot` set bit `form_id - 1`; the mask only reaches Form 32.
+const DBC_MASK_FORMS: std::ops::RangeInclusive<u32> = 1..=32;
+
+/// Replaces the Forms 1-32 of a spell's Form Set with those its DBC masks name. A Form in both
+/// masks is excluded, our rule: vmangos reads the masks differently, and no 1.12 row sets both.
+/// Rows for higher Form ids stay.
+pub(crate) fn write_dbc_form_set(
+    ctx: &ReducerContext,
+    spell_id: u32,
+    required: u32,
+    excluded: u32,
+) {
+    let rows = ctx.db.game_spell_form();
+    let stale: Vec<u64> = rows
+        .by_spell()
+        .filter(spell_id)
+        .filter(|row| DBC_MASK_FORMS.contains(&row.form_id))
+        .map(|row| row.id)
+        .collect();
+    for id in stale {
+        rows.id().delete(id);
+    }
+    for form_id in DBC_MASK_FORMS {
+        let bit = 1u32 << (form_id - 1);
+        if (required | excluded) & bit != 0 {
+            rows.insert(SpellForm {
+                id: lyracore_package_delta::packed_spell_form_id(spell_id, form_id),
+                spell_id,
+                form_id,
+                excluded: excluded & bit != 0,
+            });
+        }
+    }
+}
+
+/// Removes every row of a deleted spell's Form Set.
+pub(crate) fn delete_form_set(ctx: &ReducerContext, spell_id: u32) {
+    let rows = ctx.db.game_spell_form();
+    let ids: Vec<u64> = rows.by_spell().filter(spell_id).map(|row| row.id).collect();
+    for id in ids {
+        rows.id().delete(id);
+    }
+}
+
+/// Publish repair: a spell whose DBC masks name Forms but which has no Form Set rows gets them.
+pub(crate) fn backfill_dbc_form_sets(ctx: &ReducerContext) -> u64 {
+    let pending: Vec<(u32, u32, u32)> = ctx
+        .db
+        .game_spell()
+        .iter()
+        .filter(|spell| spell.form_mask | spell.form_exclude != 0)
+        .filter(|spell| {
+            ctx.db
+                .game_spell_form()
+                .by_spell()
+                .filter(spell.spell_id)
+                .next()
+                .is_none()
+        })
+        .map(|spell| (spell.spell_id, spell.form_mask, spell.form_exclude))
+        .collect();
+    for &(spell_id, required, excluded) in &pending {
+        write_dbc_form_set(ctx, spell_id, required, excluded);
+    }
+    pending.len() as u64
 }
 
 #[table(
@@ -339,7 +485,7 @@ pub struct ItemAuraExpiry {
     pub scheduled_at: ScheduleAt,
 }
 
-crate::outside_table_catalog!(game_item_aura, game_item_aura_expiry);
+crate::outside_table_catalog!(game_item_aura, game_item_aura_expiry, game_spell_form);
 
 #[spacetimedb::reducer]
 pub(crate) fn expire_item_aura(ctx: &ReducerContext, expiry: ItemAuraExpiry) {
@@ -471,6 +617,7 @@ pub(crate) struct AuraProjections {
     sheet: bool,
     mount: bool,
     display: bool,
+    form: bool,
 }
 
 impl AuraProjections {
@@ -480,6 +627,7 @@ impl AuraProjections {
             sheet: crate::modifiers::moves_sheet(spell_id, kind, parameter),
             mount: crate::mount::mount_aura_moves_mount(kind, parameter),
             display: kind == lyracore_shared::spell::taxonomy::A_TRANSFORM,
+            form: kind == lyracore_shared::spell::taxonomy::A_SHAPESHIFT,
         }
     }
 
@@ -489,6 +637,7 @@ impl AuraProjections {
             sheet: self.sheet || other.sheet,
             mount: self.mount || other.mount,
             display: self.display || other.display,
+            form: self.form || other.form,
         }
     }
 
@@ -505,14 +654,27 @@ impl AuraProjections {
         if self.display {
             super::recompute_display(ctx, unit_guid);
         }
+        if self.form {
+            crate::form::project_form(ctx, unit_guid);
+        }
     }
 }
 
 /// Removes every Aura in `auras`, opens the diminishing-returns window of each control category
 /// that no longer holds the unit, and refreshes each touched unit's derived columns once.
 pub(crate) fn shed_auras(ctx: &ReducerContext, auras: Vec<Aura>) {
+    shed(ctx, auras, true);
+}
+
+/// As `shed_auras`, for a caller that projects the Form itself afterwards.
+pub(crate) fn shed_auras_before_projection(ctx: &ReducerContext, auras: Vec<Aura>) {
+    shed(ctx, auras, false);
+}
+
+fn shed(ctx: &ReducerContext, auras: Vec<Aura>, project_form: bool) {
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let mut touched = std::collections::BTreeMap::<u64, AuraProjections>::new();
+    let mut exited = Vec::new();
     for aura in auras {
         let Some(aura) = Aura::delete_row(ctx, aura.id) else {
             continue;
@@ -532,8 +694,15 @@ pub(crate) fn shed_auras(ctx: &ReducerContext, auras: Vec<Aura>) {
             aura.eff_kind,
             aura.eff_p0,
         ));
+        if aura.eff_kind == lyracore_shared::spell::taxonomy::A_SHAPESHIFT {
+            exited.push(aura);
+        }
     }
-    for (unit_guid, projections) in touched {
+    for aura in exited {
+        crate::form::exited(ctx, &aura);
+    }
+    for (unit_guid, mut projections) in touched {
+        projections.form &= project_form;
         projections.refresh(ctx, unit_guid);
     }
 }

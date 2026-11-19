@@ -61,6 +61,7 @@ def run(host):
         sequence = 0
         traffic_seconds = 0
         previous_hash = host.rows('SELECT program_hash FROM st_module')
+        last_line = 0
         for iteration in range(1, 21):
             # A WASM custom section changes the program hash without changing the Module definition.
             section = b'\x13native-reload-check' + bytes([iteration])
@@ -102,8 +103,13 @@ def run(host):
             assert state == [[iteration, 123456]], (iteration, state)
             assert sorted(host.rows(f'SELECT guid, entry, stack_count FROM game_item_instance WHERE owner_guid = {guid}')) == sorted(items)
             text = f'Reload {iteration}'.encode()
+            # Chat flood control mutes eleven lines under a second apart, so pace them past it.
+            time.sleep(max(0, last_line + 1.1 - time.monotonic()))
+            last_line = time.monotonic()
             client.send(0x95, struct.pack('<II', 0, 7) + text + b'\0')
-            assert any(opcode == 0x96 and text in body for opcode, body in client.collect())
+            received = client.collect()
+            assert any(opcode == 0x96 and text in body for opcode, body in received), (
+                iteration, [opcode for opcode, _ in received])
             assert any(opcode == 0x96 and text in body for opcode, body in peer.collect())
         try:
             host.publish(b'not wasm')

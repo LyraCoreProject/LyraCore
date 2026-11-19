@@ -3,6 +3,7 @@ mod auth;
 mod encounter;
 mod eventai;
 pub(crate) mod fingerprint;
+mod forms;
 mod instance;
 mod mail;
 mod meeting_stone;
@@ -1655,6 +1656,21 @@ pub fn debug_set_money(
         e.money = copper;
         e.update(ctx);
     }
+    Ok(())
+}
+
+/// Removes a spell's Auras from a unit the way any removal path does, refreshing what they derive.
+#[reducer]
+pub fn debug_shed_spell_auras(
+    ctx: &ReducerContext,
+    guid: u64,
+    spell_id: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let auras = crate::spell::auras_on(ctx, guid)
+        .filter(|aura| aura.spell_id == spell_id)
+        .collect();
+    crate::spell::shed_auras(ctx, auras);
     Ok(())
 }
 

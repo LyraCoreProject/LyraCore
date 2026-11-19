@@ -494,9 +494,10 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
         "UPDATE game_spell_effect SET p0 = 4, p0_kind = 0 WHERE spell_id = {FORM}"
     ));
     shard.assert_call("debug_learn_spell", &[&guid.to_string(), &FORM.to_string()]);
-    shard.assert_sql(&format!(
-        "UPDATE game_spell SET form_mask = 1 WHERE spell_id = {EQUIP}"
-    ));
+    shard.assert_call(
+        "debug_set_spell_form_masks",
+        &[&EQUIP.to_string(), "1", "0"],
+    );
     grant(&shard, guid, ITEM, 1, 23);
     equip(&mut connection, 23);
     assert_effect(&shard, guid, 0);
@@ -523,9 +524,10 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
     ));
     move_item(&mut connection, 11, 10);
     assert_effect(&shard, guid, 1);
-    shard.assert_sql(&format!(
-        "UPDATE game_spell SET form_exclude = 1 WHERE spell_id = {EQUIP}"
-    ));
+    shard.assert_call(
+        "debug_set_spell_form_masks",
+        &[&EQUIP.to_string(), "1", "1"],
+    );
     shard.assert_sql(&format!(
         "DELETE FROM game_spell_cooldown WHERE caster_guid = {guid}"
     ));
@@ -534,7 +536,13 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
         &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
     );
     assert_effect(&shard, guid, 0);
-    shard.assert_sql(&format!("UPDATE game_spell SET form_mask = 0, form_exclude = 0, attributes = 65600 WHERE spell_id = {EQUIP}"));
+    shard.assert_call(
+        "debug_set_spell_form_masks",
+        &[&EQUIP.to_string(), "0", "0"],
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET attributes = 65600 WHERE spell_id = {EQUIP}"
+    ));
     move_item(&mut connection, 10, 11);
     assert_effect(&shard, guid, 0);
     shard.assert_sql(&format!(

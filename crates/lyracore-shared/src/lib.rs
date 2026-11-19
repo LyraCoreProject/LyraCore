@@ -5,6 +5,7 @@ pub mod chat;
 pub mod constants;
 pub mod eventai;
 pub mod faction;
+pub mod form;
 pub mod gossip;
 pub mod group;
 pub mod guid;

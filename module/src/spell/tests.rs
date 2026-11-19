@@ -1,4 +1,5 @@
 use super::*;
+use crate::Spell;
 
 fn magic_miss_bp(caster_level: u32, target_level: u32) -> u32 {
     super::rolls::magic_miss_bp(caster_level, target_level, false, 0.0)
@@ -23,66 +24,136 @@ fn damage_taken_modifier_scales_and_clamps() {
     assert_eq!(apply_damage_pct(7, -75), 1);
 }
 
+fn spell_with(attributes: u32, attributes_ex_2: u32) -> Spell {
+    Spell {
+        attributes,
+        attributes_ex_2,
+        ..Spell::blank(1, "Fixture")
+    }
+}
+
+// The Form Set a DBC `Stances` and `StancesNot` pair imports as, seen from `form`.
+fn requirement(required: u32, excluded: u32, form: Option<u32>) -> FormRequirement {
+    let bit = |mask: u32| form.is_some_and(|form| mask & (1 << (form - 1)) != 0);
+    FormRequirement {
+        requires_any: required & !excluded != 0,
+        requires_this: bit(required) && !bit(excluded),
+        excludes_this: bit(excluded),
+    }
+}
+
+fn form_gated(
+    required: u32,
+    excluded: u32,
+    attributes: u32,
+    attributes_ex_2: u32,
+) -> impl Fn(Option<ShapeshiftState>) -> Option<FormRefusal> {
+    let spell = spell_with(attributes, attributes_ex_2);
+    move |form| {
+        spell.form_refusal(
+            requirement(required, excluded, form.map(|form| form.form_id)),
+            form,
+        )
+    }
+}
+
+fn in_form(form_id: u32, acts_as_shapeshifted: bool) -> Option<ShapeshiftState> {
+    Some(ShapeshiftState {
+        form_id,
+        acts_as_shapeshifted,
+    })
+}
+
 #[test]
-fn stance_allows_gate() {
-    assert!(stance_allows(0, STANCE_BATTLE));
-    assert!(stance_allows(0, STANCE_DEFENSIVE));
-    assert!(stance_allows(0, STANCE_BERSERKER));
-    assert!(stance_allows(0x01, STANCE_BATTLE));
-    assert!(!stance_allows(0x01, STANCE_DEFENSIVE));
-    assert!(!stance_allows(0x01, STANCE_BERSERKER));
-    assert!(stance_allows(0x03, STANCE_BATTLE));
-    assert!(stance_allows(0x03, STANCE_DEFENSIVE));
-    assert!(!stance_allows(0x03, STANCE_BERSERKER));
-    assert!(stance_allows(0x05, STANCE_BATTLE));
-    assert!(!stance_allows(0x05, STANCE_DEFENSIVE));
-    assert!(stance_allows(0x05, STANCE_BERSERKER));
-    assert!(!stance_allows(0x01, 9));
-    assert!(stance_allows(0x28, STANCE_BEAR));
-    assert!(stance_allows(0x28, STANCE_DIRE_BEAR));
-    assert!(!stance_allows(0x28, STANCE_CAT));
-    assert!(!stance_allows(0x28, STANCE_BATTLE));
-    assert!(stance_allows(0x10, STANCE_CAT));
-    assert!(!stance_allows(0x10, STANCE_BEAR));
-    assert!(!stance_allows(0x10, STANCE_BATTLE));
-    assert!(stance_allows(0, STANCE_BEAR));
+fn a_stance_ability_needs_one_of_its_forms() {
+    let charge = form_gated(0x0001_0000, 0, 0x0005_0010, 0);
+    assert_eq!(charge(in_form(17, false)), None);
+    assert_eq!(
+        charge(in_form(18, false)),
+        Some(FormRefusal::OnlyShapeshift)
+    );
+    assert_eq!(charge(None), Some(FormRefusal::OnlyShapeshift));
+    let excluded = form_gated(0, 0x0001_0000, 0, 0);
+    assert_eq!(
+        excluded(in_form(17, false)),
+        Some(FormRefusal::NotShapeshift)
+    );
+    assert_eq!(excluded(in_form(18, false)), None);
+}
+
+#[test]
+fn a_form_above_the_dbc_mask_can_gate_a_spell() {
+    let spell = spell_with(0, 0);
+    let in_form_40 = in_form(40, false);
+    let only_40 = FormRequirement {
+        requires_any: true,
+        requires_this: true,
+        excludes_this: false,
+    };
+    assert_eq!(spell.form_refusal(only_40, in_form_40), None);
+    assert_eq!(
+        spell.form_refusal(
+            FormRequirement {
+                requires_this: false,
+                ..only_40
+            },
+            in_form(17, false)
+        ),
+        Some(FormRefusal::OnlyShapeshift)
+    );
+}
+
+#[test]
+fn a_shapeshift_refuses_caster_spells_and_other_forms_abilities() {
+    let caster_only = form_gated(0, 0, 0x0001_0000, 0);
+    assert_eq!(
+        caster_only(in_form(5, true)),
+        Some(FormRefusal::NotShapeshift)
+    );
+    assert_eq!(caster_only(in_form(17, false)), None);
+    assert_eq!(caster_only(None), None);
+    let maul = form_gated(0x90, 0, 0, 0);
+    assert_eq!(maul(in_form(8, true)), None);
+    assert_eq!(maul(in_form(1, true)), Some(FormRefusal::OnlyShapeshift));
+    let unshifted_too = form_gated(0x1, 0, 0, 0x0008_0000);
+    assert_eq!(unshifted_too(None), None);
+    assert_eq!(unshifted_too(in_form(17, false)), None);
+    assert_eq!(
+        unshifted_too(in_form(5, true)),
+        Some(FormRefusal::OnlyShapeshift)
+    );
+}
+
+#[test]
+fn only_a_form_bound_spell_ends_with_its_form() {
+    let ends = |required, attributes, attributes_ex_2| {
+        spell_with(attributes, attributes_ex_2)
+            .removed_on_shape_lost(requirement(required, 0, None))
+    };
+    assert!(ends(0x0001_0000, 0x0004_0010, 0));
+    assert!(!ends(0x0001_0000, 0x0005_0010, 0));
+    assert!(!ends(0x1, 0, 0x0008_0000));
+    assert!(!ends(0, 0, 0));
+}
+
+#[test]
+fn a_known_passive_comes_with_the_forms_its_form_set_names() {
+    let defiance = spell_with(0x1D0, 0);
+    let in_defensive = requirement(0x0002_0000, 0, Some(18));
+    assert!(defiance.binds_to_forms(in_defensive));
+    assert!(defiance.applies_on_form_entry(in_defensive));
+    assert!(!defiance.applies_on_form_entry(requirement(0x0002_0000, 0, Some(17))));
+    assert!(!spell_with(0x10, 0).applies_on_form_entry(in_defensive));
+    assert!(!spell_with(0x1D0, 0x0008_0000).binds_to_forms(in_defensive));
+    assert!(!defiance.binds_to_forms(requirement(0, 0, Some(18))));
 }
 
 #[test]
 fn client_form_for_stance_matches_the_convention() {
-    assert_eq!(client_form_for_stance(STANCE_BATTLE), 17);
-    assert_eq!(client_form_for_stance(STANCE_DEFENSIVE), 18);
-    assert_eq!(client_form_for_stance(STANCE_BERSERKER), 19);
     assert_eq!(client_form_for_stance(STANCE_BEAR), 5);
     assert_eq!(client_form_for_stance(STANCE_CAT), 1);
     assert_eq!(client_form_for_stance(STANCE_DIRE_BEAR), 8);
-    assert_eq!(client_form_for_stance(6), 23);
-    assert_eq!(client_form_for_stance(7), 24);
-}
-
-#[test]
-fn stance_folds_only_defensive_contributes() {
-    assert_eq!(stance_damage_taken_pct(STANCE_BATTLE), 0);
-    assert_eq!(stance_damage_taken_pct(STANCE_DEFENSIVE), -10);
-    assert_eq!(stance_damage_taken_pct(STANCE_BERSERKER), 0);
-    assert_eq!(stance_damage_done_pct(STANCE_BATTLE), 0);
-    assert_eq!(stance_damage_done_pct(STANCE_DEFENSIVE), -10);
-    assert_eq!(stance_damage_done_pct(STANCE_BERSERKER), 0);
-    assert_eq!(stance_threat_pct(STANCE_BATTLE), 0);
-    assert_eq!(stance_threat_pct(STANCE_DEFENSIVE), 30);
-    assert_eq!(stance_threat_pct(STANCE_BERSERKER), 0);
-    assert_eq!(
-        apply_damage_pct(100, stance_damage_taken_pct(STANCE_DEFENSIVE)),
-        90
-    );
-    assert_eq!(
-        apply_damage_pct(100, stance_damage_done_pct(STANCE_DEFENSIVE)),
-        90
-    );
-    assert_eq!(
-        apply_damage_pct(100, stance_damage_taken_pct(STANCE_BATTLE)),
-        100
-    );
+    assert_eq!(client_form_for_stance(11), 28);
 }
 
 #[test]

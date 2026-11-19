@@ -511,6 +511,7 @@ pub(crate) fn aura_apply(
     };
     // Refreshing refills proc charges but preserves any running internal cooldown.
     let proc = crate::spell::proc::freeze_profile(ctx, e.kind, hdr);
+    let refreshing = existing.is_some();
     if let Some(mut a) = existing {
         a.stacks = next_stacks(a.stacks, hdr.max_stacks);
         a.expires_at = expires;
@@ -627,6 +628,14 @@ pub(crate) fn aura_apply(
             proc_ready_micros: 0,
         }
         .insert_from_item(ctx, source_item);
+    }
+    if e.kind == lyracore_shared::spell::taxonomy::A_SHAPESHIFT {
+        let form_id = e.p0.max(0) as u32;
+        if refreshing {
+            crate::form::refreshed(ctx, target_guid, hdr.spell_id, form_id);
+        } else {
+            crate::form::entered(ctx, target_guid, hdr.spell_id, form_id);
+        }
     }
 
     source_behavior::finish_aura_apply(ctx, hdr, e, caster_guid, target_guid);
@@ -878,6 +887,8 @@ pub(crate) fn apply_effect(
         | EffectKind::AuraSpellmodPct
         | EffectKind::AuraDisarm
         | EffectKind::AuraRetaliate
+        | EffectKind::AuraShapeshift
+        | EffectKind::AuraFormPowerRetained
         | EffectKind::AuraControl
         | EffectKind::AuraImmunity
         | EffectKind::AuraModDetectRange
@@ -1518,6 +1529,7 @@ fn apply_character_effect(
                     c.unit_bytes_1 = (c.unit_bytes_1 & 0xFF00_0000) | form_id;
                     let c = c.update(ctx);
                     crate::combat::queued_strike::interrupt_form_bound(ctx, &c);
+                    crate::items::equip::reconcile(ctx, caster_guid);
                     // vmangos Player::InitDataForForm updates attack power and damage.
                     crate::spell::recompute_sheet(ctx, caster_guid);
                 } else if form_recast_toggles_off(c.stance, new_stance) {
@@ -1526,6 +1538,7 @@ fn apply_character_effect(
                     c.unit_bytes_1 &= 0xFF00_0000;
                     let c = c.update(ctx);
                     crate::combat::queued_strike::interrupt_form_bound(ctx, &c);
+                    crate::items::equip::reconcile(ctx, caster_guid);
                     crate::spell::recompute_sheet(ctx, caster_guid);
                 }
             }

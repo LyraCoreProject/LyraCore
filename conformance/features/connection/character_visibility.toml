@@ -106,6 +106,16 @@ function = "an_aura_ppm_proc_scales_with_the_main_hand_weapons_delay"
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/forms.rs"
+function = "a_warrior_without_a_stance_enters_the_world_in_battle_stance"
+rung = "durable_module"
+
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/entity/tests.rs"
+function = "a_create_carries_the_auras_in_their_client_slots"
+rung = "unit"
+
+[[tests]]
 path = "module/src/native/health.rs"
 function = "hidden_health_truncates_to_a_percent_of_one_hundred"
 rung = "unit"
@@ -117,12 +127,6 @@ symbol = "WorldSession::HandlePlayerLoginOpcode"
 
 [real_client]
 status = "unverified"
-
-[[known_gaps]]
-description = "A warrior enters the world without the Battle Stance Aura in its peer CREATE. The Module keeps stances in WorldEntity.stance and applies no stance Aura, and it sends Auras in a VALUES update after CREATE instead of in the CREATE descriptor."
-path = "module/src/spell/cast/targeting.rs"
-symbol = "E_SET_STANCE"
-evidence = "Tier 1 two_character_visibility and __opposite_faction at harness 004d8d74: fields_47, _95 and _101 carry 2457, 9 and 1 in the reference and are absent in core, for both recipients. At d9173eca, Player.cpp Player::_LoadAuras casts SPELL_ID_PASSIVE_BATTLE_STANCE 2457 on a warrior without a shapeshift Aura, and Object::BuildValuesUpdate writes the Aura slots into CREATE."
 
 [[known_gaps]]
 description = "Character CREATE omits the model bounding radius and combat reach. vmangos takes both from creature_display_info_addon by display id; the importer keeps bounding radius only per creature template and drops combat reach."
@@ -140,7 +144,7 @@ evidence = "Tier 1 two_character_visibility__opposite_faction at harness 004d8d7
 description = "An enemy Character entering a hostile capital is not flagged for PvP and receives no Honorless Target Aura. The Module has no PvP flag; CMSG_TOGGLE_PVP is refused as unavailable."
 path = "module/src/native/unavailable.rs"
 symbol = "CMSG_TOGGLE_PVP"
-evidence = "Tier 1 two_character_visibility__opposite_faction at harness 004d8d74: the watcher sees the orc with field_46 4104 (PLAYER_CONTROLLED | PVP) in the reference and 8 in core, and with Honorless Target 2479 in field_48, flags 0x99 in field_95 and levels 0x0101 in field_101. At d9173eca, Player.cpp Player::UpdateZone calls UpdatePvP(true) for an enemy capital; the Honorless Target Aura comes from DELAYED_CAST_HONORLESS_TARGET, scheduled by a teleport."
+evidence = "Tier 1 two_character_visibility__opposite_faction at harness 004d8d74: the watcher sees the orc with field_46 4104 (PLAYER_CONTROLLED | PVP) in the reference and 8 in core, and with Honorless Target 2479 in field_48, flags 0x99 in field_95 and levels 0x0101 in field_101, where core has 0x09 and 0x01 from Battle Stance alone. At d9173eca, Player.cpp Player::UpdateZone calls UpdatePvP(true) for an enemy capital; the Honorless Target Aura comes from DELAYED_CAST_HONORLESS_TARGET, scheduled by a teleport."
 
 [[known_gaps]]
 description = "UNIT_FIELD_POWER4 differs because vmangos regenerates energy for every Character, so the reference value depends on time since the Character was saved. The data rule records it; no fixed value exists to match."
@@ -177,3 +181,9 @@ description = "Attack power ignores the percent multiplier. vmangos scales the c
 path = "module/src/combat/tables.rs"
 symbol = "total_attack_power"
 evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::GetTotalAttackPowerValue returns ap * (1.0f + UNIT_FIELD_ATTACK_POWER_MULTIPLIER) for client builds above 1.8.4, and ranged does the same with UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER; StatSystem.cpp Player::UpdateAttackPowerAndDamage writes both fields from AP_MOD_PCT."
+
+[[known_gaps]]
+description = "No unit sends Aura applications: UNIT_FIELD_AURAAPPLICATIONS stays 0 in CREATE and VALUES, so a peer sees no stack or charge count, for example on Sunder Armor x5 or a three-charge Lightning Shield."
+path = "crates/lyracore-protocol/src/codec/update_mask.rs"
+symbol = "write_auras"
+evidence = "Source reading, not measured. Review of PR 1047. At d9173eca, SpellAuras.cpp SpellAuraHolder::UpdateAuraApplication writes stacks times charges minus one into UNIT_FIELD_AURAAPPLICATIONS, which is a public update field; write_auras writes only UNIT_FIELD_AURA, AURAFLAGS and AURALEVELS, and full_aura_mask zeroes the applications fields."

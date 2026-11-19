@@ -77,17 +77,9 @@ pub(crate) fn add_threat(ctx: &ReducerContext, creature_guid: u64, source_guid: 
         log::warn!("add_threat: negative amount {amount} for creature {creature_guid} source {source_guid} (upstream bug?)");
         return;
     }
-    let source_stance = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(source_guid)
-        .map(|s| crate::spell::stance_threat_pct(s.stance))
-        .unwrap_or(0);
     let threat_mult = (100
         + crate::modifiers::combat_field_bonus(ctx, source_guid, crate::spell::COMBAT_THREAT)
-            as i64
-        + source_stance as i64)
+            as i64)
         .max(0);
     let amount = amount * threat_mult / 100;
     if amount > 0 {

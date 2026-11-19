@@ -23,7 +23,7 @@ entry in both files.
 
 **E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Equivalence Rule](#conformance) · [Escrow](#retired-terms) · [Event Binding](#packages) · [Extra Attack](#procs)
 
-**F** [Fake](CORE_TERMS.md#fake) · [Feature Ledger](#conformance) · [Fee Hold](#retired-terms) · [Fixed Rout](#creature-ai) · [Fixture Verb](#conformance) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Forced Death](#creature-ai) · [Fuel Budget](#runtime-scripts)
+**F** [Fake](CORE_TERMS.md#fake) · [Feature Ledger](#conformance) · [Fee Hold](#retired-terms) · [Fixed Rout](#creature-ai) · [Fixture Verb](#conformance) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Forced Death](#creature-ai) · [Form](#forms) · [Form Projection](#forms) · [Form Set](#forms) · [Fuel Budget](#runtime-scripts)
 
 **G** [GameObject Collider](#gameobject-collision) · [Gate](CORE_TERMS.md#gate) · [Gateway](#retired-terms) · [Gateway Verb](#retired-terms) · [Git Package Source](#packages) · [GM level](#accounts-characters-and-sessions) · [Golden Trace](#conformance) · [Group](#groups) · [Group Audience](#groups) · [Group Broadcast](#groups) · [Group Intent](#retired-terms) · [Guardian](#creature-ai) · [GUID Range](#accounts-characters-and-sessions) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
 
@@ -547,6 +547,25 @@ the effective run speed. Never a second state machine.
 **Dismount**:
 The one shared operation that removes the active Land Mount's aura rows and re-derives the Mount
 Projection. Idempotent, and a no-op for a rider who is not mounted.
+
+### Forms
+
+**Form**:
+A shapeshift state such as Battle Stance, held as the unit's one `A_SHAPESHIFT` Aura. Its
+`game_form` row composes the Module's building blocks: power rule, class default, spell rules and
+1.12 client presentation. Its id is its own, not the 1.12 client's form byte. A new Form needs data,
+not Rust.
+_Avoid_: stance (as a stored number), form byte (for the Form's id)
+
+**Form Projection**:
+The client form byte, the passive Auras a Form brings and Form-dependent equipment, re-derived from
+a unit's shapeshift Aura. The passives are the Form's own and every known passive whose Form Set
+requires a Form with a `game_form` row. Never a second state machine.
+
+**Form Set**:
+The Forms a spell requires or excludes, held as `game_spell_form` rows by Form id. The 1.12
+`Stances` and `StancesNot` masks are only how the importer reads it.
+_Avoid_: stance mask (for the set)
 
 ### Transports
 

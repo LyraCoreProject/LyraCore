@@ -463,8 +463,9 @@ pub(crate) fn interrupt_cast_and_lock(
     interrupted
 }
 
-pub(crate) fn aura_survives_death(attributes: u32) -> bool {
-    attributes & SPELL_ATTR_PASSIVE != 0
+// vmangos IsDeathPersistentSpell reads SPELL_ATTR_EX3_ALLOW_AURA_WHILE_DEAD, 0x0010_0000.
+pub(crate) fn aura_survives_death(spell: &crate::Spell) -> bool {
+    spell.attributes & SPELL_ATTR_PASSIVE != 0 || spell.attributes_ex_3 & 0x0010_0000 != 0
 }
 
 pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
@@ -474,10 +475,7 @@ pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
             !spells
                 .spell_id()
                 .find(a.spell_id)
-                .map(|s| {
-                    aura_survives_death(s.attributes)
-                        || (a.item_guid(ctx) != 0 && s.equip_passive())
-                })
+                .map(|s| aura_survives_death(&s) || (a.item_guid(ctx) != 0 && s.equip_passive()))
                 .unwrap_or(false)
         })
         .collect();
@@ -532,12 +530,21 @@ mod tests {
     }
 
     #[test]
-    fn death_sheds_every_aura_except_a_passive_one() {
-        assert!(aura_survives_death(SPELL_ATTR_PASSIVE));
-        assert!(aura_survives_death(SPELL_ATTR_PASSIVE | 0x4 | 0x10000));
+    fn death_sheds_every_aura_except_a_passive_or_death_persistent_one() {
+        let spell = |attributes, attributes_ex_3| crate::Spell {
+            attributes,
+            attributes_ex_3,
+            ..crate::Spell::blank(2457, "Battle Stance")
+        };
+        assert!(aura_survives_death(&spell(SPELL_ATTR_PASSIVE, 0)));
+        assert!(aura_survives_death(&spell(
+            SPELL_ATTR_PASSIVE | 0x4 | 0x10000,
+            0
+        )));
+        assert!(aura_survives_death(&spell(0x0905_0010, 0x0010_0000)));
 
-        assert!(!aura_survives_death(0));
-        assert!(!aura_survives_death(0x4));
-        assert!(!aura_survives_death(!SPELL_ATTR_PASSIVE));
+        assert!(!aura_survives_death(&spell(0, 0)));
+        assert!(!aura_survives_death(&spell(0x4, 0x0008_0000)));
+        assert!(!aura_survives_death(&spell(!SPELL_ATTR_PASSIVE, 0)));
     }
 }

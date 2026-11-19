@@ -68,6 +68,7 @@ pub fn operator_apply_spell_edits(
             .spell_id()
             .delete(id);
         ctx.db.game_spell().spell_id().delete(id);
+        crate::spell::write_dbc_form_set(ctx, id, edit.spell.form_mask, edit.spell.form_exclude);
         ctx.db.game_spell().insert(edit.spell);
         for row in edit.effects {
             ctx.db.game_spell_effect().insert(row);

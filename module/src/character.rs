@@ -588,6 +588,7 @@ pub(crate) fn apply_player_login(
         character.class,
         character.level,
     );
+    crate::form::project_form(ctx, character.guid);
 
     crate::spell::recompute_vitals(ctx, character.guid);
     crate::spell::recompute_sheet(ctx, character.guid);

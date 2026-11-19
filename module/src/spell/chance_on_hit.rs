@@ -299,7 +299,7 @@ fn enchant_chance_bp(ppm: f32, amount: i32, weapon_delay_ms: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lyracore_shared::spell::taxonomy::{STANCE_BATTLE, STANCE_BERSERKER, STANCE_CAT};
+    use lyracore_shared::spell::taxonomy::STANCE_CAT;
 
     const OFFHAND: u8 = crate::items::equip_slot::OFFHAND;
 
@@ -309,13 +309,13 @@ mod tests {
             assert!(!holds_weapon(stance, MAINHAND_SLOT, || false));
             assert!(!holds_weapon(stance, OFFHAND, || false));
         }
-        assert!(holds_weapon(STANCE_BERSERKER, MAINHAND_SLOT, || false));
+        assert!(holds_weapon(0, MAINHAND_SLOT, || false));
     }
 
     #[test]
     fn disarm_takes_only_the_main_hand() {
-        assert!(!holds_weapon(STANCE_BATTLE, MAINHAND_SLOT, || true));
-        assert!(holds_weapon(STANCE_BATTLE, OFFHAND, || true));
+        assert!(!holds_weapon(0, MAINHAND_SLOT, || true));
+        assert!(holds_weapon(0, OFFHAND, || true));
     }
 
     #[test]

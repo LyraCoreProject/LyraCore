@@ -292,7 +292,7 @@ fn sheet_min(shard: &crate::standalone_support::Standalone) -> u32 {
 #[test]
 #[ignore = "requires World Source, client DBCs, SpacetimeDB 2.14.0 and Wasm"]
 fn actual_spell_power_world_plan_curse_enrage_and_weapon_requirements_change_weapon_damage() {
-    let shard = imported_spells(&[702, 8599, 4334, 196, 201, 1680, 11708]);
+    let shard = imported_spells(&[702, 8599, 4334, 196, 201, 1680, 11708, 2458, 7381]);
     let wolf = (0xf130u64 << 48) | (51000u64 << 24) | 1;
     let ordinary = sheet_min(&shard);
     assert!(ordinary > 3);
@@ -321,10 +321,9 @@ fn actual_spell_power_world_plan_curse_enrage_and_weapon_requirements_change_wea
     shard.assert_sql(
         "INSERT INTO game_conformance_swing_random (character_guid,state) VALUES (1,1)",
     );
-    shard.assert_sql(&format!(
-        "UPDATE game_world_entity SET level = 36, stance = {}, power = 100000 WHERE guid = 1",
-        lyracore_shared::spell::taxonomy::STANCE_BERSERKER
-    ));
+    shard.assert_sql("UPDATE game_world_entity SET level = 36 WHERE guid = 1");
+    cast(&shard, 1, 2458, 1);
+    shard.assert_sql("UPDATE game_world_entity SET power = 100000 WHERE guid = 1");
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET level = 36, health = 100000 WHERE guid = {wolf}"
     ));

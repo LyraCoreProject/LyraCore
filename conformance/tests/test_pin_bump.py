@@ -162,6 +162,13 @@ class PinBumpTests(unittest.TestCase):
                             PIN_BUMP.publish(encoded, revision, root / "body.md", root / "output")
             self.assertEqual(baseline.read_text(), json.dumps(after, indent=2) + "\n")
 
+    def test_the_baseline_limit_fits_one_github_job_output_with_room_for_the_committed_one(self):
+        encoded = 4 * ((PIN_BUMP.MAX_BASELINE_BYTES + 2) // 3)
+        outputs = len("propose=true\nsha=" + "b" * 40 + "\nbaseline=\n") + encoded
+        self.assertLess(outputs, 1_000_000)
+        committed = (SCRIPT.parent / "tier1-baseline.json").stat().st_size
+        self.assertLess(committed, PIN_BUMP.MAX_BASELINE_BYTES)
+
     def test_proposal_exports_only_revision_and_bounded_baseline(self):
         scratch = SCRATCH
         scratch.mkdir(parents=True, exist_ok=True)

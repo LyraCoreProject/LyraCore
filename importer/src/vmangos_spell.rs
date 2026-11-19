@@ -47,6 +47,7 @@ fn source_spell(row: &Row) -> Result<Spell> {
     let spell = Spell {
         npc_guardian_entry: npc_guardian_entry(row)?,
         icon_id: icon,
+        active_icon_id: row.number("activeIconId")?,
         single_target_key: lyracore_shared::spell_custom::single_target_key(family, icon, category),
         custom_flags: row.number("customFlags")?,
         min_target_level: row.number("minTargetLevel")?,
@@ -183,6 +184,7 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
     let mut guardian_shapes = Vec::new();
     let columns = [
         "spellIconId",
+        "activeIconId",
         "baseLevel",
         "spellVisual1",
         "preventionType",
@@ -341,7 +343,7 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
 #[cfg(test)]
 pub(crate) fn fixture() -> crate::world_source::WorldSource {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
-    let mut columns = "customFlags minTargetLevel spellIconId baseLevel spellVisual1 preventionType school dispel mechanic attributes attributesEx attributesEx2 attributesEx3 attributesEx4 dmgClass stances stancesNot category targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime auraInterruptFlags procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    let mut columns = "customFlags minTargetLevel spellIconId activeIconId baseLevel spellVisual1 preventionType school dispel mechanic attributes attributesEx attributesEx2 attributesEx3 attributesEx4 dmgClass stances stancesNot category targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime auraInterruptFlags procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
     for prefix in [
         "effectBonusCoefficient",
         "effect",

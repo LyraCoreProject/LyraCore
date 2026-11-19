@@ -434,10 +434,14 @@ fn apply_talent_rank(
 ) {
     let rank_spell = talent_rank_spell(talent, rank);
     if rank_spell != 0 {
-        if ctx.db.game_spell().spell_id().find(rank_spell).is_some() {
+        if let Some(spell) = ctx.db.game_spell().spell_id().find(rank_spell) {
             crate::spell::learn_spell(ctx, guid, owner, rank_spell);
             let stack = if talent.tab_id != 0 { 1 } else { rank };
-            crate::spell::apply_spell_auras(ctx, rank_spell, guid, level, stack);
+            if crate::form::binds_to_forms(ctx, &spell) {
+                crate::form::project_form(ctx, guid);
+            } else {
+                crate::spell::apply_spell_auras(ctx, rank_spell, guid, level, stack);
+            }
             let previous_ranks: Vec<u32> = (1..rank)
                 .map(|prev_rank| talent_rank_spell(talent, prev_rank))
                 .filter(|&prev| prev != 0 && prev != rank_spell)

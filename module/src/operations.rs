@@ -8,6 +8,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::items::discard_legacy_buyback(ctx);
     crate::spell::repair_cast_auras(ctx);
+    let form_sets = crate::spell::backfill_dbc_form_sets(ctx);
     let guids: Vec<_> = ctx
         .db
         .game_world_entity()
@@ -18,6 +19,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         .collect();
     for guid in guids {
         if crate::helpers::acting_entity_by_guid(ctx, guid).is_some() {
+            crate::form::repair(ctx, guid);
             crate::items::equip::repair(ctx, guid);
             crate::spell::recompute_vitals(ctx, guid);
             crate::spell::recompute_sheet(ctx, guid);
@@ -35,7 +37,8 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     let mail_timers = crate::mail_timer::arm_missing(ctx);
     let proc_profiles = refreeze_proc_profiles(ctx);
 
-    let repaired = gm_levels
+    let repaired = form_sets
+        + gm_levels
         + lesser_heal_target
         + weather_climate
         + schedules
@@ -45,7 +48,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + proc_profiles;
     crate::import_meta::stamp(ctx, "debug_repair_after_publish", "", "", repaired);
     log::info!(
-        "debug_repair_after_publish: {gm_levels} GM level(s), {lesser_heal_target} Lesser Heal \
+        "debug_repair_after_publish: {form_sets} spell Form Set(s), {gm_levels} GM level(s), {lesser_heal_target} Lesser Heal \
          target(s), {weather_climate} weather row(s), {schedules} schedule(s), {auction_mail} \
          Auction mail, {auction_expiries} Auction expiry(ies), {mail_timers} Mail Timer(s), \
          {proc_profiles} Proc profile(s)"

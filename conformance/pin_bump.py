@@ -22,7 +22,9 @@ DEPENDENCY = re.compile(
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
 TAG_NAME = re.compile(r"v0\.2\.0-conformance\.[0-9]+")
-MAX_BASELINE_BYTES = 128 * 1024
+# The prepare job hands the baseline to publish as a base64 job output, and GitHub caps a job's
+# outputs at 1 MB. 512 KiB encodes to 699,052 bytes and leaves room for the other outputs.
+MAX_BASELINE_BYTES = 512 * 1024
 PROPOSAL_FILES = (".wire-harness-rev", "Cargo.toml", "Cargo.lock",
                   "conformance/tier1-baseline.json")
 

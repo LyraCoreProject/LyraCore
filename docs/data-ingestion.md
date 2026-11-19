@@ -67,7 +67,9 @@ and bounded examples. The command only reads local files.
 The `spell` vmangos family reads selected `spell_template` rows for spell headers, effects,
 reagents and creature spell metadata. It keeps the existing effect translation and synthetic
 markers. SpellCastTimes, SpellRange, SpellDuration and SpellRadius remain separate client tables.
-The Base Snapshot uses the same selected spell rows:
+The family also writes `game_form` and `game_form_spell` for the declared Forms in
+`importer/src/spell_form.rs`, from the client's SpellShapeshiftForm.dbc and the vmangos facts that
+file lists. The Base Snapshot uses the same selected spell rows:
 
 ```bash
 lyracore-importer --dump "$DUMP" --dbc "$CLIENT_DATA" \
@@ -503,6 +505,7 @@ An extra field restores alignment at the localized name, column 120.
 | Effects, die sides, base dice, dice scaling, level scaling, base points | 61..63, 64..66, 67..69, 70..72, 73..75, 76..78 |
 | Mechanics, target A, target B, radii, auras, amplitudes | 79..81, 82..84, 85..87, 88..90, 91..93, 94..96 |
 | Multipliers, chain targets, item references, miscellaneous values, triggered spells, combo scaling | 97..99, 100..102, 103..105, 106..108, 109..111, 112..114 |
+| Active icon | 118 |
 | English name, family, complete 64-bit family mask | 120, 160, 161..162 |
 | Damage class | 164 |
 

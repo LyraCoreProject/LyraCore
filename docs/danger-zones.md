@@ -381,6 +381,35 @@ equipment changes and weapon skill changes.
 starts with one of each item: one throwing knife, one arrow or bullet, one piece of food. After you
 publish this schema to an existing Shard, reimport `globals` before new Characters are created.
 
+### Warrior stance migration
+
+Warrior stances are now Forms: `A_SHAPESHIFT` Auras built from the new public `game_form` and
+`game_form_spell` tables. The new public `game_spell_form` table holds the Forms each spell requires
+or excludes. All three start empty. No `game_aura` column, Transfer codec or Native Host layout
+changes. Stance and passive Auras travel with the other Auras; an older destination Module keeps an
+`A_SHAPESHIFT` Aura as an inert Aura.
+
+While `game_form` is empty, warriors behave as before Forms. A warrior enters the world with the
+Battle Stance form byte and switches stances through the old `E_SET_STANCE` spell rows. No stance
+passive applies, so Defensive Stance has no damage or threat change, and logout returns a warrior
+to Battle Stance. Until `debug_repair_after_publish` runs, `game_spell_form` is empty too, so no
+spell needs a stance.
+
+Before play resumes:
+
+1. Publish the Module through a planned additive update.
+2. Call `debug_repair_after_publish`. It fills `game_spell_form` from each spell's `form_mask` and
+   `form_exclude` where the spell has no rows.
+3. Reimport `spell` with `--dbc`. It writes Forms 17 to 19 from SpellShapeshiftForm.dbc, the
+   spells' Form Sets, the three stances as `A_SHAPESHIFT`, Tactical Mastery as
+   `A_FORM_POWER_RETAINED`, `CAST_FLAG_NO_AURA_CANCEL` on spells the client shows no aura icon
+   for, and `CAST_FLAG_LOCKS_FORM` on Nefarian's Berserk.
+4. Call `debug_repair_after_publish` again. Each online warrior with no stance Aura gets the stance
+   its client form byte shows, or Battle Stance, with that stance's passives. A druid form byte is
+   left alone.
+
+Offline warriors enter the world in Battle Stance unless they hold a stance Aura.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

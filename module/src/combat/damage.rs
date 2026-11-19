@@ -236,18 +236,9 @@ pub(crate) fn fold_incoming_damage(
     rolled: u32,
 ) -> (u32, u32) {
     let entities = ctx.db.game_world_entity();
-    let attacker_stance = entities
-        .guid()
-        .find(attacker_guid)
-        .map(|a| a.stance)
-        .unwrap_or(0);
-    let outgoing_pct = crate::spell::stance_damage_done_pct(attacker_stance)
-        + crate::modifiers::combat_field_bonus(ctx, attacker_guid, crate::spell::COMBAT_DMG_DONE);
-    let after_outgoing = crate::spell::apply_damage_pct(rolled, outgoing_pct);
-    let incoming = crate::spell::apply_damage_pct(
-        after_outgoing,
-        crate::spell::damage_taken_bonus(ctx, target_guid),
-    );
+    let outgoing_pct =
+        crate::modifiers::combat_field_bonus(ctx, attacker_guid, crate::spell::COMBAT_DMG_DONE);
+    let incoming = crate::spell::apply_damage_pct(rolled, outgoing_pct);
     let dealt = crate::spell::absorb_incoming(ctx, target_guid, incoming);
     let dealt = landed_amount(entities.guid().find(target_guid).as_ref(), dealt);
     (dealt, incoming - dealt)

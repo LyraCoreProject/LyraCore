@@ -129,7 +129,7 @@ impl UpdateMaskValues {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct AuraSlot {
     pub slot: u8,
     pub spell_id: u32,
