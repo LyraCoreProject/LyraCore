@@ -24,9 +24,9 @@ use crate::spell::{
     T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use crate::{
-    game_aura, game_pending_cast, game_school_lockout, game_spell, game_spell_cd,
-    game_spell_cooldown, game_spell_effect, PendingCast, Spell, SpellCastEvent, SpellCd,
-    SpellCooldown, SpellEffect,
+    game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
+    game_spell_cd, game_spell_effect, GlobalCooldown, PendingCast, Spell, SpellCastEvent, SpellCd,
+    SpellEffect,
 };
 
 use crate::script_binding::game_script;
@@ -179,7 +179,7 @@ fn resolve_loaded_cast(
     }
 
     if phase == CastPhase::Start {
-        start_global_cooldown(ctx, caster_guid, hdr.gcd_ms);
+        start_global_cooldown(ctx, caster_guid, hdr);
     }
 
     // A queued strike starts its cooldown when its swing fires.
@@ -867,7 +867,7 @@ fn check_cast_gates(
             check_cast_gate_prefix(ctx, caster, effects, target_guid, allow_dead_creature)?;
             crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
             check_source_cast_position(ctx, caster, hdr, target_guid)?;
-            check_global_cooldown(ctx, caster.guid)?;
+            check_global_cooldown(ctx, caster.guid, hdr)?;
             check_cast_gate_suffix(ctx, caster, spell, request)?;
             if !matches!(run, GateRun::InterruptPrecheck(_)) {
                 check_targeted_los(ctx, caster, effects, target_guid)?;
@@ -887,7 +887,7 @@ fn check_cast_gates(
             check_item_target(ctx, caster.guid, effects, request.item_target)?;
             check_source_cast_position(ctx, caster, hdr, target_guid)?;
             if phase == CastPhase::Start {
-                check_global_cooldown(ctx, caster.guid)?;
+                check_global_cooldown(ctx, caster.guid, hdr)?;
             }
             if effects.iter().any(|e| e.kind == E_DISTRACT) {
                 check_distract_destination(ctx, caster, request.dest, hdr.range_yd)?;
@@ -979,35 +979,56 @@ fn check_source_cast_position(
     Ok(())
 }
 
-fn check_global_cooldown(ctx: &ReducerContext, caster_guid: u64) -> Result<(), CastGateRefusal> {
-    if let Some(cd) = ctx.db.game_spell_cooldown().caster_guid().find(caster_guid) {
-        if crate::time::now(ctx) < cd.ready_at {
-            return Err(CastGateRefusal::new(
-                CastRefusalKind::Cooldown,
-                CastRefusalReason::NotReady,
-                "spell not ready (global cooldown)".to_string(),
-            ));
-        }
+fn check_global_cooldown(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    hdr: &Spell,
+) -> Result<(), CastGateRefusal> {
+    let now = crate::time::now(ctx);
+    if ctx
+        .db
+        .game_global_cooldown()
+        .by_caster_category()
+        .filter((caster_guid, hdr.gcd_category))
+        .any(|cooldown| now < cooldown.ready_at)
+    {
+        return Err(CastGateRefusal::new(
+            CastRefusalKind::Cooldown,
+            CastRefusalReason::NotReady,
+            "spell not ready (global cooldown)".to_string(),
+        ));
     }
     Ok(())
 }
 
-fn start_global_cooldown(ctx: &ReducerContext, caster_guid: u64, gcd_ms: u32) {
-    if gcd_ms == 0 {
+fn start_global_cooldown(ctx: &ReducerContext, caster_guid: u64, hdr: &Spell) {
+    if hdr.gcd_ms == 0 {
         return;
     }
-    let ready_at = crate::time::now(ctx)
-        .checked_add(TimeDuration::from_micros(i64::from(gcd_ms) * 1000))
-        .unwrap_or(crate::time::now(ctx));
-    let cooldowns = ctx.db.game_spell_cooldown();
-    let cooldown = SpellCooldown {
-        caster_guid,
-        ready_at,
-    };
-    if cooldowns.caster_guid().find(caster_guid).is_some() {
-        cooldowns.caster_guid().update(cooldown);
-    } else {
-        cooldowns.insert(cooldown);
+    let now = crate::time::now(ctx);
+    let ready_at = now
+        .checked_add(TimeDuration::from_micros(i64::from(hdr.gcd_ms) * 1000))
+        .unwrap_or(now);
+    let cooldowns = ctx.db.game_global_cooldown();
+    match cooldowns
+        .by_caster_category()
+        .filter((caster_guid, hdr.gcd_category))
+        .next()
+    {
+        Some(cooldown) => {
+            cooldowns.id().update(GlobalCooldown {
+                ready_at,
+                ..cooldown
+            });
+        }
+        None => {
+            cooldowns.insert(GlobalCooldown {
+                id: 0,
+                caster_guid,
+                category: hdr.gcd_category,
+                ready_at,
+            });
+        }
     }
 }
 
@@ -1589,7 +1610,7 @@ pub(crate) fn begin_loaded_cast(
         request,
         crate::time::schedule_time(ctx, fire_at),
     ));
-    start_global_cooldown(ctx, caster_guid, hdr.gcd_ms);
+    start_global_cooldown(ctx, caster_guid, hdr);
     crate::SpellCastEvent::insert(
         ctx,
         SpellCastEvent {

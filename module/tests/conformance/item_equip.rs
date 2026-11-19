@@ -502,7 +502,7 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
     equip(&mut connection, 23);
     assert_effect(&shard, guid, 0);
     shard.assert_sql(&format!(
-        "DELETE FROM game_spell_cooldown WHERE caster_guid = {guid}"
+        "DELETE FROM game_global_cooldown WHERE caster_guid = {guid}"
     ));
     shard.assert_call(
         "debug_cast_spell",
@@ -512,7 +512,7 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
     move_item(&mut connection, 10, 11);
     assert_effect(&shard, guid, 1);
     shard.assert_sql(&format!(
-        "DELETE FROM game_spell_cooldown WHERE caster_guid = {guid}"
+        "DELETE FROM game_global_cooldown WHERE caster_guid = {guid}"
     ));
     shard.assert_call(
         "debug_cast_spell",
@@ -529,7 +529,7 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
         &[&EQUIP.to_string(), "1", "1"],
     );
     shard.assert_sql(&format!(
-        "DELETE FROM game_spell_cooldown WHERE caster_guid = {guid}"
+        "DELETE FROM game_global_cooldown WHERE caster_guid = {guid}"
     ));
     shard.assert_call(
         "debug_cast_spell",
@@ -559,7 +559,7 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
             "UPDATE game_spell_effect SET p0 = {stance} WHERE spell_id = {FORM}"
         ));
         shard.assert_sql(&format!(
-            "DELETE FROM game_spell_cooldown WHERE caster_guid = {guid}"
+            "DELETE FROM game_global_cooldown WHERE caster_guid = {guid}"
         ));
         shard.assert_call(
             "debug_cast_spell",

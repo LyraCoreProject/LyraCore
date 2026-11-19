@@ -424,6 +424,22 @@ every spell without the passive (0x40) or on-next-swing (0x4) attribute bit. Unt
 The change is in the importer only, so no Module publish, schema change or repair is needed. Reimport
 `spell` from this revision before play resumes.
 
+### Global cooldown category migration
+
+A caster now has one global cooldown per `game_spell.gcd_category`, the source
+`startRecoveryCategory`. The column is END-appended with default 0, and the public
+`game_global_cooldown` table replaces `game_spell_cooldown`. The old table moves to `retired.rs`;
+its rows end within seconds and nothing reads them. The new table starts empty, and no repair is
+needed. Publish through a planned update; development reload requires an unchanged schema.
+
+Until you reimport `spell` with `--dbc`, every existing spell is in category 0, so they all share
+one global cooldown as before. Stances, Heroic Strike and the other spells without one are still
+refused while a global cooldown runs. Reimport `spell` from this revision before play resumes.
+
+A Package Delta written before this revision has no `gcd_category`, so its new spells are in
+category 0: their global cooldown neither blocks nor waits for a category 133 spell. Emit the
+Package again from a Base Snapshot of this revision, or set `gcd_category`, before you apply it.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

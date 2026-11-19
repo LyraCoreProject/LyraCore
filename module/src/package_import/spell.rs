@@ -315,6 +315,7 @@ fn write_form_set(ctx: &ReducerContext, spell: &Spell) {
 fn blank_spell(spell_id: u32) -> Spell {
     Spell {
         gcd_ms: 0,
+        gcd_category: 0,
         ..Spell::blank(spell_id, "")
     }
 }
@@ -360,6 +361,7 @@ fn apply_spell_field(spell: &mut Spell, field: &str, value: &FieldValue) -> Resu
         "attributes_ex_3" => spell.attributes_ex_3 = as_u32(field, value)?,
         "attributes_ex_4" => spell.attributes_ex_4 = as_u32(field, value)?,
         "damage_class" => spell.damage_class = as_u8(field, value)?,
+        "gcd_category" => spell.gcd_category = as_u32(field, value)?,
 
         "custom_flags" => spell.custom_flags = as_u32(field, value)?,
         "min_target_level" => spell.min_target_level = as_u32(field, value)?,

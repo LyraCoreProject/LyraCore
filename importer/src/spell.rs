@@ -926,6 +926,7 @@ fn push_spell_header_row(
         attributes_ex_3: s.attributes_ex3,
         attributes_ex_4: s.attributes_ex4,
         damage_class: s.damage_class as u8,
+        gcd_category: s.start_recovery_category,
     });
     if spell_overrides::binding_summon(
         spell_id,
@@ -1565,7 +1566,7 @@ fn assemble_spell_sql(
     push_insert(
         &mut stmts,
         "game_spell",
-        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex_2,visual_id,duration_index,category,category_cooldown_ms,equipped_item_class,equipped_item_subclass_mask,equipped_item_inventory_mask,attributes_ex_3,attributes_ex_4,damage_class",
+        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key,form_mask,form_exclude,attributes_ex_2,visual_id,duration_index,category,category_cooldown_ms,equipped_item_class,equipped_item_subclass_mask,equipped_item_inventory_mask,attributes_ex_3,attributes_ex_4,damage_class,gcd_category",
         &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
@@ -1958,6 +1959,7 @@ mod tests {
             (114, 6.5f32.to_bits()),
             (119, 999),
             (120, 1),
+            (157, 133),
             (158, 1000),
             (160, 3),
             (161, 0x8000_0001),
@@ -2264,18 +2266,19 @@ mod tests {
     fn vmangos_finishers_keep_combo_scaling_and_source_flags_in_sql() {
         let source = crate::vmangos_spell::fixture();
         let connection = source.fixture_connection();
-        connection.execute_batch("UPDATE spell_template SET school=0, attributesEx=1049088, spellFamilyName=8, effect2=0, effectPointsPerComboPoint1=5, customFlags=1024, minTargetLevel=7, effectBonusCoefficient1=0.5, startRecoveryTime=1000 WHERE build=5875").unwrap();
+        connection.execute_batch("UPDATE spell_template SET school=0, attributesEx=1049088, spellFamilyName=8, effect2=0, effectPointsPerComboPoint1=5, customFlags=1024, minTargetLevel=7, effectBonusCoefficient1=0.5, startRecoveryCategory=133, startRecoveryTime=1000 WHERE build=5875").unwrap();
         let mut tables = fixture_tables();
         tables.spells = crate::vmangos_spell::read(&source).unwrap().0;
         tables.durations = authored_table(4, &[&[1, 6000, 0, 21000]]);
         let (rows, _, _) = derive_spell_rows(&tables, &[], &[]).unwrap();
         let header = &rows.headers[0];
         assert_ne!(header.cast_flags & CAST_FLAG_COMBO_FINISHER, 0);
-        assert_eq!(header.gcd_ms, 1000);
+        assert_eq!((header.gcd_ms, header.gcd_category), (1000, 133));
         assert_eq!((header.duration_ms, header.max_duration_ms), (6000, 21000));
         let header_sql = header.sql_values();
         let values: Vec<_> = header_sql.trim_matches(['(', ')']).split(',').collect();
-        assert_eq!(values.len(), 42);
+        assert_eq!(values.len(), 43);
+        assert_eq!(values[42], "133");
         assert_eq!(&values[25..28], &["21000", "1024", "7"]);
         let effect = &rows.effects[0];
         assert_eq!(effect.kind, E_FINISHER_DAMAGE);
@@ -2702,7 +2705,7 @@ mod tests {
             .parse::<u32>()
             .unwrap()
             >= 109));
-        shard.assert_sql("DELETE FROM game_spell_cooldown");
+        shard.assert_sql("DELETE FROM game_global_cooldown");
         shard.assert_call("debug_cast_at", &["1", "1459", &ally]);
         let intellect = shard
             .query_rows("SELECT target_guid, amount, eff_p0 FROM game_aura WHERE spell_id = 1459");
@@ -2829,8 +2832,13 @@ mod tests {
             (16, 1, 9)
         );
         assert_eq!(
-            (header.attributes, header.gcd_ms, header.form_mask),
-            (64, 1000, 1 << 16)
+            (
+                header.attributes,
+                header.gcd_ms,
+                header.gcd_category,
+                header.form_mask
+            ),
+            (64, 1000, 133, 1 << 16)
         );
         assert_eq!(
             header.cast_flags,

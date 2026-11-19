@@ -165,6 +165,10 @@ pub(crate) mod character_owned_tripwire {
             "retired creature movement event table that nothing writes",
         ),
         (
+            &["game_spell_cooldown"],
+            "retired per-caster global cooldown table that nothing writes",
+        ),
+        (
             &[
                 "game_combo_point",
                 "game_dr_state",
@@ -178,6 +182,7 @@ pub(crate) mod character_owned_tripwire {
         (
             &[
                 "game_dynamic_object",
+                "game_global_cooldown",
                 "game_ground_area",
                 "game_pending_cast",
                 "game_pending_spell_impact",
@@ -186,7 +191,6 @@ pub(crate) mod character_owned_tripwire {
                 "game_school_lockout",
                 "game_self_resurrect_option",
                 "game_spell_cd",
-                "game_spell_cooldown",
             ],
             "transient spell state removed, consumed, or made inert by its deadline",
         ),

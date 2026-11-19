@@ -710,6 +710,20 @@ and leaves a running cooldown alone. That is why `debug_repair_after_publish` fr
 aura applied before the columns existed reads as "never procs", and a permanent self-buff never
 refreshes on its own.
 
+### Global cooldowns (`module/src/spell/tables.rs`)
+
+`game_spell.gcd_ms` and `gcd_category` are the source `StartRecoveryTime` and
+`StartRecoveryCategory`. A caster has one global cooldown per category, as vmangos `AddGCD` keeps
+one. A cast starts one in its spell's category when `gcd_ms` is non-zero, and the Gate refuses a
+cast only while its own category's cooldown runs. Most spells with a global cooldown are in
+category 133 and most spells without one in category 0, so the latter can be cast during a
+category 133 cooldown. Cancelling a timed cast clears only its category.
+
+`game_global_cooldown` holds one row per caster and category, keyed by `by_caster_category`. It is
+public and transient: a row lingers after `ready_at` and is overwritten by the next cooldown in its
+category. It replaces `game_spell_cooldown`, which kept one row per caster and is retired. Packages
+claim `gcd_category`; a Package Delta without it gives a new spell category 0.
+
 ### Combo finishers (`module/src/combo.rs`)
 
 A finisher is a Rogue or Druid spell whose `Spell.dbc` AttributesEx carries 0x0010_0000 or

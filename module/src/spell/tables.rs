@@ -8,6 +8,8 @@ use lyracore_shared::form::DBC_MASK_FORMS;
 const SPELL_ATTR_DO_NOT_DISPLAY: u32 = 0x80;
 const SPELL_ATTR_NOT_SHAPESHIFT: u32 = 0x10000;
 const SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED: u32 = 0x80000;
+// SPELLCATEGORY_GLOBAL: the StartRecoveryCategory of most spells with a global cooldown.
+const GCD_CATEGORY_GLOBAL: u32 = 133;
 
 #[table(accessor = game_spell, public)]
 #[derive(Clone)]
@@ -85,6 +87,9 @@ pub struct Spell {
     pub attributes_ex_4: u32,
     #[default(0u8)]
     pub damage_class: u8,
+    // Spell.dbc StartRecoveryCategory: the global cooldown this spell starts and waits on.
+    #[default(0u32)]
+    pub gcd_category: u32,
 }
 
 impl Spell {
@@ -132,6 +137,7 @@ impl Spell {
             attributes_ex_3: 0,
             attributes_ex_4: 0,
             damage_class: 0,
+            gcd_category: GCD_CATEGORY_GLOBAL,
         }
     }
 
@@ -947,10 +953,17 @@ impl SpellCastEvent {
     }
 }
 
-#[table(accessor = game_spell_cooldown, public)]
-pub struct SpellCooldown {
+#[table(
+    accessor = game_global_cooldown,
+    public,
+    index(accessor = by_caster_category, btree(columns = [caster_guid, category]))
+)]
+pub struct GlobalCooldown {
     #[primary_key]
+    #[auto_inc]
+    pub id: u64,
     pub caster_guid: u64,
+    pub category: u32,
     pub ready_at: Timestamp,
 }
 

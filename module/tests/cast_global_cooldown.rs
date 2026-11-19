@@ -10,6 +10,7 @@ use support::{
 
 const WOLF: u64 = guid::creature(TEST_WOLF_ENTRY, 1);
 const ACTOR: &str = r#"{"guid":1,"ownership":null}"#;
+const FROST_ARMOR: &str = "168";
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -100,9 +101,35 @@ fn cancelling_a_timed_cast_releases_its_global_cooldown() {
         .query_rows("SELECT * FROM game_pending_cast")
         .is_empty());
     assert!(shard
-        .query_rows("SELECT * FROM game_spell_cooldown")
+        .query_rows("SELECT * FROM game_global_cooldown")
         .is_empty());
     cast_fireball(&shard);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_spell_of_another_category_is_cast_during_a_global_cooldown() {
+    let shard = fixture("other-category-global-cooldown", 0, 60000, 0);
+    stage_frost_armor(&shard, 0, 0);
+    cast_fireball(&shard);
+    cast_frost_armor(&shard);
+    assert_global_cooldown_refusal(&shard);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn cancelling_a_timed_cast_keeps_the_global_cooldown_of_another_category() {
+    let shard = fixture("cancel-keeps-other-category", 60000, 60000, 0);
+    stage_frost_armor(&shard, 60000, 0);
+    cast_frost_armor(&shard);
+    cast_fireball(&shard);
+    shard.assert_call("gw_cancel_cast", &[ACTOR]);
+    let cooldowns = shard.query_rows("SELECT * FROM game_global_cooldown WHERE caster_guid = 1");
+    assert_eq!(cooldowns.len(), 1, "{cooldowns:?}");
+    assert_eq!(cooldowns[0]["category"], "0");
+    cast_fireball(&shard);
+    let result = shard.call("gw_cast_spell", &[ACTOR, FROST_ARMOR, "1"]);
+    assert!(String::from_utf8_lossy(&result.stderr).contains("global cooldown"));
 }
 
 #[test]
@@ -119,7 +146,7 @@ fn a_refused_cast_does_not_start_a_global_cooldown() {
         String::from_utf8_lossy(&result.stderr)
     );
     assert!(shard
-        .query_rows("SELECT * FROM game_spell_cooldown")
+        .query_rows("SELECT * FROM game_global_cooldown")
         .is_empty());
     assert!(shard
         .query_rows("SELECT * FROM game_pending_cast")
@@ -136,7 +163,7 @@ fn fixture(name: &str, cast_ms: u32, gcd_ms: u32, cooldown_ms: u32) -> Standalon
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_call("debug_learn_spell", &["1", "133"]);
     shard.assert_sql(&format!(
-        "UPDATE game_spell SET cast_time_ms = {cast_ms}, gcd_ms = {gcd_ms}, \
+        "UPDATE game_spell SET cast_time_ms = {cast_ms}, gcd_ms = {gcd_ms}, gcd_category = 133, \
          cooldown_ms = {cooldown_ms} WHERE spell_id = 133"
     ));
     shard
@@ -144,6 +171,18 @@ fn fixture(name: &str, cast_ms: u32, gcd_ms: u32, cooldown_ms: u32) -> Standalon
 
 fn cast_fireball(shard: &Standalone) {
     shard.assert_call("gw_cast_spell", &[ACTOR, "133", &WOLF.to_string()]);
+}
+
+fn stage_frost_armor(shard: &Standalone, gcd_ms: u32, gcd_category: u32) {
+    shard.assert_call("debug_learn_spell", &["1", FROST_ARMOR]);
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET gcd_ms = {gcd_ms}, gcd_category = {gcd_category} \
+         WHERE spell_id = {FROST_ARMOR}"
+    ));
+}
+
+fn cast_frost_armor(shard: &Standalone) {
+    shard.assert_call("gw_cast_spell", &[ACTOR, FROST_ARMOR, "1"]);
 }
 
 fn completion(shard: &Standalone, casts: &TableSubscription) -> Row {
@@ -165,7 +204,7 @@ fn completion(shard: &Standalone, casts: &TableSubscription) -> Row {
 }
 
 fn global_cooldown(shard: &Standalone) -> Row {
-    let mut rows = shard.query_rows("SELECT * FROM game_spell_cooldown WHERE caster_guid = 1");
+    let mut rows = shard.query_rows("SELECT * FROM game_global_cooldown WHERE caster_guid = 1");
     assert_eq!(rows.len(), 1, "an accepted cast starts the global cooldown");
     rows.remove(0)
 }

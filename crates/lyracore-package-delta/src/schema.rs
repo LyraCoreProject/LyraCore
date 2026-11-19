@@ -335,6 +335,7 @@ impl Table {
                     | "attributes_ex_3"
                     | "attributes_ex_4"
                     | "damage_class"
+                    | "gcd_category"
             ) | (Self::SpellEffect, "bonus_coefficient" | "equip_supported")
                 | (Self::Item, "damage_school")
         )
@@ -406,6 +407,7 @@ const SPELL_COLUMNS: &[Column] = &[
     column("attributes_ex_3", FieldType::U32),
     column("attributes_ex_4", FieldType::U32),
     column("damage_class", FieldType::U8),
+    column("gcd_category", FieldType::U32),
 ];
 
 const SPELL_EFFECT_COLUMNS: &[Column] = &[

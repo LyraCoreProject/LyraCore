@@ -80,6 +80,7 @@ fn populated_old_module_upgrades_without_clearing() {
         "attributes_ex_3",
         "attributes_ex_4",
         "damage_class",
+        "gcd_category",
     ] {
         assert!(
             !spell_before[0].contains_key(column),
@@ -124,6 +125,7 @@ fn populated_old_module_upgrades_without_clearing() {
         "attributes_ex_3",
         "attributes_ex_4",
         "damage_class",
+        "gcd_category",
     ] {
         assert_eq!(
             spell_after[0].remove(column).as_deref(),

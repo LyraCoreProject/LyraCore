@@ -66,6 +66,7 @@ export const SPELL_COLUMNS: { readonly [K in SpellField]: Column } = {
   attributesEx3: { column: "attributes_ex_3", type: "u32", defaultValue: 0 },
   attributesEx4: { column: "attributes_ex_4", type: "u32", defaultValue: 0 },
   damageClass: { column: "damage_class", type: "u8", defaultValue: 0 },
+  gcdCategory: { column: "gcd_category", type: "u32", defaultValue: 0 },
 };
 
 export const SPELL_EFFECT_COLUMNS: {

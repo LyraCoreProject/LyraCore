@@ -245,3 +245,10 @@ pub struct CreatureMoveEvent {
     #[default(false)]
     pub run: bool,
 }
+
+#[table(accessor = game_spell_cooldown, public)]
+pub struct SpellCooldown {
+    #[primary_key]
+    pub caster_guid: u64,
+    pub ready_at: Timestamp,
+}
