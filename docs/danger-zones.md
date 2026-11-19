@@ -412,12 +412,17 @@ Offline warriors enter the world in Battle Stance unless they hold a stance Aura
 
 ### Global cooldown migration
 
-`game_spell.gcd_ms` now comes from the source `startRecoveryTime`, where an older import set 1500
-for every spell without the passive or ranged attribute bit. Until you reimport `spell` with
-`--dbc`, Battle, Defensive and Berserker Stance, and every other spell vmangos gives no global
-cooldown, start one for 1.5 seconds. Spells vmangos gives 1 second, such as the rogue Combo Point
-builders, keep 1.5 seconds. No schema change and no repair is needed; a reimport rewrites the rows.
-Reimport before play resumes after you publish this revision to an existing Shard.
+`game_spell.gcd_ms` now comes from the source `startRecoveryTime`. An older import set 1500 for
+every spell without the passive (0x40) or on-next-swing (0x4) attribute bit. Until you reimport
+`spell` with `--dbc`, the old values stay:
+- Battle, Defensive and Berserker Stance, and every other spell vmangos gives no global cooldown,
+  start one for 1.5 seconds.
+- Spells vmangos gives 1 second, such as the rogue Combo Point builders, keep 1.5 seconds.
+- The few spells vmangos gives one but the old rule did not, such as Levitate, Water Breathing and
+  Detect Traps, start none.
+
+The change is in the importer only, so no Module publish, schema change or repair is needed. Reimport
+`spell` from this revision before play resumes.
 
 ### Native Relay events
 
