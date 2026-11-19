@@ -446,17 +446,20 @@ fn tactical_mastery_keeps_rage_through_a_stance_change() {
         &[(A_FORM_POWER_RETAINED, 500, i32::from(RAGE), P_POWER_TYPE)],
     );
     cast(&shard, TACTICAL_MASTERY);
+    // Rage decays out of combat, so the warrior stays in combat for exact readings.
+    let unit_flags = number::<u32>(&warrior(&shard), "unit_flags")
+        | lyracore_shared::constants::unit_flags::IN_COMBAT;
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_flags = {unit_flags}, combat_until_ms = {} \
+         WHERE guid = {WARRIOR}",
+        u64::MAX
+    ));
     set_rage(&shard, 1000);
     enter(&shard, BERSERKER_STANCE);
     assert_eq!(rage(&shard), 500);
     set_rage(&shard, 450);
     enter(&shard, BATTLE_STANCE);
-    // Out of combat, rage decays 50 per 2-second tick, so the kept rage is not exactly 450.
-    let kept = rage(&shard);
-    assert!(
-        (250..=450).contains(&kept),
-        "rage below the cap is kept, got {kept}"
-    );
+    assert_eq!(rage(&shard), 450);
 }
 
 #[test]

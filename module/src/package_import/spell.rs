@@ -31,6 +31,10 @@ pub(super) const OPS: ClaimOps = ClaimOps {
 fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
     let spells = ctx.db.game_spell();
     let forms = ctx.db.game_form();
+    let form_spells: Vec<(u32, u32)> = forms
+        .iter()
+        .map(|form| (form.spell_id, form.form_id))
+        .collect();
     let shapeshifts = |spell_id: u32| {
         ctx.db
             .game_spell_effect()
@@ -83,9 +87,7 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
             PrimaryKey::SpellForm { spell_id, form_id } => (form_id, spell_id),
             PrimaryKey::SpellEffect { spell_id, .. } => {
                 let effect = ctx.db.game_spell_effect().id().find(row.row_id());
-                let package_shapeshift = effect
-                    .filter(|effect| is_package_spell_id(spell_id) && effect.kind == A_SHAPESHIFT);
-                if let Some(effect) = package_shapeshift {
+                if let Some(effect) = effect.filter(|effect| effect.kind == A_SHAPESHIFT) {
                     let named = u32::try_from(effect.p0).unwrap_or(0);
                     if forms.form_id().find(named).is_none() {
                         return Err(format!(
@@ -96,14 +98,14 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
                         ));
                     }
                 }
-                let broken = forms
-                    .iter()
-                    .find(|form| form.spell_id == spell_id && !enters_form(spell_id, form.form_id));
-                if let Some(form) = broken {
+                let broken = form_spells.iter().find(|&&(form_spell, form_id)| {
+                    form_spell == spell_id && !enters_form(spell_id, form_id)
+                });
+                if let Some(&(_, form_id)) = broken {
                     return Err(format!(
                         "`game_spell_effect` row {} leaves spell {spell_id} no longer entering Form {}",
                         row.key(),
-                        form.form_id
+                        form_id
                     ));
                 }
                 continue;

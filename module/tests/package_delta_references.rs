@@ -943,6 +943,12 @@ fn form_claims_refuse_rows_the_form_tables_cannot_honour() {
             battle_stance_effect_update(r#"{"p0":{"type":"i32","value":18}}"#),
             "no longer entering Form 17",
         ),
+        (
+            format!(
+                r#"{{"table":"game_spell_effect","key":{{"spell_id":{BATTLE_STANCE_PASSIVE},"effect_index":0}},"operation":"update","fields":{{"kind":{{"type":"u8","value":{A_SHAPESHIFT}}},"p0":{{"type":"i32","value":99}}}}}}"#
+            ),
+            "Form 99, which has no `game_form` row",
+        ),
     ] {
         let refused = apply(&standalone, "spell", &artifact("example.aspect", &claims));
         assert!(!refused.status.success(), "{claims}");

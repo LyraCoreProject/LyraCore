@@ -758,9 +758,8 @@ identifier must fit 24 bits.
   writes, the apply refuses the plan when:
   - a Form's `spell_id` has no `A_SHAPESHIFT` effect for that Form, or its power rule is unknown;
   - a passive is not a passive spell, or carries `A_SHAPESHIFT`;
-  - a Package spell's `A_SHAPESHIFT` effect names a Form with no `game_form` row. Imported
-    shapeshift spells name Forms with no row (Travel, Aquatic, Ghost Wolf, Moonkin), so only Package
-    spells are held to this;
+  - a plan row writes an `A_SHAPESHIFT` effect, on any spell, that names a Form with no `game_form`
+    row;
   - a plan row that updates any spell's effect leaves a Form's `spell_id` spell with no
     `A_SHAPESHIFT` effect for that Form, whether or not the Form's own row is in the plan;
   - a passive or Form Set row names a missing spell or Form.
