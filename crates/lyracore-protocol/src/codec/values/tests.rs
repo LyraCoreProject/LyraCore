@@ -157,6 +157,8 @@ fn raw_values_body_matches_gtker_envelope() {
             spell_id,
             flags,
             level,
+            stacks: 1,
+            charges: 0,
         }],
     );
     mask.set_u32(idx::UNIT_AURAAPPLICATIONS, 0);
@@ -334,6 +336,8 @@ fn aura_values_is_player_mask_without_object_type() {
         spell_id: 6673,
         flags: 0x09,
         level: 1,
+        stacks: 1,
+        charges: 0,
     }]);
     assert!(
         mask.get(idx::OBJECT_TYPE).is_none(),

@@ -135,8 +135,24 @@ pub struct AuraSlot {
     pub spell_id: u32,
     pub flags: u8,
     pub level: u8,
+    pub stacks: u8,
+    /// Zero means the Aura has no charges.
+    pub charges: u8,
 }
 
+impl AuraSlot {
+    /// vmangos SpellAuraHolder::UpdateAuraApplication: charges times stacks, or stacks, minus one.
+    fn applications(&self) -> u8 {
+        let stacks = u32::from(self.stacks.max(1));
+        let count = match self.charges {
+            0 => stacks,
+            charges => u32::from(charges) * stacks,
+        };
+        (count.min(u32::from(u8::MAX)) - 1) as u8
+    }
+}
+
+/// Writes each slot once; callers merge an Aura's effect rows into one slot first.
 pub fn write_auras(mask: &mut UpdateMaskValues, auras: &[AuraSlot]) {
     for a in auras {
         let slot = a.slot as u16;
@@ -149,6 +165,12 @@ pub fn write_auras(mask: &mut UpdateMaskValues, auras: &[AuraSlot]) {
             idx::UNIT_AURALEVELS + slot / 4,
             (a.level as u32) << ((slot % 4) * 8),
         );
+        if a.applications() != 0 {
+            mask.or_u32(
+                idx::UNIT_AURAAPPLICATIONS + slot / 4,
+                u32::from(a.applications()) << ((slot % 4) * 8),
+            );
+        }
     }
 }
 
@@ -282,6 +304,8 @@ mod tests {
                 spell_id,
                 flags,
                 level,
+                stacks: 1,
+                charges: 0,
             }],
         );
         ours.set_u32(idx::UNIT_AURAAPPLICATIONS, 0);
@@ -304,12 +328,16 @@ mod tests {
                     spell_id: 6673,
                     flags: 0x09,
                     level: 1,
+                    stacks: 1,
+                    charges: 0,
                 },
                 AuraSlot {
                     slot: 1,
                     spell_id: 1459,
                     flags: 0x01,
                     level: 2,
+                    stacks: 1,
+                    charges: 0,
                 },
             ],
         );
@@ -318,6 +346,66 @@ mod tests {
         assert_eq!(m.get(idx::UNIT_AURAFLAGS), Some(0x19));
         assert_eq!(m.get(idx::UNIT_AURALEVELS), Some(0x0201));
         assert!(!m.to_bytes().is_empty());
+    }
+
+    fn applications(stacks: u8, charges: u8, slot: u8) -> Option<u32> {
+        let mut mask = UpdateMaskValues::new();
+        write_auras(
+            &mut mask,
+            &[AuraSlot {
+                slot,
+                spell_id: 7386,
+                flags: 0x09,
+                level: 60,
+                stacks,
+                charges,
+            }],
+        );
+        mask.get(idx::UNIT_AURAAPPLICATIONS + u16::from(slot) / 4)
+    }
+
+    #[test]
+    fn aura_applications_store_the_count_minus_one_in_the_slot_byte() {
+        assert_eq!(applications(5, 0, 0), Some(4), "Sunder Armor x5");
+        assert_eq!(
+            applications(1, 3, 0),
+            Some(2),
+            "Lightning Shield, 3 charges"
+        );
+        assert_eq!(applications(2, 3, 0), Some(5), "charges times stacks");
+        assert_eq!(
+            applications(5, 0, 6),
+            Some(4 << 16),
+            "slot 6 is byte 2 of word 1"
+        );
+    }
+
+    #[test]
+    fn a_single_application_writes_no_applications_field() {
+        assert_eq!(applications(1, 0, 0), None);
+        assert_eq!(applications(0, 0, 0), None, "stacks 0 counts as one");
+        assert_eq!(applications(1, 1, 0), None, "one charge left");
+    }
+
+    #[test]
+    fn aura_applications_cap_at_255() {
+        assert_eq!(applications(255, 0, 0), Some(254));
+        assert_eq!(applications(20, 20, 0), Some(254));
+    }
+
+    #[test]
+    fn a_values_mask_zeroes_the_applications_of_a_single_application() {
+        let mask = full_aura_mask(&[AuraSlot {
+            slot: 1,
+            spell_id: 324,
+            flags: 0x09,
+            level: 8,
+            stacks: 1,
+            charges: 1,
+        }]);
+        for word in 0..12 {
+            assert_eq!(mask.get(idx::UNIT_AURAAPPLICATIONS + word), Some(0));
+        }
     }
 
     #[test]

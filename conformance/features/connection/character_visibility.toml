@@ -116,6 +116,16 @@ function = "a_create_carries_the_auras_in_their_client_slots"
 rung = "unit"
 
 [[tests]]
+path = "module/tests/native_conformance.rs"
+function = "an_auras_stacks_and_charges_reach_viewers_as_its_applications"
+rung = "durable_module"
+
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/update_mask.rs"
+function = "aura_applications_store_the_count_minus_one_in_the_slot_byte"
+rung = "unit"
+
+[[tests]]
 path = "module/src/native/health.rs"
 function = "hidden_health_truncates_to_a_percent_of_one_hundred"
 rung = "unit"
@@ -218,12 +228,6 @@ symbol = "total_attack_power"
 evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::GetTotalAttackPowerValue returns ap * (1.0f + UNIT_FIELD_ATTACK_POWER_MULTIPLIER) for client builds above 1.8.4, and ranged does the same with UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER; StatSystem.cpp Player::UpdateAttackPowerAndDamage writes both fields from AP_MOD_PCT."
 
 [[known_gaps]]
-description = "No unit sends Aura applications: UNIT_FIELD_AURAAPPLICATIONS stays 0 in CREATE and VALUES, so a peer sees no stack or charge count, for example on Sunder Armor x5 or a three-charge Lightning Shield."
-path = "crates/lyracore-protocol/src/codec/update_mask.rs"
-symbol = "write_auras"
-evidence = "Source reading, not measured. Review of PR 1047. At d9173eca, SpellAuras.cpp SpellAuraHolder::UpdateAuraApplication writes stacks times charges minus one into UNIT_FIELD_AURAAPPLICATIONS, which is a public update field; write_auras writes only UNIT_FIELD_AURA, AURAFLAGS and AURALEVELS, and full_aura_mask zeroes the applications fields."
-
-[[known_gaps]]
 description = "A Form's own pool does not survive relog: a druid who logs out in a Form that shows rage or energy comes back with that pool empty. vmangos saves and restores every pool, so Bear rage and Cat energy return. The Reserve Pool (the druid's mana) does survive."
 path = "module/src/character.rs"
 symbol = "persist_entity"
@@ -240,3 +244,9 @@ description = "A reserved rage or energy pool neither decays nor regenerates; on
 path = "module/src/combat/regeneration.rs"
 symbol = "regenerate_characters"
 evidence = "Source reading, not measured. At d9173eca, Player.cpp Player::RegenerateAll regenerates rage, energy and mana whatever the shown power type."
+
+[[known_gaps]]
+description = "A charged Aura with no Proc effect shows no charge count, for example Inner Fire (20), Flurry (3), Stormstrike (2), Shadow Vulnerability (4), Enrage (12), Sweeping Strikes (5), Combustion (3) and Hemorrhage (30). The Module keeps charges only on A_PROC_TRIGGER and A_PROC_DAMAGE rows, so UNIT_FIELD_AURAAPPLICATIONS shows only the stacks. Spending these charges is a separate gap."
+path = "module/src/spell/proc.rs"
+symbol = "freeze_profile"
+evidence = "Source reading, not measured. Review of PR 1057: 132 charged 1.12 spells are affected. freeze_profile returns ProcProfile::default(), with zero charges, unless the effect kind is A_PROC_TRIGGER or A_PROC_DAMAGE. At d9173eca, SpellAuras.cpp SpellAuraHolder::SpellAuraHolder sets m_procCharges = spellproto->procCharges for every holder, and SpellAuraHolder::UpdateAuraApplication sends charges times stacks."

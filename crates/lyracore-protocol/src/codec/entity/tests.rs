@@ -1454,17 +1454,20 @@ fn spell_9329_and_demoralizing_shout_keep_both_attack_power_halves_in_create_and
 
 #[test]
 fn a_create_carries_the_auras_in_their_client_slots() {
-    let aura = |slot, spell_id, flags, level| update_mask::AuraSlot {
+    let aura = |slot, spell_id, flags, level, stacks| update_mask::AuraSlot {
         slot,
         spell_id,
         flags,
         level,
+        stacks,
+        charges: 0,
     };
     let entity = EntityView {
         auras: vec![
-            aura(0, 2457, 9, 1),
-            aura(1, 21156, 1, 20),
-            aura(9, 6673, 9, 7),
+            aura(0, 2457, 9, 1, 1),
+            aura(1, 21156, 1, 20, 1),
+            aura(9, 6673, 9, 7, 1),
+            aura(17, 7386, 9, 60, 5),
         ],
         ..warrior_entity()
     };
@@ -1486,21 +1489,30 @@ fn a_create_carries_the_auras_in_their_client_slots() {
         let fields = crate::codec::values_mask::parse_values_updates(&bytes[4..])
             .remove(0)
             .fields;
-        // Build 5875 UNIT_FIELD_AURA, AURAFLAGS (4 bits a slot) and AURALEVELS (8 bits a slot).
+        // Build 5875 UNIT_FIELD_AURA, AURAFLAGS (4 bits a slot), AURALEVELS and AURAAPPLICATIONS
+        // (8 bits a slot).
         for (index, value) in [
             (47, 2457),
             (48, 21156),
             (56, 6673),
+            (64, 7386),
             (95, 0x19),
             (96, 0x90),
+            (97, 0x90),
             (101, 20 << 8 | 1),
             (103, 7 << 8),
+            (105, 60 << 8),
+            (117, 4 << 8),
         ] {
             assert!(
                 fields.contains(&(index, value)),
                 "{kind:?} field {index}: {fields:?}"
             );
         }
+        assert!(
+            !fields.iter().any(|&(index, _)| (113..117).contains(&index)),
+            "{kind:?} sends no applications for single applications: {fields:?}"
+        );
     }
 }
 

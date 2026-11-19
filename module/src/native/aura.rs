@@ -30,20 +30,35 @@ fn is_visible(aura: &Aura) -> bool {
     u16::from(aura.slot) < codec::update_mask::idx::AURA_SLOTS
 }
 
-/// The Aura's client slot, when it holds one of the visible slots.
-pub(super) fn client_slot(aura: &Aura) -> Option<codec::update_mask::AuraSlot> {
-    is_visible(aura).then_some(codec::update_mask::AuraSlot {
-        slot: aura.slot,
-        spell_id: aura.spell_id,
-        flags: aura.flags,
-        level: aura.level,
-    })
+/// Merges the effect rows of each visible Aura into its one client slot.
+pub(super) fn client_slots<'a>(
+    auras: impl IntoIterator<Item = &'a Aura>,
+) -> Vec<codec::update_mask::AuraSlot> {
+    let mut slots = std::collections::BTreeMap::new();
+    for aura in auras.into_iter().filter(|aura| is_visible(aura)) {
+        slots
+            .entry(aura.slot)
+            .and_modify(|slot: &mut codec::update_mask::AuraSlot| {
+                slot.stacks = slot.stacks.max(aura.stacks);
+                slot.charges = slot.charges.max(aura.proc_charges);
+            })
+            .or_insert(codec::update_mask::AuraSlot {
+                slot: aura.slot,
+                spell_id: aura.spell_id,
+                flags: aura.flags,
+                level: aura.level,
+                stacks: aura.stacks,
+                charges: aura.proc_charges,
+            });
+    }
+    slots.into_values().collect()
 }
 
 fn sync(guid: u64, auras: &[Aura]) -> Packet {
-    let slots: Vec<_> = auras.iter().filter_map(client_slot).collect();
-    let (opcode, body) =
-        codec::build_values_update_raw(guid, &codec::update_mask::full_aura_mask(&slots));
+    let (opcode, body) = codec::build_values_update_raw(
+        guid,
+        &codec::update_mask::full_aura_mask(&client_slots(auras)),
+    );
     Packet { opcode, body }
 }
 
@@ -251,7 +266,7 @@ pub(crate) fn changed(ctx: &ReducerContext, previous: Option<&Aura>, current: Op
     let Some(row) = current.or(previous) else {
         return;
     };
-    // Tick deadlines and proc counters have no client-visible representation.
+    // Tick deadlines and proc cooldowns have no client-visible representation.
     if previous.zip(current).is_some_and(|(old, new)| {
         old.slot == new.slot
             && old.spell_id == new.spell_id
@@ -260,6 +275,7 @@ pub(crate) fn changed(ctx: &ReducerContext, previous: Option<&Aura>, current: Op
             && old.expires_at == new.expires_at
             && old.amount == new.amount
             && old.stacks == new.stacks
+            && old.proc_charges == new.proc_charges
             && old.eff_kind == new.eff_kind
             && old.eff_p0 == new.eff_p0
             && old.eff_p1 == new.eff_p1
@@ -337,5 +353,58 @@ pub(super) fn replay(ctx: &ReducerContext, connection: ConnectionId, guid: u64, 
     }
     for packet in packets {
         super::send_raw(ctx, connection, packet.opcode, packet.body, false);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use spacetimedb::Timestamp;
+
+    use super::*;
+
+    fn row(effect_id: u64, stacks: u8, proc_charges: u8) -> Aura {
+        Aura {
+            id: effect_id,
+            target_guid: 42,
+            caster_guid: 42,
+            spell_id: 7386,
+            slot: 3,
+            level: 60,
+            flags: 0x09,
+            applied_at: Timestamp::UNIX_EPOCH,
+            expires_at: Timestamp::UNIX_EPOCH,
+            effect_id,
+            eff_kind: 0,
+            amount: 0,
+            eff_p0: 0,
+            eff_p0_kind: 0,
+            eff_p1: 0,
+            period_ms: 0,
+            amount_remaining: 0,
+            stacks,
+            next_tick_micros: 0,
+            channel_target: 0,
+            enters_combat: false,
+            proc_flags: 0,
+            proc_chance: 0,
+            proc_ppm: 0.0,
+            proc_ex: 0,
+            proc_school_mask: 0,
+            proc_family_name: 0,
+            proc_family_flags: 0,
+            proc_charges,
+            proc_icd_ms: 0,
+            proc_ready_micros: 0,
+        }
+    }
+
+    #[test]
+    fn the_effect_rows_of_one_aura_share_one_slot_with_the_largest_counts() {
+        let slots = client_slots(&[row(1, 2, 0), row(2, 1, 3)]);
+        let slots: Vec<_> = slots
+            .iter()
+            .map(|slot| (slot.slot, slot.spell_id, slot.stacks, slot.charges))
+            .collect();
+        assert_eq!(slots, [(3, 7386, 2, 3)]);
     }
 }
