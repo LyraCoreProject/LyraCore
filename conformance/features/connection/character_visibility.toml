@@ -259,7 +259,7 @@ symbol = "persist_entity"
 evidence = "Source reading, not measured. At d9173eca, Player.cpp Player::SaveToDB writes power1 to power5 and Player::LoadFromDB restores each with SetPower after the Auras load; game_character keeps one power column, which holds the own pool."
 
 [[known_gaps]]
-description = "A creature's current power never reaches a viewer, in CREATE or VALUES; only its max power does. vmangos marks every UNIT_FIELD_POWERn public, so a viewer sees a creature's mana fall and regenerate."
+description = "A creature's CREATE writes no power fields, and its current power never reaches a viewer; only a later change to its max power is sent, in VALUES. vmangos marks every UNIT_FIELD_POWERn and MAXPOWERn public, so a viewer sees a creature's mana and max mana from CREATE, then sees its mana fall and regenerate."
 path = "module/src/native/visibility.rs"
 symbol = "power_values"
 evidence = "Source reading, not measured. At d9173eca, UpdateFields_1_12_1.cpp gives UNIT_FIELD_POWER1 to POWER5 UF_FLAG_PUBLIC, and Creature.cpp Creature::RegenerateMana adds to the creature's mana with ModifyPower."

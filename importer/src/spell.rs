@@ -2645,6 +2645,7 @@ mod tests {
 
     fn imported_spell_fixture(
         ids: &[u32],
+        caster_power_type: u8,
     ) -> (crate::standalone_support::Standalone, String, String) {
         let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
         let (rows, _, _) = build_spell_rows(Path::new(&dir), ids, &[]).unwrap();
@@ -2662,6 +2663,15 @@ mod tests {
         for guid in ["1", &ally, &wolf] {
             shard.assert_sql(&format!("UPDATE game_world_entity SET x = -8949.95, y = -132.493, z = 83.5312, health = 100, max_health = 1000, power = 1000, max_power = 1000 WHERE guid = {guid}"));
         }
+        let bytes: u32 = shard
+            .query_rows("SELECT unit_bytes_0 FROM game_world_entity WHERE guid = 1")[0]
+            ["unit_bytes_0"]
+            .parse()
+            .unwrap();
+        shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET unit_bytes_0 = {} WHERE guid = 1",
+            (bytes & 0x00FF_FFFF) | u32::from(caster_power_type) << 24
+        ));
         (shard, ally, wolf)
     }
 
@@ -2670,7 +2680,8 @@ mod tests {
     fn actual_imported_friendly_spells_affect_the_selected_ally() {
         use crate::standalone_support::poll_until;
         use std::time::Duration;
-        let (shard, ally, _) = imported_spell_fixture(&[139, 1459]);
+        let (shard, ally, _) =
+            imported_spell_fixture(&[139, 1459], lyracore_shared::packing::power_type::MANA);
         shard.assert_call("debug_cast_at", &["1", "139", &ally]);
         let renew = shard.query_rows(
             "SELECT target_guid, effect_id, amount, period_ms FROM game_aura WHERE spell_id = 139",
@@ -2697,7 +2708,8 @@ mod tests {
     #[test]
     #[ignore = "requires LYRACORE_VMANGOS_SQLITE, LYRACORE_TEST_DBC, SpacetimeDB and Wasm"]
     fn actual_imported_gouge_control_ends_on_damage() {
-        let (shard, _, wolf) = imported_spell_fixture(&[1776]);
+        let (shard, _, wolf) =
+            imported_spell_fixture(&[1776], lyracore_shared::packing::power_type::ENERGY);
         shard.clear_schedule("game_aura_schedule");
         shard.assert_call("debug_cast_at", &["1", "1776", &wolf]);
         let control =
@@ -2723,7 +2735,8 @@ mod tests {
     #[test]
     #[ignore = "requires LYRACORE_VMANGOS_SQLITE, LYRACORE_TEST_DBC, SpacetimeDB and Wasm"]
     fn actual_imported_stealth_uses_its_third_source_effect() {
-        let (shard, _, _) = imported_spell_fixture(&[1784]);
+        let (shard, _, _) =
+            imported_spell_fixture(&[1784], lyracore_shared::packing::power_type::ENERGY);
         shard.assert_call("debug_cast_at", &["1", "1784", "1"]);
         let slow = shard.query_rows(
             "SELECT effect_id, amount FROM game_aura WHERE spell_id = 1784 AND eff_kind = 164",

@@ -46,6 +46,7 @@ fn cast_result(reason: CastRefusalReason) -> u8 {
     match reason {
         R::Unreported => code::DONT_REPORT,
         R::NoPower => code::NO_POWER,
+        R::CasterAuraState => code::CASTER_AURASTATE,
         R::NotReady => code::NOT_READY,
         R::OutOfRange => code::OUT_OF_RANGE,
         R::TooClose => code::TOO_CLOSE,
@@ -350,6 +351,7 @@ mod tests {
         for (reason, code) in [
             (R::Unreported, 0x17),
             (R::NoPower, 0x4D),
+            (R::CasterAuraState, 0x12),
             (R::NotReady, 0x3C),
             (R::OutOfRange, 0x59),
             (R::TooClose, 0x76),

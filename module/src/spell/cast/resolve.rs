@@ -1479,9 +1479,14 @@ fn check_cast_gate_suffix(
     // Creatures have no managed power pool, so only Characters pay spell costs.
     let power = caster.spendable_power(hdr.power_type);
     if cost_gate_blocks(caster.is_player(), power, hdr.cost) {
+        let reason = if hdr.power_type == lyracore_shared::packing::power_type::HEALTH {
+            CastRefusalReason::CasterAuraState
+        } else {
+            CastRefusalReason::NoPower
+        };
         return Err(CastGateRefusal::new(
             CastRefusalKind::InsufficientPower,
-            CastRefusalReason::NoPower,
+            reason,
             format!("not enough power: have {power}, need {}", hdr.cost),
         ));
     }

@@ -3,6 +3,8 @@ use spacetimedb::{table, ReducerContext, Table, Timestamp};
 use lyracore_shared::guid;
 use lyracore_shared::packing::unpack4;
 
+use crate::world::power_pool::resurrected_power;
+
 pub(crate) fn corpse_guid_for(owner_guid: u64) -> u64 {
     guid::compose(guid::CORPSE, guid::low(owner_guid))
 }
@@ -165,6 +167,7 @@ pub(crate) fn apply_reclaim_corpse(
     }
 
     player.health = (player.max_health / 2).max(1);
+    player.set_each_pool(|pool| resurrected_power(pool, 50));
     let player_guid = player.guid;
     player.update(ctx);
     crate::ghost::finish_resurrection(ctx, player_guid);

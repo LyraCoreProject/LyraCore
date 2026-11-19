@@ -382,12 +382,18 @@ shows a pool of another power type, `reserve_power_type`, `reserve_power` and `r
 hold the unit's own pool, the Reserve Pool; `reserve_power_type` 255 means the unit holds none.
 `world::power_pool` keeps the pair consistent. A change to either pool, or to the power type, goes
 out in one partial VALUES mask to the owner and peers, as vmangos marks every `UNIT_FIELD_POWERn`
-and `MAXPOWERn` public; a creature's current power stays unsent, as before. CREATE carries both
-pools. Logout saves the own pool to `game_character.power`; a Form's pool is not saved and starts
-empty when world entry shows it again. A pool that appears sends its current value, so the client
+and `MAXPOWERn` public. A creature is the exception: its CREATE writes no power fields and its
+current power is never sent, so only a later change to its max power reaches a viewer
+(`character_visibility.toml` records the gap). A Character's CREATE carries both pools. Logout
+saves the own pool to `game_character.power`; a Form's pool is not saved and starts empty when
+world entry shows it again. A pool that appears sends its current value, so the client
 never keeps the full energy that Character CREATE writes. A spell cost, an energize and an
 energize tick reach the pool of their power type, shown or reserved; an energize skips a pool whose
-max is 0. Resurrection and the GM heal set every pool the unit holds by its power type.
+max is 0. A cost in a power type the unit holds in neither pool is refused with `NoPower`, as
+vmangos `Spell::CheckPower` does; a creature casts it unpaid. A cost in health (power type 254,
+vmangos `POWER_HEALTH`) is paid from health and refused with `CasterAuraState` when health is at
+or below it. Resurrection, corpse reclaim and the GM heal set every pool the unit holds by its
+power type; a resurrect request sets mana by its percentage, energy full and rage to 0.
 
 Hunter pets keep a durable identity in `game_hunter_pet`. A materialized pet is an ordinary owned
 `game_world_entity`, classified by `game_live_pet_kind`; summoned demons have no Hunter identity or

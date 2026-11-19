@@ -1,5 +1,6 @@
 use spacetimedb::{log, reducer, ReducerContext, Table, TimeDuration, Timestamp};
 
+use crate::world::power_pool::request_resurrected_power;
 use crate::{game_world_entity, WorldEntity};
 
 use super::*;
@@ -174,16 +175,7 @@ pub(crate) fn do_resurrect_response(
             if t.dead {
                 let pct = req.points.clamp(1, 100) as u32;
                 t.health = revive_amount(t.max_health, req.points);
-                // vmangos `Player::ResurrectUsingRequestData`: rage at zero and energy full.
-                t.set_each_pool(|pool| {
-                    use crate::world::power_pool::resurrected_power;
-                    use lyracore_shared::packing::power_type::{ENERGY, MANA};
-                    match pool.power_type {
-                        MANA => resurrected_power(pool, pct),
-                        ENERGY => pool.max,
-                        _ => resurrected_power(pool, 0),
-                    }
-                });
+                t.set_each_pool(|pool| request_resurrected_power(pool, pct));
                 t.update(ctx);
                 crate::ghost::finish_resurrection(ctx, target_guid);
             }

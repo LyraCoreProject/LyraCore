@@ -187,10 +187,7 @@ fn a_queued_raptor_strike_spends_mana_and_starts_its_cooldown_when_the_swing_fir
     ));
     engage(&standalone, wolf);
 
-    hold_the_swing(&standalone);
-    standalone.assert_sql(&format!(
-        "UPDATE game_world_entity SET power = 100, max_power = 100 WHERE guid = {PLAYER}"
-    ));
+    stage_mana(&standalone, 100);
     cast(&standalone, RAPTOR_STRIKE, wolf);
     let queued = player(&standalone);
     assert_eq!(queued_spell(&queued), RAPTOR_STRIKE.to_string());
@@ -324,7 +321,7 @@ fn death_drops_a_queued_raptor_strike() {
         "UPDATE game_world_entity SET godmode = true WHERE guid = {wolf}"
     ));
     engage(&standalone, wolf);
-    stage_power(&standalone, 100);
+    stage_mana(&standalone, 100);
     cast(&standalone, RAPTOR_STRIKE, wolf);
     assert_eq!(
         queued_spell(&player(&standalone)),
@@ -367,7 +364,7 @@ fn a_queued_raptor_strike_ends_with_its_attack() {
     ));
     let wolf = spawn_target(&standalone);
     engage(&standalone, wolf);
-    stage_power(&standalone, 100);
+    stage_mana(&standalone, 100);
     cast(&standalone, RAPTOR_STRIKE, wolf);
     assert_eq!(
         queued_spell(&player(&standalone)),
@@ -414,7 +411,7 @@ fn ending_auto_shot_keeps_a_queued_raptor_strike() {
     ));
     let wolf = spawn_target(&standalone);
     engage(&standalone, wolf);
-    stage_power(&standalone, 100);
+    stage_mana(&standalone, 100);
     cast(&standalone, RAPTOR_STRIKE, wolf);
 
     hold_the_swing(&standalone);
@@ -463,7 +460,7 @@ fn an_auto_shot_target_dying_interrupts_a_queued_raptor_strike() {
     ));
     let wolf = spawn_target(&standalone);
     engage(&standalone, wolf);
-    stage_power(&standalone, 100);
+    stage_mana(&standalone, 100);
     cast(&standalone, RAPTOR_STRIKE, wolf);
 
     hold_the_swing(&standalone);
@@ -532,7 +529,7 @@ fn running_out_of_ammo_keeps_a_queued_raptor_strike() {
     ));
     let wolf = spawn_target(&standalone);
     engage(&standalone, wolf);
-    stage_power(&standalone, 100);
+    stage_mana(&standalone, 100);
     cast(&standalone, RAPTOR_STRIKE, wolf);
 
     hold_the_swing(&standalone);
@@ -735,6 +732,22 @@ fn engage(standalone: &Standalone, target: u64) {
 fn stage_power(standalone: &Standalone, rage: u32) {
     hold_the_swing(standalone);
     standalone.assert_call("debug_set_power", &["1", &rage.to_string()]);
+}
+
+fn stage_mana(standalone: &Standalone, mana: u32) {
+    let row = standalone
+        .query_rows(&format!(
+            "SELECT unit_bytes_0 FROM game_world_entity WHERE guid = {PLAYER}"
+        ))
+        .remove(0);
+    let bytes: u32 = row["unit_bytes_0"]
+        .parse()
+        .expect("unit_bytes_0 is a number");
+    let bytes = (bytes & 0x00FF_FFFF) | (MANA << 24);
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_bytes_0 = {bytes}, max_power = {mana} WHERE guid = {PLAYER}"
+    ));
+    stage_power(standalone, mana);
 }
 
 fn cast(standalone: &Standalone, spell_id: u32, target: u64) {

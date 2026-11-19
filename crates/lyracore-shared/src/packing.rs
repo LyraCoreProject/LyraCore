@@ -38,6 +38,8 @@ pub mod power_type {
     pub const FOCUS: u8 = 2;
     pub const ENERGY: u8 = 3;
     pub const HAPPINESS: u8 = 4;
+    /// A spell cost paid in health, vmangos `POWER_HEALTH` (-2); never a pool a unit holds.
+    pub const HEALTH: u8 = 254;
 
     pub const fn for_class(class: u8) -> u8 {
         match class {
