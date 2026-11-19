@@ -71,6 +71,7 @@ fn source_spell(row: &Row) -> Result<Spell> {
         casting_time_index: row.number("castingTimeIndex")?,
         recovery_time: row.number("recoveryTime")?,
         category_recovery_time: row.number("categoryRecoveryTime")?,
+        start_recovery_time: row.number("startRecoveryTime")?,
         aura_interrupt_flags: row.number("auraInterruptFlags")?,
         proc_flags: row.number("procFlags")?,
         proc_chance: row.number("procChance")?,
@@ -298,6 +299,7 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
         "stackAmount",
         "stances",
         "stancesNot",
+        "startRecoveryTime",
         "targets",
     ];
     for row in source.columns("spell_template", &columns)?.iter() {
@@ -343,7 +345,7 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
 #[cfg(test)]
 pub(crate) fn fixture() -> crate::world_source::WorldSource {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
-    let mut columns = "customFlags minTargetLevel spellIconId activeIconId baseLevel spellVisual1 preventionType school dispel mechanic attributes attributesEx attributesEx2 attributesEx3 attributesEx4 dmgClass stances stancesNot category targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime auraInterruptFlags procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    let mut columns = "customFlags minTargetLevel spellIconId activeIconId baseLevel spellVisual1 preventionType school dispel mechanic attributes attributesEx attributesEx2 attributesEx3 attributesEx4 dmgClass stances stancesNot category targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime startRecoveryTime auraInterruptFlags procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
     for prefix in [
         "effectBonusCoefficient",
         "effect",
