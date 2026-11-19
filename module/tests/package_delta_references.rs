@@ -987,3 +987,50 @@ fn form_claims_refuse_rows_the_form_tables_cannot_honour() {
     ));
     assert_eq!(passives[0]["spell_id"], BATTLE_STANCE_PASSIVE.to_string());
 }
+
+fn imported_form_spell_update(form_id: u32, spell_id: u32) -> String {
+    format!(
+        r#"{{"table":"game_form","key":{{"form_id":{form_id}}},"operation":"update","fields":{{"spell_id":{{"type":"u32","value":{spell_id}}}}}}}"#
+    )
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_plan_that_drops_the_spell_an_imported_form_was_pointed_at_is_refused() {
+    let mut standalone = Standalone::start("package-delta-form-dropped-spell");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
+    standalone.assert_call("debug_seed_scenario_fixtures", &[]);
+    standalone.assert_call("debug_seed_warrior_forms", &[]);
+
+    let repoint = [
+        shift_insert(17),
+        imported_form_spell_update(17, PACKAGE_SHIFT),
+    ]
+    .join(",");
+    let accepted = apply(&standalone, "spell", &artifact("example.aspect", &repoint));
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+
+    let refused = apply(&standalone, "spell", "");
+    assert!(!refused.status.success());
+    assert!(
+        refusal_text(&refused).contains("`game_form` row 17 names spell 6000001"),
+        "{}",
+        refusal_text(&refused)
+    );
+    let forms = standalone.query_rows("SELECT * FROM game_form WHERE form_id = 17");
+    assert_eq!(forms[0]["spell_id"], PACKAGE_SHIFT.to_string());
+    assert_eq!(
+        standalone
+            .query_rows(&format!(
+                "SELECT * FROM game_spell WHERE spell_id = {PACKAGE_SHIFT}"
+            ))
+            .len(),
+        1
+    );
+
+    let restore = imported_form_spell_update(17, BATTLE_STANCE);
+    let accepted = apply(&standalone, "spell", &artifact("example.aspect", &restore));
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+}
