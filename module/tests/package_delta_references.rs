@@ -872,6 +872,12 @@ fn form_spell_insert(spell_id: u32) -> String {
     )
 }
 
+fn battle_stance_effect_update(fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_spell_effect","key":{{"spell_id":{BATTLE_STANCE},"effect_index":0}},"operation":"update","fields":{fields}}}"#
+    )
+}
+
 fn spell_form_update(spell_id: u32, form_id: u32) -> String {
     format!(
         r#"{{"table":"game_spell_form","key":{{"spell_id":{spell_id},"form_id":{form_id}}},"operation":"update","fields":{{"excluded":{{"type":"bool","value":true}}}}}}"#
@@ -933,6 +939,16 @@ fn form_claims_refuse_rows_the_form_tables_cannot_honour() {
             spell_form_update(BATTLE_STANCE, 17),
             "outside the Package Form range",
         ),
+        (
+            battle_stance_effect_update(r#"{"p0":{"type":"i32","value":18}}"#),
+            "no longer entering Form 17",
+        ),
+        (
+            format!(
+                r#"{{"table":"game_spell_effect","key":{{"spell_id":{BATTLE_STANCE_PASSIVE},"effect_index":0}},"operation":"update","fields":{{"kind":{{"type":"u8","value":{A_SHAPESHIFT}}},"p0":{{"type":"i32","value":99}}}}}}"#
+            ),
+            "Form 99, which has no `game_form` row",
+        ),
     ] {
         let refused = apply(&standalone, "spell", &artifact("example.aspect", &claims));
         assert!(!refused.status.success(), "{claims}");
@@ -947,6 +963,10 @@ fn form_claims_refuse_rows_the_form_tables_cannot_honour() {
             "SELECT * FROM game_form WHERE form_id = {PACKAGE_FORM}"
         ))
         .is_empty());
+
+    let tuned = battle_stance_effect_update(r#"{"base_points":{"type":"i32","value":5}}"#);
+    let accepted = apply(&standalone, "spell", &artifact("example.aspect", &tuned));
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
 
     let claims = with_form(&form_spell_insert(BATTLE_STANCE_PASSIVE));
     let accepted = apply(&standalone, "spell", &artifact("example.aspect", &claims));

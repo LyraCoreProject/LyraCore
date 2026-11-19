@@ -758,7 +758,10 @@ identifier must fit 24 bits.
   writes, the apply refuses the plan when:
   - a Form's `spell_id` has no `A_SHAPESHIFT` effect for that Form, or its power rule is unknown;
   - a passive is not a passive spell, or carries `A_SHAPESHIFT`;
-  - a Package spell's `A_SHAPESHIFT` effect names a Form with no `game_form` row;
+  - a plan row writes an `A_SHAPESHIFT` effect, on any spell, that names a Form with no `game_form`
+    row;
+  - a plan row that updates any spell's effect leaves a Form's `spell_id` spell with no
+    `A_SHAPESHIFT` effect for that Form, whether or not the Form's own row is in the plan;
   - a passive or Form Set row names a missing spell or Form.
 - **EventAI.** Covers `game_creature_ai_broadcast_text.id`, `game_creature_ai_summon.id` and
   `game_quest_event_requirement.id`. The family's scripted definitions are not claimable: a
