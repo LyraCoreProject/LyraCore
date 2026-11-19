@@ -165,6 +165,26 @@ path = "module/tests/forms.rs"
 function = "a_spirit_healer_restores_reserved_mana_and_empties_the_rage_form_pool"
 rung = "durable_module"
 
+[[tests]]
+path = "module/src/spell/chance_on_hit.rs"
+function = "natural_attacks_set_both_weapons_aside"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "bear_form_shows_rage_and_its_passives_until_the_client_cancels_it"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "a_druid_form_ends_at_death"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "publish_repair_turns_a_shown_druid_form_into_its_aura"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/CharacterHandler.cpp"
@@ -250,3 +270,9 @@ description = "A charged Aura with no Proc effect shows no charge count, for exa
 path = "module/src/spell/proc.rs"
 symbol = "freeze_profile"
 evidence = "Source reading, not measured. Review of PR 1057: 132 charged 1.12 spells are affected. freeze_profile returns ProcProfile::default(), with zero charges, unless the effect kind is A_PROC_TRIGGER or A_PROC_DAMAGE. At d9173eca, SpellAuras.cpp SpellAuraHolder::SpellAuraHolder sets m_procCharges = spellproto->procCharges for every holder, and SpellAuraHolder::UpdateAuraApplication sends charges times stacks."
+
+[[known_gaps]]
+description = "A druid in a Form keeps its own model: no Form projects a display id, so peers see a night elf or tauren where vmangos shows the cat or bear model (892 or 8571 for Cat Form, 2281 or 2289 for the bear Forms, by team)."
+path = "module/src/form/mod.rs"
+symbol = "project_form"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleAuraModShapeshift sets the display id and scale from GetShapeshiftDisplayInfo; the 1.12 SpellShapeshiftForm.dbc carries no display id, so the client takes the model from UNIT_FIELD_DISPLAYID."

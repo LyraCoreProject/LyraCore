@@ -819,10 +819,10 @@ pub(crate) fn apply_effect(
         EffectKind::CreateItem | EffectKind::Pickpocket => {
             apply_inventory_effect(ctx, e, caster_guid, target_guid, points)
         }
-        EffectKind::Resurrect
-        | EffectKind::SummonPet
-        | EffectKind::TameCreature
-        | EffectKind::SetStance => apply_character_effect(ctx, e, caster_guid, target_guid, points),
+        EffectKind::Resurrect | EffectKind::SummonPet | EffectKind::TameCreature => {
+            apply_character_effect(ctx, e, caster_guid, target_guid, points)
+        }
+        EffectKind::SetStance => EffectHit::none(),
         EffectKind::Trigger | EffectKind::Scripted => {
             apply_delegating_effect(ctx, e, caster_guid, target_guid, level)
         }
@@ -889,6 +889,7 @@ pub(crate) fn apply_effect(
         | EffectKind::AuraRetaliate
         | EffectKind::AuraShapeshift
         | EffectKind::AuraFormPowerRetained
+        | EffectKind::AuraFormEntryChance
         | EffectKind::AuraControl
         | EffectKind::AuraImmunity
         | EffectKind::AuraModDetectRange
@@ -1513,36 +1514,6 @@ fn apply_character_effect(
         E_TAME_CREATURE => {
             if let Err(error) = crate::creatures::tame_creature(ctx, caster_guid, target_guid) {
                 log::info!("tame completion for caster {caster_guid} and target {target_guid} failed: {error}");
-            }
-            EffectHit::none()
-        }
-        E_SET_STANCE => {
-            let new_stance = e.p0.clamp(0, u8::MAX as i32) as u8;
-            if let Some(mut c) = ctx.db.game_world_entity().guid().find(caster_guid) {
-                if c.stance != new_stance {
-                    let power_type = lyracore_shared::packing::power_type::for_class(c.class());
-                    let clears_power = stance_switch_clears_power(c.stance, new_stance, power_type);
-                    c.stance = new_stance;
-                    if clears_power {
-                        c.power = 0;
-                    }
-                    // Preserve byte 3, which carries the ghost visibility flag.
-                    let form_id = client_form_for_stance(new_stance) << 16;
-                    c.unit_bytes_1 = (c.unit_bytes_1 & 0xFF00_0000) | form_id;
-                    let c = c.update(ctx);
-                    crate::combat::queued_strike::interrupt_form_bound(ctx, &c);
-                    crate::items::equip::reconcile(ctx, caster_guid);
-                    // vmangos Player::InitDataForForm updates attack power and damage.
-                    crate::spell::recompute_sheet(ctx, caster_guid);
-                } else if form_recast_toggles_off(c.stance, new_stance) {
-                    // Druid caster form uses zero; client_form_for_stance(0) is Battle Stance.
-                    c.stance = 0;
-                    c.unit_bytes_1 &= 0xFF00_0000;
-                    let c = c.update(ctx);
-                    crate::combat::queued_strike::interrupt_form_bound(ctx, &c);
-                    crate::items::equip::reconcile(ctx, caster_guid);
-                    crate::spell::recompute_sheet(ctx, caster_guid);
-                }
             }
             EffectHit::none()
         }

@@ -5,9 +5,10 @@ use lyracore_shared::form::{DBC_MASK_FORMS, FORM_FACTS};
 
 use crate::dump::{push_insert, sql_str};
 
-// SpellShapeshiftForm.dbc flags bit 1 (vmangos SHAPESHIFT_FLAG_STANCE): spells treat the form as
-// unshifted.
+// SpellShapeshiftForm.dbc flags, vmangos SHAPESHIFT_FLAG_STANCE (spells treat the form as
+// unshifted) and SHAPESHIFT_FLAG_AGILITY_ATTACK_BONUS (Cat Form).
 const SHAPESHIFT_FLAG_STANCE: i32 = 0x1;
+const SHAPESHIFT_FLAG_AGILITY_ATTACK_BONUS: i32 = 0x20;
 
 // vmangos HandleAuraModShapeshift maps Tactical Mastery's class script ids to the rage it keeps.
 const RETAINED_RAGE_SCRIPTS: [(u32, i32); 5] =
@@ -16,12 +17,20 @@ const RETAINED_RAGE_SCRIPTS: [(u32, i32); 5] =
 // vmangos HandleAuraModShapeshift casts Berserker Stance when Nefarian's warrior call ends.
 const SHAPESHIFT_RETURN_SPELLS: [(u32, u32); 1] = [(23397, 2458)];
 
+// vmangos HandleAuraModShapeshift takes Furor's chance from its dummy Aura (SpellIconID 238).
+const FORM_ENTRY_CHANCE_SPELLS: [u32; 5] = [17056, 17058, 17059, 17060, 17061];
+
 // vmangos Spell::CheckCast refuses every shapeshift while Nefarian's warrior call is held.
 const FORM_LOCKING_SPELLS: [u32; 1] = [23397];
 
 /// Whether this spell's Aura locks its holder in its Form.
 pub(crate) fn locks_form(spell_id: u32) -> bool {
     FORM_LOCKING_SPELLS.contains(&spell_id)
+}
+
+/// Whether this spell's dummy Aura is the chance that entering a Form casts its entry spell.
+pub(crate) fn grants_form_entry_chance(spell_id: u32) -> bool {
+    FORM_ENTRY_CHANCE_SPELLS.contains(&spell_id)
 }
 
 /// The spell a unit gets when this spell's shapeshift Aura ends and leaves it in no Form; the
@@ -61,7 +70,7 @@ pub(crate) struct ShapeshiftFormEntry {
     pub(crate) flags: i32,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FormRow {
     pub(crate) form_id: u32,
     pub(crate) name: String,
@@ -71,12 +80,16 @@ pub(crate) struct FormRow {
     pub(crate) power_on_entry: u8,
     pub(crate) default_for_class: u8,
     pub(crate) client_form: u8,
+    pub(crate) natural_attack_ms: u32,
+    pub(crate) attack_power_from_agility: bool,
+    pub(crate) clears_snares: bool,
+    pub(crate) entry_chance_spell: u32,
 }
 
 impl FormRow {
     fn sql_values(&self) -> String {
         format!(
-            "({},{},{},{},{},{},{},{})",
+            "({},{},{},{},{},{},{},{},{},{},{},{})",
             self.form_id,
             sql_str(&self.name),
             self.spell_id,
@@ -84,7 +97,11 @@ impl FormRow {
             self.power_type,
             self.power_on_entry,
             self.default_for_class,
-            self.client_form
+            self.client_form,
+            self.natural_attack_ms,
+            self.attack_power_from_agility,
+            self.clears_snares,
+            self.entry_chance_spell
         )
     }
 }
@@ -116,6 +133,10 @@ pub(crate) fn form_rows(dbc: &[ShapeshiftFormEntry]) -> FormRows {
             default_for_class: fact.default_for_class,
             // The 1.12 client knows every DBC form by its own id.
             client_form: fact.form_id as u8,
+            natural_attack_ms: fact.natural_attack_ms,
+            attack_power_from_agility: entry.flags & SHAPESHIFT_FLAG_AGILITY_ATTACK_BONUS != 0,
+            clears_snares: fact.clears_snares,
+            entry_chance_spell: fact.entry_chance_spell,
         });
         rows.passives
             .extend(fact.passives.iter().map(|&spell| (fact.form_id, spell)));
@@ -137,7 +158,7 @@ pub(crate) fn push_form_sql(stmts: &mut Vec<String>, rows: &FormRows) {
     push_insert(
         stmts,
         "game_form",
-        "form_id,name,spell_id,acts_as_shapeshifted,power_type,power_on_entry,default_for_class,client_form",
+        "form_id,name,spell_id,acts_as_shapeshifted,power_type,power_on_entry,default_for_class,client_form,natural_attack_ms,attack_power_from_agility,clears_snares,entry_chance_spell",
         &rows.forms.iter().map(FormRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
@@ -164,6 +185,8 @@ mod tests {
             (17, "Battle Stance", 0x7),
             (18, "Defensive Stance", 0x7),
             (19, "Berserker Stance", 0x7),
+            (5, "Bear Form", 0x50),
+            (8, "Dire Bear Form", 0x50),
         ]
         .into_iter()
         .map(|(id, name, flags)| ShapeshiftFormEntry {
@@ -174,56 +197,115 @@ mod tests {
         .collect()
     }
 
+    fn stance(form_id: u32, name: &str, spell_id: u32, default_for_class: u8) -> FormRow {
+        FormRow {
+            form_id,
+            name: name.into(),
+            spell_id,
+            acts_as_shapeshifted: false,
+            power_type: power_type::RAGE,
+            power_on_entry: PowerOnEntry::KeepUpToRetained as u8,
+            default_for_class,
+            client_form: form_id as u8,
+            natural_attack_ms: 0,
+            attack_power_from_agility: false,
+            clears_snares: false,
+            entry_chance_spell: 0,
+        }
+    }
+
+    fn rows_for(rows: &FormRows, forms: &[u32]) -> Vec<FormRow> {
+        forms
+            .iter()
+            .filter_map(|&id| rows.forms.iter().find(|form| form.form_id == id))
+            .cloned()
+            .collect()
+    }
+
     #[test]
     fn the_three_warrior_stances_become_forms_with_their_vmangos_passives() {
         let rows = form_rows(&build_5875_rows());
-        let rage = power_type::RAGE;
-        let rule = PowerOnEntry::KeepUpToRetained as u8;
         assert_eq!(
-            rows.forms,
+            rows_for(&rows, &[17, 18, 19]),
             vec![
-                FormRow {
-                    form_id: 17,
-                    name: "Battle Stance".into(),
-                    spell_id: 2457,
-                    acts_as_shapeshifted: false,
-                    power_type: rage,
-                    power_on_entry: rule,
-                    default_for_class: 1,
-                    client_form: 17,
-                },
-                FormRow {
-                    form_id: 18,
-                    name: "Defensive Stance".into(),
-                    spell_id: 71,
-                    acts_as_shapeshifted: false,
-                    power_type: rage,
-                    power_on_entry: rule,
-                    default_for_class: 0,
-                    client_form: 18,
-                },
-                FormRow {
-                    form_id: 19,
-                    name: "Berserker Stance".into(),
-                    spell_id: 2458,
-                    acts_as_shapeshifted: false,
-                    power_type: rage,
-                    power_on_entry: rule,
-                    default_for_class: 0,
-                    client_form: 19,
-                },
+                stance(17, "Battle Stance", 2457, 1),
+                stance(18, "Defensive Stance", 71, 0),
+                stance(19, "Berserker Stance", 2458, 0),
             ]
         );
-        assert_eq!(rows.passives, vec![(17, 21156), (18, 7376), (19, 7381)]);
+        for passive in [(17, 21156), (18, 7376), (19, 7381)] {
+            assert!(rows.passives.contains(&passive));
+        }
+    }
+
+    #[test]
+    fn the_three_feral_forms_fight_with_natural_attacks_and_clear_snares() {
+        let rows = form_rows(&build_5875_rows());
+        let feral =
+            |form_id: u32, name: &str, spell_id, power, rule: PowerOnEntry, attack_ms| FormRow {
+                form_id,
+                name: String::from(name),
+                spell_id,
+                acts_as_shapeshifted: true,
+                power_type: power,
+                power_on_entry: rule as u8,
+                default_for_class: 0,
+                client_form: form_id as u8,
+                natural_attack_ms: attack_ms,
+                attack_power_from_agility: form_id == 1,
+                clears_snares: true,
+                entry_chance_spell: if form_id == 1 { 17099 } else { 17057 },
+            };
+        assert_eq!(
+            rows_for(&rows, &[1, 5, 8]),
+            vec![
+                feral(
+                    1,
+                    "Cat Form",
+                    768,
+                    power_type::ENERGY,
+                    PowerOnEntry::Zero,
+                    1000
+                ),
+                feral(
+                    5,
+                    "Bear Form",
+                    5487,
+                    power_type::RAGE,
+                    PowerOnEntry::Keep,
+                    2500
+                ),
+                feral(
+                    8,
+                    "Dire Bear Form",
+                    9634,
+                    power_type::RAGE,
+                    PowerOnEntry::Keep,
+                    2500
+                ),
+            ]
+        );
+        for passive in [(1, 3025), (5, 1178), (5, 21178), (8, 9635), (8, 21178)] {
+            assert!(rows.passives.contains(&passive), "{passive:?}");
+        }
+    }
+
+    #[test]
+    fn furor_is_the_form_entry_chance() {
+        for rank in [17056, 17058, 17059, 17060, 17061] {
+            assert!(grants_form_entry_chance(rank));
+        }
+        assert!(!grants_form_entry_chance(17057));
     }
 
     #[test]
     fn only_declared_forms_import_as_shapeshift_auras() {
-        for form in [17, 18, 19] {
+        for form in [1, 5, 8, 17, 18, 19] {
             assert!(imports_shapeshift(form));
         }
-        // Cat, Bear, Ghost Wolf, Shadowform, Stealth and the creature forms keep their old import.
-        for form in [1, 5, 8, 14, 15, 16, 28, 30] {
+        // Travel, Aquatic, Ghost Wolf, Shadowform, Stealth, Moonkin and the creature forms keep their
+        // old import.
+        for form in [3, 4, 14, 15, 16, 28, 30, 31] {
             assert!(!imports_shapeshift(form));
         }
     }
@@ -258,7 +340,7 @@ mod tests {
             vec![
                 "DELETE FROM game_form WHERE form_id = 17".to_string(),
                 "DELETE FROM game_form_spell WHERE form_id = 17".to_string(),
-                "INSERT INTO game_form (form_id,name,spell_id,acts_as_shapeshifted,power_type,power_on_entry,default_for_class,client_form) VALUES (17,'Battle Stance',2457,false,1,2,1,17)".to_string(),
+                "INSERT INTO game_form (form_id,name,spell_id,acts_as_shapeshifted,power_type,power_on_entry,default_for_class,client_form,natural_attack_ms,attack_power_from_agility,clears_snares,entry_chance_spell) VALUES (17,'Battle Stance',2457,false,1,2,1,17,0,false,false,0)".to_string(),
                 format!("INSERT INTO game_form_spell (id,form_id,spell_id) VALUES ({},17,21156)", (17u64 << 32) | 21156),
             ]
         );

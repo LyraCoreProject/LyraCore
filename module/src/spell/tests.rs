@@ -149,14 +149,6 @@ fn a_known_passive_comes_with_the_forms_its_form_set_names() {
 }
 
 #[test]
-fn client_form_for_stance_matches_the_convention() {
-    assert_eq!(client_form_for_stance(STANCE_BEAR), 5);
-    assert_eq!(client_form_for_stance(STANCE_CAT), 1);
-    assert_eq!(client_form_for_stance(STANCE_DIRE_BEAR), 8);
-    assert_eq!(client_form_for_stance(11), 28);
-}
-
-#[test]
 fn spell_miss_follows_the_level_hit_curve() {
     assert_eq!(magic_miss_bp(10, 10), 400);
     assert_eq!(magic_miss_bp(10, 5), 100);

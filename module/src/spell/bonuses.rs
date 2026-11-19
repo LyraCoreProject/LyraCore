@@ -2,7 +2,7 @@ use spacetimedb::ReducerContext;
 
 use lyracore_shared::spell::taxonomy::{
     A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN, A_MOD_DAMAGE_TAKEN_FLAT,
-    A_MOD_HEALING_TAKEN, A_MOD_SCHOOL_CRIT, STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR,
+    A_MOD_HEALING_TAKEN, A_MOD_SCHOOL_CRIT,
 };
 
 use super::{auras_on, spell_mod, spell_power, SPELLMOD_OP_DAMAGE};
@@ -20,12 +20,7 @@ fn fits_weapon(ctx: &ReducerContext, guid: u64, slot: u8, header: &Spell) -> boo
     if header.equipped_item_class == -1 {
         return true;
     }
-    if ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(guid)
-        .is_some_and(|unit| matches!(unit.stance, STANCE_BEAR | STANCE_DIRE_BEAR | STANCE_CAT))
+    if crate::form::combat_profile(ctx, guid).is_natural()
         || (slot != crate::items::equip_slot::RANGED && super::is_disarmed(ctx, guid))
     {
         return false;

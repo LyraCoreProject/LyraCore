@@ -617,31 +617,23 @@ fn a_package_form_projects_its_passives_and_gates_its_spells() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_package_forms_fallback_byte_never_stands_for_a_druid_form() {
-    const BEAR_FORM: u32 = 5487;
     const MAUL: u32 = 6807;
     let shard = fixture("forms-package-fallback");
     shard.assert_sql("UPDATE game_character SET class = 11 WHERE guid = 1");
     shard.assert_call("debug_spawn_player_entity", &[WARRIOR]);
     shard.assert_call("debug_set_level", &[WARRIOR, "20"]);
+    shard.assert_call("debug_seed_druid_forms", &[]);
     apply_package_form(&shard);
-    insert_spell(
-        &shard,
-        BEAR_FORM,
-        "Bear Form",
-        (0, 0, 0),
-        &[(E_SET_STANCE, 0, i32::from(STANCE_BEAR), P_NONE)],
-    );
     insert_spell(&shard, MAUL, "Maul", (0, 0, 0), &[(A_FLAG, 0, 0, P_FLAG)]);
     require_forms(&shard, MAUL, &[5], &[]);
-    cast(&shard, BEAR_FORM);
-    assert_eq!(client_form(&shard), PACKAGE_CLIENT_FORM);
+    enter(&shard, PACKAGE_SHIFT);
+    assert_eq!(client_form(&shard), PACKAGE_CLIENT_FORM, "Bear Form's byte");
 
     ready(&shard);
     let maul = shard.call("debug_force_cast", &[WARRIOR, &MAUL.to_string()]);
-    assert!(maul.status.success(), "Bear Form allows Maul");
+    assert!(!maul.status.success(), "the Package Form is not Bear Form");
     shard.assert_call("debug_repair_after_publish", &[]);
-    assert!(shapeshift_spells(&shard).is_empty());
-    assert_eq!(client_form(&shard), PACKAGE_CLIENT_FORM);
+    assert_eq!(shapeshift_spells(&shard), vec![PACKAGE_SHIFT]);
 }
 
 #[test]
@@ -1001,22 +993,15 @@ fn an_equipment_aura_bound_to_a_form_stays_with_the_equipment() {
 const SHARPENED_CLAWS: u32 = 16942;
 
 /// A druid in Cat Form whose Feral Combat tree offers Sharpened Claws, a passive whose Form Set
-/// names only druid forms, which have no Form rows yet.
+/// names only the druid's feral Forms.
 fn druid_in_cat_form(name: &str) -> Standalone {
-    const CAT_FORM: u32 = 768;
     const FERAL_COMBAT: u32 = 281;
     let shard = fixture(name);
     shard.assert_sql("UPDATE game_character SET class = 11 WHERE guid = 1");
     shard.assert_call("debug_spawn_player_entity", &[WARRIOR]);
     shard.assert_call("debug_set_level", &[WARRIOR, "20"]);
-    insert_spell(
-        &shard,
-        CAT_FORM,
-        "Cat Form",
-        (0, 0, 0),
-        &[(E_SET_STANCE, 0, 4, P_NONE)],
-    );
-    cast(&shard, CAT_FORM);
+    shard.assert_call("debug_seed_druid_forms", &[]);
+    enter(&shard, CAT_FORM);
     assert_eq!(client_form(&shard), 1);
     insert_spell(
         &shard,
@@ -1063,6 +1048,13 @@ fn a_druid_learns_a_talent_passive_bound_to_a_druid_form() {
         &[WARRIOR, &SHARPENED_CLAWS.to_string()],
     );
     assert!(aura_spells(&shard).contains(&SHARPENED_CLAWS));
+    leave(&shard, CAT_FORM);
+    assert!(
+        !aura_spells(&shard).contains(&SHARPENED_CLAWS),
+        "the talent needs a feral Form"
+    );
+    enter(&shard, BEAR_FORM);
+    assert!(aura_spells(&shard).contains(&SHARPENED_CLAWS));
 }
 
 #[test]
@@ -1085,6 +1077,13 @@ const DRUID_GUID: &str = WARRIOR;
 
 /// A level 20 druid with 700 of 1000 mana who can enter the Package Form, which shows rage.
 fn druid_beside_a_rage_form(name: &str) -> (Standalone, ReducerConnection) {
+    let (shard, wire) = druid(name);
+    apply_package_form(&shard);
+    (shard, wire)
+}
+
+/// A logged-in level 20 druid with 700 of 1000 mana.
+fn druid(name: &str) -> (Standalone, ReducerConnection) {
     let shard = fixture(name);
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.assert_sql(&format!(
@@ -1122,7 +1121,6 @@ fn druid_beside_a_rage_form(name: &str) -> (Standalone, ReducerConnection) {
     let wire = log_in(&shard, 42);
     shard.assert_call("debug_set_level", &[DRUID_GUID, "20"]);
     shard.assert_call("debug_set_power", &[DRUID_GUID, "700"]);
-    apply_package_form(&shard);
     (shard, wire)
 }
 
@@ -1253,4 +1251,179 @@ fn a_spirit_healer_restores_reserved_mana_and_empties_the_rage_form_pool() {
         ((RAGE, 0, 1000), (MANA, 500, 1000)),
         "vmangos Player::ResurrectPlayer(0.5): half mana and no rage"
     );
+}
+
+const CAT_FORM: u32 = 768;
+const BEAR_FORM: u32 = 5487;
+const DIRE_BEAR_FORM: u32 = 9634;
+const CAT_PASSIVE: u32 = 3025;
+const BEAR_PASSIVES: [u32; 2] = [1178, 21178];
+const ENERGY: u8 = 3;
+
+fn leave(shard: &Standalone, form_spell: u32) {
+    shard.assert_call(
+        "debug_shed_spell_auras",
+        &[DRUID_GUID, &form_spell.to_string()],
+    );
+}
+
+/// The 1.12 client's `CMSG_CANCEL_AURA`.
+fn cancel_aura(wire: &mut ReducerConnection, spell: u32) {
+    let _ = wire.call(
+        "native_world_receive",
+        json!([0x136u32, spell.to_le_bytes().to_vec()]),
+    );
+}
+
+fn feral_druid(name: &str) -> (Standalone, ReducerConnection) {
+    let (shard, wire) = druid(name);
+    shard.assert_call("debug_seed_druid_forms", &[]);
+    (shard, wire)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn bear_form_shows_rage_and_its_passives_until_the_client_cancels_it() {
+    let (shard, mut wire) = feral_druid("forms-druid-bear");
+    enter(&shard, BEAR_FORM);
+    assert_eq!(client_form(&shard), 5);
+    assert_eq!(pools(&shard), ((RAGE, 0, 1000), (MANA, 700, 1000)));
+    let held = aura_spells(&shard);
+    assert!(BEAR_PASSIVES.iter().all(|passive| held.contains(passive)));
+
+    cancel_aura(&mut wire, BEAR_FORM);
+    assert!(shapeshift_spells(&shard).is_empty());
+    assert_eq!(client_form(&shard), 0);
+    assert_eq!(
+        pools(&shard),
+        ((MANA, 700, 1000), (NO_RESERVE_POOL, 0, 0)),
+        "leaving the Form shows mana again"
+    );
+    let held = aura_spells(&shard);
+    assert!(!BEAR_PASSIVES.iter().any(|passive| held.contains(passive)));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_client_cancels_one_feral_form_before_casting_the_next() {
+    let (shard, mut wire) = feral_druid("forms-druid-switch");
+    enter(&shard, BEAR_FORM);
+    let casts = |spell: u32| {
+        ready(&shard);
+        shard
+            .call("debug_force_cast", &[DRUID_GUID, &spell.to_string()])
+            .status
+            .success()
+    };
+    // vmangos GetErrorAtShapeshiftedCast: the form spells are SPELL_ATTR_NOT_SHAPESHIFT.
+    assert!(!casts(CAT_FORM), "Cat Form is refused in Bear Form");
+    assert!(!casts(BEAR_FORM), "recasting Bear Form does not leave it");
+    assert_eq!(shapeshift_spells(&shard), vec![BEAR_FORM]);
+
+    cancel_aura(&mut wire, BEAR_FORM);
+    enter(&shard, CAT_FORM);
+    assert_eq!(client_form(&shard), 1);
+    assert_eq!(pools(&shard), ((ENERGY, 0, 100), (MANA, 700, 1000)));
+    let held = aura_spells(&shard);
+    assert!(held.contains(&CAT_PASSIVE));
+    assert!(!BEAR_PASSIVES.iter().any(|passive| held.contains(passive)));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_druid_form_ends_at_death() {
+    let (shard, _wire) = feral_druid("forms-druid-death");
+    enter(&shard, DIRE_BEAR_FORM);
+    shard.assert_call("debug_set_health", &[DRUID_GUID, "0"]);
+    assert_eq!(warrior(&shard)["dead"], "true");
+    assert!(shapeshift_spells(&shard).is_empty());
+    assert_eq!(client_form(&shard), 0);
+    let ((shown, ..), (reserve, ..)) = pools(&shard);
+    assert_eq!((shown, reserve), (MANA, NO_RESERVE_POOL));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_feral_form_frees_the_druid_from_roots_and_snares_as_it_comes_and_goes() {
+    const ROOT: u32 = 5090980;
+    const SNARE: u32 = 5090981;
+    const DAZE: u32 = 5090982;
+    const MECHANICLESS_SLOW: u32 = 5090983;
+    let (shard, _wire) = feral_druid("forms-druid-snares");
+    let slow = (A_MOD_SPEED, -50, i32::from(SPEED_MOVE), P_SPEED_KIND);
+    // Spell.dbc mechanics: root 7, snare 11 and daze 27.
+    for (spell, name, effect, mechanic) in [
+        (ROOT, "Root", (A_CONTROL, 0, M_ROOT, P_MECHANIC), 7),
+        (SNARE, "Snare", slow, 11),
+        (DAZE, "Daze", slow, 27),
+        (MECHANICLESS_SLOW, "Slow", slow, 0),
+    ] {
+        insert_spell(&shard, spell, name, (0, 0, 0), &[effect]);
+        shard.assert_sql(&format!(
+            "UPDATE game_spell SET mechanic = {mechanic} WHERE spell_id = {spell}"
+        ));
+        cast(&shard, spell);
+    }
+    let hindered = || {
+        let held = aura_spells(&shard);
+        [ROOT, SNARE, DAZE, MECHANICLESS_SLOW].map(|spell| held.contains(&spell))
+    };
+    assert_eq!(hindered(), [true; 4]);
+
+    enter(&shard, BEAR_FORM);
+    assert_eq!(
+        hindered(),
+        [false, false, true, true],
+        "vmangos 9033 ends roots and snares, but not a daze or a slow without a mechanic"
+    );
+    cast(&shard, ROOT);
+    cast(&shard, SNARE);
+    leave(&shard, BEAR_FORM);
+    assert_eq!(
+        hindered(),
+        [false, false, true, true],
+        "and again on leaving"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn furor_gives_a_druid_entering_bear_form_ten_rage() {
+    const FUROR: u32 = 17061;
+    const FUROR_RAGE: u32 = 17057;
+    let (shard, _wire) = feral_druid("forms-druid-furor");
+    insert_spell(
+        &shard,
+        FUROR,
+        "Furor",
+        (0x1D0, 0, 0),
+        &[(A_FORM_ENTRY_CHANCE, 100, 0, P_NONE)],
+    );
+    insert_spell(
+        &shard,
+        FUROR_RAGE,
+        "Furor",
+        (0, 0, 0),
+        &[(E_ENERGIZE, 100, i32::from(RAGE), P_POWER_TYPE)],
+    );
+    cast(&shard, FUROR);
+    enter(&shard, BEAR_FORM);
+    assert_eq!(
+        pools(&shard).0,
+        (RAGE, 100, 1000),
+        "rank 5 always gives 10 rage"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn publish_repair_turns_a_shown_druid_form_into_its_aura() {
+    let (shard, _wire) = feral_druid("forms-druid-repair");
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_bytes_1 = {} WHERE guid = {DRUID_GUID}",
+        5u32 << 16
+    ));
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert_eq!(shapeshift_spells(&shard), vec![BEAR_FORM]);
+    assert_eq!(pools(&shard), ((RAGE, 0, 1000), (MANA, 700, 1000)));
 }

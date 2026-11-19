@@ -26,6 +26,7 @@ pub const DBC_MASK_FORMS: std::ops::RangeInclusive<u32> = 1..=32;
 
 const CLASS_WARRIOR: u8 = 1;
 const RAGE: u8 = crate::packing::power_type::RAGE;
+const ENERGY: u8 = crate::packing::power_type::ENERGY;
 
 /// What vmangos knows about a Form that SpellShapeshiftForm.dbc does not carry.
 pub struct FormFact {
@@ -37,34 +38,83 @@ pub struct FormFact {
     /// Zero is no class.
     pub default_for_class: u8,
     pub passives: &'static [u32],
+    /// The swing time of the Form's natural attacks; zero keeps the weapon combat profile.
+    pub natural_attack_ms: u32,
+    /// Entering and leaving the Form ends the unit's roots and snares.
+    pub clears_snares: bool,
+    /// The spell entering the Form casts at the unit's `A_FORM_ENTRY_CHANCE`; zero is none.
+    pub entry_chance_spell: u32,
 }
 
-// vmangos d9173eca: Aura::HandleAuraModShapeshift (power), Aura::HandleShapeshiftBoosts
-// (passives) and Player::_LoadAuras (Battle Stance 2457 for a warrior without a form).
+const STANCE: FormFact = FormFact {
+    form_id: 0,
+    spell_id: 0,
+    power_type: RAGE,
+    power_on_entry: PowerOnEntry::KeepUpToRetained,
+    default_for_class: 0,
+    passives: &[],
+    natural_attack_ms: 0,
+    clears_snares: false,
+    entry_chance_spell: 0,
+};
+
+// vmangos Furor: 17099 gives 40 energy and 17057 gives 10 rage.
+const FUROR_ENERGY: u32 = 17099;
+const FUROR_RAGE: u32 = 17057;
+
+const FERAL: FormFact = FormFact {
+    power_on_entry: PowerOnEntry::Keep,
+    clears_snares: true,
+    entry_chance_spell: FUROR_RAGE,
+    ..STANCE
+};
+
+// vmangos d9173eca: Aura::HandleAuraModShapeshift (power, Shapeshift Form Effect 9033 and Furor),
+// Aura::HandleShapeshiftBoosts (passives), Player::InitDataForForm (attack times) and
+// Player::_LoadAuras (Battle Stance 2457 for a warrior without a form).
 pub const FORM_FACTS: &[FormFact] = &[
+    FormFact {
+        form_id: 1,
+        spell_id: 768,
+        power_type: ENERGY,
+        power_on_entry: PowerOnEntry::Zero,
+        passives: &[3025],
+        natural_attack_ms: 1000,
+        entry_chance_spell: FUROR_ENERGY,
+        ..FERAL
+    },
+    FormFact {
+        form_id: 5,
+        spell_id: 5487,
+        passives: &[1178, 21178],
+        natural_attack_ms: 2500,
+        ..FERAL
+    },
+    FormFact {
+        form_id: 8,
+        spell_id: 9634,
+        passives: &[9635, 21178],
+        natural_attack_ms: 2500,
+        ..FERAL
+    },
     FormFact {
         form_id: 17,
         spell_id: 2457,
-        power_type: RAGE,
-        power_on_entry: PowerOnEntry::KeepUpToRetained,
         default_for_class: CLASS_WARRIOR,
         passives: &[21156],
+        ..STANCE
     },
     FormFact {
         form_id: 18,
         spell_id: 71,
-        power_type: RAGE,
-        power_on_entry: PowerOnEntry::KeepUpToRetained,
-        default_for_class: 0,
         passives: &[7376],
+        ..STANCE
     },
     FormFact {
         form_id: 19,
         spell_id: 2458,
-        power_type: RAGE,
-        power_on_entry: PowerOnEntry::KeepUpToRetained,
-        default_for_class: 0,
         passives: &[7381],
+        ..STANCE
     },
 ];
 

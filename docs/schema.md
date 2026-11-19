@@ -398,7 +398,8 @@ respawn, so the spawn point never moves into the pet identity.
 
 A Form is data composed from building blocks the Module defines in Rust. `game_form` holds one row
 per Form, keyed by its own `form_id`, and `game_form_spell` holds the passive spells the Form grants.
-The `spell` import writes them; `debug_seed_warrior_forms` writes the same warrior stances for tests.
+The `spell` import writes them; `debug_seed_warrior_forms` and `debug_seed_druid_forms` write the
+same warrior stances and feral druid Forms for tests.
 A new Form needs rows, not Rust: a Package adds one through its Package Delta, at a `form_id` in the
 Package Form Range (`docs/package-api.md`).
 
@@ -412,11 +413,24 @@ leaves it, its passives and its Form Set rows in place.
   not the unit's own holds the own pool as the Reserve Pool and shows its pool from empty, as
   vmangos `Unit::SetPowerType` does; the rule then runs on the shown pool. Leaving the Form ends its
   pool and shows the own pool again. Every Form row shows its pool, so a Form that keeps the unit's
-  pool whatever it is, as vmangos Stealth does, needs a new building block.
+  pool whatever it is, as vmangos Stealth does, needs a new building block. A nonzero
+  `entry_chance_spell` is cast on entry at the percent chance of the unit's best
+  `A_FORM_ENTRY_CHANCE` Aura, as Furor gives Cat Form energy and the bear Forms rage.
+- **Combat profile.** `natural_attack_ms` zero keeps the weapon profile. Otherwise the unit sets its
+  weapons aside: both hands swing every `natural_attack_ms` for level-based damage, weapon skill is
+  the level cap, a druid has no ranged attack power and weapon-bound spell bonuses stop. With
+  `attack_power_from_agility`, a druid's melee attack power adds Agility, as in Cat Form; the
+  druid's Predatory Strikes adds to it with natural attacks.
 - **Lifecycle.** `default_for_class` puts a unit of that class with no Form into the Form at world
   entry, through the Aura of `spell_id`. An Aura survives death by its spell's attributes, the
-  same rule as every other Aura.
-- **Spell rules.** `acts_as_shapeshifted` decides whether spells treat the unit as shifted.
+  same rule as every other Aura, so the druid Forms end at death. `clears_snares` ends the unit's
+  roots and movement slows when it enters or leaves the Form, as vmangos Shapeshift Form Effect 9033
+  does: a root with any mechanic, and a slow whose mechanics a shapeshift does not keep (stun, daze,
+  fear and the other crowd control in vmangos `MECHANIC_NOT_REMOVED_BY_SHAPESHIFT`).
+- **Spell rules.** `acts_as_shapeshifted` decides whether spells treat the unit as shifted, and so
+  does the taxi Gate. The 1.12 form spells are `SPELL_ATTR_NOT_SHAPESHIFT`, so a druid in one feral
+  Form cannot cast another: the client sends `CMSG_CANCEL_AURA` for the current Form first, and the
+  same request is how it leaves a Form.
 - **1.12 client presentation.** `client_form` is the form byte the 1.12 client reads from
   `UNIT_FIELD_BYTES_1`. It is a projection, never the Form's identity, so a Form a client does not
   know can name a byte it does. A Package Form's byte is its fallback on the 1.12 client, and the
@@ -443,16 +457,16 @@ Aura's events drive the Form:
 The Aura change then projects once: `form::project_form` re-derives the client form byte, the shown
 pool, the passives the Form brings and the equipment that depends on the Form. The passives are the
 Form's `game_form_spell` rows and every known passive whose Form Set requires a Form with a
-`game_form` row, such as Defiance. A passive whose Form Set names only Forms without a row, such as
-a druid talent before druid forms are Forms, keeps the Aura its learning applied. The projection
+`game_form` row, such as Defiance or Sharpened Claws. A passive whose Form Set names only Forms
+without a row, such as a Moonkin talent before Moonkin Form is a Form, keeps the Aura its learning
+applied. The projection
 removes only Auras the unit cast itself; equipment Auras stay with the equipment reconcile. A spell
 with `CAST_FLAG_LOCKS_FORM`, Berserk among them, refuses every shapeshift cast while its Aura is
 held.
 
 Every Character body that enters the world runs the same projection, and one with no shapeshift Aura
 enters its class's default Form, whether it came from login, a Package or a sessionless action.
-Publish repair projects too. `WorldEntity.stance` stays a column for druid forms until they become
-Forms.
+Publish repair projects too. `WorldEntity.stance` is a retired column: nothing reads it.
 
 ### `game_character` (`module/src/character.rs`)
 

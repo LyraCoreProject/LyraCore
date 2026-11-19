@@ -1,5 +1,8 @@
 use lyracore_shared::form::PowerOnEntry;
-use lyracore_shared::spell::taxonomy::{A_FORM_POWER_RETAINED, A_SHAPESHIFT};
+use lyracore_shared::spell::taxonomy::{
+    A_CONTROL, A_FORM_ENTRY_CHANCE, A_FORM_POWER_RETAINED, A_MOD_SPEED, A_SHAPESHIFT, M_ROOT,
+    SPEED_MOVE,
+};
 use spacetimedb::{log, ReducerContext, Table};
 
 use crate::spell::tables::game_spell_form;
@@ -34,35 +37,54 @@ pub(crate) fn active_form(ctx: &ReducerContext, guid: u64) -> Option<Form> {
     form
 }
 
-/// The unit's Form for the cast and equip Gates. A unit without a shapeshift Aura can still hold
-/// a druid form that `E_SET_STANCE` wrote straight to the client form byte.
+/// The unit's Form for the cast and equip Gates.
 pub(crate) fn shapeshift_state(
     ctx: &ReducerContext,
     unit: &WorldEntity,
 ) -> Option<ShapeshiftState> {
-    if let Some(form) = active_form(ctx, unit.guid) {
-        return Some(ShapeshiftState {
-            form_id: form.form_id,
-            acts_as_shapeshifted: form.acts_as_shapeshifted,
-        });
-    }
-    let client_form = unit.form();
-    if client_form == 0 {
-        return None;
-    }
-    Some(match form_by_client_byte(ctx, client_form) {
-        Some(form) => ShapeshiftState {
-            form_id: form.form_id,
-            acts_as_shapeshifted: form.acts_as_shapeshifted,
-        },
-        None => ShapeshiftState {
-            form_id: client_form,
-            // Build-5875 SpellShapeshiftForm.dbc marks these forms as stances. Druid forms, which
-            // have no Form rows yet, reach this, and so do warrior bytes 17-19 before the spell
-            // reimport writes Forms; #1046 PR 4 removes the table.
-            acts_as_shapeshifted: !matches!(client_form, 17..=19 | 28 | 30 | 31),
-        },
+    active_form(ctx, unit.guid).map(|form| ShapeshiftState {
+        form_id: form.form_id,
+        acts_as_shapeshifted: form.acts_as_shapeshifted,
     })
+}
+
+/// How a unit fights in its Form. See docs/schema.md "Forms".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum CombatProfile {
+    #[default]
+    Weapon,
+    /// Weapons are set aside: both hands swing level-based natural attacks every `attack_ms`.
+    Natural {
+        attack_ms: u32,
+        attack_power_from_agility: bool,
+    },
+}
+
+impl CombatProfile {
+    pub(crate) fn is_natural(self) -> bool {
+        matches!(self, Self::Natural { .. })
+    }
+}
+
+impl Form {
+    fn combat_profile(&self) -> CombatProfile {
+        match self.natural_attack_ms {
+            0 => CombatProfile::Weapon,
+            attack_ms => CombatProfile::Natural {
+                attack_ms,
+                attack_power_from_agility: self.attack_power_from_agility,
+            },
+        }
+    }
+}
+
+pub(crate) fn combat_profile(ctx: &ReducerContext, guid: u64) -> CombatProfile {
+    active_form(ctx, guid).map_or(CombatProfile::Weapon, |form| form.combat_profile())
+}
+
+/// Whether spells, taxis and other rules treat the unit as shapeshifted.
+pub(crate) fn acts_as_shapeshifted(ctx: &ReducerContext, guid: u64) -> bool {
+    active_form(ctx, guid).is_some_and(|form| form.acts_as_shapeshifted)
 }
 
 /// A shapeshift Aura of `spell_id` naming `form_id` was applied: the unit leaves every other
@@ -77,17 +99,99 @@ pub(crate) fn entered(ctx: &ReducerContext, guid: u64, spell_id: u32, form_id: u
         .filter(|aura| replaced.contains(&aura.spell_id))
         .collect();
     crate::spell::shed_auras_before_projection(ctx, removed);
-    if let (Some(mut unit), Some(form)) = (
-        ctx.db.game_world_entity().guid().find(guid),
-        ctx.db.game_form().form_id().find(form_id),
-    ) {
+    let Some(form) = ctx.db.game_form().form_id().find(form_id) else {
+        return;
+    };
+    if form.clears_snares {
+        clear_snares(ctx, guid);
+    }
+    if let Some(mut unit) = ctx.db.game_world_entity().guid().find(guid) {
         let shown = (unit.unit_bytes_0, unit.power);
         show_form_pool(&mut unit, Some(&form));
         unit.power = power_on_entry(ctx, &unit, &form);
         if (unit.unit_bytes_0, unit.power) != shown {
-            unit.update(ctx);
+            unit = unit.update(ctx);
         }
+        cast_entry_chance_spell(ctx, &unit, &form);
     }
+}
+
+/// vmangos Furor: entering the Form casts its entry spell at the unit's `A_FORM_ENTRY_CHANCE`.
+fn cast_entry_chance_spell(ctx: &ReducerContext, unit: &WorldEntity, form: &Form) {
+    if form.entry_chance_spell == 0 {
+        return;
+    }
+    let chance = auras_on(ctx, unit.guid)
+        .filter(|aura| aura.eff_kind == A_FORM_ENTRY_CHANCE)
+        .map(|aura| aura.amount.max(0) as u32)
+        .max()
+        .unwrap_or(0);
+    if ctx.random::<u32>() % 100 >= chance {
+        return;
+    }
+    let spell = form.entry_chance_spell;
+    if let Err(error) =
+        crate::spell::cast_triggered(ctx, unit.guid, spell, unit.level as u8, unit.guid)
+    {
+        log::info!("Form {} entry spell {spell} failed: {error}", form.form_id);
+    }
+}
+
+// vmangos SpellDefines.h MECHANIC_NOT_REMOVED_BY_SHAPESHIFT: charm, disoriented, fear, pacify, stun,
+// freeze, banish, shackle, turn, horror, daze and sapped.
+const MECHANICS_A_SHAPESHIFT_KEEPS: [u8; 12] = [1, 2, 5, 8, 12, 13, 18, 20, 23, 24, 27, 30];
+
+/// vmangos Shapeshift Form Effect 9033: every root with a mechanic ends, and so does every
+/// movement slow with a mechanic that a shapeshift does not keep.
+fn clear_snares(ctx: &ReducerContext, guid: u64) {
+    let freed: std::collections::BTreeSet<u32> = auras_on(ctx, guid)
+        .filter(|aura| {
+            let root = aura.eff_kind == A_CONTROL && aura.eff_p0 == M_ROOT;
+            let slow = aura.eff_kind == A_MOD_SPEED
+                && aura.eff_p0 == i32::from(SPEED_MOVE)
+                && aura.amount < 0;
+            if !root && !slow {
+                return false;
+            }
+            let mechanics = spell_mechanics(ctx, aura.spell_id);
+            mechanics != 0 && (root || mechanics & mechanic_mask(MECHANICS_A_SHAPESHIFT_KEEPS) == 0)
+        })
+        .map(|aura| aura.spell_id)
+        .collect();
+    if freed.is_empty() {
+        return;
+    }
+    let ended = auras_on(ctx, guid)
+        .filter(|aura| freed.contains(&aura.spell_id))
+        .collect();
+    shed_auras(ctx, ended);
+}
+
+/// vmangos `SpellEntry::GetAllSpellMechanicMask`: the spell's mechanic and each effect's.
+fn spell_mechanics(ctx: &ReducerContext, spell_id: u32) -> u32 {
+    let header = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(spell_id)
+        .map_or(0, |spell| spell.mechanic);
+    mechanic_mask(
+        std::iter::once(header).chain(
+            ctx.db
+                .game_spell_effect()
+                .by_spell()
+                .filter(spell_id)
+                .map(|effect| effect.effect_mechanic),
+        ),
+    )
+}
+
+/// Bit `mechanic - 1` for each Spell.dbc mechanic; zero is none.
+fn mechanic_mask(mechanics: impl IntoIterator<Item = u8>) -> u32 {
+    mechanics
+        .into_iter()
+        .filter(|mechanic| (1..=32).contains(mechanic))
+        .fold(0, |mask, mechanic| mask | 1 << (mechanic - 1))
 }
 
 /// Shows the pool the unit's Form names, or the unit's own pool when it has no Form.
@@ -114,6 +218,15 @@ pub(crate) fn refreshed(ctx: &ReducerContext, guid: u64, spell_id: u32, form_id:
 pub(crate) fn exited(ctx: &ReducerContext, aura: &Aura) {
     let guid = aura.target_guid;
     end_form_bound(ctx, guid);
+    if ctx
+        .db
+        .game_form()
+        .form_id()
+        .find(aura.eff_p0.max(0) as u32)
+        .is_some_and(|form| form.clears_snares)
+    {
+        clear_snares(ctx, guid);
+    }
     let next = ctx
         .db
         .game_spell_effect()
@@ -157,8 +270,8 @@ pub(crate) fn locked(ctx: &ReducerContext, guid: u64) -> bool {
 }
 
 /// Re-derives from the unit's shapeshift Aura the client form byte, the shown pool, the passives
-/// the Form brings and the equipment that depends on the Form. A byte no Form projects, or the
-/// byte `E_SET_STANCE` wrote for the unit's `stance`, stays as it is.
+/// the Form brings and the equipment that depends on the Form. A byte no Form projects stays as it
+/// is.
 pub(crate) fn project_form(ctx: &ReducerContext, guid: u64) {
     let Some(unit) = ctx.db.game_world_entity().guid().find(guid) else {
         return;
@@ -171,11 +284,6 @@ pub(crate) fn project_form(ctx: &ReducerContext, guid: u64) {
     let current = unit.form();
     let client_form = match &form {
         Some(form) => u32::from(form.client_form),
-        None if unit.stance != 0
-            && current == crate::spell::client_form_for_stance(unit.stance) =>
-        {
-            current
-        }
         None if ctx
             .db
             .game_form()

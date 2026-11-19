@@ -1,10 +1,11 @@
 use lyracore_shared::constants::starter_item::{CLASS_WEAPON, MAINHAND_SLOT};
 use lyracore_shared::item_property::COMBAT_SPELL;
 use lyracore_shared::spell::taxonomy::{
-    E_ADD_EXTRA_ATTACKS, STANCE_BEAR, STANCE_DIRE_BEAR, T_AREA_ENEMY, T_CHAIN_ENEMY, T_TARGET_ENEMY,
+    E_ADD_EXTRA_ATTACKS, T_AREA_ENEMY, T_CHAIN_ENEMY, T_TARGET_ENEMY,
 };
 use spacetimedb::{log, table, ReducerContext};
 
+use crate::form::CombatProfile;
 use crate::game_world_entity;
 use crate::{
     game_item_enchantment, game_item_random_property, game_item_template, ItemInstance,
@@ -57,9 +58,11 @@ pub(crate) fn roll_chance_on_hit(
         crate::items::temporary_enchant_id(ctx, item.guid),
     );
     if (spells.is_empty() && enchants.is_empty())
-        || !holds_weapon(attacker.stance, slot, || {
-            crate::spell::is_disarmed(ctx, attacker_guid)
-        })
+        || !holds_weapon(
+            crate::form::combat_profile(ctx, attacker_guid),
+            slot,
+            || crate::spell::is_disarmed(ctx, attacker_guid),
+        )
     {
         return;
     }
@@ -166,12 +169,13 @@ fn helps_wielder(is_negative: bool, effect_targets: impl IntoIterator<Item = u8>
             .all(|target| !matches!(target, T_TARGET_ENEMY | T_AREA_ENEMY | T_CHAIN_ENEMY))
 }
 
-// vmangos CanUseEquippedWeapon: a feral form sets weapons aside and Disarm takes the main hand.
-pub(crate) fn holds_weapon(stance: u8, slot: u8, disarmed: impl FnOnce() -> bool) -> bool {
-    if (STANCE_BEAR..=STANCE_DIRE_BEAR).contains(&stance) {
-        return false;
-    }
-    slot != MAINHAND_SLOT || !disarmed()
+// vmangos CanUseEquippedWeapon: natural attacks set weapons aside and Disarm takes the main hand.
+pub(crate) fn holds_weapon(
+    profile: CombatProfile,
+    slot: u8,
+    disarmed: impl FnOnce() -> bool,
+) -> bool {
+    !profile.is_natural() && (slot != MAINHAND_SLOT || !disarmed())
 }
 
 fn weapon_in_slot(
@@ -299,23 +303,25 @@ fn enchant_chance_bp(ppm: f32, amount: i32, weapon_delay_ms: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lyracore_shared::spell::taxonomy::STANCE_CAT;
 
     const OFFHAND: u8 = crate::items::equip_slot::OFFHAND;
+    const WEAPON: CombatProfile = CombatProfile::Weapon;
 
     #[test]
-    fn a_feral_form_sets_both_weapons_aside() {
-        for stance in [STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR] {
-            assert!(!holds_weapon(stance, MAINHAND_SLOT, || false));
-            assert!(!holds_weapon(stance, OFFHAND, || false));
-        }
-        assert!(holds_weapon(0, MAINHAND_SLOT, || false));
+    fn natural_attacks_set_both_weapons_aside() {
+        let natural = CombatProfile::Natural {
+            attack_ms: 2500,
+            attack_power_from_agility: false,
+        };
+        assert!(!holds_weapon(natural, MAINHAND_SLOT, || false));
+        assert!(!holds_weapon(natural, OFFHAND, || false));
+        assert!(holds_weapon(WEAPON, MAINHAND_SLOT, || false));
     }
 
     #[test]
     fn disarm_takes_only_the_main_hand() {
-        assert!(!holds_weapon(0, MAINHAND_SLOT, || true));
-        assert!(holds_weapon(0, OFFHAND, || true));
+        assert!(!holds_weapon(WEAPON, MAINHAND_SLOT, || true));
+        assert!(holds_weapon(WEAPON, OFFHAND, || true));
     }
 
     #[test]

@@ -18,10 +18,10 @@ use crate::spell::{
     CAST_FLAG_REQ_OVERPOWER, CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH, CAST_FLAG_STEALTH_SAFE,
     CAST_FLAG_WEAPON_PROCS, E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT, E_DUEL,
     E_ENCHANT_ITEM_TEMPORARY, E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING, E_PERSISTENT_AREA,
-    E_SCRIPTED, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE,
-    E_WEAPON_STRIKE, HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME,
-    SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY,
-    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE, E_WEAPON_STRIKE,
+    HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME, SPELL_ATTR_PASSIVE,
+    SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY, T_TARGET_ALLY,
+    T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use crate::{
     game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
@@ -1230,12 +1230,7 @@ fn check_cast_gate_suffix(
             format!("spell {spell_id} cannot change a Form an Aura locks"),
         ));
     }
-    // The client cancels its form before casting another; an E_SET_STANCE form has no Aura.
-    let form = if effects.iter().any(|effect| effect.kind == E_SET_STANCE) {
-        None
-    } else {
-        crate::form::shapeshift_state(ctx, caster)
-    };
+    let form = crate::form::shapeshift_state(ctx, caster);
     let requirement =
         crate::spell::FormRequirement::of(ctx, spell_id, form.map(|form| form.form_id));
     if let Some(refusal) = hdr.form_refusal(requirement, form) {

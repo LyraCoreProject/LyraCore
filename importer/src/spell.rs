@@ -41,46 +41,32 @@ use std::path::Path;
 use lyracore_package_delta::ids::PACKAGE_FORM_ID_FLOOR;
 use lyracore_shared::packing::power_type;
 use lyracore_shared::spell::taxonomy::{
-    A_ABSORB, A_CONTROL, A_DAMAGE_SHIELD, A_FLAG, A_FORM_POWER_RETAINED, A_IMMUNITY, A_INERT,
-    A_MANA_REGEN_INTERRUPT, A_MOD_COMBAT, A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT,
-    A_MOD_DAMAGE_TAKEN, A_MOD_DAMAGE_TAKEN_FLAT, A_MOD_HEALING, A_MOD_HEALING_TAKEN,
-    A_MOD_HEALTH_POWER, A_MOD_HEALTH_REGEN, A_MOD_HEALTH_REGEN_PCT, A_MOD_POWER_REGEN,
-    A_MOD_POWER_REGEN_PCT, A_MOD_REGEN, A_MOD_RESISTANCE, A_MOD_SCHOOL_CRIT, A_MOD_SKILL,
-    A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE,
-    A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT,
-    A_SHAPESHIFT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_TRANSFORM, CAST_FLAG_AREA_AURA,
-    CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER, CAST_FLAG_ITEM_TARGET, CAST_FLAG_LOCKS_FORM,
-    CAST_FLAG_NO_AURA_CANCEL, CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_REFUSES_SELF_CAST,
-    CAST_FLAG_RIGHTEOUSNESS, CAST_FLAG_WEAPON_PROCS, COMBAT_ATTACK_POWER, COMBAT_CRIT,
-    COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER, COMBAT_SPELL_CRIT, COMBAT_THREAT,
-    E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM,
-    E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET,
-    E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING,
-    E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT,
-    E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE,
-    E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT,
-    M_STUN, P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG,
-    P_FLAT_MANA, P_FORM, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW,
+    A_ABSORB, A_CONTROL, A_DAMAGE_SHIELD, A_FLAG, A_FORM_ENTRY_CHANCE, A_FORM_POWER_RETAINED,
+    A_IMMUNITY, A_INERT, A_MANA_REGEN_INTERRUPT, A_MOD_COMBAT, A_MOD_DAMAGE_DONE_FLAT,
+    A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN, A_MOD_DAMAGE_TAKEN_FLAT, A_MOD_HEALING,
+    A_MOD_HEALING_TAKEN, A_MOD_HEALTH_POWER, A_MOD_HEALTH_REGEN, A_MOD_HEALTH_REGEN_PCT,
+    A_MOD_POWER_REGEN, A_MOD_POWER_REGEN_PCT, A_MOD_REGEN, A_MOD_RESISTANCE, A_MOD_SCHOOL_CRIT,
+    A_MOD_SKILL, A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE,
+    A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER,
+    A_SEAL, A_SELF_RESURRECT, A_SHAPESHIFT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_TRANSFORM,
+    CAST_FLAG_AREA_AURA, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER, CAST_FLAG_ITEM_TARGET,
+    CAST_FLAG_LOCKS_FORM, CAST_FLAG_NO_AURA_CANCEL, CAST_FLAG_RANGED_AUTO_REPEAT,
+    CAST_FLAG_REFUSES_SELF_CAST, CAST_FLAG_RIGHTEOUSNESS, CAST_FLAG_WEAPON_PROCS,
+    COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DODGE, COMBAT_HIT, COMBAT_RANGED_ATTACK_POWER,
+    COMBAT_SPELL_CRIT, COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE,
+    E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL,
+    E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL,
+    E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
+    E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED,
+    E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_PET,
+    E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN,
+    P_COMBAT_FIELD, P_COMBAT_PERCENT, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
+    P_FORM, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_POWER_TYPE, P_RAW,
     P_SCHOOL_MASK, P_SKILL_LINE, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED,
     SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_PASSIVE,
-    SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STANCE_BEAR, STANCE_CAT,
-    STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY, T_SCRIPTED, T_SELF, T_TARGET_ALLY,
-    T_TARGET_ANY, T_TARGET_ENEMY,
+    SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STAT_ALL, T_AREA_ALLY,
+    T_AREA_ENEMY, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
-
-// Druid form ids differ from the stance ids E_SET_STANCE stores.
-const FORM_CAT: i32 = 1;
-const FORM_BEAR: i32 = 5;
-const FORM_DIRE_BEAR: i32 = 8;
-
-fn form_to_stance(form_id: i32) -> Option<i32> {
-    match form_id {
-        FORM_BEAR => Some(i32::from(STANCE_BEAR)),
-        FORM_CAT => Some(i32::from(STANCE_CAT)),
-        FORM_DIRE_BEAR => Some(i32::from(STANCE_DIRE_BEAR)),
-        _ => None,
-    }
-}
 
 // AttributesEx1 bits 0x04 and 0x40 both mark a channeled spell.
 const ATTR_EX1_CHANNELED_MASK: u32 = 0x0000_0044;
@@ -324,14 +310,6 @@ fn soulstone_option_spell(aura_spell_id: u32) -> Option<i32> {
         .iter()
         .find(|(aura, _)| *aura == aura_spell_id)
         .map(|(_, option)| *option)
-}
-
-fn stance_p0(kind: u8, p0: i32) -> i32 {
-    if kind == E_SET_STANCE {
-        form_to_stance(p0).unwrap_or(p0)
-    } else {
-        p0
-    }
 }
 
 // Aura 43 takes its school from the proc spell header, not effect misc.
@@ -1318,6 +1296,8 @@ fn resolve_effect_kind(
             && crate::spell_form::retained_rage(s.effect_misc_value[i]).is_some()
         {
             A_FORM_POWER_RETAINED
+        } else if aura == AuraMod::Dummy && crate::spell_form::grants_form_entry_chance(s.id) {
+            A_FORM_ENTRY_CHANCE
         } else if rage_regen {
             A_PERIODIC_ENERGIZE
         } else if (aura == AuraMod::ModCritPercent && s.equipment[0] != u32::MAX)
@@ -1383,8 +1363,6 @@ fn resolve_effect_kind(
     };
 
     let kind = dismount_effect_kind(effect_id, s.effect_misc_value[i]).unwrap_or(kind);
-
-    let p0 = stance_p0(kind, p0);
 
     let (p0, p0_kind) = proc_damage_school_p0(kind, p0, p0_kind, school_mask);
 
@@ -1754,6 +1732,7 @@ fn kind_name(kind: u8) -> &'static str {
         A_MOD_HEALING_TAKEN => "A_MOD_HEALING_TAKEN",
         A_SHAPESHIFT => "A_SHAPESHIFT",
         A_FORM_POWER_RETAINED => "A_FORM_POWER_RETAINED",
+        A_FORM_ENTRY_CHANCE => "A_FORM_ENTRY_CHANCE",
 
         A_CONTROL => "A_CONTROL",
         A_IMMUNITY => "A_IMMUNITY",
@@ -3309,7 +3288,7 @@ mod tests {
     }
 
     #[test]
-    fn only_warrior_stances_import_as_shapeshift_auras() {
+    fn only_declared_forms_import_as_shapeshift_auras() {
         let mut dbc = fixture_tables();
         dbc.spells = vec![
             Spell {
@@ -3319,19 +3298,30 @@ mod tests {
             aura_spell(71, "Defensive Stance", 36, 18),
             aura_spell(2458, "Berserker Stance", 36, 19),
             aura_spell(5487, "Bear Form", 36, 5),
+            aura_spell(9634, "Dire Bear Form", 36, 8),
+            aura_spell(768, "Cat Form", 36, 1),
             aura_spell(1784, "Stealth", 36, 30),
             aura_spell(2645, "Ghost Wolf", 36, 16),
             aura_spell(23397, "Berserk", 36, 19),
         ];
         let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
-        for (spell, form) in [(2457, 17), (71, 18), (2458, 19)] {
+        for (spell, form) in [
+            (2457, 17),
+            (71, 18),
+            (2458, 19),
+            (5487, 5),
+            (9634, 8),
+            (768, 1),
+        ] {
             let effect = first_effect(&rows, spell);
             assert_eq!(
                 (effect.kind, effect.p0, effect.p0_kind),
                 (A_SHAPESHIFT, form, P_FORM)
             );
         }
-        assert_eq!(first_effect(&rows, 5487).kind, E_SET_STANCE);
+        for spell in [1784, 2645] {
+            assert_ne!(first_effect(&rows, spell).kind, A_SHAPESHIFT);
+        }
         let berserk = first_effect(&rows, 23397);
         assert_eq!(
             (berserk.kind, berserk.p0, berserk.trigger_spell),
@@ -3413,13 +3403,15 @@ mod tests {
             .execute_batch(&format!(
                 "CREATE TABLE game_form (form_id INTEGER PRIMARY KEY, name TEXT, spell_id INTEGER,
                      acts_as_shapeshifted BOOLEAN, power_type INTEGER, power_on_entry INTEGER,
-                     default_for_class INTEGER, client_form INTEGER);
+                     default_for_class INTEGER, client_form INTEGER, natural_attack_ms INTEGER,
+                     attack_power_from_agility BOOLEAN, clears_snares BOOLEAN,
+                     entry_chance_spell INTEGER);
                  CREATE TABLE game_form_spell (id INTEGER PRIMARY KEY, form_id INTEGER,
                      spell_id INTEGER);
                  CREATE TABLE game_spell_form (id INTEGER PRIMARY KEY, spell_id INTEGER,
                      form_id INTEGER, excluded BOOLEAN);
-                 INSERT INTO game_form VALUES (17,'Old Battle Stance',2457,true,1,0,1,17),
-                     ({PACKAGE_FORM},'Kindled Aspect',{PACKAGE_SPELL},true,1,1,0,5);
+                 INSERT INTO game_form VALUES (17,'Old Battle Stance',2457,true,1,0,1,17,0,false,false,0),
+                     ({PACKAGE_FORM},'Kindled Aspect',{PACKAGE_SPELL},true,1,1,0,5,0,false,false,0);
                  INSERT INTO game_form_spell VALUES ({},{PACKAGE_FORM},{PACKAGE_SPELL});
                  INSERT INTO game_spell_form VALUES ({},78,18,false),({},78,40,false),
                      ({},78,{PACKAGE_FORM},false),({},{PACKAGE_SPELL},{PACKAGE_FORM},true);",
@@ -3846,43 +3838,6 @@ mod tests {
                 "spell {spell_id}"
             );
         }
-    }
-
-    #[test]
-    fn stance_p0_remaps_a_druid_form_id_to_its_stance() {
-        assert_eq!(stance_p0(E_SET_STANCE, 5), 3);
-        assert_eq!(stance_p0(E_SET_STANCE, 1), 4);
-        assert_eq!(stance_p0(E_SET_STANCE, 8), 5);
-        assert_eq!(stance_p0(E_DAMAGE, 17), 17);
-        assert_eq!(stance_p0(E_SET_STANCE, 4), 4);
-    }
-
-    #[test]
-    fn druid_form_switches_name_rescue_to_set_stance() {
-        assert_eq!(
-            correct_script_effect_kind("Bear Form", A_FLAG, AuraMod::default()),
-            E_SET_STANCE
-        );
-        assert_eq!(
-            correct_script_effect_kind("Dire Bear Form", A_FLAG, AuraMod::default()),
-            E_SET_STANCE
-        );
-        assert_eq!(
-            correct_script_effect_kind("Cat Form", A_FLAG, AuraMod::default()),
-            E_SET_STANCE
-        );
-        assert_eq!(
-            correct_script_effect_kind("Aquatic Form", A_FLAG, AuraMod::default()),
-            A_FLAG
-        );
-        assert_eq!(
-            correct_script_effect_kind("Travel Form", A_FLAG, AuraMod::default()),
-            A_FLAG
-        );
-        assert_eq!(
-            correct_script_effect_kind("Moonkin Form", A_FLAG, AuraMod::default()),
-            A_FLAG
-        );
     }
 
     #[test]

@@ -7,6 +7,7 @@ use crate::{
 
 use super::queued_strike::{QueuedStrike, QueuedStrikeDamage};
 use super::*;
+use crate::form::CombatProfile;
 
 pub(crate) fn attack_power_modifiers(ctx: &ReducerContext, guid: u64, field: u8) -> u32 {
     let (positive, negative) = crate::spell::auras_on(ctx, guid)
@@ -202,12 +203,12 @@ pub(crate) fn attack_time(ctx: &ReducerContext, unit: &WorldEntity, source: HitS
 
 /// A Character's main hand swings at its usable weapon's delay; `base_attack_time_ms` is unarmed.
 pub(crate) fn main_hand_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
-    if let Some(form) = feral_attack_time(unit) {
+    if let Some(form) = natural_attack_time(ctx, unit) {
         return form;
     }
     let holds_weapon = unit.is_player()
         && crate::spell::chance_on_hit::holds_weapon(
-            unit.stance,
+            crate::form::combat_profile(ctx, unit.guid),
             lyracore_shared::constants::starter_item::MAINHAND_SLOT,
             || crate::spell::is_disarmed(ctx, unit.guid),
         );
@@ -220,7 +221,7 @@ pub(crate) fn main_hand_attack_time(ctx: &ReducerContext, unit: &WorldEntity) ->
 }
 
 pub(crate) fn off_hand_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
-    if let Some(form) = feral_attack_time(unit) {
+    if let Some(form) = natural_attack_time(ctx, unit) {
         return form;
     }
     if !unit.is_player() {
@@ -242,14 +243,15 @@ fn ranged_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
         .unwrap_or(DEFAULT_ATTACK_TIME_MS)
 }
 
-/// vmangos Player::InitDataForForm swings both hands of Cat Form at 1.0 s and Bear Form at 2.5 s.
-fn feral_attack_time(unit: &WorldEntity) -> Option<u32> {
-    use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR};
-    match unit.stance {
-        _ if !unit.is_player() => None,
-        STANCE_CAT => Some(1000),
-        STANCE_BEAR | STANCE_DIRE_BEAR => Some(2500),
-        _ => None,
+/// vmangos Player::InitDataForForm swings both hands of a Character's natural attacks at the
+/// Form's speed.
+fn natural_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> Option<u32> {
+    if !unit.is_player() {
+        return None;
+    }
+    match crate::form::combat_profile(ctx, unit.guid) {
+        CombatProfile::Natural { attack_ms, .. } => Some(attack_ms),
+        CombatProfile::Weapon => None,
     }
 }
 
@@ -392,14 +394,14 @@ fn base_melee_range(ctx: &ReducerContext, attacker: &WorldEntity, normalized: bo
         return (min, max);
     }
     let ap = melee_attack_power(ctx, attacker);
-    if let Some(form_ms) = feral_attack_time(attacker) {
+    if let Some(form_ms) = natural_attack_time(ctx, attacker) {
         // vmangos normalizes by the equipped weapon; no 1.12 druid form ability normalizes.
         let speed_ms = if normalized {
             NORMALIZED_ONE_HAND_MS
         } else {
             form_ms
         };
-        return feral_swing_range_ap(ap, attacker.level, speed_ms);
+        return natural_swing_range_ap(ap, attacker.level, speed_ms);
     }
     let mainhand = lyracore_shared::constants::starter_item::MAINHAND_SLOT;
     let speed = |delay| {
@@ -483,8 +485,8 @@ pub(crate) fn weapon_strike_spell_damage(
     armor_mitigated(if crit { base * CRIT_MULT } else { base }, mit_pct)
 }
 
-fn predatory_strikes_pct(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
-    if unit.class() != CLASS_DRUID || !is_feral_form(unit.stance) {
+fn predatory_strikes_pct(ctx: &ReducerContext, unit: &WorldEntity, profile: CombatProfile) -> u32 {
+    if unit.class() != CLASS_DRUID || !profile.is_natural() {
         return 0;
     }
     crate::spell::auras_on(ctx, unit.guid)
@@ -499,13 +501,14 @@ pub(crate) fn base_melee_attack_power(
     strength: u32,
     agility: u32,
 ) -> i32 {
+    let profile = crate::form::combat_profile(ctx, unit.guid);
     base_melee_attack_power_for(
         unit.class(),
-        unit.stance,
+        profile,
         strength,
         agility,
         unit.level,
-        predatory_strikes_pct(ctx, unit),
+        predatory_strikes_pct(ctx, unit, profile),
     )
 }
 
@@ -548,7 +551,7 @@ fn strike_weapon_range(
     };
     let (_, min, max) = ranged_sheet_values(
         attacker.class(),
-        attacker.stance,
+        crate::form::combat_profile(ctx, attacker.guid),
         crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_AGI),
         attacker.level,
         Some((dmin, dmax, delay, subclass)),

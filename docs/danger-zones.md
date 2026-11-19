@@ -410,6 +410,32 @@ Before play resumes:
 
 Offline warriors enter the world in Battle Stance unless they hold a stance Aura.
 
+### Druid form migration
+
+Bear, Dire Bear and Cat Form are now Forms 5, 8 and 1. `game_form` gains four END-appended columns
+with defaults: `natural_attack_ms`, `attack_power_from_agility`, `clears_snares` and
+`entry_chance_spell`. A Package Delta written before this revision omits them, so its Forms keep the
+weapon combat profile, clear no snares and cast nothing on entry. The new Effect Kind
+`A_FORM_ENTRY_CHANCE` (`0xD7`) carries Furor. `WorldEntity.stance` stays a column, but nothing reads
+it, and the Module ignores the reserved `E_SET_STANCE`.
+
+Until you reimport `spell` with `--dbc`, the druid form spells keep their old `E_SET_STANCE` rows,
+so casting them does nothing: no druid can enter a feral form, and a druid shown in one fights with
+its weapon. Before play resumes:
+
+1. Publish the Module through a planned additive update.
+2. Reimport `spell` with `--dbc`. It writes Forms 1, 5 and 8 with their combat profiles, snare
+   clearing, Furor spells and passives (Cat 3025, Bear 1178 and 21178, Dire Bear 9635 and 21178),
+   the three form spells as `A_SHAPESHIFT`, and Furor as `A_FORM_ENTRY_CHANCE`. Forms 17 to 19 get
+   the new columns at their defaults.
+3. Call `debug_repair_after_publish`. Each online druid whose client form byte shows 1, 5 or 8 and
+   who holds no shapeshift Aura gets that Form's Aura and passives. Its mana goes into the Reserve
+   Pool and the Form's pool starts empty.
+
+A druid whose Auras change between the reimport and the repair is projected first and drops to
+caster form, as does a druid in a form after a crash. Offline druids enter the world in caster form,
+as they did before: an `E_SET_STANCE` form never survived logout.
+
 ### Global cooldown migration
 
 `game_spell.gcd_ms` now comes from the source `startRecoveryTime`. An older import set 1500 for

@@ -446,6 +446,10 @@ fn blank_form(form_id: u32) -> Form {
         power_on_entry: 0,
         default_for_class: 0,
         client_form: 0,
+        natural_attack_ms: 0,
+        attack_power_from_agility: false,
+        clears_snares: false,
+        entry_chance_spell: 0,
     }
 }
 
@@ -458,6 +462,10 @@ fn apply_form_field(form: &mut Form, field: &str, value: &FieldValue) -> Result<
         "power_on_entry" => form.power_on_entry = as_u8(field, value)?,
         "default_for_class" => form.default_for_class = as_u8(field, value)?,
         "client_form" => form.client_form = as_u8(field, value)?,
+        "natural_attack_ms" => form.natural_attack_ms = as_u32(field, value)?,
+        "attack_power_from_agility" => form.attack_power_from_agility = as_bool(field, value)?,
+        "clears_snares" => form.clears_snares = as_bool(field, value)?,
+        "entry_chance_spell" => form.entry_chance_spell = as_u32(field, value)?,
         other => return Err(no_such_column("game_form", other)),
     }
     Ok(())
