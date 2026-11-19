@@ -1,4 +1,5 @@
 use lyracore_shared::packing::power_type;
+use lyracore_shared::spell::taxonomy::P_POWER_TYPE;
 
 use super::WorldEntity;
 
@@ -78,6 +79,27 @@ impl WorldEntity {
         *current = current.saturating_add(amount).min(max);
     }
 
+    /// The pool an energize reaches: the one its `P_POWER_TYPE` parameter names, else the shown
+    /// pool. None when the unit holds no such pool or its max is 0, as vmangos
+    /// `Spell::EffectEnergize` skips it.
+    pub(crate) fn energized_pool(&self, p0_kind: u8, p0: i32) -> Option<PowerPool> {
+        let pool = if p0_kind == P_POWER_TYPE {
+            self.pool(u8::try_from(p0).ok()?)?
+        } else {
+            self.shown_pool()
+        };
+        (pool.max > 0).then_some(pool)
+    }
+
+    /// Sets each pool the unit holds, shown or reserved, to `current(pool)`, capped at its max.
+    pub(crate) fn set_each_pool(&mut self, current: impl Fn(PowerPool) -> u32) {
+        let shown = self.shown_pool();
+        self.power = current(shown).min(shown.max);
+        if let Some(reserve) = self.reserve_pool() {
+            self.reserve_power = current(reserve).min(reserve.max);
+        }
+    }
+
     /// The power a cost in `power_type` can spend: the Reserve Pool's when it holds that power
     /// type, else the shown pool's.
     pub(crate) fn spendable_power(&self, power_type: u8) -> u32 {
@@ -117,6 +139,18 @@ impl WorldEntity {
             self.max_power = form_pool_max(power_type);
         }
         self.unit_bytes_0 = (self.unit_bytes_0 & 0x00FF_FFFF) | u32::from(power_type) << 24;
+    }
+}
+
+/// vmangos `Player::ResurrectPlayer`: mana and energy return at `percent` of their max, rage at
+/// zero, and any other pool keeps its value.
+pub(crate) fn resurrected_power(pool: PowerPool, percent: u32) -> u32 {
+    match pool.power_type {
+        power_type::RAGE => 0,
+        power_type::MANA | power_type::ENERGY => {
+            (u64::from(pool.max) * u64::from(percent) / 100) as u32
+        }
+        _ => pool.current,
     }
 }
 
@@ -209,6 +243,36 @@ mod tests {
         assert_eq!(unit.power, 0, "rage is untouched");
         unit.gain_power(ENERGY, 50);
         assert_eq!((unit.power, unit.reserve_power), (0, 800), "no energy pool");
+    }
+
+    #[test]
+    fn an_energize_reaches_the_pool_it_names_and_skips_a_pool_without_a_max() {
+        use lyracore_shared::spell::taxonomy::P_PCT_MAX_POWER;
+        let mut unit = druid(700, 1000);
+        unit.show_pool(RAGE);
+        let reached = |p0_kind, p0| unit.energized_pool(p0_kind, p0).map(|pool| pool.power_type);
+        assert_eq!(reached(P_POWER_TYPE, i32::from(MANA)), Some(MANA));
+        assert_eq!(reached(P_POWER_TYPE, i32::from(ENERGY)), None);
+        assert_eq!(reached(P_POWER_TYPE, -1), None);
+        assert_eq!(
+            reached(P_PCT_MAX_POWER, 0),
+            Some(RAGE),
+            "no named pool: the shown one"
+        );
+        let without_mana = druid(0, 0);
+        assert_eq!(
+            without_mana.energized_pool(P_POWER_TYPE, i32::from(MANA)),
+            None
+        );
+    }
+
+    #[test]
+    fn resurrection_restores_every_pool_by_its_power_type() {
+        let mut unit = druid(100, 1000);
+        unit.show_pool(RAGE);
+        unit.power = 300;
+        unit.set_each_pool(|pool| resurrected_power(pool, 50));
+        assert_eq!((unit.power, unit.reserve_power), (0, 500));
     }
 
     #[test]

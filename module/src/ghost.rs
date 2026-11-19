@@ -160,8 +160,8 @@ pub(crate) fn ghost_restored_fields(player_flags: u32, unit_bytes_1: u32) -> (bo
 
 pub const RESURRECTION_SICKNESS_SPELL: u32 = 15007;
 
-fn spirit_res_vitals(max_health: u32, max_power: u32) -> (u32, u32) {
-    ((max_health / 2).max(1), max_power / 2)
+fn spirit_res_health(max_health: u32) -> u32 {
+    (max_health / 2).max(1)
 }
 
 // None below level 11; one minute per level above 10, up to the spell's ten minutes.
@@ -180,10 +180,9 @@ pub(crate) fn do_spirit_healer_res(ctx: &ReducerContext, guid: u64) -> Result<()
     if !player.dead || player.player_flags & player_flags::GHOST == 0 {
         return Err("caller is not a ghost".into());
     }
-    let (health, power) = spirit_res_vitals(player.max_health, player.max_power);
     let player_level = player.level;
-    player.health = health;
-    player.power = power;
+    player.health = spirit_res_health(player.max_health);
+    player.set_each_pool(|pool| crate::world::power_pool::resurrected_power(pool, 50));
     player.update(ctx);
     finish_resurrection(ctx, guid);
     crate::items::apply_spirit_healer_durability_loss(ctx, guid);
@@ -210,7 +209,7 @@ pub(crate) fn do_spirit_healer_res(ctx: &ReducerContext, guid: u64) -> Result<()
 
 #[cfg(test)]
 mod tests {
-    use super::{ghost_restored_fields, resurrection_sickness_micros, spirit_res_vitals};
+    use super::{ghost_restored_fields, resurrection_sickness_micros, spirit_res_health};
 
     #[test]
     fn ghost_restored_fields_reapply_exactly_the_release_state_over_the_fresh_build() {
@@ -232,13 +231,12 @@ mod tests {
     }
 
     #[test]
-    fn spirit_healer_res_restores_half_vitals() {
-        assert_eq!(spirit_res_vitals(200, 80), (100, 40));
-        assert_eq!(spirit_res_vitals(199, 81), (99, 40));
-        assert_eq!(spirit_res_vitals(1, 0), (1, 0));
+    fn spirit_healer_res_restores_half_health() {
+        assert_eq!(spirit_res_health(200), 100);
+        assert_eq!(spirit_res_health(199), 99);
         assert_eq!(
-            spirit_res_vitals(0, 0),
-            (1, 0),
+            spirit_res_health(0),
+            1,
             "the .max(1) floor keeps a 0-max res alive"
         );
     }

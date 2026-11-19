@@ -1081,6 +1081,7 @@ fn a_druid_keeps_a_talent_passive_bound_to_a_druid_form_across_world_entry() {
 const DRUID: u8 = 11;
 const MANA: u8 = 0;
 const NO_RESERVE_POOL: u8 = u8::MAX;
+const DRUID_GUID: &str = WARRIOR;
 
 /// A level 20 druid with 700 of 1000 mana who can enter the Package Form, which shows rage.
 fn druid_beside_a_rage_form(name: &str) -> (Standalone, ReducerConnection) {
@@ -1119,15 +1120,19 @@ fn druid_beside_a_rage_form(name: &str) -> (Standalone, ReducerConnection) {
         ],
     );
     let wire = log_in(&shard, 42);
-    shard.assert_call("debug_set_level", &[WARRIOR, "20"]);
-    set_rage(&shard, 700);
+    shard.assert_call("debug_set_level", &[DRUID_GUID, "20"]);
+    shard.assert_call("debug_set_power", &[DRUID_GUID, "700"]);
     apply_package_form(&shard);
     (shard, wire)
 }
 
 /// The shown pool's power type, current and max, and the Reserve Pool's.
 fn pools(shard: &Standalone) -> ((u8, u32, u32), (u8, u32, u32)) {
-    let unit = warrior(shard);
+    let unit = shard
+        .query_rows(&format!(
+            "SELECT * FROM game_world_entity WHERE guid = {DRUID_GUID}"
+        ))
+        .remove(0);
     (
         (
             (number::<u32>(&unit, "unit_bytes_0") >> 24) as u8,
@@ -1145,7 +1150,7 @@ fn pools(shard: &Standalone) -> ((u8, u32, u32), (u8, u32, u32)) {
 fn leave_package_form(shard: &Standalone) {
     shard.assert_call(
         "debug_shed_spell_auras",
-        &[WARRIOR, &PACKAGE_SHIFT.to_string()],
+        &[DRUID_GUID, &PACKAGE_SHIFT.to_string()],
     );
 }
 
@@ -1191,8 +1196,61 @@ fn reserved_mana_pays_mana_costs_and_regenerates_after_the_five_second_rule() {
 fn reserved_mana_survives_logout_in_the_form() {
     let (shard, _first) = druid_beside_a_rage_form("forms-reserve-logout");
     enter(&shard, PACKAGE_SHIFT);
-    shard.assert_call("debug_logout_character", &[WARRIOR]);
+    shard.assert_call("debug_logout_character", &[DRUID_GUID]);
     let _second = log_in(&shard, 43);
     assert_eq!(shapeshift_spells(&shard), vec![PACKAGE_SHIFT]);
     assert_eq!(pools(&shard), ((RAGE, 0, 1000), (MANA, 700, 1000)));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_mana_energize_reaches_reserved_mana_and_leaves_rage_alone() {
+    let (shard, _wire) = druid_beside_a_rage_form("forms-reserve-energize");
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &((PACKAGE_ABILITY as u64) << 2 | 1)),
+            ("spell_id", &PACKAGE_ABILITY),
+            ("effect_index", &1u8),
+            ("kind", &E_ENERGIZE),
+            ("base_points", &99i32),
+            ("target", &T_SELF),
+            ("p_0", &i32::from(MANA)),
+            ("p_0_kind", &P_POWER_TYPE),
+        ],
+    );
+    enter(&shard, PACKAGE_SHIFT);
+    cast(&shard, PACKAGE_ABILITY);
+    let (shown, reserve) = pools(&shard);
+    assert_eq!(shown, (RAGE, 0, 1000), "rage gains nothing");
+    assert!(
+        reserve.1 > 700,
+        "reserved mana gains the energize: {reserve:?}"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_spirit_healer_restores_reserved_mana_and_empties_the_rage_form_pool() {
+    let (shard, _wire) = druid_beside_a_rage_form("forms-reserve-resurrection");
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET attributes_ex_3 = 1048576 WHERE spell_id = {PACKAGE_SHIFT}"
+    ));
+    enter(&shard, PACKAGE_SHIFT);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET power = 300 WHERE guid = {DRUID_GUID}"
+    ));
+    shard.assert_call("debug_set_health", &[DRUID_GUID, "0"]);
+    shard.assert_call("debug_repop", &[DRUID_GUID]);
+    shard.assert_call("debug_spirit_healer_res", &[DRUID_GUID]);
+    assert_eq!(
+        shapeshift_spells(&shard),
+        vec![PACKAGE_SHIFT],
+        "the Form survives death"
+    );
+    assert_eq!(
+        pools(&shard),
+        ((RAGE, 0, 1000), (MANA, 500, 1000)),
+        "vmangos Player::ResurrectPlayer(0.5): half mana and no rage"
+    );
 }

@@ -559,8 +559,9 @@ _Avoid_: stance (as a stored number), form byte (for the Form's id)
 
 **Form Projection**:
 The client form byte, the shown power pool, the passive Auras a Form brings and Form-dependent
-equipment, re-derived from a unit's shapeshift Aura. The passives are the Form's own and every known passive whose Form Set
-requires a Form with a `game_form` row. Never a second state machine.
+equipment, re-derived from a unit's shapeshift Aura. The passives are the Form's own and every known
+passive whose Form Set requires a Form with a `game_form` row. Never a second state machine.
+
 
 **Form Set**:
 The Forms a spell requires or excludes, held as `game_spell_form` rows by Form id. The 1.12
@@ -569,8 +570,9 @@ _Avoid_: stance mask (for the set)
 
 **Reserve Pool**:
 A unit's own power pool, such as a druid's mana, held aside while its Form shows a pool of another
-power type. It pays costs in its power type, reserved mana keeps regenerating, the Character saves
-it and it is shown again when the unit leaves the Form. The Form's pool starts empty and ends with the Form.
+power type. It pays costs and takes energizes in its power type, reserved mana keeps regenerating,
+the Character saves it and it is shown again when the unit leaves the Form. The Form's pool starts
+empty and ends with the Form.
 _Avoid_: secondary power, druid mana (for the general pool)
 
 ### Transports

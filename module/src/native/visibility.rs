@@ -485,8 +485,9 @@ enum Update {
     Health,
 }
 
-/// The power type and every pool, shown or reserved, that changed. A pool that ended reads zero;
-/// a creature's current power is never sent.
+/// The power type and every pool, shown or reserved, that changed. A pool that appears sends its
+/// current value, as vmangos `Unit::SetPowerType` sets it, and a pool that ended reads zero; a
+/// creature's current power is never sent.
 fn power_values(old: &WorldEntity, new: &WorldEntity, is_player: bool) -> Option<(u16, Vec<u8>)> {
     use lyracore_shared::packing::power_type;
     let pools: Vec<_> = (power_type::MANA..=power_type::HAPPINESS)
@@ -496,7 +497,9 @@ fn power_values(old: &WorldEntity, new: &WorldEntity, is_player: bool) -> Option
             let max = now.map(|pool| pool.max);
             let fields = codec::PowerFields {
                 power_type,
-                current: (is_player && was.map_or(0, |pool| pool.current) != current)
+                current: (is_player
+                    && (was.is_none() && now.is_some()
+                        || was.map_or(0, |pool| pool.current) != current))
                     .then_some(current),
                 max: max.filter(|_| was.map(|pool| pool.max) != max),
             };
@@ -612,8 +615,61 @@ mod tests {
         new.show_pool(lyracore_shared::packing::power_type::RAGE);
         assert_eq!(
             power_fields(&old, &new),
-            [(30, 1000), (36, new.unit_bytes_0)],
-            "mana stays as the client has it; rage starts at the zero it already shows"
+            [(24, 0), (30, 1000), (36, new.unit_bytes_0)],
+            "mana stays as the client has it; rage starts at zero"
+        );
+    }
+
+    #[test]
+    fn after_a_create_entering_an_energy_form_shows_zero_energy() {
+        use lyracore_protocol::codec::{self, CreateKind};
+        use lyracore_protocol::messages::vanilla::ServerMessage;
+        let caster = druid();
+        let mut cat = druid();
+        cat.show_pool(lyracore_shared::packing::power_type::ENERGY);
+        let view = codec::EntityView {
+            guid: caster.guid,
+            type_mask: caster.type_mask,
+            scale_x: 1.0,
+            health: 1,
+            max_health: 1,
+            level: 1,
+            run_speed_mult_bp: 10_000,
+            unit_bytes_0: caster.unit_bytes_0,
+            power: caster.power,
+            max_power: caster.max_power,
+            ..Default::default()
+        };
+        let create = codec::build_create_object(&view, CreateKind::Peer, &[], &[]).unwrap();
+        let mask2 = match create.objects[0].clone() {
+            Object::CreateObject { mask2, .. } | Object::CreateObject2 { mask2, .. } => mask2,
+            other => panic!("expected a CREATE, got {other:?}"),
+        };
+        let as_values = lyracore_protocol::messages::vanilla::SMSG_UPDATE_OBJECT {
+            has_transport: 0,
+            objects: vec![Object::Values {
+                guid1: lyracore_protocol::messages::Guid::new(caster.guid),
+                mask1: mask2,
+            }],
+        };
+        let mut bytes = Vec::new();
+        as_values.write_unencrypted_server(&mut bytes).unwrap();
+        let mut client: std::collections::BTreeMap<u16, u32> =
+            codec::values_mask::parse_values_updates(&bytes[4..])
+                .remove(0)
+                .fields
+                .into_iter()
+                .collect();
+        assert_eq!(
+            (client[&26], client[&32]),
+            (100, 100),
+            "CREATE: POWER4, MAXPOWER4"
+        );
+        client.extend(power_fields(&caster, &cat));
+        assert_eq!(
+            (client[&26], client[&32]),
+            (0, 100),
+            "Cat Form starts at zero energy"
         );
     }
 

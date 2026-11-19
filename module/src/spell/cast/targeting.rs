@@ -1219,11 +1219,13 @@ fn apply_restore_effect(
         E_ENERGIZE => {
             let mut hit = EffectHit::none();
             if let Some(mut t) = ctx.db.game_world_entity().guid().find(target_guid) {
-                t.power = energized_value(t.power, t.max_power, points);
-                // vmangos `EnergizeBySpell` logs the full grant, not the gain.
-                hit.energized = points.max(0) as u32;
-                hit.power_type = t.power_type();
-                t.update(ctx);
+                if let Some(pool) = t.energized_pool(e.p0_kind, e.p0) {
+                    t.gain_power(pool.power_type, points.max(0) as u32);
+                    // vmangos `EnergizeBySpell` logs the full grant, not the gain.
+                    hit.energized = points.max(0) as u32;
+                    hit.power_type = pool.power_type;
+                    t.update(ctx);
+                }
             }
             if e.enters_combat {
                 crate::combat::enter_combat(ctx, caster_guid);
