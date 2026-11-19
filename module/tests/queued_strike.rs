@@ -48,7 +48,7 @@ fn a_queued_strike_fizzles_into_a_white_swing_when_the_rage_is_gone() {
         QueuedStrike::rage(CLEAVE, "Cleave", CLEAVE_COST),
     );
     standalone.assert_sql(&format!(
-        "UPDATE game_spell SET cost = {BATTLE_SHOUT_COST}, gcd_ms = 0 WHERE spell_id = {BATTLE_SHOUT}"
+        "UPDATE game_spell SET cost = {BATTLE_SHOUT_COST} WHERE spell_id = {BATTLE_SHOUT}"
     ));
 
     standalone.assert_call("debug_spawn_player_entity", &["1"]);

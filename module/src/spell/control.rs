@@ -2,7 +2,7 @@ use spacetimedb::{log, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use super::*;
 use crate::{
-    game_aura, game_pending_cast, game_school_lockout, game_spell, game_spell_cooldown,
+    game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
     game_spell_effect, Aura, PendingCast, SchoolLockout, SpellCastEvent,
 };
 
@@ -331,17 +331,16 @@ fn interrupt_cast_with_outcome(
         .collect();
     let interrupted = !hits.is_empty();
     // Clear the cancelled cast's GCD before hooks can start another cast.
-    if hits.iter().any(|(_, spell_id, _)| {
-        ctx.db
-            .game_spell()
-            .spell_id()
-            .find(*spell_id)
-            .is_some_and(|spell| spell.gcd_ms > 0 && spell.cast_flags & CAST_FLAG_CHANNELED == 0)
-    }) {
-        ctx.db
-            .game_spell_cooldown()
-            .caster_guid()
-            .delete(caster_guid);
+    for (_, spell_id, _) in &hits {
+        let Some(spell) = ctx.db.game_spell().spell_id().find(*spell_id) else {
+            continue;
+        };
+        if spell.gcd_ms > 0 && spell.cast_flags & CAST_FLAG_CHANNELED == 0 {
+            ctx.db
+                .game_global_cooldown()
+                .by_caster_category()
+                .delete((caster_guid, spell.gcd_category));
+        }
     }
     for (id, spell_id, target_guid) in hits {
         pending.scheduled_id().delete(id);

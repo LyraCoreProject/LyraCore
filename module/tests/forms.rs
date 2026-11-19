@@ -116,7 +116,7 @@ fn log_in(shard: &Standalone, server_seed: u32) -> ReducerConnection {
 }
 
 fn ready(shard: &Standalone) {
-    shard.assert_sql("DELETE FROM game_spell_cooldown WHERE caster_guid = 1");
+    shard.assert_sql("DELETE FROM game_global_cooldown WHERE caster_guid = 1");
     shard.assert_sql("DELETE FROM game_spell_cd WHERE caster_guid = 1");
 }
 
@@ -873,7 +873,7 @@ fn a_creature_without_a_stance_cannot_use_a_stance_ability() {
     require_forms(&shard, SHIELD_BASH, &[17, 18], &[]);
     let casts = |spell: u32| {
         shard.assert_sql(&format!(
-            "DELETE FROM game_spell_cooldown WHERE caster_guid = {wolf}"
+            "DELETE FROM game_global_cooldown WHERE caster_guid = {wolf}"
         ));
         shard.assert_sql(&format!(
             "DELETE FROM game_spell_cd WHERE caster_guid = {wolf}"
