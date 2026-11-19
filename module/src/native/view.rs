@@ -81,6 +81,11 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
         max_health: e.max_health,
         power: e.power,
         max_power: e.max_power,
+        reserve_pool: e.reserve_pool().map(|pool| codec::PowerPoolView {
+            power_type: pool.power_type,
+            current: pool.current,
+            max: pool.max,
+        }),
         level: e.level,
         faction_template: e.faction_template,
         target_guid: e.target_guid,

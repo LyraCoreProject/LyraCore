@@ -169,25 +169,36 @@ pub fn build_sheath_values(guid: u64, unit_bytes_2: u32) -> SMSG_UPDATE_OBJECT {
     })
 }
 
-pub fn build_power_values(guid: u64, power_b: u8, power_cur: u32) -> SMSG_UPDATE_OBJECT {
-    let cur = power_cur as i32;
-    player_values(guid, |player| match power_b {
-        1 => {
-            player.set_unit_power2(cur);
+/// One pool's `UNIT_FIELD_POWERn` and `UNIT_FIELD_MAXPOWERn`, n = power type + 1; `None` leaves the
+/// field out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PowerFields {
+    pub power_type: u8,
+    pub current: Option<u32>,
+    pub max: Option<u32>,
+}
+
+/// vmangos d9173eca marks UNIT_FIELD_BYTES_0 and every POWERn and MAXPOWERn public, so one VALUES
+/// update serves the owner and peers. A power type beyond POWER5 is left out.
+pub fn build_power_values(
+    guid: u64,
+    unit_bytes_0: Option<u32>,
+    pools: &[PowerFields],
+) -> (u16, Vec<u8>) {
+    let mut mask = update_mask::UpdateMaskValues::new();
+    if let Some(bytes) = unit_bytes_0 {
+        mask.set_u32(update_mask::idx::UNIT_BYTES_0, bytes);
+    }
+    for pool in pools.iter().filter(|pool| pool.power_type < 5) {
+        let offset = u16::from(pool.power_type);
+        if let Some(current) = pool.current {
+            mask.set_u32(update_mask::idx::UNIT_POWER1 + offset, current);
         }
-        2 => {
-            player.set_unit_power3(cur);
+        if let Some(max) = pool.max {
+            mask.set_u32(update_mask::idx::UNIT_MAXPOWER1 + offset, max);
         }
-        3 => {
-            player.set_unit_power4(cur);
-        }
-        4 => {
-            player.set_unit_power5(cur);
-        }
-        _ => {
-            player.set_unit_power1(cur);
-        }
-    })
+    }
+    build_values_update_raw(guid, &mask)
 }
 
 pub fn build_target_values(guid: u64, target: u64) -> SMSG_UPDATE_OBJECT {
@@ -208,27 +219,6 @@ pub fn build_virtual_item_values(
     mask.set_u32(first + 1, off_hand_display);
     mask.set_u32(first + 2, ranged_display);
     build_values_update_raw(guid, &mask)
-}
-
-pub fn build_max_power_values(guid: u64, power_b: u8, max_power: u32) -> SMSG_UPDATE_OBJECT {
-    let max_p = max_power as i32;
-    unit_values(guid, |unit| match power_b {
-        1 => {
-            unit.set_unit_maxpower2(max_p);
-        }
-        2 => {
-            unit.set_unit_maxpower3(max_p);
-        }
-        3 => {
-            unit.set_unit_maxpower4(max_p);
-        }
-        4 => {
-            unit.set_unit_maxpower5(max_p);
-        }
-        _ => {
-            unit.set_unit_maxpower1(max_p);
-        }
-    })
 }
 
 pub fn build_armor_values(guid: u64, total: [u32; 7], pos_buff: u32) -> SMSG_UPDATE_OBJECT {

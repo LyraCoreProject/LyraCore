@@ -1077,3 +1077,122 @@ fn a_druid_keeps_a_talent_passive_bound_to_a_druid_form_across_world_entry() {
     let _wire = log_in(&shard, 42);
     assert!(aura_spells(&shard).contains(&SHARPENED_CLAWS));
 }
+
+const DRUID: u8 = 11;
+const MANA: u8 = 0;
+const NO_RESERVE_POOL: u8 = u8::MAX;
+
+/// A level 20 druid with 700 of 1000 mana who can enter the Package Form, which shows rage.
+fn druid_beside_a_rage_form(name: &str) -> (Standalone, ReducerConnection) {
+    let shard = fixture(name);
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET class = {DRUID} WHERE guid = 1"
+    ));
+    shard.insert_row(
+        "game_class_level_stats",
+        &[
+            (
+                "class_level",
+                &(lyracore_package_delta::packed_class_level_id(DRUID, 20) as u32),
+            ),
+            ("class", &DRUID),
+            ("level", &20u32),
+            ("base_health", &500u32),
+            ("base_mana", &1000u32),
+        ],
+    );
+    let race: u8 = number(
+        &shard.query_rows("SELECT race FROM game_character WHERE guid = 1")[0],
+        "race",
+    );
+    shard.insert_row(
+        "game_level_stats",
+        &[
+            (
+                "race_class_level",
+                &(lyracore_package_delta::packed_race_class_level_id(race, DRUID, 20) as u32),
+            ),
+            ("race", &race),
+            ("class", &DRUID),
+            ("level", &20u32),
+        ],
+    );
+    let wire = log_in(&shard, 42);
+    shard.assert_call("debug_set_level", &[WARRIOR, "20"]);
+    set_rage(&shard, 700);
+    apply_package_form(&shard);
+    (shard, wire)
+}
+
+/// The shown pool's power type, current and max, and the Reserve Pool's.
+fn pools(shard: &Standalone) -> ((u8, u32, u32), (u8, u32, u32)) {
+    let unit = warrior(shard);
+    (
+        (
+            (number::<u32>(&unit, "unit_bytes_0") >> 24) as u8,
+            number(&unit, "power"),
+            number(&unit, "max_power"),
+        ),
+        (
+            number(&unit, "reserve_power_type"),
+            number(&unit, "reserve_power"),
+            number(&unit, "reserve_max_power"),
+        ),
+    )
+}
+
+fn leave_package_form(shard: &Standalone) {
+    shard.assert_call(
+        "debug_shed_spell_auras",
+        &[WARRIOR, &PACKAGE_SHIFT.to_string()],
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_druid_keeps_mana_in_reserve_while_a_form_shows_rage() {
+    let (shard, _wire) = druid_beside_a_rage_form("forms-reserve-pool");
+    enter(&shard, PACKAGE_SHIFT);
+    assert_eq!(
+        pools(&shard),
+        ((RAGE, 0, 1000), (MANA, 700, 1000)),
+        "rage is shown and mana is held in reserve"
+    );
+    leave_package_form(&shard);
+    assert_eq!(
+        pools(&shard),
+        ((MANA, 700, 1000), (NO_RESERVE_POOL, 0, 0)),
+        "leaving the Form shows the druid's mana again"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn reserved_mana_pays_mana_costs_and_regenerates_after_the_five_second_rule() {
+    let (shard, _wire) = druid_beside_a_rage_form("forms-reserve-regeneration");
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET power_type = {MANA}, cost = 50 WHERE spell_id = {PACKAGE_ABILITY}"
+    ));
+    enter(&shard, PACKAGE_SHIFT);
+    cast(&shard, PACKAGE_ABILITY);
+    assert_eq!(pools(&shard), ((RAGE, 0, 1000), (MANA, 650, 1000)));
+
+    shard.assert_call("debug_advance_roll_batch", &["80"]);
+    assert_eq!(pools(&shard).1, (MANA, 650, 1000), "within five seconds");
+    shard.assert_call("debug_advance_roll_batch", &["80"]);
+    let (shown, reserve) = pools(&shard);
+    assert_eq!(shown, (RAGE, 0, 1000));
+    assert!(reserve.1 > 650, "reserved mana regenerates: {reserve:?}");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn reserved_mana_survives_logout_in_the_form() {
+    let (shard, _first) = druid_beside_a_rage_form("forms-reserve-logout");
+    enter(&shard, PACKAGE_SHIFT);
+    shard.assert_call("debug_logout_character", &[WARRIOR]);
+    let _second = log_in(&shard, 43);
+    assert_eq!(shapeshift_spells(&shard), vec![PACKAGE_SHIFT]);
+    assert_eq!(pools(&shard), ((RAGE, 0, 1000), (MANA, 700, 1000)));
+}

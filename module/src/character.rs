@@ -736,7 +736,7 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         c.bank_bag_slots = entity.bank_bag_slots;
         // Zero means uninitialized health; pending_ghost restores a released ghost separately.
         c.health = entity.health.max(1);
-        c.power = entity.power;
+        c.power = entity.own_pool().current;
 
         c.death_expire_micros = entity.death_expire_micros;
 

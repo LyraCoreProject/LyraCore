@@ -4,6 +4,7 @@ use spacetimedb::{log, ReducerContext, Table};
 
 use crate::spell::tables::game_spell_form;
 use crate::spell::{auras_on, shed_auras, FormRequirement, ShapeshiftState};
+use crate::world::power_pool::is_power_type;
 use crate::{
     game_player_spell, game_spell, game_spell_effect, game_world_entity, Aura, WorldEntity,
 };
@@ -65,7 +66,8 @@ pub(crate) fn shapeshift_state(
 }
 
 /// A shapeshift Aura of `spell_id` naming `form_id` was applied: the unit leaves every other
-/// Form and the power rule runs. The caller's Aura refresh projects the Form once.
+/// Form, the Form's pool is shown and the power rule runs. The caller's Aura refresh projects the
+/// Form once.
 pub(crate) fn entered(ctx: &ReducerContext, guid: u64, spell_id: u32, form_id: u32) {
     let replaced: std::collections::BTreeSet<u32> = shapeshift_auras(ctx, guid)
         .map(|aura| aura.spell_id)
@@ -79,11 +81,25 @@ pub(crate) fn entered(ctx: &ReducerContext, guid: u64, spell_id: u32, form_id: u
         ctx.db.game_world_entity().guid().find(guid),
         ctx.db.game_form().form_id().find(form_id),
     ) {
-        let power = power_on_entry(ctx, &unit, &form);
-        if power != unit.power {
-            unit.power = power;
+        let shown = (unit.unit_bytes_0, unit.power);
+        show_form_pool(&mut unit, Some(&form));
+        unit.power = power_on_entry(ctx, &unit, &form);
+        if (unit.unit_bytes_0, unit.power) != shown {
             unit.update(ctx);
         }
+    }
+}
+
+/// Shows the pool the unit's Form names, or the unit's own pool when it has no Form.
+fn show_form_pool(unit: &mut WorldEntity, form: Option<&Form>) {
+    let power_type = form.map_or(unit.own_pool().power_type, |form| form.power_type);
+    if is_power_type(power_type) {
+        unit.show_pool(power_type);
+    } else if let Some(form) = form {
+        log::warn!(
+            "Form {} names unknown power type {power_type}",
+            form.form_id
+        );
     }
 }
 
@@ -140,9 +156,9 @@ pub(crate) fn locked(ctx: &ReducerContext, guid: u64) -> bool {
     })
 }
 
-/// Re-derives from the unit's shapeshift Aura the client form byte, the passives the Form brings
-/// and the equipment that depends on the Form. A byte no Form projects, or the byte `E_SET_STANCE`
-/// wrote for the unit's `stance`, stays as it is.
+/// Re-derives from the unit's shapeshift Aura the client form byte, the shown pool, the passives
+/// the Form brings and the equipment that depends on the Form. A byte no Form projects, or the
+/// byte `E_SET_STANCE` wrote for the unit's `stance`, stays as it is.
 pub(crate) fn project_form(ctx: &ReducerContext, guid: u64) {
     let Some(unit) = ctx.db.game_world_entity().guid().find(guid) else {
         return;
@@ -170,9 +186,11 @@ pub(crate) fn project_form(ctx: &ReducerContext, guid: u64) {
         }
         None => current,
     };
-    if current != client_form {
-        unit.unit_bytes_1 =
-            (unit.unit_bytes_1 & !CLIENT_FORM_MASK) | (client_form << CLIENT_FORM_SHIFT);
+    let shown = (unit.unit_bytes_1, unit.unit_bytes_0);
+    unit.unit_bytes_1 =
+        (unit.unit_bytes_1 & !CLIENT_FORM_MASK) | (client_form << CLIENT_FORM_SHIFT);
+    show_form_pool(&mut unit, form.as_ref());
+    if (unit.unit_bytes_1, unit.unit_bytes_0) != shown {
         unit = unit.update(ctx);
     }
     if unit.is_player() {

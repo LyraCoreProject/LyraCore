@@ -179,7 +179,7 @@ pub(crate) fn apply_level_stats(
 ) -> LevelStatsDelta {
     let old = LevelStatsDelta {
         old_max_health: e.max_health,
-        old_max_power: e.max_power,
+        old_max_power: e.own_pool().max,
         old_strength: e.strength,
         old_agility: e.agility,
         old_stamina: e.stamina,
@@ -195,7 +195,7 @@ pub(crate) fn apply_level_stats(
     e.spirit = spirit;
     e.armor = agility * 2;
     e.max_health = max_health_for(ctx, race, class, level);
-    e.max_power = max_power_for(ctx, race, class, level);
+    e.set_own_pool(e.own_pool().current, max_power_for(ctx, race, class, level));
     old
 }
 
@@ -223,7 +223,8 @@ pub(crate) fn set_character_level(
         e.next_level_xp = crate::xp::xp_to_next_level(level);
         apply_level_stats(ctx, &mut e, race, class, level);
         e.health = e.max_health;
-        e.power = e.max_power;
+        let max_power = e.own_pool().max;
+        e.set_own_pool(max_power, max_power);
         e.update(ctx);
         crate::spell::recompute_sheet(ctx, character_guid);
     }

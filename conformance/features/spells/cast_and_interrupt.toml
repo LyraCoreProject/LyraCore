@@ -45,3 +45,9 @@ description = "The execute log writes one block per created item, and a scripted
 path = "module/src/native/spell.rs"
 symbol = "item_creation_log_message"
 evidence = "vmangos Server/Packets/Spell.cpp SpellLogExecute::AppendBodyTo groups ExecuteLogInfo per effect index; Conjure Water creates one item per effect, so the scenario's bytes match."
+
+[[known_gaps]]
+description = "Energize and periodic energize reach only the shown pool. vmangos energizes any pool with a max, so a druid whose Form shows rage still gains reserved mana from a mana energize; here the Reserve Pool gains nothing. A reserved rage or energy pool also neither decays nor regenerates; only reserved mana does."
+path = "module/src/spell/scheduler.rs"
+symbol = "energizes_pool"
+evidence = "Source reading, not measured. At d9173eca, SpellEffects.cpp Spell::EffectEnergize and SpellAuras.cpp Aura::PeriodicTick SPELL_AURA_PERIODIC_ENERGIZE skip only a pool whose GetMaxPower is 0, and Player.cpp Player::RegenerateAll regenerates rage, energy and mana whatever the shown power type."

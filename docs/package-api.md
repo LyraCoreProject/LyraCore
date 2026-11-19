@@ -756,7 +756,8 @@ identifier must fit 24 bits.
   tune an imported Form's columns but not add passives to it. A spell's DBC masks own its Form Set
   rows for every other Form, so a `game_spell_form` claim always names a Package Form. After its
   writes, the apply refuses the plan when:
-  - a Form's `spell_id` has no `A_SHAPESHIFT` effect for that Form, or its power rule is unknown;
+  - a Form's `spell_id` has no `A_SHAPESHIFT` effect for that Form, or its power rule or power
+    type is unknown;
   - a passive is not a passive spell, or carries `A_SHAPESHIFT`;
   - a plan row writes an `A_SHAPESHIFT` effect, on any spell, that names a Form with no `game_form`
     row;

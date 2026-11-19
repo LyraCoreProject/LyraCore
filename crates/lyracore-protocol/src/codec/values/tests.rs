@@ -24,9 +24,7 @@ fn every_values_builder_serializes_without_the_object_type_bit() {
         ),
         ("mount_display", build_mount_display_values(g, 1147)),
         ("display", build_display_values(g, 1825)),
-        ("power", build_power_values(g, 0, 55)),
         ("target", build_target_values(g, 0xF130_0000_0000_0001)),
-        ("max_power", build_max_power_values(g, 0, 200)),
         ("armor", build_armor_values(g, [60, 0, 0, 0, 0, 0, 0], 20)),
         (
             "resistance",
@@ -452,35 +450,38 @@ fn unit_flags_values_is_unit_only_no_object_type() {
 }
 
 #[test]
-fn power_values_selects_the_descriptor_by_power_byte() {
-    let cases: [(u8, i32); 5] = [(0, 111), (1, 222), (2, 333), (3, 444), (4, 555)];
-    for (power_b, cur) in cases {
-        let msg = build_power_values(1, power_b, cur as u32);
-        match &msg.objects[0] {
-            Object::Values {
-                mask1: UpdateMask::Player(p),
-                ..
-            } => {
-                let got = match power_b {
-                    1 => p.unit_power2(),
-                    2 => p.unit_power3(),
-                    3 => p.unit_power4(),
-                    4 => p.unit_power5(),
-                    _ => p.unit_power1(),
-                };
-                assert_eq!(
-                    got,
-                    Some(cur),
-                    "power_b={power_b} must land on its own descriptor"
-                );
-            }
-            other => panic!("expected a Player Values update, got {other:?}"),
-        }
-    }
-    let msg = build_power_values(1, 1, 222);
-    let mut buf = Vec::new();
-    msg.write_unencrypted_server(&mut buf).unwrap();
-    assert_no_object_type(&buf[4..]);
+fn power_values_carry_the_power_type_and_each_pool_on_its_own_descriptors() {
+    let (opcode, body) = build_power_values(
+        7,
+        Some(0x0100_0B04),
+        &[
+            PowerFields {
+                power_type: 1,
+                current: Some(0),
+                max: Some(1000),
+            },
+            PowerFields {
+                power_type: 0,
+                current: Some(650),
+                max: None,
+            },
+            PowerFields {
+                power_type: 5,
+                current: Some(9),
+                max: Some(9),
+            },
+        ],
+    );
+    assert_eq!(opcode, SMSG_UPDATE_OBJECT_OPCODE);
+    let updates = crate::codec::values_mask::parse_values_updates(&body);
+    assert_eq!(updates.len(), 1);
+    assert_eq!(updates[0].guid, 7);
+    assert_eq!(
+        updates[0].fields,
+        [(23, 650), (24, 0), (30, 1000), (36, 0x0100_0B04)],
+        "POWER1 23, POWER2 24, MAXPOWER2 30 and UNIT_FIELD_BYTES_0 36; no sixth pool"
+    );
+    assert_no_object_type(&body);
 }
 
 #[test]
@@ -497,39 +498,6 @@ fn target_values_is_unit_only_no_object_type() {
         }
         other => panic!("expected a Unit Values update, got {other:?}"),
     }
-    let mut buf = Vec::new();
-    msg.write_unencrypted_server(&mut buf).unwrap();
-    assert_no_object_type(&buf[4..]);
-}
-
-#[test]
-fn max_power_values_select_the_max_power_descriptor_without_max_health() {
-    let cases: [(u8, i32); 5] = [(0, 1001), (1, 1002), (2, 1003), (3, 1004), (4, 1005)];
-    for (power_b, max_power) in cases {
-        let msg = build_max_power_values(1, power_b, max_power as u32);
-        match &msg.objects[0] {
-            Object::Values {
-                mask1: UpdateMask::Unit(u),
-                ..
-            } => {
-                assert_eq!(u.unit_maxhealth(), None);
-                let got = match power_b {
-                    1 => u.unit_maxpower2(),
-                    2 => u.unit_maxpower3(),
-                    3 => u.unit_maxpower4(),
-                    4 => u.unit_maxpower5(),
-                    _ => u.unit_maxpower1(),
-                };
-                assert_eq!(
-                    got,
-                    Some(max_power),
-                    "power_b={power_b} must land on its own max-power descriptor"
-                );
-            }
-            other => panic!("expected a Unit Values update, got {other:?}"),
-        }
-    }
-    let msg = build_max_power_values(1, 0, 1001);
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
     assert_no_object_type(&buf[4..]);

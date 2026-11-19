@@ -120,6 +120,31 @@ path = "module/src/native/health.rs"
 function = "hidden_health_truncates_to_a_percent_of_one_hundred"
 rung = "unit"
 
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/entity/tests.rs"
+function = "a_create_carries_the_shown_pool_and_the_reserve_pool_to_owner_and_peers"
+rung = "unit"
+
+[[tests]]
+path = "module/src/native/visibility.rs"
+function = "showing_a_form_pool_sends_the_power_type_and_the_new_pool"
+rung = "unit"
+
+[[tests]]
+path = "module/src/native/visibility.rs"
+function = "reserved_mana_and_an_ended_form_pool_reach_the_client"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "a_druid_keeps_mana_in_reserve_while_a_form_shows_rage"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "reserved_mana_survives_logout_in_the_form"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/CharacterHandler.cpp"

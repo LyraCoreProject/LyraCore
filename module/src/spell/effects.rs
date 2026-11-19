@@ -93,6 +93,7 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
 
     let is_mana = lyracore_shared::packing::power_type::for_class(class)
         == lyracore_shared::packing::power_type::MANA;
+    let own = e.own_pool();
     let new_max_power = if is_mana {
         add_flat_pool_bonus(
             rederive_pool(
@@ -104,17 +105,16 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
             gear(crate::items::EquipStat::Mana),
         )
     } else {
-        e.max_power
+        own.max
     };
 
-    if new_max_health == e.max_health && new_max_power == e.max_power && new_spirit == e.spirit {
+    if new_max_health == e.max_health && new_max_power == own.max && new_spirit == e.spirit {
         return;
     }
 
     e.max_health = new_max_health;
     e.health = e.health.min(new_max_health);
-    e.max_power = new_max_power;
-    e.power = e.power.min(new_max_power);
+    e.set_own_pool(own.current.min(new_max_power), new_max_power);
     e.spirit = new_spirit;
     e.update(ctx);
 }

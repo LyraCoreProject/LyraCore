@@ -8,6 +8,7 @@ use crate::game_character;
 
 mod character_entity;
 mod placement;
+pub(crate) mod power_pool;
 mod simulation;
 
 pub(crate) use character_entity::build_player_entity;
@@ -258,6 +259,13 @@ pub struct WorldEntity {
     pub sheet_ranged_dmg_max_fraction: f32,
     #[default(0u32)]
     pub sheet_ranged_crit_bp: u32,
+    /// The Reserve Pool's power type; `power_pool::NO_RESERVE_POOL` when the unit holds none.
+    #[default(255u8)]
+    pub reserve_power_type: u8,
+    #[default(0u32)]
+    pub reserve_power: u32,
+    #[default(0u32)]
+    pub reserve_max_power: u32,
 }
 
 impl WorldEntity {
@@ -339,6 +347,9 @@ impl WorldEntity {
             sheet_ranged_dmg_min_fraction: 0.0,
             sheet_ranged_dmg_max_fraction: 0.0,
             sheet_ranged_crit_bp: 0,
+            reserve_power_type: power_pool::NO_RESERVE_POOL,
+            reserve_power: 0,
+            reserve_max_power: 0,
             sheet_dmg_min: 0,
             sheet_dmg_max: 0,
             sheet_crit_bp: 0,

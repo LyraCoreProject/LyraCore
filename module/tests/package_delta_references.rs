@@ -934,6 +934,17 @@ fn form_claims_refuse_rows_the_form_tables_cannot_honour() {
             [shift_insert(PACKAGE_FORM), form_insert(PACKAGE_SHIFT, 9)].join(","),
             "unknown power rule",
         ),
+        (
+            [
+                shift_insert(PACKAGE_FORM),
+                form_insert(PACKAGE_SHIFT, 0).replace(
+                    r#""power_type":{"type":"u8","value":1}"#,
+                    r#""power_type":{"type":"u8","value":5}"#,
+                ),
+            ]
+            .join(","),
+            "unknown power type",
+        ),
         (shift_insert(PACKAGE_FORM + 1), "no `game_form` row"),
         (
             spell_form_update(BATTLE_STANCE, 17),

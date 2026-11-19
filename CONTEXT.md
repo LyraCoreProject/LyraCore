@@ -41,7 +41,7 @@ entry in both files.
 
 **P** [Package](CORE_TERMS.md#package) · [Package API](CORE_TERMS.md#package-api) · [Package Cast Range](#packages) · [Package Config](#packages) · [Package Creature Range](#packages) · [Package Delta](#packages) · [Package Event](#runtime-scripts) · [Package EventAI Range](#packages) · [Package Fixture](#packages) · [Package Form Range](#packages) · [Package Gameobject Range](#packages) · [Package Globals Range](#packages) · [Package Gossip Range](#packages) · [Package Identifier Range](#packages) · [Package Import](#packages) · [Package Inventory](#packages) · [Package Item Range](#packages) · [Package Loot Range](#packages) · [Package Quest Range](#packages) · [Package Script Range](#packages) · [Package Source](#packages) · [Package Spell](#packages) · [Package Spell Metadata Range](#packages) · [Package Spell Range](#packages) · [Package Teardown](#packages) · [Package Trainer Range](#packages) · [Package-owned Account](#accounts-characters-and-sessions) · [Party](#groups) · [Party Partition](#groups) · [Passenger](#transports) · [Path Progress](#transports) · [Patrol Pause](#creature-ai) · [Peer Shard](#realm-topology) · [Petition](#guilds) · [Petitioner](#guilds) · [Pre-auth I/O Deadline](#accounts-characters-and-sessions) · [Proc](#procs) · [Proficiency](#requests-and-delivery) · [Property Pool](#random-properties) · [Protocol Family](CORE_TERMS.md#protocol-family) · [Prototype](#working-method) · [Provenance Stamp](#packages) · [Public Note](#guilds)
 
-**R** [Raid](#groups) · [Raid Quest](#groups) · [Raid Slot](#groups) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#groups) · [Realm](CORE_TERMS.md#realm) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Shard](#realm-topology) · [Realm-core](#retired-terms) · [Recorded Revision](#packages) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Reference Server](#conformance) · [Refusal](CORE_TERMS.md#refusal) · [Relay](CORE_TERMS.md#relay) · [Relay Arrival](#realm-topology) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Roll Conformance](#conformance) · [Rollback](#requests-and-delivery) · [Roster Revision](#groups) · [Roster Revision Relay](#retired-terms) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](CORE_TERMS.md#runtime-script) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
+**R** [Raid](#groups) · [Raid Quest](#groups) · [Raid Slot](#groups) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#groups) · [Realm](CORE_TERMS.md#realm) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Shard](#realm-topology) · [Realm-core](#retired-terms) · [Recorded Revision](#packages) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Reference Server](#conformance) · [Refusal](CORE_TERMS.md#refusal) · [Relay](CORE_TERMS.md#relay) · [Relay Arrival](#realm-topology) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Reserve Pool](#forms) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Roll Conformance](#conformance) · [Rollback](#requests-and-delivery) · [Roster Revision](#groups) · [Roster Revision Relay](#retired-terms) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](CORE_TERMS.md#runtime-script) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
 
 **S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Soulstone](#death-and-resurrection) · [Source Profile](#realm-topology) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Swing Error](#procs)
 
@@ -558,14 +558,20 @@ not Rust.
 _Avoid_: stance (as a stored number), form byte (for the Form's id)
 
 **Form Projection**:
-The client form byte, the passive Auras a Form brings and Form-dependent equipment, re-derived from
-a unit's shapeshift Aura. The passives are the Form's own and every known passive whose Form Set
+The client form byte, the shown power pool, the passive Auras a Form brings and Form-dependent
+equipment, re-derived from a unit's shapeshift Aura. The passives are the Form's own and every known passive whose Form Set
 requires a Form with a `game_form` row. Never a second state machine.
 
 **Form Set**:
 The Forms a spell requires or excludes, held as `game_spell_form` rows by Form id. The 1.12
 `Stances` and `StancesNot` masks are only how the importer reads it.
 _Avoid_: stance mask (for the set)
+
+**Reserve Pool**:
+A unit's own power pool, such as a druid's mana, held aside while its Form shows a pool of another
+power type. It pays costs in its power type, reserved mana keeps regenerating, the Character saves
+it and it is shown again when the unit leaves the Form. The Form's pool starts empty and ends with the Form.
+_Avoid_: secondary power, druid mana (for the general pool)
 
 ### Transports
 
