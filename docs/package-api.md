@@ -758,6 +758,8 @@ identifier must fit 24 bits.
   writes, the apply refuses the plan when:
   - a Form's `spell_id` has no `A_SHAPESHIFT` effect for that Form, or its power rule or power
     type is unknown;
+  - a Form's `natural_attack_ms` is not zero and is under 500 ms, or its `entry_chance_spell` names
+    a missing spell;
   - a passive is not a passive spell, or carries `A_SHAPESHIFT`;
   - a plan row writes an `A_SHAPESHIFT` effect, on any spell, that names a Form with no `game_form`
     row;

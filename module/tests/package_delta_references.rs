@@ -901,6 +901,16 @@ fn form_claims_refuse_rows_the_form_tables_cannot_honour() {
         ]
         .join(",")
     };
+    let with_form_field = |field: &str| {
+        [
+            shift_insert(PACKAGE_FORM),
+            form_insert(PACKAGE_SHIFT, 0).replace(
+                r#""client_form":{"type":"u8","value":0}"#,
+                &format!(r#""client_form":{{"type":"u8","value":0}},{field}"#),
+            ),
+        ]
+        .join(",")
+    };
 
     for (claims, named) in [
         (form_spell_insert(BATTLE_STANCE_PASSIVE), "missing Form"),
@@ -944,6 +954,16 @@ fn form_claims_refuse_rows_the_form_tables_cannot_honour() {
             ]
             .join(","),
             "unknown power type",
+        ),
+        (
+            with_form_field(r#""natural_attack_ms":{"type":"u32","value":400}"#),
+            "under the 500 ms floor",
+        ),
+        (
+            with_form_field(&format!(
+                r#""entry_chance_spell":{{"type":"u32","value":{MISSING_SPELL}}}"#
+            )),
+            "references missing spell",
         ),
         (shift_insert(PACKAGE_FORM + 1), "no `game_form` row"),
         (

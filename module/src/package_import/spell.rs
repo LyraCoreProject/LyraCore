@@ -27,6 +27,9 @@ pub(super) const OPS: ClaimOps = ClaimOps {
     after_write: Some(check_form_rows),
 };
 
+// The melee schedule fires every 100 ms, so a shorter swing could land a fifth of its period late.
+const MIN_NATURAL_ATTACK_MS: u32 = 500;
+
 /// Refuses Form rows the written tables cannot honour; docs/package-api.md "Form" lists the rules.
 fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
     let spells = ctx.db.game_spell();
@@ -65,6 +68,19 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
                         row.key(),
                         form.power_type
                     ));
+                }
+                if form.natural_attack_ms != 0 && form.natural_attack_ms < MIN_NATURAL_ATTACK_MS {
+                    return Err(format!(
+                        "`game_form` row {} claims natural attacks every {} ms, under the \
+                         {MIN_NATURAL_ATTACK_MS} ms floor",
+                        row.key(),
+                        form.natural_attack_ms
+                    ));
+                }
+                if form.entry_chance_spell != 0
+                    && spells.spell_id().find(form.entry_chance_spell).is_none()
+                {
+                    return Err(missing_reference(row, "spell", form.entry_chance_spell));
                 }
                 if !enters_form(form.spell_id, form_id) {
                     return Err(format!(

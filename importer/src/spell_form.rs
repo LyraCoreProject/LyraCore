@@ -17,8 +17,11 @@ const RETAINED_RAGE_SCRIPTS: [(u32, i32); 5] =
 // vmangos HandleAuraModShapeshift casts Berserker Stance when Nefarian's warrior call ends.
 const SHAPESHIFT_RETURN_SPELLS: [(u32, u32); 1] = [(23397, 2458)];
 
-// vmangos HandleAuraModShapeshift takes Furor's chance from its dummy Aura (SpellIconID 238).
+// vmangos HandleAuraModShapeshift takes Furor's chance from its dummy Aura (SpellIconID 238) when a
+// 1.12 druid enters Cat, Bear or Dire Bear Form.
 const FORM_ENTRY_CHANCE_SPELLS: [u32; 5] = [17056, 17058, 17059, 17060, 17061];
+const FUROR_FORMS: [u32; 3] = [1, 5, 8];
+const SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED: u32 = 0x80000;
 
 // vmangos Spell::CheckCast refuses every shapeshift while Nefarian's warrior call is held.
 const FORM_LOCKING_SPELLS: [u32; 1] = [23397];
@@ -31,6 +34,27 @@ pub(crate) fn locks_form(spell_id: u32) -> bool {
 /// Whether this spell's dummy Aura is the chance that entering a Form casts its entry spell.
 pub(crate) fn grants_form_entry_chance(spell_id: u32) -> bool {
     FORM_ENTRY_CHANCE_SPELLS.contains(&spell_id)
+}
+
+/// The Form mask an entry chance spell adds to its Spell.dbc `Stances`: the Forms its chance names.
+/// The spell carries no mask of its own; its Form Set is how the Module scopes the chance.
+pub(crate) fn form_entry_chance_mask(spell_id: u32) -> u32 {
+    if grants_form_entry_chance(spell_id) {
+        FUROR_FORMS
+            .iter()
+            .fold(0, |mask, form| mask | 1 << (form - 1))
+    } else {
+        0
+    }
+}
+
+/// The AttributesEx2 an entry chance spell adds, so its passive holds outside the Forms it names.
+pub(crate) fn form_entry_chance_ex2(spell_id: u32) -> u32 {
+    if grants_form_entry_chance(spell_id) {
+        SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED
+    } else {
+        0
+    }
 }
 
 /// The spell a unit gets when this spell's shapeshift Aura ends and leaves it in no Form; the
@@ -291,11 +315,16 @@ mod tests {
     }
 
     #[test]
-    fn furor_is_the_form_entry_chance() {
+    fn furor_is_the_form_entry_chance_of_the_feral_forms() {
         for rank in [17056, 17058, 17059, 17060, 17061] {
             assert!(grants_form_entry_chance(rank));
+            assert_eq!(form_entry_chance_mask(rank), 0x91);
         }
         assert!(!grants_form_entry_chance(17057));
+        assert_eq!(
+            (form_entry_chance_mask(17057), form_entry_chance_ex2(17057)),
+            (0, 0)
+        );
     }
 
     #[test]

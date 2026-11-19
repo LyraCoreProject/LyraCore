@@ -891,9 +891,9 @@ fn push_spell_header_row(
         custom_flags: s.custom_flags,
         min_target_level: s.min_target_level,
         single_target_key: s.single_target_key,
-        form_mask: s.shapeshift_mask,
+        form_mask: s.shapeshift_mask | crate::spell_form::form_entry_chance_mask(s.id),
         form_exclude: s.shapeshift_exclude,
-        attributes_ex_2: s.attributes_ex2,
+        attributes_ex_2: s.attributes_ex2 | crate::spell_form::form_entry_chance_ex2(s.id),
         visual_id: s.visual_id,
         duration_index: s.duration,
         category: s.category,
@@ -3285,6 +3285,36 @@ mod tests {
             implicit_target_a: [1, 0, 0],
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn furor_is_an_entry_chance_for_the_feral_forms_that_stays_outside_them() {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![Spell {
+            effect_base_points: [99, 0, 0],
+            ..aura_spell(17061, "Furor", AuraMod::Dummy as u32, 0)
+        }];
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let effect = first_effect(&rows, 17061);
+        assert_eq!(
+            (effect.kind, effect.base_points),
+            (A_FORM_ENTRY_CHANCE, 100)
+        );
+        let header = rows
+            .headers
+            .iter()
+            .find(|header| header.spell_id == 17061)
+            .unwrap();
+        assert_eq!(
+            header.form_mask,
+            1 | 1 << 4 | 1 << 7,
+            "Cat, Bear and Dire Bear"
+        );
+        assert_ne!(
+            header.attributes_ex_2 & 0x80000,
+            0,
+            "allowed while not shapeshifted"
+        );
     }
 
     #[test]

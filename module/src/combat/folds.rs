@@ -203,12 +203,13 @@ pub(crate) fn attack_time(ctx: &ReducerContext, unit: &WorldEntity, source: HitS
 
 /// A Character's main hand swings at its usable weapon's delay; `base_attack_time_ms` is unarmed.
 pub(crate) fn main_hand_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
-    if let Some(form) = natural_attack_time(ctx, unit) {
+    let profile = player_profile(ctx, unit);
+    if let Some(form) = natural_attack_time(profile) {
         return form;
     }
     let holds_weapon = unit.is_player()
         && crate::spell::chance_on_hit::holds_weapon(
-            crate::form::combat_profile(ctx, unit.guid),
+            profile,
             lyracore_shared::constants::starter_item::MAINHAND_SLOT,
             || crate::spell::is_disarmed(ctx, unit.guid),
         );
@@ -221,7 +222,7 @@ pub(crate) fn main_hand_attack_time(ctx: &ReducerContext, unit: &WorldEntity) ->
 }
 
 pub(crate) fn off_hand_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
-    if let Some(form) = natural_attack_time(ctx, unit) {
+    if let Some(form) = natural_attack_time(player_profile(ctx, unit)) {
         return form;
     }
     if !unit.is_player() {
@@ -243,13 +244,19 @@ fn ranged_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
         .unwrap_or(DEFAULT_ATTACK_TIME_MS)
 }
 
+/// A Character's Combat Profile; a creature keeps the weapon profile and its template's swing.
+fn player_profile(ctx: &ReducerContext, unit: &WorldEntity) -> CombatProfile {
+    if unit.is_player() {
+        crate::form::combat_profile(ctx, unit.guid)
+    } else {
+        CombatProfile::Weapon
+    }
+}
+
 /// vmangos Player::InitDataForForm swings both hands of a Character's natural attacks at the
 /// Form's speed.
-fn natural_attack_time(ctx: &ReducerContext, unit: &WorldEntity) -> Option<u32> {
-    if !unit.is_player() {
-        return None;
-    }
-    match crate::form::combat_profile(ctx, unit.guid) {
+fn natural_attack_time(profile: CombatProfile) -> Option<u32> {
+    match profile {
         CombatProfile::Natural { attack_ms, .. } => Some(attack_ms),
         CombatProfile::Weapon => None,
     }
@@ -393,8 +400,9 @@ fn base_melee_range(ctx: &ReducerContext, attacker: &WorldEntity, normalized: bo
         }
         return (min, max);
     }
-    let ap = melee_attack_power(ctx, attacker);
-    if let Some(form_ms) = natural_attack_time(ctx, attacker) {
+    let profile = crate::form::combat_profile(ctx, attacker.guid);
+    let ap = melee_attack_power_in(ctx, attacker, profile);
+    if let Some(form_ms) = natural_attack_time(profile) {
         // vmangos normalizes by the equipped weapon; no 1.12 druid form ability normalizes.
         let speed_ms = if normalized {
             NORMALIZED_ONE_HAND_MS
@@ -501,7 +509,22 @@ pub(crate) fn base_melee_attack_power(
     strength: u32,
     agility: u32,
 ) -> i32 {
-    let profile = crate::form::combat_profile(ctx, unit.guid);
+    base_melee_attack_power_in(
+        ctx,
+        unit,
+        crate::form::combat_profile(ctx, unit.guid),
+        strength,
+        agility,
+    )
+}
+
+fn base_melee_attack_power_in(
+    ctx: &ReducerContext,
+    unit: &WorldEntity,
+    profile: CombatProfile,
+    strength: u32,
+    agility: u32,
+) -> i32 {
     base_melee_attack_power_for(
         unit.class(),
         profile,
@@ -513,10 +536,15 @@ pub(crate) fn base_melee_attack_power(
 }
 
 pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+    melee_attack_power_in(ctx, unit, crate::form::combat_profile(ctx, unit.guid))
+}
+
+fn melee_attack_power_in(ctx: &ReducerContext, unit: &WorldEntity, profile: CombatProfile) -> u32 {
     total_attack_power(
-        base_melee_attack_power(
+        base_melee_attack_power_in(
             ctx,
             unit,
+            profile,
             crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_STR),
             crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_AGI),
         ),

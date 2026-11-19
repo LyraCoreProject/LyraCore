@@ -27,7 +27,7 @@ fn shapeshift_auras(ctx: &ReducerContext, guid: u64) -> impl Iterator<Item = Aur
 pub(crate) fn active_form(ctx: &ReducerContext, guid: u64) -> Option<Form> {
     let aura = shapeshift_auras(ctx, guid).max_by_key(|aura| aura.id)?;
     let form = ctx.db.game_form().form_id().find(aura.eff_p0.max(0) as u32);
-    if form.is_none() {
+    if form.is_none() && first_warning_for(aura.id) {
         log::warn!(
             "unit {guid} holds shapeshift Aura {} for Form {} with no game_form row",
             aura.spell_id,
@@ -35,6 +35,16 @@ pub(crate) fn active_form(ctx: &ReducerContext, guid: u64) -> Option<Form> {
         );
     }
     form
+}
+
+thread_local! {
+    static WARNED_AURAS: std::cell::RefCell<std::collections::BTreeSet<u64>> =
+        const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
+}
+
+/// Whether this Module instance has not yet warned about the Aura row `aura_id`.
+fn first_warning_for(aura_id: u64) -> bool {
+    WARNED_AURAS.with(|warned| warned.borrow_mut().insert(aura_id))
 }
 
 /// The unit's Form for the cast and equip Gates.
@@ -116,13 +126,17 @@ pub(crate) fn entered(ctx: &ReducerContext, guid: u64, spell_id: u32, form_id: u
     }
 }
 
-/// vmangos Furor: entering the Form casts its entry spell at the unit's `A_FORM_ENTRY_CHANCE`.
+/// vmangos Furor: entering the Form casts its entry spell at the chance of the unit's
+/// `A_FORM_ENTRY_CHANCE` Aura whose spell's Form Set requires this Form.
 fn cast_entry_chance_spell(ctx: &ReducerContext, unit: &WorldEntity, form: &Form) {
     if form.entry_chance_spell == 0 {
         return;
     }
     let chance = auras_on(ctx, unit.guid)
-        .filter(|aura| aura.eff_kind == A_FORM_ENTRY_CHANCE)
+        .filter(|aura| {
+            aura.eff_kind == A_FORM_ENTRY_CHANCE
+                && FormRequirement::of(ctx, aura.spell_id, Some(form.form_id)).requires_this
+        })
         .map(|aura| aura.amount.max(0) as u32)
         .max()
         .unwrap_or(0);
@@ -440,7 +454,7 @@ pub(crate) fn enter_world(ctx: &ReducerContext, guid: u64) {
 }
 
 /// Publish repair: keeps one shapeshift Aura, and gives a unit with none the Form its client form
-/// byte shows, else its class default.
+/// byte shows, else its class default. A dead or ghost unit enters no Form its death would end.
 pub(crate) fn repair(ctx: &ReducerContext, guid: u64) {
     let Some(unit) = ctx.db.game_world_entity().guid().find(guid) else {
         return;
@@ -454,12 +468,21 @@ pub(crate) fn repair(ctx: &ReducerContext, guid: u64) {
             .filter(|aura| others.contains(&aura.spell_id))
             .collect();
         shed_auras(ctx, removed);
-    } else if let Some(form) =
-        form_by_client_byte(ctx, unit.form()).or_else(|| default_form(ctx, unit.class()))
+    } else if let Some(form) = form_by_client_byte(ctx, unit.form())
+        .or_else(|| default_form(ctx, unit.class()))
+        .filter(|form| !unit.dead || survives_death(ctx, form))
     {
         apply_form_spell(ctx, &unit, &form);
     }
     project_form(ctx, guid);
+}
+
+fn survives_death(ctx: &ReducerContext, form: &Form) -> bool {
+    ctx.db
+        .game_spell()
+        .spell_id()
+        .find(form.spell_id)
+        .is_some_and(|spell| crate::spell::aura_survives_death(&spell))
 }
 
 /// The Form whose id is the client byte and which projects that byte; a Form's fallback byte never

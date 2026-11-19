@@ -420,17 +420,23 @@ weapon combat profile, clear no snares and cast nothing on entry. The new Effect
 it, and the Module ignores the reserved `E_SET_STANCE`.
 
 Until you reimport `spell` with `--dbc`, the druid form spells keep their old `E_SET_STANCE` rows,
-so casting them does nothing: no druid can enter a feral form, and a druid shown in one fights with
-its weapon. Before play resumes:
+so casting them enters nothing: no druid can enter a feral form, and a druid shown in one fights
+with its weapon. The cast still spends its mana and starts the global cooldown. Before play resumes:
 
 1. Publish the Module through a planned additive update.
 2. Reimport `spell` with `--dbc`. It writes Forms 1, 5 and 8 with their combat profiles, snare
    clearing, Furor spells and passives (Cat 3025, Bear 1178 and 21178, Dire Bear 9635 and 21178),
-   the three form spells as `A_SHAPESHIFT`, and Furor as `A_FORM_ENTRY_CHANCE`. Forms 17 to 19 get
-   the new columns at their defaults.
+   the three form spells as `A_SHAPESHIFT`, and Furor as `A_FORM_ENTRY_CHANCE` with the Form Set
+   Cat, Bear and Dire Bear. Forms 17 to 19 get the new columns at their defaults.
 3. Call `debug_repair_after_publish`. Each online druid whose client form byte shows 1, 5 or 8 and
    who holds no shapeshift Aura gets that Form's Aura and passives. Its mana goes into the Reserve
-   Pool and the Form's pool starts empty.
+   Pool and the Form's pool starts empty. A dead or ghost druid gets no Form. The same repair's
+   `repair_cast_auras` rewrites every held Furor Aura, online or not, from its old kind to
+   `A_FORM_ENTRY_CHANCE`.
+
+Druid talent passives whose Form Set names the feral Forms, such as Sharpened Claws and Feral
+Instinct, now come and go with those Forms. Before, they held in every form. Players see the stat
+change on the character sheet when they leave a feral Form.
 
 A druid whose Auras change between the reimport and the repair is projected first and drops to
 caster form, as does a druid in a form after a crash. Offline druids enter the world in caster form,

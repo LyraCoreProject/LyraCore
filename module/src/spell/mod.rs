@@ -39,9 +39,9 @@ pub(crate) use cast::{
     CreatureSpellStartMode, CreatureSpellTarget, ItemGrantOutcome, LoadedSpell,
 };
 pub(crate) use control::{
-    break_auras_on_damage, break_auras_on_move, break_channel, buff_status, cancel_cast_attempt,
-    control_status, expire_cast_attempt, fear_source, has_aura, interrupt_cast,
-    interrupt_cast_and_lock, is_action_blocked, is_disarmed, is_immune_to_mechanic,
+    aura_survives_death, break_auras_on_damage, break_auras_on_move, break_channel, buff_status,
+    cancel_cast_attempt, control_status, expire_cast_attempt, fear_source, has_aura,
+    interrupt_cast, interrupt_cast_and_lock, is_action_blocked, is_disarmed, is_immune_to_mechanic,
     is_movement_blocked, is_non_melee_spell_casting, is_self_movement_suppressed, is_stunned,
     pushback_cast, remove_auras_on_death, spell_control,
 };

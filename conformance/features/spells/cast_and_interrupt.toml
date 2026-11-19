@@ -77,3 +77,15 @@ description = "Entering or leaving a feral Form ends a movement slow whose spell
 path = "module/src/form/mod.rs"
 symbol = "clear_snares"
 evidence = "Source reading, not measured. At d9173eca, SpellEffects.cpp Spell::EffectScriptEffect for Shapeshift Form Effect 9033 skips such slows alongside MECHANIC_NOT_REMOVED_BY_SHAPESHIFT."
+
+[[known_gaps]]
+description = "Leader of the Pack does nothing: a druid who knows 17007 gets no 24932 party Aura in Cat, Bear or Dire Bear Form. The Form passives apply only to the unit itself, and 24932 is a party area Aura gated on a known talent, which no Form building block expresses."
+path = "module/src/form/mod.rs"
+symbol = "reconcile_passives"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleShapeshiftBoosts casts 24932 (SPELL_EFFECT_APPLY_AREA_AURA_PARTY, +3% crit, Stances 0x91) when the player HasSpell(17007) and 24932's Stances names the form."
+
+[[known_gaps]]
+description = "Heart of the Wild adds no Form bonus: a druid with the talent gets no 24900 Strength bonus in Cat Form and no 24899 Stamina bonus in Bear or Dire Bear Form. Both effect spells have base points -1 and take their amount from the talent rank's Aura, and no building block casts a spell with an amount another Aura supplies."
+path = "module/src/form/mod.rs"
+symbol = "reconcile_passives"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleShapeshiftBoosts finds the SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE Aura with SpellIconID 240 and misc 3 and casts HotWSpellId with CastCustomSpell at that Aura's amount."

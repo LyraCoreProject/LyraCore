@@ -415,7 +415,9 @@ leaves it, its passives and its Form Set rows in place.
   pool and shows the own pool again. Every Form row shows its pool, so a Form that keeps the unit's
   pool whatever it is, as vmangos Stealth does, needs a new building block. A nonzero
   `entry_chance_spell` is cast on entry at the percent chance of the unit's best
-  `A_FORM_ENTRY_CHANCE` Aura, as Furor gives Cat Form energy and the bear Forms rage.
+  `A_FORM_ENTRY_CHANCE` Aura whose spell's Form Set requires the Form, as Furor gives Cat Form
+  energy and the bear Forms rage. Such a spell also allows casting while not shapeshifted, so its
+  passive is not bound to those Forms and is held when the unit enters one.
 - **Combat profile.** `natural_attack_ms` zero keeps the weapon profile. Otherwise the unit sets its
   weapons aside: both hands swing every `natural_attack_ms` for level-based damage, weapon skill is
   the level cap, a druid has no ranged attack power and weapon-bound spell bonuses stop. With
@@ -440,6 +442,8 @@ leaves it, its passives and its Form Set rows in place.
 spell's Form Set, so a Form id above the 1.12 client's 32-bit `Stances` mask can gate a spell. The
 importer, Package spell rows and Operator spell edits write rows for Forms 1 to 32 from the DBC
 masks, which `game_spell.form_mask` and `form_exclude` keep verbatim; rows for higher Form ids stay.
+The one exception is Furor, whose `form_mask` the importer extends with Cat, Bear and Dire Bear to
+scope its entry chance.
 A Package names its own Forms in a spell's Form Set with `game_spell_form` rows.
 `game_spell.stances` is no longer read.
 
@@ -466,7 +470,9 @@ held.
 
 Every Character body that enters the world runs the same projection, and one with no shapeshift Aura
 enters its class's default Form, whether it came from login, a Package or a sessionless action.
-Publish repair projects too. `WorldEntity.stance` is a retired column: nothing reads it.
+Publish repair projects too, and puts a unit with no shapeshift Aura into the Form its client form
+byte shows, or else its class default; a dead or ghost unit enters no Form its death would end.
+`WorldEntity.stance` is a retired column: nothing reads it.
 
 ### `game_character` (`module/src/character.rs`)
 

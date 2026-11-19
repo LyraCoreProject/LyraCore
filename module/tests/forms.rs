@@ -1386,19 +1386,29 @@ fn a_feral_form_frees_the_druid_from_roots_and_snares_as_it_comes_and_goes() {
     );
 }
 
-#[test]
-#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn furor_gives_a_druid_entering_bear_form_ten_rage() {
-    const FUROR: u32 = 17061;
-    const FUROR_RAGE: u32 = 17057;
-    let (shard, _wire) = feral_druid("forms-druid-furor");
+const FUROR_RAGE: u32 = 17057;
+const ALLOW_WHILE_NOT_SHAPESHIFTED: u32 = 0x80000;
+
+/// A druid holding an entry chance passive for `forms`, as the `spell` import writes Furor, beside
+/// Furor's rage spell.
+fn druid_with_entry_chance(
+    name: &str,
+    chance_spell: u32,
+    forms: &[u32],
+) -> (Standalone, ReducerConnection) {
+    let (shard, wire) = feral_druid(name);
     insert_spell(
         &shard,
-        FUROR,
-        "Furor",
+        chance_spell,
+        "Entry chance",
         (0x1D0, 0, 0),
         &[(A_FORM_ENTRY_CHANCE, 100, 0, P_NONE)],
     );
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET attributes_ex_2 = {ALLOW_WHILE_NOT_SHAPESHIFTED} \
+         WHERE spell_id = {chance_spell}"
+    ));
+    require_forms(&shard, chance_spell, forms, &[]);
     insert_spell(
         &shard,
         FUROR_RAGE,
@@ -1406,13 +1416,33 @@ fn furor_gives_a_druid_entering_bear_form_ten_rage() {
         (0, 0, 0),
         &[(E_ENERGIZE, 100, i32::from(RAGE), P_POWER_TYPE)],
     );
-    cast(&shard, FUROR);
+    cast(&shard, chance_spell);
+    (shard, wire)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn furor_gives_a_druid_entering_bear_form_ten_rage() {
+    const FUROR: u32 = 17061;
+    let (shard, _wire) = druid_with_entry_chance("forms-druid-furor", FUROR, &[1, 5, 8]);
     enter(&shard, BEAR_FORM);
     assert_eq!(
         pools(&shard).0,
         (RAGE, 100, 1000),
         "rank 5 always gives 10 rage"
     );
+    assert!(aura_spells(&shard).contains(&FUROR));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_entry_chance_for_another_form_does_not_fire_on_bear_form_entry() {
+    const MOONKIN_TALENT: u32 = 5090984;
+    const MOONKIN_FORM: u32 = 31;
+    let (shard, _wire) =
+        druid_with_entry_chance("forms-druid-chance-scope", MOONKIN_TALENT, &[MOONKIN_FORM]);
+    enter(&shard, BEAR_FORM);
+    assert_eq!(pools(&shard).0, (RAGE, 0, 1000));
 }
 
 #[test]
@@ -1426,4 +1456,25 @@ fn publish_repair_turns_a_shown_druid_form_into_its_aura() {
     shard.assert_call("debug_repair_after_publish", &[]);
     assert_eq!(shapeshift_spells(&shard), vec![BEAR_FORM]);
     assert_eq!(pools(&shard), ((RAGE, 0, 1000), (MANA, 700, 1000)));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn publish_repair_puts_no_dead_or_ghost_druid_into_a_druid_form() {
+    let (shard, _wire) = feral_druid("forms-druid-repair-dead");
+    let show_bear_byte = || {
+        shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET unit_bytes_1 = {} WHERE guid = {DRUID_GUID}",
+            5u32 << 16
+        ));
+    };
+    shard.assert_call("debug_set_health", &[DRUID_GUID, "0"]);
+    show_bear_byte();
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert!(shapeshift_spells(&shard).is_empty(), "a corpse");
+
+    shard.assert_call("debug_repop", &[DRUID_GUID]);
+    show_bear_byte();
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert!(shapeshift_spells(&shard).is_empty(), "a ghost");
 }
