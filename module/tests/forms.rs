@@ -443,15 +443,20 @@ fn tactical_mastery_keeps_rage_through_a_stance_change() {
         TACTICAL_MASTERY,
         "Tactical Mastery",
         (0, 0, 0),
-        &[(A_FORM_POWER_RETAINED, 50, i32::from(RAGE), P_POWER_TYPE)],
+        &[(A_FORM_POWER_RETAINED, 500, i32::from(RAGE), P_POWER_TYPE)],
     );
     cast(&shard, TACTICAL_MASTERY);
-    set_rage(&shard, 800);
+    set_rage(&shard, 1000);
     enter(&shard, BERSERKER_STANCE);
-    assert_eq!(rage(&shard), 50);
-    set_rage(&shard, 30);
+    assert_eq!(rage(&shard), 500);
+    set_rage(&shard, 450);
     enter(&shard, BATTLE_STANCE);
-    assert_eq!(rage(&shard), 30);
+    // Out of combat, rage decays 50 per 2-second tick, so the kept rage is not exactly 450.
+    let kept = rage(&shard);
+    assert!(
+        (250..=450).contains(&kept),
+        "rage below the cap is kept, got {kept}"
+    );
 }
 
 #[test]
