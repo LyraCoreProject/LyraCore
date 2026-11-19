@@ -1015,7 +1015,7 @@ fn a_plan_that_drops_the_spell_an_imported_form_was_pointed_at_is_refused() {
     let refused = apply(&standalone, "spell", "");
     assert!(!refused.status.success());
     assert!(
-        refusal_text(&refused).contains("`game_form` row 17 names spell 6000001"),
+        refusal_text(&refused).contains("`game_form` row {form_id=17} names spell 6000001"),
         "{}",
         refusal_text(&refused)
     );
@@ -1030,7 +1030,15 @@ fn a_plan_that_drops_the_spell_an_imported_form_was_pointed_at_is_refused() {
         1
     );
 
-    let restore = imported_form_spell_update(17, BATTLE_STANCE);
-    let accepted = apply(&standalone, "spell", &artifact("example.aspect", &restore));
+    // `lyracore packages apply` replays the base import, which writes the imported Forms afresh.
+    standalone.assert_call("debug_seed_warrior_forms", &[]);
+    let accepted = apply(&standalone, "spell", "");
     assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+    let forms = standalone.query_rows("SELECT * FROM game_form WHERE form_id = 17");
+    assert_eq!(forms[0]["spell_id"], BATTLE_STANCE.to_string());
+    assert!(standalone
+        .query_rows(&format!(
+            "SELECT * FROM game_spell WHERE spell_id = {PACKAGE_SHIFT}"
+        ))
+        .is_empty());
 }

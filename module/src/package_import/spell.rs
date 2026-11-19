@@ -131,8 +131,9 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
     });
     if let Some(&(spell_id, form_id)) = orphaned {
         return Err(format!(
-            "`game_form` row {form_id} names spell {spell_id}, which does not enter the Form \
-             after this plan; reload the base import to restore the Form or keep the spell"
+            "`game_form` row {{form_id={form_id}}} names spell {spell_id}, which does not enter \
+             the Form after this plan; apply through `lyracore packages apply`, which replays the \
+             `spell` base import first, or keep the spell"
         ));
     }
     Ok(())
