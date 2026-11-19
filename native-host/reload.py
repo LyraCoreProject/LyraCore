@@ -103,12 +103,13 @@ def run(host):
             assert state == [[iteration, 123456]], (iteration, state)
             assert sorted(host.rows(f'SELECT guid, entry, stack_count FROM game_item_instance WHERE owner_guid = {guid}')) == sorted(items)
             text = f'Reload {iteration}'.encode()
-            # The Module mutes a speaker after eleven lines that each follow the last within a
-            # second, as vmangos ChatFlood does, so the lines keep a second apart on a fast Host.
+            # Chat flood control mutes eleven lines under a second apart, so pace them past it.
             time.sleep(max(0, last_line + 1.1 - time.monotonic()))
             last_line = time.monotonic()
             client.send(0x95, struct.pack('<II', 0, 7) + text + b'\0')
-            assert any(opcode == 0x96 and text in body for opcode, body in client.collect())
+            received = client.collect()
+            assert any(opcode == 0x96 and text in body for opcode, body in received), (
+                iteration, [opcode for opcode, _ in received])
             assert any(opcode == 0x96 and text in body for opcode, body in peer.collect())
         try:
             host.publish(b'not wasm')

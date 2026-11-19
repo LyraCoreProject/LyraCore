@@ -181,3 +181,9 @@ description = "Attack power ignores the percent multiplier. vmangos scales the c
 path = "module/src/combat/tables.rs"
 symbol = "total_attack_power"
 evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::GetTotalAttackPowerValue returns ap * (1.0f + UNIT_FIELD_ATTACK_POWER_MULTIPLIER) for client builds above 1.8.4, and ranged does the same with UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER; StatSystem.cpp Player::UpdateAttackPowerAndDamage writes both fields from AP_MOD_PCT."
+
+[[known_gaps]]
+description = "No unit sends Aura applications: UNIT_FIELD_AURAAPPLICATIONS stays 0 in CREATE and VALUES, so a peer sees no stack or charge count, for example on Sunder Armor x5 or a three-charge Lightning Shield."
+path = "crates/lyracore-protocol/src/codec/update_mask.rs"
+symbol = "write_auras"
+evidence = "Source reading, not measured. Review of PR 1047. At d9173eca, SpellAuras.cpp SpellAuraHolder::UpdateAuraApplication writes stacks times charges minus one into UNIT_FIELD_AURAAPPLICATIONS, which is a public update field; write_auras writes only UNIT_FIELD_AURA, AURAFLAGS and AURALEVELS, and full_aura_mask zeroes the applications fields."
