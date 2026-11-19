@@ -70,6 +70,22 @@ pub(super) fn spell_claim(spell_id: u32, operation: &str, fields: &str) -> Strin
     )
 }
 
+pub(super) const PACKAGE_FORM: u32 = 18_000_001;
+
+pub(super) const REAL_FORM: u32 = 17;
+
+pub(super) fn form_claim(form_id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_form","key":{{"form_id":{form_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+pub(super) fn form_spell_claim(form_id: u32, spell_id: u32) -> String {
+    format!(
+        r#"{{"table":"game_form_spell","key":{{"form_id":{form_id},"spell_id":{spell_id}}},"operation":"insert","fields":{{}}}}"#
+    )
+}
+
 pub(super) fn effect_claim(
     spell_id: u32,
     effect_index: u8,

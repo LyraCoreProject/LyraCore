@@ -3,6 +3,7 @@ use spacetimedb::{table, Identity, ReducerContext, ScheduleAt, Table, Timestamp}
 use super::CastRequest;
 use super::{fire_pending_cast, fire_spell_impact, tick_auras, tick_ground_areas};
 use crate::WorldEntity;
+use lyracore_shared::form::DBC_MASK_FORMS;
 
 const SPELL_ATTR_DO_NOT_DISPLAY: u32 = 0x80;
 const SPELL_ATTR_NOT_SHAPESHIFT: u32 = 0x10000;
@@ -245,9 +246,6 @@ impl FormRequirement {
         requirement
     }
 }
-
-// Spell.dbc `Stances` and `StancesNot` set bit `form_id - 1`; the mask only reaches Form 32.
-const DBC_MASK_FORMS: std::ops::RangeInclusive<u32> = 1..=32;
 
 /// Replaces the Forms 1-32 of a spell's Form Set with those its DBC masks name. A Form in both
 /// masks is excluded, our rule: vmangos reads the masks differently, and no 1.12 row sets both.

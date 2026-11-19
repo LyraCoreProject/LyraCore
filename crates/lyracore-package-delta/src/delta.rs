@@ -7,10 +7,11 @@ use crate::canonical;
 use crate::error::DeltaError;
 use crate::ids::{
     is_fixture_reserved_id, packed_class_level_id, packed_creature_spawn_guid,
-    packed_gameobject_spawn_guid, packed_quest_objective_id, packed_quest_reward_choice_id,
-    packed_quest_reward_item_id, packed_race_class_id, packed_race_class_level_id,
-    packed_spell_effect_id, PackageRange, MAX_CREATURE_GUID_COMPONENT, MAX_QUEST_OBJECTIVE_INDEX,
-    MAX_QUEST_REWARD_CHOICE_INDEX, MAX_SPELL_EFFECT_INDEX, MAX_STATS_LEVEL,
+    packed_form_spell_id, packed_gameobject_spawn_guid, packed_quest_objective_id,
+    packed_quest_reward_choice_id, packed_quest_reward_item_id, packed_race_class_id,
+    packed_race_class_level_id, packed_spell_effect_id, packed_spell_form_id, PackageRange,
+    MAX_CREATURE_GUID_COMPONENT, MAX_QUEST_OBJECTIVE_INDEX, MAX_QUEST_REWARD_CHOICE_INDEX,
+    MAX_SPELL_EFFECT_INDEX, MAX_STATS_LEVEL,
 };
 use crate::schema::{FieldType, FieldValue, Table};
 
@@ -241,6 +242,17 @@ pub enum PrimaryKey {
     },
     QuestEventRequirement {
         id: u64,
+    },
+    Form {
+        form_id: u32,
+    },
+    FormSpell {
+        form_id: u32,
+        spell_id: u32,
+    },
+    SpellForm {
+        spell_id: u32,
+        form_id: u32,
     },
 }
 
@@ -604,6 +616,33 @@ impl PrimaryKey {
         Ok(Self::QuestEventRequirement { id })
     }
 
+    pub fn form(form_id: u32) -> Result<Self, DeltaError> {
+        check_form(Table::Form, form_id)?;
+        Ok(Self::Form { form_id })
+    }
+
+    pub fn form_spell(form_id: u32, spell_id: u32) -> Result<Self, DeltaError> {
+        check_form(Table::FormSpell, form_id)?;
+        check_claimable(
+            PackageRange::Spell,
+            Table::FormSpell,
+            "spell_id",
+            u64::from(spell_id),
+        )?;
+        Ok(Self::FormSpell { form_id, spell_id })
+    }
+
+    pub fn spell_form(spell_id: u32, form_id: u32) -> Result<Self, DeltaError> {
+        check_claimable(
+            PackageRange::Spell,
+            Table::SpellForm,
+            "spell_id",
+            u64::from(spell_id),
+        )?;
+        check_form(Table::SpellForm, form_id)?;
+        Ok(Self::SpellForm { spell_id, form_id })
+    }
+
     fn package_range_id(self) -> Option<(PackageRange, u64)> {
         let (range, id) = match self {
             Self::Spell { spell_id }
@@ -646,6 +685,9 @@ impl PrimaryKey {
                 (PackageRange::EventAi, u64::from(id))
             }
             Self::QuestEventRequirement { id } => (PackageRange::EventAi, id),
+            Self::Form { form_id }
+            | Self::FormSpell { form_id, .. }
+            | Self::SpellForm { form_id, .. } => (PackageRange::Form, u64::from(form_id)),
             Self::CreatureCast { .. }
             | Self::GossipMenu { .. }
             | Self::ClassLevelStats { .. }
@@ -699,6 +741,9 @@ impl PrimaryKey {
             Self::CreatureAiBroadcastText { .. } => Table::CreatureAiBroadcastText,
             Self::CreatureAiSummon { .. } => Table::CreatureAiSummon,
             Self::QuestEventRequirement { .. } => Table::QuestEventRequirement,
+            Self::Form { .. } => Table::Form,
+            Self::FormSpell { .. } => Table::FormSpell,
+            Self::SpellForm { .. } => Table::SpellForm,
         }
     }
 
@@ -745,7 +790,10 @@ impl PrimaryKey {
             | Self::GameobjectTrap { .. }
             | Self::CreatureAiBroadcastText { .. }
             | Self::CreatureAiSummon { .. }
-            | Self::QuestEventRequirement { .. } => None,
+            | Self::QuestEventRequirement { .. }
+            | Self::Form { .. }
+            | Self::FormSpell { .. }
+            | Self::SpellForm { .. } => None,
         }
     }
 
@@ -755,6 +803,18 @@ impl PrimaryKey {
             Self::Spell { spell_id } | Self::SpellEffect { spell_id, .. } => spell_id,
             _ => unreachable!(
                 "`spell_id` is a spell-family accessor; a foreign-family key never reaches it"
+            ),
+        }
+    }
+
+    #[must_use]
+    pub fn form_id(self) -> u32 {
+        match self {
+            Self::Form { form_id }
+            | Self::FormSpell { form_id, .. }
+            | Self::SpellForm { form_id, .. } => form_id,
+            _ => unreachable!(
+                "`form_id` is a Form-table accessor; a key of another table never reaches it"
             ),
         }
     }
@@ -835,6 +895,9 @@ impl PrimaryKey {
             } => packed_creature_spawn_guid(entry, spawn_id),
             Self::GameobjectSpawn { spawn_id, .. } => packed_gameobject_spawn_guid(spawn_id),
             Self::CreatureAiBroadcastText { id } | Self::CreatureAiSummon { id } => id as u64,
+            Self::Form { form_id } => form_id as u64,
+            Self::FormSpell { form_id, spell_id } => packed_form_spell_id(form_id, spell_id),
+            Self::SpellForm { spell_id, form_id } => packed_spell_form_id(spell_id, form_id),
         }
     }
 }
@@ -916,6 +979,13 @@ impl fmt::Display for PrimaryKey {
             Self::CreatureAiBroadcastText { id } | Self::CreatureAiSummon { id } => {
                 write!(f, "{{id={id}}}")
             }
+            Self::Form { form_id } => write!(f, "{{form_id={form_id}}}"),
+            Self::FormSpell { form_id, spell_id } => {
+                write!(f, "{{form_id={form_id}, spell_id={spell_id}}}")
+            }
+            Self::SpellForm { spell_id, form_id } => {
+                write!(f, "{{spell_id={spell_id}, form_id={form_id}}}")
+            }
         }
     }
 }
@@ -947,6 +1017,10 @@ fn check_claimable(
         return Err(DeltaError::IdFixtureReserved { range, id });
     }
     Ok(())
+}
+
+fn check_form(table: Table, form_id: u32) -> Result<(), DeltaError> {
+    check_claimable(PackageRange::Form, table, "form_id", u64::from(form_id))
 }
 
 fn check_stats_level(level: u8) -> Result<(), DeltaError> {
@@ -1157,6 +1231,8 @@ fn is_key_column(table: Table, name: &str) -> bool {
         Table::AreatriggerTeleport => name == "trigger_id",
         Table::CreatureSpawn => matches!(name, "guid" | "map_id" | "entry" | "spawn_id"),
         Table::GameobjectSpawn => matches!(name, "guid" | "map_id" | "spawn_id"),
+        Table::Form => name == "form_id",
+        Table::FormSpell | Table::SpellForm => matches!(name, "id" | "form_id" | "spell_id"),
     }
 }
 
@@ -1319,7 +1395,10 @@ impl PackageDelta {
                     | Table::ClassLevelStats
                     | Table::LevelStats
                     | Table::StartPosition
-                    | Table::AreatriggerTeleport,
+                    | Table::AreatriggerTeleport
+                    | Table::Form
+                    | Table::FormSpell
+                    | Table::SpellForm,
                 ) => counts.inserted_rows += 1,
             }
         }
@@ -1404,6 +1483,8 @@ fn expected_key_members(table: Table) -> &'static [&'static str] {
         Table::AreatriggerTeleport => &["trigger_id"],
         Table::CreatureSpawn => &["entry", "map_id", "spawn_id"],
         Table::GameobjectSpawn => &["map_id", "spawn_id"],
+        Table::Form => &["form_id"],
+        Table::FormSpell | Table::SpellForm => &["form_id", "spell_id"],
     }
 }
 
@@ -1516,6 +1597,15 @@ fn build_key(key: &Map<String, Value>, table: Table) -> Result<PrimaryKey, Delta
         Table::QuestEventRequirement => {
             PrimaryKey::quest_event_requirement(key_u64(key, table, "id")?)
         }
+        Table::Form => PrimaryKey::form(key_u32(key, table, "form_id")?),
+        Table::FormSpell => PrimaryKey::form_spell(
+            key_u32(key, table, "form_id")?,
+            key_u32(key, table, "spell_id")?,
+        ),
+        Table::SpellForm => PrimaryKey::spell_form(
+            key_u32(key, table, "spell_id")?,
+            key_u32(key, table, "form_id")?,
+        ),
     }
 }
 

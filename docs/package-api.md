@@ -681,7 +681,8 @@ An Operator can install the prebuilt Script Artifact. See
 
 ## Package identifier ranges
 
-Each Import Family that lets a Package insert rows owns one Package Identifier Range.
+Each Import Family that lets a Package insert rows owns one Package Identifier Range, and the spell
+family also owns the Package Form Range.
 `crates/lyracore-package-delta/src/ids.rs` holds the numbers. A band's floor sits two decimal orders
 above the highest identifier a real client holds for its tables, clear of every reserved band. An
 apply clears the whole band before it writes.
@@ -702,6 +703,7 @@ apply clears the whole band before it writes.
 | Package Creature Range | creatures | 15,000,000 to 15,999,999 | template `entry` and spawn `spawn_id` |
 | Package Gameobject Range | gameobjects | 16,000,000 to 16,999,999 | template `entry`, trap `entry` and spawn `spawn_id` |
 | Package EventAI Range | Creature-AI | 17,000,000 to 17,999,999 | three catalogue tables' `id` |
+| Package Form Range | spell | 18,000,000 to 18,999,999 | `form_id`, for `game_form`, `game_form_spell` and `game_spell_form` |
 
 Each band after the spell band sits one whole decade above the one before it, so the millions
 column says which family invented a row.
@@ -748,6 +750,11 @@ identifier must fit 24 bits.
   row describes the template of the same entry. The two gameobject pool tables are not claimable,
   because no base import writes either, so a claim on one would have no family reload to replay
   after.
+- **Form.** A Form's own id space, so a Form, its passives (`game_form_spell`) and its rows in
+  spells' Form Sets (`game_spell_form`) are Package-owned exactly when the Form is. A Package may
+  tune an imported Form's columns but not add passives to it. A spell names Forms 1 to 32 through
+  `form_mask` and `form_exclude`, and Package Forms through `game_spell_form` rows. Every Form row
+  must name a spell and Form that exist after the apply.
 - **EventAI.** Covers `game_creature_ai_broadcast_text.id`, `game_creature_ai_summon.id` and
   `game_quest_event_requirement.id`. The family's scripted definitions are not claimable: a
   definition carries a creature's whole rule set as a nested payload, which no claimed column can

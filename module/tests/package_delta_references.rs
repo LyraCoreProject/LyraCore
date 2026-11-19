@@ -832,3 +832,58 @@ fn creature_ai_claims_are_checked_against_quests_and_encounter_ownership() {
         ))
         .is_empty());
 }
+
+const PACKAGE_FORM: u32 = 18_000_001;
+
+fn form_insert(spell_id: u32, power_on_entry: u8) -> String {
+    format!(
+        r#"{{"table":"game_form","key":{{"form_id":{PACKAGE_FORM}}},"operation":"insert","fields":{{"name":{{"type":"string","value":"Kindled Aspect"}},"spell_id":{{"type":"u32","value":{spell_id}}},"acts_as_shapeshifted":{{"type":"bool","value":true}},"power_type":{{"type":"u8","value":1}},"power_on_entry":{{"type":"u8","value":{power_on_entry}}},"default_for_class":{{"type":"u8","value":0}},"client_form":{{"type":"u8","value":0}}}}}}"#
+    )
+}
+
+fn form_spell_insert(spell_id: u32) -> String {
+    format!(
+        r#"{{"table":"game_form_spell","key":{{"form_id":{PACKAGE_FORM},"spell_id":{spell_id}}},"operation":"insert","fields":{{}}}}"#
+    )
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn form_claims_refuse_a_missing_form_or_spell_and_an_unknown_power_rule() {
+    let mut standalone = Standalone::start("package-delta-form-references");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
+    standalone.assert_call("debug_seed_scenario_fixtures", &[]);
+
+    for (claims, named) in [
+        (form_spell_insert(REAL_SPELL), "missing Form"),
+        (form_insert(MISSING_SPELL, 0), "missing spell"),
+        (
+            [form_insert(REAL_SPELL, 0), form_spell_insert(MISSING_SPELL)].join(","),
+            "missing spell",
+        ),
+        (form_insert(REAL_SPELL, 9), "unknown power rule"),
+    ] {
+        let refused = apply(&standalone, "spell", &artifact("example.aspect", &claims));
+        assert!(!refused.status.success(), "{claims}");
+        assert!(
+            refusal_text(&refused).contains(named),
+            "{}",
+            refusal_text(&refused)
+        );
+    }
+    assert!(standalone
+        .query_rows(&format!(
+            "SELECT * FROM game_form WHERE form_id = {PACKAGE_FORM}"
+        ))
+        .is_empty());
+
+    let claims = [form_insert(REAL_SPELL, 0), form_spell_insert(REAL_SPELL)].join(",");
+    let accepted = apply(&standalone, "spell", &artifact("example.aspect", &claims));
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+    let passives = standalone.query_rows(&format!(
+        "SELECT * FROM game_form_spell WHERE form_id = {PACKAGE_FORM}"
+    ));
+    assert_eq!(passives[0]["spell_id"], REAL_SPELL.to_string());
+}

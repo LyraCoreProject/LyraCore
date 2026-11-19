@@ -38,6 +38,7 @@ use lyracore_importer::spell_kind::{
 use lyracore_importer::spell_overrides::{self, NamedSpell};
 use std::path::Path;
 
+use lyracore_shared::form::DBC_MASK_FORMS;
 use lyracore_shared::packing::power_type;
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_DAMAGE_SHIELD, A_FLAG, A_FORM_POWER_RETAINED, A_IMMUNITY, A_INERT,
@@ -1658,6 +1659,7 @@ pub(crate) const CURATED_TRAINER_ID_SPAN: u64 = 500;
 
 const SYNTHETIC_SPELL_ID_FLOOR: u32 = 50_000;
 
+// Form Set rows for Forms the DBC masks cannot name belong to Package Deltas.
 fn spell_delete_statements(only: &[u32]) -> Vec<String> {
     if only.is_empty() {
         return vec![
@@ -1665,7 +1667,10 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
             format!("DELETE FROM game_spell_effect WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_spell_reagent WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_creature_ai_spell_metadata WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
-            format!("DELETE FROM game_spell_form WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
+            format!(
+                "DELETE FROM game_spell_form WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR} AND form_id <= {}",
+                DBC_MASK_FORMS.end()
+            ),
         ];
     }
     let mut ids: Vec<u32> = only.to_vec();
@@ -1683,7 +1688,10 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
         dels.push(format!(
             "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id = {id}"
         ));
-        dels.push(format!("DELETE FROM game_spell_form WHERE spell_id = {id}"));
+        dels.push(format!(
+            "DELETE FROM game_spell_form WHERE spell_id = {id} AND form_id <= {}",
+            DBC_MASK_FORMS.end()
+        ));
     }
     dels
 }
@@ -3381,6 +3389,74 @@ mod tests {
     }
 
     #[test]
+    fn a_reimport_leaves_every_row_of_a_package_form() {
+        use lyracore_package_delta::{packed_form_spell_id, packed_spell_form_id};
+        const PACKAGE_FORM: u32 = 18_000_001;
+        const PACKAGE_SPELL: u32 = 6_000_001;
+        let mut dbc = fixture_tables();
+        dbc.shapeshift_forms = vec![crate::spell_form::ShapeshiftFormEntry {
+            id: 17,
+            name: "Battle Stance".into(),
+            flags: 0x7,
+        }];
+        dbc.spells = vec![Spell {
+            shapeshift_mask: 0x0001_0000,
+            ..aura_spell(78, "Heroic Strike", 0, 0)
+        }];
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let shard = rusqlite::Connection::open_in_memory().unwrap();
+        shard
+            .execute_batch(&format!(
+                "CREATE TABLE game_form (form_id INTEGER PRIMARY KEY, name TEXT, spell_id INTEGER,
+                     acts_as_shapeshifted BOOLEAN, power_type INTEGER, power_on_entry INTEGER,
+                     default_for_class INTEGER, client_form INTEGER);
+                 CREATE TABLE game_form_spell (id INTEGER PRIMARY KEY, form_id INTEGER,
+                     spell_id INTEGER);
+                 CREATE TABLE game_spell_form (id INTEGER PRIMARY KEY, spell_id INTEGER,
+                     form_id INTEGER, excluded BOOLEAN);
+                 INSERT INTO game_form VALUES (17,'Old Battle Stance',2457,true,1,0,1,17),
+                     ({PACKAGE_FORM},'Kindled Aspect',{PACKAGE_SPELL},true,1,1,0,5);
+                 INSERT INTO game_form_spell VALUES ({},{PACKAGE_FORM},{PACKAGE_SPELL});
+                 INSERT INTO game_spell_form VALUES ({},78,18,false),({},78,{PACKAGE_FORM},false),
+                     ({},{PACKAGE_SPELL},{PACKAGE_FORM},true);",
+                packed_form_spell_id(PACKAGE_FORM, PACKAGE_SPELL),
+                packed_spell_form_id(78, 18),
+                packed_spell_form_id(78, PACKAGE_FORM),
+                packed_spell_form_id(PACKAGE_SPELL, PACKAGE_FORM),
+            ))
+            .unwrap();
+
+        for sql in assemble_spell_sql(&rows, &[], false) {
+            let table = sql.split_whitespace().nth(2).unwrap_or_default();
+            if matches!(table, "game_form" | "game_form_spell" | "game_spell_form") {
+                shard.execute_batch(&sql).unwrap();
+            }
+        }
+
+        let ids = |sql: &str| -> Vec<(u32, u32)> {
+            let mut statement = shard.prepare(sql).unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        assert_eq!(
+            ids("SELECT form_id, spell_id FROM game_form ORDER BY form_id"),
+            [(17, 2457), (PACKAGE_FORM, PACKAGE_SPELL)]
+        );
+        assert_eq!(
+            ids("SELECT form_id, spell_id FROM game_form_spell ORDER BY form_id, spell_id"),
+            [(17, 21156), (PACKAGE_FORM, PACKAGE_SPELL)]
+        );
+        assert_eq!(
+            ids("SELECT spell_id, form_id FROM game_spell_form ORDER BY spell_id, form_id"),
+            [(78, 17), (78, PACKAGE_FORM), (PACKAGE_SPELL, PACKAGE_FORM)],
+            "the import rewrites the DBC-mask Forms of its spells and leaves Package Forms alone"
+        );
+    }
+
+    #[test]
     fn tactical_mastery_imports_the_rage_a_stance_keeps() {
         let mut dbc = fixture_tables();
         dbc.spells = vec![
@@ -4425,18 +4501,20 @@ mod tests {
             statements
         };
         let tables = [
-            "game_spell",
-            "game_spell_effect",
-            "game_spell_reagent",
-            "game_creature_ai_spell_metadata",
-            "game_spell_form",
+            ("game_spell", ""),
+            ("game_spell_effect", ""),
+            ("game_spell_reagent", ""),
+            ("game_creature_ai_spell_metadata", ""),
+            ("game_spell_form", " AND form_id <= 32"),
         ];
         assert_eq!(
             sorted(spell_delete_statements(&[])),
             sorted(
                 tables
                     .iter()
-                    .map(|table| format!("DELETE FROM {table} WHERE spell_id < 50000"))
+                    .map(|(table, forms)| format!(
+                        "DELETE FROM {table} WHERE spell_id < 50000{forms}"
+                    ))
                     .collect()
             )
         );
@@ -4446,9 +4524,9 @@ mod tests {
                 [78, 7386]
                     .iter()
                     .flat_map(|id| {
-                        tables
-                            .iter()
-                            .map(move |table| format!("DELETE FROM {table} WHERE spell_id = {id}"))
+                        tables.iter().map(move |(table, forms)| {
+                            format!("DELETE FROM {table} WHERE spell_id = {id}{forms}")
+                        })
                     })
                     .collect()
             ),

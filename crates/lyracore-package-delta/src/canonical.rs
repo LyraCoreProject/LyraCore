@@ -160,6 +160,15 @@ fn write_key(out: &mut String, key: PrimaryKey) {
             out,
             &[("map_id", map_id.into()), ("spawn_id", spawn_id.into())],
         ),
+        PrimaryKey::Form { form_id } => write_members(out, &[("form_id", form_id.into())]),
+        PrimaryKey::FormSpell { form_id, spell_id } => write_members(
+            out,
+            &[("form_id", form_id.into()), ("spell_id", spell_id.into())],
+        ),
+        PrimaryKey::SpellForm { spell_id, form_id } => write_members(
+            out,
+            &[("spell_id", spell_id.into()), ("form_id", form_id.into())],
+        ),
     }
 }
 

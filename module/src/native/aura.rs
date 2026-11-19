@@ -26,17 +26,22 @@ fn modifiers(current: &[Aura], previous: &[&Aura]) -> Vec<Packet> {
         .collect()
 }
 
+fn is_visible(aura: &Aura) -> bool {
+    u16::from(aura.slot) < codec::update_mask::idx::AURA_SLOTS
+}
+
+/// The Aura's client slot, when it holds one of the visible slots.
+pub(super) fn client_slot(aura: &Aura) -> Option<codec::update_mask::AuraSlot> {
+    is_visible(aura).then_some(codec::update_mask::AuraSlot {
+        slot: aura.slot,
+        spell_id: aura.spell_id,
+        flags: aura.flags,
+        level: aura.level,
+    })
+}
+
 fn sync(guid: u64, auras: &[Aura]) -> Packet {
-    let slots: Vec<_> = auras
-        .iter()
-        .filter(|aura| aura.slot < 48)
-        .map(|aura| codec::update_mask::AuraSlot {
-            slot: aura.slot,
-            spell_id: aura.spell_id,
-            flags: aura.flags,
-            level: aura.level,
-        })
-        .collect();
+    let slots: Vec<_> = auras.iter().filter_map(client_slot).collect();
     let (opcode, body) =
         codec::build_values_update_raw(guid, &codec::update_mask::full_aura_mask(&slots));
     Packet { opcode, body }
@@ -45,7 +50,7 @@ fn sync(guid: u64, auras: &[Aura]) -> Packet {
 fn duration(ctx: &ReducerContext, aura: &Aura) -> Option<Packet> {
     let expiry = aura.expires_at.to_micros_since_unix_epoch();
     // i64::MAX marks a permanent Aura.
-    if expiry == i64::MAX || aura.slot >= 48 {
+    if expiry == i64::MAX || !is_visible(aura) {
         return None;
     }
     let remaining =
@@ -270,11 +275,7 @@ pub(crate) fn changed(ctx: &ReducerContext, previous: Option<&Aura>, current: Op
         .by_target()
         .filter(row.target_guid)
         .collect();
-    if previous
-        .into_iter()
-        .chain(current)
-        .any(|aura| aura.slot < 48)
-    {
+    if previous.into_iter().chain(current).any(is_visible) {
         let packet = sync(row.target_guid, &auras);
         super::visibility::broadcast(ctx, row.target_guid, packet.opcode, packet.body, false);
     }

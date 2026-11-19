@@ -1,25 +1,93 @@
+use std::collections::BTreeSet;
+
 use spacetimedb::{ReducerContext, Table};
 
 use lyracore_package_delta::{
-    is_package_spell_id, FieldValue, Operation, PrimaryKey, Table as ClaimTable, TracedRow,
-    SPELL_FAMILY,
+    is_package_form_id, is_package_spell_id, FieldValue, Operation, PrimaryKey,
+    Table as ClaimTable, TracedRow, SPELL_FAMILY,
 };
+use lyracore_shared::form::PowerOnEntry;
 
+use crate::form::tables::FormSpell;
+use crate::form::{game_form, game_form_spell, Form};
+use crate::spell::tables::{game_spell_form, SpellForm};
 use crate::{game_spell, game_spell_effect, Spell, SpellEffect};
 
 use super::{
-    as_bool, as_f32, as_i32, as_str, as_u16, as_u32, as_u64, as_u8, check_insert_is_whole, ClaimOps,
+    as_bool, as_f32, as_i32, as_str, as_u16, as_u32, as_u64, as_u8, check_insert_is_whole,
+    missing_reference, no_such_column, ClaimOps,
 };
 
 pub(super) const OPS: ClaimOps = ClaimOps {
     name: SPELL_FAMILY,
     in_package_range,
     row_is_present,
-    check_references: None,
+    check_references: Some(check_references),
     clear_package_range,
     write_row,
     after_write: None,
 };
+
+// Package rows are cleared before the writes, so a Package id resolves only against this plan.
+fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+    let inserted = |table: ClaimTable| -> BTreeSet<u64> {
+        rows.iter()
+            .filter(|row| row.table() == table && row.operation() == Operation::Insert)
+            .map(TracedRow::row_id)
+            .collect()
+    };
+    let (spells, forms) = (inserted(ClaimTable::Spell), inserted(ClaimTable::Form));
+    let spell_exists = |spell_id: u32| {
+        if is_package_spell_id(spell_id) {
+            spells.contains(&u64::from(spell_id))
+        } else {
+            ctx.db.game_spell().spell_id().find(spell_id).is_some()
+        }
+    };
+    let form_exists = |form_id: u32| {
+        if is_package_form_id(form_id) {
+            forms.contains(&u64::from(form_id))
+        } else {
+            ctx.db.game_form().form_id().find(form_id).is_some()
+        }
+    };
+    for row in rows {
+        let (form_id, spell_id) = match row.key() {
+            PrimaryKey::Form { form_id } => {
+                if let Some(FieldValue::U8(code)) = row
+                    .fields()
+                    .get("power_on_entry")
+                    .map(|claimed| &claimed.value)
+                {
+                    if PowerOnEntry::try_from(*code).is_err() {
+                        return Err(format!(
+                            "`game_form` row {} claims unknown power rule {code}",
+                            row.key()
+                        ));
+                    }
+                }
+                let spell_id = super::final_u32(row, "spell_id", || {
+                    ctx.db
+                        .game_form()
+                        .form_id()
+                        .find(form_id)
+                        .map(|form| form.spell_id)
+                })?;
+                (None, spell_id)
+            }
+            PrimaryKey::FormSpell { form_id, spell_id }
+            | PrimaryKey::SpellForm { spell_id, form_id } => (Some(form_id), spell_id),
+            _ => continue,
+        };
+        if let Some(form_id) = form_id.filter(|&form_id| !form_exists(form_id)) {
+            return Err(missing_reference(row, "Form", form_id));
+        }
+        if !spell_exists(spell_id) {
+            return Err(missing_reference(row, "spell", spell_id));
+        }
+    }
+    Ok(())
+}
 
 fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
     match row.table() {
@@ -30,6 +98,14 @@ fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
             .find(row.key().spell_id())
             .is_some(),
         ClaimTable::SpellEffect => ctx.db.game_spell_effect().id().find(row.row_id()).is_some(),
+        ClaimTable::Form => ctx
+            .db
+            .game_form()
+            .form_id()
+            .find(row.key().form_id())
+            .is_some(),
+        ClaimTable::FormSpell => ctx.db.game_form_spell().id().find(row.row_id()).is_some(),
+        ClaimTable::SpellForm => ctx.db.game_spell_form().id().find(row.row_id()).is_some(),
         other => unreachable!(
             "`check_claims_belong_to` refuses a non-spell row before the spell family's dispatch \
              runs, found {other}"
@@ -38,7 +114,12 @@ fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
 }
 
 fn in_package_range(row: &TracedRow) -> bool {
-    is_package_spell_id(row.key().spell_id())
+    match row.table() {
+        ClaimTable::Form | ClaimTable::FormSpell | ClaimTable::SpellForm => {
+            is_package_form_id(row.key().form_id())
+        }
+        _ => is_package_spell_id(row.key().spell_id()),
+    }
 }
 
 fn clear_package_range(ctx: &ReducerContext) {
@@ -61,6 +142,36 @@ fn clear_package_range(ctx: &ReducerContext) {
     for spell_id in stale_spells {
         spells.spell_id().delete(spell_id);
         crate::spell::delete_form_set(ctx, spell_id);
+    }
+
+    let form_sets = ctx.db.game_spell_form();
+    let stale_form_sets: Vec<u64> = form_sets
+        .iter()
+        .filter(|row| is_package_form_id(row.form_id))
+        .map(|row| row.id)
+        .collect();
+    for id in stale_form_sets {
+        form_sets.id().delete(id);
+    }
+
+    let passives = ctx.db.game_form_spell();
+    let stale_passives: Vec<u64> = passives
+        .iter()
+        .filter(|row| is_package_form_id(row.form_id))
+        .map(|row| row.id)
+        .collect();
+    for id in stale_passives {
+        passives.id().delete(id);
+    }
+
+    let forms = ctx.db.game_form();
+    let stale_forms: Vec<u32> = forms
+        .iter()
+        .filter(|form| is_package_form_id(form.form_id))
+        .map(|form| form.form_id)
+        .collect();
+    for form_id in stale_forms {
+        forms.form_id().delete(form_id);
     }
 }
 
@@ -103,6 +214,74 @@ fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
                 apply_effect_field(&mut effect, field, &claimed.value)?;
             }
             effects.id().update(effect);
+        }
+        (ClaimTable::Form, Operation::Insert) => {
+            check_insert_is_whole(row)?;
+            let mut form = blank_form(row.key().form_id());
+            for (field, claimed) in row.fields() {
+                apply_form_field(&mut form, field, &claimed.value)?;
+            }
+            ctx.db
+                .game_form()
+                .try_insert(form)
+                .map_err(|e| format!("`game_form` row {} did not insert: {e}", row.key()))?;
+        }
+        (ClaimTable::Form, Operation::Update) => {
+            let forms = ctx.db.game_form();
+            let mut form = forms
+                .form_id()
+                .find(row.key().form_id())
+                .ok_or_else(|| format!("`game_form` row {} vanished mid-apply", row.key()))?;
+            for (field, claimed) in row.fields() {
+                apply_form_field(&mut form, field, &claimed.value)?;
+            }
+            forms.form_id().update(form);
+        }
+        (ClaimTable::FormSpell, Operation::Insert) => {
+            let PrimaryKey::FormSpell { form_id, spell_id } = row.key() else {
+                unreachable!("a `game_form_spell` row carries a `game_form_spell` key")
+            };
+            ctx.db
+                .game_form_spell()
+                .try_insert(FormSpell {
+                    id: row.row_id(),
+                    form_id,
+                    spell_id,
+                })
+                .map_err(|e| format!("`game_form_spell` row {} did not insert: {e}", row.key()))?;
+        }
+        (ClaimTable::FormSpell, Operation::Update) => unreachable!(
+            "`Claim::new` refuses an update that claims no column, and `game_form_spell` has none"
+        ),
+        (ClaimTable::SpellForm, Operation::Insert) => {
+            check_insert_is_whole(row)?;
+            let PrimaryKey::SpellForm { spell_id, form_id } = row.key() else {
+                unreachable!("a `game_spell_form` row carries a `game_spell_form` key")
+            };
+            let mut form_set = SpellForm {
+                id: row.row_id(),
+                spell_id,
+                form_id,
+                excluded: false,
+            };
+            for (field, claimed) in row.fields() {
+                apply_spell_form_field(&mut form_set, field, &claimed.value)?;
+            }
+            ctx.db
+                .game_spell_form()
+                .try_insert(form_set)
+                .map_err(|e| format!("`game_spell_form` row {} did not insert: {e}", row.key()))?;
+        }
+        (ClaimTable::SpellForm, Operation::Update) => {
+            let form_sets = ctx.db.game_spell_form();
+            let mut form_set = form_sets
+                .id()
+                .find(row.row_id())
+                .ok_or_else(|| format!("`game_spell_form` row {} vanished mid-apply", row.key()))?;
+            for (field, claimed) in row.fields() {
+                apply_spell_form_field(&mut form_set, field, &claimed.value)?;
+            }
+            form_sets.id().update(form_set);
         }
         (other, _) => unreachable!(
             "`check_claims_belong_to` refuses a non-spell row before the spell family's dispatch \
@@ -205,6 +384,45 @@ fn apply_effect_field(
     Ok(())
 }
 
+fn blank_form(form_id: u32) -> Form {
+    Form {
+        form_id,
+        name: String::new(),
+        spell_id: 0,
+        acts_as_shapeshifted: false,
+        power_type: 0,
+        power_on_entry: 0,
+        default_for_class: 0,
+        client_form: 0,
+    }
+}
+
+fn apply_form_field(form: &mut Form, field: &str, value: &FieldValue) -> Result<(), String> {
+    match field {
+        "name" => form.name = as_str(field, value)?,
+        "spell_id" => form.spell_id = as_u32(field, value)?,
+        "acts_as_shapeshifted" => form.acts_as_shapeshifted = as_bool(field, value)?,
+        "power_type" => form.power_type = as_u8(field, value)?,
+        "power_on_entry" => form.power_on_entry = as_u8(field, value)?,
+        "default_for_class" => form.default_for_class = as_u8(field, value)?,
+        "client_form" => form.client_form = as_u8(field, value)?,
+        other => return Err(no_such_column("game_form", other)),
+    }
+    Ok(())
+}
+
+fn apply_spell_form_field(
+    form_set: &mut SpellForm,
+    field: &str,
+    value: &FieldValue,
+) -> Result<(), String> {
+    match field {
+        "excluded" => form_set.excluded = as_bool(field, value)?,
+        other => return Err(no_such_column("game_spell_form", other)),
+    }
+    Ok(())
+}
+
 fn built_spell(row: &TracedRow) -> Result<Spell, String> {
     check_insert_is_whole(row)?;
     let mut spell = blank_spell(row.key().spell_id());
@@ -236,10 +454,54 @@ fn built_spell_effect(row: &TracedRow) -> Result<SpellEffect, String> {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, assert_each_column_sets_its_own_field, effect_claim, plan, spell_claim,
-        PACKAGE_SPELL, REAL_SPELL, WHOLE_EFFECT_ROW, WHOLE_SPELL_ROW,
+        artifact, assert_each_column_sets_its_own_field, effect_claim, form_claim,
+        form_spell_claim, plan, spell_claim, PACKAGE_FORM, PACKAGE_SPELL, REAL_FORM, REAL_SPELL,
+        WHOLE_EFFECT_ROW, WHOLE_SPELL_ROW,
     };
     use super::*;
+
+    const A_POWER_RULE: &str = r#"{"power_on_entry":{"type":"u8","value":0}}"#;
+
+    #[test]
+    fn a_form_row_is_a_package_row_exactly_when_its_form_is() {
+        let plan = plan(&[artifact(
+            "example.aspect",
+            &[
+                form_claim(REAL_FORM, "update", A_POWER_RULE),
+                form_claim(PACKAGE_FORM, "update", A_POWER_RULE),
+                form_spell_claim(PACKAGE_FORM, REAL_SPELL),
+            ]
+            .join(","),
+        )])
+        .expect("plan builds");
+
+        let in_range: Vec<bool> = plan.rows.iter().map(in_package_range).collect();
+
+        assert_eq!(in_range, [false, true, true]);
+    }
+
+    #[test]
+    fn every_claimable_form_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::Form,
+            || blank_form(PACKAGE_FORM),
+            apply_form_field,
+        );
+    }
+
+    #[test]
+    fn every_claimable_form_set_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::SpellForm,
+            || SpellForm {
+                id: lyracore_package_delta::packed_spell_form_id(REAL_SPELL, PACKAGE_FORM),
+                spell_id: REAL_SPELL,
+                form_id: PACKAGE_FORM,
+                excluded: false,
+            },
+            apply_spell_form_field,
+        );
+    }
 
     #[test]
     fn tuning_a_package_spell_no_enabled_package_inserts_is_refused() {
