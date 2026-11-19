@@ -59,6 +59,13 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
                         form.power_on_entry
                     ));
                 }
+                if !crate::world::power_pool::is_power_type(form.power_type) {
+                    return Err(format!(
+                        "`game_form` row {} claims unknown power type {}",
+                        row.key(),
+                        form.power_type
+                    ));
+                }
                 if !enters_form(form.spell_id, form_id) {
                     return Err(format!(
                         "`game_form` row {} names spell {}, which does not enter the Form",

@@ -402,6 +402,10 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
     for update in updates(old, new) {
         let message = match update {
             Update::Shared(message) => message,
+            Update::Raw(opcode, body) => {
+                broadcast(ctx, new.guid, opcode, body, false);
+                continue;
+            }
             Update::Health => {
                 super::health::send(ctx, new);
                 continue;
@@ -477,7 +481,34 @@ pub(crate) fn loot_flags(ctx: &ReducerContext, entity: &WorldEntity) {
 #[derive(Debug)]
 enum Update {
     Shared(ServerOpcodeMessage),
+    Raw(u16, Vec<u8>),
     Health,
+}
+
+/// The power type and every pool, shown or reserved, that changed. A pool that appears sends its
+/// current value, as vmangos `Unit::SetPowerType` sets it, and a pool that ended reads zero; a
+/// creature's current power is never sent.
+fn power_values(old: &WorldEntity, new: &WorldEntity, is_player: bool) -> Option<(u16, Vec<u8>)> {
+    use lyracore_shared::packing::power_type;
+    let pools: Vec<_> = (power_type::MANA..=power_type::HAPPINESS)
+        .filter_map(|power_type| {
+            let (was, now) = (old.pool(power_type), new.pool(power_type));
+            let current = now.map_or(0, |pool| pool.current);
+            let max = now.map(|pool| pool.max);
+            let fields = codec::PowerFields {
+                power_type,
+                current: (is_player
+                    && (was.is_none() && now.is_some()
+                        || was.map_or(0, |pool| pool.current) != current))
+                    .then_some(current),
+                max: max.filter(|_| was.map(|pool| pool.max) != max),
+            };
+            (fields.current.is_some() || fields.max.is_some()).then_some(fields)
+        })
+        .collect();
+    let unit_bytes_0 = (old.unit_bytes_0 != new.unit_bytes_0).then_some(new.unit_bytes_0);
+    (unit_bytes_0.is_some() || !pools.is_empty())
+        .then(|| codec::build_power_values(new.guid, unit_bytes_0, &pools))
 }
 
 fn values(update: SMSG_UPDATE_OBJECT) -> Update {
@@ -502,13 +533,8 @@ fn updates(old: &WorldEntity, new: &WorldEntity) -> Vec<Update> {
         let m = codec::build_target_values(new.guid, new.target_guid);
         out.push(values(m));
     }
-    if old.max_power != new.max_power {
-        let power_b = (new.unit_bytes_0 >> 24) as u8;
-        out.push(values(codec::build_max_power_values(
-            new.guid,
-            power_b,
-            new.max_power,
-        )));
+    if let Some((opcode, body)) = power_values(old, new, is_player) {
+        out.push(Update::Raw(opcode, body));
     }
     // Mount display and TAXI_FLIGHT must reach the client in one mask.
     let taxi_flight_toggled = (old.unit_flags ^ new.unit_flags)
@@ -540,11 +566,6 @@ fn updates(old: &WorldEntity, new: &WorldEntity) -> Vec<Update> {
         );
         out.push(values(m));
     }
-    if is_player && old.power != new.power {
-        let power_b = (new.unit_bytes_0 >> 24) as u8;
-        let m = codec::build_power_values(new.guid, power_b, new.power);
-        out.push(values(m));
-    }
     if old.run_speed_mult_bp != new.run_speed_mult_bp {
         const BASE_RUN_SPEED: f32 = 7.0;
         let speed = BASE_RUN_SPEED * (new.run_speed_mult_bp as f32 / 10_000.0);
@@ -567,6 +588,113 @@ fn updates(old: &WorldEntity, new: &WorldEntity) -> Vec<Update> {
 mod tests {
     use super::*;
     use lyracore_protocol::messages::vanilla::{Object, UpdateMask};
+
+    fn power_fields(old: &WorldEntity, new: &WorldEntity) -> Vec<(u16, u32)> {
+        let Some((_, body)) = power_values(old, new, new.is_player()) else {
+            return Vec::new();
+        };
+        lyracore_protocol::codec::values_mask::parse_values_updates(&body)
+            .remove(0)
+            .fields
+    }
+
+    fn druid() -> WorldEntity {
+        let mut druid = crate::helpers::tests::entity(5, 0, 0, 0, 0);
+        druid.type_mask = lyracore_shared::constants::type_mask::PLAYER_BIT;
+        druid.unit_bytes_0 = lyracore_shared::packing::unit_bytes_0(4, 11, 0, 0);
+        druid.power = 700;
+        druid.max_power = 900;
+        druid
+    }
+
+    // Build 5875: POWER1 23, POWER2 24, MAXPOWER1 29, MAXPOWER2 30, UNIT_FIELD_BYTES_0 36.
+    #[test]
+    fn showing_a_form_pool_sends_the_power_type_and_the_new_pool() {
+        let old = druid();
+        let mut new = druid();
+        new.show_pool(lyracore_shared::packing::power_type::RAGE);
+        assert_eq!(
+            power_fields(&old, &new),
+            [(24, 0), (30, 1000), (36, new.unit_bytes_0)],
+            "mana stays as the client has it; rage starts at zero"
+        );
+    }
+
+    #[test]
+    fn after_a_create_entering_an_energy_form_shows_zero_energy() {
+        use lyracore_protocol::codec::{self, CreateKind};
+        use lyracore_protocol::messages::vanilla::ServerMessage;
+        let caster = druid();
+        let mut cat = druid();
+        cat.show_pool(lyracore_shared::packing::power_type::ENERGY);
+        let view = codec::EntityView {
+            guid: caster.guid,
+            type_mask: caster.type_mask,
+            scale_x: 1.0,
+            health: 1,
+            max_health: 1,
+            level: 1,
+            run_speed_mult_bp: 10_000,
+            unit_bytes_0: caster.unit_bytes_0,
+            power: caster.power,
+            max_power: caster.max_power,
+            ..Default::default()
+        };
+        let create = codec::build_create_object(&view, CreateKind::Peer, &[], &[]).unwrap();
+        let mask2 = match create.objects[0].clone() {
+            Object::CreateObject { mask2, .. } | Object::CreateObject2 { mask2, .. } => mask2,
+            other => panic!("expected a CREATE, got {other:?}"),
+        };
+        let as_values = lyracore_protocol::messages::vanilla::SMSG_UPDATE_OBJECT {
+            has_transport: 0,
+            objects: vec![Object::Values {
+                guid1: lyracore_protocol::messages::Guid::new(caster.guid),
+                mask1: mask2,
+            }],
+        };
+        let mut bytes = Vec::new();
+        as_values.write_unencrypted_server(&mut bytes).unwrap();
+        let mut client: std::collections::BTreeMap<u16, u32> =
+            codec::values_mask::parse_values_updates(&bytes[4..])
+                .remove(0)
+                .fields
+                .into_iter()
+                .collect();
+        assert_eq!(
+            (client[&26], client[&32]),
+            (100, 100),
+            "CREATE: POWER4, MAXPOWER4"
+        );
+        client.extend(power_fields(&caster, &cat));
+        assert_eq!(
+            (client[&26], client[&32]),
+            (0, 100),
+            "Cat Form starts at zero energy"
+        );
+    }
+
+    #[test]
+    fn reserved_mana_and_an_ended_form_pool_reach_the_client() {
+        let in_bear_form = |reserved_mana| {
+            let mut druid = druid();
+            druid.show_pool(lyracore_shared::packing::power_type::RAGE);
+            druid.power = 40;
+            druid.reserve_power = reserved_mana;
+            druid
+        };
+        assert_eq!(
+            power_fields(&in_bear_form(700), &in_bear_form(720)),
+            [(23, 720)]
+        );
+
+        let mut left = in_bear_form(720);
+        left.show_pool(lyracore_shared::packing::power_type::MANA);
+        assert_eq!(
+            power_fields(&in_bear_form(720), &left),
+            [(24, 0), (36, left.unit_bytes_0)],
+            "rage ends at zero and mana is shown again"
+        );
+    }
 
     #[test]
     fn bank_slot_purchase_updates_public_fields_without_coinage() {

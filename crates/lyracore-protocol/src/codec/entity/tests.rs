@@ -1503,3 +1503,42 @@ fn a_create_carries_the_auras_in_their_client_slots() {
         }
     }
 }
+
+#[test]
+fn a_create_carries_the_shown_pool_and_the_reserve_pool_to_owner_and_peers() {
+    let druid_in_bear_form = EntityView {
+        power: 20,
+        max_power: 1000,
+        unit_bytes_0: 4 | (11 << 8) | (1 << 24),
+        reserve_pool: Some(PowerPoolView {
+            power_type: 0,
+            current: 650,
+            max: 900,
+        }),
+        ..warrior_entity()
+    };
+    for kind in [CreateKind::Peer, CreateKind::SelfPlayer] {
+        let create = build_create_object(&druid_in_bear_form, kind, &[], &[]).unwrap();
+        let (Object::CreateObject {
+            mask2: UpdateMask::Player(fields),
+            ..
+        }
+        | Object::CreateObject2 {
+            mask2: UpdateMask::Player(fields),
+            ..
+        }) = &create.objects[0]
+        else {
+            panic!("expected Character CREATE");
+        };
+        assert_eq!(
+            (fields.unit_power2(), fields.unit_maxpower2()),
+            (Some(20), Some(1000)),
+            "{kind:?} sees rage"
+        );
+        assert_eq!(
+            (fields.unit_power1(), fields.unit_maxpower1()),
+            (Some(650), Some(900)),
+            "{kind:?} sees the reserved mana"
+        );
+    }
+}

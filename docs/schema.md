@@ -377,6 +377,18 @@ decides which one owns it:
 `run_speed_mult_bp` holds the effective multiplier from the shared move-speed fold while a land
 mount is active (16000 for a nominal 60% mount). A change becomes `SMSG_FORCE_RUN_SPEED_CHANGE`.
 
+`power` and `max_power` are the shown pool, whose power type is `unit_bytes_0` byte 3. While a Form
+shows a pool of another power type, `reserve_power_type`, `reserve_power` and `reserve_max_power`
+hold the unit's own pool, the Reserve Pool; `reserve_power_type` 255 means the unit holds none.
+`world::power_pool` keeps the pair consistent. A change to either pool, or to the power type, goes
+out in one partial VALUES mask to the owner and peers, as vmangos marks every `UNIT_FIELD_POWERn`
+and `MAXPOWERn` public; a creature's current power stays unsent, as before. CREATE carries both
+pools. Logout saves the own pool to `game_character.power`; a Form's pool is not saved and starts
+empty when world entry shows it again. A pool that appears sends its current value, so the client
+never keeps the full energy that Character CREATE writes. A spell cost, an energize and an
+energize tick reach the pool of their power type, shown or reserved; an energize skips a pool whose
+max is 0. Resurrection and the GM heal set every pool the unit holds by its power type.
+
 Hunter pets keep a durable identity in `game_hunter_pet`. A materialized pet is an ordinary owned
 `game_world_entity`, classified by `game_live_pet_kind`; summoned demons have no Hunter identity or
 care state. Taming retires the wild entity and arms its authored `game_creature_spawn` for a later
@@ -394,9 +406,13 @@ Imported Forms keep the ids of the 1.12 client's `SpellShapeshiftForm.dbc`, and 
 replaces only the Forms it writes. A Package Form sits in a band no import reaches, so a reimport
 leaves it, its passives and its Form Set rows in place.
 
-- **Power rule.** `power_type` names the pool the rule applies to and `power_on_entry` is a
+- **Power rule.** `power_type` names the pool the Form shows and `power_on_entry` is a
   `lyracore_shared::form::PowerOnEntry` code: keep, zero, or keep up to the unit's
-  `A_FORM_POWER_RETAINED` amount (Tactical Mastery for the warrior stances).
+  `A_FORM_POWER_RETAINED` amount (Tactical Mastery for the warrior stances). A Form whose pool is
+  not the unit's own holds the own pool as the Reserve Pool and shows its pool from empty, as
+  vmangos `Unit::SetPowerType` does; the rule then runs on the shown pool. Leaving the Form ends its
+  pool and shows the own pool again. Every Form row shows its pool, so a Form that keeps the unit's
+  pool whatever it is, as vmangos Stealth does, needs a new building block.
 - **Lifecycle.** `default_for_class` puts a unit of that class with no Form into the Form at world
   entry, through the Aura of `spell_id`. An Aura survives death by its spell's attributes, the
   same rule as every other Aura.
@@ -416,20 +432,22 @@ A Package names its own Forms in a spell's Form Set with `game_spell_form` rows.
 A unit's only Form state is its one `A_SHAPESHIFT` Aura, whose `eff_p0` is the `form_id`. The
 Aura's events drive the Form:
 
-- **Apply** (`form::entered`): the unit leaves any other Form and the power rule runs.
+- **Apply** (`form::entered`): the unit leaves any other Form, the Form's pool is shown and the
+  power rule runs.
 - **Refresh** (`form::refreshed`): as vmangos removes and reapplies the modifier, the unit's
   Form-bound Auras end, then the Form is entered again, power rule included.
 - **Removal** (`form::exited`): the unit's own Auras that need a Form end, as in vmangos
   `HandleShapeshiftBoosts`. A unit left in no Form gets the shapeshift effect's `trigger_spell`;
   Nefarian's Berserk 23397 ends into Berserker Stance this way.
 
-The Aura change then projects once: `form::project_form` re-derives the client form byte, the
-passives the Form brings and the equipment that depends on the Form. The passives are the Form's
-`game_form_spell` rows and every known passive whose Form Set requires a Form with a `game_form`
-row, such as Defiance. A passive whose Form Set names only Forms without a row, such as a druid
-talent before druid forms are Forms, keeps the Aura its learning applied. The projection removes
-only Auras the unit cast itself; equipment Auras stay with the equipment reconcile. A spell with
-`CAST_FLAG_LOCKS_FORM`, Berserk among them, refuses every shapeshift cast while its Aura is held.
+The Aura change then projects once: `form::project_form` re-derives the client form byte, the shown
+pool, the passives the Form brings and the equipment that depends on the Form. The passives are the
+Form's `game_form_spell` rows and every known passive whose Form Set requires a Form with a
+`game_form` row, such as Defiance. A passive whose Form Set names only Forms without a row, such as
+a druid talent before druid forms are Forms, keeps the Aura its learning applied. The projection
+removes only Auras the unit cast itself; equipment Auras stay with the equipment reconcile. A spell
+with `CAST_FLAG_LOCKS_FORM`, Berserk among them, refuses every shapeshift cast while its Aura is
+held.
 
 Every Character body that enters the world runs the same projection, and one with no shapeshift Aura
 enters its class's default Form, whether it came from login, a Package or a sessionless action.

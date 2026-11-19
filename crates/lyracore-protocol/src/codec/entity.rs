@@ -11,9 +11,9 @@ use wow_world_messages::vanilla::{
     MovementBlock_SplineFlag, MovementBlock_UpdateFlag, MovementBlock_UpdateFlag_All,
     MovementBlock_UpdateFlag_Living, Object, ObjectType, PetCommandState, PetEnabled,
     PetReactState, Power, Race, SMSG_PET_SPELLS_action_bars, Skill, SkillInfo, SkillInfoIndex,
-    UpdateMask, UpdatePlayer, UpdateUnit, Vector3d, VisibleItem, VisibleItemIndex, Weekday,
-    SMSG_ACCOUNT_DATA_TIMES, SMSG_ACTION_BUTTONS, SMSG_BINDPOINTUPDATE, SMSG_DESTROY_OBJECT,
-    SMSG_INITIALIZE_FACTIONS, SMSG_INITIAL_SPELLS, SMSG_LOGIN_SETTIMESPEED,
+    UpdateMask, UpdatePlayer, UpdatePlayerBuilder, UpdateUnit, Vector3d, VisibleItem,
+    VisibleItemIndex, Weekday, SMSG_ACCOUNT_DATA_TIMES, SMSG_ACTION_BUTTONS, SMSG_BINDPOINTUPDATE,
+    SMSG_DESTROY_OBJECT, SMSG_INITIALIZE_FACTIONS, SMSG_INITIAL_SPELLS, SMSG_LOGIN_SETTIMESPEED,
     SMSG_LOGIN_VERIFY_WORLD, SMSG_PET_SPELLS, SMSG_SET_REST_START, SMSG_TUTORIAL_FLAGS,
     SMSG_UPDATE_OBJECT,
 };
@@ -40,6 +40,8 @@ pub struct EntityView {
     pub max_health: u32,
     pub power: u32,
     pub max_power: u32,
+    /// The pool a Form holds in reserve while `unit_bytes_0` shows another.
+    pub reserve_pool: Option<PowerPoolView>,
     pub level: u32,
     pub faction_template: u32,
     pub target_guid: u64,
@@ -89,6 +91,13 @@ pub struct EntityView {
     pub spline: Option<CreateSpline>,
     /// The Auras in the 48 client-visible slots, which vmangos `BuildValuesUpdate` writes into CREATE.
     pub auras: Vec<update_mask::AuraSlot>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PowerPoolView {
+    pub power_type: u8,
+    pub current: u32,
+    pub max: u32,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -387,6 +396,18 @@ fn create_packed_bytes(entity: &EntityView, power: u8) -> (u32, u32, u32) {
     (player_bytes_2, unit_bytes_1, unit_bytes_2)
 }
 
+fn with_power_pool(builder: UpdatePlayerBuilder, pool: &PowerPoolView) -> UpdatePlayerBuilder {
+    let (current, max) = (pool.current as i32, pool.max as i32);
+    match pool.power_type {
+        1 => builder.set_unit_power2(current).set_unit_maxpower2(max),
+        2 => builder.set_unit_power3(current).set_unit_maxpower3(max),
+        3 => builder.set_unit_power4(current).set_unit_maxpower4(max),
+        4 => builder.set_unit_power5(current).set_unit_maxpower5(max),
+        0 => builder.set_unit_power1(current).set_unit_maxpower1(max),
+        _ => builder,
+    }
+}
+
 pub fn build_create_object(
     entity: &EntityView,
     kind: CreateKind,
@@ -479,24 +500,14 @@ pub fn build_create_object(
             builder = builder.set_unit_mountdisplayid(entity.mount_display_id as i32);
         }
 
-        let (power_cur, power_max) = (entity.power as i32, entity.max_power as i32);
-        builder = match power_b {
-            1 => builder
-                .set_unit_power2(power_cur)
-                .set_unit_maxpower2(power_max),
-            2 => builder
-                .set_unit_power3(power_cur)
-                .set_unit_maxpower3(power_max),
-            3 => builder
-                .set_unit_power4(power_cur)
-                .set_unit_maxpower4(power_max),
-            4 => builder
-                .set_unit_power5(power_cur)
-                .set_unit_maxpower5(power_max),
-            _ => builder
-                .set_unit_power1(power_cur)
-                .set_unit_maxpower1(power_max),
+        let shown = PowerPoolView {
+            power_type: power_b,
+            current: entity.power,
+            max: entity.max_power,
         };
+        for pool in entity.reserve_pool.iter().chain([&shown]) {
+            builder = with_power_pool(builder, pool);
+        }
 
         if matches!(kind, CreateKind::SelfPlayer) {
             let skill_lines = skill_slot_layout(class_b, learned_skills);

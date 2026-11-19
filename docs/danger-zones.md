@@ -440,6 +440,17 @@ A Package Delta written before this revision has no `gcd_category`, so its new s
 category 0: their global cooldown neither blocks nor waits for a category 133 spell. Emit the
 Package again from a Base Snapshot of this revision, or set `gcd_category`, before you apply it.
 
+### Reserve Pool migration
+
+`game_world_entity` gains three END-appended columns: `reserve_power_type` (default 255),
+`reserve_power` and `reserve_max_power` (default 0). The default 255 is the "no Reserve Pool"
+value, not a power type, so every existing row holds none, which is true: before this change no
+Form showed a pool other than the unit's own. No repair or reimport is needed, and the Transfer
+codec and Native Host layouts are unchanged. A Package Form that shows a pool other than a unit's
+own, such as rage for a druid, reserves that unit's own pool on its next entry or world entry.
+A Package Form whose `power_type` is not a power type (above 4) is now refused at apply; an
+already applied one keeps the unit's pool and logs a warning on entry.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

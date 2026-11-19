@@ -103,10 +103,18 @@ fn populated_old_module_upgrades_without_clearing() {
         "sheet_ranged_dmg_min_fraction",
         "sheet_ranged_dmg_max_fraction",
         "sheet_ranged_crit_bp",
+        "reserve_power",
+        "reserve_max_power",
     ] {
         assert!(!entity_before.contains_key(column));
         assert_eq!(entity_after.remove(column).as_deref(), Some("0"));
     }
+    assert!(!entity_before.contains_key("reserve_power_type"));
+    assert_eq!(
+        entity_after.remove("reserve_power_type").as_deref(),
+        Some("255"),
+        "an upgraded unit holds no Reserve Pool"
+    );
     assert_eq!(entity_after, entity_before);
     let mut spell_after = shard.query_rows("SELECT * FROM game_spell WHERE spell_id = 5090100");
     for column in [

@@ -20,6 +20,11 @@ path = "module/tests/forms.rs"
 function = "a_stance_cannot_be_cancelled"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/forms.rs"
+function = "a_mana_energize_reaches_reserved_mana_and_leaves_rage_alone"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/SpellHandler.cpp"

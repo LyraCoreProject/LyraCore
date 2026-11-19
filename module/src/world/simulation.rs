@@ -30,7 +30,11 @@ impl WorldEntity {
                 power_type::RAGE => self.power > 0,
                 _ => false,
             };
-        self.regeneration_pending = !self.dead && (self.health < self.max_health || power_pending);
+        let reserve_pending = self
+            .reserve_pool()
+            .is_some_and(|pool| pool.power_type == power_type::MANA && pool.current < pool.max);
+        self.regeneration_pending =
+            !self.dead && (self.health < self.max_health || power_pending || reserve_pending);
         self.simulation_indexed = true;
     }
 
@@ -135,6 +139,18 @@ mod tests {
             entity.stamp_simulation();
             assert_eq!(entity.regeneration_pending, pending, "{kind}, {power}");
         }
+    }
+
+    #[test]
+    fn a_reserved_mana_pool_below_its_max_keeps_regeneration_pending() {
+        let mut entity = entity();
+        entity.power = 100;
+        entity.show_pool(power_type::RAGE);
+        entity.stamp_simulation();
+        assert!(!entity.regeneration_pending, "full mana and no rage");
+        entity.reserve_power = 99;
+        entity.stamp_simulation();
+        assert!(entity.regeneration_pending);
     }
 
     #[test]

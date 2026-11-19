@@ -33,7 +33,7 @@ fn state(ctx: &ReducerContext, e: &WorldEntity) -> CharacterRegeneration {
             character_guid: e.guid,
             health_fraction: 0.0,
             next_tick_ms: now_ms(ctx).saturating_add(
-                if e.health < e.max_health || (e.power_type() == MANA && e.power < e.max_power) {
+                if e.health < e.max_health || mana_below_max(e) {
                     0
                 } else {
                     TICK_MS
@@ -170,7 +170,7 @@ pub(super) fn regenerate_characters(ctx: &ReducerContext) {
             continue;
         }
         row.next_tick_ms = next_tick_after(row.next_tick_ms, now);
-        if e.health >= e.max_health && (e.power_type() != MANA || e.power >= e.max_power) {
+        if e.health >= e.max_health && !mana_below_max(&e) {
             ctx.db
                 .game_character_regeneration()
                 .character_guid()
@@ -181,10 +181,10 @@ pub(super) fn regenerate_characters(ctx: &ReducerContext) {
         let in_combat = e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
             || super::is_engaged(ctx, e.guid);
         let class = (e.unit_bytes_0 >> 8) as u8;
-        let before = (e.health, e.power);
-        if e.power_type() == MANA && e.power < e.max_power {
+        let before = (e.health, e.power, e.reserve_power);
+        if mana_below_max(&e) {
             let gain = bonuses.mana_per_tick(class, e.spirit, now < e.mana_regen_paused_until_ms);
-            e.power = e.power.saturating_add(gain).min(e.max_power);
+            e.gain_power(MANA, gain);
         }
         if e.health < e.max_health
             && (!in_combat
@@ -203,10 +203,14 @@ pub(super) fn regenerate_characters(ctx: &ReducerContext) {
             .game_character_regeneration()
             .character_guid()
             .update(row);
-        if before != (e.health, e.power) {
+        if before != (e.health, e.power, e.reserve_power) {
             e.update(ctx);
         }
     }
+}
+
+fn mana_below_max(e: &WorldEntity) -> bool {
+    e.pool(MANA).is_some_and(|pool| pool.current < pool.max)
 }
 
 fn mana_per_second(class: u8, spirit: u32) -> f32 {

@@ -224,7 +224,7 @@ impl CastOrigin {
 }
 
 pub(crate) fn charge_spell_cost(ctx: &ReducerContext, caster: &mut WorldEntity, hdr: &Spell) {
-    caster.power = caster.power.saturating_sub(hdr.cost);
+    caster.spend_power(hdr.power_type, hdr.cost);
     if hdr.cost > 0 && hdr.power_type == lyracore_shared::packing::power_type::MANA {
         let now_ms = crate::time::now_ms(ctx);
         caster.mana_regen_paused_until_ms = now_ms + 5000;
@@ -1466,11 +1466,12 @@ fn check_cast_gate_suffix(
     }
 
     // Creatures have no managed power pool, so only Characters pay spell costs.
-    if cost_gate_blocks(caster.is_player(), caster.power, hdr.cost) {
+    let power = caster.spendable_power(hdr.power_type);
+    if cost_gate_blocks(caster.is_player(), power, hdr.cost) {
         return Err(CastGateRefusal::new(
             CastRefusalKind::InsufficientPower,
             CastRefusalReason::NoPower,
-            format!("not enough power: have {}, need {}", caster.power, hdr.cost),
+            format!("not enough power: have {power}, need {}", hdr.cost),
         ));
     }
 

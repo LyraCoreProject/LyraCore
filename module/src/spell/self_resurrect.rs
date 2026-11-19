@@ -93,15 +93,19 @@ pub(crate) fn do_self_resurrect(
     reagents.commit(ctx).map_err(String::from)?;
     super::cast::start_spell_cooldown(ctx, character_guid, option.spell_id, header.cooldown_ms);
 
-    let (health, power) = self_resurrect_vitals(
-        character.max_health,
-        character.max_power,
-        power_type::for_class(character.class()),
-        effect.base_points,
-        effect.p0,
-    );
+    let max_health = character.max_health;
+    let vitals = |pool: crate::world::power_pool::PowerPool| {
+        self_resurrect_vitals(
+            max_health,
+            pool.max,
+            pool.power_type,
+            effect.base_points,
+            effect.p0,
+        )
+    };
+    let health = vitals(character.shown_pool()).0;
+    character.set_each_pool(|pool| vitals(pool).1);
     character.health = health;
-    character.power = power;
     character.update(ctx);
     crate::ghost::finish_resurrection(ctx, character_guid);
     crate::native::spell::spell_cooldown(ctx, character_guid, option.spell_id, header.cooldown_ms);

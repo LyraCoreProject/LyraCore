@@ -293,7 +293,7 @@ pub(crate) fn apply_gm_command(
         }
         GmCommand::Heal => {
             caller.health = caller.max_health;
-            caller.power = caller.max_power;
+            caller.set_each_pool(|pool| pool.max);
             caller.update(ctx);
         }
         GmCommand::Gps => {

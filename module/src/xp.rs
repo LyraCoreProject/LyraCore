@@ -311,18 +311,13 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
         let spirit_gained = p.spirit.saturating_sub(delta.old_spirit);
         let gained = p.max_health.saturating_sub(delta.old_max_health);
         p.health = p.max_health;
-        let mana_gained = if lyracore_shared::packing::power_type::for_class(class)
-            == lyracore_shared::packing::power_type::MANA
-        {
-            p.max_power.saturating_sub(delta.old_max_power)
+        let own = p.own_pool();
+        let mana_gained = if own.power_type == lyracore_shared::packing::power_type::MANA {
+            p.set_own_pool(own.max, own.max);
+            own.max.saturating_sub(delta.old_max_power)
         } else {
             0
         };
-        if lyracore_shared::packing::power_type::for_class(class)
-            == lyracore_shared::packing::power_type::MANA
-        {
-            p.power = p.max_power;
-        }
         p.next_level_xp = xp_to_next_level(p.level);
         LevelupEvent::send(
             ctx,

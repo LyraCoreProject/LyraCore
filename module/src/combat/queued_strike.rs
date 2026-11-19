@@ -52,7 +52,7 @@ pub(crate) fn charge(
     let Some(mut payer) = ctx.db.game_world_entity().guid().find(attacker.guid) else {
         return false;
     };
-    if strike.is_some_and(|strike| payer.power < strike.cost) {
+    if strike.is_some_and(|strike| payer.spendable_power(strike.power_type) < strike.cost) {
         SpellCastEvent::insert(
             ctx,
             SpellCastEvent {

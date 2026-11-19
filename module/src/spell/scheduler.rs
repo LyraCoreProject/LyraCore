@@ -174,7 +174,16 @@ pub(crate) fn do_resurrect_response(
             if t.dead {
                 let pct = req.points.clamp(1, 100) as u32;
                 t.health = revive_amount(t.max_health, req.points);
-                t.power = t.max_power.saturating_mul(pct) / 100;
+                // vmangos `Player::ResurrectUsingRequestData`: rage at zero and energy full.
+                t.set_each_pool(|pool| {
+                    use crate::world::power_pool::resurrected_power;
+                    use lyracore_shared::packing::power_type::{ENERGY, MANA};
+                    match pool.power_type {
+                        MANA => resurrected_power(pool, pct),
+                        ENERGY => pool.max,
+                        _ => resurrected_power(pool, 0),
+                    }
+                });
                 t.update(ctx);
                 crate::ghost::finish_resurrection(ctx, target_guid);
             }
@@ -249,6 +258,8 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
 
     let mut pending: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
     let mut pending_power: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
+    let mut pending_reserve_power: std::collections::HashMap<u64, u32> =
+        std::collections::HashMap::new();
     let mut dot_damaged: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut dying: std::collections::HashMap<u64, Option<u64>> = std::collections::HashMap::new();
     let mut finishing_duels: std::collections::HashSet<u64> = std::collections::HashSet::new();
@@ -437,20 +448,22 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 let effective = new_health.saturating_sub(cur);
                 crate::threat::add_heal_threat(ctx, a.caster_guid, a.target_guid, effective);
             }
-            A_PERIODIC_ENERGIZE if energizes_pool(a.eff_p0_kind, a.eff_p0, target.power_type()) => {
-                let cur = pending_power
-                    .get(&a.target_guid)
-                    .copied()
-                    .unwrap_or(target.power);
-                pending_power.insert(
-                    a.target_guid,
-                    energized_value(cur, target.max_power, a.amount),
-                );
+            A_PERIODIC_ENERGIZE => {
+                let Some(pool) = target.energized_pool(a.eff_p0_kind, a.eff_p0) else {
+                    continue;
+                };
+                let batch = if pool.power_type == target.power_type() {
+                    &mut pending_power
+                } else {
+                    &mut pending_reserve_power
+                };
+                let cur = batch.get(&a.target_guid).copied().unwrap_or(pool.current);
+                batch.insert(a.target_guid, energized_value(cur, pool.max, a.amount));
                 crate::SpellCastEvent::insert(
                     ctx,
                     SpellCastEvent {
                         energized: a.amount.max(0) as u32,
-                        power_type: target.power_type(),
+                        power_type: pool.power_type,
                         ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
                     },
                 );
@@ -475,6 +488,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     }
     flush_pool(ctx, &pending, |e, v| e.health = v);
     flush_pool(ctx, &pending_power, |e, v| e.power = v);
+    flush_pool(ctx, &pending_reserve_power, |e, v| e.reserve_power = v);
     for (duel_id, winner_guid, loser_guid) in duel_finishes {
         crate::duel::complete_duel(
             ctx,
@@ -704,10 +718,6 @@ pub(crate) fn classify_ground_tick(
     }
 }
 
-fn energizes_pool(eff_p0_kind: u8, eff_p0: i32, power_type: u8) -> bool {
-    eff_p0_kind != P_POWER_TYPE || eff_p0 == i32::from(power_type)
-}
-
 #[cfg(feature = "conformance_test_fixture")]
 #[reducer]
 pub fn debug_stage_virtual_spell_impact(
@@ -754,19 +764,6 @@ mod expiry_tests {
         assert!(!is_due_for_expiry(A_STEALTH, expires_at, expires_at));
         assert!(!is_due_for_expiry(A_STEALTH, expires_at, long_past));
         assert!(is_due_for_expiry(A_MOD_STAT, expires_at, long_past));
-    }
-}
-
-#[cfg(test)]
-mod energize_tests {
-    use super::*;
-    use lyracore_shared::packing::power_type::{MANA, RAGE};
-
-    #[test]
-    fn mana_regen_skips_a_rage_pool() {
-        assert!(energizes_pool(P_POWER_TYPE, i32::from(MANA), MANA));
-        assert!(!energizes_pool(P_POWER_TYPE, i32::from(MANA), RAGE));
-        assert!(energizes_pool(P_PCT_MAX_POWER, 0, RAGE));
     }
 }
 
