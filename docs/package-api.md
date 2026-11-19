@@ -763,6 +763,10 @@ identifier must fit 24 bits.
     row;
   - a plan row that updates any spell's effect leaves a Form's `spell_id` spell with no
     `A_SHAPESHIFT` effect for that Form, whether or not the Form's own row is in the plan;
+  - a Form's `spell_id` names a Package spell the plan leaves out, or one that no longer enters the
+    Form, whether or not the Form's own row is in the plan. `lyracore packages apply` replays the
+    `spell` base import first, which returns an updated imported Form to its base `spell_id`, so
+    this refusal fires only for a plan applied without that replay;
   - a passive or Form Set row names a missing spell or Form.
 - **EventAI.** Covers `game_creature_ai_broadcast_text.id`, `game_creature_ai_summon.id` and
   `game_quest_event_requirement.id`. The family's scripted definitions are not claimable: a

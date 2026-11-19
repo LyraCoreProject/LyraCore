@@ -126,6 +126,16 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
             return Err(missing_reference(row, "spell", spell_id));
         }
     }
+    let orphaned = form_spells.iter().find(|&&(spell_id, form_id)| {
+        is_package_spell_id(spell_id) && !enters_form(spell_id, form_id)
+    });
+    if let Some(&(spell_id, form_id)) = orphaned {
+        return Err(format!(
+            "`game_form` row {{form_id={form_id}}} names spell {spell_id}, which does not enter \
+             the Form after this plan; apply through `lyracore packages apply`, which replays the \
+             `spell` base import first, or keep the spell"
+        ));
+    }
     Ok(())
 }
 
