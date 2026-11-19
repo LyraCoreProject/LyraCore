@@ -69,6 +69,9 @@ pub const PACKAGE_GAMEOBJECT_ID_CEIL: u32 = 16_999_999;
 pub const PACKAGE_CREATURE_AI_ID_FLOOR: u64 = 17_000_000;
 pub const PACKAGE_CREATURE_AI_ID_CEIL: u64 = 17_999_999;
 
+pub const PACKAGE_FORM_ID_FLOOR: u32 = 18_000_000;
+pub const PACKAGE_FORM_ID_CEIL: u32 = 18_999_999;
+
 pub const FIXTURE_SPELL_ID_FLOOR: u32 = 50_000;
 pub const FIXTURE_SPELL_ID_CEIL: u32 = 50_999;
 
@@ -91,6 +94,7 @@ pub enum PackageRange {
     Creature,
     Gameobject,
     EventAi,
+    Form,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -118,7 +122,7 @@ const fn band(range: PackageRange, floor: u64, ceil: u64, row: &'static str) -> 
     }
 }
 
-const BANDS: [Band; 13] = [
+const BANDS: [Band; 14] = [
     band(
         PackageRange::Script,
         PACKAGE_SCRIPT_ID_FLOOR as u64,
@@ -239,6 +243,15 @@ const BANDS: [Band; 13] = [
             PACKAGE_CREATURE_AI_ID_FLOOR,
             PACKAGE_CREATURE_AI_ID_CEIL,
             "creature-ai row",
+        )
+    },
+    Band {
+        zero_is_not: "a Form",
+        ..band(
+            PackageRange::Form,
+            PACKAGE_FORM_ID_FLOOR as u64,
+            PACKAGE_FORM_ID_CEIL as u64,
+            "Form",
         )
     },
 ];
@@ -382,6 +395,11 @@ pub const fn is_package_creature_ai_id(id: u64) -> bool {
 }
 
 #[must_use]
+pub const fn is_package_form_id(form_id: u32) -> bool {
+    PackageRange::Form.contains(form_id as u64)
+}
+
+#[must_use]
 pub const fn is_fixture_reserved_spell_id(spell_id: u32) -> bool {
     PackageRange::Spell.is_fixture_reserved(spell_id as u64)
 }
@@ -477,6 +495,8 @@ pub const MAX_CREATURE_GUID_COMPONENT: u32 = lyracore_shared::guid::CREATURE_COM
 
 const _: () = assert!(PACKAGE_CREATURE_ID_CEIL <= MAX_CREATURE_GUID_COMPONENT);
 const _: () = assert!(PACKAGE_CREATURE_AI_ID_CEIL <= u32::MAX as u64);
+// A shapeshift effect names its Form in the effect's i32 parameter.
+const _: () = assert!(PACKAGE_FORM_ID_CEIL <= i32::MAX as u32);
 
 #[must_use]
 pub const fn packed_creature_spawn_guid(entry: u32, spawn_id: u32) -> u64 {

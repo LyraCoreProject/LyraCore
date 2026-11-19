@@ -1,7 +1,7 @@
 //! Forms: client SpellShapeshiftForm.dbc rows composed with the vmangos facts the DBC lacks.
 
 use lyracore_package_delta::packed_form_spell_id;
-use lyracore_shared::form::FORM_FACTS;
+use lyracore_shared::form::{DBC_MASK_FORMS, FORM_FACTS};
 
 use crate::dump::{push_insert, sql_str};
 
@@ -50,7 +50,7 @@ pub(crate) fn retained_rage(script_id: u32) -> Option<i32> {
 /// `form_id - 1` names a Form. A Form in both masks is excluded, our rule: vmangos reads the masks
 /// differently, and no 1.12 row sets both.
 pub(crate) fn dbc_form_set(required: u32, excluded: u32) -> impl Iterator<Item = (u32, bool)> {
-    (1..=32u32)
+    DBC_MASK_FORMS
         .filter(move |form| (required | excluded) & (1 << (form - 1)) != 0)
         .map(move |form| (form, excluded & (1 << (form - 1)) != 0))
 }

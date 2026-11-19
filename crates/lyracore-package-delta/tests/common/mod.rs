@@ -456,6 +456,41 @@ pub fn spell_proc_event_claim(spell_id: u32, operation: &str, fields: &str) -> S
     )
 }
 
+pub const PACKAGE_FORM: u32 = 18_000_001;
+
+pub const REAL_FORM: u32 = 17;
+
+pub const WHOLE_FORM_ROW: &str = r#"{
+    "name": { "type": "string", "value": "Kindled Aspect" },
+    "spell_id": { "type": "u32", "value": 6000001 },
+    "acts_as_shapeshifted": { "type": "bool", "value": true },
+    "power_type": { "type": "u8", "value": 1 },
+    "power_on_entry": { "type": "u8", "value": 1 },
+    "default_for_class": { "type": "u8", "value": 0 },
+    "client_form": { "type": "u8", "value": 5 }
+}"#;
+
+#[must_use]
+pub fn form_claim(form_id: u32, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"table":"game_form","key":{{"form_id":{form_id}}},"operation":"{operation}","fields":{fields}}}"#
+    )
+}
+
+#[must_use]
+pub fn form_spell_claim(form_id: u32, spell_id: u32, operation: &str) -> String {
+    format!(
+        r#"{{"table":"game_form_spell","key":{{"form_id":{form_id},"spell_id":{spell_id}}},"operation":"{operation}","fields":{{}}}}"#
+    )
+}
+
+#[must_use]
+pub fn spell_form_claim(spell_id: u32, form_id: u32, operation: &str, excluded: bool) -> String {
+    format!(
+        r#"{{"table":"game_spell_form","key":{{"spell_id":{spell_id},"form_id":{form_id}}},"operation":"{operation}","fields":{{"excluded":{{"type":"bool","value":{excluded}}}}}}}"#
+    )
+}
+
 pub const PACKAGE_CREATURE: u32 = 15_000_001;
 
 pub const REAL_CREATURE: u32 = 6;

@@ -1454,13 +1454,18 @@ fn spell_9329_and_demoralizing_shout_keep_both_attack_power_halves_in_create_and
 
 #[test]
 fn a_create_carries_the_auras_in_their_client_slots() {
+    let aura = |slot, spell_id, flags, level| update_mask::AuraSlot {
+        slot,
+        spell_id,
+        flags,
+        level,
+    };
     let entity = EntityView {
-        auras: vec![update_mask::AuraSlot {
-            slot: 0,
-            spell_id: 2457,
-            flags: 9,
-            level: 1,
-        }],
+        auras: vec![
+            aura(0, 2457, 9, 1),
+            aura(1, 21156, 1, 20),
+            aura(9, 6673, 9, 7),
+        ],
         ..warrior_entity()
     };
     for kind in [CreateKind::Peer, CreateKind::SelfPlayer] {
@@ -1481,8 +1486,16 @@ fn a_create_carries_the_auras_in_their_client_slots() {
         let fields = crate::codec::values_mask::parse_values_updates(&bytes[4..])
             .remove(0)
             .fields;
-        // Build 5875 UNIT_FIELD_AURA, UNIT_FIELD_AURAFLAGS and UNIT_FIELD_AURALEVELS.
-        for (index, value) in [(47, 2457), (95, 9), (101, 1)] {
+        // Build 5875 UNIT_FIELD_AURA, AURAFLAGS (4 bits a slot) and AURALEVELS (8 bits a slot).
+        for (index, value) in [
+            (47, 2457),
+            (48, 21156),
+            (56, 6673),
+            (95, 0x19),
+            (96, 0x90),
+            (101, 20 << 8 | 1),
+            (103, 7 << 8),
+        ] {
             assert!(
                 fields.contains(&(index, value)),
                 "{kind:?} field {index}: {fields:?}"

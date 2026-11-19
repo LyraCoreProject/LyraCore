@@ -69,6 +69,9 @@ pub enum Table {
     CreatureAiBroadcastText,
     CreatureAiSummon,
     QuestEventRequirement,
+    Form,
+    FormSpell,
+    SpellForm,
 }
 
 impl Table {
@@ -113,6 +116,9 @@ impl Table {
         Self::CreatureAiBroadcastText,
         Self::CreatureAiSummon,
         Self::QuestEventRequirement,
+        Self::Form,
+        Self::FormSpell,
+        Self::SpellForm,
     ];
 
     #[must_use]
@@ -158,13 +164,18 @@ impl Table {
             Self::CreatureAiBroadcastText => "game_creature_ai_broadcast_text",
             Self::CreatureAiSummon => "game_creature_ai_summon",
             Self::QuestEventRequirement => "game_quest_event_requirement",
+            Self::Form => "game_form",
+            Self::FormSpell => "game_form_spell",
+            Self::SpellForm => "game_spell_form",
         }
     }
 
     #[must_use]
     pub const fn family(self) -> &'static str {
         match self {
-            Self::Spell | Self::SpellEffect => SPELL_FAMILY,
+            Self::Spell | Self::SpellEffect | Self::Form | Self::FormSpell | Self::SpellForm => {
+                SPELL_FAMILY
+            }
             Self::Item => ITEM_FAMILY,
             Self::Quest
             | Self::QuestText
@@ -245,6 +256,9 @@ impl Table {
             "game_creature_ai_broadcast_text" => Some(Self::CreatureAiBroadcastText),
             "game_creature_ai_summon" => Some(Self::CreatureAiSummon),
             "game_quest_event_requirement" => Some(Self::QuestEventRequirement),
+            "game_form" => Some(Self::Form),
+            "game_form_spell" => Some(Self::FormSpell),
+            "game_spell_form" => Some(Self::SpellForm),
             _ => None,
         }
     }
@@ -292,6 +306,9 @@ impl Table {
             Self::CreatureAiBroadcastText => CREATURE_AI_BROADCAST_TEXT_COLUMNS,
             Self::CreatureAiSummon => CREATURE_AI_SUMMON_COLUMNS,
             Self::QuestEventRequirement => QUEST_EVENT_REQUIREMENT_COLUMNS,
+            Self::Form => FORM_COLUMNS,
+            Self::FormSpell => &[],
+            Self::SpellForm => SPELL_FORM_COLUMNS,
         }
     }
 
@@ -779,6 +796,18 @@ const CREATURE_AI_SUMMON_COLUMNS: &[Column] = &[
 ];
 
 const QUEST_EVENT_REQUIREMENT_COLUMNS: &[Column] = &[column("quest_entry", FieldType::U32)];
+
+const FORM_COLUMNS: &[Column] = &[
+    column("name", FieldType::Str),
+    column("spell_id", FieldType::U32),
+    column("acts_as_shapeshifted", FieldType::Bool),
+    column("power_type", FieldType::U8),
+    column("power_on_entry", FieldType::U8),
+    column("default_for_class", FieldType::U8),
+    column("client_form", FieldType::U8),
+];
+
+const SPELL_FORM_COLUMNS: &[Column] = &[column("excluded", FieldType::Bool)];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FieldType {

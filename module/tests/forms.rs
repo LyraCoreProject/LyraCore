@@ -3,7 +3,7 @@ mod support;
 use std::collections::BTreeSet;
 
 use lyracore_package_delta::fixture_ids::RECRUITS_TUNIC;
-use lyracore_package_delta::packed_spell_form_id;
+use lyracore_package_delta::{packed_form_spell_id, packed_spell_form_id};
 use lyracore_shared::spell::taxonomy::*;
 use serde_json::json;
 use support::{number, ReducerConnection, Row, Standalone};
@@ -484,6 +484,234 @@ fn the_cast_gate_reads_the_spell_form_set() {
     enter(&shard, DEFENSIVE_STANCE);
     assert!(!casts(BATTLE_ONLY));
     assert!(!casts(NOT_IN_DEFENSIVE));
+}
+
+const PACKAGE_FORM: u32 = 18_000_001;
+const PACKAGE_SHIFT: u32 = 6_000_001;
+const PACKAGE_PASSIVE: u32 = 6_000_002;
+const PACKAGE_ABILITY: u32 = 6_000_003;
+const PACKAGE_CLIENT_FORM: u32 = 5;
+
+fn package_spell_claims(spell: u32, name: &str, attributes: u32, effect: (u8, i32, u8)) -> String {
+    let (kind, parameter, parameter_kind) = effect;
+    let u8_ = |value: u8| json!({"type": "u8", "value": value});
+    let u32_ = |value: u32| json!({"type": "u32", "value": value});
+    let i32_ = |value: i32| json!({"type": "i32", "value": value});
+    let spell_row = json!({
+        "name": {"type": "string", "value": name},
+        "power_type": u8_(RAGE), "cost": u32_(0), "cast_time_ms": u32_(0), "gcd_ms": u32_(0),
+        "cooldown_ms": u32_(0), "range_yd": u32_(0), "duration_ms": u32_(PERMANENT_MS as u32),
+        "school_mask": u8_(1), "dispel_type": u8_(0), "mechanic": u8_(0), "max_stacks": u8_(0),
+        "aura_interrupt": {"type": "u16", "value": 0}, "attributes": u32_(attributes),
+        "spell_level": u8_(1), "max_level": u8_(0),
+        "is_negative": {"type": "bool", "value": false}, "cast_flags": u32_(0),
+        "stances": u8_(0), "family_name": u8_(0), "family_flags": {"type": "u64", "value": "0"},
+        "proc_flags": u32_(0), "proc_chance": u8_(0), "proc_charges": u8_(0),
+    });
+    let effect_row = json!({
+        "kind": u8_(kind), "base_points": i32_(0), "die_sides": i32_(0),
+        "per_level": {"type": "f32", "value": 0.0}, "period_ms": u32_(0), "target": u8_(T_SELF),
+        "radius_yd": {"type": "f32", "value": 0.0}, "chain_targets": u8_(0),
+        "trigger_spell": u32_(0), "effect_mechanic": u8_(0), "p0": i32_(parameter),
+        "p0_kind": u8_(parameter_kind), "p1": i32_(0), "script_id": u32_(0),
+        "enters_combat": {"type": "bool", "value": false},
+    });
+    [
+        json!({"table": "game_spell", "key": {"spell_id": spell}, "operation": "insert",
+               "fields": spell_row}),
+        json!({"table": "game_spell_effect", "key": {"spell_id": spell, "effect_index": 0},
+               "operation": "insert", "fields": effect_row}),
+    ]
+    .map(|claim| claim.to_string())
+    .join(",")
+}
+
+fn apply_package_form(shard: &Standalone) {
+    let form = json!({"table": "game_form", "key": {"form_id": PACKAGE_FORM},
+    "operation": "insert", "fields": {
+        "name": {"type": "string", "value": "Kindled Aspect"},
+        "spell_id": {"type": "u32", "value": PACKAGE_SHIFT},
+        "acts_as_shapeshifted": {"type": "bool", "value": true},
+        "power_type": {"type": "u8", "value": RAGE},
+        "power_on_entry": {"type": "u8", "value": 1},
+        "default_for_class": {"type": "u8", "value": 0},
+        "client_form": {"type": "u8", "value": PACKAGE_CLIENT_FORM},
+    }});
+    let passive = json!({"table": "game_form_spell",
+        "key": {"form_id": PACKAGE_FORM, "spell_id": PACKAGE_PASSIVE},
+        "operation": "insert", "fields": {}});
+    let form_set = json!({"table": "game_spell_form",
+        "key": {"spell_id": PACKAGE_ABILITY, "form_id": PACKAGE_FORM},
+        "operation": "insert", "fields": {"excluded": {"type": "bool", "value": false}}});
+    let claims = [
+        package_spell_claims(
+            PACKAGE_SHIFT,
+            "Kindled Aspect",
+            0,
+            (A_SHAPESHIFT, PACKAGE_FORM as i32, P_FORM),
+        ),
+        package_spell_claims(
+            PACKAGE_PASSIVE,
+            "Kindled Aspect Passive",
+            0x0005_00D0,
+            (A_FLAG, 0, P_FLAG),
+        ),
+        package_spell_claims(PACKAGE_ABILITY, "Kindled Strike", 0, (A_FLAG, 0, P_FLAG)),
+        form.to_string(),
+        passive.to_string(),
+        form_set.to_string(),
+    ]
+    .join(",");
+    let artifact = format!(
+        r#"{{"version":1,"package":"example.aspect","source_hash":"{}","claims":[{claims}]}}"#,
+        "0".repeat(64)
+    );
+    shard.assert_call(
+        "apply_package_deltas",
+        &[&json!("spell").to_string(), &json!(artifact).to_string()],
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_package_form_projects_its_passives_and_gates_its_spells() {
+    let shard = spawned("forms-package");
+    apply_package_form(&shard);
+    let casts = |spell: u32| {
+        ready(&shard);
+        shard
+            .call("debug_force_cast", &[WARRIOR, &spell.to_string()])
+            .status
+            .success()
+    };
+    assert!(
+        !casts(PACKAGE_ABILITY),
+        "the ability needs the Package Form"
+    );
+
+    set_rage(&shard, 600);
+    enter(&shard, PACKAGE_SHIFT);
+    assert_eq!(client_form(&shard), PACKAGE_CLIENT_FORM);
+    assert!(aura_spells(&shard).contains(&PACKAGE_PASSIVE));
+    assert_eq!(rage(&shard), 0, "the Form's power rule zeroes rage");
+    assert!(casts(PACKAGE_ABILITY));
+
+    shard.assert_call(
+        "debug_shed_spell_auras",
+        &[WARRIOR, &PACKAGE_SHIFT.to_string()],
+    );
+    assert!(shapeshift_spells(&shard).is_empty());
+    assert_eq!(client_form(&shard), 0);
+    assert!(!aura_spells(&shard).contains(&PACKAGE_PASSIVE));
+    assert!(!casts(PACKAGE_ABILITY));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_package_forms_fallback_byte_never_stands_for_a_druid_form() {
+    const BEAR_FORM: u32 = 5487;
+    const MAUL: u32 = 6807;
+    let shard = fixture("forms-package-fallback");
+    shard.assert_sql("UPDATE game_character SET class = 11 WHERE guid = 1");
+    shard.assert_call("debug_spawn_player_entity", &[WARRIOR]);
+    shard.assert_call("debug_set_level", &[WARRIOR, "20"]);
+    apply_package_form(&shard);
+    insert_spell(
+        &shard,
+        BEAR_FORM,
+        "Bear Form",
+        (0, 0, 0),
+        &[(E_SET_STANCE, 0, i32::from(STANCE_BEAR), P_NONE)],
+    );
+    insert_spell(&shard, MAUL, "Maul", (0, 0, 0), &[(A_FLAG, 0, 0, P_FLAG)]);
+    require_forms(&shard, MAUL, &[5], &[]);
+    cast(&shard, BEAR_FORM);
+    assert_eq!(client_form(&shard), PACKAGE_CLIENT_FORM);
+
+    ready(&shard);
+    let maul = shard.call("debug_force_cast", &[WARRIOR, &MAUL.to_string()]);
+    assert!(maul.status.success(), "Bear Form allows Maul");
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert!(shapeshift_spells(&shard).is_empty());
+    assert_eq!(client_form(&shard), PACKAGE_CLIENT_FORM);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_form_change_never_strips_an_aura_another_unit_cast() {
+    const TEST_POLY: u32 = 50023;
+    let shard = spawned("forms-foreign-aura");
+    let wolf = wolf(&shard);
+    shard.assert_call(
+        "debug_force_cast_at",
+        &[&wolf, &TEST_POLY.to_string(), WARRIOR],
+    );
+    shard.insert_row(
+        "game_form_spell",
+        &[
+            ("id", &packed_form_spell_id(18, TEST_POLY)),
+            ("form_id", &18u32),
+            ("spell_id", &TEST_POLY),
+        ],
+    );
+
+    shard.assert_call("debug_repair_after_publish", &[]);
+
+    assert_eq!(shapeshift_spells(&shard), vec![BATTLE_STANCE]);
+    assert!(aura_spells(&shard).contains(&TEST_POLY));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_learned_passive_a_form_also_grants_survives_leaving_that_form() {
+    const SHARPENED: u32 = 16942;
+    let shard = spawned("forms-learned-passive");
+    insert_spell(
+        &shard,
+        SHARPENED,
+        "Sharpened passive",
+        (0x1D0, 0, 0),
+        &[(A_MOD_COMBAT, 3, i32::from(COMBAT_THREAT), P_COMBAT_FIELD)],
+    );
+    shard.insert_row(
+        "game_form_spell",
+        &[
+            ("id", &packed_form_spell_id(18, SHARPENED)),
+            ("form_id", &18u32),
+            ("spell_id", &SHARPENED),
+        ],
+    );
+    shard.assert_call("debug_learn_spell", &[WARRIOR, &SHARPENED.to_string()]);
+    for stance in [DEFENSIVE_STANCE, BATTLE_STANCE, BERSERKER_STANCE] {
+        enter(&shard, stance);
+        assert!(aura_spells(&shard).contains(&SHARPENED), "stance {stance}");
+    }
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert!(aura_spells(&shard).contains(&SHARPENED));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn removing_a_package_form_takes_its_rows_and_repair_restores_the_unit() {
+    let shard = spawned("forms-package-removal");
+    apply_package_form(&shard);
+    enter(&shard, PACKAGE_SHIFT);
+
+    shard.assert_call(
+        "apply_package_deltas",
+        &[&json!("spell").to_string(), &json!("").to_string()],
+    );
+    for table in ["game_form", "game_form_spell", "game_spell_form"] {
+        let rows = shard.query_rows(&format!(
+            "SELECT * FROM {table} WHERE form_id = {PACKAGE_FORM}"
+        ));
+        assert!(rows.is_empty(), "{table}: {rows:?}");
+    }
+
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert_eq!(shapeshift_spells(&shard), vec![BATTLE_STANCE]);
+    assert!(!aura_spells(&shard).contains(&PACKAGE_PASSIVE));
+    assert_eq!(client_form(&shard), 17);
 }
 
 #[test]

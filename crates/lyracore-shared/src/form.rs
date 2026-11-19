@@ -21,6 +21,9 @@ impl TryFrom<u8> for PowerOnEntry {
     }
 }
 
+/// The Forms Spell.dbc `Stances` and `StancesNot` can name: bit `form_id - 1` reaches Form 32.
+pub const DBC_MASK_FORMS: std::ops::RangeInclusive<u32> = 1..=32;
+
 const CLASS_WARRIOR: u8 = 1;
 const RAGE: u8 = crate::packing::power_type::RAGE;
 

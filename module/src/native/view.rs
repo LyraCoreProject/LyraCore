@@ -139,13 +139,7 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
             .game_aura()
             .by_target()
             .filter(e.guid)
-            .filter(|aura| aura.slot < 48)
-            .map(|aura| codec::update_mask::AuraSlot {
-                slot: aura.slot,
-                spell_id: aura.spell_id,
-                flags: aura.flags,
-                level: aura.level,
-            })
+            .filter_map(|aura| super::aura::client_slot(&aura))
             .collect(),
     }
 }

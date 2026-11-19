@@ -19,8 +19,12 @@ pub(super) const OPS: ClaimOps = ClaimOps {
     check_references: Some(check_references),
     clear_package_range,
     write_row,
-    after_write: Some(crate::go_collider::rebuild_go_colliders),
+    after_write: Some(rebuild_go_colliders),
 };
+
+fn rebuild_go_colliders(ctx: &ReducerContext, _rows: &[TracedRow]) -> Result<(), String> {
+    crate::go_collider::rebuild_go_colliders(ctx)
+}
 
 const GAMEOBJECT_GUID_SPAWN_MASK: u64 = 0xFFFF_FFFF_FFFF;
 

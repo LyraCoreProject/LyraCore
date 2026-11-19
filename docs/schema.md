@@ -387,7 +387,12 @@ respawn, so the spawn point never moves into the pet identity.
 A Form is data composed from building blocks the Module defines in Rust. `game_form` holds one row
 per Form, keyed by its own `form_id`, and `game_form_spell` holds the passive spells the Form grants.
 The `spell` import writes them; `debug_seed_warrior_forms` writes the same warrior stances for tests.
-A new Form needs rows, not Rust.
+A new Form needs rows, not Rust: a Package adds one through its Package Delta, at a `form_id` in the
+Package Form Range (`docs/package-api.md`).
+
+Imported Forms keep the ids of the 1.12 client's `SpellShapeshiftForm.dbc`, and the `spell` import
+replaces only the Forms it writes. A Package Form sits in a band no import reaches, so a reimport
+leaves it, its passives and its Form Set rows in place.
 
 - **Power rule.** `power_type` names the pool the rule applies to and `power_on_entry` is a
   `lyracore_shared::form::PowerOnEntry` code: keep, zero, or keep up to the unit's
@@ -398,12 +403,14 @@ A new Form needs rows, not Rust.
 - **Spell rules.** `acts_as_shapeshifted` decides whether spells treat the unit as shifted.
 - **1.12 client presentation.** `client_form` is the form byte the 1.12 client reads from
   `UNIT_FIELD_BYTES_1`. It is a projection, never the Form's identity, so a Form a client does not
-  know can name a byte it does.
+  know can name a byte it does. A Package Form's byte is its fallback on the 1.12 client, and the
+  Module never reads a byte back as that Form: a byte names only the Form whose id it is.
 
 `game_spell_form` holds the Forms a spell requires, or excludes when `excluded`. Its rows are the
 spell's Form Set, so a Form id above the 1.12 client's 32-bit `Stances` mask can gate a spell. The
 importer, Package spell rows and Operator spell edits write rows for Forms 1 to 32 from the DBC
 masks, which `game_spell.form_mask` and `form_exclude` keep verbatim; rows for higher Form ids stay.
+A Package names its own Forms in a spell's Form Set with `game_spell_form` rows.
 `game_spell.stances` is no longer read.
 
 A unit's only Form state is its one `A_SHAPESHIFT` Aura, whose `eff_p0` is the `form_id`. The
@@ -420,9 +427,9 @@ The Aura change then projects once: `form::project_form` re-derives the client f
 passives the Form brings and the equipment that depends on the Form. The passives are the Form's
 `game_form_spell` rows and every known passive whose Form Set requires a Form with a `game_form`
 row, such as Defiance. A passive whose Form Set names only Forms without a row, such as a druid
-talent before druid forms are Forms, keeps the Aura its learning applied. Equipment Auras stay with
-the equipment reconcile. A spell with `CAST_FLAG_LOCKS_FORM`, Berserk among them, refuses every
-shapeshift cast while its Aura is held.
+talent before druid forms are Forms, keeps the Aura its learning applied. The projection removes
+only Auras the unit cast itself; equipment Auras stay with the equipment reconcile. A spell with
+`CAST_FLAG_LOCKS_FORM`, Berserk among them, refuses every shapeshift cast while its Aura is held.
 
 Every Character body that enters the world runs the same projection, and one with no shapeshift Aura
 enters its class's default Form, whether it came from login, a Package or a sessionless action.
