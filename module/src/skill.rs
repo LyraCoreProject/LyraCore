@@ -705,6 +705,7 @@ pub(crate) fn reconcile_profile_skill(
         ));
     }
 
+    // A profile stands in for a trained Character, so its skill sits at the level cap.
     let cap = skill_cap_for_level(actor.level) as u16;
     let skills = ctx.db.game_player_skill();
     if let Some(mut row) = skills
@@ -712,10 +713,11 @@ pub(crate) fn reconcile_profile_skill(
         .filter(&guid)
         .find(|row| row.skill_line == line)
     {
-        if row.max_rank >= cap {
+        if row.max_rank >= cap && row.current >= cap {
             return Ok(false);
         }
-        row.max_rank = cap;
+        row.max_rank = row.max_rank.max(cap);
+        row.current = row.current.max(cap);
         row.update(ctx);
     } else {
         PlayerSkill::insert(
@@ -725,7 +727,7 @@ pub(crate) fn reconcile_profile_skill(
                 character_guid: guid,
                 owner_identity: actor.owner_identity,
                 skill_line: line,
-                current: SkillStart::Starting.value(ctx, &actor, line, cap),
+                current: cap,
                 max_rank: cap,
             },
         );

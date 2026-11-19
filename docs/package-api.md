@@ -364,7 +364,8 @@ The six provisioning verbs are `select_profile_talent`, `reconcile_profile_spell
 `reconcile_profile_skill`, `learn_profile_talent`, `reconcile_profile_item` and
 `equip_profile_upgrade`. `reconcile_profile_spell`, `reconcile_profile_skill` and
 `learn_profile_talent` return `Result<bool, ActionRefusal>`; `true` means they changed normal
-Character state and `false` means the selected profile entry was already satisfied. None of them
+Character state and `false` means the selected profile entry was already satisfied.
+`reconcile_profile_skill` raises the skill's current value and maximum to the level cap. None of them
 authorizes an Actor. A Package must first pass the same controller and Sessionless Action Gate as
 any other gameplay request. Their grants have no money cost because the selected profile is the
 source of the entitlement.
