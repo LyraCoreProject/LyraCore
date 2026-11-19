@@ -834,6 +834,7 @@ fn creature_ai_claims_are_checked_against_quests_and_encounter_ownership() {
 }
 
 const PACKAGE_FORM: u32 = 18_000_001;
+const BATTLE_STANCE: u32 = 2457;
 
 fn form_insert(spell_id: u32, power_on_entry: u8) -> String {
     format!(
@@ -855,15 +856,20 @@ fn form_claims_refuse_a_missing_form_or_spell_and_an_unknown_power_rule() {
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
+    standalone.assert_call("debug_seed_warrior_forms", &[]);
 
     for (claims, named) in [
-        (form_spell_insert(REAL_SPELL), "missing Form"),
+        (form_spell_insert(BATTLE_STANCE), "missing Form"),
         (form_insert(MISSING_SPELL, 0), "missing spell"),
         (
-            [form_insert(REAL_SPELL, 0), form_spell_insert(MISSING_SPELL)].join(","),
+            [
+                form_insert(BATTLE_STANCE, 0),
+                form_spell_insert(MISSING_SPELL),
+            ]
+            .join(","),
             "missing spell",
         ),
-        (form_insert(REAL_SPELL, 9), "unknown power rule"),
+        (form_insert(BATTLE_STANCE, 9), "unknown power rule"),
     ] {
         let refused = apply(&standalone, "spell", &artifact("example.aspect", &claims));
         assert!(!refused.status.success(), "{claims}");
@@ -879,11 +885,15 @@ fn form_claims_refuse_a_missing_form_or_spell_and_an_unknown_power_rule() {
         ))
         .is_empty());
 
-    let claims = [form_insert(REAL_SPELL, 0), form_spell_insert(REAL_SPELL)].join(",");
+    let claims = [
+        form_insert(BATTLE_STANCE, 0),
+        form_spell_insert(BATTLE_STANCE),
+    ]
+    .join(",");
     let accepted = apply(&standalone, "spell", &artifact("example.aspect", &claims));
     assert!(accepted.status.success(), "{}", refusal_text(&accepted));
     let passives = standalone.query_rows(&format!(
         "SELECT * FROM game_form_spell WHERE form_id = {PACKAGE_FORM}"
     ));
-    assert_eq!(passives[0]["spell_id"], REAL_SPELL.to_string());
+    assert_eq!(passives[0]["spell_id"], BATTLE_STANCE.to_string());
 }
