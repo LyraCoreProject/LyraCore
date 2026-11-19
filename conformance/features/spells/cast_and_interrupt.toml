@@ -17,7 +17,7 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/forms.rs"
-function = "a_stance_cannot_be_cancelled_or_dispelled"
+function = "a_stance_cannot_be_cancelled"
 rung = "durable_module"
 
 [vmangos]
