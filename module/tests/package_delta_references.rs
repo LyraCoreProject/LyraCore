@@ -5,6 +5,7 @@ use lyracore_package_delta::fixture_ids::{
     SCENARIO_QUEST, TEST_WOLF_ENTRY,
 };
 use lyracore_shared::guid;
+use lyracore_shared::spell::taxonomy::{A_SHAPESHIFT, P_FORM};
 use support::Standalone;
 
 const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -834,7 +835,15 @@ fn creature_ai_claims_are_checked_against_quests_and_encounter_ownership() {
 }
 
 const PACKAGE_FORM: u32 = 18_000_001;
+const PACKAGE_SHIFT: u32 = 6_000_001;
 const BATTLE_STANCE: u32 = 2457;
+const BATTLE_STANCE_PASSIVE: u32 = 21156;
+
+fn shift_insert(form_id: u32) -> String {
+    format!(
+        r#"{{"table":"game_spell","key":{{"spell_id":{PACKAGE_SHIFT}}},"operation":"insert","fields":{{"name":{{"type":"string","value":"Kindled Aspect"}},"power_type":{{"type":"u8","value":1}},"cost":{{"type":"u32","value":0}},"cast_time_ms":{{"type":"u32","value":0}},"gcd_ms":{{"type":"u32","value":0}},"cooldown_ms":{{"type":"u32","value":0}},"range_yd":{{"type":"u32","value":0}},"duration_ms":{{"type":"u32","value":4294967295}},"school_mask":{{"type":"u8","value":1}},"dispel_type":{{"type":"u8","value":0}},"mechanic":{{"type":"u8","value":0}},"max_stacks":{{"type":"u8","value":0}},"aura_interrupt":{{"type":"u16","value":0}},"attributes":{{"type":"u32","value":0}},"spell_level":{{"type":"u8","value":1}},"max_level":{{"type":"u8","value":0}},"is_negative":{{"type":"bool","value":false}},"cast_flags":{{"type":"u32","value":0}},"stances":{{"type":"u8","value":0}},"family_name":{{"type":"u8","value":0}},"family_flags":{{"type":"u64","value":"0"}},"proc_flags":{{"type":"u32","value":0}},"proc_chance":{{"type":"u8","value":0}},"proc_charges":{{"type":"u8","value":0}}}}}},{{"table":"game_spell_effect","key":{{"spell_id":{PACKAGE_SHIFT},"effect_index":0}},"operation":"insert","fields":{{"kind":{{"type":"u8","value":{A_SHAPESHIFT}}},"base_points":{{"type":"i32","value":0}},"die_sides":{{"type":"i32","value":0}},"per_level":{{"type":"f32","value":0.0}},"period_ms":{{"type":"u32","value":0}},"target":{{"type":"u8","value":0}},"radius_yd":{{"type":"f32","value":0.0}},"chain_targets":{{"type":"u8","value":0}},"trigger_spell":{{"type":"u32","value":0}},"effect_mechanic":{{"type":"u8","value":0}},"p0":{{"type":"i32","value":{form_id}}},"p0_kind":{{"type":"u8","value":{P_FORM}}},"p1":{{"type":"i32","value":0}},"script_id":{{"type":"u32","value":0}},"enters_combat":{{"type":"bool","value":false}}}}}}"#
+    )
+}
 
 fn form_insert(spell_id: u32, power_on_entry: u8) -> String {
     format!(
@@ -848,34 +857,57 @@ fn form_spell_insert(spell_id: u32) -> String {
     )
 }
 
+fn spell_form_update(spell_id: u32, form_id: u32) -> String {
+    format!(
+        r#"{{"table":"game_spell_form","key":{{"spell_id":{spell_id},"form_id":{form_id}}},"operation":"update","fields":{{"excluded":{{"type":"bool","value":true}}}}}}"#
+    )
+}
+
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn form_claims_refuse_a_missing_form_or_spell_and_an_unknown_power_rule() {
+fn form_claims_refuse_rows_the_form_tables_cannot_honour() {
     let mut standalone = Standalone::start("package-delta-form-references");
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);
     standalone.assert_call("debug_seed_warrior_forms", &[]);
+    let with_form = |rest: &str| {
+        [
+            shift_insert(PACKAGE_FORM),
+            form_insert(PACKAGE_SHIFT, 0),
+            rest.to_owned(),
+        ]
+        .join(",")
+    };
 
     for (claims, named) in [
-        (form_spell_insert(BATTLE_STANCE), "missing Form"),
-        (form_insert(MISSING_SPELL, 0), "missing spell"),
+        (form_spell_insert(BATTLE_STANCE_PASSIVE), "missing Form"),
+        (form_insert(BATTLE_STANCE, 0), "does not enter the Form"),
+        (form_insert(MISSING_SPELL, 0), "does not enter the Form"),
         (
-            [
-                form_insert(BATTLE_STANCE, 0),
-                form_spell_insert(MISSING_SPELL),
-            ]
-            .join(","),
+            with_form(&form_spell_insert(MISSING_SPELL)),
             "missing spell",
         ),
-        (form_insert(BATTLE_STANCE, 9), "unknown power rule"),
+        (
+            with_form(&form_spell_insert(BATTLE_STANCE)),
+            "not a passive",
+        ),
+        (
+            [shift_insert(PACKAGE_FORM), form_insert(PACKAGE_SHIFT, 9)].join(","),
+            "unknown power rule",
+        ),
+        (shift_insert(PACKAGE_FORM + 1), "no `game_form` row"),
+        (
+            spell_form_update(BATTLE_STANCE, 17),
+            "outside the Package Form range",
+        ),
     ] {
         let refused = apply(&standalone, "spell", &artifact("example.aspect", &claims));
         assert!(!refused.status.success(), "{claims}");
         assert!(
             refusal_text(&refused).contains(named),
-            "{}",
+            "{named}: {}",
             refusal_text(&refused)
         );
     }
@@ -885,15 +917,11 @@ fn form_claims_refuse_a_missing_form_or_spell_and_an_unknown_power_rule() {
         ))
         .is_empty());
 
-    let claims = [
-        form_insert(BATTLE_STANCE, 0),
-        form_spell_insert(BATTLE_STANCE),
-    ]
-    .join(",");
+    let claims = with_form(&form_spell_insert(BATTLE_STANCE_PASSIVE));
     let accepted = apply(&standalone, "spell", &artifact("example.aspect", &claims));
     assert!(accepted.status.success(), "{}", refusal_text(&accepted));
     let passives = standalone.query_rows(&format!(
         "SELECT * FROM game_form_spell WHERE form_id = {PACKAGE_FORM}"
     ));
-    assert_eq!(passives[0]["spell_id"], BATTLE_STANCE.to_string());
+    assert_eq!(passives[0]["spell_id"], BATTLE_STANCE_PASSIVE.to_string());
 }

@@ -640,6 +640,13 @@ impl PrimaryKey {
             u64::from(spell_id),
         )?;
         check_form(Table::SpellForm, form_id)?;
+        // A spell's DBC masks own its rows for every other Form.
+        if !PackageRange::Form.contains(u64::from(form_id)) {
+            return Err(DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Form,
+                id: u64::from(form_id),
+            });
+        }
         Ok(Self::SpellForm { spell_id, form_id })
     }
 

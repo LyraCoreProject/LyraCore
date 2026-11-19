@@ -78,6 +78,25 @@ fn an_imported_form_is_tunable_but_its_passives_are_the_imports() {
 }
 
 #[test]
+fn no_operation_may_claim_a_form_set_row_of_an_imported_form() {
+    for operation in ["insert", "update"] {
+        let json = artifact(
+            "example.tuner",
+            &spell_form_claim(REAL_SPELL, REAL_FORM, operation, true),
+        );
+
+        assert_eq!(
+            PackageDelta::parse(&json).expect_err("the claim must be refused"),
+            DeltaError::IdOutsidePackageRange {
+                range: PackageRange::Form,
+                id: u64::from(REAL_FORM)
+            },
+            "{operation}"
+        );
+    }
+}
+
+#[test]
 fn a_passive_names_no_column_so_it_cannot_be_updated() {
     let json = artifact(
         "example.aspect",

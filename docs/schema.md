@@ -403,7 +403,8 @@ leaves it, its passives and its Form Set rows in place.
 - **Spell rules.** `acts_as_shapeshifted` decides whether spells treat the unit as shifted.
 - **1.12 client presentation.** `client_form` is the form byte the 1.12 client reads from
   `UNIT_FIELD_BYTES_1`. It is a projection, never the Form's identity, so a Form a client does not
-  know can name a byte it does. That byte is a Package Form's fallback on the 1.12 client.
+  know can name a byte it does. A Package Form's byte is its fallback on the 1.12 client, and the
+  Module never reads a byte back as that Form: a byte names only the Form whose id it is.
 
 `game_spell_form` holds the Forms a spell requires, or excludes when `excluded`. Its rows are the
 spell's Form Set, so a Form id above the 1.12 client's 32-bit `Stances` mask can gate a spell. The
@@ -426,9 +427,9 @@ The Aura change then projects once: `form::project_form` re-derives the client f
 passives the Form brings and the equipment that depends on the Form. The passives are the Form's
 `game_form_spell` rows and every known passive whose Form Set requires a Form with a `game_form`
 row, such as Defiance. A passive whose Form Set names only Forms without a row, such as a druid
-talent before druid forms are Forms, keeps the Aura its learning applied. Equipment Auras stay with
-the equipment reconcile. A spell with `CAST_FLAG_LOCKS_FORM`, Berserk among them, refuses every
-shapeshift cast while its Aura is held.
+talent before druid forms are Forms, keeps the Aura its learning applied. The projection removes
+only Auras the unit cast itself; equipment Auras stay with the equipment reconcile. A spell with
+`CAST_FLAG_LOCKS_FORM`, Berserk among them, refuses every shapeshift cast while its Aura is held.
 
 Every Character body that enters the world runs the same projection, and one with no shapeshift Aura
 enters its class's default Form, whether it came from login, a Package or a sessionless action.

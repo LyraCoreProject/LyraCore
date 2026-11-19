@@ -38,7 +38,7 @@ use lyracore_importer::spell_kind::{
 use lyracore_importer::spell_overrides::{self, NamedSpell};
 use std::path::Path;
 
-use lyracore_shared::form::DBC_MASK_FORMS;
+use lyracore_package_delta::ids::PACKAGE_FORM_ID_FLOOR;
 use lyracore_shared::packing::power_type;
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_DAMAGE_SHIELD, A_FLAG, A_FORM_POWER_RETAINED, A_IMMUNITY, A_INERT,
@@ -1659,7 +1659,7 @@ pub(crate) const CURATED_TRAINER_ID_SPAN: u64 = 500;
 
 const SYNTHETIC_SPELL_ID_FLOOR: u32 = 50_000;
 
-// Form Set rows for Forms the DBC masks cannot name belong to Package Deltas.
+// A Form Set row for a Package Form belongs to Package Deltas.
 fn spell_delete_statements(only: &[u32]) -> Vec<String> {
     if only.is_empty() {
         return vec![
@@ -1668,8 +1668,7 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
             format!("DELETE FROM game_spell_reagent WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_creature_ai_spell_metadata WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!(
-                "DELETE FROM game_spell_form WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR} AND form_id <= {}",
-                DBC_MASK_FORMS.end()
+                "DELETE FROM game_spell_form WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR} AND form_id < {PACKAGE_FORM_ID_FLOOR}"
             ),
         ];
     }
@@ -1689,8 +1688,7 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
             "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id = {id}"
         ));
         dels.push(format!(
-            "DELETE FROM game_spell_form WHERE spell_id = {id} AND form_id <= {}",
-            DBC_MASK_FORMS.end()
+            "DELETE FROM game_spell_form WHERE spell_id = {id} AND form_id < {PACKAGE_FORM_ID_FLOOR}"
         ));
     }
     dels
@@ -3417,10 +3415,11 @@ mod tests {
                  INSERT INTO game_form VALUES (17,'Old Battle Stance',2457,true,1,0,1,17),
                      ({PACKAGE_FORM},'Kindled Aspect',{PACKAGE_SPELL},true,1,1,0,5);
                  INSERT INTO game_form_spell VALUES ({},{PACKAGE_FORM},{PACKAGE_SPELL});
-                 INSERT INTO game_spell_form VALUES ({},78,18,false),({},78,{PACKAGE_FORM},false),
-                     ({},{PACKAGE_SPELL},{PACKAGE_FORM},true);",
+                 INSERT INTO game_spell_form VALUES ({},78,18,false),({},78,40,false),
+                     ({},78,{PACKAGE_FORM},false),({},{PACKAGE_SPELL},{PACKAGE_FORM},true);",
                 packed_form_spell_id(PACKAGE_FORM, PACKAGE_SPELL),
                 packed_spell_form_id(78, 18),
+                packed_spell_form_id(78, 40),
                 packed_spell_form_id(78, PACKAGE_FORM),
                 packed_spell_form_id(PACKAGE_SPELL, PACKAGE_FORM),
             ))
@@ -3452,7 +3451,7 @@ mod tests {
         assert_eq!(
             ids("SELECT spell_id, form_id FROM game_spell_form ORDER BY spell_id, form_id"),
             [(78, 17), (78, PACKAGE_FORM), (PACKAGE_SPELL, PACKAGE_FORM)],
-            "the import rewrites the DBC-mask Forms of its spells and leaves Package Forms alone"
+            "the import rewrites the imported Form Sets of its spells and leaves Package Forms alone"
         );
     }
 
@@ -4505,7 +4504,7 @@ mod tests {
             ("game_spell_effect", ""),
             ("game_spell_reagent", ""),
             ("game_creature_ai_spell_metadata", ""),
-            ("game_spell_form", " AND form_id <= 32"),
+            ("game_spell_form", " AND form_id < 18000000"),
         ];
         assert_eq!(
             sorted(spell_delete_statements(&[])),

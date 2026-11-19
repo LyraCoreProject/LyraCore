@@ -3,7 +3,7 @@ mod support;
 use std::collections::BTreeSet;
 
 use lyracore_package_delta::fixture_ids::RECRUITS_TUNIC;
-use lyracore_package_delta::packed_spell_form_id;
+use lyracore_package_delta::{packed_form_spell_id, packed_spell_form_id};
 use lyracore_shared::spell::taxonomy::*;
 use serde_json::json;
 use support::{number, ReducerConnection, Row, Standalone};
@@ -526,8 +526,6 @@ fn package_spell_claims(spell: u32, name: &str, attributes: u32, effect: (u8, i3
     .join(",")
 }
 
-/// A Package Delta that adds a Form with one passive, its shapeshift spell, and an ability only
-/// the Form may cast.
 fn apply_package_form(shard: &Standalone) {
     let form = json!({"table": "game_form", "key": {"form_id": PACKAGE_FORM},
     "operation": "insert", "fields": {
@@ -606,6 +604,85 @@ fn a_package_form_projects_its_passives_and_gates_its_spells() {
     assert_eq!(client_form(&shard), 0);
     assert!(!aura_spells(&shard).contains(&PACKAGE_PASSIVE));
     assert!(!casts(PACKAGE_ABILITY));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_package_forms_fallback_byte_never_stands_for_a_druid_form() {
+    const BEAR_FORM: u32 = 5487;
+    const MAUL: u32 = 6807;
+    let shard = fixture("forms-package-fallback");
+    shard.assert_sql("UPDATE game_character SET class = 11 WHERE guid = 1");
+    shard.assert_call("debug_spawn_player_entity", &[WARRIOR]);
+    shard.assert_call("debug_set_level", &[WARRIOR, "20"]);
+    apply_package_form(&shard);
+    insert_spell(
+        &shard,
+        BEAR_FORM,
+        "Bear Form",
+        (0, 0, 0),
+        &[(E_SET_STANCE, 0, i32::from(STANCE_BEAR), P_NONE)],
+    );
+    insert_spell(&shard, MAUL, "Maul", (0, 0, 0), &[(A_FLAG, 0, 0, P_FLAG)]);
+    require_forms(&shard, MAUL, &[5], &[]);
+    cast(&shard, BEAR_FORM);
+    assert_eq!(client_form(&shard), PACKAGE_CLIENT_FORM);
+
+    ready(&shard);
+    let maul = shard.call("debug_force_cast", &[WARRIOR, &MAUL.to_string()]);
+    assert!(maul.status.success(), "Bear Form allows Maul");
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert!(shapeshift_spells(&shard).is_empty());
+    assert_eq!(client_form(&shard), PACKAGE_CLIENT_FORM);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_form_change_never_strips_an_aura_another_unit_cast() {
+    const TEST_POLY: u32 = 50023;
+    let shard = spawned("forms-foreign-aura");
+    let wolf = wolf(&shard);
+    shard.assert_call(
+        "debug_force_cast_at",
+        &[&wolf, &TEST_POLY.to_string(), WARRIOR],
+    );
+    shard.insert_row(
+        "game_form_spell",
+        &[
+            ("id", &packed_form_spell_id(18, TEST_POLY)),
+            ("form_id", &18u32),
+            ("spell_id", &TEST_POLY),
+        ],
+    );
+
+    shard.assert_call("debug_repair_after_publish", &[]);
+
+    assert_eq!(shapeshift_spells(&shard), vec![BATTLE_STANCE]);
+    assert!(aura_spells(&shard).contains(&TEST_POLY));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn removing_a_package_form_takes_its_rows_and_repair_restores_the_unit() {
+    let shard = spawned("forms-package-removal");
+    apply_package_form(&shard);
+    enter(&shard, PACKAGE_SHIFT);
+
+    shard.assert_call(
+        "apply_package_deltas",
+        &[&json!("spell").to_string(), &json!("").to_string()],
+    );
+    for table in ["game_form", "game_form_spell", "game_spell_form"] {
+        let rows = shard.query_rows(&format!(
+            "SELECT * FROM {table} WHERE form_id = {PACKAGE_FORM}"
+        ));
+        assert!(rows.is_empty(), "{table}: {rows:?}");
+    }
+
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert_eq!(shapeshift_spells(&shard), vec![BATTLE_STANCE]);
+    assert!(!aura_spells(&shard).contains(&PACKAGE_PASSIVE));
+    assert_eq!(client_form(&shard), 17);
 }
 
 #[test]

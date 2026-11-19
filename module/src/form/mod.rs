@@ -141,8 +141,8 @@ pub(crate) fn locked(ctx: &ReducerContext, guid: u64) -> bool {
 }
 
 /// Re-derives from the unit's shapeshift Aura the client form byte, the passives the Form brings
-/// and the equipment that depends on the Form. A client byte no Form projects, such as a druid
-/// form `E_SET_STANCE` wrote, stays as it is.
+/// and the equipment that depends on the Form. A byte no Form projects, or the druid form byte
+/// `E_SET_STANCE` wrote, stays as it is.
 pub(crate) fn project_form(ctx: &ReducerContext, guid: u64) {
     let Some(unit) = ctx.db.game_world_entity().guid().find(guid) else {
         return;
@@ -155,7 +155,19 @@ pub(crate) fn project_form(ctx: &ReducerContext, guid: u64) {
     let current = unit.form();
     let client_form = match &form {
         Some(form) => u32::from(form.client_form),
-        None if form_by_client_byte(ctx, current).is_some() => 0,
+        None if unit.stance != 0
+            && current == crate::spell::client_form_for_stance(unit.stance) =>
+        {
+            current
+        }
+        None if ctx
+            .db
+            .game_form()
+            .iter()
+            .any(|form| u32::from(form.client_form) == current) =>
+        {
+            0
+        }
         None => current,
     };
     if current != client_form {
@@ -232,6 +244,8 @@ fn reconcile_passives(ctx: &ReducerContext, unit: &WorldEntity, form: Option<&Fo
     }
     let (stale, held): (Vec<Aura>, Vec<Aura>) = auras_on(ctx, unit.guid).partition(|aura| {
         !desired.contains(&aura.spell_id)
+            && aura.caster_guid == unit.guid
+            && aura.item_guid(ctx) == 0
             && (ctx
                 .db
                 .game_form_spell()
@@ -239,12 +253,10 @@ fn reconcile_passives(ctx: &ReducerContext, unit: &WorldEntity, form: Option<&Fo
                 .filter(aura.spell_id)
                 .next()
                 .is_some()
-                || (aura.caster_guid == unit.guid
-                    && aura.item_guid(ctx) == 0
-                    && spells
-                        .spell_id()
-                        .find(aura.spell_id)
-                        .is_some_and(|spell| binds_to_forms(ctx, &spell))))
+                || spells
+                    .spell_id()
+                    .find(aura.spell_id)
+                    .is_some_and(|spell| binds_to_forms(ctx, &spell)))
     });
     shed_auras(ctx, stale);
     for spell in desired {
@@ -315,16 +327,13 @@ pub(crate) fn repair(ctx: &ReducerContext, guid: u64) {
     project_form(ctx, guid);
 }
 
+/// The Form whose id the client byte is; a Form's fallback byte never maps back to that Form.
 fn form_by_client_byte(ctx: &ReducerContext, client_form: u32) -> Option<Form> {
-    (client_form != 0)
-        .then(|| {
-            ctx.db
-                .game_form()
-                .iter()
-                .filter(|form| u32::from(form.client_form) == client_form)
-                .min_by_key(|form| form.form_id)
-        })
-        .flatten()
+    ctx.db
+        .game_form()
+        .form_id()
+        .find(client_form)
+        .filter(|form| u32::from(form.client_form) == client_form)
 }
 
 fn default_form(ctx: &ReducerContext, class: u8) -> Option<Form> {

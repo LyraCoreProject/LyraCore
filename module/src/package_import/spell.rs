@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use spacetimedb::{ReducerContext, Table};
 
 use lyracore_package_delta::{
@@ -7,6 +5,7 @@ use lyracore_package_delta::{
     Table as ClaimTable, TracedRow, SPELL_FAMILY,
 };
 use lyracore_shared::form::PowerOnEntry;
+use lyracore_shared::spell::taxonomy::{A_SHAPESHIFT, SPELL_ATTR_PASSIVE};
 
 use crate::form::tables::FormSpell;
 use crate::form::{game_form, game_form_spell, Form};
@@ -22,67 +21,85 @@ pub(super) const OPS: ClaimOps = ClaimOps {
     name: SPELL_FAMILY,
     in_package_range,
     row_is_present,
-    check_references: Some(check_references),
+    check_references: None,
     clear_package_range,
     write_row,
-    after_write: None,
+    after_write: Some(check_form_rows),
 };
 
-// Package rows are cleared before the writes, so a Package id resolves only against this plan.
-fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
-    let inserted = |table: ClaimTable| -> BTreeSet<u64> {
-        rows.iter()
-            .filter(|row| row.table() == table && row.operation() == Operation::Insert)
-            .map(TracedRow::row_id)
-            .collect()
-    };
-    let (spells, forms) = (inserted(ClaimTable::Spell), inserted(ClaimTable::Form));
-    let spell_exists = |spell_id: u32| {
-        if is_package_spell_id(spell_id) {
-            spells.contains(&u64::from(spell_id))
-        } else {
-            ctx.db.game_spell().spell_id().find(spell_id).is_some()
-        }
-    };
-    let form_exists = |form_id: u32| {
-        if is_package_form_id(form_id) {
-            forms.contains(&u64::from(form_id))
-        } else {
-            ctx.db.game_form().form_id().find(form_id).is_some()
-        }
+/// Refuses Form rows the written tables cannot honour; docs/package-api.md "Form" lists the rules.
+fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+    let spells = ctx.db.game_spell();
+    let forms = ctx.db.game_form();
+    let shapeshifts = |spell_id: u32| {
+        ctx.db
+            .game_spell_effect()
+            .by_spell()
+            .filter(spell_id)
+            .filter(|effect| effect.kind == A_SHAPESHIFT)
     };
     for row in rows {
         let (form_id, spell_id) = match row.key() {
             PrimaryKey::Form { form_id } => {
-                if let Some(FieldValue::U8(code)) = row
-                    .fields()
-                    .get("power_on_entry")
-                    .map(|claimed| &claimed.value)
+                let form = forms
+                    .form_id()
+                    .find(form_id)
+                    .ok_or_else(|| format!("`game_form` row {} vanished mid-apply", row.key()))?;
+                if PowerOnEntry::try_from(form.power_on_entry).is_err() {
+                    return Err(format!(
+                        "`game_form` row {} claims unknown power rule {}",
+                        row.key(),
+                        form.power_on_entry
+                    ));
+                }
+                if !shapeshifts(form.spell_id).any(|effect| u32::try_from(effect.p0) == Ok(form_id))
                 {
-                    if PowerOnEntry::try_from(*code).is_err() {
+                    return Err(format!(
+                        "`game_form` row {} names spell {}, which does not enter the Form",
+                        row.key(),
+                        form.spell_id
+                    ));
+                }
+                continue;
+            }
+            PrimaryKey::FormSpell { form_id, spell_id } => {
+                let spell = spells
+                    .spell_id()
+                    .find(spell_id)
+                    .ok_or_else(|| missing_reference(row, "spell", spell_id))?;
+                if spell.attributes & SPELL_ATTR_PASSIVE == 0
+                    || shapeshifts(spell_id).next().is_some()
+                {
+                    return Err(format!(
+                        "`game_form_spell` row {} names spell {spell_id}, which is not a passive \
+                         spell or which shapeshifts",
+                        row.key()
+                    ));
+                }
+                (form_id, spell_id)
+            }
+            PrimaryKey::SpellForm { spell_id, form_id } => (form_id, spell_id),
+            PrimaryKey::SpellEffect { spell_id, .. } if is_package_spell_id(spell_id) => {
+                let effect = ctx.db.game_spell_effect().id().find(row.row_id());
+                if let Some(effect) = effect.filter(|effect| effect.kind == A_SHAPESHIFT) {
+                    let named = u32::try_from(effect.p0).unwrap_or(0);
+                    if forms.form_id().find(named).is_none() {
                         return Err(format!(
-                            "`game_form` row {} claims unknown power rule {code}",
-                            row.key()
+                            "`game_spell_effect` row {} shapeshifts into Form {}, which has no \
+                             `game_form` row",
+                            row.key(),
+                            effect.p0
                         ));
                     }
                 }
-                let spell_id = super::final_u32(row, "spell_id", || {
-                    ctx.db
-                        .game_form()
-                        .form_id()
-                        .find(form_id)
-                        .map(|form| form.spell_id)
-                })?;
-                (None, spell_id)
+                continue;
             }
-            PrimaryKey::FormSpell { form_id, spell_id }
-            | PrimaryKey::SpellForm { spell_id, form_id } => (Some(form_id), spell_id),
             _ => continue,
         };
-        if let Some(form_id) = form_id.filter(|&form_id| !form_exists(form_id)) {
+        if forms.form_id().find(form_id).is_none() {
             return Err(missing_reference(row, "Form", form_id));
         }
-        if !spell_exists(spell_id) {
+        if spells.spell_id().find(spell_id).is_none() {
             return Err(missing_reference(row, "spell", spell_id));
         }
     }

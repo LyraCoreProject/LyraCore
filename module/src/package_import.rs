@@ -88,7 +88,7 @@ impl Family {
 }
 
 type CheckReferences = fn(&ReducerContext, &[TracedRow]) -> Result<(), String>;
-type AfterWrite = fn(&ReducerContext) -> Result<(), String>;
+type AfterWrite = fn(&ReducerContext, &[TracedRow]) -> Result<(), String>;
 
 /// One Import Family's claim operations, in the order `apply_claims` runs them.
 struct ClaimOps {
@@ -99,7 +99,7 @@ struct ClaimOps {
     check_references: Option<CheckReferences>,
     clear_package_range: fn(&ReducerContext),
     write_row: fn(&ReducerContext, &TracedRow) -> Result<(), String>,
-    /// Runs once after every row is written.
+    /// Runs once after every row is written; an Err refuses the whole apply.
     after_write: Option<AfterWrite>,
 }
 
@@ -191,7 +191,7 @@ fn apply_claims(
         (ops.write_row)(ctx, row)?;
     }
     if let Some(after_write) = ops.after_write {
-        after_write(ctx)?;
+        after_write(ctx, &plan.rows)?;
     }
     Ok(plan.packages)
 }

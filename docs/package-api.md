@@ -752,9 +752,13 @@ identifier must fit 24 bits.
   after.
 - **Form.** A Form's own id space, so a Form, its passives (`game_form_spell`) and its rows in
   spells' Form Sets (`game_spell_form`) are Package-owned exactly when the Form is. A Package may
-  tune an imported Form's columns but not add passives to it. A spell names Forms 1 to 32 through
-  `form_mask` and `form_exclude`, and Package Forms through `game_spell_form` rows. Every Form row
-  must name a spell and Form that exist after the apply.
+  tune an imported Form's columns but not add passives to it. A spell's DBC masks own its Form Set
+  rows for every other Form, so a `game_spell_form` claim always names a Package Form. After its
+  writes, the apply refuses the plan when:
+  - a Form's `spell_id` has no `A_SHAPESHIFT` effect for that Form, or its power rule is unknown;
+  - a passive is not a passive spell, or carries `A_SHAPESHIFT`;
+  - a Package spell's `A_SHAPESHIFT` effect names a Form with no `game_form` row;
+  - a passive or Form Set row names a missing spell or Form.
 - **EventAI.** Covers `game_creature_ai_broadcast_text.id`, `game_creature_ai_summon.id` and
   `game_quest_event_requirement.id`. The family's scripted definitions are not claimable: a
   definition carries a creature's whole rule set as a nested payload, which no claimed column can
