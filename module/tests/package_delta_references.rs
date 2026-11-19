@@ -851,6 +851,21 @@ fn form_insert(spell_id: u32, power_on_entry: u8) -> String {
     )
 }
 
+/// A Package spell like the shapeshift spell, under another id, optionally passive and without its
+/// shapeshift effect.
+fn other_spell_insert(spell_id: u32, attributes: u32, shapeshifts: bool) -> String {
+    let mut claims = shift_insert(PACKAGE_FORM);
+    if !shapeshifts {
+        claims.truncate(claims.find(r#",{"table":"game_spell_effect""#).unwrap());
+    }
+    claims
+        .replace(&PACKAGE_SHIFT.to_string(), &spell_id.to_string())
+        .replace(
+            r#""attributes":{"type":"u32","value":0}"#,
+            &format!(r#""attributes":{{"type":"u32","value":{attributes}}}"#),
+        )
+}
+
 fn form_spell_insert(spell_id: u32) -> String {
     format!(
         r#"{{"table":"game_form_spell","key":{{"form_id":{PACKAGE_FORM},"spell_id":{spell_id}}},"operation":"insert","fields":{{}}}}"#
@@ -892,6 +907,22 @@ fn form_claims_refuse_rows_the_form_tables_cannot_honour() {
         (
             with_form(&form_spell_insert(BATTLE_STANCE)),
             "not a passive",
+        ),
+        (
+            with_form(&format!(
+                "{},{}",
+                other_spell_insert(PACKAGE_SHIFT + 1, 0, false),
+                form_spell_insert(PACKAGE_SHIFT + 1)
+            )),
+            "not a passive",
+        ),
+        (
+            with_form(&format!(
+                "{},{}",
+                other_spell_insert(PACKAGE_SHIFT + 2, 0x40, true),
+                form_spell_insert(PACKAGE_SHIFT + 2)
+            )),
+            "which shapeshifts",
         ),
         (
             [shift_insert(PACKAGE_FORM), form_insert(PACKAGE_SHIFT, 9)].join(","),

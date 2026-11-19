@@ -663,6 +663,35 @@ fn a_form_change_never_strips_an_aura_another_unit_cast() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_learned_passive_a_form_also_grants_survives_leaving_that_form() {
+    const SHARPENED: u32 = 16942;
+    let shard = spawned("forms-learned-passive");
+    insert_spell(
+        &shard,
+        SHARPENED,
+        "Sharpened passive",
+        (0x1D0, 0, 0),
+        &[(A_MOD_COMBAT, 3, i32::from(COMBAT_THREAT), P_COMBAT_FIELD)],
+    );
+    shard.insert_row(
+        "game_form_spell",
+        &[
+            ("id", &packed_form_spell_id(18, SHARPENED)),
+            ("form_id", &18u32),
+            ("spell_id", &SHARPENED),
+        ],
+    );
+    shard.assert_call("debug_learn_spell", &[WARRIOR, &SHARPENED.to_string()]);
+    for stance in [DEFENSIVE_STANCE, BATTLE_STANCE, BERSERKER_STANCE] {
+        enter(&shard, stance);
+        assert!(aura_spells(&shard).contains(&SHARPENED), "stance {stance}");
+    }
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert!(aura_spells(&shard).contains(&SHARPENED));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn removing_a_package_form_takes_its_rows_and_repair_restores_the_unit() {
     let shard = spawned("forms-package-removal");
     apply_package_form(&shard);
