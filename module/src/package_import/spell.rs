@@ -38,6 +38,9 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
             .filter(spell_id)
             .filter(|effect| effect.kind == A_SHAPESHIFT)
     };
+    let enters_form = |spell_id: u32, form_id: u32| {
+        shapeshifts(spell_id).any(|effect| u32::try_from(effect.p0) == Ok(form_id))
+    };
     for row in rows {
         let (form_id, spell_id) = match row.key() {
             PrimaryKey::Form { form_id } => {
@@ -52,8 +55,7 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
                         form.power_on_entry
                     ));
                 }
-                if !shapeshifts(form.spell_id).any(|effect| u32::try_from(effect.p0) == Ok(form_id))
-                {
+                if !enters_form(form.spell_id, form_id) {
                     return Err(format!(
                         "`game_form` row {} names spell {}, which does not enter the Form",
                         row.key(),
@@ -79,9 +81,11 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
                 (form_id, spell_id)
             }
             PrimaryKey::SpellForm { spell_id, form_id } => (form_id, spell_id),
-            PrimaryKey::SpellEffect { spell_id, .. } if is_package_spell_id(spell_id) => {
+            PrimaryKey::SpellEffect { spell_id, .. } => {
                 let effect = ctx.db.game_spell_effect().id().find(row.row_id());
-                if let Some(effect) = effect.filter(|effect| effect.kind == A_SHAPESHIFT) {
+                let package_shapeshift = effect
+                    .filter(|effect| is_package_spell_id(spell_id) && effect.kind == A_SHAPESHIFT);
+                if let Some(effect) = package_shapeshift {
                     let named = u32::try_from(effect.p0).unwrap_or(0);
                     if forms.form_id().find(named).is_none() {
                         return Err(format!(
@@ -91,6 +95,16 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
                             effect.p0
                         ));
                     }
+                }
+                let broken = forms
+                    .iter()
+                    .find(|form| form.spell_id == spell_id && !enters_form(spell_id, form.form_id));
+                if let Some(form) = broken {
+                    return Err(format!(
+                        "`game_spell_effect` row {} leaves spell {spell_id} no longer entering Form {}",
+                        row.key(),
+                        form.form_id
+                    ));
                 }
                 continue;
             }
