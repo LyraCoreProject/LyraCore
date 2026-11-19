@@ -42,7 +42,7 @@ thread_local! {
         const { std::cell::RefCell::new(std::collections::BTreeSet::new()) };
 }
 
-/// Whether this Module instance has not yet warned about the Aura row `aura_id`.
+/// Records a warning for the Aura row `aura_id`; true only the first time in this Module instance.
 fn first_warning_for(aura_id: u64) -> bool {
     WARNED_AURAS.with(|warned| warned.borrow_mut().insert(aura_id))
 }

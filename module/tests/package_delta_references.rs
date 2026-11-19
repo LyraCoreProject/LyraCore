@@ -5,7 +5,7 @@ use lyracore_package_delta::fixture_ids::{
     SCENARIO_QUEST, TEST_WOLF_ENTRY,
 };
 use lyracore_shared::guid;
-use lyracore_shared::spell::taxonomy::{A_SHAPESHIFT, P_FORM};
+use lyracore_shared::spell::taxonomy::{A_FORM_ENTRY_CHANCE, A_SHAPESHIFT, P_FORM};
 use support::Standalone;
 
 const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -963,7 +963,11 @@ fn form_claims_refuse_rows_the_form_tables_cannot_honour() {
             with_form_field(&format!(
                 r#""entry_chance_spell":{{"type":"u32","value":{MISSING_SPELL}}}"#
             )),
-            "references missing spell",
+            "names entry chance spell 4000000, which does not exist",
+        ),
+        (
+            entry_chance_insert(PACKAGE_SHIFT + 3, 0),
+            "without SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED",
         ),
         (shift_insert(PACKAGE_FORM + 1), "no `game_form` row"),
         (
@@ -995,6 +999,10 @@ fn form_claims_refuse_rows_the_form_tables_cannot_honour() {
         ))
         .is_empty());
 
+    let unbound = entry_chance_insert(PACKAGE_SHIFT + 3, ALLOW_WHILE_NOT_SHAPESHIFTED);
+    let accepted = apply(&standalone, "spell", &artifact("example.aspect", &unbound));
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+
     let tuned = battle_stance_effect_update(r#"{"base_points":{"type":"i32","value":5}}"#);
     let accepted = apply(&standalone, "spell", &artifact("example.aspect", &tuned));
     assert!(accepted.status.success(), "{}", refusal_text(&accepted));
@@ -1006,6 +1014,55 @@ fn form_claims_refuse_rows_the_form_tables_cannot_honour() {
         "SELECT * FROM game_form_spell WHERE form_id = {PACKAGE_FORM}"
     ));
     assert_eq!(passives[0]["spell_id"], BATTLE_STANCE_PASSIVE.to_string());
+}
+
+const ALLOW_WHILE_NOT_SHAPESHIFTED: u32 = 0x80000;
+
+/// A passive spell whose one effect is an `A_FORM_ENTRY_CHANCE`.
+fn entry_chance_insert(spell_id: u32, attributes_ex_2: u32) -> String {
+    other_spell_insert(spell_id, 0x40, true)
+        .replace(
+            &format!(r#""kind":{{"type":"u8","value":{A_SHAPESHIFT}}}"#),
+            &format!(r#""kind":{{"type":"u8","value":{A_FORM_ENTRY_CHANCE}}}"#),
+        )
+        .replace(
+            r#""attributes":{"type":"u32","value":64}"#,
+            &format!(
+                r#""attributes":{{"type":"u32","value":64}},"attributes_ex_2":{{"type":"u32","value":{attributes_ex_2}}}"#
+            ),
+        )
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_plan_that_drops_a_forms_entry_chance_spell_is_refused() {
+    const ENTRY_SPELL: u32 = PACKAGE_SHIFT + 4;
+    let mut standalone = Standalone::start("package-delta-form-dropped-entry-spell");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
+    standalone.assert_call("debug_seed_scenario_fixtures", &[]);
+    standalone.assert_call("debug_seed_warrior_forms", &[]);
+
+    let pointed = [
+        other_spell_insert(ENTRY_SPELL, 0, false),
+        format!(
+            r#"{{"table":"game_form","key":{{"form_id":17}},"operation":"update","fields":{{"entry_chance_spell":{{"type":"u32","value":{ENTRY_SPELL}}}}}}}"#
+        ),
+    ]
+    .join(",");
+    let accepted = apply(&standalone, "spell", &artifact("example.aspect", &pointed));
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+
+    let refused = apply(&standalone, "spell", "");
+    assert!(!refused.status.success());
+    assert!(
+        refusal_text(&refused).contains(&format!(
+            "`game_form` row {{form_id=17}} names entry chance spell {ENTRY_SPELL}"
+        )),
+        "{}",
+        refusal_text(&refused)
+    );
 }
 
 fn imported_form_spell_update(form_id: u32, spell_id: u32) -> String {

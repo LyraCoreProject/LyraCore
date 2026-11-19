@@ -416,8 +416,10 @@ leaves it, its passives and its Form Set rows in place.
   pool whatever it is, as vmangos Stealth does, needs a new building block. A nonzero
   `entry_chance_spell` is cast on entry at the percent chance of the unit's best
   `A_FORM_ENTRY_CHANCE` Aura whose spell's Form Set requires the Form, as Furor gives Cat Form
-  energy and the bear Forms rage. Such a spell also allows casting while not shapeshifted, so its
-  passive is not bound to those Forms and is held when the unit enters one.
+  energy and the bear Forms rage. Such a spell must carry
+  `SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED`: otherwise its passive is bound to those Forms, ends
+  when the unit leaves one and is not yet back when the next entry reads the chance. A Package plan
+  that breaks this rule is refused. Such a passive is held, and castable, in any Form.
 - **Combat profile.** `natural_attack_ms` zero keeps the weapon profile. Otherwise the unit sets its
   weapons aside: both hands swing every `natural_attack_ms` for level-based damage, weapon skill is
   the level cap, a druid has no ranged attack power and weapon-bound spell bonuses stop. With

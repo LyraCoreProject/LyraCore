@@ -5,7 +5,7 @@ use lyracore_package_delta::{
     Table as ClaimTable, TracedRow, SPELL_FAMILY,
 };
 use lyracore_shared::form::PowerOnEntry;
-use lyracore_shared::spell::taxonomy::{A_SHAPESHIFT, SPELL_ATTR_PASSIVE};
+use lyracore_shared::spell::taxonomy::{A_FORM_ENTRY_CHANCE, A_SHAPESHIFT, SPELL_ATTR_PASSIVE};
 
 use crate::form::tables::FormSpell;
 use crate::form::{game_form, game_form_spell, Form};
@@ -27,7 +27,8 @@ pub(super) const OPS: ClaimOps = ClaimOps {
     after_write: Some(check_form_rows),
 };
 
-// The melee schedule fires every 100 ms, so a shorter swing could land a fifth of its period late.
+// The melee schedule fires every 100 ms. Each swing waits for the next tick and the next swing
+// counts from there, so the delay accumulates: a swing at this floor lands up to a fifth late.
 const MIN_NATURAL_ATTACK_MS: u32 = 500;
 
 /// Refuses Form rows the written tables cannot honour; docs/package-api.md "Form" lists the rules.
@@ -49,6 +50,28 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
         shapeshifts(spell_id).any(|effect| u32::try_from(effect.p0) == Ok(form_id))
     };
     for row in rows {
+        if let PrimaryKey::Spell { spell_id } | PrimaryKey::SpellEffect { spell_id, .. } = row.key()
+        {
+            let unbound = spells
+                .spell_id()
+                .find(spell_id)
+                .is_none_or(|spell| spell.allowed_unshifted());
+            let chance = ctx
+                .db
+                .game_spell_effect()
+                .by_spell()
+                .filter(spell_id)
+                .any(|effect| effect.kind == A_FORM_ENTRY_CHANCE);
+            if chance && !unbound {
+                return Err(format!(
+                    "`{}` row {} gives spell {spell_id} an `A_FORM_ENTRY_CHANCE` effect without \
+                     SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED, so its passive would end before \
+                     the chance is read",
+                    row.table(),
+                    row.key()
+                ));
+            }
+        }
         let (form_id, spell_id) = match row.key() {
             PrimaryKey::Form { form_id } => {
                 let form = forms
@@ -76,11 +99,6 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
                         row.key(),
                         form.natural_attack_ms
                     ));
-                }
-                if form.entry_chance_spell != 0
-                    && spells.spell_id().find(form.entry_chance_spell).is_none()
-                {
-                    return Err(missing_reference(row, "spell", form.entry_chance_spell));
                 }
                 if !enters_form(form.spell_id, form_id) {
                     return Err(format!(
@@ -141,6 +159,24 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
         if spells.spell_id().find(spell_id).is_none() {
             return Err(missing_reference(row, "spell", spell_id));
         }
+    }
+    let missing_entry_spell = forms.iter().find(|form| {
+        form.entry_chance_spell != 0
+            && (is_package_spell_id(form.entry_chance_spell)
+                || rows.iter().any(|row| {
+                    row.key()
+                        == PrimaryKey::Form {
+                            form_id: form.form_id,
+                        }
+                }))
+            && spells.spell_id().find(form.entry_chance_spell).is_none()
+    });
+    if let Some(form) = missing_entry_spell {
+        return Err(format!(
+            "`game_form` row {{form_id={}}} names entry chance spell {}, which does not exist \
+             after this plan",
+            form.form_id, form.entry_chance_spell
+        ));
     }
     let orphaned = form_spells.iter().find(|&&(spell_id, form_id)| {
         is_package_spell_id(spell_id) && !enters_form(spell_id, form_id)

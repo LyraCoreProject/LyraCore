@@ -82,6 +82,20 @@ fn a_stance_ability_needs_one_of_its_forms() {
 }
 
 #[test]
+fn a_passive_allowed_unshifted_is_held_in_any_form_its_set_does_not_name() {
+    let furor = form_gated(0x91, 0, 0x1D0, 0x80000);
+    for form in [None, in_form(5, true), in_form(3, true), in_form(17, false)] {
+        assert_eq!(furor(form), None, "{form:?}");
+    }
+    let active = form_gated(0x91, 0, 0, 0x80000);
+    assert_eq!(
+        active(in_form(3, true)),
+        Some(FormRefusal::OnlyShapeshift),
+        "a cast spell still needs another of its Forms"
+    );
+}
+
+#[test]
 fn a_form_above_the_dbc_mask_can_gate_a_spell() {
     let spell = spell_with(0, 0);
     let in_form_40 = in_form(40, false);

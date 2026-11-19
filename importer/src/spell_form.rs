@@ -36,8 +36,7 @@ pub(crate) fn grants_form_entry_chance(spell_id: u32) -> bool {
     FORM_ENTRY_CHANCE_SPELLS.contains(&spell_id)
 }
 
-/// The Form mask an entry chance spell adds to its Spell.dbc `Stances`: the Forms its chance names.
-/// The spell carries no mask of its own; its Form Set is how the Module scopes the chance.
+/// The Spell.dbc `Stances` bits an entry chance spell gains: the Forms its chance applies to.
 pub(crate) fn form_entry_chance_mask(spell_id: u32) -> u32 {
     if grants_form_entry_chance(spell_id) {
         FUROR_FORMS

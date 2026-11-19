@@ -114,8 +114,7 @@ effect_kinds! {
     A_SHAPESHIFT => AuraShapeshift = 0xD5,
     // p0 is the power type; the amount is what a power rule that caps on Form entry keeps.
     A_FORM_POWER_RETAINED => AuraFormPowerRetained = 0xD6,
-    // The amount is the percent chance that entering a Form of the spell's Form Set casts the Form's
-    // entry spell (Furor).
+    // Amount: percent chance that entering a Form in the spell's Form Set casts its entry spell.
     A_FORM_ENTRY_CHANCE => AuraFormEntryChance = 0xD7,
     E_SUMMON_GUARDIANS => SummonGuardians = 0x27,
     E_ADD_EXTRA_ATTACKS => AddExtraAttacks = 0x28,
