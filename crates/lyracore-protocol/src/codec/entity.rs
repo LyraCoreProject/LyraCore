@@ -87,6 +87,8 @@ pub struct EntityView {
     pub guild_id: u32,
     pub guild_rank: u32,
     pub spline: Option<CreateSpline>,
+    /// The Auras in the 48 client-visible slots, which vmangos `BuildValuesUpdate` writes into CREATE.
+    pub auras: Vec<update_mask::AuraSlot>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -593,9 +595,12 @@ pub fn build_create_object(
     } else {
         Some(entity.base_attack_time_ms)
     };
-    if let Some(delay) = offhand_attack_time_ms {
+    if offhand_attack_time_ms.is_some() || !entity.auras.is_empty() {
         add_create_fields(&mut message, |mask| {
-            mask.set_u32(127, delay);
+            if let Some(delay) = offhand_attack_time_ms {
+                mask.set_u32(127, delay);
+            }
+            update_mask::write_auras(mask, &entity.auras);
         })?;
     }
     Ok(message)

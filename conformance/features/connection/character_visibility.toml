@@ -111,6 +111,11 @@ function = "a_warrior_without_a_stance_enters_the_world_in_battle_stance"
 rung = "durable_module"
 
 [[tests]]
+path = "crates/lyracore-protocol/src/codec/entity/tests.rs"
+function = "a_create_carries_the_auras_in_their_client_slots"
+rung = "unit"
+
+[[tests]]
 path = "module/src/native/health.rs"
 function = "hidden_health_truncates_to_a_percent_of_one_hundred"
 rung = "unit"
@@ -122,12 +127,6 @@ symbol = "WorldSession::HandlePlayerLoginOpcode"
 
 [real_client]
 status = "unverified"
-
-[[known_gaps]]
-description = "A warrior's Battle Stance Aura is absent from its peer CREATE. World entry now gives a warrior without a stance the Battle Stance Aura from Form data, but the Module sends Auras in a VALUES update after CREATE instead of in the CREATE descriptor. The visibility and taxi fixtures install the warrior Forms, so the CREATE carries form byte 17 in field_138 and the Aura arrives in a later VALUES update; taxi_single_hop records the extra update it adds."
-path = "crates/lyracore-protocol/src/codec/entity.rs"
-symbol = "build_create_object"
-evidence = "Tier 1 two_character_visibility and __opposite_faction at harness 004d8d74: fields_47, _95 and _101 carry 2457, 9 and 1 in the reference and are absent in core, for both recipients. At d9173eca, Object::BuildValuesUpdate writes the Aura slots into CREATE. module/tests/forms.rs a_warrior_without_a_stance_enters_the_world_in_battle_stance shows the Aura in a visible slot after world entry."
 
 [[known_gaps]]
 description = "Character CREATE omits the model bounding radius and combat reach. vmangos takes both from creature_display_info_addon by display id; the importer keeps bounding radius only per creature template and drops combat reach."
@@ -145,7 +144,7 @@ evidence = "Tier 1 two_character_visibility__opposite_faction at harness 004d8d7
 description = "An enemy Character entering a hostile capital is not flagged for PvP and receives no Honorless Target Aura. The Module has no PvP flag; CMSG_TOGGLE_PVP is refused as unavailable."
 path = "module/src/native/unavailable.rs"
 symbol = "CMSG_TOGGLE_PVP"
-evidence = "Tier 1 two_character_visibility__opposite_faction at harness 004d8d74: the watcher sees the orc with field_46 4104 (PLAYER_CONTROLLED | PVP) in the reference and 8 in core, and with Honorless Target 2479 in field_48, flags 0x99 in field_95 and levels 0x0101 in field_101. At d9173eca, Player.cpp Player::UpdateZone calls UpdatePvP(true) for an enemy capital; the Honorless Target Aura comes from DELAYED_CAST_HONORLESS_TARGET, scheduled by a teleport."
+evidence = "Tier 1 two_character_visibility__opposite_faction at harness 004d8d74: the watcher sees the orc with field_46 4104 (PLAYER_CONTROLLED | PVP) in the reference and 8 in core, and with Honorless Target 2479 in field_48, flags 0x99 in field_95 and levels 0x0101 in field_101, where core has 0x09 and 0x01 from Battle Stance alone. At d9173eca, Player.cpp Player::UpdateZone calls UpdatePvP(true) for an enemy capital; the Honorless Target Aura comes from DELAYED_CAST_HONORLESS_TARGET, scheduled by a teleport."
 
 [[known_gaps]]
 description = "UNIT_FIELD_POWER4 differs because vmangos regenerates energy for every Character, so the reference value depends on time since the Character was saved. The data rule records it; no fixed value exists to match."

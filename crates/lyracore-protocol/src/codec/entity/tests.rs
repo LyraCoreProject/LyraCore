@@ -1451,3 +1451,42 @@ fn spell_9329_and_demoralizing_shout_keep_both_attack_power_halves_in_create_and
     assert_eq!(player.unit_attack_power_mods(), Some((16, (-35i16) as u16)));
     assert_eq!(player.unit_ranged_attack_power_mods(), Some((16, 0)));
 }
+
+#[test]
+fn a_create_carries_the_auras_in_their_client_slots() {
+    let entity = EntityView {
+        auras: vec![update_mask::AuraSlot {
+            slot: 0,
+            spell_id: 2457,
+            flags: 9,
+            level: 1,
+        }],
+        ..warrior_entity()
+    };
+    for kind in [CreateKind::Peer, CreateKind::SelfPlayer] {
+        let create = build_create_object(&entity, kind, &[], &[]).unwrap();
+        let mask2 = match create.objects[0].clone() {
+            Object::CreateObject { mask2, .. } | Object::CreateObject2 { mask2, .. } => mask2,
+            _ => panic!("expected a CREATE"),
+        };
+        let values = SMSG_UPDATE_OBJECT {
+            has_transport: 0,
+            objects: vec![Object::Values {
+                guid1: Guid::new(entity.guid),
+                mask1: mask2,
+            }],
+        };
+        let mut bytes = Vec::new();
+        values.write_unencrypted_server(&mut bytes).unwrap();
+        let fields = crate::codec::values_mask::parse_values_updates(&bytes[4..])
+            .remove(0)
+            .fields;
+        // Build 5875 UNIT_FIELD_AURA, UNIT_FIELD_AURAFLAGS and UNIT_FIELD_AURALEVELS.
+        for (index, value) in [(47, 2457), (95, 9), (101, 1)] {
+            assert!(
+                fields.contains(&(index, value)),
+                "{kind:?} field {index}: {fields:?}"
+            );
+        }
+    }
+}

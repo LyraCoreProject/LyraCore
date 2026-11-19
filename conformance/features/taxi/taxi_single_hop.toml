@@ -129,9 +129,3 @@ description = "The b38526fa imported-world audit exposes passenger_update_delive
 path = "module/src/native/world.rs"
 symbol = "enter_character"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/CharacterHandler.cpp"
-
-[[known_gaps]]
-description = "The flight checkpoint receives an extra SMSG_UPDATE_OBJECT VALUES update carrying the Aura fields 47 to 124 for the warrior, which enters the world in Battle Stance. vmangos writes the Aura slots into CREATE, so the reference has no separate update. This is the CREATE gap recorded under character_visibility: the Module sends Auras in a VALUES update after CREATE."
-path = "crates/lyracore-protocol/src/codec/entity.rs"
-symbol = "build_create_object"
-evidence = "Tier 1 taxi_single_hop__late_observer (actor and viewer) and __reconnect (actor) at harness 004d8d74 with the taxi fixture installing the warrior Forms: 78 extra_packet signatures per recipient at flight, opcode 0x00A9, field paths objects/0/values/field_47 through field_124, reason 'packets must align by opcode and mapped subject GUID in stream order'. At d9173eca, Object::BuildValuesUpdate writes the Aura slots into CREATE and Player::_LoadAuras casts Battle Stance 2457 on a warrior without a shapeshift Aura."

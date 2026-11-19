@@ -1,5 +1,5 @@
 use crate::guild::game_guild_member;
-use crate::{game_item_instance, game_item_random_property, game_item_template};
+use crate::{game_aura, game_item_instance, game_item_random_property, game_item_template};
 use crate::{Character, WorldEntity};
 use lyracore_protocol::codec;
 use lyracore_protocol::messages::vanilla::{CharacterGear, InventoryType};
@@ -134,6 +134,19 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
         guild_id: guild.as_ref().map_or(0, |g| g.guild_id),
         guild_rank: guild.as_ref().map_or(0, |g| g.rank_id),
         spline: None,
+        auras: ctx
+            .db
+            .game_aura()
+            .by_target()
+            .filter(e.guid)
+            .filter(|aura| aura.slot < 48)
+            .map(|aura| codec::update_mask::AuraSlot {
+                slot: aura.slot,
+                spell_id: aura.spell_id,
+                flags: aura.flags,
+                level: aura.level,
+            })
+            .collect(),
     }
 }
 
