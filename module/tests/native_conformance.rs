@@ -814,6 +814,184 @@ fn creature_health_is_a_percent_and_a_pets_owner_sees_it_in_full() {
     );
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_auras_stacks_and_charges_reach_viewers_as_its_applications() {
+    use lyracore_shared::spell::taxonomy::{
+        A_MOD_STAT, A_PROC_DAMAGE, P_SCHOOL_MASK, STAT_STA, T_SELF,
+    };
+    const STACKING: u32 = 5_090_420;
+    const CHARGED: u32 = 5_090_421;
+    const PROC_FLAG_TAKEN_MELEE_HIT: u32 = 0x8;
+    const NATURE: u8 = 8;
+
+    let (shard, subject, _) = fixture("native-aura-applications");
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {subject}"
+    ));
+    shard.insert_rows(
+        "game_spell",
+        &[
+            &[
+                ("spell_id", &STACKING),
+                ("name", &"Stacking fixture"),
+                ("school_mask", &1),
+                ("duration_ms", &600_000),
+                ("max_stacks", &5),
+                ("spell_level", &1),
+            ],
+            &[
+                ("spell_id", &CHARGED),
+                ("name", &"Charged fixture"),
+                ("school_mask", &NATURE),
+                ("duration_ms", &600_000),
+                ("spell_level", &1),
+                ("proc_flags", &PROC_FLAG_TAKEN_MELEE_HIT),
+                ("proc_chance", &100),
+                ("proc_charges", &3),
+            ],
+        ],
+    );
+    shard.insert_rows(
+        "game_spell_effect",
+        &[
+            &[
+                ("id", &(STACKING * 4)),
+                ("spell_id", &STACKING),
+                ("kind", &A_MOD_STAT),
+                ("base_points", &10),
+                ("target", &T_SELF),
+                ("p_0", &STAT_STA),
+                ("p_0_kind", &1),
+            ],
+            &[
+                ("id", &(CHARGED * 4)),
+                ("spell_id", &CHARGED),
+                ("kind", &A_PROC_DAMAGE),
+                ("base_points", &10),
+                ("target", &T_SELF),
+                ("p_0", &NATURE),
+                ("p_0_kind", &P_SCHOOL_MASK),
+            ],
+        ],
+    );
+    let mut own = enter(&shard, subject);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[&subject.to_string(), &TEST_WOLF_ENTRY.to_string(), "3"],
+    );
+    let wolf = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY} AND x = 3"
+    ))[0]["guid"]
+        .clone();
+    let cast = |spell: u32| {
+        shard.assert_call(
+            "debug_force_cast",
+            &[&subject.to_string(), &spell.to_string()],
+        )
+    };
+    let slot = |spell: u32| -> u8 {
+        shard.query_rows(&format!(
+            "SELECT slot FROM game_aura WHERE target_guid = {subject} AND spell_id = {spell}"
+        ))[0]["slot"]
+            .parse()
+            .unwrap()
+    };
+
+    applications_after(&mut own, subject, || cast(STACKING));
+    let words = applications_after(&mut own, subject, || cast(STACKING));
+    assert_eq!(
+        applications(&words, slot(STACKING)),
+        1,
+        "vmangos SpellAuraHolder::SetStackAmount sends two stacks as 1"
+    );
+
+    let words = applications_after(&mut own, subject, || cast(CHARGED));
+    assert_eq!(
+        applications(&words, slot(CHARGED)),
+        2,
+        "vmangos SpellAuraHolder::_AddSpellAuraHolder sends three charges as 2"
+    );
+
+    shard.assert_call("debug_advance_virtual_clock", &["50000"]);
+    let words = applications_after(&mut own, subject, || {
+        shard.assert_call("debug_apply_damage", &[&subject.to_string(), "1", &wolf]);
+    });
+    assert_eq!(
+        applications(&words, slot(CHARGED)),
+        1,
+        "vmangos SpellAuraHolder::DropAuraCharge sends two charges left as 1"
+    );
+    assert_eq!(
+        applications(&words, slot(STACKING)),
+        1,
+        "the stacking Aura keeps its count"
+    );
+}
+
+/// The UNIT_FIELD_AURAAPPLICATIONS words of the last VALUES `action` sends to viewers of `unit`.
+fn applications_after(
+    connection: &mut ReducerConnection,
+    unit: u64,
+    action: impl FnOnce(),
+) -> Vec<u32> {
+    use wire_client::decode::Field;
+
+    connection.drain_packets();
+    action();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while std::time::Instant::now() < deadline {
+        let rows = connection.wait_for_packets(Duration::from_secs(1)).unwrap();
+        let mut sent = None;
+        for row in &rows {
+            let Packet(_, (audience, _), (option, opcode), body, _, _, _) =
+                serde_json::from_str(row.get()).unwrap();
+            if audience != 1 || option != 0 || opcode.get() != "169" {
+                continue;
+            }
+            let bytes: Vec<u8> = body
+                .as_bytes()
+                .chunks_exact(2)
+                .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+                .collect();
+            let decoded = wire_client::decode::decode(0x00a9, &bytes).unwrap();
+            let Some(Field::List(objects)) = decoded.fields.get("objects") else {
+                continue;
+            };
+            for object in objects {
+                let Field::Object(object) = object else {
+                    continue;
+                };
+                let (Some(&Field::Guid(guid)), Some(Field::Object(values))) =
+                    (object.get("guid"), object.get("values"))
+                else {
+                    continue;
+                };
+                let words: Option<Vec<u32>> = (113..125)
+                    .map(|index| match values.get(&format!("field_{index}")) {
+                        Some(Field::Unsigned(value)) => Some(u32::try_from(*value).unwrap()),
+                        _ => None,
+                    })
+                    .collect();
+                if guid == unit && words.is_some() {
+                    sent = words;
+                }
+            }
+        }
+        if let Some(words) = sent {
+            return words;
+        }
+    }
+    panic!("no Aura VALUES reached the viewers of {unit}");
+}
+
+// Build 5875 packs one byte a slot, four slots a word.
+fn applications(words: &[u32], slot: u8) -> u8 {
+    (words[usize::from(slot / 4)] >> (slot % 4 * 8)) as u8
+}
+
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum HealthDelivery {
     Connection(u128),

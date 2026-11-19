@@ -139,13 +139,13 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
         guild_id: guild.as_ref().map_or(0, |g| g.guild_id),
         guild_rank: guild.as_ref().map_or(0, |g| g.rank_id),
         spline: None,
-        auras: ctx
-            .db
-            .game_aura()
-            .by_target()
-            .filter(e.guid)
-            .filter_map(|aura| super::aura::client_slot(&aura))
-            .collect(),
+        auras: super::aura::client_slots(
+            &ctx.db
+                .game_aura()
+                .by_target()
+                .filter(e.guid)
+                .collect::<Vec<_>>(),
+        ),
     }
 }
 
