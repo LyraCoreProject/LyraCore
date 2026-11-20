@@ -46,6 +46,9 @@ fn source_spell(row: &Row) -> Result<Spell> {
 
     let spell = Spell {
         npc_guardian_entry: npc_guardian_entry(row)?,
+        follow_up_spell: lyracore_importer::spell_overrides::script_follow_up(
+            &row.optional_text("script_name")?.unwrap_or_default(),
+        ),
         icon_id: icon,
         active_icon_id: row.number("activeIconId")?,
         single_target_key: lyracore_shared::spell_custom::single_target_key(family, icon, category),
@@ -321,10 +324,11 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
                 spell.custom_flags & lyracore_shared::spell_custom::UNSUPPORTED
             ));
         }
-        if !row
-            .optional_text("script_name")?
-            .unwrap_or_default()
-            .is_empty()
+        if spell.follow_up_spell.is_none()
+            && !row
+                .optional_text("script_name")?
+                .unwrap_or_default()
+                .is_empty()
         {
             scripts.push(spell.id);
         }
@@ -399,6 +403,26 @@ pub(crate) fn guardian_fixture() -> crate::world_source::WorldSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bubble_script_names_forbearance_as_its_follow_up_and_is_no_script_finding() {
+        let source = fixture();
+        source
+            .fixture_connection()
+            .execute_batch("UPDATE spell_template SET script_name='spell_paladin_bubble'")
+            .unwrap();
+        let (spells, manifest) = read(&source).unwrap();
+        assert_eq!(spells[0].follow_up_spell, Some(25771));
+        assert_eq!(
+            manifest["findings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|finding| finding["code"] == "spells.script")
+                .unwrap()["source_ids"],
+            serde_json::json!([])
+        );
+    }
 
     #[test]
     fn guardian_mapping_refuses_player_level_radius_and_script_variants() {

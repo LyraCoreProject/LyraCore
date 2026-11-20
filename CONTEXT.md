@@ -23,7 +23,7 @@ entry in both files.
 
 **E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Equivalence Rule](#conformance) · [Escrow](#retired-terms) · [Event Binding](#packages) · [Extra Attack](#procs)
 
-**F** [Fake](CORE_TERMS.md#fake) · [Feature Ledger](#conformance) · [Fee Hold](#retired-terms) · [Fixed Rout](#creature-ai) · [Fixture Verb](#conformance) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Forced Death](#creature-ai) · [Form](#forms) · [Form Projection](#forms) · [Form Set](#forms) · [Fuel Budget](#runtime-scripts)
+**F** [Fake](CORE_TERMS.md#fake) · [Feature Ledger](#conformance) · [Fee Hold](#retired-terms) · [Fixed Rout](#creature-ai) · [Fixture Verb](#conformance) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Follow-up Cast](#procs) · [Forced Death](#creature-ai) · [Form](#forms) · [Form Projection](#forms) · [Form Set](#forms) · [Fuel Budget](#runtime-scripts)
 
 **G** [GameObject Collider](#gameobject-collision) · [Gate](CORE_TERMS.md#gate) · [Gateway](#retired-terms) · [Gateway Verb](#retired-terms) · [Git Package Source](#packages) · [GM level](#accounts-characters-and-sessions) · [Golden Trace](#conformance) · [Group](#groups) · [Group Audience](#groups) · [Group Broadcast](#groups) · [Group Intent](#retired-terms) · [Guardian](#creature-ai) · [GUID Range](#accounts-characters-and-sessions) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
 
@@ -637,10 +637,17 @@ _Avoid_: proc owner, wearer
 The unit on the other side of the hit that fired a Proc: the victim of a dealt event, the attacker of a taken one.
 _Avoid_: other unit, opponent
 
+**Follow-up Cast**:
+The Triggered Cast a spell's caster makes at each unit the spell hits, after it lands, from
+`game_spell_follow_up`, as a vmangos spell script's `OnAfterHit` does. Divine Shield's Forbearance
+is one. It makes no Follow-up Cast of its own.
+_Avoid_: linked spell, after-hit cast
+
 **Triggered Cast**:
-A cast started by a Proc, a periodic aura or another triggered effect. It checks faction targeting
-and target life, then runs the cast core's effect loop without cast-start position, range, line of
-sight, power cost, cooldown or stealth-break checks. Its own hits fire no further Procs.
+A cast started by a Proc, a periodic aura, a spell's hit (a Follow-up Cast) or another triggered
+effect. It checks faction targeting and target life, then runs the cast core's effect loop without
+cast-start position, range, line of sight, power cost, cooldown or stealth-break checks. Its own
+hits fire no further Procs.
 _Avoid_: proc cast, internal cast, free cast
 
 **Chance on Hit**:

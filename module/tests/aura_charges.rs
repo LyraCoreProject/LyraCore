@@ -8,7 +8,7 @@ use lyracore_shared::spell::taxonomy::{
     CAST_FLAG_IGNORE_RESISTANCES, CAST_FLAG_MAGIC_HIT, COMBAT_ATTACK_POWER, COMBAT_CRIT,
     COMBAT_SPELL_CRIT, E_DAMAGE, E_INTERRUPT, M_FEAR, M_POLY, M_STUN, P_COMBAT_FIELD, P_MECHANIC,
     P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST, SPEED_MOVE,
-    SPEED_SWING, T_SELF, T_TARGET_ANY, T_TARGET_ENEMY,
+    SPEED_SWING, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
@@ -95,6 +95,14 @@ const SNARE_FIXTURE: u32 = 5_091_131;
 const RAKE_FIXTURE: u32 = 5_091_132;
 const REND_FIXTURE: u32 = 5_091_133;
 const WOLF_CAST: u32 = 5_091_134;
+const FORBEARANCE: u32 = 5_091_135;
+const DIVINE_SHIELD: u32 = 5_091_136;
+const BLESSING_OF_PROTECTION: u32 = 5_091_137;
+// vmangos SharedDefines.h MECHANIC_INVULNERABILITY.
+const MECHANIC_INVULNERABILITY: u8 = 25;
+// The A_IMMUNITY p1 bit for SPELL_ATTR_EX_IMMUNITY_TO_HOSTILE_AND_FRIENDLY_EFFECTS.
+const IMMUNE_TO_HOSTILE_AND_FRIENDLY: i32 = 0x100;
+const BUBBLE_COOLDOWN_MS: u32 = 300_000;
 const FROST: u8 = 0x10;
 const SLOW_POINTS: i32 = -50;
 const BLEED_POINTS: i32 = 3;
@@ -958,6 +966,73 @@ fn an_interrupt_stops_a_silence_immune_creature_without_locking_its_school() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn divine_shield_applies_forbearance_to_its_caster() {
+    let mut standalone = Standalone::start("aura-charges-forbearance");
+    stage(&mut standalone);
+    bubble(&standalone, DIVINE_SHIELD, T_SELF);
+
+    cast(&standalone, DIVINE_SHIELD, PLAYER);
+    assert!(stacks(&standalone, DIVINE_SHIELD).is_some());
+    assert!(
+        stacks(&standalone, FORBEARANCE).is_some(),
+        "vmangos PaladinBubbleScript casts Forbearance at the unit Divine Shield hit"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_second_divine_shield_is_refused_while_forbearance_lasts() {
+    let mut standalone = Standalone::start("aura-charges-forbearance-second-bubble");
+    stage(&mut standalone);
+    bubble(&standalone, DIVINE_SHIELD, T_SELF);
+    cast(&standalone, DIVINE_SHIELD, PLAYER);
+    standalone.assert_sql(&format!(
+        "DELETE FROM game_aura WHERE spell_id = {DIVINE_SHIELD}"
+    ));
+
+    assert_bubble_refused(&standalone, DIVINE_SHIELD, PLAYER);
+    assert_eq!(stacks(&standalone, DIVINE_SHIELD), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn blessing_of_protection_on_an_ally_under_forbearance_is_refused_before_its_cooldown_starts() {
+    let mut standalone = Standalone::start("aura-charges-forbearance-ally");
+    stage(&mut standalone);
+    let ally = spawn_ally(&standalone);
+    bubble(&standalone, BLESSING_OF_PROTECTION, T_TARGET_ALLY);
+    cast(&standalone, BLESSING_OF_PROTECTION, ally);
+    assert!(
+        aura_column(&standalone, ally, FORBEARANCE, "stacks").is_some(),
+        "vmangos casts Forbearance at the ally that Blessing of Protection hit"
+    );
+    standalone.assert_sql(&format!(
+        "DELETE FROM game_aura WHERE spell_id = {BLESSING_OF_PROTECTION}"
+    ));
+    set_spell(
+        &standalone,
+        BLESSING_OF_PROTECTION,
+        &format!("cooldown_ms = {BUBBLE_COOLDOWN_MS}"),
+    );
+
+    assert_bubble_refused(&standalone, BLESSING_OF_PROTECTION, ally);
+    assert!(
+        standalone
+            .query_rows(&format!(
+                "SELECT id FROM game_spell_cd WHERE caster_guid = {PLAYER} \
+                 AND spell_id = {BLESSING_OF_PROTECTION}"
+            ))
+            .is_empty(),
+        "the refusal comes before the cooldown starts"
+    );
+    assert_eq!(
+        aura_column(&standalone, ally, BLESSING_OF_PROTECTION, "stacks"),
+        None
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_stun_immune_template_refuses_a_helpful_spell_of_its_mechanic_when_the_cast_starts() {
     let mut standalone = Standalone::start("aura-charges-template-helpful");
     let caster = stage(&mut standalone);
@@ -1518,6 +1593,101 @@ fn bleed_period(standalone: &Standalone, spell_id: u32) {
     standalone.assert_sql(&format!(
         "UPDATE game_spell_effect SET period_ms = {BLEED_PERIOD_MS} WHERE spell_id = {spell_id}"
     ));
+}
+
+fn bubble(standalone: &Standalone, spell_id: u32, target: u8) {
+    aura_spell(
+        standalone,
+        Charged {
+            spell_id: FORBEARANCE,
+            school_mask: PHYSICAL,
+            target: T_TARGET_ALLY,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(
+            A_IMMUNITY,
+            0,
+            i32::from(MECHANIC_INVULNERABILITY),
+            P_MECHANIC,
+        )],
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET p_1 = {IMMUNE_TO_HOSTILE_AND_FRIENDLY} \
+         WHERE spell_id = {FORBEARANCE}"
+    ));
+    set_spell(
+        standalone,
+        FORBEARANCE,
+        &format!("attributes = {ATTR_NO_IMMUNITIES}, mechanic = {MECHANIC_INVULNERABILITY}"),
+    );
+    aura_spell(
+        standalone,
+        Charged {
+            spell_id,
+            school_mask: PHYSICAL,
+            target,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_MOD_RESISTANCE, 10, i32::from(RESIST_ARMOR), P_SCHOOL_MASK)],
+    );
+    set_spell(
+        standalone,
+        spell_id,
+        &format!("is_negative = false, mechanic = {MECHANIC_INVULNERABILITY}"),
+    );
+    standalone.insert_row(
+        "game_spell_follow_up",
+        &[
+            ("spell_id", &spell_id),
+            ("follow_up_spell_id", &FORBEARANCE),
+        ],
+    );
+}
+
+fn assert_bubble_refused(standalone: &Standalone, spell_id: u32, target: u64) {
+    let output = standalone.call(
+        "debug_begin_cast",
+        &[
+            &PLAYER.to_string(),
+            &spell_id.to_string(),
+            &target.to_string(),
+        ],
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success() && text.contains("is immune to its mechanic"),
+        "vmangos Spell::CheckCast refuses the bubble with TARGET_AURASTATE under Forbearance: {text}"
+    );
+}
+
+fn spawn_ally(standalone: &Standalone) -> u64 {
+    standalone.assert_call(
+        "debug_create_package_character",
+        &[r#""forbearance-test""#, r#""Ally""#, "1", "2"],
+    );
+    let ally: u64 = standalone
+        .query_rows("SELECT guid FROM game_character WHERE name = 'Ally'")
+        .remove(0)["guid"]
+        .parse()
+        .unwrap();
+    standalone.assert_call("debug_spawn_player_entity", &[&ally.to_string()]);
+    let player = standalone
+        .query_rows(&format!(
+            "SELECT x, y, z, map_id, instance_id FROM game_world_entity WHERE guid = {PLAYER}"
+        ))
+        .remove(0);
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = {}, y = {}, z = {}, map_id = {}, instance_id = {} \
+         WHERE guid = {ally}",
+        player["x"], player["y"], player["z"], player["map_id"], player["instance_id"]
+    ));
+    ally
 }
 
 fn interrupt_spell(standalone: &Standalone, spell_id: u32) {

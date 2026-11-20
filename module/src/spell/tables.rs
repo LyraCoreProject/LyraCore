@@ -397,6 +397,14 @@ pub struct SpellReagent {
     pub count: u32,
 }
 
+/// The spell a caster casts as a Follow-up Cast at each unit its spell hits.
+#[table(accessor = game_spell_follow_up)]
+pub struct SpellFollowUp {
+    #[primary_key]
+    pub spell_id: u32,
+    pub follow_up_spell_id: u32,
+}
+
 #[table(accessor = game_spell_proc_event)]
 pub struct SpellProcEvent {
     #[primary_key]

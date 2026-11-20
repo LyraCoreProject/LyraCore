@@ -1193,6 +1193,22 @@ which is how Fear Ward is used up: it fires on any spell whose header mechanic i
 the result. A cast an aura started runs no such pass, a harmful item cast runs it, and a helpful spell raises no
 proc event. A finisher refused whole keeps its combo points.
 
+### Follow-up casts
+
+`game_spell_follow_up` names, for a spell, the spell its caster casts as a Follow-up Cast at each
+unit the spell hits, after the spell's `SMSG_SPELL_GO`, as a vmangos spell script's `OnAfterHit`
+does. A unit the hit roll missed, or that refused every effect, gets none. A Follow-up Cast is a
+Triggered Cast and makes no Follow-up Cast of its own, and a spell never follows up with itself.
+A queued next-swing spell makes none when it is queued.
+
+The spell import writes the rows from vmangos `spell_template.script_name`, by the script names in
+`SCRIPT_FOLLOW_UPS` (`importer/src/spell_overrides.rs`); such a spell is no `spells.script`
+finding. `spell_paladin_bubble` casts Forbearance (25771) after Divine Shield (642, 1020), Divine
+Protection (498, 5573) and Blessing of Protection (1022, 5599, 10278), so a second bubble on that
+unit is refused at the cast-start gate with `SPELL_FAILED_TARGET_AURASTATE`: Forbearance is an
+aura 77 immunity to mechanic 25 whose `p1` carries bit 0x100. Lay on Hands has no mechanic and no
+script at build 5875, so it neither applies Forbearance nor is refused by it.
+
 ### Regeneration
 
 `A_MOD_POWER_REGEN` (0xC1) stores mana per five seconds. Each Character keeps a two-second

@@ -542,6 +542,14 @@ copy, so it needs no repair, respawn or `debug_repair_after_publish` step.
 Package Deltas may claim the column; one that omits it keeps the default. The Operator Content API
 does not carry it, so an Operator update keeps the template's mask.
 
+### Follow-up Cast migration
+
+`game_spell_follow_up` is a new table and starts empty, so no spell makes a Follow-up Cast after the
+publish. Reimport the `spell` family to fill it; then Divine Shield, Divine Protection and Blessing
+of Protection apply Forbearance and a second bubble on that unit is refused. Forbearance (25771) is
+already imported. No existing row changes, so the publish needs no repair, and a unit that is
+already shielded gets no Forbearance until its next bubble.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each
