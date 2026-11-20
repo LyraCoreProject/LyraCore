@@ -612,7 +612,7 @@ fn run_spell_effects(
     }
 }
 
-// vmangos casts it after SMSG_SPELL_GO, as a spell script's OnAfterHit does: docs/schema.md#follow-up-casts.
+// Read docs/schema.md#follow-up-casts for its timing and its loop limit.
 fn cast_follow_up(
     ctx: &ReducerContext,
     spell_id: u32,
@@ -620,13 +620,7 @@ fn cast_follow_up(
     level: u8,
     hit_targets: &[u64],
 ) {
-    let Some(follow_up) = ctx
-        .db
-        .game_spell_follow_up()
-        .spell_id()
-        .find(spell_id)
-        .filter(|row| row.follow_up_spell_id != spell_id)
-    else {
+    let Some(follow_up) = ctx.db.game_spell_follow_up().spell_id().find(spell_id) else {
         return;
     };
     let Ok(spell) = LoadedSpell::load(ctx, follow_up.follow_up_spell_id) else {

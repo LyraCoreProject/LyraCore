@@ -2636,11 +2636,24 @@ mod tests {
             .chain(&[FORBEARANCE])
             .copied()
             .collect();
+        let source = crate::world_source::WorldSource::open(Path::new(
+            &std::env::var("LYRACORE_VMANGOS_SQLITE").expect("set LYRACORE_VMANGOS_SQLITE"),
+        ))
+        .unwrap();
+        let (snapshot, _) = crate::vmangos_spell::read(&source).unwrap();
+        assert_eq!(
+            snapshot
+                .iter()
+                .filter(|spell| spell.follow_up_spell.is_some())
+                .map(|spell| (spell.id, spell.follow_up_spell.unwrap()))
+                .collect::<BTreeMap<_, _>>(),
+            bubbles.iter().map(|&id| (id, FORBEARANCE)).collect(),
+            "vmangos binds spell_paladin_bubble to these seven spells only"
+        );
         let (rows, _, _) = build_spell_rows(Path::new(&dir), &ids, &[]).unwrap();
         assert_eq!(
             rows.follow_ups.iter().copied().collect::<BTreeMap<_, _>>(),
-            bubbles.iter().map(|&id| (id, FORBEARANCE)).collect(),
-            "vmangos binds spell_paladin_bubble to these seven spells only"
+            bubbles.iter().map(|&id| (id, FORBEARANCE)).collect()
         );
         let header = |id: u32| rows.headers.iter().find(|s| s.spell_id == id).unwrap();
         for id in bubbles {

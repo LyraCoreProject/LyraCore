@@ -638,8 +638,8 @@ The unit on the other side of the hit that fired a Proc: the victim of a dealt e
 _Avoid_: other unit, opponent
 
 **Follow-up Cast**:
-The Triggered Cast a spell's caster makes at each unit the spell hits, after it lands, from
-`game_spell_follow_up`, as a vmangos spell script's `OnAfterHit` does. Divine Shield's Forbearance
+The Triggered Cast a spell's caster makes at each unit the spell hits, when the spell resolves,
+from `game_spell_follow_up`, as a vmangos spell script's `OnAfterHit` does. Divine Shield's Forbearance
 is one. It makes no Follow-up Cast of its own.
 _Avoid_: linked spell, after-hit cast
 

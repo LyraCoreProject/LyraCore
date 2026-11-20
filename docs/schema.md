@@ -1196,10 +1196,16 @@ proc event. A finisher refused whole keeps its combo points.
 ### Follow-up casts
 
 `game_spell_follow_up` names, for a spell, the spell its caster casts as a Follow-up Cast at each
-unit the spell hits, after the spell's `SMSG_SPELL_GO`, as a vmangos spell script's `OnAfterHit`
-does. A unit the hit roll missed, or that refused every effect, gets none. A Follow-up Cast is a
-Triggered Cast and makes no Follow-up Cast of its own, and a spell never follows up with itself.
-A queued next-swing spell makes none when it is queued.
+unit the spell hits, as a vmangos spell script's `OnAfterHit` does. LyraCore casts it when the
+spell resolves, after its `SMSG_SPELL_GO`. vmangos casts it when the spell reaches the unit, so a
+follow-up of a spell with travel time comes early here; no follow-up spell has travel time. A unit
+the hit roll missed, or that refused every effect, gets none. A queued next-swing spell makes none
+when it is queued.
+
+A Follow-up Cast is a Triggered Cast and makes no Follow-up Cast of its own. That limit is one
+level deep: a trigger effect or a Proc that a Follow-up Cast starts is an ordinary Triggered Cast
+and can make Follow-up Casts. The import writes no such chain and Packages cannot claim the table,
+so current data cannot loop.
 
 The spell import writes the rows from vmangos `spell_template.script_name`, by the script names in
 `SCRIPT_FOLLOW_UPS` (`importer/src/spell_overrides.rs`); such a spell is no `spells.script`

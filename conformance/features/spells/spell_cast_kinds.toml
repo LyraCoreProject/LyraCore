@@ -91,6 +91,12 @@ symbol = "template_findings"
 evidence = "Source reading, not measured. At d9173eca, Creature.cpp reads CreatureImmunityFlags through HasImmunityFlag, and Creature::IsImmuneToAoe refuses area effects; 457 creature_template entries in the vmangos 4641790 snapshot set the column. The importer reports it as creatures.template-behavior."
 
 [[known_gaps]]
+description = "A Follow-up Cast fires when its spell resolves, not when a spell with travel time reaches the unit; no current follow-up spell has travel time."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "cast_follow_up"
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp runs a spell script's OnAfterHit from DoAllEffectOnTarget, at impact for a spell with speed; run_spell_effects calls cast_follow_up for every hit target before a scheduled impact lands."
+
+[[known_gaps]]
 description = "The immune proc pass simplifies vmangos Spell::m_canTrigger: it skips only a cast an Aura started, and runs for a harmful item spell. Missing are the SPELL_ATTR_EX3_NOT_A_PROC and family exceptions (Arcane Missiles, Blizzard, Rain of Fire, Hellfire, the trap effects, Seal of Command), the SUPPRESS_CASTER_PROCS and SUPPRESS_TARGET_PROCS pair, and the rule that a helpful item spell cannot trigger."
 path = "module/src/spell/cast/resolve.rs"
 symbol = "CastOrigin"

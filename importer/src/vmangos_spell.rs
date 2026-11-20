@@ -24,7 +24,7 @@ fn word(row: &Row, column: &str) -> Result<u32> {
     Ok(value as u32)
 }
 
-fn source_spell(row: &Row) -> Result<Spell> {
+fn source_spell(row: &Row, script_name: &str) -> Result<Spell> {
     let family: u8 = row.number("spellFamilyName")?;
     let icon: u32 = row.number("spellIconId")?;
     let family_flags: u64 = row.number("spellFamilyFlags")?;
@@ -46,9 +46,7 @@ fn source_spell(row: &Row) -> Result<Spell> {
 
     let spell = Spell {
         npc_guardian_entry: npc_guardian_entry(row)?,
-        follow_up_spell: lyracore_importer::spell_overrides::script_follow_up(
-            &row.optional_text("script_name")?.unwrap_or_default(),
-        ),
+        follow_up_spell: lyracore_importer::spell_overrides::script_follow_up(script_name),
         icon_id: icon,
         active_icon_id: row.number("activeIconId")?,
         single_target_key: lyracore_shared::spell_custom::single_target_key(family, icon, category),
@@ -308,7 +306,8 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
         "targets",
     ];
     for row in source.columns("spell_template", &columns)?.iter() {
-        let spell = source_spell(row)?;
+        let script_name = row.optional_text("script_name")?.unwrap_or_default();
+        let spell = source_spell(row, script_name)?;
         if spell.id == 5200 && spell.npc_guardian_entry.is_none() {
             guardian_shapes.push(spell.id);
         }
@@ -324,12 +323,7 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
                 spell.custom_flags & lyracore_shared::spell_custom::UNSUPPORTED
             ));
         }
-        if spell.follow_up_spell.is_none()
-            && !row
-                .optional_text("script_name")?
-                .unwrap_or_default()
-                .is_empty()
-        {
+        if spell.follow_up_spell.is_none() && !script_name.is_empty() {
             scripts.push(spell.id);
         }
         for (index, value) in spell.effect_item_type.iter().enumerate() {
