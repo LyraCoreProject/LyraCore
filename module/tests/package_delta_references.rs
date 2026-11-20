@@ -1190,9 +1190,10 @@ fn a_package_follow_up_on_an_imported_spell_casts_its_package_spell() {
         ]
         .join(","),
     );
-    standalone.assert_sql(&format!(
-        "INSERT INTO game_spell_follow_up (spell_id,follow_up_spell_id) VALUES ({SEEDED_RENEW},133)"
-    ));
+    standalone.insert_row(
+        "game_spell_follow_up",
+        &[("spell_id", &SEEDED_RENEW), ("follow_up_spell_id", &133u32)],
+    );
     let collides = apply(&standalone, "spell", &plan);
     assert!(
         !collides.status.success() && refusal_text(&collides).contains("did not insert"),
