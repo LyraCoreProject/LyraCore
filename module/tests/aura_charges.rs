@@ -99,6 +99,7 @@ const FROST: u8 = 0x10;
 const SLOW_POINTS: i32 = -50;
 const BLEED_POINTS: i32 = 3;
 const BLEED_PERIOD_MS: u32 = 3000;
+const SPELL_ROLL_SEED: u64 = 1;
 const MISS_NONE: &str = "0";
 const MISS_IMMUNE: &str = "7";
 const MISS_IMMUNE2: &str = "8";
@@ -804,26 +805,7 @@ fn frostbolt_deals_its_damage_to_a_snare_immune_creature_without_its_slow() {
 fn a_snare_whose_only_effect_is_dropped_reports_immune2() {
     let mut standalone = Standalone::start("aura-charges-snare-only-immune2");
     let wolf = stage(&mut standalone);
-    aura_spell(
-        &standalone,
-        Charged {
-            spell_id: SNARE_FIXTURE,
-            school_mask: FROST,
-            target: T_TARGET_ENEMY,
-            proc_flags: 0,
-            charges: 0,
-        },
-        &[(
-            A_MOD_SPEED,
-            SLOW_POINTS,
-            i32::from(SPEED_MOVE),
-            P_SPEED_KIND,
-        )],
-    );
-    standalone.assert_sql(&format!(
-        "UPDATE game_spell_effect SET effect_mechanic = {MECHANIC_SNARE} \
-         WHERE spell_id = {SNARE_FIXTURE}"
-    ));
+    snare_only_spell(&standalone);
     set_wolf_mechanic_immune_mask(&standalone, 1 << (MECHANIC_SNARE - 1));
 
     assert_eq!(
@@ -838,8 +820,46 @@ fn a_snare_whose_only_effect_is_dropped_reports_immune2() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_bleed_immune_creature_takes_rakes_damage_without_its_bleed_and_refuses_rend() {
-    let mut standalone = Standalone::start("aura-charges-bleed-immune");
+fn a_snare_whose_only_effect_is_dropped_reports_immune2_when_its_hit_roll_misses() {
+    let mut standalone = Standalone::start("aura-charges-snare-immune2-on-miss");
+    let wolf = stage(&mut standalone);
+    snare_only_spell(&standalone);
+    set_spell(
+        &standalone,
+        SNARE_FIXTURE,
+        &format!("cast_flags = {CAST_FLAG_MAGIC_HIT}"),
+    );
+    set_level(&standalone, wolf, OUT_OF_REACH_LEVEL);
+    standalone.insert_row(
+        "game_conformance_spell_random",
+        &[
+            ("character_guid", &PLAYER),
+            ("target_guid", &wolf),
+            ("state", &SPELL_ROLL_SEED),
+        ],
+    );
+
+    let missed = cast_miss_code(&standalone, PLAYER, SNARE_FIXTURE, wolf);
+    assert!(
+        missed != MISS_NONE && missed != MISS_IMMUNE2,
+        "the seeded roll misses a target with no immunity: {missed}"
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_conformance_spell_random SET state = {SPELL_ROLL_SEED} \
+         WHERE character_guid = {PLAYER}"
+    ));
+    set_wolf_mechanic_immune_mask(&standalone, 1 << (MECHANIC_SNARE - 1));
+    assert_eq!(
+        cast_miss_code(&standalone, PLAYER, SNARE_FIXTURE, wolf),
+        MISS_IMMUNE2,
+        "vmangos WriteSpellGoTargets reports Immune2 for an empty effect mask, whatever the roll"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn rake_deals_its_damage_to_a_bleed_immune_creature_without_its_bleed() {
+    let mut standalone = Standalone::start("aura-charges-rake-bleed-immune");
     let wolf = stage(&mut standalone);
     bolt(&standalone, RAKE_FIXTURE, PHYSICAL, 0);
     set_spell(
@@ -854,28 +874,7 @@ fn a_bleed_immune_creature_takes_rakes_damage_without_its_bleed_and_refuses_rend
         (0, P_NONE),
         MECHANIC_BLEED,
     );
-    standalone.assert_sql(&format!(
-        "UPDATE game_spell_effect SET period_ms = {BLEED_PERIOD_MS} WHERE spell_id = {RAKE_FIXTURE}"
-    ));
-    aura_spell(
-        &standalone,
-        Charged {
-            spell_id: REND_FIXTURE,
-            school_mask: PHYSICAL,
-            target: T_TARGET_ENEMY,
-            proc_flags: 0,
-            charges: 0,
-        },
-        &[(A_PERIODIC_DAMAGE, BLEED_POINTS, 0, P_NONE)],
-    );
-    standalone.assert_sql(&format!(
-        "UPDATE game_spell_effect SET period_ms = {BLEED_PERIOD_MS} WHERE spell_id = {REND_FIXTURE}"
-    ));
-    set_spell(
-        &standalone,
-        REND_FIXTURE,
-        &format!("mechanic = {MECHANIC_BLEED}"),
-    );
+    bleed_period(&standalone, RAKE_FIXTURE);
     set_wolf_mechanic_immune_mask(&standalone, 1 << (MECHANIC_BLEED - 1));
 
     let go = go_event(&standalone, PLAYER, RAKE_FIXTURE, wolf);
@@ -890,7 +889,32 @@ fn a_bleed_immune_creature_takes_rakes_damage_without_its_bleed_and_refuses_rend
         None,
         "vmangos drops Rake's bleed, an effect of mechanic 15"
     );
-    advance(&standalone);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn rend_is_refused_whole_by_a_bleed_immune_creature() {
+    let mut standalone = Standalone::start("aura-charges-rend-bleed-immune");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: REND_FIXTURE,
+            school_mask: PHYSICAL,
+            target: T_TARGET_ENEMY,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_PERIODIC_DAMAGE, BLEED_POINTS, 0, P_NONE)],
+    );
+    bleed_period(&standalone, REND_FIXTURE);
+    set_spell(
+        &standalone,
+        REND_FIXTURE,
+        &format!("mechanic = {MECHANIC_BLEED}"),
+    );
+    set_wolf_mechanic_immune_mask(&standalone, 1 << (MECHANIC_BLEED - 1));
+
     assert_eq!(
         cast_miss_code(&standalone, PLAYER, REND_FIXTURE, wolf),
         MISS_IMMUNE,
@@ -1465,6 +1489,35 @@ fn mechanic_effect(
             ("effect_mechanic", &mechanic),
         ],
     );
+}
+
+fn snare_only_spell(standalone: &Standalone) {
+    aura_spell(
+        standalone,
+        Charged {
+            spell_id: SNARE_FIXTURE,
+            school_mask: FROST,
+            target: T_TARGET_ENEMY,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(
+            A_MOD_SPEED,
+            SLOW_POINTS,
+            i32::from(SPEED_MOVE),
+            P_SPEED_KIND,
+        )],
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET effect_mechanic = {MECHANIC_SNARE} \
+         WHERE spell_id = {SNARE_FIXTURE}"
+    ));
+}
+
+fn bleed_period(standalone: &Standalone, spell_id: u32) {
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET period_ms = {BLEED_PERIOD_MS} WHERE spell_id = {spell_id}"
+    ));
 }
 
 fn interrupt_spell(standalone: &Standalone, spell_id: u32) {

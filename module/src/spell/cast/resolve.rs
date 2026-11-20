@@ -334,12 +334,12 @@ fn grant_crafted_item(
     }
 }
 
-/// How a cast's effects fared against mechanic immunity, by target.
+/// Each target's mechanic immunity, decided whatever its hit roll, as vmangos builds its effect mask.
 #[derive(Default)]
 struct ImmuneRefusals {
     header: std::collections::HashMap<u64, bool>,
     refused: std::collections::BTreeSet<u64>,
-    landed: std::collections::BTreeSet<u64>,
+    exposed: std::collections::BTreeSet<u64>,
 }
 
 impl ImmuneRefusals {
@@ -361,7 +361,7 @@ impl ImmuneRefusals {
         if immune {
             self.refused.insert(target_guid);
         } else {
-            self.landed.insert(target_guid);
+            self.exposed.insert(target_guid);
         }
     }
 
@@ -371,7 +371,7 @@ impl ImmuneRefusals {
 
     fn refused_whole(&self, target_guid: u64) -> bool {
         self.refused_by_header(target_guid)
-            || (self.refused.contains(&target_guid) && !self.landed.contains(&target_guid))
+            || (self.refused.contains(&target_guid) && !self.exposed.contains(&target_guid))
     }
 
     fn whole_refusals(&self) -> Vec<u64> {
@@ -476,14 +476,14 @@ fn run_spell_effects(
             if rolls_weapon && t != caster_guid {
                 remember_hit_target(&mut weapon_targets, &mut seen_weapon_targets, t);
             }
+            let immune = crate::spell::is_immune_to_effect(ctx, caster_guid, t, hdr, e);
+            immunity.record(t, immune);
             if roll.is_avoided() {
                 if t == target_guid {
                     primary_avoided = roll;
                 }
                 continue;
             }
-            let immune = crate::spell::is_immune_to_effect(ctx, caster_guid, t, hdr, e);
-            immunity.record(t, immune);
             if immune {
                 log::info!(
                     "spell {} effect {} refused: unit {t} is immune to its mechanic",
