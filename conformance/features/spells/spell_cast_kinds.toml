@@ -61,10 +61,10 @@ symbol = "proc_holders"
 evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::IsTriggeredAtSpellProcEvent returns SPELL_PROC_TRIGGER_FAILED for SpellIconID 108 with SpellVisual 2759 while m_extraAttacks is set."
 
 [[known_gaps]]
-description = "A mechanic immunity refuses only an A_CONTROL effect. A movement slow, a disarm or any other aura effect of the immune mechanic still lands, and a damage effect of a spell whose header mechanic is immune still deals its damage."
+description = "A mechanic immunity refuses a single effect only for an A_CONTROL effect. A movement slow, a disarm or any other aura effect whose own effect mechanic is immune still lands when the spell's header mechanic is not immune."
 path = "module/src/spell/cast/targeting.rs"
 symbol = "apply_aura_effect"
-evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::IsImmuneToSpell refuses the whole spell for its header Mechanic, and Unit::IsImmuneToSpellEffect refuses any effect for its EffectMechanic; apply_aura_effect asks is_immune_to_mechanic only for A_CONTROL."
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::IsImmuneToSpellEffect refuses any effect for its EffectMechanic; apply_aura_effect asks is_immune_to_effect only for A_CONTROL. A header mechanic refuses the whole spell, whatever its effects."
 
 [[known_gaps]]
 description = "Applying a mechanic immunity Aura does not remove the Auras it makes the unit immune to, so Will of the Forsaken cast while feared leaves the fear on."
@@ -229,10 +229,20 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/aura_charges.rs"
+function = "will_of_the_forsaken_refuses_a_spell_when_any_effect_aims_at_an_enemy"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_fear_with_a_speed_effect_is_refused_whole_and_uses_fear_ward_up"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
 function = "a_spell_that_skips_immunities_lands_through_fear_ward_and_keeps_it"
 rung = "durable_module"
 
 [[tests]]
 path = "module/tests/aura_charges.rs"
-function = "an_effect_mechanic_is_refused_and_a_spell_with_one_landing_effect_keeps_fear_ward"
+function = "an_effect_mechanic_refuses_an_effect_and_reports_immune_only_when_none_landed"
 rung = "durable_module"

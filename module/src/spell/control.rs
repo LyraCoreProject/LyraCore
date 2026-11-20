@@ -266,13 +266,12 @@ pub(crate) fn break_auras_on_damage(
     }
 }
 
-// docs/schema.md#mechanic-numbering says why an immunity row and a control row differ here.
 const SOURCE_MECHANIC_IMMUNITY_MASK: i32 = 147;
 const SOURCE_AURA_MASK: i32 = 0xff;
 const IMMUNE_TO_HOSTILE_AND_FRIENDLY: i32 = 0x100;
-// vmangos SpellDefines.h SPELL_ATTR_NO_IMMUNITIES and SPELL_ATTR_EX3_IGNORE_CASTER_AND_TARGET_RESTRICTIONS,
-// which the importer keeps in `attributes` and `attributes_ex_3`.
+// vmangos SPELL_ATTR_NO_IMMUNITIES, kept in `attributes`.
 const SPELL_ATTR_NO_IMMUNITIES: u32 = 0x2000_0000;
+// vmangos SPELL_ATTR_EX3_IGNORE_CASTER_AND_TARGET_RESTRICTIONS, kept in `attributes_ex_3`.
 const SPELL_ATTR_EX3_IGNORE_RESTRICTIONS: u32 = 0x1000_0000;
 
 pub(crate) fn is_mechanic_immunity_mask(p1: i32) -> bool {
@@ -287,46 +286,77 @@ fn immunity_names_mechanic(source_aura: i32, p0: i32, mechanic: u8) -> bool {
     }
 }
 
-/// vmangos `Unit::IsImmuneToSpell` and `IsImmuneToSpellEffect`: whether an Aura of the unit makes
-/// it immune to the `A_CONTROL` effect `effect` of `spell`, by `spell.mechanic` or
-/// `effect.effect_mechanic` (Spell.dbc numbering). A `NO_IMMUNITIES` spell skips the header
-/// check, and a spell that ignores restrictions skips both. An effect aimed at an enemy is harmful
-/// whatever the spell data says, as vmangos `IsPositiveEffect` decides. A missing source spell
-/// blocks any spell for aura 77, and a helpful one for aura 147.
-pub(crate) fn is_immune_to_mechanic(
+fn aims_at_enemy(effect: &crate::SpellEffect) -> bool {
+    matches!(effect.target, T_TARGET_ENEMY | T_AREA_ENEMY | T_CHAIN_ENEMY)
+}
+
+fn is_custom_positive(spell: &crate::Spell) -> bool {
+    spell.custom_flags & lyracore_shared::spell_custom::POSITIVE != 0
+}
+
+// vmangos IsPositiveSpell: docs/schema.md#mechanic-numbering.
+fn spell_is_harmful(spell: &crate::Spell, effects: &[crate::SpellEffect]) -> bool {
+    spell.negative() || (!is_custom_positive(spell) && effects.iter().any(aims_at_enemy))
+}
+
+fn effect_is_harmful(spell: &crate::Spell, effect: &crate::SpellEffect) -> bool {
+    spell.negative() || (!is_custom_positive(spell) && aims_at_enemy(effect))
+}
+
+fn is_immune_to_mechanic(
+    ctx: &ReducerContext,
+    unit_guid: u64,
+    mechanic: u8,
+    harmful: bool,
+) -> bool {
+    mechanic != 0
+        && auras_on(ctx, unit_guid).any(|aura| {
+            if aura.eff_kind != A_IMMUNITY
+                || aura.eff_p0_kind != P_MECHANIC
+                || !immunity_names_mechanic(aura.eff_p1 & SOURCE_AURA_MASK, aura.eff_p0, mechanic)
+            {
+                return false;
+            }
+            let source = ctx.db.game_spell().spell_id().find(aura.spell_id);
+            aura.eff_p1 & IMMUNE_TO_HOSTILE_AND_FRIENDLY != 0
+                || match source.map(|source| !source.negative()) {
+                    Some(helpful) => helpful == harmful,
+                    None => !is_mechanic_immunity_mask(aura.eff_p1) || !harmful,
+                }
+        })
+}
+
+/// vmangos `Unit::IsImmuneToSpell`, by header mechanic: docs/schema.md#mechanic-numbering.
+pub(crate) fn is_immune_to_spell(
+    ctx: &ReducerContext,
+    unit_guid: u64,
+    spell: &crate::Spell,
+    effects: &[crate::SpellEffect],
+) -> bool {
+    spell.attributes & SPELL_ATTR_NO_IMMUNITIES == 0
+        && spell.attributes_ex_3 & SPELL_ATTR_EX3_IGNORE_RESTRICTIONS == 0
+        && is_immune_to_mechanic(
+            ctx,
+            unit_guid,
+            spell.mechanic,
+            spell_is_harmful(spell, effects),
+        )
+}
+
+/// vmangos `Unit::IsImmuneToSpellEffect`, by effect mechanic: docs/schema.md#mechanic-numbering.
+pub(crate) fn is_immune_to_effect(
     ctx: &ReducerContext,
     unit_guid: u64,
     spell: &crate::Spell,
     effect: &crate::SpellEffect,
 ) -> bool {
-    if spell.attributes_ex_3 & SPELL_ATTR_EX3_IGNORE_RESTRICTIONS != 0 {
-        return false;
-    }
-    let header = (spell.attributes & SPELL_ATTR_NO_IMMUNITIES == 0).then_some(spell.mechanic);
-    let mechanics = [header, Some(effect.effect_mechanic)];
-    let harmful =
-        spell.negative() || matches!(effect.target, T_TARGET_ENEMY | T_AREA_ENEMY | T_CHAIN_ENEMY);
-    auras_on(ctx, unit_guid).any(|aura| {
-        if aura.eff_kind != A_IMMUNITY || aura.eff_p0_kind != P_MECHANIC {
-            return false;
-        }
-        let source_aura = aura.eff_p1 & SOURCE_AURA_MASK;
-        if !mechanics
-            .iter()
-            .flatten()
-            .filter(|&&mechanic| mechanic != 0)
-            .any(|&mechanic| immunity_names_mechanic(source_aura, aura.eff_p0, mechanic))
-        {
-            return false;
-        }
-        let source = ctx.db.game_spell().spell_id().find(aura.spell_id);
-        let source_helpful = source.as_ref().map(|source| !source.negative());
-        aura.eff_p1 & IMMUNE_TO_HOSTILE_AND_FRIENDLY != 0
-            || match source_helpful {
-                Some(helpful) => helpful == harmful,
-                None => !is_mechanic_immunity_mask(aura.eff_p1) || !harmful,
-            }
-    })
+    spell.attributes_ex_3 & SPELL_ATTR_EX3_IGNORE_RESTRICTIONS == 0
+        && is_immune_to_mechanic(
+            ctx,
+            unit_guid,
+            effect.effect_mechanic,
+            effect_is_harmful(spell, effect),
+        )
 }
 
 // Matches cmangos PUSHBACK_SPELL_DELAY_TIME.

@@ -1160,18 +1160,20 @@ Spell.dbc mechanic but a control class (`M_STUN`, `M_ROOT`, `M_FEAR`, `M_POLY`),
 mechanics share: it picks the unit's control state and its diminishing-returns category, and no
 immunity reads it.
 
-An `A_CONTROL` effect is refused when the target holds an immunity Aura that names the Spell's
-`mechanic` or the effect's `effect_mechanic`, as vmangos `IsImmuneToSpell` and
-`IsImmuneToSpellEffect` decide. The Aura's source Spell must have the other polarity, or its `p1`
-must carry bit 0x100. A control effect aimed at an enemy is harmful whatever the Spell's flags say.
-A Spell with `SPELL_ATTR_NO_IMMUNITIES` (Attributes 0x20000000) skips the header mechanic, and one
-with the ignore-restrictions bit (AttributesEx3 0x10000000) skips both. Only `A_CONTROL` effects are
-checked: a movement slow whose mechanic an immunity names still lands.
+A target is immune to a whole cast when it holds an immunity Aura that names the Spell's `mechanic`,
+before the hit roll and before any effect runs, as vmangos `IsImmuneToSpell` decides. It is immune
+to one `A_CONTROL` effect when an Aura names the effect's `effect_mechanic`, as
+`IsImmuneToSpellEffect` decides. The Aura's source Spell must have the other polarity, or its `p1`
+must carry bit 0x100. A Spell is harmful when any effect aims at an enemy, and an effect is harmful
+when it does, unless `SPELL_CUSTOM_POSITIVE` says otherwise. A Spell with `SPELL_ATTR_NO_IMMUNITIES`
+(Attributes 0x20000000) skips the header mechanic, and one with the ignore-restrictions bit
+(AttributesEx3 0x10000000) skips both. The caster is never immune to its own cast by header.
 
-When every effect a cast has on a target is refused, the cast reports that target as immune
-(`SpellMissInfo` Immune, for the primary target) and runs the proc pass with `PROC_EX_IMMUNE`, which
-is how Fear Ward is used up: it fires on any spell of mechanic fear taken, whatever the result. A
-triggered cast runs no proc pass, and a cast with one landing effect on the target runs none for it.
+A cast that was refused whole on a target reports it as immune (`SpellMissInfo` Immune, for the
+primary target): Immune when the header mechanic refused it, and Immune2 when only effect
+mechanics masked every effect. It also runs the proc pass for that target with `PROC_EX_IMMUNE`,
+which is how Fear Ward is used up: it fires on any spell whose header mechanic is fear, whatever
+the result. A cast an aura started runs no such pass, and a harmful item cast runs it.
 
 ### Regeneration
 

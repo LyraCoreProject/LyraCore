@@ -208,6 +208,7 @@ fn resolve_loaded_cast(
 pub(crate) enum CastOrigin {
     Direct(CastPhase),
     Triggered,
+    AuraTriggered,
     DeadCreatureCallbackTriggered,
     ChanceOnHit,
 }
@@ -216,8 +217,20 @@ impl CastOrigin {
     fn is_triggered(self) -> bool {
         matches!(
             self,
-            Self::Triggered | Self::DeadCreatureCallbackTriggered | Self::ChanceOnHit
+            Self::Triggered
+                | Self::AuraTriggered
+                | Self::DeadCreatureCallbackTriggered
+                | Self::ChanceOnHit
         )
+    }
+
+    // vmangos Spell::m_canTrigger: an aura's spell cannot, and an item's harmful spell can.
+    fn can_trigger(self, hdr: &Spell) -> bool {
+        match self {
+            Self::AuraTriggered => false,
+            Self::ChanceOnHit => hdr.negative(),
+            _ => true,
+        }
     }
 
     fn allows_dead_self(self) -> bool {
@@ -321,14 +334,29 @@ fn grant_crafted_item(
     }
 }
 
-/// The targets a cast's effects reached, and which of them refused every effect.
+/// How a cast's effects fared against mechanic immunity, by target.
 #[derive(Default)]
 struct ImmuneRefusals {
+    header: std::collections::HashMap<u64, bool>,
     refused: std::collections::BTreeSet<u64>,
     landed: std::collections::BTreeSet<u64>,
 }
 
 impl ImmuneRefusals {
+    /// Whether the target is immune to the whole spell, asked once per target.
+    fn refuses_spell(
+        &mut self,
+        ctx: &ReducerContext,
+        target_guid: u64,
+        hdr: &Spell,
+        effects: &[SpellEffect],
+    ) -> bool {
+        *self
+            .header
+            .entry(target_guid)
+            .or_insert_with(|| crate::spell::is_immune_to_spell(ctx, target_guid, hdr, effects))
+    }
+
     fn record(&mut self, target_guid: u64, immune: bool) {
         if immune {
             self.refused.insert(target_guid);
@@ -337,8 +365,35 @@ impl ImmuneRefusals {
         }
     }
 
+    fn refused_by_header(&self, target_guid: u64) -> bool {
+        self.header.get(&target_guid) == Some(&true)
+    }
+
     fn refused_whole(&self, target_guid: u64) -> bool {
-        self.refused.contains(&target_guid) && !self.landed.contains(&target_guid)
+        self.refused_by_header(target_guid)
+            || (self.refused.contains(&target_guid) && !self.landed.contains(&target_guid))
+    }
+
+    fn whole_refusals(&self) -> Vec<u64> {
+        let by_header = self.header.iter().filter(|(_, &immune)| immune);
+        let mut guids: Vec<u64> = by_header
+            .map(|(&guid, _)| guid)
+            .chain(self.refused.iter().copied())
+            .filter(|&guid| self.refused_whole(guid))
+            .collect();
+        guids.sort_unstable();
+        guids.dedup();
+        guids
+    }
+
+    /// The cast's miss code for a target: 7 for a header refusal and 8 when only effects were.
+    fn miss(&self, target_guid: u64) -> Option<u8> {
+        if self.refused_by_header(target_guid) {
+            Some(crate::spell::CAST_MISS_IMMUNE)
+        } else {
+            self.refused_whole(target_guid)
+                .then_some(crate::spell::CAST_MISS_IMMUNE2)
+        }
     }
 }
 
@@ -408,6 +463,9 @@ fn run_spell_effects(
             if triggered && !triggered_target_admitted(origin, caster_guid, t, is_alive(ctx, t)) {
                 continue;
             }
+            if t != caster_guid && immunity.refuses_spell(ctx, t, hdr, effects) {
+                continue;
+            }
             let roll = if rolls_hit && t != caster_guid {
                 *target_rolls
                     .entry(t)
@@ -471,12 +529,12 @@ fn run_spell_effects(
             }
         }
     }
-    for &t in immunity
-        .refused
-        .iter()
-        .filter(|&&t| !triggered && t != caster_guid)
-    {
-        if immunity.refused_whole(t) {
+    if origin.can_trigger(hdr) {
+        for t in immunity
+            .whole_refusals()
+            .into_iter()
+            .filter(|&t| t != caster_guid)
+        {
             crate::spell::proc::run_immune_proc_pass(ctx, caster_guid, t, hdr.spell_id);
         }
     }
@@ -520,16 +578,14 @@ fn run_spell_effects(
             is_crit: any_crit,
             resisted: total_resisted,
             absorbed: total_absorbed,
-            miss_info: if immunity.refused_whole(target_guid) {
-                crate::spell::CAST_MISS_IMMUNE
-            } else {
+            miss_info: immunity.miss(target_guid).unwrap_or_else(|| {
                 cast_miss(
                     primary_avoided,
                     weapon_strike,
                     hdr.cast_flags & CAST_FLAG_MAGIC_HIT != 0
                         || hdr.school_mask & !RESIST_ARMOR != 0,
                 )
-            },
+            }),
             energized: total_energized,
             power_type: energized_power_type,
             cooldown_ms: hdr.cooldown_ms,
@@ -715,6 +771,22 @@ pub(crate) fn cast_triggered(
         &CastRequest::new(caster_guid, spell_id, level, target_guid),
         &spell,
         CastOrigin::Triggered,
+    )
+}
+
+pub(crate) fn cast_aura_triggered(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    level: u8,
+    target_guid: u64,
+) -> Result<(), String> {
+    let spell = LoadedSpell::load(ctx, spell_id)?;
+    cast_triggered_with_origin(
+        ctx,
+        &CastRequest::new(caster_guid, spell_id, level, target_guid),
+        &spell,
+        CastOrigin::AuraTriggered,
     )
 }
 
