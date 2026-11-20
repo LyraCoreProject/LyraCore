@@ -53,6 +53,17 @@ def native_and_peer(host, at=(0, 20, 0, 0), grouped=False):
     return client, peer
 
 
+def without_stray_destroys(packets, guid):
+    """Drops destroys of objects other than `guid`, which an earlier check can leave arriving late."""
+    return [(opcode, body) for opcode, body in packets if opcode != 0xaa or destroys([(opcode, body)]) == [guid]]
+
+
+def regeneration_update(packet, guid):
+    """Whether the packet only updates health (field 22) or power (fields 23 to 27) of `guid`."""
+    fields = values([packet], guid)
+    return bool(fields) and set(fields) <= {22, 23, 24, 25, 26, 27}
+
+
 def spawn(host, near, entry, distance):
     """Spawns one creature `distance` yards from the Character `near` and returns its guid."""
     query = f'SELECT guid FROM game_world_entity WHERE entry = {entry}'
@@ -4611,8 +4622,7 @@ def check_auras(host):
     peer.send(0x12e, cast(168))
     buff = peer.collect()
     observed = client.collect()
-    # Late destroys of objects an earlier check left behind can arrive first.
-    assert [opcode for opcode, body in buff if opcode != 0xaa or destroys([(opcode, body)]) == [peer_guid]][:3] == [0x131, 0x130, 0x132]
+    assert [opcode for opcode, _ in without_stray_destroys(buff, peer_guid)][:3] == [0x131, 0x130, 0x132]
     assert sum(opcode == 0x132 and spell_id(body) == 168 for opcode, body in buff) == 1
     assert sum(opcode == 0x132 and spell_id(body) == 168 for opcode, body in observed) == 1
     assert any(opcode == 0x137 and 5900 <= struct.unpack_from('<I', body, 1)[0] <= 6000 for opcode, body in buff)
@@ -4942,9 +4952,11 @@ def check_progression(host):
     assert host.rows(f'SELECT x FROM game_world_entity WHERE guid = {guid}') == [[17.0]]
     peer.collect()
     host.call('debug_teleport', [guid, 1, 4, 5, 6, 0.75])
-    # A regeneration tick can send the Character a values update just before the teleport packets.
-    departing = [(opcode, body) for opcode, body in client.collect(auto_ack=False)
-                 if not (opcode == 0xa9 and body[5] == 0 and packed_guid(body[6:]) == guid)]
+    departing = client.collect(auto_ack=False)
+    # A regeneration tick can send a health or power update ahead of the teleport packets. Nothing else may.
+    teleport = next((index for index, (opcode, _) in enumerate(departing) if opcode == 0x3f), len(departing))
+    departing = [packet for index, packet in enumerate(departing)
+                 if index > teleport or not regeneration_update(packet, guid)]
     assert [opcode for opcode, _ in departing] == [0x3f, 0x3e]
     assert departing[1][1] == struct.pack('<Iffff', 1, 4, 5, 6, 0.75)
     assert destroys(peer.collect()).count(guid) == 1

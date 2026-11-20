@@ -31,6 +31,12 @@ def rename_private_table(wasm):
     return bytes(candidate)
 
 
+def movement_times(packets, guid):
+    # A relayed movement is the mover's packed GUID, then the movement flags and the client's timestamp.
+    return [struct.unpack_from('<I', body, 1 + body[0].bit_count() + 4)[0]
+            for opcode, body in packets if opcode == 0xb7 and packed_guid(body) == guid]
+
+
 def commitlog_bytes(host):
     return sum(path.stat().st_size for path in host.data.glob('replicas/*/clog/*.log'))
 
@@ -68,7 +74,7 @@ def run(host):
             candidate = wasm + b'\x00' + bytes([len(section)]) + section
             stopped = threading.Event()
             sending = threading.Event()
-            relayed = threading.Event()
+            times = []
             failures = []
 
             def traffic():
@@ -79,8 +85,7 @@ def run(host):
                         client.send(0xb7, struct.pack('<IIffffI', 0, sequence * 10, iteration, 0, 0, 0, 0))
                         sending.set()
                         client.collect()
-                        if any(opcode == 0xb7 and packed_guid(body) == guid for opcode, body in peer.collect()):
-                            relayed.set()
+                        times.extend(movement_times(peer.collect(), guid))
                         stopped.wait(0.01)
                 except Exception as error:
                     failures.append(error)
@@ -88,8 +93,10 @@ def run(host):
             worker = threading.Thread(target=traffic, daemon=True)
             started = time.monotonic()
             worker.start()
-            assert sending.wait(30), 'no movement request was sent before replacement'
             try:
+                host.wait_until(lambda: sending.is_set() or failures, 'no movement request was sent before replacement')
+                assert not failures, (iteration, failures)
+                start_sequence = sequence
                 host.publish(candidate)
             finally:
                 stopped.set()
@@ -97,10 +104,13 @@ def run(host):
             traffic_seconds += time.monotonic() - started
             assert not worker.is_alive(), 'native requests stalled during replacement'
             assert not failures, (iteration, failures)
-            # The Host relays a movement request 20 ms after it arrives, which can be after the last fence.
-            host.wait_until(lambda: relayed.is_set() or any(opcode == 0xb7 and packed_guid(body) == guid
-                                                           for opcode, body in peer.collect()),
-                            'movement was not relayed during replacement')
+
+            def relayed():
+                return any(time_ms > start_sequence * 10 for time_ms in times)
+
+            # The Host flushes movement relays every 20 ms, which can be after the last fence.
+            host.wait_until(lambda: relayed() or (times.extend(movement_times(peer.collect(), guid)) or relayed()),
+                            'movement sent during replacement was not relayed')
             current_hash = host.rows('SELECT program_hash FROM st_module')
             assert current_hash != previous_hash, 'publish did not replace the Module'
             previous_hash = current_hash
