@@ -359,9 +359,7 @@ pub(crate) fn run_unlanded_proc_pass(
     }
 }
 
-/// The proc pass of a spell that a mechanic immunity refused on every effect it had on the target.
-/// vmangos raises PROC_EX_IMMUNE for a whole-spell refusal and only for a spell that can trigger,
-/// so the caller skips a triggered cast. The hit source follows the spell's damage class.
+/// The proc pass of a harmful spell that a mechanic immunity refused whole, with PROC_EX_IMMUNE.
 pub(crate) fn run_immune_proc_pass(
     ctx: &ReducerContext,
     caster_guid: u64,

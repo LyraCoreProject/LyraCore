@@ -359,7 +359,7 @@ fn fear_ward_is_kept_by_a_frostbolt_and_spent_by_a_fear_spell() {
     assert_eq!(
         charges(&standalone, PLAYER, FEAR_WARD),
         Some(1),
-        "vmangos HandleMechanicImmuneResistanceAuraProc keeps Fear Ward off a spell of another mechanic"
+        "vmangos IsTriggeredAtSpellProcEvent keeps Fear Ward off a spell whose mechanic is not fear"
     );
     cast_by(&standalone, wolf, FEAR_BOLT, PLAYER);
     assert_eq!(charges(&standalone, PLAYER, FEAR_WARD), None);
@@ -500,7 +500,7 @@ fn will_of_the_forsaken_refuses_a_charm_whose_spell_data_calls_it_helpful() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_spell_that_skips_immunities_lands_through_fear_ward_and_keeps_it() {
+fn a_spell_that_skips_immunities_lands_through_fear_ward() {
     let mut standalone = Standalone::start("aura-charges-skips-immunities");
     let wolf = stage(&mut standalone);
     aura_spell(
@@ -537,7 +537,6 @@ fn a_spell_that_skips_immunities_lands_through_fear_ward_and_keeps_it() {
             "attributes = 0, attributes_ex_3 = 0",
         );
     }
-    assert_eq!(charges(&standalone, PLAYER, FEAR_WARD), Some(1));
 }
 
 #[test]
@@ -662,6 +661,37 @@ fn will_of_the_forsaken_refuses_a_spell_when_any_effect_aims_at_an_enemy() {
         stacks(&standalone, DOMINION_OF_SOUL),
         None,
         "its haste effect aims at an enemy, so vmangos IsPositiveSpell is false for the whole spell"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_unit_is_immune_to_its_own_cast_by_header_mechanic() {
+    let mut standalone = Standalone::start("aura-charges-self-cast");
+    stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: WILL_OF_THE_FORSAKEN,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_IMMUNITY, 0, i32::from(MECHANIC_SLEEP), P_MECHANIC)],
+    );
+    control_spell(&standalone, SLEEP_FIXTURE, M_POLY, MECHANIC_SLEEP);
+    standalone.assert_call(
+        "debug_force_cast",
+        &["1", &WILL_OF_THE_FORSAKEN.to_string()],
+    );
+    advance(&standalone);
+
+    cast_by(&standalone, PLAYER, SLEEP_FIXTURE, PLAYER);
+    assert_eq!(
+        stacks(&standalone, SLEEP_FIXTURE),
+        None,
+        "vmangos Unit::IsImmuneToSpell ignores castOnSelf, as Dreamless Sleep through Will of the Forsaken shows"
     );
 }
 

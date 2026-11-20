@@ -79,6 +79,30 @@ symbol = "is_immune_to_mechanic"
 evidence = "Not measured and not read. Berserker Rage 18499 and Will of the Forsaken 7744 are aura 77 and covered by tests; no trinket spell was checked against the vmangos spell dump."
 
 [[known_gaps]]
+description = "Forbearance is never applied: LyraCore applies no Forbearance Aura after Divine Shield, Blessing of Protection or Lay on Hands, so the header-mechanic refusal of a helpful spell never meets it."
+path = "module/src/spell/control.rs"
+symbol = "is_immune_to_spell"
+evidence = "Source reading, not measured. At d9173eca, PaladinBubbleScript applies Forbearance 25771, an aura 77 immunity to mechanic 25, and Unit::IsImmuneToSpell then refuses a second bubble."
+
+[[known_gaps]]
+description = "The immune proc pass simplifies vmangos Spell::m_canTrigger: it skips only a cast an Aura started, and runs for a harmful item spell. Missing are the SPELL_ATTR_EX3_NOT_A_PROC and family exceptions (Arcane Missiles, Blizzard, Rain of Fire, Hellfire, the trap effects, Seal of Command), the SUPPRESS_CASTER_PROCS and SUPPRESS_TARGET_PROCS pair, and the rule that a helpful item spell cannot trigger."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "CastOrigin"
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::prepareDataForTriggerSystem sets m_canTrigger from those rules; no shipped spell is known to reach them through an immune refusal."
+
+[[known_gaps]]
+description = "A refused helpful spell raises no proc event: the immune proc pass runs only for a harmful spell, because the Module has no proc bits for a helpful spell."
+path = "module/src/spell/proc.rs"
+symbol = "run_immune_proc_pass"
+evidence = "Source reading, not measured. At d9173eca, Unit::ProcDamageAndSpell runs for any refused spell with the proc flags its polarity gives."
+
+[[known_gaps]]
+description = "A fear that lands deals no damage, so it runs no proc pass and does not use up Fear Ward. In vmangos a landed fear still procs the ward, which needs a landed fear to get past the immunity first, as with a SPELL_ATTR_NO_IMMUNITIES fear."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "run_spell_effects"
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::DoSpellHitOnUnit runs ProcDamageAndSpell for a landed aura spell, and IsTriggeredAtSpellProcEvent returns SPELL_PROC_TRIGGER_OK for 6346 on a spell of mechanic fear."
+
+[[known_gaps]]
 description = "Retaliation strikes back, and spends a charge, on a hit from behind and while its warrior is stunned. vmangos neither strikes nor spends then."
 path = "module/src/combat/folds.rs"
 symbol = "retaliate_on_hit"
@@ -239,10 +263,25 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/aura_charges.rs"
-function = "a_spell_that_skips_immunities_lands_through_fear_ward_and_keeps_it"
+function = "a_spell_that_skips_immunities_lands_through_fear_ward"
 rung = "durable_module"
 
 [[tests]]
 path = "module/tests/aura_charges.rs"
 function = "an_effect_mechanic_refuses_an_effect_and_reports_immune_only_when_none_landed"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_unit_is_immune_to_its_own_cast_by_header_mechanic"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/combo_finisher.rs"
+function = "a_finisher_that_a_mechanic_immunity_refuses_keeps_its_combo_points"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/item_use_target.rs"
+function = "a_helpful_item_spell_on_an_ally_immune_to_its_mechanic_is_refused_and_keeps_the_item"
 rung = "durable_module"

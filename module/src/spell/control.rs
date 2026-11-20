@@ -294,8 +294,8 @@ fn is_custom_positive(spell: &crate::Spell) -> bool {
     spell.custom_flags & lyracore_shared::spell_custom::POSITIVE != 0
 }
 
-// vmangos IsPositiveSpell: docs/schema.md#mechanic-numbering.
-fn spell_is_harmful(spell: &crate::Spell, effects: &[crate::SpellEffect]) -> bool {
+// Approximates vmangos IsPositiveSpell, without SPELL_ATTR_AURA_IS_DEBUFF: docs/schema.md#mechanic-numbering.
+pub(crate) fn spell_is_harmful(spell: &crate::Spell, effects: &[crate::SpellEffect]) -> bool {
     spell.negative() || (!is_custom_positive(spell) && effects.iter().any(aims_at_enemy))
 }
 
@@ -341,6 +341,16 @@ pub(crate) fn is_immune_to_spell(
             spell.mechanic,
             spell_is_harmful(spell, effects),
         )
+}
+
+/// vmangos `Spell::CheckCast` refuses a helpful spell on a target that is immune to its header.
+pub(crate) fn refuses_helpful_spell(
+    ctx: &ReducerContext,
+    unit_guid: u64,
+    spell: &crate::Spell,
+    effects: &[crate::SpellEffect],
+) -> bool {
+    !spell_is_harmful(spell, effects) && is_immune_to_spell(ctx, unit_guid, spell, effects)
 }
 
 /// vmangos `Unit::IsImmuneToSpellEffect`, by effect mechanic: docs/schema.md#mechanic-numbering.

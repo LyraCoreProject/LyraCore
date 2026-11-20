@@ -1167,13 +1167,18 @@ to one `A_CONTROL` effect when an Aura names the effect's `effect_mechanic`, as
 must carry bit 0x100. A Spell is harmful when any effect aims at an enemy, and an effect is harmful
 when it does, unless `SPELL_CUSTOM_POSITIVE` says otherwise. A Spell with `SPELL_ATTR_NO_IMMUNITIES`
 (Attributes 0x20000000) skips the header mechanic, and one with the ignore-restrictions bit
-(AttributesEx3 0x10000000) skips both. The caster is never immune to its own cast by header.
+(AttributesEx3 0x10000000) skips both. A unit is immune to its own cast too, as vmangos ignores `castOnSelf`.
+
+A helpful spell aimed at a target that is immune to its header mechanic is refused when the cast
+starts, with `SPELL_FAILED_TARGET_AURASTATE`, so no item, power or cooldown is spent, as vmangos
+`Spell::CheckCast` does. A harmful one is refused after it starts.
 
 A cast that was refused whole on a target reports it as immune (`SpellMissInfo` Immune, for the
 primary target): Immune when the header mechanic refused it, and Immune2 when only effect
 mechanics masked every effect. It also runs the proc pass for that target with `PROC_EX_IMMUNE`,
 which is how Fear Ward is used up: it fires on any spell whose header mechanic is fear, whatever
-the result. A cast an aura started runs no such pass, and a harmful item cast runs it.
+the result. A cast an aura started runs no such pass, a harmful item cast runs it, and a helpful spell raises no
+proc event. A finisher refused whole keeps its combo points.
 
 ### Regeneration
 

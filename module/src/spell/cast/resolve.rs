@@ -224,7 +224,7 @@ impl CastOrigin {
         )
     }
 
-    // vmangos Spell::m_canTrigger: an aura's spell cannot, and an item's harmful spell can.
+    // Simplifies vmangos Spell::m_canTrigger; see the ledger gap in spell_cast_kinds.toml.
     fn can_trigger(self, hdr: &Spell) -> bool {
         match self {
             Self::AuraTriggered => false,
@@ -463,7 +463,7 @@ fn run_spell_effects(
             if triggered && !triggered_target_admitted(origin, caster_guid, t, is_alive(ctx, t)) {
                 continue;
             }
-            if t != caster_guid && immunity.refuses_spell(ctx, t, hdr, effects) {
+            if immunity.refuses_spell(ctx, t, hdr, effects) {
                 continue;
             }
             let roll = if rolls_hit && t != caster_guid {
@@ -529,17 +529,16 @@ fn run_spell_effects(
             }
         }
     }
-    if origin.can_trigger(hdr) {
-        for t in immunity
-            .whole_refusals()
-            .into_iter()
-            .filter(|&t| t != caster_guid)
-        {
+    if origin.can_trigger(hdr) && crate::spell::spell_is_harmful(hdr, effects) {
+        for t in immunity.whole_refusals() {
             crate::spell::proc::run_immune_proc_pass(ctx, caster_guid, t, hdr.spell_id);
         }
     }
     // Spend after every effect has read the points; vmangos keeps them when a finisher misses.
-    if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0 && !primary_avoided.is_avoided() {
+    if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0
+        && !primary_avoided.is_avoided()
+        && immunity.miss(target_guid).is_none()
+    {
         crate::combo::spend_combo(ctx, caster_guid);
     }
     let finish_items = |craft: Option<crate::items::ItemStoragePlan>| {
@@ -1313,6 +1312,32 @@ fn check_cast_range(what: &str, dist: f32, range_yd: u32) -> Result<(), CastGate
     Ok(())
 }
 
+fn check_target_aura_state(
+    ctx: &ReducerContext,
+    spell: &LoadedSpell,
+    target_guid: u64,
+) -> Result<(), CastGateRefusal> {
+    let exists = target_guid != 0
+        && ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(target_guid)
+            .is_some();
+    if exists
+        && crate::spell::refuses_helpful_spell(ctx, target_guid, &spell.header, &spell.effects)
+    {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::TargetAuraState,
+            format!(
+                "spell {} is refused: unit {target_guid} is immune to its mechanic",
+                spell.header.spell_id
+            ),
+        ));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn check_cast_gate_suffix(
     ctx: &ReducerContext,
@@ -1342,6 +1367,8 @@ fn check_cast_gate_suffix(
     {
         crate::creatures::guardian::check(ctx, caster, effect)?;
     }
+
+    check_target_aura_state(ctx, spell, target_guid)?;
 
     if level_gate_blocks(caster.is_player(), hdr.spell_level, level) {
         return Err(CastGateRefusal::other(
