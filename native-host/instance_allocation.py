@@ -60,6 +60,7 @@ def check(host):
 
     def cross(client, guid, target, trigger):
         client.collect()
+        host.await_guild_settled(guid, *worlds)
         client.send(0xb4, struct.pack('<I', trigger))
         packets = []
         while guid not in creates(packets):

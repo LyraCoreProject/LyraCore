@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 MODULE = ROOT / 'target/wasm32-unknown-unknown/release/lyracore_module.wasm'
 
 Account = namedtuple('Account', 'id username identity')
+SETTLE_SECONDS = 30
 
 
 def free_port():
@@ -41,6 +42,7 @@ class Host:
         self.restorations = []
         self.identities = 0
         self.additional_databases = 0
+        self.databases = []
         self.process = None
         self.token = None
 
@@ -109,7 +111,8 @@ class Host:
         if dev is not None:
             self.dev = dev
         self.start()
-        self.wait_until(self.answers, 'native host did not recover', timeout=20)
+        self.wait_until(lambda: all(self.answers(database) for database in (None, *self.databases)),
+                        'native host did not recover')
 
     @property
     def pid(self):
@@ -137,9 +140,9 @@ class Host:
             return False
         return True
 
-    def answers(self):
+    def answers(self, database=None):
         try:
-            self.sql('SELECT id FROM game_account')
+            self.sql('SELECT id FROM game_account', database)
         except (OSError, RuntimeError):
             return False
         return True
@@ -154,6 +157,7 @@ class Host:
         self.publish(self.module.read_bytes(), database)
         self.call('claim_operator', database=database)
         self.call('install_guid_range', [guid_base], database=database)
+        self.databases.append(database)
         return database
 
     def identity(self, database=None):
@@ -173,7 +177,7 @@ class Host:
     def rows(self, query, database=None):
         return self.sql(query, database)[0]['rows']
 
-    def wait_until(self, condition, message, timeout=5, interval=0.05):
+    def wait_until(self, condition, message, timeout=SETTLE_SECONDS, interval=0.05):
         """Returns the first truthy result of `condition()`, or raises AssertionError(message)."""
         deadline = time.monotonic() + timeout
         while True:
@@ -183,6 +187,13 @@ class Host:
             if time.monotonic() >= deadline:
                 raise AssertionError(message)
             time.sleep(interval)
+
+    def await_guild_settled(self, guid, *databases):
+        """Waits until the Character has no guild transaction on any of the databases, since one refuses
+        Transfer and teleport. Without databases it checks the default one."""
+        self.wait_until(lambda: not any(self.rows(f'SELECT guid FROM game_guild_transaction WHERE guid = {guid}', database)
+                                        for database in databases or (None,)),
+                        f'guild transaction of Character {guid} did not settle')
 
     def await_empty(self, table):
         self.wait_until(lambda: not self.rows(f'SELECT * FROM {table}'), f'{table} retained disconnected clients')
