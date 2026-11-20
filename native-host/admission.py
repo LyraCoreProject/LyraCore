@@ -1,5 +1,6 @@
 import socket
 import struct
+import threading
 import time
 
 from headless import creates
@@ -29,7 +30,7 @@ def run(host, idle_seconds=0):
         else:
             assert body == b'\x0c' + bytes(9), body.hex()
 
-    def admitted(client, timeout=5):
+    def admitted(client, timeout=5, positions=None):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             opcode, body = client.read()
@@ -37,7 +38,30 @@ def run(host, idle_seconds=0):
             if body[0] == 0x0c:
                 return time.monotonic()
             assert body[0] == 0x1b
+            if positions is not None:
+                positions.append(struct.unpack('<I', body[1:])[0])
         raise AssertionError('Login Queue did not admit the next World Session')
+
+    def watch(client):
+        # Stamps the admission when it arrives, however late the check turns to the next client.
+        outcome = {'positions': []}
+
+        def stamp():
+            try:
+                outcome['at'] = admitted(client, positions=outcome['positions'])
+            except AssertionError as error:
+                outcome['error'] = error
+
+        thread = threading.Thread(target=stamp)
+        thread.start()
+        return thread, outcome
+
+    def admitted_at(watched):
+        thread, outcome = watched
+        thread.join()
+        if 'error' in outcome:
+            raise outcome['error']
+        return outcome['at']
 
     def closed(client):
         client.socket.settimeout(3)
@@ -114,10 +138,11 @@ def run(host, idle_seconds=0):
         time.sleep(1.1)
         host.call('native_set_admission_limits', [0, 0, 1])
         first = open_client('E')
-        second = open_client('F', 1)
-        third = open_client('G', 2)
-        second_at = admitted(second)
-        third_at = admitted(third)
+        second = watch(open_client('F', 1))
+        third = watch(open_client('G', 2))
+        second_at = admitted_at(second)
+        third_at = admitted_at(third)
+        assert 1 in third[1]['positions'], 'the third client was admitted in the second one\'s turn'
         assert third_at - second_at >= 0.8
         assert len(host.rows('SELECT ticket FROM game_native_admission WHERE admitted = true')) == 3
         reset()
