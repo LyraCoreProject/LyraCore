@@ -76,6 +76,12 @@ const WILL_OF_THE_FORSAKEN: u32 = 5_091_119;
 const SLEEP_FIXTURE: u32 = 5_091_120;
 const STUN_FIXTURE: u32 = 5_091_121;
 const MIND_EXHAUSTION: u32 = 5_091_122;
+const MIND_CONTROL: u32 = 5_091_123;
+const FEAR_AND_BOLT: u32 = 5_091_124;
+const MECHANIC_IMMUNE_MISS: &str = "7";
+// Spell.dbc Attributes and AttributesEx3 bits that skip immunity.
+const ATTR_NO_IMMUNITIES: u32 = 0x2000_0000;
+const ATTR_EX3_IGNORE_RESTRICTIONS: u32 = 0x1000_0000;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -379,8 +385,20 @@ fn fear_ward_refuses_a_fear_that_deals_no_damage_and_is_used_up_by_it() {
     control_spell(&standalone, PSYCHIC_SCREAM, M_FEAR, MECHANIC_FEAR);
     standalone.assert_call("debug_force_cast", &["1", &REAL_FEAR_WARD.to_string()]);
     advance(&standalone);
+    let events = subscribe_with_fence(
+        &standalone,
+        &[&format!(
+            "SELECT * FROM game_spell_cast_event_live WHERE spell_id = {PSYCHIC_SCREAM} AND kind = 2"
+        )],
+    );
 
     cast_by(&standalone, wolf, PSYCHIC_SCREAM, PLAYER);
+    fence_subscription(&standalone, &events);
+    assert_eq!(
+        event_rows(&events, "game_spell_cast_event_live")[0]["miss_info"],
+        MECHANIC_IMMUNE_MISS,
+        "the cast reports its target as immune"
+    );
     assert_eq!(
         stacks(&standalone, PSYCHIC_SCREAM),
         None,
@@ -435,6 +453,114 @@ fn will_of_the_forsaken_refuses_a_fear_and_a_sleep_and_lets_a_stun_land() {
     assert!(
         stacks(&standalone, STUN_FIXTURE).is_some(),
         "its charm immunity is mechanic 1, not LyraCore's M_STUN, so a stun lands"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn will_of_the_forsaken_refuses_a_charm_whose_spell_data_calls_it_helpful() {
+    let mut standalone = Standalone::start("aura-charges-charm-polarity");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: WILL_OF_THE_FORSAKEN,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_IMMUNITY, 0, i32::from(MECHANIC_CHARM), P_MECHANIC)],
+    );
+    control_spell(&standalone, MIND_CONTROL, M_POLY, MECHANIC_CHARM);
+    set_spell(&standalone, MIND_CONTROL, "is_negative = false");
+    standalone.assert_call(
+        "debug_force_cast",
+        &["1", &WILL_OF_THE_FORSAKEN.to_string()],
+    );
+    advance(&standalone);
+
+    cast_by(&standalone, wolf, MIND_CONTROL, PLAYER);
+    assert_eq!(
+        stacks(&standalone, MIND_CONTROL),
+        None,
+        "vmangos IsPositiveEffect makes a charm aimed at an enemy harmful, whatever the spell flags say"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_spell_that_skips_immunities_lands_through_fear_ward_and_keeps_it() {
+    let mut standalone = Standalone::start("aura-charges-skips-immunities");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: REAL_FEAR_WARD,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: TAKE_HARMFUL_ABILITY | TAKE_HARMFUL_SPELL,
+            charges: 1,
+        },
+        &[(A_IMMUNITY, 0, i32::from(MECHANIC_FEAR), P_MECHANIC)],
+    );
+    control_spell(&standalone, PSYCHIC_SCREAM, M_FEAR, MECHANIC_FEAR);
+    standalone.assert_call("debug_force_cast", &["1", &REAL_FEAR_WARD.to_string()]);
+    advance(&standalone);
+
+    for column in [
+        format!("attributes = {ATTR_NO_IMMUNITIES}"),
+        format!("attributes_ex_3 = {ATTR_EX3_IGNORE_RESTRICTIONS}"),
+    ] {
+        set_spell(&standalone, PSYCHIC_SCREAM, &column);
+        cast_by(&standalone, wolf, PSYCHIC_SCREAM, PLAYER);
+        assert!(
+            stacks(&standalone, PSYCHIC_SCREAM).is_some(),
+            "{column} skips the immunity"
+        );
+        standalone.assert_sql(&format!(
+            "DELETE FROM game_aura WHERE spell_id = {PSYCHIC_SCREAM}"
+        ));
+        set_spell(
+            &standalone,
+            PSYCHIC_SCREAM,
+            "attributes = 0, attributes_ex_3 = 0",
+        );
+    }
+    assert_eq!(charges(&standalone, PLAYER, REAL_FEAR_WARD), Some(1));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_effect_mechanic_is_refused_and_a_spell_with_one_landing_effect_keeps_fear_ward() {
+    let mut standalone = Standalone::start("aura-charges-effect-mechanic");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: REAL_FEAR_WARD,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: TAKE_HARMFUL_ABILITY | TAKE_HARMFUL_SPELL,
+            charges: 1,
+        },
+        &[(A_IMMUNITY, 0, i32::from(MECHANIC_FEAR), P_MECHANIC)],
+    );
+    control_spell_by_effect(&standalone, FEAR_AND_BOLT, M_FEAR, MECHANIC_FEAR);
+    add_damage_effect(&standalone, FEAR_AND_BOLT);
+    standalone.assert_call("debug_force_cast", &["1", &REAL_FEAR_WARD.to_string()]);
+    advance(&standalone);
+
+    cast_by(&standalone, wolf, FEAR_AND_BOLT, PLAYER);
+    assert_eq!(
+        stacks(&standalone, FEAR_AND_BOLT),
+        None,
+        "the effect's own mechanic is refused although the header has none"
+    );
+    assert_eq!(
+        charges(&standalone, PLAYER, REAL_FEAR_WARD),
+        Some(1),
+        "vmangos raises PROC_EX_IMMUNE only when every effect on the target was refused"
     );
 }
 
@@ -938,7 +1064,6 @@ fn bolt(standalone: &Standalone, spell_id: u32, school_mask: u8, cast_flags: u32
     );
 }
 
-// A proc never fires off an Aura applied in the same virtual instant.
 fn control_spell(standalone: &Standalone, spell_id: u32, control: i32, mechanic: u8) {
     aura_spell(
         standalone,
@@ -954,6 +1079,28 @@ fn control_spell(standalone: &Standalone, spell_id: u32, control: i32, mechanic:
     set_spell(standalone, spell_id, &format!("mechanic = {mechanic}"));
 }
 
+fn control_spell_by_effect(standalone: &Standalone, spell_id: u32, control: i32, mechanic: u8) {
+    control_spell(standalone, spell_id, control, 0);
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET effect_mechanic = {mechanic} WHERE spell_id = {spell_id}"
+    ));
+}
+
+fn add_damage_effect(standalone: &Standalone, spell_id: u32) {
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell_id, 1)),
+            ("spell_id", &spell_id),
+            ("effect_index", &1u8),
+            ("kind", &E_DAMAGE),
+            ("base_points", &5),
+            ("target", &T_TARGET_ENEMY),
+        ],
+    );
+}
+
+// A proc never fires off an Aura applied in the same virtual instant.
 fn advance(standalone: &Standalone) {
     standalone.assert_call("debug_advance_virtual_clock", &["50000"]);
 }

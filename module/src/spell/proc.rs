@@ -12,6 +12,7 @@ use lyracore_shared::spell::taxonomy::{
 // vmangos SpellDefines.h SpellModOp SPELLMOD_CHARGES.
 const SPELLMOD_OP_CHARGES: i32 = 4;
 
+use super::control::is_mechanic_immunity_mask;
 use super::*;
 use crate::{
     game_aura, game_spell, game_spell_effect, game_spell_proc_event, Aura, Spell, SpellCastEvent,
@@ -358,23 +359,37 @@ pub(crate) fn run_unlanded_proc_pass(
     }
 }
 
-/// The proc pass of a harmful spell that a mechanic immunity refused: vmangos runs it with
-/// PROC_EX_IMMUNE after SPELL_MISS_IMMUNE.
+/// The proc pass of a spell that a mechanic immunity refused on every effect it had on the target.
+/// vmangos raises PROC_EX_IMMUNE for a whole-spell refusal and only for a spell that can trigger,
+/// so the caller skips a triggered cast. The hit source follows the spell's damage class.
 pub(crate) fn run_immune_proc_pass(
     ctx: &ReducerContext,
     caster_guid: u64,
     target_guid: u64,
     spell_id: u32,
 ) {
+    let damage_class = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(spell_id)
+        .map_or(0, |spell| spell.damage_class);
+    let source = match damage_class {
+        DAMAGE_CLASS_MELEE => HitSource::MeleeSpell,
+        DAMAGE_CLASS_RANGED => HitSource::Ranged,
+        _ => HitSource::Spell,
+    };
     fire_aura_procs(
         ctx,
         caster_guid,
         target_guid,
-        &Hit::spell(HitSource::Spell, spell_id, false),
+        &Hit::spell(source, spell_id, false),
         (PROC_EX_IMMUNE, false),
         true,
     );
 }
+
+const DAMAGE_CLASS_MELEE: u8 = 2;
 
 const DAMAGE_CLASS_RANGED: u8 = 3;
 
@@ -613,10 +628,12 @@ fn effect_proc(row: &Aura, spell: &HolderSpell, charges: u8, hit: &ProcHit) -> A
         A_MOD_SPEED if row.eff_p0 == i32::from(SPEED_CAST) => {
             hit.spell.is_some_and(|spell| spell.cast_time_ms > 0)
         }
-        // HandleMechanicImmuneResistanceAuraProc: only a spell of the immune mechanic.
-        A_IMMUNITY if row.eff_p0_kind == P_MECHANIC => hit
-            .spell
-            .is_some_and(|spell| i32::from(spell.mechanic) == row.eff_p0),
+        // HandleMechanicImmuneResistanceAuraProc: only a spell of the immune mechanic. Aura 147
+        // has HandleNULLProc, which always fires.
+        A_IMMUNITY if row.eff_p0_kind == P_MECHANIC && !is_mechanic_immunity_mask(row.eff_p1) => {
+            hit.spell
+                .is_some_and(|spell| i32::from(spell.mechanic) == row.eff_p0)
+        }
         // HandleModPowerCostSchoolAuraProc: only a spell of the school that costs power.
         A_INERT if spell.spell_id == INSIGHT => hit
             .spell
@@ -1323,6 +1340,14 @@ mod tests {
         assert_eq!(
             effect_proc(&fear_ward, &spell, 1, &frostbolt),
             AuraProc::Failed
+        );
+        let mut mask = fear_ward;
+        mask.eff_p1 = 147;
+        mask.eff_p0 = 817;
+        assert_eq!(
+            effect_proc(&mask, &spell, 1, &frostbolt),
+            AuraProc::Fired,
+            "aura 147 has HandleNULLProc, which fires on any spell"
         );
     }
 

@@ -321,6 +321,27 @@ fn grant_crafted_item(
     }
 }
 
+/// The targets a cast's effects reached, and which of them refused every effect.
+#[derive(Default)]
+struct ImmuneRefusals {
+    refused: std::collections::BTreeSet<u64>,
+    landed: std::collections::BTreeSet<u64>,
+}
+
+impl ImmuneRefusals {
+    fn record(&mut self, target_guid: u64, immune: bool) {
+        if immune {
+            self.refused.insert(target_guid);
+        } else {
+            self.landed.insert(target_guid);
+        }
+    }
+
+    fn refused_whole(&self, target_guid: u64) -> bool {
+        self.refused.contains(&target_guid) && !self.landed.contains(&target_guid)
+    }
+}
+
 fn run_spell_effects(
     ctx: &ReducerContext,
     spell: &LoadedSpell,
@@ -363,7 +384,7 @@ fn run_spell_effects(
     let mut target_rolls: std::collections::HashMap<u64, AttackOutcome> =
         std::collections::HashMap::new();
     let mut shield_targets = std::collections::BTreeSet::new();
-    let mut immune_targets = std::collections::BTreeSet::new();
+    let mut immunity = ImmuneRefusals::default();
     // vmangos rolls the main hand per target, landed or avoided. LyraCore skips a Chance on Hit cast.
     let rolls_weapon =
         hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0 && !matches!(origin, CastOrigin::ChanceOnHit);
@@ -433,10 +454,10 @@ fn run_spell_effects(
             if t != caster_guid && hit.dealt > 0 && hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0 {
                 shield_targets.insert(t);
             }
-            if t != caster_guid && hit.immune {
-                immune_targets.insert(t);
+            immunity.record(t, hit.immune);
+            if !hit.immune {
+                remember_hit_target(&mut hit_targets, &mut seen_hit_targets, t);
             }
-            remember_hit_target(&mut hit_targets, &mut seen_hit_targets, t);
             if t == target_guid {
                 total_damage = total_damage.saturating_add(hit.dealt);
                 total_resisted = total_resisted.saturating_add(hit.resisted);
@@ -450,8 +471,14 @@ fn run_spell_effects(
             }
         }
     }
-    for t in immune_targets {
-        crate::spell::proc::run_immune_proc_pass(ctx, caster_guid, t, hdr.spell_id);
+    for &t in immunity
+        .refused
+        .iter()
+        .filter(|&&t| !triggered && t != caster_guid)
+    {
+        if immunity.refused_whole(t) {
+            crate::spell::proc::run_immune_proc_pass(ctx, caster_guid, t, hdr.spell_id);
+        }
     }
     // Spend after every effect has read the points; vmangos keeps them when a finisher misses.
     if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0 && !primary_avoided.is_avoided() {
@@ -493,11 +520,16 @@ fn run_spell_effects(
             is_crit: any_crit,
             resisted: total_resisted,
             absorbed: total_absorbed,
-            miss_info: cast_miss(
-                primary_avoided,
-                weapon_strike,
-                hdr.cast_flags & CAST_FLAG_MAGIC_HIT != 0 || hdr.school_mask & !RESIST_ARMOR != 0,
-            ),
+            miss_info: if immunity.refused_whole(target_guid) {
+                crate::spell::CAST_MISS_IMMUNE
+            } else {
+                cast_miss(
+                    primary_avoided,
+                    weapon_strike,
+                    hdr.cast_flags & CAST_FLAG_MAGIC_HIT != 0
+                        || hdr.school_mask & !RESIST_ARMOR != 0,
+                )
+            },
             energized: total_energized,
             power_type: energized_power_type,
             cooldown_ms: hdr.cooldown_ms,

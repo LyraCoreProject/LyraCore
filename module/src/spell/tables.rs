@@ -875,6 +875,7 @@ pub const CAST_MISS_MISS: u8 = 1;
 pub const CAST_MISS_RESIST: u8 = 2;
 pub const CAST_MISS_DODGE: u8 = 3;
 pub const CAST_MISS_PARRY: u8 = 4;
+pub const CAST_MISS_IMMUNE: u8 = 7;
 
 impl SpellImpactEvent {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {

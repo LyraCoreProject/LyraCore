@@ -929,7 +929,7 @@ fn apply_aura_effect(
     level: u8,
     points: i32,
 ) -> EffectHit {
-    if e.kind == A_CONTROL && is_immune_to_mechanic(ctx, target_guid, hdr, e.effect_mechanic) {
+    if e.kind == A_CONTROL && is_immune_to_mechanic(ctx, target_guid, hdr, e) {
         log::info!(
             "spell {} A_CONTROL refused — target {target_guid} is immune to its mechanic",
             e.spell_id

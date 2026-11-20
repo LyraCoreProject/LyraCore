@@ -67,6 +67,18 @@ symbol = "apply_aura_effect"
 evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::IsImmuneToSpell refuses the whole spell for its header Mechanic, and Unit::IsImmuneToSpellEffect refuses any effect for its EffectMechanic; apply_aura_effect asks is_immune_to_mechanic only for A_CONTROL."
 
 [[known_gaps]]
+description = "Applying a mechanic immunity Aura does not remove the Auras it makes the unit immune to, so Will of the Forsaken cast while feared leaves the fear on."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "aura_apply"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleModMechanicImmunity and HandleModMechanicImmunityMask call Unit::RemoveAurasAtMechanicImmunity on apply for a spell with SPELL_ATTR_EX_IMMUNITY_PURGES_EFFECT."
+
+[[known_gaps]]
+description = "The PvP trinkets are unverified as immunity Auras: Insignia of the Alliance and Horde and Escape Artist may be Dispel Mechanic effects in vmangos, which this change does not touch."
+path = "module/src/spell/control.rs"
+symbol = "is_immune_to_mechanic"
+evidence = "Not measured and not read. Berserker Rage 18499 and Will of the Forsaken 7744 are aura 77 and covered by tests; no trinket spell was checked against the vmangos spell dump."
+
+[[known_gaps]]
 description = "Retaliation strikes back, and spends a charge, on a hit from behind and while its warrior is stunned. vmangos neither strikes nor spends then."
 path = "module/src/combat/folds.rs"
 symbol = "retaliate_on_hit"
@@ -209,3 +221,18 @@ rung = "unit"
 path = "module/src/spell/control.rs"
 function = "a_mechanic_immunity_names_its_mechanic_and_a_mask_names_each_bit"
 rung = "unit"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "will_of_the_forsaken_refuses_a_charm_whose_spell_data_calls_it_helpful"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_spell_that_skips_immunities_lands_through_fear_ward_and_keeps_it"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "an_effect_mechanic_is_refused_and_a_spell_with_one_landing_effect_keeps_fear_ward"
+rung = "durable_module"
