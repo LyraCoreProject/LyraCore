@@ -39,6 +39,8 @@ const MECHANIC_FEAR: u8 = 5;
 const MECHANIC_CHARM: u8 = 1;
 const MECHANIC_SLEEP: u8 = 10;
 const MECHANIC_STUN: u8 = 12;
+// vmangos creature_template.mechanic_immune_mask sets bit `mechanic - 1`.
+const STUN_IMMUNE_MASK: u32 = 1 << (MECHANIC_STUN - 1);
 // vmangos Unit::HandleHasteAuraProc names Flurry by this SpellVisual.
 const FLURRY_VISUAL: u32 = 2759;
 const SPELL_FAMILY_WARRIOR: u8 = 4;
@@ -702,6 +704,62 @@ fn a_unit_is_immune_to_its_own_cast_by_header_mechanic() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_whose_template_is_stun_immune_refuses_a_stun_that_lands_on_one_without_the_mask() {
+    let mut standalone = Standalone::start("aura-charges-template-stun");
+    let unmasked = stage(&mut standalone);
+    let masked = spawn_wolf(&standalone);
+    control_spell(&standalone, STUN_FIXTURE, M_STUN, MECHANIC_STUN);
+
+    cast(&standalone, STUN_FIXTURE, unmasked);
+    assert!(
+        aura_column(&standalone, unmasked, STUN_FIXTURE, "stacks").is_some(),
+        "a creature whose template has no mask is stunned"
+    );
+    set_wolf_mechanic_immune_mask(&standalone, STUN_IMMUNE_MASK);
+    assert_eq!(
+        cast_miss_code(&standalone, PLAYER, STUN_FIXTURE, masked),
+        MISS_IMMUNE,
+        "vmangos Creature::IsImmuneToSpell refuses a stun its template's mechanic_immune_mask names"
+    );
+    assert_eq!(
+        aura_column(&standalone, masked, STUN_FIXTURE, "stacks"),
+        None
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_stun_immune_template_refuses_a_stun_effect_and_reports_immune2() {
+    let mut standalone = Standalone::start("aura-charges-template-stun-effect");
+    let wolf = stage(&mut standalone);
+    control_spell_by_effect(&standalone, STUN_FIXTURE, M_STUN, MECHANIC_STUN);
+    set_wolf_mechanic_immune_mask(&standalone, STUN_IMMUNE_MASK);
+
+    assert_eq!(
+        cast_miss_code(&standalone, PLAYER, STUN_FIXTURE, wolf),
+        MISS_IMMUNE2,
+        "vmangos Creature::IsImmuneToSpellEffect reads the template mask by effect mechanic"
+    );
+    assert_eq!(aura_column(&standalone, wolf, STUN_FIXTURE, "stacks"), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_stun_immune_template_lets_the_creature_stun_itself() {
+    let mut standalone = Standalone::start("aura-charges-template-self-stun");
+    let wolf = stage(&mut standalone);
+    control_spell(&standalone, STUN_FIXTURE, M_STUN, MECHANIC_STUN);
+    set_wolf_mechanic_immune_mask(&standalone, STUN_IMMUNE_MASK);
+
+    cast_by(&standalone, wolf, STUN_FIXTURE, wolf);
+    assert!(
+        aura_column(&standalone, wolf, STUN_FIXTURE, "stacks").is_some(),
+        "vmangos Creature::IsImmuneToSpell skips the template mask when castOnSelf"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_debuff_that_names_a_mechanic_refuses_no_harmful_spell_of_it() {
     let mut standalone = Standalone::start("aura-charges-mind-exhaustion");
     let wolf = stage(&mut standalone);
@@ -1113,16 +1171,7 @@ struct Charged {
     charges: u8,
 }
 
-fn stage(standalone: &mut Standalone) -> u64 {
-    standalone.publish_module();
-    standalone.assert_call("claim_operator", &[]);
-    standalone.assert_call("install_guid_range", &["0"]);
-    standalone.assert_call("debug_spawn_player_entity", &["1"]);
-    standalone.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
-    standalone.assert_sql(&format!(
-        "UPDATE game_world_entity SET health = {PLAYER_HEALTH}, max_health = {PLAYER_HEALTH} \
-         WHERE guid = {PLAYER}"
-    ));
+fn spawn_wolf(standalone: &Standalone) -> u64 {
     standalone.assert_call(
         "debug_spawn_at_feet",
         &["1", &TEST_WOLF_ENTRY.to_string(), "1.0"],
@@ -1139,6 +1188,27 @@ fn stage(standalone: &mut Standalone) -> u64 {
         "UPDATE game_world_entity SET simulation_indexed = false, armor = 0, level = 1, \
          health = {WOLF_HEALTH}, max_health = {WOLF_HEALTH} WHERE guid = {wolf}"
     ));
+    wolf
+}
+
+fn set_wolf_mechanic_immune_mask(standalone: &Standalone, mask: u32) {
+    standalone.assert_sql(&format!(
+        "UPDATE game_creature_template SET mechanic_immune_mask = {mask} \
+         WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+}
+
+fn stage(standalone: &mut Standalone) -> u64 {
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
+    standalone.assert_call("debug_spawn_player_entity", &["1"]);
+    standalone.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = {PLAYER_HEALTH}, max_health = {PLAYER_HEALTH} \
+         WHERE guid = {PLAYER}"
+    ));
+    let wolf = spawn_wolf(standalone);
     standalone.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
     wolf
 }

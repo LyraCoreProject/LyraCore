@@ -347,14 +347,14 @@ impl ImmuneRefusals {
     fn refuses_spell(
         &mut self,
         ctx: &ReducerContext,
+        caster_guid: u64,
         target_guid: u64,
         hdr: &Spell,
         effects: &[SpellEffect],
     ) -> bool {
-        *self
-            .header
-            .entry(target_guid)
-            .or_insert_with(|| crate::spell::is_immune_to_spell(ctx, target_guid, hdr, effects))
+        *self.header.entry(target_guid).or_insert_with(|| {
+            crate::spell::is_immune_to_spell(ctx, caster_guid, target_guid, hdr, effects)
+        })
     }
 
     fn record(&mut self, target_guid: u64, immune: bool) {
@@ -463,7 +463,7 @@ fn run_spell_effects(
             if triggered && !triggered_target_admitted(origin, caster_guid, t, is_alive(ctx, t)) {
                 continue;
             }
-            if immunity.refuses_spell(ctx, t, hdr, effects) {
+            if immunity.refuses_spell(ctx, caster_guid, t, hdr, effects) {
                 continue;
             }
             let roll = if rolls_hit && t != caster_guid {
@@ -1315,6 +1315,7 @@ fn check_cast_range(what: &str, dist: f32, range_yd: u32) -> Result<(), CastGate
 fn check_target_aura_state(
     ctx: &ReducerContext,
     spell: &LoadedSpell,
+    caster_guid: u64,
     target_guid: u64,
 ) -> Result<(), CastGateRefusal> {
     let exists = target_guid != 0
@@ -1325,7 +1326,13 @@ fn check_target_aura_state(
             .find(target_guid)
             .is_some();
     if exists
-        && crate::spell::refuses_helpful_spell(ctx, target_guid, &spell.header, &spell.effects)
+        && crate::spell::refuses_helpful_spell(
+            ctx,
+            caster_guid,
+            target_guid,
+            &spell.header,
+            &spell.effects,
+        )
     {
         return Err(CastGateRefusal::other(
             CastRefusalReason::TargetAuraState,
@@ -1368,7 +1375,7 @@ fn check_cast_gate_suffix(
         crate::creatures::guardian::check(ctx, caster, effect)?;
     }
 
-    check_target_aura_state(ctx, spell, target_guid)?;
+    check_target_aura_state(ctx, spell, caster_guid, target_guid)?;
 
     if level_gate_blocks(caster.is_player(), hdr.spell_level, level) {
         return Err(CastGateRefusal::other(

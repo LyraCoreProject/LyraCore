@@ -243,6 +243,7 @@ fn apply_template_field(
         "skin_loot_id" => template.skin_loot_id = as_u32(field, value)?,
         "trainer_type" => template.trainer_type = as_u8(field, value)?,
         "trainer_class" => template.trainer_class = as_u8(field, value)?,
+        "mechanic_immune_mask" => template.mechanic_immune_mask = as_u32(field, value)?,
         other => return Err(no_such_column("game_creature_template", other)),
     }
     Ok(())

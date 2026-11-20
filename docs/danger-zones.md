@@ -532,6 +532,16 @@ reapplied. The repair refills a live mixed holder once: Holy Shield's block row 
 and the holder spends from the larger count of its rows, so a Holy Shield with charges already
 spent goes back to full.
 
+### Creature mechanic immunity migration
+
+`game_creature_template` gains the END-appended column `mechanic_immune_mask` with default 0, which
+means no template immunity, so every existing template is unchanged until a reimport. Reimport the
+`creatures` family to fill it from the World Source; then bosses and elites refuse the mechanics
+their vmangos template names. A live creature reads its template's mask on each check and keeps no
+copy, so it needs no repair, respawn or `debug_repair_after_publish` step.
+Package Deltas may claim the column; one that omits it keeps the default. The Operator Content API
+does not carry it, so an Operator update keeps the template's mask.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

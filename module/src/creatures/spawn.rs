@@ -59,6 +59,10 @@ pub struct CreatureTemplate {
     pub trainer_type: u8,
     #[default(0u8)]
     pub trainer_class: u8,
+
+    // vmangos `mechanic_immune_mask`: bit `mechanic - 1` per Spell.dbc mechanic.
+    #[default(0u32)]
+    pub mechanic_immune_mask: u32,
 }
 
 impl CreatureTemplate {
@@ -91,6 +95,7 @@ impl CreatureTemplate {
             skin_loot_id: 0,
             trainer_type: 0,
             trainer_class: 0,
+            mechanic_immune_mask: 0,
         }
     }
 }

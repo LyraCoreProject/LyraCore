@@ -10,7 +10,7 @@ def check_operator_creatures(host):
     assert selection.read()[0] == 0x1ee
     template = host.sql('SELECT * FROM game_creature_template WHERE entry = 620')[0]
     fields = dict(zip([column['name']['some'] for column in template['schema']['elements']], template['rows'][0]))
-    del fields['entry']
+    del fields['entry'], fields['mechanic_immune_mask']
     host.restore('game_faction_template', 'id = 50909')
     if not host.rows('SELECT id FROM game_faction_template WHERE id = 50909'):
         host.sql('INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (50909,0,0,0,0,0,0,0,0,0,0,0,0)')

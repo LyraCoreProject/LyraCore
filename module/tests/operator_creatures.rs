@@ -28,7 +28,7 @@ fn fields(shard: &Standalone) -> Value {
         template(shard, 620)
             .unwrap()
             .into_iter()
-            .filter(|(key, _)| key != "entry")
+            .filter(|(key, _)| key != "entry" && key != "mechanic_immune_mask")
             .map(|(key, value)| {
                 let value = if key == "name" || key == "subname" {
                     json!(value)
@@ -214,6 +214,24 @@ fn template_and_display_edits_respawn_world_creatures_but_leave_instance_copies(
         CHICKEN
     )
     .is_some_and(|row| number::<u32>(&row, "display_id") == 200)));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_update_keeps_the_template_mechanic_immunity() {
+    let shard = realm("operator-creatures-immunity");
+    shard.assert_sql(
+        "UPDATE game_creature_template SET mechanic_immune_mask = 2048 WHERE entry = 620",
+    );
+    let mut fields = fields(&shard);
+    fields["name"] = json!("Stunproof chicken");
+    apply(
+        &shard,
+        json!([{"updateCreature": {"entry": 620, "fields": fields}}]),
+    );
+    let updated = template(&shard, 620).unwrap();
+    assert_eq!(updated["name"], "Stunproof chicken");
+    assert_eq!(number::<u32>(&updated, "mechanic_immune_mask"), 2048);
 }
 
 #[test]

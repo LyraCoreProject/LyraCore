@@ -36,8 +36,9 @@ macro_rules! creature_fields {
         pub struct CreatureFields { $(pub $field: $ty,)* }
 
         impl CreatureFields {
-            fn into_template(self, entry: u32) -> CreatureTemplate {
-                CreatureTemplate { entry, $($field: self.$field,)* }
+            // The Operator Content API does not edit mechanic immunity, so an update keeps it.
+            fn into_template(self, entry: u32, mechanic_immune_mask: u32) -> CreatureTemplate {
+                CreatureTemplate { entry, mechanic_immune_mask, $($field: self.$field,)* }
             }
 
             fn of_template(row: &CreatureTemplate) -> Self {
@@ -336,7 +337,7 @@ fn apply(
             let change = create.fields.changes(None);
             ctx.db
                 .game_creature_template()
-                .try_insert(create.fields.into_template(entry))
+                .try_insert(create.fields.into_template(entry, 0))
                 .map_err(|reason| format!("creature {entry} cannot be inserted: {reason}"))?;
             Ok((format!("create creature {entry}: {change}"), Some(entry)))
         }
@@ -348,10 +349,11 @@ fn apply(
                 Some(&CreatureFields::of_template(&old)),
             )?;
             let change = update.fields.changes(Some(&old));
-            ctx.db
-                .game_creature_template()
-                .entry()
-                .update(update.fields.into_template(update.entry));
+            ctx.db.game_creature_template().entry().update(
+                update
+                    .fields
+                    .into_template(update.entry, old.mechanic_immune_mask),
+            );
             Ok((
                 format!("update creature {}: {change}", update.entry),
                 Some(update.entry),
@@ -1026,7 +1028,7 @@ mod tests {
 
     #[test]
     fn log_names_only_changed_columns_and_escapes_line_breaks() {
-        let old = fields().into_template(42);
+        let old = fields().into_template(42, 0);
         let renamed = CreatureFields {
             name: "New\nname".into(),
             ..fields()

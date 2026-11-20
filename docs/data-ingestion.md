@@ -28,6 +28,8 @@ it does not provide the source-backed class rates.
 The creatures pass stores the no-parry, no-block and no-defense flags in `game_creature_defense`.
 White melee reads these flags alongside facing, totem type, casting and stun state. Reimport the
 creatures family to populate them on an existing Realm.
+It also stores `mechanic_immune_mask` on `game_creature_template`, as vmangos stores it: bit
+`mechanic - 1` per Spell.dbc mechanic ([mechanic numbering](./schema.md#mechanic-numbering)).
 
 The globals pass imports selected `areatrigger_tavern` ids with `patch_min <= 10`. The Module
 matches them to the imported `areatrigger_template` geometry for inn rest. Reimport replaces the
