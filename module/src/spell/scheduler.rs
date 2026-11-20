@@ -511,7 +511,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         if trigger_spell == 0 {
             continue;
         }
-        let result = cast_triggered(ctx, caster_guid, trigger_spell, level, channel_target);
+        let result = cast_aura_triggered(ctx, caster_guid, trigger_spell, level, channel_target);
         if let Err(e) = result {
             log::info!(
                 "channel tick: caster {caster_guid}'s trigger {trigger_spell} at {channel_target} did not resolve: {e}"

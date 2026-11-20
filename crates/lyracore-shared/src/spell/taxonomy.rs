@@ -145,6 +145,7 @@ pub const HUMANOID_TYPE: u8 = 7;
 pub const BEAST_TYPE: u8 = 1;
 pub const CRITTER_TYPE: u8 = 8;
 pub const TOTEM_TYPE: u8 = 11;
+// A_CONTROL control classes, not Spell.dbc mechanics: docs/schema.md#mechanic-numbering.
 pub const M_STUN: i32 = 1;
 pub const M_ROOT: i32 = 2;
 pub const M_FEAR: i32 = 3;

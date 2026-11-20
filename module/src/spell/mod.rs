@@ -32,18 +32,20 @@ mod tests;
 pub(crate) use cast::blink_forward;
 pub(crate) use cast::{
     apply_direct_heal, apply_effect, apply_item_auras, apply_spell_auras, aura_apply, begin_cast,
-    begin_loaded_cast, cast_triggered, charge_spell_cost, check_cast_start_gates,
-    clear_dead_callback_cast_admission, complete_cast, faction_target_violation, recipe_reagents,
-    record_spell_cooldown, resolve_cast, revive_amount, select_targets, start_creature_spell,
-    start_spell_cooldown, CastRequest, CreatureSpellCasterAdmission, CreatureSpellStart,
-    CreatureSpellStartMode, CreatureSpellTarget, ItemGrantOutcome, LoadedSpell,
+    begin_loaded_cast, cast_aura_triggered, cast_triggered, charge_spell_cost,
+    check_cast_start_gates, clear_dead_callback_cast_admission, complete_cast,
+    faction_target_violation, recipe_reagents, record_spell_cooldown, resolve_cast, revive_amount,
+    select_targets, start_creature_spell, start_spell_cooldown, CastRequest,
+    CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
+    ItemGrantOutcome, LoadedSpell,
 };
 pub(crate) use control::{
     aura_survives_death, break_auras_on_damage, break_auras_on_move, break_channel, buff_status,
     cancel_cast_attempt, control_status, expire_cast_attempt, fear_source, has_aura,
-    interrupt_cast, interrupt_cast_and_lock, is_action_blocked, is_disarmed, is_immune_to_mechanic,
-    is_movement_blocked, is_non_melee_spell_casting, is_self_movement_suppressed, is_stunned,
-    pushback_cast, remove_auras_on_death, spell_control,
+    interrupt_cast, interrupt_cast_and_lock, is_action_blocked, is_disarmed, is_immune_to_effect,
+    is_immune_to_spell, is_movement_blocked, is_non_melee_spell_casting,
+    is_self_movement_suppressed, is_stunned, pushback_cast, refuses_helpful_spell,
+    remove_auras_on_death, spell_control, spell_is_harmful,
 };
 #[cfg(test)]
 pub(crate) use control::{breaks_on_damage, cc_blocks};
@@ -88,8 +90,8 @@ pub(crate) use tables::{
     FormRefusal, FormRequirement, ShapeshiftState,
 };
 pub use tables::{
-    CAST_FAIL_INTERRUPTED, CAST_FAIL_NO_POWER, CAST_MISS_DODGE, CAST_MISS_MISS, CAST_MISS_NONE,
-    CAST_MISS_PARRY, CAST_MISS_RESIST,
+    CAST_FAIL_INTERRUPTED, CAST_FAIL_NO_POWER, CAST_MISS_DODGE, CAST_MISS_IMMUNE,
+    CAST_MISS_IMMUNE2, CAST_MISS_MISS, CAST_MISS_NONE, CAST_MISS_PARRY, CAST_MISS_RESIST,
 };
 
 pub(crate) use lyracore_shared::spell::taxonomy::{

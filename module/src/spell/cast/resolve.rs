@@ -208,6 +208,7 @@ fn resolve_loaded_cast(
 pub(crate) enum CastOrigin {
     Direct(CastPhase),
     Triggered,
+    AuraTriggered,
     DeadCreatureCallbackTriggered,
     ChanceOnHit,
 }
@@ -216,8 +217,20 @@ impl CastOrigin {
     fn is_triggered(self) -> bool {
         matches!(
             self,
-            Self::Triggered | Self::DeadCreatureCallbackTriggered | Self::ChanceOnHit
+            Self::Triggered
+                | Self::AuraTriggered
+                | Self::DeadCreatureCallbackTriggered
+                | Self::ChanceOnHit
         )
+    }
+
+    // Simplifies vmangos Spell::m_canTrigger; see the ledger gap in spell_cast_kinds.toml.
+    fn can_trigger(self, hdr: &Spell) -> bool {
+        match self {
+            Self::AuraTriggered => false,
+            Self::ChanceOnHit => hdr.negative(),
+            _ => true,
+        }
     }
 
     fn allows_dead_self(self) -> bool {
@@ -292,6 +305,98 @@ fn remember_hit_target(
     }
 }
 
+fn grant_crafted_item(
+    ctx: &ReducerContext,
+    plan: &mut crate::items::ItemStoragePlan,
+    e: &SpellEffect,
+    hdr: &Spell,
+    points: i32,
+) -> super::targeting::EffectHit {
+    let result = ctx
+        .db
+        .game_item_template()
+        .entry()
+        .find(e.p0.max(0) as u32)
+        .ok_or_else(|| {
+            crate::actor::ActionRefusal::from("craft product has no item template".to_string())
+        })
+        .and_then(|template| plan.grant(ctx, &template, points.max(1) as u32, false, None));
+    if let Err(ref reason) = result {
+        log::info!("craft {} refused: {reason:?}", hdr.spell_id);
+    }
+    super::targeting::EffectHit {
+        item: if result.is_ok() {
+            ItemGrantOutcome::Granted
+        } else {
+            ItemGrantOutcome::Refused
+        },
+        ..Default::default()
+    }
+}
+
+/// How a cast's effects fared against mechanic immunity, by target.
+#[derive(Default)]
+struct ImmuneRefusals {
+    header: std::collections::HashMap<u64, bool>,
+    refused: std::collections::BTreeSet<u64>,
+    landed: std::collections::BTreeSet<u64>,
+}
+
+impl ImmuneRefusals {
+    /// Whether the target is immune to the whole spell, asked once per target.
+    fn refuses_spell(
+        &mut self,
+        ctx: &ReducerContext,
+        target_guid: u64,
+        hdr: &Spell,
+        effects: &[SpellEffect],
+    ) -> bool {
+        *self
+            .header
+            .entry(target_guid)
+            .or_insert_with(|| crate::spell::is_immune_to_spell(ctx, target_guid, hdr, effects))
+    }
+
+    fn record(&mut self, target_guid: u64, immune: bool) {
+        if immune {
+            self.refused.insert(target_guid);
+        } else {
+            self.landed.insert(target_guid);
+        }
+    }
+
+    fn refused_by_header(&self, target_guid: u64) -> bool {
+        self.header.get(&target_guid) == Some(&true)
+    }
+
+    fn refused_whole(&self, target_guid: u64) -> bool {
+        self.refused_by_header(target_guid)
+            || (self.refused.contains(&target_guid) && !self.landed.contains(&target_guid))
+    }
+
+    fn whole_refusals(&self) -> Vec<u64> {
+        let by_header = self.header.iter().filter(|(_, &immune)| immune);
+        let mut guids: Vec<u64> = by_header
+            .map(|(&guid, _)| guid)
+            .chain(self.refused.iter().copied())
+            .filter(|&guid| self.refused_whole(guid))
+            .collect();
+        guids.sort_unstable();
+        guids.dedup();
+        guids
+    }
+
+    /// The cast's miss code for a target: 7 for a header refusal and 8 when only effects were.
+    fn miss(&self, target_guid: u64) -> Option<u8> {
+        if self.refused_by_header(target_guid) {
+            Some(crate::spell::CAST_MISS_IMMUNE)
+        } else {
+            self.refused_whole(target_guid)
+                .then_some(crate::spell::CAST_MISS_IMMUNE2)
+        }
+    }
+}
+
 fn run_spell_effects(
     ctx: &ReducerContext,
     spell: &LoadedSpell,
@@ -334,6 +439,7 @@ fn run_spell_effects(
     let mut target_rolls: std::collections::HashMap<u64, AttackOutcome> =
         std::collections::HashMap::new();
     let mut shield_targets = std::collections::BTreeSet::new();
+    let mut immunity = ImmuneRefusals::default();
     // vmangos rolls the main hand per target, landed or avoided. LyraCore skips a Chance on Hit cast.
     let rolls_weapon =
         hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0 && !matches!(origin, CastOrigin::ChanceOnHit);
@@ -357,6 +463,9 @@ fn run_spell_effects(
             if triggered && !triggered_target_admitted(origin, caster_guid, t, is_alive(ctx, t)) {
                 continue;
             }
+            if immunity.refuses_spell(ctx, t, hdr, effects) {
+                continue;
+            }
             let roll = if rolls_hit && t != caster_guid {
                 *target_rolls
                     .entry(t)
@@ -376,37 +485,8 @@ fn run_spell_effects(
             if e.kind == E_CREATE_ITEM {
                 created_items.push(e.p0.max(0) as u32);
             }
-            let hit = if e.kind == E_CREATE_ITEM && craft.is_some() {
-                let result = ctx
-                    .db
-                    .game_item_template()
-                    .entry()
-                    .find(e.p0.max(0) as u32)
-                    .ok_or_else(|| {
-                        crate::actor::ActionRefusal::from(
-                            "craft product has no item template".to_string(),
-                        )
-                    })
-                    .and_then(|template| {
-                        craft.as_mut().expect("craft was checked").grant(
-                            ctx,
-                            &template,
-                            points.max(1) as u32,
-                            false,
-                            None,
-                        )
-                    });
-                if let Err(ref reason) = result {
-                    log::info!("craft {} refused: {reason:?}", hdr.spell_id);
-                }
-                super::targeting::EffectHit {
-                    item: if result.is_ok() {
-                        ItemGrantOutcome::Granted
-                    } else {
-                        ItemGrantOutcome::Refused
-                    },
-                    ..Default::default()
-                }
+            let hit = if let (E_CREATE_ITEM, Some(plan)) = (e.kind, craft.as_mut()) {
+                grant_crafted_item(ctx, plan, e, hdr, points)
             } else {
                 let points = crate::combo::effect_points(ctx, hdr, e, caster_guid, t, points);
                 apply_effect(
@@ -432,7 +512,10 @@ fn run_spell_effects(
             if t != caster_guid && hit.dealt > 0 && hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0 {
                 shield_targets.insert(t);
             }
-            remember_hit_target(&mut hit_targets, &mut seen_hit_targets, t);
+            immunity.record(t, hit.immune);
+            if !hit.immune {
+                remember_hit_target(&mut hit_targets, &mut seen_hit_targets, t);
+            }
             if t == target_guid {
                 total_damage = total_damage.saturating_add(hit.dealt);
                 total_resisted = total_resisted.saturating_add(hit.resisted);
@@ -446,8 +529,16 @@ fn run_spell_effects(
             }
         }
     }
+    if origin.can_trigger(hdr) && crate::spell::spell_is_harmful(hdr, effects) {
+        for t in immunity.whole_refusals() {
+            crate::spell::proc::run_immune_proc_pass(ctx, caster_guid, t, hdr.spell_id);
+        }
+    }
     // Spend after every effect has read the points; vmangos keeps them when a finisher misses.
-    if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0 && !primary_avoided.is_avoided() {
+    if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0
+        && !primary_avoided.is_avoided()
+        && immunity.miss(target_guid).is_none()
+    {
         crate::combo::spend_combo(ctx, caster_guid);
     }
     let finish_items = |craft: Option<crate::items::ItemStoragePlan>| {
@@ -486,11 +577,14 @@ fn run_spell_effects(
             is_crit: any_crit,
             resisted: total_resisted,
             absorbed: total_absorbed,
-            miss_info: cast_miss(
-                primary_avoided,
-                weapon_strike,
-                hdr.cast_flags & CAST_FLAG_MAGIC_HIT != 0 || hdr.school_mask & !RESIST_ARMOR != 0,
-            ),
+            miss_info: immunity.miss(target_guid).unwrap_or_else(|| {
+                cast_miss(
+                    primary_avoided,
+                    weapon_strike,
+                    hdr.cast_flags & CAST_FLAG_MAGIC_HIT != 0
+                        || hdr.school_mask & !RESIST_ARMOR != 0,
+                )
+            }),
             energized: total_energized,
             power_type: energized_power_type,
             cooldown_ms: hdr.cooldown_ms,
@@ -676,6 +770,22 @@ pub(crate) fn cast_triggered(
         &CastRequest::new(caster_guid, spell_id, level, target_guid),
         &spell,
         CastOrigin::Triggered,
+    )
+}
+
+pub(crate) fn cast_aura_triggered(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    level: u8,
+    target_guid: u64,
+) -> Result<(), String> {
+    let spell = LoadedSpell::load(ctx, spell_id)?;
+    cast_triggered_with_origin(
+        ctx,
+        &CastRequest::new(caster_guid, spell_id, level, target_guid),
+        &spell,
+        CastOrigin::AuraTriggered,
     )
 }
 
@@ -1202,6 +1312,32 @@ fn check_cast_range(what: &str, dist: f32, range_yd: u32) -> Result<(), CastGate
     Ok(())
 }
 
+fn check_target_aura_state(
+    ctx: &ReducerContext,
+    spell: &LoadedSpell,
+    target_guid: u64,
+) -> Result<(), CastGateRefusal> {
+    let exists = target_guid != 0
+        && ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(target_guid)
+            .is_some();
+    if exists
+        && crate::spell::refuses_helpful_spell(ctx, target_guid, &spell.header, &spell.effects)
+    {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::TargetAuraState,
+            format!(
+                "spell {} is refused: unit {target_guid} is immune to its mechanic",
+                spell.header.spell_id
+            ),
+        ));
+    }
+    Ok(())
+}
+
 #[allow(clippy::too_many_lines)]
 fn check_cast_gate_suffix(
     ctx: &ReducerContext,
@@ -1231,6 +1367,8 @@ fn check_cast_gate_suffix(
     {
         crate::creatures::guardian::check(ctx, caster, effect)?;
     }
+
+    check_target_aura_state(ctx, spell, target_guid)?;
 
     if level_gate_blocks(caster.is_player(), hdr.spell_level, level) {
         return Err(CastGateRefusal::other(

@@ -137,6 +137,7 @@ pub mod cast_failure {
     pub const ONLY_STEALTHED: u8 = 0x57;
     pub const OUT_OF_RANGE: u8 = 0x59;
     pub const STUNNED: u8 = 0x64;
+    pub const TARGET_AURASTATE: u8 = 0x67;
     pub const TARGETS_DEAD: u8 = 0x65;
     pub const TOO_CLOSE: u8 = 0x76;
     pub const UNIT_NOT_INFRONT: u8 = 0x7C;

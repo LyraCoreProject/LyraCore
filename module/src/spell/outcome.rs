@@ -54,6 +54,7 @@ pub(crate) enum CastRefusalReason {
     Unreported,
     NoPower,
     CasterAuraState,
+    TargetAuraState,
     NotReady,
     OutOfRange,
     TooClose,

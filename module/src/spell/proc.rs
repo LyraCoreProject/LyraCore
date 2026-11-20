@@ -12,6 +12,7 @@ use lyracore_shared::spell::taxonomy::{
 // vmangos SpellDefines.h SpellModOp SPELLMOD_CHARGES.
 const SPELLMOD_OP_CHARGES: i32 = 4;
 
+use super::control::is_mechanic_immunity_mask;
 use super::*;
 use crate::{
     game_aura, game_spell, game_spell_effect, game_spell_proc_event, Aura, Spell, SpellCastEvent,
@@ -37,6 +38,7 @@ pub(crate) const PROC_EX_MISS: u32 = 0x0000_0004;
 pub(crate) const PROC_EX_DODGE: u32 = 0x0000_0010;
 pub(crate) const PROC_EX_PARRY: u32 = 0x0000_0020;
 pub(crate) const PROC_EX_BLOCK: u32 = 0x0000_0040;
+pub(crate) const PROC_EX_IMMUNE: u32 = 0x0000_0100;
 pub(crate) const PROC_EX_ABSORB: u32 = 0x0000_0400;
 // procEx bits below this name hit results; the bits above it are conditions.
 const PROC_EX_RESULTS: u32 = 0x0000_0FFF;
@@ -246,9 +248,13 @@ pub(crate) fn decide(
     if roll_bp >= proc_chance_bp(profile, side, hit.attack_time_ms) {
         return None;
     }
+    Some(fire_of(profile, now_micros))
+}
+
+fn fire_of(profile: &ProcProfile, now_micros: i64) -> ProcFire {
     let limited = profile.charges > 0;
     let charges_left = if limited { profile.charges - 1 } else { 0 };
-    Some(ProcFire {
+    ProcFire {
         charges_left,
         remove_buff: limited && charges_left == 0,
         ready_micros: if profile.icd_ms > 0 {
@@ -256,7 +262,19 @@ pub(crate) fn decide(
         } else {
             profile.ready_micros
         },
-    })
+    }
+}
+
+const FEAR_WARD: u32 = 6346;
+// vmangos SharedDefines.h MECHANIC_FEAR.
+const MECHANIC_FEAR: u8 = 5;
+
+// vmangos IsTriggeredAtSpellProcEvent decides Fear Ward before its proc event: it fires on a
+// spell of mechanic fear taken, with no roll and whatever the result, and on nothing else.
+fn fear_ward_decide(profile: &ProcProfile, hit: &ProcHit, now_micros: i64) -> Option<ProcFire> {
+    hit.spell
+        .is_some_and(|spell| spell.mechanic == MECHANIC_FEAR)
+        .then(|| fire_of(profile, now_micros))
 }
 
 /// Every Aura Holder carries its spell's profile and base charges (vmangos SpellAuraHolder).
@@ -340,6 +358,36 @@ pub(crate) fn run_unlanded_proc_pass(
         fire_aura_procs(ctx, attacker_guid, target_guid, hit, (result, false), true);
     }
 }
+
+/// The proc pass of a harmful spell that a mechanic immunity refused whole, with PROC_EX_IMMUNE.
+pub(crate) fn run_immune_proc_pass(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    target_guid: u64,
+    spell_id: u32,
+) {
+    let damage_class = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(spell_id)
+        .map_or(0, |spell| spell.damage_class);
+    let source = match damage_class {
+        DAMAGE_CLASS_MELEE => HitSource::MeleeSpell,
+        DAMAGE_CLASS_RANGED => HitSource::Ranged,
+        _ => HitSource::Spell,
+    };
+    fire_aura_procs(
+        ctx,
+        caster_guid,
+        target_guid,
+        &Hit::spell(source, spell_id, false),
+        (PROC_EX_IMMUNE, false),
+        true,
+    );
+}
+
+const DAMAGE_CLASS_MELEE: u8 = 2;
 
 const DAMAGE_CLASS_RANGED: u8 = 3;
 
@@ -452,7 +500,12 @@ fn fire_holder(
 ) {
     let profile = holder_profile(holder);
     let roll_bp = ctx.random::<u32>() % BASIS_POINTS;
-    let Some(fire) = decide(&profile, side, hit, now_micros, roll_bp) else {
+    let decision = if holder[0].spell_id == FEAR_WARD && side == ProcSide::Victim {
+        fear_ward_decide(&profile, hit, now_micros)
+    } else {
+        decide(&profile, side, hit, now_micros, roll_bp)
+    };
+    let Some(fire) = decision else {
         return;
     };
     let spell = HolderSpell::of(ctx, holder[0].spell_id);
@@ -573,10 +626,12 @@ fn effect_proc(row: &Aura, spell: &HolderSpell, charges: u8, hit: &ProcHit) -> A
         A_MOD_SPEED if row.eff_p0 == i32::from(SPEED_CAST) => {
             hit.spell.is_some_and(|spell| spell.cast_time_ms > 0)
         }
-        // HandleMechanicImmuneResistanceAuraProc: only a spell of the immune mechanic.
-        A_IMMUNITY if row.eff_p0_kind == P_MECHANIC => hit
-            .spell
-            .is_some_and(|spell| i32::from(spell.mechanic) == row.eff_p0),
+        // HandleMechanicImmuneResistanceAuraProc: only a spell of the immune mechanic. Aura 147
+        // has HandleNULLProc, which always fires.
+        A_IMMUNITY if row.eff_p0_kind == P_MECHANIC && !is_mechanic_immunity_mask(row.eff_p1) => {
+            hit.spell
+                .is_some_and(|spell| i32::from(spell.mechanic) == row.eff_p0)
+        }
         // HandleModPowerCostSchoolAuraProc: only a spell of the school that costs power.
         A_INERT if spell.spell_id == INSIGHT => hit
             .spell
@@ -710,7 +765,7 @@ fn fire_proc(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) -> bool {
                 );
                 return false;
             }
-            match crate::spell::cast_triggered(
+            match crate::spell::cast_aura_triggered(
                 ctx,
                 row.target_guid,
                 trigger_spell,
@@ -1239,8 +1294,34 @@ mod tests {
     }
 
     #[test]
+    fn fear_ward_fires_on_a_fear_whatever_its_result_and_on_no_other_spell() {
+        let profile = ProcProfile {
+            flags: PROC_FLAG_TAKEN_NEGATIVE_SPELL_HIT,
+            chance: 100,
+            proc_ex: PROC_EX_NORMAL_HIT,
+            charges: 1,
+            ..ProcProfile::default()
+        };
+        let fear = TriggeringSpell {
+            mechanic: MECHANIC_FEAR,
+            ..spell_facts()
+        };
+        let refused_fear = spell_hit(fear, PROC_EX_IMMUNE);
+        let fire = fear_ward_decide(&profile, &refused_fear, 0).expect("a refused fear fires");
+        assert!(fire.remove_buff);
+        assert_eq!(
+            decide(&profile, ProcSide::Victim, &refused_fear, 0, 0),
+            None,
+            "its proc event names a normal hit, which a refused fear is not"
+        );
+        assert_eq!(
+            fear_ward_decide(&profile, &spell_hit(spell_facts(), PROC_EX_NORMAL_HIT), 0),
+            None
+        );
+    }
+
+    #[test]
     fn a_mechanic_immunity_charge_is_spent_only_by_a_spell_of_that_mechanic() {
-        const MECHANIC_FEAR: u8 = 5;
         let mut fear_ward = aura(6346, A_IMMUNITY, 1);
         fear_ward.eff_p0 = i32::from(MECHANIC_FEAR);
         fear_ward.eff_p0_kind = P_MECHANIC;
@@ -1257,6 +1338,14 @@ mod tests {
         assert_eq!(
             effect_proc(&fear_ward, &spell, 1, &frostbolt),
             AuraProc::Failed
+        );
+        let mut mask = fear_ward;
+        mask.eff_p1 = 147;
+        mask.eff_p0 = 817;
+        assert_eq!(
+            effect_proc(&mask, &spell, 1, &frostbolt),
+            AuraProc::Fired,
+            "aura 147 has HandleNULLProc, which fires on any spell"
         );
     }
 

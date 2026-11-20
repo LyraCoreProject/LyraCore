@@ -1,7 +1,7 @@
 mod support;
 
 use lyracore_shared::spell::taxonomy::{
-    CAST_FLAG_COMBO_FINISHER, E_FINISHER_DAMAGE, T_TARGET_ENEMY,
+    A_IMMUNITY, CAST_FLAG_COMBO_FINISHER, E_FINISHER_DAMAGE, P_MECHANIC, T_SELF, T_TARGET_ENEMY,
 };
 
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
@@ -10,11 +10,13 @@ use support::{number, wait_for_event_rows, Standalone};
 
 const CHARACTER: u64 = 1;
 const FINISHER: u32 = 509_0110;
+const STUN_IMMUNITY: u32 = 509_0111;
+// vmangos SharedDefines.h MECHANIC_STUN, and SpellMissInfo Immune.
+const MECHANIC_STUN: u8 = 12;
+const MISS_IMMUNE: u32 = 7;
 
-#[test]
-#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_finisher_adds_its_per_point_damage_and_spends_the_points() {
-    let mut standalone = Standalone::start("combo-finisher");
+fn stage_finisher(name: &str) -> (Standalone, u64) {
+    let mut standalone = Standalone::start(name);
     standalone.publish_module();
     standalone.clear_schedule("game_creature_move_schedule");
     standalone.clear_schedule("game_melee_schedule");
@@ -67,6 +69,13 @@ fn a_finisher_adds_its_per_point_damage_and_spends_the_points() {
         ],
     );
 
+    (standalone, wolf)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_finisher_adds_its_per_point_damage_and_spends_the_points() {
+    let (standalone, wolf) = stage_finisher("combo-finisher");
     let held = format!("SELECT points FROM game_combo_point WHERE owner_guid = {CHARACTER}");
     for _ in 0..10 {
         let events = standalone.subscribe(&[&format!(
@@ -103,4 +112,60 @@ fn a_finisher_adds_its_per_point_damage_and_spends_the_points() {
         return;
     }
     panic!("ten finishers must land at least once");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_finisher_that_a_mechanic_immunity_refuses_keeps_its_combo_points() {
+    let (standalone, wolf) = stage_finisher("combo-finisher-immune");
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell SET mechanic = {MECHANIC_STUN} WHERE spell_id = {FINISHER}"
+    ));
+    standalone.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &STUN_IMMUNITY),
+            ("name", &"Fixture Stun Immunity"),
+            ("duration_ms", &600_000),
+            ("spell_level", &1),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(STUN_IMMUNITY, 0)),
+            ("spell_id", &STUN_IMMUNITY),
+            ("kind", &A_IMMUNITY),
+            ("target", &T_SELF),
+            ("p_0", &i32::from(MECHANIC_STUN)),
+            ("p_0_kind", &P_MECHANIC),
+        ],
+    );
+    standalone.assert_call(
+        "debug_force_cast",
+        &[&wolf.to_string(), &STUN_IMMUNITY.to_string()],
+    );
+    let events = standalone.subscribe(&[&format!(
+        "SELECT * FROM game_spell_cast_event_live WHERE spell_id = {FINISHER} AND kind = 2"
+    )]);
+    standalone.assert_call(
+        "debug_cast_at",
+        &[
+            &CHARACTER.to_string(),
+            &FINISHER.to_string(),
+            &wolf.to_string(),
+        ],
+    );
+    let go = wait_for_event_rows(&events, "game_spell_cast_event_live")
+        .pop()
+        .expect("the finisher must report its GO");
+    assert_eq!(number::<u32>(&go, "miss_info"), MISS_IMMUNE);
+    let points = standalone.query_rows(&format!(
+        "SELECT points FROM game_combo_point WHERE owner_guid = {CHARACTER}"
+    ));
+    assert_eq!(
+        number::<u32>(&points[0], "points"),
+        3,
+        "vmangos Spell::finish keeps the points when an enemy target has a miss condition, Immune included"
+    );
 }

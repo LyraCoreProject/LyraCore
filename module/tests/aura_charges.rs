@@ -3,11 +3,12 @@ mod support;
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{
-    A_ABSORB, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN, A_MOD_RESISTANCE,
-    A_MOD_SPEED, A_SPELLMOD_FLAT, CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES,
-    COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_SPELL_CRIT, E_DAMAGE, P_COMBAT_FIELD, P_MECHANIC,
-    P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST, SPEED_SWING,
-    T_SELF, T_TARGET_ENEMY,
+    A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN,
+    A_MOD_RESISTANCE, A_MOD_SPEED, A_SPELLMOD_FLAT, CAST_FLAG_CANNOT_CRIT,
+    CAST_FLAG_IGNORE_RESISTANCES, CAST_FLAG_MAGIC_HIT, COMBAT_ATTACK_POWER, COMBAT_CRIT,
+    COMBAT_SPELL_CRIT, E_DAMAGE, M_FEAR, M_POLY, M_STUN, P_COMBAT_FIELD, P_MECHANIC, P_NONE,
+    P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST, SPEED_MOVE, SPEED_SWING,
+    T_SELF, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
@@ -31,9 +32,13 @@ const PROC_EX_BLOCK: u32 = 0x40;
 const PROC_EX_TRIGGER_ALWAYS: u32 = 0x1_0000;
 // Spell.dbc attribute bit 0, SPELL_ATTR_PROC_FAILURE_BURNS_CHARGE.
 const PROC_FAILURE_BURNS_CHARGE: u32 = 0x1;
-// vmangos SpellModOp SPELLMOD_CHARGES and SharedDefines.h MECHANIC_FEAR.
+// vmangos SpellModOp SPELLMOD_CHARGES.
 const SPELLMOD_CHARGES: i32 = 4;
+// vmangos SharedDefines.h Mechanics.
 const MECHANIC_FEAR: u8 = 5;
+const MECHANIC_CHARM: u8 = 1;
+const MECHANIC_SLEEP: u8 = 10;
+const MECHANIC_STUN: u8 = 12;
 // vmangos Unit::HandleHasteAuraProc names Flurry by this SpellVisual.
 const FLURRY_VISUAL: u32 = 2759;
 const SPELL_FAMILY_WARRIOR: u8 = 4;
@@ -56,7 +61,8 @@ const NATURE_BOLT: u32 = 5_091_103;
 const FIRE_BOLT: u32 = 5_091_104;
 const SCORCH: u32 = 5_091_105;
 const CERTAIN_SPELL_CRIT: u32 = 5_091_106;
-const FEAR_WARD: u32 = 5_091_107;
+// The Module names Fear Ward by its vmangos spell id.
+const FEAR_WARD: u32 = 6346;
 const FEAR_BOLT: u32 = 5_091_108;
 const FOCUS: u32 = 5_091_109;
 const SLOW_BOLT: u32 = 5_091_110;
@@ -66,6 +72,22 @@ const SHIELD_BLOCK: u32 = 5_091_113;
 const IMPROVED_SHIELD_BLOCK: u32 = 5_091_115;
 const WINDFURY_ATTACK: u32 = 5_091_116;
 const POWER_WORD_SHIELD: u32 = 5_091_117;
+const PSYCHIC_SCREAM: u32 = 5_091_118;
+const WILL_OF_THE_FORSAKEN: u32 = 5_091_119;
+const SLEEP_FIXTURE: u32 = 5_091_120;
+const STUN_FIXTURE: u32 = 5_091_121;
+const MIND_EXHAUSTION: u32 = 5_091_122;
+const MIND_CONTROL: u32 = 5_091_123;
+const FEAR_AND_BOLT: u32 = 5_091_124;
+const FEAR_AND_SLOW: u32 = 5_091_125;
+const DOMINION_OF_SOUL: u32 = 5_091_126;
+const EFFECT_FEAR: u32 = 5_091_127;
+const MISS_NONE: &str = "0";
+const MISS_IMMUNE: &str = "7";
+const MISS_IMMUNE2: &str = "8";
+// Spell.dbc Attributes and AttributesEx3 bits that skip immunity.
+const ATTR_NO_IMMUNITIES: u32 = 0x2000_0000;
+const ATTR_EX3_IGNORE_RESTRICTIONS: u32 = 0x1000_0000;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -337,10 +359,372 @@ fn fear_ward_is_kept_by_a_frostbolt_and_spent_by_a_fear_spell() {
     assert_eq!(
         charges(&standalone, PLAYER, FEAR_WARD),
         Some(1),
-        "vmangos HandleMechanicImmuneResistanceAuraProc keeps Fear Ward off a spell of another mechanic"
+        "vmangos IsTriggeredAtSpellProcEvent keeps Fear Ward off a spell whose mechanic is not fear"
     );
     cast_by(&standalone, wolf, FEAR_BOLT, PLAYER);
     assert_eq!(charges(&standalone, PLAYER, FEAR_WARD), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn fear_ward_refuses_a_fear_that_deals_no_damage_and_is_used_up_by_it() {
+    let mut standalone = Standalone::start("aura-charges-fear-ward-refuses");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: FEAR_WARD,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: TAKE_HARMFUL_ABILITY | TAKE_HARMFUL_SPELL,
+            charges: 1,
+        },
+        &[(A_IMMUNITY, 0, i32::from(MECHANIC_FEAR), P_MECHANIC)],
+    );
+    standalone.insert_row(
+        "game_spell_proc_event",
+        &[("spell_id", &FEAR_WARD), ("proc_ex", &PROC_EX_NORMAL_HIT)],
+    );
+    control_spell(&standalone, PSYCHIC_SCREAM, M_FEAR, MECHANIC_FEAR);
+    set_spell(
+        &standalone,
+        PSYCHIC_SCREAM,
+        &format!("cast_flags = {CAST_FLAG_MAGIC_HIT}"),
+    );
+    set_level(&standalone, PLAYER, OUT_OF_REACH_LEVEL);
+    standalone.assert_call("debug_force_cast", &["1", &FEAR_WARD.to_string()]);
+    advance(&standalone);
+    let events = subscribe_with_fence(
+        &standalone,
+        &[&format!(
+            "SELECT * FROM game_spell_cast_event_live WHERE spell_id = {PSYCHIC_SCREAM} AND kind = 2"
+        )],
+    );
+
+    cast_by(&standalone, wolf, PSYCHIC_SCREAM, PLAYER);
+    fence_subscription(&standalone, &events);
+    assert_eq!(
+        event_rows(&events, "game_spell_cast_event_live")[0]["miss_info"],
+        MISS_IMMUNE,
+        "the cast reports its target as immune, not as a resist, though a hit roll could resist it"
+    );
+    assert_eq!(
+        stacks(&standalone, PSYCHIC_SCREAM),
+        None,
+        "vmangos Unit::IsImmuneToSpell refuses a fear the Fear Warded unit takes"
+    );
+    assert_eq!(
+        charges(&standalone, PLAYER, FEAR_WARD),
+        None,
+        "the refused fear uses Fear Ward up, though it deals no damage"
+    );
+    set_spell(&standalone, PSYCHIC_SCREAM, "cast_flags = 0");
+    cast_by(&standalone, wolf, PSYCHIC_SCREAM, PLAYER);
+    assert!(
+        stacks(&standalone, PSYCHIC_SCREAM).is_some(),
+        "the next fear lands"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn will_of_the_forsaken_refuses_a_fear_and_a_sleep_and_lets_a_stun_land() {
+    let mut standalone = Standalone::start("aura-charges-will-of-the-forsaken");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: WILL_OF_THE_FORSAKEN,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[
+            (A_IMMUNITY, 0, i32::from(MECHANIC_CHARM), P_MECHANIC),
+            (A_IMMUNITY, 0, i32::from(MECHANIC_FEAR), P_MECHANIC),
+            (A_IMMUNITY, 0, i32::from(MECHANIC_SLEEP), P_MECHANIC),
+        ],
+    );
+    control_spell(&standalone, PSYCHIC_SCREAM, M_FEAR, MECHANIC_FEAR);
+    control_spell(&standalone, SLEEP_FIXTURE, M_POLY, MECHANIC_SLEEP);
+    control_spell(&standalone, STUN_FIXTURE, M_STUN, MECHANIC_STUN);
+    standalone.assert_call(
+        "debug_force_cast",
+        &["1", &WILL_OF_THE_FORSAKEN.to_string()],
+    );
+    advance(&standalone);
+
+    cast_by(&standalone, wolf, PSYCHIC_SCREAM, PLAYER);
+    cast_by(&standalone, wolf, SLEEP_FIXTURE, PLAYER);
+    cast_by(&standalone, wolf, STUN_FIXTURE, PLAYER);
+    assert_eq!(stacks(&standalone, PSYCHIC_SCREAM), None, "fear is refused");
+    assert_eq!(stacks(&standalone, SLEEP_FIXTURE), None, "sleep is refused");
+    assert!(
+        stacks(&standalone, STUN_FIXTURE).is_some(),
+        "its charm immunity is mechanic 1, not LyraCore's M_STUN, so a stun lands"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn will_of_the_forsaken_refuses_a_charm_whose_spell_data_calls_it_helpful() {
+    let mut standalone = Standalone::start("aura-charges-charm-polarity");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: WILL_OF_THE_FORSAKEN,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_IMMUNITY, 0, i32::from(MECHANIC_CHARM), P_MECHANIC)],
+    );
+    control_spell(&standalone, MIND_CONTROL, M_POLY, MECHANIC_CHARM);
+    set_spell(&standalone, MIND_CONTROL, "is_negative = false");
+    standalone.assert_call(
+        "debug_force_cast",
+        &["1", &WILL_OF_THE_FORSAKEN.to_string()],
+    );
+    advance(&standalone);
+
+    cast_by(&standalone, wolf, MIND_CONTROL, PLAYER);
+    assert_eq!(
+        stacks(&standalone, MIND_CONTROL),
+        None,
+        "vmangos IsPositiveEffect makes a charm aimed at an enemy harmful, whatever the spell flags say"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_spell_that_skips_immunities_lands_through_fear_ward() {
+    let mut standalone = Standalone::start("aura-charges-skips-immunities");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: FEAR_WARD,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: TAKE_HARMFUL_ABILITY | TAKE_HARMFUL_SPELL,
+            charges: 1,
+        },
+        &[(A_IMMUNITY, 0, i32::from(MECHANIC_FEAR), P_MECHANIC)],
+    );
+    control_spell(&standalone, PSYCHIC_SCREAM, M_FEAR, MECHANIC_FEAR);
+    standalone.assert_call("debug_force_cast", &["1", &FEAR_WARD.to_string()]);
+    advance(&standalone);
+
+    for column in [
+        format!("attributes = {ATTR_NO_IMMUNITIES}"),
+        format!("attributes_ex_3 = {ATTR_EX3_IGNORE_RESTRICTIONS}"),
+    ] {
+        set_spell(&standalone, PSYCHIC_SCREAM, &column);
+        cast_by(&standalone, wolf, PSYCHIC_SCREAM, PLAYER);
+        assert!(
+            stacks(&standalone, PSYCHIC_SCREAM).is_some(),
+            "{column} skips the immunity"
+        );
+        standalone.assert_sql(&format!(
+            "DELETE FROM game_aura WHERE spell_id = {PSYCHIC_SCREAM}"
+        ));
+        set_spell(
+            &standalone,
+            PSYCHIC_SCREAM,
+            "attributes = 0, attributes_ex_3 = 0",
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_fear_with_a_speed_effect_is_refused_whole_and_uses_fear_ward_up() {
+    let mut standalone = Standalone::start("aura-charges-fear-and-slow");
+    let wolf = stage(&mut standalone);
+    real_fear_ward(&standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: FEAR_AND_SLOW,
+            school_mask: NATURE,
+            target: T_TARGET_ENEMY,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[
+            (A_CONTROL, 0, M_FEAR, P_MECHANIC),
+            (A_MOD_SPEED, -50, i32::from(SPEED_MOVE), P_SPEED_KIND),
+        ],
+    );
+    set_spell(
+        &standalone,
+        FEAR_AND_SLOW,
+        &format!("mechanic = {MECHANIC_FEAR}"),
+    );
+
+    let miss = cast_miss_code(&standalone, wolf, FEAR_AND_SLOW, PLAYER);
+    assert_eq!(
+        miss, MISS_IMMUNE,
+        "vmangos refuses the whole spell by its header mechanic"
+    );
+    assert_eq!(
+        stacks(&standalone, FEAR_AND_SLOW),
+        None,
+        "no effect of the fear, its speed Aura included, lands"
+    );
+    assert_eq!(charges(&standalone, PLAYER, FEAR_WARD), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_effect_mechanic_refuses_an_effect_and_reports_immune_only_when_none_landed() {
+    let mut standalone = Standalone::start("aura-charges-effect-mechanic");
+    let wolf = stage(&mut standalone);
+    real_fear_ward(&standalone);
+    control_spell_by_effect(&standalone, FEAR_AND_BOLT, M_FEAR, MECHANIC_FEAR);
+    add_damage_effect(&standalone, FEAR_AND_BOLT);
+    set_spell(
+        &standalone,
+        FEAR_AND_BOLT,
+        &format!("cast_flags = {CAST_FLAG_IGNORE_RESISTANCES}"),
+    );
+    control_spell_by_effect(&standalone, EFFECT_FEAR, M_FEAR, MECHANIC_FEAR);
+
+    let mixed = cast_miss_code(&standalone, wolf, FEAR_AND_BOLT, PLAYER);
+    assert_eq!(
+        stacks(&standalone, FEAR_AND_BOLT),
+        None,
+        "the fear effect is refused"
+    );
+    assert_eq!(
+        mixed, MISS_NONE,
+        "its damage effect landed, so the target is not immune"
+    );
+    let whole = cast_miss_code(&standalone, wolf, EFFECT_FEAR, PLAYER);
+    assert_eq!(stacks(&standalone, EFFECT_FEAR), None);
+    assert_eq!(
+        whole, MISS_IMMUNE2,
+        "vmangos reports Immune2 when the effect masks, not the header, took every effect"
+    );
+    assert_eq!(
+        charges(&standalone, PLAYER, FEAR_WARD),
+        Some(1),
+        "Fear Ward reads the header mechanic, which neither spell has"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn will_of_the_forsaken_refuses_a_spell_when_any_effect_aims_at_an_enemy() {
+    let mut standalone = Standalone::start("aura-charges-dominion");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: WILL_OF_THE_FORSAKEN,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_IMMUNITY, 0, i32::from(MECHANIC_CHARM), P_MECHANIC)],
+    );
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: DOMINION_OF_SOUL,
+            school_mask: NATURE,
+            target: T_TARGET_ENEMY,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[
+            (A_CONTROL, 0, M_POLY, P_MECHANIC),
+            (A_MOD_SPEED, 20, i32::from(SPEED_CAST), P_SPEED_KIND),
+        ],
+    );
+    set_spell(
+        &standalone,
+        DOMINION_OF_SOUL,
+        &format!("mechanic = {MECHANIC_CHARM}, is_negative = false"),
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET target = {T_TARGET_ANY} \
+         WHERE spell_id = {DOMINION_OF_SOUL} AND effect_index = 0"
+    ));
+    standalone.assert_call(
+        "debug_force_cast",
+        &["1", &WILL_OF_THE_FORSAKEN.to_string()],
+    );
+    advance(&standalone);
+
+    cast_by(&standalone, wolf, DOMINION_OF_SOUL, PLAYER);
+    assert_eq!(
+        stacks(&standalone, DOMINION_OF_SOUL),
+        None,
+        "its haste effect aims at an enemy, so vmangos IsPositiveSpell is false for the whole spell"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_unit_is_immune_to_its_own_cast_by_header_mechanic() {
+    let mut standalone = Standalone::start("aura-charges-self-cast");
+    stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: WILL_OF_THE_FORSAKEN,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_IMMUNITY, 0, i32::from(MECHANIC_SLEEP), P_MECHANIC)],
+    );
+    control_spell(&standalone, SLEEP_FIXTURE, M_POLY, MECHANIC_SLEEP);
+    standalone.assert_call(
+        "debug_force_cast",
+        &["1", &WILL_OF_THE_FORSAKEN.to_string()],
+    );
+    advance(&standalone);
+
+    cast_by(&standalone, PLAYER, SLEEP_FIXTURE, PLAYER);
+    assert_eq!(
+        stacks(&standalone, SLEEP_FIXTURE),
+        None,
+        "vmangos Unit::IsImmuneToSpell ignores castOnSelf, as Dreamless Sleep through Will of the Forsaken shows"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_debuff_that_names_a_mechanic_refuses_no_harmful_spell_of_it() {
+    let mut standalone = Standalone::start("aura-charges-mind-exhaustion");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: MIND_EXHAUSTION,
+            school_mask: PHYSICAL,
+            target: T_TARGET_ENEMY,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_IMMUNITY, 0, i32::from(MECHANIC_STUN), P_MECHANIC)],
+    );
+    control_spell(&standalone, STUN_FIXTURE, M_STUN, MECHANIC_STUN);
+
+    cast_by(&standalone, wolf, MIND_EXHAUSTION, PLAYER);
+    assert!(stacks(&standalone, MIND_EXHAUSTION).is_some());
+    cast_by(&standalone, wolf, STUN_FIXTURE, PLAYER);
+    assert!(
+        stacks(&standalone, STUN_FIXTURE).is_some(),
+        "vmangos immunity refuses a spell of the other polarity, and a debuff refuses only helpful ones"
+    );
 }
 
 #[test]
@@ -809,6 +1193,70 @@ fn bolt(standalone: &Standalone, spell_id: u32, school_mask: u8, cast_flags: u32
         &[
             ("id", &packed_spell_effect_id(spell_id, 0)),
             ("spell_id", &spell_id),
+            ("kind", &E_DAMAGE),
+            ("base_points", &5),
+            ("target", &T_TARGET_ENEMY),
+        ],
+    );
+}
+
+fn real_fear_ward(standalone: &Standalone) {
+    aura_spell(
+        standalone,
+        Charged {
+            spell_id: FEAR_WARD,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: TAKE_HARMFUL_ABILITY | TAKE_HARMFUL_SPELL,
+            charges: 1,
+        },
+        &[(A_IMMUNITY, 0, i32::from(MECHANIC_FEAR), P_MECHANIC)],
+    );
+    standalone.assert_call("debug_force_cast", &["1", &FEAR_WARD.to_string()]);
+    advance(standalone);
+}
+
+fn cast_miss_code(standalone: &Standalone, caster: u64, spell_id: u32, target: u64) -> String {
+    let events = subscribe_with_fence(
+        standalone,
+        &[&format!(
+            "SELECT * FROM game_spell_cast_event_live WHERE spell_id = {spell_id} AND kind = 2"
+        )],
+    );
+    cast_by(standalone, caster, spell_id, target);
+    fence_subscription(standalone, &events);
+    event_rows(&events, "game_spell_cast_event_live")[0]["miss_info"].clone()
+}
+
+fn control_spell(standalone: &Standalone, spell_id: u32, control: i32, mechanic: u8) {
+    aura_spell(
+        standalone,
+        Charged {
+            spell_id,
+            school_mask: NATURE,
+            target: T_TARGET_ENEMY,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_CONTROL, 0, control, P_MECHANIC)],
+    );
+    set_spell(standalone, spell_id, &format!("mechanic = {mechanic}"));
+}
+
+fn control_spell_by_effect(standalone: &Standalone, spell_id: u32, control: i32, mechanic: u8) {
+    control_spell(standalone, spell_id, control, 0);
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET effect_mechanic = {mechanic} WHERE spell_id = {spell_id}"
+    ));
+}
+
+fn add_damage_effect(standalone: &Standalone, spell_id: u32) {
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell_id, 1)),
+            ("spell_id", &spell_id),
+            ("effect_index", &1u8),
             ("kind", &E_DAMAGE),
             ("base_points", &5),
             ("target", &T_TARGET_ENEMY),

@@ -1150,6 +1150,36 @@ immunity also blocks friendly effects. Reflection uses this distinction to choos
 damage; a school immunity blocks it only when its source is helpful or carries bit 0x100. Shield
 damage still lands when the reflected swing ended a Duel.
 
+### Mechanic numbering
+
+A Spell's `mechanic` and an effect's `effect_mechanic` (zero names none) carry the Spell.dbc
+mechanic, as vmangos `SharedDefines.h` numbers it: 5 is fear, 7 root, 12 stun, 17 polymorph. So does
+an `A_IMMUNITY` row with `p0_kind` `P_MECHANIC`: aura 77 keeps its misc value, and aura 147 keeps
+its mask, with the source aura id in the low byte of `p1`. An `A_CONTROL` row's `p0` is not a
+Spell.dbc mechanic but a control class (`M_STUN`, `M_ROOT`, `M_FEAR`, `M_POLY`), which several
+mechanics share: it picks the unit's control state and its diminishing-returns category, and no
+immunity reads it.
+
+A target is immune to a whole cast when it holds an immunity Aura that names the Spell's `mechanic`,
+before the hit roll and before any effect runs, as vmangos `IsImmuneToSpell` decides. It is immune
+to one `A_CONTROL` effect when an Aura names the effect's `effect_mechanic`, as
+`IsImmuneToSpellEffect` decides. The Aura's source Spell must have the other polarity, or its `p1`
+must carry bit 0x100. A Spell is harmful when any effect aims at an enemy, and an effect is harmful
+when it does, unless `SPELL_CUSTOM_POSITIVE` says otherwise. A Spell with `SPELL_ATTR_NO_IMMUNITIES`
+(Attributes 0x20000000) skips the header mechanic, and one with the ignore-restrictions bit
+(AttributesEx3 0x10000000) skips both. A unit is immune to its own cast too, as vmangos ignores `castOnSelf`.
+
+A helpful spell aimed at a target that is immune to its header mechanic is refused when the cast
+starts, with `SPELL_FAILED_TARGET_AURASTATE`, so no item, power or cooldown is spent, as vmangos
+`Spell::CheckCast` does. A harmful one is refused after it starts.
+
+A cast that was refused whole on a target reports it as immune (`SpellMissInfo` Immune, for the
+primary target): Immune when the header mechanic refused it, and Immune2 when only effect
+mechanics masked every effect. It also runs the proc pass for that target with `PROC_EX_IMMUNE`,
+which is how Fear Ward is used up: it fires on any spell whose header mechanic is fear, whatever
+the result. A cast an aura started runs no such pass, a harmful item cast runs it, and a helpful spell raises no
+proc event. A finisher refused whole keeps its combo points.
+
 ### Regeneration
 
 `A_MOD_POWER_REGEN` (0xC1) stores mana per five seconds. Each Character keeps a two-second
