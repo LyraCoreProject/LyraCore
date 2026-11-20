@@ -55,6 +55,7 @@ pub(crate) fn clear(ctx: &ReducerContext, character_guid: u64) {
         if !crate::transfer::is_in_transit(ctx, character_guid) {
             crate::native::economy::buyback_removed(ctx, &row);
             crate::native::economy::buyback_destroyed(ctx, &row);
+            crate::native::realm_petition::charter_discarded(ctx, character_guid, &row.item);
         }
     }
     ctx.db

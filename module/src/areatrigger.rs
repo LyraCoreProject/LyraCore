@@ -296,6 +296,9 @@ pub(crate) fn request_enter_areatrigger(
 
 // A trigger may grant exploration credit and teleport; both effects are independent.
 pub(crate) fn apply_enter_areatrigger(ctx: &ReducerContext, player_guid: u64, trigger_id: u32) {
+    if crate::taxi::is_in_flight(ctx, player_guid) {
+        return;
+    }
     let teleport_target = ctx
         .db
         .game_areatrigger_teleport()
@@ -320,6 +323,7 @@ pub(crate) fn apply_enter_areatrigger(ctx: &ReducerContext, player_guid: u64, tr
                     spacetimedb::log::warn!(
                         "areatrigger {trigger_id}: dungeon entry refused for {player_guid}: {e}"
                     );
+                    crate::native::teleport::area_trigger_refused(ctx, player_guid, target_map);
                     return;
                 }
             }
@@ -332,6 +336,7 @@ pub(crate) fn apply_enter_areatrigger(ctx: &ReducerContext, player_guid: u64, tr
             spacetimedb::log::info!(
                 "areatrigger {trigger_id}: teleport refused for {player_guid}: {refusal}"
             );
+            crate::native::teleport::area_trigger_refused(ctx, player_guid, target_map);
         }
     }
 }

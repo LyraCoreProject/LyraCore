@@ -1,6 +1,9 @@
 use lyracore_protocol::{
     codec,
-    messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
+    messages::vanilla::{
+        opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
+        SMSG_NOTIFICATION,
+    },
 };
 use spacetimedb::{ReducerContext, SpacetimeType, Table};
 
@@ -24,6 +27,25 @@ pub struct NativeTeleportOrigin {
     pub y: f32,
     pub z: f32,
     pub orientation: f32,
+}
+
+pub(crate) fn area_trigger_refused(ctx: &ReducerContext, guid: u64, map: u32) {
+    let Some(player) = super::world_session(ctx, guid) else {
+        return;
+    };
+    if crate::instance::is_dungeon_map(map) {
+        super::instance_shard::notice(ctx, player.connection_id);
+        return;
+    }
+    let notice = SMSG_NOTIFICATION {
+        notification: "Unable to travel there. Please try again.".into(),
+    };
+    let _ = super::send(
+        ctx,
+        player.connection_id,
+        ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(notice)),
+        false,
+    );
 }
 
 pub(super) fn restore_origin(

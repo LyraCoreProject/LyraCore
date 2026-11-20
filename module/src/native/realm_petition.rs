@@ -88,6 +88,15 @@ pub(crate) fn pending(ctx: &ReducerContext, guid: u64) -> bool {
     ctx.db.game_guild_transaction().guid().find(guid).is_some()
 }
 
+/// Whether a charter or emblem payment or a charter turn-in awaits its Realm result.
+pub(crate) fn payment_pending(ctx: &ReducerContext, guid: u64) -> bool {
+    ctx.db
+        .game_guild_transaction()
+        .guid()
+        .find(guid)
+        .is_some_and(|row| !row.operation.background())
+}
+
 fn start(ctx: &ReducerContext, guid: u64, operation: Operation, copper: u32) -> Result<(), String> {
     if pending(ctx, guid) {
         return Err("guild transaction is settling".into());
@@ -384,7 +393,7 @@ fn settle(ctx: &ReducerContext, guid: u64) {
     table.guid().delete(guid);
     if let Operation::Reconcile(items) = row.operation {
         if charter_items(ctx, guid) != items {
-            replay(ctx, guid);
+            reconcile(ctx, guid);
         } else {
             for charter in items {
                 if let Err(error) = start(ctx, guid, Operation::Verify(charter), 0) {
@@ -395,7 +404,7 @@ fn settle(ctx: &ReducerContext, guid: u64) {
             }
         }
     } else if !matches!(row.operation, Operation::Import(_)) {
-        replay(ctx, guid);
+        reconcile(ctx, guid);
     }
 }
 
@@ -435,15 +444,21 @@ pub fn retry_guild_transaction(ctx: &ReducerContext, retry: GuildTransactionRetr
 }
 
 pub(crate) fn item_removed(ctx: &ReducerContext, item: &crate::ItemInstance) {
+    if super::has_world_session(ctx, item.owner_guid) {
+        charter_discarded(ctx, item.owner_guid, item);
+    }
+}
+
+/// Starts the Close of a charter `owner` lost; a pending transaction reconciles it instead.
+pub(crate) fn charter_discarded(ctx: &ReducerContext, owner: u64, item: &crate::ItemInstance) {
     if item.entry != GUILD_CHARTER_ENTRY
         || crate::peer::realm_shard(ctx).is_none()
-        || pending(ctx, item.owner_guid)
-        || crate::transfer::is_in_transit(ctx, item.owner_guid)
-        || !super::has_world_session(ctx, item.owner_guid)
+        || pending(ctx, owner)
+        || crate::transfer::is_in_transit(ctx, owner)
     {
         return;
     }
-    if let Err(error) = start(ctx, item.owner_guid, Operation::Close(item.guid), 0) {
+    if let Err(error) = start(ctx, owner, Operation::Close(item.guid), 0) {
         spacetimedb::log::error!(
             "guild charter {} cleanup could not start: {error}",
             item.guid
@@ -471,6 +486,12 @@ fn charter_items(ctx: &ReducerContext, guid: u64) -> Vec<u64> {
 }
 
 pub(super) fn replay(ctx: &ReducerContext, guid: u64) {
+    if !charter_items(ctx, guid).is_empty() {
+        reconcile(ctx, guid);
+    }
+}
+
+fn reconcile(ctx: &ReducerContext, guid: u64) {
     if pending(ctx, guid)
         || ctx
             .db
