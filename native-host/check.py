@@ -4738,9 +4738,9 @@ def check_combo_points(host):
     observer = host.enter_world('Observer', at=(0, 10, 0, 0))
     guid = rogue.guid
     host.call('debug_learn_spell', [guid, 133])
-    host.restore('game_spell', 'spell_id = 133', 'gcd_ms', 'cast_flags')
+    host.restore('game_spell', 'spell_id = 133', 'gcd_ms', 'cast_flags', 'cost')
     host.restore('game_spell_effect', 'spell_id = 133', 'kind')
-    host.sql('UPDATE game_spell SET gcd_ms = 0 WHERE spell_id = 133')
+    host.sql('UPDATE game_spell SET gcd_ms = 0, cost = 0 WHERE spell_id = 133')
     first = spawn(host, guid, 51000, 5)
     second = spawn(host, guid, 51000, 6)
     rogue.collect()
