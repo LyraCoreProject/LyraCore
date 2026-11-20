@@ -9,7 +9,6 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
-tests = []
 
 [vmangos]
 commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
@@ -13530,3 +13529,8 @@ description = "Alternate-gender creature model choice is absent."
 path = "importer/src/world_import_creatures.rs"
 symbol = "templates"
 evidence = "conformance/vmangos-port-census/creatures.md: display selection; no nonzero alternative at the pin."
+
+[[tests]]
+path = "importer/src/world_import_creatures.rs"
+function = "mechanic_immune_mask_reaches_the_template_and_is_no_finding"
+rung = "unit"

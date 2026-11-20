@@ -61,10 +61,10 @@ symbol = "proc_holders"
 evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::IsTriggeredAtSpellProcEvent returns SPELL_PROC_TRIGGER_FAILED for SpellIconID 108 with SpellVisual 2759 while m_extraAttacks is set."
 
 [[known_gaps]]
-description = "A mechanic immunity refuses a single effect only for an A_CONTROL effect. A movement slow, a disarm or any other aura effect whose own effect mechanic is immune still lands when the spell's header mechanic is not immune."
+description = "A mechanic immunity, from an Aura or a creature template, refuses a single effect only for an A_CONTROL effect (#1076). A movement slow, a disarm or any other aura effect whose own effect mechanic is immune still lands when the spell's header mechanic is not immune: the 94 spells that slow only through an aura 33 effect of mechanic 11, such as Frostbolt, Hamstring, Wing Clip, Cone of Cold and Thunderclap, still slow the 590 templates immune to snare. An interrupt effect (68) of mechanic 26, as on Kick, Pummel, Shield Bash, Earth Shock and Spell Lock, still interrupts the 218 templates immune to interrupt. A school lockout still locks the 467 templates immune to silence."
 path = "module/src/spell/cast/targeting.rs"
 symbol = "apply_aura_effect"
-evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::IsImmuneToSpellEffect refuses any effect for its EffectMechanic; apply_aura_effect asks is_immune_to_effect only for A_CONTROL. A header mechanic refuses the whole spell, whatever its effects."
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::IsImmuneToSpellEffect and Creature::IsImmuneToSpellEffect refuse any effect for its EffectMechanic, and Creature::LockOutSpells returns before the lockout when mechanic_immune_mask names MECHANIC_SILENCE. apply_aura_effect asks is_immune_to_effect only for A_CONTROL, and no immunity guards the interrupt effect or the school lockout. A header mechanic refuses the whole spell, whatever its effects. Template counts are distinct creature_template entries in the vmangos 4641790 snapshot; the spell count is the newest spell_template row through build 5875 whose header mechanic is not 11."
 
 [[known_gaps]]
 description = "Applying a mechanic immunity Aura does not remove the Auras it makes the unit immune to, so Will of the Forsaken cast while feared leaves the fear on."
@@ -83,6 +83,18 @@ description = "Forbearance is never applied: LyraCore applies no Forbearance Aur
 path = "module/src/spell/control.rs"
 symbol = "is_immune_to_spell"
 evidence = "Source reading, not measured. At d9173eca, PaladinBubbleScript applies Forbearance 25771, an aura 77 immunity to mechanic 25, and Unit::IsImmuneToSpell then refuses a second bubble."
+
+[[known_gaps]]
+description = "A creature template's school_immune_mask is not imported, so a creature is never immune to a harmful spell or a hit by school from its template. vmangos refuses such a spell whole and such damage too."
+path = "importer/src/world_import_creatures.rs"
+symbol = "template_findings"
+evidence = "Source reading, not measured. At d9173eca, Creature::IsImmuneToSpell and Creature::IsImmuneToDamage read school_immune_mask; 224 creature_template entries in the vmangos 4641790 snapshot set it. LyraCore has no school immunity for spell or melee damage outside damage shields, and the importer reports the column as creatures.template-behavior."
+
+[[known_gaps]]
+description = "A creature template's immunity_flags (taunt, stat, cast speed, disease, poison, curse and area-effect immunity) are not imported."
+path = "importer/src/world_import_creatures.rs"
+symbol = "template_findings"
+evidence = "Source reading, not measured. At d9173eca, Creature.cpp reads CreatureImmunityFlags through HasImmunityFlag, and Creature::IsImmuneToAoe refuses area effects; 457 creature_template entries in the vmangos 4641790 snapshot set the column. The importer reports it as creatures.template-behavior."
 
 [[known_gaps]]
 description = "The immune proc pass simplifies vmangos Spell::m_canTrigger: it skips only a cast an Aura started, and runs for a harmful item spell. Missing are the SPELL_ATTR_EX3_NOT_A_PROC and family exceptions (Arcane Missiles, Blizzard, Rain of Fire, Hellfire, the trap effects, Seal of Command), the SUPPRESS_CASTER_PROCS and SUPPRESS_TARGET_PROCS pair, and the rule that a helpful item spell cannot trigger."
@@ -284,4 +296,29 @@ rung = "durable_module"
 [[tests]]
 path = "module/tests/item_use_target.rs"
 function = "a_helpful_item_spell_on_an_ally_immune_to_its_mechanic_is_refused_and_keeps_the_item"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_stun_lands_on_a_creature_before_its_template_mask_is_set_and_is_refused_after"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_stun_immune_template_refuses_a_helpful_spell_of_its_mechanic_when_the_cast_starts"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_stun_immune_template_refuses_a_stun_effect_and_reports_immune2"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_stun_immune_template_lets_the_creature_stun_itself"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/operator_creatures.rs"
+function = "an_update_keeps_the_template_mechanic_immunity"
 rung = "durable_module"

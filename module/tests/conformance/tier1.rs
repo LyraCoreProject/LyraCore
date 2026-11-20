@@ -390,7 +390,7 @@ fn seed_taxi_world(shard: &Standalone, scenario: &wire_client::scenario::Scenari
             .flat_map(|character| character.fixtures.iter().cloned()),
     );
     for statement in super::taxi_route::statements(&route)? {
-        shard.assert_sql(&statement);
+        shard.assert_sql(&insert_defaults(&statement));
     }
     shard.assert_call(
         "import_terrain_chunks",
@@ -498,7 +498,7 @@ fn result_updates_preserve_other_scenarios_and_clear_failed_setup() -> Result<()
 
 fn seed_quest_world(shard: &Standalone, _: &wire_client::scenario::Scenario) -> Result<()> {
     for statement in super::quest_world::STATEMENTS {
-        shard.assert_sql(statement);
+        shard.assert_sql(&insert_defaults(statement));
     }
     Ok(())
 }

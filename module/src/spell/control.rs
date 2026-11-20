@@ -2,8 +2,9 @@ use spacetimedb::{log, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use super::*;
 use crate::{
-    game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
-    game_spell_effect, Aura, PendingCast, SchoolLockout, SpellCastEvent,
+    game_aura, game_creature_template, game_global_cooldown, game_pending_cast,
+    game_school_lockout, game_spell, game_spell_effect, game_world_entity, Aura, PendingCast,
+    SchoolLockout, SpellCastEvent,
 };
 
 fn has_control_mechanic(ctx: &ReducerContext, unit_guid: u64, mechanic: i32) -> bool {
@@ -326,47 +327,72 @@ fn is_immune_to_mechanic(
         })
 }
 
-/// vmangos `Unit::IsImmuneToSpell`, by header mechanic: docs/schema.md#mechanic-numbering.
+// vmangos `Creature::IsImmuneToSpell`: a creature's own cast skips its template mask.
+fn template_is_immune_to_mechanic(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    unit_guid: u64,
+    mechanic: u8,
+) -> bool {
+    caster_guid != unit_guid
+        && (1..=32).contains(&mechanic)
+        && ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(unit_guid)
+            .filter(|unit| !unit.is_player())
+            .and_then(|unit| ctx.db.game_creature_template().entry().find(unit.entry))
+            .is_some_and(|template| template.mechanic_immune_mask & (1 << (mechanic - 1)) != 0)
+}
+
+/// vmangos `IsImmuneToSpell`, by header mechanic: docs/schema.md#mechanic-numbering.
 pub(crate) fn is_immune_to_spell(
     ctx: &ReducerContext,
+    caster_guid: u64,
     unit_guid: u64,
     spell: &crate::Spell,
     effects: &[crate::SpellEffect],
 ) -> bool {
     spell.attributes & SPELL_ATTR_NO_IMMUNITIES == 0
         && spell.attributes_ex_3 & SPELL_ATTR_EX3_IGNORE_RESTRICTIONS == 0
-        && is_immune_to_mechanic(
-            ctx,
-            unit_guid,
-            spell.mechanic,
-            spell_is_harmful(spell, effects),
-        )
+        && (template_is_immune_to_mechanic(ctx, caster_guid, unit_guid, spell.mechanic)
+            || is_immune_to_mechanic(
+                ctx,
+                unit_guid,
+                spell.mechanic,
+                spell_is_harmful(spell, effects),
+            ))
 }
 
 /// vmangos `Spell::CheckCast` refuses a helpful spell on a target that is immune to its header.
 pub(crate) fn refuses_helpful_spell(
     ctx: &ReducerContext,
+    caster_guid: u64,
     unit_guid: u64,
     spell: &crate::Spell,
     effects: &[crate::SpellEffect],
 ) -> bool {
-    !spell_is_harmful(spell, effects) && is_immune_to_spell(ctx, unit_guid, spell, effects)
+    !spell_is_harmful(spell, effects)
+        && is_immune_to_spell(ctx, caster_guid, unit_guid, spell, effects)
 }
 
-/// vmangos `Unit::IsImmuneToSpellEffect`, by effect mechanic: docs/schema.md#mechanic-numbering.
+/// vmangos `IsImmuneToSpellEffect`, by effect mechanic: docs/schema.md#mechanic-numbering.
 pub(crate) fn is_immune_to_effect(
     ctx: &ReducerContext,
+    caster_guid: u64,
     unit_guid: u64,
     spell: &crate::Spell,
     effect: &crate::SpellEffect,
 ) -> bool {
     spell.attributes_ex_3 & SPELL_ATTR_EX3_IGNORE_RESTRICTIONS == 0
-        && is_immune_to_mechanic(
-            ctx,
-            unit_guid,
-            effect.effect_mechanic,
-            effect_is_harmful(spell, effect),
-        )
+        && (template_is_immune_to_mechanic(ctx, caster_guid, unit_guid, effect.effect_mechanic)
+            || is_immune_to_mechanic(
+                ctx,
+                unit_guid,
+                effect.effect_mechanic,
+                effect_is_harmful(spell, effect),
+            ))
 }
 
 // Matches cmangos PUSHBACK_SPELL_DELAY_TIME.
