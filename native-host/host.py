@@ -4,6 +4,7 @@ from sql_defaults import insert_defaults
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import socket
 import subprocess
@@ -83,10 +84,28 @@ class Host:
                 ports.add(free_port())
             self.http_port, self.world_port, self.logon_port = ports
             self.start()
-            self.wait_until(lambda: self.identify() or self.process.poll() is not None, 'native host did not start', timeout=20)
+            self.wait_until(lambda: self.process.poll() is not None
+                            or (self.listens(self.http_port) and self.identify()
+                                and self.listens(self.world_port) and self.listens(self.logon_port)),
+                            'native host did not start', timeout=20)
             if self.process.poll() is None:
                 return
-        raise AssertionError('native host stopped on every set of free ports')
+            tail = '\n'.join(self.log_text().splitlines()[-10:])
+            if not re.search('already in use', tail, re.IGNORECASE):
+                raise AssertionError(f'native host stopped at start:\n{tail}')
+            print(f'native host found a port in use; trying new ports:\n{tail}', flush=True)
+        raise AssertionError(f'native host found a port in use on every try:\n{tail}')
+
+    def listens(self, port):
+        """Whether the Host process itself listens on the port, not another process. Without /proc it assumes so."""
+        try:
+            fds = f'/proc/{self.process.pid}/fd'
+            sockets = {os.readlink(f'{fds}/{fd}')[8:-1] for fd in os.listdir(fds) if os.readlink(f'{fds}/{fd}').startswith('socket:[')}
+            with open('/proc/net/tcp') as table:
+                rows = [row.split() for row in table.read().splitlines()[1:]]
+        except OSError:
+            return True
+        return any(row[1].endswith(f':{port:04X}') and row[3] == '0A' and row[9] in sockets for row in rows)
 
     def __exit__(self, *_):
         self.stop()
@@ -158,7 +177,11 @@ class Host:
         return True
 
     def publish(self, wasm, database=None):
-        return self.request(f'/v1/database/{database or self.database}?host_type=Wasm', wasm, 'PUT', 'application/wasm', timeout=PUBLISH_SECONDS)
+        started = time.monotonic()
+        response = self.request(f'/v1/database/{database or self.database}?host_type=Wasm', wasm, 'PUT', 'application/wasm', timeout=PUBLISH_SECONDS)
+        if time.monotonic() - started > 60:
+            print(f'Module publish took {time.monotonic() - started:.0f} s', flush=True)
+        return response
 
     def add_database(self, guid_base=1):
         """Publishes and claims another database on this Host. Returns its name."""

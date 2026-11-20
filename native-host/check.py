@@ -1930,9 +1930,12 @@ def check_transport_crossings(host):
         sailor = host.enter_world('Sailor', at=(0, 7020, 7000, 0))
         docker = host.enter_world('Docker', at=(0, 6900, 7000, 0))
         lander = host.enter_world('Lander', at=(1, 7200, 7000, 0))
-        # The transport leaves the boarding reach about 9 s into its 24 s lap, so board right after it returns to map 0.
-        until(lambda: crossing_map() == 1, 30)
-        until(lambda: crossing_map() == 0, 30)
+        def boardable():
+            rows = host.rows(f'SELECT map_id, scheduled_at FROM game_transport_crossing WHERE transport_entry = {entry}')
+            # The row holds the map the transport is on and when it leaves it, which ends the boarding reach.
+            return bool(rows) and rows[0][0] == 0 and rows[0][1][1][0] / 1e6 - time.time() >= 5
+
+        until(boardable, 30)
         for world in (sailor, docker, lander):
             world.collect()
 
@@ -3230,6 +3233,9 @@ def check_addon(host):
             body += target.encode() + b'\0'
         world.send(0x95, body + text.encode() + b'\0')
 
+    def limits():
+        return sorted(host.rows('SELECT connection_id, addon_limit FROM game_native_world_connection'))
+
     def replies(world, guid):
         texts = []
         for opcode, body in world.collect():
@@ -3258,10 +3264,13 @@ def check_addon(host):
         send(first, f'STC\tv1|ping|{index}|1/1|burst {index}', 6, 'Addontwo')
     assert replies(first, guid) == [f'STC\tv1|pong|0|1/1|burst {index}' for index in range(20)]
     assert not replies(second, other_guid)
+    kept = limits()
+    assert any(limit[0] == 0 for _, limit in kept), kept
     first.send(0x4b)
     first.collect()
     first.send(0x3d, struct.pack('<Q', guid))
     first.collect()
+    assert limits() == kept, 'logout and login changed the addon rate buckets'
     for index in range(21):
         send(first, f'STC\tv1|ping|{21 + index}|1/1|after logout {index}')
     # The bucket refills 2 per second from empty, so a Session that kept it answers few, and a reset one answers 20.
@@ -3431,14 +3440,18 @@ def check_companion_actions(host, first, second, guid, other_guid):
     host.call('debug_teleport', [1, 0, 4000, 1000, 0, 0])
     first.collect()
     second.collect()
-    # Full health and no rage cannot tick, so no regeneration or decay lands between the two reads.
-    max_health = host.rows('SELECT max_health FROM game_world_entity WHERE guid = 1')[0][0]
-    host.sql(f'UPDATE game_world_entity SET health = {max_health}, power = 0, money = 4242 WHERE guid = 1')
-    vitals = host.rows('SELECT health, max_health, power, max_power, money FROM game_world_entity WHERE guid = 1')
+    max_health, max_power = host.rows('SELECT max_health, max_power FROM game_world_entity WHERE guid = 1')[0]
+    # Half health and full rage are values a reset cannot leave; regeneration only raises health and decay lowers rage by 50.
+    host.sql(f'UPDATE game_world_entity SET health = {max_health // 2}, power = {max_power}, money = 4242 WHERE guid = 1')
+    vitals = host.rows('SELECT health, max_health, power, max_power, money FROM game_world_entity WHERE guid = 1')[0]
     relocate(entrance, 36, instance, 101)
     assert host.rows('SELECT map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = 1') == [[36, instance, 4000, 1000, 0]]
-    relocated_vitals = host.rows('SELECT health, max_health, power, max_power, money FROM game_world_entity WHERE guid = 1')
-    assert relocated_vitals == vitals, (vitals, relocated_vitals)
+    relocated_vitals = host.rows('SELECT health, max_health, power, max_power, money FROM game_world_entity WHERE guid = 1')[0]
+    assert [relocated_vitals[i] for i in (1, 3, 4)] == [vitals[i] for i in (1, 3, 4)], (vitals, relocated_vitals)
+    health, _, power, _, _ = vitals
+    relocated_health, relocated_max_health, relocated_power, _, _ = relocated_vitals
+    assert health <= relocated_health < relocated_max_health, (vitals, relocated_vitals)
+    assert 0 < relocated_power <= power and (power - relocated_power) % 50 == 0, (vitals, relocated_vitals)
     assert host.rows('SELECT map_id, pending_instance_id, online FROM game_character WHERE guid = 1') == [[36, instance, False]]
     assert 1 in creates(first.collect())
     assert 1 in destroys(second.collect())
