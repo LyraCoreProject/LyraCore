@@ -15,7 +15,7 @@ import admission
 from eventai_speech import check_eventai_speech
 from headless import (AUTH_CHALLENGE, Logon, cast, creates, destroys, item_pointer, packed_guid, read_exact,
                       spell_go_misses, spell_id, teleport_ack, values)
-from host import MODULE, Host
+from host import MODULE, TRANSFER_SECONDS, Host
 from operator_items import check_operator_items
 from operator_spells import check_operator_spells
 from operator_characters import check_operator_characters
@@ -5327,7 +5327,7 @@ def check_continent_shards(host):
             assert host.rows('SELECT connection_id FROM game_native_world_connection', target) == connection
             host.wait_until(lambda: not host.rows('SELECT connection_id FROM game_native_world_connection', source)
                 and not host.rows('SELECT connection_id FROM game_native_transfer_pending', source),
-                'the source retained the departed connection or its pending Transfer')
+                'the source retained the departed connection or its pending Transfer', timeout=TRANSFER_SECONDS)
             assert not host.rows('SELECT connection_id FROM game_native_transfer_pending', target)
             assert host.rows(f'SELECT map_id, x FROM game_character WHERE guid = {guid}', target) == [[map_id, 20]]
             assert not host.rows(f'SELECT guid FROM game_character WHERE guid = {guid}', source)
@@ -5401,7 +5401,7 @@ def check_continent_shards(host):
         and not host.rows('SELECT transfer_id FROM game_transfer_in', kalimdor)
         and not host.rows('SELECT connection_id FROM game_native_transfer_pending', eastern)
         and not host.rows('SELECT account_id FROM game_native_away'),
-        'a lost connection did not leave one released target copy')
+        'a lost connection did not leave one released target copy', timeout=TRANSFER_SECONDS)
     assert host.rows(f'SELECT pending_godmode, pending_run_speed_mult_bp FROM game_character WHERE guid = {guid}', kalimdor) == [[False, 10000]]
     characters[0] = (guid, kalimdor)
     directory_is_current()
@@ -5449,7 +5449,7 @@ def check_continent_shards(host):
     client.send(0xdc)
     client.read_until_closed()
     host.wait_until(lambda: not host.rows('SELECT transfer_id FROM game_transfer_out', eastern),
-        'refused Transfer retained source Escrow')
+        'refused Transfer retained source Escrow', timeout=TRANSFER_SECONDS)
     assert host.rows(f'SELECT pending_godmode, pending_run_speed_mult_bp FROM game_character WHERE guid = {guid}', eastern) == [[False, 10000]]
     assert not host.rows('SELECT connection_id FROM game_native_transfer_pending', eastern)
     assert host.rows(f'SELECT map_id, x, y, z FROM game_character WHERE guid = {guid}', eastern) == original
@@ -5460,8 +5460,9 @@ def check_continent_shards(host):
     assert client.read()[0] == 0x1ee
     client.send(0x37)
     client.close()
+    # Under the 10 s selection expiry, which also empties the table.
     host.wait_until(lambda: not host.rows('SELECT id FROM game_pending_selection'),
-        'a closed connection retained a pending Character list')
+        'a closed connection retained a pending Character list', timeout=8)
     client = host.connect('CONTINENTS')
     assert client.read()[0] == 0x1ee
     host.call('operator_remove_peer_shard', [host.identity()], database=eastern)

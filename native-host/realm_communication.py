@@ -1,6 +1,7 @@
 import struct
 
 from headless import creates
+from host import TRANSFER_SECONDS
 import realm_guild
 import realm_petition
 import realm_mail
@@ -151,7 +152,7 @@ def check(host):
         arrival.append(peer.read())
     peer.collect()
     host.wait_until(lambda: not host.rows('SELECT connection_id FROM game_native_transfer_pending', western),
-        'Transfer did not finish')
+        'Transfer did not finish', timeout=TRANSFER_SECONDS)
     assert host.rows(f'SELECT connection_id FROM game_native_player WHERE character_guid = {peer_guid}', eastern) == connection
     who(['Eastern', 'Western'])
     whisper('after Transfer')
@@ -193,8 +194,9 @@ def check(host):
             assert 'Peer Shard' in str(error), str(error)
         else:
             raise AssertionError(f'{reducer} admitted a non-Peer Shard')
+    # Under the 15 s request lifetime, whose expiry also empties both tables.
     host.wait_until(lambda: not host.rows('SELECT id FROM game_realm_query')
-        and not host.rows('SELECT id FROM game_realm_delivery'), 'Realm communication retained completed work')
+        and not host.rows('SELECT id FROM game_realm_delivery'), 'Realm communication retained completed work', timeout=12)
 
     # The IDC test caller substitutes for the Realm Shard; native connections stay real.
     [operator_hex] = host.rows('SELECT identity FROM game_operator')[0][0]
@@ -336,7 +338,7 @@ def check_contacts(host, worlds, character, enter, received):
     target.collect()
     host.wait_until(lambda: host.rows(f'SELECT online FROM game_party_character WHERE guid = {target_guid}', western) == [[True]]
         and not host.rows('SELECT connection_id FROM game_native_transfer_pending', western),
-        'contact target did not finish Transfer')
+        'contact target did not finish Transfer', timeout=TRANSFER_SECONDS)
     contacts = host.rows(f'SELECT target_guid, is_ignore FROM game_character_contact WHERE owner_guid = {guid}', western)
     assert sorted(contacts) == [[target_guid, False], [target_guid, True]], f'target Transfer removed another Character\'s contacts: {contacts}'
     owner.collect()

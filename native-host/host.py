@@ -19,6 +19,8 @@ MODULE = ROOT / 'target/wasm32-unknown-unknown/release/lyracore_module.wasm'
 
 Account = namedtuple('Account', 'id username identity')
 SETTLE_SECONDS = 30
+# Transfer waits end before the 30 s stale Escrow reap, which would also clear the state they wait on.
+TRANSFER_SECONDS = 15
 
 
 def free_port():
@@ -41,7 +43,6 @@ class Host:
         self.clients = []
         self.restorations = []
         self.identities = 0
-        self.additional_databases = 0
         self.databases = []
         self.process = None
         self.token = None
@@ -111,8 +112,8 @@ class Host:
         if dev is not None:
             self.dev = dev
         self.start()
-        self.wait_until(lambda: all(self.answers(database) for database in (None, *self.databases)),
-                        'native host did not recover')
+        for database in (None, *self.databases):
+            self.wait_until(lambda: self.answers(database), f'database {database or self.database} did not recover')
 
     @property
     def pid(self):
@@ -152,8 +153,7 @@ class Host:
 
     def add_database(self, guid_base=1):
         """Publishes and claims another database on this Host. Returns its name."""
-        self.additional_databases += 1
-        database = f'{self.database}-extra-{self.additional_databases}'
+        database = f'{self.database}-extra-{len(self.databases) + 1}'
         self.publish(self.module.read_bytes(), database)
         self.call('claim_operator', database=database)
         self.call('install_guid_range', [guid_base], database=database)
@@ -189,8 +189,9 @@ class Host:
             time.sleep(interval)
 
     def await_guild_settled(self, guid, *databases):
-        """Waits until the Character has no guild transaction on any of the databases, since one refuses
-        Transfer and teleport. Without databases it checks the default one."""
+        """Waits until the Character has no guild transaction on any of the databases. One refuses a Transfer
+        and a cross-map teleport, as does any pending payment (`payment_pending`), Auction ones included.
+        Without databases it checks the default one."""
         self.wait_until(lambda: not any(self.rows(f'SELECT guid FROM game_guild_transaction WHERE guid = {guid}', database)
                                         for database in databases or (None,)),
                         f'guild transaction of Character {guid} did not settle')
