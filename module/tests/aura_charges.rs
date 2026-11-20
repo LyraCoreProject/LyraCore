@@ -586,6 +586,11 @@ fn an_effect_mechanic_refuses_an_effect_and_reports_immune_only_when_none_landed
     real_fear_ward(&standalone);
     control_spell_by_effect(&standalone, FEAR_AND_BOLT, M_FEAR, MECHANIC_FEAR);
     add_damage_effect(&standalone, FEAR_AND_BOLT);
+    set_spell(
+        &standalone,
+        FEAR_AND_BOLT,
+        &format!("cast_flags = {CAST_FLAG_IGNORE_RESISTANCES}"),
+    );
     control_spell_by_effect(&standalone, EFFECT_FEAR, M_FEAR, MECHANIC_FEAR);
 
     let mixed = cast_miss_code(&standalone, wolf, FEAR_AND_BOLT, PLAYER);
