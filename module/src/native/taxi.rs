@@ -194,14 +194,16 @@ pub(super) fn receive(
         }
         ClientOpcodeMessage::CMSG_ACTIVATETAXI(c) => {
             super::available_entity(ctx, guid)?;
-            let reply = crate::taxi::activate_taxi(
+            let Some(reply) = crate::taxi::activate_taxi(
                 ctx,
                 guid,
                 c.guid.guid(),
                 c.source_node,
                 c.destination_node,
                 0,
-            );
+            ) else {
+                return Ok(());
+            };
             let accepted = reply.accepted && reply.result_code == taxi_protocol::ACTIVATE_OK;
             if accepted {
                 super::send(

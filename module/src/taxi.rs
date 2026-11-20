@@ -152,6 +152,7 @@ enum TaxiGateDenied {
     NotInteractable,
     NoSourceNode,
     UnsupportedInstance,
+    Flying,
     PlayerBusy,
     PlayerAlreadyMounted,
     PlayerMoving,
@@ -180,6 +181,7 @@ impl TaxiGateDenied {
             Self::NotInteractable => "flight master is not interactable",
             Self::NoSourceNode => "flight master has no nearby taxi node",
             Self::UnsupportedInstance => "taxi routes are unavailable in instances",
+            Self::Flying => "player is in a taxi flight",
             Self::PlayerBusy => "player is busy",
             Self::PlayerAlreadyMounted => "player is already mounted",
             Self::PlayerMoving => "player must stop moving",
@@ -195,11 +197,20 @@ impl TaxiGateDenied {
         }
     }
 
+    /// vmangos drops a taxi request from a flying Character, or from one that cannot interact with the
+    /// flight master because of range, without a reply.
+    fn is_silent(self) -> bool {
+        matches!(
+            self,
+            Self::Flying | Self::DifferentPartition | Self::OutOfRange
+        )
+    }
+
     fn activate_result_code(self) -> u8 {
         use lyracore_shared::constants::taxi_protocol as wire;
         match self {
             Self::PlayerMissing => wire::ACTIVATE_UNSPECIFIED_SERVER_ERROR,
-            Self::PlayerDead | Self::PlayerBusy | Self::UnsupportedInstance => {
+            Self::PlayerDead | Self::Flying | Self::PlayerBusy | Self::UnsupportedInstance => {
                 wire::ACTIVATE_PLAYER_BUSY
             }
             Self::PlayerAlreadyMounted => wire::ACTIVATE_PLAYER_ALREADY_MOUNTED,
@@ -320,7 +331,7 @@ impl ActivationPlayerState {
 
     fn validate_idle(self) -> Result<(), TaxiGateDenied> {
         if self.has_active_flight {
-            return Err(TaxiGateDenied::PlayerBusy);
+            return Err(TaxiGateDenied::Flying);
         }
         if self.mount_display_id != 0 {
             return Err(TaxiGateDenied::PlayerAlreadyMounted);
@@ -1137,17 +1148,16 @@ pub fn gw_activate_taxi(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    write_reply(
+    if let Some(reply) = activate_taxi(
         ctx,
-        activate_taxi(
-            ctx,
-            character_guid,
-            npc_guid,
-            source_client_node_id,
-            destination_client_node_id,
-            request_id,
-        ),
-    );
+        character_guid,
+        npc_guid,
+        source_client_node_id,
+        destination_client_node_id,
+        request_id,
+    ) {
+        write_reply(ctx, reply);
+    }
     Ok(())
 }
 
@@ -1158,9 +1168,19 @@ pub(crate) fn activate_taxi(
     source_client_node_id: u32,
     destination_client_node_id: u32,
     request_id: u64,
-) -> TaxiServiceReply {
+) -> Option<TaxiServiceReply> {
     let created_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let attempt = (|| -> Result<(), TaxiGateDenied> {
+        // vmangos refuses a flying Character before anything else, and without a reply.
+        if ctx
+            .db
+            .game_active_taxi_flight()
+            .character_guid()
+            .find(character_guid)
+            .is_some()
+        {
+            return Err(TaxiGateDenied::Flying);
+        }
         let (mut player, source) = resolve_flight_master(ctx, character_guid, npc_guid)?;
         let mut player_state = ActivationPlayerState::from_world(ctx, &player);
         player_state.validate_idle()?;
@@ -1206,14 +1226,17 @@ pub(crate) fn activate_taxi(
         Ok(())
     })();
 
-    activation_reply(
+    if attempt.is_err_and(TaxiGateDenied::is_silent) {
+        return None;
+    }
+    Some(activation_reply(
         character_guid,
         request_id,
         npc_guid,
         source_client_node_id,
         created_micros,
         attempt,
-    )
+    ))
 }
 
 pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
@@ -1557,6 +1580,7 @@ mod tests {
                 wire::ACTIVATE_TOO_FAR_AWAY,
             ),
             (TaxiGateDenied::OutOfRange, wire::ACTIVATE_TOO_FAR_AWAY),
+            (TaxiGateDenied::Flying, wire::ACTIVATE_PLAYER_BUSY),
             (TaxiGateDenied::Hostile, wire::ACTIVATE_NO_VENDOR_NEARBY),
             (
                 TaxiGateDenied::NotInteractable,
@@ -1605,6 +1629,16 @@ mod tests {
             assert!(!reply.refusal.is_empty(), "{denied:?}");
             assert_eq!(reply.operation, wire::REPLY_ACTIVATE);
             assert_eq!((reply.character_guid, reply.request_id), (7, 11));
+            assert_eq!(
+                denied.is_silent(),
+                matches!(
+                    denied,
+                    TaxiGateDenied::Flying
+                        | TaxiGateDenied::DifferentPartition
+                        | TaxiGateDenied::OutOfRange
+                ),
+                "{denied:?}"
+            );
         }
         let accepted = activation_reply(7, 11, 90, 255, 1234, Ok(()));
         assert!(accepted.accepted);
@@ -1652,7 +1686,7 @@ mod tests {
         );
 
         let after_first = state;
-        assert_eq!(state.activate(25, 1147), Err(TaxiGateDenied::PlayerBusy));
+        assert_eq!(state.activate(25, 1147), Err(TaxiGateDenied::Flying));
         assert_eq!(
             state, after_first,
             "a serialized retry must not charge twice"
