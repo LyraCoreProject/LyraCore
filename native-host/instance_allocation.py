@@ -34,10 +34,16 @@ def check(host):
             host.sql(f"INSERT INTO game_areatrigger_teleport (trigger_id,target_map,x,y,z,o,name) "
                      f"VALUES ({trigger},{target},1000,1000,0,0,'Instance allocation check')", shard)
 
-    def received(client, opcode):
+    def wait_for_packets(client, arrived, message):
         packets = []
-        host.wait_until(lambda: packets.extend(client.collect()) or any(op == opcode for op, _ in packets),
-                        f'missing packet {opcode:#x}')
+        try:
+            host.wait_until(lambda: packets.extend(client.collect()) or arrived(packets), message)
+        except AssertionError as error:
+            raise AssertionError(f'{error}; collected opcodes {[hex(op) for op, _ in packets]}') from None
+        return packets
+
+    def received(client, opcode):
+        packets = wait_for_packets(client, lambda packets: any(op == opcode for op, _ in packets), f'missing packet {opcode:#x}')
         return [body for op, body in packets if op == opcode]
 
     def login(client, guid):
@@ -60,6 +66,7 @@ def check(host):
 
     def cross(client, guid, target, trigger):
         client.collect()
+        host.await_guild_settled(guid, *worlds)
         client.send(0xb4, struct.pack('<I', trigger))
         packets = []
         while guid not in creates(packets):
@@ -140,9 +147,7 @@ def check(host):
     assert host.rows(f'SELECT map_id FROM game_world_entity WHERE guid = {refused_guid}', continent) == [[0]]
     assert cross(solo, solo_guid, continent, leave) == 0
     solo.send(0x31d)
-    replies = []
-    host.wait_until(lambda: replies.extend(solo.collect()) or (0x31e, struct.pack('<I', 36)) in replies,
-                    'solo reset did not reach its hosting Shard')
+    wait_for_packets(solo, lambda packets: (0x31e, struct.pack('<I', 36)) in packets, 'solo reset did not reach its hosting Shard')
     assert host.rows(f'SELECT reset_requested FROM game_instance WHERE instance_id = {renewed}', first) == [[False]]
     leader.send(0x6e, b'Alloclater\0')
     received(later, 0x6f)

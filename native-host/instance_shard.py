@@ -71,8 +71,7 @@ def check(host):
 
     def cross(client, guid, source, target, trigger):
         client.collect()
-        host.wait_until(lambda: not host.rows(f'SELECT guid FROM game_guild_transaction WHERE guid = {guid}', source),
-                        'guild reconciliation did not settle before Instance Transfer')
+        host.await_guild_settled(guid, source)
         inventory = host.rows(f'SELECT guid, entry, slot, stack_count FROM game_item_instance WHERE owner_guid = {guid}', source)
         client.send(0xb4, struct.pack('<I', trigger))
         packets = []

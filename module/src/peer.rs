@@ -14,10 +14,13 @@ pub(crate) fn is_peer(ctx: &ReducerContext, identity: Identity) -> bool {
     ctx.db.game_peer_shard().database().find(identity).is_some()
 }
 
-fn confirm(ctx: &ReducerContext, database: Identity, confirmed: bool) {
+fn confirm(ctx: &ReducerContext, database: Identity) {
     let peers = ctx.db.game_peer_shard();
     if let Some(peer) = peers.database().find(database) {
-        peers.database().update(PeerShard { confirmed, ..peer });
+        peers.database().update(PeerShard {
+            confirmed: true,
+            ..peer
+        });
     }
 }
 
@@ -27,7 +30,7 @@ pub fn idc_peer_hello(ctx: &ReducerContext) -> Result<(), String> {
     if !is_peer(ctx, ctx.sender()) {
         return Err("caller is not a Peer Shard".into());
     }
-    confirm(ctx, ctx.sender(), true);
+    confirm(ctx, ctx.sender());
     Ok(())
 }
 
@@ -40,9 +43,12 @@ pub struct PeerHello {
     pub database: crate::remote_bindings::peer::Identity,
 }
 
+// A refusal leaves the listing as it is: the other Shard's own hello may have confirmed it already.
 #[reducer(on_result(game_peer_hello))]
 pub fn peer_hello_answered(ctx: &ReducerContext, hello: PeerHello, result: Result<(), String>) {
-    confirm(ctx, hello.database.0, result.is_ok());
+    if result.is_ok() {
+        confirm(ctx, hello.database.0);
+    }
 }
 
 /// Lists `database` as a Peer Shard and sends it a hello, which confirms the listing once that
