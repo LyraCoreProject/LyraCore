@@ -43,6 +43,13 @@ impl Character {
         self.request(0x12e, body);
     }
 
+    fn restart_spell_rolls(&self) {
+        self.shard.assert_sql(&format!(
+            "UPDATE game_conformance_spell_random SET state=1 WHERE character_guid={}",
+            self.guid
+        ));
+    }
+
     fn packets(&mut self, opcode: u16) -> Vec<Vec<u8>> {
         self.connection
             .call("native_world_receive", json!([0x1dc, vec![0u8; 8]]))
@@ -322,6 +329,7 @@ fn imported_shields_do_not_recurse_and_can_kill_the_attacker() {
         "UPDATE game_conformance_swing_random SET state=1 WHERE character_guid={}",
         character.guid
     ));
+    character.restart_spell_rolls();
     character.cast_at(22572, target);
     let strike = character.packets(0x24f);
     assert_eq!(
@@ -355,6 +363,7 @@ fn imported_shields_do_not_recurse_and_can_kill_the_attacker() {
         "UPDATE game_conformance_swing_random SET state=1 WHERE character_guid={}",
         character.guid
     ));
+    character.restart_spell_rolls();
     character.cast_at(22572, target);
     assert_eq!(
         character.pool("health"),
