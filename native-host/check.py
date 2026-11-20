@@ -5072,11 +5072,8 @@ def check_taxi(host):
     assert host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}') == [[money_before]]
     host.sql(f'INSERT INTO game_character_taxi_node (id,character_guid,node_id) VALUES (0,{guid},5090302)')
     client.send(0x1ad, struct.pack('<QII', flight_master, 253, 254))
-    # The flight leaves the flight master's range within a second, and the range check comes first.
-    client.send(0x1ad, struct.pack('<QII', flight_master, 253, 254))
     takeoff = client.collect()
     assert (0x1ae, bytes(4)) in takeoff
-    assert (0x1ae, struct.pack('<I', 7)) in takeoff, takeoff
     assert next(index for index, (opcode, _) in enumerate(takeoff) if opcode == 0x1ae) < next(index for index, (opcode, _) in enumerate(takeoff) if opcode == 0xdd)
     assert values(takeoff, guid)[133] == 1147
     assert any(opcode == 0xdd and packed_guid(body) == guid for opcode, body in peer.collect())
@@ -5090,10 +5087,14 @@ def check_taxi(host):
     flight_speech = client.collect()
     assert not any(opcode == 0x96 for opcode, _ in flight_speech)
     assert not any(opcode == 0x96 for opcode, _ in peer.collect())
+    client.send(0x1ad, struct.pack('<QII', flight_master, 253, 254))
+    ignored = client.collect()
+    assert not any(opcode == 0x1ae for opcode, _ in ignored), ignored
+    assert host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}') == [[money_before - 25]]
     client.send(0xee, struct.pack('<IIffffI', 0, 9999, 10000, 0, 0, 0, 0))
     suppressed = client.collect()
     assert host.rows(f'SELECT x FROM game_world_entity WHERE guid = {guid}')[0][0] < 100
-    landed = takeoff + flight_chat + flight_speech + suppressed
+    landed = takeoff + flight_chat + flight_speech + ignored + suppressed
     for _ in range(80):
         landed += client.collect()
         if not host.rows(f'SELECT character_guid FROM game_active_taxi_flight WHERE character_guid = {guid}'):

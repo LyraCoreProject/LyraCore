@@ -202,6 +202,9 @@ pub(super) fn receive(
                 c.destination_node,
                 0,
             );
+            if reply.result_code == taxi_protocol::ACTIVATE_NO_REPLY {
+                return Ok(());
+            }
             let accepted = reply.accepted && reply.result_code == taxi_protocol::ACTIVATE_OK;
             if accepted {
                 super::send(

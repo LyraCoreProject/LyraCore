@@ -152,6 +152,7 @@ enum TaxiGateDenied {
     NotInteractable,
     NoSourceNode,
     UnsupportedInstance,
+    Flying,
     PlayerBusy,
     PlayerAlreadyMounted,
     PlayerMoving,
@@ -180,6 +181,7 @@ impl TaxiGateDenied {
             Self::NotInteractable => "flight master is not interactable",
             Self::NoSourceNode => "flight master has no nearby taxi node",
             Self::UnsupportedInstance => "taxi routes are unavailable in instances",
+            Self::Flying => "player is in a taxi flight",
             Self::PlayerBusy => "player is busy",
             Self::PlayerAlreadyMounted => "player is already mounted",
             Self::PlayerMoving => "player must stop moving",
@@ -211,7 +213,7 @@ impl TaxiGateDenied {
             | Self::NotFlightMaster
             | Self::NotInteractable
             | Self::Hostile => wire::ACTIVATE_NO_VENDOR_NEARBY,
-            Self::DifferentPartition | Self::OutOfRange => wire::ACTIVATE_TOO_FAR_AWAY,
+            Self::Flying | Self::DifferentPartition | Self::OutOfRange => wire::ACTIVATE_NO_REPLY,
             Self::SourceMismatch | Self::DestinationUnknown => wire::ACTIVATE_NOT_VISITED,
             Self::SameNode => wire::ACTIVATE_SAME_NODE,
             Self::NoSourceNode
@@ -320,7 +322,7 @@ impl ActivationPlayerState {
 
     fn validate_idle(self) -> Result<(), TaxiGateDenied> {
         if self.has_active_flight {
-            return Err(TaxiGateDenied::PlayerBusy);
+            return Err(TaxiGateDenied::Flying);
         }
         if self.mount_display_id != 0 {
             return Err(TaxiGateDenied::PlayerAlreadyMounted);
@@ -1137,17 +1139,17 @@ pub fn gw_activate_taxi(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    write_reply(
+    let reply = activate_taxi(
         ctx,
-        activate_taxi(
-            ctx,
-            character_guid,
-            npc_guid,
-            source_client_node_id,
-            destination_client_node_id,
-            request_id,
-        ),
+        character_guid,
+        npc_guid,
+        source_client_node_id,
+        destination_client_node_id,
+        request_id,
     );
+    if reply.result_code != lyracore_shared::constants::taxi_protocol::ACTIVATE_NO_REPLY {
+        write_reply(ctx, reply);
+    }
     Ok(())
 }
 
@@ -1161,6 +1163,16 @@ pub(crate) fn activate_taxi(
 ) -> TaxiServiceReply {
     let created_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let attempt = (|| -> Result<(), TaxiGateDenied> {
+        // vmangos refuses a flying Character before anything else, and without a reply.
+        if ctx
+            .db
+            .game_active_taxi_flight()
+            .character_guid()
+            .find(character_guid)
+            .is_some()
+        {
+            return Err(TaxiGateDenied::Flying);
+        }
         let (mut player, source) = resolve_flight_master(ctx, character_guid, npc_guid)?;
         let mut player_state = ActivationPlayerState::from_world(ctx, &player);
         player_state.validate_idle()?;
@@ -1552,11 +1564,9 @@ mod tests {
                 TaxiGateDenied::NotFlightMaster,
                 wire::ACTIVATE_NO_VENDOR_NEARBY,
             ),
-            (
-                TaxiGateDenied::DifferentPartition,
-                wire::ACTIVATE_TOO_FAR_AWAY,
-            ),
-            (TaxiGateDenied::OutOfRange, wire::ACTIVATE_TOO_FAR_AWAY),
+            (TaxiGateDenied::DifferentPartition, wire::ACTIVATE_NO_REPLY),
+            (TaxiGateDenied::OutOfRange, wire::ACTIVATE_NO_REPLY),
+            (TaxiGateDenied::Flying, wire::ACTIVATE_NO_REPLY),
             (TaxiGateDenied::Hostile, wire::ACTIVATE_NO_VENDOR_NEARBY),
             (
                 TaxiGateDenied::NotInteractable,
@@ -1652,7 +1662,7 @@ mod tests {
         );
 
         let after_first = state;
-        assert_eq!(state.activate(25, 1147), Err(TaxiGateDenied::PlayerBusy));
+        assert_eq!(state.activate(25, 1147), Err(TaxiGateDenied::Flying));
         assert_eq!(
             state, after_first,
             "a serialized retry must not charge twice"
