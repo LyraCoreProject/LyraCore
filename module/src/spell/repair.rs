@@ -9,8 +9,8 @@ use lyracore_shared::spell::taxonomy::{
     A_MOD_SCHOOL_CRIT, P_COMBAT_PERCENT,
 };
 
-/// Ends the Auras of a stealth spell whose unit no longer holds its `A_STEALTH` Aura, which a break
-/// left behind before it ended the whole spell. Returns how many Auras it ended.
+/// Ends the Auras of a stealth spell whose unit no longer holds its `A_STEALTH` Aura. Returns how
+/// many Auras it ended.
 pub(crate) fn shed_stealth_remnants(ctx: &ReducerContext) -> u64 {
     let stealth_spells: std::collections::BTreeSet<u32> = ctx
         .db

@@ -466,9 +466,11 @@ Form Set requires Form 30. Before play resumes:
    logout, a cast or a swing, shed only the `A_STEALTH` Aura, so such a rogue still carries
    Stealth's slow. Without this step the reimported shapeshift row would put that rogue in Form 30
    without stealth. Then `repair_cast_auras` rewrites the shapeshift row of every held Aura of
-   these spells, online or not, to `A_SHAPESHIFT`. Each online unit is then projected: a stealthed
-   rogue shows form byte 30 and keeps its energy, and a druid in Travel Form gets 5419. A druid who
-   held one of these Auras beside a feral Form keeps the newer one.
+   these spells, online or not, to `A_SHAPESHIFT`. Each online Character is then projected: a
+   stealthed rogue shows form byte 30 and keeps its energy, and a druid in Travel Form gets 5419. A
+   druid who held one of these Auras beside a feral Form keeps the newer one. Creatures are not
+   projected: a creature already holding Stealth 1785 (Defias Blackguard, Shadowy Assassin, Shadow
+   Panther) keeps form byte 0 until it stealths again or respawns. Only its look is affected.
 
 Offline units holding one of these Auras enter the world in its Form. Players see these changes:
 Holy spells are refused in Shadowform and healing spells in Moonkin Form, as their Form Sets say;
