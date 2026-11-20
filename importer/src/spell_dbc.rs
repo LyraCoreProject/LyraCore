@@ -68,6 +68,7 @@ pub(crate) struct Spell {
     pub(crate) single_target_key: u64,
     pub(crate) bonus_coefficient: Option<[f32; 3]>,
     pub(crate) npc_guardian_entry: Option<u32>,
+    pub(crate) follow_up_spell: Option<u32>,
 }
 
 pub(crate) fn read_spells(bytes: &[u8]) -> Result<Vec<Spell>> {
@@ -114,6 +115,7 @@ pub(crate) fn read_spells(bytes: &[u8]) -> Result<Vec<Spell>> {
                 single_target_key: 0,
                 bonus_coefficient: None,
                 npc_guardian_entry: None,
+                follow_up_spell: None,
                 id: column(0),
                 school: column(1),
                 dispel_type: column(4),

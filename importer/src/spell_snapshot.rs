@@ -276,6 +276,7 @@ pub(crate) struct SpellRows {
     pub(crate) fishing: Vec<SpellEffectRow>,
     pub(crate) reagents: Vec<ReagentRow>,
     pub(crate) eventai_metadata: Vec<AiMetadataRow>,
+    pub(crate) follow_ups: Vec<(u32, u32)>,
     pub(crate) trainers: Vec<TrainerRow>,
     pub(crate) forms: crate::spell_form::FormRows,
 }

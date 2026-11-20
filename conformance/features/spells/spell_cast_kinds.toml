@@ -79,12 +79,6 @@ symbol = "is_immune_to_mechanic"
 evidence = "Not measured and not read. Berserker Rage 18499 and Will of the Forsaken 7744 are aura 77 and covered by tests; no trinket spell was checked against the vmangos spell dump."
 
 [[known_gaps]]
-description = "Forbearance is never applied: LyraCore applies no Forbearance Aura after Divine Shield, Blessing of Protection or Lay on Hands, so the header-mechanic refusal of a helpful spell never meets it."
-path = "module/src/spell/control.rs"
-symbol = "is_immune_to_spell"
-evidence = "Source reading, not measured. At d9173eca, PaladinBubbleScript applies Forbearance 25771, an aura 77 immunity to mechanic 25, and Unit::IsImmuneToSpell then refuses a second bubble."
-
-[[known_gaps]]
 description = "A creature template's school_immune_mask is not imported, so a creature is never immune to a harmful spell or a hit by school from its template. vmangos refuses such a spell whole and such damage too."
 path = "importer/src/world_import_creatures.rs"
 symbol = "template_findings"
@@ -95,6 +89,12 @@ description = "A creature template's immunity_flags (taunt, stat, cast speed, di
 path = "importer/src/world_import_creatures.rs"
 symbol = "template_findings"
 evidence = "Source reading, not measured. At d9173eca, Creature.cpp reads CreatureImmunityFlags through HasImmunityFlag, and Creature::IsImmuneToAoe refuses area effects; 457 creature_template entries in the vmangos 4641790 snapshot set the column. The importer reports it as creatures.template-behavior."
+
+[[known_gaps]]
+description = "A Follow-up Cast fires when its spell resolves, not when a spell with travel time reaches the unit; no current follow-up spell has travel time."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "cast_follow_up"
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp runs a spell script's OnAfterHit from DoAllEffectOnTarget, at impact for a spell with speed; run_spell_effects calls cast_follow_up for every hit target before a scheduled impact lands."
 
 [[known_gaps]]
 description = "The immune proc pass simplifies vmangos Spell::m_canTrigger: it skips only a cast an Aura started, and runs for a harmful item spell. Missing are the SPELL_ATTR_EX3_NOT_A_PROC and family exceptions (Arcane Missiles, Blizzard, Rain of Fire, Hellfire, the trap effects, Seal of Command), the SUPPRESS_CASTER_PROCS and SUPPRESS_TARGET_PROCS pair, and the rule that a helpful item spell cannot trigger."
@@ -356,4 +356,34 @@ rung = "durable_module"
 [[tests]]
 path = "module/tests/aura_charges.rs"
 function = "an_interrupt_stops_a_silence_immune_creature_without_locking_its_school"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "divine_shield_applies_forbearance_to_its_caster"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_second_divine_shield_is_refused_while_forbearance_lasts"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "blessing_of_protection_on_an_ally_under_forbearance_is_refused_before_its_cooldown_starts"
+rung = "durable_module"
+
+[[tests]]
+path = "importer/src/vmangos_spell.rs"
+function = "a_bubble_script_names_forbearance_as_its_follow_up_and_is_no_script_finding"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "actual_bubbles_follow_up_with_forbearance_and_lay_on_hands_does_not"
+rung = "durable_module"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "actual_imported_bubbles_leave_forbearance_and_refuse_a_second_bubble"
 rung = "durable_module"

@@ -183,6 +183,16 @@ pub fn named(name: &str) -> Option<&'static NamedSpell> {
     NAMED_SPELLS.iter().find(|spell| spell.name == name)
 }
 
+/// The spell a vmangos spell script casts at each unit its spell hits, by script name.
+const SCRIPT_FOLLOW_UPS: &[(&str, u32)] = &[("spell_paladin_bubble", 25771)];
+
+pub fn script_follow_up(script_name: &str) -> Option<u32> {
+    SCRIPT_FOLLOW_UPS
+        .iter()
+        .find(|(name, _)| *name == script_name)
+        .map(|&(_, spell)| spell)
+}
+
 pub struct SpellIdOverride {
     pub ids: &'static [u32],
     pub name: &'static str,

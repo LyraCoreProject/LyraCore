@@ -605,6 +605,7 @@ pub(crate) fn derive_spell_rows(
             fishing: fishing_marker_rows(),
             reagents: acc.reagent_rows,
             eventai_metadata: acc.eventai_metadata_rows,
+            follow_ups: acc.follow_up_rows,
             trainers: trainer_rows,
             forms: crate::spell_form::form_rows(&dbc.shapeshift_forms),
         },
@@ -725,6 +726,7 @@ struct SpellAccumulator {
     effect_rows: Vec<SpellEffectRow>,
     reagent_rows: Vec<ReagentRow>,
     eventai_metadata_rows: Vec<AiMetadataRow>,
+    follow_up_rows: Vec<(u32, u32)>,
     samples: Vec<String>,
     spell_levels: BTreeMap<u32, u8>,
     wrapper_to_rank: BTreeMap<u32, u32>,
@@ -758,6 +760,7 @@ fn push_spell_header_row(
         cov,
         spell_rows,
         eventai_metadata_rows,
+        follow_up_rows,
         samples,
         spell_levels,
         ..
@@ -803,6 +806,9 @@ fn push_spell_header_row(
     let attributes = s.attributes;
     let gcd_ms = s.start_recovery_time;
     let channeled = is_channeled(s.attributes_ex1, overrides);
+    if let Some(follow_up) = s.follow_up_spell {
+        follow_up_rows.push((spell_id, follow_up));
+    }
     if excludes_eventai_caster(s.attributes_ex1) {
         eventai_metadata_rows.push(AiMetadataRow {
             spell_id,
@@ -1573,6 +1579,16 @@ fn assemble_spell_sql(
             .map(AiMetadataRow::sql_values)
             .collect::<Vec<_>>(),
     );
+    push_insert(
+        &mut stmts,
+        "game_spell_follow_up",
+        "spell_id,follow_up_spell_id",
+        &rows
+            .follow_ups
+            .iter()
+            .map(|(spell, follow_up)| format!("({spell},{follow_up})"))
+            .collect::<Vec<_>>(),
+    );
 
     crate::spell_form::push_form_sql(&mut stmts, &rows.forms);
     push_insert(
@@ -1642,6 +1658,7 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
             format!("DELETE FROM game_spell_effect WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_spell_reagent WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_creature_ai_spell_metadata WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
+            format!("DELETE FROM game_spell_follow_up WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!(
                 "DELETE FROM game_spell_form WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR} AND form_id < {PACKAGE_FORM_ID_FLOOR}"
             ),
@@ -1650,7 +1667,7 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
     let mut ids: Vec<u32> = only.to_vec();
     ids.sort_unstable();
     ids.dedup();
-    let mut dels = Vec::with_capacity(ids.len() * 5);
+    let mut dels = Vec::with_capacity(ids.len() * 6);
     for id in ids {
         dels.push(format!("DELETE FROM game_spell WHERE spell_id = {id}"));
         dels.push(format!(
@@ -1661,6 +1678,9 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
         ));
         dels.push(format!(
             "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id = {id}"
+        ));
+        dels.push(format!(
+            "DELETE FROM game_spell_follow_up WHERE spell_id = {id}"
         ));
         dels.push(format!(
             "DELETE FROM game_spell_form WHERE spell_id = {id} AND form_id < {PACKAGE_FORM_ID_FLOOR}"
@@ -2604,6 +2624,69 @@ mod tests {
 
     #[test]
     #[ignore = "requires LYRACORE_VMANGOS_SQLITE and LYRACORE_TEST_DBC"]
+    fn actual_bubbles_follow_up_with_forbearance_and_lay_on_hands_does_not() {
+        const FORBEARANCE: u32 = 25771;
+        const INVULNERABILITY: u8 = 25;
+        let bubbles = [498, 642, 1020, 1022, 5573, 5599, 10278];
+        let lay_on_hands = [633, 2800, 10310];
+        let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
+        let ids: Vec<u32> = bubbles
+            .iter()
+            .chain(&lay_on_hands)
+            .chain(&[FORBEARANCE])
+            .copied()
+            .collect();
+        let source = crate::world_source::WorldSource::open(Path::new(
+            &std::env::var("LYRACORE_VMANGOS_SQLITE").expect("set LYRACORE_VMANGOS_SQLITE"),
+        ))
+        .unwrap();
+        let (snapshot, _) = crate::vmangos_spell::read(&source).unwrap();
+        assert_eq!(
+            snapshot
+                .iter()
+                .filter(|spell| spell.follow_up_spell.is_some())
+                .map(|spell| (spell.id, spell.follow_up_spell.unwrap()))
+                .collect::<BTreeMap<_, _>>(),
+            bubbles.iter().map(|&id| (id, FORBEARANCE)).collect(),
+            "vmangos binds spell_paladin_bubble to these seven spells only"
+        );
+        let (rows, _, _) = build_spell_rows(Path::new(&dir), &ids, &[]).unwrap();
+        assert_eq!(
+            rows.follow_ups.iter().copied().collect::<BTreeMap<_, _>>(),
+            bubbles.iter().map(|&id| (id, FORBEARANCE)).collect()
+        );
+        let header = |id: u32| rows.headers.iter().find(|s| s.spell_id == id).unwrap();
+        for id in bubbles {
+            assert_eq!(
+                (header(id).mechanic, header(id).is_negative),
+                (INVULNERABILITY, false),
+                "{id}"
+            );
+        }
+        for id in lay_on_hands {
+            assert_eq!(header(id).mechanic, 0, "{id}");
+        }
+        let immunity = rows
+            .effects
+            .iter()
+            .filter(|e| e.spell_id == FORBEARANCE)
+            .map(|e| (e.kind, e.p0, e.p0_kind, e.p1 & 0x100, e.target))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            immunity,
+            [(
+                A_IMMUNITY,
+                i32::from(INVULNERABILITY),
+                P_MECHANIC,
+                0x100,
+                T_TARGET_ALLY
+            )],
+            "AttributesEx 0x10000 makes Forbearance refuse helpful spells of mechanic 25 too"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE and LYRACORE_TEST_DBC"]
     fn actual_adrenaline_rush_doubles_energy_regeneration() {
         let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
         let (rows, _, _) = build_spell_rows(Path::new(&dir), &[13750], &[]).unwrap();
@@ -2673,6 +2756,46 @@ mod tests {
             (bytes & 0x00FF_FFFF) | u32::from(caster_power_type) << 24
         ));
         (shard, ally, wolf)
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE, LYRACORE_TEST_DBC, SpacetimeDB and Wasm"]
+    fn actual_imported_bubbles_leave_forbearance_and_refuse_a_second_bubble() {
+        let (shard, ally, _) = imported_spell_fixture(
+            &[642, 1022, 25771],
+            lyracore_shared::packing::power_type::MANA,
+        );
+        shard.assert_call("debug_set_level", &["1", "60"]);
+        let forbearance_on = |guid: &str| {
+            !shard
+                .query_rows(&format!(
+                    "SELECT id FROM game_aura WHERE spell_id = 25771 AND target_guid = {guid}"
+                ))
+                .is_empty()
+        };
+        let reset_timers = || {
+            shard.assert_sql("DELETE FROM game_global_cooldown");
+            shard.assert_sql("DELETE FROM game_spell_cd");
+        };
+
+        shard.assert_call("debug_cast_at", &["1", "642", "1"]);
+        assert!(forbearance_on("1"), "Divine Shield leaves Forbearance");
+        shard.assert_sql("DELETE FROM game_aura WHERE spell_id = 642");
+        reset_timers();
+        let output = shard.call("debug_begin_cast", &["1", "642", "1"]);
+        let text = String::from_utf8_lossy(&output.stderr).into_owned()
+            + &String::from_utf8_lossy(&output.stdout);
+        assert!(
+            !output.status.success() && text.contains("is immune to its mechanic"),
+            "{text}"
+        );
+
+        reset_timers();
+        shard.assert_call("debug_cast_at", &["1", "1022", &ally]);
+        assert!(
+            forbearance_on(&ally),
+            "Blessing of Protection leaves Forbearance on the ally"
+        );
     }
 
     #[test]
@@ -4549,6 +4672,7 @@ mod tests {
             ("game_spell_effect", ""),
             ("game_spell_reagent", ""),
             ("game_creature_ai_spell_metadata", ""),
+            ("game_spell_follow_up", ""),
             ("game_spell_form", " AND form_id < 18000000"),
         ];
         assert_eq!(

@@ -25,8 +25,8 @@ use crate::spell::{
 };
 use crate::{
     game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
-    game_spell_cd, game_spell_effect, GlobalCooldown, PendingCast, Spell, SpellCastEvent, SpellCd,
-    SpellEffect,
+    game_spell_cd, game_spell_effect, game_spell_follow_up, GlobalCooldown, PendingCast, Spell,
+    SpellCastEvent, SpellCd, SpellEffect,
 };
 
 use crate::script_binding::game_script;
@@ -211,6 +211,7 @@ pub(crate) enum CastOrigin {
     AuraTriggered,
     DeadCreatureCallbackTriggered,
     ChanceOnHit,
+    FollowUp,
 }
 
 impl CastOrigin {
@@ -221,6 +222,7 @@ impl CastOrigin {
                 | Self::AuraTriggered
                 | Self::DeadCreatureCallbackTriggered
                 | Self::ChanceOnHit
+                | Self::FollowUp
         )
     }
 
@@ -231,6 +233,10 @@ impl CastOrigin {
             Self::ChanceOnHit => hdr.negative(),
             _ => true,
         }
+    }
+
+    fn makes_follow_up(self) -> bool {
+        !matches!(self, Self::FollowUp)
     }
 
     fn allows_dead_self(self) -> bool {
@@ -563,7 +569,7 @@ fn run_spell_effects(
         finish_items(craft);
         return;
     }
-    for target in hit_targets {
+    for &target in &hit_targets {
         crate::creatures::eventai_on_spell_hit(
             ctx,
             caster_guid,
@@ -601,6 +607,39 @@ fn run_spell_effects(
     );
     finish_items(craft);
     finish_weapon_hits(ctx, caster_guid, weapon_targets, shield_targets);
+    if origin.makes_follow_up() {
+        cast_follow_up(ctx, hdr.spell_id, caster_guid, level, &hit_targets);
+    }
+}
+
+// Read docs/schema.md#follow-up-casts for its timing and its loop limit.
+fn cast_follow_up(
+    ctx: &ReducerContext,
+    spell_id: u32,
+    caster_guid: u64,
+    level: u8,
+    hit_targets: &[u64],
+) {
+    let Some(follow_up) = ctx.db.game_spell_follow_up().spell_id().find(spell_id) else {
+        return;
+    };
+    let Ok(spell) = LoadedSpell::load(ctx, follow_up.follow_up_spell_id) else {
+        log::warn!(
+            "spell {spell_id} follow-up {} has no spell row",
+            follow_up.follow_up_spell_id
+        );
+        return;
+    };
+    for &target_guid in hit_targets {
+        let request = CastRequest::new(caster_guid, spell.header.spell_id, level, target_guid);
+        if let Err(reason) = cast_triggered_with_origin(ctx, &request, &spell, CastOrigin::FollowUp)
+        {
+            log::info!(
+                "spell {spell_id} follow-up {} refused on {target_guid}: {reason}",
+                spell.header.spell_id
+            );
+        }
+    }
 }
 
 // vmangos sends SMSG_SPELL_GO before effects, so a client cast's item packets and execute log follow it.
