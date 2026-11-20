@@ -88,6 +88,11 @@ pub(crate) fn is_world_porting(ctx: &ReducerContext, guid: u64) -> bool {
 
 /// Whether a guild or Auction payment of this Character still awaits its Realm result.
 pub(crate) fn payment_pending(ctx: &ReducerContext, guid: u64) -> bool {
+    realm_petition::payment_pending(ctx, guid) || realm_auction::pending(ctx, guid)
+}
+
+/// Whether a Realm transaction must settle on this Shard before the Character may leave it.
+pub(crate) fn realm_result_pending(ctx: &ReducerContext, guid: u64) -> bool {
     realm_petition::pending(ctx, guid) || realm_auction::pending(ctx, guid)
 }
 

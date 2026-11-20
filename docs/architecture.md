@@ -579,11 +579,22 @@ refund or consume again. A missing transport response is not permission to refun
 
 Refunds update the live purse or the stored Character after logout. If the purse has filled while
 the request was pending, settlement credits only the space available and retries the remaining
-copper. Cross-map teleport, Transfer and Character deletion refuse while settlement is pending.
-Ordinary movement, logout and other inventory actions can continue. Charter destruction during a
-request is reconciled after its result. Login compares held charter item GUIDs with the Realm's
+copper. Cross-map teleport and Transfer refuse while a payment or turn-in is pending. Character
+deletion refuses while any guild transaction is pending, reconciliation and closure included.
+Ordinary movement, logout and other inventory actions can continue. Destroying a charter, or
+discarding a sold charter from buyback at logout or login, closes its petition. Charter destruction
+during a request is reconciled after its result. Every world entry of a Character that holds a
+charter, at login and after each WorldPort, compares held charter item GUIDs with the Realm's
 petition, closes a petition whose charter is missing, and removes inert items only after an explicit
-Realm absence result. Pending reconciliation and closure retry refusals; they also prevent Transfer.
+Realm absence result. A Character with no charter sends nothing at world entry. A charter removed
+without a closure, for example by an operator while its owner is offline, leaves its petition open
+until the reconciliation after the owner's next guild transaction; a charter purchase that the
+Realm refuses for that petition is one, so the next purchase succeeds. Pending reconciliation and
+closure retry refusals. They do not hold movement within the Shard, but they refuse Transfer,
+cross-Shard teleport, Instance admission on another Shard, Package relocation and Character
+deletion: the transaction row and its retries stay on this Shard, and a retry sent after the
+Character returns would carry a stale charter list. A refused AreaTrigger teleport tells the client
+to try again. A Character on a taxi flight ignores AreaTriggers, as the reference does.
 
 Before reopening an existing Realm, capture `game_guild_petition`,
 `game_guild_petition_signature` and the matching owned charter items on every World Shard. Resolve

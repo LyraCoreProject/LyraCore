@@ -596,8 +596,8 @@ pub(crate) fn teleport_gate(
         .ok_or_else(|| {
             ActionRefusal::new(ActionRefusalKind::MissingActor, "Character is not in world")
         })?;
-    if (entity.map_id != map_id || destination.is_some())
-        && crate::native::payment_pending(ctx, player_guid)
+    if (destination.is_some() && crate::native::realm_result_pending(ctx, player_guid))
+        || (entity.map_id != map_id && crate::native::payment_pending(ctx, player_guid))
     {
         return Err(ActionRefusal::new(
             ActionRefusalKind::CannotAct,

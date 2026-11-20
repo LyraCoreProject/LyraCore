@@ -514,12 +514,12 @@ fn finish_native(
     {
         return;
     }
+    let remote = world.filter(|world| *world != ctx.database_identity());
     if !error.is_empty()
-        || world.is_some_and(|world| {
-            world != ctx.database_identity() && !crate::peer::is_peer(ctx, world)
-        })
+        || remote.is_some_and(|world| !crate::peer::is_peer(ctx, world))
         || crate::taxi::is_in_flight(ctx, pending.guid)
         || super::payment_pending(ctx, pending.guid)
+        || (remote.is_some() && super::realm_result_pending(ctx, pending.guid))
     {
         notice(ctx, connection);
         return;
@@ -559,7 +559,7 @@ fn finish_native(
     }
 }
 
-fn notice(ctx: &ReducerContext, connection: ConnectionId) {
+pub(super) fn notice(ctx: &ReducerContext, connection: ConnectionId) {
     let _ = super::send(
         ctx,
         connection,

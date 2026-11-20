@@ -170,3 +170,25 @@ pub fn debug_native_enter_world(ctx: &ReducerContext, character_guid: u64) -> Re
         0,
     )
 }
+
+/// Records on this Realm Shard that `world` holds the World Session `connection` of a Character.
+#[reducer]
+pub fn debug_native_away(
+    ctx: &ReducerContext,
+    account_id: u64,
+    connection: u128,
+    world: Identity,
+    character_guid: u64,
+) -> Result<(), String> {
+    use super::realm_shard::{game_native_away, NativeAway};
+    crate::helpers::require_operator(ctx)?;
+    let aways = ctx.db.game_native_away();
+    aways.account_id().delete(account_id);
+    aways.insert(NativeAway {
+        account_id,
+        connection_id: ConnectionId::from_u128(connection),
+        world: Some(world),
+        character_guid,
+    });
+    Ok(())
+}
