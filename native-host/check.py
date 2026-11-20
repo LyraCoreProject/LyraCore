@@ -5087,7 +5087,8 @@ def check_taxi(host):
     flight_speech = client.collect()
     assert not any(opcode == 0x96 for opcode, _ in flight_speech)
     assert not any(opcode == 0x96 for opcode, _ in peer.collect())
-    client.send(0x1ad, struct.pack('<QII', flight_master, 253, 254))
+    # A flight master that does not exist is answered with 5 unless the flight check comes first.
+    client.send(0x1ad, struct.pack('<QII', flight_master + 1_000_000, 253, 254))
     ignored = client.collect()
     assert not any(opcode == 0x1ae for opcode, _ in ignored), ignored
     assert host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}') == [[money_before - 25]]

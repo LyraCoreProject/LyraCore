@@ -187,8 +187,6 @@ pub mod taxi_protocol {
     pub const ACTIVATE_PLAYER_MOVING: u8 = 10;
     pub const ACTIVATE_SAME_NODE: u8 = 11;
     pub const ACTIVATE_NOT_STANDING: u8 = 12;
-    /// Not a wire value: vmangos answers a flying Character or one out of range with nothing.
-    pub const ACTIVATE_NO_REPLY: u8 = u8::MAX;
 }
 
 // Reserved storage ids survive DBC import; client ids must fit the vanilla taxi mask.

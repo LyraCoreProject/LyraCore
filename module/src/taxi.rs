@@ -197,11 +197,20 @@ impl TaxiGateDenied {
         }
     }
 
+    /// vmangos drops a taxi request from a flying Character, or from one that cannot interact with the
+    /// flight master because of range, without a reply.
+    fn is_silent(self) -> bool {
+        matches!(
+            self,
+            Self::Flying | Self::DifferentPartition | Self::OutOfRange
+        )
+    }
+
     fn activate_result_code(self) -> u8 {
         use lyracore_shared::constants::taxi_protocol as wire;
         match self {
             Self::PlayerMissing => wire::ACTIVATE_UNSPECIFIED_SERVER_ERROR,
-            Self::PlayerDead | Self::PlayerBusy | Self::UnsupportedInstance => {
+            Self::PlayerDead | Self::Flying | Self::PlayerBusy | Self::UnsupportedInstance => {
                 wire::ACTIVATE_PLAYER_BUSY
             }
             Self::PlayerAlreadyMounted => wire::ACTIVATE_PLAYER_ALREADY_MOUNTED,
@@ -213,7 +222,7 @@ impl TaxiGateDenied {
             | Self::NotFlightMaster
             | Self::NotInteractable
             | Self::Hostile => wire::ACTIVATE_NO_VENDOR_NEARBY,
-            Self::Flying | Self::DifferentPartition | Self::OutOfRange => wire::ACTIVATE_NO_REPLY,
+            Self::DifferentPartition | Self::OutOfRange => wire::ACTIVATE_TOO_FAR_AWAY,
             Self::SourceMismatch | Self::DestinationUnknown => wire::ACTIVATE_NOT_VISITED,
             Self::SameNode => wire::ACTIVATE_SAME_NODE,
             Self::NoSourceNode
@@ -1139,15 +1148,14 @@ pub fn gw_activate_taxi(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let reply = activate_taxi(
+    if let Some(reply) = activate_taxi(
         ctx,
         character_guid,
         npc_guid,
         source_client_node_id,
         destination_client_node_id,
         request_id,
-    );
-    if reply.result_code != lyracore_shared::constants::taxi_protocol::ACTIVATE_NO_REPLY {
+    ) {
         write_reply(ctx, reply);
     }
     Ok(())
@@ -1160,7 +1168,7 @@ pub(crate) fn activate_taxi(
     source_client_node_id: u32,
     destination_client_node_id: u32,
     request_id: u64,
-) -> TaxiServiceReply {
+) -> Option<TaxiServiceReply> {
     let created_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let attempt = (|| -> Result<(), TaxiGateDenied> {
         // vmangos refuses a flying Character before anything else, and without a reply.
@@ -1218,14 +1226,17 @@ pub(crate) fn activate_taxi(
         Ok(())
     })();
 
-    activation_reply(
+    if attempt.is_err_and(TaxiGateDenied::is_silent) {
+        return None;
+    }
+    Some(activation_reply(
         character_guid,
         request_id,
         npc_guid,
         source_client_node_id,
         created_micros,
         attempt,
-    )
+    ))
 }
 
 pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
@@ -1564,9 +1575,12 @@ mod tests {
                 TaxiGateDenied::NotFlightMaster,
                 wire::ACTIVATE_NO_VENDOR_NEARBY,
             ),
-            (TaxiGateDenied::DifferentPartition, wire::ACTIVATE_NO_REPLY),
-            (TaxiGateDenied::OutOfRange, wire::ACTIVATE_NO_REPLY),
-            (TaxiGateDenied::Flying, wire::ACTIVATE_NO_REPLY),
+            (
+                TaxiGateDenied::DifferentPartition,
+                wire::ACTIVATE_TOO_FAR_AWAY,
+            ),
+            (TaxiGateDenied::OutOfRange, wire::ACTIVATE_TOO_FAR_AWAY),
+            (TaxiGateDenied::Flying, wire::ACTIVATE_PLAYER_BUSY),
             (TaxiGateDenied::Hostile, wire::ACTIVATE_NO_VENDOR_NEARBY),
             (
                 TaxiGateDenied::NotInteractable,
@@ -1615,6 +1629,16 @@ mod tests {
             assert!(!reply.refusal.is_empty(), "{denied:?}");
             assert_eq!(reply.operation, wire::REPLY_ACTIVATE);
             assert_eq!((reply.character_guid, reply.request_id), (7, 11));
+            assert_eq!(
+                denied.is_silent(),
+                matches!(
+                    denied,
+                    TaxiGateDenied::Flying
+                        | TaxiGateDenied::DifferentPartition
+                        | TaxiGateDenied::OutOfRange
+                ),
+                "{denied:?}"
+            );
         }
         let accepted = activation_reply(7, 11, 90, 255, 1234, Ok(()));
         assert!(accepted.accepted);

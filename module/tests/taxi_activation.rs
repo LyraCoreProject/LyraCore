@@ -9,6 +9,7 @@ const DESTINATION_CLIENT_NODE: u32 = 254;
 const FARE: u32 = 25;
 // A flight of 200 s at 32 yd/s outlasts a slow test.
 const FLIGHT_YARDS: f32 = 6400.0;
+const MISSING_MASTER: u64 = 0xf130_00ff_ffff_ffff;
 const ACTIVATE_TAXI: u32 = 0x1ad;
 const ACTIVATE_TAXI_REPLY: u64 = 0x1ae;
 
@@ -98,7 +99,11 @@ fn stage(name: &str, money: u32) -> (Standalone, support::ReducerConnection, Str
 }
 
 fn activate(wire: &mut support::ReducerConnection, master: &str) -> Vec<serde_json::Value> {
-    let mut body = master.parse::<u64>().unwrap().to_le_bytes().to_vec();
+    activate_guid(wire, master.parse().unwrap())
+}
+
+fn activate_guid(wire: &mut support::ReducerConnection, master: u64) -> Vec<serde_json::Value> {
+    let mut body = master.to_le_bytes().to_vec();
     body.extend(SOURCE_CLIENT_NODE.to_le_bytes());
     body.extend(DESTINATION_CLIENT_NODE.to_le_bytes());
     wire.call("native_world_receive", json!([ACTIVATE_TAXI, body]))
@@ -137,8 +142,20 @@ fn a_flying_character_gets_no_reply_and_no_second_charge() {
     assert_eq!(replies(&activate(&mut wire, &master)), ["00000000"]);
     assert_eq!((flights(&shard), money(&shard)), (1, 1000 - FARE));
 
+    // A flight master that does not exist is answered with 5 unless the flight check comes first.
+    assert!(replies(&activate_guid(&mut wire, MISSING_MASTER)).is_empty());
     assert!(replies(&activate(&mut wire, &master)).is_empty());
     assert_eq!((flights(&shard), money(&shard)), (1, 1000 - FARE));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_missing_flight_master_still_gets_its_reply_when_not_flying() {
+    let (_shard, mut wire, _master) = stage("taxi-activation-missing", 1000);
+    assert_eq!(
+        replies(&activate_guid(&mut wire, MISSING_MASTER)),
+        ["05000000"]
+    );
 }
 
 #[test]
