@@ -17,6 +17,9 @@ const MISSING_MASTER: u64 = 0xf130_00ff_ffff_ffff;
 const ACTIVATE_TAXI: u32 = 0x1ad;
 const ACTIVATE_TAXI_EXPRESS: u32 = 0x312;
 const ACTIVATE_TAXI_REPLY: u64 = 0x1ae;
+const TAXI_NODE_STATUS_QUERY: u32 = 0x1aa;
+const TAXI_NODE_STATUS: u64 = 0x1ab;
+const REVERSE_PATH: u32 = 5_090_306;
 const UNCATALOGUED_CLIENT_NODE: u32 = 9_999;
 const MOUNT_DISPLAY: u32 = 1147;
 const SLOW_CAST: u32 = 5_090_391;
@@ -25,7 +28,7 @@ const CAT_FORM: u32 = 768;
 const HOSTILE_FACTION_TEMPLATE: u32 = 14;
 const FRIENDLY_FACTION_TEMPLATE: u32 = 1;
 
-// vmangos Unit.h UnitFlags.
+// vmangos UnitDefines.h UnitFlags.
 const REMOVE_CLIENT_CONTROL: u32 = 0x0000_0004;
 const IN_COMBAT: u32 = 0x0008_0000;
 const NOT_SELECTABLE: u32 = 0x0200_0000;
@@ -169,6 +172,54 @@ fn express(
         .collect()
 }
 
+fn node_status_replies(wire: &mut support::ReducerConnection, master: u64) -> Vec<String> {
+    wire.call(
+        "native_world_receive",
+        json!([TAXI_NODE_STATUS_QUERY, master.to_le_bytes().to_vec()]),
+    )
+    .unwrap()
+    .inserts("game_native_packet")
+    .iter()
+    .map(|row| serde_json::from_str::<serde_json::Value>(row.get()).unwrap())
+    .filter(|packet| packet[2][1] == TAXI_NODE_STATUS)
+    .map(|packet| packet[3].as_str().unwrap().to_owned())
+    .collect()
+}
+
+fn known_node_status(master: u64) -> String {
+    let guid: String = master
+        .to_le_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("{guid}01")
+}
+
+fn stun_the_character(shard: &Standalone) {
+    insert_self_spell(shard, STUN_SELF, 0, A_CONTROL, M_STUN);
+    shard.assert_call("debug_force_cast", &["1", &STUN_SELF.to_string()]);
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT id FROM game_aura WHERE target_guid = 1 AND spell_id = {STUN_SELF}"
+            ))
+            .len(),
+        1
+    );
+}
+
+fn insert_reverse_path(shard: &Standalone) {
+    shard.insert_row(
+        "game_taxi_path",
+        &[
+            ("id", &REVERSE_PATH),
+            ("source_node_id", &DESTINATION_NODE),
+            ("destination_node_id", &SOURCE_NODE),
+            ("fare", &FARE),
+        ],
+    );
+}
+
 fn replies(packets: &[serde_json::Value]) -> Vec<String> {
     packets
         .iter()
@@ -250,14 +301,77 @@ fn an_express_request_gets_no_reply_where_vmangos_is_silent() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn an_express_request_vmangos_would_act_on_gets_the_server_error() {
-    let (shard, mut wire, master) = stage("taxi-activation-express-error", 1000);
+fn a_two_node_express_request_flies() {
+    let (shard, mut wire, master) = stage("taxi-activation-express-flies", 1000);
     let nodes = [SOURCE_CLIENT_NODE, DESTINATION_CLIENT_NODE];
+    assert_eq!(
+        replies(&express(&mut wire, master.parse().unwrap(), &nodes)),
+        [status(0)]
+    );
+    assert_eq!((flights(&shard), money(&shard)), (1, 1000 - FARE));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_multi_hop_express_request_in_combat_gets_status_7() {
+    let (shard, mut wire, master) = stage("taxi-activation-express-combat", 1000);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_flags = {IN_COMBAT} WHERE guid = 1"
+    ));
+    let nodes = [
+        SOURCE_CLIENT_NODE,
+        DESTINATION_CLIENT_NODE,
+        SOURCE_CLIENT_NODE,
+    ];
+    assert_eq!(
+        replies(&express(&mut wire, master.parse().unwrap(), &nodes)),
+        [status(7)]
+    );
+    assert_eq!((flights(&shard), money(&shard)), (0, 1000));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_multi_hop_express_request_with_an_unknown_node_gets_no_reply() {
+    let (shard, mut wire, master) = stage("taxi-activation-express-unknown", 1000);
+    insert_reverse_path(&shard);
+    let nodes = [
+        SOURCE_CLIENT_NODE,
+        DESTINATION_CLIENT_NODE,
+        UNCATALOGUED_CLIENT_NODE,
+    ];
+    assert!(replies(&express(&mut wire, master.parse().unwrap(), &nodes)).is_empty());
+    assert_eq!((flights(&shard), money(&shard)), (0, 1000));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_multi_hop_express_request_with_a_leg_without_a_path_gets_no_reply() {
+    let (shard, mut wire, master) = stage("taxi-activation-express-no-path", 1000);
+    let nodes = [
+        SOURCE_CLIENT_NODE,
+        DESTINATION_CLIENT_NODE,
+        SOURCE_CLIENT_NODE,
+    ];
+    assert!(replies(&express(&mut wire, master.parse().unwrap(), &nodes)).is_empty());
+    assert_eq!((flights(&shard), money(&shard)), (0, 1000));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_multi_hop_express_request_the_module_cannot_fly_gets_status_1() {
+    let (shard, mut wire, master) = stage("taxi-activation-express-multi-hop", 1000);
+    insert_reverse_path(&shard);
+    let nodes = [
+        SOURCE_CLIENT_NODE,
+        DESTINATION_CLIENT_NODE,
+        SOURCE_CLIENT_NODE,
+    ];
     assert_eq!(
         replies(&express(&mut wire, master.parse().unwrap(), &nodes)),
         [status(1)]
     );
-    assert_unchanged(&shard, "an express request");
+    assert_eq!((flights(&shard), money(&shard)), (0, 1000));
 }
 
 #[test]
@@ -497,16 +611,7 @@ fn a_character_that_cannot_interact_gets_no_reply() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_stunned_character_gets_no_reply() {
     let (shard, mut wire, master) = stage("taxi-activation-stunned", 1000);
-    insert_self_spell(&shard, STUN_SELF, 0, A_CONTROL, M_STUN);
-    shard.assert_call("debug_force_cast", &["1", &STUN_SELF.to_string()]);
-    assert_eq!(
-        shard
-            .query_rows(&format!(
-                "SELECT id FROM game_aura WHERE target_guid = 1 AND spell_id = {STUN_SELF}"
-            ))
-            .len(),
-        1
-    );
+    stun_the_character(&shard);
     assert!(replies(&activate(&mut wire, &master)).is_empty());
     assert_unchanged(&shard, "a stunned Character");
 }
@@ -570,6 +675,86 @@ fn a_node_vmangos_does_not_accept_gets_no_reply() {
     assert_eq!(
         replies(&activate(&mut wire, &master.to_string())),
         [status(0)]
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn refusals_come_in_the_vmangos_order() {
+    let (shard, mut wire, master) = stage("taxi-activation-order", 1000);
+    let player = |assignment: &str| {
+        shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET {assignment} WHERE guid = 1"
+        ))
+    };
+    let source_x: f32 = column(
+        &shard,
+        "game_taxi_node",
+        &format!("id = {SOURCE_NODE}"),
+        "x",
+    )
+    .parse()
+    .unwrap();
+
+    player(&format!("unit_flags = {IN_COMBAT}"));
+    shard.assert_sql(&format!(
+        "DELETE FROM game_character_taxi_node WHERE node_id = {DESTINATION_NODE}"
+    ));
+    assert_eq!(
+        replies(&activate(&mut wire, &master)),
+        [status(7)],
+        "combat comes before an unknown node"
+    );
+    know(&shard, DESTINATION_NODE);
+
+    player(&format!(
+        "unit_flags = {}",
+        IN_COMBAT | REMOVE_CLIENT_CONTROL
+    ));
+    assert_eq!(
+        replies(&activate(&mut wire, &master)),
+        [status(7)],
+        "combat comes before the lack of client control"
+    );
+
+    player(&format!(
+        "unit_flags = 0, mount_display_id = {MOUNT_DISPLAY}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_taxi_node SET x = {} WHERE id = {SOURCE_NODE}",
+        source_x + 100.0
+    ));
+    assert_eq!(
+        replies(&activate(&mut wire, &master)),
+        [status(8)],
+        "a mount comes before the reach of the source node"
+    );
+    assert_unchanged(&shard, "an ordered refusal");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_stunned_character_still_gets_the_node_status() {
+    let (shard, mut wire, master) = stage("taxi-activation-status-stunned", 1000);
+    stun_the_character(&shard);
+    let master: u64 = master.parse().unwrap();
+    assert_eq!(
+        node_status_replies(&mut wire, master),
+        [known_node_status(master)]
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_flight_master_in_combat_still_gets_the_node_status() {
+    let (shard, mut wire, master) = stage("taxi-activation-status-combat", 1000);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_flags = {IN_COMBAT} WHERE guid = {master}"
+    ));
+    let master: u64 = master.parse().unwrap();
+    assert_eq!(
+        node_status_replies(&mut wire, master),
+        [known_node_status(master)]
     );
 }
 

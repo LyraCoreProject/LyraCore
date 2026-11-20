@@ -20,7 +20,7 @@ symbol = "WorldSession::HandleActivateTaxiExpressOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "The Module returns an unavailable response for CMSG_ACTIVATETAXIEXPRESS."
-path = "module/src/native/unavailable.rs"
-symbol = "raw_responses"
-evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
+description = "The Module flies a two-node CMSG_ACTIVATETAXIEXPRESS request. A request for more than two nodes passes every vmangos check before the route lookup, then gets status 1, because multi-hop routes are unsupported."
+path = "module/src/native/taxi.rs"
+symbol = "activate"
+evidence = "module/src/native/taxi.rs; module/src/taxi.rs activate_route; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"

@@ -153,7 +153,6 @@ enum TaxiGateDenied {
     Hostile,
     NotInteractable,
     NoSourceNode,
-    UnsupportedInstance,
     Flying,
     PlayerBusy,
     NoClientControl,
@@ -164,6 +163,7 @@ enum TaxiGateDenied {
     SourceTooFar,
     NoPath,
     UnsupportedRoute,
+    MultiHopRoute,
     MissingMount,
     NotEnoughMoney,
 }
@@ -183,7 +183,6 @@ impl TaxiGateDenied {
             Self::Hostile => "flight master refuses interaction",
             Self::NotInteractable => "flight master is not interactable",
             Self::NoSourceNode => "flight master has no nearby taxi node",
-            Self::UnsupportedInstance => "taxi routes are unavailable in instances",
             Self::Flying => "player is in a taxi flight",
             Self::PlayerBusy => "player is busy",
             Self::NoClientControl => "player has no client control",
@@ -194,13 +193,14 @@ impl TaxiGateDenied {
             Self::SourceTooFar => "source taxi node is too far away",
             Self::NoPath => "no taxi path between the nodes",
             Self::UnsupportedRoute => "no complete supported direct route",
+            Self::MultiHopRoute => "multi-hop taxi routes are unsupported",
             Self::MissingMount => "taxi node has no usable faction mount",
             Self::NotEnoughMoney => "not enough money for taxi fare",
         }
     }
 
-    /// The `SMSG_ACTIVATETAXIREPLY` status vmangos `Player::ActivateTaxiPathTo` sends for this
-    /// denial. `None` is the silence of `CanInteractWithNPC` and of a flying Character.
+    /// The `SMSG_ACTIVATETAXIREPLY` status vmangos sends for this denial. `None` is the silence of
+    /// `CanInteractWithNPC`, a flying Character, no client control, an unknown node and no path.
     fn activation_status(self) -> Option<u8> {
         use lyracore_shared::constants::taxi_protocol as wire;
         match self {
@@ -219,12 +219,12 @@ impl TaxiGateDenied {
             | Self::NoClientControl
             | Self::UnknownNode
             | Self::NoPath => None,
-            Self::UnsupportedInstance | Self::PlayerBusy => Some(wire::ACTIVATE_PLAYER_BUSY),
+            Self::PlayerBusy => Some(wire::ACTIVATE_PLAYER_BUSY),
             Self::PlayerAlreadyMounted => Some(wire::ACTIVATE_PLAYER_ALREADY_MOUNTED),
             Self::PlayerShapeShifted => Some(wire::ACTIVATE_PLAYER_SHAPE_SHIFTED),
             Self::NoSourceNode | Self::UnsupportedRoute => Some(wire::ACTIVATE_NO_SUCH_PATH),
             Self::SourceTooFar => Some(wire::ACTIVATE_TOO_FAR_AWAY),
-            Self::NodeWithoutPosition | Self::MissingMount => {
+            Self::NodeWithoutPosition | Self::MultiHopRoute | Self::MissingMount => {
                 Some(wire::ACTIVATE_UNSPECIFIED_SERVER_ERROR)
             }
             Self::NotEnoughMoney => Some(wire::ACTIVATE_NOT_ENOUGH_MONEY),
@@ -269,17 +269,27 @@ fn flight_master_gate(player: &WorldEntity, npc: &WorldEntity) -> Result<(), Tax
     Ok(())
 }
 
+fn nearest_node(
+    npc: &WorldEntity,
+    nodes: impl Iterator<Item = GameTaxiNode>,
+) -> Option<(f32, GameTaxiNode)> {
+    nodes
+        .filter(|node| node.map_id == npc.map_id)
+        .map(|node| {
+            (
+                squared_distance((npc.x, npc.y, npc.z), (node.x, node.y, node.z)),
+                node,
+            )
+        })
+        .min_by(|(da, a), (db, b)| da.total_cmp(db).then_with(|| a.id.cmp(&b.id)))
+}
+
 fn nearest_source_node(
     npc: &WorldEntity,
     nodes: impl Iterator<Item = GameTaxiNode>,
 ) -> Option<GameTaxiNode> {
-    nodes
-        .filter(|node| node.map_id == npc.map_id)
-        .filter_map(|node| {
-            let distance = squared_distance((npc.x, npc.y, npc.z), (node.x, node.y, node.z));
-            (distance <= TAXI_NODE_RESOLVE_RANGE_SQ).then_some((distance, node))
-        })
-        .min_by(|(da, a), (db, b)| da.total_cmp(db).then_with(|| a.id.cmp(&b.id)))
+    nearest_node(npc, nodes)
+        .filter(|(distance, _)| *distance <= TAXI_NODE_RESOLVE_RANGE_SQ)
         .map(|(_, node)| node)
 }
 
@@ -316,9 +326,6 @@ fn resolve_flight_master(
     npc_guid: u64,
 ) -> Result<(WorldEntity, GameTaxiNode), TaxiGateDenied> {
     let (player, npc) = interacting_flight_master(ctx, character_guid, npc_guid)?;
-    if player.instance_id != 0 {
-        return Err(TaxiGateDenied::UnsupportedInstance);
-    }
     let source = nearest_source_node(&npc, ctx.db.game_taxi_node().iter())
         .ok_or(TaxiGateDenied::NoSourceNode)?;
     Ok((player, source))
@@ -330,17 +337,6 @@ fn has_active_flight(ctx: &ReducerContext, character_guid: u64) -> bool {
         .character_guid()
         .find(character_guid)
         .is_some()
-}
-
-/// Whether the Character may interact with the flight master `npc_guid`; vmangos answers a request
-/// for one it may not use with silence.
-pub(crate) fn can_interact_with_flight_master(
-    ctx: &ReducerContext,
-    character_guid: u64,
-    npc_guid: u64,
-) -> bool {
-    !has_active_flight(ctx, character_guid)
-        && interacting_flight_master(ctx, character_guid, npc_guid).is_ok()
 }
 
 /// The packet's source node must lie near the Character. vmangos compares a squared distance with
@@ -382,7 +378,8 @@ impl ActivationPlayerState {
         }
     }
 
-    /// vmangos checks combat before anything else, then drops a Character without client control.
+    /// vmangos checks `CanInteractWithNPC` and the node count first. This checks Flying, then combat,
+    /// then client control.
     fn validate_can_act(self) -> Result<(), TaxiGateDenied> {
         use lyracore_shared::constants::unit_flags;
         if self.has_active_flight {
@@ -1118,14 +1115,45 @@ pub fn gw_taxi_node_status(
     Ok(())
 }
 
+/// The node vmangos `SendTaxiStatus` reports on: the nearest on the creature's map that has a
+/// mount for the Character's team. It checks no interaction, only that the creature is on the
+/// Character's map.
+fn status_node(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    npc_guid: u64,
+) -> Result<GameTaxiNode, TaxiGateDenied> {
+    let player = crate::helpers::acting_entity_by_guid(ctx, character_guid)
+        .ok_or(TaxiGateDenied::PlayerMissing)?;
+    let creature = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(npc_guid)
+        .filter(|npc| {
+            !npc.is_player()
+                && npc.type_mask & lyracore_shared::constants::type_mask::CREATURE
+                    == lyracore_shared::constants::type_mask::CREATURE
+                && crate::helpers::in_same_partition(npc, player.map_id, player.instance_id)
+        })
+        .ok_or(TaxiGateDenied::FlightMasterMissing)?;
+    let catalogue = ctx.db.game_taxi_node();
+    let mounted = catalogue
+        .iter()
+        .filter(|node| faction_mount_display(player.race(), node) != 0);
+    nearest_node(&creature, mounted)
+        .map(|(_, node)| node)
+        .ok_or(TaxiGateDenied::NoSourceNode)
+}
+
 pub(crate) fn taxi_node_status(
     ctx: &ReducerContext,
     character_guid: u64,
     npc_guid: u64,
     request_id: u64,
 ) -> TaxiServiceReply {
-    match resolve_flight_master(ctx, character_guid, npc_guid) {
-        Ok((_player, source)) => TaxiServiceReply {
+    match status_node(ctx, character_guid, npc_guid) {
+        Ok(source) => TaxiServiceReply {
             character_guid,
             request_id,
             operation: lyracore_shared::constants::taxi_protocol::REPLY_STATUS,
@@ -1207,12 +1235,11 @@ pub fn gw_activate_taxi(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    if let Some(reply) = activate_taxi(
+    if let Some(reply) = activate_route(
         ctx,
         character_guid,
         npc_guid,
-        source_client_node_id,
-        destination_client_node_id,
+        &[source_client_node_id, destination_client_node_id],
         request_id,
     ) {
         write_reply(ctx, reply);
@@ -1220,12 +1247,24 @@ pub fn gw_activate_taxi(
     Ok(())
 }
 
-pub(crate) fn activate_taxi(
+/// Whether `nodes`, in route order, have a path between each pair.
+fn every_leg_has_a_path(ctx: &ReducerContext, nodes: &[GameTaxiNode]) -> bool {
+    nodes.windows(2).all(|leg| {
+        ctx.db
+            .game_taxi_path()
+            .by_source()
+            .filter(&leg[0].id)
+            .any(|path| path.destination_node_id == leg[1].id)
+    })
+}
+
+/// A taxi request along `client_nodes`, as vmangos `Player::ActivateTaxiPathTo` takes it. Only a
+/// route of two nodes flies; a longer one is refused after every check that precedes the route.
+pub(crate) fn activate_route(
     ctx: &ReducerContext,
     character_guid: u64,
     npc_guid: u64,
-    source_client_node_id: u32,
-    destination_client_node_id: u32,
+    client_nodes: &[u32],
     request_id: u64,
 ) -> Option<TaxiServiceReply> {
     let created_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
@@ -1235,25 +1274,33 @@ pub(crate) fn activate_taxi(
             return Err(TaxiGateDenied::Flying);
         }
         let (mut player, _) = interacting_flight_master(ctx, character_guid, npc_guid)?;
+        if client_nodes.len() < 2 {
+            return Err(TaxiGateDenied::NoPath);
+        }
         let mut player_state = ActivationPlayerState::from_world(ctx, &player);
         player_state.validate_can_act()?;
-        let nodes = ctx.db.game_taxi_node();
-        let known_node = |client_node_id: u32| {
-            nodes
-                .client_node_id()
-                .find(client_node_id)
-                .filter(|node| is_known(ctx, character_guid, node.id))
-                .ok_or(TaxiGateDenied::UnknownNode)
-        };
-        let source = known_node(source_client_node_id)?;
-        let destination = known_node(destination_client_node_id)?;
+        let catalogue = ctx.db.game_taxi_node();
+        let nodes = client_nodes
+            .iter()
+            .map(|&client_node_id| {
+                catalogue
+                    .client_node_id()
+                    .find(client_node_id)
+                    .filter(|node| is_known(ctx, character_guid, node.id))
+                    .ok_or(TaxiGateDenied::UnknownNode)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         player_state.validate_can_mount()?;
-        source_node_in_reach(&player, &source)?;
-        if player.instance_id != 0 {
-            return Err(TaxiGateDenied::UnsupportedInstance);
-        }
-        let path = direct_supported_path(ctx, &source, &destination)?;
-        let mount_display_id = faction_mount_display(player.race(), &source);
+        source_node_in_reach(&player, &nodes[0])?;
+        let [source, destination] = nodes.as_slice() else {
+            return Err(if every_leg_has_a_path(ctx, &nodes) {
+                TaxiGateDenied::MultiHopRoute
+            } else {
+                TaxiGateDenied::NoPath
+            });
+        };
+        let path = direct_supported_path(ctx, source, destination)?;
+        let mount_display_id = faction_mount_display(player.race(), source);
         player_state.activate(path.fare, mount_display_id)?;
 
         let flight = ActiveTaxiFlight {
@@ -1286,7 +1333,7 @@ pub(crate) fn activate_taxi(
         character_guid,
         request_id,
         npc_guid,
-        source_client_node_id,
+        client_nodes.first().copied().unwrap_or_default(),
         created_micros,
         attempt,
     ))
@@ -1669,6 +1716,21 @@ mod tests {
     }
 
     #[test]
+    fn the_status_node_is_the_nearest_on_the_map_however_far() {
+        let (_, npc) = flight_master_and_player(0.0);
+        let at = |id, x, map_id| GameTaxiNode {
+            x,
+            ..node(id, id, map_id)
+        };
+        let nearest = |nodes: Vec<GameTaxiNode>| nearest_node(&npc, nodes.into_iter());
+        assert_eq!(
+            nearest(vec![at(1, 5000.0, 0)]).map(|(_, node)| node.id),
+            Some(1)
+        );
+        assert!(nearest(vec![at(1, 5.0, 1)]).is_none());
+    }
+
+    #[test]
     fn arbitrary_overlap_never_reaps_young_unobserved_replies() {
         let now = 100_000_000;
         let rows: Vec<_> = (1..=10_000)
@@ -1711,10 +1773,6 @@ mod tests {
         ];
         let answered = [
             (TaxiGateDenied::NoSourceNode, wire::ACTIVATE_NO_SUCH_PATH),
-            (
-                TaxiGateDenied::UnsupportedInstance,
-                wire::ACTIVATE_PLAYER_BUSY,
-            ),
             (TaxiGateDenied::PlayerBusy, wire::ACTIVATE_PLAYER_BUSY),
             (
                 TaxiGateDenied::PlayerAlreadyMounted,
@@ -1732,6 +1790,10 @@ mod tests {
             (
                 TaxiGateDenied::UnsupportedRoute,
                 wire::ACTIVATE_NO_SUCH_PATH,
+            ),
+            (
+                TaxiGateDenied::MultiHopRoute,
+                wire::ACTIVATE_UNSPECIFIED_SERVER_ERROR,
             ),
             (
                 TaxiGateDenied::MissingMount,
@@ -1763,53 +1825,6 @@ mod tests {
         assert!(accepted.accepted);
         assert_eq!(accepted.result_code, wire::ACTIVATE_OK);
         assert!(accepted.refusal.is_empty());
-    }
-
-    #[test]
-    fn vmangos_never_sends_the_statuses_the_module_dropped() {
-        use lyracore_shared::constants::taxi_protocol as wire;
-        let dropped = [
-            wire::ACTIVATE_NO_VENDOR_NEARBY,
-            wire::ACTIVATE_NOT_VISITED,
-            wire::ACTIVATE_PLAYER_MOVING,
-            wire::ACTIVATE_SAME_NODE,
-            wire::ACTIVATE_NOT_STANDING,
-        ];
-        let every_denial = [
-            TaxiGateDenied::PlayerMissing,
-            TaxiGateDenied::PlayerDead,
-            TaxiGateDenied::PlayerLostControl,
-            TaxiGateDenied::FlightMasterMissing,
-            TaxiGateDenied::FlightMasterDead,
-            TaxiGateDenied::FlightMasterInCombat,
-            TaxiGateDenied::NotFlightMaster,
-            TaxiGateDenied::DifferentPartition,
-            TaxiGateDenied::OutOfRange,
-            TaxiGateDenied::Hostile,
-            TaxiGateDenied::NotInteractable,
-            TaxiGateDenied::NoSourceNode,
-            TaxiGateDenied::UnsupportedInstance,
-            TaxiGateDenied::Flying,
-            TaxiGateDenied::PlayerBusy,
-            TaxiGateDenied::NoClientControl,
-            TaxiGateDenied::UnknownNode,
-            TaxiGateDenied::PlayerAlreadyMounted,
-            TaxiGateDenied::PlayerShapeShifted,
-            TaxiGateDenied::NodeWithoutPosition,
-            TaxiGateDenied::SourceTooFar,
-            TaxiGateDenied::NoPath,
-            TaxiGateDenied::UnsupportedRoute,
-            TaxiGateDenied::MissingMount,
-            TaxiGateDenied::NotEnoughMoney,
-        ];
-        for denied in every_denial {
-            assert!(
-                denied
-                    .activation_status()
-                    .is_none_or(|status| !dropped.contains(&status)),
-                "{denied:?}"
-            );
-        }
     }
 
     #[test]
