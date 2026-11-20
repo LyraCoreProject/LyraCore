@@ -4,11 +4,11 @@ use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN,
-    A_MOD_RESISTANCE, A_MOD_SPEED, A_SPELLMOD_FLAT, CAST_FLAG_CANNOT_CRIT,
+    A_MOD_RESISTANCE, A_MOD_SPEED, A_PERIODIC_DAMAGE, A_SPELLMOD_FLAT, CAST_FLAG_CANNOT_CRIT,
     CAST_FLAG_IGNORE_RESISTANCES, CAST_FLAG_MAGIC_HIT, COMBAT_ATTACK_POWER, COMBAT_CRIT,
-    COMBAT_SPELL_CRIT, E_DAMAGE, M_FEAR, M_POLY, M_STUN, P_COMBAT_FIELD, P_MECHANIC, P_NONE,
-    P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST, SPEED_MOVE, SPEED_SWING,
-    T_SELF, T_TARGET_ANY, T_TARGET_ENEMY,
+    COMBAT_SPELL_CRIT, E_DAMAGE, E_INTERRUPT, M_FEAR, M_POLY, M_STUN, P_COMBAT_FIELD, P_MECHANIC,
+    P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST, SPEED_MOVE,
+    SPEED_SWING, T_SELF, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
@@ -41,6 +41,10 @@ const MECHANIC_SLEEP: u8 = 10;
 const MECHANIC_STUN: u8 = 12;
 // vmangos creature_template.mechanic_immune_mask sets bit `mechanic - 1`.
 const STUN_IMMUNE_MASK: u32 = 1 << (MECHANIC_STUN - 1);
+const MECHANIC_SILENCE: u8 = 9;
+const MECHANIC_SNARE: u8 = 11;
+const MECHANIC_BLEED: u8 = 15;
+const MECHANIC_INTERRUPT: u8 = 26;
 // vmangos Unit::HandleHasteAuraProc names Flurry by this SpellVisual.
 const FLURRY_VISUAL: u32 = 2759;
 const SPELL_FAMILY_WARRIOR: u8 = 4;
@@ -85,6 +89,16 @@ const FEAR_AND_SLOW: u32 = 5_091_125;
 const DOMINION_OF_SOUL: u32 = 5_091_126;
 const EFFECT_FEAR: u32 = 5_091_127;
 const HELPFUL_STUN_MECHANIC: u32 = 5_091_128;
+const KICK_FIXTURE: u32 = 5_091_129;
+const FROSTBOLT_FIXTURE: u32 = 5_091_130;
+const SNARE_FIXTURE: u32 = 5_091_131;
+const RAKE_FIXTURE: u32 = 5_091_132;
+const REND_FIXTURE: u32 = 5_091_133;
+const WOLF_CAST: u32 = 5_091_134;
+const FROST: u8 = 0x10;
+const SLOW_POINTS: i32 = -50;
+const BLEED_POINTS: i32 = 3;
+const BLEED_PERIOD_MS: u32 = 3000;
 const MISS_NONE: &str = "0";
 const MISS_IMMUNE: &str = "7";
 const MISS_IMMUNE2: &str = "8";
@@ -730,6 +744,196 @@ fn a_stun_lands_on_a_creature_before_its_template_mask_is_set_and_is_refused_aft
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn kick_deals_its_damage_to_an_interrupt_immune_creature_and_leaves_its_cast() {
+    let mut standalone = Standalone::start("aura-charges-kick-interrupt-immune");
+    let wolf = stage(&mut standalone);
+    interrupt_spell(&standalone, KICK_FIXTURE);
+    set_wolf_mechanic_immune_mask(&standalone, 1 << (MECHANIC_INTERRUPT - 1));
+    wolf_begins_a_cast(&standalone, wolf);
+
+    let go = go_event(&standalone, PLAYER, KICK_FIXTURE, wolf);
+    assert_eq!(go["miss_info"], MISS_NONE);
+    advance(&standalone);
+    assert!(
+        health(&standalone, wolf) < WOLF_HEALTH,
+        "Kick's damage effect lands"
+    );
+    assert!(
+        wolf_is_casting(&standalone, wolf),
+        "vmangos Creature::IsImmuneToSpellEffect drops the interrupt effect of mechanic 26"
+    );
+    assert!(lockouts(&standalone, wolf).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn frostbolt_deals_its_damage_to_a_snare_immune_creature_without_its_slow() {
+    let mut standalone = Standalone::start("aura-charges-frostbolt-snare-immune");
+    let wolf = stage(&mut standalone);
+    bolt(&standalone, FROSTBOLT_FIXTURE, FROST, 0);
+    set_spell(
+        &standalone,
+        FROSTBOLT_FIXTURE,
+        &format!("duration_ms = {DURATION_MS}"),
+    );
+    mechanic_effect(
+        &standalone,
+        FROSTBOLT_FIXTURE,
+        (1, A_MOD_SPEED, SLOW_POINTS),
+        (i32::from(SPEED_MOVE), P_SPEED_KIND),
+        MECHANIC_SNARE,
+    );
+    set_wolf_mechanic_immune_mask(&standalone, 1 << (MECHANIC_SNARE - 1));
+
+    let go = go_event(&standalone, PLAYER, FROSTBOLT_FIXTURE, wolf);
+    assert_eq!(go["miss_info"], MISS_NONE);
+    advance(&standalone);
+    assert!(
+        health(&standalone, wolf) < WOLF_HEALTH,
+        "Frostbolt's damage effect lands"
+    );
+    assert_eq!(
+        aura_column(&standalone, wolf, FROSTBOLT_FIXTURE, "stacks"),
+        None,
+        "vmangos Creature::IsImmuneToSpellEffect drops the slow of mechanic 11"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_snare_whose_only_effect_is_dropped_reports_immune2() {
+    let mut standalone = Standalone::start("aura-charges-snare-only-immune2");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: SNARE_FIXTURE,
+            school_mask: FROST,
+            target: T_TARGET_ENEMY,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(
+            A_MOD_SPEED,
+            SLOW_POINTS,
+            i32::from(SPEED_MOVE),
+            P_SPEED_KIND,
+        )],
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET effect_mechanic = {MECHANIC_SNARE} \
+         WHERE spell_id = {SNARE_FIXTURE}"
+    ));
+    set_wolf_mechanic_immune_mask(&standalone, 1 << (MECHANIC_SNARE - 1));
+
+    assert_eq!(
+        cast_miss_code(&standalone, PLAYER, SNARE_FIXTURE, wolf),
+        MISS_IMMUNE2
+    );
+    assert_eq!(
+        aura_column(&standalone, wolf, SNARE_FIXTURE, "stacks"),
+        None
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_bleed_immune_creature_takes_rakes_damage_without_its_bleed_and_refuses_rend() {
+    let mut standalone = Standalone::start("aura-charges-bleed-immune");
+    let wolf = stage(&mut standalone);
+    bolt(&standalone, RAKE_FIXTURE, PHYSICAL, 0);
+    set_spell(
+        &standalone,
+        RAKE_FIXTURE,
+        &format!("duration_ms = {DURATION_MS}"),
+    );
+    mechanic_effect(
+        &standalone,
+        RAKE_FIXTURE,
+        (1, A_PERIODIC_DAMAGE, BLEED_POINTS),
+        (0, P_NONE),
+        MECHANIC_BLEED,
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET period_ms = {BLEED_PERIOD_MS} WHERE spell_id = {RAKE_FIXTURE}"
+    ));
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: REND_FIXTURE,
+            school_mask: PHYSICAL,
+            target: T_TARGET_ENEMY,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_PERIODIC_DAMAGE, BLEED_POINTS, 0, P_NONE)],
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET period_ms = {BLEED_PERIOD_MS} WHERE spell_id = {REND_FIXTURE}"
+    ));
+    set_spell(
+        &standalone,
+        REND_FIXTURE,
+        &format!("mechanic = {MECHANIC_BLEED}"),
+    );
+    set_wolf_mechanic_immune_mask(&standalone, 1 << (MECHANIC_BLEED - 1));
+
+    let go = go_event(&standalone, PLAYER, RAKE_FIXTURE, wolf);
+    assert_eq!(go["miss_info"], MISS_NONE);
+    advance(&standalone);
+    assert!(
+        health(&standalone, wolf) < WOLF_HEALTH,
+        "Rake's damage effect lands"
+    );
+    assert_eq!(
+        aura_column(&standalone, wolf, RAKE_FIXTURE, "stacks"),
+        None,
+        "vmangos drops Rake's bleed, an effect of mechanic 15"
+    );
+    advance(&standalone);
+    assert_eq!(
+        cast_miss_code(&standalone, PLAYER, REND_FIXTURE, wolf),
+        MISS_IMMUNE,
+        "Rend's header mechanic is bleed, so the whole spell is refused"
+    );
+    assert_eq!(aura_column(&standalone, wolf, REND_FIXTURE, "stacks"), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_interrupt_stops_a_silence_immune_creature_without_locking_its_school() {
+    let mut standalone = Standalone::start("aura-charges-silence-immune-lockout");
+    let wolf = stage(&mut standalone);
+    interrupt_spell(&standalone, KICK_FIXTURE);
+
+    wolf_begins_a_cast(&standalone, wolf);
+    go_event(&standalone, PLAYER, KICK_FIXTURE, wolf);
+    assert!(!wolf_is_casting(&standalone, wolf));
+    assert_eq!(
+        lockouts(&standalone, wolf),
+        [FIRE.to_string()],
+        "an interrupt locks the school of a creature without the mask"
+    );
+
+    standalone.assert_sql(&format!(
+        "DELETE FROM game_school_lockout WHERE caster_guid = {wolf}"
+    ));
+    set_wolf_mechanic_immune_mask(&standalone, 1 << (MECHANIC_SILENCE - 1));
+    advance(&standalone);
+    wolf_begins_a_cast(&standalone, wolf);
+    go_event(&standalone, PLAYER, KICK_FIXTURE, wolf);
+    assert!(
+        !wolf_is_casting(&standalone, wolf),
+        "silence immunity does not stop an interrupt"
+    );
+    assert!(
+        lockouts(&standalone, wolf).is_empty(),
+        "vmangos Creature::LockOutSpells skips a template immune to silence"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_stun_immune_template_refuses_a_helpful_spell_of_its_mechanic_when_the_cast_starts() {
     let mut standalone = Standalone::start("aura-charges-template-helpful");
     let caster = stage(&mut standalone);
@@ -1238,6 +1442,108 @@ fn spawn_wolf(standalone: &Standalone) -> u64 {
          health = {WOLF_HEALTH}, max_health = {WOLF_HEALTH} WHERE guid = {wolf}"
     ));
     wolf
+}
+
+fn mechanic_effect(
+    standalone: &Standalone,
+    spell_id: u32,
+    (index, kind, base_points): (u8, u8, i32),
+    (p0, p0_kind): (i32, u8),
+    mechanic: u8,
+) {
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell_id, index)),
+            ("spell_id", &spell_id),
+            ("effect_index", &index),
+            ("kind", &kind),
+            ("base_points", &base_points),
+            ("target", &T_TARGET_ENEMY),
+            ("p_0", &p0),
+            ("p_0_kind", &p0_kind),
+            ("effect_mechanic", &mechanic),
+        ],
+    );
+}
+
+fn interrupt_spell(standalone: &Standalone, spell_id: u32) {
+    bolt(standalone, spell_id, PHYSICAL, 0);
+    mechanic_effect(
+        standalone,
+        spell_id,
+        (1, E_INTERRUPT, 0),
+        (0, P_NONE),
+        MECHANIC_INTERRUPT,
+    );
+}
+
+fn wolf_begins_a_cast(standalone: &Standalone, wolf: u64) {
+    if standalone
+        .query_rows(&format!(
+            "SELECT spell_id FROM game_spell WHERE spell_id = {WOLF_CAST}"
+        ))
+        .is_empty()
+    {
+        bolt(standalone, WOLF_CAST, FIRE, 0);
+        set_spell(standalone, WOLF_CAST, "cast_time_ms = 10000");
+    }
+    standalone.assert_call(
+        "debug_begin_cast",
+        &[
+            &wolf.to_string(),
+            &WOLF_CAST.to_string(),
+            &PLAYER.to_string(),
+        ],
+    );
+    assert!(wolf_is_casting(standalone, wolf));
+}
+
+fn wolf_is_casting(standalone: &Standalone, wolf: u64) -> bool {
+    !standalone
+        .query_rows(&format!(
+            "SELECT spell_id FROM game_pending_cast WHERE caster_guid = {wolf}"
+        ))
+        .is_empty()
+}
+
+fn health(standalone: &Standalone, guid: u64) -> u32 {
+    standalone.query_rows(&format!(
+        "SELECT health FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["health"]
+        .parse()
+        .unwrap()
+}
+
+fn lockouts(standalone: &Standalone, caster: u64) -> Vec<String> {
+    standalone
+        .query_rows(&format!(
+            "SELECT school FROM game_school_lockout WHERE caster_guid = {caster}"
+        ))
+        .into_iter()
+        .map(|row| row["school"].clone())
+        .collect()
+}
+
+fn go_event(standalone: &Standalone, caster: u64, spell_id: u32, target: u64) -> support::Row {
+    let events = subscribe_with_fence(
+        standalone,
+        &[&format!(
+            "SELECT * FROM game_spell_cast_event_live WHERE spell_id = {spell_id} AND kind = 2"
+        )],
+    );
+    standalone.assert_call(
+        "debug_cast_at",
+        &[
+            &caster.to_string(),
+            &spell_id.to_string(),
+            &target.to_string(),
+        ],
+    );
+    fence_subscription(standalone, &events);
+    event_rows(&events, "game_spell_cast_event_live")
+        .pop()
+        .expect("the cast completes")
 }
 
 fn set_wolf_mechanic_immune_mask(standalone: &Standalone, mask: u32) {
