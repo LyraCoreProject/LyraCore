@@ -1162,8 +1162,9 @@ immunity reads it.
 
 A target is immune to a whole cast when it holds an immunity Aura that names the Spell's `mechanic`,
 before the hit roll and before any effect runs, as vmangos `IsImmuneToSpell` decides. It is immune
-to one effect of any kind when an Aura names the effect's `effect_mechanic`, after the hit roll,
-as `IsImmuneToSpellEffect` decides: that effect is dropped and the others still run. So Frostbolt's
+to one effect of any kind when an Aura names the effect's `effect_mechanic`, whatever the hit roll,
+as `IsImmuneToSpellEffect` decides when vmangos builds the target's effect mask: that effect is
+dropped and the others still run. So Frostbolt's
 damage lands on a unit immune to snare without its slow, and Kick's damage lands on one immune to
 interrupt without its interrupt. The Aura's source Spell must have the other polarity, or its `p1`
 must carry bit 0x100. A Spell is harmful when any effect aims at an enemy, and an effect is harmful
@@ -1187,7 +1188,7 @@ starts, with `SPELL_FAILED_TARGET_AURASTATE`, so no item, power or cooldown is s
 
 A cast that was refused whole on a target reports it as immune (`SpellMissInfo` Immune, for the
 primary target): Immune when the header mechanic refused it, and Immune2 when only effect
-mechanics masked every effect. It also runs the proc pass for that target with `PROC_EX_IMMUNE`,
+mechanics masked every effect, even when the hit roll missed, as vmangos `WriteSpellGoTargets` does. It also runs the proc pass for that target with `PROC_EX_IMMUNE`,
 which is how Fear Ward is used up: it fires on any spell whose header mechanic is fear, whatever
 the result. A cast an aura started runs no such pass, a harmful item cast runs it, and a helpful spell raises no
 proc event. A finisher refused whole keeps its combo points.

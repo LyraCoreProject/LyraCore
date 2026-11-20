@@ -340,7 +340,17 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/aura_charges.rs"
-function = "a_bleed_immune_creature_takes_rakes_damage_without_its_bleed_and_refuses_rend"
+function = "a_snare_whose_only_effect_is_dropped_reports_immune2_when_its_hit_roll_misses"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "rake_deals_its_damage_to_a_bleed_immune_creature_without_its_bleed"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "rend_is_refused_whole_by_a_bleed_immune_creature"
 rung = "durable_module"
 
 [[tests]]
