@@ -729,10 +729,10 @@ the source effect from the target. Ordinary passives use slot 255; visual passiv
 area auras and totem auras can use visible slots. Repair applies the same rule to stored cast auras.
 
 `game_spell_proc_event` carries the source proc-event overlay: `ppm_rate`,
-`icd_ms`, `proc_ex` (the normal-hit and critical-hit rule), the `school_mask`, `family_name` and
+`icd_ms`, `proc_ex` (the hit result that fires it, or `PROC_EX_TRIGGER_ALWAYS`), the `school_mask`, `family_name` and
 `family_flags` filter on triggering spells, a `proc_flags` override and a `custom_chance`. It is
 keyed by spell id, private, and absent for most spells; an absent row means "use the header's
-values". The `spellmeta` dump family loads it, and its clear stops at the reserved synthetic id
+values". A higher rank without its own row takes its first rank's row through `game_spell_chain`. The `spellmeta` dump family loads it, and its clear stops at the reserved synthetic id
 floor so the seeded Proc fixtures keep their overlay rows.
 
 `game_enchant_proc_rate` (`module/src/spell/chance_on_hit.rs`) carries the vmangos
@@ -752,12 +752,14 @@ spending the last charge or deleting the item deletes it earlier.
 `game_aura` carries the frozen profile: `proc_flags`, `proc_chance`, `proc_ppm`, `proc_ex`,
 `proc_school_mask`, `proc_family_name`, `proc_family_flags`, `proc_charges`, `proc_icd_ms`,
 `proc_ready_micros`. `spell::proc::freeze_profile` folds header and overlay together once, at
-apply, so the proc pass reads one row. The overlay wins where both carry a value; charges come only
-from the header. `proc_charges` and `proc_ready_micros` are mutable: a fire spends a charge and
-stamps the next cooldown deadline. A refresh freezes the other columns again and refills charges,
-and leaves a running cooldown alone. That is why `debug_repair_after_publish` freezes Proc profiles again: an
-aura applied before the columns existed reads as "never procs", and a permanent self-buff never
-refreshes on its own.
+apply, for every Aura, so the proc pass reads one row. The overlay wins where both carry a value;
+charges come from the header, plus the caster's `SPELLMOD_CHARGES` modifiers. `proc_charges` and `proc_ready_micros` are mutable. The proc pass
+treats the effect rows of one spell from one caster and one item as one Aura Holder: one roll, and one charge spent
+for all its rows, whether a Proc fired or an Aura such as Inner Fire only counted the event. A
+refresh freezes the other columns again and refills charges, and leaves a running cooldown alone.
+That is why `debug_repair_after_publish` freezes profiles again: an Aura applied before its profile
+was frozen reads as "never procs, no charges", and a permanent self-buff never refreshes on its
+own.
 
 ### Global cooldowns (`module/src/spell/tables.rs`)
 

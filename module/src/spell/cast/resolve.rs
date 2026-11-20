@@ -354,7 +354,7 @@ fn run_spell_effects(
             let roll = if rolls_hit && t != caster_guid {
                 *target_rolls
                     .entry(t)
-                    .or_insert_with(|| hit_roll(ctx, caster_guid, level, t, table, hdr))
+                    .or_insert_with(|| hit_roll(ctx, caster_guid, level, t, table, hdr, triggered))
             } else {
                 AttackOutcome::Normal
             };
@@ -555,6 +555,7 @@ fn hit_roll(
     target_guid: u64,
     table: HitTable,
     spell: &Spell,
+    triggered: bool,
 ) -> AttackOutcome {
     let HitTable::Weapon { ranged } = table else {
         return if super::targeting::spell_misses(ctx, level, target_guid, spell) {
@@ -582,6 +583,21 @@ fn hit_roll(
                 Some(crate::combat::DeliveredSpell::cast(spell)),
             );
             arm_avoidance_reacts(ctx, caster_guid, target_guid, roll);
+            if !triggered {
+                let source = if ranged {
+                    crate::combat::HitSource::Ranged
+                } else {
+                    crate::combat::HitSource::MeleeSpell
+                };
+                crate::spell::proc::run_unlanded_proc_pass(
+                    ctx,
+                    caster_guid,
+                    target_guid,
+                    &crate::combat::Hit::spell(source, spell.spell_id, false),
+                    roll,
+                    (0, 0),
+                );
+            }
             roll
         }
         _ => AttackOutcome::Normal,

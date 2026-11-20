@@ -167,6 +167,7 @@ pub(crate) struct Hit {
     pub source: HitSource,
     pub spell_id: u32,
     pub crit: bool,
+    pub blocked: bool,
 }
 
 impl Hit {
@@ -175,6 +176,7 @@ impl Hit {
             source,
             spell_id: 0,
             crit,
+            blocked: false,
         }
     }
 
@@ -183,6 +185,7 @@ impl Hit {
             source,
             spell_id,
             crit,
+            blocked: false,
         }
     }
 
@@ -191,6 +194,14 @@ impl Hit {
             source: HitSource::Triggered,
             spell_id: 0,
             crit: false,
+            blocked: false,
+        }
+    }
+
+    pub(crate) fn with_block(self, blocked: u32) -> Self {
+        Self {
+            blocked: blocked > 0,
+            ..self
         }
     }
 }
@@ -412,6 +423,10 @@ pub(crate) struct ResolvedDamage {
 impl ResolvedDamage {
     pub(crate) fn amount(self) -> u32 {
         self.damage.amount
+    }
+
+    pub(crate) fn absorbed(self) -> u32 {
+        self.absorbed
     }
 
     pub(crate) fn land(

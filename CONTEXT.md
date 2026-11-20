@@ -13,7 +13,7 @@ entry in both files.
 
 ## Index
 
-**A** [Account](CORE_TERMS.md#account) · [Account Character Owner](#retired-terms) · [Account Claim](#retired-terms) · [Account Fence](#retired-terms) · [Action Outcome](#procs) · [Actor](CORE_TERMS.md#actor) · [Alpha Test Tools](#accounts-characters-and-sessions) · [AOI](CORE_TERMS.md#aoi) · [AOI Grant](CORE_TERMS.md#aoi-grant) · [Architecture Test](CORE_TERMS.md#architecture-test) · [Assistant](#groups) · [Attack Table](#procs) · [Auction Cut](#auctions) · [Auction House](#auctions) · [Auction Mail](#auctions) · [Auction Market](#auctions) · [Auction Notice](#auctions) · [Authored Casting](#creature-ai) · [Authored Combat](#creature-ai) · [Authored Flee](#creature-ai) · [Authored Spawn](#requests-and-delivery) · [Authoring Library](#packages) · [Auto-Reply](#chat) · [Away Status](#chat)
+**A** [Account](CORE_TERMS.md#account) · [Account Character Owner](#retired-terms) · [Account Claim](#retired-terms) · [Account Fence](#retired-terms) · [Action Outcome](#procs) · [Actor](CORE_TERMS.md#actor) · [Alpha Test Tools](#accounts-characters-and-sessions) · [AOI](CORE_TERMS.md#aoi) · [AOI Grant](CORE_TERMS.md#aoi-grant) · [Architecture Test](CORE_TERMS.md#architecture-test) · [Assistant](#groups) · [Attack Table](#procs) · [Auction Cut](#auctions) · [Auction House](#auctions) · [Auction Mail](#auctions) · [Auction Market](#auctions) · [Auction Notice](#auctions) · [Aura Holder](#procs) · [Authored Casting](#creature-ai) · [Authored Combat](#creature-ai) · [Authored Flee](#creature-ai) · [Authored Spawn](#requests-and-delivery) · [Authoring Library](#packages) · [Auto-Reply](#chat) · [Away Status](#chat)
 
 **B** [Base Snapshot](#packages) · [Baseline](#client-content) · [Behavior](#conformance) · [Bot Capacity Lease](#bots) · [Bot Controller](#bots) · [Bounded Map Slice](#realm-topology) · [Build Identity](#packages)
 
@@ -620,6 +620,14 @@ Aura is on it gets a Self-Resurrection Option. The Aura itself does not survive 
 **Proc**:
 An aura that fires off a combat event, with the event mask, chance, charges and internal cooldown its spell data gives it. One engine, one pass, run at the damage chokepoint.
 _Avoid_: on-hit trigger, reactive aura
+
+**Aura Holder**:
+The Aura rows that one caster's spell, or one equipped item's spell, puts on one unit, one row for
+each effect. The proc pass rolls a holder once and spends at most one charge for all its rows. A
+charged holder with no Proc row, such as Inner Fire or Flurry, spends a charge on an event its
+spell's proc flags admit, unless the hit result its `procEx` names is absent or an aura-type
+handler keeps the charge, as Flurry keeps its last one on a crit.
+_Avoid_: buff, aura group
 
 **Carrier**:
 The unit wearing a Proc aura. A fired Proc casts from the Carrier, at the Carrier's frozen aura level.
