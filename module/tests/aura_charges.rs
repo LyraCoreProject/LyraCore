@@ -3,11 +3,11 @@ mod support;
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{
-    A_ABSORB, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN, A_MOD_RESISTANCE,
-    A_MOD_SPEED, A_SPELLMOD_FLAT, CAST_FLAG_CANNOT_CRIT, CAST_FLAG_IGNORE_RESISTANCES,
-    COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_SPELL_CRIT, E_DAMAGE, P_COMBAT_FIELD, P_MECHANIC,
-    P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST, SPEED_SWING,
-    T_SELF, T_TARGET_ENEMY,
+    A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN,
+    A_MOD_RESISTANCE, A_MOD_SPEED, A_SPELLMOD_FLAT, CAST_FLAG_CANNOT_CRIT,
+    CAST_FLAG_IGNORE_RESISTANCES, COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_SPELL_CRIT, E_DAMAGE,
+    M_FEAR, M_POLY, M_STUN, P_COMBAT_FIELD, P_MECHANIC, P_NONE, P_SCHOOL_MASK, P_SPEED_KIND,
+    P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST, SPEED_SWING, T_SELF, T_TARGET_ENEMY,
 };
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
@@ -34,6 +34,9 @@ const PROC_FAILURE_BURNS_CHARGE: u32 = 0x1;
 // vmangos SpellModOp SPELLMOD_CHARGES and SharedDefines.h MECHANIC_FEAR.
 const SPELLMOD_CHARGES: i32 = 4;
 const MECHANIC_FEAR: u8 = 5;
+const MECHANIC_CHARM: u8 = 1;
+const MECHANIC_SLEEP: u8 = 10;
+const MECHANIC_STUN: u8 = 12;
 // vmangos Unit::HandleHasteAuraProc names Flurry by this SpellVisual.
 const FLURRY_VISUAL: u32 = 2759;
 const SPELL_FAMILY_WARRIOR: u8 = 4;
@@ -57,6 +60,8 @@ const FIRE_BOLT: u32 = 5_091_104;
 const SCORCH: u32 = 5_091_105;
 const CERTAIN_SPELL_CRIT: u32 = 5_091_106;
 const FEAR_WARD: u32 = 5_091_107;
+// The Module names Fear Ward by its vmangos spell id.
+const REAL_FEAR_WARD: u32 = 6346;
 const FEAR_BOLT: u32 = 5_091_108;
 const FOCUS: u32 = 5_091_109;
 const SLOW_BOLT: u32 = 5_091_110;
@@ -66,6 +71,11 @@ const SHIELD_BLOCK: u32 = 5_091_113;
 const IMPROVED_SHIELD_BLOCK: u32 = 5_091_115;
 const WINDFURY_ATTACK: u32 = 5_091_116;
 const POWER_WORD_SHIELD: u32 = 5_091_117;
+const PSYCHIC_SCREAM: u32 = 5_091_118;
+const WILL_OF_THE_FORSAKEN: u32 = 5_091_119;
+const SLEEP_FIXTURE: u32 = 5_091_120;
+const STUN_FIXTURE: u32 = 5_091_121;
+const MIND_EXHAUSTION: u32 = 5_091_122;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -341,6 +351,118 @@ fn fear_ward_is_kept_by_a_frostbolt_and_spent_by_a_fear_spell() {
     );
     cast_by(&standalone, wolf, FEAR_BOLT, PLAYER);
     assert_eq!(charges(&standalone, PLAYER, FEAR_WARD), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn fear_ward_refuses_a_fear_that_deals_no_damage_and_is_used_up_by_it() {
+    let mut standalone = Standalone::start("aura-charges-fear-ward-refuses");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: REAL_FEAR_WARD,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: TAKE_HARMFUL_ABILITY | TAKE_HARMFUL_SPELL,
+            charges: 1,
+        },
+        &[(A_IMMUNITY, 0, i32::from(MECHANIC_FEAR), P_MECHANIC)],
+    );
+    standalone.insert_row(
+        "game_spell_proc_event",
+        &[
+            ("spell_id", &REAL_FEAR_WARD),
+            ("proc_ex", &PROC_EX_NORMAL_HIT),
+        ],
+    );
+    control_spell(&standalone, PSYCHIC_SCREAM, M_FEAR, MECHANIC_FEAR);
+    standalone.assert_call("debug_force_cast", &["1", &REAL_FEAR_WARD.to_string()]);
+    advance(&standalone);
+
+    cast_by(&standalone, wolf, PSYCHIC_SCREAM, PLAYER);
+    assert_eq!(
+        stacks(&standalone, PSYCHIC_SCREAM),
+        None,
+        "vmangos Unit::IsImmuneToSpell refuses a fear the Fear Warded unit takes"
+    );
+    assert_eq!(
+        charges(&standalone, PLAYER, REAL_FEAR_WARD),
+        None,
+        "the refused fear uses Fear Ward up, though it deals no damage"
+    );
+    cast_by(&standalone, wolf, PSYCHIC_SCREAM, PLAYER);
+    assert!(
+        stacks(&standalone, PSYCHIC_SCREAM).is_some(),
+        "the next fear lands"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn will_of_the_forsaken_refuses_a_fear_and_a_sleep_and_lets_a_stun_land() {
+    let mut standalone = Standalone::start("aura-charges-will-of-the-forsaken");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: WILL_OF_THE_FORSAKEN,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[
+            (A_IMMUNITY, 0, i32::from(MECHANIC_CHARM), P_MECHANIC),
+            (A_IMMUNITY, 0, i32::from(MECHANIC_FEAR), P_MECHANIC),
+            (A_IMMUNITY, 0, i32::from(MECHANIC_SLEEP), P_MECHANIC),
+        ],
+    );
+    control_spell(&standalone, PSYCHIC_SCREAM, M_FEAR, MECHANIC_FEAR);
+    control_spell(&standalone, SLEEP_FIXTURE, M_POLY, MECHANIC_SLEEP);
+    control_spell(&standalone, STUN_FIXTURE, M_STUN, MECHANIC_STUN);
+    standalone.assert_call(
+        "debug_force_cast",
+        &["1", &WILL_OF_THE_FORSAKEN.to_string()],
+    );
+    advance(&standalone);
+
+    cast_by(&standalone, wolf, PSYCHIC_SCREAM, PLAYER);
+    cast_by(&standalone, wolf, SLEEP_FIXTURE, PLAYER);
+    cast_by(&standalone, wolf, STUN_FIXTURE, PLAYER);
+    assert_eq!(stacks(&standalone, PSYCHIC_SCREAM), None, "fear is refused");
+    assert_eq!(stacks(&standalone, SLEEP_FIXTURE), None, "sleep is refused");
+    assert!(
+        stacks(&standalone, STUN_FIXTURE).is_some(),
+        "its charm immunity is mechanic 1, not LyraCore's M_STUN, so a stun lands"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_debuff_that_names_a_mechanic_refuses_no_harmful_spell_of_it() {
+    let mut standalone = Standalone::start("aura-charges-mind-exhaustion");
+    let wolf = stage(&mut standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: MIND_EXHAUSTION,
+            school_mask: PHYSICAL,
+            target: T_TARGET_ENEMY,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_IMMUNITY, 0, i32::from(MECHANIC_STUN), P_MECHANIC)],
+    );
+    control_spell(&standalone, STUN_FIXTURE, M_STUN, MECHANIC_STUN);
+
+    cast_by(&standalone, wolf, MIND_EXHAUSTION, PLAYER);
+    assert!(stacks(&standalone, MIND_EXHAUSTION).is_some());
+    cast_by(&standalone, wolf, STUN_FIXTURE, PLAYER);
+    assert!(
+        stacks(&standalone, STUN_FIXTURE).is_some(),
+        "vmangos immunity refuses a spell of the other polarity, and a debuff refuses only helpful ones"
+    );
 }
 
 #[test]
@@ -817,6 +939,21 @@ fn bolt(standalone: &Standalone, spell_id: u32, school_mask: u8, cast_flags: u32
 }
 
 // A proc never fires off an Aura applied in the same virtual instant.
+fn control_spell(standalone: &Standalone, spell_id: u32, control: i32, mechanic: u8) {
+    aura_spell(
+        standalone,
+        Charged {
+            spell_id,
+            school_mask: NATURE,
+            target: T_TARGET_ENEMY,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_CONTROL, 0, control, P_MECHANIC)],
+    );
+    set_spell(standalone, spell_id, &format!("mechanic = {mechanic}"));
+}
+
 fn advance(standalone: &Standalone) {
     standalone.assert_call("debug_advance_virtual_clock", &["50000"]);
 }

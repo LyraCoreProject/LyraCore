@@ -334,6 +334,7 @@ fn run_spell_effects(
     let mut target_rolls: std::collections::HashMap<u64, AttackOutcome> =
         std::collections::HashMap::new();
     let mut shield_targets = std::collections::BTreeSet::new();
+    let mut immune_targets = std::collections::BTreeSet::new();
     // vmangos rolls the main hand per target, landed or avoided. LyraCore skips a Chance on Hit cast.
     let rolls_weapon =
         hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0 && !matches!(origin, CastOrigin::ChanceOnHit);
@@ -432,6 +433,9 @@ fn run_spell_effects(
             if t != caster_guid && hit.dealt > 0 && hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0 {
                 shield_targets.insert(t);
             }
+            if t != caster_guid && hit.immune {
+                immune_targets.insert(t);
+            }
             remember_hit_target(&mut hit_targets, &mut seen_hit_targets, t);
             if t == target_guid {
                 total_damage = total_damage.saturating_add(hit.dealt);
@@ -445,6 +449,9 @@ fn run_spell_effects(
                 any_crit |= hit.crit;
             }
         }
+    }
+    for t in immune_targets {
+        crate::spell::proc::run_immune_proc_pass(ctx, caster_guid, t, hdr.spell_id);
     }
     // Spend after every effect has read the points; vmangos keeps them when a finisher misses.
     if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0 && !primary_avoided.is_avoided() {

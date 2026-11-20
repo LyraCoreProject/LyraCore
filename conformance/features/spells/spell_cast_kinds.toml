@@ -61,10 +61,10 @@ symbol = "proc_holders"
 evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::IsTriggeredAtSpellProcEvent returns SPELL_PROC_TRIGGER_FAILED for SpellIconID 108 with SpellVisual 2759 while m_extraAttacks is set."
 
 [[known_gaps]]
-description = "Fear Ward is never used up by a fear: the Module runs the proc pass only for a hit that deals damage, and a fear deals none."
-path = "module/src/spell/proc.rs"
-symbol = "run_proc_pass"
-evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::IsTriggeredAtSpellProcEvent returns SPELL_PROC_TRIGGER_OK for 6346 on a spell whose Mechanic is MECHANIC_FEAR, and HandleTriggers drops its one charge; apply_hit, the only caller of run_proc_pass for a spell hit, returns before it when no damage lands."
+description = "A mechanic immunity refuses only an A_CONTROL effect. A movement slow, a disarm or any other aura effect of the immune mechanic still lands, and a damage effect of a spell whose header mechanic is immune still deals its damage."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "apply_aura_effect"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::IsImmuneToSpell refuses the whole spell for its header Mechanic, and Unit::IsImmuneToSpellEffect refuses any effect for its EffectMechanic; apply_aura_effect asks is_immune_to_mechanic only for A_CONTROL."
 
 [[known_gaps]]
 description = "Retaliation strikes back, and spends a charge, on a hit from behind and while its warrior is stunned. vmangos neither strikes nor spends then."
@@ -188,4 +188,24 @@ rung = "unit"
 [[tests]]
 path = "module/src/spell/proc.rs"
 function = "only_a_proc_row_that_fired_starts_the_internal_cooldown"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "fear_ward_refuses_a_fear_that_deals_no_damage_and_is_used_up_by_it"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "will_of_the_forsaken_refuses_a_fear_and_a_sleep_and_lets_a_stun_land"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/spell/proc.rs"
+function = "fear_ward_fires_on_a_fear_whatever_its_result_and_on_no_other_spell"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/control.rs"
+function = "a_mechanic_immunity_names_its_mechanic_and_a_mask_names_each_bit"
 rung = "unit"

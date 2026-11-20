@@ -266,9 +266,45 @@ pub(crate) fn break_auras_on_damage(
     }
 }
 
-pub(crate) fn is_immune_to_mechanic(ctx: &ReducerContext, unit_guid: u64, mechanic: i32) -> bool {
-    auras_on(ctx, unit_guid)
-        .any(|a| a.eff_kind == A_IMMUNITY && a.eff_p0_kind == P_MECHANIC && a.eff_p0 == mechanic)
+// docs/schema.md#mechanic-numbering says why an immunity row and a control row differ here.
+const SOURCE_MECHANIC_IMMUNITY_MASK: i32 = 147;
+const SOURCE_AURA_MASK: i32 = 0xff;
+const IMMUNE_TO_HOSTILE_AND_FRIENDLY: i32 = 0x100;
+
+fn immunity_names_mechanic(source_aura: i32, p0: i32, mechanic: u8) -> bool {
+    if source_aura == SOURCE_MECHANIC_IMMUNITY_MASK {
+        (1..=32).contains(&mechanic) && p0 & (1 << (mechanic - 1)) != 0
+    } else {
+        p0 == i32::from(mechanic)
+    }
+}
+
+/// vmangos `Unit::IsImmuneToSpell` and `IsImmuneToSpellEffect`: whether an Aura of the unit makes
+/// it immune to a Spell whose header or effect has `effect_mechanic`, Spell.dbc numbering.
+pub(crate) fn is_immune_to_mechanic(
+    ctx: &ReducerContext,
+    unit_guid: u64,
+    spell: &crate::Spell,
+    effect_mechanic: u8,
+) -> bool {
+    let mechanics =
+        [spell.mechanic, effect_mechanic].map(|mechanic| (mechanic != 0).then_some(mechanic));
+    auras_on(ctx, unit_guid).any(|aura| {
+        if aura.eff_kind != A_IMMUNITY || aura.eff_p0_kind != P_MECHANIC {
+            return false;
+        }
+        let source_aura = aura.eff_p1 & SOURCE_AURA_MASK;
+        if !mechanics
+            .iter()
+            .flatten()
+            .any(|&mechanic| immunity_names_mechanic(source_aura, aura.eff_p0, mechanic))
+        {
+            return false;
+        }
+        let source = ctx.db.game_spell().spell_id().find(aura.spell_id);
+        aura.eff_p1 & IMMUNE_TO_HOSTILE_AND_FRIENDLY != 0
+            || source.is_none_or(|source| source.negative() != spell.negative())
+    })
 }
 
 // Matches cmangos PUSHBACK_SPELL_DELAY_TIME.
@@ -484,7 +520,8 @@ pub(crate) fn remove_auras_on_death(ctx: &ReducerContext, unit_guid: u64) {
 #[cfg(test)]
 mod tests {
     use super::{
-        aura_survives_death, cc_blocks, CAST_PUSHBACK_MAX, CAST_PUSHBACK_MS, SPELL_ATTR_PASSIVE,
+        aura_survives_death, cc_blocks, immunity_names_mechanic, CAST_PUSHBACK_MAX,
+        CAST_PUSHBACK_MS, SPELL_ATTR_PASSIVE,
     };
 
     #[test]
@@ -545,5 +582,38 @@ mod tests {
         assert!(!aura_survives_death(&spell(0, 0)));
         assert!(!aura_survives_death(&spell(0x4, 0x0008_0000)));
         assert!(!aura_survives_death(&spell(!SPELL_ATTR_PASSIVE, 0)));
+    }
+
+    #[test]
+    fn a_mechanic_immunity_names_its_mechanic_and_a_mask_names_each_bit() {
+        const MECHANIC_IMMUNITY: i32 = 77;
+        const MECHANIC_IMMUNITY_MASK: i32 = 147;
+        const CHARM: u8 = 1;
+        const FEAR: u8 = 5;
+        const SLEEP: u8 = 10;
+        assert!(immunity_names_mechanic(MECHANIC_IMMUNITY, 5, FEAR));
+        assert!(!immunity_names_mechanic(MECHANIC_IMMUNITY, 5, CHARM));
+        let blue_dragon = 817;
+        assert!(immunity_names_mechanic(
+            MECHANIC_IMMUNITY_MASK,
+            blue_dragon,
+            CHARM
+        ));
+        assert!(immunity_names_mechanic(
+            MECHANIC_IMMUNITY_MASK,
+            blue_dragon,
+            FEAR
+        ));
+        assert!(immunity_names_mechanic(
+            MECHANIC_IMMUNITY_MASK,
+            blue_dragon,
+            SLEEP
+        ));
+        assert!(!immunity_names_mechanic(
+            MECHANIC_IMMUNITY_MASK,
+            blue_dragon,
+            12
+        ));
+        assert!(!immunity_names_mechanic(MECHANIC_IMMUNITY_MASK, 1, 33));
     }
 }

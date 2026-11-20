@@ -1150,6 +1150,23 @@ immunity also blocks friendly effects. Reflection uses this distinction to choos
 damage; a school immunity blocks it only when its source is helpful or carries bit 0x100. Shield
 damage still lands when the reflected swing ended a Duel.
 
+### Mechanic numbering
+
+A Spell's `mechanic` and an effect's `effect_mechanic` (zero names none) carry the Spell.dbc
+mechanic, as vmangos `SharedDefines.h` numbers it: 5 is fear, 7 root, 12 stun, 17 polymorph. So does
+an `A_IMMUNITY` row with `p0_kind` `P_MECHANIC`: aura 77 keeps its misc value, and aura 147 keeps
+its mask, with the source aura id in the low byte of `p1`. An `A_CONTROL` row's `p0` is not a
+Spell.dbc mechanic but a control class (`M_STUN`, `M_ROOT`, `M_FEAR`, `M_POLY`), which several
+mechanics share: it picks the unit's control state and its diminishing-returns category, and no
+immunity reads it.
+
+An `A_CONTROL` effect is refused when the target holds an immunity Aura that names the Spell's
+`mechanic` or the effect's `effect_mechanic`, and the Aura's source Spell has the other polarity or
+its `p1` carries bit 0x100, as vmangos `IsImmuneToSpell` and `IsImmuneToSpellEffect` decide. Only
+`A_CONTROL` effects are checked: a movement slow whose mechanic an immunity names still lands. A
+refused spell runs the proc pass with `PROC_EX_IMMUNE`, which is how Fear Ward is used up: it fires
+on any spell of mechanic fear taken, whatever the result.
+
 ### Regeneration
 
 `A_MOD_POWER_REGEN` (0xC1) stores mana per five seconds. Each Character keeps a two-second
