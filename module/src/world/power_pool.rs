@@ -306,6 +306,23 @@ mod tests {
     }
 
     #[test]
+    fn a_form_that_shows_the_own_pool_leaves_its_costs_payable() {
+        let mut moonkin = druid(700, 1000);
+        moonkin.show_pool(moonkin.own_pool().power_type);
+        assert_eq!(moonkin.spendable_power(MANA), 700);
+        moonkin.spend_power(MANA, 100);
+        assert_eq!((moonkin.power, moonkin.reserve_pool()), (600, None));
+
+        let mut rogue = druid(0, 0);
+        rogue.unit_bytes_0 = unit_bytes_0(1, 4, 0, ENERGY);
+        rogue.power = 80;
+        rogue.max_power = 100;
+        rogue.show_pool(rogue.own_pool().power_type);
+        assert_eq!(rogue.spendable_power(ENERGY), 80);
+        assert_eq!(rogue.spendable_power(MANA), 0);
+    }
+
+    #[test]
     fn a_health_cost_spends_all_but_the_last_point_of_health() {
         let mut unit = druid(700, 1000);
         unit.health = 60;
