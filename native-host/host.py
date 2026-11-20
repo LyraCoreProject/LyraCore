@@ -19,6 +19,7 @@ MODULE = ROOT / 'target/wasm32-unknown-unknown/release/lyracore_module.wasm'
 
 Account = namedtuple('Account', 'id username identity')
 SETTLE_SECONDS = 30
+PUBLISH_SECONDS = 600
 # Transfer waits end before the 30 s stale Escrow reap, which would also clear the state they wait on.
 TRANSFER_SECONDS = 15
 
@@ -54,10 +55,6 @@ class Host:
         subprocess.run(['openssl', 'genpkey', '-algorithm', 'EC', '-pkeyopt', 'ec_paramgen_curve:P-256', '-out', str(self.private)], check=True, capture_output=True)
         self.private.chmod(0o600)
         subprocess.run(['openssl', 'ec', '-in', str(self.private), '-pubout', '-out', str(self.public)], check=True, capture_output=True)
-        ports = set()
-        while len(ports) < 3:
-            ports.add(free_port())
-        self.http_port, self.world_port, self.logon_port = ports
         self.database = f'disposable-native-{time.time_ns()}'
         self.data = run / 'data'
         self.data.mkdir()
@@ -66,8 +63,7 @@ class Host:
         self.log_path = run / 'host.log'
         self.log = self.log_path.open('w')
         try:
-            self.start()
-            self.wait_until(self.identify, 'native host did not start', timeout=20)
+            self.start_on_free_ports()
             self.publish(self.module.read_bytes())
             self.call('claim_operator')
             self.call('install_guid_range', [0])
@@ -78,6 +74,19 @@ class Host:
             self.__exit__(None, None, None)
             raise
         return self
+
+    def start_on_free_ports(self):
+        """Another process can take a port between free_port() and the Host binding it, which stops the Host."""
+        for _ in range(3):
+            ports = set()
+            while len(ports) < 3:
+                ports.add(free_port())
+            self.http_port, self.world_port, self.logon_port = ports
+            self.start()
+            self.wait_until(lambda: self.identify() or self.process.poll() is not None, 'native host did not start', timeout=20)
+            if self.process.poll() is None:
+                return
+        raise AssertionError('native host stopped on every set of free ports')
 
     def __exit__(self, *_):
         self.stop()
@@ -123,13 +132,13 @@ class Host:
         self.log.flush()
         return self.log_path.read_text()
 
-    def request(self, path, body=None, method='GET', content_type='application/json', authenticated=True):
+    def request(self, path, body=None, method='GET', content_type='application/json', authenticated=True, timeout=120):
         headers = {'Content-Type': content_type}
         if self.token and authenticated:
             headers['Authorization'] = 'Bearer ' + self.token
         request = urllib.request.Request(f'http://127.0.0.1:{self.http_port}{path}', body, headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with urllib.request.urlopen(request, timeout=timeout) as response:
                 return response.read()
         except urllib.error.HTTPError as error:
             raise RuntimeError(f'{path}: HTTP {error.code}: {error.read().decode()}') from error
@@ -149,7 +158,7 @@ class Host:
         return True
 
     def publish(self, wasm, database=None):
-        return self.request(f'/v1/database/{database or self.database}?host_type=Wasm', wasm, 'PUT', 'application/wasm')
+        return self.request(f'/v1/database/{database or self.database}?host_type=Wasm', wasm, 'PUT', 'application/wasm', timeout=PUBLISH_SECONDS)
 
     def add_database(self, guid_base=1):
         """Publishes and claims another database on this Host. Returns its name."""

@@ -1930,6 +1930,8 @@ def check_transport_crossings(host):
         sailor = host.enter_world('Sailor', at=(0, 7020, 7000, 0))
         docker = host.enter_world('Docker', at=(0, 6900, 7000, 0))
         lander = host.enter_world('Lander', at=(1, 7200, 7000, 0))
+        # The transport leaves the boarding reach about 9 s into its 24 s lap, so board right after it returns to map 0.
+        until(lambda: crossing_map() == 1, 30)
         until(lambda: crossing_map() == 0, 30)
         for world in (sailor, docker, lander):
             world.collect()
@@ -3251,6 +3253,7 @@ def check_addon(host):
         world.collect()
     first, guid = worlds[0]
     second, other_guid = worlds[1]
+    burst_started = time.monotonic()
     for index in range(21):
         send(first, f'STC\tv1|ping|{index}|1/1|burst {index}', 6, 'Addontwo')
     assert replies(first, guid) == [f'STC\tv1|pong|0|1/1|burst {index}' for index in range(20)]
@@ -3259,8 +3262,10 @@ def check_addon(host):
     first.collect()
     first.send(0x3d, struct.pack('<Q', guid))
     first.collect()
-    send(first, 'STC\tv1|ping|21|1/1|after logout')
-    assert not replies(first, guid)
+    for index in range(21):
+        send(first, f'STC\tv1|ping|{21 + index}|1/1|after logout {index}')
+    # The bucket refills 2 per second from empty, so a Session that kept it answers few, and a reset one answers 20.
+    assert len(replies(first, guid)) <= 1 + 2 * (time.monotonic() - burst_started)
     time.sleep(0.55)
     send(first, 'STC\tv1|ping|22|1/1|refilled')
     assert replies(first, guid) == ['STC\tv1|pong|0|1/1|refilled']
@@ -3426,10 +3431,13 @@ def check_companion_actions(host, first, second, guid, other_guid):
     host.call('debug_teleport', [1, 0, 4000, 1000, 0, 0])
     first.collect()
     second.collect()
-    vitals = host.rows('SELECT health, power, money FROM game_world_entity WHERE guid = 1')
+    # Full health and no rage cannot tick, so no regeneration or decay lands between the two reads.
+    max_health = host.rows('SELECT max_health FROM game_world_entity WHERE guid = 1')[0][0]
+    host.sql(f'UPDATE game_world_entity SET health = {max_health}, power = 0, money = 4242 WHERE guid = 1')
+    vitals = host.rows('SELECT health, max_health, power, max_power, money FROM game_world_entity WHERE guid = 1')
     relocate(entrance, 36, instance, 101)
     assert host.rows('SELECT map_id, instance_id, x, y, z FROM game_world_entity WHERE guid = 1') == [[36, instance, 4000, 1000, 0]]
-    relocated_vitals = host.rows('SELECT health, power, money FROM game_world_entity WHERE guid = 1')
+    relocated_vitals = host.rows('SELECT health, max_health, power, max_power, money FROM game_world_entity WHERE guid = 1')
     assert relocated_vitals == vitals, (vitals, relocated_vitals)
     assert host.rows('SELECT map_id, pending_instance_id, online FROM game_character WHERE guid = 1') == [[36, instance, False]]
     assert 1 in creates(first.collect())
@@ -5051,8 +5059,11 @@ def check_taxi(host):
     assert host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}') == [[money_before]]
     host.sql(f'INSERT INTO game_character_taxi_node (id,character_guid,node_id) VALUES (0,{guid},5090302)')
     client.send(0x1ad, struct.pack('<QII', flight_master, 253, 254))
+    # The flight leaves the flight master's range within a second, and the range check comes first.
+    client.send(0x1ad, struct.pack('<QII', flight_master, 253, 254))
     takeoff = client.collect()
     assert (0x1ae, bytes(4)) in takeoff
+    assert (0x1ae, struct.pack('<I', 7)) in takeoff, takeoff
     assert next(index for index, (opcode, _) in enumerate(takeoff) if opcode == 0x1ae) < next(index for index, (opcode, _) in enumerate(takeoff) if opcode == 0xdd)
     assert values(takeoff, guid)[133] == 1147
     assert any(opcode == 0xdd and packed_guid(body) == guid for opcode, body in peer.collect())
@@ -5066,13 +5077,10 @@ def check_taxi(host):
     flight_speech = client.collect()
     assert not any(opcode == 0x96 for opcode, _ in flight_speech)
     assert not any(opcode == 0x96 for opcode, _ in peer.collect())
-    client.send(0x1ad, struct.pack('<QII', flight_master, 253, 254))
-    busy = client.collect()
-    assert (0x1ae, struct.pack('<I', 7)) in busy, busy
     client.send(0xee, struct.pack('<IIffffI', 0, 9999, 10000, 0, 0, 0, 0))
     suppressed = client.collect()
     assert host.rows(f'SELECT x FROM game_world_entity WHERE guid = {guid}')[0][0] < 100
-    landed = takeoff + flight_chat + flight_speech + busy + suppressed
+    landed = takeoff + flight_chat + flight_speech + suppressed
     for _ in range(80):
         landed += client.collect()
         if not host.rows(f'SELECT character_guid FROM game_active_taxi_flight WHERE character_guid = {guid}'):
