@@ -272,7 +272,7 @@ fn quest_slots_survive_reconnect_and_reuse_only_the_abandoned_slot() {
 
     let (shard, guid, _) = fixture("quest-slot-reconnect");
     for statement in quest_world::STATEMENTS {
-        shard.assert_sql(statement);
+        shard.assert_sql(&lyracore_shared::import_sql::insert_defaults(statement));
     }
     shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
     for quest in [15, 7] {
