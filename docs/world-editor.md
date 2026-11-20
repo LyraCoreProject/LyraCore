@@ -57,6 +57,8 @@ Refusal rolls back the whole save, and Meld shows its message.
 - A creature save calls `operator_apply_creature_edits` with the template, its display rows and its
   spell list. The Realm respawns the live creatures of that entry, so they come back with the edit.
 - New items and creatures get entries in the Operator Template Range. Meld has no delete for either.
+- A new creature has no mechanic immunity, even one made from a boss, so it can be stunned. An edit
+  keeps a creature's own immunity. See [creature templates](./operator-content-api.md#creature-templates).
 - Fields the Realm has no column for are listed as not written. Meld's
   [client notes](https://github.com/LyraCoreProject/Meld/blob/lyracore/docs/architecture/client.md#lyracore-items-and-vendors)
   list them.

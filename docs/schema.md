@@ -1170,10 +1170,11 @@ when it does, unless `SPELL_CUSTOM_POSITIVE` says otherwise. A Spell with `SPELL
 (AttributesEx3 0x10000000) skips both. A unit is immune to its own cast too, as vmangos ignores `castOnSelf`.
 
 A creature is also immune to a mechanic its template's `mechanic_immune_mask` names, with bit
-`mechanic - 1` set, as vmangos `Creature::IsImmuneToSpell` and `IsImmuneToSpellEffect` decide.
-The mask holds whatever the polarity, and the same attribute bits skip it. It is the one immunity
-that spares a creature's own cast, as vmangos honours `castOnSelf` for it alone. A live creature
-reads its template's mask, so a changed template applies at once.
+`mechanic - 1` set, as vmangos `Creature::IsImmuneToSpell` decides for the header mechanic and
+`IsImmuneToSpellEffect` for an `A_CONTROL` effect's mechanic. The mask holds whatever the polarity,
+and the same attribute bits skip it. It is the one immunity LyraCore implements that spares a
+creature's own cast, as vmangos `castOnSelf` does. A live creature reads its template's mask, so a
+changed template applies at once.
 
 A helpful spell aimed at a target that is immune to its header mechanic is refused when the cast
 starts, with `SPELL_FAILED_TARGET_AURASTATE`, so no item, power or cooldown is spent, as vmangos

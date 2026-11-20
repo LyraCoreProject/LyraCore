@@ -84,6 +84,7 @@ const FEAR_AND_BOLT: u32 = 5_091_124;
 const FEAR_AND_SLOW: u32 = 5_091_125;
 const DOMINION_OF_SOUL: u32 = 5_091_126;
 const EFFECT_FEAR: u32 = 5_091_127;
+const HELPFUL_STUN_MECHANIC: u32 = 5_091_128;
 const MISS_NONE: &str = "0";
 const MISS_IMMUNE: &str = "7";
 const MISS_IMMUNE2: &str = "8";
@@ -704,25 +705,73 @@ fn a_unit_is_immune_to_its_own_cast_by_header_mechanic() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_creature_whose_template_is_stun_immune_refuses_a_stun_that_lands_on_one_without_the_mask() {
+fn a_stun_lands_on_a_creature_before_its_template_mask_is_set_and_is_refused_after() {
     let mut standalone = Standalone::start("aura-charges-template-stun");
-    let unmasked = stage(&mut standalone);
-    let masked = spawn_wolf(&standalone);
+    let stunned_wolf = stage(&mut standalone);
+    let immune_wolf = spawn_wolf(&standalone);
     control_spell(&standalone, STUN_FIXTURE, M_STUN, MECHANIC_STUN);
 
-    cast(&standalone, STUN_FIXTURE, unmasked);
+    cast(&standalone, STUN_FIXTURE, stunned_wolf);
     assert!(
-        aura_column(&standalone, unmasked, STUN_FIXTURE, "stacks").is_some(),
-        "a creature whose template has no mask is stunned"
+        aura_column(&standalone, stunned_wolf, STUN_FIXTURE, "stacks").is_some(),
+        "a creature is stunned before its template has a mask"
     );
     set_wolf_mechanic_immune_mask(&standalone, STUN_IMMUNE_MASK);
     assert_eq!(
-        cast_miss_code(&standalone, PLAYER, STUN_FIXTURE, masked),
+        cast_miss_code(&standalone, PLAYER, STUN_FIXTURE, immune_wolf),
         MISS_IMMUNE,
         "vmangos Creature::IsImmuneToSpell refuses a stun its template's mechanic_immune_mask names"
     );
     assert_eq!(
-        aura_column(&standalone, masked, STUN_FIXTURE, "stacks"),
+        aura_column(&standalone, immune_wolf, STUN_FIXTURE, "stacks"),
+        None
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_stun_immune_template_refuses_a_helpful_spell_of_its_mechanic_when_the_cast_starts() {
+    let mut standalone = Standalone::start("aura-charges-template-helpful");
+    let caster = stage(&mut standalone);
+    let ally = spawn_wolf(&standalone);
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: HELPFUL_STUN_MECHANIC,
+            school_mask: NATURE,
+            target: T_TARGET_ANY,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_MOD_RESISTANCE, 10, i32::from(RESIST_ARMOR), P_SCHOOL_MASK)],
+    );
+    set_spell(
+        &standalone,
+        HELPFUL_STUN_MECHANIC,
+        &format!("is_negative = false, mechanic = {MECHANIC_STUN}"),
+    );
+    set_wolf_mechanic_immune_mask(&standalone, STUN_IMMUNE_MASK);
+
+    let output = standalone.call(
+        "debug_begin_cast",
+        &[
+            &caster.to_string(),
+            &HELPFUL_STUN_MECHANIC.to_string(),
+            &ally.to_string(),
+        ],
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success() && text.contains("is immune to its mechanic"),
+        "vmangos Spell::CheckCast refuses a helpful spell with TARGET_AURASTATE, \
+         whatever the template mask's polarity: {text}"
+    );
+    assert_eq!(
+        aura_column(&standalone, ally, HELPFUL_STUN_MECHANIC, "stacks"),
         None
     );
 }

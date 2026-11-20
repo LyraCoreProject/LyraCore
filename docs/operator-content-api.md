@@ -589,7 +589,8 @@ complete JSON payloads. Use a faction template, items and spells present in the 
 
 `CreatureFields` contains every `game_creature_template` column except `entry` and
 `mechanic_immune_mask`. A created template has no mechanic immunity, and an update keeps the
-template's own.
+template's own. A template copied from an imported boss, such as Meld's new creature from a base,
+can therefore be stunned, feared and polymorphed.
 
 | Type | Fields |
 | --- | --- |

@@ -61,10 +61,10 @@ symbol = "proc_holders"
 evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::IsTriggeredAtSpellProcEvent returns SPELL_PROC_TRIGGER_FAILED for SpellIconID 108 with SpellVisual 2759 while m_extraAttacks is set."
 
 [[known_gaps]]
-description = "A mechanic immunity refuses a single effect only for an A_CONTROL effect. A movement slow, a disarm or any other aura effect whose own effect mechanic is immune still lands when the spell's header mechanic is not immune."
+description = "A mechanic immunity, from an Aura or a creature template, refuses a single effect only for an A_CONTROL effect (#1076). A movement slow, a disarm or any other aura effect whose own effect mechanic is immune still lands when the spell's header mechanic is not immune: the 94 spells that slow only through an aura 33 effect of mechanic 11, such as Frostbolt, Hamstring, Wing Clip, Cone of Cold and Thunderclap, still slow the 590 templates immune to snare. An interrupt effect (68) of mechanic 26, as on Kick, Pummel, Shield Bash, Earth Shock and Spell Lock, still interrupts the 218 templates immune to interrupt. A school lockout still locks the 467 templates immune to silence."
 path = "module/src/spell/cast/targeting.rs"
 symbol = "apply_aura_effect"
-evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::IsImmuneToSpellEffect refuses any effect for its EffectMechanic; apply_aura_effect asks is_immune_to_effect only for A_CONTROL. A header mechanic refuses the whole spell, whatever its effects."
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::IsImmuneToSpellEffect and Creature::IsImmuneToSpellEffect refuse any effect for its EffectMechanic, and Creature::LockOutSpells returns before the lockout when mechanic_immune_mask names MECHANIC_SILENCE. apply_aura_effect asks is_immune_to_effect only for A_CONTROL, and no immunity guards the interrupt effect or the school lockout. A header mechanic refuses the whole spell, whatever its effects. Template counts are distinct creature_template entries in the vmangos 4641790 snapshot; the spell count is the newest spell_template row through build 5875 whose header mechanic is not 11."
 
 [[known_gaps]]
 description = "Applying a mechanic immunity Aura does not remove the Auras it makes the unit immune to, so Will of the Forsaken cast while feared leaves the fear on."
@@ -300,7 +300,12 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/aura_charges.rs"
-function = "a_creature_whose_template_is_stun_immune_refuses_a_stun_that_lands_on_one_without_the_mask"
+function = "a_stun_lands_on_a_creature_before_its_template_mask_is_set_and_is_refused_after"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_stun_immune_template_refuses_a_helpful_spell_of_its_mechanic_when_the_cast_starts"
 rung = "durable_module"
 
 [[tests]]
