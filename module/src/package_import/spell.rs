@@ -85,7 +85,7 @@ fn check_form_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Strin
                         form.power_on_entry
                     ));
                 }
-                if !crate::world::power_pool::is_power_type(form.power_type) {
+                if !crate::form::is_form_power_type(form.power_type) {
                     return Err(format!(
                         "`game_form` row {} claims unknown power type {}",
                         row.key(),
@@ -502,6 +502,7 @@ fn blank_form(form_id: u32) -> Form {
         attack_power_from_agility: false,
         clears_snares: false,
         entry_chance_spell: 0,
+        blocks_mounting: false,
     }
 }
 
@@ -518,6 +519,7 @@ fn apply_form_field(form: &mut Form, field: &str, value: &FieldValue) -> Result<
         "attack_power_from_agility" => form.attack_power_from_agility = as_bool(field, value)?,
         "clears_snares" => form.clears_snares = as_bool(field, value)?,
         "entry_chance_spell" => form.entry_chance_spell = as_u32(field, value)?,
+        "blocks_mounting" => form.blocks_mounting = as_bool(field, value)?,
         other => return Err(no_such_column("game_form", other)),
     }
     Ok(())

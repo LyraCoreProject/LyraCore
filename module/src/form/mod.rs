@@ -1,4 +1,4 @@
-use lyracore_shared::form::PowerOnEntry;
+use lyracore_shared::form::{PowerOnEntry, OWN_POOL};
 use lyracore_shared::spell::taxonomy::{
     A_CONTROL, A_FORM_ENTRY_CHANCE, A_FORM_POWER_RETAINED, A_MOD_SPEED, A_SHAPESHIFT, M_ROOT,
     SPEED_MOVE,
@@ -77,6 +77,14 @@ impl CombatProfile {
 }
 
 impl Form {
+    /// The power type of the pool the Form shows on `unit`.
+    fn shown_power_type(&self, unit: &WorldEntity) -> u8 {
+        match self.power_type {
+            OWN_POOL => unit.own_pool().power_type,
+            power_type => power_type,
+        }
+    }
+
     fn combat_profile(&self) -> CombatProfile {
         match self.natural_attack_ms {
             0 => CombatProfile::Weapon,
@@ -92,9 +100,10 @@ pub(crate) fn combat_profile(ctx: &ReducerContext, guid: u64) -> CombatProfile {
     active_form(ctx, guid).map_or(CombatProfile::Weapon, |form| form.combat_profile())
 }
 
-/// Whether spells, taxis and other rules treat the unit as shapeshifted.
-pub(crate) fn acts_as_shapeshifted(ctx: &ReducerContext, guid: u64) -> bool {
-    active_form(ctx, guid).is_some_and(|form| form.acts_as_shapeshifted)
+/// Whether the unit's Form keeps it from mounting and from taking a taxi, as every Form that acts
+/// as shapeshifted does.
+pub(crate) fn blocks_mounting(ctx: &ReducerContext, guid: u64) -> bool {
+    active_form(ctx, guid).is_some_and(|form| form.acts_as_shapeshifted || form.blocks_mounting)
 }
 
 /// A shapeshift Aura of `spell_id` naming `form_id` was applied: the unit leaves every other
@@ -208,9 +217,16 @@ fn mechanic_mask(mechanics: impl IntoIterator<Item = u8>) -> u32 {
         .fold(0, |mask, mechanic| mask | 1 << (mechanic - 1))
 }
 
+/// Whether a Form's `power_type` names a pool the Module keeps or the unit's own pool.
+pub(crate) fn is_form_power_type(power_type: u8) -> bool {
+    power_type == OWN_POOL || is_power_type(power_type)
+}
+
 /// Shows the pool the unit's Form names, or the unit's own pool when it has no Form.
 fn show_form_pool(unit: &mut WorldEntity, form: Option<&Form>) {
-    let power_type = form.map_or(unit.own_pool().power_type, |form| form.power_type);
+    let power_type = form.map_or(unit.own_pool().power_type, |form| {
+        form.shown_power_type(unit)
+    });
     if is_power_type(power_type) {
         unit.show_pool(power_type);
     } else if let Some(form) = form {
@@ -322,7 +338,7 @@ pub(crate) fn project_form(ctx: &ReducerContext, guid: u64) {
 }
 
 fn power_on_entry(ctx: &ReducerContext, unit: &WorldEntity, form: &Form) -> u32 {
-    if unit.power_type() != form.power_type {
+    if unit.power_type() != form.shown_power_type(unit) {
         return unit.power;
     }
     match PowerOnEntry::try_from(form.power_on_entry) {
@@ -508,4 +524,76 @@ fn default_form(ctx: &ReducerContext, class: u8) -> Option<Form> {
 
 fn apply_form_spell(ctx: &ReducerContext, unit: &WorldEntity, form: &Form) {
     crate::spell::apply_spell_auras(ctx, form.spell_id, unit.guid, unit.level as u8, 1);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::world::power_pool::PowerPool;
+    use lyracore_shared::packing::{power_type::*, unit_bytes_0};
+
+    const DRUID: u8 = 11;
+    const ROGUE: u8 = 4;
+
+    fn unit(class: u8, power_type: u8, power: u32, max_power: u32) -> WorldEntity {
+        let mut unit = crate::helpers::tests::entity(7, 0, 0, 0, 0);
+        unit.unit_bytes_0 = unit_bytes_0(4, class, 0, power_type);
+        unit.power = power;
+        unit.max_power = max_power;
+        unit
+    }
+
+    fn travel_form() -> Form {
+        Form {
+            form_id: 3,
+            name: "Travel Form".into(),
+            spell_id: 783,
+            acts_as_shapeshifted: true,
+            power_type: OWN_POOL,
+            power_on_entry: PowerOnEntry::Keep as u8,
+            default_for_class: 0,
+            client_form: 3,
+            natural_attack_ms: 0,
+            attack_power_from_agility: false,
+            clears_snares: true,
+            entry_chance_spell: 0,
+            blocks_mounting: true,
+        }
+    }
+
+    #[test]
+    fn a_form_showing_the_own_pool_brings_a_druids_mana_back_from_reserve() {
+        let mut druid = unit(DRUID, MANA, 700, 1000);
+        druid.show_pool(ENERGY);
+        druid.power = 60;
+        show_form_pool(&mut druid, Some(&travel_form()));
+        assert_eq!(
+            (druid.shown_pool(), druid.reserve_pool()),
+            (
+                PowerPool {
+                    power_type: MANA,
+                    current: 700,
+                    max: 1000
+                },
+                None
+            )
+        );
+    }
+
+    #[test]
+    fn a_form_showing_the_own_pool_keeps_a_rogues_energy() {
+        let mut rogue = unit(ROGUE, ENERGY, 80, 100);
+        show_form_pool(&mut rogue, Some(&travel_form()));
+        assert_eq!(
+            (rogue.shown_pool(), rogue.reserve_pool()),
+            (
+                PowerPool {
+                    power_type: ENERGY,
+                    current: 80,
+                    max: 100
+                },
+                None
+            )
+        );
+    }
 }

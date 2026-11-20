@@ -10,7 +10,8 @@ pub struct Form {
     /// The spell whose Aura the Module applies when it puts a unit in this Form itself.
     pub spell_id: u32,
     pub acts_as_shapeshifted: bool,
-    /// `lyracore_shared::packing::power_type`, the pool the power rule applies to.
+    /// `lyracore_shared::packing::power_type`, the pool the power rule applies to, or
+    /// `lyracore_shared::form::OWN_POOL`.
     pub power_type: u8,
     /// A `lyracore_shared::form::PowerOnEntry` code.
     pub power_on_entry: u8,
@@ -31,6 +32,10 @@ pub struct Form {
     /// The spell entering the Form casts at the unit's `A_FORM_ENTRY_CHANCE`; zero is none.
     #[default(0u32)]
     pub entry_chance_spell: u32,
+    /// The unit can neither mount nor take a taxi in the Form, even if it does not act as
+    /// shapeshifted.
+    #[default(false)]
+    pub blocks_mounting: bool,
 }
 
 /// A passive spell a unit holds while in a Form.

@@ -3,12 +3,12 @@ use spacetimedb::ReducerContext;
 
 use super::{
     apply_resistance, bonuses, shed_auras, CastGateRefusal, CastRefusalKind, CastRefusalReason,
-    A_FLAG, A_PERIODIC_DAMAGE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_STEALTH, CAST_FLAG_CHANNELED,
+    A_FLAG, A_PERIODIC_DAMAGE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, CAST_FLAG_CHANNELED,
     RESIST_ARMOR,
 };
 use crate::game_world_entity;
 use crate::geometry::distance_3d;
-use crate::{game_aura, game_spell, Aura, Spell, SpellEffect};
+use crate::{game_aura, game_spell, Aura, Spell};
 
 pub(crate) fn bonus_magnitude(points: i32, power: i32, coefficient: f32, flags: u32) -> i32 {
     if flags & custom::FIXED_DAMAGE != 0 {
@@ -65,13 +65,7 @@ pub(crate) fn aura_casters_coexist(hdr: &Spell, kind: u8) -> bool {
             || matches!(kind, A_PERIODIC_DAMAGE | A_PERIODIC_HEAL | A_FLAG))
 }
 
-pub(crate) fn finish_aura_apply(
-    ctx: &ReducerContext,
-    hdr: &Spell,
-    effect: &SpellEffect,
-    caster: u64,
-    target: u64,
-) {
+pub(crate) fn finish_aura_apply(ctx: &ReducerContext, hdr: &Spell, caster: u64, target: u64) {
     if hdr.custom_flags & custom::SINGLE_TARGET_AURA != 0 {
         let spells = ctx.db.game_spell();
         let displaced = ctx
@@ -93,14 +87,10 @@ pub(crate) fn finish_aura_apply(
         shed_auras(ctx, displaced);
     }
     if hdr.custom_flags & custom::AURA_APPLY_BREAKS_STEALTH != 0 {
-        let shed = ctx
-            .db
-            .game_aura()
-            .by_target()
-            .filter(&target)
-            .filter(|a| a.eff_kind == A_STEALTH && a.effect_id != effect.id)
-            .collect();
-        shed_auras(ctx, shed);
+        shed_auras(
+            ctx,
+            super::tables::stealth_spell_auras(ctx, target, hdr.spell_id),
+        );
     }
 }
 

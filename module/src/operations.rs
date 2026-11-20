@@ -7,6 +7,7 @@ use crate::{game_auction, game_auction_expiry, game_aura, game_spell, AuctionExp
 pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::items::discard_legacy_buyback(ctx);
+    let stealth_remnants = crate::spell::shed_stealth_remnants(ctx);
     crate::spell::repair_cast_auras(ctx);
     let form_sets = crate::spell::backfill_dbc_form_sets(ctx);
     let guids: Vec<_> = ctx
@@ -37,7 +38,8 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     let mail_timers = crate::mail_timer::arm_missing(ctx);
     let proc_profiles = refreeze_proc_profiles(ctx);
 
-    let repaired = form_sets
+    let repaired = stealth_remnants
+        + form_sets
         + gm_levels
         + lesser_heal_target
         + weather_climate
@@ -48,7 +50,8 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + proc_profiles;
     crate::import_meta::stamp(ctx, "debug_repair_after_publish", "", "", repaired);
     log::info!(
-        "debug_repair_after_publish: {form_sets} spell Form Set(s), {gm_levels} GM level(s), {lesser_heal_target} Lesser Heal \
+        "debug_repair_after_publish: {stealth_remnants} Stealth remnant Aura(s), {form_sets} spell \
+         Form Set(s), {gm_levels} GM level(s), {lesser_heal_target} Lesser Heal \
          target(s), {weather_climate} weather row(s), {schedules} schedule(s), {auction_mail} \
          Auction mail, {auction_expiries} Auction expiry(ies), {mail_timers} Mail Timer(s), \
          {proc_profiles} Proc profile(s)"

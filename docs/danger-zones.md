@@ -442,6 +442,38 @@ A druid whose Auras change between the reimport and the repair is projected firs
 caster form, as does a druid in a form after a crash. Offline druids enter the world in caster form,
 as they did before: an `E_SET_STANCE` form never survived logout.
 
+### Remaining form migration
+
+Travel Form, Aquatic Form, Ghost Wolf, Shadowform, Stealth and Moonkin Form are now Forms 3, 4, 16,
+28, 30 and 31. `game_form` gains the END-appended column `blocks_mounting` with default false, and
+`power_type` 255 (`lyracore_shared::form::OWN_POOL`) shows the unit's own pool. A Package Delta
+written before this revision omits the column, so its Forms block mounting and taxis only when they
+act as shapeshifted, as before.
+
+From the publish on, breaking stealth ends every Aura of the stealth spell, not only its
+`A_STEALTH` Aura. Until you reimport `spell` with `--dbc`, the six form spells keep their old effect
+rows: no unit enters these Forms, Travel Form gives no speed, and Ambush, Garrote, Cheap Shot, Sap,
+Pick Pocket and Premeditation stay refused, as they have been since Forms 17 to 19, because their
+Form Set requires Form 30. Before play resumes:
+
+1. Publish the Module through a planned additive update.
+2. Reimport `spell` with `--dbc`. It writes Forms 3, 4, 16, 28, 30 and 31 with their passives
+   (Travel 5419, Aquatic 5421, Moonkin 24905), the shapeshift effect of every spell naming those
+   Forms as `A_SHAPESHIFT` (every Stealth rank, and creature spells such as Arantir's Deception and
+   Spirit Shade Visual), and `blocks_mounting` on Forms 1, 3, 4, 5, 8, 16 and 31.
+3. Call `debug_repair_after_publish`. First it ends Stealth remnants, online or offline: the Auras
+   of a stealth spell whose unit no longer holds that spell's `A_STEALTH` Aura. An older break, on
+   logout, a cast or a swing, shed only the `A_STEALTH` Aura, so such a rogue still carries
+   Stealth's slow. Without this step the reimported shapeshift row would put that rogue in Form 30
+   without stealth. Then `repair_cast_auras` rewrites the shapeshift row of every held Aura of
+   these spells, online or not, to `A_SHAPESHIFT`. Each online unit is then projected: a stealthed
+   rogue shows form byte 30 and keeps its energy, and a druid in Travel Form gets 5419. A druid who
+   held one of these Auras beside a feral Form keeps the newer one.
+
+Offline units holding one of these Auras enter the world in its Form. Players see these changes:
+Holy spells are refused in Shadowform and healing spells in Moonkin Form, as their Form Sets say;
+Travel, Aquatic and Moonkin Form and Ghost Wolf refuse mounts and taxis; the Stealth openers work.
+
 ### Global cooldown migration
 
 `game_spell.gcd_ms` now comes from the source `startRecoveryTime`. An older import set 1500 for

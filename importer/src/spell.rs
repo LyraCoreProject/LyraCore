@@ -2486,6 +2486,7 @@ mod tests {
                 .is_negative
         );
         assert_eq!(stealth.len(), 3);
+        assert_eq!((stealth[0].kind, stealth[0].p0), (A_SHAPESHIFT, 30));
         assert_eq!(stealth.iter().filter(|e| e.kind == A_STEALTH).count(), 1);
         assert_eq!(
             (stealth[2].kind, stealth[2].base_points),
@@ -3330,8 +3331,14 @@ mod tests {
             aura_spell(5487, "Bear Form", 36, 5),
             aura_spell(9634, "Dire Bear Form", 36, 8),
             aura_spell(768, "Cat Form", 36, 1),
+            aura_spell(783, "Travel Form", 36, 3),
+            aura_spell(1066, "Aquatic Form", 36, 4),
+            aura_spell(24858, "Moonkin Form", 36, 31),
             aura_spell(1784, "Stealth", 36, 30),
             aura_spell(2645, "Ghost Wolf", 36, 16),
+            aura_spell(15473, "Shadowform", 36, 28),
+            aura_spell(7090, "Bear Form", 36, 14),
+            aura_spell(27827, "Spirit of Redemption", 36, 32),
             aura_spell(23397, "Berserk", 36, 19),
         ];
         let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
@@ -3342,15 +3349,18 @@ mod tests {
             (5487, 5),
             (9634, 8),
             (768, 1),
+            (783, 3),
+            (1066, 4),
+            (24858, 31),
+            (1784, 30),
+            (2645, 16),
+            (15473, 28),
         ] {
             let effect = first_effect(&rows, spell);
             assert_eq!(
                 (effect.kind, effect.p0, effect.p0_kind),
                 (A_SHAPESHIFT, form, P_FORM)
             );
-        }
-        for spell in [1784, 2645] {
-            assert_ne!(first_effect(&rows, spell).kind, A_SHAPESHIFT);
         }
         let berserk = first_effect(&rows, 23397);
         assert_eq!(
@@ -3373,8 +3383,9 @@ mod tests {
             "Berserk locks the warrior in Berserker Stance"
         );
         assert!(!locks(2458));
-        assert_eq!(first_effect(&rows, 1784).kind, A_FLAG);
-        assert_eq!(first_effect(&rows, 2645).kind, A_FLAG);
+        for spell in [7090, 27827] {
+            assert_eq!(first_effect(&rows, spell).kind, A_FLAG);
+        }
         let cancel = |spell: u32| {
             rows.headers
                 .iter()
@@ -3435,13 +3446,13 @@ mod tests {
                      acts_as_shapeshifted BOOLEAN, power_type INTEGER, power_on_entry INTEGER,
                      default_for_class INTEGER, client_form INTEGER, natural_attack_ms INTEGER,
                      attack_power_from_agility BOOLEAN, clears_snares BOOLEAN,
-                     entry_chance_spell INTEGER);
+                     entry_chance_spell INTEGER, blocks_mounting BOOLEAN);
                  CREATE TABLE game_form_spell (id INTEGER PRIMARY KEY, form_id INTEGER,
                      spell_id INTEGER);
                  CREATE TABLE game_spell_form (id INTEGER PRIMARY KEY, spell_id INTEGER,
                      form_id INTEGER, excluded BOOLEAN);
-                 INSERT INTO game_form VALUES (17,'Old Battle Stance',2457,true,1,0,1,17,0,false,false,0),
-                     ({PACKAGE_FORM},'Kindled Aspect',{PACKAGE_SPELL},true,1,1,0,5,0,false,false,0);
+                 INSERT INTO game_form VALUES (17,'Old Battle Stance',2457,true,1,0,1,17,0,false,false,0,false),
+                     ({PACKAGE_FORM},'Kindled Aspect',{PACKAGE_SPELL},true,1,1,0,5,0,false,false,0,false);
                  INSERT INTO game_form_spell VALUES ({},{PACKAGE_FORM},{PACKAGE_SPELL});
                  INSERT INTO game_spell_form VALUES ({},78,18,false),({},78,40,false),
                      ({},78,{PACKAGE_FORM},false),({},{PACKAGE_SPELL},{PACKAGE_FORM},true);",

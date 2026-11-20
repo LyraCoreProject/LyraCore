@@ -1084,22 +1084,29 @@ fn druid_beside_a_rage_form(name: &str) -> (Standalone, ReducerConnection) {
 
 /// A logged-in level 20 druid with 700 of 1000 mana.
 fn druid(name: &str) -> (Standalone, ReducerConnection) {
+    let (shard, wire) = logged_in(name, DRUID, 1000);
+    shard.assert_call("debug_set_power", &[DRUID_GUID, "700"]);
+    (shard, wire)
+}
+
+/// A logged-in level 20 Character of `class`.
+fn logged_in(name: &str, class: u8, base_mana: u32) -> (Standalone, ReducerConnection) {
     let shard = fixture(name);
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.assert_sql(&format!(
-        "UPDATE game_character SET class = {DRUID} WHERE guid = 1"
+        "UPDATE game_character SET class = {class} WHERE guid = 1"
     ));
     shard.insert_row(
         "game_class_level_stats",
         &[
             (
                 "class_level",
-                &(lyracore_package_delta::packed_class_level_id(DRUID, 20) as u32),
+                &(lyracore_package_delta::packed_class_level_id(class, 20) as u32),
             ),
-            ("class", &DRUID),
+            ("class", &class),
             ("level", &20u32),
             ("base_health", &500u32),
-            ("base_mana", &1000u32),
+            ("base_mana", &base_mana),
         ],
     );
     let race: u8 = number(
@@ -1111,16 +1118,15 @@ fn druid(name: &str) -> (Standalone, ReducerConnection) {
         &[
             (
                 "race_class_level",
-                &(lyracore_package_delta::packed_race_class_level_id(race, DRUID, 20) as u32),
+                &(lyracore_package_delta::packed_race_class_level_id(race, class, 20) as u32),
             ),
             ("race", &race),
-            ("class", &DRUID),
+            ("class", &class),
             ("level", &20u32),
         ],
     );
     let wire = log_in(&shard, 42);
     shard.assert_call("debug_set_level", &[DRUID_GUID, "20"]);
-    shard.assert_call("debug_set_power", &[DRUID_GUID, "700"]);
     (shard, wire)
 }
 
@@ -1477,4 +1483,208 @@ fn publish_repair_puts_no_dead_or_ghost_druid_into_a_druid_form() {
     show_bear_byte();
     shard.assert_call("debug_repair_after_publish", &[]);
     assert!(shapeshift_spells(&shard).is_empty(), "a ghost");
+}
+
+const OWN_POOL: u8 = u8::MAX;
+const NOT_SHAPESHIFT: u32 = 0x10000;
+
+/// Writes a Form that shows the unit's own pool, as the `spell` import writes Forms 3, 4, 16, 28,
+/// 30 and 31, and the spell that enters it.
+fn install_own_pool_form(
+    shard: &Standalone,
+    (form_id, name, spell): (u32, &str, u32),
+    (acts_as_shapeshifted, blocks_mounting): (bool, bool),
+    other_effects: &[(u8, i32, i32, u8)],
+) {
+    let mut effects = vec![(A_SHAPESHIFT, 0, form_id as i32, P_FORM)];
+    effects.extend_from_slice(other_effects);
+    insert_spell(shard, spell, name, (NOT_SHAPESHIFT, 0, 0), &effects);
+    shard.insert_row(
+        "game_form",
+        &[
+            ("form_id", &form_id),
+            ("name", &name),
+            ("spell_id", &spell),
+            ("acts_as_shapeshifted", &acts_as_shapeshifted),
+            ("power_type", &OWN_POOL),
+            ("power_on_entry", &0u8),
+            ("default_for_class", &0u8),
+            ("client_form", &(form_id as u8)),
+            ("natural_attack_ms", &0u32),
+            ("attack_power_from_agility", &false),
+            ("clears_snares", &false),
+            ("entry_chance_spell", &0u32),
+            ("blocks_mounting", &blocks_mounting),
+        ],
+    );
+}
+
+const ROGUE: u8 = 4;
+const STEALTH_FORM: u32 = 30;
+const STEALTH: u32 = 5090985;
+const STEALTH_OPENER: u32 = 5090986;
+const UNSAFE_IN_STEALTH: u32 = 5090987;
+
+/// A logged-in level 20 rogue with 80 energy who knows a Stealth shaped like 1784: it enters Form
+/// 30, stealths and slows, and breaks on damage.
+fn rogue_with_stealth(name: &str) -> (Standalone, ReducerConnection) {
+    let (shard, wire) = logged_in(name, ROGUE, 0);
+    shard.assert_call("debug_set_power", &[DRUID_GUID, "80"]);
+    install_own_pool_form(
+        &shard,
+        (STEALTH_FORM, "Stealth", STEALTH),
+        (false, false),
+        &[
+            (A_STEALTH, 5, 0, P_NONE),
+            (A_MOD_SPEED, -50, i32::from(SPEED_MOVE), P_SPEED_KIND),
+        ],
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET aura_interrupt = 1 WHERE spell_id = {STEALTH}"
+    ));
+    (shard, wire)
+}
+
+fn stealth_auras(shard: &Standalone) -> usize {
+    shard
+        .query_rows(&format!(
+            "SELECT id FROM game_aura WHERE target_guid = 1 AND spell_id = {STEALTH}"
+        ))
+        .len()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn stealth_is_a_form_that_keeps_energy_and_a_break_ends_all_of_it() {
+    let (shard, _wire) = rogue_with_stealth("forms-stealth");
+    insert_spell(
+        &shard,
+        UNSAFE_IN_STEALTH,
+        "Unsafe in Stealth",
+        (0, 0, 0),
+        &[(A_MOD_STAT, 1, i32::from(STAT_STR), P_STAT_ID)],
+    );
+    enter(&shard, STEALTH);
+    assert_eq!(stealth_auras(&shard), 3, "Form, stealth and slow");
+    assert_eq!(client_form(&shard), STEALTH_FORM);
+    assert_eq!(
+        pools(&shard),
+        ((ENERGY, 80, 100), (NO_RESERVE_POOL, 0, 0)),
+        "vmangos keeps a rogue's energy in Stealth"
+    );
+
+    cast(&shard, UNSAFE_IN_STEALTH);
+    assert_eq!(stealth_auras(&shard), 0, "the break ends every effect");
+    assert_eq!(client_form(&shard), 0);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_rogue_can_use_an_opener_only_in_stealth() {
+    let (shard, _wire) = rogue_with_stealth("forms-stealth-opener");
+    insert_spell(
+        &shard,
+        STEALTH_OPENER,
+        "Opener",
+        (0, 0, 0),
+        &[(A_MOD_STAT, 1, i32::from(STAT_STR), P_STAT_ID)],
+    );
+    // Ambush, Garrote, Cheap Shot, Sap and Pick Pocket name Stealth in Spell.dbc `Stances`.
+    require_forms(&shard, STEALTH_OPENER, &[STEALTH_FORM], &[]);
+    let casts = || {
+        ready(&shard);
+        shard
+            .call(
+                "debug_force_cast",
+                &[DRUID_GUID, &STEALTH_OPENER.to_string()],
+            )
+            .status
+            .success()
+    };
+    assert!(!casts(), "outside Stealth");
+    enter(&shard, STEALTH);
+    assert!(casts(), "in Stealth");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn publish_repair_ends_a_stealth_left_without_its_stealth_aura() {
+    let (shard, _wire) = rogue_with_stealth("forms-stealth-remnant");
+    enter(&shard, STEALTH);
+    // An earlier break shed only the A_STEALTH Aura.
+    shard.assert_sql(&format!(
+        "DELETE FROM game_aura WHERE target_guid = 1 AND eff_kind = {A_STEALTH}"
+    ));
+    shard.assert_call("debug_repair_after_publish", &[]);
+    assert_eq!(stealth_auras(&shard), 0);
+    assert_eq!(client_form(&shard), 0);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_druid_leaving_cat_form_for_an_own_pool_form_shows_mana() {
+    const TRAVEL_FORM: u32 = 5090988;
+    let (shard, _wire) = feral_druid("forms-own-pool");
+    install_own_pool_form(&shard, (3, "Travel Form", TRAVEL_FORM), (true, true), &[]);
+    // Castable in Cat Form, so the switch skips the client's cancel.
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET attributes = 0 WHERE spell_id = {TRAVEL_FORM}"
+    ));
+    enter(&shard, CAT_FORM);
+    shard.assert_call("debug_set_power", &[DRUID_GUID, "60"]);
+    enter(&shard, TRAVEL_FORM);
+    assert_eq!(client_form(&shard), 3);
+    assert_eq!(pools(&shard), ((MANA, 700, 1000), (NO_RESERVE_POOL, 0, 0)));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn moonkin_form_keeps_its_unit_from_mounting() {
+    use lyracore_package_delta::fixture_ids::{
+        FIXTURE_MOUNT_SPELL, LEARN_APPRENTICE_RIDING_SPELL_ID, RIDING_TRAINER_ENTRY,
+    };
+    const MOONKIN_FORM: u32 = 5090989;
+    let shard = spawned("forms-moonkin-mount");
+    // Moonkin Form's SHAPESHIFT_FLAG_STANCE lets spells treat the unit as unshifted, but vmangos
+    // Unit::IsInDisallowedMountForm names it.
+    install_own_pool_form(
+        &shard,
+        (31, "Moonkin Form", MOONKIN_FORM),
+        (false, true),
+        &[],
+    );
+    shard.assert_call("debug_set_money", &[WARRIOR, "1000"]);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[WARRIOR, &RIDING_TRAINER_ENTRY.to_string(), "5"],
+    );
+    let trainer = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {RIDING_TRAINER_ENTRY}"
+    ))[0]["guid"]
+        .clone();
+    shard.assert_call(
+        "gw_trainer_buy",
+        &[
+            &support::actor(WARRIOR),
+            &trainer,
+            &LEARN_APPRENTICE_RIDING_SPELL_ID.to_string(),
+        ],
+    );
+    let mounts = || {
+        ready(&shard);
+        shard
+            .call(
+                "debug_force_cast",
+                &[WARRIOR, &FIXTURE_MOUNT_SPELL.to_string()],
+            )
+            .status
+            .success()
+    };
+    enter(&shard, MOONKIN_FORM);
+    assert!(!mounts(), "in Moonkin Form");
+    shard.assert_call(
+        "debug_shed_spell_auras",
+        &[WARRIOR, &MOONKIN_FORM.to_string()],
+    );
+    assert!(mounts(), "out of it");
 }

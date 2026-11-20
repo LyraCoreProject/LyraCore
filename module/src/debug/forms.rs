@@ -179,6 +179,7 @@ fn seed_form(
         attack_power_from_agility,
         clears_snares: fact.clears_snares,
         entry_chance_spell: fact.entry_chance_spell,
+        blocks_mounting: fact.blocks_mounting,
     });
     for &spell_id in fact.passives {
         let id = lyracore_package_delta::packed_form_spell_id(fact.form_id, spell_id);

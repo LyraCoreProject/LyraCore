@@ -638,7 +638,7 @@ pub(crate) fn aura_apply(
         }
     }
 
-    source_behavior::finish_aura_apply(ctx, hdr, e, caster_guid, target_guid);
+    source_behavior::finish_aura_apply(ctx, hdr, caster_guid, target_guid);
 
     // Advance diminishing returns only after successful aura placement.
     if let Some(category) = dr_category {

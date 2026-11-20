@@ -272,7 +272,7 @@ symbol = "freeze_profile"
 evidence = "Source reading, not measured. Review of PR 1057: 132 charged 1.12 spells are affected. freeze_profile returns ProcProfile::default(), with zero charges, unless the effect kind is A_PROC_TRIGGER or A_PROC_DAMAGE. At d9173eca, SpellAuras.cpp SpellAuraHolder::SpellAuraHolder sets m_procCharges = spellproto->procCharges for every holder, and SpellAuraHolder::UpdateAuraApplication sends charges times stacks."
 
 [[known_gaps]]
-description = "A druid in a Form keeps its own model: no Form projects a display id, so peers see a night elf or tauren where vmangos shows the cat or bear model (892 or 8571 for Cat Form, 2281 or 2289 for the bear Forms, by team)."
+description = "A unit in a Form keeps its own model: no Form projects a display id or scale, so peers see a night elf, tauren or troll where vmangos shows the Form's model: 892 or 8571 for Cat Form, 2281 or 2289 for the bear Forms and 15374 or 15375 for Moonkin Form, by team; 632 for Travel Form, 2428 for Aquatic Form and 4613 for Ghost Wolf. Stealth, Shadowform and the stances keep the unit's model in vmangos too."
 path = "module/src/form/mod.rs"
 symbol = "project_form"
 evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleAuraModShapeshift sets the display id and scale from GetShapeshiftDisplayInfo; the 1.12 SpellShapeshiftForm.dbc carries no display id, so the client takes the model from UNIT_FIELD_DISPLAYID."

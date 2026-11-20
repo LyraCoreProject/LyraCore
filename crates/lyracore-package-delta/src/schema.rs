@@ -343,6 +343,7 @@ impl Table {
                         | "attack_power_from_agility"
                         | "clears_snares"
                         | "entry_chance_spell"
+                        | "blocks_mounting"
                 )
                 | (Self::Item, "damage_school")
         )
@@ -818,6 +819,7 @@ const FORM_COLUMNS: &[Column] = &[
     column("attack_power_from_agility", FieldType::Bool),
     column("clears_snares", FieldType::Bool),
     column("entry_chance_spell", FieldType::U32),
+    column("blocks_mounting", FieldType::Bool),
 ];
 
 const SPELL_FORM_COLUMNS: &[Column] = &[column("excluded", FieldType::Bool)];
