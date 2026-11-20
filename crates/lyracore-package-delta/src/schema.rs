@@ -337,6 +337,13 @@ impl Table {
                     | "damage_class"
                     | "gcd_category"
             ) | (Self::SpellEffect, "bonus_coefficient" | "equip_supported")
+                | (
+                    Self::Form,
+                    "natural_attack_ms"
+                        | "attack_power_from_agility"
+                        | "clears_snares"
+                        | "entry_chance_spell"
+                )
                 | (Self::Item, "damage_school")
         )
     }
@@ -807,6 +814,10 @@ const FORM_COLUMNS: &[Column] = &[
     column("power_on_entry", FieldType::U8),
     column("default_for_class", FieldType::U8),
     column("client_form", FieldType::U8),
+    column("natural_attack_ms", FieldType::U32),
+    column("attack_power_from_agility", FieldType::Bool),
+    column("clears_snares", FieldType::Bool),
+    column("entry_chance_spell", FieldType::U32),
 ];
 
 const SPELL_FORM_COLUMNS: &[Column] = &[column("excluded", FieldType::Bool)];

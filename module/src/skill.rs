@@ -2,7 +2,7 @@ use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use lyracore_shared::constants::starter_item;
 use lyracore_shared::race_class::{mask_admits, ZeroMask};
-use lyracore_shared::spell::taxonomy::{A_MOD_SKILL, STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR};
+use lyracore_shared::spell::taxonomy::A_MOD_SKILL;
 
 use crate::skilldata::{game_skill_ability, game_skill_availability, SkillAbility};
 use crate::{
@@ -356,9 +356,7 @@ pub(crate) fn skill_value(ctx: &ReducerContext, guid: u64, line: u32, maximum: b
 }
 
 pub(crate) fn effective_weapon_skill(ctx: &ReducerContext, attacker: &WorldEntity) -> u32 {
-    if !attacker.is_player()
-        || matches!(attacker.stance, STANCE_BEAR | STANCE_CAT | STANCE_DIRE_BEAR)
-    {
+    if !attacker.is_player() || crate::form::combat_profile(ctx, attacker.guid).is_natural() {
         return skill_cap_for_level(attacker.level);
     }
     let line = equipped_weapon_skill_line(ctx, attacker.guid);
@@ -374,7 +372,7 @@ pub(crate) fn effective_ranged_weapon_skill(ctx: &ReducerContext, attacker: &Wor
     else {
         return 0;
     };
-    if matches!(attacker.stance, STANCE_BEAR | STANCE_CAT | STANCE_DIRE_BEAR) {
+    if crate::form::combat_profile(ctx, attacker.guid).is_natural() {
         return skill_cap_for_level(attacker.level);
     }
     skill_value(ctx, attacker.guid, line, false)

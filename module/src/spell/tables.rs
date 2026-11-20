@@ -150,7 +150,8 @@ impl Spell {
             || (self.attributes == SPELL_ATTR_DO_NOT_DISPLAY && self.duration_index == 21)
     }
 
-    /// vmangos `SpellEntry::GetErrorAtShapeshiftedCast`, without its talent-learning exception.
+    /// vmangos `SpellEntry::GetErrorAtShapeshiftedCast`, without its talent-learning exception. A
+    /// passive held in any Form ignores its required Forms.
     pub(crate) fn form_refusal(
         &self,
         requirement: FormRequirement,
@@ -165,7 +166,7 @@ impl Spell {
         if form.is_some_and(|form| form.acts_as_shapeshifted) {
             if self.attributes & SPELL_ATTR_NOT_SHAPESHIFT != 0 {
                 Some(FormRefusal::NotShapeshift)
-            } else if requirement.requires_any {
+            } else if requirement.requires_any && !self.held_in_any_form() {
                 Some(FormRefusal::OnlyShapeshift)
             } else {
                 None
@@ -196,7 +197,13 @@ impl Spell {
         self.binds_to_forms(requirement) && requirement.requires_this
     }
 
-    fn allowed_unshifted(&self) -> bool {
+    /// A passive allowed while not shapeshifted, as the importer writes Furor: its Form Set scopes
+    /// what it does, not where it can be held.
+    fn held_in_any_form(&self) -> bool {
+        self.attributes & super::SPELL_ATTR_PASSIVE != 0 && self.allowed_unshifted()
+    }
+
+    pub(crate) fn allowed_unshifted(&self) -> bool {
         self.attributes_ex_2 & SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED != 0
     }
 }

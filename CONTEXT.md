@@ -17,7 +17,7 @@ entry in both files.
 
 **B** [Base Snapshot](#packages) · [Baseline](#client-content) · [Behavior](#conformance) · [Bot Capacity Lease](#bots) · [Bot Controller](#bots) · [Bounded Map Slice](#realm-topology) · [Build Identity](#packages)
 
-**C** [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Cast Request](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character directory](#realm-topology) · [Character Migration](#accounts-characters-and-sessions) · [Character Name Reservation](#realm-topology) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Coalescible Motion](#requests-and-delivery) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
+**C** [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Cast Request](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character directory](#realm-topology) · [Character Migration](#accounts-characters-and-sessions) · [Character Name Reservation](#realm-topology) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Coalescible Motion](#requests-and-delivery) · [Combat Profile](#forms) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
 
 **D** [Data Gap](#conformance) · [Data-dependent field](#conformance) · [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
@@ -551,11 +551,17 @@ Projection. Idempotent, and a no-op for a rider who is not mounted.
 ### Forms
 
 **Form**:
-A shapeshift state such as Battle Stance, held as the unit's one `A_SHAPESHIFT` Aura. Its
-`game_form` row composes the Module's building blocks: power rule, class default, spell rules and
-1.12 client presentation. Its id is its own, not the 1.12 client's form byte. A new Form needs data,
-not Rust.
+A shapeshift state such as Battle Stance or Bear Form, held as the unit's one `A_SHAPESHIFT` Aura.
+Its `game_form` row composes the Module's building blocks: power rule, combat profile, lifecycle
+flags, class default, spell rules and 1.12 client presentation. Its id is its own, not the 1.12
+client's form byte. A new Form needs data, not Rust. Rules ask about a Form's building blocks, never
+its id.
 _Avoid_: stance (as a stored number), form byte (for the Form's id)
+
+**Combat Profile**:
+How a unit fights in its Form: with its weapons, or with natural attacks that set weapons aside and
+swing at the Form's own speed for level-based damage, as in Cat and Bear Form.
+_Avoid_: feral form (for the rule), stance check
 
 **Form Projection**:
 The client form byte, the shown power pool, the passive Auras a Form brings and Form-dependent

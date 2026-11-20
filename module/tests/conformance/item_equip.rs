@@ -19,7 +19,7 @@ fn fixture(name: &str) -> (Standalone, ReducerConnection, u64, u64) {
 
 pub(super) fn configure(shard: &Standalone) {
     for (spell, kind, points, attributes) in
-        [(EQUIP, 0xa0, 7, 64), (USE, 0xa2, 50, 0), (FORM, 0x14, 0, 0)]
+        [(EQUIP, 0xa0, 7, 64), (USE, 0xa2, 50, 0), (FORM, 0xd5, 0, 0)]
     {
         shard.insert_row(
             "game_spell",
@@ -316,10 +316,13 @@ fn equip_retains_source_category_cooldowns_and_item_category_overrides() {
     shard.assert_call("gw_use_item", &[&actor(guid), "11"]);
     advance(&shard, 100);
     assert_eq!(
-        shard.query_rows(&format!(
-            "SELECT stance FROM game_world_entity WHERE guid = {guid}"
-        ))[0]["stance"],
-        "2"
+        shard
+            .query_rows(&format!(
+                "SELECT id FROM game_aura WHERE target_guid = {guid} AND spell_id = {FORM}"
+            ))
+            .len(),
+        1,
+        "the item's spell lands after its cast time"
     );
     assert!(!shard
         .call("gw_use_item", &[&actor(guid), "10"])
@@ -490,9 +493,33 @@ fn login_reconnect_and_resurrection_rebuild_equip_auras_once_without_a_new_coold
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
     let (shard, mut connection, guid, _) = fixture("equip-forms");
+    shard.assert_call("debug_seed_druid_forms", &[]);
+    shard.assert_call("debug_seed_warrior_forms", &[]);
     shard.assert_sql(&format!(
-        "UPDATE game_spell_effect SET p0 = 4, p0_kind = 0 WHERE spell_id = {FORM}"
+        "UPDATE game_spell SET duration_ms = 4294967295 WHERE spell_id = {FORM}"
     ));
+    let enter_form = |form: u32| {
+        shard.assert_call(
+            "debug_shed_spell_auras",
+            &[&guid.to_string(), &FORM.to_string()],
+        );
+        shard.assert_sql(&format!(
+            "UPDATE game_spell_effect SET p0 = {form}, p0_kind = 19 WHERE spell_id = {FORM}"
+        ));
+        shard.assert_sql(&format!(
+            "DELETE FROM game_global_cooldown WHERE caster_guid = {guid}"
+        ));
+        shard.assert_call(
+            "debug_cast_spell",
+            &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
+        );
+    };
+    let leave_form = || {
+        shard.assert_call(
+            "debug_shed_spell_auras",
+            &[&guid.to_string(), &FORM.to_string()],
+        );
+    };
     shard.assert_call("debug_learn_spell", &[&guid.to_string(), &FORM.to_string()]);
     shard.assert_call(
         "debug_set_spell_form_masks",
@@ -501,23 +528,11 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
     grant(&shard, guid, ITEM, 1, 23);
     equip(&mut connection, 23);
     assert_effect(&shard, guid, 0);
-    shard.assert_sql(&format!(
-        "DELETE FROM game_global_cooldown WHERE caster_guid = {guid}"
-    ));
-    shard.assert_call(
-        "debug_cast_spell",
-        &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
-    );
+    enter_form(1);
     assert_effect(&shard, guid, 1);
     move_item(&mut connection, 10, 11);
     assert_effect(&shard, guid, 1);
-    shard.assert_sql(&format!(
-        "DELETE FROM game_global_cooldown WHERE caster_guid = {guid}"
-    ));
-    shard.assert_call(
-        "debug_cast_spell",
-        &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
-    );
+    leave_form();
     assert_effect(&shard, guid, 0);
     shard.assert_sql(&format!(
         "UPDATE game_spell SET attributes_ex_2 = 524288 WHERE spell_id = {EQUIP}"
@@ -528,13 +543,7 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
         "debug_set_spell_form_masks",
         &[&EQUIP.to_string(), "1", "1"],
     );
-    shard.assert_sql(&format!(
-        "DELETE FROM game_global_cooldown WHERE caster_guid = {guid}"
-    ));
-    shard.assert_call(
-        "debug_cast_spell",
-        &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
-    );
+    enter_form(1);
     assert_effect(&shard, guid, 0);
     shard.assert_call(
         "debug_set_spell_form_masks",
@@ -545,26 +554,11 @@ fn equip_spells_follow_form_exclusions_requirements_and_unshifted_exemption() {
     ));
     move_item(&mut connection, 10, 11);
     assert_effect(&shard, guid, 0);
-    shard.assert_sql(&format!(
-        "UPDATE game_spell_effect SET p0 = 2 WHERE spell_id = {FORM}"
-    ));
-    shard.assert_call(
-        "debug_cast_spell",
-        &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
-    );
+    enter_form(19);
     assert_effect(&shard, guid, 1);
     let original = auras(&shard, guid);
-    for stance in [11, 13, 14] {
-        shard.assert_sql(&format!(
-            "UPDATE game_spell_effect SET p0 = {stance} WHERE spell_id = {FORM}"
-        ));
-        shard.assert_sql(&format!(
-            "DELETE FROM game_global_cooldown WHERE caster_guid = {guid}"
-        ));
-        shard.assert_call(
-            "debug_cast_spell",
-            &[&guid.to_string(), &FORM.to_string(), &guid.to_string()],
-        );
+    for stance in [17, 18] {
+        enter_form(stance);
         assert_effect(&shard, guid, 1);
         assert_eq!(auras(&shard, guid), original);
     }

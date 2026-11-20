@@ -295,7 +295,7 @@ struct ActivationPlayerState {
     money: u32,
     mount_display_id: u32,
     movement_flags: u32,
-    stance: u8,
+    shapeshifted: bool,
     stand_state: u8,
     unit_flags: u32,
 }
@@ -312,7 +312,7 @@ impl ActivationPlayerState {
             money: player.money,
             mount_display_id: player.mount_display_id,
             movement_flags: player.movement_flags,
-            stance: player.stance,
+            shapeshifted: crate::form::acts_as_shapeshifted(ctx, player.guid),
             stand_state: (player.unit_bytes_1 & 0xFF) as u8,
             unit_flags: player.unit_flags,
         }
@@ -328,7 +328,7 @@ impl ActivationPlayerState {
         if self.movement_flags != 0 {
             return Err(TaxiGateDenied::PlayerMoving);
         }
-        if self.stance >= crate::spell::STANCE_BEAR {
+        if self.shapeshifted {
             return Err(TaxiGateDenied::PlayerShapeShifted);
         }
         if self.stand_state != 0 {
@@ -1637,7 +1637,7 @@ mod tests {
             money: 100,
             mount_display_id: 0,
             movement_flags: 0,
-            stance: 0,
+            shapeshifted: false,
             stand_state: 0,
             unit_flags: 0,
         };
@@ -1666,7 +1666,7 @@ mod tests {
             money: 24,
             mount_display_id: 0,
             movement_flags: 0,
-            stance: 0,
+            shapeshifted: false,
             stand_state: 0,
             unit_flags: 0,
         };

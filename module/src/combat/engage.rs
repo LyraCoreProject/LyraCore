@@ -425,9 +425,11 @@ pub(crate) fn weapon_changed(ctx: &ReducerContext, character_guid: u64, slot: u8
         .find(character_guid)
         .is_some_and(|character| {
             character.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
-                && crate::spell::chance_on_hit::holds_weapon(character.stance, slot, || {
-                    crate::spell::is_disarmed(ctx, character_guid)
-                })
+                && crate::spell::chance_on_hit::holds_weapon(
+                    crate::form::combat_profile(ctx, character_guid),
+                    slot,
+                    || crate::spell::is_disarmed(ctx, character_guid),
+                )
         });
     let Some(mut attack) = ctx
         .db

@@ -159,6 +159,26 @@ fn stage_disarm(shard: &Standalone) {
     );
 }
 
+const CAT_FORM: u32 = 768;
+const BEAR_FORM: u32 = 5487;
+const DIRE_BEAR_FORM: u32 = 9634;
+
+/// Writes the druid Forms without their passives, so only the Form's own rules move the numbers.
+fn seed_druid_forms(shard: &Standalone) {
+    shard.assert_call("debug_seed_druid_forms", &[]);
+    shard.assert_sql("DELETE FROM game_form_spell");
+}
+
+fn shift(shard: &Standalone, form_spell: u32) {
+    shard.assert_sql("DELETE FROM game_global_cooldown WHERE caster_guid = 1");
+    shard.assert_call("debug_force_cast", &["1", &form_spell.to_string()]);
+}
+
+/// Leaves the Form as the client's CMSG_CANCEL_AURA does.
+fn leave_form(shard: &Standalone, form_spell: u32) {
+    shard.assert_call("debug_shed_spell_auras", &["1", &form_spell.to_string()]);
+}
+
 fn swing_readout(shard: &Standalone, target: &str) -> BTreeMap<String, String> {
     shard.assert_call("debug_compute_swing", &["1", target]);
     shard
@@ -170,10 +190,10 @@ fn swing_readout(shard: &Standalone, target: &str) -> BTreeMap<String, String> {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn main_hand_attack_time_follows_the_usable_weapon_and_feral_form() {
     use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
-    use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_CAT, STANCE_DIRE_BEAR};
 
     let mut shard = Standalone::start("white-melee-weapon-delay");
     let target = beside_a_wolf(&mut shard, "");
+    seed_druid_forms(&shard);
     stage_disarm(&shard);
     let attack_time = |shard: &Standalone| swing_readout(shard, &target)["attack_time_ms"].clone();
 
@@ -186,17 +206,20 @@ fn main_hand_attack_time_follows_the_usable_weapon_and_feral_form() {
     assert_eq!(attack_time(&shard), "1900", "a 1.9 second blade");
 
     // vmangos Player::InitDataForForm swings Cat Form at 1.0 s and Bear Form at 2.5 s.
-    for (stance, expected) in [
-        (STANCE_CAT, "1000"),
-        (STANCE_BEAR, "2500"),
-        (STANCE_DIRE_BEAR, "2500"),
+    for (form, expected) in [
+        (CAT_FORM, "1000"),
+        (BEAR_FORM, "2500"),
+        (DIRE_BEAR_FORM, "2500"),
     ] {
-        shard.assert_sql(&format!(
-            "UPDATE game_world_entity SET stance = {stance} WHERE guid = 1"
-        ));
-        assert_eq!(attack_time(&shard), expected, "feral form {stance}");
+        shift(&shard, form);
+        assert_eq!(attack_time(&shard), expected, "Form spell {form}");
+        leave_form(&shard, form);
     }
-    shard.assert_sql("UPDATE game_world_entity SET stance = 0 WHERE guid = 1");
+    assert_eq!(
+        attack_time(&shard),
+        "1900",
+        "leaving the Form takes the blade up"
+    );
 
     // vmangos Aura::HandleAuraModDisarm sets the main hand back to BASE_ATTACK_TIME.
     shard.assert_call("debug_force_cast", &["1", &DISARM.to_string()]);
@@ -207,13 +230,13 @@ fn main_hand_attack_time_follows_the_usable_weapon_and_feral_form() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_feral_druid_swings_level_damage_instead_of_its_weapon() {
     use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
-    use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_CAT};
 
     let mut shard = Standalone::start("white-melee-feral-damage");
     let target = beside_a_wolf(
         &mut shard,
         "UPDATE game_character SET class = 11, level = 60 WHERE guid = 1",
     );
+    seed_druid_forms(&shard);
     shard.assert_sql(&format!(
         "UPDATE game_item_template SET delay_ms = 3800, damage_min = 100.0, damage_max = 150.0, \
          stat_strength = 0, stat_agility = 0 WHERE entry = {FIXTURE_BLADE}"
@@ -222,16 +245,15 @@ fn a_feral_druid_swings_level_damage_instead_of_its_weapon() {
     shard.assert_sql("UPDATE game_world_entity SET strength = 50, agility = 40 WHERE guid = 1");
 
     // vmangos at level 60: Cat 51-75 + 120 AP / 14; Bear 127.5-187.5 + 80 AP / 14 * 2.5.
-    for (stance, expected) in [(STANCE_CAT, ("59", "83")), (STANCE_BEAR, ("141", "201"))] {
-        shard.assert_sql(&format!(
-            "UPDATE game_world_entity SET stance = {stance} WHERE guid = 1"
-        ));
+    for (form, expected) in [(CAT_FORM, ("59", "83")), (BEAR_FORM, ("141", "201"))] {
+        shift(&shard, form);
         let readout = swing_readout(&shard, &target);
         assert_eq!(
             (readout["base_min"].as_str(), readout["base_max"].as_str()),
             expected,
-            "feral form {stance}"
+            "Form spell {form}"
         );
+        leave_form(&shard, form);
     }
 }
 
@@ -240,10 +262,10 @@ fn a_feral_druid_swings_level_damage_instead_of_its_weapon() {
 fn a_usable_weapon_change_in_combat_restarts_the_main_hand_swing() {
     use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
     use lyracore_shared::constants::unit_flags;
-    use lyracore_shared::spell::taxonomy::STANCE_CAT;
 
     let mut shard = Standalone::start("white-melee-weapon-swap");
     let target = beside_a_wolf(&mut shard, "");
+    seed_druid_forms(&shard);
     stage_disarm(&shard);
     shard.assert_sql(&format!(
         "UPDATE game_item_template SET max_durability = 50 WHERE entry = {FIXTURE_BLADE}"
@@ -270,11 +292,9 @@ fn a_usable_weapon_change_in_combat_restarts_the_main_hand_swing() {
 
     // vmangos Player::_ApplyItemBonuses returns before the reset unless the hand can use it.
     equip(&shard);
-    shard.assert_sql(&format!(
-        "UPDATE game_world_entity SET stance = {STANCE_CAT} WHERE guid = 1"
-    ));
+    shift(&shard, CAT_FORM);
     assert!(!unequip_restarts(&shard), "a feral form holds no weapon");
-    shard.assert_sql("UPDATE game_world_entity SET stance = 0 WHERE guid = 1");
+    leave_form(&shard, CAT_FORM);
 
     equip(&shard);
     shard.assert_call("debug_force_cast", &["1", &DISARM.to_string()]);
@@ -302,37 +322,15 @@ fn a_usable_weapon_change_in_combat_restarts_the_main_hand_swing() {
     );
 }
 
-const CAT_FORM: u32 = 5_090_413;
-
 fn feral_druid(name: &str) -> Standalone {
     use lyracore_package_delta::fixture_ids::FIXTURE_BLADE;
-    use lyracore_package_delta::packed_spell_effect_id;
-    use lyracore_shared::spell::taxonomy::{E_SET_STANCE, STANCE_CAT, T_SELF};
 
     let mut shard = Standalone::start(name);
     beside_a_wolf(
         &mut shard,
         "UPDATE game_character SET class = 11, level = 60 WHERE guid = 1",
     );
-    shard.insert_row(
-        "game_spell",
-        &[
-            ("spell_id", &CAT_FORM),
-            ("name", &"Cat Form fixture"),
-            ("school_mask", &1),
-            ("spell_level", &1),
-        ],
-    );
-    shard.insert_row(
-        "game_spell_effect",
-        &[
-            ("id", &packed_spell_effect_id(CAT_FORM, 0)),
-            ("spell_id", &CAT_FORM),
-            ("kind", &E_SET_STANCE),
-            ("target", &T_SELF),
-            ("p_0", &STANCE_CAT),
-        ],
-    );
+    seed_druid_forms(&shard);
     shard.assert_sql(&format!(
         "UPDATE game_item_template SET delay_ms = 2000, damage_min = 10.0, damage_max = 15.0, \
          stat_strength = 0, stat_agility = 0 WHERE entry = {FIXTURE_BLADE}"
@@ -388,10 +386,10 @@ fn a_shapeshift_refreshes_the_sheet_attack_power_and_damage() {
     let shard = feral_druid("white-melee-shapeshift-sheet");
 
     // vmangos Player::InitDataForForm: Cat AP 2 * 80 + 40 - 20 swings 51-75 + 180 / 14.
-    shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
+    shift(&shard, CAT_FORM);
     assert_eq!(druid_sheet(&shard), ["180", "63", "87"], "Cat Form");
     // Caster AP 2 * 80 - 20 swings the 10-15 weapon + 140 / 14 * 2.0.
-    shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
+    leave_form(&shard, CAT_FORM);
     assert_eq!(
         druid_sheet(&shard),
         ["140", "30", "35"],
@@ -416,7 +414,7 @@ fn the_sheet_follows_the_predatory_strikes_aura_as_it_comes_and_goes() {
 
     let shard = feral_druid("white-melee-predatory-strikes-aura");
     predatory_strikes_fixture(&shard, PREDATORY_STRIKES, 150, 1_000);
-    shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
+    shift(&shard, CAT_FORM);
     assert_eq!(druid_sheet(&shard), ["180", "63", "87"], "Cat Form");
 
     // vmangos: Predatory Strikes 150 adds level 60 * 150 / 100 = 90 to Cat Form AP, 270 in all.
@@ -440,7 +438,7 @@ fn the_sheet_follows_the_predatory_strikes_aura_as_it_comes_and_goes() {
         ["270", "70", "94"],
         "the Aura arrives again"
     );
-    shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
+    leave_form(&shard, CAT_FORM);
     assert_eq!(
         druid_sheet(&shard),
         ["140", "30", "35"],
@@ -523,7 +521,7 @@ fn learning_predatory_strikes_in_cat_form_raises_the_sheet_attack_power() {
             ("spell_id", &RANK_1),
         ],
     );
-    shard.assert_call("debug_force_cast", &["1", &CAT_FORM.to_string()]);
+    shift(&shard, CAT_FORM);
     assert_eq!(druid_sheet(&shard), ["180", "63", "87"], "Cat Form");
 
     shard.assert_call("debug_learn_talent", &["1", &TALENT.to_string()]);

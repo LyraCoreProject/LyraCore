@@ -774,7 +774,7 @@ fn fire_ranged_shot(
     let (rdmin, rdmax) = if attacker.is_player() {
         let (_, rdmin, rdmax) = ranged_sheet_values(
             attacker.class(),
-            attacker.stance,
+            crate::form::combat_profile(ctx, attacker.guid),
             crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_AGI),
             attacker.level,
             Some(weapon),

@@ -1,8 +1,6 @@
 mod support;
 
-use lyracore_shared::spell::taxonomy::{
-    E_NEXT_SWING, E_SET_STANCE, STANCE_BEAR, STANCE_DIRE_BEAR, T_SELF, T_TARGET_ENEMY,
-};
+use lyracore_shared::spell::taxonomy::{E_NEXT_SWING, T_TARGET_ENEMY};
 
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -241,13 +239,8 @@ fn leaving_bear_form_interrupts_a_queued_maul() {
             ..QueuedStrike::rage(MAUL, "Maul", MAUL_COST)
         },
     );
-    stage_form(&standalone, BEAR_FORM, "Bear Form", STANCE_BEAR);
-    stage_form(
-        &standalone,
-        DIRE_BEAR_FORM,
-        "Dire Bear Form",
-        STANCE_DIRE_BEAR,
-    );
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("debug_seed_druid_forms", &[]);
     standalone.assert_call("debug_spawn_player_entity", &["1"]);
     standalone.assert_sql(&format!(
         "UPDATE game_world_entity SET godmode = true WHERE guid = {PLAYER}"
@@ -255,14 +248,14 @@ fn leaving_bear_form_interrupts_a_queued_maul() {
     let wolf = spawn_target(&standalone);
     engage(&standalone, wolf);
 
-    cast(&standalone, BEAR_FORM, PLAYER);
+    shift(&standalone, BEAR_FORM);
     stage_power(&standalone, MAUL_COST);
     cast(&standalone, MAUL, wolf);
     assert_eq!(queued_spell(&player(&standalone)), MAUL.to_string());
 
-    assert_form_change_interrupts_maul(&standalone, BEAR_FORM);
+    assert_form_change_interrupts_maul(&standalone, BEAR_FORM, None);
 
-    cast(&standalone, BEAR_FORM, PLAYER);
+    shift(&standalone, BEAR_FORM);
     stage_power(&standalone, MAUL_COST);
     let (casts, landed) = swing(&standalone);
 
@@ -278,21 +271,36 @@ fn leaving_bear_form_interrupts_a_queued_maul() {
 
     stage_power(&standalone, MAUL_COST);
     cast(&standalone, MAUL, wolf);
-    assert_form_change_interrupts_maul(&standalone, DIRE_BEAR_FORM);
+    assert_form_change_interrupts_maul(&standalone, BEAR_FORM, Some(DIRE_BEAR_FORM));
 }
 
-fn assert_form_change_interrupts_maul(standalone: &Standalone, form: u32) {
+/// Casts a form spell once its global cooldown has passed.
+fn shift(standalone: &Standalone, form: u32) {
+    standalone.assert_sql(&format!(
+        "DELETE FROM game_global_cooldown WHERE caster_guid = {PLAYER}"
+    ));
+    cast(standalone, form, PLAYER);
+}
+
+/// Changes Form as the 1.12 client does: `CMSG_CANCEL_AURA` leaves `from`, then `to` is cast.
+fn assert_form_change_interrupts_maul(standalone: &Standalone, from: u32, to: Option<u32>) {
     assert_eq!(queued_spell(&player(standalone)), MAUL.to_string());
     let events =
         standalone.subscribe(&["SELECT * FROM game_spell_cast_event_live WHERE caster_guid = 1"]);
-    cast(standalone, form, PLAYER);
+    standalone.assert_call(
+        "debug_shed_spell_auras",
+        &[&PLAYER.to_string(), &from.to_string()],
+    );
+    if let Some(to) = to {
+        shift(standalone, to);
+    }
     assert!(
         poll_until(POLL_TIMEOUT, || cast_events(&events).iter().any(|row| {
             row["spell_id"] == MAUL.to_string()
                 && row["is_interrupted"] == "true"
                 && row["failure_reason"] == INTERRUPTED
         })),
-        "casting form {form} must interrupt Maul, got {:?}",
+        "leaving Form spell {from} must interrupt Maul, got {:?}",
         cast_events(&events)
     );
     assert_eq!(queued_spell(&player(standalone)), "0");
@@ -563,27 +571,6 @@ fn running_out_of_ammo_keeps_a_queued_raptor_strike() {
             .any(|row| row["spell_id"] == RAPTOR_STRIKE.to_string()),
         "running out of ammo must not interrupt the strike, got {:?}",
         cast_events(&events)
-    );
-}
-
-fn stage_form(standalone: &Standalone, spell_id: u32, name: &str, stance: u8) {
-    standalone.insert_row(
-        "game_spell",
-        &[
-            ("spell_id", &spell_id),
-            ("name", &name),
-            ("school_mask", &1),
-        ],
-    );
-    standalone.insert_row(
-        "game_spell_effect",
-        &[
-            ("id", &packed_spell_effect_id(spell_id, 0)),
-            ("spell_id", &spell_id),
-            ("kind", &E_SET_STANCE),
-            ("target", &T_SELF),
-            ("p_0", &stance),
-        ],
     );
 }
 

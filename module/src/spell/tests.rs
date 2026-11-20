@@ -82,6 +82,20 @@ fn a_stance_ability_needs_one_of_its_forms() {
 }
 
 #[test]
+fn a_passive_allowed_unshifted_is_held_in_any_form_its_set_does_not_name() {
+    let furor = form_gated(0x91, 0, 0x1D0, 0x80000);
+    for form in [None, in_form(5, true), in_form(3, true), in_form(17, false)] {
+        assert_eq!(furor(form), None, "{form:?}");
+    }
+    let active = form_gated(0x91, 0, 0, 0x80000);
+    assert_eq!(
+        active(in_form(3, true)),
+        Some(FormRefusal::OnlyShapeshift),
+        "a cast spell still needs another of its Forms"
+    );
+}
+
+#[test]
 fn a_form_above_the_dbc_mask_can_gate_a_spell() {
     let spell = spell_with(0, 0);
     let in_form_40 = in_form(40, false);
@@ -146,14 +160,6 @@ fn a_known_passive_comes_with_the_forms_its_form_set_names() {
     assert!(!spell_with(0x10, 0).applies_on_form_entry(in_defensive));
     assert!(!spell_with(0x1D0, 0x0008_0000).binds_to_forms(in_defensive));
     assert!(!defiance.binds_to_forms(requirement(0, 0, Some(18))));
-}
-
-#[test]
-fn client_form_for_stance_matches_the_convention() {
-    assert_eq!(client_form_for_stance(STANCE_BEAR), 5);
-    assert_eq!(client_form_for_stance(STANCE_CAT), 1);
-    assert_eq!(client_form_for_stance(STANCE_DIRE_BEAR), 8);
-    assert_eq!(client_form_for_stance(11), 28);
 }
 
 #[test]

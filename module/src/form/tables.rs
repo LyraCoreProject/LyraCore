@@ -18,6 +18,19 @@ pub struct Form {
     pub default_for_class: u8,
     /// The 1.12 client's form byte, `UNIT_FIELD_BYTES_1` byte 2.
     pub client_form: u8,
+    /// Zero is the weapon combat profile; else weapons are set aside for natural attacks that
+    /// swing this often.
+    #[default(0u32)]
+    pub natural_attack_ms: u32,
+    /// Agility adds to the melee attack power of a druid in the Form.
+    #[default(false)]
+    pub attack_power_from_agility: bool,
+    /// Entering and leaving the Form ends the unit's roots and snares.
+    #[default(false)]
+    pub clears_snares: bool,
+    /// The spell entering the Form casts at the unit's `A_FORM_ENTRY_CHANCE`; zero is none.
+    #[default(0u32)]
+    pub entry_chance_spell: u32,
 }
 
 /// A passive spell a unit holds while in a Form.

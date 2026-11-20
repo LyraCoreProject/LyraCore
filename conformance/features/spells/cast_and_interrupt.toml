@@ -25,6 +25,21 @@ path = "module/tests/forms.rs"
 function = "a_mana_energize_reaches_reserved_mana_and_leaves_rage_alone"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/forms.rs"
+function = "the_client_cancels_one_feral_form_before_casting_the_next"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "a_feral_form_frees_the_druid_from_roots_and_snares_as_it_comes_and_goes"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "furor_gives_a_druid_entering_bear_form_ten_rage"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/SpellHandler.cpp"
@@ -50,3 +65,27 @@ description = "The execute log writes one block per created item, and a scripted
 path = "module/src/native/spell.rs"
 symbol = "item_creation_log_message"
 evidence = "vmangos Server/Packets/Spell.cpp SpellLogExecute::AppendBodyTo groups ExecuteLogInfo per effect index; Conjure Water creates one item per effect, so the scenario's bytes match."
+
+[[known_gaps]]
+description = "Entering a Form that acts as shapeshifted keeps the Auras whose spell carries AURA_INTERRUPT_SHAPESHIFTING_CANCELS; vmangos removes them. The importer keeps only the damage and movement interrupt bits."
+path = "importer/src/spell.rs"
+symbol = "aura_interrupt_bits"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleAuraModShapeshift calls RemoveAurasWithInterruptFlags(AURA_INTERRUPT_SHAPESHIFTING_CANCELS) for a form without SHAPESHIFT_FLAG_STANCE."
+
+[[known_gaps]]
+description = "Entering or leaving a feral Form ends a movement slow whose spell has SpellIconID 15, dispel type 0 and no snare mechanic; vmangos keeps it as a daze. The Module does not store the icon id."
+path = "module/src/form/mod.rs"
+symbol = "clear_snares"
+evidence = "Source reading, not measured. At d9173eca, SpellEffects.cpp Spell::EffectScriptEffect for Shapeshift Form Effect 9033 skips such slows alongside MECHANIC_NOT_REMOVED_BY_SHAPESHIFT."
+
+[[known_gaps]]
+description = "Leader of the Pack does nothing: a druid who knows 17007 gets no 24932 party Aura in Cat, Bear or Dire Bear Form. The Form passives apply only to the unit itself, and 24932 is a party area Aura gated on a known talent, which no Form building block expresses."
+path = "module/src/form/mod.rs"
+symbol = "reconcile_passives"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleShapeshiftBoosts casts 24932 (SPELL_EFFECT_APPLY_AREA_AURA_PARTY, +3% crit, Stances 0x91) when the player HasSpell(17007) and 24932's Stances names the form."
+
+[[known_gaps]]
+description = "Heart of the Wild adds no Form bonus: a druid with the talent gets no 24900 Strength bonus in Cat Form and no 24899 Stamina bonus in Bear or Dire Bear Form. Both effect spells have base points -1 and take their amount from the talent rank's Aura, and no building block casts a spell with an amount another Aura supplies."
+path = "module/src/form/mod.rs"
+symbol = "reconcile_passives"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleShapeshiftBoosts finds the SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE Aura with SpellIconID 240 and misc 3 and casts HotWSpellId with CastCustomSpell at that Aura's amount."

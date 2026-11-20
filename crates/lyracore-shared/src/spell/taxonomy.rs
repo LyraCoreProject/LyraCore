@@ -47,6 +47,7 @@ effect_kinds! {
     E_INTERRUPT => Interrupt = 0x11,
     E_REDUCE_THREAT => ReduceThreat = 0x12,
     E_NEXT_SWING => NextSwing = 0x13,
+    // Reserved: no import writes it and the Module ignores it; Forms are `A_SHAPESHIFT` Auras.
     E_SET_STANCE => SetStance = 0x14,
     E_SUMMON_PET => SummonPet = 0x15,
     E_HEAL_MAX_HEALTH => HealMaxHealth = 0x16,
@@ -113,6 +114,8 @@ effect_kinds! {
     A_SHAPESHIFT => AuraShapeshift = 0xD5,
     // p0 is the power type; the amount is what a power rule that caps on Form entry keeps.
     A_FORM_POWER_RETAINED => AuraFormPowerRetained = 0xD6,
+    // Amount: percent chance that entering a Form in the spell's Form Set casts its entry spell.
+    A_FORM_ENTRY_CHANCE => AuraFormEntryChance = 0xD7,
     E_SUMMON_GUARDIANS => SummonGuardians = 0x27,
     E_ADD_EXTRA_ATTACKS => AddExtraAttacks = 0x28,
     // Effect points are the duration in seconds; p0 is the enchantment id.
@@ -197,9 +200,6 @@ pub const SPEED_MOUNTED: u8 = 3;
 pub const SPEED_SWIM: u8 = 4;
 pub const SPEED_MOVE_ALWAYS: u8 = 5;
 pub const SPEED_MOVE_NOT_STACK: u8 = 6;
-pub const STANCE_BEAR: u8 = 3;
-pub const STANCE_CAT: u8 = 4;
-pub const STANCE_DIRE_BEAR: u8 = 5;
 pub const STAT_STR: u8 = 0;
 pub const STAT_AGI: u8 = 1;
 pub const STAT_STA: u8 = 2;
@@ -269,6 +269,7 @@ mod tests {
         assert_eq!(A_MOD_HEALING_TAKEN, 0xD4);
         assert_eq!(A_SHAPESHIFT, 0xD5);
         assert_eq!(A_FORM_POWER_RETAINED, 0xD6);
+        assert_eq!(A_FORM_ENTRY_CHANCE, 0xD7);
         for k in [
             E_DAMAGE, E_HEAL, E_ENERGIZE, E_DISPEL, E_TRIGGER, E_SCRIPTED,
         ] {

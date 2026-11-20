@@ -187,6 +187,7 @@ pub struct WorldEntity {
     pub overpower_until_ms: u64,
     #[default(0u64)]
     pub revenge_until_ms: u64,
+    /// Retired: nothing reads it. A unit's Form is its shapeshift Aura (docs/schema.md "Forms").
     #[default(0)]
     pub stance: u8,
     #[default(0u64)]

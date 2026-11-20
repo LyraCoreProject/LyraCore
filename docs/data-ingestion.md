@@ -67,9 +67,9 @@ and bounded examples. The command only reads local files.
 The `spell` vmangos family reads selected `spell_template` rows for spell headers, effects,
 reagents and creature spell metadata. It keeps the existing effect translation and synthetic
 markers. SpellCastTimes, SpellRange, SpellDuration and SpellRadius remain separate client tables.
-The family also writes `game_form` and `game_form_spell` for the declared Forms in
-`importer/src/spell_form.rs`, from the client's SpellShapeshiftForm.dbc and the vmangos facts that
-file lists. It replaces only those Forms and the Form Set rows below the Package Form Range, so
+The family also writes `game_form` and `game_form_spell` for the Forms that
+`lyracore_shared::form::FORM_FACTS` declares, from the client's SpellShapeshiftForm.dbc and those
+vmangos facts. It replaces only those Forms and the Form Set rows below the Package Form Range, so
 a Package Form survives the import. The Base Snapshot uses the same selected spell rows:
 
 ```bash

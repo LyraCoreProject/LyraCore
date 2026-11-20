@@ -53,11 +53,7 @@ const PASSIVES: [(u32, &str, &[PassiveEffect]); 3] = {
 #[reducer]
 pub fn debug_seed_warrior_forms(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    use lyracore_shared::spell::taxonomy::{CAST_FLAG_NO_AURA_CANCEL, P_FORM, T_SELF};
-    let upsert_effect = |effect: crate::SpellEffect| {
-        ctx.db.game_spell_effect().id().delete(effect.id);
-        ctx.db.game_spell_effect().insert(effect);
-    };
+    use lyracore_shared::spell::taxonomy::CAST_FLAG_NO_AURA_CANCEL;
     for fact in lyracore_shared::form::FORM_FACTS {
         let Some(&(_, name)) = STANCE_NAMES.iter().find(|(form, _)| *form == fact.form_id) else {
             continue;
@@ -75,35 +71,129 @@ pub fn debug_seed_warrior_forms(ctx: &ReducerContext) -> Result<(), String> {
                 ..crate::Spell::blank(fact.spell_id, name)
             });
         }
-        upsert_effect(crate::SpellEffect {
+        seed_form(ctx, fact, name, false, false);
+    }
+    seed_passives(ctx, &PASSIVES);
+    Ok(())
+}
+
+// Build-5875 SpellShapeshiftForm.dbc names and flags and Spell.dbc values the `spell` import reads
+// for Forms 1, 5 and 8.
+const DRUID_FORMS: [(u32, &str, bool); 3] = [
+    (1, "Cat Form", true),
+    (5, "Bear Form", false),
+    (8, "Dire Bear Form", false),
+];
+const DRUID_FORM_ATTRIBUTES: u32 = 0x0005_0010;
+const DRUID_FORM_GCD_CATEGORY: u32 = 133;
+const DRUID_PASSIVES: [(u32, &str, &[PassiveEffect]); 4] = {
+    use lyracore_shared::spell::taxonomy::{
+        A_MOD_COMBAT, COMBAT_ATTACK_POWER, COMBAT_THREAT, P_COMBAT_FIELD,
+    };
+    [
+        (
+            3025,
+            "Cat Form (Passive)",
+            &[
+                (A_MOD_COMBAT, 40, COMBAT_ATTACK_POWER, P_COMBAT_FIELD),
+                (A_MOD_COMBAT, -29, COMBAT_THREAT, P_COMBAT_FIELD),
+            ],
+        ),
+        (
+            1178,
+            "Bear Form (Passive)",
+            &[(A_MOD_COMBAT, 30, COMBAT_ATTACK_POWER, P_COMBAT_FIELD)],
+        ),
+        (
+            9635,
+            "Dire Bear Form (Passive)",
+            &[(A_MOD_COMBAT, 120, COMBAT_ATTACK_POWER, P_COMBAT_FIELD)],
+        ),
+        (
+            21178,
+            "Bear Form (Passive2)",
+            &[(A_MOD_COMBAT, 30, COMBAT_THREAT, P_COMBAT_FIELD)],
+        ),
+    ]
+};
+
+/// Writes Forms 1, 5 and 8 with their form spells, as the `spell` import writes them, and passives
+/// that carry only their attack power and threat effects.
+#[reducer]
+pub fn debug_seed_druid_forms(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    for fact in lyracore_shared::form::FORM_FACTS {
+        let Some(&(_, name, agility)) = DRUID_FORMS.iter().find(|(form, ..)| *form == fact.form_id)
+        else {
+            continue;
+        };
+        if ctx.db.game_spell().spell_id().find(fact.spell_id).is_none() {
+            ctx.db.game_spell().insert(crate::Spell {
+                attributes: DRUID_FORM_ATTRIBUTES,
+                duration_ms: u32::MAX,
+                school_mask: 1,
+                gcd_category: DRUID_FORM_GCD_CATEGORY,
+                ..crate::Spell::blank(fact.spell_id, name)
+            });
+        }
+        seed_form(ctx, fact, name, true, agility);
+    }
+    seed_passives(ctx, &DRUID_PASSIVES);
+    Ok(())
+}
+
+fn upsert_effect(ctx: &ReducerContext, effect: crate::SpellEffect) {
+    ctx.db.game_spell_effect().id().delete(effect.id);
+    ctx.db.game_spell_effect().insert(effect);
+}
+
+fn seed_form(
+    ctx: &ReducerContext,
+    fact: &lyracore_shared::form::FormFact,
+    name: &str,
+    acts_as_shapeshifted: bool,
+    attack_power_from_agility: bool,
+) {
+    use lyracore_shared::spell::taxonomy::{P_FORM, T_SELF};
+    upsert_effect(
+        ctx,
+        crate::SpellEffect {
             kind: A_SHAPESHIFT,
             target: T_SELF,
             p0: fact.form_id as i32,
             p0_kind: P_FORM,
             ..crate::SpellEffect::blank(fact.spell_id, 0)
-        });
-        ctx.db.game_form().form_id().delete(fact.form_id);
-        ctx.db.game_form().insert(Form {
+        },
+    );
+    ctx.db.game_form().form_id().delete(fact.form_id);
+    ctx.db.game_form().insert(Form {
+        form_id: fact.form_id,
+        name: name.to_string(),
+        spell_id: fact.spell_id,
+        acts_as_shapeshifted,
+        power_type: fact.power_type,
+        power_on_entry: fact.power_on_entry as u8,
+        default_for_class: fact.default_for_class,
+        client_form: fact.form_id as u8,
+        natural_attack_ms: fact.natural_attack_ms,
+        attack_power_from_agility,
+        clears_snares: fact.clears_snares,
+        entry_chance_spell: fact.entry_chance_spell,
+    });
+    for &spell_id in fact.passives {
+        let id = lyracore_package_delta::packed_form_spell_id(fact.form_id, spell_id);
+        ctx.db.game_form_spell().id().delete(id);
+        ctx.db.game_form_spell().insert(FormSpell {
+            id,
             form_id: fact.form_id,
-            name: name.to_string(),
-            spell_id: fact.spell_id,
-            acts_as_shapeshifted: false,
-            power_type: fact.power_type,
-            power_on_entry: fact.power_on_entry as u8,
-            default_for_class: fact.default_for_class,
-            client_form: fact.form_id as u8,
+            spell_id,
         });
-        for &spell_id in fact.passives {
-            let id = lyracore_package_delta::packed_form_spell_id(fact.form_id, spell_id);
-            ctx.db.game_form_spell().id().delete(id);
-            ctx.db.game_form_spell().insert(FormSpell {
-                id,
-                form_id: fact.form_id,
-                spell_id,
-            });
-        }
     }
-    for (spell_id, name, effects) in PASSIVES {
+}
+
+fn seed_passives(ctx: &ReducerContext, passives: &[(u32, &str, &[PassiveEffect])]) {
+    use lyracore_shared::spell::taxonomy::T_SELF;
+    for &(spell_id, name, effects) in passives {
         if ctx.db.game_spell().spell_id().find(spell_id).is_none() {
             ctx.db.game_spell().insert(crate::Spell {
                 attributes: PASSIVE_ATTRIBUTES,
@@ -114,17 +204,19 @@ pub fn debug_seed_warrior_forms(ctx: &ReducerContext) -> Result<(), String> {
             });
         }
         for (index, &(kind, base_points, p0, p0_kind)) in effects.iter().enumerate() {
-            upsert_effect(crate::SpellEffect {
-                kind,
-                base_points,
-                target: T_SELF,
-                p0: i32::from(p0),
-                p0_kind,
-                ..crate::SpellEffect::blank(spell_id, index as u8)
-            });
+            upsert_effect(
+                ctx,
+                crate::SpellEffect {
+                    kind,
+                    base_points,
+                    target: T_SELF,
+                    p0: i32::from(p0),
+                    p0_kind,
+                    ..crate::SpellEffect::blank(spell_id, index as u8)
+                },
+            );
         }
     }
-    Ok(())
 }
 
 /// Sets a spell's DBC Form masks and the Form Set rows they import as.
