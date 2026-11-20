@@ -5068,7 +5068,7 @@ def check_taxi(host):
     host.sql(f'UPDATE game_world_entity SET npc_flags = 9 WHERE guid = {flight_master}')
     host.sql(f'UPDATE game_world_entity SET movement_flags = 0, unit_flags = 0 WHERE guid = {guid}')
     for node, client_node, x in [(5090301, 253, 0), (5090302, 254, 64)]:
-        host.sql(f"INSERT INTO game_taxi_node (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) VALUES ({node},{client_node},0,{x},0,0,'Native flight',295,1147)")
+        host.sql(f"INSERT INTO game_taxi_node (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) VALUES ({node},{client_node},0,{x},1,0,'Native flight',295,1147)")
     host.sql('INSERT INTO game_taxi_path (id,source_node_id,destination_node_id,fare) VALUES (5090303,5090301,5090302,25)')
     for index, x in [(0, 0), (1, 64)]:
         host.sql(f'INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) VALUES ({5090304 + index},5090303,{index},0,{x},0,0,0,0)')
@@ -5083,7 +5083,8 @@ def check_taxi(host):
     assert (0x1ab, struct.pack('<QB', flight_master, 1)) in client.collect()
     money_before = host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}')[0][0]
     client.send(0x1ad, struct.pack('<QII', flight_master, 253, 254))
-    assert (0x1ae, struct.pack('<I', 6)) in client.collect()
+    unvisited = client.collect()
+    assert not any(opcode == 0x1ae for opcode, _ in unvisited), unvisited
     assert host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}') == [[money_before]]
     host.sql(f'INSERT INTO game_character_taxi_node (id,character_guid,node_id) VALUES (0,{guid},5090302)')
     client.send(0x1ad, struct.pack('<QII', flight_master, 253, 254))
@@ -5102,7 +5103,6 @@ def check_taxi(host):
     flight_speech = client.collect()
     assert not any(opcode == 0x96 for opcode, _ in flight_speech)
     assert not any(opcode == 0x96 for opcode, _ in peer.collect())
-    # A flight master that does not exist is answered with 5 unless the flight check comes first.
     client.send(0x1ad, struct.pack('<QII', flight_master + 1_000_000, 253, 254))
     ignored = client.collect()
     assert not any(opcode == 0x1ae for opcode, _ in ignored), ignored

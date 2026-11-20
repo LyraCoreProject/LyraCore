@@ -237,6 +237,25 @@ pub(super) fn receive(
             }
             Ok(())
         }
+        ClientOpcodeMessage::CMSG_ACTIVATETAXIEXPRESS(c) => {
+            super::available_entity(ctx, guid)?;
+            // Multi-hop routes are unsupported; vmangos is silent below two nodes or out of reach.
+            if c.nodes.len() >= 2
+                && crate::taxi::can_interact_with_flight_master(ctx, guid, c.guid.guid())
+            {
+                super::send(
+                    ctx,
+                    connection,
+                    ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(codec::build_activate_taxi_reply(
+                        codec::TaxiActivationResult {
+                            result_code: taxi_protocol::ACTIVATE_UNSPECIFIED_SERVER_ERROR,
+                        },
+                    )),
+                    false,
+                )?;
+            }
+            Ok(())
+        }
         other => return Err(Unhandled::Declined(other)),
     };
     Ok(handled?)

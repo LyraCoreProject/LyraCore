@@ -232,15 +232,6 @@ fn raw_responses(opcode: u32, body: &[u8]) -> Result<Option<Vec<Packet>>> {
             std::str::from_utf8(&body[12..body.len() - 1])?;
             Ok(Some(vec![unavailable("Looking-for-group preferences")]))
         }
-        CMSG_ACTIVATETAXIEXPRESS_OPCODE => {
-            anyhow::ensure!(body.len() >= 16, "short CMSG_ACTIVATETAXIEXPRESS body");
-            let count = u32::from_le_bytes(body[12..16].try_into()?);
-            anyhow::ensure!(
-                u64::from(count) * 4 + 16 == body.len() as u64,
-                "invalid CMSG_ACTIVATETAXIEXPRESS node count"
-            );
-            Ok(Some(vec![word(SMSG_ACTIVATETAXIREPLY_OPCODE, 1)]))
-        }
         CMSG_SET_FACTION_INACTIVE_OPCODE => {
             anyhow::ensure!(
                 body.len() == 5 && body[4] <= 1,
