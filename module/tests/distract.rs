@@ -61,6 +61,12 @@ fn shard(name: &str) -> (Standalone, Line) {
     shard.publish_module();
     shard.assert_call("debug_spawn_player_entity", &[&PLAYER.to_string()]);
     shard.assert_call("debug_set_level", &[&PLAYER.to_string(), "60"]);
+    let bytes: u32 = number(&entity(&shard, PLAYER), "unit_bytes_0");
+    let bytes = (bytes & 0x00FF_FFFF) | (POWER_ENERGY << 24);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_bytes_0 = {bytes}, max_power = {ENERGY} \
+         WHERE guid = {PLAYER}"
+    ));
     shard.assert_call(
         "debug_set_power",
         &[&PLAYER.to_string(), &ENERGY.to_string()],

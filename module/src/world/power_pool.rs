@@ -67,16 +67,21 @@ impl WorldEntity {
             .find(|pool| pool.power_type == power_type)
     }
 
+    fn pool_mut(&mut self, power_type: u8) -> Option<(&mut u32, u32)> {
+        if self.power_type() == power_type {
+            Some((&mut self.power, self.max_power))
+        } else if self.reserve_power_type == power_type {
+            Some((&mut self.reserve_power, self.reserve_max_power))
+        } else {
+            None
+        }
+    }
+
     /// Adds `amount` to the unit's pool of `power_type`, up to its max; a unit without one gains none.
     pub(crate) fn gain_power(&mut self, power_type: u8, amount: u32) {
-        let (current, max) = if self.power_type() == power_type {
-            (&mut self.power, self.max_power)
-        } else if self.reserve_power_type == power_type {
-            (&mut self.reserve_power, self.reserve_max_power)
-        } else {
-            return;
-        };
-        *current = current.saturating_add(amount).min(max);
+        if let Some((current, max)) = self.pool_mut(power_type) {
+            *current = current.saturating_add(amount).min(max);
+        }
     }
 
     /// The pool an energize reaches: the one its `P_POWER_TYPE` parameter names, else the shown
@@ -100,22 +105,24 @@ impl WorldEntity {
         }
     }
 
-    /// The power a cost in `power_type` can spend: the Reserve Pool's when it holds that power
-    /// type, else the shown pool's.
+    /// The power a cost in `power_type` can spend: its pool's, shown or reserved, and 0 for a pool
+    /// the unit lacks. A health cost can spend all but the last point, as vmangos
+    /// `Spell::CheckPower` refuses it at or below the cost.
     pub(crate) fn spendable_power(&self, power_type: u8) -> u32 {
-        match self.reserve_pool() {
-            Some(reserve) if reserve.power_type == power_type => reserve.current,
-            _ => self.power,
+        if power_type == power_type::HEALTH {
+            return self.health.saturating_sub(1);
         }
+        self.pool(power_type).map_or(0, |pool| pool.current)
     }
 
+    /// Pays a cost from the pool of its power type, or from health for a health cost, never below
+    /// 1; a unit without the pool pays nothing.
     pub(crate) fn spend_power(&mut self, power_type: u8, amount: u32) {
-        let pool = if self.reserve_power_type == power_type {
-            &mut self.reserve_power
-        } else {
-            &mut self.power
-        };
-        *pool = pool.saturating_sub(amount);
+        if power_type == power_type::HEALTH {
+            self.health = self.health.saturating_sub(amount).max(1);
+        } else if let Some((current, _)) = self.pool_mut(power_type) {
+            *current = current.saturating_sub(amount);
+        }
     }
 
     /// Shows the unit's pool of `power_type`. The unit's own pool comes back from reserve; any
@@ -151,6 +158,16 @@ pub(crate) fn resurrected_power(pool: PowerPool, percent: u32) -> u32 {
             (u64::from(pool.max) * u64::from(percent) / 100) as u32
         }
         _ => pool.current,
+    }
+}
+
+/// vmangos `Player::ResurrectUsingRequestData`: mana returns at `percent` of its max, energy full,
+/// rage at zero, and any other pool keeps its value.
+pub(crate) fn request_resurrected_power(pool: PowerPool, percent: u32) -> u32 {
+    match pool.power_type {
+        power_type::MANA => resurrected_power(pool, percent),
+        power_type::ENERGY => pool.max,
+        _ => resurrected_power(pool, 0),
     }
 }
 
@@ -273,6 +290,60 @@ mod tests {
         unit.power = 300;
         unit.set_each_pool(|pool| resurrected_power(pool, 50));
         assert_eq!((unit.power, unit.reserve_power), (0, 500));
+    }
+
+    #[test]
+    fn a_cost_in_a_pool_the_unit_lacks_cannot_be_spent_or_paid() {
+        let mut unit = druid(700, 1000);
+        assert_eq!(unit.spendable_power(RAGE), 0);
+        assert_eq!(unit.spendable_power(MANA), 700);
+        unit.spend_power(RAGE, 50);
+        unit.show_pool(RAGE);
+        unit.power = 300;
+        assert_eq!(unit.spendable_power(ENERGY), 0);
+        unit.spend_power(ENERGY, 50);
+        assert_eq!((unit.power, unit.reserve_power), (300, 700));
+    }
+
+    #[test]
+    fn a_form_that_shows_the_own_pool_leaves_its_costs_payable() {
+        let mut moonkin = druid(700, 1000);
+        moonkin.show_pool(moonkin.own_pool().power_type);
+        assert_eq!(moonkin.spendable_power(MANA), 700);
+        moonkin.spend_power(MANA, 100);
+        assert_eq!((moonkin.power, moonkin.reserve_pool()), (600, None));
+
+        let mut rogue = druid(0, 0);
+        rogue.unit_bytes_0 = unit_bytes_0(1, 4, 0, ENERGY);
+        rogue.power = 80;
+        rogue.max_power = 100;
+        rogue.show_pool(rogue.own_pool().power_type);
+        assert_eq!(rogue.spendable_power(ENERGY), 80);
+        assert_eq!(rogue.spendable_power(MANA), 0);
+    }
+
+    #[test]
+    fn a_health_cost_spends_all_but_the_last_point_of_health() {
+        let mut unit = druid(700, 1000);
+        unit.health = 60;
+        assert_eq!(unit.spendable_power(HEALTH), 59);
+        unit.spend_power(HEALTH, 45);
+        assert_eq!((unit.health, unit.power), (15, 700));
+        unit.spend_power(HEALTH, 45);
+        assert_eq!(unit.health, 1);
+    }
+
+    #[test]
+    fn a_resurrect_request_restores_mana_by_percent_energy_full_and_rage_none() {
+        let pool = |power_type| PowerPool {
+            power_type,
+            current: 40,
+            max: 200,
+        };
+        assert_eq!(request_resurrected_power(pool(MANA), 35), 70);
+        assert_eq!(request_resurrected_power(pool(ENERGY), 35), 200);
+        assert_eq!(request_resurrected_power(pool(RAGE), 35), 0);
+        assert_eq!(request_resurrected_power(pool(FOCUS), 35), 40);
     }
 
     #[test]

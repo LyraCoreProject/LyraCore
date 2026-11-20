@@ -32,6 +32,7 @@ fn an_enabled_scripted_effect_heals_the_resolved_target_and_credits_xp_to_the_ca
     standalone.publish_module();
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER.to_string()]);
     prevent_scheduled_regeneration(&standalone, PLAYER);
+    give_mana_pool(&standalone, PLAYER);
     standalone.assert_call("debug_set_power", &[&PLAYER.to_string(), "1000"]);
 
     insert_spell(
@@ -144,6 +145,7 @@ fn a_missing_or_disabled_script_refuses_the_cast_before_any_cost_is_spent() {
     standalone.publish_module();
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER.to_string()]);
     prevent_scheduled_regeneration(&standalone, PLAYER);
+    give_mana_pool(&standalone, PLAYER);
     standalone.assert_call("debug_set_power", &[&PLAYER.to_string(), "1000"]);
 
     insert_spell(
@@ -269,6 +271,7 @@ fn a_failing_scripted_effect_discards_only_its_own_staged_effects() {
     );
 
     prevent_scheduled_regeneration(&standalone, PLAYER);
+    give_mana_pool(&standalone, PLAYER);
     standalone.assert_call("debug_set_power", &[&PLAYER.to_string(), "1000"]);
     standalone.assert_call("debug_set_power", &[&PLAYER.to_string(), "800"]);
     const FLOOR: u32 = 800;
@@ -394,6 +397,16 @@ fn prevent_scheduled_regeneration(standalone: &Standalone, guid: u64) {
         "UPDATE game_world_entity SET simulation_indexed = false, unit_flags = {}, combat_until_ms = {} WHERE guid = {guid}",
         flags | unit_flags::IN_COMBAT,
         u64::MAX,
+    ));
+}
+
+fn give_mana_pool(standalone: &Standalone, guid: u64) {
+    let bytes = entity(standalone, guid)["unit_bytes_0"]
+        .parse::<u32>()
+        .expect("unit bytes are a number");
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_bytes_0 = {}, max_power = 1000 WHERE guid = {guid}",
+        bytes & 0x00FF_FFFF
     ));
 }
 

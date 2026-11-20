@@ -394,8 +394,17 @@ fn insight_is_kept_by_a_free_spell_and_spent_by_one_that_costs_power() {
     bolt(&standalone, FIRE_BOLT, FIRE, 0);
     bolt(&standalone, COSTLY_BOLT, FIRE, 0);
     set_spell(&standalone, COSTLY_BOLT, "cost = 10");
+    let bytes: u32 = standalone
+        .query_rows(&format!(
+            "SELECT unit_bytes_0 FROM game_world_entity WHERE guid = {PLAYER}"
+        ))
+        .remove(0)["unit_bytes_0"]
+        .parse()
+        .expect("unit_bytes_0 is a number");
     standalone.assert_sql(&format!(
-        "UPDATE game_world_entity SET power = 1000, max_power = 1000 WHERE guid = {PLAYER}"
+        "UPDATE game_world_entity SET unit_bytes_0 = {}, power = 1000, max_power = 1000 \
+         WHERE guid = {PLAYER}",
+        bytes & 0x00FF_FFFF
     ));
     standalone.assert_call("debug_force_cast", &["1", &INSIGHT.to_string()]);
     advance(&standalone);

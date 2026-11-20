@@ -53,6 +53,7 @@ impl std::fmt::Display for CastRefusal {
 pub(crate) enum CastRefusalReason {
     Unreported,
     NoPower,
+    CasterAuraState,
     NotReady,
     OutOfRange,
     TooClose,

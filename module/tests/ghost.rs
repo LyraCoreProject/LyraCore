@@ -193,6 +193,48 @@ fn corpse_reclaim_restores_native_form() {
     assert_alive(&shard);
 }
 
+fn power_after_reclaim(name: &str, class: u32, power_type: u32, max_power: u32, power: u32) -> u32 {
+    let shard = fixture(name, 1);
+    let bytes: u32 = number(&entity(&shard), "unit_bytes_0");
+    let bytes = (bytes & 0x00FF_00FF) | (class << 8) | (power_type << 24);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET simulation_indexed = false, unit_bytes_0 = {bytes}, \
+         max_power = {max_power}, power = {power} WHERE guid = 1"
+    ));
+    release(&shard);
+    let ghost = entity(&shard);
+    shard.assert_sql(&format!("UPDATE game_corpse SET x = {}, y = {}, z = {}, reclaim_delay_micros = 0 WHERE owner_guid = 1", ghost["x"], ghost["y"], ghost["z"]));
+    shard.assert_call("gw_reclaim_corpse", &[&actor("1"), "1"]);
+    assert_alive(&shard);
+    number(&entity(&shard), "power")
+}
+
+// The reclaimed Character regenerates at once, so a power that returns above 0 lands within a few ticks.
+const REGEN_ALLOWANCE: u32 = 200;
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn corpse_reclaim_returns_half_the_mana() {
+    let mana = power_after_reclaim("reclaim-mana", 8, 0, 100_000, 100);
+    assert!((50_000..50_000 + REGEN_ALLOWANCE).contains(&mana), "{mana}");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn corpse_reclaim_returns_no_rage() {
+    assert_eq!(power_after_reclaim("reclaim-rage", 1, 1, 1000, 600), 0);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn corpse_reclaim_returns_half_the_energy() {
+    let energy = power_after_reclaim("reclaim-energy", 4, 3, 10_000, 100);
+    assert!(
+        (5_000..5_000 + REGEN_ALLOWANCE).contains(&energy),
+        "{energy}"
+    );
+}
+
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_ghost_cannot_use_a_stale_self_resurrection_option() {
