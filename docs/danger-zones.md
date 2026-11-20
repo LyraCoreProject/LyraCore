@@ -515,6 +515,21 @@ own, such as rage for a druid, reserves that unit's own pool on its next entry o
 A Package Form whose `power_type` is not a power type (above 4) is now refused at apply; an
 already applied one keeps the unit's pool and logs a warning on entry.
 
+### Aura charge migration
+
+Every Aura now freezes its spell's proc profile and `proc_charges`, not only `A_PROC_TRIGGER` and
+`A_PROC_DAMAGE` rows, and adds the caster's `SPELLMOD_CHARGES` modifiers. No schema change and no
+reimport are needed: the `spell` family already imports `proc_flags`, `proc_chance` and
+`proc_charges` for every spell, and `spellmeta` already imports every `spell_proc_event` row; the
+Module now gives a first rank's row to its higher ranks.
+
+An Aura applied before this publish carries no profile, so it shows no charge count and spends
+none. `debug_repair_after_publish` re-freezes each Aura that has neither proc flags nor charges
+with its spell's full charges. Without the repair, such an Aura stays uncharged until it is
+reapplied. The repair refills a live mixed holder once: Holy Shield's block row gets 4 charges,
+and the holder spends from the larger count of its rows, so a Holy Shield with charges already
+spent goes back to full.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

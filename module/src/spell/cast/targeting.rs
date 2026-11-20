@@ -510,7 +510,7 @@ pub(crate) fn aura_apply(
         e.p1
     };
     // Refreshing refills proc charges but preserves any running internal cooldown.
-    let proc = crate::spell::proc::freeze_profile(ctx, e.kind, hdr);
+    let proc = crate::spell::proc::freeze_profile(ctx, hdr, caster_guid);
     let refreshing = existing.is_some();
     if let Some(mut a) = existing {
         a.stacks = next_stacks(a.stacks, hdr.max_stacks);

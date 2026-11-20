@@ -9,7 +9,6 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
-tests = []
 
 [vmangos]
 commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
@@ -42,3 +41,151 @@ description = "Opening spell 21082 from the Base Snapshot is refused because its
 path = "importer/src/spell.rs"
 symbol = "push_spell_effect_rows"
 evidence = "conformance/vmangos-port-census/spell.md: spell 21082 snapshot and Package API bound."
+
+[[known_gaps]]
+description = "Sweeping Strikes never spends its five charges: the Module strikes no second target, and vmangos spends a charge only for each strike."
+path = "module/src/spell/proc.rs"
+symbol = "dummy_proc"
+evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::HandleDummyAuraProc case 12292 casts 12723 at a random unit near the victim and returns SPELL_AURA_PROC_FAILED, keeping the charge, when it finds none; dummy_proc returns Failed for 12292 and 18765."
+
+[[known_gaps]]
+description = "A charged spell modifier, such as Clearcasting, Presence of Mind, Nature's Swiftness, Inner Focus or Elemental Mastery, shows its charges but the spell it modifies never spends them."
+path = "module/src/spell/power.rs"
+symbol = "spell_mod"
+evidence = "Source reading, not measured. At d9173eca, Unit::ProcDamageAndSpellFor skips a holder whose SpellModifier carries charges, and Player::ApplySpellMod spends them when the modified spell is cast; spell_mod sums A_SPELLMOD_FLAT and A_SPELLMOD_PCT rows and never changes them."
+
+[[known_gaps]]
+description = "An extra attack spends a Flurry charge. vmangos keeps Flurry's charges while the attacker holds extra attacks, for example from Windfury."
+path = "module/src/spell/proc.rs"
+symbol = "proc_holders"
+evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::IsTriggeredAtSpellProcEvent returns SPELL_PROC_TRIGGER_FAILED for SpellIconID 108 with SpellVisual 2759 while m_extraAttacks is set."
+
+[[known_gaps]]
+description = "Fear Ward is never used up by a fear: the Module runs the proc pass only for a hit that deals damage, and a fear deals none."
+path = "module/src/spell/proc.rs"
+symbol = "run_proc_pass"
+evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::IsTriggeredAtSpellProcEvent returns SPELL_PROC_TRIGGER_OK for 6346 on a spell whose Mechanic is MECHANIC_FEAR, and HandleTriggers drops its one charge; apply_hit, the only caller of run_proc_pass for a spell hit, returns before it when no damage lands."
+
+[[known_gaps]]
+description = "Retaliation strikes back, and spends a charge, on a hit from behind and while its warrior is stunned. vmangos neither strikes nor spends then."
+path = "module/src/combat/folds.rs"
+symbol = "retaliate_on_hit"
+evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp Unit::HandleDummyAuraProc case 20230 returns SPELL_AURA_PROC_FAILED unless HasInArc(pVictim) and the warrior can react; retaliate_on_hit checks neither."
+
+[[known_gaps]]
+description = "An instant weapon ability, such as Mortal Strike, is never blocked, so it never raises PROC_EX_BLOCK and never spends a Shield Block or Redoubt charge. A queued strike, such as Heroic Strike, can be blocked."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "hit_roll"
+evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::ProcDamageAndSpell raises PROC_EX_BLOCK for SPELL_MISS_BLOCK and for a spell hit whose damageInfo->blocked is set; run_spell_effects deals a weapon ability's damage with no block amount, and hit_roll raises no block."
+
+[[known_gaps]]
+description = "An Auto Shot that misses or is dodged runs no proc pass, so a ranged Aura with PROC_EX_TRIGGER_ALWAYS or a named avoidance result does not count it."
+path = "module/src/combat/swing.rs"
+symbol = "fire_ranged_shot"
+evidence = "Source reading, not measured. At d9173eca, Unit::ProcDamageAndSpell runs for an avoided ranged attack with PROC_EX_MISS or PROC_EX_DODGE; fire_ranged_shot schedules an impact only for damage, and ranged_impact returns before the pass when the shot's damage is zero."
+
+[[known_gaps]]
+description = "A school-mask power cost Aura (SPELL_AURA_MOD_POWER_COST_SCHOOL_PCT and SPELL_AURA_MOD_POWER_COST_SCHOOL, aura types 72 and 73) is not imported, so Insight lowers no spell cost, and its charge rule keys on spell 18820 instead of the aura type."
+path = "importer/src/spell_kind.rs"
+symbol = "aura_mod_to_kind"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp applies aura types 72 and 73 with Aura::HandleModPowerCostPCT and Aura::HandleModPowerCost, and UnitAuraProcHandler.cpp counts their charges with HandleModPowerCostSchoolAuraProc; aura_mod_to_kind maps both to A_INERT, and effect_proc names INSIGHT (18820)."
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "flurry_spends_a_charge_on_each_of_three_swings_hit_or_miss"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "inner_fire_spends_a_charge_on_each_hit_taken_and_goes_after_twenty"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "stormstrike_spends_a_charge_on_each_nature_hit_and_not_on_a_swing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "combustion_stacks_on_fire_hits_and_spends_its_charges_on_fire_crits"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/spell/proc.rs"
+function = "a_proc_that_triggers_always_fires_on_an_avoided_swing_and_any_other_does_not"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/proc.rs"
+function = "a_proc_that_names_a_result_fires_only_on_that_result"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/proc.rs"
+function = "a_charged_aura_takes_part_in_the_proc_pass_whatever_its_effect"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/proc.rs"
+function = "a_charged_spell_modifier_is_left_to_the_spell_that_uses_it"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "fear_ward_is_kept_by_a_frostbolt_and_spent_by_a_fear_spell"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "focus_is_kept_by_an_instant_spell_and_spent_by_one_with_a_cast_time"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "insight_is_kept_by_a_free_spell_and_spent_by_one_that_costs_power"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "flurry_keeps_its_last_charge_on_a_crit"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_full_block_spends_a_charge_that_blocks_spend"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "improved_shield_block_adds_a_charge_to_shield_block"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_spell_that_burns_charges_on_failure_spends_none_on_a_counted_swing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/spell/proc.rs"
+function = "inner_fire_spends_only_on_a_hit_that_dealt_damage"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/proc.rs"
+function = "each_equipped_item_of_one_spell_is_its_own_holder"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_swing_that_an_absorb_takes_whole_still_spends_flurry"
+rung = "durable_module"
+
+[[tests]]
+path = "module/src/spell/proc.rs"
+function = "an_absorbed_swing_keeps_its_quality_and_adds_the_absorb"
+rung = "unit"
+
+[[tests]]
+path = "module/src/spell/proc.rs"
+function = "only_a_proc_row_that_fired_starts_the_internal_cooldown"
+rung = "unit"

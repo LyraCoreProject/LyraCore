@@ -818,7 +818,7 @@ fn creature_health_is_a_percent_and_a_pets_owner_sees_it_in_full() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_auras_stacks_and_charges_reach_viewers_as_its_applications() {
     use lyracore_shared::spell::taxonomy::{
-        A_MOD_STAT, A_PROC_DAMAGE, P_SCHOOL_MASK, STAT_STA, T_SELF,
+        A_MOD_RESISTANCE, A_MOD_STAT, P_SCHOOL_MASK, RESIST_ARMOR, STAT_STA, T_SELF,
     };
     const STACKING: u32 = 5_090_420;
     const CHARGED: u32 = 5_090_421;
@@ -869,10 +869,10 @@ fn an_auras_stacks_and_charges_reach_viewers_as_its_applications() {
             &[
                 ("id", &(CHARGED * 4)),
                 ("spell_id", &CHARGED),
-                ("kind", &A_PROC_DAMAGE),
+                ("kind", &A_MOD_RESISTANCE),
                 ("base_points", &10),
                 ("target", &T_SELF),
-                ("p_0", &NATURE),
+                ("p_0", &RESIST_ARMOR),
                 ("p_0_kind", &P_SCHOOL_MASK),
             ],
         ],

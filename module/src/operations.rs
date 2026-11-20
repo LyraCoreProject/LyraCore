@@ -81,20 +81,21 @@ fn arm_missing_auction_expiries(ctx: &ReducerContext) -> u64 {
     armed
 }
 
+// An Aura applied before its spell's profile was frozen carries neither proc flags nor charges.
 fn refreeze_proc_profiles(ctx: &ReducerContext) -> u64 {
-    let stale_procs: Vec<crate::Aura> = ctx
+    let stale: Vec<crate::Aura> = ctx
         .db
         .game_aura()
         .iter()
-        .filter(|a| crate::spell::proc::is_proc_kind(a.eff_kind) && a.proc_flags == 0)
+        .filter(|a| a.proc_flags == 0 && a.proc_charges == 0)
         .collect();
     let mut refrozen = 0;
-    for mut a in stale_procs {
+    for mut a in stale {
         let Some(hdr) = ctx.db.game_spell().spell_id().find(a.spell_id) else {
             continue;
         };
-        let profile = crate::spell::proc::freeze_profile(ctx, a.eff_kind, &hdr);
-        if profile.flags == 0 {
+        let profile = crate::spell::proc::freeze_profile(ctx, &hdr, a.caster_guid);
+        if profile.flags == 0 && profile.charges == 0 {
             continue;
         }
         a.proc_flags = profile.flags;

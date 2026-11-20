@@ -126,6 +126,11 @@ function = "aura_applications_store_the_count_minus_one_in_the_slot_byte"
 rung = "unit"
 
 [[tests]]
+path = "module/src/spell/proc.rs"
+function = "an_aura_freezes_its_spells_header"
+rung = "unit"
+
+[[tests]]
 path = "module/src/native/health.rs"
 function = "hidden_health_truncates_to_a_percent_of_one_hundred"
 rung = "unit"
@@ -264,12 +269,6 @@ description = "A reserved rage or energy pool neither decays nor regenerates; on
 path = "module/src/combat/regeneration.rs"
 symbol = "regenerate_characters"
 evidence = "Source reading, not measured. At d9173eca, Player.cpp Player::RegenerateAll regenerates rage, energy and mana whatever the shown power type."
-
-[[known_gaps]]
-description = "A charged Aura with no Proc effect shows no charge count, for example Inner Fire (20), Flurry (3), Stormstrike (2), Shadow Vulnerability (4), Enrage (12), Sweeping Strikes (5), Combustion (3) and Hemorrhage (30). The Module keeps charges only on A_PROC_TRIGGER and A_PROC_DAMAGE rows, so UNIT_FIELD_AURAAPPLICATIONS shows only the stacks. Spending these charges is a separate gap."
-path = "module/src/spell/proc.rs"
-symbol = "freeze_profile"
-evidence = "Source reading, not measured. Review of PR 1057: 132 charged 1.12 spells are affected. freeze_profile returns ProcProfile::default(), with zero charges, unless the effect kind is A_PROC_TRIGGER or A_PROC_DAMAGE. At d9173eca, SpellAuras.cpp SpellAuraHolder::SpellAuraHolder sets m_procCharges = spellproto->procCharges for every holder, and SpellAuraHolder::UpdateAuraApplication sends charges times stacks."
 
 [[known_gaps]]
 description = "A unit in a Form keeps its own model: no Form projects a display id or scale, so peers see a night elf, tauren or troll where vmangos shows the Form's model: 892 or 8571 for Cat Form, 2281 or 2289 for the bear Forms and 15374 or 15375 for Moonkin Form, by team; 632 for Travel Form, 2428 for Aquatic Form and 4613 for Ghost Wolf. Stealth, Shadowform and the stances keep the unit's model in vmangos too."

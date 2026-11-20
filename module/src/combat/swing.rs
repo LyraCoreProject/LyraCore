@@ -167,14 +167,18 @@ fn resolve_offhand_swing(
     );
 
     let dealt = damage.amount();
+    let hit = Hit::weapon(HitSource::OffHand, hit_info == AttackOutcome::Crit).with_block(blocked);
     let combat_ended = damage
-        .land(
-            ctx,
-            attacker_guid,
-            target_guid,
-            Hit::weapon(HitSource::OffHand, hit_info == AttackOutcome::Crit),
-        )
+        .land(ctx, attacker_guid, target_guid, hit)
         .combat_ended();
+    crate::spell::proc::run_unlanded_proc_pass(
+        ctx,
+        attacker_guid,
+        target_guid,
+        &hit,
+        hit_info,
+        (dealt, damage.absorbed()),
+    );
     if combat_ended {
         if affects_victim(hit_info, dealt, blocked) {
             super::damage_shield::reflect(ctx, attacker_guid, target_guid);
@@ -644,22 +648,27 @@ fn fire_melee_swing(
     }
 
     let dealt = damage.amount();
-    let combat_ended = damage
-        .land(
-            ctx,
-            attacker_guid,
-            target_guid,
-            if swing_is_spell {
-                Hit::spell(
-                    HitSource::MainHand,
-                    queued_spell,
-                    hit_info == AttackOutcome::Crit,
-                )
-            } else {
-                Hit::weapon(HitSource::MainHand, hit_info == AttackOutcome::Crit)
-            },
+    let hit = if swing_is_spell {
+        Hit::spell(
+            HitSource::MainHand,
+            queued_spell,
+            hit_info == AttackOutcome::Crit,
         )
+    } else {
+        Hit::weapon(HitSource::MainHand, hit_info == AttackOutcome::Crit)
+    }
+    .with_block(blocked);
+    let combat_ended = damage
+        .land(ctx, attacker_guid, target_guid, hit)
         .combat_ended();
+    crate::spell::proc::run_unlanded_proc_pass(
+        ctx,
+        attacker_guid,
+        target_guid,
+        &hit,
+        hit_info,
+        (dealt, damage.absorbed()),
+    );
     let reflects = if swing_is_spell {
         dealt > 0
             && queued_header
