@@ -361,7 +361,7 @@ fn each_refusal_vmangos_answers_gets_its_status() {
 fn a_casting_character_gets_status_7() {
     let (shard, mut wire, master) = stage("taxi-activation-casting", 1000);
     insert_self_spell(&shard, SLOW_CAST, 60_000, A_INERT, 0);
-    shard.assert_call("debug_force_cast", &["1", &SLOW_CAST.to_string()]);
+    shard.assert_call("debug_begin_cast", &["1", &SLOW_CAST.to_string(), "1"]);
     assert_eq!(
         shard
             .query_rows("SELECT caster_guid FROM game_pending_cast")
