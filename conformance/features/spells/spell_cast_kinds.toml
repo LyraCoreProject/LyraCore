@@ -417,3 +417,8 @@ rung = "durable_module"
 path = "importer/src/spell.rs"
 function = "a_bandage_follows_up_with_recently_bandaged_and_has_no_synthetic_trigger"
 rung = "unit"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "actual_reimport_replaces_a_package_follow_up_on_an_imported_spell"
+rung = "durable_module"

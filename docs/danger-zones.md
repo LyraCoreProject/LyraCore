@@ -556,7 +556,8 @@ No table changes; `game_spell_follow_up` exists since the Follow-up Cast migrati
 `spell` family straight after the publish. Until then:
 
 - Power Word: Shield applies no Weakened Soul. The Module no longer reads the old `A_ABSORB` `p1`
-  link, and the follow-up rows that replace it come with the import.
+  link, and the follow-up rows that replace it come with the import. So rank 1, which the link
+  covered, can be recast on any unit that has no live Weakened Soul.
 - Bandages still apply Recently Bandaged through the old synthetic trigger effect, and Recently
   Bandaged still refuses the next bandage by its immunity. The item check that refused a bandage
   by aura id is gone.

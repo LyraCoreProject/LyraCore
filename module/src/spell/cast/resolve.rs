@@ -604,7 +604,6 @@ fn run_spell_effects(
     cast_follow_up(ctx, hdr.spell_id, caster_guid, level, &hit_targets);
 }
 
-// Read docs/schema.md#follow-up-casts for its timing and its loop limit.
 thread_local! {
     // The reducer timestamp of a Follow-up Cast on the call stack; a stale one never matches.
     static FOLLOW_UP_IN_PROGRESS: std::cell::Cell<Option<spacetimedb::Timestamp>> =
@@ -630,6 +629,7 @@ impl Drop for FollowUpInProgress {
     }
 }
 
+// Read docs/schema.md#follow-up-casts for its timing and its loop limit.
 fn cast_follow_up(
     ctx: &ReducerContext,
     spell_id: u32,

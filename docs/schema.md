@@ -1204,9 +1204,10 @@ makes none when it is queued.
 
 A Follow-up Cast is a Triggered Cast. While one runs, no cast it leads to makes a Follow-up Cast,
 whether through a trigger effect, a Proc or a Chance on Hit, so a pair such as A follows up with B
-while B triggers A ends after one round. The guard lasts for the Durable Request that cast the
-first follow-up. A cast in a later Durable Request, such as a periodic tick of an Aura the
-follow-up applied, may follow up again.
+while B triggers A ends after one round. The guard holds only while the first Follow-up Cast and
+the casts it leads to run, and is released when they return. A later cast, in the same Durable
+Request or a later one such as a periodic tick of an Aura the follow-up applied, may follow up
+again.
 
 The spell import writes the rows from vmangos `spell_template.script_name`, by the script names in
 `SCRIPT_FOLLOW_UPS` (`importer/src/spell_overrides.rs`); such a spell is no `spells.script`
@@ -1223,8 +1224,12 @@ carries bit 0x100, so the next such spell on that unit is refused at the cast-st
 Lay on Hands has no mechanic and no script at build 5875, so it neither applies Forbearance nor is
 refused by it.
 
-A Package may claim the table. The spell import's delete keeps every row whose `spell_id` or
-`follow_up_spell_id` is a Package spell; [the Package API](./package-api.md) gives the rule.
+A Package may claim the table; [the Package API](./package-api.md) gives the rule. The spell
+import deletes and rewrites every row keyed by an imported spell, including a Package's row on
+one, and the Package reapply restores the Package's rows. The import is a fixed SQL plan whose
+statements commit one by one, so it cannot skip a row by what the Shard holds, while a Package
+apply is one transaction: a Package row that collides with an import row is refused there and
+nothing of that apply is written.
 
 ### Regeneration
 

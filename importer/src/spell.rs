@@ -38,7 +38,7 @@ use lyracore_importer::spell_kind::{
 use lyracore_importer::spell_overrides::{self, NamedSpell};
 use std::path::Path;
 
-use lyracore_package_delta::ids::{PACKAGE_FORM_ID_FLOOR, PACKAGE_SPELL_ID_FLOOR};
+use lyracore_package_delta::ids::PACKAGE_FORM_ID_FLOOR;
 use lyracore_shared::packing::power_type;
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_DAMAGE_SHIELD, A_FLAG, A_FORM_ENTRY_CHANCE, A_FORM_POWER_RETAINED,
@@ -1630,9 +1630,7 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
             format!("DELETE FROM game_spell_effect WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_spell_reagent WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_creature_ai_spell_metadata WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
-            format!(
-                "DELETE FROM game_spell_follow_up WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR} AND follow_up_spell_id < {PACKAGE_SPELL_ID_FLOOR}"
-            ),
+            format!("DELETE FROM game_spell_follow_up WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!(
                 "DELETE FROM game_spell_form WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR} AND form_id < {PACKAGE_FORM_ID_FLOOR}"
             ),
@@ -1654,7 +1652,7 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
             "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id = {id}"
         ));
         dels.push(format!(
-            "DELETE FROM game_spell_follow_up WHERE spell_id = {id} AND follow_up_spell_id < {PACKAGE_SPELL_ID_FLOOR}"
+            "DELETE FROM game_spell_follow_up WHERE spell_id = {id}"
         ));
         dels.push(format!(
             "DELETE FROM game_spell_form WHERE spell_id = {id} AND form_id < {PACKAGE_FORM_ID_FLOOR}"
@@ -2825,6 +2823,30 @@ mod tests {
         );
         shard.assert_sql("DELETE FROM game_aura WHERE spell_id = 592");
         refused("592", &ally);
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE, LYRACORE_TEST_DBC, SpacetimeDB and Wasm"]
+    fn actual_reimport_replaces_a_package_follow_up_on_an_imported_spell() {
+        let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
+        let ids = [642, 25771];
+        let (rows, _, _) = build_spell_rows(Path::new(&dir), &ids, &[]).unwrap();
+        let mut shard = crate::standalone_support::Standalone::start("reimport-follow-up");
+        shard.publish_module();
+        shard.assert_sql(
+            "INSERT INTO game_spell_follow_up (spell_id,follow_up_spell_id) VALUES (642,6000001)",
+        );
+
+        for sql in assemble_spell_sql(&rows, &ids, false) {
+            shard.assert_sql(&sql);
+        }
+        let follow_ups =
+            shard.query_rows("SELECT * FROM game_spell_follow_up WHERE spell_id = 642");
+        assert_eq!(follow_ups.len(), 1);
+        assert_eq!(
+            follow_ups[0]["follow_up_spell_id"], "25771",
+            "the import owns every follow-up of an imported spell; Package reapply restores its own"
+        );
     }
 
     #[test]
@@ -4694,7 +4716,7 @@ mod tests {
             ("game_spell_effect", ""),
             ("game_spell_reagent", ""),
             ("game_creature_ai_spell_metadata", ""),
-            ("game_spell_follow_up", " AND follow_up_spell_id < 6000000"),
+            ("game_spell_follow_up", ""),
             ("game_spell_form", " AND form_id < 18000000"),
         ];
         assert_eq!(

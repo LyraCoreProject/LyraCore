@@ -482,7 +482,7 @@ fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
     Ok(())
 }
 
-/// A Package owns a follow-up of its own spell, or one that casts its own spell.
+/// A follow-up is Package-owned when its spell or its follow-up spell is a Package spell.
 fn is_package_follow_up(row: &SpellFollowUp) -> bool {
     is_package_spell_id(row.spell_id) || is_package_spell_id(row.follow_up_spell_id)
 }

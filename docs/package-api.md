@@ -777,10 +777,12 @@ identifier must fit 24 bits.
 - **Follow-up Cast.** `game_spell_follow_up` names the spell a caster casts at each unit its spell
   hits ([follow-up casts](./schema.md#follow-up-casts)). A row is Package-owned when its
   `spell_id` or its `follow_up_spell_id` is a Package spell. So a Package may give its own spell any
-  follow-up, and give an imported spell a follow-up that casts a Package spell; the spell import
-  keeps that row. A claim on an imported spell that names an imported follow-up spell is refused,
-  because the import owns those rows, and an insert on an imported spell that already has one fails.
-  After its writes, the apply refuses a row whose spell or follow-up spell does not exist.
+  follow-up, and give an imported spell a follow-up that casts a Package spell. A claim on an
+  imported spell that names an imported follow-up spell is refused, because the import owns those
+  rows. The spell import deletes every follow-up of an imported spell, a Package's included, and
+  the Package reapply writes it back; when the import gave that spell a follow-up of its own, the
+  reapply refuses the Package row and writes nothing. After its writes, the apply refuses a row
+  whose spell or follow-up spell does not exist.
 - **EventAI.** Covers `game_creature_ai_broadcast_text.id`, `game_creature_ai_summon.id` and
   `game_quest_event_requirement.id`. The family's scripted definitions are not claimable: a
   definition carries a creature's whole rule set as a nested payload, which no claimed column can

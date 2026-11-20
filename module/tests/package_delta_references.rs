@@ -1182,18 +1182,36 @@ fn a_package_follow_up_on_an_imported_spell_casts_its_package_spell() {
         "the import owns a follow-up between imported spells"
     );
 
-    let accepted = apply(
-        &standalone,
-        "spell",
-        &artifact(
-            "example.follow_up",
-            &[
-                follow_up_spell_insert(PACKAGE_FOLLOW_UP),
-                follow_up_claim(SEEDED_RENEW, PACKAGE_FOLLOW_UP),
-            ]
-            .join(","),
-        ),
+    let plan = artifact(
+        "example.follow_up",
+        &[
+            follow_up_spell_insert(PACKAGE_FOLLOW_UP),
+            follow_up_claim(SEEDED_RENEW, PACKAGE_FOLLOW_UP),
+        ]
+        .join(","),
     );
+    standalone.assert_sql(&format!(
+        "INSERT INTO game_spell_follow_up (spell_id,follow_up_spell_id) VALUES ({SEEDED_RENEW},133)"
+    ));
+    let collides = apply(&standalone, "spell", &plan);
+    assert!(
+        !collides.status.success() && refusal_text(&collides).contains("did not insert"),
+        "an import follow-up on the spell refuses the Package one: {}",
+        refusal_text(&collides)
+    );
+    assert!(
+        standalone
+            .query_rows(&format!(
+                "SELECT spell_id FROM game_spell WHERE spell_id = {PACKAGE_FOLLOW_UP}"
+            ))
+            .is_empty(),
+        "the refused plan writes nothing"
+    );
+    standalone.assert_sql(&format!(
+        "DELETE FROM game_spell_follow_up WHERE spell_id = {SEEDED_RENEW}"
+    ));
+
+    let accepted = apply(&standalone, "spell", &plan);
     assert!(accepted.status.success(), "{}", refusal_text(&accepted));
     standalone.assert_call("debug_cast_at", &["1", &SEEDED_RENEW.to_string(), "1"]);
     assert!(
