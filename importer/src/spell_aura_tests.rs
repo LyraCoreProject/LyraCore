@@ -1,4 +1,5 @@
 use super::aura_test_support::Character;
+use lyracore_shared::spell::taxonomy::P_PCT_MAX_POWER;
 
 #[test]
 #[ignore = "requires local World Source, stock client MPQs, SpacetimeDB 2.14.0 and Wasm"]
@@ -60,7 +61,7 @@ fn imported_evocation_uses_spirit_and_repairs_its_old_frozen_amount() {
         700,
         "100 Spirit gives 600 mana per tick with the source 1500% bonus"
     );
-    character.shard.assert_sql(&format!("UPDATE game_aura SET eff_kind=146,amount=15,period_ms=2000 WHERE target_guid={} AND effect_id=48204",character.guid));
+    character.shard.assert_sql(&format!("UPDATE game_aura SET eff_kind=146,eff_p0=0,eff_p0_kind={P_PCT_MAX_POWER},amount=15,period_ms=2000 WHERE target_guid={} AND effect_id=48204",character.guid));
     character
         .shard
         .assert_call("debug_repair_after_publish", &[]);
