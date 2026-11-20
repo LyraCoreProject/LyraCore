@@ -292,6 +292,35 @@ fn remember_hit_target(
     }
 }
 
+fn grant_crafted_item(
+    ctx: &ReducerContext,
+    plan: &mut crate::items::ItemStoragePlan,
+    e: &SpellEffect,
+    hdr: &Spell,
+    points: i32,
+) -> super::targeting::EffectHit {
+    let result = ctx
+        .db
+        .game_item_template()
+        .entry()
+        .find(e.p0.max(0) as u32)
+        .ok_or_else(|| {
+            crate::actor::ActionRefusal::from("craft product has no item template".to_string())
+        })
+        .and_then(|template| plan.grant(ctx, &template, points.max(1) as u32, false, None));
+    if let Err(ref reason) = result {
+        log::info!("craft {} refused: {reason:?}", hdr.spell_id);
+    }
+    super::targeting::EffectHit {
+        item: if result.is_ok() {
+            ItemGrantOutcome::Granted
+        } else {
+            ItemGrantOutcome::Refused
+        },
+        ..Default::default()
+    }
+}
+
 fn run_spell_effects(
     ctx: &ReducerContext,
     spell: &LoadedSpell,
@@ -377,37 +406,8 @@ fn run_spell_effects(
             if e.kind == E_CREATE_ITEM {
                 created_items.push(e.p0.max(0) as u32);
             }
-            let hit = if e.kind == E_CREATE_ITEM && craft.is_some() {
-                let result = ctx
-                    .db
-                    .game_item_template()
-                    .entry()
-                    .find(e.p0.max(0) as u32)
-                    .ok_or_else(|| {
-                        crate::actor::ActionRefusal::from(
-                            "craft product has no item template".to_string(),
-                        )
-                    })
-                    .and_then(|template| {
-                        craft.as_mut().expect("craft was checked").grant(
-                            ctx,
-                            &template,
-                            points.max(1) as u32,
-                            false,
-                            None,
-                        )
-                    });
-                if let Err(ref reason) = result {
-                    log::info!("craft {} refused: {reason:?}", hdr.spell_id);
-                }
-                super::targeting::EffectHit {
-                    item: if result.is_ok() {
-                        ItemGrantOutcome::Granted
-                    } else {
-                        ItemGrantOutcome::Refused
-                    },
-                    ..Default::default()
-                }
+            let hit = if let (E_CREATE_ITEM, Some(plan)) = (e.kind, craft.as_mut()) {
+                grant_crafted_item(ctx, plan, e, hdr, points)
             } else {
                 let points = crate::combo::effect_points(ctx, hdr, e, caster_guid, t, points);
                 apply_effect(
