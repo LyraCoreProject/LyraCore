@@ -398,8 +398,10 @@ respawn, so the spawn point never moves into the pet identity.
 
 A Form is data composed from building blocks the Module defines in Rust. `game_form` holds one row
 per Form, keyed by its own `form_id`, and `game_form_spell` holds the passive spells the Form grants.
-The `spell` import writes them; `debug_seed_warrior_forms` and `debug_seed_druid_forms` write the
-same warrior stances and feral druid Forms for tests.
+The `spell` import writes them for the 1.12 player Forms: the warrior stances, Cat, Bear, Dire
+Bear, Travel, Aquatic and Moonkin Form, Ghost Wolf, Shadowform and Stealth.
+`debug_seed_warrior_forms` and `debug_seed_druid_forms` write the same warrior stances and feral
+druid Forms for tests.
 A new Form needs rows, not Rust: a Package adds one through its Package Delta, at a `form_id` in the
 Package Form Range (`docs/package-api.md`).
 
@@ -412,8 +414,10 @@ leaves it, its passives and its Form Set rows in place.
   `A_FORM_POWER_RETAINED` amount (Tactical Mastery for the warrior stances). A Form whose pool is
   not the unit's own holds the own pool as the Reserve Pool and shows its pool from empty, as
   vmangos `Unit::SetPowerType` does; the rule then runs on the shown pool. Leaving the Form ends its
-  pool and shows the own pool again. Every Form row shows its pool, so a Form that keeps the unit's
-  pool whatever it is, as vmangos Stealth does, needs a new building block. A nonzero
+  pool and shows the own pool again. `power_type` `lyracore_shared::form::OWN_POOL` (255) shows the
+  unit's own pool, whatever its power type, as vmangos `Player::InitDataForForm` does in every Form
+  but Cat and the bears: a rogue keeps energy in Stealth, and a druid shows mana in Travel, Aquatic
+  and Moonkin Form. A nonzero
   `entry_chance_spell` is cast on entry at the percent chance of the unit's best
   `A_FORM_ENTRY_CHANCE` Aura whose spell's Form Set requires the Form, as Furor gives Cat Form
   energy and the bear Forms rage. Such a spell must carry
@@ -431,10 +435,15 @@ leaves it, its passives and its Form Set rows in place.
   roots and movement slows when it enters or leaves the Form, as vmangos Shapeshift Form Effect 9033
   does: a root with any mechanic, and a slow whose mechanics a shapeshift does not keep (stun, daze,
   fear and the other crowd control in vmangos `MECHANIC_NOT_REMOVED_BY_SHAPESHIFT`).
-- **Spell rules.** `acts_as_shapeshifted` decides whether spells treat the unit as shifted, and so
-  does the taxi Gate. The 1.12 form spells are `SPELL_ATTR_NOT_SHAPESHIFT`, so a druid in one feral
-  Form cannot cast another: the client sends `CMSG_CANCEL_AURA` for the current Form first, and the
-  same request is how it leaves a Form.
+- **Spell rules.** `acts_as_shapeshifted` decides whether spells treat the unit as shifted. The
+  1.12 form spells are `SPELL_ATTR_NOT_SHAPESHIFT`, so a druid in one feral Form cannot cast
+  another: the client sends `CMSG_CANCEL_AURA` for the current Form first, and the same request is
+  how it leaves a Form. A spell's Form Set can exclude a Form whatever `acts_as_shapeshifted` says,
+  as the Holy spells exclude Shadowform, and require one, as Ambush and the other openers require
+  Stealth.
+- **Mounting.** A Form that acts as shapeshifted, or sets `blocks_mounting`, refuses mount spells
+  and taxis, as vmangos `Unit::IsInDisallowedMountForm` does. Moonkin Form needs the column: spells
+  treat it as unshifted, yet it blocks mounting.
 - **1.12 client presentation.** `client_form` is the form byte the 1.12 client reads from
   `UNIT_FIELD_BYTES_1`. It is a projection, never the Form's identity, so a Form a client does not
   know can name a byte it does. A Package Form's byte is its fallback on the 1.12 client, and the
@@ -458,14 +467,14 @@ Aura's events drive the Form:
   Form-bound Auras end, then the Form is entered again, power rule included.
 - **Removal** (`form::exited`): the unit's own Auras that need a Form end, as in vmangos
   `HandleShapeshiftBoosts`. A unit left in no Form gets the shapeshift effect's `trigger_spell`;
-  Nefarian's Berserk 23397 ends into Berserker Stance this way.
+  Nefarian's Berserk 23397 ends into Berserker Stance this way. Breaking stealth ends every Aura of
+  the stealth spell, so Stealth's Form and slow end with its `A_STEALTH` Aura.
 
 The Aura change then projects once: `form::project_form` re-derives the client form byte, the shown
 pool, the passives the Form brings and the equipment that depends on the Form. The passives are the
 Form's `game_form_spell` rows and every known passive whose Form Set requires a Form with a
 `game_form` row, such as Defiance or Sharpened Claws. A passive whose Form Set names only Forms
-without a row, such as a Moonkin talent before Moonkin Form is a Form, keeps the Aura its learning
-applied. The projection
+without a row, such as Tree Form, keeps the Aura its learning applied. The projection
 removes only Auras the unit cast itself; equipment Auras stay with the equipment reconcile. A spell
 with `CAST_FLAG_LOCKS_FORM`, Berserk among them, refuses every shapeshift cast while its Aura is
 held.

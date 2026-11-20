@@ -21,6 +21,9 @@ impl TryFrom<u8> for PowerOnEntry {
     }
 }
 
+/// The `power_type` of a Form that shows the unit's own pool, whatever its power type.
+pub const OWN_POOL: u8 = u8::MAX;
+
 /// The Forms Spell.dbc `Stances` and `StancesNot` can name: bit `form_id - 1` reaches Form 32.
 pub const DBC_MASK_FORMS: std::ops::RangeInclusive<u32> = 1..=32;
 
@@ -33,6 +36,7 @@ pub struct FormFact {
     pub form_id: u32,
     /// The spell whose Aura enters the Form.
     pub spell_id: u32,
+    /// A `packing::power_type`, or `OWN_POOL`.
     pub power_type: u8,
     pub power_on_entry: PowerOnEntry,
     /// Zero is no class.
@@ -44,6 +48,8 @@ pub struct FormFact {
     pub clears_snares: bool,
     /// The spell entering the Form casts at the unit's `A_FORM_ENTRY_CHANCE`; zero is none.
     pub entry_chance_spell: u32,
+    /// The unit can neither mount nor take a taxi in the Form.
+    pub blocks_mounting: bool,
 }
 
 const STANCE: FormFact = FormFact {
@@ -56,6 +62,7 @@ const STANCE: FormFact = FormFact {
     natural_attack_ms: 0,
     clears_snares: false,
     entry_chance_spell: 0,
+    blocks_mounting: false,
 };
 
 // vmangos Furor: 17099 gives 40 energy and 17057 gives 10 rage.
@@ -66,12 +73,26 @@ const FERAL: FormFact = FormFact {
     power_on_entry: PowerOnEntry::Keep,
     clears_snares: true,
     entry_chance_spell: FUROR_RAGE,
+    blocks_mounting: true,
     ..STANCE
 };
 
+const OWN_POOL_FORM: FormFact = FormFact {
+    power_type: OWN_POOL,
+    power_on_entry: PowerOnEntry::Keep,
+    ..STANCE
+};
+
+const DRUID_OWN_POOL: FormFact = FormFact {
+    clears_snares: true,
+    blocks_mounting: true,
+    ..OWN_POOL_FORM
+};
+
 // vmangos d9173eca: Aura::HandleAuraModShapeshift (power, Shapeshift Form Effect 9033 and Furor),
-// Aura::HandleShapeshiftBoosts (passives), Player::InitDataForForm (attack times) and
-// Player::_LoadAuras (Battle Stance 2457 for a warrior without a form).
+// Aura::HandleShapeshiftBoosts (passives), Player::InitDataForForm (attack times, and the class's
+// own pool in every other Form), Unit::IsInDisallowedMountForm and Player::_LoadAuras (Battle
+// Stance 2457 for a warrior without a form).
 pub const FORM_FACTS: &[FormFact] = &[
     FormFact {
         form_id: 1,
@@ -115,6 +136,40 @@ pub const FORM_FACTS: &[FormFact] = &[
         spell_id: 2458,
         passives: &[7381],
         ..STANCE
+    },
+    FormFact {
+        form_id: 3,
+        spell_id: 783,
+        passives: &[5419],
+        ..DRUID_OWN_POOL
+    },
+    FormFact {
+        form_id: 4,
+        spell_id: 1066,
+        passives: &[5421],
+        ..DRUID_OWN_POOL
+    },
+    FormFact {
+        form_id: 31,
+        spell_id: 24858,
+        passives: &[24905],
+        ..DRUID_OWN_POOL
+    },
+    FormFact {
+        form_id: 16,
+        spell_id: 2645,
+        blocks_mounting: true,
+        ..OWN_POOL_FORM
+    },
+    FormFact {
+        form_id: 28,
+        spell_id: 15473,
+        ..OWN_POOL_FORM
+    },
+    FormFact {
+        form_id: 30,
+        spell_id: 1784,
+        ..OWN_POOL_FORM
     },
 ];
 

@@ -757,7 +757,7 @@ identifier must fit 24 bits.
   rows for every other Form, so a `game_spell_form` claim always names a Package Form. After its
   writes, the apply refuses the plan when:
   - a Form's `spell_id` has no `A_SHAPESHIFT` effect for that Form, or its power rule or power
-    type is unknown;
+    type is unknown; power type 255 shows the unit's own pool;
   - a Form's `natural_attack_ms` is not zero and is under 500 ms;
   - a Form in the plan, or any Form whose `entry_chance_spell` is a Package spell, names an
     `entry_chance_spell` that does not exist after the plan;

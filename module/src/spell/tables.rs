@@ -726,11 +726,30 @@ pub(crate) fn is_stealthed(ctx: &ReducerContext, unit_guid: u64) -> bool {
     auras_on(ctx, unit_guid).any(|a| a.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH)
 }
 
+/// Ends every Aura of each spell that stealths the unit, as vmangos removes the whole holder, so
+/// Stealth's Form and slow end with it.
 pub(crate) fn break_stealth(ctx: &ReducerContext, unit_guid: u64) {
-    let stealth: Vec<Aura> = auras_on(ctx, unit_guid)
-        .filter(|a| a.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH)
+    shed_auras(ctx, stealth_spell_auras(ctx, unit_guid, 0));
+}
+
+/// The unit's Auras of each spell, other than `except_spell`, that holds an `A_STEALTH` Aura on it.
+pub(crate) fn stealth_spell_auras(
+    ctx: &ReducerContext,
+    unit_guid: u64,
+    except_spell: u32,
+) -> Vec<Aura> {
+    let spells: std::collections::BTreeSet<u32> = auras_on(ctx, unit_guid)
+        .filter(|a| {
+            a.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH && a.spell_id != except_spell
+        })
+        .map(|a| a.spell_id)
         .collect();
-    shed_auras(ctx, stealth);
+    if spells.is_empty() {
+        return Vec::new();
+    }
+    auras_on(ctx, unit_guid)
+        .filter(|a| spells.contains(&a.spell_id))
+        .collect()
 }
 
 pub(crate) fn remove_seal_auras(ctx: &ReducerContext, unit_guid: u64) -> u32 {

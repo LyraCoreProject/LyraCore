@@ -40,6 +40,21 @@ path = "module/tests/forms.rs"
 function = "furor_gives_a_druid_entering_bear_form_ten_rage"
 rung = "durable_module"
 
+[[tests]]
+path = "module/tests/forms.rs"
+function = "stealth_is_a_form_that_keeps_energy_and_a_break_ends_all_of_it"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "a_rogue_can_use_an_opener_only_in_stealth"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/forms.rs"
+function = "moonkin_form_keeps_its_unit_from_mounting"
+rung = "durable_module"
+
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
 path = "src/game/Handlers/SpellHandler.cpp"
@@ -89,3 +104,27 @@ description = "Heart of the Wild adds no Form bonus: a druid with the talent get
 path = "module/src/form/mod.rs"
 symbol = "reconcile_passives"
 evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleShapeshiftBoosts finds the SPELL_AURA_MOD_TOTAL_STAT_PERCENTAGE Aura with SpellIconID 240 and misc 3 and casts HotWSpellId with CastCustomSpell at that Aura's amount."
+
+[[known_gaps]]
+description = "Moonkin Aura reaches only the druid: Moonkin Form's trigger spell 24907 gives the druid +3% spell crit but no party member. The Module applies a party area Aura to its caster alone."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "aura_has_visible_slot"
+evidence = "Source reading, not measured. At d9173eca, 24907 is SPELL_EFFECT_APPLY_AREA_AURA_PARTY with SPELL_AURA_MOD_SPELL_CRIT_CHANCE, which vmangos AreaAura::Update gives to party members in range."
+
+[[known_gaps]]
+description = "A percent of base armor adds as flat armor: Bear Form 1178 adds 180 armor, and Dire Bear Form 9635 and Moonkin Form 24905 add 360, where vmangos multiplies the armor from items by 2.8 or 4.6."
+path = "importer/src/spell_kind.rs"
+symbol = "aura_mod_to_kind"
+evidence = "Source reading, not measured. SPELL_AURA_MOD_BASE_RESISTANCE_PCT (142) imports as A_MOD_RESISTANCE, which module/src/modifiers/resistance.rs sums as a flat amount. At d9173eca, Aura::HandleAuraModBaseResistancePercent applies it as BASE_PCT on the armor unit modifier."
+
+[[known_gaps]]
+description = "Travel Form can be entered and kept in deep water, and Aquatic Form on land; vmangos refuses the cast and ends the Form when the unit enters or leaves water. Aquatic Form's water breathing (aura 82 of 5421) does not stop the breath timer."
+path = "importer/src/spell.rs"
+symbol = "aura_interrupt_bits"
+evidence = "Source reading, not measured. 783 carries AURA_INTERRUPT_UNDER_WATER_CANCELS (0x80) and 1066 AURA_INTERRUPT_ABOVE_WATER_CANCELS (0x100); the importer keeps only the damage and movement bits. At d9173eca, Spell::CheckCast returns SPELL_FAILED_ONLY_ABOVEWATER or SPELL_FAILED_ONLY_UNDERWATER, and Player::SetEnvironmentFlags removes such Auras. module/src/breath.rs reads no Aura."
+
+[[known_gaps]]
+description = "Spirit of Redemption is not a Form: its shapeshift effect for Form 32 still imports as a flag, so a priest who dies with the talent neither becomes the spirit nor gets passives 27792 and 27795."
+path = "crates/lyracore-shared/src/form.rs"
+symbol = "FORM_FACTS"
+evidence = "Source reading, not measured. At d9173eca, 27827 enters FORM_SPIRITOFREDEMPTION when the priest would die (Unit::Kill) and Aura::HandleShapeshiftBoosts adds 27792 and 27795; the Module has no building block that replaces a death."

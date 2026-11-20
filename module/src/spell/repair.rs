@@ -1,13 +1,43 @@
 use spacetimedb::{ReducerContext, Table};
 
 use super::*;
-use crate::{game_aura, game_spell, game_spell_effect};
+use crate::{game_aura, game_spell, game_spell_effect, Aura};
 use crate::{game_character_talent, game_player_spell, game_talent, game_world_entity};
 use lyracore_shared::packing::power_type;
 use lyracore_shared::spell::taxonomy::{
     A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_DAMAGE_TAKEN_FLAT, A_MOD_HEALING_TAKEN,
     A_MOD_SCHOOL_CRIT, P_COMBAT_PERCENT,
 };
+
+/// Ends the Auras of a stealth spell whose unit no longer holds its `A_STEALTH` Aura, which a break
+/// left behind before it ended the whole spell. Returns how many Auras it ended.
+pub(crate) fn shed_stealth_remnants(ctx: &ReducerContext) -> u64 {
+    let stealth_spells: std::collections::BTreeSet<u32> = ctx
+        .db
+        .game_spell_effect()
+        .iter()
+        .filter(|effect| effect.kind == A_STEALTH)
+        .map(|effect| effect.spell_id)
+        .collect();
+    let held: Vec<Aura> = ctx
+        .db
+        .game_aura()
+        .iter()
+        .filter(|aura| stealth_spells.contains(&aura.spell_id))
+        .collect();
+    let stealthed: std::collections::BTreeSet<(u64, u32)> = held
+        .iter()
+        .filter(|aura| aura.eff_kind == A_STEALTH)
+        .map(|aura| (aura.target_guid, aura.spell_id))
+        .collect();
+    let remnants: Vec<Aura> = held
+        .into_iter()
+        .filter(|aura| !stealthed.contains(&(aura.target_guid, aura.spell_id)))
+        .collect();
+    let ended = remnants.len() as u64;
+    shed_auras(ctx, remnants);
+    ended
+}
 
 pub(crate) fn repair_cast_auras(ctx: &ReducerContext) {
     let characters: Vec<_> = ctx

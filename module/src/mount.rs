@@ -145,6 +145,12 @@ pub(crate) fn check_mount_cast(
             "you cannot mount while dead",
         ));
     }
+    if crate::form::blocks_mounting(ctx, caster.guid) {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::NotShapeshift,
+            "you cannot mount in this Form",
+        ));
+    }
     if crate::combat::is_engaged(ctx, caster.guid) {
         return Err(CastGateRefusal::other(
             CastRefusalReason::MountInCombat,
