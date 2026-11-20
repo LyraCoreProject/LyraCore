@@ -4611,7 +4611,8 @@ def check_auras(host):
     peer.send(0x12e, cast(168))
     buff = peer.collect()
     observed = client.collect()
-    assert [opcode for opcode, _ in buff][:3] == [0x131, 0x130, 0x132]
+    # Late destroys of objects an earlier check left behind can arrive first.
+    assert [opcode for opcode, body in buff if opcode != 0xaa or destroys([(opcode, body)]) == [peer_guid]][:3] == [0x131, 0x130, 0x132]
     assert sum(opcode == 0x132 and spell_id(body) == 168 for opcode, body in buff) == 1
     assert sum(opcode == 0x132 and spell_id(body) == 168 for opcode, body in observed) == 1
     assert any(opcode == 0x137 and 5900 <= struct.unpack_from('<I', body, 1)[0] <= 6000 for opcode, body in buff)
@@ -4941,7 +4942,9 @@ def check_progression(host):
     assert host.rows(f'SELECT x FROM game_world_entity WHERE guid = {guid}') == [[17.0]]
     peer.collect()
     host.call('debug_teleport', [guid, 1, 4, 5, 6, 0.75])
-    departing = client.collect(auto_ack=False)
+    # A regeneration tick can send the Character a values update just before the teleport packets.
+    departing = [(opcode, body) for opcode, body in client.collect(auto_ack=False)
+                 if not (opcode == 0xa9 and body[5] == 0 and packed_guid(body[6:]) == guid)]
     assert [opcode for opcode, _ in departing] == [0x3f, 0x3e]
     assert departing[1][1] == struct.pack('<Iffff', 1, 4, 5, 6, 0.75)
     assert destroys(peer.collect()).count(guid) == 1

@@ -67,6 +67,7 @@ def run(host):
             section = b'\x13native-reload-check' + bytes([iteration])
             candidate = wasm + b'\x00' + bytes([len(section)]) + section
             stopped = threading.Event()
+            sending = threading.Event()
             relayed = threading.Event()
             failures = []
 
@@ -76,6 +77,7 @@ def run(host):
                     while not stopped.is_set():
                         sequence += 1
                         client.send(0xb7, struct.pack('<IIffffI', 0, sequence * 10, iteration, 0, 0, 0, 0))
+                        sending.set()
                         client.collect()
                         if any(opcode == 0xb7 and packed_guid(body) == guid for opcode, body in peer.collect()):
                             relayed.set()
@@ -86,6 +88,7 @@ def run(host):
             worker = threading.Thread(target=traffic, daemon=True)
             started = time.monotonic()
             worker.start()
+            assert sending.wait(30), 'no movement request was sent before replacement'
             try:
                 host.publish(candidate)
             finally:
@@ -94,7 +97,10 @@ def run(host):
             traffic_seconds += time.monotonic() - started
             assert not worker.is_alive(), 'native requests stalled during replacement'
             assert not failures, (iteration, failures)
-            assert relayed.is_set(), 'movement was not relayed during replacement'
+            # The Host relays a movement request 20 ms after it arrives, which can be after the last fence.
+            host.wait_until(lambda: relayed.is_set() or any(opcode == 0xb7 and packed_guid(body) == guid
+                                                           for opcode, body in peer.collect()),
+                            'movement was not relayed during replacement')
             current_hash = host.rows('SELECT program_hash FROM st_module')
             assert current_hash != previous_hash, 'publish did not replace the Module'
             previous_hash = current_hash
