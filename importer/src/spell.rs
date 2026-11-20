@@ -208,9 +208,6 @@ fn is_aura_effect(effect_id: i32) -> bool {
     )
 }
 
-const MECHANIC_BANDAGE: u32 = 16;
-const RECENTLY_BANDAGED: u32 = 11196;
-
 // EffectBasePoints stores the nominal integer amount minus one.
 fn dbc_flat_amount(raw: i32) -> i32 {
     raw + 1
@@ -279,25 +276,6 @@ fn synthetic_seal_effect(spell_id: u32, name: &str, used_index: u8) -> Option<Sp
         base_points: damage,
         ..blank_effect(spell_id, used_index)
     })
-}
-
-// Bandage effects omit their linked Recently Bandaged debuff.
-fn recently_bandaged_effect(s: &Spell, target: u8, used_index: u8) -> Option<SpellEffectRow> {
-    (s.mechanic == MECHANIC_BANDAGE).then(|| SpellEffectRow {
-        kind: E_TRIGGER,
-        target,
-        trigger_spell: RECENTLY_BANDAGED,
-        ..blank_effect(s.id, used_index)
-    })
-}
-
-fn absorb_debuff_p1(spell_id: u32, name: &str, kind: u8) -> i32 {
-    if kind != A_ABSORB {
-        return 0;
-    }
-    spell_overrides::by_id(spell_id, name)
-        .and_then(|spell| spell.absorb_debuff)
-        .unwrap_or(0)
 }
 
 // Store EffectMultipleValue in hundredths: 0.5 becomes 50.
@@ -1020,7 +998,6 @@ fn push_spell_effect_rows(
         weapon_strike_row(s, &resolved)
     };
     let mut used_slots = [false; 4];
-    let mut healed_target = T_SELF;
     for (i, effect) in resolved {
         let effect_id = s.effect[i];
         used_slots[i] = true;
@@ -1065,9 +1042,6 @@ fn push_spell_effect_rows(
             None => (kind, p0, p0_kind),
         };
         let target = resolve_effect_target(s, i, kind, header);
-        if kind == A_PERIODIC_HEAL {
-            healed_target = target;
-        }
         let radius_yd = if s.effect_radius[i] > 0 {
             dbc.radii
                 .get(SpellRadiusKey::new(s.effect_radius[i]))
@@ -1111,7 +1085,7 @@ fn push_spell_effect_rows(
         } else if let Some(row) = strike_row {
             i32::from(row.normalized)
         } else {
-            absorb_debuff_p1(spell_id, name, kind)
+            0
         };
         let script_id = 0u32;
         let enters_combat = header.overrides.is_some_and(|spell| spell.enters_combat);
@@ -1164,9 +1138,7 @@ fn push_spell_effect_rows(
     }
 
     let synth_slot = used_slots.iter().position(|&u| !u).unwrap_or(3) as u8;
-    let synth = synthetic_seal_effect(spell_id, name, synth_slot)
-        .or_else(|| recently_bandaged_effect(s, healed_target, synth_slot));
-    if let Some(synth) = synth {
+    if let Some(synth) = synthetic_seal_effect(spell_id, name, synth_slot) {
         cov.effects += 1;
         cov.real += 1;
         *cov.by_kind.entry(synth.kind).or_default() += 1;
@@ -2530,7 +2502,7 @@ mod tests {
         );
         assert_eq!(
             (effects(17)[0].target, effects(17)[0].p1),
-            (T_TARGET_ALLY, 6788)
+            (T_TARGET_ALLY, 0)
         );
         assert_eq!(
             (
@@ -2624,7 +2596,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires LYRACORE_VMANGOS_SQLITE and LYRACORE_TEST_DBC"]
-    fn actual_bubbles_follow_up_with_forbearance_and_lay_on_hands_does_not() {
+    fn actual_script_follow_ups_bind_exactly_their_vmangos_spells() {
         const FORBEARANCE: u32 = 25771;
         const INVULNERABILITY: u8 = 25;
         let bubbles = [498, 642, 1020, 1022, 5573, 5599, 10278];
@@ -2641,14 +2613,27 @@ mod tests {
         ))
         .unwrap();
         let (snapshot, _) = crate::vmangos_spell::read(&source).unwrap();
+        let first_aid = [
+            746, 1159, 3267, 3268, 7926, 7927, 10838, 10839, 18608, 18610, 20803, 23567, 23568,
+            23569, 23696, 24412, 24413, 24414, 30020,
+        ];
+        let power_word_shield = [
+            17, 592, 600, 3747, 6065, 6066, 10898, 10899, 10900, 10901, 27607,
+        ];
+        let expected: BTreeMap<u32, u32> = bubbles
+            .iter()
+            .map(|&id| (id, FORBEARANCE))
+            .chain(first_aid.iter().map(|&id| (id, 11196)))
+            .chain(power_word_shield.iter().map(|&id| (id, 6788)))
+            .collect();
         assert_eq!(
             snapshot
                 .iter()
                 .filter(|spell| spell.follow_up_spell.is_some())
                 .map(|spell| (spell.id, spell.follow_up_spell.unwrap()))
                 .collect::<BTreeMap<_, _>>(),
-            bubbles.iter().map(|&id| (id, FORBEARANCE)).collect(),
-            "vmangos binds spell_paladin_bubble to these seven spells only"
+            expected,
+            "vmangos binds the bubble, First Aid and Power Word: Shield scripts to these spells only"
         );
         let (rows, _, _) = build_spell_rows(Path::new(&dir), &ids, &[]).unwrap();
         assert_eq!(
@@ -2795,6 +2780,72 @@ mod tests {
         assert!(
             forbearance_on(&ally),
             "Blessing of Protection leaves Forbearance on the ally"
+        );
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE, LYRACORE_TEST_DBC, SpacetimeDB and Wasm"]
+    fn actual_imported_bandage_and_shield_follow_up_and_refuse_the_next_one() {
+        let (shard, ally, _) = imported_spell_fixture(
+            &[746, 11196, 592, 6788],
+            lyracore_shared::packing::power_type::MANA,
+        );
+        shard.assert_call("debug_set_level", &["1", "60"]);
+        let aura_on = |spell: u32, guid: &str| {
+            !shard
+                .query_rows(&format!(
+                    "SELECT id FROM game_aura WHERE spell_id = {spell} AND target_guid = {guid}"
+                ))
+                .is_empty()
+        };
+        let refused = |spell: &str, target: &str| {
+            shard.assert_sql("DELETE FROM game_global_cooldown");
+            shard.assert_sql("DELETE FROM game_spell_cd");
+            let output = shard.call("debug_begin_cast", &["1", spell, target]);
+            let text = String::from_utf8_lossy(&output.stderr).into_owned()
+                + &String::from_utf8_lossy(&output.stdout);
+            assert!(
+                !output.status.success() && text.contains("is immune to its mechanic"),
+                "{spell}: {text}"
+            );
+        };
+
+        shard.assert_call("debug_cast_at", &["1", "746", &ally]);
+        assert!(aura_on(11196, &ally), "First Aid leaves Recently Bandaged");
+        shard.assert_sql("DELETE FROM game_aura WHERE spell_id = 746");
+        refused("746", &ally);
+
+        shard.assert_sql("DELETE FROM game_global_cooldown");
+        shard.assert_call("debug_cast_at", &["1", "592", &ally]);
+        assert!(
+            aura_on(6788, &ally),
+            "Power Word: Shield rank 2 leaves Weakened Soul"
+        );
+        shard.assert_sql("DELETE FROM game_aura WHERE spell_id = 592");
+        refused("592", &ally);
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE, LYRACORE_TEST_DBC, SpacetimeDB and Wasm"]
+    fn actual_reimport_replaces_a_package_follow_up_on_an_imported_spell() {
+        let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
+        let ids = [642, 25771];
+        let (rows, _, _) = build_spell_rows(Path::new(&dir), &ids, &[]).unwrap();
+        let mut shard = crate::standalone_support::Standalone::start("reimport-follow-up");
+        shard.publish_module();
+        shard.assert_sql(
+            "INSERT INTO game_spell_follow_up (spell_id,follow_up_spell_id) VALUES (642,6000001)",
+        );
+
+        for sql in assemble_spell_sql(&rows, &ids, false) {
+            shard.assert_sql(&sql);
+        }
+        let follow_ups =
+            shard.query_rows("SELECT * FROM game_spell_follow_up WHERE spell_id = 642");
+        assert_eq!(follow_ups.len(), 1);
+        assert_eq!(
+            follow_ups[0]["follow_up_spell_id"], "25771",
+            "the import owns every follow-up of an imported spell; Package reapply restores its own"
         );
     }
 
@@ -3937,7 +3988,7 @@ mod tests {
     }
 
     #[test]
-    fn bandage_applies_recently_bandaged_to_the_unit_it_heals() {
+    fn a_bandage_follows_up_with_recently_bandaged_and_has_no_synthetic_trigger() {
         let mut dbc = fixture_tables();
         dbc.spells = vec![Spell {
             id: 746,
@@ -3946,18 +3997,19 @@ mod tests {
             effect: [EFFECT_APPLY_AURA, 0, 0],
             effect_aura: [AuraMod::PeriodicHeal as u32, 0, 0],
             implicit_target_a: [21, 0, 0],
+            follow_up_spell: Some(11196),
             ..Default::default()
         }];
 
         let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
-        let trigger = rows
-            .effects
-            .iter()
-            .find(|effect| effect.spell_id == 746 && effect.effect_index == 1)
-            .unwrap();
+        assert_eq!(rows.follow_ups, [(746, 11196)]);
         assert_eq!(
-            (trigger.kind, trigger.trigger_spell, trigger.target),
-            (E_TRIGGER, 11196, T_TARGET_ALLY)
+            rows.effects
+                .iter()
+                .filter(|effect| effect.spell_id == 746)
+                .map(|effect| effect.kind)
+                .collect::<Vec<_>>(),
+            [A_PERIODIC_HEAL]
         );
     }
 
@@ -4314,14 +4366,6 @@ mod tests {
         assert!(synthetic_seal_effect(21082, "Seal of Command", 2).is_none());
         assert!(synthetic_seal_effect(21084, "Seal of the Crusader", 2).is_none());
         assert!(synthetic_seal_effect(21084, "Seal of Righteousness", 2).is_none());
-    }
-
-    #[test]
-    fn power_word_shield_p1_links_weakened_soul() {
-        assert_eq!(absorb_debuff_p1(17, "Power Word: Shield", A_ABSORB), 6788);
-        assert_eq!(absorb_debuff_p1(18, "Power Word: Shield", A_ABSORB), 0);
-        assert_eq!(absorb_debuff_p1(17, "Power Word: Fortitude", A_ABSORB), 0);
-        assert_eq!(absorb_debuff_p1(17, "Power Word: Shield", A_FLAG), 0);
     }
 
     #[test]

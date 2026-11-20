@@ -550,6 +550,25 @@ of Protection apply Forbearance and a second bubble on that unit is refused. For
 already imported. No existing row changes, so the publish needs no repair, and a unit that is
 already shielded gets no Forbearance until its next bubble.
 
+### Follow-up claim migration
+
+No table changes; `game_spell_follow_up` exists since the Follow-up Cast migration. Reimport the
+`spell` family straight after the publish. Until then:
+
+- Power Word: Shield applies no Weakened Soul. The Module no longer reads the old `A_ABSORB` `p1`
+  link, and the follow-up rows that replace it come with the import. So rank 1, which the link
+  covered, can be recast on any unit that has no live Weakened Soul.
+- Bandages still apply Recently Bandaged through the old synthetic trigger effect, and Recently
+  Bandaged still refuses the next bandage by its immunity. The item check that refused a bandage
+  by aura id is gone.
+
+The reimport drops the synthetic bandage trigger and the `p1` link, and writes follow-up rows for
+the 19 First Aid spells and all 11 Power Word: Shield ranks; before, only rank 1 linked Weakened
+Soul. Live Recently Bandaged and Weakened Soul Auras need no repair: the imported spells were
+already aura 77 immunities with bit 0x100. A Shard without a spell import keeps the bandage rows
+its `init` seeded, whose Recently Bandaged no longer refuses a bandage; recreate it to get the new
+seed. `debug_repair_after_publish` updates the shield fixture and Weakened Soul seeds.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

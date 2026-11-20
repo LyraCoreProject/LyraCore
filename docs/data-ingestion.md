@@ -536,8 +536,10 @@ translates vanilla damage and movement interrupt bits into the Module's compact 
 and Stealth's speed penalty come from the third source effect. Their former synthetic additions are
 removed. The Human Spirit maps directly to its percentage aura. Evocation keeps its source
 spirit-regeneration aura in slot 0.
-The authored seal marker and Power Word: Shield's linked Weakened Soul rule remain because their
-Module behavior is not an equivalent DBC effect.
+The authored seal marker remains because its Module behavior is not an equivalent DBC effect.
+Recently Bandaged after a bandage, Weakened Soul after Power Word: Shield and Forbearance after a
+bubble come from their vmangos script names as follow-up rows, not as synthetic effects
+([follow-up casts](./schema.md#follow-up-casts)).
 
 `importer/src/spell_overrides.rs` holds every per-spell correction: name-keyed rules apply to all
 ranks of a spell, id-keyed rules to one spell. The binding corrections there map a summon event and

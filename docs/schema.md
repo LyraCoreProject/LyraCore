@@ -1196,24 +1196,40 @@ proc event. A finisher refused whole keeps its combo points.
 ### Follow-up casts
 
 `game_spell_follow_up` names, for a spell, the spell its caster casts as a Follow-up Cast at each
-unit the spell hits, as a vmangos spell script's `OnAfterHit` does. LyraCore casts it when the
-spell resolves, after its `SMSG_SPELL_GO`. vmangos casts it when the spell reaches the unit, so a
-follow-up of a spell with travel time comes early here; no follow-up spell has travel time. A unit
-the hit roll missed, or that refused every effect, gets none. A queued next-swing spell makes none
-when it is queued.
+unit the spell hits, as a vmangos spell script's `OnHit` or `OnAfterHit` does. LyraCore casts it
+when the spell resolves, after its `SMSG_SPELL_GO`. vmangos casts it when the spell reaches the
+unit, so a follow-up of a spell with travel time comes early here; no follow-up spell has travel
+time. A unit the hit roll missed, or that refused every effect, gets none. A queued next-swing spell
+makes none when it is queued.
 
-A Follow-up Cast is a Triggered Cast and makes no Follow-up Cast of its own. That limit is one
-level deep: a trigger effect or a Proc that a Follow-up Cast starts is an ordinary Triggered Cast
-and can make Follow-up Casts. The import writes no such chain and Packages cannot claim the table,
-so current data cannot loop.
+A Follow-up Cast is a Triggered Cast. While one runs, no cast it leads to makes a Follow-up Cast,
+whether through a trigger effect, a Proc or a Chance on Hit, so a pair such as A follows up with B
+while B triggers A ends after one round. The guard holds only while the first Follow-up Cast and
+the casts it leads to run, and is released when they return. A later cast, in the same Durable
+Request or a later one such as a periodic tick of an Aura the follow-up applied, may follow up
+again.
 
 The spell import writes the rows from vmangos `spell_template.script_name`, by the script names in
 `SCRIPT_FOLLOW_UPS` (`importer/src/spell_overrides.rs`); such a spell is no `spells.script`
-finding. `spell_paladin_bubble` casts Forbearance (25771) after Divine Shield (642, 1020), Divine
-Protection (498, 5573) and Blessing of Protection (1022, 5599, 10278), so a second bubble on that
-unit is refused at the cast-start gate with `SPELL_FAILED_TARGET_AURASTATE`: Forbearance is an
-aura 77 immunity to mechanic 25 whose `p1` carries bit 0x100. Lay on Hands has no mechanic and no
-script at build 5875, so it neither applies Forbearance nor is refused by it.
+finding. Each follow-up spell is an aura 77 immunity to its spell's header mechanic whose `p1`
+carries bit 0x100, so the next such spell on that unit is refused at the cast-start gate with
+`SPELL_FAILED_TARGET_AURASTATE`, and an item that casts it is kept:
+
+| Script | Spells | Follow-up | Mechanic |
+| --- | --- | --- | --- |
+| `spell_paladin_bubble` | Divine Shield, Divine Protection, Blessing of Protection (7) | Forbearance (25771) | 25, invulnerability |
+| `spell_first_aid` | First Aid (19, the bandages) | Recently Bandaged (11196) | 16, bandage |
+| `spell_priest_power_word_shield` | Power Word: Shield (11 ranks) | Weakened Soul (6788) | 19, shield |
+
+Lay on Hands has no mechanic and no script at build 5875, so it neither applies Forbearance nor is
+refused by it.
+
+A Package may claim the table; [the Package API](./package-api.md) gives the rule. The spell
+import deletes and rewrites every row keyed by an imported spell, including a Package's row on
+one, and the Package reapply restores the Package's rows. The import is a fixed SQL plan whose
+statements commit one by one, so it cannot skip a row by what the Shard holds, while a Package
+apply is one transaction: a Package row that collides with an import row is refused there and
+nothing of that apply is written.
 
 ### Regeneration
 

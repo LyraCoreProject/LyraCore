@@ -420,8 +420,6 @@ pub(crate) fn remove_items(
     Ok(())
 }
 
-pub(crate) const RECENTLY_BANDAGED_SPELL: u32 = 11196;
-
 fn use_spell_for(tmpl: &ItemTemplate) -> Option<u32> {
     super::equip::spells(tmpl)
         .into_iter()
@@ -442,10 +440,6 @@ fn spell_keeps_item(ctx: &ReducerContext, spell_id: u32) -> bool {
             )
         });
     reusable_effect || crate::mount::spell_is_mount(ctx, spell_id)
-}
-
-fn bandage_cooldown_blocks(entry: u32, has_cooldown_debuff: bool) -> bool {
-    matches!(entry, 1251 | 2581) && has_cooldown_debuff
 }
 
 fn is_mana_class(ctx: &ReducerContext, player_guid: u64) -> bool {
@@ -535,12 +529,6 @@ pub(crate) fn apply_item_use_on(
             ItemRefusal::ItemNotUsable,
             format!("requires level {}", tmpl.required_level),
         ));
-    }
-    if bandage_cooldown_blocks(
-        inst.entry,
-        crate::spell::has_aura(ctx, player_guid, RECENTLY_BANDAGED_SPELL),
-    ) {
-        return Err(refuse(ItemRefusal::NotRightNow, "Recently Bandaged"));
     }
     // Energize restores rage or energy on non-mana classes, allowing out-of-combat preloading.
     if spell_restores_power(ctx, spell_id) && !is_mana_class(ctx, player_guid) {

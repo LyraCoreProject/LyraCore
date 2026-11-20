@@ -80,6 +80,12 @@ pub(super) fn form_claim(form_id: u32, operation: &str, fields: &str) -> String 
     )
 }
 
+pub(super) fn follow_up_claim(spell_id: u32, follow_up_spell_id: u32, operation: &str) -> String {
+    format!(
+        r#"{{"table":"game_spell_follow_up","key":{{"spell_id":{spell_id}}},"operation":"{operation}","fields":{{"follow_up_spell_id":{{"type":"u32","value":{follow_up_spell_id}}}}}}}"#
+    )
+}
+
 pub(super) fn form_spell_claim(form_id: u32, spell_id: u32) -> String {
     format!(
         r#"{{"table":"game_form_spell","key":{{"form_id":{form_id},"spell_id":{spell_id}}},"operation":"insert","fields":{{}}}}"#

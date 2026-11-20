@@ -184,7 +184,11 @@ pub fn named(name: &str) -> Option<&'static NamedSpell> {
 }
 
 /// The spell a vmangos spell script casts at each unit its spell hits, by script name.
-const SCRIPT_FOLLOW_UPS: &[(&str, u32)] = &[("spell_paladin_bubble", 25771)];
+const SCRIPT_FOLLOW_UPS: &[(&str, u32)] = &[
+    ("spell_paladin_bubble", 25771),
+    ("spell_first_aid", 11196),
+    ("spell_priest_power_word_shield", 6788),
+];
 
 pub fn script_follow_up(script_name: &str) -> Option<u32> {
     SCRIPT_FOLLOW_UPS
@@ -198,8 +202,6 @@ pub struct SpellIdOverride {
     pub name: &'static str,
     /// Mechanic for the control aura instead of the aura's own.
     pub control_mechanic: Option<i32>,
-    /// Debuff the absorb effect applies, which the source effect omits.
-    pub absorb_debuff: Option<i32>,
     /// Flat Seal damage on a synthetic effect in the first free slot.
     pub seal_damage: Option<i32>,
 }
@@ -209,14 +211,6 @@ pub const SPELL_ID_OVERRIDES: &[SpellIdOverride] = &[
         ids: &[1776, 1777, 8629, 11285, 11286],
         name: "Gouge",
         control_mechanic: Some(M_POLY),
-        absorb_debuff: None,
-        seal_damage: None,
-    },
-    SpellIdOverride {
-        ids: &[17],
-        name: "Power Word: Shield",
-        control_mechanic: None,
-        absorb_debuff: Some(6788),
         seal_damage: None,
     },
     // The client Dummy magnitude names a spell; the curated Seal marker needs flat damage.
@@ -224,7 +218,6 @@ pub const SPELL_ID_OVERRIDES: &[SpellIdOverride] = &[
         ids: &[21082],
         name: "Seal of the Crusader",
         control_mechanic: None,
-        absorb_debuff: None,
         seal_damage: Some(20),
     },
 ];

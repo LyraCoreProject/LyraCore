@@ -1,4 +1,4 @@
-use lyracore_shared::spell::taxonomy::{A_ABSORB, CAST_FLAG_RANGED_AUTO_REPEAT};
+use lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
 use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
@@ -10,18 +10,18 @@ use crate::{game_item_instance, game_item_template};
 
 use crate::spell::{
     apply_effect, aura_apply, break_channel, break_stealth, cost_gate_blocks, cost_refusal_reason,
-    effect_amount, faction_target_violation, has_aura, is_action_blocked, is_stealthed,
-    level_gate_blocks, recipe_reagents, select_targets, CastGateRefusal, CastHandle,
-    CastRefusalKind, CastRefusalReason, CastStart, FormRefusal, ItemGrantOutcome,
-    SpellCastEventKind, A_FLAG, A_MOUNTED, CAST_FLAG_BINARY, CAST_FLAG_CHANNELED,
-    CAST_FLAG_COMBO_FINISHER, CAST_FLAG_INCAP_OPENER, CAST_FLAG_MAGIC_HIT, CAST_FLAG_REQ_BEHIND,
-    CAST_FLAG_REQ_DAGGER, CAST_FLAG_REQ_OVERPOWER, CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH,
-    CAST_FLAG_STEALTH_SAFE, CAST_FLAG_WEAPON_PROCS, E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT,
-    E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING,
-    E_PERSISTENT_AREA, E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE,
-    E_WEAPON_STRIKE, HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME,
-    SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY,
-    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    effect_amount, faction_target_violation, is_action_blocked, is_stealthed, level_gate_blocks,
+    recipe_reagents, select_targets, CastGateRefusal, CastHandle, CastRefusalKind,
+    CastRefusalReason, CastStart, FormRefusal, ItemGrantOutcome, SpellCastEventKind, A_FLAG,
+    A_MOUNTED, CAST_FLAG_BINARY, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER,
+    CAST_FLAG_INCAP_OPENER, CAST_FLAG_MAGIC_HIT, CAST_FLAG_REQ_BEHIND, CAST_FLAG_REQ_DAGGER,
+    CAST_FLAG_REQ_OVERPOWER, CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH, CAST_FLAG_STEALTH_SAFE,
+    CAST_FLAG_WEAPON_PROCS, E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT, E_DUEL,
+    E_ENCHANT_ITEM_TEMPORARY, E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING, E_PERSISTENT_AREA,
+    E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE, E_WEAPON_STRIKE,
+    HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME, SPELL_ATTR_PASSIVE,
+    SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY, T_TARGET_ALLY,
+    T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use crate::{
     game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
@@ -211,7 +211,6 @@ pub(crate) enum CastOrigin {
     AuraTriggered,
     DeadCreatureCallbackTriggered,
     ChanceOnHit,
-    FollowUp,
 }
 
 impl CastOrigin {
@@ -222,7 +221,6 @@ impl CastOrigin {
                 | Self::AuraTriggered
                 | Self::DeadCreatureCallbackTriggered
                 | Self::ChanceOnHit
-                | Self::FollowUp
         )
     }
 
@@ -233,10 +231,6 @@ impl CastOrigin {
             Self::ChanceOnHit => hdr.negative(),
             _ => true,
         }
-    }
-
-    fn makes_follow_up(self) -> bool {
-        !matches!(self, Self::FollowUp)
     }
 
     fn allows_dead_self(self) -> bool {
@@ -607,8 +601,31 @@ fn run_spell_effects(
     );
     finish_items(craft);
     finish_weapon_hits(ctx, caster_guid, weapon_targets, shield_targets);
-    if origin.makes_follow_up() {
-        cast_follow_up(ctx, hdr.spell_id, caster_guid, level, &hit_targets);
+    cast_follow_up(ctx, hdr.spell_id, caster_guid, level, &hit_targets);
+}
+
+thread_local! {
+    // The reducer timestamp of a Follow-up Cast on the call stack; a stale one never matches.
+    static FOLLOW_UP_IN_PROGRESS: std::cell::Cell<Option<spacetimedb::Timestamp>> =
+        const { std::cell::Cell::new(None) };
+}
+
+struct FollowUpInProgress;
+
+impl FollowUpInProgress {
+    fn enter(ctx: &ReducerContext) -> Option<Self> {
+        FOLLOW_UP_IN_PROGRESS.with(|cell| {
+            (cell.get() != Some(ctx.timestamp)).then(|| {
+                cell.set(Some(ctx.timestamp));
+                Self
+            })
+        })
+    }
+}
+
+impl Drop for FollowUpInProgress {
+    fn drop(&mut self) {
+        FOLLOW_UP_IN_PROGRESS.with(|cell| cell.set(None));
     }
 }
 
@@ -620,7 +637,17 @@ fn cast_follow_up(
     level: u8,
     hit_targets: &[u64],
 ) {
+    if hit_targets.is_empty() {
+        return;
+    }
     let Some(follow_up) = ctx.db.game_spell_follow_up().spell_id().find(spell_id) else {
+        return;
+    };
+    let Some(_in_progress) = FollowUpInProgress::enter(ctx) else {
+        log::info!(
+            "spell {spell_id} follow-up {} skipped: it descends from a Follow-up Cast",
+            follow_up.follow_up_spell_id
+        );
         return;
     };
     let Ok(spell) = LoadedSpell::load(ctx, follow_up.follow_up_spell_id) else {
@@ -632,7 +659,8 @@ fn cast_follow_up(
     };
     for &target_guid in hit_targets {
         let request = CastRequest::new(caster_guid, spell.header.spell_id, level, target_guid);
-        if let Err(reason) = cast_triggered_with_origin(ctx, &request, &spell, CastOrigin::FollowUp)
+        if let Err(reason) =
+            cast_triggered_with_origin(ctx, &request, &spell, CastOrigin::Triggered)
         {
             log::info!(
                 "spell {spell_id} follow-up {} refused on {target_guid}: {reason}",
@@ -1536,16 +1564,6 @@ fn check_cast_gate_suffix(
     }
 
     check_unit_target(ctx, caster, effects, target_guid, spell_id)?;
-
-    if let Some(e) = effects
-        .iter()
-        .find(|e| e.kind == A_ABSORB && e.p1 != 0 && has_aura(ctx, target_guid, e.p1 as u32))
-    {
-        return Err(CastGateRefusal::other(CastRefusalReason::Unreported, format!(
-            "spell {spell_id} refused — target {target_guid} carries the linked debuff {} (Weakened-Soul-style lockout)",
-            e.p1
-        )));
-    }
 
     if let Some(e) = effects
         .iter()

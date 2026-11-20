@@ -639,8 +639,9 @@ _Avoid_: other unit, opponent
 
 **Follow-up Cast**:
 The Triggered Cast a spell's caster makes at each unit the spell hits, when the spell resolves,
-from `game_spell_follow_up`, as a vmangos spell script's `OnAfterHit` does. Divine Shield's Forbearance
-is one. It makes no Follow-up Cast of its own.
+from `game_spell_follow_up`, as a vmangos spell script's `OnHit` or `OnAfterHit` does. Divine
+Shield's Forbearance, a bandage's Recently Bandaged and Power Word: Shield's Weakened Soul are
+follow-ups. No cast a Follow-up Cast leads to in the same Durable Request makes another.
 _Avoid_: linked spell, after-hit cast
 
 **Triggered Cast**:

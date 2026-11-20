@@ -72,6 +72,7 @@ pub enum Table {
     Form,
     FormSpell,
     SpellForm,
+    SpellFollowUp,
 }
 
 impl Table {
@@ -119,6 +120,7 @@ impl Table {
         Self::Form,
         Self::FormSpell,
         Self::SpellForm,
+        Self::SpellFollowUp,
     ];
 
     #[must_use]
@@ -167,15 +169,19 @@ impl Table {
             Self::Form => "game_form",
             Self::FormSpell => "game_form_spell",
             Self::SpellForm => "game_spell_form",
+            Self::SpellFollowUp => "game_spell_follow_up",
         }
     }
 
     #[must_use]
     pub const fn family(self) -> &'static str {
         match self {
-            Self::Spell | Self::SpellEffect | Self::Form | Self::FormSpell | Self::SpellForm => {
-                SPELL_FAMILY
-            }
+            Self::Spell
+            | Self::SpellEffect
+            | Self::Form
+            | Self::FormSpell
+            | Self::SpellForm
+            | Self::SpellFollowUp => SPELL_FAMILY,
             Self::Item => ITEM_FAMILY,
             Self::Quest
             | Self::QuestText
@@ -259,6 +265,7 @@ impl Table {
             "game_form" => Some(Self::Form),
             "game_form_spell" => Some(Self::FormSpell),
             "game_spell_form" => Some(Self::SpellForm),
+            "game_spell_follow_up" => Some(Self::SpellFollowUp),
             _ => None,
         }
     }
@@ -309,6 +316,7 @@ impl Table {
             Self::Form => FORM_COLUMNS,
             Self::FormSpell => &[],
             Self::SpellForm => SPELL_FORM_COLUMNS,
+            Self::SpellFollowUp => SPELL_FOLLOW_UP_COLUMNS,
         }
     }
 
@@ -825,6 +833,8 @@ const FORM_COLUMNS: &[Column] = &[
 ];
 
 const SPELL_FORM_COLUMNS: &[Column] = &[column("excluded", FieldType::Bool)];
+
+const SPELL_FOLLOW_UP_COLUMNS: &[Column] = &[column("follow_up_spell_id", FieldType::U32)];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum FieldType {

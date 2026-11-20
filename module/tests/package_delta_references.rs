@@ -5,7 +5,9 @@ use lyracore_package_delta::fixture_ids::{
     SCENARIO_QUEST, TEST_WOLF_ENTRY,
 };
 use lyracore_shared::guid;
-use lyracore_shared::spell::taxonomy::{A_FORM_ENTRY_CHANCE, A_SHAPESHIFT, P_FORM};
+use lyracore_shared::spell::taxonomy::{
+    A_FORM_ENTRY_CHANCE, A_MOD_RESISTANCE, A_SHAPESHIFT, P_FORM, P_SCHOOL_MASK, RESIST_ARMOR,
+};
 use support::Standalone;
 
 const HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -1118,4 +1120,107 @@ fn a_plan_that_drops_the_spell_an_imported_form_was_pointed_at_is_refused() {
             "SELECT * FROM game_spell WHERE spell_id = {PACKAGE_SHIFT}"
         ))
         .is_empty());
+}
+
+const SEEDED_RENEW: u32 = 139;
+const PACKAGE_FOLLOW_UP: u32 = 6_000_101;
+
+/// A Package aura spell that raises its target's armour, built on the shapeshift spell's claims.
+fn follow_up_spell_insert(spell_id: u32) -> String {
+    other_spell_insert(spell_id, 0, true)
+        .replace(
+            &format!(r#""kind":{{"type":"u8","value":{A_SHAPESHIFT}}}"#),
+            &format!(r#""kind":{{"type":"u8","value":{A_MOD_RESISTANCE}}}"#),
+        )
+        .replace(
+            &format!(r#""p0":{{"type":"i32","value":{PACKAGE_FORM}}}"#),
+            &format!(r#""p0":{{"type":"i32","value":{RESIST_ARMOR}}}"#),
+        )
+        .replace(
+            &format!(r#""p0_kind":{{"type":"u8","value":{P_FORM}}}"#),
+            &format!(r#""p0_kind":{{"type":"u8","value":{P_SCHOOL_MASK}}}"#),
+        )
+}
+
+fn follow_up_claim(spell_id: u32, follow_up_spell_id: u32) -> String {
+    format!(
+        r#"{{"table":"game_spell_follow_up","key":{{"spell_id":{spell_id}}},"operation":"insert","fields":{{"follow_up_spell_id":{{"type":"u32","value":{follow_up_spell_id}}}}}}}"#
+    )
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_package_follow_up_on_an_imported_spell_casts_its_package_spell() {
+    let mut standalone = Standalone::start("package-delta-follow-up");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
+    standalone.assert_call("debug_spawn_player_entity", &["1"]);
+    standalone.assert_call("debug_set_level", &["1", "10"]);
+
+    let missing = apply(
+        &standalone,
+        "spell",
+        &artifact(
+            "example.follow_up",
+            &follow_up_claim(SEEDED_RENEW, PACKAGE_FOLLOW_UP),
+        ),
+    );
+    assert!(!missing.status.success());
+    assert!(
+        refusal_text(&missing).contains(&PACKAGE_FOLLOW_UP.to_string()),
+        "{}",
+        refusal_text(&missing)
+    );
+    let imported = apply(
+        &standalone,
+        "spell",
+        &artifact("example.follow_up", &follow_up_claim(SEEDED_RENEW, 133)),
+    );
+    assert!(
+        !imported.status.success(),
+        "the import owns a follow-up between imported spells"
+    );
+
+    let plan = artifact(
+        "example.follow_up",
+        &[
+            follow_up_spell_insert(PACKAGE_FOLLOW_UP),
+            follow_up_claim(SEEDED_RENEW, PACKAGE_FOLLOW_UP),
+        ]
+        .join(","),
+    );
+    standalone.insert_row(
+        "game_spell_follow_up",
+        &[("spell_id", &SEEDED_RENEW), ("follow_up_spell_id", &133u32)],
+    );
+    let collides = apply(&standalone, "spell", &plan);
+    assert!(
+        !collides.status.success() && refusal_text(&collides).contains("did not insert"),
+        "an import follow-up on the spell refuses the Package one: {}",
+        refusal_text(&collides)
+    );
+    assert!(
+        standalone
+            .query_rows(&format!(
+                "SELECT spell_id FROM game_spell WHERE spell_id = {PACKAGE_FOLLOW_UP}"
+            ))
+            .is_empty(),
+        "the refused plan writes nothing"
+    );
+    standalone.assert_sql(&format!(
+        "DELETE FROM game_spell_follow_up WHERE spell_id = {SEEDED_RENEW}"
+    ));
+
+    let accepted = apply(&standalone, "spell", &plan);
+    assert!(accepted.status.success(), "{}", refusal_text(&accepted));
+    standalone.assert_call("debug_cast_at", &["1", &SEEDED_RENEW.to_string(), "1"]);
+    assert!(
+        !standalone
+            .query_rows(&format!(
+                "SELECT id FROM game_aura WHERE spell_id = {PACKAGE_FOLLOW_UP} AND target_guid = 1"
+            ))
+            .is_empty(),
+        "Renew follows up with the Package spell on the unit it hit"
+    );
 }

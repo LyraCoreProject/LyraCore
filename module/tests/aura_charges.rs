@@ -1,14 +1,16 @@
 mod support;
 
-use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
+use lyracore_package_delta::fixture_ids::{
+    FIXTURE_BLADE, LINEN_BANDAGE_SPELL, TEST_POWER_WORD_SHIELD_SPELL, TEST_WOLF_ENTRY,
+};
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_INERT, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN,
     A_MOD_RESISTANCE, A_MOD_SPEED, A_PERIODIC_DAMAGE, A_SPELLMOD_FLAT, CAST_FLAG_CANNOT_CRIT,
     CAST_FLAG_IGNORE_RESISTANCES, CAST_FLAG_MAGIC_HIT, COMBAT_ATTACK_POWER, COMBAT_CRIT,
-    COMBAT_SPELL_CRIT, E_DAMAGE, E_INTERRUPT, M_FEAR, M_POLY, M_STUN, P_COMBAT_FIELD, P_MECHANIC,
-    P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST, SPEED_MOVE,
-    SPEED_SWING, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    COMBAT_SPELL_CRIT, E_DAMAGE, E_INTERRUPT, E_TRIGGER, M_FEAR, M_POLY, M_STUN, P_COMBAT_FIELD,
+    P_MECHANIC, P_NONE, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, RESIST_ARMOR, SPEED_CAST,
+    SPEED_MOVE, SPEED_SWING, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
@@ -103,6 +105,11 @@ const MECHANIC_INVULNERABILITY: u8 = 25;
 // The A_IMMUNITY p1 bit for SPELL_ATTR_EX_IMMUNITY_TO_HOSTILE_AND_FRIENDLY_EFFECTS.
 const IMMUNE_TO_HOSTILE_AND_FRIENDLY: i32 = 0x100;
 const BUBBLE_COOLDOWN_MS: u32 = 300_000;
+// The seeded follow-up spells: vmangos FirstAidScript and PriestPowerWordShieldScript.
+const RECENTLY_BANDAGED: u32 = 11196;
+const WEAKENED_SOUL: u32 = 6788;
+const LOOP_FIRST: u32 = 5_091_138;
+const LOOP_SECOND: u32 = 5_091_139;
 const FROST: u8 = 0x10;
 const SLOW_POINTS: i32 = -50;
 const BLEED_POINTS: i32 = 3;
@@ -966,6 +973,90 @@ fn an_interrupt_stops_a_silence_immune_creature_without_locking_its_school() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_bandage_leaves_recently_bandaged_and_the_next_bandage_is_refused() {
+    let mut standalone = Standalone::start("aura-charges-bandage");
+    stage(&mut standalone);
+
+    cast(&standalone, LINEN_BANDAGE_SPELL, PLAYER);
+    assert!(
+        stacks(&standalone, RECENTLY_BANDAGED).is_some(),
+        "vmangos FirstAidScript casts Recently Bandaged at the unit the bandage hit"
+    );
+    standalone.assert_sql(&format!(
+        "DELETE FROM game_aura WHERE spell_id = {LINEN_BANDAGE_SPELL}"
+    ));
+    assert_refused_as_immune(&standalone, LINEN_BANDAGE_SPELL, PLAYER);
+    assert_eq!(stacks(&standalone, LINEN_BANDAGE_SPELL), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn power_word_shield_leaves_weakened_soul_and_the_next_shield_is_refused_on_self_and_ally() {
+    let mut standalone = Standalone::start("aura-charges-weakened-soul");
+    stage(&mut standalone);
+    let ally = spawn_ally(&standalone);
+
+    for target in [PLAYER, ally] {
+        cast(&standalone, TEST_POWER_WORD_SHIELD_SPELL, target);
+        assert!(
+            aura_column(&standalone, target, WEAKENED_SOUL, "stacks").is_some(),
+            "vmangos PriestPowerWordShieldScript casts Weakened Soul at the shielded unit {target}"
+        );
+        standalone.assert_sql(&format!(
+            "DELETE FROM game_aura WHERE spell_id = {TEST_POWER_WORD_SHIELD_SPELL}"
+        ));
+        standalone.assert_sql("DELETE FROM game_global_cooldown");
+        assert_refused_as_immune(&standalone, TEST_POWER_WORD_SHIELD_SPELL, target);
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_follow_up_that_triggers_its_own_spell_stops_after_one_round() {
+    let mut standalone = Standalone::start("aura-charges-follow-up-loop");
+    stage(&mut standalone);
+    for spell_id in [LOOP_FIRST, LOOP_SECOND] {
+        aura_spell(
+            &standalone,
+            Charged {
+                spell_id,
+                school_mask: PHYSICAL,
+                target: T_SELF,
+                proc_flags: 0,
+                charges: 0,
+            },
+            &[(A_MOD_RESISTANCE, 1, i32::from(RESIST_ARMOR), P_SCHOOL_MASK)],
+        );
+    }
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(LOOP_SECOND, 1)),
+            ("spell_id", &LOOP_SECOND),
+            ("effect_index", &1u8),
+            ("kind", &E_TRIGGER),
+            ("target", &T_SELF),
+            ("trigger_spell", &LOOP_FIRST),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_follow_up",
+        &[
+            ("spell_id", &LOOP_FIRST),
+            ("follow_up_spell_id", &LOOP_SECOND),
+        ],
+    );
+
+    cast(&standalone, LOOP_FIRST, PLAYER);
+    assert!(stacks(&standalone, LOOP_FIRST).is_some());
+    assert!(
+        stacks(&standalone, LOOP_SECOND).is_some(),
+        "the follow-up runs once, and the spell it triggers makes no second follow-up"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn divine_shield_applies_forbearance_to_its_caster() {
     let mut standalone = Standalone::start("aura-charges-forbearance");
     stage(&mut standalone);
@@ -990,7 +1081,7 @@ fn a_second_divine_shield_is_refused_while_forbearance_lasts() {
         "DELETE FROM game_aura WHERE spell_id = {DIVINE_SHIELD}"
     ));
 
-    assert_bubble_refused(&standalone, DIVINE_SHIELD, PLAYER);
+    assert_refused_as_immune(&standalone, DIVINE_SHIELD, PLAYER);
     assert_eq!(stacks(&standalone, DIVINE_SHIELD), None);
 }
 
@@ -1015,7 +1106,7 @@ fn blessing_of_protection_on_an_ally_under_forbearance_is_refused_before_its_coo
         &format!("cooldown_ms = {BUBBLE_COOLDOWN_MS}"),
     );
 
-    assert_bubble_refused(&standalone, BLESSING_OF_PROTECTION, ally);
+    assert_refused_as_immune(&standalone, BLESSING_OF_PROTECTION, ally);
     assert!(
         standalone
             .query_rows(&format!(
@@ -1646,7 +1737,7 @@ fn bubble(standalone: &Standalone, spell_id: u32, target: u8) {
     );
 }
 
-fn assert_bubble_refused(standalone: &Standalone, spell_id: u32, target: u64) {
+fn assert_refused_as_immune(standalone: &Standalone, spell_id: u32, target: u64) {
     let output = standalone.call(
         "debug_begin_cast",
         &[
@@ -1662,7 +1753,7 @@ fn assert_bubble_refused(standalone: &Standalone, spell_id: u32, target: u64) {
     );
     assert!(
         !output.status.success() && text.contains("is immune to its mechanic"),
-        "vmangos Spell::CheckCast refuses the bubble with TARGET_AURASTATE under Forbearance: {text}"
+        "vmangos Spell::CheckCast refuses a helpful spell of an immune mechanic with TARGET_AURASTATE: {text}"
     );
 }
 
