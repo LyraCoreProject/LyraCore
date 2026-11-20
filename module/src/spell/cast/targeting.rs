@@ -14,9 +14,8 @@ use crate::skilldata::game_skill_ability;
 
 use crate::script_binding::game_script;
 use crate::{
-    game_aura, game_ground_area, game_pending_spell_impact, game_spell, game_spell_effect,
-    game_spell_reagent, Aura, GroundArea, PendingSpellImpact, ResurrectRequest, Spell,
-    SpellCastEvent, SpellEffect,
+    game_aura, game_ground_area, game_pending_spell_impact, game_spell, game_spell_reagent, Aura,
+    GroundArea, PendingSpellImpact, ResurrectRequest, Spell, SpellCastEvent, SpellEffect,
 };
 
 #[derive(Clone, Copy, Default)]
@@ -671,47 +670,6 @@ pub(crate) fn aura_apply(
     }
 }
 
-pub(crate) fn apply_linked_debuff(
-    ctx: &ReducerContext,
-    linked_spell_id: u32,
-    caster_guid: u64,
-    target_guid: u64,
-    level: u8,
-) {
-    let Some(linked_hdr) = ctx.db.game_spell().spell_id().find(linked_spell_id) else {
-        log::info!("linked debuff {linked_spell_id} has no game_spell header — skipped");
-        return;
-    };
-    for e in ctx
-        .db
-        .game_spell_effect()
-        .by_spell()
-        .filter(&linked_spell_id)
-        .filter(|e| e.kind & KIND_AURA_BIT != 0)
-    {
-        let points = effect_amount(
-            e.base_points,
-            e.die_sides,
-            e.per_level,
-            level as u32,
-            linked_hdr.spell_level,
-            linked_hdr.max_level,
-            ctx.random::<u32>(),
-        );
-        aura_apply(
-            ctx,
-            &e,
-            &linked_hdr,
-            caster_guid,
-            target_guid,
-            target_guid,
-            level,
-            points,
-            0,
-        );
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn apply_effect(
     ctx: &ReducerContext,
@@ -939,9 +897,6 @@ fn apply_aura_effect(
         points,
         0,
     );
-    if e.kind == A_ABSORB && e.p1 != 0 {
-        apply_linked_debuff(ctx, e.p1 as u32, caster_guid, target_guid, level);
-    }
     // Check action blocking after placement so the new control aura participates.
     if e.kind == A_CONTROL && is_action_blocked(ctx, target_guid) {
         break_channel(ctx, target_guid);

@@ -380,10 +380,40 @@ rung = "unit"
 
 [[tests]]
 path = "importer/src/spell.rs"
-function = "actual_bubbles_follow_up_with_forbearance_and_lay_on_hands_does_not"
+function = "actual_script_follow_ups_bind_exactly_their_vmangos_spells"
 rung = "durable_module"
 
 [[tests]]
 path = "importer/src/spell.rs"
 function = "actual_imported_bubbles_leave_forbearance_and_refuse_a_second_bubble"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_bandage_leaves_recently_bandaged_and_the_next_bandage_is_refused"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "power_word_shield_leaves_weakened_soul_and_the_next_shield_is_refused_on_self_and_ally"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/aura_charges.rs"
+function = "a_follow_up_that_triggers_its_own_spell_stops_after_one_round"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/package_delta_references.rs"
+function = "a_package_follow_up_on_an_imported_spell_casts_its_package_spell"
+rung = "durable_module"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "actual_imported_bandage_and_shield_follow_up_and_refuse_the_next_one"
+rung = "durable_module"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "a_bandage_follows_up_with_recently_bandaged_and_has_no_synthetic_trigger"
+rung = "unit"

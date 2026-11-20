@@ -485,6 +485,12 @@ pub fn form_spell_claim(form_id: u32, spell_id: u32, operation: &str) -> String 
 }
 
 #[must_use]
+pub fn spell_follow_up_claim(spell_id: u32, follow_up_spell_id: u32, operation: &str) -> String {
+    format!(
+        r#"{{"table":"game_spell_follow_up","key":{{"spell_id":{spell_id}}},"operation":"{operation}","fields":{{"follow_up_spell_id":{{"type":"u32","value":{follow_up_spell_id}}}}}}}"#
+    )
+}
+
 pub fn spell_form_claim(spell_id: u32, form_id: u32, operation: &str, excluded: bool) -> String {
     format!(
         r#"{{"table":"game_spell_form","key":{{"spell_id":{spell_id},"form_id":{form_id}}},"operation":"{operation}","fields":{{"excluded":{{"type":"bool","value":{excluded}}}}}}}"#

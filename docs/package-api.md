@@ -692,7 +692,7 @@ apply clears the whole band before it writes.
 | --- | --- | --- | --- |
 | Operator Template Range | Operator Content API, not a Package band | 5,200,500 to 5,999,999 | Template `entry`; currently item templates only. Imports must not write here. |
 | Package Script Range | script | 100,000 to 999,999 | `game_script` identifier |
-| Package Spell Range | spell | 6,000,000 to 6,999,999 | spell id, for `game_spell` and `game_spell_effect` |
+| Package Spell Range | spell | 6,000,000 to 6,999,999 | spell id, for `game_spell`, `game_spell_effect` and `game_spell_follow_up` |
 | Package Item Range | items | 7,000,000 to 7,999,999 | `game_item_template.entry` |
 | Package Quest Range | quest | 8,000,000 to 8,999,999 | `quest_entry` |
 | Package Loot Range | loot | 9,000,000 to 9,999,999 | the loot row's own identifier |
@@ -774,6 +774,13 @@ identifier must fit 24 bits.
     `spell` base import first, which returns an updated imported Form to its base `spell_id`, so
     this refusal fires only for a plan applied without that replay;
   - a passive or Form Set row names a missing spell or Form.
+- **Follow-up Cast.** `game_spell_follow_up` names the spell a caster casts at each unit its spell
+  hits ([follow-up casts](./schema.md#follow-up-casts)). A row is Package-owned when its
+  `spell_id` or its `follow_up_spell_id` is a Package spell. So a Package may give its own spell any
+  follow-up, and give an imported spell a follow-up that casts a Package spell; the spell import
+  keeps that row. A claim on an imported spell that names an imported follow-up spell is refused,
+  because the import owns those rows, and an insert on an imported spell that already has one fails.
+  After its writes, the apply refuses a row whose spell or follow-up spell does not exist.
 - **EventAI.** Covers `game_creature_ai_broadcast_text.id`, `game_creature_ai_summon.id` and
   `game_quest_event_requirement.id`. The family's scripted definitions are not claimable: a
   definition carries a creature's whole rule set as a nested payload, which no claimed column can

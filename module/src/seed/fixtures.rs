@@ -10,13 +10,15 @@ use spacetimedb::{ReducerContext, Table};
 
 use crate::{
     game_createinfo_spell, game_creature_family, game_creature_spawn, game_creature_template,
-    game_faction, game_item_template, game_spell, game_spell_effect, game_spell_proc_event,
-    game_taxi_node, game_taxi_path, game_taxi_path_node, CreateinfoSpell, CreatureFamily,
-    CreatureSpawn, CreatureTemplate, Faction, GameTaxiNode, GameTaxiPath, GameTaxiPathNode,
-    ItemTemplate, Spell, SpellEffect, SpellProcEvent,
+    game_faction, game_item_template, game_spell, game_spell_effect, game_spell_follow_up,
+    game_spell_proc_event, game_taxi_node, game_taxi_path, game_taxi_path_node, CreateinfoSpell,
+    CreatureFamily, CreatureSpawn, CreatureTemplate, Faction, GameTaxiNode, GameTaxiPath,
+    GameTaxiPathNode, ItemTemplate, Spell, SpellEffect, SpellProcEvent,
 };
 
 const TEST_TAME_BOAR_FAMILY: u32 = 5;
+// vmangos SharedDefines.h MECHANIC_SHIELD.
+const MECHANIC_SHIELD: u8 = 19;
 const TEST_HUNTER_CLASS: u8 = 3;
 
 pub(crate) fn test_wolf_template() -> CreatureTemplate {
@@ -347,8 +349,9 @@ pub(crate) fn seed_weakened_soul(ctx: &ReducerContext) {
             kind: 0xB1,
             base_points: 1,
             target: 2,
-            p0: 19,
+            p0: i32::from(MECHANIC_SHIELD),
             p0_kind: 3,
+            p1: crate::seed::MECHANIC_IMMUNITY_TO_BOTH_POLARITIES,
             ..SpellEffect::blank(6788, 1)
         },
     );
@@ -362,12 +365,14 @@ pub(crate) fn seed_pw_shield_fixture(ctx: &ReducerContext) {
         .find(TEST_POWER_WORD_SHIELD_SPELL)
     {
         s.duration_ms = 30000;
+        s.mechanic = MECHANIC_SHIELD;
         ctx.db.game_spell().spell_id().update(s);
     } else {
         ctx.db.game_spell().insert(Spell {
             range_yd: 30,
             duration_ms: 30000,
             school_mask: 2,
+            mechanic: MECHANIC_SHIELD,
             ..Spell::blank(TEST_POWER_WORD_SHIELD_SPELL, "Test Power Word: Shield")
         });
     }
@@ -379,10 +384,19 @@ pub(crate) fn seed_pw_shield_fixture(ctx: &ReducerContext) {
             target: 2,
             p0: 2,
             p0_kind: 2,
-            p1: 6788,
             ..SpellEffect::blank(TEST_POWER_WORD_SHIELD_SPELL, 0)
         },
     );
+    let follow_up = crate::SpellFollowUp {
+        spell_id: TEST_POWER_WORD_SHIELD_SPELL,
+        follow_up_spell_id: 6788,
+    };
+    let follow_ups = ctx.db.game_spell_follow_up();
+    if follow_ups.spell_id().find(follow_up.spell_id).is_some() {
+        follow_ups.spell_id().update(follow_up);
+    } else {
+        follow_ups.insert(follow_up);
+    }
 }
 
 pub(crate) fn seed_soul_shard_item(ctx: &ReducerContext) {

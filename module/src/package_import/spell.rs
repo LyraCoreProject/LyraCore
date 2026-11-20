@@ -10,7 +10,9 @@ use lyracore_shared::spell::taxonomy::{A_FORM_ENTRY_CHANCE, A_SHAPESHIFT, SPELL_
 use crate::form::tables::FormSpell;
 use crate::form::{game_form, game_form_spell, Form};
 use crate::spell::tables::{game_spell_form, SpellForm};
-use crate::{game_spell, game_spell_effect, Spell, SpellEffect};
+use crate::{
+    game_spell, game_spell_effect, game_spell_follow_up, Spell, SpellEffect, SpellFollowUp,
+};
 
 use super::{
     as_bool, as_f32, as_i32, as_str, as_u16, as_u32, as_u64, as_u8, check_insert_is_whole,
@@ -24,8 +26,40 @@ pub(super) const OPS: ClaimOps = ClaimOps {
     check_references: None,
     clear_package_range,
     write_row,
-    after_write: Some(check_form_rows),
+    after_write: Some(check_written_rows),
 };
+
+fn check_written_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+    check_form_rows(ctx, rows)?;
+    check_follow_up_rows(ctx, rows)
+}
+
+/// Refuses a follow-up whose spell or follow-up spell does not exist after the plan.
+fn check_follow_up_rows(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), String> {
+    let spells = ctx.db.game_spell();
+    for row in rows {
+        let PrimaryKey::SpellFollowUp { spell_id } = row.key() else {
+            continue;
+        };
+        let follow_up = ctx
+            .db
+            .game_spell_follow_up()
+            .spell_id()
+            .find(spell_id)
+            .ok_or_else(|| {
+                format!(
+                    "`game_spell_follow_up` row {} vanished mid-apply",
+                    row.key()
+                )
+            })?;
+        for named in [spell_id, follow_up.follow_up_spell_id] {
+            if spells.spell_id().find(named).is_none() {
+                return Err(missing_reference(row, "spell", named));
+            }
+        }
+    }
+    Ok(())
+}
 
 // The melee schedule fires every 100 ms. Each swing waits for the next tick and the next swing
 // counts from there, so the delay accumulates: a swing at this floor lands up to a fifth late.
@@ -208,6 +242,12 @@ fn row_is_present(ctx: &ReducerContext, row: &TracedRow) -> bool {
             .is_some(),
         ClaimTable::FormSpell => ctx.db.game_form_spell().id().find(row.row_id()).is_some(),
         ClaimTable::SpellForm => ctx.db.game_spell_form().id().find(row.row_id()).is_some(),
+        ClaimTable::SpellFollowUp => ctx
+            .db
+            .game_spell_follow_up()
+            .spell_id()
+            .find(row.key().spell_id())
+            .is_some(),
         other => unreachable!(
             "`check_claims_belong_to` refuses a non-spell row before the spell family's dispatch \
              runs, found {other}"
@@ -220,11 +260,28 @@ fn in_package_range(row: &TracedRow) -> bool {
         ClaimTable::Form | ClaimTable::FormSpell | ClaimTable::SpellForm => {
             is_package_form_id(row.key().form_id())
         }
+        ClaimTable::SpellFollowUp => {
+            is_package_spell_id(row.key().spell_id())
+                || matches!(
+                    row.fields().get("follow_up_spell_id").map(|claimed| &claimed.value),
+                    Some(FieldValue::U32(follow_up)) if is_package_spell_id(*follow_up)
+                )
+        }
         _ => is_package_spell_id(row.key().spell_id()),
     }
 }
 
 fn clear_package_range(ctx: &ReducerContext) {
+    let follow_ups = ctx.db.game_spell_follow_up();
+    let stale_follow_ups: Vec<u32> = follow_ups
+        .iter()
+        .filter(is_package_follow_up)
+        .map(|row| row.spell_id)
+        .collect();
+    for spell_id in stale_follow_ups {
+        follow_ups.spell_id().delete(spell_id);
+    }
+
     let effects = ctx.db.game_spell_effect();
     let stale_effects: Vec<u64> = effects
         .iter()
@@ -374,6 +431,38 @@ fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
                 .try_insert(form_set)
                 .map_err(|e| format!("`game_spell_form` row {} did not insert: {e}", row.key()))?;
         }
+        (ClaimTable::SpellFollowUp, Operation::Insert) => {
+            check_insert_is_whole(row)?;
+            let mut follow_up = blank_spell_follow_up(row.key().spell_id());
+            for (field, claimed) in row.fields() {
+                apply_spell_follow_up_field(&mut follow_up, field, &claimed.value)?;
+            }
+            ctx.db
+                .game_spell_follow_up()
+                .try_insert(follow_up)
+                .map_err(|e| {
+                    format!(
+                        "`game_spell_follow_up` row {} did not insert: {e}",
+                        row.key()
+                    )
+                })?;
+        }
+        (ClaimTable::SpellFollowUp, Operation::Update) => {
+            let follow_ups = ctx.db.game_spell_follow_up();
+            let mut follow_up = follow_ups
+                .spell_id()
+                .find(row.key().spell_id())
+                .ok_or_else(|| {
+                    format!(
+                        "`game_spell_follow_up` row {} vanished mid-apply",
+                        row.key()
+                    )
+                })?;
+            for (field, claimed) in row.fields() {
+                apply_spell_follow_up_field(&mut follow_up, field, &claimed.value)?;
+            }
+            follow_ups.spell_id().update(follow_up);
+        }
         (ClaimTable::SpellForm, Operation::Update) => {
             let form_sets = ctx.db.game_spell_form();
             let mut form_set = form_sets
@@ -389,6 +478,30 @@ fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
             "`check_claims_belong_to` refuses a non-spell row before the spell family's dispatch \
              runs, found {other}"
         ),
+    }
+    Ok(())
+}
+
+/// A Package owns a follow-up of its own spell, or one that casts its own spell.
+fn is_package_follow_up(row: &SpellFollowUp) -> bool {
+    is_package_spell_id(row.spell_id) || is_package_spell_id(row.follow_up_spell_id)
+}
+
+fn blank_spell_follow_up(spell_id: u32) -> SpellFollowUp {
+    SpellFollowUp {
+        spell_id,
+        follow_up_spell_id: 0,
+    }
+}
+
+fn apply_spell_follow_up_field(
+    follow_up: &mut SpellFollowUp,
+    field: &str,
+    value: &FieldValue,
+) -> Result<(), String> {
+    match field {
+        "follow_up_spell_id" => follow_up.follow_up_spell_id = as_u32(field, value)?,
+        other => return Err(no_such_column("game_spell_follow_up", other)),
     }
     Ok(())
 }
@@ -568,7 +681,7 @@ fn built_spell_effect(row: &TracedRow) -> Result<SpellEffect, String> {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, assert_each_column_sets_its_own_field, effect_claim, form_claim,
+        artifact, assert_each_column_sets_its_own_field, effect_claim, follow_up_claim, form_claim,
         form_spell_claim, plan, spell_claim, PACKAGE_FORM, PACKAGE_SPELL, REAL_FORM, REAL_SPELL,
         WHOLE_EFFECT_ROW, WHOLE_SPELL_ROW,
     };
@@ -600,6 +713,36 @@ mod tests {
             ClaimTable::Form,
             || blank_form(PACKAGE_FORM),
             apply_form_field,
+        );
+    }
+
+    #[test]
+    fn a_follow_up_row_is_a_package_row_exactly_when_it_names_a_package_spell() {
+        let plan = plan(&[artifact(
+            "example.bubble",
+            &[
+                follow_up_claim(PACKAGE_SPELL, REAL_SPELL, "insert"),
+                follow_up_claim(REAL_SPELL, PACKAGE_SPELL, "insert"),
+            ]
+            .join(","),
+        )])
+        .expect("plan builds");
+
+        let in_range: Vec<bool> = plan.rows.iter().map(in_package_range).collect();
+
+        assert_eq!(in_range, [true, true]);
+        assert!(!is_package_follow_up(&SpellFollowUp {
+            spell_id: REAL_SPELL,
+            follow_up_spell_id: 25771,
+        }));
+    }
+
+    #[test]
+    fn every_claimable_follow_up_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::SpellFollowUp,
+            || blank_spell_follow_up(PACKAGE_SPELL),
+            apply_spell_follow_up_field,
         );
     }
 

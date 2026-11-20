@@ -45,7 +45,8 @@ fn write_key(out: &mut String, key: PrimaryKey) {
     match key {
         PrimaryKey::Spell { spell_id }
         | PrimaryKey::SpellChain { spell_id }
-        | PrimaryKey::SpellProcEvent { spell_id } => {
+        | PrimaryKey::SpellProcEvent { spell_id }
+        | PrimaryKey::SpellFollowUp { spell_id } => {
             write_members(out, &[("spell_id", spell_id.into())]);
         }
         PrimaryKey::SpellEffect {

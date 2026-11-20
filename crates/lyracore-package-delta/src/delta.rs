@@ -6,7 +6,7 @@ use serde_json::{Map, Value};
 use crate::canonical;
 use crate::error::DeltaError;
 use crate::ids::{
-    is_fixture_reserved_id, packed_class_level_id, packed_creature_spawn_guid,
+    is_fixture_reserved_id, is_package_spell_id, packed_class_level_id, packed_creature_spawn_guid,
     packed_form_spell_id, packed_gameobject_spawn_guid, packed_quest_objective_id,
     packed_quest_reward_choice_id, packed_quest_reward_item_id, packed_race_class_id,
     packed_race_class_level_id, packed_spell_effect_id, packed_spell_form_id, PackageRange,
@@ -214,6 +214,9 @@ pub enum PrimaryKey {
         id: u64,
     },
     SpellProcEvent {
+        spell_id: u32,
+    },
+    SpellFollowUp {
         spell_id: u32,
     },
     CreatureTemplate {
@@ -541,6 +544,16 @@ impl PrimaryKey {
         Ok(Self::SpellProcEvent { spell_id })
     }
 
+    pub fn spell_follow_up(spell_id: u32) -> Result<Self, DeltaError> {
+        check_claimable(
+            PackageRange::Spell,
+            Table::SpellFollowUp,
+            "spell_id",
+            u64::from(spell_id),
+        )?;
+        Ok(Self::SpellFollowUp { spell_id })
+    }
+
     pub fn creature_template(entry: u32) -> Result<Self, DeltaError> {
         check_claimable_creature_entry(Table::CreatureTemplate, "entry", entry)?;
         Ok(Self::CreatureTemplate { entry })
@@ -655,7 +668,8 @@ impl PrimaryKey {
             Self::Spell { spell_id }
             | Self::SpellEffect { spell_id, .. }
             | Self::SpellChain { spell_id }
-            | Self::SpellProcEvent { spell_id } => (PackageRange::Spell, u64::from(spell_id)),
+            | Self::SpellProcEvent { spell_id }
+            | Self::SpellFollowUp { spell_id } => (PackageRange::Spell, u64::from(spell_id)),
             Self::Item { entry } => (PackageRange::Item, u64::from(entry)),
             Self::Quest { entry: quest_entry }
             | Self::QuestText { quest_entry }
@@ -740,6 +754,7 @@ impl PrimaryKey {
             Self::SpellChain { .. } => Table::SpellChain,
             Self::SpellLearn { .. } => Table::SpellLearn,
             Self::SpellProcEvent { .. } => Table::SpellProcEvent,
+            Self::SpellFollowUp { .. } => Table::SpellFollowUp,
             Self::CreatureTemplate { .. } => Table::CreatureTemplate,
             Self::CreatureSpawn { .. } => Table::CreatureSpawn,
             Self::GameobjectTemplate { .. } => Table::GameobjectTemplate,
@@ -792,6 +807,7 @@ impl PrimaryKey {
             | Self::SpellChain { .. }
             | Self::SpellLearn { .. }
             | Self::SpellProcEvent { .. }
+            | Self::SpellFollowUp { .. }
             | Self::CreatureTemplate { .. }
             | Self::GameobjectTemplate { .. }
             | Self::GameobjectTrap { .. }
@@ -807,7 +823,9 @@ impl PrimaryKey {
     #[must_use]
     pub fn spell_id(self) -> u32 {
         match self {
-            Self::Spell { spell_id } | Self::SpellEffect { spell_id, .. } => spell_id,
+            Self::Spell { spell_id }
+            | Self::SpellEffect { spell_id, .. }
+            | Self::SpellFollowUp { spell_id } => spell_id,
             _ => unreachable!(
                 "`spell_id` is a spell-family accessor; a foreign-family key never reaches it"
             ),
@@ -846,7 +864,8 @@ impl PrimaryKey {
         match self {
             Self::Spell { spell_id }
             | Self::SpellChain { spell_id }
-            | Self::SpellProcEvent { spell_id } => spell_id as u64,
+            | Self::SpellProcEvent { spell_id }
+            | Self::SpellFollowUp { spell_id } => spell_id as u64,
             Self::SpellEffect {
                 spell_id,
                 effect_index,
@@ -969,7 +988,9 @@ impl fmt::Display for PrimaryKey {
                 write!(f, "{{row_id={row_id}}}")
             }
             Self::AreatriggerTeleport { trigger_id } => write!(f, "{{trigger_id={trigger_id}}}"),
-            Self::SpellChain { spell_id } | Self::SpellProcEvent { spell_id } => {
+            Self::SpellChain { spell_id }
+            | Self::SpellProcEvent { spell_id }
+            | Self::SpellFollowUp { spell_id } => {
                 write!(f, "{{spell_id={spell_id}}}")
             }
             Self::CreatureTemplate { entry }
@@ -994,6 +1015,30 @@ impl fmt::Display for PrimaryKey {
                 write!(f, "{{spell_id={spell_id}, form_id={form_id}}}")
             }
         }
+    }
+}
+
+/// A follow-up keyed by an imported spell is the Package's when it names a Package spell.
+fn check_follow_up_owner(
+    key: PrimaryKey,
+    fields: &BTreeMap<String, FieldValue>,
+) -> Result<bool, DeltaError> {
+    let PrimaryKey::SpellFollowUp { spell_id } = key else {
+        return Ok(false);
+    };
+    if is_package_spell_id(spell_id) {
+        return Ok(false);
+    }
+    match fields.get("follow_up_spell_id") {
+        Some(FieldValue::U32(follow_up)) if is_package_spell_id(*follow_up) => Ok(true),
+        Some(FieldValue::U32(follow_up)) => Err(DeltaError::IdOutsidePackageRange {
+            range: PackageRange::Spell,
+            id: u64::from(*follow_up),
+        }),
+        _ => Err(DeltaError::IdOutsidePackageRange {
+            range: PackageRange::Spell,
+            id: 0,
+        }),
     }
 }
 
@@ -1113,7 +1158,8 @@ impl Claim {
         fields: BTreeMap<String, FieldValue>,
     ) -> Result<Self, DeltaError> {
         let table = key.table();
-        if operation == Operation::Insert {
+        let owned_by_follow_up = check_follow_up_owner(key, &fields)?;
+        if operation == Operation::Insert && !owned_by_follow_up {
             check_inventable(key)?;
         }
 
@@ -1199,7 +1245,9 @@ impl Claim {
 
 fn is_key_column(table: Table, name: &str) -> bool {
     match table {
-        Table::Spell | Table::SpellChain | Table::SpellProcEvent => name == "spell_id",
+        Table::Spell | Table::SpellChain | Table::SpellProcEvent | Table::SpellFollowUp => {
+            name == "spell_id"
+        }
         Table::SpellEffect => matches!(name, "id" | "spell_id" | "effect_index"),
         Table::Item
         | Table::Quest
@@ -1390,6 +1438,7 @@ impl PackageDelta {
                     | Table::SpellChain
                     | Table::SpellLearn
                     | Table::SpellProcEvent
+                    | Table::SpellFollowUp
                     | Table::CreatureTemplate
                     | Table::CreatureSpawn
                     | Table::GameobjectTemplate
@@ -1453,7 +1502,9 @@ fn parse_claim(value: &Value, index: usize) -> Result<Claim, DeltaError> {
 
 fn expected_key_members(table: Table) -> &'static [&'static str] {
     match table {
-        Table::Spell | Table::SpellChain | Table::SpellProcEvent => &["spell_id"],
+        Table::Spell | Table::SpellChain | Table::SpellProcEvent | Table::SpellFollowUp => {
+            &["spell_id"]
+        }
         Table::SpellEffect => &["effect_index", "spell_id"],
         Table::Item
         | Table::Quest
@@ -1585,6 +1636,7 @@ fn build_key(key: &Map<String, Value>, table: Table) -> Result<PrimaryKey, Delta
         Table::SpellChain => PrimaryKey::spell_chain(key_u32(key, table, "spell_id")?),
         Table::SpellLearn => PrimaryKey::spell_learn(key_u64(key, table, "id")?),
         Table::SpellProcEvent => PrimaryKey::spell_proc_event(key_u32(key, table, "spell_id")?),
+        Table::SpellFollowUp => PrimaryKey::spell_follow_up(key_u32(key, table, "spell_id")?),
         Table::CreatureTemplate => PrimaryKey::creature_template(key_u32(key, table, "entry")?),
         Table::CreatureSpawn => PrimaryKey::creature_spawn(
             key_u32(key, table, "map_id")?,

@@ -38,7 +38,7 @@ use lyracore_importer::spell_kind::{
 use lyracore_importer::spell_overrides::{self, NamedSpell};
 use std::path::Path;
 
-use lyracore_package_delta::ids::PACKAGE_FORM_ID_FLOOR;
+use lyracore_package_delta::ids::{PACKAGE_FORM_ID_FLOOR, PACKAGE_SPELL_ID_FLOOR};
 use lyracore_shared::packing::power_type;
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_CONTROL, A_DAMAGE_SHIELD, A_FLAG, A_FORM_ENTRY_CHANCE, A_FORM_POWER_RETAINED,
@@ -208,9 +208,6 @@ fn is_aura_effect(effect_id: i32) -> bool {
     )
 }
 
-const MECHANIC_BANDAGE: u32 = 16;
-const RECENTLY_BANDAGED: u32 = 11196;
-
 // EffectBasePoints stores the nominal integer amount minus one.
 fn dbc_flat_amount(raw: i32) -> i32 {
     raw + 1
@@ -279,25 +276,6 @@ fn synthetic_seal_effect(spell_id: u32, name: &str, used_index: u8) -> Option<Sp
         base_points: damage,
         ..blank_effect(spell_id, used_index)
     })
-}
-
-// Bandage effects omit their linked Recently Bandaged debuff.
-fn recently_bandaged_effect(s: &Spell, target: u8, used_index: u8) -> Option<SpellEffectRow> {
-    (s.mechanic == MECHANIC_BANDAGE).then(|| SpellEffectRow {
-        kind: E_TRIGGER,
-        target,
-        trigger_spell: RECENTLY_BANDAGED,
-        ..blank_effect(s.id, used_index)
-    })
-}
-
-fn absorb_debuff_p1(spell_id: u32, name: &str, kind: u8) -> i32 {
-    if kind != A_ABSORB {
-        return 0;
-    }
-    spell_overrides::by_id(spell_id, name)
-        .and_then(|spell| spell.absorb_debuff)
-        .unwrap_or(0)
 }
 
 // Store EffectMultipleValue in hundredths: 0.5 becomes 50.
@@ -1020,7 +998,6 @@ fn push_spell_effect_rows(
         weapon_strike_row(s, &resolved)
     };
     let mut used_slots = [false; 4];
-    let mut healed_target = T_SELF;
     for (i, effect) in resolved {
         let effect_id = s.effect[i];
         used_slots[i] = true;
@@ -1065,9 +1042,6 @@ fn push_spell_effect_rows(
             None => (kind, p0, p0_kind),
         };
         let target = resolve_effect_target(s, i, kind, header);
-        if kind == A_PERIODIC_HEAL {
-            healed_target = target;
-        }
         let radius_yd = if s.effect_radius[i] > 0 {
             dbc.radii
                 .get(SpellRadiusKey::new(s.effect_radius[i]))
@@ -1111,7 +1085,7 @@ fn push_spell_effect_rows(
         } else if let Some(row) = strike_row {
             i32::from(row.normalized)
         } else {
-            absorb_debuff_p1(spell_id, name, kind)
+            0
         };
         let script_id = 0u32;
         let enters_combat = header.overrides.is_some_and(|spell| spell.enters_combat);
@@ -1164,9 +1138,7 @@ fn push_spell_effect_rows(
     }
 
     let synth_slot = used_slots.iter().position(|&u| !u).unwrap_or(3) as u8;
-    let synth = synthetic_seal_effect(spell_id, name, synth_slot)
-        .or_else(|| recently_bandaged_effect(s, healed_target, synth_slot));
-    if let Some(synth) = synth {
+    if let Some(synth) = synthetic_seal_effect(spell_id, name, synth_slot) {
         cov.effects += 1;
         cov.real += 1;
         *cov.by_kind.entry(synth.kind).or_default() += 1;
@@ -1658,7 +1630,9 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
             format!("DELETE FROM game_spell_effect WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_spell_reagent WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
             format!("DELETE FROM game_creature_ai_spell_metadata WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
-            format!("DELETE FROM game_spell_follow_up WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR}"),
+            format!(
+                "DELETE FROM game_spell_follow_up WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR} AND follow_up_spell_id < {PACKAGE_SPELL_ID_FLOOR}"
+            ),
             format!(
                 "DELETE FROM game_spell_form WHERE spell_id < {SYNTHETIC_SPELL_ID_FLOOR} AND form_id < {PACKAGE_FORM_ID_FLOOR}"
             ),
@@ -1680,7 +1654,7 @@ fn spell_delete_statements(only: &[u32]) -> Vec<String> {
             "DELETE FROM game_creature_ai_spell_metadata WHERE spell_id = {id}"
         ));
         dels.push(format!(
-            "DELETE FROM game_spell_follow_up WHERE spell_id = {id}"
+            "DELETE FROM game_spell_follow_up WHERE spell_id = {id} AND follow_up_spell_id < {PACKAGE_SPELL_ID_FLOOR}"
         ));
         dels.push(format!(
             "DELETE FROM game_spell_form WHERE spell_id = {id} AND form_id < {PACKAGE_FORM_ID_FLOOR}"
@@ -2530,7 +2504,7 @@ mod tests {
         );
         assert_eq!(
             (effects(17)[0].target, effects(17)[0].p1),
-            (T_TARGET_ALLY, 6788)
+            (T_TARGET_ALLY, 0)
         );
         assert_eq!(
             (
@@ -2624,7 +2598,7 @@ mod tests {
 
     #[test]
     #[ignore = "requires LYRACORE_VMANGOS_SQLITE and LYRACORE_TEST_DBC"]
-    fn actual_bubbles_follow_up_with_forbearance_and_lay_on_hands_does_not() {
+    fn actual_script_follow_ups_bind_exactly_their_vmangos_spells() {
         const FORBEARANCE: u32 = 25771;
         const INVULNERABILITY: u8 = 25;
         let bubbles = [498, 642, 1020, 1022, 5573, 5599, 10278];
@@ -2641,14 +2615,27 @@ mod tests {
         ))
         .unwrap();
         let (snapshot, _) = crate::vmangos_spell::read(&source).unwrap();
+        let first_aid = [
+            746, 1159, 3267, 3268, 7926, 7927, 10838, 10839, 18608, 18610, 20803, 23567, 23568,
+            23569, 23696, 24412, 24413, 24414, 30020,
+        ];
+        let power_word_shield = [
+            17, 592, 600, 3747, 6065, 6066, 10898, 10899, 10900, 10901, 27607,
+        ];
+        let expected: BTreeMap<u32, u32> = bubbles
+            .iter()
+            .map(|&id| (id, FORBEARANCE))
+            .chain(first_aid.iter().map(|&id| (id, 11196)))
+            .chain(power_word_shield.iter().map(|&id| (id, 6788)))
+            .collect();
         assert_eq!(
             snapshot
                 .iter()
                 .filter(|spell| spell.follow_up_spell.is_some())
                 .map(|spell| (spell.id, spell.follow_up_spell.unwrap()))
                 .collect::<BTreeMap<_, _>>(),
-            bubbles.iter().map(|&id| (id, FORBEARANCE)).collect(),
-            "vmangos binds spell_paladin_bubble to these seven spells only"
+            expected,
+            "vmangos binds the bubble, First Aid and Power Word: Shield scripts to these spells only"
         );
         let (rows, _, _) = build_spell_rows(Path::new(&dir), &ids, &[]).unwrap();
         assert_eq!(
@@ -2796,6 +2783,48 @@ mod tests {
             forbearance_on(&ally),
             "Blessing of Protection leaves Forbearance on the ally"
         );
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE, LYRACORE_TEST_DBC, SpacetimeDB and Wasm"]
+    fn actual_imported_bandage_and_shield_follow_up_and_refuse_the_next_one() {
+        let (shard, ally, _) = imported_spell_fixture(
+            &[746, 11196, 592, 6788],
+            lyracore_shared::packing::power_type::MANA,
+        );
+        shard.assert_call("debug_set_level", &["1", "60"]);
+        let aura_on = |spell: u32, guid: &str| {
+            !shard
+                .query_rows(&format!(
+                    "SELECT id FROM game_aura WHERE spell_id = {spell} AND target_guid = {guid}"
+                ))
+                .is_empty()
+        };
+        let refused = |spell: &str, target: &str| {
+            shard.assert_sql("DELETE FROM game_global_cooldown");
+            shard.assert_sql("DELETE FROM game_spell_cd");
+            let output = shard.call("debug_begin_cast", &["1", spell, target]);
+            let text = String::from_utf8_lossy(&output.stderr).into_owned()
+                + &String::from_utf8_lossy(&output.stdout);
+            assert!(
+                !output.status.success() && text.contains("is immune to its mechanic"),
+                "{spell}: {text}"
+            );
+        };
+
+        shard.assert_call("debug_cast_at", &["1", "746", &ally]);
+        assert!(aura_on(11196, &ally), "First Aid leaves Recently Bandaged");
+        shard.assert_sql("DELETE FROM game_aura WHERE spell_id = 746");
+        refused("746", &ally);
+
+        shard.assert_sql("DELETE FROM game_global_cooldown");
+        shard.assert_call("debug_cast_at", &["1", "592", &ally]);
+        assert!(
+            aura_on(6788, &ally),
+            "Power Word: Shield rank 2 leaves Weakened Soul"
+        );
+        shard.assert_sql("DELETE FROM game_aura WHERE spell_id = 592");
+        refused("592", &ally);
     }
 
     #[test]
@@ -3937,7 +3966,7 @@ mod tests {
     }
 
     #[test]
-    fn bandage_applies_recently_bandaged_to_the_unit_it_heals() {
+    fn a_bandage_follows_up_with_recently_bandaged_and_has_no_synthetic_trigger() {
         let mut dbc = fixture_tables();
         dbc.spells = vec![Spell {
             id: 746,
@@ -3946,18 +3975,19 @@ mod tests {
             effect: [EFFECT_APPLY_AURA, 0, 0],
             effect_aura: [AuraMod::PeriodicHeal as u32, 0, 0],
             implicit_target_a: [21, 0, 0],
+            follow_up_spell: Some(11196),
             ..Default::default()
         }];
 
         let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
-        let trigger = rows
-            .effects
-            .iter()
-            .find(|effect| effect.spell_id == 746 && effect.effect_index == 1)
-            .unwrap();
+        assert_eq!(rows.follow_ups, [(746, 11196)]);
         assert_eq!(
-            (trigger.kind, trigger.trigger_spell, trigger.target),
-            (E_TRIGGER, 11196, T_TARGET_ALLY)
+            rows.effects
+                .iter()
+                .filter(|effect| effect.spell_id == 746)
+                .map(|effect| effect.kind)
+                .collect::<Vec<_>>(),
+            [A_PERIODIC_HEAL]
         );
     }
 
@@ -4317,14 +4347,6 @@ mod tests {
     }
 
     #[test]
-    fn power_word_shield_p1_links_weakened_soul() {
-        assert_eq!(absorb_debuff_p1(17, "Power Word: Shield", A_ABSORB), 6788);
-        assert_eq!(absorb_debuff_p1(18, "Power Word: Shield", A_ABSORB), 0);
-        assert_eq!(absorb_debuff_p1(17, "Power Word: Fortitude", A_ABSORB), 0);
-        assert_eq!(absorb_debuff_p1(17, "Power Word: Shield", A_FLAG), 0);
-    }
-
-    #[test]
     fn instant_effects_map_to_real_kinds() {
         assert_eq!(instant_effect_to_kind(2), E_DAMAGE);
         assert_eq!(instant_effect_to_kind(17), E_WEAPON_STRIKE);
@@ -4672,7 +4694,7 @@ mod tests {
             ("game_spell_effect", ""),
             ("game_spell_reagent", ""),
             ("game_creature_ai_spell_metadata", ""),
-            ("game_spell_follow_up", ""),
+            ("game_spell_follow_up", " AND follow_up_spell_id < 6000000"),
             ("game_spell_form", " AND form_id < 18000000"),
         ];
         assert_eq!(

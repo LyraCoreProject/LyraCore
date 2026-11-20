@@ -51,6 +51,7 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
             Table::Form => "game_form",
             Table::FormSpell => "game_form_spell",
             Table::SpellForm => "game_spell_form",
+            Table::SpellFollowUp => "game_spell_follow_up",
         };
 
         assert_eq!(table.as_str(), name);
@@ -59,7 +60,7 @@ fn every_table_in_the_catalogue_parses_back_to_itself() {
 
     assert_eq!(
         Table::ALL.len(),
-        43,
+        44,
         "a table reached the enum without reaching `Table::ALL`"
     );
 }
@@ -72,6 +73,7 @@ fn the_spell_tables_belong_to_the_spell_import_family() {
         Table::Form,
         Table::FormSpell,
         Table::SpellForm,
+        Table::SpellFollowUp,
     ] {
         assert_eq!(table.family(), SPELL_FAMILY, "{table}");
     }

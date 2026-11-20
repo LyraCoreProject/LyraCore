@@ -24,11 +24,11 @@ use crate::{
     game_gameobject_template, game_gateway_lease_reaper_schedule, game_graveyard,
     game_graveyard_zone, game_ground_area_schedule, game_instance_reaper_schedule,
     game_item_template, game_melee_schedule, game_motion_publish_schedule, game_pet_care_schedule,
-    game_realm, game_spell, game_spell_effect, game_start_position, Account, AuraSchedule,
-    BreathSchedule, Character, CreatureLoot, CreatureSpawn, CreatureTemplate, CreatureWaypoint,
-    EventReaperSchedule, GameObject, GameObjectPool, GameObjectPoolMember, GameObjectTemplate,
-    GraveyardLoc, GraveyardZone, GroundAreaSchedule, ItemTemplate, MeleeSchedule, PetCareSchedule,
-    Realm, Spell, SpellEffect, StartPosition, EVENT_TTL_MICROS,
+    game_realm, game_spell, game_spell_effect, game_spell_follow_up, game_start_position, Account,
+    AuraSchedule, BreathSchedule, Character, CreatureLoot, CreatureSpawn, CreatureTemplate,
+    CreatureWaypoint, EventReaperSchedule, GameObject, GameObjectPool, GameObjectPoolMember,
+    GameObjectTemplate, GraveyardLoc, GraveyardZone, GroundAreaSchedule, ItemTemplate,
+    MeleeSchedule, PetCareSchedule, Realm, Spell, SpellEffect, StartPosition, EVENT_TTL_MICROS,
 };
 use crate::{game_alpha_test_tools_enrollment, AlphaTestToolsEnrollment};
 
@@ -677,8 +677,19 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     crate::weather::seed_weather_weights(ctx);
 }
 
+// vmangos SharedDefines.h MECHANIC_BANDAGE.
+const MECHANIC_BANDAGE: u8 = 16;
+// An aura 77 immunity row that refuses both polarities: docs/schema.md#mechanic-numbering.
+pub(crate) const MECHANIC_IMMUNITY_TO_BOTH_POLARITIES: i32 = 77 | 0x100;
+
 #[allow(clippy::too_many_lines)]
 fn seed_spell_registry(ctx: &ReducerContext) {
+    let follow_up = |spell_id: u32, follow_up_spell_id: u32| {
+        ctx.db.game_spell_follow_up().insert(crate::SpellFollowUp {
+            spell_id,
+            follow_up_spell_id,
+        });
+    };
     let spell = |spell_id: u32,
                  name: &str,
                  power_type: u8,
@@ -755,7 +766,14 @@ fn seed_spell_registry(ctx: &ReducerContext) {
         true,
         0,
     );
-    effect(11196, 0, 0xBE, 0, 0, 3, 0, 7);
+    ctx.db.game_spell_effect().insert(SpellEffect {
+        kind: crate::spell::A_IMMUNITY,
+        target: 3,
+        p0: i32::from(MECHANIC_BANDAGE),
+        p0_kind: lyracore_shared::spell::taxonomy::P_MECHANIC,
+        p1: MECHANIC_IMMUNITY_TO_BOTH_POLARITIES,
+        ..SpellEffect::blank(11196, 0)
+    });
     spell(980, "Curse of Agony", 0, 0, 0, 30, 24000, 32, 2, true, 0);
     effect(980, 0, 0x90, 5, 1000, 1, 0, 0);
     spell(139, "Renew", 0, 0, 0, 40, 15000, 2, 1, false, 0);
@@ -920,15 +938,11 @@ fn seed_spell_registry(ctx: &ReducerContext) {
         school_mask: 2,
         aura_interrupt: 1,
         cast_flags: crate::spell::CAST_FLAG_CHANNELED,
+        mechanic: MECHANIC_BANDAGE,
         ..Spell::blank(LINEN_BANDAGE_SPELL, "Linen Bandage")
     });
     effect(LINEN_BANDAGE_SPELL, 0, 0x91, 8, 1000, 0, 0, 0);
-    ctx.db.game_spell_effect().insert(SpellEffect {
-        kind: 0x05,
-        target: 0,
-        trigger_spell: 11196,
-        ..SpellEffect::blank(LINEN_BANDAGE_SPELL, 1)
-    });
+    follow_up(LINEN_BANDAGE_SPELL, 11196);
 
     ctx.db.game_spell().insert(Spell {
         gcd_ms: 0,
@@ -972,14 +986,11 @@ fn seed_spell_registry(ctx: &ReducerContext) {
         school_mask: 2,
         aura_interrupt: 1,
         cast_flags: crate::spell::CAST_FLAG_CHANNELED,
+        mechanic: MECHANIC_BANDAGE,
         ..Spell::blank(HEAVY_LINEN_BANDAGE_SPELL, "Heavy Linen Bandage")
     });
     effect(HEAVY_LINEN_BANDAGE_SPELL, 0, 0x91, 18, 1000, 0, 0, 0);
-    ctx.db.game_spell_effect().insert(SpellEffect {
-        kind: 0x05,
-        trigger_spell: 11196,
-        ..SpellEffect::blank(HEAVY_LINEN_BANDAGE_SPELL, 1)
-    });
+    follow_up(HEAVY_LINEN_BANDAGE_SPELL, 11196);
 
     ctx.db.game_spell().insert(Spell {
         cast_time_ms: 10_000,
