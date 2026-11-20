@@ -267,6 +267,8 @@ pub(crate) fn break_auras_on_damage(
     }
 }
 
+// vmangos SharedDefines.h MECHANIC_SILENCE.
+const MECHANIC_SILENCE: u8 = 9;
 const SOURCE_MECHANIC_IMMUNITY_MASK: i32 = 147;
 const SOURCE_AURA_MASK: i32 = 0xff;
 const IMMUNE_TO_HOSTILE_AND_FRIENDLY: i32 = 0x100;
@@ -327,15 +329,8 @@ fn is_immune_to_mechanic(
         })
 }
 
-// vmangos `Creature::IsImmuneToSpell`: a creature's own cast skips its template mask.
-fn template_is_immune_to_mechanic(
-    ctx: &ReducerContext,
-    caster_guid: u64,
-    unit_guid: u64,
-    mechanic: u8,
-) -> bool {
-    caster_guid != unit_guid
-        && (1..=32).contains(&mechanic)
+fn template_names_mechanic(ctx: &ReducerContext, unit_guid: u64, mechanic: u8) -> bool {
+    (1..=32).contains(&mechanic)
         && ctx
             .db
             .game_world_entity()
@@ -344,6 +339,16 @@ fn template_is_immune_to_mechanic(
             .filter(|unit| !unit.is_player())
             .and_then(|unit| ctx.db.game_creature_template().entry().find(unit.entry))
             .is_some_and(|template| template.mechanic_immune_mask & (1 << (mechanic - 1)) != 0)
+}
+
+// vmangos `Creature::IsImmuneToSpell`: a creature's own cast skips its template mask.
+fn template_is_immune_to_mechanic(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    unit_guid: u64,
+    mechanic: u8,
+) -> bool {
+    caster_guid != unit_guid && template_names_mechanic(ctx, unit_guid, mechanic)
 }
 
 /// vmangos `IsImmuneToSpell`, by header mechanic: docs/schema.md#mechanic-numbering.
@@ -548,7 +553,8 @@ pub(crate) fn interrupt_cast_and_lock(
         .map(|p| p.spell_id)
         .collect();
     let interrupted = interrupt_cast(ctx, target_guid);
-    if interrupted {
+    // vmangos `Creature::LockOutSpells` skips a template immune to silence.
+    if interrupted && !template_names_mechanic(ctx, target_guid, MECHANIC_SILENCE) {
         let until = crate::time::now(ctx)
             .checked_add(TimeDuration::from_micros(lockout_ms * 1000))
             .unwrap_or(crate::time::now(ctx));

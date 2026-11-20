@@ -37,7 +37,6 @@ pub(crate) struct EffectHit {
     pub healed: u32,
     pub energized: u32,
     pub power_type: u8,
-    pub immune: bool,
 }
 impl EffectHit {
     fn none() -> Self {
@@ -929,16 +928,6 @@ fn apply_aura_effect(
     level: u8,
     points: i32,
 ) -> EffectHit {
-    if e.kind == A_CONTROL && is_immune_to_effect(ctx, caster_guid, target_guid, hdr, e) {
-        log::info!(
-            "spell {} A_CONTROL refused — target {target_guid} is immune to its mechanic",
-            e.spell_id
-        );
-        return EffectHit {
-            immune: true,
-            ..EffectHit::none()
-        };
-    }
     aura_apply(
         ctx,
         e,

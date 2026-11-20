@@ -482,6 +482,16 @@ fn run_spell_effects(
                 }
                 continue;
             }
+            let immune = crate::spell::is_immune_to_effect(ctx, caster_guid, t, hdr, e);
+            immunity.record(t, immune);
+            if immune {
+                log::info!(
+                    "spell {} effect {} refused: unit {t} is immune to its mechanic",
+                    hdr.spell_id,
+                    e.effect_index
+                );
+                continue;
+            }
             if e.kind == E_CREATE_ITEM {
                 created_items.push(e.p0.max(0) as u32);
             }
@@ -512,10 +522,7 @@ fn run_spell_effects(
             if t != caster_guid && hit.dealt > 0 && hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0 {
                 shield_targets.insert(t);
             }
-            immunity.record(t, hit.immune);
-            if !hit.immune {
-                remember_hit_target(&mut hit_targets, &mut seen_hit_targets, t);
-            }
+            remember_hit_target(&mut hit_targets, &mut seen_hit_targets, t);
             if t == target_guid {
                 total_damage = total_damage.saturating_add(hit.dealt);
                 total_resisted = total_resisted.saturating_add(hit.resisted);

@@ -1162,8 +1162,10 @@ immunity reads it.
 
 A target is immune to a whole cast when it holds an immunity Aura that names the Spell's `mechanic`,
 before the hit roll and before any effect runs, as vmangos `IsImmuneToSpell` decides. It is immune
-to one `A_CONTROL` effect when an Aura names the effect's `effect_mechanic`, as
-`IsImmuneToSpellEffect` decides. The Aura's source Spell must have the other polarity, or its `p1`
+to one effect of any kind when an Aura names the effect's `effect_mechanic`, after the hit roll,
+as `IsImmuneToSpellEffect` decides: that effect is dropped and the others still run. So Frostbolt's
+damage lands on a unit immune to snare without its slow, and Kick's damage lands on one immune to
+interrupt without its interrupt. The Aura's source Spell must have the other polarity, or its `p1`
 must carry bit 0x100. A Spell is harmful when any effect aims at an enemy, and an effect is harmful
 when it does, unless `SPELL_CUSTOM_POSITIVE` says otherwise. A Spell with `SPELL_ATTR_NO_IMMUNITIES`
 (Attributes 0x20000000) skips the header mechanic, and one with the ignore-restrictions bit
@@ -1171,10 +1173,13 @@ when it does, unless `SPELL_CUSTOM_POSITIVE` says otherwise. A Spell with `SPELL
 
 A creature is also immune to a mechanic its template's `mechanic_immune_mask` names, with bit
 `mechanic - 1` set, as vmangos `Creature::IsImmuneToSpell` decides for the header mechanic and
-`IsImmuneToSpellEffect` for an `A_CONTROL` effect's mechanic. The mask holds whatever the polarity,
+`IsImmuneToSpellEffect` for an effect's mechanic. The mask holds whatever the polarity,
 and the same attribute bits skip it. It is the one immunity LyraCore implements that spares a
 creature's own cast, as vmangos `castOnSelf` does. A live creature reads its template's mask, so a
-changed template applies at once.
+changed template applies at once. An interrupt does not lock the schools of a creature whose
+template names silence (9), as vmangos `Creature::LockOutSpells` does; it still stops the cast
+unless the creature is immune to interrupt (26). An Aura that names silence does not skip the
+lockout.
 
 A helpful spell aimed at a target that is immune to its header mechanic is refused when the cast
 starts, with `SPELL_FAILED_TARGET_AURASTATE`, so no item, power or cooldown is spent, as vmangos
