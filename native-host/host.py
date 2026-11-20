@@ -188,14 +188,6 @@ class Host:
                 raise AssertionError(message)
             time.sleep(interval)
 
-    def await_guild_settled(self, guid, *databases):
-        """Waits until the Character has no guild transaction on any of the databases. One refuses a Transfer
-        and a cross-map teleport, as does any pending payment (`payment_pending`), Auction ones included.
-        Without databases it checks the default one."""
-        self.wait_until(lambda: not any(self.rows(f'SELECT guid FROM game_guild_transaction WHERE guid = {guid}', database)
-                                        for database in databases or (None,)),
-                        f'guild transaction of Character {guid} did not settle')
-
     def await_empty(self, table):
         self.wait_until(lambda: not self.rows(f'SELECT * FROM {table}'), f'{table} retained disconnected clients')
 

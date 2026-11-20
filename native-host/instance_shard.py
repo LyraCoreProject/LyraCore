@@ -71,7 +71,6 @@ def check(host):
 
     def cross(client, guid, source, target, trigger):
         client.collect()
-        host.await_guild_settled(guid, source)
         inventory = host.rows(f'SELECT guid, entry, slot, stack_count FROM game_item_instance WHERE owner_guid = {guid}', source)
         client.send(0xb4, struct.pack('<I', trigger))
         packets = []
