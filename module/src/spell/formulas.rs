@@ -1,7 +1,16 @@
+use super::CastRefusalReason;
 use crate::Aura;
 
 pub(crate) fn cost_gate_blocks(is_player: bool, power: u32, cost: u32) -> bool {
     is_player && power < cost
+}
+
+pub(crate) fn cost_refusal_reason(power_type: u8) -> CastRefusalReason {
+    if power_type == lyracore_shared::packing::power_type::HEALTH {
+        CastRefusalReason::CasterAuraState
+    } else {
+        CastRefusalReason::NoPower
+    }
 }
 
 pub(crate) fn level_gate_blocks(is_player: bool, spell_level: u8, caster_level: u8) -> bool {
@@ -144,6 +153,17 @@ mod tests {
         A_ABSORB, A_MOD_RESISTANCE, P_NONE, P_SCHOOL_MASK, RESIST_ARMOR,
     };
     use spacetimedb::Timestamp;
+
+    #[test]
+    fn a_health_shortfall_reports_the_caster_aura_state_and_any_other_cost_no_power() {
+        use lyracore_shared::packing::power_type::{HEALTH, MANA, RAGE};
+        assert_eq!(
+            cost_refusal_reason(HEALTH),
+            CastRefusalReason::CasterAuraState
+        );
+        assert_eq!(cost_refusal_reason(MANA), CastRefusalReason::NoPower);
+        assert_eq!(cost_refusal_reason(RAGE), CastRefusalReason::NoPower);
+    }
 
     fn aura(amount: i32, stacks: u8) -> Aura {
         Aura {

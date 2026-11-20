@@ -128,3 +128,15 @@ description = "Spirit of Redemption is not a Form: its shapeshift effect for For
 path = "crates/lyracore-shared/src/form.rs"
 symbol = "FORM_FACTS"
 evidence = "Source reading, not measured. At d9173eca, 27827 enters FORM_SPIRITOFREDEMPTION when the priest would die (Unit::Kill) and Aura::HandleShapeshiftBoosts adds 27792 and 27795; the Module has no building block that replaces a death."
+
+[[known_gaps]]
+description = "Health Funnel pays only its up-front health cost. vmangos also takes manaPerSecond health every second of the channel (5 at rank 1, 52 at rank 7) and ends the channel when health no longer exceeds it; the Module charges nothing per second."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "charge_spell_cost"
+evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::Update takes manaPerSecond plus manaPerSecondPerLevel times the caster's level from the caster's health or power each second, and interrupts the channel when it cannot pay."
+
+[[known_gaps]]
+description = "A creature never pays a spell cost and is never refused for one. vmangos refuses a creature that holds mana, a pet and any caster whose spell costs health when power or health is short, and charges them; it skips the check only for a creature that casts a power type it lacks."
+path = "module/src/spell/cast/resolve.rs"
+symbol = "check_cast_gate_suffix"
+evidence = "Source reading, not measured. At d9173eca, Spell.cpp Spell::CheckPower returns SPELL_CAST_OK only for a non-pet creature whose power type is not mana or whose create mana is 0, and Spell::TakePower spends health or power for every caster unit."

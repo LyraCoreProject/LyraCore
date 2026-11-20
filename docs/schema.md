@@ -390,10 +390,13 @@ world entry shows it again. A pool that appears sends its current value, so the 
 never keeps the full energy that Character CREATE writes. A spell cost, an energize and an
 energize tick reach the pool of their power type, shown or reserved; an energize skips a pool whose
 max is 0. A cost in a power type the unit holds in neither pool is refused with `NoPower`, as
-vmangos `Spell::CheckPower` does; a creature casts it unpaid. A cost in health (power type 254,
-vmangos `POWER_HEALTH`) is paid from health and refused with `CasterAuraState` when health is at
-or below it. Resurrection, corpse reclaim and the GM heal set every pool the unit holds by its
-power type; a resurrect request sets mana by its percentage, energy full and rage to 0.
+vmangos `Spell::CheckPower` does. A creature is never refused for a cost and never pays one. A
+cost in health (power type 254, vmangos `POWER_HEALTH`) is paid from health and refused with
+`CasterAuraState` when health is at or below it. Only the up-front cost is modelled, so Health
+Funnel's per-second health cost is a known gap, as is any cost a creature or pet pays. A cast an
+item starts pays no cost and is never refused for one. Resurrection, corpse reclaim and the GM
+heal set every pool the unit holds by its power type; a resurrect request sets mana by its
+percentage, energy full and rage to 0.
 
 Hunter pets keep a durable identity in `game_hunter_pet`. A materialized pet is an ordinary owned
 `game_world_entity`, classified by `game_live_pet_kind`; summoned demons have no Hunter identity or

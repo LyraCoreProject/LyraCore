@@ -115,7 +115,8 @@ impl WorldEntity {
         self.pool(power_type).map_or(0, |pool| pool.current)
     }
 
-    /// Pays a cost from the pool of its power type; a unit without one pays nothing.
+    /// Pays a cost from the pool of its power type, or from health for a health cost, never below
+    /// 1; a unit without the pool pays nothing.
     pub(crate) fn spend_power(&mut self, power_type: u8, amount: u32) {
         if power_type == power_type::HEALTH {
             self.health = self.health.saturating_sub(amount).max(1);

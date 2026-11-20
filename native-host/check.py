@@ -4074,15 +4074,15 @@ def check_inventory(host):
     assert item_pointer(pointers, food_slot) == tunic_guid
     assert item_pointer(pointers, tunic_slot) == food_guid
     assert not any(field >= 486 and field < 612 for field in values(peer.collect(), guid))
-    host.restore('game_spell', 'spell_id = 50115', 'cost')
-    host.sql('UPDATE game_spell SET cost = 999999 WHERE spell_id = 50115')
+    host.restore('game_spell', 'spell_id = 50115', 'spell_level')
+    host.sql('UPDATE game_spell SET spell_level = 255 WHERE spell_id = 50115')
     client.send(0xab, bytes([255, split_slot, 0, 0, 0]))
     refused = client.collect()
     assert any(opcode == 0x112 for opcode, _ in refused)
     assert not values(refused, split_guid)
     assert split_guid not in destroys(refused)
     assert host.rows(f'SELECT stack_count FROM game_item_instance WHERE guid = {split_guid}') == [[2]]
-    host.sql('UPDATE game_spell SET cost = 0 WHERE spell_id = 50115')
+    host.sql('UPDATE game_spell SET spell_level = 0 WHERE spell_id = 50115')
     client.send(0x111, bytes([255, split_slot, 0, 0, 0, 0]))
     removed = client.collect()
     assert split_guid in destroys(removed)

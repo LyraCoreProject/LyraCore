@@ -9,19 +9,19 @@ use crate::{game_creature_template, game_world_entity, WorldEntity};
 use crate::{game_item_instance, game_item_template};
 
 use crate::spell::{
-    apply_effect, aura_apply, break_channel, break_stealth, cost_gate_blocks, effect_amount,
-    faction_target_violation, has_aura, is_action_blocked, is_stealthed, level_gate_blocks,
-    recipe_reagents, select_targets, CastGateRefusal, CastHandle, CastRefusalKind,
-    CastRefusalReason, CastStart, FormRefusal, ItemGrantOutcome, SpellCastEventKind, A_FLAG,
-    A_MOUNTED, CAST_FLAG_BINARY, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER,
-    CAST_FLAG_INCAP_OPENER, CAST_FLAG_MAGIC_HIT, CAST_FLAG_REQ_BEHIND, CAST_FLAG_REQ_DAGGER,
-    CAST_FLAG_REQ_OVERPOWER, CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH, CAST_FLAG_STEALTH_SAFE,
-    CAST_FLAG_WEAPON_PROCS, E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT, E_DUEL,
-    E_ENCHANT_ITEM_TEMPORARY, E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING, E_PERSISTENT_AREA,
-    E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE, E_WEAPON_STRIKE,
-    HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME, SPELL_ATTR_PASSIVE,
-    SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY, T_TARGET_ALLY,
-    T_TARGET_ANY, T_TARGET_ENEMY,
+    apply_effect, aura_apply, break_channel, break_stealth, cost_gate_blocks, cost_refusal_reason,
+    effect_amount, faction_target_violation, has_aura, is_action_blocked, is_stealthed,
+    level_gate_blocks, recipe_reagents, select_targets, CastGateRefusal, CastHandle,
+    CastRefusalKind, CastRefusalReason, CastStart, FormRefusal, ItemGrantOutcome,
+    SpellCastEventKind, A_FLAG, A_MOUNTED, CAST_FLAG_BINARY, CAST_FLAG_CHANNELED,
+    CAST_FLAG_COMBO_FINISHER, CAST_FLAG_INCAP_OPENER, CAST_FLAG_MAGIC_HIT, CAST_FLAG_REQ_BEHIND,
+    CAST_FLAG_REQ_DAGGER, CAST_FLAG_REQ_OVERPOWER, CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH,
+    CAST_FLAG_STEALTH_SAFE, CAST_FLAG_WEAPON_PROCS, E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT,
+    E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING,
+    E_PERSISTENT_AREA, E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE,
+    E_WEAPON_STRIKE, HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME,
+    SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY,
+    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use crate::{
     game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
@@ -56,6 +56,11 @@ impl CastRequest {
             item_target: None,
             cooldown_category: None,
         }
+    }
+
+    /// A cast an item starts; only item use sets a cooldown category.
+    fn is_item_cast(&self) -> bool {
+        self.cooldown_category.is_some()
     }
 }
 
@@ -143,7 +148,8 @@ fn resolve_loaded_cast(
     };
 
     // Flush the cost before effects so self-heals read the charged caster row.
-    if caster.is_player() && hdr.cost > 0 && !queues_next_swing(effects) {
+    if caster.is_player() && hdr.cost > 0 && !request.is_item_cast() && !queues_next_swing(effects)
+    {
         charge_spell_cost(ctx, &mut caster, hdr);
         caster.update(ctx);
     }
@@ -1476,17 +1482,12 @@ fn check_cast_gate_suffix(
         ));
     }
 
-    // Creatures have no managed power pool, so only Characters pay spell costs.
+    // vmangos `Spell::CheckPower` passes a cast an item starts.
     let power = caster.spendable_power(hdr.power_type);
-    if cost_gate_blocks(caster.is_player(), power, hdr.cost) {
-        let reason = if hdr.power_type == lyracore_shared::packing::power_type::HEALTH {
-            CastRefusalReason::CasterAuraState
-        } else {
-            CastRefusalReason::NoPower
-        };
+    if !request.is_item_cast() && cost_gate_blocks(caster.is_player(), power, hdr.cost) {
         return Err(CastGateRefusal::new(
             CastRefusalKind::InsufficientPower,
-            reason,
+            cost_refusal_reason(hdr.power_type),
             format!("not enough power: have {power}, need {}", hdr.cost),
         ));
     }

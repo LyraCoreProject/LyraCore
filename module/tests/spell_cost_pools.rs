@@ -1,9 +1,9 @@
 mod support;
 
-use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_package_delta::fixture_ids::{EATING_SPELL, FIXTURE_JERKY, TEST_WOLF_ENTRY};
 use lyracore_shared::guid;
 use lyracore_shared::packing::power_type::{HEALTH, MANA, RAGE};
-use support::{number, refused, Row, Standalone};
+use support::{actor, number, refused, Row, Standalone};
 
 const WOLF: u64 = guid::creature(TEST_WOLF_ENTRY, 1);
 const ACTOR: &str = r#"{"guid":1,"ownership":null}"#;
@@ -71,7 +71,9 @@ fn a_mana_cost_is_refused_for_a_caster_without_a_mana_pool() {
 fn a_health_cost_is_paid_from_health() {
     let shard = fixture("cost-pool-health", HEALTH);
     shard.assert_call("debug_set_health", &["1", "50"]);
+    shard.assert_call("debug_set_power", &["1", "50"]);
     let mana = number::<u32>(&entity(&shard), "power");
+    assert_eq!(mana, 50, "the mage holds mana that could pay the cost");
     cast_fireball(&shard);
     let after = entity(&shard);
     assert_eq!(number::<u32>(&after, "health"), 50 - COST);
@@ -95,4 +97,40 @@ fn a_health_cost_is_refused_at_or_below_the_health_it_takes() {
         "not enough power",
     );
     assert_eq!(number::<u32>(&entity(&shard), "health"), COST);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_item_spell_casts_without_its_cost_for_a_caster_without_that_pool() {
+    let mut shard = Standalone::start("cost-pool-item");
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    shard.assert_sql("UPDATE game_world_entity SET simulation_indexed = false WHERE guid = 1");
+    become_warrior(&shard);
+    shard.assert_call("debug_set_power", &["1", "50"]);
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET power_type = {MANA}, cost = {COST} WHERE spell_id = {EATING_SPELL}"
+    ));
+    shard.assert_call("debug_grant_item", &["1", &FIXTURE_JERKY.to_string(), "2"]);
+    let slot = shard
+        .query_rows(&format!(
+            "SELECT slot FROM game_item_instance WHERE owner_guid = 1 AND entry = {FIXTURE_JERKY}"
+        ))
+        .remove(0)["slot"]
+        .clone();
+    shard.assert_call("gw_use_item", &[&actor("1"), &slot]);
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT stack_count FROM game_item_instance WHERE owner_guid = 1 AND entry = {FIXTURE_JERKY}"
+        ))[0]["stack_count"],
+        "1"
+    );
+    assert_eq!(
+        number::<u32>(&entity(&shard), "power"),
+        50,
+        "rage is untouched"
+    );
 }
