@@ -410,6 +410,14 @@ fn with_power_pool(builder: UpdatePlayerBuilder, pool: &PowerPoolView) -> Update
     }
 }
 
+fn free_primary_professions(learned_skills: &[SkillView]) -> i32 {
+    let held = learned_skills
+        .iter()
+        .filter(|skill| lyracore_shared::trainer::is_primary_profession_line(skill.line))
+        .count();
+    lyracore_shared::trainer::free_primary_profession_slots(held) as i32
+}
+
 pub fn build_create_object(
     entity: &EntityView,
     kind: CreateKind,
@@ -464,16 +472,7 @@ pub fn build_create_object(
                     entity.level,
                     0,
                 ) as i32)
-                .set_player_character_points2(
-                    lyracore_shared::trainer::free_primary_profession_slots(
-                        learned_skills
-                            .iter()
-                            .filter(|skill| {
-                                lyracore_shared::trainer::is_primary_profession_line(skill.line)
-                            })
-                            .count(),
-                    ) as i32,
-                )
+                .set_player_character_points2(free_primary_professions(learned_skills))
                 .set_unit_strength(entity.strength as i32)
                 .set_unit_agility(entity.agility as i32)
                 .set_unit_stamina(entity.stamina as i32)
