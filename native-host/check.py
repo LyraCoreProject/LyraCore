@@ -4307,7 +4307,9 @@ def check_inventory(host):
         host.call('debug_apply_damage', [target, 1, guid])
         host.call('debug_kill_creature', [guid, target])
         progress = client.collect()
-        assert (0x1d0, struct.pack('<QIBIf', target, 60 if kills == 1 else 50, 0, 50, 1.0)) in progress
+        # 1.12 kill XP: level 1 vs a level 1 mob is 50, plus 10 rested; level 2 vs level 1 is 55 * 4 / 5.
+        total, base = (60, 50) if kills == 1 else (44, 44)
+        assert (0x1d0, struct.pack('<QIBIf', target, total, 0, base, 1.0)) in progress
         if kills == 1:
             assert any(opcode == 0x1d4 and body[:4] == struct.pack('<I', 2) for opcode, body in progress)
             assert host.rows(f'SELECT level, xp FROM game_world_entity WHERE guid = {guid}') == [[2, 50]]
