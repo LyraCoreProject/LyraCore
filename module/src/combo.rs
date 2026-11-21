@@ -45,7 +45,9 @@ pub(crate) fn effect_points(
             .game_world_entity()
             .guid()
             .find(caster_guid)
-            .map(|caster| crate::combat::melee_attack_power(ctx, &caster) * ap_pct / 100)
+            .map(|caster| {
+                (crate::combat::melee_attack_power(ctx, &caster) * ap_pct as f32 / 100.0) as u32
+            })
             .unwrap_or(0)
     };
     combo_amount(points, e.points_per_combo, combo).saturating_add(ap_share as i32)

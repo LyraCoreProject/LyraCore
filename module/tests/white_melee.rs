@@ -493,6 +493,133 @@ fn a_casters_flat_attack_power_offsets_a_negative_base() {
     assert_eq!(range(&shard), ("33".into(), "35".into()), "with +232 AP");
 }
 
+fn combat_field_aura(shard: &Standalone, spell_id: u32, field: u8, amount: i32) {
+    use lyracore_package_delta::packed_spell_effect_id;
+    use lyracore_shared::spell::taxonomy::{A_MOD_COMBAT, T_SELF};
+
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &spell_id),
+            ("name", &"Combat field fixture"),
+            ("school_mask", &1),
+            ("duration_ms", &600_000),
+            ("gcd_ms", &0),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(spell_id, 0)),
+            ("spell_id", &spell_id),
+            ("kind", &A_MOD_COMBAT),
+            ("base_points", &amount),
+            ("target", &T_SELF),
+            ("p_0", &field),
+        ],
+    );
+}
+
+fn sheet_value<T: std::str::FromStr>(shard: &Standalone, column: &str) -> T
+where
+    T::Err: std::fmt::Debug,
+{
+    shard.query_rows(&format!(
+        "SELECT {column} FROM game_world_entity WHERE guid = 1"
+    ))[0][column]
+        .parse()
+        .unwrap()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_negative_base_attack_power_reaches_the_sheet_as_a_signed_value() {
+    use lyracore_shared::spell::taxonomy::COMBAT_ATTACK_POWER;
+    const FLAT_ATTACK_POWER: u32 = 5_090_415;
+
+    let mut shard = Standalone::start("white-melee-signed-base");
+    beside_a_wolf(
+        &mut shard,
+        "UPDATE game_character SET class = 8, level = 1 WHERE guid = 1",
+    );
+    shard.assert_sql("UPDATE game_world_entity SET strength = 5, agility = 25 WHERE guid = 1");
+    combat_field_aura(&shard, FLAT_ATTACK_POWER, COMBAT_ATTACK_POWER, 232);
+    shard.assert_call("debug_force_cast", &["1", &FLAT_ATTACK_POWER.to_string()]);
+
+    // vmangos writes (int32)(Strength 5 - 10) and (int32)(Agility 25 - 10) as they are.
+    assert_eq!(sheet_value::<u32>(&shard, "sheet_ap_base") as i32, -5);
+    assert_eq!(sheet_value::<u32>(&shard, "sheet_ranged_ap") as i32, 15);
+    assert_eq!(sheet_value::<i32>(&shard, "sheet_ap_mods"), 232);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn attack_power_percent_auras_multiply_and_scale_the_swing() {
+    use lyracore_shared::spell::taxonomy::{COMBAT_ATTACK_POWER, COMBAT_ATTACK_POWER_PCT};
+    const FLAT: u32 = 5_090_416;
+    const PERCENT_50: u32 = 5_090_417;
+    const PERCENT_20: u32 = 5_090_418;
+
+    let mut shard = Standalone::start("white-melee-attack-power-percent");
+    let target = beside_a_wolf(
+        &mut shard,
+        "UPDATE game_character SET class = 8, level = 1 WHERE guid = 1",
+    );
+    shard.assert_sql("UPDATE game_world_entity SET strength = 5 WHERE guid = 1");
+    combat_field_aura(&shard, FLAT, COMBAT_ATTACK_POWER, 232);
+    combat_field_aura(&shard, PERCENT_50, COMBAT_ATTACK_POWER_PCT, 50);
+    combat_field_aura(&shard, PERCENT_20, COMBAT_ATTACK_POWER_PCT, 20);
+    let range = |shard: &Standalone| {
+        let readout = swing_readout(shard, &target);
+        (readout["base_min"].clone(), readout["base_max"].clone())
+    };
+    let multiplier = |shard: &Standalone| sheet_value::<f32>(shard, "sheet_ap_multiplier");
+
+    // vmangos: -5 + 232 = 227 AP scaled by 1.5 * 1.2 = 1.8 is 408.6, which adds 408.6 / 14 * 2.0.
+    shard.assert_call("debug_force_cast", &["1", &FLAT.to_string()]);
+    shard.assert_call("debug_force_cast", &["1", &PERCENT_50.to_string()]);
+    assert_eq!(range(&shard), ("49".into(), "51".into()), "227 AP * 1.5");
+    assert!((multiplier(&shard) - 0.5).abs() < 1e-6);
+    shard.assert_call("debug_force_cast", &["1", &PERCENT_20.to_string()]);
+    assert_eq!(range(&shard), ("59".into(), "61".into()), "227 AP * 1.8");
+    assert!(
+        (multiplier(&shard) - 0.8).abs() < 1e-6,
+        "the Auras multiply"
+    );
+    shard.assert_call("debug_shed_spell_auras", &["1", &PERCENT_50.to_string()]);
+    shard.assert_call("debug_shed_spell_auras", &["1", &PERCENT_20.to_string()]);
+    assert_eq!(range(&shard), ("33".into(), "35".into()), "227 AP");
+    assert_eq!(multiplier(&shard), 0.0);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_ranged_percent_aura_reaches_the_sheet_of_everyone_but_wand_users() {
+    use lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER_PCT;
+    const PERCENT_50: u32 = 5_090_419;
+
+    let mut shard = Standalone::start("white-melee-ranged-percent");
+    beside_a_wolf(
+        &mut shard,
+        "UPDATE game_character SET class = 1, level = 1 WHERE guid = 1",
+    );
+    shard.assert_sql("UPDATE game_world_entity SET agility = 25 WHERE guid = 1");
+    combat_field_aura(&shard, PERCENT_50, COMBAT_RANGED_ATTACK_POWER_PCT, 50);
+    let ranged_multiplier =
+        |shard: &Standalone| sheet_value::<f32>(shard, "sheet_ranged_ap_multiplier");
+
+    // vmangos: a Warrior's ranged base is level 1 + Agility 25 - 10 with or without a launcher.
+    shard.assert_call("debug_force_cast", &["1", &PERCENT_50.to_string()]);
+    assert_eq!(sheet_value::<u32>(&shard, "sheet_ranged_ap"), 16);
+    assert!((ranged_multiplier(&shard) - 0.5).abs() < 1e-6);
+
+    // HandleAuraModRangedAttackPowerPercent returns early for a class that uses wands.
+    shard.assert_call("debug_shed_spell_auras", &["1", &PERCENT_50.to_string()]);
+    shard.assert_sql("UPDATE game_world_entity SET unit_bytes_0 = 2049 WHERE guid = 1");
+    shard.assert_call("debug_force_cast", &["1", &PERCENT_50.to_string()]);
+    assert_eq!(ranged_multiplier(&shard), 0.0);
+}
+
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn learning_predatory_strikes_in_cat_form_raises_the_sheet_attack_power() {

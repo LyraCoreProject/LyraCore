@@ -1053,6 +1053,45 @@ fn create_object_carries_stored_melee_and_ranged_sheet_projection() {
 }
 
 #[test]
+fn create_object_carries_a_negative_base_and_the_attack_power_multipliers() {
+    let e = EntityView {
+        sheet_ap_base: -5,
+        sheet_ranged_ap: -9,
+        sheet_ap_multiplier: 0.1,
+        sheet_ranged_ap_multiplier: 0.25,
+        ..warrior_entity()
+    };
+    let msg = build_create_object(&e, CreateKind::SelfPlayer, &[], &[]).unwrap();
+    match &msg.objects[0] {
+        Object::CreateObject2 {
+            mask2: UpdateMask::Player(p),
+            ..
+        } => {
+            assert_eq!(p.unit_attack_power(), Some(-5));
+            assert_eq!(p.unit_ranged_attack_power(), Some(-9));
+            assert_eq!(p.unit_attack_power_multiplier(), Some(0.1));
+            assert_eq!(p.unit_ranged_attack_power_multiplier(), Some(0.25));
+        }
+        other => panic!("expected a Player CreateObject2, got {other:?}"),
+    }
+}
+
+#[test]
+fn create_object_leaves_a_zero_attack_power_multiplier_unset() {
+    let msg = build_create_object(&warrior_entity(), CreateKind::SelfPlayer, &[], &[]).unwrap();
+    match &msg.objects[0] {
+        Object::CreateObject2 {
+            mask2: UpdateMask::Player(p),
+            ..
+        } => {
+            assert_eq!(p.unit_attack_power_multiplier(), None);
+            assert_eq!(p.unit_ranged_attack_power_multiplier(), None);
+        }
+        other => panic!("expected a Player CreateObject2, got {other:?}"),
+    }
+}
+
+#[test]
 fn create_object_carries_a_zero_stored_sheet_projection() {
     let msg = build_create_object(&warrior_entity(), CreateKind::SelfPlayer, &[], &[]).unwrap();
     match &msg.objects[0] {

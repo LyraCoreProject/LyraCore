@@ -220,6 +220,7 @@ pub struct WorldEntity {
     pub sheet_int_bonus: i32,
     #[default(0)]
     pub sheet_spi_bonus: i32,
+    /// The `i32` base attack power as its bits; a published column cannot change type in place.
     #[default(0)]
     pub sheet_ap_base: u32,
     #[default(0)]
@@ -238,6 +239,7 @@ pub struct WorldEntity {
     pub mount_display_id: u32,
     #[default(0)]
     pub zone_id: u32,
+    /// The `i32` ranged base attack power as its bits, like `sheet_ap_base`.
     #[default(0)]
     pub sheet_ranged_ap: u32,
     #[default(0)]
@@ -267,6 +269,11 @@ pub struct WorldEntity {
     pub reserve_power: u32,
     #[default(0u32)]
     pub reserve_max_power: u32,
+    /// UNIT_FIELD_ATTACK_POWER_MULTIPLIER: the percent Auras' product minus 1.
+    #[default(0.0f32)]
+    pub sheet_ap_multiplier: f32,
+    #[default(0.0f32)]
+    pub sheet_ranged_ap_multiplier: f32,
 }
 
 impl WorldEntity {
@@ -348,6 +355,8 @@ impl WorldEntity {
             sheet_ranged_dmg_min_fraction: 0.0,
             sheet_ranged_dmg_max_fraction: 0.0,
             sheet_ranged_crit_bp: 0,
+            sheet_ap_multiplier: 0.0,
+            sheet_ranged_ap_multiplier: 0.0,
             reserve_power_type: power_pool::NO_RESERVE_POOL,
             reserve_power: 0,
             reserve_max_power: 0,

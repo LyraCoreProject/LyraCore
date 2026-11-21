@@ -535,11 +535,11 @@ fn base_melee_attack_power_in(
     )
 }
 
-pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> f32 {
     melee_attack_power_in(ctx, unit, crate::form::combat_profile(ctx, unit.guid))
 }
 
-fn melee_attack_power_in(ctx: &ReducerContext, unit: &WorldEntity, profile: CombatProfile) -> u32 {
+fn melee_attack_power_in(ctx: &ReducerContext, unit: &WorldEntity, profile: CombatProfile) -> f32 {
     total_attack_power(
         base_melee_attack_power_in(
             ctx,
@@ -549,6 +549,57 @@ fn melee_attack_power_in(ctx: &ReducerContext, unit: &WorldEntity, profile: Comb
             crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_AGI),
         ),
         crate::modifiers::combat_field_bonus(ctx, unit.guid, crate::spell::COMBAT_ATTACK_POWER),
+        melee_attack_power_multiplier(ctx, unit.guid),
+    )
+}
+
+/// The wire value of UNIT_FIELD_ATTACK_POWER_MULTIPLIER: the percent Auras' product minus 1.
+pub(crate) fn melee_attack_power_multiplier(ctx: &ReducerContext, unit_guid: u64) -> f32 {
+    crate::modifiers::attack_power_multiplier(
+        ctx,
+        unit_guid,
+        lyracore_shared::spell::taxonomy::COMBAT_ATTACK_POWER_PCT,
+    )
+}
+
+/// The wire value of UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER; wand users ignore it.
+pub(crate) fn ranged_attack_power_multiplier(ctx: &ReducerContext, unit: &WorldEntity) -> f32 {
+    if is_wand_user(unit.class()) {
+        return 0.0;
+    }
+    crate::modifiers::attack_power_multiplier(
+        ctx,
+        unit.guid,
+        lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER_PCT,
+    )
+}
+
+/// The flat ranged attack power Auras add; wand users ignore them.
+fn ranged_attack_power_bonus(ctx: &ReducerContext, unit: &WorldEntity) -> i32 {
+    if is_wand_user(unit.class()) {
+        return 0;
+    }
+    crate::modifiers::combat_field_bonus(
+        ctx,
+        unit.guid,
+        lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
+    )
+}
+
+/// `ranged_sheet_values` from the unit's stats and Auras; `weapon` may carry a normalized delay.
+pub(crate) fn ranged_values(
+    ctx: &ReducerContext,
+    unit: &WorldEntity,
+    weapon: Option<(u32, u32, u32, u8)>,
+) -> (i32, f32, f32) {
+    ranged_sheet_values(
+        unit.class(),
+        crate::form::combat_profile(ctx, unit.guid),
+        crate::modifiers::effective_stat(ctx, unit, crate::spell::STAT_AGI),
+        unit.level,
+        weapon,
+        ranged_attack_power_bonus(ctx, unit),
+        ranged_attack_power_multiplier(ctx, unit),
     )
 }
 
@@ -577,18 +628,7 @@ fn strike_weapon_range(
     } else {
         delay
     };
-    let (_, min, max) = ranged_sheet_values(
-        attacker.class(),
-        crate::form::combat_profile(ctx, attacker.guid),
-        crate::modifiers::effective_stat(ctx, attacker, crate::spell::STAT_AGI),
-        attacker.level,
-        Some((dmin, dmax, delay, subclass)),
-        crate::modifiers::combat_field_bonus(
-            ctx,
-            attacker.guid,
-            lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
-        ),
-    );
+    let (_, min, max) = ranged_values(ctx, attacker, Some((dmin, dmax, delay, subclass)));
     (
         crate::spell::bonuses::weapon_damage(ctx, attacker, crate::items::equip_slot::RANGED, min)
             as u32,
