@@ -184,8 +184,8 @@ IDs and uses the selected wrapper's spell level when the offer has no required l
 vmangos profession offers come from its skill-step effects. Constant steps 1 through 4 grant
 75 through 300 ranks, following [EffectLearnSkill at the same commit](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Spells/SpellEffects.cpp#L2959-L2975).
 Buying a profession offer grants both its skill cap and its resolved learned spell.
-The import adds no synthetic profession offers. Its manifest reports source skill prerequisites
-and multiple learn targets the Module cannot represent.
+The import adds no synthetic profession offers. It keeps each offer's required skill and value.
+Its manifest reports multiple learn targets and racial riding lines the Module cannot represent.
 
 The quests family selects quest patches and relation ranges. Full profiles share the full quest
 catalogue; other canonical profiles share the existing starter and instance catalogue. Giver

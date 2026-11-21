@@ -117,6 +117,8 @@ impl CastRefusalReason {
 pub(crate) struct CastGateRefusal {
     pub(crate) reason: CastRefusalReason,
     pub(crate) refusal: CastRefusal,
+    /// The equip error the caster also gets, as vmangos `Spell::CheckItems` sends one.
+    pub(crate) item_refusal: Option<lyracore_shared::item::ItemRefusal>,
 }
 
 impl CastGateRefusal {
@@ -128,6 +130,7 @@ impl CastGateRefusal {
         Self {
             reason,
             refusal: CastRefusal::new(kind, message.into()),
+            item_refusal: None,
         }
     }
 

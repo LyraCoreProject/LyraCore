@@ -100,6 +100,13 @@ giver plays while the quest is incomplete or complete, and up to four offer-rewa
 their delays. Absence means no emotes; reimport quests to populate an existing Realm. The public
 quest template layout stays unchanged for Packages.
 
+`game_quest_availability` and `game_quest_prerequisite` are new private companion tables for the
+source quest availability rules. An availability row holds a quest's signed `ExclusiveGroup` and
+its `MaxLevel`; absence means neither. Prerequisite rows hold the predecessors vmangos adds beyond
+a positive `PrevQuestId`: a negative `PrevQuestId` and each quest whose `NextQuestId` names the
+quest, with `must_be_active` for a negative link. `prev_quest_id` keeps the positive `PrevQuestId`,
+so Packages can still set one. Reimport quests to populate an existing Realm.
+
 ### The three migration rules that have bitten
 
 1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64`
@@ -146,7 +153,8 @@ and `category_cooldown_ms` retain source fields needed by equip effects. The fiv
 absolute deadline. `game_pending_cast.cooldown_category` preserves an Item's override, including
 zero, through cast completion. `game_pending_cast.cast_item_guid` names the Item a cast uses up
 when it goes off; zero means no cast item, and a row in flight at upgrade already used up its Item
-at start. Their typed defaults preserve old rows during an additive publish.
+at start. A channel whose Item is destroyed, sold, traded, mailed or auctioned sets it, and an
+`item_target_guid` naming the same Item, to zero and runs on, as vmangos `ClearCastItem` does. Their typed defaults preserve old rows during an additive publish.
 See [equip spell migration](danger-zones.md#equip-spell-migration) before play resumes.
 
 Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully
@@ -750,6 +758,19 @@ catalogue. It fails closed: a mount whose skill data was never imported cannot b
 `learn_skill_cap` carries the tier the purchase grants. A riding offering's `spell_id` is a marker
 with no `Spell.dbc` row, so the purchase confirmation does not echo it as a learned spell. The
 trainer NPC declares itself with `trainer_type::MOUNTS`.
+
+### Trainer offering gates (`module/src/trainer.rs`)
+
+`game_trainer_spell.required_skill` and `required_skill_value` carry the vmangos `reqskill` and
+`reqskillvalue`. An offer with a `required_skill` is red, and its buy refused, while the Character's
+base skill in that line is below the value. The base skill is the stored value plus the permanent
+bonus from `A_MOD_SKILL` Auras, as vmangos `GetSkillValueBase` counts it; a temporary bonus does not
+count. A Character holds at most two primary professions
+(`lyracore_shared::trainer::PRIMARY_PROFESSION_LINES`). The first rank of a primary profession is
+the offer with `learn_skill_cap` 75. The list sends it green with no learn button, and the buy is
+refused, once two primary skill rows exist. The count is derived from `game_player_skill`;
+`PLAYER_CHARACTER_POINTS2` carries the free count to the client. Every refusal of these gates is
+sent as `TrainingFailureReason::NotEnoughSkill`, as vmangos does.
 
 ### Proc data (`module/src/spell/tables.rs`)
 

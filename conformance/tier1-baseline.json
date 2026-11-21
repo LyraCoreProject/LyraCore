@@ -942,22 +942,6 @@
             "objects",
             "0",
             "values",
-            "field_1103"
-          ]
-        },
-        {
-          "rule": "field_shape",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
             "field_1106"
           ]
         },

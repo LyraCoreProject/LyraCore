@@ -9,7 +9,14 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
-tests = []
+tests = [
+    { path = "crates/lyracore-protocol/src/codec/trainer.rs", function = "a_trainer_list_marks_unmet_gates_red_and_sends_the_skill_requirement", rung = "codec" },
+    { path = "crates/lyracore-protocol/src/codec/trainer.rs", function = "a_primary_first_rank_is_green_with_a_free_slot_and_green_without_the_learn_button", rung = "codec" },
+    { path = "module/tests/trainer_professions.rs", function = "a_recipe_is_refused_below_its_skill_requirement_and_learnable_at_it", rung = "durable_module" },
+    { path = "module/tests/trainer_professions.rs", function = "a_permanent_skill_bonus_counts_toward_a_required_skill", rung = "durable_module" },
+    { path = "module/tests/trainer_professions.rs", function = "a_third_primary_profession_is_refused_while_a_secondary_one_and_a_later_rank_are_not", rung = "durable_module" },
+    { path = "module/tests/trainer_professions.rs", function = "a_higher_rank_is_refused_until_the_previous_rank_is_known", rung = "durable_module" },
+]
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -18,3 +25,15 @@ symbol = "WorldSession::HandleTrainerListOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "A buy of an offer the Character already knows sends Unavailable; vmangos sends NOT_ENOUGH_SKILL because a gray offer is not plain green."
+path = "module/src/native/trainer.rs"
+symbol = "failure_reason"
+evidence = "vmangos WorldSession::HandleTrainerBuySpellOpcode at d9173eca3ea08dd985c52dabbcc826898d1d0b77, NPCHandler.cpp:300-304."
+
+[[known_gaps]]
+description = "game_spell_chain.req_spell is never checked: vmangos shows an offer red, and refuses its buy, while the Character lacks the required additional spell."
+path = "module/src/trainer.rs"
+symbol = "assess"
+evidence = "vmangos Player::GetTrainerSpellState at d9173eca3ea08dd985c52dabbcc826898d1d0b77, Player.cpp:4263-4268."

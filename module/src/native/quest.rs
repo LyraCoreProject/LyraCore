@@ -2,7 +2,7 @@ use crate::actor::{ActionRefusal, ActionRefusalKind};
 use crate::npc_interaction::NpcService;
 use crate::quest::*;
 use crate::{game_creature_template, game_item_template};
-use lyracore_shared::quest::AcceptanceRefusal;
+use lyracore_shared::quest::{AcceptanceRefusal, StartSighting};
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::{Rollback, Unhandled};
@@ -279,19 +279,89 @@ pub(super) fn evaluations(
                 let template = ctx.db.game_quest_template().entry().find(entry)?;
                 let row = character_quest_row(ctx, guid, entry);
                 let active = row.as_ref().is_some_and(|row| row.is_active());
+                let (startable, sighting) = if role == quest_role::START {
+                    start_offer(ctx, &actor, &template)
+                } else {
+                    (false, StartSighting::Hidden)
+                };
                 Some(codec::GiverQuestEval {
                     quest_id: entry,
                     title: template.title.clone(),
                     level: template.quest_level,
                     role,
-                    startable: role == quest_role::START
-                        && accept_gates(ctx, &actor, &template).is_ok(),
+                    startable,
+                    sighting,
                     active,
                     complete: active && row.as_ref().is_some_and(|row| quest_is_complete(ctx, row)),
                 })
             },
         )
         .collect()
+}
+
+const REP_HOSTILE: u8 = 1;
+
+// vmangos Unit::IsHostileTo: Hostile or Hated. At war only caps the rank at Neutral.
+fn reaction_is_hostile(reputation_standing: Option<i32>, template_hostile: bool) -> bool {
+    reputation_standing.map_or(template_hostile, |standing| {
+        crate::reputation::reputation_rank(standing) <= REP_HOSTILE
+    })
+}
+
+// vmangos GetFactionReactionTo: a reputation faction's rank replaces the template rule.
+fn giver_is_hostile(
+    ctx: &ReducerContext,
+    npc: &crate::WorldEntity,
+    actor: &crate::WorldEntity,
+) -> bool {
+    use crate::{game_faction, game_faction_template, game_player_reputation};
+    let templates = ctx.db.game_faction_template();
+    let (Some(npc_template), Some(actor_template)) = (
+        templates.id().find(npc.faction_template),
+        templates.id().find(actor.faction_template),
+    ) else {
+        return false;
+    };
+    let standing = ctx
+        .db
+        .game_faction()
+        .faction_id()
+        .find(npc_template.faction)
+        .filter(|faction| faction.reputation_index >= 0)
+        .map(|faction| {
+            ctx.db
+                .game_player_reputation()
+                .by_character()
+                .filter(&actor.guid)
+                .find(|row| row.faction_id == faction.faction_id)
+                .map_or(faction.base_standing, |row| row.standing)
+        });
+    reaction_is_hostile(
+        standing,
+        crate::faction::compute_hostile(&npc_template, &actor_template),
+    )
+}
+
+// vmangos shows no mark over a creature whose reaction to the Character is hostile.
+fn giver_status(
+    ctx: &ReducerContext,
+    giver: u64,
+    guid: u64,
+) -> lyracore_protocol::messages::vanilla::QuestGiverStatus {
+    use crate::game_world_entity;
+    let hostile = lyracore_shared::guid::is_creature(giver)
+        && ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(giver)
+            .zip(ctx.db.game_world_entity().guid().find(guid))
+            .is_some_and(|(npc, actor)| giver_is_hostile(ctx, &npc, &actor));
+    if hostile {
+        lyracore_protocol::messages::vanilla::QuestGiverStatus::None
+    } else {
+        codec::quest_giver_status(&evaluations(ctx, giver, guid))
+    }
 }
 
 pub(super) fn menu(ctx: &ReducerContext, giver: u64, guid: u64) -> Result<Vec<Packet>, String> {
@@ -330,9 +400,18 @@ fn offer_reward(giver: u64, detail: &codec::QuestDetailView) -> Result<Packet, S
 }
 
 fn quest_is_ready_to_reward(ctx: &ReducerContext, giver: u64, guid: u64, quest: u32) -> bool {
-    evaluations(ctx, giver, guid)
-        .iter()
-        .any(|eval| eval.quest_id == quest && eval.role == quest_role::END && eval.complete)
+    use crate::game_world_entity;
+    ctx.db
+        .game_world_entity()
+        .guid()
+        .find(guid)
+        .is_some_and(|actor| !actor.dead)
+        && giver_relations(ctx, giver).contains(&QuestRelation {
+            quest_entry: quest,
+            role: quest_role::END,
+        })
+        && character_quest_row(ctx, guid, quest)
+            .is_some_and(|row| row.is_active() && quest_is_complete(ctx, &row))
 }
 
 // Request-items shows only when the quest has request text and either needs items or is not done.
@@ -432,14 +511,18 @@ fn accept_refusal(refusal: &AcceptQuestRefusal) -> Vec<Packet> {
         AcceptQuestRefusal::LogFull => Some(ServerOpcodeMessage::SMSG_QUESTLOG_FULL),
         AcceptQuestRefusal::Acceptance { refusal, .. } => {
             let reason = match refusal {
-                AcceptanceRefusal::Level => Reason::QuestFailedLowLevel,
-                AcceptanceRefusal::Race => Reason::QuestFailedWrongRace,
-                AcceptanceRefusal::AlreadyTaken => Reason::QuestAlreadyOn,
-                AcceptanceRefusal::Class | AcceptanceRefusal::Prerequisite => Reason::DontHaveReq,
+                AcceptanceRefusal::AboveMaxLevel => None,
+                AcceptanceRefusal::Race => Some(Reason::QuestFailedWrongRace),
+                AcceptanceRefusal::AlreadyTaken => Some(Reason::QuestAlreadyOn),
+                AcceptanceRefusal::Level
+                | AcceptanceRefusal::Class
+                | AcceptanceRefusal::Prerequisite => Some(Reason::DontHaveReq),
             };
-            Some(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_INVALID(
-                codec::build_questgiver_quest_invalid(reason),
-            ))
+            reason.map(|reason| {
+                ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_INVALID(
+                    codec::build_questgiver_quest_invalid(reason),
+                )
+            })
         }
         AcceptQuestRefusal::Refused(_) => None,
     };
@@ -460,7 +543,7 @@ pub(super) fn receive(
         ClientOpcodeMessage::CMSG_QUESTGIVER_STATUS_QUERY(q) => vec![packet(
             ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(Box::new(codec::build_questgiver_status(
                 q.guid.guid(),
-                codec::quest_giver_status(&evaluations(ctx, q.guid.guid(), guid)),
+                giver_status(ctx, q.guid.guid(), guid),
             ))),
         )?],
         ClientOpcodeMessage::CMSG_QUESTGIVER_HELLO(q) => {
@@ -773,4 +856,23 @@ pub(super) fn collects(ctx: &ReducerContext, guid: u64, entry: u32) -> bool {
                         && objective.target_entry == entry
                 })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reaction_is_hostile;
+
+    #[test]
+    fn only_a_hostile_or_hated_reputation_rank_hides_the_mark() {
+        assert!(reaction_is_hostile(Some(-3001), false));
+        assert!(reaction_is_hostile(Some(-42000), false));
+        assert!(!reaction_is_hostile(Some(-3000), true), "Unfriendly");
+        assert!(!reaction_is_hostile(Some(0), true));
+    }
+
+    #[test]
+    fn without_a_reputation_faction_the_template_decides() {
+        assert!(reaction_is_hostile(None, true));
+        assert!(!reaction_is_hostile(None, false));
+    }
 }

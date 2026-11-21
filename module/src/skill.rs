@@ -282,7 +282,7 @@ fn equipped_weapon_skill_line_at(ctx: &ReducerContext, guid: u64, slot: u8) -> O
         .then(|| weapon_subclass_to_skill_line(tmpl.subclass))
 }
 
-fn skill_bonuses(ctx: &ReducerContext, guid: u64, line: u32) -> (i16, i16) {
+pub(crate) fn skill_bonuses(ctx: &ReducerContext, guid: u64, line: u32) -> (i16, i16) {
     ctx.db
         .game_aura()
         .by_target()
