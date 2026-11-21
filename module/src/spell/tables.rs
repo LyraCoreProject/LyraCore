@@ -411,6 +411,18 @@ pub struct SpellFollowUp {
     pub follow_up_spell_id: u32,
 }
 
+// vmangos `spell_threat`, which every rank without its own row takes from its first rank.
+#[table(accessor = game_spell_threat)]
+pub struct SpellThreat {
+    #[primary_key]
+    pub spell_id: u32,
+    pub threat: u16,
+    // Scales the spell's damage and heal threat.
+    pub multiplier: f32,
+    // Effect indexes that do not carry the flat threat to their target.
+    pub inverse_effect_mask: u8,
+}
+
 #[table(accessor = game_spell_proc_event)]
 pub struct SpellProcEvent {
     #[primary_key]
@@ -510,7 +522,12 @@ pub struct ItemAuraExpiry {
     pub scheduled_at: ScheduleAt,
 }
 
-crate::outside_table_catalog!(game_item_aura, game_item_aura_expiry, game_spell_form);
+crate::outside_table_catalog!(
+    game_item_aura,
+    game_item_aura_expiry,
+    game_spell_form,
+    game_spell_threat
+);
 
 #[spacetimedb::reducer]
 pub(crate) fn expire_item_aura(ctx: &ReducerContext, expiry: ItemAuraExpiry) {

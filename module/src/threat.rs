@@ -13,21 +13,8 @@ pub struct TauntLock {
     pub forced_until_ms: u64,
 }
 
+use crate::spell::tables::{game_spell_threat, SpellThreat};
 use crate::{game_melee_attack, game_spell, game_spell_effect, game_world_entity};
-
-// vmangos `spell_threat`, which every rank without its own row takes from its first rank.
-#[table(accessor = game_spell_threat)]
-pub struct SpellThreat {
-    #[primary_key]
-    pub spell_id: u32,
-    pub threat: u16,
-    // Scales the spell's damage and heal threat.
-    pub multiplier: f32,
-    // Effect indexes whose targets the flat threat skips.
-    pub inverse_effect_mask: u8,
-}
-
-crate::outside_table_catalog!(game_spell_threat);
 
 #[table(
     accessor = game_threat,
@@ -75,10 +62,21 @@ pub(crate) enum HealDelivery {
 fn spell_threat(ctx: &ReducerContext, spell_id: u32) -> Option<SpellThreat> {
     let rows = ctx.db.game_spell_threat();
     let first = crate::spell::first_rank(ctx, spell_id);
-    // vmangos SpellRankHelper refuses a later rank's own row that adds no flat threat.
-    match rows.spell_id().find(spell_id) {
-        Some(row) if row.threat != 0 || first == spell_id => Some(row),
-        _ => rows.spell_id().find(first),
+    rank_threat(spell_id, first, rows.spell_id().find(spell_id), || {
+        rows.spell_id().find(first)
+    })
+}
+
+// vmangos SpellRankHelper refuses a later rank's own row that adds no flat threat.
+fn rank_threat(
+    spell_id: u32,
+    first_rank: u32,
+    own: Option<SpellThreat>,
+    first_rank_row: impl FnOnce() -> Option<SpellThreat>,
+) -> Option<SpellThreat> {
+    match own {
+        Some(row) if row.threat != 0 || first_rank == spell_id => Some(row),
+        _ => first_rank_row(),
     }
 }
 
@@ -611,6 +609,37 @@ mod tests {
         assert_eq!(scaled_threat(7, 1.25) as i64, 8);
         assert_eq!(scaled_threat(500, 0.0) as i64, 0);
         assert_eq!(scaled_threat(12345, 1.0) as i64, 12345);
+    }
+
+    fn threat_row(spell_id: u32, threat: u16) -> SpellThreat {
+        SpellThreat {
+            spell_id,
+            threat,
+            multiplier: 1.0,
+            inverse_effect_mask: 0,
+        }
+    }
+
+    fn chosen_rank(own: Option<SpellThreat>) -> Option<u32> {
+        let (first, later) = (10, 11);
+        let spell_id = own.as_ref().map_or(later, |row| row.spell_id);
+        rank_threat(spell_id, first, own, || Some(threat_row(first, 45))).map(|row| row.spell_id)
+    }
+
+    #[test]
+    fn a_later_rank_with_its_own_flat_threat_keeps_its_row() {
+        assert_eq!(chosen_rank(Some(threat_row(11, 99))), Some(11));
+    }
+
+    #[test]
+    fn a_later_rank_whose_own_row_has_no_flat_threat_takes_its_first_ranks_row() {
+        assert_eq!(chosen_rank(Some(threat_row(11, 0))), Some(10));
+        assert_eq!(chosen_rank(None), Some(10));
+    }
+
+    #[test]
+    fn a_first_rank_keeps_its_own_row_without_flat_threat() {
+        assert_eq!(chosen_rank(Some(threat_row(10, 0))), Some(10));
     }
 
     #[test]

@@ -658,7 +658,13 @@ fn fire_melee_swing(
         Hit::weapon(HitSource::MainHand, hit_info == AttackOutcome::Crit)
     }
     .with_block(blocked);
-    if queued_fired {
+    // vmangos adds a queued strike's table threat unless it missed or was dodged or parried.
+    if swing_is_spell
+        && !matches!(
+            hit_info,
+            AttackOutcome::Miss | AttackOutcome::Dodge | AttackOutcome::Parry
+        )
+    {
         crate::threat::add_table_threat(
             ctx,
             attacker_guid,

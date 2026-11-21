@@ -771,7 +771,7 @@ by its first rank. Higher ranks take the first rank's rate through `game_spell_c
 row means no charge limit. It is private. The `spellmeta` dump family loads it, and packages cannot
 claim it.
 
-`game_spell_threat` (`module/src/threat.rs`) carries the vmangos `spell_threat` row: a spell's flat
+`game_spell_threat` (`module/src/spell/tables.rs`) carries the vmangos `spell_threat` row: a spell's flat
 `threat`, the `multiplier` on its damage and heal threat, and the `inverse_effect_mask` of effect
 indexes whose targets skip the flat threat. A rank without its own row takes its first rank's row
 through `game_spell_chain`; a later rank's own row with no flat threat is ignored, as in vmangos. A

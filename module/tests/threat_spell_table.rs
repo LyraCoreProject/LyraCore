@@ -258,7 +258,16 @@ fn a_landed_heroic_strike_adds_its_table_threat_and_scaled_damage_threat() {
         let damage: i64 = number(&swing, "damage");
         let observed = threat(&shard, wolf, PLAYER).unwrap_or(0);
         if damage == 0 {
-            assert_eq!(observed, 0, "an avoided strike adds no table threat");
+            let blocked: u32 = number(&swing, "blocked_amount");
+            let expected = if blocked > 0 {
+                HEROIC_STRIKE_RANK_9_THREAT
+            } else {
+                0
+            };
+            assert_eq!(
+                observed, expected,
+                "an avoided strike adds no table threat; a blocked one does"
+            );
             continue;
         }
         assert_eq!(
