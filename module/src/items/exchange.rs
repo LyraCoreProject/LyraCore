@@ -114,6 +114,16 @@ impl ItemStoragePlan {
         consume_item_stacks(&mut self.items, entry, count)
     }
 
+    pub(crate) fn use_up_one(&mut self, item_guid: u64) -> Result<(), ActionRefusal> {
+        let item = self
+            .items
+            .iter_mut()
+            .find(|item| item.guid == item_guid && item.stack_count > 0)
+            .ok_or_else(|| ActionRefusal::from(format!("item {item_guid} is gone")))?;
+        item.stack_count -= 1;
+        Ok(())
+    }
+
     pub(crate) fn grant(
         &mut self,
         ctx: &ReducerContext,

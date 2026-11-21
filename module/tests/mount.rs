@@ -215,17 +215,27 @@ fn a_rider_flagged_in_combat_without_threat_cannot_start_a_mount() {
         .query_rows("SELECT id FROM game_threat WHERE source_guid = 1 OR creature_guid = 1")
         .is_empty());
 
+    shard.assert_call("debug_learn_spell", &[RIDER, MOUNT]);
     assert!(
         poll_until(POLL_TIMEOUT, || {
-            let refused = shard.call("debug_force_cast", &[RIDER, MOUNT]);
+            let refused = shard.call("debug_cast_spell", &[RIDER, MOUNT, "0"]);
             !refused.status.success()
                 && String::from_utf8_lossy(&refused.stderr).contains("cannot be cast in combat")
         }),
-        "the IN_COMBAT flag alone must refuse the mount as affecting combat"
+        "the IN_COMBAT flag alone must refuse the mount cast start as affecting combat"
     );
     let items = reins(&shard);
     let refused = shard.call("gw_use_item", &[&actor(RIDER), &items[0]["slot"]]);
-    assert!(!refused.status.success());
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(!refused.status.success(), "{text}");
+    assert!(
+        text.contains(lyracore_shared::item::ItemRefusal::NotInCombat.as_tag()),
+        "{text}"
+    );
     assert!(mount_auras(&shard).is_empty());
 
     shard.assert_sql(&format!(

@@ -41,6 +41,8 @@ pub(crate) struct CastRequest {
     pub client_initiated: bool,
     pub dest: Option<(f32, f32, f32)>,
     pub item_target: Option<u64>,
+    /// The item that started the cast, used up when the cast goes off unless the spell keeps it.
+    pub cast_item: Option<u64>,
     pub cooldown_category: Option<u32>,
 }
 
@@ -54,6 +56,7 @@ impl CastRequest {
             client_initiated: false,
             dest: None,
             item_target: None,
+            cast_item: None,
             cooldown_category: None,
         }
     }
@@ -135,15 +138,25 @@ fn resolve_loaded_cast(
 
     check_cast_gates(ctx, &caster, spell, request, GateRun::Resolve(phase))?;
 
+    // vmangos Spell::TakeCastItem: the item goes only when the cast goes off.
+    let used_up_item = request
+        .cast_item
+        .filter(|_| !crate::items::spell_keeps_item(ctx, spell_id));
     // Scheduled crafts admit reagents before charging power; all products commit together.
     let craft = if effects.iter().any(|effect| effect.kind == E_CREATE_ITEM) {
         let mut plan = crate::items::ItemStoragePlan::read(ctx, caster_guid, caster.owner_identity);
+        if let Some(item_guid) = used_up_item {
+            plan.use_up_one(item_guid).map_err(String::from)?;
+        }
         for (entry, count) in recipe_reagents(ctx, spell_id) {
             plan.consume(entry, count).map_err(String::from)?;
         }
         plan.check_trade_offers(ctx).map_err(String::from)?;
         Some(plan)
     } else {
+        if let Some(item_guid) = used_up_item {
+            crate::items::use_up_one(ctx, item_guid);
+        }
         None
     };
 
@@ -1084,6 +1097,7 @@ enum CastGate {
     Behind,
     GroundPointLineOfSight,
     Dagger,
+    CastItem,
     SpellFocus,
     ItemTarget,
     RangedWeapon,
@@ -1098,7 +1112,7 @@ enum CastGate {
 }
 
 /// vmangos `Spell::CheckCast` order, cut down to the Gates LyraCore has.
-const CHECK_CAST_ORDER: [CastGate; 31] = [
+const CHECK_CAST_ORDER: [CastGate; 32] = [
     CastGate::SpellReady,
     CastGate::CasterAlive,
     CastGate::CasterLevel,
@@ -1119,6 +1133,7 @@ const CHECK_CAST_ORDER: [CastGate; 31] = [
     CastGate::Behind,
     CastGate::GroundPointLineOfSight,
     CastGate::Dagger,
+    CastGate::CastItem,
     CastGate::SpellFocus,
     CastGate::ItemTarget,
     CastGate::RangedWeapon,
@@ -1326,6 +1341,7 @@ impl GateCheck<'_> {
                 .try_for_each(|effect| {
                     crate::creatures::check_hostile_summon(ctx, caster, hdr, effect).map(|_| ())
                 }),
+            CastGate::CastItem => check_cast_item(ctx, caster.guid, request.cast_item),
             CastGate::ItemTarget => {
                 check_item_target(ctx, caster.guid, effects, request.item_target)
             }
@@ -1995,6 +2011,33 @@ fn caster_life_allows(is_player: bool, dead: bool, dead_callback: bool) -> bool 
     !dead || (dead_callback && !is_player)
 }
 
+// vmangos Spell::CheckItems: the cast item must still be carried and not offered in trade.
+fn check_cast_item(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    cast_item: Option<u64>,
+) -> Result<(), CastGateRefusal> {
+    let Some(item_guid) = cast_item else {
+        return Ok(());
+    };
+    let carried = ctx
+        .db
+        .game_item_instance()
+        .guid()
+        .find(item_guid)
+        .is_some_and(|item| {
+            item.owner_guid == caster_guid && crate::items::is_carried_slot(item.slot)
+        });
+    if carried && !crate::trade::item_is_offered(ctx, caster_guid, item_guid) {
+        Ok(())
+    } else {
+        Err(CastGateRefusal::other(
+            CastRefusalReason::ItemGone,
+            format!("the cast item {item_guid} is gone"),
+        ))
+    }
+}
+
 // vmangos Spell::CheckCast refuses a temporary enchantment without an item it may enchant.
 fn check_item_target(
     ctx: &ReducerContext,
@@ -2255,6 +2298,9 @@ mod gate_order_tests {
     #[test]
     fn items_come_before_range_and_range_before_facing() {
         assert_before(START, G::Behind, &[G::Dagger, G::ItemTarget, G::Range]);
+        for run in [START, COMPLETION] {
+            assert_before(run, G::CastItem, &[G::SpellFocus, G::ItemTarget, G::Range]);
+        }
         assert_before(
             START,
             G::ItemTarget,

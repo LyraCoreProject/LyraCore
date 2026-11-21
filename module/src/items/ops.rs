@@ -427,7 +427,19 @@ fn use_spell_for(tmpl: &ItemTemplate) -> Option<u32> {
         .map(|(spell, _)| spell)
 }
 
-fn spell_keeps_item(ctx: &ReducerContext, spell_id: u32) -> bool {
+pub(crate) fn use_up_one(ctx: &ReducerContext, item_guid: u64) {
+    let Some(mut inst) = ctx.db.game_item_instance().guid().find(item_guid) else {
+        return;
+    };
+    if inst.stack_count > 1 {
+        inst.stack_count -= 1;
+        inst.update(ctx);
+    } else {
+        crate::ItemInstance::delete(ctx, inst.guid);
+    }
+}
+
+pub(crate) fn spell_keeps_item(ctx: &ReducerContext, spell_id: u32) -> bool {
     let reusable_effect = ctx
         .db
         .game_spell_effect()
@@ -495,7 +507,7 @@ pub(crate) fn apply_item_use_on(
             "dead players cannot use items",
         ));
     }
-    let mut inst = item_in_slot(ctx, player_guid, slot)
+    let inst = item_in_slot(ctx, player_guid, slot)
         .ok_or_else(|| refuse(ItemRefusal::ItemNotFound, format!("no item in slot {slot}")))?;
     if crate::trade::item_is_offered(ctx, player_guid, inst.guid) {
         return Err(ItemRefusal::NotRightNow);
@@ -530,6 +542,21 @@ pub(crate) fn apply_item_use_on(
             format!("requires level {}", tmpl.required_level),
         ));
     }
+    // vmangos WorldSession::HandleUseItemOpcode checks combat after Player::CanUseItem.
+    if player.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
+        && super::equip::spells(&tmpl).into_iter().any(|(spell, _)| {
+            ctx.db
+                .game_spell()
+                .spell_id()
+                .find(spell)
+                .is_some_and(|spell| spell.non_combat())
+        })
+    {
+        return Err(refuse(
+            ItemRefusal::NotInCombat,
+            format!("item {} cannot be used in combat", inst.entry),
+        ));
+    }
     // Energize restores rage or energy on non-mana classes, allowing out-of-combat preloading.
     if spell_restores_power(ctx, spell_id) && !is_mana_class(ctx, player_guid) {
         return Err(refuse(
@@ -556,15 +583,6 @@ pub(crate) fn apply_item_use_on(
     {
         return Err(ItemRefusal::SpellCooldown(spell_id));
     }
-    // Propagate cast Refusals so the reducer rolls back item consumption.
-    if !spell_keeps_item(ctx, spell_id) {
-        if inst.stack_count > 1 {
-            inst.stack_count -= 1;
-            inst.update(ctx);
-        } else {
-            crate::ItemInstance::delete(ctx, inst.guid);
-        }
-    }
     let (unit_guid, item_target) = match target {
         ItemUseTarget::Item(item_guid) => (player_guid, Some(item_guid)),
         ItemUseTarget::User => (player_guid, None),
@@ -574,6 +592,7 @@ pub(crate) fn apply_item_use_on(
         ctx,
         &crate::spell::CastRequest {
             item_target,
+            cast_item: Some(inst.guid),
             cooldown_category: Some(super::equip::use_category(&tmpl, spell_id)),
             ..crate::spell::CastRequest::new(player_guid, spell_id, player.level as u8, unit_guid)
         },

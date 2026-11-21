@@ -76,7 +76,7 @@ pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     crate::creatures::distraction::clear(ctx, guid);
 }
 
-/// vmangos `Unit::SetInCombatState`.
+/// Ports the delayed non-combat cast interrupt of vmangos `Unit::SetInCombatState`.
 fn interrupt_non_combat_cast(ctx: &ReducerContext, guid: u64) {
     let Some(cast) = ctx.db.game_pending_cast().by_caster().filter(&guid).next() else {
         return;
