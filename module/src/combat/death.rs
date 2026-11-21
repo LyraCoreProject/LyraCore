@@ -122,7 +122,17 @@ fn kill_creature_with_attribution(
         .as_ref()
         .map(|entitlement| entitlement.recipients.as_slice())
         .unwrap_or_default();
-    award_tag_rewards(ctx, &target, target_guid, kill_recipients, reward_source);
+    let in_party = entitlement
+        .as_ref()
+        .is_some_and(|entitlement| entitlement.group_id.is_some());
+    award_tag_rewards(
+        ctx,
+        &target,
+        target_guid,
+        kill_recipients,
+        in_party,
+        reward_source,
+    );
     roll_corpse_loot(ctx, &mut target, target_guid, entitlement.as_ref());
     target.health = 0;
     target.dead = true;
@@ -200,6 +210,7 @@ fn award_tag_rewards(
     target: &WorldEntity,
     target_guid: u64,
     recipients: &[u64],
+    in_party: bool,
     reward_source: Option<u64>,
 ) {
     let template = ctx.db.game_creature_template().entry().find(target.entry);
@@ -210,10 +221,10 @@ fn award_tag_rewards(
         target.level,
         rank,
         target.map_id,
+        in_party,
         recipients,
     );
     for recipient in recipients {
-        crate::creatures::award_hunter_pet_kill_progression(ctx, *recipient, target.level, rank);
         crate::quest::on_creature_killed(ctx, *recipient, target.entry);
     }
     let is_critter = template
