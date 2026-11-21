@@ -318,7 +318,12 @@ DBC has a second row. Path nodes keep explicit `(path_id, node_index)` order. `f
 signed `int32` container so every raw bit survives, and `delay_ms` holds the DBC's seconds in
 milliseconds. The importer validates references, wire-id bounds and collisions, and duplicate
 ordinals before it writes. It replaces nodes first, paths second and path nodes last, so a
-successful rerun removes stale geometry.
+successful rerun removes stale geometry. `own_mount_horde` and `own_mount_alliance` are end-appended
+with default true and record whether the source node names a mount for that team itself. The mount
+displays fill an empty team slot from the other team for flight, so only these flags tell the teams
+apart. The node-status query skips a node without the Character's own team flag, as vmangos
+`GetNearestTaxiNode` does. Reimport the `dbc` family before play resumes; see the
+[taxi team mount migration](danger-zones.md#taxi-team-mount-migration).
 
 ### Transports (`module/src/transport/mod.rs`)
 

@@ -246,8 +246,9 @@ pub fn statements(scenario: &wire_client::scenario::Scenario) -> anyhow::Result<
     for (id, [x, y, z]) in NODES {
         statements.push(format!(
             "INSERT INTO game_taxi_node \
-             (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) \
-             VALUES ({id},{id},0,{x},{y},{z},'Route fixture',0,{MOUNT_DISPLAY})"
+             (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance,\
+             own_mount_horde,own_mount_alliance) \
+             VALUES ({id},{id},0,{x},{y},{z},'Route fixture',0,{MOUNT_DISPLAY},false,true)"
         ));
     }
     statements.push("INSERT INTO game_taxi_path (id,source_node_id,destination_node_id,fare) VALUES (6,2,4,110)".into());

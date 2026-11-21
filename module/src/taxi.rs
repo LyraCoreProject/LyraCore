@@ -430,6 +430,14 @@ fn faction_mount_display(race: u8, source: &GameTaxiNode) -> u32 {
     }
 }
 
+fn has_own_mount(race: u8, node: &GameTaxiNode) -> bool {
+    if lyracore_shared::faction::team_for_race(race) == lyracore_shared::faction::TEAM_HORDE {
+        node.own_mount_horde
+    } else {
+        node.own_mount_alliance
+    }
+}
+
 fn debit_fare(money: u32, fare: u32) -> Result<u32, TaxiGateDenied> {
     money
         .checked_sub(fare)
@@ -1114,10 +1122,7 @@ pub fn gw_taxi_node_status(
     Ok(())
 }
 
-/// The node vmangos `SendTaxiStatus` reports on: the nearest on the creature's map that has a
-/// mount. It checks no interaction, only that the creature is on the Character's map. vmangos also
-/// skips a node without the Character's own team mount; the imported catalogue fills an empty team
-/// slot from the other team, so this cannot yet (#1091).
+/// The nearest node on the creature's map with the Character's team mount; no interaction check.
 fn status_node(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -1140,7 +1145,7 @@ fn status_node(
     let catalogue = ctx.db.game_taxi_node();
     let mounted = catalogue
         .iter()
-        .filter(|node| faction_mount_display(player.race(), node) != 0);
+        .filter(|node| has_own_mount(player.race(), node));
     nearest_node(&creature, mounted)
         .map(|(_, node)| node)
         .ok_or(TaxiGateDenied::NoSourceNode)
@@ -1537,6 +1542,8 @@ mod tests {
             name: String::new(),
             mount_display_horde: 1,
             mount_display_alliance: 2,
+            own_mount_horde: true,
+            own_mount_alliance: true,
         }
     }
 
@@ -1842,6 +1849,16 @@ mod tests {
         assert_eq!(faction_mount_display(1, &source), 1147);
         source.mount_display_horde = 0;
         assert_eq!(faction_mount_display(6, &source), 0);
+    }
+
+    #[test]
+    fn a_node_counts_for_the_team_that_has_its_own_mount() {
+        let mut node = node(1, 1, 0);
+        node.own_mount_horde = false;
+        assert!(!has_own_mount(2, &node));
+        assert!(has_own_mount(1, &node));
+        node.own_mount_alliance = false;
+        assert!(!has_own_mount(1, &node));
     }
 
     #[test]
