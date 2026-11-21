@@ -76,6 +76,16 @@ pub(crate) fn combat_field_bonus(ctx: &ReducerContext, unit_guid: u64, field: u8
     })
 }
 
+/// vmangos AP_MOD_PCT minus 1: percent Auras multiply, as `power_regen_rate` compounds.
+pub(crate) fn attack_power_multiplier(ctx: &ReducerContext, unit_guid: u64, field: u8) -> f32 {
+    let product = compound_regen_rate(
+        auras_on(ctx, unit_guid)
+            .filter(|a| a.eff_kind == A_MOD_COMBAT && a.eff_p0 == i32::from(field))
+            .map(|a| AuraAmount::from(&a).total()),
+    );
+    product as f32 - 1.0
+}
+
 pub(crate) fn combat_health_regen_pct(ctx: &ReducerContext, unit_guid: u64) -> i32 {
     aura_total(ctx, unit_guid, |a| a.eff_kind == A_COMBAT_HEALTH_REGEN_PCT)
 }

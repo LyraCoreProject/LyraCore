@@ -4,7 +4,7 @@ use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::SMSG_SET_PROFICIENCY;
 
 pub(super) fn ranged_sheet_stats(
-    ranged_attack_power: u32,
+    ranged_attack_power: i32,
     ranged_dmg_min: u32,
     ranged_dmg_max: u32,
 ) -> SheetStatsValues {
@@ -22,6 +22,8 @@ pub(super) fn ranged_sheet_stats(
         attack_power: 50,
         ap_modifiers: 0,
         ranged_ap_modifiers: 0,
+        ap_multiplier: 0.0,
+        ranged_ap_multiplier: 0.0,
         dmg_min: 11,
         dmg_max: 13,
         ranged_attack_power,

@@ -96,6 +96,66 @@ function = "learning_predatory_strikes_in_cat_form_raises_the_sheet_attack_power
 rung = "durable_module"
 
 [[tests]]
+path = "module/src/combat/tables.rs"
+function = "attack_power_damage_does_not_lose_a_point_to_rounding"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/tables.rs"
+function = "the_percent_multiplier_scales_the_clamped_total"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/tables.rs"
+function = "a_character_without_a_launcher_still_has_a_ranged_attack_power_base"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/tables.rs"
+function = "the_ranged_multiplier_scales_launcher_damage"
+rung = "unit"
+
+[[tests]]
+path = "module/src/modifiers/stats.rs"
+function = "attack_power_percent_auras_move_the_sheet"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/spell.rs"
+function = "combat_field_resolves_from_variant_not_misc"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/entity/tests.rs"
+function = "create_object_carries_a_negative_base_and_the_attack_power_multipliers"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/entity/tests.rs"
+function = "create_object_leaves_a_zero_attack_power_multiplier_unset"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/values/tests.rs"
+function = "sheet_values_carry_a_negative_base_and_the_attack_power_multipliers"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/white_melee.rs"
+function = "a_negative_base_attack_power_reaches_the_sheet_as_a_signed_value"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/white_melee.rs"
+function = "attack_power_percent_auras_multiply_and_scale_the_swing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/white_melee.rs"
+function = "the_ranged_percent_aura_reaches_the_sheet_of_everyone_but_wand_users"
+rung = "durable_module"
+
+[[tests]]
 path = "module/src/spell/proc.rs"
 function = "a_ranged_spells_proc_rolls_with_the_ranged_weapon"
 rung = "unit"
@@ -235,22 +295,10 @@ symbol = "visible_health"
 evidence = "Review of PR 1040. At d9173eca, Player.cpp Player::CanSeeHealthOf takes the owner from GetCharmerOrOwnerPlayerOrPlayerItself, and Player::CanSeeSpecialInfoOf shows raw health to the caster of a SPELL_AURA_EMPATHY Aura on the target."
 
 [[known_gaps]]
-description = "The sheet shows ranged attack power 0 for a Character without a launcher or thrown weapon. vmangos computes it from Agility for every Character."
-path = "module/src/combat/tables.rs"
-symbol = "ranged_sheet_values"
-evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Player::UpdateAttackPowerAndDamage(true) writes UNIT_FIELD_RANGED_ATTACK_POWER from Unit::GetAttackPowerFromStrengthAndAgility with no weapon check; ranged_sheet_values returns 0 without a bow, gun, crossbow or thrown weapon."
-
-[[known_gaps]]
-description = "The sheet shows base attack power and ranged attack power 0 where vmangos shows a negative base, for example a Mage with Strength 5. The client adds base and modifiers, so its displayed total is too high by the size of the negative base: a Mage with Strength 5 and +232 AP shows 232 where vmangos shows 227. Damage already sums base and modifiers before it clamps."
-path = "module/src/world.rs"
-symbol = "sheet_ap_base"
-evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Player::UpdateAttackPowerAndDamage writes (int32)baseAttackPower to UNIT_FIELD_ATTACK_POWER, and Unit.cpp Unit::GetTotalAttackPowerValue clamps only the sum. WorldEntity.sheet_ap_base and sheet_ranged_ap are u32; a signed column is a schema change (docs/danger-zones.md section 1.2)."
-
-[[known_gaps]]
-description = "Attack power ignores the percent multiplier. vmangos scales the clamped total by one plus the multiplier, and the sheet writes the multiplier to the client; the Module has no attack power percent modifier."
-path = "module/src/combat/tables.rs"
-symbol = "total_attack_power"
-evidence = "Source reading, not measured. At d9173eca, Unit.cpp Unit::GetTotalAttackPowerValue returns ap * (1.0f + UNIT_FIELD_ATTACK_POWER_MULTIPLIER) for client builds above 1.8.4, and ranged does the same with UNIT_FIELD_RANGED_ATTACK_POWER_MULTIPLIER; StatSystem.cpp Player::UpdateAttackPowerAndDamage writes both fields from AP_MOD_PCT."
+description = "Creatures and pets ignore the attack power percent Auras. vmangos scales a creature's and a pet's attack power by the multiplier and writes it to the update field; the Module takes a creature's damage from its level stats and a hunter pet's through scale_hunter_pet_swing."
+path = "module/src/combat/folds.rs"
+symbol = "swing_range_ctx"
+evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Creature::UpdateAttackPowerAndDamage writes AP_MOD_PCT - 1 at line 866 and scales damage by GetTotalAttackPowerValue at lines 925-929; Pet::UpdateAttackPowerAndDamage does the same at lines 1046 and 1078-1082."
 
 [[known_gaps]]
 description = "A Form's own pool does not survive relog: a druid who logs out in a Form that shows rage or energy comes back with that pool empty. vmangos saves and restores every pool, so Bear rage and Cat energy return. The Reserve Pool (the druid's mana) does survive."

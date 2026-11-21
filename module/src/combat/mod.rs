@@ -54,7 +54,8 @@ pub(crate) use folds::defender_block_value;
 pub(crate) use folds::{
     arm_react, attack_power_modifiers, attack_time, base_melee_attack_power, effective_crit_bp,
     effective_ranged_crit_bp, effective_swing_time, equipped_offhand_weapon_damage,
-    equipped_ranged_weapon, find_ammo, melee_attack_power, off_hand_attack_time, ranged_projectile,
+    equipped_ranged_weapon, find_ammo, melee_attack_power, melee_attack_power_multiplier,
+    off_hand_attack_time, ranged_attack_power_multiplier, ranged_projectile, ranged_values,
     react_window_active, retaliate_on_hit, roll_money, roll_ranged_swing, roll_swing,
     roll_swing_with_range, seal_holy_on_swing, spend_ranged_ammo, swing_range_ctx,
     weapon_strike_spell_damage, wear_weapon, ReactKind, WeaponStrike,
@@ -70,10 +71,10 @@ pub(crate) use swing::{
 pub use swing::{ranged_impact, tick_melee};
 pub(crate) use tables::{
     apply_offhand_penalty, armor_mitigated, armor_mitigation_pct, base_melee_attack_power_for,
-    is_rage_user, is_translating, natural_swing_range_ap, player_swing_range_ap, rage_from_damage,
-    ranged_sheet_values, regen_entity_health, regen_entity_health_in_combat, regen_entity_power,
-    scale_swing_for_rank, swing_time_with_haste, total_attack_power, weapon_swing_range_ap,
-    RegenWindow, AUTO_SHOT_PROJECTILE_SPEED, CLASS_DRUID, CLASS_MAGE, CLASS_PRIEST, CLASS_WARLOCK,
+    is_rage_user, is_translating, is_wand_user, natural_swing_range_ap, player_swing_range_ap,
+    rage_from_damage, ranged_sheet_values, regen_entity_health, regen_entity_health_in_combat,
+    regen_entity_power, scale_swing_for_rank, swing_time_with_haste, total_attack_power,
+    weapon_swing_range_ap, RegenWindow, AUTO_SHOT_PROJECTILE_SPEED, CLASS_DRUID,
     CREATURE_MELEE_MAX, CREATURE_MELEE_MIN, CRIT_MULT, CRUSH_DAMAGE_PCT, GLANCING_DAMAGE_PCT,
     MELEE_LEEWAY_WINDOW_MS, MELEE_RANGE_LEEWAY_CREATURE_SQ, MELEE_RANGE_LEEWAY_SQ, MELEE_RANGE_SQ,
     RANGED_INITIAL_SHOT_MS, RANGED_RANGE_SQ, WAND_PROJECTILE_SPEED,

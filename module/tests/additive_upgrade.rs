@@ -105,6 +105,8 @@ fn populated_old_module_upgrades_without_clearing() {
         "sheet_ranged_crit_bp",
         "reserve_power",
         "reserve_max_power",
+        "sheet_ap_multiplier",
+        "sheet_ranged_ap_multiplier",
     ] {
         assert!(!entity_before.contains_key(column));
         assert_eq!(entity_after.remove(column).as_deref(), Some("0"));

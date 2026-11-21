@@ -696,6 +696,26 @@ fn sheet_values_carry_the_same_melee_and_ranged_projection() {
 }
 
 #[test]
+fn sheet_values_carry_a_negative_base_and_the_attack_power_multipliers() {
+    let mut stats = ranged_sheet_stats(-9, 0, 0);
+    stats.attack_power = -5;
+    stats.ap_multiplier = 0.1;
+    stats.ranged_ap_multiplier = 0.25;
+    let msg = build_sheet_stats_values(1, &stats);
+    let Object::Values {
+        mask1: UpdateMask::Player(player),
+        ..
+    } = &msg.objects[0]
+    else {
+        panic!("expected Player Values")
+    };
+    assert_eq!(player.unit_attack_power(), Some(-5));
+    assert_eq!(player.unit_ranged_attack_power(), Some(-9));
+    assert_eq!(player.unit_attack_power_multiplier(), Some(0.1));
+    assert_eq!(player.unit_ranged_attack_power_multiplier(), Some(0.25));
+}
+
+#[test]
 fn spell_7598_updates_both_melee_and_ranged_crit_fields() {
     let mut stats = ranged_sheet_stats(180, 48, 68);
     stats.crit_pct = 7.0;

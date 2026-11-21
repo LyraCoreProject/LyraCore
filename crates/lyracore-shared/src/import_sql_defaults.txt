@@ -36,6 +36,8 @@ game_world_entity sheet_ranged_crit_bp 0
 game_world_entity reserve_power_type 255
 game_world_entity reserve_power 0
 game_world_entity reserve_max_power 0
+game_world_entity sheet_ap_multiplier 0.0
+game_world_entity sheet_ranged_ap_multiplier 0.0
 game_active_taxi_flight first_destination_node_index 1
 game_spell equipped_item_class -1
 game_spell equipped_item_subclass_mask 0

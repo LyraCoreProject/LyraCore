@@ -92,6 +92,11 @@ pub(crate) const CLASS_WARLOCK: u8 = 9;
 
 pub(crate) const CLASS_DRUID: u8 = 11;
 
+/// vmangos `CLASSMASK_WAND_USERS`: their Auras leave ranged attack power alone.
+pub(crate) const fn is_wand_user(class: u8) -> bool {
+    matches!(class, CLASS_PRIEST | CLASS_MAGE | CLASS_WARLOCK)
+}
+
 /// vmangos base melee AP before modifiers, which can be negative; `profile` is the unit's Form's.
 pub(crate) fn base_melee_attack_power_for(
     class: u8,
@@ -119,16 +124,20 @@ pub(crate) fn base_melee_attack_power_for(
     }
 }
 
-/// Sums base and flat modifiers, then clamps at 0, as vmangos `GetTotalAttackPowerValue` does.
-pub(crate) fn total_attack_power(base: i32, bonus: i32) -> u32 {
-    base.saturating_add(bonus).max(0) as u32
+/// vmangos `GetTotalAttackPowerValue`: `base + bonus` clamped at 0, times `1 + multiplier`.
+pub(crate) fn total_attack_power(base: i32, bonus: i32, multiplier: f32) -> f32 {
+    base.saturating_add(bonus).max(0) as f32 * (1.0 + multiplier)
+}
+
+fn attack_power_damage(ap: f32, delay_ms: u32) -> u32 {
+    (f64::from(ap) * f64::from(delay_ms) / f64::from(AP_PER_DPS * 1000)) as u32
 }
 
 /// vmangos Player::CalculateMinMaxDamage: natural attacks deal level-based damage at their own speed.
-pub(crate) fn natural_swing_range_ap(ap: u32, level: u32, attack_time_ms: u32) -> (u32, u32) {
+pub(crate) fn natural_swing_range_ap(ap: f32, level: u32, attack_time_ms: u32) -> (u32, u32) {
     let speed = attack_time_ms as f32 / 1000.0;
     let level = level.min(60) as f32;
-    let bonus = ap as f32 / AP_PER_DPS as f32 * speed;
+    let bonus = ap / AP_PER_DPS as f32 * speed;
     (
         (level * 0.85 * speed + bonus) as u32,
         (level * 1.25 * speed + bonus) as u32,
@@ -147,6 +156,7 @@ fn ranged_attack_power_for(class: u8, profile: CombatProfile, agility: u32, leve
     raw as i32 - 10
 }
 
+/// The signed ranged attack power base of any Character, and the ranged weapon's damage.
 pub(crate) fn ranged_sheet_values(
     class: u8,
     profile: CombatProfile,
@@ -154,38 +164,35 @@ pub(crate) fn ranged_sheet_values(
     level: u32,
     weapon: Option<(u32, u32, u32, u8)>,
     bonus: i32,
-) -> (u32, f32, f32) {
+    multiplier: f32,
+) -> (i32, f32, f32) {
     use crate::items::weapon_subclass as ws;
 
+    let base = ranged_attack_power_for(class, profile, agility, level);
     let Some((dmg_min, dmg_max, delay_ms, subclass)) = weapon else {
-        return (0, 0.0, 0.0);
+        return (base, 0.0, 0.0);
     };
     if matches!(subclass, ws::BOW | ws::GUN | ws::CROSSBOW | ws::THROWN) {
-        let base = ranged_attack_power_for(class, profile, agility, level);
-        let attack_power = total_attack_power(base, bonus);
-        let bonus = attack_power as f32 / AP_PER_DPS as f32 * (delay_ms as f32 / 1000.0);
-        (
-            base.max(0) as u32,
-            dmg_min as f32 + bonus,
-            dmg_max as f32 + bonus,
-        )
+        let attack_power = total_attack_power(base, bonus, multiplier);
+        let bonus = attack_power / AP_PER_DPS as f32 * (delay_ms as f32 / 1000.0);
+        (base, dmg_min as f32 + bonus, dmg_max as f32 + bonus)
     } else {
-        (0, dmg_min as f32, dmg_max as f32)
+        (base, dmg_min as f32, dmg_max as f32)
     }
 }
 
-pub(crate) fn player_swing_range_ap(ap: u32, attack_time_ms: u32) -> (u32, u32) {
-    let bonus = ap * attack_time_ms / (AP_PER_DPS * 1000);
+pub(crate) fn player_swing_range_ap(ap: f32, attack_time_ms: u32) -> (u32, u32) {
+    let bonus = attack_power_damage(ap, attack_time_ms);
     (UNARMED_BASE_MIN + bonus, UNARMED_BASE_MAX + bonus)
 }
 
 pub(crate) fn weapon_swing_range_ap(
-    ap: u32,
+    ap: f32,
     dmg_min: u32,
     dmg_max: u32,
     delay_ms: u32,
 ) -> (u32, u32) {
-    let bonus = ap * delay_ms / (AP_PER_DPS * 1000);
+    let bonus = attack_power_damage(ap, delay_ms);
     (dmg_min + bonus, dmg_max + bonus)
 }
 
@@ -505,19 +512,20 @@ mod tests {
         );
     }
 
-    fn warrior_ap(strength: u32, level: u32) -> u32 {
+    fn warrior_ap(strength: u32, level: u32) -> f32 {
         total_attack_power(
             base_melee_attack_power_for(CLASS_WARRIOR, WEAPON, strength, 0, level, 0),
             0,
+            0.0,
         )
     }
 
     #[test]
     fn a_warriors_attack_power_follows_strength_and_level() {
-        assert_eq!(warrior_ap(23, 1), 29);
-        assert_eq!(warrior_ap(40, 10), 30 + 80 - 20);
+        assert_eq!(warrior_ap(23, 1), 29.0);
+        assert_eq!(warrior_ap(40, 10), 90.0);
         assert!(warrior_ap(40, 10) > warrior_ap(23, 1));
-        assert_eq!(warrior_ap(0, 1), 0);
+        assert_eq!(warrior_ap(0, 1), 0.0);
     }
 
     #[test]
@@ -525,19 +533,53 @@ mod tests {
         // vmangos: a Mage with Strength 5 has base -5; +232 flat AP totals 227, not 232.
         let mage = base_melee_attack_power_for(CLASS_MAGE, WEAPON, 5, 0, 1, 0);
         assert_eq!(mage, -5);
-        assert_eq!(total_attack_power(mage, 232), 227);
-        assert_eq!(total_attack_power(mage, 0), 0);
-        assert_eq!(total_attack_power(mage, -30), 0);
+        assert_eq!(total_attack_power(mage, 232, 0.0), 227.0);
+        assert_eq!(total_attack_power(mage, 0, 0.0), 0.0);
+        assert_eq!(total_attack_power(mage, -30, 0.0), 0.0);
+    }
+
+    #[test]
+    fn attack_power_damage_does_not_lose_a_point_to_rounding() {
+        // Each case is a whole number of damage that f32 division can undershoot.
+        for (ap, delay_ms, expected) in [
+            (120.0, 2800, 24),
+            (15.0, 2800, 3),
+            (60.0, 2100, 9),
+            (35.0, 2800, 7),
+            (70.0, 1400, 7),
+            (100.0, 3500, 25),
+            (21.0, 2000, 3),
+        ] {
+            assert_eq!(
+                weapon_swing_range_ap(ap, 0, 0, delay_ms),
+                (expected, expected),
+                "{ap} AP over {delay_ms} ms"
+            );
+            assert_eq!(
+                player_swing_range_ap(ap, delay_ms),
+                (UNARMED_BASE_MIN + expected, UNARMED_BASE_MAX + expected),
+                "{ap} AP over {delay_ms} ms unarmed"
+            );
+        }
+        assert_eq!(weapon_swing_range_ap(408.6, 0, 0, 2000), (58, 58));
+    }
+
+    #[test]
+    fn the_percent_multiplier_scales_the_clamped_total() {
+        // vmangos GetTotalAttackPowerValue: (base + flat) * (1 + multiplier), 0 below zero.
+        assert_eq!(total_attack_power(100, 20, 0.5), 180.0);
+        assert_eq!(total_attack_power(-5, 0, 0.5), 0.0);
+        assert_eq!(total_attack_power(-5, 105, 1.0), 200.0);
     }
 
     #[test]
     fn feral_forms_swing_level_damage_at_their_own_speed() {
         // Level 60: Cat 51-75 per 1.0 s and Bear 127.5-187.5 per 2.5 s, plus AP / 14 per second.
-        assert_eq!(natural_swing_range_ap(0, 60, 1000), (51, 75));
-        assert_eq!(natural_swing_range_ap(280, 60, 1000), (71, 95));
-        assert_eq!(natural_swing_range_ap(140, 60, 2500), (152, 212));
+        assert_eq!(natural_swing_range_ap(0.0, 60, 1000), (51, 75));
+        assert_eq!(natural_swing_range_ap(280.0, 60, 1000), (71, 95));
+        assert_eq!(natural_swing_range_ap(140.0, 60, 2500), (152, 212));
         assert_eq!(
-            natural_swing_range_ap(0, 63, 1000),
+            natural_swing_range_ap(0.0, 63, 1000),
             (51, 75),
             "the level caps at 60"
         );
@@ -646,10 +688,28 @@ mod tests {
                 20,
                 10,
                 Some((8, 12, 2800, crate::items::weapon_subclass::BOW)),
-                0
+                0,
+                0.0
             ),
             (50, 18.0, 22.0)
         );
+    }
+
+    #[test]
+    fn a_character_without_a_launcher_still_has_a_ranged_attack_power_base() {
+        // vmangos UpdateAttackPowerAndDamage(true) checks no weapon: a Mage's base is Agility - 10.
+        let none = |agility| ranged_sheet_values(CLASS_MAGE, WEAPON, agility, 10, None, 0, 0.0);
+        assert_eq!(none(25), (15, 0.0, 0.0));
+        assert_eq!(none(5), (-5, 0.0, 0.0));
+    }
+
+    #[test]
+    fn the_ranged_multiplier_scales_launcher_damage() {
+        // Hunter base 50 * 1.5 = 75 AP over the 2.8 s bow adds 15.
+        let bow = Some((8, 12, 2800, crate::items::weapon_subclass::BOW));
+        let (ap, min, max) = ranged_sheet_values(3, WEAPON, 20, 10, bow, 0, 0.5);
+        assert_eq!(ap, 50);
+        assert!((min - 23.0).abs() < 0.0001 && (max - 27.0).abs() < 0.0001);
     }
 
     #[test]
@@ -661,9 +721,10 @@ mod tests {
                 0,
                 1,
                 Some((10, 10, 14000, crate::items::weapon_subclass::THROWN)),
-                16
+                16,
+                0.0
             ),
-            (0, 17.0, 17.0),
+            (-9, 17.0, 17.0),
             "base -9 plus 16 AP is 7 AP over the 14 s throw"
         );
     }
@@ -678,6 +739,7 @@ mod tests {
                 60,
                 Some((23, 43, 1800, crate::items::weapon_subclass::THROWN)),
                 16,
+                0.0,
             );
             let (expected_ap, expected_min, expected_max) = if class == 3 {
                 (370, 72.62857, 92.62857)
@@ -699,9 +761,10 @@ mod tests {
                 130,
                 60,
                 Some((8, 12, 2800, crate::items::weapon_subclass::WAND)),
-                16
+                16,
+                0.0
             ),
-            (0, 8.0, 12.0)
+            (120, 8.0, 12.0)
         );
     }
 
@@ -725,10 +788,10 @@ mod tests {
         assert_eq!(weapon_swing_range_ap(warrior_ap(23, 1), 1, 3, 1900), (4, 6));
         let base_ap = warrior_ap(23, 1);
         let (lo, hi) = player_swing_range_ap(base_ap, 2000);
-        let (blo, bhi) = player_swing_range_ap(base_ap + 30, 2000);
+        let (blo, bhi) = player_swing_range_ap(base_ap + 30.0, 2000);
         assert!(blo > lo && bhi > hi);
         let (wlo, _) = weapon_swing_range_ap(base_ap, 8, 12, 1900);
-        let (wblo, _) = weapon_swing_range_ap(base_ap + 30, 8, 12, 1900);
+        let (wblo, _) = weapon_swing_range_ap(base_ap + 30.0, 8, 12, 1900);
         assert!(wblo > wlo);
     }
 

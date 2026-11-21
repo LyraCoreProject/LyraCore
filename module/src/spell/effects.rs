@@ -127,7 +127,6 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     if !e.is_player() {
         return;
     }
-    let (_, class, _, _) = lyracore_shared::packing::unpack4(e.unit_bytes_0);
     let eff_str =
         crate::modifiers::effective_stat(ctx, &e, lyracore_shared::spell::taxonomy::STAT_STR);
     let eff_agi =
@@ -135,15 +134,12 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     let [str_bonus, agi_bonus, sta_bonus, int_bonus, spi_bonus] =
         crate::modifiers::SHEET_STATS.map(|stat| crate::modifiers::sheet_stat_bonus(ctx, &e, stat));
 
-    let ap_base = crate::combat::base_melee_attack_power(ctx, &e, eff_str, eff_agi).max(0) as u32;
+    let ap_base = crate::combat::base_melee_attack_power(ctx, &e, eff_str, eff_agi) as u32;
     let ap_mods = crate::modifiers::combat_field_bonus(ctx, unit_guid, COMBAT_ATTACK_POWER);
     let (dmg_min, dmg_max) = crate::combat::swing_range_ctx(ctx, &e);
     let ap_modifiers = crate::combat::attack_power_modifiers(ctx, unit_guid, COMBAT_ATTACK_POWER);
     // Priest, mage and warlock ignore ranged AP modifiers.
-    let ranged_ap_modifiers = if matches!(
-        class,
-        crate::combat::CLASS_PRIEST | crate::combat::CLASS_MAGE | crate::combat::CLASS_WARLOCK
-    ) {
+    let ranged_ap_modifiers = if crate::combat::is_wand_user(e.class()) {
         0
     } else {
         crate::combat::attack_power_modifiers(
@@ -152,18 +148,14 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
             lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
         )
     };
-    let (ranged_ap, ranged_dmg_min, ranged_dmg_max) = crate::combat::ranged_sheet_values(
-        class,
-        crate::form::combat_profile(ctx, unit_guid),
-        eff_agi,
-        e.level,
+    let (ranged_ap, ranged_dmg_min, ranged_dmg_max) = crate::combat::ranged_values(
+        ctx,
+        &e,
         crate::combat::equipped_ranged_weapon(ctx, unit_guid),
-        crate::modifiers::combat_field_bonus(
-            ctx,
-            unit_guid,
-            lyracore_shared::spell::taxonomy::COMBAT_RANGED_ATTACK_POWER,
-        ),
     );
+    let ranged_ap = ranged_ap as u32;
+    let ap_multiplier = crate::combat::melee_attack_power_multiplier(ctx, unit_guid);
+    let ranged_ap_multiplier = crate::combat::ranged_attack_power_multiplier(ctx, &e);
     let ranged_dmg_min =
         bonuses::weapon_damage(ctx, &e, crate::items::equip_slot::RANGED, ranged_dmg_min);
     let ranged_dmg_max =
@@ -188,6 +180,8 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
         && crit_bp == e.sheet_crit_bp
         && ranged_crit_bp == e.sheet_ranged_crit_bp
         && ranged_ap == e.sheet_ranged_ap
+        && ap_multiplier == e.sheet_ap_multiplier
+        && ranged_ap_multiplier == e.sheet_ranged_ap_multiplier
         && ranged_dmg_min == e.sheet_ranged_dmg_min
         && ranged_dmg_max == e.sheet_ranged_dmg_max
         && ranged_min_fraction == e.sheet_ranged_dmg_min_fraction
@@ -209,6 +203,8 @@ pub(crate) fn recompute_sheet(ctx: &ReducerContext, unit_guid: u64) {
     e.sheet_crit_bp = crit_bp;
     e.sheet_ranged_crit_bp = ranged_crit_bp;
     e.sheet_ranged_ap = ranged_ap;
+    e.sheet_ap_multiplier = ap_multiplier;
+    e.sheet_ranged_ap_multiplier = ranged_ap_multiplier;
     e.sheet_ranged_dmg_min = ranged_dmg_min;
     e.sheet_ranged_dmg_max = ranged_dmg_max;
     e.sheet_ranged_dmg_min_fraction = ranged_min_fraction;

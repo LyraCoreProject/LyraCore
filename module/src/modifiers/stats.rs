@@ -1,7 +1,8 @@
 use lyracore_shared::spell::taxonomy::{
     A_DISARM, A_FLAG, A_MOD_COMBAT, A_MOD_DAMAGE_DONE_FLAT, A_MOD_DAMAGE_DONE_PCT, A_MOD_STAT,
-    A_MOD_STAT_PCT, COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_RANGED_ATTACK_POWER, STAT_AGI,
-    STAT_ALL, STAT_INT, STAT_SPI, STAT_STA, STAT_STR,
+    A_MOD_STAT_PCT, COMBAT_ATTACK_POWER, COMBAT_ATTACK_POWER_PCT, COMBAT_CRIT,
+    COMBAT_RANGED_ATTACK_POWER, COMBAT_RANGED_ATTACK_POWER_PCT, STAT_AGI, STAT_ALL, STAT_INT,
+    STAT_SPI, STAT_STA, STAT_STR,
 };
 use spacetimedb::ReducerContext;
 
@@ -12,7 +13,13 @@ use crate::WorldEntity;
 // The inputs `recompute_vitals` and `recompute_sheet` read; `moves_*` must match them.
 pub(crate) const VITALS_STATS: [u8; 3] = [STAT_STA, STAT_INT, STAT_SPI];
 pub(crate) const SHEET_STATS: [u8; 5] = [STAT_STR, STAT_AGI, STAT_STA, STAT_INT, STAT_SPI];
-const SHEET_COMBAT_FIELDS: [u8; 3] = [COMBAT_ATTACK_POWER, COMBAT_RANGED_ATTACK_POWER, COMBAT_CRIT];
+const SHEET_COMBAT_FIELDS: [u8; 5] = [
+    COMBAT_ATTACK_POWER,
+    COMBAT_RANGED_ATTACK_POWER,
+    COMBAT_ATTACK_POWER_PCT,
+    COMBAT_RANGED_ATTACK_POWER_PCT,
+    COMBAT_CRIT,
+];
 
 // Spell rows carry no icon id; vmangos matches the Predatory Strikes dummy Aura by icon 1563.
 const PREDATORY_STRIKES_SPELLS: [u32; 5] = [16972, 16974, 16975, 16976, 16977];
@@ -168,6 +175,13 @@ mod tests {
         assert!(moves_vitals(A_MOD_STAT, i32::from(STAT_SPI)));
         assert!(moves_vitals(A_MOD_STAT_PCT, i32::from(STAT_ALL)));
         assert!(moves_sheet(0, A_MOD_STAT_PCT, i32::from(STAT_STR)));
+    }
+
+    #[test]
+    fn attack_power_percent_auras_move_the_sheet() {
+        for field in [COMBAT_ATTACK_POWER_PCT, COMBAT_RANGED_ATTACK_POWER_PCT] {
+            assert!(moves_sheet(0, A_MOD_COMBAT, i32::from(field)));
+        }
     }
 
     #[test]

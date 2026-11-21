@@ -79,6 +79,7 @@ pub fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         DamageShield => A_DAMAGE_SHIELD,
 
         ModAttackPower | ModRangedAttackPower => A_MOD_COMBAT,
+        ModAttackPowerPct | ModRangedAttackPowerPct => A_MOD_COMBAT,
         ModCritPercent | ModSpellCritChance => A_MOD_COMBAT,
         ModHitChance => A_MOD_COMBAT,
         ModDamageDone => A_MOD_DAMAGE_DONE_FLAT,

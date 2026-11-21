@@ -68,13 +68,15 @@ pub struct EntityView {
     pub stamina: u32,
     pub intellect: u32,
     pub spirit: u32,
-    pub sheet_ap_base: u32,
+    pub sheet_ap_base: i32,
     // Positive i16 in the low half, negative i16 in the high half.
     pub sheet_ap_modifiers: u32,
     pub sheet_ranged_ap_modifiers: u32,
+    pub sheet_ap_multiplier: f32,
+    pub sheet_ranged_ap_multiplier: f32,
     pub sheet_dmg_min: u32,
     pub sheet_dmg_max: u32,
-    pub sheet_ranged_ap: u32,
+    pub sheet_ranged_ap: i32,
     pub sheet_ranged_dmg_min: f32,
     pub sheet_ranged_dmg_max: f32,
     pub npc_flags: u32,
@@ -475,18 +477,25 @@ pub fn build_create_object(
                 .set_unit_shadow_resistance(entity.magic_resistances[4] as i32)
                 .set_unit_arcane_resistance(entity.magic_resistances[5] as i32)
                 // Unset damage fields become uninitialized floats in the build 5875 paperdoll.
-                .set_unit_attack_power(entity.sheet_ap_base as i32)
+                .set_unit_attack_power(entity.sheet_ap_base)
                 // gtker writes its first short argument into the high half.
                 .set_unit_attack_power_mods((ap_mods >> 16) as u16, ap_mods as u16)
-                // Attack power uses 1 + multiplier; setting 1.0 doubles displayed AP.
                 .set_unit_mindamage(entity.sheet_dmg_min as f32)
                 .set_unit_maxdamage(entity.sheet_dmg_max as f32)
-                .set_unit_ranged_attack_power(entity.sheet_ranged_ap as i32)
+                .set_unit_ranged_attack_power(entity.sheet_ranged_ap)
                 .set_unit_ranged_attack_power_mods((ranged_mods >> 16) as u16, ranged_mods as u16)
                 .set_unit_minrangeddamage(entity.sheet_ranged_dmg_min)
                 .set_unit_maxrangeddamage(entity.sheet_ranged_dmg_max)
                 // The paperdoll divides damage by this multiplier; zero produces infinities.
                 .set_player_field_mod_damage_done_pct(1.0_f32.to_bits() as i32);
+            // Attack power uses 1 + multiplier: unset reads 0, and 1.0 would double displayed AP.
+            if entity.sheet_ap_multiplier != 0.0 {
+                builder = builder.set_unit_attack_power_multiplier(entity.sheet_ap_multiplier);
+            }
+            if entity.sheet_ranged_ap_multiplier != 0.0 {
+                builder = builder
+                    .set_unit_ranged_attack_power_multiplier(entity.sheet_ranged_ap_multiplier);
+            }
         }
 
         builder = builder

@@ -993,8 +993,11 @@ Real world content is not seeded. It comes from the importer; see
 `game_world_entity.sheet_ap_modifiers` and `sheet_ranged_ap_modifiers` cache the wire AP
 breakdown. The low signed-16 half is the positive modifier and the high signed-16 half is the
 negative modifier. They are END-appended with zero defaults and refreshed by publish repair.
-The ranged base AP stays separate. Damage uses the signed total; both CREATE and VALUES
-retain the individual modifier halves.
+The ranged base AP stays separate and exists for every Character, with or without a launcher.
+Damage uses the signed total scaled by `1 + multiplier`, where `sheet_ap_multiplier` and
+`sheet_ranged_ap_multiplier` hold the multiplier the client receives; both CREATE and VALUES
+retain the individual modifier halves. `sheet_ap_base` and `sheet_ranged_ap` store the bits of a
+signed base. Priests, mages and warlocks ignore ranged AP Auras, flat and percent.
 
 `game_item_aura` retains the exact BSATN source definition for each active derived aura. Repair
 compares it with the current header and effect, so unchanged auras keep their identity and timing.
