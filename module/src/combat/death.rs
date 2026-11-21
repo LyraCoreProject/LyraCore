@@ -204,16 +204,15 @@ fn award_tag_rewards(
 ) {
     let template = ctx.db.game_creature_template().entry().find(target.entry);
     let rank = template.as_ref().map(|t| t.rank).unwrap_or(0);
-    let share_count = recipients.len() as u32;
+    crate::xp::award_kill_xp(
+        ctx,
+        target_guid,
+        target.level,
+        rank,
+        target.map_id,
+        recipients,
+    );
     for recipient in recipients {
-        crate::xp::award_xp(
-            ctx,
-            *recipient,
-            target_guid,
-            target.level,
-            rank,
-            share_count,
-        );
         crate::creatures::award_hunter_pet_kill_progression(ctx, *recipient, target.level, rank);
         crate::quest::on_creature_killed(ctx, *recipient, target.entry);
     }
@@ -229,7 +228,7 @@ fn award_tag_rewards(
             .find(reward_guid)
             .map(|character| character.level)
             .unwrap_or(0);
-        let yields_xp = crate::xp::xp_for_kill(target.level, reward_level) > 0;
+        let yields_xp = !crate::xp::is_grey_kill(reward_level, target.level);
         // vmangos `spell_chain` ranks Drain Soul from 1120; every rank grants the shard.
         let draining_soul = ctx
             .db
