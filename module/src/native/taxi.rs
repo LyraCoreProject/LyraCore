@@ -164,6 +164,50 @@ pub(super) fn open(
     Ok(())
 }
 
+fn activate(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    npc: u64,
+    nodes: &[u32],
+) -> Result<(), Rollback> {
+    let Some(reply) = crate::taxi::activate_route(ctx, guid, npc, nodes, 0) else {
+        return Ok(());
+    };
+    let accepted = reply.accepted && reply.result_code == taxi_protocol::ACTIVATE_OK;
+    if accepted {
+        super::send(
+            ctx,
+            connection,
+            ServerOpcodeMessage::SMSG_CANCEL_COMBAT,
+            false,
+        )?;
+    }
+    super::send(
+        ctx,
+        connection,
+        ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(codec::build_activate_taxi_reply(
+            codec::TaxiActivationResult {
+                result_code: reply.result_code,
+            },
+        )),
+        false,
+    )?;
+    // The ordered feed must deliver the paid reply before the first flight spline.
+    if accepted {
+        super::send(
+            ctx,
+            connection,
+            ServerOpcodeMessage::SMSG_MOUNTRESULT(SMSG_MOUNTRESULT {
+                result: MountResult::Ok,
+            }),
+            false,
+        )?;
+        crate::taxi::arm_taxi_flight(ctx, guid);
+    }
+    Ok(())
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
@@ -194,48 +238,17 @@ pub(super) fn receive(
         }
         ClientOpcodeMessage::CMSG_ACTIVATETAXI(c) => {
             super::available_entity(ctx, guid)?;
-            let Some(reply) = crate::taxi::activate_taxi(
-                ctx,
-                guid,
-                c.guid.guid(),
-                c.source_node,
-                c.destination_node,
-                0,
-            ) else {
-                return Ok(());
-            };
-            let accepted = reply.accepted && reply.result_code == taxi_protocol::ACTIVATE_OK;
-            if accepted {
-                super::send(
-                    ctx,
-                    connection,
-                    ServerOpcodeMessage::SMSG_CANCEL_COMBAT,
-                    false,
-                )?;
-            }
-            super::send(
+            activate(
                 ctx,
                 connection,
-                ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(codec::build_activate_taxi_reply(
-                    codec::TaxiActivationResult {
-                        result_code: reply.result_code,
-                    },
-                )),
-                false,
-            )?;
-            // The ordered feed must deliver the paid reply before the first flight spline.
-            if accepted {
-                super::send(
-                    ctx,
-                    connection,
-                    ServerOpcodeMessage::SMSG_MOUNTRESULT(SMSG_MOUNTRESULT {
-                        result: MountResult::Ok,
-                    }),
-                    false,
-                )?;
-                crate::taxi::arm_taxi_flight(ctx, guid);
-            }
-            Ok(())
+                guid,
+                c.guid.guid(),
+                &[c.source_node, c.destination_node],
+            )
+        }
+        ClientOpcodeMessage::CMSG_ACTIVATETAXIEXPRESS(c) => {
+            super::available_entity(ctx, guid)?;
+            activate(ctx, connection, guid, c.guid.guid(), &c.nodes)
         }
         other => return Err(Unhandled::Declined(other)),
     };

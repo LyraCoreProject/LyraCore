@@ -200,7 +200,10 @@ A Refusal or an empty reply does not establish a working gameplay feature.
 | Ammunition, skill unlearning, equipment visibility, PvP flags and honor queries | Specific System Messages |
 | Summon acceptance, remote cameras, LFG preferences and quest-share confirmations | Specific System Messages |
 | Raid lockout queries | An empty lockout list; instance bindings end with their Instance |
-| Taxi chains | Activation failure; single-hop taxis have their own implementation |
+
+`module/src/native/taxi.rs` answers taxi chains: an express request for two nodes flies as a
+single-hop taxi does. A request for more nodes runs vmangos's earlier checks, stays silent when a
+leg has no path, and otherwise gets status 1, because multi-hop routes are unsupported.
 
 The Module handles current presence, name lookup, party authority and recipient Gates in one
 Shard.
