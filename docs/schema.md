@@ -144,7 +144,9 @@ and `category_cooldown_ms` retain source fields needed by equip effects. The fiv
 `game_item_template.spellcategory_*` fields override category admission for an Item cast.
 `game_spell_cd.category` identifies the shared category owner; `category_ready_micros` keeps its
 absolute deadline. `game_pending_cast.cooldown_category` preserves an Item's override, including
-zero, through cast completion. Their typed defaults preserve old rows during an additive publish.
+zero, through cast completion. `game_pending_cast.cast_item_guid` names the Item a cast uses up
+when it goes off; zero means no cast item, and a row in flight at upgrade already used up its Item
+at start. Their typed defaults preserve old rows during an additive publish.
 See [equip spell migration](danger-zones.md#equip-spell-migration) before play resumes.
 
 Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully

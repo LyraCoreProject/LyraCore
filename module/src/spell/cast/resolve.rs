@@ -61,9 +61,8 @@ impl CastRequest {
         }
     }
 
-    /// A cast an item starts; only item use sets a cooldown category.
     fn is_item_cast(&self) -> bool {
-        self.cooldown_category.is_some()
+        self.cast_item.is_some()
     }
 }
 
@@ -152,7 +151,7 @@ fn resolve_loaded_cast(
             plan.consume(entry, count).map_err(String::from)?;
         }
         plan.check_trade_offers(ctx).map_err(String::from)?;
-        Some(plan)
+        Some(Craft { plan, used_up_item })
     } else {
         if let Some(item_guid) = used_up_item {
             crate::items::use_up_one(ctx, item_guid);
@@ -318,6 +317,12 @@ fn remember_hit_target(
     }
 }
 
+/// A craft's storage plan, and the cast item it uses up through the plan or, if dropped, directly.
+struct Craft {
+    plan: crate::items::ItemStoragePlan,
+    used_up_item: Option<u64>,
+}
+
 fn grant_crafted_item(
     ctx: &ReducerContext,
     plan: &mut crate::items::ItemStoragePlan,
@@ -415,7 +420,7 @@ fn run_spell_effects(
     spell: &LoadedSpell,
     request: &CastRequest,
     origin: CastOrigin,
-    mut craft: Option<crate::items::ItemStoragePlan>,
+    mut craft: Option<Craft>,
 ) {
     let (caster_guid, target_guid) = (request.caster_guid, request.target_guid);
     let (level, dest) = (request.level, request.dest);
@@ -508,8 +513,8 @@ fn run_spell_effects(
             if e.kind == E_CREATE_ITEM {
                 created_items.push(e.p0.max(0) as u32);
             }
-            let hit = if let (E_CREATE_ITEM, Some(plan)) = (e.kind, craft.as_mut()) {
-                grant_crafted_item(ctx, plan, e, hdr, points)
+            let hit = if let (E_CREATE_ITEM, Some(craft)) = (e.kind, craft.as_mut()) {
+                grant_crafted_item(ctx, &mut craft.plan, e, hdr, points)
             } else {
                 let points = crate::combo::effect_points(ctx, hdr, e, caster_guid, t, points);
                 apply_effect(
@@ -561,7 +566,7 @@ fn run_spell_effects(
     {
         crate::combo::spend_combo(ctx, caster_guid);
     }
-    let finish_items = |craft: Option<crate::items::ItemStoragePlan>| {
+    let finish_items = |craft: Option<Craft>| {
         finish_item_creation(
             ctx,
             caster_guid,
@@ -688,17 +693,23 @@ fn finish_item_creation(
     ctx: &ReducerContext,
     caster_guid: u64,
     spell_id: u32,
-    craft: Option<crate::items::ItemStoragePlan>,
+    craft: Option<Craft>,
     item_grants: u32,
     mut item_refused: bool,
     created_items: &[u32],
 ) {
-    if !item_refused {
-        if let Some(plan) = craft {
+    if let Some(Craft { plan, used_up_item }) = craft {
+        if !item_refused {
             if let Err(reason) = plan.commit_with_source(ctx, crate::items::ItemPush::SPELL_CREATED)
             {
                 log::info!("craft {spell_id} refused: {reason:?}");
                 item_refused = true;
+            }
+        }
+        // A refused product drops the plan, but the cast went off and still uses up its item.
+        if item_refused {
+            if let Some(item_guid) = used_up_item {
+                crate::items::use_up_one(ctx, item_guid);
             }
         }
     }
@@ -2011,7 +2022,7 @@ fn caster_life_allows(is_player: bool, dead: bool, dead_callback: bool) -> bool 
     !dead || (dead_callback && !is_player)
 }
 
-// vmangos Spell::CheckItems: the cast item must still be carried and not offered in trade.
+// vmangos Spell::CheckItems refuses a cast item in trade; LyraCore also needs it carried.
 fn check_cast_item(
     ctx: &ReducerContext,
     caster_guid: u64,

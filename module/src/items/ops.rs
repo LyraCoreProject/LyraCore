@@ -584,6 +584,12 @@ pub(crate) fn apply_item_use_on(
         return Err(ItemRefusal::SpellCooldown(spell_id));
     }
     let (unit_guid, item_target) = match target {
+        ItemUseTarget::Item(item_guid) if item_guid == inst.guid => {
+            return Err(refuse(
+                ItemRefusal::NotRightNow,
+                format!("item {} cannot target itself", inst.guid),
+            ));
+        }
         ItemUseTarget::Item(item_guid) => (player_guid, Some(item_guid)),
         ItemUseTarget::User => (player_guid, None),
         ItemUseTarget::Unit(unit_guid) => (unit_guid, None),
