@@ -4272,7 +4272,7 @@ def check_inventory(host):
     for spell in (5091101, 5091103):
         client.send(0x1b2, struct.pack('<QI', trainer, spell))
         assert (0x1b3, struct.pack('<QI', trainer, spell)) in client.collect()
-    assert host.rows(f'SELECT spell_id FROM game_player_spell WHERE character_guid = {guid} AND spell_id IN (5091101)') == [[5091101]]
+    assert host.rows(f'SELECT spell_id FROM game_player_spell WHERE character_guid = {guid} AND spell_id = 5091101') == [[5091101]]
     assert host.rows(f'SELECT skill_line FROM game_player_skill WHERE character_guid = {guid} AND skill_line = 185') == [[185]]
     host.sql(f'UPDATE game_world_entity SET money = {money_before[0][0]} WHERE guid = {guid}')
     client.collect()
