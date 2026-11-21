@@ -26,9 +26,36 @@ pub(crate) fn buy_cost(unit_price: u32, count: u32) -> u32 {
     unit_price.saturating_mul(count)
 }
 
-// Repair currently costs one copper per point; DBC DurabilityCost is not imported.
-pub(crate) fn repair_cost(max_durability: u32, durability: u32) -> u32 {
-    max_durability.saturating_sub(durability)
+// vmangos picks the DurabilityCosts column by item class; other classes use column 0.
+pub(crate) fn durability_multiplier_id(class: u8, subclass: u8) -> u8 {
+    match class {
+        2 => subclass,
+        4 => subclass.saturating_add(21),
+        _ => 0,
+    }
+}
+
+// Float steps and truncation follow vmangos Player::DurabilityRepair.
+pub(crate) fn repair_cost(lost_durability: u32, multiplier: u32, quality_mod: f32) -> u32 {
+    (lost_durability.wrapping_mul(multiplier) as f32 * quality_mod) as u32
+}
+
+pub(crate) fn repair_bill(cost: u32, discount_mod: f32) -> u32 {
+    ((cost as f32 * discount_mod + 0.5) as u32).max(1)
+}
+
+pub(crate) fn sell_value_after_wear(sell_value: u32, cost: u32) -> u32 {
+    let cost = cost.max(1);
+    if cost > sell_value {
+        1
+    } else {
+        sell_value - cost
+    }
+}
+
+// Equipped, bag and backpack slots, then bag contents; the keyring and the bank stay unrepaired.
+pub(crate) const fn repaired_by_repair_all(slot: u8) -> bool {
+    slot <= 38 || (slot >= 120 && slot <= 191)
 }
 
 pub(crate) fn merge_amount(src: u32, dst: u32, max_stack: u32) -> u32 {
@@ -280,12 +307,48 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn repair_cost_is_one_copper_per_restored_point() {
-        assert_eq!(repair_cost(100, 100), 0);
-        assert_eq!(repair_cost(100, 0), 100);
-        assert_eq!(repair_cost(100, 60), 40);
-        assert_eq!(repair_cost(0, 0), 0);
-        assert_eq!(repair_cost(50, 80), 0);
+    fn durability_multiplier_column_follows_class_and_subclass() {
+        assert_eq!(durability_multiplier_id(2, 0), 0);
+        assert_eq!(durability_multiplier_id(2, 20), 20);
+        assert_eq!(durability_multiplier_id(4, 0), 21);
+        assert_eq!(durability_multiplier_id(4, 4), 25);
+        assert_eq!(durability_multiplier_id(1, 3), 0);
+        assert_eq!(durability_multiplier_id(0, 0), 0);
+    }
+
+    #[test]
+    fn repair_cost_scales_lost_points_by_multiplier_and_quality() {
+        assert_eq!(repair_cost(10, 7, 1.5), 105);
+        assert_eq!(repair_cost(40, 12, 1.0), 480);
+        assert_eq!(repair_cost(0, 7, 1.5), 0);
+        assert_eq!(repair_cost(3, 1, 0.5), 1);
+    }
+
+    #[test]
+    fn repair_bill_applies_the_discount_and_never_falls_below_one_copper() {
+        assert_eq!(repair_bill(100, 1.0), 100);
+        assert_eq!(repair_bill(100, 0.9), 90);
+        assert_eq!(repair_bill(1000, 0.9), 900);
+        assert_eq!(repair_bill(0, 1.0), 1);
+        assert_eq!(repair_bill(0, 0.9), 1);
+    }
+
+    #[test]
+    fn a_damaged_item_sells_for_its_price_minus_the_repair_cost() {
+        assert_eq!(sell_value_after_wear(100, 30), 70);
+        assert_eq!(sell_value_after_wear(50, 0), 49);
+        assert_eq!(sell_value_after_wear(10, 10), 0);
+        assert_eq!(sell_value_after_wear(10, 30), 1);
+    }
+
+    #[test]
+    fn repair_all_covers_carried_slots_and_bag_contents_but_not_keyring_or_bank() {
+        for slot in [0u8, 18, 19, 22, 23, 38, 120, 191] {
+            assert!(repaired_by_repair_all(slot), "slot {slot} is repaired");
+        }
+        for slot in [39u8, 62, 63, 81, 112, 119, 192, 255] {
+            assert!(!repaired_by_repair_all(slot), "slot {slot} is not repaired");
+        }
     }
 
     #[test]

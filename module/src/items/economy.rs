@@ -1,9 +1,12 @@
-use spacetimedb::ReducerContext;
+use spacetimedb::{table, ReducerContext};
 
 use crate::game_npc_vendor;
 
 use super::inventory::is_carried_slot;
-use super::rules::{buy_cost, equip_slot, repair_cost, sell_value};
+use super::rules::{
+    buy_cost, durability_multiplier_id, equip_slot, repair_bill, repair_cost,
+    repaired_by_repair_all, sell_value, sell_value_after_wear,
+};
 use super::tables::{
     game_item_instance, game_item_template, item_in_slot, ItemInstance, ItemTemplate, NpcVendor,
 };
@@ -11,6 +14,25 @@ use super::tables::{
 use crate::npc_interaction::{NpcRefusal, NpcService};
 
 // Prices are in copper.
+
+// DurabilityCosts.dbc: one row per item level and multiplier column (0..=20 weapon, 21..=28 armour).
+#[table(accessor = game_durability_cost, index(accessor = by_level_multiplier, btree(columns = [item_level, multiplier_id])))]
+pub struct DurabilityCost {
+    pub item_level: u32,
+    pub multiplier_id: u8,
+    pub cost: u32,
+}
+
+// DurabilityQuality.dbc: the repair price factor of an item quality is row (quality + 1) * 2.
+#[table(accessor = game_durability_quality)]
+pub struct DurabilityQuality {
+    #[primary_key]
+    pub id: u32,
+    pub quality_mod: f32,
+}
+
+crate::outside_table_catalog!(game_durability_cost, game_durability_quality);
+
 const BANK_SLOT_PRICES: [u32; 6] = [1_000, 10_000, 100_000, 250_000, 250_000, 250_000];
 
 pub(crate) const MAX_BANK_BAG_SLOTS: u8 = BANK_SLOT_PRICES.len() as u8;
@@ -173,7 +195,13 @@ pub(crate) fn apply_item_sell_count(
     if tmpl.sell_price == 0 {
         return Err("item has no sell value".to_string().into());
     }
-    let earned = sell_value(tmpl.sell_price, count);
+    let mut earned = sell_value(tmpl.sell_price, count);
+    let lost_durability = tmpl.max_durability.saturating_sub(inst.durability);
+    if lost_durability > 0 {
+        let cost = wear_repair_cost(ctx, &tmpl, lost_durability)
+            .ok_or_else(|| format!("no repair cost for item level {}", tmpl.item_level))?;
+        earned = sell_value_after_wear(earned, cost);
+    }
     super::buyback::sell(ctx, inst, &tmpl, count, earned)?;
     player.money = player.money.saturating_add(earned);
     player.update(ctx);
@@ -503,23 +531,50 @@ pub(crate) fn apply_repair_item(
 
 pub(crate) const REPAIR_ALL: u8 = u8::MAX;
 
+// None when DurabilityCosts or DurabilityQuality has no row for the item, as in vmangos.
+fn wear_repair_cost(
+    ctx: &ReducerContext,
+    tmpl: &ItemTemplate,
+    lost_durability: u32,
+) -> Option<u32> {
+    let multiplier = ctx
+        .db
+        .game_durability_cost()
+        .by_level_multiplier()
+        .filter((
+            u32::from(tmpl.item_level),
+            durability_multiplier_id(tmpl.class, tmpl.subclass),
+        ))
+        .next()?
+        .cost;
+    let quality_mod = ctx
+        .db
+        .game_durability_quality()
+        .id()
+        .find((u32::from(tmpl.quality) + 1) * 2)?
+        .quality_mod;
+    Some(repair_cost(lost_durability, multiplier, quality_mod))
+}
+
+// vmangos repairs item by item in slot order and skips an item the Character cannot pay for.
 pub(crate) fn apply_player_repair(
     ctx: &ReducerContext,
     player_guid: u64,
     npc_guid: u64,
     slot: u8,
 ) -> Result<(), String> {
-    let (mut player, _npc) =
+    let (mut player, npc) =
         crate::npc_interaction::gate(ctx, player_guid, npc_guid, NpcService::Repair)?;
-    let instances = ctx.db.game_item_instance();
     let templates = ctx.db.game_item_template();
 
-    let targets: Vec<ItemInstance> = instances
+    let mut targets: Vec<ItemInstance> = ctx
+        .db
+        .game_item_instance()
         .by_owner_guid()
         .filter(&player_guid)
         .filter(|i| {
             if slot == REPAIR_ALL {
-                i.slot <= equip_slot::END
+                repaired_by_repair_all(i.slot)
             } else {
                 i.slot == slot
             }
@@ -528,30 +583,40 @@ pub(crate) fn apply_player_repair(
     if slot != REPAIR_ALL && targets.is_empty() {
         return Err(format!("no item in slot {slot}"));
     }
+    targets.sort_by_key(|inst| inst.slot);
 
-    let mut total_cost: u32 = 0;
-    let mut to_repair: Vec<(ItemInstance, u32)> = Vec::new();
-    for inst in targets {
-        if let Some(tmpl) = templates.entry().find(inst.entry) {
-            if tmpl.max_durability > 0 && inst.durability < tmpl.max_durability {
-                total_cost =
-                    total_cost.saturating_add(repair_cost(tmpl.max_durability, inst.durability));
-                to_repair.push((inst, tmpl.max_durability));
-            }
+    let discount_pct =
+        crate::reputation::vendor_discount_pct(ctx, player_guid, npc.faction_template);
+    let discount_mod = 1.0 - discount_pct as f32 / 100.0;
+    let mut spent = false;
+    let mut restored_equipped_stats = false;
+    for mut inst in targets {
+        let Some(tmpl) = templates.entry().find(inst.entry) else {
+            continue;
+        };
+        if tmpl.max_durability == 0 || inst.durability >= tmpl.max_durability {
+            continue;
         }
-    }
-    if to_repair.is_empty() {
-        return Ok(());
-    }
-    if player.money < total_cost {
-        return Err("not enough money to repair".to_string());
-    }
-    // Debit and repair must commit in the same transaction.
-    player.money -= total_cost;
-    player.update(ctx);
-    for (mut inst, max_dur) in to_repair {
-        inst.durability = max_dur;
+        let lost_durability = tmpl.max_durability - inst.durability;
+        let Some(cost) = wear_repair_cost(ctx, &tmpl, lost_durability) else {
+            continue;
+        };
+        let bill = repair_bill(cost, discount_mod);
+        if player.money < bill {
+            continue;
+        }
+        player.money -= bill;
+        spent = true;
+        restored_equipped_stats |= inst.slot <= equip_slot::END && inst.durability == 0;
+        inst.durability = tmpl.max_durability;
         inst.update(ctx);
+    }
+    if spent {
+        player.update(ctx);
+    }
+    if restored_equipped_stats {
+        crate::spell::recompute_vitals(ctx, player_guid);
+        crate::spell::recompute_sheet(ctx, player_guid);
     }
     Ok(())
 }
