@@ -91,6 +91,7 @@ pub(super) fn plan(source: &impl TableRows) -> Result<DumpPlan> {
         );
         enchant_charges.push(format!("({id},{charges})"));
     }
+    let threats = super::vmangos_spell_threat::rows(source, known)?;
     let mut statements = Vec::new();
     for (table,key,columns,rows) in [
         ("game_spell_chain","spell_id","spell_id,prev_spell,first_spell,rank,req_spell",chains),
@@ -98,6 +99,7 @@ pub(super) fn plan(source: &impl TableRows) -> Result<DumpPlan> {
         ("game_spell_proc_event","spell_id","spell_id,proc_flags,proc_ex,school_mask,family_name,family_flags,ppm_rate,custom_chance,icd_ms",procs),
         ("game_enchant_proc_rate","spell_id","spell_id,ppm_rate",enchant_rates),
         ("game_spell_enchant_charges","spell_id","spell_id,charges",enchant_charges),
+        ("game_spell_threat","spell_id","spell_id,threat,multiplier,inverse_effect_mask",threats),
     ] {
         statements.push(if table == "game_spell_proc_event" {format!("DELETE FROM {table} WHERE spell_id < {SYNTHETIC_PROC_EVENT_FLOOR}")}else{format!("DELETE FROM {table} WHERE {key} > 0")});
         push_insert(&mut statements,table,columns,&rows);
@@ -278,7 +280,9 @@ mod tests {
             CREATE TABLE spell_proc_item_enchant (entry INTEGER PRIMARY KEY,ppmRate REAL);
             INSERT INTO spell_proc_item_enchant VALUES (20,1.6);
             CREATE TABLE spell_enchant_charges (entry INTEGER PRIMARY KEY,charges INTEGER);
-            INSERT INTO spell_enchant_charges VALUES (20,40);").unwrap();
+            INSERT INTO spell_enchant_charges VALUES (20,40);
+            CREATE TABLE spell_threat (entry INTEGER,threat REAL,multiplier REAL,inverse_effect_mask INTEGER,build_min INTEGER,build_max INTEGER,PRIMARY KEY(entry,build_min,build_max));
+            INSERT INTO spell_threat VALUES (10,20.5,2.25,2,0,5875),(20,99.0,1.0,0,0,5000);").unwrap();
         WorldSource::fixture(connection)
     }
 
@@ -295,6 +299,9 @@ mod tests {
         );
         assert!(sql
             .contains("INSERT INTO game_spell_enchant_charges (spell_id,charges) VALUES (20,40)"));
+        assert!(plan.stmts.iter().any(|statement| statement
+            == "INSERT INTO game_spell_threat (spell_id,threat,multiplier,inverse_effect_mask) \
+                VALUES (10,20,2.25,2)"));
         let manifest: serde_json::Value =
             serde_json::from_str(plan.world_source_manifest.as_ref().unwrap()).unwrap();
         assert_eq!(

@@ -13,7 +13,21 @@ pub struct TauntLock {
     pub forced_until_ms: u64,
 }
 
-use crate::{game_melee_attack, game_world_entity};
+use crate::{game_melee_attack, game_spell, game_spell_effect, game_world_entity};
+
+// vmangos `spell_threat`, which every rank without its own row takes from its first rank.
+#[table(accessor = game_spell_threat)]
+pub struct SpellThreat {
+    #[primary_key]
+    pub spell_id: u32,
+    pub threat: u16,
+    // Scales the spell's damage and heal threat.
+    pub multiplier: f32,
+    // Effect indexes whose targets the flat threat skips.
+    pub inverse_effect_mask: u8,
+}
+
+crate::outside_table_catalog!(game_spell_threat);
 
 #[table(
     accessor = game_threat,
@@ -44,19 +58,58 @@ pub struct ScaleAllThreat {
     pub percent: i32,
 }
 
-pub const DAMAGE_THREAT_PERMILLE: i64 = 1000;
+// vmangos Spell.cpp heal threat per point: a Paladin's direct heal draws half the usual.
+const HEAL_THREAT_PER_POINT: f32 = 0.5;
+const PALADIN_HEAL_THREAT_PER_POINT: f32 = 0.25;
+const CLASS_PALADIN: u8 = 2;
 
-pub const HEAL_THREAT_PERMILLE: i64 = 500;
+/// Every effect index of a spell, for a target that all of its effects reach.
+pub(crate) const EVERY_EFFECT: u8 = 0b111;
 
-pub(crate) fn threat_from_damage(damage: u32) -> i64 {
-    damage as i64 * DAMAGE_THREAT_PERMILLE / 1000
+#[derive(Clone, Copy)]
+pub(crate) enum HealDelivery {
+    Direct,
+    Periodic,
 }
 
-pub(crate) fn threat_from_heal_each(effective_heal: u32, mob_count: u32) -> i64 {
-    if mob_count == 0 {
+fn spell_threat(ctx: &ReducerContext, spell_id: u32) -> Option<SpellThreat> {
+    let rows = ctx.db.game_spell_threat();
+    let first = crate::spell::first_rank(ctx, spell_id);
+    // vmangos SpellRankHelper refuses a later rank's own row that adds no flat threat.
+    match rows.spell_id().find(spell_id) {
+        Some(row) if row.threat != 0 || first == spell_id => Some(row),
+        _ => rows.spell_id().find(first),
+    }
+}
+
+fn threat_multiplier(ctx: &ReducerContext, spell_id: u32) -> f32 {
+    if spell_id == 0 {
+        return 1.0;
+    }
+    spell_threat(ctx, spell_id).map_or(1.0, |row| row.multiplier)
+}
+
+fn scaled_threat(amount: u32, multiplier: f32) -> f32 {
+    amount as f32 * multiplier
+}
+
+/// `spell_id` zero is a white swing or a source with no spell.
+pub(crate) fn threat_from_damage(ctx: &ReducerContext, spell_id: u32, damage: u32) -> i64 {
+    scaled_threat(damage, threat_multiplier(ctx, spell_id)) as i64
+}
+
+fn heal_threat_per_point(healer_class: u8, delivery: HealDelivery) -> f32 {
+    match (delivery, healer_class) {
+        (HealDelivery::Direct, CLASS_PALADIN) => PALADIN_HEAL_THREAT_PER_POINT,
+        _ => HEAL_THREAT_PER_POINT,
+    }
+}
+
+fn threat_share(threat: f32, creatures: usize) -> i64 {
+    if creatures == 0 {
         return 0;
     }
-    (effective_heal as i64 * HEAL_THREAT_PERMILLE / 1000) / mob_count as i64
+    (threat / creatures as f32) as i64
 }
 
 pub(crate) fn threat_after_reduction(current: i64, amount: i64) -> i64 {
@@ -294,32 +347,65 @@ pub(crate) fn clear_taunt_lock(ctx: &ReducerContext, creature_guid: u64) {
         .delete(creature_guid);
 }
 
+/// A direct heal from no spell, such as a Runtime Script's.
 pub(crate) fn add_heal_threat(
     ctx: &ReducerContext,
     healer_guid: u64,
     healed_guid: u64,
     effective_heal: u32,
 ) {
-    let entities = ctx.db.game_world_entity();
-    let healer_is_player = entities
-        .guid()
-        .find(healer_guid)
-        .map(|e| e.is_player())
-        .unwrap_or(false);
-    if !healer_is_player || effective_heal == 0 {
+    add_spell_heal_threat(
+        ctx,
+        healer_guid,
+        healed_guid,
+        effective_heal,
+        0,
+        HealDelivery::Direct,
+    );
+}
+
+pub(crate) fn add_spell_heal_threat(
+    ctx: &ReducerContext,
+    healer_guid: u64,
+    healed_guid: u64,
+    effective_heal: u32,
+    spell_id: u32,
+    delivery: HealDelivery,
+) {
+    if effective_heal == 0 {
         return;
     }
-    let mut mobs: Vec<u64> = ctx
+    let Some(healer) = ctx.db.game_world_entity().guid().find(healer_guid) else {
+        return;
+    };
+    let threat = scaled_threat(
+        effective_heal,
+        heal_threat_per_point(healer.class(), delivery) * threat_multiplier(ctx, spell_id),
+    );
+    add_assist_threat(ctx, healer_guid, healed_guid, threat);
+}
+
+/// vmangos `HostileRefManager::threatAssist`: the creatures fighting `helped_guid` share `threat`.
+fn add_assist_threat(ctx: &ReducerContext, helper_guid: u64, helped_guid: u64, threat: f32) {
+    let entities = ctx.db.game_world_entity();
+    if !entities
+        .guid()
+        .find(helper_guid)
+        .is_some_and(|helper| helper.is_player())
+    {
+        return;
+    }
+    let mut creatures: Vec<u64> = ctx
         .db
         .game_melee_attack()
         .by_target()
-        .filter(&healed_guid)
+        .filter(&helped_guid)
         .map(|a| a.attacker_guid)
         .chain(
             ctx.db
                 .game_threat()
                 .by_source()
-                .filter(&healed_guid)
+                .filter(&helped_guid)
                 .map(|entry| entry.creature_guid),
         )
         .filter(|g| {
@@ -330,11 +416,55 @@ pub(crate) fn add_heal_threat(
                 .unwrap_or(false)
         })
         .collect();
-    mobs.sort_unstable();
-    mobs.dedup();
-    let each = threat_from_heal_each(effective_heal, mobs.len() as u32);
-    for creature in mobs {
-        add_threat(ctx, creature, healer_guid, each);
+    creatures.sort_unstable();
+    creatures.dedup();
+    let each = threat_share(threat, creatures.len());
+    for creature in creatures {
+        add_threat(ctx, creature, helper_guid, each);
+    }
+}
+
+/// vmangos `Spell::HandleThreatSpells`; `landed` pairs each target with its landed effect mask.
+pub(crate) fn add_table_threat(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    landed: &[(u64, u8)],
+) {
+    let Some(row) = spell_threat(ctx, spell_id).filter(|row| row.threat != 0) else {
+        return;
+    };
+    let Some(spell) = ctx.db.game_spell().spell_id().find(spell_id) else {
+        return;
+    };
+    let effects: Vec<_> = ctx
+        .db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&spell_id)
+        .collect();
+    let harmful = effects
+        .iter()
+        .filter(|effect| crate::spell::effect_is_harmful(&spell, effect))
+        .count();
+    if harmful != 0 && harmful != effects.len() {
+        return;
+    }
+    let entities = ctx.db.game_world_entity();
+    for &(target_guid, effect_mask) in landed {
+        if (effect_mask & !row.inverse_effect_mask) == 0 {
+            continue;
+        }
+        let Some(target) = entities.guid().find(target_guid).filter(|t| !t.dead) else {
+            continue;
+        };
+        if harmful == 0 {
+            add_assist_threat(ctx, caster_guid, target_guid, f32::from(row.threat));
+        } else if !target.is_player()
+            && crate::loot::tag::controlling_character(ctx, caster_guid).is_some()
+        {
+            add_threat(ctx, target_guid, caster_guid, i64::from(row.threat));
+        }
     }
 }
 
@@ -475,22 +605,35 @@ mod tests {
     }
 
     #[test]
-    fn damage_threat_is_one_to_one() {
-        assert_eq!(threat_from_damage(0), 0);
-        assert_eq!(threat_from_damage(1), 1);
-        assert_eq!(threat_from_damage(10), 10);
-        assert_eq!(threat_from_damage(12345), 12345);
-        assert!(threat_from_damage(100) > threat_from_damage(99));
+    fn a_threat_multiplier_scales_damage_and_truncates() {
+        // vmangos spell_threat: Revenge 2.25, Hamstring 1.25, Holy Nova 0.
+        assert_eq!(scaled_threat(100, 2.25) as i64, 225);
+        assert_eq!(scaled_threat(7, 1.25) as i64, 8);
+        assert_eq!(scaled_threat(500, 0.0) as i64, 0);
+        assert_eq!(scaled_threat(12345, 1.0) as i64, 12345);
     }
 
     #[test]
-    fn heal_threat_is_half_split_among_mobs() {
-        assert_eq!(threat_from_heal_each(100, 1), 50);
-        assert_eq!(threat_from_heal_each(100, 2), 25);
-        assert_eq!(threat_from_heal_each(100, 4), 12);
-        assert_eq!(threat_from_heal_each(100, 0), 0);
-        assert_eq!(threat_from_heal_each(0, 3), 0);
-        assert!(threat_from_heal_each(1000, 1) > threat_from_heal_each(1000, 5));
+    fn a_paladins_direct_heal_draws_a_quarter_threat_a_point() {
+        let warrior = 1;
+        assert_eq!(
+            heal_threat_per_point(CLASS_PALADIN, HealDelivery::Direct),
+            0.25
+        );
+        assert_eq!(
+            heal_threat_per_point(CLASS_PALADIN, HealDelivery::Periodic),
+            0.5
+        );
+        assert_eq!(heal_threat_per_point(warrior, HealDelivery::Direct), 0.5);
+    }
+
+    #[test]
+    fn heal_threat_is_split_among_the_creatures_and_truncated() {
+        assert_eq!(threat_share(50.0, 1), 50);
+        assert_eq!(threat_share(50.0, 2), 25);
+        assert_eq!(threat_share(50.0, 4), 12);
+        assert_eq!(threat_share(50.0, 0), 0);
+        assert_eq!(threat_share(0.0, 3), 0);
     }
 
     #[test]

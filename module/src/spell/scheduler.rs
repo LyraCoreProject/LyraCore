@@ -352,7 +352,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                             ctx,
                             a.target_guid,
                             a.caster_guid,
-                            crate::threat::threat_from_damage(amount as u32),
+                            crate::threat::threat_from_damage(ctx, a.spell_id, amount as u32),
                         );
                     }
                 }
@@ -438,7 +438,14 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     );
                 }
                 let effective = new_health.saturating_sub(cur);
-                crate::threat::add_heal_threat(ctx, a.caster_guid, a.target_guid, effective);
+                crate::threat::add_spell_heal_threat(
+                    ctx,
+                    a.caster_guid,
+                    a.target_guid,
+                    effective,
+                    a.spell_id,
+                    crate::threat::HealDelivery::Periodic,
+                );
             }
             A_PERIODIC_ENERGIZE => {
                 let Some(pool) = target.energized_pool(a.eff_p0_kind, a.eff_p0) else {
