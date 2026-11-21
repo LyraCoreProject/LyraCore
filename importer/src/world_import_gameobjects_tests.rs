@@ -195,7 +195,7 @@ fn imported_open_chest_can_be_looted() {
             &[&serde_json::to_string(&batch).unwrap()],
         );
     }
-    shard.assert_sql("INSERT INTO game_gameobject_loot (id,loot_id,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090040,5090042,25,10000,1,0,false)");
+    shard.assert_sql("INSERT INTO game_gameobject_loot (id,loot_id,item_entry,chance_bp,count,group_id,quest_only,min_count) VALUES (5090040,5090042,25,10000,1,0,false,0)");
     let guid = go_guid(5090040).to_string();
     shard.assert_call(
         "gw_use_gameobject",

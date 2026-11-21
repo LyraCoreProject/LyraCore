@@ -63,18 +63,12 @@ pub(crate) fn skin_corpse(
             .game_skinning_loot()
             .by_skin()
             .filter(&skin_loot_id)
-            .map(|r| LootRow {
-                item_entry: r.item_entry,
-                chance_bp: r.chance_bp,
-                count: r.count,
-                group_id: r.group_id,
-                quest_only: false,
-            })
+            .map(LootRow::from)
             .collect()
     } else {
         Vec::new()
     };
-    let winners = crate::loot::roll_loot_rows(ctx, rows);
+    let winners = crate::loot::roll_loot_rows(ctx, corpse_guid, rows);
     if winners.is_empty() {
         crate::items::grant_item(ctx, looter_guid, LEATHER_ENTRY, LEATHER_COUNT)?;
     } else {
@@ -115,17 +109,11 @@ pub(crate) fn apply_fish(ctx: &ReducerContext, guid: u64) -> Result<(), crate::R
                 .game_fishing_loot()
                 .by_zone()
                 .filter(&zone)
-                .map(|r| LootRow {
-                    item_entry: r.item_entry,
-                    chance_bp: r.chance_bp,
-                    count: r.count,
-                    group_id: r.group_id,
-                    quest_only: false,
-                })
+                .map(LootRow::from)
                 .collect()
         })
         .unwrap_or_default();
-    let winner = crate::loot::roll_loot_rows(ctx, rows)
+    let winner = crate::loot::roll_loot_rows(ctx, guid, rows)
         .into_iter()
         .next()
         .map(|drop| drop.item_entry);

@@ -1,8 +1,8 @@
 use lyracore_shared::loot_roll::vote_kind;
 use wow_world_messages::vanilla::{
-    Gold, LootMethodError, RollVote, SMSG_LOOT_RESPONSE_LootMethod, SMSG_LOOT_ALL_PASSED,
-    SMSG_LOOT_MASTER_LIST, SMSG_LOOT_MONEY_NOTIFY, SMSG_LOOT_RELEASE_RESPONSE, SMSG_LOOT_REMOVED,
-    SMSG_LOOT_RESPONSE, SMSG_LOOT_ROLL, SMSG_LOOT_ROLL_WON, SMSG_LOOT_START_ROLL,
+    LootMethodError, RollVote, SMSG_LOOT_ALL_PASSED, SMSG_LOOT_MASTER_LIST, SMSG_LOOT_MONEY_NOTIFY,
+    SMSG_LOOT_RELEASE_RESPONSE, SMSG_LOOT_REMOVED, SMSG_LOOT_ROLL, SMSG_LOOT_ROLL_WON,
+    SMSG_LOOT_START_ROLL,
 };
 use wow_world_messages::Guid;
 
@@ -30,13 +30,13 @@ pub fn build_loot_response_raw(guid: u64, money: u32, items: &[LootItemView]) ->
     (SMSG_LOOT_RESPONSE_OPCODE, body)
 }
 
-pub fn build_loot_error_response(guid: u64, loot_error: LootMethodError) -> SMSG_LOOT_RESPONSE {
-    SMSG_LOOT_RESPONSE {
-        guid: Guid::new(guid),
-        loot_method: SMSG_LOOT_RESPONSE_LootMethod::ErrorX { loot_error },
-        gold: Gold::new(0),
-        items: Vec::new(),
-    }
+/// gtker appends gold and an item count to an error; vmangos `LootResponse` ends after the error.
+pub fn build_loot_error_response(guid: u64, loot_error: LootMethodError) -> (u16, Vec<u8>) {
+    let mut body = Vec::with_capacity(10);
+    body.extend_from_slice(&guid.to_le_bytes());
+    body.push(0u8); // LootMethod::ErrorX
+    body.push(loot_error.as_int());
+    (SMSG_LOOT_RESPONSE_OPCODE, body)
 }
 
 pub fn build_loot_removed(slot: u8) -> SMSG_LOOT_REMOVED {
@@ -197,6 +197,17 @@ mod tests {
             body,
             framed[4..],
             "raw envelope must byte-match gtker's money-only loot"
+        );
+    }
+
+    #[test]
+    fn loot_error_is_the_guid_a_zero_loot_type_and_the_error() {
+        let (opcode, body) =
+            build_loot_error_response(0xF130_0000_0000_0007, LootMethodError::TooFar);
+        assert_eq!(opcode, 0x0160);
+        assert_eq!(
+            body,
+            [0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0xF1, 0x00, 0x04]
         );
     }
 

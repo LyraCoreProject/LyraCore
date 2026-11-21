@@ -463,6 +463,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         count: 1,
         group_id: 0,
         quest_only: false,
+        min_count: 0,
     });
     ctx.db.game_creature_loot().insert(CreatureLoot {
         id: 0,
@@ -472,6 +473,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         count: 1,
         group_id: 0,
         quest_only: false,
+        min_count: 0,
     });
     ctx.db.game_creature_loot().insert(CreatureLoot {
         id: 0,
@@ -481,6 +483,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         count: 1,
         group_id: 0,
         quest_only: false,
+        min_count: 0,
     });
 
     ctx.db

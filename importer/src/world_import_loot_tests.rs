@@ -1,6 +1,18 @@
+use super::vmangos_loot::LootDrop;
 use super::*;
 use crate::world_source::{sqlite_fixture, FixtureTable};
 use rusqlite::types::Value::{Integer as N, Real as F};
+
+fn fixed(item: u64, chance_bp: u32, group_id: u32, quest_only: bool) -> LootDrop {
+    LootDrop {
+        item,
+        chance_bp,
+        min_count: 1,
+        max_count: 1,
+        group_id,
+        quest_only,
+    }
+}
 
 #[test]
 fn vmangos_loot_selects_patch_rows_expands_nested_references_and_excludes_forbidden_items() {
@@ -78,24 +90,24 @@ fn vmangos_loot_selects_patch_rows_expands_nested_references_and_excludes_forbid
     let loot = build_loot_family_rows(&source, &creatures, &creatures, &[10]).unwrap();
     assert_eq!(
         loot.pickpocket_rows,
-        ["(1,7,100,4000,1,0,false)", "(2,7,103,500,1,0,true)"]
+        ["(1,7,100,4000,1,0,false,1)", "(2,7,103,500,1,0,true,1)"]
     );
     assert_eq!(
         loot.skinning_rows,
-        ["(1,10,100,4000,1,0)", "(2,10,103,500,1,0)"]
+        ["(1,10,100,4000,1,0,1)", "(2,10,103,500,1,0,1)"]
     );
     assert_eq!(
         loot.gameobject_loot_rows,
-        ["(1,10,100,4000,1,0,false)", "(2,10,103,500,1,0,true)"]
+        ["(1,10,100,4000,1,0,false,1)", "(2,10,103,500,1,0,true,1)"]
     );
     assert_eq!(
         loot.fishing_rows,
-        ["(1,10,100,4000,1,0)", "(2,10,103,500,1,0)"]
+        ["(1,10,100,4000,1,0,1)", "(2,10,103,500,1,0,1)"]
     );
     let creature_loot = parse_creature_drops(&source).unwrap();
     assert_eq!(
         creature_loot[&10],
-        [(100, 4000, 1, 0, false), (103, 500, 1, 0, true)]
+        [fixed(100, 4000, 0, false), fixed(103, 500, 0, true)]
     );
 }
 
@@ -161,9 +173,9 @@ fn vmangos_equal_chance_group_shares_the_remainder_after_forbidden_items() {
     assert_eq!(
         parse_creature_drops(&source).unwrap()[&7],
         [
-            (100, 2500, 1, 1000001, false),
-            (101, 3750, 1, 1000001, false),
-            (102, 3750, 1, 1000001, false)
+            fixed(100, 2500, 1000001, false),
+            fixed(101, 3750, 1000001, false),
+            fixed(102, 3750, 1000001, false)
         ]
     );
 }
@@ -226,10 +238,16 @@ fn loot_source(
 }
 
 // The Module rolls group zero independently and selects one cumulative band per other group.
-fn loot_probability(drops: &[(u64, u32, u32, u32, bool)], item: u64) -> f64 {
+fn loot_probability(drops: &[LootDrop], item: u64) -> f64 {
     let mut groups = std::collections::BTreeMap::<u32, (u32, u32)>::new();
     let mut miss = 1.0;
-    for &(entry, chance, _, group, _) in drops {
+    for &LootDrop {
+        item: entry,
+        chance_bp: chance,
+        group_id: group,
+        ..
+    } in drops
+    {
         if group == 0 {
             if entry == item {
                 miss *= 1.0 - f64::from(chance) / 10000.0;
@@ -258,7 +276,7 @@ fn referenced_herbs_keep_the_guaranteed_herb_and_independent_bonus() {
     let drops = parse_creature_drops(&source).unwrap();
     assert_eq!(loot_probability(&drops[&1], 100), 1.0);
     assert_eq!(loot_probability(&drops[&1], 101), 0.5);
-    assert!(drops[&1].iter().all(|drop| drop.3 == 0));
+    assert!(drops[&1].iter().all(|drop| drop.group_id == 0));
     assert_eq!(loot_probability(&drops[&2], 100), 0.5);
     assert_eq!(loot_probability(&drops[&2], 101), 0.25);
 }
@@ -281,8 +299,8 @@ fn repeated_references_offer_each_roll_including_nested_and_selected_groups() {
     assert_eq!(
         drops[&2]
             .iter()
-            .filter(|drop| drop.0 == 102)
-            .map(|drop| drop.2)
+            .filter(|drop| drop.item == 102)
+            .map(|drop| drop.max_count)
             .sum::<u32>(),
         3
     );
@@ -303,8 +321,14 @@ fn every_member_of_a_large_equal_group_can_drop_and_the_group_always_drops() {
         .iter()
         .all(|&chance| (0.00149..=0.00161).contains(&chance)));
     assert!((chances.iter().sum::<f64>() - 1.0).abs() < 1e-12);
-    assert_eq!(drops[&1].iter().filter(|drop| drop.1 == 16).count(), 535);
-    assert_eq!(drops[&1].iter().filter(|drop| drop.1 == 15).count(), 96);
+    assert_eq!(
+        drops[&1].iter().filter(|drop| drop.chance_bp == 16).count(),
+        535
+    );
+    assert_eq!(
+        drops[&1].iter().filter(|drop| drop.chance_bp == 15).count(),
+        96
+    );
 }
 
 #[test]
@@ -319,7 +343,10 @@ fn a_gated_reference_splits_its_exact_share_among_equal_members() {
         ],
     );
     let drops = parse_creature_drops(&source).unwrap();
-    assert_eq!(drops[&1].iter().map(|drop| drop.1).sum::<u32>(), 3700);
+    assert_eq!(
+        drops[&1].iter().map(|drop| drop.chance_bp).sum::<u32>(),
+        3700
+    );
     assert!((loot_probability(&drops[&1], 100) - 0.037).abs() < 1e-12);
     assert!((loot_probability(&drops[&1], 103) - 0.111).abs() < 1e-12);
 }
@@ -329,7 +356,7 @@ fn a_negative_chance_reference_keeps_its_children_available_to_everyone() {
     let source = loot_source(&[(1, 0, -100.0, 0, -20, 1)], &[(20, 100, 100.0, 0, 1, 1)]);
     let drops = parse_creature_drops(&source).unwrap();
     assert_eq!(loot_probability(&drops[&1], 100), 1.0);
-    assert!(drops[&1].iter().all(|drop| !drop.4));
+    assert!(drops[&1].iter().all(|drop| !drop.quest_only));
 }
 
 #[test]
@@ -337,4 +364,36 @@ fn a_repeated_reference_below_full_chance_is_refused() {
     let source = loot_source(&[(1, 0, 50.0, 0, -20, 2)], &[(20, 100, 100.0, 0, 1, 1)]);
     let error = parse_creature_drops(&source).unwrap_err().to_string();
     assert!(error.contains("repeats 2 times at 50%"), "{error}");
+}
+
+#[test]
+fn an_item_row_keeps_its_count_range_and_a_reference_repeats_its_children() {
+    let source = loot_source(
+        &[
+            (1, 100, 100.0, 0, 1, 3),
+            (1, 101, 100.0, 0, 2, 2),
+            (1, 0, 100.0, 0, -20, 2),
+            (1, 102, 100.0, 0, 0, 3),
+            (1, 103, 100.0, 0, 4, 3),
+        ],
+        &[(20, 104, 100.0, 0, 2, 5)],
+    );
+    let drops = parse_creature_drops(&source).unwrap();
+    let range = |item, min_count, max_count| LootDrop {
+        item,
+        chance_bp: 10000,
+        min_count,
+        max_count,
+        group_id: 0,
+        quest_only: false,
+    };
+    assert_eq!(
+        drops[&1],
+        [
+            range(100, 1, 3),
+            range(101, 2, 2),
+            range(104, 2, 5),
+            range(104, 2, 5)
+        ]
+    );
 }

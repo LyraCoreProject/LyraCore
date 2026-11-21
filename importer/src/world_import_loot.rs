@@ -4,8 +4,45 @@ use anyhow::{ensure, Result};
 
 use crate::dump::TableRows;
 
-type Drop = (u64, u32, u32, u32, bool);
 type Templates = BTreeMap<u64, Vec<Entry>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct LootDrop {
+    pub(super) item: u64,
+    pub(super) chance_bp: u32,
+    pub(super) min_count: u32,
+    pub(super) max_count: u32,
+    pub(super) group_id: u32,
+    pub(super) quest_only: bool,
+}
+
+impl LootDrop {
+    /// `(id,key,item_entry,chance_bp,count,group_id,quest_only,min_count)`
+    pub(super) fn row(&self, id: u64, key: u64) -> String {
+        let Self {
+            item,
+            chance_bp,
+            min_count,
+            max_count,
+            group_id,
+            quest_only,
+        } = *self;
+        format!("({id},{key},{item},{chance_bp},{max_count},{group_id},{quest_only},{min_count})")
+    }
+
+    /// `(id,key,item_entry,chance_bp,count,group_id,min_count)` for skinning and fishing.
+    pub(super) fn row_without_quest_only(&self, id: u64, key: u64) -> String {
+        let Self {
+            item,
+            chance_bp,
+            min_count,
+            max_count,
+            group_id,
+            ..
+        } = *self;
+        format!("({id},{key},{item},{chance_bp},{max_count},{group_id},{min_count})")
+    }
+}
 
 struct Entry {
     item: u64,
@@ -19,7 +56,8 @@ struct Entry {
 struct Member {
     item: u64,
     chance: f64,
-    count: u32,
+    min_count: u32,
+    max_count: u32,
     quest_only: bool,
 }
 
@@ -45,7 +83,11 @@ fn read(
         let entry = row.number("entry")?;
         let count = row.number("maxcount")?;
         let group = row.number("groupid")?;
-        if reference >= 0 && forbidden.contains(&item) {
+        // vmangos LootStoreItem::IsValid drops a zero minimum and a maximum below the minimum.
+        if reference == 0 || reference > i64::from(count) {
+            continue;
+        }
+        if reference > 0 && forbidden.contains(&item) {
             continue;
         }
         templates.entry(entry).or_default().push(Entry {
@@ -105,7 +147,8 @@ fn expand(
             let member = Member {
                 item: row.item,
                 chance: row.chance,
-                count: row.count.max(1),
+                min_count: row.reference as u32,
+                max_count: row.count,
                 quest_only: row.quest_only,
             };
             if row.group != 0 {
@@ -162,7 +205,7 @@ fn basis_points(members: &[Member]) -> Vec<u32> {
 pub(super) fn parse(
     dump: &(impl TableRows + ?Sized),
     table: &str,
-) -> Result<HashMap<u64, Vec<Drop>>> {
+) -> Result<HashMap<u64, Vec<LootDrop>>> {
     let forbidden = super::forbidden_items(dump)?;
     let refs = read(dump, "reference_loot_template", &forbidden)?;
     let templates = read(dump, table, &forbidden)?;
@@ -184,8 +227,15 @@ pub(super) fn parse(
                         .collect(),
                 )
             };
-            for (member, chance) in roll.members.into_iter().zip(shares) {
-                drops.push((member.item, chance, member.count, group, member.quest_only));
+            for (member, chance_bp) in roll.members.into_iter().zip(shares) {
+                drops.push(LootDrop {
+                    item: member.item,
+                    chance_bp,
+                    min_count: member.min_count,
+                    max_count: member.max_count,
+                    group_id: group,
+                    quest_only: member.quest_only,
+                });
             }
         }
         if !drops.is_empty() {
