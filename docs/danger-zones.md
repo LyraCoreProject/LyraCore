@@ -602,6 +602,12 @@ the node-status query now share one lookup with no 10-yard limit. A Character wh
 before the change may have learned a node that lookup now skips; no repair is needed, and the
 node stays known. The reimport writes the flag from `spell_template` effect 123 and `TaxiPath`.
 
+### Taxi multi-hop migration
+
+`game_active_taxi_flight` gains `current_leg_index`, end-appended with default 0. The private
+`game_taxi_flight_leg` table is new. A flight already in the air has no leg rows, so it is a
+one-leg route on leg 0 and flies as before. No repair is needed.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each
