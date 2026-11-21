@@ -4729,13 +4729,15 @@ def check_casting(host):
     started = peer.collect()
     assert any(opcode == 0x131 and spell_id(body) == 133 for opcode, body in started), started
     host.sql(f'UPDATE game_world_entity SET power = 0 WHERE guid = {peer_guid}')
+    # vmangos Spell::cast sends the failing check's own result at completion: NO_POWER.
+    no_power = [failed_other, (0x130, struct.pack('<IBB', 133, 2, 0x4D))]
     refused, deadline = [], time.monotonic() + 5
     while time.monotonic() < deadline:
         refused += [packet for packet in peer.collect() if packet[0] in (0x130, 0x132, 0x133, 0x2a6)]
-        if len(refused) >= len(interrupted):
+        if len(refused) >= len(no_power):
             break
         time.sleep(0.05)
-    assert refused == interrupted, refused
+    assert refused == no_power, refused
     assert not host.rows(f'SELECT * FROM game_pending_cast WHERE caster_guid = {peer_guid}')
     host.sql('UPDATE game_spell SET cost = 0 WHERE spell_id = 133')
     client.collect()
