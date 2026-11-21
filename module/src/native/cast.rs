@@ -123,6 +123,27 @@ fn refuses_self_cast(header: Option<&Spell>, caster: u64, selected_unit: u64) ->
         && header.is_some_and(|row| row.cast_flags & CAST_FLAG_REFUSES_SELF_CAST != 0)
 }
 
+fn route_for(header: Option<&Spell>, effects: &[crate::SpellEffect]) -> Route {
+    if header.is_some_and(|row| row.cast_flags & CAST_FLAG_RANGED_AUTO_REPEAT != 0) {
+        Route::Ranged
+    } else if let Some(effect) = effects
+        .iter()
+        .find(|row| matches!(row.kind, E_ENCHANT_ITEM | E_DISENCHANT))
+    {
+        if effect.kind == E_ENCHANT_ITEM {
+            Route::Enchant(effect.p0 as u32)
+        } else {
+            Route::Disenchant
+        }
+    } else if effects.iter().any(|row| row.kind == E_FISH) {
+        Route::Fish
+    } else if effects.iter().any(|row| row.kind == E_OPEN_LOCK) {
+        Route::OpenLock
+    } else {
+        Route::Ordinary
+    }
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
@@ -156,27 +177,7 @@ pub(super) fn receive(
             "a negative spell cannot target its caster",
         ));
     }
-    let route = if header
-        .as_ref()
-        .is_some_and(|row| row.cast_flags & CAST_FLAG_RANGED_AUTO_REPEAT != 0)
-    {
-        Route::Ranged
-    } else if let Some(effect) = effects
-        .iter()
-        .find(|row| matches!(row.kind, E_ENCHANT_ITEM | E_DISENCHANT))
-    {
-        if effect.kind == E_ENCHANT_ITEM {
-            Route::Enchant(effect.p0 as u32)
-        } else {
-            Route::Disenchant
-        }
-    } else if effects.iter().any(|row| row.kind == E_FISH) {
-        Route::Fish
-    } else if effects.iter().any(|row| row.kind == E_OPEN_LOCK) {
-        Route::OpenLock
-    } else {
-        Route::Ordinary
-    };
+    let route = route_for(header.as_ref(), &effects);
     let dest = request
         .targets
         .target_flags
