@@ -148,6 +148,21 @@ impl ItemStoragePlan {
         )
     }
 
+    /// vmangos `Player::CanStoreNewItem`: whether `count` new items fit, drawing no Random Property.
+    pub(crate) fn can_store_new(
+        mut self,
+        ctx: &ReducerContext,
+        template: &ItemTemplate,
+        count: u32,
+    ) -> Result<(), lyracore_shared::item::ItemRefusal> {
+        use lyracore_shared::item::ItemRefusal;
+        self.grant(ctx, template, count, false, Some(0))
+            .map_err(|refusal| match refusal.kind {
+                ActionRefusalKind::DuplicateItem => ItemRefusal::CantCarryMore,
+                _ => ItemRefusal::InventoryFull,
+            })
+    }
+
     pub(crate) fn purchase(
         &mut self,
         ctx: &ReducerContext,

@@ -158,6 +158,34 @@ fn fresh_character_create_has_no_watched_faction() {
 }
 
 #[test]
+fn character_create_reports_the_free_primary_profession_slots() {
+    let skill = |line| SkillView {
+        line,
+        current: 1,
+        maximum: 75,
+        temporary_bonus: 0,
+        permanent_bonus: 0,
+    };
+    for (learned, expected) in [
+        (vec![], 2),
+        (vec![skill(185), skill(356)], 2),
+        (vec![skill(171), skill(185)], 1),
+        (vec![skill(171), skill(197), skill(356)], 0),
+    ] {
+        let message =
+            build_create_object(&warrior_entity(), CreateKind::SelfPlayer, &[], &learned).unwrap();
+        let Object::CreateObject2 {
+            mask2: UpdateMask::Player(fields),
+            ..
+        } = &message.objects[0]
+        else {
+            panic!("expected Character CREATE");
+        };
+        assert_eq!(fields.player_character_points2(), Some(expected));
+    }
+}
+
+#[test]
 fn character_create_restores_the_private_watched_faction() {
     for index in [-1, 0, 19, 63] {
         let entity = EntityView {

@@ -172,8 +172,9 @@ fn create_spell(shard: &Standalone) {
     shard.insert_row(
         "game_spell_effect",
         &[
-            ("id", &20360400),
+            ("id", &20360401),
             ("spell_id", &5090100),
+            ("effect_index", &1),
             ("kind", &7),
             ("base_points", &2),
             ("p_0", &ITEM),

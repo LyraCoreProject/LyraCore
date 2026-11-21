@@ -171,6 +171,10 @@ pub(crate) mod qt {
     pub const SPECIAL_FLAGS: &str = "SpecialFlags";
     pub const PREV_QUEST_ID: &str = "PrevQuestId";
     pub const NEXT_QUEST_IN_CHAIN: &str = "NextQuestInChain";
+    pub const NEXT_QUEST_ID: &str = "NextQuestId";
+    pub const EXCLUSIVE_GROUP: &str = "ExclusiveGroup";
+    pub const MAX_LEVEL: &str = "MaxLevel";
+    pub const BREADCRUMB_FOR_QUEST_ID: &str = "BreadcrumbForQuestId";
     pub const SRC_ITEM_ID: &str = "SrcItemId";
     pub const SRC_ITEM_COUNT: &str = "SrcItemCount"; // SrcItemCount zero means one.
     pub const TITLE: &str = "Title";

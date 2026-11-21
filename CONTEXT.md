@@ -45,7 +45,7 @@ entry in both files.
 
 **S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Soulstone](#death-and-resurrection) · [Source Profile](#realm-topology) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Swing Error](#procs)
 
-**T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Temporary Enchantment](#random-properties) · [Tier 1 baseline](#conformance) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#realm-topology) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Triggered Cast](#procs) · [Trust Review](#packages)
+**T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Temporary Enchantment](#random-properties) · [Tier 1 baseline](#conformance) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#realm-topology) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Trigger Child Cast](#procs) · [Triggered Cast](#procs) · [Trust Review](#packages)
 
 **U** [UI Transform](#client-content)
 
@@ -648,8 +648,17 @@ _Avoid_: linked spell, after-hit cast
 A cast started by a Proc, a periodic aura, a spell's hit (a Follow-up Cast) or another triggered
 effect. It checks faction targeting and target life, then runs the cast core's effect loop without
 cast-start position, range, line of sight, power cost, cooldown or stealth-break checks. Its own
-hits fire no further Procs.
+hits fire no further Procs. The cast an `E_TRIGGER` effect makes is a Trigger Child Cast, not a
+Triggered Cast.
 _Avoid_: proc cast, internal cast, free cast
+
+**Trigger Child Cast**:
+The cast an `E_TRIGGER` effect makes of its trigger spell, at once, inside its parent's effects. It
+runs the cast Gates and the cast core like a direct cast, but skips the Gates vmangos guards with
+`!m_IsTriggeredSpell` that LyraCore models: global cooldown, combat, Form, stealth, peaceful target
+and product storage. It starts no global cooldown. It still checks range, power, cooldown and caster
+control, and breaks stealth.
+_Avoid_: triggered spell, trigger cast
 
 **Chance on Hit**:
 A weapon spell slot or a combat-spell enchantment that may cast when the weapon strikes a victim

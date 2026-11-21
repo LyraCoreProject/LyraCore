@@ -605,7 +605,12 @@ pub(crate) fn apply_item_use_on(
         crate::spell::CreatureSpellCasterAdmission::Living,
     )
     .map(|_| ())
-    .map_err(|detail| refuse(ItemRefusal::NotRightNow, detail))
+    .map_err(|detail| {
+        refuse(
+            detail.item_refusal.unwrap_or(ItemRefusal::NotRightNow),
+            detail,
+        )
+    })
 }
 
 pub(crate) fn resistance_items(

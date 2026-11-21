@@ -4,6 +4,7 @@ mod creature_population;
 mod dbc;
 mod dbc_diff;
 mod dump;
+mod durability;
 mod eventai;
 mod extents;
 mod go_model;

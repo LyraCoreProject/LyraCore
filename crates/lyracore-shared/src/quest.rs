@@ -188,12 +188,56 @@ pub fn objectives_complete(
     }) && (!requires_event_credit || has_event_credit)
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Debug, Default)]
 pub struct AcceptanceRequirements {
+    pub quest_entry: u32,
     pub min_level: u32,
+    /// Zero admits every level.
+    pub max_level: u32,
+    /// Zero stands for the Character's own level.
+    pub quest_level: u32,
     pub required_races: u32,
     pub required_classes: u32,
     pub repeatable: bool,
+    /// Positive: only one quest of the group. Negative: a successor needs every quest of the group.
+    pub exclusive_group: i32,
+    pub next_in_chain: u32,
+    /// The first one met decides; vmangos's order is unspecified.
+    pub prerequisites: Vec<Prerequisite>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Prerequisite {
+    pub quest_entry: u32,
+    /// Met while the quest is in the log, instead of once it is rewarded.
+    pub must_be_active: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct QuestStanding {
+    pub active: bool,
+    pub rewarded: bool,
+    pub repeatable: bool,
+}
+
+impl QuestStanding {
+    // vmangos QUEST_STATUS_INCOMPLETE or _COMPLETE; a rewarded repeatable quest returns to NONE.
+    fn taken_or_done(self) -> bool {
+        self.active || (self.rewarded && !self.repeatable)
+    }
+}
+
+pub trait QuestHistory {
+    fn standing(&self, quest_entry: u32) -> QuestStanding;
+    fn exclusive_group(&self, quest_entry: u32) -> i32;
+    fn exclusive_group_members(&self, group: i32) -> Vec<u32>;
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct Applicant {
+    pub level: u32,
+    pub race: u8,
+    pub class: u8,
 }
 
 #[derive(Clone, Copy)]
@@ -204,6 +248,7 @@ pub struct Attempt {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AcceptanceRefusal {
+    AboveMaxLevel,
     Level,
     Race,
     Class,
@@ -211,37 +256,147 @@ pub enum AcceptanceRefusal {
     AlreadyTaken,
 }
 
+/// vmangos `Player::CanTakeQuest`, in its check order.
 pub fn acceptance(
-    requirements: AcceptanceRequirements,
-    level: u32,
-    race: u8,
-    class: u8,
-    prerequisite_rewarded: bool,
+    requirements: &AcceptanceRequirements,
+    applicant: Applicant,
     existing: Option<Attempt>,
+    history: &impl QuestHistory,
 ) -> Result<(), AcceptanceRefusal> {
-    if level < requirements.min_level {
-        return Err(AcceptanceRefusal::Level);
+    if requirements.max_level != 0 && requirements.max_level < applicant.level {
+        return Err(AcceptanceRefusal::AboveMaxLevel);
     }
-    if !mask_admits(requirements.required_races, race, ZeroMask::AdmitsAll) {
-        return Err(AcceptanceRefusal::Race);
-    }
-    if !mask_admits(requirements.required_classes, class, ZeroMask::AdmitsAll) {
-        return Err(AcceptanceRefusal::Class);
-    }
-    if !prerequisite_rewarded {
-        return Err(AcceptanceRefusal::Prerequisite);
-    }
-    if existing
-        .is_some_and(|attempt| !(attempt.failed || (requirements.repeatable && attempt.rewarded)))
-    {
+    if !untaken(requirements, existing) {
         return Err(AcceptanceRefusal::AlreadyTaken);
     }
+    if !exclusive_group_open(requirements, history) {
+        return Err(AcceptanceRefusal::Prerequisite);
+    }
+    if !mask_admits(
+        requirements.required_classes,
+        applicant.class,
+        ZeroMask::AdmitsAll,
+    ) {
+        return Err(AcceptanceRefusal::Class);
+    }
+    if !mask_admits(
+        requirements.required_races,
+        applicant.race,
+        ZeroMask::AdmitsAll,
+    ) {
+        return Err(AcceptanceRefusal::Race);
+    }
+    if applicant.level < requirements.min_level {
+        return Err(AcceptanceRefusal::Level);
+    }
+    if !prerequisites_met(requirements, history) || !next_in_chain_open(requirements, history) {
+        return Err(AcceptanceRefusal::Prerequisite);
+    }
     Ok(())
+}
+
+pub const HIGH_LEVEL_HIDE_DIFF: u32 = 7;
+pub const LOW_LEVEL_HIDE_DIFF: u32 = 4;
+
+/// How a quest giver marks one quest it starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StartSighting {
+    Hidden,
+    /// Within `HIGH_LEVEL_HIDE_DIFF` levels below the quest's minimum level.
+    Upcoming,
+    Offered,
+    /// More than `LOW_LEVEL_HIDE_DIFF` levels below the Character.
+    Trivial,
+}
+
+/// vmangos `CanSeeStartQuest` and the giver half of `GetDialogStatus`; no maximum level check.
+pub fn start_sighting(
+    requirements: &AcceptanceRequirements,
+    applicant: Applicant,
+    existing: Option<Attempt>,
+    history: &impl QuestHistory,
+) -> StartSighting {
+    let seen = untaken(requirements, existing)
+        && mask_admits(
+            requirements.required_classes,
+            applicant.class,
+            ZeroMask::AdmitsAll,
+        )
+        && mask_admits(
+            requirements.required_races,
+            applicant.race,
+            ZeroMask::AdmitsAll,
+        )
+        && exclusive_group_open(requirements, history)
+        && prerequisites_met(requirements, history)
+        && next_in_chain_open(requirements, history);
+    let quest_level = match requirements.quest_level {
+        0 => applicant.level,
+        level => level,
+    };
+    if !seen || applicant.level.saturating_add(HIGH_LEVEL_HIDE_DIFF) < requirements.min_level {
+        StartSighting::Hidden
+    } else if applicant.level < requirements.min_level {
+        StartSighting::Upcoming
+    } else if applicant.level > quest_level.saturating_add(LOW_LEVEL_HIDE_DIFF) {
+        StartSighting::Trivial
+    } else {
+        StartSighting::Offered
+    }
+}
+
+fn untaken(requirements: &AcceptanceRequirements, existing: Option<Attempt>) -> bool {
+    existing.is_none_or(|attempt| attempt.failed || (requirements.repeatable && attempt.rewarded))
+}
+
+fn exclusive_group_open(
+    requirements: &AcceptanceRequirements,
+    history: &impl QuestHistory,
+) -> bool {
+    requirements.exclusive_group <= 0
+        || history
+            .exclusive_group_members(requirements.exclusive_group)
+            .into_iter()
+            .all(|member| {
+                member == requirements.quest_entry || !history.standing(member).taken_or_done()
+            })
+}
+
+fn prerequisites_met(requirements: &AcceptanceRequirements, history: &impl QuestHistory) -> bool {
+    if requirements.prerequisites.is_empty() {
+        return true;
+    }
+    let met = |quest_entry, must_be_active| {
+        let standing = history.standing(quest_entry);
+        if must_be_active {
+            standing.active
+        } else {
+            standing.rewarded
+        }
+    };
+    let Some(first) = requirements
+        .prerequisites
+        .iter()
+        .find(|prerequisite| met(prerequisite.quest_entry, prerequisite.must_be_active))
+    else {
+        return false;
+    };
+    let group = history.exclusive_group(first.quest_entry);
+    group >= 0
+        || history
+            .exclusive_group_members(group)
+            .into_iter()
+            .all(|member| member == first.quest_entry || met(member, first.must_be_active))
+}
+
+fn next_in_chain_open(requirements: &AcceptanceRequirements, history: &impl QuestHistory) -> bool {
+    requirements.next_in_chain == 0 || !history.standing(requirements.next_in_chain).taken_or_done()
 }
 
 impl AcceptanceRefusal {
     pub fn text(self, min_level: u32) -> String {
         match self {
+            Self::AboveMaxLevel => "your level is too high for that quest".to_string(),
             Self::Level => format!("requires level {min_level}"),
             Self::Race => "quest not available to your race".to_string(),
             Self::Class => "quest not available to your class".to_string(),
@@ -326,13 +481,97 @@ mod rule_tests {
         assert!(!objectives_complete([kill], &[2], |_| 0, true, true));
     }
 
+    #[derive(Default)]
+    struct History {
+        standings: std::collections::BTreeMap<u32, QuestStanding>,
+        groups: std::collections::BTreeMap<u32, i32>,
+    }
+
+    impl History {
+        fn with(mut self, quest_entry: u32, standing: QuestStanding) -> Self {
+            self.standings.insert(quest_entry, standing);
+            self
+        }
+
+        fn grouped(mut self, group: i32, members: &[u32]) -> Self {
+            for member in members {
+                self.groups.insert(*member, group);
+            }
+            self
+        }
+    }
+
+    impl QuestHistory for History {
+        fn standing(&self, quest_entry: u32) -> QuestStanding {
+            self.standings
+                .get(&quest_entry)
+                .copied()
+                .unwrap_or_default()
+        }
+
+        fn exclusive_group(&self, quest_entry: u32) -> i32 {
+            self.groups.get(&quest_entry).copied().unwrap_or(0)
+        }
+
+        fn exclusive_group_members(&self, group: i32) -> Vec<u32> {
+            self.groups
+                .iter()
+                .filter(|(_, member_group)| **member_group == group)
+                .map(|(member, _)| *member)
+                .collect()
+        }
+    }
+
+    const ACTIVE: QuestStanding = QuestStanding {
+        active: true,
+        rewarded: false,
+        repeatable: false,
+    };
+    const REWARDED: QuestStanding = QuestStanding {
+        active: false,
+        rewarded: true,
+        repeatable: false,
+    };
+    const QUEST: u32 = 100;
+
     fn requirements(repeatable: bool) -> AcceptanceRequirements {
         AcceptanceRequirements {
+            quest_entry: QUEST,
             min_level: 10,
+            quest_level: 12,
             required_races: 1,
             required_classes: 2,
             repeatable,
+            ..AcceptanceRequirements::default()
         }
+    }
+
+    fn applicant(level: u32, race: u8, class: u8) -> Applicant {
+        Applicant { level, race, class }
+    }
+
+    fn eligible() -> Applicant {
+        applicant(10, 1, 2)
+    }
+
+    fn after(prerequisites: &[(u32, bool)]) -> AcceptanceRequirements {
+        AcceptanceRequirements {
+            prerequisites: prerequisites
+                .iter()
+                .map(|&(quest_entry, must_be_active)| Prerequisite {
+                    quest_entry,
+                    must_be_active,
+                })
+                .collect(),
+            ..requirements(false)
+        }
+    }
+
+    fn accept(
+        requirements: &AcceptanceRequirements,
+        history: &History,
+    ) -> Result<(), AcceptanceRefusal> {
+        acceptance(requirements, eligible(), None, history)
     }
 
     #[test]
@@ -345,55 +584,299 @@ mod rule_tests {
             failed: false,
             rewarded: true,
         });
+        let history = History::default();
         assert_eq!(
-            acceptance(requirements(false), 10, 1, 2, true, failed),
+            acceptance(&requirements(false), eligible(), failed, &history),
             Ok(())
         );
         assert_eq!(
-            acceptance(requirements(false), 10, 1, 2, true, rewarded),
+            acceptance(&requirements(false), eligible(), rewarded, &history),
             Err(AcceptanceRefusal::AlreadyTaken)
         );
         assert_eq!(
-            acceptance(requirements(true), 10, 1, 2, true, rewarded),
+            acceptance(&requirements(true), eligible(), rewarded, &history),
             Ok(())
         );
         assert_eq!(
             acceptance(
-                requirements(true),
-                10,
-                1,
-                2,
-                true,
+                &requirements(true),
+                eligible(),
                 Some(Attempt {
                     failed: false,
                     rewarded: false
-                })
+                }),
+                &history
             ),
             Err(AcceptanceRefusal::AlreadyTaken)
         );
     }
 
     #[test]
-    fn retry_still_applies_level_race_class_and_prerequisite_gates_in_order() {
-        let failed = Some(Attempt {
-            failed: true,
+    fn checks_refuse_in_the_vmangos_can_take_quest_order() {
+        let taken = Some(Attempt {
+            failed: false,
             rewarded: false,
         });
+        let capped = AcceptanceRequirements {
+            max_level: 9,
+            exclusive_group: 5,
+            prerequisites: vec![Prerequisite {
+                quest_entry: 7,
+                must_be_active: false,
+            }],
+            ..requirements(false)
+        };
+        let history = History::default().grouped(5, &[QUEST, 6]).with(6, ACTIVE);
+        let wrong = applicant(10, 2, 1);
         assert_eq!(
-            acceptance(requirements(false), 9, 2, 1, false, failed),
-            Err(AcceptanceRefusal::Level)
+            acceptance(&capped, wrong, taken, &history),
+            Err(AcceptanceRefusal::AboveMaxLevel)
+        );
+        let uncapped = AcceptanceRequirements {
+            max_level: 0,
+            ..capped
+        };
+        assert_eq!(
+            acceptance(&uncapped, applicant(9, 2, 1), taken, &history),
+            Err(AcceptanceRefusal::AlreadyTaken)
         );
         assert_eq!(
-            acceptance(requirements(false), 10, 2, 1, false, failed),
-            Err(AcceptanceRefusal::Race)
+            acceptance(&uncapped, applicant(9, 2, 1), None, &history),
+            Err(AcceptanceRefusal::Prerequisite)
         );
+        let open_group = History::default();
         assert_eq!(
-            acceptance(requirements(false), 10, 1, 1, false, failed),
+            acceptance(&uncapped, applicant(9, 2, 1), None, &open_group),
             Err(AcceptanceRefusal::Class)
         );
         assert_eq!(
-            acceptance(requirements(false), 10, 1, 2, false, failed),
+            acceptance(&uncapped, applicant(9, 2, 2), None, &open_group),
+            Err(AcceptanceRefusal::Race)
+        );
+        assert_eq!(
+            acceptance(&uncapped, applicant(9, 1, 2), None, &open_group),
+            Err(AcceptanceRefusal::Level)
+        );
+        assert_eq!(
+            acceptance(&uncapped, eligible(), None, &open_group),
             Err(AcceptanceRefusal::Prerequisite)
+        );
+    }
+
+    #[test]
+    fn a_maximum_level_refuses_only_characters_above_it() {
+        let capped = AcceptanceRequirements {
+            max_level: 10,
+            ..requirements(false)
+        };
+        let history = History::default();
+        assert_eq!(acceptance(&capped, eligible(), None, &history), Ok(()));
+        assert_eq!(
+            acceptance(&capped, applicant(11, 1, 2), None, &history),
+            Err(AcceptanceRefusal::AboveMaxLevel)
+        );
+    }
+
+    #[test]
+    fn any_rewarded_or_active_prerequisite_unlocks_the_quest() {
+        let quest = after(&[(1, false), (2, true)]);
+        assert_eq!(
+            accept(&quest, &History::default()),
+            Err(AcceptanceRefusal::Prerequisite)
+        );
+        assert_eq!(
+            accept(&quest, &History::default().with(1, REWARDED)),
+            Ok(())
+        );
+        assert_eq!(accept(&quest, &History::default().with(2, ACTIVE)), Ok(()));
+        assert_eq!(
+            accept(
+                &quest,
+                &History::default().with(1, ACTIVE).with(2, REWARDED)
+            ),
+            Err(AcceptanceRefusal::Prerequisite),
+            "a rewarded prerequisite needs a reward and an active one needs the log"
+        );
+    }
+
+    #[test]
+    fn a_negative_group_prerequisite_needs_every_quest_of_its_group() {
+        let quest = after(&[(1, false)]);
+        let partial = History::default().grouped(-3, &[1, 2]).with(1, REWARDED);
+        assert_eq!(
+            accept(&quest, &partial),
+            Err(AcceptanceRefusal::Prerequisite)
+        );
+        assert_eq!(accept(&quest, &partial.with(2, REWARDED)), Ok(()));
+
+        let active = after(&[(1, true)]);
+        let partial = History::default().grouped(-3, &[1, 2]).with(1, ACTIVE);
+        assert_eq!(
+            accept(&active, &partial),
+            Err(AcceptanceRefusal::Prerequisite)
+        );
+        assert_eq!(accept(&active, &partial.with(2, ACTIVE)), Ok(()));
+    }
+
+    #[test]
+    fn a_positive_group_prerequisite_needs_only_itself() {
+        let quest = after(&[(1, false)]);
+        let history = History::default().grouped(3, &[1, 2]).with(1, REWARDED);
+        assert_eq!(accept(&quest, &history), Ok(()));
+    }
+
+    #[test]
+    fn a_positive_exclusive_group_admits_one_taken_or_done_quest() {
+        let quest = AcceptanceRequirements {
+            exclusive_group: 4,
+            ..requirements(false)
+        };
+        let group = || History::default().grouped(4, &[QUEST, 2]);
+        assert_eq!(accept(&quest, &group()), Ok(()));
+        assert_eq!(
+            accept(&quest, &group().with(2, ACTIVE)),
+            Err(AcceptanceRefusal::Prerequisite)
+        );
+        assert_eq!(
+            accept(&quest, &group().with(2, REWARDED)),
+            Err(AcceptanceRefusal::Prerequisite)
+        );
+        let repeated = QuestStanding {
+            repeatable: true,
+            ..REWARDED
+        };
+        assert_eq!(
+            accept(&quest, &group().with(2, repeated)),
+            Ok(()),
+            "a rewarded repeatable quest no longer counts as taken"
+        );
+        assert_eq!(
+            accept(&quest, &group().with(QUEST, ACTIVE)),
+            Ok(()),
+            "the quest's own standing is the attempt's concern"
+        );
+    }
+
+    #[test]
+    fn a_negative_exclusive_group_does_not_limit_its_own_quests() {
+        let quest = AcceptanceRequirements {
+            exclusive_group: -4,
+            ..requirements(false)
+        };
+        let history = History::default().grouped(-4, &[QUEST, 2]).with(2, ACTIVE);
+        assert_eq!(accept(&quest, &history), Ok(()));
+    }
+
+    #[test]
+    fn a_taken_or_done_next_quest_in_chain_closes_the_quest() {
+        let quest = AcceptanceRequirements {
+            next_in_chain: 2,
+            ..requirements(false)
+        };
+        assert_eq!(accept(&quest, &History::default()), Ok(()));
+        assert_eq!(
+            accept(&quest, &History::default().with(2, ACTIVE)),
+            Err(AcceptanceRefusal::Prerequisite)
+        );
+        assert_eq!(
+            accept(&quest, &History::default().with(2, REWARDED)),
+            Err(AcceptanceRefusal::Prerequisite)
+        );
+    }
+
+    fn sighting(level: u32, quest: &AcceptanceRequirements) -> StartSighting {
+        start_sighting(quest, applicant(level, 1, 2), None, &History::default())
+    }
+
+    #[test]
+    fn a_quest_up_to_seven_levels_ahead_is_upcoming() {
+        let quest = requirements(false);
+        assert_eq!(sighting(2, &quest), StartSighting::Hidden);
+        assert_eq!(sighting(3, &quest), StartSighting::Upcoming);
+        assert_eq!(sighting(9, &quest), StartSighting::Upcoming);
+        assert_eq!(sighting(10, &quest), StartSighting::Offered);
+    }
+
+    #[test]
+    fn a_quest_more_than_four_levels_below_the_character_is_trivial() {
+        let quest = requirements(false);
+        assert_eq!(sighting(16, &quest), StartSighting::Offered);
+        assert_eq!(sighting(17, &quest), StartSighting::Trivial);
+        let own_level = AcceptanceRequirements {
+            quest_level: 0,
+            ..requirements(false)
+        };
+        assert_eq!(sighting(60, &own_level), StartSighting::Offered);
+    }
+
+    #[test]
+    fn the_sighting_hides_what_acceptance_refuses_except_the_level_limits() {
+        let capped = AcceptanceRequirements {
+            max_level: 11,
+            ..requirements(false)
+        };
+        assert_eq!(sighting(12, &capped), StartSighting::Offered);
+        assert_eq!(
+            start_sighting(
+                &requirements(false),
+                applicant(10, 2, 2),
+                None,
+                &History::default()
+            ),
+            StartSighting::Hidden
+        );
+        assert_eq!(
+            start_sighting(
+                &requirements(false),
+                applicant(10, 1, 1),
+                None,
+                &History::default()
+            ),
+            StartSighting::Hidden
+        );
+        assert_eq!(
+            start_sighting(
+                &after(&[(1, false)]),
+                applicant(9, 1, 2),
+                None,
+                &History::default()
+            ),
+            StartSighting::Hidden
+        );
+        let grouped = AcceptanceRequirements {
+            exclusive_group: 4,
+            ..requirements(false)
+        };
+        let taken = History::default().grouped(4, &[QUEST, 2]).with(2, ACTIVE);
+        assert_eq!(
+            start_sighting(&grouped, eligible(), None, &taken),
+            StartSighting::Hidden
+        );
+        let chained = AcceptanceRequirements {
+            next_in_chain: 2,
+            ..requirements(false)
+        };
+        assert_eq!(
+            start_sighting(
+                &chained,
+                eligible(),
+                None,
+                &History::default().with(2, REWARDED)
+            ),
+            StartSighting::Hidden
+        );
+        let active = Some(Attempt {
+            failed: false,
+            rewarded: false,
+        });
+        assert_eq!(
+            start_sighting(
+                &requirements(false),
+                eligible(),
+                active,
+                &History::default()
+            ),
+            StartSighting::Hidden
         );
     }
 
