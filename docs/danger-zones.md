@@ -320,6 +320,9 @@ the affected melee or ranged projection. It is also derived and does not cross C
 The zero-default END fields `sheet_ap_multiplier` and `sheet_ranged_ap_multiplier` cache
 UNIT_FIELD_ATTACK_POWER_MULTIPLIER and its ranged twin, the percent Auras' product minus 1. Publish
 repair and world entry refresh them; they are derived and do not cross Character Transfer.
+The spell importer now maps auras 166 and 167 (attack power percent, melee and ranged) to
+`A_MOD_COMBAT` on the new `COMBAT_ATTACK_POWER_PCT` and `COMBAT_RANGED_ATTACK_POWER_PCT` fields.
+Run `spell --dbc` again after publish so imported Spells carry them.
 `sheet_ap_base` and `sheet_ranged_ap` keep their `u32` type and hold the bits of the signed base,
 so SQL shows a negative base as a large number and the wire reads it as `i32`. Rows saved before
 this change hold non-negative bases and need no migration.

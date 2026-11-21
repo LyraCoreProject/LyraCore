@@ -116,6 +116,11 @@ function = "attack_power_percent_auras_move_the_sheet"
 rung = "unit"
 
 [[tests]]
+path = "importer/src/spell.rs"
+function = "combat_field_resolves_from_variant_not_misc"
+rung = "unit"
+
+[[tests]]
 path = "crates/lyracore-protocol/src/codec/entity/tests.rs"
 function = "create_object_carries_a_negative_base_and_the_attack_power_multipliers"
 rung = "unit"
@@ -283,12 +288,6 @@ description = "Only a unit's raid sees its real health. An Empathy (Beast Lore) 
 path = "module/src/native/health.rs"
 symbol = "visible_health"
 evidence = "Review of PR 1040. At d9173eca, Player.cpp Player::CanSeeHealthOf takes the owner from GetCharmerOrOwnerPlayerOrPlayerItself, and Player::CanSeeSpecialInfoOf shows raw health to the caster of a SPELL_AURA_EMPATHY Aura on the target."
-
-[[known_gaps]]
-description = "The importer does not map the attack power percent Auras, melee and ranged, so an imported Spell never carries one. The Module applies the multiplier to damage and the sheet for any A_MOD_COMBAT effect on COMBAT_ATTACK_POWER_PCT or COMBAT_RANGED_ATTACK_POWER_PCT."
-path = "importer/src/spell_kind.rs"
-symbol = "aura_mod_to_kind"
-evidence = "Source reading, not measured. At d9173eca, SpellAuras.cpp Aura::HandleAuraModAttackPowerPercent and HandleAuraModRangedAttackPowerPercent handle SPELL_AURA_MOD_ATTACK_POWER_PCT (166) and SPELL_AURA_MOD_RANGED_ATTACK_POWER_PCT (167); importer/src/spell_kind.rs maps neither AuraMod::ModAttackPowerPct nor ModRangedAttackPowerPct."
 
 [[known_gaps]]
 description = "A Form's own pool does not survive relog: a druid who logs out in a Form that shows rage or energy comes back with that pool empty. vmangos saves and restores every pool, so Bear rage and Cat energy return. The Reserve Pool (the druid's mana) does survive."
