@@ -583,8 +583,7 @@ seed. `debug_repair_after_publish` updates the shield fixture and Weakened Soul 
 `game_pending_cast` gains the END-appended `cast_item_guid` (default 0), and an Item cast now uses
 up its Item when the cast goes off, not when it starts. Zero means no cast item. A timed Item cast
 in flight at the publish already used up its Item at start, so zero is right for it: it completes
-without using up another. It also counts as a spell cast, so a spell with a power cost charges it
-at completion. No repair or reimport is needed, and the Native Host layouts are unchanged.
+without using up another, and its cooldown category still marks it as an Item cast. No repair or reimport is needed, and the Native Host layouts are unchanged.
 
 ### Taxi team mount migration
 

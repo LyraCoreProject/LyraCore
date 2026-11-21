@@ -62,7 +62,7 @@ impl CastRequest {
     }
 
     fn is_item_cast(&self) -> bool {
-        self.cast_item.is_some()
+        self.cast_item.is_some() || self.cooldown_category.is_some()
     }
 }
 
@@ -2022,7 +2022,7 @@ fn caster_life_allows(is_player: bool, dead: bool, dead_callback: bool) -> bool 
     !dead || (dead_callback && !is_player)
 }
 
-// vmangos Spell::CheckItems refuses a cast item in trade; LyraCore also needs it carried.
+// vmangos Spell::CheckItems: a cast item in trade or not carried fails the cast.
 fn check_cast_item(
     ctx: &ReducerContext,
     caster_guid: u64,

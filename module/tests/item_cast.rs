@@ -99,6 +99,11 @@ fn an_item_naming_itself_as_its_target_is_refused_and_kept() {
     let slot = grant(&shard, HEAL_ITEM, 2);
     let refused = shard.call("debug_use_item_on_item", &[PLAYER, &slot, &slot]);
     assert!(!refused.status.success());
+    assert!(
+        String::from_utf8_lossy(&refused.stderr).contains("cannot target itself"),
+        "{}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
     assert!(pending_casts(&shard).is_empty());
     assert_eq!(stack(&shard, HEAL_ITEM), Some(2));
 }
