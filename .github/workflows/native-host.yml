@@ -2,7 +2,7 @@ name: Native Host
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths-ignore:
       - "conformance/*.py"
       - "conformance/tests/*.py"
@@ -19,7 +19,8 @@ on:
     branches: [main]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  # A run for another label skips every job, so it gets its own group and cancels nothing.
+  group: ${{ github.workflow }}-${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && github.run_id || github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -28,9 +29,14 @@ permissions:
 env:
   HOST_CHECKOUT: .lyracore/native-host/SpacetimeDB
 
+# A PR runs these Boat jobs only with the full-ci label, because each Boat VM counts against the
+# plan's start limits. Pushes to main run them on GitHub's runners.
 jobs:
   host:
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    if: >-
+      github.event_name == 'push' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -65,7 +71,10 @@ jobs:
           if-no-files-found: error
 
   host-tests:
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    if: >-
+      github.event_name == 'push' ||
+      (!github.event.pull_request.draft &&
+      (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -103,8 +112,11 @@ jobs:
         run: touch .native-host-tests-passed
 
   module:
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
-    runs-on: ${{ github.event_name == 'push' && 'ubuntu-latest' || 'boat' }}
+    if: >-
+      github.event_name == 'push' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -122,7 +134,10 @@ jobs:
           if-no-files-found: error
 
   checks:
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    if: >-
+      github.event_name == 'push' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
     needs: [host, module]
     runs-on: ${{ github.event_name == 'push' && 'ubuntu-latest' || 'boat-large' }}
     timeout-minutes: 30
