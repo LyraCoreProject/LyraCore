@@ -91,14 +91,8 @@ impl Fight {
             "SELECT id FROM game_threat WHERE creature_guid = {wolf} AND source_guid = {source}"
         ));
         if updated.is_empty() {
-            self.shard.insert_row(
-                "game_threat",
-                &[
-                    ("creature_guid", &wolf.parse::<u64>().unwrap()),
-                    ("source_guid", &source.parse::<u64>().unwrap()),
-                    ("threat", &threat),
-                ],
-            );
+            self.shard
+                .assert_call("debug_add_threat", &[wolf, source, &threat.to_string()]);
         } else {
             self.shard.assert_sql(&format!(
                 "UPDATE game_threat SET threat = {threat} \

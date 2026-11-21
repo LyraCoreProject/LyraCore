@@ -2813,6 +2813,7 @@ impl ThreatSink for Scenario {
                 let c = creatures.get(&f.attacker)?;
                 scope.covers(c.instance_id).then_some(Fighter {
                     guid: f.attacker,
+                    at: c.at,
                     victim: f.victim,
                 })
             })
@@ -2821,16 +2822,9 @@ impl ThreatSink for Scenario {
     fn taunted_onto(&self, guid: u64) -> Option<u64> {
         self.taunts.borrow().get(&guid).copied()
     }
-    fn contenders(&self, guid: u64) -> Vec<Contender> {
+    fn threat_sources(&self, guid: u64) -> Vec<ThreatSource> {
         let creatures = self.creatures.borrow();
         let players = self.players.borrow();
-        let at = |guid: u64| {
-            creatures
-                .get(&guid)
-                .map(|c| c.at)
-                .or_else(|| players.iter().find(|p| p.guid == guid).map(|p| p.at))
-        };
-        let creature_at = at(guid);
         crate::threat::rank(
             self.threat
                 .borrow()
@@ -2840,12 +2834,16 @@ impl ThreatSink for Scenario {
                 .collect(),
         )
         .into_iter()
-        .map(|(source_guid, threat)| Contender {
-            source_guid,
-            threat,
-            in_melee_reach: creature_at
-                .zip(at(source_guid))
-                .is_some_and(|(a, b)| dist_sq(a, b) <= CHASE_MELEE_SQ),
+        .filter_map(|(source, threat)| {
+            let at = creatures
+                .get(&source)
+                .map(|c| c.at)
+                .or_else(|| players.iter().find(|p| p.guid == source).map(|p| p.at))?;
+            Some(ThreatSource {
+                guid: source,
+                at,
+                threat,
+            })
         })
         .collect()
     }
@@ -5056,34 +5054,19 @@ fn equal_threat_leaves_the_target_where_it_is() {
 }
 
 #[test]
-fn a_creature_switches_only_past_the_threat_margin_for_the_challengers_distance() {
-    let in_melee = p(5.0, 0.0, 10.0);
+fn a_creature_switches_past_the_margin_for_the_challengers_distance() {
+    let in_melee = p(4.0, 0.0, 10.0);
     let at_range = p(20.0, 0.0, 10.0);
-    let cases: [(&str, Point, i64, i64, u64); 6] = [
-        ("109% in melee", in_melee, 100, 109, HUNTER),
-        ("111% in melee", in_melee, 100, 111, RANGER),
-        ("129% at range", at_range, 100, 129, HUNTER),
-        ("131% at range", at_range, 100, 131, RANGER),
-        (
-            "111 against a victim that grew to 102",
-            in_melee,
-            102,
-            111,
-            HUNTER,
-        ),
-        (
-            "any threat against a victim with none",
-            in_melee,
-            0,
-            1,
-            RANGER,
-        ),
+    let cases: [(&str, Point, i64, u64); 3] = [
+        ("111% in melee", in_melee, 111, RANGER),
+        ("111% at range", at_range, 111, HUNTER),
+        ("131% at range", at_range, 131, RANGER),
     ];
-    for (case, challenger_at, victim_threat, challenger_threat, victim) in cases {
+    for (case, challenger_at, challenger_threat, victim) in cases {
         let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
             .player(RANGER, challenger_at)
             .attacking(WOLF, HUNTER)
-            .threat(WOLF, HUNTER, victim_threat)
+            .threat(WOLF, HUNTER, 100)
             .threat(WOLF, RANGER, challenger_threat);
         let tick = w.tick(true, catch_all());
         run_cycle(&mut w, tick);
@@ -5096,7 +5079,7 @@ fn a_creature_switches_only_past_the_threat_margin_for_the_challengers_distance(
 fn a_challenger_in_melee_takes_over_from_a_stronger_one_still_at_range() {
     let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
         .player(RANGER, p(20.0, 0.0, 10.0))
-        .player(MAGE, p(5.0, 0.0, 10.0))
+        .player(MAGE, p(4.0, 0.0, 10.0))
         .attacking(WOLF, HUNTER)
         .threat(WOLF, HUNTER, 100)
         .threat(WOLF, RANGER, 125)

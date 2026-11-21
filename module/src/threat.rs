@@ -179,15 +179,13 @@ pub(crate) struct Contender {
 /// vmangos `selectNextVictim`: keep `current` unless a contender in `ranked` (highest threat first)
 /// has more than 110% of its threat in melee reach or more than 130% outside it.
 pub(crate) fn select_victim(current: u64, ranked: &[Contender]) -> Option<u64> {
-    if current == 0 {
+    let Some(current_threat) = ranked
+        .iter()
+        .find(|c| c.source_guid == current)
+        .map(|c| i128::from(c.threat))
+    else {
         return ranked.first().map(|c| c.source_guid);
-    }
-    let current_threat = i128::from(
-        ranked
-            .iter()
-            .find(|c| c.source_guid == current)
-            .map_or(0, |c| c.threat),
-    );
+    };
     for contender in ranked {
         let threat = i128::from(contender.threat);
         if contender.source_guid == current || threat * 10 <= current_threat * 11 {
@@ -453,10 +451,21 @@ mod tests {
     }
 
     #[test]
-    fn a_victim_with_no_threat_yields_to_any_contender_with_threat() {
-        let ranked = [contender(2, 1, false)];
+    fn a_victim_at_zero_threat_yields_to_any_contender_with_threat() {
+        assert_eq!(
+            select_victim(1, &[contender(2, 0, true), contender(1, 0, true)]),
+            Some(1)
+        );
+        assert_eq!(
+            select_victim(1, &[contender(2, 1, false), contender(1, 0, true)]),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn a_victim_missing_from_the_ranking_yields_to_the_top_contender() {
+        let ranked = [contender(2, 0, false), contender(3, 0, true)];
         assert_eq!(select_victim(1, &ranked), Some(2));
-        assert_eq!(select_victim(1, &[contender(2, 0, true)]), Some(1));
     }
 
     #[test]

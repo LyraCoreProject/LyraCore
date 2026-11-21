@@ -343,13 +343,21 @@ pub(crate) trait CastSink {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct Fighter {
     pub guid: u64,
+    pub at: Point,
     pub victim: u64,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct ThreatSource {
+    pub guid: u64,
+    pub at: Point,
+    pub threat: i64,
 }
 
 pub(crate) trait ThreatSink {
     fn fighters(&self, scope: &TickScope) -> Vec<Fighter>;
     fn taunted_onto(&self, guid: u64) -> Option<u64>;
-    fn contenders(&self, guid: u64) -> Vec<Contender>;
+    fn threat_sources(&self, guid: u64) -> Vec<ThreatSource>;
     fn retarget(&mut self, creature: u64, victim: u64);
 }
 
@@ -1062,7 +1070,16 @@ fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
             }
             continue;
         }
-        if let Some(victim) = select_victim(f.victim, &w.contenders(f.guid)) {
+        let contenders: Vec<Contender> = w
+            .threat_sources(f.guid)
+            .into_iter()
+            .map(|source| Contender {
+                source_guid: source.guid,
+                threat: source.threat,
+                in_melee_reach: dist_sq(f.at, source.at) <= CHASE_MELEE_SQ,
+            })
+            .collect();
+        if let Some(victim) = select_victim(f.victim, &contenders) {
             if victim != f.victim {
                 switches.push((f.guid, victim));
             }
