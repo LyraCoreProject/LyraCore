@@ -9,10 +9,7 @@ use lyracore_shared::trainer::TrainerRefusal;
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::{Rollback, Unhandled};
-use crate::{
-    skill::game_player_skill, spell::spellbook::game_player_spell, trainer::game_trainer_spell,
-    Refusal,
-};
+use crate::{trainer::game_trainer_spell, Refusal};
 
 pub(super) fn list(
     ctx: &ReducerContext,
@@ -22,37 +19,29 @@ pub(super) fn list(
 ) -> Result<(), Refusal> {
     let character = super::actor(ctx, guid)?;
     let trainer = crate::trainer::validate_trainer_interaction(ctx, &character, trainer)?;
-    let learned: std::collections::HashSet<_> = ctx
-        .db
-        .game_player_spell()
-        .by_character()
-        .filter(guid)
-        .map(|row| row.spell_id)
-        .collect();
-    let caps: std::collections::HashMap<_, _> = ctx
-        .db
-        .game_player_skill()
-        .by_character()
-        .filter(guid)
-        .map(|row| (row.skill_line, u32::from(row.max_rank)))
-        .collect();
+    let trainee = crate::trainer::Trainee::load(ctx, guid);
     let mut spells: Vec<_> = ctx
         .db
         .game_trainer_spell()
         .by_trainer()
         .filter(trainer.entry)
-        .map(|row| codec::TrainerSpellView {
-            spell_id: row.spell_id,
-            cost: row.cost,
-            required_level: row.required_level,
-            player_level: character.level,
-            known: lyracore_shared::trainer::offering_known(
-                row.learn_skill_line,
-                row.learn_skill_cap,
-                caps.get(&row.learn_skill_line).copied(),
-                learned.contains(&crate::trainer::resolve_learn_target(ctx, row.spell_id)),
-            ),
-            learn_skill_line: row.learn_skill_line,
+        .map(|row| {
+            let assessment = trainee.assess(
+                ctx,
+                &row,
+                crate::trainer::resolve_learn_target(ctx, row.spell_id),
+            );
+            codec::TrainerSpellView {
+                spell_id: row.spell_id,
+                cost: row.cost,
+                required_level: row.required_level,
+                player_level: character.level,
+                known: assessment.known,
+                learn_skill_line: row.learn_skill_line,
+                required_skill: row.required_skill,
+                required_skill_value: row.required_skill_value,
+                gates: assessment.gates,
+            }
         })
         .collect();
     spells.sort_by_key(|row| row.spell_id);
@@ -124,9 +113,10 @@ pub(super) fn receive(
 fn failure_reason(refusal: TrainerRefusal) -> TrainingFailureReason {
     match refusal {
         TrainerRefusal::NotEnoughMoney => TrainingFailureReason::NotEnoughMoney,
-        TrainerRefusal::LevelTooLow | TrainerRefusal::PreviousRankMissing => {
-            TrainingFailureReason::NotEnoughSkill
-        }
+        TrainerRefusal::LevelTooLow
+        | TrainerRefusal::PreviousRankMissing
+        | TrainerRefusal::SkillTooLow
+        | TrainerRefusal::PrimaryProfessionLimit => TrainingFailureReason::NotEnoughSkill,
         TrainerRefusal::Unavailable | TrainerRefusal::NotOffered | TrainerRefusal::AlreadyKnown => {
             TrainingFailureReason::Unavailable
         }

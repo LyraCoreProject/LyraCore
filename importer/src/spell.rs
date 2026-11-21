@@ -1485,6 +1485,8 @@ fn trainer_offering_rows(
                         required_level: lvl,
                         learn_skill_line: 0,
                         learn_skill_cap: 75,
+                        required_skill: 0,
+                        required_skill_value: 0,
                     });
                 }
                 None => trainer_missing.push(spell_id),
@@ -1607,7 +1609,7 @@ fn assemble_spell_sql(
         push_insert(
             &mut stmts,
             "game_trainer_spell",
-            "id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap",
+            "id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap,required_skill,required_skill_value",
             &rows
                 .trainers
                 .iter()

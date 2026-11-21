@@ -15,6 +15,8 @@ pub enum TrainerRefusal {
     AlreadyKnown,
     LevelTooLow,
     PreviousRankMissing,
+    SkillTooLow,
+    PrimaryProfessionLimit,
     NotEnoughMoney,
 }
 
@@ -26,6 +28,8 @@ impl TrainerRefusal {
             Self::AlreadyKnown => "trainer:already_known",
             Self::LevelTooLow => "trainer:level_too_low",
             Self::PreviousRankMissing => "trainer:previous_rank_missing",
+            Self::SkillTooLow => "trainer:skill_too_low",
+            Self::PrimaryProfessionLimit => "trainer:primary_profession_limit",
             Self::NotEnoughMoney => "trainer:not_enough_money",
         }
     }
@@ -148,18 +152,58 @@ pub fn offering_known(
     }
 }
 
+pub const MAX_PRIMARY_PROFESSIONS: u32 = 2;
+pub const APPRENTICE_SKILL_CAP: u32 = 75;
+
+pub const PRIMARY_PROFESSION_LINES: [u32; 9] = [171, 164, 333, 202, 182, 165, 186, 393, 197];
+
+pub fn is_primary_profession_line(line: u32) -> bool {
+    PRIMARY_PROFESSION_LINES.contains(&line)
+}
+
+pub fn is_primary_first_rank(skill_line: u32, offered_cap: u32) -> bool {
+    is_primary_profession_line(skill_line) && offered_cap == APPRENTICE_SKILL_CAP
+}
+
+pub fn free_primary_profession_slots(held: usize) -> u32 {
+    MAX_PRIMARY_PROFESSIONS.saturating_sub(u32::try_from(held).unwrap_or(u32::MAX))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OfferingState {
     Known,
     LevelTooLow,
+    PreviousRankMissing,
+    SkillTooLow,
+    PrimaryProfessionLimit,
     Available,
 }
 
-pub fn offering_state(known: bool, level: u32, required_level: u32) -> OfferingState {
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct OfferingGates {
+    pub previous_rank_missing: bool,
+    pub skill_requirement_unmet: bool,
+    pub primary_first_rank: bool,
+    pub primary_slot_free: bool,
+}
+
+// Gate order follows vmangos Player::GetTrainerSpellState.
+pub fn offering_state(
+    known: bool,
+    level: u32,
+    required_level: u32,
+    gates: OfferingGates,
+) -> OfferingState {
     if known {
         OfferingState::Known
     } else if level < required_level {
         OfferingState::LevelTooLow
+    } else if gates.previous_rank_missing {
+        OfferingState::PreviousRankMissing
+    } else if gates.skill_requirement_unmet {
+        OfferingState::SkillTooLow
+    } else if gates.primary_first_rank && !gates.primary_slot_free {
+        OfferingState::PrimaryProfessionLimit
     } else {
         OfferingState::Available
     }
@@ -276,8 +320,64 @@ mod rule_tests {
 
     #[test]
     fn known_offerings_stay_gray_even_below_the_required_level() {
-        assert_eq!(offering_state(true, 1, 10), OfferingState::Known);
-        assert_eq!(offering_state(false, 9, 10), OfferingState::LevelTooLow);
-        assert_eq!(offering_state(false, 10, 10), OfferingState::Available);
+        let gates = OfferingGates::default();
+        assert_eq!(offering_state(true, 1, 10, gates), OfferingState::Known);
+        assert_eq!(
+            offering_state(false, 9, 10, gates),
+            OfferingState::LevelTooLow
+        );
+        assert_eq!(
+            offering_state(false, 10, 10, gates),
+            OfferingState::Available
+        );
+    }
+
+    #[test]
+    fn offering_gates_apply_in_vmangos_order() {
+        let all = OfferingGates {
+            previous_rank_missing: true,
+            skill_requirement_unmet: true,
+            primary_first_rank: true,
+            primary_slot_free: false,
+        };
+        assert_eq!(offering_state(true, 1, 9, all), OfferingState::Known);
+        assert_eq!(offering_state(false, 1, 9, all), OfferingState::LevelTooLow);
+        assert_eq!(
+            offering_state(false, 9, 9, all),
+            OfferingState::PreviousRankMissing
+        );
+        let all = OfferingGates {
+            previous_rank_missing: false,
+            ..all
+        };
+        assert_eq!(offering_state(false, 9, 9, all), OfferingState::SkillTooLow);
+        let all = OfferingGates {
+            skill_requirement_unmet: false,
+            ..all
+        };
+        assert_eq!(
+            offering_state(false, 9, 9, all),
+            OfferingState::PrimaryProfessionLimit
+        );
+        let all = OfferingGates {
+            primary_slot_free: true,
+            ..all
+        };
+        assert_eq!(offering_state(false, 9, 9, all), OfferingState::Available);
+    }
+
+    #[test]
+    fn only_the_nine_primary_lines_count_and_only_their_apprentice_rank_takes_a_slot() {
+        for line in PRIMARY_PROFESSION_LINES {
+            assert!(is_primary_first_rank(line, 75), "line {line}");
+            assert!(!is_primary_first_rank(line, 150), "line {line}");
+        }
+        for secondary in [129, 185, 356, 762, 0] {
+            assert!(!is_primary_first_rank(secondary, 75), "line {secondary}");
+        }
+        assert_eq!(free_primary_profession_slots(0), 2);
+        assert_eq!(free_primary_profession_slots(1), 1);
+        assert_eq!(free_primary_profession_slots(2), 0);
+        assert_eq!(free_primary_profession_slots(9), 0);
     }
 }

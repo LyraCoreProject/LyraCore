@@ -602,6 +602,15 @@ the node-status query now share one lookup with no 10-yard limit. A Character wh
 before the change may have learned a node that lookup now skips; no repair is needed, and the
 node stays known. The reimport writes the flag from `spell_template` effect 123 and `TaxiPath`.
 
+### Trainer skill requirement migration
+
+`game_trainer_spell` gains `required_skill` and `required_skill_value`, end-appended with default 0.
+Reimport the `trainers` family straight after the publish. Until then no offer carries a skill
+requirement, so a Character can buy any rank or recipe that its level allows. The primary
+profession limit applies at once: it counts the Character's own `game_player_skill` rows, so a
+Character who already holds more than two primary professions keeps them and cannot learn another
+first rank. No repair is needed.
+
 ### Quest availability migration
 
 The private `game_quest_availability` and `game_quest_prerequisite` tables are new. Reimport the
