@@ -33,7 +33,8 @@ pub enum LootRefusal {
     NothingToLoot,
     ItemUnavailable,
     InventoryFull,
-    /// Item storage refused for a reason other than space, such as a unique item limit.
+    UniqueItemHeld,
+    /// Item storage refused for a reason other than space or a unique item limit.
     StorageRefused,
     RollUnavailable,
     NotMasterLooter,
@@ -52,6 +53,7 @@ impl LootRefusal {
             Self::NothingToLoot => "loot:nothing_to_loot",
             Self::ItemUnavailable => "loot:item_unavailable",
             Self::InventoryFull => "loot:inventory_full",
+            Self::UniqueItemHeld => "loot:unique_item_held",
             Self::StorageRefused => "loot:storage_refused",
             Self::RollUnavailable => "loot:roll_unavailable",
             Self::NotMasterLooter => "loot:not_master_looter",
@@ -77,6 +79,7 @@ impl From<LootRefusal> for ActionRefusal {
             }
             LootRefusal::OutOfRange => ActionRefusalKind::OutOfRange,
             LootRefusal::InventoryFull => ActionRefusalKind::InventoryFull,
+            LootRefusal::UniqueItemHeld => ActionRefusalKind::DuplicateItem,
             LootRefusal::StorageRefused => ActionRefusalKind::Other,
             LootRefusal::LootTagIneligible
             | LootRefusal::ItemUnavailable
