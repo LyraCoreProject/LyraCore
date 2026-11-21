@@ -608,6 +608,61 @@ fn the_ranged_percent_aura_reaches_the_sheet_of_everyone_but_wand_users() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn percent_attack_power_auras_scale_a_creatures_and_a_pets_swing() {
+    use lyracore_shared::spell::taxonomy::COMBAT_ATTACK_POWER_PCT;
+    const DOUBLE: u32 = 5_090_430;
+    const DOUBLE_AGAIN: u32 = 5_090_431;
+
+    let mut shard = Standalone::start("white-melee-creature-percent-attack-power");
+    let wolf = beside_a_wolf(&mut shard, "");
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_template SET damage_min = 100, damage_max = 200 \
+         WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    combat_field_aura(&shard, DOUBLE, COMBAT_ATTACK_POWER_PCT, 100);
+    combat_field_aura(&shard, DOUBLE_AGAIN, COMBAT_ATTACK_POWER_PCT, 100);
+    let range = |shard: &Standalone| {
+        shard.assert_call("debug_compute_swing", &[&wolf, "1"]);
+        let readout = shard
+            .query_rows("SELECT * FROM game_debug_readout WHERE key = 'swing'")
+            .remove(0);
+        (readout["base_min"].clone(), readout["base_max"].clone())
+    };
+    let pair = |min: &str, max: &str| (min.to_string(), max.to_string());
+
+    // vmangos UpdateDamagePhysical: damage * (0.7 + 0.3 * AP now / database AP).
+    assert_eq!(range(&shard), pair("100", "200"), "before the Auras");
+    shard.assert_call("debug_force_cast", &[&wolf, &DOUBLE.to_string()]);
+    assert_eq!(range(&shard), pair("130", "260"), "AP * 2 gives 0.7 + 0.6");
+    shard.assert_call("debug_force_cast", &[&wolf, &DOUBLE_AGAIN.to_string()]);
+    assert_eq!(
+        range(&shard),
+        pair("190", "380"),
+        "the Auras multiply: AP * 4 gives 0.7 + 1.2"
+    );
+
+    shard.insert_row(
+        "game_live_pet_kind",
+        &[
+            ("pet_guid", &wolf.parse::<u64>().unwrap()),
+            ("hunter_pet_id", &0u64),
+        ],
+    );
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET owner_guid = 1 WHERE guid = {wolf}"
+    ));
+    assert_eq!(range(&shard), pair("190", "380"), "a summoned pet likewise");
+
+    shard.assert_call("debug_shed_spell_auras", &[&wolf, &DOUBLE.to_string()]);
+    shard.assert_call(
+        "debug_shed_spell_auras",
+        &[&wolf, &DOUBLE_AGAIN.to_string()],
+    );
+    assert_eq!(range(&shard), pair("100", "200"), "after the Auras");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn learning_predatory_strikes_in_cat_form_raises_the_sheet_attack_power() {
     const TALENT: u32 = 9_001;
     const RANK_1: u32 = 16_972;
