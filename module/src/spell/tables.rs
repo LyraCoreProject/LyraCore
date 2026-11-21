@@ -790,8 +790,8 @@ crate::character_owned!(transfer, fn sweep_transfer_game_aura(ctx, character_gui
 });
 
 pub const CAST_FAIL_NONE: u8 = 0;
-pub const CAST_FAIL_NO_POWER: u8 = 1;
-pub const CAST_FAIL_INTERRUPTED: u8 = 2;
+pub const CAST_FAIL_NO_POWER: u8 = super::CastRefusalReason::NoPower.failure_code();
+pub const CAST_FAIL_INTERRUPTED: u8 = super::CastRefusalReason::Interrupted.failure_code();
 
 // Codes are append-only for rolling Module updates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -861,7 +861,7 @@ pub struct SpellCastEvent {
     pub grid_x: i32,
     #[default(0i32)]
     pub grid_y: i32,
-    // A failed SMSG_CAST_RESULT releases the 1.12 client's queued melee ability.
+    // A `CastRefusalReason` code; its failed SMSG_CAST_RESULT releases the queued melee ability.
     #[default(0u8)]
     pub failure_reason: u8,
     // Zero selects legacy field decoding; new rows use nonzero codes.

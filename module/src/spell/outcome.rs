@@ -49,10 +49,13 @@ impl std::fmt::Display for CastRefusal {
 }
 
 /// What the casting client's cast result reports; Package API kinds stay in [`CastRefusalKind`].
+/// Each discriminant is its `SpellCastEvent::failure_reason` code; codes are append-only.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
 pub(crate) enum CastRefusalReason {
+    NoPower = 1,
+    Interrupted = 2,
     Unreported,
-    NoPower,
     CasterAuraState,
     TargetAuraState,
     NotReady,
@@ -79,6 +82,51 @@ pub(crate) enum CastRefusalReason {
     MountInDeepWater,
     TargetLevelTooLow,
     ItemGone,
+}
+
+impl CastRefusalReason {
+    const ALL: [Self; 29] = [
+        Self::NoPower,
+        Self::Interrupted,
+        Self::Unreported,
+        Self::CasterAuraState,
+        Self::TargetAuraState,
+        Self::NotReady,
+        Self::OutOfRange,
+        Self::TooClose,
+        Self::NotInFront,
+        Self::NoLineOfSight,
+        Self::NoAmmo,
+        Self::WrongStance,
+        Self::NotShapeshift,
+        Self::NotBehind,
+        Self::NotStealthed,
+        Self::NoComboPoints,
+        Self::SchoolLocked,
+        Self::ReactWindowClosed,
+        Self::Stunned,
+        Self::LevelTooLow,
+        Self::CasterDead,
+        Self::TargetDead,
+        Self::BadTargets,
+        Self::MountWhileDead,
+        Self::MountInCombat,
+        Self::MountIndoors,
+        Self::MountInDeepWater,
+        Self::TargetLevelTooLow,
+        Self::ItemGone,
+    ];
+
+    pub(crate) const fn failure_code(self) -> u8 {
+        self as u8
+    }
+
+    /// The reason a `SpellCastEvent::failure_reason` code names; zero names none.
+    pub(crate) fn from_failure_code(code: u8) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|reason| reason.failure_code() == code)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -241,4 +289,27 @@ pub(crate) fn pending_cast(ctx: &ReducerContext, caster_guid: u64) -> Option<Cas
         .filter(caster_guid)
         .next()
         .map(|cast| CastHandle::from_row(ctx, cast))
+}
+
+#[cfg(test)]
+mod failure_code_tests {
+    use super::CastRefusalReason;
+
+    #[test]
+    fn every_reason_reads_back_from_its_own_nonzero_failure_code() {
+        for reason in CastRefusalReason::ALL {
+            assert_ne!(reason.failure_code(), 0, "{reason:?}");
+            assert_eq!(
+                CastRefusalReason::from_failure_code(reason.failure_code()),
+                Some(reason)
+            );
+        }
+        assert_eq!(CastRefusalReason::from_failure_code(0), None);
+    }
+
+    #[test]
+    fn the_codes_queued_strikes_already_write_keep_their_meaning() {
+        assert_eq!(crate::spell::CAST_FAIL_NO_POWER, 1);
+        assert_eq!(crate::spell::CAST_FAIL_INTERRUPTED, 2);
+    }
 }

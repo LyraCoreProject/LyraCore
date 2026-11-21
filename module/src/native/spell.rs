@@ -1,5 +1,5 @@
 use super::{bounded as message, game_native_player};
-use crate::spell::SpellCastEventKind;
+use crate::spell::{CastRefusalReason, SpellCastEventKind};
 use crate::{SpellCastEvent, SpellImpactEvent};
 use lyracore_protocol::{codec, messages as wow_world_messages, world::Packet};
 use spacetimedb::{ReducerContext, Table};
@@ -158,12 +158,15 @@ fn cast_event_messages(
             ))),
         ));
         // Only a failed SMSG_CAST_RESULT releases the client's in-flight cast and its cast bar.
-        if let Some(reason) = codec::cast_failure_reason_for_code(row.failure_reason) {
+        if let Some(reason) = CastRefusalReason::from_failure_code(row.failure_reason) {
             out.push((
                 EventAudience::Source,
                 Packet {
                     opcode: codec::SMSG_CAST_RESULT_OPCODE,
-                    body: codec::build_cast_result_failed(row.spell_id, reason),
+                    body: codec::build_cast_result_failed(
+                        row.spell_id,
+                        super::cast::cast_result(reason),
+                    ),
                 },
             ));
         }
@@ -438,5 +441,33 @@ mod tests {
             ]
             .concat()
         );
+    }
+
+    #[test]
+    fn a_refused_completion_reports_its_own_gate_result_to_the_caster_only() {
+        let mut row = event();
+        row.kind = SpellCastEventKind::Interrupt as u8;
+        row.is_interrupted = true;
+        row.failure_reason = CastRefusalReason::OutOfRange.failure_code();
+        let packets = cast_event_messages(&row, None);
+        assert_eq!(packets.len(), 2);
+        assert!(matches!(packets[0].0, EventAudience::Everyone));
+        assert_ne!(packets[0].1.opcode, codec::SMSG_CAST_RESULT_OPCODE);
+        assert!(matches!(packets[1].0, EventAudience::Source));
+        assert_eq!(packets[1].1.opcode, codec::SMSG_CAST_RESULT_OPCODE);
+        assert_eq!(
+            packets[1].1.body,
+            codec::build_cast_result_failed(row.spell_id, 0x59)
+        );
+    }
+
+    #[test]
+    fn an_interrupt_without_a_failure_code_sends_no_cast_result() {
+        let mut row = event();
+        row.kind = SpellCastEventKind::Interrupt as u8;
+        row.is_interrupted = true;
+        let packets = cast_event_messages(&row, None);
+        assert_eq!(packets.len(), 1);
+        assert!(matches!(packets[0].0, EventAudience::Everyone));
     }
 }

@@ -31,12 +31,12 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
             sched.caster_guid,
             e
         );
-        // Only a failed SMSG_CAST_RESULT clears the 1.12 client's filled cast bar.
+        // The failed SMSG_CAST_RESULT names the refusing Gate (vmangos) and clears the cast bar.
         crate::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
                 is_interrupted: true,
-                failure_reason: CAST_FAIL_INTERRUPTED,
+                failure_reason: e.reason.failure_code(),
                 ..SpellCastEvent::signal(
                     ctx,
                     sched.caster_guid,
