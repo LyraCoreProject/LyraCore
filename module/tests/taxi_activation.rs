@@ -923,6 +923,10 @@ fn the_node_status_skips_a_node_outside_the_taxi_network() {
 fn the_taxi_menu_opens_on_the_nearest_node_however_far() {
     let (shard, mut wire, master) = stage("taxi-activation-menu-far", 1000);
     let master: u64 = master.parse().unwrap();
+    // The seeded Northshire nodes stand within 10 yards of the master; without them only the
+    // far node qualifies, which the old 10-yard lookup refused.
+    shard.assert_sql("DELETE FROM game_taxi_node WHERE id = 5090100");
+    shard.assert_sql("DELETE FROM game_taxi_node WHERE id = 5090101");
     shard.assert_sql(&format!(
         "UPDATE game_taxi_node SET x = x + {FAR_YARDS} WHERE id = {SOURCE_NODE}"
     ));

@@ -180,7 +180,7 @@ impl TaxiGateDenied {
             Self::OutOfRange => "flight master is out of range",
             Self::Hostile => "flight master refuses interaction",
             Self::NotInteractable => "flight master is not interactable",
-            Self::NoSourceNode => "flight master has no nearby taxi node",
+            Self::NoSourceNode => "flight master has no taxi node",
             Self::Flying => "player is in a taxi flight",
             Self::PlayerBusy => "player is busy",
             Self::NoClientControl => "player has no client control",
