@@ -33,6 +33,7 @@ pub const fn grants_equipped_stats(slot: u8, max_durability: u32, durability: u3
 pub enum ItemRefusal {
     ItemNotFound,
     InventoryFull,
+    CantCarryMore,
     WrongSlot,
     CannotEquip,
     TwoHandedWeaponEquipped,
@@ -55,6 +56,7 @@ impl ItemRefusal {
         match self {
             Self::ItemNotFound => "item:item_not_found",
             Self::InventoryFull => "item:inventory_full",
+            Self::CantCarryMore => "item:cant_carry_more",
             Self::WrongSlot => "item:wrong_slot",
             Self::CannotEquip => "item:cannot_equip",
             Self::TwoHandedWeaponEquipped => "item:two_handed_weapon_equipped",

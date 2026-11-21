@@ -1,6 +1,8 @@
 use lyracore_protocol::messages::vanilla::{NewItemChatAlert, NewItemCreationType, NewItemSource};
 use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
+use crate::{game_pending_cast, game_spell};
+
 // Playable class IDs skip 6 and 10; Druid is bit 10.
 pub const ALL_PLAYABLE_CLASS_MASK: u32 = 0x5df;
 pub const ALL_PLAYABLE_RACE_MASK: u32 = 0xff;
@@ -320,6 +322,7 @@ impl ItemInstance {
             ctx.db.game_item_instance().guid().update(remaining.clone());
         } else {
             ctx.db.game_item_instance().guid().delete(self.guid);
+            release_cast_item(ctx, &self);
         }
         // Sale preserves Petitions and pauses enchantments; see docs/schema.md when changing buyback.
         crate::native::inventory::item_sold(ctx, &self, remaining.as_ref(), sold, evicted);
@@ -345,11 +348,39 @@ impl ItemInstance {
         let removed = items.guid().delete(guid);
         super::forget_temporary_enchantment(ctx, guid);
         if let Some(row) = previous {
+            release_cast_item(ctx, &row);
             crate::native::realm_petition::item_removed(ctx, &row);
             crate::native::inventory::item_changed(ctx, Some(&row), None, None);
             super::equip::changed(ctx, Some(&row), None);
         }
         removed
+    }
+}
+
+/// vmangos `Player::InterruptSpellsWithCastItem`: a timed cast stops, a channel forgets the item.
+fn release_cast_item(ctx: &ReducerContext, item: &ItemInstance) {
+    let pending = ctx.db.game_pending_cast();
+    let Some(mut cast) = pending
+        .by_caster()
+        .filter(&item.owner_guid)
+        .find(|cast| cast.cast_item_guid == item.guid)
+    else {
+        return;
+    };
+    let channeled = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(cast.spell_id)
+        .is_some_and(|spell| spell.cast_flags & crate::spell::CAST_FLAG_CHANNELED != 0);
+    if channeled {
+        cast.cast_item_guid = 0;
+        if cast.item_target_guid == item.guid {
+            cast.item_target_guid = 0;
+        }
+        pending.scheduled_id().update(cast);
+    } else {
+        crate::spell::interrupt_cast(ctx, item.owner_guid);
     }
 }
 

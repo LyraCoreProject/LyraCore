@@ -146,7 +146,8 @@ and `category_cooldown_ms` retain source fields needed by equip effects. The fiv
 absolute deadline. `game_pending_cast.cooldown_category` preserves an Item's override, including
 zero, through cast completion. `game_pending_cast.cast_item_guid` names the Item a cast uses up
 when it goes off; zero means no cast item, and a row in flight at upgrade already used up its Item
-at start. Their typed defaults preserve old rows during an additive publish.
+at start. A channel whose Item is destroyed, sold, traded, mailed or auctioned sets it, and an
+`item_target_guid` naming the same Item, to zero and runs on, as vmangos `ClearCastItem` does. Their typed defaults preserve old rows during an additive publish.
 See [equip spell migration](danger-zones.md#equip-spell-migration) before play resumes.
 
 Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully

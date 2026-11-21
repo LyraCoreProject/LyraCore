@@ -70,6 +70,8 @@ impl CastRequest {
 pub(crate) enum CastPhase {
     Start,
     Completion,
+    /// A Trigger Child Cast, resolved at once inside its parent's effects.
+    Trigger,
 }
 
 /// A `Spell` row and its effects in cast order.
@@ -105,6 +107,15 @@ pub(crate) fn resolve_cast(
 ) -> Result<(), CastGateRefusal> {
     let spell = LoadedSpell::load(ctx, request.spell_id)?;
     resolve_loaded_cast(ctx, request, &spell, CastPhase::Start)
+}
+
+/// Resolves a Trigger Child Cast.
+pub(crate) fn resolve_trigger_cast(
+    ctx: &ReducerContext,
+    request: &CastRequest,
+) -> Result<(), CastGateRefusal> {
+    let spell = LoadedSpell::load(ctx, request.spell_id)?;
+    resolve_loaded_cast(ctx, request, &spell, CastPhase::Trigger)
 }
 
 /// Resolves a timed cast that came due.
@@ -1083,6 +1094,11 @@ impl GateRun {
     fn is_strict(self) -> bool {
         self != Self::Resolve(CastPhase::Completion)
     }
+
+    /// A Trigger Child Cast skips some Gates vmangos guards with `!m_IsTriggeredSpell`; #1136 lists the rest.
+    fn is_trigger_child(self) -> bool {
+        self == Self::Resolve(CastPhase::Trigger)
+    }
 }
 
 /// One cast Gate; [`cast_gate_order`] decides which Gates a run checks and in what order.
@@ -1110,6 +1126,7 @@ enum CastGate {
     Dagger,
     CastItem,
     SpellFocus,
+    ProductStorage,
     ItemTarget,
     RangedWeapon,
     Range,
@@ -1123,7 +1140,7 @@ enum CastGate {
 }
 
 /// vmangos `Spell::CheckCast` order, cut down to the Gates LyraCore has.
-const CHECK_CAST_ORDER: [CastGate; 32] = [
+const CHECK_CAST_ORDER: [CastGate; 33] = [
     CastGate::SpellReady,
     CastGate::CasterAlive,
     CastGate::CasterLevel,
@@ -1146,6 +1163,7 @@ const CHECK_CAST_ORDER: [CastGate; 32] = [
     CastGate::Dagger,
     CastGate::CastItem,
     CastGate::SpellFocus,
+    CastGate::ProductStorage,
     CastGate::ItemTarget,
     CastGate::RangedWeapon,
     CastGate::Range,
@@ -1165,10 +1183,11 @@ impl CastGate {
             | Self::NonCombat
             | Self::Form
             | Self::Stealth
-            | Self::PeacefulTarget => run.is_strict(),
+            | Self::PeacefulTarget => run.is_strict() && !run.is_trigger_child(),
             // A completion checks power before every other Gate instead.
             Self::Power => run.is_strict(),
-            // Resolve(Start) also runs E_TRIGGER casts; vmangos skips a trigger's line of sight.
+            Self::ProductStorage => !run.is_trigger_child(),
+            // A Trigger Child Cast skips line of sight, as in vmangos; an instant checked it at Start.
             Self::LineOfSight => matches!(
                 run,
                 GateRun::Readiness(_) | GateRun::Start(_) | GateRun::Resolve(CastPhase::Completion)
@@ -1353,6 +1372,20 @@ impl GateCheck<'_> {
                     crate::creatures::check_hostile_summon(ctx, caster, hdr, effect).map(|_| ())
                 }),
             CastGate::CastItem => check_cast_item(ctx, caster.guid, request.cast_item),
+            CastGate::ProductStorage => {
+                product_storage(ctx, caster, spell, request.level).map_err(|refusal| {
+                    CastGateRefusal {
+                        item_refusal: Some(refusal),
+                        ..CastGateRefusal::other(
+                            CastRefusalReason::Unreported,
+                            format!(
+                                "spell {spell_id} product cannot be stored: {}",
+                                refusal.as_tag()
+                            ),
+                        )
+                    }
+                })
+            }
             CastGate::ItemTarget => {
                 check_item_target(ctx, caster.guid, effects, request.item_target)
             }
@@ -2049,6 +2082,42 @@ fn check_cast_item(
     }
 }
 
+/// vmangos `Spell::CheckItems`: effect 0's product must fit; its fewest count draws no roll.
+fn product_storage(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    spell: &LoadedSpell,
+    level: u8,
+) -> Result<(), lyracore_shared::item::ItemRefusal> {
+    let Some(effect) = spell
+        .effects
+        .iter()
+        .find(|effect| effect.effect_index == 0 && effect.kind == E_CREATE_ITEM)
+        .filter(|_| caster.is_player())
+    else {
+        return Ok(());
+    };
+    let hdr = &spell.header;
+    let fewest = effect_amount(
+        effect.base_points,
+        effect.die_sides,
+        effect.per_level,
+        u32::from(level),
+        hdr.spell_level,
+        hdr.max_level,
+        0,
+    )
+    .max(1) as u32;
+    let product = ctx
+        .db
+        .game_item_template()
+        .entry()
+        .find(effect.p0.max(0) as u32)
+        .ok_or(lyracore_shared::item::ItemRefusal::ItemNotFound)?;
+    crate::items::ItemStoragePlan::read(ctx, caster.guid, caster.owner_identity)
+        .can_store_new(ctx, &product, fewest)
+}
+
 // vmangos Spell::CheckCast refuses a temporary enchantment without an item it may enchant.
 fn check_item_target(
     ctx: &ReducerContext,
@@ -2311,6 +2380,8 @@ mod gate_order_tests {
         assert_before(START, G::Behind, &[G::Dagger, G::ItemTarget, G::Range]);
         for run in [START, COMPLETION] {
             assert_before(run, G::CastItem, &[G::SpellFocus, G::ItemTarget, G::Range]);
+            assert_before(run, G::SpellFocus, &[G::ProductStorage]);
+            assert_before(run, G::ProductStorage, &[G::ItemTarget, G::Range]);
         }
         assert_before(
             START,
@@ -2357,6 +2428,26 @@ mod gate_order_tests {
         }
         assert!(!COMPLETION.is_strict());
         assert!(GateRun::Resolve(CastPhase::Start).is_strict());
+    }
+
+    #[test]
+    fn a_trigger_child_cast_skips_the_caster_state_and_product_gates() {
+        let trigger = order(GateRun::Resolve(CastPhase::Trigger));
+        for gate in [
+            G::GlobalCooldown,
+            G::NonCombat,
+            G::Form,
+            G::Stealth,
+            G::PeacefulTarget,
+            G::ProductStorage,
+            G::LineOfSight,
+        ] {
+            assert!(
+                !trigger.contains(&gate),
+                "a Trigger Child Cast checks {gate:?}"
+            );
+        }
+        assert!(GateRun::Resolve(CastPhase::Trigger).is_strict());
     }
 
     #[test]
