@@ -468,14 +468,30 @@ fn is_known(ctx: &ReducerContext, character_guid: u64, node_id: u32) -> bool {
         .any(|row| row.node_id == node_id)
 }
 
-pub(crate) fn discover(ctx: &ReducerContext, character_guid: u64, node_id: u32) {
-    if !is_known(ctx, character_guid, node_id) {
-        ctx.db.game_character_taxi_node().insert(CharacterTaxiNode {
-            id: 0,
-            character_guid,
-            node_id,
-        });
+/// Teaches the node; false when the Character already knew it.
+pub(crate) fn discover(ctx: &ReducerContext, character_guid: u64, node_id: u32) -> bool {
+    if is_known(ctx, character_guid, node_id) {
+        return false;
     }
+    ctx.db.game_character_taxi_node().insert(CharacterTaxiNode {
+        id: 0,
+        character_guid,
+        node_id,
+    });
+    true
+}
+
+/// vmangos `SendLearnNewTaxiNode`: teaches the flight master's node; false when known or absent.
+pub(crate) fn learn_nearest_node(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    npc: &WorldEntity,
+) -> bool {
+    let Some(player) = crate::helpers::acting_entity_by_guid(ctx, character_guid) else {
+        return false;
+    };
+    nearest_taxi_node(npc, player.race(), ctx.db.game_taxi_node().iter())
+        .is_some_and(|node| discover(ctx, character_guid, node.id))
 }
 
 /// Whether `points`, in node order, form one whole route: contiguous, without delays or flags.
@@ -1185,6 +1201,7 @@ pub fn gw_open_taxi(
     Ok(())
 }
 
+/// vmangos `HandleTaxiQueryAvailableNodes`: teaches and announces an unknown node, else opens the menu.
 pub(crate) fn open_taxi(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -1192,31 +1209,90 @@ pub(crate) fn open_taxi(
     request_id: u64,
 ) -> TaxiServiceReply {
     match resolve_flight_master(ctx, character_guid, npc_guid) {
-        Ok((_player, source)) => {
-            discover(ctx, character_guid, source.id);
-            TaxiServiceReply {
-                character_guid,
-                request_id,
-                operation: lyracore_shared::constants::taxi_protocol::REPLY_OPEN,
-                npc_guid,
-                accepted: true,
-                known: true,
-                source_client_node_id: source.client_node_id,
-                available_client_node_ids: available_client_nodes(ctx, character_guid, &source),
-                refusal: String::new(),
-                created_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
-                result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_OK,
-            }
-        }
-        Err(denied) => refused_reply(
+        Ok((_player, source)) if discover(ctx, character_guid, source.id) => accepted_open_reply(
+            ctx,
             character_guid,
             request_id,
-            lyracore_shared::constants::taxi_protocol::REPLY_OPEN,
             npc_guid,
-            denied,
-            crate::time::now(ctx).to_micros_since_unix_epoch(),
+            lyracore_shared::constants::taxi_protocol::REPLY_NEW_PATH,
+            &source,
+            Vec::new(),
         ),
+        Ok((_player, source)) => menu_reply(ctx, character_guid, request_id, npc_guid, &source),
+        Err(denied) => refused_open_reply(ctx, character_guid, request_id, npc_guid, denied),
     }
+}
+
+/// vmangos `SendTaxiMenu`: the menu of a chosen gossip option, which never teaches the node.
+pub(crate) fn taxi_menu(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    npc_guid: u64,
+    request_id: u64,
+) -> TaxiServiceReply {
+    match resolve_flight_master(ctx, character_guid, npc_guid) {
+        Ok((_player, source)) => menu_reply(ctx, character_guid, request_id, npc_guid, &source),
+        Err(denied) => refused_open_reply(ctx, character_guid, request_id, npc_guid, denied),
+    }
+}
+
+fn menu_reply(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    request_id: u64,
+    npc_guid: u64,
+    source: &GameTaxiNode,
+) -> TaxiServiceReply {
+    accepted_open_reply(
+        ctx,
+        character_guid,
+        request_id,
+        npc_guid,
+        lyracore_shared::constants::taxi_protocol::REPLY_OPEN,
+        source,
+        available_client_nodes(ctx, character_guid, source),
+    )
+}
+
+fn accepted_open_reply(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    request_id: u64,
+    npc_guid: u64,
+    operation: u8,
+    source: &GameTaxiNode,
+    available_client_node_ids: Vec<u32>,
+) -> TaxiServiceReply {
+    TaxiServiceReply {
+        character_guid,
+        request_id,
+        operation,
+        npc_guid,
+        accepted: true,
+        known: true,
+        source_client_node_id: source.client_node_id,
+        available_client_node_ids,
+        refusal: String::new(),
+        created_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
+        result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_OK,
+    }
+}
+
+fn refused_open_reply(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    request_id: u64,
+    npc_guid: u64,
+    denied: TaxiGateDenied,
+) -> TaxiServiceReply {
+    refused_reply(
+        character_guid,
+        request_id,
+        lyracore_shared::constants::taxi_protocol::REPLY_OPEN,
+        npc_guid,
+        denied,
+        crate::time::now(ctx).to_micros_since_unix_epoch(),
+    )
 }
 
 #[spacetimedb::reducer]

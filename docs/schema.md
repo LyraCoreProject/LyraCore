@@ -344,8 +344,8 @@ itself when none remain.
 ### Taxi flights (`module/src/taxi.rs`)
 
 `game_character_taxi_node` is private, durable taxi progression: one row per known node, by storage
-id. Opening a nearby friendly flight master discovers its node idempotently; a status query only
-reads.
+id. A node query, or a gossip menu with the taxi option, teaches the nearest qualifying node and
+announces it; the taxi menu opens only on a known node. A status query only reads.
 
 `game_active_taxi_flight` has at most one row per Character, because `character_guid` is its
 primary key. A successful activation creates the row in the same transaction that deducts the

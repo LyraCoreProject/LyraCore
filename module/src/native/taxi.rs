@@ -146,21 +146,66 @@ pub(super) fn open(
     npc: u64,
 ) -> Result<(), Refusal> {
     super::actor(ctx, guid)?;
-    let reply = crate::taxi::open_taxi(ctx, guid, npc, 0);
-    if reply.accepted {
-        super::send(
-            ctx,
-            connection,
-            ServerOpcodeMessage::SMSG_SHOWTAXINODES(Box::new(codec::build_show_taxi_nodes(
-                &codec::TaxiMapView {
-                    npc_guid: npc,
-                    source_client_node_id: reply.source_client_node_id,
-                    available_client_node_ids: reply.available_client_node_ids,
-                },
-            ))),
-            false,
-        )?;
+    send_reply(ctx, connection, crate::taxi::open_taxi(ctx, guid, npc, 0))
+}
+
+pub(super) fn open_menu(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    npc: u64,
+) -> Result<(), Refusal> {
+    super::actor(ctx, guid)?;
+    send_reply(ctx, connection, crate::taxi::taxi_menu(ctx, guid, npc, 0))
+}
+
+pub(super) fn announce_new_path(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    npc: u64,
+) -> Result<(), String> {
+    super::send(
+        ctx,
+        connection,
+        ServerOpcodeMessage::SMSG_NEW_TAXI_PATH,
+        false,
+    )?;
+    super::send(
+        ctx,
+        connection,
+        ServerOpcodeMessage::SMSG_TAXINODE_STATUS(Box::new(codec::build_taxi_node_status(
+            codec::TaxiNodeStatusView {
+                npc_guid: npc,
+                known: true,
+            },
+        ))),
+        false,
+    )
+}
+
+fn send_reply(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    reply: crate::taxi::TaxiServiceReply,
+) -> Result<(), Refusal> {
+    if !reply.accepted {
+        return Ok(());
     }
+    if reply.operation == taxi_protocol::REPLY_NEW_PATH {
+        return Ok(announce_new_path(ctx, connection, reply.npc_guid)?);
+    }
+    super::send(
+        ctx,
+        connection,
+        ServerOpcodeMessage::SMSG_SHOWTAXINODES(Box::new(codec::build_show_taxi_nodes(
+            &codec::TaxiMapView {
+                npc_guid: reply.npc_guid,
+                source_client_node_id: reply.source_client_node_id,
+                available_client_node_ids: reply.available_client_node_ids,
+            },
+        ))),
+        false,
+    )?;
     Ok(())
 }
 

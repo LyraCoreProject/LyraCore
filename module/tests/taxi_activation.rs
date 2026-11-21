@@ -30,6 +30,13 @@ const OFF_NETWORK_NODE: u32 = 5_090_310;
 const OFF_NETWORK_CLIENT_NODE: u32 = 250;
 const TAXI_QUERY_AVAILABLE_NODES: u32 = 0x1ac;
 const SHOW_TAXI_NODES: u64 = 0x1a9;
+const NEW_TAXI_PATH: u64 = 0x1af;
+const GOSSIP_HELLO: u32 = 0x17b;
+const GOSSIP_MESSAGE: u64 = 0x17d;
+const TAXI_GOSSIP_OPTION: u32 = 5_090_393;
+const FIRST_VISIT_NODE: u32 = 5_090_311;
+const FIRST_VISIT_CLIENT_NODE: u32 = 249;
+const FLIGHT_MASTER_QUEST: u32 = 5_090_394;
 const FAR_YARDS: f32 = 500.0;
 const HORDE_RACE: u32 = 2;
 const ALLIANCE_RACE: u32 = 1;
@@ -849,18 +856,34 @@ fn set_race(shard: &Standalone, race: u32) {
     ));
 }
 
-fn taxi_menu_prefixes(wire: &mut support::ReducerConnection, master: u64) -> Vec<String> {
+fn received_packets(
+    wire: &mut support::ReducerConnection,
+    opcode: u32,
+    master: u64,
+) -> Vec<(u64, String)> {
     wire.call(
         "native_world_receive",
-        json!([TAXI_QUERY_AVAILABLE_NODES, master.to_le_bytes().to_vec()]),
+        json!([opcode, master.to_le_bytes().to_vec()]),
     )
     .unwrap()
     .inserts("game_native_packet")
     .iter()
     .map(|row| serde_json::from_str::<serde_json::Value>(row.get()).unwrap())
-    .filter(|packet| packet[2][1] == SHOW_TAXI_NODES)
-    .map(|packet| packet[3].as_str().unwrap()[..32].to_owned())
+    .map(|packet| {
+        (
+            packet[2][1].as_u64().unwrap(),
+            packet[3].as_str().unwrap().to_owned(),
+        )
+    })
     .collect()
+}
+
+fn taxi_menu_prefixes(wire: &mut support::ReducerConnection, master: u64) -> Vec<String> {
+    received_packets(wire, TAXI_QUERY_AVAILABLE_NODES, master)
+        .into_iter()
+        .filter(|(opcode, _)| *opcode == SHOW_TAXI_NODES)
+        .map(|(_, body)| body[..32].to_owned())
+        .collect()
 }
 
 fn taxi_menu(master: u64, source_client_node: u32) -> String {
@@ -945,7 +968,7 @@ fn the_taxi_menu_opens_on_the_nearest_node_however_far() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn the_taxi_menu_opens_on_and_learns_the_node_with_the_characters_team_mount() {
+fn the_taxi_menu_opens_on_and_teaches_the_node_with_the_characters_team_mount() {
     let (shard, mut wire, master) = stage("taxi-activation-menu-team", 1000);
     let master: u64 = master.parse().unwrap();
     insert_node_at_master(
@@ -962,16 +985,17 @@ fn the_taxi_menu_opens_on_and_learns_the_node_with_the_characters_team_mount() {
     );
     assert!(!learned(&shard, ONE_TEAM_NODE));
     set_race(&shard, HORDE_RACE);
+    assert!(taxi_menu_prefixes(&mut wire, master).is_empty());
+    assert!(learned(&shard, ONE_TEAM_NODE));
     assert_eq!(
         taxi_menu_prefixes(&mut wire, master),
         [taxi_menu(master, ONE_TEAM_CLIENT_NODE)]
     );
-    assert!(learned(&shard, ONE_TEAM_NODE));
 }
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn the_taxi_menu_opens_on_and_learns_only_a_node_in_the_taxi_network() {
+fn the_taxi_menu_opens_on_and_teaches_only_a_node_in_the_taxi_network() {
     let (shard, mut wire, master) = stage("taxi-activation-menu-network", 1000);
     let master: u64 = master.parse().unwrap();
     insert_node_at_master(
@@ -986,6 +1010,134 @@ fn the_taxi_menu_opens_on_and_learns_only_a_node_in_the_taxi_network() {
         [taxi_menu(master, SOURCE_CLIENT_NODE)]
     );
     assert!(!learned(&shard, OFF_NETWORK_NODE));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_first_visit_teaches_the_node_and_announces_the_path_without_a_menu() {
+    let (shard, mut wire, master) = stage("taxi-activation-first-visit", 1000);
+    let master: u64 = master.parse().unwrap();
+    insert_node_at_master(
+        &shard,
+        master,
+        (FIRST_VISIT_NODE, FIRST_VISIT_CLIENT_NODE),
+        true,
+        true,
+    );
+    assert!(!learned(&shard, FIRST_VISIT_NODE));
+    assert_eq!(
+        received_packets(&mut wire, TAXI_QUERY_AVAILABLE_NODES, master),
+        [
+            (NEW_TAXI_PATH, String::new()),
+            (TAXI_NODE_STATUS, known_node_status(master)),
+        ]
+    );
+    assert!(learned(&shard, FIRST_VISIT_NODE));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_second_visit_opens_the_menu_and_announces_nothing() {
+    let (shard, mut wire, master) = stage("taxi-activation-second-visit", 1000);
+    let master: u64 = master.parse().unwrap();
+    insert_node_at_master(
+        &shard,
+        master,
+        (FIRST_VISIT_NODE, FIRST_VISIT_CLIENT_NODE),
+        true,
+        true,
+    );
+    received_packets(&mut wire, TAXI_QUERY_AVAILABLE_NODES, master);
+    let visit = received_packets(&mut wire, TAXI_QUERY_AVAILABLE_NODES, master);
+    assert_eq!(
+        visit.iter().map(|(opcode, _)| *opcode).collect::<Vec<_>>(),
+        [SHOW_TAXI_NODES]
+    );
+    assert!(visit[0]
+        .1
+        .starts_with(&taxi_menu(master, FIRST_VISIT_CLIENT_NODE)));
+}
+
+fn give_the_flight_master_a_taxi_gossip_option(shard: &Standalone) {
+    shard.insert_row(
+        "game_gossip_option",
+        &[
+            ("row_id", &TAXI_GOSSIP_OPTION),
+            ("entry", &FLIGHT_MASTER_ENTRY),
+            ("text", &"I'd like to fly."),
+            ("action", &lyracore_shared::constants::gossip_option::TAXI),
+        ],
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_first_gossip_hello_teaches_the_node_and_opens_no_gossip_menu() {
+    let (shard, mut wire, master) = stage("taxi-activation-first-hello", 1000);
+    let master: u64 = master.parse().unwrap();
+    give_the_flight_master_a_taxi_gossip_option(&shard);
+    insert_node_at_master(
+        &shard,
+        master,
+        (FIRST_VISIT_NODE, FIRST_VISIT_CLIENT_NODE),
+        true,
+        true,
+    );
+    assert_eq!(
+        received_packets(&mut wire, GOSSIP_HELLO, master),
+        [
+            (NEW_TAXI_PATH, String::new()),
+            (TAXI_NODE_STATUS, known_node_status(master)),
+        ]
+    );
+    assert!(learned(&shard, FIRST_VISIT_NODE));
+    let hello = received_packets(&mut wire, GOSSIP_HELLO, master);
+    assert_eq!(
+        hello.iter().map(|(opcode, _)| *opcode).collect::<Vec<_>>(),
+        [GOSSIP_MESSAGE]
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_first_gossip_hello_at_a_quest_giver_teaches_the_node_and_still_opens_the_gossip_menu() {
+    let (shard, mut wire, master) = stage("taxi-activation-first-hello-quest", 1000);
+    let master: u64 = master.parse().unwrap();
+    give_the_flight_master_a_taxi_gossip_option(&shard);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET npc_flags = {} WHERE guid = {master}",
+        9 | lyracore_shared::constants::npc_flags::QUESTGIVER
+    ));
+    shard.insert_row(
+        "game_quest_template",
+        &[
+            ("entry", &FLIGHT_MASTER_QUEST),
+            ("quest_level", &1),
+            ("title", &"Flight master quest"),
+            ("zone_or_sort", &12),
+        ],
+    );
+    shard.insert_row(
+        "game_creature_quest",
+        &[
+            ("id", &u64::from(FLIGHT_MASTER_QUEST)),
+            ("creature_entry", &FLIGHT_MASTER_ENTRY),
+            ("quest_entry", &FLIGHT_MASTER_QUEST),
+        ],
+    );
+    insert_node_at_master(
+        &shard,
+        master,
+        (FIRST_VISIT_NODE, FIRST_VISIT_CLIENT_NODE),
+        true,
+        true,
+    );
+    let hello = received_packets(&mut wire, GOSSIP_HELLO, master);
+    assert_eq!(
+        hello.iter().map(|(opcode, _)| *opcode).collect::<Vec<_>>(),
+        [NEW_TAXI_PATH, TAXI_NODE_STATUS, GOSSIP_MESSAGE]
+    );
+    assert!(learned(&shard, FIRST_VISIT_NODE));
 }
 
 fn insert_self_spell(
