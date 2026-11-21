@@ -801,6 +801,14 @@ by its first rank. Higher ranks take the first rank's rate through `game_spell_c
 row means no charge limit. It is private. The `spellmeta` dump family loads it, and packages cannot
 claim it.
 
+`game_spell_threat` (`module/src/spell/tables.rs`) carries the vmangos `spell_threat` row: a spell's flat
+`threat`, the `multiplier` on its damage and heal threat, and the `inverse_effect_mask` of effect
+indexes whose targets skip the flat threat. A rank without its own row takes its first rank's row
+through `game_spell_chain`; a later rank's own row with no flat threat is ignored, as in vmangos. A
+harmful spell adds the flat threat to each creature it lands on. A helpful spell splits it among the
+creatures fighting each target, as heal threat is split. A spell with both kinds of effect adds
+none. It is private. The `spellmeta` dump family loads it, and packages cannot claim it.
+
 `game_temporary_enchantment` (`module/src/items/temporary_enchantment.rs`) holds one Temporary
 Enchantment per item: `item_guid`, `enchant_id`, `expires_at` and `charges` (0 means no limit). It is
 a private scheduled table. Its schedule fires at `expires_at` and deletes the row; replacing,

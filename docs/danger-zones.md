@@ -645,6 +645,13 @@ append-only codes 30 and 31. No repair or reimport is needed. A Character online
 carries no PvP Flag until it toggles PvP, moves in a PvP-enforced zone or joins PvP combat. From
 then on another Character can harm it only while the flag is set or in a started Duel.
 
+### Spell threat migration
+
+The private `game_spell_threat` table is new and starts empty. Until you reimport the `spellmeta`
+family, no spell adds flat table threat and every multiplier is 1, so Sunder Armor adds no threat
+and Heroic Strike only its damage. Harmful Auras no longer add `level * 5` threat either way, and a
+Paladin's direct heal now draws a quarter threat a point. No repair is needed.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

@@ -328,6 +328,19 @@ fn remember_hit_target(
     }
 }
 
+// Each landed target, in first-landing order, with the mask of the effect indexes that reached it.
+fn remember_landed_effect(landed: &mut Vec<(u64, u8)>, guid: u64, effect_index: u8) {
+    let bit = 1 << effect_index;
+    match landed
+        .iter_mut()
+        .find(|(landed_guid, _)| *landed_guid == guid)
+    {
+        Some((_, mask)) => *mask |= bit,
+        None if guid != 0 => landed.push((guid, bit)),
+        None => {}
+    }
+}
+
 /// A craft's storage plan, and the cast item it uses up through the plan or, if dropped, directly.
 struct Craft {
     plan: crate::items::ItemStoragePlan,
@@ -436,8 +449,7 @@ fn run_spell_effects(
     let (caster_guid, target_guid) = (request.caster_guid, request.target_guid);
     let (level, dest) = (request.level, request.dest);
     let (hdr, effects) = (&spell.header, spell.effects.as_slice());
-    let mut hit_targets = Vec::new();
-    let mut seen_hit_targets = std::collections::HashSet::new();
+    let mut landed = Vec::new();
     let triggered = origin.is_triggered();
     let mut total_damage: u32 = 0;
     let mut total_healed: u32 = 0;
@@ -555,7 +567,7 @@ fn run_spell_effects(
             if t != caster_guid && hit.dealt > 0 && hdr.cast_flags & CAST_FLAG_WEAPON_PROCS != 0 {
                 shield_targets.insert(t);
             }
-            remember_hit_target(&mut hit_targets, &mut seen_hit_targets, t);
+            remember_landed_effect(&mut landed, t, e.effect_index);
             if t == target_guid {
                 total_damage = total_damage.saturating_add(hit.dealt);
                 total_resisted = total_resisted.saturating_add(hit.resisted);
@@ -596,7 +608,8 @@ fn run_spell_effects(
         finish_items(craft);
         return;
     }
-    for &target in &hit_targets {
+    crate::threat::add_table_threat(ctx, caster_guid, hdr.spell_id, &landed);
+    for &(target, _) in &landed {
         crate::creatures::eventai_on_spell_hit(
             ctx,
             caster_guid,
@@ -634,7 +647,7 @@ fn run_spell_effects(
     );
     finish_items(craft);
     finish_weapon_hits(ctx, caster_guid, weapon_targets, shield_targets);
-    cast_follow_up(ctx, hdr.spell_id, caster_guid, level, &hit_targets);
+    cast_follow_up(ctx, hdr.spell_id, caster_guid, level, &landed);
 }
 
 thread_local! {
@@ -668,9 +681,9 @@ fn cast_follow_up(
     spell_id: u32,
     caster_guid: u64,
     level: u8,
-    hit_targets: &[u64],
+    landed: &[(u64, u8)],
 ) {
-    if hit_targets.is_empty() {
+    if landed.is_empty() {
         return;
     }
     let Some(follow_up) = ctx.db.game_spell_follow_up().spell_id().find(spell_id) else {
@@ -690,7 +703,7 @@ fn cast_follow_up(
         );
         return;
     };
-    for &target_guid in hit_targets {
+    for &(target_guid, _) in landed {
         let request = CastRequest::new(caster_guid, spell.header.spell_id, level, target_guid);
         if let Err(reason) =
             cast_triggered_with_origin(ctx, &request, &spell, CastOrigin::Triggered)
