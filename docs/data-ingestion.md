@@ -430,9 +430,8 @@ passes its existing `DUMP` input.
 For each faction, a zero creature entry selects the other faction's entry before lookup. The node
 also keeps whether the faction's own entry is nonzero (`own_mount_horde`, `own_mount_alliance`),
 whether or not a display resolves, because the node-status query skips a node without the
-Character's own team mount. A missing
-template, a template with no model, or a selected model absent from `CreatureDisplayInfo` produces
-display zero and a warning. The Module then refuses that faction's flight before charging the fare.
+Character's own team mount. A missing template, a template with no model, or a selected model
+absent from `CreatureDisplayInfo` produces display zero and a warning. The Module then refuses that faction's flight before charging the fare.
 An explicit missing entry does not fall back to the other faction. Invalid source fields fail
 before any DBC catalogue SQL runs.
 

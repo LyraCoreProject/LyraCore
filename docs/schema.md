@@ -322,8 +322,8 @@ successful rerun removes stale geometry. `own_mount_horde` and `own_mount_allian
 with default true and record whether the source node names a mount for that team itself. The mount
 displays fill an empty team slot from the other team for flight, so only these flags tell the teams
 apart. The node-status query skips a node without the Character's own team flag, as vmangos
-`GetNearestTaxiNode` does. A Realm keeps the old behaviour for imported nodes until the `dbc` family
-is imported again.
+`GetNearestTaxiNode` does. Reimport the `dbc` family before play resumes; see the
+[taxi team mount migration](danger-zones.md#taxi-team-mount-migration).
 
 ### Transports (`module/src/transport/mod.rs`)
 

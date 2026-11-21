@@ -569,6 +569,14 @@ already aura 77 immunities with bit 0x100. A Shard without a spell import keeps 
 its `init` seeded, whose Recently Bandaged no longer refuses a bandage; recreate it to get the new
 seed. `debug_repair_after_publish` updates the shield fixture and Weakened Soul seeds.
 
+### Taxi team mount migration
+
+`game_taxi_node` gains `own_mount_horde` and `own_mount_alliance`, end-appended with default true.
+Reimport the `dbc` family straight after the publish. Until then every node passes the node-status
+query's team filter for both teams, including a node with no mount at all, which the old resolved
+display check skipped; so a nearer mountless node can be reported as not known. The reimport writes
+both flags from each team's own mount entry. No repair is needed.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each
