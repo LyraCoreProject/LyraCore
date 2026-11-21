@@ -318,11 +318,16 @@ fn a_duel_challenge_refuses_with_the_vmangos_cast_result() {
     );
 
     shard.assert_sql("DELETE FROM game_duel");
-    shard.assert_sql(&format!(
-        "INSERT INTO game_character_contact (id,owner_guid,owner_identity,target_guid,is_ignore) \
-         VALUES ({IGNORE_CONTACT},{rival},0x{},{challenger},true)",
-        "00".repeat(32)
-    ));
+    shard.insert_row(
+        "game_character_contact",
+        &[
+            ("id", &IGNORE_CONTACT),
+            ("owner_guid", &rival),
+            ("owner_identity", &format!("0x{}", "00".repeat(32))),
+            ("target_guid", &challenger),
+            ("is_ignore", &true),
+        ],
+    );
     challenge(&mut connection, rival).expect("an ignored challenge drops without a cast result");
     assert_eq!(duels(&shard), 0);
 

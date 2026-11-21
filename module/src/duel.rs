@@ -786,16 +786,16 @@ mod tests {
             request_verdict(Some(a), Some(b), FREE, true),
             Err(RequestDenied::Ignored)
         );
-        let capital = RequestParticipant {
+        let in_capital = |participant: RequestParticipant| RequestParticipant {
             may_duel_here: false,
-            ..b
+            ..participant
         };
         assert_eq!(
-            request_verdict(Some(a), Some(capital), FREE, false),
+            request_verdict(Some(a), Some(in_capital(b)), FREE, false),
             Err(RequestDenied::NoDuelingHere)
         );
         assert_eq!(
-            request_verdict(Some(capital), Some(b), FREE, false),
+            request_verdict(Some(in_capital(a)), Some(b), FREE, false),
             Err(RequestDenied::NoDuelingHere)
         );
     }
