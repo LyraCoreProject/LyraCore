@@ -602,6 +602,13 @@ the node-status query now share one lookup with no 10-yard limit. A Character wh
 before the change may have learned a node that lookup now skips; no repair is needed, and the
 node stays known. The reimport writes the flag from `spell_template` effect 123 and `TaxiPath`.
 
+### PvP Flag migration
+
+`game_pvp_flag_timer` is a new private one-shot schedule, and `CastRefusalReason` gains the
+append-only codes 30 to 32. No repair or reimport is needed. A Character online at the publish
+carries no PvP Flag until it toggles PvP, moves in a PvP-enforced zone or joins PvP combat. From
+then on another Character can harm it only while the flag is set or in a started Duel.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

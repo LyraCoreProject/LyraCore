@@ -95,6 +95,9 @@ cast_refusal_reasons! {
     MountInDeepWater = 27,
     TargetLevelTooLow = 28,
     ItemGone = 29,
+    NoDueling = 30,
+    TargetDueling = 31,
+    TargetEnemy = 32,
 }
 
 impl CastRefusalReason {

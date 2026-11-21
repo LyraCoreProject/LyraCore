@@ -164,6 +164,9 @@ def check_spell_source_behavior(host):
         assert any(op == 0x130 and body[:5] == struct.pack('<IB', delayed, 2) for op, body in packets), packets
 
     original_factions = {guid: host.rows(f'SELECT faction_template FROM game_world_entity WHERE guid = {guid}')[0][0] for guid in [a, b]}
+    original_unit_flags = {guid: host.rows(f'SELECT unit_flags FROM game_world_entity WHERE guid = {guid}')[0][0] for guid in [a, b]}
+    # A hostile Character is a harmful spell's target only while it is flagged for PvP.
+    host.sql(f'UPDATE game_world_entity SET unit_flags = {original_unit_flags[b] | 0x1000} WHERE guid = {b}')
     for faction, group, enemy in [(50908, 1, 2), (50909, 2, 1)]:
         host.restore('game_faction_template', f'id = {faction}')
         host.sql(f'DELETE FROM game_faction_template WHERE id = {faction}')
@@ -185,7 +188,7 @@ def check_spell_source_behavior(host):
         host.sql(f'DELETE FROM game_aura WHERE spell_id = {holder}')
         host.sql(f'DELETE FROM game_aura WHERE spell_id = {triggered_aura}')
     for guid, faction in original_factions.items():
-        host.sql(f'UPDATE game_world_entity SET faction_template = {faction} WHERE guid = {guid}')
+        host.sql(f'UPDATE game_world_entity SET faction_template = {faction}, unit_flags = {original_unit_flags[guid]} WHERE guid = {guid}')
 
     host.sql(f'DELETE FROM game_aura WHERE caster_guid = {a}')
     for channeled in [0x80, 0]:

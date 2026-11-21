@@ -1,6 +1,10 @@
 use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Table, Timestamp};
 
-use crate::game_world_entity;
+use crate::spell::{CastGateRefusal, CastRefusalReason};
+use crate::{game_character_contact, game_world_entity};
+
+// DBCEnums.h AREA_FLAG_DUEL.
+const AREA_FLAG_DUEL: u32 = 0x0000_0040;
 
 pub(crate) mod state {
     pub const REQUESTED: u8 = 0;
@@ -120,7 +124,29 @@ pub(crate) enum RequestDenied {
     SelfTarget,
     DifferentPartition,
     CrossFaction,
-    Busy,
+    AlreadyOpponents,
+    TargetBusy,
+    InitiatorBusy,
+    Ignored,
+    NoDuelingHere,
+}
+
+impl RequestDenied {
+    /// The cast result vmangos `Spell::CheckCast` or `Spell::EffectDuel` reports; None drops silently.
+    fn cast_refusal(self) -> Option<CastRefusalReason> {
+        match self {
+            Self::MissingPlayer => Some(CastRefusalReason::BadTargets),
+            Self::AlreadyOpponents => Some(CastRefusalReason::TargetEnemy),
+            Self::TargetBusy => Some(CastRefusalReason::TargetDueling),
+            Self::NoDuelingHere => Some(CastRefusalReason::NoDueling),
+            Self::Dead
+            | Self::SelfTarget
+            | Self::DifferentPartition
+            | Self::CrossFaction
+            | Self::InitiatorBusy
+            | Self::Ignored => None,
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -131,10 +157,11 @@ pub(crate) struct RequestParticipant {
     map_id: u32,
     instance_id: u64,
     race: u8,
+    may_duel_here: bool,
 }
 
-impl From<&crate::WorldEntity> for RequestParticipant {
-    fn from(entity: &crate::WorldEntity) -> Self {
+impl RequestParticipant {
+    fn of(ctx: &ReducerContext, entity: &crate::WorldEntity) -> Self {
         Self {
             guid: entity.guid,
             is_player: entity.is_player(),
@@ -142,15 +169,33 @@ impl From<&crate::WorldEntity> for RequestParticipant {
             map_id: entity.map_id,
             instance_id: entity.instance_id,
             race: entity.race(),
+            may_duel_here: may_duel_at(ctx, entity),
         }
     }
 }
 
+/// vmangos `Spell::EffectDuel`: only an area with `AREA_FLAG_DUEL` allows a Duel; capitals and
+/// dungeons lack it, and an instanced map with no known area counts as a dungeon.
+fn may_duel_at(ctx: &ReducerContext, entity: &crate::WorldEntity) -> bool {
+    match crate::terrain::area_at(ctx, entity.map_id, entity.x, entity.y) {
+        Some(area) => area.flags & AREA_FLAG_DUEL != 0,
+        None => !lyracore_shared::instance::has_instance_population(entity.map_id),
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct DuelCommitments {
+    initiator_active_with_challenged: bool,
+    initiator_busy: bool,
+    challenged_busy: bool,
+}
+
+/// vmangos `Spell::CheckCast` and `Spell::EffectDuel`, in the order they refuse.
 pub(crate) fn request_verdict(
     initiator: Option<RequestParticipant>,
     challenged: Option<RequestParticipant>,
-    initiator_busy: bool,
-    challenged_busy: bool,
+    commitments: DuelCommitments,
+    challenged_ignores_initiator: bool,
 ) -> Result<(), RequestDenied> {
     let (Some(initiator), Some(challenged)) = (initiator, challenged) else {
         return Err(RequestDenied::MissingPlayer);
@@ -170,10 +215,73 @@ pub(crate) fn request_verdict(
     if !lyracore_shared::faction::same_team(initiator.race, challenged.race) {
         return Err(RequestDenied::CrossFaction);
     }
-    if initiator_busy || challenged_busy {
-        return Err(RequestDenied::Busy);
+    if commitments.initiator_active_with_challenged {
+        return Err(RequestDenied::AlreadyOpponents);
+    }
+    if commitments.challenged_busy {
+        return Err(RequestDenied::TargetBusy);
+    }
+    if commitments.initiator_busy {
+        return Err(RequestDenied::InitiatorBusy);
+    }
+    if challenged_ignores_initiator {
+        return Err(RequestDenied::Ignored);
+    }
+    if !initiator.may_duel_here || !challenged.may_duel_here {
+        return Err(RequestDenied::NoDuelingHere);
     }
     Ok(())
+}
+
+fn challenge_verdict(
+    ctx: &ReducerContext,
+    initiator: Option<&crate::WorldEntity>,
+    challenged: Option<&crate::WorldEntity>,
+) -> Result<(), RequestDenied> {
+    let (initiator_guid, challenged_guid) = (
+        initiator.map_or(0, |entity| entity.guid),
+        challenged.map_or(0, |entity| entity.guid),
+    );
+    let initiator_duel = duel_involving(ctx, initiator_guid);
+    let commitments = DuelCommitments {
+        initiator_active_with_challenged: initiator_duel
+            .as_ref()
+            .is_some_and(|duel| active_pair(duel, initiator_guid, challenged_guid)),
+        initiator_busy: initiator_duel.is_some(),
+        challenged_busy: duel_involving(ctx, challenged_guid).is_some(),
+    };
+    let challenged_ignores_initiator = ctx
+        .db
+        .game_character_contact()
+        .by_owner()
+        .filter(&challenged_guid)
+        .any(|contact| contact.is_ignore && contact.target_guid == initiator_guid);
+    request_verdict(
+        initiator.map(|entity| RequestParticipant::of(ctx, entity)),
+        challenged.map(|entity| RequestParticipant::of(ctx, entity)),
+        commitments,
+        challenged_ignores_initiator,
+    )
+}
+
+/// The cast result that refuses a Duel challenge from `initiator_guid` to `challenged_guid`, if any.
+pub(crate) fn challenge_refusal(
+    ctx: &ReducerContext,
+    initiator_guid: u64,
+    challenged_guid: u64,
+) -> Option<CastGateRefusal> {
+    let entities = ctx.db.game_world_entity();
+    let denied = challenge_verdict(
+        ctx,
+        entities.guid().find(initiator_guid).as_ref(),
+        entities.guid().find(challenged_guid).as_ref(),
+    )
+    .err()?;
+    let reason = denied.cast_refusal()?;
+    Some(CastGateRefusal::other(
+        reason,
+        format!("Duel challenge to {challenged_guid} refused: {denied:?}"),
+    ))
 }
 
 pub(crate) fn duel_involving(ctx: &ReducerContext, guid: u64) -> Option<Duel> {
@@ -195,6 +303,11 @@ pub(crate) fn active_duel_between(
     target_guid: u64,
 ) -> Option<Duel> {
     duel_involving(ctx, attacker_guid).filter(|duel| active_pair(duel, attacker_guid, target_guid))
+}
+
+/// Whether `guid` fights a started Duel; vmangos `m_duel->startTime != 0`.
+pub(crate) fn in_active_duel(ctx: &ReducerContext, guid: u64) -> bool {
+    duel_involving(ctx, guid).is_some_and(|duel| duel.state == state::ACTIVE)
 }
 
 fn active_pair(duel: &Duel, attacker_guid: u64, target_guid: u64) -> bool {
@@ -271,14 +384,7 @@ pub(crate) fn request_duel(
     let entities = ctx.db.game_world_entity();
     let initiator = entities.guid().find(initiator_guid);
     let challenged = entities.guid().find(challenged_guid);
-    if request_verdict(
-        initiator.as_ref().map(RequestParticipant::from),
-        challenged.as_ref().map(RequestParticipant::from),
-        duel_involving(ctx, initiator_guid).is_some(),
-        duel_involving(ctx, challenged_guid).is_some(),
-    )
-    .is_err()
-    {
+    if challenge_verdict(ctx, initiator.as_ref(), challenged.as_ref()).is_err() {
         return;
     }
     let initiator = initiator.expect("request verdict resolved initiator");
@@ -596,8 +702,15 @@ mod tests {
             map_id,
             instance_id,
             race: 1,
+            may_duel_here: true,
         }
     }
+
+    const FREE: DuelCommitments = DuelCommitments {
+        initiator_active_with_challenged: false,
+        initiator_busy: false,
+        challenged_busy: false,
+    };
 
     fn duel() -> Duel {
         Duel {
@@ -624,7 +737,7 @@ mod tests {
     fn request_gate_accepts_two_live_players_in_one_partition() {
         let a = entity(1, 0, 4);
         let b = entity(2, 0, 4);
-        assert_eq!(request_verdict(Some(a), Some(b), false, false), Ok(()));
+        assert_eq!(request_verdict(Some(a), Some(b), FREE, false), Ok(()));
     }
 
     #[test]
@@ -632,33 +745,88 @@ mod tests {
         let a = entity(1, 0, 4);
         let mut b = entity(2, 0, 4);
         assert_eq!(
-            request_verdict(Some(a), None, false, false),
+            request_verdict(Some(a), None, FREE, false),
             Err(RequestDenied::MissingPlayer)
         );
         b.dead = true;
         assert_eq!(
-            request_verdict(Some(a), Some(b), false, false),
+            request_verdict(Some(a), Some(b), FREE, false),
             Err(RequestDenied::Dead)
         );
         let same = entity(1, 0, 4);
         assert_eq!(
-            request_verdict(Some(a), Some(same), false, false),
+            request_verdict(Some(a), Some(same), FREE, false),
             Err(RequestDenied::SelfTarget)
         );
         let elsewhere = entity(2, 1, 4);
         assert_eq!(
-            request_verdict(Some(a), Some(elsewhere), false, false),
+            request_verdict(Some(a), Some(elsewhere), FREE, false),
             Err(RequestDenied::DifferentPartition)
         );
         let b = entity(2, 0, 4);
+        let initiator_busy = DuelCommitments {
+            initiator_busy: true,
+            ..FREE
+        };
         assert_eq!(
-            request_verdict(Some(a), Some(b), true, false),
-            Err(RequestDenied::Busy)
+            request_verdict(Some(a), Some(b), initiator_busy, false),
+            Err(RequestDenied::InitiatorBusy)
+        );
+    }
+
+    #[test]
+    fn a_challenge_refuses_in_vmangos_effect_duel_order() {
+        let a = entity(1, 0, 4);
+        let b = entity(2, 0, 4);
+        let all = DuelCommitments {
+            initiator_active_with_challenged: true,
+            initiator_busy: true,
+            challenged_busy: true,
+        };
+        assert_eq!(
+            request_verdict(Some(a), Some(b), all, true),
+            Err(RequestDenied::AlreadyOpponents)
+        );
+        let busy = DuelCommitments {
+            initiator_active_with_challenged: false,
+            ..all
+        };
+        assert_eq!(
+            request_verdict(Some(a), Some(b), busy, true),
+            Err(RequestDenied::TargetBusy)
         );
         assert_eq!(
-            request_verdict(Some(a), Some(b), false, true),
-            Err(RequestDenied::Busy)
+            request_verdict(Some(a), Some(b), FREE, true),
+            Err(RequestDenied::Ignored)
         );
+        let capital = RequestParticipant {
+            may_duel_here: false,
+            ..b
+        };
+        assert_eq!(
+            request_verdict(Some(a), Some(capital), FREE, false),
+            Err(RequestDenied::NoDuelingHere)
+        );
+        assert_eq!(
+            request_verdict(Some(capital), Some(b), FREE, false),
+            Err(RequestDenied::NoDuelingHere)
+        );
+    }
+
+    #[test]
+    fn only_checks_with_a_vmangos_cast_result_report_one() {
+        use CastRefusalReason as R;
+        for (denied, reported) in [
+            (RequestDenied::MissingPlayer, Some(R::BadTargets)),
+            (RequestDenied::AlreadyOpponents, Some(R::TargetEnemy)),
+            (RequestDenied::TargetBusy, Some(R::TargetDueling)),
+            (RequestDenied::NoDuelingHere, Some(R::NoDueling)),
+            (RequestDenied::InitiatorBusy, None),
+            (RequestDenied::Ignored, None),
+            (RequestDenied::DifferentPartition, None),
+        ] {
+            assert_eq!(denied.cast_refusal(), reported, "{denied:?}");
+        }
     }
 
     #[test]
@@ -667,7 +835,7 @@ mod tests {
         let mut b = entity(2, 0, 4);
         b.race = 2;
         assert_eq!(
-            request_verdict(Some(a), Some(b), false, false),
+            request_verdict(Some(a), Some(b), FREE, false),
             Err(RequestDenied::CrossFaction)
         );
     }

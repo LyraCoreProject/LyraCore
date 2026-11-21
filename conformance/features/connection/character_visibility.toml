@@ -271,10 +271,10 @@ symbol = "seed_visibility_world"
 evidence = "Tier 1 two_character_visibility__opposite_faction at harness 004d8d74: the watcher sees the orc with fields_131 and _132 51 and field_35 2 in the reference, and 49 and 1 in core. world/character_entity.rs build_player_entity reads game_race_info, which only the DBC importer fills."
 
 [[known_gaps]]
-description = "An enemy Character entering a hostile capital is not flagged for PvP and receives no Honorless Target Aura. The Module has no PvP flag; CMSG_TOGGLE_PVP is refused as unavailable."
-path = "module/src/native/unavailable.rs"
-symbol = "CMSG_TOGGLE_PVP"
-evidence = "Tier 1 two_character_visibility__opposite_faction at harness 004d8d74: the watcher sees the orc with field_46 4104 (PLAYER_CONTROLLED | PVP) in the reference and 8 in core, and with Honorless Target 2479 in field_48, flags 0x99 in field_95 and levels 0x0101 in field_101, where core has 0x09 and 0x01 from Battle Stance alone. At d9173eca, Player.cpp Player::UpdateZone calls UpdatePvP(true) for an enemy capital; the Honorless Target Aura comes from DELAYED_CAST_HONORLESS_TARGET, scheduled by a teleport."
+description = "An enemy Character entering a hostile capital receives no Honorless Target Aura."
+path = "module/src/pvp.rs"
+symbol = "enter_world"
+evidence = "Tier 1 two_character_visibility__opposite_faction at harness 004d8d74: the watcher sees the orc with Honorless Target 2479 in field_48, flags 0x99 in field_95 and levels 0x0101 in field_101 in the reference, where core has 0x09 and 0x01 from Battle Stance alone. At d9173eca, the Honorless Target Aura comes from DELAYED_CAST_HONORLESS_TARGET, scheduled by a teleport."
 
 [[known_gaps]]
 description = "UNIT_FIELD_POWER4 differs because vmangos regenerates energy for every Character, so the reference value depends on time since the Character was saved. The data rule records it; no fixed value exists to match."

@@ -1814,22 +1814,6 @@
             "objects",
             "0",
             "values",
-            "field_46"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "character": "watcher",
-          "checkpoint": "arrival",
-          "stream": {
-            "kind": "broadcast",
-            "id": "objects"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
             "field_95"
           ]
         },

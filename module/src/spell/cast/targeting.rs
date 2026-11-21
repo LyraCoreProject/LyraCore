@@ -687,6 +687,10 @@ pub(crate) fn apply_effect(
 ) -> EffectHit {
     use lyracore_shared::spell::taxonomy::EffectKind;
 
+    if !triggered && target_guid != caster_guid {
+        let helpful_target = matches!(e.target, T_TARGET_ALLY | T_AREA_ALLY);
+        crate::pvp::spell_hit(ctx, caster_guid, target_guid, helpful_target);
+    }
     let kind = match EffectKind::try_from(e.kind) {
         Ok(kind) => kind,
         // Preserve authored high-bit codes as inert auras when no handler exists.

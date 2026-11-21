@@ -301,6 +301,11 @@ pub(crate) fn apply_hit(
     {
         return miss;
     }
+    if hit.source != HitSource::DamageShield {
+        if let Some(attacker) = &attacker {
+            crate::pvp::harmed(ctx, attacker, &target);
+        }
+    }
     let attacker_is_player = attacker.as_ref().map(|a| a.is_player()).unwrap_or(false);
     let reward_source = crate::loot::tag::controlling_character(ctx, attacker_guid);
     let target_is_player = target.is_player();

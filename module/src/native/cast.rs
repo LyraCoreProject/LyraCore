@@ -8,8 +8,8 @@ use lyracore_protocol::{
     world::Packet,
 };
 use lyracore_shared::spell::taxonomy::{
-    CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_REFUSES_SELF_CAST, E_DISENCHANT, E_ENCHANT_ITEM,
-    E_ENCHANT_ITEM_TEMPORARY, E_FISH, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
+    CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_REFUSES_SELF_CAST, E_DISENCHANT, E_DUEL,
+    E_ENCHANT_ITEM, E_ENCHANT_ITEM_TEMPORARY, E_FISH, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
@@ -73,6 +73,9 @@ pub(super) fn cast_result(reason: CastRefusalReason) -> u8 {
         R::MountIndoors => code::ONLY_OUTDOORS,
         R::MountInDeepWater => code::ONLY_ABOVEWATER,
         R::ItemGone => code::ITEM_GONE,
+        R::NoDueling => code::NO_DUELING,
+        R::TargetDueling => code::TARGET_DUELING,
+        R::TargetEnemy => code::TARGET_ENEMY,
     }
 }
 
@@ -265,6 +268,11 @@ pub(super) fn receive(
                     )?)
                 } else if let Some((x, y, z)) = dest {
                     crate::spell::apply_cast_spell_at(ctx, &caster, spell, target, x, y, z)
+                } else if effects.iter().any(|row| row.kind == E_DUEL) {
+                    // vmangos Spell::EffectDuel reports its refusal once the cast's own Gates pass.
+                    let refusal = crate::duel::challenge_refusal(ctx, guid, target);
+                    crate::spell::do_cast_spell(ctx, caster, spell, target)?;
+                    refusal.map_or(Ok(()), Err)
                 } else {
                     crate::spell::do_cast_spell(ctx, caster, spell, target)
                 }
@@ -381,6 +389,9 @@ mod tests {
             (R::MountIndoors, 0x55),
             (R::MountInDeepWater, 0x50),
             (R::ItemGone, 0x26),
+            (R::NoDueling, 0x47),
+            (R::TargetDueling, 0x68),
+            (R::TargetEnemy, 0x69),
         ] {
             assert_eq!(cast_result(reason), code, "{reason:?}");
         }

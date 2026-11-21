@@ -44,6 +44,7 @@ pub(crate) mod party;
 pub(crate) mod pet;
 pub(crate) mod petition;
 pub(crate) mod progression;
+mod pvp;
 pub(crate) mod query;
 pub(crate) mod quest;
 pub(crate) mod realm_auction;

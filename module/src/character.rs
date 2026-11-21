@@ -551,6 +551,7 @@ pub(crate) fn apply_player_login(
         entity.unit_bytes_1 = unit_bytes_1;
     }
     crate::away::at_world_entry(ctx, &mut entity, entry);
+    crate::pvp::enter_world(ctx, &mut entity);
     entity.insert(ctx);
     crate::ghost::restore(ctx, character_guid);
     crate::spell::recompute_display(ctx, character_guid);

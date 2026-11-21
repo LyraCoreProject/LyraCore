@@ -165,7 +165,7 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | World entity and movement | `world.rs`, `motion.rs` |
 | Terrain, nav and exact vmap | `terrain.rs`, `nav.rs`, `vmap.rs` |
 | Chat, social and addon bridge | `chat.rs`, `channel.rs`, `realm_chat.rs`, `away.rs`, `bridge.rs` |
-| Combat, threat and duel | `combat/engage.rs`, `combat/damage.rs`, `combat/energy.rs`, `threat.rs`, `duel.rs` |
+| Combat, threat, duel and PvP | `combat/engage.rs`, `combat/damage.rs`, `combat/energy.rs`, `threat.rs`, `duel.rs`, `pvp.rs` |
 | Spell and aura | `spell/tables.rs`, `spell/stacking.rs`, `spell/cast/resolve.rs` |
 | Quest | `quest.rs` |
 | Item, trade and mail | `items/tables.rs`, `items/buyback.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_reward.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
@@ -927,6 +927,7 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_pending_cast` | `fire_pending_cast` | one-shot at cast completion | `spell/tables.rs` |
 | `game_pending_spell_impact` | `fire_spell_impact` | one-shot at projectile landing | `spell/tables.rs` |
 | `game_ranged_impact_schedule` | `ranged_impact` | one-shot at shot landing | `combat/engage.rs` |
+| `game_pvp_flag_timer` | `expire_pvp_flag` | one-shot 5 min after a Character's PvP Flag was last refreshed; a held flag re-arms it | `pvp.rs` |
 | `game_auction_expiry` | `expire_auction` | one-shot at listing expiry | `auction.rs` |
 | `game_instance_removal` | `expire_instance_removal` | one-shot 60 s after an Instance Removal starts | `instance.rs` |
 | `game_mail_timer` | `fire_mail_timer` | one-shot at a Mail's delivery, then at its expiry | `mail_timer.rs` |
