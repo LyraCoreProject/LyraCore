@@ -10,14 +10,13 @@ const BAG_ENTRY: u32 = lyracore_package_delta::fixture_ids::FIXTURE_REINS;
 // Tempered Blade: item level 12, sword (multiplier column 7), uncommon (quality row 6),
 // 70 durability. 20 lost points cost 20 x 10 x 1.5 = 300 copper; 70 lost points cost 1050.
 pub(super) fn price_the_blade(shard: &Standalone) {
-    let multipliers: Vec<String> = (0..29)
-        .map(|column| if column == 7 { "10" } else { "0" }.to_string())
-        .collect();
     shard.insert_row(
         "game_durability_cost",
         &[
+            ("id", &(12 * 32 + 7)),
             ("item_level", &12),
-            ("multipliers", &format!("[{}]", multipliers.join(","))),
+            ("multiplier_id", &7),
+            ("cost", &10),
         ],
     );
     shard.insert_row(

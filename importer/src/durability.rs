@@ -17,6 +17,9 @@ pub(crate) fn catalogue_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usiz
     Ok((statements, cost_rows, quality_rows))
 }
 
+// Each item level owns 32 ids; DurabilityCosts.dbc has 29 columns.
+const COLUMNS_PER_LEVEL: u32 = 32;
+
 fn cost_sql(table: &DurabilityCosts) -> Result<(Vec<String>, usize)> {
     if table.rows().is_empty() {
         bail!("DurabilityCosts.dbc contains no rows");
@@ -28,31 +31,27 @@ fn cost_sql(table: &DurabilityCosts) -> Result<(Vec<String>, usize)> {
         if !seen_levels.insert(item_level) {
             bail!("DurabilityCosts.dbc contains duplicate item level {item_level}");
         }
-        let multipliers = row
+        for (multiplier_id, cost) in row
             .weapon_subclass_cost
             .iter()
             .chain(&row.armour_subclass_cost)
-            .map(|cost| {
-                u32::try_from(*cost)
-                    .map(|cost| cost.to_string())
-                    .with_context(|| {
-                        format!("DurabilityCosts.dbc item level {item_level} has a negative cost")
-                    })
-            })
-            .collect::<Result<Vec<_>>>()?;
-        rows.push((
-            item_level,
-            format!("({item_level},[{}])", multipliers.join(",")),
-        ));
+            .enumerate()
+        {
+            let cost = u32::try_from(*cost).with_context(|| {
+                format!("DurabilityCosts.dbc item level {item_level} has a negative cost")
+            })?;
+            let id = item_level * COLUMNS_PER_LEVEL + multiplier_id as u32;
+            rows.push((id, format!("({id},{item_level},{multiplier_id},{cost})")));
+        }
     }
-    rows.sort_unstable_by_key(|(item_level, _)| *item_level);
+    rows.sort_unstable_by_key(|(id, _)| *id);
     let count = rows.len();
     let rows: Vec<String> = rows.into_iter().map(|(_, sql)| sql).collect();
     let mut statements = vec!["DELETE FROM game_durability_cost WHERE item_level >= 0".to_string()];
     push_insert(
         &mut statements,
         "game_durability_cost",
-        "item_level,multipliers",
+        "id,item_level,multiplier_id,cost",
         &rows,
     );
     Ok((statements, count))
@@ -120,19 +119,22 @@ mod tests {
     }
 
     #[test]
-    fn cost_rows_list_weapon_subclasses_then_armor_subclasses_and_keep_zeros() {
+    fn cost_rows_number_weapon_subclasses_then_armor_subclasses_and_keep_zeros() {
         let (statements, count) = cost_sql(&DurabilityCosts {
             rows: vec![cost_row(2, 7, 11)],
         })
         .unwrap();
-        assert_eq!(count, 1);
+        assert_eq!(count, 29);
         assert_eq!(
-            statements,
-            [
-                "DELETE FROM game_durability_cost WHERE item_level >= 0",
-                "INSERT INTO game_durability_cost (item_level,multipliers) VALUES (2,[0,7,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11,0,0,0])",
-            ]
+            statements[0],
+            "DELETE FROM game_durability_cost WHERE item_level >= 0"
         );
+        let insert = &statements[1];
+        assert!(insert.starts_with(
+            "INSERT INTO game_durability_cost (id,item_level,multiplier_id,cost) VALUES (64,2,0,0),(65,2,1,7),"
+        ));
+        assert!(insert.contains("(89,2,25,11)"));
+        assert!(insert.ends_with("(92,2,28,0)"));
     }
 
     #[test]

@@ -662,8 +662,9 @@ uses the forward outbox, and a Reward Letter inserts or forwards its Mail direct
 
 ### Repair cost (`module/src/items/tables.rs`)
 
-`game_durability_cost` holds `DurabilityCosts.dbc`: one row per item level, with 29 price
-multipliers. Index 0..=20 is a weapon subclass and 21..=28 is an armor subclass.
+`game_durability_cost` holds `DurabilityCosts.dbc` as one row per item level and multiplier column:
+column 0..=20 is a weapon subclass and 21..=28 is an armor subclass. The key `id` is
+`item_level * 32 + multiplier_id`.
 `game_durability_quality` holds `DurabilityQuality.dbc`; an item quality reads row
 `(quality + 1) * 2`. Only the importer writes both. See
 [repair cost migration](danger-zones.md#repair-cost-migration).

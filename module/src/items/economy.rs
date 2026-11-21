@@ -519,16 +519,16 @@ fn wear_repair_cost(
     tmpl: &ItemTemplate,
     lost_durability: u32,
 ) -> Option<u32> {
-    let multiplier = *ctx
+    let multiplier = ctx
         .db
         .game_durability_cost()
-        .item_level()
-        .find(u32::from(tmpl.item_level))?
-        .multipliers
-        .get(usize::from(durability_multiplier_id(
-            tmpl.class,
-            tmpl.subclass,
-        )))?;
+        .by_level_multiplier()
+        .filter((
+            u32::from(tmpl.item_level),
+            durability_multiplier_id(tmpl.class, tmpl.subclass),
+        ))
+        .next()?
+        .cost;
     let quality_mod = ctx
         .db
         .game_durability_quality()
