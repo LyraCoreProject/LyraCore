@@ -9,7 +9,6 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
-tests = []
 
 [vmangos]
 commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
@@ -18,6 +17,46 @@ symbol = "WorldSession::HandleQuestgiverAcceptQuestOpcode"
 
 [real_client]
 status = "unverified"
+
+[[tests]]
+path = "module/tests/conformance/quest_availability.rs"
+function = "a_quest_named_by_its_predecessors_next_quest_id_waits_for_that_reward"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_availability.rs"
+function = "a_negative_prerequisite_needs_its_quest_in_the_log"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_availability.rs"
+function = "an_exclusive_group_lets_a_character_take_one_of_its_quests"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_availability.rs"
+function = "a_maximum_level_closes_the_quest_one_level_above_it"
+rung = "durable_module"
+
+[[tests]]
+path = "crates/lyracore-shared/src/quest.rs"
+function = "checks_refuse_in_the_vmangos_can_take_quest_order"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-shared/src/quest.rs"
+function = "a_negative_group_prerequisite_needs_every_quest_of_its_group"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-shared/src/quest.rs"
+function = "a_positive_exclusive_group_admits_one_taken_or_done_quest"
+rung = "unit"
+
+[[tests]]
+path = "importer/src/world_import_quests_tests.rs"
+function = "prerequisites_follow_vmangos_prev_quests_from_prev_and_next_quest_ids"
+rung = "unit"
 
 [[known_gaps]]
 description = "quests.breadcrumb full-world 23, alliance-single 9: Breadcrumb prerequisites are not represented."
@@ -44,12 +83,6 @@ symbol = "plan"
 evidence = "Compatibility Manifest quests.event-credit-without-source; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
-description = "quests.exclusive-group full-world 427, alliance-single 151: Exclusive quest groups are not represented."
-path = "importer/src/world_import_quests.rs"
-symbol = "plan"
-evidence = "Compatibility Manifest quests.exclusive-group; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
 description = "quests.explicit-zero-xp full-world 725, alliance-single 228: The Module treats zero as a fallback request and can grant XP."
 path = "importer/src/world_import_quests.rs"
 symbol = "plan"
@@ -68,12 +101,6 @@ symbol = "plan"
 evidence = "Compatibility Manifest quests.flags; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
-description = "quests.maximum-level full-world 89, alliance-single 22: Maximum acceptance levels below 60 are not represented."
-path = "importer/src/world_import_quests.rs"
-symbol = "plan"
-evidence = "Compatibility Manifest quests.maximum-level; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
 description = "quests.maximum-reputation full-world 38, alliance-single 22: Maximum reputation gates are not represented."
 path = "importer/src/world_import_quests.rs"
 symbol = "plan"
@@ -84,12 +111,6 @@ description = "quests.money-requirement full-world 69, alliance-single 15: Negat
 path = "importer/src/world_import_quests.rs"
 symbol = "plan"
 evidence = "Compatibility Manifest quests.money-requirement; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
-description = "quests.negative-prerequisite full-world 44, alliance-single 16: Negative prerequisite semantics are not represented."
-path = "importer/src/world_import_quests.rs"
-symbol = "plan"
-evidence = "Compatibility Manifest quests.negative-prerequisite; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
 description = "quests.reputation-requirement full-world 264, alliance-single 16: Minimum reputation gates are not represented."

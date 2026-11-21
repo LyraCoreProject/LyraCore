@@ -598,6 +598,8 @@ struct QuestEtl {
     go_relations: Vec<String>,
     reward_mail: Vec<String>,
     reward_mail_template_ids: std::collections::HashSet<u64>,
+    availability: Vec<String>,
+    prerequisites: Vec<String>,
 }
 
 #[allow(clippy::type_complexity)]
@@ -747,7 +749,10 @@ fn build_quests(
     let mut rew_id: u64 = 1;
     let mut rew_choice_id: u64 = 1;
     let mut quest_obj_count: std::collections::HashMap<u64, u8> = std::collections::HashMap::new();
-    for row in parse_table(dump, "quest_template")?.iter() {
+    let mut availability_rows = Vec::new();
+    let quest_template_rows = parse_table(dump, "quest_template")?;
+    let links = vmangos_quests::QuestLinks::read(&quest_template_rows)?;
+    for row in quest_template_rows.iter() {
         let entry: u64 = row.number(qt::ENTRY)?;
         if entry == 0 || !candidate_quests.contains(&entry) {
             continue;
@@ -782,7 +787,6 @@ fn build_quests(
         let quest_level: i64 = row.number(qt::QUEST_LEVEL)?;
         let money: i64 = row.number(qt::REW_OR_REQ_MONEY)?;
         let reward_money_max_level: i64 = row.number(qt::REW_MONEY_MAX_LEVEL)?;
-        let prev_quest: i64 = row.number(qt::PREV_QUEST_ID)?;
         let flags: u32 = row.number(qt::QUEST_FLAGS)?;
         quest_flag_rows.push(format!("({entry},{flags})"));
         let incomplete_emote: u32 = row.number(qt::INCOMPLETE_EMOTE)?;
@@ -814,12 +818,17 @@ fn build_quests(
         let next_quest_raw: i64 = row.number(qt::NEXT_QUEST_IN_CHAIN)?;
         let limit_time_raw: i64 = row.number(qt::LIMIT_TIME)?;
         let quest_type: u32 = row.number(qt::TYPE)?;
+        let exclusive_group: i32 = row.number("ExclusiveGroup")?;
+        let max_level: u32 = row.number("MaxLevel")?;
+        if exclusive_group != 0 || max_level != 0 {
+            availability_rows.push(format!("({entry},{exclusive_group},{max_level})"));
+        }
         quest_rows.push(format!(
             "({entry},{min_level},{ql},{title},{money},{reward_xp},{prev},{req_races},{req_classes},{zone_or_sort},{rf1},{rv1},{rf2},{rv2},{src_item},{src_item_count},{repeatable},{next_quest},{limit_time},{rmm},{quest_type})",
             ql = quest_level.max(0),
             title = text(qt::TITLE)?,
             money = money.max(0),
-            prev = prev_quest.max(0),
+            prev = links.rewarded_prerequisite(entry),
             next_quest = next_quest_raw.max(0),
             limit_time = limit_time_raw.max(0),
             rmm = reward_money_max_level.max(0),
@@ -956,6 +965,7 @@ fn build_quests(
     emit_go_relations(&go_starts, 0);
     emit_go_relations(&go_ends, 1);
 
+    let prerequisites = links.prerequisite_rows(&valid_quests);
     Ok(QuestEtl {
         entries: valid_quests,
         templates: quest_rows,
@@ -971,6 +981,8 @@ fn build_quests(
         go_relations: go_quest_rows,
         reward_mail: reward_mail_rows,
         reward_mail_template_ids,
+        availability: availability_rows,
+        prerequisites,
     })
 }
 
@@ -1962,6 +1974,20 @@ fn push_quest_statements(stmts: &mut Vec<String>, quests: &QuestEtl, mail_loot_r
         &quests.reward_spells,
     );
     stmts.push("DELETE FROM game_quest_reward_choice WHERE id > 0".into());
+    stmts.push("DELETE FROM game_quest_availability WHERE quest_entry > 0".into());
+    push_insert(
+        stmts,
+        "game_quest_availability",
+        "quest_entry,exclusive_group,max_level",
+        &quests.availability,
+    );
+    stmts.push("DELETE FROM game_quest_prerequisite WHERE id > 0".into());
+    push_insert(
+        stmts,
+        "game_quest_prerequisite",
+        "id,quest_entry,prev_quest_entry,must_be_active",
+        &quests.prerequisites,
+    );
     stmts.push("DELETE FROM game_creature_quest WHERE id > 0".into());
     stmts.push("DELETE FROM game_gameobject_quest WHERE id > 0".into());
     push_insert(stmts, "game_quest_template", "entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level,quest_type", &quests.templates);

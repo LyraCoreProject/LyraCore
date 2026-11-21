@@ -1,4 +1,4 @@
-use lyracore_shared::quest::quest_role;
+use lyracore_shared::quest::{quest_role, StartSighting};
 use wow_world_base::shared::quest_party_message_vanilla_tbc::QuestPartyMessage;
 use wow_world_messages::vanilla::{
     Gold, Level, NpcTextUpdateEmote, QuestCompletable, QuestGiverStatus, QuestItem,
@@ -52,43 +52,37 @@ pub struct GiverQuestEval {
     pub title: String,
     pub level: u32,
     pub role: u8,
+    /// The full accept Gate passes; the quest list offers it.
     pub startable: bool,
+    /// The overhead mark of a quest this giver starts; `Hidden` for one it ends.
+    pub sighting: StartSighting,
     pub active: bool,
     pub complete: bool,
 }
 
 pub fn eval_status(e: &GiverQuestEval) -> QuestGiverStatus {
-    if e.role == quest_role::END && e.active {
-        if e.complete {
-            QuestGiverStatus::Reward2
-        } else {
-            QuestGiverStatus::Incomplete
-        }
-    } else if e.startable {
-        QuestGiverStatus::Available
-    } else {
-        QuestGiverStatus::None
+    if e.role == quest_role::END {
+        return match (e.active, e.complete) {
+            (true, true) => QuestGiverStatus::Reward2,
+            (true, false) => QuestGiverStatus::Incomplete,
+            (false, _) => QuestGiverStatus::None,
+        };
+    }
+    match e.sighting {
+        StartSighting::Hidden => QuestGiverStatus::None,
+        StartSighting::Upcoming => QuestGiverStatus::Unavailable,
+        StartSighting::Trivial => QuestGiverStatus::Chat,
+        StartSighting::Offered => QuestGiverStatus::Available,
     }
 }
 
-fn status_rank(s: QuestGiverStatus) -> u8 {
-    match s {
-        QuestGiverStatus::Reward2 | QuestGiverStatus::RewardRep | QuestGiverStatus::RewardOld => 3,
-        QuestGiverStatus::Available => 2,
-        QuestGiverStatus::Incomplete => 1,
-        _ => 0,
-    }
-}
-
+// The highest numeric status wins; QuestGiverStatus orders by its wire value.
 pub fn quest_giver_status(evals: &[GiverQuestEval]) -> QuestGiverStatus {
-    evals.iter().fold(QuestGiverStatus::None, |best, e| {
-        let s = eval_status(e);
-        if status_rank(s) > status_rank(best) {
-            s
-        } else {
-            best
-        }
-    })
+    evals
+        .iter()
+        .map(eval_status)
+        .max()
+        .unwrap_or(QuestGiverStatus::None)
 }
 
 pub fn build_questgiver_status(
@@ -191,7 +185,7 @@ pub fn quest_menu_items(evals: &[GiverQuestEval]) -> Vec<QuestItem> {
         .iter()
         .filter_map(|e| {
             let status = menu_icon(e);
-            (status_rank(status) > 0).then(|| QuestItem {
+            (status != QuestGiverStatus::None).then(|| QuestItem {
                 quest_id: e.quest_id,
                 quest_icon: status.as_int() as u32,
                 level: Level::new(e.level as u8),
@@ -428,17 +422,64 @@ mod tests {
             level: 2,
             role,
             startable,
+            sighting: if startable {
+                StartSighting::Offered
+            } else {
+                StartSighting::Hidden
+            },
             active,
             complete,
         }
     }
 
+    fn sighted(sighting: StartSighting) -> GiverQuestEval {
+        GiverQuestEval {
+            sighting,
+            ..ev(quest_role::START, false, false, false)
+        }
+    }
+
     #[test]
-    fn status_picks_most_actionable() {
+    fn each_start_sighting_has_its_own_mark() {
         assert_eq!(
-            quest_giver_status(&[ev(quest_role::START, true, false, false)]),
+            eval_status(&sighted(StartSighting::Hidden)),
+            QuestGiverStatus::None
+        );
+        assert_eq!(
+            eval_status(&sighted(StartSighting::Upcoming)),
+            QuestGiverStatus::Unavailable
+        );
+        assert_eq!(
+            eval_status(&sighted(StartSighting::Trivial)),
+            QuestGiverStatus::Chat
+        );
+        assert_eq!(
+            eval_status(&sighted(StartSighting::Offered)),
             QuestGiverStatus::Available
         );
+    }
+
+    #[test]
+    fn an_ended_quest_marks_only_while_it_is_in_the_log() {
+        assert_eq!(
+            eval_status(&ev(quest_role::END, false, true, true)),
+            QuestGiverStatus::Reward2
+        );
+        assert_eq!(
+            eval_status(&ev(quest_role::END, false, true, false)),
+            QuestGiverStatus::Incomplete
+        );
+        assert_eq!(
+            eval_status(&GiverQuestEval {
+                sighting: StartSighting::Offered,
+                ..ev(quest_role::END, false, false, false)
+            }),
+            QuestGiverStatus::None
+        );
+    }
+
+    #[test]
+    fn the_highest_numeric_status_wins() {
         assert_eq!(
             quest_giver_status(&[
                 ev(quest_role::START, true, false, false),
@@ -454,12 +495,25 @@ mod tests {
             QuestGiverStatus::Available
         );
         assert_eq!(
-            quest_giver_status(&[ev(quest_role::END, false, true, false)]),
+            quest_giver_status(&[
+                sighted(StartSighting::Trivial),
+                ev(quest_role::END, false, true, false)
+            ]),
             QuestGiverStatus::Incomplete
         );
         assert_eq!(
-            quest_giver_status(&[ev(quest_role::START, false, false, false)]),
-            QuestGiverStatus::None
+            quest_giver_status(&[
+                sighted(StartSighting::Upcoming),
+                sighted(StartSighting::Trivial)
+            ]),
+            QuestGiverStatus::Chat
+        );
+        assert_eq!(
+            quest_giver_status(&[
+                sighted(StartSighting::Upcoming),
+                sighted(StartSighting::Hidden)
+            ]),
+            QuestGiverStatus::Unavailable
         );
         assert_eq!(quest_giver_status(&[]), QuestGiverStatus::None);
     }

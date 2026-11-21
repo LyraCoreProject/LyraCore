@@ -2,7 +2,7 @@ use crate::actor::{ActionRefusal, ActionRefusalKind};
 use crate::npc_interaction::NpcService;
 use crate::quest::*;
 use crate::{game_creature_template, game_item_template};
-use lyracore_shared::quest::AcceptanceRefusal;
+use lyracore_shared::quest::{AcceptanceRefusal, StartSighting};
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::{Rollback, Unhandled};
@@ -279,19 +279,48 @@ pub(super) fn evaluations(
                 let template = ctx.db.game_quest_template().entry().find(entry)?;
                 let row = character_quest_row(ctx, guid, entry);
                 let active = row.as_ref().is_some_and(|row| row.is_active());
+                let (startable, sighting) = if role == quest_role::START {
+                    start_offer(ctx, &actor, &template)
+                } else {
+                    (false, StartSighting::Hidden)
+                };
                 Some(codec::GiverQuestEval {
                     quest_id: entry,
                     title: template.title.clone(),
                     level: template.quest_level,
                     role,
-                    startable: role == quest_role::START
-                        && accept_gates(ctx, &actor, &template).is_ok(),
+                    startable,
+                    sighting,
                     active,
                     complete: active && row.as_ref().is_some_and(|row| quest_is_complete(ctx, row)),
                 })
             },
         )
         .collect()
+}
+
+// vmangos shows no mark over a creature hostile to the Character.
+fn giver_status(
+    ctx: &ReducerContext,
+    giver: u64,
+    guid: u64,
+) -> lyracore_protocol::messages::vanilla::QuestGiverStatus {
+    use crate::game_world_entity;
+    let hostile = lyracore_shared::guid::is_creature(giver)
+        && ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(giver)
+            .zip(ctx.db.game_world_entity().guid().find(guid))
+            .is_some_and(|(npc, actor)| {
+                crate::reputation::npc_refuses_interaction(ctx, &npc, &actor)
+            });
+    if hostile {
+        lyracore_protocol::messages::vanilla::QuestGiverStatus::None
+    } else {
+        codec::quest_giver_status(&evaluations(ctx, giver, guid))
+    }
 }
 
 pub(super) fn menu(ctx: &ReducerContext, giver: u64, guid: u64) -> Result<Vec<Packet>, String> {
@@ -432,14 +461,19 @@ fn accept_refusal(refusal: &AcceptQuestRefusal) -> Vec<Packet> {
         AcceptQuestRefusal::LogFull => Some(ServerOpcodeMessage::SMSG_QUESTLOG_FULL),
         AcceptQuestRefusal::Acceptance { refusal, .. } => {
             let reason = match refusal {
-                AcceptanceRefusal::Level => Reason::QuestFailedLowLevel,
-                AcceptanceRefusal::Race => Reason::QuestFailedWrongRace,
-                AcceptanceRefusal::AlreadyTaken => Reason::QuestAlreadyOn,
-                AcceptanceRefusal::Class | AcceptanceRefusal::Prerequisite => Reason::DontHaveReq,
+                AcceptanceRefusal::AboveMaxLevel => None,
+                AcceptanceRefusal::Level => Some(Reason::QuestFailedLowLevel),
+                AcceptanceRefusal::Race => Some(Reason::QuestFailedWrongRace),
+                AcceptanceRefusal::AlreadyTaken => Some(Reason::QuestAlreadyOn),
+                AcceptanceRefusal::Class | AcceptanceRefusal::Prerequisite => {
+                    Some(Reason::DontHaveReq)
+                }
             };
-            Some(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_INVALID(
-                codec::build_questgiver_quest_invalid(reason),
-            ))
+            reason.map(|reason| {
+                ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_INVALID(
+                    codec::build_questgiver_quest_invalid(reason),
+                )
+            })
         }
         AcceptQuestRefusal::Refused(_) => None,
     };
@@ -460,7 +494,7 @@ pub(super) fn receive(
         ClientOpcodeMessage::CMSG_QUESTGIVER_STATUS_QUERY(q) => vec![packet(
             ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(Box::new(codec::build_questgiver_status(
                 q.guid.guid(),
-                codec::quest_giver_status(&evaluations(ctx, q.guid.guid(), guid)),
+                giver_status(ctx, q.guid.guid(), guid),
             ))),
         )?],
         ClientOpcodeMessage::CMSG_QUESTGIVER_HELLO(q) => {

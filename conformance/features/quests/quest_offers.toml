@@ -11,6 +11,10 @@ deliberate_deviations = []
 prerequisites = []
 tests = [
     { path = "importer/src/world_import_quests_tests.rs", function = "named_quests_select_revisions_relations_mail_money_xp_flags_and_learn_spells", rung = "unit" },
+    { path = "module/tests/conformance/quest_availability.rs", function = "a_quest_up_to_seven_levels_ahead_shows_the_grey_mark", rung = "durable_module" },
+    { path = "module/tests/conformance/quest_availability.rs", function = "a_quest_five_levels_below_the_character_shows_no_yellow_mark", rung = "durable_module" },
+    { path = "module/tests/conformance/quest_availability.rs", function = "a_hostile_quest_giver_shows_no_mark", rung = "durable_module" },
+    { path = "crates/lyracore-protocol/src/codec/quest.rs", function = "the_highest_numeric_status_wins", rung = "codec" },
 ]
 
 [vmangos]

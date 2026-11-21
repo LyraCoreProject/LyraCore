@@ -100,6 +100,13 @@ giver plays while the quest is incomplete or complete, and up to four offer-rewa
 their delays. Absence means no emotes; reimport quests to populate an existing Realm. The public
 quest template layout stays unchanged for Packages.
 
+`game_quest_availability` and `game_quest_prerequisite` are new private companion tables for the
+source quest availability rules. An availability row holds a quest's signed `ExclusiveGroup` and
+its `MaxLevel`; absence means neither. Prerequisite rows hold the predecessors vmangos adds beyond
+a positive `PrevQuestId`: a negative `PrevQuestId` and each quest whose `NextQuestId` names the
+quest, with `must_be_active` for a negative link. `prev_quest_id` keeps the positive `PrevQuestId`,
+so Packages can still set one. Reimport quests to populate an existing Realm.
+
 ### The three migration rules that have bitten
 
 1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64`

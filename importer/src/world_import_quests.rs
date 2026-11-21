@@ -45,6 +45,86 @@ pub(super) fn learn_spells(dump: &(impl TableRows + ?Sized)) -> Result<HashMap<u
     Ok(learned)
 }
 
+#[derive(Clone, Copy)]
+struct QuestLink {
+    prev: i64,
+    next: i64,
+    breadcrumb: bool,
+}
+
+/// Every source quest's `PrevQuestId`, `NextQuestId` and breadcrumb mark, imported or not.
+pub(super) struct QuestLinks(BTreeMap<u64, QuestLink>);
+
+impl QuestLinks {
+    pub(super) fn read(rows: &[crate::world_source::Row]) -> Result<Self> {
+        rows.iter()
+            .map(|row| {
+                Ok((
+                    row.number("entry")?,
+                    QuestLink {
+                        prev: row.number(crate::dump::qt::PREV_QUEST_ID)?,
+                        next: row.number("NextQuestId")?,
+                        breadcrumb: row.number::<u64>("BreadcrumbForQuestId")? != 0,
+                    },
+                ))
+            })
+            .collect::<Result<_>>()
+            .map(Self)
+    }
+
+    // vmangos ObjectMgr::LoadQuests drops a PrevQuestId naming no quest or a breadcrumb.
+    fn previous(&self, entry: u64) -> Option<i64> {
+        let prev = self.0.get(&entry)?.prev;
+        self.0
+            .get(&prev.unsigned_abs())
+            .filter(|target| prev != 0 && !target.breadcrumb)
+            .map(|_| prev)
+    }
+
+    pub(super) fn rewarded_prerequisite(&self, entry: u64) -> u64 {
+        self.previous(entry)
+            .filter(|prev| *prev > 0)
+            .map_or(0, i64::unsigned_abs)
+    }
+
+    /// `game_quest_prerequisite` rows: the `prevQuests` entries `prev_quest_id` does not hold.
+    pub(super) fn prerequisite_rows(&self, imported: &HashSet<u64>) -> Vec<String> {
+        let mut lists: BTreeMap<u64, Vec<(u64, bool)>> = BTreeMap::new();
+        for &entry in self.0.keys().filter(|entry| imported.contains(entry)) {
+            if let Some(prev) = self.previous(entry).filter(|prev| *prev < 0) {
+                lists
+                    .entry(entry)
+                    .or_default()
+                    .push((prev.unsigned_abs(), true));
+            }
+        }
+        for (&source, link) in &self.0 {
+            let target = link.next.unsigned_abs();
+            if link.next == 0 || !imported.contains(&target) {
+                continue;
+            }
+            let predecessor = (source, link.next < 0);
+            let list = lists.entry(target).or_default();
+            if !list.contains(&predecessor)
+                && predecessor != (self.rewarded_prerequisite(target), false)
+            {
+                list.push(predecessor);
+            }
+        }
+        lists
+            .into_iter()
+            .flat_map(|(quest, list)| {
+                list.into_iter()
+                    .map(move |(prev, must_be_active)| (quest, prev, must_be_active))
+            })
+            .enumerate()
+            .map(|(index, (quest, prev, must_be_active))| {
+                format!("({},{quest},{prev},{must_be_active})", index + 1)
+            })
+            .collect()
+    }
+}
+
 fn placed_creatures(dump: &impl TableRows, scope: &WorldImportScope) -> Result<HashSet<u64>> {
     let mut entries = HashSet::new();
     for row in dump.rows("creature")?.iter() {
@@ -246,7 +326,6 @@ fn findings(
             ("RequiredSkill", "quests.skill-requirement"),
             ("RequiredMinRepFaction", "quests.reputation-requirement"),
             ("RequiredMaxRepFaction", "quests.maximum-reputation"),
-            ("ExclusiveGroup", "quests.exclusive-group"),
             ("BreadcrumbForQuestId", "quests.breadcrumb"),
             ("SrcSpell", "quests.start-spell"),
             ("StartScript", "quests.start-script"),
@@ -255,10 +334,6 @@ fn findings(
         ] {
             add(code, row.number::<i64>(column)? != 0);
         }
-        add(
-            "quests.maximum-level",
-            (1..60).contains(&row.number::<u32>("MaxLevel")?),
-        );
         add(
             "quests.flags",
             row.number::<u32>("QuestFlags")? != 0 || row.number::<u32>("SpecialFlags")? & !3 != 0,
@@ -284,10 +359,6 @@ fn findings(
         add(
             "quests.money-requirement",
             row.number::<i64>("RewOrReqMoney")? < 0,
-        );
-        add(
-            "quests.negative-prerequisite",
-            row.number::<i64>("PrevQuestId")? < 0,
         );
         add(
             "quests.extra-reputation-rewards",
