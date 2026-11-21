@@ -358,6 +358,12 @@ and AOI observers, and is refreshed when the passenger changes AOI cell or route
 flight also records its takeoff position, so a new viewer's CREATE carries the original spline path
 with elapsed time even after the passenger has crossed a cell boundary.
 
+A multi-hop flight keeps its first leg in `path_id` and each later leg in a `game_taxi_flight_leg`
+row, ordered by `leg_index`. `destination_node_id` is the final node. Activation debits only the
+first leg's fare. The route clock pays each later leg as the flyer enters it. `current_leg_index`
+is the leg the flyer is on; that leg and every earlier one are paid. A login resume rewrites the
+row to its current leg and deletes the leg rows, because vmangos saves only that leg.
+
 ### `game_world_entity` (`module/src/world.rs`)
 
 Public. One row per Character in the world and per spawned creature. Login creates it; disconnect

@@ -54,6 +54,22 @@ pub struct ActiveTaxiFlight {
     pub origin_recorded: bool,
     #[default(1u32)]
     pub first_destination_node_index: u32,
+    #[default(0u32)]
+    pub current_leg_index: u32,
+}
+
+/// A leg after the first of a multi-hop flight; leg 0 is the flight's `path_id`.
+#[table(
+    accessor = game_taxi_flight_leg,
+    index(accessor = by_character, btree(columns = [character_guid]))
+)]
+pub struct TaxiFlightLeg {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub character_guid: u64,
+    pub leg_index: u32,
+    pub path_id: u32,
 }
 
 #[table(accessor = game_taxi_flight_schedule, scheduled(advance_taxi_flight))]
@@ -85,6 +101,22 @@ crate::character_owned!(delete, fn sweep_delete_game_active_taxi_flight(ctx, cha
 });
 // A flight cannot cross Shards; its route and catalogue belong to the current hosted map.
 crate::character_owned!(not_transported, fn sweep_transfer_game_active_taxi_flight());
+
+crate::character_owned!(delete, fn sweep_delete_game_taxi_flight_leg(ctx, character_guid) {
+    delete_onward_legs(ctx, character_guid);
+});
+crate::character_owned!(not_transported, fn sweep_transfer_game_taxi_flight_leg());
+
+fn delete_onward_legs(ctx: &ReducerContext, character_guid: u64) {
+    let legs = ctx.db.game_taxi_flight_leg();
+    for leg in legs
+        .by_character()
+        .filter(&character_guid)
+        .collect::<Vec<_>>()
+    {
+        legs.id().delete(leg.id);
+    }
+}
 
 crate::character_owned!(delete, fn sweep_delete_game_taxi_flight_schedule(ctx, character_guid) {
     ctx.db.game_taxi_flight_schedule().scheduled_id().delete(character_guid);
@@ -161,7 +193,6 @@ enum TaxiGateDenied {
     SourceTooFar,
     NoPath,
     UnsupportedRoute,
-    MultiHopRoute,
     MissingMount,
     NotEnoughMoney,
 }
@@ -190,8 +221,7 @@ impl TaxiGateDenied {
             Self::NodeWithoutPosition => "source taxi node has no position",
             Self::SourceTooFar => "source taxi node is too far away",
             Self::NoPath => "no taxi path between the nodes",
-            Self::UnsupportedRoute => "no complete supported direct route",
-            Self::MultiHopRoute => "multi-hop taxi routes are unsupported",
+            Self::UnsupportedRoute => "a leg has no route the Module can fly",
             Self::MissingMount => "taxi node has no usable faction mount",
             Self::NotEnoughMoney => "not enough money for taxi fare",
         }
@@ -222,7 +252,7 @@ impl TaxiGateDenied {
             Self::PlayerShapeShifted => Some(wire::ACTIVATE_PLAYER_SHAPE_SHIFTED),
             Self::NoSourceNode | Self::UnsupportedRoute => Some(wire::ACTIVATE_NO_SUCH_PATH),
             Self::SourceTooFar => Some(wire::ACTIVATE_TOO_FAR_AWAY),
-            Self::NodeWithoutPosition | Self::MultiHopRoute | Self::MissingMount => {
+            Self::NodeWithoutPosition | Self::MissingMount => {
                 Some(wire::ACTIVATE_UNSPECIFIED_SERVER_ERROR)
             }
             Self::NotEnoughMoney => Some(wire::ACTIVATE_NOT_ENOUGH_MONEY),
@@ -401,12 +431,12 @@ impl ActivationPlayerState {
         Ok(())
     }
 
-    fn activate(&mut self, fare: u32, mount_display_id: u32) -> Result<(), TaxiGateDenied> {
+    fn activate(&mut self, leg_fares: &[u32], mount_display_id: u32) -> Result<(), TaxiGateDenied> {
         self.validate_can_act()?;
         if mount_display_id == 0 {
             return Err(TaxiGateDenied::MissingMount);
         }
-        let remaining_money = debit_fare(self.money, fare)?;
+        let remaining_money = debit_first_leg(self.money, leg_fares)?;
 
         self.has_active_flight = true;
         self.money = remaining_money;
@@ -433,31 +463,48 @@ fn has_own_mount(race: u8, node: &GameTaxiNode) -> bool {
     }
 }
 
-fn debit_fare(money: u32, fare: u32) -> Result<u32, TaxiGateDenied> {
-    money
-        .checked_sub(fare)
-        .ok_or(TaxiGateDenied::NotEnoughMoney)
+/// vmangos `ActivateTaxiPathTo`: the money must cover every leg; only the first is paid now.
+fn debit_first_leg(money: u32, leg_fares: &[u32]) -> Result<u32, TaxiGateDenied> {
+    let route_fare = leg_fares
+        .iter()
+        .fold(0u32, |total, &fare| total.saturating_add(fare));
+    if money < route_fare {
+        return Err(TaxiGateDenied::NotEnoughMoney);
+    }
+    Ok(money - leg_fares.first().copied().unwrap_or_default())
 }
 
-fn direct_supported_path(
+/// Each leg's path; vmangos is silent at a missing path, so that outranks an unflyable leg.
+fn route_legs(
     ctx: &ReducerContext,
-    source: &GameTaxiNode,
-    destination: &GameTaxiNode,
-) -> Result<GameTaxiPath, TaxiGateDenied> {
-    let mut candidates = ctx
-        .db
-        .game_taxi_path()
-        .by_source()
-        .filter(&source.id)
-        .filter(|path| path.destination_node_id == destination.id);
-    let path = candidates.next().ok_or(TaxiGateDenied::NoPath)?;
-    if candidates.next().is_some()
-        || !ordered_route(ctx, path.id)
-            .is_some_and(|points| route_is_supported(source, destination, &points))
-    {
-        return Err(TaxiGateDenied::UnsupportedRoute);
+    nodes: &[GameTaxiNode],
+) -> Result<Vec<GameTaxiPath>, TaxiGateDenied> {
+    let candidates: Vec<Vec<GameTaxiPath>> = nodes
+        .windows(2)
+        .map(|leg| {
+            ctx.db
+                .game_taxi_path()
+                .by_source()
+                .filter(&leg[0].id)
+                .filter(|path| path.destination_node_id == leg[1].id)
+                .collect()
+        })
+        .collect();
+    if candidates.iter().any(Vec::is_empty) {
+        return Err(TaxiGateDenied::NoPath);
     }
-    Ok(path)
+    nodes
+        .windows(2)
+        .zip(candidates)
+        .map(|(leg, paths)| {
+            let [path] = <[GameTaxiPath; 1]>::try_from(paths)
+                .map_err(|_| TaxiGateDenied::UnsupportedRoute)?;
+            ordered_route(ctx, path.id)
+                .is_some_and(|points| route_is_supported(&leg[0], &leg[1], &points))
+                .then_some(path)
+                .ok_or(TaxiGateDenied::UnsupportedRoute)
+        })
+        .collect()
 }
 
 fn is_known(ctx: &ReducerContext, character_guid: u64, node_id: u32) -> bool {
@@ -525,22 +572,64 @@ struct RoutePosition {
     complete: bool,
 }
 
-fn flight_route(flight: &ActiveTaxiFlight, points: Vec<GameTaxiPathNode>) -> Vec<GameTaxiPathNode> {
-    let Some(mut origin) = points.first().cloned() else {
-        return Vec::new();
+/// A flight's points in order, with the index in `points` of each leg's last point but the last.
+#[derive(Default)]
+struct RoutePoints {
+    points: Vec<GameTaxiPathNode>,
+    leg_ends: Vec<usize>,
+}
+
+impl RoutePoints {
+    /// vmangos default joints: a leg ends at its next-to-last point, the next starts at its second.
+    fn join(legs: Vec<Vec<GameTaxiPathNode>>) -> Self {
+        let last = legs.len().saturating_sub(1);
+        let mut joined = Self::default();
+        for (index, leg) in legs.into_iter().enumerate() {
+            let taken = if index == last {
+                leg.len()
+            } else {
+                leg.len().saturating_sub(1)
+            };
+            joined
+                .points
+                .extend(leg.into_iter().take(taken).skip(usize::from(index > 0)));
+            if index < last {
+                joined.leg_ends.push(joined.points.len().saturating_sub(1));
+            }
+        }
+        joined
+    }
+
+    /// The leg the flyer is on while it flies from the point at `point_index` to the next.
+    fn leg_at(&self, point_index: usize) -> u32 {
+        self.leg_ends
+            .iter()
+            .filter(|&&end| point_index >= end)
+            .count() as u32
+    }
+}
+
+/// The route as flown: the launch origin, then the points from `first_destination_node_index`.
+fn flight_route(flight: &ActiveTaxiFlight, route: RoutePoints) -> RoutePoints {
+    let Some(mut origin) = route.points.first().cloned() else {
+        return RoutePoints::default();
     };
     if flight.origin_recorded {
         origin.x = flight.origin_x;
         origin.y = flight.origin_y;
         origin.z = flight.origin_z;
     }
-    std::iter::once(origin)
-        .chain(
-            points
-                .into_iter()
-                .skip(flight.first_destination_node_index as usize),
-        )
-        .collect()
+    let skip = flight.first_destination_node_index as usize;
+    RoutePoints {
+        points: std::iter::once(origin)
+            .chain(route.points.into_iter().skip(skip))
+            .collect(),
+        leg_ends: route
+            .leg_ends
+            .into_iter()
+            .map(|end| (end + 1).saturating_sub(skip))
+            .collect(),
+    }
 }
 
 fn resume_node(points: &[GameTaxiPathNode], character: &WorldEntity) -> u32 {
@@ -667,27 +756,76 @@ fn ordered_route(ctx: &ReducerContext, path_id: u32) -> Option<Vec<GameTaxiPathN
     is_complete_route(&points).then_some(points)
 }
 
+/// The path of each leg of `flight`, in route order.
+fn leg_paths(ctx: &ReducerContext, flight: &ActiveTaxiFlight) -> Vec<u32> {
+    let mut onward: Vec<_> = ctx
+        .db
+        .game_taxi_flight_leg()
+        .by_character()
+        .filter(&flight.character_guid)
+        .collect();
+    onward.sort_by_key(|leg| leg.leg_index);
+    std::iter::once(flight.path_id)
+        .chain(onward.into_iter().map(|leg| leg.path_id))
+        .collect()
+}
+
+fn joined_route(ctx: &ReducerContext, legs: &[u32]) -> Option<RoutePoints> {
+    legs.iter()
+        .map(|&path_id| ordered_route(ctx, path_id))
+        .collect::<Option<Vec<_>>>()
+        .map(RoutePoints::join)
+}
+
 /// An active flight's route and destination while both still lie on the flyer's map.
 struct FlightRoute {
-    points: Vec<GameTaxiPathNode>,
+    legs: Vec<u32>,
+    route: RoutePoints,
     destination: GameTaxiNode,
 }
 
 impl FlightRoute {
     fn load(ctx: &ReducerContext, flight: &ActiveTaxiFlight, flyer: &WorldEntity) -> Option<Self> {
-        let points = ordered_route(ctx, flight.path_id)?;
+        let legs = leg_paths(ctx, flight);
+        let route = joined_route(ctx, &legs)?;
         let destination = ctx
             .db
             .game_taxi_node()
             .id()
             .find(flight.destination_node_id)?;
         (destination.map_id == flyer.map_id
-            && points.iter().all(|point| point.map_id == flyer.map_id))
+            && route
+                .points
+                .iter()
+                .all(|point| point.map_id == flyer.map_id))
         .then_some(Self {
-            points,
+            legs,
+            route,
             destination,
         })
     }
+}
+
+/// vmangos `FlightPathMovementGenerator::Update` pays each leg as the flyer enters it, and
+/// `ModifyMoney` stops at zero.
+fn pay_entered_legs(
+    ctx: &ReducerContext,
+    legs: &[u32],
+    flight: &mut ActiveTaxiFlight,
+    player: &mut WorldEntity,
+    leg: u32,
+) {
+    let paid = flight.current_leg_index as usize;
+    for &path_id in legs.iter().take(leg as usize + 1).skip(paid + 1) {
+        let fare = ctx
+            .db
+            .game_taxi_path()
+            .id()
+            .find(path_id)
+            .map_or(0, |path| path.fare);
+        player.money = player.money.saturating_sub(fare);
+    }
+    flight.current_leg_index = flight.current_leg_index.max(leg);
 }
 
 pub(crate) fn current_create_spline(
@@ -704,7 +842,7 @@ pub(crate) fn current_create_spline(
     if flight.started_micros == 0 {
         return None;
     }
-    let points = flight_route(&flight, ordered_route(ctx, flight.path_id)?);
+    let points = flight_route(&flight, joined_route(ctx, &leg_paths(ctx, &flight))?).points;
     let elapsed = crate::time::now(ctx)
         .to_micros_since_unix_epoch()
         .saturating_sub(flight.started_micros)
@@ -794,6 +932,36 @@ pub(crate) fn prepare_world_entry(ctx: &ReducerContext, character: &mut WorldEnt
     }
 }
 
+/// vmangos `SaveTaxiDestinationsToString` keeps only the current leg, so `ContinueTaxiFlight`
+/// flies that leg alone on its source node's mount and lands at its end; later legs go unpaid.
+fn keep_only_current_leg(
+    ctx: &ReducerContext,
+    flight: &mut ActiveTaxiFlight,
+    race: u8,
+) -> Option<()> {
+    let legs = leg_paths(ctx, flight);
+    if legs.len() == 1 {
+        return Some(());
+    }
+    delete_onward_legs(ctx, flight.character_guid);
+    let path = ctx
+        .db
+        .game_taxi_path()
+        .id()
+        .find(*legs.get(flight.current_leg_index as usize)?)?;
+    let source = ctx.db.game_taxi_node().id().find(path.source_node_id)?;
+    let mount_display_id = faction_mount_display(race, &source);
+    if mount_display_id != 0 {
+        flight.mount_display_id = mount_display_id;
+    }
+    flight.path_id = path.id;
+    flight.source_node_id = path.source_node_id;
+    flight.destination_node_id = path.destination_node_id;
+    flight.fare = path.fare;
+    flight.current_leg_index = 0;
+    Some(())
+}
+
 pub(crate) fn resume_flight(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
     let Some(mut flight) = ctx
         .db
@@ -806,19 +974,21 @@ pub(crate) fn resume_flight(ctx: &ReducerContext, character_guid: u64) -> Result
     let Some(character) = ctx.db.game_world_entity().guid().find(character_guid) else {
         return Ok(());
     };
-    let Some(route) = FlightRoute::load(ctx, &flight, &character) else {
+    let Some(route) = keep_only_current_leg(ctx, &mut flight, character.race())
+        .and_then(|()| FlightRoute::load(ctx, &flight, &character))
+    else {
         clear_flight(ctx, character);
         return Ok(());
     };
     // Spline launch replaces the selected Reference node with the saved position.
-    flight.first_destination_node_index = resume_node(&route.points, &character) + 1;
+    flight.first_destination_node_index = resume_node(&route.route.points, &character) + 1;
     flight.origin_x = character.x;
     flight.origin_y = character.y;
     flight.origin_z = character.z;
     flight.origin_recorded = true;
     flight.current_node_index = 0;
     flight.started_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
-    let points = flight_route(&flight, route.points);
+    let points = flight_route(&flight, route.route).points;
     let Some(position) = route_position(&points, 0) else {
         clear_flight(ctx, character);
         return Ok(());
@@ -939,6 +1109,7 @@ fn finish_flight(ctx: &ReducerContext, mut player: WorldEntity, plan: FlightEndP
             }
         }
     }
+    delete_onward_legs(ctx, character_guid);
     ctx.db
         .game_taxi_passenger_spline()
         .character_guid()
@@ -1015,25 +1186,22 @@ pub(crate) fn reject_action_while_in_flight(
     }
 }
 
+/// vmangos `SendTaxiMenu` sends every known node; the client plans a route through them.
 fn available_client_nodes(
     ctx: &ReducerContext,
     character_guid: u64,
     source: &GameTaxiNode,
 ) -> Vec<u32> {
-    let mut available = vec![source.client_node_id];
-    for path in ctx.db.game_taxi_path().by_source().filter(&source.id) {
-        let Some(destination) = ctx.db.game_taxi_node().id().find(path.destination_node_id) else {
-            continue;
-        };
-        if !is_known(ctx, character_guid, destination.id) {
-            continue;
-        }
-        if ordered_route(ctx, path.id)
-            .is_some_and(|points| route_is_supported(source, &destination, &points))
-        {
-            available.push(destination.client_node_id);
-        }
-    }
+    let catalogue = ctx.db.game_taxi_node();
+    let mut available: Vec<u32> = ctx
+        .db
+        .game_character_taxi_node()
+        .by_character()
+        .filter(&character_guid)
+        .filter_map(|known| catalogue.id().find(known.node_id))
+        .map(|node| node.client_node_id)
+        .chain(std::iter::once(source.client_node_id))
+        .collect();
     available.sort_unstable();
     available.dedup();
     available
@@ -1318,18 +1486,7 @@ pub fn gw_activate_taxi(
     Ok(())
 }
 
-fn every_leg_has_a_path(ctx: &ReducerContext, nodes: &[GameTaxiNode]) -> bool {
-    nodes.windows(2).all(|leg| {
-        ctx.db
-            .game_taxi_path()
-            .by_source()
-            .filter(&leg[0].id)
-            .any(|path| path.destination_node_id == leg[1].id)
-    })
-}
-
-/// A taxi request along `client_nodes`, as vmangos `Player::ActivateTaxiPathTo` takes it. Only a
-/// route of two nodes flies; a longer one is refused after every check that precedes the route.
+/// A taxi request along `client_nodes`, as vmangos `Player::ActivateTaxiPathTo` takes it.
 pub(crate) fn activate_route(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -1362,24 +1519,27 @@ pub(crate) fn activate_route(
             .collect::<Result<Vec<_>, _>>()?;
         player_state.validate_can_mount()?;
         source_node_in_reach(&player, &nodes[0])?;
-        let [source, destination] = nodes.as_slice() else {
-            return Err(if every_leg_has_a_path(ctx, &nodes) {
-                TaxiGateDenied::MultiHopRoute
-            } else {
-                TaxiGateDenied::NoPath
-            });
-        };
-        let path = direct_supported_path(ctx, source, destination)?;
+        let legs = route_legs(ctx, &nodes)?;
+        let (source, destination) = (&nodes[0], &nodes[nodes.len() - 1]);
         let mount_display_id = faction_mount_display(player.race(), source);
-        player_state.activate(path.fare, mount_display_id)?;
+        let leg_fares: Vec<u32> = legs.iter().map(|leg| leg.fare).collect();
+        player_state.activate(&leg_fares, mount_display_id)?;
 
+        for (leg_index, leg) in (1u32..).zip(&legs[1..]) {
+            ctx.db.game_taxi_flight_leg().insert(TaxiFlightLeg {
+                id: 0,
+                character_guid,
+                leg_index,
+                path_id: leg.id,
+            });
+        }
         let flight = ActiveTaxiFlight {
             character_guid,
-            path_id: path.id,
+            path_id: legs[0].id,
             source_node_id: source.id,
             destination_node_id: destination.id,
             mount_display_id,
-            fare: path.fare,
+            fare: legs[0].fare,
             current_node_index: 0,
             // Queue the paid reply before arming motion so movement cannot overtake it.
             started_micros: 0,
@@ -1388,6 +1548,7 @@ pub(crate) fn activate_route(
             origin_z: player.z,
             origin_recorded: true,
             first_destination_node_index: 1,
+            current_leg_index: 0,
         };
         ctx.db.game_active_taxi_flight().insert(flight);
         crate::native::motion_permit::refresh_character(ctx, character_guid);
@@ -1428,7 +1589,7 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
         clear_flight(ctx, player);
         return;
     };
-    let points = flight_route(&flight, route.points);
+    let points = flight_route(&flight, route.route).points;
     crate::combat::disengage(ctx, character_guid);
     let Some(mut player) = ctx.db.game_world_entity().guid().find(character_guid) else {
         return;
@@ -1510,14 +1671,17 @@ fn taxi_pass(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
         clear_flight(ctx, player);
         return;
     };
-    let points = flight_route(&flight, route.points);
+    let flown = flight_route(&flight, route.route);
     let elapsed = crate::time::now(ctx)
         .to_micros_since_unix_epoch()
         .saturating_sub(flight.started_micros);
-    let Some(position) = route_position(&points, elapsed) else {
+    let Some(position) = route_position(&flown.points, elapsed) else {
         clear_flight(ctx, player);
         return;
     };
+    let leg = flown.leg_at(position.point_index);
+    pay_entered_legs(ctx, &route.legs, &mut flight, &mut player, leg);
+    let points = flown.points;
     if position.complete {
         let orientation = if points.len() == 1 {
             player.orientation
@@ -1870,10 +2034,6 @@ mod tests {
                 wire::ACTIVATE_NO_SUCH_PATH,
             ),
             (
-                TaxiGateDenied::MultiHopRoute,
-                wire::ACTIVATE_UNSPECIFIED_SERVER_ERROR,
-            ),
-            (
                 TaxiGateDenied::MissingMount,
                 wire::ACTIVATE_UNSPECIFIED_SERVER_ERROR,
             ),
@@ -1907,9 +2067,52 @@ mod tests {
 
     #[test]
     fn fare_debit_is_exact_and_never_wraps() {
-        assert_eq!(debit_fare(100, 25), Ok(75));
-        assert_eq!(debit_fare(25, 25), Ok(0));
-        assert_eq!(debit_fare(24, 25), Err(TaxiGateDenied::NotEnoughMoney));
+        assert_eq!(debit_first_leg(100, &[25]), Ok(75));
+        assert_eq!(debit_first_leg(25, &[25]), Ok(0));
+        assert_eq!(
+            debit_first_leg(24, &[25]),
+            Err(TaxiGateDenied::NotEnoughMoney)
+        );
+    }
+
+    #[test]
+    fn a_route_needs_money_for_every_leg_and_pays_only_the_first() {
+        assert_eq!(debit_first_leg(55, &[25, 30]), Ok(30));
+        assert_eq!(
+            debit_first_leg(54, &[25, 30]),
+            Err(TaxiGateDenied::NotEnoughMoney)
+        );
+        assert_eq!(
+            debit_first_leg(u32::MAX, &[u32::MAX, 1]),
+            Ok(0),
+            "a saturated route fare still pays the first leg"
+        );
+    }
+
+    #[test]
+    fn legs_join_at_the_vmangos_default_joints() {
+        let leg = |path_id: u32, len: u32| -> Vec<GameTaxiPathNode> {
+            (0..len).map(|index| point(0, path_id, index, 0)).collect()
+        };
+        let route = RoutePoints::join(vec![leg(1, 4), leg(2, 3), leg(3, 3)]);
+        let joined: Vec<_> = route
+            .points
+            .iter()
+            .map(|point| (point.path_id, point.node_index))
+            .collect();
+        assert_eq!(joined, [(1, 0), (1, 1), (1, 2), (2, 1), (3, 1), (3, 2)]);
+        assert_eq!(route.leg_ends, [2, 3]);
+        let legs: Vec<_> = (0..route.points.len())
+            .map(|index| route.leg_at(index))
+            .collect();
+        assert_eq!(legs, [0, 0, 1, 2, 2, 2]);
+    }
+
+    #[test]
+    fn a_single_leg_keeps_every_point() {
+        let route = RoutePoints::join(vec![vec![point(1, 9, 0, 0), point(2, 9, 1, 0)]]);
+        assert_eq!(route.points.len(), 2);
+        assert!(route.leg_ends.is_empty());
     }
 
     #[test]
@@ -1944,7 +2147,7 @@ mod tests {
             unit_flags: 0,
         };
 
-        assert_eq!(state.activate(25, 1147), Ok(()));
+        assert_eq!(state.activate(&[25], 1147), Ok(()));
         assert!(state.has_active_flight);
         assert_eq!(state.money, 75);
         assert_eq!(state.mount_display_id, 1147);
@@ -1954,7 +2157,7 @@ mod tests {
         );
 
         let after_first = state;
-        assert_eq!(state.activate(25, 1147), Err(TaxiGateDenied::Flying));
+        assert_eq!(state.activate(&[25], 1147), Err(TaxiGateDenied::Flying));
         assert_eq!(
             state, after_first,
             "a serialized retry must not charge twice"
@@ -1974,7 +2177,7 @@ mod tests {
         let before = state;
 
         assert_eq!(
-            state.activate(25, 1147),
+            state.activate(&[25], 1147),
             Err(TaxiGateDenied::NotEnoughMoney)
         );
         assert_eq!(state, before);
@@ -2073,15 +2276,45 @@ mod tests {
             origin_z: 30.0,
             origin_recorded: false,
             first_destination_node_index: 1,
+            current_leg_index: 0,
         };
 
-        let points = vec![point(1, 99, 0, 0), point(2, 99, 1, 0)];
-        assert_eq!(flight_route(&flight, points)[0].x, 0.0);
+        let points = || RoutePoints::join(vec![vec![point(1, 99, 0, 0), point(2, 99, 1, 0)]]);
+        assert_eq!(flight_route(&flight, points()).points[0].x, 0.0);
         flight.origin_recorded = true;
-        let points = vec![point(1, 99, 0, 0), point(2, 99, 1, 0)];
-        let route = flight_route(&flight, points);
+        let route = flight_route(&flight, points()).points;
         assert_eq!((route[0].x, route[0].y, route[0].z), (10.0, 20.0, 30.0));
         assert_eq!((route[1].x, route[1].y, route[1].z), (1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn a_resumed_route_keeps_its_leg_ends_on_the_flown_points() {
+        let mut flight = ActiveTaxiFlight {
+            character_guid: 1,
+            path_id: 1,
+            source_node_id: 2,
+            destination_node_id: 4,
+            mount_display_id: 6852,
+            fare: 110,
+            current_node_index: 0,
+            started_micros: 1,
+            origin_x: 0.0,
+            origin_y: 0.0,
+            origin_z: 0.0,
+            origin_recorded: true,
+            first_destination_node_index: 1,
+            current_leg_index: 0,
+        };
+        let leg = |path_id: u32, len: u32| -> Vec<GameTaxiPathNode> {
+            (0..len).map(|index| point(0, path_id, index, 0)).collect()
+        };
+        let route = || RoutePoints::join(vec![leg(1, 4), leg(2, 4)]);
+        assert_eq!(flight_route(&flight, route()).leg_ends, [2]);
+        flight.first_destination_node_index = 2;
+        let flown = flight_route(&flight, route());
+        assert_eq!(flown.points.len(), 5);
+        assert_eq!(flown.leg_ends, [1]);
+        assert_eq!(flown.points[1].node_index, 2);
     }
 
     #[test]

@@ -415,8 +415,9 @@ fn a_multi_hop_express_request_with_a_leg_without_a_path_gets_no_reply() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_multi_hop_express_request_the_module_cannot_fly_gets_status_1() {
+fn a_multi_hop_express_request_with_a_leg_the_module_cannot_fly_gets_status_2() {
     let (shard, mut wire, master) = stage("taxi-activation-express-multi-hop", 1000);
+    // The reverse path has no points, so the Module has no route to fly for the second leg.
     insert_reverse_path(&shard);
     let nodes = [
         SOURCE_CLIENT_NODE,
@@ -425,9 +426,182 @@ fn a_multi_hop_express_request_the_module_cannot_fly_gets_status_1() {
     ];
     assert_eq!(
         replies(&express(&mut wire, master.parse().unwrap(), &nodes)),
-        [status(1)]
+        [status(2)]
     );
     assert_eq!((flights(&shard), money(&shard)), (0, 1000));
+}
+
+const HOP_NODES: [u32; 3] = [5_090_320, 5_090_321, 5_090_322];
+const HOP_CLIENT_NODES: [u32; 3] = [245, 246, 247];
+const HOP_PATHS: [u32; 2] = [5_090_323, 5_090_324];
+const HOP_FARES: [u32; 2] = [25, 30];
+const HOP_YARDS: f32 = 64.0;
+
+/// Nodes A, B and C stand 64 yards apart east of the Character. Paths A to B and B to C have
+/// three points each, so the joined route is A, A + 32, B + 32, C.
+fn insert_hops(shard: &Standalone, known: &[usize]) -> (f32, f32) {
+    let player =
+        &shard.query_rows("SELECT map_id, x, y, z FROM game_world_entity WHERE guid = 1")[0];
+    let (map_id, x, y, z): (u32, f32, f32, f32) = (
+        number(player, "map_id"),
+        number(player, "x"),
+        number(player, "y"),
+        number(player, "z"),
+    );
+    for (hop, (id, client_node)) in HOP_NODES.into_iter().zip(HOP_CLIENT_NODES).enumerate() {
+        shard.insert_row(
+            "game_taxi_node",
+            &[
+                ("id", &id),
+                ("client_node_id", &client_node),
+                ("map_id", &map_id),
+                ("x", &(x + hop as f32 * HOP_YARDS)),
+                ("y", &(y + 1.0)),
+                ("z", &z),
+                ("name", &"Hop fixture"),
+                ("mount_display_horde", &295),
+                ("mount_display_alliance", &MOUNT_DISPLAY),
+            ],
+        );
+    }
+    for (leg, (path_id, fare)) in HOP_PATHS.into_iter().zip(HOP_FARES).enumerate() {
+        shard.insert_row(
+            "game_taxi_path",
+            &[
+                ("id", &path_id),
+                ("source_node_id", &HOP_NODES[leg]),
+                ("destination_node_id", &HOP_NODES[leg + 1]),
+                ("fare", &fare),
+            ],
+        );
+        for index in 0..3u32 {
+            shard.insert_row(
+                "game_taxi_path_node",
+                &[
+                    ("id", &(5_090_330 + leg as u32 * 3 + index)),
+                    ("path_id", &path_id),
+                    ("node_index", &index),
+                    ("map_id", &map_id),
+                    ("x", &(x + (leg as f32 + index as f32 / 2.0) * HOP_YARDS)),
+                    ("y", &y),
+                    ("z", &z),
+                    ("flags", &0),
+                    ("delay_ms", &0),
+                ],
+            );
+        }
+    }
+    for &hop in known {
+        know(shard, HOP_NODES[hop]);
+    }
+    (x, y + 1.0)
+}
+
+fn advance(wire: &mut support::ReducerConnection, ticks: usize) {
+    for _ in 0..ticks {
+        wire.call("debug_advance_virtual_clock", json!([50_000]))
+            .unwrap();
+    }
+}
+
+fn position(shard: &Standalone) -> (f32, f32) {
+    let player = &shard.query_rows("SELECT x, y FROM game_world_entity WHERE guid = 1")[0];
+    (number(player, "x"), number(player, "y"))
+}
+
+fn onward_legs(shard: &Standalone) -> usize {
+    shard
+        .query_rows("SELECT id FROM game_taxi_flight_leg")
+        .len()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_three_node_route_pays_each_leg_on_entry_and_lands_at_the_last_node() {
+    let (shard, mut wire, master) = stage("taxi-multi-hop-flies", 1000);
+    let (x, node_y) = insert_hops(&shard, &[0, 1, 2]);
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    assert_eq!(
+        replies(&express(
+            &mut wire,
+            master.parse().unwrap(),
+            &HOP_CLIENT_NODES
+        )),
+        [status(0)]
+    );
+    assert_eq!((flights(&shard), money(&shard)), (1, 1000 - 25));
+
+    // The second leg starts one second out, at A + 32; the route lands after four seconds.
+    advance(&mut wire, 40);
+    assert_eq!((flights(&shard), money(&shard)), (1, 1000 - 25 - 30));
+    advance(&mut wire, 60);
+    assert_eq!((flights(&shard), money(&shard)), (0, 1000 - 25 - 30));
+    assert_eq!(position(&shard), (x + 2.0 * HOP_YARDS, node_y));
+    assert_eq!(onward_legs(&shard), 0);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_route_needs_money_for_every_leg() {
+    let (shard, mut wire, master) = stage("taxi-multi-hop-fare", 25 + 30 - 1);
+    insert_hops(&shard, &[0, 1, 2]);
+    assert_eq!(
+        replies(&express(
+            &mut wire,
+            master.parse().unwrap(),
+            &HOP_CLIENT_NODES
+        )),
+        [status(3)]
+    );
+    assert_eq!((flights(&shard), money(&shard)), (0, 25 + 30 - 1));
+    assert_eq!(onward_legs(&shard), 0);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_route_through_an_unvisited_middle_node_gets_no_reply() {
+    let (shard, mut wire, master) = stage("taxi-multi-hop-unvisited-middle", 1000);
+    insert_hops(&shard, &[0, 2]);
+    assert!(replies(&express(
+        &mut wire,
+        master.parse().unwrap(),
+        &HOP_CLIENT_NODES
+    ))
+    .is_empty());
+    assert_unchanged(&shard, "an unvisited middle node");
+    assert_eq!(onward_legs(&shard), 0);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_relog_mid_route_flies_only_the_current_leg_and_never_pays_the_next() {
+    let (shard, mut wire, master) = stage("taxi-multi-hop-relog", 1000);
+    let (x, node_y) = insert_hops(&shard, &[0, 1, 2]);
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    assert_eq!(
+        replies(&express(
+            &mut wire,
+            master.parse().unwrap(),
+            &HOP_CLIENT_NODES
+        )),
+        [status(0)]
+    );
+    advance(&mut wire, 10);
+    drop(wire);
+    assert!(support::poll_until(
+        std::time::Duration::from_secs(5),
+        || shard
+            .query_rows("SELECT * FROM game_native_player")
+            .is_empty()
+    ));
+    let mut wire = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
+    wire.call("native_world_open", json!([42])).unwrap();
+    wire.call("debug_native_enter_world", json!([1])).unwrap();
+    assert_eq!(onward_legs(&shard), 0);
+
+    advance(&mut wire, 60);
+    assert_eq!((flights(&shard), money(&shard)), (0, 1000 - 25));
+    assert_eq!(position(&shard), (x + HOP_YARDS, node_y));
 }
 
 #[test]

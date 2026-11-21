@@ -9,7 +9,6 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
-tests = []
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -20,7 +19,42 @@ symbol = "WorldSession::HandleActivateTaxiExpressOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "The Module flies a two-node CMSG_ACTIVATETAXIEXPRESS request. A request for more than two nodes passes every vmangos check before the route lookup and is silent when a leg has no path; otherwise it gets status 1, because multi-hop routes are unsupported."
-path = "module/src/native/taxi.rs"
-symbol = "activate"
-evidence = "module/src/native/taxi.rs; module/src/taxi.rs activate_route; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
+description = "LyraCore does not import vmangos's taxi_path_transitions, so every joint between two legs uses the vmangos default: the first leg up to its next-to-last point, the next leg from its second point. A route with a transition row in vmangos joins its legs at other points, so the client sees a different spline near that junction."
+path = "module/src/taxi.rs"
+symbol = "RoutePoints::join"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp"
+
+[[tests]]
+path = "module/src/taxi.rs"
+function = "legs_join_at_the_vmangos_default_joints"
+rung = "unit"
+
+[[tests]]
+path = "module/src/taxi.rs"
+function = "a_route_needs_money_for_every_leg_and_pays_only_the_first"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/taxi_activation.rs"
+function = "a_three_node_route_pays_each_leg_on_entry_and_lands_at_the_last_node"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/taxi_activation.rs"
+function = "a_route_needs_money_for_every_leg"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/taxi_activation.rs"
+function = "a_route_through_an_unvisited_middle_node_gets_no_reply"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/taxi_activation.rs"
+function = "a_multi_hop_express_request_with_a_leg_without_a_path_gets_no_reply"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/taxi_activation.rs"
+function = "a_relog_mid_route_flies_only_the_current_leg_and_never_pays_the_next"
+rung = "durable_module"
