@@ -350,6 +350,15 @@ fn each_stance_scales_the_threat_its_passive_names() {
     shard.assert_sql(&format!(
         "UPDATE game_spell_effect SET target = {T_TARGET_ENEMY} WHERE spell_id = {MARK}"
     ));
+    shard.insert_row(
+        "game_spell_threat",
+        &[
+            ("spell_id", &MARK),
+            ("threat", &100),
+            ("multiplier", &1.0),
+            ("inverse_effect_mask", &0),
+        ],
+    );
     let threat = || -> i64 {
         shard
             .query_rows(&format!(
@@ -364,7 +373,7 @@ fn each_stance_scales_the_threat_its_passive_names() {
         shard.assert_call("debug_force_cast_at", &[WARRIOR, &MARK.to_string(), &wolf]);
         threat() - before
     };
-    // vmangos adds level * 5 threat for a negative Aura; the stance passive scales it.
+    // The stance passive scales the mark's flat table threat of 100.
     assert_eq!(mark(), 100);
     for (stance, expected) in [
         (BATTLE_STANCE, 80),

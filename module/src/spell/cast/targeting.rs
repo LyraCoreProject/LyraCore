@@ -664,8 +664,9 @@ pub(crate) fn aura_apply(
             .find(target_guid)
             .map(|t| !t.is_player())
             .unwrap_or(false);
+        // vmangos AddThreat(caster) on a harmful hit lists the caster with no threat of its own.
         if caster_is_player && target_is_creature {
-            crate::threat::add_threat(ctx, target_guid, caster_guid, (level as i64) * 5);
+            crate::threat::add_threat(ctx, target_guid, caster_guid, 0);
         }
     }
 }
@@ -1157,7 +1158,14 @@ fn apply_restore_effect(
                 t.health = t.max_health;
                 let effective = t.health.saturating_sub(before);
                 t.update(ctx);
-                crate::threat::add_heal_threat(ctx, caster_guid, target_guid, effective);
+                crate::threat::add_spell_heal_threat(
+                    ctx,
+                    caster_guid,
+                    target_guid,
+                    effective,
+                    hdr.spell_id,
+                    crate::threat::HealDelivery::Direct,
+                );
             }
             EffectHit::none()
         }
@@ -1503,8 +1511,17 @@ fn apply_heal(
     } else {
         bonuses::round_damage(ctx, target_guid, scaled)
     };
+    let healed = heal_unit(ctx, target_guid, scaled);
+    crate::threat::add_spell_heal_threat(
+        ctx,
+        caster_guid,
+        target_guid,
+        healed,
+        hdr.spell_id,
+        crate::threat::HealDelivery::Direct,
+    );
     EffectHit {
-        healed: apply_direct_heal(ctx, caster_guid, target_guid, scaled),
+        healed,
         crit,
         ..EffectHit::default()
     }
@@ -1516,16 +1533,20 @@ pub(crate) fn apply_direct_heal(
     target_guid: u64,
     basis: i32,
 ) -> u32 {
-    if let Some(mut t) = ctx.db.game_world_entity().guid().find(target_guid) {
-        let before = t.health;
-        t.health = healed_value(t.health, t.max_health, basis);
-        let effective = t.health.saturating_sub(before);
-        t.update(ctx);
-        crate::threat::add_heal_threat(ctx, healer_guid, target_guid, effective);
-        effective
-    } else {
-        0
-    }
+    let effective = heal_unit(ctx, target_guid, basis);
+    crate::threat::add_heal_threat(ctx, healer_guid, target_guid, effective);
+    effective
+}
+
+fn heal_unit(ctx: &ReducerContext, target_guid: u64, basis: i32) -> u32 {
+    let Some(mut t) = ctx.db.game_world_entity().guid().find(target_guid) else {
+        return 0;
+    };
+    let before = t.health;
+    t.health = healed_value(t.health, t.max_health, basis);
+    let effective = t.health.saturating_sub(before);
+    t.update(ctx);
+    effective
 }
 
 fn convert_health_to_power(ctx: &ReducerContext, caster_guid: u64, amount: i32) {

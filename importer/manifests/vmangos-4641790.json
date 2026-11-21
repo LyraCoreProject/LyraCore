@@ -2939,6 +2939,21 @@
         "spellFamilyFlags": 68719476735
       }
     },
+    "spell_threat": {
+      "columns": {
+        "integer": [
+          "build_max",
+          "build_min",
+          "entry",
+          "inverse_effect_mask"
+        ],
+        "real": [
+          "multiplier",
+          "threat"
+        ]
+      },
+      "locked_rows": 416
+    },
     "taxi_nodes": {
       "columns": {
         "integer": [
