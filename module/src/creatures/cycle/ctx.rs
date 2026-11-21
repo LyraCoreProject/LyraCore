@@ -939,11 +939,21 @@ impl ThreatSink for CtxWorld<'_> {
     fn taunted_onto(&self, guid: u64) -> Option<u64> {
         crate::threat::forced_target(self.ctx, guid, crate::time::now_ms(self.ctx))
     }
-    fn top_threat(&self, guid: u64) -> Option<u64> {
-        crate::threat::top_threat_target(self.ctx, guid)
-    }
-    fn threat_on(&self, creature: u64, source: u64) -> i64 {
-        crate::threat::threat_of(self.ctx, creature, source)
+    fn contenders(&self, guid: u64) -> Vec<crate::threat::Contender> {
+        let entities = self.ctx.db.game_world_entity();
+        let Some(creature) = entities.guid().find(guid) else {
+            return Vec::new();
+        };
+        crate::threat::ranked(self.ctx, guid)
+            .into_iter()
+            .map(|(source_guid, threat)| crate::threat::Contender {
+                source_guid,
+                threat,
+                in_melee_reach: entities.guid().find(source_guid).is_some_and(|source| {
+                    crate::helpers::dist_sq(&creature, &source) <= super::CHASE_MELEE_SQ
+                }),
+            })
+            .collect()
     }
     fn retarget(&mut self, creature: u64, victim: u64) {
         let melee = self.ctx.db.game_melee_attack();

@@ -15,6 +15,7 @@ use super::eventai::EventAiRequest;
 use super::pet;
 use super::tick::cadence::{TickScope, MOVE_TICK_SECS, SENSE_EVERY_N_TICKS};
 use super::tick::TickSweep;
+use crate::threat::{select_victim, Contender};
 
 mod ctx;
 #[cfg(test)]
@@ -348,8 +349,7 @@ pub(crate) struct Fighter {
 pub(crate) trait ThreatSink {
     fn fighters(&self, scope: &TickScope) -> Vec<Fighter>;
     fn taunted_onto(&self, guid: u64) -> Option<u64>;
-    fn top_threat(&self, guid: u64) -> Option<u64>;
-    fn threat_on(&self, creature: u64, source: u64) -> i64;
+    fn contenders(&self, guid: u64) -> Vec<Contender>;
     fn retarget(&mut self, creature: u64, victim: u64);
 }
 
@@ -1062,13 +1062,10 @@ fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
             }
             continue;
         }
-        let Some(top) = w.top_threat(f.guid) else {
-            continue;
-        };
-        if top != f.victim
-            && (f.victim == 0 || w.threat_on(f.guid, top) > w.threat_on(f.guid, f.victim))
-        {
-            switches.push((f.guid, top));
+        if let Some(victim) = select_victim(f.victim, &w.contenders(f.guid)) {
+            if victim != f.victim {
+                switches.push((f.guid, victim));
+            }
         }
     }
     for (creature, victim) in switches {
