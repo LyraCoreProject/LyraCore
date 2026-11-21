@@ -282,7 +282,8 @@ fn source_draw(ctx: &ReducerContext, source_guid: u64) -> u32 {
     )
 }
 
-/// Rolls each row on `source_guid`'s stream: its chance, then its stack size if it drops.
+/// Draws on `source_guid`'s stream each ungrouped row's chance, then each group's pick; a winner
+/// draws its stack next.
 pub(crate) fn roll_loot_rows(
     ctx: &ReducerContext,
     source_guid: u64,

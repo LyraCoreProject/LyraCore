@@ -86,8 +86,9 @@ pub(crate) fn skin_corpse(
 
 pub(crate) const FISH_POOL: &[u32] = &[6291, 6303, 6289];
 
-pub(crate) fn pick_caught_fish(winner: Option<u32>, pool_idx: usize) -> u32 {
-    winner.unwrap_or_else(|| FISH_POOL[pool_idx % FISH_POOL.len()])
+/// The rolled catch as `(item_entry, count)`; with no winner, one fish from the pool.
+pub(crate) fn pick_caught_fish(winner: Option<(u32, u32)>, pool_idx: usize) -> (u32, u32) {
+    winner.unwrap_or_else(|| (FISH_POOL[pool_idx % FISH_POOL.len()], 1))
 }
 
 pub(crate) fn apply_fish(ctx: &ReducerContext, guid: u64) -> Result<(), crate::Refusal> {
@@ -116,9 +117,9 @@ pub(crate) fn apply_fish(ctx: &ReducerContext, guid: u64) -> Result<(), crate::R
     let winner = crate::loot::roll_loot_rows(ctx, guid, rows)
         .into_iter()
         .next()
-        .map(|drop| drop.item_entry);
-    let fish = pick_caught_fish(winner, ctx.random::<usize>());
-    crate::items::grant_item(ctx, guid, fish, 1)?;
+        .map(|drop| (drop.item_entry, drop.count));
+    let (fish, count) = pick_caught_fish(winner, ctx.random::<usize>());
+    crate::items::grant_item(ctx, guid, fish, count)?;
     crate::skill::gain_profession_skill(ctx, guid, crate::skill::skill_line::FISHING, 1, 0);
     Ok(())
 }

@@ -195,7 +195,7 @@ pub(super) fn receive(
             }
             let taken = crate::loot::take_item(ctx, guid, current, c.item_slot)
                 .map_err(|reason| take_refusal(current, reason))?;
-            // vmangos Loot::NotifyItemRemoved tells every looter; a quest item only its taker.
+            // Every open window loses the slot; other needers of a quest row hold their own clones.
             let viewers: Vec<ConnectionId> = if taken.quest_only {
                 vec![connection]
             } else {

@@ -26,12 +26,11 @@ struct Stage {
     shard: Standalone,
     connection: ReducerConnection,
     character: u64,
-    account: String,
     corpse: u64,
 }
 
 fn stage(name: &str) -> Stage {
-    let (shard, character, account) = fixture(name);
+    let (shard, character, _) = fixture(name);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &[&character.to_string()]);
     shard.assert_call(
@@ -84,7 +83,6 @@ fn stage(name: &str) -> Stage {
         shard,
         connection,
         character,
-        account,
         corpse,
     }
 }
@@ -104,10 +102,20 @@ impl Stage {
     }
 
     fn second_looter(&self) -> ReducerConnection {
+        // A native player row is unique per Account, so the second looter needs its own.
+        let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
+        self.shard.assert_call(
+            "provision_account",
+            &["\"SECOND\"", &credentials, &credentials],
+        );
+        let account = self
+            .shard
+            .query_rows("SELECT id FROM game_account WHERE username = 'SECOND'")[0]["id"]
+            .clone();
         self.shard.assert_call(
             "create_character",
             &[
-                &self.account,
+                &account,
                 "\"Second\"",
                 "1",
                 "1",
@@ -155,9 +163,11 @@ impl Stage {
             .drain_packets()
             .iter()
             .filter_map(|row| {
-                let Packet(_, (_, recipient), (_, opcode), body, ..) =
+                let Packet(_, (audience, recipient), (tag, opcode), body, ..) =
                     serde_json::from_str(row.get()).unwrap();
-                (serde_json::from_str::<u16>(opcode.get()).unwrap() == SMSG_LOOT_REMOVED
+                (audience == 0
+                    && tag == 0
+                    && serde_json::from_str::<u16>(opcode.get()).unwrap() == SMSG_LOOT_REMOVED
                     && u8::from_str_radix(&body, 16) == Ok(slot))
                 .then(|| serde_json::from_str::<(u128,)>(recipient.get()).unwrap().0)
             })
