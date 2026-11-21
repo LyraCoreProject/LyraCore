@@ -17,10 +17,11 @@ pub(super) fn receive(
         }
         C::CMSG_BEGIN_TRADE => trade::apply_begin_trade(ctx, actor()?),
         C::CMSG_CANCEL_TRADE => trade::apply_cancel_trade(ctx, actor()?),
-        C::CMSG_SET_TRADE_ITEM(request) if request.bag == 255 => {
-            trade::apply_set_trade_item(ctx, actor()?, request.trade_slot, request.slot)
+        C::CMSG_SET_TRADE_ITEM(request) => {
+            // An address the Module cannot name is answered like a missing item.
+            let inv_slot = codec::inventory_slot(request.bag, request.slot).unwrap_or(u8::MAX);
+            trade::apply_set_trade_item(ctx, actor()?, request.trade_slot, inv_slot)
         }
-        C::CMSG_SET_TRADE_ITEM(_) => actor().map(drop),
         C::CMSG_CLEAR_TRADE_ITEM(request) => {
             trade::apply_clear_trade_item(ctx, actor()?, request.trade_slot)
         }

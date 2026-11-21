@@ -611,6 +611,14 @@ profession limit applies at once: it counts the Character's own `game_player_ski
 Character who already holds more than two primary professions keeps them and cannot learn another
 first rank. No repair is needed.
 
+### Repair cost migration
+
+`game_durability_cost` and `game_durability_quality` are new, private tables from
+`DurabilityCosts.dbc` and `DurabilityQuality.dbc`. They need no data migration. Reimport the `dbc`
+family straight after the publish. Until then both tables are empty, so a repair request repairs
+nothing and a damaged item cannot be sold. vmangos skips an item with no cost row, and so does the
+Module.
+
 ### Taxi multi-hop migration
 
 `game_active_taxi_flight` gains `current_leg_index`, end-appended with default 0. The private
