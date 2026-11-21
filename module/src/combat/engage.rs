@@ -1,6 +1,6 @@
 use spacetimedb::{table, ReducerContext, ScheduleAt, Table, Timestamp};
 
-use crate::{game_faction_template, game_world_entity, WorldEntity};
+use crate::{game_faction_template, game_pending_cast, game_spell, game_world_entity, WorldEntity};
 
 use super::*;
 use crate::actor::{ActionRefusal, ActionRefusalKind};
@@ -70,7 +70,28 @@ pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     e.combat_until_ms = now_ms + COMBAT_DROP_MS;
     e.unit_flags |= lyracore_shared::constants::unit_flags::IN_COMBAT;
     e.update(ctx);
+    if !already {
+        interrupt_non_combat_cast(ctx, guid);
+    }
     crate::creatures::distraction::clear(ctx, guid);
+}
+
+/// Ports the timed non-combat cast interrupt of vmangos `Unit::SetInCombatState`.
+fn interrupt_non_combat_cast(ctx: &ReducerContext, guid: u64) {
+    let Some(cast) = ctx.db.game_pending_cast().by_caster().filter(&guid).next() else {
+        return;
+    };
+    let preparing_non_combat = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(cast.spell_id)
+        .is_some_and(|spell| {
+            spell.non_combat() && spell.cast_flags & crate::spell::CAST_FLAG_CHANNELED == 0
+        });
+    if preparing_non_combat {
+        crate::spell::interrupt_cast(ctx, guid);
+    }
 }
 
 pub(crate) fn arm_creature_engagement(

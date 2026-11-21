@@ -578,6 +578,13 @@ already aura 77 immunities with bit 0x100. A Shard without a spell import keeps 
 its `init` seeded, whose Recently Bandaged no longer refuses a bandage; recreate it to get the new
 seed. `debug_repair_after_publish` updates the shield fixture and Weakened Soul seeds.
 
+### Cast item migration
+
+`game_pending_cast` gains the END-appended `cast_item_guid` (default 0), and an Item cast now uses
+up its Item when the cast goes off, not when it starts. Zero means no cast item. A timed Item cast
+in flight at the publish already used up its Item at start, so zero is right for it: it completes
+without using up another, and its cooldown category still marks it as an Item cast. No repair or reimport is needed, and the Native Host layouts are unchanged.
+
 ### Taxi team mount migration
 
 `game_taxi_node` gains `own_mount_horde` and `own_mount_alliance`, end-appended with default true.

@@ -41,6 +41,8 @@ pub(crate) struct CastRequest {
     pub client_initiated: bool,
     pub dest: Option<(f32, f32, f32)>,
     pub item_target: Option<u64>,
+    /// The item that started the cast, used up when the cast goes off unless the spell keeps it.
+    pub cast_item: Option<u64>,
     pub cooldown_category: Option<u32>,
 }
 
@@ -54,13 +56,13 @@ impl CastRequest {
             client_initiated: false,
             dest: None,
             item_target: None,
+            cast_item: None,
             cooldown_category: None,
         }
     }
 
-    /// A cast an item starts; only item use sets a cooldown category.
     fn is_item_cast(&self) -> bool {
-        self.cooldown_category.is_some()
+        self.cast_item.is_some() || self.cooldown_category.is_some()
     }
 }
 
@@ -135,15 +137,25 @@ fn resolve_loaded_cast(
 
     check_cast_gates(ctx, &caster, spell, request, GateRun::Resolve(phase))?;
 
+    // vmangos Spell::TakeCastItem: the item goes only when the cast goes off.
+    let used_up_item = request
+        .cast_item
+        .filter(|_| !crate::items::spell_keeps_item(ctx, spell_id));
     // Scheduled crafts admit reagents before charging power; all products commit together.
     let craft = if effects.iter().any(|effect| effect.kind == E_CREATE_ITEM) {
         let mut plan = crate::items::ItemStoragePlan::read(ctx, caster_guid, caster.owner_identity);
+        if let Some(item_guid) = used_up_item {
+            plan.use_up_one(item_guid).map_err(String::from)?;
+        }
         for (entry, count) in recipe_reagents(ctx, spell_id) {
             plan.consume(entry, count).map_err(String::from)?;
         }
         plan.check_trade_offers(ctx).map_err(String::from)?;
-        Some(plan)
+        Some(Craft { plan, used_up_item })
     } else {
+        if let Some(item_guid) = used_up_item {
+            crate::items::use_up_one(ctx, item_guid);
+        }
         None
     };
 
@@ -305,6 +317,12 @@ fn remember_hit_target(
     }
 }
 
+/// A craft's storage plan, and the cast item it uses up through the plan or, if dropped, directly.
+struct Craft {
+    plan: crate::items::ItemStoragePlan,
+    used_up_item: Option<u64>,
+}
+
 fn grant_crafted_item(
     ctx: &ReducerContext,
     plan: &mut crate::items::ItemStoragePlan,
@@ -402,7 +420,7 @@ fn run_spell_effects(
     spell: &LoadedSpell,
     request: &CastRequest,
     origin: CastOrigin,
-    mut craft: Option<crate::items::ItemStoragePlan>,
+    mut craft: Option<Craft>,
 ) {
     let (caster_guid, target_guid) = (request.caster_guid, request.target_guid);
     let (level, dest) = (request.level, request.dest);
@@ -495,8 +513,8 @@ fn run_spell_effects(
             if e.kind == E_CREATE_ITEM {
                 created_items.push(e.p0.max(0) as u32);
             }
-            let hit = if let (E_CREATE_ITEM, Some(plan)) = (e.kind, craft.as_mut()) {
-                grant_crafted_item(ctx, plan, e, hdr, points)
+            let hit = if let (E_CREATE_ITEM, Some(craft)) = (e.kind, craft.as_mut()) {
+                grant_crafted_item(ctx, &mut craft.plan, e, hdr, points)
             } else {
                 let points = crate::combo::effect_points(ctx, hdr, e, caster_guid, t, points);
                 apply_effect(
@@ -548,7 +566,7 @@ fn run_spell_effects(
     {
         crate::combo::spend_combo(ctx, caster_guid);
     }
-    let finish_items = |craft: Option<crate::items::ItemStoragePlan>| {
+    let finish_items = |craft: Option<Craft>| {
         finish_item_creation(
             ctx,
             caster_guid,
@@ -675,17 +693,23 @@ fn finish_item_creation(
     ctx: &ReducerContext,
     caster_guid: u64,
     spell_id: u32,
-    craft: Option<crate::items::ItemStoragePlan>,
+    craft: Option<Craft>,
     item_grants: u32,
     mut item_refused: bool,
     created_items: &[u32],
 ) {
-    if !item_refused {
-        if let Some(plan) = craft {
+    if let Some(Craft { plan, used_up_item }) = craft {
+        if !item_refused {
             if let Err(reason) = plan.commit_with_source(ctx, crate::items::ItemPush::SPELL_CREATED)
             {
                 log::info!("craft {spell_id} refused: {reason:?}");
                 item_refused = true;
+            }
+        }
+        // A refused product drops the plan, but the cast went off and still uses up its item.
+        if item_refused {
+            if let Some(item_guid) = used_up_item {
+                crate::items::use_up_one(ctx, item_guid);
             }
         }
     }
@@ -1068,7 +1092,7 @@ enum CastGate {
     CasterAlive,
     CasterLevel,
     GlobalCooldown,
-    MountCombat,
+    NonCombat,
     Form,
     Stealth,
     Mount,
@@ -1084,6 +1108,7 @@ enum CastGate {
     Behind,
     GroundPointLineOfSight,
     Dagger,
+    CastItem,
     SpellFocus,
     ItemTarget,
     RangedWeapon,
@@ -1098,12 +1123,12 @@ enum CastGate {
 }
 
 /// vmangos `Spell::CheckCast` order, cut down to the Gates LyraCore has.
-const CHECK_CAST_ORDER: [CastGate; 31] = [
+const CHECK_CAST_ORDER: [CastGate; 32] = [
     CastGate::SpellReady,
     CastGate::CasterAlive,
     CastGate::CasterLevel,
     CastGate::GlobalCooldown,
-    CastGate::MountCombat,
+    CastGate::NonCombat,
     CastGate::Form,
     CastGate::Stealth,
     CastGate::Mount,
@@ -1119,6 +1144,7 @@ const CHECK_CAST_ORDER: [CastGate; 31] = [
     CastGate::Behind,
     CastGate::GroundPointLineOfSight,
     CastGate::Dagger,
+    CastGate::CastItem,
     CastGate::SpellFocus,
     CastGate::ItemTarget,
     CastGate::RangedWeapon,
@@ -1135,11 +1161,13 @@ const CHECK_CAST_ORDER: [CastGate; 31] = [
 impl CastGate {
     fn runs_in(self, run: GateRun) -> bool {
         match self {
-            Self::GlobalCooldown | Self::Form | Self::Stealth | Self::PeacefulTarget => {
-                run.is_strict()
-            }
-            // A completion checks them before every other Gate instead.
-            Self::MountCombat | Self::Power => run.is_strict(),
+            Self::GlobalCooldown
+            | Self::NonCombat
+            | Self::Form
+            | Self::Stealth
+            | Self::PeacefulTarget => run.is_strict(),
+            // A completion checks power before every other Gate instead.
+            Self::Power => run.is_strict(),
             // Resolve(Start) also runs E_TRIGGER casts; vmangos skips a trigger's line of sight.
             Self::LineOfSight => matches!(
                 run,
@@ -1153,12 +1181,12 @@ impl CastGate {
     }
 }
 
-/// The Gates a run checks in order; a completion leads with the mount interrupt, then power.
+/// The Gates a run checks in order; a completion leads with power.
 fn cast_gate_order(run: GateRun) -> impl Iterator<Item = CastGate> {
     let completion_first: &[CastGate] = if run.is_strict() {
         &[]
     } else {
-        &[CastGate::MountCombat, CastGate::Power]
+        &[CastGate::Power]
     };
     completion_first.iter().copied().chain(
         CHECK_CAST_ORDER
@@ -1238,8 +1266,16 @@ impl GateCheck<'_> {
                 }
                 Ok(())
             }
-            CastGate::MountCombat => {
-                crate::mount::check_mount_combat(ctx, caster, effects, !self.run.is_strict())
+            CastGate::NonCombat => {
+                if hdr.non_combat()
+                    && caster.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
+                {
+                    return Err(CastGateRefusal::other(
+                        CastRefusalReason::AffectingCombat,
+                        format!("spell {spell_id} cannot be cast in combat"),
+                    ));
+                }
+                Ok(())
             }
             CastGate::Mount => crate::mount::check_mount_cast(ctx, caster, effects, spell_id),
             CastGate::ReactWindow => check_react_window(ctx, caster, hdr),
@@ -1316,6 +1352,7 @@ impl GateCheck<'_> {
                 .try_for_each(|effect| {
                     crate::creatures::check_hostile_summon(ctx, caster, hdr, effect).map(|_| ())
                 }),
+            CastGate::CastItem => check_cast_item(ctx, caster.guid, request.cast_item),
             CastGate::ItemTarget => {
                 check_item_target(ctx, caster.guid, effects, request.item_target)
             }
@@ -1985,6 +2022,33 @@ fn caster_life_allows(is_player: bool, dead: bool, dead_callback: bool) -> bool 
     !dead || (dead_callback && !is_player)
 }
 
+// vmangos Spell::CheckItems: a cast item in trade or not carried fails the cast.
+fn check_cast_item(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    cast_item: Option<u64>,
+) -> Result<(), CastGateRefusal> {
+    let Some(item_guid) = cast_item else {
+        return Ok(());
+    };
+    let carried = ctx
+        .db
+        .game_item_instance()
+        .guid()
+        .find(item_guid)
+        .is_some_and(|item| {
+            item.owner_guid == caster_guid && crate::items::is_carried_slot(item.slot)
+        });
+    if carried && !crate::trade::item_is_offered(ctx, caster_guid, item_guid) {
+        Ok(())
+    } else {
+        Err(CastGateRefusal::other(
+            CastRefusalReason::ItemGone,
+            format!("the cast item {item_guid} is gone"),
+        ))
+    }
+}
+
 // vmangos Spell::CheckCast refuses a temporary enchantment without an item it may enchant.
 fn check_item_target(
     ctx: &ReducerContext,
@@ -2199,8 +2263,8 @@ mod gate_order_tests {
     }
 
     #[test]
-    fn a_mount_cast_in_combat_is_refused_before_its_form() {
-        assert_before(START, G::MountCombat, &[G::Form, G::Mount]);
+    fn a_non_combat_spell_in_combat_is_refused_before_its_form() {
+        assert_before(START, G::NonCombat, &[G::Form, G::Mount]);
     }
 
     #[test]
@@ -2245,6 +2309,9 @@ mod gate_order_tests {
     #[test]
     fn items_come_before_range_and_range_before_facing() {
         assert_before(START, G::Behind, &[G::Dagger, G::ItemTarget, G::Range]);
+        for run in [START, COMPLETION] {
+            assert_before(run, G::CastItem, &[G::SpellFocus, G::ItemTarget, G::Range]);
+        }
         assert_before(
             START,
             G::ItemTarget,
@@ -2266,18 +2333,22 @@ mod gate_order_tests {
     }
 
     #[test]
-    fn a_completion_checks_the_mount_interrupt_then_power_before_every_other_gate() {
+    fn a_completion_checks_power_before_every_other_gate() {
         let order = order(COMPLETION);
-        assert_eq!(order[..2], [G::MountCombat, G::Power]);
-        for gate in [G::MountCombat, G::Power] {
-            assert_eq!(order.iter().filter(|&&g| g == gate).count(), 1, "{gate:?}");
-        }
+        assert_eq!(order[0], G::Power);
+        assert_eq!(order.iter().filter(|&&g| g == G::Power).count(), 1);
     }
 
     #[test]
     fn a_completion_skips_the_checks_vmangos_runs_only_when_strict() {
         let order = order(COMPLETION);
-        for gate in [G::GlobalCooldown, G::Form, G::Stealth, G::PeacefulTarget] {
+        for gate in [
+            G::GlobalCooldown,
+            G::NonCombat,
+            G::Form,
+            G::Stealth,
+            G::PeacefulTarget,
+        ] {
             assert!(!order.contains(&gate), "completion checks {gate:?}");
             assert!(
                 cast_gate_order(START).any(|g| g == gate),
@@ -2292,7 +2363,7 @@ mod gate_order_tests {
     fn both_phases_keep_one_order() {
         let moved = [
             G::GlobalCooldown,
-            G::MountCombat,
+            G::NonCombat,
             G::Form,
             G::Stealth,
             G::PeacefulTarget,

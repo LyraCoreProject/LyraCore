@@ -4,8 +4,10 @@ use lyracore_package_delta::fixture_ids::{
     FIXTURE_MOUNT_SPELL, FIXTURE_REINS, LEARN_APPRENTICE_RIDING_SPELL_ID, RIDING_TRAINER_ENTRY,
     TEST_WOLF_ENTRY,
 };
+use lyracore_shared::constants::unit_flags;
 use support::{
-    actor, event_rows, number, poll_until, subscribe_with_fence, Row, Standalone, POLL_TIMEOUT,
+    actor, event_rows, fence_subscription, number, poll_until, subscribe_with_fence, Row,
+    Standalone, POLL_TIMEOUT,
 };
 
 const RIDER: &str = "1";
@@ -153,7 +155,7 @@ fn spawn_wolf_at_feet(shard: &Standalone) -> String {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn entering_combat_during_a_mount_cast_interrupts_it() {
+fn entering_combat_during_a_mount_cast_interrupts_it_at_once() {
     let shard = fixture("mount-combat-interrupt");
     shard.clear_schedule("game_creature_move_schedule");
     shard.clear_schedule("game_melee_schedule");
@@ -165,6 +167,7 @@ fn entering_combat_during_a_mount_cast_interrupts_it() {
     shard.assert_sql(&format!(
         "UPDATE game_spell SET cast_time_ms = 5000 WHERE spell_id = {FIXTURE_MOUNT_SPELL}"
     ));
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     let query = format!(
         "SELECT * FROM game_spell_cast_event_live WHERE caster_guid = 1 \
          AND spell_id = {FIXTURE_MOUNT_SPELL}"
@@ -172,27 +175,79 @@ fn entering_combat_during_a_mount_cast_interrupts_it() {
     let casts = subscribe_with_fence(&shard, &[query.as_str()]);
 
     use_reins(&shard);
-    shard.insert_row(
-        "game_threat",
-        &[
-            ("creature_guid", &wolf.parse::<u64>().unwrap()),
-            ("source_guid", &1u64),
-            ("threat", &1i64),
-        ],
+    shard.assert_call(
+        "debug_stage_virtual_spell_impact",
+        &[&wolf, RIDER, "50", "50000"],
     );
+    shard.assert_call("debug_advance_roll_batch", &["2"]);
 
-    let interrupted = || {
-        event_rows(&casts, "game_spell_cast_event_live")
-            .into_iter()
-            .find(|row| row["is_interrupted"] == "true")
-    };
+    assert_ne!(rider_flags(&shard) & unit_flags::IN_COMBAT, 0);
+    fence_subscription(&shard, &casts);
+    let rows = event_rows(&casts, "game_spell_cast_event_live");
+    let interrupts: Vec<_> = rows
+        .iter()
+        .filter(|row| row["is_interrupted"] == "true")
+        .collect();
+    assert_eq!(interrupts.len(), 1, "{rows:?}");
+    assert_eq!(interrupts[0]["failure_reason"], INTERRUPTED);
     assert!(
-        poll_until(POLL_TIMEOUT, || interrupted().is_some()),
-        "combat entry did not interrupt the mount cast"
+        shard
+            .query_rows("SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = 1")
+            .is_empty(),
+        "100 ms into a 5 s cast, combat entry must already have removed it"
     );
-    assert_eq!(interrupted().unwrap()["failure_reason"], INTERRUPTED);
     assert!(mount_auras(&shard).is_empty());
     assert_projection(&shard, 0, 10_000);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_rider_flagged_in_combat_without_threat_cannot_start_a_mount() {
+    let shard = fixture("mount-combat-flag");
+    train_riding(&shard);
+    let flags = rider_flags(&shard);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_flags = {}, combat_until_ms = {} WHERE guid = 1",
+        flags | unit_flags::IN_COMBAT,
+        u64::MAX
+    ));
+    assert!(shard
+        .query_rows("SELECT id FROM game_threat WHERE source_guid = 1 OR creature_guid = 1")
+        .is_empty());
+
+    shard.assert_call("debug_learn_spell", &[RIDER, MOUNT]);
+    assert!(
+        poll_until(POLL_TIMEOUT, || {
+            let refused = shard.call("debug_cast_spell", &[RIDER, MOUNT, "0"]);
+            !refused.status.success()
+                && String::from_utf8_lossy(&refused.stderr).contains("cannot be cast in combat")
+        }),
+        "the IN_COMBAT flag alone must refuse the mount cast start as affecting combat"
+    );
+    let items = reins(&shard);
+    let refused = shard.call("gw_use_item", &[&actor(RIDER), &items[0]["slot"]]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(!refused.status.success(), "{text}");
+    assert!(
+        text.contains(lyracore_shared::item::ItemRefusal::NotInCombat.as_tag()),
+        "{text}"
+    );
+    assert!(mount_auras(&shard).is_empty());
+
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_flags = {flags}, combat_until_ms = 0 WHERE guid = 1"
+    ));
+    use_reins(&shard);
+    assert_eq!(mount_auras(&shard).len(), 2);
+}
+
+fn rider_flags(shard: &Standalone) -> u32 {
+    let rows = shard.query_rows("SELECT unit_flags FROM game_world_entity WHERE guid = 1");
+    number::<u32>(&rows[0], "unit_flags")
 }
 
 #[test]

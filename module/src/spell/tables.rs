@@ -7,6 +7,7 @@ use lyracore_shared::form::DBC_MASK_FORMS;
 
 const SPELL_ATTR_DO_NOT_DISPLAY: u32 = 0x80;
 const SPELL_ATTR_NOT_SHAPESHIFT: u32 = 0x10000;
+pub(crate) const SPELL_ATTR_NOT_IN_COMBAT_ONLY_PEACEFUL: u32 = 0x1000_0000;
 const SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED: u32 = 0x80000;
 // SPELLCATEGORY_GLOBAL: the StartRecoveryCategory of most spells with a global cooldown.
 const GCD_CATEGORY_GLOBAL: u32 = 133;
@@ -143,6 +144,11 @@ impl Spell {
 
     pub(crate) fn negative(&self) -> bool {
         lyracore_shared::spell_custom::is_negative(self.custom_flags, self.is_negative)
+    }
+
+    /// vmangos `SpellEntry::IsNonCombatSpell`.
+    pub(crate) fn non_combat(&self) -> bool {
+        self.attributes & SPELL_ATTR_NOT_IN_COMBAT_ONLY_PEACEFUL != 0
     }
 
     pub(crate) fn equip_passive(&self) -> bool {
@@ -1158,6 +1164,9 @@ pub struct PendingCast {
     pub item_target_guid: u64,
     #[default(None::<u32>)]
     pub cooldown_category: Option<u32>,
+    // Zero is no cast item; item guids start above zero.
+    #[default(0u64)]
+    pub cast_item_guid: u64,
 }
 
 impl PendingCast {
@@ -1180,6 +1189,7 @@ impl PendingCast {
             dest_z,
             item_target_guid: request.item_target.unwrap_or(0),
             cooldown_category: request.cooldown_category,
+            cast_item_guid: request.cast_item.unwrap_or(0),
         }
     }
 
@@ -1195,6 +1205,7 @@ impl PendingCast {
                 .has_dest
                 .then_some((self.dest_x, self.dest_y, self.dest_z)),
             item_target: (self.item_target_guid != 0).then_some(self.item_target_guid),
+            cast_item: (self.cast_item_guid != 0).then_some(self.cast_item_guid),
             cooldown_category: self.cooldown_category,
         }
     }
@@ -1305,10 +1316,11 @@ mod pending_cast_tests {
     }
 
     #[test]
-    fn a_pending_cast_keeps_its_ground_point_item_and_cooldown_category() {
+    fn a_pending_cast_keeps_its_ground_point_items_and_cooldown_category() {
         let request = CastRequest {
             dest: Some((0.0, 0.0, 0.0)),
             item_target: Some(7),
+            cast_item: Some(9),
             cooldown_category: Some(11),
             ..CastRequest::new(1, 2, 3, 4)
         };

@@ -376,6 +376,11 @@ pub fn build_inventory_refusal(
             item2,
             bag_type_subclass,
         },
+        ItemRefusal::NotInCombat => SMSG_INVENTORY_CHANGE_FAILURE::NotInCombat {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
         ItemRefusal::NotRightNow | ItemRefusal::SpellCooldown(_) => {
             SMSG_INVENTORY_CHANGE_FAILURE::CantDoRightNow {
                 item1,
