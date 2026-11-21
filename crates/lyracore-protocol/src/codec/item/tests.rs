@@ -52,6 +52,23 @@ fn a_not_in_combat_refusal_sends_equip_err_not_in_combat() {
 }
 
 #[test]
+fn a_cant_carry_more_refusal_sends_equip_err_cant_carry_more_of_this() {
+    let reply = build_inventory_refusal(ItemRefusal::CantCarryMore, 0x4000_0000_0000_0007, 0);
+    assert_eq!(
+        framed(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
+            Box::new(reply)
+        )),
+        [
+            0x00, 0x14, 0x12, 0x01, // size 20 (big endian), opcode 0x0112
+            0x11, // EQUIP_ERR_CANT_CARRY_MORE_OF_THIS
+            0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x40, // item guid
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // no second item
+            0x00, // bag type subclass
+        ]
+    );
+}
+
+#[test]
 fn item_name_response_is_the_entry_then_a_terminated_name() {
     let reply = build_item_name_query_response(25, "Axe".into());
     assert_eq!(
