@@ -69,8 +69,12 @@ pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     }
     e.combat_until_ms = now_ms + COMBAT_DROP_MS;
     e.unit_flags |= lyracore_shared::constants::unit_flags::IN_COMBAT;
+    let is_player = e.is_player();
     e.update(ctx);
     if !already {
+        if is_player {
+            crate::pvp::combat_began(ctx, guid);
+        }
         interrupt_non_combat_cast(ctx, guid);
     }
     crate::creatures::distraction::clear(ctx, guid);
@@ -392,11 +396,13 @@ fn relation_from(duel: bool, hostile: bool, friendly: impl FnOnce() -> bool) -> 
 }
 
 pub(crate) fn may_harm(ctx: &ReducerContext, attacker: &WorldEntity, target: &WorldEntity) -> bool {
-    !target.is_flying() && relation(ctx, attacker, target) != Relation::Friendly
+    !target.is_flying()
+        && relation(ctx, attacker, target) != Relation::Friendly
+        && pvp_permits_harm(ctx, attacker, target)
 }
 
 pub(crate) fn may_help(ctx: &ReducerContext, helper: &WorldEntity, target: &WorldEntity) -> bool {
-    relation(ctx, helper, target) != Relation::Hostile
+    relation(ctx, helper, target) != Relation::Hostile && pvp_permits_help(ctx, helper, target)
 }
 
 pub(crate) fn is_hostile_target(
@@ -404,7 +410,33 @@ pub(crate) fn is_hostile_target(
     attacker: &WorldEntity,
     target: &WorldEntity,
 ) -> bool {
-    !target.is_flying() && relation(ctx, attacker, target) == Relation::Hostile
+    !target.is_flying()
+        && relation(ctx, attacker, target) == Relation::Hostile
+        && pvp_permits_harm(ctx, attacker, target)
+}
+
+/// vmangos `WorldObject::IsValidAttackTarget`: one Character, or its pet, harms another only when
+/// the target is flagged for PvP or the two Characters duel.
+fn pvp_permits_harm(ctx: &ReducerContext, attacker: &WorldEntity, target: &WorldEntity) -> bool {
+    let (Some(by), Some(of)) = (
+        crate::pvp::affecting_character(ctx, attacker),
+        crate::pvp::affecting_character(ctx, target),
+    ) else {
+        return true;
+    };
+    by.guid == of.guid || of.flagged || crate::duel::active_opponents(ctx, by.guid, of.guid)
+}
+
+/// vmangos `WorldObject::IsValidHelpfulTarget`: only a dueling Character and its own pet may help
+/// it once the Duel starts.
+fn pvp_permits_help(ctx: &ReducerContext, helper: &WorldEntity, target: &WorldEntity) -> bool {
+    let (Some(by), Some(of)) = (
+        crate::pvp::affecting_character(ctx, helper),
+        crate::pvp::affecting_character(ctx, target),
+    ) else {
+        return true;
+    };
+    by.guid == of.guid || !crate::duel::in_active_duel(ctx, of.guid)
 }
 
 #[table(

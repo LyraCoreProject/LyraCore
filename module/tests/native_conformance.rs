@@ -1750,20 +1750,29 @@ fn rest_area_rejects_hostile_characters_in_an_enemy_capital() {
         &[&format!("0,{cell},{cell},0,0,0,1519,{heights}")],
     );
 
-    for guid in [alliance, horde] {
-        shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
-        shard.assert_call("debug_check_rest_at", &[&guid.to_string(), "0", "0", "0"]);
-    }
     let rest = |guid| {
         shard.query_rows(&format!(
-            "SELECT resting,player_flags FROM game_world_entity WHERE guid = {guid}"
+            "SELECT resting,player_flags,unit_flags FROM game_world_entity WHERE guid = {guid}"
         ))[0]
             .clone()
     };
+    let unit_flags = |guid| rest(guid)["unit_flags"].parse::<u32>().unwrap();
+    let mut spawned_flags = Vec::new();
+    for guid in [alliance, horde] {
+        shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
+        spawned_flags.push(unit_flags(guid));
+        shard.assert_call("debug_check_rest_at", &[&guid.to_string(), "0", "0", "0"]);
+    }
     assert_eq!(rest(alliance)["resting"], "true");
     assert_eq!(rest(alliance)["player_flags"], "32");
+    assert_eq!(unit_flags(alliance), spawned_flags[0]);
     assert_eq!(rest(horde)["resting"], "false");
     assert_eq!(rest(horde)["player_flags"], "0");
+    // vmangos Player::UpdateZone flags a Character in the enemy team's capital.
+    assert_eq!(
+        unit_flags(horde),
+        spawned_flags[1] | lyracore_shared::constants::unit_flags::PVP
+    );
 }
 
 #[test]

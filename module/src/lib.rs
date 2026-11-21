@@ -231,6 +231,7 @@ mod professions;
 
 #[cfg(test)]
 mod publish_safety;
+mod pvp;
 mod quest;
 
 mod realm_chat;

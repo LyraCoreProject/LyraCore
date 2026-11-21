@@ -444,6 +444,7 @@ pub(super) fn receive(
             unhandled.offer(|message| super::meeting_stone::receive(ctx, id, guid, message))
         })
         .or_else(|unhandled| unhandled.offer(|message| super::duel::receive(ctx, guid, message)))
+        .or_else(|unhandled| unhandled.offer(|message| super::pvp::receive(ctx, guid, message)))
         .or_else(|unhandled| unhandled.offer(|message| super::trade::receive(ctx, guid, message)))
         .or_else(|unhandled| {
             unhandled.offer(|message| super::petition::receive(ctx, &connection, guid, message))

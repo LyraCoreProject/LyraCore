@@ -2,15 +2,10 @@ use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
 use crate::world::WorldEntity;
 use crate::{
-    game_area, game_area_trigger, game_character, game_realm, game_tavern_area_trigger,
-    game_world_entity, GameArea,
+    game_area, game_area_trigger, game_character, game_tavern_area_trigger, game_world_entity,
+    GameArea,
 };
-use lyracore_shared::{constants::player_flags, faction, packing};
-
-const AREA_FLAG_CAPITAL: u32 = 0x0000_0100;
-const AREA_TEAM_ALLIANCE: u32 = 2;
-const AREA_TEAM_HORDE: u32 = 4;
-const AREA_TEAM_NONE: u32 = 0;
+use lyracore_shared::{constants::player_flags, packing};
 
 pub(crate) fn rest_state_after_bonus(previous: u8, bonus: u32, level: u8) -> u8 {
     if u32::from(level) >= crate::xp::LEVEL_CAP || bonus <= 1 {
@@ -26,7 +21,13 @@ pub(crate) fn set_rest_state_byte(mover: &mut WorldEntity, rest_state: u8) {
     mover.player_bytes_2 = (mover.player_bytes_2 & 0x00FF_FFFF) | ((rest_state as u32) << 24);
 }
 
-fn in_rest_area(ctx: &ReducerContext, mover: &WorldEntity, area: Option<&GameArea>) -> bool {
+/// vmangos `Player::UpdateZone`: a tavern rests, and so does a capital that does not enforce PvP.
+fn in_rest_area(
+    ctx: &ReducerContext,
+    mover: &WorldEntity,
+    zone: Option<&GameArea>,
+    pvp_enforced: bool,
+) -> bool {
     if ctx.db.game_tavern_area_trigger().iter().any(|tavern| {
         ctx.db
             .game_area_trigger()
@@ -42,24 +43,7 @@ fn in_rest_area(ctx: &ReducerContext, mover: &WorldEntity, area: Option<&GameAre
     }) {
         return true;
     }
-    let Some(area) = area else {
-        return false;
-    };
-    let Some(zone) = ctx.db.game_area().id().find(crate::terrain::zone_of(area)) else {
-        return false;
-    };
-    if zone.flags & AREA_FLAG_CAPITAL == 0 {
-        return false;
-    }
-    match zone.faction_group {
-        AREA_TEAM_ALLIANCE => faction::team_for_race(mover.race()) == faction::TEAM_ALLIANCE,
-        AREA_TEAM_HORDE => faction::team_for_race(mover.race()) == faction::TEAM_HORDE,
-        AREA_TEAM_NONE => !ctx.db.game_realm().iter().any(|realm| {
-            use lyracore_shared::constants::realm_type::{FFA_PVP, PVP, RP_PVP};
-            matches!(realm.realm_type, PVP | RP_PVP | FFA_PVP)
-        }),
-        _ => true,
-    }
+    zone.is_some_and(|zone| zone.flags & crate::pvp::AREA_FLAG_CAPITAL != 0) && !pvp_enforced
 }
 
 #[table(accessor = game_rest_state_event, public)]
@@ -85,7 +69,9 @@ pub(crate) fn check_rest_state(
     mover: &mut WorldEntity,
     area: Option<&GameArea>,
 ) {
-    let now_resting = in_rest_area(ctx, mover, area);
+    let zone = area.and_then(|area| ctx.db.game_area().id().find(crate::terrain::zone_of(area)));
+    let pvp_enforced = crate::pvp::update_zone(ctx, mover, zone.as_ref());
+    let now_resting = in_rest_area(ctx, mover, zone.as_ref(), pvp_enforced);
     if now_resting {
         mover.player_flags |= player_flags::RESTING;
     } else {

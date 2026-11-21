@@ -9,7 +9,36 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
-tests = []
+
+[[tests]]
+path = "module/tests/pvp.rs"
+function = "toggling_pvp_flags_at_once_and_the_flag_drops_five_minutes_after_desire_clears"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/pvp.rs"
+function = "an_unflagged_enemy_character_is_outside_an_area_spell_until_it_flags"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/pvp.rs"
+function = "a_swing_the_flagged_target_absorbs_still_flags_the_attacker"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/pvp.rs"
+function = "neither_a_character_nor_its_pet_may_attack_an_unflagged_enemy_character"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/pvp.rs"
+function = "an_enemy_capital_holds_the_flag_and_it_drops_300_s_after_leaving"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/native_conformance.rs"
+function = "rest_area_rejects_hostile_characters_in_an_enemy_capital"
+rung = "durable_module"
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -20,7 +49,31 @@ symbol = "WorldSession::HandleTogglePvP"
 status = "unverified"
 
 [[known_gaps]]
-description = "The Module returns an unavailable response for CMSG_TOGGLE_PVP, MSG_INSPECT_HONOR_STATS."
+description = "The Module returns an unavailable response for MSG_INSPECT_HONOR_STATS."
 path = "module/src/native/unavailable.rs"
 symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
+
+[[known_gaps]]
+description = "The PvP Flag and PVP_DESIRED do not survive logout or Transfer; world entry rebuilds the Character's entity without them. A map change on one Shard keeps both."
+path = "module/src/world/character_entity.rs"
+symbol = "build_player_entity"
+evidence = "At d9173eca, Player.cpp Player::UpdateCharacterFlags stores CHARACTER_FLAG_PVP_ENABLED and CHARACTER_FLAG_PVP_DESIRED, and Player::LoadFromDB calls UpdatePvP(true) and SetPvPDesired(true) from them."
+
+[[known_gaps]]
+description = "Help to a flagged Character in combat flags the helper for every spell; vmangos skips a spell with SPELL_ATTR_EX_NO_THREAT, and game_spell has no attributes_ex column to read it from."
+path = "module/src/pvp.rs"
+symbol = "spell_targeted"
+evidence = "At d9173eca, Spell.cpp Spell::DoSpellHitOnUnit calls SetInCombatWithAssisted only when the spell lacks SPELL_ATTR_EX_NO_THREAT."
+
+[[known_gaps]]
+description = "A taxi flight keeps the PvP Flag; vmangos drops it at take-off unless PVP_DESIRED is set."
+path = "module/src/taxi.rs"
+symbol = "activate_route"
+evidence = "At d9173eca, Player.cpp Player::ActivateTaxiPathTo calls UpdatePvP(false, true) when IsPvPDesired() is false."
+
+[[known_gaps]]
+description = "A Character's pets and totems do not carry its UNIT_FLAG_PVP, so their unit frames show no PvP icon; harm and help checks already use the owner's flag."
+path = "module/src/pvp.rs"
+symbol = "affecting_character"
+evidence = "At d9173eca, Unit.cpp Unit::SetPvP applies the flag to every controlled unit through SetPvPHelper."
