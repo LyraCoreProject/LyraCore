@@ -122,7 +122,17 @@ fn kill_creature_with_attribution(
         .as_ref()
         .map(|entitlement| entitlement.recipients.as_slice())
         .unwrap_or_default();
-    award_tag_rewards(ctx, &target, target_guid, kill_recipients, reward_source);
+    let in_party = entitlement
+        .as_ref()
+        .is_some_and(|entitlement| entitlement.group_id.is_some());
+    award_tag_rewards(
+        ctx,
+        &target,
+        target_guid,
+        kill_recipients,
+        in_party,
+        reward_source,
+    );
     roll_corpse_loot(ctx, &mut target, target_guid, entitlement.as_ref());
     target.health = 0;
     target.dead = true;
@@ -200,21 +210,21 @@ fn award_tag_rewards(
     target: &WorldEntity,
     target_guid: u64,
     recipients: &[u64],
+    in_party: bool,
     reward_source: Option<u64>,
 ) {
     let template = ctx.db.game_creature_template().entry().find(target.entry);
     let rank = template.as_ref().map(|t| t.rank).unwrap_or(0);
-    let share_count = recipients.len() as u32;
+    crate::xp::award_kill_xp(
+        ctx,
+        target_guid,
+        target.level,
+        rank,
+        target.map_id,
+        in_party,
+        recipients,
+    );
     for recipient in recipients {
-        crate::xp::award_xp(
-            ctx,
-            *recipient,
-            target_guid,
-            target.level,
-            rank,
-            share_count,
-        );
-        crate::creatures::award_hunter_pet_kill_progression(ctx, *recipient, target.level, rank);
         crate::quest::on_creature_killed(ctx, *recipient, target.entry);
     }
     let is_critter = template
@@ -229,7 +239,7 @@ fn award_tag_rewards(
             .find(reward_guid)
             .map(|character| character.level)
             .unwrap_or(0);
-        let yields_xp = crate::xp::xp_for_kill(target.level, reward_level) > 0;
+        let yields_xp = !crate::xp::is_grey_kill(reward_level, target.level);
         // vmangos `spell_chain` ranks Drain Soul from 1120; every rank grants the shard.
         let draining_soul = ctx
             .db

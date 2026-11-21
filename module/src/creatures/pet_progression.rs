@@ -179,8 +179,7 @@ fn eligible_live_pet(pet_id: u64, kind: super::PetKind, dead: bool) -> bool {
 pub(crate) fn award_hunter_pet_kill_progression(
     ctx: &ReducerContext,
     owner_guid: u64,
-    mob_level: u32,
-    rank: u8,
+    kill_xp: crate::xp::PetKillXp<'_>,
 ) {
     let Some(mut pet) = super::hunter_pet_for_owner(ctx, owner_guid) else {
         return;
@@ -194,12 +193,14 @@ pub(crate) fn award_hunter_pet_kill_progression(
     let Some(owner) = ctx.db.game_world_entity().guid().find(owner_guid) else {
         return;
     };
-    if crate::xp::xp_for_kill(mob_level, owner.level) == 0 {
-        return;
-    }
-    let raw = crate::xp::xp_for_kill(mob_level, pet.level)
-        .saturating_mul(crate::xp::rank_xp_multiplier(rank));
-    let award = crate::xp::rated_xp(ctx, raw);
+    let award = match kill_xp {
+        crate::xp::PetKillXp::Alone(rules) => crate::xp::pet_kill_xp(owner.level, pet.level, rules),
+        crate::xp::PetKillXp::Party {
+            xp,
+            non_grey_top_level,
+        } if pet.level <= non_grey_top_level => xp,
+        crate::xp::PetKillXp::Party { .. } => 0,
+    };
     if award == 0 {
         return;
     }

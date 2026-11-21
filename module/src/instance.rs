@@ -328,8 +328,12 @@ pub(crate) fn stranding_fallback(
     }
 }
 
-pub(crate) fn resettable_map(map: u32) -> bool {
+pub(crate) fn is_non_raid_dungeon_map(map: u32) -> bool {
     is_dungeon_map(map) && !matches!(map, 249 | 309 | 409 | 469 | 509 | 531 | 533)
+}
+
+pub(crate) fn resettable_map(map: u32) -> bool {
+    is_non_raid_dungeon_map(map)
 }
 
 pub(crate) fn instance_removal_due(
