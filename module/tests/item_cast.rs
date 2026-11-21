@@ -58,6 +58,24 @@ fn a_crafting_item_whose_product_cannot_be_stored_is_refused_and_kept() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_craft_with_full_bags_is_refused_as_inventory_full() {
+    let shard = stage("item-cast-craft-bags-full");
+    craft_fixture(&shard, 0);
+    heal_fixture(&shard);
+    shard.assert_call("debug_grant_item", &[PLAYER, &HEAL_ITEM.to_string(), "80"]);
+    assert_eq!(items(&shard, HEAL_ITEM).len(), 16, "the backpack is full");
+    shard.assert_sql("UPDATE game_world_entity SET health = 5000 WHERE guid = 1");
+
+    let refused = shard.call("debug_cast_at", &[PLAYER, &CRAFT_SPELL.to_string(), PLAYER]);
+    let text = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success(), "{text}");
+    assert!(text.contains(ItemRefusal::InventoryFull.as_tag()), "{text}");
+    assert_eq!(health(&shard), 5000, "no effect applies");
+    assert_eq!(stack(&shard, PRODUCT), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_crafting_item_cast_whose_product_cannot_be_stored_at_completion_fails_and_keeps_the_item() {
     let shard = stage("item-cast-craft-refused-late");
     craft_fixture(&shard, CAST_TIME_MS);
