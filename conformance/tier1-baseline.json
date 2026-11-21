@@ -750,6 +750,38 @@
             "objects",
             "0",
             "values",
+            "field_165"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "actor",
+          "checkpoint": "flight",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_168"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "actor",
+          "checkpoint": "flight",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
             "field_46"
           ]
         },
@@ -1183,38 +1215,6 @@
             "0",
             "values",
             "field_163"
-          ]
-        },
-        {
-          "rule": "field_shape",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_165"
-          ]
-        },
-        {
-          "rule": "field_shape",
-          "character": "actor",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_168"
           ]
         },
         {
