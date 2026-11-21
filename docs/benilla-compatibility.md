@@ -201,9 +201,9 @@ A Refusal or an empty reply does not establish a working gameplay feature.
 | Summon acceptance, remote cameras, LFG preferences and quest-share confirmations | Specific System Messages |
 | Raid lockout queries | An empty lockout list; instance bindings end with their Instance |
 
-`module/src/native/taxi.rs` answers taxi chains: an express request for two nodes flies as a
-single-hop taxi does. A request for more nodes runs vmangos's earlier checks, stays silent when a
-leg has no path, and otherwise gets status 1, because multi-hop routes are unsupported.
+`module/src/native/taxi.rs` flies taxi chains. An express request stays silent when a leg has no
+path. It gets status 2 when the Module cannot fly a leg, such as a leg that crosses maps. It joins
+the legs at vmangos's default points, because LyraCore does not import `taxi_path_transitions`.
 
 The Module handles current presence, name lookup, party authority and recipient Gates in one
 Shard.

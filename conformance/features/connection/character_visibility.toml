@@ -107,6 +107,11 @@ rung = "unit"
 
 [[tests]]
 path = "module/src/combat/tables.rs"
+function = "a_percent_attack_power_aura_scales_creature_damage_by_three_tenths_of_the_multiplier"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/tables.rs"
 function = "a_character_without_a_launcher_still_has_a_ranged_attack_power_base"
 rung = "unit"
 
@@ -148,6 +153,11 @@ rung = "durable_module"
 [[tests]]
 path = "module/tests/white_melee.rs"
 function = "attack_power_percent_auras_multiply_and_scale_the_swing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/white_melee.rs"
+function = "percent_attack_power_auras_scale_a_creatures_swing"
 rung = "durable_module"
 
 [[tests]]
@@ -295,10 +305,22 @@ symbol = "visible_health"
 evidence = "Review of PR 1040. At d9173eca, Player.cpp Player::CanSeeHealthOf takes the owner from GetCharmerOrOwnerPlayerOrPlayerItself, and Player::CanSeeSpecialInfoOf shows raw health to the caster of a SPELL_AURA_EMPATHY Aura on the target."
 
 [[known_gaps]]
-description = "Creatures and pets ignore the attack power percent Auras. vmangos scales a creature's and a pet's attack power by the multiplier and writes it to the update field; the Module takes a creature's damage from its level stats and a hunter pet's through scale_hunter_pet_swing."
+description = "A pet's owner never receives the pet's attack power multiplier (an owner-only field): neither CREATE nor VALUES writes it. vmangos writes AP_MOD_PCT - 1 to the update field."
+path = "module/src/native/view.rs"
+symbol = "entity"
+evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Creature::UpdateAttackPowerAndDamage writes AP_MOD_PCT - 1 at line 866 and Pet::UpdateAttackPowerAndDamage at line 1046."
+
+[[known_gaps]]
+description = "Flat attack power Auras, such as Demoralizing Shout, and Strength or Agility changes do not move a creature's or a pet's damage, because the Module does not store the database attack power. vmangos scales weapon damage by 0.3 * the attack power change / database attack power."
 path = "module/src/combat/folds.rs"
-symbol = "swing_range_ctx"
-evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Creature::UpdateAttackPowerAndDamage writes AP_MOD_PCT - 1 at line 866 and scales damage by GetTotalAttackPowerValue at lines 925-929; Pet::UpdateAttackPowerAndDamage does the same at lines 1046 and 1078-1082."
+symbol = "base_melee_range"
+evidence = "Review of PR 1106, source reading, not measured. At d9173eca, StatSystem.cpp Creature::UpdateAttackPowerAndDamage and UpdateDamagePhysical at lines 842-858 and 925-929."
+
+[[known_gaps]]
+description = "A creature's ranged strike takes its damage from the melee range, so the ranged attack power percent Aura has nothing to scale and the melee one scales it instead. vmangos scales the creature's ranged damage by the ranged Aura only."
+path = "module/src/combat/folds.rs"
+symbol = "strike_weapon_range"
+evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Creature::UpdateDamagePhysical scales RANGED_ATTACK damage by GetTotalAttackPowerValue at lines 925-929; Pet::UpdateAttackPowerAndDamage returns early for ranged at line 1027."
 
 [[known_gaps]]
 description = "A Form's own pool does not survive relog: a druid who logs out in a Form that shows rage or energy comes back with that pool empty. vmangos saves and restores every pool, so Bear rage and Cat energy return. The Reserve Pool (the druid's mana) does survive."
