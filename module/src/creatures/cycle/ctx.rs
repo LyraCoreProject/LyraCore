@@ -928,6 +928,11 @@ impl ThreatSink for CtxWorld<'_> {
                     != crate::creatures::CreatureReactState::Passive)
                     .then(|| Fighter {
                         guid: c.guid,
+                        at: Point {
+                            x: c.x,
+                            y: c.y,
+                            z: c.z,
+                        },
                         victim: melee
                             .attacker_guid()
                             .find(guid)
@@ -939,11 +944,23 @@ impl ThreatSink for CtxWorld<'_> {
     fn taunted_onto(&self, guid: u64) -> Option<u64> {
         crate::threat::forced_target(self.ctx, guid, crate::time::now_ms(self.ctx))
     }
-    fn top_threat(&self, guid: u64) -> Option<u64> {
-        crate::threat::top_threat_target(self.ctx, guid)
-    }
-    fn threat_on(&self, creature: u64, source: u64) -> i64 {
-        crate::threat::threat_of(self.ctx, creature, source)
+    fn threat_sources(&self, guid: u64) -> Vec<super::ThreatSource> {
+        let entities = self.ctx.db.game_world_entity();
+        crate::threat::ranked(self.ctx, guid)
+            .into_iter()
+            .filter_map(|(source_guid, threat)| {
+                let source = entities.guid().find(source_guid)?;
+                Some(super::ThreatSource {
+                    guid: source_guid,
+                    at: Point {
+                        x: source.x,
+                        y: source.y,
+                        z: source.z,
+                    },
+                    threat,
+                })
+            })
+            .collect()
     }
     fn retarget(&mut self, creature: u64, victim: u64) {
         let melee = self.ctx.db.game_melee_attack();
