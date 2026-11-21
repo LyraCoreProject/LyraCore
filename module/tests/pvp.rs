@@ -295,11 +295,11 @@ fn a_duel_challenge_refuses_with_the_vmangos_cast_result() {
         shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
     }
     duel_spell(&shard);
+    let mut connection = enter(&shard, challenger);
     shard.assert_call(
         "debug_learn_spell",
         &[&challenger.to_string(), &DUEL_CHALLENGE.to_string()],
     );
-    let mut connection = enter(&shard, challenger);
 
     insert_duel(&shard, third, rival, REQUESTED);
     let refused = challenge(&mut connection, rival).expect_err("the rival is dueling");
