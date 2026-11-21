@@ -107,7 +107,7 @@ rung = "unit"
 
 [[tests]]
 path = "module/src/combat/tables.rs"
-function = "a_percent_attack_power_aura_moves_creature_damage_by_three_tenths_of_itself"
+function = "a_percent_attack_power_aura_scales_creature_damage_by_three_tenths_of_the_multiplier"
 rung = "unit"
 
 [[tests]]
@@ -157,7 +157,7 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/white_melee.rs"
-function = "percent_attack_power_auras_scale_a_creatures_and_a_pets_swing"
+function = "percent_attack_power_auras_scale_a_creatures_swing"
 rung = "durable_module"
 
 [[tests]]
