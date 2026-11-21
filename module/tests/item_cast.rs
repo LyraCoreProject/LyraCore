@@ -100,7 +100,7 @@ fn an_item_naming_itself_as_its_target_is_refused_and_kept() {
     let refused = shard.call("debug_use_item_on_item", &[PLAYER, &slot, &slot]);
     assert!(!refused.status.success());
     assert!(
-        String::from_utf8_lossy(&refused.stderr).contains("cannot target itself"),
+        String::from_utf8_lossy(&refused.stderr).contains("item:not_right_now"),
         "{}",
         String::from_utf8_lossy(&refused.stderr)
     );
