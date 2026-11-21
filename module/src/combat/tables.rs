@@ -223,7 +223,7 @@ pub(crate) fn scale_swing_for_rank(min: u32, max: u32, rank: u8) -> (u32, u32) {
     (scale(min), scale(max))
 }
 
-/// vmangos `UpdateDamagePhysical`: damage * (0.7 + 0.3 * AP now / base AP) is 1 + 0.3 * multiplier.
+/// vmangos `UpdateDamagePhysical`: 0.7 + 0.3 * AP now / base AP, with only percent Auras moving AP.
 pub(crate) fn scale_swing_for_attack_power_multiplier(
     (min, max): (u32, u32),
     multiplier: f32,
@@ -875,7 +875,7 @@ mod tests {
     }
 
     #[test]
-    fn a_percent_attack_power_aura_moves_creature_damage_by_three_tenths_of_itself() {
+    fn a_percent_attack_power_aura_scales_creature_damage_by_three_tenths_of_the_multiplier() {
         // vmangos: +100% attack power doubles the ratio, so 0.7 + 0.3 * 2 = 1.3.
         assert_eq!(
             scale_swing_for_attack_power_multiplier((100, 200), 1.0),

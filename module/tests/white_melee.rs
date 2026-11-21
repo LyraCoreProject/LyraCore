@@ -608,7 +608,7 @@ fn the_ranged_percent_aura_reaches_the_sheet_of_everyone_but_wand_users() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn percent_attack_power_auras_scale_a_creatures_and_a_pets_swing() {
+fn percent_attack_power_auras_scale_a_creatures_swing() {
     use lyracore_shared::spell::taxonomy::COMBAT_ATTACK_POWER_PCT;
     const DOUBLE: u32 = 5_090_430;
     const DOUBLE_AGAIN: u32 = 5_090_431;
@@ -651,7 +651,11 @@ fn percent_attack_power_auras_scale_a_creatures_and_a_pets_swing() {
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET owner_guid = 1 WHERE guid = {wolf}"
     ));
-    assert_eq!(range(&shard), pair("190", "380"), "a summoned pet likewise");
+    assert_eq!(
+        range(&shard),
+        pair("190", "380"),
+        "a summoned pet takes the creature path"
+    );
 
     shard.assert_call("debug_shed_spell_auras", &[&wolf, &DOUBLE.to_string()]);
     shard.assert_call(

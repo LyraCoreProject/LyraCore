@@ -305,13 +305,19 @@ symbol = "visible_health"
 evidence = "Review of PR 1040. At d9173eca, Player.cpp Player::CanSeeHealthOf takes the owner from GetCharmerOrOwnerPlayerOrPlayerItself, and Player::CanSeeSpecialInfoOf shows raw health to the caster of a SPELL_AURA_EMPATHY Aura on the target."
 
 [[known_gaps]]
-description = "A creature's and a pet's attack power multiplier never reaches a viewer: neither CREATE nor VALUES writes it. vmangos writes AP_MOD_PCT - 1 to the update field."
+description = "A pet's owner never receives the pet's attack power multiplier (an owner-only field): neither CREATE nor VALUES writes it. vmangos writes AP_MOD_PCT - 1 to the update field."
 path = "module/src/native/view.rs"
 symbol = "entity"
 evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Creature::UpdateAttackPowerAndDamage writes AP_MOD_PCT - 1 at line 866 and Pet::UpdateAttackPowerAndDamage at line 1046."
 
 [[known_gaps]]
-description = "A creature's ranged strike takes its damage from the melee range, so the ranged attack power percent Aura has nothing to scale. vmangos scales the creature's ranged damage by it."
+description = "Flat attack power Auras, such as Demoralizing Shout, and Strength or Agility changes do not move a creature's or a pet's damage, because the Module does not store the database attack power. vmangos scales weapon damage by 0.3 * the attack power change / database attack power."
+path = "module/src/combat/folds.rs"
+symbol = "base_melee_range"
+evidence = "Review of PR 1106, source reading, not measured. At d9173eca, StatSystem.cpp Creature::UpdateAttackPowerAndDamage and UpdateDamagePhysical at lines 842-858 and 925-929."
+
+[[known_gaps]]
+description = "A creature's ranged strike takes its damage from the melee range, so the ranged attack power percent Aura has nothing to scale and the melee one scales it instead. vmangos scales the creature's ranged damage by the ranged Aura only."
 path = "module/src/combat/folds.rs"
 symbol = "strike_weapon_range"
 evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Creature::UpdateDamagePhysical scales RANGED_ATTACK damage by GetTotalAttackPowerValue at lines 925-929; Pet::UpdateAttackPowerAndDamage returns early for ranged at line 1027."
