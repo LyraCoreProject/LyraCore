@@ -127,13 +127,36 @@ fn is_submerged_here(ctx: &ReducerContext, entity: &WorldEntity) -> bool {
     crate::terrain::is_submerged(entity.z, level, entity.movement_flags)
 }
 
-/// `strict` is false at cast completion, where vmangos skips the combat check.
+/// vmangos refuses a mount cast in combat; `Unit::SetInCombatState` interrupts one in progress.
+pub(crate) fn check_mount_combat(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    effects: &[SpellEffect],
+    at_completion: bool,
+) -> Result<(), CastGateRefusal> {
+    if !effects.iter().any(|e| e.kind == A_MOUNTED)
+        || !caster.is_player()
+        || !crate::combat::is_engaged(ctx, caster.guid)
+    {
+        return Ok(());
+    }
+    if at_completion {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::Interrupted,
+            "entering combat interrupted the mount cast",
+        ));
+    }
+    Err(CastGateRefusal::other(
+        CastRefusalReason::MountInCombat,
+        "you cannot mount while in combat",
+    ))
+}
+
 pub(crate) fn check_mount_cast(
     ctx: &ReducerContext,
     caster: &WorldEntity,
     effects: &[SpellEffect],
     spell_id: u32,
-    strict: bool,
 ) -> Result<(), CastGateRefusal> {
     if !effects.iter().any(|e| e.kind == A_MOUNTED) || !caster.is_player() {
         return Ok(());
@@ -145,12 +168,6 @@ pub(crate) fn check_mount_cast(
         return Err(CastGateRefusal::other(
             CastRefusalReason::MountWhileDead,
             "you cannot mount while dead",
-        ));
-    }
-    if strict && crate::combat::is_engaged(ctx, caster.guid) {
-        return Err(CastGateRefusal::other(
-            CastRefusalReason::MountInCombat,
-            "you cannot mount while in combat",
         ));
     }
     if is_submerged_here(ctx, caster) {

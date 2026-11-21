@@ -1068,6 +1068,7 @@ enum CastGate {
     CasterAlive,
     CasterLevel,
     GlobalCooldown,
+    MountCombat,
     Form,
     Stealth,
     Mount,
@@ -1097,11 +1098,12 @@ enum CastGate {
 }
 
 /// vmangos `Spell::CheckCast` order, cut down to the Gates LyraCore has.
-const CHECK_CAST_ORDER: [CastGate; 30] = [
+const CHECK_CAST_ORDER: [CastGate; 31] = [
     CastGate::SpellReady,
     CastGate::CasterAlive,
     CastGate::CasterLevel,
     CastGate::GlobalCooldown,
+    CastGate::MountCombat,
     CastGate::Form,
     CastGate::Stealth,
     CastGate::Mount,
@@ -1136,8 +1138,8 @@ impl CastGate {
             Self::GlobalCooldown | Self::Form | Self::Stealth | Self::PeacefulTarget => {
                 run.is_strict()
             }
-            // A completion checks power before every other Gate instead.
-            Self::Power => run.is_strict(),
+            // A completion checks them before every other Gate instead.
+            Self::MountCombat | Self::Power => run.is_strict(),
             // Resolve(Start) also runs E_TRIGGER casts; vmangos skips a trigger's line of sight.
             Self::LineOfSight => matches!(
                 run,
@@ -1151,10 +1153,14 @@ impl CastGate {
     }
 }
 
-/// The Gates a run checks in order; vmangos `Spell::cast` checks power first at completion.
+/// The Gates a run checks in order; a completion leads with the mount interrupt, then power.
 fn cast_gate_order(run: GateRun) -> impl Iterator<Item = CastGate> {
-    let leading_power = (!run.is_strict()).then_some(CastGate::Power);
-    leading_power.into_iter().chain(
+    let completion_first: &[CastGate] = if run.is_strict() {
+        &[]
+    } else {
+        &[CastGate::MountCombat, CastGate::Power]
+    };
+    completion_first.iter().copied().chain(
         CHECK_CAST_ORDER
             .into_iter()
             .filter(move |gate| gate.runs_in(run)),
@@ -1232,9 +1238,10 @@ impl GateCheck<'_> {
                 }
                 Ok(())
             }
-            CastGate::Mount => {
-                crate::mount::check_mount_cast(ctx, caster, effects, spell_id, self.run.is_strict())
+            CastGate::MountCombat => {
+                crate::mount::check_mount_combat(ctx, caster, effects, !self.run.is_strict())
             }
+            CastGate::Mount => crate::mount::check_mount_cast(ctx, caster, effects, spell_id),
             CastGate::ReactWindow => check_react_window(ctx, caster, hdr),
             CastGate::TargetPartition => match self.target {
                 // World coordinates are meaningful only within the same map and instance.
@@ -2192,6 +2199,11 @@ mod gate_order_tests {
     }
 
     #[test]
+    fn a_mount_cast_in_combat_is_refused_before_its_form() {
+        assert_before(START, G::MountCombat, &[G::Form, G::Mount]);
+    }
+
+    #[test]
     fn form_and_stealth_come_before_every_target_gate() {
         for gate in [G::Form, G::Stealth] {
             assert_before(
@@ -2254,10 +2266,12 @@ mod gate_order_tests {
     }
 
     #[test]
-    fn a_completion_checks_power_before_every_other_gate() {
+    fn a_completion_checks_the_mount_interrupt_then_power_before_every_other_gate() {
         let order = order(COMPLETION);
-        assert_eq!(order[0], G::Power);
-        assert_eq!(order.iter().filter(|&&gate| gate == G::Power).count(), 1);
+        assert_eq!(order[..2], [G::MountCombat, G::Power]);
+        for gate in [G::MountCombat, G::Power] {
+            assert_eq!(order.iter().filter(|&&g| g == gate).count(), 1, "{gate:?}");
+        }
     }
 
     #[test]
@@ -2276,8 +2290,9 @@ mod gate_order_tests {
 
     #[test]
     fn both_phases_keep_one_order() {
-        let strict_only = [
+        let moved = [
             G::GlobalCooldown,
+            G::MountCombat,
             G::Form,
             G::Stealth,
             G::PeacefulTarget,
@@ -2285,11 +2300,11 @@ mod gate_order_tests {
         ];
         let start: Vec<_> = order(START)
             .into_iter()
-            .filter(|gate| !strict_only.contains(gate))
+            .filter(|gate| !moved.contains(gate))
             .collect();
         let completion: Vec<_> = order(COMPLETION)
             .into_iter()
-            .filter(|gate| !strict_only.contains(gate))
+            .filter(|gate| !moved.contains(gate))
             .collect();
         assert_eq!(start, completion);
     }

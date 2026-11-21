@@ -65,7 +65,8 @@ fn a_short_cast_finishes_during_its_original_global_cooldown() {
         timestamp(&spell_cooldown[0], "ready_at"),
         completed_at + 7_000_000
     );
-    assert_global_cooldown_refusal(&shard);
+    // vmangos Spell::CheckCast checks the spell cooldown before the global cooldown.
+    assert_cast_refused(&shard, "spell not ready (cooldown)");
 }
 
 #[test]
@@ -216,7 +217,14 @@ fn timestamp(row: &Row, column: &str) -> i64 {
 }
 
 fn assert_global_cooldown_refusal(shard: &Standalone) {
+    assert_cast_refused(shard, "global cooldown");
+}
+
+fn assert_cast_refused(shard: &Standalone, reason: &str) {
     let result = shard.call("gw_cast_spell", &[ACTOR, "133", &WOLF.to_string()]);
-    assert!(!result.status.success());
-    assert!(String::from_utf8_lossy(&result.stderr).contains("global cooldown"));
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        !result.status.success() && stderr.contains(reason),
+        "{stderr}"
+    );
 }

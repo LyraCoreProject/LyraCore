@@ -4,7 +4,9 @@ use lyracore_package_delta::fixture_ids::{
     FIXTURE_MOUNT_SPELL, FIXTURE_REINS, LEARN_APPRENTICE_RIDING_SPELL_ID, RIDING_TRAINER_ENTRY,
     TEST_WOLF_ENTRY,
 };
-use support::{actor, number, poll_until, Row, Standalone, POLL_TIMEOUT};
+use support::{
+    actor, event_rows, number, poll_until, subscribe_with_fence, Row, Standalone, POLL_TIMEOUT,
+};
 
 const RIDER: &str = "1";
 const REINS: &str = "5090054";
@@ -98,10 +100,7 @@ fn an_untrained_mount_refusal_keeps_the_item_vitals_and_auras_unchanged() {
     );
 }
 
-#[test]
-#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn reusable_reins_restore_the_mount_on_rebuild_and_clear_it_on_dismount() {
-    let shard = fixture("mount-lifetime");
+fn train_riding(shard: &Standalone) {
     shard.assert_call(
         "debug_spawn_at_feet",
         &[RIDER, &RIDING_TRAINER_ENTRY.to_string(), "5"],
@@ -125,6 +124,81 @@ fn reusable_reins_restore_the_mount_on_rebuild_and_clear_it_on_dismount() {
     assert_eq!(riding.len(), 1);
     assert_eq!(riding[0]["current"], "75");
     assert_eq!(riding[0]["max_rank"], "75");
+}
+
+fn spawn_wolf_at_feet(shard: &Standalone) -> String {
+    let previous_targets = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[RIDER, &TEST_WOLF_ENTRY.to_string(), "5"],
+    );
+    let targets: Vec<_> = shard
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
+        .into_iter()
+        .filter(|target| {
+            !previous_targets
+                .iter()
+                .any(|row| row["guid"] == target["guid"])
+        })
+        .collect();
+    assert_eq!(targets.len(), 1);
+    targets[0]["guid"].clone()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn entering_combat_during_a_mount_cast_interrupts_it() {
+    let shard = fixture("mount-combat-interrupt");
+    shard.clear_schedule("game_creature_move_schedule");
+    shard.clear_schedule("game_melee_schedule");
+    train_riding(&shard);
+    let wolf = spawn_wolf_at_feet(&shard);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET simulation_indexed = false WHERE guid = {wolf}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET cast_time_ms = 1000 WHERE spell_id = {FIXTURE_MOUNT_SPELL}"
+    ));
+    let query = format!(
+        "SELECT * FROM game_spell_cast_event_live WHERE caster_guid = 1 \
+         AND spell_id = {FIXTURE_MOUNT_SPELL}"
+    );
+    let casts = subscribe_with_fence(&shard, &[query.as_str()]);
+
+    use_reins(&shard);
+    shard.insert_row(
+        "game_threat",
+        &[
+            ("creature_guid", &wolf.parse::<u64>().unwrap()),
+            ("source_guid", &1u64),
+            ("threat", &1i64),
+        ],
+    );
+
+    let interrupted = || {
+        event_rows(&casts, "game_spell_cast_event_live")
+            .into_iter()
+            .find(|row| row["is_interrupted"] == "true")
+    };
+    assert!(
+        poll_until(POLL_TIMEOUT, || interrupted().is_some()),
+        "combat entry did not interrupt the mount cast"
+    );
+    // CastRefusalReason::Interrupted, which the client reports as SPELL_FAILED_INTERRUPTED.
+    assert_eq!(interrupted().unwrap()["failure_reason"], "2");
+    assert!(mount_auras(&shard).is_empty());
+    assert_projection(&shard, 0, 10_000);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn reusable_reins_restore_the_mount_on_rebuild_and_clear_it_on_dismount() {
+    let shard = fixture("mount-lifetime");
+    train_riding(&shard);
     let items = reins(&shard);
 
     use_reins(&shard);
@@ -151,26 +225,8 @@ fn reusable_reins_restore_the_mount_on_rebuild_and_clear_it_on_dismount() {
 
     use_reins(&shard);
     assert_projection(&shard, 1147, 16_000);
-    let previous_targets = shard.query_rows(&format!(
-        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
-    ));
-    shard.assert_call(
-        "debug_spawn_at_feet",
-        &[RIDER, &TEST_WOLF_ENTRY.to_string(), "5"],
-    );
-    let targets: Vec<_> = shard
-        .query_rows(&format!(
-            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
-        ))
-        .into_iter()
-        .filter(|target| {
-            !previous_targets
-                .iter()
-                .any(|row| row["guid"] == target["guid"])
-        })
-        .collect();
-    assert_eq!(targets.len(), 1);
-    shard.assert_call("gw_attack", &[&actor(RIDER), &targets[0]["guid"]]);
+    let wolf = spawn_wolf_at_feet(&shard);
+    shard.assert_call("gw_attack", &[&actor(RIDER), &wolf]);
     assert!(mount_auras(&shard).is_empty());
     assert_projection(&shard, 0, 10_000);
     assert_eq!(reins(&shard), items);

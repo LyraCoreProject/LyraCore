@@ -150,7 +150,7 @@ fn cast_event_messages(
         _ => return out,
     };
     if kind == SpellCastEventKind::Interrupt {
-        // vmangos Spell::cancel order: unit teardown for everyone, then the caster's failed result.
+        // vmangos Spell::cancel and Spell::cast: teardown for everyone, then the caster's result.
         out.push((
             EventAudience::Everyone,
             message(ServerOpcodeMessage::SMSG_SPELL_FAILED_OTHER(Box::new(

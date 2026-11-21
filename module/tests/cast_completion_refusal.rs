@@ -64,11 +64,14 @@ fn a_completion_reaches_5_yd_further_than_its_start() {
         cast_rows(&casts)
     );
     assert!(!cast_rows(&casts).iter().any(is_interrupt));
+    assert_wolf_at(&shard, drifted);
 }
 
 fn fixture(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);
     shard.publish_module();
+    shard.clear_schedule("game_creature_move_schedule");
+    shard.clear_schedule("game_melee_schedule");
     shard.assert_call("claim_operator", &[]);
     shard.assert_sql("UPDATE game_character SET class = 8 WHERE guid = 1");
     shard.assert_call("debug_spawn_player_entity", &["1"]);
@@ -86,8 +89,23 @@ fn fixture(name: &str) -> Standalone {
 
 fn place_wolf(shard: &Standalone, x: f32) {
     shard.assert_sql(&format!(
-        "UPDATE game_world_entity SET x = {x}, y = 0, z = 0 WHERE guid = {WOLF}"
+        "UPDATE game_world_entity SET simulation_indexed = false, x = {x}, y = 0, z = 0 \
+         WHERE guid = {WOLF}"
     ));
+}
+
+fn assert_wolf_at(shard: &Standalone, x: f32) {
+    let rows = shard.query_rows(&format!(
+        "SELECT x, y, z FROM game_world_entity WHERE guid = {WOLF}"
+    ));
+    let at: Vec<f32> = ["x", "y", "z"]
+        .iter()
+        .map(|axis| rows[0][*axis].parse().unwrap())
+        .collect();
+    assert!(
+        (at[0] - x).abs() < 0.01 && at[1] == 0.0 && at[2] == 0.0,
+        "the wolf moved during the cast: {at:?}"
+    );
 }
 
 fn cast_fireball(shard: &Standalone) {
