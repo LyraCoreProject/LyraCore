@@ -476,11 +476,13 @@ fn combat_field_aura(shard: &Standalone, spell_id: u32, field: u8, amount: i32) 
     use lyracore_package_delta::packed_spell_effect_id;
     use lyracore_shared::spell::taxonomy::{A_MOD_COMBAT, T_SELF};
 
+    // Spells that share a name are ranks of one spell, so each fixture names itself.
+    let name = format!("Combat field fixture {spell_id}");
     shard.insert_row(
         "game_spell",
         &[
             ("spell_id", &spell_id),
-            ("name", &"Combat field fixture"),
+            ("name", &name.as_str()),
             ("school_mask", &1),
             ("duration_ms", &600_000),
             ("gcd_ms", &0),
