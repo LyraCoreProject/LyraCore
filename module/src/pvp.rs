@@ -23,7 +23,7 @@ pub struct PvpFlagTimer {
     pub scheduled_at: ScheduleAt,
     /// The last PvP combat pulse, cleared when a later combat begins; vmangos `inPvPCombat`.
     pub last_pvp_pulse_ms: Option<u64>,
-    /// vmangos `inPvPEnforcedArea`, as the last zone check saw it.
+    /// Whether the last zone check held the flag: a PvP-enforced zone outside a taxi flight.
     pub in_enforced_zone: bool,
 }
 
@@ -140,9 +140,32 @@ pub(crate) fn update_zone(
 
 /// Runs the zone check for a Character entering the world, before viewers build its CREATE.
 pub(crate) fn enter_world(ctx: &ReducerContext, character: &mut WorldEntity) {
-    let zone = crate::terrain::area_at(ctx, character.map_id, character.x, character.y)
-        .and_then(|area| ctx.db.game_area().id().find(crate::terrain::zone_of(&area)));
+    let zone = zone_at(ctx, character);
     update_zone(ctx, character, zone.as_ref());
+}
+
+/// Runs the zone check where a near teleport left the Character; movement's own check skips it.
+pub(crate) fn recheck_zone(ctx: &ReducerContext, character_guid: u64) {
+    let Some(mut character) = ctx.db.game_world_entity().guid().find(character_guid) else {
+        return;
+    };
+    let unit_flags = character.unit_flags;
+    let zone = zone_at(ctx, &character);
+    update_zone(ctx, &mut character, zone.as_ref());
+    if character.unit_flags != unit_flags {
+        character.update(ctx);
+    }
+}
+
+/// A map change keeps the PvP Flag and `PVP_DESIRED` of the replaced entity; its timer row stays.
+pub(crate) fn keep_across_map_change(replaced: &WorldEntity, character: &mut WorldEntity) {
+    character.unit_flags |= replaced.unit_flags & unit_flags::PVP;
+    character.player_flags |= replaced.player_flags & player_flags::PVP_DESIRED;
+}
+
+fn zone_at(ctx: &ReducerContext, character: &WorldEntity) -> Option<GameArea> {
+    crate::terrain::area_at(ctx, character.map_id, character.x, character.y)
+        .and_then(|area| ctx.db.game_area().id().find(crate::terrain::zone_of(&area)))
 }
 
 /// vmangos `Player::UpdateZone`: an enemy capital enforces PvP, and on a PvP Realm so does every
@@ -157,6 +180,10 @@ fn in_enforced_zone(ctx: &ReducerContext, character: &WorldEntity, zone: &GameAr
         AREA_TEAM_NONE => is_pvp_realm(ctx),
         _ => false,
     }
+}
+
+fn in_enforced_area(ctx: &ReducerContext, character: &WorldEntity) -> bool {
+    zone_at(ctx, character).is_some_and(|zone| in_enforced_zone(ctx, character, &zone))
 }
 
 fn is_pvp_realm(ctx: &ReducerContext) -> bool {
@@ -190,7 +217,7 @@ pub(crate) fn harmed(ctx: &ReducerContext, attacker: &WorldEntity, victim: &Worl
     }
 }
 
-/// vmangos `Unit::SetInCombatWithAssisted` and `Spell::DoAllEffectOnTarget`: help to another
+/// vmangos `Unit::SetInCombatWithAssisted` and `Spell::DoSpellHitOnUnit`: help to another
 /// flagged Character flags the helper's Character, which joins the target's PvP combat.
 fn helped(ctx: &ReducerContext, helper: &WorldEntity, target: &WorldEntity) {
     let (Some(by), Some(of)) = (
@@ -206,14 +233,20 @@ fn helped(ctx: &ReducerContext, helper: &WorldEntity, target: &WorldEntity) {
     pulse(ctx, by.guid, joins_pvp_combat);
 }
 
-/// vmangos `Spell::DoAllEffectOnTarget`, hit or not: a spell harms a unit its caster is not
-/// friendly to. It helps a friendly unit in combat, or one a helpful target kind names.
+/// vmangos `Spell::DoAllEffectOnTarget` and `DoSpellHitOnUnit`, hit or not: effect `e` harms a
+/// unit its caster is not friendly to. It helps a friendly unit in combat, or one a helpful target
+/// kind names. A Duel challenge does neither.
 pub(crate) fn spell_targeted(
     ctx: &ReducerContext,
     caster_guid: u64,
     target_guid: u64,
-    helpful_target: bool,
+    e: &crate::SpellEffect,
 ) {
+    use lyracore_shared::spell::taxonomy::{E_DUEL, T_AREA_ALLY, T_TARGET_ALLY};
+    if e.kind == E_DUEL {
+        return;
+    }
+    let helpful_target = matches!(e.target, T_TARGET_ALLY | T_AREA_ALLY);
     let entities = ctx.db.game_world_entity();
     let (Some(caster), Some(target)) = (
         entities.guid().find(caster_guid),
@@ -271,6 +304,15 @@ pub fn expire_pvp_flag(ctx: &ReducerContext, timer: PvpFlagTimer) {
         last_pvp_pulse_ms: timer.last_pvp_pulse_ms,
         in_enforced_zone: timer.in_enforced_zone,
     };
+    // A teleport or a death can leave the zone with no zone check; that counts as leaving now.
+    if held.in_enforced_zone && (character.is_flying() || !in_enforced_area(ctx, &character)) {
+        let held = Hold {
+            in_enforced_zone: false,
+            ..held
+        };
+        arm(ctx, &character, held);
+        return;
+    }
     let frozen = (held.last_pvp_pulse_ms.is_some() && in_combat(&character))
         || held.in_enforced_zone
         || character.player_flags & player_flags::PVP_DESIRED != 0;

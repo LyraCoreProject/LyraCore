@@ -145,6 +145,7 @@ fn resolve_offhand_swing(
     if crate::spell::is_disarmed(ctx, attacker_guid) {
         return;
     }
+    crate::pvp::harmed(ctx, attacker, &target);
 
     let range = offhand_swing_range(ctx, attacker, (dmin, dmax, delay));
     crate::conformance_rolls::observe_offhand_range(ctx, range);
@@ -565,7 +566,8 @@ fn fire_melee_swing(
     let attacker_guid = attacker.guid;
     let target_guid = target.guid;
     let melee = ctx.db.game_melee_attack();
-    // vmangos Unit::UpdateMeleeAttackingState flags the attacker whether the swing lands or not.
+    // vmangos UpdateMeleeAttackingState flags a Character's swing, landed or not; DealDamage flags
+    // a pet's owner.
     crate::pvp::harmed(ctx, attacker, target);
 
     let queued_spell = if extra { 0 } else { attacker.next_swing_spell };
@@ -758,7 +760,6 @@ fn fire_ranged_shot(
     let attacker_guid = attacker.guid;
     let target_guid = target.guid;
     let melee = ctx.db.game_melee_attack();
-    crate::pvp::harmed(ctx, attacker, target);
     let launcher = matches!(subclass, ws::BOW | ws::GUN | ws::CROSSBOW);
 
     let ammo_display_id: u32 = if launcher {
@@ -782,6 +783,7 @@ fn fire_ranged_shot(
     } else {
         0
     };
+    crate::pvp::harmed(ctx, attacker, target);
 
     let (rdmin, rdmax) = if attacker.is_player() {
         let (_, rdmin, rdmax) = ranged_values(ctx, attacker, Some(weapon));

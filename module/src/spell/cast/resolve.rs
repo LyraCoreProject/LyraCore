@@ -481,6 +481,10 @@ fn run_spell_effects(
             if triggered && !triggered_target_admitted(origin, caster_guid, t, is_alive(ctx, t)) {
                 continue;
             }
+            // Before the hit roll, so a miss counts; vmangos skips a cast an aura triggers.
+            if t != caster_guid && !matches!(origin, CastOrigin::AuraTriggered) {
+                crate::pvp::spell_targeted(ctx, caster_guid, t, e);
+            }
             if immunity.refuses_spell(ctx, caster_guid, t, hdr, effects) {
                 continue;
             }

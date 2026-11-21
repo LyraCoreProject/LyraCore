@@ -149,24 +149,7 @@ pub(crate) fn faction_target_violation(
     None
 }
 
-/// The units effect `e` reaches. Each one counts for the PvP Flag before its hit roll, so a miss,
-/// a resist or an immunity counts too (vmangos `Spell::DoAllEffectOnTarget`).
 pub(crate) fn select_targets(
-    ctx: &ReducerContext,
-    caster_guid: u64,
-    explicit: u64,
-    e: &SpellEffect,
-    dest: Option<(f32, f32, f32)>,
-) -> Vec<u64> {
-    let targets = effect_targets(ctx, caster_guid, explicit, e, dest);
-    let helpful_target = matches!(e.target, T_TARGET_ALLY | T_AREA_ALLY);
-    for &target_guid in targets.iter().filter(|&&guid| guid != caster_guid) {
-        crate::pvp::spell_targeted(ctx, caster_guid, target_guid, helpful_target);
-    }
-    targets
-}
-
-fn effect_targets(
     ctx: &ReducerContext,
     caster_guid: u64,
     explicit: u64,

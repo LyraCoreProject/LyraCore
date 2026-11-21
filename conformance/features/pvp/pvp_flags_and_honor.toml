@@ -55,10 +55,16 @@ symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
 
 [[known_gaps]]
-description = "The PvP Flag and PVP_DESIRED do not survive logout or Transfer; world entry rebuilds the Character's entity without them."
+description = "The PvP Flag and PVP_DESIRED do not survive logout or Transfer; world entry rebuilds the Character's entity without them. A map change on one Shard keeps both."
 path = "module/src/world/character_entity.rs"
 symbol = "build_player_entity"
 evidence = "At d9173eca, Player.cpp Player::UpdateCharacterFlags stores CHARACTER_FLAG_PVP_ENABLED and CHARACTER_FLAG_PVP_DESIRED, and Player::LoadFromDB calls UpdatePvP(true) and SetPvPDesired(true) from them."
+
+[[known_gaps]]
+description = "Help to a flagged Character in combat flags the helper for every spell; vmangos skips a spell with SPELL_ATTR_EX_NO_THREAT, and game_spell has no attributes_ex column to read it from."
+path = "module/src/pvp.rs"
+symbol = "spell_targeted"
+evidence = "At d9173eca, Spell.cpp Spell::DoSpellHitOnUnit calls SetInCombatWithAssisted only when the spell lacks SPELL_ATTR_EX_NO_THREAT."
 
 [[known_gaps]]
 description = "A taxi flight keeps the PvP Flag; vmangos drops it at take-off unless PVP_DESIRED is set."

@@ -523,9 +523,10 @@ pub(crate) fn apply_player_login(
     restamp_owned_data(ctx, character_guid, owner);
 
     let entities = ctx.db.game_world_entity();
+    let replaced = entities.guid().find(character_guid);
     // Persist the previous live entity before replacement so ghost relog cannot lose progression.
-    if let Some(stale) = entities.guid().find(character_guid) {
-        persist_entity(ctx, &stale, false);
+    if let Some(stale) = &replaced {
+        persist_entity(ctx, stale, false);
         crate::WorldEntity::delete(ctx, character_guid);
         character = chars.guid().find(character_guid).unwrap_or(character);
     }
@@ -551,6 +552,9 @@ pub(crate) fn apply_player_login(
         entity.unit_bytes_1 = unit_bytes_1;
     }
     crate::away::at_world_entry(ctx, &mut entity, entry);
+    if let (WorldEntry::WorldPort, Some(replaced)) = (entry, &replaced) {
+        crate::pvp::keep_across_map_change(replaced, &mut entity);
+    }
     crate::pvp::enter_world(ctx, &mut entity);
     entity.insert(ctx);
     crate::ghost::restore(ctx, character_guid);

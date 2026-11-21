@@ -131,7 +131,7 @@ pub(crate) enum RequestDenied {
 }
 
 impl RequestDenied {
-    /// The cast result vmangos `Spell::CheckCast` or `Spell::EffectDuel` reports; None drops silently.
+    /// The cast result vmangos `Spell::CheckCast` or `EffectDuel` reports; None drops silently.
     fn cast_refusal(self) -> Option<CastRefusalReason> {
         match self {
             Self::MissingPlayer => Some(CastRefusalReason::BadTargets),
@@ -182,7 +182,7 @@ fn may_duel_at(ctx: &ReducerContext, entity: &crate::WorldEntity) -> bool {
     }
 }
 
-/// The Duel, challenge or Duel request a challenge meets; the challenged Character's comes first.
+/// The Duel or pending challenge a new challenge meets; the challenged Character's counts first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum DuelCommitment {
     Free,

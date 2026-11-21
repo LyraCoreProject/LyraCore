@@ -224,6 +224,24 @@ fn an_enemy_capital_holds_the_flag_and_it_drops_300_s_after_leaving() {
     assert_eq!(flags(&shard, raider).0, flagged);
     advance(&shard, 1);
     assert_eq!(flags(&shard, raider).0, unflagged);
+
+    check_zone_at("0", "0");
+    // A move with no zone check, such as a near teleport or a ghost's run, leaves the zone too.
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = 5000.0, y = 5000.0 WHERE guid = {raider}"
+    ));
+    advance(&shard, PVP_FLAG_TICKS);
+    assert_eq!(
+        flags(&shard, raider).0,
+        flagged,
+        "the countdown starts at the expiry"
+    );
+    advance(&shard, PVP_FLAG_TICKS);
+    assert_eq!(
+        flags(&shard, raider).0,
+        unflagged,
+        "a stale zone cannot hold the flag"
+    );
 }
 
 #[test]
