@@ -34,6 +34,7 @@ fn fixture(name: &str) -> Fixture {
         "UPDATE game_world_entity SET x = 100, y = 100, z = 100 WHERE guid = {other}"
     ));
     shard.assert_sql("DELETE FROM game_item_instance");
+    shard.clear_schedule("game_event_reaper_schedule");
     let partner = format!(r#"{{"guid":{other},"ownership":null}}"#);
     Fixture {
         shard,
