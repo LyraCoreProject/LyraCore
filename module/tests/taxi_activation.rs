@@ -24,6 +24,10 @@ const UNCATALOGUED_CLIENT_NODE: u32 = 9_999;
 const UNVISITED_NODE: u32 = 5_090_307;
 const UNVISITED_CLIENT_NODE: u32 = 252;
 const UNVISITED_PATH: u32 = 5_090_308;
+const ONE_TEAM_NODE: u32 = 5_090_309;
+const ONE_TEAM_CLIENT_NODE: u32 = 251;
+const HORDE_RACE: u32 = 2;
+const ALLIANCE_RACE: u32 = 1;
 const MOUNT_DISPLAY: u32 = 1147;
 const SLOW_CAST: u32 = 5_090_391;
 const STUN_SELF: u32 = 5_090_392;
@@ -189,13 +193,17 @@ fn node_status_replies(wire: &mut support::ReducerConnection, master: u64) -> Ve
     .collect()
 }
 
-fn known_node_status(master: u64) -> String {
+fn node_status(master: u64, known: bool) -> String {
     let guid: String = master
         .to_le_bytes()
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect();
-    format!("{guid}01")
+    format!("{guid}{:02x}", u8::from(known))
+}
+
+fn known_node_status(master: u64) -> String {
+    node_status(master, true)
 }
 
 fn stun_the_character(shard: &Standalone) {
@@ -792,6 +800,49 @@ fn a_flight_master_in_combat_still_gets_the_node_status() {
         node_status_replies(&mut wire, master),
         [known_node_status(master)]
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_node_status_skips_a_node_without_a_mount_for_the_characters_team() {
+    let (shard, mut wire, master) = stage("taxi-activation-status-team", 1000);
+    let master: u64 = master.parse().unwrap();
+    let flight_master = &shard.query_rows(&format!(
+        "SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {master}"
+    ))[0];
+    let (map_id, x, y, z): (u32, f32, f32, f32) = (
+        number(flight_master, "map_id"),
+        number(flight_master, "x"),
+        number(flight_master, "y"),
+        number(flight_master, "z"),
+    );
+    // The importer fills the Alliance display from the Horde entry; only the flags differ.
+    shard.insert_row(
+        "game_taxi_node",
+        &[
+            ("id", &ONE_TEAM_NODE),
+            ("client_node_id", &ONE_TEAM_CLIENT_NODE),
+            ("map_id", &map_id),
+            ("x", &x),
+            ("y", &y),
+            ("z", &z),
+            ("name", &"Horde-only fixture"),
+            ("mount_display_horde", &295),
+            ("mount_display_alliance", &295),
+            ("own_mount_horde", &true),
+            ("own_mount_alliance", &false),
+        ],
+    );
+    for (race, known) in [(HORDE_RACE, false), (ALLIANCE_RACE, true)] {
+        shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET unit_bytes_0 = {race} WHERE guid = 1"
+        ));
+        assert_eq!(
+            node_status_replies(&mut wire, master),
+            [node_status(master, known)],
+            "race {race}"
+        );
+    }
 }
 
 fn insert_self_spell(

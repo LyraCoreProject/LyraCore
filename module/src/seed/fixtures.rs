@@ -181,6 +181,8 @@ pub(crate) fn seed_taxi_fixture(ctx: &ReducerContext) {
         name: taxi::SOURCE_NAME.to_string(),
         mount_display_horde: taxi::MOUNT_DISPLAY_HORDE,
         mount_display_alliance: taxi::MOUNT_DISPLAY_ALLIANCE,
+        own_mount_horde: true,
+        own_mount_alliance: true,
     });
     ctx.db.game_taxi_node().insert(GameTaxiNode {
         id: taxi::DESTINATION_NODE_STORAGE_ID,
@@ -192,6 +194,8 @@ pub(crate) fn seed_taxi_fixture(ctx: &ReducerContext) {
         name: taxi::DESTINATION_NAME.to_string(),
         mount_display_horde: taxi::MOUNT_DISPLAY_HORDE,
         mount_display_alliance: taxi::MOUNT_DISPLAY_ALLIANCE,
+        own_mount_horde: true,
+        own_mount_alliance: true,
     });
     ctx.db.game_taxi_path().insert(GameTaxiPath {
         id: taxi::PATH_ID,

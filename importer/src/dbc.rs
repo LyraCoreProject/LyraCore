@@ -671,7 +671,7 @@ fn taxi_catalogue_sql(
         node_rows.push((
             id,
             format!(
-                "({},{},{},{},{},{},{},{},{})",
+                "({},{},{},{},{},{},{},{},{},{},{})",
                 id,
                 id,
                 row.map.id,
@@ -681,6 +681,8 @@ fn taxi_catalogue_sql(
                 sql_text(&row.name.en_gb),
                 displays[0],
                 displays[1],
+                entries[0] != 0,
+                entries[1] != 0,
             ),
         ));
     }
@@ -809,7 +811,7 @@ fn taxi_catalogue_sql(
         (
             fixture::SOURCE_NODE_STORAGE_ID,
             format!(
-                "({},{},{},{},{},{},{},{},{})",
+                "({},{},{},{},{},{},{},{},{},true,true)",
                 fixture::SOURCE_NODE_STORAGE_ID,
                 fixture::SOURCE_CLIENT_NODE_ID,
                 fixture::MAP_ID,
@@ -824,7 +826,7 @@ fn taxi_catalogue_sql(
         (
             fixture::DESTINATION_NODE_STORAGE_ID,
             format!(
-                "({},{},{},{},{},{},{},{},{})",
+                "({},{},{},{},{},{},{},{},{},true,true)",
                 fixture::DESTINATION_NODE_STORAGE_ID,
                 fixture::DESTINATION_CLIENT_NODE_ID,
                 fixture::MAP_ID,
@@ -895,7 +897,7 @@ fn taxi_catalogue_sql(
     push_insert(
         &mut stmts,
         "game_taxi_node",
-        "id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance",
+        "id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance,own_mount_horde,own_mount_alliance",
         &node_rows,
     );
     push_insert(
@@ -1341,18 +1343,18 @@ mod tests {
     #[test]
     fn taxi_mount_fallback_requires_an_absent_faction_entry() {
         let (mut nodes, paths, points) = synthetic_taxi_catalogue();
-        for (entries, expected, warning_count) in [
-            ([0, 1101], [1147, 1147], 0),
-            ([1100, 0], [295, 295], 0),
-            ([0, 0], [0, 0], 0),
-            ([9999, 1101], [0, 1147], 1),
-            ([1100, 9999], [295, 0], 1),
+        for (entries, expected, own, warning_count) in [
+            ([0, 1101], [1147, 1147], [false, true], 0),
+            ([1100, 0], [295, 295], [true, false], 0),
+            ([0, 0], [0, 0], [false, false], 0),
+            ([9999, 1101], [0, 1147], [true, true], 1),
+            ([1100, 9999], [295, 0], [true, true], 1),
         ] {
             nodes.rows[1].mount_creature_display_info = entries;
             let catalogue = catalogue_with_mounts(&nodes, &paths, &points).unwrap();
             let expected = format!(
-                "(10,10,0,10,2,3,'O''Ryan''s Source',{},{})",
-                expected[0], expected[1]
+                "(10,10,0,10,2,3,'O''Ryan''s Source',{},{},{},{})",
+                expected[0], expected[1], own[0], own[1]
             );
             assert!(
                 catalogue
@@ -1382,7 +1384,7 @@ mod tests {
         assert!(catalogue
             .statements
             .iter()
-            .any(|sql| sql.contains("(10,10,0,10,2,3,'O''Ryan''s Source',295,1147)")));
+            .any(|sql| sql.contains("(10,10,0,10,2,3,'O''Ryan''s Source',295,1147,true,true)")));
     }
 
     #[test]
@@ -1399,7 +1401,7 @@ mod tests {
         assert!(catalogue
             .statements
             .iter()
-            .any(|sql| sql.contains("(10,10,0,10,2,3,'O''Ryan''s Source',0,0)")));
+            .any(|sql| sql.contains("(10,10,0,10,2,3,'O''Ryan''s Source',0,0,true,true)")));
         assert!(catalogue
             .warnings
             .iter()
@@ -1442,7 +1444,7 @@ mod tests {
             .find(|sql| sql.starts_with("INSERT INTO game_taxi_node "))
             .unwrap();
         assert!(
-            node_insert.contains("(10,10,0,10,2,3,'O''Ryan''s Source',295,1147)"),
+            node_insert.contains("(10,10,0,10,2,3,'O''Ryan''s Source',295,1147,true,true)"),
             "Horde/Alliance creature entries must resolve to displays: {node_insert}"
         );
 

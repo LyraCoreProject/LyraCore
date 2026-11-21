@@ -13,6 +13,10 @@ pub struct GameTaxiNode {
     pub name: String,
     pub mount_display_horde: u32,
     pub mount_display_alliance: u32,
+    #[default(true)]
+    pub own_mount_horde: bool,
+    #[default(true)]
+    pub own_mount_alliance: bool,
 }
 
 #[table(
