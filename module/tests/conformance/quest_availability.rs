@@ -105,7 +105,7 @@ fn status(stage: &mut Stage) -> Vec<(u16, Vec<u8>)> {
 
 fn status_reply(stage: &Stage, status: u8) -> Vec<(u16, Vec<u8>)> {
     let mut body = stage.giver.to_le_bytes().to_vec();
-    body.push(status);
+    body.extend(u32::from(status).to_le_bytes());
     vec![(SMSG_QUESTGIVER_STATUS, body)]
 }
 
