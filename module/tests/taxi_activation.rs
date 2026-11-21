@@ -927,8 +927,15 @@ fn the_taxi_menu_opens_on_the_nearest_node_however_far() {
     // far node qualifies, which the old 10-yard lookup refused.
     shard.assert_sql("DELETE FROM game_taxi_node WHERE id = 5090100");
     shard.assert_sql("DELETE FROM game_taxi_node WHERE id = 5090101");
+    let x: f32 = number(
+        &shard.query_rows(&format!(
+            "SELECT x FROM game_taxi_node WHERE id = {SOURCE_NODE}"
+        ))[0],
+        "x",
+    );
     shard.assert_sql(&format!(
-        "UPDATE game_taxi_node SET x = x + {FAR_YARDS} WHERE id = {SOURCE_NODE}"
+        "UPDATE game_taxi_node SET x = {} WHERE id = {SOURCE_NODE}",
+        x + FAR_YARDS
     ));
     assert_eq!(
         taxi_menu_prefixes(&mut wire, master),
