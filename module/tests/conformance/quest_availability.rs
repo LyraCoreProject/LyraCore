@@ -166,7 +166,7 @@ fn set_level(stage: &Stage, level: u32) {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_quest_named_by_its_predecessors_next_quest_id_waits_for_that_reward() {
+fn a_seeded_prerequisite_row_holds_the_quest_until_its_predecessor_is_rewarded() {
     let mut stage = stage("quest-availability-next-quest-id");
     offer(&stage, FIRST, 1, 1);
     offer(&stage, SECOND, 1, 1);
@@ -258,6 +258,45 @@ fn a_quest_five_levels_below_the_character_shows_no_yellow_mark() {
     assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
 }
 
+const CHARACTER_FACTION: u32 = 5_113_000;
+const GIVER_FACTION: u32 = 5_113_001;
+
+fn set_factions(stage: &Stage, giver_enemy_group: u32) {
+    for (id, faction_group, enemy_group) in [
+        (CHARACTER_FACTION, 1u32, 0u32),
+        (GIVER_FACTION, 0, giver_enemy_group),
+    ] {
+        stage.shard.insert_row(
+            "game_faction_template",
+            &[
+                ("id", &id),
+                ("faction", &id),
+                ("faction_group", &faction_group),
+                ("enemy_group", &enemy_group),
+            ],
+        );
+    }
+    for (guid, template) in [
+        (stage.guid, CHARACTER_FACTION),
+        (stage.giver, GIVER_FACTION),
+    ] {
+        stage.shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET faction_template = {template} WHERE guid = {guid}"
+        ));
+    }
+}
+
+fn grant_reputation(stage: &Stage, amount: i32) {
+    stage.shard.assert_call(
+        "debug_grant_reputation",
+        &[
+            &stage.guid.to_string(),
+            &GIVER_FACTION.to_string(),
+            &amount.to_string(),
+        ],
+    );
+}
+
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_hostile_quest_giver_shows_no_mark() {
@@ -265,28 +304,35 @@ fn a_hostile_quest_giver_shows_no_mark() {
     offer(&stage, FIRST, 1, 1);
     assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
 
-    let (character_template, giver_template) = (5_113_000u32, 5_113_001u32);
-    for (id, faction, faction_group, enemy_group) in [
-        (character_template, 5_113_000u32, 1u32, 0u32),
-        (giver_template, 5_113_001, 0, 1),
-    ] {
-        stage.shard.insert_row(
-            "game_faction_template",
-            &[
-                ("id", &id),
-                ("faction", &faction),
-                ("faction_group", &faction_group),
-                ("enemy_group", &enemy_group),
-            ],
-        );
-    }
+    set_factions(&stage, 1);
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_NONE));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_reputation_giver_hides_its_mark_only_from_a_hostile_rank() {
+    let mut stage = stage("quest-availability-reputation");
+    offer(&stage, FIRST, 1, 1);
+    set_factions(&stage, 1);
+    stage.shard.insert_row(
+        "game_faction",
+        &[
+            ("faction_id", &GIVER_FACTION),
+            ("reputation_index", &60),
+            ("base_standing", &0),
+        ],
+    );
+    grant_reputation(&stage, -3000);
     stage.shard.assert_sql(&format!(
-        "UPDATE game_world_entity SET faction_template = {character_template} WHERE guid = {}",
+        "UPDATE game_player_reputation SET at_war = true WHERE character_guid = {}",
         stage.guid
     ));
-    stage.shard.assert_sql(&format!(
-        "UPDATE game_world_entity SET faction_template = {giver_template} WHERE guid = {}",
-        stage.giver
-    ));
+    assert_eq!(
+        status(&mut stage),
+        status_reply(&stage, STATUS_AVAILABLE),
+        "an Unfriendly rank at war is not hostile"
+    );
+
+    grant_reputation(&stage, -1);
     assert_eq!(status(&mut stage), status_reply(&stage, STATUS_NONE));
 }

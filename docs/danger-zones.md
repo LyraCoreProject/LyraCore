@@ -611,6 +611,10 @@ as before. The reimport also clears a `prev_quest_id` that names a breadcrumb or
 as vmangos does. A Character already on two quests of one exclusive group keeps both; no repair is
 needed.
 
+The next-quest-in-chain check needs no reimport: it reads `next_quest_id`, which existing quests
+already hold. From the publish on, a Character who has taken or finished a quest's next quest in
+its chain can no longer take that quest, and its giver no longer marks it.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

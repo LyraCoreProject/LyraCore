@@ -732,11 +732,11 @@ struct CharacterQuestHistory<'a> {
 }
 
 impl lyracore_shared::quest::QuestHistory for CharacterQuestHistory<'_> {
-    fn standing(&self, quest_entry: u32) -> lyracore_shared::quest::Standing {
+    fn standing(&self, quest_entry: u32) -> lyracore_shared::quest::QuestStanding {
         let Some(row) = character_quest_row(self.ctx, self.character_guid, quest_entry) else {
-            return lyracore_shared::quest::Standing::default();
+            return lyracore_shared::quest::QuestStanding::default();
         };
-        lyracore_shared::quest::Standing {
+        lyracore_shared::quest::QuestStanding {
             active: row.is_active(),
             rewarded: row.rewarded,
             repeatable: self

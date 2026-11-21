@@ -818,8 +818,8 @@ fn build_quests(
         let next_quest_raw: i64 = row.number(qt::NEXT_QUEST_IN_CHAIN)?;
         let limit_time_raw: i64 = row.number(qt::LIMIT_TIME)?;
         let quest_type: u32 = row.number(qt::TYPE)?;
-        let exclusive_group: i32 = row.number("ExclusiveGroup")?;
-        let max_level: u32 = row.number("MaxLevel")?;
+        let exclusive_group: i32 = row.number(qt::EXCLUSIVE_GROUP)?;
+        let max_level: u32 = row.number(qt::MAX_LEVEL)?;
         if exclusive_group != 0 || max_level != 0 {
             availability_rows.push(format!("({entry},{exclusive_group},{max_level})"));
         }

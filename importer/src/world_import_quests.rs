@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use anyhow::Result;
 use wow_world_base::vanilla::SpellEffect;
 
-use crate::dump::TableRows;
+use crate::dump::{qt, TableRows};
 use crate::world_import_scope::{WorldImportProfile, WorldImportScope};
 
 use super::{
@@ -62,9 +62,9 @@ impl QuestLinks {
                 Ok((
                     row.number("entry")?,
                     QuestLink {
-                        prev: row.number(crate::dump::qt::PREV_QUEST_ID)?,
-                        next: row.number("NextQuestId")?,
-                        breadcrumb: row.number::<u64>("BreadcrumbForQuestId")? != 0,
+                        prev: row.number(qt::PREV_QUEST_ID)?,
+                        next: row.number(qt::NEXT_QUEST_ID)?,
+                        breadcrumb: row.number::<u64>(qt::BREADCRUMB_FOR_QUEST_ID)? != 0,
                     },
                 ))
             })

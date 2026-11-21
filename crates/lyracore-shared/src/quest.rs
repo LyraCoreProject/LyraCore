@@ -202,7 +202,7 @@ pub struct AcceptanceRequirements {
     /// Positive: only one quest of the group. Negative: a successor needs every quest of the group.
     pub exclusive_group: i32,
     pub next_in_chain: u32,
-    /// In vmangos `prevQuests` order; the first one met decides.
+    /// The first one met decides; vmangos's order is unspecified.
     pub prerequisites: Vec<Prerequisite>,
 }
 
@@ -214,13 +214,13 @@ pub struct Prerequisite {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct Standing {
+pub struct QuestStanding {
     pub active: bool,
     pub rewarded: bool,
     pub repeatable: bool,
 }
 
-impl Standing {
+impl QuestStanding {
     // vmangos QUEST_STATUS_INCOMPLETE or _COMPLETE; a rewarded repeatable quest returns to NONE.
     fn taken_or_done(self) -> bool {
         self.active || (self.rewarded && !self.repeatable)
@@ -228,7 +228,7 @@ impl Standing {
 }
 
 pub trait QuestHistory {
-    fn standing(&self, quest_entry: u32) -> Standing;
+    fn standing(&self, quest_entry: u32) -> QuestStanding;
     fn exclusive_group(&self, quest_entry: u32) -> i32;
     fn exclusive_group_members(&self, group: i32) -> Vec<u32>;
 }
@@ -483,12 +483,12 @@ mod rule_tests {
 
     #[derive(Default)]
     struct History {
-        standings: std::collections::BTreeMap<u32, Standing>,
+        standings: std::collections::BTreeMap<u32, QuestStanding>,
         groups: std::collections::BTreeMap<u32, i32>,
     }
 
     impl History {
-        fn with(mut self, quest_entry: u32, standing: Standing) -> Self {
+        fn with(mut self, quest_entry: u32, standing: QuestStanding) -> Self {
             self.standings.insert(quest_entry, standing);
             self
         }
@@ -502,7 +502,7 @@ mod rule_tests {
     }
 
     impl QuestHistory for History {
-        fn standing(&self, quest_entry: u32) -> Standing {
+        fn standing(&self, quest_entry: u32) -> QuestStanding {
             self.standings
                 .get(&quest_entry)
                 .copied()
@@ -522,12 +522,12 @@ mod rule_tests {
         }
     }
 
-    const ACTIVE: Standing = Standing {
+    const ACTIVE: QuestStanding = QuestStanding {
         active: true,
         rewarded: false,
         repeatable: false,
     };
-    const REWARDED: Standing = Standing {
+    const REWARDED: QuestStanding = QuestStanding {
         active: false,
         rewarded: true,
         repeatable: false,
@@ -741,7 +741,7 @@ mod rule_tests {
             accept(&quest, &group().with(2, REWARDED)),
             Err(AcceptanceRefusal::Prerequisite)
         );
-        let repeated = Standing {
+        let repeated = QuestStanding {
             repeatable: true,
             ..REWARDED
         };

@@ -7,13 +7,13 @@ replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["quest_offers"]
-deliberate_deviations = []
 prerequisites = []
 tests = [
     { path = "importer/src/world_import_quests_tests.rs", function = "named_quests_select_revisions_relations_mail_money_xp_flags_and_learn_spells", rung = "unit" },
     { path = "module/tests/conformance/quest_availability.rs", function = "a_quest_up_to_seven_levels_ahead_shows_the_grey_mark", rung = "durable_module" },
     { path = "module/tests/conformance/quest_availability.rs", function = "a_quest_five_levels_below_the_character_shows_no_yellow_mark", rung = "durable_module" },
     { path = "module/tests/conformance/quest_availability.rs", function = "a_hostile_quest_giver_shows_no_mark", rung = "durable_module" },
+    { path = "module/tests/conformance/quest_availability.rs", function = "a_reputation_giver_hides_its_mark_only_from_a_hostile_rank", rung = "durable_module" },
     { path = "crates/lyracore-protocol/src/codec/quest.rs", function = "the_highest_numeric_status_wins", rung = "codec" },
 ]
 
@@ -25,3 +25,20 @@ symbol = "WorldSession::HandleQuestQueryOpcode"
 [real_client]
 status = "unverified"
 
+[[deliberate_deviations]]
+id = "failed_quest_mark"
+result = "A quest giver shows its start mark for a failed quest the Character can take again. The Reference Server shows no start mark for a quest at QUEST_STATUS_FAILED."
+reason = "The mark follows the LyraCore failed-quest retry, which the maintainer kept, so the giver marks every quest it lets the Character take."
+source = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/QuestHandler.cpp"
+
+[[known_gaps]]
+description = "A rewarded repeatable quest shows the yellow Available mark. The Reference Server shows DIALOG_STATUS_REWARD_REP, the blue mark."
+path = "crates/lyracore-protocol/src/codec/quest.rs"
+symbol = "eval_status"
+evidence = "vmangos d9173eca QuestHandler.cpp WorldSession::GetDialogStatus."
+
+[[known_gaps]]
+description = "The giver mark and quest list ignore the previous-chain check (SatisfyQuestPrevChain), breadcrumbs, required skills and reputation requirements."
+path = "crates/lyracore-shared/src/quest.rs"
+symbol = "start_sighting"
+evidence = "vmangos d9173eca Player.cpp Player::CanSeeStartQuest; Compatibility Manifest quests.breadcrumb, quests.skill-requirement, quests.reputation-requirement, quests.maximum-reputation."

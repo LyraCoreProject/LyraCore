@@ -195,7 +195,7 @@ pub fn quest_menu_items(evals: &[GiverQuestEval]) -> Vec<QuestItem> {
         .collect()
 }
 
-/// Completed quests use RewardRep, 4, in menus and Reward, 6, above the giver.
+/// Completed quests use RewardRep, 4, in menus and Reward2, 7, above the giver.
 fn menu_icon(e: &GiverQuestEval) -> QuestGiverStatus {
     if e.role == quest_role::END && e.active {
         if e.complete {
