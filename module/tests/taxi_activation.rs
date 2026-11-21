@@ -21,6 +21,9 @@ const TAXI_NODE_STATUS_QUERY: u32 = 0x1aa;
 const TAXI_NODE_STATUS: u64 = 0x1ab;
 const REVERSE_PATH: u32 = 5_090_306;
 const UNCATALOGUED_CLIENT_NODE: u32 = 9_999;
+const UNVISITED_NODE: u32 = 5_090_307;
+const UNVISITED_CLIENT_NODE: u32 = 252;
+const UNVISITED_PATH: u32 = 5_090_308;
 const MOUNT_DISPLAY: u32 = 1147;
 const SLOW_CAST: u32 = 5_090_391;
 const STUN_SELF: u32 = 5_090_392;
@@ -332,13 +335,46 @@ fn a_multi_hop_express_request_in_combat_gets_status_7() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_multi_hop_express_request_with_an_unknown_node_gets_no_reply() {
-    let (shard, mut wire, master) = stage("taxi-activation-express-unknown", 1000);
-    insert_reverse_path(&shard);
+fn a_multi_hop_express_request_with_an_unvisited_node_gets_no_reply() {
+    let (shard, mut wire, master) = stage("taxi-activation-express-unvisited", 1000);
+    let destination = &shard.query_rows(&format!(
+        "SELECT map_id, x, y, z FROM game_taxi_node WHERE id = {DESTINATION_NODE}"
+    ))[0];
+    let (map_id, x, y, z): (u32, f32, f32, f32) = (
+        number(destination, "map_id"),
+        number(destination, "x"),
+        number(destination, "y"),
+        number(destination, "z"),
+    );
+    // The third node is catalogued and has a path from the second, so only the visit check
+    // can keep this request silent.
+    shard.insert_row(
+        "game_taxi_node",
+        &[
+            ("id", &UNVISITED_NODE),
+            ("client_node_id", &UNVISITED_CLIENT_NODE),
+            ("map_id", &map_id),
+            ("x", &(x + FLIGHT_YARDS)),
+            ("y", &y),
+            ("z", &z),
+            ("name", &"Unvisited fixture"),
+            ("mount_display_horde", &295),
+            ("mount_display_alliance", &MOUNT_DISPLAY),
+        ],
+    );
+    shard.insert_row(
+        "game_taxi_path",
+        &[
+            ("id", &UNVISITED_PATH),
+            ("source_node_id", &DESTINATION_NODE),
+            ("destination_node_id", &UNVISITED_NODE),
+            ("fare", &FARE),
+        ],
+    );
     let nodes = [
         SOURCE_CLIENT_NODE,
         DESTINATION_CLIENT_NODE,
-        UNCATALOGUED_CLIENT_NODE,
+        UNVISITED_CLIENT_NODE,
     ];
     assert!(replies(&express(&mut wire, master.parse().unwrap(), &nodes)).is_empty());
     assert_eq!((flights(&shard), money(&shard)), (0, 1000));

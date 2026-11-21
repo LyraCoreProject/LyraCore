@@ -378,8 +378,7 @@ impl ActivationPlayerState {
         }
     }
 
-    /// vmangos checks `CanInteractWithNPC` and the node count first. This checks Flying, then combat,
-    /// then client control.
+    /// vmangos checks `CanInteractWithNPC` and the node count first.
     fn validate_can_act(self) -> Result<(), TaxiGateDenied> {
         use lyracore_shared::constants::unit_flags;
         if self.has_active_flight {
@@ -1116,8 +1115,9 @@ pub fn gw_taxi_node_status(
 }
 
 /// The node vmangos `SendTaxiStatus` reports on: the nearest on the creature's map that has a
-/// mount for the Character's team. It checks no interaction, only that the creature is on the
-/// Character's map.
+/// mount. It checks no interaction, only that the creature is on the Character's map. vmangos also
+/// skips a node without the Character's own team mount; the imported catalogue fills an empty team
+/// slot from the other team, so this cannot yet (#1091).
 fn status_node(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -1247,7 +1247,6 @@ pub fn gw_activate_taxi(
     Ok(())
 }
 
-/// Whether `nodes`, in route order, have a path between each pair.
 fn every_leg_has_a_path(ctx: &ReducerContext, nodes: &[GameTaxiNode]) -> bool {
     nodes.windows(2).all(|leg| {
         ctx.db
