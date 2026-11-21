@@ -395,14 +395,7 @@ pub(super) fn receive(
                     }
                 })
                 .and_then(|slot| crate::items::apply_player_repair(ctx, guid, c.npc.guid(), slot));
-            result.map_err(|reason| {
-                Rollback::reply(
-                    ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                        codec::build_gm_system_message(reason.clone()),
-                    )),
-                    reason,
-                )
-            })
+            result.map_err(Rollback::silent)
         }
         ClientOpcodeMessage::CMSG_BUY_BANK_SLOT(c) => {
             let reply = |result| {
