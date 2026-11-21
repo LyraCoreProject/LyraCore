@@ -223,6 +223,16 @@ pub(crate) fn scale_swing_for_rank(min: u32, max: u32, rank: u8) -> (u32, u32) {
     (scale(min), scale(max))
 }
 
+/// vmangos `UpdateDamagePhysical`: 0.7 + 0.3 * AP now / base AP, with only percent Auras moving AP.
+pub(crate) fn scale_swing_for_attack_power_multiplier(
+    (min, max): (u32, u32),
+    multiplier: f32,
+) -> (u32, u32) {
+    let scale = 1.0 + 0.3 * f64::from(multiplier);
+    let apply = |damage: u32| (f64::from(damage) * scale) as u32;
+    (apply(min), apply(max))
+}
+
 pub(crate) fn armor_mitigation_pct(armor: u32, attacker_level: u32) -> u32 {
     if armor == 0 {
         return 0;
@@ -862,6 +872,27 @@ mod tests {
         );
         assert_eq!(scale_swing_for_rank(1, 3, 1), (1, 4));
         assert_eq!(scale_swing_for_rank(10, 20, 3), (25, 50));
+    }
+
+    #[test]
+    fn a_percent_attack_power_aura_scales_creature_damage_by_three_tenths_of_the_multiplier() {
+        // vmangos: +100% attack power doubles the ratio, so 0.7 + 0.3 * 2 = 1.3.
+        assert_eq!(
+            scale_swing_for_attack_power_multiplier((100, 200), 1.0),
+            (130, 260)
+        );
+        assert_eq!(
+            scale_swing_for_attack_power_multiplier((100, 200), 3.0),
+            (190, 380)
+        );
+        assert_eq!(
+            scale_swing_for_attack_power_multiplier((100, 200), -0.5),
+            (85, 170)
+        );
+        assert_eq!(
+            scale_swing_for_attack_power_multiplier((100, 200), 0.0),
+            (100, 200)
+        );
     }
 
     #[test]

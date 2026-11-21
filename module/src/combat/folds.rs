@@ -6,6 +6,7 @@ use crate::{
 };
 
 use super::queued_strike::{QueuedStrike, QueuedStrikeDamage};
+use super::tables::scale_swing_for_attack_power_multiplier;
 use super::*;
 use crate::form::CombatProfile;
 
@@ -394,6 +395,10 @@ fn base_melee_range(ctx: &ReducerContext, attacker: &WorldEntity, normalized: bo
         });
         let rank = tmpl.filter(|_| !derived).map(|t| t.rank).unwrap_or(0);
         let (min, max) = scale_swing_for_rank(base_min, base_max, rank);
+        let (min, max) = scale_swing_for_attack_power_multiplier(
+            (min, max),
+            melee_attack_power_multiplier(ctx, attacker.guid),
+        );
         if disarmed {
             let pct = crate::spell::DISARM_SWING_RETAINED_PCT;
             return (min * pct / 100, max * pct / 100);

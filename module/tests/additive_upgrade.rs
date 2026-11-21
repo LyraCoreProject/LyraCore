@@ -42,6 +42,7 @@ fn assert_saved_taxi_flight_upgrade(baseline: &[u8]) {
         .pop()
         .unwrap();
     assert_eq!(after["first_destination_node_index"], "1");
+    assert_eq!(after["current_leg_index"], "0");
     for (column, value) in before {
         assert_eq!(after[&column], value, "{column}");
     }

@@ -48,10 +48,10 @@ pub(crate) fn take_item(
     plan.grant(ctx, &tmpl, count, false, Some(row.random_property_id))
         .and_then(|()| plan.commit(ctx))
         .map_err(|cause| {
-            let refusal = if cause.kind == ActionRefusalKind::InventoryFull {
-                LootRefusal::InventoryFull
-            } else {
-                LootRefusal::StorageRefused
+            let refusal = match cause.kind {
+                ActionRefusalKind::InventoryFull => LootRefusal::InventoryFull,
+                ActionRefusalKind::DuplicateItem => LootRefusal::UniqueItemHeld,
+                _ => LootRefusal::StorageRefused,
             };
             refuse(refusal, &cause.detail)
         })?;
