@@ -2,9 +2,11 @@ use lyracore_protocol::{
     codec,
     messages::vanilla::{
         opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
-        LootMethodError,
+        LootMethodError, SMSG_INVENTORY_CHANGE_FAILURE,
     },
 };
+use lyracore_shared::guid;
+use lyracore_shared::item::ItemRefusal;
 use lyracore_shared::loot_roll as roll;
 use spacetimedb::{ConnectionId, ReducerContext};
 
@@ -44,6 +46,22 @@ fn open(ctx: &ReducerContext, connection: ConnectionId, target: u64) {
     }
 }
 
+fn loot_error(target: u64, failure: LootMethodError) -> ServerOpcodeMessage {
+    ServerOpcodeMessage::SMSG_LOOT_RESPONSE(Box::new(codec::build_loot_error_response(
+        target, failure,
+    )))
+}
+
+fn release_response(target: u64) -> ServerOpcodeMessage {
+    ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(Box::new(codec::build_loot_release_response(
+        target,
+    )))
+}
+
+fn inventory_failure(failure: SMSG_INVENTORY_CHANGE_FAILURE) -> ServerOpcodeMessage {
+    ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(failure))
+}
+
 fn refusal(target: u64, refusal: LootRefusal) -> Rollback {
     let failure = match refusal {
         LootRefusal::LootTagIneligible => LootMethodError::DidntKill,
@@ -54,18 +72,43 @@ fn refusal(target: u64, refusal: LootRefusal) -> Rollback {
         | LootRefusal::NothingToLoot
         | LootRefusal::ItemUnavailable
         | LootRefusal::InventoryFull
+        | LootRefusal::UniqueItemHeld
         | LootRefusal::StorageRefused
         | LootRefusal::RollUnavailable
         | LootRefusal::NotMasterLooter
         | LootRefusal::RecipientUnavailable
         | LootRefusal::RecipientInventoryFull => return Rollback::silent(refusal.as_tag()),
     };
-    Rollback::reply(
-        ServerOpcodeMessage::SMSG_LOOT_RESPONSE(Box::new(codec::build_loot_error_response(
-            target, failure,
-        ))),
-        refusal.as_tag(),
-    )
+    Rollback::reply(loot_error(target, failure), refusal.as_tag())
+}
+
+// Replies follow vmangos HandleAutostoreLootItemOpcode; a failed store leaves the window open.
+fn take_refusal(target: u64, refusal: LootRefusal) -> Rollback {
+    let gameobject = guid::is_gameobject(target);
+    let message = match refusal {
+        LootRefusal::NoLootSource | LootRefusal::OutOfRange if gameobject => {
+            release_response(target)
+        }
+        LootRefusal::NoLootSource
+        | LootRefusal::LootTagIneligible
+        | LootRefusal::ItemUnavailable => loot_error(target, LootMethodError::DidntKill),
+        LootRefusal::OutOfRange => loot_error(target, LootMethodError::TooFar),
+        LootRefusal::NothingToLoot => inventory_failure(codec::build_already_looted()),
+        LootRefusal::InventoryFull => inventory_failure(codec::build_inventory_refusal(
+            ItemRefusal::InventoryFull,
+            0,
+            0,
+        )),
+        LootRefusal::UniqueItemHeld => inventory_failure(codec::build_cant_carry_more_of_this()),
+        LootRefusal::LooterUnavailable
+        | LootRefusal::LooterDead
+        | LootRefusal::StorageRefused
+        | LootRefusal::RollUnavailable
+        | LootRefusal::NotMasterLooter
+        | LootRefusal::RecipientUnavailable
+        | LootRefusal::RecipientInventoryFull => return Rollback::silent(refusal.as_tag()),
+    };
+    Rollback::reply(message, refusal.as_tag())
 }
 
 pub(super) fn receive(
@@ -146,7 +189,7 @@ pub(super) fn receive(
                 return Ok(());
             }
             crate::loot::take_item(ctx, guid, current, c.item_slot)
-                .map_err(|reason| refusal(current, reason))?;
+                .map_err(|reason| take_refusal(current, reason))?;
             Ok(super::send(
                 ctx,
                 connection,
@@ -154,15 +197,17 @@ pub(super) fn receive(
                 false,
             )?)
         }
-        ClientOpcodeMessage::CMSG_LOOT_RELEASE(c) => {
+        ClientOpcodeMessage::CMSG_LOOT_RELEASE(_) => {
             super::actor(ctx, guid)?;
+            let current = open_loot();
+            if current == 0 {
+                return Ok(());
+            }
             open(ctx, connection, 0);
             Ok(super::send(
                 ctx,
                 connection,
-                ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(Box::new(
-                    codec::build_loot_release_response(c.guid.guid()),
-                )),
+                release_response(current),
                 false,
             )?)
         }
