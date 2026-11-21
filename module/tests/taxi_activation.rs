@@ -36,6 +36,7 @@ const GOSSIP_MESSAGE: u64 = 0x17d;
 const TAXI_GOSSIP_OPTION: u32 = 5_090_393;
 const FIRST_VISIT_NODE: u32 = 5_090_311;
 const FIRST_VISIT_CLIENT_NODE: u32 = 249;
+const FLIGHT_MASTER_QUEST: u32 = 5_090_394;
 const FAR_YARDS: f32 = 500.0;
 const HORDE_RACE: u32 = 2;
 const ALLIANCE_RACE: u32 = 1;
@@ -1095,6 +1096,48 @@ fn a_first_gossip_hello_teaches_the_node_and_opens_no_gossip_menu() {
         hello.iter().map(|(opcode, _)| *opcode).collect::<Vec<_>>(),
         [GOSSIP_MESSAGE]
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_first_gossip_hello_at_a_quest_giver_teaches_the_node_and_still_opens_the_gossip_menu() {
+    let (shard, mut wire, master) = stage("taxi-activation-first-hello-quest", 1000);
+    let master: u64 = master.parse().unwrap();
+    give_the_flight_master_a_taxi_gossip_option(&shard);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET npc_flags = {} WHERE guid = {master}",
+        9 | lyracore_shared::constants::npc_flags::QUESTGIVER
+    ));
+    shard.insert_row(
+        "game_quest_template",
+        &[
+            ("entry", &FLIGHT_MASTER_QUEST),
+            ("quest_level", &1),
+            ("title", &"Flight master quest"),
+            ("zone_or_sort", &12),
+        ],
+    );
+    shard.insert_row(
+        "game_creature_quest",
+        &[
+            ("id", &u64::from(FLIGHT_MASTER_QUEST)),
+            ("creature_entry", &FLIGHT_MASTER_ENTRY),
+            ("quest_entry", &FLIGHT_MASTER_QUEST),
+        ],
+    );
+    insert_node_at_master(
+        &shard,
+        master,
+        (FIRST_VISIT_NODE, FIRST_VISIT_CLIENT_NODE),
+        true,
+        true,
+    );
+    let hello = received_packets(&mut wire, GOSSIP_HELLO, master);
+    assert_eq!(
+        hello.iter().map(|(opcode, _)| *opcode).collect::<Vec<_>>(),
+        [NEW_TAXI_PATH, TAXI_NODE_STATUS, GOSSIP_MESSAGE]
+    );
+    assert!(learned(&shard, FIRST_VISIT_NODE));
 }
 
 fn insert_self_spell(

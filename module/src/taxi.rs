@@ -481,8 +481,7 @@ pub(crate) fn discover(ctx: &ReducerContext, character_guid: u64, node_id: u32) 
     true
 }
 
-/// vmangos `SendLearnNewTaxiNode` for a gossip menu: teaches the node nearest the flight master.
-/// True when the Character did not know it.
+/// vmangos `SendLearnNewTaxiNode`: teaches the flight master's node; false when known or absent.
 pub(crate) fn learn_nearest_node(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -1202,8 +1201,7 @@ pub fn gw_open_taxi(
     Ok(())
 }
 
-/// vmangos `HandleTaxiQueryAvailableNodes`: an unknown node is taught and announced instead of
-/// opening the menu; only a known node opens it.
+/// vmangos `HandleTaxiQueryAvailableNodes`: teaches and announces an unknown node, else opens the menu.
 pub(crate) fn open_taxi(
     ctx: &ReducerContext,
     character_guid: u64,

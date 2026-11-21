@@ -146,6 +146,7 @@ fn send_menu(
         Vec::new()
     };
     // vmangos teaches the node while it builds the menu and shows the menu only for a quest.
+    // vmangos also hides the menu when the map has no node for the Character's team; we show it.
     if options
         .iter()
         .any(|option| option.action == gossip_option::TAXI)
