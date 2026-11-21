@@ -1251,19 +1251,34 @@ def check_trade(host):
     first.send(0x11d, bytes([0, 255, weapon_slot]))
     offers(first, second, 0, 0, 5090050, 1, 823, 1900)
     first.send(0x11d, bytes([6, 255, reins_slot]))
+    offers(first, second, 0, 6, 5090054, 1)
+    first.send(0x11e, bytes([6]))
     offers(first, second, 0, 6)
+    first.send(0x11d, bytes([1, 255, reins_slot]))
+    assert status(3) in first.collect()
+    assert not trading(second.collect())
     host.sql(f'UPDATE game_item_instance SET soulbound = false WHERE guid = {reins}')
     first.send(0x11d, bytes([6, 255, reins_slot]))
     offers(first, second, 0, 6, 5090054, 1)
     second.send(0x11d, bytes([0, 255, food_slot]))
     offers(second, first, 0, 0, 5090052, 5)
-    for request in [bytes([7, 255, weapon_slot]), bytes([1, 1, weapon_slot]), bytes([1, 255, 4])]:
+    first.send(0x11d, bytes([1, 255, 4]))
+    assert not trading(first.collect())
+    assert not trading(second.collect())
+    for request in [bytes([7, 255, weapon_slot]), bytes([1, 1, weapon_slot]), bytes([1, 255, weapon_slot])]:
         first.send(0x11d, request)
-        assert not trading(first.collect())
+        assert status(3) in first.collect()
         assert not trading(second.collect())
-    first.send(0x11d, bytes([1, 255, weapon_slot]))
-    offers(first, second, 0, 1)
     assert len(host.rows('SELECT id FROM game_trade_slot')) == 3
+    host.call('debug_grant_item', [first_guid, 5090052, 2])
+    bagged = host.rows(f'SELECT guid FROM game_item_instance WHERE owner_guid = {first_guid} AND entry = 5090052')[0][0]
+    host.sql(f'UPDATE game_item_instance SET slot = 120 WHERE guid = {bagged}')
+    first.send(0x11d, bytes([2, 19, 0]))
+    offers(first, second, 0, 2, 5090052, 2)
+    first.send(0x11e, bytes([2]))
+    offers(first, second, 0, 2)
+    host.sql(f'DELETE FROM game_item_instance WHERE guid = {bagged}')
+    first.collect()
     accept_first()
     second.send(0x11f, struct.pack('<I', 25))
     assert status(7) in offers(second, first, 25, 0, 5090052, 5)
@@ -4307,7 +4322,9 @@ def check_inventory(host):
         host.call('debug_apply_damage', [target, 1, guid])
         host.call('debug_kill_creature', [guid, target])
         progress = client.collect()
-        assert (0x1d0, struct.pack('<QIBIf', target, 60 if kills == 1 else 50, 0, 50, 1.0)) in progress
+        # 1.12 kill XP: level 1 vs a level 1 mob is 50, plus 10 rested; level 2 vs level 1 is 55 * 4 / 5.
+        total, base = (60, 50) if kills == 1 else (44, 44)
+        assert (0x1d0, struct.pack('<QIBIf', target, total, 0, base, 1.0)) in progress
         if kills == 1:
             assert any(opcode == 0x1d4 and body[:4] == struct.pack('<I', 2) for opcode, body in progress)
             assert host.rows(f'SELECT level, xp FROM game_world_entity WHERE guid = {guid}') == [[2, 50]]

@@ -74,16 +74,144 @@ pub(crate) fn max_health_for_level(level: u32) -> u32 {
     60 + 15 * level.saturating_sub(1)
 }
 
+fn grey_level(player_level: u32) -> u32 {
+    match player_level {
+        0..=5 => 0,
+        6..=39 => player_level - 5 - player_level / 10,
+        _ => player_level - 1 - player_level / 5,
+    }
+}
+
+pub(crate) fn is_grey_kill(player_level: u32, mob_level: u32) -> bool {
+    mob_level <= grey_level(player_level)
+}
+
+fn zero_difference(player_level: u32) -> u32 {
+    match player_level {
+        0..=7 => 5,
+        8..=9 => 6,
+        10..=11 => 7,
+        12..=15 => 8,
+        16..=19 => 9,
+        20..=29 => 11,
+        30..=39 => 12,
+        40..=44 => 13,
+        45..=49 => 14,
+        50..=54 => 15,
+        55..=59 => 16,
+        _ => 17,
+    }
+}
+
+fn base_gain_level_factor(player_level: u32, mob_level: u32) -> f32 {
+    if mob_level >= player_level {
+        return 1.0 + 0.05 * (mob_level - player_level).min(4) as f32;
+    }
+    if is_grey_kill(player_level, mob_level) {
+        return 0.0;
+    }
+    let zero_difference = zero_difference(player_level);
+    (zero_difference + mob_level).saturating_sub(player_level) as f32 / zero_difference as f32
+}
+
+fn base_gain(owner_level: u32, unit_level: u32, mob_level: u32) -> f32 {
+    (owner_level * 5 + 45) as f32 * base_gain_level_factor(unit_level, mob_level)
+}
+
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn xp_for_kill(mob_level: u32, player_level: u32) -> u32 {
-    if mob_level + 5 < player_level {
+    base_gain(player_level, player_level, mob_level).round_ties_even() as u32
+}
+
+fn is_elite_rank(rank: u8) -> bool {
+    matches!(rank, 1..=3)
+}
+
+fn elite_factor(rank: u8, non_raid_dungeon: bool) -> f32 {
+    match (is_elite_rank(rank), non_raid_dungeon) {
+        (false, _) => 1.0,
+        (true, true) => 2.5,
+        (true, false) => 2.0,
+    }
+}
+
+pub(crate) struct KillXpRules {
+    mob_level: u32,
+    rank: u8,
+    non_raid_dungeon: bool,
+    xp_rate: f32,
+}
+
+impl KillXpRules {
+    fn new(ctx: &ReducerContext, mob_level: u32, rank: u8, map_id: u32) -> Self {
+        Self {
+            mob_level,
+            rank,
+            non_raid_dungeon: crate::instance::is_non_raid_dungeon_map(map_id),
+            xp_rate: xp_rate(ctx),
+        }
+    }
+}
+
+pub(crate) fn pet_kill_xp(owner_level: u32, pet_level: u32, rules: &KillXpRules) -> u32 {
+    let gain = base_gain(owner_level, pet_level, rules.mob_level);
+    if gain == 0.0 {
         return 0;
     }
-    let base = mob_level * 5 + 45;
-    if mob_level > player_level {
-        base * 6 / 5
-    } else {
-        base
+    (gain * elite_factor(rules.rank, rules.non_raid_dungeon) * rules.xp_rate).round_ties_even()
+        as u32
+}
+
+fn kill_xp(player_level: u32, rules: &KillXpRules) -> u32 {
+    pet_kill_xp(player_level, player_level, rules)
+}
+
+fn group_xp_rate(members: u32) -> f32 {
+    match members {
+        0..=2 => 1.0,
+        3 => 1.166,
+        4 => 1.3,
+        5 => 1.4,
+        _ => (1.0 - members as f32 * 0.05).max(0.01),
     }
+}
+
+struct PartyKill {
+    non_grey_top_level: u32,
+    // Every member's share; only a member at or below `non_grey_top_level` is paid it.
+    shares: Vec<u32>,
+}
+
+fn party_kill(levels: &[u32], rules: &KillXpRules) -> Option<PartyKill> {
+    let top_level = levels.iter().copied().max()?;
+    let non_grey_top_level = levels
+        .iter()
+        .copied()
+        .filter(|&level| !is_grey_kill(level, rules.mob_level))
+        .max()?;
+    let xp = kill_xp(non_grey_top_level, rules) as f32;
+    let group_rate = group_xp_rate(levels.len() as u32);
+    let sum_level = levels.iter().sum::<u32>() as f32;
+    let shares = levels
+        .iter()
+        .map(|&level| {
+            let share_rate = group_rate * level as f32 / sum_level;
+            if top_level == non_grey_top_level {
+                (xp * share_rate) as u32
+            } else {
+                (xp * share_rate / 2.0 + 1.0) as u32
+            }
+        })
+        .collect();
+    Some(PartyKill {
+        non_grey_top_level,
+        shares,
+    })
+}
+
+pub(crate) enum PetKillXp<'a> {
+    Alone(&'a KillXpRules),
+    Party { xp: u32, non_grey_top_level: u32 },
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -130,19 +258,17 @@ fn progression_after_award(
     }
 }
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn rank_xp_multiplier(rank: u8) -> u32 {
-    match rank {
-        1..=3 => 2,
-        _ => 1,
+    if is_elite_rank(rank) {
+        2
+    } else {
+        1
     }
 }
 
 fn xp_rate(ctx: &ReducerContext) -> f32 {
     crate::config::server_config(ctx).xp_rate
-}
-
-pub(crate) fn split_kill_xp(base: u32, share_count: u32) -> u32 {
-    base / share_count.max(1)
 }
 
 pub(crate) fn rated_xp(ctx: &ReducerContext, base: u32) -> u32 {
@@ -220,29 +346,52 @@ pub(crate) fn accrue_rested_on_login(
     (rest_pool_after(pool, effective, level), true)
 }
 
-pub(crate) fn award_xp(
+pub(crate) fn award_kill_xp(
     ctx: &ReducerContext,
-    attacker_guid: u64,
     killed_guid: u64,
     mob_level: u32,
     rank: u8,
-    share_count: u32,
+    map_id: u32,
+    in_party: bool,
+    recipients: &[u64],
 ) {
+    let entities = ctx.db.game_world_entity();
+    let members: Vec<(u64, u32)> = recipients
+        .iter()
+        .filter_map(|guid| Some((*guid, entities.guid().find(*guid)?.level)))
+        .collect();
+    let levels: Vec<u32> = members.iter().map(|(_, level)| *level).collect();
+    let rules = KillXpRules::new(ctx, mob_level, rank, map_id);
+    let Some(kill) = party_kill(&levels, &rules) else {
+        return;
+    };
+    for ((recipient, level), share) in members.iter().zip(kill.shares) {
+        let paid = if *level <= kill.non_grey_top_level {
+            share
+        } else {
+            0
+        };
+        award_xp(ctx, *recipient, killed_guid, paid);
+        let pet_xp = if in_party {
+            PetKillXp::Party {
+                xp: share,
+                non_grey_top_level: kill.non_grey_top_level,
+            }
+        } else if paid > 0 {
+            PetKillXp::Alone(&rules)
+        } else {
+            continue;
+        };
+        crate::creatures::award_hunter_pet_kill_progression(ctx, *recipient, pet_xp);
+    }
+}
+
+fn award_xp(ctx: &ReducerContext, attacker_guid: u64, killed_guid: u64, base: u32) {
     let entities = ctx.db.game_world_entity();
     let Some(mut p) = entities.guid().find(attacker_guid) else {
         return;
     };
-    if p.level >= LEVEL_CAP {
-        return;
-    }
-    let base = split_kill_xp(
-        rated_xp(
-            ctx,
-            xp_for_kill(mob_level, p.level) * rank_xp_multiplier(rank),
-        ),
-        share_count,
-    );
-    if base == 0 {
+    if p.level >= LEVEL_CAP || base == 0 {
         return;
     }
     let chars = ctx.db.game_character();
@@ -376,9 +525,10 @@ pub(crate) fn sweep_expired(ctx: &ReducerContext) {
 #[cfg(test)]
 mod tests {
     use super::{
-        accrue_rested_on_login, explore_xp, max_health_for_level, progression_after_award,
-        rank_xp_multiplier, rest_bonus, rest_pool_after, split_kill_xp, xp_for_kill,
-        xp_to_next_level, XpProgression, REST_EIGHT_HOURS_MICROS,
+        accrue_rested_on_login, explore_xp, grey_level, group_xp_rate, kill_xp,
+        max_health_for_level, party_kill, pet_kill_xp, progression_after_award, rank_xp_multiplier,
+        rest_bonus, rest_pool_after, xp_for_kill, xp_to_next_level, KillXpRules, XpProgression,
+        REST_EIGHT_HOURS_MICROS,
     };
 
     #[test]
@@ -393,25 +543,152 @@ mod tests {
     }
 
     #[test]
-    fn kill_xp_pays_base_greys_out_and_adds_20pct_for_an_out_leveling_mob() {
+    fn kill_xp_scales_the_character_level_base_by_the_level_difference() {
         assert_eq!(xp_for_kill(1, 1), 50);
         assert_eq!(xp_for_kill(10, 10), 95);
-        assert_eq!(xp_for_kill(60, 59), 414);
         assert_eq!(xp_for_kill(60, 60), 345);
-        assert_eq!(xp_for_kill(5, 10), 70);
-        assert_eq!(xp_for_kill(4, 10), 0);
-        assert_eq!(xp_for_kill(1, 60), 0);
-        assert_eq!(xp_for_kill(11, 10), 120);
-        assert_eq!(xp_for_kill(2, 1), 66);
+        assert_eq!(xp_for_kill(27, 30), 146);
+        assert_eq!(xp_for_kill(50, 60), 142);
+        assert_eq!(xp_for_kill(40, 45), 174);
+        assert_eq!(xp_for_kill(14, 20), 66);
+        assert_eq!(xp_for_kill(11, 10), 100);
+        assert_eq!(xp_for_kill(34, 30), 234);
     }
 
     #[test]
-    fn group_split_divides_evenly_and_never_rounds_up() {
-        assert_eq!(split_kill_xp(100, 1), 100);
-        assert_eq!(split_kill_xp(100, 3), 33);
-        assert_eq!(split_kill_xp(1, 2), 0);
-        assert_eq!(split_kill_xp(100, 0), 100);
-        assert_eq!(split_kill_xp(100, 5), 20);
+    fn kill_xp_caps_the_bonus_at_four_levels_above() {
+        assert_eq!(xp_for_kill(14, 10), 114);
+        assert_eq!(xp_for_kill(30, 10), 114);
+    }
+
+    #[test]
+    fn kill_xp_is_zero_at_or_below_the_grey_level() {
+        assert_eq!(xp_for_kill(4, 9), 0);
+        assert_eq!(xp_for_kill(5, 9), 30);
+        assert_eq!(xp_for_kill(1, 60), 0);
+        assert_eq!(xp_for_kill(47, 60), 0);
+        assert_eq!(xp_for_kill(48, 60), 101);
+    }
+
+    #[test]
+    fn grey_level_follows_the_two_vmangos_bands() {
+        assert_eq!(grey_level(5), 0);
+        assert_eq!(grey_level(6), 1);
+        assert_eq!(grey_level(10), 4);
+        assert_eq!(grey_level(39), 31);
+        assert_eq!(grey_level(40), 31);
+        assert_eq!(grey_level(60), 47);
+    }
+
+    fn rules(mob_level: u32, rank: u8) -> KillXpRules {
+        KillXpRules {
+            mob_level,
+            rank,
+            non_raid_dungeon: false,
+            xp_rate: 1.0,
+        }
+    }
+
+    fn dungeon_rules(mob_level: u32, rank: u8) -> KillXpRules {
+        KillXpRules {
+            non_raid_dungeon: true,
+            ..rules(mob_level, rank)
+        }
+    }
+
+    fn paid_shares(levels: &[u32], rules: &KillXpRules) -> Vec<u32> {
+        party_kill(levels, rules).map_or_else(
+            || vec![0; levels.len()],
+            |kill| {
+                levels
+                    .iter()
+                    .zip(kill.shares)
+                    .map(|(level, share)| {
+                        if *level <= kill.non_grey_top_level {
+                            share
+                        } else {
+                            0
+                        }
+                    })
+                    .collect()
+            },
+        )
+    }
+
+    #[test]
+    fn an_elite_pays_double_and_two_and_a_half_times_in_a_non_raid_dungeon() {
+        assert_eq!(kill_xp(20, &rules(20, 0)), 145);
+        assert_eq!(kill_xp(20, &rules(20, 1)), 290);
+        assert_eq!(kill_xp(20, &rules(20, 3)), 290);
+        assert_eq!(kill_xp(20, &rules(20, 4)), 145);
+        assert_eq!(kill_xp(20, &dungeon_rules(20, 1)), 362);
+        assert_eq!(kill_xp(20, &dungeon_rules(20, 0)), 145);
+    }
+
+    #[test]
+    fn the_xp_rate_scales_the_kill_before_rounding() {
+        let rated = |mob_level, xp_rate| KillXpRules {
+            xp_rate,
+            ..rules(mob_level, 0)
+        };
+        assert_eq!(kill_xp(30, &rated(27, 1.5)), 219);
+        assert_eq!(kill_xp(30, &rated(4, 2.0)), 0);
+    }
+
+    #[test]
+    fn a_hunter_pet_takes_its_base_from_the_owner_and_its_factor_from_itself() {
+        assert_eq!(pet_kill_xp(40, 30, &rules(32, 0)), 270);
+        assert_eq!(pet_kill_xp(20, 15, &rules(18, 0)), 167);
+        assert_eq!(pet_kill_xp(60, 58, &rules(60, 0)), 380);
+        assert_eq!(pet_kill_xp(20, 20, &dungeon_rules(20, 1)), 362);
+        assert_eq!(pet_kill_xp(60, 20, &rules(10, 0)), 0);
+    }
+
+    #[test]
+    fn group_rate_grows_to_five_members_then_falls_five_percent_a_member() {
+        assert_eq!(group_xp_rate(1), 1.0);
+        assert_eq!(group_xp_rate(2), 1.0);
+        assert_eq!(group_xp_rate(3), 1.166);
+        assert_eq!(group_xp_rate(4), 1.3);
+        assert_eq!(group_xp_rate(5), 1.4);
+        assert_eq!(group_xp_rate(8), 0.6);
+        assert_eq!(group_xp_rate(40), 0.01);
+    }
+
+    #[test]
+    fn a_lone_member_gets_the_whole_kill() {
+        assert_eq!(paid_shares(&[30], &rules(27, 0)), [146]);
+        assert_eq!(paid_shares(&[60], &rules(50, 0)), [142]);
+        assert_eq!(paid_shares(&[9], &rules(4, 0)), [0]);
+    }
+
+    #[test]
+    fn a_party_splits_the_top_members_kill_by_level() {
+        assert_eq!(paid_shares(&[20, 18], &rules(19, 0)), [69, 62]);
+        assert_eq!(paid_shares(&[60, 20], &rules(60, 0)), [258, 86]);
+    }
+
+    #[test]
+    fn a_full_party_adds_the_group_bonus() {
+        assert_eq!(paid_shares(&[60; 5], &rules(60, 0)), [96; 5]);
+    }
+
+    #[test]
+    fn a_grey_top_member_earns_nothing_and_halves_the_rest() {
+        assert_eq!(paid_shares(&[60, 40], &rules(45, 0)), [0, 59]);
+    }
+
+    #[test]
+    fn a_member_above_the_non_grey_top_still_has_a_share_for_a_pet() {
+        let kill = party_kill(&[60, 40], &rules(45, 0)).unwrap();
+        assert_eq!(kill.non_grey_top_level, 40);
+        assert_eq!(kill.shares, [89, 59]);
+    }
+
+    #[test]
+    fn a_kill_grey_to_every_member_pays_nobody() {
+        assert!(party_kill(&[60, 55], &rules(40, 0)).is_none());
+        assert!(party_kill(&[], &rules(40, 0)).is_none());
     }
 
     #[test]
