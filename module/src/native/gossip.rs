@@ -140,6 +140,22 @@ fn send_menu(
         .is_ok()
     })
     .collect();
+    let quests = if opening {
+        codec::quest_menu_items(&super::quest::evaluations(ctx, npc.guid, guid))
+    } else {
+        Vec::new()
+    };
+    // vmangos teaches the node while it builds the menu and shows the menu only for a quest.
+    if options
+        .iter()
+        .any(|option| option.action == gossip_option::TAXI)
+        && crate::taxi::learn_nearest_node(ctx, guid, npc)
+    {
+        super::taxi::announce_new_path(ctx, connection, npc.guid)?;
+        if quests.is_empty() {
+            return Ok(());
+        }
+    }
     let mut player = ctx
         .db
         .game_native_player()
@@ -160,11 +176,6 @@ fn send_menu(
             .collect(),
     });
     ctx.db.game_native_player().connection_id().update(player);
-    let quests = if opening {
-        codec::quest_menu_items(&super::quest::evaluations(ctx, npc.guid, guid))
-    } else {
-        Vec::new()
-    };
     Ok(super::send(
         ctx,
         connection,
@@ -243,7 +254,7 @@ fn select(
         gossip_option::VENDOR => Ok(super::economy::vendor(ctx, connection, guid, npc)?),
         gossip_option::TRAINER => Ok(super::trainer::list(ctx, connection, guid, npc)?),
         gossip_option::BANKER => Ok(super::economy::bank(ctx, connection, guid, npc)?),
-        gossip_option::TAXI => Ok(super::taxi::open(ctx, connection, guid, npc)?),
+        gossip_option::TAXI => Ok(super::taxi::open_menu(ctx, connection, guid, npc)?),
         gossip_option::INNKEEPER => {
             complete(ctx, connection)?;
             super::send_raw(

@@ -172,6 +172,7 @@ pub mod taxi_protocol {
     pub const REPLY_STATUS: u8 = 1;
     pub const REPLY_OPEN: u8 = 2;
     pub const REPLY_ACTIVATE: u8 = 3;
+    pub const REPLY_NEW_PATH: u8 = 4;
 
     // Activation results match vanilla ActivateTaxiReply discriminants.
     pub const ACTIVATE_OK: u8 = 0;

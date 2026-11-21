@@ -5079,6 +5079,12 @@ def check_taxi(host):
     client.send(0x1aa, struct.pack('<Q', flight_master))
     assert (0x1ab, struct.pack('<QB', flight_master, 0)) in client.collect()
     client.send(0x1ac, struct.pack('<Q', flight_master))
+    first_visit = client.collect()
+    first_visit_opcodes = [opcode for opcode, _ in first_visit]
+    assert first_visit_opcodes.index(0x1af) < first_visit_opcodes.index(0x1ab), first_visit
+    assert (0x1af, b'') in first_visit and (0x1ab, struct.pack('<QB', flight_master, 1)) in first_visit
+    assert 0x1a9 not in first_visit_opcodes, first_visit
+    client.send(0x1ac, struct.pack('<Q', flight_master))
     taxi_menu = next(body for opcode, body in client.collect() if opcode == 0x1a9)
     assert taxi_menu[:16] == struct.pack('<IQI', 1, flight_master, 253)
     client.send(0x1aa, struct.pack('<Q', flight_master))
