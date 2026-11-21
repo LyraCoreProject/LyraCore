@@ -31,6 +31,9 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
             sched.caster_guid,
             e
         );
+        if let Some(refusal) = e.item_refusal {
+            crate::native::inventory::item_refused(ctx, sched.caster_guid, refusal);
+        }
         // The failed SMSG_CAST_RESULT names the refusing Gate (vmangos) and clears the cast bar.
         crate::SpellCastEvent::insert(
             ctx,

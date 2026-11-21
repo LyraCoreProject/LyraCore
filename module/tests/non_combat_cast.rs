@@ -124,7 +124,7 @@ fn an_item_with_a_non_combat_spell_is_refused_as_not_in_combat() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_triggered_non_combat_spell_applies_while_its_caster_is_in_combat() {
+fn a_trigger_child_cast_with_the_non_combat_attribute_applies_in_combat() {
     let shard = stage("non-combat-trigger-child");
     trigger_fixture(&shard);
     let player = shard.query_rows("SELECT unit_flags FROM game_world_entity WHERE guid = 1");
@@ -141,7 +141,7 @@ fn a_triggered_non_combat_spell_applies_while_its_caster_is_in_combat() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_triggered_spell_starts_no_global_cooldown() {
+fn a_trigger_child_cast_starts_no_global_cooldown() {
     let shard = stage("non-combat-trigger-gcd");
     trigger_fixture(&shard);
     shard.assert_sql("UPDATE game_world_entity SET health = 5000 WHERE guid = 1");

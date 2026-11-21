@@ -26,6 +26,18 @@ pub(crate) fn item_equip_cooldown(ctx: &ReducerContext, owner: u64, item: u64, s
     super::send_raw_to_character(ctx, owner, codec::SMSG_ITEM_COOLDOWN_OPCODE, body);
 }
 
+/// SMSG_INVENTORY_CHANGE_FAILURE without item guids, as vmangos `SendEquipError(msg, nullptr, nullptr)`.
+pub(crate) fn item_refused(ctx: &ReducerContext, owner: u64, refusal: ItemRefusal) {
+    let failure = item_refusal_packet(refusal);
+    super::send_raw_to_character(ctx, owner, failure.opcode, failure.body);
+}
+
+pub(super) fn item_refusal_packet(refusal: ItemRefusal) -> Packet {
+    packet(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
+        Box::new(codec::build_inventory_refusal(refusal, 0, 0)),
+    ))
+}
+
 fn slot(
     ctx: &ReducerContext,
     guid: u64,

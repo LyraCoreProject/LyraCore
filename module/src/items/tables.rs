@@ -375,6 +375,9 @@ fn release_cast_item(ctx: &ReducerContext, item: &ItemInstance) {
         .is_some_and(|spell| spell.cast_flags & crate::spell::CAST_FLAG_CHANNELED != 0);
     if channeled {
         cast.cast_item_guid = 0;
+        if cast.item_target_guid == item.guid {
+            cast.item_target_guid = 0;
+        }
         pending.scheduled_id().update(cast);
     } else {
         crate::spell::interrupt_cast(ctx, item.owner_guid);

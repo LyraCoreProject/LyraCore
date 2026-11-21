@@ -594,30 +594,22 @@ pub(crate) fn apply_item_use_on(
         ItemUseTarget::User => (player_guid, None),
         ItemUseTarget::Unit(unit_guid) => (unit_guid, None),
     };
-    let level = player.level as u8;
     crate::spell::begin_cast(
         ctx,
         &crate::spell::CastRequest {
             item_target,
             cast_item: Some(inst.guid),
             cooldown_category: Some(super::equip::use_category(&tmpl, spell_id)),
-            ..crate::spell::CastRequest::new(player_guid, spell_id, level, unit_guid)
+            ..crate::spell::CastRequest::new(player_guid, spell_id, player.level as u8, unit_guid)
         },
         crate::spell::CreatureSpellCasterAdmission::Living,
     )
     .map(|_| ())
     .map_err(|detail| {
-        // vmangos Spell::CheckItems sends a product's storage refusal as its equip error.
-        let storage = if detail.reason == crate::spell::CastRefusalReason::Unreported {
-            crate::spell::LoadedSpell::load(ctx, spell_id)
-                .ok()
-                .and_then(|spell| {
-                    crate::spell::cast::resolve::product_storage(ctx, &player, &spell, level).err()
-                })
-        } else {
-            None
-        };
-        refuse(storage.unwrap_or(ItemRefusal::NotRightNow), detail)
+        refuse(
+            detail.item_refusal.unwrap_or(ItemRefusal::NotRightNow),
+            detail,
+        )
     })
 }
 

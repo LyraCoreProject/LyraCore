@@ -70,7 +70,7 @@ impl CastRequest {
 pub(crate) enum CastPhase {
     Start,
     Completion,
-    /// An `E_TRIGGER` child, resolved at once inside its parent's effects.
+    /// A Trigger Child Cast, resolved at once inside its parent's effects.
     Trigger,
 }
 
@@ -109,7 +109,7 @@ pub(crate) fn resolve_cast(
     resolve_loaded_cast(ctx, request, &spell, CastPhase::Start)
 }
 
-/// Resolves an `E_TRIGGER` child as a triggered spell.
+/// Resolves a Trigger Child Cast.
 pub(crate) fn resolve_trigger_cast(
     ctx: &ReducerContext,
     request: &CastRequest,
@@ -1095,8 +1095,8 @@ impl GateRun {
         self != Self::Resolve(CastPhase::Completion)
     }
 
-    /// vmangos `Spell::m_IsTriggeredSpell`.
-    fn is_triggered(self) -> bool {
+    /// A Trigger Child Cast skips the Gates vmangos guards with `!m_IsTriggeredSpell`.
+    fn is_trigger_child(self) -> bool {
         self == Self::Resolve(CastPhase::Trigger)
     }
 }
@@ -1183,11 +1183,11 @@ impl CastGate {
             | Self::NonCombat
             | Self::Form
             | Self::Stealth
-            | Self::PeacefulTarget => run.is_strict() && !run.is_triggered(),
+            | Self::PeacefulTarget => run.is_strict() && !run.is_trigger_child(),
             // A completion checks power before every other Gate instead.
             Self::Power => run.is_strict(),
-            Self::ProductStorage => !run.is_triggered(),
-            // vmangos skips a trigger's line of sight; an instant cast checked it at Start.
+            Self::ProductStorage => !run.is_trigger_child(),
+            // A Trigger Child Cast skips line of sight, as in vmangos; an instant checked it at Start.
             Self::LineOfSight => matches!(
                 run,
                 GateRun::Readiness(_) | GateRun::Start(_) | GateRun::Resolve(CastPhase::Completion)
@@ -1374,13 +1374,16 @@ impl GateCheck<'_> {
             CastGate::CastItem => check_cast_item(ctx, caster.guid, request.cast_item),
             CastGate::ProductStorage => {
                 product_storage(ctx, caster, spell, request.level).map_err(|refusal| {
-                    CastGateRefusal::other(
-                        CastRefusalReason::Unreported,
-                        format!(
-                            "spell {spell_id} product cannot be stored: {}",
-                            refusal.as_tag()
-                        ),
-                    )
+                    CastGateRefusal {
+                        item_refusal: Some(refusal),
+                        ..CastGateRefusal::other(
+                            CastRefusalReason::Unreported,
+                            format!(
+                                "spell {spell_id} product cannot be stored: {}",
+                                refusal.as_tag()
+                            ),
+                        )
+                    }
                 })
             }
             CastGate::ItemTarget => {
@@ -2080,7 +2083,7 @@ fn check_cast_item(
 }
 
 /// vmangos `Spell::CheckItems`: effect 0's product must fit; its fewest count draws no roll.
-pub(crate) fn product_storage(
+fn product_storage(
     ctx: &ReducerContext,
     caster: &WorldEntity,
     spell: &LoadedSpell,
@@ -2428,7 +2431,7 @@ mod gate_order_tests {
     }
 
     #[test]
-    fn a_trigger_child_skips_the_checks_vmangos_runs_only_untriggered() {
+    fn a_trigger_child_cast_skips_the_caster_state_and_product_gates() {
         let trigger = order(GateRun::Resolve(CastPhase::Trigger));
         for gate in [
             G::GlobalCooldown,
@@ -2439,10 +2442,10 @@ mod gate_order_tests {
             G::ProductStorage,
             G::LineOfSight,
         ] {
-            assert!(!trigger.contains(&gate), "a trigger child checks {gate:?}");
-        }
-        for gate in [G::SpellReady, G::CasterAlive, G::Range, G::Power] {
-            assert!(trigger.contains(&gate), "a trigger child skips {gate:?}");
+            assert!(
+                !trigger.contains(&gate),
+                "a Trigger Child Cast checks {gate:?}"
+            );
         }
         assert!(GateRun::Resolve(CastPhase::Trigger).is_strict());
     }

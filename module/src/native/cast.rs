@@ -279,6 +279,9 @@ pub(super) fn receive(
             super::send_raw(ctx, connection, response.opcode, response.body, false);
             return Ok(());
         }
+        if let Some(item_refusal) = refusal.item_refusal {
+            prelude.push(super::inventory::item_refusal_packet(item_refusal));
+        }
         prelude.push(response);
         return Err(Rollback::replies(prelude, refusal));
     }
