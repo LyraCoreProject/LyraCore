@@ -396,6 +396,14 @@ pub fn build_inventory_refusal(
     }
 }
 
+pub fn build_already_looted() -> SMSG_INVENTORY_CHANGE_FAILURE {
+    SMSG_INVENTORY_CHANGE_FAILURE::AlreadyLooted {
+        item1: Guid::new(0),
+        item2: Guid::new(0),
+        bag_type_subclass: 0,
+    }
+}
+
 pub fn build_cant_carry_more_of_this() -> SMSG_INVENTORY_CHANGE_FAILURE {
     SMSG_INVENTORY_CHANGE_FAILURE::CantCarryMoreOfThis {
         item1: Guid::new(0),

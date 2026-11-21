@@ -610,6 +610,12 @@ family straight after the publish. Until then both tables are empty, so a repair
 nothing and a damaged item cannot be sold. vmangos skips an item with no cost row, and so does the
 Module.
 
+### Taxi multi-hop migration
+
+`game_active_taxi_flight` gains `current_leg_index`, end-appended with default 0. The private
+`game_taxi_flight_leg` table is new. A flight already in the air has no leg rows, so it is a
+one-leg route on leg 0 and flies as before. No repair is needed.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each
