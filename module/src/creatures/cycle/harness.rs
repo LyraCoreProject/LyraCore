@@ -2813,6 +2813,7 @@ impl ThreatSink for Scenario {
                 let c = creatures.get(&f.attacker)?;
                 scope.covers(c.instance_id).then_some(Fighter {
                     guid: f.attacker,
+                    at: c.at,
                     victim: f.victim,
                 })
             })
@@ -2821,7 +2822,9 @@ impl ThreatSink for Scenario {
     fn taunted_onto(&self, guid: u64) -> Option<u64> {
         self.taunts.borrow().get(&guid).copied()
     }
-    fn top_threat(&self, guid: u64) -> Option<u64> {
+    fn threat_sources(&self, guid: u64) -> Vec<ThreatSource> {
+        let creatures = self.creatures.borrow();
+        let players = self.players.borrow();
         crate::threat::rank(
             self.threat
                 .borrow()
@@ -2830,15 +2833,19 @@ impl ThreatSink for Scenario {
                 .map(|((_, source), threat)| (*source, *threat))
                 .collect(),
         )
-        .first()
-        .map(|&(source, _)| source)
-    }
-    fn threat_on(&self, creature: u64, source: u64) -> i64 {
-        self.threat
-            .borrow()
-            .get(&(creature, source))
-            .copied()
-            .unwrap_or(0)
+        .into_iter()
+        .filter_map(|(source, threat)| {
+            let at = creatures
+                .get(&source)
+                .map(|c| c.at)
+                .or_else(|| players.iter().find(|p| p.guid == source).map(|p| p.at))?;
+            Some(ThreatSource {
+                guid: source,
+                at,
+                threat,
+            })
+        })
+        .collect()
     }
     fn retarget(&mut self, creature: u64, victim: u64) {
         for f in self.fights.borrow_mut().iter_mut() {
@@ -3139,6 +3146,7 @@ const PACK_MATE: u64 = WOLF + 1;
 const FAR_MATE: u64 = WOLF + 2;
 const HUNTER: u64 = 0x0000_0000_0000_0A11;
 const RANGER: u64 = HUNTER + 1;
+const MAGE: u64 = HUNTER + 2;
 const IMP: u64 = 0x0000_0000_0000_1117;
 const NUKE: u32 = 100;
 const HEAL: u32 = 101;
@@ -5041,8 +5049,45 @@ fn equal_threat_leaves_the_target_where_it_is() {
     assert_eq!(
         w.victims(),
         [(WOLF, RANGER)],
-        "a switch needs strictly more threat"
+        "equal threat is under the margin"
     );
+}
+
+#[test]
+fn a_creature_switches_past_the_margin_for_the_challengers_distance() {
+    let in_melee = p(4.0, 0.0, 10.0);
+    let at_range = p(20.0, 0.0, 10.0);
+    let cases: [(&str, Point, i64, u64); 3] = [
+        ("111% in melee", in_melee, 111, RANGER),
+        ("111% at range", at_range, 111, HUNTER),
+        ("131% at range", at_range, 131, RANGER),
+    ];
+    for (case, challenger_at, challenger_threat, victim) in cases {
+        let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+            .player(RANGER, challenger_at)
+            .attacking(WOLF, HUNTER)
+            .threat(WOLF, HUNTER, 100)
+            .threat(WOLF, RANGER, challenger_threat);
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(w.victims(), [(WOLF, victim)], "{case}");
+    }
+}
+
+#[test]
+fn a_challenger_in_melee_takes_over_from_a_stronger_one_still_at_range() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .player(RANGER, p(20.0, 0.0, 10.0))
+        .player(MAGE, p(4.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 100)
+        .threat(WOLF, RANGER, 125)
+        .threat(WOLF, MAGE, 115);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(w.victims(), [(WOLF, MAGE)]);
 }
 
 #[test]

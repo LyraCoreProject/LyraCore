@@ -611,6 +611,12 @@ profession limit applies at once: it counts the Character's own `game_player_ski
 Character who already holds more than two primary professions keeps them and cannot learn another
 first rank. No repair is needed.
 
+### Taxi multi-hop migration
+
+`game_active_taxi_flight` gains `current_leg_index`, end-appended with default 0. The private
+`game_taxi_flight_leg` table is new. A flight already in the air has no leg rows, so it is a
+one-leg route on leg 0 and flies as before. No repair is needed.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

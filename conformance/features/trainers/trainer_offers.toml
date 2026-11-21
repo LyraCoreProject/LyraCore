@@ -9,7 +9,9 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
-tests = []
+tests = [
+    { path = "importer/src/world_import_trainers.rs", function = "selected_shared_offers_win_and_skill_steps_replace_synthetic_tiers", rung = "unit" },
+]
 
 [vmangos]
 commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
@@ -30,3 +32,9 @@ description = "trainers.racial-riding full-world 7, alliance-single 0: The Modul
 path = "importer/src/world_import_trainers.rs"
 symbol = "plan"
 evidence = "Compatibility Manifest trainers.racial-riding; conformance/vmangos-port-census/trainers.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "Package offers cannot carry a skill requirement, and the primary profession limit checks the offer's skill line, not the taught spell: a line-0 wrapper offer that teaches a primary first rank skips the limit."
+path = "module/src/package_import/trainers.rs"
+symbol = "blank_trainer_spell"
+evidence = "vmangos Player::GetTrainerSpellState and SpellMgr::IsPrimaryProfessionFirstRankSpell(triggerSpell) at d9173eca3ea08dd985c52dabbcc826898d1d0b77."

@@ -57,6 +57,7 @@ pub(crate) struct Assessment {
 }
 
 pub(crate) struct Trainee {
+    guid: u64,
     learned: HashSet<u32>,
     skills: HashMap<u32, (u32, u32)>,
 }
@@ -64,6 +65,7 @@ pub(crate) struct Trainee {
 impl Trainee {
     pub(crate) fn load(ctx: &ReducerContext, guid: u64) -> Self {
         Self {
+            guid,
             learned: ctx
                 .db
                 .game_player_spell()
@@ -108,10 +110,14 @@ impl Trainee {
                 .is_some_and(|chain| {
                     !rank_prereq_met(chain.prev_spell, self.learned.contains(&chain.prev_spell))
                 });
-        let base_required_skill = self
-            .skills
-            .get(&offered.required_skill)
-            .map_or(0, |&(current, _)| current);
+        let base_required_skill =
+            self.skills
+                .get(&offered.required_skill)
+                .map_or(0, |&(current, _)| {
+                    let (_, permanent) =
+                        crate::skill::skill_bonuses(ctx, self.guid, offered.required_skill);
+                    u32::try_from(i64::from(current) + i64::from(permanent)).unwrap_or(0)
+                });
         let held_primaries = self
             .skills
             .keys()

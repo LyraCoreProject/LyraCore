@@ -358,6 +358,13 @@ and AOI observers, and is refreshed when the passenger changes AOI cell or route
 flight also records its takeoff position, so a new viewer's CREATE carries the original spline path
 with elapsed time even after the passenger has crossed a cell boundary.
 
+A multi-hop flight keeps its first leg in `path_id` and each later leg in a row of the private
+`game_taxi_flight_leg` table, ordered by `leg_index`. `destination_node_id` is the final node.
+Activation debits only the first leg's fare. The route clock pays each later leg as the flyer
+enters it. `current_leg_index` is the leg the flyer is on; that leg and every earlier one are
+paid. A login resume rewrites the row to its current leg and deletes the leg rows, because vmangos
+saves only that leg.
+
 ### `game_world_entity` (`module/src/world.rs`)
 
 Public. One row per Character in the world and per spawned creature. Login creates it; disconnect
@@ -739,7 +746,9 @@ trainer NPC declares itself with `trainer_type::MOUNTS`.
 
 `game_trainer_spell.required_skill` and `required_skill_value` carry the vmangos `reqskill` and
 `reqskillvalue`. An offer with a `required_skill` is red, and its buy refused, while the Character's
-base skill in that line is below the value. A Character holds at most two primary professions
+base skill in that line is below the value. The base skill is the stored value plus the permanent
+bonus from `A_MOD_SKILL` Auras, as vmangos `GetSkillValueBase` counts it; a temporary bonus does not
+count. A Character holds at most two primary professions
 (`lyracore_shared::trainer::PRIMARY_PROFESSION_LINES`). The first rank of a primary profession is
 the offer with `learn_skill_cap` 75. The list sends it green with no learn button, and the buy is
 refused, once two primary skill rows exist. The count is derived from `game_player_skill`;

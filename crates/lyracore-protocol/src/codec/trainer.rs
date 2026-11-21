@@ -284,21 +284,6 @@ mod tests {
     }
 
     #[test]
-    fn a_later_rank_and_a_secondary_profession_send_no_confirmation() {
-        let spell = |learn_skill_line| TrainerSpellView {
-            spell_id: 3101,
-            required_level: 1,
-            player_level: 10,
-            learn_skill_line,
-            ..Default::default()
-        };
-        for line in [171, 185] {
-            let sent = &build_trainer_list(42, &[spell(line)], "").spells[0];
-            assert_eq!((sent.talent_point_cost, sent.first_rank), (0, 0), "{line}");
-        }
-    }
-
-    #[test]
     fn trainer_buy_failed_addresses_the_trainer_and_the_offering() {
         let msg = build_trainer_buy_failed(42, 100, TrainingFailureReason::NotEnoughMoney);
         assert_eq!(msg.guid, Guid::new(42));

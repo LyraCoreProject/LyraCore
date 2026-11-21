@@ -2,6 +2,7 @@ mod support;
 
 use lyracore_package_delta::fixture_ids::PROFESSION_TRAINER_ENTRY;
 use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_shared::spell::taxonomy::{A_MOD_SKILL, T_SELF};
 use support::{actor, Standalone};
 
 fn fixture(name: &str) -> (Standalone, String) {
@@ -184,6 +185,44 @@ fn a_recipe_is_refused_below_its_skill_requirement_and_learnable_at_it() {
     buy(&shard, &npc, RECIPE);
     assert!(knows(&shard, RECIPE));
     assert_eq!(money(&shard), money_before - 10);
+}
+
+#[test]
+#[ignore = "requires the local SpacetimeDB 2.14.0 CLI and debug Module"]
+fn a_permanent_skill_bonus_counts_toward_a_required_skill() {
+    use lyracore_shared::trainer::TrainerRefusal;
+    const RECIPE: u32 = 5_091_111;
+    const BONUS: u32 = 5_091_112;
+    const TAILORING: u32 = 197;
+    let (shard, npc) = fixture("trainer-permanent-skill-bonus");
+    offer_requiring(&shard, 5_091_111, RECIPE, (0, 75), (TAILORING, 50));
+    shard.assert_call("debug_set_skill", &["1", "197", "45"]);
+    refused_buy(&shard, &npc, RECIPE, TrainerRefusal::SkillTooLow.as_tag());
+
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &BONUS),
+            ("name", &"Trainer permanent skill bonus fixture"),
+            ("duration_ms", &600_000),
+            ("spell_level", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(BONUS, 0)),
+            ("spell_id", &BONUS),
+            ("kind", &A_MOD_SKILL),
+            ("base_points", &10),
+            ("target", &T_SELF),
+            ("p_0", &TAILORING),
+            ("p_1", &1),
+        ],
+    );
+    shard.assert_call("debug_force_cast", &["1", &BONUS.to_string()]);
+    buy(&shard, &npc, RECIPE);
+    assert!(knows(&shard, RECIPE));
 }
 
 #[test]

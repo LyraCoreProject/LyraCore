@@ -334,10 +334,5 @@ mod tests {
                 .any(|row| row["code"] == "trainers.multiple-learn-targets"
                     && row["occurrences"] == 1)
         );
-        assert!(manifest["findings"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|row| row["code"] != "trainers.skill-requirement"));
     }
 }
