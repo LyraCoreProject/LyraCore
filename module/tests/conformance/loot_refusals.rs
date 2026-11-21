@@ -33,11 +33,15 @@ fn stage(name: &str) -> Stage {
         "debug_spawn_at_feet",
         &[&character.to_string(), &TEST_WOLF_ENTRY.to_string(), "2.0"],
     );
-    let corpse: u64 = shard.query_rows(&format!(
-        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
-    ))[0]["guid"]
-        .parse()
-        .unwrap();
+    // The seeded demo wolf shares the entry; the one spawned here has the largest guid.
+    let corpse = shard
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        ))
+        .iter()
+        .filter_map(|row| row["guid"].parse::<u64>().ok())
+        .max()
+        .expect("the spawned wolf must exist");
     shard.assert_call(
         "debug_kill_creature",
         &[&character.to_string(), &corpse.to_string()],
@@ -86,9 +90,10 @@ impl Stage {
             CMSG_LOOT,
             self.corpse.to_le_bytes().into(),
         );
+        // A loot error shares the opcode; a real window has a nonzero loot type after the guid.
         assert!(opened
             .iter()
-            .any(|(opcode, _)| *opcode == SMSG_LOOT_RESPONSE));
+            .any(|(opcode, body)| *opcode == SMSG_LOOT_RESPONSE && body[8] != 0));
         assert_eq!(self.open_loot(), self.corpse.to_string());
     }
 
