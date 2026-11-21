@@ -15,7 +15,7 @@ struct Offer {
     cost: u32,
     level: u8,
     skill: u32,
-    rank: u32,
+    skill_value: u32,
 }
 
 fn offers(dump: &impl TableRows, table: &str) -> Result<BTreeMap<u64, BTreeMap<u32, Offer>>> {
@@ -27,7 +27,7 @@ fn offers(dump: &impl TableRows, table: &str) -> Result<BTreeMap<u64, BTreeMap<u
             cost: row.number("spellcost")?,
             level: row.number("reqlevel")?,
             skill: row.number("reqskill")?,
-            rank: row.number("reqskillvalue")?,
+            skill_value: row.number("reqskillvalue")?,
         };
         if let Some(previous) = owners
             .entry(entry)
@@ -142,12 +142,6 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
             let (line, cap) = skill_grant(spell)
                 .with_context(|| format!("trainer {entry} spell {}", offer.spell))?
                 .unwrap_or((0, 75));
-            if offer.skill != 0 || offer.rank != 0 {
-                findings
-                    .entry("trainers.skill-requirement")
-                    .or_default()
-                    .insert(key);
-            }
             let extra_learn = spell.number::<u32>("effect2")? == SpellEffect::LearnSpell.as_int()
                 || spell.number::<u32>("effect3")? == SpellEffect::LearnSpell.as_int();
             if extra_learn {
@@ -163,10 +157,12 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
                     .insert(key);
             }
             rows.push(format!(
-                "({},{entry},{},{},{level},{line},{cap})",
+                "({},{entry},{},{},{level},{line},{cap},{},{})",
                 rows.len() + 1,
                 offer.spell,
-                offer.cost
+                offer.cost,
+                offer.skill,
+                offer.skill_value
             ));
         }
     }
@@ -188,7 +184,7 @@ pub(super) fn statements(stmts: &mut Vec<String>, rows: &[String]) {
     push_insert(
         stmts,
         "game_trainer_spell",
-        "id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap",
+        "id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap,required_skill,required_skill_value",
         rows,
     );
 }
@@ -327,7 +323,7 @@ mod tests {
         ]);
         let plan = plan(&source, &args).unwrap();
         assert_eq!(plan.stamps, [("trainers", 3)]);
-        assert_eq!(plan.stmts[1], "INSERT INTO game_trainer_spell (id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap) VALUES (1,100,700,30,10,0,75),(2,100,701,40,15,186,150),(3,101,702,5,20,0,75)");
+        assert_eq!(plan.stmts[1], "INSERT INTO game_trainer_spell (id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap,required_skill,required_skill_value) VALUES (1,100,700,30,10,0,75,186,50),(2,100,701,40,15,186,150,186,50),(3,101,702,5,20,0,75,186,50)");
         let manifest: serde_json::Value =
             serde_json::from_str(plan.world_source_manifest.as_ref().unwrap()).unwrap();
         assert!(
@@ -342,6 +338,6 @@ mod tests {
             .as_array()
             .unwrap()
             .iter()
-            .any(|row| row["code"] == "trainers.skill-requirement" && row["occurrences"] == 3));
+            .all(|row| row["code"] != "trainers.skill-requirement"));
     }
 }

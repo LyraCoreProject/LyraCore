@@ -251,19 +251,25 @@ pub(crate) struct TrainerRow {
     pub required_level: u8,
     pub learn_skill_line: u32,
     pub learn_skill_cap: u32,
+    #[serde(default)]
+    pub required_skill: u32,
+    #[serde(default)]
+    pub required_skill_value: u32,
 }
 
 impl TrainerRow {
     pub fn sql_values(&self) -> String {
         format!(
-            "({},{},{},{},{},{},{})",
+            "({},{},{},{},{},{},{},{},{})",
             self.id,
             self.trainer_entry,
             self.spell_id,
             self.cost,
             self.required_level,
             self.learn_skill_line,
-            self.learn_skill_cap
+            self.learn_skill_cap,
+            self.required_skill,
+            self.required_skill_value
         )
     }
 }

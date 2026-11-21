@@ -1,10 +1,11 @@
+use lyracore_shared::trainer::OfferingGates;
 use wow_world_messages::vanilla::{
     Skill, TrainerSpell, TrainerSpellState, TrainingFailureReason, SMSG_LEARNED_SPELL,
     SMSG_TRAINER_BUY_FAILED, SMSG_TRAINER_BUY_SUCCEEDED, SMSG_TRAINER_LIST,
 };
 use wow_world_messages::Guid;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct TrainerSpellView {
     pub spell_id: u32,
     pub cost: u32,
@@ -12,6 +13,9 @@ pub struct TrainerSpellView {
     pub player_level: u32,
     pub known: bool,
     pub learn_skill_line: u32,
+    pub required_skill: u32,
+    pub required_skill_value: u32,
+    pub gates: OfferingGates,
 }
 
 pub fn build_trainer_list(
@@ -40,20 +44,30 @@ pub fn build_trainer_list(
         .iter()
         .map(|s| {
             use lyracore_shared::trainer::{offering_state, OfferingState};
-            let state = match offering_state(s.known, s.player_level, u32::from(s.required_level)) {
+            let state = match offering_state(
+                s.known,
+                s.player_level,
+                u32::from(s.required_level),
+                s.gates,
+            ) {
                 OfferingState::Known => TrainerSpellState::Gray,
-                OfferingState::LevelTooLow => TrainerSpellState::Red,
-                OfferingState::Available => TrainerSpellState::Green,
+                OfferingState::LevelTooLow
+                | OfferingState::PreviousRankMissing
+                | OfferingState::SkillTooLow => TrainerSpellState::Red,
+                OfferingState::PrimaryProfessionLimit | OfferingState::Available => {
+                    TrainerSpellState::Green
+                }
             };
+            let first_rank = u32::from(s.gates.primary_first_rank);
             TrainerSpell {
                 spell: s.spell_id,
                 state,
                 spell_cost: s.cost,
-                talent_point_cost: if s.learn_skill_line != 0 { 1 } else { 0 },
-                first_rank: if s.learn_skill_line != 0 { 1 } else { 0 },
+                talent_point_cost: first_rank & u32::from(s.gates.primary_slot_free),
+                first_rank,
                 required_level: s.required_level,
-                required_skill: Skill::default(),
-                required_skill_value: 0,
+                required_skill: Skill::try_from(s.required_skill).unwrap_or_default(),
+                required_skill_value: s.required_skill_value,
                 required_spells: [0, 0, 0],
             }
         })
@@ -106,6 +120,7 @@ mod tests {
                     player_level: 10,
                     known: false,
                     learn_skill_line: 0,
+                    ..Default::default()
                 },
                 TrainerSpellView {
                     spell_id: 4036,
@@ -114,6 +129,7 @@ mod tests {
                     player_level: 10,
                     known: true,
                     learn_skill_line: line,
+                    ..Default::default()
                 },
             ];
             let mut packet = Vec::new();
@@ -137,6 +153,7 @@ mod tests {
                 player_level: 10,
                 known: false,
                 learn_skill_line: line,
+                ..Default::default()
             }];
             assert_eq!(build_trainer_list(42, &spells, "").trainer_type, 0);
         }
@@ -153,6 +170,7 @@ mod tests {
                 player_level: 10,
                 known: false,
                 learn_skill_line: 0,
+                ..Default::default()
             },
             TrainerSpellView {
                 spell_id: 101,
@@ -161,6 +179,7 @@ mod tests {
                 player_level: 2,
                 known: false,
                 learn_skill_line: 0,
+                ..Default::default()
             },
             TrainerSpellView {
                 spell_id: 102,
@@ -169,6 +188,7 @@ mod tests {
                 player_level: 10,
                 known: true,
                 learn_skill_line: 0,
+                ..Default::default()
             },
         ];
         let msg = build_trainer_list(42, &v, "Greetings");
@@ -184,11 +204,98 @@ mod tests {
             player_level: 6,
             known: false,
             learn_skill_line: 0,
+            ..Default::default()
         }];
         assert_eq!(
             build_trainer_list(1, &edge, "").spells[0].state,
             TrainerSpellState::Green
         );
+    }
+
+    #[test]
+    fn a_trainer_list_marks_unmet_gates_red_and_sends_the_skill_requirement() {
+        let offer = |spell_id, gates| TrainerSpellView {
+            spell_id,
+            required_level: 1,
+            player_level: 10,
+            learn_skill_line: 0,
+            required_skill: 197,
+            required_skill_value: 50,
+            gates,
+            ..Default::default()
+        };
+        let msg = build_trainer_list(
+            42,
+            &[
+                offer(1, OfferingGates::default()),
+                offer(
+                    2,
+                    OfferingGates {
+                        skill_requirement_unmet: true,
+                        ..Default::default()
+                    },
+                ),
+                offer(
+                    3,
+                    OfferingGates {
+                        previous_rank_missing: true,
+                        ..Default::default()
+                    },
+                ),
+            ],
+            "",
+        );
+        let states: Vec<_> = msg.spells.iter().map(|spell| spell.state).collect();
+        assert_eq!(
+            states,
+            [
+                TrainerSpellState::Green,
+                TrainerSpellState::Red,
+                TrainerSpellState::Red
+            ]
+        );
+        assert!(msg
+            .spells
+            .iter()
+            .all(|spell| spell.required_skill == Skill::Tailoring
+                && spell.required_skill_value == 50));
+    }
+
+    #[test]
+    fn a_primary_first_rank_is_green_with_a_free_slot_and_green_without_the_learn_button() {
+        let first_rank = |primary_slot_free| TrainerSpellView {
+            spell_id: 2259,
+            required_level: 1,
+            player_level: 10,
+            learn_skill_line: 171,
+            gates: OfferingGates {
+                primary_first_rank: true,
+                primary_slot_free,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let free = &build_trainer_list(42, &[first_rank(true)], "").spells[0];
+        assert_eq!(free.state, TrainerSpellState::Green);
+        assert_eq!((free.talent_point_cost, free.first_rank), (1, 1));
+        let none_left = &build_trainer_list(42, &[first_rank(false)], "").spells[0];
+        assert_eq!(none_left.state, TrainerSpellState::Green);
+        assert_eq!((none_left.talent_point_cost, none_left.first_rank), (0, 1));
+    }
+
+    #[test]
+    fn a_later_rank_and_a_secondary_profession_send_no_confirmation() {
+        let spell = |learn_skill_line| TrainerSpellView {
+            spell_id: 3101,
+            required_level: 1,
+            player_level: 10,
+            learn_skill_line,
+            ..Default::default()
+        };
+        for line in [171, 185] {
+            let sent = &build_trainer_list(42, &[spell(line)], "").spells[0];
+            assert_eq!((sent.talent_point_cost, sent.first_rank), (0, 0), "{line}");
+        }
     }
 
     #[test]

@@ -1,9 +1,14 @@
-use lyracore_shared::trainer::TrainerRefusal;
+use std::collections::{HashMap, HashSet};
+
+use lyracore_shared::trainer::{
+    is_primary_first_rank, is_primary_profession_line, offering_known, offering_state,
+    OfferingGates, OfferingState, TrainerRefusal,
+};
 use spacetimedb::{table, ReducerContext, Table};
 
 use crate::{
     game_creature_template, game_player_skill, game_spell, game_spell_chain, game_spell_effect,
-    game_world_entity, WorldEntity,
+    game_world_entity, spell::spellbook::game_player_spell, WorldEntity,
 };
 
 pub(crate) fn refused(refusal: TrainerRefusal, detail: &str) -> TrainerRefusal {
@@ -29,6 +34,10 @@ pub struct TrainerSpell {
     pub learn_skill_line: u32,
     #[default(75u32)]
     pub learn_skill_cap: u32,
+    #[default(0u32)]
+    pub required_skill: u32,
+    #[default(0u32)]
+    pub required_skill_value: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,17 +51,100 @@ pub(crate) fn rank_prereq_met(prev_spell: u32, knows_prev: bool) -> bool {
     prev_spell == 0 || knows_prev
 }
 
+pub(crate) struct Assessment {
+    pub known: bool,
+    pub gates: OfferingGates,
+}
+
+pub(crate) struct Trainee {
+    learned: HashSet<u32>,
+    skills: HashMap<u32, (u32, u32)>,
+}
+
+impl Trainee {
+    pub(crate) fn load(ctx: &ReducerContext, guid: u64) -> Self {
+        Self {
+            learned: ctx
+                .db
+                .game_player_spell()
+                .by_character()
+                .filter(guid)
+                .map(|row| row.spell_id)
+                .collect(),
+            skills: ctx
+                .db
+                .game_player_skill()
+                .by_character()
+                .filter(guid)
+                .map(|row| {
+                    (
+                        row.skill_line,
+                        (u32::from(row.current), u32::from(row.max_rank)),
+                    )
+                })
+                .collect(),
+        }
+    }
+
+    pub(crate) fn assess(
+        &self,
+        ctx: &ReducerContext,
+        offered: &TrainerSpell,
+        learn_target: u32,
+    ) -> Assessment {
+        let line = offered.learn_skill_line;
+        let known = offering_known(
+            line,
+            offered.learn_skill_cap,
+            self.skills.get(&line).map(|&(_, max_rank)| max_rank),
+            self.learned.contains(&learn_target),
+        );
+        let previous_rank_missing = line == 0
+            && ctx
+                .db
+                .game_spell_chain()
+                .spell_id()
+                .find(learn_target)
+                .is_some_and(|chain| {
+                    !rank_prereq_met(chain.prev_spell, self.learned.contains(&chain.prev_spell))
+                });
+        let base_required_skill = self
+            .skills
+            .get(&offered.required_skill)
+            .map_or(0, |&(current, _)| current);
+        let held_primaries = self
+            .skills
+            .keys()
+            .filter(|&&held| is_primary_profession_line(held))
+            .count();
+        Assessment {
+            known,
+            gates: OfferingGates {
+                previous_rank_missing,
+                skill_requirement_unmet: offered.required_skill != 0
+                    && base_required_skill < offered.required_skill_value,
+                primary_first_rank: is_primary_first_rank(line, offered.learn_skill_cap),
+                primary_slot_free: lyracore_shared::trainer::free_primary_profession_slots(
+                    held_primaries,
+                ) > 0,
+            },
+        }
+    }
+}
+
 pub(crate) fn trainer_buy_check(
-    known: bool,
-    level: u32,
-    required_level: u32,
+    state: OfferingState,
     money: u32,
     cost: u32,
 ) -> Result<(), TrainerRefusal> {
-    use lyracore_shared::trainer::{offering_state, OfferingState};
-    match offering_state(known, level, required_level) {
+    match state {
         OfferingState::Known => return Err(TrainerRefusal::AlreadyKnown),
         OfferingState::LevelTooLow => return Err(TrainerRefusal::LevelTooLow),
+        OfferingState::PreviousRankMissing => return Err(TrainerRefusal::PreviousRankMissing),
+        OfferingState::SkillTooLow => return Err(TrainerRefusal::SkillTooLow),
+        OfferingState::PrimaryProfessionLimit => {
+            return Err(TrainerRefusal::PrimaryProfessionLimit)
+        }
         OfferingState::Available => {}
     }
     if money < cost {
@@ -424,80 +516,55 @@ pub(crate) fn apply_trainer_buy(
     } else {
         BuyGrant::Spell(resolve_learn_target(ctx, spell_id))
     };
-    let stored_cap = ctx
-        .db
-        .game_player_skill()
-        .by_character()
-        .filter(&caster_guid)
-        .find(|skill| skill.skill_line == profession_line)
-        .map(|skill| u32::from(skill.max_rank));
-    let knows_spell = match grant {
-        BuyGrant::Spell(to_learn) => crate::spell::knows_spell(ctx, caster_guid, to_learn),
-        _ => false,
+    let learn_target = match grant {
+        BuyGrant::Spell(to_learn) => to_learn,
+        _ => spell_id,
     };
-    let known = lyracore_shared::trainer::offering_known(
-        profession_line,
-        offered.learn_skill_cap,
-        stored_cap,
-        knows_spell,
-    );
-
-    if !known {
-        if let BuyGrant::Spell(to_learn) = grant {
-            if let Some(chain) = ctx.db.game_spell_chain().spell_id().find(to_learn) {
-                let knows_prev = crate::spell::knows_spell(ctx, caster_guid, chain.prev_spell);
-                if !rank_prereq_met(chain.prev_spell, knows_prev) {
-                    return Err(refused(
-                        TrainerRefusal::PreviousRankMissing,
-                        "requires the previous rank",
-                    ));
-                }
-            }
-        }
-    }
-    match trainer_buy_check(
-        known,
+    let assessment = Trainee::load(ctx, caster_guid).assess(ctx, &offered, learn_target);
+    let state = offering_state(
+        assessment.known,
         caster.level,
-        offered.required_level as u32,
-        caster.money,
-        offered.cost,
-    ) {
-        Ok(()) => {
-            caster.money = caster.money.saturating_sub(offered.cost);
-            let owner = caster.owner_identity;
-            caster.update(ctx);
-            match grant {
-                BuyGrant::Profession(line, cap) => {
-                    crate::skill::learn_profession(ctx, caster_guid, owner, line, cap as u16);
-                    crate::spell::learn_spell_with_dependents(
-                        ctx,
-                        caster_guid,
-                        owner,
-                        resolve_learn_target(ctx, spell_id),
-                    );
-                }
-                BuyGrant::Riding(tier) => {
-                    crate::skill::learn_riding(ctx, caster_guid, owner, tier as u16)
-                }
-                BuyGrant::Spell(id) => {
-                    crate::spell::learn_spell_with_dependents(ctx, caster_guid, owner, id)
-                }
+        u32::from(offered.required_level),
+        assessment.gates,
+    );
+    if let Err(refusal) = trainer_buy_check(state, caster.money, offered.cost) {
+        let detail = match refusal {
+            TrainerRefusal::AlreadyKnown => "already known".to_string(),
+            TrainerRefusal::LevelTooLow => format!("requires level {}", offered.required_level),
+            TrainerRefusal::PreviousRankMissing => "requires the previous rank".to_string(),
+            TrainerRefusal::SkillTooLow => format!(
+                "requires skill {} at {}",
+                offered.required_skill, offered.required_skill_value
+            ),
+            TrainerRefusal::PrimaryProfessionLimit => "no free primary profession slot".to_string(),
+            TrainerRefusal::NotEnoughMoney => {
+                format!("not enough money (need {})", offered.cost)
             }
-            Ok(())
-        }
-        Err(TrainerRefusal::AlreadyKnown) => {
-            Err(refused(TrainerRefusal::AlreadyKnown, "already known"))
-        }
-        Err(TrainerRefusal::LevelTooLow) => Err(refused(
-            TrainerRefusal::LevelTooLow,
-            &format!("requires level {}", offered.required_level),
-        )),
-        Err(TrainerRefusal::NotEnoughMoney) => Err(refused(
-            TrainerRefusal::NotEnoughMoney,
-            &format!("not enough money (need {})", offered.cost),
-        )),
-        Err(refusal) => Err(refused(refusal, "purchase gate refused the buy")),
+            TrainerRefusal::Unavailable | TrainerRefusal::NotOffered => {
+                "purchase gate refused the buy".to_string()
+            }
+        };
+        return Err(refused(refusal, &detail));
     }
+    caster.money = caster.money.saturating_sub(offered.cost);
+    let owner = caster.owner_identity;
+    caster.update(ctx);
+    match grant {
+        BuyGrant::Profession(line, cap) => {
+            crate::skill::learn_profession(ctx, caster_guid, owner, line, cap as u16);
+            crate::spell::learn_spell_with_dependents(
+                ctx,
+                caster_guid,
+                owner,
+                resolve_learn_target(ctx, spell_id),
+            );
+        }
+        BuyGrant::Riding(tier) => crate::skill::learn_riding(ctx, caster_guid, owner, tier as u16),
+        BuyGrant::Spell(id) => {
+            crate::spell::learn_spell_with_dependents(ctx, caster_guid, owner, id)
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -505,21 +572,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn trainer_buy_check_gates_in_priority_order() {
+    fn trainer_buy_check_refuses_each_state_with_its_own_refusal() {
+        for (state, refusal) in [
+            (OfferingState::Known, TrainerRefusal::AlreadyKnown),
+            (OfferingState::LevelTooLow, TrainerRefusal::LevelTooLow),
+            (
+                OfferingState::PreviousRankMissing,
+                TrainerRefusal::PreviousRankMissing,
+            ),
+            (OfferingState::SkillTooLow, TrainerRefusal::SkillTooLow),
+            (
+                OfferingState::PrimaryProfessionLimit,
+                TrainerRefusal::PrimaryProfessionLimit,
+            ),
+        ] {
+            assert_eq!(trainer_buy_check(state, 1000, 10), Err(refusal));
+        }
+    }
+
+    #[test]
+    fn trainer_buy_check_charges_only_an_available_offering_the_buyer_can_afford() {
         assert_eq!(
-            trainer_buy_check(true, 10, 1, 1000, 10),
-            Err(TrainerRefusal::AlreadyKnown)
-        );
-        assert_eq!(
-            trainer_buy_check(false, 2, 6, 1000, 10),
-            Err(TrainerRefusal::LevelTooLow)
-        );
-        assert_eq!(
-            trainer_buy_check(false, 10, 1, 5, 10),
+            trainer_buy_check(OfferingState::Available, 5, 10),
             Err(TrainerRefusal::NotEnoughMoney)
         );
-        assert_eq!(trainer_buy_check(false, 10, 6, 100, 10), Ok(()));
-        assert_eq!(trainer_buy_check(false, 6, 6, 10, 10), Ok(()));
+        assert_eq!(trainer_buy_check(OfferingState::Available, 10, 10), Ok(()));
     }
 
     #[test]
@@ -547,15 +624,6 @@ mod tests {
     }
 
     #[test]
-    fn weapon_learn_known_is_row_presence_not_a_cap_comparison() {
-        assert_eq!(
-            trainer_buy_check(true, 40, 1, 1000, 100),
-            Err(TrainerRefusal::AlreadyKnown)
-        );
-        assert_eq!(trainer_buy_check(false, 40, 1, 1000, 100), Ok(()));
-    }
-
-    #[test]
     fn a_riding_tier_is_buyable_once_and_the_next_tier_still_sells() {
         assert!(
             !lyracore_shared::trainer::offering_known(762, 75, None, false),
@@ -572,15 +640,6 @@ mod tests {
         assert!(
             lyracore_shared::trainer::offering_known(762, 150, Some(150), false),
             "re-buying Journeyman is refused"
-        );
-    }
-
-    #[test]
-    fn profession_rebuy_is_rejected_as_already_known() {
-        assert_eq!(trainer_buy_check(false, 1, 1, 0, 0), Ok(()));
-        assert_eq!(
-            trainer_buy_check(true, 1, 1, 0, 0),
-            Err(TrainerRefusal::AlreadyKnown)
         );
     }
 }

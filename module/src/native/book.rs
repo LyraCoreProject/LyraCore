@@ -168,6 +168,12 @@ pub(crate) fn skill_changed(
         )
     };
     let after = layout(&mut stored);
+    let free_primary_professions = lyracore_shared::trainer::free_primary_profession_slots(
+        stored
+            .iter()
+            .filter(|entry| lyracore_shared::trainer::is_primary_profession_line(entry.1.line))
+            .count(),
+    );
     stored.retain(|entry| entry.0 != row.id);
     if let Some(old) = previous {
         stored.push((old.id, old.view(ctx)));
@@ -185,6 +191,21 @@ pub(crate) fn skill_changed(
                 );
             }
         }
+    }
+    if previous.is_none() != current.is_none()
+        && lyracore_shared::trainer::is_primary_profession_line(row.skill_line)
+    {
+        super::send_to_character(
+            ctx,
+            row.character_guid,
+            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                codec::build_free_primary_professions_values(
+                    row.character_guid,
+                    free_primary_professions,
+                ),
+            )),
+            super::EncodeFailure::Panic,
+        );
     }
 }
 

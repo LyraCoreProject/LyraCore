@@ -30,9 +30,3 @@ description = "trainers.racial-riding full-world 7, alliance-single 0: The Modul
 path = "importer/src/world_import_trainers.rs"
 symbol = "plan"
 evidence = "Compatibility Manifest trainers.racial-riding; conformance/vmangos-port-census/trainers.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
-description = "trainers.skill-requirement full-world 4879, alliance-single 1839: Trainer offers have no required skill/rank columns."
-path = "importer/src/world_import_trainers.rs"
-symbol = "plan"
-evidence = "Compatibility Manifest trainers.skill-requirement; conformance/vmangos-port-census/trainers.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."

@@ -735,6 +735,17 @@ catalogue. It fails closed: a mount whose skill data was never imported cannot b
 with no `Spell.dbc` row, so the purchase confirmation does not echo it as a learned spell. The
 trainer NPC declares itself with `trainer_type::MOUNTS`.
 
+### Trainer offering gates (`module/src/trainer.rs`)
+
+`game_trainer_spell.required_skill` and `required_skill_value` carry the vmangos `reqskill` and
+`reqskillvalue`. An offer with a `required_skill` is red, and its buy refused, while the Character's
+base skill in that line is below the value. A Character holds at most two primary professions
+(`lyracore_shared::trainer::PRIMARY_PROFESSION_LINES`). The first rank of a primary profession is
+the offer with `learn_skill_cap` 75. The list sends it green with no learn button, and the buy is
+refused, once two primary skill rows exist. The count is derived from `game_player_skill`;
+`PLAYER_CHARACTER_POINTS2` carries the free count to the client. Every refusal of these gates is
+sent as `TrainingFailureReason::NotEnoughSkill`, as vmangos does.
+
 ### Proc data (`module/src/spell/tables.rs`)
 
 A Proc is an aura that fires off a combat event. Its rules live in three places: two are static

@@ -117,6 +117,8 @@ fn blank_trainer_spell(id: u64) -> TrainerSpell {
         required_level: 0,
         learn_skill_line: 0,
         learn_skill_cap: 75,
+        required_skill: 0,
+        required_skill_value: 0,
     }
 }
 
