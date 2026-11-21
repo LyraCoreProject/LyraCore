@@ -587,6 +587,74 @@ fn a_relog_mid_route_flies_only_the_current_leg_and_never_pays_the_next() {
         [status(0)]
     );
     advance(&mut wire, 10);
+    let mut wire = relog(&shard, wire);
+    assert_eq!(onward_legs(&shard), 0);
+
+    advance(&mut wire, 60);
+    assert_eq!((flights(&shard), money(&shard)), (0, 1000 - 25));
+    assert_eq!(position(&shard), (x + HOP_YARDS, node_y));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_relog_on_the_last_leg_lands_at_the_last_node_without_paying_again() {
+    let (shard, mut wire, master) = stage("taxi-multi-hop-relog-last-leg", 1000);
+    let (x, node_y) = insert_hops(&shard, &[0, 1, 2]);
+    shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    assert_eq!(
+        replies(&express(
+            &mut wire,
+            master.parse().unwrap(),
+            &HOP_CLIENT_NODES
+        )),
+        [status(0)]
+    );
+    advance(&mut wire, 40);
+    assert_eq!(money(&shard), 1000 - 25 - 30);
+    let mut wire = relog(&shard, wire);
+    assert_eq!(onward_legs(&shard), 0);
+
+    advance(&mut wire, 60);
+    assert_eq!((flights(&shard), money(&shard)), (0, 1000 - 25 - 30));
+    assert_eq!(position(&shard), (x + 2.0 * HOP_YARDS, node_y));
+    assert_eq!(onward_legs(&shard), 0);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_taxi_menu_marks_every_known_node_including_one_without_a_direct_path() {
+    let (shard, mut wire, master) = stage("taxi-menu-known-mask", 1000);
+    insert_hops(&shard, &[0, 1, 2]);
+    // Without the stage's source node, hop A is the flight master's nearest node.
+    shard.assert_sql(&format!(
+        "DELETE FROM game_taxi_node WHERE id = {SOURCE_NODE}"
+    ));
+    let master: u64 = master.parse().unwrap();
+    let menus: Vec<String> = received_packets(&mut wire, TAXI_QUERY_AVAILABLE_NODES, master)
+        .into_iter()
+        .filter(|(opcode, _)| *opcode == SHOW_TAXI_NODES)
+        .map(|(_, body)| body)
+        .collect();
+    let [menu] = menus.as_slice() else {
+        panic!("expected one taxi menu, got {menus:?}");
+    };
+    assert!(menu.starts_with(&taxi_menu(master, HOP_CLIENT_NODES[0])));
+    // The mask follows the 16-byte header; client node n is bit n - 1.
+    let mask: Vec<u8> = (32..menu.len())
+        .step_by(2)
+        .map(|at| u8::from_str_radix(&menu[at..at + 2], 16).unwrap())
+        .collect();
+    for client_node in HOP_CLIENT_NODES {
+        let bit = (client_node - 1) as usize;
+        assert_ne!(
+            mask[bit / 8] & (1 << (bit % 8)),
+            0,
+            "client node {client_node}"
+        );
+    }
+}
+
+fn relog(shard: &Standalone, wire: support::ReducerConnection) -> support::ReducerConnection {
     drop(wire);
     assert!(support::poll_until(
         std::time::Duration::from_secs(5),
@@ -597,11 +665,7 @@ fn a_relog_mid_route_flies_only_the_current_leg_and_never_pays_the_next() {
     let mut wire = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
     wire.call("native_world_open", json!([42])).unwrap();
     wire.call("debug_native_enter_world", json!([1])).unwrap();
-    assert_eq!(onward_legs(&shard), 0);
-
-    advance(&mut wire, 60);
-    assert_eq!((flights(&shard), money(&shard)), (0, 1000 - 25));
-    assert_eq!(position(&shard), (x + HOP_YARDS, node_y));
+    wire
 }
 
 #[test]

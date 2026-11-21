@@ -58,3 +58,13 @@ rung = "durable_module"
 path = "module/tests/taxi_activation.rs"
 function = "a_relog_mid_route_flies_only_the_current_leg_and_never_pays_the_next"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/taxi_activation.rs"
+function = "a_relog_on_the_last_leg_lands_at_the_last_node_without_paying_again"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/taxi_activation.rs"
+function = "the_taxi_menu_marks_every_known_node_including_one_without_a_direct_path"
+rung = "durable_module"

@@ -619,16 +619,17 @@ fn flight_route(flight: &ActiveTaxiFlight, route: RoutePoints) -> RoutePoints {
         origin.y = flight.origin_y;
         origin.z = flight.origin_z;
     }
-    let skip = flight.first_destination_node_index as usize;
     RoutePoints {
         points: std::iter::once(origin)
-            .chain(route.points.into_iter().skip(skip))
+            .chain(
+                route
+                    .points
+                    .into_iter()
+                    .skip(flight.first_destination_node_index as usize),
+            )
             .collect(),
-        leg_ends: route
-            .leg_ends
-            .into_iter()
-            .map(|end| (end + 1).saturating_sub(skip))
-            .collect(),
+        // A launch keeps every point index; a resume that skips points flies one leg only.
+        leg_ends: route.leg_ends,
     }
 }
 
@@ -1525,6 +1526,8 @@ pub(crate) fn activate_route(
         let leg_fares: Vec<u32> = legs.iter().map(|leg| leg.fare).collect();
         player_state.activate(&leg_fares, mount_display_id)?;
 
+        // vmangos `ClearTaxiDestinations` drops any unfinished route before the new one.
+        delete_onward_legs(ctx, character_guid);
         for (leg_index, leg) in (1u32..).zip(&legs[1..]) {
             ctx.db.game_taxi_flight_leg().insert(TaxiFlightLeg {
                 id: 0,
@@ -2285,36 +2288,6 @@ mod tests {
         let route = flight_route(&flight, points()).points;
         assert_eq!((route[0].x, route[0].y, route[0].z), (10.0, 20.0, 30.0));
         assert_eq!((route[1].x, route[1].y, route[1].z), (1.0, 0.0, 0.0));
-    }
-
-    #[test]
-    fn a_resumed_route_keeps_its_leg_ends_on_the_flown_points() {
-        let mut flight = ActiveTaxiFlight {
-            character_guid: 1,
-            path_id: 1,
-            source_node_id: 2,
-            destination_node_id: 4,
-            mount_display_id: 6852,
-            fare: 110,
-            current_node_index: 0,
-            started_micros: 1,
-            origin_x: 0.0,
-            origin_y: 0.0,
-            origin_z: 0.0,
-            origin_recorded: true,
-            first_destination_node_index: 1,
-            current_leg_index: 0,
-        };
-        let leg = |path_id: u32, len: u32| -> Vec<GameTaxiPathNode> {
-            (0..len).map(|index| point(0, path_id, index, 0)).collect()
-        };
-        let route = || RoutePoints::join(vec![leg(1, 4), leg(2, 4)]);
-        assert_eq!(flight_route(&flight, route()).leg_ends, [2]);
-        flight.first_destination_node_index = 2;
-        let flown = flight_route(&flight, route());
-        assert_eq!(flown.points.len(), 5);
-        assert_eq!(flown.leg_ends, [1]);
-        assert_eq!(flown.points[1].node_index, 2);
     }
 
     #[test]
