@@ -329,6 +329,11 @@ pub fn build_inventory_refusal(
             item2,
             bag_type_subclass,
         },
+        ItemRefusal::CantCarryMore => SMSG_INVENTORY_CHANGE_FAILURE::CantCarryMoreOfThis {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
         ItemRefusal::WrongSlot => SMSG_INVENTORY_CHANGE_FAILURE::ItemDoesntGoToSlot {
             item1,
             item2,

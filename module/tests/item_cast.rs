@@ -1,6 +1,7 @@
 mod support;
 
 use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_shared::item::ItemRefusal;
 use lyracore_shared::spell::taxonomy::{E_CREATE_ITEM, E_HEAL, T_SELF};
 use support::{
     actor, event_rows, fence_subscription, number, subscribe_with_fence, Row, Standalone,
@@ -14,7 +15,9 @@ const CRAFT_ITEM: u32 = 5_098_303;
 const HEAL_SPELL: u32 = 5_098_304;
 const HEAL_ITEM: u32 = 5_098_305;
 const CAST_TIME_MS: u32 = 5000;
-// `CastRefusalReason::ItemGone` in `game_spell_cast_event_live.failure_reason`.
+// `CastRefusalReason` codes in `game_spell_cast_event_live.failure_reason`.
+const INTERRUPTED: &str = "2";
+const UNREPORTED: &str = "3";
 const ITEM_GONE: &str = "29";
 
 #[test]
@@ -36,37 +39,121 @@ fn a_crafting_item_cast_uses_up_its_item_through_its_storage_plan() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_crafting_item_cast_whose_product_is_refused_still_uses_up_its_item() {
+fn a_crafting_item_whose_product_cannot_be_stored_is_refused_and_kept() {
     let shard = stage("item-cast-craft-refused");
     craft_fixture(&shard, 0);
     grant(&shard, PRODUCT, 1);
     let slot = grant(&shard, CRAFT_ITEM, 2);
     shard.assert_sql("UPDATE game_world_entity SET health = 5000 WHERE guid = 1");
 
-    use_item(&shard, &slot);
-    assert!(health(&shard) > 5000, "the heal effect applies");
-    assert_eq!(
-        stack(&shard, PRODUCT),
-        Some(1),
-        "the unique product is refused"
-    );
-    assert_eq!(stack(&shard, CRAFT_ITEM), Some(1));
+    let refused = shard.call("gw_use_item", &[&actor(PLAYER), &slot]);
+    let text = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success(), "{text}");
+    assert!(text.contains(ItemRefusal::CantCarryMore.as_tag()), "{text}");
+    assert_eq!(health(&shard), 5000, "no effect applies");
+    assert_eq!(stack(&shard, PRODUCT), Some(1));
+    assert_eq!(stack(&shard, CRAFT_ITEM), Some(2));
+    assert!(pending_casts(&shard).is_empty());
 }
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_cast_item_destroyed_mid_cast_fails_the_completion_as_item_gone() {
+fn a_craft_with_full_bags_is_refused_as_inventory_full() {
+    let shard = stage("item-cast-craft-bags-full");
+    craft_fixture(&shard, 0);
+    heal_fixture(&shard);
+    shard.assert_call("debug_grant_item", &[PLAYER, &HEAL_ITEM.to_string(), "80"]);
+    assert_eq!(items(&shard, HEAL_ITEM).len(), 16, "the backpack is full");
+    shard.assert_sql("UPDATE game_world_entity SET health = 5000 WHERE guid = 1");
+
+    let refused = shard.call("debug_cast_at", &[PLAYER, &CRAFT_SPELL.to_string(), PLAYER]);
+    let text = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success(), "{text}");
+    assert!(text.contains(ItemRefusal::InventoryFull.as_tag()), "{text}");
+    assert_eq!(health(&shard), 5000, "no effect applies");
+    assert_eq!(stack(&shard, PRODUCT), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_crafting_item_cast_whose_product_cannot_be_stored_at_completion_fails_and_keeps_the_item() {
+    let shard = stage("item-cast-craft-refused-late");
+    craft_fixture(&shard, CAST_TIME_MS);
+    let slot = grant(&shard, CRAFT_ITEM, 2);
+    shard.assert_sql("UPDATE game_world_entity SET health = 5000 WHERE guid = 1");
+    let casts = subscribe_casts(&shard, CRAFT_SPELL);
+    use_item(&shard, &slot);
+    grant(&shard, PRODUCT, 1);
+
+    shard.assert_call("debug_advance_roll_batch", &["120"]);
+    let rows = cast_rows(&shard, &casts);
+    assert!(!rows.iter().any(is_completion), "{rows:?}");
+    assert_eq!(refusal_reasons(&rows), [UNREPORTED], "{rows:?}");
+    assert_eq!(health(&shard), 5000, "no effect applies");
+    assert_eq!(stack(&shard, PRODUCT), Some(1));
+    assert_eq!(stack(&shard, CRAFT_ITEM), Some(2));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_cast_item_destroyed_mid_cast_interrupts_the_cast_at_once() {
     let shard = stage("item-cast-destroyed");
     heal_fixture(&shard);
     let slot = grant(&shard, HEAL_ITEM, 2);
     let casts = subscribe_casts(&shard, HEAL_SPELL);
     use_item(&shard, &slot);
-    shard.assert_sql(&format!(
-        "DELETE FROM game_item_instance WHERE owner_guid = 1 AND entry = {HEAL_ITEM}"
-    ));
+    shard.assert_call("gw_destroy_item", &[&actor(PLAYER), &slot, "2"]);
+
+    assert_interrupted(&shard, &casts);
+    assert_eq!(stack(&shard, HEAL_ITEM), None);
+    shard.assert_call("debug_advance_roll_batch", &["120"]);
+    assert_interrupted(&shard, &casts);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn destroying_part_of_a_cast_item_stack_leaves_the_cast_to_complete() {
+    let shard = stage("item-cast-destroyed-part");
+    heal_fixture(&shard);
+    let slot = grant(&shard, HEAL_ITEM, 2);
+    let casts = subscribe_casts(&shard, HEAL_SPELL);
+    use_item(&shard, &slot);
+    shard.assert_call("gw_destroy_item", &[&actor(PLAYER), &slot, "1"]);
+    assert_eq!(pending_casts(&shard).len(), 1);
 
     shard.assert_call("debug_advance_roll_batch", &["120"]);
-    assert_item_gone(&shard, &casts);
+    let rows = cast_rows(&shard, &casts);
+    assert!(rows.iter().any(is_completion), "{rows:?}");
+    assert!(refusal_reasons(&rows).is_empty(), "{rows:?}");
+    assert_eq!(stack(&shard, HEAL_ITEM), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_cast_item_traded_away_mid_cast_interrupts_the_cast_at_once() {
+    let shard = stage("item-cast-traded-away");
+    heal_fixture(&shard);
+    let slot = grant(&shard, HEAL_ITEM, 2);
+    let other = open_trade(&shard);
+    let casts = subscribe_casts(&shard, HEAL_SPELL);
+    use_item(&shard, &slot);
+    shard.assert_call("gw_set_trade_item", &[&actor(PLAYER), "0", &slot]);
+    assert_eq!(pending_casts(&shard).len(), 1, "an offer keeps the cast");
+    shard.assert_call("gw_accept_trade", &[&actor(&other)]);
+    shard.assert_call("gw_accept_trade", &[&actor(PLAYER)]);
+
+    assert_interrupted(&shard, &casts);
+    assert_eq!(stack(&shard, HEAL_ITEM), None);
+    assert_eq!(
+        number::<u32>(
+            &shard.query_rows(&format!(
+                "SELECT stack_count FROM game_item_instance WHERE owner_guid = {other} \
+                 AND entry = {HEAL_ITEM}"
+            ))[0],
+            "stack_count"
+        ),
+        2
+    );
 }
 
 #[test]
@@ -215,7 +302,7 @@ fn use_item(shard: &Standalone, slot: &str) {
     shard.assert_call("gw_use_item", &[&actor(PLAYER), slot]);
 }
 
-fn open_trade(shard: &Standalone) {
+fn open_trade(shard: &Standalone) -> String {
     shard.assert_call(
         "create_character",
         &["1", "\"Other\"", "1", "1", "0", "0", "0", "0", "0", "0"],
@@ -230,6 +317,7 @@ fn open_trade(shard: &Standalone) {
     }
     shard.assert_call("gw_initiate_trade", &[&actor(PLAYER), &other]);
     shard.assert_call("gw_begin_trade", &[&actor(&other)]);
+    other
 }
 
 fn subscribe_casts(shard: &Standalone, spell_id: u32) -> TableSubscription {
@@ -248,16 +336,26 @@ fn is_completion(row: &Row) -> bool {
     row["is_completion"] == "true"
 }
 
-fn assert_item_gone(shard: &Standalone, casts: &TableSubscription) {
+fn refusal_reasons(rows: &[Row]) -> Vec<&str> {
+    rows.iter()
+        .filter(|row| row["is_interrupted"] == "true")
+        .map(|row| row["failure_reason"].as_str())
+        .collect()
+}
+
+fn assert_refused_as(shard: &Standalone, casts: &TableSubscription, reason: &str) {
     let rows = cast_rows(shard, casts);
     assert!(!rows.iter().any(is_completion), "{rows:?}");
-    let refusals: Vec<_> = rows
-        .iter()
-        .filter(|row| row["is_interrupted"] == "true")
-        .collect();
-    assert_eq!(refusals.len(), 1, "{rows:?}");
-    assert_eq!(refusals[0]["failure_reason"], ITEM_GONE);
+    assert_eq!(refusal_reasons(&rows), [reason], "{rows:?}");
     assert!(pending_casts(shard).is_empty());
+}
+
+fn assert_interrupted(shard: &Standalone, casts: &TableSubscription) {
+    assert_refused_as(shard, casts, INTERRUPTED);
+}
+
+fn assert_item_gone(shard: &Standalone, casts: &TableSubscription) {
+    assert_refused_as(shard, casts, ITEM_GONE);
 }
 
 fn pending_casts(shard: &Standalone) -> Vec<Row> {
