@@ -2,14 +2,18 @@ use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY, TEST_WOL
 use lyracore_shared::guid;
 use lyracore_test_support::{ReducerConnection, Standalone};
 
+use serde_json::json;
+
 use super::buy_in_slot::request;
-use super::{enter, fixture};
+use super::{enter, fixture, Packet};
 
 const CMSG_LOOT: u32 = 0x15d;
+const CMSG_LOOT_MONEY: u32 = 0x15e;
 const CMSG_LOOT_RELEASE: u32 = 0x15f;
 const CMSG_AUTOSTORE_LOOT_ITEM: u32 = 0x108;
 const SMSG_LOOT_RESPONSE: u16 = 0x160;
 const SMSG_LOOT_RELEASE_RESPONSE: u16 = 0x161;
+const SMSG_LOOT_REMOVED: u16 = 0x162;
 const SMSG_INVENTORY_CHANGE_FAILURE: u16 = 0x112;
 
 const INVENTORY_FULL: u8 = 0x32;
@@ -83,18 +87,101 @@ fn stage(name: &str) -> Stage {
     }
 }
 
+fn open_corpse_on(connection: &mut ReducerConnection, corpse: u64) {
+    let opened = request(connection, CMSG_LOOT, corpse.to_le_bytes().into());
+    // A loot error shares the opcode; a real window has a nonzero loot type after the guid.
+    assert!(opened
+        .iter()
+        .any(|(opcode, body)| *opcode == SMSG_LOOT_RESPONSE && body[8] != 0));
+}
+
 impl Stage {
     fn open_corpse(&mut self) {
-        let opened = request(
-            &mut self.connection,
-            CMSG_LOOT,
-            self.corpse.to_le_bytes().into(),
-        );
-        // A loot error shares the opcode; a real window has a nonzero loot type after the guid.
-        assert!(opened
-            .iter()
-            .any(|(opcode, body)| *opcode == SMSG_LOOT_RESPONSE && body[8] != 0));
+        open_corpse_on(&mut self.connection, self.corpse);
         assert_eq!(self.open_loot(), self.corpse.to_string());
+    }
+
+    fn second_looter(&self) -> ReducerConnection {
+        // A native player row is unique per Account, so the second looter needs its own.
+        let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
+        self.shard.assert_call(
+            "provision_account",
+            &["\"SECOND\"", &credentials, &credentials],
+        );
+        let account = self
+            .shard
+            .query_rows("SELECT id FROM game_account WHERE username = 'SECOND'")[0]["id"]
+            .clone();
+        self.shard.assert_call(
+            "create_character",
+            &[
+                &account,
+                "\"Second\"",
+                "1",
+                "1",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+                "0",
+            ],
+        );
+        let second: u64 = self
+            .shard
+            .query_rows("SELECT guid FROM game_character WHERE name = 'Second'")[0]["guid"]
+            .parse()
+            .unwrap();
+        self.shard
+            .assert_call("debug_spawn_player_entity", &[&second.to_string()]);
+        self.shard.insert_row(
+            "game_corpse_loot_eligible",
+            &[
+                ("id", &900_003),
+                ("corpse_guid", &self.corpse),
+                ("eligible_guid", &second),
+            ],
+        );
+        let mut connection = enter(&self.shard, second);
+        connection.drain_packets();
+        connection
+    }
+
+    fn removed_recipients_of_take(&mut self, slot: u8) -> Vec<u128> {
+        self.connection
+            .call("native_world_receive", json!([0x1dcu32, vec![0u8; 8]]))
+            .unwrap();
+        self.connection.drain_packets();
+        self.connection
+            .call(
+                "native_world_receive",
+                json!([CMSG_AUTOSTORE_LOOT_ITEM, vec![slot]]),
+            )
+            .unwrap();
+        let mut recipients: Vec<u128> = self
+            .connection
+            .drain_packets()
+            .iter()
+            .filter_map(|row| {
+                let Packet(_, (audience, recipient), (tag, opcode), body, ..) =
+                    serde_json::from_str(row.get()).unwrap();
+                (audience == 0
+                    && tag == 0
+                    && serde_json::from_str::<u16>(opcode.get()).unwrap() == SMSG_LOOT_REMOVED
+                    && u8::from_str_radix(&body, 16) == Ok(slot))
+                .then(|| serde_json::from_str::<(u128,)>(recipient.get()).unwrap().0)
+            })
+            .collect();
+        recipients.sort_unstable();
+        recipients
+    }
+
+    fn corpse_money(&self) -> String {
+        self.shard.query_rows(&format!(
+            "SELECT money FROM game_world_entity WHERE guid = {}",
+            self.corpse
+        ))[0]["money"]
+            .clone()
     }
 
     fn take(&mut self, slot: u8) -> Vec<(u16, Vec<u8>)> {
@@ -159,10 +246,7 @@ fn loot_error(target: u64, error: u8) -> (u16, Vec<u8>) {
 }
 
 fn assert_loot_error(packets: &[(u16, Vec<u8>)], target: u64, error: u8) {
-    let (opcode, prefix) = loot_error(target, error);
-    assert_eq!(packets.len(), 1);
-    assert_eq!(packets[0].0, opcode);
-    assert_eq!(packets[0].1[..10], prefix[..]);
+    assert_eq!(packets, [loot_error(target, error)]);
 }
 
 fn release_response(target: u64) -> (u16, Vec<u8>) {
@@ -285,4 +369,36 @@ fn a_release_closes_the_stored_window_whatever_guid_the_client_names() {
     assert_eq!(stage.release(0xdead), [release_response(stage.corpse)]);
     assert_eq!(stage.open_loot(), "0");
     assert!(stage.release(stage.corpse).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_take_tells_every_looter_with_the_window_open() {
+    let mut stage = stage("loot-take-removed-for-all");
+    let mut second = stage.second_looter();
+    stage.open_corpse();
+    open_corpse_on(&mut second, stage.corpse);
+
+    let mut expected = vec![stage.connection.connection_id(), second.connection_id()];
+    expected.sort_unstable();
+    assert_eq!(stage.removed_recipients_of_take(0), expected);
+    assert_eq!(stage.carried(FIXTURE_JERKY), 1);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn money_out_of_reach_is_silent_and_stays_on_the_corpse() {
+    let mut stage = stage("loot-money-out-of-reach");
+    stage.shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET money = 17 WHERE guid = {}",
+        stage.corpse
+    ));
+    stage.open_corpse();
+    stage.shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = 500 WHERE guid = {}",
+        stage.character
+    ));
+
+    assert!(request(&mut stage.connection, CMSG_LOOT_MONEY, Vec::new()).is_empty());
+    assert_eq!(stage.corpse_money(), "17");
 }

@@ -600,10 +600,9 @@ struct QuestEtl {
     reward_mail_template_ids: std::collections::HashSet<u64>,
 }
 
-#[allow(clippy::type_complexity)]
 fn parse_creature_drops(
     dump: &(impl crate::dump::TableRows + ?Sized),
-) -> Result<std::collections::HashMap<u64, Vec<(u64, u32, u32, u32, bool)>>> {
+) -> Result<std::collections::HashMap<u64, Vec<vmangos_loot::LootDrop>>> {
     vmangos_loot::parse(dump, "creature_loot_template")
 }
 
@@ -615,9 +614,7 @@ fn creature_drop_item_set(
     let mut set = std::collections::HashSet::new();
     for lootid in creature_loot_ids.values() {
         if let Some(drops) = drops_by_lootid.get(lootid) {
-            for &(item, ..) in drops {
-                set.insert(item);
-            }
+            set.extend(drops.iter().map(|drop| drop.item));
         }
     }
     Ok(set)
@@ -638,9 +635,7 @@ fn gameobject_loot_item_set(
         }
         let lootid: u64 = row.number(got::DATA1)?;
         if let Some(drops) = loot.get(&lootid) {
-            for &(item, ..) in drops {
-                set.insert(item);
-            }
+            set.extend(drops.iter().map(|drop| drop.item));
         }
     }
     Ok(set)
@@ -1005,14 +1000,12 @@ fn build_items_and_loot(
         let Some(drops) = drops_by_lootid.get(lootid) else {
             continue;
         };
-        for &(item, chance_bp, count, group_id, quest_only) in drops {
-            if forbidden.contains(&item) {
+        for drop in drops {
+            if forbidden.contains(&drop.item) {
                 continue;
             }
-            item_ids.insert(item);
-            loot_rows.push(format!(
-                "({loot_id},{creature_entry},{item},{chance_bp},{count},{group_id},{quest_only})"
-            ));
+            item_ids.insert(drop.item);
+            loot_rows.push(drop.row(loot_id, *creature_entry));
             loot_id += 1;
         }
     }
@@ -1717,8 +1710,8 @@ fn build_loot_family_rows(
         let Some(drops) = drops_by_pickpocketid.get(pp_loot_id) else {
             continue;
         };
-        for &(item, chance_bp, count, group_id, quest_only) in drops {
-            pickpocket_rows.push(format!("({pickpocket_row_id},{creature_entry},{item},{chance_bp},{count},{group_id},{quest_only})"));
+        for drop in drops {
+            pickpocket_rows.push(drop.row(pickpocket_row_id, *creature_entry));
             pickpocket_row_id += 1;
         }
     }
@@ -1733,10 +1726,8 @@ fn build_loot_family_rows(
         let Some(drops) = drops_by_skinid.get(&skin_id) else {
             continue;
         };
-        for &(item, chance_bp, count, group_id, _quest_only) in drops {
-            skinning_rows.push(format!(
-                "({skinning_row_id},{skin_id},{item},{chance_bp},{count},{group_id})"
-            ));
+        for drop in drops {
+            skinning_rows.push(drop.row_without_quest_only(skinning_row_id, skin_id));
             skinning_row_id += 1;
         }
     }
@@ -1751,10 +1742,8 @@ fn build_loot_family_rows(
         let Some(drops) = drops_by_goloot.get(&(loot_id as u64)) else {
             continue;
         };
-        for &(item, chance_bp, count, group_id, quest_only) in drops {
-            gameobject_loot_rows.push(format!(
-                "({go_loot_row_id},{loot_id},{item},{chance_bp},{count},{group_id},{quest_only})"
-            ));
+        for drop in drops {
+            gameobject_loot_rows.push(drop.row(go_loot_row_id, u64::from(loot_id)));
             go_loot_row_id += 1;
         }
     }
@@ -1765,10 +1754,8 @@ fn build_loot_family_rows(
     let mut zones: Vec<&u64> = drops_by_zone.keys().collect();
     zones.sort();
     for zone in zones {
-        for &(item, chance_bp, count, group_id, _quest_only) in &drops_by_zone[zone] {
-            fishing_rows.push(format!(
-                "({fishing_row_id},{zone},{item},{chance_bp},{count},{group_id})"
-            ));
+        for drop in &drops_by_zone[zone] {
+            fishing_rows.push(drop.row_without_quest_only(fishing_row_id, *zone));
             fishing_row_id += 1;
         }
     }
@@ -1814,7 +1801,7 @@ fn push_item_statements(
     push_insert(
         stmts,
         "game_creature_loot",
-        "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only",
+        "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only,min_count",
         loot_rows,
     );
     push_insert(
@@ -1839,25 +1826,25 @@ fn push_loot_statements(
     push_insert(
         stmts,
         "game_pickpocket_loot",
-        "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only",
+        "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only,min_count",
         pickpocket_rows,
     );
     push_insert(
         stmts,
         "game_skinning_loot",
-        "id,skin_loot_id,item_entry,chance_bp,count,group_id",
+        "id,skin_loot_id,item_entry,chance_bp,count,group_id,min_count",
         skinning_rows,
     );
     push_insert(
         stmts,
         "game_gameobject_loot",
-        "id,loot_id,item_entry,chance_bp,count,group_id,quest_only",
+        "id,loot_id,item_entry,chance_bp,count,group_id,quest_only,min_count",
         gameobject_loot_rows,
     );
     push_insert(
         stmts,
         "game_fishing_loot",
-        "id,zone_id,item_entry,chance_bp,count,group_id",
+        "id,zone_id,item_entry,chance_bp,count,group_id,min_count",
         fishing_rows,
     );
 }
@@ -2232,7 +2219,6 @@ fn loot_findings(dump: &impl TableRows, tables: &[&str]) -> Result<Vec<serde_jso
     for &table in tables {
         let rows = dump.rows(table)?;
         let mut conditions = 0;
-        let mut count_ranges = 0;
         let mut quest_only = 0;
         for row in rows.iter() {
             let minimum = row.number::<i64>("mincountOrRef")?;
@@ -2240,15 +2226,12 @@ fn loot_findings(dump: &impl TableRows, tables: &[&str]) -> Result<Vec<serde_jso
                 continue;
             }
             conditions += usize::from(row.number::<u32>("condition_id")? != 0);
-            let maximum = row.number::<u32>("maxcount")?;
-            count_ranges += usize::from(minimum >= 0 && minimum as u64 != u64::from(maximum));
             if matches!(table, "skinning_loot_template" | "fishing_loot_template") {
                 quest_only += usize::from(row.number::<f64>("ChanceOrQuestChance")? < 0.0);
             }
         }
         for (code, occurrences) in [
             ("loot.condition", conditions),
-            ("loot.count-range", count_ranges),
             ("loot.quest-only", quest_only),
         ] {
             if occurrences != 0 {

@@ -4322,7 +4322,7 @@ def check_inventory(host):
     assert values(observed, target)[143] & 1 == 0
     peer.send(0x15d, struct.pack('<Q', target))
     refused = peer.collect()
-    assert any(opcode == 0x160 and body[:10] == struct.pack('<QBB', target, 0, 0) for opcode, body in refused)
+    assert (0x160, struct.pack('<QBB', target, 0, 0)) in refused
     client.send(0x15d, struct.pack('<Q', target))
     loot = next(body for opcode, body in client.collect() if opcode == 0x160)
     assert loot[:14] == struct.pack('<QBIB', target, 1, 17, 1)

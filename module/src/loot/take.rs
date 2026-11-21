@@ -1,16 +1,17 @@
 use spacetimedb::ReducerContext;
 
-use super::{refuse, LootRefusal, LootSource};
+use super::{refuse, CorpseLoot, LootRefusal, LootSource};
 use crate::actor::{ActionRefusal, ActionRefusalKind};
 use crate::game_corpse_loot;
 use crate::game_item_template;
 
+/// Stores one loot row with the looter and returns the row it took.
 pub(crate) fn take_item(
     ctx: &ReducerContext,
     looter_guid: u64,
     source_guid: u64,
     loot_slot: u8,
-) -> Result<(), LootRefusal> {
+) -> Result<CorpseLoot, LootRefusal> {
     let (looter, source) = super::reach(ctx, looter_guid, source_guid)?;
     let source_is_corpse = matches!(source, LootSource::Corpse(_));
     let loot = ctx.db.game_corpse_loot();
@@ -83,7 +84,7 @@ pub(crate) fn take_item(
             count,
         },
     );
-    Ok(())
+    Ok(row)
 }
 
 #[cfg_attr(not(has_packages), allow(dead_code))]
@@ -93,7 +94,8 @@ pub(crate) fn request_take_loot(
     source_guid: u64,
     loot_slot: u8,
 ) -> Result<(), ActionRefusal> {
-    Ok(take_item(ctx, looter_guid, source_guid, loot_slot)?)
+    take_item(ctx, looter_guid, source_guid, loot_slot)?;
+    Ok(())
 }
 
 pub(crate) fn apply_take_loot(
@@ -102,5 +104,6 @@ pub(crate) fn apply_take_loot(
     source_guid: u64,
     loot_slot: u8,
 ) -> Result<(), String> {
-    Ok(take_item(ctx, looter_guid, source_guid, loot_slot)?)
+    take_item(ctx, looter_guid, source_guid, loot_slot)?;
+    Ok(())
 }

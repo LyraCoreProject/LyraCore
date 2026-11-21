@@ -26,12 +26,6 @@ symbol = "parse"
 evidence = "Compatibility Manifest loot.condition; conformance/vmangos-port-census/loot.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
-description = "loot.count-range selected 5960: The current import stores the maximum count."
-path = "importer/src/world_import_loot.rs"
-symbol = "parse"
-evidence = "Compatibility Manifest loot.count-range; conformance/vmangos-port-census/loot.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
 description = "loot.quest-only selected 35: Fishing and skinning tables have no quest-only flag."
 path = "importer/src/world_import_loot.rs"
 symbol = "parse"

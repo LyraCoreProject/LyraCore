@@ -632,6 +632,14 @@ notifications go directly from the Module; login also reads pending system messa
 Durable tests observe notifications through subscriptions opened before the action. A SQL read
 after the action sees an empty event table.
 
+### Loot stack range migration
+
+`game_creature_loot`, `game_pickpocket_loot`, `game_gameobject_loot`, `game_skinning_loot` and
+`game_fishing_loot` gain `min_count`, end-appended with default 0. Zero keeps a row's stack fixed
+at `count`, so rows written before the change drop as before. Reimport the `items` and `loot`
+families after the publish; until then every drop still gives its largest stack. A row written by
+the Operator Content API or inserted by a Package Delta carries zero and keeps a fixed stack.
+
 ## 2. Tooling gotchas
 
 - **`spacetime sql` (2.5):** no `ORDER BY`, no `IN` or subqueries, no `Timestamp` or `Identity`

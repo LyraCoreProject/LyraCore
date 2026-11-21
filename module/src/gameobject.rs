@@ -670,18 +670,12 @@ fn use_resolved_gameobject(
                     .game_gameobject_loot()
                     .by_loot()
                     .filter(&tmpl.data1)
-                    .map(|r| crate::loot::LootRow {
-                        item_entry: r.item_entry,
-                        chance_bp: r.chance_bp,
-                        count: r.count,
-                        group_id: r.group_id,
-                        quest_only: r.quest_only,
-                    })
+                    .map(crate::loot::LootRow::from)
                     .collect()
             } else {
                 Vec::new()
             };
-            let mut winners = crate::loot::roll_loot_rows(ctx, rows);
+            let mut winners = crate::loot::roll_loot_rows(ctx, go.guid, rows);
             if winners.is_empty() && tmpl.data0 != 0 {
                 winners.push(crate::loot::LootDrop {
                     item_entry: tmpl.data0,
