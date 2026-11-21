@@ -605,6 +605,40 @@ fn taxi_mount_displays(
     Ok(mounts)
 }
 
+const SPELL_EFFECT_SEND_TAXI: u32 = 123;
+
+fn spell_taxi_path_ids(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<HashSet<u32>> {
+    let columns = [
+        "effect1",
+        "effect2",
+        "effect3",
+        "effectMiscValue1",
+        "effectMiscValue2",
+        "effectMiscValue3",
+    ];
+    let mut path_ids = HashSet::new();
+    for row in dump.columns("spell_template", &columns)?.iter() {
+        for index in 1..=3 {
+            if row.number::<u32>(&format!("effect{index}"))? == SPELL_EFFECT_SEND_TAXI {
+                let misc_value: i32 = row.number(&format!("effectMiscValue{index}"))?;
+                path_ids.insert(misc_value as u32);
+            }
+        }
+    }
+    Ok(path_ids)
+}
+
+/// A node leaves the taxi network only when every path out of it is a spell path (vmangos
+/// `sTaxiNodesMask`, `DBCStores.cpp:366-405`).
+fn taxi_network_nodes(paths: &DbcTaxiPath, spell_paths: &HashSet<u32>) -> HashMap<u32, bool> {
+    let mut network = HashMap::new();
+    for row in paths.rows() {
+        *network.entry(row.source_taxi_node.id).or_insert(false) |=
+            !spell_paths.contains(&row.id.id);
+    }
+    network
+}
+
 #[allow(clippy::too_many_lines)]
 fn taxi_catalogue_sql(
     nodes: &DbcTaxiNodes,
@@ -621,6 +655,7 @@ fn taxi_catalogue_sql(
     }
 
     let mounts = taxi_mount_displays(mount_dump, display_ids)?;
+    let network = taxi_network_nodes(paths, &spell_taxi_path_ids(mount_dump)?);
     let mut warnings = Vec::new();
     let mut node_ids = HashSet::with_capacity(nodes.rows().len());
     let mut node_rows = Vec::with_capacity(nodes.rows().len() + 2);
@@ -671,7 +706,7 @@ fn taxi_catalogue_sql(
         node_rows.push((
             id,
             format!(
-                "({},{},{},{},{},{},{},{},{},{},{})",
+                "({},{},{},{},{},{},{},{},{},{},{},{})",
                 id,
                 id,
                 row.map.id,
@@ -683,6 +718,7 @@ fn taxi_catalogue_sql(
                 displays[1],
                 entries[0] != 0,
                 entries[1] != 0,
+                network.get(&id).copied().unwrap_or(true),
             ),
         ));
     }
@@ -811,7 +847,7 @@ fn taxi_catalogue_sql(
         (
             fixture::SOURCE_NODE_STORAGE_ID,
             format!(
-                "({},{},{},{},{},{},{},{},{},true,true)",
+                "({},{},{},{},{},{},{},{},{},true,true,true)",
                 fixture::SOURCE_NODE_STORAGE_ID,
                 fixture::SOURCE_CLIENT_NODE_ID,
                 fixture::MAP_ID,
@@ -826,7 +862,7 @@ fn taxi_catalogue_sql(
         (
             fixture::DESTINATION_NODE_STORAGE_ID,
             format!(
-                "({},{},{},{},{},{},{},{},{},true,true)",
+                "({},{},{},{},{},{},{},{},{},true,true,true)",
                 fixture::DESTINATION_NODE_STORAGE_ID,
                 fixture::DESTINATION_CLIENT_NODE_ID,
                 fixture::MAP_ID,
@@ -897,7 +933,7 @@ fn taxi_catalogue_sql(
     push_insert(
         &mut stmts,
         "game_taxi_node",
-        "id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance,own_mount_horde,own_mount_alliance",
+        "id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance,own_mount_horde,own_mount_alliance,in_taxi_network",
         &node_rows,
     );
     push_insert(
@@ -1298,10 +1334,19 @@ mod tests {
     }
 
     fn mount_source(rows: &str) -> crate::world_source::WorldSource {
+        mount_source_with_spells(rows, "")
+    }
+
+    fn mount_source_with_spells(rows: &str, spells: &str) -> crate::world_source::WorldSource {
         crate::world_source::fixture_sql(&format!(
             "CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, patch INTEGER DEFAULT 10,
                 display_id1 INTEGER, display_id2 INTEGER, display_id3 INTEGER, display_id4 INTEGER);
-             INSERT INTO creature_template (entry,display_id1,display_id2,display_id3,display_id4) VALUES {rows};"
+             INSERT INTO creature_template (entry,display_id1,display_id2,display_id3,display_id4) VALUES {rows};
+             CREATE TABLE spell_template (entry INTEGER, build INTEGER,
+                effect1 INTEGER, effect2 INTEGER, effect3 INTEGER,
+                effectMiscValue1 INTEGER, effectMiscValue2 INTEGER, effectMiscValue3 INTEGER,
+                PRIMARY KEY (entry, build));
+             INSERT INTO spell_template VALUES (1,5875,0,0,0,0,0,0){spells};"
         ))
     }
 
@@ -1353,7 +1398,7 @@ mod tests {
             nodes.rows[1].mount_creature_display_info = entries;
             let catalogue = catalogue_with_mounts(&nodes, &paths, &points).unwrap();
             let expected = format!(
-                "(10,10,0,10,2,3,'O''Ryan''s Source',{},{},{},{})",
+                "(10,10,0,10,2,3,'O''Ryan''s Source',{},{},{},{},true)",
                 expected[0], expected[1], own[0], own[1]
             );
             assert!(
@@ -1371,6 +1416,49 @@ mod tests {
     }
 
     #[test]
+    fn a_node_leaves_the_taxi_network_only_when_every_path_out_of_it_is_a_spell_path() {
+        let (mut nodes, mut paths, points) = synthetic_taxi_catalogue();
+        for id in [30, 40, 50] {
+            nodes.rows.push(taxi_node_row(
+                id,
+                "Network fixture",
+                [1100, 1101],
+                id as f32,
+            ));
+        }
+        paths.rows.extend([
+            taxi_path_row(71, 30, 20, 10),
+            taxi_path_row(72, 40, 20, 10),
+            taxi_path_row(73, 40, 10, 10),
+        ]);
+        let source = mount_source_with_spells(
+            "(1100,295,0,0,0),(1101,1147,0,0,0)",
+            ",(2,5875,123,0,0,71,0,0),(3,5875,0,0,123,0,0,72),(4,5875,5,0,0,73,0,0)",
+        );
+        let catalogue = super::taxi_catalogue_sql(
+            &nodes,
+            &paths,
+            &points,
+            &source,
+            &HashSet::from([295, 1147]),
+        )
+        .unwrap();
+        let node_insert = catalogue
+            .statements
+            .iter()
+            .find(|sql| sql.starts_with("INSERT INTO game_taxi_node "))
+            .unwrap();
+        for (node, in_network) in [(10, true), (20, true), (30, false), (40, true), (50, true)] {
+            let tail = &node_insert[node_insert.find(&format!("({node},{node},0,")).unwrap()..];
+            let row = &tail[..tail.find(')').unwrap()];
+            assert!(
+                row.ends_with(&format!(",true,true,{in_network}")),
+                "node {node}: {row}"
+            );
+        }
+    }
+
+    #[test]
     fn taxi_mounts_use_the_first_nonzero_template_model() {
         let (nodes, paths, points) = synthetic_taxi_catalogue();
         let catalogue = super::taxi_catalogue_sql(
@@ -1381,10 +1469,9 @@ mod tests {
             &HashSet::from([295, 1147]),
         )
         .unwrap();
-        assert!(catalogue
-            .statements
-            .iter()
-            .any(|sql| sql.contains("(10,10,0,10,2,3,'O''Ryan''s Source',295,1147,true,true)")));
+        assert!(catalogue.statements.iter().any(
+            |sql| sql.contains("(10,10,0,10,2,3,'O''Ryan''s Source',295,1147,true,true,true)")
+        ));
     }
 
     #[test]
@@ -1401,7 +1488,7 @@ mod tests {
         assert!(catalogue
             .statements
             .iter()
-            .any(|sql| sql.contains("(10,10,0,10,2,3,'O''Ryan''s Source',0,0,true,true)")));
+            .any(|sql| sql.contains("(10,10,0,10,2,3,'O''Ryan''s Source',0,0,true,true,true)")));
         assert!(catalogue
             .warnings
             .iter()
@@ -1444,7 +1531,7 @@ mod tests {
             .find(|sql| sql.starts_with("INSERT INTO game_taxi_node "))
             .unwrap();
         assert!(
-            node_insert.contains("(10,10,0,10,2,3,'O''Ryan''s Source',295,1147,true,true)"),
+            node_insert.contains("(10,10,0,10,2,3,'O''Ryan''s Source',295,1147,true,true,true)"),
             "Horde/Alliance creature entries must resolve to displays: {node_insert}"
         );
 

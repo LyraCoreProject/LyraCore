@@ -435,6 +435,10 @@ absent from `CreatureDisplayInfo` produces display zero and a warning. The Modul
 An explicit missing entry does not fall back to the other faction. Invalid source fields fail
 before any DBC catalogue SQL runs.
 
+`in_taxi_network` follows vmangos `sTaxiNodesMask` (`DBCStores.cpp:366-405`). The importer reads
+the `spell_template` rows' `SPELL_EFFECT_SEND_TAXI` (123) misc values as spell path ids, and a node
+is out of the network only when it has paths and every one is a spell path.
+
 The catalogue stores the first nonzero model in the template's four model slots. This deterministic
 choice omits the reference's random model and gender selection. The creature-entry lookup and
 faction fallback follow [CMaNGOS Classic's taxi mount selection](https://github.com/cmangos/mangos-classic/blob/8ec338a1704e7dcb1c0213eb7ed58f9231ade40f/src/game/Globals/ObjectMgr.cpp#L6500-L6534).

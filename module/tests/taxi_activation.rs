@@ -26,6 +26,11 @@ const UNVISITED_CLIENT_NODE: u32 = 252;
 const UNVISITED_PATH: u32 = 5_090_308;
 const ONE_TEAM_NODE: u32 = 5_090_309;
 const ONE_TEAM_CLIENT_NODE: u32 = 251;
+const OFF_NETWORK_NODE: u32 = 5_090_310;
+const OFF_NETWORK_CLIENT_NODE: u32 = 250;
+const TAXI_QUERY_AVAILABLE_NODES: u32 = 0x1ac;
+const SHOW_TAXI_NODES: u64 = 0x1a9;
+const FAR_YARDS: f32 = 500.0;
 const HORDE_RACE: u32 = 2;
 const ALLIANCE_RACE: u32 = 1;
 const MOUNT_DISPLAY: u32 = 1147;
@@ -802,11 +807,13 @@ fn a_flight_master_in_combat_still_gets_the_node_status() {
     );
 }
 
-#[test]
-#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn the_node_status_skips_a_node_without_a_mount_for_the_characters_team() {
-    let (shard, mut wire, master) = stage("taxi-activation-status-team", 1000);
-    let master: u64 = master.parse().unwrap();
+fn insert_node_at_master(
+    shard: &Standalone,
+    master: u64,
+    (id, client_node): (u32, u32),
+    own_mount_alliance: bool,
+    in_taxi_network: bool,
+) {
     let flight_master = &shard.query_rows(&format!(
         "SELECT map_id, x, y, z FROM game_world_entity WHERE guid = {master}"
     ))[0];
@@ -820,29 +827,154 @@ fn the_node_status_skips_a_node_without_a_mount_for_the_characters_team() {
     shard.insert_row(
         "game_taxi_node",
         &[
-            ("id", &ONE_TEAM_NODE),
-            ("client_node_id", &ONE_TEAM_CLIENT_NODE),
+            ("id", &id),
+            ("client_node_id", &client_node),
             ("map_id", &map_id),
             ("x", &x),
             ("y", &y),
             ("z", &z),
-            ("name", &"Horde-only fixture"),
+            ("name", &"Nearest-node fixture"),
             ("mount_display_horde", &295),
             ("mount_display_alliance", &295),
             ("own_mount_horde", &true),
-            ("own_mount_alliance", &false),
+            ("own_mount_alliance", &own_mount_alliance),
+            ("in_taxi_network", &in_taxi_network),
         ],
     );
+}
+
+fn set_race(shard: &Standalone, race: u32) {
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_bytes_0 = {race} WHERE guid = 1"
+    ));
+}
+
+fn taxi_menu_prefixes(wire: &mut support::ReducerConnection, master: u64) -> Vec<String> {
+    wire.call(
+        "native_world_receive",
+        json!([TAXI_QUERY_AVAILABLE_NODES, master.to_le_bytes().to_vec()]),
+    )
+    .unwrap()
+    .inserts("game_native_packet")
+    .iter()
+    .map(|row| serde_json::from_str::<serde_json::Value>(row.get()).unwrap())
+    .filter(|packet| packet[2][1] == SHOW_TAXI_NODES)
+    .map(|packet| packet[3].as_str().unwrap()[..32].to_owned())
+    .collect()
+}
+
+fn taxi_menu(master: u64, source_client_node: u32) -> String {
+    let mut prefix = 1u32.to_le_bytes().to_vec();
+    prefix.extend(master.to_le_bytes());
+    prefix.extend(source_client_node.to_le_bytes());
+    prefix.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+fn learned(shard: &Standalone, node: u32) -> bool {
+    !shard
+        .query_rows(&format!(
+            "SELECT id FROM game_character_taxi_node WHERE character_guid = 1 AND node_id = {node}"
+        ))
+        .is_empty()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_node_status_skips_a_node_without_a_mount_for_the_characters_team() {
+    let (shard, mut wire, master) = stage("taxi-activation-status-team", 1000);
+    let master: u64 = master.parse().unwrap();
+    insert_node_at_master(
+        &shard,
+        master,
+        (ONE_TEAM_NODE, ONE_TEAM_CLIENT_NODE),
+        false,
+        true,
+    );
     for (race, known) in [(HORDE_RACE, false), (ALLIANCE_RACE, true)] {
-        shard.assert_sql(&format!(
-            "UPDATE game_world_entity SET unit_bytes_0 = {race} WHERE guid = 1"
-        ));
+        set_race(&shard, race);
         assert_eq!(
             node_status_replies(&mut wire, master),
             [node_status(master, known)],
             "race {race}"
         );
     }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_node_status_skips_a_node_outside_the_taxi_network() {
+    let (shard, mut wire, master) = stage("taxi-activation-status-network", 1000);
+    let master: u64 = master.parse().unwrap();
+    insert_node_at_master(
+        &shard,
+        master,
+        (OFF_NETWORK_NODE, OFF_NETWORK_CLIENT_NODE),
+        true,
+        false,
+    );
+    assert_eq!(
+        node_status_replies(&mut wire, master),
+        [known_node_status(master)]
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_taxi_menu_opens_on_the_nearest_node_however_far() {
+    let (shard, mut wire, master) = stage("taxi-activation-menu-far", 1000);
+    let master: u64 = master.parse().unwrap();
+    shard.assert_sql(&format!(
+        "UPDATE game_taxi_node SET x = x + {FAR_YARDS} WHERE id = {SOURCE_NODE}"
+    ));
+    assert_eq!(
+        taxi_menu_prefixes(&mut wire, master),
+        [taxi_menu(master, SOURCE_CLIENT_NODE)]
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_taxi_menu_opens_on_and_learns_the_node_with_the_characters_team_mount() {
+    let (shard, mut wire, master) = stage("taxi-activation-menu-team", 1000);
+    let master: u64 = master.parse().unwrap();
+    insert_node_at_master(
+        &shard,
+        master,
+        (ONE_TEAM_NODE, ONE_TEAM_CLIENT_NODE),
+        false,
+        true,
+    );
+    set_race(&shard, ALLIANCE_RACE);
+    assert_eq!(
+        taxi_menu_prefixes(&mut wire, master),
+        [taxi_menu(master, SOURCE_CLIENT_NODE)]
+    );
+    assert!(!learned(&shard, ONE_TEAM_NODE));
+    set_race(&shard, HORDE_RACE);
+    assert_eq!(
+        taxi_menu_prefixes(&mut wire, master),
+        [taxi_menu(master, ONE_TEAM_CLIENT_NODE)]
+    );
+    assert!(learned(&shard, ONE_TEAM_NODE));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn the_taxi_menu_opens_on_and_learns_only_a_node_in_the_taxi_network() {
+    let (shard, mut wire, master) = stage("taxi-activation-menu-network", 1000);
+    let master: u64 = master.parse().unwrap();
+    insert_node_at_master(
+        &shard,
+        master,
+        (OFF_NETWORK_NODE, OFF_NETWORK_CLIENT_NODE),
+        true,
+        false,
+    );
+    assert_eq!(
+        taxi_menu_prefixes(&mut wire, master),
+        [taxi_menu(master, SOURCE_CLIENT_NODE)]
+    );
+    assert!(!learned(&shard, OFF_NETWORK_NODE));
 }
 
 fn insert_self_spell(
