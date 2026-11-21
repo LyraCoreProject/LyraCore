@@ -2,7 +2,7 @@ name: Module durable tests
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
     paths-ignore:
       - "conformance/*.py"
       - "conformance/tests/*.py"
@@ -23,7 +23,8 @@ on:
       - ".claude/**"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  # A run for another label skips every job, so it gets its own group and cancels nothing.
+  group: ${{ github.workflow }}-${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && github.run_id || github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -33,9 +34,14 @@ env:
   UPGRADE_BASELINE: 859c7257c74d2c371dea8ed743cfbccd596cac11
   UPGRADE_BASELINE_WASM: ${{ github.workspace }}/.lyracore-upgrade-baseline.wasm
 
+# A PR runs these Boat jobs only with the full-ci label, because each Boat VM counts against the
+# plan's start limits. Pushes to main run them on GitHub's runners.
 jobs:
   durable:
-    if: github.event_name == 'push' || github.event.pull_request.draft == false
+    if: >-
+      github.event_name == 'push' ||
+      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
     runs-on: ${{ github.event_name == 'push' && 'ubuntu-latest' || 'boat-large' }}
     timeout-minutes: 45
     strategy:
