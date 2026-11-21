@@ -349,6 +349,7 @@ pub(crate) fn refresh_offer(ctx: &ReducerContext, owner_guid: u64) {
     }
 }
 
+// vmangos sends TRADE_CANCELED to the offerer only: the Trade Session and partner window stay.
 pub(crate) fn apply_set_trade_item(
     ctx: &ReducerContext,
     actor: WorldEntity,
@@ -358,30 +359,32 @@ pub(crate) fn apply_set_trade_item(
     let Some(session) = session_involving(ctx, actor.guid).filter(|s| s.open) else {
         return Ok(());
     };
-    if trade_slot > WILL_NOT_BE_TRADED_SLOT {
-        return Err(format!("bad trade slot {trade_slot}").into());
-    }
-    if inv_slot < lyracore_shared::constants::starter_item::BACKPACK_SLOT_0 {
+    let trade_slot_valid = trade_slot <= WILL_NOT_BE_TRADED_SLOT;
+    if trade_slot_valid && inv_slot < lyracore_shared::constants::starter_item::BACKPACK_SLOT_0 {
         return Err("equipped items cannot be traded".into());
     }
-    if inv_slot >= lyracore_shared::constants::starter_item::BACKPACK_SLOT_0 + 16 {
-        return Err("bag items cannot be traded yet".into());
-    }
-    let inst = crate::items::item_in_slot(ctx, actor.guid, inv_slot).ok_or("no item in slot")?;
-    if inst.soulbound {
-        push_offer_events(ctx, &session, actor.guid);
-        return Ok(());
-    }
+    let partner = if actor.guid == session.initiator_guid {
+        session.target_guid
+    } else {
+        session.initiator_guid
+    };
     let slots = ctx.db.game_trade_slot();
+    let offered = (trade_slot_valid && crate::items::is_carried_slot(inv_slot))
+        .then(|| crate::items::item_in_slot(ctx, actor.guid, inv_slot))
+        .flatten()
+        .filter(|inst| !inst.soulbound || trade_slot == WILL_NOT_BE_TRADED_SLOT)
+        .filter(|inst| {
+            !slots
+                .by_session()
+                .filter(&session.id)
+                .any(|row| row.owner_guid == actor.guid && row.item_guid == inst.guid)
+        });
+    let Some(inst) = offered else {
+        push_trade_event(ctx, actor.guid, event_kind::TRADE_CANCELED, partner);
+        return Ok(());
+    };
     for row in slots.by_session().filter(&session.id).collect::<Vec<_>>() {
-        if row.owner_guid != actor.guid {
-            continue;
-        }
-        if row.item_guid == inst.guid && row.trade_slot != trade_slot {
-            push_offer_events(ctx, &session, actor.guid);
-            return Ok(());
-        }
-        if row.trade_slot == trade_slot {
+        if row.owner_guid == actor.guid && row.trade_slot == trade_slot {
             slots.id().delete(row.id);
         }
     }
