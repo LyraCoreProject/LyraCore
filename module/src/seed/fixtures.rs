@@ -1064,6 +1064,8 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             required_level: 1,
             learn_skill_line: 0,
             learn_skill_cap: 75,
+            required_skill: 0,
+            required_skill_value: 0,
         });
     }
 
@@ -1097,6 +1099,8 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             required_level: 1,
             learn_skill_line: crate::skill::skill_line::AXE_1H,
             learn_skill_cap: 0,
+            required_skill: 0,
+            required_skill_value: 0,
         });
     }
     if !offerings
@@ -1113,6 +1117,8 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             required_level: 60,
             learn_skill_line: crate::skill::skill_line::POLEARM,
             learn_skill_cap: 0,
+            required_skill: 0,
+            required_skill_value: 0,
         });
     }
 
@@ -1152,6 +1158,8 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             required_level,
             learn_skill_line: crate::skill::skill_line::RIDING,
             learn_skill_cap: tier as u32,
+            required_skill: 0,
+            required_skill_value: 0,
         });
     }
 }

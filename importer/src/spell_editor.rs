@@ -392,6 +392,8 @@ mod tests {
             required_level: 1,
             learn_skill_line: 0,
             learn_skill_cap: 75,
+            required_skill: 0,
+            required_skill_value: 0,
         };
         let ordinary = TrainerRow {
             id: 100,

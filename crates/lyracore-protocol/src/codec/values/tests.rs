@@ -41,6 +41,10 @@ fn every_values_builder_serializes_without_the_object_type_bit() {
             build_skill_values(g, 3, SkillInfo::new(Skill::Fishing, 0, 100, 150, 0, 0)).unwrap(),
         ),
         ("talent_points", build_talent_points_values(g, 2)),
+        (
+            "free_primary_professions",
+            build_free_primary_professions_values(g, 1),
+        ),
         ("xp", build_player_xp_values(g, Some(400), Some(1000))),
         (
             "inv_slot",

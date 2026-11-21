@@ -4252,6 +4252,45 @@ def check_inventory(host):
     refused = client.collect()
     assert (0x1b4, struct.pack('<QII', trainer, 2050, 0)) in refused, 'TRAINER_BUY_FAILED Unavailable'
     assert not any(opcode in (0x12b, 0xa9) for opcode, _ in refused)
+    host.restore('game_trainer_spell', 'id >= 5091100 AND id <= 5091102')
+    for row_id, spell, line, cap, skill, value in [(5091100, 5091101, 0, 75, 197, 50), (5091101, 5091102, 171, 75, 0, 0), (5091102, 5091103, 185, 75, 0, 0)]:
+        host.sql(f'INSERT INTO game_trainer_spell (id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap,required_skill,required_skill_value) VALUES ({row_id},51001,{spell},10,1,{line},{cap},{skill},{value})')
+    green, red = 0, 1
+
+    def trainer_offers():
+        client.send(0x1b0, struct.pack('<Q', trainer))
+        body = next(body for opcode, body in client.collect() if opcode == 0x1b1)
+        offers = (struct.unpack_from('<IBIIIBII', body, 16 + 38 * index) for index in range(struct.unpack_from('<I', body, 12)[0]))
+        return {offer[0]: offer[1:] for offer in offers}
+
+    def refused_as_not_enough_skill(spell):
+        client.send(0x1b2, struct.pack('<QI', trainer, spell))
+        assert (0x1b4, struct.pack('<QII', trainer, spell, 2)) in client.collect()
+
+    money_before = host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}')
+    offers = trainer_offers()
+    assert offers[5091101] == (red, 10, 0, 0, 1, 197, 50)
+    assert offers[5091102] == (green, 10, 1, 1, 1, 0, 0)
+    assert offers[5091103] == (green, 10, 0, 0, 1, 0, 0)
+    refused_as_not_enough_skill(5091101)
+    host.call('debug_set_skill', [guid, 164, 1])
+    assert values(client.collect(), guid)[1103] == 1
+    host.call('debug_set_skill', [guid, 197, 1])
+    assert values(client.collect(), guid)[1103] == 0
+    offers = trainer_offers()
+    assert offers[5091101] == (red, 10, 0, 0, 1, 197, 50)
+    assert offers[5091102] == (green, 10, 0, 1, 1, 0, 0)
+    refused_as_not_enough_skill(5091102)
+    assert host.rows(f'SELECT skill_line FROM game_player_skill WHERE character_guid = {guid} AND skill_line = 171') == []
+    host.sql(f'UPDATE game_player_skill SET current = 50 WHERE character_guid = {guid} AND skill_line = 197')
+    assert trainer_offers()[5091101] == (green, 10, 0, 0, 1, 197, 50)
+    for spell in (5091101, 5091103):
+        client.send(0x1b2, struct.pack('<QI', trainer, spell))
+        assert (0x1b3, struct.pack('<QI', trainer, spell)) in client.collect()
+    assert host.rows(f'SELECT spell_id FROM game_player_spell WHERE character_guid = {guid} AND spell_id = 5091101') == [[5091101]]
+    assert host.rows(f'SELECT skill_line FROM game_player_skill WHERE character_guid = {guid} AND skill_line = 185') == [[185]]
+    host.sql(f'UPDATE game_world_entity SET money = {money_before[0][0]} WHERE guid = {guid}')
+    client.collect()
     host.call('debug_set_skill', [guid, 356, 3])
     skills = values(client.collect(), guid)
     assert any(value == 356 and skills.get(index + 1) == (5 << 16 | 3) for index, value in skills.items())

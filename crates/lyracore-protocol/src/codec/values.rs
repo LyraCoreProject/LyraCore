@@ -358,6 +358,12 @@ pub fn build_talent_points_values(guid: u64, points: u32) -> SMSG_UPDATE_OBJECT 
     })
 }
 
+pub fn build_free_primary_professions_values(guid: u64, free: u32) -> SMSG_UPDATE_OBJECT {
+    player_values(guid, |player| {
+        player.set_player_character_points2(free as i32);
+    })
+}
+
 pub fn build_player_xp_values(
     guid: u64,
     xp: Option<u32>,
