@@ -433,6 +433,27 @@ pub struct VendorStockRuntime {
 
 crate::outside_table_catalog!(game_vendor_stock, game_vendor_stock_runtime);
 
+// DurabilityCosts.dbc: one repair price multiplier per item level and column.
+// Column 0..=20 is a weapon subclass and 21..=28 an armor subclass; id is item_level * 32 + column.
+#[table(accessor = game_durability_cost, index(accessor = by_level_multiplier, btree(columns = [item_level, multiplier_id])))]
+pub struct DurabilityCost {
+    #[primary_key]
+    pub id: u32,
+    pub item_level: u32,
+    pub multiplier_id: u8,
+    pub cost: u32,
+}
+
+// DurabilityQuality.dbc: an item quality reads row (quality + 1) * 2.
+#[table(accessor = game_durability_quality)]
+pub struct DurabilityQuality {
+    #[primary_key]
+    pub id: u32,
+    pub quality_mod: f32,
+}
+
+crate::outside_table_catalog!(game_durability_cost, game_durability_quality);
+
 #[table(accessor = game_character_buyback, index(accessor = by_player_guid, btree(columns = [player_guid])))]
 pub struct BuybackEntry {
     #[primary_key]

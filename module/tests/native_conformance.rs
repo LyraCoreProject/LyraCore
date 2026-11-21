@@ -28,6 +28,8 @@ mod quest_availability;
 mod quest_turn_in;
 #[path = "../../conformance/support/quest_world.rs"]
 mod quest_world;
+#[path = "conformance/repair.rs"]
+mod repair;
 #[path = "conformance/rolls.rs"]
 mod rolls;
 #[path = "conformance/skills.rs"]

@@ -169,6 +169,35 @@ pub(crate) fn ranked(ctx: &ReducerContext, creature_guid: u64) -> Vec<(u64, i64)
     )
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct Contender {
+    pub source_guid: u64,
+    pub threat: i64,
+    pub in_melee_reach: bool,
+}
+
+/// vmangos `selectNextVictim`: keep `current` unless a contender in `ranked` (highest threat first)
+/// has more than 110% of its threat in melee reach or more than 130% outside it.
+pub(crate) fn select_victim(current: u64, ranked: &[Contender]) -> Option<u64> {
+    let Some(current_threat) = ranked
+        .iter()
+        .find(|c| c.source_guid == current)
+        .map(|c| i128::from(c.threat))
+    else {
+        return ranked.first().map(|c| c.source_guid);
+    };
+    for contender in ranked {
+        let threat = i128::from(contender.threat);
+        if contender.source_guid == current || threat * 10 <= current_threat * 11 {
+            return Some(current);
+        }
+        if threat * 10 > current_threat * 13 || contender.in_melee_reach {
+            return Some(contender.source_guid);
+        }
+    }
+    None
+}
+
 pub(crate) fn top_threat_target(ctx: &ReducerContext, creature_guid: u64) -> Option<u64> {
     ranked(ctx, creature_guid)
         .first()
@@ -381,6 +410,69 @@ pub(crate) fn engage_without_threat(ctx: &ReducerContext, creature_guid: u64, so
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn contender(source_guid: u64, threat: i64, in_melee_reach: bool) -> Contender {
+        Contender {
+            source_guid,
+            threat,
+            in_melee_reach,
+        }
+    }
+
+    #[test]
+    fn a_contender_in_melee_reach_needs_more_than_110_percent() {
+        let at = |threat| [contender(2, threat, true), contender(1, 100, true)];
+        assert_eq!(select_victim(1, &at(110)), Some(1));
+        assert_eq!(select_victim(1, &at(111)), Some(2));
+    }
+
+    #[test]
+    fn a_contender_at_range_needs_more_than_130_percent() {
+        let at = |threat| [contender(2, threat, false), contender(1, 100, true)];
+        assert_eq!(select_victim(1, &at(130)), Some(1));
+        assert_eq!(select_victim(1, &at(131)), Some(2));
+    }
+
+    #[test]
+    fn a_lower_contender_in_melee_reach_takes_over_from_a_higher_one_at_range() {
+        let ranked = [
+            contender(3, 120, false),
+            contender(2, 115, true),
+            contender(1, 100, true),
+        ];
+        assert_eq!(select_victim(1, &ranked), Some(2));
+    }
+
+    #[test]
+    fn a_creature_without_a_victim_picks_the_top_contender() {
+        let ranked = [contender(2, 5, false), contender(1, 4, true)];
+        assert_eq!(select_victim(0, &ranked), Some(2));
+        assert_eq!(select_victim(0, &[]), None);
+    }
+
+    #[test]
+    fn a_victim_at_zero_threat_yields_to_any_contender_with_threat() {
+        assert_eq!(
+            select_victim(1, &[contender(2, 0, true), contender(1, 0, true)]),
+            Some(1)
+        );
+        assert_eq!(
+            select_victim(1, &[contender(2, 1, false), contender(1, 0, true)]),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn a_victim_missing_from_the_ranking_yields_to_the_top_contender() {
+        let ranked = [contender(2, 0, false), contender(3, 0, true)];
+        assert_eq!(select_victim(1, &ranked), Some(2));
+    }
+
+    #[test]
+    fn margins_survive_saturated_threat() {
+        let ranked = [contender(2, i64::MAX, true), contender(1, i64::MAX, true)];
+        assert_eq!(select_victim(1, &ranked), Some(1));
+    }
 
     #[test]
     fn damage_threat_is_one_to_one() {

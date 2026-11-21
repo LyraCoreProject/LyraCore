@@ -2,6 +2,7 @@ use lyracore_test_support::{Field, ReducerConnection, Standalone};
 use serde_json::json;
 
 use super::buy_in_slot::{delivered, money, request};
+use super::repair::price_the_blade;
 use super::{enter, fixture, Packet};
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY, SCENARIO_VENDOR_ENTRY};
 use lyracore_package_delta::packed_spell_effect_id;
@@ -341,6 +342,7 @@ fn buyback(connection: &mut ReducerConnection, vendor: u64, slot: u32) -> Vec<(u
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_full_sale_returns_the_same_item_with_its_instance_state() {
     let (shard, mut connection, guid, vendor) = stage("buyback-identity");
+    price_the_blade(&shard);
     shard.assert_call(
         "debug_grant_item",
         &[&guid.to_string(), &FIXTURE_BLADE.to_string(), "1"],
@@ -897,10 +899,16 @@ fn trade_cannot_offer_a_buyback_item() {
     let partner = format!(r#"{{"guid":{other},"ownership":null}}"#);
     shard.assert_call("gw_initiate_trade", &[&actor, &other]);
     shard.assert_call("gw_begin_trade", &[&partner]);
-    assert!(!shard
-        .call("gw_set_trade_item", &[&actor, "0", "23"])
-        .status
-        .success());
+    shard.assert_call("gw_set_trade_item", &[&actor, "0", "23"]);
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT * FROM game_trade_event WHERE recipient_guid = {guid} AND kind = {}",
+                lyracore_shared::trade::event_kind::TRADE_CANCELED
+            ))
+            .len(),
+        1
+    );
     assert!(shard.query_rows("SELECT * FROM game_trade_slot").is_empty());
     assert_eq!(sold_rows(&shard, guid), before);
 }

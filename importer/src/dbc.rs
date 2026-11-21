@@ -180,6 +180,8 @@ pub(crate) fn catalogue_statements(
     let (race_stmts, race_count) = race_info_sql(&races);
     let (si_stmts, si_count) = start_item_sql(&mut chain)?;
     let (property_stmts, _, _) = crate::item_property::catalogue_sql(&mut chain)?;
+    let (durability_stmts, durability_cost_count, durability_quality_count) =
+        crate::durability::catalogue_sql(&mut chain)?;
 
     let (area_stmts, area_count) = source::area(mount_dump)?;
     let (trigger_stmts, trigger_count) = source::area_trigger(mount_dump)?;
@@ -242,6 +244,9 @@ pub(crate) fn catalogue_statements(
     println!("SkillRaceClassInfo: {sav_count} availability rows");
     println!("AuctionHouse: {auction_house_count} houses");
     println!("MailTemplate: {mail_template_count} templates");
+    println!(
+        "DurabilityCosts/DurabilityQuality: {durability_cost_count} costs, {durability_quality_count} quality modifiers"
+    );
     println!("AreaTable: {area_count} areas");
     println!("AreaTrigger: {trigger_count} triggers");
     println!("WorldSafeLocs: {graveyard_count} graveyards");
@@ -264,6 +269,7 @@ pub(crate) fn catalogue_statements(
     Ok([
         map_stmts,
         property_stmts,
+        durability_stmts,
         faction_stmts,
         gf_stmts,
         auction_house_stmts,
