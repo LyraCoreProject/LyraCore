@@ -8,6 +8,8 @@ mod vmangos_gossip;
 mod vmangos_loot;
 #[path = "world_import_quests.rs"]
 mod vmangos_quests;
+#[path = "world_import_spell_threat.rs"]
+mod vmangos_spell_threat;
 #[path = "world_import_spellmeta.rs"]
 mod vmangos_spellmeta;
 

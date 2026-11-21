@@ -400,7 +400,7 @@ pub(crate) fn apply_hit(
             ctx,
             target_guid,
             attacker_guid,
-            crate::threat::threat_from_damage(dmg),
+            crate::threat::threat_from_damage(ctx, hit.spell_id, dmg),
         );
         if !weapon && !shield {
             crate::spell::arm_spell_retaliation(ctx, attacker_guid, target_guid);

@@ -302,7 +302,7 @@ pub(crate) fn spell_is_harmful(spell: &crate::Spell, effects: &[crate::SpellEffe
     spell.negative() || (!is_custom_positive(spell) && effects.iter().any(aims_at_enemy))
 }
 
-fn effect_is_harmful(spell: &crate::Spell, effect: &crate::SpellEffect) -> bool {
+pub(crate) fn effect_is_harmful(spell: &crate::Spell, effect: &crate::SpellEffect) -> bool {
     spell.negative() || (!is_custom_positive(spell) && aims_at_enemy(effect))
 }
 
