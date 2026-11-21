@@ -1095,7 +1095,7 @@ impl GateRun {
         self != Self::Resolve(CastPhase::Completion)
     }
 
-    /// A Trigger Child Cast skips the Gates vmangos guards with `!m_IsTriggeredSpell`.
+    /// A Trigger Child Cast skips some Gates vmangos guards with `!m_IsTriggeredSpell`; #1136 lists the rest.
     fn is_trigger_child(self) -> bool {
         self == Self::Resolve(CastPhase::Trigger)
     }
