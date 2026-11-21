@@ -349,14 +349,7 @@ pub(crate) fn refresh_offer(ctx: &ReducerContext, owner_guid: u64) {
     }
 }
 
-fn is_tradeable_position(inv_slot: u8) -> bool {
-    let backpack = lyracore_shared::constants::starter_item::BACKPACK_SLOT_0;
-    (backpack..backpack + 16).contains(&inv_slot)
-        || lyracore_protocol::codec::bag_content_parts(inv_slot).is_some()
-}
-
-// vmangos HandleSetTradeItemOpcode answers each refusal with TRADE_STATUS_TRADE_CANCELED to the
-// offerer only. The session stays; equipped slots stay a silent Refusal.
+// vmangos sends TRADE_CANCELED to the offerer only: the Trade Session and partner window stay.
 pub(crate) fn apply_set_trade_item(
     ctx: &ReducerContext,
     actor: WorldEntity,
@@ -366,7 +359,8 @@ pub(crate) fn apply_set_trade_item(
     let Some(session) = session_involving(ctx, actor.guid).filter(|s| s.open) else {
         return Ok(());
     };
-    if inv_slot < lyracore_shared::constants::starter_item::BACKPACK_SLOT_0 {
+    let trade_slot_valid = trade_slot <= WILL_NOT_BE_TRADED_SLOT;
+    if trade_slot_valid && inv_slot < lyracore_shared::constants::starter_item::BACKPACK_SLOT_0 {
         return Err("equipped items cannot be traded".into());
     }
     let partner = if actor.guid == session.initiator_guid {
@@ -375,7 +369,7 @@ pub(crate) fn apply_set_trade_item(
         session.initiator_guid
     };
     let slots = ctx.db.game_trade_slot();
-    let offered = (trade_slot <= WILL_NOT_BE_TRADED_SLOT && is_tradeable_position(inv_slot))
+    let offered = (trade_slot_valid && crate::items::is_carried_slot(inv_slot))
         .then(|| crate::items::item_in_slot(ctx, actor.guid, inv_slot))
         .flatten()
         .filter(|inst| !inst.soulbound || trade_slot == WILL_NOT_BE_TRADED_SLOT)

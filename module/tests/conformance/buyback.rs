@@ -897,10 +897,16 @@ fn trade_cannot_offer_a_buyback_item() {
     let partner = format!(r#"{{"guid":{other},"ownership":null}}"#);
     shard.assert_call("gw_initiate_trade", &[&actor, &other]);
     shard.assert_call("gw_begin_trade", &[&partner]);
-    assert!(!shard
-        .call("gw_set_trade_item", &[&actor, "0", "23"])
-        .status
-        .success());
+    shard.assert_call("gw_set_trade_item", &[&actor, "0", "23"]);
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT * FROM game_trade_event WHERE recipient_guid = {guid} AND kind = {}",
+                lyracore_shared::trade::event_kind::TRADE_CANCELED
+            ))
+            .len(),
+        1
+    );
     assert!(shard.query_rows("SELECT * FROM game_trade_slot").is_empty());
     assert_eq!(sold_rows(&shard, guid), before);
 }

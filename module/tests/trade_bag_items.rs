@@ -1,6 +1,6 @@
 mod support;
 
-use lyracore_package_delta::fixture_ids::{FIXTURE_JERKY, FIXTURE_REINS};
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY, FIXTURE_REINS};
 use lyracore_shared::trade::{decode_offer, event_kind, OfferSlot};
 use support::{number, Standalone};
 
@@ -47,6 +47,14 @@ impl Fixture {
         self.shard
             .assert_call("gw_initiate_trade", &[ACTOR, &self.other]);
         self.shard.assert_call("gw_begin_trade", &[&self.partner]);
+    }
+
+    fn equip_bag(&self) {
+        self.shard.assert_sql(&format!(
+            "UPDATE game_item_template SET class = 1, subclass = 0, inventory_type = 18, \
+             container_slots = 4, max_stack = 1 WHERE entry = {FIXTURE_BLADE}"
+        ));
+        self.grant_at(FIXTURE_BLADE, 1, "19", false);
     }
 
     fn grant_at(&self, entry: u32, count: u32, slot: &str, soulbound: bool) {
@@ -108,8 +116,12 @@ impl Fixture {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_item_from_a_bag_is_offered_shown_to_both_and_moves_to_the_partner() {
     let f = fixture("trade-bag-item");
+    f.equip_bag();
     f.grant_at(FIXTURE_JERKY, 5, BAG_SLOT, false);
-    let item = f.shard.query_rows("SELECT guid FROM game_item_instance")[0]["guid"].clone();
+    let item = f.shard.query_rows(&format!(
+        "SELECT guid FROM game_item_instance WHERE entry = {FIXTURE_JERKY}"
+    ))[0]["guid"]
+        .clone();
     f.open_trade();
 
     f.shard
@@ -209,6 +221,7 @@ fn a_soulbound_item_goes_in_the_will_not_be_traded_slot_only_and_stays_with_its_
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_refused_offer_answers_trade_canceled_to_the_offerer_and_leaves_the_trade_as_it_was() {
     let f = fixture("trade-offer-refusals");
+    f.equip_bag();
     f.grant_at(FIXTURE_JERKY, 5, BAG_SLOT, false);
     f.grant_at(FIXTURE_REINS, 1, BANK_SLOT, false);
     f.open_trade();
@@ -216,9 +229,10 @@ fn a_refused_offer_answers_trade_canceled_to_the_offerer_and_leaves_the_trade_as
     f.assert_canceled_only_for_actor("0", BANK_SLOT, 1);
     f.assert_canceled_only_for_actor("0", "30", 2);
     f.assert_canceled_only_for_actor("7", BAG_SLOT, 3);
+    f.assert_canceled_only_for_actor("7", "4", 4);
 
     f.shard
         .assert_call("gw_set_trade_item", &[ACTOR, "0", BAG_SLOT]);
-    f.assert_canceled_only_for_actor("0", BAG_SLOT, 4);
-    f.assert_canceled_only_for_actor("1", BAG_SLOT, 5);
+    f.assert_canceled_only_for_actor("0", BAG_SLOT, 5);
+    f.assert_canceled_only_for_actor("1", BAG_SLOT, 6);
 }

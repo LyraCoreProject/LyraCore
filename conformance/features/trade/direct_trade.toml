@@ -18,3 +18,21 @@ symbol = "WorldSession::HandleInitiateTradeOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "An equipped item is a silent Refusal. vmangos accepts it when the Character can unequip it and unequips it at the Trade Commit."
+path = "module/src/trade.rs"
+symbol = "apply_set_trade_item"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/TradeHandler.cpp#L700-L705 https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Item.cpp#L932-L954"
+
+[[known_gaps]]
+description = "An equipped bag in slots 19 to 22 is a silent Refusal. vmangos answers TRADE_STATUS_TRADE_CANCELED because Item::CanBeTraded refuses a bag in a bag position."
+path = "module/src/trade.rs"
+symbol = "apply_set_trade_item"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Item.cpp#L936"
+
+[[known_gaps]]
+description = "Nothing lets the partner enchant the item in the Will-Not-Be-Traded Slot. vmangos lets the partner cast an enchant on it."
+path = "module/src/trade.rs"
+symbol = "apply_set_trade_item"
+evidence = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/TradeHandler.cpp#L700-L705"
