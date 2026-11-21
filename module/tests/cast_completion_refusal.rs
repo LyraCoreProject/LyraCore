@@ -32,6 +32,11 @@ fn a_target_that_leaves_range_during_the_cast_is_refused_out_of_range() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_completion_checks_power_before_range() {
     let shard = fixture("completion-power-first");
+    // A cost no 5 s of mana regeneration can refill once the pool is drained.
+    shard.assert_sql(&format!(
+        "UPDATE game_spell SET cost = 1000 WHERE spell_id = {FIREBALL}"
+    ));
+    shard.assert_call("debug_set_power", &[&PLAYER.to_string(), "1000"]);
     let casts = subscribe_casts(&shard);
     cast_fireball(&shard);
     shard.assert_call("debug_set_power", &[&PLAYER.to_string(), "0"]);
