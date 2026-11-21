@@ -577,6 +577,15 @@ query's team filter for both teams, including a node with no mount at all, which
 display check skipped; so a nearer mountless node can be reported as not known. The reimport writes
 both flags from each team's own mount entry. No repair is needed.
 
+### Taxi network migration
+
+`game_taxi_node` gains `in_taxi_network`, end-appended with default true. Reimport the `dbc` family
+straight after the publish. Until then every node counts as in the taxi network, so a flight
+master's lookup can land on a node that only spell paths leave. The taxi menu, the learn step and
+the node-status query now share one lookup with no 10-yard limit. A Character who opened a menu
+before the change may have learned a node that lookup now skips; no repair is needed, and the
+node stays known. The reimport writes the flag from `spell_template` effect 123 and `TaxiPath`.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

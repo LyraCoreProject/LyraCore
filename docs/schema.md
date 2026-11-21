@@ -321,9 +321,13 @@ ordinals before it writes. It replaces nodes first, paths second and path nodes 
 successful rerun removes stale geometry. `own_mount_horde` and `own_mount_alliance` are end-appended
 with default true and record whether the source node names a mount for that team itself. The mount
 displays fill an empty team slot from the other team for flight, so only these flags tell the teams
-apart. The node-status query skips a node without the Character's own team flag, as vmangos
-`GetNearestTaxiNode` does. Reimport the `dbc` family before play resumes; see the
-[taxi team mount migration](danger-zones.md#taxi-team-mount-migration).
+apart. `in_taxi_network` is end-appended with default true; it is false only for a node that has
+paths and every one is a spell path (`SPELL_EFFECT_SEND_TAXI`). The node-status query, the taxi menu and the
+learn step share one lookup, as vmangos `GetNearestTaxiNode` does: the nearest node on the
+creature's map that is in the network and has the Character's own team flag, however far.
+Reimport the `dbc` family before play resumes; see the
+[taxi team mount migration](danger-zones.md#taxi-team-mount-migration) and the
+[taxi network migration](danger-zones.md#taxi-network-migration).
 
 ### Transports (`module/src/transport/mod.rs`)
 

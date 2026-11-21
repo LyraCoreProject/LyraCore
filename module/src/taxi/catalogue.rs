@@ -17,6 +17,8 @@ pub struct GameTaxiNode {
     pub own_mount_horde: bool,
     #[default(true)]
     pub own_mount_alliance: bool,
+    #[default(true)]
+    pub in_taxi_network: bool,
 }
 
 #[table(

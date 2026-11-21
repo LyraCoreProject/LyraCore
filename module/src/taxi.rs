@@ -13,8 +13,6 @@ pub(crate) use catalogue::{
     GameTaxiPathNode,
 };
 
-const TAXI_NODE_RESOLVE_RANGE_SQ: f32 = 100.0;
-
 #[reducer]
 pub fn restore_taxi_fixture(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -182,7 +180,7 @@ impl TaxiGateDenied {
             Self::OutOfRange => "flight master is out of range",
             Self::Hostile => "flight master refuses interaction",
             Self::NotInteractable => "flight master is not interactable",
-            Self::NoSourceNode => "flight master has no nearby taxi node",
+            Self::NoSourceNode => "flight master has no taxi node",
             Self::Flying => "player is in a taxi flight",
             Self::PlayerBusy => "player is busy",
             Self::NoClientControl => "player has no client control",
@@ -269,12 +267,17 @@ fn flight_master_gate(player: &WorldEntity, npc: &WorldEntity) -> Result<(), Tax
     Ok(())
 }
 
-fn nearest_node(
+/// vmangos `ObjectMgr::GetNearestTaxiNode`: the nearest node on the creature's map that is in the
+/// taxi network and has a mount for the Character's team, however far; a tie goes to the lower id.
+fn nearest_taxi_node(
     npc: &WorldEntity,
+    race: u8,
     nodes: impl Iterator<Item = GameTaxiNode>,
-) -> Option<(f32, GameTaxiNode)> {
+) -> Option<GameTaxiNode> {
     nodes
-        .filter(|node| node.map_id == npc.map_id)
+        .filter(|node| {
+            node.map_id == npc.map_id && node.in_taxi_network && has_own_mount(race, node)
+        })
         .map(|node| {
             (
                 squared_distance((npc.x, npc.y, npc.z), (node.x, node.y, node.z)),
@@ -282,14 +285,6 @@ fn nearest_node(
             )
         })
         .min_by(|(da, a), (db, b)| da.total_cmp(db).then_with(|| a.id.cmp(&b.id)))
-}
-
-fn nearest_source_node(
-    npc: &WorldEntity,
-    nodes: impl Iterator<Item = GameTaxiNode>,
-) -> Option<GameTaxiNode> {
-    nearest_node(npc, nodes)
-        .filter(|(distance, _)| *distance <= TAXI_NODE_RESOLVE_RANGE_SQ)
         .map(|(_, node)| node)
 }
 
@@ -326,7 +321,7 @@ fn resolve_flight_master(
     npc_guid: u64,
 ) -> Result<(WorldEntity, GameTaxiNode), TaxiGateDenied> {
     let (player, npc) = interacting_flight_master(ctx, character_guid, npc_guid)?;
-    let source = nearest_source_node(&npc, ctx.db.game_taxi_node().iter())
+    let source = nearest_taxi_node(&npc, player.race(), ctx.db.game_taxi_node().iter())
         .ok_or(TaxiGateDenied::NoSourceNode)?;
     Ok((player, source))
 }
@@ -1122,7 +1117,7 @@ pub fn gw_taxi_node_status(
     Ok(())
 }
 
-/// The nearest node on the creature's map with the Character's team mount; no interaction check.
+/// The node `nearest_taxi_node` finds for the creature; no interaction check.
 fn status_node(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -1142,12 +1137,7 @@ fn status_node(
                 && crate::helpers::in_same_partition(npc, player.map_id, player.instance_id)
         })
         .ok_or(TaxiGateDenied::FlightMasterMissing)?;
-    let catalogue = ctx.db.game_taxi_node();
-    let mounted = catalogue
-        .iter()
-        .filter(|node| has_own_mount(player.race(), node));
-    nearest_node(&creature, mounted)
-        .map(|(_, node)| node)
+    nearest_taxi_node(&creature, player.race(), ctx.db.game_taxi_node().iter())
         .ok_or(TaxiGateDenied::NoSourceNode)
 }
 
@@ -1544,6 +1534,7 @@ mod tests {
             mount_display_alliance: 2,
             own_mount_horde: true,
             own_mount_alliance: true,
+            in_taxi_network: true,
         }
     }
 
@@ -1705,35 +1696,40 @@ mod tests {
     }
 
     #[test]
-    fn the_source_node_is_the_nearest_within_ten_yards_and_ties_go_to_the_lower_id() {
+    fn the_taxi_node_is_the_nearest_eligible_on_the_map_however_far() {
         let (_, npc) = flight_master_and_player(0.0);
         let at = |id, x, map_id| GameTaxiNode {
             x,
             ..node(id, id, map_id)
         };
-        let source = |nodes: Vec<GameTaxiNode>| {
-            nearest_source_node(&npc, nodes.into_iter()).map(|node| node.id)
+        let nearest = |nodes: Vec<GameTaxiNode>| {
+            nearest_taxi_node(&npc, 1, nodes.into_iter()).map(|node| node.id)
         };
-        assert_eq!(source(vec![at(1, 10.0, 0)]), Some(1));
-        assert_eq!(source(vec![at(1, 10.01, 0)]), None);
-        assert_eq!(source(vec![at(1, 2.0, 1)]), None);
-        assert_eq!(source(vec![at(1, 6.0, 0), at(2, 3.0, 0)]), Some(2));
-        assert_eq!(source(vec![at(9, -3.0, 0), at(4, 3.0, 0)]), Some(4));
+        assert_eq!(nearest(vec![at(1, 5000.0, 0)]), Some(1));
+        assert_eq!(nearest(vec![at(1, 2.0, 1)]), None);
+        assert_eq!(nearest(vec![at(1, 6.0, 0), at(2, 3.0, 0)]), Some(2));
+        assert_eq!(nearest(vec![at(9, -3.0, 0), at(4, 3.0, 0)]), Some(4));
     }
 
     #[test]
-    fn the_status_node_is_the_nearest_on_the_map_however_far() {
+    fn the_taxi_node_skips_a_node_outside_the_network_or_without_the_team_mount() {
         let (_, npc) = flight_master_and_player(0.0);
-        let at = |id, x, map_id| GameTaxiNode {
-            x,
-            ..node(id, id, map_id)
+        let pick = |race, tweak: fn(&mut GameTaxiNode)| {
+            let mut near = GameTaxiNode {
+                x: 1.0,
+                ..node(1, 1, 0)
+            };
+            tweak(&mut near);
+            let far = GameTaxiNode {
+                x: 50.0,
+                ..node(2, 2, 0)
+            };
+            nearest_taxi_node(&npc, race, [near, far].into_iter()).map(|node| node.id)
         };
-        let nearest = |nodes: Vec<GameTaxiNode>| nearest_node(&npc, nodes.into_iter());
-        assert_eq!(
-            nearest(vec![at(1, 5000.0, 0)]).map(|(_, node)| node.id),
-            Some(1)
-        );
-        assert!(nearest(vec![at(1, 5.0, 1)]).is_none());
+        assert_eq!(pick(1, |_| {}), Some(1));
+        assert_eq!(pick(1, |node| node.in_taxi_network = false), Some(2));
+        assert_eq!(pick(2, |node| node.own_mount_horde = false), Some(2));
+        assert_eq!(pick(1, |node| node.own_mount_horde = false), Some(1));
     }
 
     #[test]
