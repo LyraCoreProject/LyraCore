@@ -97,6 +97,11 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/src/combat/tables.rs"
+function = "attack_power_damage_does_not_lose_a_point_to_rounding"
+rung = "unit"
+
+[[tests]]
+path = "module/src/combat/tables.rs"
 function = "the_percent_multiplier_scales_the_clamped_total"
 rung = "unit"
 
@@ -288,6 +293,12 @@ description = "Only a unit's raid sees its real health. An Empathy (Beast Lore) 
 path = "module/src/native/health.rs"
 symbol = "visible_health"
 evidence = "Review of PR 1040. At d9173eca, Player.cpp Player::CanSeeHealthOf takes the owner from GetCharmerOrOwnerPlayerOrPlayerItself, and Player::CanSeeSpecialInfoOf shows raw health to the caster of a SPELL_AURA_EMPATHY Aura on the target."
+
+[[known_gaps]]
+description = "Creatures and pets ignore the attack power percent Auras. vmangos scales a creature's and a pet's attack power by the multiplier and writes it to the update field; the Module takes a creature's damage from its level stats and a hunter pet's through scale_hunter_pet_swing."
+path = "module/src/combat/folds.rs"
+symbol = "swing_range_ctx"
+evidence = "Source reading, not measured. At d9173eca, StatSystem.cpp Creature::UpdateAttackPowerAndDamage writes AP_MOD_PCT - 1 at line 866 and scales damage by GetTotalAttackPowerValue at lines 925-929; Pet::UpdateAttackPowerAndDamage does the same at lines 1046 and 1078-1082."
 
 [[known_gaps]]
 description = "A Form's own pool does not survive relog: a druid who logs out in a Form that shows rage or energy comes back with that pool empty. vmangos saves and restores every pool, so Bear rage and Cat energy return. The Reserve Pool (the druid's mana) does survive."

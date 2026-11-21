@@ -130,7 +130,7 @@ pub(crate) fn total_attack_power(base: i32, bonus: i32, multiplier: f32) -> f32 
 }
 
 fn attack_power_damage(ap: f32, delay_ms: u32) -> u32 {
-    (ap / AP_PER_DPS as f32 * (delay_ms as f32 / 1000.0)) as u32
+    (f64::from(ap) * f64::from(delay_ms) / f64::from(AP_PER_DPS * 1000)) as u32
 }
 
 /// vmangos Player::CalculateMinMaxDamage: natural attacks deal level-based damage at their own speed.
@@ -536,6 +536,32 @@ mod tests {
         assert_eq!(total_attack_power(mage, 232, 0.0), 227.0);
         assert_eq!(total_attack_power(mage, 0, 0.0), 0.0);
         assert_eq!(total_attack_power(mage, -30, 0.0), 0.0);
+    }
+
+    #[test]
+    fn attack_power_damage_does_not_lose_a_point_to_rounding() {
+        // Each case is a whole number of damage that f32 division can undershoot.
+        for (ap, delay_ms, expected) in [
+            (120.0, 2800, 24),
+            (15.0, 2800, 3),
+            (60.0, 2100, 9),
+            (35.0, 2800, 7),
+            (70.0, 1400, 7),
+            (100.0, 3500, 25),
+            (21.0, 2000, 3),
+        ] {
+            assert_eq!(
+                weapon_swing_range_ap(ap, 0, 0, delay_ms),
+                (expected, expected),
+                "{ap} AP over {delay_ms} ms"
+            );
+            assert_eq!(
+                player_swing_range_ap(ap, delay_ms),
+                (UNARMED_BASE_MIN + expected, UNARMED_BASE_MAX + expected),
+                "{ap} AP over {delay_ms} ms unarmed"
+            );
+        }
+        assert_eq!(weapon_swing_range_ap(408.6, 0, 0, 2000), (58, 58));
     }
 
     #[test]

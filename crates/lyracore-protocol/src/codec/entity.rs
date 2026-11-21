@@ -488,7 +488,7 @@ pub fn build_create_object(
                 .set_unit_maxrangeddamage(entity.sheet_ranged_dmg_max)
                 // The paperdoll divides damage by this multiplier; zero produces infinities.
                 .set_player_field_mod_damage_done_pct(1.0_f32.to_bits() as i32);
-            // Attack power uses 1 + multiplier: an unset field reads 0 and 1.0 would double displayed AP.
+            // Attack power uses 1 + multiplier: unset reads 0, and 1.0 would double displayed AP.
             if entity.sheet_ap_multiplier != 0.0 {
                 builder = builder.set_unit_attack_power_multiplier(entity.sheet_ap_multiplier);
             }

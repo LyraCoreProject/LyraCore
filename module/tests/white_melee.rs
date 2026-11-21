@@ -449,8 +449,7 @@ fn the_sheet_follows_the_predatory_strikes_aura_as_it_comes_and_goes() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_casters_flat_attack_power_offsets_a_negative_base() {
-    use lyracore_package_delta::packed_spell_effect_id;
-    use lyracore_shared::spell::taxonomy::{A_MOD_COMBAT, COMBAT_ATTACK_POWER, T_SELF};
+    use lyracore_shared::spell::taxonomy::COMBAT_ATTACK_POWER;
     const FLAT_ATTACK_POWER: u32 = 5_090_414;
 
     let mut shard = Standalone::start("white-melee-negative-base");
@@ -459,27 +458,7 @@ fn a_casters_flat_attack_power_offsets_a_negative_base() {
         "UPDATE game_character SET class = 8, level = 1 WHERE guid = 1",
     );
     shard.assert_sql("UPDATE game_world_entity SET strength = 5 WHERE guid = 1");
-    shard.insert_row(
-        "game_spell",
-        &[
-            ("spell_id", &FLAT_ATTACK_POWER),
-            ("name", &"Flat attack power fixture"),
-            ("school_mask", &1),
-            ("duration_ms", &600_000),
-            ("gcd_ms", &0),
-        ],
-    );
-    shard.insert_row(
-        "game_spell_effect",
-        &[
-            ("id", &packed_spell_effect_id(FLAT_ATTACK_POWER, 0)),
-            ("spell_id", &FLAT_ATTACK_POWER),
-            ("kind", &A_MOD_COMBAT),
-            ("base_points", &232),
-            ("target", &T_SELF),
-            ("p_0", &COMBAT_ATTACK_POWER),
-        ],
-    );
+    combat_field_aura(&shard, FLAT_ATTACK_POWER, COMBAT_ATTACK_POWER, 232);
     let range = |shard: &Standalone| {
         let readout = swing_readout(shard, &target);
         (readout["base_min"].clone(), readout["base_max"].clone())
@@ -617,6 +596,11 @@ fn the_ranged_percent_aura_reaches_the_sheet_of_everyone_but_wand_users() {
     shard.assert_call("debug_shed_spell_auras", &["1", &PERCENT_50.to_string()]);
     shard.assert_sql("UPDATE game_world_entity SET unit_bytes_0 = 2049 WHERE guid = 1");
     shard.assert_call("debug_force_cast", &["1", &PERCENT_50.to_string()]);
+    assert_eq!(
+        sheet_value::<u32>(&shard, "sheet_ranged_ap"),
+        15,
+        "the sheet was recomputed as a Mage: Agility 25 - 10"
+    );
     assert_eq!(ranged_multiplier(&shard), 0.0);
 }
 

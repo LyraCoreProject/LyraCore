@@ -988,7 +988,7 @@ The ranged base AP stays separate and exists for every Character, with or withou
 Damage uses the signed total scaled by `1 + multiplier`, where `sheet_ap_multiplier` and
 `sheet_ranged_ap_multiplier` hold the multiplier the client receives; both CREATE and VALUES
 retain the individual modifier halves. `sheet_ap_base` and `sheet_ranged_ap` store the bits of a
-signed base. Priests, mages and warlocks ignore ranged AP Auras and percent Auras.
+signed base. Priests, mages and warlocks ignore ranged AP Auras, flat and percent.
 
 `game_item_aura` retains the exact BSATN source definition for each active derived aura. Repair
 compares it with the current header and effect, so unchanged auras keep their identity and timing.
