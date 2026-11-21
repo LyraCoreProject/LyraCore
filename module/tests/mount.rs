@@ -11,6 +11,8 @@ use support::{
 const RIDER: &str = "1";
 const REINS: &str = "5090054";
 const MOUNT: &str = "50310";
+// `CastRefusalReason::Interrupted`, which the client reports as SPELL_FAILED_INTERRUPTED.
+const INTERRUPTED: &str = "2";
 
 fn fixture(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);
@@ -161,7 +163,7 @@ fn entering_combat_during_a_mount_cast_interrupts_it() {
         "UPDATE game_world_entity SET simulation_indexed = false WHERE guid = {wolf}"
     ));
     shard.assert_sql(&format!(
-        "UPDATE game_spell SET cast_time_ms = 1000 WHERE spell_id = {FIXTURE_MOUNT_SPELL}"
+        "UPDATE game_spell SET cast_time_ms = 5000 WHERE spell_id = {FIXTURE_MOUNT_SPELL}"
     ));
     let query = format!(
         "SELECT * FROM game_spell_cast_event_live WHERE caster_guid = 1 \
@@ -188,8 +190,7 @@ fn entering_combat_during_a_mount_cast_interrupts_it() {
         poll_until(POLL_TIMEOUT, || interrupted().is_some()),
         "combat entry did not interrupt the mount cast"
     );
-    // CastRefusalReason::Interrupted, which the client reports as SPELL_FAILED_INTERRUPTED.
-    assert_eq!(interrupted().unwrap()["failure_reason"], "2");
+    assert_eq!(interrupted().unwrap()["failure_reason"], INTERRUPTED);
     assert!(mount_auras(&shard).is_empty());
     assert_projection(&shard, 0, 10_000);
 }

@@ -77,7 +77,7 @@ fn fixture(name: &str) -> Standalone {
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_call("debug_learn_spell", &["1", FIREBALL]);
     shard.assert_sql(&format!(
-        "UPDATE game_spell SET cast_time_ms = 1000, gcd_ms = 0, cooldown_ms = 0, \
+        "UPDATE game_spell SET cast_time_ms = 5000, gcd_ms = 0, cooldown_ms = 0, \
          range_yd = {RANGE_YD} WHERE spell_id = {FIREBALL}"
     ));
     shard.assert_sql(&format!(
