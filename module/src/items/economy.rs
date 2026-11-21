@@ -1,4 +1,4 @@
-use spacetimedb::{table, ReducerContext};
+use spacetimedb::ReducerContext;
 
 use crate::game_npc_vendor;
 
@@ -8,31 +8,13 @@ use super::rules::{
     repaired_by_repair_all, sell_value, sell_value_after_wear,
 };
 use super::tables::{
-    game_item_instance, game_item_template, item_in_slot, ItemInstance, ItemTemplate, NpcVendor,
+    game_durability_cost, game_durability_quality, game_item_instance, game_item_template,
+    item_in_slot, ItemInstance, ItemTemplate, NpcVendor,
 };
 
 use crate::npc_interaction::{NpcRefusal, NpcService};
 
 // Prices are in copper.
-
-// DurabilityCosts.dbc: one row per item level and multiplier column (0..=20 weapon, 21..=28 armour).
-#[table(accessor = game_durability_cost, index(accessor = by_level_multiplier, btree(columns = [item_level, multiplier_id])))]
-pub struct DurabilityCost {
-    pub item_level: u32,
-    pub multiplier_id: u8,
-    pub cost: u32,
-}
-
-// DurabilityQuality.dbc: the repair price factor of an item quality is row (quality + 1) * 2.
-#[table(accessor = game_durability_quality)]
-pub struct DurabilityQuality {
-    #[primary_key]
-    pub id: u32,
-    pub quality_mod: f32,
-}
-
-crate::outside_table_catalog!(game_durability_cost, game_durability_quality);
-
 const BANK_SLOT_PRICES: [u32; 6] = [1_000, 10_000, 100_000, 250_000, 250_000, 250_000];
 
 pub(crate) const MAX_BANK_BAG_SLOTS: u8 = BANK_SLOT_PRICES.len() as u8;
@@ -537,16 +519,16 @@ fn wear_repair_cost(
     tmpl: &ItemTemplate,
     lost_durability: u32,
 ) -> Option<u32> {
-    let multiplier = ctx
+    let multiplier = *ctx
         .db
         .game_durability_cost()
-        .by_level_multiplier()
-        .filter((
-            u32::from(tmpl.item_level),
-            durability_multiplier_id(tmpl.class, tmpl.subclass),
-        ))
-        .next()?
-        .cost;
+        .item_level()
+        .find(u32::from(tmpl.item_level))?
+        .multipliers
+        .get(usize::from(durability_multiplier_id(
+            tmpl.class,
+            tmpl.subclass,
+        )))?;
     let quality_mod = ctx
         .db
         .game_durability_quality()

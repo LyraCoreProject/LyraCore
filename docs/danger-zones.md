@@ -605,11 +605,10 @@ node stays known. The reimport writes the flag from `spell_template` effect 123 
 ### Repair cost migration
 
 `game_durability_cost` and `game_durability_quality` are new, private tables from
-`DurabilityCosts.dbc` and `DurabilityQuality.dbc`. Reimport the `dbc` family straight after the
-publish. Until then both tables are empty: a repair request repairs nothing, and a damaged item
-cannot be sold, because vmangos skips an item with no cost row. The tables start empty and need no
-repair. Repair cost, repair-all coverage, the Honored discount, a short-of-money repair and the sell
-price of a damaged item follow vmangos `Player::DurabilityRepair` and `HandleSellItemOpcode`.
+`DurabilityCosts.dbc` and `DurabilityQuality.dbc`. They need no data migration. Reimport the `dbc`
+family straight after the publish. Until then both tables are empty, so a repair request repairs
+nothing and a damaged item cannot be sold. vmangos skips an item with no cost row, and so does the
+Module.
 
 ### Native Relay events
 

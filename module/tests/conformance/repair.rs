@@ -7,12 +7,18 @@ const FIXTURE_FACTION: u32 = 50900;
 const VENDOR_FACTION_TEMPLATE: u32 = 35;
 const BAG_ENTRY: u32 = lyracore_package_delta::fixture_ids::FIXTURE_REINS;
 
-// Tempered Blade: item level 12, sword (multiplier column 7), uncommon (quality row 6), 70 durability.
-// 20 lost points cost 20 x 10 x 1.5 = 300 copper; 70 lost points cost 1050.
-fn price_the_blade(shard: &Standalone) {
+// Tempered Blade: item level 12, sword (multiplier column 7), uncommon (quality row 6),
+// 70 durability. 20 lost points cost 20 x 10 x 1.5 = 300 copper; 70 lost points cost 1050.
+pub(super) fn price_the_blade(shard: &Standalone) {
+    let multipliers: Vec<String> = (0..29)
+        .map(|column| if column == 7 { "10" } else { "0" }.to_string())
+        .collect();
     shard.insert_row(
         "game_durability_cost",
-        &[("item_level", &12), ("multiplier_id", &7), ("cost", &10)],
+        &[
+            ("item_level", &12),
+            ("multipliers", &format!("[{}]", multipliers.join(","))),
+        ],
     );
     shard.insert_row(
         "game_durability_quality",
@@ -51,6 +57,17 @@ fn repair(connection: &mut ReducerConnection, vendor: u64, item: u64) -> Vec<(u1
     request(connection, 0x2a8, body)
 }
 
+fn assert_no_chat_or_refusal(packets: &[(u16, Vec<u8>)]) {
+    const SMSG_MESSAGECHAT: u16 = 0x96;
+    const SMSG_INVENTORY_CHANGE_FAILURE: u16 = 0x112;
+    assert!(
+        packets
+            .iter()
+            .all(|(opcode, _)| ![SMSG_MESSAGECHAT, SMSG_INVENTORY_CHANGE_FAILURE].contains(opcode)),
+        "a repair answers with no chat line and no refusal: {packets:?}"
+    );
+}
+
 fn sell(connection: &mut ReducerConnection, vendor: u64, item: u64) -> Vec<(u16, Vec<u8>)> {
     let mut body = vendor.to_le_bytes().to_vec();
     body.extend(item.to_le_bytes());
@@ -72,7 +89,7 @@ fn repairing_one_item_charges_the_durability_cost_table_price() {
     price_the_blade(&shard);
     let blade = damaged_blade(&shard, guid, 23, 50);
     let spare = damaged_blade(&shard, guid, 24, 50);
-    assert!(repair(&mut connection, vendor, blade).is_empty());
+    assert_no_chat_or_refusal(&repair(&mut connection, vendor, blade));
     assert_eq!(durability(&shard, blade), "70");
     assert_eq!(durability(&shard, spare), "50");
     assert_eq!(money(&shard, guid), "49700");
@@ -88,7 +105,7 @@ fn repair_all_covers_equipped_backpack_and_bag_items() {
     let backpack = damaged_blade(&shard, guid, 23, 50);
     let in_bag = damaged_blade(&shard, guid, 120, 50);
     let banked = damaged_blade(&shard, guid, 39, 50);
-    assert!(repair(&mut connection, vendor, 0).is_empty());
+    assert_no_chat_or_refusal(&repair(&mut connection, vendor, 0));
     for item in [equipped, backpack, in_bag] {
         assert_eq!(durability(&shard, item), "70");
     }
@@ -107,11 +124,58 @@ fn repair_all_skips_what_the_character_cannot_pay_for_and_stays_silent() {
     let backpack = damaged_blade(&shard, guid, 23, 50);
     let in_bag = damaged_blade(&shard, guid, 120, 50);
     set_money(&shard, guid, 700);
-    assert!(repair(&mut connection, vendor, 0).is_empty());
+    assert_no_chat_or_refusal(&repair(&mut connection, vendor, 0));
     assert_eq!(durability(&shard, broken), "0");
     assert_eq!(durability(&shard, backpack), "70");
     assert_eq!(durability(&shard, in_bag), "70");
     assert_eq!(money(&shard, guid), "100");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn repair_all_pays_in_slot_order_so_the_backpack_comes_before_the_bag() {
+    let (shard, mut connection, guid, vendor) = stage("repair-all-order");
+    price_the_blade(&shard);
+    equip_bag_in_slot_19(&shard, guid);
+    let backpack = damaged_blade(&shard, guid, 23, 50);
+    let in_bag = damaged_blade(&shard, guid, 120, 50);
+    set_money(&shard, guid, 300);
+    assert_no_chat_or_refusal(&repair(&mut connection, vendor, 0));
+    assert_eq!(durability(&shard, backpack), "70");
+    assert_eq!(durability(&shard, in_bag), "50");
+    assert_eq!(money(&shard, guid), "0");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn repairing_a_broken_equipped_item_gives_its_stats_back() {
+    let (shard, mut connection, guid, vendor) = stage("repair-broken-stats");
+    price_the_blade(&shard);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET stat_stamina = 40 WHERE entry = {FIXTURE_BLADE}"
+    ));
+    let blade = damaged_blade(&shard, guid, 15, 0);
+    let max_health = |shard: &Standalone| -> u32 {
+        shard.query_rows(&format!(
+            "SELECT max_health FROM game_world_entity WHERE guid = {guid}"
+        ))[0]["max_health"]
+            .parse()
+            .unwrap()
+    };
+    let broken = max_health(&shard);
+    assert_no_chat_or_refusal(&repair(&mut connection, vendor, blade));
+    assert_eq!(durability(&shard, blade), "70");
+    assert!(max_health(&shard) > broken);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_damaged_item_cannot_be_sold_when_its_repair_cost_is_unknown() {
+    let (shard, mut connection, guid, vendor) = stage("sell-unpriced");
+    let blade = damaged_blade(&shard, guid, 23, 50);
+    sell(&mut connection, vendor, blade);
+    assert_eq!(inventory(&shard, guid).len(), 1);
+    assert_eq!(money(&shard, guid), "50000");
 }
 
 #[test]
@@ -146,7 +210,7 @@ fn an_honored_character_pays_ten_percent_less_to_repair() {
         &[&guid.to_string(), &FIXTURE_FACTION.to_string(), "9000"],
     );
     let blade = damaged_blade(&shard, guid, 23, 50);
-    assert!(repair(&mut connection, vendor, blade).is_empty());
+    assert_no_chat_or_refusal(&repair(&mut connection, vendor, blade));
     assert_eq!(durability(&shard, blade), "70");
     assert_eq!(money(&shard, guid), "49730");
 }

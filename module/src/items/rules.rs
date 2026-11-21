@@ -53,9 +53,9 @@ pub(crate) fn sell_value_after_wear(sell_value: u32, cost: u32) -> u32 {
     }
 }
 
-// Equipped, bag and backpack slots, then bag contents; the keyring and the bank stay unrepaired.
-pub(crate) const fn repaired_by_repair_all(slot: u8) -> bool {
-    slot <= 38 || (slot >= 120 && slot <= 191)
+// Carried slots except the keyring; the bank is not carried.
+pub(crate) fn repaired_by_repair_all(slot: u8) -> bool {
+    lyracore_shared::item::is_carried_slot(slot) && !(81..=112).contains(&slot)
 }
 
 pub(crate) fn merge_amount(src: u32, dst: u32, max_stack: u32) -> u32 {

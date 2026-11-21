@@ -2,6 +2,7 @@ use lyracore_test_support::{Field, ReducerConnection, Standalone};
 use serde_json::json;
 
 use super::buy_in_slot::{delivered, money, request};
+use super::repair::price_the_blade;
 use super::{enter, fixture, Packet};
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY, SCENARIO_VENDOR_ENTRY};
 use lyracore_package_delta::packed_spell_effect_id;
@@ -341,6 +342,7 @@ fn buyback(connection: &mut ReducerConnection, vendor: u64, slot: u32) -> Vec<(u
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_full_sale_returns_the_same_item_with_its_instance_state() {
     let (shard, mut connection, guid, vendor) = stage("buyback-identity");
+    price_the_blade(&shard);
     shard.assert_call(
         "debug_grant_item",
         &[&guid.to_string(), &FIXTURE_BLADE.to_string(), "1"],
