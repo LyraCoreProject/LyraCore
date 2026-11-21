@@ -761,6 +761,7 @@ pub(crate) fn seed_mount_fixture(ctx: &ReducerContext) {
     let mount = Spell {
         gcd_ms: 0,
         duration_ms: u32::MAX,
+        attributes: crate::spell::tables::SPELL_ATTR_NOT_IN_COMBAT_ONLY_PEACEFUL,
         ..Spell::blank(FIXTURE_MOUNT_SPELL, "Test Riding Horse")
     };
     if ctx

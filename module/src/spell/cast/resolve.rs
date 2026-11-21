@@ -1068,7 +1068,7 @@ enum CastGate {
     CasterAlive,
     CasterLevel,
     GlobalCooldown,
-    MountCombat,
+    NonCombat,
     Form,
     Stealth,
     Mount,
@@ -1103,7 +1103,7 @@ const CHECK_CAST_ORDER: [CastGate; 31] = [
     CastGate::CasterAlive,
     CastGate::CasterLevel,
     CastGate::GlobalCooldown,
-    CastGate::MountCombat,
+    CastGate::NonCombat,
     CastGate::Form,
     CastGate::Stealth,
     CastGate::Mount,
@@ -1135,11 +1135,13 @@ const CHECK_CAST_ORDER: [CastGate; 31] = [
 impl CastGate {
     fn runs_in(self, run: GateRun) -> bool {
         match self {
-            Self::GlobalCooldown | Self::Form | Self::Stealth | Self::PeacefulTarget => {
-                run.is_strict()
-            }
-            // A completion checks them before every other Gate instead.
-            Self::MountCombat | Self::Power => run.is_strict(),
+            Self::GlobalCooldown
+            | Self::NonCombat
+            | Self::Form
+            | Self::Stealth
+            | Self::PeacefulTarget => run.is_strict(),
+            // A completion checks power before every other Gate instead.
+            Self::Power => run.is_strict(),
             // Resolve(Start) also runs E_TRIGGER casts; vmangos skips a trigger's line of sight.
             Self::LineOfSight => matches!(
                 run,
@@ -1153,12 +1155,12 @@ impl CastGate {
     }
 }
 
-/// The Gates a run checks in order; a completion leads with the mount interrupt, then power.
+/// The Gates a run checks in order; a completion leads with power.
 fn cast_gate_order(run: GateRun) -> impl Iterator<Item = CastGate> {
     let completion_first: &[CastGate] = if run.is_strict() {
         &[]
     } else {
-        &[CastGate::MountCombat, CastGate::Power]
+        &[CastGate::Power]
     };
     completion_first.iter().copied().chain(
         CHECK_CAST_ORDER
@@ -1238,8 +1240,16 @@ impl GateCheck<'_> {
                 }
                 Ok(())
             }
-            CastGate::MountCombat => {
-                crate::mount::check_mount_combat(ctx, caster, effects, !self.run.is_strict())
+            CastGate::NonCombat => {
+                if hdr.non_combat()
+                    && caster.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0
+                {
+                    return Err(CastGateRefusal::other(
+                        CastRefusalReason::AffectingCombat,
+                        format!("spell {spell_id} cannot be cast in combat"),
+                    ));
+                }
+                Ok(())
             }
             CastGate::Mount => crate::mount::check_mount_cast(ctx, caster, effects, spell_id),
             CastGate::ReactWindow => check_react_window(ctx, caster, hdr),
@@ -2199,8 +2209,8 @@ mod gate_order_tests {
     }
 
     #[test]
-    fn a_mount_cast_in_combat_is_refused_before_its_form() {
-        assert_before(START, G::MountCombat, &[G::Form, G::Mount]);
+    fn a_non_combat_spell_in_combat_is_refused_before_its_form() {
+        assert_before(START, G::NonCombat, &[G::Form, G::Mount]);
     }
 
     #[test]
@@ -2266,18 +2276,22 @@ mod gate_order_tests {
     }
 
     #[test]
-    fn a_completion_checks_the_mount_interrupt_then_power_before_every_other_gate() {
+    fn a_completion_checks_power_before_every_other_gate() {
         let order = order(COMPLETION);
-        assert_eq!(order[..2], [G::MountCombat, G::Power]);
-        for gate in [G::MountCombat, G::Power] {
-            assert_eq!(order.iter().filter(|&&g| g == gate).count(), 1, "{gate:?}");
-        }
+        assert_eq!(order[0], G::Power);
+        assert_eq!(order.iter().filter(|&&g| g == G::Power).count(), 1);
     }
 
     #[test]
     fn a_completion_skips_the_checks_vmangos_runs_only_when_strict() {
         let order = order(COMPLETION);
-        for gate in [G::GlobalCooldown, G::Form, G::Stealth, G::PeacefulTarget] {
+        for gate in [
+            G::GlobalCooldown,
+            G::NonCombat,
+            G::Form,
+            G::Stealth,
+            G::PeacefulTarget,
+        ] {
             assert!(!order.contains(&gate), "completion checks {gate:?}");
             assert!(
                 cast_gate_order(START).any(|g| g == gate),
@@ -2292,7 +2306,7 @@ mod gate_order_tests {
     fn both_phases_keep_one_order() {
         let moved = [
             G::GlobalCooldown,
-            G::MountCombat,
+            G::NonCombat,
             G::Form,
             G::Stealth,
             G::PeacefulTarget,

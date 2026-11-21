@@ -7,6 +7,7 @@ use lyracore_shared::form::DBC_MASK_FORMS;
 
 const SPELL_ATTR_DO_NOT_DISPLAY: u32 = 0x80;
 const SPELL_ATTR_NOT_SHAPESHIFT: u32 = 0x10000;
+pub(crate) const SPELL_ATTR_NOT_IN_COMBAT_ONLY_PEACEFUL: u32 = 0x1000_0000;
 const SPELL_ATTR_EX2_ALLOW_WHILE_NOT_SHAPESHIFTED: u32 = 0x80000;
 // SPELLCATEGORY_GLOBAL: the StartRecoveryCategory of most spells with a global cooldown.
 const GCD_CATEGORY_GLOBAL: u32 = 133;
@@ -143,6 +144,11 @@ impl Spell {
 
     pub(crate) fn negative(&self) -> bool {
         lyracore_shared::spell_custom::is_negative(self.custom_flags, self.is_negative)
+    }
+
+    /// vmangos `SpellEntry::IsNonCombatSpell`.
+    pub(crate) fn non_combat(&self) -> bool {
+        self.attributes & SPELL_ATTR_NOT_IN_COMBAT_ONLY_PEACEFUL != 0
     }
 
     pub(crate) fn equip_passive(&self) -> bool {

@@ -90,7 +90,7 @@ cast_refusal_reasons! {
     TargetDead = 22,
     BadTargets = 23,
     MountWhileDead = 24,
-    MountInCombat = 25,
+    AffectingCombat = 25,
     MountIndoors = 26,
     MountInDeepWater = 27,
     TargetLevelTooLow = 28,
