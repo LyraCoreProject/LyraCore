@@ -127,6 +127,31 @@ fn is_submerged_here(ctx: &ReducerContext, entity: &WorldEntity) -> bool {
     crate::terrain::is_submerged(entity.z, level, entity.movement_flags)
 }
 
+/// vmangos refuses a mount cast in combat; `Unit::SetInCombatState` interrupts one in progress.
+pub(crate) fn check_mount_combat(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    effects: &[SpellEffect],
+    at_completion: bool,
+) -> Result<(), CastGateRefusal> {
+    if !effects.iter().any(|e| e.kind == A_MOUNTED)
+        || !caster.is_player()
+        || !crate::combat::is_engaged(ctx, caster.guid)
+    {
+        return Ok(());
+    }
+    if at_completion {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::Interrupted,
+            "entering combat interrupted the mount cast",
+        ));
+    }
+    Err(CastGateRefusal::other(
+        CastRefusalReason::MountInCombat,
+        "you cannot mount while in combat",
+    ))
+}
+
 pub(crate) fn check_mount_cast(
     ctx: &ReducerContext,
     caster: &WorldEntity,
@@ -145,16 +170,10 @@ pub(crate) fn check_mount_cast(
             "you cannot mount while dead",
         ));
     }
-    if crate::form::blocks_mounting(ctx, caster.guid) {
+    if is_submerged_here(ctx, caster) {
         return Err(CastGateRefusal::other(
-            CastRefusalReason::NotShapeshift,
-            "you cannot mount in this Form",
-        ));
-    }
-    if crate::combat::is_engaged(ctx, caster.guid) {
-        return Err(CastGateRefusal::other(
-            CastRefusalReason::MountInCombat,
-            "you cannot mount while in combat",
+            CastRefusalReason::MountInDeepWater,
+            "you cannot mount in deep water",
         ));
     }
     if !mount_cast_allowed_here(ctx, caster.map_id, caster.x, caster.y, caster.z) {
@@ -163,10 +182,10 @@ pub(crate) fn check_mount_cast(
             "you cannot mount indoors",
         ));
     }
-    if is_submerged_here(ctx, caster) {
+    if crate::form::blocks_mounting(ctx, caster.guid) {
         return Err(CastGateRefusal::other(
-            CastRefusalReason::MountInDeepWater,
-            "you cannot mount in deep water",
+            CastRefusalReason::NotShapeshift,
+            "you cannot mount in this Form",
         ));
     }
     Ok(())

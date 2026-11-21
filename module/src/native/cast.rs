@@ -40,12 +40,13 @@ fn failure(spell: u32, reason: CastRefusalReason) -> Packet {
     }
 }
 
-fn cast_result(reason: CastRefusalReason) -> u8 {
+pub(super) fn cast_result(reason: CastRefusalReason) -> u8 {
     use codec::cast_failure as code;
     use CastRefusalReason as R;
     match reason {
         R::Unreported => code::DONT_REPORT,
         R::NoPower => code::NO_POWER,
+        R::Interrupted => code::INTERRUPTED,
         R::CasterAuraState => code::CASTER_AURASTATE,
         R::TargetAuraState => code::TARGET_AURASTATE,
         R::NotReady => code::NOT_READY,
@@ -59,12 +60,13 @@ fn cast_result(reason: CastRefusalReason) -> u8 {
         R::NotBehind => code::NOT_BEHIND,
         R::NotStealthed => code::ONLY_STEALTHED,
         R::NoComboPoints => code::NO_COMBO_POINTS,
-        R::SchoolLocked => code::INTERRUPTED,
+        R::SchoolLocked => code::NOT_READY,
         R::ReactWindowClosed => code::CASTER_AURASTATE,
         R::Stunned => code::STUNNED,
         R::LevelTooLow => code::LEVEL_REQUIREMENT,
         R::TargetLevelTooLow => code::LOW_LEVEL,
-        R::CasterDead | R::TargetDead => code::TARGETS_DEAD,
+        R::CasterDead => code::CASTER_DEAD,
+        R::TargetDead => code::TARGETS_DEAD,
         R::BadTargets => code::BAD_TARGETS,
         R::MountWhileDead => code::CASTER_DEAD,
         R::MountInCombat => code::AFFECTING_COMBAT,
@@ -352,6 +354,7 @@ mod tests {
         for (reason, code) in [
             (R::Unreported, 0x17),
             (R::NoPower, 0x4D),
+            (R::Interrupted, 0x23),
             (R::CasterAuraState, 0x12),
             (R::TargetAuraState, 0x67),
             (R::NotReady, 0x3C),
@@ -365,12 +368,12 @@ mod tests {
             (R::NotBehind, 0x33),
             (R::NotStealthed, 0x57),
             (R::NoComboPoints, 0x46),
-            (R::SchoolLocked, 0x23),
+            (R::SchoolLocked, 0x3C),
             (R::ReactWindowClosed, 0x12),
             (R::Stunned, 0x64),
             (R::LevelTooLow, 0x29),
             (R::TargetLevelTooLow, 0x2b),
-            (R::CasterDead, 0x65),
+            (R::CasterDead, 0x13),
             (R::TargetDead, 0x65),
             (R::BadTargets, 0x0A),
             (R::MountWhileDead, 0x13),

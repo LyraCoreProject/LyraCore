@@ -48,37 +48,67 @@ impl std::fmt::Display for CastRefusal {
     }
 }
 
-/// What the casting client's cast result reports; Package API kinds stay in [`CastRefusalKind`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum CastRefusalReason {
-    Unreported,
-    NoPower,
-    CasterAuraState,
-    TargetAuraState,
-    NotReady,
-    OutOfRange,
-    TooClose,
-    NotInFront,
-    NoLineOfSight,
-    NoAmmo,
-    WrongStance,
-    NotShapeshift,
-    NotBehind,
-    NotStealthed,
-    NoComboPoints,
-    SchoolLocked,
-    ReactWindowClosed,
-    Stunned,
-    LevelTooLow,
-    CasterDead,
-    TargetDead,
-    BadTargets,
-    MountWhileDead,
-    MountInCombat,
-    MountIndoors,
-    MountInDeepWater,
-    TargetLevelTooLow,
-    ItemGone,
+macro_rules! cast_refusal_reasons {
+    ($($reason:ident = $code:literal,)+) => {
+        /// What the caster's cast result reports; Package API kinds stay in [`CastRefusalKind`].
+        /// Each discriminant is its `SpellCastEvent::failure_reason` code; codes are append-only.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        #[repr(u8)]
+        pub(crate) enum CastRefusalReason {
+            $($reason = $code,)+
+        }
+
+        impl CastRefusalReason {
+            /// Every reason, built from the same list as the enum so none is missing.
+            const ALL: &'static [Self] = &[$(Self::$reason,)+];
+        }
+    };
+}
+
+cast_refusal_reasons! {
+    NoPower = 1,
+    Interrupted = 2,
+    Unreported = 3,
+    CasterAuraState = 4,
+    TargetAuraState = 5,
+    NotReady = 6,
+    OutOfRange = 7,
+    TooClose = 8,
+    NotInFront = 9,
+    NoLineOfSight = 10,
+    NoAmmo = 11,
+    WrongStance = 12,
+    NotShapeshift = 13,
+    NotBehind = 14,
+    NotStealthed = 15,
+    NoComboPoints = 16,
+    SchoolLocked = 17,
+    ReactWindowClosed = 18,
+    Stunned = 19,
+    LevelTooLow = 20,
+    CasterDead = 21,
+    TargetDead = 22,
+    BadTargets = 23,
+    MountWhileDead = 24,
+    MountInCombat = 25,
+    MountIndoors = 26,
+    MountInDeepWater = 27,
+    TargetLevelTooLow = 28,
+    ItemGone = 29,
+}
+
+impl CastRefusalReason {
+    pub(crate) const fn failure_code(self) -> u8 {
+        self as u8
+    }
+
+    /// The reason a `SpellCastEvent::failure_reason` code names; zero names none.
+    pub(crate) fn from_failure_code(code: u8) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|reason| reason.failure_code() == code)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -241,4 +271,27 @@ pub(crate) fn pending_cast(ctx: &ReducerContext, caster_guid: u64) -> Option<Cas
         .filter(caster_guid)
         .next()
         .map(|cast| CastHandle::from_row(ctx, cast))
+}
+
+#[cfg(test)]
+mod failure_code_tests {
+    use super::CastRefusalReason;
+
+    #[test]
+    fn every_reason_reads_back_from_its_own_nonzero_failure_code() {
+        for &reason in CastRefusalReason::ALL {
+            assert_ne!(reason.failure_code(), 0, "{reason:?}");
+            assert_eq!(
+                CastRefusalReason::from_failure_code(reason.failure_code()),
+                Some(reason)
+            );
+        }
+        assert_eq!(CastRefusalReason::from_failure_code(0), None);
+    }
+
+    #[test]
+    fn the_codes_queued_strikes_already_write_keep_their_meaning() {
+        assert_eq!(crate::spell::CAST_FAIL_NO_POWER, 1);
+        assert_eq!(crate::spell::CAST_FAIL_INTERRUPTED, 2);
+    }
 }

@@ -143,16 +143,6 @@ pub mod cast_failure {
     pub const UNIT_NOT_INFRONT: u8 = 0x7C;
 }
 
-pub fn cast_failure_reason_for_code(code: u8) -> Option<u8> {
-    const CAST_FAIL_NO_POWER: u8 = 1;
-    const CAST_FAIL_INTERRUPTED: u8 = 2;
-    match code {
-        CAST_FAIL_NO_POWER => Some(cast_failure::NO_POWER),
-        CAST_FAIL_INTERRUPTED => Some(cast_failure::INTERRUPTED),
-        _ => None,
-    }
-}
-
 pub fn build_cast_result_ok(spell_id: u32) -> Vec<u8> {
     let mut v = Vec::with_capacity(5);
     v.extend_from_slice(&spell_id.to_le_bytes());
