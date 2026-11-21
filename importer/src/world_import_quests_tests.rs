@@ -51,6 +51,8 @@ fn quest<'a>(
         ("RewItemCount1", N(1)),
         ("RewChoiceItemId1", N(902)),
         ("RewChoiceItemCount1", N(1)),
+        ("ExclusiveGroup", N(-7)),
+        ("MaxLevel", N(20)),
     ] {
         row.iter_mut().find(|(key, _)| *key == name).unwrap().1 = value;
     }
@@ -58,7 +60,7 @@ fn quest<'a>(
 }
 
 fn source() -> WorldSource {
-    let mut names = "entry patch ZoneOrSort MinLevel QuestLevel Type RequiredClasses RequiredRaces LimitTime QuestFlags SpecialFlags PrevQuestId NextQuestInChain SrcItemId SrcItemCount RewRepFaction1 RewRepValue1 RewRepFaction2 RewRepValue2 RewOrReqMoney RewSpell RewSpellCast RewMoneyMaxLevel RewMailTemplateId RewMailDelaySecs RewMailMoney RewXP IncompleteEmote CompleteEmote".split_whitespace().map(str::to_string).collect::<Vec<_>>();
+    let mut names = "entry patch ZoneOrSort MinLevel QuestLevel Type RequiredClasses RequiredRaces LimitTime QuestFlags SpecialFlags PrevQuestId NextQuestInChain SrcItemId SrcItemCount RewRepFaction1 RewRepValue1 RewRepFaction2 RewRepValue2 RewOrReqMoney RewSpell RewSpellCast RewMoneyMaxLevel RewMailTemplateId RewMailDelaySecs RewMailMoney RewXP IncompleteEmote CompleteEmote NextQuestId ExclusiveGroup MaxLevel BreadcrumbForQuestId".split_whitespace().map(str::to_string).collect::<Vec<_>>();
     for slot in 1..=4 {
         for prefix in [
             "ReqCreatureOrGOId",
@@ -271,6 +273,10 @@ fn named_quests_select_revisions_relations_mail_money_xp_flags_and_learn_spells(
     );
     assert_eq!(quests.cast_objectives, ["(1,100,0,700)"]);
     assert_eq!(quests.relations, ["(1,200,100,0)", "(2,200,100,1)"]);
+    assert_eq!(quests.availability, ["(100,-7,20)"]);
+    assert!(statements.iter().any(|statement| {
+        statement.contains("game_quest_availability") && statement.contains("(100,-7,20)")
+    }));
     let (mail, items) = build_mail_loot(&source, &HashSet::from([5, 6])).unwrap();
     assert_eq!(mail, ["(5,903,1)"]);
     assert_eq!(items, HashSet::from([903]));
@@ -443,4 +449,55 @@ fn invalid_reward_numbers_cannot_silently_remove_a_spell_or_item() {
         .expect("invalid reward must stop the import");
         assert!(error.to_string().contains(column), "{error:#}");
     }
+}
+
+#[test]
+fn prerequisites_follow_vmangos_prev_quests_from_prev_and_next_quest_ids() {
+    let quest = |entry, prev, next, breadcrumb| {
+        [
+            ("entry", N(entry)),
+            ("patch", N(10)),
+            ("PrevQuestId", N(prev)),
+            ("NextQuestId", N(next)),
+            ("BreadcrumbForQuestId", N(breadcrumb)),
+        ]
+    };
+    let source = sqlite_fixture(&[FixtureTable {
+        name: "quest_template",
+        columns: &[
+            ("entry", "INTEGER"),
+            ("patch", "INTEGER"),
+            ("PrevQuestId", "INTEGER"),
+            ("NextQuestId", "INTEGER"),
+            ("BreadcrumbForQuestId", "INTEGER"),
+        ],
+        key: &["entry", "patch"],
+        rows: &[
+            &quest(10, 0, 12, 0),
+            &quest(11, 0, -12, 0),
+            &quest(12, 10, 0, 0),
+            &quest(13, -11, 0, 0),
+            &quest(14, 15, 0, 0),
+            &quest(15, 0, 0, 14),
+            &quest(16, 99, 0, 0),
+        ],
+    }])
+    .unwrap();
+    let links = QuestLinks::read(&source.rows("quest_template").unwrap()).unwrap();
+    assert_eq!(links.rewarded_prerequisite(12), 10);
+    assert_eq!(links.rewarded_prerequisite(13), 0);
+    assert_eq!(
+        links.rewarded_prerequisite(14),
+        0,
+        "a breadcrumb unlocks nothing"
+    );
+    assert_eq!(
+        links.rewarded_prerequisite(16),
+        0,
+        "a missing quest unlocks nothing"
+    );
+    assert_eq!(
+        links.prerequisite_rows(&HashSet::from([12, 13, 14, 16])),
+        ["(1,12,11,true)", "(2,13,11,true)"]
+    );
 }

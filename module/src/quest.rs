@@ -171,6 +171,30 @@ pub struct QuestEmote {
     pub offer_reward_delay_4: u32,
 }
 
+#[table(
+    accessor = game_quest_availability,
+    index(accessor = by_exclusive_group, btree(columns = [exclusive_group]))
+)]
+pub struct QuestAvailability {
+    #[primary_key]
+    pub quest_entry: u32,
+    pub exclusive_group: i32,
+    pub max_level: u32,
+}
+
+/// Predecessors beyond `prev_quest_id`: a negative `PrevQuestId` and each source `NextQuestId`.
+#[table(
+    accessor = game_quest_prerequisite,
+    index(accessor = by_quest, btree(columns = [quest_entry]))
+)]
+pub struct QuestPrerequisite {
+    #[primary_key]
+    pub id: u64,
+    pub quest_entry: u32,
+    pub prev_quest_entry: u32,
+    pub must_be_active: bool,
+}
+
 #[table(accessor = game_quest_text, public)]
 pub struct QuestText {
     #[primary_key]
@@ -310,7 +334,13 @@ pub struct CharacterQuestLog {
     pub entries: Vec<u32>,
 }
 
-crate::outside_table_catalog!(game_quest_flags, game_quest_emote, game_character_quest_log);
+crate::outside_table_catalog!(
+    game_quest_flags,
+    game_quest_emote,
+    game_quest_availability,
+    game_quest_prerequisite,
+    game_character_quest_log
+);
 
 impl CharacterQuest {
     pub(crate) fn is_active(&self) -> bool {
@@ -563,14 +593,6 @@ pub(crate) fn quest_is_taken(ctx: &ReducerContext, character_guid: u64, quest_en
     character_quest_row(ctx, character_guid, quest_entry).is_some_and(|quest| quest.is_active())
 }
 
-pub(crate) fn quest_is_rewarded(
-    ctx: &ReducerContext,
-    character_guid: u64,
-    quest_entry: u32,
-) -> bool {
-    character_quest_row(ctx, character_guid, quest_entry).is_some_and(|q| q.rewarded)
-}
-
 enum GiverKind {
     Creature(u32),
     GameObject(u32),
@@ -704,30 +726,160 @@ pub(crate) fn accept_gates(
     acceptance_gate(ctx, player, tmpl).map_err(|refusal| refusal.text(tmpl.min_level))
 }
 
+struct CharacterQuestHistory<'a> {
+    ctx: &'a ReducerContext,
+    character_guid: u64,
+}
+
+impl lyracore_shared::quest::QuestHistory for CharacterQuestHistory<'_> {
+    fn standing(&self, quest_entry: u32) -> lyracore_shared::quest::QuestStanding {
+        let Some(row) = character_quest_row(self.ctx, self.character_guid, quest_entry) else {
+            return lyracore_shared::quest::QuestStanding::default();
+        };
+        lyracore_shared::quest::QuestStanding {
+            active: row.is_active(),
+            rewarded: row.rewarded,
+            repeatable: self
+                .ctx
+                .db
+                .game_quest_template()
+                .entry()
+                .find(quest_entry)
+                .is_some_and(|quest| quest.repeatable),
+        }
+    }
+
+    fn exclusive_group(&self, quest_entry: u32) -> i32 {
+        self.ctx
+            .db
+            .game_quest_availability()
+            .quest_entry()
+            .find(quest_entry)
+            .map_or(0, |availability| availability.exclusive_group)
+    }
+
+    fn exclusive_group_members(&self, group: i32) -> Vec<u32> {
+        self.ctx
+            .db
+            .game_quest_availability()
+            .by_exclusive_group()
+            .filter(group)
+            .map(|availability| availability.quest_entry)
+            .collect()
+    }
+}
+
+struct AcceptanceInputs<'a> {
+    requirements: lyracore_shared::quest::AcceptanceRequirements,
+    applicant: lyracore_shared::quest::Applicant,
+    existing: Option<CharacterQuest>,
+    history: CharacterQuestHistory<'a>,
+}
+
+impl AcceptanceInputs<'_> {
+    fn attempt(&self) -> Option<lyracore_shared::quest::Attempt> {
+        self.existing
+            .as_ref()
+            .map(|row| lyracore_shared::quest::Attempt {
+                rewarded: row.rewarded,
+                failed: row.failed,
+            })
+    }
+}
+
+fn acceptance_inputs<'a>(
+    ctx: &'a ReducerContext,
+    player: &crate::WorldEntity,
+    tmpl: &QuestTemplate,
+) -> AcceptanceInputs<'a> {
+    use lyracore_shared::quest::{AcceptanceRequirements, Applicant, Prerequisite};
+    let availability = ctx
+        .db
+        .game_quest_availability()
+        .quest_entry()
+        .find(tmpl.entry);
+    let mut prerequisites: Vec<_> = (tmpl.prev_quest_id != 0)
+        .then_some(Prerequisite {
+            quest_entry: tmpl.prev_quest_id,
+            must_be_active: false,
+        })
+        .into_iter()
+        .collect();
+    let mut imported: Vec<_> = ctx
+        .db
+        .game_quest_prerequisite()
+        .by_quest()
+        .filter(tmpl.entry)
+        .collect();
+    imported.sort_unstable_by_key(|row| row.id);
+    prerequisites.extend(imported.into_iter().map(|row| Prerequisite {
+        quest_entry: row.prev_quest_entry,
+        must_be_active: row.must_be_active,
+    }));
+    AcceptanceInputs {
+        requirements: AcceptanceRequirements {
+            quest_entry: tmpl.entry,
+            min_level: tmpl.min_level,
+            max_level: availability.as_ref().map_or(0, |row| row.max_level),
+            quest_level: tmpl.quest_level,
+            required_races: tmpl.required_races,
+            required_classes: tmpl.required_classes,
+            repeatable: tmpl.repeatable,
+            exclusive_group: availability.as_ref().map_or(0, |row| row.exclusive_group),
+            next_in_chain: tmpl.next_quest_id,
+            prerequisites,
+        },
+        applicant: Applicant {
+            level: player.level,
+            race: player.race(),
+            class: player.class(),
+        },
+        existing: character_quest_row(ctx, player.guid, tmpl.entry),
+        history: CharacterQuestHistory {
+            ctx,
+            character_guid: player.guid,
+        },
+    }
+}
+
 fn acceptance_gate(
     ctx: &ReducerContext,
     player: &crate::WorldEntity,
     tmpl: &QuestTemplate,
 ) -> Result<Option<CharacterQuest>, AcceptanceRefusal> {
-    use lyracore_shared::quest::{acceptance, AcceptanceRequirements, Attempt};
-    let existing = character_quest_row(ctx, player.guid, tmpl.entry);
-    acceptance(
-        AcceptanceRequirements {
-            min_level: tmpl.min_level,
-            required_races: tmpl.required_races,
-            required_classes: tmpl.required_classes,
-            repeatable: tmpl.repeatable,
-        },
-        player.level,
-        player.race(),
-        player.class(),
-        tmpl.prev_quest_id == 0 || quest_is_rewarded(ctx, player.guid, tmpl.prev_quest_id),
-        existing.as_ref().map(|row| Attempt {
-            rewarded: row.rewarded,
-            failed: row.failed,
-        }),
+    let inputs = acceptance_inputs(ctx, player, tmpl);
+    lyracore_shared::quest::acceptance(
+        &inputs.requirements,
+        inputs.applicant,
+        inputs.attempt(),
+        &inputs.history,
     )?;
-    Ok(existing)
+    Ok(inputs.existing)
+}
+
+/// Whether the accept Gate passes, and the giver's overhead mark for the quest.
+pub(crate) fn start_offer(
+    ctx: &ReducerContext,
+    player: &crate::WorldEntity,
+    tmpl: &QuestTemplate,
+) -> (bool, lyracore_shared::quest::StartSighting) {
+    let inputs = acceptance_inputs(ctx, player, tmpl);
+    let attempt = inputs.attempt();
+    (
+        lyracore_shared::quest::acceptance(
+            &inputs.requirements,
+            inputs.applicant,
+            attempt,
+            &inputs.history,
+        )
+        .is_ok(),
+        lyracore_shared::quest::start_sighting(
+            &inputs.requirements,
+            inputs.applicant,
+            attempt,
+            &inputs.history,
+        ),
+    )
 }
 
 pub(crate) enum AcceptQuestRefusal {

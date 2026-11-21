@@ -2540,6 +2540,7 @@
           "LimitTime",
           "MaxLevel",
           "MinLevel",
+          "NextQuestId",
           "NextQuestInChain",
           "OfferRewardEmote1",
           "OfferRewardEmote2",

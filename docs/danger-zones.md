@@ -602,6 +602,19 @@ the node-status query now share one lookup with no 10-yard limit. A Character wh
 before the change may have learned a node that lookup now skips; no repair is needed, and the
 node stays known. The reimport writes the flag from `spell_template` effect 123 and `TaxiPath`.
 
+### Quest availability migration
+
+The private `game_quest_availability` and `game_quest_prerequisite` tables are new. Reimport the
+`quests` family straight after the publish. Until then no quest has an exclusive group, a maximum
+level or a predecessor beyond its `prev_quest_id`, so each of those quests is offered and accepted
+as before. The reimport also clears a `prev_quest_id` that names a breadcrumb or a missing quest,
+as vmangos does. A Character already on two quests of one exclusive group keeps both; no repair is
+needed.
+
+The next-quest-in-chain check needs no reimport: it reads `next_quest_id`, which existing quests
+already hold. From the publish on, a Character who has taken or finished a quest's next quest in
+its chain can no longer take that quest, and its giver no longer marks it.
+
 ### Repair cost migration
 
 `game_durability_cost` and `game_durability_quality` are new, private tables from
