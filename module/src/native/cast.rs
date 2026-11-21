@@ -75,7 +75,6 @@ pub(super) fn cast_result(reason: CastRefusalReason) -> u8 {
         R::ItemGone => code::ITEM_GONE,
         R::NoDueling => code::NO_DUELING,
         R::TargetDueling => code::TARGET_DUELING,
-        R::TargetEnemy => code::TARGET_ENEMY,
     }
 }
 
@@ -269,10 +268,7 @@ pub(super) fn receive(
                 } else if let Some((x, y, z)) = dest {
                     crate::spell::apply_cast_spell_at(ctx, &caster, spell, target, x, y, z)
                 } else if effects.iter().any(|row| row.kind == E_DUEL) {
-                    // vmangos Spell::EffectDuel reports its refusal once the cast's own Gates pass.
-                    let refusal = crate::duel::challenge_refusal(ctx, guid, target);
-                    crate::spell::do_cast_spell(ctx, caster, spell, target)?;
-                    refusal.map_or(Ok(()), Err)
+                    crate::duel::cast_challenge(ctx, caster, spell, target)
                 } else {
                     crate::spell::do_cast_spell(ctx, caster, spell, target)
                 }
@@ -391,7 +387,6 @@ mod tests {
             (R::ItemGone, 0x26),
             (R::NoDueling, 0x47),
             (R::TargetDueling, 0x68),
-            (R::TargetEnemy, 0x69),
         ] {
             assert_eq!(cast_result(reason), code, "{reason:?}");
         }

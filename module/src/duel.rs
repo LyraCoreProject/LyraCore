@@ -124,7 +124,6 @@ pub(crate) enum RequestDenied {
     SelfTarget,
     DifferentPartition,
     CrossFaction,
-    AlreadyOpponents,
     TargetBusy,
     InitiatorBusy,
     Ignored,
@@ -136,7 +135,6 @@ impl RequestDenied {
     fn cast_refusal(self) -> Option<CastRefusalReason> {
         match self {
             Self::MissingPlayer => Some(CastRefusalReason::BadTargets),
-            Self::AlreadyOpponents => Some(CastRefusalReason::TargetEnemy),
             Self::TargetBusy => Some(CastRefusalReason::TargetDueling),
             Self::NoDuelingHere => Some(CastRefusalReason::NoDueling),
             Self::Dead
@@ -174,8 +172,9 @@ impl RequestParticipant {
     }
 }
 
-/// vmangos `Spell::EffectDuel`: only an area with `AREA_FLAG_DUEL` allows a Duel; capitals and
-/// dungeons lack it, and an instanced map with no known area counts as a dungeon.
+/// vmangos `Spell::EffectDuel`: only an area with `AREA_FLAG_DUEL` allows a Duel, and capitals and
+/// dungeons lack it. vmangos allows a position with no area; LyraCore refuses one on an instanced
+/// map, whose terrain may be missing.
 fn may_duel_at(ctx: &ReducerContext, entity: &crate::WorldEntity) -> bool {
     match crate::terrain::area_at(ctx, entity.map_id, entity.x, entity.y) {
         Some(area) => area.flags & AREA_FLAG_DUEL != 0,
@@ -183,18 +182,20 @@ fn may_duel_at(ctx: &ReducerContext, entity: &crate::WorldEntity) -> bool {
     }
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct DuelCommitments {
-    initiator_active_with_challenged: bool,
-    initiator_busy: bool,
-    challenged_busy: bool,
+/// The Duel, challenge or Duel request a challenge meets; the challenged Character's comes first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DuelCommitment {
+    Free,
+    ChallengedBusy,
+    InitiatorBusy,
 }
 
-/// vmangos `Spell::CheckCast` and `Spell::EffectDuel`, in the order they refuse.
+/// The challenge checks. Those that report a cast result keep the vmangos order: `BAD_TARGETS`
+/// and `TARGET_DUELING` from `Spell::CheckCast`, then `NO_DUELING` from `Spell::EffectDuel`.
 pub(crate) fn request_verdict(
     initiator: Option<RequestParticipant>,
     challenged: Option<RequestParticipant>,
-    commitments: DuelCommitments,
+    commitment: DuelCommitment,
     challenged_ignores_initiator: bool,
 ) -> Result<(), RequestDenied> {
     let (Some(initiator), Some(challenged)) = (initiator, challenged) else {
@@ -215,14 +216,10 @@ pub(crate) fn request_verdict(
     if !lyracore_shared::faction::same_team(initiator.race, challenged.race) {
         return Err(RequestDenied::CrossFaction);
     }
-    if commitments.initiator_active_with_challenged {
-        return Err(RequestDenied::AlreadyOpponents);
-    }
-    if commitments.challenged_busy {
-        return Err(RequestDenied::TargetBusy);
-    }
-    if commitments.initiator_busy {
-        return Err(RequestDenied::InitiatorBusy);
+    match commitment {
+        DuelCommitment::Free => {}
+        DuelCommitment::ChallengedBusy => return Err(RequestDenied::TargetBusy),
+        DuelCommitment::InitiatorBusy => return Err(RequestDenied::InitiatorBusy),
     }
     if challenged_ignores_initiator {
         return Err(RequestDenied::Ignored);
@@ -242,13 +239,12 @@ fn challenge_verdict(
         initiator.map_or(0, |entity| entity.guid),
         challenged.map_or(0, |entity| entity.guid),
     );
-    let initiator_duel = duel_involving(ctx, initiator_guid);
-    let commitments = DuelCommitments {
-        initiator_active_with_challenged: initiator_duel
-            .as_ref()
-            .is_some_and(|duel| active_pair(duel, initiator_guid, challenged_guid)),
-        initiator_busy: initiator_duel.is_some(),
-        challenged_busy: duel_involving(ctx, challenged_guid).is_some(),
+    let commitment = if duel_involving(ctx, challenged_guid).is_some() {
+        DuelCommitment::ChallengedBusy
+    } else if duel_involving(ctx, initiator_guid).is_some() {
+        DuelCommitment::InitiatorBusy
+    } else {
+        DuelCommitment::Free
     };
     let challenged_ignores_initiator = ctx
         .db
@@ -259,13 +255,25 @@ fn challenge_verdict(
     request_verdict(
         initiator.map(|entity| RequestParticipant::of(ctx, entity)),
         challenged.map(|entity| RequestParticipant::of(ctx, entity)),
-        commitments,
+        commitment,
         challenged_ignores_initiator,
     )
 }
 
-/// The cast result that refuses a Duel challenge from `initiator_guid` to `challenged_guid`, if any.
-pub(crate) fn challenge_refusal(
+/// Casts the Duel spell `spell_id` from `caster` at `challenged_guid`. A refused challenge reports
+/// its cast result once the cast's own Gates pass, after vmangos's range and power checks.
+pub(crate) fn cast_challenge(
+    ctx: &ReducerContext,
+    caster: crate::WorldEntity,
+    spell_id: u32,
+    challenged_guid: u64,
+) -> Result<(), CastGateRefusal> {
+    let refusal = challenge_refusal(ctx, caster.guid, challenged_guid);
+    crate::spell::do_cast_spell(ctx, caster, spell_id, challenged_guid)?;
+    refusal.map_or(Ok(()), Err)
+}
+
+fn challenge_refusal(
     ctx: &ReducerContext,
     initiator_guid: u64,
     challenged_guid: u64,
@@ -706,11 +714,7 @@ mod tests {
         }
     }
 
-    const FREE: DuelCommitments = DuelCommitments {
-        initiator_active_with_challenged: false,
-        initiator_busy: false,
-        challenged_busy: false,
-    };
+    const FREE: DuelCommitment = DuelCommitment::Free;
 
     fn duel() -> Duel {
         Duel {
@@ -764,35 +768,18 @@ mod tests {
             Err(RequestDenied::DifferentPartition)
         );
         let b = entity(2, 0, 4);
-        let initiator_busy = DuelCommitments {
-            initiator_busy: true,
-            ..FREE
-        };
         assert_eq!(
-            request_verdict(Some(a), Some(b), initiator_busy, false),
+            request_verdict(Some(a), Some(b), DuelCommitment::InitiatorBusy, false),
             Err(RequestDenied::InitiatorBusy)
         );
     }
 
     #[test]
-    fn a_challenge_refuses_in_vmangos_effect_duel_order() {
+    fn a_challenge_refuses_in_vmangos_check_cast_then_effect_duel_order() {
         let a = entity(1, 0, 4);
         let b = entity(2, 0, 4);
-        let all = DuelCommitments {
-            initiator_active_with_challenged: true,
-            initiator_busy: true,
-            challenged_busy: true,
-        };
         assert_eq!(
-            request_verdict(Some(a), Some(b), all, true),
-            Err(RequestDenied::AlreadyOpponents)
-        );
-        let busy = DuelCommitments {
-            initiator_active_with_challenged: false,
-            ..all
-        };
-        assert_eq!(
-            request_verdict(Some(a), Some(b), busy, true),
+            request_verdict(Some(a), Some(b), DuelCommitment::ChallengedBusy, true),
             Err(RequestDenied::TargetBusy)
         );
         assert_eq!(
@@ -818,7 +805,6 @@ mod tests {
         use CastRefusalReason as R;
         for (denied, reported) in [
             (RequestDenied::MissingPlayer, Some(R::BadTargets)),
-            (RequestDenied::AlreadyOpponents, Some(R::TargetEnemy)),
             (RequestDenied::TargetBusy, Some(R::TargetDueling)),
             (RequestDenied::NoDuelingHere, Some(R::NoDueling)),
             (RequestDenied::InitiatorBusy, None),

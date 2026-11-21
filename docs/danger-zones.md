@@ -611,7 +611,7 @@ one-leg route on leg 0 and flies as before. No repair is needed.
 ### PvP Flag migration
 
 `game_pvp_flag_timer` is a new private one-shot schedule, and `CastRefusalReason` gains the
-append-only codes 30 to 32. No repair or reimport is needed. A Character online at the publish
+append-only codes 30 and 31. No repair or reimport is needed. A Character online at the publish
 carries no PvP Flag until it toggles PvP, moves in a PvP-enforced zone or joins PvP combat. From
 then on another Character can harm it only while the flag is set or in a started Duel.
 

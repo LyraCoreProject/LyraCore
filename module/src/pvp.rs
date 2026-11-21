@@ -12,7 +12,7 @@ const AREA_TEAM_NONE: u32 = 0;
 const AREA_TEAM_ALLIANCE: u32 = 2;
 const AREA_TEAM_HORDE: u32 = 4;
 
-/// The countdown that drops a Character's PvP flag; [`expire_pvp_flag`] re-arms a frozen one.
+/// The countdown that drops a Character's PvP Flag; [`expire_pvp_flag`] re-arms a held one.
 #[table(accessor = game_pvp_flag_timer, scheduled(expire_pvp_flag))]
 pub struct PvpFlagTimer {
     #[primary_key]
@@ -21,8 +21,10 @@ pub struct PvpFlagTimer {
     #[unique]
     pub character_guid: u64,
     pub scheduled_at: ScheduleAt,
-    /// The last PvP combat pulse in ms, zeroed when a later combat begins; vmangos `inPvPCombat`.
-    pub pvp_combat_ms: u64,
+    /// The last PvP combat pulse, cleared when a later combat begins; vmangos `inPvPCombat`.
+    pub last_pvp_pulse_ms: Option<u64>,
+    /// vmangos `inPvPEnforcedArea`, as the last zone check saw it.
+    pub in_enforced_zone: bool,
 }
 
 crate::outside_table_catalog!(game_pvp_flag_timer);
@@ -30,8 +32,26 @@ crate::outside_table_catalog!(game_pvp_flag_timer);
 crate::character_owned!(delete, fn sweep_delete_game_pvp_flag_timer(ctx, character_guid) {
     ctx.db.game_pvp_flag_timer().character_guid().delete(character_guid);
 });
-// Transfer rebuilds the Character's entity without its PvP flag.
+// Transfer rebuilds the Character's entity without its PvP Flag.
 crate::character_owned!(not_transported, fn sweep_transfer_game_pvp_flag_timer());
+
+/// What holds a PvP Flag past its countdown, besides `PVP_DESIRED`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Hold {
+    last_pvp_pulse_ms: Option<u64>,
+    in_enforced_zone: bool,
+}
+
+fn hold(ctx: &ReducerContext, character_guid: u64) -> Hold {
+    ctx.db
+        .game_pvp_flag_timer()
+        .character_guid()
+        .find(character_guid)
+        .map_or_else(Hold::default, |timer| Hold {
+            last_pvp_pulse_ms: timer.last_pvp_pulse_ms,
+            in_enforced_zone: timer.in_enforced_zone,
+        })
+}
 
 pub(crate) fn is_flagged(unit: &WorldEntity) -> bool {
     unit.unit_flags & unit_flags::PVP != 0
@@ -68,39 +88,61 @@ pub(crate) fn toggle(ctx: &ReducerContext, character_guid: u64, desired: Option<
     let Some(mut character) = ctx.db.game_world_entity().guid().find(character_guid) else {
         return;
     };
-    let desired = desired.unwrap_or(character.player_flags & player_flags::PVP_DESIRED == 0);
-    if desired {
+    let was_desired = character.player_flags & player_flags::PVP_DESIRED != 0;
+    if desired.unwrap_or(!was_desired) {
         character.player_flags |= player_flags::PVP_DESIRED;
-        refresh(ctx, &mut character, false);
+        let held = hold(ctx, character_guid);
+        refresh(ctx, &mut character, held);
     } else {
         character.player_flags &= !player_flags::PVP_DESIRED;
-        if is_flagged(&character) {
-            let pvp_combat_ms = pvp_combat_ms(ctx, character_guid);
-            arm(ctx, &character, pvp_combat_ms);
+        // Clearing the wish lets a held countdown run; an already running one keeps its time.
+        if was_desired && is_flagged(&character) {
+            arm(ctx, &character, hold(ctx, character_guid));
         }
     }
     character.update(ctx);
 }
 
-/// vmangos `Player::UpdateZone`: flags a Character in a PvP-enforced zone unless it flies a taxi.
-/// Returns whether the zone enforces PvP; the caller saves `character`.
+/// vmangos `Player::UpdateZone`: entering a PvP-enforced zone flags the Character unless it
+/// flies a taxi, the zone holds the flag, and leaving starts the countdown. Writes only on a
+/// change; returns whether the zone enforces PvP. The caller saves `character`.
 pub(crate) fn update_zone(
     ctx: &ReducerContext,
     character: &mut WorldEntity,
     zone: Option<&GameArea>,
 ) -> bool {
     let enforced = zone.is_some_and(|zone| in_enforced_zone(ctx, character, zone));
+    let held = hold(ctx, character.guid);
     if enforced && !character.is_flying() {
-        refresh(ctx, character, false);
+        if !is_flagged(character) || !held.in_enforced_zone {
+            let held = Hold {
+                in_enforced_zone: true,
+                ..held
+            };
+            refresh(ctx, character, held);
+        }
+    } else if held.in_enforced_zone {
+        let held = Hold {
+            in_enforced_zone: false,
+            ..held
+        };
+        if is_flagged(character) {
+            arm(ctx, character, held);
+        } else {
+            ctx.db
+                .game_pvp_flag_timer()
+                .character_guid()
+                .delete(character.guid);
+        }
     }
     enforced
 }
 
-/// Flags a Character entering the world in a PvP-enforced zone before viewers build its CREATE.
+/// Runs the zone check for a Character entering the world, before viewers build its CREATE.
 pub(crate) fn enter_world(ctx: &ReducerContext, character: &mut WorldEntity) {
-    if !character.is_flying() && in_enforced_area(ctx, character) {
-        refresh(ctx, character, false);
-    }
+    let zone = crate::terrain::area_at(ctx, character.map_id, character.x, character.y)
+        .and_then(|area| ctx.db.game_area().id().find(crate::terrain::zone_of(&area)));
+    update_zone(ctx, character, zone.as_ref());
 }
 
 /// vmangos `Player::UpdateZone`: an enemy capital enforces PvP, and on a PvP Realm so does every
@@ -124,12 +166,6 @@ fn is_pvp_realm(ctx: &ReducerContext) -> bool {
             realm_type::PVP | realm_type::RP_PVP | realm_type::FFA_PVP
         )
     })
-}
-
-fn in_enforced_area(ctx: &ReducerContext, character: &WorldEntity) -> bool {
-    crate::terrain::area_at(ctx, character.map_id, character.x, character.y)
-        .and_then(|area| ctx.db.game_area().id().find(crate::terrain::zone_of(&area)))
-        .is_some_and(|zone| in_enforced_zone(ctx, character, &zone))
 }
 
 /// vmangos `Unit::TogglePlayerPvPFlagOnAttackVictim` and `Unit::SetInCombatWithAggressor`: harm
@@ -156,7 +192,7 @@ pub(crate) fn harmed(ctx: &ReducerContext, attacker: &WorldEntity, victim: &Worl
 
 /// vmangos `Unit::SetInCombatWithAssisted` and `Spell::DoAllEffectOnTarget`: help to another
 /// flagged Character flags the helper's Character, which joins the target's PvP combat.
-pub(crate) fn helped(ctx: &ReducerContext, helper: &WorldEntity, target: &WorldEntity) {
+fn helped(ctx: &ReducerContext, helper: &WorldEntity, target: &WorldEntity) {
     let (Some(by), Some(of)) = (
         affecting_character(ctx, helper),
         affecting_character(ctx, target),
@@ -166,13 +202,13 @@ pub(crate) fn helped(ctx: &ReducerContext, helper: &WorldEntity, target: &WorldE
     if by.guid == of.guid || !(is_flagged(target) || of.flagged) {
         return;
     }
-    let joins_pvp_combat = in_combat(target) && pvp_combat_ms(ctx, of.guid) != 0;
+    let joins_pvp_combat = in_combat(target) && hold(ctx, of.guid).last_pvp_pulse_ms.is_some();
     pulse(ctx, by.guid, joins_pvp_combat);
 }
 
-/// vmangos `Spell::DoAllEffectOnTarget`: an effect harms a unit its caster is not friendly to, and
-/// helps a friendly one only through a helpful target kind.
-pub(crate) fn spell_hit(
+/// vmangos `Spell::DoAllEffectOnTarget`, hit or not: a spell harms a unit its caster is not
+/// friendly to. It helps a friendly unit in combat, or one a helpful target kind names.
+pub(crate) fn spell_targeted(
     ctx: &ReducerContext,
     caster_guid: u64,
     target_guid: u64,
@@ -187,8 +223,11 @@ pub(crate) fn spell_hit(
     };
     match crate::combat::relation(ctx, &caster, &target) {
         crate::combat::Relation::SelfUnit => {}
-        crate::combat::Relation::Friendly if helpful_target => helped(ctx, &caster, &target),
-        crate::combat::Relation::Friendly => {}
+        crate::combat::Relation::Friendly => {
+            if helpful_target || in_combat(&target) {
+                helped(ctx, &caster, &target);
+            }
+        }
         crate::combat::Relation::Neutral | crate::combat::Relation::Hostile => {
             harmed(ctx, &caster, &target)
         }
@@ -201,10 +240,13 @@ pub(crate) fn combat_began(ctx: &ReducerContext, character_guid: u64) {
     let Some(mut timer) = timers.character_guid().find(character_guid) else {
         return;
     };
-    if timer.pvp_combat_ms == 0 || timer.pvp_combat_ms >= crate::time::now_ms(ctx) {
+    if timer
+        .last_pvp_pulse_ms
+        .is_none_or(|pulse_ms| pulse_ms >= crate::time::now_ms(ctx))
+    {
         return;
     }
-    timer.pvp_combat_ms = 0;
+    timer.last_pvp_pulse_ms = None;
     timers.scheduled_id().update(timer);
 }
 
@@ -225,11 +267,15 @@ pub fn expire_pvp_flag(ctx: &ReducerContext, timer: PvpFlagTimer) {
     if !is_flagged(&character) {
         return;
     }
-    let frozen = (timer.pvp_combat_ms != 0 && in_combat(&character))
-        || character.player_flags & player_flags::PVP_DESIRED != 0
-        || in_enforced_area(ctx, &character);
+    let held = Hold {
+        last_pvp_pulse_ms: timer.last_pvp_pulse_ms,
+        in_enforced_zone: timer.in_enforced_zone,
+    };
+    let frozen = (held.last_pvp_pulse_ms.is_some() && in_combat(&character))
+        || held.in_enforced_zone
+        || character.player_flags & player_flags::PVP_DESIRED != 0;
     if frozen {
-        arm(ctx, &character, timer.pvp_combat_ms);
+        arm(ctx, &character, held);
         return;
     }
     character.unit_flags &= !unit_flags::PVP;
@@ -241,7 +287,11 @@ fn pulse(ctx: &ReducerContext, character_guid: u64, pvp_combat: bool) {
         return;
     };
     let was_flagged = is_flagged(&character);
-    refresh(ctx, &mut character, pvp_combat);
+    let mut held = hold(ctx, character_guid);
+    if pvp_combat {
+        held.last_pvp_pulse_ms = Some(crate::time::now_ms(ctx));
+    }
+    refresh(ctx, &mut character, held);
     if !was_flagged {
         character.update(ctx);
     }
@@ -249,30 +299,17 @@ fn pulse(ctx: &ReducerContext, character_guid: u64, pvp_combat: bool) {
 
 /// vmangos `Player::UpdatePvP(true)`: flags `character` and restarts its countdown; the caller
 /// saves `character`.
-fn refresh(ctx: &ReducerContext, character: &mut WorldEntity, pvp_combat: bool) {
+fn refresh(ctx: &ReducerContext, character: &mut WorldEntity, held: Hold) {
     character.unit_flags |= unit_flags::PVP;
-    let pvp_combat_ms = if pvp_combat {
-        crate::time::now_ms(ctx)
-    } else {
-        pvp_combat_ms(ctx, character.guid)
-    };
-    arm(ctx, character, pvp_combat_ms);
+    arm(ctx, character, held);
 }
 
-fn pvp_combat_ms(ctx: &ReducerContext, character_guid: u64) -> u64 {
-    ctx.db
-        .game_pvp_flag_timer()
-        .character_guid()
-        .find(character_guid)
-        .map_or(0, |timer| timer.pvp_combat_ms)
-}
-
-fn arm(ctx: &ReducerContext, character: &WorldEntity, pvp_combat_ms: u64) {
+fn arm(ctx: &ReducerContext, character: &WorldEntity, held: Hold) {
     let timers = ctx.db.game_pvp_flag_timer();
     timers.character_guid().delete(character.guid);
     let start_ms = countdown_start_ms(
         crate::time::now_ms(ctx),
-        pvp_combat_ms,
+        held.last_pvp_pulse_ms,
         in_combat(character),
         character.combat_until_ms,
     );
@@ -282,25 +319,25 @@ fn arm(ctx: &ReducerContext, character: &WorldEntity, pvp_combat_ms: u64) {
         scheduled_id: 0,
         character_guid: character.guid,
         scheduled_at: crate::time::schedule_time(ctx, due),
-        pvp_combat_ms,
+        last_pvp_pulse_ms: held.last_pvp_pulse_ms,
+        in_enforced_zone: held.in_enforced_zone,
     });
 }
 
 /// vmangos freezes the countdown in PvP combat; a pulse now keeps combat for `COMBAT_DROP_MS`.
 fn countdown_start_ms(
     now_ms: u64,
-    pvp_combat_ms: u64,
+    last_pvp_pulse_ms: Option<u64>,
     in_combat: bool,
     combat_until_ms: u64,
 ) -> u64 {
-    if pvp_combat_ms == 0 {
-        now_ms
-    } else if pvp_combat_ms == now_ms {
-        combat_until_ms.max(now_ms + crate::combat::COMBAT_DROP_MS)
-    } else if in_combat {
-        combat_until_ms.max(now_ms)
-    } else {
-        now_ms
+    match last_pvp_pulse_ms {
+        None => now_ms,
+        Some(pulse_ms) if pulse_ms == now_ms => {
+            combat_until_ms.max(now_ms + crate::combat::COMBAT_DROP_MS)
+        }
+        Some(_) if in_combat => combat_until_ms.max(now_ms),
+        Some(_) => now_ms,
     }
 }
 
@@ -315,18 +352,18 @@ mod tests {
 
     #[test]
     fn the_countdown_starts_now_outside_pvp_combat() {
-        assert_eq!(countdown_start_ms(1_000, 0, true, 9_000), 1_000);
-        assert_eq!(countdown_start_ms(1_000, 400, false, 9_000), 1_000);
+        assert_eq!(countdown_start_ms(1_000, None, true, 9_000), 1_000);
+        assert_eq!(countdown_start_ms(1_000, Some(400), false, 9_000), 1_000);
     }
 
     #[test]
     fn pvp_combat_holds_the_countdown_until_combat_ends() {
-        assert_eq!(countdown_start_ms(1_000, 400, true, 9_000), 9_000);
-        assert_eq!(countdown_start_ms(1_000, 400, true, 0), 1_000);
+        assert_eq!(countdown_start_ms(1_000, Some(400), true, 9_000), 9_000);
+        assert_eq!(countdown_start_ms(1_000, Some(400), true, 0), 1_000);
         assert_eq!(
-            countdown_start_ms(1_000, 1_000, false, 0),
+            countdown_start_ms(1_000, Some(1_000), false, 0),
             1_000 + COMBAT_DROP_MS
         );
-        assert_eq!(countdown_start_ms(1_000, 1_000, true, 90_000), 90_000);
+        assert_eq!(countdown_start_ms(1_000, Some(1_000), true, 90_000), 90_000);
     }
 }

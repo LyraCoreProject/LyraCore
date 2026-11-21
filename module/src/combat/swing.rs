@@ -565,6 +565,8 @@ fn fire_melee_swing(
     let attacker_guid = attacker.guid;
     let target_guid = target.guid;
     let melee = ctx.db.game_melee_attack();
+    // vmangos Unit::UpdateMeleeAttackingState flags the attacker whether the swing lands or not.
+    crate::pvp::harmed(ctx, attacker, target);
 
     let queued_spell = if extra { 0 } else { attacker.next_swing_spell };
     let queued_header = ctx.db.game_spell().spell_id().find(queued_spell);
@@ -756,6 +758,7 @@ fn fire_ranged_shot(
     let attacker_guid = attacker.guid;
     let target_guid = target.guid;
     let melee = ctx.db.game_melee_attack();
+    crate::pvp::harmed(ctx, attacker, target);
     let launcher = matches!(subclass, ws::BOW | ws::GUN | ws::CROSSBOW);
 
     let ammo_display_id: u32 = if launcher {

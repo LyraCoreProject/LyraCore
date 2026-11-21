@@ -21,6 +21,21 @@ function = "an_unflagged_enemy_character_is_outside_an_area_spell_until_it_flags
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/pvp.rs"
+function = "a_swing_the_flagged_target_absorbs_still_flags_the_attacker"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/pvp.rs"
+function = "neither_a_character_nor_its_pet_may_attack_an_unflagged_enemy_character"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/pvp.rs"
+function = "an_enemy_capital_holds_the_flag_and_it_drops_300_s_after_leaving"
+rung = "durable_module"
+
+[[tests]]
 path = "module/tests/native_conformance.rs"
 function = "rest_area_rejects_hostile_characters_in_an_enemy_capital"
 rung = "durable_module"
