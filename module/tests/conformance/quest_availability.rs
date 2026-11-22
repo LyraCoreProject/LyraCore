@@ -12,6 +12,7 @@ const SECOND: u32 = 5_113_001;
 const EXCLUSIVE_GROUP: i32 = 5_113;
 const CMSG_QUESTGIVER_STATUS_QUERY: u32 = 0x182;
 const CMSG_QUESTGIVER_ACCEPT_QUEST: u32 = 0x189;
+const CMSG_QUESTLOG_REMOVE_QUEST: u32 = 0x194;
 const SMSG_QUESTGIVER_STATUS: u16 = 0x183;
 const SMSG_QUESTGIVER_QUEST_INVALID: u16 = 0x18F;
 const SMSG_GOSSIP_COMPLETE: u16 = 0x17E;
@@ -178,6 +179,45 @@ fn a_seeded_prerequisite_row_holds_the_quest_until_its_predecessor_is_rewarded()
     stage.shard.assert_sql(&format!(
         "UPDATE game_character_quest SET rewarded = true WHERE quest_entry = {FIRST}"
     ));
+    accepted(&mut stage, SECOND);
+}
+
+fn repeatable_unlocks_second(stage: &mut Stage) {
+    offer(stage, FIRST, 1, 1);
+    offer(stage, SECOND, 1, 1);
+    stage.shard.assert_sql(&format!(
+        "UPDATE game_quest_template SET repeatable = true WHERE entry = {FIRST}"
+    ));
+    prerequisite(stage, SECOND, FIRST, false);
+    accepted(stage, FIRST);
+    stage.shard.assert_sql(&format!(
+        "UPDATE game_character_quest SET rewarded = true WHERE quest_entry = {FIRST}"
+    ));
+    accepted(stage, FIRST);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn retaking_a_rewarded_repeatable_quest_keeps_the_quest_it_unlocked() {
+    let mut stage = stage("quest-availability-repeatable-retake");
+    repeatable_unlocks_second(&mut stage);
+
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
+    accepted(&mut stage, SECOND);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn abandoning_a_retaken_repeatable_quest_keeps_its_reward_record() {
+    let mut stage = stage("quest-availability-repeatable-abandon");
+    repeatable_unlocks_second(&mut stage);
+
+    request(&mut stage.connection, CMSG_QUESTLOG_REMOVE_QUEST, vec![0]);
+    let rows = stage.shard.query_rows(&format!(
+        "SELECT rewarded FROM game_character_quest WHERE quest_entry = {FIRST}"
+    ));
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["rewarded"], "true");
     accepted(&mut stage, SECOND);
 }
 

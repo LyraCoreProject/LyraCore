@@ -691,6 +691,18 @@ The next-quest-in-chain check needs no reimport: it reads `next_quest_id`, which
 already hold. From the publish on, a Character who has taken or finished a quest's next quest in
 its chain can no longer take that quest, and its giver no longer marks it.
 
+### Quest retake migration
+
+The private `game_character_quest_retake` table is new and starts empty. It needs no backfill: a
+rewarded quest row already holds its reward record. A Character who retook a repeatable quest
+before the publish lost that record, so its follow-up stays closed until the next turn-in, as
+before. From the publish on, a retake keeps the record, and abandoning the retake returns the row
+to rewarded.
+
+`game_character_quest_retake` is a Character-owned Transfer table. A blob from an older source lacks
+it and imports with no rows. An older destination refuses the new manifest, so update both Shards
+before moving active World Sessions.
+
 ### Repair cost migration
 
 `game_durability_cost` and `game_durability_quality` are new, private tables from
