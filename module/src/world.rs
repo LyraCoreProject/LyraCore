@@ -825,6 +825,7 @@ pub(crate) fn apply_movement_update(
     let map_id = mover.map_id;
     let instance_id = mover.instance_id;
     let mut fall_lethal = false;
+    let mut fall_hurt = false;
     if opcode as u32 == lyracore_shared::opcodes::movement::MSG_MOVE_FALL_LAND
         && !mover.dead
         && !mover.godmode
@@ -835,6 +836,7 @@ pub(crate) fn apply_movement_update(
         let (health, lethal) = resolve_environmental_damage(dmg, mover.health);
         mover.health = health;
         fall_lethal = lethal;
+        fall_hurt = dmg > 0;
         crate::native::environment::fall_damage(ctx, mover.guid, dmg);
     }
     crossing.explore(ctx, &mut mover);
@@ -886,6 +888,11 @@ pub(crate) fn apply_movement_update(
     }
     if fall_lethal {
         crate::combat::kill_player(ctx, mover_guid, mover_guid);
+    }
+    // After the entity write: breaking stealth refreshes the entity row the write just replaced.
+    // A fall that deals 0 damage is no damage event in vmangos and keeps stealth.
+    if fall_hurt {
+        crate::spell::break_stealth(ctx, mover_guid);
     }
 
     // Dismount after the entity write so its projection cannot be overwritten by the old snapshot.

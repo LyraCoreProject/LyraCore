@@ -215,6 +215,9 @@ pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
             hurt.health = health;
             hurt.update(ctx);
         }
+        // Every expired tick is a damage event, so the victim loses stealth even on a tick that
+        // deals 0.
+        crate::spell::break_stealth(ctx, entity_guid);
     }
 }
 

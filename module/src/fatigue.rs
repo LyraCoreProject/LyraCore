@@ -142,6 +142,7 @@ fn exhaust(ctx: &ReducerContext, mut entity: WorldEntity, ticks: u32) -> bool {
             if remaining_health != start_health {
                 entity.update(ctx);
             }
+            crate::spell::break_stealth(ctx, guid);
             crate::combat::kill_player(ctx, guid, guid);
             crate::breath_relay::exhaustion_damage(ctx, guid, remaining_health);
             return true;
@@ -154,6 +155,7 @@ fn exhaust(ctx: &ReducerContext, mut entity: WorldEntity, ticks: u32) -> bool {
     if entity.health != start_health {
         entity.update(ctx);
     }
+    crate::spell::break_stealth(ctx, guid);
     false
 }
 
