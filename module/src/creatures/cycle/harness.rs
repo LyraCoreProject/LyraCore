@@ -15,6 +15,7 @@ use crate::creatures::eventai::{
 };
 use crate::creatures::rout_window_open;
 use crate::quest::{EventAiQuestCredit, EventAiQuestCreditContext, QuestCreditOutcome};
+use crate::threat::SourceStanding;
 use crate::CreatureAiEvent;
 use lyracore_shared::movement_flags::FORWARD;
 use lyracore_shared::movement_path::chase_step;
@@ -186,6 +187,7 @@ struct Scenario {
     eventai_spell_starts:
         RefCell<Vec<(SpellStartMode, SpellCastTarget, bool, SpellCasterAdmission)>>,
     threat: RefCell<HashMap<(u64, u64), i64>>,
+    standings: RefCell<HashMap<u64, SourceStanding>>,
     taunts: RefCell<HashMap<u64, u64>>,
     pet_owners: RefCell<HashMap<u64, u64>>,
     pet_bars: RefCell<HashMap<u64, (PetOrder, PetReact)>>,
@@ -741,6 +743,11 @@ impl Scenario {
 
     fn threat(self, creature: u64, source: u64, threat: i64) -> Self {
         self.threat.borrow_mut().insert((creature, source), threat);
+        self
+    }
+
+    fn standing(self, source: u64, standing: SourceStanding) -> Self {
+        self.standings.borrow_mut().insert(source, standing);
         self
     }
 
@@ -2877,9 +2884,23 @@ impl ThreatSink for Scenario {
                 guid: source,
                 body: self.melee_body(source)?,
                 threat,
+                standing: self
+                    .standings
+                    .borrow()
+                    .get(&source)
+                    .copied()
+                    .unwrap_or(SourceStanding::Free),
             })
         })
         .collect()
+    }
+    fn held_in_place(&self, guid: u64) -> bool {
+        self.frozen.borrow().contains(&guid)
+            || self
+                .creatures
+                .borrow()
+                .get(&guid)
+                .is_some_and(|c| c.cannot_act)
     }
     fn retarget(&mut self, creature: u64, victim: u64) {
         for f in self.fights.borrow_mut().iter_mut() {
@@ -5099,6 +5120,110 @@ fn a_taunt_pins_the_target_whatever_the_threat_table_says() {
             "taunt forces the target until it ends ({case})"
         );
     }
+}
+
+#[test]
+fn a_creature_turns_from_a_low_priority_victim_to_a_free_source() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .player(RANGER, p(4.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 1000)
+        .threat(WOLF, RANGER, 10)
+        .standing(HUNTER, SourceStanding::LowPriority);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.victims(),
+        [(WOLF, RANGER)],
+        "a feared or gouged victim yields to any free source"
+    );
+}
+
+#[test]
+fn a_low_priority_victim_yields_to_a_free_source_inside_the_margin() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .player(RANGER, p(4.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 100)
+        .threat(WOLF, RANGER, 105)
+        .standing(HUNTER, SourceStanding::LowPriority);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.victims(),
+        [(WOLF, RANGER)],
+        "vmangos keeps a feared victim at 100 against a free 105; LyraCore turns"
+    );
+}
+
+#[test]
+fn an_unattackable_source_is_never_the_victim() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .player(RANGER, p(4.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 1000)
+        .threat(WOLF, RANGER, 10)
+        .standing(HUNTER, SourceStanding::Unattackable)
+        .standing(RANGER, SourceStanding::LowPriority);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.victims(),
+        [(WOLF, RANGER)],
+        "even a low-priority source beats one the creature cannot attack"
+    );
+}
+
+#[test]
+fn a_creature_held_in_place_ranks_a_source_out_of_its_melee_reach_low() {
+    let cases: [(&str, Twist, u64); 3] = [
+        ("a free wolf keeps its victim at range", |w| w, HUNTER),
+        (
+            "a rooted wolf turns to the source it reaches",
+            |w| w.rooted(WOLF),
+            RANGER,
+        ),
+        (
+            "a stunned wolf turns to the source it reaches",
+            |w| w.crowd_controlled(WOLF),
+            RANGER,
+        ),
+    ];
+    for (case, twist, victim) in cases {
+        let mut w = twist(
+            wolf_fighting(p(20.0, 0.0, 10.0))
+                .player(RANGER, p(3.0, 0.0, 10.0))
+                .attacking(WOLF, HUNTER)
+                .threat(WOLF, HUNTER, 1000)
+                .threat(WOLF, RANGER, 10),
+        );
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(w.victims(), [(WOLF, victim)], "{case}");
+    }
+}
+
+#[test]
+fn when_every_source_is_low_priority_the_top_one_wins_without_a_margin() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .player(RANGER, p(4.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 100)
+        .threat(WOLF, RANGER, 105)
+        .standing(HUNTER, SourceStanding::LowPriority)
+        .standing(RANGER, SourceStanding::LowPriority);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.victims(),
+        [(WOLF, RANGER)],
+        "105% would not pass the 110% margin, but the second pass has no current victim"
+    );
 }
 
 fn wolf_cornered() -> Scenario {

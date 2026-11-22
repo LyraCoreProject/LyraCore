@@ -31,7 +31,7 @@ entry in both files.
 
 **I** [Idle Bot](#bots) · [Import Family](#packages) · [Instance Lease](#groups) · [Instance Placement](#realm-topology) · [Instance Shard](#realm-topology) · [Instance Pool](#retired-terms) · [Instance Removal](#groups) · [Instance Vmap Slice](#realm-topology) · [Invocation](#runtime-scripts) · [Item Exchange](#procs) · [Item Spell Charges](#random-properties) · [Item Text](#mail)
 
-**L** [Land Mount](#mounts) · [Lethal Damage Floor](#creature-ai) · [Letter Copy](#mail) · [Listing](#auctions) · [Login Queue](#accounts-characters-and-sessions) · [Logon Limiter](#accounts-characters-and-sessions) · [Loot Release](#loot) · [Loot Roll](#loot) · [Loot Roll Promotion](#retired-terms) · [Loot Roll Promotion Receipt](#retired-terms) · [Loot Source](#loot) · [Loot Tag](#loot) · [Loot Window](#loot)
+**L** [Land Mount](#mounts) · [Lethal Damage Floor](#creature-ai) · [Letter Copy](#mail) · [Listing](#auctions) · [Login Queue](#accounts-characters-and-sessions) · [Logon Limiter](#accounts-characters-and-sessions) · [Loot Release](#loot) · [Loot Roll](#loot) · [Loot Roll Promotion](#retired-terms) · [Loot Roll Promotion Receipt](#retired-terms) · [Loot Source](#loot) · [Loot Tag](#loot) · [Loot Window](#loot) · [Low-Priority Source](#creature-ai)
 
 **M** [Mail](#mail) · [Mail Arrival](#mail) · [Mail Expiry](#mail) · [Mail Sender](#mail) · [Mail Template](#mail) · [Mail Timer](#mail) · [Meeting Stone](#meeting-stones) · [Meeting Stone Queue](#meeting-stones) · [Melee Reach](#procs) · [Member Stats](#groups) · [Migration Source](#accounts-characters-and-sessions) · [Module](CORE_TERMS.md#module) · [Motion Permit](#requests-and-delivery) · [Mount Projection](#mounts) · [Movement Intent](#creature-ai)
 
@@ -781,6 +781,14 @@ of combat answer at once: one whose template responds attacks the victim, and ca
 in turn. One whose template flees, on random movement and within 10 yards of the victim, runs to
 the point 10 yards from the victim on its own side.
 _Avoid_: leash call, kite pull
+
+**Low-Priority Source**:
+A threat source a creature takes as its victim only when every source it can attack is low
+priority. A source is low priority when it holds a harmful Aura that fears, confuses or breaks on
+damage, or, while the creature cannot move, when it is outside the creature's Melee Reach. The
+creature then takes the top one by threat, without the threat margin. It never takes a source it
+cannot attack. See `module/src/threat.rs`.
+_Avoid_: secondary threat target
 
 **Rule State**:
 The durable arming of one EventAI rule on one creature: its next eligible time and whether it is
