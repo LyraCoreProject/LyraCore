@@ -10,6 +10,7 @@ use super::{
     Pursuit, PursuitSink, Recovering, RegenSink, RoutSink, Router, Sensor, SpellOption, Stop,
     ThreatSink, TickContext, Waypoint,
 };
+use crate::combat::reach::{combat_reach, MeleeBody};
 use crate::creatures::cast_condition;
 use crate::creatures::distraction;
 use crate::creatures::eventai::movement::{AuthoredIdleMovement, AuthoredWalkingMode};
@@ -914,6 +915,7 @@ impl CastSink for CtxWorld<'_> {
 impl ThreatSink for CtxWorld<'_> {
     fn fighters(&self, scope: &TickScope) -> Vec<Fighter> {
         use crate::game_threat;
+        let now_ms = crate::time::now_ms_u32(self.ctx);
         let melee = self.ctx.db.game_melee_attack();
         let mut candidates = melee.iter().map(|a| a.attacker_guid).collect::<Vec<_>>();
         candidates.extend(self.ctx.db.game_threat().iter().map(|t| t.creature_guid));
@@ -927,11 +929,7 @@ impl ThreatSink for CtxWorld<'_> {
                     != crate::creatures::CreatureReactState::Passive)
                     .then(|| Fighter {
                         guid: c.guid,
-                        at: Point {
-                            x: c.x,
-                            y: c.y,
-                            z: c.z,
-                        },
+                        body: MeleeBody::of(self.ctx, &c, now_ms),
                         victim: melee
                             .attacker_guid()
                             .find(guid)
@@ -945,17 +943,14 @@ impl ThreatSink for CtxWorld<'_> {
     }
     fn threat_sources(&self, guid: u64) -> Vec<super::ThreatSource> {
         let entities = self.ctx.db.game_world_entity();
+        let now_ms = crate::time::now_ms_u32(self.ctx);
         crate::threat::ranked(self.ctx, guid)
             .into_iter()
             .filter_map(|(source_guid, threat)| {
                 let source = entities.guid().find(source_guid)?;
                 Some(super::ThreatSource {
                     guid: source_guid,
-                    at: Point {
-                        x: source.x,
-                        y: source.y,
-                        z: source.z,
-                    },
+                    body: MeleeBody::of(self.ctx, &source, now_ms),
                     threat,
                 })
             })
@@ -1014,6 +1009,8 @@ impl PursuitSink for CtxWorld<'_> {
                         splines.guid().find(row.target_guid),
                     ),
                     victim_is_character: victim.is_player(),
+                    combat_reach: combat_reach(self.ctx, &c),
+                    victim_combat_reach: combat_reach(self.ctx, &victim),
                     last_move_ms: c.last_move_ms,
                     routing: tick::creature_is_routing(self.ctx, &c),
                     leg: splines.guid().find(c.guid).map(|s| as_leg(s, false)),

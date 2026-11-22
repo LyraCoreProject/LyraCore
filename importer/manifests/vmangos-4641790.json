@@ -532,7 +532,7 @@
     },
     "creature_display_info_addon": {
       "columns": {
-        "real": ["bounding_radius"],
+        "real": ["bounding_radius", "combat_reach"],
         "integer": [
           "build",
           "display_id",

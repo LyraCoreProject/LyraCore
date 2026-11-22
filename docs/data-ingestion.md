@@ -33,6 +33,11 @@ It also stores `mechanic_immune_mask` on `game_creature_template`, as vmangos st
 It stores `call_for_help_range` there too, the yards inside which a creature calls friendly
 creatures for help; 0 turns the Call for Assistance and the Call for Help off. A negative range is a
 `creatures.negative-call-for-help-range` finding and imports as 5, as vmangos loads it.
+The pass also stores every `creature_display_info_addon` model's `combat_reach` at the selected
+build in `game_display_combat_reach`, beside the display's CreatureDisplayInfo.dbc scale, which the
+source reach is measured at. A model without a bounding radius is left out and keeps the default
+1.5 yd, as `Unit::UpdateModelData` does. [Melee Reach](../CONTEXT.md#procs) scales the reach by the
+unit's scale over the display's.
 
 The globals pass imports selected `areatrigger_tavern` ids with `patch_min <= 10`. The Module
 matches them to the imported `areatrigger_template` geometry for inn rest. Reimport replaces the

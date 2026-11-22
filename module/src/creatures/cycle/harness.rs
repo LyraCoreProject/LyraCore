@@ -165,6 +165,7 @@ struct Scenario {
     hold_ranges: RefCell<HashMap<u64, f32>>,
     player_moved_ms: RefCell<HashMap<u64, u32>>,
     player_move_flags: RefCell<HashMap<u64, u32>>,
+    combat_reaches: RefCell<HashMap<u64, f32>>,
     at_war: RefCell<HashSet<(u32, u32)>>,
     blind: RefCell<HashSet<(u64, u64)>>,
     pulls: RefCell<Vec<(u64, u64, Pull)>>,
@@ -765,6 +766,44 @@ impl Scenario {
             .collect();
         pairs.sort_unstable();
         pairs
+    }
+
+    fn combat_reach(self, guid: u64, yd: f32) -> Self {
+        self.combat_reaches.borrow_mut().insert(guid, yd);
+        self
+    }
+
+    fn reach_of(&self, guid: u64) -> f32 {
+        self.combat_reaches
+            .borrow()
+            .get(&guid)
+            .copied()
+            .unwrap_or(crate::combat::reach::DEFAULT_COMBAT_REACH_YD)
+    }
+
+    fn melee_body(&self, guid: u64) -> Option<MeleeBody> {
+        use crate::combat::reach::moved_within_leeway_window;
+        let now_ms = (self.now_micros.get() / 1000) as u32;
+        let (at, is_character, last_move_ms) = match self.creatures.borrow().get(&guid) {
+            Some(c) => (c.at, false, Some(c.last_move_ms)),
+            None => {
+                let players = self.players.borrow();
+                let player = players.iter().find(|p| p.guid == guid)?;
+                (
+                    player.at,
+                    true,
+                    self.player_moved_ms.borrow().get(&guid).copied(),
+                )
+            }
+        };
+        Some(MeleeBody {
+            x: at.x,
+            y: at.y,
+            z: at.z,
+            combat_reach: self.reach_of(guid),
+            is_character,
+            moving: last_move_ms.is_some_and(|ms| moved_within_leeway_window(ms, now_ms)),
+        })
     }
 
     fn kiting(self, guid: u64, at: Point) -> Self {
@@ -2810,9 +2849,11 @@ impl ThreatSink for Scenario {
             .iter()
             .filter_map(|f| {
                 let c = creatures.get(&f.attacker)?;
-                scope.covers(c.instance_id).then_some(Fighter {
+                scope.covers(c.instance_id).then(|| Fighter {
                     guid: f.attacker,
-                    at: c.at,
+                    body: self
+                        .melee_body(f.attacker)
+                        .expect("a fighter is a creature"),
                     victim: f.victim,
                 })
             })
@@ -2822,8 +2863,6 @@ impl ThreatSink for Scenario {
         self.taunts.borrow().get(&guid).copied()
     }
     fn threat_sources(&self, guid: u64) -> Vec<ThreatSource> {
-        let creatures = self.creatures.borrow();
-        let players = self.players.borrow();
         crate::threat::rank(
             self.threat
                 .borrow()
@@ -2834,13 +2873,9 @@ impl ThreatSink for Scenario {
         )
         .into_iter()
         .filter_map(|(source, threat)| {
-            let at = creatures
-                .get(&source)
-                .map(|c| c.at)
-                .or_else(|| players.iter().find(|p| p.guid == source).map(|p| p.at))?;
             Some(ThreatSource {
                 guid: source,
-                at,
+                body: self.melee_body(source)?,
                 threat,
             })
         })
@@ -2878,6 +2913,8 @@ impl PursuitSink for Scenario {
                         .map_or(0.0, |victim| victim.orientation),
                     victim_movement_flags,
                     victim_is_character: self.players.borrow().iter().any(|p| p.guid == f.victim),
+                    combat_reach: self.reach_of(f.attacker),
+                    victim_combat_reach: self.reach_of(f.victim),
                     last_move_ms: c.last_move_ms,
                     routing: self.is_routing(f.attacker),
                     leg: legs.iter().find(|l| l.guid == f.attacker).cloned(),
@@ -4973,6 +5010,47 @@ fn a_creature_switches_past_the_margin_for_the_challengers_distance() {
 
         assert_eq!(w.victims(), [(WOLF, victim)], "{case}");
     }
+}
+
+#[test]
+fn a_large_creatures_threat_margin_counts_its_own_melee_reach() {
+    for (case, wolf_reach, victim) in [
+        ("6 yd is at range for a normal wolf", 1.5, HUNTER),
+        ("6 yd is inside a 4 yd combat reach", 4.0, RANGER),
+    ] {
+        let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+            .combat_reach(WOLF, wolf_reach)
+            .player(RANGER, p(6.0, 0.0, 10.0))
+            .attacking(WOLF, HUNTER)
+            .threat(WOLF, HUNTER, 100)
+            .threat(WOLF, RANGER, 111);
+        let tick = w.tick(true, catch_all());
+        run_cycle(&mut w, tick);
+
+        assert_eq!(w.victims(), [(WOLF, victim)], "{case}");
+    }
+}
+
+#[test]
+fn a_large_creature_stops_its_chase_at_its_own_melee_reach() {
+    let mut w = wolf_fighting(p(7.0, 0.0, 10.0))
+        .combat_reach(WOLF, 5.0)
+        .attacking(WOLF, HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    assert!(
+        w.effects().is_empty(),
+        "5 + 1.5 + 4/3 yd reaches a victim 7 yd away"
+    );
+
+    let mut w = wolf_fighting(p(7.0, 0.0, 10.0)).attacking(WOLF, HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    assert_running_legs_to(
+        &w,
+        &[p(7.0 - CONTACT_YD, 0.0, 10.0)],
+        "a normal wolf closes from 7 yd",
+    );
 }
 
 #[test]

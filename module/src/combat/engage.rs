@@ -781,14 +781,13 @@ fn face_requested_melee_target(ctx: &ReducerContext, attacker_guid: u64, target_
     let Some(target) = entities.guid().find(target_guid) else {
         return;
     };
-    let (dx, dy, dz) = (
-        target.x - attacker.x,
-        target.y - attacker.y,
-        target.z - attacker.z,
+    let (dx, dy) = (target.x - attacker.x, target.y - attacker.y);
+    let now_ms = crate::time::now_ms_u32(ctx);
+    let in_reach = super::reach::in_melee_reach(
+        &super::reach::MeleeBody::of(ctx, &attacker, now_ms),
+        &super::reach::MeleeBody::of(ctx, &target, now_ms),
     );
-    if dx * dx + dy * dy + dz * dz > MELEE_RANGE_SQ
-        || (dx.abs() <= f32::EPSILON && dy.abs() <= f32::EPSILON)
-    {
+    if !in_reach || (dx.abs() <= f32::EPSILON && dy.abs() <= f32::EPSILON) {
         return;
     }
 

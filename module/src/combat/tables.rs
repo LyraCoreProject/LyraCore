@@ -2,10 +2,6 @@ use crate::form::CombatProfile;
 use crate::WorldEntity;
 
 pub(crate) const MELEE_RANGE_SQ: f32 = 25.0;
-pub(crate) const MELEE_RANGE_LEEWAY_SQ: f32 =
-    (5.0 + 4.0 / 3.0 + 8.0 / 3.0) * (5.0 + 4.0 / 3.0 + 8.0 / 3.0);
-pub(crate) const MELEE_RANGE_LEEWAY_CREATURE_SQ: f32 = (5.0 + 8.0 / 3.0) * (5.0 + 8.0 / 3.0);
-pub(crate) const MELEE_LEEWAY_WINDOW_MS: u32 = 1200;
 pub(crate) const RANGED_RANGE_SQ: f32 = 1225.0;
 pub(crate) const RANGED_INITIAL_SHOT_MS: u32 = 500;
 // Projectile speeds are in yd/s from Spell.dbc.
@@ -505,22 +501,6 @@ pub(crate) fn regen_entity_health_in_combat(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn melee_leeway_covers_the_post_flee_tick_gap_for_a_pinned_chaser() {
-        use crate::creatures::MOVE_TICK_SECS;
-        use lyracore_shared::constants::speeds::RUN;
-        let worst_case_gap = 5.0 + RUN * MOVE_TICK_SECS;
-        let leeway = MELEE_RANGE_LEEWAY_SQ.sqrt();
-        assert!(
-            leeway >= worst_case_gap,
-            "leeway {leeway}yd must cover the worst-case post-flee-tick gap {worst_case_gap}yd"
-        );
-        assert!(
-            (leeway - 9.0).abs() < 0.001,
-            "leeway {leeway}yd expected exactly 9yd"
-        );
-    }
 
     fn warrior_ap(strength: u32, level: u32) -> f32 {
         total_attack_power(
