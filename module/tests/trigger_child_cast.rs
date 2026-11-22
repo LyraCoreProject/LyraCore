@@ -160,6 +160,9 @@ fn a_mount_spells_trigger_child_cast_leaves_its_caster_mounted() {
     shard.assert_call("debug_set_level", &[PLAYER, "20"]);
     shard.assert_call("debug_set_money", &[PLAYER, "1000"]);
     train_riding(&shard);
+    shard.assert_sql(
+        "UPDATE game_world_entity SET health = 5000, max_health = 10000 WHERE guid = 1",
+    );
     spell(&shard, CHILD, &[]);
     heal_child(&shard);
     effect(

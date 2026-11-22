@@ -656,9 +656,9 @@ _Avoid_: proc cast, internal cast, free cast
 The cast an `E_TRIGGER` effect makes of its trigger spell, at once, inside its parent's effects. It
 runs the cast Gates and the cast core like a direct cast, but skips the Gates vmangos guards with
 `!m_IsTriggeredSpell` that LyraCore models: cooldown, caster life, global cooldown, combat, Form,
-stealth, line of sight, peaceful target, product storage, range, facing, power and caster control.
-It neither dismounts nor unstealths its caster and starts no global cooldown. It still pays its
-power cost and starts its own cooldown.
+stealth, line of sight, peaceful target, product storage, range, facing, power and combo points,
+and caster control. It neither dismounts nor unstealths its caster and starts no global cooldown.
+It still pays its power cost and starts its own cooldown.
 _Avoid_: triggered spell, trigger cast
 
 **Chance on Hit**:
