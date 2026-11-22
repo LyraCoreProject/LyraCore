@@ -637,9 +637,9 @@ lookups use the display id across entries, so keep metadata for the same model c
 
 `LootRow` has `item_entry: u32`, `chance_bp: u32`, `min_count: u32`, `count: u32`,
 `group_id: u32`, and `quest_only: bool`. `SkinRow` has the same fields except `quest_only`.
-A dropped row gives a stack drawn evenly from `min_count` through `count`, as vmangos `LootItem`
-does. A `min_count` of zero keeps the stack fixed at `count`, so send the imported row's
-`min_count` back to keep its range.
+Every field of a loot row is required. A dropped row gives a stack drawn evenly from `min_count`
+through `count`, as vmangos `LootItem` does. Send `min_count: 0` for a stack fixed at `count`, and
+send the imported row's `min_count` back to keep its range.
 For `group_id = 0`, each row gets an independent roll in 0 through 9,999; 10,000 always drops
 and zero never drops. A nonzero group gets one roll over cumulative weights on that same
 10,000-point scale. At most one row wins. Group weights are not normalized: a total of 7,500

@@ -16,6 +16,7 @@ const OPERATOR_BEAST_ENTRY: u32 = 52_000;
 const CHEST_LOOT_ID: u32 = 52_100;
 const CHEST_ENTRIES: [u32; 3] = [52_101, 52_102, 52_103];
 const PACKAGE_LOOT_ROW: u64 = 9_000_001;
+const IMPORTED_CHEST_ROW: u64 = 52_200;
 const SOURCE_HASH: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
 fn realm(name: &str) -> Standalone {
@@ -37,6 +38,7 @@ fn stage(name: &str, rows: &[&[Field]]) -> Standalone {
     shard
 }
 
+// The source's stream draws the drop chance first and the stack size second.
 fn seed_source_stream(shard: &Standalone, source_guid: u64, seed: u64) {
     shard.insert_row(
         "game_conformance_spell_random",
@@ -48,7 +50,6 @@ fn seed_source_stream(shard: &Standalone, source_guid: u64, seed: u64) {
     );
 }
 
-// The source's stream draws the drop chance first and the stack size second.
 fn kill_with_seed(shard: &Standalone, wolf: &str, seed: u64) -> Vec<(u32, u32)> {
     shard.assert_call("debug_apply_damage", &[wolf, "1", "1"]);
     seed_source_stream(shard, wolf.parse().unwrap(), seed);
@@ -213,15 +214,31 @@ fn chests_at_the_character(shard: &Standalone) -> Vec<u64> {
         .collect()
 }
 
-fn apply_chest_loot_delta(shard: &Standalone, row_fields: &str) {
+fn chest_loot_delta(id: u64, operation: &str, fields: &str) -> String {
+    format!(
+        r#"{{"version":1,"package":"example.chest-stacks","source_hash":"{SOURCE_HASH}","claims":[{{"table":"game_gameobject_loot","key":{{"id":{id}}},"operation":"{operation}","fields":{fields}}}]}}"#
+    )
+}
+
+fn chest_loot_insert(stack_fields: &str) -> String {
     let fields = format!(
-        r#"{{"loot_id":{{"type":"u32","value":{CHEST_LOOT_ID}}},"item_entry":{{"type":"u32","value":{FIXTURE_JERKY}}},"chance_bp":{{"type":"u32","value":10000}},"group_id":{{"type":"u32","value":0}},"quest_only":{{"type":"bool","value":false}},{row_fields}}}"#
+        r#"{{"loot_id":{{"type":"u32","value":{CHEST_LOOT_ID}}},"item_entry":{{"type":"u32","value":{FIXTURE_JERKY}}},"chance_bp":{{"type":"u32","value":10000}},"group_id":{{"type":"u32","value":0}},"quest_only":{{"type":"bool","value":false}},{stack_fields}}}"#
     );
-    let delta = format!(
-        r#"{{"version":1,"package":"example.chest-stacks","source_hash":"{SOURCE_HASH}","claims":[{{"table":"game_gameobject_loot","key":{{"id":{PACKAGE_LOOT_ROW}}},"operation":"insert","fields":{fields}}}]}}"#
-    );
+    chest_loot_delta(PACKAGE_LOOT_ROW, "insert", &fields)
+}
+
+fn apply_loot_delta(shard: &Standalone, delta: &str) -> std::process::Output {
     let arg = |value: &str| serde_json::to_string(value).unwrap();
-    shard.assert_call("apply_package_deltas", &[&arg("loot"), &arg(&delta)]);
+    shard.call("apply_package_deltas", &[&arg("loot"), &arg(delta)])
+}
+
+fn apply_chest_loot_delta(shard: &Standalone, stack_fields: &str) {
+    let output = apply_loot_delta(shard, &chest_loot_insert(stack_fields));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn open_with_seed(shard: &Standalone, entry: u32, chest_guid: u64, seed: u64) -> Vec<(u32, u32)> {
@@ -267,5 +284,55 @@ fn a_package_chest_row_without_min_count_applies_and_keeps_its_stack() {
     assert_eq!(
         open_with_seed(&shard, CHEST_ENTRIES[0], chests[0], SEED_FOR_FIRST_STACK),
         [(FIXTURE_JERKY, 3)]
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_package_loot_row_whose_final_minimum_exceeds_its_count_is_refused() {
+    let shard = realm("loot-stack-package-refused");
+    chests_at_the_character(&shard);
+    shard.insert_row(
+        "game_gameobject_loot",
+        &[
+            ("id", &IMPORTED_CHEST_ROW),
+            ("loot_id", &CHEST_LOOT_ID),
+            ("item_entry", &FIXTURE_JERKY),
+            ("chance_bp", &10_000),
+            ("count", &2),
+        ],
+    );
+    let inverted_insert = chest_loot_insert(
+        r#""min_count":{"type":"u32","value":4},"count":{"type":"u32","value":3}"#,
+    );
+    let minimum_above_stored_count = chest_loot_delta(
+        IMPORTED_CHEST_ROW,
+        "update",
+        r#"{"min_count":{"type":"u32","value":3}}"#,
+    );
+
+    for (delta, expected) in [
+        (inverted_insert, "needs min_count 4 <= count 3"),
+        (minimum_above_stored_count, "needs min_count 3 <= count 2"),
+    ] {
+        let output = apply_loot_delta(&shard, &delta);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!output.status.success(), "{text}");
+        assert!(text.contains(expected), "{text}");
+    }
+    assert!(shard
+        .query_rows(&format!(
+            "SELECT id FROM game_gameobject_loot WHERE id = {PACKAGE_LOOT_ROW}"
+        ))
+        .is_empty());
+    assert_eq!(
+        shard.query_rows(&format!(
+            "SELECT min_count FROM game_gameobject_loot WHERE id = {IMPORTED_CHEST_ROW}"
+        ))[0]["min_count"],
+        "0"
     );
 }

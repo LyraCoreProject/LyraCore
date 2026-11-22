@@ -54,7 +54,8 @@ An `update` names only the columns it changes; an `insert` carries the whole row
 omit a column appended after Package Deltas began naming its table; `Table::column_has_default`
 lists them, and the row takes that column's migration default. The four loot tables' `min_count`
 is one: an omitted or zero `min_count` keeps the stack fixed at `count`, and a nonzero one drops a
-stack from `min_count` through `count`.
+stack from `min_count` through `count`. An apply refuses a loot row whose final `min_count`, after
+its claims meet the stored row, is above its `count`.
 
 # What it traces
 

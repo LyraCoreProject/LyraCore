@@ -36,6 +36,7 @@ fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Stri
         {
             return Err(missing_reference(row, "item_entry", item_entry));
         }
+        check_stack_range(ctx, row)?;
 
         match row.table() {
             ClaimTable::PickpocketLoot => {
@@ -87,6 +88,25 @@ fn check_references(ctx: &ReducerContext, rows: &[TracedRow]) -> Result<(), Stri
     Ok(())
 }
 
+// vmangos LootStoreItem::IsValid skips a row whose maxcount is below its mincountOrRef.
+fn check_stack_range(ctx: &ReducerContext, row: &TracedRow) -> Result<(), String> {
+    let min_count =
+        if row.operation() == Operation::Insert && !row.fields().contains_key("min_count") {
+            0
+        } else {
+            final_u32(ctx, row, "min_count")?
+        };
+    let count = final_u32(ctx, row, "count")?;
+    if min_count > count {
+        return Err(format!(
+            "`{}` row {} needs min_count {min_count} <= count {count}",
+            row.table(),
+            row.key()
+        ));
+    }
+    Ok(())
+}
+
 fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, String> {
     super::final_u32(row, field, || match row.table() {
         ClaimTable::PickpocketLoot => {
@@ -97,6 +117,8 @@ fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, 
                 .map(|loot| match field {
                     "creature_entry" => loot.creature_entry,
                     "item_entry" => loot.item_entry,
+                    "min_count" => loot.min_count,
+                    "count" => loot.count,
                     _ => 0,
                 })
         }
@@ -108,6 +130,8 @@ fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, 
                 .map(|loot| match field {
                     "loot_id" => loot.loot_id,
                     "item_entry" => loot.item_entry,
+                    "min_count" => loot.min_count,
+                    "count" => loot.count,
                     _ => 0,
                 })
         }
@@ -119,6 +143,8 @@ fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, 
                 .map(|loot| match field {
                     "skin_loot_id" => loot.skin_loot_id,
                     "item_entry" => loot.item_entry,
+                    "min_count" => loot.min_count,
+                    "count" => loot.count,
                     _ => 0,
                 })
         }
@@ -130,6 +156,8 @@ fn final_u32(ctx: &ReducerContext, row: &TracedRow, field: &str) -> Result<u32, 
             .map(|loot| match field {
                 "zone_id" => loot.zone_id,
                 "item_entry" => loot.item_entry,
+                "min_count" => loot.min_count,
+                "count" => loot.count,
                 _ => 0,
             }),
         other => unreachable!("loot value lookup received {other}"),

@@ -144,26 +144,52 @@ fn the_same_id_is_independently_claimable_on_every_loot_table() {
 }
 
 #[test]
-fn a_loot_insert_may_claim_a_stack_minimum_or_leave_it_to_its_default() {
-    let ranged = WHOLE_PICKPOCKET_LOOT_ROW.replacen(
-        '{',
-        r#"{ "min_count": { "type": "u32", "value": 2 },"#,
-        1,
-    );
+fn a_loot_insert_may_claim_a_stack_minimum() {
+    let ranged = r#"{
+        "creature_entry": { "type": "u32", "value": 6 },
+        "item_entry": { "type": "u32", "value": 25 },
+        "chance_bp": { "type": "u32", "value": 5000 },
+        "min_count": { "type": "u32", "value": 1 },
+        "count": { "type": "u32", "value": 3 },
+        "group_id": { "type": "u32", "value": 0 },
+        "quest_only": { "type": "bool", "value": false }
+    }"#;
     let json = artifact(
         "example.pkg",
-        &pickpocket_loot_claim(9_000_000, "insert", &ranged),
+        &pickpocket_loot_claim(9_000_000, "insert", ranged),
     );
 
     let delta = PackageDelta::parse(&json).expect("a loot row may claim min_count");
 
-    assert_eq!(delta.claims()[0].fields()["min_count"], FieldValue::U32(2));
-    for table in [
-        Table::PickpocketLoot,
-        Table::GameobjectLoot,
-        Table::SkinningLoot,
-        Table::FishingLoot,
+    assert_eq!(delta.claims()[0].fields()["min_count"], FieldValue::U32(1));
+}
+
+#[test]
+fn every_loot_table_takes_an_insert_without_a_stack_minimum() {
+    for (table, owner, quest_only) in [
+        ("game_pickpocket_loot", "creature_entry", true),
+        ("game_gameobject_loot", "loot_id", true),
+        ("game_skinning_loot", "skin_loot_id", false),
+        ("game_fishing_loot", "zone_id", false),
     ] {
-        assert!(table.column_has_default("min_count"), "{table}");
+        let quest_only = if quest_only {
+            r#","quest_only":{"type":"bool","value":false}"#
+        } else {
+            ""
+        };
+        let json = artifact(
+            "example.pkg",
+            &format!(
+                r#"{{"table":"{table}","key":{{"id":9000000}},"operation":"insert","fields":{{"{owner}":{{"type":"u32","value":6}},"item_entry":{{"type":"u32","value":25}},"chance_bp":{{"type":"u32","value":5000}},"count":{{"type":"u32","value":1}},"group_id":{{"type":"u32","value":0}}{quest_only}}}}}"#
+            ),
+        );
+
+        let delta = PackageDelta::parse(&json)
+            .unwrap_or_else(|e| panic!("`{table}` must insert without min_count: {e}"));
+
+        assert!(
+            !delta.claims()[0].fields().contains_key("min_count"),
+            "{table}"
+        );
     }
 }
