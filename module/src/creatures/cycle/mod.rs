@@ -346,7 +346,6 @@ pub(crate) struct Fighter {
     pub guid: u64,
     pub body: MeleeBody,
     pub victim: u64,
-    pub held_in_place: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -361,6 +360,7 @@ pub(crate) trait ThreatSink {
     fn fighters(&self, scope: &TickScope) -> Vec<Fighter>;
     fn taunted_onto(&self, guid: u64) -> Option<u64>;
     fn threat_sources(&self, guid: u64) -> Vec<ThreatSource>;
+    fn held_in_place(&self, guid: u64) -> bool;
     fn retarget(&mut self, creature: u64, victim: u64);
 }
 
@@ -1019,6 +1019,7 @@ fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
             }
             continue;
         }
+        let held_in_place = w.held_in_place(f.guid);
         let contenders: Vec<Contender> = w
             .threat_sources(f.guid)
             .into_iter()
@@ -1026,7 +1027,7 @@ fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
                 let in_melee_reach = in_melee_reach(&f.body, &source.body);
                 // vmangos: a creature that cannot move ranks a source out of its melee reach low.
                 let standing = match source.standing {
-                    SourceStanding::Free if f.held_in_place && !in_melee_reach => {
+                    SourceStanding::Free if held_in_place && !in_melee_reach => {
                         SourceStanding::LowPriority
                     }
                     standing => standing,

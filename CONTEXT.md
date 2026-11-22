@@ -774,13 +774,6 @@ call in turn. The creature calls again only after it loses its victim. A creatur
 `call_for_help_range` 0 makes no call.
 _Avoid_: assist pass, pack pull
 
-**Low-Priority Source**:
-A threat source a creature takes as its victim only when no other source it can attack remains:
-one under a harmful Aura that fears, confuses or breaks on damage, or, while the creature cannot
-move, one outside its Melee Reach. The creature then takes the top one by threat, without
-the threat margin. It never takes a source it cannot attack. See `module/src/threat.rs`.
-_Avoid_: secondary threat target
-
 **Call for Help**:
 The call a creature makes once a second while its victim has drawn it more than 10 yards from its
 respawn point. Friendly creatures it sees within the template's `call_for_help_range` that are out
@@ -788,6 +781,14 @@ of combat answer at once: one whose template responds attacks the victim, and ca
 in turn. One whose template flees, on random movement and within 10 yards of the victim, runs to
 the point 10 yards from the victim on its own side.
 _Avoid_: leash call, kite pull
+
+**Low-Priority Source**:
+A threat source a creature takes as its victim only when every source it can attack is low
+priority. A source is low priority when it holds a harmful Aura that fears, confuses or breaks on
+damage, or, while the creature cannot move, when it is outside the creature's Melee Reach. The
+creature then takes the top one by threat, without the threat margin. It never takes a source it
+cannot attack. See `module/src/threat.rs`.
+_Avoid_: secondary threat target
 
 **Rule State**:
 The durable arming of one EventAI rule on one creature: its next eligible time and whether it is

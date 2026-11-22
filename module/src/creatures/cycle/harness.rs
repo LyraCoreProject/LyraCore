@@ -2862,7 +2862,6 @@ impl ThreatSink for Scenario {
                         .melee_body(f.attacker)
                         .expect("a fighter is a creature"),
                     victim: f.victim,
-                    held_in_place: self.frozen.borrow().contains(&f.attacker),
                 })
             })
             .collect()
@@ -2894,6 +2893,14 @@ impl ThreatSink for Scenario {
             })
         })
         .collect()
+    }
+    fn held_in_place(&self, guid: u64) -> bool {
+        self.frozen.borrow().contains(&guid)
+            || self
+                .creatures
+                .borrow()
+                .get(&guid)
+                .is_some_and(|c| c.cannot_act)
     }
     fn retarget(&mut self, creature: u64, victim: u64) {
         for f in self.fights.borrow_mut().iter_mut() {
@@ -5134,6 +5141,24 @@ fn a_creature_turns_from_a_low_priority_victim_to_a_free_source() {
 }
 
 #[test]
+fn a_low_priority_victim_yields_to_a_free_source_inside_the_margin() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .player(RANGER, p(4.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 100)
+        .threat(WOLF, RANGER, 105)
+        .standing(HUNTER, SourceStanding::LowPriority);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        w.victims(),
+        [(WOLF, RANGER)],
+        "vmangos keeps a feared victim at 100 against a free 105; LyraCore turns"
+    );
+}
+
+#[test]
 fn an_unattackable_source_is_never_the_victim() {
     let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
         .player(RANGER, p(4.0, 0.0, 10.0))
@@ -5154,11 +5179,16 @@ fn an_unattackable_source_is_never_the_victim() {
 
 #[test]
 fn a_creature_held_in_place_ranks_a_source_out_of_its_melee_reach_low() {
-    let cases: [(&str, Twist, u64); 2] = [
+    let cases: [(&str, Twist, u64); 3] = [
         ("a free wolf keeps its victim at range", |w| w, HUNTER),
         (
             "a rooted wolf turns to the source it reaches",
             |w| w.rooted(WOLF),
+            RANGER,
+        ),
+        (
+            "a stunned wolf turns to the source it reaches",
+            |w| w.crowd_controlled(WOLF),
             RANGER,
         ),
     ];

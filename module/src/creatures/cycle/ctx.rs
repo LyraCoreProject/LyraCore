@@ -839,13 +839,6 @@ impl CtxWorld<'_> {
             .find(guid)
             .map(|c| c.entry)
     }
-
-    // vmangos UNIT_STATE_CAN_NOT_MOVE: rooted or stunned. EventAI immobilization holds it too.
-    fn held_in_place(&self, guid: u64) -> bool {
-        crate::spell::is_rooted(self.ctx, guid)
-            || crate::spell::is_stunned(self.ctx, guid)
-            || eventai::movement::intent(self.ctx, guid).is_some_and(|intent| intent.immobilized)
-    }
 }
 
 impl CastSink for CtxWorld<'_> {
@@ -941,7 +934,6 @@ impl ThreatSink for CtxWorld<'_> {
                             .attacker_guid()
                             .find(guid)
                             .map_or(0, |a| a.target_guid),
-                        held_in_place: self.held_in_place(guid),
                     })
             })
             .collect()
@@ -967,6 +959,12 @@ impl ThreatSink for CtxWorld<'_> {
                 })
             })
             .collect()
+    }
+    // vmangos UNIT_STATE_CAN_NOT_MOVE is root or stun; counting EventAI immobilization is ours.
+    fn held_in_place(&self, guid: u64) -> bool {
+        crate::spell::is_rooted(self.ctx, guid)
+            || crate::spell::is_stunned(self.ctx, guid)
+            || eventai::movement::intent(self.ctx, guid).is_some_and(|intent| intent.immobilized)
     }
     fn retarget(&mut self, creature: u64, victim: u64) {
         let melee = self.ctx.db.game_melee_attack();

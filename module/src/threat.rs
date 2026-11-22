@@ -276,6 +276,7 @@ pub(crate) struct Contender {
 /// vmangos `selectNextVictim` over `ranked`, highest threat first. Among free contenders, keep
 /// `current` unless one has more than 110% of its threat in melee reach or more than 130% outside
 /// it. With no free contender, take the top low-priority one. Never take an unattackable one.
+/// vmangos tests the margin before the victim's own priority; a low-priority victim yields here.
 pub(crate) fn select_victim(current: u64, ranked: &[Contender]) -> Option<u64> {
     let free: Vec<Contender> = ranked
         .iter()
