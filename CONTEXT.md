@@ -648,9 +648,9 @@ _Avoid_: linked spell, after-hit cast
 A cast started by a Proc, a periodic aura, a spell's hit (a Follow-up Cast) or another triggered
 effect. It checks faction targeting and target life, then runs the cast core's effect loop without
 cast-start position, range, line of sight, power cost, cooldown or stealth-break checks. Its own
-hits fire no further Procs. A harmful hit on a unit that detects the caster still breaks the
-caster's stealth, unless a Proc or periodic aura made the cast. The cast an `E_TRIGGER` effect
-makes is a Trigger Child Cast, not a Triggered Cast.
+hits fire no further Procs. Its direct damage still breaks its caster's stealth, as all direct
+damage does, whatever made the cast. The cast an `E_TRIGGER` effect makes is a Trigger Child
+Cast, not a Triggered Cast.
 _Avoid_: proc cast, internal cast, free cast
 
 **Trigger Child Cast**:

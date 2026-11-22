@@ -257,14 +257,6 @@ spent charges, as they refuse an opened item, until their rows can carry the cha
 and imports with no rows; an older Shard has spent no charges. An older destination refuses the new
 manifest, so update both Shards before moving active World Sessions.
 
-### Spell hit stealth migration
-
-Older spell rows lack `CAST_FLAG_HIT_KEEPS_STEALTH`. Until spells are reimported, a harmful hit
-from a spell with vmangos `SPELL_ATTR_EX_ALLOW_WHILE_STEALTHED`, `SPELL_ATTR_EX_NO_THREAT`,
-`SPELL_ATTR_EX_THREAT_ONLY_ON_MISS` or `SPELL_ATTR_EX2_NO_INITIAL_THREAT` breaks its caster's
-stealth when its target detects the caster. After you publish this revision to an existing Shard,
-reimport the `spell` family before play resumes.
-
 ### Combo finisher migration
 
 `game_spell.max_duration_ms` and `game_spell_effect.points_per_combo` default to zero, and older

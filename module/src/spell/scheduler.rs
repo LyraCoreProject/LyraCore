@@ -641,7 +641,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 a.caster_guid,
                 t,
                 resisted,
-                crate::combat::Hit::triggered(),
+                crate::combat::Hit::periodic(),
             );
             if dealt > 0 || absorbed > 0 || points > resisted {
                 crate::SpellCastEvent::insert(

@@ -14,14 +14,14 @@ use crate::spell::{
     recipe_reagents, select_targets, CastGateRefusal, CastHandle, CastRefusalKind,
     CastRefusalReason, CastStart, FormRefusal, ItemGrantOutcome, SpellCastEventKind, A_FLAG,
     A_MOUNTED, CAST_FLAG_BINARY, CAST_FLAG_CHANNELED, CAST_FLAG_COMBO_FINISHER,
-    CAST_FLAG_HIT_KEEPS_STEALTH, CAST_FLAG_INCAP_OPENER, CAST_FLAG_MAGIC_HIT, CAST_FLAG_REQ_BEHIND,
-    CAST_FLAG_REQ_DAGGER, CAST_FLAG_REQ_OVERPOWER, CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH,
-    CAST_FLAG_STEALTH_SAFE, CAST_FLAG_WEAPON_PROCS, E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT,
-    E_DUEL, E_ENCHANT_ITEM_TEMPORARY, E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING,
-    E_PERSISTENT_AREA, E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE, E_TAUNT,
-    E_WEAPON_STRIKE, HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME,
-    SPELL_ATTR_PASSIVE, SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY,
-    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    CAST_FLAG_INCAP_OPENER, CAST_FLAG_MAGIC_HIT, CAST_FLAG_REQ_BEHIND, CAST_FLAG_REQ_DAGGER,
+    CAST_FLAG_REQ_OVERPOWER, CAST_FLAG_REQ_REVENGE, CAST_FLAG_REQ_STEALTH, CAST_FLAG_STEALTH_SAFE,
+    CAST_FLAG_WEAPON_PROCS, E_BLINK, E_CREATE_ITEM, E_DAMAGE, E_DISTRACT, E_DUEL,
+    E_ENCHANT_ITEM_TEMPORARY, E_FINISHER_DAMAGE, E_INTERRUPT, E_NEXT_SWING, E_PERSISTENT_AREA,
+    E_SCRIPTED, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_TAME_CREATURE, E_WEAPON_STRIKE,
+    HUMANOID_TYPE, KIND_AURA_BIT, RESIST_ARMOR, SPELLMOD_OP_CASTING_TIME, SPELL_ATTR_PASSIVE,
+    SPELL_ATTR_USES_RANGED_SLOT, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY, T_TARGET_ALLY,
+    T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use crate::{
     game_aura, game_global_cooldown, game_pending_cast, game_school_lockout, game_spell,
@@ -614,7 +614,16 @@ fn run_spell_effects(
         finish_items(craft);
         return;
     }
-    hits_landed(ctx, spell, origin, caster_guid, &landed);
+    crate::threat::add_table_threat(ctx, caster_guid, hdr.spell_id, &landed);
+    for &(target, _) in &landed {
+        crate::creatures::eventai_on_spell_hit(
+            ctx,
+            caster_guid,
+            target,
+            hdr.spell_id,
+            u32::from(hdr.school_mask),
+        );
+    }
     let school_index = crate::spell::school_index(hdr.school_mask);
     crate::SpellCastEvent::insert(
         ctx,
@@ -645,53 +654,6 @@ fn run_spell_effects(
     finish_items(craft);
     finish_weapon_hits(ctx, caster_guid, weapon_targets, shield_targets);
     cast_follow_up(ctx, hdr.spell_id, caster_guid, level, &landed);
-}
-
-// vmangos Spell::DoSpellHitOnUnit: the caster's stealth, then table threat and EventAI spell hits.
-fn hits_landed(
-    ctx: &ReducerContext,
-    spell: &LoadedSpell,
-    origin: CastOrigin,
-    caster_guid: u64,
-    landed: &[(u64, u8)],
-) {
-    let hdr = &spell.header;
-    if hit_breaks_stealth(spell, origin) && is_stealthed(ctx, caster_guid) {
-        let entities = ctx.db.game_world_entity();
-        let detected = entities.guid().find(caster_guid).is_some_and(|caster| {
-            landed.iter().any(|&(target_guid, _)| {
-                target_guid != caster_guid
-                    && entities
-                        .guid()
-                        .find(target_guid)
-                        .is_some_and(|target| crate::creatures::detects_stealthed(&target, &caster))
-            })
-        });
-        if detected {
-            break_stealth(ctx, caster_guid);
-        }
-    }
-    crate::threat::add_table_threat(ctx, caster_guid, hdr.spell_id, landed);
-    for &(target, _) in landed {
-        crate::creatures::eventai_on_spell_hit(
-            ctx,
-            caster_guid,
-            target,
-            hdr.spell_id,
-            u32::from(hdr.school_mask),
-        );
-    }
-}
-
-// An Aura's cast keeps stealth unless it holds a threat effect; LyraCore has no spell speed.
-fn hit_breaks_stealth(spell: &LoadedSpell, origin: CastOrigin) -> bool {
-    let (hdr, effects) = (&spell.header, spell.effects.as_slice());
-    crate::spell::spell_is_harmful(hdr, effects)
-        && hdr.cast_flags & (CAST_FLAG_STEALTH_SAFE | CAST_FLAG_HIT_KEEPS_STEALTH) == 0
-        && (!matches!(origin, CastOrigin::AuraTriggered)
-            || effects
-                .iter()
-                .any(|e| e.kind == E_TAUNT && e.base_points > 0))
 }
 
 thread_local! {

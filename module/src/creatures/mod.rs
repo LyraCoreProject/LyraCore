@@ -17,9 +17,7 @@ pub(crate) mod spawn;
 
 pub(crate) mod tick;
 
-pub(crate) use ai::{
-    combat_active_radius, detects_stealthed, flee_eligible, rout_window_open, should_flee,
-};
+pub(crate) use ai::{combat_active_radius, flee_eligible, rout_window_open, should_flee};
 pub(crate) use assistance::{
     call_assistance, call_for_help, sweep_delete_game_creature_assistance_call,
     sweep_transfer_game_creature_assistance_call,
