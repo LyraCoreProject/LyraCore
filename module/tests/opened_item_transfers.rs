@@ -155,6 +155,17 @@ fn an_opened_item_can_be_neither_offered_nor_traded_at_accept() {
         1,
         "vmangos leaves the trade open"
     );
+    let session = &f
+        .shard
+        .query_rows("SELECT initiator_accepted, target_accepted FROM game_trade_session")[0];
+    assert_eq!(
+        (
+            session["initiator_accepted"].as_str(),
+            session["target_accepted"].as_str()
+        ),
+        ("false", "false"),
+        "a refused accept is not recorded"
+    );
 }
 
 #[test]
