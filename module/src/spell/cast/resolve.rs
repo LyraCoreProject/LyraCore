@@ -2,6 +2,7 @@ use lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
 use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
+use super::depth::TriggerLink;
 use crate::combat::AttackOutcome;
 use crate::geometry::{distance_3d, is_behind, is_facing};
 use crate::{game_creature_template, game_world_entity, WorldEntity};
@@ -142,6 +143,7 @@ fn resolve_loaded_cast(
         ..
     } = *request;
     let (hdr, effects) = (&spell.header, spell.effects.as_slice());
+    let _link = TriggerLink::enter(ctx.timestamp, spell_id)?;
 
     let mut caster = crate::helpers::live_entity(ctx, caster_guid)
         .map_err(|_| format!("caster {caster_guid} not in world"))?;
@@ -944,6 +946,7 @@ fn cast_triggered_with_origin(
     origin: CastOrigin,
 ) -> Result<(), String> {
     let caster_guid = request.caster_guid;
+    let _link = TriggerLink::enter(ctx.timestamp, request.spell_id)?;
     let caster = ctx
         .db
         .game_world_entity()
@@ -1084,6 +1087,7 @@ pub(crate) fn start_creature_spell(
                 GateRun::InterruptPrecheck(route.admission),
             )?;
         }
+        TriggerLink::check(ctx.timestamp, request.spell_id)?;
         crate::spell::break_channel(ctx, request.caster_guid);
     }
     match route.mode {
@@ -2218,6 +2222,7 @@ pub(crate) fn begin_loaded_cast(
 
     let caster = crate::helpers::live_entity(ctx, caster_guid)?;
     check_cast_gates(ctx, &caster, spell, request, GateRun::Start(admission))?;
+    TriggerLink::check(ctx.timestamp, spell_id)?;
 
     // Break the previous channel before a new channel can place its aura.
     break_channel(ctx, caster_guid);

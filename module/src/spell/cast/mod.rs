@@ -1,3 +1,4 @@
+mod depth;
 pub(crate) mod resolve;
 mod targeting;
 

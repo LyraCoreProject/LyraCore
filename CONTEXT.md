@@ -45,7 +45,7 @@ entry in both files.
 
 **S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Soulstone](#death-and-resurrection) · [Source Profile](#realm-topology) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Swing Error](#procs)
 
-**T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Temporary Enchantment](#random-properties) · [Tier 1 baseline](#conformance) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#realm-topology) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Trigger Child Cast](#procs) · [Triggered Cast](#procs) · [Trust Review](#packages)
+**T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Temporary Enchantment](#random-properties) · [Tier 1 baseline](#conformance) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#realm-topology) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Trigger Child Cast](#procs) · [Trigger Depth](#procs) · [Triggered Cast](#procs) · [Trust Review](#packages)
 
 **U** [UI Transform](#client-content)
 
@@ -661,6 +661,16 @@ and caster control. It neither dismounts nor unstealths its caster at cast start
 global cooldown.
 It still pays its power cost and starts its own cooldown.
 _Avoid_: triggered spell, trigger cast
+
+**Trigger Depth**:
+How many spells one Durable Request is resolving inside each other's effects, the first cast
+included, whether a direct cast, a Trigger Child Cast or a Triggered Cast started them. A spell that
+would resolve as the ninth is refused, the eight before it keep their effects, and the Module logs
+the spell ids once. One Durable Request also resolves at most 1024 spells inside other spells'
+effects; past that it refuses every nested spell and logs once, while a spell that starts outside
+any other spell's effects stays free. Both limits stop a loop in operator or Package spell data,
+such as A triggers B while B triggers A, before the reducer traps or does exponential work.
+_Avoid_: recursion limit, trigger chain
 
 **Chance on Hit**:
 A weapon spell slot or a combat-spell enchantment that may cast when the weapon strikes a victim

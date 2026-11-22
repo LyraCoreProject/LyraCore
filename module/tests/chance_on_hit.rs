@@ -2,8 +2,8 @@ mod support;
 
 use lyracore_shared::item_property::COMBAT_SPELL;
 use lyracore_shared::spell::taxonomy::{
-    A_PROC_TRIGGER, CAST_FLAG_WEAPON_PROCS, E_ADD_EXTRA_ATTACKS, E_DAMAGE, E_HEAL, E_WEAPON_STRIKE,
-    P_NONE, P_RAW, T_SELF, T_TARGET_ENEMY,
+    A_PROC_TRIGGER, CAST_FLAG_ALWAYS_HIT, CAST_FLAG_WEAPON_PROCS, E_ADD_EXTRA_ATTACKS, E_DAMAGE,
+    E_HEAL, E_TRIGGER, E_WEAPON_STRIKE, P_NONE, P_RAW, T_SELF, T_TARGET_ENEMY,
 };
 
 use std::collections::BTreeMap;
@@ -301,6 +301,56 @@ fn an_aura_ppm_proc_scales_with_the_main_hand_weapons_delay() {
         gos_of(&events, THUNDERFURY_PROC),
         connected(&events),
         "every connected swing of the slow weapon procs"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_chance_on_hit_spell_that_triggers_its_weapon_ability_stops_at_the_trigger_depth() {
+    const TRIGGER_DEPTH_LIMIT: usize = 8;
+    let mut standalone = Standalone::start("chance-on-hit-loop");
+    let wolf = stage(&mut standalone);
+    standalone.clear_schedule("game_event_reaper_schedule");
+    set_level(&standalone, wolf, 1);
+    face_player(&standalone, wolf);
+    stage_spell(
+        &standalone,
+        SINISTER_STRIKE,
+        "Sinister Strike",
+        CAST_FLAG_WEAPON_PROCS,
+        (E_WEAPON_STRIKE, T_TARGET_ENEMY),
+        (100, P_RAW),
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell SET cast_flags = {CAST_FLAG_ALWAYS_HIT} \
+         WHERE spell_id = {THUNDERFURY_PROC}"
+    ));
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(THUNDERFURY_PROC, 1)),
+            ("spell_id", &THUNDERFURY_PROC),
+            ("effect_index", &1u8),
+            ("kind", &E_TRIGGER),
+            ("target", &T_TARGET_ENEMY),
+            ("trigger_spell", &SINISTER_STRIKE),
+        ],
+    );
+    let events = subscribe_with_fence(&standalone, &[CAST_EVENTS]);
+
+    standalone.assert_call(
+        "debug_cast_at",
+        &["1", &SINISTER_STRIKE.to_string(), &wolf.to_string()],
+    );
+
+    fence_subscription(&standalone, &events);
+    assert_eq!(
+        (
+            gos_of(&events, SINISTER_STRIKE),
+            gos_of(&events, THUNDERFURY_PROC)
+        ),
+        (TRIGGER_DEPTH_LIMIT / 2, TRIGGER_DEPTH_LIMIT / 2),
+        "the strike and its Chance on Hit alternate for eight links and the ninth is refused"
     );
 }
 
