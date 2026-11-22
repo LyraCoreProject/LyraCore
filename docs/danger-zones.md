@@ -235,6 +235,24 @@ call `debug_backfill_cell_ids` as the Operator before you open the native listen
 DynamicObjects and reconciles their AOI Grants. New ground effects stamp their cell on insertion;
 expiry removes the DynamicObject and its Grants in the same transaction.
 
+### Item spell charge migration
+
+`game_item_template` gains `spellcharges_1` to `spellcharges_5`, end-appended with default 0. The
+private `game_item_spell_charges` table is new and starts empty, and `CastRefusalReason` gains the
+append-only code 32. Shared import SQL defaults fill older inserts.
+
+An item cast now uses up its item only when an expendable spell, one with negative charges, spends
+its last charge, and only after the cast's `SMSG_SPELL_GO` and effects. Between the publish and the
+reimport every template has zero charges, so no item cast uses up its item: potions, food,
+bandages, scrolls and soulstones last for ever. Reimport the `items` family before players can
+reach the Realm. A Shard that keeps the fixture items its `init` seeded has Tough Jerky at zero
+charges until it is recreated. The Operator Content API and Package Deltas do not carry the
+columns, so a created item has no charges and an update keeps them.
+
+`game_item_spell_charges` is a Character-owned Transfer table. An older destination refuses it, so
+update both Shards before moving active World Sessions. Trade and buyback keep an item's spent
+charges; mail and auctions drop them.
+
 ### Combo finisher migration
 
 `game_spell.max_duration_ms` and `game_spell_effect.points_per_combo` default to zero, and older

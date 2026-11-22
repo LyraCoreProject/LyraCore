@@ -261,6 +261,7 @@ fn grant_peaceful_items(shard: &Standalone) -> String {
             ("name", &"Timed peaceful fixture item"),
             ("max_stack", &5),
             ("spellid_1", &PEACEFUL_SPELL),
+            ("spellcharges_1", &-1),
         ],
     );
     shard.assert_call(

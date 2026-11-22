@@ -75,6 +75,7 @@ pub(super) fn cast_result(reason: CastRefusalReason) -> u8 {
         R::ItemGone => code::ITEM_GONE,
         R::NoDueling => code::NO_DUELING,
         R::TargetDueling => code::TARGET_DUELING,
+        R::NoChargesRemain => code::NO_CHARGES_REMAIN,
     }
 }
 
@@ -391,6 +392,7 @@ mod tests {
             (R::ItemGone, 0x26),
             (R::NoDueling, 0x47),
             (R::TargetDueling, 0x68),
+            (R::NoChargesRemain, 0x44),
         ] {
             assert_eq!(cast_result(reason), code, "{reason:?}");
         }

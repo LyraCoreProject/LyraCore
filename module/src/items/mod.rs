@@ -7,6 +7,7 @@ mod inventory;
 mod ops;
 pub(crate) mod properties;
 mod rules;
+pub(crate) mod spell_charges;
 pub(crate) mod tables;
 pub(crate) mod temporary_enchantment;
 pub(crate) mod vendor_stock;
@@ -48,13 +49,17 @@ pub(crate) use ops::{
     apply_spirit_healer_durability_loss, equipped_school_stat_bonus, equipped_stat_bonus,
     grant_item, grant_item_property, grant_letter_item, grant_starter_item, has_free_slot,
     item_count, item_stat_bonus, remove_items, request_grant_item, request_profile_item,
-    resistance_items, spell_keeps_item, store_instance_state, use_up_one, ItemSnapshot,
-    ItemUseTarget, StoreRefusal,
+    resistance_items, store_instance_state, use_up_one, ItemSnapshot, ItemUseTarget, StoreRefusal,
 };
 pub(crate) use properties::{
     enchant_stat, enchant_stat_for_school, is_known_enchant, property_stat,
     property_stat_for_school, seed_compatibility_enchantments, select_loot_property,
     select_property,
+};
+pub(crate) use spell_charges::{
+    cast_item_use_of, item_charges_remain, record_spent as record_spent_charges, spent_charges,
+    sweep_delete_game_item_spell_charges, sweep_transfer_game_item_spell_charges, take_cast_item,
+    CastItemUse,
 };
 pub(crate) use tables::ItemPush;
 

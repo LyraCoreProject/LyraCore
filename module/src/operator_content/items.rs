@@ -111,7 +111,8 @@ item_fields! {
     allowed_race: u32,
     random_property: u32;
     kept: damage_school, spellppmrate_1, spellppmrate_2, spellppmrate_3, spellppmrate_4, spellppmrate_5, spellcategory_1, spellcategory_2, spellcategory_3, spellcategory_4, spellcategory_5,
-    lock_id, money_min, money_max,
+    lock_id, money_min, money_max, spellcharges_1, spellcharges_2, spellcharges_3, spellcharges_4,
+    spellcharges_5,
 }
 
 #[derive(SpacetimeType, Clone)]

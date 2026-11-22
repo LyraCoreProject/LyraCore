@@ -13,6 +13,10 @@ tests = [
     { path = "module/tests/conformance/item_loot.rs", function = "opening_a_clam_gives_its_item_and_money_and_destroys_the_emptied_clam", rung = "durable_module" },
     { path = "module/tests/conformance/item_loot.rs", function = "opening_an_item_that_is_not_lootable_is_refused", rung = "durable_module" },
     { path = "module/tests/conformance/item_loot.rs", function = "opening_a_lockbox_that_needs_lockpicking_answers_item_locked", rung = "durable_module" },
+    { path = "module/tests/conformance/item_equip.rs", function = "an_item_cast_sends_its_spell_go_before_it_destroys_the_used_up_item", rung = "durable_module" },
+    { path = "module/tests/item_cast.rs", function = "an_item_spell_without_charges_keeps_its_item", rung = "durable_module" },
+    { path = "module/tests/item_cast.rs", function = "an_item_without_charges_left_stays_and_refuses_its_use", rung = "durable_module" },
+    { path = "module/tests/item_cast.rs", function = "an_expendable_item_is_used_up_by_its_last_charge", rung = "durable_module" },
 ]
 
 [vmangos]
@@ -40,3 +44,15 @@ description = "A Transfer keeps an opened item's money but drops its remaining i
 path = "module/src/loot/item.rs"
 symbol = "open_item"
 evidence = "game_loot_money is a Character-owned Transfer table; game_corpse_loot rows are not."
+
+[[known_gaps]]
+description = "Mail and the Auction House drop an item's spent spell charges, so a mailed or auctioned item arrives with its template charges. Trade and Transfer keep them."
+path = "module/src/items/spell_charges.rs"
+symbol = "ItemSpellCharges"
+evidence = "vmangos keeps charges on the Item object through mail and auctions; game_mail and game_auction carry no spent charges, and their cross-Shard parcels would need a new row shape."
+
+[[known_gaps]]
+description = "An item use refused for no charges left answers \"can't do that right now\", not SPELL_FAILED_NO_CHARGES_REMAIN, and the client shows no charge count."
+path = "module/src/items/ops.rs"
+symbol = "apply_item_use_on"
+evidence = "vmangos Spell::CheckItems sends SPELL_FAILED_NO_CHARGES_REMAIN; apply_item_use_on maps every cast Gate refusal without an item refusal to ItemRefusal::NotRightNow, and the item query and ITEM_FIELD_SPELL_CHARGES send zero charges."

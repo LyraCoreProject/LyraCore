@@ -311,6 +311,7 @@ pub(crate) fn tough_jerky_template(entry: u32) -> ItemTemplate {
         food_type: 1,
         spellid_1: 50115,
         spelltrigger_1: 0,
+        spellcharges_1: -1,
         bonding: crate::items::bonding::NONE,
         ..ItemTemplate::blank(entry, "Tough Jerky")
     }

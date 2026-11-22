@@ -127,6 +127,7 @@ fn fields(shard: &Standalone) -> Value {
                     )
                     && !key.starts_with("spellppmrate_")
                     && !key.starts_with("spellcategory_")
+                    && !key.starts_with("spellcharges_")
             })
             .map(|(key, value)| {
                 let value = if key == "name" {

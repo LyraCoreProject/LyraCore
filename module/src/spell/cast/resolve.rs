@@ -41,7 +41,7 @@ pub(crate) struct CastRequest {
     pub client_initiated: bool,
     pub dest: Option<(f32, f32, f32)>,
     pub item_target: Option<u64>,
-    /// The item that started the cast, used up when the cast goes off unless the spell keeps it.
+    /// The item that started the cast; its spell charges decide what the cast takes from it.
     pub cast_item: Option<u64>,
     pub cooldown_category: Option<u32>,
 }
@@ -148,10 +148,12 @@ fn resolve_loaded_cast(
 
     check_cast_gates(ctx, &caster, spell, request, GateRun::Resolve(phase))?;
 
-    // vmangos Spell::TakeCastItem: the item goes only when the cast goes off.
-    let used_up_item = request
+    let cast_item = request
         .cast_item
-        .filter(|_| !crate::items::spell_keeps_item(ctx, spell_id));
+        .map(|item_guid| (item_guid, crate::items::cast_item_use_of(ctx, item_guid)));
+    let used_up_item = cast_item
+        .filter(|(_, item_use)| *item_use == crate::items::CastItemUse::UseUp)
+        .map(|(item_guid, _)| item_guid);
     // Scheduled crafts admit reagents before charging power; all products commit together.
     let craft = if effects.iter().any(|effect| effect.kind == E_CREATE_ITEM) {
         let mut plan = crate::items::ItemStoragePlan::read(ctx, caster_guid, caster.owner_identity);
@@ -164,11 +166,9 @@ fn resolve_loaded_cast(
         plan.check_trade_offers(ctx).map_err(String::from)?;
         Some(Craft { plan, used_up_item })
     } else {
-        if let Some(item_guid) = used_up_item {
-            crate::items::use_up_one(ctx, item_guid);
-        }
         None
     };
+    let plan_takes_cast_item = craft.is_some() && used_up_item.is_some();
 
     // Flush the cost before effects so self-heals read the charged caster row.
     if caster.is_player() && hdr.cost > 0 && !request.is_item_cast() && !queues_next_swing(effects)
@@ -189,6 +189,11 @@ fn resolve_loaded_cast(
     }
 
     run_spell_effects(ctx, spell, request, CastOrigin::Direct(phase), craft);
+
+    // vmangos Spell::TakeCastItem runs after SMSG_SPELL_GO and the effects.
+    if let Some((item_guid, item_use)) = cast_item.filter(|_| !plan_takes_cast_item) {
+        crate::items::take_cast_item(ctx, item_guid, item_use);
+    }
 
     let cast_hits_enemy = effects
         .iter()
@@ -2095,7 +2100,7 @@ fn caster_life_allows(is_player: bool, dead: bool, dead_callback: bool) -> bool 
     !dead || (dead_callback && !is_player)
 }
 
-// vmangos Spell::CheckItems: a cast item in trade or not carried fails the cast.
+// vmangos Spell::CheckItems: a cast item in trade, not carried or out of charges fails the cast.
 fn check_cast_item(
     ctx: &ReducerContext,
     caster_guid: u64,
@@ -2112,14 +2117,19 @@ fn check_cast_item(
         .is_some_and(|item| {
             item.owner_guid == caster_guid && crate::items::is_carried_slot(item.slot)
         });
-    if carried && !crate::trade::item_is_offered(ctx, caster_guid, item_guid) {
-        Ok(())
-    } else {
-        Err(CastGateRefusal::other(
+    if !carried || crate::trade::item_is_offered(ctx, caster_guid, item_guid) {
+        return Err(CastGateRefusal::other(
             CastRefusalReason::ItemGone,
             format!("the cast item {item_guid} is gone"),
-        ))
+        ));
     }
+    if !crate::items::item_charges_remain(ctx, item_guid) {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::NoChargesRemain,
+            format!("the cast item {item_guid} has no charges left"),
+        ));
+    }
+    Ok(())
 }
 
 /// vmangos `Spell::CheckItems`: effect 0's product must fit; its fewest count draws no roll.

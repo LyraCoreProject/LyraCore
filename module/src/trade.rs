@@ -727,11 +727,23 @@ fn run_trade_commit(
             let mut partner_guids =
                 crate::items::allocate_item_guids(ctx, acceptor_items.len() + partner_items.len())?;
             let acceptor_guids = partner_guids.split_off(acceptor_items.len());
+            let spent_charges = |items: &[crate::ItemInstance]| -> Vec<u32> {
+                items
+                    .iter()
+                    .map(|inst| crate::items::spent_charges(ctx, inst.guid))
+                    .collect()
+            };
+            let (acceptor_spent, partner_spent) = (
+                spent_charges(&acceptor_items),
+                spent_charges(&partner_items),
+            );
             // Remove both outgoing offers first; their freed slots count toward space.
             for inst in acceptor_items.iter().chain(partner_items.iter()) {
                 crate::ItemInstance::delete(ctx, inst.guid);
             }
-            for (inst, guid) in acceptor_items.iter().zip(partner_guids) {
+            for ((inst, guid), spent) in
+                acceptor_items.iter().zip(partner_guids).zip(acceptor_spent)
+            {
                 let tmpl = ctx
                     .db
                     .game_item_template()
@@ -746,8 +758,10 @@ fn run_trade_commit(
                     Some(guid),
                     &crate::items::ItemSnapshot::from(inst),
                 )?;
+                crate::items::record_spent_charges(ctx, guid, partner.guid, spent);
             }
-            for (inst, guid) in partner_items.iter().zip(acceptor_guids) {
+            for ((inst, guid), spent) in partner_items.iter().zip(acceptor_guids).zip(partner_spent)
+            {
                 let tmpl = ctx
                     .db
                     .game_item_template()
@@ -762,6 +776,7 @@ fn run_trade_commit(
                     Some(guid),
                     &crate::items::ItemSnapshot::from(inst),
                 )?;
+                crate::items::record_spent_charges(ctx, guid, acceptor.guid, spent);
             }
             let entities = ctx.db.game_world_entity();
             let mut acceptor_row = entities
