@@ -28,7 +28,10 @@ fn fields(shard: &Standalone) -> Value {
             .into_iter()
             .filter(|(key, _)| {
                 key != "entry"
-                    && key != "damage_school"
+                    && !matches!(
+                        key.as_str(),
+                        "damage_school" | "lock_id" | "money_min" | "money_max"
+                    )
                     && !key.starts_with("spellppmrate_")
                     && !key.starts_with("spellcategory_")
             })
