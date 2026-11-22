@@ -228,6 +228,8 @@ pub const CAST_FLAG_REFUSES_SELF_CAST: u32 = 0x0008_0000;
 pub const CAST_FLAG_NO_AURA_CANCEL: u32 = 0x0010_0000;
 // While a unit holds this spell's Aura, it cannot cast a shapeshift (vmangos Spell::CheckCast).
 pub const CAST_FLAG_LOCKS_FORM: u32 = 0x0020_0000;
+// A hit keeps its caster stealthed: vmangos ALLOW_WHILE_STEALTHED or a no-initial-threat attribute.
+pub const CAST_FLAG_HIT_KEEPS_STEALTH: u32 = 0x0040_0000;
 
 #[cfg(test)]
 mod tests {

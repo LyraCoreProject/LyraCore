@@ -96,6 +96,15 @@ pub(crate) fn stealth_detect_range(creature_level: u32, target_level: u32) -> f3
     (STEALTH_DETECT_BASE + advantage * STEALTH_DETECT_PER_LEVEL).min(STEALTH_DETECT_MAX)
 }
 
+/// Whether `viewer` sees the stealthed `unit`. A Character never does, as AOI hides it.
+pub(crate) fn detects_stealthed(viewer: &crate::WorldEntity, unit: &crate::WorldEntity) -> bool {
+    !viewer.is_player()
+        && viewer.map_id == unit.map_id
+        && viewer.instance_id == unit.instance_id
+        && crate::geometry::distance_3d(viewer.x, viewer.y, viewer.z, unit.x, unit.y, unit.z)
+            <= stealth_detect_range(viewer.level, unit.level)
+}
+
 pub(crate) fn flee_step(cx: f32, cy: f32, tx: f32, ty: f32, dist: f32) -> (f32, f32) {
     let (dx, dy) = (cx - tx, cy - ty);
     let len = (dx * dx + dy * dy).sqrt();
@@ -300,6 +309,19 @@ mod tests {
         assert_eq!(stealth_detect_range(1, 60), 5.0);
         assert_eq!(stealth_detect_range(99, 1), STEALTH_DETECT_MAX);
         assert_eq!(stealth_detect_range(10, 10), MIN_AGGRO_RADIUS);
+    }
+
+    #[test]
+    fn a_creature_detects_a_stealthed_unit_only_inside_its_detection_range() {
+        let unit_at = |guid: u64, x: f32, level: u32| crate::WorldEntity {
+            level,
+            ..crate::WorldEntity::blank(guid, 0, 0, [x, 0.0, 0.0, 0.0])
+        };
+        let mut rogue = unit_at(1, 0.0, 10);
+        rogue.type_mask |= lyracore_shared::constants::type_mask::PLAYER_BIT;
+        assert!(detects_stealthed(&unit_at(2, 15.0, 20), &rogue));
+        assert!(!detects_stealthed(&unit_at(2, 15.5, 20), &rogue));
+        assert!(!detects_stealthed(&rogue, &unit_at(2, 1.0, 60)));
     }
 
     #[test]

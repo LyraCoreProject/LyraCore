@@ -6,8 +6,8 @@ use lyracore_package_delta::fixture_ids::{
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::guid;
 use lyracore_shared::spell::taxonomy::{
-    A_CONTROL, A_STEALTH, CAST_FLAG_STEALTH_SAFE, E_HEAL, E_TRIGGER, M_STUN, P_MECHANIC, T_SELF,
-    T_TARGET_ANY,
+    A_CONTROL, A_STEALTH, CAST_FLAG_ALWAYS_HIT, CAST_FLAG_STEALTH_SAFE, E_DAMAGE, E_HEAL,
+    E_TRIGGER, M_STUN, P_MECHANIC, T_SELF, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 use support::{actor, number, Standalone};
 
@@ -214,6 +214,96 @@ fn a_stealth_safe_spells_trigger_child_cast_leaves_its_caster_stealthed() {
     cast_parent(&shard, PLAYER);
     assert!(health(&shard) > 5000, "the child heals");
     assert_eq!(auras(&shard, STEALTH), 1, "the caster stays stealthed");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_harmful_trigger_child_cast_breaks_stealth_on_a_creature_that_detects_its_caster() {
+    let shard = stage("trigger-child-hit-detected");
+    strike_wolf_from_stealth(&shard, "3");
+    assert_eq!(
+        auras(&shard, STEALTH),
+        0,
+        "a wolf 3 yards away detects the caster"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_harmful_trigger_child_cast_keeps_stealth_on_a_creature_that_cannot_detect_its_caster() {
+    let shard = stage("trigger-child-hit-undetected");
+    strike_wolf_from_stealth(&shard, "20");
+    assert_eq!(
+        auras(&shard, STEALTH),
+        1,
+        "a wolf 20 yards away cannot detect the caster"
+    );
+}
+
+// The wolf's stealth detection range is 5 yards, as its level is not above the caster's.
+fn strike_wolf_from_stealth(shard: &Standalone, distance_yd: &str) {
+    spell(shard, STEALTH, &[("duration_ms", &600_000u32)]);
+    effect(
+        shard,
+        STEALTH,
+        0,
+        &[("kind", &A_STEALTH), ("target", &T_SELF)],
+    );
+    spell(
+        shard,
+        PARENT,
+        &[
+            ("cast_flags", &CAST_FLAG_STEALTH_SAFE),
+            ("range_yd", &40u32),
+        ],
+    );
+    spell(
+        shard,
+        CHILD,
+        &[
+            ("cast_flags", &CAST_FLAG_ALWAYS_HIT),
+            ("is_negative", &true),
+            ("school_mask", &1u8),
+        ],
+    );
+    trigger_effect(shard, 0, T_TARGET_ANY);
+    effect(
+        shard,
+        CHILD,
+        0,
+        &[
+            ("kind", &E_DAMAGE),
+            ("base_points", &10),
+            ("target", &T_TARGET_ENEMY),
+        ],
+    );
+    learn_parent(shard);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &[PLAYER, &TEST_WOLF_ENTRY.to_string(), distance_yd],
+    );
+    let wolf = shard
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY} \
+             AND guid != {WOLF_GUID}"
+        ))
+        .pop()
+        .expect("the spawned wolf must exist")["guid"]
+        .clone();
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET simulation_indexed = false, level = 1 WHERE guid = {wolf}"
+    ));
+    shard.assert_call("debug_force_cast", &[PLAYER, &STEALTH.to_string()]);
+    assert_eq!(auras(shard, STEALTH), 1);
+
+    cast_parent(shard, &wolf);
+    let wolf_row = &shard.query_rows(&format!(
+        "SELECT health, max_health FROM game_world_entity WHERE guid = {wolf}"
+    ))[0];
+    assert!(
+        number::<u32>(wolf_row, "health") < number::<u32>(wolf_row, "max_health"),
+        "the child hits the wolf"
+    );
 }
 
 fn stage(name: &str) -> Standalone {
