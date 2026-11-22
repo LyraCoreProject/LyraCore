@@ -12,8 +12,9 @@ We build complex things as simply as possible, and we look for ways to remove co
   source, tests, scripts and configuration. Complete its
   [comment review](CODING_STANDARDS.md#comment-review) before handoff.
 - CI runs formatting checks, clippy and fast tests on every PR push. Durable and Native Host checks
-  run only on PRs with the `full-ci` label, subject to path filters. Each run uses scarce Boat starts:
-  add the label once review is done, and push each round of fixes as one push. Do not run them
+  run once when a PR gets the `full-ci` label, subject to path filters, and later pushes skip them.
+  Each run uses scarce Boat starts: add the label once, after review and the last push. To rerun
+  them after a fix, remove the label and add it again. Do not run them
   before you open or update a PR; push, then fix what CI reports. Run `cargo fmt --all` to format.
   Run one test locally only to reproduce a CI failure, or to see a new test fail before your fix.
 - [`docs/README.md`](docs/README.md) lists every document and when to read it. Open a document when
