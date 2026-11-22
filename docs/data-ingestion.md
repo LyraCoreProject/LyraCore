@@ -158,8 +158,10 @@ as described by `LootGroup::Roll` in [LootMgr.cpp at commit
 464179081673cfd240f7ffe7f0daf96bca0b5a70](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/LootMgr.cpp#L1092-L1128).
 Group-zero reference children roll independently. Each reference processes its selected group or
 whole template `maxcount` times, with separate groups for each roll. Largest-remainder allocation
-keeps each group's basis-point total equal to its intended share.
-Runtime conditions, variable counts and quest-only skinning or fishing drops
+keeps each group's basis-point total equal to its intended share. An item row keeps its
+`mincountOrRef`..`maxcount` stack range, and rows that `LootStoreItem::IsValid` rejects (a zero
+`mincountOrRef`, or a `maxcount` below it) are skipped.
+Runtime conditions and quest-only skinning or fishing drops
 appear in the Compatibility Manifest. Item-container and disenchant tables have no current world
 import path; the manifest counts them as unsupported.
 

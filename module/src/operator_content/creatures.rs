@@ -695,6 +695,7 @@ fn replace_creature_loot(
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
+            min_count: 0,
         }
     );
     let old: Vec<_> = old
@@ -739,6 +740,7 @@ fn replace_pickpocket_loot(
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
+            min_count: 0,
         }
     );
     let old: Vec<_> = old
@@ -786,6 +788,7 @@ fn replace_skinning_loot(
             chance_bp: row.chance_bp,
             count: row.count,
             group_id: row.group_id,
+            min_count: 0,
         }
     );
     let old: Vec<_> = old

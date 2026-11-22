@@ -130,6 +130,8 @@ pub struct CreatureLoot {
     pub group_id: u32,
     #[default(false)]
     pub quest_only: bool,
+    #[default(0)]
+    pub min_count: u32,
 }
 
 pub(crate) fn loot_drops(chance_bp: u32, roll_0_9999: u32) -> bool {
@@ -168,6 +170,8 @@ pub(crate) struct LootRow {
     pub(crate) item_entry: u32,
     // Basis points; a nonzero group_id uses it as a weight within the group.
     pub(crate) chance_bp: u32,
+    // Zero keeps the stack fixed at `count`, as rows stored before stack rolls do.
+    pub(crate) min_count: u32,
     pub(crate) count: u32,
     // Zero is independent; nonzero selects a pool with at most one drop.
     pub(crate) group_id: u32,
@@ -182,17 +186,107 @@ pub(crate) struct LootDrop {
 }
 
 impl LootRow {
-    fn drop(self) -> LootDrop {
+    fn stack_range(self) -> (u32, u32) {
+        let maximum = self.count.max(1);
+        match self.min_count {
+            0 => (maximum, maximum),
+            minimum => (minimum.min(maximum), maximum),
+        }
+    }
+
+    // vmangos LootItem draws urand(mincountOrRef, maxcount) as the row drops.
+    fn drop(self, ctx: &ReducerContext, source_guid: u64) -> LootDrop {
+        let (minimum, maximum) = self.stack_range();
+        let count = if minimum == maximum {
+            minimum
+        } else {
+            minimum + source_draw(ctx, source_guid) % (maximum - minimum + 1)
+        };
         LootDrop {
             item_entry: self.item_entry,
-            count: self.count.max(1),
+            count,
             quest_only: self.quest_only,
         }
     }
 }
 
+impl From<CreatureLoot> for LootRow {
+    fn from(row: CreatureLoot) -> Self {
+        Self {
+            item_entry: row.item_entry,
+            chance_bp: row.chance_bp,
+            min_count: row.min_count,
+            count: row.count,
+            group_id: row.group_id,
+            quest_only: row.quest_only,
+        }
+    }
+}
+
+impl From<GamePickpocketLoot> for LootRow {
+    fn from(row: GamePickpocketLoot) -> Self {
+        Self {
+            item_entry: row.item_entry,
+            chance_bp: row.chance_bp,
+            min_count: row.min_count,
+            count: row.count,
+            group_id: row.group_id,
+            quest_only: row.quest_only,
+        }
+    }
+}
+
+impl From<GameObjectLoot> for LootRow {
+    fn from(row: GameObjectLoot) -> Self {
+        Self {
+            item_entry: row.item_entry,
+            chance_bp: row.chance_bp,
+            min_count: row.min_count,
+            count: row.count,
+            group_id: row.group_id,
+            quest_only: row.quest_only,
+        }
+    }
+}
+
+impl From<GameSkinningLoot> for LootRow {
+    fn from(row: GameSkinningLoot) -> Self {
+        Self {
+            item_entry: row.item_entry,
+            chance_bp: row.chance_bp,
+            min_count: row.min_count,
+            count: row.count,
+            group_id: row.group_id,
+            quest_only: false,
+        }
+    }
+}
+
+impl From<GameFishingLoot> for LootRow {
+    fn from(row: GameFishingLoot) -> Self {
+        Self {
+            item_entry: row.item_entry,
+            chance_bp: row.chance_bp,
+            min_count: row.min_count,
+            count: row.count,
+            group_id: row.group_id,
+            quest_only: false,
+        }
+    }
+}
+
+fn source_draw(ctx: &ReducerContext, source_guid: u64) -> u32 {
+    crate::conformance_rolls::draw(
+        ctx,
+        crate::conformance_rolls::RollStream::Target(source_guid),
+    )
+}
+
+/// Draws on `source_guid`'s stream each ungrouped row's chance, then each group's pick; a winner
+/// draws its stack next.
 pub(crate) fn roll_loot_rows(
     ctx: &ReducerContext,
+    source_guid: u64,
     rows: impl IntoIterator<Item = LootRow>,
 ) -> Vec<LootDrop> {
     let mut winners = Vec::new();
@@ -200,8 +294,8 @@ pub(crate) fn roll_loot_rows(
         std::collections::BTreeMap::new();
     for row in rows {
         if row.group_id == 0 {
-            if loot_drops(row.chance_bp, ctx.random::<u32>() % 10000) {
-                winners.push(row.drop());
+            if loot_drops(row.chance_bp, source_draw(ctx, source_guid) % 10000) {
+                winners.push(row.drop(ctx, source_guid));
             }
         } else {
             grouped.entry(row.group_id).or_default().push(row);
@@ -209,8 +303,8 @@ pub(crate) fn roll_loot_rows(
     }
     for members in grouped.into_values() {
         let weights: Vec<u32> = members.iter().map(|row| row.chance_bp).collect();
-        if let Some(i) = group_pick(&weights, ctx.random::<u32>() % 10000) {
-            winners.push(members[i].drop());
+        if let Some(i) = group_pick(&weights, source_draw(ctx, source_guid) % 10000) {
+            winners.push(members[i].drop(ctx, source_guid));
         }
     }
     winners
@@ -437,14 +531,8 @@ pub(crate) fn roll_creature_loot(
         .game_creature_loot()
         .by_creature()
         .filter(&creature_entry)
-        .map(|r| LootRow {
-            item_entry: r.item_entry,
-            chance_bp: r.chance_bp,
-            count: r.count,
-            group_id: r.group_id,
-            quest_only: r.quest_only,
-        });
-    let winners = roll_loot_rows(ctx, rows);
+        .map(LootRow::from);
+    let winners = roll_loot_rows(ctx, corpse_guid, rows);
     insert_corpse_rows(ctx, corpse_guid, winners)
 }
 
@@ -460,6 +548,8 @@ pub struct GamePickpocketLoot {
     pub count: u32,
     pub group_id: u32,
     pub quest_only: bool,
+    #[default(0)]
+    pub min_count: u32,
 }
 
 #[table(accessor = game_gameobject_loot, public, index(accessor = by_loot, btree(columns = [loot_id])))]
@@ -473,6 +563,8 @@ pub struct GameObjectLoot {
     pub count: u32,
     pub group_id: u32,
     pub quest_only: bool,
+    #[default(0)]
+    pub min_count: u32,
 }
 
 #[table(accessor = game_skinning_loot, public, index(accessor = by_skin, btree(columns = [skin_loot_id])))]
@@ -485,6 +577,8 @@ pub struct GameSkinningLoot {
     pub chance_bp: u32,
     pub count: u32,
     pub group_id: u32,
+    #[default(0)]
+    pub min_count: u32,
 }
 
 #[table(accessor = game_fishing_loot, public, index(accessor = by_zone, btree(columns = [zone_id])))]
@@ -497,6 +591,8 @@ pub struct GameFishingLoot {
     pub chance_bp: u32,
     pub count: u32,
     pub group_id: u32,
+    #[default(0)]
+    pub min_count: u32,
 }
 
 pub(crate) fn roll_pickpocket_loot(ctx: &ReducerContext, creature_entry: u32, target_guid: u64) {
@@ -505,14 +601,8 @@ pub(crate) fn roll_pickpocket_loot(ctx: &ReducerContext, creature_entry: u32, ta
         .game_pickpocket_loot()
         .by_creature()
         .filter(&creature_entry)
-        .map(|r| LootRow {
-            item_entry: r.item_entry,
-            chance_bp: r.chance_bp,
-            count: r.count,
-            group_id: r.group_id,
-            quest_only: r.quest_only,
-        });
-    let winners = roll_loot_rows(ctx, rows);
+        .map(LootRow::from);
+    let winners = roll_loot_rows(ctx, target_guid, rows);
     if winners.is_empty() {
         return;
     }
@@ -884,6 +974,23 @@ mod tests {
         let eq = [2500u32, 2500, 2500, 2500];
         assert!(group_pick(&eq, 9999).is_some());
         assert_eq!(group_pick(&eq, 2500), Some(1));
+    }
+
+    #[test]
+    fn a_stack_spans_the_row_minimum_to_its_count_and_zero_keeps_it_fixed() {
+        let row = |min_count, count| LootRow {
+            item_entry: 25,
+            chance_bp: 10000,
+            min_count,
+            count,
+            group_id: 0,
+            quest_only: false,
+        };
+        assert_eq!(row(1, 3).stack_range(), (1, 3));
+        assert_eq!(row(2, 2).stack_range(), (2, 2));
+        assert_eq!(row(0, 3).stack_range(), (3, 3));
+        assert_eq!(row(4, 3).stack_range(), (3, 3));
+        assert_eq!(row(0, 0).stack_range(), (1, 1));
     }
 
     #[test]

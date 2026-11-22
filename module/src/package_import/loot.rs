@@ -325,6 +325,7 @@ fn blank_pickpocket_loot(id: u64) -> GamePickpocketLoot {
         count: 0,
         group_id: 0,
         quest_only: false,
+        min_count: 0,
     }
 }
 
@@ -367,6 +368,7 @@ fn blank_gameobject_loot(id: u64) -> GameObjectLoot {
         count: 0,
         group_id: 0,
         quest_only: false,
+        min_count: 0,
     }
 }
 
@@ -408,6 +410,7 @@ fn blank_skinning_loot(id: u64) -> GameSkinningLoot {
         chance_bp: 0,
         count: 0,
         group_id: 0,
+        min_count: 0,
     }
 }
 
@@ -448,6 +451,7 @@ fn blank_fishing_loot(id: u64) -> GameFishingLoot {
         chance_bp: 0,
         count: 0,
         group_id: 0,
+        min_count: 0,
     }
 }
 

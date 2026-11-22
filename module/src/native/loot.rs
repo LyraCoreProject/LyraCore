@@ -46,10 +46,12 @@ fn open(ctx: &ReducerContext, connection: ConnectionId, target: u64) {
     }
 }
 
-fn loot_error(target: u64, failure: LootMethodError) -> ServerOpcodeMessage {
-    ServerOpcodeMessage::SMSG_LOOT_RESPONSE(Box::new(codec::build_loot_error_response(
-        target, failure,
-    )))
+fn loot_error(target: u64, failure: LootMethodError, refusal: LootRefusal) -> Rollback {
+    let (opcode, body) = codec::build_loot_error_response(target, failure);
+    Rollback::replies(
+        vec![lyracore_protocol::world::Packet { opcode, body }],
+        refusal.as_tag(),
+    )
 }
 
 fn release_response(target: u64) -> ServerOpcodeMessage {
@@ -62,7 +64,7 @@ fn inventory_failure(failure: SMSG_INVENTORY_CHANGE_FAILURE) -> ServerOpcodeMess
     ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(failure))
 }
 
-fn refusal(target: u64, refusal: LootRefusal) -> Rollback {
+fn open_refusal(target: u64, refusal: LootRefusal) -> Rollback {
     let failure = match refusal {
         LootRefusal::LootTagIneligible => LootMethodError::DidntKill,
         LootRefusal::OutOfRange => LootMethodError::TooFar,
@@ -79,36 +81,38 @@ fn refusal(target: u64, refusal: LootRefusal) -> Rollback {
         | LootRefusal::RecipientUnavailable
         | LootRefusal::RecipientInventoryFull => return Rollback::silent(refusal.as_tag()),
     };
-    Rollback::reply(loot_error(target, failure), refusal.as_tag())
+    loot_error(target, failure, refusal)
 }
 
 // Replies follow vmangos HandleAutostoreLootItemOpcode; a failed store leaves the window open.
 fn take_refusal(target: u64, refusal: LootRefusal) -> Rollback {
     let gameobject = guid::is_gameobject(target);
-    let message = match refusal {
+    let reply = |message| Rollback::reply(message, refusal.as_tag());
+    match refusal {
         LootRefusal::NoLootSource | LootRefusal::OutOfRange if gameobject => {
-            release_response(target)
+            reply(release_response(target))
         }
         LootRefusal::NoLootSource
         | LootRefusal::LootTagIneligible
-        | LootRefusal::ItemUnavailable => loot_error(target, LootMethodError::DidntKill),
-        LootRefusal::OutOfRange => loot_error(target, LootMethodError::TooFar),
-        LootRefusal::NothingToLoot => inventory_failure(codec::build_already_looted()),
-        LootRefusal::InventoryFull => inventory_failure(codec::build_inventory_refusal(
+        | LootRefusal::ItemUnavailable => loot_error(target, LootMethodError::DidntKill, refusal),
+        LootRefusal::OutOfRange => loot_error(target, LootMethodError::TooFar, refusal),
+        LootRefusal::NothingToLoot => reply(inventory_failure(codec::build_already_looted())),
+        LootRefusal::InventoryFull => reply(inventory_failure(codec::build_inventory_refusal(
             ItemRefusal::InventoryFull,
             0,
             0,
-        )),
-        LootRefusal::UniqueItemHeld => inventory_failure(codec::build_cant_carry_more_of_this()),
+        ))),
+        LootRefusal::UniqueItemHeld => {
+            reply(inventory_failure(codec::build_cant_carry_more_of_this()))
+        }
         LootRefusal::LooterUnavailable
         | LootRefusal::LooterDead
         | LootRefusal::StorageRefused
         | LootRefusal::RollUnavailable
         | LootRefusal::NotMasterLooter
         | LootRefusal::RecipientUnavailable
-        | LootRefusal::RecipientInventoryFull => return Rollback::silent(refusal.as_tag()),
-    };
-    Rollback::reply(message, refusal.as_tag())
+        | LootRefusal::RecipientInventoryFull => Rollback::silent(refusal.as_tag()),
+    }
 }
 
 pub(super) fn receive(
@@ -129,7 +133,7 @@ pub(super) fn receive(
             super::actor(ctx, guid)?;
             let target = c.guid.guid();
             crate::loot::open_creature_corpse(ctx, guid, target)
-                .map_err(|reason| refusal(target, reason))?;
+                .map_err(|reason| open_refusal(target, reason))?;
             let money = ctx
                 .db
                 .game_world_entity()
@@ -170,8 +174,9 @@ pub(super) fn receive(
             if current == 0 {
                 return Ok(());
             }
+            // vmangos HandleLootMoneyOpcode answers no refusal.
             crate::loot::claim_money(ctx, guid, current)
-                .map_err(|reason| refusal(current, reason))?;
+                .map_err(|reason| Rollback::silent(reason.as_tag()))?;
             for viewer in ctx.db.game_native_player().by_open_loot().filter(current) {
                 super::send(
                     ctx,
@@ -188,14 +193,28 @@ pub(super) fn receive(
             if current == 0 {
                 return Ok(());
             }
-            crate::loot::take_item(ctx, guid, current, c.item_slot)
+            let taken = crate::loot::take_item(ctx, guid, current, c.item_slot)
                 .map_err(|reason| take_refusal(current, reason))?;
-            Ok(super::send(
-                ctx,
-                connection,
-                ServerOpcodeMessage::SMSG_LOOT_REMOVED(codec::build_loot_removed(c.item_slot)),
-                false,
-            )?)
+            // Every open window loses the slot; other needers of a quest row hold their own clones.
+            let viewers: Vec<ConnectionId> = if taken.quest_only {
+                vec![connection]
+            } else {
+                ctx.db
+                    .game_native_player()
+                    .by_open_loot()
+                    .filter(current)
+                    .map(|viewer| viewer.connection_id)
+                    .collect()
+            };
+            for viewer in viewers {
+                super::send(
+                    ctx,
+                    viewer,
+                    ServerOpcodeMessage::SMSG_LOOT_REMOVED(codec::build_loot_removed(taken.slot)),
+                    false,
+                )?;
+            }
+            Ok(())
         }
         ClientOpcodeMessage::CMSG_LOOT_RELEASE(_) => {
             super::actor(ctx, guid)?;

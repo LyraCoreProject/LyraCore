@@ -169,7 +169,7 @@ fn populated(name: &str) -> (Standalone, PathBuf, String, String) {
         &shard,
         json!([{"setVendorOffers": {"creature_entry": 620, "offers": [{"item_entry": OPERATOR_ITEM, "max_count": 0}]}}]),
     );
-    shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (20,620,{OPERATOR_ITEM},10000,1,0,false)"));
+    shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only,min_count) VALUES (20,620,{OPERATOR_ITEM},10000,1,0,false,0)"));
     (shard, path, first, second)
 }
 
@@ -264,7 +264,7 @@ fn populated_items_reimport_refuses_retained_row_id_collisions_before_writes() {
         let sql = if table == "game_npc_vendor" {
             format!("INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count,restock_seconds,stock_flags) VALUES (1,620,{OPERATOR_ITEM},0,0,0,0)")
         } else {
-            format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (1,620,{OPERATOR_ITEM},10000,1,0,false)")
+            format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only,min_count) VALUES (1,620,{OPERATOR_ITEM},10000,1,0,false,0)")
         };
         shard.assert_sql(&sql);
         let before = snapshot(&shard);
