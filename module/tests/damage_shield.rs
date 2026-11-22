@@ -3,6 +3,8 @@ mod support;
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{A_DAMAGE_SHIELD, T_SELF};
+use serde_json::json;
+use std::time::{Duration, Instant};
 use support::{
     event_rows, fence_subscription, subscribe_with_fence, Standalone, TableSubscription,
 };
@@ -18,6 +20,9 @@ const REFLECTED: u32 = 7;
 const OUT_OF_REACH_LEVEL: u32 = 60;
 const AVOIDED_SWINGS: usize = 2;
 const SWING_EVENTS: &str = "SELECT * FROM game_combat_event_live";
+const SMSG_SPELLORDAMAGE_IMMUNE: u64 = 0x263;
+const WOLF_SWING_ATTEMPTS: usize = 20;
+const PACKET_WAIT: Duration = Duration::from_secs(10);
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -68,6 +73,60 @@ fn a_connecting_white_swing_takes_the_bearers_shield_damage_and_an_avoided_one_d
             .collect::<Vec<_>>(),
         [REFLECTED.to_string()],
         "reflection does not consume the shield"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_whose_template_is_immune_to_the_shields_school_takes_no_shield_damage() {
+    let mut standalone = Standalone::start("damage-shield-template-immunity");
+    let wolf = stage(&mut standalone);
+    let mut wire = standalone.connect_reducers(&["SELECT * FROM game_native_packet"]);
+    wire.call("native_world_open", json!([42])).unwrap();
+    wire.call("debug_native_enter_world", json!([PLAYER]))
+        .unwrap();
+    standalone.assert_call("debug_force_cast_at", &["1", &THORNS.to_string(), "1"]);
+    standalone.assert_sql(&format!(
+        "UPDATE game_creature_template SET school_immune_mask = {NATURE} \
+         WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    set_level(&standalone, wolf, OUT_OF_REACH_LEVEL);
+    let events = subscribe_with_fence(&standalone, &[SWING_EVENTS]);
+    wire.drain_packets();
+    standalone.assert_call("debug_engage", &[&wolf.to_string(), "1"]);
+
+    for _ in 0..WOLF_SWING_ATTEMPTS {
+        if wolf_damage(&events, wolf) > 0 {
+            break;
+        }
+        standalone.assert_sql(&format!(
+            "UPDATE game_melee_attack SET last_swing_ms = 1 WHERE attacker_guid = {wolf}"
+        ));
+        standalone.assert_call("debug_advance_roll_batch", &["4"]);
+        fence_subscription(&standalone, &events);
+    }
+    assert!(wolf_damage(&events, wolf) > 0, "a wolf swing connects");
+    assert_eq!(
+        health(&standalone, wolf),
+        WOLF_HEALTH,
+        "the shield deals the immune wolf no damage"
+    );
+    let immune = format!("{:016x}", PLAYER.swap_bytes()) + &format!("{:016x}", wolf.swap_bytes());
+    let reports_immunity = |row: &str| {
+        let packet: serde_json::Value = serde_json::from_str(row).unwrap();
+        packet[2][1] == SMSG_SPELLORDAMAGE_IMMUNE
+            && packet[3]
+                .as_str()
+                .is_some_and(|body| body.to_ascii_lowercase().starts_with(&immune))
+    };
+    let deadline = Instant::now() + PACKET_WAIT;
+    let mut packets = wire.wait_for_packets(Duration::from_secs(1)).unwrap();
+    while !packets.iter().any(|row| reports_immunity(row.get())) && Instant::now() < deadline {
+        packets.extend(wire.wait_for_packets(Duration::from_secs(1)).unwrap());
+    }
+    assert!(
+        packets.iter().any(|row| reports_immunity(row.get())),
+        "the bearer reports the immunity with SMSG_SPELLORDAMAGE_IMMUNE"
     );
 }
 

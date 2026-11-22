@@ -438,3 +438,8 @@ rung = "durable_module"
 path = "module/tests/threat_victim_margin.rs"
 function = "a_creature_turns_from_a_victim_immune_to_its_melee_to_a_free_source"
 rung = "durable_module"
+
+[[tests]]
+path = "module/tests/damage_shield.rs"
+function = "a_creature_whose_template_is_immune_to_the_shields_school_takes_no_shield_damage"
+rung = "durable_module"

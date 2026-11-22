@@ -775,7 +775,7 @@ pub(crate) fn roll_swing_with_range(
     range: (u32, u32),
     strike: Option<QueuedStrike>,
 ) -> (u32, AttackOutcome, u32) {
-    // vmangos CalculateMeleeDamage; a queued strike is a Spell, and Spells test no school immunity.
+    // CalculateMeleeDamage; a queued strike resolves as a Spell; Spell immunity is a known gap.
     if strike.is_none() && crate::spell::immune_to_school(ctx, target, SCHOOL_MASK_PHYSICAL) {
         return (0, AttackOutcome::Immune, 0);
     }

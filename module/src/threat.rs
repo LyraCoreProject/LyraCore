@@ -239,27 +239,27 @@ pub(crate) fn source_standing(
 ) -> SourceStanding {
     if !crate::combat::may_harm(ctx, creature, source) {
         SourceStanding::Unattackable
-    } else if holds_low_priority_aura(ctx, source.guid)
-        || crate::spell::immune_to_school(ctx, source, SCHOOL_MASK_PHYSICAL)
-    {
+    } else if is_low_priority(ctx, source) {
         SourceStanding::LowPriority
     } else {
         SourceStanding::Free
     }
 }
 
-fn holds_low_priority_aura(ctx: &ReducerContext, guid: u64) -> bool {
+fn is_low_priority(ctx: &ReducerContext, source: &WorldEntity) -> bool {
     let spells = ctx.db.game_spell();
-    crate::spell::auras_on(ctx, guid).any(|aura| {
-        spells.spell_id().find(aura.spell_id).is_some_and(|spell| {
-            makes_low_priority(
-                spell.negative(),
-                spell.aura_interrupt,
-                aura.eff_kind,
-                aura.eff_p0,
-            )
+    crate::spell::template_immune_to_school(ctx, source, SCHOOL_MASK_PHYSICAL)
+        || crate::spell::auras_on(ctx, source.guid).any(|aura| {
+            crate::spell::aura_refuses_damage(ctx, &aura, SCHOOL_MASK_PHYSICAL)
+                || spells.spell_id().find(aura.spell_id).is_some_and(|spell| {
+                    makes_low_priority(
+                        spell.negative(),
+                        spell.aura_interrupt,
+                        aura.eff_kind,
+                        aura.eff_p0,
+                    )
+                })
         })
-    })
 }
 
 // vmangos `IsTargetSecondaryThreatFocus`; confuse, pacify and charm import as one control class.
