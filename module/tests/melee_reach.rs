@@ -53,10 +53,14 @@ impl Swing {
         let wolf = entity(&self.shard, self.wolf);
         let display_id: u32 = number(&wolf, "display_id");
         let scale: f32 = number(&wolf, "scale_x");
-        self.shard.assert_sql(&format!(
-            "INSERT INTO game_display_combat_reach (display_id, combat_reach, display_scale) \
-             VALUES ({display_id}, {combat_reach}, {scale})"
-        ));
+        self.shard.insert_row(
+            "game_display_combat_reach",
+            &[
+                ("display_id", &display_id),
+                ("combat_reach", &combat_reach),
+                ("display_scale", &scale),
+            ],
+        );
     }
 
     fn subscribe(&self) -> TableSubscription {

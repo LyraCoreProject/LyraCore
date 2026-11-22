@@ -119,11 +119,16 @@ impl Fight {
             "SELECT display_id, scale_x FROM game_world_entity WHERE guid = {}",
             self.wolf
         ))[0];
-        self.shard.assert_sql(&format!(
-            "INSERT INTO game_display_combat_reach (display_id, combat_reach, display_scale) \
-             VALUES ({}, {combat_reach}, {})",
-            wolf["display_id"], wolf["scale_x"]
-        ));
+        let display_id: u32 = number(wolf, "display_id");
+        let scale: f32 = number(wolf, "scale_x");
+        self.shard.insert_row(
+            "game_display_combat_reach",
+            &[
+                ("display_id", &display_id),
+                ("combat_reach", &combat_reach),
+                ("display_scale", &scale),
+            ],
+        );
     }
 
     fn challenge(&self, threat: i64) -> String {

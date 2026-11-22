@@ -710,9 +710,9 @@ _Avoid_: weapon damage spell, special attack
 **Melee Reach**:
 The flat distance inside which one unit's melee swing reaches another: both units' combat reach
 from their display, plus 4/3 yd, and at least 5 yd. The height difference must stay under 6 yd.
-When both units move and one is a Character, the reach grows by 2.66 yd, and a moving Character
-reaches at least 9 yd. Swings, the chase stop and the 110% threat margin share it. See
-`module/src/combat/reach.rs`.
+When both units move and one is a Character, the reach grows by 2.66 yd. A moving Character that
+attacks a moving unit other than a Character reaches at least 9 yd. Swings, the chase stop and the
+110% threat margin share it. See `module/src/combat/reach.rs`.
 _Avoid_: melee range, attack distance
 
 **Swing Error**:

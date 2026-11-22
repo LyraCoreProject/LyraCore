@@ -831,7 +831,7 @@ const PET_TRAIL_YD: f32 = 4.0;
 
 const _: () = assert!(
     PET_FOLLOW_BAND_SQ > MELEE_REACH_FLOOR_YD * MELEE_REACH_FLOOR_YD,
-    "the follow band must sit outside melee range, or a trailing pet jitters at the boundary"
+    "the follow band must sit outside Melee Reach, or a trailing pet jitters at the boundary"
 );
 
 enum PetAction {
@@ -1144,7 +1144,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
     visited
 }
 
-// vmangos chases to the reach without leeway (`Unit::GetMaxChaseDistance`).
+// vmangos stops on `CanReachWithMeleeAutoAttack`; this stop needs a standing victim, so no leeway.
 fn in_chase_reach(c: &Pursuit) -> bool {
     let still = |at: Point, combat_reach, is_character| MeleeBody {
         x: at.x,

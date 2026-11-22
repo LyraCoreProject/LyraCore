@@ -3,14 +3,14 @@ use spacetimedb::ReducerContext;
 use crate::creatures::catalogue::game_display_combat_reach;
 use crate::WorldEntity;
 
-// vmangos d9173eca DEFAULT_COMBAT_REACH, BASE_MELEERANGE_OFFSET, ATTACK_DISTANCE and LEEWAY_BONUS_RANGE.
+// vmangos DEFAULT_COMBAT_REACH, BASE_MELEERANGE_OFFSET, ATTACK_DISTANCE and LEEWAY_BONUS_RANGE.
 pub(crate) const DEFAULT_COMBAT_REACH_YD: f32 = 1.5;
 const BASE_MELEERANGE_OFFSET_YD: f32 = 4.0 / 3.0;
 pub(crate) const MELEE_REACH_FLOOR_YD: f32 = 5.0;
 const LEEWAY_BONUS_YD: f32 = 2.66;
 // UNIT_DEFAULT_MELEE_Z_LIMIT; vmangos compares it with the squared height difference.
 const MELEE_Z_LIMIT_SQ: f32 = 36.0;
-// A moving Character also reaches a creature whose position advances once per movement tick.
+// Deliberate Deviation `moving_character_reach_floor`, conformance/features/combat/auto_attack.toml
 const CHARACTER_PURSUIT_REACH_YD: f32 = 9.0;
 const LEEWAY_WINDOW_MS: u32 = 1200;
 
@@ -42,7 +42,7 @@ pub(crate) fn moved_within_leeway_window(last_move_ms: u32, now_ms: u32) -> bool
     now_ms.wrapping_sub(last_move_ms) < LEEWAY_WINDOW_MS
 }
 
-/// vmangos `Unit::UpdateModelData`: the display's reach, scaled by the unit's scale over the display's.
+/// The display's reach scaled by the unit's scale over the display's (`Unit::UpdateModelData`).
 pub(crate) fn combat_reach(ctx: &ReducerContext, unit: &WorldEntity) -> f32 {
     let reaches = ctx.db.game_display_combat_reach();
     let Some(display) = reaches.display_id().find(unit.display_id) else {
@@ -69,7 +69,7 @@ pub(crate) fn melee_reach_yd(attacker: &MeleeBody, target: &MeleeBody) -> f32 {
         + BASE_MELEERANGE_OFFSET_YD)
         .max(MELEE_REACH_FLOOR_YD);
     let leeway = (attacker.is_character || target.is_character) && attacker.moving && target.moving;
-    match (leeway, attacker.is_character) {
+    match (leeway, attacker.is_character && !target.is_character) {
         (false, _) => reach,
         (true, false) => reach + LEEWAY_BONUS_YD,
         (true, true) => (reach + LEEWAY_BONUS_YD).max(CHARACTER_PURSUIT_REACH_YD),
@@ -170,6 +170,12 @@ mod tests {
                 moving(creature(0.0, 1.5)),
                 moving(creature(0.0, 1.5)),
                 5.0,
+            ),
+            (
+                "two moving Characters",
+                moving(character(0.0)),
+                moving(character(0.0)),
+                5.0 + 2.66,
             ),
         ];
         for (case, attacker, target, reach) in cases {

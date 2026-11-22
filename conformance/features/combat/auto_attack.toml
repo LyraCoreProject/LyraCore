@@ -7,7 +7,9 @@ replies = ["0x0143", "0x0144", "0x014A"]
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["white_melee_outcomes"]
-deliberate_deviations = []
+deliberate_deviations = [
+  { id = "moving_character_reach_floor", result = "A moving Character that swings at a moving unit other than a Character reaches at least 9 yd. vmangos gives a normal pair 5 + 2.66 = 7.66 yd.", reason = "A creature's stored position moves to its rendered point once per 0.5 s movement tick, and swings run every 100 ms. A creature that flees at run speed is then up to 3.5 yd behind where the client draws it, so a Character at its rendered back needs 5 + 3.5 yd. A Character's position follows its own client movement, so two Characters keep 7.66 yd.", source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Object.cpp#L1890" },
+]
 prerequisites = []
 tests = []
 
@@ -36,3 +38,9 @@ description = "Other white melee contexts retain the legacy Character dodge form
 path = "module/src/combat/folds.rs"
 symbol = "white_swing_table"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp"
+
+[[known_gaps]]
+description = "Melee leeway applies when both units moved within the last 1.2 s. vmangos requires both units to move without walking at that instant (IsMovingButNotWalking), so a unit that just stopped or walks keeps the leeway here."
+path = "module/src/combat/reach.rs"
+symbol = "moved_within_leeway_window"
+evidence = "Source reading, not measured. At d9173eca, Object.cpp WorldObject::GetLeewayBonusRangeForTargets checks IsMovingButNotWalking on both units for auto attacks: https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Object.cpp#L1890"
