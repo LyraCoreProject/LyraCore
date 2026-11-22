@@ -4420,7 +4420,7 @@ def check_inventory(host):
     assert (0x197, struct.pack('<I', 50900)) in expired
     client.send(0x194, bytes([0]))
     assert values(client.collect(), guid)[198] == 0
-    assert not host.rows(f'SELECT id FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = 50900')
+    assert host.rows(f'SELECT rewarded FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = 50900') == [[True]]
 
 
 def check_gossip_submenus(host):
