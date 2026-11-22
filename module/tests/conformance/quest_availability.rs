@@ -68,6 +68,10 @@ fn stage(name: &str) -> Stage {
 }
 
 fn offer(stage: &Stage, quest: u32, min_level: u32, quest_level: u32) {
+    offer_repeatable(stage, quest, min_level, quest_level, false);
+}
+
+fn offer_repeatable(stage: &Stage, quest: u32, min_level: u32, quest_level: u32, repeatable: bool) {
     stage.shard.insert_row(
         "game_quest_template",
         &[
@@ -76,7 +80,7 @@ fn offer(stage: &Stage, quest: u32, min_level: u32, quest_level: u32) {
             ("quest_level", &quest_level),
             ("title", &"Availability quest"),
             ("zone_or_sort", &12),
-            ("repeatable", &false),
+            ("repeatable", &repeatable),
         ],
     );
     stage.shard.insert_row(
@@ -182,18 +186,49 @@ fn a_seeded_prerequisite_row_holds_the_quest_until_its_predecessor_is_rewarded()
     accepted(&mut stage, SECOND);
 }
 
-fn repeatable_unlocks_second(stage: &mut Stage) {
-    offer(stage, FIRST, 1, 1);
-    offer(stage, SECOND, 1, 1);
+fn turn_in(stage: &Stage, quest: u32) {
+    let relation = u64::from(quest) + 1_000_000_000;
+    stage.shard.insert_row(
+        "game_creature_quest",
+        &[
+            ("id", &relation),
+            ("creature_entry", &SCENARIO_QUESTGIVER_ENTRY),
+            ("quest_entry", &quest),
+            ("role", &1),
+        ],
+    );
+    stage.shard.assert_call(
+        "debug_turn_in_quest",
+        &[
+            &stage.guid.to_string(),
+            &stage.giver.to_string(),
+            &quest.to_string(),
+            "0",
+        ],
+    );
     stage.shard.assert_sql(&format!(
-        "UPDATE game_quest_template SET repeatable = true WHERE entry = {FIRST}"
+        "DELETE FROM game_creature_quest WHERE id = {relation}"
     ));
+}
+
+fn retakes(stage: &Stage) -> usize {
+    stage
+        .shard
+        .query_rows(&format!(
+            "SELECT id FROM game_character_quest_retake WHERE character_guid = {}",
+            stage.guid
+        ))
+        .len()
+}
+
+fn repeatable_unlocks_second(stage: &mut Stage) {
+    offer_repeatable(stage, FIRST, 1, 1, true);
+    offer(stage, SECOND, 1, 1);
     prerequisite(stage, SECOND, FIRST, false);
     accepted(stage, FIRST);
-    stage.shard.assert_sql(&format!(
-        "UPDATE game_character_quest SET rewarded = true WHERE quest_entry = {FIRST}"
-    ));
+    turn_in(stage, FIRST);
     accepted(stage, FIRST);
+    assert_eq!(retakes(stage), 1);
 }
 
 #[test]
@@ -204,6 +239,8 @@ fn retaking_a_rewarded_repeatable_quest_keeps_the_quest_it_unlocked() {
 
     assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
     accepted(&mut stage, SECOND);
+    turn_in(&stage, FIRST);
+    assert_eq!(retakes(&stage), 0, "the turn-in holds the reward record");
 }
 
 #[test]

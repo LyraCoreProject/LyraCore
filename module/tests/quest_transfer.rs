@@ -101,7 +101,7 @@ fn seed_quests(shard: &Standalone) {
         "game_character_quest_retake",
         &[
             ("id", &1u64),
-            ("character_guid", &1u64),
+            ("character_guid", &CHARACTER.parse::<u64>().unwrap()),
             ("quest_entry", &(FIRST_QUEST + 3)),
         ],
     );
