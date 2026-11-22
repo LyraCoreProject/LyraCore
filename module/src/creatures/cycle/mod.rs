@@ -16,7 +16,7 @@ use super::pet;
 use super::tick::cadence::{TickScope, MOVE_TICK_SECS, SENSE_EVERY_N_TICKS};
 use super::tick::TickSweep;
 use crate::combat::reach::{in_melee_reach, MeleeBody, MELEE_REACH_FLOOR_YD};
-use crate::threat::{select_victim, Contender};
+use crate::threat::{select_victim, Contender, SourceStanding};
 
 mod ctx;
 #[cfg(test)]
@@ -346,6 +346,7 @@ pub(crate) struct Fighter {
     pub guid: u64,
     pub body: MeleeBody,
     pub victim: u64,
+    pub held_in_place: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -353,6 +354,7 @@ pub(crate) struct ThreatSource {
     pub guid: u64,
     pub body: MeleeBody,
     pub threat: i64,
+    pub standing: SourceStanding,
 }
 
 pub(crate) trait ThreatSink {
@@ -1020,10 +1022,21 @@ fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
         let contenders: Vec<Contender> = w
             .threat_sources(f.guid)
             .into_iter()
-            .map(|source| Contender {
-                source_guid: source.guid,
-                threat: source.threat,
-                in_melee_reach: in_melee_reach(&f.body, &source.body),
+            .map(|source| {
+                let in_melee_reach = in_melee_reach(&f.body, &source.body);
+                // vmangos: a creature that cannot move ranks a source out of its melee reach low.
+                let standing = match source.standing {
+                    SourceStanding::Free if f.held_in_place && !in_melee_reach => {
+                        SourceStanding::LowPriority
+                    }
+                    standing => standing,
+                };
+                Contender {
+                    source_guid: source.guid,
+                    threat: source.threat,
+                    in_melee_reach,
+                    standing,
+                }
             })
             .collect();
         if let Some(victim) = select_victim(f.victim, &contenders) {

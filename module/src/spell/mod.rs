@@ -39,6 +39,9 @@ pub(crate) use cast::{
     CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
     ItemGrantOutcome, LoadedSpell,
 };
+pub(crate) use control::breaks_on_damage;
+#[cfg(test)]
+pub(crate) use control::cc_blocks;
 pub(crate) use control::{
     aura_survives_death, break_auras_on_damage, break_auras_on_move, break_channel, buff_status,
     cancel_cast_attempt, control_status, effect_is_harmful, expire_cast_attempt, fear_source,
@@ -47,8 +50,6 @@ pub(crate) use control::{
     is_rooted, is_self_movement_suppressed, is_stunned, pushback_cast, refuses_helpful_spell,
     remove_auras_on_death, spell_control, spell_is_harmful,
 };
-#[cfg(test)]
-pub(crate) use control::{breaks_on_damage, cc_blocks};
 pub use control::{BuffStatus, BuffUnavailableReason, ControlReadError, UnitControl};
 pub(crate) use effects::{
     absorb_incoming, arm_spell_retaliation, dispel_target, recompute_sheet, recompute_vitals,

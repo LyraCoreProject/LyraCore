@@ -14,7 +14,8 @@ pub struct TauntLock {
 }
 
 use crate::spell::tables::{game_spell_threat, SpellThreat};
-use crate::{game_melee_attack, game_spell, game_spell_effect, game_world_entity};
+use crate::{game_melee_attack, game_spell, game_spell_effect, game_world_entity, WorldEntity};
+use lyracore_shared::spell::taxonomy::{A_CONTROL, M_FEAR, M_POLY};
 
 #[table(
     accessor = game_threat,
@@ -220,16 +221,77 @@ pub(crate) fn ranked(ctx: &ReducerContext, creature_guid: u64) -> Vec<(u64, i64)
     )
 }
 
+/// Where a threat source stands in victim selection, as vmangos `selectNextVictim` ranks it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum SourceStanding {
+    Free,
+    LowPriority,
+    Unattackable,
+}
+
+/// vmangos `IsValidAttackTarget` and `IsSecondaryThreatTarget`. The Module summons no Totems.
+pub(crate) fn source_standing(
+    ctx: &ReducerContext,
+    creature: &WorldEntity,
+    source: &WorldEntity,
+) -> SourceStanding {
+    if !crate::combat::may_harm(ctx, creature, source) {
+        SourceStanding::Unattackable
+    } else if holds_low_priority_aura(ctx, source.guid) {
+        SourceStanding::LowPriority
+    } else {
+        SourceStanding::Free
+    }
+}
+
+fn holds_low_priority_aura(ctx: &ReducerContext, guid: u64) -> bool {
+    let spells = ctx.db.game_spell();
+    crate::spell::auras_on(ctx, guid).any(|aura| {
+        spells.spell_id().find(aura.spell_id).is_some_and(|spell| {
+            makes_low_priority(
+                spell.negative(),
+                spell.aura_interrupt,
+                aura.eff_kind,
+                aura.eff_p0,
+            )
+        })
+    })
+}
+
+// vmangos `IsTargetSecondaryThreatFocus`; confuse, pacify and charm import as one control class.
+fn makes_low_priority(harmful: bool, aura_interrupt: u16, kind: u8, control: i32) -> bool {
+    harmful
+        && (crate::spell::breaks_on_damage(aura_interrupt)
+            || (kind == A_CONTROL && matches!(control, M_FEAR | M_POLY)))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct Contender {
     pub source_guid: u64,
     pub threat: i64,
     pub in_melee_reach: bool,
+    pub standing: SourceStanding,
 }
 
-/// vmangos `selectNextVictim`: keep `current` unless a contender in `ranked` (highest threat first)
-/// has more than 110% of its threat in melee reach or more than 130% outside it.
+/// vmangos `selectNextVictim` over `ranked`, highest threat first. Among free contenders, keep
+/// `current` unless one has more than 110% of its threat in melee reach or more than 130% outside
+/// it. With no free contender, take the top low-priority one. Never take an unattackable one.
 pub(crate) fn select_victim(current: u64, ranked: &[Contender]) -> Option<u64> {
+    let free: Vec<Contender> = ranked
+        .iter()
+        .filter(|c| c.standing == SourceStanding::Free)
+        .copied()
+        .collect();
+    if free.is_empty() {
+        return ranked
+            .iter()
+            .find(|c| c.standing == SourceStanding::LowPriority)
+            .map(|c| c.source_guid);
+    }
+    keep_or_overtake(current, &free)
+}
+
+fn keep_or_overtake(current: u64, ranked: &[Contender]) -> Option<u64> {
     let Some(current_threat) = ranked
         .iter()
         .find(|c| c.source_guid == current)
@@ -544,6 +606,7 @@ mod tests {
             source_guid,
             threat,
             in_melee_reach,
+            standing: SourceStanding::Free,
         }
     }
 
@@ -600,6 +663,25 @@ mod tests {
     fn margins_survive_saturated_threat() {
         let ranked = [contender(2, i64::MAX, true), contender(1, i64::MAX, true)];
         assert_eq!(select_victim(1, &ranked), Some(1));
+    }
+
+    #[test]
+    fn a_harmful_aura_that_fears_confuses_or_breaks_on_damage_makes_its_target_low_priority() {
+        const BREAKS_ON_DAMAGE: u16 = 0x1;
+        let stun = (A_CONTROL, lyracore_shared::spell::taxonomy::M_STUN);
+        let fear = (A_CONTROL, M_FEAR);
+        let confuse = (A_CONTROL, M_POLY);
+        let low = |harmful, interrupt, (kind, control)| {
+            makes_low_priority(harmful, interrupt, kind, control)
+        };
+        assert!(low(true, 0, fear), "fear");
+        assert!(low(true, 0, confuse), "confuse");
+        assert!(
+            low(true, BREAKS_ON_DAMAGE, stun),
+            "a stun that breaks on damage"
+        );
+        assert!(!low(true, 0, stun), "a stun that holds through damage");
+        assert!(!low(false, BREAKS_ON_DAMAGE, fear), "a helpful aura");
     }
 
     #[test]

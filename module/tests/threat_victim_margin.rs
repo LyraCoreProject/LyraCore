@@ -1,6 +1,10 @@
 mod support;
 
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
+use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_shared::spell::taxonomy::{
+    A_CONTROL, CAST_FLAG_IGNORE_RESISTANCES, M_FEAR, P_MECHANIC, T_TARGET_ENEMY,
+};
 use support::{number, Standalone};
 
 const VICTIM: &str = "1";
@@ -10,6 +14,7 @@ const FAR_FUTURE_MS: u64 = 1_900_000_000_000;
 const DEFENSIVE: u8 = 1;
 const HUMAN: &str = "1";
 const WARRIOR: &str = "1";
+const FEAR: u32 = 5_113_301;
 
 struct Fight {
     shard: Standalone,
@@ -216,4 +221,57 @@ fn a_taunt_lock_holds_the_victim_against_any_threat_and_ends_with_the_lock() {
     ));
     fight.settle();
     assert_eq!(fight.victim(), CHALLENGER, "without the lock 500% switches");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_turns_from_its_feared_victim_to_a_free_source() {
+    let fight = Fight::start("threat-priority-fear", 3.0);
+    fight.set_threat(CHALLENGER, 100);
+    fight.settle();
+    assert_eq!(fight.victim(), VICTIM, "10% of the victim's threat");
+
+    fight.shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &FEAR),
+            ("name", &"Fear fixture"),
+            ("school_mask", &32u8),
+            ("range_yd", &30),
+            ("is_negative", &true),
+            ("duration_ms", &600_000),
+            ("spell_level", &1),
+            ("cast_flags", &CAST_FLAG_IGNORE_RESISTANCES),
+        ],
+    );
+    fight.shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(FEAR, 0)),
+            ("spell_id", &FEAR),
+            ("kind", &A_CONTROL),
+            ("target", &T_TARGET_ENEMY),
+            ("p_0", &M_FEAR),
+            ("p_0_kind", &P_MECHANIC),
+        ],
+    );
+    fight
+        .shard
+        .assert_call("debug_cast_at", &[&fight.wolf, &FEAR.to_string(), VICTIM]);
+    fight.settle();
+    assert_eq!(
+        fight.victim(),
+        CHALLENGER,
+        "a feared victim is low priority"
+    );
+
+    fight
+        .shard
+        .assert_call("debug_shed_spell_auras", &[VICTIM, &FEAR.to_string()]);
+    fight.settle();
+    assert_eq!(
+        fight.victim(),
+        VICTIM,
+        "the fear ends and the margin returns"
+    );
 }

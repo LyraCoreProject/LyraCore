@@ -31,7 +31,7 @@ entry in both files.
 
 **I** [Idle Bot](#bots) · [Import Family](#packages) · [Instance Lease](#groups) · [Instance Placement](#realm-topology) · [Instance Shard](#realm-topology) · [Instance Pool](#retired-terms) · [Instance Removal](#groups) · [Instance Vmap Slice](#realm-topology) · [Invocation](#runtime-scripts) · [Item Exchange](#procs) · [Item Spell Charges](#random-properties) · [Item Text](#mail)
 
-**L** [Land Mount](#mounts) · [Lethal Damage Floor](#creature-ai) · [Letter Copy](#mail) · [Listing](#auctions) · [Login Queue](#accounts-characters-and-sessions) · [Logon Limiter](#accounts-characters-and-sessions) · [Loot Release](#loot) · [Loot Roll](#loot) · [Loot Roll Promotion](#retired-terms) · [Loot Roll Promotion Receipt](#retired-terms) · [Loot Source](#loot) · [Loot Tag](#loot) · [Loot Window](#loot)
+**L** [Land Mount](#mounts) · [Lethal Damage Floor](#creature-ai) · [Letter Copy](#mail) · [Listing](#auctions) · [Login Queue](#accounts-characters-and-sessions) · [Logon Limiter](#accounts-characters-and-sessions) · [Loot Release](#loot) · [Loot Roll](#loot) · [Loot Roll Promotion](#retired-terms) · [Loot Roll Promotion Receipt](#retired-terms) · [Loot Source](#loot) · [Loot Tag](#loot) · [Loot Window](#loot) · [Low-Priority Source](#creature-ai)
 
 **M** [Mail](#mail) · [Mail Arrival](#mail) · [Mail Expiry](#mail) · [Mail Sender](#mail) · [Mail Template](#mail) · [Mail Timer](#mail) · [Meeting Stone](#meeting-stones) · [Meeting Stone Queue](#meeting-stones) · [Melee Reach](#procs) · [Member Stats](#groups) · [Migration Source](#accounts-characters-and-sessions) · [Module](CORE_TERMS.md#module) · [Motion Permit](#requests-and-delivery) · [Mount Projection](#mounts) · [Movement Intent](#creature-ai)
 
@@ -773,6 +773,13 @@ combat and not passive attack that victim 1.5 seconds later. A creature that ans
 call in turn. The creature calls again only after it loses its victim. A creature template with
 `call_for_help_range` 0 makes no call.
 _Avoid_: assist pass, pack pull
+
+**Low-Priority Source**:
+A threat source a creature takes as its victim only when no other source it can attack remains:
+one under a harmful Aura that fears, confuses or breaks on damage, or, while the creature cannot
+move, one outside its Melee Reach. The creature then takes the top one by threat, without
+the threat margin. It never takes a source it cannot attack. See `module/src/threat.rs`.
+_Avoid_: secondary threat target
 
 **Call for Help**:
 The call a creature makes once a second while its victim has drawn it more than 10 yards from its

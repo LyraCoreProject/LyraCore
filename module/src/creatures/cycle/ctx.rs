@@ -839,6 +839,13 @@ impl CtxWorld<'_> {
             .find(guid)
             .map(|c| c.entry)
     }
+
+    // vmangos UNIT_STATE_CAN_NOT_MOVE: rooted or stunned. EventAI immobilization holds it too.
+    fn held_in_place(&self, guid: u64) -> bool {
+        crate::spell::is_rooted(self.ctx, guid)
+            || crate::spell::is_stunned(self.ctx, guid)
+            || eventai::movement::intent(self.ctx, guid).is_some_and(|intent| intent.immobilized)
+    }
 }
 
 impl CastSink for CtxWorld<'_> {
@@ -934,6 +941,7 @@ impl ThreatSink for CtxWorld<'_> {
                             .attacker_guid()
                             .find(guid)
                             .map_or(0, |a| a.target_guid),
+                        held_in_place: self.held_in_place(guid),
                     })
             })
             .collect()
@@ -943,6 +951,9 @@ impl ThreatSink for CtxWorld<'_> {
     }
     fn threat_sources(&self, guid: u64) -> Vec<super::ThreatSource> {
         let entities = self.ctx.db.game_world_entity();
+        let Some(creature) = entities.guid().find(guid) else {
+            return Vec::new();
+        };
         let now_ms = crate::time::now_ms_u32(self.ctx);
         crate::threat::ranked(self.ctx, guid)
             .into_iter()
@@ -952,6 +963,7 @@ impl ThreatSink for CtxWorld<'_> {
                     guid: source_guid,
                     body: MeleeBody::of(self.ctx, &source, now_ms),
                     threat,
+                    standing: crate::threat::source_standing(self.ctx, &creature, &source),
                 })
             })
             .collect()
