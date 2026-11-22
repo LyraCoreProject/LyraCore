@@ -124,7 +124,7 @@ if __name__ == '__main__':
             template = host.sql('SELECT * FROM game_creature_template WHERE entry = 620')[0]
             fields = dict(zip([column['name']['some'] for column in template['schema']['elements']],
                               template['rows'][0]))
-            del fields['entry'], fields['mechanic_immune_mask']
+            del fields['entry'], fields['mechanic_immune_mask'], fields['call_for_help_range']
             host.sql('INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES (50909,0,0,0,0,0,0,0,0,0,0,0,0)')
             fields['faction_template'] = 50909
             fields['max_level'] = fields['level']

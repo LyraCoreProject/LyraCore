@@ -1063,6 +1063,17 @@ impl PursuitSink for CtxWorld<'_> {
             leg::face(self.ctx, &mut e, orientation);
         }
     }
+    fn respawn_point(&self, guid: u64) -> Option<Point> {
+        let spawn = self.ctx.db.game_creature_spawn().guid().find(guid)?;
+        Some(Point {
+            x: spawn.x,
+            y: spawn.y,
+            z: spawn.z,
+        })
+    }
+    fn call_for_help(&mut self, guid: u64, victim: u64) {
+        crate::creatures::call_for_help(self.ctx, guid, victim);
+    }
 }
 
 impl RoutSink for CtxWorld<'_> {

@@ -390,6 +390,10 @@ pub(crate) trait PursuitSink {
     fn casting(&self, guid: u64) -> bool;
     fn commit_back_off(&mut self, guid: u64, victim: u64, to: (f32, f32), dur_ms: u32);
     fn face(&mut self, guid: u64, at: Point, orientation: f32);
+    fn respawn_point(&self, _guid: u64) -> Option<Point> {
+        None
+    }
+    fn call_for_help(&mut self, _guid: u64, _victim: u64) {}
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -576,6 +580,7 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
             timed(w, "threat_retarget", |w| threat_retarget(w, &tick.scope)) as u64,
         ));
     }
+    timed(w, "call_for_help", |w| call_for_help(w, &tick));
     rows.push(("chase", timed(w, "chase", |w| chase(w, &tick)) as u64));
     rows.push((
         "combat_enter",
@@ -1060,6 +1065,25 @@ fn angle_diff(from: f32, to: f32) -> f32 {
         d += two_pi;
     }
     d
+}
+
+const CALL_FOR_HELP_PERIOD_MICROS: u64 = 1_000_000;
+const CALL_FOR_HELP_FROM_RESPAWN_YD: f32 = 10.0;
+
+// A creature runs every tick period, so its first tick of each second is vmangos's 1000 ms timer.
+fn call_for_help<W: PursuitSink>(w: &mut W, tick: &TickContext) {
+    let tick_micros = (f64::from(tick.tick_secs) * 1_000_000.0) as u64;
+    if tick.now_micros % CALL_FOR_HELP_PERIOD_MICROS >= tick_micros {
+        return;
+    }
+    for c in w.pursuits(&tick.scope) {
+        let away = w.respawn_point(c.guid).is_some_and(|respawn| {
+            dist_sq(c.at, respawn) > CALL_FOR_HELP_FROM_RESPAWN_YD * CALL_FOR_HELP_FROM_RESPAWN_YD
+        });
+        if away {
+            w.call_for_help(c.guid, c.victim);
+        }
+    }
 }
 
 fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(

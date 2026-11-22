@@ -1,9 +1,14 @@
 use spacetimedb::{table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
-use crate::{game_faction_template, game_world_entity, WorldEntity};
+use crate::{
+    game_creature_spawn, game_creature_template, game_faction_template, game_world_entity,
+    WorldEntity,
+};
 
 // vmangos World.cpp CreatureFamilyAssistanceDelay default.
 const ASSISTANCE_DELAY_MICROS: i64 = 1_500_000;
+// vmangos `MoveAwayFromTarget(pEnemy, 10.0f)`, and the distance inside which a creature flees.
+const FLEE_DISTANCE_YD: f32 = 10.0;
 
 #[table(
     accessor = game_creature_assistance_call,
@@ -28,20 +33,30 @@ crate::character_owned!(delete, fn sweep_delete_game_creature_assistance_call(ct
 // A call belongs to the live fight and does not survive Transfer.
 crate::character_owned!(not_transported, fn sweep_transfer_game_creature_assistance_call());
 
-/// vmangos `Creature::CallAssistance`: neighbours able to help when the call lands attack the victim.
-pub(crate) fn call_assistance(ctx: &ReducerContext, caller_guid: u64, victim_guid: u64) {
-    let entities = ctx.db.game_world_entity();
-    let (Some(caller), Some(victim)) = (
-        entities.guid().find(caller_guid),
-        entities.guid().find(victim_guid),
-    ) else {
-        return;
-    };
-    if caller.is_player() || caller.owner_guid != 0 {
-        return;
-    }
-    let radius = super::ai::ASSIST_RADIUS;
-    let mut assistant_guids: Vec<u64> = crate::helpers::entities_near(
+/// Which creatures a call reaches: vmangos `CanBeTargetedByCallForHelp` with or without `checkfaction`.
+#[derive(Clone, Copy, PartialEq)]
+enum Kin {
+    SameFactionTemplate,
+    Friendly,
+}
+
+fn call_for_help_range(ctx: &ReducerContext, creature: &WorldEntity) -> f32 {
+    ctx.db
+        .game_creature_template()
+        .entry()
+        .find(creature.entry)
+        .map_or(0.0, |template| template.call_for_help_range)
+}
+
+/// Neighbours of `caller` within `radius` that can be called against `victim` and that it sees.
+fn called_neighbours(
+    ctx: &ReducerContext,
+    caller: &WorldEntity,
+    victim: &WorldEntity,
+    radius: f32,
+    kin: Kin,
+) -> Vec<WorldEntity> {
+    crate::helpers::entities_near(
         ctx,
         caller.map_id,
         caller.instance_id,
@@ -50,8 +65,8 @@ pub(crate) fn call_assistance(ctx: &ReducerContext, caller_guid: u64, victim_gui
         radius,
     )
     .into_iter()
-    .filter(|n| crate::helpers::dist_sq(&caller, n) <= radius * radius)
-    .filter(|n| can_assist(ctx, n, &caller, &victim))
+    .filter(|n| crate::helpers::dist_sq(caller, n) <= radius * radius)
+    .filter(|n| can_be_called(ctx, n, caller, victim, kin))
     .filter(|n| {
         crate::nav::has_los(
             ctx,
@@ -61,6 +76,30 @@ pub(crate) fn call_assistance(ctx: &ReducerContext, caller_guid: u64, victim_gui
             (n.x, n.y, n.z),
         )
     })
+    .collect()
+}
+
+/// vmangos `Creature::CallAssistance`: neighbours able to help when the call lands attack the victim.
+pub(crate) fn call_assistance(ctx: &ReducerContext, caller_guid: u64, victim_guid: u64) {
+    let entities = ctx.db.game_world_entity();
+    let (Some(caller), Some(victim)) = (
+        entities.guid().find(caller_guid),
+        entities.guid().find(victim_guid),
+    ) else {
+        return;
+    };
+    if caller.is_player() || caller.owner_guid != 0 || call_for_help_range(ctx, &caller) <= 0.0 {
+        return;
+    }
+    let mut assistant_guids: Vec<u64> = called_neighbours(
+        ctx,
+        &caller,
+        &victim,
+        super::ai::ASSIST_RADIUS,
+        Kin::SameFactionTemplate,
+    )
+    .iter()
+    .filter(|n| answers_against(ctx, n))
     .map(|n| n.guid)
     .collect();
     if assistant_guids.is_empty() {
@@ -83,6 +122,31 @@ pub(crate) fn call_assistance(ctx: &ReducerContext, caller_guid: u64, victim_gui
         });
 }
 
+/// vmangos `Creature::CallForHelp` as `Creature::Update` makes it: friendly neighbours within the
+/// template's range answer at once, and a neighbour that flees runs from the victim instead.
+pub(crate) fn call_for_help(ctx: &ReducerContext, caller_guid: u64, victim_guid: u64) {
+    let entities = ctx.db.game_world_entity();
+    let (Some(caller), Some(victim)) = (
+        entities.guid().find(caller_guid),
+        entities.guid().find(victim_guid),
+    ) else {
+        return;
+    };
+    let range = call_for_help_range(ctx, &caller);
+    if caller.is_player() || caller.owner_guid != 0 || range <= 0.0 {
+        return;
+    }
+    let mut neighbours = called_neighbours(ctx, &caller, &victim, range, Kin::Friendly);
+    neighbours.sort_unstable_by_key(|n| n.guid);
+    for neighbour in neighbours {
+        if answers_against(ctx, &neighbour) {
+            crate::combat::answer_creature_assistance(ctx, neighbour.guid, victim.guid);
+        } else if flees_from(ctx, &neighbour, &victim) {
+            move_away_from(ctx, neighbour, &victim);
+        }
+    }
+}
+
 #[spacetimedb::reducer]
 pub fn answer_assistance_call(ctx: &ReducerContext, call: AssistanceCall) {
     if !crate::time::scheduler_authorized(ctx) {
@@ -103,41 +167,99 @@ pub fn answer_assistance_call(ctx: &ReducerContext, call: AssistanceCall) {
         return;
     }
     for guid in call.assistant_guids {
-        if entities
-            .guid()
-            .find(guid)
-            .is_some_and(|assistant| can_assist(ctx, &assistant, &caller, &victim))
-        {
+        if entities.guid().find(guid).is_some_and(|assistant| {
+            can_be_called(ctx, &assistant, &caller, &victim, Kin::SameFactionTemplate)
+                && answers_against(ctx, &assistant)
+        }) {
             crate::combat::answer_creature_assistance(ctx, guid, victim.guid);
         }
     }
 }
 
-/// vmangos `Creature::CanAssistTo` with the same faction template required.
-fn can_assist(
+/// vmangos `Creature::CanBeTargetedByCallForHelp`.
+fn can_be_called(
     ctx: &ReducerContext,
-    assistant: &WorldEntity,
+    neighbour: &WorldEntity,
     caller: &WorldEntity,
     victim: &WorldEntity,
+    kin: Kin,
 ) -> bool {
     use lyracore_shared::constants::unit_flags;
 
-    assistant.guid != caller.guid
-        && !assistant.is_player()
-        && !assistant.dead
-        && assistant.owner_guid == 0
-        && assistant.faction_template == caller.faction_template
-        && assistant.unit_flags & (unit_flags::IN_COMBAT | unit_flags::NOT_SELECTABLE) == 0
+    neighbour.guid != caller.guid
+        && !neighbour.is_player()
+        && !neighbour.dead
+        && neighbour.owner_guid == 0
+        && (neighbour.faction_template == caller.faction_template
+            || (kin == Kin::Friendly
+                && crate::faction::is_friendly(
+                    ctx,
+                    neighbour.faction_template,
+                    caller.faction_template,
+                )))
+        && neighbour.unit_flags & (unit_flags::IN_COMBAT | unit_flags::NOT_SELECTABLE) == 0
         && !victim.dead
         && ctx
             .db
             .game_faction_template()
             .id()
-            .find(assistant.faction_template)
-            .is_some_and(|template| template.answers_call_for_help())
-        && super::react_state(ctx, assistant.guid) != super::CreatureReactState::Passive
-        && !crate::combat::is_engaged(ctx, assistant.guid)
-        && !crate::spell::is_action_blocked(ctx, assistant.guid)
-        && !super::eventai::movement::returning_home(ctx, assistant.guid)
-        && crate::combat::may_harm(ctx, assistant, victim)
+            .find(neighbour.faction_template)
+            .is_some_and(|template| template.reacts_to_call_for_help())
+        && !crate::combat::is_engaged(ctx, neighbour.guid)
+        && !crate::spell::is_action_blocked(ctx, neighbour.guid)
+        && crate::combat::may_harm(ctx, neighbour, victim)
+}
+
+/// vmangos `Creature::CanRespondToCallForHelpAgainst`.
+fn answers_against(ctx: &ReducerContext, neighbour: &WorldEntity) -> bool {
+    ctx.db
+        .game_faction_template()
+        .id()
+        .find(neighbour.faction_template)
+        .is_some_and(|template| template.answers_call_for_help())
+        && super::react_state(ctx, neighbour.guid) != super::CreatureReactState::Passive
+        && !super::eventai::movement::returning_home(ctx, neighbour.guid)
+}
+
+/// vmangos `Creature::CanFleeFromCallForHelpAgainst`, for a creature on random movement.
+fn flees_from(ctx: &ReducerContext, neighbour: &WorldEntity, victim: &WorldEntity) -> bool {
+    ctx.db
+        .game_faction_template()
+        .id()
+        .find(neighbour.faction_template)
+        .is_some_and(|template| template.flees_from_call_for_help())
+        && ctx
+            .db
+            .game_creature_spawn()
+            .guid()
+            .find(neighbour.guid)
+            .is_some_and(|spawn| spawn.movement_type == super::MOVEMENT_RANDOM)
+        && !crate::spell::is_rooted(ctx, neighbour.guid)
+        && crate::helpers::dist_sq(neighbour, victim) < FLEE_DISTANCE_YD * FLEE_DISTANCE_YD
+}
+
+/// vmangos `Creature::MoveAwayFromTarget`: a run of `FLEE_DISTANCE_YD` directly away from `threat`.
+fn move_away_from(ctx: &ReducerContext, mover: WorldEntity, threat: &WorldEntity) {
+    let run = crate::modifiers::effective_move_speed(
+        ctx,
+        mover.guid,
+        lyracore_shared::constants::speeds::RUN,
+    );
+    let away = super::ai::flee_step(mover.x, mover.y, threat.x, threat.y, FLEE_DISTANCE_YD);
+    let step = crate::nav::nav_step(
+        ctx,
+        mover.map_id,
+        mover.instance_id,
+        (mover.x, mover.y),
+        away,
+        FLEE_DISTANCE_YD,
+        0.0,
+        mover.z,
+    );
+    let Some((x, y, duration_ms)) = super::ai::leg_toward((mover.x, mover.y), step, run) else {
+        return;
+    };
+    let course = super::leg::Course::on_ground(ctx, &mover, (x, y), mover.z, duration_ms, true)
+        .held_until_landed(true);
+    super::leg::start(ctx, mover, course);
 }

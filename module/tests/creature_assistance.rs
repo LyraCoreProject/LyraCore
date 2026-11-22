@@ -12,6 +12,15 @@ const IMPACT_MICROS: i64 = 50_000;
 // `debug_advance_virtual_clock` stays inside one 50 ms scheduler window.
 const WINDOW_MICROS: i64 = 50_000;
 const LATER_COMBAT_UNTIL_MS: u64 = 1_800_000_100_000;
+// vmangos `Creature::Update` calls for help from more than 10 yd away from the respawn point.
+const CHASE_SECONDS: i64 = 5;
+const VICTIM_CLOSE_X: f32 = 34.0;
+const VICTIM_FAR_X: f32 = 70.0;
+const CALLER_HOME_X: f32 = 30.0;
+const FRIEND_X: f32 = 45.0;
+const CALL_RANGE_YD: f32 = 20.0;
+const CALLER_GROUP: u32 = 0x10;
+const FRIEND_GROUP: u32 = 0x20;
 
 fn stage(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);
@@ -21,7 +30,14 @@ fn stage(name: &str) -> Standalone {
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.assert_sql("UPDATE game_world_entity SET godmode = true WHERE guid = 1");
+    set_call_for_help_range(&shard, 5.0);
     shard
+}
+
+fn set_call_for_help_range(shard: &Standalone, range: f32) {
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_template SET call_for_help_range = {range} WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
 }
 
 fn faction(shard: &Standalone, id: u32, flags: u32) {
@@ -215,5 +231,134 @@ fn a_creature_calls_for_assistance_once_a_fight() {
         victim_of(&shard, &neighbour),
         None,
         "a second hit in the same fight does not call again"
+    );
+}
+
+fn friendly_faction(shard: &Standalone, id: u32, flags: u32) {
+    shard.insert_row(
+        "game_faction_template",
+        &[
+            ("id", &id),
+            ("faction_group", &FRIEND_GROUP),
+            ("friend_group", &CALLER_GROUP),
+            ("flags", &flags),
+        ],
+    );
+}
+
+fn x_of(shard: &Standalone, guid: &str) -> f32 {
+    shard.query_rows(&format!(
+        "SELECT x FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["x"]
+        .parse()
+        .unwrap()
+}
+
+// A caller pulled onto a victim standing at `victim_x`, with a friend of another faction template
+// 15 yd from the caller's respawn point and out of its Call for Assistance radius.
+fn pull_caller_toward(
+    victim_x: f32,
+    friend_flags: u32,
+    name: &str,
+) -> (Standalone, String, String) {
+    let shard = stage(name);
+    set_call_for_help_range(&shard, CALL_RANGE_YD);
+    shard.insert_row(
+        "game_faction_template",
+        &[("id", &9010u32), ("faction_group", &CALLER_GROUP)],
+    );
+    friendly_faction(&shard, 9011, friend_flags);
+    let caller = wolf(&shard, CALLER_HOME_X, 9010);
+    let friend = wolf(&shard, FRIEND_X, 9011);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = {victim_x} WHERE guid = 1"
+    ));
+    stage_hit(&shard, &caller);
+    (shard, caller, friend)
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_chased_more_than_ten_yards_from_home_calls_a_friendly_creature_in_range_for_help() {
+    let (shard, caller, friend) = pull_caller_toward(VICTIM_FAR_X, RESPONDS, "creature-help-far");
+    let mut clock = Clock::new(&shard);
+    clock.advance(IMPACT_MICROS);
+    assert_eq!(victim_of(&shard, &caller).as_deref(), Some("1"));
+    assert_eq!(
+        victim_of(&shard, &friend),
+        None,
+        "a friend 15 yards from the caller's home is out of its Call for Assistance"
+    );
+    clock.advance(CHASE_SECONDS * 1_000_000);
+    assert!(
+        x_of(&shard, &caller) - CALLER_HOME_X > 10.0,
+        "the caller ran more than 10 yards from home"
+    );
+    assert_eq!(
+        victim_of(&shard, &friend).as_deref(),
+        Some("1"),
+        "a friendly creature of another faction template joins the chase"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_fighting_within_ten_yards_of_home_calls_no_friend_for_help() {
+    let (shard, caller, friend) =
+        pull_caller_toward(VICTIM_CLOSE_X, RESPONDS, "creature-help-near");
+    let mut clock = Clock::new(&shard);
+    clock.advance(IMPACT_MICROS + CHASE_SECONDS * 1_000_000);
+    assert_eq!(victim_of(&shard, &caller).as_deref(), Some("1"));
+    assert!(x_of(&shard, &caller) - CALLER_HOME_X <= 10.0);
+    assert_eq!(victim_of(&shard, &friend), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_with_call_for_help_range_zero_calls_no_friend_for_help() {
+    let (shard, caller, friend) = pull_caller_toward(VICTIM_FAR_X, RESPONDS, "creature-help-zero");
+    set_call_for_help_range(&shard, 0.0);
+    let mut clock = Clock::new(&shard);
+    clock.advance(IMPACT_MICROS + CHASE_SECONDS * 1_000_000);
+    assert_eq!(victim_of(&shard, &caller).as_deref(), Some("1"));
+    assert_eq!(victim_of(&shard, &friend), None);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_friend_that_flees_from_calls_for_help_runs_ten_yards_from_a_nearby_victim() {
+    let (shard, caller, fleer) = pull_caller_toward(VICTIM_FAR_X, FLEES, "creature-help-flee");
+    let fleer_x = VICTIM_FAR_X - 8.0;
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = {fleer_x} WHERE guid = {fleer}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_spawn SET x = {fleer_x}, movement_type = 1 WHERE guid = {fleer}"
+    ));
+    set_call_for_help_range(&shard, 40.0);
+    let mut clock = Clock::new(&shard);
+    clock.advance(IMPACT_MICROS);
+    let mut farthest = 0.0f32;
+    for _ in 0..(CHASE_SECONDS * 10) {
+        clock.advance(100_000);
+        let course_end: f32 = shard
+            .query_rows(&format!(
+                "SELECT dx FROM game_creature_spline WHERE guid = {fleer}"
+            ))
+            .first()
+            .map_or(fleer_x, |row| row["dx"].parse().unwrap());
+        farthest = farthest
+            .max(VICTIM_FAR_X - course_end)
+            .max(VICTIM_FAR_X - x_of(&shard, &fleer));
+    }
+    assert_eq!(victim_of(&shard, &caller).as_deref(), Some("1"));
+    assert_eq!(
+        victim_of(&shard, &fleer),
+        None,
+        "a fleeing creature never attacks"
+    );
+    assert!(
+        farthest >= 15.0,
+        "the creature on random movement ran 10 yards from the victim, not {farthest} away"
     );
 }

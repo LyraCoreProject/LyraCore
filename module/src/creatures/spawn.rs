@@ -63,6 +63,10 @@ pub struct CreatureTemplate {
     // vmangos `mechanic_immune_mask`: bit `mechanic - 1` per Spell.dbc mechanic.
     #[default(0u32)]
     pub mechanic_immune_mask: u32,
+
+    // vmangos `call_for_help_range` in yards; 0 turns calls for assistance and help off.
+    #[default(0.0)]
+    pub call_for_help_range: f32,
 }
 
 impl CreatureTemplate {
@@ -96,6 +100,7 @@ impl CreatureTemplate {
             trainer_type: 0,
             trainer_class: 0,
             mechanic_immune_mask: 0,
+            call_for_help_range: 0.0,
         }
     }
 }

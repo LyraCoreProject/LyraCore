@@ -105,6 +105,9 @@ fn native_login_calls_nearby_pack_assistance() {
     let (shard, character, _) = fixture("native-login-assistance");
     shard.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_template SET call_for_help_range = 5.0 WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
     shard.assert_sql("DELETE FROM game_faction_template WHERE id = 1 OR id = 14");
     shard.insert_rows(
         "game_faction_template",

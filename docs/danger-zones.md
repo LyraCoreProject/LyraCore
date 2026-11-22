@@ -198,6 +198,18 @@ Shard, call `debug_backfill_cell_ids` as the Operator before you open the native
 restamps corpse positions as well as the other spatial tables. New corpses stamp their cell on
 insertion; corpse decay and Instance teardown use their time and Instance indexes.
 
+### Creature call for help migration
+
+`game_creature_template` gains the END-appended column `call_for_help_range` with default 0, which
+turns Call for Help and Call for Assistance off for that template. Reimport the `creatures` family
+straight after the publish to fill it from the World Source. Until then no creature calls for
+assistance or help, including the pack mates that joined a proximity pull before this revision.
+A live creature reads its template's range on each call and keeps no copy, so it needs no repair,
+respawn or `debug_repair_after_publish` step. Package Deltas may claim the column; one that omits
+it keeps the default. The Operator Content API does not carry it, so a created template has range 0
+and an update keeps the template's range. Direct SQL INSERTs may omit it; shared import SQL
+defaults fill older inserts.
+
 ### DynamicObject AOI migration
 
 The native runtime adds a map, Instance and `cell` index to `game_dynamic_object`. Its new `cell`
