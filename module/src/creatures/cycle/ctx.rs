@@ -1063,6 +1063,11 @@ impl PursuitSink for CtxWorld<'_> {
             leg::face(self.ctx, &mut e, orientation);
         }
     }
+    fn call_for_help(&mut self, guid: u64, victim: u64) {
+        crate::creatures::call_for_help(self.ctx, guid, victim, |neighbour| {
+            self.home_of(neighbour).is_some_and(|home| home.wanders)
+        });
+    }
 }
 
 impl RoutSink for CtxWorld<'_> {

@@ -244,6 +244,7 @@ fn apply_template_field(
         "trainer_type" => template.trainer_type = as_u8(field, value)?,
         "trainer_class" => template.trainer_class = as_u8(field, value)?,
         "mechanic_immune_mask" => template.mechanic_immune_mask = as_u32(field, value)?,
+        "call_for_help_range" => template.call_for_help_range = as_f32(field, value)?,
         other => return Err(no_such_column("game_creature_template", other)),
     }
     Ok(())

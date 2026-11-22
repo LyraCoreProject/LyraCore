@@ -30,6 +30,13 @@ impl FactionTemplate {
     pub(crate) fn answers_call_for_help(&self) -> bool {
         self.flags & RESPOND_TO_CALL_FOR_HELP != 0 && self.flags & FLEE_FROM_CALL_FOR_HELP == 0
     }
+    /// vmangos `RESPOND_TO_CALL_FOR_HELP` or `FLEE_FROM_CALL_FOR_HELP`: a call reaches the creature.
+    pub(crate) fn reacts_to_call_for_help(&self) -> bool {
+        self.flags & (RESPOND_TO_CALL_FOR_HELP | FLEE_FROM_CALL_FOR_HELP) != 0
+    }
+    pub(crate) fn flees_from_call_for_help(&self) -> bool {
+        self.flags & FLEE_FROM_CALL_FOR_HELP != 0
+    }
     fn enemies(&self) -> [u32; 4] {
         [self.enemy_0, self.enemy_1, self.enemy_2, self.enemy_3]
     }
@@ -193,6 +200,31 @@ mod tests {
             assert_eq!(
                 template.answers_call_for_help(),
                 answers,
+                "flags {flags:#x}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_template_reacts_to_a_call_for_help_when_it_responds_or_flees() {
+        for (flags, reacts, flees) in [
+            (0x0, false, false),
+            (0x1, true, false),
+            (0x401, true, true),
+            (0x400, true, true),
+        ] {
+            let template = FactionTemplate {
+                flags,
+                ..ft(1, 0, 0, 0, 0, [0; 4], [0; 4])
+            };
+            assert_eq!(
+                template.reacts_to_call_for_help(),
+                reacts,
+                "flags {flags:#x}"
+            );
+            assert_eq!(
+                template.flees_from_call_for_help(),
+                flees,
                 "flags {flags:#x}"
             );
         }

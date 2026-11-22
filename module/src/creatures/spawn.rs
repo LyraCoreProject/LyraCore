@@ -6,6 +6,9 @@ use crate::gossip::{
 };
 use crate::{game_world_entity, WorldEntity};
 
+// vmangos `m_callForHelpDist(5.0f)`; keep it equal to the column's `#[default]`.
+pub(crate) const DEFAULT_CALL_FOR_HELP_RANGE_YD: f32 = 5.0;
+
 #[table(
     accessor = game_creature_template,
     public,
@@ -63,6 +66,10 @@ pub struct CreatureTemplate {
     // vmangos `mechanic_immune_mask`: bit `mechanic - 1` per Spell.dbc mechanic.
     #[default(0u32)]
     pub mechanic_immune_mask: u32,
+
+    // vmangos `call_for_help_range` in yards; 0 turns calls for assistance and help off.
+    #[default(5.0)]
+    pub call_for_help_range: f32,
 }
 
 impl CreatureTemplate {
@@ -96,6 +103,7 @@ impl CreatureTemplate {
             trainer_type: 0,
             trainer_class: 0,
             mechanic_immune_mask: 0,
+            call_for_help_range: DEFAULT_CALL_FOR_HELP_RANGE_YD,
         }
     }
 }

@@ -28,7 +28,9 @@ fn fields(shard: &Standalone) -> Value {
         template(shard, 620)
             .unwrap()
             .into_iter()
-            .filter(|(key, _)| key != "entry" && key != "mechanic_immune_mask")
+            .filter(|(key, _)| {
+                !["entry", "mechanic_immune_mask", "call_for_help_range"].contains(&key.as_str())
+            })
             .map(|(key, value)| {
                 let value = if key == "name" || key == "subname" {
                     json!(value)
@@ -232,6 +234,24 @@ fn an_update_keeps_the_template_mechanic_immunity() {
     let updated = template(&shard, 620).unwrap();
     assert_eq!(updated["name"], "Stunproof chicken");
     assert_eq!(number::<u32>(&updated, "mechanic_immune_mask"), 2048);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_update_keeps_the_template_call_for_help_range() {
+    let shard = realm("operator-creatures-help-range");
+    shard.assert_sql(
+        "UPDATE game_creature_template SET call_for_help_range = 12.5 WHERE entry = 620",
+    );
+    let mut fields = fields(&shard);
+    fields["name"] = json!("Loud chicken");
+    apply(
+        &shard,
+        json!([{"updateCreature": {"entry": 620, "fields": fields}}]),
+    );
+    let updated = template(&shard, 620).unwrap();
+    assert_eq!(updated["name"], "Loud chicken");
+    assert_eq!(number::<f32>(&updated, "call_for_help_range"), 12.5);
 }
 
 #[test]

@@ -354,7 +354,10 @@ impl Table {
                         | "blocks_mounting"
                 )
                 | (Self::Item, "damage_school")
-                | (Self::CreatureTemplate, "mechanic_immune_mask")
+                | (
+                    Self::CreatureTemplate,
+                    "mechanic_immune_mask" | "call_for_help_range"
+                )
         )
     }
 
@@ -750,6 +753,7 @@ const CREATURE_TEMPLATE_COLUMNS: &[Column] = &[
     column("trainer_type", FieldType::U8),
     column("trainer_class", FieldType::U8),
     column("mechanic_immune_mask", FieldType::U32),
+    column("call_for_help_range", FieldType::F32),
 ];
 
 // Spawn lifetime columns belong to the running Shard and cannot be claimed.

@@ -17,7 +17,7 @@ entry in both files.
 
 **B** [Base Snapshot](#packages) · [Baseline](#client-content) · [Behavior](#conformance) · [Bot Capacity Lease](#bots) · [Bot Controller](#bots) · [Bounded Map Slice](#realm-topology) · [Build Identity](#packages)
 
-**C** [Call for Assistance](#creature-ai) · [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Cast Request](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character directory](#realm-topology) · [Character Migration](#accounts-characters-and-sessions) · [Character Name Reservation](#realm-topology) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Coalescible Motion](#requests-and-delivery) · [Combat Profile](#forms) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
+**C** [Call for Assistance](#creature-ai) · [Call for Help](#creature-ai) · [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Cast Request](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character directory](#realm-topology) · [Character Migration](#accounts-characters-and-sessions) · [Character Name Reservation](#realm-topology) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Coalescible Motion](#requests-and-delivery) · [Combat Profile](#forms) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
 
 **D** [Data Gap](#conformance) · [Data-dependent field](#conformance) · [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Duel](#pvp) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
@@ -762,8 +762,17 @@ the Ranged Posture.
 The one call a creature makes when it gains a victim. Creatures within 10 yards that share its
 faction template, whose template responds to calls for help and does not flee, and that are out of
 combat and not passive attack that victim 1.5 seconds later. A creature that answers does not
-call in turn. The creature calls again only after it loses its victim.
+call in turn. The creature calls again only after it loses its victim. A creature template with
+`call_for_help_range` 0 makes no call.
 _Avoid_: assist pass, pack pull
+
+**Call for Help**:
+The call a creature makes once a second while its victim has drawn it more than 10 yards from its
+respawn point. Friendly creatures it sees within the template's `call_for_help_range` that are out
+of combat answer at once: one whose template responds attacks the victim, and calls for assistance
+in turn. One whose template flees, on random movement and within 10 yards of the victim, runs to
+the point 10 yards from the victim on its own side.
+_Avoid_: leash call, kite pull
 
 **Rule State**:
 The durable arming of one EventAI rule on one creature: its next eligible time and whether it is
