@@ -199,6 +199,16 @@ impl Stage {
         carried_by(&self.shard, self.character, entry)
     }
 
+    fn corpse_flag_lootable(&self) -> bool {
+        let flags: u32 = self.shard.query_rows(&format!(
+            "SELECT dynamic_flags FROM game_world_entity WHERE guid = {}",
+            self.corpse
+        ))[0]["dynamic_flags"]
+            .parse()
+            .unwrap();
+        flags & 1 != 0
+    }
+
     fn loot_rows(&self) -> usize {
         self.shard
             .query_rows(&format!(
@@ -252,6 +262,11 @@ fn carried_by(shard: &Standalone, character: u64, entry: u32) -> usize {
 const JERKY_QUEST: u32 = 9_141_001;
 
 fn give_jerky_quest(shard: &Standalone, characters: &[u64]) {
+    insert_jerky_quest(shard);
+    grant_jerky_quest(shard, characters);
+}
+
+fn insert_jerky_quest(shard: &Standalone) {
     shard.insert_row(
         "game_quest_template",
         &[
@@ -270,6 +285,9 @@ fn give_jerky_quest(shard: &Standalone, characters: &[u64]) {
             ("required_count", &1),
         ],
     );
+}
+
+fn grant_jerky_quest(shard: &Standalone, characters: &[u64]) {
     for character in characters {
         shard.assert_call(
             "debug_grant_quest",
@@ -354,6 +372,47 @@ fn party_loot_stage(name: &str) -> (Stage, u64, ReducerConnection) {
         corpse,
     };
     (stage, second, second_connection)
+}
+
+const SKINNING_SKILL_LINE: u32 = 393;
+
+// The wolf's only drop is a quest-only Jerky row, and it carries no money. The killer accepts the
+// quest before the kill only when `needs_jerky` is set.
+fn quest_drop_stage(name: &str, needs_jerky: bool) -> Stage {
+    let (shard, character, corpse) = spawn_wolf(name);
+    insert_jerky_quest(&shard);
+    if needs_jerky {
+        grant_jerky_quest(&shard, &[character]);
+    }
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_template SET money_min = 0, money_max = 0 WHERE entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.assert_sql(&format!(
+        "DELETE FROM game_creature_loot WHERE creature_entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.insert_row(
+        "game_creature_loot",
+        &[
+            ("id", &9_164_001),
+            ("creature_entry", &TEST_WOLF_ENTRY),
+            ("item_entry", &FIXTURE_JERKY),
+            ("chance_bp", &10_000),
+            ("count", &1),
+            ("quest_only", &true),
+        ],
+    );
+    shard.assert_call(
+        "debug_kill_creature",
+        &[&character.to_string(), &corpse.to_string()],
+    );
+    let mut connection = enter(&shard, character);
+    connection.drain_packets();
+    Stage {
+        shard,
+        connection,
+        character,
+        corpse,
+    }
 }
 
 fn inventory_failure(reason: u8) -> (u16, Vec<u8>) {
@@ -605,4 +664,59 @@ fn a_needer_whose_objective_completes_cannot_take_their_party_loot_copy() {
     assert_loot_error(&packets, stage.corpse, LOOT_ERROR_DIDNT_KILL);
     assert_eq!(stage.carried(FIXTURE_JERKY), 1);
     assert_eq!(stage.loot_rows(), 2);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_corpse_whose_only_drop_is_an_unneeded_quest_item_is_not_lootable_and_can_be_skinned() {
+    let stage = quest_drop_stage("loot-quest-item-unneeded", false);
+    assert_eq!(stage.loot_rows(), 0);
+    assert!(!stage.corpse_flag_lootable());
+
+    stage.shard.insert_row(
+        "game_player_skill",
+        &[
+            ("id", &9_164_002),
+            ("character_guid", &stage.character),
+            ("skill_line", &SKINNING_SKILL_LINE),
+            ("current", &300),
+            ("max_rank", &300),
+        ],
+    );
+    stage
+        .shard
+        .assert_call("debug_skin_nearest", &[&stage.character.to_string()]);
+
+    let skinned = stage.shard.query_rows(&format!(
+        "SELECT skinned FROM game_world_entity WHERE guid = {}",
+        stage.corpse
+    ));
+    assert_eq!(skinned[0]["skinned"], "true");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_quest_accepted_after_the_kill_cannot_take_the_item_from_that_corpse() {
+    let mut stage = quest_drop_stage("loot-quest-item-late", false);
+    grant_jerky_quest(&stage.shard, &[stage.character]);
+
+    stage.take(0);
+
+    assert_eq!(stage.loot_rows(), 0);
+    assert_eq!(stage.carried(FIXTURE_JERKY), 0);
+    assert!(!stage.corpse_flag_lootable());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_quest_item_its_killer_needs_at_the_kill_stays_on_the_corpse() {
+    let mut stage = quest_drop_stage("loot-quest-item-needed", true);
+    assert_eq!(stage.loot_rows(), 1);
+    assert!(stage.corpse_flag_lootable());
+
+    assert_eq!(stage.open_corpse().len(), 1);
+    stage.take(0);
+
+    assert_eq!(stage.carried(FIXTURE_JERKY), 1);
+    assert_eq!(stage.loot_rows(), 0);
 }

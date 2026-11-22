@@ -486,8 +486,30 @@ pub(crate) fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
     }
 }
 
+// vmangos Loot::FillQuestLoot offers a quest-only drop to a looter who needs it when the loot is
+// filled, and a fill is never repeated. A drop no looter needs is not kept, so a Character who
+// accepts the quest later cannot take it, and a corpse with nothing else is not lootable.
+pub(crate) fn insert_corpse_rows_for_needers(
+    ctx: &ReducerContext,
+    corpse_guid: u64,
+    winners: Vec<LootDrop>,
+    looters: &[u64],
+) -> bool {
+    let needed = winners
+        .into_iter()
+        .filter(|winner| {
+            !winner.quest_only
+                || looters
+                    .iter()
+                    .any(|&looter| killer_needs_item(ctx, Some(looter), winner.item_entry))
+        })
+        .collect();
+    insert_corpse_rows(ctx, corpse_guid, needed, looters)
+}
+
 /// Each needer in `looters` gets a reserved copy of a party-loot quest drop; every other drop is
-/// one shared row.
+/// one shared row. A quest drop with no needer stays a shared row, as a chest keeps one for a
+/// later opener.
 pub(crate) fn insert_corpse_rows(
     ctx: &ReducerContext,
     corpse_guid: u64,
@@ -573,7 +595,7 @@ pub(crate) fn roll_creature_loot(
         .map(LootRow::from);
     let winners = roll_loot_rows(ctx, corpse_guid, rows);
     let looters = corpse_eligible_recipients(ctx, corpse_guid);
-    insert_corpse_rows(ctx, corpse_guid, winners, &looters)
+    insert_corpse_rows_for_needers(ctx, corpse_guid, winners, &looters)
 }
 
 // The importer resolves PickpocketLootId to creature_entry before storage.
@@ -682,7 +704,12 @@ pub struct GameFishingLoot {
     pub min_count: u32,
 }
 
-pub(crate) fn roll_pickpocket_loot(ctx: &ReducerContext, creature_entry: u32, target_guid: u64) {
+pub(crate) fn roll_pickpocket_loot(
+    ctx: &ReducerContext,
+    creature_entry: u32,
+    target_guid: u64,
+    pickpocket_guid: u64,
+) {
     let rows = ctx
         .db
         .game_pickpocket_loot()
@@ -693,7 +720,7 @@ pub(crate) fn roll_pickpocket_loot(ctx: &ReducerContext, creature_entry: u32, ta
     if winners.is_empty() {
         return;
     }
-    insert_corpse_rows(ctx, target_guid, winners, &[]);
+    insert_corpse_rows_for_needers(ctx, target_guid, winners, &[pickpocket_guid]);
     refresh_lootable(ctx, target_guid);
 }
 

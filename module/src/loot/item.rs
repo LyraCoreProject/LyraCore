@@ -61,7 +61,7 @@ pub(crate) fn open_item(
         .filter(&item.entry)
         .map(LootRow::from);
     let winners = super::roll_loot_rows(ctx, item.guid, rows);
-    super::insert_corpse_rows(ctx, item.guid, winners, &[]);
+    super::insert_corpse_rows_for_needers(ctx, item.guid, winners, &[looter.guid]);
     super::stock_purse(
         ctx,
         item.guid,
