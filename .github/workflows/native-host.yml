@@ -19,8 +19,8 @@ on:
     branches: [main]
 
 concurrency:
-  # A run for another label skips every job, so it gets its own group and cancels nothing.
-  group: ${{ github.workflow }}-${{ (github.event.action == 'labeled' && github.event.label.name != 'full-ci') && github.run_id || github.event.pull_request.number || github.run_id }}
+  # Each label gets its own group, so a later push does not cancel a full-ci run.
+  group: ${{ github.workflow }}-${{ github.event.action == 'labeled' && format('{0}-{1}', github.event.label.name, github.event.pull_request.number) || github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -29,14 +29,14 @@ permissions:
 env:
   HOST_CHECKOUT: .lyracore/native-host/SpacetimeDB
 
-# A PR runs these Boat jobs only with the full-ci label, because each Boat VM counts against the
-# plan's start limits. Pushes to main run them on GitHub's runners.
+# A PR runs these jobs once, when the full-ci label is added, because each Boat VM counts against
+# the plan's start limits. Later pushes skip them; remove the label and add it again to rerun them.
+# Pushes to main run them on GitHub's runners.
 jobs:
   host:
     if: >-
       github.event_name == 'push' ||
-      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
+      (github.event.action == 'labeled' && github.event.label.name == 'full-ci')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
@@ -114,8 +114,7 @@ jobs:
   module:
     if: >-
       github.event_name == 'push' ||
-      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
+      (github.event.action == 'labeled' && github.event.label.name == 'full-ci')
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -136,8 +135,7 @@ jobs:
   checks:
     if: >-
       github.event_name == 'push' ||
-      (contains(github.event.pull_request.labels.*.name, 'full-ci') &&
-      (github.event.action != 'labeled' || github.event.label.name == 'full-ci'))
+      (github.event.action == 'labeled' && github.event.label.name == 'full-ci')
     needs: [host, module]
     runs-on: ${{ github.event_name == 'push' && 'ubuntu-latest' || 'boat-large' }}
     timeout-minutes: 30

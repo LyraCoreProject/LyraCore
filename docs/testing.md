@@ -1,9 +1,10 @@
 # Testing
 
-Rust and Runtime Scripts run on draft pull requests, forks included. Module durable and the Native
-Host checks run on Boat VMs, which the plan limits by starts, so a PR runs them only once it has the
-`full-ci` label: adding the label starts them, and further pushes run them while the label stays,
-subject to path filters. The Native Host unit tests still run on every ready push. Pushes to `main` keep their existing workflow coverage. This page lists the commands so you
+Rust and Runtime Scripts run on draft pull requests, forks included, on GitHub's runners. Module
+durable and the Native Host checks run on Boat VMs, which the plan limits by starts, so a PR runs
+them once, when the `full-ci` label is added, subject to path filters. Later pushes skip them; to run
+them on a new head, remove the label and add it again. The Native Host unit tests still run on every
+ready push. Pushes to `main` run every workflow on GitHub's runners. This page lists the commands so you
 can reproduce a CI failure. Do not run them all before a PR; CI does. A green unit tier does not
 prove the durable tier, and neither proves what a real client shows.
 

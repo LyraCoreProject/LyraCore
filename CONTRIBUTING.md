@@ -77,7 +77,8 @@ targets core `main`.
 ## How a change is judged
 
 1. The checks pass. CI runs fast checks on every pull request, including forks. A maintainer adds
-   the `full-ci` label to run the durable and Native Host checks, subject to path filters. You need
+   the `full-ci` label to run the durable and Native Host checks once on the current head, subject
+   to path filters. You need
    not run them first. [`docs/testing.md`](docs/testing.md)
    explains them.
 2. The evidence is stated: what 1.12.1 does, and how you know. A packet capture, a DBC field, a

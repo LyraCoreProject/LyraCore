@@ -31,10 +31,9 @@ jobs:
           grep -rnE --include='*.rs' 'e?print(ln)?!' "${roots[@]}" || status=$?
           [ "$status" -eq 1 ]
 
-  # One job, because each Boat VM counts against the plan's start limits. Pushes to main run on
-  # GitHub's runners, where nobody waits for the result.
+  # Runs on GitHub's runners, so a PR push uses no Boat starts.
   rust:
-    runs-on: ${{ github.event_name == 'push' && 'ubuntu-latest' || 'boat' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
