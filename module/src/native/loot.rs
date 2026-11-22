@@ -277,17 +277,15 @@ pub(super) fn receive(
             }
             let taken = crate::loot::take_item(ctx, guid, current, c.item_slot)
                 .map_err(|reason| take_refusal(current, reason))?;
-            // Every open window loses the slot; other needers of a quest row hold their own clones.
-            let viewers: Vec<ConnectionId> = if taken.quest_only {
-                vec![connection]
-            } else {
-                ctx.db
-                    .game_native_player()
-                    .by_open_loot()
-                    .filter(current)
-                    .map(|viewer| viewer.connection_id)
-                    .collect()
-            };
+            // A shared row leaves every open Loot Window; a reserved copy leaves only its taker's.
+            let viewers: Vec<ConnectionId> = ctx
+                .db
+                .game_native_player()
+                .by_open_loot()
+                .filter(current)
+                .filter(|viewer| viewer.connection_id == connection || taken.reserved_for == 0)
+                .map(|viewer| viewer.connection_id)
+                .collect();
             for viewer in viewers {
                 super::send(
                     ctx,
