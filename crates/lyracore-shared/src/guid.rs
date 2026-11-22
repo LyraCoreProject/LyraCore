@@ -58,6 +58,11 @@ pub const fn is_gameobject(guid: u64) -> bool {
     high(guid) == GAMEOBJECT
 }
 
+#[must_use]
+pub const fn is_item(guid: u64) -> bool {
+    high(guid) == ITEM
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

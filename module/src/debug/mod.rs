@@ -579,6 +579,8 @@ pub fn debug_spawn_gameobject(
             gather_gray,
             lock_id: 0,
             size: 0.0,
+            money_min: 0,
+            money_max: 0,
         },
         map_id,
         [x, y, z],
@@ -659,6 +661,8 @@ pub fn debug_setup_gather_pool(
                 gather_gray: 0,
                 lock_id: 0,
                 size: 0.0,
+                money_min: 0,
+                money_max: 0,
             });
         }
         member_tbl.insert(crate::gameobject::GameObjectPoolMember {

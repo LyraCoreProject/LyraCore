@@ -4,7 +4,10 @@ use crate::actor::{ActionRefusal, ActionRefusalKind};
 use crate::character::game_character;
 use crate::game_group_member;
 use crate::WorldEntity;
-use crate::{game_character_quest, game_gameobject, game_quest_objective, game_world_entity};
+use crate::{
+    game_character_quest, game_gameobject, game_item_instance, game_quest_objective,
+    game_world_entity,
+};
 use crate::{game_corpse_loot_eligible, game_loot_roll, game_loot_roll_vote};
 use lyracore_shared::loot_roll::event_kind as roll_event_kind;
 
@@ -22,6 +25,9 @@ pub(crate) use tag::{
 
 mod take;
 pub(crate) use take::{apply_take_loot, request_take_loot, take_item};
+
+mod item;
+pub(crate) use item::{forget_item_loot, open_item, release_item, OpenItemRefusal};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LootRefusal {
@@ -249,6 +255,19 @@ impl From<GameObjectLoot> for LootRow {
     }
 }
 
+impl From<GameItemLoot> for LootRow {
+    fn from(row: GameItemLoot) -> Self {
+        Self {
+            item_entry: row.item_entry,
+            chance_bp: row.chance_bp,
+            min_count: row.min_count,
+            count: row.count,
+            group_id: row.group_id,
+            quest_only: row.quest_only,
+        }
+    }
+}
+
 impl From<GameSkinningLoot> for LootRow {
     fn from(row: GameSkinningLoot) -> Self {
         Self {
@@ -449,6 +468,7 @@ pub(crate) fn purge_corpse_residue(ctx: &ReducerContext, guid: u64) {
 }
 
 pub(crate) fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
+    ctx.db.game_loot_money().source_guid().delete(corpse_guid);
     let loot = ctx.db.game_corpse_loot();
     let stale: Vec<u64> = loot
         .by_corpse()
@@ -566,6 +586,53 @@ pub struct GameObjectLoot {
     #[default(0)]
     pub min_count: u32,
 }
+
+// vmangos item_loot_template: what opening a lootable item of `lootable_entry` can give.
+#[table(accessor = game_item_loot, public, index(accessor = by_lootable, btree(columns = [lootable_entry])))]
+pub struct GameItemLoot {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub lootable_entry: u32,
+    pub item_entry: u32,
+    pub chance_bp: u32,
+    pub count: u32,
+    pub group_id: u32,
+    pub quest_only: bool,
+    #[default(0)]
+    pub min_count: u32,
+}
+
+/// The copper a chest or an opened item still holds. An item's row marks its loot as rolled.
+#[table(accessor = game_loot_money, index(accessor = by_owner, btree(columns = [owner_guid])))]
+pub struct LootMoney {
+    #[primary_key]
+    pub source_guid: u64,
+    // The Character holding an opened item; zero for a chest.
+    pub owner_guid: u64,
+    pub money: u32,
+}
+
+crate::outside_table_catalog!(game_loot_money);
+
+crate::character_owned!(delete, fn sweep_delete_game_loot_money(ctx, character_guid) {
+    let purses: Vec<u64> = ctx
+        .db
+        .game_loot_money()
+        .by_owner()
+        .filter(&character_guid)
+        .map(|purse| purse.source_guid)
+        .collect();
+    for item_guid in purses {
+        forget_item_loot(ctx, item_guid);
+    }
+});
+// An opened item keeps its money across a Transfer, so the destination does not roll it again.
+crate::character_owned!(transfer, fn sweep_transfer_game_loot_money(ctx, character_guid, io) {
+    table = game_loot_money,
+    by = by_owner,
+    keep_key,
+});
 
 #[table(accessor = game_skinning_loot, public, index(accessor = by_skin, btree(columns = [skin_loot_id])))]
 pub struct GameSkinningLoot {
@@ -734,9 +801,11 @@ pub(crate) fn refuse(refusal: LootRefusal, detail: &str) -> LootRefusal {
 pub(crate) enum LootSource {
     Corpse(Box<WorldEntity>),
     GameObject,
+    Item,
 }
 
-/// A live looter within reach of a GameObject, or of a corpse it holds Loot Tag access to.
+/// A live looter within reach of a GameObject, of a corpse it holds Loot Tag access to, or holding
+/// an opened item.
 pub(crate) fn reach(
     ctx: &ReducerContext,
     looter_guid: u64,
@@ -752,6 +821,25 @@ pub(crate) fn reach(
             LootRefusal::LooterDead,
             "dead Characters cannot loot",
         ));
+    }
+    if lyracore_shared::guid::is_item(source_guid) {
+        let held = ctx
+            .db
+            .game_item_instance()
+            .guid()
+            .find(source_guid)
+            .is_some_and(|item| item.owner_guid == looter_guid);
+        if !held
+            || ctx
+                .db
+                .game_loot_money()
+                .source_guid()
+                .find(source_guid)
+                .is_none()
+        {
+            return Err(refuse(LootRefusal::NoLootSource, "no opened item held"));
+        }
+        return Ok((looter, LootSource::Item));
     }
     let (partition, at, source) = if let Some(corpse) = entities.guid().find(source_guid) {
         if corpse.is_player() || !corpse.dead {
@@ -805,7 +893,7 @@ pub(crate) fn reach_corpse(
 ) -> Result<(WorldEntity, WorldEntity), LootRefusal> {
     match reach(ctx, looter_guid, corpse_guid)? {
         (looter, LootSource::Corpse(corpse)) => Ok((looter, *corpse)),
-        (_, LootSource::GameObject) => Err(refuse(
+        (_, LootSource::GameObject | LootSource::Item) => Err(refuse(
             LootRefusal::NoLootSource,
             "Loot Source is not a creature corpse",
         )),
@@ -840,21 +928,34 @@ pub(crate) fn apply_loot_money(
 pub(crate) fn claim_money(
     ctx: &ReducerContext,
     looter_guid: u64,
-    target_guid: u64,
+    source_guid: u64,
 ) -> Result<(), LootRefusal> {
-    let (mut looter, mut corpse) = reach_corpse(ctx, looter_guid, target_guid)?;
-    if corpse.money == 0 {
-        return Err(refuse(LootRefusal::NothingToLoot, "corpse purse is empty"));
-    }
+    let (looter, source) = reach(ctx, looter_guid, source_guid)?;
+    let (amount, recipients) = match source {
+        LootSource::Corpse(corpse) => {
+            let mut corpse = *corpse;
+            if corpse.money == 0 {
+                return Err(refuse(LootRefusal::NothingToLoot, "corpse purse is empty"));
+            }
+            let amount = std::mem::take(&mut corpse.money);
+            corpse.update(ctx);
+            (amount, corpse_eligible_recipients(ctx, source_guid))
+        }
+        // vmangos HandleLootMoneyOpcode shares a chest's money with the group members near the looter.
+        LootSource::GameObject => (
+            take_purse(ctx, source_guid)?,
+            nearby_group_members(ctx, &looter),
+        ),
+        LootSource::Item => (take_purse(ctx, source_guid)?, Vec::new()),
+    };
+    pay_money(ctx, looter, amount, &recipients);
+    refresh_lootable(ctx, source_guid);
+    Ok(())
+}
 
-    let amount = corpse.money;
-    corpse.money = 0;
-    corpse.update(ctx);
-
-    let recipients = corpse_eligible_recipients(ctx, target_guid);
-    let grouped = money_is_grouped(&recipients);
-    let shares = split_money(amount, &recipients, looter_guid);
-
+fn pay_money(ctx: &ReducerContext, mut looter: WorldEntity, amount: u32, recipients: &[u64]) {
+    let looter_guid = looter.guid;
+    let shares = split_money(amount, recipients, looter_guid);
     // Credit the looter in this local copy to avoid overwriting a separately updated purse.
     for &(recipient_guid, share) in &shares {
         if share == 0 {
@@ -868,7 +969,7 @@ pub(crate) fn claim_money(
     }
     looter.update(ctx);
 
-    if grouped {
+    if money_is_grouped(recipients) {
         for &(recipient_guid, share) in &shares {
             if share == 0 {
                 continue;
@@ -882,9 +983,78 @@ pub(crate) fn claim_money(
             );
         }
     }
+}
 
-    refresh_lootable(ctx, target_guid);
-    Ok(())
+fn nearby_group_members(ctx: &ReducerContext, looter: &WorldEntity) -> Vec<u64> {
+    let Some(member) = crate::group::group_of(ctx, looter.guid) else {
+        return Vec::new();
+    };
+    let entities = ctx.db.game_world_entity();
+    crate::group::members_of(ctx, member.group_id)
+        .into_iter()
+        .filter(|member| {
+            entities
+                .guid()
+                .find(member.character_guid)
+                .is_some_and(|e| {
+                    let [dx, dy, dz] = [e.x - looter.x, e.y - looter.y, e.z - looter.z];
+                    (e.map_id, e.instance_id) == (looter.map_id, looter.instance_id)
+                        && dx * dx + dy * dy + dz * dz <= crate::group::GROUP_XP_RANGE_SQ
+                })
+        })
+        .map(|member| member.character_guid)
+        .collect()
+}
+
+pub(crate) fn purse(ctx: &ReducerContext, source_guid: u64) -> u32 {
+    ctx.db
+        .game_loot_money()
+        .source_guid()
+        .find(source_guid)
+        .map_or(0, |purse| purse.money)
+}
+
+fn take_purse(ctx: &ReducerContext, source_guid: u64) -> Result<u32, LootRefusal> {
+    let purses = ctx.db.game_loot_money();
+    let mut purse = purses
+        .source_guid()
+        .find(source_guid)
+        .filter(|purse| purse.money != 0)
+        .ok_or_else(|| refuse(LootRefusal::NothingToLoot, "Loot Source purse is empty"))?;
+    let amount = std::mem::take(&mut purse.money);
+    purses.source_guid().update(purse);
+    Ok(amount)
+}
+
+/// Rolls a Loot Source's money and replaces whatever purse it held.
+pub(crate) fn stock_purse(
+    ctx: &ReducerContext,
+    source_guid: u64,
+    owner_guid: u64,
+    (minimum, maximum): (u32, u32),
+) {
+    let money = money_in_range(minimum, maximum, || source_draw(ctx, source_guid));
+    let purses = ctx.db.game_loot_money();
+    purses.source_guid().delete(source_guid);
+    purses.insert(LootMoney {
+        source_guid,
+        owner_guid,
+        money,
+    });
+}
+
+// vmangos Loot::GenerateMoneyLoot at a drop rate of 1; a wide range rolls in steps of 256 copper.
+fn money_in_range(minimum: u32, maximum: u32, draw: impl FnOnce() -> u32) -> u32 {
+    if maximum == 0 {
+        0
+    } else if maximum <= minimum {
+        maximum
+    } else if maximum - minimum < 32_700 {
+        minimum + draw() % (maximum - minimum + 1)
+    } else {
+        let (low, high) = (minimum >> 8, maximum >> 8);
+        (low + draw() % (high - low + 1)) << 8
+    }
 }
 
 // During Transfer, defer the share so an in-flight recipient still gets paid.
@@ -991,6 +1161,26 @@ mod tests {
         assert_eq!(row(0, 3).stack_range(), (3, 3));
         assert_eq!(row(4, 3).stack_range(), (3, 3));
         assert_eq!(row(0, 0).stack_range(), (1, 1));
+    }
+
+    #[test]
+    fn money_rolls_the_open_range_and_a_closed_range_gives_its_maximum() {
+        assert_eq!(money_in_range(0, 0, || unreachable!()), 0);
+        assert_eq!(money_in_range(50, 0, || unreachable!()), 0);
+        assert_eq!(money_in_range(40, 40, || unreachable!()), 40);
+        assert_eq!(money_in_range(90, 40, || unreachable!()), 40);
+        assert_eq!(money_in_range(10, 20, || 0), 10);
+        assert_eq!(money_in_range(10, 20, || 10), 20);
+        assert_eq!(money_in_range(10, 20, || 11), 10);
+    }
+
+    #[test]
+    fn a_range_of_32700_copper_or_more_rolls_whole_steps_of_256() {
+        assert_eq!(money_in_range(0, 32_699, || 32_699), 32_699);
+        assert_eq!(money_in_range(0, 32_700, || 0), 0);
+        assert_eq!(money_in_range(0, 32_700, || 127), 127 * 256);
+        assert_eq!(money_in_range(0, 32_700, || 128), 0);
+        assert_eq!(money_in_range(1_000, 100_000, || 0), 768);
     }
 
     #[test]

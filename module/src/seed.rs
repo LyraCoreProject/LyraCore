@@ -500,6 +500,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             gather_gray: 0,
             lock_id: 0,
             size: 0.0,
+            money_min: 0,
+            money_max: 0,
         });
     GameObject {
         guid: packed_gameobject_spawn_guid(1),
@@ -536,6 +538,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             gather_gray: 0,
             lock_id: 0,
             size: 0.0,
+            money_min: 0,
+            money_max: 0,
         });
     GameObject {
         guid: packed_gameobject_spawn_guid(2),
@@ -573,6 +577,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             gather_gray: 0,
             lock_id: 0,
             size: 0.0,
+            money_min: 0,
+            money_max: 0,
         });
     GameObject {
         guid: packed_gameobject_spawn_guid(3),
@@ -609,6 +615,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             gather_gray: 0,
             lock_id: 0,
             size: 0.0,
+            money_min: 0,
+            money_max: 0,
         });
     GameObject {
         guid: packed_gameobject_spawn_guid(4),
@@ -651,6 +659,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
                     gather_gray: 0,
                     lock_id: 0,
                     size: 0.0,
+                    money_min: 0,
+                    money_max: 0,
                 });
         }
     }

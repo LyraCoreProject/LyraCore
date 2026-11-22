@@ -42,6 +42,8 @@ pub fn debug_stage_meeting_stone(
         gather_gray: 0,
         lock_id: 0,
         size: 0.0,
+        money_min: 0,
+        money_max: 0,
     });
     let stones = ctx.db.game_meeting_stone();
     stones.entry().delete(entry);

@@ -11,7 +11,7 @@ use lyracore_shared::loot_roll as roll;
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::{game_native_player, Rollback, Unhandled};
-use crate::loot::LootRefusal;
+use crate::loot::{LootRefusal, OpenItemRefusal};
 use crate::{game_corpse_loot, game_item_template, game_world_entity, Refusal};
 
 fn items(ctx: &ReducerContext, target: u64, guid: u64) -> Vec<codec::LootItemView> {
@@ -86,10 +86,10 @@ fn open_refusal(target: u64, refusal: LootRefusal) -> Rollback {
 
 // Replies follow vmangos HandleAutostoreLootItemOpcode; a failed store leaves the window open.
 fn take_refusal(target: u64, refusal: LootRefusal) -> Rollback {
-    let gameobject = guid::is_gameobject(target);
+    let released = guid::is_gameobject(target) || guid::is_item(target);
     let reply = |message| Rollback::reply(message, refusal.as_tag());
     match refusal {
-        LootRefusal::NoLootSource | LootRefusal::OutOfRange if gameobject => {
+        LootRefusal::NoLootSource | LootRefusal::OutOfRange if released => {
             reply(release_response(target))
         }
         LootRefusal::NoLootSource
@@ -113,6 +113,72 @@ fn take_refusal(target: u64, refusal: LootRefusal) -> Rollback {
         | LootRefusal::RecipientUnavailable
         | LootRefusal::RecipientInventoryFull => Rollback::silent(refusal.as_tag()),
     }
+}
+
+fn open_item_failure(refusal: OpenItemRefusal, item: u64) -> SMSG_INVENTORY_CHANGE_FAILURE {
+    let refusal = match refusal {
+        OpenItemRefusal::ItemMissing => ItemRefusal::ItemNotFound,
+        OpenItemRefusal::LooterDead => ItemRefusal::PlayerDead,
+        OpenItemRefusal::ItemLocked => return codec::build_item_locked(item),
+        OpenItemRefusal::NotLootable => ItemRefusal::NotRightNow,
+    };
+    codec::build_inventory_refusal(refusal, item, 0)
+}
+
+// vmangos HandleOpenItemOpcode answers a refusal with SMSG_INVENTORY_CHANGE_FAILURE on the item.
+fn open_item(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    slot: Option<u8>,
+    current: u64,
+) -> Result<(), Rollback> {
+    let item = slot.and_then(|slot| crate::items::item_in_slot(ctx, guid, slot));
+    let item_guid = item.as_ref().map_or(0, |item| item.guid);
+    let looter = super::actor(ctx, guid).map_err(|cause| {
+        Rollback::reply(
+            inventory_failure(codec::build_inventory_refusal(
+                ItemRefusal::NotRightNow,
+                item_guid,
+                0,
+            )),
+            cause,
+        )
+    })?;
+    crate::loot::open_item(ctx, &looter, item).map_err(|refusal| {
+        Rollback::reply(
+            inventory_failure(open_item_failure(refusal, item_guid)),
+            refusal.as_tag(),
+        )
+    })?;
+    // vmangos SendLoot releases the window already open before it shows the new one.
+    if current != 0 && current != item_guid {
+        release(ctx, connection, guid, current)?;
+    }
+    let money = crate::loot::purse(ctx, item_guid);
+    let (opcode, body) =
+        codec::build_loot_response_raw(item_guid, money, &items(ctx, item_guid, guid));
+    super::send_raw(ctx, connection, opcode, body, false);
+    open(ctx, connection, item_guid);
+    Ok(())
+}
+
+fn release(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    current: u64,
+) -> Result<(), Rollback> {
+    open(ctx, connection, 0);
+    if guid::is_item(current) {
+        crate::loot::release_item(ctx, guid, current);
+    }
+    Ok(super::send(
+        ctx,
+        connection,
+        release_response(current),
+        false,
+    )?)
 }
 
 pub(super) fn receive(
@@ -161,8 +227,9 @@ pub(super) fn receive(
             let target = c.guid.guid();
             crate::gameobject::request_use_gameobject(ctx, guid, target)?;
             let items = items(ctx, target, guid);
-            if !items.is_empty() {
-                let (opcode, body) = codec::build_loot_response_raw(target, 0, &items);
+            let money = crate::loot::purse(ctx, target);
+            if !items.is_empty() || money != 0 {
+                let (opcode, body) = codec::build_loot_response_raw(target, money, &items);
                 super::send_raw(ctx, connection, opcode, body, false);
                 open(ctx, connection, target);
             }
@@ -222,14 +289,15 @@ pub(super) fn receive(
             if current == 0 {
                 return Ok(());
             }
-            open(ctx, connection, 0);
-            Ok(super::send(
-                ctx,
-                connection,
-                release_response(current),
-                false,
-            )?)
+            release(ctx, connection, guid, current)
         }
+        ClientOpcodeMessage::CMSG_OPEN_ITEM(c) => open_item(
+            ctx,
+            connection,
+            guid,
+            codec::inventory_slot(c.bag_index, c.slot),
+            open_loot(),
+        ),
         ClientOpcodeMessage::CMSG_LOOT_ROLL(c) => {
             super::actor(ctx, guid)?;
             let slot =

@@ -525,7 +525,7 @@ instant and owns kill rewards and corpse eligibility until the creature leaves c
 A Character's open loot on one Loot Source.
 
 **Loot Source**:
-The corpse or GameObject a Loot Window is open on.
+The corpse, GameObject or opened item a Loot Window is open on.
 _Avoid_: loot target
 
 **Loot Release**:

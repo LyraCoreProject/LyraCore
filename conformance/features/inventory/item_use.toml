@@ -9,7 +9,11 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
-tests = []
+tests = [
+    { path = "module/tests/conformance/item_loot.rs", function = "opening_a_clam_gives_its_item_and_money_and_destroys_the_emptied_clam", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "opening_an_item_that_is_not_lootable_is_refused", rung = "durable_module" },
+    { path = "module/tests/conformance/item_loot.rs", function = "opening_a_lockbox_that_needs_lockpicking_answers_item_locked", rung = "durable_module" },
+]
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -20,7 +24,19 @@ symbol = "WorldSession::HandleUseItemOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "The Module returns an unavailable response for CMSG_OPEN_ITEM, CMSG_WRAP_ITEM."
+description = "The Module returns an unavailable response for CMSG_WRAP_ITEM."
 path = "module/src/native/unavailable.rs"
 symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
+
+[[known_gaps]]
+description = "No spell unlocks an item, so CMSG_OPEN_ITEM refuses every item whose lock needs a skill with ITEM_LOCKED."
+path = "module/src/loot/item.rs"
+symbol = "needs_lockpicking"
+evidence = "vmangos HandleOpenItemOpcode opens a lockbox once ITEM_DYNFLAG_UNLOCKED is set; LyraCore item rows have no unlocked flag."
+
+[[known_gaps]]
+description = "Opening an item binds it, and a Transfer keeps its money but drops its remaining items; vmangos keeps item loot on the item guid."
+path = "module/src/loot/item.rs"
+symbol = "open_item"
+evidence = "Mail, trade and auctions recreate an item under a new guid; game_corpse_loot rows are not Character-owned Transfer rows."

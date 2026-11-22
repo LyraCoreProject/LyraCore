@@ -190,6 +190,18 @@ flag, so no creature answers a Call for Assistance, including the pack mates tha
 proximity pull before this revision. Direct SQL INSERTs must supply `flags`; shared import SQL defaults fill
 older inserts. No repair is needed.
 
+### Chest money and item loot migration
+
+`game_item_template` gains `lock_id`, `money_min` and `money_max`, and `game_gameobject_template`
+gains `money_min` and `money_max`, all end-appended with default 0. The public `game_item_loot`
+table and the private `game_loot_money` table are new and start empty. Reimport the `items`,
+`gameobjects` and `loot` families after the publish. Until then no item is lootable, every lootable
+item opens with no loot and chests give no money. Shared import SQL defaults fill older inserts.
+
+`game_loot_money` is a Character-owned Transfer table. An older destination refuses it, so update
+both Shards before moving active World Sessions. Opening an item binds it: mail, trade and
+auctions give an item a new guid, which would roll its loot again.
+
 ### Corpse AOI migration
 
 The native runtime indexes `game_corpse` by map, Instance and `cell`. The end-appended `cell`

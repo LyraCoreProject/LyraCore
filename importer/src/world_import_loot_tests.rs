@@ -77,6 +77,7 @@ fn vmangos_loot_selects_patch_rows_expands_nested_references_and_excludes_forbid
         "skinning_loot_template",
         "gameobject_loot_template",
         "fishing_loot_template",
+        "item_loot_template",
     ] {
         tables.push(FixtureTable {
             name,
@@ -103,6 +104,10 @@ fn vmangos_loot_selects_patch_rows_expands_nested_references_and_excludes_forbid
     assert_eq!(
         loot.fishing_rows,
         ["(1,10,100,4000,1,0,1)", "(2,10,103,500,1,0,1)"]
+    );
+    assert_eq!(
+        loot.item_loot_rows,
+        ["(1,10,100,4000,1,0,false,1)", "(2,10,103,500,1,0,true,1)"]
     );
     let creature_loot = parse_creature_drops(&source).unwrap();
     assert_eq!(

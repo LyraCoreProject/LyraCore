@@ -93,7 +93,7 @@ pub(super) fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<V
             opcode: SMSG_STABLE_RESULT_OPCODE,
             body: vec![6],
         },
-        ClientOpcodeMessage::CMSG_OPEN_ITEM(_) | ClientOpcodeMessage::CMSG_WRAP_ITEM(_) => {
+        ClientOpcodeMessage::CMSG_WRAP_ITEM(_) => {
             message(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
                 Box::new(codec::build_inventory_refusal(
                     lyracore_shared::item::ItemRefusal::NotRightNow,

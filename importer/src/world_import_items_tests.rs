@@ -4,7 +4,7 @@ use rusqlite::types::Value::{Integer as N, Real as F, Text};
 use std::collections::HashSet;
 
 fn item_source() -> WorldSource {
-    let numeric = "entry patch class subclass display_id quality flags buy_count buy_price sell_price inventory_type allowable_class allowable_race item_level required_level required_skill required_skill_rank required_reputation_faction required_reputation_rank max_count stackable container_slots dmg_min1 dmg_max1 dmg_type1 armor holy_res fire_res nature_res frost_res shadow_res arcane_res delay spellid_1 spelltrigger_1 spellid_2 spelltrigger_2 spellid_3 spelltrigger_3 spellid_4 spelltrigger_4 spellid_5 spelltrigger_5 bonding page_text start_quest sheath random_property block max_durability bag_family food_type spellppmrate_1 spellppmrate_2 spellppmrate_3 spellppmrate_4 spellppmrate_5 spellcategory_1 spellcategory_2 spellcategory_3 spellcategory_4 spellcategory_5";
+    let numeric = "entry patch class subclass display_id quality flags buy_count buy_price sell_price inventory_type allowable_class allowable_race item_level required_level required_skill required_skill_rank required_reputation_faction required_reputation_rank max_count stackable container_slots dmg_min1 dmg_max1 dmg_type1 armor holy_res fire_res nature_res frost_res shadow_res arcane_res delay spellid_1 spelltrigger_1 spellid_2 spelltrigger_2 spellid_3 spelltrigger_3 spellid_4 spelltrigger_4 spellid_5 spelltrigger_5 bonding page_text start_quest sheath random_property block max_durability bag_family food_type spellppmrate_1 spellppmrate_2 spellppmrate_3 spellppmrate_4 spellppmrate_5 spellcategory_1 spellcategory_2 spellcategory_3 spellcategory_4 spellcategory_5 lock_id min_money_loot max_money_loot";
     let mut names = numeric
         .split_whitespace()
         .map(str::to_string)
@@ -338,9 +338,33 @@ fn an_imported_item_keeps_the_procs_per_minute_of_each_spell_slot() {
         .find(|row| row.contains("'Ordinary Water'"))
         .unwrap();
     assert!(
-        water.ends_with(",9.5,0,0,0,0.8,30,0,0,0,1160,0)"),
+        water.ends_with(",9.5,0,0,0,0.8,30,0,0,0,1160,0,0,0,0)"),
         "{water}"
     );
+}
+
+#[test]
+fn an_imported_item_keeps_its_lock_and_money_range() {
+    let source = item_source();
+    edit_source(
+        &source,
+        "UPDATE item_template SET lock_id = 5, min_money_loot = 12, max_money_loot = 34 WHERE entry = 1001",
+    );
+    let ItemRows {
+        templates: items, ..
+    } = build_items_and_loot(
+        &source,
+        &HashMap::from([(100, 3)]),
+        &HashSet::from([100]),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .unwrap();
+    let water = items
+        .iter()
+        .find(|row| row.contains("'Ordinary Water'"))
+        .unwrap();
+    assert!(water.ends_with(",5,12,34)"), "{water}");
 }
 
 #[test]

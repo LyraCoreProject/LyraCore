@@ -39,6 +39,11 @@ pub struct GameObjectTemplate {
     pub lock_id: u32,
     #[default(0f32)]
     pub size: f32,
+    // Copper a chest rolls between when it opens, as vmangos mingold..maxgold.
+    #[default(0u32)]
+    pub money_min: u32,
+    #[default(0u32)]
+    pub money_max: u32,
 }
 
 #[table(accessor = game_gameobject_trap)]
@@ -684,6 +689,7 @@ fn use_resolved_gameobject(
                 });
             }
             crate::loot::insert_corpse_rows(ctx, go.guid, winners);
+            crate::loot::stock_purse(ctx, go.guid, 0, (tmpl.money_min, tmpl.money_max));
             go.state = 1;
             go.update(ctx);
         }

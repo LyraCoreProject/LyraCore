@@ -17,6 +17,8 @@ fn gameobject_source() -> WorldSource {
         ("data5", "INTEGER"),
         ("size", "REAL"),
         ("script_name", "TEXT"),
+        ("mingold", "INTEGER"),
+        ("maxgold", "INTEGER"),
     ];
     let template = |entry, patch, kind, name: &str| {
         [
@@ -41,6 +43,8 @@ fn gameobject_source() -> WorldSource {
             ("data5", N(0)),
             ("size", N(1)),
             ("script_name", Text(String::new())),
+            ("mingold", N(if entry == 5090042 { 40 } else { 0 })),
+            ("maxgold", N(if entry == 5090042 { 40 } else { 0 })),
         ]
     };
     let spawn_columns = &[
@@ -168,8 +172,9 @@ fn vmangos_gameobjects_select_versions_and_ranges_skip_disabled_and_translate_st
     let sql = plan.stmts.join(";");
     assert!(!sql.contains("Old door"));
     assert!(!sql.contains("Fishing hole"));
-    assert!(sql.contains("(5090043,10,1,'Fixture goober',0,0,0,0,0,0,1)"));
-    assert!(sql.contains("(1731,25,1,'Copper node',2770,1,186,300,100,0,1)"));
+    assert!(sql.contains("(5090043,10,1,'Fixture goober',0,0,0,0,0,0,1,0,0)"));
+    assert!(sql.contains("(1731,25,1,'Copper node',2770,1,186,300,100,0,1,0,0)"));
+    assert!(sql.contains("(5090042,3,1,'Fixture mug',0,5090042,0,0,0,0,1,40,40)"));
 }
 
 #[test]

@@ -33,6 +33,8 @@ fn spawn_door(ctx: &ReducerContext, entry: u32, type_id: u8) {
             gather_gray: 0,
             lock_id: 0,
             size: 0.0,
+            money_min: 0,
+            money_max: 0,
         },
         MAP,
         [0.0, 0.0, 0.0],
