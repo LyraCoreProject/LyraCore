@@ -346,6 +346,7 @@ pub(crate) struct Fighter {
     pub guid: u64,
     pub body: MeleeBody,
     pub victim: u64,
+    pub serves_character: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -362,6 +363,7 @@ pub(crate) trait ThreatSink {
     fn threat_sources(&self, guid: u64) -> Vec<ThreatSource>;
     fn held_in_place(&self, guid: u64) -> bool;
     fn retarget(&mut self, creature: u64, victim: u64);
+    fn can_attack(&self, creature: u64, target: u64) -> bool;
     fn evade(&mut self, creature: u64);
 }
 
@@ -1009,6 +1011,16 @@ fn eligible_cast<W: CastSink>(w: &W, c: &Caster, option: &SpellOption) -> Option
     Some((option.spell_id, target))
 }
 
+// vmangos SelectHostileTarget: a creature that has no threat list, or still has an attackable
+// melee victim that holds no threat row, does not evade.
+fn evades_without_source<W: ThreatSink>(w: &W, f: &Fighter, contenders: &[Contender]) -> bool {
+    let victim_outside_list =
+        f.victim != 0 && !contenders.iter().any(|c| c.source_guid == f.victim);
+    !contenders.is_empty()
+        && !f.serves_character
+        && !(victim_outside_list && w.can_attack(f.guid, f.victim))
+}
+
 fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
     let fighters = w.fighters(scope);
     let visited = fighters.len();
@@ -1044,7 +1056,7 @@ fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
             .collect();
         match select_victim(f.victim, &contenders) {
             Some(victim) if victim != f.victim => switches.push((f.guid, victim)),
-            None if !contenders.is_empty() => evaders.push(f.guid),
+            None if evades_without_source(w, f, &contenders) => evaders.push(f.guid),
             _ => {}
         }
     }

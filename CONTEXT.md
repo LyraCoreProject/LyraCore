@@ -787,7 +787,7 @@ A threat source a creature takes as its victim only when every source it can att
 priority. A source is low priority when it holds a harmful Aura that fears, confuses or breaks on
 damage, or, while the creature cannot move, when it is outside the creature's Melee Reach. The
 creature then takes the top one by threat, without the threat margin. It never takes a source it
-cannot attack. See `module/src/threat.rs`.
+cannot attack, and with no source it can attack the creature evades. See `module/src/threat.rs`.
 _Avoid_: secondary threat target
 
 **Rule State**:

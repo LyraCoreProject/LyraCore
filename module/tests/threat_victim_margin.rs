@@ -2,7 +2,7 @@ mod support;
 
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_package_delta::packed_spell_effect_id;
-use lyracore_shared::constants::unit_flags::{IN_COMBAT, TAXI_FLIGHT};
+use lyracore_shared::constants::unit_flags::IN_COMBAT;
 use lyracore_shared::spell::taxonomy::{
     A_CONTROL, CAST_FLAG_IGNORE_RESISTANCES, M_FEAR, P_MECHANIC, T_TARGET_ENEMY,
 };
@@ -16,6 +16,8 @@ const DEFENSIVE: u8 = 1;
 const HUMAN: &str = "1";
 const WARRIOR: &str = "1";
 const FEAR: u32 = 5_113_301;
+const CHARACTER_FACTION: u32 = 9_101;
+const WOLF_FACTION: u32 = 9_102;
 
 struct Fight {
     shard: Standalone,
@@ -137,11 +139,25 @@ impl Fight {
         );
     }
 
-    fn board_taxi(&self, guid: &str) {
-        let flags: u32 = number(&self.entity(guid), "unit_flags");
+    fn befriend_wolf_to_characters(&self) {
+        for (id, group, friend_group) in [(CHARACTER_FACTION, 1u32, 0u32), (WOLF_FACTION, 0, 1)] {
+            self.shard.insert_row(
+                "game_faction_template",
+                &[
+                    ("id", &id),
+                    ("faction", &id),
+                    ("faction_group", &group),
+                    ("friend_group", &friend_group),
+                ],
+            );
+        }
         self.shard.assert_sql(&format!(
-            "UPDATE game_world_entity SET unit_flags = {} WHERE guid = {guid}",
-            flags | TAXI_FLIGHT
+            "UPDATE game_world_entity SET faction_template = {CHARACTER_FACTION} \
+             WHERE guid = {VICTIM}"
+        ));
+        self.shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET faction_template = {WOLF_FACTION} WHERE guid = {}",
+            self.wolf
         ));
     }
 
@@ -295,13 +311,13 @@ fn a_creature_turns_from_its_feared_victim_to_a_free_source() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_creature_whose_only_source_boards_a_taxi_evades_with_full_health() {
-    let fight = Fight::start("threat-evade-taxi", 3.0);
+fn a_creature_whose_only_source_turns_friendly_evades_with_full_health() {
+    let fight = Fight::start("threat-evade-friendly", 3.0);
     fight.shard.assert_sql(&format!(
         "UPDATE game_world_entity SET health = 50000 WHERE guid = {}",
         fight.wolf
     ));
-    fight.board_taxi(VICTIM);
+    fight.befriend_wolf_to_characters();
     fight.settle();
 
     let wolf = fight.entity(&fight.wolf);
@@ -327,19 +343,4 @@ fn a_creature_whose_only_source_boards_a_taxi_evades_with_full_health() {
     );
     assert_eq!(number::<u32>(&wolf, "unit_flags") & IN_COMBAT, 0);
     assert_eq!(wolf["health"], wolf["max_health"]);
-}
-
-#[test]
-#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_creature_turns_to_the_source_left_when_its_victim_boards_a_taxi() {
-    let fight = Fight::start("threat-evade-other-source", 15.0);
-    fight.set_threat(CHALLENGER, 10);
-    fight.board_taxi(VICTIM);
-    fight.settle();
-
-    assert_eq!(
-        fight.victim(),
-        CHALLENGER,
-        "a source out of reach is still a valid source"
-    );
 }

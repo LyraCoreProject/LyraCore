@@ -934,6 +934,14 @@ impl ThreatSink for CtxWorld<'_> {
                             .attacker_guid()
                             .find(guid)
                             .map_or(0, |a| a.target_guid),
+                        serves_character: c.owner_guid != 0
+                            && self
+                                .ctx
+                                .db
+                                .game_world_entity()
+                                .guid()
+                                .find(c.owner_guid)
+                                .is_some_and(|owner| owner.is_player()),
                     })
             })
             .collect()
@@ -984,6 +992,13 @@ impl ThreatSink for CtxWorld<'_> {
                 c.target_guid = victim;
                 c.update(self.ctx);
             }
+        }
+    }
+    fn can_attack(&self, creature: u64, target: u64) -> bool {
+        let entities = self.ctx.db.game_world_entity();
+        match (entities.guid().find(creature), entities.guid().find(target)) {
+            (Some(attacker), Some(target)) => crate::combat::may_harm(self.ctx, &attacker, &target),
+            _ => false,
         }
     }
     fn evade(&mut self, creature: u64) {
