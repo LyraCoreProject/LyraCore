@@ -339,6 +339,7 @@ fn apply_pickpocket_loot_field(
         "item_entry" => loot.item_entry = as_u32(field, value)?,
         "chance_bp" => loot.chance_bp = as_u32(field, value)?,
         "count" => loot.count = as_u32(field, value)?,
+        "min_count" => loot.min_count = as_u32(field, value)?,
         "group_id" => loot.group_id = as_u32(field, value)?,
         "quest_only" => loot.quest_only = as_bool(field, value)?,
         other => {
@@ -382,6 +383,7 @@ fn apply_gameobject_loot_field(
         "item_entry" => loot.item_entry = as_u32(field, value)?,
         "chance_bp" => loot.chance_bp = as_u32(field, value)?,
         "count" => loot.count = as_u32(field, value)?,
+        "min_count" => loot.min_count = as_u32(field, value)?,
         "group_id" => loot.group_id = as_u32(field, value)?,
         "quest_only" => loot.quest_only = as_bool(field, value)?,
         other => {
@@ -424,6 +426,7 @@ fn apply_skinning_loot_field(
         "item_entry" => loot.item_entry = as_u32(field, value)?,
         "chance_bp" => loot.chance_bp = as_u32(field, value)?,
         "count" => loot.count = as_u32(field, value)?,
+        "min_count" => loot.min_count = as_u32(field, value)?,
         "group_id" => loot.group_id = as_u32(field, value)?,
         other => {
             return Err(format!(
@@ -465,6 +468,7 @@ fn apply_fishing_loot_field(
         "item_entry" => loot.item_entry = as_u32(field, value)?,
         "chance_bp" => loot.chance_bp = as_u32(field, value)?,
         "count" => loot.count = as_u32(field, value)?,
+        "min_count" => loot.min_count = as_u32(field, value)?,
         "group_id" => loot.group_id = as_u32(field, value)?,
         other => {
             return Err(format!(

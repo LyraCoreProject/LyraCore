@@ -355,6 +355,13 @@ impl Table {
                 )
                 | (Self::Item, "damage_school")
                 | (
+                    Self::PickpocketLoot
+                        | Self::GameobjectLoot
+                        | Self::SkinningLoot
+                        | Self::FishingLoot,
+                    "min_count"
+                )
+                | (
                     Self::CreatureTemplate,
                     "mechanic_immune_mask" | "call_for_help_range"
                 )
@@ -563,6 +570,7 @@ const PICKPOCKET_LOOT_COLUMNS: &[Column] = &[
     column("count", FieldType::U32),
     column("group_id", FieldType::U32),
     column("quest_only", FieldType::Bool),
+    column("min_count", FieldType::U32),
 ];
 
 const GAMEOBJECT_LOOT_COLUMNS: &[Column] = &[
@@ -572,6 +580,7 @@ const GAMEOBJECT_LOOT_COLUMNS: &[Column] = &[
     column("count", FieldType::U32),
     column("group_id", FieldType::U32),
     column("quest_only", FieldType::Bool),
+    column("min_count", FieldType::U32),
 ];
 
 const SKINNING_LOOT_COLUMNS: &[Column] = &[
@@ -580,6 +589,7 @@ const SKINNING_LOOT_COLUMNS: &[Column] = &[
     column("chance_bp", FieldType::U32),
     column("count", FieldType::U32),
     column("group_id", FieldType::U32),
+    column("min_count", FieldType::U32),
 ];
 
 const FISHING_LOOT_COLUMNS: &[Column] = &[
@@ -588,6 +598,7 @@ const FISHING_LOOT_COLUMNS: &[Column] = &[
     column("chance_bp", FieldType::U32),
     column("count", FieldType::U32),
     column("group_id", FieldType::U32),
+    column("min_count", FieldType::U32),
 ];
 
 const CREATURE_CAST_COLUMNS: &[Column] = &[column("spell_id", FieldType::U32)];

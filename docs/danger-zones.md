@@ -760,8 +760,9 @@ after the action sees an empty event table.
 `game_creature_loot`, `game_pickpocket_loot`, `game_gameobject_loot`, `game_skinning_loot` and
 `game_fishing_loot` gain `min_count`, end-appended with default 0. Zero keeps a row's stack fixed
 at `count`, so rows written before the change drop as before. Reimport the `items` and `loot`
-families after the publish; until then every drop still gives its largest stack. A row written by
-the Operator Content API or inserted by a Package Delta carries zero and keeps a fixed stack.
+families after the publish; until then every drop still gives its largest stack. The Operator
+Content API loot rows and the Package Delta loot tables carry `min_count` too; a Package Delta
+that omits it inserts zero.
 
 ## 2. Tooling gotchas
 

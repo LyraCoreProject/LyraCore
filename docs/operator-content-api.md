@@ -635,16 +635,19 @@ lookups use the display id across entries, so keep metadata for the same model c
 [{"setCreatureDisplays":{"entry":5200500,"displays":[{"display_id":100,"scale":1.0,"weight":1,"gender":0,"bounding_radius":0.389},{"display_id":200,"scale":1.5,"weight":3,"gender":1,"bounding_radius":0.5}]}}]
 ```
 
-`LootRow` has `item_entry: u32`, `chance_bp: u32`, `count: u32`, `group_id: u32`, and
-`quest_only: bool`. `SkinRow` has the same fields except `quest_only`.
+`LootRow` has `item_entry: u32`, `chance_bp: u32`, `min_count: u32`, `count: u32`,
+`group_id: u32`, and `quest_only: bool`. `SkinRow` has the same fields except `quest_only`.
+A dropped row gives a stack drawn evenly from `min_count` through `count`, as vmangos `LootItem`
+does. A `min_count` of zero keeps the stack fixed at `count`, so send the imported row's
+`min_count` back to keep its range.
 For `group_id = 0`, each row gets an independent roll in 0 through 9,999; 10,000 always drops
 and zero never drops. A nonzero group gets one roll over cumulative weights on that same
 10,000-point scale. At most one row wins. Group weights are not normalized: a total of 7,500
 leaves a 25% chance of no drop. A total above 10,000 is refused so later rows remain reachable.
-Counts must be positive. Empty lists remove all rows.
+Counts must be positive, and a `min_count` above `count` is refused. Empty lists remove all rows.
 
 ```json
-[{"setCreatureLoot":{"creature_entry":5200500,"rows":[{"item_entry":25,"chance_bp":7500,"count":1,"group_id":1,"quest_only":false}]}}]
+[{"setCreatureLoot":{"creature_entry":5200500,"rows":[{"item_entry":25,"chance_bp":7500,"min_count":1,"count":3,"group_id":1,"quest_only":false}]}}]
 ```
 
 Pickpocket lists are keyed by creature entry. `pickpocket_loot_id` records the import source's
@@ -652,7 +655,7 @@ identifier; the importer resolves it before storing rows. Editing that template 
 select a different pickpocket list.
 
 ```json
-[{"setPickpocketLoot":{"creature_entry":5200500,"rows":[{"item_entry":25,"chance_bp":10000,"count":1,"group_id":0,"quest_only":false}]}}]
+[{"setPickpocketLoot":{"creature_entry":5200500,"rows":[{"item_entry":25,"chance_bp":10000,"min_count":0,"count":1,"group_id":0,"quest_only":false}]}}]
 ```
 
 Skinning lists use a nonzero `skin_loot_id`, shared by every template that names it. This variant
@@ -661,7 +664,7 @@ existing profession logic grants one Light Leather, item 2318. Removing the list
 fallback.
 
 ```json
-[{"setSkinningLoot":{"skin_loot_id":42,"rows":[{"item_entry":25,"chance_bp":10000,"count":1,"group_id":0}]}}]
+[{"setSkinningLoot":{"skin_loot_id":42,"rows":[{"item_entry":25,"chance_bp":10000,"min_count":0,"count":1,"group_id":0}]}}]
 ```
 
 `CreatureSpell` has `spell_id: u32`, `priority: u8`, `condition: u8`, and `condition_value: u8`.
@@ -727,7 +730,8 @@ creation. Other Gates require:
 - Creature type 1 through 10, a protocol-supported creature family, rank 0 through 4,
   trainer type 0 through 3, and trainer class zero or a protocol-supported Character class.
 - Display gender 0 through 2 and finite nonnegative bounding radius.
-- Existing item and spell references, valid loot chances and groups, and AI conditions as above.
+- Existing item and spell references, valid loot chances, stack ranges and groups, and AI
+  conditions as above.
 
 Every list replacement allocates explicit nonzero ids before deleting old rows. It starts above
 the highest existing id outside that table's protected bands, then advances a transaction-local

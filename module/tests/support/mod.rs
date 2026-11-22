@@ -170,18 +170,27 @@ pub fn wolves(shard: &mut Standalone, offsets: &[f32]) -> Vec<Row> {
 }
 
 pub fn wolves_beside(shard: &Standalone, character: &str, offsets: &[f32]) -> Vec<String> {
+    creatures_beside(shard, character, TEST_WOLF_ENTRY, offsets)
+}
+
+pub fn creatures_beside(
+    shard: &Standalone,
+    character: &str,
+    entry: u32,
+    offsets: &[f32],
+) -> Vec<String> {
     shard.assert_sql(&format!(
-        "DELETE FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+        "DELETE FROM game_world_entity WHERE entry = {entry}"
     ));
     for offset in offsets {
         shard.assert_call(
             "debug_spawn_at_feet",
-            &[character, &TEST_WOLF_ENTRY.to_string(), &offset.to_string()],
+            &[character, &entry.to_string(), &offset.to_string()],
         );
     }
     let mut guids: Vec<u64> = shard
         .query_rows(&format!(
-            "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
+            "SELECT guid FROM game_world_entity WHERE entry = {entry}"
         ))
         .iter()
         .map(|wolf| number(wolf, "guid"))

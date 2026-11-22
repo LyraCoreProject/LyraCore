@@ -69,7 +69,7 @@ fn row(shard: &Standalone, table: &str, guid: u64) -> Option<support::Row> {
 }
 
 fn loot() -> Value {
-    json!({"item_entry": 25, "chance_bp": 7500, "count": 2, "group_id": 1, "quest_only": false})
+    json!({"item_entry": 25, "chance_bp": 7500, "min_count": 1, "count": 2, "group_id": 1, "quest_only": false})
 }
 
 #[test]
@@ -295,6 +295,7 @@ fn loot_lists_replace_imported_ids_skip_bands_and_preserve_owned_rows() {
         assert_eq!(rows.len(), 1);
         assert_eq!(number::<u64>(&rows[0], "id"), 5_100_000);
         assert_eq!(number::<u32>(&rows[0], "count"), 2);
+        assert_eq!(number::<u32>(&rows[0], "min_count"), 1);
         shard.insert_rows(
             table,
             &[
@@ -474,6 +475,13 @@ fn refused_batches_keep_rows_lives_and_logs_and_unchanged_imported_values_pass()
             "creature edit 0",
         );
     }
+    let mut inverted_range = loot();
+    inverted_range["min_count"] = json!(3);
+    refusal(
+        &shard,
+        json!([{"setCreatureLoot": {"creature_entry": FIRST, "rows": [inverted_range]}}]),
+        "creature edit 0: loot for item 25 needs min_count 3 <= count 2",
+    );
 }
 
 #[test]

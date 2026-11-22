@@ -2,7 +2,9 @@ mod common;
 
 use common::{artifact, pickpocket_loot_claim, WHOLE_PICKPOCKET_LOOT_ROW};
 use lyracore_package_delta::ids::{is_fixture_reserved_loot_id, PackageRange};
-use lyracore_package_delta::{is_package_loot_id, DeltaError, PackageDelta, PrimaryKey, Table};
+use lyracore_package_delta::{
+    is_package_loot_id, DeltaError, FieldValue, PackageDelta, PrimaryKey, Table,
+};
 
 const A_CHANCE: &str = r#"{"chance_bp":{"type":"u32","value":2500}}"#;
 
@@ -138,5 +140,30 @@ fn the_same_id_is_independently_claimable_on_every_loot_table() {
         Table::FishingLoot,
     ] {
         assert!(table.columns().iter().any(|c| c.name == "item_entry"));
+    }
+}
+
+#[test]
+fn a_loot_insert_may_claim_a_stack_minimum_or_leave_it_to_its_default() {
+    let ranged = WHOLE_PICKPOCKET_LOOT_ROW.replacen(
+        '{',
+        r#"{ "min_count": { "type": "u32", "value": 2 },"#,
+        1,
+    );
+    let json = artifact(
+        "example.pkg",
+        &pickpocket_loot_claim(9_000_000, "insert", &ranged),
+    );
+
+    let delta = PackageDelta::parse(&json).expect("a loot row may claim min_count");
+
+    assert_eq!(delta.claims()[0].fields()["min_count"], FieldValue::U32(2));
+    for table in [
+        Table::PickpocketLoot,
+        Table::GameobjectLoot,
+        Table::SkinningLoot,
+        Table::FishingLoot,
+    ] {
+        assert!(table.column_has_default("min_count"), "{table}");
     }
 }
