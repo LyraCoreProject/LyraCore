@@ -286,6 +286,7 @@ fn item(slot: u8) -> ListingItem {
         slot,
         mailable: true,
         has_generated_loot: false,
+        has_spent_charges: false,
         snapshot: crate::items::ItemSnapshot {
             entry: 25,
             stack_count: 2,
@@ -392,6 +393,13 @@ fn listing_accepts_only_one_owned_mailable_bag_stack_and_valid_terms() {
     opened.has_generated_loot = true;
     assert_eq!(
         prepare_listing(Some(&opened), 7, 10, terms(), policy()),
+        Err(AuctionRefusal::ItemNotTradeable)
+    );
+
+    let mut spent = item(23);
+    spent.has_spent_charges = true;
+    assert_eq!(
+        prepare_listing(Some(&spent), 7, 10, terms(), policy()),
         Err(AuctionRefusal::ItemNotTradeable)
     );
 

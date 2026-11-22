@@ -758,7 +758,7 @@ fn run_trade_commit(
                     Some(guid),
                     &crate::items::ItemSnapshot::from(inst),
                 )?;
-                crate::items::record_spent_charges(ctx, guid, partner.guid, spent);
+                crate::items::record_spent(ctx, guid, partner.guid, spent);
             }
             for ((inst, guid), spent) in partner_items.iter().zip(acceptor_guids).zip(partner_spent)
             {
@@ -776,7 +776,7 @@ fn run_trade_commit(
                     Some(guid),
                     &crate::items::ItemSnapshot::from(inst),
                 )?;
-                crate::items::record_spent_charges(ctx, guid, acceptor.guid, spent);
+                crate::items::record_spent(ctx, guid, acceptor.guid, spent);
             }
             let entities = ctx.db.game_world_entity();
             let mut acceptor_row = entities

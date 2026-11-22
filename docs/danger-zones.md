@@ -203,8 +203,9 @@ an empty Loot Window, with no Lockpicking check, and release destroys it. Reimpo
 `loot` families before players can reach the Realm. Reimport `gameobjects` for chest money; until
 then chests give no money.
 
-`game_loot_money` is a Character-owned Transfer table. An older destination refuses it, so update
-both Shards before moving active World Sessions.
+`game_loot_money` is a Character-owned Transfer table. A blob from an older source lacks it and
+imports with no purse rows; an older Shard has opened no item. An older destination refuses the new
+manifest, so update both Shards before moving active World Sessions.
 
 ### Corpse AOI migration
 
@@ -247,11 +248,14 @@ reimport every template has zero charges, so no item cast uses up its item: poti
 bandages, scrolls and soulstones last for ever. Reimport the `items` family before players can
 reach the Realm. A Shard that keeps the fixture items its `init` seeded has Tough Jerky at zero
 charges until it is recreated. The Operator Content API and Package Deltas do not carry the
-columns, so a created item has no charges and an update keeps them.
+columns, so a created item has no charges, is never used up and an update keeps them.
 
-`game_item_spell_charges` is a Character-owned Transfer table. An older destination refuses it, so
-update both Shards before moving active World Sessions. Trade and buyback keep an item's spent
-charges; mail and auctions drop them.
+Trade and buyback keep an item's spent charges. Mail and the Auction House refuse an item with
+spent charges, as they refuse an opened item, until their rows can carry the charges.
+
+`game_item_spell_charges` is a Character-owned Transfer table. A blob from an older source lacks it
+and imports with no rows; an older Shard has spent no charges. An older destination refuses the new
+manifest, so update both Shards before moving active World Sessions.
 
 ### Combo finisher migration
 

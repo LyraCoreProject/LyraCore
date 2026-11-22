@@ -152,12 +152,14 @@ and `category_cooldown_ms` retain source fields needed by equip effects. The fiv
 `game_spell_cd.category` identifies the shared category owner; `category_ready_micros` keeps its
 absolute deadline. `game_pending_cast.cooldown_category` preserves an Item's override, including
 zero, through cast completion. `game_pending_cast.cast_item_guid` names the Item that started a
-cast; zero means no cast item, and a row in flight at upgrade already used up its Item at start.
-The five `game_item_template.spellcharges_*` fields hold vmangos `SpellCharges`: zero is unlimited,
-and a negative count is expendable. After the cast's `SMSG_SPELL_GO` and effects, the cast spends a
-charge, and an expendable spell's last charge uses up one Item. A channel whose Item is destroyed, sold, traded, mailed or auctioned sets it, and an
-`item_target_guid` naming the same Item, to zero and runs on, as vmangos `ClearCastItem` does. Their typed defaults preserve old rows during an additive publish.
-See [equip spell migration](danger-zones.md#equip-spell-migration) before play resumes.
+cast; zero means no cast item, and a row in flight at upgrade already used up its Item at start. A
+channel whose Item is destroyed, sold, traded, mailed or auctioned sets it, and an
+`item_target_guid` naming the same Item, to zero and runs on, as vmangos `ClearCastItem` does. Their
+typed defaults preserve old rows during an additive publish. The five
+`game_item_template.spellcharges_*` fields hold vmangos `SpellCharges`: zero is unlimited, and a
+negative count is expendable. After the cast's `SMSG_SPELL_GO` and effects, the cast spends a
+charge, and an expendable spell's last charge uses up one Item. See [equip spell
+migration](danger-zones.md#equip-spell-migration) before play resumes.
 
 Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully
 qualified `#[spacetimedb::table(...)]`; missing the second form undercounts.

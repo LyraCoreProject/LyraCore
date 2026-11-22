@@ -306,6 +306,7 @@ struct ListingItem {
     slot: u8,
     mailable: bool,
     has_generated_loot: bool,
+    has_spent_charges: bool,
     snapshot: crate::items::ItemSnapshot,
     sell_price: u32,
 }
@@ -1068,6 +1069,7 @@ impl ListingSource for CtxSource<'_> {
             mailable: crate::items::validate_bag_dest_slot(self.ctx, item.owner_guid, item.slot)
                 .is_ok(),
             has_generated_loot: crate::loot::has_generated_loot(self.ctx, item.guid),
+            has_spent_charges: crate::items::has_spent_charges(self.ctx, item.guid),
             snapshot: crate::items::ItemSnapshot::from(&item),
             sell_price: template.sell_price,
         })
@@ -1668,7 +1670,8 @@ fn prepare_listing(
     {
         return Err(AuctionRefusal::ItemNotFound);
     }
-    if item.has_generated_loot {
+    // A Listing cannot carry spent charges; see the item_use Feature Ledger deviation.
+    if item.has_generated_loot || item.has_spent_charges {
         return Err(AuctionRefusal::ItemNotTradeable);
     }
     if terms.start_bid == 0 || (terms.buyout != 0 && terms.buyout < terms.start_bid) {

@@ -57,7 +57,7 @@ pub(crate) use properties::{
     select_property,
 };
 pub(crate) use spell_charges::{
-    cast_item_use_of, item_charges_remain, record_spent as record_spent_charges, spent_charges,
+    cast_item_use_of, has_spent_charges, item_charges_remain, record_spent, spent_charges,
     sweep_delete_game_item_spell_charges, sweep_transfer_game_item_spell_charges, take_cast_item,
     CastItemUse,
 };

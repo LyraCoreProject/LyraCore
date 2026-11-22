@@ -94,26 +94,32 @@ pub(crate) fn spent_charges(ctx: &ReducerContext, item_guid: u64) -> u32 {
         .map_or(0, |row| row.spent)
 }
 
+/// The template and spent charges of the item `item_guid`; `None` when it or its template is gone.
+fn charge_state(ctx: &ReducerContext, item_guid: u64) -> Option<(ItemTemplate, u32)> {
+    let item = ctx.db.game_item_instance().guid().find(item_guid)?;
+    let template = ctx.db.game_item_template().entry().find(item.entry)?;
+    Some((template, spent_charges(ctx, item_guid)))
+}
+
 /// What a cast would do now to the item `item_guid`; a missing item is kept.
 pub(crate) fn cast_item_use_of(ctx: &ReducerContext, item_guid: u64) -> CastItemUse {
-    ctx.db
-        .game_item_instance()
-        .guid()
-        .find(item_guid)
-        .and_then(|item| ctx.db.game_item_template().entry().find(item.entry))
-        .map_or(CastItemUse::Keep, |template| {
-            cast_item_use(&template, spent_charges(ctx, item_guid))
-        })
+    charge_state(ctx, item_guid).map_or(CastItemUse::Keep, |(template, spent)| {
+        cast_item_use(&template, spent)
+    })
 }
 
 /// Whether `item_guid` has a charge left for each limited spell; a missing item passes.
 pub(crate) fn item_charges_remain(ctx: &ReducerContext, item_guid: u64) -> bool {
+    charge_state(ctx, item_guid).is_none_or(|(template, spent)| charges_remain(&template, spent))
+}
+
+/// Whether the item `item_guid` has spent a spell charge, which mail and auctions cannot carry.
+pub(crate) fn has_spent_charges(ctx: &ReducerContext, item_guid: u64) -> bool {
     ctx.db
-        .game_item_instance()
-        .guid()
+        .game_item_spell_charges()
+        .item_guid()
         .find(item_guid)
-        .and_then(|item| ctx.db.game_item_template().entry().find(item.entry))
-        .is_none_or(|template| charges_remain(&template, spent_charges(ctx, item_guid)))
+        .is_some()
 }
 
 /// Applies a cast's [`CastItemUse`] to an item that may be gone by now.

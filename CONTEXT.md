@@ -29,7 +29,7 @@ entry in both files.
 
 **H** [Handoff](#requests-and-delivery) · [Headless Client](CORE_TERMS.md#headless-client) · [Hold](#retired-terms) · [Host Operation](#runtime-scripts)
 
-**I** [Idle Bot](#bots) · [Import Family](#packages) · [Instance Lease](#groups) · [Instance Placement](#realm-topology) · [Instance Shard](#realm-topology) · [Instance Pool](#retired-terms) · [Instance Removal](#groups) · [Instance Vmap Slice](#realm-topology) · [Invocation](#runtime-scripts) · [Item Exchange](#procs) · [Item Text](#mail)
+**I** [Idle Bot](#bots) · [Import Family](#packages) · [Instance Lease](#groups) · [Instance Placement](#realm-topology) · [Instance Shard](#realm-topology) · [Instance Pool](#retired-terms) · [Instance Removal](#groups) · [Instance Vmap Slice](#realm-topology) · [Invocation](#runtime-scripts) · [Item Exchange](#procs) · [Item Spell Charges](#random-properties) · [Item Text](#mail)
 
 **L** [Land Mount](#mounts) · [Lethal Damage Floor](#creature-ai) · [Letter Copy](#mail) · [Listing](#auctions) · [Login Queue](#accounts-characters-and-sessions) · [Logon Limiter](#accounts-characters-and-sessions) · [Loot Release](#loot) · [Loot Roll](#loot) · [Loot Roll Promotion](#retired-terms) · [Loot Roll Promotion Receipt](#retired-terms) · [Loot Source](#loot) · [Loot Tag](#loot) · [Loot Window](#loot)
 
@@ -1393,6 +1393,14 @@ spent removes it early. `game_temporary_enchantment` holds it, keyed by item, an
 removes it at expiry. The time runs while the item is unequipped or its owner is offline.
 A sale pauses the remaining duration and charges in buyback until restoration.
 _Avoid_: temp enchant, coating, imbue
+
+**Item Spell Charges**:
+The uses an item's own spell allows, from the template's `spellcharges_1` to `spellcharges_5`. Zero
+is unlimited; a negative count is expendable, and its last charge uses up one item. An item that
+cannot stack keeps the charges it has spent in `game_item_spell_charges`; a stack stores none.
+They belong to the item, not to an Aura: Proc charges belong to an Aura and its holder, and
+Temporary Enchantment charges belong to the enchantment and go with it.
+_Avoid_: item charges, uses
 
 **Stat Kind**:
 An append-only code for an enchantment effect's contribution, independent of the client encoding.
