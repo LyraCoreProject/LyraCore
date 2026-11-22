@@ -1,8 +1,9 @@
 use lyracore_shared::loot_roll::vote_kind;
+use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
 use wow_world_messages::vanilla::{
-    LootMethodError, RollVote, SMSG_LOOT_ALL_PASSED, SMSG_LOOT_MASTER_LIST, SMSG_LOOT_MONEY_NOTIFY,
-    SMSG_LOOT_RELEASE_RESPONSE, SMSG_LOOT_REMOVED, SMSG_LOOT_ROLL, SMSG_LOOT_ROLL_WON,
-    SMSG_LOOT_START_ROLL,
+    Gold, LootMethodError, RollVote, SMSG_LOOT_RESPONSE_LootMethod, SMSG_LOOT_ALL_PASSED,
+    SMSG_LOOT_MASTER_LIST, SMSG_LOOT_MONEY_NOTIFY, SMSG_LOOT_RELEASE_RESPONSE, SMSG_LOOT_REMOVED,
+    SMSG_LOOT_RESPONSE, SMSG_LOOT_ROLL, SMSG_LOOT_ROLL_WON, SMSG_LOOT_START_ROLL,
 };
 use wow_world_messages::Guid;
 
@@ -30,13 +31,19 @@ pub fn build_loot_response_raw(guid: u64, money: u32, items: &[LootItemView]) ->
     (SMSG_LOOT_RESPONSE_OPCODE, body)
 }
 
-/// gtker appends gold and an item count to an error; vmangos `LootResponse` ends after the error.
+/// The guid, loot type 0 and the error: 10 bytes, with no gold and no item count, as vmangos writes it.
 pub fn build_loot_error_response(guid: u64, loot_error: LootMethodError) -> (u16, Vec<u8>) {
-    let mut body = Vec::with_capacity(10);
-    body.extend_from_slice(&guid.to_le_bytes());
-    body.push(0u8); // LootMethod::ErrorX
-    body.push(loot_error.as_int());
-    (SMSG_LOOT_RESPONSE_OPCODE, body)
+    let error = SMSG_LOOT_RESPONSE {
+        guid: Guid::new(guid),
+        loot_method: SMSG_LOOT_RESPONSE_LootMethod::ErrorX { loot_error },
+        gold: Gold::new(0),
+        items: Vec::new(),
+    };
+    let mut framed = Vec::with_capacity(14);
+    ServerOpcodeMessage::SMSG_LOOT_RESPONSE(Box::new(error))
+        .write_unencrypted_server(&mut framed)
+        .expect("writing to a Vec cannot fail");
+    (SMSG_LOOT_RESPONSE_OPCODE, framed.split_off(4))
 }
 
 pub fn build_loot_removed(slot: u8) -> SMSG_LOOT_REMOVED {
@@ -150,11 +157,6 @@ pub fn build_loot_all_passed(
 mod tests {
     use super::*;
     use lyracore_shared::loot_roll::vote_kind;
-    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
-    use wow_world_messages::vanilla::{
-        Gold, RollVote, SMSG_LOOT_RESPONSE_LootMethod, SMSG_LOOT_RESPONSE,
-    };
-    use wow_world_messages::Guid;
 
     #[test]
     fn all_passed_is_the_corpse_slot_item_property_and_suffix_under_its_header() {
@@ -209,6 +211,30 @@ mod tests {
             body,
             [0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x30, 0xF1, 0x00, 0x04]
         );
+    }
+
+    #[test]
+    fn the_ten_byte_loot_error_decodes_as_an_error_without_gold_or_items() {
+        let guid = 0xF130_0000_0000_0007;
+        let (opcode, body) = build_loot_error_response(guid, LootMethodError::TooFar);
+        let mut framed = Vec::new();
+        framed.extend_from_slice(&(body.len() as u16 + 2).to_be_bytes());
+        framed.extend_from_slice(&opcode.to_le_bytes());
+        framed.extend_from_slice(&body);
+        let decoded = ServerOpcodeMessage::read_unencrypted(&mut std::io::Cursor::new(&framed))
+            .expect("a loot error of 10 bytes must decode");
+        let ServerOpcodeMessage::SMSG_LOOT_RESPONSE(response) = decoded else {
+            panic!("expected SMSG_LOOT_RESPONSE");
+        };
+        assert_eq!(body.len(), 10);
+        assert_eq!(response.guid.guid(), guid);
+        assert_eq!(
+            response.loot_method,
+            SMSG_LOOT_RESPONSE_LootMethod::ErrorX {
+                loot_error: LootMethodError::TooFar
+            }
+        );
+        assert!(response.items.is_empty());
     }
 
     #[test]
