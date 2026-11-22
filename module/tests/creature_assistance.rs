@@ -257,6 +257,19 @@ fn x_of(shard: &Standalone, guid: &str) -> f32 {
         .unwrap()
 }
 
+fn y_of(shard: &Standalone, guid: &str) -> f32 {
+    shard.query_rows(&format!(
+        "SELECT y FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["y"]
+        .parse()
+        .unwrap()
+}
+
+// Idle wander keeps the fleer within 9 yd of the victim, so only a flee reaches 10 yd, on either side.
+fn is_flee_distance_from_victim((x, y): (f32, f32)) -> bool {
+    ((x - VICTIM_FAR_X).hypot(y) - FLEE_DISTANCE_YD).abs() < 0.25
+}
+
 // The Character stands at the origin facing +x while the wolves spawn, so an offset is a world x.
 // The caller's friend has another faction template, so only a Call for Help reaches it, and it
 // stands 15 yd from the caller's home, outside the Call for Assistance radius.
@@ -384,18 +397,20 @@ fn a_friend_that_flees_from_calls_for_help_runs_to_ten_yards_from_a_nearby_victi
     set_call_for_help_range(&shard, 40.0);
     let mut clock = Clock::new(&shard);
     clock.advance(IMPACT_MICROS);
-    let flee_x = VICTIM_FAR_X - FLEE_DISTANCE_YD;
     let mut reached_flee_point = false;
     for _ in 0..(CHASE_SECONDS * 10) {
         clock.advance(100_000);
-        let course_end: f32 = shard
+        let course_end = shard
             .query_rows(&format!(
-                "SELECT dx FROM game_creature_spline WHERE guid = {fleer}"
+                "SELECT dx, dy FROM game_creature_spline WHERE guid = {fleer}"
             ))
             .first()
-            .map_or(FLEER_X, |row| row["dx"].parse().unwrap());
-        reached_flee_point |=
-            (course_end - flee_x).abs() < 0.5 || (x_of(&shard, fleer) - flee_x).abs() < 0.5;
+            .map(|row| (row["dx"].parse().unwrap(), row["dy"].parse().unwrap()));
+        let position = (x_of(&shard, fleer), y_of(&shard, fleer));
+        reached_flee_point |= [course_end, Some(position)]
+            .into_iter()
+            .flatten()
+            .any(is_flee_distance_from_victim);
     }
     assert_eq!(victim_of(&shard, &caller).as_deref(), Some("1"));
     assert_eq!(
