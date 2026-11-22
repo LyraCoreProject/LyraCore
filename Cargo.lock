@@ -3464,7 +3464,7 @@ checksum = "d3e7f722a488637c33c707dc29de57a12908eba56b3f07db69ee476d1f7f3f8f"
 [[package]]
 name = "wow_world_messages"
 version = "0.3.0"
-source = "git+https://github.com/LyraCoreProject/wow_world_messages?rev=c5fcba631ce557cb8a2db8f8cee109b6ca2816a3#c5fcba631ce557cb8a2db8f8cee109b6ca2816a3"
+source = "git+https://github.com/LyraCoreProject/wow_world_messages?rev=d3d1cbd4eb893502a7075c0fb62e575880439e55#d3d1cbd4eb893502a7075c0fb62e575880439e55"
 dependencies = [
  "flate2",
  "wow_srp",
