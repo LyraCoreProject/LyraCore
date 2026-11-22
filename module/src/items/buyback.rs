@@ -51,6 +51,7 @@ pub(crate) fn clear(ctx: &ReducerContext, character_guid: u64) {
     for row in entries(ctx, character_guid) {
         ctx.db.game_buyback_item().item_guid().delete(row.item_guid);
         super::forget_temporary_enchantment(ctx, row.item_guid);
+        crate::loot::forget_item_loot(ctx, row.item_guid);
         crate::mail_text::drop_letter_text(ctx, row.item.item_text_id);
         if !crate::transfer::is_in_transit(ctx, character_guid) {
             crate::native::economy::buyback_removed(ctx, &row);
@@ -145,6 +146,7 @@ pub(super) fn sell(
     if let Some(row) = &evicted {
         ctx.db.game_buyback_item().item_guid().delete(row.item_guid);
         super::forget_temporary_enchantment(ctx, row.item_guid);
+        crate::loot::forget_item_loot(ctx, row.item_guid);
         crate::mail_text::drop_letter_text(ctx, row.item.item_text_id);
     }
     if current_occupied {

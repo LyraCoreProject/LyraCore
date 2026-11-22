@@ -36,7 +36,7 @@ symbol = "needs_lockpicking"
 evidence = "vmangos HandleOpenItemOpcode opens a lockbox once ITEM_DYNFLAG_UNLOCKED is set; LyraCore item rows have no unlocked flag."
 
 [[known_gaps]]
-description = "Opening an item binds it, and a Transfer keeps its money but drops its remaining items; vmangos keeps item loot on the item guid."
+description = "A Transfer keeps an opened item's money but drops its remaining items; vmangos keeps item loot on the item guid."
 path = "module/src/loot/item.rs"
 symbol = "open_item"
-evidence = "Mail, trade and auctions recreate an item under a new guid; game_corpse_loot rows are not Character-owned Transfer rows."
+evidence = "game_loot_money is a Character-owned Transfer table; game_corpse_loot rows are not."

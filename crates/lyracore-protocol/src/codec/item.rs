@@ -393,6 +393,16 @@ pub fn build_inventory_refusal(
                 bag_type_subclass,
             }
         }
+        ItemRefusal::CouldntSplitItems => SMSG_INVENTORY_CHANGE_FAILURE::CouldntSplitItems {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::AlreadyLooted => SMSG_INVENTORY_CHANGE_FAILURE::AlreadyLooted {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
         ItemRefusal::Internal => SMSG_INVENTORY_CHANGE_FAILURE::IntBagError {
             item1,
             item2,

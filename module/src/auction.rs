@@ -305,6 +305,7 @@ struct ListingItem {
     owner_guid: u64,
     slot: u8,
     mailable: bool,
+    has_generated_loot: bool,
     snapshot: crate::items::ItemSnapshot,
     sell_price: u32,
 }
@@ -1066,6 +1067,7 @@ impl ListingSource for CtxSource<'_> {
             slot: item.slot,
             mailable: crate::items::validate_bag_dest_slot(self.ctx, item.owner_guid, item.slot)
                 .is_ok(),
+            has_generated_loot: crate::loot::has_generated_loot(self.ctx, item.guid),
             snapshot: crate::items::ItemSnapshot::from(&item),
             sell_price: template.sell_price,
         })
@@ -1665,6 +1667,9 @@ fn prepare_listing(
         || item.snapshot.soulbound
     {
         return Err(AuctionRefusal::ItemNotFound);
+    }
+    if item.has_generated_loot {
+        return Err(AuctionRefusal::ItemNotTradeable);
     }
     if terms.start_bid == 0 || (terms.buyout != 0 && terms.buyout < terms.start_bid) {
         return Err(AuctionRefusal::InvalidTerms);

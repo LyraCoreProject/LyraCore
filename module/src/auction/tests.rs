@@ -285,6 +285,7 @@ fn item(slot: u8) -> ListingItem {
         owner_guid: 7,
         slot,
         mailable: true,
+        has_generated_loot: false,
         snapshot: crate::items::ItemSnapshot {
             entry: 25,
             stack_count: 2,
@@ -385,6 +386,13 @@ fn listing_accepts_only_one_owned_mailable_bag_stack_and_valid_terms() {
     assert_eq!(
         prepare_listing(Some(&not_mailable), 7, 10, terms(), policy()),
         Err(AuctionRefusal::ItemNotFound)
+    );
+
+    let mut opened = item(23);
+    opened.has_generated_loot = true;
+    assert_eq!(
+        prepare_listing(Some(&opened), 7, 10, terms(), policy()),
+        Err(AuctionRefusal::ItemNotTradeable)
     );
 
     let mut letter = item(23);

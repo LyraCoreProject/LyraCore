@@ -27,7 +27,9 @@ mod take;
 pub(crate) use take::{apply_take_loot, request_take_loot, take_item};
 
 mod item;
-pub(crate) use item::{forget_item_loot, open_item, release_item, OpenItemRefusal};
+pub(crate) use item::{
+    forget_item_loot, has_generated_loot, open_item, release_item, OpenItemRefusal,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LootRefusal {
@@ -829,14 +831,7 @@ pub(crate) fn reach(
             .guid()
             .find(source_guid)
             .is_some_and(|item| item.owner_guid == looter_guid);
-        if !held
-            || ctx
-                .db
-                .game_loot_money()
-                .source_guid()
-                .find(source_guid)
-                .is_none()
-        {
+        if !held || !has_generated_loot(ctx, source_guid) {
             return Err(refuse(LootRefusal::NoLootSource, "no opened item held"));
         }
         return Ok((looter, LootSource::Item));

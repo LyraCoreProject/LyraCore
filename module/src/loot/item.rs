@@ -51,13 +51,7 @@ pub(crate) fn open_item(
     {
         return Err(OpenItemRefusal::NotLootable);
     }
-    if ctx
-        .db
-        .game_loot_money()
-        .source_guid()
-        .find(item.guid)
-        .is_some()
-    {
+    if has_generated_loot(ctx, item.guid) {
         return Ok(());
     }
     let rows = ctx
@@ -74,15 +68,17 @@ pub(crate) fn open_item(
         item.owner_guid,
         (template.money_min, template.money_max),
     );
-    // Mail, trade and auctions give an item a new guid, which would roll its loot again.
-    if !item.soulbound {
-        ItemInstance {
-            soulbound: true,
-            ..item
-        }
-        .update_merged(ctx);
-    }
     Ok(())
+}
+
+/// vmangos `Item::HasGeneratedLoot`: the item was opened and still holds its rolled loot. Such an
+/// item cannot be mailed, traded, auctioned, split or merged into.
+pub(crate) fn has_generated_loot(ctx: &ReducerContext, item_guid: u64) -> bool {
+    ctx.db
+        .game_loot_money()
+        .source_guid()
+        .find(item_guid)
+        .is_some()
 }
 
 // vmangos refuses a lock whose first two openers need a skill; no item here is ever unlocked.

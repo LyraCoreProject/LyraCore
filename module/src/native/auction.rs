@@ -3,7 +3,7 @@ use lyracore_protocol::{
     messages::{
         vanilla::{
             opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
-            AuctionHouse, MSG_AUCTION_HELLO_Server,
+            AuctionHouse, InventoryResult, MSG_AUCTION_HELLO_Server,
             SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction as Action,
             SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResult as BidResult,
             SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo as ResultTwo,
@@ -249,6 +249,10 @@ pub(super) fn command(auction_id: u32, action: Action) -> ServerOpcodeMessage {
 pub(super) fn result_two(refusal: AuctionRefusal) -> ResultTwo {
     match refusal {
         AuctionRefusal::ItemNotFound => ResultTwo::ErrItemNotFound,
+        // vmangos AuctionHouseHandler answers AUCTION_ERR_INVENTORY with EQUIP_ERR_ITEM_NOT_FOUND.
+        AuctionRefusal::ItemNotTradeable => ResultTwo::ErrInventory {
+            inventory_result2: InventoryResult::ItemNotFound,
+        },
         AuctionRefusal::NotEnoughMoney => ResultTwo::ErrNotEnoughMoney,
         AuctionRefusal::InvalidTerms | AuctionRefusal::Database => ResultTwo::ErrDatabase,
     }

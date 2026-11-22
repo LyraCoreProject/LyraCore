@@ -39,11 +39,39 @@ fn items(ctx: &ReducerContext, target: u64, guid: u64) -> Vec<codec::LootItemVie
     items
 }
 
+fn open_loot(ctx: &ReducerContext, connection: ConnectionId) -> u64 {
+    ctx.db
+        .game_native_player()
+        .connection_id()
+        .find(connection)
+        .map_or(0, |owner| owner.open_loot)
+}
+
 fn open(ctx: &ReducerContext, connection: ConnectionId, target: u64) {
     if let Some(mut owner) = ctx.db.game_native_player().connection_id().find(connection) {
         owner.open_loot = target;
         ctx.db.game_native_player().connection_id().update(owner);
     }
+}
+
+/// Shows a Loot Window on `target`. vmangos `SendLoot` first releases a window open on another
+/// Loot Source.
+fn show(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    target: u64,
+    money: u32,
+    items: &[codec::LootItemView],
+) -> Result<(), Rollback> {
+    let current = open_loot(ctx, connection);
+    if current != 0 && current != target {
+        release(ctx, connection, guid, current)?;
+    }
+    let (opcode, body) = codec::build_loot_response_raw(target, money, items);
+    super::send_raw(ctx, connection, opcode, body, false);
+    open(ctx, connection, target);
+    Ok(())
 }
 
 fn loot_error(target: u64, failure: LootMethodError, refusal: LootRefusal) -> Rollback {
@@ -131,7 +159,6 @@ fn open_item(
     connection: ConnectionId,
     guid: u64,
     slot: Option<u8>,
-    current: u64,
 ) -> Result<(), Rollback> {
     let item = slot.and_then(|slot| crate::items::item_in_slot(ctx, guid, slot));
     let item_guid = item.as_ref().map_or(0, |item| item.guid);
@@ -151,16 +178,15 @@ fn open_item(
             refusal.as_tag(),
         )
     })?;
-    // vmangos SendLoot releases the window already open before it shows the new one.
-    if current != 0 && current != item_guid {
-        release(ctx, connection, guid, current)?;
-    }
     let money = crate::loot::purse(ctx, item_guid);
-    let (opcode, body) =
-        codec::build_loot_response_raw(item_guid, money, &items(ctx, item_guid, guid));
-    super::send_raw(ctx, connection, opcode, body, false);
-    open(ctx, connection, item_guid);
-    Ok(())
+    show(
+        ctx,
+        connection,
+        guid,
+        item_guid,
+        money,
+        &items(ctx, item_guid, guid),
+    )
 }
 
 fn release(
@@ -187,13 +213,7 @@ pub(super) fn receive(
     guid: u64,
     message: ClientOpcodeMessage,
 ) -> Result<(), Unhandled> {
-    let open_loot = || {
-        ctx.db
-            .game_native_player()
-            .connection_id()
-            .find(connection)
-            .map_or(0, |owner| owner.open_loot)
-    };
+    let open_loot = || open_loot(ctx, connection);
     let handled: Result<(), Rollback> = match message {
         ClientOpcodeMessage::CMSG_LOOT(c) => {
             super::actor(ctx, guid)?;
@@ -217,10 +237,7 @@ pub(super) fn receive(
                     .into());
                 }
             }
-            let (opcode, body) = codec::build_loot_response_raw(target, money, &items);
-            super::send_raw(ctx, connection, opcode, body, false);
-            open(ctx, connection, target);
-            Ok(())
+            show(ctx, connection, guid, target, money, &items)
         }
         ClientOpcodeMessage::CMSG_GAMEOBJ_USE(c) => {
             super::actor(ctx, guid)?;
@@ -229,9 +246,7 @@ pub(super) fn receive(
             let items = items(ctx, target, guid);
             let money = crate::loot::purse(ctx, target);
             if !items.is_empty() || money != 0 {
-                let (opcode, body) = codec::build_loot_response_raw(target, money, &items);
-                super::send_raw(ctx, connection, opcode, body, false);
-                open(ctx, connection, target);
+                show(ctx, connection, guid, target, money, &items)?;
             }
             Ok(())
         }
@@ -296,7 +311,6 @@ pub(super) fn receive(
             connection,
             guid,
             codec::inventory_slot(c.bag_index, c.slot),
-            open_loot(),
         ),
         ClientOpcodeMessage::CMSG_LOOT_ROLL(c) => {
             super::actor(ctx, guid)?;

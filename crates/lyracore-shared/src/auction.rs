@@ -26,14 +26,17 @@ pub fn auction_cut(bid: u32, consignment_rate: u32) -> Option<u32> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AuctionRefusal {
     ItemNotFound,
+    /// vmangos `Item::CanBeTraded` refuses, as for an opened item.
+    ItemNotTradeable,
     NotEnoughMoney,
     InvalidTerms,
     Database,
 }
 
 impl AuctionRefusal {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::ItemNotFound,
+        Self::ItemNotTradeable,
         Self::NotEnoughMoney,
         Self::InvalidTerms,
         Self::Database,
@@ -42,6 +45,7 @@ impl AuctionRefusal {
     pub fn as_tag(self) -> &'static str {
         match self {
             Self::ItemNotFound => "auction:item_not_found",
+            Self::ItemNotTradeable => "auction:item_not_tradeable",
             Self::NotEnoughMoney => "auction:not_enough_money",
             Self::InvalidTerms => "auction:invalid_terms",
             Self::Database => "auction:database",

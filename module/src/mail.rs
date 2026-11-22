@@ -142,6 +142,10 @@ pub(crate) fn detach_item(
     if inst.soulbound {
         return Err(MailRefusal::ItemIsSoulbound);
     }
+    // vmangos HandleSendMail answers MAIL_ERR_INTERNAL_ERROR when Item::CanBeTraded refuses.
+    if crate::loot::has_generated_loot(ctx, inst.guid) {
+        return Err(lyracore_shared::mail::ITEM_HAS_LOOT.to_string().into());
+    }
     let snapshot = ItemSnapshot::from(&inst);
     if snapshot.item_text_id != 0 {
         use crate::mail_text::game_item_text;
