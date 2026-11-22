@@ -26,10 +26,19 @@ use ratchet::Signature;
 mod report;
 pub use report::*;
 
+// The scoreboard reads only `accepts`; Tier 1 collection uses the rest.
+#[allow(dead_code)]
+#[path = "../../support/queued_strike_rolls.rs"]
+mod queued_strike_rolls;
+
 fn roll_difference(scenario: &wire_client::scenario::Scenario, difference: &Difference) -> bool {
     use wire_client::trace::RecordedField;
     if scenario.spell_rolls.is_some() {
         return spell_difference(scenario, difference);
+    }
+    // The queued strike shares white melee's pinned context and Golden Trace.
+    if scenario.id == "white_melee_outcomes" && queued_strike_rolls::accepts(difference) {
+        return true;
     }
     let Some(spec) = &scenario.rolls else {
         return false;

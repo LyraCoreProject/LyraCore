@@ -1,6 +1,6 @@
 # 0007. Measure random rolls against source-derived probabilities
 
-Accepted design, 2026-11-05. Slices: white main-hand melee and direct-damage spells at levels 60 and 63.
+Accepted design, 2026-11-05. Slices: white main-hand melee, direct-damage spells and the queued strike at levels 60 and 63.
 
 [ADR 0005](0005-1-12-conformance.md) checks random fields' shape and range. A server that always
 crits can satisfy that contract. Roll Conformance compares delivered gameplay outcomes with fixed
@@ -380,3 +380,82 @@ Emit ordinary `spell_sample` Rule signatures for blocked level/seed samples and 
 `known_gaps`. Do not test or report partial counts as rates. Full-rate repeatability and gameplay
 chance sensitivity remain unmeasured until a separate implementer repairs the gameplay blocker.
 The allocation still reserves all 72 tests. Main replays the merge seed once, without retry.
+
+## Pinned third context: queued strike
+
+Added 2026-11-23 for issue #1026. The first white-melee context gains Heroic Strike rank 1,
+spell 78, queued before every main-hand swing. The Character holds Worn Axe, item 37, in the main
+hand with axe skill 44 at 300/300. Humans have no axe racial, and cleared starting auras remove
+every racial skill bonus. Heroic Strike requires a main-hand weapon, so the first context's
+unarmed hands cannot cast it. Every other input, target and position is the first context's.
+
+The pinned database (`464179081673cfd240f7ffe7f0daf96bca0b5a70`) selects `spell_template` 78
+build 4695 for build 5875: attributes `0x50014` (next swing without swing damage, ability, not while
+shapeshifted, no sheath), attributes ex `0x08000000`, ex3 `0x400` (main-hand weapon), ex2 and ex4 zero, damage
+class 2 (melee), school 0, mechanic 0, range index 2 (combat), equipped item class 2 with subclass
+mask 173555, one effect 17 (weapon damage, no school) with base points 10 and one-sided die, rage
+cost 150, no cast time, cooldown or global cooldown. `item_template` 37 is a quality 1 one-handed
+axe (class 2, subclass 0, main-hand type 21), damage 1 to 3, delay 2000, durability 20. Tier 1
+swings the axe every 50 ms and gives it no durability. The roll formulas read neither value; an
+unbroken axe keeps the context fixed for 50,000 swings. The Reference Server keeps 2000 ms.
+
+Source links use one-based lines at the pinned commit:
+
+- [SpellCaster.cpp:336–425](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  Heroic Strike lacks the always-hit attribute (line 341), and a spell skips the dual-wield
+  penalty (line 350). Miss stays 5% and 8%.
+- [SpellCaster.cpp:428–729](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp):
+  the spell can crit (line 437). Its combat range keeps weapon skill 300 (line 451). It has no
+  mechanic to resist (line 485). Dodge and parry follow the first context: 5%, 5% at level 60 and
+  6.5%, 14% at level 63. The table blocks a spell only with the completely-blocked attribute, which
+  Heroic Strike lacks (line 546). A Character's next-swing spell can glance (line 548): 10%, 40%.
+  Only creatures crush (line 550). Heroic Strike lacks no-active-defense (line 576). Crit comes
+  from `GetSpellCritChance` (line 499).
+- [Unit.cpp:5212–5307](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp):
+  a melee damage class reads `GetUnitCriticalChance`, which at
+  [Unit.cpp:2552–2596](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp) gives 5% and 2% as in the first context. No spell crit
+  aura or spell modifier applies.
+- [SpellEntry.h:506–523, 887–890, 1110–1121](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellEntry.h):
+  effect 17 can crit and attribute `0x4` marks a next-swing spell.
+- [SpellDefines.h:832–965](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/SpellDefines.h) defines the attribute bits read above.
+
+The table is a single `urand(0, 9999)` roll without a block band:
+
+| Target level | Miss | Dodge | Parry | Glancing | Crit | Hit |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 60 | 5% | 5% | 5% | 10% | 5% | 70% |
+| 63 | 8% | 6.5% | 14% | 40% | 2% | 29.5% |
+
+A landed strike then rolls partial block separately.
+[Spell.cpp:1401–1426](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp) calls
+[Unit.cpp:2205–2233](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp), whose melee branch calls `IsSpellPartiallyBlocked`
+([Unit.cpp:2351–2395](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp)). The target faces the Character and has no no-block
+flag. Block chance is 5% plus 0.1% per skill point the Character's weapon skill falls short of
+the target's level maximum, capped at 5%: 5% at level 60, 6.5% capped to 5% at level 63. `roll_chance_f(5.0)`
+accepts 214748365 of 2^32 draws, as in the spell slice. The overlapping block probabilities are
+`8500*214748365/(10000*2^32)` and `7150*214748365/(10000*2^32)`. Creature block value is level/2
+plus strength/20 ([Creature.h:225–228](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Creature.h)), so a block always removes damage.
+
+[Spell.cpp:4947–4992](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp) sends the strike's `SMSG_ATTACKERSTATEUPDATE` before
+its damage log. It carries spell 78, the table's hit info and the victim state from
+[DamageStructs.h:72–134](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/DamageStructs.h): miss is state 0 with `0x10`, dodge state
+2, parry state 3, glancing `0x4000` and crit `0x80` on state 1. A partial block adds `0x800`
+([Unit.cpp:1617–1653](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp)) and a positive blocked amount in
+`SMSG_SPELLNONMELEEDAMAGELOG`. The next-swing-no-damage attribute leaves the swing's own damage
+and blocked fields zero. The classifier in `conformance/support/queued_strike_rolls.rs` reads one
+own swing per strike and checks the damage log against it. A missing or contradictory packet blocks
+the sample; it is not a rate.
+
+Tier 1 enters through `CMSG_CAST_SPELL` before each swing, the ordinary melee scheduler and
+delivered packets, with the white seam stream and public seeds. An unretained readiness check
+fires two strikes per Character before collection. It requires the queued spell, an own
+`SMSG_SPELL_GO` and no white swing. This context reserves its own family: 1e-6 over seven checks,
+two levels and three seeds, 42 tests at `1e-6/42`. Each submission's false-failure bound across
+the three contexts is therefore 2e-6. The signatures join `white_melee_outcomes`, whose pinned
+context this extends: rule `queued_strike_distribution` with field `["outcomes", category]`, or
+`queued_strike_sample` with field `["outcomes"]`. The checkpoint is
+`queued_strike_level_<level>_<seed slot>`, the stream `swings`, opcode `0x014A`. The merge seed
+measures it with white melee.
+
+No Reference Server recording exists for this context yet, and no harness scenario. A later
+harness change can move the specification and classifier there with one recorded check.

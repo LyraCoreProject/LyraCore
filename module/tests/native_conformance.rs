@@ -30,6 +30,10 @@ mod quest_availability;
 mod quest_turn_in;
 #[path = "../../conformance/support/quest_world.rs"]
 mod quest_world;
+#[path = "../../conformance/support/queued_strike_rolls.rs"]
+mod queued_strike_spec;
+#[path = "conformance/queued_strikes.rs"]
+mod queued_strikes;
 #[path = "conformance/repair.rs"]
 mod repair;
 #[path = "conformance/rolls.rs"]

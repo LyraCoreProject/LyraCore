@@ -34,6 +34,25 @@ impl Drop for Preparation<'_> {
     }
 }
 
+pub(super) const NAMES: [&str; 16] = [
+    "Rollalpha",
+    "Rollbeta",
+    "Rollgamma",
+    "Rolldelta",
+    "Rollepsilon",
+    "Rollzeta",
+    "Rolleta",
+    "Rolltheta",
+    "Rolliota",
+    "Rollkappa",
+    "Rolambda",
+    "Rollmu",
+    "Rollnu",
+    "Rollxi",
+    "Rollomicron",
+    "Rollpi",
+];
+
 struct RollFixture {
     collector: ReducerConnection,
     characters: Vec<Character>,
@@ -85,26 +104,8 @@ fn prepare(
     let FixtureVerb::Character { at, .. } = &scenario.fixtures[0] else {
         anyhow::bail!("roll Character fixture")
     };
-    let names = [
-        "Rollalpha",
-        "Rollbeta",
-        "Rollgamma",
-        "Rolldelta",
-        "Rollepsilon",
-        "Rollzeta",
-        "Rolleta",
-        "Rolltheta",
-        "Rolliota",
-        "Rollkappa",
-        "Rolambda",
-        "Rollmu",
-        "Rollnu",
-        "Rollxi",
-        "Rollomicron",
-        "Rollpi",
-    ];
     let mut prepared = Vec::new();
-    for (index, name) in names
+    for (index, name) in NAMES
         .iter()
         .enumerate()
         .filter(|(index, _)| index / 8 == level_index && index % 8 / 4 == part)
@@ -351,15 +352,45 @@ fn verified_counts(
 ) -> Result<Counts> {
     ensure!(
         shard
-            .query_database_rows(shard_name, "SELECT id FROM game_aura")
-            .is_empty(),
-        "roll participants have auras"
-    );
-    ensure!(
-        shard
             .query_database_rows(shard_name, "SELECT guid FROM game_item_instance")
             .is_empty(),
         "roll participants have items"
+    );
+    let mut counts = Counts::default();
+    for character in characters {
+        ensure!(
+            character.started && character.stopped && character.damage > 0,
+            "missing gameplay witness"
+        );
+        for category in 0..7 {
+            counts.0[category] += character.counts.0[category];
+        }
+    }
+    let participants: Vec<_> = characters
+        .iter()
+        .map(|character| (character.guid, character.target))
+        .collect();
+    verify_participants(shard, shard_name, &participants, target_level, &[95, 162])?;
+    println!(
+        "roll fixture {shard_name}: verified {} level-60 human warriors, agility 100, unarmed/defense 300/300, no items or auras",
+        characters.len()
+    );
+    Ok(counts)
+}
+
+/// Checks the pinned warrior, target, skills, health and positions of each (Character, target).
+pub(super) fn verify_participants(
+    shard: &Standalone,
+    shard_name: &str,
+    participants: &[(u64, u64)],
+    target_level: u32,
+    skill_lines: &[u32],
+) -> Result<()> {
+    ensure!(
+        shard
+            .query_database_rows(shard_name, "SELECT id FROM game_aura")
+            .is_empty(),
+        "roll participants have auras"
     );
     let entities = shard.query_database_rows(shard_name,
         "SELECT guid,level,agility,health,max_health,dead,map_id,x,y,z,orientation FROM game_world_entity");
@@ -371,23 +402,18 @@ fn verified_counts(
         shard_name,
         "SELECT guid,race,class,level FROM game_character",
     );
-    let mut counts = Counts::default();
-    for character in characters {
-        ensure!(
-            character.started && character.stopped && character.damage > 0,
-            "missing gameplay witness"
-        );
+    for (guid, target) in participants {
         let entity = entities
             .iter()
-            .find(|row| row["guid"] == character.guid.to_string())
+            .find(|row| row["guid"] == guid.to_string())
             .context("roll Character disappeared")?;
         let target = entities
             .iter()
-            .find(|row| row["guid"] == character.target.to_string())
+            .find(|row| row["guid"] == target.to_string())
             .context("roll target disappeared")?;
         let identity = identities
             .iter()
-            .find(|row| row["guid"] == character.guid.to_string())
+            .find(|row| row["guid"] == guid.to_string())
             .context("roll Character identity disappeared")?;
         ensure!(
             identity["race"] == "1" && identity["class"] == "1" && identity["level"] == "60",
@@ -408,11 +434,11 @@ fn verified_counts(
                 "roll health or map changed"
             );
         }
-        for skill in [95, 162] {
+        for skill in skill_lines {
             let row = skills
                 .iter()
                 .find(|row| {
-                    row["character_guid"] == character.guid.to_string()
+                    row["character_guid"] == guid.to_string()
                         && row["skill_line"] == skill.to_string()
                 })
                 .context("roll skill disappeared")?;
@@ -432,18 +458,11 @@ fn verified_counts(
                 && coordinate(target, "orientation")?.cos() < -0.9999,
             "roll position or facing changed"
         );
-        for category in 0..7 {
-            counts.0[category] += character.counts.0[category];
-        }
     }
-    println!(
-        "roll fixture {shard_name}: verified {} level-60 human warriors, agility 100, unarmed/defense 300/300, no items or auras",
-        characters.len()
-    );
-    Ok(counts)
+    Ok(())
 }
 
-fn fresh_shards(shard: &mut Standalone, prefix: &str, count: usize) -> Vec<String> {
+pub(super) fn fresh_shards(shard: &mut Standalone, prefix: &str, count: usize) -> Vec<String> {
     (0..count)
         .map(|index| {
             let shard_name = format!("{}-{prefix}-{index}", shard.shard_name());
@@ -569,6 +588,9 @@ pub(super) fn public_seeds() -> Result<()> {
     let report = core_root().join(".lyracore/conformance/white-melee-rates.json");
     std::fs::create_dir_all(report.parent().context("roll rate report parent")?)?;
     std::fs::write(report, serde_json::to_vec_pretty(&measurements)?)?;
+    comparison
+        .differences
+        .extend(super::queued_strikes::public_seeds(golden.scenario())?);
     super::tier1::record_and_check(
         "white_melee_outcomes",
         &path,
@@ -621,6 +643,7 @@ pub(super) fn merge_seed(commit: &str) -> Result<()> {
         add_counts(&parts[0], &parts[1]),
         add_counts(&parts[2], &parts[3]),
     ];
+    drop(shard);
     let spec = golden.scenario().rolls.as_ref().unwrap();
     let mut comparison = Comparison {
         differences: vec![],
@@ -630,6 +653,9 @@ pub(super) fn merge_seed(commit: &str) -> Result<()> {
             .differences
             .extend(rolls::compare(spec, counts, level, "merge", 50_000)?.differences);
     }
+    comparison
+        .differences
+        .extend(super::queued_strikes::merge_seed(golden.scenario(), seed)?);
     println!(
         "merge {commit}: {}",
         serde_json::to_string_pretty(
