@@ -86,6 +86,9 @@ pub(crate) fn apply_item_split(
     if crate::trade::item_is_offered(ctx, player_guid, inst.guid) {
         return Err(ItemRefusal::NotRightNow);
     }
+    if crate::loot::has_generated_loot(ctx, inst.guid) {
+        return Err(ItemRefusal::CouldntSplitItems);
+    }
     if !valid_split_count(count, inst.stack_count) {
         return Err(refuse(ItemRefusal::WrongSlot, "invalid split count"));
     }
@@ -225,6 +228,10 @@ pub(crate) fn apply_item_move(
             if let Some(tmpl) = ctx.db.game_item_template().entry().find(src.entry) {
                 if tmpl.max_stack > 1 {
                     let moved = merge_amount(src.stack_count, dst.stack_count, tmpl.max_stack);
+                    // vmangos Item::CanBeMergedPartlyWith refuses an opened destination stack.
+                    if moved > 0 && crate::loot::has_generated_loot(ctx, dst.guid) {
+                        return Err(ItemRefusal::AlreadyLooted);
+                    }
                     if moved > 0 {
                         dst.stack_count += moved;
                         dst.update_merged(ctx);

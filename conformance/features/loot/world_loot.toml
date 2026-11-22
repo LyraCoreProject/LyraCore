@@ -9,7 +9,9 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []
 deliberate_deviations = []
 prerequisites = []
-tests = []
+tests = [
+    { path = "module/tests/conformance/item_loot.rs", function = "a_chest_with_a_fixed_money_range_shows_that_money", rung = "durable_module" },
+]
 
 [vmangos]
 commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
@@ -32,7 +34,7 @@ symbol = "parse"
 evidence = "Compatibility Manifest loot.quest-only; conformance/vmangos-port-census/loot.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
-description = "loot.unconsumed-table selected 2741: Item-container and disenchant source tables have no world import path."
+description = "loot.unconsumed-table selected 79: The disenchant source table has no world import path."
 path = "importer/src/world_import_loot.rs"
 symbol = "parse"
 evidence = "Compatibility Manifest loot.unconsumed-table; conformance/vmangos-port-census/loot.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."

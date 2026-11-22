@@ -57,7 +57,8 @@ pub(crate) fn take_item(
             refuse(refusal, &cause.detail)
         })?;
     loot.id().delete(row.id);
-    if row.quest_only && row.reserved_for == 0 {
+    // vmangos gives an item's loot to its owner alone.
+    if row.quest_only && row.reserved_for == 0 && !matches!(source, LootSource::Item) {
         let clone = if source_is_corpse {
             super::clone_quest_loot_for_eligible
         } else {

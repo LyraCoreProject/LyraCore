@@ -142,6 +142,13 @@ pub struct ItemTemplate {
     pub spellcategory_5: u32,
     #[default(0)]
     pub damage_school: u8,
+    #[default(0u32)]
+    pub lock_id: u32,
+    // Copper an opened lootable item rolls between, as vmangos min_money_loot..max_money_loot.
+    #[default(0u32)]
+    pub money_min: u32,
+    #[default(0u32)]
+    pub money_max: u32,
 }
 
 impl ItemTemplate {
@@ -217,6 +224,9 @@ impl ItemTemplate {
             spellcategory_4: 0,
             spellcategory_5: 0,
             damage_school: 0,
+            lock_id: 0,
+            money_min: 0,
+            money_max: 0,
         }
     }
 }
@@ -347,6 +357,7 @@ impl ItemInstance {
         let previous = items.guid().find(guid);
         let removed = items.guid().delete(guid);
         super::forget_temporary_enchantment(ctx, guid);
+        crate::loot::forget_item_loot(ctx, guid);
         if let Some(row) = previous {
             release_cast_item(ctx, &row);
             crate::native::realm_petition::item_removed(ctx, &row);

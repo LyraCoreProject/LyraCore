@@ -11,7 +11,7 @@ use lyracore_shared::loot_roll as roll;
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::{game_native_player, Rollback, Unhandled};
-use crate::loot::LootRefusal;
+use crate::loot::{LootRefusal, OpenItemRefusal};
 use crate::{game_corpse_loot, game_item_template, game_world_entity, Refusal};
 
 fn items(ctx: &ReducerContext, target: u64, guid: u64) -> Vec<codec::LootItemView> {
@@ -39,11 +39,39 @@ fn items(ctx: &ReducerContext, target: u64, guid: u64) -> Vec<codec::LootItemVie
     items
 }
 
+fn open_loot(ctx: &ReducerContext, connection: ConnectionId) -> u64 {
+    ctx.db
+        .game_native_player()
+        .connection_id()
+        .find(connection)
+        .map_or(0, |owner| owner.open_loot)
+}
+
 fn open(ctx: &ReducerContext, connection: ConnectionId, target: u64) {
     if let Some(mut owner) = ctx.db.game_native_player().connection_id().find(connection) {
         owner.open_loot = target;
         ctx.db.game_native_player().connection_id().update(owner);
     }
+}
+
+/// Shows a Loot Window on `target`. vmangos `SendLoot` first releases a window open on another
+/// Loot Source.
+fn show(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    target: u64,
+    money: u32,
+    items: &[codec::LootItemView],
+) -> Result<(), Rollback> {
+    let current = open_loot(ctx, connection);
+    if current != 0 && current != target {
+        release(ctx, connection, guid, current)?;
+    }
+    let (opcode, body) = codec::build_loot_response_raw(target, money, items);
+    super::send_raw(ctx, connection, opcode, body, false);
+    open(ctx, connection, target);
+    Ok(())
 }
 
 fn loot_error(target: u64, failure: LootMethodError, refusal: LootRefusal) -> Rollback {
@@ -86,10 +114,10 @@ fn open_refusal(target: u64, refusal: LootRefusal) -> Rollback {
 
 // Replies follow vmangos HandleAutostoreLootItemOpcode; a failed store leaves the window open.
 fn take_refusal(target: u64, refusal: LootRefusal) -> Rollback {
-    let gameobject = guid::is_gameobject(target);
+    let released = guid::is_gameobject(target) || guid::is_item(target);
     let reply = |message| Rollback::reply(message, refusal.as_tag());
     match refusal {
-        LootRefusal::NoLootSource | LootRefusal::OutOfRange if gameobject => {
+        LootRefusal::NoLootSource | LootRefusal::OutOfRange if released => {
             reply(release_response(target))
         }
         LootRefusal::NoLootSource
@@ -115,19 +143,77 @@ fn take_refusal(target: u64, refusal: LootRefusal) -> Rollback {
     }
 }
 
+fn open_item_failure(refusal: OpenItemRefusal, item: u64) -> SMSG_INVENTORY_CHANGE_FAILURE {
+    let refusal = match refusal {
+        OpenItemRefusal::ItemMissing => ItemRefusal::ItemNotFound,
+        OpenItemRefusal::LooterDead => ItemRefusal::PlayerDead,
+        OpenItemRefusal::ItemLocked => return codec::build_item_locked(item),
+        OpenItemRefusal::NotLootable => ItemRefusal::NotRightNow,
+    };
+    codec::build_inventory_refusal(refusal, item, 0)
+}
+
+// vmangos HandleOpenItemOpcode answers a refusal with SMSG_INVENTORY_CHANGE_FAILURE on the item.
+fn open_item(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    slot: Option<u8>,
+) -> Result<(), Rollback> {
+    let item = slot.and_then(|slot| crate::items::item_in_slot(ctx, guid, slot));
+    let item_guid = item.as_ref().map_or(0, |item| item.guid);
+    let looter = super::actor(ctx, guid).map_err(|cause| {
+        Rollback::reply(
+            inventory_failure(codec::build_inventory_refusal(
+                ItemRefusal::NotRightNow,
+                item_guid,
+                0,
+            )),
+            cause,
+        )
+    })?;
+    crate::loot::open_item(ctx, &looter, item).map_err(|refusal| {
+        Rollback::reply(
+            inventory_failure(open_item_failure(refusal, item_guid)),
+            refusal.as_tag(),
+        )
+    })?;
+    let money = crate::loot::purse(ctx, item_guid);
+    show(
+        ctx,
+        connection,
+        guid,
+        item_guid,
+        money,
+        &items(ctx, item_guid, guid),
+    )
+}
+
+fn release(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    current: u64,
+) -> Result<(), Rollback> {
+    open(ctx, connection, 0);
+    if guid::is_item(current) {
+        crate::loot::release_item(ctx, guid, current);
+    }
+    Ok(super::send(
+        ctx,
+        connection,
+        release_response(current),
+        false,
+    )?)
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
 ) -> Result<(), Unhandled> {
-    let open_loot = || {
-        ctx.db
-            .game_native_player()
-            .connection_id()
-            .find(connection)
-            .map_or(0, |owner| owner.open_loot)
-    };
+    let open_loot = || open_loot(ctx, connection);
     let handled: Result<(), Rollback> = match message {
         ClientOpcodeMessage::CMSG_LOOT(c) => {
             super::actor(ctx, guid)?;
@@ -151,20 +237,16 @@ pub(super) fn receive(
                     .into());
                 }
             }
-            let (opcode, body) = codec::build_loot_response_raw(target, money, &items);
-            super::send_raw(ctx, connection, opcode, body, false);
-            open(ctx, connection, target);
-            Ok(())
+            show(ctx, connection, guid, target, money, &items)
         }
         ClientOpcodeMessage::CMSG_GAMEOBJ_USE(c) => {
             super::actor(ctx, guid)?;
             let target = c.guid.guid();
             crate::gameobject::request_use_gameobject(ctx, guid, target)?;
             let items = items(ctx, target, guid);
-            if !items.is_empty() {
-                let (opcode, body) = codec::build_loot_response_raw(target, 0, &items);
-                super::send_raw(ctx, connection, opcode, body, false);
-                open(ctx, connection, target);
+            let money = crate::loot::purse(ctx, target);
+            if !items.is_empty() || money != 0 {
+                show(ctx, connection, guid, target, money, &items)?;
             }
             Ok(())
         }
@@ -222,14 +304,14 @@ pub(super) fn receive(
             if current == 0 {
                 return Ok(());
             }
-            open(ctx, connection, 0);
-            Ok(super::send(
-                ctx,
-                connection,
-                release_response(current),
-                false,
-            )?)
+            release(ctx, connection, guid, current)
         }
+        ClientOpcodeMessage::CMSG_OPEN_ITEM(c) => open_item(
+            ctx,
+            connection,
+            guid,
+            codec::inventory_slot(c.bag_index, c.slot),
+        ),
         ClientOpcodeMessage::CMSG_LOOT_ROLL(c) => {
             super::actor(ctx, guid)?;
             let slot =

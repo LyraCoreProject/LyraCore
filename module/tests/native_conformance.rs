@@ -16,6 +16,8 @@ mod buyback;
 mod character_world;
 #[path = "conformance/item_equip.rs"]
 mod item_equip;
+#[path = "conformance/item_loot.rs"]
+mod item_loot;
 #[path = "conformance/loot_refusals.rs"]
 mod loot_refusals;
 #[path = "conformance/passives.rs"]

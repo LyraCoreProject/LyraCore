@@ -393,6 +393,16 @@ pub fn build_inventory_refusal(
                 bag_type_subclass,
             }
         }
+        ItemRefusal::CouldntSplitItems => SMSG_INVENTORY_CHANGE_FAILURE::CouldntSplitItems {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
+        ItemRefusal::AlreadyLooted => SMSG_INVENTORY_CHANGE_FAILURE::AlreadyLooted {
+            item1,
+            item2,
+            bag_type_subclass,
+        },
         ItemRefusal::Internal => SMSG_INVENTORY_CHANGE_FAILURE::IntBagError {
             item1,
             item2,
@@ -404,6 +414,14 @@ pub fn build_inventory_refusal(
 pub fn build_already_looted() -> SMSG_INVENTORY_CHANGE_FAILURE {
     SMSG_INVENTORY_CHANGE_FAILURE::AlreadyLooted {
         item1: Guid::new(0),
+        item2: Guid::new(0),
+        bag_type_subclass: 0,
+    }
+}
+
+pub fn build_item_locked(item: u64) -> SMSG_INVENTORY_CHANGE_FAILURE {
+    SMSG_INVENTORY_CHANGE_FAILURE::ItemLocked {
+        item1: Guid::new(item),
         item2: Guid::new(0),
         bag_type_subclass: 0,
     }

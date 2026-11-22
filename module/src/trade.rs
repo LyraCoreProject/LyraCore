@@ -372,7 +372,7 @@ pub(crate) fn apply_set_trade_item(
     let offered = (trade_slot_valid && crate::items::is_carried_slot(inv_slot))
         .then(|| crate::items::item_in_slot(ctx, actor.guid, inv_slot))
         .flatten()
-        .filter(|inst| !inst.soulbound || trade_slot == WILL_NOT_BE_TRADED_SLOT)
+        .filter(|inst| trade_slot == WILL_NOT_BE_TRADED_SLOT || tradeable(ctx, inst))
         .filter(|inst| {
             !slots
                 .by_session()
@@ -530,14 +530,12 @@ pub(crate) struct CommitSide {
     pub gold_balance: u32,
     pub items_offered: u32,
     pub free_bag_slots: u32,
-    pub offers_soulbound: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CommitRefusal {
     GoldShort { side: u64 },
     GoldOverflow { side: u64 },
-    Soulbound { side: u64 },
     InventoryFull { side: u64 },
 }
 
@@ -552,9 +550,6 @@ pub(crate) fn commit_verdict(a: &CommitSide, b: &CommitSide) -> Result<(), Commi
     for side in [a, b] {
         if side.gold_offered > side.gold_balance {
             return Err(CommitRefusal::GoldShort { side: side.guid });
-        }
-        if side.offers_soulbound {
-            return Err(CommitRefusal::Soulbound { side: side.guid });
         }
     }
     for (side, other) in [(a, b), (b, a)] {
@@ -585,18 +580,35 @@ pub(crate) fn apply_accept_trade(
     } else {
         session.target_accepted = true;
     }
-    if session.initiator_accepted && session.target_accepted {
-        return Ok(run_trade_commit(ctx, session, &actor)?);
-    }
     let partner = if i_am_initiator {
         session.target_guid
     } else {
         session.initiator_guid
     };
+    // vmangos HandleAcceptTradeOpcode keeps the accept, answers only the accepting player and
+    // leaves the trade open.
+    if offers_untradeable(ctx, &session) {
+        touch_session(ctx, session);
+        push_trade_event(ctx, actor.guid, event_kind::TRADE_CANCELED, partner);
+        return Ok(());
+    }
+    if session.initiator_accepted && session.target_accepted {
+        return Ok(run_trade_commit(ctx, session, &actor)?);
+    }
     let me = actor.guid;
     touch_session(ctx, session);
     push_trade_event(ctx, partner, event_kind::TRADE_ACCEPT, me);
     Ok(())
+}
+
+fn offers_untradeable(ctx: &ReducerContext, session: &TradeSession) -> bool {
+    ctx.db
+        .game_trade_slot()
+        .by_session()
+        .filter(&session.id)
+        .filter(|row| row.trade_slot < WILL_NOT_BE_TRADED_SLOT)
+        .filter_map(|row| ctx.db.game_item_instance().guid().find(row.item_guid))
+        .any(|item| !tradeable(ctx, &item))
 }
 
 pub(crate) fn apply_unaccept_trade(
@@ -624,6 +636,11 @@ pub(crate) fn apply_unaccept_trade(
     Ok(())
 }
 
+// vmangos Item::CanBeTraded, checked when an item is offered and again at accept.
+fn tradeable(ctx: &ReducerContext, item: &crate::ItemInstance) -> bool {
+    !item.soulbound && !crate::loot::has_generated_loot(ctx, item.guid)
+}
+
 fn gather_commit_side(
     ctx: &ReducerContext,
     session: &TradeSession,
@@ -635,16 +652,18 @@ fn gather_commit_side(
         session.target_gold
     };
     let mut items = Vec::new();
-    let mut offers_soulbound = false;
     for row in ctx.db.game_trade_slot().by_session().filter(&session.id) {
         if row.owner_guid != entity.guid || row.trade_slot >= WILL_NOT_BE_TRADED_SLOT {
             continue;
         }
-        if let Some(inst) = ctx.db.game_item_instance().guid().find(row.item_guid) {
-            if inst.owner_guid == entity.guid {
-                offers_soulbound |= inst.soulbound;
-                items.push(inst);
-            }
+        if let Some(inst) = ctx
+            .db
+            .game_item_instance()
+            .guid()
+            .find(row.item_guid)
+            .filter(|inst| inst.owner_guid == entity.guid)
+        {
+            items.push(inst);
         }
     }
     (
@@ -654,7 +673,6 @@ fn gather_commit_side(
             gold_balance: entity.money,
             items_offered: items.len() as u32,
             free_bag_slots: crate::items::count_free_inventory_slots(ctx, entity.guid),
-            offers_soulbound,
         },
         items,
     )
@@ -702,10 +720,6 @@ fn run_trade_commit(
             };
             push_trade_event(ctx, failed, event_kind::GOLD_FAIL_SELF, other);
             push_trade_event(ctx, other, event_kind::GOLD_FAIL_PARTNER, failed);
-            Ok(())
-        }
-        Err(CommitRefusal::Soulbound { .. }) => {
-            cancel_trade_for(ctx, session.initiator_guid);
             Ok(())
         }
         Ok(()) => {
@@ -920,7 +934,6 @@ mod tests {
             gold_balance,
             items_offered,
             free_bag_slots,
-            offers_soulbound: false,
         };
 
         let a = side(1, 50, 100, 1, 0);
@@ -939,13 +952,6 @@ mod tests {
         assert_eq!(
             commit_verdict(&side(1, 50, 100, 0, 16), &side(2, 0, u32::MAX - 49, 0, 16)),
             Err(CommitRefusal::GoldOverflow { side: 2 })
-        );
-
-        let mut sb = side(1, 0, 0, 1, 16);
-        sb.offers_soulbound = true;
-        assert_eq!(
-            commit_verdict(&sb, &b),
-            Err(CommitRefusal::Soulbound { side: 1 })
         );
 
         assert_eq!(

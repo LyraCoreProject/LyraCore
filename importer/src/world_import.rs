@@ -96,50 +96,52 @@ pub(crate) fn classify_go_type(entry: u64, raw_type: u32) -> Option<u8> {
     }
 }
 
-fn go_template_row(
-    entry: u64,
-    stored_type: u8,
-    disp: u32,
-    name: &str,
-    data0: u32,
-    data1: u32,
-    size: f32,
-) -> (String, Option<u32>) {
-    let n = sql_text(name);
-    match stored_type {
+fn go_template_row(entry: u64, meta: &GoMeta) -> (String, Option<u32>) {
+    let GoMeta {
+        stored_type,
+        disp,
+        data0,
+        data1,
+        size,
+        money: (money_min, money_max),
+        ..
+    } = *meta;
+    let n = sql_text(&meta.name);
+    let (row, loot_id) = match stored_type {
         GO_GATHER => {
             let (skill, item, req, gray) = gather_node(entry)
                 .expect("classify_go_type only returns GO_GATHER for a GATHER_NODES entry");
-            (format!("({entry},{GO_GATHER},{disp},{n},{item},{req},{skill},{GATHER_RESPAWN_SECS},{gray},0,{size})"), None)
+            (format!("({entry},{GO_GATHER},{disp},{n},{item},{req},{skill},{GATHER_RESPAWN_SECS},{gray},0,{size}"), None)
         }
         GO_CHEST => {
             let loot_id = data1;
             (
-                format!("({entry},{GO_CHEST},{disp},{n},0,{loot_id},0,0,0,{data0},{size})"),
+                format!("({entry},{GO_CHEST},{disp},{n},0,{loot_id},0,0,0,{data0},{size}"),
                 (loot_id != 0).then_some(loot_id),
             )
         }
         GO_GOOBER => (
-            format!("({entry},{GO_GOOBER},{disp},{n},0,0,0,0,0,{data0},{size})"),
+            format!("({entry},{GO_GOOBER},{disp},{n},0,0,0,0,0,{data0},{size}"),
             None,
         ),
         GO_DOOR => (
-            format!("({entry},{GO_DOOR},{disp},{n},0,0,0,0,0,{data1},{size})"),
+            format!("({entry},{GO_DOOR},{disp},{n},0,0,0,0,0,{data1},{size}"),
             None,
         ),
         GO_BUTTON => (
-            format!("({entry},{GO_BUTTON},{disp},{n},0,0,0,0,0,{data1},{size})"),
+            format!("({entry},{GO_BUTTON},{disp},{n},0,0,0,0,0,{data1},{size}"),
             None,
         ),
         8 => (
-            format!("({entry},8,{disp},{n},{data0},{data1},0,0,0,0,{size})"),
+            format!("({entry},8,{disp},{n},{data0},{data1},0,0,0,0,{size}"),
             None,
         ),
         other => (
-            format!("({entry},{other},{disp},{n},0,0,0,0,0,0,{size})"),
+            format!("({entry},{other},{disp},{n},0,0,0,0,0,0,{size}"),
             None,
         ),
-    }
+    };
+    (format!("{row},{money_min},{money_max})"), loot_id)
 }
 
 // -1 means every playable class or race.
@@ -1161,8 +1163,11 @@ fn build_items_and_loot(
         let bag_family: u32 = row.number(it::BAG_FAMILY)?;
         let buy_count: u32 = row.number::<u32>(it::BUY_COUNT)?.max(1);
         let food_type: u8 = row.number(it::FOOD_TYPE)?;
+        let lock_id: u32 = row.number(it::LOCK_ID)?;
+        let money_min: u32 = row.number(it::MIN_MONEY_LOOT)?;
+        let money_max: u32 = row.number(it::MAX_MONEY_LOOT)?;
         item_rows.push(format!(
-            "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type},{allowed_class},{allowed_race},{random_property},{ppm1},{ppm2},{ppm3},{ppm4},{ppm5},{cat1},{cat2},{cat3},{cat4},{cat5},{damage_school})",
+            "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type},{allowed_class},{allowed_race},{random_property},{ppm1},{ppm2},{ppm3},{ppm4},{ppm5},{cat1},{cat2},{cat3},{cat4},{cat5},{damage_school},{lock_id},{money_min},{money_max})",
             sheath = row.number::<u8>(it::SHEATH)?,
             sp1 = row.number::<u32>(it::SPELLID_1)?,
             spt1 = row.number::<u8>(it::SPELLTRIGGER_1)?,
@@ -1447,6 +1452,7 @@ struct GoMeta {
     trap_cooldown_secs: u32,
     meeting_stone_area_id: u32,
     size: f32,
+    money: (u32, u32),
 }
 
 struct GameobjectSpawns {
@@ -1518,6 +1524,11 @@ fn collect_gameobject_spawns(
                 0
             };
             let size: f32 = row.number(got::SIZE)?;
+            let money = if stored_type == GO_CHEST {
+                (row.number(got::MIN_GOLD)?, row.number(got::MAX_GOLD)?)
+            } else {
+                (0, 0)
+            };
             Ok(Some((
                 entry,
                 GoMeta {
@@ -1530,6 +1541,7 @@ fn collect_gameobject_spawns(
                     trap_cooldown_secs,
                     meeting_stone_area_id,
                     size,
+                    money,
                 },
             )))
         })
@@ -1636,15 +1648,7 @@ fn gameobject_template_rows(
     for entry in entries {
         let meta = &go_meta[&entry];
         *go_type_histogram.entry(meta.stored_type).or_insert(0) += 1;
-        let (row, _loot_id_used) = go_template_row(
-            entry,
-            meta.stored_type,
-            meta.disp,
-            &meta.name,
-            meta.data0,
-            meta.data1,
-            meta.size,
-        );
+        let (row, _loot_id_used) = go_template_row(entry, meta);
         go_template_rows.push(row);
         if meta.trap_spell_id != 0 {
             go_trap_rows.push(format!(
@@ -1707,6 +1711,7 @@ struct LootFamilyRows {
     skinning_rows: Vec<String>,
     gameobject_loot_rows: Vec<String>,
     fishing_rows: Vec<String>,
+    item_loot_rows: Vec<String>,
 }
 
 fn build_loot_family_rows(
@@ -1774,9 +1779,20 @@ fn build_loot_family_rows(
         }
     }
 
+    let drops_by_item = vmangos_loot::parse(dump, "item_loot_template")?;
+    let mut item_loot_rows: Vec<String> = Vec::new();
+    let mut lootable_entries: Vec<&u64> = drops_by_item.keys().collect();
+    lootable_entries.sort();
+    for lootable in lootable_entries {
+        for drop in &drops_by_item[lootable] {
+            item_loot_rows.push(drop.row(item_loot_rows.len() as u64 + 1, *lootable));
+        }
+    }
+
     eprintln!(
         "mapped: {} pickpocket_loot rows ({} creatures), {} skinning_loot rows ({} skin tables), \
-         {} gameobject_loot rows ({} chest loot ids), {} fishing_loot rows ({} zones)",
+         {} gameobject_loot rows ({} chest loot ids), {} fishing_loot rows ({} zones), \
+         {} item_loot rows ({} lootable items)",
         pickpocket_rows.len(),
         creature_pickpocket_ids.len(),
         skinning_rows.len(),
@@ -1788,6 +1804,8 @@ fn build_loot_family_rows(
         chest_loot_ids_used.len(),
         fishing_rows.len(),
         drops_by_zone.len(),
+        item_loot_rows.len(),
+        drops_by_item.len(),
     );
 
     Ok(LootFamilyRows {
@@ -1795,6 +1813,7 @@ fn build_loot_family_rows(
         skinning_rows,
         gameobject_loot_rows,
         fishing_rows,
+        item_loot_rows,
     })
 }
 
@@ -1811,7 +1830,7 @@ fn push_item_statements(
         stmts.push(format!("DELETE FROM {table} WHERE item_entry < {OPERATOR_TEMPLATE_ID_FLOOR} AND creature_entry < {OPERATOR_TEMPLATE_ID_FLOOR}"));
     }
     stmts.push("DELETE FROM game_vendor_stock WHERE key > 0".into());
-    push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property,spellppmrate_1,spellppmrate_2,spellppmrate_3,spellppmrate_4,spellppmrate_5,spellcategory_1,spellcategory_2,spellcategory_3,spellcategory_4,spellcategory_5,damage_school", item_rows);
+    push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property,spellppmrate_1,spellppmrate_2,spellppmrate_3,spellppmrate_4,spellppmrate_5,spellcategory_1,spellcategory_2,spellcategory_3,spellcategory_4,spellcategory_5,damage_school,lock_id,money_min,money_max", item_rows);
     push_insert(
         stmts,
         "game_creature_loot",
@@ -1826,17 +1845,19 @@ fn push_item_statements(
     );
 }
 
-fn push_loot_statements(
-    stmts: &mut Vec<String>,
-    pickpocket_rows: &[String],
-    skinning_rows: &[String],
-    gameobject_loot_rows: &[String],
-    fishing_rows: &[String],
-) {
+fn push_loot_statements(stmts: &mut Vec<String>, loot: &LootFamilyRows) {
+    let LootFamilyRows {
+        pickpocket_rows,
+        skinning_rows,
+        gameobject_loot_rows,
+        fishing_rows,
+        item_loot_rows,
+    } = loot;
     stmts.push("DELETE FROM game_pickpocket_loot WHERE id > 0".into());
     stmts.push("DELETE FROM game_skinning_loot WHERE id > 0".into());
     stmts.push("DELETE FROM game_gameobject_loot WHERE id > 0".into());
     stmts.push("DELETE FROM game_fishing_loot WHERE id > 0".into());
+    stmts.push("DELETE FROM game_item_loot WHERE id > 0".into());
     push_insert(
         stmts,
         "game_pickpocket_loot",
@@ -1860,6 +1881,12 @@ fn push_loot_statements(
         "game_fishing_loot",
         "id,zone_id,item_entry,chance_bp,count,group_id,min_count",
         fishing_rows,
+    );
+    push_insert(
+        stmts,
+        "game_item_loot",
+        "id,lootable_entry,item_entry,chance_bp,count,group_id,quest_only,min_count",
+        item_loot_rows,
     );
 }
 
@@ -1920,7 +1947,7 @@ fn push_gameobject_statements(
     stmts.push("DELETE FROM game_gameobject_trap WHERE entry > 0".into());
     stmts.push("DELETE FROM game_meeting_stone WHERE entry > 0".into());
     stmts.push("DELETE FROM game_gameobject_template WHERE entry > 0".into());
-    push_insert(stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size", go_template_rows);
+    push_insert(stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size,money_min,money_max", go_template_rows);
     push_insert(
         stmts,
         "game_gameobject_trap",
@@ -2223,13 +2250,7 @@ fn vmangos_loot_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Du
     }
     let loot = build_loot_family_rows(dump, &pickpocket, &skinning, &chest_ids)?;
     let mut stmts = Vec::new();
-    push_loot_statements(
-        &mut stmts,
-        &loot.pickpocket_rows,
-        &loot.skinning_rows,
-        &loot.gameobject_loot_rows,
-        &loot.fishing_rows,
-    );
+    push_loot_statements(&mut stmts, &loot);
     let count = insert_row_count(&stmts);
     Ok(DumpPlan {
         stmts,
@@ -2266,7 +2287,7 @@ fn loot_findings(dump: &impl TableRows, tables: &[&str]) -> Result<Vec<serde_jso
                 findings.push(serde_json::json!({"code":code,"classification":"unsupported","table":table,"occurrences":occurrences}));
             }
         }
-        if matches!(table, "item_loot_template" | "disenchant_loot_template") && !rows.is_empty() {
+        if table == "disenchant_loot_template" && !rows.is_empty() {
             findings.push(serde_json::json!({"code":"loot.unconsumed-table","classification":"unsupported","table":table,"occurrences":rows.len()}));
         }
     }

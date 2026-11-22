@@ -48,6 +48,8 @@ pub enum ItemRefusal {
     SpellCooldown(u32),
     Indestructible,
     BagNotEmpty,
+    CouldntSplitItems,
+    AlreadyLooted,
     Internal,
 }
 
@@ -71,6 +73,8 @@ impl ItemRefusal {
             Self::SpellCooldown(_) => "item:spell_cooldown",
             Self::Indestructible => "item:indestructible",
             Self::BagNotEmpty => "item:bag_not_empty",
+            Self::CouldntSplitItems => "item:couldnt_split_items",
+            Self::AlreadyLooted => "item:already_looted",
             Self::Internal => "item:internal",
         }
     }

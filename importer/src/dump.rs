@@ -137,6 +137,9 @@ pub(crate) mod it {
     pub const MAX_DURABILITY: &str = "max_durability";
     pub const BAG_FAMILY: &str = "bag_family";
     pub const FOOD_TYPE: &str = "food_type";
+    pub const LOCK_ID: &str = "lock_id";
+    pub const MIN_MONEY_LOOT: &str = "min_money_loot";
+    pub const MAX_MONEY_LOOT: &str = "max_money_loot";
 
     pub(crate) fn read<'a>(
         row: &'a crate::world_source::Row,
@@ -223,6 +226,8 @@ pub(crate) mod got {
     pub const DATA2: &str = "data2";
     pub const DATA3: &str = "data3";
     pub const DATA5: &str = "data5";
+    pub const MIN_GOLD: &str = "mingold";
+    pub const MAX_GOLD: &str = "maxgold";
 }
 
 pub(crate) mod go {
