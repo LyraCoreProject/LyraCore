@@ -344,14 +344,23 @@ pub fn package_guild_answered(
 
 #[reducer]
 pub fn retry_package_guild(ctx: &ReducerContext, retry: PackageGuildRetry) {
-    if crate::time::scheduler_authorized(ctx) {
-        ctx.db
-            .game_package_guild_delivery()
-            .insert(PackageGuildDelivery {
-                id: 0,
-                ..retry.call
-            });
+    if !crate::time::scheduler_authorized(ctx) {
+        return;
     }
+    // A later invitation change re-sends the Character's state, so a removed Shard's copy is dropped.
+    if !crate::peer::is_peer(ctx, retry.call.database.0) {
+        spacetimedb::log::warn!(
+            "Package guild invitation retry to {} dropped: not a Peer Shard",
+            retry.call.database.0
+        );
+        return;
+    }
+    ctx.db
+        .game_package_guild_delivery()
+        .insert(PackageGuildDelivery {
+            id: 0,
+            ..retry.call
+        });
 }
 
 #[cfg(feature = "debug_reducers")]
