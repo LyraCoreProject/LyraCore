@@ -5797,6 +5797,7 @@ fn discovery_stays_on_the_narrow_candidate_universes() {
                 ("eventai", 0),
                 ("cast", 1),
                 ("threat_retarget", 1),
+                ("call_for_help", 0),
                 ("chase", 1),
                 ("combat_enter", 1),
                 ("idle", 2),

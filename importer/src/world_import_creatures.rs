@@ -345,11 +345,11 @@ fn templates(
         .iter()
         .map(|c| row.number::<u32>(c))
         .collect::<Result<Vec<_>>>()?;
-        let call_for_help_range: f32 = row.number("call_for_help_range")?;
-        anyhow::ensure!(
-            call_for_help_range.is_finite() && call_for_help_range >= 0.0,
-            "creature {entry}: invalid call for help range"
-        );
+        let mut call_for_help_range: f32 = row.number("call_for_help_range")?;
+        if !(call_for_help_range.is_finite() && call_for_help_range >= 0.0) {
+            finding(findings, "creatures.negative-call-for-help-range", entry);
+            call_for_help_range = 5.0;
+        }
         templates.push(format!("({entry},{},{},{display},{min},{health},{},{},{unit},{},{},{kind},{},{scale},{},{},{},{max},{max_health},0,{low},{high},{armor},{},{},{},{},{},{call_for_help_range})",
             sql_text(row.text("name")?), sql_text(row.optional_text("subname")?.unwrap_or_default()), fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6], fields[7], fields[8], fields[9], fields[10], fields[11], fields[12]));
         template_findings(row, entry, restored, findings)?;
@@ -847,6 +847,36 @@ mod tests {
             insert.contains(",mechanic_immune_mask,call_for_help_range) VALUES")
                 && insert.ends_with(",0,12.5)"),
             "{insert}"
+        );
+    }
+
+    #[test]
+    fn a_negative_call_for_help_range_is_a_finding_and_becomes_five_yards() {
+        let source = template_source();
+        source
+            .fixture_connection()
+            .execute("UPDATE creature_template SET call_for_help_range = -1", [])
+            .unwrap();
+        let mut statements = Vec::new();
+        let mut findings = Findings::new();
+        templates(
+            &source,
+            &HashSet::from([5090042]),
+            &HashSet::new(),
+            None,
+            &mut statements,
+            &mut findings,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let insert = statements
+            .iter()
+            .find(|sql| sql.starts_with("INSERT INTO game_creature_template "))
+            .unwrap();
+        assert!(insert.ends_with(",0,0,5)"), "{insert}");
+        assert_eq!(
+            findings.get("creatures.negative-call-for-help-range"),
+            Some(&BTreeSet::from(["5090042".to_string()]))
         );
     }
 

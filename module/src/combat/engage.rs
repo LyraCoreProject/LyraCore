@@ -138,17 +138,28 @@ pub(crate) fn answer_creature_assistance(
     target_guid: u64,
 ) {
     if start_creature_attack(ctx, creature_guid, target_guid) {
-        enter_combat(ctx, creature_guid);
-        enter_combat(ctx, target_guid);
-        crate::hooks::fire_on_aggro(
-            ctx,
-            &crate::hooks::AggroPayload {
-                creature_guid,
-                target_guid,
-                assist: true,
-            },
-        );
+        join_fight(ctx, creature_guid, target_guid);
     }
+}
+
+/// An answer to a Call for Help attacks as vmangos `AttackStart` does, so it calls for assistance.
+pub(crate) fn answer_creature_help(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) {
+    if resume_creature_engagement(ctx, creature_guid, target_guid) {
+        join_fight(ctx, creature_guid, target_guid);
+    }
+}
+
+fn join_fight(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) {
+    enter_combat(ctx, creature_guid);
+    enter_combat(ctx, target_guid);
+    crate::hooks::fire_on_aggro(
+        ctx,
+        &crate::hooks::AggroPayload {
+            creature_guid,
+            target_guid,
+            assist: true,
+        },
+    );
 }
 
 fn start_creature_attack(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) -> bool {

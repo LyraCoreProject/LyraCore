@@ -768,8 +768,9 @@ _Avoid_: assist pass, pack pull
 **Call for Help**:
 The call a creature makes once a second while its victim has drawn it more than 10 yards from its
 respawn point. Friendly creatures it sees within the template's `call_for_help_range` that are out
-of combat answer at once: one whose template responds attacks the victim, and one whose template
-flees, on random movement and within 10 yards of the victim, runs 10 yards away from it.
+of combat answer at once: one whose template responds attacks the victim, and calls for assistance
+in turn. One whose template flees, on random movement and within 10 yards of the victim, runs to
+the point 10 yards from the victim on its own side.
 _Avoid_: leash call, kite pull
 
 **Rule State**:

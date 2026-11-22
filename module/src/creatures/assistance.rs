@@ -1,14 +1,12 @@
 use spacetimedb::{table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
-use crate::{
-    game_creature_spawn, game_creature_template, game_faction_template, game_world_entity,
-    WorldEntity,
-};
+use crate::{game_creature_template, game_faction_template, game_world_entity, WorldEntity};
 
 // vmangos World.cpp CreatureFamilyAssistanceDelay default.
 const ASSISTANCE_DELAY_MICROS: i64 = 1_500_000;
 // vmangos `MoveAwayFromTarget(pEnemy, 10.0f)`, and the distance inside which a creature flees.
 const FLEE_DISTANCE_YD: f32 = 10.0;
+const MOVE_AWAY_CLIMB_YD: f32 = 10.0;
 
 #[table(
     accessor = game_creature_assistance_call,
@@ -122,9 +120,13 @@ pub(crate) fn call_assistance(ctx: &ReducerContext, caller_guid: u64, victim_gui
         });
 }
 
-/// vmangos `Creature::CallForHelp` as `Creature::Update` makes it: friendly neighbours within the
-/// template's range answer at once, and a neighbour that flees runs from the victim instead.
-pub(crate) fn call_for_help(ctx: &ReducerContext, caller_guid: u64, victim_guid: u64) {
+/// vmangos `Creature::CallForHelp`; `moves_randomly` tells whether a creature is on random movement.
+pub(crate) fn call_for_help(
+    ctx: &ReducerContext,
+    caller_guid: u64,
+    victim_guid: u64,
+    moves_randomly: impl Fn(u64) -> bool,
+) {
     let entities = ctx.db.game_world_entity();
     let (Some(caller), Some(victim)) = (
         entities.guid().find(caller_guid),
@@ -140,8 +142,8 @@ pub(crate) fn call_for_help(ctx: &ReducerContext, caller_guid: u64, victim_guid:
     neighbours.sort_unstable_by_key(|n| n.guid);
     for neighbour in neighbours {
         if answers_against(ctx, &neighbour) {
-            crate::combat::answer_creature_assistance(ctx, neighbour.guid, victim.guid);
-        } else if flees_from(ctx, &neighbour, &victim) {
+            crate::combat::answer_creature_help(ctx, neighbour.guid, victim.guid);
+        } else if flees_from(ctx, &neighbour, &victim, moves_randomly(neighbour.guid)) {
             move_away_from(ctx, neighbour, &victim);
         }
     }
@@ -221,37 +223,60 @@ fn answers_against(ctx: &ReducerContext, neighbour: &WorldEntity) -> bool {
         && !super::eventai::movement::returning_home(ctx, neighbour.guid)
 }
 
-/// vmangos `Creature::CanFleeFromCallForHelpAgainst`, for a creature on random movement.
-fn flees_from(ctx: &ReducerContext, neighbour: &WorldEntity, victim: &WorldEntity) -> bool {
-    ctx.db
-        .game_faction_template()
-        .id()
-        .find(neighbour.faction_template)
-        .is_some_and(|template| template.flees_from_call_for_help())
+/// vmangos `Creature::CanFleeFromCallForHelpAgainst`.
+fn flees_from(
+    ctx: &ReducerContext,
+    neighbour: &WorldEntity,
+    victim: &WorldEntity,
+    moves_randomly: bool,
+) -> bool {
+    moves_randomly
         && ctx
             .db
-            .game_creature_spawn()
-            .guid()
-            .find(neighbour.guid)
-            .is_some_and(|spawn| spawn.movement_type == super::MOVEMENT_RANDOM)
+            .game_faction_template()
+            .id()
+            .find(neighbour.faction_template)
+            .is_some_and(|template| template.flees_from_call_for_help())
         && !crate::spell::is_rooted(ctx, neighbour.guid)
         && crate::helpers::dist_sq(neighbour, victim) < FLEE_DISTANCE_YD * FLEE_DISTANCE_YD
 }
 
-/// vmangos `Creature::MoveAwayFromTarget`: a run of `FLEE_DISTANCE_YD` directly away from `threat`.
+/// vmangos `MoveDistance`: to the point 10 yd from `threat` on the mover's side.
 fn move_away_from(ctx: &ReducerContext, mover: WorldEntity, threat: &WorldEntity) {
+    let (dx, dy) = (mover.x - threat.x, mover.y - threat.y);
+    let len = (dx * dx + dy * dy).sqrt();
+    let (ux, uy) = if len > 0.0 {
+        (dx / len, dy / len)
+    } else {
+        (1.0, 0.0)
+    };
+    let (x, y) = (
+        threat.x + ux * FLEE_DISTANCE_YD,
+        threat.y + uy * FLEE_DISTANCE_YD,
+    );
+    let z = crate::terrain::snap_z(ctx, mover.map_id, mover.instance_id, x, y, mover.z);
+    if z > mover.z + MOVE_AWAY_CLIMB_YD
+        || !crate::nav::has_los(
+            ctx,
+            mover.map_id,
+            mover.instance_id,
+            (threat.x, threat.y, threat.z),
+            (x, y, z),
+        )
+    {
+        return;
+    }
     let run = crate::modifiers::effective_move_speed(
         ctx,
         mover.guid,
         lyracore_shared::constants::speeds::RUN,
     );
-    let away = super::ai::flee_step(mover.x, mover.y, threat.x, threat.y, FLEE_DISTANCE_YD);
     let step = crate::nav::nav_step(
         ctx,
         mover.map_id,
         mover.instance_id,
         (mover.x, mover.y),
-        away,
+        (x, y),
         FLEE_DISTANCE_YD,
         0.0,
         mover.z,
@@ -259,7 +284,7 @@ fn move_away_from(ctx: &ReducerContext, mover: WorldEntity, threat: &WorldEntity
     let Some((x, y, duration_ms)) = super::ai::leg_toward((mover.x, mover.y), step, run) else {
         return;
     };
-    let course = super::leg::Course::on_ground(ctx, &mover, (x, y), mover.z, duration_ms, true)
+    let course = super::leg::Course::on_ground(ctx, &mover, (x, y), z, duration_ms, true)
         .held_until_landed(true);
     super::leg::start(ctx, mover, course);
 }

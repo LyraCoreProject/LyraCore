@@ -13530,6 +13530,12 @@ path = "importer/src/world_import_creatures.rs"
 symbol = "templates"
 evidence = "conformance/vmangos-port-census/creatures.md: display selection; no nonzero alternative at the pin."
 
+[[known_gaps]]
+description = "The Call for Assistance and Call for Help compare distances between creature positions, without adding the bounding radii of both creatures as vmangos IsWithinDistInMap does."
+path = "module/src/creatures/assistance.rs"
+symbol = "called_neighbours"
+evidence = "vmangos d9173eca3ea08dd985c52dabbcc826898d1d0b77 GridNotifiers.h:976-1008 CallOfHelpCreatureInRangeDo."
+
 [[tests]]
 path = "importer/src/world_import_creatures.rs"
 function = "mechanic_immune_mask_reaches_the_template_and_is_no_finding"

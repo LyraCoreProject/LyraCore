@@ -347,7 +347,11 @@ fn apply(
             let change = create.fields.changes(None);
             ctx.db
                 .game_creature_template()
-                .try_insert(create.fields.into_template(entry, 0, 0.0))
+                .try_insert(create.fields.into_template(
+                    entry,
+                    0,
+                    crate::creatures::DEFAULT_CALL_FOR_HELP_RANGE_YD,
+                ))
                 .map_err(|reason| format!("creature {entry} cannot be inserted: {reason}"))?;
             Ok((format!("create creature {entry}: {change}"), Some(entry)))
         }
@@ -1044,7 +1048,7 @@ mod tests {
 
     #[test]
     fn log_names_only_changed_columns_and_escapes_line_breaks() {
-        let old = fields().into_template(42, 0, 0.0);
+        let old = fields().into_template(42, 0, 5.0);
         let renamed = CreatureFields {
             name: "New\nname".into(),
             ..fields()

@@ -76,6 +76,7 @@ pub(crate) use spawn::{
     build_creature_entity, clear_gossip_menu_override, clear_gossip_menu_overrides_for_instance,
     creature_spawn_evidence, current_life_seq, insert_creature_entity, rolled_creature_stats,
     scale_creature_damage_for_level, scale_health_for_rank, set_creature_gossip_menu,
+    DEFAULT_CALL_FOR_HELP_RANGE_YD,
 };
 
 pub(crate) use tick::{despawn_creature_entity, CREATURE_CORPSE_DECAY_MICROS};

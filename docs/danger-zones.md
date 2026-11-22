@@ -200,15 +200,16 @@ insertion; corpse decay and Instance teardown use their time and Instance indexe
 
 ### Creature call for help migration
 
-`game_creature_template` gains the END-appended column `call_for_help_range` with default 0, which
-turns Call for Help and Call for Assistance off for that template. Reimport the `creatures` family
-straight after the publish to fill it from the World Source. Until then no creature calls for
-assistance or help, including the pack mates that joined a proximity pull before this revision.
-A live creature reads its template's range on each call and keeps no copy, so it needs no repair,
-respawn or `debug_repair_after_publish` step. Package Deltas may claim the column; one that omits
-it keeps the default. The Operator Content API does not carry it, so a created template has range 0
-and an update keeps the template's range. Direct SQL INSERTs may omit it; shared import SQL
-defaults fill older inserts.
+`game_creature_template` gains the END-appended column `call_for_help_range` with default 5.0,
+vmangos's in-code default, so every existing template keeps its Call for Assistance. A range of 0
+turns the Call for Assistance and the Call for Help off for that template. From the publish on, a
+creature that fights more than 10 yards from its respawn point calls friendly creatures within 5
+yards for help, until a reimport of the `creatures` family fills each template's own range from the
+World Source. A live creature reads its template's range on each call and keeps no copy, so it
+needs no repair, respawn or `debug_repair_after_publish` step. Package Deltas may claim the column;
+one that omits it keeps the default. The Operator Content API does not carry it, so a created
+template has range 5.0 and an update keeps the template's range. Direct SQL INSERTs may omit it;
+shared import SQL defaults fill older inserts.
 
 ### DynamicObject AOI migration
 
