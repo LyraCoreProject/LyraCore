@@ -114,6 +114,18 @@ impl Fight {
             .clone()
     }
 
+    fn give_wolf_combat_reach(&self, combat_reach: f32) {
+        let wolf = &self.shard.query_rows(&format!(
+            "SELECT display_id, scale_x FROM game_world_entity WHERE guid = {}",
+            self.wolf
+        ))[0];
+        self.shard.assert_sql(&format!(
+            "INSERT INTO game_display_combat_reach (display_id, combat_reach, display_scale) \
+             VALUES ({}, {combat_reach}, {})",
+            wolf["display_id"], wolf["scale_x"]
+        ));
+    }
+
     fn challenge(&self, threat: i64) -> String {
         self.set_threat(CHALLENGER, threat);
         self.settle();
@@ -149,6 +161,24 @@ fn a_challenger_outside_melee_reach_needs_more_than_130_percent_of_the_victims_t
         "exactly 130% does not switch"
     );
     assert_eq!(fight.challenge(1310), CHALLENGER, "131% at range switches");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_large_creature_counts_a_challenger_in_its_own_melee_reach() {
+    let fight = Fight::start("threat-margin-large-creature", 6.0);
+    assert_eq!(
+        fight.challenge(1110),
+        VICTIM,
+        "6 yd is outside a normal wolf's 5 yd reach"
+    );
+    fight.give_wolf_combat_reach(4.0);
+    fight.settle();
+    assert_eq!(
+        fight.victim(),
+        CHALLENGER,
+        "4 + 1.5 + 4/3 yd reaches the challenger 6 yd away"
+    );
 }
 
 #[test]

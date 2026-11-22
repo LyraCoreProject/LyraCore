@@ -37,10 +37,20 @@ pub struct CreatureDisplay {
     pub bounding_radius: f32,
 }
 
+/// A display's combat reach in yards, measured at `display_scale`, its CreatureDisplayInfo.dbc scale.
+#[table(accessor = game_display_combat_reach, public)]
+pub struct DisplayCombatReach {
+    #[primary_key]
+    pub display_id: u32,
+    pub combat_reach: f32,
+    pub display_scale: f32,
+}
+
 crate::outside_table_catalog!(
     game_creature_defense,
     game_creature_level_stats,
-    game_creature_display
+    game_creature_display,
+    game_display_combat_reach
 );
 
 pub(crate) fn display_gender(ctx: &ReducerContext, display_id: u32) -> u8 {

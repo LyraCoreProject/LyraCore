@@ -269,7 +269,7 @@ symbol = "WorldSession::HandlePlayerLoginOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "Character CREATE omits the model bounding radius and combat reach. vmangos takes both from creature_display_info_addon by display id; the importer keeps bounding radius only per creature template and drops combat reach."
+description = "Character CREATE omits the model bounding radius and combat reach. vmangos takes both from creature_display_info_addon by display id; the importer keeps bounding radius only per creature template and combat reach in game_display_combat_reach, which only the Module's Melee Reach reads."
 path = "importer/src/world_import_creatures.rs"
 symbol = "creature_display_info_addon"
 evidence = "Tier 1 two_character_visibility and __opposite_faction at harness 004d8d74: field_129 is 0.306 for human male display 49 and 0.372 for orc male display 51 in the reference, field_130 is 1.5 for both; both fields are absent in core for both recipients. At d9173eca, Unit.cpp Unit::UpdateModelData sets UNIT_FIELD_BOUNDINGRADIUS and UNIT_FIELD_COMBATREACH from the display's addon row."

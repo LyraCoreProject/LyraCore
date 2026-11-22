@@ -75,6 +75,8 @@ The presence of level rows for an entry preserves the imported stat convention e
 changes the template endpoints; edited values never acquire classic rank multipliers. An authored
 display or scale change likewise takes precedence over the imported display choices.
 vmangos imports replace the level rows with selected source class-level stats.
+`game_display_combat_reach` is a new table of combat reach by display id, filled by the creatures
+import; until then every unit uses the default reach ([migration](danger-zones.md#melee-reach-migration)).
 
 EventAI keeps the published rule's policy enums fieldless. The new private
 `game_creature_ai_script_policy` table holds command-list boundaries and event admission policies,

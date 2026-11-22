@@ -33,7 +33,7 @@ entry in both files.
 
 **L** [Land Mount](#mounts) · [Lethal Damage Floor](#creature-ai) · [Letter Copy](#mail) · [Listing](#auctions) · [Login Queue](#accounts-characters-and-sessions) · [Logon Limiter](#accounts-characters-and-sessions) · [Loot Release](#loot) · [Loot Roll](#loot) · [Loot Roll Promotion](#retired-terms) · [Loot Roll Promotion Receipt](#retired-terms) · [Loot Source](#loot) · [Loot Tag](#loot) · [Loot Window](#loot)
 
-**M** [Mail](#mail) · [Mail Arrival](#mail) · [Mail Expiry](#mail) · [Mail Sender](#mail) · [Mail Template](#mail) · [Mail Timer](#mail) · [Meeting Stone](#meeting-stones) · [Meeting Stone Queue](#meeting-stones) · [Member Stats](#groups) · [Migration Source](#accounts-characters-and-sessions) · [Module](CORE_TERMS.md#module) · [Motion Permit](#requests-and-delivery) · [Mount Projection](#mounts) · [Movement Intent](#creature-ai)
+**M** [Mail](#mail) · [Mail Arrival](#mail) · [Mail Expiry](#mail) · [Mail Sender](#mail) · [Mail Template](#mail) · [Mail Timer](#mail) · [Meeting Stone](#meeting-stones) · [Meeting Stone Queue](#meeting-stones) · [Melee Reach](#procs) · [Member Stats](#groups) · [Migration Source](#accounts-characters-and-sessions) · [Module](CORE_TERMS.md#module) · [Motion Permit](#requests-and-delivery) · [Mount Projection](#mounts) · [Movement Intent](#creature-ai)
 
 **N** [Native Host](CORE_TERMS.md#native-host) · [Navigation Inputs](#bots)
 
@@ -706,6 +706,14 @@ A spell effect that deals the caster's weapon damage plus the spell's flat bonus
 weapon damage percent. A ranged-slot spell such as Throw strikes with the ranged weapon and spends
 one thrown weapon or one ammo. A queued strike instead waits for the next melee swing.
 _Avoid_: weapon damage spell, special attack
+
+**Melee Reach**:
+The flat distance inside which one unit's melee swing reaches another: both units' combat reach
+from their display, plus 4/3 yd, and at least 5 yd. The height difference must stay under 6 yd.
+When both units move and one is a Character, the reach grows by 2.66 yd, and a moving Character
+reaches at least 9 yd. Swings, the chase stop and the 110% threat margin share it. See
+`module/src/combat/reach.rs`.
+_Avoid_: melee range, attack distance
 
 **Swing Error**:
 Why a player's due melee swing could not land: the target is out of reach or behind the player.

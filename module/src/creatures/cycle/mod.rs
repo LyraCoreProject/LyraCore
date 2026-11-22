@@ -7,14 +7,15 @@ use super::ai::{
     aggro_radius, fear_step_for_tick, feared_flee_step, finite_point, flee_step, hp_pct_below,
     is_aggro_candidate, leg_in_flight, leg_toward, may_start_rout, nearest_waypoint_idx,
     next_waypoint_idx, rout_close_ms, spline_t, stealth_detect_range, wander_point,
-    wounded_slow_factor, CHASE_LEASH_SQ, CHASE_MELEE_SQ, CHASE_REPATH_COS, FLEE_LEG_YD,
-    RETURN_LEASH_SQ, WANDER_CHANCE_PCT, WANDER_RADIUS,
+    wounded_slow_factor, CHASE_LEASH_SQ, CHASE_REPATH_COS, FLEE_LEG_YD, RETURN_LEASH_SQ,
+    WANDER_CHANCE_PCT, WANDER_RADIUS,
 };
 use super::cast_condition;
 use super::eventai::EventAiRequest;
 use super::pet;
 use super::tick::cadence::{TickScope, MOVE_TICK_SECS, SENSE_EVERY_N_TICKS};
 use super::tick::TickSweep;
+use crate::combat::reach::{in_melee_reach, MeleeBody, MELEE_REACH_FLOOR_YD};
 use crate::threat::{select_victim, Contender};
 
 mod ctx;
@@ -343,14 +344,14 @@ pub(crate) trait CastSink {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct Fighter {
     pub guid: u64,
-    pub at: Point,
+    pub body: MeleeBody,
     pub victim: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct ThreatSource {
     pub guid: u64,
-    pub at: Point,
+    pub body: MeleeBody,
     pub threat: i64,
 }
 
@@ -371,6 +372,8 @@ pub(crate) struct Pursuit {
     pub victim_orientation: f32,
     pub victim_movement_flags: u32,
     pub victim_is_character: bool,
+    pub combat_reach: f32,
+    pub victim_combat_reach: f32,
     pub last_move_ms: u32,
     pub routing: bool,
     pub leg: Option<LegInFlight>,
@@ -827,7 +830,7 @@ const PET_FOLLOW_BAND_SQ: f32 = 64.0;
 const PET_TRAIL_YD: f32 = 4.0;
 
 const _: () = assert!(
-    PET_FOLLOW_BAND_SQ > CHASE_MELEE_SQ,
+    PET_FOLLOW_BAND_SQ > MELEE_REACH_FLOOR_YD * MELEE_REACH_FLOOR_YD,
     "the follow band must sit outside melee range, or a trailing pet jitters at the boundary"
 );
 
@@ -1020,7 +1023,7 @@ fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
             .map(|source| Contender {
                 source_guid: source.guid,
                 threat: source.threat,
-                in_melee_reach: dist_sq(f.at, source.at) <= CHASE_MELEE_SQ,
+                in_melee_reach: in_melee_reach(&f.body, &source.body),
             })
             .collect();
         if let Some(victim) = select_victim(f.victim, &contenders) {
@@ -1046,7 +1049,7 @@ const OVERLAP_YD: f32 = 2.0 * BOUNDING_RADIUS_YD;
 const BACK_OFF_AFTER_STILL_MS: u32 = 2_000;
 
 const _: () = assert!(
-    CHASE_CONTACT_YD * CHASE_CONTACT_YD < CHASE_MELEE_SQ,
+    CHASE_CONTACT_YD < MELEE_REACH_FLOOR_YD,
     "a chaser must stop inside the reach its own swing needs"
 );
 
@@ -1124,7 +1127,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         }
         let victim_moving = crate::combat::is_translating(c.victim_movement_flags);
         let in_contact = gap_sq <= CHASE_CONTACT_YD * CHASE_CONTACT_YD;
-        if in_contact || (gap_sq <= CHASE_MELEE_SQ && !victim_moving) {
+        if in_contact || (in_chase_reach(&c) && !victim_moving) {
             if back_off_from == 0 && !back_off(w, tick, &c, gap_sq) {
                 stand_and_face(w, &c);
             }
@@ -1139,6 +1142,22 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         commit_chase_leg(w, &c, c.victim_at, CHASE_CONTACT_YD);
     }
     visited
+}
+
+// vmangos chases to the reach without leeway (`Unit::GetMaxChaseDistance`).
+fn in_chase_reach(c: &Pursuit) -> bool {
+    let still = |at: Point, combat_reach, is_character| MeleeBody {
+        x: at.x,
+        y: at.y,
+        z: at.z,
+        combat_reach,
+        is_character,
+        moving: false,
+    };
+    in_melee_reach(
+        &still(c.at, c.combat_reach, false),
+        &still(c.victim_at, c.victim_combat_reach, c.victim_is_character),
+    )
 }
 
 fn commit_chase_leg<W: MotionSink + IdleSink + PursuitSink>(
@@ -1559,6 +1578,8 @@ mod facing_tests {
             victim_orientation: 0.0,
             victim_movement_flags: 0,
             victim_is_character: true,
+            combat_reach: 1.5,
+            victim_combat_reach: 1.5,
             last_move_ms: 0,
             routing: false,
             leg,

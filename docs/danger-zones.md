@@ -553,6 +553,13 @@ A Package Delta written before this revision has no `gcd_category`, so its new s
 category 0: their global cooldown neither blocks nor waits for a category 133 spell. Emit the
 Package again from a Base Snapshot of this revision, or set `gcd_category`, before you apply it.
 
+### Melee reach migration
+
+The new `game_display_combat_reach` table starts empty after a publish, so every unit keeps the
+default 1.5 yd combat reach and a 5 yd Melee Reach. Reimport the `creatures` family with `--dbc`
+before play resumes; large creatures and Tauren then reach as far as vmangos allows. Without
+client data the import stores a display scale of 1, as it does for template scales.
+
 ### Reserve Pool migration
 
 `game_world_entity` gains three END-appended columns: `reserve_power_type` (default 255),

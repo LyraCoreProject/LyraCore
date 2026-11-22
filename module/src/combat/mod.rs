@@ -13,6 +13,7 @@ mod folds;
 mod inactive_grid;
 mod leash;
 pub(crate) mod queued_strike;
+pub(crate) mod reach;
 pub(crate) mod swing;
 mod tables;
 
@@ -75,8 +76,7 @@ pub(crate) use tables::{
     regen_entity_power, scale_swing_for_rank, swing_time_with_haste, total_attack_power,
     weapon_swing_range_ap, RegenWindow, AUTO_SHOT_PROJECTILE_SPEED, CLASS_DRUID,
     CREATURE_MELEE_MAX, CREATURE_MELEE_MIN, CRIT_MULT, CRUSH_DAMAGE_PCT, GLANCING_DAMAGE_PCT,
-    MELEE_LEEWAY_WINDOW_MS, MELEE_RANGE_LEEWAY_CREATURE_SQ, MELEE_RANGE_LEEWAY_SQ, MELEE_RANGE_SQ,
-    RANGED_INITIAL_SHOT_MS, RANGED_RANGE_SQ, WAND_PROJECTILE_SPEED,
+    MELEE_RANGE_SQ, RANGED_INITIAL_SHOT_MS, RANGED_RANGE_SQ, WAND_PROJECTILE_SPEED,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use tables::{regen_health_in_combat, swing_profile};

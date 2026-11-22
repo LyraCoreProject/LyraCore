@@ -3,6 +3,7 @@ use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration};
 use crate::spell::SpellCastEventKind;
 use crate::{game_item_template, game_spell, game_world_entity, SpellCastEvent, WorldEntity};
 
+use super::reach::{in_melee_reach, MeleeBody};
 use super::*;
 use crate::{
     game_melee_attack, game_ranged_impact_schedule, CombatEvent, MeleeAttack, MeleeSchedule,
@@ -87,6 +88,7 @@ pub(super) fn evade(ctx: &ReducerContext, creature: u64) {
 fn aggro_pass(ctx: &ReducerContext) {
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
+    let now_ms = crate::time::now_ms_u32(ctx);
 
     let mut new_aggro: Vec<(u64, u64)> = Vec::new();
     for atk in melee.iter() {
@@ -98,15 +100,12 @@ fn aggro_pass(ctx: &ReducerContext) {
         };
         // Retaliation requires a fired attack; entering attack stance alone is not a hit.
         let is_ranged = atk.ranged_spell_id != 0;
-        let dx = attacker.x - target.x;
-        let dy = attacker.y - target.y;
-        let dz = attacker.z - target.z;
         if attacker.is_player()
             && !target.is_player()
             && !target.dead
             && ((is_ranged
                 && target.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0)
-                || (atk.last_swing_ms != 0 && dx * dx + dy * dy + dz * dz <= MELEE_RANGE_LEEWAY_SQ))
+                || (atk.last_swing_ms != 0 && within_moving_reach(ctx, &attacker, &target, now_ms)))
             && melee.attacker_guid().find(target.guid).is_none()
             && !new_aggro.iter().any(|(c, _)| *c == target.guid)
         {
@@ -117,6 +116,20 @@ fn aggro_pass(ctx: &ReducerContext) {
         engage_passive_creature(ctx, creature, player);
         arm_creature_engagement(ctx, creature, player, false);
     }
+}
+
+// Retaliation always allows the leeway, so a fired swing still counts after either unit stops.
+fn within_moving_reach(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: &WorldEntity,
+    now_ms: u32,
+) -> bool {
+    let moving = |unit| MeleeBody {
+        moving: true,
+        ..MeleeBody::of(ctx, unit, now_ms)
+    };
+    in_melee_reach(&moving(attacker), &moving(target))
 }
 
 fn resolve_offhand_swing(
@@ -456,26 +469,18 @@ fn swing_blocked(
     dist_sq: f32,
     now_ms: u32,
 ) -> Option<SwingBlock> {
-    let range_sq = if is_ranged {
-        RANGED_RANGE_SQ
-    } else {
-        let both_moving = now_ms.wrapping_sub(attacker.last_move_ms) < MELEE_LEEWAY_WINDOW_MS
-            && now_ms.wrapping_sub(target.last_move_ms) < MELEE_LEEWAY_WINDOW_MS;
-        if both_moving {
-            if attacker.is_player() {
-                MELEE_RANGE_LEEWAY_SQ
-            } else {
-                MELEE_RANGE_LEEWAY_CREATURE_SQ
-            }
-        } else {
-            MELEE_RANGE_SQ
+    if is_ranged {
+        if dist_sq > RANGED_RANGE_SQ {
+            return Some(SwingBlock::OutOfRange);
         }
-    };
-    if dist_sq > range_sq {
+        if dist_sq < MELEE_RANGE_SQ {
+            return Some(SwingBlock::TooClose);
+        }
+    } else if !in_melee_reach(
+        &MeleeBody::of(ctx, attacker, now_ms),
+        &MeleeBody::of(ctx, target, now_ms),
+    ) {
         return Some(SwingBlock::OutOfRange);
-    }
-    if is_ranged && dist_sq < MELEE_RANGE_SQ {
-        return Some(SwingBlock::TooClose);
     }
     if !crate::nav::has_los(
         ctx,

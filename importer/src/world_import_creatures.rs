@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use super::*;
 use crate::world_source::Row;
@@ -107,7 +107,14 @@ fn flags(row: &Row, restored: u32) -> Result<(u32, u32)> {
     Ok((unit, kind))
 }
 
-fn model_attributes(dump: &impl TableRows) -> Result<BTreeMap<u32, (u8, u32, f32)>> {
+struct ModelAttributes {
+    gender: u8,
+    alternate: u32,
+    bounding_radius: f32,
+    combat_reach: f32,
+}
+
+fn model_attributes(dump: &impl TableRows) -> Result<BTreeMap<u32, ModelAttributes>> {
     let models = dump.columns(
         "creature_display_info_addon",
         &[
@@ -115,6 +122,7 @@ fn model_attributes(dump: &impl TableRows) -> Result<BTreeMap<u32, (u8, u32, f32
             "gender",
             "display_id_other_gender",
             "bounding_radius",
+            "combat_reach",
         ],
     )?;
     models
@@ -127,14 +135,39 @@ fn model_attributes(dump: &impl TableRows) -> Result<BTreeMap<u32, (u8, u32, f32
                 radius.is_finite() && radius >= 0.0,
                 "creature model has invalid radius {radius}"
             );
+            let reach: f32 = row.number("combat_reach")?;
+            anyhow::ensure!(
+                reach.is_finite() && reach >= 0.0,
+                "creature model has invalid combat reach {reach}"
+            );
             Ok((
                 row.number::<u32>("display_id")?,
-                (
+                ModelAttributes {
                     gender,
-                    row.number::<u32>("display_id_other_gender")?,
-                    radius,
-                ),
+                    alternate: row.number::<u32>("display_id_other_gender")?,
+                    bounding_radius: radius,
+                    combat_reach: reach,
+                },
             ))
+        })
+        .collect()
+}
+
+// vmangos `Unit::UpdateModelData` falls back to the default reach for a model without a radius.
+fn display_reaches(
+    models: &BTreeMap<u32, ModelAttributes>,
+    scales: &HashMap<u32, f32>,
+) -> Vec<String> {
+    models
+        .iter()
+        .filter(|(_, model)| model.bounding_radius > 0.0)
+        .map(|(display, model)| {
+            let scale = scales
+                .get(display)
+                .copied()
+                .filter(|s| *s > 0.0)
+                .unwrap_or(1.0);
+            format!("({display},{},{scale})", model.combat_reach)
         })
         .collect()
 }
@@ -311,7 +344,9 @@ fn templates(
             };
             weight_sum += u64::from(weight);
             let id = (entry << 3) | slot;
-            let (gender, alternate, radius) = models.get(&model).copied().unwrap_or((0, 0, 0.389));
+            let (gender, alternate, radius) = models.get(&model).map_or((0, 0, 0.389), |m| {
+                (m.gender, m.alternate, m.bounding_radius)
+            });
             if !models.contains_key(&model) {
                 finding(findings, "creatures.missing-model-gender", entry);
             }
@@ -359,6 +394,7 @@ fn templates(
         ("game_creature_defense", "entry", "entry,no_parry,no_block,no_defense", defenses),
         ("game_creature_level_stats", "id", "id,entry,level,health,damage_min,damage_max,armor", levels),
         ("game_creature_display", "id", "id,entry,display_id,scale,weight,gender,bounding_radius", displays),
+        ("game_display_combat_reach", "display_id", "display_id,combat_reach,display_scale", display_reaches(&models, &scales)),
     ] {
         statements.push(format!("DELETE FROM {table} WHERE {key} > 0"));
         push_insert(statements, table, columns, &rows);
@@ -684,7 +720,7 @@ mod tests {
             INSERT INTO creature_template (entry,patch,unit_class,level_min,level_max,health_multiplier,damage_multiplier,armor_multiplier,display_id1,faction,rank,base_attack_time) VALUES (5090042,10,1,10,10,1,1,1,100,35,3,2000);
             CREATE TABLE creature_ai_events (creature_id INTEGER,action1_script INTEGER,action2_script INTEGER,action3_script INTEGER);
             CREATE TABLE creature_ai_scripts (id INTEGER,command INTEGER,datalong INTEGER,datalong2 INTEGER);
-            CREATE TABLE creature_display_info_addon (display_id INTEGER, build INTEGER, gender INTEGER, display_id_other_gender INTEGER, bounding_radius REAL DEFAULT 0.389, PRIMARY KEY(display_id,build));
+            CREATE TABLE creature_display_info_addon (display_id INTEGER, build INTEGER, gender INTEGER, display_id_other_gender INTEGER, bounding_radius REAL DEFAULT 0.389, combat_reach REAL DEFAULT 1.5, PRIMARY KEY(display_id,build));
             CREATE TABLE creature_classlevelstats (class INTEGER, level INTEGER, health REAL, melee_damage REAL, armor REAL);
             INSERT INTO creature_classlevelstats VALUES (1,10,100,20,50);")).unwrap();
         WorldSource::fixture(connection)
@@ -1045,7 +1081,7 @@ mod tests {
     fn selected_model_gender_follows_the_display_and_build() {
         let source = template_source();
         let connection = source.fixture_connection();
-        connection.execute_batch("INSERT INTO creature_display_info_addon VALUES (100,4222,0,0,0.5),(100,5875,1,0,0.75),(100,6000,2,0,1.0);").unwrap();
+        connection.execute_batch("INSERT INTO creature_display_info_addon VALUES (100,4222,0,0,0.5,1.5),(100,5875,1,0,0.75,4.05),(100,6000,2,0,1.0,1.5);").unwrap();
         let mut statements = Vec::new();
         templates(
             &source,
@@ -1063,5 +1099,21 @@ mod tests {
             .unwrap();
         assert!(display.contains("(id,entry,display_id,scale,weight,gender,bounding_radius)"));
         assert!(display.ends_with(",5090042,100,1,1,1,0.75)"));
+        assert!(statements.iter().any(|s| s
+            == "INSERT INTO game_display_combat_reach (display_id,combat_reach,display_scale) VALUES (100,4.05,1)"));
+    }
+
+    #[test]
+    fn a_display_reach_carries_its_dbc_scale_and_a_model_without_radius_keeps_the_default() {
+        let model = |bounding_radius, combat_reach| ModelAttributes {
+            gender: 0,
+            alternate: 0,
+            bounding_radius,
+            combat_reach,
+        };
+        // vmangos tauren male display 59 and a model with no radius.
+        let models = BTreeMap::from([(59, model(0.9747, 4.05)), (60, model(0.0, 3.75))]);
+        let scales = HashMap::from([(59, 1.35)]);
+        assert_eq!(display_reaches(&models, &scales), ["(59,4.05,1.35)"]);
     }
 }
