@@ -118,11 +118,38 @@ pub(crate) fn arm_creature_engagement(
     true
 }
 
+/// A creature that gains a victim calls for assistance, as vmangos `Unit::Attack` does.
 pub(crate) fn resume_creature_engagement(
     ctx: &ReducerContext,
     creature_guid: u64,
     target_guid: u64,
 ) -> bool {
+    if !start_creature_attack(ctx, creature_guid, target_guid) {
+        return false;
+    }
+    crate::creatures::call_assistance(ctx, creature_guid, target_guid);
+    true
+}
+
+/// An answer to a call for assistance never calls for assistance itself.
+pub(crate) fn answer_creature_assistance(
+    ctx: &ReducerContext,
+    creature_guid: u64,
+    target_guid: u64,
+) {
+    if start_creature_attack(ctx, creature_guid, target_guid) {
+        crate::hooks::fire_on_aggro(
+            ctx,
+            &crate::hooks::AggroPayload {
+                creature_guid,
+                target_guid,
+                assist: true,
+            },
+        );
+    }
+}
+
+fn start_creature_attack(ctx: &ReducerContext, creature_guid: u64, target_guid: u64) -> bool {
     if crate::creatures::react_state(ctx, creature_guid)
         == crate::creatures::CreatureReactState::Passive
     {

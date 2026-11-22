@@ -16,9 +16,20 @@ pub struct FactionTemplate {
     pub friend_1: u32,
     pub friend_2: u32,
     pub friend_3: u32,
+    /// `FactionTemplate.dbc` `Flags`.
+    #[default(0)]
+    pub flags: u32,
 }
 
+// vmangos DBCEnums.h FactionTemplateFlags.
+const RESPOND_TO_CALL_FOR_HELP: u32 = 0x1;
+const FLEE_FROM_CALL_FOR_HELP: u32 = 0x400;
+
 impl FactionTemplate {
+    /// vmangos `Creature::CanRespondToCallForHelpAgainst`: it responds and does not flee instead.
+    pub(crate) fn answers_call_for_help(&self) -> bool {
+        self.flags & RESPOND_TO_CALL_FOR_HELP != 0 && self.flags & FLEE_FROM_CALL_FOR_HELP == 0
+    }
     fn enemies(&self) -> [u32; 4] {
         [self.enemy_0, self.enemy_1, self.enemy_2, self.enemy_3]
     }
@@ -105,6 +116,7 @@ mod tests {
             friend_1: fr[1],
             friend_2: fr[2],
             friend_3: fr[3],
+            flags: 0,
         }
     }
 
@@ -169,6 +181,21 @@ mod tests {
         let neutral_b = ft(3, 0, 0x2, 0, 0, [0; 4], [0; 4]);
         assert!(compute_hostile(&a, &hostile_b));
         assert!(!compute_hostile(&a, &neutral_b));
+    }
+
+    #[test]
+    fn only_a_responding_template_that_does_not_flee_answers_a_call_for_help() {
+        for (flags, answers) in [(0x0, false), (0x1, true), (0x401, false), (0x400, false)] {
+            let template = FactionTemplate {
+                flags,
+                ..ft(1, 0, 0, 0, 0, [0; 4], [0; 4])
+            };
+            assert_eq!(
+                template.answers_call_for_help(),
+                answers,
+                "flags {flags:#x}"
+            );
+        }
     }
 
     #[test]

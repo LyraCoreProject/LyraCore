@@ -87,6 +87,7 @@ pub(super) fn faction_template(source: &(impl TableRows + ?Sized)) -> Result<(Ve
             ("friend_1", "friend_faction2", Unsigned),
             ("friend_2", "friend_faction3", Unsigned),
             ("friend_3", "friend_faction4", Unsigned),
+            ("flags", "faction_flags", Unsigned),
         ],
     )
 }
@@ -293,7 +294,7 @@ mod tests {
     fn fixture() -> WorldSource {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         connection.execute_batch("CREATE TABLE map_template (entry INTEGER, patch INTEGER, player_limit INTEGER, reset_delay INTEGER, ghost_entrance_map INTEGER, script_name TEXT, PRIMARY KEY(entry,patch)); INSERT INTO map_template VALUES (1,10,10,7,0,'instance_example'); CREATE TABLE faction (id INTEGER, build INTEGER,reputation_list_id INTEGER,base_rep_value1 INTEGER,PRIMARY KEY(id,build)); INSERT INTO faction VALUES (1,5875,-1,-100),(1,6000,5,999);
-            CREATE TABLE faction_template (id INTEGER, build INTEGER, faction_id INTEGER,our_mask INTEGER,friendly_mask INTEGER,hostile_mask INTEGER,enemy_faction1 INTEGER,enemy_faction2 INTEGER,enemy_faction3 INTEGER,enemy_faction4 INTEGER,friend_faction1 INTEGER,friend_faction2 INTEGER,friend_faction3 INTEGER,friend_faction4 INTEGER,PRIMARY KEY(id,build)); INSERT INTO faction_template VALUES(1,5875,1,2,3,4,5,6,7,8,9,10,11,12);
+            CREATE TABLE faction_template (id INTEGER, build INTEGER, faction_id INTEGER,faction_flags INTEGER,our_mask INTEGER,friendly_mask INTEGER,hostile_mask INTEGER,enemy_faction1 INTEGER,enemy_faction2 INTEGER,enemy_faction3 INTEGER,enemy_faction4 INTEGER,friend_faction1 INTEGER,friend_faction2 INTEGER,friend_faction3 INTEGER,friend_faction4 INTEGER,PRIMARY KEY(id,build)); INSERT INTO faction_template VALUES(1,5875,1,13,2,3,4,5,6,7,8,9,10,11,12);
             CREATE TABLE area_template (entry INTEGER,map_id INTEGER,zone_id INTEGER,explore_flag INTEGER,flags INTEGER,area_level INTEGER,team INTEGER,name TEXT); INSERT INTO area_template VALUES (1,0,2,3,4,-1,6,'O''Brien');
             CREATE TABLE areatrigger_template (id INTEGER,build INTEGER,map_id INTEGER,x REAL,y REAL,z REAL,radius REAL,box_x REAL,box_y REAL,box_z REAL,box_orientation REAL,cooldown INTEGER,condition_id INTEGER,script_id INTEGER,script_name TEXT,PRIMARY KEY(id,build)); INSERT INTO areatrigger_template VALUES (1,5875,0,1,2,3,4,5,6,7,8,9,10,11,'example');
             CREATE TABLE skill_line_ability (id INTEGER,build INTEGER,spell_id INTEGER,skill_id INTEGER,race_mask INTEGER,class_mask INTEGER,req_skill_value INTEGER,learn_on_get_skill INTEGER,max_value INTEGER,min_value INTEGER,PRIMARY KEY(id,build)); INSERT INTO skill_line_ability VALUES(1,5875,10,20,3,4,5,2,100,75);
@@ -308,7 +309,7 @@ mod tests {
             (faction(&source).unwrap(), "(1,-1,-100)"),
             (
                 faction_template(&source).unwrap(),
-                "(1,1,2,3,4,5,6,7,8,9,10,11,12)",
+                "(1,1,2,3,4,5,6,7,8,9,10,11,12,13)",
             ),
             (area(&source).unwrap(), "(1,0,2,3,4,-1,6,'O''Brien')"),
             (area_trigger(&source).unwrap(), "(1,0,1,2,3,4,5,6,7,8)"),

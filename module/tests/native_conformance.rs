@@ -121,6 +121,7 @@ fn native_login_calls_nearby_pack_assistance() {
                 ("faction", &14),
                 ("faction_group", &8),
                 ("enemy_group", &1),
+                ("flags", &1),
             ],
         ],
     );
@@ -146,21 +147,39 @@ fn native_login_calls_nearby_pack_assistance() {
         .query_rows("SELECT * FROM game_melee_attack")
         .is_empty());
 
+    let engaged = || {
+        let mut engaged = shard
+            .query_rows(&format!(
+                "SELECT attacker_guid FROM game_melee_attack WHERE target_guid = {character}"
+            ))
+            .into_iter()
+            .map(|row| row["attacker_guid"].parse::<u64>().unwrap())
+            .collect::<Vec<_>>();
+        engaged.sort_unstable();
+        engaged
+    };
+    let near = shard.query_rows(&format!(
+        "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY} AND x = 15"
+    ))[0]["guid"]
+        .parse::<u64>()
+        .unwrap();
     let _connection = enter(&shard, character);
-    let mut engaged = shard
-        .query_rows(&format!(
-            "SELECT attacker_guid FROM game_melee_attack WHERE target_guid = {character}"
-        ))
-        .into_iter()
-        .map(|row| row["attacker_guid"].parse::<u64>().unwrap())
-        .collect::<Vec<_>>();
-    engaged.sort_unstable();
+    assert_eq!(
+        engaged(),
+        [near],
+        "the nearer wolf notices the Character on login"
+    );
+    shard.assert_call("debug_advance_virtual_clock", &["1500000"]);
     let mut expected = creatures
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())
         .collect::<Vec<_>>();
     expected.sort_unstable();
-    assert_eq!(engaged, expected, "both pack members must engage on login");
+    assert_eq!(
+        engaged(),
+        expected,
+        "its pack mate answers the call for assistance 1.5 seconds later"
+    );
     for guid in expected.into_iter().chain([character]) {
         let flags = shard.query_rows(&format!(
             "SELECT unit_flags FROM game_world_entity WHERE guid = {guid}"

@@ -1,4 +1,5 @@
 mod ai;
+pub(crate) mod assistance;
 pub(crate) mod catalogue;
 pub(crate) mod cycle;
 pub(crate) mod distraction;
@@ -17,6 +18,10 @@ pub(crate) mod spawn;
 pub(crate) mod tick;
 
 pub(crate) use ai::{combat_active_radius, flee_eligible, rout_window_open, should_flee};
+pub(crate) use assistance::{
+    call_assistance, sweep_delete_game_creature_assistance_call,
+    sweep_transfer_game_creature_assistance_call,
+};
 pub(crate) use eventai::{
     begin_death_dispatch, cancel_relay_runs_for_instance, cancel_relay_runs_for_new_life,
     cancel_relay_runs_for_source, creature_ai_on_aggro, creature_ai_on_creature_death,

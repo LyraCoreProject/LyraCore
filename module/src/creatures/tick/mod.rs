@@ -271,8 +271,7 @@ pub(crate) fn active_cell_creatures(
     }
     let slice = scope.slice();
     TickSweep {
-        active: awake.iter().copied().filter(|&g| slice.owns(g)).collect(),
-        awake,
+        active: awake.into_iter().filter(|&g| slice.owns(g)).collect(),
         pets,
         in_combat,
     }
@@ -298,8 +297,6 @@ fn is_idle_bot(
 pub(crate) struct TickSweep {
     /// The awake creatures this tick's slice runs.
     pub(crate) active: std::collections::HashSet<u64>,
-    /// Every awake creature in scope, whichever slice runs it; a neighbour can answer any call.
-    pub(crate) awake: std::collections::HashSet<u64>,
     pub(crate) pets: Vec<u64>,
     pub(crate) in_combat: Vec<u64>,
 }
