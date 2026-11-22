@@ -141,7 +141,7 @@ pub struct CreatureLoot {
     pub min_count: u32,
 }
 
-// vmangos ItemPrototype.h: each needer gets their own copy of such an item.
+// vmangos ItemPrototype.h: each looter gets their own copy of such an item.
 const ITEM_FLAG_PARTY_LOOT: u32 = 0x800;
 
 pub(crate) fn loot_drops(chance_bp: u32, roll_0_9999: u32) -> bool {
@@ -333,8 +333,9 @@ pub(crate) fn roll_loot_rows(
     winners
 }
 
+// vmangos checks the quest need again at take, even for a looter's own party-loot copy.
 fn quest_take_allowed(reserved_for: u64, taker_guid: u64, taker_needs_item: bool) -> bool {
-    reserved_for == taker_guid || (reserved_for == 0 && taker_needs_item)
+    taker_needs_item && (reserved_for == 0 || reserved_for == taker_guid)
 }
 
 fn group_loot_take_allowed(
@@ -485,14 +486,15 @@ pub(crate) fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
     }
 }
 
-/// Each needer in `looters` gets a reserved copy of a party-loot quest drop; others share one row.
+/// Each needer in `looters` gets a reserved copy of a party-loot quest drop; every other drop is
+/// one shared row.
 pub(crate) fn insert_corpse_rows(
     ctx: &ReducerContext,
     corpse_guid: u64,
     winners: Vec<LootDrop>,
     looters: &[u64],
 ) -> bool {
-    let mut inserted = 0;
+    let (mut shared, mut reserved) = (Vec::new(), Vec::new());
     for winner in winners {
         let item_entry = winner.item_entry;
         let random_property_id = match crate::items::select_loot_property(ctx, item_entry) {
@@ -503,10 +505,10 @@ pub(crate) fn insert_corpse_rows(
             }
         };
         for reserved_for in reservations(ctx, winner, looters) {
-            ctx.db.game_corpse_loot().insert(CorpseLoot {
+            let row = CorpseLoot {
                 id: 0,
                 corpse_guid,
-                slot: inserted as u8,
+                slot: 0,
                 item_entry,
                 count: winner.count,
                 quest_only: winner.quest_only,
@@ -515,11 +517,22 @@ pub(crate) fn insert_corpse_rows(
                 master_only: false,
                 withheld: false,
                 random_property_id,
-            });
-            inserted += 1;
+            };
+            if reserved_for == 0 {
+                shared.push(row);
+            } else {
+                reserved.push(row);
+            }
         }
     }
-    inserted != 0
+    // Shared rows take the low slots, so every Loot Window lists regular loot without gaps.
+    let rows = shared.into_iter().chain(reserved);
+    let mut inserted = false;
+    for (slot, row) in (0..=u8::MAX).zip(rows) {
+        ctx.db.game_corpse_loot().insert(CorpseLoot { slot, ..row });
+        inserted = true;
+    }
+    inserted
 }
 
 // vmangos Loot::FillQuestLoot lists a party-loot quest item once for each needer at fill time.

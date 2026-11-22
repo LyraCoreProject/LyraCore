@@ -277,17 +277,13 @@ pub(super) fn receive(
             }
             let taken = crate::loot::take_item(ctx, guid, current, c.item_slot)
                 .map_err(|reason| take_refusal(current, reason))?;
-            // vmangos NotifyQuestItemRemoved tells only the looters a quest row was listed to.
+            // A shared row leaves every open Loot Window; a reserved copy leaves only its taker's.
             let viewers: Vec<ConnectionId> = ctx
                 .db
                 .game_native_player()
                 .by_open_loot()
                 .filter(current)
-                .filter(|viewer| {
-                    viewer.connection_id == connection
-                        || !taken.quest_only
-                        || taken.takeable_by(ctx, viewer.character_guid)
-                })
+                .filter(|viewer| viewer.connection_id == connection || taken.reserved_for == 0)
                 .map(|viewer| viewer.connection_id)
                 .collect();
             for viewer in viewers {

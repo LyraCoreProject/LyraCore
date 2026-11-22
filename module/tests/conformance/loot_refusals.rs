@@ -92,18 +92,25 @@ fn stage(name: &str) -> Stage {
     }
 }
 
-fn open_corpse_on(connection: &mut ReducerConnection, corpse: u64) {
+/// Opens a Loot Window on `corpse` and returns the slots it lists.
+fn open_corpse_on(connection: &mut ReducerConnection, corpse: u64) -> Vec<u8> {
     let opened = request(connection, CMSG_LOOT, corpse.to_le_bytes().into());
     // A loot error shares the opcode; a real window has a nonzero loot type after the guid.
-    assert!(opened
+    let (_, body) = opened
         .iter()
-        .any(|(opcode, body)| *opcode == SMSG_LOOT_RESPONSE && body[8] != 0));
+        .find(|(opcode, body)| *opcode == SMSG_LOOT_RESPONSE && body[8] != 0)
+        .expect("a Loot Window opens");
+    // Guid, loot type and money take 13 bytes, then the item count and 22 bytes per item.
+    (0..usize::from(body[13]))
+        .map(|item| body[14 + item * 22])
+        .collect()
 }
 
 impl Stage {
-    fn open_corpse(&mut self) {
-        open_corpse_on(&mut self.connection, self.corpse);
+    fn open_corpse(&mut self) -> Vec<u8> {
+        let listed = open_corpse_on(&mut self.connection, self.corpse);
         assert_eq!(self.open_loot(), self.corpse.to_string());
+        listed
     }
 
     fn second_looter(&self) -> (u64, ReducerConnection) {
@@ -558,8 +565,8 @@ fn each_needer_takes_a_party_loot_quest_item_from_the_window_already_open() {
     let (first_slot, second_slot) = (slot_of(stage.character), slot_of(second_guid));
     assert_eq!(stage.loot_rows(), 2);
     assert_ne!(first_slot, second_slot);
-    stage.open_corpse();
-    open_corpse_on(&mut second, stage.corpse);
+    assert_eq!(stage.open_corpse(), [first_slot]);
+    assert_eq!(open_corpse_on(&mut second, stage.corpse), [second_slot]);
 
     assert_eq!(
         stage.removed_recipients_of_take(first_slot),
@@ -571,4 +578,31 @@ fn each_needer_takes_a_party_loot_quest_item_from_the_window_already_open() {
     assert_eq!(stage.carried(FIXTURE_JERKY), 1);
     assert_eq!(carried_by(&stage.shard, second_guid, FIXTURE_JERKY), 1);
     assert_eq!(stage.loot_rows(), 0);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_needer_whose_objective_completes_cannot_take_their_party_loot_copy() {
+    let (mut stage, _, _) = party_loot_stage("loot-quest-item-party-done");
+    stage.open_corpse();
+    stage.shard.assert_call(
+        "debug_grant_item",
+        &[
+            &stage.character.to_string(),
+            &FIXTURE_JERKY.to_string(),
+            "1",
+        ],
+    );
+    let slot: u8 = stage.shard.query_rows(&format!(
+        "SELECT slot FROM game_corpse_loot WHERE corpse_guid = {} AND reserved_for = {}",
+        stage.corpse, stage.character
+    ))[0]["slot"]
+        .parse()
+        .unwrap();
+
+    let packets = stage.take(slot);
+
+    assert_loot_error(&packets, stage.corpse, LOOT_ERROR_DIDNT_KILL);
+    assert_eq!(stage.carried(FIXTURE_JERKY), 1);
+    assert_eq!(stage.loot_rows(), 2);
 }
