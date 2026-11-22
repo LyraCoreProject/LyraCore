@@ -100,6 +100,7 @@
     "pitch_motion": 2,
     "proximity_emotes": 2,
     "quest_choice_reward": 3,
+    "quest_failure": 4,
     "quest_log_full": 5,
     "quest_transfer": 6,
     "queued_strike": 6,
