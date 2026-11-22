@@ -945,8 +945,6 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
     if !crate::combat::may_harm(ctx, &attacker, &target) {
         return;
     }
-
-    let damage = FrozenDamage::stored(shot.damage).resolve(ctx, &target);
     // An auto-repeat shot lands as a white hit; a Weapon Strike keeps its spell and crit.
     let strike = ctx
         .db
@@ -956,6 +954,12 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
         .is_some_and(|spell| {
             spell.cast_flags & lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT == 0
         });
+    // vmangos breaks a Weapon Strike's stealth on hit, not at launch.
+    if strike {
+        crate::spell::break_stealth(ctx, shot.attacker_guid);
+    }
+
+    let damage = FrozenDamage::stored(shot.damage).resolve(ctx, &target);
     let hit = if strike {
         Hit::spell(HitSource::Ranged, shot.ranged_spell_id, shot.is_crit)
     } else {

@@ -1041,22 +1041,27 @@ fn apply_damage_effect(
                     }
                 }
             }
-            let (dealt, absorbed) = crate::combat::deal_damage(
-                ctx,
-                caster_guid,
-                target_guid,
-                after_resist,
-                hit_of(
-                    hdr,
-                    triggered,
-                    if e.kind == E_FINISHER_DAMAGE {
-                        crate::combat::HitSource::MeleeSpell
-                    } else {
-                        crate::combat::HitSource::Spell
-                    },
-                    is_crit,
-                ),
-            );
+            // vmangos deals spell damage only when it is non-zero before absorb and resist.
+            let (dealt, absorbed) = if after_resist > 0 || resisted > 0 {
+                crate::combat::deal_damage(
+                    ctx,
+                    caster_guid,
+                    target_guid,
+                    after_resist,
+                    hit_of(
+                        hdr,
+                        triggered,
+                        if e.kind == E_FINISHER_DAMAGE {
+                            crate::combat::HitSource::MeleeSpell
+                        } else {
+                            crate::combat::HitSource::Spell
+                        },
+                        is_crit,
+                    ),
+                )
+            } else {
+                (0, 0)
+            };
             EffectHit {
                 dealt,
                 resisted,

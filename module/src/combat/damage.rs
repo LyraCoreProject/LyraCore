@@ -1,6 +1,6 @@
 use spacetimedb::{table, ReducerContext, Table};
 
-use crate::{game_world_entity, WorldEntity};
+use crate::{game_spell, game_world_entity, WorldEntity};
 
 use super::*;
 
@@ -168,6 +168,7 @@ pub(crate) struct Hit {
     pub spell_id: u32,
     pub crit: bool,
     pub blocked: bool,
+    pub periodic: bool,
 }
 
 impl Hit {
@@ -177,6 +178,7 @@ impl Hit {
             spell_id: 0,
             crit,
             blocked: false,
+            periodic: false,
         }
     }
 
@@ -186,6 +188,7 @@ impl Hit {
             spell_id,
             crit,
             blocked: false,
+            periodic: false,
         }
     }
 
@@ -195,6 +198,14 @@ impl Hit {
             spell_id: 0,
             crit: false,
             blocked: false,
+            periodic: false,
+        }
+    }
+
+    pub(crate) fn periodic() -> Self {
+        Self {
+            periodic: true,
+            ..Self::triggered()
         }
     }
 
@@ -492,8 +503,8 @@ impl FrozenDamage {
     }
 }
 
-/// Spell and triggered damage: a dead or unharmable target takes nothing. Returns the damage
-/// dealt and the amount absorbed.
+/// Spell and triggered damage: a dead or unharmable target takes nothing. Non-periodic damage,
+/// even 0, ends the attacker's stealth. Returns the damage dealt and the amount absorbed.
 pub(crate) fn deal_damage(
     ctx: &ReducerContext,
     attacker_guid: u64,
@@ -515,6 +526,9 @@ pub(crate) fn deal_damage(
     {
         return (0, 0);
     }
+    if !is_periodic(ctx, hit) {
+        crate::spell::break_stealth(ctx, attacker_guid);
+    }
     let resolved = resolve_damage(ctx, attacker_guid, target_guid, basis.max(0) as u32);
     if resolved.amount() == 0 && !resolved.damage.lethal_prevented {
         return (0, resolved.absorbed);
@@ -523,6 +537,21 @@ pub(crate) fn deal_damage(
     enter_combat(ctx, attacker_guid);
     resolved.land(ctx, attacker_guid, target_guid, hit);
     (resolved.amount(), resolved.absorbed)
+}
+
+// vmangos SPELL_ATTR_EX3_TREAT_AS_PERIODIC, kept in `attributes_ex_3`.
+const SPELL_ATTR_EX3_TREAT_AS_PERIODIC: u32 = 0x0200_0000;
+
+// A ground-area tick, or a spell vmangos DealSpellDamage deals as DOT, keeps stealth.
+fn is_periodic(ctx: &ReducerContext, hit: Hit) -> bool {
+    hit.periodic
+        || (hit.spell_id != 0
+            && ctx
+                .db
+                .game_spell()
+                .spell_id()
+                .find(hit.spell_id)
+                .is_some_and(|spell| spell.attributes_ex_3 & SPELL_ATTR_EX3_TREAT_AS_PERIODIC != 0))
 }
 
 #[cfg(feature = "debug_reducers")]

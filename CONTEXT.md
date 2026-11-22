@@ -648,8 +648,8 @@ _Avoid_: linked spell, after-hit cast
 A cast started by a Proc, a periodic aura, a spell's hit (a Follow-up Cast) or another triggered
 effect. It checks faction targeting and target life, then runs the cast core's effect loop without
 cast-start position, range, line of sight, power cost, cooldown or stealth-break checks. Its own
-hits fire no further Procs. The cast an `E_TRIGGER` effect makes is a Trigger Child Cast, not a
-Triggered Cast.
+hits fire no further Procs. Its non-periodic damage still ends its caster's stealth, whatever made
+the cast. The cast an `E_TRIGGER` effect makes is a Trigger Child Cast, not a Triggered Cast.
 _Avoid_: proc cast, internal cast, free cast
 
 **Trigger Child Cast**:
@@ -657,7 +657,8 @@ The cast an `E_TRIGGER` effect makes of its trigger spell, at once, inside its p
 runs the cast Gates and the cast core like a direct cast, but skips the Gates vmangos guards with
 `!m_IsTriggeredSpell` that LyraCore models: cooldown, caster life, global cooldown, combat, Form,
 stealth, line of sight, peaceful target, product storage, range, facing, power and combo points,
-and caster control. It neither dismounts nor unstealths its caster and starts no global cooldown.
+and caster control. It neither dismounts nor unstealths its caster at cast start and starts no
+global cooldown.
 It still pays its power cost and starts its own cooldown.
 _Avoid_: triggered spell, trigger cast
 

@@ -68,21 +68,26 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
     if !crate::time::scheduler_authorized(ctx) {
         return;
     }
-    let (dealt, absorbed) = crate::combat::deal_damage(
-        ctx,
-        sched.caster_guid,
-        sched.target_guid,
-        sched.after_resist,
-        crate::combat::Hit::spell(
-            if sched.triggered {
-                crate::combat::HitSource::Triggered
-            } else {
-                crate::combat::HitSource::Spell
-            },
-            sched.spell_id,
-            sched.is_crit,
-        ),
-    );
+    // vmangos deals spell damage only when it is non-zero before absorb and resist.
+    let (dealt, absorbed) = if sched.after_resist > 0 || sched.resisted > 0 {
+        crate::combat::deal_damage(
+            ctx,
+            sched.caster_guid,
+            sched.target_guid,
+            sched.after_resist,
+            crate::combat::Hit::spell(
+                if sched.triggered {
+                    crate::combat::HitSource::Triggered
+                } else {
+                    crate::combat::HitSource::Spell
+                },
+                sched.spell_id,
+                sched.is_crit,
+            ),
+        )
+    } else {
+        (0, 0)
+    };
     let (map_id, instance_id, grid_x, grid_y) = crate::helpers::grid_of(ctx, sched.caster_guid);
     crate::SpellImpactEvent::insert(
         ctx,
@@ -641,7 +646,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 a.caster_guid,
                 t,
                 resisted,
-                crate::combat::Hit::triggered(),
+                crate::combat::Hit::periodic(),
             );
             if dealt > 0 || absorbed > 0 || points > resisted {
                 crate::SpellCastEvent::insert(
