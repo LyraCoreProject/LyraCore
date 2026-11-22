@@ -28,8 +28,7 @@ crate::character_owned!(delete, fn sweep_delete_game_creature_assistance_call(ct
 // A call belongs to the live fight and does not survive Transfer.
 crate::character_owned!(not_transported, fn sweep_transfer_game_creature_assistance_call());
 
-/// vmangos `Creature::CallAssistance`: the neighbours that could help when the caller gains its
-/// victim are asked once, and each one that still can when the call lands attacks that victim.
+/// vmangos `Creature::CallAssistance`: neighbours able to help when the call lands attack the victim.
 pub(crate) fn call_assistance(ctx: &ReducerContext, caller_guid: u64, victim_guid: u64) {
     let entities = ctx.db.game_world_entity();
     let (Some(caller), Some(victim)) = (
@@ -100,6 +99,9 @@ pub fn answer_assistance_call(ctx: &ReducerContext, call: AssistanceCall) {
     ) else {
         return;
     };
+    if victim.map_id != caller.map_id || victim.instance_id != caller.instance_id {
+        return;
+    }
     for guid in call.assistant_guids {
         if entities
             .guid()

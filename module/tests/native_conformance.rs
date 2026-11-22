@@ -169,7 +169,7 @@ fn native_login_calls_nearby_pack_assistance() {
         [near],
         "the nearer wolf notices the Character on login"
     );
-    shard.assert_call("debug_advance_virtual_clock", &["1500000"]);
+    shard.assert_call("debug_advance_roll_batch", &["30"]);
     let mut expected = creatures
         .iter()
         .map(|row| row["guid"].parse::<u64>().unwrap())

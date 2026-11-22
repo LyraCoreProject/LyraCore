@@ -26,7 +26,7 @@ const RESPOND_TO_CALL_FOR_HELP: u32 = 0x1;
 const FLEE_FROM_CALL_FOR_HELP: u32 = 0x400;
 
 impl FactionTemplate {
-    /// vmangos `Creature::CanRespondToCallForHelpAgainst`: it responds and does not flee instead.
+    /// vmangos `RESPOND_TO_CALL_FOR_HELP` without `FLEE_FROM_CALL_FOR_HELP`.
     pub(crate) fn answers_call_for_help(&self) -> bool {
         self.flags & RESPOND_TO_CALL_FOR_HELP != 0 && self.flags & FLEE_FROM_CALL_FOR_HELP == 0
     }

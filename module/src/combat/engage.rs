@@ -138,6 +138,8 @@ pub(crate) fn answer_creature_assistance(
     target_guid: u64,
 ) {
     if start_creature_attack(ctx, creature_guid, target_guid) {
+        enter_combat(ctx, creature_guid);
+        enter_combat(ctx, target_guid);
         crate::hooks::fire_on_aggro(
             ctx,
             &crate::hooks::AggroPayload {
