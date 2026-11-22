@@ -228,6 +228,18 @@ one that omits it keeps the default. The Operator Content API does not carry it,
 template has range 5.0 and an update keeps the template's range. Direct SQL INSERTs may omit it;
 shared import SQL defaults fill older inserts.
 
+### Creature school immunity migration
+
+`game_creature_template` gains the END-appended column `school_immune_mask` with default 0, which
+means no template immunity, so every existing template is unchanged until a reimport. Reimport the
+`creatures` family to fill it from the World Source; then a creature whose vmangos template names a
+school takes no white swing or damage shield damage of that school, and a creature immune to
+physical damage is a low-priority victim. A live creature reads its template's mask on each check
+and keeps no copy, so it needs no repair, respawn or `debug_repair_after_publish` step. Package
+Deltas may claim the column; one that omits it keeps the default. The Operator Content API does not
+carry it, so a created template has no school immunity and an update keeps the template's mask.
+Direct SQL INSERTs may omit it; shared import SQL defaults fill older inserts.
+
 ### DynamicObject AOI migration
 
 The native runtime adds a map, Instance and `cell` index to `game_dynamic_object`. Its new `cell`

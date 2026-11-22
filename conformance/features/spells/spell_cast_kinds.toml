@@ -79,10 +79,16 @@ symbol = "is_immune_to_mechanic"
 evidence = "Not measured and not read. Berserker Rage 18499 and Will of the Forsaken 7744 are aura 77 and covered by tests; no trinket spell was checked against the vmangos spell dump."
 
 [[known_gaps]]
-description = "A creature template's school_immune_mask is not imported, so a creature is never immune to a harmful spell or a hit by school from its template. vmangos refuses such a spell whole and such damage too."
-path = "importer/src/world_import_creatures.rs"
-symbol = "template_findings"
-evidence = "Source reading, not measured. At d9173eca, Creature::IsImmuneToSpell and Creature::IsImmuneToDamage read school_immune_mask; 224 creature_template entries in the vmangos 4641790 snapshot set it. LyraCore has no school immunity for spell or melee damage outside damage shields, and the importer reports the column as creatures.template-behavior."
+description = "School immunity refuses only white swings and damage shields. A harmful spell, a queued strike and an Auto Shot still land on a unit whose template school_immune_mask or school or damage immunity Aura names their school. vmangos refuses such a spell whole and such damage too."
+path = "module/src/spell/control.rs"
+symbol = "is_immune_to_spell"
+evidence = "Source reading, not measured. At d9173eca, Creature::IsImmuneToSpell reads school_immune_mask, Unit::IsImmuneToSpell calls IsImmuneToSchool, and Spell::DoSpellHitOnUnit and the damage effects call IsImmuneToDamage; is_immune_to_spell reads only mechanics, and roll_swing_with_range tests immunity only without a queued strike."
+
+[[known_gaps]]
+description = "A creature's white swing and its victim selection treat its melee as physical: the importer reads no creature_template damage_school."
+path = "module/src/threat.rs"
+symbol = "source_standing"
+evidence = "Source reading, not measured. At d9173eca, Creature.cpp SetMeleeDamageSchool(cinfo->damage_school), and ThreatContainer::selectNextVictim tests IsImmuneToDamage(GetMeleeDamageSchoolMask())."
 
 [[known_gaps]]
 description = "A creature template's immunity_flags (taunt, stat, cast speed, disease, poison, curse and area-effect immunity) are not imported."
@@ -421,4 +427,14 @@ rung = "unit"
 [[tests]]
 path = "importer/src/spell.rs"
 function = "actual_reimport_replaces_a_package_follow_up_on_an_imported_spell"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "a_creature_whose_template_is_immune_to_physical_takes_no_white_swing_damage"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/threat_victim_margin.rs"
+function = "a_creature_turns_from_a_victim_immune_to_its_melee_to_a_free_source"
 rung = "durable_module"

@@ -33,6 +33,7 @@ It also stores `mechanic_immune_mask` on `game_creature_template`, as vmangos st
 It stores `call_for_help_range` there too, the yards inside which a creature calls friendly
 creatures for help; 0 turns the Call for Assistance and the Call for Help off. A negative range is a
 `creatures.negative-call-for-help-range` finding and imports as 5, as vmangos loads it.
+It stores `school_immune_mask` there too, bit `school` per spell school, as vmangos stores it.
 The pass also stores every `creature_display_info_addon` model's `combat_reach` at the selected
 build in `game_display_combat_reach`, beside the display's CreatureDisplayInfo.dbc scale, which the
 source reach is measured at. A model without a bounding radius is left out and keeps the default

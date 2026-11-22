@@ -44,8 +44,6 @@ pub(crate) const PROC_EX_ABSORB: u32 = 0x0000_0400;
 const PROC_EX_RESULTS: u32 = 0x0000_0FFF;
 pub(crate) const PROC_EX_TRIGGER_ALWAYS: u32 = 0x0001_0000;
 
-const SCHOOL_MASK_PHYSICAL: u8 = 0x01;
-
 pub(crate) const BASIS_POINTS: u32 = 10_000;
 
 // Vanilla chance_pct = ppm * attack_time_ms / 600.
@@ -145,6 +143,7 @@ fn unlanded_result(outcome: AttackOutcome, hit: &Hit, dealt: u32, absorbed: u32)
         AttackOutcome::Miss => Some(PROC_EX_MISS),
         AttackOutcome::Dodge => Some(PROC_EX_DODGE),
         AttackOutcome::Parry => Some(PROC_EX_PARRY),
+        AttackOutcome::Immune => Some(PROC_EX_IMMUNE),
         AttackOutcome::Normal
         | AttackOutcome::Crit
         | AttackOutcome::Glancing

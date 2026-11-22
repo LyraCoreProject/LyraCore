@@ -29,7 +29,13 @@ fn fields(shard: &Standalone) -> Value {
             .unwrap()
             .into_iter()
             .filter(|(key, _)| {
-                !["entry", "mechanic_immune_mask", "call_for_help_range"].contains(&key.as_str())
+                ![
+                    "entry",
+                    "mechanic_immune_mask",
+                    "call_for_help_range",
+                    "school_immune_mask",
+                ]
+                .contains(&key.as_str())
             })
             .map(|(key, value)| {
                 let value = if key == "name" || key == "subname" {

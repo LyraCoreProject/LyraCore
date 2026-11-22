@@ -9,6 +9,7 @@ use super::queued_strike::{QueuedStrike, QueuedStrikeDamage};
 use super::tables::scale_swing_for_attack_power_multiplier;
 use super::*;
 use crate::form::CombatProfile;
+use crate::spell::SCHOOL_MASK_PHYSICAL;
 
 pub(crate) fn attack_power_modifiers(ctx: &ReducerContext, guid: u64, field: u8) -> u32 {
     let (positive, negative) = crate::spell::auras_on(ctx, guid)
@@ -608,8 +609,6 @@ pub(crate) fn ranged_values(
     )
 }
 
-const SCHOOL_MASK_PHYSICAL: u8 = 1;
-
 fn strike_weapon_range(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
@@ -776,6 +775,10 @@ pub(crate) fn roll_swing_with_range(
     range: (u32, u32),
     strike: Option<QueuedStrike>,
 ) -> (u32, AttackOutcome, u32) {
+    // vmangos CalculateMeleeDamage; a queued strike is a Spell, and Spells test no school immunity.
+    if strike.is_none() && crate::spell::immune_to_school(ctx, target, SCHOOL_MASK_PHYSICAL) {
+        return (0, AttackOutcome::Immune, 0);
+    }
     let (outcome, table) = roll_attack(
         ctx,
         attacker,
@@ -845,9 +848,10 @@ fn resolve_swing(
     });
     let base = defender.taken.apply(base);
     let pre_mit = match outcome {
-        AttackOutcome::Miss | AttackOutcome::Dodge | AttackOutcome::Parry => {
-            return (0, outcome, 0)
-        }
+        AttackOutcome::Miss
+        | AttackOutcome::Dodge
+        | AttackOutcome::Parry
+        | AttackOutcome::Immune => return (0, outcome, 0),
         AttackOutcome::Crit => base * CRIT_MULT,
         AttackOutcome::Glancing if base > 0 => (base * GLANCING_DAMAGE_PCT / 100).max(1),
         AttackOutcome::Glancing => 0,
@@ -900,7 +904,10 @@ pub(crate) fn roll_ranged_swing(
             as u32
     };
     let pre_mit = match outcome {
-        AttackOutcome::Miss | AttackOutcome::Dodge | AttackOutcome::Parry => return (0, outcome),
+        AttackOutcome::Miss
+        | AttackOutcome::Dodge
+        | AttackOutcome::Parry
+        | AttackOutcome::Immune => return (0, outcome),
         AttackOutcome::Crit if school == 0 => base * CRIT_MULT,
         AttackOutcome::Crit => base + base / 2,
         AttackOutcome::Normal

@@ -14,6 +14,7 @@ pub struct TauntLock {
 }
 
 use crate::spell::tables::{game_spell_threat, SpellThreat};
+use crate::spell::SCHOOL_MASK_PHYSICAL;
 use crate::{game_melee_attack, game_spell, game_spell_effect, game_world_entity, WorldEntity};
 use lyracore_shared::spell::taxonomy::{A_CONTROL, M_FEAR, M_POLY};
 
@@ -229,7 +230,8 @@ pub(crate) enum SourceStanding {
     Unattackable,
 }
 
-/// vmangos `IsValidAttackTarget` and `IsSecondaryThreatTarget`. The Module summons no Totems.
+/// vmangos `IsValidAttackTarget`, `IsSecondaryThreatTarget` and immunity to the creature's melee,
+/// which is physical: the Module imports no creature `damage_school`. It summons no Totems.
 pub(crate) fn source_standing(
     ctx: &ReducerContext,
     creature: &WorldEntity,
@@ -237,7 +239,9 @@ pub(crate) fn source_standing(
 ) -> SourceStanding {
     if !crate::combat::may_harm(ctx, creature, source) {
         SourceStanding::Unattackable
-    } else if holds_low_priority_aura(ctx, source.guid) {
+    } else if holds_low_priority_aura(ctx, source.guid)
+        || crate::spell::immune_to_school(ctx, source, SCHOOL_MASK_PHYSICAL)
+    {
         SourceStanding::LowPriority
     } else {
         SourceStanding::Free

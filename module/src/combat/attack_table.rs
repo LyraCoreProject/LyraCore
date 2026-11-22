@@ -20,6 +20,8 @@ pub(crate) enum AttackOutcome {
     Glancing,
     Crushing,
     Block,
+    /// The target is immune to the swing's school; no attack table is rolled.
+    Immune,
 }
 
 impl AttackOutcome {
@@ -34,12 +36,13 @@ impl AttackOutcome {
             Self::Glancing => 5,
             Self::Crushing => 6,
             Self::Block => 7,
+            Self::Immune => 8,
         }
     }
 
     pub(crate) fn is_avoided(self) -> bool {
         match self {
-            Self::Miss | Self::Dodge | Self::Parry => true,
+            Self::Miss | Self::Dodge | Self::Parry | Self::Immune => true,
             Self::Normal | Self::Crit | Self::Glancing | Self::Crushing | Self::Block => false,
         }
     }
@@ -658,7 +661,11 @@ mod tests {
             AttackOutcome::Glancing,
             AttackOutcome::Crushing,
             AttackOutcome::Block,
+            AttackOutcome::Immune,
         ];
-        assert_eq!(outcomes.map(AttackOutcome::wire), [0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(
+            outcomes.map(AttackOutcome::wire),
+            [0, 1, 2, 3, 4, 5, 6, 7, 8]
+        );
     }
 }

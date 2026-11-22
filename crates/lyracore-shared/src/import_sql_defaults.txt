@@ -59,6 +59,7 @@ game_ground_area effect_id 0
 game_spell_group power_rank 0
 game_creature_template mechanic_immune_mask 0
 game_creature_template call_for_help_range 5.0
+game_creature_template school_immune_mask 0
 game_faction_template flags 0
 game_taxi_node own_mount_horde true
 game_taxi_node own_mount_alliance true

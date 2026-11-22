@@ -4,7 +4,8 @@ use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::constants::unit_flags::IN_COMBAT;
 use lyracore_shared::spell::taxonomy::{
-    A_CONTROL, CAST_FLAG_IGNORE_RESISTANCES, M_FEAR, P_MECHANIC, T_TARGET_ENEMY,
+    A_CONTROL, A_IMMUNITY, CAST_FLAG_IGNORE_RESISTANCES, M_FEAR, P_MECHANIC, P_SCHOOL_MASK, T_SELF,
+    T_TARGET_ENEMY,
 };
 use support::{number, Standalone};
 
@@ -18,6 +19,10 @@ const WARRIOR: &str = "1";
 const FEAR: u32 = 5_113_301;
 const CHARACTER_FACTION: u32 = 9_101;
 const WOLF_FACTION: u32 = 9_102;
+const PHYSICAL_IMMUNITY: u32 = 5_113_302;
+const PHYSICAL: i32 = 1;
+// SPELL_AURA_SCHOOL_IMMUNITY in the low byte of an immunity Aura's p1.
+const SOURCE_SCHOOL_IMMUNITY: i32 = 39;
 
 struct Fight {
     shard: Standalone,
@@ -343,4 +348,57 @@ fn a_creature_whose_only_source_turns_friendly_evades_with_full_health() {
     );
     assert_eq!(number::<u32>(&wolf, "unit_flags") & IN_COMBAT, 0);
     assert_eq!(wolf["health"], wolf["max_health"]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_turns_from_a_victim_immune_to_its_melee_to_a_free_source() {
+    let fight = Fight::start("threat-priority-physical-immunity", 3.0);
+    fight.set_threat(CHALLENGER, 100);
+    fight.settle();
+    assert_eq!(fight.victim(), VICTIM, "10% of the victim's threat");
+
+    fight.shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &PHYSICAL_IMMUNITY),
+            ("name", &"Physical immunity fixture"),
+            ("school_mask", &2u8),
+            ("duration_ms", &600_000),
+            ("spell_level", &1),
+        ],
+    );
+    fight.shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(PHYSICAL_IMMUNITY, 0)),
+            ("spell_id", &PHYSICAL_IMMUNITY),
+            ("kind", &A_IMMUNITY),
+            ("target", &T_SELF),
+            ("p_0", &PHYSICAL),
+            ("p_0_kind", &P_SCHOOL_MASK),
+            ("p_1", &SOURCE_SCHOOL_IMMUNITY),
+        ],
+    );
+    fight.shard.assert_call(
+        "debug_force_cast_at",
+        &[VICTIM, &PHYSICAL_IMMUNITY.to_string(), VICTIM],
+    );
+    fight.settle();
+    assert_eq!(
+        fight.victim(),
+        CHALLENGER,
+        "a victim immune to physical damage is low priority"
+    );
+
+    fight.shard.assert_call(
+        "debug_shed_spell_auras",
+        &[VICTIM, &PHYSICAL_IMMUNITY.to_string()],
+    );
+    fight.settle();
+    assert_eq!(
+        fight.victim(),
+        VICTIM,
+        "the immunity ends and the margin returns"
+    );
 }

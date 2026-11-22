@@ -854,7 +854,8 @@ fn arm_avoidance_reacts(
         | AttackOutcome::Miss
         | AttackOutcome::Glancing
         | AttackOutcome::Crushing
-        | AttackOutcome::Block => {}
+        | AttackOutcome::Block
+        | AttackOutcome::Immune => {}
     }
 }
 
@@ -864,6 +865,7 @@ fn cast_miss(roll: AttackOutcome, weapon_strike: bool, magic_hit: bool) -> u8 {
         AttackOutcome::Parry => crate::spell::CAST_MISS_PARRY,
         AttackOutcome::Miss if weapon_strike || !magic_hit => crate::spell::CAST_MISS_MISS,
         AttackOutcome::Miss => crate::spell::CAST_MISS_RESIST,
+        AttackOutcome::Immune => crate::spell::CAST_MISS_IMMUNE,
         AttackOutcome::Normal
         | AttackOutcome::Crit
         | AttackOutcome::Glancing
