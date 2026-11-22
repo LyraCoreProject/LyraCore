@@ -5234,7 +5234,7 @@ fn a_player_owned_pet_never_evades() {
         .threat(IMP, WOLF, 100)
         .standing(WOLF, SourceStanding::Unattackable);
     let tick = w.tick(true, catch_all());
-    run_cycle(&mut w, tick);
+    threat_retarget(&mut w, &tick.scope);
 
     assert_eq!(w.victims(), [(IMP, WOLF)]);
 }
