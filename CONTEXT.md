@@ -664,10 +664,12 @@ _Avoid_: triggered spell, trigger cast
 
 **Trigger Depth**:
 How many spells one Durable Request is resolving inside each other's effects, the first cast
-included, whether a Trigger Child Cast, Triggered Cast, Proc, Chance on Hit or creature cast started
-them. A spell that would resolve as the ninth is refused, the eight before it keep their effects,
-and the Module logs the spell ids once. It stops a loop in operator or Package spell data, such as
-A triggers B while B triggers A, before the reducer traps.
+included, whether a direct cast, a Trigger Child Cast or a Triggered Cast started them. A spell that
+would resolve as the ninth is refused, the eight before it keep their effects, and the Module logs
+the spell ids once. One Durable Request also resolves at most 1024 spells inside other spells'
+effects; past that it refuses every nested spell and logs once, while a spell that starts outside
+any other spell's effects stays free. Both limits stop a loop in operator or Package spell data,
+such as A triggers B while B triggers A, before the reducer traps or does exponential work.
 _Avoid_: recursion limit, trigger chain
 
 **Chance on Hit**:
