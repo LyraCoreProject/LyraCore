@@ -177,13 +177,14 @@ fn resolve_loaded_cast(
         caster.update(ctx);
     }
 
+    let untriggered = phase != CastPhase::Trigger;
     // Dismount after charging power so the stale caster cannot overwrite the Mount Projection.
-    if !effects.iter().any(|e| e.kind == A_MOUNTED) {
+    if untriggered && !effects.iter().any(|e| e.kind == A_MOUNTED) {
         crate::mount::dismount(ctx, caster_guid);
     }
 
     // Break stealth before effects so recasting Stealth can reapply its aura.
-    if hdr.cast_flags & CAST_FLAG_STEALTH_SAFE == 0 {
+    if untriggered && hdr.cast_flags & CAST_FLAG_STEALTH_SAFE == 0 {
         break_stealth(ctx, caster_guid);
     }
 
@@ -1112,7 +1113,6 @@ impl GateRun {
         self != Self::Resolve(CastPhase::Completion)
     }
 
-    /// A Trigger Child Cast skips some Gates vmangos guards with `!m_IsTriggeredSpell`; #1136 lists the rest.
     fn is_trigger_child(self) -> bool {
         self == Self::Resolve(CastPhase::Trigger)
     }
@@ -1194,17 +1194,40 @@ const CHECK_CAST_ORDER: [CastGate; 33] = [
 ];
 
 impl CastGate {
+    /// vmangos `Spell::CheckCast` runs these only when `!m_IsTriggeredSpell`.
+    fn skipped_by_trigger_child(self) -> bool {
+        matches!(
+            self,
+            Self::SpellReady
+                | Self::CasterAlive
+                | Self::GlobalCooldown
+                | Self::NonCombat
+                | Self::Form
+                | Self::Stealth
+                | Self::LineOfSight
+                | Self::PeacefulTarget
+                | Self::ProductStorage
+                | Self::Range
+                | Self::Facing
+                | Self::GroundPointRange
+                | Self::Power
+                | Self::CasterControl
+        )
+    }
+
     fn runs_in(self, run: GateRun) -> bool {
+        if run.is_trigger_child() && self.skipped_by_trigger_child() {
+            return false;
+        }
         match self {
             Self::GlobalCooldown
             | Self::NonCombat
             | Self::Form
             | Self::Stealth
-            | Self::PeacefulTarget => run.is_strict() && !run.is_trigger_child(),
+            | Self::PeacefulTarget => run.is_strict(),
             // A completion checks power before every other Gate instead.
             Self::Power => run.is_strict(),
-            Self::ProductStorage => !run.is_trigger_child(),
-            // A Trigger Child Cast skips line of sight, as in vmangos; an instant checked it at Start.
+            // An instant checked line of sight at Start.
             Self::LineOfSight => matches!(
                 run,
                 GateRun::Readiness(_) | GateRun::Start(_) | GateRun::Resolve(CastPhase::Completion)
@@ -2448,9 +2471,11 @@ mod gate_order_tests {
     }
 
     #[test]
-    fn a_trigger_child_cast_skips_the_caster_state_and_product_gates() {
+    fn a_trigger_child_cast_skips_the_gates_vmangos_runs_only_for_an_untriggered_spell() {
         let trigger = order(GateRun::Resolve(CastPhase::Trigger));
         for gate in [
+            G::SpellReady,
+            G::CasterAlive,
             G::GlobalCooldown,
             G::NonCombat,
             G::Form,
@@ -2458,6 +2483,11 @@ mod gate_order_tests {
             G::PeacefulTarget,
             G::ProductStorage,
             G::LineOfSight,
+            G::Range,
+            G::Facing,
+            G::GroundPointRange,
+            G::Power,
+            G::CasterControl,
         ] {
             assert!(
                 !trigger.contains(&gate),
