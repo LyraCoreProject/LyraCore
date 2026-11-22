@@ -1,6 +1,6 @@
 mod support;
 
-use lyracore_package_delta::fixture_ids::{FIXTURE_JERKY, FIXTURE_REINS};
+use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, FIXTURE_JERKY};
 use lyracore_shared::trade::event_kind;
 use support::{refused, Standalone};
 
@@ -115,7 +115,7 @@ fn an_opened_item_cannot_be_mailed() {
 fn an_opened_item_can_be_neither_offered_nor_traded_at_accept() {
     let f = fixture("opened-item-trade");
     let opened = f.grant_at(FIXTURE_JERKY, 1, 23);
-    let offered = f.grant_at(FIXTURE_REINS, 1, 24);
+    let offered = f.grant_at(FIXTURE_BLADE, 1, 24);
     f.open(&opened);
     let partner = format!(r#"{{"guid":{},"ownership":null}}"#, f.other);
     f.shard.assert_call("gw_initiate_trade", &[ACTOR, &f.other]);
@@ -131,16 +131,30 @@ fn an_opened_item_can_be_neither_offered_nor_traded_at_accept() {
 
     f.shard
         .assert_call("gw_set_trade_item", &[ACTOR, "0", "24"]);
+    assert_eq!(
+        f.shard.query_rows("SELECT id FROM game_trade_slot").len(),
+        1,
+        "the unopened blade is offered"
+    );
     f.open(&offered);
+
     f.shard.assert_call("gw_accept_trade", &[ACTOR]);
+    assert_eq!(
+        (f.canceled("1"), f.canceled(&f.other)),
+        (2, 0),
+        "only the accepting player is told"
+    );
     f.shard.assert_call("gw_accept_trade", &[&partner]);
+    assert_eq!((f.canceled("1"), f.canceled(&f.other)), (2, 1));
 
     assert_eq!(f.owner_of(&offered), ["1"], "the trade does not complete");
-    assert_eq!(f.canceled(&f.other), 1);
-    assert!(f
-        .shard
-        .query_rows("SELECT id FROM game_trade_session")
-        .is_empty());
+    assert_eq!(
+        f.shard
+            .query_rows("SELECT id FROM game_trade_session")
+            .len(),
+        1,
+        "vmangos leaves the trade open"
+    );
 }
 
 #[test]
