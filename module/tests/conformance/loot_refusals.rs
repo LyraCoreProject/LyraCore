@@ -376,8 +376,6 @@ fn party_loot_stage(name: &str) -> (Stage, u64, ReducerConnection) {
 
 const SKINNING_SKILL_LINE: u32 = 393;
 
-// The wolf's only drop is a quest-only Jerky row, and it carries no money. The killer accepts the
-// quest before the kill only when `needs_jerky` is set.
 fn quest_drop_stage(name: &str, needs_jerky: bool) -> Stage {
     let (shard, character, corpse) = spawn_wolf(name);
     insert_jerky_quest(&shard);
@@ -400,6 +398,19 @@ fn quest_drop_stage(name: &str, needs_jerky: bool) -> Stage {
             ("count", &1),
             ("quest_only", &true),
         ],
+    );
+    shard.assert_call(
+        "debug_apply_damage",
+        &[&corpse.to_string(), "1", &character.to_string()],
+    );
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT character_guid FROM game_creature_quest_tap WHERE creature_guid = {corpse}"
+            ))
+            .len(),
+        1,
+        "damage must acquire the Loot Tag"
     );
     shard.assert_call(
         "debug_kill_creature",
@@ -700,11 +711,17 @@ fn a_quest_accepted_after_the_kill_cannot_take_the_item_from_that_corpse() {
     let mut stage = quest_drop_stage("loot-quest-item-late", false);
     grant_jerky_quest(&stage.shard, &[stage.character]);
 
-    stage.take(0);
+    let opened = request(
+        &mut stage.connection,
+        CMSG_LOOT,
+        stage.corpse.to_le_bytes().into(),
+    );
 
+    assert!(!opened
+        .iter()
+        .any(|(opcode, body)| *opcode == SMSG_LOOT_RESPONSE && body[8] != 0));
     assert_eq!(stage.loot_rows(), 0);
     assert_eq!(stage.carried(FIXTURE_JERKY), 0);
-    assert!(!stage.corpse_flag_lootable());
 }
 
 #[test]

@@ -486,39 +486,30 @@ pub(crate) fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
     }
 }
 
-// vmangos Loot::FillQuestLoot offers a quest-only drop to a looter who needs it when the loot is
-// filled, and a fill is never repeated. A drop no looter needs is not kept, so a Character who
-// accepts the quest later cannot take it, and a corpse with nothing else is not lootable.
-pub(crate) fn insert_corpse_rows_for_needers(
-    ctx: &ReducerContext,
-    corpse_guid: u64,
-    winners: Vec<LootDrop>,
-    looters: &[u64],
-) -> bool {
-    let needed = winners
-        .into_iter()
-        .filter(|winner| {
-            !winner.quest_only
-                || looters
-                    .iter()
-                    .any(|&looter| killer_needs_item(ctx, Some(looter), winner.item_entry))
-        })
-        .collect();
-    insert_corpse_rows(ctx, corpse_guid, needed, looters)
+/// What a fill does with a quest-only drop that no looter in `looters` needs.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UnneededQuestDrop {
+    Drop,
+    // A chest keeps the row for a later opener, as vmangos does.
+    KeepShared,
 }
 
 /// Each needer in `looters` gets a reserved copy of a party-loot quest drop; every other drop is
-/// one shared row. A quest drop with no needer stays a shared row, as a chest keeps one for a
-/// later opener.
+/// one shared row.
 pub(crate) fn insert_corpse_rows(
     ctx: &ReducerContext,
     corpse_guid: u64,
     winners: Vec<LootDrop>,
     looters: &[u64],
+    unneeded: UnneededQuestDrop,
 ) -> bool {
     let (mut shared, mut reserved) = (Vec::new(), Vec::new());
     for winner in winners {
         let item_entry = winner.item_entry;
+        let copies = reservations(ctx, winner, looters, unneeded);
+        if copies.is_empty() {
+            continue;
+        }
         let random_property_id = match crate::items::select_loot_property(ctx, item_entry) {
             Ok(id) => id,
             Err(reason) => {
@@ -526,7 +517,7 @@ pub(crate) fn insert_corpse_rows(
                 continue;
             }
         };
-        for reserved_for in reservations(ctx, winner, looters) {
+        for reserved_for in copies {
             let row = CorpseLoot {
                 id: 0,
                 corpse_guid,
@@ -557,9 +548,14 @@ pub(crate) fn insert_corpse_rows(
     inserted
 }
 
-// vmangos Loot::FillQuestLoot lists a party-loot quest item once for each needer at fill time.
-fn reservations(ctx: &ReducerContext, winner: LootDrop, looters: &[u64]) -> Vec<u64> {
-    if !winner.quest_only || !is_party_loot(ctx, winner.item_entry) {
+// vmangos Loot::FillQuestLoot offers a quest-only drop only to looters who need it at fill.
+fn reservations(
+    ctx: &ReducerContext,
+    winner: LootDrop,
+    looters: &[u64],
+    unneeded: UnneededQuestDrop,
+) -> Vec<u64> {
+    if !winner.quest_only {
         return vec![0];
     }
     let needers: Vec<u64> = looters
@@ -568,9 +564,14 @@ fn reservations(ctx: &ReducerContext, winner: LootDrop, looters: &[u64]) -> Vec<
         .filter(|&looter| killer_needs_item(ctx, Some(looter), winner.item_entry))
         .collect();
     if needers.is_empty() {
-        vec![0]
-    } else {
+        match unneeded {
+            UnneededQuestDrop::Drop => Vec::new(),
+            UnneededQuestDrop::KeepShared => vec![0],
+        }
+    } else if is_party_loot(ctx, winner.item_entry) {
         needers
+    } else {
+        vec![0]
     }
 }
 
@@ -595,7 +596,7 @@ pub(crate) fn roll_creature_loot(
         .map(LootRow::from);
     let winners = roll_loot_rows(ctx, corpse_guid, rows);
     let looters = corpse_eligible_recipients(ctx, corpse_guid);
-    insert_corpse_rows_for_needers(ctx, corpse_guid, winners, &looters)
+    insert_corpse_rows(ctx, corpse_guid, winners, &looters, UnneededQuestDrop::Drop)
 }
 
 // The importer resolves PickpocketLootId to creature_entry before storage.
@@ -720,7 +721,13 @@ pub(crate) fn roll_pickpocket_loot(
     if winners.is_empty() {
         return;
     }
-    insert_corpse_rows_for_needers(ctx, target_guid, winners, &[pickpocket_guid]);
+    insert_corpse_rows(
+        ctx,
+        target_guid,
+        winners,
+        &[pickpocket_guid],
+        UnneededQuestDrop::Drop,
+    );
     refresh_lootable(ctx, target_guid);
 }
 
