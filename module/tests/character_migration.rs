@@ -329,6 +329,33 @@ fn a_migrated_character_arrives_with_its_source_state() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_rewarded_repeatable_quest_in_the_log_keeps_its_reward_record() {
+    let (shard, catalogue) = realm("character-migration-repeatable-retake");
+    shard.assert_sql(&format!(
+        "UPDATE game_quest_template SET repeatable = true WHERE entry = {REWARDED_QUEST}"
+    ));
+    let output = migrate(&shard, &migration(&catalogue, 7, "Migrant"));
+    shard.assert_output_success(&output, "migrate_character");
+    let guid = guid_of(&shard, "Migrant");
+
+    let quests = shard.query_rows(&format!(
+        "SELECT rewarded FROM game_character_quest \
+         WHERE character_guid = {guid} AND quest_entry = {REWARDED_QUEST}"
+    ));
+    assert_eq!(quests.len(), 1, "{quests:?}");
+    assert_eq!(
+        quests[0]["rewarded"], "false",
+        "the quest returns to the log"
+    );
+    let retakes = shard.query_rows(&format!(
+        "SELECT quest_entry FROM game_character_quest_retake WHERE character_guid = {guid}"
+    ));
+    assert_eq!(retakes.len(), 1, "{retakes:?}");
+    assert_eq!(retakes[0]["quest_entry"], REWARDED_QUEST.to_string());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_migrated_character_keeps_its_combat_skills_at_first_login() {
     const SWORDS: u32 = 43;
     const DEFENSE: u32 = 95;

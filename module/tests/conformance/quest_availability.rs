@@ -12,6 +12,7 @@ const SECOND: u32 = 5_113_001;
 const EXCLUSIVE_GROUP: i32 = 5_113;
 const CMSG_QUESTGIVER_STATUS_QUERY: u32 = 0x182;
 const CMSG_QUESTGIVER_ACCEPT_QUEST: u32 = 0x189;
+const CMSG_QUESTLOG_REMOVE_QUEST: u32 = 0x194;
 const SMSG_QUESTGIVER_STATUS: u16 = 0x183;
 const SMSG_QUESTGIVER_QUEST_INVALID: u16 = 0x18F;
 const SMSG_GOSSIP_COMPLETE: u16 = 0x17E;
@@ -67,6 +68,10 @@ fn stage(name: &str) -> Stage {
 }
 
 fn offer(stage: &Stage, quest: u32, min_level: u32, quest_level: u32) {
+    offer_repeatable(stage, quest, min_level, quest_level, false);
+}
+
+fn offer_repeatable(stage: &Stage, quest: u32, min_level: u32, quest_level: u32, repeatable: bool) {
     stage.shard.insert_row(
         "game_quest_template",
         &[
@@ -75,7 +80,7 @@ fn offer(stage: &Stage, quest: u32, min_level: u32, quest_level: u32) {
             ("quest_level", &quest_level),
             ("title", &"Availability quest"),
             ("zone_or_sort", &12),
-            ("repeatable", &false),
+            ("repeatable", &repeatable),
         ],
     );
     stage.shard.insert_row(
@@ -178,6 +183,78 @@ fn a_seeded_prerequisite_row_holds_the_quest_until_its_predecessor_is_rewarded()
     stage.shard.assert_sql(&format!(
         "UPDATE game_character_quest SET rewarded = true WHERE quest_entry = {FIRST}"
     ));
+    accepted(&mut stage, SECOND);
+}
+
+fn turn_in(stage: &Stage, quest: u32) {
+    let relation = u64::from(quest) + 1_000_000_000;
+    stage.shard.insert_row(
+        "game_creature_quest",
+        &[
+            ("id", &relation),
+            ("creature_entry", &SCENARIO_QUESTGIVER_ENTRY),
+            ("quest_entry", &quest),
+            ("role", &1),
+        ],
+    );
+    stage.shard.assert_call(
+        "debug_turn_in_quest",
+        &[
+            &stage.guid.to_string(),
+            &stage.giver.to_string(),
+            &quest.to_string(),
+            "0",
+        ],
+    );
+    stage.shard.assert_sql(&format!(
+        "DELETE FROM game_creature_quest WHERE id = {relation}"
+    ));
+}
+
+fn retakes(stage: &Stage) -> usize {
+    stage
+        .shard
+        .query_rows(&format!(
+            "SELECT id FROM game_character_quest_retake WHERE character_guid = {}",
+            stage.guid
+        ))
+        .len()
+}
+
+fn repeatable_unlocks_second(stage: &mut Stage) {
+    offer_repeatable(stage, FIRST, 1, 1, true);
+    offer(stage, SECOND, 1, 1);
+    prerequisite(stage, SECOND, FIRST, false);
+    accepted(stage, FIRST);
+    turn_in(stage, FIRST);
+    accepted(stage, FIRST);
+    assert_eq!(retakes(stage), 1);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn retaking_a_rewarded_repeatable_quest_keeps_the_quest_it_unlocked() {
+    let mut stage = stage("quest-availability-repeatable-retake");
+    repeatable_unlocks_second(&mut stage);
+
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
+    accepted(&mut stage, SECOND);
+    turn_in(&stage, FIRST);
+    assert_eq!(retakes(&stage), 0, "the turn-in holds the reward record");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn abandoning_a_retaken_repeatable_quest_keeps_its_reward_record() {
+    let mut stage = stage("quest-availability-repeatable-abandon");
+    repeatable_unlocks_second(&mut stage);
+
+    request(&mut stage.connection, CMSG_QUESTLOG_REMOVE_QUEST, vec![0]);
+    let rows = stage.shard.query_rows(&format!(
+        "SELECT rewarded FROM game_character_quest WHERE quest_entry = {FIRST}"
+    ));
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!(rows[0]["rewarded"], "true");
     accepted(&mut stage, SECOND);
 }
 

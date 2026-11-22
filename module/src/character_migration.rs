@@ -1116,6 +1116,9 @@ impl Arrival<'_> {
                     failed,
                 },
             );
+            if quest.rewarded && !rewarded {
+                crate::quest::CharacterQuestRetake::record(self.ctx, self.guid, quest.quest_entry);
+            }
         }
         Ok(())
     }

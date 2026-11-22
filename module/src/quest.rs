@@ -327,6 +327,19 @@ pub struct CharacterQuestEventCredit {
     pub quest_entry: u32,
 }
 
+/// A repeatable quest's reward record while the Character is on that quest again.
+#[table(
+    accessor = game_character_quest_retake,
+    index(accessor = by_character, btree(columns = [character_guid]))
+)]
+pub struct CharacterQuestRetake {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub character_guid: u64,
+    pub quest_entry: u32,
+}
+
 #[table(accessor = game_character_quest_log)]
 pub struct CharacterQuestLog {
     #[primary_key]
@@ -339,12 +352,18 @@ crate::outside_table_catalog!(
     game_quest_emote,
     game_quest_availability,
     game_quest_prerequisite,
-    game_character_quest_log
+    game_character_quest_log,
+    game_character_quest_retake
 );
 
 impl CharacterQuest {
     pub(crate) fn is_active(&self) -> bool {
         !self.rewarded && !self.failed
+    }
+
+    /// Whether this attempt or an earlier one of the quest was rewarded.
+    pub(crate) fn reward_recorded(&self, ctx: &ReducerContext) -> bool {
+        self.rewarded || CharacterQuestRetake::held(ctx, self.character_guid, self.quest_entry)
     }
 
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
@@ -370,11 +389,59 @@ impl CharacterQuest {
             .unwrap_or(255);
         let removed = table.id().delete(id);
         if let Some(row) = old {
+            CharacterQuestRetake::clear(ctx, row.character_guid, row.quest_entry);
             crate::native::quest::changed(ctx, Some(&row), None, slot);
         }
         removed
     }
 }
+
+impl CharacterQuestRetake {
+    fn held(ctx: &ReducerContext, character_guid: u64, quest_entry: u32) -> bool {
+        ctx.db
+            .game_character_quest_retake()
+            .by_character()
+            .filter(character_guid)
+            .any(|row| row.quest_entry == quest_entry)
+    }
+
+    pub(crate) fn record(ctx: &ReducerContext, character_guid: u64, quest_entry: u32) {
+        if !Self::held(ctx, character_guid, quest_entry) {
+            ctx.db.game_character_quest_retake().insert(Self {
+                id: 0,
+                character_guid,
+                quest_entry,
+            });
+        }
+    }
+
+    /// Returns whether a retake held a reward record.
+    fn clear(ctx: &ReducerContext, character_guid: u64, quest_entry: u32) -> bool {
+        let table = ctx.db.game_character_quest_retake();
+        let held: Vec<_> = table
+            .by_character()
+            .filter(character_guid)
+            .filter(|row| row.quest_entry == quest_entry)
+            .map(|row| row.id)
+            .collect();
+        for id in &held {
+            table.id().delete(id);
+        }
+        !held.is_empty()
+    }
+}
+
+crate::character_owned!(delete, fn sweep_delete_game_character_quest_retake(ctx, character_guid) {
+    let retakes = ctx.db.game_character_quest_retake();
+    for row in retakes.by_character().filter(&character_guid).collect::<Vec<_>>() {
+        retakes.id().delete(row.id);
+    }
+});
+crate::character_owned!(transfer, fn sweep_transfer_game_character_quest_retake(ctx, character_guid, io) {
+    table = game_character_quest_retake,
+    by = by_character,
+    remint = id,
+});
 
 pub(crate) fn quest_log_entries(ctx: &ReducerContext, guid: u64) -> Vec<u32> {
     let mut quests: Vec<_> = ctx
@@ -738,7 +805,7 @@ impl lyracore_shared::quest::QuestHistory for CharacterQuestHistory<'_> {
         };
         lyracore_shared::quest::QuestStanding {
             active: row.is_active(),
-            rewarded: row.rewarded,
+            rewarded: row.reward_recorded(self.ctx),
             repeatable: self
                 .ctx
                 .db
@@ -1023,6 +1090,9 @@ fn apply_accept_effects(
     }
     match existing {
         Some(mut row) => {
+            if row.rewarded {
+                CharacterQuestRetake::record(ctx, character_guid, quest_entry);
+            }
             row.counts = counts;
             row.rewarded = false;
             row.failed = false;
@@ -1253,6 +1323,7 @@ pub(crate) fn request_turn_in_quest(
     // Keep rewarded repeatable rows because later quests read them as prerequisite evidence.
     cq.rewarded = true;
     cq.update(ctx);
+    CharacterQuestRetake::clear(ctx, player_guid, quest_entry);
     crate::hooks::fire_on_quest_turnin(
         ctx,
         &crate::hooks::QuestTurninPayload {
@@ -1746,7 +1817,7 @@ pub(crate) fn apply_abandon_quest(
     player_guid: u64,
     quest_entry: u32,
 ) -> Result<(), crate::Refusal> {
-    let cq = character_quest_row(ctx, player_guid, quest_entry)
+    let mut cq = character_quest_row(ctx, player_guid, quest_entry)
         .ok_or_else(|| "you are not on that quest".to_string())?;
     if cq.rewarded {
         return Err("cannot abandon a completed quest".into());
@@ -1758,7 +1829,14 @@ pub(crate) fn apply_abandon_quest(
             crate::items::remove_items(ctx, player_guid, tmpl.src_item, count)?;
         }
     }
-    crate::quest::CharacterQuest::delete(ctx, cq.id);
+    if CharacterQuestRetake::clear(ctx, player_guid, quest_entry) {
+        cq.rewarded = true;
+        cq.failed = false;
+        cq.deadline_micros = 0;
+        cq.update(ctx);
+    } else {
+        crate::quest::CharacterQuest::delete(ctx, cq.id);
+    }
     Ok(())
 }
 

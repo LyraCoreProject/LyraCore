@@ -25,6 +25,12 @@ fn quests(shard: &Standalone) -> Vec<Row> {
     rows
 }
 
+fn retakes(shard: &Standalone) -> Vec<Row> {
+    shard.query_rows(&format!(
+        "SELECT quest_entry FROM game_character_quest_retake WHERE character_guid = {CHARACTER}"
+    ))
+}
+
 fn seed_quests(shard: &Standalone) {
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &[CHARACTER]);
@@ -91,6 +97,14 @@ fn seed_quests(shard: &Standalone) {
          WHERE quest_entry = {}",
         FIRST_QUEST + 2
     ));
+    shard.insert_row(
+        "game_character_quest_retake",
+        &[
+            ("id", &1u64),
+            ("character_guid", &CHARACTER.parse::<u64>().unwrap()),
+            ("quest_entry", &(FIRST_QUEST + 3)),
+        ],
+    );
 }
 
 #[test]
@@ -146,10 +160,18 @@ fn quest_progress_survives_cross_shard_transfer_and_world_port() {
     destination.assert_call("import_character_blob", &[TRANSFER, &blob, &system]);
     assert_eq!(quests(&destination), before, "import preserves every quest");
     assert_eq!(destination.query_rows(&log_query), before_log);
+    let retake = retakes(&destination);
+    assert_eq!(
+        retake.len(),
+        1,
+        "the reward record of a retaken quest moves"
+    );
+    assert_eq!(number::<u32>(&retake[0], "quest_entry"), FIRST_QUEST + 3);
     source.assert_call("confirm_import", &[TRANSFER, &system]);
     source.assert_call("finish_transfer", &[TRANSFER, &system]);
     assert!(quests(&source).is_empty(), "the source quests left once");
     assert!(source.query_rows(&log_query).is_empty());
+    assert!(retakes(&source).is_empty());
     destination.assert_call("release_transfer", &[TRANSFER, &system]);
     assert_eq!(
         quests(&destination),
