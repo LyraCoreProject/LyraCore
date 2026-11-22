@@ -2,6 +2,7 @@ use lyracore_shared::spell::taxonomy::CAST_FLAG_RANGED_AUTO_REPEAT;
 use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
+use super::depth::TriggerDepth;
 use crate::combat::AttackOutcome;
 use crate::geometry::{distance_3d, is_behind, is_facing};
 use crate::{game_creature_template, game_world_entity, WorldEntity};
@@ -142,6 +143,7 @@ fn resolve_loaded_cast(
         ..
     } = *request;
     let (hdr, effects) = (&spell.header, spell.effects.as_slice());
+    let _depth = TriggerDepth::enter(ctx.timestamp, spell_id)?;
 
     let mut caster = crate::helpers::live_entity(ctx, caster_guid)
         .map_err(|_| format!("caster {caster_guid} not in world"))?;
@@ -944,6 +946,7 @@ fn cast_triggered_with_origin(
     origin: CastOrigin,
 ) -> Result<(), String> {
     let caster_guid = request.caster_guid;
+    let _depth = TriggerDepth::enter(ctx.timestamp, request.spell_id)?;
     let caster = ctx
         .db
         .game_world_entity()

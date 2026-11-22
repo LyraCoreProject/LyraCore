@@ -9,7 +9,7 @@ use lyracore_shared::spell::taxonomy::{
     A_CONTROL, A_PERIODIC_TRIGGER, A_STEALTH, CAST_FLAG_ALWAYS_HIT, CAST_FLAG_STEALTH_SAFE,
     E_DAMAGE, E_HEAL, E_TRIGGER, M_STUN, P_MECHANIC, T_SELF, T_TARGET_ANY, T_TARGET_ENEMY,
 };
-use support::{actor, number, Standalone};
+use support::{actor, event_rows, fence_subscription, number, subscribe_with_fence, Standalone};
 
 const PLAYER: &str = "1";
 const WOLF_GUID: u64 = guid::creature(TEST_WOLF_ENTRY, 1);
@@ -17,6 +17,7 @@ const PARENT: u32 = 5_098_401;
 const CHILD: u32 = 5_098_402;
 const STEALTH: u32 = 5_098_403;
 const DEATH_RULE_ID: u64 = 5_098_404;
+const TRIGGER_DEPTH_LIMIT: usize = 8;
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -302,6 +303,42 @@ fn a_harmful_trigger_child_cast_without_damage_leaves_its_caster_stealthed() {
     ));
     assert_eq!(stuns.len(), 1, "the child stuns the wolf");
     assert_eq!(auras(&shard, STEALTH), 1, "the caster stays stealthed");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn two_spells_that_trigger_each_other_resolve_to_the_trigger_depth_and_stop() {
+    let shard = stage("trigger-child-loop");
+    shard.clear_schedule("game_event_reaper_schedule");
+    spell(&shard, PARENT, &[]);
+    spell(&shard, CHILD, &[]);
+    trigger_effect(&shard, 0, T_SELF);
+    effect(
+        &shard,
+        CHILD,
+        0,
+        &[
+            ("kind", &E_TRIGGER),
+            ("target", &T_SELF),
+            ("trigger_spell", &PARENT),
+        ],
+    );
+    learn_parent(&shard);
+    let events = subscribe_with_fence(&shard, &["SELECT * FROM game_spell_cast_event_live"]);
+
+    cast_parent(&shard, PLAYER);
+    fence_subscription(&shard, &events);
+    let gos = |spell_id: u32| {
+        event_rows(&events, "game_spell_cast_event_live")
+            .iter()
+            .filter(|row| row["spell_id"] == spell_id.to_string() && row["kind"] == "2")
+            .count()
+    };
+    assert_eq!(
+        (gos(PARENT), gos(CHILD)),
+        (TRIGGER_DEPTH_LIMIT / 2, TRIGGER_DEPTH_LIMIT / 2),
+        "the first eight links resolve and the ninth is refused"
+    );
 }
 
 fn stealth_safe_parent(shard: &Standalone, extra: &[(&str, &dyn std::fmt::Display)]) {
