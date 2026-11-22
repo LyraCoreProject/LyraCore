@@ -362,6 +362,7 @@ pub(crate) trait ThreatSink {
     fn threat_sources(&self, guid: u64) -> Vec<ThreatSource>;
     fn held_in_place(&self, guid: u64) -> bool;
     fn retarget(&mut self, creature: u64, victim: u64);
+    fn evade(&mut self, creature: u64);
 }
 
 #[derive(Clone, PartialEq, Debug)]
@@ -1012,6 +1013,7 @@ fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
     let fighters = w.fighters(scope);
     let visited = fighters.len();
     let mut switches: Vec<(u64, u64)> = Vec::new();
+    let mut evaders: Vec<u64> = Vec::new();
     for f in &fighters {
         if let Some(pinned) = w.taunted_onto(f.guid) {
             if pinned != f.victim {
@@ -1040,14 +1042,17 @@ fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
                 }
             })
             .collect();
-        if let Some(victim) = select_victim(f.victim, &contenders) {
-            if victim != f.victim {
-                switches.push((f.guid, victim));
-            }
+        match select_victim(f.victim, &contenders) {
+            Some(victim) if victim != f.victim => switches.push((f.guid, victim)),
+            None if !contenders.is_empty() => evaders.push(f.guid),
+            _ => {}
         }
     }
     for (creature, victim) in switches {
         w.retarget(creature, victim);
+    }
+    for creature in evaders {
+        w.evade(creature);
     }
     visited
 }

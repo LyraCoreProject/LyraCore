@@ -986,6 +986,9 @@ impl ThreatSink for CtxWorld<'_> {
             }
         }
     }
+    fn evade(&mut self, creature: u64) {
+        crate::combat::swing::evade(self.ctx, creature);
+    }
 }
 
 impl PursuitSink for CtxWorld<'_> {

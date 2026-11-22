@@ -2,6 +2,7 @@ mod support;
 
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_shared::constants::unit_flags::{IN_COMBAT, TAXI_FLIGHT};
 use lyracore_shared::spell::taxonomy::{
     A_CONTROL, CAST_FLAG_IGNORE_RESISTANCES, M_FEAR, P_MECHANIC, T_TARGET_ENEMY,
 };
@@ -134,6 +135,22 @@ impl Fight {
                 ("display_scale", &scale),
             ],
         );
+    }
+
+    fn board_taxi(&self, guid: &str) {
+        let flags: u32 = number(&self.entity(guid), "unit_flags");
+        self.shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET unit_flags = {} WHERE guid = {guid}",
+            flags | TAXI_FLIGHT
+        ));
+    }
+
+    fn entity(&self, guid: &str) -> support::Row {
+        self.shard
+            .query_rows(&format!(
+                "SELECT unit_flags, health, max_health FROM game_world_entity WHERE guid = {guid}"
+            ))
+            .remove(0)
     }
 
     fn challenge(&self, threat: i64) -> String {
@@ -273,5 +290,56 @@ fn a_creature_turns_from_its_feared_victim_to_a_free_source() {
         fight.victim(),
         VICTIM,
         "the fear ends and the margin returns"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_whose_only_source_boards_a_taxi_evades_with_full_health() {
+    let fight = Fight::start("threat-evade-taxi", 3.0);
+    fight.shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = 50000 WHERE guid = {}",
+        fight.wolf
+    ));
+    fight.board_taxi(VICTIM);
+    fight.settle();
+
+    let wolf = fight.entity(&fight.wolf);
+    assert!(
+        fight
+            .shard
+            .query_rows(&format!(
+                "SELECT id FROM game_threat WHERE creature_guid = {}",
+                fight.wolf
+            ))
+            .is_empty(),
+        "the wolf cleared its threat"
+    );
+    assert!(
+        fight
+            .shard
+            .query_rows(&format!(
+                "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {}",
+                fight.wolf
+            ))
+            .is_empty(),
+        "the wolf stopped attacking"
+    );
+    assert_eq!(number::<u32>(&wolf, "unit_flags") & IN_COMBAT, 0);
+    assert_eq!(wolf["health"], wolf["max_health"]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_turns_to_the_source_left_when_its_victim_boards_a_taxi() {
+    let fight = Fight::start("threat-evade-other-source", 15.0);
+    fight.set_threat(CHALLENGER, 10);
+    fight.board_taxi(VICTIM);
+    fight.settle();
+
+    assert_eq!(
+        fight.victim(),
+        CHALLENGER,
+        "a source out of reach is still a valid source"
     );
 }
