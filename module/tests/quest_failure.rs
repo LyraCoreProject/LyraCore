@@ -67,16 +67,24 @@ fn a_failed_repeatable_quest_without_a_timer_leaves_the_log_and_can_be_taken_aga
 fn a_failed_retake_returns_to_its_reward_record() {
     let shard = setup("quest-failure-retake");
     grant(&shard, REPEATABLE);
-    shard.assert_sql(&format!(
-        "UPDATE game_character_quest SET rewarded = true WHERE quest_entry = {REPEATABLE}"
-    ));
-    grant(&shard, REPEATABLE);
+    shard.insert_row(
+        "game_character_quest_retake",
+        &[
+            ("id", &1u64),
+            ("character_guid", &CHARACTER.parse::<u64>().unwrap()),
+            ("quest_entry", &REPEATABLE),
+        ],
+    );
     fail(&shard, REPEATABLE);
 
     let rows = attempts(&shard, REPEATABLE);
     assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0]["rewarded"], "true", "{rows:?}");
     assert_eq!(rows[0]["failed"], "false", "{rows:?}");
+    let retakes = shard.query_rows(&format!(
+        "SELECT quest_entry FROM game_character_quest_retake WHERE character_guid = {CHARACTER}"
+    ));
+    assert!(retakes.is_empty(), "{retakes:?}");
 }
 
 #[test]

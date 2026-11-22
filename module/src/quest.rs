@@ -1808,13 +1808,12 @@ pub(crate) fn debug_force_expire(
 
 /// Marks the attempt failed. A repeatable quest without a timer then leaves the log.
 fn fail_quest(ctx: &ReducerContext, mut cq: CharacterQuest) {
-    let leaves_log = cq.deadline_micros == 0
-        && ctx
-            .db
-            .game_quest_template()
-            .entry()
-            .find(cq.quest_entry)
-            .is_some_and(|tmpl| tmpl.repeatable && tmpl.limit_time == 0);
+    let leaves_log = ctx
+        .db
+        .game_quest_template()
+        .entry()
+        .find(cq.quest_entry)
+        .is_some_and(|tmpl| tmpl.repeatable && tmpl.limit_time == 0);
     cq.failed = true;
     cq.deadline_micros = 0;
     let cq = cq.update(ctx);

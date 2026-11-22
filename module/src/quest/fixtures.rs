@@ -921,7 +921,7 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         }
         let row = character_quest_row(ctx, EVENTAI_CREDIT_FIXTURE_PLAYER, quest_entry);
         let timed = deadline_micros != 0;
-        if row.as_ref().is_some_and(|quest| !quest.failed) || row.is_none() != !timed {
+        if row.as_ref().is_some_and(|quest| !quest.failed) || row.is_none() == timed {
             return Err(format!(
                 "a script-failed repeatable quest (timed {timed}) is wrongly in the log or not failed: {:?}",
                 row.map(|quest| quest.failed)
