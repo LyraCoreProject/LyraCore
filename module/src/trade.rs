@@ -585,9 +585,10 @@ pub(crate) fn apply_accept_trade(
     } else {
         session.initiator_guid
     };
-    // vmangos HandleAcceptTradeOpcode refuses before it records the accept, answers only the
-    // accepting player and leaves the trade open.
+    // vmangos HandleAcceptTradeOpcode keeps the accept, answers only the accepting player and
+    // leaves the trade open.
     if offers_untradeable(ctx, &session) {
+        touch_session(ctx, session);
         push_trade_event(ctx, actor.guid, event_kind::TRADE_CANCELED, partner);
         return Ok(());
     }

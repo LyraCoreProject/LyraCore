@@ -163,8 +163,8 @@ fn an_opened_item_can_be_neither_offered_nor_traded_at_accept() {
             session["initiator_accepted"].as_str(),
             session["target_accepted"].as_str()
         ),
-        ("false", "false"),
-        "a refused accept is not recorded"
+        ("true", "true"),
+        "vmangos keeps a refused accept"
     );
 }
 
