@@ -74,7 +74,7 @@ fn leash_pass(ctx: &ReducerContext) {
     }
 }
 
-pub(super) fn evade(ctx: &ReducerContext, creature: u64) {
+pub(crate) fn evade(ctx: &ReducerContext, creature: u64) {
     crate::creatures::eventai_on_evade(ctx, creature);
     disengage(ctx, creature);
     if let Some(mut c) = ctx.db.game_world_entity().guid().find(creature) {

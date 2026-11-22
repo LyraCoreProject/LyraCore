@@ -2,6 +2,7 @@ mod support;
 
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_shared::constants::unit_flags::IN_COMBAT;
 use lyracore_shared::spell::taxonomy::{
     A_CONTROL, CAST_FLAG_IGNORE_RESISTANCES, M_FEAR, P_MECHANIC, T_TARGET_ENEMY,
 };
@@ -15,6 +16,8 @@ const DEFENSIVE: u8 = 1;
 const HUMAN: &str = "1";
 const WARRIOR: &str = "1";
 const FEAR: u32 = 5_113_301;
+const CHARACTER_FACTION: u32 = 9_101;
+const WOLF_FACTION: u32 = 9_102;
 
 struct Fight {
     shard: Standalone,
@@ -134,6 +137,36 @@ impl Fight {
                 ("display_scale", &scale),
             ],
         );
+    }
+
+    fn befriend_wolf_to_characters(&self) {
+        for (id, group, friend_group) in [(CHARACTER_FACTION, 1u32, 0u32), (WOLF_FACTION, 0, 1)] {
+            self.shard.insert_row(
+                "game_faction_template",
+                &[
+                    ("id", &id),
+                    ("faction", &id),
+                    ("faction_group", &group),
+                    ("friend_group", &friend_group),
+                ],
+            );
+        }
+        self.shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET faction_template = {CHARACTER_FACTION} \
+             WHERE guid = {VICTIM}"
+        ));
+        self.shard.assert_sql(&format!(
+            "UPDATE game_world_entity SET faction_template = {WOLF_FACTION} WHERE guid = {}",
+            self.wolf
+        ));
+    }
+
+    fn entity(&self, guid: &str) -> support::Row {
+        self.shard
+            .query_rows(&format!(
+                "SELECT unit_flags, health, max_health FROM game_world_entity WHERE guid = {guid}"
+            ))
+            .remove(0)
     }
 
     fn challenge(&self, threat: i64) -> String {
@@ -274,4 +307,40 @@ fn a_creature_turns_from_its_feared_victim_to_a_free_source() {
         VICTIM,
         "the fear ends and the margin returns"
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_creature_whose_only_source_turns_friendly_evades_with_full_health() {
+    let fight = Fight::start("threat-evade-friendly", 3.0);
+    fight.shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = 50000 WHERE guid = {}",
+        fight.wolf
+    ));
+    fight.befriend_wolf_to_characters();
+    fight.settle();
+
+    let wolf = fight.entity(&fight.wolf);
+    assert!(
+        fight
+            .shard
+            .query_rows(&format!(
+                "SELECT id FROM game_threat WHERE creature_guid = {}",
+                fight.wolf
+            ))
+            .is_empty(),
+        "the wolf cleared its threat"
+    );
+    assert!(
+        fight
+            .shard
+            .query_rows(&format!(
+                "SELECT target_guid FROM game_melee_attack WHERE attacker_guid = {}",
+                fight.wolf
+            ))
+            .is_empty(),
+        "the wolf stopped attacking"
+    );
+    assert_eq!(number::<u32>(&wolf, "unit_flags") & IN_COMBAT, 0);
+    assert_eq!(wolf["health"], wolf["max_health"]);
 }

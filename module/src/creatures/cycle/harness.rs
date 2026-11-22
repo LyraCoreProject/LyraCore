@@ -2862,6 +2862,7 @@ impl ThreatSink for Scenario {
                         .melee_body(f.attacker)
                         .expect("a fighter is a creature"),
                     victim: f.victim,
+                    serves_character: self.pet_owners.borrow().contains_key(&f.attacker),
                 })
             })
             .collect()
@@ -2908,6 +2909,15 @@ impl ThreatSink for Scenario {
                 f.victim = victim;
             }
         }
+    }
+    fn can_attack(&self, _creature: u64, target: u64) -> bool {
+        self.standings.borrow().get(&target) != Some(&SourceStanding::Unattackable)
+    }
+    fn evade(&mut self, creature: u64) {
+        self.fights.borrow_mut().retain(|f| f.attacker != creature);
+        self.threat
+            .borrow_mut()
+            .retain(|(owner, _), _| *owner != creature);
     }
 }
 
@@ -3205,6 +3215,7 @@ const HUNTER: u64 = 0x0000_0000_0000_0A11;
 const RANGER: u64 = HUNTER + 1;
 const MAGE: u64 = HUNTER + 2;
 const IMP: u64 = 0x0000_0000_0000_1117;
+const ESCORT: u64 = IMP + 1;
 const NUKE: u32 = 100;
 const HEAL: u32 = 101;
 const DEBUFF: u32 = 102;
@@ -5175,6 +5186,97 @@ fn an_unattackable_source_is_never_the_victim() {
         [(WOLF, RANGER)],
         "even a low-priority source beats one the creature cannot attack"
     );
+}
+
+#[test]
+fn a_creature_whose_every_source_is_unattackable_evades() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .player(RANGER, p(4.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 1000)
+        .threat(WOLF, RANGER, 10)
+        .standing(HUNTER, SourceStanding::Unattackable)
+        .standing(RANGER, SourceStanding::Unattackable);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(w.victims().is_empty(), "the wolf left combat");
+    assert_eq!(
+        (w.threat_value(WOLF, HUNTER), w.threat_value(WOLF, RANGER)),
+        (None, None),
+        "the wolf cleared its threat"
+    );
+}
+
+#[test]
+fn a_creature_keeps_fighting_while_one_source_is_attackable() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .player(RANGER, p(15.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 1000)
+        .threat(WOLF, RANGER, 10)
+        .standing(HUNTER, SourceStanding::Unattackable);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(
+        (w.victims(), w.threat_value(WOLF, RANGER)),
+        (vec![(WOLF, RANGER)], Some(10)),
+        "a source out of reach is still a valid source"
+    );
+}
+
+#[test]
+fn a_player_owned_pet_never_evades() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .pet(IMP, HUNTER, p(1.0, 0.0, 10.0))
+        .attacking(IMP, WOLF)
+        .threat(IMP, WOLF, 100)
+        .standing(WOLF, SourceStanding::Unattackable);
+    let tick = w.tick(true, catch_all());
+    threat_retarget(&mut w, &tick.scope);
+
+    assert_eq!(w.victims(), [(IMP, WOLF)]);
+}
+
+#[test]
+fn a_creature_keeps_an_attackable_victim_that_holds_no_threat_row() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .creature(ESCORT, p(1.0, 0.0, 10.0))
+        .attacking(WOLF, ESCORT)
+        .threat(WOLF, HUNTER, 1000)
+        .standing(HUNTER, SourceStanding::Unattackable);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(w.victims(), [(WOLF, ESCORT)]);
+}
+
+#[test]
+fn a_creature_evades_when_its_victim_without_a_threat_row_is_unattackable_too() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .creature(ESCORT, p(1.0, 0.0, 10.0))
+        .attacking(WOLF, ESCORT)
+        .threat(WOLF, HUNTER, 1000)
+        .standing(HUNTER, SourceStanding::Unattackable)
+        .standing(ESCORT, SourceStanding::Unattackable);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(w.victims().is_empty());
+}
+
+#[test]
+fn a_taunted_creature_does_not_evade_from_unattackable_sources() {
+    let mut w = wolf_fighting(p(3.0, 0.0, 10.0))
+        .attacking(WOLF, HUNTER)
+        .threat(WOLF, HUNTER, 1000)
+        .standing(HUNTER, SourceStanding::Unattackable)
+        .taunted(WOLF, HUNTER);
+    let tick = w.tick(true, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert_eq!(w.victims(), [(WOLF, HUNTER)]);
 }
 
 #[test]
