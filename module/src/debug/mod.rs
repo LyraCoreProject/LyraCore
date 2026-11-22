@@ -1503,8 +1503,8 @@ pub fn debug_disarm_instance_tick(ctx: &ReducerContext, instance_id: u64) -> Res
 #[reducer]
 pub fn debug_clear_schedule(ctx: &ReducerContext, table: String) -> Result<(), String> {
     use crate::{
-        game_aura_schedule, game_event_reaper_schedule, game_gateway_lease_reaper_schedule,
-        game_melee_schedule, game_motion_publish_schedule,
+        game_aura_schedule, game_duel_schedule, game_event_reaper_schedule,
+        game_gateway_lease_reaper_schedule, game_melee_schedule, game_motion_publish_schedule,
     };
     fn clear<T: Table>(table: T) {
         let rows: Vec<_> = table.iter().collect();
@@ -1515,6 +1515,7 @@ pub fn debug_clear_schedule(ctx: &ReducerContext, table: String) -> Result<(), S
     match table.as_str() {
         "game_aura_schedule" => clear(ctx.db.game_aura_schedule()),
         "game_creature_move_schedule" => clear(ctx.db.game_creature_move_schedule()),
+        "game_duel_schedule" => clear(ctx.db.game_duel_schedule()),
         "game_event_reaper_schedule" => clear(ctx.db.game_event_reaper_schedule()),
         "game_gateway_lease_reaper_schedule" => clear(ctx.db.game_gateway_lease_reaper_schedule()),
         "game_melee_schedule" => clear(ctx.db.game_melee_schedule()),

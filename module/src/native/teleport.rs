@@ -237,6 +237,7 @@ fn finish_near(
     .map_err(|error| error.to_string())?;
     let counter_offset = 1 + packet.body[0].count_ones() as usize;
     packet.body.drain(counter_offset..counter_offset + 4);
+    crate::pvp::recheck_zone(ctx, entity.guid);
     player.teleport = None;
     player.teleport_started_micros = 0;
     let connection_id = player.connection_id;

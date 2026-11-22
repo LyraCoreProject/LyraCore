@@ -8,8 +8,8 @@ use lyracore_protocol::{
     world::Packet,
 };
 use lyracore_shared::spell::taxonomy::{
-    CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_REFUSES_SELF_CAST, E_DISENCHANT, E_ENCHANT_ITEM,
-    E_ENCHANT_ITEM_TEMPORARY, E_FISH, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
+    CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_REFUSES_SELF_CAST, E_DISENCHANT, E_DUEL,
+    E_ENCHANT_ITEM, E_ENCHANT_ITEM_TEMPORARY, E_FISH, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
@@ -73,6 +73,8 @@ pub(super) fn cast_result(reason: CastRefusalReason) -> u8 {
         R::MountIndoors => code::ONLY_OUTDOORS,
         R::MountInDeepWater => code::ONLY_ABOVEWATER,
         R::ItemGone => code::ITEM_GONE,
+        R::NoDueling => code::NO_DUELING,
+        R::TargetDueling => code::TARGET_DUELING,
     }
 }
 
@@ -121,6 +123,27 @@ fn refuses_self_cast(header: Option<&Spell>, caster: u64, selected_unit: u64) ->
         && header.is_some_and(|row| row.cast_flags & CAST_FLAG_REFUSES_SELF_CAST != 0)
 }
 
+fn route_for(header: Option<&Spell>, effects: &[crate::SpellEffect]) -> Route {
+    if header.is_some_and(|row| row.cast_flags & CAST_FLAG_RANGED_AUTO_REPEAT != 0) {
+        Route::Ranged
+    } else if let Some(effect) = effects
+        .iter()
+        .find(|row| matches!(row.kind, E_ENCHANT_ITEM | E_DISENCHANT))
+    {
+        if effect.kind == E_ENCHANT_ITEM {
+            Route::Enchant(effect.p0 as u32)
+        } else {
+            Route::Disenchant
+        }
+    } else if effects.iter().any(|row| row.kind == E_FISH) {
+        Route::Fish
+    } else if effects.iter().any(|row| row.kind == E_OPEN_LOCK) {
+        Route::OpenLock
+    } else {
+        Route::Ordinary
+    }
+}
+
 pub(super) fn receive(
     ctx: &ReducerContext,
     connection: ConnectionId,
@@ -154,27 +177,7 @@ pub(super) fn receive(
             "a negative spell cannot target its caster",
         ));
     }
-    let route = if header
-        .as_ref()
-        .is_some_and(|row| row.cast_flags & CAST_FLAG_RANGED_AUTO_REPEAT != 0)
-    {
-        Route::Ranged
-    } else if let Some(effect) = effects
-        .iter()
-        .find(|row| matches!(row.kind, E_ENCHANT_ITEM | E_DISENCHANT))
-    {
-        if effect.kind == E_ENCHANT_ITEM {
-            Route::Enchant(effect.p0 as u32)
-        } else {
-            Route::Disenchant
-        }
-    } else if effects.iter().any(|row| row.kind == E_FISH) {
-        Route::Fish
-    } else if effects.iter().any(|row| row.kind == E_OPEN_LOCK) {
-        Route::OpenLock
-    } else {
-        Route::Ordinary
-    };
+    let route = route_for(header.as_ref(), &effects);
     let dest = request
         .targets
         .target_flags
@@ -265,6 +268,8 @@ pub(super) fn receive(
                     )?)
                 } else if let Some((x, y, z)) = dest {
                     crate::spell::apply_cast_spell_at(ctx, &caster, spell, target, x, y, z)
+                } else if effects.iter().any(|row| row.kind == E_DUEL) {
+                    crate::duel::cast_challenge(ctx, caster, spell, target)
                 } else {
                     crate::spell::do_cast_spell(ctx, caster, spell, target)
                 }
@@ -384,6 +389,8 @@ mod tests {
             (R::MountIndoors, 0x55),
             (R::MountInDeepWater, 0x50),
             (R::ItemGone, 0x26),
+            (R::NoDueling, 0x47),
+            (R::TargetDueling, 0x68),
         ] {
             assert_eq!(cast_result(reason), code, "{reason:?}");
         }

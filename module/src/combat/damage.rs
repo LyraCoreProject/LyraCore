@@ -287,7 +287,7 @@ pub(crate) fn apply_hit(
     let Some(mut target) = entities.guid().find(target_guid) else {
         return miss;
     };
-    if target.dead || (damage.amount == 0 && !damage.lethal_prevented) {
+    if target.dead {
         return miss;
     }
     let dmg = damage.amount;
@@ -299,6 +299,15 @@ pub(crate) fn apply_hit(
             .as_ref()
             .is_some_and(|attacker| !crate::combat::may_harm(ctx, attacker, &target))
     {
+        return miss;
+    }
+    // vmangos Unit::DealDamage flags even a fully absorbed hit; a weapon flags at its swing.
+    if hit.source != HitSource::DamageShield && !weapon {
+        if let Some(attacker) = &attacker {
+            crate::pvp::harmed(ctx, attacker, &target);
+        }
+    }
+    if dmg == 0 && !damage.lethal_prevented {
         return miss;
     }
     let attacker_is_player = attacker.as_ref().map(|a| a.is_player()).unwrap_or(false);

@@ -147,7 +147,6 @@ pub(super) fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<V
         ClientOpcodeMessage::CMSG_UNLEARN_SKILL(_) => unavailable("Skill unlearning requests"),
         ClientOpcodeMessage::CMSG_SET_AMMO(_) => unavailable("Ammunition selections"),
         ClientOpcodeMessage::CMSG_MOUNTSPECIAL_ANIM => unavailable("Mount flourishes"),
-        ClientOpcodeMessage::CMSG_TOGGLE_PVP(_) => unavailable("PvP flag changes"),
         ClientOpcodeMessage::CMSG_TOGGLE_HELM | ClientOpcodeMessage::CMSG_TOGGLE_CLOAK => {
             unavailable("Equipment visibility preferences")
         }

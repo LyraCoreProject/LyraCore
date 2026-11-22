@@ -638,6 +638,13 @@ Module.
 `game_taxi_flight_leg` table is new. A flight already in the air has no leg rows, so it is a
 one-leg route on leg 0 and flies as before. No repair is needed.
 
+### PvP Flag migration
+
+`game_pvp_flag_timer` is a new private one-shot schedule, and `CastRefusalReason` gains the
+append-only codes 30 and 31. No repair or reimport is needed. A Character online at the publish
+carries no PvP Flag until it toggles PvP, moves in a PvP-enforced zone or joins PvP combat. From
+then on another Character can harm it only while the flag is set or in a started Duel.
+
 ### Spell threat migration
 
 The private `game_spell_threat` table is new and starts empty. Until you reimport the `spellmeta`
