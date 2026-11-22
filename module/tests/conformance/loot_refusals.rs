@@ -689,6 +689,7 @@ fn a_corpse_whose_only_drop_is_an_unneeded_quest_item_is_not_lootable_and_can_be
         &[
             ("id", &9_164_002),
             ("character_guid", &stage.character),
+            ("owner_identity", &format!("0x{}", "00".repeat(32))),
             ("skill_line", &SKINNING_SKILL_LINE),
             ("current", &300),
             ("max_rank", &300),
@@ -717,9 +718,13 @@ fn a_quest_accepted_after_the_kill_cannot_take_the_item_from_that_corpse() {
         stage.corpse.to_le_bytes().into(),
     );
 
-    assert!(!opened
+    // The refused skinning answers a window with no items; a window listing the item has count 1.
+    let listed: Vec<u8> = opened
         .iter()
-        .any(|(opcode, body)| *opcode == SMSG_LOOT_RESPONSE && body[8] != 0));
+        .filter(|(opcode, body)| *opcode == SMSG_LOOT_RESPONSE && body[8] != 0)
+        .flat_map(|(_, body)| (0..usize::from(body[13])).map(|item| body[14 + item * 22]))
+        .collect();
+    assert!(listed.is_empty());
     assert_eq!(stage.loot_rows(), 0);
     assert_eq!(stage.carried(FIXTURE_JERKY), 0);
 }
