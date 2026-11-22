@@ -1,5 +1,6 @@
 mod support;
 
+use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::constants::player_flags;
 use lyracore_shared::terrain::cell_index;
 use support::{actor, number, poll_until, Standalone, POLL_TIMEOUT};
@@ -10,6 +11,8 @@ const HEARTBEAT: u32 = lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT;
 
 const DEEP_WATER: (f32, f32, f32) = (-8900.0, -132.0, -1.0);
 const SAFE_WATER: (f32, f32, f32) = (-9000.0, -132.0, -1.0);
+
+const STEALTH: u32 = 5_116_201;
 
 const FATIGUE_DRAIN: u8 = 3;
 const FATIGUE_STOP: u8 = 5;
@@ -139,4 +142,48 @@ fn an_exhausted_ghost_returns_to_a_graveyard() {
         "moved to a graveyard"
     );
     assert_eq!(ghost["dead"], "true");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn exhaustion_damage_ends_stealth() {
+    let shard = fixture("fatigue-stealth");
+    shard.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &STEALTH),
+            ("name", &"Fixture Stealth"),
+            ("duration_ms", &600000),
+            ("school_mask", &1),
+        ],
+    );
+    shard.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(STEALTH, 0)),
+            ("spell_id", &STEALTH),
+            ("kind", &lyracore_shared::spell::taxonomy::A_STEALTH),
+            ("p_0", &0),
+            ("p_0_kind", &3),
+        ],
+    );
+    move_to(&shard, DEEP_WATER, 1000);
+    shard.assert_call("debug_force_cast", &[PLAYER, &STEALTH.to_string()]);
+    let stealth_auras = || {
+        shard
+            .query_rows(&format!(
+                "SELECT id FROM game_aura WHERE target_guid = {PLAYER} AND spell_id = {STEALTH}"
+            ))
+            .len()
+    };
+    assert_eq!(stealth_auras(), 1);
+
+    let max_health: u32 = number(&entity(&shard), "max_health");
+    exhaust_now(&shard);
+    assert!(
+        poll_until(POLL_TIMEOUT, || number::<u32>(&entity(&shard), "health")
+            < max_health),
+        "the tick exhausts the Character"
+    );
+    assert_eq!(stealth_auras(), 0, "exhaustion damage ends Stealth");
 }

@@ -83,6 +83,21 @@ fn send_move(shard: &Standalone, opcode: u32, flags: &str, at: [f32; 3], o: f32,
     );
 }
 
+// A movement body with no transport, swimming or jumping tail: flags, timestamp, pose and fall time.
+fn landing_body(fall_time_ms: u32) -> String {
+    let mut body = vec![0u8; 24];
+    body.extend_from_slice(&fall_time_ms.to_le_bytes());
+    format!(
+        "[{}]",
+        body.iter().map(u8::to_string).collect::<Vec<_>>().join(",")
+    )
+}
+
+fn health(shard: &Standalone) -> u32 {
+    let rows = shard.query_rows("SELECT health FROM game_world_entity WHERE guid = 1");
+    number(&rows[0], "health")
+}
+
 fn position(shard: &Standalone) -> (f32, f32) {
     let rows = shard.query_rows("SELECT x, orientation FROM game_world_entity WHERE guid = 1");
     (number(&rows[0], "x"), number(&rows[0], "orientation"))
@@ -161,4 +176,24 @@ fn moving_ends_shadowmeld_but_keeps_stealth() {
     cast(&shard, STEALTH);
     send_move(&shard, START_FORWARD, FORWARD, [x + 6.0, y, z], 1.0, 30);
     assert_eq!(auras(&shard, STEALTH), 1, "Rogue Stealth allows movement");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_damaging_fall_ends_stealth_and_a_harmless_landing_keeps_it() {
+    let (shard, [x, y, z]) = fixture("movement-fall-stealth");
+    let full_health = health(&shard);
+    cast(&shard, STEALTH);
+
+    send_move(&shard, FALL_LAND, &landing_body(0), [x, y, z], 1.0, 10);
+    assert_eq!(
+        health(&shard),
+        full_health,
+        "a landing with no fall is free"
+    );
+    assert_eq!(auras(&shard, STEALTH), 1, "no damage keeps Stealth");
+
+    send_move(&shard, FALL_LAND, &landing_body(3_000), [x, y, z], 1.0, 20);
+    assert!(health(&shard) < full_health, "a 3 s fall hurts");
+    assert_eq!(auras(&shard, STEALTH), 0, "fall damage ends Stealth");
 }
