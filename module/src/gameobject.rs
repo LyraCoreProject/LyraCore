@@ -688,7 +688,7 @@ fn use_resolved_gameobject(
                     quest_only: false,
                 });
             }
-            crate::loot::insert_corpse_rows(ctx, go.guid, winners);
+            crate::loot::insert_corpse_rows(ctx, go.guid, winners, &[]);
             crate::loot::stock_purse(ctx, go.guid, 0, (tmpl.money_min, tmpl.money_max));
             go.state = 1;
             go.update(ctx);

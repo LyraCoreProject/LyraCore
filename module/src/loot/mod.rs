@@ -2,11 +2,10 @@ use spacetimedb::{table, ReducerContext, Table};
 
 use crate::actor::{ActionRefusal, ActionRefusalKind};
 use crate::character::game_character;
-use crate::game_group_member;
 use crate::WorldEntity;
 use crate::{
-    game_character_quest, game_gameobject, game_item_instance, game_quest_objective,
-    game_world_entity,
+    game_character_quest, game_gameobject, game_item_instance, game_item_template,
+    game_quest_objective, game_world_entity,
 };
 use crate::{game_corpse_loot_eligible, game_loot_roll, game_loot_roll_vote};
 use lyracore_shared::loot_roll::event_kind as roll_event_kind;
@@ -141,6 +140,9 @@ pub struct CreatureLoot {
     #[default(0)]
     pub min_count: u32,
 }
+
+// vmangos ItemPrototype.h: each needer gets their own copy of such an item.
+const ITEM_FLAG_PARTY_LOOT: u32 = 0x800;
 
 pub(crate) fn loot_drops(chance_bp: u32, roll_0_9999: u32) -> bool {
     roll_0_9999 < chance_bp
@@ -371,29 +373,6 @@ impl CorpseLoot {
     }
 }
 
-pub(crate) fn clone_targets(other_members: &[(u64, bool)]) -> Vec<u64> {
-    other_members
-        .iter()
-        .filter(|(_, needs)| *needs)
-        .map(|(guid, _)| *guid)
-        .collect()
-}
-
-pub(crate) fn next_free_slots(used_slots: &[u8], count: usize) -> Vec<u8> {
-    let mut next = used_slots
-        .iter()
-        .copied()
-        .max()
-        .map_or(0, |m| m.saturating_add(1));
-    (0..count)
-        .map(|_| {
-            let s = next;
-            next = next.saturating_add(1);
-            s
-        })
-        .collect()
-}
-
 pub(crate) fn killer_needs_item(ctx: &ReducerContext, killer: Option<u64>, item: u32) -> bool {
     let Some(killer_guid) = killer else {
         return false;
@@ -506,18 +485,16 @@ pub(crate) fn reap_corpse_loot_family(ctx: &ReducerContext, corpse_guid: u64) {
     }
 }
 
+/// Each needer in `looters` gets a reserved copy of a party-loot quest drop; others share one row.
 pub(crate) fn insert_corpse_rows(
     ctx: &ReducerContext,
     corpse_guid: u64,
     winners: Vec<LootDrop>,
+    looters: &[u64],
 ) -> bool {
     let mut inserted = 0;
-    for LootDrop {
-        item_entry,
-        count,
-        quest_only,
-    } in winners
-    {
+    for winner in winners {
+        let item_entry = winner.item_entry;
         let random_property_id = match crate::items::select_loot_property(ctx, item_entry) {
             Ok(id) => id,
             Err(reason) => {
@@ -525,22 +502,49 @@ pub(crate) fn insert_corpse_rows(
                 continue;
             }
         };
-        ctx.db.game_corpse_loot().insert(CorpseLoot {
-            id: 0,
-            corpse_guid,
-            slot: inserted as u8,
-            item_entry,
-            count,
-            quest_only,
-            reserved_for: 0,
-            designated_looter_guid: 0,
-            master_only: false,
-            withheld: false,
-            random_property_id,
-        });
-        inserted += 1;
+        for reserved_for in reservations(ctx, winner, looters) {
+            ctx.db.game_corpse_loot().insert(CorpseLoot {
+                id: 0,
+                corpse_guid,
+                slot: inserted as u8,
+                item_entry,
+                count: winner.count,
+                quest_only: winner.quest_only,
+                reserved_for,
+                designated_looter_guid: 0,
+                master_only: false,
+                withheld: false,
+                random_property_id,
+            });
+            inserted += 1;
+        }
     }
     inserted != 0
+}
+
+// vmangos Loot::FillQuestLoot lists a party-loot quest item once for each needer at fill time.
+fn reservations(ctx: &ReducerContext, winner: LootDrop, looters: &[u64]) -> Vec<u64> {
+    if !winner.quest_only || !is_party_loot(ctx, winner.item_entry) {
+        return vec![0];
+    }
+    let needers: Vec<u64> = looters
+        .iter()
+        .copied()
+        .filter(|&looter| killer_needs_item(ctx, Some(looter), winner.item_entry))
+        .collect();
+    if needers.is_empty() {
+        vec![0]
+    } else {
+        needers
+    }
+}
+
+fn is_party_loot(ctx: &ReducerContext, item_entry: u32) -> bool {
+    ctx.db
+        .game_item_template()
+        .entry()
+        .find(item_entry)
+        .is_some_and(|template| template.item_flags & ITEM_FLAG_PARTY_LOOT != 0)
 }
 
 pub(crate) fn roll_creature_loot(
@@ -555,7 +559,8 @@ pub(crate) fn roll_creature_loot(
         .filter(&creature_entry)
         .map(LootRow::from);
     let winners = roll_loot_rows(ctx, corpse_guid, rows);
-    insert_corpse_rows(ctx, corpse_guid, winners)
+    let looters = corpse_eligible_recipients(ctx, corpse_guid);
+    insert_corpse_rows(ctx, corpse_guid, winners, &looters)
 }
 
 // The importer resolves PickpocketLootId to creature_entry before storage.
@@ -675,109 +680,8 @@ pub(crate) fn roll_pickpocket_loot(ctx: &ReducerContext, creature_entry: u32, ta
     if winners.is_empty() {
         return;
     }
-    insert_corpse_rows(ctx, target_guid, winners);
+    insert_corpse_rows(ctx, target_guid, winners, &[]);
     refresh_lootable(ctx, target_guid);
-}
-
-pub(crate) fn clone_quest_loot_for_group(
-    ctx: &ReducerContext,
-    taker_guid: u64,
-    corpse_guid: u64,
-    item_entry: u32,
-    count: u32,
-    random_property_id: u32,
-) {
-    let Some(m) = crate::group::group_of(ctx, taker_guid) else {
-        return;
-    };
-    let others: Vec<(u64, bool)> = ctx
-        .db
-        .game_group_member()
-        .by_group()
-        .filter(&m.group_id)
-        .filter(|gm| gm.character_guid != taker_guid)
-        .map(|gm| {
-            (
-                gm.character_guid,
-                killer_needs_item(ctx, Some(gm.character_guid), item_entry),
-            )
-        })
-        .collect();
-    let targets = clone_targets(&others);
-    if targets.is_empty() {
-        return;
-    }
-    let used_slots: Vec<u8> = ctx
-        .db
-        .game_corpse_loot()
-        .by_corpse()
-        .filter(&corpse_guid)
-        .map(|l| l.slot)
-        .collect();
-    let slots = next_free_slots(&used_slots, targets.len());
-    for (target_guid, slot) in targets.into_iter().zip(slots) {
-        ctx.db.game_corpse_loot().insert(CorpseLoot {
-            id: 0,
-            corpse_guid,
-            slot,
-            item_entry,
-            count,
-            quest_only: true,
-            reserved_for: target_guid,
-            designated_looter_guid: 0,
-            master_only: false,
-            withheld: false,
-            random_property_id,
-        });
-    }
-}
-
-// Use death-time eligibility; a current roster would admit later joiners.
-pub(crate) fn clone_quest_loot_for_eligible(
-    ctx: &ReducerContext,
-    taker_guid: u64,
-    corpse_guid: u64,
-    item_entry: u32,
-    count: u32,
-    random_property_id: u32,
-) {
-    let others: Vec<(u64, bool)> = corpse_eligible_recipients(ctx, corpse_guid)
-        .into_iter()
-        .filter(|eligible_guid| *eligible_guid != taker_guid)
-        .map(|eligible_guid| {
-            (
-                eligible_guid,
-                killer_needs_item(ctx, Some(eligible_guid), item_entry),
-            )
-        })
-        .collect();
-    let targets = clone_targets(&others);
-    if targets.is_empty() {
-        return;
-    }
-    let used_slots: Vec<u8> = ctx
-        .db
-        .game_corpse_loot()
-        .by_corpse()
-        .filter(&corpse_guid)
-        .map(|loot| loot.slot)
-        .collect();
-    let slots = next_free_slots(&used_slots, targets.len());
-    for (target_guid, slot) in targets.into_iter().zip(slots) {
-        ctx.db.game_corpse_loot().insert(CorpseLoot {
-            id: 0,
-            corpse_guid,
-            slot,
-            item_entry,
-            count,
-            quest_only: true,
-            reserved_for: target_guid,
-            designated_looter_guid: 0,
-            master_only: false,
-            withheld: false,
-            random_property_id,
-        });
-    }
 }
 
 pub(crate) fn corpse_is_looted(ctx: &ReducerContext, corpse_guid: u64, money: u32) -> bool {
@@ -1265,36 +1169,6 @@ mod tests {
             !group_loot_take_allowed(false, 0, false, 42, 8),
             "not the designated looter"
         );
-    }
-
-    #[test]
-    fn clone_targets_admits_only_the_still_needing_members() {
-        let others = [(10u64, true), (20u64, false), (30u64, true)];
-        assert_eq!(
-            clone_targets(&others),
-            vec![10, 30],
-            "the non-needing member 20 gets no clone"
-        );
-        assert!(
-            clone_targets(&[]).is_empty(),
-            "a solo taker (no other members) clones nothing"
-        );
-        assert!(
-            clone_targets(&[(10, false)]).is_empty(),
-            "no other member currently needs it → no clones"
-        );
-    }
-
-    #[test]
-    fn next_free_slots_never_collides_with_whats_already_on_the_corpse() {
-        assert_eq!(next_free_slots(&[0, 1, 2], 2), vec![3, 4]);
-        assert_eq!(
-            next_free_slots(&[], 3),
-            vec![0, 1, 2],
-            "an emptied corpse starts back at slot 0"
-        );
-        assert_eq!(next_free_slots(&[5], 1), vec![6]);
-        assert_eq!(next_free_slots(&[255], 2), vec![255, 255]);
     }
 
     #[test]

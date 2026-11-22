@@ -29,7 +29,7 @@ struct Stage {
     corpse: u64,
 }
 
-fn stage(name: &str) -> Stage {
+fn spawn_wolf(name: &str) -> (Standalone, u64, u64) {
     let (shard, character, _) = fixture(name);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     shard.assert_call("debug_spawn_player_entity", &[&character.to_string()]);
@@ -38,7 +38,7 @@ fn stage(name: &str) -> Stage {
         &[&character.to_string(), &TEST_WOLF_ENTRY.to_string(), "2.0"],
     );
     // The seeded demo wolf shares the entry; the one spawned here has the largest guid.
-    let corpse = shard
+    let wolf = shard
         .query_rows(&format!(
             "SELECT guid FROM game_world_entity WHERE entry = {TEST_WOLF_ENTRY}"
         ))
@@ -46,6 +46,11 @@ fn stage(name: &str) -> Stage {
         .filter_map(|row| row["guid"].parse::<u64>().ok())
         .max()
         .expect("the spawned wolf must exist");
+    (shard, character, wolf)
+}
+
+fn stage(name: &str) -> Stage {
+    let (shard, character, corpse) = spawn_wolf(name);
     shard.assert_call(
         "debug_kill_creature",
         &[&character.to_string(), &corpse.to_string()],
@@ -101,39 +106,8 @@ impl Stage {
         assert_eq!(self.open_loot(), self.corpse.to_string());
     }
 
-    fn second_looter(&self) -> ReducerConnection {
-        // A native player row is unique per Account, so the second looter needs its own.
-        let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
-        self.shard.assert_call(
-            "provision_account",
-            &["\"SECOND\"", &credentials, &credentials],
-        );
-        let account = self
-            .shard
-            .query_rows("SELECT id FROM game_account WHERE username = 'SECOND'")[0]["id"]
-            .clone();
-        self.shard.assert_call(
-            "create_character",
-            &[
-                &account,
-                "\"Second\"",
-                "1",
-                "1",
-                "0",
-                "0",
-                "0",
-                "0",
-                "0",
-                "0",
-            ],
-        );
-        let second: u64 = self
-            .shard
-            .query_rows("SELECT guid FROM game_character WHERE name = 'Second'")[0]["guid"]
-            .parse()
-            .unwrap();
-        self.shard
-            .assert_call("debug_spawn_player_entity", &[&second.to_string()]);
+    fn second_looter(&self) -> (u64, ReducerConnection) {
+        let second = provision_second(&self.shard);
         self.shard.insert_row(
             "game_corpse_loot_eligible",
             &[
@@ -144,7 +118,7 @@ impl Stage {
         );
         let mut connection = enter(&self.shard, second);
         connection.drain_packets();
-        connection
+        (second, connection)
     }
 
     fn removed_recipients_of_take(&mut self, slot: u8) -> Vec<u128> {
@@ -215,12 +189,7 @@ impl Stage {
     }
 
     fn carried(&self, entry: u32) -> usize {
-        self.shard
-            .query_rows(&format!(
-                "SELECT guid FROM game_item_instance WHERE owner_guid = {} AND entry = {entry}",
-                self.character
-            ))
-            .len()
+        carried_by(&self.shard, self.character, entry)
     }
 
     fn loot_rows(&self) -> usize {
@@ -231,6 +200,153 @@ impl Stage {
             ))
             .len()
     }
+}
+
+// A native player row is unique per Account, so the second looter needs its own.
+fn provision_second(shard: &Standalone) -> u64 {
+    let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
+    shard.assert_call(
+        "provision_account",
+        &["\"SECOND\"", &credentials, &credentials],
+    );
+    let account =
+        shard.query_rows("SELECT id FROM game_account WHERE username = 'SECOND'")[0]["id"].clone();
+    shard.assert_call(
+        "create_character",
+        &[
+            &account,
+            "\"Second\"",
+            "1",
+            "1",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+        ],
+    );
+    let second: u64 = shard.query_rows("SELECT guid FROM game_character WHERE name = 'Second'")[0]
+        ["guid"]
+        .parse()
+        .unwrap();
+    shard.assert_call("debug_spawn_player_entity", &[&second.to_string()]);
+    second
+}
+
+fn carried_by(shard: &Standalone, character: u64, entry: u32) -> usize {
+    shard
+        .query_rows(&format!(
+            "SELECT guid FROM game_item_instance WHERE owner_guid = {character} AND entry = {entry}"
+        ))
+        .len()
+}
+
+const JERKY_QUEST: u32 = 9_141_001;
+
+fn give_jerky_quest(shard: &Standalone, characters: &[u64]) {
+    shard.insert_row(
+        "game_quest_template",
+        &[
+            ("entry", &JERKY_QUEST),
+            ("quest_level", &1),
+            ("title", &"Jerky for two"),
+        ],
+    );
+    shard.insert_row(
+        "game_quest_objective",
+        &[
+            ("id", &9_141_002),
+            ("quest_entry", &JERKY_QUEST),
+            ("kind", &1),
+            ("target_entry", &FIXTURE_JERKY),
+            ("required_count", &1),
+        ],
+    );
+    for character in characters {
+        shard.assert_call(
+            "debug_grant_quest",
+            &[&character.to_string(), &JERKY_QUEST.to_string()],
+        );
+    }
+}
+
+const ITEM_FLAG_PARTY_LOOT: u32 = 0x800;
+const PARTY: u64 = 9_141_010;
+
+// Two grouped needers share the Loot Tag, so the wolf's death fills loot for both.
+fn party_loot_stage(name: &str) -> (Stage, u64, ReducerConnection) {
+    let (shard, character, corpse) = spawn_wolf(name);
+    let second = provision_second(&shard);
+    give_jerky_quest(&shard, &[character, second]);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET item_flags = {ITEM_FLAG_PARTY_LOOT} WHERE entry = {FIXTURE_JERKY}"
+    ));
+    shard.assert_sql(&format!(
+        "DELETE FROM game_creature_loot WHERE creature_entry = {TEST_WOLF_ENTRY}"
+    ));
+    shard.insert_row(
+        "game_creature_loot",
+        &[
+            ("id", &9_141_020),
+            ("creature_entry", &TEST_WOLF_ENTRY),
+            ("item_entry", &FIXTURE_JERKY),
+            ("chance_bp", &10_000),
+            ("count", &1),
+            ("quest_only", &true),
+        ],
+    );
+    shard.insert_row(
+        "game_group",
+        &[
+            ("group_id", &PARTY),
+            ("leader_guid", &character),
+            ("loot_method", &0),
+        ],
+    );
+    let no_identity = format!("0x{}", "00".repeat(32));
+    for (id, member) in [(9_141_011u64, character), (9_141_012, second)] {
+        shard.insert_row(
+            "game_group_member",
+            &[
+                ("id", &id),
+                ("group_id", &PARTY),
+                ("character_guid", &member),
+                ("owner_identity", &no_identity),
+            ],
+        );
+        shard.insert_row(
+            "game_creature_quest_tap_member",
+            &[
+                ("id", &id),
+                ("creature_guid", &corpse),
+                ("character_guid", &member),
+            ],
+        );
+    }
+    shard.insert_row(
+        "game_creature_quest_tap",
+        &[("creature_guid", &corpse), ("character_guid", &character)],
+    );
+    shard.insert_row(
+        "game_creature_loot_tag_group",
+        &[("creature_guid", &corpse), ("group_id", &PARTY)],
+    );
+    shard.assert_call(
+        "debug_kill_creature",
+        &[&character.to_string(), &corpse.to_string()],
+    );
+    let mut connection = enter(&shard, character);
+    connection.drain_packets();
+    let mut second_connection = enter(&shard, second);
+    second_connection.drain_packets();
+    let stage = Stage {
+        shard,
+        connection,
+        character,
+        corpse,
+    };
+    (stage, second, second_connection)
 }
 
 fn inventory_failure(reason: u8) -> (u16, Vec<u8>) {
@@ -375,7 +491,7 @@ fn a_release_closes_the_stored_window_whatever_guid_the_client_names() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_take_tells_every_looter_with_the_window_open() {
     let mut stage = stage("loot-take-removed-for-all");
-    let mut second = stage.second_looter();
+    let (_, mut second) = stage.second_looter();
     stage.open_corpse();
     open_corpse_on(&mut second, stage.corpse);
 
@@ -401,4 +517,58 @@ fn money_out_of_reach_is_silent_and_stays_on_the_corpse() {
 
     assert!(request(&mut stage.connection, CMSG_LOOT_MONEY, Vec::new()).is_empty());
     assert_eq!(stage.corpse_money(), "17");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_quest_item_taken_by_one_needer_is_gone_from_every_needers_window() {
+    let mut stage = stage("loot-quest-item-shared");
+    stage
+        .shard
+        .assert_sql("UPDATE game_corpse_loot SET quest_only = true WHERE id = 900001");
+    let (second_guid, mut second) = stage.second_looter();
+    give_jerky_quest(&stage.shard, &[stage.character, second_guid]);
+    stage.open_corpse();
+    open_corpse_on(&mut second, stage.corpse);
+
+    let mut expected = vec![stage.connection.connection_id(), second.connection_id()];
+    expected.sort_unstable();
+    assert_eq!(stage.removed_recipients_of_take(0), expected);
+    assert_eq!(stage.carried(FIXTURE_JERKY), 1);
+    assert_eq!(stage.loot_rows(), 0);
+    assert_eq!(
+        request(&mut second, CMSG_AUTOSTORE_LOOT_ITEM, vec![0]),
+        [inventory_failure(ALREADY_LOOTED)]
+    );
+    assert_eq!(carried_by(&stage.shard, second_guid, FIXTURE_JERKY), 0);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn each_needer_takes_a_party_loot_quest_item_from_the_window_already_open() {
+    let (mut stage, second_guid, mut second) = party_loot_stage("loot-quest-item-party");
+    let slot_of = |character: u64| -> u8 {
+        stage.shard.query_rows(&format!(
+            "SELECT slot FROM game_corpse_loot WHERE corpse_guid = {} AND reserved_for = {character}",
+            stage.corpse
+        ))[0]["slot"]
+            .parse()
+            .unwrap()
+    };
+    let (first_slot, second_slot) = (slot_of(stage.character), slot_of(second_guid));
+    assert_eq!(stage.loot_rows(), 2);
+    assert_ne!(first_slot, second_slot);
+    stage.open_corpse();
+    open_corpse_on(&mut second, stage.corpse);
+
+    assert_eq!(
+        stage.removed_recipients_of_take(first_slot),
+        [stage.connection.connection_id()]
+    );
+    let taken = request(&mut second, CMSG_AUTOSTORE_LOOT_ITEM, vec![second_slot]);
+
+    assert!(taken.contains(&(SMSG_LOOT_REMOVED, vec![second_slot])));
+    assert_eq!(stage.carried(FIXTURE_JERKY), 1);
+    assert_eq!(carried_by(&stage.shard, second_guid, FIXTURE_JERKY), 1);
+    assert_eq!(stage.loot_rows(), 0);
 }
