@@ -1514,7 +1514,7 @@ fn apply_script_event(
         let Some(recipient) = entities.guid().find(guid) else {
             continue;
         };
-        let Some(mut quest) =
+        let Some(quest) =
             character_quest_row(ctx, guid, request.quest_entry).filter(|quest| quest.is_active())
         else {
             continue;
@@ -1547,9 +1547,7 @@ fn apply_script_event(
                 );
             }
         } else {
-            quest.failed = true;
-            quest.deadline_micros = 0;
-            quest.update(ctx);
+            fail_quest(ctx, quest);
         }
     }
     QuestCreditOutcome::Applied
@@ -1701,10 +1699,8 @@ crate::game_tick_pass!(fn quest_timer_pass(ctx) {
 .filter(|q| is_expired(now, q))
 .filter(|q| !crate::transfer::is_in_transit(ctx, q.character_guid))
 .collect();
-    for mut cq in expired {
-        cq.failed = true;
-        cq.deadline_micros = 0;
-        cq.update(ctx);
+    for cq in expired {
+        fail_quest(ctx, cq);
     }
 });
 
@@ -1801,15 +1797,30 @@ pub(crate) fn debug_force_expire(
     character_guid: u64,
     quest_entry: u32,
 ) -> Result<(), String> {
-    let mut cq = character_quest_row(ctx, character_guid, quest_entry)
+    let cq = character_quest_row(ctx, character_guid, quest_entry)
         .ok_or_else(|| "you are not on that quest".to_string())?;
     if !cq.is_active() {
         return Err("quest is already terminal".to_string());
     }
+    fail_quest(ctx, cq);
+    Ok(())
+}
+
+/// Marks the attempt failed. A repeatable quest without a timer then leaves the log.
+fn fail_quest(ctx: &ReducerContext, mut cq: CharacterQuest) {
+    let leaves_log = ctx
+        .db
+        .game_quest_template()
+        .entry()
+        .find(cq.quest_entry)
+        .is_some_and(|tmpl| tmpl.repeatable && tmpl.limit_time == 0);
     cq.failed = true;
     cq.deadline_micros = 0;
-    cq.update(ctx);
-    Ok(())
+    let cq = cq.update(ctx);
+    if leaves_log {
+        // A refused removal leaves the attempt in the log as failed.
+        let _ = remove_from_log(ctx, cq);
+    }
 }
 
 pub(crate) fn apply_abandon_quest(
@@ -1817,11 +1828,16 @@ pub(crate) fn apply_abandon_quest(
     player_guid: u64,
     quest_entry: u32,
 ) -> Result<(), crate::Refusal> {
-    let mut cq = character_quest_row(ctx, player_guid, quest_entry)
+    let cq = character_quest_row(ctx, player_guid, quest_entry)
         .ok_or_else(|| "you are not on that quest".to_string())?;
     if cq.rewarded {
         return Err("cannot abandon a completed quest".into());
     }
+    remove_from_log(ctx, cq)
+}
+
+fn remove_from_log(ctx: &ReducerContext, mut cq: CharacterQuest) -> Result<(), crate::Refusal> {
+    let (player_guid, quest_entry) = (cq.character_guid, cq.quest_entry);
     if let Some(tmpl) = ctx.db.game_quest_template().entry().find(quest_entry) {
         if tmpl.src_item != 0 {
             let available = crate::items::item_count(ctx, player_guid, tmpl.src_item);

@@ -329,6 +329,8 @@ const EVENTAI_CREDIT_FIXTURE_KILL_QUEST: u32 = 5_092_961;
 const EVENTAI_CREDIT_FIXTURE_FALLBACK_QUEST: u32 = 5_092_962;
 const EVENTAI_CREDIT_FIXTURE_MISSING_OBJECTIVE_QUEST: u32 = 5_092_963;
 const EVENTAI_CREDIT_FIXTURE_EVENT_QUEST: u32 = 5_092_964;
+const EVENTAI_CREDIT_FIXTURE_REPEATABLE_QUEST: u32 = 5_092_965;
+const EVENTAI_CREDIT_FIXTURE_TIMED_REPEATABLE_QUEST: u32 = 5_092_966;
 
 fn eventai_credit_fixture_count(
     ctx: &ReducerContext,
@@ -358,6 +360,8 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         EVENTAI_CREDIT_FIXTURE_FALLBACK_QUEST,
         EVENTAI_CREDIT_FIXTURE_MISSING_OBJECTIVE_QUEST,
         EVENTAI_CREDIT_FIXTURE_EVENT_QUEST,
+        EVENTAI_CREDIT_FIXTURE_REPEATABLE_QUEST,
+        EVENTAI_CREDIT_FIXTURE_TIMED_REPEATABLE_QUEST,
     ];
 
     crate::loot::tag::clear(ctx, EVENTAI_CREDIT_FIXTURE_SOURCE);
@@ -521,6 +525,21 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         EVENTAI_CREDIT_FIXTURE_EVENT_QUEST,
         "EventAI event gate",
     ));
+    templates.insert(QuestTemplate {
+        repeatable: true,
+        ..quest_template(
+            EVENTAI_CREDIT_FIXTURE_REPEATABLE_QUEST,
+            "EventAI repeatable escort",
+        )
+    });
+    templates.insert(QuestTemplate {
+        repeatable: true,
+        limit_time: 600,
+        ..quest_template(
+            EVENTAI_CREDIT_FIXTURE_TIMED_REPEATABLE_QUEST,
+            "EventAI timed repeatable escort",
+        )
+    });
     for (id, quest_entry, target_entry) in [
         (
             509_296_100,
@@ -856,6 +875,57 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
             {
                 return Err(format!("script credit outcome differs for {guid}: distance {distance_yd}, group {group}, selected {selected_x}/{selected_z}"));
             }
+        }
+    }
+
+    let mut player = entities
+        .guid()
+        .find(EVENTAI_CREDIT_FIXTURE_PLAYER)
+        .ok_or("script credit Character missing")?;
+    player
+        .place(
+            source.x,
+            source.y,
+            source.z + 21.0,
+            crate::world::MoveClock::Unchanged,
+        )
+        .unexplored();
+    player.update(ctx);
+    for (index, (quest_entry, deadline_micros)) in [
+        (EVENTAI_CREDIT_FIXTURE_REPEATABLE_QUEST, 0),
+        (EVENTAI_CREDIT_FIXTURE_TIMED_REPEATABLE_QUEST, i64::MAX),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        CharacterQuest::insert(
+            ctx,
+            CharacterQuest {
+                id: 509_297_120 + index as u64,
+                character_guid: EVENTAI_CREDIT_FIXTURE_PLAYER,
+                owner_identity: fixture_owner,
+                quest_entry,
+                counts: vec![0],
+                rewarded: false,
+                deadline_micros,
+                failed: false,
+            },
+        );
+        let request = EventAiQuestCredit::ScriptEvent(ScriptQuestEvent {
+            quest_entry,
+            distance_yd: 20,
+            group: false,
+        });
+        if apply_eventai_credit(ctx, request, &tap_context) != QuestCreditOutcome::Applied {
+            return Err("script quest failure was refused".into());
+        }
+        let row = character_quest_row(ctx, EVENTAI_CREDIT_FIXTURE_PLAYER, quest_entry);
+        let timed = deadline_micros != 0;
+        if row.as_ref().is_some_and(|quest| !quest.failed) || row.is_none() == timed {
+            return Err(format!(
+                "a script-failed repeatable quest (timed {timed}) is wrongly in the log or not failed: {:?}",
+                row.map(|quest| quest.failed)
+            ));
         }
     }
 

@@ -78,6 +78,9 @@ fn background_passes_leave_a_character_in_escrow_unchanged() {
         shard.assert_call("debug_grant_quest", &[guid, &SCENARIO_QUEST.to_string()]);
     }
     begin_transfer(&shard, ESCROWED);
+    shard.assert_sql(&format!(
+        "UPDATE game_quest_template SET limit_time = 60 WHERE entry = {SCENARIO_QUEST}"
+    ));
     shard.assert_sql("UPDATE game_character_quest SET deadline_micros = 1");
     shard.assert_sql("UPDATE game_character SET resting = true, rested_since_micros = 1");
 
