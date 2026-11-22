@@ -57,6 +57,14 @@ impl Fixture {
         );
     }
 
+    // A spent-charge row is what a cast that spends a charge leaves on an item that cannot stack.
+    fn spend_charge(&self, item: &str) {
+        self.shard.insert_row(
+            "game_item_spell_charges",
+            &[("item_guid", &item), ("owner_guid", &1), ("spent", &1)],
+        );
+    }
+
     fn owner_of(&self, item: &str) -> Vec<String> {
         self.shard
             .query_rows(&format!(
@@ -187,4 +195,72 @@ fn an_opened_stack_cannot_be_split() {
     ));
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0]["stack_count"], "5");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_item_with_spent_charges_cannot_be_mailed() {
+    let f = fixture("spent-charge-mail");
+    let item = f.grant_at(FIXTURE_BLADE, 1, 23);
+    f.spend_charge(&item);
+    f.shard.assert_call("debug_set_money", &["1", "1000"]);
+
+    refused(
+        &f.shard,
+        "realm_mail_send",
+        &[
+            ACTOR,
+            &f.other,
+            "\"Charges\"",
+            "\"\"",
+            "0",
+            "0",
+            &item,
+            "true",
+        ],
+        lyracore_shared::mail::ITEM_HAS_SPENT_CHARGES,
+    );
+
+    assert_eq!(f.owner_of(&item), ["1"]);
+    assert!(f
+        .shard
+        .query_rows(&format!(
+            "SELECT id FROM game_mail WHERE item_entry = {FIXTURE_BLADE}"
+        ))
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_traded_item_keeps_its_spent_charges_under_its_new_guid() {
+    let f = fixture("spent-charge-trade");
+    let item = f.grant_at(FIXTURE_BLADE, 1, 23);
+    f.spend_charge(&item);
+    let partner = format!(r#"{{"guid":{},"ownership":null}}"#, f.other);
+    f.shard.assert_call("gw_initiate_trade", &[ACTOR, &f.other]);
+    f.shard.assert_call("gw_begin_trade", &[&partner]);
+    f.shard
+        .assert_call("gw_set_trade_item", &[ACTOR, "0", "23"]);
+    f.shard.assert_call("gw_accept_trade", &[ACTOR]);
+    f.shard.assert_call("gw_accept_trade", &[&partner]);
+
+    let received = f.shard.query_rows(&format!(
+        "SELECT guid FROM game_item_instance WHERE owner_guid = {} AND entry = {FIXTURE_BLADE}",
+        f.other
+    ));
+    assert_eq!(received.len(), 1, "the trade completes");
+    let new_guid = &received[0]["guid"];
+    assert_ne!(new_guid, &item, "a traded item gets a new guid");
+    let charges = f
+        .shard
+        .query_rows("SELECT item_guid, owner_guid, spent FROM game_item_spell_charges");
+    assert_eq!(charges.len(), 1, "{charges:?}");
+    assert_eq!(
+        (
+            charges[0]["item_guid"].as_str(),
+            charges[0]["owner_guid"].as_str(),
+            charges[0]["spent"].as_str()
+        ),
+        (new_guid.as_str(), f.other.as_str(), "1")
+    );
 }

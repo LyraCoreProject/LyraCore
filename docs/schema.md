@@ -153,11 +153,15 @@ and `category_cooldown_ms` retain source fields needed by equip effects. The fiv
 `game_item_template.spellcategory_*` fields override category admission for an Item cast.
 `game_spell_cd.category` identifies the shared category owner; `category_ready_micros` keeps its
 absolute deadline. `game_pending_cast.cooldown_category` preserves an Item's override, including
-zero, through cast completion. `game_pending_cast.cast_item_guid` names the Item a cast uses up
-when it goes off; zero means no cast item, and a row in flight at upgrade already used up its Item
-at start. A channel whose Item is destroyed, sold, traded, mailed or auctioned sets it, and an
-`item_target_guid` naming the same Item, to zero and runs on, as vmangos `ClearCastItem` does. Their typed defaults preserve old rows during an additive publish.
-See [equip spell migration](danger-zones.md#equip-spell-migration) before play resumes.
+zero, through cast completion. `game_pending_cast.cast_item_guid` names the Item that started a
+cast; zero means no cast item, and a row in flight at upgrade already used up its Item at start. A
+channel whose Item is destroyed, sold, traded, mailed or auctioned sets it, and an
+`item_target_guid` naming the same Item, to zero and runs on, as vmangos `ClearCastItem` does. Their
+typed defaults preserve old rows during an additive publish. The five
+`game_item_template.spellcharges_*` fields hold vmangos `SpellCharges`: zero is unlimited, and a
+negative count is expendable. After the cast's `SMSG_SPELL_GO` and effects, the cast spends a
+charge, and an expendable spell's last charge uses up one Item. See [equip spell
+migration](danger-zones.md#equip-spell-migration) before play resumes.
 
 Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully
 qualified `#[spacetimedb::table(...)]`; missing the second form undercounts.
@@ -815,6 +819,11 @@ none. It is private. The `spellmeta` dump family loads it, and packages cannot c
 Enchantment per item: `item_guid`, `enchant_id`, `expires_at` and `charges` (0 means no limit). It is
 a private scheduled table. Its schedule fires at `expires_at` and deletes the row; replacing,
 spending the last charge or deleting the item deletes it earlier.
+
+`game_item_spell_charges` (`module/src/items/spell_charges.rs`) holds the item spell charges one
+Item has spent, by `item_guid` with its `owner_guid`. No row means the Item holds its template
+charges. Only an Item that cannot stack keeps a row, as vmangos stores charges only on such an
+Item. It is private and Character-owned; deleting the Item deletes it.
 
 `game_aura` carries the frozen profile: `proc_flags`, `proc_chance`, `proc_ppm`, `proc_ex`,
 `proc_school_mask`, `proc_family_name`, `proc_family_flags`, `proc_charges`, `proc_icd_ms`,

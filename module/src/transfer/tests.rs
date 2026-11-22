@@ -1134,7 +1134,7 @@ fn the_instance_removal_dies_with_the_source_copy_and_is_not_carried() {
     );
 }
 
-const OLD_BLOBS_MAY_LACK: [&str; 13] = [
+const OLD_BLOBS_MAY_LACK: [&str; 15] = [
     "game_auction_bid_hold",
     "game_auction_hold",
     "game_buyback_item",
@@ -1147,6 +1147,8 @@ const OLD_BLOBS_MAY_LACK: [&str; 13] = [
     "game_guild_fee_hold",
     "game_instance_entry",
     "game_instance_removal",
+    "game_item_spell_charges",
+    "game_loot_money",
     "game_spell_cd",
 ];
 
@@ -1258,6 +1260,8 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         ("game_guild_fee_hold", count),
         ("game_instance_entry", count),
         ("game_instance_removal", count),
+        ("game_item_spell_charges", count),
+        ("game_loot_money", count),
         ("game_spell_cd", count),
     ];
     let carried = [TableRows {
@@ -1273,7 +1277,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         arms,
     )
     .expect("the filled payload imports");
-    assert_eq!(applied.get(), 14);
+    assert_eq!(applied.get(), 16);
 }
 
 #[test]

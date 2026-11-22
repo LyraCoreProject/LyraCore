@@ -3,7 +3,6 @@ use spacetimedb::ReducerContext;
 use crate::game_aura;
 use crate::game_player_skill;
 use crate::game_skill_ability;
-use crate::game_spell_effect;
 use crate::game_world_entity;
 use crate::spell::{CastGateRefusal, CastRefusalReason, A_MOD_SPEED, A_MOUNTED, SPEED_MOUNTED};
 use crate::SpellEffect;
@@ -75,14 +74,6 @@ pub(crate) fn restore_mount_on_rebuild(ctx: &ReducerContext, guid: u64) {
     if active_mount_spell(ctx, guid).is_some() {
         recompute_mount(ctx, guid);
     }
-}
-
-pub(crate) fn spell_is_mount(ctx: &ReducerContext, spell_id: u32) -> bool {
-    ctx.db
-        .game_spell_effect()
-        .by_spell()
-        .filter(&spell_id)
-        .any(|e| e.kind == A_MOUNTED)
 }
 
 fn rank_satisfies(rank: u16, min_skill: i32) -> bool {

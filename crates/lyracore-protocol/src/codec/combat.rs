@@ -129,6 +129,7 @@ pub mod cast_failure {
     pub const NOT_BEHIND: u8 = 0x33;
     pub const NOT_READY: u8 = 0x3C;
     pub const NOT_SHAPESHIFT: u8 = 0x3D;
+    pub const NO_CHARGES_REMAIN: u8 = 0x44;
     pub const NO_COMBO_POINTS: u8 = 0x46;
     pub const NO_DUELING: u8 = 0x47;
     pub const NO_POWER: u8 = 0x4D;

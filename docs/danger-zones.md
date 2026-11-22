@@ -203,8 +203,9 @@ an empty Loot Window, with no Lockpicking check, and release destroys it. Reimpo
 `loot` families before players can reach the Realm. Reimport `gameobjects` for chest money; until
 then chests give no money.
 
-`game_loot_money` is a Character-owned Transfer table. An older destination refuses it, so update
-both Shards before moving active World Sessions.
+`game_loot_money` is a Character-owned Transfer table. A blob from an older source lacks it and
+imports with no purse rows; an older Shard has opened no item. An older destination refuses the new
+manifest, so update both Shards before moving active World Sessions.
 
 ### Corpse AOI migration
 
@@ -234,6 +235,27 @@ column defaults to zero, which is a valid cell. After you publish this schema to
 call `debug_backfill_cell_ids` as the Operator before you open the native listeners. It restamps
 DynamicObjects and reconciles their AOI Grants. New ground effects stamp their cell on insertion;
 expiry removes the DynamicObject and its Grants in the same transaction.
+
+### Item spell charge migration
+
+`game_item_template` gains `spellcharges_1` to `spellcharges_5`, end-appended with default 0. The
+private `game_item_spell_charges` table is new and starts empty, and `CastRefusalReason` gains the
+append-only code 32. Shared import SQL defaults fill older inserts.
+
+An item cast now uses up its item only when an expendable spell, one with negative charges, spends
+its last charge, and only after the cast's `SMSG_SPELL_GO` and effects. Between the publish and the
+reimport every template has zero charges, so no item cast uses up its item: potions, food,
+bandages, scrolls and soulstones last for ever. Reimport the `items` family before players can
+reach the Realm. A Shard that keeps the fixture items its `init` seeded has Tough Jerky at zero
+charges until it is recreated. The Operator Content API and Package Deltas do not carry the
+columns, so a created item has no charges, is never used up and an update keeps them.
+
+Trade and buyback keep an item's spent charges. Mail and the Auction House refuse an item with
+spent charges, as they refuse an opened item, until their rows can carry the charges.
+
+`game_item_spell_charges` is a Character-owned Transfer table. A blob from an older source lacks it
+and imports with no rows; an older Shard has spent no charges. An older destination refuses the new
+manifest, so update both Shards before moving active World Sessions.
 
 ### Combo finisher migration
 

@@ -253,6 +253,13 @@ fn equip_cooldown_packets_gate_zero_cooldown_use_and_preserve_longer_delays() {
     assert!(!shard.call("gw_use_item", &[&actor, "10"]).status.success());
     advance(&shard, 1);
     shard.assert_call("gw_use_item", &[&actor, "10"]);
+    assert!(
+        inventory(&shard, guid)
+            .iter()
+            .any(|row| row["guid"] == item.to_string()),
+        "a Use effect without charges keeps the ring"
+    );
+    shard.assert_call("gw_destroy_item", &[&actor, "10", "1"]);
 
     shard.assert_sql(&format!(
         "DELETE FROM game_spell_cd WHERE caster_guid = {guid}"
@@ -287,6 +294,38 @@ fn equip_cooldown_packets_gate_zero_cooldown_use_and_preserve_longer_delays() {
             "SELECT * FROM game_spell_cd WHERE caster_guid = {guid}"
         )),
         before
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_item_cast_sends_its_spell_go_before_it_destroys_the_used_up_item() {
+    let (shard, mut connection, guid, _) = fixture("item-cast-go-order");
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET spellid_1 = {USE}, spelltrigger_1 = 0, spellcharges_1 = -1, spellcategory_1 = 0 WHERE entry = {FIXTURE_JERKY}"
+    ));
+    let jerky = grant(&shard, guid, FIXTURE_JERKY, 1, 23);
+    let mut frame = Vec::new();
+    CMSG_USE_ITEM {
+        bag_index: 255,
+        bag_slot: 23,
+        spell_index: 0,
+        targets: SpellCastTargets {
+            target_flags: SpellCastTargets_SpellCastTargetFlags::default(),
+        },
+    }
+    .write_unencrypted_client(&mut std::io::Cursor::new(&mut frame))
+    .unwrap();
+    let packets = request(&mut connection, 0xab, frame[6..].to_vec());
+    let spell_go = packets.iter().position(|(opcode, _)| *opcode == 0x132);
+    let destroy = packets
+        .iter()
+        .position(|(opcode, body)| *opcode == 0xaa && body.starts_with(&jerky.to_le_bytes()));
+    assert!(
+        spell_go
+            .zip(destroy)
+            .is_some_and(|(go, destroy)| go < destroy),
+        "{packets:?}"
     );
 }
 

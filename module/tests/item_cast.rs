@@ -14,6 +14,8 @@ const PRODUCT: u32 = 5_098_302;
 const CRAFT_ITEM: u32 = 5_098_303;
 const HEAL_SPELL: u32 = 5_098_304;
 const HEAL_ITEM: u32 = 5_098_305;
+const INSTANT_SPELL: u32 = 5_098_306;
+const CHARGED_ITEM: u32 = 5_098_307;
 const CAST_TIME_MS: u32 = 5000;
 // `CastRefusalReason` codes in `game_spell_cast_event_live.failure_reason`.
 const INTERRUPTED: &str = "2";
@@ -195,6 +197,50 @@ fn an_item_naming_itself_as_its_target_is_refused_and_kept() {
     assert_eq!(stack(&shard, HEAL_ITEM), Some(2));
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_item_spell_without_charges_keeps_its_item() {
+    let shard = stage("item-cast-no-charges");
+    let slot = charged_fixture(&shard, 1, 0);
+    use_item(&shard, &slot);
+    pass_global_cooldown(&shard);
+    use_item(&shard, &slot);
+    assert_eq!(stack(&shard, CHARGED_ITEM), Some(1));
+    assert!(spent_charges(&shard).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_item_without_charges_left_stays_and_refuses_its_use() {
+    let shard = stage("item-cast-no-charges-remain");
+    let slot = charged_fixture(&shard, 1, 1);
+    use_item(&shard, &slot);
+    assert_eq!(stack(&shard, CHARGED_ITEM), Some(1));
+    assert_eq!(spent_charges(&shard), ["1"]);
+
+    pass_global_cooldown(&shard);
+    let refused = shard.call("gw_use_item", &[&actor(PLAYER), &slot]);
+    let text = String::from_utf8_lossy(&refused.stderr);
+    assert!(!refused.status.success(), "{text}");
+    assert!(text.contains(ItemRefusal::NotRightNow.as_tag()), "{text}");
+    assert_eq!(stack(&shard, CHARGED_ITEM), Some(1));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_expendable_item_is_used_up_by_its_last_charge() {
+    let shard = stage("item-cast-last-charge");
+    let slot = charged_fixture(&shard, 1, -2);
+    use_item(&shard, &slot);
+    assert_eq!(stack(&shard, CHARGED_ITEM), Some(1));
+    assert_eq!(spent_charges(&shard), ["1"]);
+
+    pass_global_cooldown(&shard);
+    use_item(&shard, &slot);
+    assert_eq!(stack(&shard, CHARGED_ITEM), None);
+    assert!(spent_charges(&shard).is_empty());
+}
+
 fn stage(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);
     shard.publish_module();
@@ -260,15 +306,52 @@ fn effect(shard: &Standalone, spell_id: u32, index: u8, (kind, points): (u8, i32
 }
 
 fn item(shard: &Standalone, entry: u32, name: &str, spell_id: u32) {
+    charged_item(shard, entry, name, spell_id, (5, -1));
+}
+
+fn charged_item(
+    shard: &Standalone,
+    entry: u32,
+    name: &str,
+    spell_id: u32,
+    (max_stack, charges): (u32, i32),
+) {
     shard.insert_row(
         "game_item_template",
         &[
             ("entry", &entry),
             ("name", &name),
-            ("max_stack", &5),
+            ("max_stack", &max_stack),
             ("spellid_1", &spell_id),
+            ("spellcharges_1", &charges),
         ],
     );
+}
+
+fn charged_fixture(shard: &Standalone, max_stack: u32, charges: i32) -> String {
+    spell(shard, INSTANT_SPELL, "Instant item heal fixture", 0);
+    effect(shard, INSTANT_SPELL, 0, (E_HEAL, 100), 0);
+    let name = "Charged item fixture";
+    charged_item(
+        shard,
+        CHARGED_ITEM,
+        name,
+        INSTANT_SPELL,
+        (max_stack, charges),
+    );
+    grant(shard, CHARGED_ITEM, 1)
+}
+
+fn spent_charges(shard: &Standalone) -> Vec<String> {
+    shard
+        .query_rows("SELECT spent FROM game_item_spell_charges WHERE owner_guid = 1")
+        .into_iter()
+        .map(|row| row["spent"].clone())
+        .collect()
+}
+
+fn pass_global_cooldown(shard: &Standalone) {
+    shard.assert_call("debug_advance_roll_batch", &["40"]);
 }
 
 fn grant(shard: &Standalone, entry: u32, count: u32) -> String {

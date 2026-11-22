@@ -240,8 +240,8 @@ fn soulstone_item(shard: &Standalone, owner: u64) {
         ],
     );
     shard.assert_sql(&format!(
-        "UPDATE game_item_template SET spellid_1 = {SOULSTONE_AURA}, spelltrigger_1 = 0 \
-         WHERE entry = {HEARTHSTONE}"
+        "UPDATE game_item_template SET spellid_1 = {SOULSTONE_AURA}, spelltrigger_1 = 0, \
+         spellcharges_1 = -1 WHERE entry = {HEARTHSTONE}"
     ));
     shard.assert_call(
         "debug_grant_item",

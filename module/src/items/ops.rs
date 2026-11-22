@@ -439,21 +439,6 @@ pub(crate) fn use_up_one(ctx: &ReducerContext, item_guid: u64) {
     }
 }
 
-pub(crate) fn spell_keeps_item(ctx: &ReducerContext, spell_id: u32) -> bool {
-    let reusable_effect = ctx
-        .db
-        .game_spell_effect()
-        .by_spell()
-        .filter(&spell_id)
-        .any(|e| {
-            matches!(
-                e.kind,
-                crate::spell::E_RECALL_HOME | crate::spell::E_SUMMON_HOSTILE
-            )
-        });
-    reusable_effect || crate::mount::spell_is_mount(ctx, spell_id)
-}
-
 fn is_mana_class(ctx: &ReducerContext, player_guid: u64) -> bool {
     ctx.db
         .game_character()

@@ -146,6 +146,12 @@ pub(crate) fn detach_item(
     if crate::loot::has_generated_loot(ctx, inst.guid) {
         return Err(lyracore_shared::mail::ITEM_HAS_LOOT.to_string().into());
     }
+    // A Mail row cannot carry spent charges; see the item_use Feature Ledger deviation.
+    if crate::items::has_spent_charges(ctx, inst.guid) {
+        return Err(lyracore_shared::mail::ITEM_HAS_SPENT_CHARGES
+            .to_string()
+            .into());
+    }
     let snapshot = ItemSnapshot::from(&inst);
     if snapshot.item_text_id != 0 {
         use crate::mail_text::game_item_text;

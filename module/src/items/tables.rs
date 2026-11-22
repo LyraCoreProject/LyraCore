@@ -149,6 +149,17 @@ pub struct ItemTemplate {
     pub money_min: u32,
     #[default(0u32)]
     pub money_max: u32,
+    // vmangos SpellCharges per spell slot: negative is expendable, zero is unlimited.
+    #[default(0i32)]
+    pub spellcharges_1: i32,
+    #[default(0i32)]
+    pub spellcharges_2: i32,
+    #[default(0i32)]
+    pub spellcharges_3: i32,
+    #[default(0i32)]
+    pub spellcharges_4: i32,
+    #[default(0i32)]
+    pub spellcharges_5: i32,
 }
 
 impl ItemTemplate {
@@ -227,6 +238,11 @@ impl ItemTemplate {
             lock_id: 0,
             money_min: 0,
             money_max: 0,
+            spellcharges_1: 0,
+            spellcharges_2: 0,
+            spellcharges_3: 0,
+            spellcharges_4: 0,
+            spellcharges_5: 0,
         }
     }
 }
@@ -357,6 +373,7 @@ impl ItemInstance {
         let previous = items.guid().find(guid);
         let removed = items.guid().delete(guid);
         super::forget_temporary_enchantment(ctx, guid);
+        super::spell_charges::forget_item(ctx, guid);
         crate::loot::forget_item_loot(ctx, guid);
         if let Some(row) = previous {
             release_cast_item(ctx, &row);

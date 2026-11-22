@@ -11,7 +11,7 @@ def check_operator_items(host):
     fields = dict(zip([column['name']['some'] for column in template['schema']['elements']], template['rows'][0]))
     for column in ['entry', 'damage_school', 'lock_id', 'money_min', 'money_max'] + [
         f'{prefix}_{slot}'
-        for prefix in ['spellppmrate', 'spellcategory']
+        for prefix in ['spellppmrate', 'spellcategory', 'spellcharges']
         for slot in range(1, 6)
     ]:
         del fields[column]

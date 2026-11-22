@@ -530,6 +530,8 @@ pub(crate) const TRANSFER_TABLES_OLD_BLOBS_MAY_LACK: &[&str] = &[
     "game_guild_fee_hold",
     "game_instance_entry",
     "game_instance_removal",
+    "game_item_spell_charges",
+    "game_loot_money",
     "game_spell_cd",
 ];
 

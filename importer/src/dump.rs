@@ -128,6 +128,11 @@ pub(crate) mod it {
     pub const SPELLPPMRATE_3: &str = "spellppmrate_3";
     pub const SPELLPPMRATE_4: &str = "spellppmrate_4";
     pub const SPELLPPMRATE_5: &str = "spellppmrate_5";
+    pub const SPELLCHARGES_1: &str = "spellcharges_1";
+    pub const SPELLCHARGES_2: &str = "spellcharges_2";
+    pub const SPELLCHARGES_3: &str = "spellcharges_3";
+    pub const SPELLCHARGES_4: &str = "spellcharges_4";
+    pub const SPELLCHARGES_5: &str = "spellcharges_5";
     pub const BONDING: &str = "bonding";
     pub const PAGE_TEXT: &str = "page_text";
     pub const START_QUEST: &str = "start_quest";

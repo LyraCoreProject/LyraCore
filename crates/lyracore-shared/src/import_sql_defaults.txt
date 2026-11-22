@@ -25,6 +25,11 @@ game_item_template spellcategory_2 0
 game_item_template spellcategory_3 0
 game_item_template spellcategory_4 0
 game_item_template spellcategory_5 0
+game_item_template spellcharges_1 0
+game_item_template spellcharges_2 0
+game_item_template spellcharges_3 0
+game_item_template spellcharges_4 0
+game_item_template spellcharges_5 0
 game_spell_cd category 0
 game_spell_cd category_ready_micros 0
 game_spell_effect equip_supported false
