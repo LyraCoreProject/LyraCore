@@ -1336,7 +1336,6 @@ impl CreatureWorld for Scenario {
         let awake = self.awake.borrow();
         TickSweep {
             active: awake.active.clone(),
-            awake: awake.active.clone(),
             pets: awake.pets.clone(),
             in_combat: awake.in_combat.clone(),
         }
@@ -3805,10 +3804,6 @@ type Twist = fn(Scenario) -> Scenario;
 
 type CastEffect = (u64, u32, u64);
 
-fn pack_mate(w: Scenario, guid: u64, at: Point) -> Scenario {
-    w.creature(guid, at).tuned_aggro_range(guid, 1)
-}
-
 #[test]
 fn a_creature_engages_the_nearest_hostile_player_it_can_see() {
     let mut w = wolf_and_player(p(15.0, 0.0, 10.0)).player(RANGER, p(3.0, 0.0, 10.0));
@@ -3948,101 +3943,6 @@ fn a_soothed_crowd_controlled_or_near_death_creature_starts_no_fight() {
             "Mind Soothe, stuns and a pending rout stop the pull ({case})"
         );
     }
-}
-
-#[test]
-fn a_pack_mate_answers_a_call_it_can_hear() {
-    let mut w = pack_mate(
-        wolf_and_player(p(5.0, 0.0, 10.0)),
-        PACK_MATE,
-        p(0.0, 8.0, 10.0),
-    );
-    w = pack_mate(w, FAR_MATE, p(0.0, 40.0, 10.0)).awake([WOLF, PACK_MATE, FAR_MATE]);
-    let tick = w.tick(true, catch_all());
-    run_cycle(&mut w, tick);
-
-    assert_eq!(
-        w.pulls(),
-        [
-            (WOLF, HUNTER, Pull::Noticed),
-            (PACK_MATE, HUNTER, Pull::Assisted)
-        ],
-        "assist reaches only neighbors within range of the caller"
-    );
-}
-
-#[test]
-fn a_neighbor_of_the_wrong_kind_place_or_sight_ignores_the_call() {
-    let cases: [(&str, Twist); 3] = [
-        ("another faction", |w| w.faction(PACK_MATE, 99)),
-        ("another instance", |w| w.in_instance(PACK_MATE, 7)),
-        ("a wall between them", |w| w.wall_between(PACK_MATE, WOLF)),
-    ];
-    for (case, apart) in cases {
-        let mut w = apart(
-            pack_mate(
-                wolf_and_player(p(5.0, 0.0, 10.0)),
-                PACK_MATE,
-                p(0.0, 8.0, 10.0),
-            )
-            .awake([WOLF, PACK_MATE]),
-        );
-        let tick = w.tick(true, catch_all());
-        run_cycle(&mut w, tick);
-
-        assert_eq!(
-            w.pulls(),
-            [(WOLF, HUNTER, Pull::Noticed)],
-            "assist needs same kind, same partition and line of sight ({case})"
-        );
-    }
-}
-
-#[test]
-fn nobody_pulling_means_no_assist_scan_at_all() {
-    let mut w = pack_mate(
-        Scenario::new(HALF_WAY)
-            .creature(WOLF, p(0.0, 0.0, 10.0))
-            .at_war(BEASTS, ALLIANCE)
-            .player(HUNTER, p(100.0, 0.0, 10.0)),
-        PACK_MATE,
-        p(0.0, 5.0, 10.0),
-    )
-    .awake([WOLF, PACK_MATE]);
-    let tick = w.tick(true, catch_all());
-    let outcome = run_cycle(&mut w, tick);
-
-    assert_eq!(
-        outcome
-            .rows_visited
-            .iter()
-            .find(|(key, _)| *key == "assist"),
-        Some(&("assist", 0)),
-        "a firing with no pull must not walk the active set"
-    );
-}
-
-#[test]
-fn a_neighbor_between_two_callers_answers_the_lower_guid() {
-    let mut w = Scenario::new(HALF_WAY)
-        .creature(WOLF, p(-3.0, 0.0, 10.0))
-        .creature(PACK_MATE, p(3.0, 0.0, 10.0))
-        .at_war(BEASTS, ALLIANCE)
-        .player(HUNTER, p(-3.0, 2.0, 10.0))
-        .player(RANGER, p(3.0, 2.0, 10.0));
-    w = pack_mate(w, FAR_MATE, p(0.0, 0.0, 10.0)).awake([WOLF, PACK_MATE, FAR_MATE]);
-    let tick = w.tick(true, catch_all());
-    run_cycle(&mut w, tick);
-
-    assert_eq!(
-        w.pulls(),
-        [
-            (WOLF, HUNTER, Pull::Noticed),
-            (PACK_MATE, RANGER, Pull::Noticed),
-            (FAR_MATE, HUNTER, Pull::Assisted)
-        ],
-        "a neighbor between two callers joins the same one every run"
-    );
 }
 
 #[test]
@@ -5893,7 +5793,6 @@ fn discovery_stays_on_the_narrow_candidate_universes() {
                 ("advance", 0),
                 ("patrol", 0),
                 ("aggro", 1),
-                ("assist", 0),
                 ("pet", 0),
                 ("eventai", 0),
                 ("cast", 1),

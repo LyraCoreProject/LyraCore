@@ -2,12 +2,8 @@ use super::tick::cadence::MOVE_TICK_SECS;
 
 const FLEE_HEALTH_PCT: u32 = 15;
 
-const ASSIST_RADIUS: f32 = 10.0;
-
-pub(crate) fn within_assist_radius(ax: f32, ay: f32, bx: f32, by: f32) -> bool {
-    let (dx, dy) = (ax - bx, ay - by);
-    dx * dx + dy * dy <= ASSIST_RADIUS * ASSIST_RADIUS
-}
+// vmangos World.cpp CreatureFamilyAssistanceRadius default.
+pub(super) const ASSIST_RADIUS: f32 = 10.0;
 
 pub(crate) fn hp_pct_below(health: u32, max_health: u32, pct: u32) -> bool {
     health > 0 && (health as u64) * 100 < (max_health as u64) * (pct as u64)
@@ -437,14 +433,6 @@ mod tests {
             (d - radius).abs() < eps,
             "max rand_b should sit on the rim, dist {d} vs {radius}"
         );
-    }
-
-    #[test]
-    fn assist_radius_is_inclusive_boundary() {
-        assert!(within_assist_radius(0.0, 0.0, 7.0, 0.0));
-        assert!(within_assist_radius(0.0, 0.0, 10.0, 0.0));
-        assert!(!within_assist_radius(0.0, 0.0, 12.0, 0.0));
-        assert!(within_assist_radius(3.0, 4.0, 3.0, 4.0));
     }
 
     #[test]

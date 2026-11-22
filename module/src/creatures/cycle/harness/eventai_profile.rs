@@ -261,52 +261,6 @@ fn broadcast_text_emote_keeps_its_own_chat_type() {
 }
 
 #[test]
-fn defensive_creatures_assist_but_passive_creatures_do_not() {
-    let build = |state| {
-        let mut scenario = Scenario::new(1_000_000)
-            .creature(CREATURE, point(0.0))
-            .entry(CREATURE, ENTRY)
-            .creature(ALLY, point(2.0))
-            .entry(ALLY, ENTRY + 1)
-            .player(TARGET, point(3.0))
-            .awake([CREATURE, ALLY])
-            .at_war(BEASTS, ALLIANCE)
-            .eventai_native_definition(definition(
-                EventAiSubject::Guid(ALLY),
-                6,
-                InstructionSelection::All,
-                vec![CreatureInstruction::SetReactState(
-                    SetReactStateInstruction { state },
-                )],
-            ));
-        dispatch(&mut scenario, ALLY);
-        scenario
-    };
-
-    let mut defensive = build(CreatureReactState::Defensive);
-    let tick = defensive.tick(
-        true,
-        TickScope::CatchAll {
-            dedicated: HashSet::new(),
-            slice: crate::creatures::TickSlice::WHOLE,
-        },
-    );
-    run_cycle(&mut defensive, tick);
-    assert!(defensive.pulls().contains(&(ALLY, TARGET, Pull::Assisted)));
-
-    let mut passive = build(CreatureReactState::Passive);
-    let tick = passive.tick(
-        true,
-        TickScope::CatchAll {
-            dedicated: HashSet::new(),
-            slice: crate::creatures::TickSlice::WHOLE,
-        },
-    );
-    run_cycle(&mut passive, tick);
-    assert!(!passive.pulls().iter().any(|(guid, _, _)| *guid == ALLY));
-}
-
-#[test]
 fn random_home_and_random_current_keep_distinct_anchors() {
     let mut scenario = world().home(CREATURE, point(-8.0), false);
     assert!(EventAiWorld::apply_eventai_movement(

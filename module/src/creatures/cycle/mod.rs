@@ -7,8 +7,8 @@ use super::ai::{
     aggro_radius, fear_step_for_tick, feared_flee_step, finite_point, flee_step, hp_pct_below,
     is_aggro_candidate, leg_in_flight, leg_toward, may_start_rout, nearest_waypoint_idx,
     next_waypoint_idx, rout_close_ms, spline_t, stealth_detect_range, wander_point,
-    within_assist_radius, wounded_slow_factor, CHASE_LEASH_SQ, CHASE_MELEE_SQ, CHASE_REPATH_COS,
-    FLEE_LEG_YD, RETURN_LEASH_SQ, WANDER_CHANCE_PCT, WANDER_RADIUS,
+    wounded_slow_factor, CHASE_LEASH_SQ, CHASE_MELEE_SQ, CHASE_REPATH_COS, FLEE_LEG_YD,
+    RETURN_LEASH_SQ, WANDER_CHANCE_PCT, WANDER_RADIUS,
 };
 use super::cast_condition;
 use super::eventai::EventAiRequest;
@@ -536,7 +536,6 @@ fn timed<W: CreatureWorld, T>(w: &mut W, pass: &'static str, f: impl FnOnce(&mut
 pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> CycleOutcome {
     let TickSweep {
         active,
-        awake,
         pets,
         in_combat,
     } = timed(w, "sweep", |w| w.awake_creatures(&tick.scope, tick.sense));
@@ -556,12 +555,8 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         rows.extend(maintenance);
     }
     if tick.sense {
-        let (pulls, seen) = timed(w, "aggro", |w| aggro(w, &active));
+        let seen = timed(w, "aggro", |w| aggro(w, &active));
         rows.push(("aggro", seen as u64));
-        rows.push((
-            "assist",
-            timed(w, "assist", |w| assist(w, &awake, pulls)) as u64,
-        ));
         rows.push((
             "pet",
             timed(w, "pet", |w| pet_behavior(w, &tick, &pets)) as u64,
@@ -744,16 +739,6 @@ fn patrol<W: IdleSink + MotionSink>(w: &mut W, tick: &TickContext, active: &Hash
     visited
 }
 
-#[derive(Clone, Copy)]
-struct Called {
-    guid: u64,
-    at: Point,
-    map_id: u32,
-    instance_id: u64,
-    faction_template: u32,
-    victim: u64,
-}
-
 fn sensing_order(w: &impl EngageSink, active: &HashSet<u64>) -> Vec<Sensor> {
     let mut candidates = w.sensing_creatures(active);
     candidates.sort_unstable_by_key(|c| c.guid);
@@ -761,7 +746,7 @@ fn sensing_order(w: &impl EngageSink, active: &HashSet<u64>) -> Vec<Sensor> {
 }
 
 // Decide every pull before hooks run Package code that can change the candidates.
-fn aggro<W: EngageSink>(w: &mut W, active: &HashSet<u64>) -> (Vec<Called>, usize) {
+fn aggro<W: EngageSink>(w: &mut W, active: &HashSet<u64>) -> usize {
     let targets: Vec<AggroTarget> = w
         .players()
         .into_iter()
@@ -774,12 +759,12 @@ fn aggro_with_targets<W: EngageSink>(
     w: &mut W,
     active: &HashSet<u64>,
     targets: &[AggroTarget],
-) -> (Vec<Called>, usize) {
+) -> usize {
     if targets.is_empty() {
-        return (Vec::new(), 0);
+        return 0;
     }
     let sensors = sensing_order(w, active);
-    let mut called = Vec::new();
+    let mut pulls = Vec::new();
     for s in &sensors {
         if s.would_rout
             || s.cannot_act
@@ -790,19 +775,12 @@ fn aggro_with_targets<W: EngageSink>(
         let Some(victim) = nearest_noticed(w, s, targets) else {
             continue;
         };
-        called.push(Called {
-            guid: s.guid,
-            at: s.at,
-            map_id: s.map_id,
-            instance_id: s.instance_id,
-            faction_template: s.faction_template,
-            victim,
-        });
+        pulls.push((s.guid, victim));
     }
-    for c in &called {
-        w.engage(c.guid, c.victim, Pull::Noticed);
+    for (creature, victim) in pulls {
+        w.engage(creature, victim, Pull::Noticed);
     }
-    (called, sensors.len())
+    sensors.len()
 }
 
 fn nearest_noticed<W: EngageSink>(w: &W, s: &Sensor, targets: &[AggroTarget]) -> Option<u64> {
@@ -837,45 +815,6 @@ fn nearest_noticed<W: EngageSink>(w: &W, s: &Sensor, targets: &[AggroTarget]) ->
 fn dist_sq(a: Point, b: Point) -> f32 {
     let (dx, dy, dz) = (a.x - b.x, a.y - b.y, a.z - b.z);
     dx * dx + dy * dy + dz * dz
-}
-
-fn assist<W: EngageSink>(w: &mut W, active: &HashSet<u64>, mut calls: Vec<Called>) -> usize {
-    if calls.is_empty() {
-        return 0;
-    }
-    calls.sort_unstable_by_key(|c| c.guid);
-    let neighbors = sensing_order(w, active);
-    let mut answered = Vec::new();
-    for n in &neighbors {
-        if n.would_rout
-            || n.cannot_act
-            || n.react_state == crate::creatures::CreatureReactState::Passive
-        {
-            continue;
-        }
-        let call = calls.iter().find(|c| {
-            c.guid != n.guid
-                && c.map_id == n.map_id
-                && c.faction_template == n.faction_template
-                && c.instance_id == n.instance_id
-                && within_assist_radius(c.at.x, c.at.y, n.at.x, n.at.y)
-                && w.line_of_sight(
-                    n.guid,
-                    Point {
-                        x: c.at.x,
-                        y: c.at.y,
-                        z: n.at.z,
-                    },
-                )
-        });
-        if let Some(call) = call {
-            answered.push((n.guid, call.victim));
-        }
-    }
-    for (neighbor, victim) in answered {
-        w.engage(neighbor, victim, Pull::Assisted);
-    }
-    neighbors.len()
 }
 
 const PET_FOLLOW_BAND_SQ: f32 = 64.0;

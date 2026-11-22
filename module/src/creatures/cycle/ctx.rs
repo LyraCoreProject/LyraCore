@@ -115,8 +115,7 @@ pub(crate) fn character_arrived(ctx: &ReducerContext, guid: u64) {
         chase_expansions: std::cell::Cell::new(0),
     };
     crate::vmap::with_query_cache(|| {
-        let (pulls, _) = super::aggro_with_targets(&mut world, &active, &[target]);
-        super::assist(&mut world, &active, pulls);
+        super::aggro_with_targets(&mut world, &active, &[target]);
     });
     for attack in ctx.db.game_melee_attack().by_target().filter(&guid) {
         world.enter_combat(attack.attacker_guid);

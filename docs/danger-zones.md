@@ -181,6 +181,15 @@ the new manifest tables. Update both Shards before moving active World Sessions.
 copy after a refusal and do not attest an import that failed. The older Item row codecs remain
 explicit in `module/src/transfer/legacy_item_rows.rs`.
 
+### Call for assistance migration
+
+`game_faction_template` gains `flags`, end-appended with default 0. The private one-shot
+`game_creature_assistance_call` schedule is new and starts empty. Reimport the `dbc` family
+straight after the publish. Until then no faction template carries the respond-to-call-for-help
+flag, so no creature answers a Call for Assistance, including the pack mates that joined a
+proximity pull before this revision. Direct SQL INSERTs must supply `flags`; shared import SQL defaults fill
+older inserts. No repair is needed.
+
 ### Corpse AOI migration
 
 The native runtime indexes `game_corpse` by map, Instance and `cell`. The end-appended `cell`

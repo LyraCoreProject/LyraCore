@@ -39,13 +39,14 @@ pub(crate) use tables::PURSUIT_WINDOW_MS;
 
 pub use engage::AttackStart;
 pub(crate) use engage::{
-    apply_start_attack, apply_start_ranged_attack, arm_creature_engagement, break_own_attacks,
-    disengage, engage_passive_creature, enter_combat, is_engaged, is_hostile_target, may_harm,
-    may_help, refresh_leash, relation, request_attack, resume_creature_engagement,
-    start_melee_attack, stop_attack_for, stop_duel_combat, suspend_hostile_references,
-    sweep_delete_game_combat_check_schedule, sweep_transfer_game_combat_check_schedule,
-    validate_attack_target, weapon_changed, AttackRefusal, Relation, COMBAT_DROP_MS,
-    SWING_ERROR_BAD_FACING, SWING_ERROR_NONE, SWING_ERROR_NOT_IN_RANGE,
+    answer_creature_assistance, apply_start_attack, apply_start_ranged_attack,
+    arm_creature_engagement, break_own_attacks, disengage, engage_passive_creature, enter_combat,
+    is_engaged, is_hostile_target, may_harm, may_help, refresh_leash, relation, request_attack,
+    resume_creature_engagement, start_melee_attack, stop_attack_for, stop_duel_combat,
+    suspend_hostile_references, sweep_delete_game_combat_check_schedule,
+    sweep_transfer_game_combat_check_schedule, validate_attack_target, weapon_changed,
+    AttackRefusal, Relation, COMBAT_DROP_MS, SWING_ERROR_BAD_FACING, SWING_ERROR_NONE,
+    SWING_ERROR_NOT_IN_RANGE,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use folds::defender_block_value;
