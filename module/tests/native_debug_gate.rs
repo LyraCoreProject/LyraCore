@@ -92,6 +92,7 @@ fn debug_reducers_build_does_not_export_conformance_entry() {
         "game_native_conformance_birth",
         "game_conformance_swing_random",
         "game_conformance_spell_random",
+        "game_conformance_wear_random",
         "game_conformance_schedule_revision",
     ] {
         assert!(!schema_section(&schema, "Tables")

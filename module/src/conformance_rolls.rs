@@ -7,6 +7,7 @@ pub(crate) enum RollStream {
     Caster(u64),
     Target(u64),
     Swing(u64),
+    Wear(u64),
 }
 
 /// Production draws `ctx.random`; the conformance fixture substitutes its seeded stream.
@@ -40,6 +41,13 @@ mod fixture {
         pub state: u64,
     }
 
+    #[table(accessor = game_conformance_wear_random)]
+    pub struct WearRandom {
+        #[primary_key]
+        pub character_guid: u64,
+        pub state: u64,
+    }
+
     #[table(accessor = game_conformance_spell_random)]
     pub struct SpellRandom {
         #[primary_key]
@@ -49,7 +57,11 @@ mod fixture {
         pub state: u64,
     }
 
-    crate::outside_table_catalog!(game_conformance_swing_random, game_conformance_spell_random);
+    crate::outside_table_catalog!(
+        game_conformance_swing_random,
+        game_conformance_spell_random,
+        game_conformance_wear_random
+    );
 
     fn next(state: &mut u64) -> u32 {
         *state = state.wrapping_add(0x9e3779b97f4a7c15);
@@ -84,6 +96,13 @@ mod fixture {
                 let mut row = swings.character_guid().find(guid)?;
                 let draw = next(&mut row.state);
                 swings.character_guid().update(row);
+                Some(draw)
+            }
+            RollStream::Wear(guid) => {
+                let wears = ctx.db.game_conformance_wear_random();
+                let mut row = wears.character_guid().find(guid)?;
+                let draw = next(&mut row.state);
+                wears.character_guid().update(row);
                 Some(draw)
             }
         }
