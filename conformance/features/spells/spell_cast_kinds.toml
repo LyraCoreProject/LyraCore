@@ -465,6 +465,16 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/school_immunity.rs"
+function = "a_refused_harmful_spell_draws_the_creature_into_combat"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "a_periodic_damage_tick_on_a_creature_that_became_immune_deals_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
 function = "a_harmful_spell_without_damage_is_refused_by_a_creature_immune_to_its_school"
 rung = "durable_module"
 

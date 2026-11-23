@@ -301,7 +301,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     continue;
                 }
                 let spell = ctx.db.game_spell().spell_id().find(a.spell_id);
-                // vmangos Aura::PeriodicTick tests IsImmuneToDamage on every tick.
+                // vmangos Aura::PeriodicTick tests the unit's damage immunity on every tick.
                 if spell.as_ref().is_some_and(|spell| {
                     crate::spell::school_refuses_spell(ctx, a.caster_guid, &target, spell, true)
                 }) {

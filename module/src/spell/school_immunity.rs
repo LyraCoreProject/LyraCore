@@ -80,7 +80,7 @@ impl ImmunityAura {
             || self.source_negative != Some(true)
     }
 
-    // vmangos `IsImmuneToSchool` refuses the other polarity; damage immunity a harmful Spell.
+    // vmangos `IsImmuneToSpell`: other polarity; damage immunity: a harmful Spell on another unit.
     fn refuses_spell(&self, harmful: bool, on_self: bool) -> bool {
         match self.source_aura {
             SOURCE_SCHOOL_IMMUNITY => self.both_polarities || self.source_negative != Some(harmful),

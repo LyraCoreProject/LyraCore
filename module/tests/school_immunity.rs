@@ -2,10 +2,13 @@ mod support;
 
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
 use lyracore_package_delta::packed_spell_effect_id;
+use lyracore_shared::constants::unit_flags::IN_COMBAT;
 use lyracore_shared::spell::taxonomy::{
-    A_IMMUNITY, A_MOD_DAMAGE_TAKEN, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE, E_HEAL, E_NEXT_SWING,
-    P_SCHOOL_MASK, T_AREA_ENEMY, T_SELF, T_TARGET_ENEMY,
+    A_IMMUNITY, A_MOD_DAMAGE_TAKEN, A_PERIODIC_DAMAGE, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE,
+    E_HEAL, E_NEXT_SWING, P_SCHOOL_MASK, T_AREA_ENEMY, T_SELF, T_TARGET_ENEMY,
 };
+use serde_json::json;
+use std::time::{Duration, Instant};
 use support::{event_rows, fence_subscription, subscribe_with_fence, Field, Standalone};
 
 const PLAYER: u64 = 1;
@@ -33,6 +36,12 @@ const IMMUNITY_FIXTURE: u32 = 5_117_203;
 const HEAL_FIXTURE: u32 = 5_117_204;
 const FROST_AREA_FIXTURE: u32 = 5_117_205;
 const DEBUFF_FIXTURE: u32 = 5_117_206;
+const FROST_DOT_FIXTURE: u32 = 5_117_207;
+const DOT_PERIOD_MS: u32 = 3_000;
+// 50 ms scheduler ticks that pass one DoT period.
+const ONE_PERIOD_TICKS: &str = "61";
+const SMSG_SPELLORDAMAGE_IMMUNE: u64 = 0x263;
+const PACKET_WAIT: Duration = Duration::from_secs(10);
 const HEAL_COST: u32 = 100;
 const MANA: u32 = 1_000;
 const SHOOT: u32 = 5019;
@@ -77,21 +86,7 @@ fn a_creature_whose_template_is_immune_to_physical_takes_no_white_swing_damage()
 fn a_frost_spell_on_a_frost_immune_creature_reports_immune_and_deals_nothing() {
     let mut standalone = Standalone::start("school-immunity-frost-spell");
     let wolf = stage(&mut standalone);
-    insert_spell(
-        &standalone,
-        FROSTBOLT_FIXTURE,
-        &[
-            ("school_mask", &FROST),
-            ("range_yd", &30),
-            ("is_negative", &true),
-            ("cast_flags", &CAST_FLAG_IGNORE_RESISTANCES),
-        ],
-        &[
-            ("kind", &E_DAMAGE),
-            ("base_points", &50),
-            ("target", &T_TARGET_ENEMY),
-        ],
-    );
+    insert_frostbolt(&standalone);
     set_template_school_immunity(&standalone, FROST);
 
     let go = cast_go(&standalone, FROSTBOLT_FIXTURE, wolf);
@@ -108,6 +103,96 @@ fn a_frost_spell_on_a_frost_immune_creature_reports_immune_and_deals_nothing() {
     assert!(
         health(&standalone, wolf) < WOLF_HEALTH,
         "without the immunity the same bolt lands"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_refused_harmful_spell_draws_the_creature_into_combat() {
+    let mut standalone = Standalone::start("school-immunity-refusal-engages");
+    let wolf = stage(&mut standalone);
+    insert_frostbolt(&standalone);
+    set_template_school_immunity(&standalone, FROST);
+
+    let go = cast_go(&standalone, FROSTBOLT_FIXTURE, wolf);
+    assert_eq!(go["miss_info"], MISS_IMMUNE);
+    let threat = standalone.query_rows(&format!(
+        "SELECT threat FROM game_threat WHERE creature_guid = {wolf} AND source_guid = {PLAYER}"
+    ));
+    assert_eq!(
+        threat.len(),
+        1,
+        "vmangos Spell::DoAllEffectOnTarget engages on an immune miss"
+    );
+    assert_eq!(threat[0]["threat"], "0");
+    for unit in [PLAYER, wolf] {
+        let flags: u32 = standalone.query_rows(&format!(
+            "SELECT unit_flags FROM game_world_entity WHERE guid = {unit}"
+        ))[0]["unit_flags"]
+            .parse()
+            .unwrap();
+        assert_ne!(flags & IN_COMBAT, 0, "unit {unit} is in combat");
+    }
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_periodic_damage_tick_on_a_creature_that_became_immune_deals_nothing() {
+    let mut standalone = Standalone::start("school-immunity-periodic-tick");
+    let wolf = stage(&mut standalone);
+    let mut wire = standalone.connect_reducers(&["SELECT * FROM game_native_packet"]);
+    wire.call("native_world_open", json!([42])).unwrap();
+    wire.call("debug_native_enter_world", json!([PLAYER]))
+        .unwrap();
+    insert_spell(
+        &standalone,
+        FROST_DOT_FIXTURE,
+        &[
+            ("school_mask", &FROST),
+            ("range_yd", &30),
+            ("is_negative", &true),
+            ("duration_ms", &30_000),
+            ("cast_flags", &CAST_FLAG_IGNORE_RESISTANCES),
+        ],
+        &[
+            ("kind", &A_PERIODIC_DAMAGE),
+            ("base_points", &9),
+            ("period_ms", &DOT_PERIOD_MS),
+            ("target", &T_TARGET_ENEMY),
+        ],
+    );
+    let go = cast_go(&standalone, FROST_DOT_FIXTURE, wolf);
+    assert_eq!(
+        go["miss_info"], MISS_NONE,
+        "the DoT lands before the immunity"
+    );
+    give_immunity_aura(&standalone, wolf, FROST, SOURCE_SCHOOL_IMMUNITY);
+    let first_tick = next_tick(&standalone, wolf);
+    let health_before = health(&standalone, wolf);
+    wire.drain_packets();
+
+    standalone.assert_call("debug_advance_roll_batch", &[ONE_PERIOD_TICKS]);
+    assert_eq!(health(&standalone, wolf), health_before);
+    assert!(
+        next_tick(&standalone, wolf) > first_tick,
+        "the refused tick still moves the Aura to its next period"
+    );
+    let immune = format!("{:016x}", PLAYER.swap_bytes()) + &format!("{:016x}", wolf.swap_bytes());
+    let reports_immunity = |row: &str| {
+        let packet: serde_json::Value = serde_json::from_str(row).unwrap();
+        packet[2][1] == SMSG_SPELLORDAMAGE_IMMUNE
+            && packet[3]
+                .as_str()
+                .is_some_and(|body| body.to_ascii_lowercase().starts_with(&immune))
+    };
+    let deadline = Instant::now() + PACKET_WAIT;
+    let mut packets = wire.wait_for_packets(Duration::from_secs(1)).unwrap();
+    while !packets.iter().any(|row| reports_immunity(row.get())) && Instant::now() < deadline {
+        packets.extend(wire.wait_for_packets(Duration::from_secs(1)).unwrap());
+    }
+    assert!(
+        packets.iter().any(|row| reports_immunity(row.get())),
+        "vmangos Aura::PeriodicTick reports the tick with SMSG_SPELLORDAMAGE_IMMUNE"
     );
 }
 
@@ -344,6 +429,33 @@ fn insert_spell(standalone: &Standalone, spell_id: u32, spell: &[Field], effect:
     let mut effect_row: Vec<Field> = vec![("id", &effect_id), ("spell_id", &spell_id)];
     effect_row.extend_from_slice(effect);
     standalone.insert_row("game_spell_effect", &effect_row);
+}
+
+fn insert_frostbolt(standalone: &Standalone) {
+    insert_spell(
+        standalone,
+        FROSTBOLT_FIXTURE,
+        &[
+            ("school_mask", &FROST),
+            ("range_yd", &30),
+            ("is_negative", &true),
+            ("cast_flags", &CAST_FLAG_IGNORE_RESISTANCES),
+        ],
+        &[
+            ("kind", &E_DAMAGE),
+            ("base_points", &50),
+            ("target", &T_TARGET_ENEMY),
+        ],
+    );
+}
+
+fn next_tick(standalone: &Standalone, wolf: u64) -> i64 {
+    standalone.query_rows(&format!(
+        "SELECT next_tick_micros FROM game_aura \
+         WHERE target_guid = {wolf} AND spell_id = {FROST_DOT_FIXTURE}"
+    ))[0]["next_tick_micros"]
+        .parse()
+        .unwrap()
 }
 
 fn insert_heal(standalone: &Standalone, cost: u32) {

@@ -493,6 +493,10 @@ fn engage_refusing_unit(ctx: &ReducerContext, caster_guid: u64, unit_guid: u64) 
     if unit.dead || !crate::combat::may_harm(ctx, &caster, &unit) {
         return;
     }
+    // vmangos SpellHitResult answers SPELL_MISS_EVADE before it tests immunity.
+    if !unit.is_player() && crate::creatures::eventai::movement::returning_home(ctx, unit_guid) {
+        return;
+    }
     if unit.is_player() {
         crate::combat::enter_combat(ctx, caster_guid);
         crate::combat::enter_combat(ctx, unit_guid);
