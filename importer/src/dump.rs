@@ -173,6 +173,12 @@ pub(crate) mod qt {
     pub const TYPE: &str = "Type";
     pub const REQUIRED_CLASSES: &str = "RequiredClasses";
     pub const REQUIRED_RACES: &str = "RequiredRaces";
+    pub const REQUIRED_SKILL: &str = "RequiredSkill";
+    pub const REQUIRED_SKILL_VALUE: &str = "RequiredSkillValue";
+    pub const REQUIRED_MIN_REP_FACTION: &str = "RequiredMinRepFaction";
+    pub const REQUIRED_MIN_REP_VALUE: &str = "RequiredMinRepValue";
+    pub const REQUIRED_MAX_REP_FACTION: &str = "RequiredMaxRepFaction";
+    pub const REQUIRED_MAX_REP_VALUE: &str = "RequiredMaxRepValue";
     // LimitTime is seconds after acceptance; zero means untimed.
     pub const LIMIT_TIME: &str = "LimitTime";
     pub const QUEST_FLAGS: &str = "QuestFlags";

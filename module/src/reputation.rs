@@ -74,6 +74,25 @@ pub(crate) fn clamped_standing(standing: i32) -> i32 {
     standing.clamp(REP_MIN, REP_MAX)
 }
 
+/// vmangos `ReputationMgr::GetReputation`: the stored standing, else the faction's base standing.
+pub(crate) fn reputation(ctx: &ReducerContext, character_guid: u64, faction_id: u32) -> i32 {
+    let Some(faction) = ctx
+        .db
+        .game_faction()
+        .faction_id()
+        .find(faction_id)
+        .filter(|faction| faction.reputation_index >= 0)
+    else {
+        return 0;
+    };
+    ctx.db
+        .game_player_reputation()
+        .by_character()
+        .filter(&character_guid)
+        .find(|row| row.faction_id == faction_id)
+        .map_or(faction.base_standing, |row| row.standing)
+}
+
 pub(crate) fn reputation_rank(standing: i32) -> u8 {
     lyracore_shared::faction::reputation_rank(standing)
 }

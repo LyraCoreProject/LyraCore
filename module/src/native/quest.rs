@@ -516,7 +516,9 @@ fn accept_refusal(refusal: &AcceptQuestRefusal) -> Vec<Packet> {
                 AcceptanceRefusal::AlreadyTaken => Some(Reason::QuestAlreadyOn),
                 AcceptanceRefusal::Level
                 | AcceptanceRefusal::Class
-                | AcceptanceRefusal::Prerequisite => Some(Reason::DontHaveReq),
+                | AcceptanceRefusal::Prerequisite
+                | AcceptanceRefusal::Skill
+                | AcceptanceRefusal::Reputation => Some(Reason::DontHaveReq),
             };
             reason.map(|reason| {
                 ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_INVALID(

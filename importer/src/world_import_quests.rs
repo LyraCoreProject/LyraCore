@@ -323,9 +323,6 @@ fn findings(
         }
         for (column, code) in [
             ("RequiredCondition", "quests.condition"),
-            ("RequiredSkill", "quests.skill-requirement"),
-            ("RequiredMinRepFaction", "quests.reputation-requirement"),
-            ("RequiredMaxRepFaction", "quests.maximum-reputation"),
             ("BreadcrumbForQuestId", "quests.breadcrumb"),
             ("SrcSpell", "quests.start-spell"),
             ("StartScript", "quests.start-script"),

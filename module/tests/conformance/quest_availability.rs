@@ -413,3 +413,105 @@ fn a_reputation_giver_hides_its_mark_only_from_a_hostile_rank() {
     grant_reputation(&stage, -1);
     assert_eq!(status(&mut stage), status_reply(&stage, STATUS_NONE));
 }
+
+const REQUIRED_FACTION: u32 = 5_113_002;
+const FRIENDLY: i32 = 3000;
+const HONORED: i32 = 9000;
+const COOKING: u32 = 185;
+
+fn require(stage: &Stage, quest: u32, columns: &str) {
+    stage.shard.assert_sql(&format!(
+        "UPDATE game_quest_template SET {columns} WHERE entry = {quest}"
+    ));
+}
+
+fn reputation_quest(stage: &Stage, columns: &str) {
+    offer(stage, FIRST, 1, 1);
+    require(stage, FIRST, columns);
+    stage.shard.insert_row(
+        "game_faction",
+        &[
+            ("faction_id", &REQUIRED_FACTION),
+            ("reputation_index", &61),
+            ("base_standing", &0),
+        ],
+    );
+}
+
+fn gain_required_reputation(stage: &Stage, amount: i32) {
+    stage.shard.assert_call(
+        "debug_grant_reputation",
+        &[
+            &stage.guid.to_string(),
+            &REQUIRED_FACTION.to_string(),
+            &amount.to_string(),
+        ],
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_minimum_reputation_quest_opens_at_friendly() {
+    let mut stage = stage("quest-availability-minimum-reputation");
+    reputation_quest(
+        &stage,
+        &format!(
+            "required_min_rep_faction = {REQUIRED_FACTION}, required_min_rep_value = {FRIENDLY}"
+        ),
+    );
+
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_NONE));
+    refused(&mut stage, FIRST, dont_have_req());
+    gain_required_reputation(&stage, FRIENDLY - 1);
+    refused(&mut stage, FIRST, dont_have_req());
+    gain_required_reputation(&stage, 1);
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
+    accepted(&mut stage, FIRST);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_maximum_reputation_quest_closes_at_its_cap() {
+    let mut stage = stage("quest-availability-maximum-reputation");
+    reputation_quest(
+        &stage,
+        &format!(
+            "required_max_rep_faction = {REQUIRED_FACTION}, required_max_rep_value = {HONORED}"
+        ),
+    );
+
+    gain_required_reputation(&stage, HONORED - 1);
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_AVAILABLE));
+    gain_required_reputation(&stage, 1);
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_NONE));
+    refused(&mut stage, FIRST, dont_have_req());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_skill_quest_is_refused_below_its_skill_value() {
+    let mut stage = stage("quest-availability-skill");
+    offer(&stage, FIRST, 1, 1);
+    require(
+        &stage,
+        FIRST,
+        &format!("required_skill = {COOKING}, required_skill_value = 50"),
+    );
+    stage.shard.assert_call(
+        "debug_learn_profession",
+        &[&stage.guid.to_string(), &COOKING.to_string(), "75"],
+    );
+
+    set_cooking(&stage, 49);
+    assert_eq!(status(&mut stage), status_reply(&stage, STATUS_NONE));
+    refused(&mut stage, FIRST, dont_have_req());
+    set_cooking(&stage, 50);
+    accepted(&mut stage, FIRST);
+}
+
+fn set_cooking(stage: &Stage, value: u32) {
+    stage.shard.assert_sql(&format!(
+        "UPDATE game_player_skill SET current = {value} WHERE character_guid = {} AND skill_line = {COOKING}",
+        stage.guid
+    ));
+}

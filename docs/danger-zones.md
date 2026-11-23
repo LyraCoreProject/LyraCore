@@ -725,6 +725,15 @@ The next-quest-in-chain check needs no reimport: it reads `next_quest_id`, which
 already hold. From the publish on, a Character who has taken or finished a quest's next quest in
 its chain can no longer take that quest, and its giver no longer marks it.
 
+### Quest requirement migration
+
+`game_quest_template` gains `required_skill`, `required_skill_value`, `required_min_rep_faction`,
+`required_min_rep_value`, `required_max_rep_faction` and `required_max_rep_value`, end-appended
+with default 0. Reimport the `quests` family straight after the publish. Until then no quest has a
+skill or reputation requirement, so each such quest is offered and accepted as before. A Character
+who already holds a quest it no longer meets keeps it; no repair is needed. Package Deltas written
+before the change omit the columns and still apply, with no requirement.
+
 ### Quest retake migration
 
 The private `game_character_quest_retake` table is new and starts empty. It needs no backfill: a
