@@ -1,4 +1,4 @@
-//! Statistics shared by the weapon Roll Conformance contexts; ADR 0007 derives every probability.
+//! Statistics shared by the weapon Roll Conformance contexts; they follow ADR 0007.
 
 use anyhow::{ensure, Result};
 use serde::{Serialize, Serializer};
@@ -50,7 +50,7 @@ impl<const N: usize> Counts<N> {
     }
 }
 
-/// One weapon context: its name, delivery stream and opcode, categories and exact rates.
+/// One weapon context; its name fixes the Tier 1 checkpoint and rule names, so it never changes.
 pub struct StrikeContext<const N: usize> {
     pub name: &'static str,
     pub stream: &'static str,
@@ -107,8 +107,7 @@ impl<const N: usize> StrikeContext<N> {
         (u128::from(numerator) * u128::from(SAMPLES_PER_LEVEL) / u128::from(denominator)) as u64
     }
 
-    /// Exact equal-tail binomial tests; each context reserves its own 1e-6 family over its
-    /// categories × levels × slots.
+    /// Exact equal-tail binomial tests; each context reserves its own 1e-6 family (ADR 0007).
     pub fn compare(
         &self,
         counts: &Counts<N>,
