@@ -513,7 +513,7 @@ impl ForcedStrike {
 /// Fires one queued strike per Character from scripted (table, weapon, partial block) draws.
 fn forced_strike(test_name: &str, draws: [u32; 3]) -> Result<Vec<ForcedStrike>> {
     let golden = wire_client::catalogue::get("white_melee_outcomes")?;
-    let mut shard = Standalone::start(test_name);
+    let mut shard = Standalone::start_persistent(test_name);
     let name = super::rolls::fresh_shards(&mut shard, "forced", 1).remove(0);
     let (mut receiver, mut characters) =
         prepare(&shard, &name, golden.scenario(), PUBLIC_SEEDS[0], 0, 0)?;
