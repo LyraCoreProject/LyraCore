@@ -546,8 +546,8 @@ pub(crate) fn apply_zone_transition(
     }
 }
 
-/// Moves a Character to `pose`, reviving a ghost bound for its corpse's map; a `teleport_gate`
-/// refusal leaves everything unchanged.
+/// Moves a Character to `pose`. A ghost bound for its corpse's map revives first, even when the
+/// raid gate then refuses; any other `teleport_gate` refusal leaves everything unchanged.
 pub(crate) fn teleport(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -571,6 +571,17 @@ pub(crate) fn teleport_aboard(
 
 /// The Gate `teleport` applies; call it first only to refuse before writes of your own.
 pub(crate) fn teleport_gate(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    map_id: u32,
+    instance_id: u64,
+) -> Result<Option<Identity>, crate::actor::ActionRefusal> {
+    let destination = travel_gate(ctx, player_guid, map_id, instance_id)?;
+    raid_gate(ctx, player_guid, map_id)?;
+    Ok(destination)
+}
+
+fn travel_gate(
     ctx: &ReducerContext,
     player_guid: u64,
     map_id: u32,
@@ -614,13 +625,21 @@ pub(crate) fn teleport_gate(
             "Character transaction is settling",
         ));
     }
+    Ok(destination)
+}
+
+fn raid_gate(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    map_id: u32,
+) -> Result<(), crate::actor::ActionRefusal> {
     if crate::instance::raid_entry_refused(ctx, player_guid, map_id) {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::Prerequisite,
+        return Err(crate::actor::ActionRefusal::new(
+            crate::actor::ActionRefusalKind::Prerequisite,
             "a Raid is required to enter this map",
         ));
     }
-    Ok(destination)
+    Ok(())
 }
 
 fn relocate(
@@ -631,8 +650,9 @@ fn relocate(
     [x, y, z, o]: [f32; 4],
     aboard: Option<crate::transport::Aboard>,
 ) -> Result<(), crate::actor::ActionRefusal> {
-    let destination = teleport_gate(ctx, player_guid, map_id, instance_id)?;
+    let destination = travel_gate(ctx, player_guid, map_id, instance_id)?;
     crate::corpse::revive_ghost_bound_for_corpse_map(ctx, player_guid, map_id);
+    raid_gate(ctx, player_guid, map_id)?;
     let entities = ctx.db.game_world_entity();
     let e = entities
         .guid()

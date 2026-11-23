@@ -38,3 +38,9 @@ description = "Resurrection removes the corpse. vmangos SpawnCorpseBones leaves 
 path = "module/src/ghost.rs"
 symbol = "finish_resurrection"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp"
+
+[[known_gaps]]
+description = "On a Realm with an Instance Shard, a ghost whose corpse is in a dungeon or raid is not revived at its entrance. The corpse row lives on the Instance Shard, so the World Shard finds no corpse on the destination map."
+path = "module/src/corpse.rs"
+symbol = "revive_ghost_bound_for_corpse_map"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp"

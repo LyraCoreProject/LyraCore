@@ -179,15 +179,13 @@ fn revive_at_half(ctx: &ReducerContext, mut player: crate::WorldEntity) {
     crate::ghost::finish_resurrection(ctx, player_guid);
 }
 
-const KALIMDOR: u32 = 1;
-
 /// vmangos `Player::TeleportTo`: a ghost bound for the non-continent map of its corpse revives.
 pub(crate) fn revive_ghost_bound_for_corpse_map(
     ctx: &ReducerContext,
     character_guid: u64,
     map_id: u32,
 ) {
-    if map_id <= KALIMDOR {
+    if crate::instance::is_continent(ctx, map_id) {
         return;
     }
     let Some(player) = ctx.db.game_world_entity().guid().find(character_guid) else {
@@ -201,7 +199,7 @@ pub(crate) fn revive_ghost_bound_for_corpse_map(
         .game_corpse()
         .guid()
         .find(corpse_guid_for(character_guid))
-        .is_some_and(|corpse| corpse.map_id == map_id && !corpse.is_bones)
+        .is_some_and(|corpse| corpse.map_id == map_id)
     {
         revive_at_half(ctx, player);
     }

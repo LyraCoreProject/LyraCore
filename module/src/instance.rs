@@ -350,7 +350,16 @@ pub(crate) fn instance_removal_due(
         && gm_level == 0
 }
 
+const MAP_TYPE_CONTINENT: u32 = 0;
 const MAP_TYPE_RAID: u32 = 2;
+
+pub(crate) fn is_continent(ctx: &ReducerContext, map_id: u32) -> bool {
+    ctx.db
+        .game_map()
+        .id()
+        .find(map_id)
+        .is_some_and(|map| map.map_type == MAP_TYPE_CONTINENT)
+}
 
 fn raid_refuses(inside: bool, in_raid: bool, gm_level: u8) -> bool {
     !inside && !in_raid && gm_level == 0
