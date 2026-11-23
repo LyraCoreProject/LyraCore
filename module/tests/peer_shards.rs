@@ -106,25 +106,10 @@ fn a_package_guild_retry_stops_when_its_target_leaves_the_peer_shards() {
         &[&identity(&shard, &second), r#""second""#],
     );
 
-    // Message::Invitation { guid: 9, revision: 1, invitation: None }.
-    let mut message = vec![1u8];
-    message.extend(9u64.to_le_bytes());
-    message.extend(1u64.to_le_bytes());
-    message.push(1);
-    let message = format!(
-        "0x{}",
-        message
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    );
-    shard.insert_row_database(
+    shard.assert_call_database(
         &first,
-        "game_package_guild_delivery",
-        &[
-            ("database", &identity_hex(&shard, &second)),
-            ("message", &message),
-        ],
+        "debug_queue_package_guild_invitation",
+        &[&identity(&shard, &second), "9", "1"],
     );
     assert!(
         poll_until(Duration::from_secs(20), || count(
