@@ -41,6 +41,8 @@ const DOT_PERIOD_MS: u32 = 3_000;
 // 50 ms scheduler ticks that pass one DoT period.
 const ONE_PERIOD_TICKS: &str = "61";
 const SMSG_SPELLORDAMAGE_IMMUNE: u64 = 0x263;
+const PLAYER_FACTION: u32 = 9_101;
+const WOLF_FACTION: u32 = 9_102;
 const PACKET_WAIT: Duration = Duration::from_secs(10);
 const HEAL_COST: u32 = 100;
 const MANA: u32 = 1_000;
@@ -235,6 +237,7 @@ fn an_area_spell_hits_the_creature_beside_one_immune_to_its_school() {
     let mut standalone = Standalone::start("school-immunity-area");
     let immune = stage(&mut standalone);
     let exposed = spawn_wolf(&standalone);
+    hostile_factions(&standalone, &[immune, exposed]);
     give_immunity_aura(&standalone, immune, FROST, SOURCE_SCHOOL_IMMUNITY);
     insert_spell(
         &standalone,
@@ -507,6 +510,36 @@ fn give_immunity_aura(standalone: &Standalone, unit: u64, school_mask: u32, sour
         1,
         "the unit carries the immunity Aura"
     );
+}
+
+// An enemy area effect picks only hostile units, and the bare Standalone has no faction rows.
+fn hostile_factions(standalone: &Standalone, wolves: &[u64]) {
+    standalone.insert_rows(
+        "game_faction_template",
+        &[
+            &[
+                ("id", &PLAYER_FACTION),
+                ("faction", &PLAYER_FACTION),
+                ("faction_group", &1),
+                ("friend_group", &1),
+                ("enemy_group", &2),
+            ],
+            &[
+                ("id", &WOLF_FACTION),
+                ("faction", &WOLF_FACTION),
+                ("faction_group", &2),
+                ("friend_group", &2),
+                ("enemy_group", &1),
+            ],
+        ],
+    );
+    let units = std::iter::once((PLAYER, PLAYER_FACTION))
+        .chain(wolves.iter().map(|&wolf| (wolf, WOLF_FACTION)));
+    for (guid, faction) in units {
+        standalone.assert_sql(&format!(
+            "UPDATE game_world_entity SET faction_template = {faction} WHERE guid = {guid}"
+        ));
+    }
 }
 
 fn cast_go(standalone: &Standalone, spell_id: u32, target: u64) -> support::Row {
