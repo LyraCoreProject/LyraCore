@@ -270,8 +270,8 @@ pub(crate) fn break_auras_on_damage(
 // vmangos SharedDefines.h MECHANIC_SILENCE.
 const MECHANIC_SILENCE: u8 = 9;
 const SOURCE_MECHANIC_IMMUNITY_MASK: i32 = 147;
-const SOURCE_AURA_MASK: i32 = 0xff;
-const IMMUNE_TO_HOSTILE_AND_FRIENDLY: i32 = 0x100;
+pub(super) const SOURCE_AURA_MASK: i32 = 0xff;
+pub(super) const IMMUNE_TO_HOSTILE_AND_FRIENDLY: i32 = 0x100;
 // vmangos SPELL_ATTR_NO_IMMUNITIES, kept in `attributes`.
 const SPELL_ATTR_NO_IMMUNITIES: u32 = 0x2000_0000;
 // vmangos SPELL_ATTR_EX3_IGNORE_CASTER_AND_TARGET_RESTRICTIONS, kept in `attributes_ex_3`.

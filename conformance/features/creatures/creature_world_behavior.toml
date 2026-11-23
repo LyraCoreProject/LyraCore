@@ -13540,3 +13540,8 @@ evidence = "vmangos d9173eca3ea08dd985c52dabbcc826898d1d0b77 GridNotifiers.h:976
 path = "importer/src/world_import_creatures.rs"
 function = "mechanic_immune_mask_reaches_the_template_and_is_no_finding"
 rung = "unit"
+
+[[tests]]
+path = "importer/src/world_import_creatures.rs"
+function = "school_immune_mask_reaches_the_template_and_is_no_finding"
+rung = "unit"

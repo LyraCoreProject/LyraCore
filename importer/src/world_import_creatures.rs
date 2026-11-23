@@ -195,12 +195,7 @@ fn template_findings(row: &Row, entry: u64, restored: u32, findings: &mut Findin
     if extra & !0x14 != 0 {
         finding(findings, "creatures.template-behavior", entry);
     }
-    for name in [
-        "spawn_spell_id",
-        "totem_spell_id",
-        "immunity_flags",
-        "school_immune_mask",
-    ] {
+    for name in ["spawn_spell_id", "totem_spell_id", "immunity_flags"] {
         if row.number::<u32>(name)? != 0 {
             finding(findings, "creatures.template-behavior", entry);
         }
@@ -376,6 +371,7 @@ fn templates(
             "trainer_type",
             "trainer_class",
             "mechanic_immune_mask",
+            "school_immune_mask",
         ]
         .iter()
         .map(|c| row.number::<u32>(c))
@@ -385,12 +381,12 @@ fn templates(
             finding(findings, "creatures.negative-call-for-help-range", entry);
             call_for_help_range = 5.0;
         }
-        templates.push(format!("({entry},{},{},{display},{min},{health},{},{},{unit},{},{},{kind},{},{scale},{},{},{},{max},{max_health},0,{low},{high},{armor},{},{},{},{},{},{call_for_help_range})",
-            sql_text(row.text("name")?), sql_text(row.optional_text("subname")?.unwrap_or_default()), fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6], fields[7], fields[8], fields[9], fields[10], fields[11], fields[12]));
+        templates.push(format!("({entry},{},{},{display},{min},{health},{},{},{unit},{},{},{kind},{},{scale},{},{},{},{max},{max_health},0,{low},{high},{armor},{},{},{},{},{},{call_for_help_range},{})",
+            sql_text(row.text("name")?), sql_text(row.optional_text("subname")?.unwrap_or_default()), fields[0], fields[1], fields[2], fields[3], fields[4], fields[5], fields[6], fields[7], fields[8], fields[9], fields[10], fields[11], fields[12], fields[13]));
         template_findings(row, entry, restored, findings)?;
     }
     for (table, key, columns, rows) in [
-        ("game_creature_template", "entry", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class,mechanic_immune_mask,call_for_help_range", templates),
+        ("game_creature_template", "entry", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class,mechanic_immune_mask,call_for_help_range,school_immune_mask", templates),
         ("game_creature_defense", "entry", "entry,no_parry,no_block,no_defense", defenses),
         ("game_creature_level_stats", "id", "id,entry,level,health,damage_min,damage_max,armor", levels),
         ("game_creature_display", "id", "id,entry,display_id,scale,weight,gender,bounding_radius", displays),
@@ -844,8 +840,46 @@ mod tests {
             .find(|sql| sql.starts_with("INSERT INTO game_creature_template "))
             .unwrap();
         assert!(
-            insert.contains(",trainer_class,mechanic_immune_mask,call_for_help_range) VALUES")
-                && insert.ends_with(&format!(",0,0,{stun_and_fear},0)")),
+            insert.contains(
+                ",trainer_class,mechanic_immune_mask,call_for_help_range,school_immune_mask) VALUES"
+            ) && insert.ends_with(&format!(",0,0,{stun_and_fear},0,0)")),
+            "{insert}"
+        );
+        assert!(
+            !findings.contains_key("creatures.template-behavior"),
+            "{findings:?}"
+        );
+    }
+
+    #[test]
+    fn school_immune_mask_reaches_the_template_and_is_no_finding() {
+        let source = template_source();
+        let fire_and_frost = (1u32 << 2) | (1 << 4);
+        source
+            .fixture_connection()
+            .execute(
+                "UPDATE creature_template SET school_immune_mask = ?1",
+                [fire_and_frost],
+            )
+            .unwrap();
+        let mut statements = Vec::new();
+        let mut findings = Findings::new();
+        templates(
+            &source,
+            &HashSet::from([5090042]),
+            &HashSet::new(),
+            None,
+            &mut statements,
+            &mut findings,
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let insert = statements
+            .iter()
+            .find(|sql| sql.starts_with("INSERT INTO game_creature_template "))
+            .unwrap();
+        assert!(
+            insert.ends_with(&format!(",0,0,{fire_and_frost})")),
             "{insert}"
         );
         assert!(
@@ -880,8 +914,8 @@ mod tests {
             .find(|sql| sql.starts_with("INSERT INTO game_creature_template "))
             .unwrap();
         assert!(
-            insert.contains(",mechanic_immune_mask,call_for_help_range) VALUES")
-                && insert.ends_with(",0,12.5)"),
+            insert.contains(",mechanic_immune_mask,call_for_help_range,school_immune_mask) VALUES")
+                && insert.ends_with(",0,12.5,0)"),
             "{insert}"
         );
     }
@@ -909,7 +943,7 @@ mod tests {
             .iter()
             .find(|sql| sql.starts_with("INSERT INTO game_creature_template "))
             .unwrap();
-        assert!(insert.ends_with(",0,0,5)"), "{insert}");
+        assert!(insert.ends_with(",0,0,5,0)"), "{insert}");
         assert_eq!(
             findings.get("creatures.negative-call-for-help-range"),
             Some(&BTreeSet::from(["5090042".to_string()]))

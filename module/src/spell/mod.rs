@@ -18,6 +18,7 @@ mod power;
 pub(crate) mod proc;
 mod resist;
 pub(crate) mod scheduler;
+mod school_immunity;
 mod self_resurrect;
 pub(crate) mod source_behavior;
 pub(crate) mod spellbook;
@@ -78,6 +79,10 @@ pub(crate) use scheduler::{
     fire_pending_cast,
 };
 pub use scheduler::{fire_spell_impact, tick_auras, tick_ground_areas};
+pub(crate) use school_immunity::{
+    aura_refuses_damage, immune_to_school, school_refuses_spell, template_immune_to_school,
+    SCHOOL_MASK_PHYSICAL,
+};
 pub(crate) use self_resurrect::{
     clear_resurrect_request_and_option, do_self_resurrect, record_self_resurrect_option,
 };

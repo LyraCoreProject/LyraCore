@@ -590,10 +590,10 @@ complete JSON payloads. Use a faction template, items and spells present in the 
 ### Types and examples
 
 `CreatureFields` contains every `game_creature_template` column except `entry`,
-`mechanic_immune_mask` and `call_for_help_range`. A created template has no mechanic immunity and
-a call for help range of 5 yards, and an update keeps the template's own. A template copied from an
-imported boss, such as Meld's new creature from a base, can therefore be stunned, feared and
-polymorphed.
+`mechanic_immune_mask`, `call_for_help_range` and `school_immune_mask`. A created template has no
+mechanic or school immunity and a call for help range of 5 yards, and an update keeps the
+template's own. A template copied from an imported boss, such as Meld's new creature from a base,
+can therefore be stunned, feared and polymorphed.
 
 | Type | Fields |
 | --- | --- |

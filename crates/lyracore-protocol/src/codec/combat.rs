@@ -446,6 +446,7 @@ fn attacker_state_update(
                 VICTIMSTATE_NORMAL
             }),
         ),
+        8 => (HitInfo::NormalSwing, u32::from(VICTIMSTATE_IS_IMMUNE)),
         _ => (HitInfo::AffectsVictim, u32::from(VICTIMSTATE_NORMAL)),
     };
     SMSG_ATTACKERSTATEUPDATE {
@@ -472,6 +473,7 @@ const VICTIMSTATE_NORMAL: u8 = 1;
 const VICTIMSTATE_DODGE: u8 = 2;
 const VICTIMSTATE_PARRY: u8 = 3;
 const VICTIMSTATE_BLOCK: u8 = 5;
+const VICTIMSTATE_IS_IMMUNE: u8 = 7;
 
 #[cfg(test)]
 mod tests {
@@ -620,6 +622,7 @@ mod tests {
             (7, 5, 25, 0x802, 1),
             (7, 0, 25, 0x802, 5),
             (7, 5, 0, 0x802, 1),
+            (8, 0, 0, 0, 7),
         ] {
             let packet = build_attacker_state_update(1, 2, damage, outcome, blocked, 0);
             assert_eq!(packet.opcode, 0x14a);
