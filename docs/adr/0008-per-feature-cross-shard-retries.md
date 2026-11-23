@@ -19,8 +19,9 @@ table and reducer, and each stream chooses its own fence comparison.
   and the table catalogue. A macro that generated the table and reducer pair would be invisible to
   it.
 - The pairs differ on purpose. Mail routes a retried parcel again and does not send it to its old
-  target. The Package guild stream retries invitations only. Auction retries both settlements and
-  deliveries. Transfer waits 30 seconds, for the reason its comment gives.
+  target. The Package guild stream retries invitations only, and drops one whose target left the
+  Peer Shards. Auction retries both settlements and deliveries. Transfer waits 30 seconds, for the
+  reason its comment gives.
 
 A retry policy fix is therefore a few lines at each site.
 

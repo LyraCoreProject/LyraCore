@@ -344,14 +344,45 @@ pub fn package_guild_answered(
 
 #[reducer]
 pub fn retry_package_guild(ctx: &ReducerContext, retry: PackageGuildRetry) {
-    if crate::time::scheduler_authorized(ctx) {
-        ctx.db
-            .game_package_guild_delivery()
-            .insert(PackageGuildDelivery {
-                id: 0,
-                ..retry.call
-            });
+    if !crate::time::scheduler_authorized(ctx) {
+        return;
     }
+    // A later invitation change re-sends the Character's state, so a removed Shard's copy is dropped.
+    if !crate::peer::is_peer(ctx, retry.call.database.0) {
+        spacetimedb::log::warn!(
+            "Package guild invitation retry to {} dropped: not a Peer Shard",
+            retry.call.database.0
+        );
+        return;
+    }
+    ctx.db
+        .game_package_guild_delivery()
+        .insert(PackageGuildDelivery {
+            id: 0,
+            ..retry.call
+        });
+}
+
+/// Queues an invitation that clears `guid`'s invitation on `target`, which a test makes refuse it.
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_queue_package_guild_invitation(
+    ctx: &ReducerContext,
+    target: Identity,
+    guid: u64,
+    revision: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    send(
+        ctx,
+        target,
+        Message::Invitation(PackageGuildInvitation {
+            guid,
+            revision,
+            invitation: None,
+        }),
+    );
+    Ok(())
 }
 
 #[cfg(feature = "debug_reducers")]
