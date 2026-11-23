@@ -307,6 +307,7 @@ pub(crate) fn apply_enter_areatrigger(ctx: &ReducerContext, player_guid: u64, tr
         .map(|t| (t.target_map, t.x, t.y, t.z, t.o));
     crate::quest::on_areatrigger_entered(ctx, player_guid, trigger_id);
     if let Some((target_map, x, y, z, o)) = teleport_target {
+        crate::corpse::revive_ghost_bound_for_corpse_map(ctx, player_guid, target_map);
         if crate::instance::raid_entry_refused(ctx, player_guid, target_map) {
             crate::native::instance::raid_group_required(ctx, player_guid);
             return;

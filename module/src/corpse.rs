@@ -1,8 +1,10 @@
 use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
+use lyracore_shared::constants::player_flags;
 use lyracore_shared::guid;
 use lyracore_shared::packing::unpack4;
 
+use crate::game_world_entity;
 use crate::world::power_pool::resurrected_power;
 
 pub(crate) fn corpse_guid_for(owner_guid: u64) -> u64 {
@@ -129,9 +131,8 @@ impl Corpse {
 
 pub(crate) fn apply_reclaim_corpse(
     ctx: &ReducerContext,
-    mut player: crate::WorldEntity,
+    player: crate::WorldEntity,
 ) -> Result<(), crate::Refusal> {
-    use lyracore_shared::constants::player_flags;
     let corpses = ctx.db.game_corpse();
 
     if !player.dead || player.player_flags & player_flags::GHOST == 0 {
@@ -166,12 +167,42 @@ pub(crate) fn apply_reclaim_corpse(
         return Err("corpse reclaim delay not elapsed".into());
     }
 
+    revive_at_half(ctx, player);
+    Ok(())
+}
+
+fn revive_at_half(ctx: &ReducerContext, mut player: crate::WorldEntity) {
     player.health = (player.max_health / 2).max(1);
     player.set_each_pool(|pool| resurrected_power(pool, 50));
     let player_guid = player.guid;
     player.update(ctx);
     crate::ghost::finish_resurrection(ctx, player_guid);
-    Ok(())
+}
+
+/// vmangos `Player::TeleportTo`: a ghost bound for the instanceable map of its corpse revives.
+pub(crate) fn revive_ghost_bound_for_corpse_map(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    map_id: u32,
+) {
+    if !crate::instance::is_instanceable(ctx, map_id) {
+        return;
+    }
+    let Some(player) = ctx.db.game_world_entity().guid().find(character_guid) else {
+        return;
+    };
+    if !player.dead || player.player_flags & player_flags::GHOST == 0 || player.map_id == map_id {
+        return;
+    }
+    if ctx
+        .db
+        .game_corpse()
+        .guid()
+        .find(corpse_guid_for(character_guid))
+        .is_some_and(|corpse| corpse.map_id == map_id)
+    {
+        revive_at_half(ctx, player);
+    }
 }
 
 pub(crate) fn sweep_corpse_decay(ctx: &ReducerContext) {
