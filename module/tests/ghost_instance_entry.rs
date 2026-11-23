@@ -103,10 +103,10 @@ fn release_with_corpse_on(shard: &Standalone, guid: u64, corpse_map: u32, is_bon
     max_health
 }
 
-fn has_corpse(shard: &Standalone, guid: u64) -> bool {
+fn has_resurrectable_corpse(shard: &Standalone, guid: u64) -> bool {
     !shard
         .query_rows(&format!(
-            "SELECT guid FROM game_corpse WHERE owner_guid = {guid}"
+            "SELECT guid FROM game_corpse WHERE owner_guid = {guid} AND is_bones = false"
         ))
         .is_empty()
 }
@@ -116,7 +116,7 @@ fn assert_revived_inside_deadmines(shard: &Standalone, guid: u64, max_health: u3
     assert_eq!(entered["map_id"], DEADMINES.to_string());
     assert_eq!(entered["pending_ghost"], "false");
     assert_eq!(number::<u32>(&entered, "health"), max_health / 2);
-    assert!(!has_corpse(shard, guid));
+    assert!(!has_resurrectable_corpse(shard, guid));
 }
 
 fn assert_revived_outside(shard: &Standalone, guid: u64, max_health: u32) {
@@ -133,7 +133,7 @@ fn assert_revived_outside(shard: &Standalone, guid: u64, max_health: u32) {
         (max_health / 2..max_health).contains(&health),
         "{health} of {max_health}"
     );
-    assert!(!has_corpse(shard, guid));
+    assert!(!has_resurrectable_corpse(shard, guid));
 }
 
 #[test]

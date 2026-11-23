@@ -76,7 +76,7 @@ pub(crate) fn finish_resurrection(ctx: &ReducerContext, guid: u64) {
         .collect();
     crate::spell::shed_auras(ctx, auras);
     crate::spell::recompute_display(ctx, guid);
-    crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(guid));
+    crate::corpse::convert_to_bones(ctx, crate::corpse::corpse_guid_for(guid));
     crate::spell::clear_resurrect_request_and_option(ctx, guid);
 }
 

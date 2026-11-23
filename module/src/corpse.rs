@@ -19,10 +19,11 @@ const STREAK_RUNG_MICROS: i64 = 300 * 1_000_000;
 
 const MAX_STREAK_RUNGS: i64 = CORPSE_RECLAIM_DELAY_SECS.len() as i64;
 
-// Corpse and bone lifetimes use chosen values; vanilla decay timing is unverified.
-pub(crate) const CORPSE_DECAY_MICROS: i64 = 300 * 1_000_000;
+// vmangos Corpse::IsExpired: a resurrectable Corpse expires after 3 days.
+pub(crate) const CORPSE_EXPIRY_MICROS: i64 = 3 * 24 * 3600 * 1_000_000;
 
-pub(crate) const BONES_DECAY_MICROS: i64 = 300 * 1_000_000;
+// vmangos Bones.ExpireMinutes.
+pub(crate) const BONES_EXPIRY_MICROS: i64 = 60 * 60 * 1_000_000;
 
 pub(crate) fn escalated_reclaim(streak_deadline_micros: i64, now_micros: i64) -> (i64, i64) {
     let credit_remaining = streak_deadline_micros - now_micros;
@@ -79,6 +80,7 @@ pub struct Corpse {
     pub display_id: u32,
     pub bytes_1: u32,
     pub bytes_2: u32,
+    // Bones: when the Corpse became bones.
     pub created_at: Timestamp,
 
     #[default(30_000_000i64)]
@@ -205,25 +207,46 @@ pub(crate) fn revive_ghost_bound_for_corpse_map(
     }
 }
 
+pub(crate) fn convert_to_bones(ctx: &ReducerContext, corpse_guid: u64) {
+    let Some(mut corpse) = ctx.db.game_corpse().guid().find(corpse_guid) else {
+        return;
+    };
+    if corpse.is_bones {
+        return;
+    }
+    corpse.is_bones = true;
+    corpse.created_at = crate::time::now(ctx);
+    corpse.update(ctx);
+}
+
+pub(crate) fn delete_resurrectable_corpse(ctx: &ReducerContext, owner_guid: u64) {
+    let guid = corpse_guid_for(owner_guid);
+    if ctx
+        .db
+        .game_corpse()
+        .guid()
+        .find(guid)
+        .is_some_and(|corpse| !corpse.is_bones)
+    {
+        Corpse::delete(ctx, guid);
+    }
+}
+
 pub(crate) fn sweep_corpse_decay(ctx: &ReducerContext) {
     let t = ctx.db.game_corpse();
     let now = crate::time::now(ctx).to_micros_since_unix_epoch();
-    let to_bones: Vec<u64> = t
+    let expired: Vec<u64> = t
         .by_created_at()
-        .filter(..=Timestamp::from_micros_since_unix_epoch(now - CORPSE_DECAY_MICROS))
+        .filter(..=Timestamp::from_micros_since_unix_epoch(now - CORPSE_EXPIRY_MICROS))
         .filter(|c| !c.is_bones)
         .map(|c| c.guid)
         .collect();
-    for guid in to_bones {
-        if let Some(mut c) = t.guid().find(guid) {
-            c.is_bones = true;
-            c.update(ctx);
-        }
+    for guid in expired {
+        convert_to_bones(ctx, guid);
     }
-    let bones_gone_micros = CORPSE_DECAY_MICROS + BONES_DECAY_MICROS;
     let to_despawn: Vec<u64> = t
         .by_created_at()
-        .filter(..=Timestamp::from_micros_since_unix_epoch(now - bones_gone_micros))
+        .filter(..=Timestamp::from_micros_since_unix_epoch(now - BONES_EXPIRY_MICROS))
         .filter(|c| c.is_bones)
         .map(|c| c.guid)
         .collect();

@@ -539,7 +539,7 @@ pub(crate) fn apply_player_login(
         return Err("World Shard does not own the Character map".into());
     }
     if !character.pending_ghost {
-        crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(character_guid));
+        crate::corpse::delete_resurrectable_corpse(ctx, character_guid);
     }
 
     if entry == WorldEntry::Login {
@@ -855,7 +855,7 @@ fn finish_logout(
     crate::combat::disengage(ctx, guid);
     crate::trade::cancel_trade_for(ctx, guid);
     if !keep_corpse {
-        crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(guid));
+        crate::corpse::delete_resurrectable_corpse(ctx, guid);
     }
     crate::spell::clear_resurrect_request_and_option(ctx, guid);
     crate::spell::break_stealth(ctx, guid);

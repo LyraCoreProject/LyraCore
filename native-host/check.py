@@ -303,12 +303,14 @@ def check_death(host):
     peer.collect()
     client.send(0x1d2, struct.pack('<Q', corpse))
     reclaimed = client.collect()
-    assert corpse in destroys(reclaimed)
+    assert values(reclaimed, corpse)[35] == 1
+    assert (0x216, b'\0') in reclaimed
+    assert corpse not in destroys(reclaimed)
     assert any(opcode == 0xdf for opcode, _ in reclaimed)
     assert healer in destroys(reclaimed)
-    assert corpse in destroys(acknowledge_controls(host, client, peer, reclaimed))
+    assert values(acknowledge_controls(host, client, peer, reclaimed), corpse)[35] == 1
     assert host.rows(f'SELECT dead FROM game_world_entity WHERE guid = {guid}') == [[False]]
-    assert not host.rows(f'SELECT guid FROM game_corpse WHERE guid = {corpse}')
+    assert host.rows(f'SELECT is_bones FROM game_corpse WHERE guid = {corpse}') == [[True]]
     for spell, kind, points, target, parameter in [(51991, 14, 40, 3, 0), (51992, 38, 40, 0, 0), (51993, 181, 0, 0, 51992)]:
         host.sql(f"INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Native resurrection',0,0,0,0,0,100,60000,1,0,0,1,0,0,0,0,false,0,0,0,0,0,0,0,0)")
         host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({spell * 4},{spell},0,{kind},{points},0,0.0,0,{target},0.0,0,0,0,{parameter},15,0,0,false,0.0)')
@@ -355,7 +357,9 @@ def check_death(host):
     peer.collect()
     grant = host.rows(f'SELECT id FROM game_aoi_grant WHERE viewer_guid = {guid} AND layer = 2 AND entity_guid = {corpse}')
     assert len(grant) == 1
-    host.call('debug_age_corpse', [corpse, 310])
+    host.call('debug_age_corpse', [corpse, 360])
+    assert host.rows(f'SELECT is_bones FROM game_corpse WHERE guid = {corpse}') == [[False]]
+    host.call('debug_age_corpse', [corpse, 259201])
     bones = client.collect()
     assert values(bones, corpse)[35] == 1
     assert (0x216, b'\0') in bones
@@ -366,7 +370,7 @@ def check_death(host):
     client.send(0x1d2, struct.pack('<Q', corpse))
     client.collect()
     assert host.rows(f'SELECT dead FROM game_world_entity WHERE guid = {guid}') == [[True]]
-    host.call('debug_age_corpse', [corpse, 610])
+    host.call('debug_age_corpse', [corpse, 3601])
     assert corpse in destroys(client.collect())
     assert corpse in destroys(peer.collect())
     assert not host.rows(f'SELECT id FROM game_aoi_grant WHERE layer = 2 AND entity_guid = {corpse}')
