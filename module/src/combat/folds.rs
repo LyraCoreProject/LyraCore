@@ -775,8 +775,8 @@ pub(crate) fn roll_swing_with_range(
     range: (u32, u32),
     strike: Option<QueuedStrike>,
 ) -> (u32, AttackOutcome, u32) {
-    // CalculateMeleeDamage; a queued strike resolves as a Spell; Spell immunity is a known gap.
-    if strike.is_none() && crate::spell::immune_to_school(ctx, target, SCHOOL_MASK_PHYSICAL) {
+    // vmangos refuses a white swing in CalculateMeleeDamage and a queued strike in SpellHitResult.
+    if crate::spell::immune_to_school(ctx, target, SCHOOL_MASK_PHYSICAL) {
         return (0, AttackOutcome::Immune, 0);
     }
     let (outcome, table) = roll_attack(
@@ -889,13 +889,17 @@ pub(crate) fn roll_ranged_swing(
     dmin: u32,
     dmax: u32,
 ) -> (u32, AttackOutcome) {
+    let school = ranged_school(ctx, attacker.guid);
+    // vmangos SpellHitResult tests Auto Shot's school, or a wand's, before the hit roll.
+    if crate::spell::immune_to_school(ctx, target, 1 << school) {
+        return (0, AttackOutcome::Immune);
+    }
     let (outcome, _) = roll_attack(ctx, attacker, target, AttackType::Ranged, None);
     let weapon = crate::conformance_rolls::draw(
         ctx,
         crate::conformance_rolls::RollStream::Swing(attacker.guid),
     );
     let base = dmin + weapon % (dmax.saturating_sub(dmin) + 1);
-    let school = ranged_school(ctx, attacker.guid);
     let base = if school == 0 {
         crate::spell::bonuses::weapon_damage_taken(ctx, target.guid, base)
     } else {

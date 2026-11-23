@@ -221,14 +221,8 @@ fn cast_event_messages(
     }
     let mut go = codec::build_spell_go(row.caster_guid, row.spell_id, row.target_guid, ammo);
     if row.is_completion && row.damage == 0 {
-        use wow_world_messages::vanilla::{SpellMiss, SpellMissInfo};
-        let miss_info = match row.swing_hit_info {
-            2 => Some(SpellMissInfo::Miss),
-            3 => Some(SpellMissInfo::Dodge),
-            4 => Some(SpellMissInfo::Parry),
-            _ => None,
-        };
-        if let Some(mi) = miss_info {
+        use wow_world_messages::vanilla::SpellMiss;
+        if let Some(mi) = swing_miss_info(row.swing_hit_info) {
             go.hits.clear();
             go.misses = vec![SpellMiss {
                 target: wow_world_messages::Guid::new(row.target_guid),
@@ -304,6 +298,18 @@ fn cast_event_messages(
         out.push((EventAudience::Source, packet));
     }
     out
+}
+
+/// The SMSG_SPELL_GO miss for an `AttackOutcome::wire` code that deals no damage.
+pub(super) fn swing_miss_info(hit_info: u8) -> Option<wow_world_messages::vanilla::SpellMissInfo> {
+    use wow_world_messages::vanilla::SpellMissInfo;
+    match hit_info {
+        2 => Some(SpellMissInfo::Miss),
+        3 => Some(SpellMissInfo::Dodge),
+        4 => Some(SpellMissInfo::Parry),
+        8 => Some(SpellMissInfo::Immune),
+        _ => None,
+    }
 }
 
 fn cast_miss_info(code: u8) -> Option<wow_world_messages::vanilla::SpellMissInfo> {

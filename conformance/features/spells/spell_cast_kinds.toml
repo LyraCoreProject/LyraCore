@@ -79,10 +79,10 @@ symbol = "is_immune_to_mechanic"
 evidence = "Not measured and not read. Berserker Rage 18499 and Will of the Forsaken 7744 are aura 77 and covered by tests; no trinket spell was checked against the vmangos spell dump."
 
 [[known_gaps]]
-description = "School immunity refuses only white swings and damage shields. A harmful spell, a queued strike and an Auto Shot still land on a unit whose template school_immune_mask or school or damage immunity Aura names their school. vmangos refuses such a spell whole and such damage too."
-path = "module/src/spell/control.rs"
-symbol = "is_immune_to_spell"
-evidence = "Source reading, not measured. At d9173eca, Creature::IsImmuneToSpell reads school_immune_mask, Unit::IsImmuneToSpell calls IsImmuneToSchool, and Spell::DoSpellHitOnUnit and the damage effects call IsImmuneToDamage; is_immune_to_spell reads only mechanics, and roll_swing_with_range tests immunity only without a queued strike."
+description = "School immunity is decided when a spell or ranged shot launches. A unit that becomes immune while the spell or shot travels still takes it; vmangos checks a spell with travel time again on impact and reports immune."
+path = "module/src/spell/scheduler.rs"
+symbol = "fire_spell_impact"
+evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit rechecks IsImmuneToDamage and IsImmuneToSpell for a spell with speed and sends SPELL_MISS_IMMUNE; fire_spell_impact and ranged_impact land the damage frozen at launch."
 
 [[known_gaps]]
 description = "A creature's white swing and its victim selection treat its melee as physical: the importer reads no creature_template damage_school."
@@ -432,6 +432,21 @@ rung = "durable_module"
 [[tests]]
 path = "module/tests/school_immunity.rs"
 function = "a_creature_whose_template_is_immune_to_physical_takes_no_white_swing_damage"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "a_frost_spell_on_a_frost_immune_creature_reports_immune_and_deals_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "a_queued_strike_on_a_creature_under_a_physical_immunity_aura_deals_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "a_wand_shot_on_a_creature_whose_template_is_immune_to_the_wands_school_deals_nothing"
 rung = "durable_module"
 
 [[tests]]

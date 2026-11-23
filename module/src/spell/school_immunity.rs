@@ -1,7 +1,10 @@
 use lyracore_shared::spell::taxonomy::{A_IMMUNITY, P_SCHOOL_MASK};
 use spacetimedb::ReducerContext;
 
-use super::control::{IMMUNE_TO_HOSTILE_AND_FRIENDLY, SOURCE_AURA_MASK};
+use super::control::{
+    IMMUNE_TO_HOSTILE_AND_FRIENDLY, SOURCE_AURA_MASK, SPELL_ATTR_EX3_IGNORE_RESTRICTIONS,
+    SPELL_ATTR_NO_IMMUNITIES,
+};
 use crate::{game_creature_template, game_spell, Aura, Spell, WorldEntity};
 
 pub(crate) const SCHOOL_MASK_PHYSICAL: u8 = 1;
@@ -9,6 +12,8 @@ pub(crate) const SCHOOL_MASK_PHYSICAL: u8 = 1;
 // Source aura ids in the low byte of an immunity Aura's p1: docs/schema.md#damage-shields.
 const SOURCE_SCHOOL_IMMUNITY: i32 = 39;
 const SOURCE_DAMAGE_IMMUNITY: i32 = 40;
+// vmangos SPELL_ATTR_EX2_NO_SCHOOL_IMMUNITIES, kept in `attributes_ex_2`.
+const SPELL_ATTR_EX2_NO_SCHOOL_IMMUNITIES: u32 = 0x0400_0000;
 
 /// vmangos `Unit::IsImmuneToDamage` without a Spell: true when damage of the school does not land.
 pub(crate) fn immune_to_school(ctx: &ReducerContext, unit: &WorldEntity, school_mask: u8) -> bool {
@@ -21,16 +26,24 @@ pub(crate) fn aura_refuses_damage(ctx: &ReducerContext, aura: &Aura, school_mask
     immunity_aura(ctx, aura, school_mask).is_some_and(|immunity| immunity.refuses_damage())
 }
 
-/// vmangos `IsImmuneToSpell` by school, for a Spell that is not the unit's own.
+/// vmangos `IsImmuneToSpell` by school, then `IsImmuneToDamage`, for a Spell on another unit.
 pub(crate) fn school_refuses_spell(
     ctx: &ReducerContext,
     unit: &WorldEntity,
     spell: &Spell,
 ) -> bool {
+    if spell.attributes & SPELL_ATTR_NO_IMMUNITIES != 0
+        || spell.attributes_ex_3 & SPELL_ATTR_EX3_IGNORE_RESTRICTIONS != 0
+    {
+        return false;
+    }
+    let skips_school_immunity = spell.attributes_ex_2 & SPELL_ATTR_EX2_NO_SCHOOL_IMMUNITIES != 0;
     (spell.negative() && template_immune_to_school(ctx, unit, spell.school_mask))
         || super::auras_on(ctx, unit.guid).any(|aura| {
-            immunity_aura(ctx, &aura, spell.school_mask)
-                .is_some_and(|immunity| immunity.refuses_spell(spell.negative()))
+            immunity_aura(ctx, &aura, spell.school_mask).is_some_and(|immunity| {
+                !(skips_school_immunity && immunity.source_aura == SOURCE_SCHOOL_IMMUNITY)
+                    && immunity.refuses_spell(spell.negative())
+            })
         })
 }
 

@@ -404,6 +404,15 @@ impl ImmuneRefusals {
     ) -> bool {
         *self.header.entry(target_guid).or_insert_with(|| {
             crate::spell::is_immune_to_spell(ctx, caster_guid, target_guid, hdr, effects)
+                // vmangos tests a queued strike's school when its swing fires.
+                || (target_guid != caster_guid
+                    && !queues_next_swing(effects)
+                    && ctx
+                        .db
+                        .game_world_entity()
+                        .guid()
+                        .find(target_guid)
+                        .is_some_and(|unit| crate::spell::school_refuses_spell(ctx, &unit, hdr)))
         })
     }
 

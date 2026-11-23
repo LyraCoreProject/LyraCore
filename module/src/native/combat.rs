@@ -129,7 +129,7 @@ pub(crate) fn combat_event(ctx: &ReducerContext, event: &CombatEvent) {
                 event.ranged_spell_id,
                 event.target_guid,
                 ammo,
-                event.hit_info == 2,
+                super::spell::swing_miss_info(event.hit_info),
             ))),
             false,
         );
