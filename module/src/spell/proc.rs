@@ -330,7 +330,8 @@ pub(crate) fn run_proc_pass(
     attacker_guid: u64,
     target_guid: u64,
     hit: &Hit,
-    (target_survived, absorbed): (bool, u32),
+    target_survived: bool,
+    absorbed: u32,
 ) {
     fire_aura_procs(
         ctx,

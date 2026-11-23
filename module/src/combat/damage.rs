@@ -253,7 +253,7 @@ pub(crate) fn is_killing_blow(
     is_lethal(target.health, dmg) && !duel_takes_lethal_hit(ctx, attacker_guid, target)
 }
 
-// Absorb before lethal checks and godmode so even a zeroed hit drains shields. Godmode is no absorb.
+// Absorb before lethal checks and godmode so even a zeroed hit drains shields.
 pub(crate) fn fold_incoming_damage(
     ctx: &ReducerContext,
     attacker_guid: u64,
@@ -264,9 +264,9 @@ pub(crate) fn fold_incoming_damage(
     let outgoing_pct =
         crate::modifiers::combat_field_bonus(ctx, attacker_guid, crate::spell::COMBAT_DMG_DONE);
     let incoming = crate::spell::apply_damage_pct(rolled, outgoing_pct);
-    let unabsorbed = crate::spell::absorb_incoming(ctx, target_guid, incoming);
-    let dealt = landed_amount(entities.guid().find(target_guid).as_ref(), unabsorbed);
-    (dealt, incoming - unabsorbed)
+    let dealt = crate::spell::absorb_incoming(ctx, target_guid, incoming);
+    let dealt = landed_amount(entities.guid().find(target_guid).as_ref(), dealt);
+    (dealt, incoming - dealt)
 }
 
 // A godmode target takes no damage; the rule applies when damage lands.
@@ -376,7 +376,8 @@ pub(crate) fn apply_hit(
             attacker_guid,
             target_guid,
             &hit,
-            (true, damage.absorbed),
+            true,
+            damage.absorbed,
         );
         return HitOutcome {
             killed: false,
@@ -401,7 +402,8 @@ pub(crate) fn apply_hit(
             attacker_guid,
             target_guid,
             &hit,
-            (false, damage.absorbed),
+            false,
+            damage.absorbed,
         );
         return HitOutcome {
             killed: true,
@@ -447,13 +449,7 @@ pub(crate) fn apply_hit(
             crate::spell::arm_spell_retaliation(ctx, attacker_guid, target_guid);
         }
     }
-    crate::spell::proc::run_proc_pass(
-        ctx,
-        attacker_guid,
-        target_guid,
-        &hit,
-        (true, damage.absorbed),
-    );
+    crate::spell::proc::run_proc_pass(ctx, attacker_guid, target_guid, &hit, true, damage.absorbed);
     HitOutcome {
         killed: false,
         duel_completed: false,
@@ -501,7 +497,7 @@ pub(crate) fn resolve_damage(
     }
 }
 
-/// A projectile's damage, folded and absorbed at launch; godmode and the floor apply at impact.
+/// A projectile's damage, folded at launch; godmode applies at launch and impact, the floor at impact.
 #[derive(Clone, Copy)]
 pub(crate) struct FrozenDamage {
     amount: u32,

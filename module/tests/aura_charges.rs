@@ -1695,6 +1695,7 @@ fn a_swing_that_an_absorb_takes_part_of_raises_the_absorb_bit() {
     const ABSORB_POINTS: i32 = 1;
     let mut standalone = Standalone::start("aura-charges-partly-absorbed-swing");
     let wolf = stage(&mut standalone);
+    // Behind a wolf facing away, a swing is neither parried nor blocked.
     standalone.assert_sql(&format!(
         "UPDATE game_world_entity SET x = 0, y = 0, orientation = 0 WHERE guid = {PLAYER}"
     ));
