@@ -431,7 +431,7 @@ pub(crate) fn apply_buy_item_to(
         return Err(BuyRefusal::SoldOut);
     }
     if tmpl.required_reputation_rank != 0 {
-        use crate::{game_faction_template, game_player_reputation};
+        use crate::game_faction_template;
         let faction = if tmpl.required_reputation_faction != 0 {
             tmpl.required_reputation_faction
         } else {
@@ -441,13 +441,7 @@ pub(crate) fn apply_buy_item_to(
                 .find(vendor.faction_template)
                 .map_or(0, |faction| faction.faction)
         };
-        let standing = ctx
-            .db
-            .game_player_reputation()
-            .by_character()
-            .filter(character_guid)
-            .find(|reputation| reputation.faction_id == faction)
-            .map_or(0, |reputation| reputation.standing);
+        let standing = crate::reputation::reputation(ctx, character_guid, faction).unwrap_or(0);
         if u32::from(crate::reputation::reputation_rank(standing)) < tmpl.required_reputation_rank {
             return Err(BuyRefusal::Reputation);
         }

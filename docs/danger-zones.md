@@ -49,7 +49,8 @@ Shard. An existing multi-Shard Realm needs a reviewed data migration first; see
    `crates/lyracore-protocol/src/codec/values.rs`; each has a wire-pinning test.
 4. **`SMSG_SET_FACTION_STANDING` sends the reputation index** (`Faction.dbc` `ReputationListID`),
    not the `faction_id`. The id indexes past the client's 64-slot array and crashes the client
-   with ERROR #132.
+   with ERROR #132. It and `SMSG_INITIALIZE_FACTIONS` send the stored standing less the
+   Character's base standing; the client adds the base from its own Faction.dbc.
 5. **Don't gate features on client-display readback.** The server is authoritative, so verify
    effects server-side. Flag client visuals for a human to look at.
 6. **`#[default(...)]` cannot default a `String` column.** The SpacetimeDB macro type-checks every
@@ -156,6 +157,31 @@ These rules come from `Creature::GetVendorItemCurrentCount`, `UpdateVendorItemCu
 [vmangos d9173eca](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Creature.cpp).
 List zero counts remain visible, as in
 [`SendListInventory`](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/ItemHandler.cpp).
+
+### Base reputation migration
+
+`game_faction` gains `base_standing_2` to `base_standing_4`, `base_race_mask_1` to
+`base_race_mask_4` and `base_class_mask_1` to `base_class_mask_4`, end-appended with default 0.
+`base_standing` keeps slot 1. A Character starts each faction at the first slot whose race and
+class masks admit it, a zero mask admitting all, and at 0 when none does. Until a reimport every
+mask is 0, so slot 1 admits every Character. Interaction refusal now reads that base for a faction
+with no stored row instead of the faction templates, so until the reimport a Character counts as
+Friendly to the other team's capital cities (their slot 1 holds 3100) and their vendors, taxis and
+quest givers serve it. Reimport the `dbc` family straight after the publish. Shared import SQL
+defaults fill older inserts.
+
+`SMSG_INITIALIZE_FACTIONS` and `SMSG_SET_FACTION_STANDING` now send a stored standing less the
+Character's base (trap 4). A reputation pane for a faction with a non-zero base drops to the correct
+value: the client used to add its base to the full standing.
+
+Every `game_player_reputation` row written before the reimport holds slot 1's base. Order: publish,
+reimport the `dbc` family straight away, and the `dbc` stamp from `stamp_import_meta` runs a
+one-shot repair. It sets each row to `standing - base_standing + the Character's base`, clamped,
+and records the `repair_base_standing` family in `game_import_meta` so it never runs again. It
+skips, and records nothing, until some reputation faction has a non-zero mask, and while any
+Character with a reputation row is in Transfer; a later `dbc` stamp then runs it. Do not write rows
+on new masks before the stamp: the repair would shift them too. Move no Character between Shards
+until both Shards have run the repair, because a Transfer carries its rows unchanged.
 
 ### Buyback migration
 
@@ -842,6 +868,10 @@ that omits it inserts zero.
 - **`spacetime sql` (2.5):** no `ORDER BY`, no `IN` or subqueries, no `Timestamp` or `Identity`
   literal. A range filter on a single column can wrongly return 0 rows; use a histogram or
   `COUNT`. To load a `Timestamp` column, go through a reducer that stamps `ctx.timestamp`.
+- **`spacetime sql` INSERT fills columns by table position.** The values go to the table's columns
+  in declaration order, whatever order the named list gives, and nothing reports the mismatch. Name
+  columns in table order. The Native Host's `host.sql` reorders a named INSERT to the published
+  order, and `import_sql_defaults.txt` lists each table's END-appended defaults in table order.
 - **`spacetime sql` prints whole floats without a decimal point.** A regex that reads a coordinate
   back needs `-?[0-9]+(\.[0-9]+)?`, or a Character parked at exactly `x=-8890.0` fails every
   "did it arrive" poll.

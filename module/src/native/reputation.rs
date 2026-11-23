@@ -17,9 +17,10 @@ pub(crate) fn changed(
     {
         return;
     }
-    if let Some((opcode, body)) =
-        codec::build_set_faction_standing_raw(row.reputation_index as u32, row.standing)
-    {
+    if let Some((opcode, body)) = codec::build_set_faction_standing_raw(
+        row.reputation_index as u32,
+        crate::reputation::earned_standing(ctx, row),
+    ) {
         super::send_raw_to_character(ctx, row.character_guid, opcode, body);
     }
 }

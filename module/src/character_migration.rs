@@ -1013,8 +1013,7 @@ impl Arrival<'_> {
                     owner_identity: self.owner,
                     faction_id: reputation.faction_id,
                     standing: crate::reputation::clamped_standing(
-                        faction
-                            .base_standing
+                        crate::reputation::base_standing(self.ctx, self.guid, &faction)
                             .saturating_add(reputation.earned_standing),
                     ),
                     reputation_index: faction.reputation_index,

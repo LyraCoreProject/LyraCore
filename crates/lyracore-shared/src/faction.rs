@@ -49,6 +49,17 @@ pub fn reputation_rank(standing: i32) -> u8 {
     }
 }
 
+/// vmangos `GetIndexFitTo`: the first slot admitting race and class (zero admits all), else 0.
+pub fn base_standing(slots: [(u32, u32, i32); 4], race: u8, class: u8) -> i32 {
+    use crate::race_class::{mask_admits, ZeroMask::AdmitsAll};
+    slots
+        .into_iter()
+        .find(|&(race_mask, class_mask, _)| {
+            mask_admits(race_mask, race, AdmitsAll) && mask_admits(class_mask, class, AdmitsAll)
+        })
+        .map_or(0, |(_, _, standing)| standing)
+}
+
 pub fn relation_holds(
     asserting: &[u32; 4],
     vetoing: &[u32; 4],
@@ -76,6 +87,32 @@ pub fn refuses_interaction(reputation: Option<(i32, bool)>, template_hostile: bo
 #[cfg(test)]
 mod rule_tests {
     use super::*;
+
+    // Faction.dbc 1.12 rows for Cenarion Circle (609) and Wintersaber Trainers (589).
+    const CENARION_CIRCLE: [(u32, u32, i32); 4] =
+        [(255, 479, 0), (40, 1024, 2000), (0, 0, 0), (0, 0, 0)];
+    const WINTERSABER_TRAINERS: [(u32, u32, i32); 4] =
+        [(178, 0, -42000), (77, 0, 0), (0, 0, 0), (0, 0, 0)];
+
+    #[test]
+    fn base_standing_takes_the_first_slot_that_admits_race_and_class() {
+        let (tauren, night_elf, human) = (6, 4, 1);
+        let (warrior, druid) = (1, 11);
+        assert_eq!(base_standing(CENARION_CIRCLE, tauren, druid), 2000);
+        assert_eq!(base_standing(CENARION_CIRCLE, night_elf, druid), 2000);
+        assert_eq!(base_standing(CENARION_CIRCLE, tauren, warrior), 0);
+        assert_eq!(base_standing(WINTERSABER_TRAINERS, tauren, druid), -42000);
+        assert_eq!(base_standing(WINTERSABER_TRAINERS, human, warrior), 0);
+    }
+
+    #[test]
+    fn base_standing_is_zero_when_no_slot_admits_the_character() {
+        let (human, warrior) = (1, 1);
+        let other_races = [(2, 0, 500), (4, 0, 600), (8, 0, 700), (16, 0, 800)];
+        let druids_only = [(1, 1024, 2000); 4];
+        assert_eq!(base_standing(other_races, human, warrior), 0);
+        assert_eq!(base_standing(druids_only, human, warrior), 0);
+    }
 
     #[test]
     fn reputation_ranks_change_at_each_vanilla_threshold() {

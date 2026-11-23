@@ -73,6 +73,17 @@ game_spell_group power_rank 0
 game_creature_template mechanic_immune_mask 0
 game_creature_template call_for_help_range 5.0
 game_creature_template school_immune_mask 0
+game_faction base_standing_2 0
+game_faction base_standing_3 0
+game_faction base_standing_4 0
+game_faction base_race_mask_1 0
+game_faction base_race_mask_2 0
+game_faction base_race_mask_3 0
+game_faction base_race_mask_4 0
+game_faction base_class_mask_1 0
+game_faction base_class_mask_2 0
+game_faction base_class_mask_3 0
+game_faction base_class_mask_4 0
 game_faction_template flags 0
 game_taxi_node own_mount_horde true
 game_taxi_node own_mount_alliance true

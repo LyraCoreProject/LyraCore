@@ -40,6 +40,8 @@ mod ranged_swing_spec;
 mod ranged_swings;
 #[path = "conformance/repair.rs"]
 mod repair;
+#[path = "conformance/reputation.rs"]
+mod reputation;
 #[path = "conformance/rolls.rs"]
 mod rolls;
 #[path = "conformance/skills.rs"]

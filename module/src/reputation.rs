@@ -1,6 +1,8 @@
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
-use crate::{game_character, game_faction, game_faction_template, game_world_entity};
+use crate::{
+    faction::Faction, game_character, game_faction, game_faction_template, game_world_entity,
+};
 
 #[table(accessor = game_player_reputation, public, index(accessor = by_character, btree(columns = [character_guid])))]
 pub struct PlayerReputation {
@@ -26,7 +28,9 @@ impl PlayerReputation {
                 .game_faction()
                 .faction_id()
                 .find(row.faction_id)
-                .map_or(0, |faction| clamped_standing(faction.base_standing));
+                .map_or(0, |faction| {
+                    clamped_standing(base_standing(ctx, row.character_guid, &faction))
+                });
             row.at_war = false;
             crate::native::reputation::changed(ctx, None, &row);
             ctx.db.game_player_reputation().id().delete(id);
@@ -75,7 +79,27 @@ pub(crate) fn clamped_standing(standing: i32) -> i32 {
     standing.clamp(REP_MIN, REP_MAX)
 }
 
-/// Stored standing, else `game_faction.base_standing` (first Faction.dbc slot); `None` unindexed.
+/// vmangos `GetBaseReputation` for the Character's race and class; 0 when no slot admits it.
+pub(crate) fn base_standing(ctx: &ReducerContext, character_guid: u64, faction: &Faction) -> i32 {
+    let (race, class) = crate::helpers::character_by_guid(ctx, character_guid)
+        .map_or((0, 0), |character| (character.race, character.class));
+    faction.base_standing_for(race, class)
+}
+
+/// vmangos `FactionState::Standing`, the standing relative to the base, which the client is sent.
+pub(crate) fn earned_standing(ctx: &ReducerContext, row: &PlayerReputation) -> i32 {
+    let base = ctx
+        .db
+        .game_faction()
+        .faction_id()
+        .find(row.faction_id)
+        .map_or(0, |faction| {
+            base_standing(ctx, row.character_guid, &faction)
+        });
+    row.standing.saturating_sub(base)
+}
+
+/// Stored standing, else the Character's base standing; `None` unindexed.
 pub(crate) fn reputation(
     ctx: &ReducerContext,
     character_guid: u64,
@@ -93,8 +117,54 @@ pub(crate) fn reputation(
             .by_character()
             .filter(&character_guid)
             .find(|row| row.faction_id == faction_id)
-            .map_or(faction.base_standing, |row| row.standing),
+            .map_or_else(
+                || base_standing(ctx, character_guid, &faction),
+                |row| row.standing,
+            ),
     )
+}
+
+const BASE_STANDING_REPAIR_FAMILY: &str = "repair_base_standing";
+
+/// One-shot after the first `dbc` stamp with masks; see danger-zones "Base reputation migration".
+pub(crate) fn repair_base_standing(ctx: &ReducerContext) {
+    if crate::import_meta::is_imported(ctx, BASE_STANDING_REPAIR_FAMILY)
+        || !ctx
+            .db
+            .game_faction()
+            .iter()
+            .any(|faction| faction.reputation_index >= 0 && faction.has_slot_masks())
+    {
+        return;
+    }
+    let rows = ctx.db.game_player_reputation().iter().collect::<Vec<_>>();
+    if rows
+        .iter()
+        .any(|row| crate::transfer::is_in_transit(ctx, row.character_guid))
+    {
+        spacetimedb::log::warn!(
+            "repair_base_standing: a Character is in transit; the next dbc stamp runs the repair"
+        );
+        return;
+    }
+    let mut moved = 0u64;
+    for mut row in rows {
+        let Some(faction) = ctx.db.game_faction().faction_id().find(row.faction_id) else {
+            continue;
+        };
+        let standing = clamped_standing(
+            row.standing
+                .saturating_sub(faction.base_standing)
+                .saturating_add(base_standing(ctx, row.character_guid, &faction)),
+        );
+        if standing != row.standing {
+            row.standing = standing;
+            row.update(ctx);
+            moved += 1;
+        }
+    }
+    crate::import_meta::stamp(ctx, BASE_STANDING_REPAIR_FAMILY, "", "", moved);
+    spacetimedb::log::info!("repair_base_standing: moved {moved} reputation row(s) to their slot");
 }
 
 pub(crate) fn reputation_rank(standing: i32) -> u8 {
@@ -114,26 +184,12 @@ pub(crate) fn vendor_discount_pct(
     player_guid: u64,
     faction_template_id: u32,
 ) -> u32 {
-    let Some(tmpl) = ctx
-        .db
+    ctx.db
         .game_faction_template()
         .id()
         .find(faction_template_id)
-    else {
-        return 0;
-    };
-    if tmpl.faction == 0 {
-        return 0;
-    }
-    let standing = ctx
-        .db
-        .game_player_reputation()
-        .by_character()
-        .filter(&player_guid)
-        .find(|r| r.faction_id == tmpl.faction)
-        .map(|r| r.standing)
-        .unwrap_or(0);
-    reputation_discount_pct(standing)
+        .and_then(|tmpl| reputation(ctx, player_guid, tmpl.faction))
+        .map_or(0, reputation_discount_pct)
 }
 
 pub(crate) fn npc_refuses_interaction(
@@ -150,15 +206,18 @@ pub(crate) fn npc_refuses_interaction(
         .game_faction()
         .faction_id()
         .find(npc_ft.faction)
-        .filter(|parent| parent.reputation_index >= 0)
-        .and_then(|parent| {
+        .filter(|faction| faction.reputation_index >= 0)
+        .map(|faction| {
             ctx.db
                 .game_player_reputation()
                 .by_character()
                 .filter(&player.guid)
-                .find(|row| row.faction_id == parent.faction_id)
-        })
-        .map(|row| (row.standing, row.at_war));
+                .find(|row| row.faction_id == faction.faction_id)
+                .map_or_else(
+                    || (base_standing(ctx, player.guid, &faction), false),
+                    |row| (row.standing, row.at_war),
+                )
+        });
     let template_hostile = templates
         .id()
         .find(player.faction_template)
@@ -173,7 +232,9 @@ pub(crate) fn grant_reputation(
     amount: i32,
 ) {
     let (base, rep_index) = match ctx.db.game_faction().faction_id().find(faction_id) {
-        Some(f) if f.reputation_index >= 0 => (f.base_standing, f.reputation_index),
+        Some(f) if f.reputation_index >= 0 => {
+            (base_standing(ctx, player_guid, &f), f.reputation_index)
+        }
         _ => return,
     };
     let reps = ctx.db.game_player_reputation();
@@ -252,7 +313,7 @@ pub(crate) fn apply_set_faction_at_war(
             character_guid: player.guid,
             owner_identity: player.owner_identity,
             faction_id: faction.faction_id,
-            standing: clamped_standing(faction.base_standing),
+            standing: clamped_standing(base_standing(ctx, player.guid, &faction)),
             reputation_index: reputation_index as i32,
             at_war,
         },

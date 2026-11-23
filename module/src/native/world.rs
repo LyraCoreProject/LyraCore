@@ -115,7 +115,10 @@ pub(super) fn enter_character(
         .game_player_reputation()
         .by_character()
         .filter(guid)
-        .map(|rep| (rep.reputation_index, rep.standing, rep.at_war))
+        .map(|rep| {
+            let earned = crate::reputation::earned_standing(ctx, &rep);
+            (rep.reputation_index, earned, rep.at_war)
+        })
         .collect::<Vec<_>>();
     let actions = ctx
         .db
