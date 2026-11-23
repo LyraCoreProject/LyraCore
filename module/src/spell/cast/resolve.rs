@@ -384,7 +384,8 @@ fn grant_crafted_item(
     }
 }
 
-/// Each target's mechanic immunity, decided whatever its hit roll, as vmangos builds its effect mask.
+/// Each target's immunity: to the whole spell by mechanic or school before its hit roll, as vmangos
+/// `SpellHitResult` decides it, and to each effect by mechanic whatever the roll.
 #[derive(Default)]
 struct ImmuneRefusals {
     header: std::collections::HashMap<u64, bool>,
@@ -402,17 +403,20 @@ impl ImmuneRefusals {
         hdr: &Spell,
         effects: &[SpellEffect],
     ) -> bool {
+        let harmful = crate::spell::spell_is_harmful(hdr, effects);
+        let refused_by_school = |unit: crate::WorldEntity| {
+            crate::spell::school_refuses_spell(ctx, caster_guid, &unit, hdr, harmful)
+        };
         *self.header.entry(target_guid).or_insert_with(|| {
             crate::spell::is_immune_to_spell(ctx, caster_guid, target_guid, hdr, effects)
                 // vmangos tests a queued strike's school when its swing fires.
-                || (target_guid != caster_guid
-                    && !queues_next_swing(effects)
+                || (!queues_next_swing(effects)
                     && ctx
                         .db
                         .game_world_entity()
                         .guid()
                         .find(target_guid)
-                        .is_some_and(|unit| crate::spell::school_refuses_spell(ctx, &unit, hdr)))
+                        .is_some_and(refused_by_school))
         })
     }
 
@@ -453,6 +457,47 @@ impl ImmuneRefusals {
             self.refused_whole(target_guid)
                 .then_some(crate::spell::CAST_MISS_IMMUNE2)
         }
+    }
+}
+
+// vmangos Spell::DoAllEffectOnTarget: a refused harmful spell still procs and draws the unit in.
+fn answer_whole_refusals(
+    ctx: &ReducerContext,
+    immunity: &ImmuneRefusals,
+    caster_guid: u64,
+    origin: CastOrigin,
+    spell: &LoadedSpell,
+) {
+    let (hdr, effects) = (&spell.header, spell.effects.as_slice());
+    if !crate::spell::spell_is_harmful(hdr, effects) {
+        return;
+    }
+    for t in immunity.whole_refusals() {
+        if origin.can_trigger(hdr) {
+            crate::spell::proc::run_immune_proc_pass(ctx, caster_guid, t, hdr.spell_id);
+        }
+        if t != caster_guid && !matches!(origin, CastOrigin::AuraTriggered) {
+            engage_refusing_unit(ctx, caster_guid, t);
+        }
+    }
+}
+
+fn engage_refusing_unit(ctx: &ReducerContext, caster_guid: u64, unit_guid: u64) {
+    let entities = ctx.db.game_world_entity();
+    let (Some(caster), Some(unit)) = (
+        entities.guid().find(caster_guid),
+        entities.guid().find(unit_guid),
+    ) else {
+        return;
+    };
+    if unit.dead || !crate::combat::may_harm(ctx, &caster, &unit) {
+        return;
+    }
+    if unit.is_player() {
+        crate::combat::enter_combat(ctx, caster_guid);
+        crate::combat::enter_combat(ctx, unit_guid);
+    } else {
+        crate::threat::engage_without_threat(ctx, unit_guid, caster_guid);
     }
 }
 
@@ -525,6 +570,9 @@ fn run_spell_effects(
             if t != caster_guid && !matches!(origin, CastOrigin::AuraTriggered) {
                 crate::pvp::spell_targeted(ctx, caster_guid, t, e);
             }
+            if rolls_weapon && t != caster_guid {
+                remember_hit_target(&mut weapon_targets, &mut seen_weapon_targets, t);
+            }
             if immunity.refuses_spell(ctx, caster_guid, t, hdr, effects) {
                 continue;
             }
@@ -535,9 +583,6 @@ fn run_spell_effects(
             } else {
                 AttackOutcome::Normal
             };
-            if rolls_weapon && t != caster_guid {
-                remember_hit_target(&mut weapon_targets, &mut seen_weapon_targets, t);
-            }
             let immune = crate::spell::is_immune_to_effect(ctx, caster_guid, t, hdr, e);
             immunity.record(t, immune);
             if roll.is_avoided() {
@@ -598,11 +643,7 @@ fn run_spell_effects(
             }
         }
     }
-    if origin.can_trigger(hdr) && crate::spell::spell_is_harmful(hdr, effects) {
-        for t in immunity.whole_refusals() {
-            crate::spell::proc::run_immune_proc_pass(ctx, caster_guid, t, hdr.spell_id);
-        }
-    }
+    answer_whole_refusals(ctx, &immunity, caster_guid, origin, spell);
     // Spend after every effect has read the points; vmangos keeps them when a finisher misses.
     if hdr.cast_flags & CAST_FLAG_COMBO_FINISHER != 0
         && !primary_avoided.is_avoided()
@@ -2049,29 +2090,29 @@ fn check_target_aura_state(
     caster_guid: u64,
     target_guid: u64,
 ) -> Result<(), CastGateRefusal> {
-    let exists = target_guid != 0
-        && ctx
-            .db
-            .game_world_entity()
-            .guid()
-            .find(target_guid)
-            .is_some();
-    if exists
-        && crate::spell::refuses_helpful_spell(
-            ctx,
-            caster_guid,
-            target_guid,
-            &spell.header,
-            &spell.effects,
-        )
-    {
-        return Err(CastGateRefusal::other(
+    let (hdr, effects) = (&spell.header, spell.effects.as_slice());
+    let Some(target) = (target_guid != 0)
+        .then(|| ctx.db.game_world_entity().guid().find(target_guid))
+        .flatten()
+    else {
+        return Ok(());
+    };
+    let refusal = |immune_to: &str| {
+        Err(CastGateRefusal::other(
             CastRefusalReason::TargetAuraState,
             format!(
-                "spell {} is refused: unit {target_guid} is immune to its mechanic",
-                spell.header.spell_id
+                "spell {} is refused: unit {target_guid} is immune to its {immune_to}",
+                hdr.spell_id
             ),
-        ));
+        ))
+    };
+    if crate::spell::refuses_helpful_spell(ctx, caster_guid, target_guid, hdr, effects) {
+        return refusal("mechanic");
+    }
+    if !crate::spell::spell_is_harmful(hdr, effects)
+        && crate::spell::school_refuses_spell(ctx, caster_guid, &target, hdr, false)
+    {
+        return refusal("school");
     }
     Ok(())
 }

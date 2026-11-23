@@ -3,27 +3,38 @@ mod support;
 use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::spell::taxonomy::{
-    A_IMMUNITY, E_DAMAGE, E_NEXT_SWING, P_SCHOOL_MASK, T_SELF, T_TARGET_ENEMY,
+    A_IMMUNITY, A_MOD_DAMAGE_TAKEN, CAST_FLAG_IGNORE_RESISTANCES, E_DAMAGE, E_HEAL, E_NEXT_SWING,
+    P_SCHOOL_MASK, T_AREA_ENEMY, T_SELF, T_TARGET_ENEMY,
 };
-use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
+use support::{event_rows, fence_subscription, subscribe_with_fence, Field, Standalone};
 
 const PLAYER: u64 = 1;
+const PLAYER_HEALTH: u32 = 10_000;
 const WOLF_HEALTH: u32 = 100_000;
-const PHYSICAL: u32 = 1;
+const PHYSICAL: u32 = 0x01;
+const HOLY: u32 = 0x02;
 const FROST: u32 = 0x10;
 const SHADOW: u32 = 0x20;
+const ALL_SCHOOLS: u32 = 0x7f;
 // vmangos SpellSchools index of SHADOW, as game_item_template.damage_school stores it.
 const SHADOW_SCHOOL: u8 = 5;
 // AttackOutcome::wire codes in game_combat_event_live.hit_info.
 const HIT_INFO_IMMUNE: &str = "8";
-// vmangos SpellMissInfo SPELL_MISS_IMMUNE in game_spell_cast_event_live.miss_info.
+// vmangos SpellMissInfo in game_spell_cast_event_live.miss_info.
+const MISS_NONE: &str = "0";
 const MISS_IMMUNE: &str = "7";
-// Source aura id in an immunity Aura's p1: docs/schema.md#damage-shields.
+// Source aura id and both-polarities bit in an immunity Aura's p1: docs/schema.md#damage-shields.
 const SOURCE_SCHOOL_IMMUNITY: i32 = 39;
+const IMMUNE_TO_HOSTILE_AND_FRIENDLY: i32 = 0x100;
 const SWING_EVENTS: &str = "SELECT * FROM game_combat_event_live";
 const FROSTBOLT_FIXTURE: u32 = 5_117_201;
 const QUEUED_STRIKE_FIXTURE: u32 = 5_117_202;
-const PHYSICAL_IMMUNITY_FIXTURE: u32 = 5_117_203;
+const IMMUNITY_FIXTURE: u32 = 5_117_203;
+const HEAL_FIXTURE: u32 = 5_117_204;
+const FROST_AREA_FIXTURE: u32 = 5_117_205;
+const DEBUFF_FIXTURE: u32 = 5_117_206;
+const HEAL_COST: u32 = 100;
+const MANA: u32 = 1_000;
 const SHOOT: u32 = 5019;
 const WAND: u8 = 19;
 const RANGED_SLOT: u8 = 17;
@@ -66,21 +77,16 @@ fn a_creature_whose_template_is_immune_to_physical_takes_no_white_swing_damage()
 fn a_frost_spell_on_a_frost_immune_creature_reports_immune_and_deals_nothing() {
     let mut standalone = Standalone::start("school-immunity-frost-spell");
     let wolf = stage(&mut standalone);
-    standalone.insert_row(
-        "game_spell",
+    insert_spell(
+        &standalone,
+        FROSTBOLT_FIXTURE,
         &[
-            ("spell_id", &FROSTBOLT_FIXTURE),
-            ("name", &"Frostbolt fixture"),
-            ("school_mask", &(FROST as u8)),
+            ("school_mask", &FROST),
             ("range_yd", &30),
             ("is_negative", &true),
+            ("cast_flags", &CAST_FLAG_IGNORE_RESISTANCES),
         ],
-    );
-    standalone.insert_row(
-        "game_spell_effect",
         &[
-            ("id", &packed_spell_effect_id(FROSTBOLT_FIXTURE, 0)),
-            ("spell_id", &FROSTBOLT_FIXTURE),
             ("kind", &E_DAMAGE),
             ("base_points", &50),
             ("target", &T_TARGET_ENEMY),
@@ -88,28 +94,148 @@ fn a_frost_spell_on_a_frost_immune_creature_reports_immune_and_deals_nothing() {
     );
     set_template_school_immunity(&standalone, FROST);
 
-    let events = subscribe_with_fence(
-        &standalone,
-        &[&format!(
-            "SELECT * FROM game_spell_cast_event_live \
-             WHERE spell_id = {FROSTBOLT_FIXTURE} AND kind = 2"
-        )],
-    );
-    standalone.assert_call(
-        "debug_cast_at",
-        &["1", &FROSTBOLT_FIXTURE.to_string(), &wolf.to_string()],
-    );
-    standalone.assert_call("debug_advance_virtual_clock", &["50000"]);
-    fence_subscription(&standalone, &events);
-    let go = event_rows(&events, "game_spell_cast_event_live")
-        .pop()
-        .expect("the cast completes");
+    let go = cast_go(&standalone, FROSTBOLT_FIXTURE, wolf);
     assert_eq!(
         go["miss_info"], MISS_IMMUNE,
         "the template refuses the bolt before its hit roll"
     );
     assert_eq!(go["damage"], "0");
     assert_eq!(health(&standalone, wolf), WOLF_HEALTH);
+
+    set_template_school_immunity(&standalone, 0);
+    let go = cast_go(&standalone, FROSTBOLT_FIXTURE, wolf);
+    assert_eq!(go["miss_info"], MISS_NONE);
+    assert!(
+        health(&standalone, wolf) < WOLF_HEALTH,
+        "without the immunity the same bolt lands"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_harmful_spell_without_damage_is_refused_by_a_creature_immune_to_its_school() {
+    let mut standalone = Standalone::start("school-immunity-harmful-aura");
+    let wolf = stage(&mut standalone);
+    insert_spell(
+        &standalone,
+        DEBUFF_FIXTURE,
+        &[
+            ("school_mask", &PHYSICAL),
+            ("range_yd", &30),
+            ("is_negative", &false),
+            ("duration_ms", &600_000),
+            ("spell_level", &1),
+        ],
+        &[
+            ("kind", &A_MOD_DAMAGE_TAKEN),
+            ("base_points", &20),
+            ("target", &T_TARGET_ENEMY),
+            ("p_0", &(PHYSICAL as i32)),
+            ("p_0_kind", &P_SCHOOL_MASK),
+        ],
+    );
+    set_template_school_immunity(&standalone, PHYSICAL);
+
+    let go = cast_go(&standalone, DEBUFF_FIXTURE, wolf);
+    assert_eq!(
+        go["miss_info"], MISS_IMMUNE,
+        "a spell aimed at an enemy is harmful whatever its imported polarity"
+    );
+    assert!(auras(&standalone, wolf, DEBUFF_FIXTURE).is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn an_area_spell_hits_the_creature_beside_one_immune_to_its_school() {
+    let mut standalone = Standalone::start("school-immunity-area");
+    let immune = stage(&mut standalone);
+    let exposed = spawn_wolf(&standalone);
+    give_immunity_aura(&standalone, immune, FROST, SOURCE_SCHOOL_IMMUNITY);
+    insert_spell(
+        &standalone,
+        FROST_AREA_FIXTURE,
+        &[
+            ("school_mask", &FROST),
+            ("range_yd", &30),
+            ("is_negative", &true),
+            ("cast_flags", &CAST_FLAG_IGNORE_RESISTANCES),
+        ],
+        &[
+            ("kind", &E_DAMAGE),
+            ("base_points", &50),
+            ("target", &T_AREA_ENEMY),
+            ("radius_yd", &10.0),
+        ],
+    );
+
+    cast_go(&standalone, FROST_AREA_FIXTURE, immune);
+    assert_eq!(health(&standalone, immune), WOLF_HEALTH);
+    assert!(health(&standalone, exposed) < WOLF_HEALTH);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_heal_lands_through_a_school_immunity_from_a_helpful_source() {
+    let mut standalone = Standalone::start("school-immunity-heal-through-shield");
+    stage(&mut standalone);
+    give_immunity_aura(&standalone, PLAYER, ALL_SCHOOLS, SOURCE_SCHOOL_IMMUNITY);
+    insert_heal(&standalone, 0);
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = {} WHERE guid = {PLAYER}",
+        PLAYER_HEALTH / 2
+    ));
+
+    let go = cast_go(&standalone, HEAL_FIXTURE, PLAYER);
+    assert_eq!(go["miss_info"], MISS_NONE);
+    assert!(
+        health(&standalone, PLAYER) > PLAYER_HEALTH / 2,
+        "vmangos IsImmuneToSchool lets a helpful spell past a helpful source's immunity"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_helpful_spell_on_a_unit_immune_to_its_school_is_refused_before_its_cost() {
+    let mut standalone = Standalone::start("school-immunity-helpful-refused");
+    stage(&mut standalone);
+    give_immunity_aura(
+        &standalone,
+        PLAYER,
+        HOLY,
+        SOURCE_SCHOOL_IMMUNITY | IMMUNE_TO_HOSTILE_AND_FRIENDLY,
+    );
+    insert_heal(&standalone, HEAL_COST);
+    let bytes: u32 = standalone.query_rows(&format!(
+        "SELECT unit_bytes_0 FROM game_world_entity WHERE guid = {PLAYER}"
+    ))[0]["unit_bytes_0"]
+        .parse()
+        .unwrap();
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET unit_bytes_0 = {}, max_power = {MANA} WHERE guid = {PLAYER}",
+        bytes & 0x00FF_FFFF
+    ));
+    standalone.assert_call("debug_set_power", &["1", &MANA.to_string()]);
+
+    let output = standalone.call(
+        "debug_begin_cast",
+        &["1", &HEAL_FIXTURE.to_string(), &PLAYER.to_string()],
+    );
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success() && text.contains("is immune to its school"),
+        "vmangos Spell::CheckCast refuses it with TARGET_AURASTATE: {text}"
+    );
+    assert_eq!(
+        standalone.query_rows(&format!(
+            "SELECT power FROM game_world_entity WHERE guid = {PLAYER}"
+        ))[0]["power"],
+        MANA.to_string(),
+        "the refusal spends no mana"
+    );
 }
 
 #[test]
@@ -117,22 +243,16 @@ fn a_frost_spell_on_a_frost_immune_creature_reports_immune_and_deals_nothing() {
 fn a_queued_strike_on_a_creature_under_a_physical_immunity_aura_deals_nothing() {
     let mut standalone = Standalone::start("school-immunity-queued-strike");
     let wolf = stage(&mut standalone);
-    stage_physical_immunity_aura(&standalone, wolf);
-    standalone.insert_row(
-        "game_spell",
+    give_immunity_aura(&standalone, wolf, PHYSICAL, SOURCE_SCHOOL_IMMUNITY);
+    insert_spell(
+        &standalone,
+        QUEUED_STRIKE_FIXTURE,
         &[
-            ("spell_id", &QUEUED_STRIKE_FIXTURE),
-            ("name", &"Queued strike fixture"),
-            ("school_mask", &(PHYSICAL as u8)),
+            ("school_mask", &PHYSICAL),
             ("range_yd", &5),
             ("is_negative", &true),
         ],
-    );
-    standalone.insert_row(
-        "game_spell_effect",
         &[
-            ("id", &packed_spell_effect_id(QUEUED_STRIKE_FIXTURE, 0)),
-            ("spell_id", &QUEUED_STRIKE_FIXTURE),
             ("kind", &E_NEXT_SWING),
             ("base_points", &11),
             ("target", &T_TARGET_ENEMY),
@@ -215,47 +335,90 @@ fn a_wand_shot_on_a_creature_whose_template_is_immune_to_the_wands_school_deals_
     assert_eq!(health(&standalone, wolf), WOLF_HEALTH);
 }
 
-fn stage_physical_immunity_aura(standalone: &Standalone, wolf: u64) {
-    standalone.insert_row(
-        "game_spell",
+fn insert_spell(standalone: &Standalone, spell_id: u32, spell: &[Field], effect: &[Field]) {
+    let name = format!("School immunity fixture {spell_id}");
+    let mut spell_row: Vec<Field> = vec![("spell_id", &spell_id), ("name", &name)];
+    spell_row.extend_from_slice(spell);
+    standalone.insert_row("game_spell", &spell_row);
+    let effect_id = packed_spell_effect_id(spell_id, 0);
+    let mut effect_row: Vec<Field> = vec![("id", &effect_id), ("spell_id", &spell_id)];
+    effect_row.extend_from_slice(effect);
+    standalone.insert_row("game_spell_effect", &effect_row);
+}
+
+fn insert_heal(standalone: &Standalone, cost: u32) {
+    insert_spell(
+        standalone,
+        HEAL_FIXTURE,
         &[
-            ("spell_id", &PHYSICAL_IMMUNITY_FIXTURE),
-            ("name", &"Physical immunity fixture"),
-            ("school_mask", &2u8),
+            ("school_mask", &HOLY),
+            ("range_yd", &30),
+            ("is_negative", &false),
+            ("cost", &cost),
+        ],
+        &[
+            ("kind", &E_HEAL),
+            ("base_points", &500),
+            ("target", &T_SELF),
+        ],
+    );
+}
+
+// A helpful Spell carries the immunity, as Divine Shield and Blessing of Protection do.
+fn give_immunity_aura(standalone: &Standalone, unit: u64, school_mask: u32, source: i32) {
+    insert_spell(
+        standalone,
+        IMMUNITY_FIXTURE,
+        &[
+            ("school_mask", &HOLY),
             ("duration_ms", &600_000),
             ("spell_level", &1),
         ],
-    );
-    standalone.insert_row(
-        "game_spell_effect",
         &[
-            ("id", &packed_spell_effect_id(PHYSICAL_IMMUNITY_FIXTURE, 0)),
-            ("spell_id", &PHYSICAL_IMMUNITY_FIXTURE),
             ("kind", &A_IMMUNITY),
             ("target", &T_SELF),
-            ("p_0", &(PHYSICAL as i32)),
+            ("p_0", &(school_mask as i32)),
             ("p_0_kind", &P_SCHOOL_MASK),
-            ("p_1", &SOURCE_SCHOOL_IMMUNITY),
+            ("p_1", &source),
         ],
     );
     standalone.assert_call(
         "debug_force_cast_at",
         &[
-            &wolf.to_string(),
-            &PHYSICAL_IMMUNITY_FIXTURE.to_string(),
-            &wolf.to_string(),
+            &unit.to_string(),
+            &IMMUNITY_FIXTURE.to_string(),
+            &unit.to_string(),
         ],
     );
     assert_eq!(
-        standalone
-            .query_rows(&format!(
-                "SELECT spell_id FROM game_aura WHERE target_guid = {wolf} \
-                 AND spell_id = {PHYSICAL_IMMUNITY_FIXTURE}"
-            ))
-            .len(),
+        auras(standalone, unit, IMMUNITY_FIXTURE).len(),
         1,
-        "the wolf carries the immunity Aura"
+        "the unit carries the immunity Aura"
     );
+}
+
+fn cast_go(standalone: &Standalone, spell_id: u32, target: u64) -> support::Row {
+    let events = subscribe_with_fence(
+        standalone,
+        &[&format!(
+            "SELECT * FROM game_spell_cast_event_live WHERE spell_id = {spell_id} AND kind = 2"
+        )],
+    );
+    standalone.assert_call(
+        "debug_cast_at",
+        &["1", &spell_id.to_string(), &target.to_string()],
+    );
+    standalone.assert_call("debug_advance_virtual_clock", &["50000"]);
+    fence_subscription(standalone, &events);
+    event_rows(&events, "game_spell_cast_event_live")
+        .pop()
+        .expect("the cast completes")
+}
+
+fn auras(standalone: &Standalone, unit: u64, spell_id: u32) -> Vec<support::Row> {
+    standalone.query_rows(&format!(
+        "SELECT spell_id FROM game_aura WHERE target_guid = {unit} AND spell_id = {spell_id}"
+    ))
 }
 
 fn stage(standalone: &mut Standalone) -> u64 {
@@ -264,6 +427,20 @@ fn stage(standalone: &mut Standalone) -> u64 {
     standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_spawn_player_entity", &["1"]);
     standalone.assert_call("debug_start_virtual_clock", &["1800000000000000"]);
+    let wolf = spawn_wolf(standalone);
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET health = {PLAYER_HEALTH}, max_health = {PLAYER_HEALTH} \
+         WHERE guid = {PLAYER}"
+    ));
+    standalone.insert_row(
+        "game_conformance_swing_random",
+        &[("character_guid", &1), ("state", &1)],
+    );
+    standalone.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
+    wolf
+}
+
+fn spawn_wolf(standalone: &Standalone) -> u64 {
     standalone.assert_call(
         "debug_spawn_at_feet",
         &["1", &TEST_WOLF_ENTRY.to_string(), "1.0"],
@@ -280,14 +457,6 @@ fn stage(standalone: &mut Standalone) -> u64 {
         "UPDATE game_world_entity SET simulation_indexed = false, armor = 0, level = 1, \
          health = {WOLF_HEALTH}, max_health = {WOLF_HEALTH} WHERE guid = {wolf}"
     ));
-    standalone.assert_sql(
-        "UPDATE game_world_entity SET health = 10000, max_health = 10000 WHERE guid = 1",
-    );
-    standalone.insert_row(
-        "game_conformance_swing_random",
-        &[("character_guid", &1), ("state", &1)],
-    );
-    standalone.assert_call("debug_equip_weapon", &["1", &FIXTURE_BLADE.to_string()]);
     wolf
 }
 

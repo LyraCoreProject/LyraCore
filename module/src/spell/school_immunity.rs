@@ -26,23 +26,27 @@ pub(crate) fn aura_refuses_damage(ctx: &ReducerContext, aura: &Aura, school_mask
     immunity_aura(ctx, aura, school_mask).is_some_and(|immunity| immunity.refuses_damage())
 }
 
-/// vmangos `IsImmuneToSpell` by school, then `IsImmuneToDamage`, for a Spell on another unit.
+/// vmangos `SpellHitResult` by school: `IsImmuneToSpell`, then `IsImmuneToDamage` for a harmful
+/// Spell on another unit. A unit's own Spell on itself skips the template mask and damage immunity.
 pub(crate) fn school_refuses_spell(
     ctx: &ReducerContext,
+    caster_guid: u64,
     unit: &WorldEntity,
     spell: &Spell,
+    harmful: bool,
 ) -> bool {
     if spell.attributes & SPELL_ATTR_NO_IMMUNITIES != 0
         || spell.attributes_ex_3 & SPELL_ATTR_EX3_IGNORE_RESTRICTIONS != 0
     {
         return false;
     }
+    let on_self = unit.guid == caster_guid;
     let skips_school_immunity = spell.attributes_ex_2 & SPELL_ATTR_EX2_NO_SCHOOL_IMMUNITIES != 0;
-    (spell.negative() && template_immune_to_school(ctx, unit, spell.school_mask))
+    (harmful && !on_self && template_immune_to_school(ctx, unit, spell.school_mask))
         || super::auras_on(ctx, unit.guid).any(|aura| {
             immunity_aura(ctx, &aura, spell.school_mask).is_some_and(|immunity| {
                 !(skips_school_immunity && immunity.source_aura == SOURCE_SCHOOL_IMMUNITY)
-                    && immunity.refuses_spell(spell.negative())
+                    && immunity.refuses_spell(harmful, on_self)
             })
         })
 }
@@ -77,12 +81,10 @@ impl ImmunityAura {
     }
 
     // vmangos `IsImmuneToSchool` refuses the other polarity; damage immunity a harmful Spell.
-    fn refuses_spell(&self, negative: bool) -> bool {
+    fn refuses_spell(&self, harmful: bool, on_self: bool) -> bool {
         match self.source_aura {
-            SOURCE_SCHOOL_IMMUNITY => {
-                self.both_polarities || self.source_negative != Some(negative)
-            }
-            SOURCE_DAMAGE_IMMUNITY => negative,
+            SOURCE_SCHOOL_IMMUNITY => self.both_polarities || self.source_negative != Some(harmful),
+            SOURCE_DAMAGE_IMMUNITY => harmful && !on_self,
             _ => false,
         }
     }

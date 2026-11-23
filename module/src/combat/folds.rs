@@ -886,12 +886,18 @@ pub(crate) fn roll_ranged_swing(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
     target: &WorldEntity,
-    dmin: u32,
-    dmax: u32,
+    ranged_spell_id: u32,
+    (dmin, dmax): (u32, u32),
 ) -> (u32, AttackOutcome) {
     let school = ranged_school(ctx, attacker.guid);
-    // vmangos SpellHitResult tests Auto Shot's school, or a wand's, before the hit roll.
-    if crate::spell::immune_to_school(ctx, target, 1 << school) {
+    let spell_school_mask = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(ranged_spell_id)
+        .map_or(SCHOOL_MASK_PHYSICAL, |spell| spell.school_mask);
+    // vmangos SpellHitResult: IsImmuneToSpell takes Shoot's school, IsImmuneToDamage the wand's.
+    if crate::spell::immune_to_school(ctx, target, spell_school_mask | (1 << school)) {
         return (0, AttackOutcome::Immune);
     }
     let (outcome, _) = roll_attack(ctx, attacker, target, AttackType::Ranged, None);

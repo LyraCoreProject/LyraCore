@@ -1223,14 +1223,16 @@ immunity also blocks friendly effects. Reflection uses this distinction to choos
 `SMSG_SPELLORDAMAGE_IMMUNE` before applying damage. A damage immunity always blocks the reflected
 damage; a school immunity blocks it only when its source is helpful or carries bit 0x100. A
 creature template's `school_immune_mask` blocks it too. White swings and queued strikes use the
-same damage test for physical damage, and a ranged swing for its weapon's school: an immune target
-takes no attack table roll and no damage, and the swing reports victim state 7 or the spell miss
-Immune. A harmful Spell on another unit takes the test with the Spell's school before its hit roll,
-as vmangos `SpellHitResult` does, and the cast reports `SPELL_MISS_IMMUNE`. A school immunity
-refuses a helpful Spell only when its source is harmful or carries bit 0x100. A Spell with
-`SPELL_ATTR_NO_IMMUNITIES` or the ignore-restrictions attribute skips the test, and one with
-`SPELL_ATTR_EX2_NO_SCHOOL_IMMUNITIES` skips school immunity Auras. Shield damage still lands when
-the reflected swing ended a Duel.
+same damage test for physical damage, and a ranged swing for its spell's school and its weapon's
+school: an immune target takes no attack table roll and no damage, and the swing reports victim
+state 7 or the spell miss Immune. A Spell takes the test with its school before its hit roll, as
+vmangos `SpellHitResult` does, and the cast reports `SPELL_MISS_IMMUNE`; a refused harmful Spell
+still draws a creature into combat. Only a harmful Spell on another unit meets the template mask and
+damage immunity. A school immunity refuses a helpful Spell only when its source is harmful or
+carries bit 0x100, and the cast refuses such a Spell before it charges its cost. A periodic damage
+tick and a ground area tick take the test on every tick. A Spell with `SPELL_ATTR_NO_IMMUNITIES` or
+the ignore-restrictions attribute skips the test, and one with `SPELL_ATTR_EX2_NO_SCHOOL_IMMUNITIES`
+skips school immunity Auras. Shield damage still lands when the reflected swing ended a Duel.
 
 ### Mechanic numbering
 

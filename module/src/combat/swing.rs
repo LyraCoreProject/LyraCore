@@ -819,7 +819,8 @@ fn fire_ranged_shot(
     } else {
         (dmin, dmax)
     };
-    let (rolled, hit_info) = roll_ranged_swing(ctx, attacker, target, rdmin, rdmax);
+    let (rolled, hit_info) =
+        roll_ranged_swing(ctx, attacker, target, ranged_spell_id, (rdmin, rdmax));
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
