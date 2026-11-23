@@ -1371,7 +1371,7 @@ fn apply_inventory_effect(
                     let target_entry = target.entry;
                     target.pickpocketed = true;
                     target.update(ctx);
-                    crate::loot::roll_pickpocket_loot(ctx, target_entry, target_guid);
+                    crate::loot::roll_pickpocket_loot(ctx, target_entry, target_guid, caster_guid);
                 }
             }
             EffectHit::none()
