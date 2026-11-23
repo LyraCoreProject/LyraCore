@@ -548,13 +548,17 @@ Strikes, which roll only miss and crit, need their own context.
 
 ## Pinned fifth and sixth contexts: ranged swings
 
-Added 2026-11-23 for issue #1026. Two auto-repeat ranged swings each get a context: Auto Shot,
-spell 75, from a gun, and Shoot, spell 5019, from a wand. Both Characters are level-60 humans with
-agility 100, defense and unarmed skill at 300/300, an empty main hand and no talents, auras or
-hit and crit bonuses. The Auto Shot Character is the first context's warrior. It holds gun 2508 in
-the ranged slot, bullets 2516 in its backpack, and guns skill 46 at 300/300. The wand Character is a priest, class 5, because vmangos gives a wand its weapon's
-school only for wand-using classes. It holds wand 11287, with wands skill 228 at 300/300. Each target is the first context's creature, passive so that it never closes to melee,
-ten yards ahead for Auto Shot and six for the wand; no roll formula reads distance.
+Added 2026-11-23 for issue #1026. Two auto-repeat ranged swings each get a context: Auto Shot, spell
+75, from a gun, and Shoot, spell 5019, from a wand. Both Characters are level-60 humans with agility
+100, defense and unarmed skill at 300/300, an empty main hand and no talents, auras or hit and crit
+bonuses. The Auto Shot Character is the first context's warrior. It holds gun 2508 in the ranged
+slot, bullets 2516 in its backpack, and guns skill 46 at 300/300. Auto Shot is a hunter spell, and a
+warrior fires a gun with Shoot Gun, spell 7918. The warrior casting spell 75 is deliberate and
+rate-neutral: it keeps the first context's Character, and for a gun the rolls read the class only
+through its crit rate. The wand Character is a priest, class 5, because vmangos gives a wand its
+weapon's school only for wand-using classes. It holds wand 11287, with wands skill 228 at 300/300.
+Each target is the first context's creature, passive so that it never closes to melee, ten yards
+ahead for Auto Shot and six for the wand; no roll formula reads distance.
 
 The pinned database selects `spell_template` 75 build 5086 (`mangos.sql:5882`) over build 4222
 (`mangos.sql:5887`): attributes `0x50012` (ranged slot, ability, not while shapeshifted, no
@@ -639,13 +643,14 @@ is not a rate.
 
 Tier 1 enters through `CMSG_CAST_SPELL`, which starts the auto-repeat, then the ordinary melee
 scheduler, ranged impact schedule and delivered packets, with the white seam stream and the public
-seeds. Each batch advances one weapon delay. An unretained readiness check requires two whole shots
-per Character. Each context reserves its own family: 1e-6 over four checks, two levels and three
-seeds, 24 tests at `1e-6/24`. Each submission's false-failure bound across the six contexts is
-therefore 5e-6. The signatures join `white_melee_outcomes`: rule `auto_shot_distribution` or
-`wand_shot_distribution` with field `["outcomes", category]`, or the `_sample` rule with field
-`["outcomes"]`. The checkpoint is `<context>_level_<level>_<seed slot>`, the stream `casts`, opcode
-`0x0132`. The merge seed measures both with white melee.
+seeds. Each batch advances one weapon delay. An unretained readiness check requires two counted
+shots per Character; a shot still in flight counts in the sample. Each context reserves its own
+family: 1e-6 over four checks, two levels and three seeds, 24 tests at `1e-6/24`. Each submission's
+false-failure bound across the six contexts is therefore 5e-6. The signatures join
+`white_melee_outcomes`: rule `auto_shot_distribution` or `wand_shot_distribution` with field
+`["outcomes", category]`, or the `_sample` rule with field `["outcomes"]`. The checkpoint is
+`<context>_level_<level>_<seed slot>`, the stream `casts`, opcode `0x0132`. The merge seed measures
+both with white melee.
 
 No Reference Server recording exists for these contexts yet, and no harness scenario. Thrown
 weapons, bows and crossbows use the same table and remain unmeasured.

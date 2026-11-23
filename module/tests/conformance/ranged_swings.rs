@@ -103,7 +103,7 @@ fn advance_and_drain(
     Ok(receiver.drain_packets())
 }
 
-// Unretained readiness: each Character starts its auto-repeat and lands two whole shots.
+// Unretained readiness: two shots per Character; one still in flight is counted in the sample.
 fn ready_shots(
     shooter: &Shooter,
     receiver: &mut ReducerConnection,
@@ -127,9 +127,10 @@ fn ready_shots(
             let packets = own_packets(character, &rows)?;
             character.observe(shooter, &packets, u32::MAX)?;
         }
-        if characters.iter().all(|character| {
-            character.counts.trials() >= READY_SHOTS && character.flight.is_empty()
-        }) {
+        if characters
+            .iter()
+            .all(|character| character.counts.trials() >= READY_SHOTS)
+        {
             for character in characters.iter_mut() {
                 character.counts = Counts::default();
             }
@@ -141,7 +142,7 @@ fn ready_shots(
         .map(|character| character.counts.trials())
         .collect();
     anyhow::bail!(
-        "{} readiness landed {shots:?} shots in {READY_BATCHES} batches",
+        "{} readiness counted {shots:?} shots in {READY_BATCHES} batches",
         shooter.swing.context.label()
     )
 }

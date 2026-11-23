@@ -45,7 +45,7 @@ fn roll_difference(scenario: &wire_client::scenario::Scenario, difference: &Diff
     if scenario.spell_rolls.is_some() {
         return spell_difference(scenario, difference);
     }
-    // The weapon strikes and ranged swings share white melee's pinned context and Golden Trace.
+    // The queued strike, Weapon Strike and ranged swings share white melee's Golden Trace.
     if scenario.id == "white_melee_outcomes"
         && (queued_strike_rolls::CONTEXT.accepts(difference)
             || weapon_strike_rolls::CONTEXT.accepts(difference)
