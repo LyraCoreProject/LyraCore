@@ -108,6 +108,15 @@ pub(super) fn changed(
             cooldown(ctx, current);
         }
     }
+    if let Some((old, new)) = previous.zip(current) {
+        if old.owner_guid == new.owner_guid
+            && new.slot <= super::equip_slot::END
+            && (old.durability == 0) != (new.durability == 0)
+        {
+            crate::spell::recompute_vitals(ctx, new.owner_guid);
+            crate::spell::recompute_sheet(ctx, new.owner_guid);
+        }
+    }
 }
 
 pub(crate) fn reconcile(ctx: &ReducerContext, guid: u64) {

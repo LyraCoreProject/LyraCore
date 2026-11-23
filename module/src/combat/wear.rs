@@ -11,10 +11,11 @@ const DURABILITY_LOSS_CHANCE_DAMAGE_BP: u32 = 50;
 pub(crate) fn wear_for_landed_damage(
     ctx: &ReducerContext,
     attacker: Option<&WorldEntity>,
-    victim: &WorldEntity,
+    victim_guid: u64,
+    victim_is_player: bool,
 ) {
-    if victim.is_player() {
-        roll_equipment_wear(ctx, victim.guid);
+    if victim_is_player {
+        roll_equipment_wear(ctx, victim_guid);
     }
     if let Some(attacker) = attacker.filter(|attacker| attacker.is_player()) {
         roll_equipment_wear(ctx, attacker.guid);

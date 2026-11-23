@@ -325,6 +325,7 @@ pub(crate) fn apply_hit(
     let reward_source = crate::loot::tag::controlling_character(ctx, attacker_guid);
     let target_is_player = target.is_player();
     if damage.lethal_prevented && dmg == 0 {
+        super::wear::wear_for_landed_damage(ctx, attacker.as_ref(), target_guid, target_is_player);
         // A lethal floor still refreshes pursuit so the scripted fight cannot evade.
         refresh_leash(ctx, attacker_guid, target_guid);
         commit_death_prevention(ctx, target_guid, attacker_guid);
@@ -353,11 +354,11 @@ pub(crate) fn apply_hit(
 
     let lethal = is_lethal(target.health, dmg);
     if lethal && duel_takes_lethal_hit(ctx, attacker_guid, &target) {
-        super::wear::wear_for_landed_damage(ctx, attacker.as_ref(), &target);
         let before = target.health;
         target.health = 1;
         reward_taken_rage(&mut target, attacker_guid, before);
         target.update(ctx);
+        super::wear::wear_for_landed_damage(ctx, attacker.as_ref(), target_guid, target_is_player);
         if let Some(duel) = crate::duel::active_duel_between(ctx, attacker_guid, target_guid) {
             crate::duel::complete_duel(
                 ctx,
@@ -392,9 +393,6 @@ pub(crate) fn apply_hit(
             duel_completed: false,
         };
     }
-    if !lethal {
-        super::wear::wear_for_landed_damage(ctx, attacker.as_ref(), &target);
-    }
     let accrues_threat = !target_is_player && reward_source.is_some();
     if weapon && target_is_player && reward_source.is_none() {
         crate::skill::gain_defense_skill(ctx, &target);
@@ -403,6 +401,9 @@ pub(crate) fn apply_hit(
     target.health = crate::spell::damaged_value(target.health, dmg as i32);
     reward_taken_rage(&mut target, attacker_guid, before);
     target.update(ctx);
+    if !lethal {
+        super::wear::wear_for_landed_damage(ctx, attacker.as_ref(), target_guid, target_is_player);
+    }
     if damage.lethal_prevented {
         commit_death_prevention(ctx, target_guid, attacker_guid);
     }
