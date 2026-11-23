@@ -9,7 +9,7 @@ use lyracore_protocol::{
 };
 use lyracore_shared::spell::taxonomy::{
     CAST_FLAG_RANGED_AUTO_REPEAT, CAST_FLAG_REFUSES_SELF_CAST, E_DISENCHANT, E_DUEL,
-    E_ENCHANT_ITEM, E_ENCHANT_ITEM_TEMPORARY, E_FISH, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
+    E_ENCHANT_ITEM, E_ENCHANT_ITEM_TEMPORARY, E_FISH, E_NEXT_SWING, E_OPEN_LOCK,
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
@@ -187,6 +187,14 @@ pub(super) fn receive(
         .target_flags
         .get_dest_location()
         .map(|dest| (dest.destination.x, dest.destination.y, dest.destination.z));
+    let enchants_temporarily = effects
+        .iter()
+        .any(|row| row.kind == E_ENCHANT_ITEM_TEMPORARY);
+    let targets_item = !enchants_temporarily
+        && matches!(
+            request.targets.target_flags.get_item(),
+            Some(ItemTarget::Item { .. })
+        );
     let mut prelude = Vec::new();
     if matches!(route, Route::Ordinary)
         && header.as_ref().is_none_or(|row| row.cast_time_ms == 0)
@@ -196,22 +204,19 @@ pub(super) fn receive(
             || codec::build_spell_start(guid, spell, 0, 0, None),
             |dest| codec::build_spell_start_dest(guid, spell, dest),
         );
-        let go = if let Some(dest) = dest {
-            codec::build_spell_go_dest(guid, spell, dest)
-        } else if effects.iter().any(|row| row.kind == E_PERSISTENT_AREA) {
-            codec::build_spell_go_area(guid, spell)
-        } else {
-            codec::build_spell_go(guid, spell, target, None)
-        };
         prelude = vec![
             packet(ServerOpcodeMessage::SMSG_SPELL_START(Box::new(start)))?,
             Packet {
                 opcode: codec::SMSG_CAST_RESULT_OPCODE,
                 body: codec::build_cast_result_ok(spell),
             },
-            packet(ServerOpcodeMessage::SMSG_SPELL_GO(Box::new(go)))?,
         ];
-        // Instant casts must release the owner's cast state before Aura updates.
+        // A resolved cast sends its GO after the hit roll; an item-target spell has no cast event.
+        if targets_item {
+            let go = codec::build_spell_go(guid, spell, target, None);
+            prelude.push(packet(ServerOpcodeMessage::SMSG_SPELL_GO(Box::new(go)))?);
+        }
+        // vmangos Spell::prepare and Spell::cast send these before the cast's effects.
         for packet in &prelude {
             super::send_raw(ctx, connection, packet.opcode, packet.body.clone(), false);
         }
@@ -243,10 +248,7 @@ pub(super) fn receive(
                 crate::gameobject::apply_pick_lock(ctx, guid, object)
             }
             Route::Ordinary => {
-                if effects
-                    .iter()
-                    .any(|row| row.kind == E_ENCHANT_ITEM_TEMPORARY)
-                {
+                if enchants_temporarily {
                     let item = item_target(ctx, guid, request).map_err(|refusal| {
                         CastGateRefusal::other(CastRefusalReason::ItemGone, String::from(refusal))
                     })?;
@@ -260,10 +262,7 @@ pub(super) fn receive(
                         crate::spell::CreatureSpellCasterAdmission::Living,
                     )
                     .map(|_| ())
-                } else if matches!(
-                    request.targets.target_flags.get_item(),
-                    Some(ItemTarget::Item { .. })
-                ) {
+                } else if targets_item {
                     Ok(crate::creatures::apply_item_target_spell(
                         ctx,
                         guid,

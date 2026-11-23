@@ -8,6 +8,7 @@ use wire_client::decode::{decode, Field, Packet};
 use wire_client::rolls::PUBLIC_SEEDS;
 use wire_client::scenario::{FixtureVerb, Scenario};
 
+use super::properties::Packet as RoutedPacket;
 use super::queued_strikes::{cast_request, Preparation, CMSG_CAST_SPELL};
 use super::transport::{prepare_character, Delivery};
 use super::weapon_strike_spec::{self as spec, Counts};
@@ -52,10 +53,12 @@ fn own_packets(
     character: &mut Character,
     rows: &[Box<serde_json::value::RawValue>],
 ) -> Result<Vec<Packet>> {
-    character
-        .delivery
-        .route_rows(rows.to_vec())?
-        .into_iter()
+    decoded(&character.delivery.route_rows(rows.to_vec())?)
+}
+
+fn decoded(routed: &[RoutedPacket]) -> Result<Vec<Packet>> {
+    routed
+        .iter()
         .filter(|packet| matches!(packet.opcode, 0x132 | 0x14a | 0x24b | 0x250))
         .map(|packet| match packet.opcode {
             spec::SPELL_LOG_MISS => spec::spell_log_miss(&packet.body),
@@ -403,4 +406,203 @@ pub(super) fn merge_seed(scenario: &Scenario, seed: u64) -> Result<Vec<Differenc
         serde_json::to_string(&samples)?
     );
     compare_samples(&samples, "merge")
+}
+
+const CERTAIN_HIT: u32 = 5_098_601;
+const LIKELY_MISS: u32 = 5_098_602;
+const CERTAIN_DODGE: u32 = 5_098_603;
+const CERTAIN_PARRY: u32 = 5_098_604;
+const NO_AVOIDANCE: u32 = 5_098_605;
+// A full miss band still leaves 40%, since the attack table caps miss at 60%.
+const MISS_ATTEMPTS: usize = 40;
+
+/// Self Auras whose combat-field changes, in whole percent, force a band of the attack table.
+fn stage_forcing_auras(shard: &Standalone, shard_name: &str) {
+    use lyracore_package_delta::packed_spell_effect_id;
+    use lyracore_shared::spell::taxonomy::{
+        A_MOD_COMBAT, COMBAT_DODGE, COMBAT_HIT, COMBAT_PARRY, P_COMBAT_PERCENT, T_SELF,
+    };
+
+    let spells: [(u32, &[(u8, i32)]); 5] = [
+        (CERTAIN_HIT, &[(COMBAT_HIT, 100)]),
+        (LIKELY_MISS, &[(COMBAT_HIT, -100)]),
+        (CERTAIN_DODGE, &[(COMBAT_DODGE, 100)]),
+        (CERTAIN_PARRY, &[(COMBAT_DODGE, -100), (COMBAT_PARRY, 100)]),
+        (NO_AVOIDANCE, &[(COMBAT_DODGE, -100), (COMBAT_PARRY, -100)]),
+    ];
+    for (spell, changes) in spells {
+        let name = format!("Attack table fixture {spell}");
+        shard.insert_row_database(
+            shard_name,
+            "game_spell",
+            &[
+                ("spell_id", &spell),
+                ("name", &name),
+                ("duration_ms", &3_600_000u32),
+                ("max_duration_ms", &3_600_000u32),
+                ("spell_level", &1u32),
+            ],
+        );
+        for (index, (field, percent)) in changes.iter().enumerate() {
+            let index = index as u8;
+            shard.insert_row_database(
+                shard_name,
+                "game_spell_effect",
+                &[
+                    ("id", &packed_spell_effect_id(spell, index)),
+                    ("spell_id", &spell),
+                    ("effect_index", &index),
+                    ("kind", &A_MOD_COMBAT),
+                    ("base_points", percent),
+                    ("target", &T_SELF),
+                    ("p_0", &i32::from(*field)),
+                    ("p_0_kind", &P_COMBAT_PERCENT),
+                ],
+            );
+        }
+    }
+}
+
+fn force(shard: &Standalone, shard_name: &str, unit: u64, spell: u32) {
+    shard.assert_call_database(
+        shard_name,
+        "debug_force_cast",
+        &[&unit.to_string(), &spell.to_string()],
+    );
+}
+
+/// Casts for each listed Character, routes the batch to every Character and returns their packets.
+fn cast_round(
+    receiver: &mut ReducerConnection,
+    characters: &mut [Character],
+    casting: &[usize],
+) -> Result<Vec<Vec<RoutedPacket>>> {
+    for &index in casting {
+        cast(&mut characters[index]).map_err(anyhow::Error::msg)?;
+    }
+    let rows = advance_and_drain(receiver)?;
+    characters
+        .iter_mut()
+        .map(|character| character.delivery.route_rows(rows.clone()))
+        .collect()
+}
+
+fn observe(character: &mut Character, routed: &[RoutedPacket]) -> Result<()> {
+    let packets = decoded(routed)?;
+    character
+        .counts
+        .observe(&packets, character.guid, character.target)
+        .with_context(|| format!("Character {}: {packets:?}", character.guid))
+}
+
+fn own_go(packet: &RoutedPacket, caster: u64) -> bool {
+    packet.opcode == spec::SPELL_GO
+        && decode(packet.opcode, &packet.body).is_ok_and(|go| {
+            go.fields.get("caster") == Some(&Field::Guid(caster))
+                && go.fields.get("spell") == Some(&Field::Unsigned(spec::SPELL_ID.into()))
+        })
+}
+
+/// Whether the packet is an SMSG_UPDATE_OBJECT that holds one values block for `guid`.
+fn values_update_of(packet: &RoutedPacket, guid: u64) -> bool {
+    // Block count u32 and no transport, then UPDATETYPE_VALUES and the packed guid.
+    let Some((mask, rest)) = packet.body.get(6..).and_then(|body| body.split_first()) else {
+        return false;
+    };
+    let mut bytes = rest.iter();
+    let unpacked: [u8; 8] = std::array::from_fn(|bit| {
+        if mask & (1 << bit) != 0 {
+            bytes.next().copied().unwrap_or(0)
+        } else {
+            0
+        }
+    });
+    packet.opcode == 0xa9
+        && packet.body.starts_with(&[1, 0, 0, 0, 0, 0])
+        && u64::from_le_bytes(unpacked) == guid
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_cast_weapon_strike_reaches_its_caster_as_one_go_that_names_its_outcome() -> Result<()> {
+    let golden = wire_client::catalogue::get("white_melee_outcomes")?;
+    let mut shard = Standalone::start("weapon-strike-outcome-go");
+    shard.publish_module();
+    let shard_name = shard.shard_name().to_string();
+    let (mut receiver, mut characters) = prepare(
+        &shard,
+        &shard_name,
+        golden.scenario(),
+        PUBLIC_SEEDS[0],
+        0,
+        0,
+    )?;
+    stage_forcing_auras(&shard, &shard_name);
+    let forcing = [
+        (CERTAIN_HIT, CERTAIN_DODGE),
+        (CERTAIN_HIT, CERTAIN_PARRY),
+        (LIKELY_MISS, NO_AVOIDANCE),
+        (CERTAIN_HIT, NO_AVOIDANCE),
+    ];
+    ensure!(
+        characters.len() == forcing.len(),
+        "four weapon strike Characters"
+    );
+    for (character, (caster_aura, target_aura)) in characters.iter().zip(forcing) {
+        force(&shard, &shard_name, character.guid, caster_aura);
+        force(&shard, &shard_name, character.target, target_aura);
+    }
+    let forced = advance_and_drain(&mut receiver)?;
+    for character in &mut characters {
+        character.delivery.route_rows(forced.clone())?;
+    }
+    let overpower = |guid: u64| -> Result<u64> {
+        let rows = shard.query_database_rows(
+            &shard_name,
+            &format!("SELECT overpower_until_ms FROM game_world_entity WHERE guid = {guid}"),
+        );
+        Ok(rows.first().context("dodging Character")?["overpower_until_ms"].parse()?)
+    };
+    let overpower_before = overpower(characters[0].guid)?;
+
+    let packets = cast_round(&mut receiver, &mut characters, &[0, 1, 3])?;
+    for index in [0, 1, 3] {
+        observe(&mut characters[index], &packets[index])?;
+    }
+    ensure!(
+        characters[0].counts.0 == [0, 1, 0, 0, 0, 0],
+        "a certain dodge"
+    );
+    ensure!(
+        overpower(characters[0].guid)? > overpower_before,
+        "a dodged Weapon Strike that costs rage still arms Overpower"
+    );
+    ensure!(
+        characters[1].counts.0 == [0, 0, 1, 0, 0, 0],
+        "a certain parry"
+    );
+    ensure!(characters[3].counts.trials() == 1 && characters[3].counts.0[..3] == [0, 0, 0]);
+    let landed = &packets[3];
+    let position = |found: &dyn Fn(&RoutedPacket) -> bool| landed.iter().position(found);
+    let go = position(&|packet| own_go(packet, characters[3].guid));
+    let log = position(&|packet| packet.opcode == 0x0250);
+    let debuff = position(&|packet| values_update_of(packet, characters[3].target));
+    // The GO precedes the effects' packets, or the client keeps its cast slot busy.
+    ensure!(
+        go.zip(debuff).is_some_and(|(go, debuff)| go < debuff)
+            && go.zip(log).is_some_and(|(go, log)| go < log),
+        "vmangos sends the GO before the target's values update and the damage log: {landed:?}"
+    );
+
+    for _ in 0..MISS_ATTEMPTS {
+        let packets = cast_round(&mut receiver, &mut characters, &[2])?;
+        observe(&mut characters[2], &packets[2])?;
+        if characters[2].counts.0[0] > 0 {
+            return Ok(());
+        }
+    }
+    anyhow::bail!(
+        "no miss in {MISS_ATTEMPTS} casts: {:?}",
+        characters[2].counts
+    )
 }

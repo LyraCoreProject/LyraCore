@@ -14,7 +14,7 @@ import traceback
 import admission
 from eventai_speech import check_eventai_speech
 from headless import (AUTH_CHALLENGE, Logon, cast, creates, destroys, item_pointer, packed_guid, read_exact,
-                      spell_go_misses, spell_id, teleport_ack, values)
+                      spell_go_misses, spell_go_parts, spell_id, teleport_ack, values)
 from host import MODULE, TRANSFER_SECONDS, Host
 from operator_items import check_operator_items
 from operator_spells import check_operator_spells
@@ -4678,6 +4678,7 @@ def check_auras(host):
     peer.send(0x12e, cast(168))
     buff = peer.collect()
     observed = client.collect()
+    # The GO precedes the buff's values update, or the client keeps its cast slot busy.
     assert [opcode for opcode, _ in without_stray_destroys(buff, peer_guid)][:3] == [0x131, 0x130, 0x132]
     assert sum(opcode == 0x132 and spell_id(body) == 168 for opcode, body in buff) == 1
     assert sum(opcode == 0x132 and spell_id(body) == 168 for opcode, body in observed) == 1
@@ -4690,6 +4691,44 @@ def check_auras(host):
     assert not host.rows(f'SELECT id FROM game_aura WHERE target_guid = {peer_guid} AND spell_id = 168')
     client.collect()
 
+
+def check_ground_cast_go(host):
+    client, peer = native_and_peer(host, at=(0, 0, 0, 0))
+    area, ground = 5090641, 5090642
+    for spell, cast_time in [(area, 0), (ground, 300)]:
+        host.restore('game_spell', f'spell_id = {spell}')
+        host.restore('game_spell_effect', f'spell_id = {spell}')
+        for table, changes in [
+            ('game_spell', dict(spell_id=spell, name='Native Area', cost=0, cast_time_ms=cast_time, gcd_ms=0, cooldown_ms=0, duration_ms=3000, attributes=0)),
+            ('game_spell_effect', dict(id=spell << 2, spell_id=spell, effect_index=0, kind=27, target=1, base_points=0, die_sides=0, per_level=0, period_ms=1000, radius_yd=5, enters_combat=False)),
+        ]:
+            source = host.sql(f'SELECT * FROM {table} WHERE spell_id = 133')[0]
+            row = dict(zip([column['name']['some'] for column in source['schema']['elements']], source['rows'][0]))
+            row.update(changes)
+            literals = ["'" + value.replace("'", "''") + "'" if isinstance(value, str) else str(value) for value in row.values()]
+            host.sql(f"INSERT INTO {table} ({','.join(row)}) VALUES ({','.join(literals)})")
+        host.call('debug_learn_spell', [peer.guid, spell])
+    peer.collect()
+    client.collect()
+
+    def gos(connection, spell, packets):
+        def arrived():
+            packets.extend(connection.collect())
+            return [body for opcode, body in packets if opcode == 0x132 and spell_id(body) == spell]
+        return host.wait_until(arrived, f'spell {spell} sent no SMSG_SPELL_GO')
+
+    # A persistent area hits the ground: its GO lists no unit and keeps the caster's target block.
+    peer.send(0x12e, cast(area))
+    for connection in (peer, client):
+        assert [spell_go_parts(body) for body in gos(connection, area, [])] == [([], [], b'\0\0')]
+    # vmangos writes a timed ground cast's destination into its completion GO.
+    point = (10.0, 6.0, 0.0)
+    peer.send(0x12e, struct.pack('<IHfff', ground, 0x40, *point))
+    named = ([], [], struct.pack('<Hfff', 0x40, *point))
+    for connection in (peer, client):
+        assert [spell_go_parts(body) for body in gos(connection, ground, [])] == [named]
+    peer.collect()
+    client.collect()
 
 def check_melee(host):
     client, peer = native_and_peer(host, at=(0, 0, 0, 0))
@@ -4870,16 +4909,16 @@ def check_combo_points(host):
         packets = []
         def finished():
             packets.extend(rogue.collect())
-            return (1222 in values(packets, guid)
-                    or any(opcode == 0x24b for opcode, _ in packets))
-        host.wait_until(finished, 'the finisher neither spent its points nor reported a miss')
-        # Client-initiated casts report avoidance through SPELLLOGMISS after their launch GO.
-        missed = [struct.unpack('<IQBIQB', body) for opcode, body in packets if opcode == 0x24b]
+            return any(opcode == 0x132 and spell_id(body) == 133 for opcode, body in packets)
+        host.wait_until(finished, 'the finisher sent its caster no SMSG_SPELL_GO')
+        # vmangos reports a miss, dodge or parry in the GO miss list and sends no SPELLLOGMISS.
+        gos = [body for opcode, body in packets if opcode == 0x132 and spell_id(body) == 133]
+        assert len(gos) == 1 and not any(opcode == 0x24b for opcode, _ in packets), packets
+        missed = spell_go_misses(gos[0])
         if not missed:
             assert shown(packets) == (first, 0)
             break
-        assert len(missed) == 1 and missed[0][:5] == (133, guid, 0, 1, first), missed
-        assert missed[0][5] in (1, 3, 4), missed
+        assert len(missed) == 1 and missed[0][0] == first and missed[0][1] in (1, 3, 4), missed
         assert host.rows(held) == [[first, 2]], 'an avoided finisher consumed combo points'
     else:
         raise AssertionError('all finisher casts were avoided')
@@ -5575,7 +5614,7 @@ def named(*checks):
 # These checks share one seeded Host and run in this order, with reset() after each.
 SHARED = named(
     check_operator_reducers, check_operator_items, check_operator_spells, check_operator_creatures, check_operator_characters, check_logon, check_character_create, check_queries, check_visibility,
-    check_inventory, check_creature_catalogue, check_pet_level_scaling, check_spell_source_behavior, check_gossip_submenus, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
+    check_inventory, check_creature_catalogue, check_pet_level_scaling, check_spell_source_behavior, check_gossip_submenus, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_ground_cast_go, check_melee,
     check_casting, check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social,
     check_channels, check_party, check_instance_resets,
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,
