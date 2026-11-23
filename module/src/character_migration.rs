@@ -204,6 +204,7 @@ pub struct CharacterMigration {
 const SOURCE_LABEL_MAX_LEN: usize = 64;
 const ACTION_BUTTONS: u8 = 120;
 const MAX_WATCHED_FACTION_INDEX: i32 = 63;
+const CONTINENT_MAP_TYPE: u32 = 0;
 const HUNTER_CLASS: u8 = 3;
 const MAX_PET_LOYALTY_LEVEL: u8 = 6;
 
@@ -769,7 +770,7 @@ fn insert_character(
     let home = migration.home;
     require_map(ctx, &migration.name, home.map_id)?;
     let position = match migration.position {
-        Some(position) if crate::instance::is_continent(ctx, position.map_id) => position,
+        Some(position) if is_continent(ctx, position.map_id) => position,
         _ => home,
     };
     require_map(ctx, &migration.name, position.map_id)?;
@@ -825,6 +826,14 @@ fn insert_character(
         drunk_value: 0,
     });
     Ok(guid)
+}
+
+fn is_continent(ctx: &ReducerContext, map_id: u32) -> bool {
+    ctx.db
+        .game_map()
+        .id()
+        .find(map_id)
+        .is_some_and(|map| map.map_type == CONTINENT_MAP_TYPE)
 }
 
 fn require_map(ctx: &ReducerContext, name: &str, map_id: u32) -> Result<(), String> {

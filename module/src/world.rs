@@ -546,8 +546,8 @@ pub(crate) fn apply_zone_transition(
     }
 }
 
-/// Moves a Character to `pose`. A ghost bound for its corpse's map revives first, even when the
-/// raid gate then refuses; any other `teleport_gate` refusal leaves everything unchanged.
+/// Moves a Character to `pose`. A ghost bound for its corpse's map revives before the raid gate
+/// runs; any other `teleport_gate` refusal leaves everything unchanged.
 pub(crate) fn teleport(
     ctx: &ReducerContext,
     player_guid: u64,

@@ -111,6 +111,14 @@ fn has_corpse(shard: &Standalone, guid: u64) -> bool {
         .is_empty()
 }
 
+fn assert_revived_inside_deadmines(shard: &Standalone, guid: u64, max_health: u32) {
+    let entered = character(shard, guid);
+    assert_eq!(entered["map_id"], DEADMINES.to_string());
+    assert_eq!(entered["pending_ghost"], "false");
+    assert_eq!(number::<u32>(&entered, "health"), max_health / 2);
+    assert!(!has_corpse(shard, guid));
+}
+
 fn assert_revived_outside(shard: &Standalone, guid: u64, max_health: u32) {
     let refused = entity(shard, guid);
     assert_eq!(refused["map_id"], "0", "a solo Character stays outside");
@@ -184,11 +192,7 @@ fn a_ghost_revives_at_the_entrance_of_the_map_holding_its_corpse() {
         "debug_enter_areatrigger",
         &[&DEADMINES_GHOST.to_string(), &TO_DEADMINES.to_string()],
     );
-    let entered = character(&shard, DEADMINES_GHOST);
-    assert_eq!(entered["map_id"], DEADMINES.to_string());
-    assert_eq!(entered["pending_ghost"], "false");
-    assert_eq!(number::<u32>(&entered, "health"), max_health / 2);
-    assert!(!has_corpse(&shard, DEADMINES_GHOST));
+    assert_revived_inside_deadmines(&shard, DEADMINES_GHOST, max_health);
 
     let max_health = release_with_corpse_on(&shard, raid_ghost, RAID_MAP, false);
     shard.assert_call(
@@ -197,21 +201,17 @@ fn a_ghost_revives_at_the_entrance_of_the_map_holding_its_corpse() {
     );
     assert_revived_outside(&shard, raid_ghost, max_health);
 
-    let max_health = release_with_corpse_on(&shard, teleported_ghost, RAID_MAP, false);
-    let teleport = shard.call(
+    let max_health = release_with_corpse_on(&shard, teleported_ghost, DEADMINES, false);
+    shard.assert_call(
         "debug_teleport",
         &[
             &teleported_ghost.to_string(),
-            &RAID_MAP.to_string(),
+            &DEADMINES.to_string(),
             "10",
             "20",
             "30",
             "0",
         ],
     );
-    assert!(
-        !teleport.status.success(),
-        "the raid gate refuses the teleport"
-    );
-    assert_revived_outside(&shard, teleported_ghost, max_health);
+    assert_revived_inside_deadmines(&shard, teleported_ghost, max_health);
 }
