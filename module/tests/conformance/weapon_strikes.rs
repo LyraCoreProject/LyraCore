@@ -8,6 +8,7 @@ use wire_client::decode::{decode, Field, Packet};
 use wire_client::rolls::PUBLIC_SEEDS;
 use wire_client::scenario::{FixtureVerb, Scenario};
 
+use super::properties::Packet as RoutedPacket;
 use super::queued_strikes::{cast_request, Preparation, CMSG_CAST_SPELL};
 use super::transport::{prepare_character, Delivery};
 use super::weapon_strike_spec::{self as spec, Counts};
@@ -52,10 +53,12 @@ fn own_packets(
     character: &mut Character,
     rows: &[Box<serde_json::value::RawValue>],
 ) -> Result<Vec<Packet>> {
-    character
-        .delivery
-        .route_rows(rows.to_vec())?
-        .into_iter()
+    decoded(&character.delivery.route_rows(rows.to_vec())?)
+}
+
+fn decoded(routed: &[RoutedPacket]) -> Result<Vec<Packet>> {
+    routed
+        .iter()
         .filter(|packet| matches!(packet.opcode, 0x132 | 0x14a | 0x24b | 0x250))
         .map(|packet| match packet.opcode {
             spec::SPELL_LOG_MISS => spec::spell_log_miss(&packet.body),
@@ -473,22 +476,42 @@ fn cast_round(
     receiver: &mut ReducerConnection,
     characters: &mut [Character],
     casting: &[usize],
-) -> Result<Vec<Vec<Packet>>> {
+) -> Result<Vec<Vec<RoutedPacket>>> {
     for &index in casting {
         cast(&mut characters[index]).map_err(anyhow::Error::msg)?;
     }
     let rows = advance_and_drain(receiver)?;
     characters
         .iter_mut()
-        .map(|character| own_packets(character, &rows))
+        .map(|character| character.delivery.route_rows(rows.clone()))
         .collect()
 }
 
-fn observe(character: &mut Character, packets: &[Packet]) -> Result<()> {
+fn observe(character: &mut Character, routed: &[RoutedPacket]) -> Result<()> {
+    let packets = decoded(routed)?;
     character
         .counts
-        .observe(packets, character.guid, character.target)
+        .observe(&packets, character.guid, character.target)
         .with_context(|| format!("Character {}: {packets:?}", character.guid))
+}
+
+/// Whether the packet is an SMSG_UPDATE_OBJECT that holds one values block for `guid`.
+fn values_update_of(packet: &RoutedPacket, guid: u64) -> bool {
+    // Block count u32 and no transport, then UPDATETYPE_VALUES and the packed guid.
+    let Some((mask, rest)) = packet.body.get(6..).and_then(|body| body.split_first()) else {
+        return false;
+    };
+    let mut bytes = rest.iter();
+    let unpacked: [u8; 8] = std::array::from_fn(|bit| {
+        if mask & (1 << bit) != 0 {
+            bytes.next().copied().unwrap_or(0)
+        } else {
+            0
+        }
+    });
+    packet.opcode == 0xa9
+        && packet.body.starts_with(&[1, 0, 0, 0, 0, 0])
+        && u64::from_le_bytes(unpacked) == guid
 }
 
 #[test]
@@ -536,13 +559,15 @@ fn a_cast_weapon_strike_reaches_its_caster_as_one_go_that_names_its_outcome() ->
     );
     ensure!(characters[3].counts.trials() == 1 && characters[3].counts.0[..3] == [0, 0, 0]);
     let landed = &packets[3];
-    let go = landed
-        .iter()
-        .position(|packet| packet.opcode == spec::SPELL_GO);
-    let log = landed.iter().position(|packet| packet.opcode == 0x0250);
+    let position = |found: &dyn Fn(&RoutedPacket) -> bool| landed.iter().position(found);
+    let go = position(&|packet| packet.opcode == spec::SPELL_GO);
+    let log = position(&|packet| packet.opcode == 0x0250);
+    let debuff = position(&|packet| values_update_of(packet, characters[3].target));
+    // The GO precedes the effects' packets, or the client keeps its cast slot busy.
     ensure!(
-        go.zip(log).is_some_and(|(go, log)| go < log),
-        "vmangos sends the GO before the damage log: {landed:?}"
+        go.zip(debuff).is_some_and(|(go, debuff)| go < debuff)
+            && go.zip(log).is_some_and(|(go, log)| go < log),
+        "vmangos sends the GO before the target's values update and the damage log: {landed:?}"
     );
 
     for _ in 0..MISS_ATTEMPTS {

@@ -944,16 +944,16 @@ impl SpellImpactEvent {
 
 impl SpellCastEvent {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
-        Self::insert_at(ctx, row, None)
+        Self::insert_at(ctx, row, crate::native::spell::GoDelivery::Pending)
     }
 
-    /// Inserts a resolved cast's row; its SMSG_SPELL_GO names the cast's ground point.
+    /// Inserts a row; `delivery` says whether its GO packets went out already.
     pub(crate) fn insert_at(
         ctx: &ReducerContext,
         row: Self,
-        ground_point: Option<(f32, f32, f32)>,
+        delivery: crate::native::spell::GoDelivery,
     ) -> Self {
-        crate::native::spell::cast_event(ctx, &row, ground_point);
+        crate::native::spell::cast_event(ctx, &row, delivery);
         ctx.db.game_spell_cast_event_live().insert(row)
     }
 
