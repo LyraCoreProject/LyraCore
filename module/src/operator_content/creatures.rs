@@ -123,6 +123,8 @@ pub struct CreatureDisplays {
 pub struct LootRow {
     pub item_entry: u32,
     pub chance_bp: u32,
+    // Zero keeps the stack fixed at `count`.
+    pub min_count: u32,
     pub count: u32,
     pub group_id: u32,
     pub quest_only: bool,
@@ -138,6 +140,8 @@ pub struct CreatureLootRows {
 pub struct SkinRow {
     pub item_entry: u32,
     pub chance_bp: u32,
+    // Zero keeps the stack fixed at `count`.
+    pub min_count: u32,
     pub count: u32,
     pub group_id: u32,
 }
@@ -630,17 +634,40 @@ fn replace_displays(
     Ok((format!("creature {} displays {old:?} -> {:?}; template display/scale {old_model:?} -> {new_model:?}", edit.entry, edit.displays), Some(edit.entry)))
 }
 
-fn check_loot(
-    ctx: &ReducerContext,
-    rows: impl Iterator<Item = (u32, u32, u32, u32)>,
-) -> Result<(), String> {
+impl From<&SkinRow> for LootRow {
+    fn from(row: &SkinRow) -> Self {
+        Self {
+            item_entry: row.item_entry,
+            chance_bp: row.chance_bp,
+            min_count: row.min_count,
+            count: row.count,
+            group_id: row.group_id,
+            quest_only: false,
+        }
+    }
+}
+
+fn check_loot(ctx: &ReducerContext, rows: impl Iterator<Item = LootRow>) -> Result<(), String> {
     let mut groups = BTreeMap::<u32, u32>::new();
-    for (item, chance, count, group) in rows {
+    for LootRow {
+        item_entry: item,
+        chance_bp: chance,
+        min_count,
+        count,
+        group_id: group,
+        ..
+    } in rows
+    {
         if ctx.db.game_item_template().entry().find(item).is_none() {
             return Err(format!("item {item} does not exist"));
         }
         if chance > 10_000 || count == 0 {
             return Err("loot needs chance_bp <= 10000 and a positive count".into());
+        }
+        if min_count > count {
+            return Err(format!(
+                "loot for item {item} needs min_count {min_count} <= count {count}"
+            ));
         }
         if group != 0 {
             let total = groups.entry(group).or_default();
@@ -683,11 +710,7 @@ fn replace_creature_loot(
     let entry = edit.creature_entry;
     editable_creature(ctx, entry)?;
     let rows = edit.rows;
-    check_loot(
-        ctx,
-        rows.iter()
-            .map(|row| (row.item_entry, row.chance_bp, row.count, row.group_id)),
-    )?;
+    check_loot(ctx, rows.iter().cloned())?;
     let table = ctx.db.game_creature_loot();
     let old: Vec<_> = table.by_creature().filter(entry).collect();
     replace_rows!(
@@ -704,7 +727,7 @@ fn replace_creature_loot(
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
-            min_count: 0,
+            min_count: row.min_count,
         }
     );
     let old: Vec<_> = old
@@ -712,6 +735,7 @@ fn replace_creature_loot(
         .map(|row| LootRow {
             item_entry: row.item_entry,
             chance_bp: row.chance_bp,
+            min_count: row.min_count,
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
@@ -728,11 +752,7 @@ fn replace_pickpocket_loot(
     let entry = edit.creature_entry;
     editable_creature(ctx, entry)?;
     let rows = edit.rows;
-    check_loot(
-        ctx,
-        rows.iter()
-            .map(|row| (row.item_entry, row.chance_bp, row.count, row.group_id)),
-    )?;
+    check_loot(ctx, rows.iter().cloned())?;
     let table = ctx.db.game_pickpocket_loot();
     let old: Vec<_> = table.by_creature().filter(entry).collect();
     replace_rows!(
@@ -749,7 +769,7 @@ fn replace_pickpocket_loot(
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
-            min_count: 0,
+            min_count: row.min_count,
         }
     );
     let old: Vec<_> = old
@@ -757,6 +777,7 @@ fn replace_pickpocket_loot(
         .map(|row| LootRow {
             item_entry: row.item_entry,
             chance_bp: row.chance_bp,
+            min_count: row.min_count,
             count: row.count,
             group_id: row.group_id,
             quest_only: row.quest_only,
@@ -777,11 +798,7 @@ fn replace_skinning_loot(
         return Err("skin_loot_id must be nonzero".into());
     }
     let rows = edit.rows;
-    check_loot(
-        ctx,
-        rows.iter()
-            .map(|row| (row.item_entry, row.chance_bp, row.count, row.group_id)),
-    )?;
+    check_loot(ctx, rows.iter().map(LootRow::from))?;
     let table = ctx.db.game_skinning_loot();
     let old: Vec<_> = table.by_skin().filter(skin).collect();
     replace_rows!(
@@ -797,7 +814,7 @@ fn replace_skinning_loot(
             chance_bp: row.chance_bp,
             count: row.count,
             group_id: row.group_id,
-            min_count: 0,
+            min_count: row.min_count,
         }
     );
     let old: Vec<_> = old
@@ -805,6 +822,7 @@ fn replace_skinning_loot(
         .map(|row| SkinRow {
             item_entry: row.item_entry,
             chance_bp: row.chance_bp,
+            min_count: row.min_count,
             count: row.count,
             group_id: row.group_id,
         })

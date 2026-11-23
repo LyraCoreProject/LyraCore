@@ -50,7 +50,12 @@ names the spell and the effect index; the packed durable key
 Unknown versions, tables, columns, type tags and malformed keys fail at `PackageDelta::parse`,
 before an applier sees the artifact. So does row deletion: uninstalling a Package replays the
 affected families without its claims, and there is no pre-image a delete could be undone from.
-An `update` names only the columns it changes; an `insert` carries the whole row.
+An `update` names only the columns it changes; an `insert` carries the whole row. An insert may
+omit a column appended after Package Deltas began naming its table; `Table::column_has_default`
+lists them, and the row takes that column's migration default. The four loot tables' `min_count`
+is one: an omitted or zero `min_count` keeps the stack fixed at `count`, and a nonzero one drops a
+stack from `min_count` through `count`. An apply refuses a loot row whose final `min_count`, after
+its claims meet the stored row, is above its `count`.
 
 # What it traces
 
