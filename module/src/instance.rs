@@ -352,14 +352,20 @@ pub(crate) fn instance_removal_due(
 
 const MAP_TYPE_RAID: u32 = 2;
 
-fn raid_group_refuses(map_type: u32, inside: bool, in_raid_group: bool, gm_level: u8) -> bool {
-    map_type == MAP_TYPE_RAID && !inside && !in_raid_group && gm_level == 0
+fn raid_refuses(inside: bool, in_raid: bool, gm_level: u8) -> bool {
+    !inside && !in_raid && gm_level == 0
 }
 
 pub(crate) fn raid_entry_refused(ctx: &ReducerContext, character_guid: u64, map_id: u32) -> bool {
-    let Some(map) = ctx.db.game_map().id().find(map_id) else {
+    if !ctx
+        .db
+        .game_map()
+        .id()
+        .find(map_id)
+        .is_some_and(|map| map.map_type == MAP_TYPE_RAID)
+    {
         return false;
-    };
+    }
     let inside = ctx
         .db
         .game_world_entity()
@@ -369,12 +375,7 @@ pub(crate) fn raid_entry_refused(ctx: &ReducerContext, character_guid: u64, map_
     let gm_level = crate::helpers::character_by_guid(ctx, character_guid).map_or(0, |character| {
         crate::auth::gm_level(ctx, character.account_id)
     });
-    raid_group_refuses(
-        map.map_type,
-        inside,
-        crate::group::in_raid(ctx, character_guid),
-        gm_level,
-    )
+    raid_refuses(inside, crate::group::in_raid(ctx, character_guid), gm_level)
 }
 
 fn binding_is_local(ctx: &ReducerContext, map: u32, world: Option<spacetimedb::Identity>) -> bool {
@@ -1328,23 +1329,11 @@ mod tests {
     }
 
     #[test]
-    fn only_a_raid_group_member_or_a_gm_enters_a_raid_map() {
-        assert!(
-            raid_group_refuses(MAP_TYPE_RAID, false, false, 0),
-            "solo or party"
-        );
-        assert!(
-            !raid_group_refuses(MAP_TYPE_RAID, false, true, 0),
-            "raid member"
-        );
-        assert!(!raid_group_refuses(MAP_TYPE_RAID, false, false, 1), "a GM");
-        assert!(
-            !raid_group_refuses(MAP_TYPE_RAID, true, false, 0),
-            "already inside"
-        );
-        for dungeon_or_open_world in [0, 1, 3] {
-            assert!(!raid_group_refuses(dungeon_or_open_world, false, false, 0));
-        }
+    fn only_a_raid_member_or_a_gm_enters_a_raid_map() {
+        assert!(raid_refuses(false, false, 0), "solo or party");
+        assert!(!raid_refuses(false, true, 0), "raid member");
+        assert!(!raid_refuses(false, false, 1), "a GM");
+        assert!(!raid_refuses(true, false, 0), "already inside");
     }
 
     #[test]

@@ -616,7 +616,7 @@ pub(crate) fn teleport_gate(
     if crate::instance::raid_entry_refused(ctx, player_guid, map_id) {
         return Err(ActionRefusal::new(
             ActionRefusalKind::Prerequisite,
-            "a raid group is required to enter this map",
+            "a Raid is required to enter this map",
         ));
     }
     Ok(destination)

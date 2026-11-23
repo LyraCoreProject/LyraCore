@@ -538,6 +538,18 @@ fn finish_native(
     {
         return;
     }
+    if let Err(refusal) = crate::world::teleport_gate(ctx, pending.guid, decoded.map, instance_id) {
+        spacetimedb::log::warn!(
+            "instance entry: {} admitted to instance {instance_id} but teleport refused: {refusal}",
+            pending.guid
+        );
+        if instance::raid_entry_refused(ctx, pending.guid, decoded.map) {
+            super::instance::raid_group_required(ctx, pending.guid);
+        } else {
+            notice(ctx, connection);
+        }
+        return;
+    }
     instance::bind_character(
         ctx,
         pending.guid,

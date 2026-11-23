@@ -52,7 +52,7 @@ fn enter(shard: &Standalone, guid: u64, trigger: u32) {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn only_a_raid_group_member_enters_a_raid_map_through_its_area_trigger() {
+fn only_a_raid_member_enters_a_raid_map_through_its_area_trigger() {
     let mut shard = Standalone::start("raid-entry");
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);

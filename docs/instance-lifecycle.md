@@ -31,10 +31,11 @@ dormant at instance zero. Battleground creation is unimplemented.
 
 Dungeon exits and graveyard release use imported Area Trigger, area, and graveyard metadata.
 Missing exit metadata sends a reaped-instance login to the Character's home. The small fixture keeps
-its Deadmines bootstrap fallback. Raid admission uses map capacity. A map whose imported
-`game_map.map_type` is 2 (raid) admits only a member of a Raid or a GM: the Area Trigger and every
-other teleport into it refuse anyone else, and the Character gets `SMSG_RAID_GROUP_ONLY` with no
-countdown and error 1, as vmangos `MapManager::CanPlayerEnter` sends.
+its Deadmines bootstrap fallback. Raid admission uses map capacity. A map whose imported `game_map.map_type` is 2 (raid) admits only a member of a Raid or a GM.
+`world::teleport_gate` refuses every other teleport into it. Only the Area Trigger and the Instance
+entry of a remote Shard also send `SMSG_RAID_GROUP_ONLY` with no countdown and error 1. vmangos sends
+it on every far teleport through `Player::TeleportTo` and `MapManager::CanPlayerEnter`, so a refused
+summon shows no message here.
 
 Creature copies set bit 23 (`INSTANCE_POP_LOW_BAND` in `module/src/creatures/population.rs`) in
 the low field. This separates their identities from imported spawns and encounter wave allocation. A copy skips any guid that a spawn
