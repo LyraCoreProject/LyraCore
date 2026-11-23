@@ -224,6 +224,15 @@ def check_charge_movement(host):
         raise AssertionError(('missing movement after Charge', [(hex(opcode), body.hex()) for opcode, body in observed]))
 
 
+def assert_turned_to_bones(packets, corpse):
+    """vmangos Map::RemoveCorpses: DESTROY the body, then CREATE_OBJECT2 bones with CORPSE_FIELD_FLAGS 0x05."""
+    seen = [(opcode, body[5] if opcode == 0xa9 else None) for opcode, body in packets
+            if (opcode == 0xaa and corpse in destroys([(opcode, body)])) or corpse in creates([(opcode, body)])]
+    assert seen == [(0xaa, None), (0xa9, 3)], seen
+    assert values(packets, corpse, create=True)[35] == 0x05
+    assert not any(opcode == 0x216 for opcode, _ in packets)
+
+
 def check_death(host):
     client, peer = native_and_peer(host)
     guid, peer_guid = client.guid, peer.guid
@@ -303,12 +312,10 @@ def check_death(host):
     peer.collect()
     client.send(0x1d2, struct.pack('<Q', corpse))
     reclaimed = client.collect()
-    assert values(reclaimed, corpse)[35] == 1
-    assert (0x216, b'\0') in reclaimed
-    assert corpse not in destroys(reclaimed)
+    assert_turned_to_bones(reclaimed, corpse)
     assert any(opcode == 0xdf for opcode, _ in reclaimed)
     assert healer in destroys(reclaimed)
-    assert values(acknowledge_controls(host, client, peer, reclaimed), corpse)[35] == 1
+    assert_turned_to_bones(acknowledge_controls(host, client, peer, reclaimed), corpse)
     assert host.rows(f'SELECT dead FROM game_world_entity WHERE guid = {guid}') == [[False]]
     assert host.rows(f'SELECT is_bones FROM game_corpse WHERE guid = {corpse}') == [[True]]
     for spell, kind, points, target, parameter in [(51991, 14, 40, 3, 0), (51992, 38, 40, 0, 0), (51993, 181, 0, 0, 51992)]:
@@ -360,11 +367,10 @@ def check_death(host):
     host.call('debug_age_corpse', [corpse, 360])
     assert host.rows(f'SELECT is_bones FROM game_corpse WHERE guid = {corpse}') == [[False]]
     host.call('debug_age_corpse', [corpse, 259201])
-    bones = client.collect()
-    assert values(bones, corpse)[35] == 1
-    assert (0x216, b'\0') in bones
-    assert values(peer.collect(), corpse)[35] == 1
-    assert host.rows(f'SELECT id FROM game_aoi_grant WHERE viewer_guid = {guid} AND layer = 2 AND entity_guid = {corpse}') == grant
+    assert_turned_to_bones(client.collect(), corpse)
+    assert_turned_to_bones(peer.collect(), corpse)
+    regranted = host.rows(f'SELECT id FROM game_aoi_grant WHERE viewer_guid = {guid} AND layer = 2 AND entity_guid = {corpse}')
+    assert len(regranted) == 1 and regranted != grant
     client.send(0x216)
     assert (0x216, b'\0') in client.collect()
     client.send(0x1d2, struct.pack('<Q', corpse))
