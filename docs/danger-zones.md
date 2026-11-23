@@ -24,11 +24,13 @@ Shard. An existing multi-Shard Realm needs a reviewed data migration first; see
      `lyracore_shared::import_sql::in_table_order`. That writes every published column in published
      order. It takes each value from the statement or else from `import_sql_defaults.txt`, and
      refuses a name the table lacks or a column with neither, before any statement of the batch
-     runs. Any other SQL writer must name columns in table order. Durable tests write fixture rows
-     with `Standalone::insert_row`, which reads the published columns and their declared defaults,
-     so a new column needs nothing there. When an existing importer or native check INSERT can omit
-     the new column, add its default to `crates/lyracore-shared/src/import_sql_defaults.txt`. The
-     importer, the native check and the `conformance/support` worlds fill it from there.
+     runs. `spacetime describe` reports the published snake_case names (`value1` as `value_1`), SQL
+     accepts either name, and `in_table_order` matches both. Any other SQL writer must name columns
+     in table order. Durable tests write fixture rows with `Standalone::insert_row`, which reads the
+     published columns and their declared defaults, so a new column needs nothing there. When an
+     existing importer or native check INSERT can omit the new column, add its default to
+     `crates/lyracore-shared/src/import_sql_defaults.txt`. The importer, the native check and the
+     `conformance/support` worlds fill it from there.
    - Change native reducer arguments and their Host calls together. The Host and Module also share
      the BSATN layouts of `game_native_cipher` and `game_native_packet`. Update
      `native-host/src/feed.rs` with `module/src/native/mod.rs`, then run the native protocol check.

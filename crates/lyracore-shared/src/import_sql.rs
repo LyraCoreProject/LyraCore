@@ -30,21 +30,22 @@ fn ordered(
     let table = insert.table;
     let published = published_columns(table)
         .ok_or_else(|| format!("the published Module has no table `{table}`"))?;
+    let named: Vec<String> = insert.columns.iter().map(|name| canonical(name)).collect();
     for (at, name) in insert.columns.iter().enumerate() {
-        if !published.iter().any(|column| column == name) {
+        if !published.contains(&named[at]) {
             return Err(format!("{table} has no column `{name}`"));
         }
-        if insert.columns[..at].contains(name) {
+        if named[..at].contains(&named[at]) {
             return Err(format!("{table}.{name} is named twice"));
         }
     }
     let cells = published
         .iter()
         .map(
-            |column| match insert.columns.iter().position(|name| name == column) {
+            |column| match named.iter().position(|name| name == column) {
                 Some(at) => Ok(Cell::Named(at)),
                 None => migration_defaults(table)
-                    .find(|(name, _)| *name == column.as_str())
+                    .find(|(name, _)| canonical(name) == *column)
                     .map(|(_, value)| Cell::Default(value))
                     .ok_or_else(|| format!("{table}.{column} has no value and no default")),
             },
@@ -116,6 +117,38 @@ impl<'a> NamedInsert<'a> {
             values: keyword(rest, "VALUES").ok_or_else(unreadable)?,
         }))
     }
+}
+
+// SpacetimeDB 2.14 publishes `convert_case` 0.6 `Case::Snake` column names (`value1` as `value_1`);
+// SQL also accepts the source name. This ports its default boundaries for ASCII identifiers.
+fn canonical(name: &str) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    let mut words: Vec<String> = vec![String::new()];
+    for (at, &c) in chars.iter().enumerate() {
+        if matches!(c, '_' | '-' | ' ') {
+            words.push(String::new());
+            continue;
+        }
+        if let Some(&before) = at.checked_sub(1).and_then(|before| chars.get(before)) {
+            let after = chars.get(at + 1);
+            let boundary = (before.is_ascii_lowercase() && c.is_ascii_uppercase())
+                || (before.is_ascii_uppercase() && c.is_ascii_digit())
+                || (before.is_ascii_digit() && c.is_ascii_alphabetic())
+                || (before.is_ascii_lowercase() && c.is_ascii_digit())
+                || (before.is_ascii_uppercase()
+                    && c.is_ascii_uppercase()
+                    && after.is_some_and(char::is_ascii_lowercase));
+            if boundary {
+                words.push(String::new());
+            }
+        }
+        words
+            .last_mut()
+            .expect("words starts non-empty")
+            .push(c.to_ascii_lowercase());
+    }
+    words.retain(|word| !word.is_empty());
+    words.join("_")
 }
 
 fn keyword<'a>(text: &'a str, word: &str) -> Option<&'a str> {
@@ -290,6 +323,7 @@ mod tests {
                 "required_max_rep_value",
             ],
             "game_area" => &["id", "name"],
+            "game_gossip_condition" => &["condition_id", "value_1", "value_2"],
             _ => return None,
         };
         Some(columns.iter().map(|&column| column.to_owned()).collect())
@@ -323,6 +357,31 @@ mod tests {
             in_table_order(sql, published).unwrap(),
             "DELETE FROM game_area WHERE id > 0;\n INSERT INTO game_area (id,name) VALUES (3,'O''Brien, (east);');SELECT ';' FROM game_area"
         );
+    }
+
+    #[test]
+    fn source_column_names_match_their_published_snake_case_names() {
+        let sql = "INSERT INTO game_gossip_condition (value2,condition_id,value1) VALUES (2,7,1)";
+        assert_eq!(
+            in_table_order(sql, published).unwrap(),
+            "INSERT INTO game_gossip_condition (condition_id,value_1,value_2) VALUES (7,1,2)"
+        );
+    }
+
+    #[test]
+    fn canonical_names_split_where_convert_case_snake_splits() {
+        for (source, published) in [
+            ("value1", "value_1"),
+            ("p0_kind", "p_0_kind"),
+            ("data10", "data_10"),
+            ("x2y", "x_2_y"),
+            ("base_standing_2", "base_standing_2"),
+            ("value_1", "value_1"),
+            ("castTimeIndex", "cast_time_index"),
+            ("HTTPServer", "http_server"),
+        ] {
+            assert_eq!(canonical(source), published, "{source}");
+        }
     }
 
     #[test]
