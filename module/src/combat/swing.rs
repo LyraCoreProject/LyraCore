@@ -985,7 +985,7 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
     if !crate::combat::may_harm(ctx, &attacker, &target) {
         return;
     }
-    // An auto-repeat shot lands as a white hit; a Weapon Strike keeps its spell and crit.
+    // An auto-repeat shot lands as a white hit; a Weapon Strike also keeps its spell.
     let strike = ctx
         .db
         .game_spell()

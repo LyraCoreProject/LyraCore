@@ -49,6 +49,9 @@ const TAKEN_RANGED_HIT: u32 = 0x80;
 const PROC_EX_MISS: u32 = 0x4;
 const PROC_EX_BLOCK: u32 = 0x40;
 const PROC_EX_ABSORB: u32 = 0x400;
+// First Target draws of state 32: a resist roll of 1, which resists three quarters, then a dither
+// that rounds the resisted amount of a one-damage shot up to the whole shot.
+const FULL_RESIST_SEED_STATE: u32 = 32;
 // A cast ranged strike draws the Caster stream: its hit roll, the effect points, then the block.
 // Splitmix states whose draws 2 to 5 each fall under 200 basis points, below the wolf's 500 block
 // chance, and whose draws 1 to 5 each fall over 1000, above it.
@@ -143,6 +146,44 @@ fn a_partly_resisted_wand_shot_reports_the_resisted_amount() {
     );
     assert_eq!(logs[0]["blocked_amount"], "0");
     assert_eq!(health(&standalone, wolf), WOLF_HEALTH - damage);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_fully_resisted_wand_shot_fires_the_victims_default_proc() {
+    let mut standalone = Standalone::start("ranged-impact-wand-full-resist");
+    let wolf = stage(&mut standalone);
+    insert_shot_spell(&standalone, SHOOT, ARCANE, DAMAGE_CLASS_MAGIC);
+    equip_ranged(&standalone, WAND, ARCANE_SCHOOL);
+    standalone.assert_sql(&format!(
+        "UPDATE game_item_template SET damage_min = 1.0, damage_max = 1.0 \
+         WHERE entry = {FIXTURE_BLADE}"
+    ));
+    aim(&standalone, wolf, SHOOT);
+    stage_proc_watch(&standalone, wolf, None);
+    standalone.insert_row(
+        "game_conformance_spell_random",
+        &[
+            ("character_guid", &PLAYER),
+            ("target_guid", &wolf),
+            ("state", &FULL_RESIST_SEED_STATE),
+        ],
+    );
+    let events = subscribe_with_fence(&standalone, &[DAMAGE_LOG_EVENTS]);
+
+    shoot(&standalone, &[NORMAL_TABLE_ROLL, 0]);
+    fence_subscription(&standalone, &events);
+
+    let logs = event_rows(&events, "game_spell_cast_event_live");
+    assert_eq!(logs.len(), 1, "{logs:?}");
+    assert_eq!(logs[0]["damage"], "0", "the resist takes the whole shot");
+    assert!(number(&logs[0], "resisted") > 0, "{logs:?}");
+    assert_eq!(health(&standalone, wolf), WOLF_HEALTH);
+    assert_eq!(
+        watch_charges(&standalone, wolf),
+        Some(WATCH_CHARGES - 1),
+        "vmangos raises PROC_EX_NORMAL_HIT for a ranged hit a resist takes whole"
+    );
 }
 
 #[test]

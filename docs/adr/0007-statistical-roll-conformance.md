@@ -646,7 +646,8 @@ A ranged hit is a Spell in vmangos, so `CreateProcExtendMask`
 raises `PROC_EX_BLOCK` beside the hit's quality (`PROC_EX_NORMAL_HIT` or `PROC_EX_CRITICAL_HIT`),
 and `PROC_EX_ABSORB` beside the quality for an absorb. Only a white melee full block raises
 `PROC_EX_BLOCK` alone. `ranged_impact` runs the unlanded proc pass when a shot lands with no
-damage, so a fully blocked or fully absorbed ranged hit raises those bits; the launch folds the
+damage, so a fully blocked, absorbed or resisted ranged hit raises its quality and the block or
+absorb bit; the launch folds the
 absorbed amount into the impact schedule. A shot that misses or meets an immune target has no
 impact, so `fire_ranged_shot` raises its `PROC_EX_MISS` or `PROC_EX_IMMUNE` at launch, after the
 GO row, where vmangos raises them at impact. A cast strike's miss runs with the cast.

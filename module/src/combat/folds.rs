@@ -883,8 +883,8 @@ impl RangedRoll {
 const SPELL_ATTR_NO_ACTIVE_DEFENSE: u32 = 0x0020_0000;
 const SPELL_ATTR_EX3_COMPLETELY_BLOCKED: u32 = 0x0000_0008;
 
-// Only a ranged-damage-class spell blocks, not a wand's Shoot, nor one that cannot be actively
-// defended against or is wholly blocked; the draw follows the weapon draw.
+// Only a ranged-damage-class spell blocks, not a wand's Shoot, nor one `IsSpellPartiallyBlocked`
+// excludes by attribute.
 fn rolls_ranged_block(
     ctx: &ReducerContext,
     stream: crate::conformance_rolls::RollStream,
@@ -906,7 +906,7 @@ fn rolls_ranged_block(
 }
 
 /// A cast ranged Weapon Strike's partial block: its damage after the block and the amount blocked.
-/// The draw comes from the Caster stream, after the cast's hit roll and the strike's damage roll.
+/// The draw comes from the Caster stream, after the cast's hit roll and the effect's points draw.
 pub(super) fn block_ranged_strike(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
@@ -972,6 +972,7 @@ pub(crate) fn roll_ranged_swing(
         | AttackOutcome::Crushing
         | AttackOutcome::Block => base,
     };
+    // The block draw follows the weapon draw.
     let blocks = rolls_ranged_block(
         ctx,
         crate::conformance_rolls::RollStream::Swing(attacker.guid),
