@@ -31,6 +31,7 @@ const TAKE_HARMFUL_SPELL: u32 = 0x2_0000;
 const TAKE_HARMFUL_ABILITY: u32 = 0x2000;
 const PROC_EX_NORMAL_HIT: u32 = 0x1;
 const PROC_EX_BLOCK: u32 = 0x40;
+const PROC_EX_ABSORB: u32 = 0x400;
 const PROC_EX_TRIGGER_ALWAYS: u32 = 0x1_0000;
 // Spell.dbc attribute bit 0, SPELL_ATTR_PROC_FAILURE_BURNS_CHARGE.
 const PROC_FAILURE_BURNS_CHARGE: u32 = 0x1;
@@ -1683,6 +1684,92 @@ fn a_swing_that_an_absorb_takes_whole_still_spends_flurry() {
             assert_eq!(last["damage"], "0", "the absorb takes the whole swing");
             return;
         }
+    }
+    panic!("no swing connected");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_swing_that_an_absorb_takes_part_of_raises_the_absorb_bit() {
+    const CHARGES: u8 = 20;
+    const ABSORB_POINTS: i32 = 1;
+    let mut standalone = Standalone::start("aura-charges-partly-absorbed-swing");
+    let wolf = stage(&mut standalone);
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = 0, y = 0, orientation = 0 WHERE guid = {PLAYER}"
+    ));
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = 1, y = 0, orientation = 0 WHERE guid = {wolf}"
+    ));
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: POWER_WORD_SHIELD,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: 0,
+            charges: 0,
+        },
+        &[(A_ABSORB, ABSORB_POINTS, i32::from(PHYSICAL), P_SCHOOL_MASK)],
+    );
+    standalone.assert_call(
+        "debug_force_cast_at",
+        &[
+            &wolf.to_string(),
+            &POWER_WORD_SHIELD.to_string(),
+            &wolf.to_string(),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_proc_event",
+        &[("spell_id", &FLURRY), ("proc_ex", &PROC_EX_ABSORB)],
+    );
+    aura_spell(
+        &standalone,
+        Charged {
+            spell_id: FLURRY,
+            school_mask: PHYSICAL,
+            target: T_SELF,
+            proc_flags: DEAL_MELEE_SWING,
+            charges: CHARGES,
+        },
+        &[(A_MOD_SPEED, 30, i32::from(SPEED_SWING), P_SPEED_KIND)],
+    );
+    standalone.assert_call("debug_force_cast", &["1", &FLURRY.to_string()]);
+    standalone.insert_row(
+        "game_conformance_swing_random",
+        &[("character_guid", &1), ("state", &1)],
+    );
+    let events = subscribe_with_fence(
+        &standalone,
+        &["SELECT * FROM game_combat_event_live WHERE attacker_guid = 1"],
+    );
+    standalone.assert_call("debug_engage", &["1", &wolf.to_string()]);
+
+    for swung in 1..=ATTEMPTS {
+        swing(&standalone);
+        fence_subscription(&standalone, &events);
+        let swings = event_rows(&events, "game_combat_event_live");
+        assert_eq!(swings.len(), swung);
+        let last = &swings[swung - 1];
+        if HIT_INFO_AVOIDED.contains(&last["hit_info"].as_str()) {
+            assert_eq!(
+                charges(&standalone, PLAYER, FLURRY),
+                Some(CHARGES),
+                "an avoided swing raises no PROC_EX_ABSORB"
+            );
+            continue;
+        }
+        assert_ne!(
+            last["damage"], "0",
+            "the absorb takes only part of the swing"
+        );
+        assert_eq!(
+            charges(&standalone, PLAYER, FLURRY),
+            Some(CHARGES - 1),
+            "vmangos Unit::CalculateMeleeDamage raises PROC_EX_ABSORB for a partly absorbed swing"
+        );
+        return;
     }
     panic!("no swing connected");
 }
