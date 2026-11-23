@@ -110,7 +110,7 @@ pub(super) fn changed(
     }
     if let Some((old, new)) = previous.zip(current) {
         if old.owner_guid == new.owner_guid
-            && new.slot <= super::equip_slot::END
+            && equipped(new)
             && (old.durability == 0) != (new.durability == 0)
         {
             crate::spell::recompute_vitals(ctx, new.owner_guid);
