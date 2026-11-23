@@ -161,7 +161,6 @@ pub(crate) fn attack_table(facts: &AttackFacts) -> AttackTable {
     let faced = facts.target_faces_attacker;
     let can_roll_block = faced && !facts.no_block;
     let can_block = melee && can_roll_block;
-    let ranged_swing = !melee && facts.spell.is_none();
 
     let full = skills.weapon - skills.defense;
     let difference = skills.weapon - skills.defense_maximum;
@@ -231,10 +230,7 @@ pub(crate) fn attack_table(facts: &AttackFacts) -> AttackTable {
         block: band(can_block && facts.spell.is_none(), block),
         crit: band(!facts.spell.is_some_and(|spell| spell.cannot_crit), crit),
         crushing: band(melee && swing, base.crushing),
-        partial_block: band(
-            (can_block && facts.spell.is_some()) || (ranged_swing && can_roll_block),
-            block,
-        ),
+        partial_block: band(can_roll_block && (facts.spell.is_some() || !melee), block),
     }
 }
 
@@ -627,18 +623,21 @@ mod tests {
         shot.attack_type = AttackType::Ranged;
         assert_eq!(bands(attack_table(&shot)), [800, 0, 0, 0, 0, 200, 0, 500]);
         shot.spell = Some(CAST);
-        assert_eq!(bands(attack_table(&shot)), [800, 0, 0, 0, 0, 200, 0, 0]);
+        assert_eq!(bands(attack_table(&shot)), [800, 0, 0, 0, 0, 200, 0, 500]);
     }
 
     #[test]
-    fn a_ranged_swing_blocks_only_a_target_that_faces_it_and_may_block() {
-        let mut shot = level_60();
-        shot.attack_type = AttackType::Ranged;
-        shot.target_faces_attacker = false;
-        assert_eq!(attack_table(&shot).partial_block, 0);
-        shot.target_faces_attacker = true;
-        shot.no_block = true;
-        assert_eq!(attack_table(&shot).partial_block, 0);
+    fn a_ranged_attack_blocks_only_a_target_that_faces_it_and_may_block() {
+        for spell in [None, Some(CAST)] {
+            let mut shot = level_60();
+            shot.attack_type = AttackType::Ranged;
+            shot.spell = spell;
+            shot.target_faces_attacker = false;
+            assert_eq!(attack_table(&shot).partial_block, 0);
+            shot.target_faces_attacker = true;
+            shot.no_block = true;
+            assert_eq!(attack_table(&shot).partial_block, 0);
+        }
     }
 
     #[test]

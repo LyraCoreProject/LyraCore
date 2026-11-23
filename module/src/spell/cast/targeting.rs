@@ -1107,14 +1107,7 @@ fn apply_damage_effect(
             );
             if strike.ranged && target_guid != caster_guid {
                 // The impact emits the damage log, so this GO carries no damage.
-                crate::combat::launch_ranged_strike(
-                    ctx,
-                    &caster,
-                    &target,
-                    dmg,
-                    hdr.spell_id,
-                    strike_crit,
-                );
+                crate::combat::launch_ranged_strike(ctx, &caster, &target, dmg, hdr, strike_crit);
                 return EffectHit::none();
             }
             let (dealt, absorbed) = crate::combat::deal_damage(

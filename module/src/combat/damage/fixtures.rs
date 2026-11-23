@@ -85,6 +85,7 @@ pub fn debug_stage_ranged_lethal_damage_floor_fixture(
             school: 0,
             resisted: 0,
             blocked: 0,
+            absorbed: 0,
         });
     Ok(())
 }

@@ -880,10 +880,14 @@ impl RangedRoll {
     }
 }
 
-// Only a ranged-damage-class spell blocks, not a wand's Shoot; the draw follows the weapon draw.
+const SPELL_ATTR_NO_ACTIVE_DEFENSE: u32 = 0x0020_0000;
+const SPELL_ATTR_EX3_COMPLETELY_BLOCKED: u32 = 0x0000_0008;
+
+// Only a ranged-damage-class spell blocks, not a wand's Shoot, nor one `IsSpellPartiallyBlocked`
+// excludes by attribute.
 fn rolls_ranged_block(
     ctx: &ReducerContext,
-    attacker_guid: u64,
+    stream: crate::conformance_rolls::RollStream,
     ranged_spell_id: u32,
     partial_block_bp: u32,
 ) -> bool {
@@ -893,12 +897,36 @@ fn rolls_ranged_block(
             .game_spell()
             .spell_id()
             .find(ranged_spell_id)
-            .is_some_and(|spell| spell.damage_class == crate::spell::proc::DAMAGE_CLASS_RANGED)
-        && crate::conformance_rolls::draw(
-            ctx,
-            crate::conformance_rolls::RollStream::Swing(attacker_guid),
-        ) % 10_000
-            < partial_block_bp
+            .is_some_and(|spell| {
+                spell.damage_class == crate::spell::proc::DAMAGE_CLASS_RANGED
+                    && spell.attributes & SPELL_ATTR_NO_ACTIVE_DEFENSE == 0
+                    && spell.attributes_ex_3 & SPELL_ATTR_EX3_COMPLETELY_BLOCKED == 0
+            })
+        && crate::conformance_rolls::draw(ctx, stream) % 10_000 < partial_block_bp
+}
+
+/// A cast ranged Weapon Strike's partial block: its damage after the block and the amount blocked.
+/// The draw comes from the Caster stream, after the cast's hit roll and the effect's points draw.
+pub(super) fn block_ranged_strike(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: &WorldEntity,
+    spell: &crate::Spell,
+    rolled: u32,
+) -> (u32, u32) {
+    let table = attack_table_for(
+        ctx,
+        attacker,
+        target,
+        AttackType::Ranged,
+        Some(DeliveredSpell::cast(spell)),
+    );
+    let stream = crate::conformance_rolls::RollStream::Caster(attacker.guid);
+    if !rolls_ranged_block(ctx, stream, spell.spell_id, table.partial_block) {
+        return (rolled, 0);
+    }
+    let blocked = defender_block_value(ctx, target).min(rolled);
+    (rolled - blocked, blocked)
 }
 
 pub(crate) fn roll_ranged_swing(
@@ -944,7 +972,13 @@ pub(crate) fn roll_ranged_swing(
         | AttackOutcome::Crushing
         | AttackOutcome::Block => base,
     };
-    let blocks = rolls_ranged_block(ctx, attacker.guid, ranged_spell_id, table.partial_block);
+    // The block draw follows the weapon draw.
+    let blocks = rolls_ranged_block(
+        ctx,
+        crate::conformance_rolls::RollStream::Swing(attacker.guid),
+        ranged_spell_id,
+        table.partial_block,
+    );
     let block_value = || defender_block_value(ctx, target);
     if school != 0 {
         let blocked = if blocks {

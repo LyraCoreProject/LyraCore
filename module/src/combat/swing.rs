@@ -848,6 +848,17 @@ fn fire_ranged_shot(
             ..CombatEvent::signal_at(ctx, attacker, target_guid)
         },
     );
+    if hit_info.is_avoided() {
+        // A shot that cannot land has no impact to carry its Miss or Immune procs.
+        crate::spell::proc::run_unlanded_proc_pass(
+            ctx,
+            attacker_guid,
+            target_guid,
+            &Hit::weapon(HitSource::Ranged, false),
+            hit_info,
+            (0, 0),
+        );
+    }
     schedule_ranged_impact(
         ctx,
         attacker_guid,
@@ -872,9 +883,10 @@ pub(crate) fn launch_ranged_strike(
     attacker: &WorldEntity,
     target: &WorldEntity,
     rolled: u32,
-    spell_id: u32,
+    spell: &crate::Spell,
     is_crit: bool,
 ) {
+    let (rolled, blocked) = super::folds::block_ranged_strike(ctx, attacker, target, spell, rolled);
     let damage = FrozenDamage::launch(ctx, attacker.guid, target.guid, rolled);
     let (dx, dy, dz) = (
         target.x - attacker.x,
@@ -891,10 +903,10 @@ pub(crate) fn launch_ranged_strike(
         target.guid,
         RangedShot {
             damage,
-            ranged_spell_id: spell_id,
+            ranged_spell_id: spell.spell_id,
             is_crit,
             resisted: 0,
-            blocked: 0,
+            blocked,
         },
         travel_ms,
     );
@@ -922,7 +934,7 @@ fn schedule_ranged_impact(
         resisted,
         blocked,
     } = shot;
-    if damage.amount() == 0 && resisted == 0 && blocked == 0 {
+    if damage.amount() == 0 && damage.absorbed() == 0 && resisted == 0 && blocked == 0 {
         return;
     }
     let land_at = crate::time::now(ctx)
@@ -949,6 +961,7 @@ fn schedule_ranged_impact(
             },
             resisted,
             blocked,
+            absorbed: damage.absorbed(),
         });
 }
 
@@ -964,13 +977,15 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
     let Some(target) = entities.guid().find(shot.target_guid) else {
         return;
     };
-    if target.dead || (shot.damage == 0 && shot.resisted == 0 && shot.blocked == 0) {
+    if target.dead
+        || (shot.damage == 0 && shot.absorbed == 0 && shot.resisted == 0 && shot.blocked == 0)
+    {
         return;
     }
     if !crate::combat::may_harm(ctx, &attacker, &target) {
         return;
     }
-    // An auto-repeat shot lands as a white hit; a Weapon Strike keeps its spell and crit.
+    // An auto-repeat shot lands as a white hit; a Weapon Strike also keeps its spell.
     let strike = ctx
         .db
         .game_spell()
@@ -984,13 +999,23 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
         crate::spell::break_stealth(ctx, shot.attacker_guid);
     }
 
-    let damage = FrozenDamage::stored(shot.damage).resolve(ctx, &target);
+    let damage = FrozenDamage::stored(shot.damage, shot.absorbed).resolve(ctx, &target);
     let hit = if strike {
         Hit::spell(HitSource::Ranged, shot.ranged_spell_id, shot.is_crit)
     } else {
-        Hit::weapon(HitSource::Ranged, false).with_block(shot.blocked)
-    };
+        Hit::weapon(HitSource::Ranged, shot.is_crit)
+    }
+    .with_block(shot.blocked);
+    let dealt = damage.amount();
     let outcome = damage.land(ctx, shot.attacker_guid, shot.target_guid, hit);
+    crate::spell::proc::run_unlanded_proc_pass(
+        ctx,
+        shot.attacker_guid,
+        shot.target_guid,
+        &hit,
+        AttackOutcome::Normal,
+        (dealt, damage.absorbed()),
+    );
     let reports_damage = damage.amount() > 0 || shot.resisted > 0 || shot.blocked > 0;
     if reports_damage && shot.ranged_spell_id != 0 {
         crate::SpellCastEvent::insert(

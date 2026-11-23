@@ -632,6 +632,26 @@ reports the blocked amount. Partial resistance of the arcane Shoot is not part o
 table; `ranged_impact` reports its resisted amount, the classifier accepts a positive one and
 measures no resist rate.
 
+A cast ranged Weapon Strike (Aimed Shot, Multi-Shot, Throw) takes the same partial block through
+the same Spell.cpp:1415 branch, unless its spell has `SPELL_ATTR_NO_ACTIVE_DEFENSE` or
+`SPELL_ATTR_EX3_COMPLETELY_BLOCKED` (`IsSpellPartiallyBlocked`). LyraCore rolls it in
+`launch_ranged_strike` from the Caster stream, after the cast's hit roll and the effect's points
+draw. The strike's own damage roll is `ctx.random`, not a Caster draw. The blocked amount goes to
+the impact. vmangos rolls the block at impact, LyraCore at launch, so a block that follows a launch
+state change differs. No Roll Conformance context measures a ranged cast strike: the cast Weapon
+Strike context is melee Mortal Strike, so Tier 1 signatures do not move.
+
+A ranged hit is a Spell in vmangos, so `CreateProcExtendMask`
+([Unit.cpp:8776–8830](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp))
+raises `PROC_EX_BLOCK` beside the hit's quality (`PROC_EX_NORMAL_HIT` or `PROC_EX_CRITICAL_HIT`),
+and `PROC_EX_ABSORB` beside the quality for an absorb. Only a white melee full block raises
+`PROC_EX_BLOCK` alone. `ranged_impact` runs the unlanded proc pass when a shot lands with no
+damage, so a fully blocked, absorbed or resisted ranged hit raises its quality and the block or
+absorb bit; the launch folds the
+absorbed amount into the impact schedule. A shot that misses or meets an immune target has no
+impact, so `fire_ranged_shot` raises its `PROC_EX_MISS` or `PROC_EX_IMMUNE` at launch, after the
+GO row, where vmangos raises them at impact. A cast strike's miss runs with the cast.
+
 vmangos reports every shot through the Spell path. [Spell.cpp:4529–4561, 4625–4653](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Spells/Spell.cpp)
 sends one `SMSG_SPELL_GO` at launch, with ammo for a ranged spell: a landed target is in the hit
 list, a missed target in the miss list with reason 1. A landed shot sends

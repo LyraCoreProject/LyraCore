@@ -319,11 +319,13 @@ columns.
 
 ### Ranged impact report migration
 
-`game_ranged_impact_schedule` gains `resisted` and `blocked`, end-appended with default 0. A shot
-launched before the update lands with both at 0, which means no partial block or resist report.
+`game_ranged_impact_schedule` gains `resisted`, `blocked` and `absorbed`, end-appended with default
+0. A shot launched before the update lands with all three at 0, which means no partial block,
+resist report or absorb proc.
 The table is transient and nothing stores it, so no repair or reimport is needed. Only a Spell row
-whose `damage_class` is 3 (ranged) rolls an Auto Shot's partial block, so a ranged shot with no
-imported Spell row never blocks.
+whose `damage_class` is 3 (ranged) rolls a partial block for an Auto Shot or a cast ranged Weapon
+Strike, and not one with `SPELL_ATTR_NO_ACTIVE_DEFENSE` or `SPELL_ATTR_EX3_COMPLETELY_BLOCKED`, so a
+ranged shot with no imported Spell row never blocks.
 
 ### Summoning ritual migration
 
