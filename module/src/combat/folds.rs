@@ -331,21 +331,6 @@ pub(crate) fn find_ammo(ctx: &ReducerContext, player_guid: u64) -> Option<ItemIn
     )
 }
 
-const DURABILITY_WEAR_CHANCE_PCT: u32 = 10;
-
-pub(crate) fn wear_weapon(ctx: &ReducerContext, player_guid: u64) {
-    if let Some(mut inst) = crate::items::item_in_slot(
-        ctx,
-        player_guid,
-        lyracore_shared::constants::starter_item::MAINHAND_SLOT,
-    ) {
-        if inst.durability > 0 && ctx.random::<u32>() % 100 < DURABILITY_WEAR_CHANCE_PCT {
-            inst.durability -= 1;
-            inst.update(ctx);
-        }
-    }
-}
-
 pub(crate) fn swing_range_ctx(ctx: &ReducerContext, attacker: &WorldEntity) -> (u32, u32) {
     melee_range(ctx, attacker, false)
 }

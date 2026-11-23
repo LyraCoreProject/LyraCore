@@ -351,7 +351,9 @@ pub(crate) fn apply_hit(
         }
     }
 
-    if is_lethal(target.health, dmg) && duel_takes_lethal_hit(ctx, attacker_guid, &target) {
+    let lethal = is_lethal(target.health, dmg);
+    if lethal && duel_takes_lethal_hit(ctx, attacker_guid, &target) {
+        super::wear::wear_for_landed_damage(ctx, attacker.as_ref(), &target);
         let before = target.health;
         target.health = 1;
         reward_taken_rage(&mut target, attacker_guid, before);
@@ -372,7 +374,7 @@ pub(crate) fn apply_hit(
         };
     }
     let shield = matches!(hit.source, HitSource::DamageShield);
-    let killed = is_lethal(target.health, dmg) && (weapon || !target_is_player || shield);
+    let killed = lethal && (weapon || !target_is_player || shield);
     if killed {
         if target_is_player {
             kill_player(ctx, target_guid, attacker_guid);
@@ -389,6 +391,9 @@ pub(crate) fn apply_hit(
             killed: true,
             duel_completed: false,
         };
+    }
+    if !lethal {
+        super::wear::wear_for_landed_damage(ctx, attacker.as_ref(), &target);
     }
     let accrues_threat = !target_is_player && reward_source.is_some();
     if weapon && target_is_player && reward_source.is_none() {

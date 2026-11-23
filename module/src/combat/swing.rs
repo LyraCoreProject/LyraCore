@@ -609,10 +609,6 @@ fn fire_melee_swing(
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
-    if attacker.is_player() {
-        wear_weapon(ctx, attacker_guid);
-    }
-
     let damage = resolve_damage(ctx, attacker_guid, target_guid, rolled);
     let (projected_swing, projected_seal) = split_damage_projection(damage.amount(), seal_portion);
 
