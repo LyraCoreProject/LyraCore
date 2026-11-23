@@ -192,7 +192,7 @@ fn inventory_changes_preserve_accepted_trade_items() {
     assert!(shard
         .query_rows("SELECT * FROM game_trade_event")
         .is_empty());
-    shard.assert_call("gw_split_item", &[ACTOR, "24", "27", "1"]);
+    shard.assert_call("gw_split_item", &[ACTOR, "24", "28", "1"]);
     shard.assert_call("gw_accept_trade", &[ACTOR]);
     let received = shard.query_rows(&format!(
         "SELECT stack_count FROM game_item_instance WHERE owner_guid = {other} AND entry = {FIXTURE_JERKY}"
