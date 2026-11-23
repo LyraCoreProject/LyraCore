@@ -73,7 +73,7 @@ fn advance_and_drain(
     Ok(receiver.drain_packets())
 }
 
-// Unretained readiness: each Character's Mortal Strike must be accepted and reach its own GO.
+// Unretained readiness.
 fn ready_casts(receiver: &mut ReducerConnection, characters: &mut [Character]) -> Result<()> {
     for character in characters.iter_mut() {
         cast(character).map_err(anyhow::Error::msg)?;

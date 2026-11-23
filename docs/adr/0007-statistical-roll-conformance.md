@@ -525,8 +525,9 @@ sends one `SMSG_SPELL_GO` to the caster and its observers: a landed target is in
 avoided target is in the miss list with reason 1 (miss), 3 (dodge) or 4 (parry). A landed cast then
 sends `SMSG_SPELLNONMELEEDAMAGELOG` (Spell.cpp:1429), with crit flag `0x02` and a positive blocked
 amount for a partial block ([SpellCaster.cpp:1080–1096, 1253–1258](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp)).
-Only a next-swing spell sends `SMSG_ATTACKERSTATEUPDATE` (Spell.cpp:1289–1290, 1424–1426), and
-`SMSG_SPELLLOGMISS` reports only immunity and evasion (Spell.cpp:1614, 1643, 1700). The classifier
+Only a next-swing spell sends `SMSG_ATTACKERSTATEUPDATE` (Spell.cpp:1289–1290, 1424–1426).
+`SMSG_SPELLLOGMISS` reports immunity and evasion (Spell.cpp:1614, 1643, 1700) and a resisted damage
+shield ([Unit.cpp:1797](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Unit.cpp)), never a miss, dodge or parry. The classifier
 in `conformance/support/weapon_strike_rolls.rs` reads one own `SMSG_SPELL_GO` per cast and the
 damage log of a landed cast. A missing, extra or contradictory packet blocks the sample; it is not
 a rate.

@@ -367,7 +367,7 @@ mod fixture {
     // Spell 12294 translates a pinned database row; ADR 0007 explains the dropped cooldowns.
     fn arm_mortal_strike(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
         use crate::{game_spell, game_spell_effect};
-        use lyracore_shared::spell::taxonomy::{A_INERT, P_RAW};
+        use lyracore_shared::spell::taxonomy::{A_INERT, CAST_FLAG_REFUSES_SELF_CAST, P_RAW};
 
         let mut spell = crate::Spell::blank(12294, "Fixture spell 12294");
         spell.power_type = 1;
@@ -377,13 +377,14 @@ mod fixture {
         spell.category = 971;
         spell.range_yd = 5;
         spell.duration_ms = 10_000;
+        spell.max_duration_ms = 10_000;
         spell.duration_index = 1;
         spell.school_mask = 1;
         spell.attributes = 327696;
         spell.attributes_ex_3 = 1024;
         spell.spell_level = 40;
         spell.is_negative = true;
-        spell.cast_flags = crate::spell::CAST_FLAG_WEAPON_PROCS;
+        spell.cast_flags = crate::spell::CAST_FLAG_WEAPON_PROCS | CAST_FLAG_REFUSES_SELF_CAST;
         spell.family_name = 4;
         spell.family_flags = 33554432;
         spell.custom_flags = lyracore_shared::spell_custom::FACE_TARGET;
