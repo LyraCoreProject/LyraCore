@@ -4,8 +4,8 @@ use lyracore_package_delta::fixture_ids::{FIXTURE_BLADE, TEST_WOLF_ENTRY};
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::item::weapon_subclass::{THROWN, WAND};
 use lyracore_shared::spell::taxonomy::{
-    A_INERT, CAST_FLAG_ALWAYS_HIT, CAST_FLAG_CANNOT_CRIT, CAST_FLAG_RANGED_AUTO_REPEAT,
-    E_WEAPON_STRIKE, P_NONE, T_SELF, T_TARGET_ENEMY,
+    A_ABSORB, A_INERT, CAST_FLAG_ALWAYS_HIT, CAST_FLAG_CANNOT_CRIT, CAST_FLAG_RANGED_AUTO_REPEAT,
+    E_WEAPON_STRIKE, P_NONE, P_SCHOOL_MASK, T_SELF, T_TARGET_ENEMY,
 };
 use support::{event_rows, fence_subscription, subscribe_with_fence, Row, Standalone};
 
@@ -35,7 +35,9 @@ const SHOT_TICKS: &str = "4";
 // 20 ticks of 50 ms pass the longest flight in these tests.
 const FLIGHT_TICKS: &str = "20";
 const STRIKE: u32 = 5_121_201;
-const BLOCK_WATCH: u32 = 5_121_202;
+const PROC_WATCH: u32 = 5_121_202;
+const ABSORB_SHIELD: u32 = 5_121_203;
+const SHIELD_POINTS: i32 = 100_000;
 // Spell.dbc Attributes of Throw; 0x02 marks the ranged slot.
 const STRIKE_ATTRIBUTES: u32 = 0x0041_0012;
 const INVTYPE_THROWN: u8 = 25;
@@ -46,6 +48,7 @@ const DURATION_MS: u32 = 600_000;
 const TAKEN_RANGED_HIT: u32 = 0x80;
 const PROC_EX_MISS: u32 = 0x4;
 const PROC_EX_BLOCK: u32 = 0x40;
+const PROC_EX_ABSORB: u32 = 0x400;
 // A cast ranged strike draws the Caster stream: its hit roll, the effect points, then the block.
 // Splitmix states whose draws 2 to 5 each fall under 200 basis points, below the wolf's 500 block
 // chance, and whose draws 1 to 5 each fall over 1000, above it.
@@ -169,6 +172,7 @@ fn a_cast_ranged_strike_is_partly_blocked_by_a_facing_creature_and_reports_it() 
     let (blocked, unblocked) = (&logs[0], &logs[1]);
     assert_eq!(unblocked["blocked_amount"], "0");
     assert!(number(blocked, "blocked_amount") > 0, "{blocked:?}");
+    assert!(number(blocked, "damage") > 0, "{blocked:?}");
     assert_eq!(
         number(blocked, "damage") + number(blocked, "blocked_amount"),
         number(unblocked, "damage"),
@@ -183,11 +187,21 @@ fn a_cast_ranged_strike_is_partly_blocked_by_a_facing_creature_and_reports_it() 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_fully_blocked_cast_ranged_strike_fires_the_victims_block_proc() {
-    let mut standalone = Standalone::start("ranged-impact-strike-full-block");
+    assert_full_block_spends_a_watch_charge("ranged-impact-strike-full-block", Some(PROC_EX_BLOCK));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_fully_blocked_cast_ranged_strike_also_raises_a_normal_hit_for_a_default_proc() {
+    assert_full_block_spends_a_watch_charge("ranged-impact-strike-default-proc", None);
+}
+
+fn assert_full_block_spends_a_watch_charge(name: &str, proc_ex: Option<u32>) {
+    let mut standalone = Standalone::start(name);
     let wolf = stage(&mut standalone);
     stage_strike(&standalone, 5);
     face_each_other(&standalone, wolf);
-    stage_block_watch(&standalone, wolf, PROC_EX_BLOCK);
+    stage_proc_watch(&standalone, wolf, proc_ex);
     seed_caster(&standalone, wolf, BLOCKING_CASTER_STATE);
     let events = subscribe_with_fence(&standalone, &[DAMAGE_LOG_EVENTS]);
     assert_eq!(watch_charges(&standalone, wolf), Some(WATCH_CHARGES));
@@ -203,7 +217,32 @@ fn a_fully_blocked_cast_ranged_strike_fires_the_victims_block_proc() {
     assert_eq!(
         watch_charges(&standalone, wolf),
         Some(WATCH_CHARGES - 1),
-        "vmangos raises PROC_EX_BLOCK on the victim for a full block"
+        "vmangos raises PROC_EX_BLOCK with the hit's quality on the victim for a full block"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_cast_ranged_strike_that_an_absorb_takes_whole_fires_the_victims_absorb_proc() {
+    let mut standalone = Standalone::start("ranged-impact-strike-absorb");
+    let wolf = stage(&mut standalone);
+    stage_strike(&standalone, 40);
+    face_each_other(&standalone, wolf);
+    stage_absorb_shield(&standalone, wolf);
+    stage_proc_watch(&standalone, wolf, Some(PROC_EX_ABSORB));
+    seed_caster(&standalone, wolf, CLEAR_CASTER_STATE);
+
+    throw(&standalone, wolf);
+
+    assert_eq!(
+        health(&standalone, wolf),
+        WOLF_HEALTH,
+        "the shield takes it all"
+    );
+    assert_eq!(
+        watch_charges(&standalone, wolf),
+        Some(WATCH_CHARGES - 1),
+        "vmangos raises PROC_EX_ABSORB for a ranged hit an absorb takes"
     );
 }
 
@@ -215,7 +254,7 @@ fn a_missed_auto_shot_fires_the_victims_miss_proc() {
     insert_shot_spell(&standalone, AUTO_SHOT, PHYSICAL, DAMAGE_CLASS_RANGED);
     equip_ranged(&standalone, THROWN, 0);
     aim(&standalone, wolf, AUTO_SHOT);
-    stage_block_watch(&standalone, wolf, PROC_EX_MISS);
+    stage_proc_watch(&standalone, wolf, Some(PROC_EX_MISS));
 
     shoot(&standalone, &[0, 0]);
 
@@ -373,13 +412,14 @@ fn stage_strike(standalone: &Standalone, weapon_damage: u32) {
     ));
 }
 
-// A Charged Aura on the wolf that spends a charge on a ranged hit it takes with the proc_ex result.
-fn stage_block_watch(standalone: &Standalone, wolf: u64, proc_ex: u32) {
+// A Charged Aura on the wolf that spends a charge on a ranged hit it takes; without a proc_ex
+// the default applies.
+fn stage_proc_watch(standalone: &Standalone, wolf: u64, proc_ex: Option<u32>) {
     standalone.insert_row(
         "game_spell",
         &[
-            ("spell_id", &BLOCK_WATCH),
-            ("name", &"Block watch fixture"),
+            ("spell_id", &PROC_WATCH),
+            ("name", &"Proc watch fixture"),
             ("school_mask", &PHYSICAL),
             ("range_yd", &30),
             ("duration_ms", &DURATION_MS),
@@ -392,8 +432,8 @@ fn stage_block_watch(standalone: &Standalone, wolf: u64, proc_ex: u32) {
     standalone.insert_row(
         "game_spell_effect",
         &[
-            ("id", &packed_spell_effect_id(BLOCK_WATCH, 0)),
-            ("spell_id", &BLOCK_WATCH),
+            ("id", &packed_spell_effect_id(PROC_WATCH, 0)),
+            ("spell_id", &PROC_WATCH),
             ("effect_index", &0),
             ("kind", &A_INERT),
             ("base_points", &0),
@@ -402,15 +442,52 @@ fn stage_block_watch(standalone: &Standalone, wolf: u64, proc_ex: u32) {
             ("p_0_kind", &P_NONE),
         ],
     );
+    if let Some(proc_ex) = proc_ex {
+        standalone.insert_row(
+            "game_spell_proc_event",
+            &[("spell_id", &PROC_WATCH), ("proc_ex", &proc_ex)],
+        );
+    }
+    standalone.assert_call(
+        "debug_force_cast_at",
+        &[
+            &wolf.to_string(),
+            &PROC_WATCH.to_string(),
+            &wolf.to_string(),
+        ],
+    );
+}
+
+fn stage_absorb_shield(standalone: &Standalone, wolf: u64) {
     standalone.insert_row(
-        "game_spell_proc_event",
-        &[("spell_id", &BLOCK_WATCH), ("proc_ex", &proc_ex)],
+        "game_spell",
+        &[
+            ("spell_id", &ABSORB_SHIELD),
+            ("name", &"Absorb shield fixture"),
+            ("school_mask", &PHYSICAL),
+            ("range_yd", &30),
+            ("duration_ms", &DURATION_MS),
+            ("spell_level", &1),
+        ],
+    );
+    standalone.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(ABSORB_SHIELD, 0)),
+            ("spell_id", &ABSORB_SHIELD),
+            ("effect_index", &0),
+            ("kind", &A_ABSORB),
+            ("base_points", &SHIELD_POINTS),
+            ("target", &T_SELF),
+            ("p_0", &(PHYSICAL as i32)),
+            ("p_0_kind", &P_SCHOOL_MASK),
+        ],
     );
     standalone.assert_call(
         "debug_force_cast_at",
         &[
             &wolf.to_string(),
-            &BLOCK_WATCH.to_string(),
+            &ABSORB_SHIELD.to_string(),
             &wolf.to_string(),
         ],
     );
@@ -420,7 +497,7 @@ fn watch_charges(standalone: &Standalone, wolf: u64) -> Option<u8> {
     standalone
         .query_rows(&format!(
             "SELECT proc_charges FROM game_aura WHERE target_guid = {wolf} \
-             AND spell_id = {BLOCK_WATCH}"
+             AND spell_id = {PROC_WATCH}"
         ))
         .first()
         .map(|row| row["proc_charges"].parse().unwrap())

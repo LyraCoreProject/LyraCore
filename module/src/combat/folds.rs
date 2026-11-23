@@ -880,7 +880,11 @@ impl RangedRoll {
     }
 }
 
-// Only a ranged-damage-class spell blocks, not a wand's Shoot; the draw follows the weapon draw.
+const SPELL_ATTR_NO_ACTIVE_DEFENSE: u32 = 0x0020_0000;
+const SPELL_ATTR_EX3_COMPLETELY_BLOCKED: u32 = 0x0000_0008;
+
+// Only a ranged-damage-class spell blocks, not a wand's Shoot, nor one that cannot be actively
+// defended against or is wholly blocked; the draw follows the weapon draw.
 fn rolls_ranged_block(
     ctx: &ReducerContext,
     stream: crate::conformance_rolls::RollStream,
@@ -893,7 +897,11 @@ fn rolls_ranged_block(
             .game_spell()
             .spell_id()
             .find(ranged_spell_id)
-            .is_some_and(|spell| spell.damage_class == crate::spell::proc::DAMAGE_CLASS_RANGED)
+            .is_some_and(|spell| {
+                spell.damage_class == crate::spell::proc::DAMAGE_CLASS_RANGED
+                    && spell.attributes & SPELL_ATTR_NO_ACTIVE_DEFENSE == 0
+                    && spell.attributes_ex_3 & SPELL_ATTR_EX3_COMPLETELY_BLOCKED == 0
+            })
         && crate::conformance_rolls::draw(ctx, stream) % 10_000 < partial_block_bp
 }
 

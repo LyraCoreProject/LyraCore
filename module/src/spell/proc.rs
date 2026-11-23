@@ -136,8 +136,9 @@ fn landed_result(hit: &Hit) -> u32 {
     }
 }
 
-// vmangos Unit::CalculateMeleeDamage raises PROC_EX_BLOCK alone for a full block; an absorb that
-// takes the rest keeps the hit's quality and adds PROC_EX_ABSORB.
+// vmangos Unit::CalculateMeleeDamage raises PROC_EX_BLOCK alone for a full block; a ranged hit is
+// a Spell and keeps its quality (CreateProcExtendMask). An absorb that takes the rest keeps the
+// hit's quality and adds PROC_EX_ABSORB.
 fn unlanded_result(outcome: AttackOutcome, hit: &Hit, dealt: u32, absorbed: u32) -> Option<u32> {
     match outcome {
         AttackOutcome::Miss => Some(PROC_EX_MISS),
@@ -149,6 +150,7 @@ fn unlanded_result(outcome: AttackOutcome, hit: &Hit, dealt: u32, absorbed: u32)
         | AttackOutcome::Glancing
         | AttackOutcome::Crushing
         | AttackOutcome::Block => match (dealt, absorbed, hit.blocked) {
+            (0, 0, true) if hit.source == HitSource::Ranged => Some(landed_result(hit)),
             (0, 0, true) => Some(PROC_EX_BLOCK),
             (0, 1.., _) => Some(landed_result(hit) | PROC_EX_ABSORB),
             _ => None,
@@ -1449,6 +1451,20 @@ mod tests {
             "a full block raises the block alone"
         );
         assert_eq!(unlanded_result(AttackOutcome::Normal, &swing, 5, 40), None);
+    }
+
+    #[test]
+    fn a_fully_blocked_ranged_hit_keeps_its_quality_beside_the_block() {
+        let shot = Hit::weapon(HitSource::Ranged, false).with_block(10);
+        let crit = Hit::spell(HitSource::Ranged, 2643, true).with_block(10);
+        assert_eq!(
+            unlanded_result(AttackOutcome::Normal, &shot, 0, 0),
+            Some(PROC_EX_NORMAL_HIT | PROC_EX_BLOCK)
+        );
+        assert_eq!(
+            unlanded_result(AttackOutcome::Crit, &crit, 0, 0),
+            Some(PROC_EX_CRITICAL_HIT | PROC_EX_BLOCK)
+        );
     }
 
     #[test]

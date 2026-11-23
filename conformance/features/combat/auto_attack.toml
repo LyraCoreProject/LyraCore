@@ -63,6 +63,12 @@ symbol = "attack_table_for"
 evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/SpellCaster.cpp"
 
 [[known_gaps]]
+description = "A ranged Spell that deals damage through E_DAMAGE with damage class 3, such as Arcane Shot, is never partially blocked. vmangos rolls the partial block for every spell with damage class 2 or 3. LyraCore rolls it only for an auto-repeat shot and a cast ranged Weapon Strike."
+path = "module/src/spell/cast/targeting.rs"
+symbol = "apply_damage_effect"
+evidence = "Source reading at d9173eca: Spell.cpp:1369-1429 calls Unit.cpp:2205-2233, whose ranged and melee damage-class branch calls IsSpellPartiallyBlocked (Unit.cpp:2351-2395). LyraCore: apply_damage_effect E_DAMAGE runs mitigate_spell and calls no block roll."
+
+[[known_gaps]]
 description = "Melee leeway applies when both units moved within the last 1.2 s. vmangos requires both units to move without walking at that instant (IsMovingButNotWalking), so a unit that just stopped or walks keeps the leeway here."
 path = "module/src/combat/reach.rs"
 symbol = "moved_within_leeway_window"

@@ -683,6 +683,8 @@ pub struct RangedImpactSchedule {
     pub resisted: u32,
     #[default(0u32)]
     pub blocked: u32,
+    #[default(0u32)]
+    pub absorbed: u32,
 }
 
 pub(crate) enum AttackRefusal {

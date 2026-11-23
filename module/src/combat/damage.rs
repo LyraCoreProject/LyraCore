@@ -481,7 +481,10 @@ pub(crate) fn resolve_damage(
 
 /// A projectile's damage, folded and absorbed at launch; godmode and the floor apply at impact.
 #[derive(Clone, Copy)]
-pub(crate) struct FrozenDamage(u32);
+pub(crate) struct FrozenDamage {
+    amount: u32,
+    absorbed: u32,
+}
 
 impl FrozenDamage {
     pub(crate) fn launch(
@@ -490,21 +493,26 @@ impl FrozenDamage {
         target_guid: u64,
         rolled: u32,
     ) -> Self {
-        Self(fold_incoming_damage(ctx, attacker_guid, target_guid, rolled).0)
+        let (amount, absorbed) = fold_incoming_damage(ctx, attacker_guid, target_guid, rolled);
+        Self { amount, absorbed }
     }
 
-    pub(crate) fn stored(amount: u32) -> Self {
-        Self(amount)
+    pub(crate) fn stored(amount: u32, absorbed: u32) -> Self {
+        Self { amount, absorbed }
     }
 
     pub(crate) fn amount(self) -> u32 {
-        self.0
+        self.amount
+    }
+
+    pub(crate) fn absorbed(self) -> u32 {
+        self.absorbed
     }
 
     pub(crate) fn resolve(self, ctx: &ReducerContext, target: &WorldEntity) -> ResolvedDamage {
         ResolvedDamage {
-            damage: final_damage(ctx, target.guid, landed_amount(Some(target), self.0)),
-            absorbed: 0,
+            damage: final_damage(ctx, target.guid, landed_amount(Some(target), self.amount)),
+            absorbed: self.absorbed,
         }
     }
 }
