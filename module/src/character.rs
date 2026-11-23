@@ -92,6 +92,8 @@ pub struct Character {
     pub watched_faction_index: i32,
     #[default(0u8)]
     pub rest_state: u8,
+    #[default(0u16)]
+    pub drunk_value: u16,
 }
 
 // The 5875 client refuses a Character list longer than this limit.
@@ -294,6 +296,7 @@ pub(crate) fn insert_new_character(
         bank_bag_slots: 0,
         watched_faction_index: -1,
         rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
+        drunk_value: 0,
     };
 
     if chars.try_insert(row).is_err() {
@@ -539,6 +542,13 @@ pub(crate) fn apply_player_login(
         crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(character_guid));
     }
 
+    if entry == WorldEntry::Login {
+        character.drunk_value = crate::drunk::sobered_offline(
+            character.drunk_value,
+            character.last_logout_micros,
+            crate::time::now(ctx).to_micros_since_unix_epoch(),
+        );
+    }
     let mut entity = build_player_entity(ctx, &character, owner);
     if entry == WorldEntry::Login {
         crate::taxi::prepare_world_entry(ctx, &mut entity);
@@ -557,6 +567,9 @@ pub(crate) fn apply_player_login(
     }
     crate::pvp::enter_world(ctx, &mut entity);
     entity.insert(ctx);
+    if character.drunk_value != 0 {
+        crate::drunk::start_sobering(ctx, character_guid);
+    }
     crate::ghost::restore(ctx, character_guid);
     crate::spell::recompute_display(ctx, character_guid);
     if entry == WorldEntry::WorldPort {
@@ -744,6 +757,7 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         c.power = entity.own_pool().current;
 
         c.death_expire_micros = entity.death_expire_micros;
+        c.drunk_value = crate::drunk::drunk_value(entity);
 
         c.pending_instance_id = entity.instance_id;
         c.pending_ghost = persisted_pending_ghost(entity.dead, entity.player_flags);

@@ -823,6 +823,7 @@ fn insert_character(
         bank_bag_slots: migration.bank_bag_slots,
         watched_faction_index: migration.watched_faction_index,
         rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
+        drunk_value: 0,
     });
     Ok(guid)
 }

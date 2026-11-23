@@ -810,6 +810,10 @@ pub(crate) fn apply_effect(
             enchant_item_temporarily(ctx, e, caster_guid, item_target, points);
             EffectHit::none()
         }
+        EffectKind::Inebriate => {
+            crate::drunk::inebriate(ctx, target_guid, points);
+            EffectHit::none()
+        }
         EffectKind::EnchantItem
         | EffectKind::Disenchant
         | EffectKind::Fish

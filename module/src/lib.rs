@@ -160,6 +160,7 @@ mod exploration;
 #[cfg(feature = "debug_reducers")]
 mod debug;
 
+mod drunk;
 mod duel;
 mod encounter;
 mod faction;

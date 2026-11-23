@@ -72,6 +72,14 @@ pub fn build_bank_bag_slots_values(guid: u64, player_bytes_2: u32) -> SMSG_UPDAT
     })
 }
 
+/// PLAYER_BYTES_3: bit 0 is gender and bits 1 to 15 the drunk value the client draws its tier from.
+pub fn build_player_bytes_3_values(guid: u64, player_bytes_3: u32) -> SMSG_UPDATE_OBJECT {
+    let (a, b, c, d) = unpack4(player_bytes_3);
+    player_values(guid, |player| {
+        player.set_player_bytes_3(a, b, c, d);
+    })
+}
+
 pub const SMSG_UPDATE_OBJECT_OPCODE: u16 = 0x00A9;
 
 pub fn build_values_update_raw(guid: u64, mask: &update_mask::UpdateMaskValues) -> (u16, Vec<u8>) {

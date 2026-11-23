@@ -31,6 +31,7 @@ fn every_values_builder_serializes_without_the_object_type_bit() {
             build_resistance_values(g, [40, 0, 0, 0, 0, 0, 0]),
         ),
         ("coinage", build_coinage_values(g, 900)),
+        ("player_bytes_3", build_player_bytes_3_values(g, 0x3201)),
         ("ammo", build_player_ammo_id_values(g, 2512)),
         (
             "owner_summon",
@@ -411,6 +412,15 @@ fn player_flags_values_only_write_changed_fields() {
         let updates = crate::codec::values_mask::parse_values_updates(&packet[4..]);
         assert_eq!(updates[0].fields, expected);
     }
+}
+
+#[test]
+fn player_bytes_3_values_carry_gender_and_drunk_value_in_field_195() {
+    let msg = build_player_bytes_3_values(0x1234, 0x0000_3201);
+    let mut packet = Vec::new();
+    msg.write_unencrypted_server(&mut packet).unwrap();
+    let updates = crate::codec::values_mask::parse_values_updates(&packet[4..]);
+    assert_eq!(updates[0].fields, vec![(195, 0x0000_3201)]);
 }
 
 #[test]

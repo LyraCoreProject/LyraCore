@@ -124,6 +124,8 @@ effect_kinds! {
     E_SUMMON_OBJECT => SummonObject = 0x2A,
     // Offers the target a teleport to the caster, or to the Summoning Ritual that cast it.
     E_SUMMON_PLAYER => SummonPlayer = 0x2B,
+    // Effect points times 256 add to the target Character's drunk value.
+    E_INEBRIATE => Inebriate = 0x2C,
 }
 
 pub const KIND_AURA_BIT: u8 = 0x80;
@@ -259,6 +261,7 @@ mod tests {
         assert_eq!(E_ENCHANT_ITEM_TEMPORARY, 0x29);
         assert_eq!(E_SUMMON_OBJECT, 0x2A);
         assert_eq!(E_SUMMON_PLAYER, 0x2B);
+        assert_eq!(E_INEBRIATE, 0x2C);
         assert_eq!(A_PERIODIC_DAMAGE, 0x90);
         assert_eq!(A_PERIODIC_HEAL, 0x91);
         assert_eq!(A_ABSORB, 0xA2);

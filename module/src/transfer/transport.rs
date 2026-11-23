@@ -479,41 +479,38 @@ pub(crate) fn decode_blob(transfer_id: u64, bytes: &[u8]) -> Result<ExportBlob, 
         .map_err(|e| format!("transfer {transfer_id}: corrupt export blob: {e}"))
 }
 
-// Older transfer rows may lack the final rest-state byte or watched index and rest-state suffix.
+// Defaults for older rows ending before `watched_faction_index`, `rest_state` or `drunk_value`.
+const CHARACTER_ROW_SUFFIX: [&[u8]; 3] = [&[0xFF, 0xFF, 0xFF, 0xFF], &[0], &[0, 0]];
+
 pub(crate) fn decode_character_row(
     transfer_id: u64,
     bytes: &[u8],
 ) -> Result<crate::character::Character, String> {
-    use spacetimedb::sats::bsatn::{from_reader, DecodeError};
-
-    let refusal = |reason| {
-        format!("transfer {transfer_id}: cannot decode the arriving character row: {reason}")
+    let decode = |row: &[u8]| {
+        let mut remaining = row;
+        let character =
+            spacetimedb::sats::bsatn::from_reader::<crate::character::Character>(&mut remaining)
+                .map_err(|e| e.to_string())?;
+        if remaining.is_empty() {
+            Ok(character)
+        } else {
+            Err("trailing bytes".to_string())
+        }
     };
-    let mut remaining = bytes;
-    let suffix: &[u8] = match from_reader::<crate::character::Character>(&mut remaining) {
-        Ok(character) if remaining.is_empty() => return Ok(character),
-        Ok(_) => return Err(refusal("trailing bytes".to_string())),
-        Err(DecodeError::BufferLength {
-            for_type: "u8",
-            expected: 1,
-            given: 0,
-        }) if remaining.is_empty() => &[0],
-        Err(DecodeError::BufferLength {
-            for_type: "i32",
-            expected: 4,
-            given: 0,
-        }) if remaining.is_empty() => &[0xFF, 0xFF, 0xFF, 0xFF, 0],
-        Err(e) => return Err(refusal(e.to_string())),
-    };
-    let mut upgraded = bytes.to_vec();
-    upgraded.extend_from_slice(suffix);
-    let mut remaining = upgraded.as_slice();
-    let character = from_reader::<crate::character::Character>(&mut remaining)
-        .map_err(|e| refusal(e.to_string()))?;
-    if !remaining.is_empty() {
-        return Err(refusal("trailing bytes".to_string()));
+    let current = decode(bytes);
+    if current.is_ok() {
+        return current;
     }
-    Ok(character)
+    for first_missing in (0..CHARACTER_ROW_SUFFIX.len()).rev() {
+        let suffix = CHARACTER_ROW_SUFFIX[first_missing..].concat();
+        let upgraded = [bytes, suffix.as_slice()].concat();
+        if let Ok(character) = decode(&upgraded) {
+            return Ok(character);
+        }
+    }
+    current.map_err(|reason| {
+        format!("transfer {transfer_id}: cannot decode the arriving character row: {reason}")
+    })
 }
 
 // Keep each compatibility entry until every Shard can export that table.

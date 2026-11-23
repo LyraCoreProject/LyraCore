@@ -313,6 +313,7 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     crate::duel::interrupt_duel_for(ctx, victim_guid);
     victim.health = 0;
     victim.dead = true;
+    crate::drunk::sober_on_death(&mut victim);
     super::queued_strike::forget(&mut victim);
     victim.combat_until_ms = crate::time::now_ms(ctx);
     victim.update(ctx);
