@@ -107,6 +107,8 @@ pub fn debug_stage_choice_reward_fixture(
         rew_rep_value_4: 0,
         rew_rep_faction_5: 0,
         rew_rep_value_5: 0,
+        reward_spell: 0,
+        reward_spell_cast: 0,
     });
 
     let objectives = ctx.db.game_quest_objective();
@@ -534,6 +536,8 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         rew_rep_value_4: 0,
         rew_rep_faction_5: 0,
         rew_rep_value_5: 0,
+        reward_spell: 0,
+        reward_spell_cast: 0,
     };
     templates.insert(quest_template(
         EVENTAI_CREDIT_FIXTURE_KILL_QUEST,
@@ -1140,6 +1144,8 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         rew_rep_value_4: 0,
         rew_rep_faction_5: 0,
         rew_rep_value_5: 0,
+        reward_spell: 0,
+        reward_spell_cast: 0,
     };
     templates.insert(quest_template(
         RQC_NORMAL_QUEST,

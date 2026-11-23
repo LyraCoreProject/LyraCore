@@ -263,6 +263,8 @@ mod fixture {
                 rew_rep_value_4: 0,
                 rew_rep_faction_5: 0,
                 rew_rep_value_5: 0,
+                reward_spell: 0,
+                reward_spell_cast: 0,
             });
             let relations = ctx.db.game_creature_quest();
             relations.id().delete(relation);

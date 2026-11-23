@@ -112,9 +112,10 @@ pub struct LearnEffect {
     pub trigger_spell: u32,
 }
 
-// The importer turns LEARN_SPELL into E_SCRIPTED. Stances and forms carry a trigger spell too.
+// Learn effects only; spell rows imported before E_LEARN_SPELL store them as E_SCRIPTED.
 pub fn learn_target_trigger(kind: u8, trigger_spell: u32) -> Option<u32> {
-    (trigger_spell != 0 && kind == crate::spell::taxonomy::E_SCRIPTED).then_some(trigger_spell)
+    use crate::spell::taxonomy::{E_LEARN_SPELL, E_SCRIPTED};
+    (trigger_spell != 0 && matches!(kind, E_LEARN_SPELL | E_SCRIPTED)).then_some(trigger_spell)
 }
 
 pub fn resolve_learn_target(spell_id: u32, effects: impl IntoIterator<Item = LearnEffect>) -> u32 {
@@ -214,7 +215,7 @@ mod rule_tests {
     use super::*;
     use crate::spell::taxonomy::{
         A_FLAG, A_MOD_STAT, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_SHAPESHIFT,
-        A_STEALTH, E_DAMAGE, E_SCRIPTED, E_SET_STANCE, E_TRIGGER,
+        A_STEALTH, E_DAMAGE, E_LEARN_SPELL, E_SCRIPTED, E_SET_STANCE, E_TRIGGER,
     };
 
     #[test]
@@ -295,14 +296,16 @@ mod rule_tests {
 
     #[test]
     fn a_learn_effect_resolves_to_the_spell_it_teaches() {
-        let learn = |trigger_spell| LearnEffect {
-            index: 0,
-            id: 1,
-            kind: E_SCRIPTED,
-            trigger_spell,
-        };
-        assert_eq!(resolve_learn_target(1873, [learn(639)]), 639);
-        assert_eq!(resolve_learn_target(1873, [learn(0)]), 1873);
+        for kind in [E_LEARN_SPELL, E_SCRIPTED] {
+            let learn = |trigger_spell| LearnEffect {
+                index: 0,
+                id: 1,
+                kind,
+                trigger_spell,
+            };
+            assert_eq!(resolve_learn_target(1873, [learn(639)]), 639);
+            assert_eq!(resolve_learn_target(1873, [learn(0)]), 1873);
+        }
     }
 
     #[test]

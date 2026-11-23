@@ -26,6 +26,8 @@ mod passives;
 mod properties;
 #[path = "conformance/quest_availability.rs"]
 mod quest_availability;
+#[path = "conformance/quest_reward_spell.rs"]
+mod quest_reward_spell;
 #[path = "conformance/quest_turn_in.rs"]
 mod quest_turn_in;
 #[path = "../../conformance/support/quest_world.rs"]

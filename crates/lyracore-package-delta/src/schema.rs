@@ -369,6 +369,8 @@ impl Table {
                         | "rew_rep_value_4"
                         | "rew_rep_faction_5"
                         | "rew_rep_value_5"
+                        | "reward_spell"
+                        | "reward_spell_cast"
                 )
                 | (
                     Self::PickpocketLoot
@@ -568,6 +570,8 @@ const QUEST_COLUMNS: &[Column] = &[
     column("rew_rep_value_4", FieldType::I32),
     column("rew_rep_faction_5", FieldType::U32),
     column("rew_rep_value_5", FieldType::I32),
+    column("reward_spell", FieldType::U32),
+    column("reward_spell_cast", FieldType::U32),
 ];
 
 const QUEST_TEXT_COLUMNS: &[Column] = &[

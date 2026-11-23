@@ -782,7 +782,8 @@ pub(crate) fn apply_effect(
         | EffectKind::SummonPet
         | EffectKind::TameCreature
         | EffectKind::SummonObject
-        | EffectKind::SummonPlayer => {
+        | EffectKind::SummonPlayer
+        | EffectKind::LearnSpell => {
             apply_character_effect(ctx, e, caster_guid, target_guid, points)
         }
         EffectKind::SetStance => EffectHit::none(),
@@ -1492,6 +1493,10 @@ fn apply_character_effect(
         }
         E_SUMMON_PLAYER => {
             crate::summoning_ritual::summon_to_caster(ctx, caster_guid, target_guid);
+            EffectHit::none()
+        }
+        E_LEARN_SPELL => {
+            crate::spell::learn_from_effect(ctx, target_guid, e.trigger_spell);
             EffectHit::none()
         }
         _ => EffectHit::none(),

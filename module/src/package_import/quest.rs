@@ -452,6 +452,8 @@ fn blank_quest(entry: u32) -> QuestTemplate {
         rew_rep_value_4: 0,
         rew_rep_faction_5: 0,
         rew_rep_value_5: 0,
+        reward_spell: 0,
+        reward_spell_cast: 0,
     }
 }
 
@@ -494,6 +496,8 @@ fn apply_quest_field(
         "rew_rep_value_4" => quest.rew_rep_value_4 = as_i32(field, value)?,
         "rew_rep_faction_5" => quest.rew_rep_faction_5 = as_u32(field, value)?,
         "rew_rep_value_5" => quest.rew_rep_value_5 = as_i32(field, value)?,
+        "reward_spell" => quest.reward_spell = as_u32(field, value)?,
+        "reward_spell_cast" => quest.reward_spell_cast = as_u32(field, value)?,
         other => {
             return Err(format!(
                 "`game_quest_template` has no claimable column `{other}`"

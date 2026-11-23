@@ -802,6 +802,16 @@ with `required_money` is incomplete until the Character holds the money. A quest
 `reward_money` and `required_money` needs the cost first, then pays the cost and the reward. Package
 Deltas written before the change omit the new columns and still apply.
 
+### Quest reward spell migration
+
+`game_quest_template` gains `reward_spell` and `reward_spell_cast`, end-appended with default 0,
+and `game_quest_reward_spell` moves to `retired.rs`. Spell effect 36 now imports as
+`E_LEARN_SPELL` (code 0x2D); older spell rows keep it as `E_SCRIPTED`, which trainers still read as
+a learn effect. Reimport the `spell` and `quests` families straight after the publish. Until then
+no quest shows or casts a reward spell, so a quest that taught a spell teaches nothing. No repair
+is needed. Package Deltas written before the change omit the columns and still apply, with no
+reward spell.
+
 ### Repair cost migration
 
 `game_durability_cost` and `game_durability_quality` are new, private tables from

@@ -3,6 +3,7 @@ mod support;
 use lyracore_package_delta::fixture_ids::TEST_WOLF_ENTRY;
 use lyracore_package_delta::packed_spell_effect_id;
 use lyracore_shared::guid;
+use lyracore_shared::spell::taxonomy::{E_LEARN_SPELL, T_TARGET_ALLY};
 use std::collections::BTreeMap;
 use support::{poll_until, Field, Standalone, POLL_TIMEOUT};
 
@@ -75,6 +76,25 @@ fn insert_binding_quest(node: &Standalone, quest: u32, reward: u32, item: u32, c
             ("learn_spell", &50946),
         ],
     );
+    let teacher = reward + 10;
+    node.insert_row(
+        "game_spell",
+        &[
+            ("spell_id", &teacher),
+            ("name", &"Binding reward fixture"),
+            ("spell_level", &1),
+        ],
+    );
+    node.insert_row(
+        "game_spell_effect",
+        &[
+            ("id", &packed_spell_effect_id(teacher, 0)),
+            ("spell_id", &teacher),
+            ("kind", &E_LEARN_SPELL),
+            ("target", &T_TARGET_ALLY),
+            ("trigger_spell", &reward),
+        ],
+    );
     node.insert_row(
         "game_quest_template",
         &[
@@ -87,6 +107,7 @@ fn insert_binding_quest(node: &Standalone, quest: u32, reward: u32, item: u32, c
             ("zone_or_sort", &-61),
             ("src_item", &item),
             ("src_item_count", &1),
+            ("reward_spell_cast", &teacher),
         ],
     );
     node.insert_row(
@@ -113,10 +134,6 @@ fn insert_binding_quest(node: &Standalone, quest: u32, reward: u32, item: u32, c
                 ("role", &1),
             ],
         ],
-    );
-    node.insert_row(
-        "game_quest_reward_spell",
-        &[("quest_entry", &quest), ("spell_id", &reward)],
     );
 }
 
@@ -444,9 +461,11 @@ fn binding_items_require_the_circle_and_complete_both_quest_variants_without_rep
             .len(),
             1
         );
-        assert!(node
-            .query_rows("SELECT spell_id FROM game_player_spell WHERE spell_id = 50946")
-            .is_empty());
+        assert_eq!(
+            node.query_rows("SELECT spell_id FROM game_player_spell WHERE spell_id = 50946")
+                .len(),
+            1
+        );
         assert_refused(
             &node,
             "debug_turn_in_quest",

@@ -212,7 +212,7 @@ refused SQL, absent dispatcher or C++ source reference. Only the `creature-ai` f
 
 Reward mail uses `RewMailTemplateId`, `RewMailDelaySecs` and `RewMailMoney`. Sender zero retains the
 Module's quest-ender sender rule. Used mail loot must be one unconditional item at 100% chance.
-Quest learn rewards use single-effect wrappers from the selected vmangos spell table. `RewXP`
+Each quest keeps `RewSpell` and `RewSpellCast` as `reward_spell` and `reward_spell_cast`. `RewXP`
 supplies explicit rewards, following [Quest::XPValue at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/QuestDef.cpp#L180-L201).
 The Module grants XP as that function does: `RewXP` in full up to five levels above the quest, then
 80%, 60%, 40%, 20% and 10%; a quest with zero `RewXP` grants none. At level 60 it pays `RewMoneyMaxLevel`
@@ -223,8 +223,7 @@ Each quest keeps its required skill and value and its minimum and maximum reputa
 value.
 
 The Compatibility Manifest also reports unavailable collect objectives, non-goober GameObject
-targets, extra prerequisites, scripts, flags, reward casts and reputation fields that the Module
-does not carry.
+targets, extra prerequisites, scripts, flags and reputation fields that the Module does not carry.
 
 `importer/src/source_selection.rs` owns patch 10 and build 5875 selection. Versioned tables keep the
 greatest eligible patch or build per primary key, ordered by numeric key. Ranges include both

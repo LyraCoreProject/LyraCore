@@ -1,7 +1,7 @@
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
-use crate::game_spell;
 use crate::skill::SkillStart;
+use crate::{game_spell, game_world_entity};
 
 #[table(
     accessor = game_player_spell,
@@ -184,6 +184,22 @@ pub(crate) fn learn_spell_with_dependents(
         .collect();
     for dep in dependent_spell_ids(&rows, spell_id) {
         learn_spell(ctx, guid, owner, dep);
+    }
+}
+
+/// vmangos `Spell::EffectLearnSpell`: a Character target learns the spell; any other unit does not.
+pub(crate) fn learn_from_effect(ctx: &ReducerContext, target_guid: u64, spell_id: u32) {
+    let Some(learner) = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(target_guid)
+        .filter(|target| target.is_player())
+    else {
+        return;
+    };
+    if spell_id != 0 {
+        learn_spell_with_dependents(ctx, target_guid, learner.owner_identity, spell_id);
     }
 }
 

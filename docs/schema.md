@@ -112,6 +112,15 @@ a positive `PrevQuestId`: a negative `PrevQuestId` and each quest whose `NextQue
 quest, with `must_be_active` for a negative link. `prev_quest_id` keeps the positive `PrevQuestId`,
 so Packages can still set one. Reimport quests to populate an existing Realm.
 
+`game_quest_template.reward_spell` is the source `RewSpell`, which the quest details, offer-reward and
+quest-query packets show. A turn-in casts `reward_spell_cast`, or `reward_spell` when that is 0, as
+a triggered cast on the Character after its other rewards and the turn-in hook, as vmangos
+`Player::RewardQuest` does. A creature ender casts a spell with an `E_LEARN_SPELL` or
+`E_CREATE_ITEM` effect or an effect aimed at an ally; otherwise the Character casts it. An
+`E_LEARN_SPELL` effect teaches a Character target its `trigger_spell` and that spell's dependent
+spells, and teaches any other target nothing, as vmangos `Spell::EffectLearnSpell` does. The
+retired `game_quest_reward_spell` held the taught spell of a single-effect learn reward.
+
 ### The three migration rules that have bitten
 
 1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64`

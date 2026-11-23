@@ -38,6 +38,8 @@ pub struct QuestDetailView {
     pub next_quest_id: u32,
     pub max_level_money_reward: u32,
     pub flags: u32,
+    /// `RewSpell`, the spell the quest windows show.
+    pub reward_spell: u32,
     pub rewards: Vec<QuestRewardView>,
     pub choice_rewards: Vec<QuestRewardView>,
     pub required_items: Vec<QuestRewardView>,
@@ -280,7 +282,7 @@ pub fn build_quest_details_raw(giver_guid: u64, d: &QuestDetailView) -> (u16, Ve
         }
     }
     body.extend_from_slice(&d.money_reward.to_le_bytes());
-    body.extend_from_slice(&0u32.to_le_bytes());
+    body.extend_from_slice(&d.reward_spell.to_le_bytes());
     body.extend_from_slice(&DETAILS_EMOTE_COUNT.to_le_bytes());
     body.resize(body.len() + DETAILS_EMOTE_COUNT as usize * 8, 0);
     (SMSG_QUESTGIVER_QUEST_DETAILS, body)
@@ -302,9 +304,9 @@ pub fn build_offer_reward(giver_guid: u64, d: &QuestDetailView) -> SMSG_QUESTGIV
         choice_item_rewards: reward_items_with_icon(&d.choice_rewards),
         item_rewards: reward_items_with_icon(&d.rewards),
         money_reward: Gold::new(d.money_reward as u32),
-        // The wire carries the quest flags where gtker names the first reward spell.
+        // The wire carries the quest flags, then RewSpell, where gtker names two reward spells.
         reward_spell: d.flags,
-        reward_spell_cast: 0,
+        reward_spell_cast: d.reward_spell,
     }
 }
 
@@ -357,7 +359,7 @@ pub fn build_quest_query_response_raw(d: &QuestDetailView) -> (u16, Vec<u8>) {
     u32le(&mut body, d.next_quest_id);
     u32le(&mut body, d.money_reward as u32);
     u32le(&mut body, d.max_level_money_reward);
-    u32le(&mut body, 0);
+    u32le(&mut body, d.reward_spell);
     u32le(&mut body, 0);
     u32le(&mut body, d.flags);
     for i in 0..4 {
@@ -564,6 +566,7 @@ mod tests {
             next_quest_id: 0,
             max_level_money_reward: 0,
             flags: 0,
+            reward_spell: 0,
             rewards: vec![],
             choice_rewards: vec![],
             required_items: vec![],
@@ -686,6 +689,7 @@ mod tests {
             next_quest_id: 0,
             max_level_money_reward: 0,
             flags: 0,
+            reward_spell: 0,
             rewards: Vec::new(),
             choice_rewards: Vec::new(),
             required_items: Vec::new(),
@@ -744,6 +748,7 @@ mod tests {
             next_quest_id: 0,
             max_level_money_reward: 0,
             flags: 0,
+            reward_spell: 0,
             rewards: vec![QuestRewardView {
                 item_entry: 6078,
                 count: 1,
@@ -829,6 +834,7 @@ mod tests {
         let d = QuestDetailView {
             money_reward: 25,
             flags: 8,
+            reward_spell: 1460,
             emotes: QuestEmotes {
                 offer_reward: vec![(0, 2), (300, 5)],
                 ..QuestEmotes::default()
@@ -853,7 +859,25 @@ mod tests {
         let tail = &framed[framed.len() - 12..];
         assert_eq!(&tail[0..4], &25u32.to_le_bytes(), "money");
         assert_eq!(&tail[4..8], &8u32.to_le_bytes(), "quest flags");
-        assert_eq!(&tail[8..12], &0u32.to_le_bytes(), "reward spell");
+        assert_eq!(&tail[8..12], &1460u32.to_le_bytes(), "reward spell");
+    }
+
+    #[test]
+    fn details_and_quest_query_show_the_reward_spell_after_the_money() {
+        let d = QuestDetailView {
+            money_reward: 25,
+            max_level_money_reward: 4200,
+            reward_spell: 1460,
+            ..detail_view()
+        };
+        let (_, details) = build_quest_details_raw(100, &d);
+        // Guid, quest id, three empty CStrings, auto_finish and two empty reward lists.
+        assert_eq!(&details[27..31], &25u32.to_le_bytes(), "money");
+        assert_eq!(&details[31..35], &1460u32.to_le_bytes(), "reward spell");
+        let (_, query) = build_quest_query_response_raw(&d);
+        assert_eq!(&query[44..48], &4200u32.to_le_bytes(), "max level money");
+        assert_eq!(&query[48..52], &1460u32.to_le_bytes(), "reward spell");
+        assert_eq!(&query[52..56], &0u32.to_le_bytes(), "source item");
     }
 
     #[test]
