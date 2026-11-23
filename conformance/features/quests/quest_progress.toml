@@ -130,6 +130,12 @@ symbol = "plan"
 evidence = "Compatibility Manifest quests.flags; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
+description = "A Character who gains or loses the money a quest costs keeps the old quest log slot state until the next object update. The Reference Server updates it in Player::MoneyChanged."
+path = "module/src/quest.rs"
+symbol = "quest_is_complete"
+evidence = "quest_is_complete reads the held money on every call, so the giver mark, request window and turn-in follow it at once. Nothing pushes a quest log slot update when money changes; vmangos Player.cpp MoneyChanged calls CompleteQuest or IncompleteQuest."
+
+[[known_gaps]]
 description = "quests.reputation-spillover-mask full-world 723, alliance-single 338: Per-quest reputation spillover masks are not represented."
 path = "importer/src/world_import_quests.rs"
 symbol = "plan"

@@ -1,12 +1,5 @@
 use crate::race_class::{mask_admits, ZeroMask};
 
-// Placeholder conversion of six copper per XP at the level cap.
-const MAX_LEVEL_XP_TO_COPPER: u32 = 6;
-
-pub fn max_level_money_reward(xp: u32) -> u32 {
-    xp.saturating_mul(MAX_LEVEL_XP_TO_COPPER)
-}
-
 // game_group_event kind 9 is retired; quest sharing uses 10 and 11.
 pub mod share_event_kind {
     pub const QUEST_SHARE: u8 = 10;
@@ -83,10 +76,30 @@ mod tests {
     }
 
     #[test]
-    fn max_level_money_reward_uses_the_documented_v_coefficient() {
-        assert_eq!(max_level_money_reward(0), 0);
-        assert_eq!(max_level_money_reward(100), 600);
-        assert_eq!(max_level_money_reward(u32::MAX), u32::MAX);
+    fn quest_xp_is_full_up_to_five_levels_above_the_quest() {
+        assert_eq!(quest_xp_for_level(110, 10, 1), 110);
+        assert_eq!(quest_xp_for_level(110, 10, 15), 110);
+    }
+
+    #[test]
+    fn quest_xp_falls_to_a_tenth_by_the_vmangos_steps() {
+        let steps = [(16, 88), (17, 66), (18, 44), (19, 22), (20, 11), (60, 11)];
+        for (player_level, expected) in steps {
+            assert_eq!(quest_xp_for_level(110, 10, player_level), expected);
+        }
+    }
+
+    #[test]
+    fn quest_xp_rounds_up_in_single_precision_like_the_reference_server() {
+        assert_eq!(quest_xp_for_level(100, 10, 16), 80);
+        assert_eq!(quest_xp_for_level(100, 10, 17), 61);
+        assert_eq!(quest_xp_for_level(1, 10, 60), 1);
+    }
+
+    #[test]
+    fn a_quest_without_xp_grants_none_at_any_level() {
+        assert_eq!(quest_xp_for_level(0, 10, 10), 0);
+        assert_eq!(quest_xp_for_level(0, 10, 40), 0);
     }
 
     #[test]
@@ -428,6 +441,20 @@ impl AcceptanceRefusal {
             Self::Reputation => "your reputation does not allow that quest".to_string(),
         }
     }
+}
+
+/// `Quest::XPValue`: full XP up to five levels above the quest, then 80%, 60%, 40%, 20% and 10%.
+pub fn quest_xp_for_level(reward_xp: u32, quest_level: u32, player_level: u32) -> u32 {
+    let full = reward_xp as f32;
+    let factor = match player_level.saturating_sub(quest_level) {
+        0..=5 => return reward_xp,
+        6 => 0.8f32,
+        7 => 0.6,
+        8 => 0.4,
+        9 => 0.2,
+        _ => 0.1,
+    };
+    (full * factor).ceil() as u32
 }
 
 pub const QUEST_LOG_FULL_TEXT: &str = "quest log is full";

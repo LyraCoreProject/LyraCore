@@ -35,7 +35,6 @@ pub struct QuestDetailView {
     pub request_items_text: String,
     /// Signed: a quest that costs money carries the negated cost.
     pub money_reward: i32,
-    pub reward_xp: u32,
     pub next_quest_id: u32,
     pub max_level_money_reward: u32,
     pub flags: u32,
@@ -401,12 +400,17 @@ pub fn build_quest_query_response_raw(d: &QuestDetailView) -> (u16, Vec<u8>) {
     (SMSG_QUEST_QUERY_RESPONSE_OPCODE, body)
 }
 
-pub fn build_quest_complete(d: &QuestDetailView) -> SMSG_QUESTGIVER_QUEST_COMPLETE {
+/// `experience` and `money` are the granted payout; `money` is signed like the offer.
+pub fn build_quest_complete(
+    d: &QuestDetailView,
+    experience: u32,
+    money: i32,
+) -> SMSG_QUESTGIVER_QUEST_COMPLETE {
     SMSG_QUESTGIVER_QUEST_COMPLETE {
         quest_id: d.quest_id,
         unknown: 0x03,
-        experience_reward: d.reward_xp,
-        money_reward: Gold::new(d.money_reward as u32),
+        experience_reward: experience,
+        money_reward: Gold::new(money as u32),
         item_rewards: reward_items(&d.rewards),
     }
 }
@@ -557,7 +561,6 @@ mod tests {
             offer_reward_text: String::new(),
             request_items_text: String::new(),
             money_reward: 0,
-            reward_xp: 0,
             next_quest_id: 0,
             max_level_money_reward: 0,
             flags: 0,
@@ -680,7 +683,6 @@ mod tests {
             offer_reward_text: String::new(),
             request_items_text: String::new(),
             money_reward: 0,
-            reward_xp: 0,
             next_quest_id: 0,
             max_level_money_reward: 0,
             flags: 0,
@@ -739,7 +741,6 @@ mod tests {
             offer_reward_text: "Well done.".into(),
             request_items_text: String::new(),
             money_reward: 25,
-            reward_xp: 130,
             next_quest_id: 0,
             max_level_money_reward: 0,
             flags: 0,
@@ -764,7 +765,7 @@ mod tests {
             emotes: QuestEmotes::default(),
             objectives: vec![(6, 10, 0, 0)],
         };
-        let c = build_quest_complete(&d);
+        let c = build_quest_complete(&d, 130, 25);
         assert_eq!(c.experience_reward, 130);
         assert_eq!(c.money_reward, Gold::new(25));
         assert_eq!(c.item_rewards.len(), 1);
@@ -819,7 +820,7 @@ mod tests {
         assert_eq!(off.choice_item_rewards[1].item_display_id, 22);
         assert_eq!(off.item_rewards.len(), 1);
 
-        let comp = build_quest_complete(&d);
+        let comp = build_quest_complete(&d, 0, 0);
         assert_eq!(comp.item_rewards.len(), 1);
     }
 
@@ -879,6 +880,16 @@ mod tests {
         assert_eq!(complete.required_items.len(), 1);
         assert_eq!(complete.required_items[0].item, 900);
         assert_eq!(complete.required_items[0].item_display_id, 77);
+    }
+
+    #[test]
+    fn quest_complete_carries_the_granted_payout_with_a_signed_cost() {
+        let d = detail_view();
+        let paid = build_quest_complete(&d, 88, 870);
+        assert_eq!(paid.experience_reward, 88);
+        assert_eq!(paid.money_reward, Gold::new(870));
+        let cost = build_quest_complete(&d, 0, -250);
+        assert_eq!(cost.money_reward, Gold::new(0u32.wrapping_sub(250)));
     }
 
     #[test]

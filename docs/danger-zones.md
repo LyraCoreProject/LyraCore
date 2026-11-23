@@ -760,10 +760,13 @@ before moving active World Sessions.
 `game_quest_template` gains `required_money` and `rew_rep_faction_3`, `rew_rep_value_3` through
 `rew_rep_faction_5`, `rew_rep_value_5`, end-appended with default 0. Reimport the `quests` family
 straight after the publish. Until then no quest has a money cost or a third to fifth reputation
-reward, so each such quest turns in as before. A turn-in now grants exactly `reward_xp`: a quest
-whose `reward_xp` is 0 grants none, where it used to grant a level-based amount. A Package Delta
-that relied on that fallback must set `reward_xp`. Package Deltas written before the change omit
-the new columns and still apply.
+reward, so each such quest turns in as before. A turn-in now grants `reward_xp` scaled by the
+Character's level above the quest, so a quest whose `reward_xp` is 0 grants none, where it used to
+grant a level-based amount. At level 60 it pays `reward_money_max_level` and no XP, where it used to
+pay six copper per XP. A Package Delta that relied on the XP fallback must set `reward_xp`. A quest
+with `required_money` is incomplete until the Character holds the money. A quest that sets both
+`reward_money` and `required_money` needs the cost first, then pays the cost and the reward. Package
+Deltas written before the change omit the new columns and still apply.
 
 ### Repair cost migration
 

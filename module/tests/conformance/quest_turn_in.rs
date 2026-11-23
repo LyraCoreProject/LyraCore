@@ -25,7 +25,6 @@ const SMSG_ITEM_PUSH_RESULT: u16 = 0x166;
 const SMSG_LOG_XPGAIN: u16 = 0x1D0;
 const SMSG_QUESTGIVER_QUEST_COMPLETE: u16 = 0x191;
 const SMSG_QUESTGIVER_QUEST_FAILED: u16 = 0x192;
-const SMSG_QUESTGIVER_QUEST_INVALID: u16 = 0x18F;
 const SMSG_SET_FACTION_STANDING: u16 = 0x124;
 const SMSG_UPDATE_OBJECT: u16 = 0xA9;
 const PLAYER_XP: u16 = 716;
@@ -33,7 +32,6 @@ const PLAYER_NEXT_LEVEL_XP: u16 = 717;
 const FACTION: u32 = 72;
 const INVENTORY_FULL_REASON: u32 = 4;
 const DUPLICATE_ITEM_REASON: u32 = 17;
-const NOT_ENOUGH_MONEY_REASON: u32 = 22;
 const QUEST_COST: u32 = 500;
 const QUEST_XP: u32 = 110;
 const BACKPACK_SLOTS: u32 = 16;
@@ -629,6 +627,13 @@ fn xp(shard: &Standalone, guid: u64) -> u32 {
         .unwrap()
 }
 
+fn rewarded(shard: &Standalone) -> String {
+    shard.query_rows(&format!(
+        "SELECT rewarded FROM game_character_quest WHERE quest_entry = {QUEST}"
+    ))[0]["rewarded"]
+        .clone()
+}
+
 fn choose_reward(connection: &mut ReducerConnection, giver: u64) -> Vec<(u16, Vec<u8>)> {
     quest_request(
         connection,
@@ -641,7 +646,7 @@ fn choose_reward(connection: &mut ReducerConnection, giver: u64) -> Vec<(u16, Ve
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn a_quest_cost_refuses_the_turn_in_without_the_money_and_takes_it_with() {
+fn a_quest_cost_stays_incomplete_without_the_money_and_is_taken_with_it() {
     let (shard, mut connection, guid, giver) = stage("quest-turn-in-cost");
     shard.assert_sql(&format!(
         "UPDATE game_quest_template SET required_money = {QUEST_COST} WHERE entry = {QUEST}"
@@ -653,33 +658,44 @@ fn a_quest_cost_refuses_the_turn_in_without_the_money_and_takes_it_with() {
     grant_quest(&shard, guid, QUEST);
     let xp_before = xp(&shard, guid);
 
-    let refused = choose_reward(&mut connection, giver);
-
-    assert_eq!(
-        opcodes(&refused),
-        [SMSG_QUESTGIVER_QUEST_INVALID, SMSG_QUESTGIVER_OFFER_REWARD],
-        "the notice comes before the re-offer"
+    let window = quest_request(
+        &mut connection,
+        CMSG_QUESTGIVER_COMPLETE_QUEST,
+        giver,
+        QUEST,
+        None,
     );
-    assert_eq!(word(&refused[0].1, 0), NOT_ENOUGH_MONEY_REASON);
+    assert_eq!(opcodes(&window), [SMSG_QUESTGIVER_REQUEST_ITEMS]);
+    let tail = after_request_strings(&window[0].1);
+    assert_eq!(word(tail, 12), QUEST_COST, "the cost is the required money");
+    assert_eq!(completable(tail), 0);
+    let refused = choose_reward(&mut connection, giver);
+    assert_eq!(opcodes(&refused), [SMSG_QUESTGIVER_OFFER_REWARD]);
     assert_eq!(money(&shard, guid), QUEST_COST - 1);
     assert_eq!(xp(&shard, guid), xp_before);
-    let rewarded = shard.query_rows(&format!(
-        "SELECT rewarded FROM game_character_quest WHERE quest_entry = {QUEST}"
-    ));
-    assert_eq!(rewarded[0]["rewarded"], "false");
+    assert_eq!(rewarded(&shard), "false");
 
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET money = {} WHERE guid = {guid}",
         QUEST_COST + 40
     ));
+    let offer = quest_request(
+        &mut connection,
+        CMSG_QUESTGIVER_COMPLETE_QUEST,
+        giver,
+        QUEST,
+        None,
+    );
+    assert_eq!(opcodes(&offer), [SMSG_QUESTGIVER_OFFER_REWARD]);
     let accepted = choose_reward(&mut connection, giver);
 
-    assert!(opcodes(&accepted).contains(&SMSG_QUESTGIVER_QUEST_COMPLETE));
+    let complete = accepted
+        .iter()
+        .find(|(opcode, _)| *opcode == SMSG_QUESTGIVER_QUEST_COMPLETE)
+        .expect("the completion popup");
+    assert_eq!(word(&complete.1, 12), 0u32.wrapping_sub(QUEST_COST));
     assert_eq!(money(&shard, guid), 40);
-    let rewarded = shard.query_rows(&format!(
-        "SELECT rewarded FROM game_character_quest WHERE quest_entry = {QUEST}"
-    ));
-    assert_eq!(rewarded[0]["rewarded"], "true");
+    assert_eq!(rewarded(&shard), "true");
 }
 
 #[test]
@@ -757,4 +773,53 @@ fn a_quest_with_five_reputation_rewards_grants_all_five() {
         .collect();
     granted.sort_unstable();
     assert_eq!(granted, FACTIONS);
+}
+
+fn completion_popup(replies: &[(u16, Vec<u8>)]) -> &[u8] {
+    &replies
+        .iter()
+        .find(|(opcode, _)| *opcode == SMSG_QUESTGIVER_QUEST_COMPLETE)
+        .expect("the completion popup")
+        .1
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn quest_xp_falls_with_the_level_above_the_quest_and_the_popup_shows_it() {
+    let (shard, mut connection, guid, giver) = stage("quest-turn-in-xp-scaling");
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 8 WHERE guid = {guid}"
+    ));
+    grant_quest(&shard, guid, QUEST);
+    let xp_before = xp(&shard, guid);
+
+    let replies = choose_reward(&mut connection, giver);
+
+    assert_eq!(
+        xp(&shard, guid),
+        xp_before + 88,
+        "quest level 2, Character level 8: 80%"
+    );
+    assert_eq!(word(completion_popup(&replies), 8), 88);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_level_60_turn_in_pays_the_max_level_money_instead_of_xp() {
+    let (shard, mut connection, guid, giver) = stage("quest-turn-in-max-level");
+    shard.assert_sql(&format!(
+        "UPDATE game_quest_template SET reward_money = 30, reward_money_max_level = 870 WHERE entry = {QUEST}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET level = 60, money = 5 WHERE guid = {guid}"
+    ));
+    grant_quest(&shard, guid, QUEST);
+
+    let replies = choose_reward(&mut connection, giver);
+
+    assert_eq!(money(&shard, guid), 5 + 30 + 870);
+    assert!(!opcodes(&replies).contains(&SMSG_LOG_XPGAIN));
+    let popup = completion_popup(&replies);
+    assert_eq!(word(popup, 8), 0, "no XP at the cap");
+    assert_eq!(word(popup, 12), 30 + 870);
 }

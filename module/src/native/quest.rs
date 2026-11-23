@@ -57,7 +57,6 @@ pub(super) fn quest_detail_view(
         offer_reward_text,
         request_items_text,
         money_reward: lyracore_shared::quest::offered_money(tmpl.reward_money, tmpl.required_money),
-        reward_xp: tmpl.reward_xp,
         next_quest_id: tmpl.next_quest_id,
         max_level_money_reward: tmpl.reward_money_max_level,
         flags: ctx
@@ -76,6 +75,19 @@ pub(super) fn quest_detail_view(
             .map(|(_, a, b, c, d)| (a, b, c, d))
             .collect(),
     })
+}
+
+// The XP and signed money of the turn-in, read at the Character's level before it is granted.
+fn turn_in_payout_of(ctx: &ReducerContext, guid: u64, quest: u32) -> Option<(u32, i32)> {
+    use crate::game_world_entity;
+    let level = ctx.db.game_world_entity().guid().find(guid)?.level;
+    let tmpl = ctx.db.game_quest_template().entry().find(quest)?;
+    let payout = turn_in_payout(ctx, level, &tmpl);
+    let money = tmpl.reward_money.wrapping_add(payout.money);
+    Some((
+        payout.xp.unwrap_or(0),
+        lyracore_shared::quest::offered_money(money, tmpl.required_money),
+    ))
 }
 
 fn quest_emotes(ctx: &ReducerContext, quest_id: u32) -> codec::QuestEmotes {
@@ -445,7 +457,7 @@ fn request_reward_screen(
     Ok(vec![offer_reward(giver, &detail)?])
 }
 
-// Storage and money refusals send their notice; only a quest this giver ends is re-offered.
+// Storage refusals send the quest-failed notice; only a quest this giver ends is re-offered.
 fn refused_turn_in_screen(
     ctx: &ReducerContext,
     giver: u64,
@@ -476,11 +488,6 @@ fn refused_turn_in_screen(
     let notice = match refusal.kind {
         ActionRefusalKind::InventoryFull => Some(failed(Reason::QuestFailedInventoryFull)),
         ActionRefusalKind::DuplicateItem => Some(failed(Reason::QuestFailedDuplicateItem)),
-        ActionRefusalKind::NotEnoughMoney => {
-            Some(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_INVALID(
-                codec::build_questgiver_quest_invalid(Reason::QuestFailedNotEnoughMoney),
-            ))
-        }
         _ => None,
     }
     .map(packet)
@@ -604,6 +611,7 @@ pub(super) fn receive(
             if q.reward >= QUEST_REWARD_CHOICES_COUNT {
                 return Ok(());
             }
+            let payout = turn_in_payout_of(ctx, guid, q.quest_id);
             let turned_in = super::actor(ctx, guid)
                 .map_err(|refusal| ActionRefusal::from(String::from(refusal)))
                 .and_then(|_| request_turn_in_quest(ctx, guid, q.guid.guid(), q.quest_id, q.reward))
@@ -617,9 +625,10 @@ pub(super) fn receive(
                 return Err(Rollback::replies(packets, reason).into());
             }
             let mut packets: Vec<Packet> = quest_detail_view(ctx, q.quest_id)
-                .map(|detail| {
+                .zip(payout)
+                .map(|(detail, (xp, money))| {
                     packet(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(
-                        Box::new(codec::build_quest_complete(&detail)),
+                        Box::new(codec::build_quest_complete(&detail, xp, money)),
                     ))
                 })
                 .transpose()?

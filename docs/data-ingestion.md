@@ -214,9 +214,11 @@ Reward mail uses `RewMailTemplateId`, `RewMailDelaySecs` and `RewMailMoney`. Sen
 Module's quest-ender sender rule. Used mail loot must be one unconditional item at 100% chance.
 Quest learn rewards use single-effect wrappers from the selected vmangos spell table. `RewXP`
 supplies explicit rewards, following [Quest::XPValue at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/QuestDef.cpp#L180-L201).
-The Module grants exactly that XP; a quest with zero `RewXP` grants none. A negative `RewOrReqMoney`
-becomes `required_money`, which the Character must hold and pays on turn-in. All five
-`RewRepFaction` and `RewRepValue` slots are kept.
+The Module grants XP as that function does: `RewXP` in full up to five levels above the quest, then
+80%, 60%, 40%, 20% and 10%; a quest with zero `RewXP` grants none. At level 60 it pays `RewMoneyMaxLevel`
+and no XP, as [RewardQuest does](https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Player.cpp#L13136-L13141).
+A negative `RewOrReqMoney` becomes `required_money`: the quest is incomplete until the Character holds
+it, and the turn-in pays it. All five `RewRepFaction` and `RewRepValue` slots are kept.
 Each quest keeps its required skill and value and its minimum and maximum reputation faction and
 value.
 
