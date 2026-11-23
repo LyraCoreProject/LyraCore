@@ -37,7 +37,13 @@ pub(crate) fn reflect(ctx: &ReducerContext, attacker_guid: u64, bearer_guid: u64
             && crate::creatures::eventai::movement::returning_home(ctx, attacker_guid)
         {
             Some(MISS_EVADE)
-        } else if crate::spell::school_refuses_spell(ctx, &attacker, &spell) {
+        } else if crate::spell::school_refuses_spell(
+            ctx,
+            bearer_guid,
+            &attacker,
+            &spell,
+            spell.negative(),
+        ) {
             Some(MISS_IMMUNE)
         } else if spell.negative()
             && spell.cast_flags & CAST_FLAG_MAGIC_HIT != 0
@@ -48,7 +54,7 @@ pub(crate) fn reflect(ctx: &ReducerContext, attacker_guid: u64, bearer_guid: u64
             None
         };
         if let Some(miss) = miss {
-            crate::native::combat::damage_shield_miss(
+            crate::native::combat::spell_log_miss(
                 ctx,
                 bearer_guid,
                 attacker_guid,
@@ -58,7 +64,7 @@ pub(crate) fn reflect(ctx: &ReducerContext, attacker_guid: u64, bearer_guid: u64
             continue;
         }
         if crate::spell::immune_to_school(ctx, &attacker, spell.school_mask) {
-            crate::native::combat::damage_shield_immune(
+            crate::native::combat::spell_or_damage_immune(
                 ctx,
                 bearer_guid,
                 attacker_guid,

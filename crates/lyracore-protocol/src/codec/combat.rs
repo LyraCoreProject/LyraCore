@@ -159,7 +159,7 @@ pub fn build_spell_go(
     hit_target: u64,
     ammo: Option<(u32, u32)>,
 ) -> SMSG_SPELL_GO {
-    build_spell_go_outcome(caster_guid, spell_id, hit_target, ammo, false)
+    build_spell_go_outcome(caster_guid, spell_id, hit_target, ammo, None)
 }
 
 pub fn build_spell_go_area(caster_guid: u64, spell_id: u32) -> SMSG_SPELL_GO {
@@ -215,7 +215,7 @@ pub fn build_spell_go_outcome(
     spell_id: u32,
     hit_target: u64,
     ammo: Option<(u32, u32)>,
-    miss: bool,
+    miss: Option<SpellMissInfo>,
 ) -> SMSG_SPELL_GO {
     // Self-casts use TARGET_FLAG_SELF even when the target guid equals the caster.
     let is_self_cast = hit_target == 0 || hit_target == caster_guid;
@@ -246,16 +246,15 @@ pub fn build_spell_go_outcome(
             ),
         }
     };
-    let (hits, misses) = if miss {
-        (
+    let (hits, misses) = match miss {
+        Some(miss_info) => (
             vec![],
             vec![SpellMiss {
                 target: Guid::new(hit),
-                miss_info: SpellMissInfo::Miss,
+                miss_info,
             }],
-        )
-    } else {
-        (vec![Guid::new(hit)], vec![])
+        ),
+        None => (vec![Guid::new(hit)], vec![]),
     };
     SMSG_SPELL_GO {
         cast_item: Guid::new(caster_guid),
@@ -492,7 +491,13 @@ mod tests {
             Some((5996, 24))
         );
         assert!(s.targets.target_flags.get_unit().is_some());
-        let go = build_spell_go_outcome(0xF1, 75, 0xBEEF, Some((5996, 24)), true);
+        let go = build_spell_go_outcome(
+            0xF1,
+            75,
+            0xBEEF,
+            Some((5996, 24)),
+            Some(SpellMissInfo::Miss),
+        );
         assert!(go.hits.is_empty());
         assert_eq!(go.misses.len(), 1);
     }

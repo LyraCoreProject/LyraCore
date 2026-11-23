@@ -273,9 +273,9 @@ const SOURCE_MECHANIC_IMMUNITY_MASK: i32 = 147;
 pub(super) const SOURCE_AURA_MASK: i32 = 0xff;
 pub(super) const IMMUNE_TO_HOSTILE_AND_FRIENDLY: i32 = 0x100;
 // vmangos SPELL_ATTR_NO_IMMUNITIES, kept in `attributes`.
-const SPELL_ATTR_NO_IMMUNITIES: u32 = 0x2000_0000;
+pub(super) const SPELL_ATTR_NO_IMMUNITIES: u32 = 0x2000_0000;
 // vmangos SPELL_ATTR_EX3_IGNORE_CASTER_AND_TARGET_RESTRICTIONS, kept in `attributes_ex_3`.
-const SPELL_ATTR_EX3_IGNORE_RESTRICTIONS: u32 = 0x1000_0000;
+pub(super) const SPELL_ATTR_EX3_IGNORE_RESTRICTIONS: u32 = 0x1000_0000;
 
 pub(crate) fn is_mechanic_immunity_mask(p1: i32) -> bool {
     p1 & SOURCE_AURA_MASK == SOURCE_MECHANIC_IMMUNITY_MASK

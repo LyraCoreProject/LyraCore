@@ -87,30 +87,24 @@ pub(crate) fn damage_shield(
     );
 }
 
-pub(crate) fn damage_shield_miss(
-    ctx: &ReducerContext,
-    bearer: u64,
-    attacker: u64,
-    spell: u32,
-    miss: u8,
-) {
+pub(crate) fn spell_log_miss(ctx: &ReducerContext, caster: u64, target: u64, spell: u32, miss: u8) {
     super::visibility::broadcast(
         ctx,
-        bearer,
+        caster,
         codec::SMSG_SPELLLOGMISS_OPCODE,
-        codec::build_spell_log_miss(bearer, spell, attacker, miss),
+        codec::build_spell_log_miss(caster, spell, target, miss),
         false,
     );
 }
 
-pub(crate) fn damage_shield_immune(ctx: &ReducerContext, bearer: u64, attacker: u64, spell: u32) {
+pub(crate) fn spell_or_damage_immune(ctx: &ReducerContext, caster: u64, target: u64, spell: u32) {
     use lyracore_protocol::messages::vanilla::SMSG_SPELLORDAMAGE_IMMUNE;
     emit(
         ctx,
-        bearer,
+        caster,
         ServerOpcodeMessage::SMSG_SPELLORDAMAGE_IMMUNE(Box::new(SMSG_SPELLORDAMAGE_IMMUNE {
-            caster: Guid::new(bearer),
-            target: Guid::new(attacker),
+            caster: Guid::new(caster),
+            target: Guid::new(target),
             id: spell,
             debug_log_format: false,
         })),
@@ -129,7 +123,7 @@ pub(crate) fn combat_event(ctx: &ReducerContext, event: &CombatEvent) {
                 event.ranged_spell_id,
                 event.target_guid,
                 ammo,
-                event.hit_info == 2,
+                super::spell::swing_miss_info(event.hit_info),
             ))),
             false,
         );

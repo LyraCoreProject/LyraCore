@@ -300,22 +300,25 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 if dying.contains_key(&a.target_guid) {
                     continue;
                 }
+                let spell = ctx.db.game_spell().spell_id().find(a.spell_id);
+                // vmangos Aura::PeriodicTick tests the unit's damage immunity on every tick.
+                if spell.as_ref().is_some_and(|spell| {
+                    crate::spell::school_refuses_spell(ctx, a.caster_guid, &target, spell, true)
+                }) {
+                    crate::native::combat::spell_or_damage_immune(
+                        ctx,
+                        a.caster_guid,
+                        a.target_guid,
+                        a.spell_id,
+                    );
+                    continue;
+                }
                 let cur = pending
                     .get(&a.target_guid)
                     .copied()
                     .unwrap_or(target.health);
-                let school = ctx
-                    .db
-                    .game_spell()
-                    .spell_id()
-                    .find(a.spell_id)
-                    .map(|s| s.school_mask)
-                    .unwrap_or(0);
-                let points = ctx
-                    .db
-                    .game_spell()
-                    .spell_id()
-                    .find(a.spell_id)
+                let school = spell.as_ref().map_or(0, |s| s.school_mask);
+                let points = spell
                     .zip(ctx.db.game_spell_effect().id().find(a.effect_id))
                     .map_or(a.amount, |(hdr, effect)| {
                         let damage = bonuses::spell_damage_taken(
@@ -596,7 +599,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
     for a in &due {
         let caster = entities.guid().find(a.caster_guid);
         let r2 = a.radius_yd * a.radius_yd;
-        let targets: Vec<u64> =
+        let targets: Vec<WorldEntity> =
             crate::helpers::entities_near(ctx, a.map_id, a.instance_id, a.x, a.y, a.radius_yd)
                 .into_iter()
                 .filter(|c| !c.dead && c.guid != a.caster_guid)
@@ -608,7 +611,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                     caster
                         .as_ref()
                         .is_some_and(|caster| crate::combat::is_hostile_target(ctx, caster, &c))
-                        .then_some(c.guid)
+                        .then_some(c)
                 })
                 .take(AOE_MAX_TARGETS)
                 .collect();
@@ -619,7 +622,24 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
             .spell_id()
             .find(a.spell_id)
             .zip(ctx.db.game_spell_effect().id().find(a.effect_id));
-        for t in targets {
+        for target in targets {
+            let t = target.guid;
+            let immune = source.as_ref().map_or_else(
+                || crate::spell::immune_to_school(ctx, &target, a.school_mask),
+                |(header, _)| {
+                    crate::spell::school_refuses_spell(ctx, a.caster_guid, &target, header, true)
+                },
+            );
+            if immune {
+                crate::native::combat::spell_log_miss(
+                    ctx,
+                    a.caster_guid,
+                    t,
+                    a.spell_id,
+                    crate::spell::CAST_MISS_IMMUNE,
+                );
+                continue;
+            }
             let points = source.as_ref().map_or(a.amount, |(header, effect)| {
                 let damage = bonuses::spell_damage_taken(
                     ctx,

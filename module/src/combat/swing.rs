@@ -664,13 +664,8 @@ fn fire_melee_swing(
         Hit::weapon(HitSource::MainHand, hit_info == AttackOutcome::Crit)
     }
     .with_block(blocked);
-    // vmangos adds a queued strike's table threat unless it missed or was dodged or parried.
-    if swing_is_spell
-        && !matches!(
-            hit_info,
-            AttackOutcome::Miss | AttackOutcome::Dodge | AttackOutcome::Parry
-        )
-    {
+    // vmangos adds a queued strike's table threat unless it was avoided or refused as immune.
+    if swing_is_spell && !hit_info.is_avoided() {
         crate::threat::add_table_threat(
             ctx,
             attacker_guid,
@@ -820,7 +815,8 @@ fn fire_ranged_shot(
     } else {
         (dmin, dmax)
     };
-    let (rolled, hit_info) = roll_ranged_swing(ctx, attacker, target, rdmin, rdmax);
+    let (rolled, hit_info) =
+        roll_ranged_swing(ctx, attacker, target, ranged_spell_id, (rdmin, rdmax));
 
     crate::spell::break_stealth(ctx, attacker_guid);
 

@@ -358,7 +358,7 @@ pub(crate) fn run_unlanded_proc_pass(
     }
 }
 
-/// The proc pass of a harmful spell that a mechanic immunity refused whole, with PROC_EX_IMMUNE.
+/// The proc pass of a harmful spell that an immunity refused whole, with PROC_EX_IMMUNE.
 pub(crate) fn run_immune_proc_pass(
     ctx: &ReducerContext,
     caster_guid: u64,

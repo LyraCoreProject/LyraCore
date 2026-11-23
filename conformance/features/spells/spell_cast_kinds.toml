@@ -79,10 +79,34 @@ symbol = "is_immune_to_mechanic"
 evidence = "Not measured and not read. Berserker Rage 18499 and Will of the Forsaken 7744 are aura 77 and covered by tests; no trinket spell was checked against the vmangos spell dump."
 
 [[known_gaps]]
-description = "School immunity refuses only white swings and damage shields. A harmful spell, a queued strike and an Auto Shot still land on a unit whose template school_immune_mask or school or damage immunity Aura names their school. vmangos refuses such a spell whole and such damage too."
-path = "module/src/spell/control.rs"
-symbol = "is_immune_to_spell"
-evidence = "Source reading, not measured. At d9173eca, Creature::IsImmuneToSpell reads school_immune_mask, Unit::IsImmuneToSpell calls IsImmuneToSchool, and Spell::DoSpellHitOnUnit and the damage effects call IsImmuneToDamage; is_immune_to_spell reads only mechanics, and roll_swing_with_range tests immunity only without a queued strike."
+description = "School immunity is decided when a spell or ranged shot launches. A unit that becomes immune while the spell or shot travels still takes it; vmangos checks a spell with travel time again on impact and reports immune."
+path = "module/src/spell/scheduler.rs"
+symbol = "fire_spell_impact"
+evidence = "Source reading, not measured. At d9173eca, Spell::DoSpellHitOnUnit rechecks IsImmuneToDamage and IsImmuneToSpell for a spell with speed and sends SPELL_MISS_IMMUNE; fire_spell_impact and ranged_impact land the damage frozen at launch."
+
+[[known_gaps]]
+description = "Retaliation strikes back at an attacker immune to physical damage and deals its damage. vmangos casts the Retaliation strike as a spell, so the attacker's immunity refuses it and the strike reports immune."
+path = "module/src/combat/folds.rs"
+symbol = "retaliate_on_hit"
+evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp casts spell 22858 for the Retaliation proc, and Spell::SpellHitResult which returns SPELL_MISS_IMMUNE; retaliate_on_hit calls weapon_strike_damage and deal_damage without an immunity test."
+
+[[known_gaps]]
+description = "The holy portion that Seal of Righteousness adds to a landed white swing ignores a target immune to holy damage. vmangos deals that portion as a separate holy spell, which a holy immunity refuses."
+path = "module/src/combat/folds.rs"
+symbol = "seal_holy_on_swing"
+evidence = "Source reading, not measured. At d9173eca, UnitAuraProcHandler.cpp casts spell 25742 for the Seal of Righteousness melee proc, and its hit goes through Spell::SpellHitResult; seal_holy_on_swing adds the portion to the swing damage without an immunity test."
+
+[[known_gaps]]
+description = "A helpful spell with SPELL_ATTR_EX_IMMUNITY_PURGES_EFFECT is still refused by a school immunity of the other polarity, and a refused harmful spell with SPELL_ATTR_EX_NO_THREAT still draws the creature into combat. Both attributes are in AttributesEx, which the game_spell row does not keep."
+path = "module/src/spell/school_immunity.rs"
+symbol = "school_refuses_spell"
+evidence = "Source reading, not measured. At d9173eca, Unit::IsImmuneToSpell and Unit::IsImmuneToSchool skip school immunity for SPELL_ATTR_EX_IMMUNITY_PURGES_EFFECT (0x8000), and Spell::DoAllEffectOnTarget skips the engagement for SPELL_ATTR_EX_NO_THREAT; game_spell keeps attributes, attributes_ex_2, attributes_ex_3 and attributes_ex_4 only."
+
+[[known_gaps]]
+description = "A queued strike refused as immune, like one that misses or is dodged or parried, sends no SMSG_ATTACKERSTATEUPDATE. vmangos sends the next-swing spell's attack state with the victim state of its miss."
+path = "module/src/native/combat.rs"
+symbol = "combat_event"
+evidence = "Source reading, not measured. At d9173eca, Spell::DoAllEffectOnTarget calls SendMeleeAttackingStateUpdate for a next-melee-swing spell that deals no damage, with SpellMissInfoToVictimState of its miss; combat_event skips the attack state for a spell swing."
 
 [[known_gaps]]
 description = "A creature's white swing and its victim selection treat its melee as physical: the importer reads no creature_template damage_school."
@@ -432,6 +456,51 @@ rung = "durable_module"
 [[tests]]
 path = "module/tests/school_immunity.rs"
 function = "a_creature_whose_template_is_immune_to_physical_takes_no_white_swing_damage"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "a_frost_spell_on_a_frost_immune_creature_reports_immune_and_deals_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "a_refused_harmful_spell_draws_the_creature_into_combat"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "a_periodic_damage_tick_on_a_creature_that_became_immune_deals_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "a_harmful_spell_without_damage_is_refused_by_a_creature_immune_to_its_school"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "an_area_spell_hits_the_creature_beside_one_immune_to_its_school"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "a_heal_lands_through_a_school_immunity_from_a_helpful_source"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "a_helpful_spell_on_a_unit_immune_to_its_school_is_refused_before_its_cost"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "a_queued_strike_on_a_creature_under_a_physical_immunity_aura_deals_nothing"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/school_immunity.rs"
+function = "a_wand_shot_on_a_creature_whose_template_is_immune_to_the_wands_school_deals_nothing"
 rung = "durable_module"
 
 [[tests]]
