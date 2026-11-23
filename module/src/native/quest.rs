@@ -314,7 +314,7 @@ fn giver_is_hostile(
     npc: &crate::WorldEntity,
     actor: &crate::WorldEntity,
 ) -> bool {
-    use crate::{game_faction, game_faction_template, game_player_reputation};
+    use crate::game_faction_template;
     let templates = ctx.db.game_faction_template();
     let (Some(npc_template), Some(actor_template)) = (
         templates.id().find(npc.faction_template),
@@ -322,22 +322,8 @@ fn giver_is_hostile(
     ) else {
         return false;
     };
-    let standing = ctx
-        .db
-        .game_faction()
-        .faction_id()
-        .find(npc_template.faction)
-        .filter(|faction| faction.reputation_index >= 0)
-        .map(|faction| {
-            ctx.db
-                .game_player_reputation()
-                .by_character()
-                .filter(&actor.guid)
-                .find(|row| row.faction_id == faction.faction_id)
-                .map_or(faction.base_standing, |row| row.standing)
-        });
     reaction_is_hostile(
-        standing,
+        crate::reputation::reputation(ctx, actor.guid, npc_template.faction),
         crate::faction::compute_hostile(&npc_template, &actor_template),
     )
 }
@@ -516,7 +502,9 @@ fn accept_refusal(refusal: &AcceptQuestRefusal) -> Vec<Packet> {
                 AcceptanceRefusal::AlreadyTaken => Some(Reason::QuestAlreadyOn),
                 AcceptanceRefusal::Level
                 | AcceptanceRefusal::Class
-                | AcceptanceRefusal::Prerequisite => Some(Reason::DontHaveReq),
+                | AcceptanceRefusal::Prerequisite
+                | AcceptanceRefusal::Skill
+                | AcceptanceRefusal::Reputation => Some(Reason::DontHaveReq),
             };
             reason.map(|reason| {
                 ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_INVALID(

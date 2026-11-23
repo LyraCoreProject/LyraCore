@@ -204,6 +204,24 @@ pub struct AcceptanceRequirements {
     pub next_in_chain: u32,
     /// The first one met decides; vmangos's order is unspecified.
     pub prerequisites: Vec<Prerequisite>,
+    pub required_skill: Option<SkillRequirement>,
+    /// Met at this reputation value or above.
+    pub min_reputation: Option<ReputationRequirement>,
+    /// Met below this reputation value.
+    pub max_reputation: Option<ReputationRequirement>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SkillRequirement {
+    pub skill_line: u32,
+    /// Met at this skill value or above.
+    pub value: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReputationRequirement {
+    pub faction_id: u32,
+    pub value: i32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -231,6 +249,10 @@ pub trait QuestHistory {
     fn standing(&self, quest_entry: u32) -> QuestStanding;
     fn exclusive_group(&self, quest_entry: u32) -> i32;
     fn exclusive_group_members(&self, group: i32) -> Vec<u32>;
+    /// Stored standing, else `game_faction.base_standing` (first Faction.dbc slot).
+    fn reputation(&self, faction_id: u32) -> i32;
+    /// vmangos `GetSkillValue`: with temporary and permanent bonuses; zero when unlearned.
+    fn skill_value(&self, skill_line: u32) -> u32;
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -254,6 +276,8 @@ pub enum AcceptanceRefusal {
     Class,
     Prerequisite,
     AlreadyTaken,
+    Skill,
+    Reputation,
 }
 
 /// vmangos `Player::CanTakeQuest`, in its check order.
@@ -288,6 +312,12 @@ pub fn acceptance(
     }
     if applicant.level < requirements.min_level {
         return Err(AcceptanceRefusal::Level);
+    }
+    if !skill_met(requirements, history) {
+        return Err(AcceptanceRefusal::Skill);
+    }
+    if !reputation_met(requirements, history) {
+        return Err(AcceptanceRefusal::Reputation);
     }
     if !prerequisites_met(requirements, history) || !next_in_chain_open(requirements, history) {
         return Err(AcceptanceRefusal::Prerequisite);
@@ -327,7 +357,9 @@ pub fn start_sighting(
             applicant.race,
             ZeroMask::AdmitsAll,
         )
+        && skill_met(requirements, history)
         && exclusive_group_open(requirements, history)
+        && reputation_met(requirements, history)
         && prerequisites_met(requirements, history)
         && next_in_chain_open(requirements, history);
     let quest_level = match requirements.quest_level {
@@ -389,6 +421,21 @@ fn prerequisites_met(requirements: &AcceptanceRequirements, history: &impl Quest
             .all(|member| member == first.quest_entry || met(member, first.must_be_active))
 }
 
+fn skill_met(requirements: &AcceptanceRequirements, history: &impl QuestHistory) -> bool {
+    requirements
+        .required_skill
+        .is_none_or(|skill| history.skill_value(skill.skill_line) >= skill.value)
+}
+
+fn reputation_met(requirements: &AcceptanceRequirements, history: &impl QuestHistory) -> bool {
+    requirements
+        .min_reputation
+        .is_none_or(|min| history.reputation(min.faction_id) >= min.value)
+        && requirements
+            .max_reputation
+            .is_none_or(|max| history.reputation(max.faction_id) < max.value)
+}
+
 fn next_in_chain_open(requirements: &AcceptanceRequirements, history: &impl QuestHistory) -> bool {
     requirements.next_in_chain == 0 || !history.standing(requirements.next_in_chain).taken_or_done()
 }
@@ -402,6 +449,8 @@ impl AcceptanceRefusal {
             Self::Class => "quest not available to your class".to_string(),
             Self::Prerequisite => "must complete the prerequisite quest first".to_string(),
             Self::AlreadyTaken => "already on or completed that quest".to_string(),
+            Self::Skill => "your skill is too low for that quest".to_string(),
+            Self::Reputation => "your reputation does not allow that quest".to_string(),
         }
     }
 }
@@ -485,6 +534,8 @@ mod rule_tests {
     struct History {
         standings: std::collections::BTreeMap<u32, QuestStanding>,
         groups: std::collections::BTreeMap<u32, i32>,
+        reputations: std::collections::BTreeMap<u32, i32>,
+        skills: std::collections::BTreeMap<u32, u32>,
     }
 
     impl History {
@@ -497,6 +548,16 @@ mod rule_tests {
             for member in members {
                 self.groups.insert(*member, group);
             }
+            self
+        }
+
+        fn reputation(mut self, faction_id: u32, value: i32) -> Self {
+            self.reputations.insert(faction_id, value);
+            self
+        }
+
+        fn skill(mut self, skill_line: u32, value: u32) -> Self {
+            self.skills.insert(skill_line, value);
             self
         }
     }
@@ -519,6 +580,14 @@ mod rule_tests {
                 .filter(|(_, member_group)| **member_group == group)
                 .map(|(member, _)| *member)
                 .collect()
+        }
+
+        fn reputation(&self, faction_id: u32) -> i32 {
+            self.reputations.get(&faction_id).copied().unwrap_or(0)
+        }
+
+        fn skill_value(&self, skill_line: u32) -> u32 {
+            self.skills.get(&skill_line).copied().unwrap_or(0)
         }
     }
 
@@ -661,6 +730,37 @@ mod rule_tests {
             acceptance(&uncapped, eligible(), None, &open_group),
             Err(AcceptanceRefusal::Prerequisite)
         );
+        let gated = AcceptanceRequirements {
+            required_skill: Some(SkillRequirement {
+                skill_line: SKILL_LINE,
+                value: 50,
+            }),
+            min_reputation: Some(ReputationRequirement {
+                faction_id: FACTION,
+                value: FRIENDLY,
+            }),
+            ..uncapped
+        };
+        assert_eq!(
+            acceptance(&gated, applicant(9, 1, 2), None, &open_group),
+            Err(AcceptanceRefusal::Level)
+        );
+        assert_eq!(
+            acceptance(&gated, eligible(), None, &open_group),
+            Err(AcceptanceRefusal::Skill)
+        );
+        let skilled = History::default().skill(SKILL_LINE, 50);
+        assert_eq!(
+            acceptance(&gated, eligible(), None, &skilled),
+            Err(AcceptanceRefusal::Reputation)
+        );
+        let skilled_and_friendly = History::default()
+            .skill(SKILL_LINE, 50)
+            .reputation(FACTION, FRIENDLY);
+        assert_eq!(
+            acceptance(&gated, eligible(), None, &skilled_and_friendly),
+            Err(AcceptanceRefusal::Prerequisite)
+        );
     }
 
     #[test]
@@ -781,6 +881,75 @@ mod rule_tests {
         assert_eq!(
             accept(&quest, &History::default().with(2, REWARDED)),
             Err(AcceptanceRefusal::Prerequisite)
+        );
+    }
+
+    const FACTION: u32 = 72;
+    const FRIENDLY: i32 = 3000;
+    const HONORED: i32 = 9000;
+    const SKILL_LINE: u32 = 185;
+
+    #[test]
+    fn a_minimum_reputation_admits_its_value_and_above() {
+        let quest = AcceptanceRequirements {
+            min_reputation: Some(ReputationRequirement {
+                faction_id: FACTION,
+                value: FRIENDLY,
+            }),
+            ..requirements(false)
+        };
+        let at = |value| History::default().reputation(FACTION, value);
+        assert_eq!(
+            accept(&quest, &at(FRIENDLY - 1)),
+            Err(AcceptanceRefusal::Reputation)
+        );
+        assert_eq!(accept(&quest, &at(FRIENDLY)), Ok(()));
+        assert_eq!(
+            start_sighting(&quest, eligible(), None, &at(FRIENDLY - 1)),
+            StartSighting::Hidden
+        );
+        assert_eq!(
+            start_sighting(&quest, eligible(), None, &at(FRIENDLY)),
+            StartSighting::Offered
+        );
+    }
+
+    #[test]
+    fn a_maximum_reputation_admits_only_values_below_it() {
+        let quest = AcceptanceRequirements {
+            max_reputation: Some(ReputationRequirement {
+                faction_id: FACTION,
+                value: HONORED,
+            }),
+            ..requirements(false)
+        };
+        let at = |value| History::default().reputation(FACTION, value);
+        assert_eq!(accept(&quest, &at(HONORED - 1)), Ok(()));
+        assert_eq!(
+            accept(&quest, &at(HONORED)),
+            Err(AcceptanceRefusal::Reputation)
+        );
+        assert_eq!(
+            start_sighting(&quest, eligible(), None, &at(HONORED)),
+            StartSighting::Hidden
+        );
+    }
+
+    #[test]
+    fn a_required_skill_admits_its_value_and_above() {
+        let quest = AcceptanceRequirements {
+            required_skill: Some(SkillRequirement {
+                skill_line: SKILL_LINE,
+                value: 50,
+            }),
+            ..requirements(false)
+        };
+        let at = |value| History::default().skill(SKILL_LINE, value);
+        assert_eq!(accept(&quest, &at(49)), Err(AcceptanceRefusal::Skill));
+        assert_eq!(accept(&quest, &at(50)), Ok(()));
+        assert_eq!(
+            start_sighting(&quest, eligible(), None, &at(49)),
+            StartSighting::Hidden
         );
     }
 

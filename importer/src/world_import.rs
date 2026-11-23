@@ -818,13 +818,19 @@ fn build_quests(
         let next_quest_raw: i64 = row.number(qt::NEXT_QUEST_IN_CHAIN)?;
         let limit_time_raw: i64 = row.number(qt::LIMIT_TIME)?;
         let quest_type: u32 = row.number(qt::TYPE)?;
+        let required_skill: u32 = row.number(qt::REQUIRED_SKILL)?;
+        let required_skill_value: u32 = row.number(qt::REQUIRED_SKILL_VALUE)?;
+        let min_rep_faction: u32 = row.number(qt::REQUIRED_MIN_REP_FACTION)?;
+        let min_rep_value: i32 = row.number(qt::REQUIRED_MIN_REP_VALUE)?;
+        let max_rep_faction: u32 = row.number(qt::REQUIRED_MAX_REP_FACTION)?;
+        let max_rep_value: i32 = row.number(qt::REQUIRED_MAX_REP_VALUE)?;
         let exclusive_group: i32 = row.number(qt::EXCLUSIVE_GROUP)?;
         let max_level: u32 = row.number(qt::MAX_LEVEL)?;
         if exclusive_group != 0 || max_level != 0 {
             availability_rows.push(format!("({entry},{exclusive_group},{max_level})"));
         }
         quest_rows.push(format!(
-            "({entry},{min_level},{ql},{title},{money},{reward_xp},{prev},{req_races},{req_classes},{zone_or_sort},{rf1},{rv1},{rf2},{rv2},{src_item},{src_item_count},{repeatable},{next_quest},{limit_time},{rmm},{quest_type})",
+            "({entry},{min_level},{ql},{title},{money},{reward_xp},{prev},{req_races},{req_classes},{zone_or_sort},{rf1},{rv1},{rf2},{rv2},{src_item},{src_item_count},{repeatable},{next_quest},{limit_time},{rmm},{quest_type},{required_skill},{required_skill_value},{min_rep_faction},{min_rep_value},{max_rep_faction},{max_rep_value})",
             ql = quest_level.max(0),
             title = text(qt::TITLE)?,
             money = money.max(0),
@@ -2049,7 +2055,7 @@ fn push_quest_statements(stmts: &mut Vec<String>, quests: &QuestEtl, mail_loot_r
     );
     stmts.push("DELETE FROM game_creature_quest WHERE id > 0".into());
     stmts.push("DELETE FROM game_gameobject_quest WHERE id > 0".into());
-    push_insert(stmts, "game_quest_template", "entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level,quest_type", &quests.templates);
+    push_insert(stmts, "game_quest_template", "entry,min_level,quest_level,title,reward_money,reward_xp,prev_quest_id,required_races,required_classes,zone_or_sort,rew_rep_faction_1,rew_rep_value_1,rew_rep_faction_2,rew_rep_value_2,src_item,src_item_count,repeatable,next_quest_id,limit_time,reward_money_max_level,quest_type,required_skill,required_skill_value,required_min_rep_faction,required_min_rep_value,required_max_rep_faction,required_max_rep_value", &quests.templates);
     push_insert(
         stmts,
         "game_quest_text",

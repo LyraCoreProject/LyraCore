@@ -38,7 +38,7 @@ symbol = "eval_status"
 evidence = "vmangos d9173eca QuestHandler.cpp WorldSession::GetDialogStatus."
 
 [[known_gaps]]
-description = "The giver mark and quest list ignore the previous-chain check (SatisfyQuestPrevChain), breadcrumbs, required skills and reputation requirements."
+description = "The giver mark and quest list ignore the previous-chain check (SatisfyQuestPrevChain) and breadcrumbs."
 path = "crates/lyracore-shared/src/quest.rs"
 symbol = "start_sighting"
-evidence = "vmangos d9173eca Player.cpp Player::CanSeeStartQuest; Compatibility Manifest quests.breadcrumb, quests.skill-requirement, quests.reputation-requirement, quests.maximum-reputation."
+evidence = "vmangos d9173eca Player.cpp Player::CanSeeStartQuest; Compatibility Manifest quests.breadcrumb."

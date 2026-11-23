@@ -909,6 +909,12 @@ pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {
             limit_time: 0,
             reward_money_max_level: 0,
             quest_type: 0,
+            required_skill: 0,
+            required_skill_value: 0,
+            required_min_rep_faction: 0,
+            required_min_rep_value: 0,
+            required_max_rep_faction: 0,
+            required_max_rep_value: 0,
         });
         ctx.db.game_quest_text().insert(crate::QuestText {
             quest_entry: SCENARIO_QUEST,

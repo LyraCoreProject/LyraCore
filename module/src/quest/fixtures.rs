@@ -94,6 +94,12 @@ pub fn debug_stage_choice_reward_fixture(
         limit_time: 0,
         reward_money_max_level: 0,
         quest_type: 0,
+        required_skill: 0,
+        required_skill_value: 0,
+        required_min_rep_faction: 0,
+        required_min_rep_value: 0,
+        required_max_rep_faction: 0,
+        required_max_rep_value: 0,
     });
 
     let objectives = ctx.db.game_quest_objective();
@@ -508,6 +514,12 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         limit_time: 0,
         reward_money_max_level: 0,
         quest_type: 0,
+        required_skill: 0,
+        required_skill_value: 0,
+        required_min_rep_faction: 0,
+        required_min_rep_value: 0,
+        required_max_rep_faction: 0,
+        required_max_rep_value: 0,
     };
     templates.insert(quest_template(
         EVENTAI_CREDIT_FIXTURE_KILL_QUEST,
@@ -1101,6 +1113,12 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         limit_time: 0,
         reward_money_max_level: 0,
         quest_type,
+        required_skill: 0,
+        required_skill_value: 0,
+        required_min_rep_faction: 0,
+        required_min_rep_value: 0,
+        required_max_rep_faction: 0,
+        required_max_rep_value: 0,
     };
     templates.insert(quest_template(
         RQC_NORMAL_QUEST,

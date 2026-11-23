@@ -355,6 +355,15 @@ impl Table {
                 )
                 | (Self::Item, "damage_school")
                 | (
+                    Self::Quest,
+                    "required_skill"
+                        | "required_skill_value"
+                        | "required_min_rep_faction"
+                        | "required_min_rep_value"
+                        | "required_max_rep_faction"
+                        | "required_max_rep_value"
+                )
+                | (
                     Self::PickpocketLoot
                         | Self::GameobjectLoot
                         | Self::SkinningLoot
@@ -539,6 +548,12 @@ const QUEST_COLUMNS: &[Column] = &[
     column("limit_time", FieldType::U32),
     column("reward_money_max_level", FieldType::U32),
     column("quest_type", FieldType::U32),
+    column("required_skill", FieldType::U32),
+    column("required_skill_value", FieldType::U32),
+    column("required_min_rep_faction", FieldType::U32),
+    column("required_min_rep_value", FieldType::I32),
+    column("required_max_rep_faction", FieldType::U32),
+    column("required_max_rep_value", FieldType::I32),
 ];
 
 const QUEST_TEXT_COLUMNS: &[Column] = &[

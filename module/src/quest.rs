@@ -146,6 +146,18 @@ pub struct QuestTemplate {
     pub reward_money_max_level: u32,
     #[default(0)]
     pub quest_type: u32,
+    #[default(0)]
+    pub required_skill: u32,
+    #[default(0)]
+    pub required_skill_value: u32,
+    #[default(0)]
+    pub required_min_rep_faction: u32,
+    #[default(0)]
+    pub required_min_rep_value: i32,
+    #[default(0)]
+    pub required_max_rep_faction: u32,
+    #[default(0)]
+    pub required_max_rep_value: i32,
 }
 
 #[table(accessor = game_quest_flags)]
@@ -834,6 +846,14 @@ impl lyracore_shared::quest::QuestHistory for CharacterQuestHistory<'_> {
             .map(|availability| availability.quest_entry)
             .collect()
     }
+
+    fn reputation(&self, faction_id: u32) -> i32 {
+        crate::reputation::reputation(self.ctx, self.character_guid, faction_id).unwrap_or(0)
+    }
+
+    fn skill_value(&self, skill_line: u32) -> u32 {
+        crate::skill::skill_value(self.ctx, self.character_guid, skill_line, false)
+    }
 }
 
 struct AcceptanceInputs<'a> {
@@ -859,7 +879,12 @@ fn acceptance_inputs<'a>(
     player: &crate::WorldEntity,
     tmpl: &QuestTemplate,
 ) -> AcceptanceInputs<'a> {
-    use lyracore_shared::quest::{AcceptanceRequirements, Applicant, Prerequisite};
+    use lyracore_shared::quest::{
+        AcceptanceRequirements, Applicant, Prerequisite, ReputationRequirement, SkillRequirement,
+    };
+    let reputation = |faction_id, value| {
+        (faction_id != 0).then_some(ReputationRequirement { faction_id, value })
+    };
     let availability = ctx
         .db
         .game_quest_availability()
@@ -895,6 +920,12 @@ fn acceptance_inputs<'a>(
             exclusive_group: availability.as_ref().map_or(0, |row| row.exclusive_group),
             next_in_chain: tmpl.next_quest_id,
             prerequisites,
+            required_skill: (tmpl.required_skill != 0).then_some(SkillRequirement {
+                skill_line: tmpl.required_skill,
+                value: tmpl.required_skill_value,
+            }),
+            min_reputation: reputation(tmpl.required_min_rep_faction, tmpl.required_min_rep_value),
+            max_reputation: reputation(tmpl.required_max_rep_faction, tmpl.required_max_rep_value),
         },
         applicant: Applicant {
             level: player.level,

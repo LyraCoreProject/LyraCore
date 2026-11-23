@@ -215,6 +215,8 @@ Module's quest-ender sender rule. Used mail loot must be one unconditional item 
 Quest learn rewards use single-effect wrappers from the selected vmangos spell table. `RewXP`
 supplies explicit rewards, following [Quest::XPValue at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/QuestDef.cpp#L180-L201).
 The Module treats zero XP as a fallback request, so explicit zero-XP quests remain unsupported.
+Each quest keeps its required skill and value and its minimum and maximum reputation faction and
+value.
 
 The Compatibility Manifest also reports unavailable collect objectives, non-goober GameObject
 targets, extra prerequisites, scripts, flags, reward casts and reputation fields that the Module

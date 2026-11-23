@@ -44,6 +44,21 @@ function = "a_maximum_level_closes_the_quest_one_level_above_it"
 rung = "durable_module"
 
 [[tests]]
+path = "module/tests/conformance/quest_availability.rs"
+function = "a_minimum_reputation_quest_opens_at_friendly"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_availability.rs"
+function = "a_maximum_reputation_quest_closes_at_its_cap"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/conformance/quest_availability.rs"
+function = "a_skill_quest_is_refused_below_its_skill_value"
+rung = "durable_module"
+
+[[tests]]
 path = "crates/lyracore-shared/src/quest.rs"
 function = "checks_refuse_in_the_vmangos_can_take_quest_order"
 rung = "unit"
@@ -56,6 +71,21 @@ rung = "unit"
 [[tests]]
 path = "crates/lyracore-shared/src/quest.rs"
 function = "a_positive_exclusive_group_admits_one_taken_or_done_quest"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-shared/src/quest.rs"
+function = "a_minimum_reputation_admits_its_value_and_above"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-shared/src/quest.rs"
+function = "a_maximum_reputation_admits_only_values_below_it"
+rung = "unit"
+
+[[tests]]
+path = "crates/lyracore-shared/src/quest.rs"
+function = "a_required_skill_admits_its_value_and_above"
 rung = "unit"
 
 [[tests]]
@@ -112,22 +142,10 @@ symbol = "plan"
 evidence = "Compatibility Manifest quests.flags; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
-description = "quests.maximum-reputation full-world 38, alliance-single 22: Maximum reputation gates are not represented."
-path = "importer/src/world_import_quests.rs"
-symbol = "plan"
-evidence = "Compatibility Manifest quests.maximum-reputation; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
 description = "quests.money-requirement full-world 69, alliance-single 15: Negative reward money does not charge the quest cost."
 path = "importer/src/world_import_quests.rs"
 symbol = "plan"
 evidence = "Compatibility Manifest quests.money-requirement; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
-description = "quests.reputation-requirement full-world 264, alliance-single 16: Minimum reputation gates are not represented."
-path = "importer/src/world_import_quests.rs"
-symbol = "plan"
-evidence = "Compatibility Manifest quests.reputation-requirement; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
 description = "quests.reputation-spillover-mask full-world 723, alliance-single 338: Per-quest reputation spillover masks are not represented."
@@ -140,12 +158,6 @@ description = "quests.reward-cast full-world 202, alliance-single 72: Only a sin
 path = "importer/src/world_import_quests.rs"
 symbol = "plan"
 evidence = "Compatibility Manifest quests.reward-cast; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
-description = "quests.skill-requirement full-world 143, alliance-single 51: Required skill/rank gates are not represented."
-path = "importer/src/world_import_quests.rs"
-symbol = "plan"
-evidence = "Compatibility Manifest quests.skill-requirement; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
 
 [[known_gaps]]
 description = "quests.start-script full-world 103, alliance-single 39: The Module does not dispatch acceptance scripts."

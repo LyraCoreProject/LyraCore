@@ -26,7 +26,7 @@ impl PlayerReputation {
                 .game_faction()
                 .faction_id()
                 .find(row.faction_id)
-                .map_or(0, |faction| faction.base_standing.clamp(REP_MIN, REP_MAX));
+                .map_or(0, |faction| clamped_standing(faction.base_standing));
             row.at_war = false;
             crate::native::reputation::changed(ctx, None, &row);
             ctx.db.game_player_reputation().id().delete(id);
@@ -67,11 +67,34 @@ crate::character_owned!(restamp, fn sweep_restamp_game_player_reputation(ctx, ch
     }
 });
 
+// vmangos ReputationMgr Reputation_Bottom and Reputation_Cap.
 const REP_MIN: i32 = -42000;
-const REP_MAX: i32 = 42000;
+const REP_MAX: i32 = 42999;
 
 pub(crate) fn clamped_standing(standing: i32) -> i32 {
     standing.clamp(REP_MIN, REP_MAX)
+}
+
+/// Stored standing, else `game_faction.base_standing` (first Faction.dbc slot); `None` unindexed.
+pub(crate) fn reputation(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    faction_id: u32,
+) -> Option<i32> {
+    let faction = ctx
+        .db
+        .game_faction()
+        .faction_id()
+        .find(faction_id)
+        .filter(|faction| faction.reputation_index >= 0)?;
+    Some(
+        ctx.db
+            .game_player_reputation()
+            .by_character()
+            .filter(&character_guid)
+            .find(|row| row.faction_id == faction_id)
+            .map_or(faction.base_standing, |row| row.standing),
+    )
 }
 
 pub(crate) fn reputation_rank(standing: i32) -> u8 {
@@ -159,7 +182,7 @@ pub(crate) fn grant_reputation(
         .filter(&player_guid)
         .find(|r| r.faction_id == faction_id)
     {
-        row.standing = (row.standing.saturating_add(amount)).clamp(REP_MIN, REP_MAX);
+        row.standing = clamped_standing(row.standing.saturating_add(amount));
         row.reputation_index = rep_index;
         row.update(ctx);
         return;
@@ -187,7 +210,7 @@ pub(crate) fn grant_reputation(
             character_guid: player_guid,
             owner_identity: owner,
             faction_id,
-            standing: base.saturating_add(amount).clamp(REP_MIN, REP_MAX),
+            standing: clamped_standing(base.saturating_add(amount)),
             reputation_index: rep_index,
             at_war: false,
         },
@@ -229,7 +252,7 @@ pub(crate) fn apply_set_faction_at_war(
             character_guid: player.guid,
             owner_identity: player.owner_identity,
             faction_id: faction.faction_id,
-            standing: faction.base_standing.clamp(REP_MIN, REP_MAX),
+            standing: clamped_standing(faction.base_standing),
             reputation_index: reputation_index as i32,
             at_war,
         },
@@ -258,7 +281,15 @@ pub(crate) fn apply_set_watched_faction(
 
 #[cfg(test)]
 mod rep_tests {
-    use super::{reputation_discount_pct, reputation_rank};
+    use super::{clamped_standing, reputation_discount_pct, reputation_rank};
+
+    #[test]
+    fn standing_reaches_the_vmangos_cap_of_42999() {
+        assert_eq!(clamped_standing(42_999), 42_999);
+        assert_eq!(clamped_standing(43_000), 42_999);
+        assert_eq!(clamped_standing(-42_001), -42_000);
+        assert_eq!(reputation_rank(42_999), 7);
+    }
 
     #[test]
     fn rank_thresholds_match_vanilla() {
