@@ -539,7 +539,7 @@ pub(crate) fn apply_player_login(
         return Err("World Shard does not own the Character map".into());
     }
     if !character.pending_ghost {
-        crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(character_guid));
+        crate::corpse::delete_resurrectable_corpse(ctx, character_guid);
     }
 
     if entry == WorldEntry::Login {
@@ -613,6 +613,10 @@ pub(crate) fn apply_player_login(
 
     crate::spell::recompute_vitals(ctx, character.guid);
     crate::spell::recompute_sheet(ctx, character.guid);
+    if entry == WorldEntry::Login && crate::corpse::revive_ghost_without_corpse(ctx, character_guid)
+    {
+        character.pending_ghost = false;
+    }
 
     let (rested, consumed) = crate::xp::accrue_rested_on_login(
         crate::time::now(ctx).to_micros_since_unix_epoch(),
@@ -855,7 +859,7 @@ fn finish_logout(
     crate::combat::disengage(ctx, guid);
     crate::trade::cancel_trade_for(ctx, guid);
     if !keep_corpse {
-        crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(guid));
+        crate::corpse::delete_resurrectable_corpse(ctx, guid);
     }
     crate::spell::clear_resurrect_request_and_option(ctx, guid);
     crate::spell::break_stealth(ctx, guid);

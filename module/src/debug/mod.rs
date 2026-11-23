@@ -148,7 +148,7 @@ pub fn debug_age_corpse(
     corpse.created_at =
         crate::time::now(ctx) - TimeDuration::from_micros(i64::from(age_seconds) * 1_000_000);
     corpse.update(ctx);
-    crate::corpse::sweep_corpse_decay(ctx);
+    crate::corpse::sweep_corpse_expiry(ctx);
     Ok(())
 }
 

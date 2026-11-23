@@ -48,5 +48,5 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
     crate::mail_timer::sweep_expired(ctx);
     crate::spell::stacking::sweep_dr_state(ctx);
     crate::loot::sweep_loot_rolls(ctx);
-    crate::corpse::sweep_corpse_decay(ctx);
+    crate::corpse::sweep_corpse_expiry(ctx);
 }

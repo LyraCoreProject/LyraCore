@@ -193,6 +193,84 @@ fn corpse_reclaim_restores_native_form() {
     assert_alive(&shard);
 }
 
+const CORPSE: &str = "17366161638117343233";
+
+fn corpse_is_bones(shard: &Standalone) -> String {
+    shard.query_rows("SELECT is_bones FROM game_corpse WHERE owner_guid = 1")[0]["is_bones"].clone()
+}
+
+fn move_corpse_to_ghost(shard: &Standalone) {
+    let ghost = entity(shard);
+    shard.assert_sql(&format!("UPDATE game_corpse SET x = {}, y = {}, z = {}, reclaim_delay_micros = 0 WHERE owner_guid = 1", ghost["x"], ghost["y"], ghost["z"]));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_ghost_reclaims_its_corpse_after_six_minutes() {
+    let shard = fixture("ghost-reclaim-late", 4);
+    release(&shard);
+    shard.assert_call("debug_age_corpse", &[CORPSE, "360"]);
+    assert_eq!(corpse_is_bones(&shard), "false");
+    move_corpse_to_ghost(&shard);
+    shard.assert_call("gw_reclaim_corpse", &[&actor("1"), "1"]);
+    assert_alive(&shard);
+    assert_eq!(corpse_is_bones(&shard), "true");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_corpse_expires_to_bones_after_three_days_and_a_ghost_cannot_reclaim_it() {
+    let shard = fixture("ghost-reclaim-expired", 4);
+    release(&shard);
+    shard.assert_call("debug_age_corpse", &[CORPSE, "259201"]);
+    assert_eq!(corpse_is_bones(&shard), "true");
+    move_corpse_to_ghost(&shard);
+    let refusal = shard.call("gw_reclaim_corpse", &[&actor("1"), "1"]);
+    assert!(!refusal.status.success());
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refusal.stdout),
+        String::from_utf8_lossy(&refusal.stderr)
+    );
+    assert!(output.contains("corpse has decayed to bones"), "{output}");
+    assert_ghost(&shard, true);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn a_ghost_that_logs_in_after_its_corpse_turned_to_bones_is_revived_at_half_health() {
+    let shard = fixture("ghost-login-bones", 4);
+    bind_session(&shard);
+    release(&shard);
+    shard.assert_call("debug_logout_character", &["1"]);
+    shard.assert_call("debug_age_corpse", &[CORPSE, "259201"]);
+    bind_session(&shard);
+    shard.assert_call("gw_player_login", &["1", &actor("1")]);
+    assert_alive(&shard);
+    let row = entity(&shard);
+    let (health, max_health): (u32, u32) = (number(&row, "health"), number(&row, "max_health"));
+    assert!(
+        (max_health / 2..max_health).contains(&health),
+        "{health} of {max_health}"
+    );
+    assert_eq!(corpse_is_bones(&shard), "true");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn bones_of_a_revived_character_disappear_after_an_hour() {
+    let shard = fixture("ghost-bones-expiry", 4);
+    release(&shard);
+    move_corpse_to_ghost(&shard);
+    shard.assert_call("gw_reclaim_corpse", &[&actor("1"), "1"]);
+    shard.assert_call("debug_age_corpse", &[CORPSE, "3500"]);
+    assert_eq!(corpse_is_bones(&shard), "true");
+    shard.assert_call("debug_age_corpse", &[CORPSE, "3601"]);
+    assert!(shard
+        .query_rows("SELECT guid FROM game_corpse WHERE owner_guid = 1")
+        .is_empty());
+}
+
 fn power_after_reclaim(name: &str, class: u32, power_type: u32, max_power: u32, power: u32) -> u32 {
     let shard = fixture(name, 1);
     let bytes: u32 = number(&entity(&shard), "unit_bytes_0");
@@ -389,7 +467,7 @@ fn accepting_resurrection_restores_native_form() {
     shard.assert_call("debug_resurrect_response", &["1", "true"]);
     assert_alive(&shard);
     assert!(shard
-        .query_rows("SELECT guid FROM game_corpse WHERE owner_guid = 1")
+        .query_rows("SELECT guid FROM game_corpse WHERE owner_guid = 1 AND is_bones = false")
         .is_empty());
 }
 
