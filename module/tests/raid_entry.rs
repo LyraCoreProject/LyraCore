@@ -53,6 +53,7 @@ fn only_a_raid_member_enters_a_raid_map_through_its_area_trigger() {
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
+    shard.assert_call("set_gm_level", &["\"Tester\"", "0"]);
     let [party_leader, party_member, raid_leader, raid_member] =
         ["PartyLeader", "PartyMember", "RaidLeader", "RaidMember"].map(|name| {
             shard.assert_call(
